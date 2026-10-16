@@ -342,10 +342,15 @@ int display_fullscreen_write(uint32_t offset,const void *data,uint32_t bytes)
     return fullscreen_display && fullscreen_native && !switching ?
         supersavage_display_write(offset,data,bytes) : -EIO;
 }
+static int fullscreen_windowed(int error)
+{
+    klog("[display] fullscreen=0 continuation=windowed error=%d",error);
+    return DISPLAY_FULLSCREEN_WINDOWED;
+}
 int display_fullscreen_begin(uint16_t mode)
 {
     int logged=display_fullscreen_checkpoint("request",0);
-    if (logged) return logged;
+    if (logged) return fullscreen_windowed(logged);
     struct process *desktop=proc_find(grants_display_pid());
     const char *why=0;
     if (!desktop) why="no-display-owner";
@@ -353,17 +358,17 @@ int display_fullscreen_begin(uint16_t mode)
     else if (!grants_display_owner(desktop)) why="owner-without-writable-display";
     if (why) {
         klog("[display] fullscreen_refused reason=%s owner_pid=%u mode=%u",why,grants_display_pid(),mode);
-        return -EPERM;
+        return fullscreen_windowed(-EPERM);
     }
     if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) {
         klog("[display] fullscreen_refused reason=busy switching=%u active=%u awaiting_frame=%u presenting=%u",
             (unsigned)switching,(unsigned)fullscreen_display,(unsigned)awaiting_frame,(unsigned)grants_display_busy());
-        return -EBUSY;
+        return fullscreen_windowed(-EBUSY);
     }
     if (!fbdev_get()->present || !listed(fbdev_get()->mode_id)) {
         klog("[display] fullscreen_refused reason=unsupported present=%u mode_id=%u",
             (unsigned)fbdev_get()->present,(unsigned)fbdev_get()->mode_id);
-        return -EOPNOTSUPP;
+        return fullscreen_windowed(-EOPNOTSUPP);
     }
     bool native=false;
     for (unsigned i=0;i<pci_count();i++) {
@@ -373,25 +378,25 @@ int display_fullscreen_begin(uint16_t mode)
             if (e) {
                 klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable pci=5333:8c2e mode=%u error=%d",mode,e);
                 display_fullscreen_checkpoint("refused",e);
-                return e;
+                return fullscreen_windowed(e);
             }
             native=true;
         }
     }
-    if (display_worker_start()) return -ENOMEM;
-    if (!native && mode>0x7F) return -EOPNOTSUPP;
+    if (display_worker_start()) return fullscreen_windowed(-ENOMEM);
+    if (!native && mode>0x7F) return fullscreen_windowed(-EOPNOTSUPP);
     switching=true;
     previous=*fbdev_get();
     int e=native ? 0 : biosvm_video_prepare();
-    if (e) { switching=false; return -EIO; }
+    if (e) { switching=false; return fullscreen_windowed(-EIO); }
     e=display_fullscreen_checkpoint("grant-suspend",0);
-    if (e) { switching=false; return e; }
+    if (e) { switching=false; return fullscreen_windowed(e); }
     e=grants_display_suspend(true);
-    if (e) { switching=false; return e; }
+    if (e) { switching=false; return fullscreen_windowed(e); }
     e=display_fullscreen_checkpoint("desktop-revoke",0);
-    if (e) { grants_display_suspend(false); switching=false; return e; }
+    if (e) { grants_display_suspend(false); switching=false; return fullscreen_windowed(e); }
     e=fbdev_change_begin();
-    if (e) { grants_display_suspend(false); switching=false; return e; }
+    if (e) { grants_display_suspend(false); switching=false; return fullscreen_windowed(e); }
     fullscreen_native=native;
     fullscreen_return_budget=NATIVE_RETURN_MS;
     fullscreen_return_timed=false;
@@ -402,7 +407,7 @@ int display_fullscreen_begin(uint16_t mode)
         if (native && e==-EOPNOTSUPP)
             klog("[display] fullscreen_refused reason=supersavage-recovery-unavailable mode=%u",mode);
         int restored=display_fullscreen_end();
-        return restored ? restored : e;
+        return restored ? restored : fullscreen_windowed(e);
     }
     klog("[display] fullscreen=1 mode=%u desktop_mode=%u provider=%s",mode,previous.mode_id,native ? "supersavage-native" : "firmware-vga");
     return 0;
@@ -438,6 +443,7 @@ int display_fullscreen_end(void)
             fullscreen_native ? "supersavage-native" : "firmware-vga",e,fallback_result);
         e=fallback_result;
     }
+    if (fullscreen_native) supersavage_display_complete(!e);
     fbdev_change_end();
     bool native=fullscreen_native;
     fullscreen_display=false;

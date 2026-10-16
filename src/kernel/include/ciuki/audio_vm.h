@@ -87,6 +87,7 @@ struct audio_vm_diagnostic {
     uint64_t level_at;
     uint32_t pcm_peak, opl_peak, mix_peak, ring_peak;
     uint32_t rate;
+    uint32_t refill_us, refill_gap_us;
     int error;
     uint8_t gain[2], master[2];
     bool ready, attached, running, muted, master_muted, master_in_codec;

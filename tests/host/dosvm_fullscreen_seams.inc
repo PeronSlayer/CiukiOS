@@ -1,5 +1,6 @@
 /* Physical transport seams. The production state machine is included below. */
 #include "../../src/kernel/arch/vga_io.h"
+#include <ciuki/display.h>
 static uint8_t fs_bitmap[8193];
 static cvga_state fs_card;
 static bool fs_ports,fs_display,fs_refuse;
@@ -57,7 +58,7 @@ void arch_vga_io(bool on) { fs_ports=on; arch_vga_bitmap(fs_bitmap,on); }
 void *vmm_map_mmio(uint32_t p,uint32_t bytes,bool uncached)
 { CHECK(p==0xA0000 && bytes==0x20000 && uncached); return P2V(p); }
 int display_fullscreen_begin(uint16_t mode)
-{ CHECK(cvga_find_mode(mode) || (fs_vbe_available && dos_video_mode(mode))); fs_begins++; if (fs_refuse) return -EBUSY; CHECK(!fs_display); fs_display=true; return 0; }
+{ CHECK(cvga_find_mode(mode) || (fs_vbe_available && dos_video_mode(mode))); fs_begins++; if (fs_refuse) return DISPLAY_FULLSCREEN_WINDOWED; CHECK(!fs_display); fs_display=true; return 0; }
 int display_fullscreen_end(void) {
     CHECK(fs_display);
     if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }

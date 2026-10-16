@@ -37,6 +37,8 @@ struct ciuki_input_event;
 bool dosvm_input_focus(struct dosvm_key, bool focused);
 bool dosvm_input_event(struct dosvm_key, const struct ciuki_input_event *);
 struct dosvm_key dosvm_focused_key(void);
+/* Internal result: 0 entered, DISPLAY_FULLSCREEN_WINDOWED refused safely,
+ * negative on failure. The owner syscall translates windowed to success. */
 int dosvm_fullscreen_enter(struct dosvm_key);
 int dosvm_fullscreen_leave(struct dosvm_key, bool background);
 bool dosvm_fullscreen_active(struct dosvm_key);

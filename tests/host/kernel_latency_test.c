@@ -41,6 +41,10 @@ extern void dosvm_task_switch(const struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
 #include "latency_scheduler.inc"
 static struct task idle, normal, hog, ui, reporter;
+static const struct task *audio_focus;
+const struct task *dosvm_task_focus(void) { return audio_focus; }
+uint32_t dosvm_task_quantum(const struct task *t,uint32_t quantum)
+{ return t==audio_focus && quantum>2 ? 2 : quantum; }
 static char records[4096];
 static unsigned record_bytes;
 void klog_periodic(const char *fmt,...)
@@ -70,7 +74,7 @@ static void reset(void)
     ui=(struct task){.id=4,.prio=P_INTERACTIVE,.state=T_READY,.user=true};strcpy(ui.name,"desktop");
     idle.all_next=&normal; normal.all_next=&hog; hog.all_next=&ui; all_tasks=&idle;
     g_current=idle_task=&idle;g_ticks=0;cycles=1;slice_left=10;flags=0x200;
-    focus_task=0;g_need_resched=false;g_starvation_boosts=0;
+    focus_task=audio_focus=0;g_need_resched=false;g_starvation_boosts=0;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));
@@ -107,6 +111,34 @@ static void device_test(void)
     /* The UI is selected ahead of two busy normal tasks. */
     reset();hog.prio=P_NORMAL;rq_push(&normal);rq_push(&hog);rq_push(&ui);
     schedule();CHECK(g_current==&ui);
+}
+/* The production scheduler runs a continuously READY focused VM beside a
+ * refill worker. A ready-return loop is the negative control: it eventually
+ * demotes refill. Blocking between services preserves P_DEVICE and cadence. */
+static void fullscreen_refill_test(void)
+{
+    unsigned gaps[2]={0};
+    for (unsigned blocking=0;blocking<2;blocking++) {
+        reset();ui.state=T_BLOCKED;audio_focus=&normal;
+        rq_push(&normal);rq_push(&hog);schedule();
+        unsigned services=0;uint64_t last=g_ticks;
+        while (g_ticks<200) {
+            bool refill=g_current==&hog;
+            if (refill) {
+                if (services && g_ticks-last>gaps[blocking]) gaps[blocking]=(unsigned)(g_ticks-last);
+                last=g_ticks;services++;
+            }
+            run_tick(0x1234);
+            if (refill && blocking) task_sleep_ms(1);
+            else if (g_need_resched || refill) schedule();
+        }
+        CHECK(services>20);
+        if (blocking) CHECK(!hog.device_demoted && hog.prio==P_DEVICE && !overruns);
+        else CHECK(hog.device_demoted && overruns);
+    }
+    CHECK(gaps[0]>2 && gaps[1]<=2);
+    printf("f3-39 scheduler busy focus: ready-return refill gap=%ums, blocking refill gap=%ums, device guard retained PASS\n",gaps[0],gaps[1]);
+    audio_focus=0;
 }
 static void measured_wake_test(void)
 {
@@ -156,7 +188,7 @@ static void accounting_test(void)
 }
 int main(void)
 {
-    wake_test();device_test();measured_wake_test();accounting_test();
+    wake_test();device_test();fullscreen_refill_test();measured_wake_test();accounting_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;
 }

@@ -39,7 +39,8 @@ static int blackbox_error;
 int blackbox_checkpoint(void) { blackbox_syncs++; return blackbox_error; }
 static bool native_supported;
 static int native_begin_error,native_end_error;
-static unsigned native_prepares,native_begins,native_ends;
+static unsigned native_prepares,native_begins,native_ends,native_completes;
+static bool native_recovered;
 static char native_results[256],return_timing[256],frame_timing[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
@@ -62,6 +63,8 @@ int supersavage_display_begin(uint16_t mode)
 { (void)mode; assert(suspended && !fbdev_get()->present && !accel_ports_owned); native_begins++; event(11); return native_begin_error; }
 int supersavage_display_end(void)
 { assert(suspended && !fbdev_get()->present); native_ends++; event(12); return native_end_error; }
+void supersavage_display_complete(bool recovered)
+{ native_completes++;native_recovered=recovered; }
 static void wr16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static void wr32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; i++) p[i] = v >> (8 * i); }
 static void mode_info(uint16_t id, uint8_t m[256])
@@ -179,7 +182,7 @@ static void fixture(void)
     fullscreen_display=fullscreen_native=awaiting_native_frame=suspended=fs_begin_failure=fs_end_failure=false;
     native_supported=false;native_begin_error=native_end_error=0;
     fullscreen_return_timed=false;fullscreen_return_tick=0;
-    native_prepares=native_begins=native_ends=blackbox_syncs=0;blackbox_error=0;
+    native_prepares=native_begins=native_ends=native_completes=blackbox_syncs=0;native_recovered=false;blackbox_error=0;
     native_results[0]=return_timing[0]=frame_timing[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
@@ -275,14 +278,14 @@ static void fullscreen_tests(void)
 {
     fixture();is_supersavage=true;
     acceleration=&test_acceleration;accel_ports_owned=true;
-    assert(display_fullscreen_begin(0x13)==-EOPNOTSUPP && !suspended && !fullscreen_display);
+    assert(display_fullscreen_begin(0x13)==DISPLAY_FULLSCREEN_WINDOWED && !suspended && !fullscreen_display);
     assert(!sequence_count && !switches && !accel_stops && accel_ports_owned && fbdev_get()->present && log_syncs==2);
     fixture();log_active=false;
-    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
+    assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !sequence_count && fbdev_get()->present);
     fixture();log_sync_error=-EIO;
-    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && fbdev_get()->present);
+    assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !sequence_count && fbdev_get()->present);
     fixture();blackbox_error=-EIO;
-    assert(display_fullscreen_begin(3)==-EIO && !sequence_count && blackbox_syncs==1 && fbdev_get()->present);
+    assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !sequence_count && blackbox_syncs==1 && fbdev_get()->present);
     fixture();g_boot.flags|=CBI_F_SMBIOS_QEMU;log_active=false;
     assert(!display_fullscreen_begin(3) && !log_syncs);
     assert(!display_fullscreen_end());
@@ -300,13 +303,14 @@ static void fullscreen_tests(void)
     assert(sequence_count==ARRAY_SIZE(native_sequence) && !memcmp(sequence,native_sequence,sizeof(native_sequence)));
     g_ticks+=10000; display_watchdog_poll(); assert(!switches && fbdev_get()->present);
     fixture();is_supersavage=native_supported=true;native_begin_error=-EOPNOTSUPP;
-    assert(display_fullscreen_begin(3)==-EOPNOTSUPP && !suspended && fbdev_get()->present && native_ends==1 && !switches);
+    assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !suspended && fbdev_get()->present && native_ends==1 && !switches);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x101)); native_end_error=-EIO;
     display_fullscreen_return_request();g_ticks+=1180;
     assert(!display_fullscreen_end() && fbdev_get()->present && fbdev_get()->mapped && switches==1);
     assert(!suspended && !fullscreen_display && !changing && !switching && awaiting_frame);
     assert(strstr(native_results,"native_result=-5 fallback_attempted=1 fallback_result=0 result=0"));
+    assert(native_completes==1 && native_recovered);
     assert(strstr(return_timing,"lease_return_ms=1180 budget_ms=4000 overrun=0 result=0"));
     uint32_t rgb=0x00123456;
     struct fb_surface frame={&rgb,1,1,4,4};struct fb_rect rect={0,0,1,1};
@@ -318,13 +322,14 @@ static void fullscreen_tests(void)
     assert(!display_fullscreen_begin(0x13));native_end_error=-EIO;fail_restore=true;
     assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped && switches==1);
     assert(!suspended && !fullscreen_display && !awaiting_frame);
+    assert(native_completes==1 && !native_recovered);
     assert(strstr(native_results,"native_result=-5 fallback_attempted=1 fallback_result=-5 result=-5"));
     g_ticks+=10000;display_watchdog_poll();assert(switches==1);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x13));native_end_error=-EIO;bad_info=true;
     assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && switches==1 && !suspended);
     fixture();is_supersavage=native_supported=true;native_begin_error=-EIO;native_end_error=-EIO;
-    assert(display_fullscreen_begin(0x13)==-EIO && fbdev_get()->present && !suspended && switches==1);
+    assert(display_fullscreen_begin(0x13)==DISPLAY_FULLSCREEN_WINDOWED && fbdev_get()->present && !suspended && switches==1);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x13));display_fullscreen_return_request();g_ticks+=1180;
     assert(!display_fullscreen_end() && strstr(return_timing,"budget_ms=2000 overrun=0 result=0"));
@@ -349,23 +354,24 @@ static void fullscreen_tests(void)
         assert(!awaiting_frame && !awaiting_native_frame);
     }
     puts("PASS f3-37 display: all four packed modes retain native success / mediated VBE fallback, returned grant and first desktop frame; writes confined to active transaction");
+    puts("PASS f3-39 display: safe refusal/recovered entry returns windowed; final recovery result reaches native strike policy");
     puts("PASS f3-36 display: native failure -> bounded mediated VBE fallback, both results logged, lease/remap/presents/frame resume, invalid/failed fallback stays unavailable without retry, entry rollback, measured return/frame budgets");
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());
     assert(!fbdev_get()->present && !fbdev_get()->mapped && accel_stops==1);
-    assert(display_set(&desktop,0x111)==-EBUSY && display_fullscreen_begin(3)==-EBUSY);
+    assert(display_set(&desktop,0x111)==-EBUSY && display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED);
     assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && awaiting_frame);
     const unsigned expected[]={0,1,2,3,9,10,5,6,7,8};
     assert(sequence_count==ARRAY_SIZE(expected) && !memcmp(sequence,expected,sizeof(expected)));
     assert(!display_fullscreen_end());
     display_frame_complete(fbdev_get()->generation); assert(!awaiting_frame);
     fixture(); fs_begin_failure=true;
-    assert(display_fullscreen_begin(3)==-EIO && !suspended && fbdev_get()->present);
+    assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !suspended && fbdev_get()->present);
     fixture(); assert(!display_fullscreen_begin(3)); fs_end_failure=true;
     assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && switches==1);
     fixture(); assert(!display_fullscreen_begin(3)); fs_end_failure=fail_restore=true;
     assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped);
-    fixture(); busy=true; assert(display_fullscreen_begin(3)==-EBUSY && !suspended);
+    fixture(); busy=true; assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !suspended);
     puts("PASS full-screen lease: accelerator stop, grant suspend, LFB revoke, firmware save, restore/remap/repaint, rollback and failed restore");
 }
 /* f3-21: the worker that polls queued DOS full-screen requests must exist
