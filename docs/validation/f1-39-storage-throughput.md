@@ -119,3 +119,49 @@ replay was skipped. Detailed results are in `build/codex/f1-76-report.md`.
 The lead must qualify the integrated image on
 `volume-resolution-cd-usb-qemu-t23`, `optical-l1-qemu-t23` and `f1-storage`;
 no new guest or hardware evidence is claimed here.
+
+## F1-77: T23 PACKET signature and EC abort (2026-10-16)
+
+Research checked before implementation:
+[ATA/ATAPI-6 revision 3a](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf),
+7.15.6.2, 8.15.5.2 and 9.12: PACKET devices restore their signature and
+abort IDENTIFY DEVICE; DRDY may be set at command completion. IDENTIFY
+DEVICE is section 8.15 in this revision (8.12 describes a different command).
+[QEMU 9.2](https://github.com/qemu/qemu/blob/v9.2.0/hw/ide/core.c)
+(`ide_set_signature`, `cmd_identify`, `ide_abort_command`) publishes 14/EB
+and completes EC with DRDY|ERR and ABRT.
+[Linux 6.12 libata-core](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/libata-core.c)
+(`ata_dev_classify`) checks only LBA Mid/High because some devices do not
+publish valid SC/LBA Low values.
+[libata-sff](https://github.com/torvalds/linux/blob/v6.12/drivers/ata/libata-sff.c)
+(`ata_sff_dev_classify`) rejects status zero for ATA, not for ATAPI; its
+reset wait also accounts for ATAPI devices with missing SC/LBA Low values.
+
+The read-only T23 logs under `legacy/local/physical/a79f840c/serial.log`
+contain three secondary-master EC failures at status 51/error 04, before
+any secondary-channel signature line. The earlier `e8dfd0cd/serial.log`
+contains status 00/signature 010114eb and successful ATAPI identification.
+The firmware DMA-mode probe runs before the reset-signature logging, so
+these logs do not establish which task-file registers failed its ABRT
+check. The current check already permits DRDY/DSC, but requires SC/LBA Low
+01/01; reset classification also requires that complete tuple.
+
+Decision within f1-77: keep bounded BSY waits, the two discovery passes,
+and two reset samples. A stable 14/EB pair establishes PACKET presence
+and classification even with zero status, changing DRDY/DSC or transient
+SC/LBA Low. Keep complete matching snapshots for other signatures. For EC
+only, ABRT plus 14/EB permits the existing A1 classification path without
+SC/LBA Low requirements; BSY/DRQ/DF, non-ABRT errors and missing IRQs keep
+their existing containment. Log sampled signatures before classification,
+including absent units and differing reset samples, and log the firmware
+probe and EC-abort samples so pre-reset failures remain diagnosable.
+
+The focused ASan/UBSan ATA harness passes 53 added discovery scenarios and
+all 32 f1-76 topology combinations, with the existing containment controls.
+The full sanitized kernel host script and kernel-only target build pass;
+the optional prebuilt DOSBOOT replay is skipped. All commands ran
+sequentially under `nice -n 19`. The target build passes its frame checks
+and FPU/SIMD audit. Results and the initial regression replay against the
+unmodified driver are recorded in `build/codex/f1-77-report.md`. The lead's
+QEMU storage/media/volume-resolution gates and T23 `kind=atapi` confirmation
+remain outstanding; no new image or physical qualification is claimed.

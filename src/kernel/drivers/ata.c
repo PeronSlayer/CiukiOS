@@ -190,14 +190,36 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
     return -FS_EIO;
 }
 
-/* ATA-6 9.12 / QEMU cmd_identify: EC on a PACKET unit restores its
+static uint32_t read_signature(struct ata_channel *c)
+{
+    uint32_t value = reg_read(c, 2);
+    value |= (uint32_t)reg_read(c, 3) << 8;
+    value |= (uint32_t)reg_read(c, 4) << 16;
+    return value | (uint32_t)reg_read(c, 5) << 24;
+}
+static bool packet_signature(uint32_t value)
+{
+    /* libata ata_dev_classify: some PACKET units only publish Mid/High. */
+    return (value >> 16) == 0xeb14;
+}
+static void log_signature(struct ata_device *d, uint8_t status, uint32_t value)
+{
+    klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x",
+         d->channel->irq - 14, d->unit, status, value & 255,
+         (value >> 8) & 255, (value >> 16) & 255, value >> 24);
+}
+
+/* ATA-6 8.15.5.2, 9.12 / QEMU cmd_identify: EC on a PACKET unit restores its
  * signature and aborts. This is classification, never a failed I/O retry.
  * Call only for IDENTIFY, after checking the deadline and clearing BSY. */
-static bool packet_identify_abort(struct ata_channel *c, uint8_t s)
+static bool packet_identify_abort(struct ata_device *d, uint8_t s)
 {
-    return (s & ATA_ERR) && !(s & (ATA_BSY | ATA_DRQ | ATA_DF)) &&
-        reg_read(c, 1) == 0x04 && reg_read(c, 2) == 1 && reg_read(c, 3) == 1 &&
-        reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb;
+    struct ata_channel *c = d->channel;
+    if (!(s & ATA_ERR) || (s & (ATA_BSY | ATA_DRQ | ATA_DF)) || reg_read(c, 1) != 0x04)
+        return false;
+    uint32_t value = read_signature(c);
+    log_signature(d, s, value);
+    return packet_signature(value);
 }
 
 /* Poll only bounded status transitions at reset/selection or within a
@@ -213,7 +235,7 @@ static int poll_status_result(struct ata_device *d, uint64_t start, uint64_t dea
         if (c->stopped || c->quiescing || expired(c, deadline))
             return failure(d, start, s);
         if (!(s & ATA_BSY)) {
-            if (classify && packet_identify_abort(c, s)) return 1;
+            if (classify && packet_identify_abort(d, s)) return 1;
             if (!s || s == 0xff || (s & (ATA_ERR | ATA_DF)))
                 return failure(d, start, s);
             if ((s & required) == required && !(s & forbidden))
@@ -256,7 +278,7 @@ static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t st
     d->status = s;
     if (c->stopped || c->quiescing || expired(c, deadline))
         return failure(d, start, s);
-    if (classify && packet_identify_abort(c, s)) return 1;
+    if (classify && packet_identify_abort(d, s)) return 1;
     if (!(s & ATA_BSY) && (s & (ATA_ERR | ATA_DF)))
         return failure(d, start, s);
     return 0;
@@ -768,18 +790,20 @@ static int firmware_mode(struct ata_device *d)
     if (pace(c)) return failure(d, start, alternate(c));
     for (;;) {
         status = alternate(c);
-        if (!status || status == 0xff) return 0;
+        if (status == 0xff) return 0;
         if (!(status & ATA_BSY)) break;
         if (expired(c, deadline)) return failure(d, start, status);
         task_sleep_ms(1);
     }
-    if (reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb) return 0;
+    uint32_t value = read_signature(c);
+    log_signature(d, status, value);
+    if (packet_signature(value) || !status) return 0;
     int e = issue(d, ATA_IDENTIFY, start, &sequence);
     while (!e) {
         status = alternate(c);
         if (expired(c, deadline)) { e = failure(d, start, status); break; }
         if (status & ATA_BSY) { task_sleep_ms(1); continue; }
-        if (packet_identify_abort(c, status)) break;
+        if (packet_identify_abort(d, status)) break;
         /* The abort may arrive between the status sample above and the
          * DRQ poll. Classify it there too, before generic containment. */
         e = poll_status_result(d, start, deadline, ATA_DRQ, 0, true);
@@ -818,18 +842,19 @@ static int read_reset_signature(struct ata_device *d, struct reset_signature *si
             return failure(d, start, s);
         if (s == 0xff) return 0;
         if (!(s & ATA_BSY)) {
-            uint32_t value = reg_read(c, 2);
-            value |= (uint32_t)reg_read(c, 3) << 8;
-            value |= (uint32_t)reg_read(c, 4) << 16;
-            value |= (uint32_t)reg_read(c, 5) << 24;
-            /* Bracket the task file with status reads, and require two
-             * identical snapshots separated by a sleep. A single 00/00
-             * cylinder pair while reset/selection settles is not ATA. */
+            uint32_t value = read_signature(c);
+            /* Bracket the task file with BSY-clear status. PACKET's
+             * Mid/High pair is decisive even while SC/Low or DRDY/DSC
+             * change; other signatures still need identical snapshots. */
             uint8_t ending = alternate(c);
-            if (ending == s) {
-                if (sampled && value == previous && s == previous_status) {
+            if (!sampled || value != previous || s != previous_status)
+                log_signature(d, s, value);
+            bool packet = packet_signature(value);
+            if (ending != 0xff && !(ending & ATA_BSY) && (ending == s || packet)) {
+                if (sampled && (packet ? packet_signature(previous) :
+                                          value == previous && s == previous_status)) {
                     sig->value = value; sig->status = s;
-                    sig->present = s || value == 0xeb140101u;
+                    sig->present = s || packet;
                     return 0;
                 }
                 sampled = true; previous = value; previous_status = s;
@@ -875,21 +900,15 @@ int ata_channel_discover(struct ata_channel *c)
         struct ata_device *d = &c->devices[i];
         d->issued = false;
         e = read_reset_signature(d, &sig[i]);
-        if (e || !sig[i].present) continue;
-        /* One line per selected unit so an absent slave can be told from a
-         * signature mismatch in the boot log (gate evidence of 2026-10-16). */
-        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, sig[i].status,
-             sig[i].value & 255, (sig[i].value >> 8) & 255,
-             (sig[i].value >> 16) & 255, sig[i].value >> 24);
     }
     /* Pass 2: classify and identify. Commands may now change task files. */
     for (unsigned i = 0; i < ATA_DEVICES && !e; i++) {
         struct ata_device *d = &c->devices[i];
-        if (!sig[i].present || (sig[i].value & 0xffff) != 0x0101)
+        if (!sig[i].present)
             continue;
         reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
         if (pace(c)) { e = failure(d, start, alternate(c)); break; }
-        if (sig[i].value == 0xeb140101u) {
+        if (packet_signature(sig[i].value)) {
             d->present = d->atapi = true;
             e = identify_packet(d);
             if (e == -FS_EOPNOTSUPP) { e = 0; continue; }

@@ -67,7 +67,20 @@ static void outb(uint16_t port, uint8_t v) {
 }
 static void outl(uint16_t port, uint32_t v) { if (port == 0xcf8) native_dma_config_address = v; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
-void klog(const char *fmt, ...) { (void)fmt; }
+static bool capture_logs;
+static char captured_logs[4096];
+void klog(const char *fmt, ...)
+{
+    if (!capture_logs) return;
+    size_t used = strlen(captured_logs);
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(captured_logs + used, sizeof(captured_logs) - used, fmt, ap);
+    va_end(ap);
+    CHECK(n >= 0 && (size_t)n + 1 < sizeof(captured_logs) - used);
+    if (n >= 0 && (size_t)n + 1 < sizeof(captured_logs) - used)
+        strcat(captured_logs, "\n");
+}
 __attribute__((noreturn)) void panic(const char *fmt, ...)
 {
     fprintf(stderr, "unexpected panic: %s\n", fmt);
@@ -210,6 +223,9 @@ struct fake {
     bool discovery_model, reset_started, hide_packet[2], signature_seen[2], signature_published[2];
     bool zero_transient[2], unstable_signature;
     uint8_t taskfile[2][6], unit_status[2], unit_command[2], abort_error;
+    uint16_t reset_low[2], abort_low;
+    uint8_t packet_status[2];
+    bool packet_transition[2], low_transition[2], low_settled[2];
     uint64_t signature_at[2], busy_until[2];
     unsigned settle_ms[2], busy_ms[2], signature_reads[2], reset_count;
     unsigned identify_ata[2], identify_atapi[2], premature_commands;
@@ -278,9 +294,21 @@ static uint8_t fake_in8(void *ctx, uint16_t port)
                 (g_ticks < f->signature_at[u] && !f->zero_transient[u]) || f->hide_packet[u] ? ATA_DRDY : 0;
             if (!f->signature_published[u] && g_ticks >= f->signature_at[u]) {
                 f->signature_published[u] = true;
-                f->taskfile[u][2] = f->taskfile[u][3] = f->kind[u] == ABSENT ? 0 : 1;
+                uint16_t low = f->kind[u] == ABSENT || f->low_transition[u] ? 0 : f->reset_low[u];
+                f->taskfile[u][2] = low & 255; f->taskfile[u][3] = low >> 8;
                 f->taskfile[u][4] = f->kind[u] == PACKET && !f->hide_packet[u] ? 0x14 : 0;
                 f->taskfile[u][5] = f->kind[u] == PACKET && !f->hide_packet[u] ? 0xeb : 0;
+            }
+            if (f->signature_published[u] && f->kind[u] == PACKET && !f->hide_packet[u]) {
+                bool first = g_ticks == f->signature_at[u];
+                f->status = first && f->packet_transition[u] ? 0 : f->packet_status[u];
+                /* Publish the SC/Low transition once. Later host writes
+                 * must remain broadcast, rather than being reconstructed. */
+                if (f->low_transition[u] && !f->low_settled[u] && !first) {
+                    f->taskfile[u][2] = f->reset_low[u] & 255;
+                    f->taskfile[u][3] = f->reset_low[u] >> 8;
+                    f->low_settled[u] = true;
+                }
             }
         }
     }
@@ -298,6 +326,7 @@ static uint8_t fake_in8(void *ctx, uint16_t port)
     }
     if (r == 1) { f->errors++; return f->command ? f->abort_error : 1; }
     if (f->discovery_model && r >= 2 && r <= 5) {
+        CHECK(!f->reset_started || g_ticks >= f->busy_until[f->selected]);
         if (r == 4 && f->unstable_signature && f->reset_started)
             f->taskfile[f->selected][r] ^= 1;
         f->signature_reads[f->selected]++;
@@ -341,6 +370,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
                     f->unit_status[u] = ATA_BSY; f->unit_command[u] = 0;
                     f->signature_published[u] = false;
                     f->signature_seen[u] = false;
+                    f->low_settled[u] = false;
                     memset(f->taskfile[u], 0, sizeof(f->taskfile[u]));
                     /* A transient ATA-looking tuple before PACKET publication. */
                     f->taskfile[u][2] = f->taskfile[u][3] = f->zero_transient[u] ? 0 : 1;
@@ -427,7 +457,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     }
     if (f->discovery_model && f->kind[f->selected] == PACKET && value == ATA_IDENTIFY) {
         unsigned u = f->selected;
-        f->taskfile[u][2] = f->taskfile[u][3] = 1;
+        f->taskfile[u][2] = f->abort_low & 255; f->taskfile[u][3] = f->abort_low >> 8;
         f->taskfile[u][4] = 0x14; f->taskfile[u][5] = f->bad_abort_signature ? 0 : 0xeb;
         f->status = f->abort_status;
         if (f->defer_abort) f->abort_status_reads = 1;
@@ -542,6 +572,8 @@ static void fresh(struct fake *f, bool ext)
     f->kind[0] = DISK;
     f->abort_error = 4;
     f->abort_status = ATA_DRDY | ATA_ERR;
+    f->abort_low = f->reset_low[0] = f->reset_low[1] = 0x0101;
+    captured_logs[0] = 0;
     f->status = 0x40;
     for (unsigned u = 0; u < 2; u++) {
         uint16_t *id = f->identify[u];
@@ -944,6 +976,106 @@ static void discovery_fresh(struct fake *f, unsigned topology, bool dma)
     }
 }
 
+static void test_t23_discovery(void)
+{
+    capture_logs = true;
+    /* Single optical master: the first reset sample is 00/14/EB, then
+     * DRDY|DSC. SC/Low may also change while Mid/High remain decisive. */
+    for (unsigned dma = 0; dma < 2; dma++) {
+        for (unsigned transient = 0; transient < 2; transient++) {
+            struct fake f;
+            discovery_fresh(&f, 1, dma); f.kind[1] = ABSENT;
+            f.packet_status[0] = 0x50; f.packet_transition[0] = true;
+            f.low_transition[0] = transient;
+            f.reset_low[0] = transient ? 0x0302 : 0x0101;
+            f.unit_status[0] = 0;
+            native_attach(&f, 1);
+            CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.stopped);
+            CHECK(f.channel.devices[0].atapi && f.channel.devices[0].identified);
+            CHECK(!f.channel.devices[1].present && !f.identify_ata[0] && f.identify_atapi[0] == 1);
+            CHECK(f.reset_count == 1 && !f.premature_commands);
+            CHECK(f.signature_reads[0] == 8 + 4 * dma); /* exactly two reset samples */
+            const char *first = strstr(captured_logs, transient ?
+                "[ata1] unit=0 status=00 signature=000014eb\n" :
+                "[ata1] unit=0 status=00 signature=010114eb\n");
+            const char *second = strstr(captured_logs, transient ?
+                "[ata1] unit=0 status=50 signature=020314eb\n" :
+                "[ata1] unit=0 status=50 signature=010114eb\n");
+            const char *identified = strstr(captured_logs, "[ata1] unit=0 kind=atapi");
+            CHECK(first && second && identified && first < second && second < identified);
+            CHECK(strstr(captured_logs, "[ata1] unit=1 status=00 signature=00000000\n"));
+            CHECK(!strstr(captured_logs, "fault") && !f.channel.active && (f.control & ATA_NIEN));
+        }
+    }
+    capture_logs = false;
+    /* Zero or DRDY|DSC status, including a permanently incomplete SC/Low
+     * tuple, with/without BSY and the pre-reset firmware probe. */
+    const uint16_t lows[] = { 0x0101, 0, 0x0302 };
+    for (unsigned dma = 0; dma < 2; dma++) {
+        for (unsigned ready = 0; ready < 2; ready++) {
+            for (unsigned low = 0; low < 3; low++) {
+                for (unsigned busy = 0; busy < 2; busy++) {
+                    struct fake f;
+                    discovery_fresh(&f, 1, dma); f.kind[1] = ABSENT;
+                    f.reset_low[0] = lows[low]; f.packet_status[0] = ready ? 0x50 : 0;
+                    f.busy_ms[0] = busy ? 5 : 0;
+                    CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.stopped);
+                    CHECK(f.channel.devices[0].atapi && f.channel.devices[0].identified);
+                    CHECK(!f.identify_ata[0] && f.identify_atapi[0] == 1);
+                    CHECK(!f.premature_commands && f.reset_count == 1);
+                }
+            }
+        }
+    }
+    capture_logs = true;
+    /* Late PACKET signature: EC aborts with T23 status 51/error 04, then
+     * exactly one A1, through the IRQ path and both firmware poll paths. */
+    for (unsigned dma = 0; dma < 2; dma++) {
+        for (unsigned deferred = 0; deferred < 2; deferred++) {
+            for (unsigned low = 0; low < 3; low++) {
+                for (unsigned immediate = 0; immediate < 2; immediate++) {
+                    struct fake f;
+                    discovery_fresh(&f, 1, dma); f.kind[1] = ABSENT;
+                    if (dma) f.taskfile[0][4] = f.taskfile[0][5] = 0;
+                    else f.hide_packet[0] = true;
+                    f.abort_low = lows[low]; f.abort_status = 0x51;
+                    f.packet_status[0] = 0x50; f.packet_transition[0] = true;
+                    f.defer_abort = deferred; f.immediate = immediate;
+                    native_attach(&f, 1);
+                    CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.stopped);
+                    CHECK(f.channel.devices[0].atapi && f.channel.devices[0].identified);
+                    CHECK(f.identify_ata[0] == 1 && f.identify_atapi[0] == 1 && f.commands == 2);
+                    CHECK(f.reset_count == 1 && !f.premature_commands);
+                    CHECK(!f.channel.active && !f.channel.request_generation &&
+                          !f.channel.mutex.owner && (f.control & ATA_NIEN));
+                    CHECK(!f.channel.devices[0].block.quarantined && !masked[15]);
+                    const char *aborted = strstr(captured_logs, low == 0 ?
+                        "[ata1] unit=0 status=51 signature=010114eb\n" : low == 1 ?
+                        "[ata1] unit=0 status=51 signature=000014eb\n" :
+                        "[ata1] unit=0 status=51 signature=020314eb\n");
+                    const char *identified = strstr(captured_logs, "[ata1] unit=0 kind=atapi");
+                    CHECK(aborted && identified && aborted < identified && !strstr(captured_logs, "fault"));
+                }
+            }
+        }
+    }
+    /* A pre-reset failure must retain both the sampled tuple and the
+     * abort tuple before containment; its missing 14/EB still fails. */
+    struct fake f;
+    discovery_fresh(&f, 1, true); f.kind[1] = ABSENT;
+    f.taskfile[0][4] = f.taskfile[0][5] = 0;
+    f.abort_status = 0x51; f.bad_abort_signature = true;
+    native_attach(&f, 1);
+    CHECK(ata_channel_discover(&f.channel) == -FS_EIO && f.channel.stopped);
+    CHECK(!f.reset_count && f.identify_ata[0] == 1 && !f.identify_atapi[0]);
+    const char *sample = strstr(captured_logs, "[ata1] unit=0 status=40 signature=01010000\n");
+    const char *aborted = strstr(captured_logs, "[ata1] unit=0 status=51 signature=01011400\n");
+    const char *fault = strstr(captured_logs, "[ata1] fault unit=0 command=ec");
+    CHECK(sample && aborted && fault && sample < aborted && aborted < fault);
+    capture_logs = false;
+    puts("ATA T23 discovery: zero/DRDY|DSC status, SC/Low transients, BSY wait, status 51 EC ABRT -> A1, signature logs: PASS");
+}
+
 static void test_discovery_topologies(void)
 {
     for (unsigned dma = 0; dma < 2; dma++) {
@@ -1130,7 +1262,7 @@ static void test_emergency_recorder(void)
 }
 int main(void)
 {
-    test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
+    test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
     test_dma(); test_constant_pic_masks(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
