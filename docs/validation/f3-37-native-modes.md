@@ -34,7 +34,28 @@ desktop VBE fallback.
 
 Commands, exact summaries and limitations are in
 `build/codex/f3-37-report.md`. Host checks run sequentially at nice level 19.
-No image, QEMU, systemd scope, commit or diary operation is part of this work.
+No canonical FAT32 image, QEMU, systemd scope, commit or diary operation is
+part of this work; the review follow-up builds the kernel and private DOS payload.
+
+## Review fixes (2026-10-16)
+
+Rechecked the [VESA VBE 2.0 standard](https://www.phatcode.net/res/221/files/vbe20.pdf),
+sections 3, 4.5–4.6, 4.9–4.12 and Appendix 2 against the synthetic handler.
+The original handler restricted 4F02 to linear modes, compared BX rather
+than BL for scanline/palette operations and discarded the preserve flag.
+Decision: expose the ten existing VGA modes in the private ROM list with
+matching aperture-based 4F01 information; forward their 4F02 selections to
+the existing VGA BIOS transaction. Use BDA 40:87 bit 7 for 4F03 bit 15,
+updating it after successful linear allocation and retaining other BDA bits.
+Dispatch 4F06/08/09 on BL; 4F08 still validates BH on DAC-format sets and
+4F07 still requires BH zero. Existing unsupported operations stay refused.
+
+Host regressions cover all VGA entries, saved 0003h → 4101h → 0003h in
+windowed and fullscreen paths with rendered DOS text, arbitrary BH in
+queries/palette transfers, the 4F08 → 4F09 register-reuse sequence, and
+preserve/query/replay/clear plus refused-set retention. Kernel/DOS payload
+builds and exact results are recorded in the report's Review fixes section;
+no canonical FAT32 image or QEMU run is included.
 
 ## Qualification still required
 

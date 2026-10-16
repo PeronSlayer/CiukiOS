@@ -1,4 +1,4 @@
-/* Synthetic, linear-only VBE. RAM remains owned by the VM in both display
+/* Synthetic VBE with legacy VGA and linear modes. RAM stays VM-owned in both display
  * paths; no guest address is interpreted as a host physical address.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -11,8 +11,9 @@ void dosvm_vbe_init(struct dosvm *v)
     /* F3000..F37ff holds the complete 8x8 font; the remaining half of
      * this private, guest-read-only ROM page holds VBE data, never code. */
     uint8_t *rom=(uint8_t *)P2V(v->frames[0xF3])+0x800;
-    const uint16_t modes[]={0x101,0x103,0x111,0x114,0xFFFF};
-    for (unsigned i=0;i<ARRAY_SIZE(modes);i++) vm_w16(rom+2*i,modes[i]);
+    const uint16_t modes[]={0x101,0x103,0x111,0x114,
+                           0,1,2,3,0x0D,0x0E,0x10,0x11,0x12,0x13,0xFFFF};
+    for (unsigned i=0;i<ARRAY_SIZE(modes);i++) vm_w16(rom+0x80+2*i,modes[i]);
     memcpy(rom+0x10,"CiukiOS",8);
     memcpy(rom+0x20,"Native SuperSavage VBE",22);
     memcpy(rom+0x40,"F3-37",6);
@@ -24,6 +25,24 @@ static bool vbe_available(struct dosvm *v,uint16_t mode)
     (void)v;
     return dos_video_mode(mode) && display_fullscreen_supported(mode);
 }
+static const cvga_mode_params *vbe_vga_mode(unsigned mode)
+{ return mode<=0x13 ? cvga_find_mode(mode) : 0; }
+static void vbe_vga_info(uint8_t *info,const cvga_mode_params *m)
+{
+    bool packed=m->mode==0x13;
+    /* Fixed VGA aperture, not a bank-switching or linear framebuffer. */
+    vm_w16(info,m->text ? 0x000F : 0x001F); info[2]=6;
+    vm_w16(info+4,m->text ? 32 : 64); vm_w16(info+6,m->text ? 32 : 64);
+    vm_w16(info+8,m->segment);
+    vm_w16(info+16,m->text ? m->columns*2 : packed ? m->width : m->width/8);
+    vm_w16(info+18,m->text ? m->columns : m->width);
+    vm_w16(info+20,m->text ? m->rows : m->height);
+    info[22]=m->text ? m->width/m->columns : 8; info[23]=m->char_height;
+    info[24]=m->text || packed ? 1 : 4; info[25]=packed ? 8 : 4;
+    info[26]=1; info[27]=m->text ? 0 : packed ? 4 : 3;
+    info[29]=m->text ? 7 : packed ? 0 : 0x10000/m->page_bytes-1;
+    info[30]=1;
+}
 static int vbe_output(struct dosvm *v,struct v86_frame *f,const void *data,unsigned bytes)
 {
     if (!vm_buffer(v,f->es,f->tf.edi,bytes,true)) return -EFAULT;
@@ -32,6 +51,7 @@ static int vbe_output(struct dosvm *v,struct v86_frame *f,const void *data,unsig
 int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
 {
     unsigned ax=(uint16_t)f->tf.eax,bx=(uint16_t)f->tf.ebx;
+    unsigned bl=bx&255;
     unsigned cx=(uint16_t)f->tf.ecx,dx=(uint16_t)f->tf.edx;
     bool ok=false;
     uint8_t info[512]={0};
@@ -41,10 +61,14 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
             dosvm_read(v,vm_ptr(f->es,f->tf.edi),info,4)) return -EFAULT;
         unsigned bytes=!memcmp(info,"VBE2",4) ? 512 : 256;
         memset(info,0,sizeof(info)); memcpy(info,"VESA",4); vm_w16(info+4,0x0200);
-        vm_w32(info+6,0xF0003810);vm_w32(info+14,0xF0003800);
+        vm_w32(info+6,0xF0003810);vm_w32(info+14,0xF0003880);
         vm_w16(info+18,DOS_VBE_BYTES/65536);vm_w16(info+20,1);
         vm_w32(info+22,0xF0003810);vm_w32(info+26,0xF0003820);vm_w32(info+30,0xF0003840);
         int e=vbe_output(v,f,info,bytes); if (e) return e; ok=true;
+    } else if (ax==0x4F01 && !(cx&~0x41FFu) &&
+               vbe_vga_mode(cx&0x1FF) && vbe_available(v,0x101)) {
+        vbe_vga_info(info,vbe_vga_mode(cx&0x1FF));
+        int e=vbe_output(v,f,info,256); if (e) return e; ok=true;
     } else if (ax==0x4F01 && !(cx&~0x41FFu) && vbe_available(v,cx&0x1FF)) {
         const struct dos_video_mode *m=dos_video_mode(cx&0x1FF);
         /* Supported, colour, graphics, no VGA window, linear available.
@@ -56,8 +80,19 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
         if (m->bpp==16) { info[31]=5;info[32]=11;info[33]=6;info[34]=5;info[35]=5; }
         vm_w32(info+40,DOS_VBE_PHYS);
         int e=vbe_output(v,f,info,256); if (e) return e; ok=true;
+    } else if (ax==0x4F02 && !(bx&~0x81FFu) &&
+               vbe_vga_mode(bx&0x1FF) && vbe_available(v,0x101)) {
+        /* Reuse the VGA BIOS transaction, including ordered native return,
+         * BDA updates, font/palette setup and presenter invalidation. */
+        struct v86_frame mode=*f;
+        vm_low(&mode.tf.eax,(bx&0x1FF)|((bx&0x8000)>>8));
+        int e=dosvm_vga_bios(v,&mode); if (e) return e; ok=true;
     } else if (ax==0x4F02 && (bx&0x4000) && !(bx&~0xC1FFu) && vbe_available(v,bx&0x1FF)) {
         if (vbe_backing(v)) {
+            uint8_t ctl;
+            if (dosvm_read(v,0x487,&ctl,1)) return -EFAULT;
+            ctl=(ctl&0x7F)|((bx&0x8000)>>8);
+            if (dosvm_write(v,0x487,&ctl,1)) return -EFAULT;
             dosvm_vga_sync(v,true);
             /* Capture the old VGA transport before changing its model. */
             if (v->fullscreen && !v->vbe_mode) dosvm_fullscreen_model_begin(v);
@@ -71,17 +106,18 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
             dosvm_launch_video(v); ok=true;
         }
     } else if (ax==0x4F03 && vbe_available(v,0x101)) {
-        uint8_t mode=3; dosvm_read(v,0x449,&mode,1);
-        vm_low(&f->tf.ebx,v->vbe_mode ? v->vbe_mode|0x4000 : mode); ok=true;
-    } else if (ax==0x4F06 && bx==1 && v->vbe_mode) {
+        uint8_t mode,ctl;
+        if (dosvm_read(v,0x449,&mode,1) || dosvm_read(v,0x487,&ctl,1)) return -EFAULT;
+        vm_low(&f->tf.ebx,(v->vbe_mode ? v->vbe_mode|0x4000 : mode)|((ctl&0x80)<<8)); ok=true;
+    } else if (ax==0x4F06 && bl==1 && v->vbe_mode) {
         const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
         vm_low(&f->tf.ebx,m->pitch); vm_low(&f->tf.ecx,m->width); vm_low(&f->tf.edx,m->height); ok=true;
     } else if (ax==0x4F07 && v->vbe_mode && (bx==1 || (bx==0 && !cx && !dx))) {
         vm_low(&f->tf.ecx,0); vm_low(&f->tf.edx,0); ok=true;
-    } else if (ax==0x4F08 && vbe_available(v,0x101) && ((bx&255)==1 || bx==0x0600)) {
+    } else if (ax==0x4F08 && vbe_available(v,0x101) && (bl==1 || (bl==0 && (bx>>8)==6))) {
         vm_low(&f->tf.ebx,0x0600); ok=true; /* only standard six-bit guest DAC */
-    } else if (ax==0x4F09 && v->vbe_mode && (bx==0 || bx==1) && dx<=256 && cx<=256-dx) {
-        bool read=bx==1; unsigned bytes=cx*4;
+    } else if (ax==0x4F09 && v->vbe_mode && (bl==0 || bl==1) && dx<=256 && cx<=256-dx) {
+        bool read=bl==1; unsigned bytes=cx*4;
         if (!vm_buffer(v,f->es,f->tf.edi,bytes,read)) return -EFAULT;
         /* Validate the whole transfer before changing any DAC entry. */
         for (unsigned i=0;i<cx;i++) {

@@ -237,6 +237,32 @@ static int vbe_changing_row(void *arg,unsigned y,const void *pixels,unsigned byt
     if (!y) v->vga.display_changes++;
     return capture_row(frame_buffer,y,pixels,bytes);
 }
+static void vbe_saved_vga_restore(struct dosvm *v,struct dosvm_key key,bool fullscreen)
+{
+    int10(v,3,0,0,0);
+    struct v86_frame f=vf(0x4F03,0,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && (uint16_t)f.tf.ebx==3);
+    unsigned saved=(uint16_t)f.tf.ebx;
+    f=vf(0x4F02,0x4101,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->vbe_mode==0x101);
+    if (fullscreen) CHECK(!dosvm_fullscreen_enter(key));
+    f=vf(0x4F02,saved,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !v->vbe_mode);
+    if (fullscreen) {
+        CHECK(fullscreen_return && v->fullscreen_hold && fs_display);
+        dosvm_fullscreen_poll();
+    }
+    CHECK(!v->fullscreen && !v->fullscreen_hold && !fs_display);
+    f=vf(0x4F03,0,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==saved);
+    /* DOS text writes must reach the VGA presenter after the restore. */
+    int10(v,0x0E43,7,0,0);int10(v,0x0E3E,7,0,0);
+    CHECK(cvga_peek_vram(&v->vga,0xB8000)=='C' && cvga_peek_vram(&v->vga,0xB8002)=='>');
+    compare_with_reference(v,g_ticks);
+    bool visible=false;
+    for (unsigned i=0;i<sizeof(frame_buffer);i++) visible|=frame_buffer[i]!=0;
+    CHECK(visible);
+}
 static void test_fullscreen_vbe(void)
 {
     window_fixtures();fs_vbe_available=true;
@@ -248,9 +274,11 @@ static void test_fullscreen_vbe(void)
     uint8_t info[512];CHECK(!dosvm_read(v,0x20000,info,256));
     CHECK(!memcmp(info,"VESA",4) && vm_u16(info+4)==0x200 && vm_u16(info+18)==16);
     const unsigned modes[]={0x101,0x103,0x111,0x114};
-    uint8_t list[10];CHECK(!dosvm_read(v,vm_far(vm_u32(info+14)),list,sizeof(list)));
-    for (unsigned i=0;i<4;i++) CHECK(vm_u16(list+2*i)==modes[i]);CHECK(vm_u16(list+8)==0xFFFF);
-    CHECK(!dosvm_range(v,0xF3800,10,true));
+    const unsigned vga_modes[]={0,1,2,3,0x0D,0x0E,0x10,0x11,0x12,0x13};
+    uint8_t list[30];CHECK(!dosvm_read(v,vm_far(vm_u32(info+14)),list,sizeof(list)));
+    for (unsigned i=0;i<4;i++) CHECK(vm_u16(list+2*i)==modes[i]);
+    for (unsigned i=0;i<ARRAY_SIZE(vga_modes);i++) CHECK(vm_u16(list+8+2*i)==vga_modes[i]);
+    CHECK(vm_u16(list+28)==0xFFFF && !dosvm_range(v,0xF3880,sizeof(list),true));
     for (unsigned i=34;i<256;i++) CHECK(!info[i]);
     CHECK(!dosvm_write(v,0x20000,"VBE2",4));f=vf(0x4F00,0,0,0);f.es=0x2000;
     CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x20000,info,512));
@@ -259,6 +287,25 @@ static void test_fullscreen_vbe(void)
     f=vf(0x4F01,0,0x111,0);f.es=0x2000;f.tf.edi=0xFF80;
     CHECK(dosvm_vga_bios(v,&f)==-EFAULT && !v->vbe_mode);
     f.tf.edi=0;f.es=0xF000;CHECK(dosvm_vga_bios(v,&f)==-EFAULT);
+    for (unsigned i=0;i<ARRAY_SIZE(vga_modes);i++) {
+        unsigned mode=vga_modes[i];const cvga_mode_params *m=cvga_find_mode(mode);
+        f=vf(0x4F01,0,mode,0);f.es=0x2000;
+        CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x20000,info,256));
+        CHECK(vm_u16(info)==(m->text ? 0xF : 0x1F) && info[2]==6 && !info[3]);
+        CHECK(vm_u16(info+8)==m->segment && !vm_u32(info+40));
+        CHECK(vm_u16(info+18)==(m->text ? m->columns : m->width) &&
+              vm_u16(info+20)==(m->text ? m->rows : m->height));
+        CHECK(info[24]==(m->text || mode==0x13 ? 1 : 4) && info[25]==(mode==0x13 ? 8 : 4));
+        f=vf(0x4F02,mode,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !v->vbe_mode);
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==mode);
+        uint8_t ctl;CHECK(!dosvm_read(v,0x487,&ctl,1) && !(ctl&0x80));
+        cvga_store_plane(&v->vga,0,0,0x5A);
+        f=vf(0x4F02,mode|0x8000,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+        CHECK(v->vga.plane[0][0]==0x5A && !dosvm_read(v,0x487,&ctl,1) && (ctl&0x80));
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==(mode|0x8000));
+    }
+    vbe_saved_vga_restore(v,key,false);
+    vbe_saved_vga_restore(v,key,true);
     for (unsigned i=0;i<4;i++) {
         const struct dos_video_mode *m=dos_video_mode(modes[i]);
         f=vf(0x4F01,0,m->number,0);f.es=0x2000;
@@ -272,7 +319,20 @@ static void test_fullscreen_vbe(void)
         for (unsigned k=0;k<37;k++) (void)dosvm_vga_status(v,1000);
         CHECK(v->video_vblank_us==1000000+(m->width==640 ? 16683u : 16579u));
         f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==(m->number|0x4000));
-        f=vf(0x4F06,1,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==m->pitch && (uint16_t)f.tf.ecx==m->width);
+        f=vf(0x4F06,0xA501,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F &&
+            (uint16_t)f.tf.ebx==m->pitch && (uint16_t)f.tf.ecx==m->width && (uint16_t)f.tf.edx==m->height);
+        /* Bit 15 and the BDA agree; replaying 4F03 must retain RAM. */
+        uint8_t ctl=0x65,byte=0x5A;
+        CHECK(!dosvm_write(v,0x487,&ctl,1) && !dosvm_write(v,v->vbe_buffer.base,&byte,1));
+        f=vf(0x4F02,m->number|0xC000,0,0);
+        CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x487,&ctl,1) && ctl==0xE5);
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==(m->number|0xC000));
+        f.tf.eax=0x4F02;CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+        CHECK(!dosvm_read(v,v->vbe_buffer.base,&byte,1) && byte==0x5A);
+        f=vf(0x4F02,m->number|0x4000,0,0);
+        CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x487,&ctl,1) && ctl==0x65);
+        CHECK(!dosvm_read(v,v->vbe_buffer.base,&byte,1) && !byte);
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==(m->number|0x4000));
         uint8_t pattern[4]={0x1F,0xF8,0xE0,0x07};CHECK(!dosvm_write(v,v->vbe_buffer.base,pattern,4));
         struct ciuki_rect damage;v->video_presented=false;
         CHECK(dosvm_vga_present(v,capture_row,frame_buffer,g_ticks,&damage)==1);
@@ -306,13 +366,24 @@ static void test_fullscreen_vbe(void)
     f=vf(0x4F09,0,2,0);f.es=0x2000;f.tf.edi=0xFFFC;
     CHECK(dosvm_vga_bios(v,&f)==-EFAULT);
     uint8_t palette[8]={1,2,3,0,4,5,6,0};CHECK(!dosvm_write(v,0x20000,palette,8));
-    f=vf(0x4F09,0,2,0);f.es=0x2000;CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+    f=vf(0x4F08,0xA501,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && (uint16_t)f.tf.ebx==0x0600);
+    /* Reuse BX=0600h from the DAC query, changing only AX/CX/ES. */
+    f.tf.eax=0x4F09;f.tf.ecx=2;f.es=0x2000;
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
     CHECK(v->vga.dac[0][0]==3 && v->vga.dac[1][2]==4);
-    f=vf(0x4F09,1,2,0);f.es=0x2000;CHECK(!dosvm_vga_bios(v,&f) && !dosvm_read(v,0x20000,info,8) && !memcmp(info,palette,8));
+    CHECK(!dosvm_write(v,0x20000,info,8));
+    f=vf(0x4F09,0xA501,2,0);f.es=0x2000;CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x20000,info,8) && !memcmp(info,palette,8));
+    f=vf(0x4F08,0x0600,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+    f=vf(0x4F08,0x0800,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
+    f=vf(0x4F07,0x0601,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
+    f=vf(0x4F07,0x0600,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
     /* Unsupported/banked/custom-refresh modes leave the current state intact. */
-    const unsigned bad[]={0x110|0x4000,0x113|0x4000,0x101,0x114|0x4800,0x118|0x4000};
+    const unsigned bad[]={0x110|0x4000,0x113|0x4000,0x101,0x114|0x4800,0x118|0x4000,0x83,0x4003,4};
     for (unsigned i=0;i<ARRAY_SIZE(bad);i++) {
+        uint8_t ctl=0xE5;CHECK(!dosvm_write(v,0x487,&ctl,1));
         f=vf(0x4F02,bad[i],0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && v->vbe_mode==0x114);
+        CHECK(!dosvm_read(v,0x487,&ctl,1) && ctl==0xE5);
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==0xC114);
     }
     CHECK(!dosvm_fullscreen_enter(key));fs_linear_error=-EIO;
     *vbe_pte(v,0)|=0x40;dosvm_fullscreen_poll();
@@ -345,5 +416,6 @@ static void test_fullscreen_vbe(void)
     v=create();f=vf(0x4F02,0x4101,0,0);
     CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && !v->vbe_buffer.used && !v->vbe_mode);
     destroy(v,true);empty();fs_vbe_available=false;
+    puts("PASS f3-37 review fixes: saved VGA restore windowed/fullscreen with visible text, modeled VGA enumeration/info, nonzero-BH palette/scanline calls, preserve-memory/BDA round trips and refused-set retention");
     puts("PASS f3-37 guest VBE: four modes query/set/get, bounded buffers and refusals, private DPMI mapping, window frames, enter/first linear write/exact RAM PTEs/restore failure, ordered VGA return and cleanup");
 }
