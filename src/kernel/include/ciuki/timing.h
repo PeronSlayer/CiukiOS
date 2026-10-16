@@ -4,8 +4,30 @@
 #define CIUKI_TIMING_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define CRIT_BUDGET_US 250u
+
+/* A ten-second window contains fewer than 10000 disjoint >1 ms sections.
+ * Static diagnostic storage; no allocation, formatting or I/O in crit_end. */
+#define TIMING_STALL_CAPACITY 10000u
+struct timing_stall {
+    uint64_t start_tsc, end_tsc;
+    uint32_t site;
+    const char *section;
+};
+struct timing_stall_stats {
+    uint64_t start_tsc, end_tsc, per_ms;
+    uint64_t period_min_us, period_max_us, period_mean_us, jitter_us;
+    uint32_t count, dropped;
+};
+struct timing_stats;
+void timing_stalls_begin(void);
+/* Freeze counters with the trace, before period analysis can add latency.
+ * The optional second output is the existing timing snapshot for this window. */
+void timing_stalls_end(struct timing_stall_stats *, struct timing_stats *);
+/* Frozen trace only; copies one record under a fixed-size IRQ section. */
+bool timing_stall_get(unsigned index, struct timing_stall *);
 
 struct timing_stats {
     uint32_t tsc_khz;

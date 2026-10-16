@@ -47,6 +47,7 @@ static void irq_restore(uint32_t f) { flags = f; if ((f & 0x200) && on_restore) 
 static void outb(uint16_t port, uint8_t v) { (void)port; (void)v; writes++; }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; writes++; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
+static uint16_t cpu_inw(uint16_t port) { (void)port; return UINT16_MAX; }
 void *kzalloc(size_t n) { return calloc(1, n); }
 void kfree(void *p) { free(p); }
 

@@ -3,7 +3,7 @@
 #include <ciuki/hardware_check.h>
 static const char *const items[HW_CHECK_ITEMS] = {
     "ATA scratch", "Mount repair", "USB storage", "USB mouse", "Keyboard / EC",
-    "Timer 10 s", "Serial burst", "Savage sweep", "Audio tone"
+    "Timer 10 s", "SMI bit 10 s", "Serial burst", "Savage sweep", "Audio tone"
 };
 void hardware_check_model(const struct hw_check_ops *ops, struct hw_check_result results[HW_CHECK_ITEMS])
 {
@@ -28,11 +28,12 @@ void hardware_check_model(const struct hw_check_ops *ops, struct hw_check_result
             items[i], results[i].detail, elapsed);
         ops->line(ops->ctx, line);
     }
-    /* Repeat only the compact results after all live/sweep detail. Fits even
-     * an 80x25 console, and remains available for an operator photograph. */
+    /* One physical row per compact result leaves room for the PM snapshot
+     * and before/clear/restore comparison on an 80x25 H-page photograph.
+     * The complete result detail was already logged above. */
     ops->line(ops->ctx, "Hardware check complete - results:");
     for (unsigned i = 0; i < HW_CHECK_ITEMS; i++) {
-        ksnprintf(line, 144, "%s %s: %s",
+        ksnprintf(line, 80, "%s %s: %s",
             results[i].status == HW_PASS ? "PASS" : results[i].status == HW_SKIP ? "SKIP" : "FAIL",
             items[i], results[i].detail);
         ops->line(ops->ctx, line);

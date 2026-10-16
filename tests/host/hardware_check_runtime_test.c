@@ -35,6 +35,7 @@ static const struct pci_func gpu={.vendor=0x5333,.device=0x8c2e,.class_code=3};
 static char lines[32][256];
 static unsigned line_count;
 static bool complete, tone_checked;
+static unsigned timer_calls;
 
 /* Unchanged page items use ready/absent boundaries; their device protocols
  * have separate tests. The page must still reach audio and its final list. */
@@ -42,6 +43,9 @@ int hardware_check_ata(struct storage *s,struct hw_check_result *r) { assert(s==
 int hardware_check_repair(struct storage *s,struct hw_check_result *r) { return hardware_check_ata(s,r); }
 void timing_reset(void) {}
 void timing_snapshot(struct timing_stats *s) { memset(s,0,sizeof(*s)); }
+void hardware_check_timer(uint64_t until,bool experiment,struct hw_check_result *s,const struct hw_check_ops *ops)
+{ (void)until; (void)ops; assert(experiment==(timer_calls++!=0)); s->status=HW_SKIP; }
+void hardware_check_smi_summary(const struct hw_check_ops *ops) { (void)ops; }
 void serial_snapshot(struct serial_stats *s) { memset(s,0,sizeof(*s)); }
 uint32_t serial_evidence_begin(size_t n) { (void)n; assert(0); return 0; }
 uint64_t serial_write_ticket(const char *s,size_t n) { (void)s; (void)n; assert(0); return 0; }
@@ -130,6 +134,7 @@ static void fixture(void)
     has_host=live_prompt=event_sent=retained=swept=winner=false;
     scan_ms=attach_ms=prompt_ms=sweep_calls=mode_calls=restores=clears=line_count=0; scenario=0;
     complete=tone_checked=false; summary_bytes=0; collecting_summary=false;
+    timer_calls=0;
     fb=(struct fb_device){.present=true,.mode_id=0x118,.width=1024,.height=768,.bpp=32,.pitch=4096,.phys=0xe8000000};
     g_boot.display.mode_count=1;
     g_boot.display.modes[0]=(struct ciuki_boot_display_mode){.id=0x117,.width=1024,.height=768,.bpp=16,.pitch=2048,.linear=1};
@@ -177,9 +182,9 @@ int main(void)
     }
     puts("PASS f1-69 H sweep: winner recorded before 16 bpp, no winner/timeout gate, restored desktop, retained marker, unsafe writer/late watchdog refusal");
     fixture(); hardware_check_run();
-    assert(tone_checked && complete && sweep_calls==2 && restores==1 && fb.bpp==32);
+    assert(tone_checked && complete && sweep_calls==2 && restores==1 && fb.bpp==32 && timer_calls==2);
     fixture(); scenario=4; hardware_check_run();
-    assert(tone_checked && complete && sweep_calls==2 && !restores && !clears);
+    assert(tone_checked && complete && sweep_calls==2 && !restores && !clears && timer_calls==2);
     puts("PASS f1-69 complete H page: audio and pinned final results after a passing sweep and an unsafe-writer failure");
     return 0;
 }

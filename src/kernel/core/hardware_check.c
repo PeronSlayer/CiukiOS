@@ -22,7 +22,7 @@ int hardware_check_ata(struct storage *, struct hw_check_result *);
 int hardware_check_repair(struct storage *, struct hw_check_result *);
 static struct task *check_task;
 static uint64_t io_until;
-static char summary_page[1800];
+static char summary_page[2400];
 static unsigned summary_bytes;
 static bool collecting_summary;
 static uint64_t check_now(void *ctx)
@@ -154,22 +154,6 @@ static void input_window(bool mouse,uint64_t until,struct hw_check_result *out)
     ksnprintf(out->detail,sizeof(out->detail),"ready=%u enumeration_ms=%llu events=%u shown=%u EC=%u changes=%u lost=%llu restore=%d",
         mouse ? interfaces : ps2.active,enumerated,events,displayed,audio.master_in_hardware,volume,after.overflow-before.overflow,restore);
 }
-static void timer_check(struct hw_check_result *out)
-{
-    if (!g_cpu_tsc || !g_tsc_per_ms) {
-        out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"no calibrated independent clock"); return;
-    }
-    timing_reset();
-    struct timing_stats a,b; timing_snapshot(&a);
-    uint64_t start=check_now(0);
-    while (check_now(0)-start<10000) task_sleep_ms(1);
-    uint64_t elapsed=check_now(0)-start; timing_snapshot(&b);
-    uint64_t ticks=b.pit_irqs-a.pit_irqs, lost=elapsed>ticks ? elapsed-ticks : 0;
-    /* One tick at the sampling boundary is expected quantisation. */
-    out->status=lost<=2 && b.critical_us<=CRIT_BUDGET_US ? HW_PASS : HW_FAIL;
-    ksnprintf(out->detail,sizeof(out->detail),"ms=%llu ticks=%llu lost=%llu IF-off=%uus section=%s site=%08x",
-        elapsed,ticks,lost,b.critical_us,b.critical_section,b.critical_site);
-}
 static void serial_check(uint64_t until,struct hw_check_result *out)
 {
     struct serial_stats a,b; serial_snapshot(&a);
@@ -275,6 +259,7 @@ static void audio_check(struct hw_check_result *out)
 static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_result *out)
 {
     (void)ctx;
+    const struct hw_check_ops ops={0,check_now,check_step,page_line};
     io_until=until-1500; /* leave cleanup and result publication time */
     switch (item) {
     case 0: hardware_check_ata(storage_get(),out); break;
@@ -282,20 +267,23 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     case 2: hardware_check_usb_storage(until,out,check_now); break;
     case 3: input_window(true,until,out); break;
     case 4: input_window(false,until,out); break;
-    case 5: timer_check(out); break;
-    case 6: serial_check(until,out); break;
-    case 7: savage_check(until,out); break;
-    case 8: audio_check(out); break;
+    case 5: hardware_check_timer(until,false,out,&ops); break;
+    case 6: hardware_check_timer(until,true,out,&ops); break;
+    case 7: serial_check(until,out); break;
+    case 8: savage_check(until,out); break;
+    case 9: audio_check(out); break;
     }
     io_until=0;
 }
 void hardware_check_run(void)
 {
     static struct hw_check_result results[HW_CHECK_ITEMS];
+    summary_bytes=0; collecting_summary=false;
     check_task=g_current; console_wake();
     if (!blackbox_capture) page_line(0,"Black box unavailable: f0-25 capture hook not linked");
     const struct hw_check_ops ops={0,check_now,check_step,page_line};
     hardware_check_model(&ops,results);
+    hardware_check_smi_summary(&ops);
     struct bootlog_stats log; bootlog_snapshot(&log);
     char sinks[128];
     ksnprintf(sinks,sizeof(sinks),"Evidence: disk=%s dropped=%u error=%d; black box=%s",

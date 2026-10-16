@@ -26,6 +26,7 @@ static uint32_t irq_save(void) { uint32_t f = host_flags; host_flags = 0; return
 static void irq_restore(uint32_t f) { host_flags = f; }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
+static uint16_t cpu_inw(uint16_t port) { (void)port; return UINT16_MAX; }
 
 struct fake_byte { uint8_t status, data; uint64_t ready; };
 struct fake_bus {
