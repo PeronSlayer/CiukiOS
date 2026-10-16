@@ -15,6 +15,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     d->cursor_loaded = DESK_CURSOR_COUNT;
     d->ops = *ops; d->width = w; d->height = h;
     d->display = d->input = d->output = d->focus = d->drag = d->about = d->authority_fd = d->mixer_fd = -1;
+    d->media_fd = d->network_fd = d->mixer_observer_fd = -1;
     d->action = -1;
     d->mouse_x = (int32_t)w / 2; d->mouse_y = (int32_t)h / 2;
     d->clock_second = UINT64_MAX;

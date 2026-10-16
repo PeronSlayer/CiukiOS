@@ -181,18 +181,42 @@ static struct ciuki_media_volume media_volumes[26];
 static int network_available, network_error;
 static unsigned network_opens, network_closes, network_queries;
 static struct ciuki_net_state network_fixture;
-#ifdef DESK_FOOTPRINT_TEST
+#if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
 #define MIXER_FD 1001
 static struct ciuki_mixer_master mixer_fixture;
 static unsigned mixer_queries,mixer_sets;
+static int mixer_available, mixer_error;
+#endif
+static int media_volume_error;
+#ifdef DESK_POLL_LEDGER_TEST
+void desktop_poll_host_init(void);
+void desktop_poll_host_open(unsigned);
+void desktop_poll_host_close(unsigned);
+void desktop_poll_host_baseline(void);
+void desktop_poll_host_leak(int);
+void desktop_poll_host_check(int);
+void desktop_poll_host_finish(void);
+static int poll_bridge, poll_snapshot, poll_equal;
+#define POLL_OPEN(kind) do { if (poll_bridge) desktop_poll_host_open(kind); } while (0)
+#define POLL_CLOSE(kind) do { if (poll_bridge) desktop_poll_host_close(kind); } while (0)
+#else
+#define POLL_OPEN(kind) ((void)0)
+#define POLL_CLOSE(kind) ((void)0)
 #endif
 #define NETWORK_FD 1000
 int shell_open(const char *path, int flags, ...)
 {
-    if (media_available && !strcmp(path,"/dev/media")) return MEDIA_FD;
+    if (media_available && !strcmp(path,"/dev/media")) {
+        assert(flags==(O_RDONLY|O_CLOEXEC)); POLL_OPEN(2); return MEDIA_FD;
+    }
+#if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
+    if (mixer_available && !strcmp(path,"/dev/mixer")) {
+        assert(flags==(O_RDONLY|O_CLOEXEC)); POLL_OPEN(1); return MIXER_FD;
+    }
+#endif
     if (!strcmp(path, "/dev/net")) {
         assert(flags == (O_RDONLY | O_CLOEXEC)); network_opens++;
-        if (network_available) return NETWORK_FD;
+        if (network_available) { POLL_OPEN(0); return NETWORK_FD; }
         errno = ENODEV; return -1;
     }
     if (flags & O_CREAT) {
@@ -202,7 +226,14 @@ int shell_open(const char *path, int flags, ...)
     return open(path, flags);
 }
 int shell_close(int fd)
-{ if (fd == MEDIA_FD) return 0; if (fd == NETWORK_FD) { network_closes++; return 0; } return fake_ops.close(fd); }
+{
+    if (fd==MEDIA_FD) { POLL_CLOSE(2); return 0; }
+    if (fd==NETWORK_FD) { POLL_CLOSE(0); network_closes++; return 0; }
+#if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
+    if (fd==MIXER_FD) { POLL_CLOSE(1); return 0; }
+#endif
+    return fake_ops.close(fd);
+}
 static int shell_regular_fd=-1, shell_directory_fd=-1;
 int shell_fstat(int fd, struct stat *st)
 {
@@ -279,6 +310,9 @@ static int fake_record_count;
 /* Desktop shell services with explicit device boundaries. */
 int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 {
+#ifdef DESK_POLL_LEDGER_TEST
+    if (poll_snapshot) desktop_poll_host_check(poll_equal);
+#endif
     if (fd==MEDIA_FD) {
         if (op==MEDIA_GET_STATE) {
             assert(size==sizeof(media_fixture));
@@ -286,6 +320,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
             memcpy(record,&media_fixture,size);return 0;
         }
         if (op==MEDIA_GET_VOLUME) {
+            if (media_volume_error) { errno=EIO; return -1; }
             struct ciuki_media_volume *v=record;
             assert(size==sizeof(*v) && v->drive<26);
             *v=media_volumes[v->drive]; return 0;
@@ -299,8 +334,9 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
         if (media_error) { errno=media_error;return -1; }
         media_fixture.removable_mask=0;media_fixture.type[4]=CIUKI_MEDIA_SAFE_REMOVED;return 0;
     }
-#ifdef DESK_FOOTPRINT_TEST
+#if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
     if (fd==MIXER_FD) {
+        if (mixer_error) { errno=EIO; return -1; }
         assert(size==sizeof(mixer_fixture));
         if (op==MIXER_GET_MASTER) { mixer_queries++; memcpy(record,&mixer_fixture,size); }
         else { assert(op==MIXER_SET_MASTER); mixer_sets++; memcpy(&mixer_fixture,record,size); }
@@ -940,6 +976,7 @@ static void test_media_removal_service(void)
     assert(!d.sh.notification.balloon && d.sh.notification.started==monotonic());
     desk_shell_tick(&d);assert(d.sh.notification.active);
     media_read(&d);assert(strstr(d.sh.notification.text,"safe to unplug"));
+    observers_close(&d);
     media_available=0;timing_model=0;desk_render_release(&d);fake_reset();
     puts("PASS media service: busy program names, refresh-before-success, ten-second eject starts a fresh eight-second notification, later detach preserves success");
 }
@@ -952,23 +989,27 @@ static void test_network_service(void)
     d.now_ns = 1000000000ull; d.damage.count = 0;
     desk_shell_tick(&d); assert(d.sh.want_reload & 16); shell_service(&d);
     assert(!d.sh.want_reload && d.sh.network.present && d.sh.network.link == CIUKI_NET_LINK_UP);
-    assert(network_opens == 1 && network_queries == 1 && network_closes == 1 && d.damage.count == 1);
+    assert(network_opens == 1 && network_queries == 1 && !network_closes && d.damage.count == 1);
     d.damage.count = 0; d.now_ns += 1999999999ull; desk_shell_tick(&d); shell_service(&d);
     assert(network_queries == 1 && !d.damage.count);
     d.now_ns++; desk_shell_tick(&d); shell_service(&d);
-    assert(network_queries == 2 && network_closes == 2 && !d.damage.count);
+    assert(network_opens == 1 && network_queries == 2 && !network_closes && !d.damage.count);
     network_error = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
-    assert(!d.sh.network.present && network_closes == 3 && d.damage.count && d.sh.notification.active);
+    assert(!d.sh.network.present && network_closes == 1 && d.network_fd<0 && d.damage.count && d.sh.notification.active);
     assert(d.sh.notification.action==SH_NOTIFY_NETWORK);
     desk_shell_key(&d,DU_KEY_ESC,1); d.damage.count=0;
     network_error = 0; network_available = 0; d.damage.count = 0;
     d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
-    assert(!d.sh.network.present && network_queries == 3 && network_closes == 3 && !d.damage.count);
+    assert(!d.sh.network.present && network_queries == 3 && network_closes == 1 && !d.damage.count);
     network_available = 1; d.now_ns += 2000000000ull; desk_shell_tick(&d); shell_service(&d);
-    assert(d.sh.network.present && network_closes == 4 && d.damage.count && d.sh.notification.active);
+    assert(d.sh.network.present && network_opens == 3 && network_closes == 1 && d.damage.count && d.sh.notification.active);
+    observers_close(&d); assert(network_closes==2);
     network_available = 0; desk_render_release(&d); fake_reset();
-    puts("PASS network service: timer/reload, open/devctl/close, unchanged state, failures and recovery");
+    puts("PASS network service: timer/reload, retained descriptor, unchanged state, failures and recovery");
 }
+#ifdef DESK_POLL_LEDGER_TEST
+#include "poll_handles_test.h"
+#endif
 #ifdef DESK_FOOTPRINT_TEST
 #include "memory_footprint_test.h"
 #include "theme_wallpaper_sequence_test.h"
@@ -977,6 +1018,9 @@ static void test_network_service(void)
 #endif
 int main(int argc,char **argv)
 {
+#ifdef DESK_POLL_LEDGER_TEST
+    if (argc==2 && !strcmp(argv[1],"--poll-handles")) { test_poll_handles(); return 0; }
+#endif
 #ifdef DESK_FOOTPRINT_TEST
     if (argc==3 && !strcmp(argv[1],"--wallpaper-boot")) { test_wallpaper_boot(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper")) { test_theme_wallpaper(argv[2]); return 0; }

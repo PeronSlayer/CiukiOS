@@ -411,6 +411,38 @@ void klog(const char *f,...) {(void)f;}
             bad=next(r for r in rows if r.get('case')=='progress');bad['replies']='99'
             with self.assertRaises(EvidenceError):parser.check(case['expected'])
 
+    def test_usb_cases_keep_strict_restored_and_final_ledgers(self):
+        from evidence import Parser
+        cases=runner.load(ROOT/'tests/suites/f1-usb.json')['cases']
+        self.assertEqual({c['id'] for c in cases},{'usb-input-uhci','usb-input-ohci','usb-wheel-uhci'})
+        for case in cases:
+            with self.subTest(case=case['id']):
+                predicates=case['expected']['predicates']
+                restored=next(p for p in predicates if p['where'].get('case')=='restored')
+                self.assertEqual(restored['exact_count'],100)
+                self.assertEqual(restored['fields'],{'equal':{'eq':1},'processes_equal':{'eq':1}})
+                rows=[dict(event='BEGIN'),dict(event='END',status='PASS')]
+                for predicate in predicates:
+                    for i in range(predicate['exact_count']):
+                        row={k:str(v) for k,v in predicate['where'].items()}
+                        row.update({k:'1' for k in predicate.get('required_fields',[])})
+                        for field,rule in predicate.get('fields',{}).items():
+                            value=rule.get('eq',rule.get('ge',1)) if isinstance(rule,dict) else rule
+                            row[field]=str(11 if isinstance(value,str) and value.startswith('$') else value)
+                            if isinstance(value,str) and value.startswith('$'): row[value[1:]]='11'
+                        if predicate.get('unique'): row[predicate['unique']]=str(i+1)
+                        rows.append(row)
+                # Diagnostic rows are additional evidence, never an allowance.
+                rows.append(dict(event='DATA',case='handle',server='desktop',cycle='33',pid='2',fd='22',stage='restored',kind='media'))
+                parser=Parser('12345678','crash-isolation'); parser.records=rows; parser.terminal=rows[1]; parser.outcome='pass'
+                parser.check(case['expected'])
+                for kind,field in (('restored','equal'),('restored','processes_equal'),
+                                   ('ledger','objects_equal'),('ledger','processes_equal')):
+                    row=next(r for r in rows if r.get('case')==kind)
+                    row[field]='0'
+                    with self.assertRaises(EvidenceError): parser.check(case['expected'])
+                    row[field]='1'
+
     def test_live_runner_capture_before_teardown_and_missing_interaction(self):
         from test_runner import RunnerTests
         fixture=RunnerTests();fixture.setUp()
