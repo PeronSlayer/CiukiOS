@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "autoplay_wait.h"
 int ciuki_devices(struct ciuki_devices_info *out) { (void)out; errno=ENODEV; return -1; }
 static struct desktop d;
 static struct ciuki_media_volume volumes[26];
@@ -32,10 +33,10 @@ static void mounted(unsigned drive,unsigned generation,const char *id,const char
 {
     volumes[drive]=(struct ciuki_media_volume){.version=1,.size=96,.drive=drive,.flags=flags,.generation=generation};
     snprintf(volumes[drive].id,40,"%s",id); snprintf(volumes[drive].label,33,"%s",label);
-    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
+    desk_autoplay_update(&d,volumes); autoplay_drain(&d);
 }
 static void eject(unsigned drive)
-{ memset(&volumes[drive],0,sizeof(volumes[drive])); desk_autoplay_update(&d,volumes); desk_autoplay_service(&d); }
+{ memset(&volumes[drive],0,sizeof(volumes[drive])); desk_autoplay_update(&d,volumes); autoplay_drain(&d); }
 static void file(const char *path,const char *text)
 {
     int i=fake_lookup(path); if (i<0) i=fake_file(path,(unsigned)strlen(text),0); assert(i>=0);
@@ -62,6 +63,8 @@ int main(int argc,char **argv)
     fake_reset(); fake_tree_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     d.pixels=calloc(640*480,4); assert(d.pixels);
     d.autoplay_fs=&fake_vfs; d.autoplay_preference=preference; d.media_sound=sound; d.launch=launch;
+    assert(!desk_autoplay_prepare(&d));
+    assert(!desk_redraw(&d) && d.presents);
     const char *programs[]={"files","music","viewer","dosbox"};
     for (unsigned i=0;i<4;i++) { snprintf(d.programs[i].name,64,"%s",programs[i]); snprintf(d.programs[i].path,DESK_ARG_MAX+1,"/Programs/%s",programs[i]); }
     d.program_count=4;
@@ -71,8 +74,9 @@ int main(int argc,char **argv)
     mounted(4,10,"fat-12345678-1234","MIXTAPE",CIUKI_MEDIA_REMOVABLE);
     assert(d.sh.autoplay.open && !strcmp(d.sh.autoplay.content.music,"/mnt/e/Music"));
     assert(desk_autoplay_enabled(&d,AP_MUSIC) && !desk_autoplay_enabled(&d,AP_PICTURES)); render();
-    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d); assert(connected==1 && !launches);
+    desk_autoplay_update(&d,volumes); autoplay_drain(&d); assert(connected==1 && !launches);
     select_action(AP_MUSIC); key(DU_KEY_SPACE); key(DU_KEY_ENTER); desk_autoplay_service(&d);
+    assert(!launches && d.sh.autoplay.phase==AP_LAUNCH_PENDING); autoplay_drain(&d);
     assert(!d.sh.autoplay.open && launches==1 && !strcmp(program,"music") && !strcmp(argument,"/mnt/e/Music"));
     assert(ap_preference_get(registry_dir,"fat-12345678-1234")==AP_MUSIC);
     eject(4); mounted(4,11,"fat-12345678-1234","MIXTAPE",CIUKI_MEDIA_REMOVABLE);
@@ -91,12 +95,12 @@ int main(int argc,char **argv)
     assert(!ap_parse(&quoted,quoted_text,strlen(quoted_text)) && !strcmp(quoted.open,"\"SETUP\\INSTALL.COM\" /S") && !strcmp(quoted.label,"Ciuki Games"));
     assert(!strcmp(d.sh.autoplay.content.inf.label,"Ciuki Games") && !strcmp(d.sh.autoplay.content.inf.icon,"disc.ico"));
     char label[33]; assert(!ap_drive_label(&fake_vfs,3,label) && !strcmp(label,"Ciuki Games")); render();
-    select_action(AP_RUN); key(DU_KEY_ENTER); desk_autoplay_service(&d);
+    select_action(AP_RUN); key(DU_KEY_ENTER); autoplay_drain(&d);
     assert(launches==4 && !strcmp(program,"dosbox") && !strcmp(argument,"D:\\SETUP\\INSTALL.COM /S")); eject(3);
     assert(fake_create("/mnt/g",FM_DIR)>=0); assert(fake_create("/mnt/g/Pictures",FM_DIR)>=0);
     file("/mnt/g/Pictures/ciuki.PNG","picture");
     mounted(6,30,"fat-87654321-1234","PHOTOS",CIUKI_MEDIA_REMOVABLE);
-    assert(desk_autoplay_enabled(&d,AP_PICTURES)); select_action(AP_PICTURES); key(DU_KEY_ENTER); desk_autoplay_service(&d);
+    assert(desk_autoplay_enabled(&d,AP_PICTURES)); select_action(AP_PICTURES); key(DU_KEY_ENTER); autoplay_drain(&d);
     assert(launches==5 && !strcmp(program,"viewer") && !strcmp(argument,"/mnt/g/Pictures/ciuki.PNG")); eject(6);
     /* Eject cancels a pending confirmation without launching or saving it. */
     mounted(6,31,"fat-87654321-1234","PHOTOS",CIUKI_MEDIA_REMOVABLE);
@@ -115,23 +119,23 @@ int main(int argc,char **argv)
     char run[100]; assert(strstr(desk_autoplay_label(&d,AP_RUN,run,sizeof(run)),"F5"));
     int w=window(); struct desk_box content=desk_content(&d.clients[w]);
     desk_internal_click(&d,w,content.x+30,content.y+58+AP_RUN*24+5); assert(d.sh.autoplay.selected==AP_FOLDER);
-    select_action(AP_NOTHING); key(DU_KEY_SPACE); key(DU_KEY_ENTER); desk_autoplay_service(&d);
+    select_action(AP_NOTHING); key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d);
     assert(launches==5 && ap_preference_get(registry_dir,"iso-2345678901234567")==AP_NOTHING); eject(3);
     mounted(3,22,"iso-2345678901234567","WINDOWS",CIUKI_MEDIA_OPTICAL); assert(!d.sh.autoplay.open && launches==5); eject(3);
     /* Unavailable remembered action falls back to asking. Failed launches never save. */
     assert(!ap_preference_set(registry_dir,"fat-00000001-1234","Empty stick",AP_MUSIC));
     mounted(3,23,"fat-00000001-1234","EMPTY",CIUKI_MEDIA_REMOVABLE); assert(d.sh.autoplay.open);
-    fail_launch=1; key(DU_KEY_SPACE); key(DU_KEY_ENTER); desk_autoplay_service(&d); fail_launch=0;
+    fail_launch=1; key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d); fail_launch=0;
     assert(ap_preference_get(registry_dir,"fat-00000001-1234")==AP_MUSIC); eject(3);
     /* Simultaneous arrivals are queued, and an eject removes a queued item. */
     volumes[4]=(struct ciuki_media_volume){.drive=4,.flags=1,.generation=40};
     volumes[6]=(struct ciuki_media_volume){.drive=6,.flags=1,.generation=40};
-    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
+    desk_autoplay_update(&d,volumes); autoplay_drain(&d);
     /* New media must not steal input from the failed-launch error dialog. */
     assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && !d.sh.autoplay.open);
     assert(d.sh.autoplay.waiting==((1u<<4)|(1u<<6)));
-    key(DU_KEY_ESC); desk_autoplay_service(&d); assert(d.sh.autoplay.active.drive==4);
-    eject(6); key(DU_KEY_ESC); desk_autoplay_service(&d); assert(!d.sh.autoplay.open); eject(4);
+    key(DU_KEY_ESC); autoplay_drain(&d); assert(d.sh.autoplay.active.drive==4);
+    eject(6); key(DU_KEY_ESC); autoplay_drain(&d); assert(!d.sh.autoplay.open); eject(4);
     struct ap_inf inf;
     const char *invalid="[autorun]\nopen=../escape.com\n";
     file("/mnt/d/AUTORUN.INF",invalid); struct ap_content probe;
@@ -151,6 +155,7 @@ int main(int argc,char **argv)
     assert(ap_preference_set(registry_dir,"bad\\id","Bad",0)<0);
     assert(connected>5 && disconnected>5);
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i);
+    desk_autoplay_stop(&d); free(d.sh.autoplay.workspace);
     free(d.pixels); d.pixels=NULL; desk_render_release(&d); assert(!fake_live()); fake_assert_clean();
     puts("PASS AutoPlay: mount music/CD/pictures, typed DOS launch, disabled Windows, registry across letters, cancellation/eject/replacement/queue, sounds seam, bounded parser");
     return 0;

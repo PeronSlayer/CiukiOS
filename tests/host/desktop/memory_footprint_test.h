@@ -2,6 +2,7 @@
  * Included by the production desktop.c launcher harness. Fixture memory is
  * allocated before tracing; only production units use footprint_alloc.h. */
 #include "footprint_alloc.h"
+#include "autoplay_wait.h"
 #undef malloc
 #undef calloc
 #undef realloc
@@ -86,6 +87,8 @@ static void test_memory_footprint(const char *directory)
     assert(!desk_wall_worker_start(&wallpaper_worker,NULL,NULL)); wallpaper_worker_started=1;
     assert(!desk_folder_init(&d,&footprint_fs));
     d.pixels=calloc((size_t)d.width*d.height,4); assert(d.pixels);
+    d.sh.gate=0; d.autoplay_fs=&footprint_fs;
+    assert(!desk_autoplay_prepare(&d)); d.sh.gate=1;
     (void)desk_shell_wallpaper_update(&d); assert(d.sh.wall_valid); footprint_frame(&d);
     struct du_icon_stats prepared_icons; du_icon_snapshot(&prepared_icons);
     assert(prepared_icons.cached);
@@ -209,7 +212,7 @@ static void test_memory_footprint(const char *directory)
     desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
     assert(!d.sh.autoplay.open && d.sh.autoplay.waiting==(1u<<4));
     /* The surviving client retains input until focus returns to the desktop. */
-    desk_focus(&d,-1); desk_autoplay_service(&d); assert(d.sh.autoplay.open);
+    desk_focus(&d,-1); autoplay_drain(&d); assert(d.sh.autoplay.open);
     assert(!strcmp(d.sh.autoplay.content.music,"/mnt/e")); footprint_frame(&d);
     memset(volumes,0,sizeof(volumes)); desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
     assert(!d.sh.autoplay.open); footprint_frame(&d);
@@ -222,6 +225,7 @@ static void test_memory_footprint(const char *directory)
         final_icons.store_bytes==prepared_icons.store_bytes);
     printf("ICON_POOL cached=%u heap_bytes=%u peak_bytes=%u\n",prepared_icons.cached,
         prepared_icons.heap_bytes,prepared_icons.peak_bytes);
+    desk_autoplay_stop(&d);
     drop_all(&d); free(d.pixels); free(d.sh.icons); free(d.sh.wall); free(d.sh.autoplay.workspace); fake_reset();
     printf("%s desktop footprint: allocations_after_first_frame=%u\n",audit ? "AUDIT" : "PASS",allocations);
     if (!audit) {

@@ -359,6 +359,7 @@ enum desktop_stage { STALL_IDLE, STALL_INPUT, STALL_IPC, STALL_DISPLAY,
     STALL_THEME, STALL_LAUNCH, STALL_SHELL, STALL_RENDER, STALL_REPORT };
 static struct {
     pthread_t thread;
+    const struct desktop *desktop;
     unsigned live, stop, stage, pending, work, frame_ms, loop_ms;
     const char *wait;
 } desktop_watchdog;
@@ -409,9 +410,9 @@ static int desktop_stall_record(uint32_t now,char *line,size_t size)
         frame!=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE) ||
         loop!=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE) ||
         wait!=__atomic_load_n(&desktop_watchdog.wait,__ATOMIC_ACQUIRE)) return 0;
-    int n=snprintf(line,size,"[desktop] stall stage=%s worker=%s/%s no_frame_ms=%u input_pending=%u work_pending=%u wait=%s wallpaper_wait=%s\n",
+    int n=snprintf(line,size,"[desktop] stall stage=%s worker=%s/%s no_frame_ms=%u input_pending=%u work_pending=%u wait=%s wallpaper_wait=%s autoplay_wait=%s\n",
         stage<sizeof(desktop_stages)/sizeof(*desktop_stages) ? desktop_stages[stage] : "unknown",
-        wall,settings,now-frame,pending,work,wait ? wait : "unknown",wall_wait ? wall_wait : "starting");
+        wall,settings,now-frame,pending,work,wait ? wait : "unknown",wall_wait ? wall_wait : "starting",desk_autoplay_activity(desktop_watchdog.desktop));
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void *desktop_watchdog_run(void *unused)
@@ -437,6 +438,7 @@ static void *desktop_watchdog_run(void *unused)
 }
 static void desktop_watchdog_start(struct desktop *d)
 {
+    desktop_watchdog.desktop=d;
     __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
     __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
     int error=pthread_create(&desktop_watchdog.thread,NULL,desktop_watchdog_run,NULL);
@@ -572,6 +574,7 @@ static int settings_save(struct desktop *d)
 }
 static int shutdown_wait(struct desktop *d)
 {
+    if (desk_autoplay_busy(d)) return 0;
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
     if (settings_writer_started && cfg_writer_busy(&settings_writer)) return 0;
     return !audio_shutdown_wait || audio_shutdown_wait(d);
@@ -1034,7 +1037,7 @@ static void startup_launch(struct desktop *d,const char *name)
 }
 static int launch_pending(struct desktop *d)
 {
-    if (d->action<0) return 0;
+    if (d->action<0) return desk_autoplay_launch(d);
     unsigned selected=(unsigned)d->action; d->action=-1;
     int pid=selected<d->program_count ? desk_task_launch(d,d->programs[selected].name,NULL) : -ENOENT;
     if (pid<0) {
@@ -1185,6 +1188,7 @@ static void shell_service(struct desktop *d)
         desk_shell_message(d,"AutoPlay","The media could not be checked. Please try again.",1);
     }
     desktop_wait("autoplay-service"); desk_autoplay_service(d);
+    desktop_wait("autoplay-done");
     sh->want_reload=0;
     wallpaper_poll(d);
     if (!sh->wall_valid) wallpaper_update(d);
@@ -1243,6 +1247,8 @@ static void shell_setup(struct desktop *d, int gate)
         if (result) desk_shell_notify_error(d,"Desktop folder unavailable",result);
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
+        int autoplay_error=desk_autoplay_prepare(d);
+        if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }

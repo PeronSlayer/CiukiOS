@@ -1010,6 +1010,9 @@ static void test_network_service(void)
 #ifdef DESK_POLL_LEDGER_TEST
 #include "poll_handles_test.h"
 #endif
+#ifndef DESK_FOOTPRINT_TEST
+#include "autoplay_stall_test.h"
+#endif
 #ifdef DESK_FOOTPRINT_TEST
 #include "memory_footprint_test.h"
 #include "theme_wallpaper_sequence_test.h"
@@ -1027,6 +1030,7 @@ int main(int argc,char **argv)
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper-performance")) { test_theme_wallpaper_performance(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
+    if (argc==2 && !strcmp(argv[1],"--autoplay-startup")) { test_autoplay_startup(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--launch-input")) { test_launch_input(); return 0; }
 #endif
     test_network_service();

@@ -2,6 +2,7 @@
  * Included by shell_launch_test.c so the syscall and spawn seams are shared.
  * SPDX-License-Identifier: MIT */
 #include "../../../apps/desktop/keymap.h"
+#include "autoplay_wait.h"
 static int empty_media_list(void *ctx,const char *path,fm_emit emit,void *user)
 { (void)ctx; (void)path; (void)emit; (void)user; return 0; }
 static const struct fm_vfs empty_media_fs={.list=empty_media_list};
@@ -37,6 +38,9 @@ static void test_launch_input(void)
     d.launch=launch_program; d.authority_fd=-1;
     d.autoplay_fs=&empty_media_fs; d.autoplay_preference=no_media_preference;
     assert(d.sh.autoplay.workspace);
+    assert(!desk_autoplay_prepare(&d));
+    d.pixels=calloc(1024*768,4); assert(d.pixels);
+    assert(!desk_redraw(&d) && d.presents);
     desk_program_add(&d,"dosbox",elf,sizeof(elf)); desk_program_add(&d,"control",elf,sizeof(elf));
     media_available=1;
     media_fixture=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_fixture)};
@@ -127,10 +131,11 @@ static void test_launch_input(void)
     d.mouse_x=1000; d.mouse_y=100;
     struct ciuki_input_event click={.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1};
     desk_input(&d,&click); click.value=0; desk_input(&d,&click); assert(d.focus<0);
-    shell_service(&d); assert(d.sh.autoplay.open && !d.sh.autoplay.waiting);
+    shell_service(&d); autoplay_drain(&d); assert(d.sh.autoplay.open && !d.sh.autoplay.waiting);
     assert(dosbox_spawns==before+5); /* startup, bare startup, command, failure, bare */
     media_available=0; memset(media_volumes,0,sizeof(media_volumes));
     desk_menu_close(&d); desk_render_release(&d); drop_all(&d); fake_reset();
+    desk_autoplay_stop(&d); free(d.pixels);
     free(d.sh.wall); free(d.sh.autoplay.workspace);
     puts("PASS F2-76 idle USB launch: exact bare dosbox argv, no unsolicited command or settings launch");
     puts("PASS F2-76 media race: Start, Run and focused DOS retain input; only explicit activation launches Sounds; AutoPlay waits for desktop focus");

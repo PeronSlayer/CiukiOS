@@ -1,8 +1,123 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "autoplay.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+enum { AP_JOB_PROBE=1, AP_JOB_SAVE };
+/* One slot remains owned by the worker from submission through collection.
+ * Only the frame thread changes shell state. I/O never holds the mailbox. */
+struct ap_worker {
+    pthread_mutex_t lock; pthread_cond_t changed; pthread_t thread;
+    struct desktop *desktop;
+    const struct fm_vfs *fs;
+    struct ap_workspace *workspace;
+    int (*preference)(struct desktop *,const char *,const char *,int);
+    struct ciuki_media_volume volume;
+    struct ap_content content;
+    int job, busy, ready, stopping, action, saved, error;
+    const char *activity;
+};
+static int submit(struct desk_autoplay *,int);
+static void activity(struct ap_worker *w,const char *name)
+{ __atomic_store_n(&w->activity,name,__ATOMIC_RELEASE); }
+static void *autoplay_worker(void *arg)
+{
+    struct ap_worker *w=arg;
+    pthread_mutex_lock(&w->lock);
+    for (;;) {
+        activity(w,"mailbox-wait");
+        while (!w->job && !w->stopping) pthread_cond_wait(&w->changed,&w->lock);
+        if (w->stopping) break;
+        int job=w->job; w->job=0; w->busy=1;
+        pthread_mutex_unlock(&w->lock);
+        w->error=0; w->saved=-1;
+        if (job==AP_JOB_PROBE) {
+            activity(w,"media-scan");
+            if (ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace)) {
+                memset(&w->content,0,sizeof(w->content));
+                snprintf(w->content.root,sizeof(w->content.root),"/mnt/%c",'a'+w->volume.drive);
+            }
+            activity(w,"preference-read");
+            if (w->volume.id[0] && w->preference)
+                w->saved=w->preference(w->desktop,w->volume.id,NULL,-1);
+        } else {
+            activity(w,"preference-write");
+            const char *label=w->content.inf.label[0] ? w->content.inf.label : w->volume.label;
+            if (w->preference(w->desktop,w->volume.id,label,w->action)<0) w->error=1;
+        }
+        pthread_mutex_lock(&w->lock);
+        w->busy=0; w->ready=1;
+    }
+    pthread_mutex_unlock(&w->lock); return NULL;
+}
+int desk_autoplay_prepare(struct desktop *d)
+{
+    struct desk_autoplay *a=&d->sh.autoplay;
+    if (a->worker || !d->autoplay_fs || d->sh.gate) return 0;
+    if (!a->workspace) return ENOMEM;
+    struct ap_worker *w=calloc(1,sizeof(*w)); if (!w) return ENOMEM;
+    w->desktop=d; w->fs=d->autoplay_fs; w->workspace=a->workspace;
+    w->preference=d->autoplay_preference; activity(w,"starting");
+    int e=pthread_mutex_init(&w->lock,NULL);
+    if (e) { free(w); return e; }
+    e=pthread_cond_init(&w->changed,NULL);
+    if (e) { pthread_mutex_destroy(&w->lock); free(w); return e; }
+    e=pthread_create(&w->thread,NULL,autoplay_worker,w);
+    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return e; }
+    a->worker=w; return 0;
+}
+int desk_autoplay_busy(struct desktop *d)
+{
+    struct desk_autoplay *a=&d->sh.autoplay;
+    struct ap_worker *w=a->worker;
+    if (!w) return 0;
+    /* Shutdown stops ordinary service, but an accepted preference still
+     * needs submission. Retrying here does not wait for its disk write. */
+    if (a->phase==AP_SAVE_PENDING && submit(a,AP_JOB_SAVE)) a->phase=AP_SAVING;
+    if (pthread_mutex_trylock(&w->lock)) return 1;
+    int busy=w->job || w->busy || a->phase==AP_SAVE_PENDING;
+    pthread_mutex_unlock(&w->lock); return busy;
+}
+void desk_autoplay_stop(struct desktop *d)
+{
+    struct ap_worker *w=d->sh.autoplay.worker;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock); w->stopping=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread,NULL); pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    free(w); d->sh.autoplay.worker=NULL; d->sh.autoplay.phase=AP_IDLE;
+}
+const char *desk_autoplay_activity(const struct desktop *d)
+{
+    struct ap_worker *w=d ? d->sh.autoplay.worker : NULL;
+    return w ? __atomic_load_n(&w->activity,__ATOMIC_ACQUIRE) : "unavailable";
+}
+static int submit(struct desk_autoplay *a,int job)
+{
+    struct ap_worker *w=a->worker;
+    if (!w || pthread_mutex_trylock(&w->lock)) return 0;
+    int available=!w->job && !w->busy && !w->ready && !w->stopping;
+    if (available) {
+        w->volume=a->active; w->action=a->selected;
+        if (job==AP_JOB_SAVE) w->content=a->content;
+        w->job=job; pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->lock); return available;
+}
+static int take(struct desk_autoplay *a,int *error)
+{
+    struct ap_worker *w=a->worker;
+    if (!w || pthread_mutex_trylock(&w->lock)) return 0;
+    int ready=w->ready;
+    if (ready) {
+        if (a->phase==AP_PROBING) { a->content=w->content; a->saved=w->saved; }
+        *error=w->error; w->ready=0;
+    }
+    pthread_mutex_unlock(&w->lock); return ready;
+}
 const char *ap_action_name(int action)
 {
     static const char *const names[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
@@ -32,53 +147,95 @@ void desk_autoplay_update(struct desktop *d,const struct ciuki_media_volume v[26
             for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].internal==DESK_INTERNAL_AUTOPLAY) desk_drop_client(d,k);
             a->open=0; a->want_commit=0;
         }
+        if (a->phase==AP_READY && a->active.drive==i) a->phase=AP_IDLE;
         a->waiting&=~(1u<<i); a->seen[i]=generation;
         if (generation) { a->pending[i]=v[i]; a->waiting|=1u<<i; if (d->media_sound) d->media_sound(d,1); }
     }
 }
-static void execute(struct desktop *d)
+static int input_owned(const struct desktop *d)
+{
+    if (d->focus>=0 || d->sh.levels || d->sh.switcher || d->action>=0 || d->sh.want_run[0] || d->keyboard_geometry || d->drag>=0 ||
+        d->sh.volume_open || d->sh.network_open || d->sh.media_open) return 1;
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (d->clients[k].awaiting_frame || d->clients[k].launch_frame_pending) return 1;
+    return 0;
+}
+static void remember(struct desktop *d)
+{
+    struct desk_autoplay *a=&d->sh.autoplay;
+    if (a->always && a->active.id[0] && d->autoplay_preference) a->phase=AP_SAVE_PENDING;
+}
+static void execute_later(struct desktop *d)
+{
+    if (d->sh.autoplay.selected==AP_NOTHING) remember(d);
+    else d->sh.autoplay.phase=AP_LAUNCH_PENDING;
+}
+int desk_autoplay_launch(struct desktop *d)
 {
     struct desk_autoplay *a=&d->sh.autoplay; int action=a->selected;
-    if (!desk_autoplay_enabled(d,action)) return;
+    if (a->phase!=AP_LAUNCH_PENDING || d->power.state || input_owned(d)) return 0;
+    a->phase=AP_IDLE;
+    if (a->active.drive>=26 || a->seen[a->active.drive]!=a->active.generation || !desk_autoplay_enabled(d,action)) return 0;
     int pid=0;
     if (action==AP_FOLDER) pid=desk_task_launch(d,"files",a->content.root);
     if (action==AP_MUSIC) pid=desk_task_launch(d,"music",a->content.music);
     if (action==AP_PICTURES) pid=desk_task_launch(d,"viewer",a->content.picture);
     if (action==AP_RUN) { const char *args[]={a->content.command}; pid=desk_task_launch_args(d,"dosbox",args,1); }
-    if (pid<0) { desk_shell_message(d,"AutoPlay","The selected program could not be started.",1); return; }
-    if (a->always && a->active.id[0] && d->autoplay_preference && d->autoplay_preference(d,a->active.id,a->content.inf.label[0] ? a->content.inf.label : a->active.label,action)<0)
-        desk_shell_message(d,"AutoPlay","The choice could not be saved. You will be asked again.",1);
+    if (pid<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
+    else remember(d);
+    return pid;
 }
 void desk_autoplay_service(struct desktop *d)
 {
     struct desk_autoplay *a=&d->sh.autoplay;
-    if (!d->autoplay_fs || d->sh.gate || d->power.state) return;
+    if (!d->autoplay_fs || d->sh.gate || d->power.state || !d->shell || !d->presents || !a->worker) return;
+    if (a->phase==AP_LAUNCH_PENDING) return;
+    if (a->phase==AP_SAVE_PENDING) {
+        if (submit(a,AP_JOB_SAVE)) a->phase=AP_SAVING;
+        return;
+    }
+    if (a->phase==AP_SAVING) {
+        int error;
+        if (!take(a,&error)) return;
+        a->phase=AP_IDLE;
+        if (error) desk_shell_message(d,"AutoPlay","The choice could not be saved. You will be asked again.",1);
+        return;
+    }
     if (a->want_commit) {
         a->want_commit=0;
-        if (a->open && a->active.drive<26 && a->seen[a->active.drive]==a->active.generation) execute(d);
+        if (a->open && a->active.drive<26 && a->seen[a->active.drive]==a->active.generation && desk_autoplay_enabled(d,a->selected)) execute_later(d);
         for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].internal==DESK_INTERNAL_AUTOPLAY) desk_drop_client(d,k);
         a->open=0;
+        return;
     }
-    if (a->open || !a->waiting) return;
+    if (a->phase==AP_PROBING) {
+        int error;
+        if (!take(a,&error)) return;
+        a->phase=AP_IDLE;
+        if (a->active.drive>=26 || a->seen[a->active.drive]!=a->active.generation) return;
+        a->phase=AP_READY;
+    }
+    if (a->open || (!a->waiting && a->phase!=AP_READY)) return;
     /* Media discovery can finish between menu/Run key edges. Opening a
      * prompt here would close the menu (desk_internal_open) and redirect the
      * rest of that command to AutoPlay or the previously focused DOS window.
      * Keep arrivals queued until input returns to the desktop, including
      * across a native client's asynchronous first frame. */
-    if (d->focus>=0 || d->sh.levels || d->sh.switcher || d->action>=0 || d->sh.want_run[0] || d->keyboard_geometry || d->drag>=0 ||
-        d->sh.volume_open || d->sh.network_open || d->sh.media_open) return;
-    for (int k=0;k<DESK_CLIENTS;k++)
-        if (d->clients[k].awaiting_frame) return;
-    for (unsigned i=3;i<26;i++) if (a->waiting&(1u<<i)) {
-        a->waiting&=~(1u<<i); a->active=a->pending[i]; a->selected=AP_FOLDER; a->always=0;
-        if (ap_probe_workspace(d->autoplay_fs,i,&a->content,a->workspace)) {
-            memset(&a->content,0,sizeof(a->content));
-            snprintf(a->content.root,sizeof(a->content.root),"/mnt/%c",'a'+i);
+    if (input_owned(d)) return;
+    if (a->phase==AP_READY) {
+        a->phase=AP_IDLE;
+        if (a->saved>=0 && a->saved<AP_CHOICES && desk_autoplay_enabled(d,a->saved)) {
+            a->selected=a->saved; execute_later(d); return;
         }
-        int saved=a->active.id[0] && d->autoplay_preference ? d->autoplay_preference(d,a->active.id,NULL,-1) : -1;
-        if (saved>=0 && saved<AP_CHOICES && desk_autoplay_enabled(d,saved)) { a->selected=saved; execute(d); continue; }
-        a->open=1;
-        if (desk_internal_open(d,DESK_INTERNAL_AUTOPLAY)<0) { a->open=0; a->waiting|=1u<<i; }
+        if (desk_internal_open(d,DESK_INTERNAL_AUTOPLAY)<0) a->phase=AP_READY;
+        else a->open=1;
+        return;
+    }
+    for (unsigned i=3;i<26;i++) if (a->waiting&(1u<<i)) {
+        a->active=a->pending[i]; a->selected=AP_FOLDER; a->always=0;
+        if (submit(a,AP_JOB_PROBE)) {
+            a->waiting&=~(1u<<i); a->phase=AP_PROBING;
+        }
         break;
     }
 }

@@ -16,11 +16,15 @@ struct ap_content {
 };
 struct ap_preference { char id[40], label[64]; int action; };
 struct ap_workspace;
+struct ap_worker;
+enum { AP_IDLE, AP_PROBING, AP_READY, AP_LAUNCH_PENDING, AP_SAVE_PENDING, AP_SAVING };
 struct desk_autoplay {
     struct ciuki_media_volume pending[26], active;
     uint32_t seen[26], waiting;
     struct ap_content content;
     struct ap_workspace *workspace;
+    struct ap_worker *worker;
+    int phase, saved;
     int open, selected, always, want_commit;
 };
 int ap_parse(struct ap_inf *, const char *, size_t);
@@ -37,6 +41,14 @@ int ap_preference_forget(const char *directory, const char *id);
 struct desktop;
 void desk_autoplay_update(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_autoplay_service(struct desktop *);
+/* Dispatch selected applications in the desktop's ordinary launch stage. */
+int desk_autoplay_launch(struct desktop *);
+/* Prepare before the first frame; service never creates threads or performs
+ * filesystem/registry I/O. Stop is for teardown, after busy() becomes false. */
+int desk_autoplay_prepare(struct desktop *);
+int desk_autoplay_busy(struct desktop *);
+void desk_autoplay_stop(struct desktop *);
+const char *desk_autoplay_activity(const struct desktop *);
 int desk_autoplay_enabled(const struct desktop *, int);
 const char *desk_autoplay_label(const struct desktop *, int, char *, size_t);
 #endif
