@@ -817,9 +817,13 @@ int ata_channel_discover(struct ata_channel *c)
         if (e)
             break;
         /* 9.12: SC=1/LBA Low=1, ATA mid/high=00/00; ATAPI=14/EB. */
-        if (reg_read(c, 2) != 1 || reg_read(c, 3) != 1)
-            continue;
+        uint8_t count = reg_read(c, 2), low = reg_read(c, 3);
         uint8_t mid = reg_read(c, 4), high = reg_read(c, 5);
+        /* One line per selected unit so an absent slave can be told from a
+         * signature mismatch in the boot log (gate evidence of 2026-10-16). */
+        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, s, count, low, mid, high);
+        if (count != 1 || low != 1)
+            continue;
         if (mid == 0x14 && high == 0xeb) {
             d->present = d->atapi = true;
             e = identify_packet(d);

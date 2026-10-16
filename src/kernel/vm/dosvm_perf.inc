@@ -103,7 +103,7 @@ void dosvm_startup_report(struct dosvm *v, bool force)
         struct dosvm_vector_cost c = v->perf.vector[path][vector];
         irq_restore(flags);
         if (!c.count) continue;
-        rec_diag(dosvm_probe(v), "group=vm_perf_v vm=%u gen=%u n=%u path=%s v=%02x calls=%u us=%llu max_us=%llu ax=%04x",
+        rec_diag(dosvm_probe(v), "group=vm_perf_v vm=%u gen=%u n=%u path=%s vector=%02x calls=%u us=%llu max_us=%llu ax=%04x",
                  v->info.key.id, v->info.key.generation, number, path ? "bios" : "int", vector,
                  c.count, perf_us(c.cycles), perf_us(c.max_cycles), c.ax);
         if (g_need_resched) schedule();
@@ -193,7 +193,7 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
         const struct dosvm_hot_cost *p = &s->top_port[i], *q = &s->top_vector[i];
         if (p->count) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_port vm=%u gen=%u n=%u rank=%u port=%04x exits=%u us=%llu",
                       id, gen, n, i + 1, p->id, p->count, perf_us(p->cycles));
-        if (q->count) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_vector vm=%u gen=%u n=%u rank=%u path=%s v=%02x calls=%u us=%llu",
+        if (q->count) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_vector vm=%u gen=%u n=%u rank=%u path=%s vector=%02x calls=%u us=%llu",
                       id, gen, n, i + 1, q->id < 256 ? "int" : q->id < 512 ? "bios" : "pm",
                       q->id & 255, q->count, perf_us(q->cycles));
     }
