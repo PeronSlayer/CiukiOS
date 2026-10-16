@@ -32,9 +32,9 @@ struct fat_volume {
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
     bool mounted, readonly, writable_session, dirty_recovered;
     bool preparing; /* unpublished mount: complete direct I/O, no cache mutex */
-    bool scan_complete, scan_fast;
+    bool scan_complete, scan_fast, scan_deferred;
     uint32_t scan_extent, scan_passes, scan_needed_bytes, scan_available_bytes;
-    uint32_t mount_ms, repair_ms;
+    uint32_t mount_ms, repair_ms, scan_ms;
     uint32_t repaired_lost, repaired_logs, repaired_copies, log_directory;
     struct fat_prepare_cache *prepare_cache; /* private, freed before publication */
     const char *diagnostic;
@@ -50,8 +50,12 @@ struct fat_volume {
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);
 int fat_prepare(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors);
-/* f1-09: upgrade an already scanned RO mount; caller refreshes its view and
- * serializes against VFS. Repairs scanned log tails, lost allocation and
+/* Removable read-only publication: bounded headers only, no read-ahead or
+ * ownership scan. The explicit write upgrade validates ownership first. */
+int fat_prepare_removable(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors);
+/* f1-09/f1-74: upgrade a RO mount; deferred removable ownership is proved
+ * first. Caller refreshes its view and serializes against VFS. Repairs
+ * scanned log tails, lost allocation and
  * advisory flags durably; live ownership conflicts and issued I/O errors
  * retain their write gate. */
 int fat_enable_write(struct fat_volume *);

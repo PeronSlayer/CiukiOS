@@ -40,7 +40,8 @@ int main(void) {
     struct hw_check_result r;
     reset();hardware_check_usb_storage(15000,&r,now);
     assert(r.status==HW_PASS && clock_ms==11320 && reads==16);
-    assert(strstr(r.detail,"capacity=4294967296 bytes=1048576 mount_ms=1200 wait_ms=11000 read_ms=320 error=0"));
+    assert(strstr(r.detail,"mount_ms=1200") && strstr(r.detail,"bytes=1048576 wait_ms=11000 read_ms=320 error=0"));
+    assert(strstr(r.detail,"scan=incomplete scan_ms=0"));
     done();puts("PASS USB page: first scan at 9s, publication at 11s, writable 4 GiB mount, 1 MiB read in 320 ms within 15s item");
     reset();h.ready=false;h.quarantined=true;h.reason="resource_conflict";
     hardware_check_usb_storage(15000,&r,now);
@@ -70,5 +71,14 @@ int main(void) {
     hardware_check_usb_storage(2095,&r,now);
     assert(r.status==HW_SKIP && clock_ms==100 && !reads);done();
     puts("PASS merged USB storage: first-scan deadline and publication wait preserve absolute reserves without oversleep");
+    reset();scan_at=mount_at=0;h.scanned=true;
+    s.volumes[4].fat.scan_deferred=s.volumes[4].fat.readonly=true;
+    hardware_check_usb_storage(15000,&r,now);
+    assert(r.status==HW_PASS && strstr(r.detail,"mode=ro") && strstr(r.detail,"scan=deferred scan_ms=0"));done();
+    reset();scan_at=mount_at=0;h.scanned=true;
+    s.volumes[4].fat.scan_complete=true;s.volumes[4].fat.scan_ms=19000;
+    hardware_check_usb_storage(15000,&r,now);
+    assert(r.status==HW_PASS && strstr(r.detail,"scan=complete scan_ms=19000"));done();
+    puts("PASS F1-74 USB page: deferred read-only scan passes; completed scan time is independent of mount time");
     return 0;
 }

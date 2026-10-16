@@ -81,7 +81,8 @@ void hardware_check_usb_storage(uint64_t until,struct hw_check_result *out, uint
     }
     fs_contig_free(buf,BLKDEV_READ_BYTES);
     out->status=e ? HW_FAIL : HW_PASS;
-    ksnprintf(out->detail,sizeof(out->detail),"drive=%c mounted=1 mode=%s capacity=%llu bytes=%u mount_ms=%u wait_ms=%llu read_ms=%llu error=%d",
-        'A'+vol->drive,vol->fat.readonly ? "ro" : "rw",(unsigned long long)vol->io.capacity*512,
-        bytes,vol->fat.mount_ms,mounted-start,now(0)-mounted,e);
+    ksnprintf(out->detail,sizeof(out->detail),"drive=%c mounted=1 mode=%s mount_ms=%u scan=%s scan_ms=%u bytes=%u wait_ms=%llu read_ms=%llu error=%d",
+        'A'+vol->drive,vol->fat.readonly ? "ro" : "rw",vol->fat.mount_ms,
+        vol->fat.scan_complete ? "complete" : vol->fat.scan_deferred ? "deferred" : "incomplete",vol->fat.scan_ms,
+        bytes,mounted-start,now(0)-mounted,e);
 }

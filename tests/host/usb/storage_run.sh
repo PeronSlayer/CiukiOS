@@ -21,6 +21,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
 }
 build_test storage_test
 "$out/storage_test" "$root/build/host/fs/fat12.img" "$root/build/host/fs/fat16.img" "$root/build/host/fs/fat32.img"
+build_test f1_74_test
+"$out/f1_74_test" "$root/build/host/fs/fat16.img"
 
 # Replay the real run queue policy while the USB bind worker sleeps.
 python3 - "$root" "$out" <<'PYTHON'
