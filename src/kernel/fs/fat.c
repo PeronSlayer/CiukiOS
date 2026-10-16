@@ -3,6 +3,7 @@
 #include "fat.h"
 #include <ciuki/hardware_check.h>
 #include <ciuki/blackbox.h>
+#include <ciuki/bootlog.h>
 #pragma weak blackbox_checkpoint
 #include "../include/ciuki/fat_native.h"
 bool fat_native_ready(void) { return true; }
@@ -974,19 +975,72 @@ static void find_logs(struct fat_volume *v) {
     e=fat_lookup(v,entry.first,"LOGS",&entry);
     if (!e && (entry.attr&FAT_ATTR_DIR)) v->log_directory=entry.first;
 }
+static bool boot_log(struct fat_volume *v, uint32_t dir, const struct fat_entry *file) {
+    return dir==v->log_directory &&
+        (path_equal(file->alias,"BOOT.LOG") || path_equal(file->alias,"BOOT1.LOG") || path_equal(file->alias,"BOOT2.LOG"));
+}
+/* Reservations are zero-initialized before ownership is published. The log
+ * writer emits text followed by zero padding, with a possible zero gap before
+ * the runtime ring. Recover only within the already proved owned chain and
+ * the fixed reservation budget; never search free clusters or another mirror.
+ * Plain text has no checksum: a text-like torn sector cannot be distinguished
+ * from a short record. A malformed sector stops recovery before that sector. */
+static int recover_log_size(struct fat_volume *v, struct fat_entry *file) {
+    if (!file->first || file->size>=BOOTLOG_LIMIT) return 0;
+    /* Start in the last published sector, even for an aligned EOF: a cut
+     * during finalization may already have detached its following cluster. */
+    uint32_t cb=(uint32_t)v->spc*512, pos=(file->size ? file->size-1 : 0)&~511u, c;
+    int e=chain_at(v,file->first,pos/cb,&c); if (e) return e;
+    for (uint32_t walked=0;walked<v->clusters;walked++) {
+        for (unsigned off=pos%cb;off<cb && pos<BOOTLOG_LIMIT;off+=512,pos+=512) {
+            fs_service();
+            uint8_t sector[512];
+            if ((e=readsec(v,cluster_sector(v,c)+off/512,sector))) return e;
+            unsigned length=0;
+            while (length<512 && sector[length]) {
+                uint8_t ch=sector[length];
+                if ((ch<32 && ch!='\t' && ch!='\r' && ch!='\n') || ch==127) return 0;
+                length++;
+            }
+            for (unsigned i=length;i<512;i++) if (sector[i]) return 0;
+            if (length && pos+length>file->size) file->size=pos+length;
+        }
+        if (pos>=BOOTLOG_LIMIT) return 0;
+        uint32_t next;
+        if ((e=fat_get_cluster(v,c,&next))) return e;
+        if (eoc(v,next)) return 0;
+        if (!valid(v,next)) return corrupt(v,"log_recovery_chain",next);
+        c=next;
+    }
+    return corrupt(v,"log_recovery_cycle",c);
+}
 /* Called only after every ownership pass has finished. Publish/detach before
  * freeing, so another power cut restarts the same repair. Directory discovery
  * reuses scan_tree's bounded stack instead of a byte-per-cluster head map. */
 static int repair_file_tail(struct fat_volume *v, uint32_t dir, struct fat_entry *file) {
     uint32_t tail=file->first, last=0, a=0, b=0;int e;
+    bool log=boot_log(v,dir,file), excess=true;
     if (file->size) {
         if ((e=chain_at(v,file->first,(file->size-1)/((uint32_t)v->spc*512),&last)) ||
             (e=scan_pair(v,last,&a,&b))) return e;
         tail=a;
         /* Imported FAT12 split tails cannot be detached atomically. */
         if (split12(v,last)) return 0;
-        if (eoc(v,tail) && a==b) return 0;
+        if (eoc(v,tail) && a==b) {
+            if (!log || !(file->size%((uint32_t)v->spc*512))) return 0;
+            excess=false;
+        }
     } else if (!tail) return 0;
+    uint32_t published=file->size;
+    if (log) {
+        if ((e=recover_log_size(v,file))) return e;
+        /* If recovery moves EOF beyond an interrupted detach, restore the
+         * proved active link in both copies before publishing the larger size.
+         * Otherwise a second cut could expose a short chain in that mirror. */
+        if (file->size>published && a!=b &&
+            ((e=set_cluster(v,last,a)) || (e=barrier(v)))) return e;
+    }
+    if (!excess && file->size==published) return 0;
     if ((e=fat_publish_reserved(v,file,true))) return e;
     if (a!=b) {
         /* If the active copy was already EOC, publish_reserved had no
@@ -994,9 +1048,11 @@ static int repair_file_tail(struct fat_volume *v, uint32_t dir, struct fat_entry
         if (eoc(v,a) && ((e=set_cluster(v,last,mask(v))) || (e=barrier(v)))) return e;
         v->repaired_copies++;
     }
-    if ((!file->size || !eoc(v,tail)) && dir==v->log_directory &&
-        (path_equal(file->alias,"BOOT.LOG") || path_equal(file->alias,"BOOT1.LOG") || path_equal(file->alias,"BOOT2.LOG")))
+    if (log) {
         v->repaired_logs++;
+        if (klog) klog("[storage] log_repair file=%s action=%s recovered_bytes=%u size=%u",
+            file->alias,file->size>published ? "extended" : "finalized",file->size-published,file->size);
+    }
     return 0;
 }
 static int scan_tree(struct fat_volume *v, struct fat_scan_state *s, bool repair) {

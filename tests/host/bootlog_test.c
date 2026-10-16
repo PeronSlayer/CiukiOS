@@ -310,6 +310,24 @@ static void batching_and_cadence(void)
     CHECK(!bootlog_shutdown());
     puts("bootlog: 32KiB physical blocks, one-second rate/high water, five-second metadata, shutdown EOF and clock wrap PASS");
 }
+static void stalled_metadata(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture("durable before stall\n",21);CHECK(!bootlog_drain());
+    CHECK(!snapshot().metadata_writes && !published_size);
+    fs_lock_take(&fs.lock);
+    unsigned before=calls;
+    for (model_now=5000;model_now<=45000;model_now+=5000) {
+        CHECK(bootlog_due(model_now));
+        CHECK(bootlog_drain()==-FS_EBUSY && calls==before);
+        CHECK(!snapshot().metadata_writes && snapshot().writes==1 && !snapshot().error);
+    }
+    fs_lock_drop(&fs.lock);
+    CHECK(bootlog_due(model_now) && !bootlog_drain());
+    CHECK(snapshot().metadata_writes==1 && published_size==21);
+    CHECK(!bootlog_shutdown());
+    puts("PASS F0-36 metadata stall: deadline due 5..45s, namespace try-lock skips publication with metadata=0, unlock publishes without new data");
+}
 static void runtime_summaries(void)
 {
     reset_model();
@@ -538,4 +556,4 @@ static void bounded_pause(void)
     puts("PASS bootlog pause: zero I/O with protected records/sync pending, in-flight exclusion, non-nesting, explicit resume, deadline/clock wrap, shutdown and reset");
 }
 
-int main(void) { bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+int main(void) { stalled_metadata();bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

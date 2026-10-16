@@ -95,9 +95,11 @@ static void recovery_cases(void)
         OK(storage_enable_write(s,2));ordinary_operations(s);
         bootlog_capture("recovered boot\n",15);OK(bootlog_activate(&s->vfs,true,s->sequence));
         OK(bootlog_shutdown());struct fat_entry log;OK(vfs_stat(&table,BOOTLOG_PREVIOUS,&log));
-        CHECK(log.size==(mode>1 ? 11u : 0u));
+        CHECK(mode ? log.size>=11 : !log.size);
+        if (mode==1) CHECK(log.size==11); /* unpublished prefix is recovered */
+        if (mode>1) CHECK(log.size>BOOTLOG_PROTECTED && log.size<=BOOTLOG_PROTECTED+BOOTLOG_BATCH);
         if (!log.size) CHECK(!log.first); /* zero-length reservations are released */
-        else { uint8_t text[32];size_t done;OK(fat_read(&s->volumes[2].fat,&log,0,text,sizeof(text),&done));CHECK(done==11 && !memcmp(text,"crash boot\n",11)); }
+        else { uint8_t text[32];size_t done;OK(fat_read(&s->volumes[2].fat,&log,0,text,sizeof(text),&done));CHECK(done>=11 && !memcmp(text,"crash boot\n",11)); }
         ordinary_operations(s);stop(s,true);bootlog_reset();
         for (unsigned copy=0;copy<2;copy++) {
             struct scan_result scan=independent_scan(media[0].fd,copy);

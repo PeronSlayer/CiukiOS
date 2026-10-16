@@ -148,6 +148,45 @@ write allocations avoid them. Native regular-file syscalls transfer at most
 caller's next run. Research and host evidence:
 [f0-32 validation](../validation/f0-32-fat-write-in-place.md).
 
+**[F0, f0-36 amendment, 2026-10-16]** The three reserved boot logs
+`/SYSTEM/LOGS/BOOT.LOG`, `BOOT1.LOG` and `BOOT2.LOG` are an exception to
+ordinary-file excess-tail trimming. After every ownership pass succeeds,
+recover their unpublished text from the active, solely owned chain before
+finalizing its unused reservation. Bound recovery by `BOOTLOG_LIMIT` (320 KiB),
+preserve the published length, accept printable bytes (including high bytes),
+TAB/CR/LF and trailing zero padding, skip entirely zero sectors (including
+the protected-prefix/runtime-ring gap), and stop before a malformed sector.
+The recovered EOF is the last text byte in the last valid sector; padding
+does not become logical data. Publish that size durably before detaching or
+freeing unused clusters. When extending past an interrupted EOF detach,
+first mirror the ownership-proved active link durably. Log repairs report
+`action=extended`, `recovered_bytes` and the resulting `size`; empty unused
+reservations report `action=finalized`. Ordinary files retain f0-32 policy,
+and live disagreements/crosslinks still refuse every repair write.
+
+Research checked against the current implementation: Microsoft's
+[FAT specification v1.03, directory size and FAT chains](https://www.cs.fsu.edu/~cop4610t/assignments/project3/spec/fatspec.pdf)
+stores byte length independently of allocation; upstream
+[dosfstools v4.2 `check_file()`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/check.c)
+trims ordinary excess allocation, while
+[Linux v6.12 `fat_free()`](https://github.com/torvalds/linux/blob/v6.12/fs/fat/file.c)
+orders size publication before detachment. Text recovery is a Ciuki-specific
+policy for its zero-initialized reservations, not generic FAT semantics.
+The f0-25 implementation and its validation record actually finalized logs
+at published EOF too; there was no existing FAT log-sector validity routine
+to retain. The raw black box has separate sequence/CRC validation, unchanged.
+Plain log text has no checksum: syntactically valid torn data cannot be
+distinguished from valid text and is not claimed to be detected.
+
+The five-second publisher still serializes with namespace/FAT mutations.
+A namespace holder can make `bootlog_drain()` return `EBUSY` before either
+data draining or metadata publication, even when the metadata deadline is
+due. Recovery uses the durable reserved chain rather than depending on that
+publisher's progress; it needs no new lock bypass, memory budget or disk
+format. Bytes still in RAM or an unflushed device cache are not recoverable.
+Physical write counters count padded/repeated 32 KiB writes, not unique
+logical bytes: twelve writes do not imply a 384 KiB recoverable file.
+
 **[F1, f1-24 amendment]** In addition to the interrupted states above, an
 atomic-sector crash during directory publication may leave nonowning orphan
 long-name entries: the [Microsoft FAT specification, version 1.03, pp.

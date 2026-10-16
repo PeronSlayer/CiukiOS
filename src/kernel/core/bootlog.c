@@ -350,7 +350,9 @@ int bootlog_drain(void)
         int e = stats.error; drop_drain(); return e;
     }
     /* The storage task alone does runtime VFS work. Skip a contended client
-     * without monopolizing that task; its next turn retries. */
+     * without monopolizing that task; its next turn retries. This also delays
+     * a due metadata publication. The zero-initialized reserved chain must
+     * remain recoverable at mount without relying on that cadence (f0-36). */
     if (stats.active && !fs_lock_try_take(&table.vfs->lock)) {
         drop_drain(); return -FS_EBUSY;
     }
