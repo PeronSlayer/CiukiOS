@@ -24,6 +24,12 @@ static void (*sleep_hook)(void);
 static void (*port_read_hook)(void);
 static void (*hid_poll_hook)(struct usb_device *,struct usb_hid *);
 static bool (*private_transaction_hook)(uint32_t,uint32_t,volatile uint32_t *);
+void klog_diag(const char *fmt,...)
+{
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
+    char record[256];va_list ap;va_start(ap,fmt);
+    kvsnprintf(record,sizeof(record),fmt,ap);va_end(ap);klog("%s",record);
+}
 void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void klog(const char *fmt,...)
 {

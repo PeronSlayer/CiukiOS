@@ -14,7 +14,7 @@ static void hlt(void) { abort(); }
 static uint32_t read_cr2(void) { return 0; }
 struct ciuki_boot_info g_boot;
 static char output[8192];
-static unsigned ordinary_writes,console_writes,ring_captures;
+static unsigned ordinary_writes,console_writes,ring_captures,verbose_captures;
 static unsigned blackbox_captures;
 static char last_ring[256], last_blackbox[256];
 static void append_output(const char *s,size_t n)
@@ -32,6 +32,8 @@ void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n)
 { if (n >= sizeof(last_ring)) abort(); memcpy(last_ring,s,n); last_ring[n]=0; ring_captures++; }
+void bootlog_capture_verbose(const char *s, size_t n)
+{ if (n >= sizeof(last_ring)) abort(); memcpy(last_ring,s,n);last_ring[n]=0;verbose_captures++; }
 void blackbox_capture(const char *s, size_t n)
 { if (n >= sizeof(last_blackbox)) abort(); memcpy(last_blackbox,s,n); last_blackbox[n]=0; blackbox_captures++; }
 #include "../../src/kernel/core/output.c"
@@ -74,6 +76,16 @@ int main(void)
     rec_diag_disk_bootlog("vm-window","group=vm_perf_cost cause=io exits=12");
     CHECK(ring_captures==selected_ring+1 && blackbox_captures==selected_blackbox);
     CHECK(strstr(last_ring,"run=12345678") && strstr(last_ring,"group=vm_perf_cost"));
+    unsigned verbose=verbose_captures;
+    rec_diag("vm-window","group=vm_perf_cpu vm=1 n=1 guest_us=123");
+    rec_diag("vm-window","group=vm_db dr6=0");
+    CHECK(verbose_captures==verbose+2 && ring_captures==selected_ring+1);
+    for (unsigned flags=0;flags<3;flags++) {
+        g_boot.flags=flags==0 ? 0 : flags==1 ? CBI_F_VERBOSE : CBI_F_DIAG_VERBOSE;
+        verbose=verbose_captures;
+        klog_diag("[usb] worker controller=test scans_per_second=4.000");
+        CHECK(verbose_captures==verbose+(flags==2));
+    }
     if (rec_active()) rec_emit("vm-window", "DATA", "group=admission");
     CHECK(strstr(output, "run=12345678") && strstr(output, "group=admission"));
     rec_set_run("87654321"); CHECK(!rec_active());

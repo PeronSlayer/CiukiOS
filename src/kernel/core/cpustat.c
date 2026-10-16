@@ -270,6 +270,8 @@ static void cpu_emit(void)
         serial_dropped(), ms(path[CPU_CONSOLE]), ms(path[CPU_BOOTLOG]), log.queued, ms(path[CPU_ELF]), ms(path[CPU_ZERO]), work.max_run_us);
     klog_periodic("[kernel] bootlog writes=%llu bytes=%llu metadata=%llu rotations=%u dropped=%u",
         log.writes, log.bytes_written, log.metadata_writes, log.rotations, log.dropped);
+    klog_periodic("[kernel] bootlog dropped_protected=%u dropped_verbose=%u records_protected=%u records_verbose=%u",
+        log.dropped_protected, log.dropped_verbose, log.records_dropped_protected, log.records_dropped_verbose);
     for (unsigned i = 0; i < event_count; i++)
         klog_periodic("[sched] device_overrun task=%s#%u count=%u", events[i].name, events[i].id, events[i].count);
     if (lost) klog_periodic("[sched] device_overrun lost=%u", lost);

@@ -73,6 +73,12 @@ int registry_quarantine(int h,gen_t g)
     return 0;
 }
 static void (*record_hook)(const char *);
+void klog_diag(const char *fmt,...)
+{
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
+    char record[256];va_list ap;va_start(ap,fmt);
+    kvsnprintf(record,sizeof(record),fmt,ap);va_end(ap);klog("%s",record);
+}
 void klog_periodic(const char *s, ...) __attribute__((alias("klog")));
 void klog(const char *s,...)
 {
@@ -785,7 +791,9 @@ static void uhci_schedule_regression(void)
     const uint32_t quiet_flags[] = {0, CBI_F_VERBOSE, CBI_F_TEST_REQUEST};
     for (unsigned i=0;i<ARRAY_SIZE(quiet_flags);i++) {
         setup(false,false);g_boot.flags=quiet_flags[i];assert(!attach());model_step();
-        assert(!schedule_entries && !schedule_qhs && !hid_polls[1] && !hid_pipes[1]);
+        for (unsigned turn=0;turn<8;turn++) {m.now+=250;model_step();}
+        assert(!schedule_entries && !schedule_qhs && !hid_polls[1] && !hid_pipes[1] && !cadence_records);
+        assert(!m.host.devices[0].hid[0].latency_records);
         usb_detach(&m.host.devices[0],"test");usb_detach(&m.host.devices[1],"test");
     }
     setup(false,false);assert(!attach());

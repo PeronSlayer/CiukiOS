@@ -79,7 +79,7 @@ static void fixture(bool ohci,unsigned frame_ms,unsigned gap,unsigned phase,bool
     memset(samples,0,sizeof(samples));memset(consumed,0,sizeof(consumed));produced=0;
     struct input_event stale;while(input_read(&stale)) {}
     m.frame_ms=frame_ms;m.sleep_gap=gap;m.check_sleep_lock=true;
-    g_boot.flags=CBI_F_TEST_REQUEST;
+    g_boot.flags=CBI_F_TEST_REQUEST | CBI_F_DIAG_VERBOSE;
     next_report=m.now+1+phase;frame_hook=inject;report_ack_hook=ack;
     uint64_t begin=m.now;
     struct usb_device *d=&m.host.devices[0];

@@ -72,7 +72,7 @@ void usb_uhci_dump_schedule(struct usb_host *h)
     usb_barrier();
     for (unsigned frame = 0; frame < 4; frame++) {
         dump_preempt(h);
-        klog("[usb] schedule frame=%u entry=%08x controller=%s flbase=%08x current=%u",
+        klog_diag("[usb] schedule frame=%u entry=%08x controller=%s flbase=%08x current=%u",
              frame, words(h, 0)[frame], h->owner, usb_read(h, 8, 4), usb_read(h, 6, 2));
     }
     /* The four entries share a chain. Dump its actual horizontal links once,
@@ -85,20 +85,20 @@ void usb_uhci_dump_schedule(struct usb_host *h)
         uint32_t address = link & ~15u;
         if (!(link & 14) && address == h->dma_phys + USB_TAIL) {
             volatile uint32_t *td = words(h, USB_TAIL);
-            klog("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x controller=%s",
+            klog_diag("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x controller=%s",
                  address, td[0], td[1], td[2], td[3], h->owner);
             link = td[0];
             continue;
         }
         if ((link & 15) != 2 || address < h->dma_phys + USB_ED ||
             address > h->dma_phys + USB_DMA_BYTES - 16) {
-            klog("[usb] schedule frame=0 invalid_link=%08x controller=%s", link, h->owner);
+            klog_diag("[usb] schedule frame=0 invalid_link=%08x controller=%s", link, h->owner);
             return;
         }
         unsigned at = address - h->dma_phys;
         volatile uint32_t *qh = words(h, at);
         uint32_t horizontal = qh[0], element = qh[1];
-        klog("[usb] schedule frame=0 qh=%08x link=%08x element=%08x controller=%s",
+        klog_diag("[usb] schedule frame=0 qh=%08x link=%08x element=%08x controller=%s",
              address, horizontal, element, h->owner);
         if (at >= USB_HID_BASE && at < USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE &&
             (at - USB_HID_BASE) % USB_HID_STRIDE == 0) {
@@ -107,14 +107,14 @@ void usb_uhci_dump_schedule(struct usb_host *h)
             struct usb_hid *p = &d->hid[slot % USB_HID_MAX];
             if (p->endpoint) {
                 volatile uint32_t *td = words(h, at + 16);
-                klog("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x addr=%u interface=%u state=%u controller=%s",
+                klog_diag("[usb] schedule frame=0 td=%08x link=%08x status=%08x token=%08x buffer=%08x addr=%u interface=%u state=%u controller=%s",
                      address + 16, td[0], td[1], td[2], td[3], d->address, p->interface, p->pipe_state, h->owner);
             }
         }
         link = horizontal;
     }
     if (!(link & 1))
-        klog("[usb] schedule frame=0 invalid_link=%08x reason=chain_limit controller=%s", link, h->owner);
+        klog_diag("[usb] schedule frame=0 invalid_link=%08x reason=chain_limit controller=%s", link, h->owner);
 }
 static unsigned status(struct usb_host *h, unsigned port)
 {

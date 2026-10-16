@@ -13,6 +13,7 @@ void console_reclaim(void) { CHECK(false); }
 void console_set_color(uint32_t fg,uint32_t bg) { (void)fg;(void)bg;CHECK(false); }
 void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
 void bootlog_capture_ring(const char *s, size_t n) { (void)s; (void)n; }
+void bootlog_capture_verbose(const char *s, size_t n) { (void)s; (void)n; }
 #include "../../src/kernel/core/output.c"
 static bool verify_blackbox;
 static uint32_t capture_flags;

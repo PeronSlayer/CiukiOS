@@ -77,10 +77,10 @@ static void poll_record(struct usb_device *d, struct usb_hid *h, int result)
     const struct usb_packet_trace *t=&h->trace;
     /* This snapshot precedes LED/hub control or quarantine reusing DMA.
      * poll_frames excludes the two unlinked retirement frames. */
-    klog("[usb] hid poll addr=%u interface=%u ep=%u interval=%u toggle=%u maxlen=%u result=%d controller=%s root=%u parent=%u",
+    klog_diag("[usb] hid poll addr=%u interface=%u ep=%u interval=%u toggle=%u maxlen=%u result=%d controller=%s root=%u parent=%u",
          d->address,h->interface,h->endpoint,h->interval,h->toggle,h->packet,result,
          d->host->owner,d->root_port+1,d->parent);
-    klog("[usb] hid pipe addr=%u valid=%u td=%08x token=%08x hc=%08x poll_frames=%u frames=%u elapsed_ms=%llu retire_result=%d actual=%d",
+    klog_diag("[usb] hid pipe addr=%u valid=%u td=%08x token=%08x hc=%08x poll_frames=%u frames=%u elapsed_ms=%llu retire_result=%d actual=%d",
          d->address,t->valid,t->status,t->token,t->hc_status,t->poll_frames,t->frames,
          t->elapsed_ms,t->retired,t->actual);
 }
@@ -334,8 +334,8 @@ void usb_hid_outputs(struct usb_device *d)
 static void latency_window(struct usb_device *d, struct usb_hid *h, uint64_t tick)
 {
     if (!h->latency_reports || tick-h->latency_window<1000) return;
-    if (trace_enabled())
-        klog_periodic("[usb] hid latency max addr=%u ms=%llu interface=%u reports=%u window_ms=%llu bound=upper",
+    if (g_boot.flags & CBI_F_DIAG_VERBOSE)
+        klog_diag("[usb] hid latency max addr=%u ms=%llu interface=%u reports=%u window_ms=%llu bound=upper",
              d->address,h->latency_max,h->interface,h->latency_reports,tick-h->latency_window);
     h->latency_reports=0; h->latency_max=0; h->latency_window=tick;
 }
@@ -346,9 +346,9 @@ static void latency_record(struct usb_device *d, struct usb_hid *h)
     if (!h->latency_reports) h->latency_window=tick;
     h->latency_reports++;
     if (ms>h->latency_max) h->latency_max=ms;
-    if (trace_enabled() && h->latency_records<USB_HID_LATENCY_LIMIT) {
+    if ((g_boot.flags & CBI_F_DIAG_VERBOSE) && h->latency_records<USB_HID_LATENCY_LIMIT) {
         h->latency_records++;
-        klog("[usb] hid latency addr=%u ms=%llu interface=%u observed_ms=%llu bound=upper",
+        klog_diag("[usb] hid latency addr=%u ms=%llu interface=%u observed_ms=%llu bound=upper",
              d->address,ms,h->interface,tick-h->observed_at);
     }
 }

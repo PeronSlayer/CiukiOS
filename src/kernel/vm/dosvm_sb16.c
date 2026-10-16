@@ -863,8 +863,9 @@ void dosvm_audio_log(struct dosvm *v)
     }
     /* Continuous block/IRQ traffic must not starve periodic evidence. */
     if (!kind && v->audio.diag.attachment && v->audio.diag.environment &&
-        !v->audio.diag.periodic && !v->audio.diag.summary_pending &&
-        now < v->audio.diag.next_level && now < v->audio.diag.next_summary && v->audio.diag.state_count) {
+        (!(g_boot.flags & CBI_F_DIAG_VERBOSE) ||
+         (!v->audio.diag.periodic && !v->audio.diag.summary_pending &&
+          now < v->audio.diag.next_level && now < v->audio.diag.next_summary)) && v->audio.diag.state_count) {
         unsigned at = v->audio.diag.state_head;
         a = v->audio.diag.state_event[at].a; b = v->audio.diag.state_event[at].b; c = v->audio.diag.state_event[at].c;
         v->audio.diag.state_head = (uint8_t)((at + 1) % ARRAY_SIZE(v->audio.diag.state_event));
@@ -890,17 +891,17 @@ void dosvm_audio_log(struct dosvm *v)
     else if (!v->audio.diag.environment && v->audio.sb.resets) {
         char blaster[40]; audio_blaster(v, blaster); v->audio.diag.environment = true;
         klog("[vm-audio] vm=%u blaster=%s source=guest_env", id, blaster);
-    } else if (v->audio.sb.resets || v->audio.q.event_writes) {
+    } else if ((g_boot.flags & CBI_F_DIAG_VERBOSE) && (v->audio.sb.resets || v->audio.q.event_writes)) {
         struct audio_vm_diagnostic d = { .error=-ENODEV };
         if (audio_vm_diagnostic) audio_vm_diagnostic(v->info.key, &d);
         if (now >= v->audio.diag.next_level) {
             v->audio.diag.next_level = now + 1000; v->audio.diag.periodic = 4;
-            klog("[vm-audio] vm=%u level_db=%d pcm_db=%d fm_db=%d ring_db=%d peak=%u at_ms=%llu", id,
+            klog_diag("[vm-audio] vm=%u level_db=%d pcm_db=%d fm_db=%d ring_db=%d peak=%u at_ms=%llu", id,
                  sb_level_db(d.mix_peak), sb_level_db(d.pcm_peak), sb_level_db(d.opl_peak),
                  sb_level_db(d.ring_peak), d.ring_peak, (unsigned long long)d.level_at);
         } else if (v->audio.diag.summary_pending) {
             v->audio.diag.summary_pending = false;
-            klog("[vm-audio] vm=%u pcm=%llu fm=%llu fifo=%llu backend_halts=%llu running=%u drop=%u", id,
+            klog_diag("[vm-audio] vm=%u pcm=%llu fm=%llu fifo=%llu backend_halts=%llu running=%u drop=%u", id,
                  (unsigned long long)d.pcm, (unsigned long long)d.opl,
                  (unsigned long long)d.fifo, (unsigned long long)d.halts, d.running, v->audio.diag.dropped);
         } else if (now >= v->audio.diag.next_summary) {
@@ -909,7 +910,7 @@ void dosvm_audio_log(struct dosvm *v)
                 (d.published - v->audio.diag.published) * 1000 / elapsed : 0;
             v->audio.diag.last_summary = now; v->audio.diag.published = d.published;
             v->audio.diag.next_summary = now + 2000; v->audio.diag.summary_pending = true;
-            klog("[vm-audio] vm=%u ms=%llu ready=%u err=%d buffers_ps=%llu rate=%u starved=%llu attached=%u", id,
+            klog_diag("[vm-audio] vm=%u ms=%llu ready=%u err=%d buffers_ps=%llu rate=%u starved=%llu attached=%u", id,
                  (unsigned long long)now, d.ready, d.error, (unsigned long long)buffers,
                  d.rate, (unsigned long long)d.starved, d.attached);
         } else if (v->audio.diag.periodic) {
@@ -917,10 +918,10 @@ void dosvm_audio_log(struct dosvm *v)
             if (!dosvm_audio_info(v->info.key, &info)) return;
             unsigned stage = v->audio.diag.periodic--;
             if (stage == 4)
-                klog("[vm-audio] vm=%u gain=%u,%u mute=%u master=%u,%u master_mute=%u codec_master=%u", id,
+                klog_diag("[vm-audio] vm=%u gain=%u,%u mute=%u master=%u,%u master_mute=%u codec_master=%u", id,
                      d.gain[0], d.gain[1], d.muted, d.master[0], d.master[1], d.master_muted, d.master_in_codec);
             else if (stage == 3)
-                klog("[vm-audio] vm=%u ct_master=%u,%u voice=%u,%u fm_gain=%u,%u output_gain=%u,%u", id,
+                klog_diag("[vm-audio] vm=%u ct_master=%u,%u voice=%u,%u fm_gain=%u,%u output_gain=%u,%u", id,
                      info.master[0], info.master[1], info.voice[0], info.voice[1], info.fm[0], info.fm[1],
                      info.output_gain[0], info.output_gain[1]);
             else if (stage == 2) {
@@ -933,10 +934,10 @@ void dosvm_audio_log(struct dosvm *v)
                 bool disabled = v->audio.dma.command[ctl] & 4;
                 uint32_t hz = v->audio.sb.x.rate; unsigned fmt = v->audio.sb.x.format;
                 irq_restore(f);
-                klog("[vm-audio] vm=%u sb dma=%u mask=%u mode=%02x disabled=%u addr=%06x count=%u hz=%u fmt=%02x error=%u", id,
+                klog_diag("[vm-audio] vm=%u sb dma=%u mask=%u mode=%02x disabled=%u addr=%06x count=%u hz=%u fmt=%02x error=%u", id,
                      channel, ch.masked, ch.mode, disabled, address, ch.count, hz, fmt, info.last_error);
             } else
-                klog("[vm-audio] vm=%u sb active=%u paused=%u wait=%u units=%u irq=%u edges=%u ack=%u cause=%02x", id,
+                klog_diag("[vm-audio] vm=%u sb active=%u paused=%u wait=%u units=%u irq=%u edges=%u ack=%u cause=%02x", id,
                      info.active, info.paused, info.waiting, info.units, info.irq, info.irq_edges, info.services, info.causes);
         }
     }

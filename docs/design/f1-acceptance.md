@@ -213,8 +213,11 @@ BIOS recovery from native ATA errors. Every disabled device needs a reason.
 **[F1]** Boot records MUST accumulate in bounded RAM until storage passes
 identity, mount, read, durability and write gates. Only then may the normal
 logger write `\SYSTEM\LOGS\BOOT.LOG`, through VFS/cache. F4-16 supersedes
-the original 128 KiB cap: the limit is 1 MiB, with a protected 128 KiB boot
-prefix and an 896 KiB runtime ring; see [the current layout](../boot.md#disk-boot-log-f4-16).
+the original 128 KiB cap. F0-25 reserves three 320 KiB files within the
+1 MiB total budget, each with a protected 128 KiB prefix and a 192 KiB
+runtime ring. F0-34 protects bounded evidence against verbose RAM pressure
+and drains at the device pace within bounded storage turns; see the
+[publication and throughput contract](boot-log-publication.md).
 No-storage/read-only cases report `disk_log=unavailable`; logging failure MUST
 not recurse. Flush obeys normal barriers. Panic MUST neither allocate nor flush
 disk logs; serial/screen remains authoritative. Read-only probes suppress the
