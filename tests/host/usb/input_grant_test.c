@@ -10,6 +10,11 @@
 #include <time.h>
 
 static uint64_t input_tick = 100;
+bool drivers_input_firmware(void)
+{
+    return g_boot.input_policy == CBI_INPUT_FIRMWARE ||
+           (g_boot.flags & (CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE));
+}
 static const uint8_t *pending_report;
 static unsigned pending_length, key_logs, drops, log_calls;
 static char last_drop[256];
@@ -246,7 +251,7 @@ int main(int argc, char **argv)
         g_boot.flags = CBI_F_VERBOSE;
         input_usb_event(INPUT_KEY, 0x58, 1, 0, input_tick); drop_reason("generation", before);
         before = drops; g_boot.flags |= CBI_F_INPUT_FORCED;
-        input_usb_event(INPUT_KEY, 0x58, 1, 71, input_tick); drop_reason("forced_policy", before);
+        input_usb_event(INPUT_KEY, 0x58, 1, 71, input_tick); drop_reason("firmware_policy", before);
         before = drops; g_boot.flags = CBI_F_VERBOSE; g_boot.input_policy = CBI_INPUT_FIRMWARE;
         input_usb_event(INPUT_KEY, 0x58, 1, 71, input_tick); drop_reason("firmware_policy", before);
         g_boot.input_policy = CBI_INPUT_NATIVE;

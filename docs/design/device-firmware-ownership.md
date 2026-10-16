@@ -193,7 +193,12 @@ iteration timeout MUST become an elapsed-time deadline when ported.
 **[F0]** Select input policy before any native i8042 reset, disable command or
 port-60 read. `src/boot/input_platform.inc:input_platform_firmware_first`
 matches ATI `1002:4C4D`, ESS `125D:1978`, ESS subsystem `0E11:B112`, using
-read-only PCI BIOS calls. Preserve that evidence-based firmware-first quirk.
+read-only PCI BIOS calls. Preserve that evidence-based firmware-first quirk;
+the loader records `CBI_F_INPUT_DETECTED` on a match. Normal defaults to
+native unless the E500 platform match or an explicit request selects firmware;
+the kernel falls back to native when firmware fails. Safe mode also tries
+firmware first; see
+[the input activation amendment](hardware-check.md#f0-37-input-activation-and-ebda-2026-10-16).
 The archived `docs/design/notebook-input-boot-policy.md` inside
 `legacy/CiukiOS-docs-legacy-2026-10-09.zip` records unmasked IRQ1/12, an empty
 BIOS keyboard queue and status `3C`; these do not identify a command-byte or

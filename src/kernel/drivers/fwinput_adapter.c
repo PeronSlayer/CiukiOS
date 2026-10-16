@@ -114,7 +114,7 @@ static int adapter_error(const char *step, int error)
 int fwinput_adapter_init(void)
 {
     if (!(read_eflags() & 0x200) || !g_current) return adapter_error("thread_context", -EINVAL);
-    if (g_boot.input_policy != CBI_INPUT_FIRMWARE && !(g_boot.flags & CBI_F_INPUT_FORCED))
+    if (!drivers_input_firmware())
         return adapter_error("input_policy", -ENOSYS);
     if (biosvm_backend_state() == BIOSVM_DISABLED_BACKEND) return adapter_error("disabled", -V86_EIO);
     if (adapter) return 0;

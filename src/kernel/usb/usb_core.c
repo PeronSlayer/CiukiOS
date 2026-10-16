@@ -2,6 +2,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
 #include <ciuki/input.h>
+#include <ciuki/init.h>
 #ifndef CIUKI_USB_HOST
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
@@ -383,7 +384,7 @@ static int claim(struct usb_host *h, unsigned slot, enum res_type type, uint32_t
     return registry_activate(n, h->claim_gen[slot]);
 }
 static bool blocked(void)
-{ return (g_boot.flags & (CBI_F_SAFE_MODE | CBI_F_INPUT_FORCED)) || g_boot.input_policy == CBI_INPUT_FIRMWARE; }
+{ return drivers_input_firmware(); }
 static int ehci_route(struct usb_host *h)
 {
     unsigned caplen = usb_read(h, 0, 1), params = usb_read(h, 4, 4);

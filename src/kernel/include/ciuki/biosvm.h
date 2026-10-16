@@ -24,6 +24,10 @@ enum biosvm_backend { BIOSVM_OFF, BIOSVM_READY, BIOSVM_DISABLED_BACKEND };
 /* Sole controller lease. Uses PMM's existing fixed BIOS reservation; page
  * zero/EBDA are borrowed and must never reach as_destroy/pmm_free. */
 int biosvm_init(void);
+/* Boot-only handoff after adapter failure. Stop input producers and release
+ * clean, idle leases; never reclaim quarantine or an executing firmware VM.
+ * No physical register writes. The VM remains available for video. */
+int biosvm_input_fallback(void);
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Only fbdev's quiesced transaction calls this kernel-only entry. 4F02
  * (LFB), 4F01 into private scratch, 4F03 readback; serialized as one request.

@@ -13,6 +13,7 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/abi.h>
 #include <ciuki/display.h>
+#include <ciuki/init.h>
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -256,16 +257,19 @@ static int map_firmware(void)
     memcpy(&ebda_seg, P2V(0x40E), 2);
     memcpy(&conventional_kib, P2V(0x413), 2);
     uint32_t ebda = (uint32_t)ebda_seg << 4;
-    if (ebda < 0x80000 || ebda >= 0xA0000 || conventional_kib > 640 ||
-        (uint32_t)conventional_kib * 1024 > ebda) {
+    uint32_t lowmem = (uint32_t)conventional_kib * 1024;
+    if (ebda < 0x80000 || ebda >= 0xA0000 || lowmem < 0x20000 || lowmem > ebda) {
         klog("[biosvm] step=ebda_base error=%d segment=%04x conventional_kib=%u", -EFAULT, ebda_seg, conventional_kib);
         return -EFAULT;
     }
-    uint32_t end = ebda + *(const uint8_t *)P2V(ebda) * 1024u;
-    if (end <= ebda || end > 0xA0000) {
-        klog("[biosvm] step=ebda_size error=%d start=%08x end=%08x", -EFAULT, ebda, end);
-        return -EFAULT;
-    }
+    /* RBIL BDA 40:0E / INT15 C1: the byte is KiB, not an authority for
+     * reservation. Linux arch/x86/kernel/ebda.c preserves the lowmem tail
+     * without using it. Keep the whole BDA-reserved extent mapped even if
+     * the byte is zero, too small, or extends into the VGA aperture. */
+    uint32_t claimed_end = ebda + *(const uint8_t *)P2V(ebda) * 1024u;
+    uint32_t end = 0xA0000;
+    if (claimed_end != end)
+        klog("[biosvm] step=ebda_size fallback=lowmem start=%08x end=%08x", lowmem, end);
     int rc = as_create(&vm_as);
     if (rc)
         return init_error("address_space", rc);
@@ -284,7 +288,7 @@ static int map_firmware(void)
     mappings[0] = (struct biosvm_mapping){0, PAGE_SIZE, rw};
     mappings[1] = (struct biosvm_mapping){BIOSVM_SCRATCH, BIOSVM_SCRATCH + PAGE_SIZE, rw};
     mappings[2] = (struct biosvm_mapping){BIOSVM_STACK, BIOSVM_STACK + PAGE_SIZE, rw};
-    mappings[3] = (struct biosvm_mapping){PAGE_ALIGN_DOWN(ebda), PAGE_ALIGN_UP(end), rw};
+    mappings[3] = (struct biosvm_mapping){PAGE_ALIGN_DOWN(lowmem), PAGE_ALIGN_UP(end), rw};
     /* f1-07b: SeaBIOS VARLOW/extra stack are reserved firmware workspace.
      * https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/Kconfig
      * Only this private PDE exposes their physical identity as user RW. */
@@ -475,7 +479,7 @@ static bool input_irq_pending(void)
 static bool worker_ready(void *arg)
 {
     (void)arg;
-    return request_pending || (!quarantined && !synthetic && input_irq_pending());
+    return request_pending || (input_enabled && !quarantined && !synthetic && input_irq_pending());
 }
 
 static void worker_main(void *arg)
@@ -491,13 +495,13 @@ static void worker_main(void *arg)
             request_done = true;
             kwait_wake_all(&completion);
         }
-        if (!quarantined && !synthetic && input_irq_pending()) {
+        if (input_enabled && !quarantined && !synthetic && input_irq_pending()) {
             struct biosvm_regs r = {0};
             run_vm(&r, 100, 0);
             input_irq = true;
         }
         input_irq |= firmware.stats.reflected_irqs != reflected;
-        if (!quarantined && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
+        if (input_enabled && !quarantined && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
             input_service();
             notify_input();
             poll = deadline_after_ms(10);
@@ -507,7 +511,7 @@ static void worker_main(void *arg)
         /* Bound each batch to one standalone reflection. Even a stream of
          * individually short ISRs must let lower priorities run. Firmware
          * calls retain their own deadline; backlog blocks for one tick. */
-        if (!quarantined && !synthetic && input_irq_pending()) {
+        if (input_enabled && !quarantined && !synthetic && input_irq_pending()) {
             delivery.budget_yields++;
             task_sleep_ms(1);
         }
@@ -523,7 +527,7 @@ static int biosvm_init_for(bool input)
         return input && !input_enabled ? -V86_EPERM : 0;
     if (!g_current || !(read_eflags() & V86_IF))
         return init_error("thread_context", -V86_EPERM);
-    if (input && g_boot.input_policy != CBI_INPUT_FIRMWARE)
+    if (input && !drivers_input_firmware())
         return init_error("input_policy", -V86_EPERM);
     if (read_cr4() & 3)
         return init_error("vme_pvi", -V86_EPERM); /* no alternate VME/PVI monitor path */
@@ -538,11 +542,11 @@ static int biosvm_init_for(bool input)
         rc = init_error("worker_create", -ENOMEM);
         goto failed;
     }
+    kmutex_init(&request_mutex);
     if (input) {
         rc = claim_input();
         if (rc) goto failed;
     }
-    kmutex_init(&request_mutex);
     kwait_init(&wake);
     kwait_init(&completion);
     uint32_t f = irq_save();
@@ -573,6 +577,45 @@ failed:
 }
 
 int biosvm_init(void) { return biosvm_init_for(true); }
+
+static bool input_fallback_idle(int handle, gen_t generation)
+{
+    (void)handle; (void)generation;
+    /* No PS/2 DMA. Detached software producers cannot access the ports;
+     * native init performs its existing inhibit/drain before replies. */
+    return !input_enabled && !continuation && !request_pending;
+}
+
+int biosvm_input_fallback(void)
+{
+    if (!g_current || !(read_eflags() & V86_IF)) return -EINVAL;
+    if (!lease_count) return 0;       /* mapping/preflight failed before ownership */
+    kmutex_lock(&request_mutex);
+    uint32_t f = irq_save();
+    input_enabled = false;
+    irq_set_handler(1, 0);
+    irq_set_handler(12, 0);
+    input_service = 0;
+    input_observer = 0;
+    input_wait = 0;
+    pending_irqs = 0;
+    bool busy = continuation || request_pending;
+    if (!busy) {
+        firmware.pic[0].irr = firmware.pic[0].isr = 0;
+        firmware.pic[1].irr = firmware.pic[1].isr = 0;
+    }
+    irq_restore(f);
+    int rc = quarantined ? -V86_EIO : busy ? -EBUSY : 0;
+    for (unsigned i = 0; !rc && i < lease_count; i++)
+        rc = registry_quiesce(leases[i].handle, leases[i].generation, input_fallback_idle);
+    for (unsigned i = 0; !rc && i < lease_count; i++)
+        rc = registry_release(leases[i].handle, leases[i].generation);
+    if (!rc) lease_count = 0;
+    else quarantine();
+    kmutex_unlock(&request_mutex);
+    klog("[biosvm] step=input_fallback error=%d leases=%u", rc, lease_count);
+    return rc;
+}
 
 static bool finished(void *arg)
 {
@@ -880,7 +923,7 @@ static int claim_video(void)
 int biosvm_video_prepare(void)
 {
     if (!g_current || g_current == vm_thread || !(read_eflags() & V86_IF)) return -EINVAL;
-    int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
+    int e = biosvm_init_for(drivers_input_firmware());
     if (e) return e;
     kmutex_lock(&request_mutex);
     /* Display preparation precedes fbdev_change_begin: Savage may still own
@@ -947,7 +990,7 @@ int biosvm_video_switch(uint16_t mode, uint8_t info[256])
 {
     if (!info || mode < 0x100 || mode >= 0x200 || !g_current || g_current == vm_thread ||
         !(read_eflags() & V86_IF)) return -EINVAL;
-    int e = biosvm_init_for(g_boot.input_policy == CBI_INPUT_FIRMWARE);
+    int e = biosvm_init_for(drivers_input_firmware());
     if (e) return e;
     kmutex_lock(&request_mutex);
     if (fullscreen_video) { e=-EBUSY; goto done; }

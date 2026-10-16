@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,44 @@ def scratch():
 
 
 class LoaderTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
+    def test_boot_info_cleared_at_every_entry_before_discovery(self):
+        with scratch() as folder:
+            binary = Path(folder) / 'ciukldr.bin'
+            subprocess.run(['nasm', '-f', 'bin', str(ROOT / 'src/boot/ciukldr.asm'),
+                            '-o', str(binary)], cwd=ROOT, check=True)
+            data = binary.read_bytes()
+        entry, = struct.unpack_from('<H', data, 12)
+        # Decode the entire straight-line entry prefix, including ES=CS and
+        # CLD; no BIOS call/branch/interrupt can precede REP STOSB.
+        prefix = bytes.fromhex('fa fc 31c0 8ed0 66bc007c0000 8ee0 8cc8 8ed8 8ec0 31c0 bf')
+        self.assertEqual(data[entry:entry + len(prefix)], prefix)
+        offset = entry + len(prefix)
+        boot_info, = struct.unpack_from('<H', data, offset)
+        self.assertEqual(data[offset + 2:offset + 8], bytes.fromhex('b94413 f3aa fb'))
+        self.assertEqual(data[offset + 8:offset + 12], b'\x88\x16' + struct.pack('<H', boot_info + 0xC))
+        self.assertEqual(data[boot_info:boot_info + 0x1344], bytes(0x1344))
+        # Every field, including the C/NASM policy byte at 0x00E, is cleared
+        # on cold entry and re-entry after stale in-memory state.
+        self.assertLess(boot_info + 0x1344, LOADER_BYTES)
+
+    def test_e500_detection_sets_provenance_before_a20_unless_forced(self):
+        loader = (ROOT / 'src/boot/ciukldr.asm').read_text()
+        self.assertIn('%include "src/boot/input_platform.inc"', loader)
+        policy = loader.split('call fwcfg_request', 1)[1].split('call a20_enable', 1)[0]
+        self.assertEqual([line.strip() for line in policy.splitlines() if line.strip()], [
+            'test dword [B(flags)], CBI_F_INPUT_FORCED', 'jnz .policy',
+            'call input_platform_firmware_first', 'jnc .policy',
+            'mov byte [B(input_policy)], 1',
+            'or dword [B(flags)], CBI_F_INPUT_DETECTED', '.policy:',
+        ])
+        self.assertIn('%define CBI_F_INPUT_DETECTED  (1 << 14)',
+                      (ROOT / 'src/boot/boot_info.inc').read_text())
+        menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+        accept = menu.split('selector_accept:', 1)[1].split('chain_probe_names', 1)[0]
+        self.assertIn('mov byte [B(input_policy)], 1', accept)
+        self.assertIn('or dword [B(flags)], CBI_F_INPUT_FORCED', accept)
+
     @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
     def test_loader_image_keeps_its_fixed_size_and_hint(self):
         with scratch() as folder:
@@ -145,12 +184,14 @@ int main(void)
     unsigned bad = 0;
     bad += !cbi_quiet_console(CBI_F_SERIAL_LOG | CBI_F_VBE_CTRL_VALID | CBI_F_EDID_VALID | (3u << CBI_F_A20_SHIFT));
     bad += !cbi_quiet_console(0);
+    bad += !cbi_quiet_console(CBI_F_INPUT_DETECTED);
     bad += !!cbi_quiet_console(CBI_F_TEST_REQUEST);
     bad += !!cbi_quiet_console(CBI_F_SAFE_MODE);
     bad += !!cbi_quiet_console(CBI_F_VERBOSE);
     bad += !!cbi_quiet_console(CBI_F_TEXT_MODE);
     bad += !!cbi_quiet_console(CBI_F_HW_CHECK);
-    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u || CBI_F_DEFINED_MASK != 0x3FFFu;
+    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u;
+    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0x7FFFu;
     printf("quiet predicate: %u failures\n", bad);
     return bad != 0;
 }

@@ -332,11 +332,12 @@ def input_policy(pci, pci_bios_ok=True, request=None, validated_fw_cfg=False):
     if request is not None:
         selected = selector(request, 'fw_cfg' if validated_fw_cfg else 'menu', validated_fw_cfg)
         if selected['platform'] == 'e500':
-            return {'policy': 1, 'forced': True}
+            return {'policy': 1, 'forced': True, 'detected': False}
     ati = any(d['vendor'] == 0x1002 and d['device'] == 0x4c4d for d in pci)
     ess = any(d['vendor'] == 0x125d and d['device'] == 0x1978 and
               d.get('subsystem_vendor') == 0x0e11 and d.get('subsystem_device') == 0xb112 for d in pci)
-    return {'policy': int(pci_bios_ok and ati and ess), 'forced': False}
+    detected = bool(pci_bios_ok and ati and ess)
+    return {'policy': int(detected), 'forced': False, 'detected': detected}
 
 
 def display_inventory(controller, modes, current=None, firmware_memory=None):

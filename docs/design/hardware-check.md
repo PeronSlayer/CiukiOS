@@ -1,5 +1,82 @@
 # Boot hardware check (f0-26)
 
+## F0-37 input activation and EBDA (2026-10-16)
+
+Research checked before implementation:
+
+- [Linux arch/x86/kernel/ebda.c](https://github.com/torvalds/linux/blob/master/arch/x86/kernel/ebda.c)
+  derives the firmware reservation from BDA `0x413`, lowering its start for
+  a valid earlier EBDA pointer, without consulting EBDA's size byte. Linux
+  reserves through 1 MiB, including ROM; Ciuki's separate ROM mappings stay
+  unchanged and its EBDA writable extent ends at `0xA0000`.
+- [RBIL INT 15h/AH=C1h](https://fd.lod.bz/rbil/interrup/bios/15c1.html)
+  returns the EBDA segment in ES on success.
+- [RBIL BDA 0040:000E](https://fd.lod.bz/rbil/memory/bios/m0040000e.html)
+  defines the segment pointer and EBDA offset zero as its length in KiB;
+  [RBIL INT 12h](https://fd.lod.bz/rbil/interrup/bios/12.html) identifies
+  BDA `0040:0013` as the conventional-memory size in KiB.
+- Review amendment: [RBIL PCI BIOS installation check](https://fd.lod.bz/rbil/interrup/bios_expansion/1ab101.html),
+  [find device](https://fd.lod.bz/rbil/interrup/bios_expansion/1ab102.html)
+  and [read configuration DWORD](https://fd.lod.bz/rbil/interrup/bios_expansion/1ab10a.html)
+  define the status/signature and read-only calls used by
+  `input_platform_firmware_first`. The helper returns CF=0 on every failed
+  status or match. Preserve its exact ATI `1002:4C4D` + ESS `125D:1978`,
+  subsystem `0E11:B112` rule; add provenance at the caller rather than
+  removing the evidence-based E500 selection.
+
+The old loader contained an unflagged writer: after `fwcfg_request`, PCI
+profile detection could set `input_policy=1` without `CBI_F_INPUT_FORCED`.
+Both NASM and C place the byte at `0x00E`, with no overlap. The boot-info
+data is zero in the disk loader, and the MBR reloads/CRC-checks that image,
+but entry lacked an explicit runtime clear. These are source observations;
+the supplied T23 log does not prove that profile detection returned firmware
+on that boot, nor prove stale RAM. F0-37 clears the block at every entry.
+The review amendment preserves automatic E500 selection after `fwcfg_request`
+and before A20, skips detection for an already forced request, and records
+`CBI_F_INPUT_DETECTED` (bit 14) with policy 1 on a successful match.
+
+Normal defaults to native unless the E500 platform match or an explicit
+request selects firmware; the kernel falls back to native when firmware
+fails. The explicit loader request is validated fw_cfg `platform=e500`,
+which sets `CBI_F_INPUT_FORCED`; BOOT.CFG/menu cannot request that suffix.
+The kernel selects firmware first for `CBI_F_INPUT_FORCED`,
+`CBI_F_INPUT_DETECTED` or `CBI_F_SAFE_MODE`, including before activation.
+A bare firmware policy without any of those flags logs
+`[init] input_policy=firmware source=unknown action=native` and selects native.
+Safe mode starts with firmware regardless of the policy byte. The copied
+boot-info and flags remain evidence of the request; drivers use the effective
+selection.
+
+Activation order is framebuffer, input, ATA, then the existing services.
+Input tries BIOS VM then firmware adapter. Either failure records the
+firmware error, detaches the firmware software producers and attempts native
+`i8042_init()` once. Completed firmware execution with no request/continuation
+in flight permits software-only lease quiescence/release: PS/2 has no DMA,
+and the native initialization already inhibits/resets the controller. No new
+controller or PIC programming is introduced. Quarantined or busy leases
+are never reclaimed; native acquisition must still pass its ordinary checks.
+The BIOS VM may retain its mappings/worker for later serialized video calls,
+but input IRQs, observers, callbacks and pending edges are disabled on a
+clean handoff. No second firmware attempt follows a native failure.
+
+Successful fallback records input `result=ready error=0
+reason=firmware_failed_native_fallback`; both failures record `result=failed`
+with the native error and the same attempted-fallback reason. The original
+firmware error is retained separately and logged. USB follows the effective
+backend: firmware success blocks native USB, native selection/fallback allows
+it, including in safe mode. Safe mode still disables optional ATA activation.
+Hardware absence, quarantine or failure of every available backend cannot
+promise working input; report failure truthfully and leave USB eligible.
+
+For BIOS mapping, require EBDA start in `[0x80000,0xA0000)`, conventional
+memory end in `[0x20000,EBDA start]` (Linux's 128-KiB sanity floor). Size zero, overrun or a claimed extent
+not reaching `0xA0000` is unreliable. Map from the conventional-memory end
+through `0xA0000` and log `step=ebda_size fallback=lowmem start=... end=...`.
+Even with a consistent size, preserve any earlier BDA reservation boundary.
+Reject inconsistent base/low-memory fields, without dereferencing an invalid
+EBDA pointer. All these pages were already excluded by the PMM's low-MiB
+reservation; this changes only the BIOS VM's private mapping.
+
 ## F0-28 safety amendment (2026-10-15)
 
 This amendment supersedes the f0-26 timeout policy and the THRE-only

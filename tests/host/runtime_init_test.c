@@ -63,6 +63,18 @@ int main(void)
     }
     read_ok = !ferror(in); fclose(in);
     if (fclose(out) || !read_ok || !complete) return 1;
+    snprintf(source, sizeof(source), "%s/src/kernel/usb/usb_core.c", root);
+    snprintf(include, sizeof(include), "%s/build/host/runtime_usb_policy.inc", root);
+    in = fopen(source, "r"); out = fopen(include, "w");
+    if (!in || !out) return 1;
+    copying = complete = false;
+    while (fgets(line, sizeof(line), in)) {
+        if (!strcmp(line, "static bool blocked(void)\n")) copying = true;
+        if (copying && fputs(line, out) == EOF) break;
+        if (copying && strchr(line, '}')) { complete = true; break; }
+    }
+    read_ok = !ferror(in); fclose(in);
+    if (fclose(out) || !read_ok || !complete) return 1;
     pid_t child = fork();
     if (!child) {
         execlp("clang", "clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
@@ -96,6 +108,7 @@ void task_sleep_ms(uint32_t ms) { CHECK(ms == 10010); g_ticks += ms; }
 static char order[16], provenance[256];
 static uint32_t expected_flags;
 static int fb_result, input_result, bios_result, adapter_result, ata_result;
+static bool usb_blocked;
 static bool disk, quarantined, fail_expected;
 static struct fb_device display;
 struct ciuki_boot_info g_boot;
@@ -112,6 +125,9 @@ const struct fb_device *fbdev_get(void) { return &display; }
 int i8042_init(void) { called('N'); return input_result; }
 int biosvm_init(void) { called('B'); return bios_result; }
 int fwinput_adapter_init(void) { called('W'); return adapter_result; }
+int biosvm_input_fallback(void) { CHECK(drivers_input_firmware()); called('H'); return 0; }
+#include "../../build/host/runtime_usb_policy.inc"
+void usb_init(void) { usb_blocked = blocked(); }
 int ata_init(void) { called('A'); return ata_result; }
 
 struct ata_device *ata_device_get(unsigned c, unsigned u)
@@ -128,7 +144,7 @@ const struct resource *registry_get(unsigned i)
 }
 void i8042_snapshot(struct i8042_stats *out)
 {
-    *out = (struct i8042_stats){ .active = !input_result && !bios_result && !adapter_result };
+    *out = (struct i8042_stats){ .active = drivers_input_firmware() ? !bios_result && !adapter_result : !input_result };
 }
 void fwinput_backend_state(struct fwinput_backend_state *out)
 {
@@ -238,6 +254,7 @@ static int verdict(const char *probe, bool ok, const char *reason)
 
 static void reset(uint32_t flags, bool firmware, bool lfb)
 {
+    if (firmware) flags |= CBI_F_INPUT_FORCED;
     probes_operator_mode = false;
     state = (struct drivers_state){ 0 };
     memset(activation_ledger, 0, sizeof(activation_ledger));
@@ -252,6 +269,7 @@ static void reset(uint32_t flags, bool firmware, bool lfb)
     disk = quarantined = fail_expected = false;
     calls = optional_records = consoles = logs = 0;
     files_ready = false;
+    usb_blocked = false;
     order[0] = provenance[0] = 0;
     display = (struct fb_device){ 0 };
 }
@@ -261,8 +279,12 @@ static void verify(const char *expected, unsigned optional, const char *fb, cons
     drivers_init();
     CHECK(records == before && !frame_count && !sequence); /* ordinary boot: klog only */
     CHECK(logs >= 5 && strstr(log_lines[0], "[init] flag "));
-    CHECK(strstr(log_lines[1], "[init] framebuffer ") && strstr(log_lines[2], "[init] input ") &&
-          strstr(log_lines[3], "[init] ata "));
+    bool input_log = false, ata_log = false;
+    for (unsigned i = 0; i < logs; i++) {
+        input_log |= strstr(log_lines[i], "[init] input result=") != 0;
+        ata_log |= strstr(log_lines[i], "[init] ata ") != 0;
+    }
+    CHECK(input_log && ata_log);
     char with_storage[16]; snprintf(with_storage,sizeof(with_storage),"%sS",expected);
     CHECK(!strcmp(order, with_storage));
     struct drivers_state s;
@@ -274,7 +296,8 @@ static void verify(const char *expected, unsigned optional, const char *fb, cons
     CHECK(!drivers_activation_get(entries) && !drivers_activation_get(UINT32_MAX));
     const char *devices[] = { "framebuffer", "input", "ata" };
     const char *results[] = { fb, input, ata };
-    const int errors[] = { fb_result, input_result ? input_result : bios_result ? bios_result : adapter_result, ata_result };
+    const int errors[] = { fb_result, state.input_error, ata_result };
+    CHECK(usb_blocked == state.firmware);
     struct activation_entry saved[3];
     uint64_t previous = 100;
     for (unsigned i = 0; i < ARRAY_SIZE(saved); i++) {
@@ -287,7 +310,7 @@ static void verify(const char *expected, unsigned optional, const char *fb, cons
     }
     CHECK(!strcmp(saved[0].reason, state.fb_called ? "boot_console" : "safe_text_console"));
     CHECK(saved[0].required == state.safe && saved[1].required);
-    CHECK(!strcmp(saved[1].reason, state.firmware ? "firmware" : "native"));
+    CHECK(!strcmp(saved[1].reason, state.input_fallback ? "firmware_failed_native_fallback" : state.firmware ? "firmware" : "native"));
     CHECK(!strcmp(saved[2].reason, state.safe ? "safe_mode" : "native_discovery"));
     CHECK(saved[2].present == (disk && state.ata_called) && saved[2].quarantined == (quarantined && state.ata_called));
     struct activation_entry ledger[ACTIVATION_LEDGER_MAX];
@@ -347,6 +370,56 @@ static int safe_run(void)
     return result;
 }
 
+static void input_decision_table(void)
+{
+    unsigned rows = 0;
+    for (unsigned policy = 0; policy < 2; policy++)
+    for (unsigned forced = 0; forced < 2; forced++)
+    for (unsigned detected = 0; detected < 2; detected++)
+    for (unsigned safe = 0; safe < 2; safe++)
+    for (unsigned bios_fail = 0; bios_fail < 2; bios_fail++)
+    for (unsigned adapter_fail = 0; adapter_fail < 2; adapter_fail++)
+    for (unsigned native_fail = 0; native_fail < 2; native_fail++) {
+        reset((forced ? CBI_F_INPUT_FORCED : 0) | (detected ? CBI_F_INPUT_DETECTED : 0) |
+              (safe ? CBI_F_SAFE_MODE : 0), false, true);
+        g_boot.input_policy = policy;
+        bios_result = bios_fail ? -14 : 0;
+        adapter_result = adapter_fail ? -12 : 0;
+        input_result = native_fail ? -5 : 0;
+        struct ciuki_boot_info request = g_boot;
+        bool first_firmware = forced || detected || safe;
+        bool fallback = first_firmware && (bios_fail || adapter_fail);
+        bool firmware = first_firmware && !fallback;
+        int error = firmware ? 0 : input_result;
+        CHECK(drivers_input_firmware() == first_firmware);
+        drivers_init();
+        CHECK(!memcmp(&request, &g_boot, sizeof(request)));
+        CHECK(state.firmware == firmware && drivers_input_firmware() == firmware);
+        CHECK(state.input_fallback == fallback && state.input_error == error);
+        CHECK(state.firmware_error == (fallback ? (bios_fail ? bios_result : adapter_result) : 0));
+        CHECK(usb_blocked == firmware && drivers_activation_ordered());
+        const struct activation_entry *e = drivers_activation_get(1);
+        CHECK(e && e->seq == 3 && e->required && e->safe_flag_before == !!safe);
+        CHECK(e->error == error && !strcmp(e->result, error ? "failed" : "ready"));
+        CHECK(!strcmp(e->reason, fallback ? "firmware_failed_native_fallback" : firmware ? "firmware" : "native"));
+        char expected[16] = "F";
+        strcat(expected, !first_firmware ? "N" : !fallback ? "BW" : bios_fail ? "BHN" : "BWHN");
+        if (!safe) strcat(expected, "A");
+        strcat(expected, "S");
+        CHECK(!strcmp(order, expected));
+        bool unknown = false;
+        for (unsigned i = 0; i < logs; i++)
+            unknown |= strstr(log_lines[i], "[init] input_policy=firmware source=unknown action=native") != 0;
+        CHECK(unknown == (policy && !first_firmware));
+        unsigned before = calls;
+        drivers_init();
+        CHECK(calls == before);
+        rows++;
+    }
+    CHECK(rows == 128);
+    printf("input decision table: %u rows (policy/forced/detected/safe/BIOS/adapter/native, USB, ledger, request preserved) PASS\n", rows);
+}
+
 static void safe_sweep_tests(void)
 {
     reset(0, false, true); disk = true;
@@ -367,11 +440,11 @@ static void safe_sweep_tests(void)
     memcpy(g_boot.options, "safe=1", 7);
     CHECK(safe_run() == 1 && strstr(frames[frame_count - 1], "status=FAIL"));
     reset(CBI_F_SAFE_MODE, false, true);
-    verify("FN", 0, "ready", "ready", "disabled", 0);
+    verify("FBW", 0, "ready", "ready", "disabled", 0);
     probes_operator_mode = true;
     CHECK(!safe_run() && strstr(frames[frame_count - 1], "status=PASS"));
-    reset(CBI_F_SAFE_MODE, false, false); input_result = -5; fail_expected = true;
-    verify("N", 0, "disabled", "failed", "disabled", 1);
+    reset(CBI_F_SAFE_MODE, false, false); bios_result = input_result = -5; fail_expected = true;
+    verify("BHN", 0, "disabled", "failed", "disabled", 1);
     probes_operator_mode = true;
     CHECK(safe_run() == 1 && strstr(frames[frame_count - 1], "status=FAIL"));
 }
@@ -379,6 +452,7 @@ static void safe_sweep_tests(void)
 int main(void)
 {
     CHECK(CIUKI_BUILD_EPOCH == 0); /* the host build uses the header fallback */
+    input_decision_table();
     safe_sweep_tests();
     reset(0, false, true); disk = true; verify("FNA", 2, "ready", "ready", "ready", 0);
     reset(CBI_F_TEXT_MODE, false, false); verify("FNA", 2, "ready", "ready", "absent", 0);
@@ -386,28 +460,28 @@ int main(void)
     CHECK(state.fb_error == -EINVAL && state.input_error == -5 && state.ata_error == -5);
     reset(0, false, true); quarantined = true; verify("FNA", 2, "ready", "ready", "failed", 1);
     reset(0, false, true); disk = quarantined = true; verify("FNA", 2, "ready", "ready", "failed", 1);
-    reset(0, true, true); adapter_result = -5; verify("FBWA", 2, "ready", "failed", "absent", 1);
+    reset(0, true, true); adapter_result = -5; verify("FBWHNA", 2, "ready", "ready", "absent", 0);
     reset(0, false, true); fb_result = input_result = ata_result = INT32_MIN;
     verify("FNA", 2, "failed", "failed", "failed", 3);
     reset(0, true, true); verify("FBWA", 2, "ready", "ready", "absent", 0);
-    reset(0, true, true); bios_result = -5; verify("FBA", 2, "ready", "failed", "absent", 1);
-    reset(CBI_F_SAFE_MODE, false, true); verify("FN", 0, "ready", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1);
+    reset(0, true, true); bios_result = -5; verify("FBHNA", 2, "ready", "ready", "absent", 0);
+    reset(CBI_F_SAFE_MODE, false, true); verify("FBW", 0, "ready", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1);
     CHECK(strstr(provenance, "menu=1 menu_inferred=1"));
     reset(CBI_F_SAFE_MODE | CBI_F_TEXT_MODE, false, false);
     memcpy(g_boot.options, "video=640x480\nsafe=1\n", sizeof("video=640x480\nsafe=1\n"));
-    verify("N", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1 && strstr(provenance, "boot_cfg=1 menu=0"));
+    verify("BW", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run() && consoles == 1 && strstr(provenance, "boot_cfg=1 menu=0"));
     reset(CBI_F_SAFE_MODE | CBI_F_TEXT_MODE | CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST | CBI_F_INPUT_FORCED,
           true, false);
     const char *selector = "f1:safe run=12ab34cd platform=e500 safe=1";
     g_boot.test_request_len = (uint16_t)strlen(selector);
     memcpy(g_boot.test_request, selector, g_boot.test_request_len);
     verify("BW", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run() && strstr(provenance, "fw_cfg=1"));
-    reset(CBI_F_SAFE_MODE, false, false); verify("N", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run()); /* no LFB/no storage */
-    reset(CBI_F_SAFE_MODE, false, false); input_result = -5; fail_expected = true;
-    verify("N", 0, "disabled", "failed", "disabled", 1); CHECK(safe_run() == 1);
+    reset(CBI_F_SAFE_MODE, false, false); verify("BW", 0, "disabled", "ready", "disabled", 0); CHECK(!safe_run()); /* no LFB/no storage */
+    reset(CBI_F_SAFE_MODE, false, false); bios_result = input_result = -5; fail_expected = true;
+    verify("BHN", 0, "disabled", "failed", "disabled", 1); CHECK(safe_run() == 1);
     CHECK(!safe_option("nosafe=1", 8) && !safe_option("safe=10", 7) && safe_option("safe=1", 6));
     /* A corrupt ordering/flag cannot pass the safe evidence. */
-    reset(CBI_F_SAFE_MODE, false, true); verify("FN", 0, "ready", "ready", "disabled", 0);
+    reset(CBI_F_SAFE_MODE, false, true); verify("FBW", 0, "ready", "ready", "disabled", 0);
     activation_ledger[1].safe_flag_before = false;
     fail_expected = true;
     CHECK(!drivers_activation_ordered() && safe_run() == 1);

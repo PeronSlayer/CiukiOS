@@ -47,7 +47,7 @@ int probe_input(void)
 {
     rec_emit("input", "BEGIN", 0);
     int err = i8042_init();
-    bool firmware = g_boot.input_policy == CBI_INPUT_FIRMWARE || (g_boot.flags & CBI_F_INPUT_FORCED);
+    bool firmware = drivers_input_firmware();
     const char *backend = firmware ? "firmware" : "native";
     const char *failed_step = "none";
     if (!firmware) {

@@ -34,7 +34,9 @@
  * Accepted fw_cfg test selectors enable this bit. Hardware defaults to off. */
 #define CBI_F_DIAG_VERBOSE     (1u << 12)
 #define CBI_F_HW_CHECK         (1u << 13)
-#define CBI_F_DEFINED_MASK     0x00003FFFu
+/* Input policy selected by the loader's exact Armada E500 platform match. */
+#define CBI_F_INPUT_DETECTED   (1u << 14)
+#define CBI_F_DEFINED_MASK     0x00007FFFu
 
 /* A normal boot keeps the screen quiet until the desktop takes it: no test
  * request, no safe mode, no L choice and a linear framebuffer. Every other
@@ -127,6 +129,7 @@ struct ciuki_boot_info {
 #define CBI_ASSERT_OFF(f, o) \
     _Static_assert(__builtin_offsetof(struct ciuki_boot_info, f) == (o), #f)
 CBI_ASSERT_OFF(flags, 0x008);
+CBI_ASSERT_OFF(input_policy, 0x00E);
 CBI_ASSERT_OFF(partition_lba, 0x010);
 CBI_ASSERT_OFF(kernel_entry_phys, 0x024);
 CBI_ASSERT_OFF(uart_base, 0x038);
