@@ -425,7 +425,11 @@ int storage_cache_fault(struct block_cache *c, struct blkdev *d, void (*inject)(
     inject(ctx, flush);
     int delayed = cache_writeback_tick(c, fs_now_ms() + 5001);
     int barrier_error = cache_barrier(c, d);
-    struct fat_volume vol = { .cache=c, .dev=d, .type=16, .mounted=true, .writable_session=true };
+    /* The known delayed error has already revoked this synthetic session.
+     * Seed its reason: a first revocation would checkpoint the unrelated
+     * real-disk blackbox, violating this fixture's no-real-commands rule. */
+    struct fat_volume vol = { .cache=c, .dev=d, .type=16, .mounted=true, .writable_session=true,
+        .readonly=true, .ro_reasons=FAT_RO_WRITE_ERROR, .readonly_reason="write_error" };
     int unmount = fat_unmount(&vol);
     rec_emit("cache", "DATA", "case=ata_error fault=%s delayed=%d flush=%d unmount=%d mounted=%u quarantined=%u",
              flush ? "flush" : "write", delayed, barrier_error, unmount, vol.mounted, d->quarantined);
@@ -548,7 +552,10 @@ int probe_cache(void)
         cache_fixture.fail_write = !fault; cache_fixture.fail_flush = !!fault;
         int delayed = cache_writeback_tick(&c, fs_now_ms()+5001);
         int flush = cache_barrier(&c, d);
-        struct fat_volume fake = { .cache=&c, .dev=d, .mounted=true, .writable_session=true };
+        /* As in storage_cache_fault, unmount an already revoked synthetic
+         * session without checkpointing the real-disk recorder. */
+        struct fat_volume fake = { .cache=&c, .dev=d, .mounted=true, .writable_session=true,
+            .readonly=true, .ro_reasons=FAT_RO_WRITE_ERROR, .readonly_reason="write_error" };
         int unmount = fat_unmount(&fake);
         rec_emit("cache", "DATA", "case=error layer=block_driver fault=%s delayed=%d flush=%d unmount=%d mounted=%u",
                  fault ? "flush" : "write", delayed, flush, unmount, fake.mounted);
@@ -559,14 +566,16 @@ int probe_cache(void)
     if (!e) e = cache_ata_faults(&c);
 #endif
     cache_destroy(&c);
+    if (e) return finish("cache", e);
     /* Mount a separate, read-only forwarding view of the boot fixture with
      * an unqualified FLUSH. Never writes the backing volume. */
     static struct fat_volume unsupported;
     struct storage_volume *v = storage_volume(s, 2);
     struct blkdev noflush = v->io; noflush.flush = 0; noflush.write_cache_state = BLKDEV_CACHE_ENABLED;
-    if (!e) e = fat_mount(&unsupported, &s->cache, &noflush, 0, noflush.capacity, false);
+    e = fat_mount(&unsupported, &s->cache, &noflush, 0, noflush.capacity, false);
     int upgrade = e ? e : fat_enable_write(&unsupported);
-    rec_emit("cache", "DATA", "case=unsupported_flush mode=%s upgrade=%d reasons=%u", unsupported.readonly ? "ro" : "rw", upgrade, unsupported.ro_reasons);
+    rec_emit("cache", "DATA", "case=unsupported_flush mode=%s upgrade=%d reasons=%u mount=%d mounted=%u",
+             unsupported.readonly ? "ro" : "rw", upgrade, unsupported.ro_reasons, e, unsupported.mounted);
     if (!e && (upgrade != -FS_EROFS || !unsupported.readonly)) e = -FS_EIO;
     cache_invalidate(&s->cache, &noflush, true);
     if (!e) e = vfs_table_init(&s->vfs, &probe_table, 2);

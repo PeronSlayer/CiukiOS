@@ -4,6 +4,9 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
 #pragma weak blackbox_capture
+#pragma weak blackbox_bind
+#pragma weak blackbox_reset
+#pragma weak blackbox_checkpoint
 #include <ciuki/kernel.h>
 #include <ciuki/probe.h>
 #include "fake.h"
@@ -477,6 +480,100 @@ static void sweep_write_tests(void) {
     reset(); fake_reset(&media[1]);
     printf("PASS sweep cursor accounting: FAT read PASS/fixtures_absent, bootlog cold reopen, real stray writes before/during rejected\n");
 }
+static unsigned recorder_writes, recorder_flushes;
+static int recorder_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
+    CHECK(!blkdev_range(d,lba,n)); memset(buf,0,n*512);
+    for (unsigned i=0;i<n;i++) {
+        uint8_t *b=(uint8_t *)buf+i*512;
+        if (lba+i==0) {
+            fs_wr16(b+11,512);fs_wr16(b+14,BLACKBOX_RESERVED);
+            fs_wr16(b+48,1);fs_wr16(b+50,6);fs_wr16(b+510,0xaa55);
+        } else if (lba+i==BLACKBOX_DESCRIPTOR) {
+            memcpy(b,"CBB1",4);fs_wr32(b+4,1);fs_wr32(b+8,BLACKBOX_FIRST);fs_wr32(b+12,BLACKBOX_SECTORS);
+            uint32_t crc=~0u;
+            for (unsigned j=0;j<508;j++) {
+                crc^=b[j];for (unsigned bit=0;bit<8;bit++) crc=(crc>>1)^(0xedb88320u&-(crc&1));
+            }
+            fs_wr32(b+508,~crc);
+        }
+    }
+    return 0;
+}
+static int recorder_write(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
+    CHECK(buf && !blkdev_range(d,lba,n) && lba>=BLACKBOX_FIRST);
+    recorder_writes+=n;return 0;
+}
+static int recorder_flush(struct blkdev *d) { (void)d;recorder_flushes++;return 0; }
+static void cache_fault_inject(void *ctx,bool flush) {
+    struct fake *f=ctx;if (flush) f->fail_flush=true;else f->fail_write=0;
+}
+static void cache_fault_recorder(void) {
+    /* The full kernel host suite links the real raw recorder. The standalone
+     * F1 suite deliberately retains its weak-hook-only storage model. */
+    if (!blackbox_bind) return;
+    struct storage *s=start();
+    struct blkdev recorder={.read=recorder_read,.write=recorder_write,.flush=recorder_flush,
+        .capacity=BLACKBOX_RESERVED,.sector_size=512,.write_cache_state=BLKDEV_CACHE_ENABLED};
+    blackbox_reset();OK(blackbox_bind(&recorder,0,recorder.capacity,0));
+    for (unsigned flush=0;flush<2;flush++) {
+        struct block_cache c;OK(cache_init(&c,8192));
+        recorder_writes=recorder_flushes=0;
+        blackbox_capture("synthetic fault pending\n",24);
+        OK(storage_cache_fault(&c,&media[1].dev,cache_fault_inject,&media[1],!!flush));
+        printf("F1-73 synthetic fault=%s raw_writes=%u raw_flushes=%u\n",
+               flush ? "flush" : "write",recorder_writes,recorder_flushes);
+        CHECK(!recorder_writes && !recorder_flushes);
+        cache_destroy(&c);fake_reset(&media[1]);
+    }
+    /* A real first revocation must still checkpoint; do not suppress the
+     * production FAT error path or disable the recorder globally. */
+    struct fat_volume *real=&s->volumes[2].fat;
+    fat_revoke_write(real,"host_real_revocation",0);
+    CHECK(real->mounted && real->readonly && recorder_writes && recorder_flushes);
+    stop(s,false);reset();
+    puts("PASS F1-73 synthetic unmount: sticky write/flush EIO, zero raw-recorder commands; real revocation still checkpoints");
+}
+static void unsupported_flush_views(void) {
+    for (unsigned writable=0;writable<2;writable++) {
+        struct storage *s=start();
+        for (unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
+        for (unsigned drive=2;drive<5;drive++) {
+            struct storage_volume *v=storage_volume(s,drive);
+            CHECK(v && v->fat.mounted);
+            if (writable) OK(storage_enable_write(s,drive));
+            struct blkdev noflush=v->io;
+            noflush.flush=0; noflush.write_cache_state=BLKDEV_CACHE_ENABLED;
+            struct fat_volume view;
+            uint64_t writes=v->writes, flushes=v->flushes;
+            unsigned physical_writes=media[drive-2].writes, physical_flushes=media[drive-2].flushes;
+            /* Force the bounded workspace path while the original remains
+             * live. A copied device is a distinct cache identity. */
+            if (writable && v->fat.type!=12) fs_host_page_fail=1;
+            OK(fat_mount(&view,&s->cache,&noflush,0,noflush.capacity,false));
+            CHECK(view.mounted && view.readonly && view.scan_complete);
+            CHECK(view.ro_reasons&FAT_RO_DURABILITY);
+            if (writable && view.type!=12) CHECK(view.scan_available_bytes==s->cache.workspace_pages*4096);
+            CHECK(!cache_error(&s->cache,&noflush));
+            CHECK(fat_enable_write(&view)==-FS_EROFS);
+            CHECK(view.readonly && !view.writable_session && !cache_error(&s->cache,&noflush));
+            CHECK(v->fat.mounted && v->fat.readonly==!writable);
+            CHECK(v->writes==writes && v->flushes==flushes);
+            CHECK(media[drive-2].writes==physical_writes && media[drive-2].flushes==physical_flushes);
+            CHECK(!s->cache.workspace_in_use && !fs_host_contig_live);
+            printf("PASS F1-73 copied FAT%u view: live=%s mount=0 upgrade=-30 mode=ro writes=0 flushes=0 passes=%u\n",
+                   view.type,writable ? "rw" : "ro",view.scan_passes);
+            OK(fat_unmount(&view)); cache_invalidate(&s->cache,&noflush,true);
+            unsigned reads=media[drive-2].reads;
+            media[drive-2].fail_read=0;
+            CHECK(fat_mount(&view,&s->cache,&noflush,0,noflush.capacity,false)==-FS_EIO);
+            CHECK(!view.mounted && v->fat.mounted && media[drive-2].reads==reads+1);
+            CHECK(v->writes==writes && v->flushes==flushes);
+            media[drive-2].fail_read=UINT64_MAX;
+            cache_invalidate(&s->cache,&noflush,true);
+        }
+        stop(s,true);reset();fake_reset(&media[1]);fake_reset(&media[2]);
+    }
+}
 static void probe_tests(void) {
     struct storage *s=start();
     for(unsigned i=1;i<3;i++) OK(storage_add_disk(s,i,&media[i].dev));
@@ -504,7 +601,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;
