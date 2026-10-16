@@ -3,6 +3,103 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## f3-37 mode inventory and guest VBE amendment (2026-10-16)
+
+The implementation previously admitted every BIOS mode in `cvga_find_mode`,
+not just 03h/13h. Mode X/Y has **no separate BIOS number**: the guest starts
+13h and programs its standard VGA CRTC, sequencer and attribute registers.
+Keep transferring that actual register file instead of reducing it to a
+resolution inferred from the BDA mode byte.
+
+| Guest mode | Raster / depth | Native timing and addressing |
+| --- | --- | --- |
+| 00h/01h, 02h/03h | 40/80-column text | Existing IBM VGA presets and guest font/character clocks |
+| 0Dh, 0Eh | 320/640x200, 16 colours | Existing VGA presets, planar |
+| 10h | 640x350, 16 colours | Existing VGA preset, planar |
+| 11h/12h | 640x480, 2/16 colours | Existing 25.175 MHz VGA timing, planar |
+| 13h and register tweaks | 320x200/240/400/480, 360x200/240/400/480, 640x400 planar tweaks | Guest standard CRTC/25.175 or 28.322 MHz clock, chain-4 or unchained, unchanged plane/page/pan transport |
+| VBE 101h / 111h | 640x480, 8 / RGB565 16 bpp | 25.175 MHz; H 640/656/752/800, V 480/490/492/525, negative syncs; pitch 640/1280 |
+| VBE 103h / 114h | 800x600, 8 / RGB565 16 bpp | 40 MHz; H 800/840/968/1056, V 600/601/605/628, positive syncs; pitch 800/1600 |
+| VBE 110h / 113h (15 bpp), larger modes | Inventoried, not exposed | Outside the four requested linear modes; queries/sets fail |
+
+Register sources: X.Org
+[SavageModeInit and SavageCalcClock](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+and Linux
+[vgaHWInit/savagefb_decode_var](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c).
+CR67 is 01h for 8 bpp and **51h for mobile 16 bpp** (31h would select
+15 bpp). CR50 combines width 40h/80h with depth 00h/10h; CR13/51/90/91
+encode pitch in eight-byte units. CR3B/3C use X.Org's FIFO midpoint formula;
+CR5D/5E hold timing overflow. The PLL integer search uses the existing
+180–360 MHz VCO limits with the selected 25.175/40 MHz pixel clock.
+Standard CRTC values follow Linux's documented timing equations, with
+CR17=EBh from the X.Org packed branch. No engine/MCLK/MIU recipe is added.
+
+The 1024x768 firmware panel keeps SR54–57, SR5B.0, its native timing and
+routing; SR58–5A remain read-only diagnostic results. Expansion versus
+centering stays the firmware choice. A successful register model does not
+qualify panel expansion or visible hardware scanout.
+
+The supplied IBM `Driver/D/A0400/SSAV1014.INF` was checked in full
+(DriverVer 01/23/2003, 06.13.10.1290). Contrary to the directive's premise,
+it contains **no mode list**: neither 640, 800 nor 1024 appears. Its
+`S3SSavage_UserPreferences` removes `PanelCenterExpandMode` and
+`SingleController` to reset user preferences; these are not assignments of
+expansion values. The Toshiba A0500 INF has the same limitation. Therefore
+the table above inventories the source-supported implementation, not an
+alleged INF resolution list or a complete hardware capability claim.
+
+The upstream driver is a timing generator, not a fixed BIOS mode table.
+`SavageValidMode` rejects rasters larger than the active LCD; `SavageModeInit`
+has 8/15/16/24-bit depth branches, with 24- versus 32-bit storage selected
+separately. Thus the source-level packed inventory fitting this panel also
+includes the following families; only the four modes above are exposed by
+F3-37. The conventional VBE numbers below are cross-checked against upstream
+[VGABIOS's mode table](https://raw.githubusercontent.com/qemu/vgabios/master/vbetables-gen.c),
+not asserted to be an IBM BIOS enumeration.
+
+| Raster | Conventional VBE numbers (8 / 15 / 16 / 24 bpp) | F3-37 disposition |
+| --- | --- | --- |
+| 320x200 | 13h VGA / 10Dh / 10Eh / 10Fh | VGA 13h only |
+| 640x400 | 100h / — / — / — | Standard VGA register tweaks only; packed 100h unavailable |
+| 640x480 | 101h / 110h / 111h / 112h | 101h and 111h |
+| 800x600 | 103h / 113h / 114h / 115h | 103h and 114h |
+| 1024x768 | 105h / 116h / 117h / 118h | Saved desktop only; no guest mode |
+
+There is no portable VBE number for 32-bit storage: the returned mode-info
+depth/pitch/masks are authoritative, as on the existing 1024x768x32 desktop.
+No additional 15/24/32-bit register recipe or panel stretch coefficient is
+programmed. Lower VGA modes use the guest CRTC timing; packed 640x480 and
+800x600 use the explicit timings above. The retained firmware 1024x768
+panel/desktop timing is restored from its snapshot rather than synthesized.
+
+The [VBE specification](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf)
+requires 4F00/01 enumeration, 4F02 linear selection and 4F03 current-mode
+query, validated complete buffers and 004F/014F status. Implement a synthetic
+VBE 2.0 interface only when the native provider supports the requested mode.
+There are no guest firmware calls, banked modes, custom CRTC or firmware
+entry points. PhysBasePtr is a VM-local token. DPMI 0800 resolves only that
+token and a bounded subrange into an allocated private pool block; all host
+physical addresses remain refused. This is a narrow amendment of the old
+blanket guest-VBE rejection, not general physical mapping.
+The DPMI descriptions of
+[0800h](https://www.delorie.com/djgpp/doc/dpmi/api/310800.html) explicitly
+permit returning an existing region for a virtualized device;
+[0801h](https://www.delorie.com/djgpp/doc/dpmi/api/310801.html) releases the
+client's mapping reference. Ciuki uses one framebuffer base and accepts
+sizes 1..1 MiB at that exact token, not arbitrary token offsets. The private
+pool's existing RAM mappings and admission accounting remain authoritative.
+
+Allocate the 1 MiB framebuffer from the VM's already admitted memory pool,
+without changing admission limits. Both windowed display and native scanout
+consume this backing. Fullscreen copies changed RAM pages under the existing
+display transaction, and observes guest PTE dirty bits for first-frame proof.
+The provider's temporary BAR1 alias is subordinate to the framebuffer's
+quiesced lease and is revoked before restore/fallback. Guest VBE accesses
+remain trapped; no extended-register or physical LFB grant is issued.
+VBE mode changes while fullscreen request an ordered return before the guest
+continues; the selected virtual mode survives that return. Legacy VGA BIOS
+and window rendering keep their current path.
+
 ## Reference comparison
 
 The owner-supplied `Driver/D/A0400/SSAV1014.INF` identifies
@@ -50,8 +147,9 @@ from the existing IBM/SeaVGABIOS-checked Ciuki model. Mode 13h selects the
 standard 25.175 MHz clock; the desktop programmable PLL values are preserved
 and reloaded on return. The native packed 640×480×8 recipe uses X.Org's
 8-bpp non-BIOS timing/stride setup and an integer search over the same PLL
-limits. Mode 101h is an internal provider mode; this change does not add a
-guest VBE API or banked VBE memory transport.
+limits. In the original F3-32 implementation, 101h was only an internal
+provider mode. F3-37 above adds the synthetic linear guest interface;
+banked VBE remains unavailable.
 
 ## Ownership and recovery
 

@@ -4,6 +4,28 @@ static void card_write(void *arg,unsigned a,uint8_t b) { cvga_write_vram(arg,0xA
 static uint8_t card_in(void *arg,uint16_t p) { return cvga_read_port(arg,p,0); }
 static void card_out(void *arg,uint16_t p,uint8_t b) { cvga_write_port(arg,p,b); }
 static struct vga_hardware_bus card_bus={&fs_card,card_in,card_out,card_read,card_write};
+/* Guest register tweaks, not provider presets. 13h has no unique BIOS
+ * number for these rasters; preserve the entire programmed state. */
+static void tweak_mode(cvga_state *g,unsigned width,unsigned height,bool chain)
+{
+    CHECK(cvga_set_bios_mode(g,0x13,0));
+    if (height==240 || height==480) {
+        const cvga_mode_params *v=cvga_find_mode(0x12);
+        const unsigned vertical[]={6,7,9,0x10,0x11,0x12,0x15,0x16};
+        for (unsigned i=0;i<ARRAY_SIZE(vertical);i++) g->crtc[vertical[i]]=v->crtc[vertical[i]];
+    }
+    g->crtc[9]=(g->crtc[9]&0xE0)|(height<=240 ? 1 : 0);
+    if (width==360) {
+        g->misc=0x67;
+        g->crtc[0]=0x6B;g->crtc[1]=0x59;g->crtc[2]=0x5A;
+        g->crtc[3]=0x8E;g->crtc[4]=0x5E;g->crtc[5]=0x8A;
+        g->crtc[0x13]=45;
+    }
+    g->seq[4]=chain ? 0x0E : 6;
+    g->crtc[0x14]=chain ? 0x40 : 0;
+    g->crtc[0x17]=chain ? 0xA3 : 0xE3;
+    g->display_changes++;
+}
 static cvga_state fs_saved,fs_captured;
 static void test_fullscreen_transport(void)
 {
@@ -162,10 +184,166 @@ static void test_fullscreen_service(void)
     v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
     CHECK(!dosvm_stop(key,DOSVM_FAULT) && !fs_ports);
     dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display);
-    CHECK(!dosvm_destroy(key,false)); empty();
+    struct ciuki_dosvm_command close=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
     fs_test_checkpoint_pin=false;
     g_boot.flags=old_flags; g_boot.test_request_len=old_length; memcpy(g_boot.test_request,old_request,sizeof(old_request));
     puts("PASS full-screen service: refusal/rollback, UC aperture grant/revoke, task-local ports, Alt+Enter/Tab consumed, PS/2/USB mouse path, pause/resume, watchdog and fault cleanup");
     puts("PASS f3-26 full-screen: pre-mutation checkpoint failure, rollback before guest grant, VGA register readback, first-write evidence and independent 5 s first-frame timeout");
     puts("PASS f3-36 VM exit: clean and return-or-fault watchdog share revoke -> capture -> restore, one lease return, exact PTE/port cleanup, restore result and failure surfaced");
+}
+static void test_fullscreen_more_modes(void)
+{
+    window_fixtures();
+    struct ciuki_dosvm_command w;CHECK(!create_window(0,"More modes",&w));
+    struct dosvm_key key={w.id,w.generation};struct dosvm *v=dosvm_lookup(key);
+    CHECK(dosvm_input_focus(key,true));v->fullscreen_parked=true;
+    const unsigned heights[]={200,240,400,480};
+    for (unsigned wide=0;wide<2;wide++) for (unsigned h=0;h<4;h++) for (unsigned chain=0;chain<2;chain++) {
+        int10(v,0x13,0,0,0);dosvm_vga_sync(v,true);
+        unsigned width=wide ? 360 : 320;tweak_mode(&v->vga,width,heights[h],chain);
+        for (unsigned p=0;p<4;p++) memset(v->vga.plane[p],p+1,CVGA_PLANE_SIZE);
+        cvga_geometry g;CHECK(cvga_get_geometry(&v->vga,&g) && g.width==width && g.height==heights[h]);
+        CHECK(!dosvm_fullscreen_enter(key));hardware=card_bus;vga_hardware_load(&v->vga,&hardware);
+        uint8_t pixels[640];CHECK(cvga_render_row8(&fs_card,0,pixels,sizeof(pixels),0)==width && pixels[0]);
+        uint32_t *pd=P2V(v->as.pd_phys),*pt=P2V(pd[0]&~0xFFFu);pt[0xA0]|=0x40;
+        dosvm_fullscreen_poll();CHECK(fullscreen_frame_seen);
+        CHECK(!dosvm_fullscreen_leave(key,false) && !fs_display && !fs_ports && !v->fullscreen_hold);
+        CHECK(cvga_get_geometry(&v->vga,&g) && g.width==width && g.height==heights[h]);
+    }
+    const unsigned planar[]={0x0D,0x0E,0x10,0x11,0x12,0x12};
+    for (unsigned i=0;i<ARRAY_SIZE(planar);i++) {
+        int10(v,planar[i],0,0,0);dosvm_vga_sync(v,true);
+        if (i==5) {
+            const cvga_mode_params *p=cvga_find_mode(0x13);
+            const unsigned vertical[]={6,7,9,0x10,0x11,0x12,0x15,0x16};
+            for (unsigned k=0;k<ARRAY_SIZE(vertical);k++) v->vga.crtc[vertical[k]]=p->crtc[vertical[k]];
+            v->vga.crtc[9]&=0xE0;
+        }
+        memset(v->vga.plane[0],255,CVGA_PLANE_SIZE);
+        CHECK(!dosvm_fullscreen_enter(key));hardware=card_bus;vga_hardware_load(&v->vga,&hardware);
+        uint8_t pixels[640];cvga_geometry g;CHECK(cvga_get_geometry(&v->vga,&g));
+        CHECK(cvga_render_row8(&fs_card,0,pixels,sizeof(pixels),0)==g.width && pixels[0]);
+        uint32_t *pd=P2V(v->as.pd_phys),*pt=P2V(pd[0]&~0xFFFu);pt[0xA0]|=0x40;
+        dosvm_fullscreen_poll();CHECK(fullscreen_frame_seen);CHECK(!dosvm_fullscreen_leave(key,false));
+    }
+    struct ciuki_dosvm_command close=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close)));empty();
+    puts("PASS f3-37 VGA: 16 chain-4/unchained 320/360 x200/240/400/480 variants and planar 0d/0e/10/11/12 plus 640x400, enter/nonblack frame/dirty-store proof/capture/return");
+}
+static int vbe_changing_row(void *arg,unsigned y,const void *pixels,unsigned bytes)
+{
+    struct dosvm *v=arg;
+    if (!y) v->vga.display_changes++;
+    return capture_row(frame_buffer,y,pixels,bytes);
+}
+static void test_fullscreen_vbe(void)
+{
+    window_fixtures();fs_vbe_available=true;
+    struct ciuki_dosvm_command w;CHECK(!create_window(0,"VBE modes",&w));
+    struct dosvm_key key={w.id,w.generation};struct dosvm *v=dosvm_lookup(key);
+    CHECK(dosvm_input_focus(key,true));v->fullscreen_parked=true;
+    struct v86_frame f=vf(0x4F00,0,0,0);f.es=0x2000;
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+    uint8_t info[512];CHECK(!dosvm_read(v,0x20000,info,256));
+    CHECK(!memcmp(info,"VESA",4) && vm_u16(info+4)==0x200 && vm_u16(info+18)==16);
+    const unsigned modes[]={0x101,0x103,0x111,0x114};
+    uint8_t list[10];CHECK(!dosvm_read(v,vm_far(vm_u32(info+14)),list,sizeof(list)));
+    for (unsigned i=0;i<4;i++) CHECK(vm_u16(list+2*i)==modes[i]);CHECK(vm_u16(list+8)==0xFFFF);
+    CHECK(!dosvm_range(v,0xF3800,10,true));
+    for (unsigned i=34;i<256;i++) CHECK(!info[i]);
+    CHECK(!dosvm_write(v,0x20000,"VBE2",4));f=vf(0x4F00,0,0,0);f.es=0x2000;
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && !dosvm_read(v,0x20000,info,512));
+    CHECK(vm_u16(info+20)==1 && vm_u32(info+22)==0xF0003810);
+    /* Complete-buffer rejection, no ROM or wrapping segment output. */
+    f=vf(0x4F01,0,0x111,0);f.es=0x2000;f.tf.edi=0xFF80;
+    CHECK(dosvm_vga_bios(v,&f)==-EFAULT && !v->vbe_mode);
+    f.tf.edi=0;f.es=0xF000;CHECK(dosvm_vga_bios(v,&f)==-EFAULT);
+    for (unsigned i=0;i<4;i++) {
+        const struct dos_video_mode *m=dos_video_mode(modes[i]);
+        f=vf(0x4F01,0,m->number,0);f.es=0x2000;
+        CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+        CHECK(!dosvm_read(v,0x20000,info,256) && (vm_u16(info)&0xD1)==0xD1);
+        CHECK(vm_u16(info+16)==m->pitch && vm_u16(info+18)==m->width && vm_u16(info+20)==m->height);
+        CHECK(info[25]==m->bpp && vm_u32(info+40)==DOS_VBE_PHYS && !info[2] && !info[3]);
+        f=vf(0x4F02,m->number|0x4000,0,0);
+        CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->vbe_mode==m->number);
+        v->video_vblank_us=1000000;v->video_blank=0;
+        for (unsigned k=0;k<37;k++) (void)dosvm_vga_status(v,1000);
+        CHECK(v->video_vblank_us==1000000+(m->width==640 ? 16683u : 16579u));
+        f=vf(0x4F03,0,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==(m->number|0x4000));
+        f=vf(0x4F06,1,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.ebx==m->pitch && (uint16_t)f.tf.ecx==m->width);
+        uint8_t pattern[4]={0x1F,0xF8,0xE0,0x07};CHECK(!dosvm_write(v,v->vbe_buffer.base,pattern,4));
+        struct ciuki_rect damage;v->video_presented=false;
+        CHECK(dosvm_vga_present(v,capture_row,frame_buffer,g_ticks,&damage)==1);
+        CHECK(*(uint32_t *)frame_buffer!=0 && damage.width==640 && damage.height==480);
+        unsigned pages=v->vbe_buffer.pages;uint32_t saved[256];CHECK(pages==256);
+        for (unsigned p=0;p<pages;p++) as_lookup(&v->as,v->vbe_buffer.base+p*PAGE_SIZE,&saved[p]);
+        fs_linear_writes=0;CHECK(!dosvm_fullscreen_enter(key) && fs_linear_writes && !memcmp(fs_linear,pattern,4));
+        dosvm_fullscreen_switch(v->task);CHECK(!fs_ports); /* VBE is always trapped */
+        uint8_t physical=*(uint8_t *)P2V(0xB8000),virtual_byte=physical^0x80;
+        CHECK(!dosvm_write(v,0xB8000,&virtual_byte,1) && *(uint8_t *)P2V(0xB8000)==physical);
+        uint8_t pixel=0x42;CHECK(!dosvm_write(v,v->vbe_buffer.base,&pixel,1));
+        *vbe_pte(v,0)|=0x40;dosvm_fullscreen_poll();CHECK(fullscreen_frame_seen && fs_linear[0]==pixel);
+        CHECK(!dosvm_fullscreen_leave(key,false) && !fs_display && !v->fullscreen_hold);
+        for (unsigned p=0;p<pages;p++) {
+            uint32_t pte;as_lookup(&v->as,v->vbe_buffer.base+p*PAGE_SIZE,&pte);CHECK((pte&~0x60u)==(saved[p]&~0x60u));
+        }
+        CHECK(!dosvm_read(v,v->vbe_buffer.base,&pixel,1) && pixel==0x42);
+        v->video_presented=false;CHECK(dosvm_vga_present(v,capture_row,frame_buffer,g_ticks,&damage)==1);
+        /* Failed restore is surfaced for each mode; framebuffer RAM survives. */
+        CHECK(!dosvm_fullscreen_enter(key));fs_end_result=-EIO;
+        CHECK(dosvm_fullscreen_leave(key,false)==-EIO && !fullscreen_owner && !v->fullscreen_hold);
+        fs_end_result=0;
+    }
+    struct ciuki_rect race_damage;v->video_presented=false;
+    CHECK(dosvm_vga_present(v,vbe_changing_row,v,g_ticks,&race_damage)==1 && !v->video_presented);
+    CHECK(dosvm_vga_present(v,capture_row,frame_buffer,g_ticks,&race_damage)==1 && v->video_presented);
+    /* A whole failed palette buffer cannot partially alter guest colours. */
+    uint8_t saved_dac[3];memcpy(saved_dac,v->vga.dac[255],3);
+    f=vf(0x4F09,0,2,255);f.es=0x2000;
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && !memcmp(saved_dac,v->vga.dac[255],3));
+    f=vf(0x4F09,0,2,0);f.es=0x2000;f.tf.edi=0xFFFC;
+    CHECK(dosvm_vga_bios(v,&f)==-EFAULT);
+    uint8_t palette[8]={1,2,3,0,4,5,6,0};CHECK(!dosvm_write(v,0x20000,palette,8));
+    f=vf(0x4F09,0,2,0);f.es=0x2000;CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+    CHECK(v->vga.dac[0][0]==3 && v->vga.dac[1][2]==4);
+    f=vf(0x4F09,1,2,0);f.es=0x2000;CHECK(!dosvm_vga_bios(v,&f) && !dosvm_read(v,0x20000,info,8) && !memcmp(info,palette,8));
+    /* Unsupported/banked/custom-refresh modes leave the current state intact. */
+    const unsigned bad[]={0x110|0x4000,0x113|0x4000,0x101,0x114|0x4800,0x118|0x4000};
+    for (unsigned i=0;i<ARRAY_SIZE(bad);i++) {
+        f=vf(0x4F02,bad[i],0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && v->vbe_mode==0x114);
+    }
+    CHECK(!dosvm_fullscreen_enter(key));fs_linear_error=-EIO;
+    *vbe_pte(v,0)|=0x40;dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !v->fullscreen_hold && v->fullscreen_error==-EIO);fs_linear_error=0;
+    /* DPMI maps only the private token, never arbitrary physical memory. */
+    v->dpmi.clients=1;
+    f=vf(0x0800,DOS_VBE_PHYS>>16,0,0);CHECK(dosvm_vbe_map(v,&f,0x0800)==1);
+    f.tf.esi=17;CHECK(dosvm_vbe_map(v,&f,0x0800)==1);
+    f=vf(0x0800,DOS_VBE_PHYS>>16,0,0);f.tf.esi=16;f.tf.edi=0;
+    CHECK(!dosvm_vbe_map(v,&f,0x0800) && (((f.tf.ebx&65535)<<16)|(f.tf.ecx&65535))==v->vbe_buffer.base);
+    CHECK(dpmi_linear_owned(v,v->vbe_buffer.base,DOS_VBE_BYTES));
+    f=vf(0x0800,0xFEC0,0,0);f.tf.edi=4096;CHECK(dosvm_vbe_map(v,&f,0x0800)==1);
+    f=vf(0x0801,v->vbe_buffer.base>>16,v->vbe_buffer.base&65535,0);
+    CHECK(!dosvm_vbe_map(v,&f,0x0801) && dosvm_vbe_map(v,&f,0x0801)==1);v->dpmi.clients=0;
+    /* Mode changes while full-screen park and return through the same worker. */
+    CHECK(!dosvm_fullscreen_enter(key));f=vf(0x4F02,0x4101,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->fullscreen_hold);
+    dosvm_fullscreen_poll();CHECK(!v->fullscreen && !v->fullscreen_hold && v->vbe_mode==0x101);
+    CHECK(!dosvm_fullscreen_enter(key));int10(v,3,0,0,0);
+    CHECK(fullscreen_return && v->fullscreen_hold && !v->vbe_mode);
+    dosvm_fullscreen_poll();CHECK(!v->fullscreen && !v->fullscreen_hold && !fs_display);
+    int10(v,0x13,0,0,0);CHECK(!dosvm_fullscreen_enter(key));hardware=card_bus;
+    vga_hardware_load(&v->vga,&hardware);f=vf(0x4F02,0x4114,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->fullscreen_hold);
+    dosvm_fullscreen_poll();CHECK(!v->fullscreen && !v->fullscreen_hold && v->vbe_mode==0x114);
+    fs_linear_error=-EIO;CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen_hold);
+    fs_linear_error=0;
+    struct ciuki_dosvm_command close=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close)));empty();
+    v=create();f=vf(0x4F02,0x4101,0,0);
+    CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && !v->vbe_buffer.used && !v->vbe_mode);
+    destroy(v,true);empty();fs_vbe_available=false;
+    puts("PASS f3-37 guest VBE: four modes query/set/get, bounded buffers and refusals, private DPMI mapping, window frames, enter/first linear write/exact RAM PTEs/restore failure, ordered VGA return and cleanup");
 }

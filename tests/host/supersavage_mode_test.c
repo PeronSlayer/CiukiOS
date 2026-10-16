@@ -7,6 +7,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
 #include "../../src/kernel/drivers/supersavage_mode.h"
+#include <ciuki/dos_video_modes.h>
 
 struct card {
     cvga_state vga;
@@ -154,28 +155,31 @@ static void restored(void)
 }
 static void cycles(void)
 {
-    const unsigned modes[]={3,0x13,0x101};
+    const unsigned modes[]={0,1,2,3,0x0D,0x0E,0x10,0x11,0x12,0x13,0x101,0x103,0x111,0x114};
     for (unsigned i=0;i<ARRAY_SIZE(modes);i++) {
         fixture(); assert(!supersavage_mode_save(&snapshot,&bus));
         assert(snapshot.saved && snapshot.planes_saved && !supersavage_mode_enter(&snapshot,&bus,modes[i]));
         assert(!(card.cr[0x67]&0x0E) && !(card.vga.seq[1]&0x20));
         assert(!memcmp(card.sr+0x54,original.sr+0x54,8));
         assert(card.sr[0x10]==original.sr[0x10] && card.sr[0x11]==original.sr[0x11]);
-        if (modes[i]==0x101) {
-            assert(card.cr[0x67]==1 && card.cr[0x90]==0x80 && card.cr[0x91]==80);
-            assert(card.cr[0x3B]==0x5A && card.cr[0x3C]==0x2F); /* SavageModeInit FIFO midpoint */
-            assert(card.cr[0x31]==0x8C && card.vga.crtc[0x13]==80 && card.sr[0x1B]==0x10);
+        const struct dos_video_mode *m=dos_video_mode(modes[i]);
+        if (m) {
+            assert(card.cr[0x67]==(m->bpp==16 ? 0x51 : 1) && card.cr[0x90]==0x80 && card.cr[0x91]==m->pitch/8);
+            assert(card.cr[0x3B]==(m->width==640 ? 0x59 : 0x74) && card.cr[0x3C]==(m->width==640 ? 0x2F : 0x3F)); /* SavageModeInit FIFO midpoint */
+            assert(card.cr[0x31]==0x8C && card.vga.crtc[0x13]==m->pitch/8 && card.sr[0x1B]==0x10);
             assert((card.vga.misc&12)==12 && card.pll_edges);
             unsigned r=(card.sr[0x12]>>6)|((card.sr[0x29]&4)),n=(card.sr[0x12]&63)|((card.sr[0x29]&0x10)<<2);
             uint64_t hz=14318180ULL*(card.sr[0x13]+2)/((n+2)<<r);
-            assert(hz>25000000 && hz<25300000);
+            assert(hz>m->clock_khz*990u && hz<m->clock_khz*1010u);
+            assert(card.cr[0x50]==((m->width==640 ? 0x40 : 0x80)|(m->bpp==16 ? 0x10 : 0)));
+            assert(card.vga.crtc[1]==m->width/8-1 && card.vga.crtc[0x12]==(uint8_t)(m->height-1));
         } else {
             assert(!card.cr[0x31] && !(card.sr[0x1B]&0x98));
             assert(card.sr[0x12]==original.sr[0x12] && card.sr[0x13]==original.sr[0x13]);
         }
         assert(!supersavage_mode_restore(&snapshot,&bus)); restored();
     }
-    puts("PASS SuperSavage reference sequences: VGA 03/13 and packed 640x480x8, stream addressing off before reset, retained firmware panel/MCLK, PLL load, exact VGA/extended/streams/8-bit DAC/256 KiB restore (<200 ms model)");
+    puts("PASS SuperSavage reference sequences: all modeled BIOS VGA and packed 640x480/800x600 x8/x16, stream addressing off before reset, retained firmware panel/MCLK, PLL load, exact VGA/extended/streams/8-bit DAC/256 KiB restore (<200 ms model)");
 }
 static void presentation(void)
 {

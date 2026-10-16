@@ -150,10 +150,14 @@ services, never execute copied physical firmware unchecked.
 A kernel storage backend MAY internally request an allowlisted, serialized
 BIOS fallback after quiescing native ownership, exactly as the device
 contract specifies. DPMI real-mode simulation does not bypass this rule.
-Guest VBE MUST report unavailable through F4; host boot VBE capability is
-not guest capability. Failure MUST use the
+The [F3-37 amendment](supersavage-fullscreen.md#f3-37-mode-inventory-and-guest-vbe-amendment-2026-10-16)
+allows synthetic linear guest VBE 101h/103h/111h/114h only where the native
+provider supports them. Other guest VBE remains unavailable; host boot VBE
+capability is not guest capability. DPMI 0800h/0801h may resolve/release only
+the private VBE framebuffer token into the VM's admitted RAM pool; arbitrary
+physical mappings remain refused. Failure MUST use the
 [VBE status convention](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf),
-without exporting framebuffer addresses or firmware entry points.
+without exporting host framebuffer addresses or firmware entry points.
 
 ## Memory services and admission at 128 MiB
 
@@ -245,12 +249,12 @@ and the Committee specifications above.
 | 0500, 0501, 0502, 0503 | Quota-aware memory report and allocation/release/resize. |
 | 0600, 0601, 0602, 0603, 0604 | Lock/unlock, real-region pageable/relock, 4096-byte page size. |
 | 0702, 0703 | Paging hint; discard validated complete pages, preserving partial edges. |
-| 0800 | Recognized, refused with CF set: no physical-device mapping. |
+| 0800, 0801 | F3-37: resolve/release only the private VBE token. Other addresses fail with CF set. |
 | 0900, 0901, 0902 | Disable/enable/query virtual IF with specified previous-state result. |
 | 0A00 | Vendor lookup: CF set when no matching extension exists. |
 | 0B00, 0B01, 0B02, 0B03 | VM-local watchpoint allocation/release/query/reset. |
 | 0004, 0005, 0700, 0701 | Reserved; fail. |
-| 000E–000F, 0210–0213, 0401, 0504–050B, 0801, 0C00–0C01, 0D00–0D03, 0E00–0E01 | 1.0-only; unsupported through F4. |
+| 000E–000F, 0210–0213, 0401, 0504–050B, 0C00–0C01, 0D00–0D03, 0E00–0E01 | 1.0-only; unsupported through F4. |
 
 **[F3]** Failure MUST set CF, preserve unspecified registers and use the
 0.9-defined outputs, including DOS allocation errors. Unknown functions

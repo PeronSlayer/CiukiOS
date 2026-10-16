@@ -6320,6 +6320,270 @@
               }
             },
             "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 0
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 240
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 1
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 240
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 2
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 3
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 4
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 5
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 6
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 7
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 257
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 259
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 273
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 276
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
           }
         ]
       }
@@ -6532,6 +6796,270 @@
                 "eq": 0
               },
               "handles": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 0
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 240
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 1
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 240
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 2
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 3
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 4
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 5
+            },
+            "fields": {
+              "mode": {
+                "eq": 19
+              },
+              "width": {
+                "eq": 360
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 6
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 400
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "index": 7
+            },
+            "fields": {
+              "mode": {
+                "eq": 18
+              },
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "entered": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 257
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 259
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 273
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "vbe_refusal",
+              "mode": 276
+            },
+            "fields": {
+              "status": {
+                "eq": 335
+              },
+              "active": {
                 "eq": 0
               }
             },

@@ -53,6 +53,9 @@ bool dpmi_linear_owned(struct dosvm *v, uint32_t linear, uint32_t bytes)
 {
     struct dpmi *d = &v->dpmi;
     if (linear < DOSVM_LINEAR_END && bytes <= DOSVM_LINEAR_END - linear) return true;
+    const struct vm_block *video=&v->vbe_buffer;
+    if (video->used && linear>=video->base && bytes<=video->bytes && linear-video->base<=video->bytes-bytes)
+        return true;
     for (unsigned i = 0; i < DPMI_BLOCKS; i++) {
         const struct vm_block *b = &d->block[i].b;
         if (b->used && d->block[i].owner && d->block[i].owner <= d->clients &&
@@ -256,6 +259,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     if (!d->clients) return 0;
     d->decode_valid = false;
     unsigned c = d->clients - 1;
+    v->vbe_mapped[c]=false;
     uint8_t id = (uint8_t)(c + 1);
     if (d->return_steps && d->return_client == id) dpmi_return_cancel(v);
     struct dpmi_client *cl = &d->client[c];
@@ -688,7 +692,7 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
     case 0x05: return ax <= 0x0503 ? memory_service(v, f, ax) : 1;
     case 0x06: return ax <= 0x0604 ? paging_service(v, f, ax) : 1;
     case 0x07: return ax == 0x0702 || ax == 0x0703 ? paging_service(v, f, ax) : 1;
-    case 0x08: return 1;                /* 0800h refused (0.9 16): no physical mapping */
+    case 0x08: return dosvm_vbe_map(v,f,ax); /* only the private VBE token */
     case 0x09: {
         if (ax > 0x0902) return 1;
         bool old = v->monitor.vif;

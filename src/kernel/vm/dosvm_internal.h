@@ -9,6 +9,7 @@
 #include "dosvm_devices.h"
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
+#include <ciuki/dos_video_modes.h>
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -163,6 +164,9 @@ struct dosvm {
     /* f3-02 virtual VGA and window presenter (dosvm_vga.c, dosvm_client.c). */
     cvga_state vga __attribute__((aligned(4096))); /* planes page-aligned: f3-06 direct window */
     cvbios video_bios;
+    uint16_t vbe_mode;
+    struct vm_block vbe_buffer;
+    bool vbe_mapped[DPMI_CLIENTS];
     cvx_bus video_bus;
     bool video_bus_fault, video_presented;
     uint8_t video_hsync;
@@ -307,6 +311,15 @@ void dosvm_startup_report(struct dosvm *, bool force);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
+struct ciuki_rect;
+void dosvm_vbe_init(struct dosvm *);
+int dosvm_vbe_bios(struct dosvm *, struct v86_frame *);
+int dosvm_vbe_map(struct dosvm *, struct v86_frame *, unsigned);
+bool dosvm_vbe_dirty(struct dosvm *, bool clear);
+int dosvm_vbe_flush(struct dosvm *, bool force);
+int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
+                      void *, uint64_t, struct ciuki_rect *);
+void dosvm_fullscreen_mode_changed(struct dosvm *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
 void dosvm_vga_burst(struct dosvm *, struct v86_frame *);
 /* f3-06: a ring-3 DPMI client's access to the supervisor-only window. */

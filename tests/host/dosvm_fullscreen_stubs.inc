@@ -6,5 +6,9 @@ void dosvm_fullscreen_progress(struct dosvm *v,uint32_t c,uint32_t i) { (void)v;
 int dosvm_fullscreen_leave(struct dosvm_key k,bool b) { (void)k;(void)b;return 0; }
 void dosvm_fullscreen_model_begin(struct dosvm *v) { (void)v; }
 void dosvm_fullscreen_model_end(struct dosvm *v) { (void)v; }
+void dosvm_fullscreen_mode_changed(struct dosvm *v) { (void)v; }
+bool display_fullscreen_supported(uint16_t mode) { (void)mode;return false; }
+int display_fullscreen_write(uint32_t off,const void *p,uint32_t n)
+{ (void)off;(void)p;(void)n;return -EOPNOTSUPP; }
 int dosvm_fullscreen_port(uint16_t p,unsigned n,bool w,uint32_t *v)
 { (void)p;(void)n;(void)w;(void)v; abort(); }
