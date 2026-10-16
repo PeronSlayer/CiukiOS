@@ -688,14 +688,17 @@ int cvga_modex_dirty(unsigned base, unsigned pan, unsigned width,
     if (!width) return 0;
     unsigned first = (base + pan / 4) & 0xffffu;
     unsigned count = (width - 1 + pan) / 4 - pan / 4 + 1;
-    /* One test per eight-byte granule, including plane wrap at FFFFh. */
+    /* Test a bitmap byte (eight granules) at once. Mask the first and last
+     * partial byte, retaining exactly the scalar granule footprint and wrap. */
     while (count) {
-        unsigned g = first / CVGA_DIRTY_GRANULE;
-        uint8_t bits = dirty[0][g >> 3] | dirty[1][g >> 3] |
-                       dirty[2][g >> 3] | dirty[3][g >> 3];
-        if (bits & (1u << (g & 7))) return 1;
-        unsigned n = CVGA_DIRTY_GRANULE - first % CVGA_DIRTY_GRANULE;
+        unsigned at = first / (CVGA_DIRTY_GRANULE * 8);
+        unsigned n = CVGA_DIRTY_GRANULE * 8 - first % (CVGA_DIRTY_GRANULE * 8);
         if (n > count) n = count;
+        unsigned lo = (first / CVGA_DIRTY_GRANULE) & 7;
+        unsigned hi = ((first + n - 1) / CVGA_DIRTY_GRANULE) & 7;
+        unsigned mask = (255u << lo) & (255u >> (7 - hi));
+        uint8_t bits = dirty[0][at] | dirty[1][at] | dirty[2][at] | dirty[3][at];
+        if (bits & mask) return 1;
         count -= n; first = (first + n) & 0xffffu;
     }
     return 0;

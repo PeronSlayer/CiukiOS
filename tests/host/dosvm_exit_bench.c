@@ -34,6 +34,84 @@ static struct dosvm *exit_vm(bool pm)
     v->monitor.state=V86_RUNNING;
     return v;
 }
+static void exit_vga_bench(bool pm)
+{
+    const unsigned n=20000;
+    struct dosvm *v=exit_vm(pm); fast_planar(v);
+    v->monitor.vif=false; v->dpmi.if_armed=false; v->dpmi.return_steps=0;
+    unsigned address=0x30000;
+    const uint8_t byte[]={0xEE,0x90}, word16[]={0xEF,0x90}, word32[]={0x66,0xEF,0x90};
+    for (unsigned word=0;word<2;word++) {
+        CHECK(!dosvm_write(v,address,word ? (pm ? word32 : word16) : byte,word && pm ? 3 : 2));
+        uint64_t start=exit_ns();
+        for (unsigned i=0;i<n;i++) {
+            cur.tf.eip=pm ? address : 0; cur.tf.edx=word ? 0x3C4 : 0x3C5;
+            cur.tf.eax=word ? ((1u<<(i&3))<<8)|2 : 1u<<(i&3);
+            step(v,13,0); CHECK(!left);
+        }
+        exit_result(pm ? (word ? "pm_vga_word_exit" : "pm_vga_byte_exit") :
+                    (word ? "rm_vga_word_exit" : "rm_vga_byte_exit"),start,n);
+    }
+    CHECK(!dosvm_write(v,address,byte,sizeof(byte)));
+    tsc_clock_hook=exit_ns; g_tsc_per_ms=1000000;
+    uint64_t clocked=exit_ns();
+    for (unsigned i=0;i<n;i++) {
+        cur.tf.eip=pm ? address : 0; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
+        step(v,13,0); CHECK(!left);
+    }
+    exit_result(pm ? "pm_vga_byte_exit_clocked" : "rm_vga_byte_exit_clocked",clocked,n);
+    tsc_clock_hook=0; g_tsc_per_ms=0;
+    port_out(v,0x3CE,1,4);
+    for (unsigned word=0;word<2;word++) {
+        CHECK(!dosvm_write(v,address,word ? (pm ? word32 : word16) : byte,word && pm ? 3 : 2));
+        uint64_t begin=exit_ns();
+        for (unsigned i=0;i<n;i++) {
+            cur.tf.eip=pm ? address : 0; cur.tf.edx=word ? 0x3CE : 0x3CF;
+            cur.tf.eax=word ? ((i&3)<<8)|4 : i&3;
+            step(v,13,0); CHECK(!left);
+        }
+        exit_result(pm ? (word ? "pm_gc_word_exit" : "pm_gc_byte_exit") :
+                    (word ? "rm_gc_word_exit" : "rm_gc_byte_exit"),begin,n);
+    }
+    port_out(v,0x3C4,2,0x0102);
+    /* Component measurements share active CR3 and the production PTE batch.
+     * No host clock syscall inside these loops; they measure C/host fakes. */
+    cpu_cr3=v->as.pd_phys;
+    uint64_t start=exit_ns();
+    for (unsigned i=0;i<n;i++) { v->video_writable=true; video_exchange(v,(i&3)+1); }
+    exit_result(pm ? "pm_vga_pte_batch_only" : "rm_vga_pte_batch_only",start,n);
+    start=exit_ns();
+    for (unsigned i=0;i<n;i++) { uint32_t value=1u<<(i&3); CHECK(!dosvm_io(v,0x3C5,1,true,&value)); }
+    exit_result(pm ? "pm_vga_dispatch_remap" : "rm_vga_dispatch_remap",start,n);
+    CHECK(!dosvm_write(v,address,byte,sizeof(byte)));
+    start=exit_ns();
+    for (unsigned i=0;i<n;i++) {
+        struct v86_frame f=cur; f.tf.eip=pm ? address : 0; f.tf.edx=0x3C5; f.tf.eax=1u<<(i&3);
+        if (pm) {
+            struct dpmi_seg cs; CHECK(dpmi_seg(v,f.tf.cs,&cs));
+            CHECK(!emulate(v,&f));
+        } else CHECK(!v86_emulate(&v->monitor,&f));
+    }
+    exit_result(pm ? "pm_vga_decode_dispatch_remap" : "rm_vga_decode_dispatch_remap",start,n);
+    /* INC DX sequence has one native MOV AL and two OUTs at the boundary.
+     * The control binary executes the unbatched second cycle explicitly. */
+    const uint8_t sequence[]={0xEE,0xB0,8,0x42,0xEE,0x90};
+    CHECK(!dosvm_write(v,address,sequence,sizeof(sequence)));
+    start=exit_ns(); unsigned exits=0;
+    for (unsigned i=0;i<n;i++) {
+        unsigned ip=pm ? address : 0;
+        cur.tf.eip=ip; cur.tf.edx=0x3C4; cur.tf.eax=2;
+        step(v,13,0); exits++;
+        if (cur.tf.eip==ip+1) {
+            cur.tf.eax=8; cur.tf.edx=0x3C5; cur.tf.eip=ip+4;
+            step(v,13,0); exits++;
+        }
+        CHECK(!left && cur.tf.eip==ip+5);
+    }
+    exit_result(pm ? "pm_vga_index_inc_data_sequence" : "rm_vga_index_inc_data_sequence",start,n);
+    printf("exit_bench vga_sequence=%s exits_per_sequence=%.2f\n",pm ? "pm" : "rm",(double)exits/n);
+    cpu_cr3=0; destroy(v,true); empty();
+}
 int main(void)
 {
     const unsigned n=20000;
@@ -97,6 +175,8 @@ int main(void)
         }
         exit_result(armed ? "pm_flags_proved_save_exit" : "pm_flags_no_image_exit",start,n/10);
     }
-    destroy(v,true); empty(); free(ram);
+    destroy(v,true); empty();
+    exit_vga_bench(false); exit_vga_bench(true);
+    free(ram);
     return 0;
 }

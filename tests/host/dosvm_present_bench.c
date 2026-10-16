@@ -211,12 +211,41 @@ static void bench_latches(void)
            (double)present / frames / 1000, (double)replay / frames / 1000);
     destroy(v, true); empty();
 }
+static void bench_planar_rows(void)
+{
+    struct dosvm *v=create(); bench_planar(v);
+    cvga_geometry g; CHECK(cvga_get_geometry(&v->vga,&g));
+    unsigned base[480],pan[480]; uint32_t lut[256],checksum=0;
+    for (unsigned i=0;i<256;i++) lut[i]=i*0x010101u;
+    for (unsigned p=0;p<4;p++) for (unsigned i=0;i<CVGA_PLANE_SIZE;i++)
+        v->vga.plane[p][i]=(uint8_t)(i*7+p*31);
+    for (unsigned y=0;y<g.height;y++) CHECK(cvga_modex_row(&v->vga,y,&base[y],&pan[y]));
+    const unsigned frames=1000;
+    uint64_t start=bench_ns();
+    for (unsigned f=0;f<frames;f++) for (unsigned y=0;y<g.height;y++) {
+        cvp_modex_row32(&v->vga,base[y],pan[y],g.width,2,lut,v->video_pixels);
+        checksum+=v->video_pixels[(f+y)%(g.width*2)];
+    }
+    uint64_t convert=bench_ns()-start;
+    memset(v->video_taken,0,sizeof(v->video_taken));
+    v->video_taken[2][1023]=0x80; /* nonvisible dirt: query the full row span */
+    start=bench_ns();
+    for (unsigned f=0;f<frames;f++) for (unsigned y=0;y<g.height;y++)
+        checksum+=cvga_modex_dirty(base[y],pan[y],g.width,v->video_taken);
+    printf("planar_rows frames=%u source_rows=%u conversion_ns_per_frame=%llu dirty_query_ns_per_frame=%llu checksum=%u\n",
+           frames,g.height,(unsigned long long)(convert/frames),
+           (unsigned long long)((bench_ns()-start)/frames),checksum);
+    destroy(v,true); empty();
+}
 int main(void)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
+    if (getenv("CVGA_ROW_BENCH")) { bench_planar_rows(); free(ram); return 0; }
+    bench_planar_rows();
     bench_case("chain-full", false, false);
     bench_case("planar-full", true, false);
     bench_case("chain-one-row", false, true);
+    bench_case("planar-one-row", true, true);
     /* Host nanoseconds are the verbose clock seam, never target TSC evidence. */
     tsc_clock_hook = bench_ns; g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000000;
     bench_replay("doom-mode-y", 0);

@@ -11,6 +11,7 @@
 #include "vga_presenter.h"
 
 #define VIDEO_LINEAR 5u
+static void video_direct(struct dosvm *, bool port_timed);
 extern const uint8_t font_cfn_regular[]; /* 95 widths, then 95 x 16 u16 rows */
 
 static bool vram(uint32_t address) { return address >= 0xA0000 && address < 0xC0000; }
@@ -100,7 +101,7 @@ static unsigned video_register(const cvga_state *v, unsigned p)
     if (p >= 0x3C6 && p <= 0x3C9) return DOSVM_VGA_DAC;
     return DOSVM_VGA_OTHER;
 }
-static int video_port(struct dosvm *v, uint16_t port, unsigned width,
+int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                       bool write, uint32_t *value, void *arg)
 {
     (void)arg;
@@ -123,18 +124,24 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
                 bool fast = (p == 0x3C5 && v->vga.seq_index == 2) ||
                     (p == 0x3CF && (v->vga.gc_index == 4 || v->vga.gc_index == 5));
                 if (fast && (!v->launch_exec || v->launch_ready)) {
-                    uint8_t data = (uint8_t)(*value >> (8 * i));
+                    uint8_t data = (uint8_t)(*value >> (8 * i)) &
+                        (p == 0x3C5 ? 15 : v->vga.gc_index == 4 ? 3 : 0x7B);
                     uint8_t old = p == 0x3C5 ? v->vga.seq[2] : v->vga.gc[v->vga.gc_index];
                     bool was_read = v->video_read_window;
                     if (p == 0x3C5) v->video_read_window = false;
                     else if (v->vga.gc_index == 4 && cvga_direct_read_plane(&v->vga) >= 0)
                         v->video_read_window = true;
+                    unsigned remaps = v->perf.port_remaps;
                     if (data != old || was_read != v->video_read_window) {
                         dosvm_vga_model(v); /* linear backing uses the OLD memory state */
                         cvga_write_port(&v->vga, (uint16_t)p, data);
-                        dosvm_vga_direct(v);
+                        video_direct(v, true);
                     }
-                    v->perf.port_cycles[reg] += dosvm_perf_task_clock() - begin;
+                    uint64_t elapsed = dosvm_perf_task_clock() - begin;
+                    v->perf.port_cycles[reg] += elapsed;
+                    /* Share the enclosing clock pair: remap attribution
+                     * includes register update/selection on this path. */
+                    if (v->perf.port_remaps != remaps) v->perf.remap_cycles += elapsed;
                     continue;
                 }
                 /* f3-07: harvest using the OLD memory state. DAC and CRTC
@@ -282,7 +289,7 @@ void dosvm_vga_sync(struct dosvm *v, bool unmap)
     video_harvest(v);
     if (unmap && v->video_direct) video_exchange(v, 0);
 }
-void dosvm_vga_direct(struct dosvm *v)
+static void video_direct(struct dosvm *v, bool port_timed)
 {
     if (v->fullscreen || v->vbe_mode) return;
     if (!v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return;
@@ -291,7 +298,7 @@ void dosvm_vga_direct(struct dosvm *v)
     unsigned want = plane < 0 ? (cvga_direct_linear(&v->vga) ? VIDEO_LINEAR : 0) : (unsigned)plane + 1;
     bool writable = want && (!v->video_read_window || plane == write_plane || want == VIDEO_LINEAR);
     if (want == v->video_direct && writable == v->video_writable) return;
-    uint64_t begin = dosvm_perf_task_clock();
+    uint64_t begin = port_timed ? 0 : dosvm_perf_task_clock();
     /* Chained backing needs deinterleaving before memory state changes.
      * Single planes need only their D bitmap carried across the swap. */
     if (v->video_direct == VIDEO_LINEAR) video_harvest(v);
@@ -301,8 +308,9 @@ void dosvm_vga_direct(struct dosvm *v)
     v->perf.port_remaps++;
     if (want == VIDEO_LINEAR) v->video_linear_maps++;
     else if (want) v->video_maps++;
-    v->perf.remap_cycles += dosvm_perf_task_clock() - begin;
+    if (!port_timed) v->perf.remap_cycles += dosvm_perf_task_clock() - begin;
 }
+void dosvm_vga_direct(struct dosvm *v) { video_direct(v, false); }
 void dosvm_vga_model(struct dosvm *v)
 {
     if (v->video_direct == VIDEO_LINEAR) dosvm_vga_sync(v, true);
@@ -468,7 +476,7 @@ int dosvm_vga_init(struct dosvm *v)
     dosvm_vbe_init(v);
     struct v86_frame f = {0}; f.tf.eax = 3;
     int e = dosvm_vga_bios(v, &f);
-    return e ? e : dosvm_port_register(v->info.key, 0x3B0, 0x3DF, video_port, 0);
+    return e ? e : dosvm_port_register(v->info.key, 0x3B0, 0x3DF, dosvm_vga_port, 0);
 }
 
 /* Guest #PF on a supervisor-only A0000-BFFFF page: emulate the faulting
@@ -601,7 +609,7 @@ static int burst_port(void *arg, uint16_t port, unsigned size, int write, uint32
         return 0;
     }
     b->vram = true;
-    return video_port(b->v, port, size, write != 0, value, 0);
+    return dosvm_vga_port(b->v, port, size, write != 0, value, 0);
 }
 static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *first)
 {
@@ -757,6 +765,31 @@ static uint32_t rgb(const cvga_state *g, uint8_t index)
     uint32_t r = (p[0] << 2) | (p[0] >> 4), gr = (p[1] << 2) | (p[1] >> 4), b = (p[2] << 2) | (p[2] >> 4);
     return (r << 16) | (gr << 8) | b;
 }
+/* Retain the actual displayed Mode X/Y bytes, grouped by plane for exact
+ * contiguous comparisons. The total of the four spans is exactly width,
+ * including partial dots from pan. Do not confuse a dirty PTE with changed
+ * pixels, or a CRTC flip with changed palette/geometry. */
+static bool video_planar_changed(struct dosvm *v, unsigned y, unsigned width, bool force)
+{
+    unsigned base = v->video_row_base[y], pan = v->video_row_pan[y];
+    uint8_t *previous = v->video_indexes[y];
+    bool changed = force || v->video_index_pan[y] != (pan & 3);
+    v->video_index_pan[y] = (uint8_t)(pan & 3);
+    for (unsigned p = 0; p < 4; p++) {
+        unsigned first = (p + 4 - (pan & 3)) & 3;
+        if (first >= width) continue;
+        unsigned count = (width - first + 3) / 4;
+        unsigned at = (base + (pan + first) / 4) & 0xffffu;
+        unsigned n = CVGA_PLANE_SIZE - at;
+        if (n > count) n = count;
+        if (!changed && (memcmp(previous, &v->vga.plane[p][at], n) ||
+            (n < count && memcmp(previous + n, v->vga.plane[p], count - n)))) changed = true;
+        memcpy(previous, &v->vga.plane[p][at], n);
+        if (n < count) memcpy(previous + n, v->vga.plane[p], count - n);
+        previous += count;
+    }
+    return changed;
+}
 int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *, unsigned),
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {
@@ -794,6 +827,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     bool full = !v->video_presented || v->video_display != display ||
                 memcmp(&g, &v->video_geometry, sizeof(g));
     bool borders = !v->video_presented || memcmp(&g, &v->video_geometry, sizeof(g));
+    bool planar_cached = v->video_modex && v->video_presented;
     if (full) {
         unsigned base, pan;
         v->video_chain4 = supported && cvga_chain4_row(&v->vga, 0, &base, &pan);
@@ -813,8 +847,13 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
         v->perf.present_cycles += dosvm_perf_task_clock() - begin;
         return 0; /* an idle prompt/game never scans every row at the poll rate */
     }
+    bool palette_changed = !v->video_lut_valid;
     if (!v->video_lut_valid || v->video_lut_display != display) {
-        for (unsigned i = 0; i < 256; i++) v->video_lut[i] = rgb(&v->vga, (uint8_t)i);
+        for (unsigned i = 0; i < 256; i++) {
+            uint32_t color = rgb(&v->vga, (uint8_t)i);
+            palette_changed |= color != v->video_lut[i];
+            v->video_lut[i] = color;
+        }
         v->video_lut_display = display; v->video_lut_valid = true;
     }
     uint8_t bands[DOSVM_VIDEO_HEIGHT / DOSVM_VIDEO_BAND] = {0};
@@ -825,18 +864,30 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             cvga_chain4_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) : v->video_modex ?
             cvga_modex_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) :
             cvga_row_reads_dirty(&v->vga, y, v->video_taken)) ||
-            (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(&v->vga, y)))) { bands[band] = 1; dirty_rows[y] = 1; }
+            (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(&v->vga, y)))) {
+            bool force = !planar_cached || borders || palette_changed || g.blank ||
+                v->video_geometry.blank != g.blank || v->video_dac_mask != v->vga.dac_mask;
+            if (!v->video_modex || video_planar_changed(v, y, g.width, force)) {
+                bands[band] = 1; dirty_rows[y] = 1;
+            }
+        }
     }
     unsigned first = DOSVM_VIDEO_HEIGHT, last = 0, rendered = UINT32_MAX;
     bool restart = false;
     for (unsigned y = 0; y < DOSVM_VIDEO_HEIGHT; y++) {
         bool inside = supported && y >= top && y < top + height;
         unsigned source = inside ? (y - top) / scale : 0;
-        bool dirty = inside ? full || (indexed ? dirty_rows[source] : bands[source / DOSVM_VIDEO_BAND]) : borders;
+        bool dirty = inside ? (indexed ? dirty_rows[source] : full || bands[source / DOSVM_VIDEO_BAND]) : borders;
         if (!dirty) continue;
         if (!inside) memset(v->video_pixels, 0, sizeof(v->video_pixels));
         else if (source != rendered) {
-            memset(v->video_pixels, 0, sizeof(v->video_pixels));
+            /* Conversion overwrites the complete image span. Clear only
+             * its horizontal borders, avoiding a second 640-pixel store
+             * pass for the usual full-width Mode X/Y output. */
+            if (left) memset(v->video_pixels, 0, left * sizeof(uint32_t));
+            if (left + width < DOSVM_VIDEO_WIDTH)
+                memset(v->video_pixels + left + width, 0,
+                       (DOSVM_VIDEO_WIDTH - left - width) * sizeof(uint32_t));
             if (v->video_chain4 && !g.blank) {
                 cvp_chain4_row32(&v->vga, v->video_row_base[source], v->video_row_pan[source],
                                  g.width, scale, v->video_lut, v->video_pixels + left);
@@ -869,6 +920,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     v->video_changes = changes;
     v->video_seen_start = v->video_starts;
     v->video_geometry = g;
+    v->video_dac_mask = v->vga.dac_mask;
     v->video_presented = !restart && display == v->vga.display_changes;
     v->perf.present_cycles += dosvm_perf_task_clock() - begin;
     if (!last) return 0;

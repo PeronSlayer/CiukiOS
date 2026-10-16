@@ -366,8 +366,11 @@ static void test_modex_conversion(void)
         for (unsigned y = 0; y < g.height; y++) {
             unsigned base, shift; CHECK(cvga_modex_row(&v->vga, y, &base, &shift));
             CHECK(cvga_render_row8(&v->vga, y, indexes, sizeof(indexes), 0) == g.width);
-            cvp_modex_row32(&v->vga, base, shift, g.width, 2, lut, native);
-            for (unsigned x = 0; x < g.width; x++) CHECK(native[2*x] == lut[indexes[x]] && native[2*x+1] == lut[indexes[x]]);
+            for (unsigned scale=1;scale<=4;scale++) {
+                cvp_modex_row32(&v->vga, base, shift, g.width, scale, lut, native);
+                for (unsigned x=0;x<g.width;x++) for (unsigned n=0;n<scale;n++)
+                    CHECK(native[scale*x+n]==lut[indexes[x]]);
+            }
             memset(v->video_taken, 0, sizeof(v->video_taken));
             unsigned at = (base + (g.width - 1 + shift) / 4) & 0xffff;
             v->video_taken[3][at >> 6] |= 1u << ((at >> 3) & 7);
@@ -378,6 +381,94 @@ static void test_modex_conversion(void)
     unsigned base, pan; CHECK(!cvga_modex_row(&v->vga, 0, &base, &pan));
     destroy(v, true); empty();
     puts("f3-19 Mode X/Y: fused RGB/2x equals generic scanout with pan, split/reset, 64 KiB wrap and DAC mask; dword fallback PASS");
+}
+static void speed_compare_scanout(struct dosvm *v)
+{
+    cvga_geometry g; CHECK(cvga_get_geometry(&v->vga,&g));
+    unsigned scale=DOSVM_VIDEO_WIDTH/g.width;
+    if (DOSVM_VIDEO_HEIGHT/g.height<scale) scale=DOSVM_VIDEO_HEIGHT/g.height;
+    unsigned w=g.width*scale,h=g.height*scale;
+    cvp_format format={2560,640,480,4,8,16,8,8,8,0,0};
+    cvp_request q={0};
+    q.window=(cvp_rect){(640-w)/2,(480-h)/2,(640+w)/2,(480+h)/2};
+    q.flags=CVP_FORCE_FULL;
+    cvp_stats st;
+    cvp_init(&reference_presenter); memset(reference_buffer,0,sizeof(reference_buffer));
+    CHECK(cvp_present(&reference_presenter,&v->vga,&format,&q,reference_buffer,&st)==CVP_OK);
+    CHECK(!memcmp(frame_buffer,reference_buffer,sizeof(frame_buffer)));
+}
+static void test_planar_changed_rows(void)
+{
+    struct dosvm *v=create(); fast_planar(v);
+    struct ciuki_rect damage;
+    CHECK(dosvm_vga_present(v,capture_row,frame_buffer,0,&damage)==1);
+    cpu_cr3=v->as.pd_phys;
+    *window_memory(v,9*80+3)=37;
+    *window_pte(v,0xA0000)|=0x60;
+    uint32_t pte=*window_pte(v,0xA0000);
+    unsigned remaps=v->perf.port_remaps,flush=cr3_reloads;
+    port_out(v,0x3C5,1,0xF1); /* masked map-mask is still plane zero */
+    port_out(v,0x3CE,2,0xFC04); /* same plane, same writable page set */
+    CHECK(v->perf.port_remaps==remaps && cr3_reloads==flush &&
+          *window_pte(v,0xA0000)==pte && v->video_direct==1 && v->video_writable);
+    unsigned rows=v->perf.rows,converted=v->perf.converted_bytes;
+    CHECK(dosvm_vga_present(v,capture_row,frame_buffer,40,&damage)==1);
+    CHECK(v->perf.rows==rows+2 && v->perf.converted_bytes==converted+320 &&
+          damage.dst_y==58 && damage.height==2);
+    speed_compare_scanout(v);
+    *window_pte(v,0xA0000)|=0x60; /* stores of unchanged bytes are not damage */
+    rows=v->perf.rows;
+    CHECK(!dosvm_vga_present(v,capture_row,frame_buffer,80,&damage) && v->perf.rows==rows);
+    /* Exercise cached incremental frames, not only forced redraws. Pan can
+     * change plane order even when every plane contains a constant byte. */
+    for (unsigned p=0;p<4;p++) memset(v->vga.plane[p],p*47+1,CVGA_PLANE_SIZE);
+    for (unsigned pan=0;pan<8;pan++) for (unsigned split=0;split<2;split++) {
+        uint64_t tick=120+(pan*2+split)*80;
+        v->vga.attr[19]=pan; v->vga.attr[16]|=0x20;
+        v->vga.crtc[12]=0xFF; v->vga.crtc[13]=0xE0;
+        v->vga.crtc[24]=split ? 79 : 255;
+        v->vga.crtc[7]=(v->vga.crtc[7]&~0x10u)|(split ? 0 : 0x10);
+        v->vga.crtc[9]=(v->vga.crtc[9]&~0x40u)|(split ? 0 : 0x40);
+        v->vga.display_changes++; v->vga.changes++;
+        (void)dosvm_vga_present(v,capture_row,frame_buffer,tick,&damage);
+        speed_compare_scanout(v);
+        unsigned at=(v->video_row_base[17]+23)&0xFFFF;
+        cvga_store_plane(&v->vga,2,at,(uint8_t)(pan+split+15));
+        (void)dosvm_vga_present(v,capture_row,frame_buffer,tick+40,&damage);
+        speed_compare_scanout(v);
+    }
+    port_out(v,0x3C6,1,0x3F);
+    (void)dosvm_vga_present(v,capture_row,frame_buffer,2000,&damage); speed_compare_scanout(v);
+    unsigned first=(4-v->video_row_pan[0])&3;
+    unsigned at=(v->video_row_base[0]+(v->video_row_pan[0]+first)/4)&0xFFFF;
+    cvga_store_plane(&v->vga,0,at,123);
+    row_fail_at=40;
+    CHECK(dosvm_vga_present(v,capture_row,frame_buffer,2040,&damage)==-EIO && !v->video_presented);
+    row_fail_at=UINT32_MAX;
+    CHECK(dosvm_vga_present(v,capture_row,frame_buffer,2080,&damage)==1 && damage.height==480);
+    speed_compare_scanout(v);
+    cpu_cr3=0; destroy(v,true); empty();
+    puts("f3-38 planar: exact changed rows, unchanged D pages/PTE selections, pan/plane order, split/reset, wrap, DAC and failed-upload retry PASS");
+}
+static void test_planar_dirty_bitmap(void)
+{
+    static uint8_t dirty[4][CVGA_DIRTY_BYTES];
+    uint32_t seed=0xF338;
+    for (unsigned n=0;n<10000;n++) {
+        seed=seed*1664525u+1013904223u;
+        unsigned base=n&1 ? seed&0xFFFF : 0xFFF0u+(n&15);
+        unsigned pan=(seed>>16)&7, width=(seed>>19)%641;
+        unsigned at=((base+pan/4)/64+(n%5)-1)&1023;
+        memset(dirty,0,sizeof(dirty));
+        dirty[n&3][at]=(uint8_t)(1u<<((n>>2)&7));
+        bool scalar=false;
+        for (unsigned x=0;x<width;x++) {
+            unsigned g=((base+(x+pan)/4)&0xFFFF)/CVGA_DIRTY_GRANULE;
+            for (unsigned p=0;p<4;p++) scalar|=(dirty[p][g>>3]>>(g&7))&1;
+        }
+        CHECK(cvga_modex_dirty(base,pan,width,dirty)==scalar);
+    }
+    puts("f3-38 dirty bitmap: 10000 scalar pixel footprints, partial bitmap bytes, empty rows and wrap PASS");
 }
 static void test_planar_rep_and_pm_burst(void)
 {
@@ -570,4 +661,4 @@ static void test_perf_ranking(void)
 }
 static void test_speed(void)
 { test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
-  test_doom_column_replay(); test_modex_conversion(); test_planar_rep_and_pm_burst(); test_planar_strings_differential(); }
+  test_doom_column_replay(); test_modex_conversion(); test_planar_changed_rows(); test_planar_dirty_bitmap(); test_planar_rep_and_pm_burst(); test_planar_strings_differential(); }

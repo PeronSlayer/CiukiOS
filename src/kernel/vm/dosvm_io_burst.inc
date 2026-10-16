@@ -1,6 +1,6 @@
 /* Bounded virtual VGA/PIT/PIC I/O at an actual trapped instruction boundary.
  * No speculative memory writes, branch execution or physical I/O. Ordinary
- * MOV setup is committed only when followed by another supported I/O cycle.
+ * MOV/INC setup is committed only when followed by another supported I/O cycle.
  * TF, watchpoints, IF restoration, shadows, enabled IRQs and rescheduling
  * all stop the burst. SPDX-License-Identifier: GPL-2.0-only */
 #define DOSVM_IO_BUDGET 64u
@@ -33,8 +33,8 @@ static bool io_hot_port(uint16_t port)
 {
     return (port >= 0x40 && port <= 0x43) || port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1;
 }
-/* Common unprefixed byte cycles need no generic instruction decoder. Prefixes,
- * wider and string operations retain the scalar emulator's exact checks. */
+/* Common byte cycles and VGA word OUTs need no generic decoder. Other
+ * prefixes, dword and string operations retain the scalar checks. */
 static bool io_fast_fetch(struct dosvm *v, const struct v86_frame *f,
                           const struct dpmi_seg *cs, unsigned at, uint8_t *byte)
 {
@@ -46,17 +46,24 @@ static bool io_fast_fetch(struct dosvm *v, const struct v86_frame *f,
 bool dosvm_io_fast(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs, int *error)
 {
     uint8_t op, imm;
-    if (!io_fast_fetch(v, f, cs, 0, &op) || (op != 0xE4 && op != 0xE6 && op != 0xEC && op != 0xEE)) return false;
+    unsigned len = 1, width = cs && cs->big ? 4 : 2;
+    if (!io_fast_fetch(v, f, cs, 0, &op)) return false;
+    if (op == 0x66) {
+        width = width == 4 ? 2 : 4;
+        if (!io_fast_fetch(v, f, cs, len++, &op) || op != 0xEF) return false;
+    }
+    if (op != 0xE4 && op != 0xE6 && op != 0xEC && op != 0xEE && op != 0xEF) return false;
     uint16_t port = (uint16_t)f->tf.edx;
-    unsigned len = 1;
     if (op < 0xE8) {
         if (!io_fast_fetch(v, f, cs, len++, &imm)) return false;
         port = imm;
     }
-    if (!io_hot_port(port)) return false;
+    if (!(op & 1)) width = 1;
     bool write = op & 2;
+    bool vga = port == 0x3C4 || port == 0x3C5 || port == 0x3CE || port == 0x3CF;
+    if (!((width == 1 && io_hot_port(port)) || (write && vga && width <= 2))) return false;
     uint32_t value = f->tf.eax;
-    *error = v86_io(&v->monitor, port, 1, write, &value);
+    *error = v86_io(&v->monitor, port, width, write, &value);
     if (*error) {
         if (!v->frame_pm) *error = v86_abort(&v->monitor, f, *error);
         return true;
@@ -73,6 +80,18 @@ bool dosvm_io_fast(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *
     }
     return true;
 }
+static void io_burst_inc(struct v86_frame *f, unsigned width)
+{
+    uint32_t mask = width == 4 ? UINT32_MAX : 0xFFFFu;
+    uint32_t old = f->tf.edx & mask, value = (old + 1) & mask;
+    uint32_t sign = width == 4 ? 0x80000000u : 0x8000u;
+    unsigned parity = value & 255u;
+    parity ^= parity >> 4; parity ^= parity >> 2; parity ^= parity >> 1;
+    uint32_t flags = (value & sign ? 0x80u : 0) | (!value ? 0x40u : 0) |
+        (!(parity & 1) ? 4u : 0) | ((old ^ value) & 0x10u) | (value == sign ? 0x800u : 0);
+    f->tf.edx = (f->tf.edx & ~mask) | value;
+    f->tf.eflags = (f->tf.eflags & ~0x8D4u) | flags; /* CF is unchanged. */
+}
 int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
 {
     unsigned cause = v->perf.cause;
@@ -81,7 +100,7 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
         if (!io_burst_fetch(v, f, 0, &op)) return 0;
         /* Most scalar EOIs end in POP/IRET. Avoid a frame copy and full
          * prefix decoder when no supported burst instruction can follow. */
-        if (!(op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 ||
+        if (!(op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 || op == 0x42 ||
             (op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF) || op == 0x6E || op == 0x6F ||
             op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E ||
             op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3)) return 0;
@@ -111,9 +130,11 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
             continue;
         }
         if (rep) return 0;
-        while (op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88) {
+        while (op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 || op == 0x42) {
             if (++moves > 2) return 0;
-            if (op == 0x88) {
+            if (op == 0x42) {
+                io_burst_inc(&n, width);
+            } else if (op == 0x88) {
                 uint8_t modrm;
                 if (len >= 15 || !io_burst_fetch(v, &n, len++, &modrm) || modrm != 0xC4) return 0;
                 n.tf.eax = (n.tf.eax & ~0xFF00u) | ((n.tf.eax & 255) << 8); /* MOV AH,AL */
