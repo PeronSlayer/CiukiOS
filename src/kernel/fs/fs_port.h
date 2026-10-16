@@ -10,11 +10,46 @@
 #include <pthread.h>
 #include <time.h>
 typedef pthread_mutex_t fs_lock;
-static inline void fs_lock_init(fs_lock *l) { if (pthread_mutex_init(l, 0)) abort(); }
-static inline void fs_lock_destroy(fs_lock *l) { pthread_mutex_destroy(l); }
-static inline void fs_lock_take(fs_lock *l) { if (pthread_mutex_lock(l)) abort(); }
-static inline bool fs_lock_try_take(fs_lock *l) { return !pthread_mutex_trylock(l); }
-static inline void fs_lock_drop(fs_lock *l) { if (pthread_mutex_unlock(l)) abort(); }
+void fs_lock_before(fs_lock *) __attribute__((weak));
+void fs_lock_acquired(fs_lock *) __attribute__((weak));
+void fs_lock_released(fs_lock *) __attribute__((weak));
+void fs_lock_classified(fs_lock *, unsigned, char) __attribute__((weak));
+static inline void fs_lock_classify(fs_lock *l,unsigned rank,char drive) {
+    if (fs_lock_classified) fs_lock_classified(l,rank,drive);
+}
+static inline void fs_lock_init(fs_lock *l) { if (pthread_mutex_init(l,0)) abort(); }
+static inline void fs_lock_destroy(fs_lock *l) {
+    fs_lock_classify(l,0,0); pthread_mutex_destroy(l);
+}
+static inline void fs_lock_take(fs_lock *l) {
+    if (fs_lock_before) fs_lock_before(l);
+    if (pthread_mutex_lock(l)) abort();
+    if (fs_lock_acquired) fs_lock_acquired(l);
+}
+static inline bool fs_lock_try_take(fs_lock *l) {
+    bool free=!pthread_mutex_trylock(l);
+    if (free && fs_lock_acquired) fs_lock_acquired(l);
+    return free;
+}
+static inline void fs_lock_drop(fs_lock *l) {
+    if (fs_lock_released) fs_lock_released(l);
+    if (pthread_mutex_unlock(l)) abort();
+}
+struct fs_event { pthread_mutex_t mutex; pthread_cond_t changed; uint32_t sequence; };
+static inline void fs_event_init(struct fs_event *q) {
+    memset(q,0,sizeof(*q)); if (pthread_mutex_init(&q->mutex,0) || pthread_cond_init(&q->changed,0)) abort();
+}
+static inline void fs_event_destroy(struct fs_event *q) { pthread_cond_destroy(&q->changed); pthread_mutex_destroy(&q->mutex); }
+static inline void fs_event_wake(struct fs_event *q) {
+    pthread_mutex_lock(&q->mutex); __atomic_add_fetch(&q->sequence,1,__ATOMIC_RELEASE);
+    pthread_cond_broadcast(&q->changed); pthread_mutex_unlock(&q->mutex);
+}
+static inline void fs_event_wait(struct fs_event *q, fs_lock *l) {
+    uint32_t seq=__atomic_load_n(&q->sequence,__ATOMIC_ACQUIRE);
+    fs_lock_drop(l); pthread_mutex_lock(&q->mutex);
+    while (seq==__atomic_load_n(&q->sequence,__ATOMIC_ACQUIRE)) pthread_cond_wait(&q->changed,&q->mutex);
+    pthread_mutex_unlock(&q->mutex); fs_lock_take(l);
+}
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
 extern unsigned fs_host_page_fail;
@@ -32,10 +67,10 @@ static inline void *fs_contig_alloc(size_t n) {
     if (fs_host_contig_fail && !--fs_host_contig_fail) return NULL;
     size_t bytes = (n + 4095) & ~(size_t)4095;
     void *p = bytes ? aligned_alloc(4096, bytes) : NULL;
-    if (p) { memset(p, 0, bytes); fs_host_contig_live++; }
+    if (p) { memset(p, 0, bytes); __atomic_add_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED); }
     return p;
 }
-static inline void fs_contig_free(void *p, size_t n) { (void)n; if (p) { fs_host_contig_live--; free(p); } }
+static inline void fs_contig_free(void *p, size_t n) { (void)n; if (p) { __atomic_sub_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED); free(p); } }
 static inline uint32_t fs_now_ms(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint32_t)((uint64_t)t.tv_sec * 1000 + (uint32_t)t.tv_nsec / 1000000);
@@ -46,33 +81,47 @@ static inline uint32_t fs_now_ms(void) {
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/sync.h>
-#include <ciuki/sync.h>
-/* Task-context mutex: test/set with IF clear, waiters BLOCK on a kwait queue
- * (f1-18 rule). A yield-spin livelocked the boot: the P_DEVICE storage worker
- * draining the boot log yielded only to its own priority while the P_NORMAL
- * boot task held the VFS lock reading /Programs/desktop (lead fix, 2026-10-11).
- * No filesystem entry point may run in an IRQ. The bounded wait guards a
- * missed wake-up, like the DOS VM disk gate. */
-typedef struct { bool held; struct kwait wait; } fs_lock;
-static inline bool fs_lock_free(void *arg) { return !((fs_lock *)arg)->held; }
-static inline void fs_lock_init(fs_lock *l) { l->held = false; kwait_init(&l->wait); }
+/* Task-context FIFO mutex. Ticket allocation/test and release use IF=0;
+ * blocked waiters retain their ticket across the bounded safety wait.
+ * A preemption hold is acquired only when served, released on unlock. */
+typedef struct { uint32_t next, serving; struct kwait wait; unsigned rank; char drive; bool held; } fs_lock;
+static inline void fs_lock_classify(fs_lock *l,unsigned rank,char drive) { l->rank=rank; l->drive=drive; }
+struct fs_ticket { fs_lock *lock; uint32_t ticket; };
+static inline bool fs_ticket_ready(void *arg) {
+    struct fs_ticket *t=arg; return t->lock->serving==t->ticket;
+}
+static inline void fs_lock_init(fs_lock *l) { memset(l,0,sizeof(*l)); kwait_init(&l->wait); }
 static inline void fs_lock_destroy(fs_lock *l) { (void)l; }
 static inline bool fs_lock_try_take(fs_lock *l) {
-    uint32_t f = irq_save(); bool free = !l->held;
-    if (free) { l->held = true; kpreempt_hold(); }
+    uint32_t f=irq_save(); bool free=l->next==l->serving;
+    if (free) { l->next++; l->held=true; kpreempt_hold(); }
     irq_restore(f); return free;
 }
 static inline void fs_lock_take(fs_lock *l) {
+    uint32_t f=irq_save(); struct fs_ticket t={l,l->next++}; irq_restore(f);
     for (;;) {
-        uint32_t f = irq_save();
-        if (!l->held) { l->held = true; kpreempt_hold(); irq_restore(f); return; }
+        f=irq_save();
+        if (fs_ticket_ready(&t)) { l->held=true; kpreempt_hold(); irq_restore(f); return; }
         irq_restore(f);
-        kwait_wait_until(&l->wait, fs_lock_free, l, deadline_after_ms(1000));
+        kwait_wait_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000));
     }
 }
 static inline void fs_lock_drop(fs_lock *l) {
-    uint32_t f = irq_save(); l->held = false; kpreempt_release(); irq_restore(f);
-    kwait_wake_all(&l->wait);
+    uint32_t f=irq_save(); l->held=false; l->serving++; kpreempt_release(); irq_restore(f); kwait_wake_all(&l->wait);
+}
+struct fs_event { struct kwait wait; uint32_t sequence; };
+struct fs_event_ticket { struct fs_event *event; uint32_t sequence; };
+static inline bool fs_event_changed(void *arg) {
+    struct fs_event_ticket *t=arg; return t->event->sequence!=t->sequence;
+}
+static inline void fs_event_init(struct fs_event *q) { q->sequence=0; kwait_init(&q->wait); }
+static inline void fs_event_destroy(struct fs_event *q) { (void)q; }
+static inline void fs_event_wake(struct fs_event *q) {
+    uint32_t f=irq_save(); q->sequence++; irq_restore(f); kwait_wake_all(&q->wait);
+}
+static inline void fs_event_wait(struct fs_event *q, fs_lock *l) {
+    struct fs_event_ticket t={q,q->sequence}; fs_lock_drop(l);
+    kwait_wait_until(&q->wait,fs_event_changed,&t,deadline_after_ms(1000)); fs_lock_take(l);
 }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? kmalloc(n) : 0; }
 static inline void fs_free(void *p) { kfree(p); }

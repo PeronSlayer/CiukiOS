@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "cache.h"
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+void fs_assert_io_unlocked(void);
 static unsigned failures, checks;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"FAIL line %u: %s\n",__LINE__,#x); failures++; } } while (0)
 
@@ -14,15 +18,17 @@ struct mem {
 };
 static uint8_t pattern(const struct mem *m, uint64_t lba, unsigned i) { return (uint8_t)(lba * 31 + i * 7 + m->id); }
 static int mem_read(struct blkdev *d, uint64_t lba, uint32_t n, void *buf) {
+    fs_assert_io_unlocked();
     struct mem *m = d->ctx; int e = blkdev_range(d, lba, n); if (e) return e;
     m->reads += n; memcpy(buf, m->bytes + lba * d->sector_size, (size_t)n * d->sector_size); return 0;
 }
 static int mem_write(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf) {
+    fs_assert_io_unlocked();
     struct mem *m = d->ctx; int e = blkdev_range(d, lba, n); if (e) return e;
     if (m->fail_all || lba == m->fail_write_lba) return -FS_EIO;
     m->writes += n; m->last_write_lba = lba; memcpy(m->bytes + lba * d->sector_size, buf, (size_t)n * d->sector_size); return 0;
 }
-static int mem_flush(struct blkdev *d) { struct mem *m = d->ctx; m->flushes++; return 0; }
+static int mem_flush(struct blkdev *d) { fs_assert_io_unlocked(); struct mem *m = d->ctx; m->flushes++; return 0; }
 static void mem_init(struct mem *m, unsigned id, uint32_t sector, uint64_t sectors) {
     memset(m, 0, sizeof(*m)); m->id = id; m->fail_write_lba = UINT64_MAX;
     m->bytes = malloc((size_t)sector * sectors); if (!m->bytes) abort();
@@ -204,7 +210,71 @@ static void explicit_errors(void) {
     printf("PASS invalid attach and cache sizes are explicit errors\n");
 }
 
+/* Deterministic rendezvous: transport stays asleep until both reader calls
+ * overlap on the same filling slot. No timing-dependent duplicate-fill test. */
+struct fill_model {
+    struct blkdev dev; pthread_mutex_t mutex; pthread_cond_t changed;
+    bool entered, release, fail; unsigned calls;
+};
+static int delayed_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
+    (void)lba; struct fill_model *m=d->ctx;
+    fs_assert_io_unlocked();
+    pthread_mutex_lock(&m->mutex); m->calls++; m->entered=true; pthread_cond_broadcast(&m->changed);
+    while (!m->release) pthread_cond_wait(&m->changed,&m->mutex);
+    bool fail=m->fail; pthread_mutex_unlock(&m->mutex);
+    memset(buf,0x78,n*512); return fail ? -FS_EIO : 0;
+}
+struct reader { struct block_cache *cache; struct blkdev *dev; int result; uint8_t bytes[BLKDEV_READ_BYTES]; unsigned run, lba; };
+static void *reader_thread(void *arg) {
+    struct reader *r=arg;
+    r->result=r->run ? cache_read_run(r->cache,r->dev,0,r->run,r->bytes) : cache_read(r->cache,r->dev,r->lba,r->bytes);
+    return 0;
+}
+static void concurrent_fill(bool fail,unsigned run,unsigned cancel) {
+    struct block_cache c; CHECK(!cache_init(&c,8192));
+    struct fill_model m={.mutex=PTHREAD_MUTEX_INITIALIZER,.changed=PTHREAD_COND_INITIALIZER,.fail=fail};
+    m.dev=(struct blkdev){.read=delayed_read,.capacity=256,.sector_size=512,.ctx=&m};
+    struct reader a={.cache=&c,.dev=&m.dev,.run=run}, b={.cache=&c,.dev=&m.dev,.lba=run==128 ? 127u : 0u};
+    pthread_t ta,tb; CHECK(!pthread_create(&ta,0,reader_thread,&a));
+    pthread_mutex_lock(&m.mutex); while (!m.entered) pthread_cond_wait(&m.changed,&m.mutex); pthread_mutex_unlock(&m.mutex);
+    CHECK(!pthread_create(&tb,0,reader_thread,&b));
+    uint32_t start=fs_now_ms(); bool waiting=false;
+    while (!waiting && fs_now_ms()-start<2000) {
+        fs_lock_take(&c.lock);
+        for (unsigned i=0;i<256;i++) for (struct cache_block *x=c.hash[i];x;x=x->hash_next) if (x->waiters) waiting=true;
+        for (struct cache_fill *f=c.fills;f;f=f->next) if (f->waiters) waiting=true;
+        fs_lock_drop(&c.lock);
+        struct timespec t={0,1000000}; nanosleep(&t,0);
+    }
+    CHECK(waiting);
+    if (cancel==1) cache_invalidate(&c,&m.dev,true);
+    if (cancel>=2) {
+        fs_lock_take(&c.lock);
+        if (cancel==2) m.dev.media_generation++; else m.dev.quarantined=true;
+        fs_lock_drop(&c.lock);
+    }
+    pthread_mutex_lock(&m.mutex); m.release=true; pthread_cond_broadcast(&m.changed); pthread_mutex_unlock(&m.mutex);
+    CHECK(!pthread_join(ta,0) && !pthread_join(tb,0)); CHECK(m.calls==1);
+    CHECK(a.result==((fail || cancel) ? -FS_EIO : 0) && b.result==a.result);
+    if (!fail && !cancel) CHECK(a.bytes[0]==0x78 && b.bytes[511]==0x78);
+    else { m.fail=false; m.dev.quarantined=false; CHECK(!cache_read(&c,&m.dev,0,b.bytes) && m.calls==2); }
+    cache_destroy(&c); pthread_cond_destroy(&m.changed); pthread_mutex_destroy(&m.mutex);
+    printf("PASS overlapping %s fill: one command, both readers receive %s, slot reusable\n",run ? "run" : "sector",fail || cancel ? "error" : "data");
+}
+static void lock_order(void) {
+    fs_lock ns,vol,cache; fs_lock_init(&ns); fs_lock_init(&vol); fs_lock_init(&cache);
+    fs_lock_classify(&ns,1,0); fs_lock_classify(&vol,2,0); fs_lock_classify(&cache,3,0);
+    fs_lock_take(&ns); fs_lock_take(&vol); fs_lock_drop(&ns);
+    fs_lock_take(&cache); fs_lock_drop(&cache); fs_lock_drop(&vol);
+    pid_t child=fork(); CHECK(child>=0);
+    if (!child) { fs_lock_take(&cache); fs_lock_take(&ns); _exit(0); }
+    int status=0; CHECK(waitpid(child,&status,0)==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGABRT);
+    fs_lock_destroy(&ns); fs_lock_destroy(&vol); fs_lock_destroy(&cache);
+    puts("PASS pthread lock-order assertions: namespace -> volume -> cache accepted; inversion aborts");
+}
 int main(void) {
+    lock_order(); concurrent_fill(false,false,0); concurrent_fill(true,false,0); concurrent_fill(false,2,0); concurrent_fill(true,2,0); concurrent_fill(false,128,0); concurrent_fill(true,128,0);
+    for (unsigned cancel=1;cancel<=3;cancel++) { concurrent_fill(false,false,cancel); concurrent_fill(false,2,cancel); concurrent_fill(false,128,cancel); }
     budget(); attach_on_demand(); mixed_pressure(); dirty_writeback_on_conversion(); minimum_cache_rule(); failed_victim_read(); explicit_errors();
     printf("RESULT cache layout checks=%u failures=%u ASan/UBSan=enabled\n", checks, failures);
     return failures ? 1 : 0;

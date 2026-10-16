@@ -28,7 +28,10 @@ static unsigned cls(const struct cache_block *b) { return b->capacity >= 2048 ? 
 static unsigned bucket(struct blkdev *d, uint64_t lba) { return (unsigned)((uintptr_t)d/16 ^ lba ^ (lba>>32)) & 255; }
 static struct cache_device *device(struct block_cache *c, struct blkdev *d) {
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) return &c->devices[i];
-    for (unsigned i=0;i<CACHE_DEVICES;i++) if (!c->devices[i].dev) { c->devices[i].dev=d; return &c->devices[i]; }
+    for (unsigned i=0;i<CACHE_DEVICES;i++) if (!c->devices[i].dev) {
+        if (c->device_epoch==UINT32_MAX) return 0;
+        c->devices[i].dev=d; c->devices[i].epoch=++c->device_epoch; return &c->devices[i];
+    }
     return 0;
 }
 static int remember(struct block_cache *c, struct blkdev *d, int e) {
@@ -36,16 +39,78 @@ static int remember(struct block_cache *c, struct blkdev *d, int e) {
     if (s && e && !s->error) s->error=e;
     return e;
 }
+static struct cache_fill *filling(struct block_cache *c, struct blkdev *d, uint64_t lba) {
+    for (struct cache_fill *f=c->fills; f; f=f->next)
+        if (f->dev==d && lba>=f->lba && lba-f->lba<f->count) return f;
+    return 0;
+}
+static int join_fill(struct block_cache *c, struct cache_fill *f, uint64_t lba, uint32_t count, void *buf) {
+    f->waiters++;
+    while (!f->complete) fs_event_wait(&c->changed,&c->lock);
+    int e=f->error;
+    if (c->refresh) c->refresh(c->refresh_ctx,f->dev);
+    struct cache_device *state=device(c,f->dev);
+    if (!e && (!state || state->epoch!=f->epoch || f->dev->media_generation!=f->generation || f->dev->quarantined)) e=-FS_EIO;
+    if (!e) memcpy(buf,(uint8_t *)f->buffer+(size_t)(lba-f->lba)*f->dev->sector_size,(size_t)count*f->dev->sector_size);
+    f->waiters--; fs_event_wake(&c->changed); return e;
+}
+/* Cache lock held on entry/return, absent for transport and sleep. A range
+ * reservation also covers sectors for which the tiny cache has no free slot. */
+static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *buf) {
+    struct cache_fill *other=filling(c,d,lba);
+    if (other && count<=other->count-(lba-other->lba)) return join_fill(c,other,lba,count,buf);
+    struct cache_device *state=device(c,d);
+    if (!state) return -FS_ENOSPC;
+    uint32_t generation=d->media_generation, epoch=state->epoch;
+    struct cache_fill fill={.next=c->fills,.dev=d,.lba=lba,.count=count,.buffer=buf,.generation=generation,.epoch=epoch};
+    c->fills=&fill;
+    fs_lock_drop(&c->lock);
+    int e=d->read(d,lba,count,buf);
+    fs_lock_take(&c->lock);
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    state=device(c,d);
+    if (!e && (!state || state->epoch!=epoch || d->media_generation!=generation || d->quarantined)) e=-FS_EIO;
+    if (!e && proc_launch_disk_read) proc_launch_disk_read(count*d->sector_size);
+    fill.error=e; fill.complete=true; fs_event_wake(&c->changed);
+    while (fill.waiters) fs_event_wait(&c->changed,&c->lock);
+    struct cache_fill **at=&c->fills; while (*at!=&fill) at=&(*at)->next;
+    *at=fill.next; return e;
+}
+static int wait_block(struct block_cache *c, struct cache_block *b) {
+    if (b->waiters==255) fs_panic("cache waiters");
+    b->waiters++;
+    while (b->busy) fs_event_wait(&c->changed,&c->lock);
+    struct cache_device *owner=b->dirty ? device(c,b->dev) : 0;
+    int e=owner ? owner->error : b->io_error;
+    if (b->invalid || (b->dev && b->generation!=b->dev->media_generation)) e=-FS_EIO;
+    b->waiters--; fs_event_wake(&c->changed);
+    return e;
+}
+static void unhash(struct block_cache *, struct cache_block *);
+/* Caller holds cache lock; reserve the bytes while the transport sleeps.
+ * Readers/writers wait on the reservation, invalidation marks it cancelled. */
 static int write_block(struct block_cache *c, struct cache_block *b) {
+    if (b->busy) { int e=wait_block(c,b); if (e) return e; }
     if (!b->dirty) return 0;
     if (c->refresh) c->refresh(c->refresh_ctx,b->dev);
-    struct cache_device *s=device(c,b->dev);
+    struct blkdev *d=b->dev;
+    struct cache_device *s=device(c,d);
     if (!s) return -FS_ENOSPC;
     if (s->error) return s->error;
-    int e=blkdev_range(b->dev,b->lba,1);
-    if (!e) e=b->dev->write(b->dev,b->lba,1,b->data);
-    if (e) return remember(c,b->dev,e);
-    b->dirty=false; c->writes++; return 0;
+    int e=b->generation!=d->media_generation ? -FS_EIO : blkdev_range(d,b->lba,1);
+    if (e) return remember(c,d,e);
+    uint32_t generation=b->generation;
+    uint32_t since=b->since;
+    b->busy=true;
+    fs_lock_drop(&c->lock);
+    e=d->write(d,b->lba,1,b->data);
+    fs_lock_take(&c->lock);
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    if (!e && (b->invalid || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
+    b->busy=false;
+    if (e) { b->since=since; if (!b->invalid && generation==d->media_generation) remember(c,d,e); } else { b->dirty=false; b->io_error=0; c->writes++; }
+    if (b->invalid) { unhash(c,b); b->dirty=false; b->io_error=e; }
+    fs_event_wake(&c->changed); return e;
 }
 static void unhash(struct block_cache *c, struct cache_block *b) {
     if (!b->dev) return;
@@ -105,18 +170,23 @@ static void half_deactivate(struct block_cache *c, struct cache_page *pg, unsign
     c->blocks-=count; c->slots[layout]-=count;
 }
 static int convert_half(struct block_cache *c, struct cache_page *pg, unsigned h) {
+    /* Never drop the mutex halfway through changing a layout. A dirty
+     * write may sleep, so restart the complete half preflight afterwards. */
     for (unsigned k=0;k<SLOTS_512;k++) {
         struct cache_block *b=&pg->b[h*SLOTS_512+k];
-        int e=b->dev && b->dirty ? write_block(c,b) : 0;
-        if (e) return e;     /* sticky failed block pins this half only */
+        if (b->busy || b->waiters) return -FS_EBUSY;
+        if (b->dirty) {
+            int e=write_block(c,b); if (e) return e;
+            return -FS_EAGAIN; /* recheck every slot after the unlocked write */
+        }
     }
-    half_deactivate(c,pg,h); half_activate(c,pg,h,1,true);
-    return 0;
+    half_deactivate(c,pg,h); half_activate(c,pg,h,1,true); return 0;
 }
 static void convert_page(struct block_cache *c, struct cache_page *pg, unsigned halves, unsigned *done, int *blocked) {
     for (unsigned h=0;h<2 && *done<halves;h++) if (!pg->layout[h]) {
         fs_service();
         int e=convert_half(c,pg,h);
+        if (e==-FS_EAGAIN) { h--; continue; }
         if (e) *blocked=e; else ++*done;
     }
 }
@@ -136,51 +206,64 @@ static int layout_for(struct block_cache *c, struct blkdev *d) {
     unsigned pages=c->data_pages/8; if (!pages) pages=1;
     return convert(c,pages*2);
 }
+static struct cache_block *find(struct block_cache *c, struct blkdev *d, uint64_t lba) {
+    for (struct cache_block *b=c->hash[bucket(d,lba)]; b; b=b->hash_next)
+        if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) return b;
+    return 0;
+}
+/* Reserve a miss before dropping the lock. Failed fills retain their result
+ * until existing waiters have consumed it, then the slot is reusable. */
 static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read, struct cache_block **out, bool *issued) {
     if (issued) *issued=false;
+retry:
     fs_service();
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     int e=blkdev_range(d,lba,1); if (e) return e;
     if (!d->read) return -FS_EINVAL;
-    struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
+    if (!device(c,d)) return -FS_ENOSPC;
     if ((e=layout_for(c,d))) return e;
-    for (struct cache_block *b=c->hash[bucket(d,lba)];b;b=b->hash_next) {
-        if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) { c->hits++; touch(c,b); *out=b; return 0; }
+    struct cache_block *b=find(c,d,lba);
+    if (b) {
+        if (b->busy) { if (issued && read) *issued=true; e=wait_block(c,b); if (e) return e; goto retry; }
+        c->hits++; touch(c,b); *out=b; return 0;
     }
-    c->misses++;
-retry_victim:
-    ;
-    struct cache_block *b=0;
-    int blocked=-FS_ENOMEM;
-    /* A 512-byte request may use a 2048-byte slot when every 512-byte slot is
-     * pinned (f4-02 rule); a 2048-byte request needs a 2048-byte slot. */
+    int blocked=-FS_ENOMEM; bool pending=false;
     for (unsigned list=d->sector_size==2048 ? 1u : 0u; list<2 && !b; list++) {
-        for (struct cache_block *x=c->lru[list].oldest;x;x=x->next) {
+        for (struct cache_block *x=c->lru[list].oldest; x; x=x->next) {
             if (x->capacity<d->sector_size) continue;
+            if (x->busy || x->waiters) { pending=true; continue; }
             struct cache_device *owner=x->dirty ? device(c,x->dev) : 0;
             if (!x->dirty || !owner || !owner->error) { b=x; break; }
             blocked=owner->error;
         }
     }
-    if (!b) return blocked;
-    if ((e=write_block(c,b))) {
-        /* A failed dirty victim pins itself, not every reader sharing this
-         * cache. Find a different clean/healthy slot on the next pass. */
-        goto retry_victim;
+    if (!b) {
+        if (pending) { fs_event_wait(&c->changed,&c->lock); goto retry; }
+        return blocked;
     }
-    unhash(c,b);
+    if (b->dirty) { (void)write_block(c,b); goto retry; }
+    unhash(c,b); c->misses++;
+    b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
+    b->invalid=false; b->io_error=0;
+    unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
+    touch(c,b);
     if (read) {
         if (issued) *issued=true;
-        if ((e=d->read(d,lba,1,b->data))) return e;
+        b->busy=true;
+        e=read_transport(c,d,lba,1,b->data);
+        if (c->refresh) c->refresh(c->refresh_ctx,d);
+        if (!e && (b->invalid || b->generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
+        if (!e) e=blkdev_range(d,lba,1);
+        b->busy=false; b->io_error=e;
+        if (e) unhash(c,b);
+        fs_event_wake(&c->changed);
+        if (e) return e;
     }
-    if (read && proc_launch_disk_read) proc_launch_disk_read(d->sector_size);
-    b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
-    unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
-    touch(c,b); *out=b; return 0;
+    *out=b; return 0;
 }
 static unsigned meta_needed(unsigned data) { return data>1 ? (data-1+PAGES_PER_META-1)/PAGES_PER_META : 0; }
 int cache_init(struct block_cache *c, size_t bytes) {
-    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock);
+    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_lock_classify(&c->lock,3,0);
     if (!bytes) bytes=CACHE_DEFAULT_BYTES;
     if (bytes<8192 || bytes>32u*1024u*1024u) { cache_destroy(c); return -FS_EINVAL; }
     size_t pages=bytes/4096;
@@ -218,7 +301,7 @@ void cache_destroy(struct block_cache *c) {
         fs_page_free(m);
     }
     for (unsigned i=0;i<c->workspace_pages;i++) fs_page_free(c->workspace[i]);
-    fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock);
+    fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed);
     memset(c,0,sizeof(*c));
 }
 int cache_attach(struct block_cache *c, struct blkdev *d) {
@@ -237,6 +320,10 @@ void cache_stats(struct block_cache *c, struct cache_stats *out) {
 int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf) {
     if (!buf) return -FS_EINVAL;
     fs_lock_take(&c->lock); struct cache_block *b;
+    struct cache_fill *fill=d ? filling(c,d,lba) : 0;
+    if (fill && !find(c,d,lba)) {
+        int e=join_fill(c,fill,lba,1,buf); fs_lock_drop(&c->lock); return e;
+    }
     bool issued=false;
     uint32_t generation=d ? d->media_generation : 0;
     int e=get(c,d,lba,true,&b,&issued);
@@ -244,10 +331,12 @@ int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf)
     else if (!issued && !blkdev_range(d,lba,1) && d->read) {
         /* All slots may contain dirty data pinned by failed writeback.
          * A miss still has a read transport; never retry an issued read. */
-        e=d->read(d,lba,1,buf);
-        if (!e && proc_launch_disk_read) proc_launch_disk_read(d->sector_size);
+        struct cache_device *state=device(c,d);
+        uint32_t epoch=state ? state->epoch : 0;
+        e=read_transport(c,d,lba,1,buf);
         if (c->refresh) c->refresh(c->refresh_ctx,d);
-        if (!e && (generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
+        state=device(c,d);
+        if (!e && (!state || epoch!=state->epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
     }
     fs_lock_drop(&c->lock); return e;
 }
@@ -258,45 +347,95 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
     int e=blkdev_range(d,lba,count);
     if (!e && !d->read) e=-FS_EINVAL;
     if (!e && !device(c,d)) e=-FS_ENOSPC;
-    /* Preserve all hits before miss insertion can evict any later hit in a
-     * small cache. The mutex serializes cache writes and media invalidation.
-     * A bitmap, rather than pinned slots, needs no extra pages or allocation. */
-    uint32_t hits[BLKDEV_READ_SECTORS/32]={0};
-    uint32_t generation=d->media_generation;
+    struct cache_device *state=!e ? device(c,d) : 0;
+    uint32_t epoch=state ? state->epoch : 0;
+    uint32_t hits[BLKDEV_READ_SECTORS/32]={0}, generation=d->media_generation;
     for (unsigned i=0; !e && i<count; i++) {
-        fs_service();
-        for (struct cache_block *b=c->hash[bucket(d,lba+i)]; b; b=b->hash_next)
-            if (b->dev==d && b->lba==lba+i && b->generation==generation && b->sector_size==512) {
-                memcpy((uint8_t *)buf+i*512,b->data,512);
-                hits[i/32]|=1u<<(i%32); c->hits++; touch(c,b); break;
+        struct cache_block *b=find(c,d,lba+i);
+        if (b && b->busy) { e=wait_block(c,b); if (e) break; b=find(c,d,lba+i); }
+        if (b) {
+            memcpy((uint8_t *)buf+i*512,b->data,512);
+            hits[i/32]|=1u<<(i%32); c->hits++; touch(c,b);
+        } else {
+            struct cache_fill *fill=filling(c,d,lba+i);
+            if (fill) {
+                e=join_fill(c,fill,lba+i,1,(uint8_t *)buf+i*512);
+                if (!e) hits[i/32]|=1u<<(i%32);
             }
+        }
     }
     for (unsigned i=0; !e && i<count;) {
         if (hits[i/32] & (1u<<(i%32))) { i++; continue; }
-        unsigned end=i+1;
-        while (end<count && !(hits[end/32] & (1u<<(end%32)))) end++;
-        fs_service();
-        if (file_read_cancelled && file_read_cancelled()) { e=-4; break; }
-        e=d->read(d,lba+i,end-i,(uint8_t *)buf+i*512);
-        if (e) break;                 /* never publish a partial/failed read */
-        if (proc_launch_disk_read) proc_launch_disk_read((end-i)*512);
-        if (c->refresh) c->refresh(c->refresh_ctx,d);
-        if (d->media_generation!=generation || d->quarantined) { e=-FS_EIO; break; }
-        for (; i<end; i++) {
-            struct cache_block *b;
-            e=get(c,d,lba+i,false,&b,0);
-            if (e) { e=0; continue; } /* successful direct read needs no cache slot */
-            memcpy(b->data,(uint8_t *)buf+i*512,512);
+        /* Recheck after any preceding unlocked transport. */
+        struct cache_block *existing=find(c,d,lba+i);
+        if (existing) {
+            if (existing->busy) { e=wait_block(c,existing); continue; }
+            memcpy((uint8_t *)buf+i*512,existing->data,512); i++; continue;
         }
+        struct cache_fill *fill=filling(c,d,lba+i);
+        if (fill) { e=join_fill(c,fill,lba+i,1,(uint8_t *)buf+i*512); i++; continue; }
+        unsigned end=i+1;
+        while (end<count && !(hits[end/32] & (1u<<(end%32))) && !find(c,d,lba+end) && !filling(c,d,lba+end)) end++;
+        struct cache_block *reserved[BLKDEV_READ_SECTORS]={0};
+        /* Reserve only available clean slots. A run larger than the cache
+         * still uses one command; uncached bytes remain in the caller buffer. */
+        for (unsigned j=i; j<end; j++) {
+            struct cache_block *b=0;
+            for (unsigned list=0; list<2 && !b; list++)
+                for (struct cache_block *x=c->lru[list].oldest; x; x=x->next)
+                    if (!x->busy && !x->waiters && !x->dirty) { b=x; break; }
+            if (!b) continue;
+            unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
+            b->busy=true; b->invalid=false; b->io_error=0;
+            unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b;
+            touch(c,b); reserved[j]=b; c->misses++;
+        }
+        if (file_read_cancelled && file_read_cancelled()) e=-4;
+        if (!e) e=blkdev_range(d,lba+i,end-i);
+        if (!e) {
+            e=read_transport(c,d,lba+i,end-i,(uint8_t *)buf+i*512);
+        }
+        if (c->refresh) c->refresh(c->refresh_ctx,d);
+        state=device(c,d);
+        if (!e && (!state || epoch!=state->epoch || d->media_generation!=generation || d->quarantined)) e=-FS_EIO;
+        for (unsigned j=i; j<end; j++) if (reserved[j] && reserved[j]->invalid && !e) e=-FS_EIO;
+        for (unsigned j=i; j<end; j++) if (reserved[j]) {
+            struct cache_block *b=reserved[j]; b->busy=false; b->io_error=e;
+            if (e) unhash(c,b); else memcpy(b->data,(uint8_t *)buf+j*512,512);
+        }
+        fs_event_wake(&c->changed); i=end;
     }
     fs_lock_drop(&c->lock); return e;
+}
+int cache_read_ahead(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *sector) {
+    if (!c || !d || !sector || d->sector_size!=512 || !count || count>BLKDEV_READ_SECTORS) return -FS_EINVAL;
+    fs_lock_take(&c->lock);
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    int e=blkdev_range(d,lba,count);
+    bool hit=!e && find(c,d,lba);
+    fs_lock_drop(&c->lock);
+    if (e) return e;
+    if (hit || count==1) return cache_read(c,d,lba,sector);
+    /* Bounded to the already qualified transport workspace size. Failure
+     * preserves the demand-read path and never changes the write gate. */
+    void *run=fs_contig_alloc((size_t)count*512);
+    if (!run) return cache_read(c,d,lba,sector);
+    e=cache_read_run(c,d,lba,count,run);
+    if (!e) memcpy(sector,run,512);
+    fs_contig_free(run,(size_t)count*512); return e;
 }
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!buf || !blkdev_durable(d)) return d && d->quarantined ? -FS_EQUARANTINED : -FS_EROFS;
     fs_lock_take(&c->lock); struct cache_device *s=device(c,d); struct cache_block *b;
     int e=!s ? -FS_ENOSPC : s->error;
+    uint32_t generation=d->media_generation, epoch=s ? s->epoch : 0;
     if (!e) e=get(c,d,lba,false,&b,0);
+    s=device(c,d);
+    if (!e && (!s || epoch!=s->epoch || generation!=d->media_generation || d->quarantined)) {
+        if (!b->dirty) unhash(c,b);
+        e=-FS_EIO;
+    }
     if (!e) {
         memcpy(b->data,buf,d->sector_size);
         if (!b->dirty) {
@@ -319,7 +458,11 @@ static int barrier(struct block_cache *c, struct blkdev *d) {
         int e=write_block(c,b); if (e) return e;
     }
     if (d->write_cache_state!=BLKDEV_CACHE_DISABLED) {
-        int e=d->flush(d); if (e) return remember(c,d,e);
+        uint32_t generation=d->media_generation;
+        fs_lock_drop(&c->lock); int e=d->flush(d); fs_lock_take(&c->lock);
+        if (c->refresh) c->refresh(c->refresh_ctx,d);
+        if (!e && (generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
+        if (e) return remember(c,d,e);
     }
     return 0;
 }
@@ -359,8 +502,15 @@ int cache_error(struct block_cache *c, struct blkdev *d) {
 }
 void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
     fs_lock_take(&c->lock);
-    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) if (b->dev==d) { unhash(c,b); b->dirty=false; }
-    if (forget) for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) memset(&c->devices[i],0,sizeof(c->devices[i]));
+    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) if (b->dev==d) {
+        if (b->busy) b->invalid=true;
+        else { unhash(c,b); b->dirty=false; }
+    }
+    for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) {
+        if (c->device_epoch==UINT32_MAX) fs_panic("cache epoch exhausted");
+        c->devices[i].epoch=++c->device_epoch;
+        if (forget) memset(&c->devices[i],0,sizeof(c->devices[i]));
+    }
     fs_lock_drop(&c->lock);
 }
 int cache_workspace_begin(struct block_cache *c, uint32_t bytes) {

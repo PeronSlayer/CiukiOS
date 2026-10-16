@@ -16,9 +16,11 @@ struct cache_block {
     struct blkdev *dev;
     uint8_t *data;
     uint64_t lba;
-    uint32_t since, generation;
+    union { uint32_t since; int io_error; };
+    uint32_t generation;
     uint16_t sector_size, capacity;
-    bool dirty;
+    bool dirty, busy, invalid;
+    uint8_t waiters;
 };
 struct cache_page {
     uint8_t *data;          /* one fs_page_alloc() page, pure data */
@@ -27,9 +29,17 @@ struct cache_page {
 };
 struct cache_meta { struct cache_meta *next; unsigned count; struct cache_page pages[]; };
 struct cache_lru { struct cache_block *oldest, *newest; };
-struct cache_device { struct blkdev *dev; int error; };
+struct cache_device { struct blkdev *dev; int error; uint32_t epoch; };
+/* Stack-owned transport reservation; owner waits for joined readers before
+ * returning. Covers uncached sectors when a run exceeds the cache capacity. */
+struct cache_fill {
+    struct cache_fill *next; struct blkdev *dev; uint64_t lba;
+    uint32_t count, generation, epoch; void *buffer; unsigned waiters; int error; bool complete;
+};
 struct block_cache {
     fs_lock lock, workspace_lock;
+    struct fs_event changed;
+    struct cache_fill *fills;
     struct cache_page inline_page;  /* first page header: no descriptor page needed */
     struct cache_meta *meta;
     struct cache_lru lru[2];        /* [0] 512-byte slots, [1] 2048-byte slots */
@@ -37,7 +47,7 @@ struct block_cache {
     struct cache_device devices[CACHE_DEVICES];
     void *workspace[256];
     uint32_t workspace_pages, blocks;
-    uint32_t data_pages, meta_pages, slots[2];
+    uint32_t data_pages, meta_pages, slots[2], device_epoch;
     uint64_t hits, misses, writes;
     /* f1-09: refresh frozen block-view scalars even on cache hits. The
      * callback must be short, nonblocking and must not enter the cache. */
@@ -67,6 +77,9 @@ int cache_read(struct block_cache *, struct blkdev *, uint64_t lba, void *sector
 /* FAT run read, 512-byte sectors, at most BLKDEV_READ_SECTORS. Shared cache
  * hits (including dirty data) split physical requests; no private cache. */
 int cache_read_run(struct block_cache *, struct blkdev *, uint64_t lba, uint32_t count, void *buffer);
+/* Demand sector plus bounded metadata read-ahead. Hits allocate nothing;
+ * temporary transport workspace is released before returning. */
+int cache_read_ahead(struct block_cache *, struct blkdev *, uint64_t, uint32_t, void *);
 int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void *sector);
 int cache_barrier(struct block_cache *, struct blkdev *);
 int cache_writeback_tick(struct block_cache *, uint32_t now_ms);

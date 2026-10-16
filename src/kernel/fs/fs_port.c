@@ -7,6 +7,56 @@
 #ifdef FS_HOST
 unsigned fs_host_contig_fail, fs_host_contig_live;
 unsigned fs_host_page_fail;
+/* Shared across translation units, so fake transports can assert that their
+ * caller released namespace/cache bookkeeping before issuing I/O. */
+static pthread_mutex_t classes_mutex=PTHREAD_MUTEX_INITIALIZER;
+static struct { fs_lock *lock; unsigned rank; } classes[1024];
+static _Thread_local struct { fs_lock *lock; unsigned rank; } held[64];
+static _Thread_local unsigned held_count;
+#define CLASS_TOMBSTONE ((fs_lock *)(uintptr_t)1)
+static unsigned class_bucket(fs_lock *l) { return (unsigned)(((uintptr_t)l>>3)^((uintptr_t)l>>13))&1023; }
+static unsigned lock_rank(fs_lock *l) {
+    pthread_mutex_lock(&classes_mutex); unsigned rank=0, base=class_bucket(l);
+    for (unsigned n=0;n<1024;n++) {
+        unsigned i=(base+n)&1023;
+        if (classes[i].lock==l) { rank=classes[i].rank; break; }
+        if (!classes[i].lock) break;
+    }
+    pthread_mutex_unlock(&classes_mutex); return rank;
+}
+void fs_lock_classified(fs_lock *l,unsigned rank,char drive) {
+    (void)drive; pthread_mutex_lock(&classes_mutex);
+    unsigned slot=1024,base=class_bucket(l);
+    for (unsigned n=0;n<1024;n++) {
+        unsigned i=(base+n)&1023;
+        if (classes[i].lock==l) { slot=i; break; }
+        if (classes[i].lock==CLASS_TOMBSTONE && slot==1024) slot=i;
+        if (!classes[i].lock) { if (slot==1024) slot=i; break; }
+    }
+    if (slot==1024) abort();
+    classes[slot].lock=rank ? l : CLASS_TOMBSTONE; classes[slot].rank=rank;
+    pthread_mutex_unlock(&classes_mutex);
+}
+void fs_lock_before(fs_lock *l) {
+    unsigned rank=lock_rank(l);
+    for (unsigned i=0;i<held_count;i++)
+        if (held[i].lock==l || (rank && held[i].rank>rank)) abort();
+}
+void fs_lock_acquired(fs_lock *l) {
+    fs_lock_before(l); if (held_count==64) abort();
+    held[held_count].lock=l; held[held_count++].rank=lock_rank(l);
+}
+void fs_lock_released(fs_lock *l) {
+    for (unsigned i=0;i<held_count;i++) if (held[i].lock==l) {
+        memmove(held+i,held+i+1,(--held_count-i)*sizeof(*held)); return;
+    }
+    /* Some existing device fixtures acquire an unclassified pthread mutex
+     * directly to verify that the transport gate has been released. */
+    if (lock_rank(l)) abort();
+}
+void fs_assert_io_unlocked(void) {
+    for (unsigned i=0;i<held_count;i++) if (held[i].rank==1 || held[i].rank==3) abort();
+}
 #endif
 static fs_calendar_clock calendar;
 void fs_set_calendar_clock(fs_calendar_clock clock) { calendar=clock; }
