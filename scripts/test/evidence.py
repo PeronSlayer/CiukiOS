@@ -147,6 +147,10 @@ class Parser:
             raise EvidenceError('output after terminal panic')
         if b'CIUKI_TEST' not in line:
             return
+        # The black box replays captured records with an explicit prefix (f0-25,
+        # src/kernel/core/blackbox.c); a replay is diagnostics, never evidence.
+        if line.startswith(b'[blackbox] '):
+            return
         if not line.startswith(b'CIUKI_TEST ') or len(line) > 240:
             raise EvidenceError('malformed prefix or record exceeds 240 bytes')
         try:
