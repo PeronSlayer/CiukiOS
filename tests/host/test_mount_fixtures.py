@@ -14,12 +14,40 @@ from unittest.mock import patch
 
 import test_runner as existing
 import fat_fixtures
-from mount_fixtures import place_marker, classify_crash_checker, check_crash_files, check_recovered_fixture
+from mount_fixtures import place_marker, classify_crash_checker, check_crash_files, check_recovered_fixture, WriteGate
 import run as runner
 import resources as res
 
 ROOT = existing.ROOT
 EMPTY = {'size':0, 'sha256':hashlib.sha256(b'').hexdigest()}
+
+
+class WriteGateDiagnosticTests(unittest.TestCase):
+    def test_unrelated_suspended_write_and_arm_lag_have_distinct_overrun_messages(self):
+        arm={'event':'ARM','action':'crash_cut'}
+        cuts=[{'case':'cut','index':str(i),'action':'write','result':'0','durable':'1'}
+              for i in range(1,4)]
+        class Qmp:
+            def __init__(self):self.commands=[]
+            def command(self,name,args):self.commands.append((name,args));return ''
+        for early in (False,True):
+            with self.subTest(suspension_before_first_cut=early):
+                gate=WriteGate(2);qmp=Qmp();parser=runner.Parser('12345678','mount-crash')
+                parser.records=[arm]
+                gate.synchronize(arm,qmp)
+                if early:
+                    gate.feed(b"blkdebug: Suspended request 'ciuki-write'\n",0)
+                    # Index zero is a normal first gate turn. Preserve the
+                    # re-arm/resume behavior; diagnose only a later overrun.
+                    self.assertFalse(gate.step(parser,qmp,0))
+                    self.assertFalse(gate.suspended)
+                    self.assertEqual(len(qmp.commands),3)
+                parser.records.extend(cuts)
+                gate.feed(b"blkdebug: Suspended request 'ciuki-write'\n",0)
+                with self.assertRaises(runner.EvidenceError) as caught:gate.step(parser,qmp,0)
+                if early:self.assertIn("suspended write is not the probe's",str(caught.exception))
+                else:self.assertEqual(str(caught.exception),'declared cut index already passed')
+                self.assertEqual(len(qmp.commands),3 if early else 1) # no extra I/O on failure
 
 
 class BootlogSafeStorageTests(unittest.TestCase):

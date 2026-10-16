@@ -199,7 +199,10 @@ class WriteGate:
             raise EvidenceError('noncontiguous cut trace')
         if any(r.get('action') != 'write' or r.get('result') != '0' or r.get('durable') != '1' for r in cuts):
             raise EvidenceError('writethrough cut lacks durable successful sector writes')
-        if len(cuts) > self.index:raise EvidenceError('declared cut index already passed')
+        if len(cuts) > self.index:
+            if any(o['completed_index'] == 0 for o in self.observations):
+                raise EvidenceError("suspended write is not the probe's: suspension observed before first case=cut; declared cut index already passed")
+            raise EvidenceError('declared cut index already passed')
         if not self.suspended:return False
         if not self.started:raise EvidenceError('write suspended before crash ARM')
         self.observations.append(dict(completed_index=len(cuts), armed=bool(arms), suspended=True))

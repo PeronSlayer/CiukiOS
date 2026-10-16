@@ -32,6 +32,8 @@ static int handle = -1;
 static bool draining, attached, disabled;
 static bool stopping, metadata_dirty, drain_started;
 static uint32_t last_drain, last_metadata;
+static bool drain_paused;
+static uint32_t pause_start, pause_timeout;
 static uint64_t sync_target, sync_done, sync_commit_target;
 static unsigned sync_boot, sync_commit_boot;
 static uint64_t sync_ring, sync_commit_ring;
@@ -299,9 +301,28 @@ static int drain_owned(void)
     }
     return failed(e);
 }
+/* RAM lock held. Expiry never changes capture, pacing or sync watermarks. */
+static bool paused(uint32_t now)
+{
+    if (drain_paused && (int32_t)(now-(pause_start+pause_timeout))>=0)
+        drain_paused=false;
+    return drain_paused;
+}
+int bootlog_pause_drain(uint32_t timeout_ms)
+{
+    if (!timeout_ms || timeout_ms>BOOTLOG_PAUSE_MAX_MS) return -FS_EINVAL;
+    uint32_t now=fs_now_ms(), f=lock_ram();
+    int e=draining || paused(now) ? -FS_EBUSY : 0;
+    if (!e) { drain_paused=true;pause_start=now;pause_timeout=timeout_ms; }
+    unlock_ram(f);return e;
+}
+void bootlog_resume_drain(void)
+{
+    uint32_t f=lock_ram();drain_paused=false;unlock_ram(f);
+}
 static bool take_drain(void)
 {
-    uint32_t f=lock_ram(); bool free=!draining;
+    uint32_t now=fs_now_ms(), f=lock_ram(); bool free=!draining && !paused(now);
     if (free) draining=true;
     unlock_ram(f); return free;
 }
@@ -311,7 +332,7 @@ bool bootlog_due(uint32_t now)
 {
     uint32_t f = lock_ram();
     uint32_t pending = history_size-history_sent + boot_used - boot_sent + used;
-    bool due = stats.active && (stopping || sync_target > sync_done ||
+    bool due = !paused(now) && stats.active && (stopping || sync_target > sync_done ||
         (pending && (!drain_started || pressure || high_water() ||
                      (uint32_t)(now - last_drain) >= BOOTLOG_DRAIN_MS)) ||
         (metadata_dirty && (uint32_t)(now - last_metadata) >= BOOTLOG_METADATA_MS));
@@ -484,6 +505,7 @@ void bootlog_reset(void)
     history=0;history_size=history_sent=0;boot_capacity=BOOTLOG_PROTECTED;
     ring_position = BOOTLOG_PROTECTED; handle = -1; disabled = false;
     stopping=metadata_dirty=drain_started=false; last_drain=last_metadata=0;
+    drain_paused=false;pause_start=pause_timeout=0;
     sync_target=sync_done=sync_commit_target=sync_ring=sync_commit_ring=0;
     sync_boot=sync_commit_boot=0;
     memset(sync_waiters,0,sizeof(sync_waiters));
