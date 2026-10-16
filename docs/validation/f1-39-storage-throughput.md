@@ -65,3 +65,57 @@ Full Python discovery records 461 tests with 29 skips and three fixture errors
 tests pass with the equivalent existing host payload). Detailed host results,
 fixture limitations and remaining lead checks are in
 `build/codex/f1-39-report.md`.
+
+## F1-76: two-unit reset signatures and PACKET classification (2026-10-16)
+
+Research checked before implementation:
+[ATA/ATAPI-6 revision 3a](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf),
+9.2 and 9.12, specifies waiting for BSY after SRST and the complete
+SC/LBA signature. PACKET signatures persist until a command establishes
+DRDY or a host task-file write overwrites them; IDENTIFY DEVICE restores
+the PACKET signature. DRDY clear does not establish absence.
+[QEMU 9.2 IDE source](https://github.com/qemu/qemu/blob/v9.2.0/hw/ide/core.c)
+(`ide_ctrl_write`, `ide_bus_perform_srst`, `ide_perform_srst`, `ide_reset`,
+`ide_set_signature`, `cmd_identify`, `ide_ioport_write`) resets the two
+units through a scheduled callback, publishes their individual task files,
+and restores a CD signature before aborting EC. Task-file writes reach both
+units; selecting a unit does not reconstruct its reset signature. Upstream
+code alone does not establish the timing of an observed guest failure.
+
+Read-only evidence in
+`/home/peronslayer/Desktop/CiukiOS/build/test-runs/zz-media/640a7e4c/`
+(image `401f3caf2a8f68cf5e1a2f55275a496d675fbc535ecce2cf4dcdabd8dd6924f2`)
+and `33cfcf83/`
+(image `64a531f9b087ee68904f40a5b428ac5ebf09e23096af1431bcdddf613be4be65`)
+shows secondary-master EC ending at status 41/error 04 and whole-channel
+quarantine. Neither log has a secondary-channel reset-signature line before
+the fault. Since the current driver logs pass 1 before pass 2 IDENTIFY,
+the pre-SRST firmware-mode probe must also be covered; these logs do not
+prove that pass 2 was reached or measure the master's missing signature.
+
+The host regression uses production `ata_channel_discover` with individual
+unit task files, delayed reset publication, PACKET reset status zero,
+broadcast host writes, and EC restoring a PACKET signature before ABRT.
+It covers PACKET/PACKET, ATA/PACKET, PACKET/ATA and ATA/ATA with and without
+the pre-reset DMA-mode measurement. Injected one-millisecond ATA-looking
+tuples demonstrate the old single-sample misclassification. A separate
+injected transition from idle status to ABRT between the firmware probe's
+sample and its DRQ poll demonstrates premature quarantine before SRST.
+These are host mechanisms, not measurements of QEMU scheduling.
+
+Decision: preserve both discovery passes; bracket each complete signature
+with BSY-clear status and require matching snapshots separated by a
+one-millisecond sleep, under a per-unit bounded deadline. An EC-only
+classification path accepts solely ABRT with the complete PACKET tuple and
+BSY/DRQ/DF clear. Retire its generation/IRQ, restore nIEN, then issue A1
+once. Apply the same classification to the firmware probe's DRQ poll.
+Other command errors, missing IRQs, timeouts and failed A1 still quarantine
+the channel without replay or reset. Unsupported PACKET types remain skipped.
+
+The focused ATA harness and complete kernel host script pass with ASan/UBSan;
+the kernel-only build passes its target frame checks and FPU/SIMD audit.
+Commands ran sequentially under `nice -n 19`; the optional prebuilt DOSBOOT
+replay was skipped. Detailed results are in `build/codex/f1-76-report.md`.
+The lead must qualify the integrated image on
+`volume-resolution-cd-usb-qemu-t23`, `optical-l1-qemu-t23` and `f1-storage`;
+no new guest or hardware evidence is claimed here.

@@ -205,6 +205,17 @@ struct fake {
     uint32_t media_sectors;
     unsigned dma_starts, dma_stops, dma_completions;
     bool dma_command, noncontiguous, early_dma_irq, early_dma_ready, reset_loses_udma, absent_ff;
+    /* Discovery model: per-unit reset publication and task files, with host
+     * task-file writes broadcast to both units as in QEMU ide/core.c. */
+    bool discovery_model, reset_started, hide_packet[2], signature_seen[2], signature_published[2];
+    bool zero_transient[2], unstable_signature;
+    uint8_t taskfile[2][6], unit_status[2], unit_command[2], abort_error;
+    uint64_t signature_at[2], busy_until[2];
+    unsigned settle_ms[2], busy_ms[2], signature_reads[2], reset_count;
+    unsigned identify_ata[2], identify_atapi[2], premature_commands;
+    bool defer_abort, bad_abort_signature;
+    unsigned abort_status_reads;
+    uint8_t abort_status;
 };
 static struct fake *running;
 static void dma_bus_start(struct fake *f);
@@ -259,15 +270,41 @@ static uint8_t fake_in8(void *ctx, uint16_t port)
     if (f->channel.dma.ops && port == f->channel.dma.base) return f->bm_command;
     if (f->channel.dma.ops && port == f->channel.dma.base + 2) return f->bm_status;
     unsigned r = port - f->channel.base;
+    if (f->discovery_model && f->reset_started && !f->unit_command[f->selected]) {
+        unsigned u = f->selected;
+        if (g_ticks < f->busy_until[u]) f->status = ATA_BSY;
+        else {
+            f->status = f->kind[u] == DISK ||
+                (g_ticks < f->signature_at[u] && !f->zero_transient[u]) || f->hide_packet[u] ? ATA_DRDY : 0;
+            if (!f->signature_published[u] && g_ticks >= f->signature_at[u]) {
+                f->signature_published[u] = true;
+                f->taskfile[u][2] = f->taskfile[u][3] = f->kind[u] == ABSENT ? 0 : 1;
+                f->taskfile[u][4] = f->kind[u] == PACKET && !f->hide_packet[u] ? 0x14 : 0;
+                f->taskfile[u][5] = f->kind[u] == PACKET && !f->hide_packet[u] ? 0xeb : 0;
+            }
+        }
+    }
     if (port == f->channel.control || r == 7) {
         if (r == 7 && f->pending) { f->pending = false; f->irq_acks++; }
         if (f->kind[f->selected] == ABSENT)
             return f->absent_ff ? 0xff : 0;
+        if (port == f->channel.control && f->abort_status_reads) {
+            f->abort_status_reads--;
+            return ATA_DRDY; /* EC abort arrives just after this sample. */
+        }
         if (f->status_index < f->status_count)
             return f->statuses[f->status_index++];
         return f->status;
     }
-    if (r == 1) { f->errors++; return f->command ? 4 : 1; }
+    if (r == 1) { f->errors++; return f->command ? f->abort_error : 1; }
+    if (f->discovery_model && r >= 2 && r <= 5) {
+        if (r == 4 && f->unstable_signature && f->reset_started)
+            f->taskfile[f->selected][r] ^= 1;
+        f->signature_reads[f->selected]++;
+        if (r == 5 && g_ticks >= f->signature_at[f->selected])
+            f->signature_seen[f->selected] = true;
+        return f->taskfile[f->selected][r];
+    }
     if (r == 2 || r == 3)
         return f->command ? f->registers[r][0] : (f->kind[f->selected] == NO_SIGNATURE ? 0 : 1);
     if (r == 4 || r == 5)
@@ -296,24 +333,54 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
         if (value & 4) {
             f->command = 0; f->status = 0x40; f->pending = false; memset(f->multiple,0,sizeof(f->multiple));
             if (f->reset_loses_udma) for (unsigned u = 0; u < 2; u++) { f->identify[u][88] &= 255; f->identify[u][63] = 0x407; }
+            if (f->discovery_model) {
+                f->reset_started = true; f->reset_count++;
+                for (unsigned u = 0; u < 2; u++) {
+                    f->signature_at[u] = g_ticks + 2 + f->settle_ms[u];
+                    f->busy_until[u] = g_ticks + 2 + f->busy_ms[u];
+                    f->unit_status[u] = ATA_BSY; f->unit_command[u] = 0;
+                    f->signature_published[u] = false;
+                    f->signature_seen[u] = false;
+                    memset(f->taskfile[u], 0, sizeof(f->taskfile[u]));
+                    /* A transient ATA-looking tuple before PACKET publication. */
+                    f->taskfile[u][2] = f->taskfile[u][3] = f->zero_transient[u] ? 0 : 1;
+                }
+            }
         }
         return;
     }
     if (r == 6) {
+        if (f->discovery_model) {
+            f->unit_status[f->selected] = f->status;
+            f->unit_command[f->selected] = f->command;
+        }
         f->selected = (value >> 4) & 1;
         f->head = value;
         f->command = 0;             /* reset signature is preserved per device in this model */
         f->status = 0x40;
+        if (f->discovery_model) {
+            f->status = f->unit_status[f->selected];
+            f->command = f->unit_command[f->selected];
+        }
         return;
     }
     if (r < 6) {
         f->registers[r][1] = f->registers[r][0];
         f->registers[r][0] = value;
+        if (f->discovery_model)
+            f->taskfile[0][r] = f->taskfile[1][r] = value;
         return;
     }
     CHECK(r == 7);
     f->command = value;
     f->commands++;
+    if (f->discovery_model) {
+        if (f->reset_started && (!f->signature_seen[0] || !f->signature_seen[1]))
+            f->premature_commands++;
+        f->unit_command[f->selected] = value;
+        if (value == ATA_IDENTIFY) f->identify_ata[f->selected]++;
+        if (value == 0xa1) f->identify_atapi[f->selected]++;
+    }
     f->issued_tick = g_ticks;
     f->words = 0;
     f->completed_blocks = 0;
@@ -357,6 +424,13 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
         f->status = 0x80;
         f->delayed_irq = g_ticks + 45000;
         return;
+    }
+    if (f->discovery_model && f->kind[f->selected] == PACKET && value == ATA_IDENTIFY) {
+        unsigned u = f->selected;
+        f->taskfile[u][2] = f->taskfile[u][3] = 1;
+        f->taskfile[u][4] = 0x14; f->taskfile[u][5] = f->bad_abort_signature ? 0 : 0xeb;
+        f->status = f->abort_status;
+        if (f->defer_abort) f->abort_status_reads = 1;
     }
     if (f->dma_command) {
         if (f->early_dma_irq) {
@@ -466,6 +540,8 @@ static void fresh(struct fake *f, bool ext)
 {
     memset(f, 0, sizeof(*f));
     f->kind[0] = DISK;
+    f->abort_error = 4;
+    f->abort_status = ATA_DRDY | ATA_ERR;
     f->status = 0x40;
     for (unsigned u = 0; u < 2; u++) {
         uint16_t *id = f->identify[u];
@@ -853,6 +929,114 @@ static void test_storage_cache_faults(void)
 }
 #include "atapi_test.inc"
 #include "ata_dma_test.inc"
+
+static void discovery_fresh(struct fake *f, unsigned topology, bool dma)
+{
+    if (dma) dma_fresh(f, false); else fresh(f, false);
+    f->discovery_model = true;
+    for (unsigned u = 0; u < 2; u++) {
+        f->kind[u] = topology & (1u << u) ? PACKET : DISK;
+        f->unit_status[u] = ATA_DRDY;
+        f->taskfile[u][2] = f->taskfile[u][3] = 1;
+        f->taskfile[u][4] = f->kind[u] == PACKET ? 0x14 : 0;
+        f->taskfile[u][5] = f->kind[u] == PACKET ? 0xeb : 0;
+        if (f->kind[u] == PACKET) f->identify[u][0] = 0x8500;
+    }
+}
+
+static void test_discovery_topologies(void)
+{
+    for (unsigned dma = 0; dma < 2; dma++) {
+        for (unsigned topology = 0; topology < 4; topology++) {
+            for (unsigned delayed = 0; delayed < 4; delayed++) {
+                struct fake f;
+                discovery_fresh(&f, topology, dma);
+                if (delayed == 1) f.settle_ms[0] = f.settle_ms[1] = 1;
+                if (delayed == 2) { f.busy_ms[1] = 5; f.settle_ms[1] = 5; }
+                if (delayed == 3) {
+                    f.settle_ms[0] = f.settle_ms[1] = 1;
+                    f.zero_transient[0] = f.zero_transient[1] = true;
+                }
+                /* SET MULTIPLE on the master overwrites the slave's SC:
+                 * pass 1 must finish before this command can be issued. */
+                if (f.kind[0] == DISK) f.identify[0][47] = 16;
+                int result = ata_channel_discover(&f.channel);
+                CHECK(result == 2 && !f.channel.stopped);
+                CHECK(f.reset_count == 1 && !f.premature_commands);
+                for (unsigned u = 0; u < 2; u++) {
+                    struct ata_device *d = &f.channel.devices[u];
+                    CHECK(d->present && d->identified && !d->block.quarantined);
+                    CHECK(d->atapi == (f.kind[u] == PACKET));
+                    CHECK(f.identify_atapi[u] == (unsigned)d->atapi);
+                    CHECK(f.identify_ata[u] == (d->atapi ? 0u : 1u + dma));
+                    CHECK(f.signature_reads[u] >= 4);
+                }
+                CHECK(!f.channel.active && !f.channel.mutex.owner && (f.control & ATA_NIEN));
+            }
+        }
+    }
+    /* A stable ATA-looking reset tuple can still belong to a PACKET unit.
+     * Its EC ABRT restores the signature, allowing exactly one A1. */
+    for (unsigned unit = 0; unit < 2; unit++) {
+        for (unsigned immediate = 0; immediate < 2; immediate++) {
+            struct fake f;
+            discovery_fresh(&f, 1u << unit, false);
+            f.hide_packet[unit] = true; f.immediate = immediate;
+            native_attach(&f, 1);
+            unsigned pic_writes = masks + unmasks;
+            CHECK(ata_channel_discover(&f.channel) == 2 && !f.channel.stopped);
+            CHECK(f.channel.devices[unit].atapi && f.channel.devices[unit].identified);
+            CHECK(f.identify_ata[unit] == 1 && f.identify_atapi[unit] == 1);
+            CHECK(f.commands == 3 && f.data_reads == 512 && f.reset_count == 1);
+            CHECK(!f.premature_commands && !f.channel.active && (f.control & ATA_NIEN));
+            CHECK(masks + unmasks == pic_writes && !masked[15]);
+        }
+    }
+    /* Firmware's pre-SRST probe also issues EC with nIEN. Reproduce the
+     * race where its first sample is idle and the DRQ poll sees ABRT. */
+    for (unsigned unit = 0; unit < 2; unit++) {
+        struct fake f;
+        discovery_fresh(&f, 1u << unit, true);
+        f.taskfile[unit][4] = f.taskfile[unit][5] = 0;
+        f.defer_abort = true;
+        CHECK(ata_channel_discover(&f.channel) == 2 && !f.channel.stopped);
+        CHECK(f.identify_ata[unit] == 1 && f.identify_atapi[unit] == 1);
+        CHECK(f.reset_count == 1 && !f.premature_commands);
+    }
+    for (unsigned fault = 0; fault < 7; fault++) {
+        struct fake f;
+        discovery_fresh(&f, 1, false); f.hide_packet[0] = true;
+        if (fault == 0) f.abort_error = 0x10;
+        if (fault == 1) f.bad_abort_signature = true;
+        if (fault == 2) f.abort_status |= ATA_DF;
+        if (fault == 3) f.abort_status |= ATA_DRQ;
+        if (fault == 4) f.fault = NO_IRQ;
+        if (fault == 5) f.abort_status |= ATA_BSY;
+        if (fault == 6) f.fault = ERR; /* EC classifies; A1 really fails. */
+        uint64_t start = g_ticks;
+        CHECK(ata_channel_discover(&f.channel) == -FS_EIO && f.channel.stopped);
+        CHECK(g_ticks - start <= ATA_COMMAND_MS + 6);
+        CHECK(f.identify_ata[0] == 1 && f.identify_atapi[0] == (unsigned)(fault == 6));
+        CHECK(f.channel.devices[0].block.quarantined && f.channel.devices[1].block.quarantined);
+        CHECK(!f.channel.active && !f.channel.mutex.owner && (f.control & ATA_NIEN));
+        unsigned writes = f.writes;
+        CHECK(ata_channel_discover(&f.channel) == -FS_EQUARANTINED && f.writes == writes);
+    }
+    struct fake f;
+    discovery_fresh(&f, 1, false); f.hide_packet[0] = true;
+    f.identify[0][0] = 0x8100; /* Unsupported PACKET type still skips safely. */
+    CHECK(ata_channel_discover(&f.channel) == 1 && !f.channel.stopped);
+    CHECK(f.channel.devices[0].atapi && !f.channel.devices[0].identified && f.channel.devices[1].identified);
+    discovery_fresh(&f, 3, false);
+    f.busy_ms[1] = f.settle_ms[1] = 2 * ATA_COMMAND_MS;
+    CHECK(ata_channel_discover(&f.channel) == -FS_EIO && f.channel.stopped);
+    CHECK(!f.commands && f.reset_count == 1 && !f.channel.devices[0].issued);
+    discovery_fresh(&f, 3, false); f.unstable_signature = true;
+    uint64_t start = g_ticks;
+    CHECK(ata_channel_discover(&f.channel) == -FS_EIO && f.channel.stopped);
+    CHECK(g_ticks - start == ATA_COMMAND_MS + 2 && !f.commands && !f.channel.active);
+    puts("ATA discovery: four two-unit topologies, delayed signatures/BSY, broadcast writes, EC ABRT -> A1: PASS");
+}
 static void test_constant_pic_masks(void)
 {
     uint8_t *data = malloc(257 * 512), *expected = malloc(257 * 512);
@@ -946,7 +1130,7 @@ static void test_emergency_recorder(void)
 }
 int main(void)
 {
-    test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
+    test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
     test_dma(); test_constant_pic_masks(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
