@@ -44,8 +44,9 @@ struct vfs_find {
     uint8_t attr_mask; char pattern[FS_NAME_BYTES];
     bool ro; uint64_t ro_directory;
 };
-/* Caller owns all storage, including tables, mounted volumes and cache. No
- * allocations in open/read/write/find/etc. Capacity exhaustion is explicit.
+/* Caller owns tables, mounted volumes and cache. Cold FAT metadata reads
+ * may use a temporary <=64 KiB run buffer, with demand-sector fallback on
+ * allocation failure. Node/description capacity exhaustion is explicit.
  * Initialize once; destroy after tables/volumes are detached. */
 void vfs_init(struct vfs *);
 void vfs_destroy(struct vfs *);

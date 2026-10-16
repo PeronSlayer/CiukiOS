@@ -57,9 +57,54 @@ static void complete_between_observations(void)
     qh[1]=td[0]; /* HC writeback after the prefix walk's active snapshot */
     m.hc_status|=1;assert(usb_host_irq(&m.h));races++;
 }
+/* Same root listing/stat workload through production VFS/FAT/cache/BOT.
+ * Two LFN slots plus one short entry per file: 64 visible entries, 13 cold
+ * directory sectors, a normal FAT16 fixed root (32 sectors in this fixture). */
+static void metadata_commands(const char *path) {
+    setup(path,false); use_uhci(); m.h.irq_attached=true; attach();
+    unsigned reserved=fs_rd16(m.image+14), fats=m.image[16], fat_sectors=fs_rd16(m.image+22);
+    unsigned root_sector=reserved+fats*fat_sectors, root_entries=fs_rd16(m.image+17);
+    assert(root_entries>=64*3+1);
+    uint8_t *root=m.image+(size_t)root_sector*512; memset(root,0,root_entries*32);
+    static const unsigned offsets[13]={1,3,5,7,9,14,16,18,20,22,24,28,30};
+    for (unsigned i=0;i<64;i++) {
+        char alias[12],name[40]; snprintf(alias,sizeof(alias),"FILE%04uTXT",i);
+        snprintf(name,sizeof(name),"Entry %02u for AutoPlay.txt",i);
+        unsigned length=(unsigned)strlen(name); uint8_t sum=0;
+        for (unsigned j=0;j<11;j++) sum=(uint8_t)(((sum&1)<<7)+(sum>>1)+(uint8_t)alias[j]);
+        for (unsigned slot=0;slot<2;slot++) {
+            uint8_t *b=root+(i*3+slot)*32; memset(b,0xff,32);
+            unsigned seq=2-slot; b[0]=(uint8_t)(seq|(slot ? 0 : 0x40)); b[11]=15;b[12]=0;b[13]=sum;fs_wr16(b+26,0);
+            for (unsigned j=0;j<13;j++) {
+                unsigned index=(seq-1)*13+j;
+                fs_wr16(b+offsets[j],index<length ? (uint8_t)name[index] : index==length ? 0 : 0xffff);
+            }
+        }
+        uint8_t *b=root+(i*3+2)*32;memset(b,0,32);memcpy(b,alias,11);b[11]=FAT_ATTR_ARCHIVE;
+    }
+    struct block_cache cache; struct fat_volume vol;
+    static struct vfs v; static struct vfs_table table;
+    assert(!cache_init(&cache,131072));
+    assert(!fat_prepare_removable(&vol,&cache,block(),0,block()->capacity));
+    vol.preparing=false; vfs_init(&v); assert(!vfs_attach(&v,4,&vol)); assert(!vfs_table_init(&v,&table,4));
+    m.read_commands=0; unsigned before=m.read_commands,entries=0;
+    struct vfs_find find; struct fat_entry entry;
+    int e=vfs_find_first(&table,"E:/*",0,&find,&entry);
+    while (!e) { entries++; e=vfs_find_next(&table,&find,&entry); }
+    assert(e==-FS_ENOENT && entries==64);
+    for (unsigned i=0;i<64;i++) {
+        char name[64];snprintf(name,sizeof(name),"E:/Entry %02u for AutoPlay.txt",i);
+        assert(!vfs_stat(&table,name,&entry));
+    }
+    unsigned commands=m.read_commands-before;
+    printf("F1-78 metadata: root entries=%u stats=64 READ(10) commands=%u\n",entries,commands);
+    assert(commands==1); /* baseline replay: 13 commands, at least 8x fewer */
+    vfs_table_destroy(&table);vfs_destroy(&v);cache_destroy(&cache);cleanup();
+}
 int main(int argc,char **argv)
 {
     assert(argc==2);
+    metadata_commands(argv[1]);
     setup(argv[1],false);use_uhci();m.h.irq_attached=true;irq_wakes=races=0;
     attach();port_read_hook=complete_between_observations;
     uint8_t *data=malloc(BLKDEV_READ_BYTES);assert(data);

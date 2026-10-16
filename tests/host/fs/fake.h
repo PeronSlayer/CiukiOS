@@ -11,6 +11,8 @@ struct fake {
     int fd;
     uint64_t fail_read, fail_write, torn_lba;
     size_t torn_bytes;
+    unsigned read_delay_ms, read_calls, in_read;
+    bool assert_io_unlocked;
     unsigned events, writes, reads, flushes, cut_at, cut_mode;
     bool cut, reorder, fail_flush, undo_enabled;
     struct fake_sector *undo, *pending;

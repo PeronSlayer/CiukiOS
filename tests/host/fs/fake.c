@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdio.h>
+void fs_assert_io_unlocked(void);
 static int rd(struct fake *f, uint64_t lba, void *b) { return pread(f->fd,b,512,(off_t)(lba*512))==512 ? 0 : -FS_EIO; }
 static int save(struct fake *f, uint64_t lba) {
     if (!f->undo_enabled) return 0;
@@ -37,6 +38,14 @@ static int event(struct fake *f, char kind, uint64_t lba) {
 }
 static int read_dev(struct blkdev *d, uint64_t lba, uint32_t n, void *buf) {
     struct fake *f=d->ctx; int e=blkdev_range(d,lba,n); if (e) return e;
+    if (f->assert_io_unlocked) fs_assert_io_unlocked();
+    __atomic_add_fetch(&f->read_calls,1,__ATOMIC_RELAXED);
+    if (f->read_delay_ms) {
+        __atomic_store_n(&f->in_read,1,__ATOMIC_RELEASE);
+        struct timespec t={f->read_delay_ms/1000,(long)(f->read_delay_ms%1000)*1000000};
+        nanosleep(&t,0);
+        __atomic_store_n(&f->in_read,0,__ATOMIC_RELEASE);
+    }
     if (f->cut) return -FS_EIO;
     for (unsigned i=0;i<n;i++) {
         f->reads++; if (lba+i==f->fail_read) return -FS_EIO;

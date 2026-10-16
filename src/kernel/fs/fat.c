@@ -94,7 +94,19 @@ static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (v->prepare_cache) {
         const uint8_t *p;
         e=window_sector(v,s,&p); if (!e) memcpy(b,p,512);
-    } else e=v->preparing ? v->dev->read(v->dev,v->start+s,1,b) : cache_read(v->cache,v->dev,v->start+s,b);
+    } else if (v->preparing) e=v->dev->read(v->dev,v->start+s,1,b);
+    else {
+        uint64_t end=s+1;
+        if (v->type && v->fat_sectors && s>=v->reserved && s<v->reserved+(uint64_t)v->fats*v->fat_sectors)
+            end=v->reserved+((s-v->reserved)/v->fat_sectors+1)*v->fat_sectors;
+        else if (v->spc && s>=v->data_sector)
+            end=s+v->spc-(s-v->data_sector)%v->spc;
+        else if (v->root_entries && s>=v->root_sector && s<v->data_sector)
+            end=v->data_sector;
+        if (end>v->sectors) end=v->sectors;
+        unsigned count=(unsigned)(end-s>BLKDEV_READ_SECTORS ? BLKDEV_READ_SECTORS : end-s);
+        e=cache_read_ahead(v->cache,v->dev,v->start+s,count,b);
+    }
     if (e && (e==-FS_EQUARANTINED || v->dev->quarantined)) {
         v->ro_reasons|=FAT_RO_WRITE_ERROR;
         fat_revoke_write(v,"device_quarantined",0);
