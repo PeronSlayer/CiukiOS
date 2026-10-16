@@ -432,6 +432,27 @@ static unsigned flags_instruction(const uint8_t *b, unsigned n, bool big, uint8_
     at += imm;
     return at <= n && at <= 15 ? at : 0;
 }
+/* One proof, one local checked code window. Never reuse bytes across guest
+ * execution, descriptor edits or hooks. A speculative refill failure falls
+ * back to precisely the range the scalar proof would have read. */
+struct flags_code { uint32_t at; unsigned n; uint8_t bytes[128]; };
+static const uint8_t *flags_read(struct dosvm *v, const struct dpmi_seg *cs,
+                                 struct flags_code *c, uint32_t at, unsigned n)
+{
+    if (at < c->at || at - c->at > c->n || n > c->n - (at - c->at)) {
+        uint32_t linear = cs->base + at;
+        unsigned count = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
+        if (count > sizeof(c->bytes)) count = sizeof(c->bytes);
+        if (cs->limit - at < count - 1) count = cs->limit - at + 1;
+        if (count < n || (linear >= 0xA0000 && linear < 0xC0000)) count = n;
+        if (dosvm_read(v, linear, c->bytes, count)) {
+            count = n;
+            if (dosvm_read(v, linear, c->bytes, count)) return 0;
+        }
+        c->at = at; c->n = count;
+    }
+    return c->bytes + (at - c->at);
+}
 static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
                             uint8_t *pop, unsigned *width, bool boundary_only)
 {
@@ -441,10 +462,12 @@ static bool flags_preceding(struct dosvm *v, struct v86_frame *f, const struct d
         end > cs->limit || end - at > 4096) return false;
     uint8_t previous = 0, last = 0;
     unsigned previous_w = 0, last_w = 0;
+    struct flags_code cache = {0};
     while (at < end) {
-        uint8_t bytes[15], op;
+        uint8_t op;
         unsigned n = end - at < 15 ? end - at : 15, w;
-        if (dosvm_read(v, cs->base + at, bytes, n)) return false;
+        const uint8_t *bytes = flags_read(v, cs, &cache, at, n);
+        if (!bytes) return false;
         unsigned len = flags_instruction(bytes, n, cs->big, &op, &w);
         if (!len) return false;
         previous = last; previous_w = last_w; last = op; last_w = w;
@@ -570,6 +593,7 @@ static bool flags_control_preceding(struct dosvm *v, struct v86_frame *f, const 
     struct flags_path paths[32] = {{.at=d->decode_eip, .stack_valid=d->decode_stack_valid, .ds_valid=d->decode_ds_valid}};
     struct { uint32_t at; int32_t sp; unsigned depth; } seen[64];
     unsigned head = 0, tail = 1, visited = 0, budget = 4096;
+    struct flags_code cache = {0};
     while (head < tail && budget) {
         struct flags_path p = paths[head++];
         while (budget && p.at <= cs->limit) {
@@ -587,9 +611,10 @@ static bool flags_control_preceding(struct dosvm *v, struct v86_frame *f, const 
             if (visited < ARRAY_SIZE(seen)) {
                 seen[visited].at = p.at; seen[visited].sp = p.sp; seen[visited++].depth = p.depth;
             }
-            uint8_t b[15], op;
+            uint8_t op;
             unsigned n = cs->limit - p.at >= 14 ? 15 : cs->limit - p.at + 1, w;
-            if (dosvm_read(v, cs->base + p.at, b, n)) break;
+            const uint8_t *b = flags_read(v, cs, &cache, p.at, n);
+            if (!b) break;
             unsigned pos = flags_opcode(b, n, cs->big, &w);
             if (pos == n) break;
             op = b[pos];
@@ -645,6 +670,24 @@ static bool flags_control_preceding(struct dosvm *v, struct v86_frame *f, const 
 }
 static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
 {
+    /* Neither forward proof changes the candidate image. If no possible
+     * POP register or stack word even matches its low half, the old final
+     * equality check cannot succeed. Keep the full proof for every match. */
+    uint16_t want16 = (f->tf.eflags & 0x0CD5u) | V86_IF | 2u;
+    bool candidate = false;
+    for (unsigned op = 0x58; op <= 0x5F; op++) {
+        uint32_t *r = pop_register(f, (uint8_t)op);
+        if (r && (uint16_t)*r == want16) { candidate = true; break; }
+    }
+    if (!candidate) {
+        struct dpmi_seg ss;
+        uint32_t lin;
+        uint16_t image;
+        uint16_t sel = (uint16_t)f->tf.user_ss;
+        if (!dpmi_seg(v, sel, &ss) || !dpmi_ptr(v, sel,
+            ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp, 2, false, &lin) ||
+            dosvm_read(v, lin, &image, 2) || image != want16) return false;
+    }
     uint8_t pop;
     unsigned width;
     if (!flags_preceding(v, f, cs, &pop, &width, false) &&
@@ -976,6 +1019,8 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     struct dpmi_seg cs;
     if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs)) return dpmi_exception(v, f, 13, 0);
+    int direct;
+    if (dosvm_io_fast(v, f, &cs, &direct)) return direct;
     bool op32 = cs.big, a32 = cs.big, rep = false;
     uint16_t seg = (uint16_t)f->tf.ds;
     unsigned len = 0;
@@ -1165,7 +1210,9 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     bool stepped = f->tf.vector == 1 && (dr6 & (1u << 14)) &&
         v->dpmi.return_steps && return_context(&v->dpmi, f);
     int e = pm_trap(v, f, cr2, dr6);
-    if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err && v->perf.cause == DOSVM_COST_VGA_IO)
+    if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err &&
+        (v->perf.cause == DOSVM_COST_VGA_IO || (v->perf.cause == DOSVM_COST_PIT_PIC &&
+         v->perf.io_port >= 0x40 && v->perf.io_port <= 0x43)))
         e = dosvm_io_burst(v, f);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */

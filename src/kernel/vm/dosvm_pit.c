@@ -6,8 +6,8 @@
 static uint32_t pit_modulus(const struct dosvm_pit_channel *c) { return c->bcd ? 10000u : 65536u; }
 static uint16_t pit_encode(const struct dosvm_pit_channel *c, uint32_t n)
 {
-    n %= pit_modulus(c);
-    if (!c->bcd) return n;
+    if (!c->bcd) return (uint16_t)n; /* binary wrap needs no runtime division */
+    n %= 10000u;
     return (n % 10) | ((n / 10 % 10) << 4) | ((n / 100 % 10) << 8) | ((n / 1000) << 12);
 }
 static uint16_t pit_counter(const struct dosvm_pit_channel *c)

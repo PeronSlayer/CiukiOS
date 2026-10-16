@@ -108,6 +108,16 @@ control-register/table changes fault locally. Unknown ports MUST follow a
 documented absent-device response or fault, never physical passthrough.
 ([Intel, §§15.2.7–15.3](https://kib.kiev.ua/x86docs/Intel/SDMs/245472-004.pdf).)
 
+F3-33 implementation clarification (2026-10-16): bounded monitor bursts MAY
+retire adjacent virtual PIT/PIC byte I/O and flag-preserving MOV setup, with
+the same checked scalar device handlers. A pending enabled IRQ, reschedule,
+interrupt shadow, TF/watchpoint or owned IF/return proof MUST stop a burst.
+Instruction faults, register high halves, latch/read order, PIC EOI and guest
+IVT hooks retain scalar behavior. Proof-read windows are local to one monitor
+invocation; no saved-image or instruction-boundary evidence is cached across
+guest execution. Research and host differential evidence are in
+[F3-31/F3-33 validation](../validation/2026-10-15-f3-31-performance.md).
+
 **[F3–F4]** CR4.VME and CR4.PVI MUST remain disabled even when CPUID reports
 support; VIF/VIP MUST NOT be treated as authoritative state. Software
 virtual IF is the qualification baseline. VME acceleration MAY be proposed

@@ -202,11 +202,14 @@ static void putword(uint8_t *p, unsigned width, uint32_t x)
 
 static int copyseg(struct v86 *v, uint32_t seg, uint32_t off, void *buf, unsigned n, bool write)
 {
+    /* The copy hook validates the complete range itself. Calling memory
+     * first repeats the DOS page walk without providing a usable pointer. */
+    if (seg > 0xFFFF || off > 0xFFFF || n > 0x10000u - off) return -EFAULT;
+    if (v->copy)
+        return v->copy(v->ops.arg, (seg << 4) + off, buf, n, write);
     void *p = segmem(v, seg, off, n, write);
     if (!p)
         return -EFAULT;
-    if (v->copy)
-        return v->copy(v->ops.arg, (seg << 4) + off, buf, n, write);
     if (write)
         memcpy(p, buf, n);
     else
@@ -239,22 +242,25 @@ static void setlow(uint32_t *reg, uint32_t value)
 
 int v86_reflect(struct v86 *v, struct v86_frame *f, uint8_t vector)
 {
-    uint8_t ivt[4], slot[2];
+    uint8_t ivt[4], slot[6];
     uint16_t sp = (uint16_t)(f->tf.user_esp - 6);
-    uint8_t *ip_slot = segmem(v, f->tf.user_ss, sp, 2, true);
-    uint8_t *cs_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + 2), 2, true);
-    uint8_t *fl_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + 4), 2, true);
-    if (copyseg(v, 0, (uint32_t)vector * 4, ivt, 4, false) || !ip_slot || !cs_slot || !fl_slot)
+    bool packed = sp <= 0xFFFA;
+    bool stack = packed ? segmem(v, f->tf.user_ss, sp, 6, true) != 0 :
+        segmem(v, f->tf.user_ss, sp, 2, true) &&
+        segmem(v, f->tf.user_ss, (uint16_t)(sp + 2), 2, true) &&
+        segmem(v, f->tf.user_ss, (uint16_t)(sp + 4), 2, true);
+    if (copyseg(v, 0, (uint32_t)vector * 4, ivt, 4, false) || !stack)
         return v86_abort(v, f, -EFAULT);
     uint32_t ip = getword(ivt, 2), cs = getword(ivt + 2, 2);
     if (!segmem(v, cs, ip, 1, false))
         return v86_abort(v, f, -EFAULT);
     putword(slot, 2, f->tf.eip);
-    if (copyseg(v, f->tf.user_ss, sp, slot, 2, true)) goto fault;
-    putword(slot, 2, f->tf.cs);
-    if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + 2), slot, 2, true)) goto fault;
-    putword(slot, 2, guest_flags(v, f));
-    if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + 4), slot, 2, true)) goto fault;
+    putword(slot + 2, 2, f->tf.cs);
+    putword(slot + 4, 2, guest_flags(v, f));
+    if (packed) {
+        if (copyseg(v, f->tf.user_ss, sp, slot, 6, true)) goto fault;
+    } else for (unsigned i = 0; i < 3; i++)
+        if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + i * 2), slot + i * 2, 2, true)) goto fault;
     setlow(&f->tf.user_esp, sp);
     f->tf.eip = ip;
     f->tf.cs = cs;
@@ -402,7 +408,7 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
     unsigned width = op32 ? 4 : 2;
     uint32_t next = (uint16_t)(f->tf.eip + len), value;
     uint16_t sp = (uint16_t)f->tf.user_esp;
-    uint8_t *p, buf[4], csbuf[4], flbuf[4];
+    uint8_t *p, buf[12];
     bool old_shadow = v->shadow;
     uint32_t instruction_ip = f->tf.eip, instruction_cs = f->tf.cs;
     int rc = 0;
@@ -433,17 +439,17 @@ int v86_emulate(struct v86 *v, struct v86_frame *f)
         return v86_reflect(v, f, vector);
     }
     case 0xCF: {
-        p = segmem(v, f->tf.user_ss, sp, width, false);
-        uint8_t *cs_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + width), width, false);
-        uint8_t *fl_slot = segmem(v, f->tf.user_ss, (uint16_t)(sp + width * 2), width, false);
-        if (!p || !cs_slot || !fl_slot)
-            goto fault;
-        if (copyseg(v, f->tf.user_ss, sp, buf, width, false) ||
-            copyseg(v, f->tf.user_ss, (uint16_t)(sp + width), csbuf, width, false) ||
-            copyseg(v, f->tf.user_ss, (uint16_t)(sp + width * 2), flbuf, width, false))
-            goto fault;
-        uint32_t ip = getword(buf, width), cs = getword(csbuf, width);
-        value = getword(flbuf, width);
+        if (sp <= 0x10000u - 3 * width) {
+            if (copyseg(v, f->tf.user_ss, sp, buf, 3 * width, false)) goto fault;
+        } else {
+            /* Each slot must fit even when the next slot wraps SP. */
+            for (unsigned i = 0; i < 3; i++)
+                if (!segmem(v, f->tf.user_ss, (uint16_t)(sp + width * i), width, false)) goto fault;
+            for (unsigned i = 0; i < 3; i++)
+                if (copyseg(v, f->tf.user_ss, (uint16_t)(sp + width * i), buf + width * i, width, false)) goto fault;
+        }
+        uint32_t ip = getword(buf, width), cs = getword(buf + width, width);
+        value = getword(buf + width * 2, width);
         if (ip > 0xFFFF || cs > 0xFFFF || !segmem(v, cs, ip, 1, false))
             goto fault;
         v->stats.insn[V86_IRET]++;

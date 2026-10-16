@@ -289,6 +289,7 @@ void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
+bool dosvm_io_fast(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, int *);
 uint64_t dosvm_perf_clock(void);
 uint64_t dosvm_perf_task_clock(void);
 void dosvm_perf_report(struct dosvm *);
