@@ -34,6 +34,7 @@ int dpmi_push_record(struct dosvm *v, const struct v86_frame *f, uint8_t kind, s
     r->rstack_top = d->rstack_top;
     dpmi_lock_below(v, f);
     if (d->depth > d->stats.max_depth) d->stats.max_depth = d->depth;
+    if (d->return_steps) dpmi_reload_debug(v); /* parent breakpoint is suspended */
     *out = r;
     return 0;
 }
@@ -52,6 +53,7 @@ static void pop_record(struct dosvm *v)
     d->rstack_top = r->rstack_top;
     if (r->kind == DPMI_REC_CALLBACK) dpmi_free_ldt(v, DPMI_IDX_TEMP + d->depth - 1);
     d->depth--;
+    if (d->return_steps) dpmi_reload_debug(v);
 }
 /* Drop records above depth without guest help (termination, faults). */
 void dpmi_unwind(struct dosvm *v, unsigned depth)
@@ -65,6 +67,8 @@ void dpmi_unwind(struct dosvm *v, unsigned depth)
 void dpmi_set_pm(struct dosvm *v, bool pm)
 {
     struct dpmi *d = &v->dpmi;
+    if (!pm && d->return_steps && d->depth == d->return_depth && d->clients == d->return_client)
+        dpmi_return_cancel(v); /* raw mode transfer has no suspended parent record */
     if (pm != v->frame_pm) {
         if (pm) { d->rm_a20 = v->a20; if (!v->a20) dosvm_set_a20(v, true); }
         else if (v->a20 != d->rm_a20) dosvm_set_a20(v, d->rm_a20);
@@ -72,6 +76,7 @@ void dpmi_set_pm(struct dosvm *v, bool pm)
     v->frame_pm = pm;
     v->monitor.shadow = false;
     d->shadow = false;
+    if (d->return_steps) dpmi_reload_debug(v);
 }
 
 int dpmi_rm_stack(struct dosvm *v, uint16_t *ss, uint16_t *sp)

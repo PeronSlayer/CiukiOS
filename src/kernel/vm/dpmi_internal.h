@@ -112,10 +112,14 @@ struct dpmi {
     uint8_t if_step_depth, if_step_client, if_records;
     uint32_t if_target_eip, if_target_sp;
     uint64_t if_wait_tick;
-    /* f3-10: bounded, flags-clean boundaries after an extender IRET. */
+    /* f3-34: remaining forward-decode budget, never TF single steps.
+     * A spare execute breakpoint observes the next actual boundary. */
     uint16_t return_steps;
     uint8_t return_depth, return_client;
-    uint16_t return_cs, return_ss;
+    uint16_t return_cs, return_ss, return_origin_cs;
+    uint8_t return_slot, return_hops;
+    uint32_t return_eip, return_linear;
+    uint32_t return_code_desc[2], return_stack_desc[2], return_origin_desc[2];
     bool decode_valid;
     uint16_t decode_cs;
     uint32_t decode_eip;            /* known boundary at entry/previous trap return */
@@ -198,6 +202,7 @@ int dpmi_int31(struct dosvm *, struct v86_frame *);
 int dpmi_entry(struct dosvm *, struct v86_frame *);
 int dpmi_entry_complete(struct dosvm *, struct v86_frame *, uint16_t psp);
 void dpmi_reload_debug(struct dosvm *);
+void dpmi_return_cancel(struct dosvm *);
 int dpmi_terminate(struct dosvm *, bool from_pm);
 int dpmi_terminate_int(struct dosvm *, struct v86_frame *, uint8_t vector, const struct v86_frame *regs);
 int dpmi_dos_complete(struct dosvm *, struct v86_frame *, struct dpmi_record *, const struct v86_frame *result);

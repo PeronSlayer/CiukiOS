@@ -9,6 +9,7 @@ struct gcpu_state {
     uint32_t eax, ebx, ecx, edx, esi, edi, ebp, esp, eip, eflags;
     uint16_t cs, ss, ds, es, fs, gs;
     uint32_t ldt_limit;
+    uint32_t dr[4], dr7;          /* execution breakpoints, before instruction */
     bool pm;                    /* ring-3 DPMI client, else V86 (run as real mode) */
 };
 struct gcpu_event {

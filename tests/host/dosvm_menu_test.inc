@@ -194,12 +194,12 @@ static void test_menu_return_seed(void)
         if (variant == 6) cur.tf.eflags |= 1u << 14; /* current NT selects a task return */
         v->dpmi.decode_valid = false; step(v, 0x20, 0);
         uint32_t actual; CHECK(!dosvm_read(v, 0x32536, &actual, 4));
-        CHECK(actual == (variant ? image : image | V86_TF));
+        CHECK(actual == image); /* acquisition never patches the IRET image */
         CHECK(v->dpmi.return_steps == (variant ? 0 : DPMI_RETURN_STEPS) && v->monitor.vif);
         if (!variant) {
-            /* IRETD -> RET -> PUSHFD boundary, before PUSHFD saves TF. */
+            /* IRETD -> RET -> execute fault at the actual PUSHFD boundary. */
             cur.tf.cs = DPMI_SEL(901); cur.tf.eip = 0x40; cur.tf.user_esp = 0x53E;
-            cur.tf.eflags = V86_IF | V86_TF | 2; debug_dr6 = (1u << 14) | 15;
+            cur.tf.eflags = V86_IF | 2; debug_dr6 = 15; /* disabled comparisons filtered */
             step(v, 1, 0);
             CHECK(!left && !v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
             cur.tf.eip = 0x42; cur.tf.eax = V86_IF | 2; step(v, 13, 0);
@@ -230,99 +230,166 @@ static void test_menu_return_seed(void)
     cur.tf.user_esp = 0x500; cur.tf.eip = 0; step(v, 0x20, 0);
     CHECK(!v->dpmi.return_steps && !dosvm_read(v, 0x32504, &small, 2) && small == (V86_IF | 2));
     destroy(v, true); empty();
-    puts("f3-10 return seed: mixed-size epilogue/IRETD/RET, unused selector high half, flags-clean PUSHFD boundary; privileged/VM/NT/debugger/flags-save targets rejected PASS");
+    puts("f3-34 return seed: mixed-size IRETD/RET, untouched flags image, exact PUSHFD boundary; privileged/VM/NT/debugger/flags-save targets rejected PASS");
+}
+/* Seed through the production epilogue admission, then synthesize only
+ * the CPU's execute-fault frame. Whole-instruction coverage follows below. */
+static void menu_checkpoint_start(struct dosvm *v, uint32_t target)
+{
+    uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
+    const uint8_t ret = 0xC3;
+    CHECK(!dosvm_write(v, base + 0x200, &ret, 1));
+    cur.tf.eip = 0x200; cur.tf.eflags = V86_IF | 2;
+    pm_push(v, target);
+    step(v, 0x20, 0);
+    CHECK(v->dpmi.return_steps && v->dpmi.return_slot < DPMI_WATCH && !(cur.tf.eflags & V86_TF));
+    cur.tf.eip = pm_pop(v);
+}
+static void menu_checkpoint_hit(struct dosvm *v)
+{
+    CHECK(v->dpmi.return_slot < DPMI_WATCH);
+    debug_dr6 = 1u << v->dpmi.return_slot;
+    step(v, 1, 0);
+    CHECK(!left && !(cur.tf.eflags & V86_TF));
 }
 static void test_menu_return_steps(void)
 {
     struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    v->dpmi.ldt[(uint16_t)cur.tf.cs >> 3][1] |= 0x400000u;
     uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
-    uint8_t nops[DPMI_RETURN_STEPS]; memset(nops, 0x90, sizeof(nops)); CHECK(!dosvm_write(v, base + 0x300, nops, sizeof(nops)));
-    v->dpmi.return_cs = (uint16_t)cur.tf.cs; v->dpmi.return_ss = (uint16_t)cur.tf.user_ss;
-    v->dpmi.return_depth = (uint8_t)v->dpmi.depth; v->dpmi.return_client = (uint8_t)v->dpmi.clients;
-    v->dpmi.return_steps = DPMI_RETURN_STEPS;
-    for (unsigned i = 0; i < DPMI_RETURN_STEPS; i++) {
-        cur.tf.eip = 0x300 + i; cur.tf.eflags |= V86_TF; debug_dr6 = 1u << 14;
-        step(v, 1, 0);
-        CHECK(v->dpmi.return_steps == DPMI_RETURN_STEPS - i - 1 && v->monitor.vif);
-        CHECK(!!(cur.tf.eflags & V86_TF) == (i + 1 < DPMI_RETURN_STEPS));
-    }
+    uint8_t nops[DPMI_RETURN_STEPS]; memset(nops, 0x90, sizeof(nops));
+    CHECK(!dosvm_write(v, base + 0x300, nops, sizeof(nops)));
+    menu_checkpoint_start(v, 0x300); menu_checkpoint_hit(v);
+    CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif);
     static const uint8_t stops[][3] = {{0x9C}, {0x66,0x9C}, {0x9D}, {0xFA}, {0xFB}, {0x17},
         {0x8E,0xD0}, {0x0F,0xB2,0x00}, {0xCF}, {0xCD,0x31}, {0xFF,0x18},
         {0xF3,0x9C}, {0xF2,0x9C}, {0xF0,0x9C}, {0x0F,0x34}, {0x0F,0x35}, {0x0F,0x05}, {0x0F,0x07}, {0x0F,0xAA}};
     for (unsigned i = 0; i < ARRAY_SIZE(stops); i++) {
         CHECK(!dosvm_write(v, base + 0x500, stops[i], sizeof(stops[i])));
-        cur.tf.eip = 0x500; cur.tf.eflags |= V86_TF; debug_dr6 = 1u << 14;
-        v->dpmi.return_steps = 5; step(v, 1, 0);
-        CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+        menu_checkpoint_start(v, 0x500); menu_checkpoint_hit(v);
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif && v->dpmi.decode_eip == 0x500);
     }
     static const uint8_t near[][4] = {{0xFF,0xD0}, {0xFF,0xE0}, {0xFF,0x14,0x24},
         {0x0F,0xAC,0xD0,0x10}, {0x0F,0xAD,0xD0}, {0x0F,0xA4,0xD0,0x10}, {0x0F,0xA5,0xD0}, {0xF3,0xA5}};
+    static const unsigned lengths[] = {2,2,3,4,3,4,3,2};
+    const uint8_t save = 0x9C;
     for (unsigned i = 0; i < ARRAY_SIZE(near); i++) {
-        CHECK(!dosvm_write(v, base + 0x500, near[i], sizeof(near[i])));
-        cur.tf.eip = 0x500; cur.tf.eflags |= V86_TF; debug_dr6 = 1u << 14;
-        v->dpmi.return_steps = 5; step(v, 1, 0);
-        CHECK(v->dpmi.return_steps == 4 && (cur.tf.eflags & V86_TF) && v->monitor.vif);
-        const uint8_t save = 0x9C; CHECK(!dosvm_write(v, base + 0x540, &save, 1));
-        cur.tf.eip = 0x540; debug_dr6 = 1u << 14; step(v, 1, 0);
-        CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+        uint32_t end = i < 3 ? 0x540 : 0x500 + lengths[i];
+        CHECK(!dosvm_write(v, base + 0x500, near[i], lengths[i]) && !dosvm_write(v, base + end, &save, 1));
+        cur.tf.eax = 0x540;
+        pm_push(v, 0x540); /* memory operand for CALL [ESP] */
+        menu_checkpoint_start(v, 0x500); menu_checkpoint_hit(v);
+        CHECK(v->dpmi.return_steps && v->dpmi.return_eip == end && v->monitor.vif);
+        cur.tf.eip = end; menu_checkpoint_hit(v);
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif);
+        (void)pm_pop(v);
     }
-    const uint8_t nop = 0x90; CHECK(!dosvm_write(v, base + 0x610, &nop, 1));
-    v->dpmi.shadow = true; v->dpmi.shadow_cs = (uint16_t)cur.tf.cs; v->dpmi.shadow_eip = 0x600;
-    v->dpmi.return_steps = 5; cur.tf.eip = 0x610; cur.tf.eflags |= V86_TF;
-    debug_dr6 = 1u << 14; step(v, 1, 0);
-    CHECK(!v->dpmi.shadow && v->dpmi.return_steps == 4 && v->monitor.vif);
-    /* An IF-clear context never gets re-enabled by a boundary step. */
-    cur.tf.eip = 0x300; cur.tf.eflags |= V86_TF; debug_dr6 = 1u << 14;
-    v->dpmi.return_steps = 5; v->monitor.vif = false; step(v, 1, 0);
-    CHECK(!v->monitor.vif && !v->dpmi.return_steps && !(cur.tf.eflags & V86_TF));
+    /* Execute #DB at the shadowed PC has not retired that instruction. */
+    CHECK(!dosvm_write(v, base + 0x610, &save, 1));
+    menu_checkpoint_start(v, 0x610);
+    v->dpmi.shadow = true; v->dpmi.shadow_cs = (uint16_t)cur.tf.cs; v->dpmi.shadow_eip = 0x610;
+    menu_checkpoint_hit(v); CHECK(v->dpmi.shadow);
+    cur.tf.eip++; step(v, 0x20, 0); CHECK(!v->dpmi.shadow);
+    menu_checkpoint_start(v, 0x610); v->monitor.vif = false;
+    menu_checkpoint_hit(v); CHECK(!v->monitor.vif && !v->dpmi.return_steps && !v->dpmi.dr7);
     destroy(v, true); empty();
-    puts("f3-10 return steps: 512-instruction cap, stop before PUSHF/POPF/CLI/STI/INT/SS/far/system transfers, no IF forcing PASS");
+    puts("f3-34 checkpoints: 512 NOPs with one execute fault, flags/SS/far/system barriers, near indirect transfers/shifts/REP, pre-instruction STI shadow, no IF forcing PASS");
 }
 static void test_menu_return_nested(void)
 {
     struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
     uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
-    uint8_t nops[2] = {0x90, 0x90}; CHECK(!dosvm_write(v, base + 0x300, nops, sizeof(nops)));
-    cur.tf.eip = 0x300;
-    v->dpmi.return_cs = (uint16_t)cur.tf.cs; v->dpmi.return_ss = (uint16_t)cur.tf.user_ss;
-    v->dpmi.return_depth = (uint8_t)v->dpmi.depth; v->dpmi.return_client = (uint8_t)v->dpmi.clients;
-    v->dpmi.return_steps = 100; cur.tf.eflags |= V86_TF;
-    /* An actual PM IRQ preserves TF in its kernel-owned saved frame. */
+    const uint8_t save = 0x9C;
+    CHECK(!dosvm_write(v, base + 0x400, &save, 1));
+    menu_checkpoint_start(v, 0x400);
+    uint32_t parent_ip = cur.tf.eip;
+    uint16_t parent_ss = (uint16_t)cur.tf.user_ss;
     v->dpmi.vec[8] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs, .off=0x700};
     CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
-    CHECK(v->dpmi.depth == 1 && v->dpmi.return_steps == 100 && !(cur.tf.eflags & V86_TF));
+    CHECK(v->dpmi.depth == 1 && v->dpmi.return_steps && !v->dpmi.dr7 && !(cur.tf.eflags & V86_TF));
     struct v86_frame handler = cur;
-    /* A callback can reuse the client's CS/SS. It cannot cancel that
-     * client's pending step or acquire TF while guest IF is clear. */
-    cur.tf.cs = v->dpmi.return_cs; cur.tf.user_ss = v->dpmi.return_ss; cur.tf.eip = 0x300;
+    cur.tf.user_ss = parent_ss; cur.tf.eip = parent_ip;
     step(v, 0x20, 0);
-    CHECK(v->dpmi.return_steps == 100 && !(cur.tf.eflags & V86_TF) && !v->monitor.vif);
+    CHECK(v->dpmi.return_steps && !v->dpmi.dr7 && !v->monitor.vif);
     cur = handler;
     uint8_t eoi[] = {0xE6, 0x20}; cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0);
     pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
-    CHECK(!v->dpmi.depth && v->dpmi.return_steps == 100 && (cur.tf.eflags & V86_TF) && v->monitor.vif);
-    cur.tf.eip++; debug_dr6 = 1u << 14; step(v, 1, 0);
-    CHECK(v->dpmi.return_steps == 99 && (cur.tf.eflags & V86_TF) && v->monitor.vif);
-    /* A child with identical selectors also belongs to a different scope. */
-    v->dpmi.clients++; cur.tf.eflags &= ~V86_TF; v->monitor.vif = false;
-    return_boundary_seed(v, &cur);
-    CHECK(v->dpmi.return_steps == 99 && !(cur.tf.eflags & V86_TF));
-    v->dpmi.clients--; v->monitor.vif = true;
-    return_boundary_seed(v, &cur); CHECK(cur.tf.eflags & V86_TF);
+    CHECK(!v->dpmi.depth && v->dpmi.return_steps && v->dpmi.dr7 && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+    /* A child with the same selectors gets no parent slot. */
+    v->dpmi.clients++; dpmi_reload_debug(v);
+    return_boundary_seed(v, &cur); CHECK(v->dpmi.return_steps && !v->dpmi.dr7);
+    v->dpmi.clients--; dpmi_reload_debug(v);
+    menu_checkpoint_hit(v); CHECK(!v->dpmi.return_steps && !v->dpmi.dr7);
     destroy(v, true); empty();
-    /* An enabled client watchpoint must still receive its exception. */
+    /* The private B bit is consumed independently of a real client hit/BS. */
+    static const uint32_t client_causes[] = {1, 1u << 14, 1u << 13, 1u << 15};
+    for (unsigned cause = 0; cause < ARRAY_SIZE(client_causes); cause++) {
+        v = dpmi_vm(true); v86_start(); enter(v, true);
+        v->dpmi.watch[0] = (struct dpmi_watch){.used=true, .owner=1, .type=1, .size=1, .addr=0x12000};
+        dpmi_reload_debug(v);
+        v->dpmi.exc[1] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs, .off=0x700};
+        menu_checkpoint_start(v, 0x400);
+        debug_dr6 = (1u << v->dpmi.return_slot) | client_causes[cause];
+        if (cause == 1) cur.tf.eflags |= V86_TF;
+        step(v, 1, 0);
+        CHECK(!left && !v->dpmi.return_steps && v->dpmi.watch[0].hit == (cause == 0) && cur.tf.eip == 0x700 &&
+              v->dpmi.stats.exceptions == 1 && !(cur.tf.eflags & V86_TF));
+        CHECK(!!(v->dpmi.rec[0].saved.tf.eflags & V86_TF) == (cause == 1));
+        destroy(v, true); empty();
+    }
+    /* A fourth 0B00h allocation evicts the hint, never a client slot. */
     v = dpmi_vm(true); v86_start(); enter(v, true);
-    v->dpmi.return_cs = (uint16_t)cur.tf.cs; v->dpmi.return_ss = (uint16_t)cur.tf.user_ss;
-    v->dpmi.return_client = (uint8_t)v->dpmi.clients; v->dpmi.return_steps = 10;
-    v->dpmi.watch[0] = (struct dpmi_watch){.used=true, .owner=1, .type=1, .size=1};
-    v->dpmi.dr7 = 1;
-    v->dpmi.exc[1] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs, .off=0x700};
-    cur.tf.eip = 0x301; cur.tf.eflags |= V86_TF; debug_dr6 = (1u << 14) | 1;
-    step(v, 1, 0);
-    CHECK(!left && !v->dpmi.return_steps && v->dpmi.watch[0].hit && cur.tf.eip == 0x700 &&
-          v->dpmi.stats.exceptions == 1 && !(cur.tf.eflags & V86_TF));
+    menu_checkpoint_start(v, 0x400);
+    for (unsigned i = 0; i < DPMI_WATCH; i++) {
+        cur.tf.eax = 0x0B00; cur.tf.ebx = 1; cur.tf.ecx = 0x4000 + i * 4; cur.tf.edx = 0x0104;
+        CHECK(!dpmi_int31(v, &cur) && !cf() && (uint16_t)cur.tf.ebx == i);
+        CHECK(v->dpmi.watch[i].used && v->dpmi.watch[i].addr == 0x14000 + i * 4 && !v->dpmi.watch[i].hit);
+    }
+    CHECK(!v->dpmi.return_steps && (v->dpmi.dr7 & 0x55) == 0x55);
+    dosvm_task_switch(v->task);
+    for (unsigned i = 0; i < DPMI_WATCH; i++) CHECK(debug_addr[i] == 0x14000 + i * 4);
+    dosvm_task_switch(&caller); CHECK(!debug_dr7);
     destroy(v, true); empty();
-    puts("f3-10 return scope: actual IRQ saves/resumes TF, same-CS/SS nested callback and child cannot cancel or inherit parent tracking PASS");
+    puts("f3-34 return scope: IRQ/callback/child suspension, TF untouched, simultaneous client BS/watchpoint, four debugger slots, task switching PASS");
+}
+static void test_menu_checkpoint_invalid(void)
+{
+    for (unsigned variant = 0; variant < 7; variant++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v,true);
+        uint32_t base = seg_base(v,(uint16_t)cur.tf.cs);
+        const uint8_t save = 0x9C;
+        CHECK(!dosvm_write(v,base+0x400,&save,1));
+        menu_checkpoint_start(v,0x400);
+        if (variant == 0) v->dpmi.ldt[(uint16_t)cur.tf.cs >> 3][0] ^= 0x10000; /* code base */
+        if (variant == 1) v->dpmi.ldt[(uint16_t)cur.tf.user_ss >> 3][0] ^= 1; /* stack limit */
+        if (variant == 2) cur.tf.user_ss = (uint16_t)cur.tf.ds;
+        if (variant == 3) cur.tf.eflags |= V86_TF;
+        if (variant == 4) cur.tf.eflags |= 1u << 14;
+        if (variant == 5) dpmi_set_pm(v,false); /* raw mode switch without a nesting record */
+        if (variant == 6) v->dpmi.clients = 0;
+        return_resume(v,&cur);
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif);
+        CHECK(!!(cur.tf.eflags & V86_TF) == (variant == 3));
+        if (variant == 6) v->dpmi.clients = 1;
+        destroy(v,true); empty();
+    }
+    /* Acquisition may not hide the CPU's fault vector/error/PC. */
+    static const unsigned vectors[] = {0,6,11,12,13,14};
+    for (unsigned i = 0; i < ARRAY_SIZE(vectors); i++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v,true);
+        menu_checkpoint_start(v,0x400);
+        unsigned vector = vectors[i];
+        uint32_t err = vector >= 10 ? 0x87 : 0;
+        v->dpmi.exc[vector] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs,.off=0x700};
+        cur.tf.eip = 0x300;
+        fake_cr2 = 0xE0000000u; /* outside the VGA device-resolution path */
+        step(v,vector,err);
+        CHECK(!left && !v->dpmi.return_steps && !v->dpmi.dr7 && v->dpmi.depth == 1 &&
+              cur.tf.eip == 0x700 && v->dpmi.rec[0].saved.tf.eip == 0x300 &&
+              v->dpmi.rec[0].saved.tf.vector == vector && v->dpmi.rec[0].saved.tf.err == err);
+        destroy(v,true); empty();
+    }
+    puts("f3-34 invalidation: code/stack descriptor, SS, TF/NT, raw mode, client lifetime; DE/UD/NP/SS/GP/PF preserved PASS");
 }
 static void test_menu_near_return(void)
 {
@@ -350,10 +417,10 @@ static void test_menu_near_return(void)
         if (variant == 5) cur.tf.eflags |= V86_TF;
         v->dpmi.decode_valid = false; step(v, 0x20, 0);
         CHECK(v->dpmi.return_steps == (variant ? 0 : DPMI_RETURN_STEPS));
-        CHECK(!!(cur.tf.eflags & V86_TF) == (!variant || variant == 5));
+        CHECK(!!(cur.tf.eflags & V86_TF) == (variant == 5));
         if (!variant) {
             cur.tf.eip = 0x400; cur.tf.user_esp += consumed + w + (bits ? 12 : 2);
-            debug_dr6 = 1u << 14; step(v, 1, 0);
+            debug_dr6 = 1u << v->dpmi.return_slot; step(v, 1, 0);
             CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
             cur.tf.eip = 0x402; cur.tf.eax = V86_IF | 2; step(v, 13, 0);
             CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
@@ -362,13 +429,57 @@ static void test_menu_near_return(void)
             cur.tf.eip = 0x100; cur.tf.user_esp = 0x600; cur.tf.eflags |= V86_TF;
             debug_dr6 = 1u << 14; step(v, 1, 0);
             CHECK(!v->dpmi.if_armed && v->monitor.vif && v->dpmi.return_steps == DPMI_RETURN_STEPS &&
-                  (cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
+                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
         }
         destroy(v, true); empty();
     }
     puts("f3-10 near returns: 16/32-bit RET cleanup, DMX register-value epilogue after flags restore, stop before next save; SP assignment/memory store/bad target/IF-clear/debugger refused PASS");
 }
 #ifdef CIUKI_DOSVM_GUEST_CPU
+static void test_menu_checkpoint_cpu(void)
+{
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    for (unsigned bits = 0; bits < 2; bits++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        unsigned w = bits ? 4 : 2;
+        client_desc(v, 900, 0x30000, 0xFFFF, 0xFA, bits ? 0x40 : 0);
+        client_desc(v, 902, 0x32000, 0xFFFF, 0xF2, bits ? 0x40 : 0);
+        cur.tf.cs = DPMI_SEL(900); cur.tf.user_ss = cur.tf.ds = cur.tf.es = DPMI_SEL(902);
+        cur.tf.user_esp = 0x500; cur.tf.eip = 0x100; cur.tf.eflags = V86_IF | 2;
+        cur.tf.eax = 0x1234; cur.tf.ebx = cur.tf.edi = 0x700; cur.tf.ebp = 0x888;
+        const uint8_t ret = 0xC3;
+        const uint8_t copier[] = {0x55,0x89,0xE5,0x89,0x07,0xC9,0xC2,0x04,0x00};
+        const uint8_t save[] = {0x9C,0x58,0xFA,0x50,0x9D,0x90};
+        uint32_t target = 0x200, caller_ip = 0x300;
+        CHECK(!dosvm_write(v,0x30100,&ret,1) && !dosvm_write(v,0x30200,copier,sizeof(copier)) &&
+              !dosvm_write(v,0x30300,save,sizeof(save)) && !dosvm_write(v,0x32500,&target,w) &&
+              !dosvm_write(v,0x32500+w,&caller_ip,w));
+        step(v,0x20,0);
+        CHECK(v->dpmi.return_steps && !(cur.tf.eflags & V86_TF));
+        static const unsigned endpoints[] = {0x200,0x206,0x300};
+        for (unsigned i = 0; i < ARRAY_SIZE(endpoints); i++) {
+            struct gcpu_event ev;
+            CHECK(if_cpu_run(v,&ev) == GCPU_TRAP && ev.vector == 1 && ev.fault &&
+                  ev.dr6 == (1u << v->dpmi.return_slot) && !(cur.tf.eflags & V86_TF));
+            CHECK(cur.tf.eip == endpoints[i] && ev.executed == (i == 1 ? 4u : 1u));
+            debug_dr6 = ev.dr6; step(v,1,0);
+            CHECK(!left && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+        }
+        uint32_t stored = 0;
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && cur.tf.ebp == 0x888 &&
+              cur.tf.user_esp == 0x500 + 2*w + 4 && !dosvm_read(v,0x32700,&stored,w) && stored == 0x1234);
+        struct gcpu_event ev;
+        CHECK(if_cpu_run(v,&ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x302);
+        step(v,13,0); CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+        CHECK(if_cpu_run(v,&ev) == GCPU_TRAP && ev.vector == 1 && ev.dr6 == (1u << 14));
+        debug_dr6 = ev.dr6; step(v,1,0);
+        CHECK(!left && !v->dpmi.if_armed && v->monitor.vif && !(cur.tf.eflags & V86_TF));
+        destroy(v,true); empty();
+    }
+    gcpu_done(); if_cpu_vm = 0;
+    puts("f3-34 CPU: 16/32-bit real RET, result store, LEAVE/RET cleanup, three execute faults, PUSHF/CLI/POPF virtual-IF restoration PASS");
+}
 static void test_menu_doom_cli_seeds(void)
 {
     /* Byte-identical slices from the pinned DOOM.EXE, before LE relocation.
@@ -423,8 +534,10 @@ static void test_menu(void)
     test_menu_quiet_records(); test_menu_heartbeat(); test_menu_vga_dirty_repeat(); test_menu_pm_devices();
     test_menu_halted_heartbeat();
     test_menu_return_seed(); test_menu_return_steps(); test_menu_return_nested();
+    test_menu_checkpoint_invalid();
     test_menu_near_return();
 #ifdef CIUKI_DOSVM_GUEST_CPU
+    test_menu_checkpoint_cpu();
     test_menu_doom_cli_seeds();
 #endif
 }
