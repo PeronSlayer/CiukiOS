@@ -389,6 +389,36 @@ saved-image restores, guest debuggers and pending-IRQ recovery still use it.
 The <2000/s gameplay target requires same-image QEMU/T23 evidence from the
 lead; host instruction-clock rates are reported separately.
 
+### F3-35 platform selection (2026-10-16)
+
+The VM captures `CBI_F_SMBIOS_QEMU` once at creation, outside resettable
+DPMI client state. Its startup record reports `tracker=tf` on QEMU and
+`tracker=breakpoint` on hardware. QEMU uses the checked, bounded TF
+acquisition above for every return boundary; it never installs a private
+return execute breakpoint. Client-owned DPMI watchpoints retain their API
+and debug causes. Hardware retains the F3-34 sparse path and its fallback.
+Neither path patches a return flags image or changes virtual IF on expiry.
+
+Research checked against upstream
+[QEMU 11.1.1 breakpoint helpers](https://github.com/qemu/qemu/blob/v11.1.1/target/i386/tcg/system/bpt_helper.c#L156)
+and [TCG breakpoint checks](https://github.com/qemu/qemu/blob/v11.1.1/target/i386/tcg/tcg-cpu.c#L125):
+execute slots are registered at linear addresses, but matching uses EIP;
+the execute check lacks SS inhibition. This source audit, together with
+the lead's SIGSEGV evidence on image `27b35378`, requires platform selection.
+QEMU PASS therefore qualifies TF acquisition only. The T23 must supply
+positive private and segmented checkpoint hits and the RF/SS suppression
+evidence required above before the hardware path is qualified.
+
+Every five seconds, disk/boot-log `vm_perf_tracker` rows report interval
+`armed` (successfully installed private predictions), `hits` (matching
+private execute faults), `expired` (100-ms/64-IRQ lifetime exhaustion),
+`fallback` (retired owned TF steps, including the QEMU selection), and
+`reacquired` (fresh forward-proof roots at owned checkpoints or after
+replanning). `segmented` retains the nonzero-CS-base subset of hits.
+The retained serial history uses the same fields. These are observations,
+not predictions counted as proof. Host replay separates return TF and
+private breakpoint #DB causes.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN

@@ -132,7 +132,7 @@ int main(void)
             CHECK(vm.perf.sample[0].top_port[0].count==dense);
             CHECK(vm.perf.sample[0].top_vector[0].count==dense);
             if (dense) {
-                CHECK(rows==40 && vm.perf.sample[0].top_port[0].id==255 &&
+                CHECK(rows==41 && vm.perf.sample[0].top_port[0].id==255 &&
                       vm.perf.sample[0].top_vector[0].id==767);
                 CHECK(blocks==sparse_blocks && access_bytes==sparse_access && copy_bytes==sparse_copy);
                 printf("f3-31 IRQ work phase=%u sparse=dense: blocks=%u scalar_bytes=%u copied_bytes=%u cleared_bytes=%u divisions=%u PASS\n",

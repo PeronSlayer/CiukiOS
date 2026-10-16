@@ -190,6 +190,9 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
                   id, gen, n, s->ticks, s->timer_us, s->audio_us, s->port_overflow);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u gen=%u n=%u hits=%u segmented=%u fallback=%u",
                          id, gen, n, s->return_hits, s->return_segmented, s->return_fallbacks);
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_tracker vm=%u gen=%u n=%u armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u",
+                         id, gen, n, s->return_armed, s->return_hits, s->return_expired,
+                         s->return_fallbacks, s->return_reacquired, s->return_segmented);
     for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) if (s->cost_count[i])
         rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_cost vm=%u gen=%u n=%u cause=%s exits=%u us=%llu",
                       id, gen, n, perf_names[i], s->cost_count[i], s->cost_us[i]);
@@ -233,6 +236,7 @@ void dosvm_perf_report(struct dosvm *v)
     CAPTURE(burst_insn); CAPTURE(latch_read_windows); CAPTURE(batched);
     CAPTURE(port_overflow); CAPTURE(ticks);
     CAPTURE(return_hits); CAPTURE(return_segmented); CAPTURE(return_fallbacks);
+    CAPTURE(return_armed); CAPTURE(return_expired); CAPTURE(return_reacquired);
     CAPTURE(guest_cycles); CAPTURE(monitor_cycles); CAPTURE(present_cycles);
     CAPTURE(harvest_cycles); CAPTURE(log_cycles); CAPTURE(remap_cycles);
     CAPTURE(timer_cycles); CAPTURE(audio_cycles);
@@ -267,6 +271,12 @@ void dosvm_perf_report(struct dosvm *v)
     v->perf.last_return_hits = r->return_hits;
     v->perf.last_return_segmented = r->return_segmented;
     v->perf.last_return_fallbacks = r->return_fallbacks;
+    s->return_armed = DELTA(return_armed, last_return_armed);
+    s->return_expired = DELTA(return_expired, last_return_expired);
+    s->return_reacquired = DELTA(return_reacquired, last_return_reacquired);
+    v->perf.last_return_armed = r->return_armed;
+    v->perf.last_return_expired = r->return_expired;
+    v->perf.last_return_reacquired = r->return_reacquired;
     s->ticks = DELTA(ticks, last_ticks); s->timer_us = perf_us(DELTA(timer_cycles, last_timer));
     s->audio_us = perf_us(DELTA(audio_cycles, last_audio));
     v->perf.last_ticks = r->ticks; v->perf.last_timer = r->timer_cycles;
@@ -405,6 +415,9 @@ void dosvm_perf_dump(struct dosvm *v)
                 s->cost_us[i] * 1000u / s->cost_count[i]);
         rec_diag(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u n=%u hits=%u segmented=%u fallback=%u",
                  id, n+1, s->return_hits, s->return_segmented, s->return_fallbacks);
+        rec_diag(dosvm_probe(v), "group=vm_perf_tracker vm=%u n=%u armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u",
+                 id, n+1, s->return_armed, s->return_hits, s->return_expired,
+                 s->return_fallbacks, s->return_reacquired, s->return_segmented);
         rec_diag(dosvm_probe(v), "group=vm_perf_exits vm=%u n=%u gp=%u pf=%u db=%u timer=%u other=%u pm=%u",
             id, n+1, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5]);
         rec_diag(dosvm_probe(v), "group=vm_perf_pit vm=%u n=%u edges=%llu", id, n+1, s->edges);

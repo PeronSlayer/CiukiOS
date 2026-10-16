@@ -61,6 +61,7 @@ enum dosvm_vga_reg { DOSVM_VGA_SR_INDEX, DOSVM_VGA_SR_MASK, DOSVM_VGA_SR_OTHER,
     DOSVM_VGA_CRTC, DOSVM_VGA_DAC, DOSVM_VGA_OTHER, DOSVM_VGA_REGS };
 struct dosvm_perf_sample {
     uint32_t return_hits, return_segmented, return_fallbacks;
+    uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
@@ -79,6 +80,7 @@ struct dosvm_perf_sample {
  * the reporter reads this bank; producers use the other bank after IF restore. */
 struct dosvm_perf_raw {
     uint32_t return_hits, return_segmented, return_fallbacks;
+    uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
@@ -108,6 +110,7 @@ struct dosvm {
     struct v86_frame frame;  /* working copy of the trapped frame (f3-04) */
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
+    bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */
     struct vm_memory memory;
     struct dosvm_pit pit;
     struct dosvm_kbd kbd;
@@ -207,7 +210,9 @@ struct dosvm {
         uint64_t timer_cycles, audio_cycles, last_timer, last_audio;
         uint32_t cost_count[DOSVM_COST_COUNT], last_cost_count[DOSVM_COST_COUNT];
         uint32_t return_hits, return_segmented, return_fallbacks;
+        uint32_t return_armed, return_expired, return_reacquired;
         uint32_t last_return_hits, last_return_segmented, last_return_fallbacks;
+        uint32_t last_return_armed, last_return_expired, last_return_reacquired;
         uint32_t batched, last_batched;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
         uint32_t last_exits[6], last_irqs[16];
