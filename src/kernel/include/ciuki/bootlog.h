@@ -23,6 +23,8 @@
 #define BOOTLOG_PREVIOUS "C:/SYSTEM/LOGS/BOOT1.LOG"
 #define BOOTLOG_OLDEST "C:/SYSTEM/LOGS/BOOT2.LOG"
 #define BOOTLOG_SYNC_TIMEOUT_MS 2000u
+/* Mount-crash's runner deadline is 300 seconds, including the cut workload. */
+#define BOOTLOG_PAUSE_MAX_MS 300000u
 struct vfs;
 struct bootlog_stats {
     uint32_t size, queued, dropped, rotations, qualification_sequence, first_write_sequence;
@@ -45,6 +47,14 @@ void bootlog_capture_verbose(const char *, size_t);
 int bootlog_activate(struct vfs *, bool qualified, uint32_t sequence);
 int bootlog_drain(void); /* storage task: bounded device-paced turn */
 bool bootlog_due(uint32_t now); /* RAM only; includes pending metadata/sync */
+/* Single-owner, non-nesting drain exclusion; capture continues unchanged.
+ * RAM only. -EBUSY means a drain/shutdown or another pause owns the sink;
+ * success guarantees no in-flight drain. 0 or >MAX durations are invalid.
+ * due/drain/shutdown automatically release an expired pause (clock wrap safe).
+ * The owner must resume on every returning path, with no VFS locks held
+ * while retrying acquisition. */
+int bootlog_pause_drain(uint32_t timeout_ms);
+void bootlog_resume_drain(void);
 /* Thread context, with no storage or USB reservation held. Request a captured
  * byte watermark from the storage task and wait with cancellation/deadline;
  * the caller never performs disk I/O. queued includes a pending commit token. */

@@ -18,6 +18,9 @@ static unsigned checks, records, max_record;
 static unsigned fixture_present, fixture_absent;
 static unsigned fat_read_not_run, fat_read_terminal_not_run;
 static bool cut_probe_after_arm;
+static bool exercise_cut_log, cut_log_armed;
+static unsigned cut_log_turns;
+static uint64_t cut_log_calls, cut_log_writes;
 static const char *stray_probe, *stray_record;
 static unsigned stray_drive = 2;
 static uint64_t writes_before_probe, writes_during, sweep_writes;
@@ -63,6 +66,25 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...) {
     }
     if (!strcmp(probe,"mount-crash") && !strcmp(event,"ARM") && cut_probe_after_arm) {
         media[0].cut_at=media[0].events+4;
+    }
+    if (exercise_cut_log && !strcmp(probe,"mount-crash") && fmt &&
+        (!strcmp(event,"ARM") || !strncmp(line,"case=cut ",9))) {
+        struct bootlog_stats log;
+        bootlog_snapshot(&log);CHECK(log.active);
+        if (!strcmp(event,"ARM")) {
+            CHECK(!cut_log_armed);cut_log_armed=true;
+            cut_log_calls=log.storage_calls;cut_log_writes=log.writes;
+        }
+        CHECK(cut_log_armed);
+        bootlog_capture_ring(line,(size_t)n);
+        /* Schedule the real worker at ARM and after every traced request,
+         * including failed writes/flushes. It must perform no logger I/O. */
+        CHECK(!bootlog_due(fs_now_ms()));
+        CHECK(bootlog_drain()==-FS_EBUSY);
+        bootlog_snapshot(&log);
+        CHECK(log.storage_calls==cut_log_calls && log.writes==cut_log_writes);
+        CHECK(log.ring_queued && !log.dropped_protected);
+        cut_log_turns++;
     }
     if (!strcmp(probe,"fat-read") && !strcmp(event,"DATA") && !strncmp(line,"case=fixture ",13)) {
         unsigned disk; char status[16];
@@ -376,6 +398,33 @@ static void mount_probe_tests(void) {
         stop(s,true); fake_reset(f); reset();
     }
     fake_reset(f);
+    /* Both the complete workload (cut missed) and failed I/O must release
+     * exclusion. Production logger + real FAT, with a worker turn at ARM
+     * and each cut record; no stub of pause/due/drain is involved. */
+    for (unsigned fail=0;fail<2;fail++) {
+        struct storage *s=start();OK(storage_enable_write(s,2));
+        int h=vfs_open(&table,"C:/F109CUT.ARM",VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,0,0);
+        CHECK(h>=0);OK(vfs_close(&table,h));stop(s,true);
+        s=start();OK(storage_enable_write(s,2));
+        OK(bootlog_activate(&s->vfs,true,s->sequence));
+        exercise_cut_log=true;cut_log_armed=false;cut_log_turns=0;
+        cut_probe_after_arm=!!fail;
+        CHECK(probe_mount_crash()!=0 && media[0].cut==!!fail);
+        exercise_cut_log=cut_probe_after_arm=false;
+        CHECK(cut_log_armed && cut_log_turns>2);
+        OK(bootlog_pause_drain(100));bootlog_resume_drain(); /* resumed on return */
+        if (!fail) {
+            CHECK(bootlog_try_sync()==-FS_EAGAIN && bootlog_due(fs_now_ms()));
+            OK(bootlog_drain());struct bootlog_stats log;bootlog_snapshot(&log);
+            CHECK(log.writes>cut_log_writes && !log.dropped_protected);
+            OK(bootlog_shutdown());
+            stop(s,true);
+        } else {
+            CHECK(bootlog_shutdown()==-FS_EIO);stop(s,false);fake_power_loss(&media[0]);
+        }
+        reset();
+    }
+    puts("PASS mount-crash log exclusion: zero log writes/storage calls from ARM through every cut, protected capture, resume after completed/failed workload");
     /* Driver failure stands in for termination at an issued sector, followed
      * by loss of all caches. Actual QEMU process termination remains T3. */
     struct storage *s=start(); OK(storage_enable_write(s,2));

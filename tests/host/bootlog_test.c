@@ -494,4 +494,48 @@ static void pressure_watermarks(void)
     puts("PASS bootlog watermarks: out-of-order verbose evictions cannot retire older protected bytes; shutdown drains beyond pending sync target");
 }
 
-int main(void) { class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+static void pause_during_commit(void)
+{
+    CHECK(bootlog_pause_drain(100)==-FS_EBUSY);
+    commit_hook=NULL;
+}
+static void bounded_pause(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    unsigned before=calls;
+    CHECK(bootlog_pause_drain(0)==-FS_EINVAL);
+    CHECK(bootlog_pause_drain(BOOTLOG_PAUSE_MAX_MS+1)==-FS_EINVAL);
+    CHECK(bootlog_pause_drain(UINT32_MAX)==-FS_EINVAL);
+    CHECK(!bootlog_pause_drain(100));
+    bootlog_capture_ring("ARM\n",4);bootlog_capture_ring("cut\n",4);
+    CHECK(snapshot().ring_queued==8 && !snapshot().dropped_protected);
+    CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    CHECK(!bootlog_due(model_now) && bootlog_drain()==-FS_EBUSY);
+    CHECK(bootlog_shutdown()==-FS_EBUSY && calls==before);
+    model_now=99;
+    CHECK(bootlog_pause_drain(100)==-FS_EBUSY); /* no deadline extension */
+    CHECK(!bootlog_due(model_now) && bootlog_drain()==-FS_EBUSY && calls==before);
+    model_now=100;CHECK(bootlog_due(model_now));
+    commit_hook=pause_during_commit;
+    CHECK(!bootlog_drain() && commits==1 && !snapshot().queued);
+    CHECK(!memcmp(disk+BOOTLOG_PROTECTED,"ARM\ncut\n",8));
+    CHECK(!bootlog_pause_drain(BOOTLOG_PAUSE_MAX_MS));
+    bootlog_capture_ring("resumed",7);CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    before=calls;CHECK(!bootlog_due(model_now) && bootlog_drain()==-FS_EBUSY && calls==before);
+    bootlog_resume_drain();bootlog_resume_drain();
+    CHECK(bootlog_due(model_now) && !bootlog_drain() && commits==2);
+    model_now=UINT32_MAX-50;
+    CHECK(!bootlog_pause_drain(100));bootlog_capture_ring("wrap",4);
+    CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    CHECK(!bootlog_due(model_now-1)); /* worker sampled before pause began */
+    model_now=48;CHECK(!bootlog_due(model_now) && bootlog_drain()==-FS_EBUSY);
+    model_now=49;CHECK(bootlog_due(model_now) && !bootlog_drain());
+    CHECK(!bootlog_pause_drain(100));bootlog_capture_ring("shutdown",8);
+    model_now+=100;CHECK(!bootlog_shutdown()); /* expiry also releases shutdown */
+    reset_model();CHECK(!bootlog_pause_drain(100));bootlog_reset();
+    CHECK(!bootlog_activate(&fs,true,1));bootlog_capture_ring("reset",5);
+    CHECK(bootlog_due(model_now) && !bootlog_drain());CHECK(!bootlog_shutdown());
+    puts("PASS bootlog pause: zero I/O with protected records/sync pending, in-flight exclusion, non-nesting, explicit resume, deadline/clock wrap, shutdown and reset");
+}
+
+int main(void) { bounded_pause();class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

@@ -585,6 +585,23 @@ int probe_cache(void)
 }
 
 static unsigned cut_index, cut_barrier;
+static int pause_crash_log(void)
+{
+    uint32_t start=fs_now_ms();
+    /* A storage turn may already be writing. Wait without VFS ownership;
+     * never publish ARM until exclusion covers in-flight work as well. */
+    for (unsigned turn=0;turn<BOOTLOG_SYNC_TIMEOUT_MS;turn++) {
+        int e=bootlog_pause_drain(BOOTLOG_PAUSE_MAX_MS);
+        if (e!=-FS_EBUSY) return e;
+        if ((uint32_t)(fs_now_ms()-start)>=BOOTLOG_SYNC_TIMEOUT_MS) break;
+#ifndef FS_HOST
+        task_sleep_ms(1);
+#else
+        struct timespec delay={.tv_nsec=1000000};nanosleep(&delay,0);
+#endif
+    }
+    return -FS_EBUSY;
+}
 static void cut_trace(struct storage_volume *v, char action, uint64_t lba, int result)
 {
     if (action == 'B' && !result) cut_barrier++;
@@ -660,6 +677,7 @@ int probe_mount_crash(void)
             if (v->fat.ro_reasons & FAT_RO_CORRUPT) result = -FS_EUCLEAN;
         } else {
             e = storage_enable_write(s, 2);
+            if (!e) e = pause_crash_log();
             if (!e) {
                 cut_index = cut_barrier = 0; v->trace = cut_trace;
                 rec_emit(probe, "ARM", "action=crash_cut marker=F109CUT.ARM workload=replace_rename bytes=8192");
@@ -667,6 +685,7 @@ int probe_mount_crash(void)
                 if (!e) e = patch_file(&probe_table, "C:/F109CUT.BIN", 8192);
                 if (!e) e = vfs_rename(&probe_table, "C:/F109CUT.BIN", "C:/F109END.BIN");
                 v->trace = 0;
+                bootlog_resume_drain();
                 rec_emit(probe, "DATA", "case=cut_missed result=%d status=not_run", e);
                 result = e ? e : -FS_EIO;
             } else result = e;
