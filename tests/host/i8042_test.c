@@ -213,13 +213,16 @@ static void outb(uint16_t port, uint8_t data)
     if (port == 0x60 || port == 0x64) fake_write(&hw, port, data);
 }
 
-void pic_mask(unsigned irq) { CHECK(irq < 16); host_masked[irq] = true; pic_changes++; }
+void pic_mask(unsigned irq)
+{
+    CHECK(irq < 16);
+    if (!host_masked[irq]) { host_masked[irq] = true; pic_changes++; }
+}
 void pic_unmask(unsigned irq)
 {
     CHECK(irq < 16 && host_handlers[irq]);
-    host_masked[irq] = false;
-    if (irq >= 8) host_masked[2] = false;
-    pic_changes++;
+    if (irq >= 8 && host_masked[2]) { host_masked[2] = false; pic_changes++; }
+    if (host_masked[irq]) { host_masked[irq] = false; pic_changes++; }
 }
 void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); host_handlers[irq] = h; }
 void klog(const char *fmt, ...)
@@ -605,6 +608,8 @@ static void test_policy_and_lifecycle(void)
     CHECK(!(hw.config & 0x70) && (hw.config & 7) == 7 && !hw.resets && hw.selftests == 1);
     CHECK(s.last_elapsed_ms <= I8042_SETUP_MS && !host_masked[1] && !host_masked[12] && !host_masked[2]);
     CHECK(host_handlers[1] && host_handlers[12]);
+    CHECK(pic_changes == 3);          /* IRQ1, cascade and IRQ12, once */
+    unsigned pic_before = pic_changes;
     for (unsigned i = 0; i < registry_count(); i++) {
         const struct resource *r = registry_get(i);
         if (!strcmp(r->owner, "i8042")) { owners++; CHECK(r->state == RS_ACTIVE && !r->shareable); }
@@ -631,7 +636,12 @@ static void test_policy_and_lifecycle(void)
     CHECK(input_read(&event) && event.value == 0 && !input_read(&event));
     hw.ack_delay = 1;
     hw.irq_reply = true;
-    CHECK(device_command(&native, false, 0xF4, hw.now + 100) == 0);
+    for (unsigned i = 0; i < 16; i++) {
+        kmutex_lock(&native.mutex);
+        CHECK(device_command(&native, i & 1, 0xF4, hw.now + 100) == 0);
+        kmutex_unlock(&native.mutex);
+        CHECK(pic_changes == pic_before && (hw.config & IRQ_BITS) == IRQ_BITS);
+    }
     CHECK(!native.stats.pending_command && !hw.count && !input_read(&event));
     hw.ack_delay = 0;
     hw.irq_reply = false;
@@ -643,13 +653,16 @@ static void test_policy_and_lifecycle(void)
     res[native.handle[0]].generation--;
     CHECK(i8042_stop(s.generation) == 0);
     input_devices_snapshot(&devices);CHECK(!devices.ps2 && !devices.firmware && !devices.usb);
-    CHECK((hw.config & 0x33) == 0x30 && host_masked[1] && host_masked[12]);
+    CHECK((hw.config & 0x33) == 0x30 && !host_masked[1] && !host_masked[12]);
+    CHECK(pic_changes == pic_before);
     CHECK(!host_handlers[1] && !host_handlers[12] && !hw.count && !hw.resets);
     for (unsigned i = 0; i < registry_count(); i++)
         if (!strcmp(registry_get(i)->owner, "i8042")) CHECK(registry_get(i)->state == RS_RELEASED);
     CHECK(i8042_init() == 0);
     i8042_snapshot(&s);
     CHECK(s.generation && i8042_stop(s.generation) == 0);
+    CHECK(pic_changes == pic_before); /* no OUT on reactivation either */
+    puts("i8042 PIC: IRQ/data/16 keyboard+AUX commands/clean stop+restart=0 writes after init; command byte IRQ gates verified PASS");
     printf("i8042 policy/claims/IRQ/quiescence: PASS\n");
 }
 
@@ -688,9 +701,12 @@ static void test_native_failures(void)
     CHECK(i8042_init() == 0);
     i8042_snapshot(&s);
     hw.stop_stuck = true;
+    unsigned pic_before = pic_changes;
     CHECK(i8042_stop(s.generation) == -I8042_ETIMEDOUT);
     i8042_snapshot(&s);
     CHECK(s.quarantined && !host_handlers[1] && !host_handlers[12]);
+    CHECK(host_masked[1] && host_masked[12] && pic_changes == pic_before + 2);
+    CHECK(i8042_init() == -I8042_EIO && pic_changes == pic_before + 2);
     printf("i8042 native setup/timeout/quarantine: PASS\n");
 }
 

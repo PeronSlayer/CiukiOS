@@ -209,6 +209,24 @@ struct fake {
 static struct fake *running;
 static void dma_bus_start(struct fake *f);
 
+static void fake_native_irq(struct trap_frame *tf)
+{
+    CHECK(tf->vector == 0x20 + running->channel.irq);
+    ata_channel_irq(&running->channel);
+}
+static void native_attach(struct fake *f, unsigned index)
+{
+    registry_init();
+    f->channel.base = index ? 0x170 : 0x1f0;
+    f->channel.control = index ? 0x376 : 0x3f6;
+    f->channel.irq = index ? 15 : 14;
+    CHECK(!claim_channel(&f->channel, index));
+    f->channel.native = true;
+    device_control(&f->channel, ATA_NIEN);
+    irq_set_handler(f->channel.irq, fake_native_irq);
+    pic_unmask(f->channel.irq);
+}
+
 static uint16_t sector_word(uint64_t lba, unsigned word)
 {
     return (uint16_t)((lba * 257 + word * 17) ^ 0xa53c);
@@ -220,7 +238,11 @@ static void deliver(struct fake *f)
     f->delivered++;
     uint32_t saved = flags;
     flags = 0;
-    ata_channel_irq(&f->channel);
+    if (f->channel.native) {
+        CHECK(!masked[f->channel.irq] && handlers[f->channel.irq]);
+        struct trap_frame tf = { .vector = 0x20 + f->channel.irq };
+        handlers[f->channel.irq](&tf);
+    } else ata_channel_irq(&f->channel);
     flags = saved;
 }
 static void interrupt(struct fake *f)
@@ -764,6 +786,8 @@ static void test_claims(void)
         CHECK(r && r->state == RS_CLAIMED && !strcmp(r->owner, "ata0") && r->generation);
     }
     f.channel.native = true;
+    irq_set_handler(14, fake_native_irq);
+    pic_unmask(14);
     CHECK(ata_channel_discover(&f.channel) == 1);
     for (unsigned i = 0; i < 3; i++) CHECK(registry_activate(f.channel.claims[i], f.channel.generations[i]) == 0);
     f.fault = BUSY;
@@ -829,6 +853,75 @@ static void test_storage_cache_faults(void)
 }
 #include "atapi_test.inc"
 #include "ata_dma_test.inc"
+static void test_constant_pic_masks(void)
+{
+    uint8_t *data = malloc(257 * 512), *expected = malloc(257 * 512);
+    CHECK(data && expected);
+    for (unsigned index = 0; index < 2; index++) for (unsigned ext = 0; ext < 2; ext++)
+        for (unsigned mode = 0; mode < 3; mode++) {
+            struct fake f;
+            if (mode == 2) dma_fresh(&f, ext);
+            else fresh(&f, ext);
+            if (mode == 1) f.identify[0][47] = 16;
+            native_attach(&f, index);
+            unsigned before = masks + unmasks;
+            CHECK(ata_channel_discover(&f.channel) == 1);
+            for (unsigned i = 0; i < 3; i++)
+                CHECK(!registry_activate(f.channel.claims[i], f.channel.generations[i]));
+            CHECK(masks + unmasks == before && !masked[f.channel.irq] && (f.control & ATA_NIEN));
+            struct blkdev *b = &f.channel.devices[0].block;
+            const unsigned counts[] = { 1, 2, 257 };
+            for (unsigned i = 0; i < ARRAY_SIZE(counts); i++) {
+                unsigned n = counts[i];
+                f.immediate = (i & 1) != 0;
+                fill(expected, 7, n);
+                CHECK(!b->read(b, 7, n, data) && !memcmp(data, expected, n * 512));
+                CHECK(!b->write(b, 7, n, data) && !b->flush(b));
+                CHECK((f.control & ATA_NIEN) && !f.channel.active && !masked[f.channel.irq]);
+                CHECK(masks + unmasks == before);
+                /* A late edge is acknowledged without waking a new request. */
+                uint32_t sequence = f.channel.irq_sequence;
+                f.pending = true;
+                struct trap_frame tf = { .vector = 0x20 + f.channel.irq };
+                fake_native_irq(&tf);
+                CHECK(!f.pending && f.channel.irq_sequence == sequence && masks + unmasks == before);
+            }
+            CHECK(ata_channel_idle(&f.channel) && (f.control & ATA_NIEN));
+            CHECK(!handlers[f.channel.irq] && !masked[f.channel.irq] && masks + unmasks == before);
+        }
+    /* Polled packets share the same open line with a native ATA peer. */
+    struct packet_fake f;
+    packet_fresh(&f, 12);
+    native_attach(&f.disk, 0);
+    for (unsigned i = 0; i < 3; i++)
+        CHECK(!registry_activate(f.disk.channel.claims[i], f.disk.channel.generations[i]));
+    unsigned before = masks + unmasks;
+    f.responses = true;
+    struct ata_device *d = &f.disk.channel.devices[1];
+    for (unsigned i = 0; i < 8; i++) {
+        CHECK(!atapi_ready(d) && !d->block.read(&d->block, 7, 1, data));
+        CHECK((f.disk.control & ATA_NIEN) && masks + unmasks == before);
+        CHECK(!f.disk.channel.devices[0].block.read(&f.disk.channel.devices[0].block, 0, 1, data));
+        CHECK(masks + unmasks == before && !masked[14]);
+    }
+    f.disk.fault = BUSY;
+    CHECK(f.disk.channel.devices[0].block.read(&f.disk.channel.devices[0].block, 0, 1, data) == -FS_EIO);
+    CHECK(masked[14] && masks + unmasks == before + 1);
+    before = masks + unmasks;
+    CHECK(f.disk.channel.devices[0].block.read(&f.disk.channel.devices[0].block, 0, 1, data) == -FS_EQUARANTINED);
+    CHECK(masks + unmasks == before);
+    /* A failed clean-release proof is exceptional containment, not a
+     * per-request mask. Its channel cannot accept another command. */
+    struct fake busy;
+    fresh(&busy, false);
+    native_attach(&busy, 1);
+    before = masks + unmasks;
+    busy.status = ATA_BSY;
+    CHECK(!ata_channel_idle(&busy.channel) && (busy.control & ATA_NIEN) && masked[15]);
+    CHECK(masks + unmasks == before + 1 && busy.channel.quiescing);
+    free(data); free(expected);
+    puts("ATA PIC: primary/secondary LBA28/48 PIO/MULTIPLE/DMA/FLUSH, ATAPI/peer, late IRQ and clean stop=0 writes after attach; quarantine=1 mask PASS");
+}
 static void test_emergency_recorder(void)
 {
     for (unsigned ext=0;ext<2;ext++) {
@@ -855,7 +948,7 @@ int main(void)
 {
     test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
     test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
-    test_dma(); test_emergency_recorder();
+    test_dma(); test_constant_pic_masks(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
     return failures ? 1 : 0;

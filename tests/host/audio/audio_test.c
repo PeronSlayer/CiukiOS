@@ -83,7 +83,9 @@ int registry_quarantine(int h,gen_t generation)
 int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { CHECK(irq<16&&handler&&owner);irq_removals++;return 0; }
 static struct pci_func second_pci[8];
-static unsigned second_pci_count, second_claim_next, second_irq_adds, second_pic_masks;
+static unsigned second_pci_count, second_claim_next, second_irq_adds, second_pic_masks, second_pic_unmasks;
+static bool second_pic_masked = true;
+static irq_handler_t second_isa_handler;
 static int second_claim_failure=-1;
 unsigned pci_count(void) { return second_pci_count; }
 const struct pci_func *pci_get(unsigned i) { CHECK(i<second_pci_count); return &second_pci[i]; }
@@ -97,9 +99,11 @@ int registry_claim(enum res_type type,uint32_t start,uint32_t end,const char *ow
 }
 int irq_chain_add(unsigned irq,irq_chain_handler_t fn,const char *owner)
 { CHECK(irq<16 && fn && owner); second_irq_adds++; return 0; }
-void irq_set_handler(unsigned irq,irq_handler_t handler) { CHECK(irq==5); (void)handler; }
-void pic_mask(unsigned irq) { CHECK(irq==5); second_pic_masks++; }
-void pic_unmask(unsigned irq) { CHECK(irq==5); }
+void irq_set_handler(unsigned irq,irq_handler_t handler) { CHECK(irq==5); second_isa_handler=handler; }
+void pic_mask(unsigned irq)
+{ CHECK(irq==5); if (!second_pic_masked) { second_pic_masked=true; second_pic_masks++; } }
+void pic_unmask(unsigned irq)
+{ CHECK(irq==5 && second_isa_handler); if (second_pic_masked) { second_pic_masked=false; second_pic_unmasks++; } }
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
     if (fail_alloc()) return 0;

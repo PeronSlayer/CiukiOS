@@ -149,7 +149,8 @@ static void second_setup(enum audio_backend_kind kind,unsigned revision)
     if (kind==AUDIO_SB16) memset(&d->pci,0,sizeof(d->pci));
     d->state.irq=kind==AUDIO_SB16 ? 5 : 11;
     for (unsigned i=0;i<8;i++) d->claims[i]=-1;
-    second_claim_next=12; second_claim_failure=-1; second_irq_adds=second_pic_masks=0;
+    second_claim_next=12; second_claim_failure=-1; second_irq_adds=second_pic_masks=second_pic_unmasks=0;
+    second_pic_masked=true; second_isa_handler=0;
     dma_selected=true; audio.backend_name=d->name; audio.backend_pci=d->pci;
     audio.master=(struct ciuki_mixer_master){.version=1,.size=32,.left=50,.right=50};
     audio.error=0; audio.quarantined=false; audio.ready=false; audio.running=false;
@@ -264,7 +265,9 @@ static void test_second_set(void)
         struct audio_dma_device *d=&audio_dma;
         CHECK(d->state.ready && !d->state.running && second.starts==1 && !d->state.generation_fetched);
         CHECK(audio.caps.output_rate==(kind==AUDIO_ES1370 || kind==AUDIO_SB16 ? 44100 : 48000));
-        CHECK(kind==AUDIO_SB16 ? second_pic_masks : second_irq_adds==1);
+        CHECK(!second_pic_masks);
+        CHECK(kind==AUDIO_SB16 ? second_pic_unmasks==1 && !second_pic_masked && second_isa_handler : second_irq_adds==1);
+        unsigned pic_before=second_pic_masks+second_pic_unmasks;
         if (kind==AUDIO_ES1371) { CHECK(second.src_writes>=138 && second.src[0x75]==0x4000 && second.src[0x77]==0 && second.src[0x7e]==4096); }
         if (kind==AUDIO_ES1370) CHECK(second.codec[0x11]==12 && second.codec[0x16]==3 && second.codec[2]==6);
         CHECK(!audio_backend_master(&(struct ciuki_mixer_master){.mute=1}));
@@ -299,6 +302,16 @@ static void test_second_set(void)
         CHECK(backend_irq(d->state.irq,d->name) && d->inhibited && audio.error==-EIO);
         CHECK(kind==AUDIO_SB16 ? second.mask : !second.active);
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages);
+        CHECK(second_pic_masks+second_pic_unmasks==pic_before);
+        if (kind==AUDIO_SB16) {
+            CHECK(second.mask && !second.active && !(second.mixer[0x82]&2) && !second_isa_handler && !second_pic_masked);
+            /* Reattach the stopped device on the still-open line. */
+            audio.error=0;
+            CHECK(!backend_dma_init(d));
+            CHECK(second_pic_masks+second_pic_unmasks==pic_before && second_isa_handler);
+            audio_backend_shutdown();
+            CHECK(second_pic_masks+second_pic_unmasks==pic_before && pages_used==baseline);
+        }
     }
     second_setup(AUDIO_VIA8233,0x30); second.start_delay=3;
     CHECK(!backend_dma_init(&audio_dma) && audio_dma.state.ready && !audio_dma.state.running);
@@ -350,8 +363,11 @@ static void test_second_set(void)
         second_setup(kind,0x30); CHECK(!backend_dma_init(&audio_dma));
         for (unsigned i=0;i<8;i++) CHECK(!audio_backend_publish(marker)); CHECK(!audio_backend_start());
         second.stop_stuck=true; unsigned held=pages_used;
+        unsigned masks_before=second_pic_masks, unmasks_before=second_pic_unmasks;
         audio_backend_shutdown(); CHECK(audio.quarantined && audio_dma.state.quarantine && pages_used==held);
+        if (kind==AUDIO_SB16) CHECK(second_pic_masked && second_pic_masks==masks_before+1 && second_pic_unmasks==unmasks_before);
         second.stop_stuck=false; audio_backend_shutdown(); CHECK(pages_used==held && audio_dma.state.quarantine);
+        if (kind==AUDIO_SB16) CHECK(second_pic_masks==masks_before+1 && second_pic_unmasks==unmasks_before);
         /* Fixture disposal only: real quarantined storage is never freed. */
         for (unsigned i=0;i<8;i++) pmm_free(audio_dma.phys+i*PAGE_SIZE);
         if (audio_dma.desc_phys) pmm_free(audio_dma.desc_phys);
@@ -361,5 +377,6 @@ static void test_second_set(void)
     audio.backend_pci=(struct pci_func){0}; audio.backend_name=0; audio.backend_touched=false;
     audio.error=0; audio.ready=audio.running=audio.quarantined=false; memset(&audio.caps,0,sizeof(audio.caps));
     CHECK(pages_used==baseline);
+    puts("audio PIC: publish/start/progress/IRQ/mute/stop/clean shutdown+reattach=0 writes after init; SB16 unproved stop=1 quarantine mask PASS");
     puts("second audio set: synthetic ES1370/ES1371/CT5880, ISA SB16, VIA 686/8233/8233A/8235: progress, wrap, IRQ, rate, mute and quarantine PASS");
 }
