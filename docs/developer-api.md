@@ -1104,6 +1104,18 @@ char d_name[768];
 24
 
 ```c
+uint64_t d_size;
+```
+
+792: enumeration metadata, no allocation-chain walk
+
+```c
+int64_t d_mtime;
+```
+
+800: Unix seconds, zero when unavailable
+
+```c
 };
 
 struct ciuki_spawn_fd {
