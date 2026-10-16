@@ -1224,6 +1224,30 @@ class Host:
         os.utime(source,(946684800,946684800))
         copied=self.checker(['mcopy','-i',str(image),str(source),'::/Ciuki long fixture.txt'],directory)
         if copied['returncode']:raise res.Refusal('mtools fixture copy failed')
+        # f1-78/f2-79: a populated volume (root files and named sub-directories)
+        # reproduces the AutoPlay scan of a real stick; deterministic names,
+        # contents and timestamps keep the fixture reproducible.
+        populate={'': fixture.get('files',0), **fixture.get('subdirs',{})}
+        for folder,count in populate.items():
+            if type(count) is not int or count<0 or count>2048 or (folder and not re.fullmatch(r'[A-Z0-9]{1,8}',folder)):
+                raise res.Refusal('fixture files/subdirs: counts 0..2048, 8.3 upper-case folder names')
+            if not count:continue
+            # mtools: a sub-directory is copied recursively from a host tree
+            # (a trailing-slash target silently copies nothing).
+            batch=directory/f'fixture-{index}-tree'/(folder or 'ROOT');batch.mkdir(parents=True,exist_ok=True)
+            names=[]
+            for n in range(count):
+                ext={'MUSIC':'MP3','PICTURES':'BMP'}.get(folder,'TXT')
+                name=batch/f'F{n:05d}.{ext}';name.write_bytes(f'Ciuki fixture {folder or "root"} file {n}\n'.encode()*4)
+                os.utime(name,(946684800,946684800));names.append(str(name))
+            os.utime(batch,(946684800,946684800))
+            if folder:copied=self.checker(['mcopy','-s','-i',str(image),str(batch),'::/'],directory)
+            else:
+                copied={'returncode':0}
+                for start in range(0,len(names),256):
+                    copied=self.checker(['mcopy','-i',str(image),*names[start:start+256],'::/'],directory)
+                    if copied['returncode']:break
+            if copied['returncode']:raise res.Refusal('mtools fixture population failed')
         fat_fixtures.normalize_seed(image, fixture.get('corruption')=='torn-sector')
         listing=self.checker(['mdir','-i',str(image),'::/'],directory)
         if listing['returncode']:raise res.Refusal('mtools fixture listing failed')
@@ -1496,9 +1520,18 @@ def serial_patterns(expected):
         raise res.Refusal('invalid serial pattern: '+str(error)) from error
 
 
+def serial_absent_patterns(expected):
+    patterns=expected.get('serial_absent_patterns',[])
+    if not isinstance(patterns,list) or any(not isinstance(p,str) or not p.startswith('^') for p in patterns):
+        raise res.Refusal('serial_absent_patterns must be a list of line-anchored regular expressions')
+    try:return [re.compile(p.encode('ascii'),re.MULTILINE) for p in patterns]
+    except (UnicodeError,re.error) as error:
+        raise res.Refusal('invalid serial pattern: '+str(error)) from error
+
+
 def check_serial_patterns(path,expected):
-    patterns=serial_patterns(expected)
-    if not patterns:return []
+    patterns=serial_patterns(expected);absent=serial_absent_patterns(expected)
+    if not patterns and not absent:return []
     data=path.read_bytes()  # The collector already enforces res.LOG_CAP.
     matches=[]
     for pattern in patterns:
@@ -1506,6 +1539,11 @@ def check_serial_patterns(path,expected):
         if not match:raise EvidenceError('missing expected serial pattern: '+pattern.pattern.decode('ascii'))
         matches.append({'pattern':pattern.pattern.decode('ascii'),
                         'matched':match.group().decode('ascii',errors='replace')})
+    for pattern in absent:
+        # f1-78: a line that must never appear (for example a desktop stall of a second or more).
+        match=pattern.search(data)
+        if match:raise EvidenceError('forbidden serial pattern present: '+match.group().decode('ascii',errors='replace'))
+        matches.append({'pattern':pattern.pattern.decode('ascii'),'absent':True})
     return matches
 
 
@@ -1623,8 +1661,13 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     for index in fixture_usb_disks(case):
         # QEMU USB documentation: explicitly named UHCI bus and if=none
         # backend keep this fixture independent of optical/IDE ordinals.
+        # f1-78: throttle_iops models a slow full-speed stick (T23 Lexar: about
+        # 28 ms per single-sector command) with QEMU block throttling.
+        iops=case['fixtures'][index].get('throttle_iops')
+        if iops is not None and (type(iops) is not int or iops<1 or iops>100000):raise res.Refusal('throttle_iops must be an integer 1..100000')
+        throttle=f',throttling.iops-total={iops}' if iops else ''
         args+=['-device','piix3-usb-uhci,id=ciuki-storage-usb',
-               '-drive',f'file=fixture-{index}.img,format=raw,if=none,id=ciuki-usb,cache='+cache,
+               '-drive',f'file=fixture-{index}.img,format=raw,if=none,id=ciuki-usb,cache='+cache+throttle,
                '-device','usb-storage,id=ciuki-usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb']
     for index,fixture in enumerate(case.get('fixtures',[])):
         if fixture.get('generator')=='xorriso':
