@@ -456,13 +456,25 @@ class DesktopTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
+            bridge = folder / "kernel-poll.o"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections",
+                            "-DCIUKI_DESKTOP_SPAWN_HOST", "-I", str(ROOT / "src/kernel/include"),
+                            "-c", str(ROOT / "tests/host/proc/desktop_test.c"), "-o", str(bridge)], check=True, env=env)
+            sources += [bridge, ROOT / "tests/host/proc/signal_legacy.c", ROOT / "src/kernel/lib/fmt.c"]
+            sources += [ROOT / "src/kernel/probes/selector.c", ROOT / "src/kernel/lib/sha256.c"]
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                            "-DDESK_POLL_LEDGER_TEST",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
+            result = subprocess.run([str(binary), "--poll-handles"], check=True, env=env, capture_output=True, text=True)
+            print(result.stdout, end="")
+            for kind, fd in (("net", 20), ("mixer", 21), ("media", 22)):
+                self.assertRegex(result.stdout, rf"case=handle server=desktop cycle=1 pid=2 fd={fd} stage=restored kind={kind}")
 
     def test_dosbox_autorun(self):
         """/Programs/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""

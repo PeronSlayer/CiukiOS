@@ -5,6 +5,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
 #include <ciuki/storage.h>
+#include <ciuki/files.h>
 
 extern bool probes_operator_mode;
 extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
@@ -315,6 +316,67 @@ static bool native_proc_equal(const struct proc_ledger *a,const struct proc_ledg
     return a->processes==b->processes && a->threads==b->threads && a->zombies==b->zombies &&
         a->handles==b->handles && a->extents==b->extents && a->backing==b->backing && a->tables==b->tables;
 }
+/* Diagnostic only: retain kinds, never references or a tolerance in the ledger.
+ * Static storage avoids putting the 64 x 128 slot map on the kernel stack. */
+static struct native_handle_baseline {
+    uint32_t pid;
+    uint8_t kind[CIUKI_OPEN_MAX];
+} native_handles[CIUKI_PROCESS_MAX];
+static uint8_t native_handle_kind(struct process *p, unsigned fd)
+{
+    if (!p || !p->fds || !p->fds[fd].object) return 0;
+    struct file_description *f=file_fd(p,(int32_t)fd);
+    if (f && f->node) return 1+(uint8_t)f->node->kind;
+    struct desktop_description *d=desktop_fd(p,(int32_t)fd);
+    return d ? 32+(uint8_t)d->kind : 255;
+}
+static const char *native_handle_name(uint8_t kind)
+{
+    switch (kind) {
+    case 0: return "none";
+    case 1+PX_MEDIA: return "media";
+    case 1+PX_NET: return "net";
+    case 1+PX_MIXER: return "mixer";
+    case 1+PX_AUDIO: return "audio";
+    case 1+PX_FILE: return "file";
+    case 1+PX_DIRECTORY: return "directory";
+    case 1+PX_CONSOLE: return "console";
+    case 1+PX_NULL: return "null";
+    case 32+DESKTOP_SURFACE: return "surface";
+    case 32+DESKTOP_CHANNEL: return "channel";
+    case 32+DESKTOP_DISPLAY: return "display";
+    case 32+DESKTOP_INPUT: return "input";
+    default: return "other";
+    }
+}
+static void native_handles_snapshot(void)
+{
+    memset(native_handles,0,sizeof(native_handles));
+    for (unsigned slot=0;slot<CIUKI_PROCESS_MAX;slot++) {
+        struct process *p=proc_at_slot(slot);
+        if (!p) continue;
+        native_handles[slot].pid=p->pid;
+        for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++)
+            native_handles[slot].kind[fd]=native_handle_kind(p,fd);
+    }
+}
+static void native_handles_record(unsigned cycle)
+{
+    for (unsigned slot=0;slot<CIUKI_PROCESS_MAX;slot++) {
+        struct process *p=proc_at_slot(slot);
+        const struct native_handle_baseline *b=&native_handles[slot];
+        for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
+            uint8_t now=native_handle_kind(p,fd), before=b->kind[fd];
+            if (before==now && (!p || b->pid==p->pid)) continue;
+            if (before) rec_emit("crash-isolation","DATA",
+                "case=handle server=desktop cycle=%u pid=%u fd=%u stage=baseline kind=%s",
+                cycle,b->pid,fd,native_handle_name(before));
+            if (now) rec_emit("crash-isolation","DATA",
+                "case=handle server=desktop cycle=%u pid=%u fd=%u stage=restored kind=%s",
+                cycle,p->pid,fd,native_handle_name(now));
+        }
+    }
+}
 static int native_crash_isolation(void)
 {
     const char *name="crash-isolation";
@@ -353,6 +415,7 @@ static int native_crash_isolation(void)
         struct desktop_ledger baseline,restored;
         struct proc_ledger baseline_proc,restored_proc;
         desktop_snapshot(&baseline); proc_snapshot(&baseline_proc);
+        native_handles_snapshot();
         native_reports.victim_stage=0;
         pass=native_command(server,GATE_SPAWN,&generation);
         if (!pass) { native_step_record(GATE_SPAWN,generation,native_command_failure); break; }
@@ -392,6 +455,7 @@ static int native_crash_isolation(void)
         if (!pass) { native_step_record(GATE_RUN,generation,"progress_timeout"); break; }
         if (!native_command(server,GATE_SNAPSHOT,&generation)) { native_step_record(GATE_SNAPSHOT,generation,native_command_failure); pass=false; break; }
         desktop_snapshot(&restored); proc_snapshot(&restored_proc);
+        if (baseline_proc.handles!=restored_proc.handles) native_handles_record(cycles+1);
         pass=pass && native_live(server) && native_live(survivor) &&
             server->pid==server_pid && survivor->pid==survivor_pid &&
             server->memory->as.pd_phys==server_cr3 && survivor->memory->as.pd_phys==survivor_cr3 &&

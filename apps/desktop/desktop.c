@@ -805,14 +805,39 @@ static void wallpaper_poll(struct desktop *d)
     } else desk_shell_notify_error(d,"Wallpaper cannot be shown",error);
     if (changed) desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
 }
+/* Prepare observers before the first gate snapshot. Polls retain descriptors:
+ * an open/query/close sequence changes the process ledger during the query. */
+static int observer_open(int *fd, const char *path)
+{
+    if (*fd<0) *fd=open(path,O_RDONLY|O_CLOEXEC);
+    return *fd;
+}
+static void observer_close(int *fd)
+{
+    if (*fd>=0) { close(*fd); *fd=-1; }
+}
+static void observers_prepare(struct desktop *d)
+{
+    observer_open(&d->media_fd,"/dev/media");
+    observer_open(&d->network_fd,"/dev/net");
+    if (d->mixer_fd<0) observer_open(&d->mixer_observer_fd,"/dev/mixer");
+}
+static void observers_close(struct desktop *d)
+{
+    observer_close(&d->media_fd);
+    observer_close(&d->network_fd);
+    observer_close(&d->mixer_observer_fd);
+}
 static void network_read(struct desktop *d)
 {
-    int fd = open("/dev/net", O_RDONLY | O_CLOEXEC);
+    if (d->power.state && d->power.prepared) return;
+    int fd = observer_open(&d->network_fd,"/dev/net");
     struct ciuki_net_state state = { .version = CIUKI_NET_VERSION, .size = sizeof(state) };
     if (fd >= 0) {
-        if (ciuki_devctl(fd, NET_GET_STATE, &state, sizeof(state)) < 0)
+        if (ciuki_devctl(fd, NET_GET_STATE, &state, sizeof(state)) < 0) {
             state = (struct ciuki_net_state){ .version = CIUKI_NET_VERSION, .size = sizeof(state) };
-        close(fd);
+            observer_close(&d->network_fd);
+        }
     }
     desk_shell_network_update(d, &state);
 }
@@ -828,44 +853,43 @@ static void media_sound(struct desktop *d,int connected)
 }
 static int media_read(struct desktop *d)
 {
+    if (d->power.state && d->power.prepared) return 0;
     struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};
-    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    int fd=observer_open(&d->media_fd,"/dev/media");
     int observed=0;
     if (fd>=0) {
         observed=!ciuki_devctl(fd,MEDIA_GET_STATE,&s,sizeof(s));
-        close(fd);
+        if (!observed) observer_close(&d->media_fd);
     }
     if (!observed) return 0; /* An unavailable observer is not a physical unplug. */
     desk_shell_media_update(d,&s);
     /* A failed observation preserves prior state, never fabricates an eject. */
     static struct ciuki_media_volume volumes[26];
-    int observe=open("/dev/media",O_RDONLY|O_CLOEXEC);
-    if (observe>=0) {
+    {
         int ok=1;
         for (unsigned i=3;i<26;i++) {
             struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=i};
-            if (ciuki_devctl(observe,MEDIA_GET_VOLUME,&v,sizeof(v))) { ok=0; break; }
+            if (ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v))) { observer_close(&d->media_fd); ok=0; break; }
             volumes[i]=v;
         }
-        close(observe);
         if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); }
         return ok;
     }
-    return 0;
 }
 static void media_remove(struct desktop *d)
 {
     struct ciuki_media_remove r={CIUKI_MEDIA_VERSION,sizeof(r),(uint32_t)d->sh.want_remove,d->sh.remove_generation};
     int optical=r.drive<26 && d->sh.media.type[r.drive]==CIUKI_MEDIA_OPTICAL;
     d->sh.want_remove=0;
-    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC), e=fd<0 ? errno : 0;
+    if (d->power.state && d->power.prepared) return;
+    int fd=observer_open(&d->media_fd,"/dev/media"), e=fd<0 ? errno : 0;
     struct ciuki_media_blockers blockers={.version=CIUKI_MEDIA_VERSION,.size=sizeof(blockers),.drive=r.drive,.generation=r.generation};
     char reason[320]; desk_media_blocker_text(reason,sizeof(reason),NULL,desk_media_notice_body(d->width,d->height));
     if (fd>=0) {
         if (ciuki_devctl(fd,MEDIA_SAFE_REMOVE,&r,sizeof(r))) e=errno;
         if (e==EBUSY && !ciuki_devctl(fd,MEDIA_GET_BLOCKERS,&blockers,sizeof(blockers)))
             desk_media_blocker_text(reason,sizeof(reason),&blockers,desk_media_notice_body(d->width,d->height));
-        close(fd);
+        if (e && e!=EBUSY) observer_close(&d->media_fd);
     }
     d->now_ns=monotonic();
     media_read(d);
@@ -876,11 +900,15 @@ static void media_remove(struct desktop *d)
 }
 static void mixer_read(struct desktop *d)
 {
+    if (d->power.state && d->power.prepared) return;
     int old_volume=d->sh.volume, old_muted=d->sh.muted, old_state=d->sh.mixer_state;
-    int fd=d->mixer_fd, own=0;
-    if (fd<0) { fd=open("/dev/mixer",O_RDONLY|O_CLOEXEC); own=1; }   /* public, read-only */
+    int fd=d->mixer_fd;
+    if (fd<0) fd=observer_open(&d->mixer_observer_fd,"/dev/mixer"); /* public, read-only */
     struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m)};
-    if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) d->sh.mixer_state=-1;
+    if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) {
+        d->sh.mixer_state=-1;
+        observer_close(&d->mixer_observer_fd);
+    }
     else {
         d->sh.mixer_state=d->mixer_fd>=0 ? 2 : 1;
         if (m.save_state!=CIUKI_MIXER_UNSAVED || m.save_error) last_ec_preference=-1;
@@ -894,7 +922,6 @@ static void mixer_read(struct desktop *d)
             }
         }
     }
-    if (own && fd>=0) close(fd);
     if (old_volume!=d->sh.volume || old_muted!=d->sh.muted || old_state!=d->sh.mixer_state) {
         if (old_state>0 && d->sh.mixer_state>0 && (old_volume!=d->sh.volume || old_muted!=d->sh.muted)) {
             char text[64]; snprintf(text,sizeof(text),"Volume: %d%%%s",d->sh.volume,d->sh.muted ? " (muted)" : "");
@@ -1046,6 +1073,7 @@ static int power_alive(struct desktop *d, uint32_t pid)
 }
 static void power_prepare(struct desktop *d)
 {
+    observers_close(d);
     if (d->mixer_fd>=0) { close(d->mixer_fd); d->mixer_fd=-1; d->sh.mixer_state=1; }
     /* Settings, wallpaper and icon readers use scoped FILE/DIR handles.
      * Also release inherited file-backed logs, preserving input, display,
@@ -1189,6 +1217,7 @@ static void shell_setup(struct desktop *d, int gate)
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    observers_prepare(d);
     d->mixer_set=mixer_apply;
     struct utsname u;
     strcpy(d->build_identity,"unavailable");

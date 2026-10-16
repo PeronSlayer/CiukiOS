@@ -196,6 +196,7 @@ struct desktop {
     uint32_t tasks_pid, tasks_demo_pid, tasks_demo_window;
     /* Desktop shell (shell.h): settings, menus, icons, tray, built-in windows. */
     int mixer_fd;                /* delegated /dev/mixer control handle (CIUKI_MIXER_FD) or -1 */
+    int media_fd, network_fd, mixer_observer_fd; /* lifetime O_CLOEXEC observers, or -1 */
     const char *launch_argv[6];  /* Run dialog: extra arguments for the next launch */
     const struct fm_vfs *autoplay_fs;
     int (*autoplay_preference)(struct desktop *, const char *id, const char *label, int action);

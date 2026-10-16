@@ -10,6 +10,19 @@
 #include <ciuki/i8042.h>
 #include <ciuki/registry.h>
 #include <ciuki/storage.h>
+#include <ciuki/files.h>
+
+/* Device-node transport for the desktop poll interleaving test. The process
+ * ledger, slot comparison and record formatter remain production code. */
+static struct file_description poll_files[3];
+static struct px_node poll_nodes[3];
+struct file_description *file_fd(const struct process *p,int32_t fd)
+{
+    if (!p || !p->fds || fd<0 || fd>=CIUKI_OPEN_MAX) return 0;
+    for (unsigned i=0;i<3;i++)
+        if (p->fds[fd].object==&poll_files[i].object) return &poll_files[i];
+    return 0;
+}
 
 #define memcpy gate_memcpy
 #define memmove gate_memmove
@@ -31,6 +44,7 @@ static bool routing_records;
 static unsigned record_seq;
 static char last_launch[241], last_step[241];
 static unsigned gate_progress, gate_victims, gate_restored, gate_interactions;
+static unsigned poll_handle_records;
 
 static struct resource desktop_resource = { .generation = 1, .state = RS_ACTIVE };
 static bool usb_ready;
@@ -73,6 +87,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         input_records++;
         strcpy(last_input_record,extra);
     }
+    if (strstr(extra,"case=handle server=desktop ")) poll_handle_records++;
     if (routing_records) {
         CHECK(ksnprintf(record,sizeof(record),"CIUKI_TEST v=1 run=12345678 seq=%06u probe=%s event=%s%s%s",++record_seq,probe,event,n ? " " : "",extra)<=240);
         puts(record);
@@ -169,6 +184,60 @@ static int gate_fixture_spawn(struct process **out);
 #undef supervisor_spawn
 #undef supervisor_spawn_standin
 #undef supervisor_spawn_desktop_probe
+
+static struct process *poll_server;
+static struct proc_ledger poll_baseline;
+static void poll_ref(struct proc_object *o) { (void)o; }
+void desktop_poll_host_init(void)
+{
+    ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    controller.state=T_RUNNING; g_current=&controller; proc_init();
+    CHECK(!proc_prepare(proc_supervisor(),&poll_server)); proc_publish(poll_server,0);
+    const enum px_kind kinds[]={PX_NET,PX_MIXER,PX_MEDIA};
+    for (unsigned i=0;i<3;i++) {
+        poll_nodes[i].kind=kinds[i];
+        poll_files[i].node=&poll_nodes[i];
+        poll_files[i].object=(struct proc_object){poll_ref,poll_ref,true};
+    }
+    print_diagnostics=true;
+}
+void desktop_poll_host_open(unsigned kind)
+{
+    CHECK(kind<3 && !poll_server->fds[20+kind].object);
+    poll_server->fds[20+kind]=(struct proc_fd){&poll_files[kind].object,FD_CLOEXEC};
+}
+void desktop_poll_host_close(unsigned kind)
+{
+    CHECK(kind<3 && poll_server->fds[20+kind].object);
+    CHECK(!desktop_close(poll_server,20+(int)kind));
+}
+void desktop_poll_host_baseline(void)
+{ proc_snapshot(&poll_baseline); native_handles_snapshot(); }
+void desktop_poll_host_leak(int leak)
+{
+    if (leak) {
+        CHECK(!poll_server->fds[23].object);
+        poll_server->fds[23]=(struct proc_fd){&poll_files[2].object,FD_CLOEXEC};
+    } else CHECK(!desktop_close(poll_server,23));
+}
+void desktop_poll_host_check(int equal)
+{
+    struct proc_ledger now; proc_snapshot(&now);
+    CHECK(native_proc_equal(&poll_baseline,&now)==(equal!=0));
+    if (!equal) {
+        CHECK(now.handles==poll_baseline.handles+1);
+        unsigned records=poll_handle_records;
+        native_handles_record(1);
+        CHECK(poll_handle_records==records+1);
+    }
+}
+void desktop_poll_host_finish(void)
+{
+    struct proc_ledger now; proc_snapshot(&now); CHECK(!now.handles);
+    proc_discard(poll_server); poll_server=0;
+    CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
+    print_diagnostics=false; free(ram);
+}
 
 #define BUFFER (CIUKI_IMAGE_BASE + PAGE_SIZE)
 static void desktop_select(struct proc_thread *t) { g_current = t->task; g_current->state = T_RUNNING; }
