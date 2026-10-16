@@ -63,7 +63,98 @@ static void discard(struct storage *s)
     media[0].cut=true;(void)bootlog_shutdown();stop(s,false);
     fake_power_loss(&media[0]);bootlog_reset();
 }
-static void verify_reboot(void)
+static void unpublished_batches(void)
+{
+    const unsigned batches[]={1,2,4,6,10};
+    static char block[BOOTLOG_BATCH];
+    for (unsigned stalled=0;stalled<2;stalled++) for (unsigned trial=0;trial<sizeof(batches)/sizeof(batches[0]);trial++) {
+        unsigned n=batches[trial];
+        struct storage *s=start();OK(storage_enable_write(s,2));bootlog_reset();
+        OK(bootlog_activate(&s->vfs,true,s->sequence));
+        struct bootlog_stats stats;
+        for (unsigned i=0;i<n;) {
+            unsigned end=i+2<n ? i+2 : n;
+            for (;i<end;i++) {
+                memset(block,'A'+i,sizeof(block));bootlog_capture(block,sizeof(block));
+            }
+            do { OK(bootlog_drain());bootlog_snapshot(&stats); } while (stats.queued);
+        }
+        CHECK(stats.writes==n && stats.bytes_written==n*BOOTLOG_BATCH && !stats.metadata_writes);
+        struct fat_entry log,durable;OK(vfs_stat(&table,BOOTLOG_PATH,&log));
+        OK(fat_lookup(&s->volumes[2].fat,log.parent,"BOOT.LOG",&durable));CHECK(!durable.size);
+        if (stalled) {
+            /* The writer sees exactly the same try-lock failure as a settings
+             * reader that stalls while owning the namespace. */
+            fs_lock_take(&s->vfs.lock);
+            memset(block,'Q',sizeof(block));
+            bootlog_capture_ring(block,sizeof(block));bootlog_capture_ring(block,sizeof(block));
+            for (unsigned turn=0;turn<3;turn++) CHECK(bootlog_drain()==-FS_EBUSY);
+            bootlog_snapshot(&stats);
+            CHECK(stats.writes==n && !stats.metadata_writes && stats.ring_queued==2*sizeof(block));
+            fs_lock_drop(&s->vfs.lock);
+        }
+        discard(s);
+        s=start();CHECK(!s->volumes[2].writes);
+        OK(vfs_stat(&table,BOOTLOG_PATH,&log));CHECK(!log.size);
+        log_repair_record[0]=0;OK(storage_enable_write(s,2));
+        CHECK(s->volumes[2].fat.repaired_logs==1);
+        char recovered[64];snprintf(recovered,sizeof(recovered),"action=extended recovered_bytes=%u size=%u",n*BOOTLOG_BATCH,n*BOOTLOG_BATCH);
+        CHECK(strstr(log_repair_record,recovered));
+        OK(vfs_stat(&table,BOOTLOG_PATH,&log));CHECK(log.size==n*BOOTLOG_BATCH);
+        for (unsigned i=0;i<n;i++) {
+            size_t done;OK(fat_read(&s->volumes[2].fat,&log,i*sizeof(block),block,sizeof(block),&done));
+            CHECK(done==sizeof(block));for (unsigned j=0;j<sizeof(block);j++) CHECK(block[j]==(char)('A'+i));
+        }
+        /* Rotation must preserve the recovered contents under BOOT1 too. */
+        OK(bootlog_activate(&s->vfs,true,s->sequence));OK(bootlog_shutdown());
+        OK(vfs_stat(&table,BOOTLOG_PREVIOUS,&log));CHECK(log.size==n*BOOTLOG_BATCH);
+        stop(s,true);bootlog_reset();
+        for (unsigned copy=0;copy<2;copy++) {
+            struct scan_result scan=independent_scan(media[0].fd,copy);
+            CHECK(!scan.lost && !scan.crosslinks && !scan.corrupt && !scan.divergent && !scan.dirty);
+        }
+        reset();
+        printf("PASS F0-36 unpublished batches=%u bytes=%u namespace_stalled=%u: RO-first, exact recovered text, extended record, BOOT1 rotation, two clean FAT scans\n",n,n*BOOTLOG_BATCH,stalled);
+    }
+}
+static void reserved_text_cases(void)
+{
+    const char *paths[]={BOOTLOG_PATH,BOOTLOG_PREVIOUS,BOOTLOG_OLDEST,BOOTLOG_PATH,
+        BOOTLOG_PATH,BOOTLOG_PATH,"C:/SYSTEM/BOOT.LOG","C:/SYSTEM/LOGS/OTHER.LOG"};
+    const uint32_t sizes[]={0,12,512,512,521,512,0,0};
+    static uint8_t block[BOOTLOG_BATCH];
+    for (unsigned mode=0;mode<8;mode++) {
+        struct storage *s=start();OK(storage_enable_write(s,2));bootlog_reset();
+        int h=vfs_open(&table,paths[mode],VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_WRITE,0);CHECK(h>=0);
+        OK(vfs_log_reserve(&table,h,mode==5 ? 512 : BOOTLOG_LIMIT));
+        memset(block,0,sizeof(block));size_t done;
+        if (mode==1) memcpy(block,"unpublished\n",12);
+        if (mode>=2) memset(block,'A',512);
+        if (mode==2 || mode==3) {
+            block[512]=mode==2 ? 1 : 0;block[513]='B';
+            memset(block+1024,'C',512); /* later text must not bypass a bad sector */
+        }
+        if (mode==4) memcpy(block+512,"\tUTF8:\xc3\xa8\n",9);
+        if (mode) OK(vfs_log_write(&table,h,block,mode==5 ? 512 : sizeof(block),mode==5 ? 13 : sizeof(block),&done));
+        if (mode==5) {
+            /* Published EOF and unpublished bytes share the final cluster. */
+            OK(vfs_log_publish(&table,h,false));
+            uint64_t at;OK(vfs_seek(&table,h,0,VFS_SEEK_SET,&at));
+            OK(vfs_log_write(&table,h,block,512,512,&done));
+        }
+        OK(vfs_close(&table,h));discard(s);
+        s=start();CHECK(!s->volumes[2].writes);OK(storage_enable_write(s,2));
+        struct fat_entry log;OK(vfs_stat(&table,paths[mode],&log));CHECK(log.size==sizes[mode]);
+        if (!log.size) CHECK(!log.first);
+        if (log.size) {
+            uint8_t text[1024];OK(fat_read(&s->volumes[2].fat,&log,0,text,sizeof(text),&done));
+            CHECK(done==log.size && !memcmp(text,block,done));
+        }
+        stop(s,true);reset();
+    }
+    puts("PASS F0-36 reserved text: all three log names, zero-only reservation, short UTF-8/padded text, malformed control/embedded-zero stop, same-cluster extension, unrelated BOOT/OTHER files retain trim");
+}
+static void verify_reboot(uint32_t expected_log)
 {
     struct storage *s=start();
     CHECK(s->volumes[2].read_gate && !s->volumes[2].error);
@@ -72,6 +163,7 @@ static void verify_reboot(void)
     OK(vfs_stat(&table,"C:/SHORT.BIN",&entry));uint8_t bytes[512];size_t done;
     OK(fat_read(v,&entry,0,bytes,sizeof(bytes),&done));CHECK(done==sizeof(bytes));
     OK(storage_enable_write(s,2));CHECK(!v->readonly);ordinary_operations(s);
+    if (expected_log) { OK(vfs_stat(&table,BOOTLOG_PATH,&entry));CHECK(entry.size==expected_log); }
     OK(bootlog_activate(&s->vfs,true,s->sequence));OK(bootlog_shutdown());
     stop(s,true);bootlog_reset();
     for (unsigned copy=0;copy<2;copy++) {
@@ -107,7 +199,7 @@ static void all_cuts(void)
                     }
                     stop(check,false);bootlog_reset();
                 }
-                verify_reboot();fake_reset(&media[0]);
+                verify_reboot(0);fake_reset(&media[0]);
             }
             printf("PASS power cuts phase=%u mode=%u device_events=%u: RO reads, bounded repair, all files, settings, DOS games/base/overlay, log rotation, two clean FAT scans\n",phase,mode,events);
             fflush(stdout);
@@ -128,6 +220,12 @@ static void repair_cuts(void) {
     seed_workload();struct storage *s=start();OK(storage_enable_write(s,2));
     OK(bootlog_activate(&s->vfs,true,s->sequence));bootlog_capture("repair boot\n",12);
     OK(bootlog_sync(log_no_cancel,log_storage_turn,NULL));
+    char log_tail[BOOTLOG_RAM];memset(log_tail,'L',sizeof(log_tail));
+    bootlog_capture_ring(log_tail,sizeof(log_tail));
+    struct bootlog_stats stats;
+    do { OK(bootlog_drain());bootlog_snapshot(&stats); } while (stats.queued);
+    CHECK(stats.metadata_writes==1 && !stats.queued && stats.size==BOOTLOG_PROTECTED+sizeof(log_tail));
+    struct fat_entry log;OK(vfs_stat(&table,BOOTLOG_PATH,&log));
     struct fat_volume geometry=s->volumes[2].fat;
     int h=vfs_open(&table,"C:/SYSTEM/TAIL.CFG",VFS_WRITE|VFS_CREATE,0,0);CHECK(h>=0);
     size_t done;OK(vfs_write(&table,h,"old settings\n",13,&done));
@@ -142,6 +240,9 @@ static void repair_cuts(void) {
     uint8_t raw[512];OK(fake_raw_read(&media[0],sec,raw));
     fs_wr32(raw+(tail.index%16)*32+28,13);OK(fake_raw_write(&media[0],sec,raw));
     patch_entry(&media[0],&geometry,1,tail.first,0x0fffffff);
+    /* Also interrupt a log detach at its old EOF. Extension must restore
+     * this proved active link before the larger directory size is durable. */
+    patch_entry(&media[0],&geometry,1,log.first,0x0fffffff);
     /* Add an unowned allocation in one FAT copy only, as at a COW cut. */
     patch_entry(&media[0],&geometry,1,geometry.next_free,0x0fffffff);
     media[0].undo_count=0;
@@ -152,7 +253,7 @@ static void repair_cuts(void) {
         for (unsigned cut=1;cut<=events;cut++) {
             s=start();media[0].cut_at=media[0].events+cut;
             CHECK(storage_enable_write(s,2)==-FS_EIO && media[0].cut);
-            discard(s);verify_reboot();fake_reset(&media[0]);
+            discard(s);verify_reboot(BOOTLOG_PROTECTED+sizeof(log_tail));fake_reset(&media[0]);
         }
         printf("PASS repeated repair cuts mode=%u device_events=%u: ordinary append/log-tail detach, divergent orphan reclaim, flags/hints/barriers, subsequent writable boot\n",mode,events);fflush(stdout);
     }
@@ -254,7 +355,7 @@ static void raw_integration(void) {
 int main(int argc,char **argv)
 {
     CHECK(argc==4);for (unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline();all_cuts();repair_cuts();unsafe_and_bad_media();imported_rotation();
+    baseline();unpublished_batches();reserved_text_cases();all_cuts();repair_cuts();unsafe_and_bad_media();imported_rotation();
     /* Imported history is intentionally retained while seeding game files. */
     raw_integration();
     for (unsigned i=0;i<3;i++) fake_close(&media[i]);

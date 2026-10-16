@@ -35,9 +35,11 @@ struct disk { struct blkdev dev; struct fake *media; };
 static struct disk disks[3];
 static unsigned readonly_reports;
 static char readonly_record[256];
+static char log_repair_record[256];
 void klog(const char *fmt, ...) {
     char line[256]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(line)); }
+    if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(line));
     if (blackbox_capture) { blackbox_capture(line,strlen(line));blackbox_capture("\n",1); }
     bootlog_capture(line,strlen(line)); bootlog_capture("\n",1);
 }
