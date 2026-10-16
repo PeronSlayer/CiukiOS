@@ -43,6 +43,25 @@ static void indexed_row32(const cvga_state *v, unsigned step, unsigned base, uns
                      unsigned width, unsigned scale, const uint32_t lut[256], uint32_t *dest)
 {
     unsigned x = 0;
+    /* The usual 320 -> 640 path: one address calculation per four dots,
+     * no per-pixel scale loop. Edges retain the general pan/wrap path. */
+    if (scale == 2) {
+        while (x < width && ((x + pan) & 3)) {
+            unsigned dot = x + pan, at = (base + (dot / 4) * step) & 0xffffu;
+            uint32_t c = lut[v->plane[dot & 3][at] & v->dac_mask];
+            *dest++ = c; *dest++ = c; x++;
+        }
+        while (width - x >= 4) {
+            unsigned at = (base + ((x + pan) / 4) * step) & 0xffffu;
+            uint32_t a = lut[v->plane[0][at] & v->dac_mask];
+            uint32_t b = lut[v->plane[1][at] & v->dac_mask];
+            uint32_t c = lut[v->plane[2][at] & v->dac_mask];
+            uint32_t d = lut[v->plane[3][at] & v->dac_mask];
+            dest[0] = dest[1] = a; dest[2] = dest[3] = b;
+            dest[4] = dest[5] = c; dest[6] = dest[7] = d;
+            dest += 8; x += 4;
+        }
+    }
     while (x < width) {
         unsigned dot = x + pan, at = (base + (dot / 4) * step) & 0xffffu;
         unsigned plane = dot & 3, count = 4 - plane;

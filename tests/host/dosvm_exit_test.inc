@@ -87,6 +87,115 @@ static void test_exit_fast_io(void)
     }
     destroy(v,true); empty();
 }
+static unsigned vga_replacement_calls;
+static int vga_replacement_port(struct dosvm *v, uint16_t port, unsigned width,
+                                bool write, uint32_t *value, void *arg)
+{
+    (void)v; (void)port; (void)width; (void)write; (void)value; (void)arg;
+    vga_replacement_calls++; return 0;
+}
+static void test_vga_fast_io(void)
+{
+    struct dosvm *v=create(); CHECK(!dosvm_boot(v)); fast_planar(v);
+    static cvga_state saved, expected;
+    const uint16_t ports[]={0x3C4,0x3C5,0x3CE,0x3CF};
+    saved=v->vga;
+    for (unsigned p=0;p<ARRAY_SIZE(ports);p++) for (unsigned width=1;width<=2;width++)
+    for (unsigned data=0;data<256;data++) {
+        v->vga=saved; v->video_read_window=false; dosvm_vga_direct(v);
+        uint8_t op=width==1 ? 0xEE : 0xEF;
+        CHECK(!dosvm_write(v,0x30000,&op,1));
+        struct v86_frame a={.tf={.cs=0x3000,.eax=0xCAFE0000u|(data<<8)|data,
+            .edx=ports[p],.eflags=V86_VM|V86_IF|0x8D7}};
+        struct v86_frame b=a;
+        struct v86 monitor=v->monitor;
+        int ea=v86_emulate(&v->monitor,&a);
+        expected=v->vga;
+        struct v86 expected_monitor=v->monitor;
+        v->vga=saved; v->video_read_window=false; dosvm_vga_direct(v); v->monitor=monitor;
+        int eb=123; v->frame_pm=false;
+        CHECK(dosvm_io_fast(v,&b,0,&eb) && ea==eb && !memcmp(&a,&b,sizeof(a)));
+        CHECK(!memcmp(&v->vga,&expected,sizeof(expected)) &&
+              !memcmp(&v->monitor,&expected_monitor,sizeof(monitor)));
+    }
+    /* Stale hint must not bypass unregister or a replacement owner. */
+    unsigned hint=v->port_hint[2]; CHECK(v->ports[hint].handler==dosvm_vga_port);
+    CHECK(!dosvm_port_unregister(v->info.key,0x3B0));
+    uint32_t value=0x0702; saved=v->vga;
+    CHECK(!dosvm_io(v,0x3C4,2,true,&value) && !memcmp(&saved,&v->vga,sizeof(saved)));
+    CHECK(!dosvm_port_register(v->info.key,0x3C4,0x3C5,vga_replacement_port,0));
+    unsigned calls=vga_replacement_calls;
+    CHECK(!dosvm_io(v,0x3C4,2,true,&value) && vga_replacement_calls==calls+1);
+    destroy(v,true); empty();
+}
+/* Native x86 is the independent INC flag oracle for the bounded decoder. */
+static void exit_native_inc(struct v86_frame *f, unsigned width)
+{
+    uint64_t flags;
+    if (width==2) {
+        uint16_t x=f->tf.edx;
+        __asm__ volatile("incw %0; pushfq; popq %1" : "+r"(x), "=r"(flags) : : "cc");
+        f->tf.edx=(f->tf.edx&0xFFFF0000u)|x;
+    } else {
+        uint32_t x=f->tf.edx;
+        __asm__ volatile("incl %0; pushfq; popq %1" : "+r"(x), "=r"(flags) : : "cc");
+        f->tf.edx=x;
+    }
+    f->tf.eflags=(f->tf.eflags&~0x8D4u)|(flags&0x8D4u);
+}
+static void test_vga_inc_flags(void)
+{
+    for (unsigned width=2;width<=4;width+=2) for (unsigned n=0;n<65536;n++) {
+        struct v86_frame a={.tf={.edx=width==2 ? 0xBEEF0000u|n : n*65537u,
+            .eflags=0xA55A0000u|(n&0xFFFF)}};
+        struct v86_frame b=a;
+        exit_native_inc(&a,width); io_burst_inc(&b,width);
+        CHECK(!memcmp(&a,&b,sizeof(a)));
+    }
+}
+static void test_vga_mask_burst(bool pm, bool big)
+{
+    struct dosvm *v=pm ? dpmi_vm(true) : create();
+    if (pm) { v86_start(); enter(v,big); }
+    else { CHECK(!dosvm_boot(v)); v86_start(); }
+    fast_planar(v);
+    if (pm) {
+        client_desc(v,900,0x30000,0xFFFF,0xFA,big ? 0x40 : 0);
+        cur.tf.cs=DPMI_SEL(900);
+    } else cur.tf.cs=0x3000;
+    v->monitor.vif=false; v->dpmi.if_armed=false; v->dpmi.return_steps=0;
+    v->info.dos_ready=true;
+    const uint8_t code[]={0xEE,0xB0,8,0x42,0xEE,0x90};
+    CHECK(!dosvm_write(v,0x30000,code,sizeof(code)));
+    struct v86_frame initial=cur, scalar={0};
+    for (unsigned batch=0;batch<2;batch++) {
+        cur=initial; cur.tf.eip=0; cur.tf.eax=2; cur.tf.edx=0xABCD03C4;
+        cur.tf.eflags=(cur.tf.eflags&~V86_TF)|0x8D5;
+        unsigned gp=v->perf.exits[0];
+        g_need_resched=!batch; step(v,13,0); CHECK(!left);
+        if (!batch) {
+            CHECK(cur.tf.eip==1);
+            cur.tf.eax=(cur.tf.eax&~255u)|8; cur.tf.eip+=2;
+            exit_native_inc(&cur,big ? 4 : 2); cur.tf.eip++;
+            step(v,13,0); CHECK(!left); scalar=cur;
+        } else CHECK(!memcmp(&cur,&scalar,sizeof(cur)));
+        CHECK(cur.tf.eip==5 && v->vga.seq[2]==8 && v->video_direct==4 &&
+              v->perf.exits[0]-gp==(batch ? 1u : 2u));
+    }
+    /* INC setup is speculative until a supported OUT is fully fetched. */
+    uint8_t nop=0x90; CHECK(!dosvm_write(v,0x30004,&nop,1));
+    cur=initial; cur.tf.eip=1; v->frame_pm=pm;
+    struct v86_frame before=cur;
+    CHECK(!dosvm_io_burst(v,&cur) && !memcmp(&cur,&before,sizeof(cur)));
+    /* The same map-mask write in its word form, including PM32's 66h. */
+    const uint8_t word[]={0xEF,0x90}, prefixed[]={0x66,0xEF,0x90};
+    CHECK(!dosvm_write(v,0x30000,big ? prefixed : word,big ? 3 : 2));
+    cur=initial; cur.tf.eip=0; cur.tf.edx=0x3C4; cur.tf.eax=0x0402;
+    cur.tf.eflags&=~V86_TF;
+    step(v,13,0);
+    CHECK(!left && cur.tf.eip==(big ? 2u : 1u) && v->vga.seq[2]==4 && v->video_direct==3);
+    g_need_resched=false; destroy(v,true); empty();
+}
 static void test_exit_burst(bool pm, bool big)
 {
     struct dosvm *v=pm ? dpmi_vm(true) : create();
@@ -244,6 +353,8 @@ static void test_exit_flags(void)
 static void test_exit_cost(void)
 {
     test_exit_reflection(); test_exit_fast_io(); test_exit_flags();
+    test_vga_fast_io(); test_vga_inc_flags();
+    test_vga_mask_burst(false,false); test_vga_mask_burst(true,false); test_vga_mask_burst(true,true);
     test_exit_burst(false,false); test_exit_burst(true,false); test_exit_burst(true,true);
     struct dosvm *v=dpmi_vm(true); v86_start(); enter(v,false);
     client_desc(v,900,0,UINT32_MAX,0xFA,0);

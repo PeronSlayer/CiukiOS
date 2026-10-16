@@ -168,3 +168,60 @@ remain approximately unchanged. This is not a hardware speedup claim. A
 startup comparison with the existing runtime GUEST_SLICE=64000 option also
 passes with identical before/after counts; it does not reproduce the T23's
 80 us PM flag cost. The exact physical cost attribution remains for the lead.
+
+F3-38 research and implementation decision, 2026-10-16:
+
+- [QEMU 10.1 VGA](https://raw.githubusercontent.com/qemu/qemu/v10.1.0/hw/display/vga.c),
+  `vga_ioport_write`, `vga_mem_readb` and `vga_mem_writeb`: mask indexed
+  registers before comparing memory-access selections; preserve low-byte-first
+  word OUTs, all four read latches, write modes and read-map selection. Reuse
+  the registered virtual handler directly only while its cached registration
+  still owns the port. Equal backing and access permissions need no PTE walk;
+  different private planes still require an exchange. Never alias distinct
+  planes merely because their contents happen to match.
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+  INC and I/O instructions: INC preserves CF and updates OF/SF/ZF/AF/PF.
+  Speculative register setup, including INC DX/EDX, may retire only with a
+  fully decoded following virtual I/O; retain existing debug, interrupt,
+  shadow, return-tracker and reschedule boundaries.
+- QEMU's graphics scanout retains start address, line compare, pan and wrap.
+  Keep the scalar address setup as oracle. Specialize four-plane RGB expansion
+  and compare indexed rows exactly with the last successfully presented image
+  before uploading page-dirty rows. A failed upload invalidates that image;
+  palette/blank/geometry changes force repaint. The bounded index cache adds
+  300 KiB plus row tags per VM slot, accounted in existing resident admission;
+  no memory cap changes. The supplied T23 boot records 523,260 KiB usable,
+  2,064 free DMA pages and 126,816 free NORMAL pages. Its private planar
+  aperture was already active. Share the fast data-port handler's clock pair
+  with remap attribution: that subcost now conservatively includes register
+  update/selection, avoiding a second pair of serialized clock reads per OUT.
+- [Linux Savage](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c),
+  checked also against the supplied read-only source: `vgaHWProtect` and
+  `vgaHWRestore` program shared sequencer/graphics registers. All windowed
+  accesses remain virtual; no physical port permissions or provider changes.
+
+Host timing includes fake trap transport and production C helpers, but cannot
+measure physical exception entry, register-save assembly, TLB refill or IRET.
+Before/after commands, measurements and limitations belong in
+`build/codex/f3-38-report.md`; QEMU and T23 acceptance remain with the lead.
+
+F3-38 host results: the final sanitized suite passes 18,822,841 VM checks
+and 173,117 independent VGA assertions; the i686 link and integer-only audit
+pass. Three alternating O2 samples measure planar row conversion 47,456 to
+22,889 ns/frame and dirty queries 3,087 to 749 ns/frame. A sparse planar
+update uploads two rows instead of 104; the production synthetic DOOM
+presenter changes from 62.859 to 41.256 us/frame, with harvest unchanged
+within noise. The common index/MOV/INC/data sequence uses one exit instead
+of two, retaining native INC flags and the existing burst guards.
+
+The complete real DOOM DEMO1 before/after replays both pass all 5,026 tics
+with identical 5,096,860,656 instructions / 12,587,106 traps and zero
+unexpected instructions. Across matching complete intervals n=1..254, VGA
+cost per presented frame falls from 4,023.575 to 2,777.252 us (1.45x), and
+presenter cost from 138.371 to 84.171 us (1.64x). **The requested 2x overall
+target is not met.** Isolated conversion/dirty-query gains do not qualify
+that gate. New d598bf4c BOOT logs arrived and were re-read before handoff;
+they identify kernel 9c34b9859185 and contain previous-boot/history records,
+so they are supporting inputs, not validation of this patch. No image was
+built: the explicit no-image constraint excludes build_dos_image.py; existing
+DOSBOOT/game fixtures were read-only. QEMU and T23 acceptance remain open.

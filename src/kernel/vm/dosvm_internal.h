@@ -244,10 +244,14 @@ struct dosvm {
     unsigned console_length;
     cvga_geometry video_geometry;
     bool video_modex, video_chain4;
+    uint8_t video_dac_mask;
     uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
     uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];
     uint8_t video_taken[4][CVGA_DIRTY_BYTES];
     uint8_t video_row[DOSVM_VIDEO_WIDTH];
+    /* Exact previous indexed scanout, independent of page dirt and flips. */
+    uint8_t video_indexes[DOSVM_VIDEO_HEIGHT][DOSVM_VIDEO_WIDTH];
+    uint8_t video_index_pan[DOSVM_VIDEO_HEIGHT];
     uint32_t video_pixels[DOSVM_VIDEO_WIDTH];
     char name[32];
     char line[81];
@@ -310,6 +314,7 @@ void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
+int dosvm_vga_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 struct ciuki_rect;
 void dosvm_vbe_init(struct dosvm *);

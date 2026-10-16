@@ -486,6 +486,14 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
             dosvm_trace(v, DOSVM_TRACE_PIT, &v->frame, port, (uint8_t)*value, 0);
         return result;
     }
+    unsigned video = v->port_hint[2];
+    if (write && width <= 2 &&
+        (port == 0x3C4 || port == 0x3C5 || port == 0x3CE || port == 0x3CF) &&
+        video < DOSVM_PORTS && v->ports[video].handler == dosvm_vga_port &&
+        port >= v->ports[video].first && port <= v->ports[video].last) {
+        v->perf.cause = DOSVM_COST_VGA_IO;
+        return dosvm_vga_port(v, port, width, write, value, v->ports[video].arg);
+    }
     unsigned kind = (port >= 0x40 && port <= 0x43) || port == 0x61 ? 0 :
         port == 0x60 || port == 0x64 ? 1 : port >= 0x3B0 && port <= 0x3DF ? 2 : 3;
     v->perf.cause = kind == 0 ? DOSVM_COST_PIT_PIC : kind == 1 ? DOSVM_COST_KBD :
