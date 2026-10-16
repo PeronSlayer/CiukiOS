@@ -375,12 +375,25 @@ static void load_seg(sel_t *seg, uint16_t sel, bool pm, bool code)
     x86emu_set_seg_register(emu, seg, sel);
 }
 
+/* libx86emu raises UD when no CPUID callback is installed. Model the
+ * vendor leaf for boundary tests; other native leaves expose no features.
+ * The existing explicit GUEST_TCG hypervisor leaf remains in trap_check. */
+static void cpuid_vendor(x86emu_t *e)
+{
+    bool vendor = e->x86.R_EAX == 0;
+    e->x86.R_EAX = 0;
+    e->x86.R_EBX = vendor ? 0x756E6547u : 0;
+    e->x86.R_EDX = vendor ? 0x49656E69u : 0;
+    e->x86.R_ECX = vendor ? 0x6C65746Eu : 0;
+}
+
 void gcpu_init(const struct gcpu_ops *o)
 {
     ops = o;
     emu = x86emu_new(X86EMU_PERM_RWX, X86EMU_PERM_RW);
     x86emu_set_memio_handler(emu, memio);
     x86emu_set_intr_handler(emu, intr);
+    x86emu_set_cpuid_handler(emu, cpuid_vendor);
 }
 
 void gcpu_done(void) { x86emu_done(emu); emu = 0; }

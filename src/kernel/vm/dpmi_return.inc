@@ -22,7 +22,50 @@ static bool return_descriptors_live(struct dosvm *v)
         !memcmp(origin, d->return_origin_desc, sizeof(origin)) &&
         dpmi_handler_live(v, (struct dpmi_vec){d->return_eip, d->return_cs});
 }
-static bool return_arm(struct dosvm *v, const struct v86_frame *f, uint16_t cs, uint32_t ip)
+static void return_checkpoint(struct dosvm *, struct v86_frame *);
+/* No instruction bytes or saved flags are patched. TF is set only before
+ * an observed instruction which cannot save it or inhibit its exception. */
+static bool return_fallback(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    uint16_t target_cs = (uint16_t)f->tf.cs;
+    if (!d->return_steps || (f->tf.eflags & (V86_TF | (1u << 14)))) return false;
+    if (!return_step_safe(v, f)) {
+        struct dpmi_seg cs;
+        uint8_t b[15]; unsigned w;
+        if (!dpmi_seg(v, target_cs, &cs) || f->tf.eip > cs.limit) return false;
+        unsigned n = cs.limit - f->tf.eip >= 14 ? 15 : cs.limit - f->tf.eip + 1;
+        if (dosvm_read(v, cs.base + f->tf.eip, b, n)) return false;
+        unsigned pos = flags_opcode(b, n, cs.big, &w);
+        if (pos == n || b[pos] != 0xCF) return false;
+        for (unsigned i = 0; i < pos; i++) if (b[i] != 0x66) return false;
+        struct v86_frame stack = *f;
+        uint32_t ip, sel, flags;
+        if (!dpmi_pop(v, &stack, &ip, w) || !dpmi_pop(v, &stack, &sel, w) ||
+            !dpmi_pop(v, &stack, &flags, w) || (sel & 3) != 3 ||
+            (flags & (V86_VM | V86_TF | (1u << 14))) ||
+            !dpmi_handler_live(v, (struct dpmi_vec){ip, (uint16_t)sel})) return false;
+        target_cs = (uint16_t)sel; /* SDM: BS even if IRET clears entry TF */
+    }
+    d->return_step_cs = (uint16_t)f->tf.cs;
+    d->return_step_target_cs = target_cs;
+    d->return_step = true;
+    d->return_steps--;
+    f->tf.eflags |= V86_TF;
+    dpmi_reload_debug(v); /* no private execute fault may mask this BS */
+    return true;
+}
+static bool return_unstep(struct dosvm *v, struct v86_frame *f, bool retired)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!d->return_step || d->depth != d->return_depth || d->clients != d->return_client ||
+        (uint16_t)f->tf.user_ss != d->return_ss ||
+        (uint16_t)f->tf.cs != (retired ? d->return_step_target_cs : d->return_step_cs)) return false;
+    f->tf.eflags &= ~V86_TF;
+    d->return_step = false;
+    return true;
+}
+static bool return_arm(struct dosvm *v, struct v86_frame *f, uint16_t cs, uint32_t ip)
 {
     struct dpmi *d = &v->dpmi;
     uint32_t linear;
@@ -41,22 +84,35 @@ static bool return_arm(struct dosvm *v, const struct v86_frame *f, uint16_t cs, 
     d->return_origin_cs = (uint16_t)f->tf.cs;
     d->return_eip = ip; d->return_linear = linear;
     dpmi_reload_debug(v);
-    return d->return_steps != 0;
+    if (d->return_slot == DPMI_WATCH && !return_fallback(v, f)) dpmi_return_cancel(v);
+    return d->return_steps != 0 || d->return_step;
 }
-static void return_resume(struct dosvm *v, const struct v86_frame *f)
+static void return_resume(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
-    if (!d->return_steps) return;
-    /* Parent hints survive IRQ/callback/child execution. No breakpoint is
-     * installed in that context, even if it reuses the same selectors. */
+    if (!d->return_steps && !d->return_step) return;
     if (d->clients != d->return_client || d->depth != d->return_depth) {
+        d->return_replan = true;
         if (d->clients < d->return_client || d->depth < d->return_depth) dpmi_return_cancel(v);
         return;
     }
-    if (!v->frame_pm || !v->monitor.vif || (f->tf.eflags & (V86_TF | (1u << 14))) ||
+    if (!v->frame_pm || !v->monitor.vif ||
+        (f->tf.eflags & ((d->return_step ? 0 : V86_TF) | (1u << 14))) ||
         (uint16_t)f->tf.user_ss != d->return_ss ||
         ((uint16_t)f->tf.cs != d->return_cs && (uint16_t)f->tf.cs != d->return_origin_cs) ||
-        !return_descriptors_live(v)) dpmi_return_cancel(v);
+        !return_descriptors_live(v) || g_ticks - d->return_tick >= 100 || d->return_irqs >= 64) {
+        return_unstep(v, f, false);
+        dpmi_return_cancel(v);
+        return;
+    }
+    if (d->return_replan) {
+        d->return_replan = false;
+        return_unstep(v, f, false);
+        /* Nested code can edit the stack or a decoded branch. Recompute
+         * from the current CPU boundary, never resurrect the old target. */
+        return_checkpoint(v, f);
+    } else if (d->return_slot == DPMI_WATCH && !d->return_step && !return_fallback(v, f))
+        dpmi_return_cancel(v);
 }
 
 static uint32_t return_register(const struct v86_frame *f, unsigned reg)
@@ -133,7 +189,7 @@ static bool return_indirect(struct dosvm *v, const struct v86_frame *f, const ui
 }
 
 /* Additional lengths needed by the sparse scanner, separate from the
- * stricter flag-image proof decoder. Unknown encodings end acquisition.
+ * stricter flag-image proof decoder. Unknown safe encodings use a bounded CPU step.
  * The CPU alone executes and checks these instructions. */
 static unsigned return_length(const uint8_t *b, unsigned n, bool big, unsigned *pos, unsigned *w)
 {
@@ -183,7 +239,7 @@ static bool return_transfer(const uint8_t *b, unsigned n, unsigned pos)
         (op == 0xFF && pos + 1 < n && (((b[pos + 1] >> 3) & 7) == 2 || ((b[pos + 1] >> 3) & 7) == 4));
 }
 
-static void return_checkpoint(struct dosvm *v, const struct v86_frame *f)
+static void return_checkpoint(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
     struct dpmi_seg cs;
@@ -191,7 +247,14 @@ static void return_checkpoint(struct dosvm *v, const struct v86_frame *f)
         (f->tf.eflags & (V86_TF | (1u << 14))) || !dpmi_seg(v, (uint16_t)f->tf.cs, &cs)) {
         dpmi_return_cancel(v); return;
     }
+    bool spare = false;
+    for (unsigned i = 0; i < DPMI_WATCH; i++) spare |= !d->watch[i].used;
+    if (!spare) {
+        if (!return_fallback(v, f)) dpmi_return_cancel(v);
+        return;
+    }
     struct v86_frame scan = *f;
+    bool may_write = false;
     while (d->return_steps && scan.tf.eip <= cs.limit) {
         uint8_t b[15]; unsigned pos, w;
         unsigned n = cs.limit - scan.tf.eip >= 14 ? 15 : cs.limit - scan.tf.eip + 1;
@@ -200,16 +263,17 @@ static void return_checkpoint(struct dosvm *v, const struct v86_frame *f)
             dosvm_read(v, linear, b, n)) break;
         unsigned len = return_length(b, n, cs.big, &pos, &w);
         bool barrier = !return_step_safe(v, &scan);
-        if (len && !barrier && (b[pos] == 0xE8 || b[pos] == 0xE9 || b[pos] == 0xEB)) {
-            /* Direct transfers have a statically known destination. Follow
-             * the candidate path without paying a checkpoint for the call
-             * and its first instruction. Only the final execute fault is
-             * used as a boundary; a CPU fault on the way cancels the hint. */
+        if (len && !barrier && !may_write && (b[pos] == 0xE8 || b[pos] == 0xE9 || b[pos] == 0xEB)) {
+            /* Follow static transfers only while preceding decoded work
+             * cannot write their encoding. A store requires an observed
+             * transfer boundary before reading its new displacement. */
             unsigned iw = b[pos] == 0xEB ? 1 : w;
             int32_t rel = iw == 1 ? (int8_t)b[len - 1] : iw == 2 ? (int16_t)vm_u16(b + len - 2) : (int32_t)vm_u32(b + len - 4);
             uint32_t target = scan.tf.eip + len + (uint32_t)rel;
             if (iw == 2 || (iw == 1 && !cs.big)) target &= 0xFFFFu;
             if (target == scan.tf.eip || target == f->tf.eip) break;
+            /* CALL writes a return slot, potentially through a code alias. */
+            may_write = b[pos] == 0xE8;
             d->return_steps--; scan.tf.eip = target;
             continue;
         }
@@ -218,7 +282,11 @@ static void return_checkpoint(struct dosvm *v, const struct v86_frame *f)
                 return_arm(v, f, (uint16_t)f->tf.cs, scan.tf.eip);
                 return;
             }
-            if (barrier || !len) break;
+            if (barrier) break;
+            if (!len) {
+                if (return_fallback(v, f)) return;
+                break;
+            }
             /* Live register/stack values are meaningful only here. No
              * future branch direction or indirect operand is guessed. */
             uint32_t next = f->tf.eip + len, target = next;
@@ -245,12 +313,17 @@ static void return_checkpoint(struct dosvm *v, const struct v86_frame *f)
                 if (take) target = next + (uint32_t)rel;
                 if (iw == 2 && take) target &= 0xFFFFu;
             }
-            if (!cs.big && ((op >= 0x70 && op <= 0x7F) || (op >= 0xE0 && op <= 0xE3))) target &= 0xFFFFu;
+            if (!cs.big && (op == 0xEB || (op >= 0x70 && op <= 0x7F) || (op >= 0xE0 && op <= 0xE3))) target &= 0xFFFFu;
             d->return_steps--;
             if (target == f->tf.eip) break;
+            may_write |= op == 0xFF && ((b[pos + 1] >> 3) & 7) == 2;
             scan.tf.eip = target;
             continue;
         }
+        /* This deliberately conservative classifier shares the epilogue's
+         * complete register-only encodings. Unknown memory effects fence
+         * subsequent direct transfers, without stepping ordinary code. */
+        may_write |= b[pos] != 0x90 && !return_register_instruction(b, pos);
         d->return_steps--;
         if (scan.tf.eip > UINT32_MAX - len || (!cs.big && scan.tf.eip + len > 0xFFFFu)) break;
         scan.tf.eip += len;
@@ -268,10 +341,27 @@ static bool return_debug_trap(struct dosvm *v, struct v86_frame *f, uint32_t *dr
 {
     struct dpmi *d = &v->dpmi;
     uint32_t bit = return_debug_bit(d);
+    if (d->return_step) {
+        bool bs = f->tf.vector == 1 && (*dr6 & (1u << 14));
+        if (return_unstep(v, f, bs)) {
+            if (bs) {
+                *dr6 &= ~(1u << 14);
+                v->perf.return_fallbacks++;
+                if (!(*dr6 & (15u | (1u << 13) | (1u << 15)))) {
+                    return_checkpoint(v, f);
+                    return true;
+                }
+            }
+            dpmi_return_cancel(v);
+        }
+    }
     if (f->tf.vector != 1 || !(*dr6 & bit)) return false;
     *dr6 &= ~bit;                        /* never becomes a client .hit */
     bool arrived = return_context(d, f) && f->tf.eip == d->return_eip && return_descriptors_live(v);
     if (arrived && !(*dr6 & (15u | (1u << 13) | (1u << 14) | (1u << 15)))) {
+        v->perf.return_hits++;
+        struct dpmi_seg cs;
+        if (dpmi_seg(v, (uint16_t)f->tf.cs, &cs) && cs.base) v->perf.return_segmented++;
         d->return_hops--;
         return_checkpoint(v, f);
     } else dpmi_return_cancel(v);        /* alias hit or simultaneous debugger */

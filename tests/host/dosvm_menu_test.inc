@@ -299,8 +299,9 @@ static void test_menu_return_nested(void)
 {
     struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
     uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
-    const uint8_t save = 0x9C;
-    CHECK(!dosvm_write(v, base + 0x400, &save, 1));
+    const uint8_t save = 0x9C, ret = 0xC3;
+    CHECK(!dosvm_write(v, base + 0x400, &ret, 1) && !dosvm_write(v, base + 0x440, &save, 1));
+    pm_push(v, 0x440);
     menu_checkpoint_start(v, 0x400);
     uint32_t parent_ip = cur.tf.eip;
     uint16_t parent_ss = (uint16_t)cur.tf.user_ss;
@@ -319,6 +320,7 @@ static void test_menu_return_nested(void)
     v->dpmi.clients++; dpmi_reload_debug(v);
     return_boundary_seed(v, &cur); CHECK(v->dpmi.return_steps && !v->dpmi.dr7);
     v->dpmi.clients--; dpmi_reload_debug(v);
+    cur.tf.eip = pm_pop(v);
     menu_checkpoint_hit(v); CHECK(!v->dpmi.return_steps && !v->dpmi.dr7);
     destroy(v, true); empty();
     /* The private B bit is consumed independently of a real client hit/BS. */
@@ -337,7 +339,7 @@ static void test_menu_return_nested(void)
         CHECK(!!(v->dpmi.rec[0].saved.tf.eflags & V86_TF) == (cause == 1));
         destroy(v, true); empty();
     }
-    /* A fourth 0B00h allocation evicts the hint, never a client slot. */
+    /* A fourth allocation preserves acquisition and every client slot. */
     v = dpmi_vm(true); v86_start(); enter(v, true);
     menu_checkpoint_start(v, 0x400);
     for (unsigned i = 0; i < DPMI_WATCH; i++) {
@@ -345,12 +347,73 @@ static void test_menu_return_nested(void)
         CHECK(!dpmi_int31(v, &cur) && !cf() && (uint16_t)cur.tf.ebx == i);
         CHECK(v->dpmi.watch[i].used && v->dpmi.watch[i].addr == 0x14000 + i * 4 && !v->dpmi.watch[i].hit);
     }
-    CHECK(!v->dpmi.return_steps && (v->dpmi.dr7 & 0x55) == 0x55);
+    CHECK(v->dpmi.return_steps && v->dpmi.return_slot == DPMI_WATCH && (v->dpmi.dr7 & 0x55) == 0x55);
     dosvm_task_switch(v->task);
     for (unsigned i = 0; i < DPMI_WATCH; i++) CHECK(debug_addr[i] == 0x14000 + i * 4);
     dosvm_task_switch(&caller); CHECK(!debug_dr7);
     destroy(v, true); empty();
     puts("f3-34 return scope: IRQ/callback/child suspension, TF untouched, simultaneous client BS/watchpoint, four debugger slots, task switching PASS");
+}
+static void test_menu_hint_expiry(void)
+{
+    for (unsigned by_irq = 0; by_irq < 2; by_irq++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v,true);
+        menu_checkpoint_start(v,0x400);
+        uint32_t base = seg_base(v,(uint16_t)cur.tf.cs);
+        const uint8_t loop[] = {0xEB,0xFE};
+        CHECK(!dosvm_write(v,base+0x600,loop,2));
+        cur.tf.eip = 0x600; /* diverted prediction never hits */
+        uint64_t start = g_ticks;
+        if (by_irq) {
+            for (unsigned i = 0; i < 64; i++) {
+                /* Every physical entry spends lifetime even when scanning
+                 * cannot advance and no private #DB has arrived. */
+                v->dpmi.return_irqs++;
+                return_resume(v,&cur);
+            }
+        } else { g_ticks += 100; return_resume(v,&cur); }
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif && !v->perf.return_hits);
+        menu_checkpoint_start(v,0x440); CHECK(v->dpmi.return_steps && v->dpmi.return_irqs == 0);
+        v->monitor.vif = false; g_ticks += 100; return_resume(v,&cur);
+        CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && !v->monitor.vif);
+        g_ticks = start;
+        destroy(v,true); empty();
+    }
+    puts("f3-34 hint lifetime: missed target expires by time or IRQ budget, releases DR slot, allows reseeding, never forces IF PASS");
+}
+static void test_menu_fallback_ownership(void)
+{
+    static const uint32_t causes[] = {0, 1, 1u << 13, 1u << 15};
+    for (unsigned case_no = 0; case_no < ARRAY_SIZE(causes); case_no++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v,true);
+        for (unsigned i = 0; i < DPMI_WATCH; i++) v->dpmi.watch[i] =
+            (struct dpmi_watch){.used=true,.owner=1,.type=1,.size=4,.addr=0x34000+i*4};
+        dpmi_reload_debug(v);
+        uint32_t base = seg_base(v,(uint16_t)cur.tf.cs);
+        uint8_t code[515]; memset(code,0x90,sizeof(code)); code[0] = 0xC3;
+        CHECK(!dosvm_write(v,base+0x200,code,sizeof(code)));
+        cur.tf.eip = 0x200; cur.tf.eflags = V86_IF | 2; pm_push(v,0x201);
+        v->dpmi.exc[1] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs,.off=0x700};
+        step(v,0x20,0); CHECK(v->dpmi.return_step && (cur.tf.eflags & V86_TF));
+        if (case_no) {
+            cur.tf.eip = pm_pop(v);
+            debug_dr6 = (1u<<14) | causes[case_no]; step(v,1,0);
+            CHECK(!left && cur.tf.eip == 0x700 && v->dpmi.depth == 1 &&
+                  !v->dpmi.return_step && !v->dpmi.return_steps &&
+                  !(v->dpmi.rec[0].saved.tf.eflags & V86_TF) &&
+                  v->dpmi.watch[0].hit == (case_no == 1));
+        } else {
+            for (unsigned i = 0; i < DPMI_RETURN_STEPS; i++) {
+                cur.tf.eip = 0x201+i; debug_dr6 = 1u<<14; step(v,1,0);
+                CHECK(!left && v->monitor.vif && v->dpmi.return_step == (i+1 < DPMI_RETURN_STEPS));
+            }
+            CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) &&
+                  v->perf.return_fallbacks == DPMI_RETURN_STEPS && !v->perf.return_hits);
+        }
+        for (unsigned i = 0; i < DPMI_WATCH; i++) CHECK(v->dpmi.watch[i].used && v->dpmi.watch[i].addr == 0x34000+i*4);
+        destroy(v,true); empty();
+    }
+    puts("f3-34 fallback ownership: 512-step bound, no forced IF, all client DR slots retained, simultaneous B/BD/BT delivered without monitor TF PASS");
 }
 static void test_menu_checkpoint_invalid(void)
 {
@@ -480,6 +543,142 @@ static void test_menu_checkpoint_cpu(void)
     gcpu_done(); if_cpu_vm = 0;
     puts("f3-34 CPU: 16/32-bit real RET, result store, LEAVE/RET cleanup, three execute faults, PUSHF/CLI/POPF virtual-IF restoration PASS");
 }
+/* Review regressions execute the real guest instructions through the CPU
+ * adapter. No synthetic BS stands in for CPUID, IRET or flags restoration. */
+static void test_menu_review_cpu(void)
+{
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    for (unsigned bits = 0; bits < 2; bits++) for (unsigned restore = 0; restore < 2; restore++)
+    for (unsigned scenario = 0; scenario < 6; scenario++) {
+        struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
+        unsigned w = bits ? 4 : 2;
+        client_desc(v, 900, 0x30000, 0xFFFF, 0xFA, bits ? 0x40 : 0);
+        client_desc(v, 901, 0x31000, 0xFFFF, 0xFA, bits ? 0x40 : 0);
+        client_desc(v, 902, 0x32000, 0xFFFF, 0xF2, bits ? 0x40 : 0);
+        cur.tf.cs = DPMI_SEL(900); cur.tf.user_ss = cur.tf.ds = cur.tf.es = DPMI_SEL(902);
+        cur.tf.user_esp = 0x500; cur.tf.eip = 0x100; cur.tf.eflags = V86_IF | 2;
+        cur.tf.eax = 0; /* CPUID vendor leaf */
+        const uint8_t ret = 0xC3, iret = 0xCF;
+        const uint8_t cpuid[] = {0x0F,0xA2,0x9C,0x58,0xFA,0x50,0x9D,0x90};
+        uint8_t body[32]; memcpy(body, cpuid, sizeof(cpuid));
+        unsigned len = sizeof(cpuid);
+        if (restore) {
+            /* PUSH AX/EAX; PUSH CS; PUSH target; IRET; NOP */
+            body[6] = 0x0E; body[7] = 0x68;
+            uint32_t end = 0x200 + 9 + w;
+            memcpy(body + 8, &end, w); body[8+w] = 0xCF; body[9+w] = 0x90;
+            len = 10 + w;
+        }
+        uint32_t codebase = scenario == 1 ? 0x31000 : 0x30000;
+        CHECK(!dosvm_write(v, 0x30100, scenario == 1 ? &iret : &ret, 1) &&
+              !dosvm_write(v, codebase + 0x200, body, len));
+        uint32_t stack[4] = {0x200, 0, 0, 0};
+        if (scenario == 1) {
+            stack[0] = 0x180; stack[1] = DPMI_SEL(901); stack[2] = V86_IF | 2; stack[3] = 0x200;
+            CHECK(!dosvm_write(v, 0x31180, &ret, 1));
+        }
+        for (unsigned i = 0; i < (scenario == 1 ? 4u : 1u); i++)
+            CHECK(!dosvm_write(v, 0x32500 + i*w, &stack[i], w));
+        if (scenario == 1 || scenario == 4) {
+            for (unsigned i = 0; i < DPMI_WATCH; i++) v->dpmi.watch[i] =
+                (struct dpmi_watch){.used=true,.owner=1,.type=1,.size=4,.addr=0x34000+i*4};
+            dpmi_reload_debug(v);
+        }
+        if (scenario == 2 || scenario == 3) {
+            /* RET to a second RET or direct JMP. The IRQ edits the return
+             * slot or branch after its checkpoint, before CPU execution. */
+            uint32_t middle = 0x180, obsolete = 0x280;
+            CHECK(!dosvm_write(v, 0x32500, &middle, w) &&
+                  !dosvm_write(v, 0x32500+w, &obsolete, w));
+            uint8_t branch[] = {0xEB,0x7E}; /* 180 -> 200 */
+            CHECK(!dosvm_write(v, 0x30180, scenario == 2 ? &ret : branch, scenario == 2 ? 1 : 2));
+            if (scenario == 3) {
+                uint8_t before[32]; memset(before,0x90,sizeof(before));
+                before[0] = 0x89; before[1] = 0x07; /* MOV [BX/EDI],AX/EAX */
+                cur.tf.ebx = cur.tf.edi = 0x900;
+                middle = 0x160;
+                CHECK(!dosvm_write(v,0x30160,before,sizeof(before)) && !dosvm_write(v,0x32500,&middle,w));
+            }
+        }
+        if (scenario == 5) {
+            /* A store changes a direct transfer that the scanner has not
+             * reached yet. A writable data alias models self-modifying code. */
+            client_desc(v, 903, 0x30000, 0xFFFF, 0xF2, bits ? 0x40 : 0);
+            cur.tf.ds = DPMI_SEL(903);
+            uint8_t writer[34]; memset(writer,0x90,sizeof(writer));
+            writer[0] = 0xC6; writer[1] = bits ? 0x05 : 0x06;
+            uint32_t operand = 0x181, start = 0x160;
+            memcpy(writer+2,&operand,w); writer[2+w] = 0x7E;
+            writer[32] = 0xEB; writer[33] = 0x3E; /* initially points at 1C0 */
+            CHECK(!dosvm_write(v,0x30160,writer,sizeof(writer)) && !dosvm_write(v,0x32500,&start,w));
+        }
+        v->dpmi.decode_valid = false;
+        step(v, 0x20, 0);
+        CHECK(v->dpmi.return_steps);
+        if (scenario == 4) {
+            CHECK(v->dpmi.return_step && (cur.tf.eflags & V86_TF));
+            v->dpmi.vec[8] = (struct dpmi_vec){.sel=DPMI_SEL(900),.off=0x700};
+            CHECK(dosvm_irq_raise(v->info.key,0)); step(v,0x20,0);
+            CHECK(v->dpmi.depth == 1 && !v->dpmi.return_step && !(v->dpmi.rec[0].saved.tf.eflags & V86_TF));
+            cur.tf.eax = 0x20; const uint8_t eoi[] = {0xE6,0x20}; exec(v,eoi,2,13,0);
+            pm_iret(v); at_stub(v,DPMI_PM_IRQRET);
+            CHECK(!v->dpmi.depth && v->dpmi.return_step && (cur.tf.eflags & V86_TF));
+            cur.tf.eax = 0;
+        }
+        if (scenario == 2 || scenario == 3) {
+            struct gcpu_event ev;
+            CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 1);
+            debug_dr6 = ev.dr6; step(v, 1, 0);
+            if (scenario == 3) {
+                CHECK(if_cpu_run(v,&ev) == GCPU_TRAP && ev.vector == 1);
+                debug_dr6 = ev.dr6; step(v,1,0);
+            }
+            CHECK(cur.tf.eip == 0x180);
+            CHECK(v->dpmi.decode_valid && v->dpmi.decode_stack_valid && v->dpmi.decode_eip == 0x180);
+            v->dpmi.vec[8] = (struct dpmi_vec){.sel=DPMI_SEL(900),.off=0x700};
+            CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+            CHECK(v->dpmi.depth == 1 && !v->dpmi.return_step && !(v->dpmi.rec[0].saved.tf.eflags & V86_TF));
+            uint32_t target = 0x200;
+            if (scenario == 2) CHECK(!dosvm_write(v, 0x32500+w, &target, w));
+            else {
+                /* Change the instruction to a short jump via 1C0. */
+                const uint8_t jump[] = {0xEB,0x3E};
+                CHECK(!dosvm_write(v, 0x30180, jump, 2) && !dosvm_write(v, 0x301C0, jump, 2));
+            }
+            cur.tf.eax = 0x20; const uint8_t eoi[] = {0xE6,0x20}; exec(v,eoi,2,13,0);
+            pm_iret(v); at_stub(v,DPMI_PM_IRQRET);
+            CHECK(!v->dpmi.depth && v->monitor.vif && v->dpmi.return_eip != 0x280);
+        }
+        bool armed = false, restored = false;
+        for (unsigned count = 0; count < 20 && !restored; count++) {
+            struct gcpu_event ev;
+            int rc = if_cpu_run(v, &ev);
+            if (rc != GCPU_TRAP) fprintf(stderr,"review CPU bits=%u restore=%u scenario=%u rc=%d vec=%u pc=%x flags=%x step=%u remaining=%u slot=%u\n",bits,restore,scenario,rc,ev.vector,cur.tf.eip,cur.tf.eflags,v->dpmi.return_step,v->dpmi.return_steps,v->dpmi.return_slot);
+            CHECK(rc == GCPU_TRAP);
+            if (ev.vector == 13) {
+                CHECK(cur.tf.eip == 0x204 && !(cur.tf.eflags & V86_TF) && !(cur.tf.eax & V86_TF));
+                step(v,13,0); CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+                armed = true;
+            } else {
+                CHECK(ev.vector == 1);
+                debug_dr6 = ev.dr6; step(v,1,0);
+                restored = armed && v->monitor.vif;
+            }
+            CHECK(!left);
+        }
+        CHECK(armed && restored && !v->dpmi.if_armed && !(cur.tf.eflags & V86_TF));
+        CHECK(v->perf.return_fallbacks > 0);
+        if (scenario == 1 || scenario == 4) {
+            CHECK(!v->perf.return_hits && (v->dpmi.dr7 & 0x55) == 0x55);
+            for (unsigned i = 0; i < DPMI_WATCH; i++)
+                CHECK(v->dpmi.watch[i].used && !v->dpmi.watch[i].hit && v->dpmi.watch[i].addr == 0x34000+i*4);
+        } else CHECK(v->perf.return_hits && v->perf.return_hits == v->perf.return_segmented);
+        destroy(v,true); empty();
+    }
+    gcpu_done(); if_cpu_vm = 0;
+    puts("f3-34 review CPU: 16/32-bit CPUID to POPF/IRET, four untouched watchpoints with cross-CS IRET/RET, IRQ return-slot/direct-jump edits, self-modifying transfer, fallback IRQ suspension, independent proof, private segmented hits PASS");
+}
 static void test_menu_doom_cli_seeds(void)
 {
     /* Byte-identical slices from the pinned DOOM.EXE, before LE relocation.
@@ -534,10 +733,10 @@ static void test_menu(void)
     test_menu_quiet_records(); test_menu_heartbeat(); test_menu_vga_dirty_repeat(); test_menu_pm_devices();
     test_menu_halted_heartbeat();
     test_menu_return_seed(); test_menu_return_steps(); test_menu_return_nested();
-    test_menu_checkpoint_invalid();
+    test_menu_checkpoint_invalid(); test_menu_hint_expiry(); test_menu_fallback_ownership();
     test_menu_near_return();
 #ifdef CIUKI_DOSVM_GUEST_CPU
-    test_menu_checkpoint_cpu();
+    test_menu_checkpoint_cpu(); test_menu_review_cpu();
     test_menu_doom_cli_seeds();
 #endif
 }

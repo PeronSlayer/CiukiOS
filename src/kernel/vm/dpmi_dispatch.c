@@ -733,7 +733,7 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
 }
 
 /* f3-34: acquire actual boundaries through sparse execute breakpoints.
- * The remaining budget counts forward decoding, not retired TF steps.
+ * The remaining budget counts decoding and exceptional fallback TF steps.
  * The safety predicate also serves the independent f3-15 recovery path. */
 #define DPMI_RETURN_STEPS 512u
 #define DPMI_RETURN_HOPS 32u
@@ -872,8 +872,8 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
         return;
     }
     if (d->if_step) return;
-    /* A return checkpoint never owns TF. Retire its breakpoint before
-     * acquiring recovery TF; never clear a client's TF here. */
+    /* Return acquisition is inactive when virtual IF is clear. Retire
+     * its checkpoint before recovery; never clear a client's TF here. */
     if (d->return_steps && return_context(d, f)) dpmi_return_cancel(v);
     if (f->tf.eflags & (V86_TF | (1u << 14)) || d->dr7) return;
     struct dpmi_seg cs;
@@ -936,7 +936,7 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     if (d->return_steps) {
         return_resume(v, f);
-        return;
+        if (d->return_steps || d->return_step) return;
     }
     if (!v->monitor.vif || d->if_armed || (f->tf.eflags & (V86_TF | (1u << 14)))) return;
     struct dpmi_seg cs, ss;
@@ -960,10 +960,11 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
                 !dpmi_ptr(v, (uint16_t)f->tf.user_ss, sp + consumed, w, false, &linear) ||
                 dosvm_read(v, linear, &target, w) ||
                 !dpmi_handler_live(v, (struct dpmi_vec){.sel=(uint16_t)f->tf.cs, .off=target})) return;
-            /* Only an execute fault at the candidate makes it a boundary.
-             * No TF in the live frame, even for a same-selector return. */
+            /* A predicted PC is never proof. Prefer an execute fault; full
+             * client DR allocation falls back to checked CPU steps. */
             d->return_steps = DPMI_RETURN_STEPS;
             d->return_hops = DPMI_RETURN_HOPS;
+            d->return_tick = g_ticks; d->return_irqs = 0; d->return_replan = false;
             return_arm(v, f, (uint16_t)f->tf.cs, target);
             dosvm_boundary(v, f, "ret_seed");
             return;
@@ -985,6 +986,7 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
                 first != 0xC3 || (target.big ? 4u : 2u) != w) return;
             d->return_steps = DPMI_RETURN_STEPS;
             d->return_hops = DPMI_RETURN_HOPS;
+            d->return_tick = g_ticks; d->return_irqs = 0; d->return_replan = false;
             return_arm(v, f, selector, frame[3]); /* IRET -> RET -> caller */
             dosvm_boundary(v, f, "iret_seed");
             return;
@@ -1140,6 +1142,7 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
         d->shadow = false;
     bool recovery_step = d->if_step;
     if (if_recovery_trap(v, f, dr6)) return 0;
+    if (irq) return_unstep(v, f, false);
     if (return_debug_trap(v, f, &dr6)) return 0;
     if (d->return_steps && d->depth == d->return_depth && d->clients == d->return_client && !irq)
         dpmi_return_cancel(v);          /* fault/interrupt, never clear client TF */
@@ -1193,23 +1196,30 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         f->tf.eip == DPMI_PM_IRQRET && v->dpmi.depth &&
         v->dpmi.rec[v->dpmi.depth - 1].kind == DPMI_REC_PMINT;
     dr6 = dpmi_debug_status(v, dr6);
-    bool checkpoint = f->tf.vector == 1 && (dr6 & return_debug_bit(&v->dpmi));
+    bool checkpoint = f->tf.vector == 1 && ((dr6 & return_debug_bit(&v->dpmi)) ||
+        (v->dpmi.return_step && (dr6 & (1u << 14))));
+    if (irq && v->dpmi.return_steps && v->dpmi.depth == v->dpmi.return_depth &&
+        v->dpmi.clients == v->dpmi.return_client) {
+        v->dpmi.return_irqs++;
+        v->dpmi.return_replan = true;
+    }
     int e = pm_trap(v, f, cr2, dr6);
     if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err &&
         (v->perf.cause == DOSVM_COST_VGA_IO || (v->perf.cause == DOSVM_COST_PIT_PIC &&
          v->perf.io_port >= 0x40 && v->perf.io_port <= 0x43)))
         e = dosvm_io_burst(v, f);
+    bool replanning = !e && v->frame_pm && v->dpmi.return_replan &&
+        v->dpmi.depth == v->dpmi.return_depth && v->dpmi.clients == v->dpmi.return_client;
+    /* Preserve a flags save already reached before the IRQ; otherwise the
+     * resumed CPU boundary supplies a fresh stack snapshot for its proof. */
+    bool keep_resumed = replanning && dpmi_seg(v, (uint16_t)f->tf.cs, &cs) &&
+        flags_preceding(v, f, &cs, 0, 0, true);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
     if (!e && v->frame_pm && !checkpoint) return_boundary_seed(v, f);
-    /* Acquire at the endpoint, not at intermediate execute checkpoints.
-     * Keep the existing initial/IRQ boundary proof as a fallback when an
-     * optional breakpoint is suppressed (RF/SS) or later discarded. */
-    bool tracing = checkpoint && !e && v->frame_pm && v->dpmi.return_steps &&
-        return_context(&v->dpmi, f);
-    if (tracing) {
-        v->dpmi.decode_valid = v->dpmi.decode_stack_valid = v->dpmi.decode_ds_valid = false;
-    } else if ((!keep && !irq_return) || e || !v->frame_pm) {
+    /* Every checkpoint is an observed boundary: retain its independent
+     * proof even while another prediction is in flight. */
+    if ((!keep && !irq_return) || e || !v->frame_pm || checkpoint || (replanning && !keep_resumed)) {
         v->dpmi.decode_valid = !e && v->frame_pm;
         v->dpmi.decode_cs = (uint16_t)f->tf.cs;
         v->dpmi.decode_eip = f->tf.eip;
@@ -1256,6 +1266,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
         irq_restore(flags);
         return -ENOSPC;                 /* nesting exhausted: this VM only */
     }
+    if (return_unstep(v, f, false)) d->return_replan = true;
     /* Construct the complete frame before INTA. Keep arbitration and
      * commit in one bounded IRQ-disabled transaction: a rejected handler
      * or stack must leave the request pending, with no orphan ISR bit or

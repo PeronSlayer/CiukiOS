@@ -213,12 +213,14 @@ static void dosvm_heartbeat(struct dosvm *v, const struct v86_frame *f)
  * IF-disabled device transaction (polled UART writes can lose PIT ticks). */
 static const char *dosvm_step_owner(const struct dosvm *v, const struct v86_frame *f, uint32_t dr6)
 {
+    const struct dpmi *d = &v->dpmi;
+    if (!(f->tf.eflags & V86_VM) && d->return_steps && d->return_slot < DPMI_WATCH &&
+        !d->watch[d->return_slot].used && (dr6 & (1u << d->return_slot))) return "pm_checkpoint";
     if (!(dr6 & (1u << 14))) return "client";
     if (f->tf.eflags & V86_VM) {
         if (v->monitor.shadow) return "rm_ss";
         return v->monitor.vif && v86_irq_pending(&v->monitor) >= 0 ? "rm_irq" : "rm_tf";
     }
-    const struct dpmi *d = &v->dpmi;
     if (d->if_step) return "pm_if";
     if (d->if_armed) return "pm_flags";
     if (d->return_steps && (uint16_t)f->tf.cs == d->return_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
@@ -282,10 +284,10 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
                  f->tf.eip, !!(f->tf.eflags & V86_IF), !!(f->tf.eflags & V86_TF), a, v->frame_pm, b, c);
         break;
     case DOSVM_TRACE_DB_PM: case DOSVM_TRACE_DB_RM:
-        dosvm_diag(v, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u step=%s",
+        dosvm_diag(v, "group=vm_db vm=%u gen=%u n=%u pm=%u cs=%04x eip=%08x dr6=%08x cause=%08x tf=%u if=%u vif=%u armed=%u step=%s hits=%u",
                  v->info.key.id, v->info.key.generation, n, pm, f->tf.cs & 0xFFFF, f->tf.eip, a, b,
                  !!(f->tf.eflags & V86_TF), !!(f->tf.eflags & V86_IF), v->monitor.vif, v->dpmi.if_armed,
-                 dosvm_step_owner(v, f, b));
+                 dosvm_step_owner(v, f, b), v->perf.return_hits);
         break;
     case DOSVM_TRACE_FLAGS:
         dosvm_diag(v, "group=vm_if vm=%u gen=%u n=%u restore=%u matched=%u cs=%04x eip=%08x vif=%u armed=%u seed=%u seed_cs=%04x seed_ip=%08x",
