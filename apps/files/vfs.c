@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * POSIX adapter for the Files model (CiukiOS SDK: readdir over getdents,
  * stat, mkdir, rename, unlink, rmdir, open/read/write/fsync/close). */
+#define _DEFAULT_SOURCE 1
 #include "model.h"
 #include <sys/stat.h>
 #include <dirent.h>
@@ -31,7 +32,7 @@ static int sniff(const char *path)
     return n == (ssize_t)sizeof(h) && !memcmp(h, "\177ELF\1\1\1", 7) && h[16] == 2 && h[18] == 3;
 }
 
-static int list(void *ctx, const char *path, fm_emit emit, void *arg)
+static int list(void *ctx, const char *path, unsigned flags, fm_emit emit, void *arg)
 {
     DIR *dir = opendir(path);
     if (!dir) return -errno;
@@ -41,11 +42,20 @@ static int list(void *ctx, const char *path, fm_emit emit, void *arg)
         struct dirent *entry = readdir(dir);
         if (!entry) { if (errno) r = -errno; break; }
         if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-        char full[FM_PATH]; struct fm_meta meta;
-        r = fm_join(full, path, entry->d_name);
-        if (!r) r = metadata_stat(ctx, full, &meta);
+        char full[FM_PATH]; struct fm_meta meta = {.type=FM_OTHER, .ino=entry->d_ino};
+#if defined(CIUKI_DIRENT_METADATA)
+        meta.type = entry->d_type == DT_DIR ? FM_DIR : entry->d_type == DT_REG ? FM_FILE : FM_OTHER;
+        meta.size = entry->d_size; meta.modified = entry->d_mtime;
+#elif defined(DT_DIR)
+        /* Portable host builds lack Ciuki's metadata extension. */
+        meta.type = entry->d_type == DT_DIR ? FM_DIR : entry->d_type == DT_REG ? FM_FILE : FM_OTHER;
+#endif
+        if (flags & FM_LIST_SNIFF) {
+            r = fm_join(full, path, entry->d_name);
+            if (!r) r = metadata_stat(ctx, full, &meta);
+        }
         if (r == -ENOENT) { r = 0; continue; }   /* removed during enumeration */
-        if (!r && meta.type == FM_FILE && meta.size >= 52 && !strchr(entry->d_name, '.') && sniffed < 128) {
+        if (!r && (flags & FM_LIST_SNIFF) && meta.type == FM_FILE && meta.size >= 52 && !strchr(entry->d_name, '.') && sniffed < 128) {
             sniffed++; meta.exec = (uint32_t)sniff(full);
         }
         if (!r) r = emit(entry->d_name, &meta, arg);

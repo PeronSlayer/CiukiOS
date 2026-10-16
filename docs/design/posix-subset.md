@@ -336,6 +336,33 @@ with opaque monotonically advancing per-description cookies and zero at EOF.
 Concurrent directory mutation MAY change enumeration order or visibility;
 malformed records and duplicate cookies within an unmodified enumeration MUST
 fail tests. Directory lseek MUST support only offset zero/SEEK_SET, for rewind.
+
+**[F2-79] Directory metadata without path lookup.** Research (2026-10-16):
+[Microsoft FAT 1.03, pp. 23–25](https://www.pcjs.org/documents/papers/microsoft/MS_FAT_OVERVIEW_103-2000-12-06.pdf)
+defines type/attributes, size and last-write date/time in the directory entry.
+[POSIX readdir](https://pubs.opengroup.org/onlinepubs/007904875/functions/readdir_r.html)
+permits stream buffering and unspecified visibility under concurrent mutation;
+[newlib](https://sourceware.org/newlib/libc.html) leaves OS integration to its port.
+Here `sdk/libciuki/posix.c` returns the kernel record directly through the
+`dirent.h` overlay. Previously its 792-byte record carried only name/type/ino.
+Append `uint64_t d_size` at offset 792 and `int64_t d_mtime` at offset 800
+(Unix seconds, the same FAT UTC conversion as stat), making the record 808
+bytes, alignment 4. Existing fields/offsets and the syscall number stay fixed;
+the SDK `dirent.h` advertises the fields with `CIUKI_DIRENT_METADATA`.
+kernel, SDK and applications MUST be rebuilt together. Older 792-byte consumers
+are not ABI compatible. These are enumeration snapshots: directories and
+synthetic devices have size zero; read-only files use their enumeration size
+and currently report mtime zero, matching stat. FAT values come from the
+entry just enumerated, without stat, FAT chain traversal, or another lookup.
+`fm_vfs.list(..., flags, ...)` uses `FM_LIST_NAMES_ONLY` for this cheap metadata
+and `FM_LIST_SNIFF` for the existing Files browser metadata/header classification.
+AutoPlay stops after 256 root or 64 subdirectory entries, eight file-prefix
+probes, or 2 seconds of monotonic elapsed worker time, discards partial content
+on exhaustion and asks with generic choices. Checks surround VFS calls and run
+in each emission/read; they cannot preempt a syscall already blocked in I/O.
+The Desktop-folder worker compares an immutable copy, then refreshes on that
+worker if changed; only the frame thread accepts a result matching its revision.
+
 `tmpfile` MUST create with O_EXCL and unlink after opening; temporary names MUST
 resolve under `/tmp`. `tmpnam` MUST be documented as non-reserving, and MUST NOT
 be used for kernel or SDK security decisions.

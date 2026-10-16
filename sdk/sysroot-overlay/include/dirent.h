@@ -3,6 +3,7 @@
 #define _DIRENT_H
 #include <sys/types.h>
 #define dirent ciuki_dirent
+#define CIUKI_DIRENT_METADATA 1 /* d_type, d_size, d_mtime from GETDENTS */
 typedef struct ciuki_DIR DIR;
 DIR *opendir(const char *);
 DIR *fdopendir(int);

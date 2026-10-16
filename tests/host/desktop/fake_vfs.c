@@ -48,9 +48,9 @@ static int parent_of(const char *p)
 static int stat_node(void *ctx, const char *p, struct fm_meta *m)
 { (void)ctx; int r = injection(); if (r) return r; int n = fake_lookup(p); if (n < 0) return -ENOENT; *m = fake_nodes[n].meta; return 0; }
 
-static int list(void *ctx, const char *p, fm_emit emit, void *arg)
+static int list(void *ctx, const char *p, unsigned flags,fm_emit emit, void *arg)
 {
-    (void)ctx; int r = injection(); if (r) return r;
+    (void)ctx; (void)flags; int r = injection(); if (r) return r;
     int n = fake_lookup(p); if (n < 0) return -ENOENT;
     if (fake_nodes[n].meta.type != FM_DIR) return -ENOTDIR;
     /* Emit in creation order, like an unsorted FAT directory. */

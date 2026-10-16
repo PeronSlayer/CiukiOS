@@ -711,7 +711,7 @@ static int cn_list_one(const char *name, const struct fm_meta *m, void *arg)
     return l->emit(name, &st, l->arg);
 }
 static int cn_list(void *ctx, const char *dir, cn_emit emit, void *arg)
-{ struct cn_list l = {emit, arg}; return fake_vfs.list(ctx, dir, cn_list_one, &l); }
+{ struct cn_list l = {emit, arg}; return fake_vfs.list(ctx, dir, FM_LIST_SNIFF, cn_list_one, &l); }
 static int cn_load(void *ctx, const char *path, char *buf, size_t cap, size_t *len)
 {
     (void)ctx; int n = fake_lookup(path);

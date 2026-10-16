@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MIT */
 #include "../../../apps/desktop/keymap.h"
 #include "autoplay_wait.h"
-static int empty_media_list(void *ctx,const char *path,fm_emit emit,void *user)
-{ (void)ctx; (void)path; (void)emit; (void)user; return 0; }
+static int empty_media_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *user)
+{ (void)ctx; (void)flags; (void)path; (void)emit; (void)user; return 0; }
 static const struct fm_vfs empty_media_fs={.list=empty_media_list};
 static int no_media_preference(struct desktop *d,const char *id,const char *label,int action)
 { (void)d; (void)id; (void)label; assert(action==-1); return -1; }

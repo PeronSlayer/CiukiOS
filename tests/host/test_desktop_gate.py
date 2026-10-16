@@ -231,6 +231,9 @@ void klog(const char *f,...) {(void)f;}
             '-o',str(binary)],check=True,env=env)
         spec=importlib.util.spec_from_file_location('first_frame_portrait',ROOT/'apps/desktop/convert_portrait.py')
         converter=importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
+        result=subprocess.run([str(binary),'--folder-poll'],capture_output=True,text=True,env=env,timeout=10)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS F2-79 desktop gate',result.stdout)
         portrait=converter.convert(ROOT/'assets/brand/ciuki-logo.png')
         source=self.folder/'portrait.xrgb';source.write_bytes(portrait)
         for shifted in (False,True):

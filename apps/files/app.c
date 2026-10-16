@@ -294,7 +294,7 @@ static void tree_add(struct files_app *a, unsigned parent)
 {
     struct files_node *p = &a->tree[parent];
     struct names n = {.parent = p->path};
-    if (a->model.fs.list(a->model.fs.ctx, p->path, collect_dir, &n)) { free(n.v); p->children = 0; return; }
+    if (a->model.fs.list(a->model.fs.ctx, p->path, FM_LIST_NAMES_ONLY, collect_dir, &n)) { free(n.v); p->children = 0; return; }
     sort_names(&n);
     p->children = n.count > 0;
     if (!n.count) set_add(a->leaf, &a->leaf_count, p->path); else set_remove(a->leaf, &a->leaf_count, p->path);

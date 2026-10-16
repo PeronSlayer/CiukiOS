@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Bounded media discovery and shell state; all I/O uses the Files VFS seam. */
+#define _POSIX_C_SOURCE 200809L
 #include "autoplay.h"
 #include "../dosbox/autorun.h"
 #include <errno.h>
@@ -7,6 +8,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
+struct scan {
+    struct ap_content *c; const char *dir; unsigned count, limit;
+    struct ap_workspace *workspace; const char *budget;
+    char inf[FM_PATH], music[FM_PATH], pictures[FM_PATH];
+};
+struct ap_workspace {
+    struct scan s, sub; unsigned char data[AP_INF_MAX+1];
+    uint64_t start; struct ap_content *content;
+    void (*phase)(void *, const char *); void *observer;
+};
+static uint64_t scan_now(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
+    return (uint64_t)t.tv_sec*1000000000ull+(uint64_t)t.tv_nsec;
+}
+static int within_time(struct ap_workspace *w)
+{
+    uint64_t elapsed=scan_now()-w->start;
+    w->content->ms=(unsigned)(elapsed/1000000ull);
+    if (elapsed>=AP_SCAN_NS) w->content->budget="time";
+    return !w->content->budget;
+}
+static void scan_phase(struct ap_workspace *w,const char *phase)
+{ if (w->phase) w->phase(w->observer,phase); }
 static char *trim(char *s)
 {
     while (*s==' ' || *s=='\t' || *s=='\r') s++;
@@ -45,12 +71,17 @@ int ap_parse(struct ap_inf *out,const char *text,size_t size)
     }
     return 0;
 }
-static int read_prefix(const struct fm_vfs *fs,const char *path,void *out,unsigned cap)
+static int read_prefix(const struct fm_vfs *fs,const char *path,void *out,unsigned cap,struct ap_workspace *w)
 {
+    if (!within_time(w)) return -ETIMEDOUT;
+    if (w->content->sniffed==AP_SNIFF_FILES) { w->content->budget="sniff"; return -E2BIG; }
+    w->content->sniffed++;
     int fd=fs->open(fs->ctx,path,0); if (fd<0) return fd;
     unsigned used=0; int error=0;
-    while (used<cap) { int n=fs->read(fs->ctx,fd,(char *)out+used,cap-used); if (n<0) { error=n; break; } if (!n) break; used+=(unsigned)n; }
-    int e=fs->close(fs->ctx,fd); return error ? error : e ? e : (int)used;
+    while (used<cap && within_time(w)) { int n=fs->read(fs->ctx,fd,(char *)out+used,cap-used); if (n<0) { error=n; break; } if (!n) break; used+=(unsigned)n; }
+    int e=fs->close(fs->ctx,fd);
+    if (!within_time(w)) return -ETIMEDOUT;
+    return error ? error : e ? e : (int)used;
 }
 static int relative(char *out,const char *root,const char *name)
 {
@@ -74,11 +105,15 @@ static int ext(const char *name,const char *types)
     for (char *p=key;*p;p++) if (*p>='A' && *p<='Z') *p=(char)(*p+32);
     return strstr(types,key)!=NULL;
 }
-struct scan { struct ap_content *c; const char *dir; unsigned count; char inf[FM_PATH], music[FM_PATH], pictures[FM_PATH]; };
 static int entry(const char *name,const struct fm_meta *meta,void *ctx)
 {
-    struct scan *s=ctx; if (++s->count>2048) return -E2BIG;
-    char path[FM_PATH]; if (fm_join(path,s->dir,name)) return 0;
+    struct scan *s=ctx;
+    if (!within_time(s->workspace)) return -ETIMEDOUT;
+    s->count++; s->c->entries++;
+    char path[FM_PATH]; if (fm_join(path,s->dir,name)) {
+        if (s->count>=s->limit) { s->c->budget=s->budget; return -E2BIG; }
+        return 0;
+    }
     if (meta->type==FM_DIR) {
         if (!strcasecmp(name,"music")) snprintf(s->music,sizeof(s->music),"%s",path);
         if (!strcasecmp(name,"pictures")) snprintf(s->pictures,sizeof(s->pictures),"%s",path);
@@ -87,10 +122,12 @@ static int entry(const char *name,const struct fm_meta *meta,void *ctx)
         if (ext(name,".wav|.mp3|.ogg|.flac|") && !s->c->music[0]) snprintf(s->c->music,sizeof(s->c->music),"%s",s->dir);
         if (ext(name,".png|.jpg|.jpeg|.jpe|.bmp|.gif|.xrgb|") && (!s->c->picture[0] || strcmp(path,s->c->picture)<0)) snprintf(s->c->picture,sizeof(s->c->picture),"%s",path);
     }
+    if (s->count>=s->limit) { s->c->budget=s->budget; return -E2BIG; }
     return 0;
 }
-struct ap_workspace { struct scan s, sub; unsigned char data[AP_INF_MAX+1]; };
 struct ap_workspace *ap_workspace_create(void) { return calloc(1,sizeof(struct ap_workspace)); }
+void ap_workspace_observe(struct ap_workspace *w,void (*phase)(void *,const char *),void *ctx)
+{ w->phase=phase; w->observer=ctx; }
 int ap_drive_label(const struct fm_vfs *fs,unsigned drive,char out[33])
 {
     out[0]=0; if (drive<3 || drive>=26) return -EINVAL;
@@ -98,10 +135,11 @@ int ap_drive_label(const struct fm_vfs *fs,unsigned drive,char out[33])
     struct ap_workspace *w=calloc(1,sizeof(*w));
     if (!c || !w) { free(c); free(w); return -ENOMEM; }
     snprintf(c->root,sizeof(c->root),"/mnt/%c",'a'+drive);
-    w->s=(struct scan){.c=c,.dir=c->root};
-    int e=fs->list(fs->ctx,c->root,entry,&w->s);
-    if (!e && w->s.inf[0]) {
-        int n=read_prefix(fs,w->s.inf,w->data,sizeof(w->data));
+    w->content=c; w->start=scan_now();
+    w->s=(struct scan){.c=c,.dir=c->root,.workspace=w,.limit=AP_ROOT_ENTRIES,.budget="root"};
+    int e=fs->list(fs->ctx,c->root,FM_LIST_NAMES_ONLY,entry,&w->s);
+    if (within_time(w) && !e && w->s.inf[0]) {
+        int n=read_prefix(fs,w->s.inf,w->data,sizeof(w->data),w);
         if (n>=0 && n<=AP_INF_MAX && !ap_parse(&c->inf,(char *)w->data,(size_t)n)) memcpy(out,c->inf.label,33);
     }
     free(c); free(w); return e;
@@ -110,12 +148,26 @@ static int probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,str
 {
     memset(c,0,sizeof(*c)); if (drive<3 || drive>=26) return -EINVAL;
     snprintf(c->root,sizeof(c->root),"/mnt/%c",'a'+drive);
-    w->s=(struct scan){.c=c,.dir=c->root};
-    struct scan *s=&w->s; int e=fs->list(fs->ctx,c->root,entry,s); if (e) return e;
-    if (s->inf[0]) { int n=read_prefix(fs,s->inf,w->data,sizeof(w->data));
+    w->content=c; w->start=scan_now(); scan_phase(w,"media-scan:root");
+    w->s=(struct scan){.c=c,.dir=c->root,.workspace=w,.limit=AP_ROOT_ENTRIES,.budget="root"};
+    struct scan *s=&w->s; int e=fs->list(fs->ctx,c->root,FM_LIST_NAMES_ONLY,entry,s);
+    if (!within_time(w) || e) return e;
+    if (s->music[0] && !c->music[0]) {
+        scan_phase(w,"media-scan:music");
+        w->sub=(struct scan){.c=c,.dir=s->music,.workspace=w,.limit=AP_SUB_ENTRIES,.budget="music"};
+        (void)fs->list(fs->ctx,s->music,FM_LIST_NAMES_ONLY,entry,&w->sub);
+        if (!within_time(w)) return 0;
+    }
+    if (s->pictures[0]) {
+        scan_phase(w,"media-scan:pictures");
+        w->sub=(struct scan){.c=c,.dir=s->pictures,.workspace=w,.limit=AP_SUB_ENTRIES,.budget="pictures"};
+        (void)fs->list(fs->ctx,s->pictures,FM_LIST_NAMES_ONLY,entry,&w->sub);
+        if (!within_time(w)) return 0;
+    }
+    scan_phase(w,"media-scan:inf");
+    if (s->inf[0]) { int n=read_prefix(fs,s->inf,w->data,sizeof(w->data),w);
         if (n>=0 && n<=AP_INF_MAX) (void)ap_parse(&c->inf,(char *)w->data,(size_t)n); }
-    if (s->music[0] && !c->music[0]) { w->sub=(struct scan){.c=c,.dir=s->music}; (void)fs->list(fs->ctx,s->music,entry,&w->sub); }
-    if (s->pictures[0]) { w->sub=(struct scan){.c=c,.dir=s->pictures}; (void)fs->list(fs->ctx,s->pictures,entry,&w->sub); }
+    if (!within_time(w)) return 0;
     if (!c->inf.open[0]) return 0;
     c->run_kind=3;
     char name[97]; const char *args=c->inf.open; unsigned n=0;
@@ -123,9 +175,9 @@ static int probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,str
     else while (*args && *args!=' ' && n<96) name[n++]=*args++;
     name[n]=0; while (*args==' ') args++;
     if (relative(c->program,c->root,name)) return 0;
-    struct fm_meta meta; if (fs->stat_path(fs->ctx,c->program,&meta) || meta.type!=FM_FILE) return 0;
     if (!ext(name,".exe|.com|.bat|")) return 0;
-    unsigned char *h=w->data; int got=read_prefix(fs,c->program,h,4096); if (got<0) return 0;
+    struct fm_meta meta; if (fs->stat_path(fs->ctx,c->program,&meta) || !within_time(w) || meta.type!=FM_FILE) return 0;
+    unsigned char *h=w->data; int got=read_prefix(fs,c->program,h,4096,w); if (got<0) return 0;
     if (ext(name,".exe|")) {
         if (got<28 || memcmp(h,"MZ",2)) return 0;
         uint32_t pe=got>=64 ? (uint32_t)h[60]|(uint32_t)h[61]<<8|(uint32_t)h[62]<<16|(uint32_t)h[63]<<24 : 0;
@@ -151,5 +203,13 @@ int ap_probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c)
 int ap_probe_workspace(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,struct ap_workspace *w)
 {
     if (!w) { memset(c,0,sizeof(*c)); return -ENOMEM; }
-    memset(w,0,sizeof(*w)); return probe(fs,drive,c,w);
+    int result=probe(fs,drive,c,w);
+    if (drive>=3 && drive<26) (void)within_time(w);
+    if (c->budget) {
+        const char *budget=c->budget; unsigned entries=c->entries, sniffed=c->sniffed, ms=c->ms;
+        memset(c,0,sizeof(*c)); snprintf(c->root,sizeof(c->root),"/mnt/%c",'a'+drive);
+        c->budget=budget; c->entries=entries; c->sniffed=sniffed; c->ms=ms;
+        return 0;
+    }
+    return result;
 }

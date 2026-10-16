@@ -19,10 +19,13 @@ enum fm_kind { FM_KIND_FOLDER, FM_KIND_TEXT, FM_KIND_APP, FM_KIND_IMAGE, FM_KIND
 struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; };
 struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
+/* Cheap enumeration metadata (type/size/mtime/ino); SNIFF requests the
+ * browser's full stat metadata plus bounded ELF header classification. */
+enum { FM_LIST_NAMES_ONLY = 0, FM_LIST_SNIFF = 1u };
 /* Every error is -errno; reads/writes return a positive short count or zero. */
 struct fm_vfs {
     void *ctx;
-    int (*list)(void *, const char *, fm_emit, void *);
+    int (*list)(void *, const char *, unsigned flags, fm_emit, void *);
     int (*stat_path)(void *, const char *, struct fm_meta *);
     int (*mkdir)(void *, const char *);
     int (*rename)(void *, const char *, const char *);

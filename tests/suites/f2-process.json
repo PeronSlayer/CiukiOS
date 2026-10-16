@@ -2297,7 +2297,7 @@
                 "eq": 3
               },
               "record_bytes": {
-                "eq": 792
+                "eq": 808
               },
               "rewind_cookie": {
                 "eq": 1
@@ -3413,7 +3413,7 @@
                 "eq": 3
               },
               "record_bytes": {
-                "eq": 792
+                "eq": 808
               },
               "rewind_cookie": {
                 "eq": 1
@@ -4529,7 +4529,7 @@
                 "eq": 3
               },
               "record_bytes": {
-                "eq": 792
+                "eq": 808
               },
               "rewind_cookie": {
                 "eq": 1

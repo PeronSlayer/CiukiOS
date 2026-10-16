@@ -7,12 +7,18 @@
 #define AP_CHOICES 5
 #define AP_PREFS 64
 #define AP_REG_KEY "Desktop\\AutoPlay"
+#define AP_ROOT_ENTRIES 256u
+#define AP_SUB_ENTRIES 64u
+#define AP_SNIFF_FILES 8u
+#define AP_SCAN_NS 2000000000ull
 enum { AP_FOLDER, AP_MUSIC, AP_PICTURES, AP_RUN, AP_NOTHING };
 struct ap_inf { char open[97], icon[FM_PATH], label[33]; };
 struct ap_content {
     struct ap_inf inf;
     char root[16], music[FM_PATH], picture[FM_PATH], command[97], program[FM_PATH];
     int run_kind; /* 1 DOS, 2 Windows, 3 unsupported command */
+    const char *budget; /* NULL or root/music/pictures/sniff/time */
+    unsigned entries, sniffed, ms;
 };
 struct ap_preference { char id[40], label[64]; int action; };
 struct ap_workspace;
@@ -31,6 +37,7 @@ int ap_parse(struct ap_inf *, const char *, size_t);
 int ap_drive_label(const struct fm_vfs *, unsigned drive, char out[33]);
 int ap_probe(const struct fm_vfs *, unsigned drive, struct ap_content *);
 struct ap_workspace *ap_workspace_create(void);
+void ap_workspace_observe(struct ap_workspace *, void (*)(void *, const char *), void *);
 int ap_probe_workspace(const struct fm_vfs *, unsigned drive, struct ap_content *, struct ap_workspace *);
 const char *ap_action_name(int);
 /* Registry adapter; directory NULL selects the installed registry. */

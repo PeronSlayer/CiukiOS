@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "autoplay_wait.h"
 int ciuki_devices(struct ciuki_devices_info *out) { (void)out; errno=ENODEV; return -1; }
 static struct desktop d;
@@ -56,6 +57,72 @@ static void render(void)
 {
     int w=window(); assert(w>=0); struct desk_box full={0,0,640,480};
     desk_internal_paint(&d,w,desk_content(&d.clients[w]),full);
+}
+struct probe_fixture { unsigned root, sub, emitted, lists; long delay; const char *directory; pthread_t frame; int worker; };
+static uint64_t probe_clock(void)
+{ struct timespec t; assert(!clock_gettime(CLOCK_MONOTONIC,&t)); return (uint64_t)t.tv_sec*1000000000ull+t.tv_nsec; }
+static void probe_delay(struct probe_fixture *f)
+{ if (f->delay) { struct timespec pause={0,f->delay}; nanosleep(&pause,NULL); } }
+static int probe_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
+{
+    struct probe_fixture *f=ctx; assert(flags==FM_LIST_NAMES_ONLY);
+    if (f->worker) assert(!pthread_equal(pthread_self(),f->frame));
+    f->lists++; probe_delay(f);
+    unsigned count=!strcmp(path,"/mnt/e") ? f->root : f->sub;
+    struct fm_meta meta={.type=FM_FILE,.size=100};
+    for (unsigned i=0;i<count;i++) {
+        char name[64]; snprintf(name,sizeof(name),"extensionless%u",i);
+        meta.type=FM_FILE;
+        if (!i && f->directory && !strcmp(path,"/mnt/e")) { snprintf(name,sizeof(name),"%s",f->directory); meta.type=FM_DIR; }
+        else if (!i) snprintf(name,sizeof(name),"tune.wav");
+        probe_delay(f); f->emitted++;
+        int e=emit(name,&meta,arg); if (e) return e;
+    }
+    return 0;
+}
+static void probe_phase(void *ctx,const char *name) { *(const char **)ctx=name; }
+static int budget_preference(struct desktop *desk,const char *id,const char *label,int action)
+{ (void)desk; (void)id; (void)label; (void)action; assert(!"budget fallback must ask instead of reading/using a saved choice"); return AP_NOTHING; }
+static void test_probe_budgets(void)
+{
+    struct probe_fixture fixture={.root=300};
+    struct fm_vfs fs={.ctx=&fixture,.list=probe_list};
+    struct ap_content content;
+    assert(!ap_probe(&fs,4,&content));
+    assert(content.budget && !strcmp(content.budget,"root") && content.entries==256 && fixture.emitted==256);
+    assert(!content.music[0] && !content.picture[0] && !content.run_kind && !content.sniffed);
+    struct ap_workspace *workspace=ap_workspace_create(); assert(workspace);
+    const char *phase=NULL; ap_workspace_observe(workspace,probe_phase,&phase);
+    fixture=(struct probe_fixture){.root=1,.sub=100,.directory="Music"};
+    assert(!ap_probe_workspace(&fs,4,&content,workspace));
+    assert(!strcmp(content.budget,"music") && content.entries==65 && fixture.emitted==65);
+    assert(!strcmp(phase,"media-scan:music") && !content.music[0]);
+    fixture=(struct probe_fixture){.root=1,.sub=100,.directory="Pictures"};
+    assert(!ap_probe_workspace(&fs,4,&content,workspace));
+    assert(!strcmp(content.budget,"pictures") && content.entries==65 && !strcmp(phase,"media-scan:pictures"));
+    free(workspace);
+    /* Every fake call/entry costs a slow-stick command. No stat or automatic
+     * ELF sniff callback is provided: cheap discovery must never request it. */
+    static struct desktop slow;
+    desk_init(&slow,&fake_ops,640,480); desk_shell_enable(&slow); slow.presents=1;
+    fixture=(struct probe_fixture){.root=300,.delay=25000000,.frame=pthread_self(),.worker=1};
+    slow.autoplay_fs=&fs; slow.autoplay_preference=budget_preference; assert(!desk_autoplay_prepare(&slow));
+    struct ciuki_media_volume media[26]={{0}};
+    media[4]=(struct ciuki_media_volume){.drive=4,.flags=CIUKI_MEDIA_REMOVABLE,.generation=99};
+    strcpy(media[4].id,"fat-deadbeef-1234");
+    uint64_t begin=probe_clock(); desk_autoplay_update(&slow,media);
+    while (!slow.sh.autoplay.open) {
+        desk_autoplay_service(&slow); assert(probe_clock()-begin<3000000000ull);
+        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+    }
+    uint64_t elapsed=probe_clock()-begin;
+    assert(!strcmp(slow.sh.autoplay.content.budget,"time") && slow.sh.autoplay.content.entries<=256);
+    assert(desk_autoplay_enabled(&slow,AP_FOLDER) && desk_autoplay_enabled(&slow,AP_NOTHING));
+    assert(!desk_autoplay_enabled(&slow,AP_MUSIC) && !desk_autoplay_enabled(&slow,AP_PICTURES) && !desk_autoplay_enabled(&slow,AP_RUN));
+    for (int i=0;i<DESK_CLIENTS;i++) if (slow.clients[i].internal) desk_drop_client(&slow,i);
+    desk_autoplay_stop(&slow); desk_render_release(&slow); free(slow.sh.icons); free(slow.sh.autoplay.workspace);
+    printf("PASS F2-79 probe: root=256 sub=64 sniff<=8, generic fallback, phases; slow popup_ms=%llu entries=%u\n",
+        (unsigned long long)(elapsed/1000000ull),slow.sh.autoplay.content.entries);
 }
 int main(int argc,char **argv)
 {
@@ -157,6 +224,7 @@ int main(int argc,char **argv)
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i);
     desk_autoplay_stop(&d); free(d.sh.autoplay.workspace);
     free(d.pixels); d.pixels=NULL; desk_render_release(&d); assert(!fake_live()); fake_assert_clean();
+    test_probe_budgets();
     puts("PASS AutoPlay: mount music/CD/pictures, typed DOS launch, disabled Windows, registry across letters, cancellation/eject/replacement/queue, sounds seam, bounded parser");
     return 0;
 }

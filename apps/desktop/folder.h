@@ -13,7 +13,8 @@ struct desk_folder {
     unsigned cursor;
     char edit[FM_NAME];
     uint64_t poll_ns;
-    uint16_t poll_index[DESK_FOLDER_POLL_SLOTS]; /* reserved with the folder at init */
+    unsigned revision;
+    struct folder_worker *worker;
 };
 struct desktop;
 int desk_folder_init(struct desktop *, const struct fm_vfs *);
@@ -22,4 +23,6 @@ void desk_folder_service(struct desktop *);
 void desk_folder_rename(struct desktop *, int);
 void desk_folder_drop(struct desktop *, int source, int copy);
 void desk_folder_changed(struct desktop *);
+int desk_folder_busy(struct desktop *);
+const char *desk_folder_activity(const struct desktop *);
 #endif

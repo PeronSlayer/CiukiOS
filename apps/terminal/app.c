@@ -150,7 +150,7 @@ void term_complete(struct terminal *t)
     char *parent_arg=t->scratch[1], *path=t->scratch[2]; memcpy(parent_arg,token,prefix); parent_arg[prefix]=0;
     struct completion c={.t=t,.prefix=token+prefix};
     if(!prefix && !t->cwd[0]) { if(fm_volumes(&t->host.fs,completion_entry,&c))return; }
-    else if(term_path(t,prefix ? parent_arg : ".",path) || !path[0] || t->host.fs.list(t->host.fs.ctx,path,completion_entry,&c))return;
+    else if(term_path(t,prefix ? parent_arg : ".",path) || !path[0] || t->host.fs.list(t->host.fs.ctx,path,FM_LIST_SNIFF,completion_entry,&c))return;
     if(!c.count)return;
     char *replacement=t->scratch[3]; size_t n=prefix+strlen(c.common)+(c.count==1 && c.directory);
     if(n+3>=DU_TEXT_MAX)return;

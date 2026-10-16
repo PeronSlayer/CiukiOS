@@ -472,6 +472,7 @@ class DesktopTests(unittest.TestCase):
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
             subprocess.run([str(binary), "--autoplay-startup"], check=True, env=env, timeout=20)
+            subprocess.run([str(binary), "--slow-stick-folder"], check=True, env=env, timeout=20)
             result = subprocess.run([str(binary), "--poll-handles"], check=True, env=env, capture_output=True, text=True)
             print(result.stdout, end="")
             for kind, fd in (("net", 20), ("mixer", 21), ("media", 22)):

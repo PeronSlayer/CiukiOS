@@ -9,6 +9,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <pthread.h>
+static pthread_mutex_t poll_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t poll_changed=PTHREAD_COND_INITIALIZER;
+static int poll_hold, poll_entered, poll_release, poll_error;
+static int folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
+{
+    int e=fake_vfs.list(ctx,path,flags,emit,arg);
+    if (!strcmp(path,DESK_FOLDER) && flags==FM_LIST_NAMES_ONLY) {
+        pthread_mutex_lock(&poll_lock);
+        if (poll_hold) {
+            poll_entered=1; pthread_cond_broadcast(&poll_changed);
+            while (!poll_release) pthread_cond_wait(&poll_changed,&poll_lock);
+            poll_hold=0;
+        }
+        if (poll_error) { e=-EIO; poll_error=0; }
+        pthread_mutex_unlock(&poll_lock);
+    }
+    return e;
+}
+static void poll_folder(struct desktop *desk)
+{
+    desk_folder_service(desk);
+    for (unsigned i=0;desk_folder_busy(desk);i++) {
+        assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        desk_folder_service(desk);
+    }
+    desk_folder_service(desk); /* consume a completion published after the last service */
+}
 static struct desktop d;
 static const char *out;
 static char launched[FM_PATH], program[32];
@@ -56,7 +85,8 @@ int main(int argc,char **argv)
     d.pixels=calloc(1024*768,4); assert(d.pixels);
     d.portrait=malloc(256*256*4); assert(d.portrait);
     FILE *p=fopen(argv[2],"rb"); assert(p && fread((void *)d.portrait,4,256*256,p)==256*256 && !fclose(p));
-    desk_shell_enable(&d); assert(!desk_folder_init(&d,&fake_vfs));
+    struct fm_vfs fs=fake_vfs; fs.list=folder_list;
+    desk_shell_enable(&d); assert(!desk_folder_init(&d,&fs));
     assert(d.sh.icon_count==6 && !strcmp(d.sh.icons[0].label,"Computer") && !strcmp(d.sh.icons[1].label,"Documents") && !strcmp(d.sh.icons[2].label,"Trash"));
     assert(named("Pictures")<0);
     d.pictures_exists=1; desk_folder_changed(&d);
@@ -197,16 +227,36 @@ int main(int argc,char **argv)
     puts("PASS desktop folder wallpaper cache: live rename, cancel and icon drag match fresh render");
     /* Periodic scans preserve an unchanged model and notice external edits. */
     struct fm_entry *original=d.sh.folder->model.entries;
-    d.now_ns+=1000000000ull; desk_folder_service(&d);
+    d.now_ns+=1000000000ull; poll_folder(&d);
     assert(d.sh.folder->model.entries==original);
     fake_file(DESK_FOLDER "/External.txt",7,1);
-    d.now_ns+=1000000000ull; desk_folder_service(&d); assert(named("External.txt")>=3);
+    d.now_ns+=1000000000ull; poll_folder(&d); assert(named("External.txt")>=3);
     int external=fake_lookup(DESK_FOLDER "/External.txt"); assert(external>=0);
     fake_nodes[external].meta.size=8; fake_nodes[external].meta.modified++;
-    d.now_ns+=1000000000ull; desk_folder_service(&d);
+    d.now_ns+=1000000000ull; poll_folder(&d);
     assert(d.sh.folder->model.entries[named("External.txt")-3].meta.size==8);
     fake_nodes[external].live=0;
-    d.now_ns+=1000000000ull; desk_folder_service(&d); assert(named("External.txt")==-1);
+    d.now_ns+=1000000000ull; poll_folder(&d); assert(named("External.txt")==-1);
+    /* A failed enumeration keeps the model; successful retry sees the edit. */
+    original=d.sh.folder->model.entries; fake_file(DESK_FOLDER "/Retry.txt",1,0);
+    pthread_mutex_lock(&poll_lock); poll_error=1; pthread_mutex_unlock(&poll_lock);
+    d.now_ns+=1000000000ull; poll_folder(&d);
+    assert(d.sh.folder->model.entries==original && named("Retry.txt")==-1);
+    d.now_ns+=1000000000ull; poll_folder(&d); assert(named("Retry.txt")>=3);
+    /* A completed old poll must not overwrite a newer explicit command. */
+    fake_file(DESK_FOLDER "/Stale.txt",1,0);
+    pthread_mutex_lock(&poll_lock); poll_hold=1; poll_release=poll_entered=0; pthread_mutex_unlock(&poll_lock);
+    d.now_ns+=1000000000ull; desk_folder_service(&d);
+    for (unsigned i=0;;i++) {
+        pthread_mutex_lock(&poll_lock); int entered=poll_entered; pthread_mutex_unlock(&poll_lock);
+        if (entered) break;
+        assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+    }
+    command(DF_TEXT,-1); key(DU_KEY_ESC); original=d.sh.folder->model.entries;
+    pthread_mutex_lock(&poll_lock); poll_release=1; pthread_cond_broadcast(&poll_changed); pthread_mutex_unlock(&poll_lock);
+    poll_folder(&d);
+    assert(d.sh.folder->model.entries==original && named("Stale.txt")>=3);
+    puts("PASS F2-79 folder: unchanged buffer retained, async add/resize/remove, failed poll/retry and stale command result rejection");
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");

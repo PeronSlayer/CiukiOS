@@ -1,11 +1,23 @@
 /* SPDX-License-Identifier: MIT
- * Files operations served outside shell input; jobs advance incrementally. */
+ * Explicit Files operations and incremental jobs; idle polls run on a worker. */
 #include "desktop.h"
 #include "folder.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+struct folder_worker {
+    pthread_mutex_t lock; pthread_cond_t changed; pthread_t thread;
+    struct fm_model snapshot, result;
+    uint16_t index[DESK_FOLDER_POLL_SLOTS];
+    unsigned revision;
+    int pending, busy, ready, stopping, error, different;
+    const char *activity;
+};
+static int poll_start(struct desk_folder *);
+static void poll_stop(struct desk_folder *);
+static void poll_service(struct desktop *);
 
 static void error(struct desktop *d, int r)
 {
@@ -17,6 +29,7 @@ static void error(struct desktop *d, int r)
 }
 void desk_folder_changed(struct desktop *d)
 {
+    if (d->sh.folder) d->sh.folder->revision++;
     d->sh.icon_count = 0; d->sh.icon_drag=d->sh.click_icon=-1;
     desk_shell_apply(d);
 }
@@ -25,12 +38,14 @@ int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
     fm_init(&f->model, fs); f->editing = -1; f->index = -1;
     int r = fm_navigate(&f->model, DESK_FOLDER);
+    if (!r) r=poll_start(f);
     if (r) { fm_destroy(&f->model); free(f); return r; }
     f->ready = 1; d->sh.folder = f; desk_folder_changed(d); return 0;
 }
 void desk_folder_destroy(struct desktop *d)
 {
     if (!d->sh.folder) return;
+    poll_stop(d->sh.folder);
     fm_job_destroy(&d->sh.folder->job); fm_destroy(&d->sh.folder->model);
     free(d->sh.folder); d->sh.folder = NULL;
 }
@@ -114,13 +129,116 @@ static int check_entry(const char *name, const struct fm_meta *meta, void *arg)
     while (check->index[slot]) {
         const struct fm_entry *entry=&check->model->entries[check->index[slot]-1];
         if (!strcmp(entry->name,name)) {
-            if (entry->meta.size!=meta->size || entry->meta.modified!=meta->modified) check->changed=1;
+            if (entry->meta.type!=meta->type || entry->meta.size!=meta->size || entry->meta.modified!=meta->modified) check->changed=1;
             return 0;
         }
         slot=(slot+1)%DESK_FOLDER_POLL_SLOTS;
     }
     check->changed=1;
     return 0;
+}
+static void folder_activity(struct folder_worker *w,const char *name)
+{ __atomic_store_n(&w->activity,name,__ATOMIC_RELEASE); }
+static void *folder_poll_worker(void *arg)
+{
+    struct folder_worker *w=arg;
+    pthread_mutex_lock(&w->lock);
+    for (;;) {
+        folder_activity(w,"mailbox-wait");
+        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed,&w->lock);
+        if (w->stopping) break;
+        w->pending=0; w->busy=1;
+        pthread_mutex_unlock(&w->lock);
+        folder_activity(w,"directory-compare");
+        memset(w->index,0,sizeof(w->index));
+        for (unsigned i=0;i<w->snapshot.count;i++) {
+            unsigned slot=entry_bucket(w->snapshot.entries[i].name);
+            while (w->index[slot]) slot=(slot+1)%DESK_FOLDER_POLL_SLOTS;
+            w->index[slot]=(uint16_t)(i+1);
+        }
+        struct folder_check check={.model=&w->snapshot,.index=w->index};
+        struct fm_vfs *fs=&w->snapshot.fs;
+        w->error=fs->list(fs->ctx,DESK_FOLDER,FM_LIST_NAMES_ONLY,check_entry,&check);
+        w->different=!w->error && (check.changed || check.count!=w->snapshot.count);
+        if (w->different) {
+            folder_activity(w,"directory-refresh");
+            w->result.sort=w->snapshot.sort; w->result.descending=w->snapshot.descending;
+            w->error=fm_refresh(&w->result);
+        }
+        pthread_mutex_lock(&w->lock);
+        w->busy=0; w->ready=1;
+    }
+    pthread_mutex_unlock(&w->lock); return NULL;
+}
+static int poll_start(struct desk_folder *f)
+{
+    struct folder_worker *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
+    fm_init(&w->snapshot,&f->model.fs); fm_init(&w->result,&f->model.fs);
+    snprintf(w->result.path,sizeof(w->result.path),"%s",DESK_FOLDER);
+    w->snapshot.capacity=f->model.capacity;
+    if (w->snapshot.capacity) w->snapshot.entries=malloc(w->snapshot.capacity*sizeof(*w->snapshot.entries));
+    if (w->snapshot.capacity && !w->snapshot.entries) { free(w); return -ENOMEM; }
+    folder_activity(w,"starting");
+    int e=pthread_mutex_init(&w->lock,NULL);
+    if (e) goto fail;
+    e=pthread_cond_init(&w->changed,NULL);
+    if (e) { pthread_mutex_destroy(&w->lock); goto fail; }
+    e=pthread_create(&w->thread,NULL,folder_poll_worker,w);
+    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); goto fail; }
+    f->worker=w; return 0;
+fail:
+    fm_destroy(&w->snapshot); free(w); return -e;
+}
+static void poll_stop(struct desk_folder *f)
+{
+    struct folder_worker *w=f->worker; if (!w) return;
+    pthread_mutex_lock(&w->lock); w->stopping=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread,NULL);
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    fm_destroy(&w->snapshot); fm_destroy(&w->result); free(w); f->worker=NULL;
+}
+int desk_folder_busy(struct desktop *d)
+{
+    struct desk_folder *f=d->sh.folder; if (!f) return 0;
+    struct folder_worker *w=f->worker; if (!w) return f->busy;
+    if (pthread_mutex_trylock(&w->lock)) return 1;
+    int busy=f->busy || w->pending || w->busy;
+    pthread_mutex_unlock(&w->lock); return busy;
+}
+const char *desk_folder_activity(const struct desktop *d)
+{
+    struct folder_worker *w=d && d->sh.folder ? d->sh.folder->worker : NULL;
+    return w ? __atomic_load_n(&w->activity,__ATOMIC_ACQUIRE) : "unavailable";
+}
+static void poll_service(struct desktop *d)
+{
+    struct desk_folder *f=d->sh.folder; struct folder_worker *w=f->worker;
+    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    struct fm_model *m=&f->model;
+    if (w->ready) {
+        if (!w->error && w->different && w->revision==f->revision) {
+            struct fm_entry *old=m->entries;
+            m->entries=w->result.entries; m->count=w->result.count; m->capacity=w->result.capacity;
+            m->active=m->anchor=0; m->find_length=0; m->find[0]=0;
+            w->result.entries=NULL; w->result.count=w->result.capacity=0;
+            free(old); desk_folder_changed(d);
+        }
+        /* A rejected result stays worker-owned; its next refresh releases it. */
+        w->ready=0;
+    }
+    if (!w->pending && !w->busy && !d->sh.want_power && d->now_ns-f->poll_ns>=1000000000ull) {
+        if (m->count>w->snapshot.capacity) {
+            struct fm_entry *p=realloc(w->snapshot.entries,m->capacity*sizeof(*p));
+            if (!p) { pthread_mutex_unlock(&w->lock); return; }
+            w->snapshot.entries=p; w->snapshot.capacity=m->capacity;
+        }
+        if (m->count) memcpy(w->snapshot.entries,m->entries,m->count*sizeof(*m->entries));
+        w->snapshot.count=m->count; w->snapshot.sort=m->sort; w->snapshot.descending=m->descending;
+        w->revision=f->revision; w->pending=1; f->poll_ns=d->now_ns;
+        pthread_cond_signal(&w->changed);
+    }
+    pthread_mutex_unlock(&w->lock);
 }
 void desk_folder_service(struct desktop *d)
 {
@@ -138,23 +256,10 @@ void desk_folder_service(struct desktop *d)
     }
     int command=f->command, index=f->index; f->command=DF_NONE;
     if (f->busy || !command) {
-        /* Files and applications may change this directory independently. */
-        if (!f->busy && f->editing<0 && d->now_ns-f->poll_ns >= 1000000000ull) {
-            f->poll_ns=d->now_ns;
-            /* Compare the streamed directory with the owned model. An idle
-             * one-second poll needs no temporary model/list/sort buffers. */
-            memset(f->poll_index,0,sizeof(f->poll_index));
-            for (unsigned i=0;i<m->count;i++) {
-                unsigned slot=entry_bucket(m->entries[i].name);
-                while (f->poll_index[slot]) slot=(slot+1)%DESK_FOLDER_POLL_SLOTS;
-                f->poll_index[slot]=(uint16_t)(i+1);
-            }
-            struct folder_check check={.model=m,.index=f->poll_index};
-            if (!m->fs.list(m->fs.ctx,DESK_FOLDER,check_entry,&check) &&
-                (check.changed || check.count!=m->count)) { fm_refresh(m); desk_folder_changed(d); }
-        }
+        if (!f->busy && f->editing<0) poll_service(d);
         return;
     }
+    f->revision++; /* an in-flight poll predates this explicit operation */
     int r=0; char name[FM_NAME], path[FM_PATH];
     if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP) {
         r=fm_unique(m,command==DF_FOLDER ? "New Folder" : command==DF_TEXT ? "New Text Document" : "New Bitmap Image",command==DF_FOLDER ? "" : command==DF_TEXT ? ".txt" : ".bmp",name);
