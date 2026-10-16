@@ -164,6 +164,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     if (!strcmp(event, "END")) terminal_pass = !strcmp(fields, "status=PASS");
 }
 enum model_kind { M_RTL, M_E100, M_NE };
+struct model_scb_write { unsigned reg, width; uint32_t value, flags; };
 struct model {
     enum model_kind kind;
     struct netif *device;
@@ -173,6 +174,9 @@ struct model {
     unsigned ee_pins, ee_count, ee_opcode, ee_address, ee_sample, ee_bits;
     uint16_t ee_words[256], mii_status;
     unsigned mii_reads;
+    unsigned rfd_count_flags, scb_write_count, command_busy_reads;
+    bool trace_scb;
+    struct model_scb_write scb_writes[32];
     bool reset_stuck, dma_stuck, command_stuck, mdi_stuck, tx_auto, config_reject, latch_low, ee_absent;
     unsigned dma_address, dma_count;
 };
@@ -192,6 +196,11 @@ static uint32_t model_read(void *arg, uint16_t port, unsigned width)
     }
     if (port == 0x4d1) return 8;
     CHECK(port >= 0x1000 && port < 0x1100); unsigned reg = port - 0x1000;
+    if (h->kind == M_E100 && reg == 2 && h->command_busy_reads) {
+        CHECK(width == 1); unsigned value = h->reg[2];
+        if (!--h->command_busy_reads) h->reg[2] = 0;
+        return value;
+    }
     if (h->kind == M_E100 && reg == 0x0e) return h->ee_pins | ((h->ee_absent ? 1 : h->ee_sample) << 3);
     if (h->kind == M_E100 && reg == 0x10) {
         unsigned phy = (model_get(h->reg + 0x10, 4) >> 21) & 31;
@@ -214,6 +223,11 @@ static uint32_t model_read(void *arg, uint16_t port, unsigned width)
         if (reg == 0x1f) { if (!h->reset_stuck) { h->reg[0] = 0x21; h->reg[7] = 0x80; } return 0; }
     }
     return model_get(h->reg + reg, width);
+}
+static void model_e100_complete_tx(struct model *h)
+{
+    struct e100_block *cb = model_dma(h->device->dma_phys + E100_TX, sizeof(*cb));
+    cb->status = 0xa000; h->reg[0] &= ~0xc0; h->reg[1] |= 0xa0;
 }
 static void model_write(void *arg, uint16_t port, uint32_t value, unsigned width)
 {
@@ -245,12 +259,17 @@ static void model_write(void *arg, uint16_t port, uint32_t value, unsigned width
         }
     }
     if (h->kind == M_E100) {
+        if (h->trace_scb && reg <= 4) {
+            CHECK(h->scb_write_count < ARRAY_SIZE(h->scb_writes));
+            h->scb_writes[h->scb_write_count++] = (struct model_scb_write){reg,width,value,host_flags};
+        }
         if (reg == 8) {
             h->stop_count++;
             if (!h->reset_stuck) { model_put(h->reg, 0, 4); h->rfd_pointer = 0; }
             return;
         }
-        if (reg == 1) { h->reg[1] &= ~value; return; }
+        if (reg == 1) { CHECK(width == 1); h->reg[1] &= ~value; return; }
+        if (reg == 3) { CHECK(width == 1); h->reg[3] = value; return; }
         if (reg == 0x0e) {
             if (!(value & 2)) { h->ee_count = h->ee_opcode = h->ee_address = 0; h->ee_sample = 1; }
             else if ((value & 1) && !(h->ee_pins & 1)) {
@@ -267,8 +286,9 @@ static void model_write(void *arg, uint16_t port, uint32_t value, unsigned width
             }
             h->ee_pins = value; return;
         }
-        if (reg == 4) { h->pointer = value; model_put(h->reg + reg, value, width); return; }
+        if (reg == 4) { CHECK(width == 4); h->pointer = value; model_put(h->reg + reg, value, width); return; }
         if (reg == 2) {
+            CHECK(width == 1);
             if (h->command_stuck) { h->reg[2] = value; return; }
             if (value == 0x10) {
                 struct e100_block *cb = model_dma(h->pointer, sizeof(*cb));
@@ -283,7 +303,8 @@ static void model_write(void *arg, uint16_t port, uint32_t value, unsigned width
                     CHECK(cb->size == 8); h->packet_io++;
                     if (!h->tx_auto) { h->reg[0] |= 0x80; return; }
                 }
-                cb->status = 0xa000; h->reg[0] &= ~0xc0; h->reg[1] |= 0xa0;
+                cb->status = 0xa000; h->reg[0] &= ~0xc0;
+                h->reg[1] |= (cb->command & 0x2000) ? 0xa0 : 0x20;
             } else if (value == 1) { h->rfd_pointer = h->pointer; h->reg[0] = (h->reg[0] & 0xc0) | 0x10; }
             h->reg[2] = 0; return;
         }
@@ -369,7 +390,7 @@ static void model_receive(struct model *h, const uint8_t *data, unsigned len, bo
         h->reg[0x37] &= ~1u; h->reg[0x3e] |= 1;
     } else if (h->kind == M_E100) {
         CHECK(h->rfd_pointer); struct e100_block *rfd = model_dma(h->rfd_pointer, sizeof(*rfd));
-        CHECK(!rfd->status); memcpy(rfd->data, data, len); rfd->count = 0xc000 | len;
+        CHECK(!rfd->status); memcpy(rfd->data, data, len); rfd->count = h->rfd_count_flags | len;
         rfd->status = error ? 0x8800 : 0xa000; h->reg[1] |= 0x40;
         if (rfd->command & 0x8000) { h->reg[0] = (h->reg[0] & 0xc0) | 8; h->rfd_pointer = 0; }
         else h->rfd_pointer = rfd->link;
@@ -653,8 +674,10 @@ static void test_public_state(void)
     puts("PASS /dev/net: absent, safe mode, three adapters, carrier, stopped/quarantined, counters, readonly, ABI and copy failures");
 }
 #include "second_set_test.c"
+#include "e100_irq_test.c"
 int main(void)
 {
+    test_e100_irq();
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }
     struct model h; struct netif d; model_setup(&h, &d, M_E100); h.ee_bits = 8;
     CHECK(!model_attach(&h, &d) && d.eeprom_bits == 8); CHECK(!netif_stop(&d));

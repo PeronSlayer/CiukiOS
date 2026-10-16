@@ -61,3 +61,37 @@ Implementation decisions within the directive:
 Host and target compilation results are recorded in
 `build/codex/f6-01-report.md`. QEMU and physical qualification belong to the
 lead and have not been performed by the implementer.
+
+## F6-09: e100 receive completion in interrupt mode
+
+Research before implementation, 2026-10-16:
+
+- The [Intel manual](https://media.digikey.com/pdf/Data%20Sheets/Intel%20PDFs/8255x%2C82562%20Ethernet%20Controller%20Developer%20Manual.pdf),
+  sections 6.3.2, 6.4.2.5, 6.4.3.1.2 and 6.5.1–6.5.2, separates
+  byte 1 (W1C causes), byte 2 (CU/RU command) and byte 3 (interrupt
+  control). CUS is bits 7:6; RUS is bits 5:2. TCB C reports DMA completion;
+  reuse also waits for CU idle. An RFD uses C/OK in status and F/EOF in
+  count. Masking byte 3 cannot overwrite a pending byte-2 command.
+- [QEMU v10.0.0 eepro100.c](https://raw.githubusercontent.com/qemu/qemu/v10.0.0/hw/net/eepro100.c),
+  `nic_receive`, writes the count as `size`, without F/EOF. This differs
+  from the directive's `0xc000 | size` assertion and the old host fixture.
+  The v9.2.0 URL above was unavailable during this research; v10.0.0 and
+  [upstream master](https://raw.githubusercontent.com/qemu/qemu/master/hw/net/eepro100.c)
+  were checked. The run's exact QEMU binary remains the lead's validation
+  boundary. `eepro100_write1` handles the three SCB bytes independently;
+  `eepro100_acknowledge` clears only written causes. Repeating an ack,
+  including zero after the ISR, does not alter descriptors or unit states.
+
+Decision: accept a completed, bounded RFD with both count flags absent only
+on the existing `CBI_F_SMBIOS_QEMU` profile. Physical controllers still require
+both flags; partial flags and oversized counts remain faults everywhere.
+Keep descriptor polling independent of interrupt delivery, retain the TX
+deadline and CU-idle proof, and preserve the mask/W1C order. No netif or
+admission-policy change is needed. In particular, the separately reported
+`rtl8139-qemu-t23` refusal with `reason=firmware_active` is unchanged.
+
+The host regression covers the ARP request, mask/W1C ISR and worker receipt,
+both count formats, early/late/lost/shared interrupts, CU completion timing,
+busy SCB commands, and real DMA/register faults. Host results and the exact
+reproduction values are recorded in `build/codex/f6-09-report.md`; integrated
+`i82559er-qemu-t23` and `f4-audio` evidence remains with the lead.
