@@ -37,7 +37,7 @@ int main(void)
         next_item=lines=0;
         struct hw_check_result results[HW_CHECK_ITEMS];
         struct hw_check_ops ops={0,now,step,line}; hardware_check_model(&ops,results);
-        assert(next_item==HW_CHECK_ITEMS && lines==29);
+        assert(next_item==HW_CHECK_ITEMS && lines==3*HW_CHECK_ITEMS+2);
         for (unsigned i=0;i<HW_CHECK_ITEMS;i++) {
             assert(results[i].status==(variant==1 ? HW_SKIP : variant==2 && i==4 ? HW_FAIL : HW_PASS));
             char expected[32];ksnprintf(expected,sizeof(expected),"fixture=%u",i);

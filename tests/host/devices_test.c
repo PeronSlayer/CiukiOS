@@ -33,6 +33,7 @@ static uint32_t read_eflags(void) { return flags; }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; writes++; }
 static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; writes++; }
 static uint32_t inl(uint16_t p) { (void)p; assert(!"unexpected PCI read"); return 0; }
+static uint16_t cpu_inw(uint16_t p) { (void)p; assert(!"unexpected PM read"); return 0; }
 static int extended;
 static void (*cpu_hook)(void);
 static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)

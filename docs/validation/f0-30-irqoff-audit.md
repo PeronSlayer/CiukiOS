@@ -318,3 +318,79 @@ PIT edges. These injected costs do not predict a physical result.
 `nice -n 19 python3 scripts/build_kernel.py` linked successfully and passed
 the FPU/SIMD audit. Complete command output, source locations and the ELF
 SHA-256 are in `build/codex/f0-33-report.md`; no image was built or booted.
+
+## F0-35: measure the SMI hypothesis on the H page (2026-10-16)
+
+Before implementation, checked Intel's [ICH3-M datasheet 290716-001](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf):
+§9.1.10–11 qualifies PMBASE/decode; §§9.8.3.1–3, .10–11, .14–15
+define PM1, GPE0 and SMI registers; §§9.9.1/.6 put TCO1_STS at
+PMBASE+64h (the appendix's +40h TCOBASE conflicts with §9.9.1).
+GPE0_EN is a **16-bit** register at +2Ah. §9.8.1.1 gives periodic
+intervals of 8/16/32/60 seconds, and software-timer intervals of
+64±4 or 1.5±0.5 ms. §11.1.16 distinguishes USB legacy traps from
+native PCI interrupt enable. Clearing SMI_EN bit 3, 6 or 14 gates
+only the corresponding legacy-USB/software-timer/periodic source;
+GBL_SMI_EN, EOS and TCO_EN are not experiment targets.
+
+Read-only input: e8dfd0cd BOOT1.LOG line 343 has 10000 ms, 9924 ticks,
+76 lost, 2110 us at schedule; later lines 595–596 put 2109/2108 us at
+pic_unmask/OUT. BOOT.LOG also retains the schedule attribution. The
+a79f840c directory exposes only capture-start.txt in this worktree's
+read-only view; its serial measurements are the directive's supplied
+excerpt. Neither input supplies event timestamps or PM snapshots. The
+2.1 ms **duration** and 76 lost edges cannot determine event **spacing**
+or name an SMI source. The earlier F0-33 slow-PIC hypothesis is therefore
+unconfirmed, and no normal-boot workaround is introduced.
+
+Implementation:
+
+- `timing.c` records raw start/end TSC, section and site for each observed
+  section strictly above 1 ms. Capture is active only in the two H timer
+  windows. A 10000-record static array costs 240000 bytes on i686 and
+  covers ten seconds of disjoint >1 ms intervals. Its overflow counter
+  saturates and invalidates the measurement. The hot path performs no
+  division, allocation or output beyond the existing budget calculation.
+  Freeze the trace and timing counters together, before analysis; copy one
+  record per short IRQ section; calculate end-to-end
+  min/mean/max spacing and peak-to-peak jitter with IF restored. Fewer than
+  two samples cannot establish spacing. These are observed IRQ-off sections,
+  not a count of all SMIs: an SMI entirely under IF=1 can escape this trace.
+- `registry_smi_snapshot` qualifies PCI mechanism #1, LPC 8086:248c at
+  00:1f.0, the firmware base and enabled decode before PM I/O. It reads
+  PM1_STS/EN/CNT, GPE0_STS/EN, SMI_EN/STS, TCO1_STS and each matching
+  00:1d.0/1/2 USB_LEGKEY without acknowledging status or changing decode.
+  GEN_PMCON1 supplies rate selection. Raw before/after snapshots and every
+  captured event go through the existing H-page log path after measurement.
+- The separate `SMI bit 10 s` item requires H boot, IF=1, calibrated TSC,
+  a complete baseline, stable PM configuration and at least two events.
+  One candidate may be selected: USB requires enabled legacy status,
+  legacy trap enables and all three native UHCI owners; the software timer
+  requires every observed interval inside its selected rate bounds (upper
+  bound also allows the measured section duration); the periodic timer
+  requires its selected interval within 1%. Multiple candidates or missing
+  cadence yield SKIP with no write. Missing samples are never guessed into
+  a timer period. TCO stays read-only: suppressing its SMI would not stop
+  its reset machinery. No PM1/GPE/USB_LEGKEY register is written.
+- The item clears only the selected SMI_EN enable, reads it back, measures
+  ten seconds, then restores before formatting or logging. Every attempted
+  clear reaches restoration, including failed clear readback or timeout.
+  Restoration merges the saved target bit with the current defined enables,
+  preserving unrelated firmware changes and the read EOS value; three
+  bounded readback attempts report a failed restoration explicitly. The
+  trial polls for firmware re-enabling its target and fails that result.
+  PASS also requires zero captured stalls, <=2 lost ticks and the unchanged
+  250 us critical-section budget. It remains an experimental hypothesis
+  until the physical before/clear result is observed.
+- Final results use one row each, followed by the register snapshot,
+  baseline/clear timing and explicit clear/restore readback. Full details
+  remain in the live log. Trace reporting has its own deadline; unprinted
+  records are counted explicitly and prohibit a passing result or candidate
+  selection from an incomplete baseline. Measurement itself produces no log
+  traffic. The registry probe's private namespace and host I/O shims were
+  extended mechanically for the new read-only snapshot.
+
+Host checks and the final ELF hash are recorded in
+`build/codex/f0-35-report.md`. Host replay proves collection/selection/cleanup,
+not a physical SMI cause. The lead still owns f0-smoke and one T23 H-page
+acquisition on the integrated image SHA-256; an unresolved source must remain
+unresolved in that record, with no normal-boot bit clear inferred from it.

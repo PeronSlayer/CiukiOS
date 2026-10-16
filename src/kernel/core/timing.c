@@ -20,6 +20,13 @@ static uint32_t crit_site, crit_max_site;
 static const char *crit_section = "irq_save", *crit_max_section = "none";
 static uint64_t pic_mask_out_max;
 static uint32_t pic_mask_writes;
+static struct timing_stall stalls[TIMING_STALL_CAPACITY];
+static unsigned stall_count, stall_dropped;
+static bool stall_active;
+static uint64_t stall_begin, stall_per_ms;
+struct timing_raw { uint64_t per_ms, maximum, pic_max; };
+static void snapshot_locked(struct timing_stats *, struct timing_raw *);
+static void snapshot_convert(struct timing_stats *, const struct timing_raw *);
 
 static inline uint64_t rdtsc(void)
 {
@@ -49,7 +56,8 @@ void crit_end(void)
 {
     if (!g_cpu_tsc || !crit_start)
         return;
-    uint64_t d = rdtsc() - crit_start;
+    uint64_t end = rdtsc(), start = crit_start;
+    uint64_t d = end - start;
     crit_start = 0;
     if (d > crit_max_cycles) {
         crit_max_cycles = d;
@@ -60,6 +68,65 @@ void crit_end(void)
         crit_window_max = d;
     if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US)
         budget_violations++;
+    if (stall_active && start >= stall_begin && stall_per_ms && d > stall_per_ms) {
+        if (stall_count < TIMING_STALL_CAPACITY)
+            stalls[stall_count++] = (struct timing_stall){start,end,crit_site,crit_section};
+        else if (stall_dropped != UINT32_MAX)
+            stall_dropped++;
+    }
+}
+
+void timing_stalls_begin(void)
+{
+    uint32_t f = irq_save();
+    stall_active = false;
+    stall_count = stall_dropped = 0;
+    stall_per_ms = g_tsc_per_ms;
+    stall_begin = g_cpu_tsc ? rdtsc() : 0;
+    stall_active = g_cpu_tsc && stall_per_ms;
+    irq_restore(f);
+}
+
+bool timing_stall_get(unsigned index, struct timing_stall *out)
+{
+    uint32_t f = irq_save();
+    bool ok = !stall_active && index < stall_count;
+    if (ok) *out = stalls[index];
+    irq_restore(f);
+    return ok;
+}
+
+void timing_stalls_end(struct timing_stall_stats *out, struct timing_stats *timing)
+{
+    struct timing_raw raw;
+    uint32_t f = irq_save();
+    stall_active = false;
+    *out = (struct timing_stall_stats){.start_tsc=stall_begin,
+        .end_tsc=g_cpu_tsc ? rdtsc() : 0,.per_ms=stall_per_ms,
+        .count=stall_count,.dropped=stall_dropped};
+    if (timing) snapshot_locked(timing,&raw);
+    irq_restore(f);
+    if (timing) snapshot_convert(timing,&raw);
+    /* Frozen records, all arithmetic with IF restored. End-to-end spacing
+     * describes observed sections, not necessarily every physical SMI. */
+    uint64_t total=0, minimum=UINT64_MAX, maximum=0, previous=0;
+    for (unsigned i=0;i<out->count;i++) {
+        struct timing_stall event;
+        if (!timing_stall_get(i,&event)) break;
+        if (i) {
+            uint64_t delta=event.end_tsc-previous;
+            total+=delta;
+            if (delta<minimum) minimum=delta;
+            if (delta>maximum) maximum=delta;
+        }
+        previous=event.end_tsc;
+    }
+    if (out->count>1 && out->per_ms) {
+        out->period_min_us=minimum*1000/out->per_ms;
+        out->period_max_us=maximum*1000/out->per_ms;
+        out->period_mean_us=total*1000/out->per_ms/(out->count-1);
+        out->jitter_us=(maximum-minimum)*1000/out->per_ms;
+    }
 }
 
 void timing_timer_irq(void)
@@ -111,20 +178,30 @@ void timing_reset(void)
     irq_restore(f);
 }
 
-void timing_snapshot(struct timing_stats *s)
+static void snapshot_locked(struct timing_stats *s, struct timing_raw *raw)
 {
-    uint32_t f=irq_save();
-    uint64_t per_ms=g_tsc_per_ms, maximum=crit_max_cycles;
-    uint64_t pic_max=pic_mask_out_max;
+    *raw=(struct timing_raw){g_tsc_per_ms,crit_max_cycles,pic_mask_out_max};
     s->pic_mask_writes = pic_mask_writes;
     s->budget_violations = budget_violations;
     s->gaps_software = gaps_software;
     s->gaps_unclassified = gaps_unclassified;
     s->pit_irqs = pit_irqs;
     s->critical_site = crit_max_site; s->critical_section = crit_max_section;
+}
+
+static void snapshot_convert(struct timing_stats *s, const struct timing_raw *r)
+{
+    s->tsc_khz = (uint32_t)r->per_ms;
+    s->critical_us = r->per_ms ? (uint32_t)(r->maximum * 1000 / r->per_ms) : 0;
+    s->critical_ns = r->per_ms ? (uint32_t)(r->maximum * 1000000 / r->per_ms) : 0;
+    s->pic_mask_out_max_us = r->per_ms ? (uint32_t)(r->pic_max * 1000 / r->per_ms) : 0;
+}
+
+void timing_snapshot(struct timing_stats *s)
+{
+    struct timing_raw raw;
+    uint32_t f=irq_save();
+    snapshot_locked(s,&raw);
     irq_restore(f);
-    s->tsc_khz = (uint32_t)per_ms;
-    s->critical_us = per_ms ? (uint32_t)(maximum * 1000 / per_ms) : 0;
-    s->critical_ns = per_ms ? (uint32_t)(maximum * 1000000 / per_ms) : 0;
-    s->pic_mask_out_max_us = per_ms ? (uint32_t)(pic_max * 1000 / per_ms) : 0;
+    snapshot_convert(s,&raw);
 }

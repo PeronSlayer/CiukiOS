@@ -50,6 +50,17 @@ const struct pci_func *pci_get(unsigned i);
  * interrupt or assumes that Interrupt Line alone proves level routing. */
 bool pci_irq_routed(const struct pci_func *function);
 
+/* ICH3-M only, read-only H-page inspection. PCI address selection writes
+ * CF8 but never changes PCI configuration or acknowledges W1C status. */
+struct registry_smi {
+    bool supported, decoded;
+    uint32_t lpc_id, pmbase_raw, smi_en, smi_sts;
+    uint16_t base, gen_pmcon1, pm1_sts, pm1_en, pm1_cnt;
+    uint16_t gpe0_sts, gpe0_en, tco1_sts, usb_legkey[3];
+    uint8_t acpi_cntl, usb_present;
+};
+bool registry_smi_snapshot(struct registry_smi *);
+
 /* Counts are cumulative except live (includes discovery, reservations and
  * quarantine). registry_count remains the occupied slot high-water mark;
  * released slots are reused with fresh generations. Owners have static or

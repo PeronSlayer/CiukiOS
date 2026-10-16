@@ -33,6 +33,7 @@ static struct ciuki_boot_info fixture_boot;
 static void fixture_outb(uint16_t p, uint8_t v) { (void)p; (void)v; fixture_pic.writes++; }
 static void fixture_outl(uint16_t p, uint32_t v) { (void)p; (void)v; fixture_pic.writes++; }
 static uint32_t fixture_inl(uint16_t p) { (void)p; return UINT32_MAX; }
+static uint16_t fixture_inw(uint16_t p) { (void)p; return UINT16_MAX; }
 static void fixture_mask(unsigned irq) { fixture_pic.masked[irq] = true; fixture_pic.masks++; }
 static void fixture_unmask(unsigned irq)
 {
@@ -97,6 +98,7 @@ static void fixture_seed(void) { }
 #define registry_snapshot fixture_registry_snapshot
 #define registry_inventory fixture_registry_inventory
 #define registry_generation fixture_registry_generation
+#define registry_smi_snapshot fixture_registry_smi_snapshot
 #define registry_count fixture_registry_count
 #define registry_get fixture_registry_get
 #define pci_count fixture_pci_count
@@ -108,6 +110,7 @@ static void fixture_seed(void) { }
 #define outb fixture_outb
 #define outl fixture_outl
 #define inl fixture_inl
+#define cpu_inw fixture_inw
 #define pic_mask fixture_mask
 #define pic_unmask fixture_unmask
 #define irq_set_handler fixture_handler
@@ -156,6 +159,7 @@ static void fixture_seed(void) { }
 #undef registry_snapshot
 #undef registry_inventory
 #undef registry_generation
+#undef registry_smi_snapshot
 #undef registry_count
 #undef registry_get
 #undef pci_count
@@ -167,6 +171,7 @@ static void fixture_seed(void) { }
 #undef outb
 #undef outl
 #undef inl
+#undef cpu_inw
 #undef pic_mask
 #undef pic_unmask
 #undef irq_set_handler

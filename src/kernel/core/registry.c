@@ -239,6 +239,38 @@ static uint32_t pci_read(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
     return v;
 }
 
+bool registry_smi_snapshot(struct registry_smi *out)
+{
+    memset(out,0,sizeof(*out));
+    if (!((g_boot.pci_bios & 1) && ((g_boot.pci_bios >> 8) & 1))) return false;
+    out->lpc_id=pci_read(0,31,0,0);
+    /* The mobile map is qualified by 290716-001, not by a generic Intel ID. */
+    if (out->lpc_id!=0x248c8086u || (pci_read(0,31,0,8)>>16)!=0x0601) return false;
+    out->supported=true;
+    out->pmbase_raw=pci_read(0,31,0,0x40);
+    out->base=out->pmbase_raw & 0xff80;
+    out->acpi_cntl=pci_read(0,31,0,0x44) & 0xff;
+    out->gen_pmcon1=pci_read(0,31,0,0xa0) & 0xffff;
+    static const uint32_t usb_ids[3]={0x24828086,0x24848086,0x24878086};
+    for (unsigned i=0;i<3;i++) {
+        if (pci_read(0,29,i,0)!=usb_ids[i] || (pci_read(0,29,i,8)>>8)!=0x0c0300) continue;
+        out->usb_present|=1u<<i;
+        out->usb_legkey[i]=pci_read(0,29,i,0xc0) & 0xffff;
+    }
+    /* Never enable decode, repair a base, or read an unqualified I/O range. */
+    if (!out->base || (out->pmbase_raw & 0xffff007fu)!=1 || !(out->acpi_cntl & 0x10)) return false;
+    out->decoded=true;
+    out->pm1_sts=cpu_inw(out->base);
+    out->pm1_en=cpu_inw(out->base+2);
+    out->pm1_cnt=cpu_inw(out->base+4);
+    out->gpe0_sts=cpu_inw(out->base+0x28);
+    out->gpe0_en=cpu_inw(out->base+0x2a);
+    out->smi_en=inl(out->base+0x30);
+    out->smi_sts=inl(out->base+0x34);
+    out->tco1_sts=cpu_inw(out->base+0x64);
+    return true;
+}
+
 static void pci_scan(void)
 {
     /* Bus 0 and firmware-configured secondary buses of PCI-PCI bridges. */

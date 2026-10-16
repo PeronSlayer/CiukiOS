@@ -6,6 +6,24 @@ import tempfile
 import unittest
 ROOT = Path(__file__).resolve().parents[2]
 class HardwareCheckTests(unittest.TestCase):
+    def test_smi_measurement_and_restore(self):
+        folder = ROOT / 'build/host'
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='smi-page-', dir=folder) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/core/timing.c').read_text()
+            begin = source.index('static inline uint64_t rdtsc(void)')
+            end = source.index('\nvoid crit_begin(void)', begin)
+            (temp / 'latency_timing.inc').write_text(source[:begin] + source[end:])
+            binary = temp / 'smi-page'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
+                            '-I', str(ROOT / 'src/kernel/include'), '-I', str(temp),
+                            str(ROOT / 'tests/host/hardware_check_smi_test.c'),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS':'detect_leaks=0'})
+
     def test_serial_transmit_page(self):
         folder = ROOT / 'build/host'
         folder.mkdir(parents=True, exist_ok=True)

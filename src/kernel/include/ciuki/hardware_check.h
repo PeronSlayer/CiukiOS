@@ -3,7 +3,7 @@
 #define CIUKI_HARDWARE_CHECK_H
 #include <stdint.h>
 #include <stdbool.h>
-#define HW_CHECK_ITEMS 9u
+#define HW_CHECK_ITEMS 10u
 #define HW_CHECK_LIMIT_MS 15000u
 enum hw_check_status { HW_PASS, HW_FAIL, HW_SKIP };
 struct hw_check_result { enum hw_check_status status; char detail[144]; };
@@ -15,6 +15,8 @@ struct hw_check_ops {
 };
 void hardware_check_model(const struct hw_check_ops *, struct hw_check_result [HW_CHECK_ITEMS]);
 void hardware_check_run(void);
+void hardware_check_timer(uint64_t until, bool experiment, struct hw_check_result *, const struct hw_check_ops *);
+void hardware_check_smi_summary(const struct hw_check_ops *);
 /* Observe the ordinary workers only. A first scan is required before an
  * absent device can skip; enumeration/publication may still be pending. */
 bool hardware_check_usb_wait_first_scan(uint64_t until, struct hw_check_result *, uint64_t (*now)(void *));

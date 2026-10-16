@@ -67,6 +67,7 @@ static void outb(uint16_t port, uint8_t v) {
 }
 static void outl(uint16_t port, uint32_t v) { if (port == 0xcf8) native_dma_config_address = v; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
+static uint16_t cpu_inw(uint16_t port) { (void)port; return UINT16_MAX; }
 static bool capture_logs;
 static char captured_logs[4096];
 void klog(const char *fmt, ...)
