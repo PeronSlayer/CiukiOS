@@ -71,6 +71,7 @@ bool dpmi_linear_owned(struct dosvm *v, uint32_t linear, uint32_t bytes)
 void dpmi_reload_debug(struct dosvm *v)
 {
     struct dpmi *d = &v->dpmi;
+    uint32_t flags = irq_save();
     uint32_t address[4] = {0}, dr7 = 0;
     static const uint8_t len[5] = {0, 0, 1, 0, 3}, rw[3] = {0, 1, 3};
     for (unsigned i = 0; i < DPMI_WATCH; i++) {
@@ -79,9 +80,32 @@ void dpmi_reload_debug(struct dosvm *v)
         dr7 |= (1u << (i * 2)) | ((uint32_t)rw[d->watch[i].type] << (16 + i * 4)) |
                ((uint32_t)len[d->watch[i].size] << (18 + i * 4));
     }
+    /* Unallocated slots carry no client state. Keeping the temporary
+     * address there also lets the existing task-switch hook reload it;
+     * .used and .hit remain exclusively the client's 0Bxx service state. */
+    for (unsigned i = 0; i < DPMI_WATCH; i++)
+        if (!d->watch[i].used) d->watch[i].addr = 0;
+    d->return_slot = DPMI_WATCH;
+    if (d->return_steps && v->frame_pm && d->depth == d->return_depth && d->clients == d->return_client) {
+        for (unsigned i = DPMI_WATCH; i-- > 0;) if (!d->watch[i].used) {
+            d->return_slot = (uint8_t)i;
+            d->watch[i].addr = address[i] = d->return_linear;
+            dr7 |= 1u << (i * 2);       /* local, execute, length 1 */
+            break;
+        }
+        if (d->return_slot == DPMI_WATCH) d->return_steps = 0; /* all slots belong to debugger */
+    }
     if (dr7) dr7 |= 1u << 8;            /* LE: exact data breakpoints */
     d->dr7 = dr7;
     if (g_current == v->task) arch_debug_load(address, dr7);
+    irq_restore(flags);
+}
+
+void dpmi_return_cancel(struct dosvm *v)
+{
+    if (!v->dpmi.return_steps && v->dpmi.return_slot >= DPMI_WATCH) return;
+    v->dpmi.return_steps = 0;
+    dpmi_reload_debug(v);
 }
 
 /* Free every host resource without guest help; stats survive. */
@@ -232,6 +256,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     d->decode_valid = false;
     unsigned c = d->clients - 1;
     uint8_t id = (uint8_t)(c + 1);
+    if (d->return_steps && d->return_client == id) dpmi_return_cancel(v);
     struct dpmi_client *cl = &d->client[c];
     dpmi_unwind(v, cl->depth_base);
     if (cl->env_sel) dosvm_write(v, ((uint32_t)cl->psp << 4) + 0x2C, &cl->env, 2);

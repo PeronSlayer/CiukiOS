@@ -16,7 +16,7 @@ static void test_irq_restore_delivery(void)
         cur.tf.eip = 0x302; cur.tf.eax = V86_IF | 2; op1(v, 0xFA);
         CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
         /* POPF; NOP retired: the saved-image #DB and a PIT edge coincide.
-         * A live near-return slot makes f3-10 seed its bounded tracing. */
+         * A live near-return slot seeds the sparse return checkpoint. */
         pm_push(v, 0x400);
         cur.tf.eip = 0x340; cur.tf.eflags |= V86_TF;
         uint64_t edges = v->pit.edges;
@@ -27,7 +27,7 @@ static void test_irq_restore_delivery(void)
               !v->dpmi.if_armed && !v->monitor.vif && !(cur.tf.eflags & V86_TF));
         CHECK(v->dpmi.return_steps == DPMI_RETURN_STEPS && v->monitor.pic[0].isr == 1 &&
               v->monitor.stats.delivered[0] == 1 && v->dpmi.rec[0].saved.tf.eip == 0x340 &&
-              (v->dpmi.rec[0].saved.tf.eflags & V86_TF));
+              !(v->dpmi.rec[0].saved.tf.eflags & V86_TF) && v->dpmi.return_slot == DPMI_WATCH);
         /* Another edge while in service must wait; EOI is still emulated
          * with boundary/shadow state present and IF clear. */
         CHECK(dosvm_irq_raise(v->info.key, 0));
@@ -42,10 +42,10 @@ static void test_irq_restore_delivery(void)
         cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0);
         pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
         CHECK(cur.tf.eip == 0x340 && !v->dpmi.depth && !v->monitor.pic[0].isr &&
-              v->monitor.vif && (cur.tf.eflags & V86_TF));
+              v->monitor.vif && !(cur.tf.eflags & V86_TF) && v->dpmi.return_slot < DPMI_WATCH);
         destroy(v, true); empty();
     }
-    puts("f3-11 restore/IRQ replay: arm, BS at restore + PIT edge, owned return TF saved, handler EOI with armed/shadow state, pending IRQ and both returns PASS");
+    puts("f3-11/f3-34 restore/IRQ replay: arm, BS at restore + PIT edge, return checkpoint suspended, handler EOI with armed/shadow state, pending IRQ and both returns PASS");
 }
 
 static void test_irq_frame_commit(void)

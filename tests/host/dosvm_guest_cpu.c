@@ -396,7 +396,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     emu->x86.R_EAX = s->eax; emu->x86.R_EBX = s->ebx; emu->x86.R_ECX = s->ecx; emu->x86.R_EDX = s->edx;
     emu->x86.R_ESI = s->esi; emu->x86.R_EDI = s->edi; emu->x86.R_EBP = s->ebp; emu->x86.R_ESP = s->esp;
     emu->x86.R_EIP = s->eip;
-    emu->x86.R_EFLG = (s->eflags & 0x00000DD5u) | 0x202u;
+    emu->x86.R_EFLG = (s->eflags & 0x00010DD5u) | 0x202u;
     load_seg(emu->x86.R_CS_SEL, s->cs, s->pm, true);
     load_seg(emu->x86.R_SS_SEL, s->ss, s->pm, false);
     load_seg(emu->x86.R_DS_SEL, s->ds, s->pm, false);
@@ -414,11 +414,27 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
          * (Intel SDM Vol. 3, "Single-Step Exception Condition"). */
         bool tf_loaded = !tf && (emu->x86.R_EFLG & 0x100u);
         if (tf_loaded && budget > executed + 1) budget = executed + 1;
+        /* SDM 18.3.1.1: an instruction breakpoint is a fault before
+         * execution, suppressed by RF or the MOV/POP SS inhibition. */
+        unsigned execute_hits = 0;
+        if ((s->dr7 & 0x55u) && !(emu->x86.R_EFLG & 0x10000u) && !ev->ss_shadow)
+            for (unsigned i = 0; i < 4; i++)
+                if ((s->dr7 & (1u << (2 * i))) && !((s->dr7 >> (16 + 4 * i)) & 3) &&
+                    s->dr[i] == emu->x86.R_CS_BASE + emu->x86.R_EIP) execute_hits |= 1u << i;
+        if (execute_hits) {
+            ev->vector = 1; ev->fault = true; ev->dr6 = execute_hits;
+            rc = GCPU_TRAP; break;
+        }
         ev->executed_descriptor = false;
         if (trap_check(s)) { rc = ev->fault && ev->vector == 13 ? GCPU_TRAP : GCPU_TRAP; break; }
-        if (ev->executed_descriptor) { executed++; continue; }
+        if (ev->executed_descriptor) {
+            executed++; ev->ss_shadow = false;
+            emu->x86.R_EFLG &= ~0x10000u;
+            continue;
+        }
         bool ss_load = loads_ss(emu->x86.R_CS_BASE + emu->x86.R_EIP);
         uint32_t saved_eip = emu->x86.R_EIP;
+        bool rf_before = emu->x86.R_EFLG & 0x10000u;
         watch_hits = 0;
         emu->max_instr = emu->x86.R_TSC + 1;
         emu->x86.mode &= ~0x80u;               /* clear a previous stop */
@@ -429,6 +445,16 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
             break;
         }
         executed++;
+        if (rf_before || (emu->x86.R_EFLG & 0x10000u)) {
+            uint8_t opcode = 0;
+            for (unsigned i = 0; i < 15; i++) {
+                if (!fetch(emu->x86.R_CS_BASE + saved_eip + i, &opcode)) break;
+                if (opcode != 0x66 && opcode != 0x67 && opcode != 0x26 && opcode != 0x2E &&
+                    opcode != 0x36 && opcode != 0x3E && opcode != 0x64 && opcode != 0x65 &&
+                    opcode != 0xF0 && opcode != 0xF2 && opcode != 0xF3) break;
+            }
+            if (opcode != 0xCF) emu->x86.R_EFLG &= ~0x10000u; /* IRET may load a new RF */
+        }
         ev->ss_shadow = ss_load;
         if (watch_hits) {                  /* data breakpoint: #DB trap after the access */
             ev->vector = 1; ev->err = 0; ev->fault = false; ev->dr6 = watch_hits | ((tf || tf_loaded) ? 0x4000u : 0);
@@ -436,7 +462,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
             break;
         }
         /* MOV SS / POP SS delay a single-step trap by one instruction. */
-        if ((tf || tf_loaded) && executed == budget && ss_load)
+        if (executed == budget && ss_load)
             budget++;
         if (tf_loaded && executed == budget) { tf = true; break; }
     }
@@ -445,7 +471,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
     s->eax = emu->x86.R_EAX; s->ebx = emu->x86.R_EBX; s->ecx = emu->x86.R_ECX; s->edx = emu->x86.R_EDX;
     s->esi = emu->x86.R_ESI; s->edi = emu->x86.R_EDI; s->ebp = emu->x86.R_EBP; s->esp = emu->x86.R_ESP;
     s->eip = emu->x86.R_EIP;
-    s->eflags = (emu->x86.R_EFLG & 0x00000DD5u) | 0x202u;
+    s->eflags = (emu->x86.R_EFLG & 0x00010DD5u) | 0x202u;
     s->cs = emu->x86.R_CS; s->ss = emu->x86.R_SS; s->ds = emu->x86.R_DS; s->es = emu->x86.R_ES;
     s->fs = emu->x86.R_FS; s->gs = emu->x86.R_GS;
     return rc;

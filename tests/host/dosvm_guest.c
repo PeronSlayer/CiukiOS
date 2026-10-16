@@ -435,6 +435,7 @@ static void to_state(struct gcpu_state *s)
     s->ds = (uint16_t)(pm ? cpu.tf.ds : cpu.ds); s->es = (uint16_t)(pm ? cpu.tf.es : cpu.es);
     s->fs = (uint16_t)(pm ? cpu.tf.fs : cpu.fs); s->gs = (uint16_t)(pm ? cpu.tf.gs : cpu.gs);
     s->ldt_limit = DPMI_LDT_ENTRIES * 8 - 1;
+    memcpy(s->dr, debug_addr, sizeof(s->dr)); s->dr7 = debug_dr7;
 }
 static void from_state(const struct gcpu_state *s)
 {
@@ -458,7 +459,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
         const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
         if (!strcmp(owner, "rm_ss") || !strcmp(owner, "rm_irq")) db_rm++;
         else if (!strcmp(owner, "pm_flags")) db_flags++;
-        else if (!strcmp(owner, "pm_return")) db_return++;
+        else if (!strcmp(owner, "pm_return") || (debug_dr6 & return_debug_bit(&gv->dpmi))) db_return++;
         else db_other++;
     }
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }

@@ -1101,6 +1101,7 @@ static int if_cpu_run(struct dosvm *v, struct gcpu_event *ev)
         .eip=cur.tf.eip, .eflags=cur.tf.eflags, .cs=cur.tf.cs, .ss=cur.tf.user_ss,
         .ds=cur.tf.ds, .es=cur.tf.es, .fs=cur.tf.fs, .gs=cur.tf.gs,
         .ldt_limit=DPMI_LDT_ENTRIES * 8 - 1, .pm=true};
+    memcpy(s.dr, debug_addr, sizeof(s.dr)); s.dr7 = debug_dr7;
     if_cpu_vm = v;
     int rc = gcpu_run(&s, 32, ev);
     cur.tf.eax=s.eax; cur.tf.ebx=s.ebx; cur.tf.ecx=s.ecx; cur.tf.edx=s.edx;
