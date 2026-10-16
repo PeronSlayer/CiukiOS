@@ -60,6 +60,15 @@ void desk_autoplay_service(struct desktop *d)
         a->open=0;
     }
     if (a->open || !a->waiting) return;
+    /* Media discovery can finish between menu/Run key edges. Opening a
+     * prompt here would close the menu (desk_internal_open) and redirect the
+     * rest of that command to AutoPlay or the previously focused DOS window.
+     * Keep arrivals queued until input returns to the desktop, including
+     * across a native client's asynchronous first frame. */
+    if (d->focus>=0 || d->sh.levels || d->sh.switcher || d->action>=0 || d->sh.want_run[0] || d->keyboard_geometry || d->drag>=0 ||
+        d->sh.volume_open || d->sh.network_open || d->sh.media_open) return;
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (d->clients[k].awaiting_frame) return;
     for (unsigned i=3;i<26;i++) if (a->waiting&(1u<<i)) {
         a->waiting&=~(1u<<i); a->active=a->pending[i]; a->selected=AP_FOLDER; a->always=0;
         if (ap_probe_workspace(d->autoplay_fs,i,&a->content,a->workspace)) {

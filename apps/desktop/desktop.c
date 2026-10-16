@@ -983,10 +983,10 @@ static int run_command(struct desktop *d, char *line)
     if (!count) return 0;
     const char *name=!strncmp(words[0],"/Programs/",sizeof("/Programs/")-1) ? words[0]+sizeof("/Programs/")-1 : words[0];
     for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
-        for (unsigned a=0; a<6; a++) d->launch_argv[a]=a+1<count ? words[a+1] : NULL;
-        int pid=d->launch ? d->launch(d,&d->programs[k]) : -1;
-        int error=errno;
-        for (unsigned a=0; a<6; a++) d->launch_argv[a]=NULL;
+        const char *args[6]; unsigned arguments=count-1<6 ? count-1 : 6;
+        for (unsigned a=0;a<arguments;a++) args[a]=words[a+1];
+        int pid=arguments ? desk_task_launch_args(d,name,args,arguments) : desk_task_launch(d,name,NULL);
+        int error=pid<0 ? -pid : 0;
         if (pid<0) {
             char text[160]; snprintf(text,sizeof(text),"'%s' could not be started.\n%s (%d)",name,strerror(error),error);
             desk_shell_message(d,"Run",text,1);
@@ -997,6 +997,30 @@ static int run_command(struct desktop *d, char *line)
     snprintf(text,sizeof(text),"CiukiOS cannot find '%.60s'.\nType the name of a program in /Programs.",words[0]);
     desk_shell_message(d,"Run",text,1);
     return -1;
+}
+/* Shared by --launch and the Programs menu: a bare launch carries no payload. */
+static void startup_launch(struct desktop *d,const char *name)
+{
+    d->action=-1;
+    for (unsigned i=0;i<d->program_count;i++) if (!strcmp(d->programs[i].name,name)) d->action=(int)i;
+    if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
+}
+static int launch_pending(struct desktop *d)
+{
+    if (d->action<0) return 0;
+    unsigned selected=(unsigned)d->action; d->action=-1;
+    int pid=selected<d->program_count ? desk_task_launch(d,d->programs[selected].name,NULL) : -ENOENT;
+    if (pid<0) {
+        desk_shell_notify_error(d,"Program did not start",-pid);
+        desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
+    } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
+        d->shell_pid=(uint32_t)pid; d->shell_stage=2;
+    } else if (d->tasks_test && d->tasks_stage==0 && !strcmp(d->programs[selected].name,"tasks")) {
+        d->tasks_pid=(uint32_t)pid; d->tasks_stage=1;
+    } else if (d->app_test && !d->app_pid && !strcmp(d->programs[selected].name,desk_app_program(d->app_test))) {
+        d->app_pid=(uint32_t)pid;
+    }
+    return pid;
 }
 static int power_request(int action)
 { return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF); }
@@ -1261,11 +1285,7 @@ int main(int argc, char **argv)
     display_start(d);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
      * path as a menu click (the f3:vm-window probe opens /Programs/dosbox so). */
-    if (launch && !gate) {
-        d->action=-2;
-        for (unsigned i=0; i<d->program_count; i++) if (!strcmp(d->programs[i].name,launch)) d->action=(int)i;
-        if (d->action<0) { d->action=-1; snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",launch); }
-    }
+    if (launch && !gate) startup_launch(d,launch);
     /* The ABI has no timed input read or poll/select. A bounded nonblocking
      * drain followed by an interruptible 10 ms sleep keeps IPC/time moving. */
     for (int i=0; i<channel_count; i++) desk_add_client(d,channels[i]);
@@ -1425,20 +1445,7 @@ int main(int argc, char **argv)
         }
         if (d->sh.want_power && !d->sh.gate) d->action=-1;
         desktop_stage(STALL_LAUNCH);
-        if (d->action>=0) {
-            unsigned selected=(unsigned)d->action; d->action=-1;
-            int pid=selected<d->program_count && d->launch ? d->launch(d,&d->programs[selected]) : -1;
-            if (pid<0) {
-                desk_shell_notify_error(d,"Program did not start",errno);
-                desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);
-            } else if (d->shell_test && d->shell_stage==1 && !strcmp(d->programs[selected].name,"demo")) {
-                d->shell_pid=(uint32_t)pid; d->shell_stage=2;
-            } else if (d->tasks_test && d->tasks_stage==0 && !strcmp(d->programs[selected].name,"tasks")) {
-                d->tasks_pid=(uint32_t)pid; d->tasks_stage=1;
-            } else if (d->app_test && !d->app_pid && !strcmp(d->programs[selected].name,desk_app_program(d->app_test))) {
-                d->app_pid=(uint32_t)pid;
-            }
-        }
+        launch_pending(d);
         desktop_stage(STALL_SHELL);
         if (d->sh.want_reload&1) desktop_input_pending();
         shell_service(d);
