@@ -29,6 +29,8 @@ static bool e100_idle(struct netif *d)
     unsigned status = net_read(d, 0, 2);
     return status != 0xffff && !(status & 0xfc) && !net_read(d, 2, 1);
 }
+/* The interrupt-control byte is independent of the CU/RU command byte.
+ * Keep this byte-sized so an ISR cannot overwrite an unaccepted command. */
 static void e100_irq_enable(struct netif *d, bool enable) { net_write(d, 3, enable ? 0 : 1, 1); }
 static bool e100_interrupt(struct netif *d)
 {
@@ -179,6 +181,8 @@ static int e100_poll(struct netif *d, uint8_t *out)
 {
     unsigned status = net_read(d, 0, 2);
     if (status == 0xffff) return -5;
+    /* Ack only currently observed causes, never replay the ISR's saved W1C
+     * bits. Descriptor completion is independent of interrupt delivery. */
     net_write(d, 1, (status >> 8) & 0xfc, 1); (void)net_take_pending(d);
     if (d->tx_used[0]) {
         struct e100_block *cb = (struct e100_block *)(void *)(d->dma + E100_TX);
@@ -192,8 +196,13 @@ static int e100_poll(struct netif *d, uint8_t *out)
     net_dma_barrier();
     int length = 0;
     if (rfd->status & 0x8000) {
-        unsigned count = rfd->count & 0x3fff;
-        if (count > NET_FRAME_MAX || !(rfd->count & 0x4000) || !(rfd->count & 0x8000)) { d->stats.rx_errors++; return -5; }
+        unsigned actual = rfd->count, count = actual & 0x3fff, flags = actual & 0xc000;
+        /* Intel requires F/EOF; QEMU eepro100 nic_receive writes only size.
+         * Accept that exact omission on the validated QEMU profile, while
+         * retaining physical checks and rejecting partial flags everywhere.
+         * See docs/validation/f6-01-nic-drivers.md (F6-09). */
+        bool complete_count = flags == 0xc000 || (!flags && (g_boot.flags & CBI_F_SMBIOS_QEMU));
+        if (count > NET_FRAME_MAX || !complete_count) { d->stats.rx_errors++; return -5; }
         if ((rfd->status & 0x2000) && !(rfd->status & 0x0fff) && count >= 60) {
             memcpy(out, rfd->data, count); length = count;
         } else d->stats.rx_errors++;
