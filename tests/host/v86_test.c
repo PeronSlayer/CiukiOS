@@ -213,7 +213,16 @@ void input_firmware_loss(uint64_t lost) { (void)lost; }
 void input_firmware_disable(gen_t gen)
 { CHECK(gen == public_input.generation); public_input.active = false; public_input.quarantined = true; }
 void i8042_snapshot(struct i8042_stats *out) { *out = public_input; }
-int i8042_init(void) { CHECK(false); return -ENOSYS; }
+static unsigned native_attempts;
+int i8042_init(void)
+{
+    native_attempts++;
+    CHECK(!drivers_input_firmware());
+    if (quarantined) return -V86_EIO;
+    CHECK(!input_enabled && !lease_count && !irq_fake[1] && !irq_fake[12]);
+    public_input = (struct i8042_stats){.active = true, .generation = gen_alloc()};
+    return 0;
+}
 int fbdev_init(void) { CHECK(false); return -ENOSYS; }
 const struct fb_device *fbdev_get(void) { static struct fb_device fb; return &fb; }
 int ata_init(void) { CHECK(false); return -ENOSYS; }
@@ -867,6 +876,8 @@ static void test_worker(void)
     registry_init();
     CHECK(biosvm_init() == -V86_EPERM);
     g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    CHECK(biosvm_init() == -V86_EPERM); /* policy alone has no provenance */
+    g_boot.flags |= CBI_F_INPUT_DETECTED;
     CHECK(!biosvm_init() && biosvm_backend_state() == BIOSVM_READY);
     test_runtime_mappings();
     CHECK(vm_memory(0, 0, 4, true) == ram);
@@ -1003,7 +1014,7 @@ static void boot_fixture(bool irq_reservations)
     input_service = 0; input_observer = 0;
     low_pt = vm_as.pd_phys = continuation = 0;
     lease_count = pending_irqs = mouse_lost = generation = 0;
-    activation_count = execution_fault = public_events = 0;
+    activation_count = execution_fault = public_events = native_attempts = 0;
     alloc_page = 0x200000;
     fail_alloc = fail_task = false;
     fail_low_pt = reject_queue = false;
@@ -1240,7 +1251,7 @@ static void test_setup_failures(void)
     CHECK(fwinput_adapter_init() == -EINVAL && logged("step=queue_begin") && !adapter && !generation);
     CHECK(biosvm_backend_state() == BIOSVM_READY); /* leases never released on adapter failure */
     boot_fixture(true);
-    g_boot.input_policy = CBI_INPUT_NATIVE; g_boot.flags &= ~CBI_F_INPUT_FORCED;
+    g_boot.input_policy = CBI_INPUT_NATIVE; g_boot.flags &= ~(CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE);
     CHECK(fwinput_adapter_init() == -ENOSYS && logged("step=input_policy") && !enters);
 }
 
@@ -1293,7 +1304,7 @@ static void test_lease_failures(void)
     CHECK(biosvm_init() == -EFAULT && logged("step=ebda_base"));
     boot_fixture(true);
     ram[0x9FC00] = 0;
-    CHECK(biosvm_init() == -EFAULT && logged("step=ebda_size"));
+    CHECK(!biosvm_init() && logged("step=ebda_size fallback=lowmem start=0009fc00 end=000a0000"));
     boot_fixture(true);
     fail_alloc = true;
     CHECK(biosvm_init() == -ENOMEM && logged("step=address_space"));
@@ -1304,6 +1315,77 @@ static void test_lease_failures(void)
     fail_task = true;
     CHECK(biosvm_init() == -ENOMEM && logged("step=worker_create"));
     CHECK(!low_pt && !vm_as.pd_phys && !lease_count);
+}
+
+static void test_ebda_extents(void)
+{
+    static const struct { uint16_t segment, kib; uint8_t size; bool fallback; } cases[] = {
+        {0x9FC0, 639, 0, true}, {0x9FC0, 639, 1, false},
+        {0x9F00, 636, 4, false}, {0x9FC0, 639, 4, true},
+        {0x9F00, 636, 1, true}, {0x9F00, 636, 255, true},
+        {0x9FC0, 636, 1, false}, {0x9000, 576, 0, true},
+        {0x9FC0, 511, 0, true}, {0x9FC0, 128, 0, true},
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(cases); i++) {
+        boot_fixture(true);
+        putword(ram + 0x40E, 2, cases[i].segment);
+        putword(ram + 0x413, 2, cases[i].kib);
+        ram[(uint32_t)cases[i].segment << 4] = cases[i].size;
+        CHECK(!biosvm_init());
+        CHECK(mappings[3].start == PAGE_ALIGN_DOWN(cases[i].kib * 1024u));
+        CHECK(mappings[3].end == 0xA0000);
+        CHECK(logged("step=ebda_size fallback=lowmem") == cases[i].fallback);
+        const uint32_t *pt = P2V(low_pt);
+        for (uint32_t p = mappings[3].start; p < 0xA0000; p += PAGE_SIZE)
+            CHECK(pt[p >> 12] == (p | PTE_P | PTE_W | PTE_U));
+        CHECK(!pt[0xA0] && !pt[(mappings[3].start >> 12) - 1]);
+        CHECK(!hw_reads && !hw_writes && !enters);
+    }
+    static const struct { uint16_t segment, kib; } bad[] = {
+        {0, 639}, {0x7FFF, 511}, {0xA000, 640},
+        {0x9FC0, 0}, {0x9FC0, 127}, {0x9FC0, 640}, {0x9FC0, 641},
+    };
+    for (unsigned i = 0; i < ARRAY_SIZE(bad); i++) {
+        boot_fixture(true);
+        putword(ram + 0x40E, 2, bad[i].segment);
+        putword(ram + 0x413, 2, bad[i].kib);
+        CHECK(biosvm_init() == -EFAULT && logged("step=ebda_base"));
+        CHECK(!low_pt && !vm_as.pd_phys && !lease_count && !enters);
+    }
+    puts("EBDA: zero/1/4/short/overrun size, lowmem tail, invalid BDA and mapping boundaries PASS");
+}
+
+static void test_input_fallback(void)
+{
+    boot_fixture(true);
+    CHECK(!biosvm_init());
+    unsigned writes = hw_writes, reads = hw_reads;
+    CHECK(!biosvm_input_fallback() && !lease_count && !input_enabled);
+    CHECK(!irq_fake[1] && !irq_fake[12] && !input_service && !input_observer && !input_wait);
+    CHECK(!hw_writes && !hw_reads && hw_writes == writes && hw_reads == reads);
+    CHECK(biosvm_backend_state() == BIOSVM_READY); /* video dependency retained */
+    CHECK(biosvm_init() == -V86_EPERM);           /* no input reactivation */
+    for (unsigned i = 0; i < registry_count(); i++) {
+        const struct resource *r = registry_get(i);
+        CHECK(strcmp(r->owner, "firmware-input") || r->state == RS_RELEASED);
+    }
+    boot_fixture(true);
+    reject_queue = true;           /* adapter fails after actual firmware calls */
+    drivers_init();
+    CHECK(state.input_fallback && !state.firmware && !state.input_error && state.firmware_error == -EINVAL);
+    CHECK(native_attempts == 1 && !lease_count && public_input.active && !public_input.firmware);
+    CHECK(!input_service && !input_observer && !input_wait && !irq_fake[1] && !irq_fake[12]);
+    CHECK(!strcmp(drivers_activation_get(1)->reason, "firmware_failed_native_fallback"));
+    CHECK(!hw_reads && !hw_writes && !counters.quarantines);
+
+    boot_fixture(true);
+    CHECK(!biosvm_init());
+    continuation = 1;
+    CHECK(biosvm_input_fallback() == -EBUSY && lease_count == 4 && counters.quarantines == 4);
+    CHECK(!input_enabled && !irq_fake[1] && !irq_fake[12] && !hw_reads && !hw_writes);
+    continuation = 0;
+    CHECK(biosvm_input_fallback() == -V86_EIO && lease_count == 4);
+    puts("BIOS input fallback: clean software lease release, adapter failure and busy/quarantined refusal PASS");
 }
 
 static void test_pm_timer(void)
@@ -1331,7 +1413,10 @@ static void test_video_calls(void)
 {
     for (unsigned native = 0; native < 2; native++) {
         boot_fixture(true);
-        if (native) g_boot.input_policy = CBI_INPUT_NATIVE;
+        if (native) {
+            g_boot.input_policy = CBI_INPUT_NATIVE;
+            g_boot.flags &= ~(CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE);
+        }
         video_rom = true; ivt(0x10, 0xF000, 0x700); ram[0xF0700] = 0xCF;
         pci[0] = (struct pci_func){.vendor = 0x1234, .device = 0x1111, .class_code = 3}; npci = 1;
         uint8_t m[256];
@@ -1432,6 +1517,8 @@ int main(void)
     test_irq_bda_delivery();
     test_setup_failures();
     test_lease_failures();
+    test_ebda_extents();
+    test_input_fallback();
     test_pm_timer();
     test_video_calls();
     test_fullscreen_calls();

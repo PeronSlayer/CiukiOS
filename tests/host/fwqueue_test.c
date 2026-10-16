@@ -162,6 +162,7 @@ static unsigned failures;
 static uint32_t fake_flags = 0x200;
 static uint32_t read_eflags(void) { return fake_flags; }
 struct ciuki_boot_info g_boot;
+bool drivers_input_firmware(void) { return g_boot.input_policy == CBI_INPUT_FIRMWARE; }
 struct task *g_current;
 bool g_cpu_tsc = true;
 uint64_t g_tsc_per_ms = 1000;

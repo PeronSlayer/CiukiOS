@@ -25,11 +25,15 @@ struct activation_entry {
 struct drivers_state {
     uint32_t boot_flags, flag_sequence, fb_sequence, input_sequence, ata_sequence;
     unsigned optional_activations;
-    int fb_error, input_error, ata_error;
+    int fb_error, input_error, ata_error, firmware_error;
     bool initialized, safe, fb_called, ata_called, firmware;
+    bool input_fallback;
 };
 void drivers_init(void);
 void drivers_snapshot(struct drivers_state *out);
+/* Effective input owner during and after activation. The copied loader
+ * request/flags remain unchanged, including when native fallback is used. */
+bool drivers_input_firmware(void);
 /* Boot-task-owned, append-only ledger; immutable after drivers_init returns.
  * The flag snapshot precedes its driver entries in activation sequence. */
 unsigned drivers_activation_count(void);

@@ -83,6 +83,13 @@ volatile bool g_need_resched;
 uint64_t g_tsc_per_ms;
 bool g_cpu_tsc;
 struct ciuki_boot_info g_boot;
+/* Standalone controller tests have no boot activation task. */
+static bool native_policy_override;
+bool drivers_input_firmware(void)
+{
+    return !native_policy_override && (g_boot.input_policy == CBI_INPUT_FIRMWARE ||
+                                      (g_boot.flags & CBI_F_INPUT_FORCED));
+}
 
 static void fake_push(struct fake_bus *b, bool aux, uint8_t data, uint32_t delay)
 {
@@ -468,6 +475,7 @@ int biosvm_selftest(struct biosvm_selftest_report *out)
 
 static void reset_native(void)
 {
+    native_policy_override = false;
     i8042_fault_end();
     memset(&native, 0, sizeof(native));
     adapter = 0; generation = 0; loss_seen = 0;
@@ -590,6 +598,18 @@ static void test_policy_and_lifecycle(void)
     reset_native();
     g_boot.flags = CBI_F_INPUT_FORCED;
     CHECK(i8042_init() == -ENOSYS && !hw.reads && !hw.writes && !pic_changes);
+    /* F0-37: effective native selection overrides copied firmware/safe flags.
+     * Exercise the real acquisition and command sequence, plus USB delivery. */
+    reset_native();
+    g_boot.input_policy = CBI_INPUT_FIRMWARE;
+    g_boot.flags = CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE;
+    native_policy_override = true;
+    CHECK(!i8042_init() && native.stats.active && !native.stats.firmware);
+    unsigned events_before = native.queue.stats.pending;
+    input_usb_event(INPUT_KEY, INPUT_KEY_A, 1, 123, 1);
+    CHECK(native.queue.stats.pending > events_before);
+    CHECK(g_boot.input_policy == CBI_INPUT_FIRMWARE &&
+          g_boot.flags == (CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE));
     reset_native();
     CHECK(registry_claim(RES_IRQ, 12, 13, "other", false) >= 0);
     reads = hw.reads; writes = hw.writes;

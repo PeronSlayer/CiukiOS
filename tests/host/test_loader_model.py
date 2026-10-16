@@ -134,13 +134,34 @@ class LoaderModelTests(unittest.TestCase):
         m['readback_mode']=0x115;self.assertEqual(model.select_video(c,[small,m])['mode'],small['mode'])
         small['set_ok']=False;self.assertTrue(model.select_video(c,[small,m])['text'])
 
-    def test_selector_trust_and_input_quirk(self):
+    def test_selector_trust_and_explicit_input_policy(self):
         for bad in ('f0:nope run=12345678','f0:boot run=1234','f0:boot  run=12345678','f0:boot run=12345678\n','f0:boot run=12345678 platform=t23','é'*65):
             with self.assertRaises(ValueError):model.selector(bad)
         override='f0:boot run=12ab34cd platform=e500'
         with self.assertRaises(ValueError):model.selector(override)
-        self.assertTrue(model.input_policy([],request=override,validated_fw_cfg=True)['forced'])
+        forced = {'policy': 1, 'forced': True, 'detected': False}
+        self.assertEqual(model.input_policy([],request=override,validated_fw_cfg=True),forced)
         d=json.loads((ROOT/'tests/fixtures/hardware/e500/replay.json').read_text())
-        self.assertEqual(model.input_policy(d['pci'])['policy'],1)
-        self.assertEqual(model.input_policy(d['pci'],False)['policy'],0)
-        d['pci'][1]['subsystem_device']=0;self.assertEqual(model.input_policy(d['pci'])['policy'],0)
+        self.assertEqual(model.input_policy(d['pci'],request=override,validated_fw_cfg=True),forced)
+
+    def test_e500_platform_match_records_detected_input_policy(self):
+        d=json.loads((ROOT/'tests/fixtures/hardware/e500/replay.json').read_text())
+        native = {'policy': 0, 'forced': False, 'detected': False}
+        detected = {'policy': 1, 'forced': False, 'detected': True}
+        self.assertEqual(model.input_policy(d['pci']),detected)
+        self.assertEqual(model.input_policy(d['pci'],request='f0:boot run=12345678'),detected)
+        self.assertEqual(model.input_policy(d['pci'],False),native)
+        self.assertEqual(model.input_policy([]),native)
+        # Every part of the exact match is required; ordinary requests do not
+        # force firmware or suppress detection, and partial profiles stay native.
+        for index in range(2):
+            self.assertEqual(model.input_policy(d['pci'][index:index+1]),native)
+            for field in d['pci'][index]:
+                with self.subTest(device=index,field=field):
+                    pci=copy.deepcopy(d['pci'])
+                    pci[index][field]=0
+                    self.assertEqual(model.input_policy(pci),native)
+        for field in ('subsystem_vendor','subsystem_device'):
+            pci=copy.deepcopy(d['pci'])
+            del pci[1][field]
+            self.assertEqual(model.input_policy(pci),native)

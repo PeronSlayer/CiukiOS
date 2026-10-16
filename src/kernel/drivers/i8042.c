@@ -251,8 +251,7 @@ static void usb_event_drop(const char *reason, uint16_t type, uint16_t code,
 void input_usb_event(uint16_t type, uint16_t code, int32_t value, gen_t generation, uint64_t tick)
 {
     const char *drop = !generation ? "generation" :
-        g_boot.input_policy == CBI_INPUT_FIRMWARE ? "firmware_policy" :
-        (g_boot.flags & CBI_F_INPUT_FORCED) ? "forced_policy" : 0;
+        drivers_input_firmware() ? "firmware_policy" : 0;
     if (drop) { usb_event_drop(drop,type,code,value,generation); return; }
     uint32_t f = irq_save();
     struct input_queue *q = &native.queue;
@@ -979,9 +978,9 @@ static void controller_init(struct controller *c, const struct i8042_test_io *io
 int i8042_init(void)
 {
     if (!(read_eflags() & 0x200) || !g_current) return -EINVAL;
-    /* Real E500 policy is input_policy; INPUT_FORCED is the validated QEMU
-     * override. Check both BEFORE even changing PIC masks or claiming. */
-    if (g_boot.input_policy == CBI_INPUT_FIRMWARE || (g_boot.flags & CBI_F_INPUT_FORCED)) {
+    /* The boot activation owner resolves provenance and firmware failure
+     * before native claims. Hardware sequencing below is unchanged. */
+    if (drivers_input_firmware()) {
         native.stats.firmware = true;
         if (native.stats.quarantined || biosvm_backend_state() == BIOSVM_DISABLED_BACKEND)
             return -I8042_EIO;
@@ -1208,8 +1207,7 @@ void i8042_snapshot(struct i8042_stats *out)
  * access. Generation/source are immutable for the persistent BIOS lease. */
 bool input_firmware_begin(gen_t generation)
 {
-    if (!generation || (g_boot.input_policy != CBI_INPUT_FIRMWARE &&
-                        !(g_boot.flags & CBI_F_INPUT_FORCED))) return false;
+    if (!generation || !drivers_input_firmware()) return false;
     uint32_t f = irq_save();
     if (native.stats.quarantined || (native.stats.active && !native.stats.firmware)) {
         irq_restore(f);

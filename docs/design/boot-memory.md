@@ -104,11 +104,14 @@ request the system boots normally. The loader MUST, in this order:
    `opt/it.alcybercloud.ciukios/test` through the file directory (physical
    machines never get fw_cfg port accesses). A valid `platform=e500` request
    sets `input_policy = 1` and flag bit 7; a valid `safe=1` request sets
-   flag bit 0 (safe mode) as `BOOT.CFG` or the menu would; otherwise decide
-   the **input policy** with the existing evidence-based rule
-   (`src/boot/input_platform.inc`, `input_platform_firmware_first`: ATI
-   `1002:4C4D` and ESS `125D:1978` whose subsystem is `0E11:B112` select
-   firmware-first).
+   flag bit 0 (safe mode) as `BOOT.CFG` or the menu would. Unless bit 7 is
+   already set, run the exact E500 PCI platform match before A20; success
+   sets `input_policy = 1` and bit 14 (`CBI_F_INPUT_DETECTED`). Normal defaults
+   to native unless the E500 platform match or an explicit request selects
+   firmware; the kernel falls back to native when firmware fails (F0-37).
+   Clear the complete boot-info block at loader entry, before discovery,
+   requests, A20 and the menu, on both cold and warm boots. Preserve the
+   incoming boot drive across clearing.
 3. Enable A20: test the wrap-around first; try `INT 15h AX=2401h`, then the
    keyboard-controller output port (skipped on firmware-first input profiles
    unless separately qualified), then port `92h` (preserving bit 0). All
@@ -199,10 +202,10 @@ version is rejected; a later version is a new layout with its own size.
 | `0x000` | `magic` | u32 | `0x31494243` (`"CBI1"`) |
 | `0x004` | `version` | u16 | `1` |
 | `0x006` | `size` | u16 | `0x10F0` |
-| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; 7 input policy forced by validated QEMU fw_cfg `platform=e500` (requires bits 5 and 6, `input_policy = 1` and the matching selector; zero otherwise); bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`); 11 boot log on screen (menu `L`, amendment 2026-10-12); 12 high-volume device/VM diagnostics (accepted fw_cfg selector, amendment 2026-10-15) |
+| `0x008` | `flags` | u32 | bit 0 safe mode; 1 serial log selected; 2 EDID valid; 3 VBE controller info valid; 4 text mode (no LFB); 5 SMBIOS reports QEMU; 6 test request present; 7 input policy forced by validated QEMU fw_cfg `platform=e500` (requires bits 5 and 6, `input_policy = 1` and the matching selector; zero otherwise); bits 8–10 A20 method (1 already on, 2 `INT 15h`, 3 keyboard controller, 4 port `92h`); 11 boot log on screen (menu `L`, amendment 2026-10-12); 12 high-volume device/VM diagnostics (accepted fw_cfg selector, amendment 2026-10-15); 13 hardware check page (menu `H`); 14 input policy selected by the loader's E500 platform match (`CBI_F_INPUT_DETECTED`, F0-37) |
 | `0x00C` | `boot_drive` | u8 | BIOS drive number |
 | `0x00D` | `memmap_source` | u8 | `1` = E820 (the only accepted value) |
-| `0x00E` | `input_policy` | u8 | `0` native i8042, `1` firmware-first |
+| `0x00E` | `input_policy` | u8 | `0` native i8042 (default), `1` firmware-first from the E500 platform match or explicit request; effective kernel backend may fall back (F0-37) |
 | `0x00F` | `reserved0` | u8 | `0` |
 | `0x010` | `partition_lba` | u32 | FAT32 partition start |
 | `0x014` | `loader_start`, `loader_end` | u32 × 2 | physical extent, reclaimable after copy |
@@ -428,3 +431,15 @@ selector scratch. Each read initializes `copy_count` bytes before the copy
 loop consumes exactly those bytes. The loader stays 48 sectors with either
 the default or release version string; its page-rounded reservation is
 unchanged. The menu model and both assembled extents are host-tested.
+
+## f0-37 review amendment: detected E500 input policy
+
+Flag bit 14 (`CBI_F_INPUT_DETECTED`) records the loader's exact E500 platform
+match, independently of bit 7's validated fw_cfg override. The defined mask
+is `0x00007FFF`; structure version, size and offsets stay unchanged. Normal
+defaults to native unless the E500 platform match or an explicit request
+selects firmware; the kernel falls back to native when firmware fails.
+Safe mode also selects firmware first. Policy 1 without forced, detected or
+safe flags is logged as an unknown source and treated as native. See the
+[input activation amendment](hardware-check.md#f0-37-input-activation-and-ebda-2026-10-16)
+for the PCI BIOS sources and fallback order.

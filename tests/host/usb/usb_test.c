@@ -17,6 +17,12 @@ int storage_add_removable_bounded(struct storage *s,struct blkdev *b,
 int storage_remove_removable(struct storage *s,struct blkdev *b,bool surprise) { (void)s;(void)b;(void)surprise;assert(0);return -FS_EIO; }
 int storage_remove_removable_locked(struct storage *s,struct blkdev *b,bool surprise) { return storage_remove_removable(s,b,surprise); }
 struct ciuki_boot_info g_boot;
+/* Controller models supply the effective boot decision at this boundary. */
+bool drivers_input_firmware(void)
+{
+    return g_boot.input_policy == CBI_INPUT_FIRMWARE ||
+           (g_boot.flags & (CBI_F_INPUT_FORCED | CBI_F_SAFE_MODE));
+}
 static struct resource leases[64];
 static unsigned lease_count, generation;
 static unsigned claims, writes, events, key_downs, key_ups, repeats, wheel_events;

@@ -419,6 +419,7 @@
   ],
   "expected_input_policy": {
     "policy": 1,
-    "forced": false
+    "forced": false,
+    "detected": true
   }
 }

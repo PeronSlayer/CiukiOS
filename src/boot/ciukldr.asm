@@ -25,6 +25,12 @@ entry:
     mov ax, cs
     mov ds, ax
     mov es, ax
+    ; Do not inherit boot policy or discovery data across a warm entry.
+    ; ES=CS, DF=0; DX still contains the incoming BIOS boot drive.
+    xor ax, ax
+    mov di, boot_info
+    mov cx, CIUKI_BOOT_INFO_SIZE
+    rep stosb
     sti
     mov [B(boot_drive)], dl
     mov eax, [fs:0x7c6] ; Relocated MBR, first partition start.
@@ -46,6 +52,7 @@ entry:
     call input_platform_firmware_first
     jnc .policy
     mov byte [B(input_policy)], 1
+    or dword [B(flags)], CBI_F_INPUT_DETECTED
 .policy:
     call a20_enable
     call fat_mount

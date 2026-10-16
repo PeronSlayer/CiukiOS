@@ -1,7 +1,7 @@
 /* F1 activation order: framebuffer, one input owner, then native ATA.
  * The copied loader flag is observed before the first driver call. An LFB
  * in safe mode is the required console, not an optional display takeover.
- * No error authorizes another backend or a retry of quarantined hardware.
+ * Firmware input failure permits one native attempt with normal lease checks.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
@@ -26,6 +26,11 @@ static struct activation_entry activation_ledger[ACTIVATION_LEDGER_MAX];
 static unsigned activation_count;
 
 void drivers_snapshot(struct drivers_state *out) { if (out) *out = state; }
+bool drivers_input_firmware(void)
+{
+    if (state.initialized) return state.firmware;
+    return !!(g_boot.flags & (CBI_F_INPUT_FORCED | CBI_F_INPUT_DETECTED | CBI_F_SAFE_MODE));
+}
 unsigned drivers_activation_count(void) { return activation_count; }
 const struct activation_entry *drivers_activation_get(unsigned index)
 {
@@ -84,11 +89,12 @@ void drivers_init(void)
     state.initialized = true;        /* one attempt, including failed activation */
     state.boot_flags = g_boot.flags;
     state.safe = !!(state.boot_flags & CBI_F_SAFE_MODE);
-    state.firmware = g_boot.input_policy == CBI_INPUT_FIRMWARE ||
-                     !!(state.boot_flags & CBI_F_INPUT_FORCED);
+    state.firmware = !!(state.boot_flags & (CBI_F_INPUT_FORCED | CBI_F_INPUT_DETECTED | CBI_F_SAFE_MODE));
     state.flag_sequence = 1;
     klog("[init] flag safe_mode=%u boot_flags=%08x activation_seq=%u",
          state.safe, state.boot_flags, state.flag_sequence);
+    if (g_boot.input_policy == CBI_INPUT_FIRMWARE && !state.firmware)
+        klog("[init] input_policy=firmware source=unknown action=native");
 
     state.fb_sequence = 2;
     uint64_t tick = g_ticks;
@@ -109,11 +115,21 @@ void drivers_init(void)
     if (state.firmware) {
         state.input_error = biosvm_init();
         if (!state.input_error) state.input_error = fwinput_adapter_init();
+        if (state.input_error) {
+            state.firmware_error = state.input_error;
+            state.input_fallback = true;
+            int handoff = biosvm_input_fallback();
+            state.firmware = false;
+            state.input_error = i8042_init();
+            klog("[init] input fallback=native firmware_error=%d handoff_error=%d native_error=%d",
+                 state.firmware_error, handoff, state.input_error);
+        }
     } else {
         state.input_error = i8042_init();
     }
     activation_add((struct activation_entry){ .seq = state.input_sequence, .device = "input",
-        .result = state.input_error ? "failed" : "ready", .reason = state.firmware ? "firmware" : "native",
+        .result = state.input_error ? "failed" : "ready",
+        .reason = state.input_fallback ? "firmware_failed_native_fallback" : state.firmware ? "firmware" : "native",
         .error = state.input_error, .tick = tick, .safe_flag_before = safe_flag_before, .required = true });
 
     state.ata_sequence = 4;
