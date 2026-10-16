@@ -47,6 +47,10 @@ class FullscreenEvidenceTests(unittest.TestCase):
         self.assertTrue(case['fullscreen_screen'])
         rows=[dict(case='demo',active=1,ms=10000,mode=19),dict(case='restore',active=0,display=1,width=1024,height=768),
               dict(case='cleanup',restored=1,vms=0,tasks=0,pages=0,handles=0)]
+        rasters=((320,240),(360,240),(320,400),(360,400),(320,480),(360,480),(640,400),(640,480))
+        rows += [dict(case='mode',index=i,mode=19 if i<6 else 18,width=w,height=h,entered=1,restored=1)
+                 for i,(w,h) in enumerate(rasters)]
+        rows += [dict(case='vbe_refusal',mode=mode,status=0x014F,active=0) for mode in (0x101,0x103,0x111,0x114)]
         def parse(rows):
             parser=runner.Parser('12345678','vm-fullscreen')
             records=[('BEGIN',dict(version=1))]+[('DATA',r) for r in rows]+[('END',dict(status='PASS',error=0))]
@@ -58,6 +62,11 @@ class FullscreenEvidenceTests(unittest.TestCase):
         for index,key,value in [(0,'active',0),(0,'ms',9999),(1,'display',0),(2,'handles',1)]:
             broken=copy.deepcopy(rows); broken[index][key]=value
             with self.assertRaises(EvidenceError): parse(broken).check(case['expected'])
-        with self.assertRaises(EvidenceError): parse(rows[1:]).check(case['expected'])
+        for index in range(len(rows)):
+            with self.assertRaises(EvidenceError): parse(rows[:index]+rows[index+1:]).check(case['expected'])
+        for index in range(3,len(rows)):
+            broken=copy.deepcopy(rows)
+            broken[index]['restored' if index<11 else 'status']=0
+            with self.assertRaises(EvidenceError): parse(broken).check(case['expected'])
 
 if __name__=='__main__': unittest.main()

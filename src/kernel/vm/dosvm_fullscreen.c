@@ -16,6 +16,8 @@ static uint32_t fullscreen_ptes[32];
 static void *fullscreen_mapping;
 static uint64_t fullscreen_frame_deadline;
 static bool fullscreen_frame_seen;
+static bool fullscreen_linear,fullscreen_model_changed;
+static uint32_t fullscreen_palette;
 static uint8_t fs_in(void *arg, uint16_t p) { (void)arg; return inb(p); }
 static void fs_out(void *arg, uint16_t p, uint8_t v) { (void)arg; outb(p,v); }
 static uint8_t fs_read(void *arg, unsigned a) { return ((volatile uint8_t *)arg)[a]; }
@@ -61,6 +63,7 @@ bool dosvm_fullscreen_active(struct dosvm_key key)
 void dosvm_fullscreen_switch(const struct task *t)
 {
     arch_vga_io(fullscreen_owner && fullscreen_owner->fullscreen &&
+        !fullscreen_linear &&
         !fullscreen_owner->fullscreen_hold && fullscreen_owner->info.state<DOSVM_STOPPING &&
         fullscreen_owner->task==t);
 }
@@ -92,6 +95,7 @@ static int park(struct dosvm *v)
 }
 static int map_aperture(struct dosvm *v, bool grant)
 {
+    if (fullscreen_linear) return 0; /* VBE keeps its private RAM mapping */
     uint32_t *pd=P2V(v->as.pd_phys);
     if (!(pd[0]&PTE_P)) return -EFAULT;
     uint32_t *pt=P2V(pd[0]&~0xFFFu);
@@ -105,6 +109,27 @@ static int map_aperture(struct dosvm *v, bool grant)
     }
     return 0;
 }
+void dosvm_fullscreen_mode_changed(struct dosvm *v)
+{
+    if (fullscreen_owner!=v) return;
+    /* A guest worker cannot synchronously park itself. Finish the synthetic
+     * operation, then park at its normal checkpoint for the display worker. */
+    arch_vga_io(false); map_aperture(v,false);
+    fullscreen_model_changed=true; fullscreen_return=true;
+    v->fullscreen_hold=true;
+    display_fullscreen_return_request();
+}
+static void linear_palette(struct dosvm *v)
+{
+    if (fullscreen_palette==v->vga.display_changes) return;
+    outb(0x3C6,v->vga.dac_mask);outb(0x3C8,0);
+    /* Native packed setup uses X.Org's eight-bit CLUT; guests retain the
+     * six-bit VGA DAC advertised by the synthetic VBE interface. */
+    for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++) {
+        unsigned c=v->vga.dac[i][k];outb(0x3C9,(c<<2)|(c>>4));
+    }
+    fullscreen_palette=v->vga.display_changes;
+}
 int dosvm_fullscreen_enter(struct dosvm_key key)
 {
     struct dosvm *v=dosvm_lookup(key);
@@ -112,9 +137,12 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if (dosvm_fullscreen_active(key)) return 0;
     if (fullscreen_busy || fullscreen_owner) return -EBUSY;
     if (!v->owner_pid || !v->window_input || !same_key(key,dosvm_focused_key())) return -EACCES;
-    uint8_t mode=0;
-    if (dosvm_read(v,0x449,&mode,1) || !cvga_find_mode(mode)) return -EOPNOTSUPP;
+    uint8_t bios_mode=0;
+    if (dosvm_read(v,0x449,&bios_mode,1)) return -EOPNOTSUPP;
+    uint16_t mode=v->vbe_mode ? v->vbe_mode : bios_mode;
+    if (v->vbe_mode ? !display_fullscreen_supported(mode) : !cvga_find_mode(mode)) return -EOPNOTSUPP;
     fullscreen_busy=true;
+    fullscreen_linear=v->vbe_mode!=0; fullscreen_model_changed=false;
     v->fullscreen_error=0;
     /* Persistence sleeps: pin the VM before the first record can yield. */
     v->fullscreen_hold=true;
@@ -127,13 +155,21 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if ((e=display_fullscreen_checkpoint("vga-save",0))) goto resume;
     dosvm_vga_sync(v,true);
     for (unsigned i=0;i<32;i++) as_lookup(&v->as,0xA0000+i*PAGE_SIZE,&fullscreen_ptes[i]);
-    if (!fullscreen_mapping) fullscreen_mapping=vmm_map_mmio(0xA0000,0x20000,true);
-    if (!fullscreen_mapping) { e=-ENOMEM; goto resume; }
+    if (!fullscreen_linear && !fullscreen_mapping) fullscreen_mapping=vmm_map_mmio(0xA0000,0x20000,true);
+    if (!fullscreen_linear && !fullscreen_mapping) { e=-ENOMEM; goto resume; }
     hardware=(struct vga_hardware_bus){fullscreen_mapping,fs_in,fs_out,fs_read,fs_write};
     if ((e=display_fullscreen_begin(mode))) goto resume;
     if ((e=display_fullscreen_checkpoint("vga-load",0))) goto rollback;
-    vga_hardware_load(&v->vga,&hardware);
-    unsigned bad=vga_hardware_verify(&v->vga,&hardware);
+    unsigned bad=0;
+    if (fullscreen_linear) {
+        fullscreen_palette=~v->vga.display_changes; linear_palette(v);
+        e=dosvm_vbe_flush(v,true);
+        if (e<0) goto rollback;
+        e=0;
+    } else {
+        vga_hardware_load(&v->vga,&hardware);
+        bad=vga_hardware_verify(&v->vga,&hardware);
+    }
     if (bad) {
         klog("[dosvm] fullscreen_transport_fault vm=%u registers=%x",key.id,bad);
         display_fullscreen_checkpoint("vga-readback",-EIO);
@@ -181,7 +217,8 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     e=map_aperture(v,false);
     irq_restore(flags);
     display_fullscreen_checkpoint("vga-capture",0);
-    vga_hardware_capture(&v->vga,&hardware);
+    if (!fullscreen_linear && !fullscreen_model_changed) vga_hardware_capture(&v->vga,&hardware);
+    v->fullscreen_model=false;
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
     int restored=display_fullscreen_end();
@@ -223,7 +260,18 @@ void dosvm_fullscreen_poll(void)
     if (v) fullscreen_busy=true; /* checkpoint waits must pin the owner */
     irq_restore(flags);
     if (v) {
-        if (!fullscreen_frame_seen && v->as.pd_phys) {
+        if (fullscreen_linear && !fullscreen_return) {
+            linear_palette(v);
+            int frame=dosvm_vbe_flush(v,false);
+            if (frame<0) { v->fullscreen_error=frame; fullscreen_return=true; }
+            else if (frame && !fullscreen_frame_seen) {
+                fullscreen_frame_seen=true;
+                klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=linear-write",
+                    v->info.key.id,v->info.key.generation,g_ticks);
+                display_fullscreen_checkpoint("first-guest-frame",0);
+            }
+        }
+        if (!fullscreen_linear && !fullscreen_frame_seen && v->as.pd_phys) {
             uint32_t *pd=P2V(v->as.pd_phys);
             if (pd[0]&PTE_P) {
                 volatile uint32_t *pt=P2V(pd[0]&~0xFFFu);

@@ -335,6 +335,13 @@ int32_t display_syscall(struct trap_frame *tf)
 }
 
 bool display_fullscreen_active(void) { return fullscreen_display; }
+bool display_fullscreen_supported(uint16_t mode)
+{ return supersavage_display_supported(fbdev_get(),mode); }
+int display_fullscreen_write(uint32_t offset,const void *data,uint32_t bytes)
+{
+    return fullscreen_display && fullscreen_native && !switching ?
+        supersavage_display_write(offset,data,bytes) : -EIO;
+}
 int display_fullscreen_begin(uint16_t mode)
 {
     int logged=display_fullscreen_checkpoint("request",0);

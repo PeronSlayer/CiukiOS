@@ -346,6 +346,62 @@ static int fullscreen_wait(struct dosvm *v,bool active)
     }
     return 0;
 }
+/* Frozen transport cases complement the live DOOM first-frame observation.
+ * QEMU has no SuperSavage device: its VBE rows must prove refusal, not claim
+ * native SuperSavage scanout. Host tests exercise all four native recipes. */
+static int fullscreen_modes(struct dosvm *v)
+{
+    static const struct { uint16_t mode,width,height; } modes[]={
+        {0x13,320,240},{0x13,360,240},{0x13,320,400},{0x13,360,400},
+        {0x13,320,480},{0x13,360,480},{0x12,640,400},{0x12,640,480}
+    };
+    for (unsigned n=0;n<ARRAY_SIZE(modes);n++) {
+        dosvm_vga_sync(v,true);
+        if (!cvga_set_bios_mode(&v->vga,modes[n].mode,0)) return -EIO;
+        uint8_t mode=modes[n].mode;
+        if (dosvm_write(v,0x449,&mode,1)) return -EFAULT;
+        if (mode==0x13) {
+            v->vga.seq[4]=6;v->vga.crtc[0x14]=0;v->vga.crtc[0x17]=0xE3;
+            if (modes[n].height==240 || modes[n].height==480) {
+                const cvga_mode_params *p=cvga_find_mode(0x12);
+                const unsigned vertical[]={6,7,9,0x10,0x11,0x12,0x15,0x16};
+                for (unsigned k=0;k<ARRAY_SIZE(vertical);k++) v->vga.crtc[vertical[k]]=p->crtc[vertical[k]];
+            }
+            v->vga.crtc[9]=(v->vga.crtc[9]&0xE0)|(modes[n].height==240 ? 1 : 0);
+            if (modes[n].width==360) {
+                v->vga.misc=0x67;v->vga.crtc[0]=0x6B;v->vga.crtc[1]=0x59;v->vga.crtc[2]=0x5A;
+                v->vga.crtc[3]=0x8E;v->vga.crtc[4]=0x5E;v->vga.crtc[5]=0x8A;v->vga.crtc[0x13]=45;
+            }
+        } else if (modes[n].height==400) {
+            const cvga_mode_params *p=cvga_find_mode(0x13);
+            const unsigned vertical[]={6,7,9,0x10,0x11,0x12,0x15,0x16};
+            for (unsigned k=0;k<ARRAY_SIZE(vertical);k++) v->vga.crtc[vertical[k]]=p->crtc[vertical[k]];
+            v->vga.crtc[9]&=0xE0;
+        }
+        for (unsigned p=0;p<4;p++) memset(v->vga.plane[p],17+p,CVGA_PLANE_SIZE);
+        v->vga.display_changes++;
+        cvga_geometry g;
+        if (!cvga_get_geometry(&v->vga,&g) || g.width!=modes[n].width || g.height!=modes[n].height) return -EIO;
+        uint64_t until=deadline_after_ms(5000);int e;
+        do { e=dosvm_fullscreen_enter(dosvm_key(v));if (e==-EBUSY) task_sleep_ms(10); }
+        while (e==-EBUSY && !deadline_passed(until));
+        if (e) return e;
+        task_sleep_ms(50);
+        if ((e=dosvm_fullscreen_leave(dosvm_key(v),true))) return e;
+        task_sleep_ms(500);
+        if (!fbdev_get()->present || fbdev_get()->width!=1024 || fbdev_get()->height!=768) return -EIO;
+        rec_emit(FS_PROBE,"DATA","case=mode index=%u mode=%u width=%u height=%u entered=1 restored=1",
+                 n,mode,g.width,g.height);
+    }
+    const uint16_t vbe[]={0x101,0x103,0x111,0x114};
+    for (unsigned i=0;i<ARRAY_SIZE(vbe);i++) {
+        struct v86_frame f={.tf={.eax=0x4F02,.ebx=vbe[i]|0x4000}};
+        int e=dosvm_vga_bios(v,&f);
+        if (e || (uint16_t)f.tf.eax!=0x014F || v->vbe_mode) return -EIO;
+        rec_emit(FS_PROBE,"DATA","case=vbe_refusal mode=%u status=%u active=%u",vbe[i],(uint16_t)f.tf.eax,dosvm_fullscreen_active(dosvm_key(v)));
+    }
+    return 0;
+}
 static int probe_f3_vm_fullscreen(void)
 {
     rec_emit(FS_PROBE,"BEGIN","version=1");
@@ -409,6 +465,7 @@ static int probe_f3_vm_fullscreen(void)
     task_sleep_ms(4000);
     rec_emit(FS_PROBE,"DATA","case=restore active=%u display=%u width=%u height=%u",
         dosvm_fullscreen_active(dosvm_key(v)),fbdev_get()->present,fbdev_get()->width,fbdev_get()->height);
+    if ((error=fullscreen_modes(v))) goto cleanup_fs;
 cleanup_fs:
     if (v && dosvm_fullscreen_active(dosvm_key(v))) dosvm_fullscreen_leave(dosvm_key(v),false);
     if (client) process_remove(0,client);

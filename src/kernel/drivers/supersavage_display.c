@@ -9,6 +9,7 @@
 #include <ciuki/timing.h>
 #include <ciuki/supersavage_display.h>
 #include "supersavage_mode.h"
+#include <ciuki/dos_video_modes.h>
 #define MODE_MMIO_BYTES 0x80000u
 static struct supersavage_mode saved_mode;
 static const struct pci_func *adapter;
@@ -17,6 +18,11 @@ static volatile uint8_t *register_mapping,*aperture_mapping;
 static int claims[3]={-1,-1,-1};
 static gen_t generations[3];
 static bool poisoned;
+static void *linear_window;
+static volatile uint8_t *linear_mapping;
+static uint32_t linear_phys,linear_bytes,framebuffer_bytes;
+static int framebuffer_handle;
+static gen_t framebuffer_generation;
 static uint8_t native_in(void *arg,uint16_t port) { (void)arg; return inb(port); }
 static void native_out(void *arg,uint16_t port,uint8_t v) { (void)arg; outb(port,v); }
 static uint8_t native_read(void *arg,unsigned at) { (void)arg; return aperture_mapping[at]; }
@@ -54,40 +60,59 @@ static bool extent(uint32_t start,uint32_t bytes)
     }
     return true;
 }
+bool supersavage_display_supported(const struct fb_device *f,uint16_t mode)
+{
+    if (poisoned || !supersavage_mode_supported(mode)) return false;
+    if (saved_mode.saved && claims[0]>=0)
+        return !dos_video_mode(mode) || framebuffer_bytes>=DOS_VBE_BYTES;
+    const struct pci_func *candidate=0;
+    unsigned displays=0;
+    for (unsigned i=0;i<pci_count();i++) {
+        const struct pci_func *p=pci_get(i);
+        if (p && p->class_code==3) { displays++; candidate=p; }
+    }
+    const struct dos_video_mode *packed=dos_video_mode(mode);
+    return displays==1 && candidate && candidate->vendor==0x5333 && candidate->device==0x8C2E &&
+        f && f->present && (candidate->command&3)==3 &&
+        !(candidate->bar[0]&7) && !(candidate->bar[1]&7) &&
+        extent(candidate->bar[0]&~15u,MODE_MMIO_BYTES) &&
+        !((candidate->bar[0]&~15u)&(MODE_MMIO_BYTES-1)) &&
+        (candidate->bar[1]&~15u)==f->phys && extent(f->phys,f->size) &&
+        (!packed || f->size>=DOS_VBE_BYTES) &&
+        !((uint64_t)(candidate->bar[0]&~15u)<(uint64_t)f->phys+f->size &&
+          f->phys<(uint64_t)(candidate->bar[0]&~15u)+MODE_MMIO_BYTES);
+}
 int supersavage_display_prepare(const struct fb_device *f,uint16_t mode)
 {
     if (poisoned) return -EIO;
     if (saved_mode.saved || claims[0]>=0) return -EBUSY;
-    adapter=0;
-    unsigned displays=0;
+    if (!supersavage_display_supported(f,mode)) return -EOPNOTSUPP;
     for (unsigned i=0;i<pci_count();i++) {
         const struct pci_func *p=pci_get(i);
-        if (p && p->class_code==3) { displays++; adapter=p; }
+        if (p && p->class_code==3) adapter=p;
     }
-    if (displays!=1 || !adapter || adapter->vendor!=0x5333 || adapter->device!=0x8C2E ||
-        !supersavage_mode_supported(mode) || !f || !f->present || (adapter->command&3)!=3 ||
-        (adapter->bar[0]&7) || (adapter->bar[1]&7) ||
-        !extent(adapter->bar[0]&~15u,MODE_MMIO_BYTES) ||
-        ((adapter->bar[0]&~15u)&(MODE_MMIO_BYTES-1)) ||
-        (adapter->bar[1]&~15u)!=f->phys || !extent(f->phys,f->size) ||
-        ((uint64_t)(adapter->bar[0]&~15u)<(uint64_t)f->phys+f->size &&
-         f->phys<(uint64_t)(adapter->bar[0]&~15u)+MODE_MMIO_BYTES)) return -EOPNOTSUPP;
+    linear_phys=f->phys; framebuffer_bytes=f->size;
+    framebuffer_handle=f->handle; framebuffer_generation=f->generation;
+    linear_bytes=dos_video_mode(mode) ? DOS_VBE_BYTES : 0;
     if (!register_window) register_window=vmm_reserve_mmio(MODE_MMIO_BYTES);
     if (!aperture_window) aperture_window=vmm_reserve_mmio(0x20000);
-    return register_window && aperture_window ? 0 : -ENOMEM;
+    if (linear_bytes && !linear_window) linear_window=vmm_reserve_mmio(DOS_VBE_BYTES);
+    return register_window && aperture_window && (!linear_bytes || linear_window) ? 0 : -ENOMEM;
 }
 static bool native_idle(int h,gen_t generation)
 {
     (void)h; (void)generation;
     /* A retained RAM snapshot is not a hardware writer. Programming is
      * synchronous CPU I/O only: no DMA, IRQ, worker or callback to drain. */
-    return !register_mapping && !aperture_mapping;
+    return !register_mapping && !aperture_mapping && !linear_mapping;
 }
 static int release_claims(void)
 {
     if (register_mapping) vmm_revoke_mmio((void *)register_mapping,MODE_MMIO_BYTES);
     if (aperture_mapping) vmm_revoke_mmio((void *)aperture_mapping,0x20000);
+    if (linear_mapping) vmm_revoke_mmio((void *)linear_mapping,DOS_VBE_BYTES);
     register_mapping=aperture_mapping=0;
+    linear_mapping=0;
     int e=0;
     for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
         const struct resource *rsc=registry_get(claims[i]);
@@ -128,6 +153,18 @@ int supersavage_display_begin(uint16_t mode)
     register_mapping=vmm_replace_mmio(register_window,MODE_MMIO_BYTES,starts[1],MODE_MMIO_BYTES);
     aperture_mapping=vmm_replace_mmio(aperture_window,0x20000,0xA0000,0x20000);
     if (!register_mapping || !aperture_mapping) { e=-ENOMEM; goto failed; }
+    if (linear_bytes) {
+        /* fbdev_change_begin has stopped acceleration, revoked desktop
+         * aliases and proved this lease idle. Borrow it only for this
+         * synchronous transaction; there is no competing registry owner. */
+        const struct resource *fb=registry_get(framebuffer_handle);
+        if (!fb || fb->generation!=framebuffer_generation || fb->state!=RS_QUIESCING ||
+            fb->type!=RES_MMIO || fb->start!=linear_phys || fb->end-linear_phys<linear_bytes) {
+            e=-EIO; goto failed;
+        }
+        linear_mapping=vmm_replace_mmio(linear_window,DOS_VBE_BYTES,linear_phys,DOS_VBE_BYTES);
+        if (!linear_mapping) { e=-ENOMEM; goto failed; }
+    }
     e=supersavage_mode_save(&saved_mode,&io);
     klog("[display] native_supersavage state result=%d cr31=%02x cr3a=%02x cr58=%02x cr66=%02x cr67=%02x cr69=%02x panel=%02x sr12=%02x sr13=%02x sr29=%02x sr15=%02x sr1b=%02x sr54=%02x sr56=%02x sr59=%02x sr5b=%02x",
         e,saved_mode.cr[0x31],saved_mode.cr[0x3A],saved_mode.cr[0x58],saved_mode.cr[0x66],
@@ -146,6 +183,8 @@ failed:
 int supersavage_display_end(void)
 {
     if (poisoned) return -EIO; /* aliases were revoked on the first failure */
+    if (linear_mapping) vmm_revoke_mmio((void *)linear_mapping,DOS_VBE_BYTES);
+    linear_mapping=0;
     int e=supersavage_mode_restore(&saved_mode,&io);
     outcome("restore",e);
     if (e) poisoned=true;
@@ -153,4 +192,11 @@ int supersavage_display_end(void)
      * can attempt a VBE mode set. Registry failures still quarantine. */
     int released=release_claims();
     return e ? e : released;
+}
+int supersavage_display_write(uint32_t offset,const void *data,uint32_t bytes)
+{
+    if (!linear_mapping || poisoned || offset>linear_bytes || bytes>linear_bytes-offset) return -EIO;
+    const uint8_t *p=data;
+    for (unsigned i=0;i<bytes;i++) linear_mapping[offset+i]=p[i];
+    return 0;
 }

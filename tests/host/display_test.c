@@ -14,6 +14,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/cpu.h>
 #include <ciuki/supersavage_display.h>
+#include <ciuki/dos_video_modes.h>
 #undef irq_save
 #undef irq_restore
 #define irq_save() 0x200u
@@ -51,8 +52,12 @@ static uint16_t called[16];
 static unsigned sequence[64], sequence_count;
 static unsigned char user[1024];
 static void event(unsigned n) { assert(sequence_count < 64); sequence[sequence_count++] = n; }
+bool supersavage_display_supported(const struct fb_device *f,uint16_t mode)
+{ (void)f;(void)mode;return is_supersavage && native_supported; }
+int supersavage_display_write(uint32_t offset,const void *p,uint32_t bytes)
+{ (void)offset;(void)p;(void)bytes;return 0; }
 int supersavage_display_prepare(const struct fb_device *f,uint16_t mode)
-{ assert(f->present && (mode==3 || mode==0x13 || mode==0x101)); native_prepares++; return native_supported ? 0 : -EOPNOTSUPP; }
+{ assert(f->present && (mode==3 || mode==0x13 || dos_video_mode(mode))); native_prepares++; return native_supported ? 0 : -EOPNOTSUPP; }
 int supersavage_display_begin(uint16_t mode)
 { (void)mode; assert(suspended && !fbdev_get()->present && !accel_ports_owned); native_begins++; event(11); return native_begin_error; }
 int supersavage_display_end(void)
@@ -329,6 +334,21 @@ static void fullscreen_tests(void)
     assert(!display_fullscreen_begin(0x13));fail_framebuffer_claim=true;
     assert(!display_fullscreen_end() && fbdev_get()->present && switches==1 && !suspended);
     assert(strstr(native_results,"native_result=0 fallback_attempted=1 fallback_result=0 result=0"));
+    const unsigned packed_modes[]={0x101,0x103,0x111,0x114};
+    for (unsigned i=0;i<ARRAY_SIZE(packed_modes);i++) for (unsigned failure=0;failure<2;failure++) {
+        fixture();is_supersavage=native_supported=true;
+        assert(display_fullscreen_supported(packed_modes[i]));
+        assert(display_fullscreen_write(0,"x",1)==-EIO);
+        assert(!display_fullscreen_begin(packed_modes[i]));
+        assert(!display_fullscreen_write(0,"x",1));
+        native_end_error=failure ? -EIO : 0;
+        assert(!display_fullscreen_end() && fbdev_get()->present && fbdev_get()->mapped && !suspended);
+        assert(switches==failure && native_ends==1);
+        assert(display_fullscreen_write(0,"x",1)==-EIO);
+        display_frame_complete(fbdev_get()->generation);
+        assert(!awaiting_frame && !awaiting_native_frame);
+    }
+    puts("PASS f3-37 display: all four packed modes retain native success / mediated VBE fallback, returned grant and first desktop frame; writes confined to active transaction");
     puts("PASS f3-36 display: native failure -> bounded mediated VBE fallback, both results logged, lease/remap/presents/frame resume, invalid/failed fallback stays unavailable without retry, entry rollback, measured return/frame budgets");
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());

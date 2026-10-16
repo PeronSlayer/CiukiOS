@@ -305,6 +305,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
  * the kernel (scripts/test/host_kernel_tests.sh). */
 #include "dosvm_font.inc"
 #include "../../src/kernel/vm/dosvm_vga.c"
+#include "../../src/kernel/vm/dosvm_vga_vbe.c"
 #include "../../src/kernel/vm/dosvm_dma.c"
 #include "../../src/kernel/vm/dosvm_opl.c"
 #include "../../src/kernel/vm/dosvm_sb16.c"

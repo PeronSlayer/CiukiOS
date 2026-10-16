@@ -14,6 +14,18 @@ static uint32_t fs_expected_ptes[32];
 static const char *fs_fail_checkpoint;
 static unsigned fs_checkpoints;
 static bool fs_test_checkpoint_pin;
+static bool fs_vbe_available;
+static uint8_t fs_linear[DOS_VBE_BYTES];
+static unsigned fs_linear_writes;
+static int fs_linear_error;
+bool display_fullscreen_supported(uint16_t mode)
+{ return fs_vbe_available && dos_video_mode(mode); }
+int display_fullscreen_write(uint32_t offset,const void *p,uint32_t bytes)
+{
+    CHECK(fs_display && offset<=DOS_VBE_BYTES && bytes<=DOS_VBE_BYTES-offset);
+    if (fs_linear_error) return fs_linear_error;
+    memcpy(fs_linear+offset,p,bytes);fs_linear_writes++;return 0;
+}
 void display_fullscreen_return_request(void) {}
 int display_fullscreen_checkpoint(const char *step,int result)
 {
@@ -45,7 +57,7 @@ void arch_vga_io(bool on) { fs_ports=on; arch_vga_bitmap(fs_bitmap,on); }
 void *vmm_map_mmio(uint32_t p,uint32_t bytes,bool uncached)
 { CHECK(p==0xA0000 && bytes==0x20000 && uncached); return P2V(p); }
 int display_fullscreen_begin(uint16_t mode)
-{ CHECK(cvga_find_mode(mode)); fs_begins++; if (fs_refuse) return -EBUSY; CHECK(!fs_display); fs_display=true; return 0; }
+{ CHECK(cvga_find_mode(mode) || (fs_vbe_available && dos_video_mode(mode))); fs_begins++; if (fs_refuse) return -EBUSY; CHECK(!fs_display); fs_display=true; return 0; }
 int display_fullscreen_end(void) {
     CHECK(fs_display);
     if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }

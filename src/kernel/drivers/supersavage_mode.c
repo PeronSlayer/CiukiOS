@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
 #include "supersavage_mode.h"
+#include <ciuki/dos_video_modes.h>
 
 struct reg8 { uint8_t index, mask; };
 /* X.Org SavageSave, plus the bank/stride overflow and active-output state
@@ -93,7 +94,7 @@ static int retrace(const struct supersavage_mode_io *b)
     return 0;
 }
 bool supersavage_mode_supported(uint16_t mode)
-{ return mode==0x101 || (mode<0x80 && cvga_find_mode(mode)); }
+{ return dos_video_mode(mode) || (mode<0x80 && cvga_find_mode(mode)); }
 
 int supersavage_mode_save(struct supersavage_mode *s, const struct supersavage_mode_io *b)
 {
@@ -147,16 +148,16 @@ int supersavage_mode_save(struct supersavage_mode *s, const struct supersavage_m
     return 0;
 }
 
-/* Integer counterpart of SavageCalcClock(25175,1,1,127,0,4,180000,360000).
+/* Integer counterpart of SavageCalcClock(freq,1,1,127,0,4,180000,360000).
  * Compare rational errors without floating point in kernel context. */
-static void clock_25175(uint8_t *sr12, uint8_t *sr13, uint8_t *sr29)
+static void pixel_clock(unsigned khz, uint8_t *sr12, uint8_t *sr13, uint8_t *sr29)
 {
     uint64_t best=UINT64_MAX; unsigned denom_best=1, bm=0,bn=0,br=0;
     for (unsigned r=0;r<=4;r++) for (unsigned n=3;n<=129;n++) {
         unsigned denom=n<<r;
-        unsigned m=(25175000ULL*denom+7159090)/14318180;
+        unsigned m=((uint64_t)khz*1000*denom+7159090)/14318180;
         if (m<3 || m>129 || 14318180ULL*m<180000000ULL*n || 14318180ULL*m>360000000ULL*n) continue;
-        uint64_t actual=14318180ULL*m,want=25175000ULL*denom;
+        uint64_t actual=14318180ULL*m,want=(uint64_t)khz*1000*denom;
         uint64_t error=actual>want ? actual-want : want-actual;
         if (best==UINT64_MAX || error*denom_best<best*denom) {
             best=error; denom_best=denom; bm=m-2; bn=n-2; br=r;
@@ -184,45 +185,56 @@ static int streams_off(struct supersavage_mode *s, const struct supersavage_mode
     for (unsigned i=0;i<ARRAY_SIZE(regs);i++) e|=mw(s,b,regs[i],0);
     return e ? -EIO : 0;
 }
-static void standard_mode(const struct supersavage_mode_io *b, const cvga_mode_params *v, bool packed)
+/* Linux vgaHWInit timing equations; X.Org's packed CR17 and byte stride.
+ * Only the two DMT rasters admitted by dos_video_mode reach this function. */
+static void packed_standard(cvga_mode_params *v,const struct dos_video_mode *m)
 {
-    sr(b,0,1); out(b,0x3C2,v->misc|(packed ? 0x0C : 0));
+    *v=*cvga_find_mode(0x12);
+    unsigned ht=m->width==640 ? 800 : 1056, hs=m->width==640 ? 656 : 840;
+    unsigned he=m->width==640 ? 752 : 968, vt=m->height==480 ? 525 : 628;
+    unsigned vs=m->height==480 ? 490 : 601, ve=m->height==480 ? 492 : 605;
+    v->misc=m->width==640 ? 0xEF : 0x2F;
+    v->seq[3]=0x0E;
+    uint8_t *c=v->crtc;
+    c[0]=(ht>>3)-5; c[1]=(m->width>>3)-1; c[2]=(hs>>3)-1;
+    c[3]=(((he>>3)-1)&31)|0x80; c[4]=hs>>3;
+    c[5]=((((he>>3)-1)&32)<<2)|((he>>3)&31);
+    c[6]=vt-2;
+    c[7]=(((vt-2)&0x100)>>8)|(((m->height-1)&0x100)>>7)|
+         ((vs&0x100)>>6)|(((vs-1)&0x100)>>5)|0x10|
+         (((vt-2)&0x200)>>4)|(((m->height-1)&0x200)>>3)|((vs&0x200)>>2);
+    c[9]=(((vs-1)&0x200)>>4)|0x40;
+    c[0x10]=vs; c[0x11]=(ve&15)|0x20; c[0x12]=m->height-1;
+    c[0x13]=m->pitch>>3; c[0x14]=0; c[0x15]=vs-1; c[0x16]=ve-1; c[0x17]=0xEB;
+    v->gc[5]=0x40; v->gc[6]=5; v->attr[0x10]=0x41;
+}
+static void standard_mode(const struct supersavage_mode_io *b, const cvga_mode_params *v)
+{
+    sr(b,0,1); out(b,0x3C2,v->misc);
     for (unsigned i=0;i<4;i++) sr(b,i+1,v->seq[i]|(i==0 ? 0x20 : 0));
-    if (packed) sr(b,4,0x0E);
     cr(b,0x11,v->crtc[0x11]&0x7F);
-    for (unsigned i=0;i<25;i++) if (i!=0x11) cr(b,i,packed && i==0x13 ? 80 : v->crtc[i]);
-    if (packed) { cr(b,0x14,0); cr(b,0x17,0xEB); }
+    for (unsigned i=0;i<25;i++) if (i!=0x11) cr(b,i,v->crtc[i]);
     cr(b,0x11,v->crtc[0x11]);
-    for (unsigned i=0;i<9;i++) wr(b,0x3CE,i,packed && i==5 ? 0x40 : v->gc[i]);
+    for (unsigned i=0;i<9;i++) wr(b,0x3CE,i,v->gc[i]);
     for (unsigned i=0;i<21;i++) {
-        in(b,0x3DA); out(b,0x3C0,i);
-        out(b,0x3C0,packed && i==0x10 ? 0x41 : i<20 ? v->attr[i] : 0);
+        in(b,0x3DA); out(b,0x3C0,i); out(b,0x3C0,i<20 ? v->attr[i] : 0);
     }
     in(b,0x3DA); out(b,0x3C0,0x20); sr(b,0,3);
 }
 static int verify_mode(struct supersavage_mode *s, const struct supersavage_mode_io *b,
-                       const cvga_mode_params *v, bool packed)
+                       const cvga_mode_params *v)
 {
     static const uint8_t sm[]={3,0x3D,15,0x3F,14},gm[]={15,15,15,31,3,0x7B,15,15,255};
-    int e=compare(s,0x3CC,v->misc|(packed ? 12 : 0),in(b,0x3CC),0xEF);
+    int e=compare(s,0x3CC,v->misc,in(b,0x3CC),0xEF);
     for (unsigned i=0;i<5;i++) {
         unsigned expected=i==0 ? 3 : v->seq[i-1]|(i==1 ? 0x20 : 0);
-        if (packed && i==4) expected=0x0E;
         e|=compare(s,0x100+i,expected,rd(b,0x3C4,i),sm[i]);
     }
-    for (unsigned i=0;i<25;i++) {
-        unsigned expected=v->crtc[i];
-        if (packed && i==0x13) expected=80;
-        if (packed && i==0x14) expected=0;
-        if (packed && i==0x17) expected=0xEB;
-        e|=compare(s,i,expected,rd(b,0x3D4,i),255);
-    }
-    for (unsigned i=0;i<9;i++)
-        e|=compare(s,0x300+i,packed && i==5 ? 0x40 : v->gc[i],rd(b,0x3CE,i),gm[i]);
+    for (unsigned i=0;i<25;i++) e|=compare(s,i,v->crtc[i],rd(b,0x3D4,i),255);
+    for (unsigned i=0;i<9;i++) e|=compare(s,0x300+i,v->gc[i],rd(b,0x3CE,i),gm[i]);
     for (unsigned i=0;i<21;i++) {
         in(b,0x3DA); out(b,0x3C0,i);
-        unsigned expected=packed && i==0x10 ? 0x41 : i<20 ? v->attr[i] : 0;
-        e|=compare(s,0x400+i,expected,in(b,0x3C1),255);
+        e|=compare(s,0x400+i,i<20 ? v->attr[i] : 0,in(b,0x3C1),255);
     }
     in(b,0x3DA); out(b,0x3C0,0x20);
     return e ? -EIO : 0;
@@ -233,19 +245,21 @@ int supersavage_mode_enter(struct supersavage_mode *s, const struct supersavage_
     int e=step(s,b,"native-streams-off"); if (e) return e;
     if ((e=streams_off(s,b))) return e;
     e=step(s,b,"native-panel-clock"); if (e) return e;
-    bool packed=mode==0x101;
+    const struct dos_video_mode *packed=dos_video_mode(mode);
     /* Panel timing, expansion coefficients and MCLK stay firmware selected.
      * Clear only doubling, forced PLL and gamma/8-bit CLUT for legacy VGA. */
     if ((e=sw(s,b,0x15,s->sr[0x15]&~0x10u,0xDF)) ||
         (e=sw(s,b,0x18,s->sr[0x18]&~0x80u,255)) ||
         (e=sw(s,b,0x1B,packed ? 0x10 : 0,0x98))) return e;
     if (packed) {
-        uint8_t r12,r13,r29; clock_25175(&r12,&r13,&r29);
+        uint8_t r12,r13,r29; pixel_clock(packed->clock_khz,&r12,&r13,&r29);
         if ((e=pll(s,b,r12,r13,r29,0x83))) return e;
     }
     e=step(s,b,"native-vga-mode"); if (e) return e;
-    const cvga_mode_params *v=cvga_find_mode(packed ? 0x12 : mode);
-    standard_mode(b,v,packed);
+    cvga_mode_params preset;
+    if (packed) packed_standard(&preset,packed);
+    const cvga_mode_params *v=packed ? &preset : cvga_find_mode(mode);
+    standard_mode(b,v);
     /* Legacy VGA mapping/shift/overflow controls are from RE046-B. Native
      * packed controls/stride use SavageModeInit's 8-bpp non-BIOS branch. */
     const struct reg8 legacy[]={{0x31,0},{0x32,(uint8_t)(s->cr[0x32]&~0x10u)},
@@ -261,15 +275,18 @@ int supersavage_mode_enter(struct supersavage_mode *s, const struct supersavage_
         if ((e=cw(s,b,r,legacy[i].mask,mask))) return e;
     }
     if (packed) {
+        unsigned stride=packed->pitch>>3;
+        unsigned midpoint=(v->crtc[0]+v->crtc[4]+1)/2;
+        if (midpoint-v->crtc[4]<4) midpoint=v->crtc[4]+4<=v->crtc[0] ? v->crtc[4]+4 : v->crtc[0]+1;
         if ((e=cw(s,b,0x31,0x8C,0x4F)) || (e=cw(s,b,0x3A,(s->cr[0x3A]&0x87)|0x15,0xBB)) ||
             (e=cw(s,b,0x58,(s->cr[0x58]&0x80)|0x13,0x13)) ||
-            (e=cw(s,b,0x34,0x10,255)) || (e=cw(s,b,0x3B,0x5A,255)) ||
-            (e=cw(s,b,0x3C,0x2F,255)) || (e=cw(s,b,0x5E,0x40,0x57)) ||
-            (e=cw(s,b,0x50,0x40,0xF1)) || (e=cw(s,b,0x90,0x80,255)) ||
-            (e=cw(s,b,0x91,80,255)) || (e=cw(s,b,0x67,1,255))) return e;
+            (e=cw(s,b,0x34,0x10,255)) || (e=cw(s,b,0x3B,midpoint,255)) ||
+            (e=cw(s,b,0x3C,v->crtc[0]/2,255)) || (e=cw(s,b,0x5E,0x40,0x57)) ||
+            (e=cw(s,b,0x50,(packed->width==640 ? 0x40 : 0x80)|(packed->bpp==16 ? 0x10 : 0),0xF1)) || (e=cw(s,b,0x90,0x80,255)) ||
+            (e=cw(s,b,0x91,stride,255)) || (e=cw(s,b,0x67,packed->bpp==16 ? 0x51 : 1,255))) return e;
     }
     e=step(s,b,"native-mode-readback"); if (e) return e;
-    if ((e=verify_mode(s,b,v,packed))) return e;
+    if ((e=verify_mode(s,b,v))) return e;
     /* Standard state is installed again, with memory and palette, by the
      * f3-20 guest transport. Only release blanking after chipset readback. */
     sr(b,1,v->seq[0]); out(b,0x3C4,0); out(b,0x3D4,0);

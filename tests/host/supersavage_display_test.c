@@ -18,7 +18,8 @@ static unsigned nleases,claims_attempted,mapped,revoked;
 static unsigned fail_claim,fail_map,fail_activate;
 static bool extra_gpu;
 static const char *runtime_fail_step;
-static void *windows[2];
+static void *windows[3];
+static struct resource framebuffer;
 static unsigned nwindows;
 unsigned pci_count(void) { return extra_gpu ? 2 : 1; }
 const struct pci_func *pci_get(unsigned i) { return i<pci_count() ? &gpu : 0; }
@@ -31,7 +32,7 @@ int registry_claim(enum res_type t,uint32_t start,uint32_t end,const char *owner
     assert(nleases<8);unsigned h=nleases++;
     leases[h]=(struct resource){t,start,end,owner,h+1,RS_CLAIMED,false};return (int)h;
 }
-const struct resource *registry_get(unsigned h) { assert(h<nleases);return &leases[h]; }
+const struct resource *registry_get(unsigned h) { if (h==99) return &framebuffer;assert(h<nleases);return &leases[h]; }
 int registry_activate(int h,gen_t g)
 { assert(leases[h].generation==g && leases[h].state==RS_CLAIMED);if ((unsigned)h+1==fail_activate) return -EIO;leases[h].state=RS_ACTIVE;return 0; }
 int registry_quiesce(int h,gen_t g,registry_idle_proof_fn proof)
@@ -41,7 +42,7 @@ int registry_release(int h,uint32_t g)
 int registry_quarantine(int h,gen_t g)
 { assert(leases[h].generation==g);leases[h].state=RS_QUARANTINED;return 0; }
 void *vmm_reserve_mmio(uint32_t bytes)
-{ assert(nwindows<2);windows[nwindows]=calloc(1,bytes);assert(windows[nwindows]);return windows[nwindows++]; }
+{ assert(nwindows<3);windows[nwindows]=calloc(1,bytes);assert(windows[nwindows]);return windows[nwindows++]; }
 void *vmm_replace_mmio(void *window,uint32_t cap,uint32_t phys,uint32_t bytes)
 { (void)phys;assert(window && cap==bytes);return ++mapped==fail_map ? 0 : window; }
 void vmm_revoke_mmio(void *window,uint32_t bytes) { assert(window && bytes);revoked++; }
@@ -54,7 +55,7 @@ static uint8_t port_in(uint16_t p) { return input(&card,p); }
 static void port_out(uint16_t p,uint8_t v) { output(&card,p,v); }
 static int mode_save(struct supersavage_mode *s,const struct supersavage_mode_io *real)
 {
-    assert(real && mapped==2 && leases[0].state==RS_ACTIVE && leases[1].state==RS_ACTIVE && leases[2].state==RS_ACTIVE);
+    assert(real && (mapped==2 || mapped==3) && leases[0].state==RS_ACTIVE && leases[1].state==RS_ACTIVE && leases[2].state==RS_ACTIVE);
     return supersavage_mode_save(s,&bus);
 }
 static int mode_enter(struct supersavage_mode *s,const struct supersavage_mode_io *real,uint16_t mode)
@@ -76,7 +77,7 @@ static struct fb_device desktop;
 static void runtime_fixture(void)
 {
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);nwindows=0;
-    register_window=aperture_window=0;register_mapping=aperture_mapping=0;
+    register_window=aperture_window=linear_window=0;register_mapping=aperture_mapping=linear_mapping=0;
     memset(&saved_mode,0,sizeof(saved_mode));poisoned=false;adapter=0;
     for (unsigned i=0;i<3;i++) claims[i]=-1;
     memset(leases,0,sizeof(leases));nleases=claims_attempted=mapped=revoked=0;
@@ -84,7 +85,8 @@ static void runtime_fixture(void)
     fixture();gpu.command=3;gpu.bar[0]=0xF0000000;gpu.bar[1]=0xE0000000;
     g_boot=(struct ciuki_boot_info){.kernel_start=0x100000,.kernel_end=0x500000,.e820_count=1};
     g_boot.e820[0]=(struct ciuki_e820){0x100000,0x7F00000,CBI_E820_RAM,1};
-    desktop=(struct fb_device){.present=true,.phys=0xE0000000,.size=1024*768*4};
+    desktop=(struct fb_device){.present=true,.phys=0xE0000000,.size=1024*768*4,.handle=99,.generation=1};
+    framebuffer=(struct resource){RES_MMIO,desktop.phys,desktop.phys+desktop.size,"fbdev",1,RS_QUIESCING,false};
 }
 static void ownership(void)
 {
@@ -103,6 +105,33 @@ static void ownership(void)
     for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
     assert(!memcmp(card.vga.plane,original.vga.plane,sizeof(card.vga.plane)));
     puts("PASS SuperSavage provider ownership: side-effect-free PCI/BAR/decode preflight, exclusive VGA/MMIO/A000 leases, halfword stream readback, revoked aliases before release");
+}
+static void packed_ownership(void)
+{
+    const unsigned modes[]={0x101,0x103,0x111,0x114};
+    for (unsigned i=0;i<ARRAY_SIZE(modes);i++) {
+        runtime_fixture();assert(supersavage_display_supported(&desktop,modes[i]) && !nwindows && !card.reads);
+        assert(!supersavage_display_prepare(&desktop,modes[i]));
+        assert(!supersavage_display_begin(modes[i]) && linear_mapping && mapped==3);
+        uint8_t bytes[]={1,2,3,4};
+        assert(!supersavage_display_write(DOS_VBE_BYTES-4,bytes,4));
+        assert(!memcmp((void *)(linear_mapping+DOS_VBE_BYTES-4),bytes,4));
+        assert(supersavage_display_write(DOS_VBE_BYTES-3,bytes,4)==-EIO);
+        assert(!supersavage_display_end() && !linear_mapping && revoked==3);
+        assert(supersavage_display_write(0,bytes,4)==-EIO);
+        restored();
+    }
+    runtime_fixture();assert(!supersavage_display_supported(&desktop,0x110));
+    assert(!supersavage_display_prepare(&desktop,0x111));framebuffer.state=RS_ACTIVE;
+    assert(supersavage_display_begin(0x111)==-EIO && !card.reads && !linear_mapping);
+    runtime_fixture();assert(!supersavage_display_prepare(&desktop,0x114));fail_map=3;
+    assert(supersavage_display_begin(0x114)==-ENOMEM && !card.reads && !linear_mapping);
+    runtime_fixture();desktop.size=640*480*2;
+    assert(!supersavage_display_supported(&desktop,0x101));
+    assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
+    assert(!supersavage_display_supported(&desktop,0x101));
+    assert(!supersavage_display_end());
+    puts("PASS f3-37 provider: four packed modes, bounded BAR1 writes, quiesced framebuffer generation required, alias revoked before restore, mapping failure rollback");
 }
 static void refusal_and_recovery(void)
 {
@@ -144,7 +173,7 @@ static void refusal_and_recovery(void)
 }
 int main(void)
 {
-    ownership();refusal_and_recovery();
+    ownership();packed_ownership();refusal_and_recovery();
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);
     puts("SuperSavage display provider host tests: PASS");return 0;
 }

@@ -81,7 +81,9 @@ uint8_t dosvm_vga_status(struct dosvm *v, uint64_t tick)
         /* Next frame's blank: one period after this one was due, or the
          * next due time after now when polling stopped for longer. */
         v->video_blank = 0;
-        uint64_t period = vga_frame_us(&v->vga), next = v->video_vblank_us + period;
+        const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
+        uint64_t period = m ? dos_video_frame_us(m) : vga_frame_us(&v->vga);
+        uint64_t next = v->video_vblank_us + period;
         v->video_vblank_us = next > now ? next : now + period - (now - next) % period;
     }
     return (v->video_hsync++ & 1) ? 1 : 0;
@@ -103,7 +105,7 @@ static int video_port(struct dosvm *v, uint16_t port, unsigned width,
 {
     (void)arg;
     uint32_t result = 0;
-    if (v->fullscreen) return dosvm_fullscreen_port(port,width,write,value);
+    if (v->fullscreen && !v->vbe_mode) return dosvm_fullscreen_port(port,width,write,value);
     /* Indexed OUTW/OUTD address consecutive ports, low byte first. Bytes past
      * the registered 3B0h-3DFh range belong to no device: all ones/ignored. */
     bool window = false;
@@ -282,7 +284,7 @@ void dosvm_vga_sync(struct dosvm *v, bool unmap)
 }
 void dosvm_vga_direct(struct dosvm *v)
 {
-    if (v->fullscreen) return;
+    if (v->fullscreen || v->vbe_mode) return;
     if (!v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return;
     int write_plane = cvga_direct_plane(&v->vga);
     int plane = v->video_read_window ? cvga_direct_read_plane(&v->vga) : write_plane;
@@ -325,12 +327,8 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     if (!function) v->video_read_window = false;
     if (function == 0x0E) dosvm_console_byte(v, (uint8_t)f->tf.eax);
     dosvm_vga_model(v);                          /* before any BIOS mutation, including VBE */
-    /* VBE 3.0 status: AL=4Fh function recognised, AH=01h call failed. Guest
-     * VBE is unavailable through F4 (dos-dpmi-contract.md). */
-    if ((f->tf.eax & 0xFF00) == 0x4F00) {
-        f->tf.eax = (f->tf.eax & 0xFFFF0000u) | 0x014F;
-        return 0;
-    }
+    if ((f->tf.eax & 0xFF00) == 0x4F00) return dosvm_vbe_bios(v,f);
+    bool linear_mode=v->vbe_mode!=0;
     unsigned ax = f->tf.eax & 0xFFFF, bytes = 0, offset = 0;
     bool output = false;
     if (ax == 0x1012 || ax == 0x1017) {           /* DAC block ES:DX, CX entries */
@@ -346,16 +344,20 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     /* The complete guest buffer is checked before any register or VRAM change. */
     if (bytes && (bytes > 65536 || offset > 65536 - bytes || f->es > 0xFFFF ||
         !dosvm_range(v, (f->es << 4) + offset, bytes, output))) return -EFAULT;
-    if (hardware_mode) dosvm_fullscreen_model_begin(v);
+    if (hardware_mode && !linear_mode) dosvm_fullscreen_model_begin(v);
     cvbios_regs r = {f->tf.eax, f->tf.ebx, f->tf.ecx, f->tf.edx,
                      f->tf.esi, f->tf.edi, f->tf.ebp, (uint16_t)f->es, (uint16_t)f->ds};
     v->video_bus_fault = false;
     int handled = cvbios_int10(&v->video_bios, &r);
+    if (!function && handled) {
+        v->vbe_mode=0; v->video_presented=false;
+        if (hardware_mode && linear_mode) dosvm_fullscreen_mode_changed(v);
+    }
     if (handled && (!function || function == 0x0E || function == 9 || function == 0x0A || function == 0x13))
         dosvm_launch_video(v);
     dosvm_vga_direct(v);                          /* f3-06: the mode set may close the window */
     if (v->video_bus_fault) {
-        if (hardware_mode) dosvm_fullscreen_model_end(v);
+        if (hardware_mode && !linear_mode) dosvm_fullscreen_model_end(v);
         return -EFAULT;
     }
     f->tf.eax = r.eax; f->tf.ebx = r.ebx; f->tf.ecx = r.ecx; f->tf.edx = r.edx;
@@ -368,7 +370,7 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     }
     uint16_t pos;
     if (!dosvm_read(v, 0x450, &pos, 2)) v->cursor = (pos >> 8) * 80 + (pos & 255);
-    if (hardware_mode) dosvm_fullscreen_model_end(v);
+    if (hardware_mode && !linear_mode) dosvm_fullscreen_model_end(v);
     return 0;
 }
 
@@ -463,6 +465,7 @@ int dosvm_vga_init(struct dosvm *v)
     v->video_bios.font[CVBIOS_FONT_8X8] = 0xF0003000;
     v->video_bios.font[CVBIOS_FONT_8X8_HIGH] = 0xF0003400;
     v->video_bios.font[CVBIOS_FONT_8X14] = 0xF0004000;
+    dosvm_vbe_init(v);
     struct v86_frame f = {0}; f.tf.eax = 3;
     int e = dosvm_vga_bios(v, &f);
     return e ? e : dosvm_port_register(v->info.key, 0x3B0, 0x3DF, video_port, 0);
@@ -729,7 +732,12 @@ bool dosvm_video_info(struct dosvm_key key, struct dosvm_video_info *out)
     memset(out, 0, sizeof(*out));
     uint8_t mode = 0;
     dosvm_read(v, 0x449, &mode, 1);
-    out->mode = mode;
+    out->mode = v->vbe_mode ? v->vbe_mode : mode;
+    if (v->vbe_mode) {
+        const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
+        out->width=m->width; out->height=m->height; out->frames=v->video_frames;
+        return true;
+    }
     out->unchained = (v->vga.seq[4] & 0x0C) == 0x04;
     cvga_geometry g;
     if (cvga_get_geometry(&v->vga, &g)) { out->width = g.width; out->height = g.height; }
@@ -756,6 +764,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     v->video_bands = 0;
     if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
+    if (v->vbe_mode) return dosvm_vbe_present(v,row,arg,tick,damage);
     /* Page flips are a completion signal even when the start address is
      * unchanged. Plain mode 13h has no completion register: sample writable
      * pages at the programmed VGA refresh, only while stores are pending. */
@@ -899,6 +908,6 @@ int dosvm_frame_digest(struct dosvm *v, uint64_t tick, struct dosvm_frame *out)
                  DOSVM_VIDEO_WIDTH / g->width : DOSVM_VIDEO_HEIGHT / g->height) : 0;
     uint8_t mode = 0;
     dosvm_read(v, 0x449, &mode, 1);
-    out->mode = mode;
+    out->mode = v->vbe_mode ? v->vbe_mode : mode;
     return 0;
 }

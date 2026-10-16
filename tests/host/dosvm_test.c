@@ -375,6 +375,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
  * kernel's font.asm includes (scripts/test/host_kernel_tests.sh). */
 #include "dosvm_font.inc"
 #include "../../src/kernel/vm/dosvm_vga.c"
+#include "../../src/kernel/vm/dosvm_vga_vbe.c"
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -684,6 +685,8 @@ int main(void)
     test_idle();
     test_fullscreen_transport();
     test_fullscreen_service();
+    test_fullscreen_more_modes();
+    test_fullscreen_vbe();
     test_startup();
     test_quake_start();
     CHECK(guest_enters==3 && deletes>1);

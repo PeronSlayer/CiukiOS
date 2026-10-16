@@ -384,7 +384,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
-            if (v->fullscreen && !v->fullscreen_model) {
+            if (v->fullscreen && !v->vbe_mode && !v->fullscreen_model) {
                 volatile uint8_t *aperture = P2V(linear);
                 for (unsigned i=0;i<n;i++) {
                     if (write) aperture[i]=b[i]; else b[i]=aperture[i];
