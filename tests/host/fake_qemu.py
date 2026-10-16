@@ -18,6 +18,13 @@ if '-machine' in sys.argv and sys.argv[sys.argv.index('-machine')+1].endswith(',
     print('  i8042=<bool> - Enable/disable Intel 8042 PS/2 controller emulation');sys.exit(0)
 scenario_path=Path(os.environ['CIUKI_FAKE_SCRIPT'])
 scenario=json.loads(scenario_path.read_text())
+def exit_early():
+    if scenario.get('exit_signal'):
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        os.kill(os.getpid(), getattr(signal, scenario['exit_signal']))
+    os._exit(scenario.get('exit_code', 0))
+if scenario.get('exit_on') == 'startup': exit_early()
 boot=0
 if scenario.get('boot_records'):
     counter=scenario_path.with_suffix('.count')
@@ -93,6 +100,7 @@ def suspend_gate():
 
 for raw in stream:
     request=json.loads(raw);cmd=request['execute'];reply={}
+    if scenario.get('exit_on') == cmd: exit_early()
     if input_pending and time.monotonic()>=input_pending['due'] and cmd=='query-status':
         counters={'event':'DATA','case':'gate','motion':str(input_motion),'buttons':str(input_buttons)}
         emit([f'[input] gate motion={input_motion} buttons={input_buttons}' if scenario.get('raw_input_counters') else counters])

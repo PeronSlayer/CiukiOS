@@ -1312,7 +1312,8 @@ def teardown(host,unit,process,qmp,cgroup):
     result={'qmp_quit':False,'terminated_scope':False,'killed_scope':False,'remaining_children':[], 'clean':False}
     if process is None:
         result['clean']=True;return result
-    if qmp:
+    result['returncode_before_quit']=process.poll()
+    if qmp and result['returncode_before_quit'] is None:
         result['qmp_quit_requested']=True
         try:qmp.command('quit');result['qmp_quit']=True
         except (OSError,RuntimeError,ValueError):pass
@@ -1351,6 +1352,20 @@ def teardown(host,unit,process,qmp,cgroup):
     result['wrapper_returncode']=process.poll()
     result['clean']=finished() and not result.get('pid_inspection_errors')
     return result
+
+
+def early_exit_reason(returncode):
+    """Popen uses negative POSIX signal numbers; preserve the numeric status.
+
+    https://docs.python.org/3/library/subprocess.html#subprocess.Popen.returncode
+    The owned scope wrapper's status is the available QEMU exit evidence.
+    """
+    if returncode < 0:
+        number = -returncode
+        try: name = signal.Signals(number).name
+        except ValueError: name = str(number)
+        return f'QEMU/scope exited with signal {name} ({number}), status {returncode} before runner quit'
+    return f'QEMU/scope exited with code {returncode} before runner quit'
 
 
 def check_audio_wav(path, expected):
@@ -2003,6 +2018,13 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         if isinstance(e,dos_fixtures.FixturesAbsent):
             result['reason']='fixtures_absent';result['fixtures_absent']=str(e)
     finally:
+        # Capture before sending quit or terminating anything. A QMP reset/EOF
+        # can precede reaping the wrapper by a few scheduler ticks. Never use
+        # the status of our later SIGTERM/SIGKILL as the original failure.
+        early_returncode = process.poll() if process else None
+        if process and early_returncode is None and result['outcome'] != 'pass':
+            try: early_returncode = process.wait(timeout=.25)
+            except subprocess.TimeoutExpired: pass
         # A failed desktop or DOS-window case keeps its final screen for diagnosis
         # (failure artifacts are retained; passing runs delete everything but serial.log).
         if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen') or normal):
@@ -2010,6 +2032,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             except (OSError,RuntimeError,ValueError):pass
         # Ownership is held until this sequence finishes, including verification.
         result['cleanup']=teardown(host,unit,process,qmp,cgroup)
+        if early_returncode is None:
+            early_returncode = result['cleanup'].get('returncode_before_quit')
+        if early_returncode is not None:
+            result['qemu_exit'] = {'returncode':early_returncode,'before_runner_quit':True}
+            expected_exit = case.get('sweep') and early_returncode == 0 and result['outcome'] == 'pass'
+            if result['cut_point'] is None and not expected_exit:
+                result['runner_observation_reason'] = result['reason']
+                result['outcome'] = 'fail'
+                result['reason'] = early_exit_reason(early_returncode)
         # The wrapper and the scope end before systemd reaps the QEMU process;
         # allow a few seconds before a lingering process counts as a survivor
         # (campaigns 11/12 lost safe-mode cases to this race, lead 2026-10-12).

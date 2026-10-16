@@ -1221,6 +1221,8 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
      * proof even while another prediction is in flight. */
     if ((!keep && !irq_return) || e || !v->frame_pm || checkpoint || (replanning && !keep_resumed)) {
         v->dpmi.decode_valid = !e && v->frame_pm;
+        if (v->dpmi.decode_valid && (checkpoint || (replanning && !keep_resumed)))
+            v->perf.return_reacquired++;
         v->dpmi.decode_cs = (uint16_t)f->tf.cs;
         v->dpmi.decode_eip = f->tf.eip;
         struct dpmi_seg ss, code, ds;

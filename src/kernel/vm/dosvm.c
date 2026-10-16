@@ -223,7 +223,7 @@ static const char *dosvm_step_owner(const struct dosvm *v, const struct v86_fram
     }
     if (d->if_step) return "pm_if";
     if (d->if_armed) return "pm_flags";
-    if (d->return_steps && (uint16_t)f->tf.cs == d->return_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
+    if (d->return_step && (uint16_t)f->tf.cs == d->return_step_target_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
         d->depth == d->return_depth && d->clients == d->return_client) return "pm_return";
     return "client";
 }
@@ -1057,6 +1057,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->probe = config ? config->probe : 0;
     v->perf.report_tick = g_ticks;
     v->dpmi_enabled = config && config->dpmi;
+    v->return_tracker_tf = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
     kwait_init(&v->wake);
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
@@ -1102,6 +1103,8 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     /* f4-05: the VM's SB16/OPL output joins the mixer when a backend is
      * ready; without one f3-05 keeps discarding with its counter. */
     v->audio.diag.attach_error = audio_vm_attach ? audio_vm_attach(v->info.key) : -ENODEV;
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_start vm=%u gen=%u tracker=%s",
+                         v->info.key.id, v->info.key.generation, v->return_tracker_tf ? "tf" : "breakpoint");
     *out = v;
     return 0;
 fail:

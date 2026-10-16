@@ -316,6 +316,24 @@ class RunnerTests(unittest.TestCase):
         self.case['timeout']=.35
         result,_=self.run_fake(records=[{'event':'BEGIN'}])
         self.assertEqual(result['outcome'],'fail');self.assertTrue(result['timeout']['occurred'])
+        self.assertNotIn('qemu_exit', result)
+        self.assertIn('deadline', result['reason'])
+    def test_early_qemu_exit_reports_status_before_cleanup(self):
+        for stage in ('startup', 'query-status'):
+            for status, extra, reason in ((23, {'exit_code':23}, 'code 23'),
+                                          (0, {'exit_code':0}, 'code 0'),
+                                          (-signal.SIGSEGV, {'exit_signal':'SIGSEGV'}, 'signal SIGSEGV (11)')):
+                with self.subTest(stage=stage, status=status):
+                    result, directory = self.run_fake(records=[], exit_on=stage, **extra)
+                    self.assertEqual(result['outcome'], 'fail')
+                    self.assertIn(reason, result['reason'])
+                    self.assertIn('before runner quit', result['reason'])
+                    self.assertEqual(result['qemu_exit'], {'returncode':status,'before_runner_quit':True})
+                    self.assertEqual(result['cleanup']['wrapper_returncode'], status)
+                    self.assertEqual(result['cleanup']['returncode_before_quit'], status)
+                    self.assertFalse(result['cleanup']['terminated_scope'])
+                    self.assertTrue(result['cleanup']['clean'])
+                    self.assertTrue((directory/'run.qcow2').exists())
     def test_child_termination_escalates_to_kill(self):
         self.case['timeout']=.35
         result,_=self.run_fake(records=[],child=True,ignore_quit=True)

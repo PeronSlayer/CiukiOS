@@ -328,6 +328,7 @@ static void (*diag_time_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
+static char tracker_record[256], vm_start_record[256];
 void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
 {
     char extra[240],wire[256]; va_list ap; va_start(ap,fmt);
@@ -335,6 +336,8 @@ void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
     CHECK(n>=0 && n<(int)sizeof(extra));
     n=snprintf(wire,sizeof(wire),"CIUKI_TEST v=1 run=00000000 seq=999999 probe=%s event=DATA %s",probe,extra);
     CHECK(n>0 && n<=240); disk_records++;
+    if (strstr(extra, "group=vm_perf_tracker ")) strcpy(tracker_record, wire);
+    if (strstr(extra, "group=vm_start ")) strcpy(vm_start_record, wire);
     if ((unsigned)n > max_record) max_record = n;
 }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)

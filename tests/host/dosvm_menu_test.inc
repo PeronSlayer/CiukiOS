@@ -23,6 +23,23 @@ static void test_menu_quiet_records(void)
     destroy(v, true); CHECK(strstr(last_record, "group=vm_cleanup")); empty();
     puts("f3-10 quiet records: desktop launch/guest/fault/cleanup silent, latches preserved, selected evidence retained PASS");
 }
+static void test_menu_platform_selection(void)
+{
+    for (unsigned qemu = 0; qemu < 2; qemu++) {
+        g_boot.flags = qemu ? CBI_F_SMBIOS_QEMU : 0;
+        struct dosvm *v = dpmi_vm(true);
+        CHECK(v->return_tracker_tf == (qemu != 0));
+        CHECK(strstr(vm_start_record, qemu ? " tracker=tf" : " tracker=breakpoint"));
+        g_boot.flags ^= CBI_F_SMBIOS_QEMU; /* selection survives later boot flags and client reset */
+        v86_start(); enter(v, true);
+        CHECK(v->return_tracker_tf == (qemu != 0));
+        dpmi_close(v);
+        CHECK(v->return_tracker_tf == (qemu != 0));
+        destroy(v, true); empty();
+    }
+    g_boot.flags = 0;
+    puts("f3-35 tracker selection: production VM creation, immutable across boot-flag changes and DPMI reset PASS");
+}
 static void test_menu_heartbeat(void)
 {
     struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
@@ -373,6 +390,7 @@ static void test_menu_hint_expiry(void)
             }
         } else { g_ticks += 100; return_resume(v,&cur); }
         CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && v->monitor.vif && !v->perf.return_hits);
+        CHECK(v->perf.return_armed == 1 && v->perf.return_expired == 1);
         menu_checkpoint_start(v,0x440); CHECK(v->dpmi.return_steps && v->dpmi.return_irqs == 0);
         v->monitor.vif = false; g_ticks += 100; return_resume(v,&cur);
         CHECK(!v->dpmi.return_steps && !v->dpmi.dr7 && !v->monitor.vif);
@@ -549,8 +567,10 @@ static void test_menu_review_cpu(void)
 {
     const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
     gcpu_init(&ops);
+    for (unsigned tracker = 0; tracker < 2; tracker++)
     for (unsigned bits = 0; bits < 2; bits++) for (unsigned restore = 0; restore < 2; restore++)
     for (unsigned scenario = 0; scenario < 6; scenario++) {
+        g_boot.flags = tracker ? CBI_F_SMBIOS_QEMU : 0;
         struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, bits != 0);
         unsigned w = bits ? 4 : 2;
         client_desc(v, 900, 0x30000, 0xFFFF, 0xFA, bits ? 0x40 : 0);
@@ -628,9 +648,7 @@ static void test_menu_review_cpu(void)
         }
         if (scenario == 2 || scenario == 3) {
             struct gcpu_event ev;
-            CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 1);
-            debug_dr6 = ev.dr6; step(v, 1, 0);
-            if (scenario == 3) {
+            for (unsigned count = 0; cur.tf.eip != 0x180 && count < 128; count++) {
                 CHECK(if_cpu_run(v,&ev) == GCPU_TRAP && ev.vector == 1);
                 debug_dr6 = ev.dr6; step(v,1,0);
             }
@@ -651,7 +669,7 @@ static void test_menu_review_cpu(void)
             CHECK(!v->dpmi.depth && v->monitor.vif && v->dpmi.return_eip != 0x280);
         }
         bool armed = false, restored = false;
-        for (unsigned count = 0; count < 20 && !restored; count++) {
+        for (unsigned count = 0; count < 128 && !restored; count++) {
             struct gcpu_event ev;
             int rc = if_cpu_run(v, &ev);
             if (rc != GCPU_TRAP) fprintf(stderr,"review CPU bits=%u restore=%u scenario=%u rc=%d vec=%u pc=%x flags=%x step=%u remaining=%u slot=%u\n",bits,restore,scenario,rc,ev.vector,cur.tf.eip,cur.tf.eflags,v->dpmi.return_step,v->dpmi.return_steps,v->dpmi.return_slot);
@@ -673,9 +691,12 @@ static void test_menu_review_cpu(void)
             CHECK(!v->perf.return_hits && (v->dpmi.dr7 & 0x55) == 0x55);
             for (unsigned i = 0; i < DPMI_WATCH; i++)
                 CHECK(v->dpmi.watch[i].used && !v->dpmi.watch[i].hit && v->dpmi.watch[i].addr == 0x34000+i*4);
-        } else CHECK(v->perf.return_hits && v->perf.return_hits == v->perf.return_segmented);
+        } else if (!tracker) CHECK(v->perf.return_hits && v->perf.return_hits == v->perf.return_segmented);
+        if (tracker) CHECK(!v->perf.return_armed && !v->perf.return_hits && !v->perf.return_segmented);
+        CHECK(v->perf.return_reacquired > 0);
         destroy(v,true); empty();
     }
+    g_boot.flags = 0;
     gcpu_done(); if_cpu_vm = 0;
     puts("f3-34 review CPU: 16/32-bit CPUID to POPF/IRET, four untouched watchpoints with cross-CS IRET/RET, IRQ return-slot/direct-jump edits, self-modifying transfer, fallback IRQ suspension, independent proof, private segmented hits PASS");
 }
@@ -730,6 +751,7 @@ static void test_menu_doom_cli_seeds(void)
 #endif
 static void test_menu(void)
 {
+    test_menu_platform_selection();
     test_menu_quiet_records(); test_menu_heartbeat(); test_menu_vga_dirty_repeat(); test_menu_pm_devices();
     test_menu_halted_heartbeat();
     test_menu_return_seed(); test_menu_return_steps(); test_menu_return_nested();

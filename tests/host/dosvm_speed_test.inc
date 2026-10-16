@@ -109,13 +109,16 @@ static void test_speed_accounting(void)
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
     v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
     v->perf.return_hits = 17; v->perf.return_segmented = 11; v->perf.return_fallbacks = 3;
+    v->perf.return_armed = 23; v->perf.return_expired = 2; v->perf.return_reacquired = 19;
     g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
-    CHECK(disk_records==disk_before+9);
+    CHECK(disk_records==disk_before+10);
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
     CHECK(s->return_hits == 17 && s->return_segmented == 11 && s->return_fallbacks == 3);
+    CHECK(s->return_armed == 23 && s->return_expired == 2 && s->return_reacquired == 19);
+    CHECK(strstr(tracker_record, "armed=23 hits=17 expired=2 fallback=3 reacquired=19 segmented=11"));
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
     CHECK(s->harvests == 140 && s->pages == 700 && s->harvest_us == 123);
     CHECK(s->port_remaps == 1278 && s->remap_us == 456 && s->burst_insn == 1024 &&
@@ -131,7 +134,10 @@ static void test_speed_accounting(void)
     /* harvest counters are per-interval deltas: only the first interval carries them */
     for (unsigned i = 1; i < 16; i++) CHECK(v->perf.sample[i].harvest_us == 0 && v->perf.sample[i].pages == 0 &&
         !v->perf.sample[i].port_remaps && !v->perf.sample[i].remap_us && !v->perf.sample[i].burst_insn &&
-        !v->perf.sample[i].port_count[DOSVM_VGA_SR_MASK] && !v->perf.sample[i].port_us[DOSVM_VGA_SR_MASK]);
+        !v->perf.sample[i].port_count[DOSVM_VGA_SR_MASK] && !v->perf.sample[i].port_us[DOSVM_VGA_SR_MASK] &&
+        !v->perf.sample[i].return_armed && !v->perf.sample[i].return_expired &&
+        !v->perf.sample[i].return_reacquired && !v->perf.sample[i].return_hits &&
+        !v->perf.sample[i].return_segmented && !v->perf.sample[i].return_fallbacks);
     CHECK(v->perf.sample_count == 81 && v->perf.sample[0].frames == 35 &&
           v->perf.sample[1].frames == 1 && v->perf.sample[2].frames == 2 &&
           v->perf.sample[3].frames == 3 && records == records_before);

@@ -86,7 +86,8 @@ void dpmi_reload_debug(struct dosvm *v)
     for (unsigned i = 0; i < DPMI_WATCH; i++)
         if (!d->watch[i].used) d->watch[i].addr = 0;
     d->return_slot = DPMI_WATCH;
-    if (d->return_steps && !d->return_step && v->frame_pm && d->depth == d->return_depth && d->clients == d->return_client) {
+    if (!v->return_tracker_tf && d->return_steps && !d->return_step && v->frame_pm &&
+        d->depth == d->return_depth && d->clients == d->return_client) {
         for (unsigned i = DPMI_WATCH; i-- > 0;) if (!d->watch[i].used) {
             d->return_slot = (uint8_t)i;
             d->watch[i].addr = address[i] = d->return_linear;

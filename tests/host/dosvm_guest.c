@@ -13,7 +13,9 @@
  * INT 16h AH=00h; VMVIDEO must stop at stage 1 with flags 3, then each Enter
  * through the 8042 advances one stage until the prompt returns.)
  * GUEST_TCG=1 models QEMU TCG: no data-segment limit checks and TCG's CPUID
- * signature (docs/validation/2026-10-09-f0/README.md, f3-04 deviation).
+ * signature and the production TF tracker selection.
+ * GUEST_TRACKER=tf|breakpoint selects the production VM platform flag for
+ * comparison on the architectural host CPU (including segmented #DB).
  * f3-06: GUEST_BUDGET=<instructions per command> for long workloads, e.g. the
  * base image of a local DOOM fixture (scripts/test/dos_fixtures.py; extract
  * CIUKIGAM.IMG with mcopy): GUEST_BUDGET=9000000000 dosvm_guest base.img
@@ -377,6 +379,7 @@ static unsigned replay_cause(const struct v86_frame *f)
     return pm ? (op == 0xFA || op == 0xFB ? 4 : 13) : 2;
 }
 static uint64_t db_rm, db_flags, db_return, db_other;
+static uint64_t db_return_tf, db_return_breakpoint;
 static uint32_t rstack_low = 0xFFFF;   /* lowest SP seen on the DPMI host real-mode stack */
 static int trace = -1, ring_on = -1;
 #define RING 3000u
@@ -449,6 +452,8 @@ static void to_state(struct gcpu_state *s)
     s->fs = (uint16_t)(pm ? cpu.tf.fs : cpu.fs); s->gs = (uint16_t)(pm ? cpu.tf.gs : cpu.gs);
     s->ldt_limit = DPMI_LDT_ENTRIES * 8 - 1;
     memcpy(s->dr, debug_addr, sizeof(s->dr)); s->dr7 = debug_dr7;
+    if (gv->return_tracker_tf) for (unsigned i = 0; i < DPMI_WATCH; i++)
+        CHECK(gv->dpmi.watch[i].used || !(debug_dr7 & (3u << (i * 2))));
 }
 static void from_state(const struct gcpu_state *s)
 {
@@ -473,7 +478,11 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
         const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
         if (!strcmp(owner, "rm_ss") || !strcmp(owner, "rm_irq")) db_rm++;
         else if (!strcmp(owner, "pm_flags")) db_flags++;
-        else if (!strcmp(owner, "pm_return") || (debug_dr6 & return_debug_bit(&gv->dpmi))) db_return++;
+        else if (!strcmp(owner, "pm_return") || !strcmp(owner, "pm_checkpoint")) {
+            db_return++;
+            if (!strcmp(owner, "pm_checkpoint")) db_return_breakpoint++;
+            else db_return_tf++;
+        }
         else db_other++;
     }
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
@@ -860,10 +869,17 @@ int main(int argc, char **argv)
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     disk_image = fopen(argv[1], "rb"); CHECK(disk_image);
     if (getenv("GUEST_VERBOSE")) g_boot.flags |= CBI_F_VERBOSE;
+    const char *tracker = getenv("GUEST_TRACKER");
+    if (getenv("GUEST_TCG") || (tracker && !strcmp(tracker, "tf"))) g_boot.flags |= CBI_F_SMBIOS_QEMU;
+    if (tracker) {
+        CHECK(!strcmp(tracker, "tf") || !strcmp(tracker, "breakpoint"));
+        if (!strcmp(tracker, "breakpoint")) g_boot.flags &= ~CBI_F_SMBIOS_QEMU;
+    }
     CHECK(fseek(disk_image, 0, SEEK_END) == 0); disk_bytes = (uint64_t)ftell(disk_image);
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
     CHECK(dosvm_create(&config, &gv) == 0);
+    printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
     CHECK(dosvm_boot(gv) == 0);
     cpu = gv->frame;
     int failures = 0;
@@ -966,6 +982,10 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    printf("return causes: tf=%llu breakpoint=%llu armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u\n",
+           (unsigned long long)db_return_tf, (unsigned long long)db_return_breakpoint,
+           gv->perf.return_armed, gv->perf.return_hits, gv->perf.return_expired,
+           gv->perf.return_fallbacks, gv->perf.return_reacquired, gv->perf.return_segmented);
     if (uart_baud) printf("UART timing: baud=%u records=%u ms=%llu\n", uart_baud, uart_records, (unsigned long long)uart_ms);
     printf("guest runner: %s (%llu instructions, %llu traps, %u unexpected)\n", failures || unexpected ? "FAIL" : "PASS",
            (unsigned long long)instructions, (unsigned long long)traps, unexpected);

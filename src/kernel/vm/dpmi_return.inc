@@ -84,6 +84,7 @@ static bool return_arm(struct dosvm *v, struct v86_frame *f, uint16_t cs, uint32
     d->return_origin_cs = (uint16_t)f->tf.cs;
     d->return_eip = ip; d->return_linear = linear;
     dpmi_reload_debug(v);
+    if (d->return_slot < DPMI_WATCH) v->perf.return_armed++;
     if (d->return_slot == DPMI_WATCH && !return_fallback(v, f)) dpmi_return_cancel(v);
     return d->return_steps != 0 || d->return_step;
 }
@@ -96,11 +97,13 @@ static void return_resume(struct dosvm *v, struct v86_frame *f)
         if (d->clients < d->return_client || d->depth < d->return_depth) dpmi_return_cancel(v);
         return;
     }
-    if (!v->frame_pm || !v->monitor.vif ||
+    bool expired = g_ticks - d->return_tick >= 100 || d->return_irqs >= 64;
+    if (expired) v->perf.return_expired++;
+    if (expired || !v->frame_pm || !v->monitor.vif ||
         (f->tf.eflags & ((d->return_step ? 0 : V86_TF) | (1u << 14))) ||
         (uint16_t)f->tf.user_ss != d->return_ss ||
         ((uint16_t)f->tf.cs != d->return_cs && (uint16_t)f->tf.cs != d->return_origin_cs) ||
-        !return_descriptors_live(v) || g_ticks - d->return_tick >= 100 || d->return_irqs >= 64) {
+        !return_descriptors_live(v)) {
         return_unstep(v, f, false);
         dpmi_return_cancel(v);
         return;
@@ -249,7 +252,7 @@ static void return_checkpoint(struct dosvm *v, struct v86_frame *f)
     }
     bool spare = false;
     for (unsigned i = 0; i < DPMI_WATCH; i++) spare |= !d->watch[i].used;
-    if (!spare) {
+    if (v->return_tracker_tf || !spare) {
         if (!return_fallback(v, f)) dpmi_return_cancel(v);
         return;
     }
