@@ -58,6 +58,13 @@ static void entry_error(struct dosvm_key key,int error)
     if (v) v->fullscreen_error=error;
     irq_restore(flags);
 }
+static int entry_windowed(struct dosvm_key key,int reason)
+{
+    klog("[dosvm] fullscreen_refused vm=%u generation=%u error=%d continuation=windowed",
+        key.id,key.generation,reason);
+    entry_error(key,0);
+    return DISPLAY_FULLSCREEN_WINDOWED;
+}
 bool dosvm_fullscreen_active(struct dosvm_key key)
 { return fullscreen_owner && same_key(key,fullscreen_owner->info.key); }
 void dosvm_fullscreen_switch(const struct task *t)
@@ -138,9 +145,10 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if (fullscreen_busy || fullscreen_owner) return -EBUSY;
     if (!v->owner_pid || !v->window_input || !same_key(key,dosvm_focused_key())) return -EACCES;
     uint8_t bios_mode=0;
-    if (dosvm_read(v,0x449,&bios_mode,1)) return -EOPNOTSUPP;
+    if (dosvm_read(v,0x449,&bios_mode,1)) return entry_windowed(key,-EOPNOTSUPP);
     uint16_t mode=v->vbe_mode ? v->vbe_mode : bios_mode;
-    if (v->vbe_mode ? !display_fullscreen_supported(mode) : !cvga_find_mode(mode)) return -EOPNOTSUPP;
+    if (v->vbe_mode ? !display_fullscreen_supported(mode) : !cvga_find_mode(mode))
+        return entry_windowed(key,-EOPNOTSUPP);
     fullscreen_busy=true;
     fullscreen_linear=v->vbe_mode!=0; fullscreen_model_changed=false;
     v->fullscreen_error=0;
@@ -148,6 +156,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     v->fullscreen_hold=true;
     klog("[dosvm] fullscreen_request vm=%u generation=%u mode=%u",key.id,key.generation,mode);
     int e=display_fullscreen_checkpoint("vm-park",0);
+    bool recovery_failed=false;
     if (e) goto resume;
     e=park(v);
     if (e) goto done;
@@ -158,7 +167,10 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if (!fullscreen_linear && !fullscreen_mapping) fullscreen_mapping=vmm_map_mmio(0xA0000,0x20000,true);
     if (!fullscreen_linear && !fullscreen_mapping) { e=-ENOMEM; goto resume; }
     hardware=(struct vga_hardware_bus){fullscreen_mapping,fs_in,fs_out,fs_read,fs_write};
-    if ((e=display_fullscreen_begin(mode))) goto resume;
+    if ((e=display_fullscreen_begin(mode))) {
+        recovery_failed=e<0;
+        goto resume;
+    }
     if ((e=display_fullscreen_checkpoint("vga-load",0))) goto rollback;
     unsigned bad=0;
     if (fullscreen_linear) {
@@ -194,11 +206,16 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     klog("[dosvm] fullscreen=1 vm=%u generation=%u mode=%u",key.id,key.generation,mode);
     goto resume;
 rollback:
-    display_fullscreen_end();
+    {
+        int restored=display_fullscreen_end();
+        recovery_failed=restored!=0;
+        if (restored) e=restored;
+    }
 resume:
     unhold(v);
 done:
     fullscreen_busy=false;
+    if (e && !recovery_failed) return entry_windowed(key,e);
     entry_error(key,e);
     return e;
 }
@@ -310,6 +327,7 @@ void dosvm_fullscreen_poll(void)
         struct dosvm *v=dosvm_lookup(key);
         if (v && same_key(key,dosvm_focused_key())) v->fullscreen_suspended=false;
         int e=dosvm_fullscreen_enter(key);
+        if (e==DISPLAY_FULLSCREEN_WINDOWED) e=0;
         entry_error(key,e);
         if (e) klog("[dosvm] fullscreen_refused vm=%u generation=%u error=%d",key.id,key.generation,e);
     }

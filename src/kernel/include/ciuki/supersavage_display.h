@@ -11,6 +11,8 @@ int supersavage_display_prepare(const struct fb_device *, uint16_t mode);
 /* The caller holds the fbdev mode transaction and has stopped the engine. */
 int supersavage_display_begin(uint16_t mode);
 int supersavage_display_end(void);
+/* Final desktop commit/fallback result, after end has revoked CPU aliases. */
+void supersavage_display_complete(bool recovered);
 /* CPU-only packed writes under the caller's quiesced framebuffer lease. */
 int supersavage_display_write(uint32_t offset, const void *, uint32_t bytes);
 #endif

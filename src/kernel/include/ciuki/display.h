@@ -9,6 +9,9 @@ uint32_t display_change_counter(void);
 void display_frame_complete(uint32_t generation);
 void display_watchdog_poll(void);
 int display_worker_start(void);
+/* Entry refused safely: desktop is still/restored writable. No guest lease.
+ * Negative entry results mean recovery failed; zero grants full screen. */
+#define DISPLAY_FULLSCREEN_WINDOWED 1
 int display_fullscreen_begin(uint16_t mode);
 int display_fullscreen_end(void);
 bool display_fullscreen_supported(uint16_t mode);

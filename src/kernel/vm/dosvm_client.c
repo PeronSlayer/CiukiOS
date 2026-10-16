@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
 #include <ciuki/desktop.h>
+#include <ciuki/display.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
@@ -257,6 +258,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             else {
                 if (c.focused) v->fullscreen_suspended=false;
                 e=c.focused ? dosvm_fullscreen_enter(key) : dosvm_fullscreen_leave(key,false);
+                if (e==DISPLAY_FULLSCREEN_WINDOWED) e=0;
             }
         } else if (op == CIUKI_DOSVM_BACKGROUND) {
             v->fullscreen_pause=c.focused!=0;

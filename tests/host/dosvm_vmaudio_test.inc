@@ -645,9 +645,62 @@ static void test_vm_physical_rate(void)
     puts("DOS VM 44.1 kHz transport: exact resampled OPL reference across periods, fixed virtual pitch/clock, source teardown without cached replay PASS");
 }
 
+/* Busy VM with no VGA traps/window presents: only the physical 1 ms tick
+ * produces DMA, the guest gets an IRQ service opportunity every 2 ms, and
+ * the native refill consumes queued periods on its 2 ms safety deadline. */
+static void test_fullscreen_audio_cadence(void)
+{
+    vq_begin();
+    struct dosvm *v=audio_vm_create();unity(v);dsp_reset(v);
+    vq_time(1200);vq_run(2);
+    v->fullscreen=true;
+    struct vg g={v,0x30000,0,0,0,31,64,true,true};
+    audio_vm_tap_reset(dosvm_key(v));
+    vg_start(&g,22050);
+    uint64_t saved_calibration=g_tsc_per_ms;
+    uint64_t (*saved_clock)(void)=tsc_clock_hook;
+    g_tsc_per_ms=1000000;tsc_clock_hook=vm_cpu_ns;
+    uint64_t audio_before=v->perf.audio_cycles,ticks_before=v->perf.ticks;
+    uint64_t start=g_ticks,clock_start=v->audio.clock,output=0;
+    for (unsigned t=1;t<=180;t++) {
+        ms(1); /* independent of guest VGA traps, IF, or display ownership */
+        if (!(t%2)) {
+            vg_service(&g);
+            while (output+AUDIO_QUANTUM<=(uint64_t)t*48) {
+                vq_mix();output+=AUDIO_QUANTUM;
+            }
+        }
+    }
+    uint64_t service_us=(v->perf.audio_cycles-audio_before)/1000;
+    uint64_t service_ticks=v->perf.ticks-ticks_before;
+    tsc_clock_hook=saved_clock;g_tsc_per_ms=saved_calibration;
+    CHECK(service_ticks==180 && service_us>0);
+    printf("f3-39 host vm_perf_service ticks=%llu audio_us=%llu (thread CPU, not hardware)\n",
+        (unsigned long long)service_ticks,(unsigned long long)service_us);
+    struct dosvm_audio_info info=ainfo(v);
+    struct audio_vm_stats stats=vstats(v);
+    CHECK(g_ticks-start==180 && info.clock==clock_start+180*48);
+    CHECK(g.serviced==32 && stats.log_count==32 && !info.active);
+    /* A block boundary waits for acknowledgement, retaining up to two
+     * ticks of DMA work. This intentional wait is included in max_lag. */
+    CHECK(info.max_lag<=96 && info.max_service<=96 && !info.late && !info.stale_blocks);
+    CHECK(!stats.starved && !stats.late_frames && !stats.skips && !stats.seq_gaps);
+    for (unsigned n=0;n<stats.log_count;n++)
+        CHECK(stats.log[n].first[0]==vg_value(&g,n,0) && stats.log[n].frames==64);
+    printf("f3-39 busy full-screen audio: tick=1ms guest/refill=2ms blocks=%u sb_lag_frames=%u irq_service_frames=%u late=%u starved=%llu PASS\n",
+        stats.log_count,info.max_lag,info.max_service,info.late,(unsigned long long)stats.starved);
+    /* Native refill telemetry is copied, and formatted only by the guest's
+     * existing diagnostic path, never in the timer/refill callbacks. */
+    audio.max_service_us=123;audio.max_service_gap_us=2000;
+    struct audio_vm_diagnostic diagnostic;
+    audio_vm_diagnostic(dosvm_key(v),&diagnostic);
+    CHECK(diagnostic.refill_us==123 && diagnostic.refill_gap_us==2000);
+    v->fullscreen=false;dsp_reset(v);destroy(v,true);vq_end();empty();
+}
+
 static void test_vm_audio(void)
 {
-    test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate(); test_vm_source_budget();
+    test_fullscreen_audio_cadence(); test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate(); test_vm_source_budget();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");
 }

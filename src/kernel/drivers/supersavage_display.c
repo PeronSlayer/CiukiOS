@@ -17,7 +17,9 @@ static void *register_window,*aperture_window;
 static volatile uint8_t *register_mapping,*aperture_mapping;
 static int claims[3]={-1,-1,-1};
 static gen_t generations[3];
-static bool poisoned;
+#define NATIVE_STRIKE_LIMIT 3u
+static unsigned native_strikes;
+static bool session_struck, restore_failed, recovery_confirmed;
 static void *linear_window;
 static volatile uint8_t *linear_mapping;
 static uint32_t linear_phys,linear_bytes,framebuffer_bytes;
@@ -60,11 +62,26 @@ static bool extent(uint32_t start,uint32_t bytes)
     }
     return true;
 }
+static bool claims_retained(void)
+{
+    bool retained=false;
+    for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
+        const struct resource *r=registry_get(claims[i]);
+        /* Released handles may already belong to a new registry generation.
+         * Never release or quarantine that new owner's lease. */
+        if (r && (r->generation!=generations[i] || r->state==RS_RELEASED)) claims[i]=-1;
+        else retained=true;
+    }
+    if (!retained && recovery_confirmed)
+        saved_mode.saved=saved_mode.touched=saved_mode.planes_saved=false;
+    return retained;
+}
 bool supersavage_display_supported(const struct fb_device *f,uint16_t mode)
 {
-    if (poisoned || !supersavage_mode_supported(mode)) return false;
-    if (saved_mode.saved && claims[0]>=0)
+    if (native_strikes>=NATIVE_STRIKE_LIMIT || !supersavage_mode_supported(mode)) return false;
+    if (register_mapping && aperture_mapping)
         return !dos_video_mode(mode) || framebuffer_bytes>=DOS_VBE_BYTES;
+    if (claims_retained() || saved_mode.saved) return false;
     const struct pci_func *candidate=0;
     unsigned displays=0;
     for (unsigned i=0;i<pci_count();i++) {
@@ -84,8 +101,8 @@ bool supersavage_display_supported(const struct fb_device *f,uint16_t mode)
 }
 int supersavage_display_prepare(const struct fb_device *f,uint16_t mode)
 {
-    if (poisoned) return -EIO;
-    if (saved_mode.saved || claims[0]>=0) return -EBUSY;
+    if (native_strikes>=NATIVE_STRIKE_LIMIT) return -EOPNOTSUPP;
+    if (claims_retained() || saved_mode.saved) return -EBUSY;
     if (!supersavage_display_supported(f,mode)) return -EOPNOTSUPP;
     for (unsigned i=0;i<pci_count();i++) {
         const struct pci_func *p=pci_get(i);
@@ -116,15 +133,26 @@ static int release_claims(void)
     int e=0;
     for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
         const struct resource *rsc=registry_get(claims[i]);
+        if (rsc && (rsc->generation!=generations[i] || rsc->state==RS_RELEASED)) {
+            claims[i]=-1; continue;
+        }
         if (!rsc || rsc->state!=RS_ACTIVE) {
-            registry_quarantine(claims[i],generations[i]); e=-EIO; poisoned=true; continue;
+            registry_quarantine(claims[i],generations[i]); e=-EIO; continue;
         }
         int r=registry_quiesce(claims[i],generations[i],native_idle);
         if (!r) r=registry_release(claims[i],generations[i]);
-        if (r) { registry_quarantine(claims[i],generations[i]); e=-EIO; poisoned=true; }
+        if (r) { registry_quarantine(claims[i],generations[i]); e=-EIO; }
         else claims[i]=-1;
     }
     return e;
+}
+static void strike(void)
+{
+    if (session_struck || native_strikes>=NATIVE_STRIKE_LIMIT) return;
+    session_struck=true;
+    const char *stage=saved_mode.bad_stage ? saved_mode.bad_stage : saved_mode.stage;
+    klog("[display] native_supersavage strike=%u stage=%s reg=%x expected=%08x actual=%08x",
+        ++native_strikes,stage ? stage : "entry",saved_mode.bad_reg,saved_mode.expected,saved_mode.actual);
 }
 static void outcome(const char *phase,int e)
 {
@@ -138,7 +166,9 @@ static void outcome(const char *phase,int e)
 }
 int supersavage_display_begin(uint16_t mode)
 {
-    if (!adapter || poisoned || !register_window || !aperture_window) return -EIO;
+    if (native_strikes>=NATIVE_STRIKE_LIMIT) return -EOPNOTSUPP;
+    if (!adapter || !register_window || !aperture_window || claims_retained() || saved_mode.saved) return -EBUSY;
+    session_struck=restore_failed=recovery_confirmed=false;
     int e=display_fullscreen_checkpoint("native-claim",0);
     if (e) return e;
     const enum res_type types[]={RES_PORT,RES_MMIO,RES_MMIO};
@@ -173,6 +203,7 @@ int supersavage_display_begin(uint16_t mode)
         saved_mode.sr[0x54],saved_mode.sr[0x56],saved_mode.sr[0x59],saved_mode.sr[0x5B]);
     if (!e) e=supersavage_mode_enter(&saved_mode,&io,mode);
     outcome("enter",e);
+    if (e) strike(); /* preserve entry diagnostics before restore resets them */
     /* display_fullscreen_end owns rollback, including a partial save. */
     return e;
 failed:
@@ -182,20 +213,32 @@ failed:
 }
 int supersavage_display_end(void)
 {
-    if (poisoned) return -EIO; /* aliases were revoked on the first failure */
+    /* A previous end revoked these aliases, even if proof failed. A failed
+     * claim may also reach rollback without ever mapping the registers. */
+    if (!register_mapping || !aperture_mapping) return release_claims();
     if (linear_mapping) vmm_revoke_mmio((void *)linear_mapping,DOS_VBE_BYTES);
     linear_mapping=0;
     int e=supersavage_mode_restore(&saved_mode,&io);
     outcome("restore",e);
-    if (e) poisoned=true;
+    restore_failed=e!=0;
     /* Even failed readback must relinquish CPU access so the display service
      * can attempt a VBE mode set. Registry failures still quarantine. */
     int released=release_claims();
     return e ? e : released;
 }
+void supersavage_display_complete(bool recovered)
+{
+    /* Only the display service can prove the mediated VBE fallback and
+     * framebuffer commit succeeded. Never retry a stale desktop snapshot. */
+    if (!recovered) return;
+    if (restore_failed) strike();
+    restore_failed=false;
+    recovery_confirmed=true;
+    (void)claims_retained();
+}
 int supersavage_display_write(uint32_t offset,const void *data,uint32_t bytes)
 {
-    if (!linear_mapping || poisoned || offset>linear_bytes || bytes>linear_bytes-offset) return -EIO;
+    if (!linear_mapping || offset>linear_bytes || bytes>linear_bytes-offset) return -EIO;
     const uint8_t *p=data;
     for (unsigned i=0;i<bytes;i++) linear_mapping[offset+i]=p[i];
     return 0;

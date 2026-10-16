@@ -16,6 +16,7 @@ struct card {
     uint64_t us;
     unsigned reads,writes,memcycles,pll_edges,retrace_reads;
     unsigned panel_status_writes;
+    uint8_t cr33_readback;
     bool no_retrace,decorated,freeze_time;
     unsigned drop_cr,drop_sr,drop_mm;
     bool drop_once;
@@ -34,6 +35,7 @@ static uint8_t input(void *arg,uint16_t p)
     unsigned r=c->vga.crtc_index,s=c->vga.seq_index;
     if (p==0x3D5 && r>=25) {
         uint8_t value=c->cr[r];
+        if (r==0x33) value^=c->cr33_readback;
         if (c->decorated && r==0x66) value^=0x44; /* reserved CR66 bits */
         return value;
     }
@@ -260,4 +262,29 @@ static void panel_status(void)
     card.drop_sr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
     puts("PASS f3-36 panel restore: SR58 00->08/80/ff and derived SR59/5A/5B retained without writes/false EIO; lost writable SR54 remains EIO with first-failure stage");
 }
-int main(void) { cycles();presentation();failures();panel_status();puts("SuperSavage native mode host tests: PASS");return 0; }
+static void cr33_reserved(void)
+{
+    const unsigned readback[]={1,0x80,0x81,4,0x85};
+    for (unsigned n=0;n<ARRAY_SIZE(readback);n++) {
+        fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+        card.cr33_readback=readback[n];
+        assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+        assert(!supersavage_mode_restore(&snapshot,&bus) && !snapshot.mask);
+        restored();
+    }
+    const unsigned controls[]={2,8,0x10,0x20,0x40};
+    for (unsigned n=0;n<ARRAY_SIZE(controls);n++) {
+        fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+        assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+        card.cr[0x33]=snapshot.cr[0x33]^controls[n];card.drop_cr=0x33;
+        assert(supersavage_mode_restore(&snapshot,&bus)==-EIO && snapshot.saved &&
+               snapshot.bad_reg==0x33 && snapshot.mask==0x7A &&
+               !strcmp(snapshot.bad_stage,"native-restore-vga"));
+        card.drop_cr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
+    }
+    fixture();assert(!supersavage_mode_save(&snapshot,&bus));card.drop_cr=0x33;
+    assert(supersavage_mode_enter(&snapshot,&bus,0x13)==-EIO && snapshot.bad_reg==0x33 && snapshot.mask==0x7A);
+    card.drop_cr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
+    puts("PASS f3-39 CR33: T23 01/80/81 and reserved 04/85 readback accepted, all five writable bits and lost entry write remain strict EIO");
+}
+int main(void) { cycles();presentation();failures();panel_status();cr33_reserved();puts("SuperSavage native mode host tests: PASS");return 0; }

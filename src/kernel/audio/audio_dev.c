@@ -26,6 +26,7 @@ extern bool audio_vm_playing(void) __attribute__((weak));
 extern bool audio_vm_attached(void) __attribute__((weak));
 extern void audio_vm_published(void) __attribute__((weak));
 extern void serial_buffered(bool) __attribute__((weak));
+extern bool display_fullscreen_active(void) __attribute__((weak));
 
 static uint32_t checksum(const struct audio_cfg *record)
 {
@@ -375,6 +376,19 @@ void audio_service(void)
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
 static bool refill_pending(void *arg) { (void)arg; return audio.pending || audio.error; }
+static void audio_worker_wait(void)
+{
+    struct audio_transport b; audio_backend_snapshot(&b);
+    bool fullscreen=display_fullscreen_active && display_fullscreen_active();
+    unsigned wait_ms=audio.running ? (fullscreen ? 2 : 4) :
+        b.published && b.published<AUDIO_LEAD ? 1 : 50;
+    /* A ready condition returns without sleeping. Under IRQ/refill overlap,
+     * that can demote this P_DEVICE task after 10 accumulated ticks. Retain
+     * pending work and force one real block, without resetting the guard or
+     * promoting a task from outside the scheduler. */
+    if (fullscreen && audio.pending && !audio.error) task_sleep_ms(1);
+    kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
+}
 static void audio_worker(void *arg)
 {
     (void)arg;
@@ -394,9 +408,7 @@ static void audio_worker(void *arg)
          * the stream writers wake `changed`; the deadline is only a safety net:
          * short while the first periods are published, under half a period
          * while running, long when idle. */
-        struct audio_transport b; audio_backend_snapshot(&b);
-        unsigned wait_ms = audio.running ? 4 : b.published && b.published < AUDIO_LEAD ? 1 : 50;
-        kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
+        audio_worker_wait();
     }
 }
 /* One 48-sample sine period: exactly 1 kHz at 48 kHz, with short edge ramps.

@@ -135,3 +135,23 @@ static void test_deferred_service_logs(void)
     slow_playback_log=false; late_cleanup();
     puts("audio service logs: successful stop/refill does no formatting, deferred notices only while stopped PASS");
 }
+
+/* Execute the real worker wait. Its wake predicate is intentionally already
+ * true in the last row, reproducing an IRQ racing a long refill. */
+static void test_fullscreen_refill_wait(void)
+{
+    late_setup();late_start();
+    uint64_t before=g_ticks;
+    audio.pending=false;fullscreen_hook=false;
+    audio_worker_wait();CHECK(g_ticks-before==4);
+    before=g_ticks;fullscreen_hook=true;
+    audio_worker_wait();CHECK(g_ticks-before==2);
+    audio.pending=true;before=g_ticks;
+    audio_worker_wait();CHECK(g_ticks-before==1 && audio.pending);
+    /* The next iteration consumes pending work; an idle full screen retains
+     * the cheap 50 ms wait and ordinary audio keeps its 4 ms policy. */
+    audio.pending=false;audio.running=false;ac97.published=0;before=g_ticks;
+    audio_worker_wait();CHECK(g_ticks-before==50);
+    fullscreen_hook=false;late_cleanup();
+    puts("f3-39 refill wait: running window=4ms full-screen=2ms, pending IRQ forces real 1ms block without lost wake; idle=50ms PASS");
+}

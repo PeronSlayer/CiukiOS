@@ -936,7 +936,10 @@ void dosvm_audio_log(struct dosvm *v)
                 irq_restore(f);
                 klog_diag("[vm-audio] vm=%u sb dma=%u mask=%u mode=%02x disabled=%u addr=%06x count=%u hz=%u fmt=%02x error=%u", id,
                      channel, ch.masked, ch.mode, disabled, address, ch.count, hz, fmt, info.last_error);
-            } else
+            } else if (v->fullscreen)
+                klog_diag("[vm-audio] vm=%u native_refill us=%u gap_us=%u sb_lag_frames=%u irq_service_frames=%u late=%u",
+                     id,d.refill_us,d.refill_gap_us,info.max_lag,info.max_service,info.late);
+            else
                 klog_diag("[vm-audio] vm=%u sb active=%u paused=%u wait=%u units=%u irq=%u edges=%u ack=%u cause=%02x", id,
                      info.active, info.paused, info.waiting, info.units, info.irq, info.irq_edges, info.services, info.causes);
         }

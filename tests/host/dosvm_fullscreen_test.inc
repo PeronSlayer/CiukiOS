@@ -89,19 +89,31 @@ static void test_fullscreen_service(void)
     int10(v,0x0013,0,0,0);
     dosvm_vga_sync(v,true);
     uint32_t saved[32]; for (unsigned i=0;i<32;i++) as_lookup(&v->as,0xA0000+i*4096,&saved[i]);
-    fs_refuse=true; CHECK(dosvm_fullscreen_enter(key)==-EBUSY && !v->fullscreen && !v->fullscreen_hold);
+    fs_refuse=true; CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !v->fullscreen && !v->fullscreen_hold && !v->fullscreen_error);
+    struct ciuki_dosvm_command attempt=command_for(key.id,key.generation);attempt.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&attempt,sizeof(attempt)));
+    attempt=command_for(key.id,key.generation);attempt.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FULLSCREEN,&attempt,sizeof(attempt)) && !v->fullscreen && !v->fullscreen_error);
+    struct ciuki_dosvm_command refused=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&refused,sizeof(refused)) &&
+          !(refused.changed & CIUKI_DOSVM_FULLSCREEN_REFUSED));
     fs_refuse=false;
     fs_test_checkpoint_pin=true;
     fs_fail_checkpoint="vm-park";
     unsigned before=fs_begins;
-    CHECK(dosvm_fullscreen_enter(key)==-EIO && !v->fullscreen && !v->fullscreen_hold && fs_begins==before);
+    CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !v->fullscreen && !v->fullscreen_hold && fs_begins==before);
     fs_fail_checkpoint="guest-grant";
-    CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen && !v->fullscreen_hold);
+    CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !fs_display && !v->fullscreen && !v->fullscreen_hold);
     for (unsigned i=0;i<32;i++) { uint32_t pte;as_lookup(&v->as,0xA0000+i*4096,&pte);CHECK((pte&~0x60u)==(saved[i]&~0x60u)); }
     fs_fail_checkpoint=0;
     fs_stuck_blank=true;
-    CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen && !v->fullscreen_hold);
+    CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !fs_display && !v->fullscreen && !v->fullscreen_hold);
     fs_stuck_blank=false;
+    CHECK(!v->fullscreen_error && !fullscreen_owner && !fs_ports);
+    /* A failure to restore after partial entry must still reach the owner. */
+    fs_fail_checkpoint="guest-grant";fs_end_result=-EIO;
+    CHECK(dosvm_fullscreen_enter(key)==-EIO && v->fullscreen_error==-EIO && !v->fullscreen_hold);
+    fs_fail_checkpoint=0;fs_end_result=0;
     CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && fs_display);
     hardware=card_bus; vga_hardware_load(&v->vga,&hardware);
     for (unsigned i=0;i<32;i++) {
@@ -189,6 +201,7 @@ static void test_fullscreen_service(void)
     fs_test_checkpoint_pin=false;
     g_boot.flags=old_flags; g_boot.test_request_len=old_length; memcpy(g_boot.test_request,old_request,sizeof(old_request));
     puts("PASS full-screen service: refusal/rollback, UC aperture grant/revoke, task-local ports, Alt+Enter/Tab consumed, PS/2/USB mouse path, pause/resume, watchdog and fault cleanup");
+    puts("PASS f3-39 VM refusal: windowed continuation has no owner error/port/PTE grant; actual rollback failure remains EIO");
     puts("PASS f3-26 full-screen: pre-mutation checkpoint failure, rollback before guest grant, VGA register readback, first-write evidence and independent 5 s first-frame timeout");
     puts("PASS f3-36 VM exit: clean and return-or-fault watchdog share revoke -> capture -> restore, one lease return, exact PTE/port cleanup, restore result and failure surfaced");
 }
@@ -409,7 +422,7 @@ static void test_fullscreen_vbe(void)
     vga_hardware_load(&v->vga,&hardware);f=vf(0x4F02,0x4114,0,0);
     CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->fullscreen_hold);
     dosvm_fullscreen_poll();CHECK(!v->fullscreen && !v->fullscreen_hold && v->vbe_mode==0x114);
-    fs_linear_error=-EIO;CHECK(dosvm_fullscreen_enter(key)==-EIO && !fs_display && !v->fullscreen_hold);
+    fs_linear_error=-EIO;CHECK(dosvm_fullscreen_enter(key)==DISPLAY_FULLSCREEN_WINDOWED && !fs_display && !v->fullscreen_hold);
     fs_linear_error=0;
     struct ciuki_dosvm_command close=command_for(key.id,key.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close)));empty();

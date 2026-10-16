@@ -58,6 +58,13 @@ static void test_speed_window(void)
     CHECK(dosvm_task_quantum(&caller, 10) == 10);
     c = command_for(w.id, w.generation); c.focused = 1;
     CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 8 && dosvm_task_focus() == v->task);
+    v->fullscreen=true;v->audio.sb.x.active=true;
+    CHECK(dosvm_task_quantum(v->task,10)==2 && dosvm_task_quantum(v->task,1)==1);
+    v->audio.sb.x.active=false;v->audio.q.event_count=1;
+    CHECK(dosvm_task_quantum(v->task,10)==2);
+    v->audio.q.event_count=0;
+    CHECK(dosvm_task_quantum(v->task,10)==8); /* silent full screen keeps normal share */
+    v->fullscreen=false;
     c = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 4);
     c = command_for(w.id, w.generation); c.presentation.bands[0] = 1;

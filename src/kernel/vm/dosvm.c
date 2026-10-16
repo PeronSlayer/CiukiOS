@@ -473,6 +473,11 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
     struct dosvm *v = owner(t);
     if (!v || !v->owner_pid || !v->window_input) return normal;
     if (idle_recent(v)) return normal < 1u ? normal : 1u;
+    /* Native VGA removes most I/O/page-fault exits. Keep a busy audio guest's
+     * dispatch bounded while the P_DEVICE refill worker and IRQ delivery
+     * share the CPU; the physical timer still owns virtual DMA progress. */
+    if (v->fullscreen && (v->audio.sb.x.active || v->audio.q.event_count))
+        return normal < 2u ? normal : 2u;
     bool focused = input_focus.id == v->info.key.id && input_focus.generation == v->info.key.generation;
     if (focused) return normal < 8u ? normal : 8u;
     return normal < 4u ? normal : 4u;

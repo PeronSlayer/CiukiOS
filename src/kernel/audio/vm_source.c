@@ -726,6 +726,7 @@ void audio_vm_diagnostic(struct dosvm_key key, struct audio_vm_diagnostic *out)
 {
     uint32_t f = irq_save();
     *out = (struct audio_vm_diagnostic){ .rate=audio_output_rate(), .ready=audio.ready,
+        .refill_us=audio.max_service_us, .refill_gap_us=audio.max_service_gap_us,
         .error=audio.error, .fifo=audio.fifo, .halts=audio.halts, .running=audio.running,
         .master={audio.master.left, audio.master.right}, .master_muted=audio.master.mute,
         .master_in_codec=audio.master_in_codec };
