@@ -18,7 +18,7 @@ static uint64_t last_poll;
 static struct { struct task task; void (*fn)(void *); void *arg; uint64_t due; } workers[3];
 static struct kwait *waiting[3];
 static jmp_buf turn_done[3];
-static bool slow_binding;
+static bool slow_binding, quiet_irq;
 static uint32_t irq_save(void) { return 0x200; }
 static void irq_restore(uint32_t f) { (void)f; }
 void klog(const char *fmt,...) { (void)fmt; }
@@ -63,7 +63,8 @@ void usb_step(struct usb_host *h)
     } else {
         assert(h==&hosts[1]);h->busy=true;slow_binding=true;
         for(unsigned i=0;i<500;i++) {
-            if(hosts[0].irq_attached) {
+            /* Two actual completion notifications, no frame heartbeat. */
+            if(hosts[0].irq_attached && !quiet_irq && (i==100 || i==300)) {
                 hosts[0].irq_pending=input_pending=true;
                 for(unsigned n=0;n<3;n++) if(waiting[n]==&hosts[0].changed || waiting[n]==&input_changed)
                     workers[n].due=g_ticks;
@@ -79,15 +80,16 @@ void usb_step(struct usb_host *h)
 int main(void)
 {
     for(unsigned i=0;i<host_count;i++) { hosts[i].ready=true; fs_lock_init(&hosts[i].transfer_lock); }
-    start_services();assert(created==3 && started==3);
-    dispatch(1);
-    assert(scans==2 && polls==500 && gap_max==1 && g_ticks==500);
-    assert(host_turns==2);
-    memset(workers,0,sizeof(workers));memset(waiting,0,sizeof(waiting));
-    created=started=scans=polls=gap_max=host_turns=0;g_ticks=last_poll=0;
-    hosts[0].next_scan=hosts[1].next_scan=0;hosts[0].irq_attached=true;
-    start_services();dispatch(1);
-    assert(scans==2 && polls==500 && gap_max==1 && host_turns==500 && g_ticks==500);
+    for(unsigned mode=0;mode<3;mode++) {
+        memset(workers,0,sizeof(workers));memset(waiting,0,sizeof(waiting));
+        created=started=scans=polls=gap_max=host_turns=0;g_ticks=last_poll=0;
+        hosts[0].next_scan=hosts[1].next_scan=0;hosts[0].irq_attached=mode!=0;
+        quiet_irq=mode==2;
+        start_services();assert(created==3 && started==3);dispatch(1);
+        assert(scans==2 && polls==500 && gap_max==1 && g_ticks==500);
+        assert(host_turns==(mode==1 ? 4u:2u));
+    }
     for(unsigned i=0;i<host_count;i++) fs_lock_destroy(&hosts[i].transfer_lock);
-    puts("USB workers: real tasks, 500 ms bind on host 1; host 0 polling/IRQ, 4/s root scans, 1 ms IRQ and HID cadence PASS");
+    puts("USB workers: real tasks, 500 ms bind on host 1; host 0 has 2 scan turns + 2 completion turns, no heartbeat; 4/s root scans, 1 ms HID fallback PASS");
+    puts("USB workers idle IRQ host: 4 scan + 1000 HID turns/s = 1004 wakes/s, 0 interrupts PASS");
 }

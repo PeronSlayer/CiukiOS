@@ -43,7 +43,8 @@ int irq_chain_add(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { assert(irq==11 && handler && owner);irq_added++;if(!irq_add_error)irq_model_attached=true;return irq_add_error; }
 int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { assert(irq==11 && handler && owner && irq_model_attached);irq_removed++;irq_model_attached=false;return 0; }
-void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++; }
+static void (*wake_hook)(struct kwait *);
+void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++;if(wake_hook)wake_hook(q); }
 static unsigned port_actions,recovery_records,descriptor_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
@@ -665,6 +666,7 @@ static void sleep_ms(void *arg,unsigned ms)
         if(m->frame_ms && before/m->frame_ms==m->now/m->frame_ms)continue;
         if(frame_hook)frame_hook(m);
         if(m->ohci) {
+            m->regs[0x0c/4]|=4; /* SF latches even when its interrupt is disabled. */
             if(!m->ownership_stuck && (m->regs[2]&8)) {m->regs[1]&=~0x100u;m->regs[2]&=~8u;}
             if(!m->reset_stuck)m->regs[2]&=~1u;
             if(!(m->config[1]&4))continue;
@@ -1440,16 +1442,29 @@ static void shared_irq(bool ohci)
     unsigned off=ohci ? 0x0c : 2, width=ohci ? 4 : 2;
     if(!ohci) {
         volatile uint32_t *tail=(volatile uint32_t *)(m.dma+USB_TAIL);
-        assert(tail[0]==1 && tail[1]==(1u<<24));
-        sleep_ms(&m,1);assert(read_reg(&m,off,width)&1); /* idle frame, no transaction */
+        assert(tail[0]==1 && !(tail[1]&((1u<<24)|(1u<<23))));
+    } else {
+        assert(read_reg(&m,0x10,4)==0x80000052u); /* WDH/UE/RHSC/MIE, no SF */
+    }
+    for(unsigned frame=0;frame<1000;frame++) {
+        sleep_ms(&m,1);
+        if(ohci)assert(!(read_reg(&m,off,width)&read_reg(&m,0x10,4)&0x7f));
+        else assert(!(read_reg(&m,off,width)&0x1f));
+        unsigned before=writes;
+        assert(!usb_host_irq(&m.host) && writes==before && !irq_wakes);
     }
     write_reg(&m,off,ohci ? 0x7f : 0x1f,width);
     unsigned w=writes;assert(!usb_host_irq(&m.host) && writes==w && !irq_wakes);
-    if(ohci)m.regs[off/4]|=4;
+    if(ohci)m.regs[off/4]|=2;
     else m.regs[0]|=1u<<16;
     assert(usb_host_irq(&m.host) && m.host.interrupts==1 && m.host.irq_pending && irq_wakes==2);
-    assert(!(read_reg(&m,off,width)&(ohci ? 4u : 1u)));
+    assert(!(read_reg(&m,off,width)&(ohci ? 2u : 1u)));
     assert(!usb_host_irq(&m.host));
+    if(ohci) {
+        m.regs[off/4]|=0x44; /* root change plus unrelated disabled SF */
+        assert(usb_host_irq(&m.host) && m.host.interrupts==2 && irq_wakes==4);
+        assert(read_reg(&m,off,width)==4 && !usb_host_irq(&m.host));
+    }
     /* W1C in IRQ must not hide a fatal cause from the worker. */
     if(ohci)m.regs[off/4]|=0x10;
     else m.regs[0]|=8u<<16;
@@ -1465,7 +1480,7 @@ static void shared_irq(bool ohci)
         assert(!strcmp(m.host.reason,"ready_polling"));
         assert(poll_mode_records==1 && !irq_mode_records);
     }
-    printf("PASS USB %s shared IRQ own-status/W1C, frame notification, deferred fatal, route/claim/attach refusal mode=poll reason=ready_polling\n",ohci ? "OHCI":"UHCI");
+    printf("PASS USB %s shared IRQ own-status/W1C, 1000 idle frames=0 interrupts, completion/root-change notification, deferred fatal, route/claim/attach refusal mode=poll reason=ready_polling\n",ohci ? "OHCI":"UHCI");
 }
 int main(void)
 {

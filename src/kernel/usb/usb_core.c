@@ -37,7 +37,7 @@ bool usb_host_irq(struct usb_host *h)
     bool uhci = h->pci.prog_if == 0;
     unsigned off = uhci ? 2 : 0x0c, width = uhci ? 2 : 4;
     unsigned status = h->io.read(h->io.cookie, off, width);
-    unsigned causes = status & (uhci ? 0x1fu : 0x16u);
+    unsigned causes = status & (uhci ? 0x1fu : 0x52u); /* OHCI WDH/UE/RHSC, never SOF */
     if (!causes) return false;
     if (status == (uhci ? 0xffffu : UINT32_MAX) || (causes & (uhci ? 0x18u : 0x10u))) {
         h->irq_status |= status == (uhci ? 0xffffu : UINT32_MAX) ? 0x10 :
@@ -373,7 +373,8 @@ int usb_attach(struct usb_host *h, const struct pci_func *p, const struct usb_io
                     usb_host_quarantine(h, "irq_gate_failed"); return -USB_EIO;
                 }
             }
-            usb_write(h, uhci ? 4 : 0x10, uhci ? 0x0d : 0x80000016u, uhci ? 2 : 4);
+            /* Completion/error/root changes only; no per-frame heartbeat. */
+            usb_write(h, uhci ? 4 : 0x10, uhci ? 0x0d : 0x80000052u, uhci ? 2 : 4);
         } else irq_hosts[i] = 0;
         break;
     }

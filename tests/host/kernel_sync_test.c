@@ -23,6 +23,7 @@ static uint32_t flags = 0x200;
 static void (*on_restore)(void);
 static unsigned writes, masks, unmasks, eois, starts, schedules, yields, creates;
 static bool masked[16];
+static bool eoi_pending;
 static irq_handler_t handlers[16];
 static char last_log[256];
 static unsigned budget_reports;
@@ -107,7 +108,7 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
 }
 
 void pic_mask(unsigned irq) { CHECK(irq < 16); masked[irq] = true; masks++; writes++; }
-void pic_unmask(unsigned irq) { CHECK(irq < 16); masked[irq] = false; unmasks++; writes++; }
+void pic_unmask(unsigned irq) { CHECK(irq < 16 && !eoi_pending); masked[irq] = false; unmasks++; writes++; }
 void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[irq] = h; }
 
 #define P2V(p) ((void *)(uintptr_t)(p))
@@ -529,13 +530,13 @@ static unsigned calls_a, calls_b;
 static bool source_a, source_b;
 static bool irq_a(unsigned irq, const char *owner)
 {
-    CHECK(masked[irq] && strcmp(owner, "irq-a") == 0);
+    CHECK((!(flags & 0x200) || masked[irq]) && strcmp(owner, "irq-a") == 0);
     calls_a++;
     return source_a;
 }
 static bool irq_b(unsigned irq, const char *owner)
 {
-    CHECK(masked[irq] && strcmp(owner, "irq-b") == 0);
+    CHECK((!(flags & 0x200) || masked[irq]) && strcmp(owner, "irq-b") == 0);
     calls_b++;
     return source_b;
 }
@@ -545,9 +546,11 @@ static void fake_irq(unsigned irq)
     CHECK(handlers[irq] && !masked[irq]);
     struct trap_frame tf = { .vector = 0x20 + irq };
     flags = 0;
+    eoi_pending = true;
     handlers[irq](&tf);
-    CHECK(masked[irq]);                  /* no unmask before dispatcher EOI */
+    CHECK(masked[irq] == (chains[irq].stats.deferred || chains[irq].stats.quarantined));
     eois++;
+    eoi_pending = false;
     flags = 0x200;
 }
 
@@ -563,7 +566,7 @@ static bool assert_during_handler;
 static bool three_devices(unsigned irq, const char *owner)
 {
     unsigned i = (unsigned)(owner[0] - '0');
-    CHECK(i < 3 && masked[irq]);
+    CHECK(i < 3 && (!(flags & 0x200) || masked[irq]));
     shared_calls[i]++;
     unsigned status = shared_status[i];
     if (status) { shared_acks[i] |= status; shared_status[i] &= ~status; }
@@ -589,7 +592,7 @@ static void test_three_shared_devices(void)
     fake_irq(7); drain_work();
     CHECK(!shared_status[0] && shared_acks[0] == 9 && eois == before + 5);
     for (unsigned i = 0; i < 3; i++) CHECK(shared_calls[i] == 5);
-    /* Failed device has stopped its source; detach during pending rearm. */
+    /* Failed device has stopped its source; detach after a normal pass. */
     fake_irq(7);
     CHECK(!irq_chain_remove(7, three_devices, owners[1]));
     release_active(handles[1]);
@@ -621,10 +624,15 @@ static void test_irq_chain(void)
     CHECK(irq_chain_add(11, irq_b, "irq-b") == 0);
     CHECK(irq_chain_add(11, irq_a, "irq-a") == -EINVAL);
     source_a = source_b = true;
+    w = writes;
+    struct kwork_stats work_before, work_after;
+    kwork_snapshot(&work_before);
     fake_irq(11);
-    CHECK(calls_a == 1 && calls_b == 1 && eois == 1);
+    kwork_snapshot(&work_after);
+    CHECK(calls_a == 1 && calls_b == 1 && eois == 1 && writes == w && !masked[11]);
+    CHECK(!chains[11].stats.deferred && work_after.queued == work_before.queued);
     drain_work();
-    CHECK(!masked[11]);
+    CHECK(!masked[11] && writes == w);
     source_a = false;
     fake_irq(11);
     CHECK(calls_a == 2 && calls_b == 2);
@@ -634,13 +642,14 @@ static void test_irq_chain(void)
     drain_work();
     fake_irq(11);                         /* quiescing owner can still drain */
     CHECK(calls_a == 3 && calls_b == 3);
-    CHECK(irq_chain_remove(11, irq_a, "irq-a") == 0); /* pending rearm */
+    CHECK(irq_chain_remove(11, irq_a, "irq-a") == 0);
     CHECK(registry_release(a, ag) == 0);
     drain_work();
     fake_irq(11);
     drain_work();
     CHECK(calls_a == 3 && calls_b == 4 && !masked[11]);
     source_b = false;
+    unsigned mask_before = masks, unmask_before = unmasks;
     struct irq_chain_stats s;
     for (unsigned i = 0; i < IRQ_CHAIN_STUCK_PASSES; i++) {
         fake_irq(11);
@@ -648,6 +657,7 @@ static void test_irq_chain(void)
         CHECK(irq_chain_snapshot(11, &s));
         CHECK(s.consecutive_unclaimed == i + 1);
         CHECK(s.quarantined == (i + 1 == IRQ_CHAIN_STUCK_PASSES));
+        CHECK(masks == mask_before + (s.quarantined ? 1u : 0u) && unmasks == unmask_before);
     }
     CHECK(masked[11] && s.quarantines == 1 && s.participants == 1);
     CHECK(s.handled == 4 && s.unclaimed == 1000 && s.passes == 1004);
@@ -664,12 +674,17 @@ static void test_irq_chain(void)
     CHECK(irq_chain_add(10, irq_b, "irq-b") == 0);
     source_a = source_b = true;
     unsigned nb = calls_b;
+    mask_before = masks; unmask_before = unmasks;
     g_tsc_per_ms = 1;
     fake_irq(10);
-    CHECK(calls_b == nb && masked[10]);
+    CHECK(calls_b == nb && masked[10] && masks == mask_before + 1 && unmasks == unmask_before);
+    /* Even an already latched dispatch while deferred must not mask twice. */
+    struct trap_frame pending = { .vector = 0x20 + 10 };
+    flags = 0; handlers[10](&pending); flags = 0x200;
+    CHECK(masks == mask_before + 1);
     g_tsc_per_ms = 1ull << 40;
     drain_work();
-    CHECK(calls_b == nb + 1 && !masked[10]);
+    CHECK(calls_b == nb + 1 && !masked[10] && masks == mask_before + 1 && unmasks == unmask_before + 1);
     CHECK(irq_chain_snapshot(10, &s) && s.budget_violations == 1);
     g_tsc_per_ms = 1;
     fake_irq(10);
@@ -688,24 +703,36 @@ static void test_irq_chain(void)
     b = irq_claim(5, "irq-b");
     CHECK(irq_chain_add(5, irq_a, "irq-a") == 0);
     CHECK(irq_chain_add(5, irq_b, "irq-b") == 0);
+    mask_before = masks; unmask_before = unmasks;
+    g_tsc_per_ms = 1;
     fake_irq(5);
+    g_tsc_per_ms = 1ull << 40;
+    CHECK(chains[5].stats.deferred && masks == mask_before + 1);
     CHECK(registry_quiesce(a, registry_get((unsigned)a)->generation, idle_bad) == -EFAULT);
     drain_work();
     CHECK(irq_chain_snapshot(5, &s) && s.quarantined && masked[5]);
     CHECK(registry_get((unsigned)a)->state == RS_QUARANTINED);
     CHECK(registry_get((unsigned)b)->state == RS_QUARANTINED);
+    CHECK(masks == mask_before + 1 && unmasks == unmask_before);
 
     /* No continuation slot: line and claims must remain quarantined. */
     a = irq_claim(9, "irq-a");
     CHECK(irq_chain_add(9, irq_a, "irq-a") == 0);
     for (unsigned i = 0; i < KWORK_CAPACITY; i++)
         CHECK(kwork_queue(tick_work, 0));
+    mask_before = masks; unmask_before = unmasks;
+    /* A complete claiming pass needs no continuation slot, even when full. */
     fake_irq(9);
+    CHECK(irq_chain_snapshot(9, &s) && !s.quarantined && !s.deferred && !masked[9]);
+    CHECK(masks == mask_before && unmasks == unmask_before);
+    g_tsc_per_ms = 1;
+    fake_irq(9);
+    g_tsc_per_ms = 1ull << 40;
     CHECK(irq_chain_snapshot(9, &s) && s.quarantined && masked[9]);
     drain_work();
     CHECK(masked[9] && registry_get((unsigned)a)->state == RS_QUARANTINED);
-    CHECK(masks >= eois && unmasks >= 1003);
-    printf("kernel services IRQ: PASS (two owners, removal, 1000 passes, EOI, budget/overflow)\n");
+    CHECK(masks == mask_before + 1 && unmasks == unmask_before);
+    printf("kernel services IRQ: PASS (claiming pass=0 mask writes/0 queued work; deferral=1 mask/1 unmask; 1000 unclaimed passes=1 quarantine mask; EOI, removal, budget/overflow)\n");
 }
 
 static void test_stackprot(void)

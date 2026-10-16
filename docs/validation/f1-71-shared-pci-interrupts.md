@@ -122,3 +122,73 @@ FPU/SIMD audit: 5,252,248 bytes, SHA-256
 Verbatim results and logs are in the “Review fixes” section of
 `build/codex/f1-71-report.md`. No QEMU, image build, diary or Git mutation
 was performed; canonical-image and hardware qualification remain with the lead.
+
+## F1-72: completion interrupts and PIC mask writes
+
+Research repeated before implementation, 2026-10-16. The preceding F1-71
+results remain historical evidence; this amendment supersedes its heartbeat
+and per-pass mask/rearm choices.
+
+- [QEMU v9.2 UHCI](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-uhci.c),
+  `uhci_handle_td()` and `uhci_complete_td()`, and
+  [ICH3-M §5.16.6.1](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+  confirm that an inactive IOC TD raises an interrupt whenever encountered.
+  Clear IOC on the pinned tail; retain it on actual transfer TDs.
+- [Linux v6.12 OHCI register definitions](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/ohci.h)
+  and [QEMU v9.2 OHCI](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-ohci.c)
+  distinguish SF (bit 2) from WDH/UE/RHSC (bits 1/4/6). Enable only the
+  latter and MIE; ignore latched disabled SF during peer dispatch.
+- [PCI 3.0 §2.2.6](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf)
+  requires level-sensitive INTx to remain asserted until its request is
+  cleared. [ICH3-M §§5.7.4.6–9](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+  describe ELCR and removing a level request before EOI. The existing
+  trap dispatcher owns EOI with IF clear: successful bounded chains need
+  no PIC mask transaction. Deferred/quarantined chains mask before EOI;
+  only a completed healthy deferral unmasks once, in the worker.
+
+Repository comparison: `uhci.c` installed the inactive IOC tail,
+`usb_core.c` enabled OHCI SF and acknowledged it as an owned cause, and
+`registry.c` masked/queued/unmasked every pass. The read-only supplied
+`zz-usb/7fd10c05/serial.log` (image 79df4293) confirms IRQ admission and
+cumulative PIC writes 4133, 6271, 8454 and 10550. Their two-second deltas
+are 2138, 2183 and 2096 writes. At cycle 28 it records handles=19/20 and
+`desktop_contract` failure. A heartbeat race is a hypothesis, not a proved
+cause of that separate handle observation. Keep scan/deadline/retirement
+rules and qualified IRQ/refusal polling gates; measure completion wake and
+idle fallback separately in host fixtures. QEMU write limits and hardware
+qualification remain with the lead.
+
+### F1-72 host outcome
+
+The focused USB, storage and registry host suites pass. The full kernel
+host script also passes (exit 0), including the dependent production shadow
+registry probe, audio, NICs, storage power cuts and all new completion cases.
+Commands run sequentially with `nice -n 19` and ASan/UBSan; full logs and
+verbatim results are in `build/codex/f1-72-report.md`.
+
+With real production HID/TD/IRQ code and independently phased PIT/HC events,
+both UHCI and OHCI measure 0 µs completion-to-first-service with delivered
+IRQ and 500 µs with a lost IRQ or unqualified polling. Each idle HID replay
+records 1000 wakes/s and zero interrupts; the separate worker orchestration
+replay records 4 host scans plus 1000 HID turns = 1004 idle wakes/s and zero
+interrupts. Immediate scheduler dispatch is modeled; these are not measured
+hardware scheduling bounds. Input delivery retains two-frame retirement.
+
+Claiming chain passes perform zero mask writes and queue no continuation,
+including with a full work ring. A healthy deferred pass masks once and
+unmasks once after modeled EOI. Quarantine during deferral and continuation
+overflow mask only once and never rearm; the 1000-unclaimed-pass threshold,
+shared peer removal, late assertions and spurious counters remain covered.
+The shared dispatcher header and the embedded `registry_probe.c` fixture
+are updated to the same EOI/mask contract; no live IRQ fixture is unmasked.
+
+`tests/suites/f1-usb.json` and `scripts/test/run.py` remain unchanged.
+Qualified cases still require `mode=irq reason=ready_irq`; host admission
+refusals still require `mode=poll reason=ready_polling`. No QEMU/image build
+or hardware result is claimed. The lead must measure the directive's idle
+and moving-mouse PIC-write limits on its canonical image.
+
+The kernel-only build also passes: link has no undefined symbols and the
+FPU/SIMD audit passes. `build/f0/VMM.ELF` is 5,439,432 bytes, SHA-256
+`e92604a63a267a260473dab8b9a19ab3f013cb001f27b661c332f4a764b9030a`.
+This artifact is host build evidence, not an OS image or a QEMU result.

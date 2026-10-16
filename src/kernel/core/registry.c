@@ -344,10 +344,10 @@ __attribute__((no_stack_protector)) void registry_init(void)
     klog("[registry] %u reservations, %u PCI functions (read-only)", nres, npci);
 }
 
-/* Shared INTx flow follows the mask/service/EOI/unmask separation in
- * https://www.kernel.org/doc/html/v6.12/core-api/genericirq.html.
- * Existing trap.c owns EOI; a worker continuation supplies the post-EOI
- * unmask without modifying the F0 dispatcher or issuing a second EOI. */
+/* PCI 3.0 2.2.6 / ICH3-M 5.7.4.7-9: each level INTx member clears its
+ * device-local source before trap.c's single EOI, with IF clear. A bounded
+ * pass needs no PIC mask write. Only deferral/quarantine masks before EOI;
+ * a healthy worker continuation unmasks once afterwards (usb-contract.md). */
 struct irq_member {
     irq_chain_handler_t handler;
     const char *owner;
@@ -358,7 +358,7 @@ static struct irq_chain {
     struct irq_member members[IRQ_CHAIN_MAX];
     struct irq_chain_stats stats;
     unsigned next;
-    bool servicing, claimed, report;
+    bool servicing, claimed, report, masked;
     char budget_owner[32];
 } chains[16];
 
@@ -379,10 +379,19 @@ static bool same_owner(const char *a, const char *b)
     return a && b && strncmp(a, b, strlen(a) + 1) == 0;
 }
 
+static void chain_mask(unsigned irq)
+{
+    struct irq_chain *c = &chains[irq];
+    if (!c->masked) {
+        pic_mask(irq);
+        c->masked = true;
+    }
+}
+
 static void chain_quarantine(unsigned irq)
 {
     struct irq_chain *c = &chains[irq];
-    pic_mask(irq);
+    chain_mask(irq);
     if (c->stats.quarantined)
         return;
     c->stats.quarantined = true;
@@ -475,8 +484,10 @@ static void chain_resume(void *arg)
     }
     uint32_t f = irq_save();
     c->stats.deferred = false;
-    if (!c->stats.quarantined && c->stats.participants)
+    if (!c->stats.quarantined && c->stats.participants && c->masked) {
         pic_unmask(irq);
+        c->masked = false;
+    }
     irq_restore(f);
 }
 
@@ -484,7 +495,6 @@ static void chain_irq(struct trap_frame *tf)
 {
     unsigned irq = tf->vector - 0x20;
     struct irq_chain *c = &chains[irq];
-    pic_mask(irq);
     if (c->stats.quarantined || c->stats.deferred)
         return;
     c->stats.passes++;
@@ -493,6 +503,9 @@ static void chain_irq(struct trap_frame *tf)
     chain_service(irq, true);
     if (c->next == IRQ_CHAIN_MAX)
         chain_finish(irq);
+    if (c->next == IRQ_CHAIN_MAX && !c->stats.quarantined && !c->budget_owner[0])
+        return;                         /* source acknowledged; dispatcher EOI suffices */
+    chain_mask(irq);                     /* defer remaining work/logging past EOI */
     c->stats.deferred = true;
     if (!kwork_queue(chain_resume, (void *)(uintptr_t)irq)) {
         c->stats.deferred = false;
@@ -538,8 +551,10 @@ int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner)
         break;
     }
     irq_set_handler(irq, chain_irq);
-    if (!c->stats.deferred)
+    if (!c->stats.deferred && c->stats.participants == 1) {
         pic_unmask(irq);
+        c->masked = false;
+    }
     irq_restore(f);
     return 0;
 }
@@ -560,7 +575,7 @@ int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owne
             continue;
         memset(m, 0, sizeof(*m));
         if (!--c->stats.participants)
-            pic_mask(irq);
+            chain_mask(irq);
         irq_restore(f);
         return 0;
     }
