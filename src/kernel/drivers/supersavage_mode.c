@@ -7,8 +7,9 @@
 
 struct reg8 { uint8_t index, mask; };
 /* X.Org SavageSave, plus the bank/stride overflow and active-output state
- * changed by VGA takeover. Masks with reserved bits follow RE046-B; mobile
- * panel values have no equivalent Savage4 layout and compare saved bytes. */
+ * changed by VGA takeover. Masks with reserved bits follow RE046-B;
+ * unspecified mobile-specific fields compare saved bytes. Derived panel
+ * status is excluded explicitly below. */
 static const struct reg8 cr_regs[] = {
     {0x31,0x4F},{0x32,0x50},{0x33,0xFF},{0x34,0xFF},{0x36,0xFF},
     {0x3A,0xBB},{0x3B,0xFF},{0x3C,0xFF},{0x40,0xFF},{0x42,0x20},
@@ -23,7 +24,9 @@ static const struct reg8 sr_regs[] = {
     {0x12,0xFF},{0x13,0xFF},{0x15,0xDF},{0x18,0xFF},{0x1B,0x98},
     {0x29,0x1C},{0x30,0xFF},{0x39,0xFF},
     {0x54,0xFF},{0x55,0xFF},{0x56,0xFF},{0x57,0xFF},
-    {0x58,0xFF},{0x59,0xFF},{0x5A,0xFF},{0x5B,0xFF},
+    /* RE046-B pp.58-60: computed panel border/expansion status, not
+     * writable controls. X.Org's panel write loop does not verify these. */
+    {0x58,0},{0x59,0},{0x5A,0},{0x5B,0x01},
     {0x61,0xFF},{0x66,0xFF},{0x69,0xFF},{0x6E,0xFF}
 };
 /* Every dword in 8180..821c is named by savage_streams.h for the NEW
@@ -44,7 +47,10 @@ static int step(struct supersavage_mode *s, const struct supersavage_mode_io *b,
 static int compare(struct supersavage_mode *s, unsigned reg, uint32_t want, uint32_t got, uint32_t mask)
 {
     if (!((want^got)&mask)) return 0;
-    if (!s->mask) { s->bad_reg=reg; s->expected=want; s->actual=got; s->mask=mask; }
+    if (!s->mask) {
+        s->bad_stage=s->stage;
+        s->bad_reg=reg; s->expected=want; s->actual=got; s->mask=mask;
+    }
     return -EIO;
 }
 static int cw(struct supersavage_mode *s, const struct supersavage_mode_io *b,
@@ -277,18 +283,18 @@ int supersavage_mode_restore(struct supersavage_mode *s, const struct supersavag
         cr(b,0x40,s->cr[0x40]); locks(s,b); s->saved=false; return 0;
     }
     uint64_t began=b->now_us(b->vga.arg);
-    s->mask=0;
+    s->mask=0; s->bad_stage=0;
     (void)step(s,b,"native-restore-blank");
     unlock(b); sr(b,1,rd(b,0x3C4,1)|0x20);
     int e=cw(s,b,0x40,rd(b,0x3D4,0x40)|1,1);
-    if (e) { locks(s,b); return e; }
+    if (e) goto done;
     e=b->delay_us(b->vga.arg,100);
     /* A failed retrace/readback must not skip the remaining recovery. */
     e|=streams_off(s,b);
     (void)step(s,b,"native-restore-panel-clock");
     for (unsigned i=0;i<ARRAY_SIZE(sr_regs);i++) {
         unsigned r=sr_regs[i].index;
-        if (r==0x15) continue;
+        if (r==0x15 || !sr_regs[i].mask) continue;
         e|=sw(s,b,r,s->sr[r],sr_regs[i].mask);
     }
     e|=pll(s,b,s->sr[0x12],s->sr[0x13],s->sr[0x29],s->sr[0x15]);
@@ -322,6 +328,7 @@ int supersavage_mode_restore(struct supersavage_mode *s, const struct supersavag
     vga_hardware_unblank(&s->vga,&b->vga);
     unsigned bad=vga_hardware_verify(&s->vga,&b->vga);
     if (bad) { e=-EIO; compare(s,0x200,0,bad,255); }
+done:
     locks(s,b);
     s->restore_us=b->now_us(b->vga.arg)-began;
     if (!e) s->saved=s->touched=s->planes_saved=false;

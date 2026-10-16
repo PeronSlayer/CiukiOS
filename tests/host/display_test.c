@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <stdarg.h>
 #include <ciuki/kernel.h>
 #include <ciuki/display.h>
 #include <ciuki/registry.h>
@@ -38,10 +39,12 @@ int blackbox_checkpoint(void) { blackbox_syncs++; return blackbox_error; }
 static bool native_supported;
 static int native_begin_error,native_end_error;
 static unsigned native_prepares,native_begins,native_ends;
+static char native_results[256],return_timing[256],frame_timing[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window, check_boot;
+static bool fail_framebuffer_claim;
 static uint8_t *aperture, *window;
 static uint32_t window_size;
 static uint16_t called[16];
@@ -70,6 +73,7 @@ int biosvm_video_prepare(void) { return prepare_failure ? -EPERM : 0; }
 int biosvm_video_switch(uint16_t id, uint8_t m[256])
 {
     assert(!accel_ports_owned);
+    if (is_supersavage) assert(native_ends==1 && suspended);
     event(4); assert(!fbdev_get()->present && !fbdev_get()->mapped);
     assert(resources[fbdev_get()->handle].state == RS_QUIESCING || resources[fbdev_get()->handle].state == RS_RELEASED);
     assert(switches < 16); called[switches++] = id;
@@ -78,7 +82,12 @@ int biosvm_video_switch(uint16_t id, uint8_t m[256])
     if (bad_info) { bad_info = false; wr32(m + 40, 0x100000); }
     return 0;
 }
-void klog(const char *fmt, ...) { (void)fmt; }
+void klog(const char *fmt, ...) {
+    char *out=strstr(fmt,"native_result=") ? native_results :
+        strstr(fmt,"lease_return_ms=") ? return_timing :
+        strstr(fmt,"desktop_frame_ms=") ? frame_timing : NULL;
+    if (out) { va_list ap;va_start(ap,fmt);vsnprintf(out,256,fmt,ap);va_end(ap); }
+}
 void klog_periodic(const char *fmt, ...) __attribute__((alias("klog")));
 void kmutex_init(struct kmutex *m) { m->owner = 0; }
 void kmutex_lock(struct kmutex *m) { assert(!m->owner); m->owner = &timer; }
@@ -96,6 +105,7 @@ int registry_quiesce(int h, gen_t g, registry_idle_proof_fn proof) {
 int registry_release(int h, uint32_t g) { assert(registry_valid(h, g) && resources[h].state == RS_QUIESCING); event(5); resources[h].state = RS_RELEASED; return 0; }
 int registry_claim(enum res_type type, uint32_t start, uint32_t end, const char *owner_name, bool share) {
     assert(!share && resource_count < 16); event(6);
+    if (fail_framebuffer_claim) { fail_framebuffer_claim=false;return -ENOMEM; }
     for (unsigned i = 0; i < resource_count; i++)
         assert(resources[i].state == RS_RELEASED || resources[i].end <= start || resources[i].start >= end);
     int h = (int)resource_count++;
@@ -165,6 +175,7 @@ static void fixture(void)
     native_supported=false;native_begin_error=native_end_error=0;
     fullscreen_return_timed=false;fullscreen_return_tick=0;
     native_prepares=native_begins=native_ends=blackbox_syncs=0;blackbox_error=0;
+    native_results[0]=return_timing[0]=frame_timing[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
@@ -173,6 +184,7 @@ static void fixture(void)
     resource_count = generation = 1; sequence_count = switches = copies = frames = 0;
     g_ticks = 100; current = &desktop; owner = true;
     prepare_failure = busy = fail_firmware = fail_restore = bad_info = fail_window = false;
+    fail_framebuffer_claim=false;
     g_boot = (struct ciuki_boot_info){.version = 2, .flags = CBI_F_VBE_CTRL_VALID, .vbe_mode = 0x118,
         .fb_phys = 0xE0000000, .fb_width = 1024, .fb_height = 768, .fb_bpp = 32, .fb_pitch = 4112,
         .fb_red_size = 8, .fb_red_pos = 16, .fb_green_size = 8, .fb_green_pos = 8, .fb_blue_size = 8, .fb_rsvd_size = 8,
@@ -276,8 +288,7 @@ static void fullscreen_tests(void)
     assert(!switches && accel_stops==1 && !fbdev_get()->present);
     display_fullscreen_return_request();
     g_ticks+=10;display_fullscreen_return_request();assert(fullscreen_return_tick==100);
-    /* A quarantined/unavailable BIOS and a failed persistence operation do
-     * not prevent native recovery, nor authorize the firmware fallback. */
+    /* A disabled BIOS and failed persistence do not prevent native success. */
     log_sync_error=-EIO;
     assert(!display_fullscreen_end() && !suspended && fbdev_get()->present && native_ends==1 && !switches);
     const unsigned native_sequence[]={0,1,2,3,11,12,5,6,7,8};
@@ -287,8 +298,38 @@ static void fullscreen_tests(void)
     assert(display_fullscreen_begin(3)==-EOPNOTSUPP && !suspended && fbdev_get()->present && native_ends==1 && !switches);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x101)); native_end_error=-EIO;
-    assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped && !switches);
-    puts("PASS f3-32 display: native provider after accelerator stop, no BIOS preparation/calls/recovery, exact saved layout remap, unsupported rollback, failed restore leaves LFB revoked, black box checkpoint refusal");
+    display_fullscreen_return_request();g_ticks+=1180;
+    assert(!display_fullscreen_end() && fbdev_get()->present && fbdev_get()->mapped && switches==1);
+    assert(!suspended && !fullscreen_display && !changing && !switching && awaiting_frame);
+    assert(strstr(native_results,"native_result=-5 fallback_attempted=1 fallback_result=0 result=0"));
+    assert(strstr(return_timing,"lease_return_ms=1180 budget_ms=4000 overrun=0 result=0"));
+    uint32_t rgb=0x00123456;
+    struct fb_surface frame={&rgb,1,1,4,4};struct fb_rect rect={0,0,1,1};
+    assert(!fbdev_present(&frame,&rect) && fbdev_get()->mapped[0]==0x56 && fbdev_get()->mapped[2]==0x12);
+    display_frame_complete(fbdev_get()->generation);
+    assert(!awaiting_frame && strstr(frame_timing,"budget_ms=4000 overrun=0"));
+    g_ticks+=10000;display_watchdog_poll();assert(switches==1);
+    fixture();is_supersavage=native_supported=true;
+    assert(!display_fullscreen_begin(0x13));native_end_error=-EIO;fail_restore=true;
+    assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && !fbdev_get()->mapped && switches==1);
+    assert(!suspended && !fullscreen_display && !awaiting_frame);
+    assert(strstr(native_results,"native_result=-5 fallback_attempted=1 fallback_result=-5 result=-5"));
+    g_ticks+=10000;display_watchdog_poll();assert(switches==1);
+    fixture();is_supersavage=native_supported=true;
+    assert(!display_fullscreen_begin(0x13));native_end_error=-EIO;bad_info=true;
+    assert(display_fullscreen_end()==-EIO && !fbdev_get()->present && switches==1 && !suspended);
+    fixture();is_supersavage=native_supported=true;native_begin_error=-EIO;native_end_error=-EIO;
+    assert(display_fullscreen_begin(0x13)==-EIO && fbdev_get()->present && !suspended && switches==1);
+    fixture();is_supersavage=native_supported=true;
+    assert(!display_fullscreen_begin(0x13));display_fullscreen_return_request();g_ticks+=1180;
+    assert(!display_fullscreen_end() && strstr(return_timing,"budget_ms=2000 overrun=0 result=0"));
+    g_ticks+=821;display_frame_complete(fbdev_get()->generation);
+    assert(strstr(frame_timing,"desktop_frame_ms=2001 budget_ms=2000 overrun=1") && !awaiting_frame);
+    fixture();is_supersavage=native_supported=true;
+    assert(!display_fullscreen_begin(0x13));fail_framebuffer_claim=true;
+    assert(!display_fullscreen_end() && fbdev_get()->present && switches==1 && !suspended);
+    assert(strstr(native_results,"native_result=0 fallback_attempted=1 fallback_result=0 result=0"));
+    puts("PASS f3-36 display: native failure -> bounded mediated VBE fallback, both results logged, lease/remap/presents/frame resume, invalid/failed fallback stays unavailable without retry, entry rollback, measured return/frame budgets");
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_fullscreen_begin(0x13) && suspended && display_fullscreen_active());
     assert(!fbdev_get()->present && !fbdev_get()->mapped && accel_stops==1);

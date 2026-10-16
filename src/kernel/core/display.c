@@ -17,6 +17,11 @@ static bool fullscreen_native;
 static bool awaiting_native_frame;
 static bool fullscreen_return_timed;
 static uint64_t fullscreen_return_tick;
+/* T23 a79f840c: 156307 us registers, 1180 ms complete return with durable
+ * checkpoints/capture. See the f3-36 amendment; recovery must never abort. */
+#define NATIVE_RETURN_MS 2000u
+#define NATIVE_RECOVERY_MS 4000u
+static unsigned fullscreen_return_budget;
 extern void dosvm_fullscreen_poll(void) __attribute__((weak));
 static uint32_t changes;
 static uint64_t frame_deadline;
@@ -220,7 +225,9 @@ void display_frame_complete(uint32_t generation)
 {
     if (!switching && awaiting_frame && generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
         if (awaiting_native_frame && fullscreen_return_timed)
-            klog("[display] native_supersavage desktop_frame_ms=%llu budget_ms=200",g_ticks-fullscreen_return_tick);
+            klog("[display] native_supersavage desktop_frame_ms=%llu budget_ms=%u overrun=%u",
+                g_ticks-fullscreen_return_tick,fullscreen_return_budget,
+                (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget));
         awaiting_frame = false;
         awaiting_native_frame = false;
     }
@@ -379,6 +386,7 @@ int display_fullscreen_begin(uint16_t mode)
     e=fbdev_change_begin();
     if (e) { grants_display_suspend(false); switching=false; return e; }
     fullscreen_native=native;
+    fullscreen_return_budget=NATIVE_RETURN_MS;
     fullscreen_return_timed=false;
     e=native ? supersavage_display_begin(mode) : biosvm_video_fullscreen_begin((uint8_t)mode);
     fullscreen_display=true; /* also brackets rollback of a partially set mode */
@@ -401,10 +409,11 @@ int display_fullscreen_end(void)
     /* Logging failure must never prevent an already needed recovery. */
     display_fullscreen_checkpoint("desktop-restore",0);
     uint8_t info[256]; struct fb_device next;
-    int e;
+    int e, native_result=0, fallback_result=0;
+    bool fallback=false;
     if (fullscreen_native) {
-        e=supersavage_display_end();
-        next=previous; /* exact saved layout; no firmware query or fallback */
+        e=native_result=supersavage_display_end();
+        next=previous; /* only remap the saved layout after native proof */
     } else {
         e=biosvm_video_fullscreen_end(previous.mode_id,info);
         if (!e) e=fbdev_mode_decode(previous.mode_id,info,&next);
@@ -412,20 +421,29 @@ int display_fullscreen_end(void)
     if (!e && (next.width!=previous.width || next.height!=previous.height ||
                next.pitch!=previous.pitch || next.bpp!=previous.bpp || next.phys!=previous.phys)) e=-EIO;
     if (!e) e=fbdev_change_commit(&next);
-    /* If exact firmware restoration fails, try the existing confirmed-mode
-     * recovery. A failed recovery leaves mappings unavailable, never guessed. */
-    if (e && !fullscreen_native) {
-        int recovery=restore();
-        klog("[display] fullscreen_restore error=%d recovery=%d",e,recovery);
-        e=recovery;
+    /* Native end revokes its aliases/releases CPU access leases even after
+     * readback failure. Never bypass a quarantined firmware/registry owner:
+     * the mediated switch must acquire its own leases and validate the mode. */
+    if (e) {
+        fallback=true;
+        fallback_result=restore();
+        klog("[display] fullscreen_restore provider=%s primary_result=%d fallback_result=%d",
+            fullscreen_native ? "supersavage-native" : "firmware-vga",e,fallback_result);
+        e=fallback_result;
     }
     fbdev_change_end();
     bool native=fullscreen_native;
     fullscreen_display=false;
     fullscreen_native=false;
     grants_display_suspend(false);
-    if (native) klog("[display] native_supersavage lease_return_ms=%llu budget_ms=200 result=%d",
-        g_ticks-fullscreen_return_tick,e);
+    if (native) {
+        if (fallback) fullscreen_return_budget=NATIVE_RECOVERY_MS;
+        klog("[display] native_supersavage native_result=%d fallback_attempted=%u fallback_result=%d result=%d",
+            native_result,(unsigned)fallback,fallback_result,e);
+        klog("[display] native_supersavage lease_return_ms=%llu budget_ms=%u overrun=%u result=%d",
+            g_ticks-fullscreen_return_tick,fullscreen_return_budget,
+            (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget),e);
+    }
     if (!e) {
         changed(); awaiting_frame=true; awaiting_native_frame=native;
         frame_deadline=deadline_after_ms(10000);

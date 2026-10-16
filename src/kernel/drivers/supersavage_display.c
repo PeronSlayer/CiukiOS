@@ -1,5 +1,5 @@
 /* Exclusive native scanout provider for 5333:8c2e. Port/MMIO ownership spans
- * guest execution; neither entry nor recovery uses biosvm.
+ * guest execution. The display service owns mediated recovery after release.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
@@ -79,31 +79,36 @@ int supersavage_display_prepare(const struct fb_device *f,uint16_t mode)
 static bool native_idle(int h,gen_t generation)
 {
     (void)h; (void)generation;
-    return !saved_mode.saved && !register_mapping && !aperture_mapping;
+    /* A retained RAM snapshot is not a hardware writer. Programming is
+     * synchronous CPU I/O only: no DMA, IRQ, worker or callback to drain. */
+    return !register_mapping && !aperture_mapping;
 }
-static int release_claims(bool safe)
+static int release_claims(void)
 {
     if (register_mapping) vmm_revoke_mmio((void *)register_mapping,MODE_MMIO_BYTES);
     if (aperture_mapping) vmm_revoke_mmio((void *)aperture_mapping,0x20000);
     register_mapping=aperture_mapping=0;
     int e=0;
     for (unsigned i=0;i<3;i++) if (claims[i]>=0) {
-        if (!safe) { registry_quarantine(claims[i],generations[i]); continue; }
         const struct resource *rsc=registry_get(claims[i]);
         if (!rsc || rsc->state!=RS_ACTIVE) {
             registry_quarantine(claims[i],generations[i]); e=-EIO; poisoned=true; continue;
         }
         int r=registry_quiesce(claims[i],generations[i],native_idle);
         if (!r) r=registry_release(claims[i],generations[i]);
-        if (r) { e=-EIO; poisoned=true; }
+        if (r) { registry_quarantine(claims[i],generations[i]); e=-EIO; poisoned=true; }
         else claims[i]=-1;
     }
     return e;
 }
 static void outcome(const char *phase,int e)
 {
-    klog("[display] native_supersavage phase=%s result=%d stage=%s reg=%x expected=%08x actual=%08x mask=%08x restore_us=%llu",
-        phase,e,saved_mode.stage ? saved_mode.stage : "claims",saved_mode.bad_reg,
+    const char *stage=saved_mode.bad_stage ? saved_mode.bad_stage : saved_mode.stage;
+    unsigned reg=saved_mode.bad_reg;
+    klog("[display] native_supersavage phase=%s result=%d stage=%s reg=%x reg_space=%s index=%x expected=%08x actual=%08x mask=%08x restore_us=%llu restore_budget_us=200000",
+        phase,e,stage ? stage : "claims",reg,
+        reg>=0x8180 ? "mmio" : reg>=0x100 && reg<0x200 ? "sr" : "vga",
+        reg>=0x100 && reg<0x200 ? reg-0x100 : reg,
         saved_mode.expected,saved_mode.actual,saved_mode.mask,saved_mode.restore_us);
 }
 int supersavage_display_begin(uint16_t mode)
@@ -135,7 +140,7 @@ int supersavage_display_begin(uint16_t mode)
     return e;
 failed:
     outcome("claim",e);
-    int released=release_claims(true);
+    int released=release_claims();
     return released ? released : e;
 }
 int supersavage_display_end(void)
@@ -144,6 +149,8 @@ int supersavage_display_end(void)
     int e=supersavage_mode_restore(&saved_mode,&io);
     outcome("restore",e);
     if (e) poisoned=true;
-    int released=release_claims(!e);
+    /* Even failed readback must relinquish CPU access so the display service
+     * can attempt a VBE mode set. Registry failures still quarantine. */
+    int released=release_claims();
     return e ? e : released;
 }

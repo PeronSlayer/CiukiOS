@@ -185,13 +185,15 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
     int restored=display_fullscreen_end();
+    int revoked=e;
     if (!e) e=restored;
+    if (e) v->fullscreen_error=e;
     fullscreen_owner=0; fullscreen_return=false;
     desktop_next=0; desktop_pending=background && fullscreen_background ? 5 : 1;
     v->fullscreen_suspended=background && v->fullscreen_pause && dosvm_valid(key);
     unhold(v);
-    klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u",
-        key.id,key.generation,e,v->fullscreen_suspended);
+    klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u revoke_result=%d restore_result=%d",
+        key.id,key.generation,e,v->fullscreen_suspended,revoked,restored);
     fullscreen_busy=false;
     return e;
 }
