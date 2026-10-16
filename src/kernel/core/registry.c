@@ -574,8 +574,11 @@ int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owne
         if (m->handler != handler || !same_owner(m->owner, owner))
             continue;
         memset(m, 0, sizeof(*m));
+        /* Callers have stopped their device-local source before detach.
+         * Leave the IMR constant on a healthy line, even for the last
+         * member. Existing deferral/quarantine masks retain ownership. */
         if (!--c->stats.participants)
-            chain_mask(irq);
+            irq_set_handler(irq, 0);
         irq_restore(f);
         return 0;
     }

@@ -11,6 +11,52 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KernelLatencyTests(unittest.TestCase):
+    def test_pic_mask_write_sites(self):
+        # Enumerate the owners, not just a call total: adding an IMR toggle
+        # to a request path must fail even if another site is removed.
+        allowed = {
+            ('arch/pic_pit.c', 'pic_unmask'): ['pic_unmask(2)'],
+            ('arch/pic_pit.c', 'pit_init'): ['pic_unmask(0)'],
+            ('core/registry.c', 'chain_mask'): ['pic_mask(irq)'],
+            ('core/registry.c', 'chain_resume'): ['pic_unmask(irq)'],
+            ('core/registry.c', 'irq_chain_add'): ['pic_unmask(irq)'],
+            ('core/serial.c', 'serial_writer_init'): ['pic_unmask(uart_irq)'],
+            ('drivers/ata.c', 'failure'): ['pic_mask(c->irq)'],
+            ('drivers/ata.c', 'ata_channel_idle'): ['pic_mask(c->irq)'],
+            ('drivers/ata.c', 'ata_init'): ['pic_unmask(c->irq)'],
+            ('drivers/i8042.c', 'quarantine'): ['pic_mask(1)', 'pic_mask(12)'],
+            ('drivers/i8042.c', 'i8042_init'): ['pic_unmask(1)', 'pic_unmask(12)'],
+            ('audio/backend.c', 'audio_backend_shutdown'): ['pic_mask(5)'],
+            ('audio/backend.c', 'backend_dma_init'): ['pic_unmask(5)'],
+            ('vm/biosvm.c', 'biosvm_init_for'): ['pic_unmask(1)', 'pic_unmask(12)'],
+            ('probes/registry_probe.c', 'shared_fixture'): ['pic_mask((unsigned)irq)'],
+        }
+        actual = {}
+        call = re.compile(r'\bpic_(?:mask|unmask)\s*\(')
+        definition = re.compile(r'^\w[^;{}]*?\b(\w+)\([^;{}]*\)\s*\{', re.M)
+        for path in sorted((ROOT / 'src/kernel').rglob('*.c')):
+            # Ignore comments, while retaining all executable source text.
+            source = re.sub(r'/\*.*?\*/|//[^\n]*', '', path.read_text(), flags=re.S)
+            if not call.search(source):
+                continue
+            for match in definition.finditer(source):
+                depth, end = 1, match.end()
+                while depth:
+                    depth += (source[end] == '{') - (source[end] == '}')
+                    end += 1
+                body = source[match.end():end - 1]
+                calls = []
+                for found in call.finditer(body):
+                    closing, pos = 1, found.end()
+                    while closing:
+                        closing += (body[pos] == '(') - (body[pos] == ')')
+                        pos += 1
+                    calls.append(re.sub(r'\s+', '', body[found.start():pos]))
+                if calls:
+                    actual[(path.relative_to(ROOT / 'src/kernel').as_posix(), match[1])] = calls
+        self.assertEqual(actual, allowed)
+        print('PIC sites: initial handler activation, quarantine, chain deferral/rearm and H-page probe only PASS')
+
     def test_pmm_scan_reserve_and_rollback_chunks(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)
@@ -63,6 +109,7 @@ static void test_irq_restore(uint32_t f) {
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
                             '-I', str(temp), str(ROOT / 'tests/host/pic_mask_latency_test.c'),
                             '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
     def test_dosvm_perf_irq_work(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)

@@ -300,9 +300,9 @@ static void disarm(struct ata_channel *c)
     c->dma.armed = false;
     c->request_generation = 0;
     irq_restore(f);
+    /* ATA-6 7.8.6: nIEN gates the device INTRQ. The registered PIC line
+     * stays open between requests; late edges only acknowledge Status. */
     device_control(c, c->control_shadow | ATA_NIEN);
-    if (c->native)
-        pic_mask(c->irq);
 }
 
 static int data_block(struct ata_device *d, uint8_t *buf, bool write, uint64_t start, uint64_t deadline)
@@ -680,7 +680,6 @@ static int identify(struct ata_device *d)
         if (!e) {
             device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
             reg_write(c, 2, (uint8_t)maximum);
-            if (c->native) pic_unmask(c->irq);
             e = issue(d, 0xc6, start, &sequence);
         }
         if (!e) e = wait_irq(d, &sequence, start, deadline);
@@ -700,7 +699,6 @@ static int identify(struct ata_device *d)
             d->issued = false;
             device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
             reg_write(c, 1, 3); reg_write(c, 2, (uint8_t)(0x40 | mode));
-            if (c->native) pic_unmask(c->irq);
             e = issue(d, 0xef, start, &sequence);
         }
         if (!e) e = wait_irq(d, &sequence, start, deadline);
@@ -852,12 +850,8 @@ int ata_channel_discover(struct ata_channel *c)
         /* Edge handler is published before native discovery; nIEN is
          * cleared only for an ATA IDENTIFY, never for skipped ATAPI. */
         device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
-        if (c->native)
-            pic_unmask(c->irq);
         e = identify(d);
         device_control(c, c->control_shadow | ATA_NIEN);
-        if (c->native)
-            pic_mask(c->irq);
         if (!e)
             found++;
     }
@@ -913,8 +907,6 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         if (e) return dma_failure(d, start, alternate(c));
     }
     device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
-    if (c->native)
-        pic_unmask(c->irq);
     /* 6.20/8.35/8.63: LBA48 high-order task file first, then low-order.
      * 256 encodes as 00/01 for EXT and 00 (meaning 256) for LBA28. */
     if (d->lba48) {
@@ -1033,8 +1025,6 @@ static int ata_flush(struct blkdev *b)
         e = select_device(d, start, deadline, 0);
         if (!e) {
             device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
-            if (c->native)
-                pic_unmask(c->irq);
             e = issue(d, d->flush_ext ? 0xea : 0xe7, start, &sequence);
         }
         if (!e)
@@ -1109,18 +1099,17 @@ bool ata_channel_idle(struct ata_channel *c)
         return false;
     c->quiescing = true;            /* rejects even submissions queued on the mutex */
     device_control(c, c->control_shadow | ATA_NIEN);
-    if (c->native)
-        pic_mask(c->irq);
     kwait_wake_all(&c->wait);        /* an issued waiter aborts, never issues another command */
     bool master_idle = ata_dma_stop(c);
     if (!master_idle) ata_dma_revoke(c);
-    if (c->active || c->mutex.owner)
-        return false;
     /* No queued driver callbacks exist. An uncertain busy device/master
      * cannot supply a release proof; quarantine retains its claims. */
-    bool idle = master_idle && !c->stopped && !(alternate(c) & (ATA_BSY | ATA_DRQ));
-    if (idle && c->native)
-        irq_set_handler(c->irq, 0); /* no callback may outlive a released edge claim */
+    bool idle = !c->active && !c->mutex.owner && master_idle && !c->stopped &&
+                !(alternate(c) & (ATA_BSY | ATA_DRQ));
+    if (c->native) {
+        if (idle) irq_set_handler(c->irq, 0); /* no callback outlives a released claim */
+        else pic_mask(c->irq);      /* failed idle proof: quarantine containment */
+    }
     return idle;
 }
 
@@ -1176,8 +1165,13 @@ int ata_init(void)
         }
         ata_dma_attach(c, i);
         c->native = true;
-        pic_mask(c->irq);
-        irq_set_handler(c->irq, i ? secondary_irq : primary_irq);
+        /* Suppress inherited device INTRQ before opening the registered
+         * line once. Requests thereafter gate only ATA-6 nIEN (7.8.6). */
+        if (!c->stopped) {
+            device_control(c, c->control_shadow | ATA_NIEN);
+            irq_set_handler(c->irq, i ? secondary_irq : primary_irq);
+            pic_unmask(c->irq);
+        }
         int found = ata_channel_discover(c);
         if (found > 0) {
             for (unsigned j = 0; j < 3; j++)

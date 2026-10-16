@@ -107,8 +107,14 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
     return &tasks[3];
 }
 
-void pic_mask(unsigned irq) { CHECK(irq < 16); masked[irq] = true; masks++; writes++; }
-void pic_unmask(unsigned irq) { CHECK(irq < 16 && !eoi_pending); masked[irq] = false; unmasks++; writes++; }
+void pic_mask(unsigned irq)
+{ CHECK(irq < 16); if (!masked[irq]) { masked[irq] = true; masks++; writes++; } }
+void pic_unmask(unsigned irq)
+{
+    CHECK(irq < 16 && !eoi_pending);
+    if (irq >= 8) pic_unmask(2);
+    if (masked[irq]) { masked[irq] = false; unmasks++; writes++; }
+}
 void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[irq] = h; }
 
 #define P2V(p) ((void *)(uintptr_t)(p))
@@ -606,10 +612,11 @@ static void test_three_shared_devices(void)
     irq_chain_spurious(7); irq_chain_spurious(15);
     CHECK(irq_chain_snapshot(7, &s) && s.spurious == 1 && eois == before + 7);
     CHECK(irq_chain_snapshot(15, &s) && s.spurious == 1);
+    unsigned mask_before = masks, unmask_before = unmasks;
     for (unsigned i = 0; i < 3; i += 2) {
         CHECK(!irq_chain_remove(7, three_devices, owners[i])); release_active(handles[i]);
     }
-    CHECK(masked[7]);
+    CHECK(!masked[7] && !handlers[7] && masks == mask_before && unmasks == unmask_before);
     puts("shared INTx: three devices, interleaved/late assertion, one EOI per pass, failed device release preserves peers PASS");
 }
 static int fatal_irq_lease;
@@ -719,8 +726,29 @@ static void test_irq_chain(void)
     release_active(b);
     drain_work();
     CHECK(calls_b == nb + 1 && !masked[10]);
+    mask_before = masks; unmask_before = unmasks;
     CHECK(irq_chain_remove(10, irq_a, "irq-a") == 0);
-    CHECK(irq_chain_remove(10, irq_b, "irq-b") == -EINVAL && masked[10]);
+    CHECK(irq_chain_remove(10, irq_b, "irq-b") == -EINVAL && !masked[10] && !handlers[10]);
+    CHECK(masks == mask_before && unmasks == unmask_before);
+    release_active(a);
+
+    /* Clean reattach is a cached no-op. Removing the final member while
+     * deferred must retain that existing mask until a new activation. */
+    a = irq_claim(10, "irq-a");
+    CHECK(!irq_chain_add(10, irq_a, "irq-a") && handlers[10]);
+    CHECK(masks == mask_before && unmasks == unmask_before);
+    g_tsc_per_ms = 1;
+    fake_irq(10);
+    g_tsc_per_ms = 1ull << 40;
+    CHECK(chains[10].stats.deferred && masks == mask_before + 1);
+    CHECK(!irq_chain_remove(10, irq_a, "irq-a") && !handlers[10]);
+    release_active(a);
+    drain_work();
+    CHECK(!chains[10].stats.deferred && masked[10] && masks == mask_before + 1 && unmasks == unmask_before);
+    a = irq_claim(10, "irq-a");
+    CHECK(!irq_chain_add(10, irq_a, "irq-a") && !masked[10]);
+    CHECK(masks == mask_before + 1 && unmasks == unmask_before + 1);
+    CHECK(!irq_chain_remove(10, irq_a, "irq-a") && !handlers[10] && !masked[10]);
     release_active(a);
 
     /* A failed proof between IRQ service and deferred rearm must not let
@@ -758,7 +786,7 @@ static void test_irq_chain(void)
     drain_work();
     CHECK(masked[9] && registry_get((unsigned)a)->state == RS_QUARANTINED);
     CHECK(masks == mask_before + 1 && unmasks == unmask_before);
-    printf("kernel services IRQ: PASS (claiming pass=0 mask writes/0 queued work; deferral=1 mask/1 unmask; 1000 unclaimed passes=1 quarantine mask; EOI, removal, budget/overflow)\n");
+    printf("kernel services IRQ: PASS (claiming pass/clean final detach=0 mask writes; deferral=1 mask/1 unmask; 1000 unclaimed passes=1 quarantine mask; EOI, removal, budget/overflow)\n");
 }
 
 static void test_stackprot(void)
@@ -806,6 +834,7 @@ static void test_generation_exhaustion(void)
 
 int main(void)
 {
+    memset(masked, true, sizeof(masked));
     for (unsigned i = 0; i < ARRAY_SIZE(tasks); i++)
         tasks[i] = (struct task){ .id = i + 1, .generation = 1, .state = T_RUNNING };
     current(0);

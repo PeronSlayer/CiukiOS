@@ -10,6 +10,9 @@
 extern void w32_shared_tick(void) __attribute__((weak));
 extern void serial_tick(void) __attribute__((weak));
 
+/* Drivers open a line when publishing its handler, then gate requests at
+ * the device. Runtime IMR changes are quarantine, chain deferral/rearm or
+ * explicit hardware checks; every changed mask remains counted below. */
 static uint8_t mask_master = 0xFF, mask_slave = 0xFF;
 volatile uint64_t g_ticks;
 

@@ -221,7 +221,9 @@ void audio_backend_shutdown(void)
         else if (audio_dma_stop(d)) unsafe = true;
     }
     if (d->irq_attached) {
-        if (d->kind == AUDIO_SB16) { pic_mask(5); irq_set_handler(5, 0); d->irq_attached = false; }
+        /* sb_halt gates DMA5, cancels DSP auto-init and acknowledges the
+         * 16-bit source. Clean detach needs no 8259 mask transaction. */
+        if (d->kind == AUDIO_SB16) { irq_set_handler(5, 0); d->irq_attached = false; }
         else if (irq_chain_remove(d->state.irq, backend_irq, d->name)) unsafe = true;
         else d->irq_attached = false;
     }
@@ -242,7 +244,10 @@ void audio_backend_shutdown(void)
         if (e) { unsafe = d->state.quarantine = true; registry_quarantine(d->claims[i], d->generations[i]); }
         else d->claims[i] = -1;
     }
-    if (unsafe) { audio.quarantined = true; audio.reason = "stop_unproved"; return; }
+    if (unsafe) {
+        if (d->kind == AUDIO_SB16) pic_mask(5); /* uncertain source: quarantine only */
+        audio.quarantined = true; audio.reason = "stop_unproved"; return;
+    }
     if (d->phys) {
         for (unsigned i = 0; i < AUDIO_HW_BYTES / PAGE_SIZE; i++) { pmm_free(d->phys + i * PAGE_SIZE); audio.commitment_pages--; }
         d->phys = 0; d->pcm = 0;
@@ -283,7 +288,7 @@ static int backend_dma_init(struct audio_dma_device *d)
     if (!e) e = audio_dma_prove(d);
     if (!e) {
         d->state.ready = true;
-        if (d->kind == AUDIO_SB16) { pic_mask(5); irq_set_handler(5, backend_isa_irq); d->irq_attached = true; pic_unmask(5); }
+        if (d->kind == AUDIO_SB16) { irq_set_handler(5, backend_isa_irq); d->irq_attached = true; pic_unmask(5); }
         else { e = irq_chain_add(d->state.irq, backend_irq, d->name); d->irq_attached = !e; }
     }
     d->activation_deadline=0; /* rollback has its own bounded stop budget */

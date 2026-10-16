@@ -13,7 +13,7 @@ struct task *g_current;
 volatile uint64_t g_ticks;
 static uint64_t cycles = 1, next_pit;
 static uint32_t flags = 0x200;
-static unsigned writes, section_writes, max_writes, missed;
+static unsigned writes, section_writes, max_writes, missed, out_us = 5;
 static bool pending;
 static uint64_t rdtsc(void) { return cycles; }
 uint64_t ktime_cycles(void) { return cycles; }
@@ -48,7 +48,7 @@ static void hlt(void) { advance(1000); }
 static void outb(uint16_t port, uint8_t value)
 {
     (void)value; CHECK(!flags && (port == 0x21 || port == 0xa1));
-    writes++; section_writes++; advance(5);
+    writes++; section_writes++; advance(out_us);
 }
 #include "latency_timing.inc"
 #include "latency_pic.inc"
@@ -63,11 +63,16 @@ int main(void)
     CHECK(s.pic_mask_writes == 3 && s.pic_mask_out_max_us == 5 && s.critical_us == 7);
     puts("PIC: one OUT/transaction, cascade, no-op/invalid masks, TSC OUT=5us critical=7us PASS");
 
+    /* Model the T23's slow OUT. Open the registered line before measuring
+     * runtime; repeated activation is a cached no-op, even at this cost. */
+    out_us = 2108;
+    pic_unmask(11);
+    unsigned writes_before = writes;
     timing_reset(); next_pit = cycles + 1000000;
     uint64_t end = cycles + 10000000000ull;
     while (cycles < end) {
         if (end - cycles < 128000) { advance((unsigned)((end - cycles) / 1000)); break; }
-        pic_mask(11); pic_unmask(11);
+        pic_unmask(11); /* repeated registration must not touch either IMR */
         /* Replay the longest admitted non-I/O section across every PIT
          * phase, and thread work spanning multiple ticks with IF enabled. */
         uint32_t f = irq_save(); crit_label("audit_worst_90us"); advance(88); irq_restore(f);
@@ -78,7 +83,8 @@ int main(void)
     timing_snapshot(&s);
     CHECK(g_ticks == 10000 && s.pit_irqs == 10000 && !missed && !pending);
     CHECK(!s.gaps_software && !s.gaps_unclassified && s.critical_us == 90 && !s.budget_violations);
-    printf("IRQ audit model: 10 s ticks=%llu lost=%u gaps=%u/%u max=%uus section=%s PASS\n",
+    CHECK(writes == writes_before && !s.pic_mask_writes);
+    printf("IRQ audit model: 10 s ticks=%llu lost=%u gaps=%u/%u max=%uus section=%s PIC writes=0 (OUT cost=2108us) PASS\n",
         (unsigned long long)s.pit_irqs, missed, s.gaps_software, s.gaps_unclassified,
         s.critical_us, s.critical_section);
     /* Negative control: the original 4.23 ms stall loses edges and remains
@@ -87,5 +93,10 @@ int main(void)
     timing_snapshot(&s);
     CHECK(missed >= 3 && s.gaps_software && s.critical_us >= 4230);
     puts("IRQ audit model: 4.23ms negative control loses PIT edges and reports software gap PASS");
+    unsigned missed_before = missed;
+    pic_mask(11); /* quarantine/deferral still pays and reports the real cost */
+    timing_snapshot(&s);
+    CHECK(missed > missed_before && s.pic_mask_writes == 1 && s.pic_mask_out_max_us == 2108);
+    puts("PIC slow-OUT negative control: quarantine write counted at 2108us and loses PIT edges PASS");
     return 0;
 }

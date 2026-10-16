@@ -241,3 +241,80 @@ PASS, maximum record 237 bytes. Kernel link/FPU-SIMD audit and the canonical
 DOS payload FAT16/header/24-file readback pass. Final command output and
 artifact hashes are retained verbatim in `build/codex/f0-30-report.md`.
 No QEMU, full-image build, systemd scope, diary, commit or push was run.
+
+## F0-33: device-local interrupt gates (2026-10-16)
+
+Research checked before implementation against the current driver paths:
+
+- [T13 ATA/ATAPI-6 draft 1410D revision 3a, §7.8.5–6, pp. 67–68](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf):
+  Device Control bit 1 (nIEN) suppresses INTRQ, and the write reaches both
+  devices. Keep the existing nIEN changes for IDENTIFY, SET MULTIPLE, SET
+  FEATURES, PIO/DMA, FLUSH, polled PACKET and disarm; remove their PIC
+  toggles. Publish the native handler and open its line once with nIEN set,
+  before discovery. Clean quiescence also uses nIEN; uncertain command
+  failure or a failed idle proof retains the counted PIC quarantine mask.
+- [IBM PS/2 Hardware Interface Technical Reference, Keyboard/Auxiliary
+  Device Controller, pp. 8–10](https://www.ardent-tool.com/docs/pdf/ibm_hitrc07.pdf):
+  command-byte bits 0/1 enable keyboard/AUX interrupts; bits 4/5 inhibit
+  their interfaces. Existing setup and shutdown already program these
+  bits, verify readback and drain OBF. Remove setup/clean-stop PIC masking,
+  retain initial handler publication/unmask and failure quarantine. A
+  pending edge during shutdown cannot consume command replies because
+  accepting is cleared before stopping the controller.
+- [Creative Sound Blaster Hardware Programming Guide, chapters 3–4](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf)
+  and the existing `sb_halt` implementation: mask owned DMA5, pause DSP
+  16-bit DMA (D5h), reset to cancel auto-init, prove a stable count, then
+  acknowledge at base+0Fh. This device-side stop already gates new period
+  interrupts. Remove SB16's redundant pre-attach/clean-detach PIC masks;
+  retain a mask if shutdown cannot prove safety. The 8237 DMA mask is not
+  an 8259 interrupt mask and remains required.
+- [Linux v6.12 i8259.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/arch/x86/kernel/i8259.c):
+  retain the cached IMR and no-op suppression. A clean final chain detach
+  removes its dispatcher after device sources have stopped, without an
+  IMR write. F1-72's bounded dispatch, mask-before-EOI deferral/quarantine,
+  and single worker unmask remain unchanged. UART and BIOS input already
+  unmask only at initial handler registration; their runtime gates remain
+  UART IER and firmware/controller ownership respectively.
+
+Read-only T23 input is the main checkout's
+`legacy/local/physical/e8dfd0cd/serial.log`: records include mask counts
+4464, 4760, 5048, 5320, 5592, and `out_max_us=2108`, with
+`irqoff_section=pic_unmask ... irqoff_max_us=2109`. These are observations
+of the old image, not a measurement of this change. An SMI trap is a
+plausible inference, not a directly observed mechanism. No chipset writes,
+timer catch-up, relaxed H-page threshold or new memory limit is introduced.
+
+After registration, healthy requests and clean stop/restart leave IMRs
+constant. Remaining changes are initial line activation (including cascade),
+quarantine, F1-72 deferral/rearm, and the explicit H-page registry probe;
+all calls through `pic_mask`/`pic_unmask` retain OUT count/timing evidence.
+PIC initialization command words precede that runtime measurement.
+
+The lead must qualify f0-smoke, f1-input, f1-storage and f4-audio on one
+integrated image and the T23 H page: idle counter growth at most five
+writes per two seconds, zero lost ticks in the ten-second timer check.
+Host results do not close either physical gate.
+
+F0-33 host verification: the full kernel host suite exited 0 under
+`ASAN_OPTIONS=detect_leaks=0 nice -n 19`, followed by final sequential
+latency, registry/sync and ATA replays after the idle-proof containment
+review. ATA covers native primary/secondary LBA28/48 PIO, MULTIPLE, DMA,
+FLUSH, polled ATAPI and its ATA peer: zero PIC calls after attachment for
+healthy requests/clean stop, one quarantine mask on a failed request or
+idle proof. Input covers sixteen keyboard/AUX commands, IRQ decoding and
+clean stop/reactivation with zero mask writes after the initial three
+(IRQ1, IRQ2 cascade, IRQ12); failed stop changes only the two device lines.
+Audio covers publication, restart, cursor/IRQ, mute, stop, clean detach and
+SB16 reattach without another mask write; failed SB16 stop masks once and
+retains its allocations. The chain fixture keeps one mask/unmask per
+deferral, handles final removal during a continuation, and performs zero
+writes on a healthy last detach/reattach.
+
+The latency suite now executes its previously compile-only PIC binary and
+asserts the remaining mask-call owners. With a synthetic 2108 us OUT cost,
+its unchanged-mask ten-second replay delivers 10000 ticks, zero lost, zero
+PIC writes; an actual quarantine OUT is still counted at 2108 us and loses
+PIT edges. These injected costs do not predict a physical result.
+`nice -n 19 python3 scripts/build_kernel.py` linked successfully and passed
+the FPU/SIMD audit. Complete command output, source locations and the ELF
+SHA-256 are in `build/codex/f0-33-report.md`; no image was built or booted.

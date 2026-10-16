@@ -1007,8 +1007,8 @@ int i8042_init(void)
         return -ENOSPC;
     }
     uint64_t start = physical_now(0), end = start + I8042_SETUP_MS;
-    pic_mask(1);
-    pic_mask(12);
+    /* IBM controller command-byte bits 0/1 gate IRQs; AD/A7 inhibit the
+     * interfaces. Keep PIC lines open across clean stop/reactivation. */
     uint8_t cfg = 0, reply = 0;
     init_begin(&native, I8042_INIT_FLUSH, 0xAD);
     err = init_ctl_write(&native, 0xAD, end);
@@ -1161,8 +1161,8 @@ int i8042_stop(gen_t generation)
         return -EINVAL;
     }
     native.accepting = false;          /* reject submissions before stopping sources */
-    pic_mask(1);
-    pic_mask(12);
+    /* Command-byte IRQ_BITS are cleared and verified below. A latched
+     * edge cannot consume controller replies after accepting is clear. */
     irq_set_handler(1, 0);
     irq_set_handler(12, 0);
     uint64_t end = physical_now(0) + I8042_REPLY_MS;
