@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __i386__
+#include <ciuki/raw.h>
+#endif
 enum { AP_JOB_PROBE=1, AP_JOB_SAVE };
 /* One slot remains owned by the worker from submission through collection.
  * Only the frame thread changes shell state. I/O never holds the mailbox. */
@@ -23,6 +26,19 @@ struct ap_worker {
 static int submit(struct desk_autoplay *,int);
 static void activity(struct ap_worker *w,const char *name)
 { __atomic_store_n(&w->activity,name,__ATOMIC_RELEASE); }
+static void probe_activity(void *ctx,const char *name) { activity(ctx,name); }
+static void budget_log(const struct ap_worker *w)
+{
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay drive=%c budget=%s entries=%u ms=%u",
+        'A'+w->volume.drive,w->content.budget,w->content.entries,w->content.ms);
+    if (n<=0 || (size_t)n>=sizeof(line)) return;
+#ifdef __i386__
+    /* The diagnostic sink also reaches BOOT.LOG, without FILE/VFS locks. */
+    (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)n,0,0,0,0);
+#else
+    fprintf(stderr,"%s\n",line);
+#endif
+}
 static void *autoplay_worker(void *arg)
 {
     struct ap_worker *w=arg;
@@ -35,13 +51,13 @@ static void *autoplay_worker(void *arg)
         pthread_mutex_unlock(&w->lock);
         w->error=0; w->saved=-1;
         if (job==AP_JOB_PROBE) {
-            activity(w,"media-scan");
             if (ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace)) {
                 memset(&w->content,0,sizeof(w->content));
                 snprintf(w->content.root,sizeof(w->content.root),"/mnt/%c",'a'+w->volume.drive);
             }
+            if (w->content.budget) budget_log(w);
             activity(w,"preference-read");
-            if (w->volume.id[0] && w->preference)
+            if (!w->content.budget && w->volume.id[0] && w->preference)
                 w->saved=w->preference(w->desktop,w->volume.id,NULL,-1);
         } else {
             activity(w,"preference-write");
@@ -60,6 +76,7 @@ int desk_autoplay_prepare(struct desktop *d)
     if (!a->workspace) return ENOMEM;
     struct ap_worker *w=calloc(1,sizeof(*w)); if (!w) return ENOMEM;
     w->desktop=d; w->fs=d->autoplay_fs; w->workspace=a->workspace;
+    ap_workspace_observe(w->workspace,probe_activity,w);
     w->preference=d->autoplay_preference; activity(w,"starting");
     int e=pthread_mutex_init(&w->lock,NULL);
     if (e) { free(w); return e; }
@@ -88,6 +105,7 @@ void desk_autoplay_stop(struct desktop *d)
     pthread_mutex_lock(&w->lock); w->stopping=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
     pthread_join(w->thread,NULL); pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    ap_workspace_observe(w->workspace,NULL,NULL);
     free(w); d->sh.autoplay.worker=NULL; d->sh.autoplay.phase=AP_IDLE;
 }
 const char *desk_autoplay_activity(const struct desktop *d)

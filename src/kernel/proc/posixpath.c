@@ -620,6 +620,7 @@ int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *fr
 int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
 {
     struct px_node *dir = d->node, *n = 0;
+    uint64_t listed_size = 0; int64_t listed_mtime = 0; uint8_t listed_type = 0;
     int live=px_ro_check_locked(dir); if (live) return live;
     if (!directory(dir)) return -ENOTDIR;
     const char *name;
@@ -652,12 +653,22 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
         }
         n = node_entry(dir->space, dir, &entry); if (!n) return -ENOMEM;
         name = n->entry.name;
+        listed_type = entry.attr & FAT_ATTR_DIR ? DT_DIR : DT_REG;
+        listed_size = entry.attr & FAT_ATTR_DIR ? 0 : entry.size;
+        clock_fat_utc(entry.times.write_date, entry.times.write_time, &listed_mtime);
     }
     if (d->position == INT64_MAX) return -EIO;
     memset(out, 0, sizeof(*out));
     out->d_ino = n->ino; out->d_off = (int64_t)++d->position;
     out->d_reclen = sizeof(*out); out->d_namlen = (uint16_t)strlen(name);
     out->d_type = directory(n) ? DT_DIR : n->kind == PX_FILE ? DT_REG : DT_CHR;
+    if (listed_type) {
+        out->d_type = listed_type; out->d_size = listed_size; out->d_mtime = listed_mtime;
+    } else if (n->ro) out->d_size = n->kind == PX_FILE ? n->ro_size : 0;
+    else if (n->volume) {
+        out->d_size = n->kind == PX_FILE ? n->entry.size : 0;
+        clock_fat_utc(n->entry.times.write_date, n->entry.times.write_time, &out->d_mtime);
+    }
     memcpy(out->d_name, name, out->d_namlen); d->cursor = cursor;
     return sizeof(*out);
 }

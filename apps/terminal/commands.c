@@ -102,7 +102,7 @@ static int expand(struct terminal *t, const char *arg, struct matches *m)
     }
     char parent[FM_PATH]; fm_parent(parent,path); if (strpbrk(parent,"*?")) return -EINVAL;
     m->parent=parent; m->pattern=fm_basename(path);
-    r=t->host.fs.list(t->host.fs.ctx,parent,collect,m);
+    r=t->host.fs.list(t->host.fs.ctx,parent,FM_LIST_SNIFF,collect,m);
     return r ? r : m->count ? 0 : -ENOENT;
 }
 struct listing { struct terminal *t; const char *pattern; };
@@ -126,7 +126,7 @@ static int directory(struct terminal *t,const char *arg)
         if(m.type!=FM_DIR)return directory_entry(fm_basename(path),&m,&l);
         strcpy(parent,path);
     }
-    return t->host.fs.list(t->host.fs.ctx,parent,directory_entry,&l);
+    return t->host.fs.list(t->host.fs.ctx,parent,FM_LIST_SNIFF,directory_entry,&l);
 }
 static __attribute__((noinline)) int type_file(struct terminal *t,const char *path)
 {

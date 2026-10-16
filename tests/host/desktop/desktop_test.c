@@ -598,7 +598,26 @@ static void test_media_shell(void)
     for (int i=0;i<d.sh.menus[0].count;i++) registry+=!strcmp(d.sh.menus[0].items[i].label,"Registry Editor");
     assert(registry==1);
     for (int i=0;i<d.sh.menus[0].count;i++) viewer+=!strcmp(d.sh.menus[0].items[i].label,"Image Viewer");
-    assert(viewer==1); cleanup(); puts("PASS media shell: Programs entries, Accessories viewer and conditional Pictures");
+    assert(viewer==1);
+    /* Budget fallback keeps the established popup/keyboard interaction:
+     * optional actions are disabled, while both generic choices still work. */
+    desk_menu_close(&d);
+    d.sh.autoplay.content=(struct ap_content){.root="/mnt/e",.budget="time"};
+    d.sh.autoplay.selected=AP_FOLDER;
+    int prompt=desk_internal_open(&d,DESK_INTERNAL_AUTOPLAY); assert(prompt>=0);
+    d.sh.autoplay.open=1;
+    struct desk_box content=desk_content(&d.clients[prompt]);
+    for (int action=AP_MUSIC;action<=AP_RUN;action++) {
+        assert(!desk_autoplay_enabled(&d,action));
+        desk_internal_click(&d,prompt,content.x+30,content.y+58+action*24+5);
+        assert(d.sh.autoplay.selected==AP_FOLDER);
+    }
+    assert(desk_autoplay_enabled(&d,AP_NOTHING));
+    desk_shell_key(&d,DU_KEY_DOWN,1); desk_shell_key(&d,DU_KEY_DOWN,0);
+    assert(d.sh.autoplay.selected==AP_NOTHING);
+    desk_shell_key(&d,DU_KEY_ESC,1); desk_shell_key(&d,DU_KEY_ESC,0);
+    assert(!d.sh.autoplay.open && !d.sh.autoplay.want_commit);
+    cleanup(); puts("PASS media shell: Programs entries, Accessories viewer, conditional Pictures and budget popup generic keyboard choices");
 }
 static void test_graphics_menu(void)
 {

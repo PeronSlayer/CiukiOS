@@ -372,9 +372,60 @@ static int run_desktop(int argc,char **argv)
     args[argc]=display; args[argc+1]=input; args[argc+2]=NULL;
     return desktop_main(argc+2,args);
 }
+static atomic_uint gate_folder_entered, gate_folder_release;
+static int gate_folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
+{
+    (void)ctx; struct fm_meta meta={.type=FM_DIR};
+    if (!strcmp(path,"/")) return emit("Documents",&meta,arg);
+    if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
+    assert(!strcmp(path,DESK_FOLDER));
+    if (flags==FM_LIST_NAMES_ONLY) {
+        assert(!pthread_equal(pthread_self(),gate_main_thread));
+        atomic_store(&gate_folder_entered,1);
+        while (!atomic_load(&gate_folder_release)) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+    }
+    meta.type=FM_FILE; meta.size=10;
+    return emit(atomic_load(&gate_folder_release) ? "External.txt" : "Original.txt",&meta,arg);
+}
+static int gate_folder_stat(void *ctx,const char *path,struct fm_meta *meta)
+{ (void)ctx; assert(!strcmp(path,DESK_FOLDER)); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+static void gate_folder_poll(void)
+{
+    static struct desktop d; const struct desk_ops ops={0};
+    static const struct fm_vfs fs={.list=gate_folder_list,.stat_path=gate_folder_stat};
+    desk_init(&d,&ops,640,480); desk_shell_enable(&d);
+    assert(!desk_folder_init(&d,&fs));
+    d.now_ns=1000000000ull; desk_folder_service(&d);
+    for (unsigned i=0;!atomic_load(&gate_folder_entered);i++) {
+        desk_folder_service(&d); /* retry if startup briefly owned the mailbox */
+        assert(i<3000); struct timespec pause={0,1000000}; syscall(SYS_nanosleep,&pause,NULL);
+    }
+    assert(!strcmp(desk_folder_activity(&d),"directory-compare") && !shutdown_wait(&d));
+    for (unsigned i=0;i<100;i++) {
+        uint64_t begin=monotonic(); desk_folder_service(&d);
+        assert(monotonic()-begin<50000000ull);
+        assert(!strcmp(d.sh.folder->model.entries[0].name,"Original.txt"));
+    }
+    desktop_watchdog.desktop=&d; desktop_watchdog.frame_ms=100; desktop_watchdog.loop_ms=700;
+    desktop_watchdog.work=1; desktop_wait("host-wait");
+    char line[512]; assert(desktop_stall_record(701,line,sizeof(line))>0);
+    assert(strstr(line,"folder_wait=directory-compare") && strstr(line,"wait=host-wait"));
+    memset(&desktop_watchdog,0,sizeof(desktop_watchdog));
+    atomic_store(&gate_folder_release,1);
+    for (unsigned i=0;desk_folder_busy(&d);i++) {
+        assert(i<3000); struct timespec pause={0,1000000}; syscall(SYS_nanosleep,&pause,NULL);
+    }
+    /* A worker completion cannot publish icons until this frame consumes it. */
+    assert(!strcmp(d.sh.folder->model.entries[0].name,"Original.txt"));
+    desk_folder_service(&d); assert(!strcmp(d.sh.folder->model.entries[0].name,"External.txt"));
+    assert(shutdown_wait(&d)); desk_folder_destroy(&d); desk_render_release(&d);
+    free(d.sh.icons); free(d.sh.autoplay.workspace);
+    puts("PASS F2-79 desktop gate: held folder I/O, frame-only publication, shutdown drain and observer phase");
+}
 int main(int argc,char **argv)
 {
     gate_main_thread=pthread_self();
+    if (argc==2 && !strcmp(argv[1],"--folder-poll")) { gate_folder_poll(); return 0; }
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
         first_frame_portrait=argv[2]; first_frame_output=argv[3];
         normal_first_frame=!strcmp(argv[1],"--normal-first-frame");

@@ -96,7 +96,7 @@ int fm_volumes(const struct fm_vfs *fs, fm_emit emit, void *ctx)
     if (r) return r;
     if ((r = emit("C:", &meta, ctx))) return r;
     struct volumes v = {0};
-    r = fs->list(fs->ctx, "/mnt", collect_volume, &v);
+    r = fs->list(fs->ctx, "/mnt", FM_LIST_NAMES_ONLY, collect_volume, &v);
     if (r && r != -ENOENT) return r;
     for (unsigned letter = 'd'; letter <= 'z'; letter++) if (v.seen & (1u << (letter - 'a'))) {
         char drive[] = {(char)(letter - 'a' + 'A'), ':', 0};
@@ -219,7 +219,7 @@ static int collect(const char *name, const struct fm_meta *meta, void *ctx)
 static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 {
     memset(l, 0, sizeof(*l));
-    int r = fs->list(fs->ctx, path, collect, l);
+    int r = fs->list(fs->ctx, path, FM_LIST_SNIFF, collect, l);
     if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
     return r;
 }
@@ -266,7 +266,7 @@ int fm_canonical(const struct fm_vfs *fs, const char *in, char *out)
         if (!strcmp(part, ".")) continue;
         if (!strcmp(part, "..")) { fm_parent(result, result); continue; }
         char found[FM_NAME] = ""; struct resolve r = {part, found};
-        int e = fs->list(fs->ctx, result, match, &r);
+        int e = fs->list(fs->ctx, result, FM_LIST_NAMES_ONLY, match, &r);
         if (e) return e;
         if (!found[0]) return -ENOENT;
         char next[FM_PATH];

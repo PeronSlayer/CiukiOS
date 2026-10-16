@@ -147,6 +147,13 @@ class F2AlignmentTests(unittest.TestCase):
                     # The signals-fault fixture is a passing capture (image c581dfe8, after f2-14).
                     signal_failure = False
                     with self.subTest(where=where):
+                        if probe == 'fd-table' and where.get('operation') == 'getdents':
+                            # The historical capture predates F2-79's metadata
+                            # extension. Preserve it; it cannot qualify the new ABI.
+                            self.assertEqual(predicate['fields']['record_bytes']['eq'], 808)
+                            self.assertTrue(any(r.get('record_bytes') == '792' for r in matches))
+                            with self.assertRaises(EvidenceError): data_projection(probe, records, predicate)
+                            continue
                         if new or missing_fixture or signal_failure:
                             with self.assertRaises(EvidenceError): data_projection(probe, records, predicate)
                             continue

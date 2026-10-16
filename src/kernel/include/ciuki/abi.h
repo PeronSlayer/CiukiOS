@@ -914,6 +914,8 @@ struct ciuki_dirent {
     uint8_t d_type; /* 20 */
     uint8_t reserved[3]; /* 21 */
     char d_name[768]; /* 24 */
+    uint64_t d_size; /* 792: enumeration metadata, no allocation-chain walk */
+    int64_t d_mtime; /* 800: Unix seconds, zero when unavailable */
 };
 
 struct ciuki_spawn_fd {
@@ -1293,7 +1295,7 @@ _Static_assert(__builtin_offsetof(struct ciuki_stat, st_blocks) == 48, "ciuki_st
 _Static_assert(__builtin_offsetof(struct ciuki_stat, st_atim) == 56, "ciuki_stat.st_atim offset");
 _Static_assert(__builtin_offsetof(struct ciuki_stat, st_mtim) == 72, "ciuki_stat.st_mtim offset");
 _Static_assert(__builtin_offsetof(struct ciuki_stat, st_ctim) == 88, "ciuki_stat.st_ctim offset");
-_Static_assert(sizeof(struct ciuki_dirent) == 792, "ciuki_dirent size");
+_Static_assert(sizeof(struct ciuki_dirent) == 808, "ciuki_dirent size");
 _Static_assert(_Alignof(struct ciuki_dirent) == 4, "ciuki_dirent alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_ino) == 0, "ciuki_dirent.d_ino offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_off) == 8, "ciuki_dirent.d_off offset");
@@ -1302,6 +1304,8 @@ _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_namlen) == 18, "ciuki_d
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_type) == 20, "ciuki_dirent.d_type offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, reserved) == 21, "ciuki_dirent.reserved offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dirent, d_name) == 24, "ciuki_dirent.d_name offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dirent, d_size) == 792, "ciuki_dirent.d_size offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dirent, d_mtime) == 800, "ciuki_dirent.d_mtime offset");
 _Static_assert(sizeof(struct ciuki_spawn_fd) == 8, "ciuki_spawn_fd size");
 _Static_assert(_Alignof(struct ciuki_spawn_fd) == 4, "ciuki_spawn_fd alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_spawn_fd, source) == 0, "ciuki_spawn_fd.source offset");

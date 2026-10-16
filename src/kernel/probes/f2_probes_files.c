@@ -290,13 +290,13 @@ static bool kernel_cases(struct process *p)
         struct sha256_ctx names; sha256_init(&names);
         fs_lock_take(&s->vfs->lock);
         while ((n = px_getdents_locked(file_fd(p, dir), &ent)) > 0) {
-            pass &= n == 792 && ent.d_reclen == 792 && ent.d_off == (int64_t)++cookie && ent.d_namlen == strlen(ent.d_name);
+            pass &= n == (int)sizeof(ent) && ent.d_reclen == sizeof(ent) && ent.d_off == (int64_t)++cookie && ent.d_namlen == strlen(ent.d_name);
             sha256_update(&names, ent.d_name, strlen(ent.d_name) + 1);
         }
         pass &= !n && !file_seek_locked(file_fd(p, dir), 0, SEEK_SET, &position);
-        pass &= px_getdents_locked(file_fd(p, dir), &ent) == 792 && ent.d_off == 1 && !strncmp(ent.d_name, ".", 2);
+        pass &= px_getdents_locked(file_fd(p, dir), &ent) == (int)sizeof(ent) && ent.d_off == 1 && !strncmp(ent.d_name, ".", 2);
         fs_lock_drop(&s->vfs->lock);
-        rec_emit("fd-table", "DATA", "operation=getdents records=%llu record_bytes=792 rewind_cookie=%lld", cookie, ent.d_off);
+        rec_emit("fd-table", "DATA", "operation=getdents records=%llu record_bytes=%u rewind_cookie=%lld", cookie, (unsigned)sizeof(ent), ent.d_off);
         record_directory_digest(&names);
         file_close(p, dir);
     }

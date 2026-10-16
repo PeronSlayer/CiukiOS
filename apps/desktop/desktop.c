@@ -410,9 +410,9 @@ static int desktop_stall_record(uint32_t now,char *line,size_t size)
         frame!=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE) ||
         loop!=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE) ||
         wait!=__atomic_load_n(&desktop_watchdog.wait,__ATOMIC_ACQUIRE)) return 0;
-    int n=snprintf(line,size,"[desktop] stall stage=%s worker=%s/%s no_frame_ms=%u input_pending=%u work_pending=%u wait=%s wallpaper_wait=%s autoplay_wait=%s\n",
+    int n=snprintf(line,size,"[desktop] stall stage=%s worker=%s/%s no_frame_ms=%u input_pending=%u work_pending=%u wait=%s wallpaper_wait=%s autoplay_wait=%s folder_wait=%s\n",
         stage<sizeof(desktop_stages)/sizeof(*desktop_stages) ? desktop_stages[stage] : "unknown",
-        wall,settings,now-frame,pending,work,wait ? wait : "unknown",wall_wait ? wall_wait : "starting",desk_autoplay_activity(desktop_watchdog.desktop));
+        wall,settings,now-frame,pending,work,wait ? wait : "unknown",wall_wait ? wall_wait : "starting",desk_autoplay_activity(desktop_watchdog.desktop),desk_folder_activity(desktop_watchdog.desktop));
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void *desktop_watchdog_run(void *unused)
@@ -575,6 +575,7 @@ static int settings_save(struct desktop *d)
 static int shutdown_wait(struct desktop *d)
 {
     if (desk_autoplay_busy(d)) return 0;
+    if (desk_folder_busy(d)) return 0;
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
     if (settings_writer_started && cfg_writer_busy(&settings_writer)) return 0;
     return !audio_shutdown_wait || audio_shutdown_wait(d);

@@ -7,9 +7,9 @@ static pthread_t autoplay_test_main;
 static unsigned autoplay_test_scans, autoplay_test_reads, autoplay_test_writes;
 static int autoplay_test_scan_release, autoplay_test_read_release, autoplay_test_write_release;
 static uint64_t autoplay_test_service_max;
-static int stalled_media_list(void *ctx,const char *path,fm_emit emit,void *user)
+static int stalled_media_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *user)
 {
-    (void)ctx; (void)emit; (void)user; assert(!strcmp(path,"/mnt/e"));
+    (void)ctx; (void)flags; (void)emit; (void)user; assert(!strcmp(path,"/mnt/e"));
     /* The old synchronous service fails here: its caller is the frame thread.
      * Waiting for a frame/input-dependent release there cannot make progress. */
     assert(!pthread_equal(pthread_self(),autoplay_test_main));
@@ -100,7 +100,7 @@ static void test_autoplay_startup(void)
         assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
     }
     autoplay_test_service(&d); autoplay_test_wait(&autoplay_test_scans,1);
-    assert(!strcmp(desk_autoplay_activity(&d),"media-scan") && desk_autoplay_busy(&d));
+    assert(!strcmp(desk_autoplay_activity(&d),"media-scan:root") && desk_autoplay_busy(&d));
     uint64_t frames=d.presents;
     for (unsigned i=0;i<8;i++) {
         input_tap(&d,0x15b); /* Start opens/closes using the production input path */
@@ -168,4 +168,74 @@ static void test_autoplay_startup(void)
     media_available=0; memset(media_volumes,0,sizeof(media_volumes)); fake_reset(); assert(!unlink(image));
     printf("PASS F2-78 AutoPlay: setup media, concurrent held media/settings/wallpaper, menu and first launch presentation, stale replacement/eject, async save/shutdown; service_max_us=%llu\n",
         (unsigned long long)(autoplay_test_service_max/1000));
+}
+/* Ten seconds of actual shell frames: each listing call and entry costs one
+ * 25 ms slow-stick command. Both workers must leave the frame thread free. */
+static pthread_t slow_folder_frame;
+static unsigned slow_folder_lists, slow_folder_revision;
+static void slow_folder_pause(void)
+{ struct timespec pause={0,25000000}; nanosleep(&pause,NULL); }
+static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
+{
+    (void)ctx; slow_folder_pause(); struct fm_meta meta={.type=FM_DIR};
+    if (!strcmp(path,"/")) return emit("Documents",&meta,arg);
+    if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
+    int media=!strcmp(path,"/mnt/e");
+    assert(media || !strcmp(path,DESK_FOLDER));
+    if (media || flags==FM_LIST_NAMES_ONLY) {
+        assert(!pthread_equal(pthread_self(),slow_folder_frame));
+        assert(flags==FM_LIST_NAMES_ONLY);
+        if (!media) __atomic_add_fetch(&slow_folder_lists,1,__ATOMIC_RELAXED);
+    }
+    meta.type=FM_FILE; meta.size=100;
+    unsigned revision=__atomic_load_n(&slow_folder_revision,__ATOMIC_RELAXED);
+    for (unsigned i=0;i<(media ? 300u : 8u);i++) {
+        char name[64]; snprintf(name,sizeof(name),"%s%u.txt",revision && !media ? "changed" : "file",i);
+        slow_folder_pause(); int e=emit(name,&meta,arg); if (e) return e;
+    }
+    return 0;
+}
+static int slow_folder_stat(void *ctx,const char *path,struct fm_meta *meta)
+{ (void)ctx; assert(!strcmp(path,DESK_FOLDER)); slow_folder_pause(); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+static void test_slow_stick_folder(void)
+{
+    static const struct fm_vfs fs={.list=slow_folder_list,.stat_path=slow_folder_stat};
+    static struct desktop d;
+    fake_reset(); slow_folder_frame=pthread_self();
+    desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    assert(!desk_folder_init(&d,&fs)); d.autoplay_fs=&fs;
+    assert(!desk_autoplay_prepare(&d));
+    d.pixels=calloc(640*480,4); assert(d.pixels); assert(!desk_redraw(&d));
+    desktop_watchdog.desktop=&d;
+    struct ciuki_media_volume volumes[26]={{0}};
+    uint64_t start=monotonic(), maximum=0; unsigned frames=0, mounted=0, changed=0;
+    __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(start/1000000ull),__ATOMIC_RELEASE);
+    while (monotonic()-start<10000000000ull) {
+        uint64_t begin=monotonic(), elapsed=begin-start; desk_heartbeat(&d,begin);
+        if (!mounted && elapsed>=1000000000ull) {
+            mounted=1; volumes[4]=(struct ciuki_media_volume){.drive=4,.flags=CIUKI_MEDIA_REMOVABLE,.generation=1};
+            desk_autoplay_update(&d,volumes);
+        }
+        if (!changed && elapsed>=4000000000ull) { changed=1; __atomic_store_n(&slow_folder_revision,1,__ATOMIC_RELAXED); }
+        __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(begin/1000000ull),__ATOMIC_RELEASE);
+        desktop_stage(STALL_SHELL); shell_service(&d);
+        uint64_t service=monotonic()-begin; if (service>maximum) maximum=service;
+        assert(service<100000000ull);
+        char line[512]; int n=desktop_stall_record((uint32_t)(monotonic()/1000000ull),line,sizeof(line));
+        assert(!n || !strstr(line,"wait=folder-service "));
+        desktop_stage(STALL_RENDER);
+        desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},d.width,d.height);
+        fake_presents=0;
+        assert(!desk_redraw(&d)); frames++;
+        __atomic_store_n(&desktop_watchdog.frame_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
+        struct timespec pause={0,16000000}; nanosleep(&pause,NULL);
+    }
+    assert(frames>100 && mounted && __atomic_load_n(&slow_folder_lists,__ATOMIC_RELAXED)>=5);
+    assert(d.sh.autoplay.open && !strcmp(d.sh.autoplay.content.budget,"time"));
+    assert(!strcmp(d.sh.folder->model.entries[0].name,"changed0.txt"));
+    for (int k=0;k<DESK_CLIENTS;k++) if (d.clients[k].internal) desk_drop_client(&d,k);
+    desk_autoplay_stop(&d); desk_folder_destroy(&d); observers_close(&d); desk_render_release(&d);
+    free(d.pixels); free(d.sh.icons); free(d.sh.autoplay.workspace); desktop_watchdog.desktop=NULL; fake_reset();
+    printf("PASS F2-79 folder: 10 s slow-stick run, mount at 1 s, %u frames, service_max_us=%llu, no folder-service stall, external refresh\n",
+        frames,(unsigned long long)(maximum/1000));
 }

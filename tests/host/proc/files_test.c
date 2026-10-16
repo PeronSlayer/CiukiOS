@@ -239,7 +239,7 @@ static void test_namespace(void)
     dir=file_open(client,"/",O_DIRECTORY,0); CHECK(dir>=0);
     struct ciuki_dirent entry; int n; uint64_t cookie=0; bool dev=false,mnt=false;
     while ((n=px_getdents_locked(file_fd(client,dir),&entry))>0) {
-        CHECK(n==792 && entry.d_reclen==792 && entry.d_off==(int64_t)++cookie);
+        CHECK(n==(int)sizeof(struct ciuki_dirent) && entry.d_reclen==(int)sizeof(struct ciuki_dirent) && entry.d_off==(int64_t)++cookie);
         CHECK(entry.d_namlen==strlen(entry.d_name));
         for (unsigned i=entry.d_namlen;i<sizeof(entry.d_name);i++) CHECK(!entry.d_name[i]);
         CHECK(!entry.reserved[0] && !entry.reserved[1] && !entry.reserved[2]);
@@ -248,7 +248,7 @@ static void test_namespace(void)
     }
     CHECK(!n && dev && mnt);
     int64_t pos; CHECK(!file_seek_locked(file_fd(client,dir),0,SEEK_SET,&pos));
-    CHECK(px_getdents_locked(file_fd(client,dir),&entry)==792 && !strcmp(entry.d_name,".") && entry.d_off==1);
+    CHECK(px_getdents_locked(file_fd(client,dir),&entry)==(int)sizeof(struct ciuki_dirent) && !strcmp(entry.d_name,".") && entry.d_off==1);
     CHECK(file_seek_locked(file_fd(client,dir),1,SEEK_SET,&pos)==-EINVAL);
     all_closed();
     puts("files namespace: rename decision table, cwd after rename, pins, fixed dirents/cookies/rewind PASS");
@@ -303,7 +303,7 @@ static void test_read_interruption(void)
     int fd = file_open(client, "/", O_RDONLY | O_DIRECTORY, 0); CHECK(fd >= 0);
     struct file_description *d = file_fd(client, fd);
     struct ciuki_dirent record;
-    for (unsigned i = 0; i < 4; i++) CHECK(px_getdents_locked(d, &record) == 792);
+    for (unsigned i = 0; i < 4; i++) CHECK(px_getdents_locked(d, &record) == (int)sizeof(struct ciuki_dirent));
     CHECK(d->position == 4 && d->cursor == 0);
     memset(&record, 0xa5, sizeof(record));
     CHECK(!ua_write(client->memory, USER2, &record, sizeof(record)));
@@ -315,7 +315,7 @@ static void test_read_interruption(void)
     CHECK(interrupted_reads && d->position == 4 && d->cursor == 0);
     uint8_t buffer[sizeof(record)]; CHECK(!ua_read(client->memory, buffer, USER2, sizeof(buffer)));
     for (unsigned i = 0; i < sizeof(buffer); i++) CHECK(buffer[i] == 0xa5);
-    CHECK(call(CIUKI_SYS_GETDENTS, fd, USER2, sizeof(record), 0, 0) == 792 && d->position == 5);
+    CHECK(call(CIUKI_SYS_GETDENTS, fd, USER2, sizeof(record), 0, 0) == (int)sizeof(struct ciuki_dirent) && d->position == 5);
     CHECK(!file_close(client, fd));
     puts("files interrupted directory read: drained record discarded, buffer/cookie unchanged, retry succeeds PASS");
 }

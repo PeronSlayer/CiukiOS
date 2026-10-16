@@ -7,9 +7,9 @@
 #undef calloc
 #undef realloc
 #undef strdup
-static int footprint_list(void *ctx,const char *path,fm_emit emit,void *arg)
+static int footprint_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
 {
-    (void)ctx;
+    (void)ctx; (void)flags;
     struct fm_meta dir={.type=FM_DIR};
     if (!strcmp(path,"/")) return emit("Documents",&dir,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&dir,arg);

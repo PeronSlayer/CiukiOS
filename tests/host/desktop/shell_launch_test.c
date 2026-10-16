@@ -1031,6 +1031,7 @@ int main(int argc,char **argv)
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
     if (argc==2 && !strcmp(argv[1],"--autoplay-startup")) { test_autoplay_startup(); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--slow-stick-folder")) { test_slow_stick_folder(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--launch-input")) { test_launch_input(); return 0; }
 #endif
     test_network_service();
