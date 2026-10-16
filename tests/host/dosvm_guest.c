@@ -337,7 +337,13 @@ static struct v86_frame cpu;
 static uint64_t instructions, traps;
 /* Optional startup cost replay, usable with both pre-f3-14 and current VM
  * sources. Classify the trapped bytes, never execute or patch guest code. */
-static uint64_t replay_cost[14];
+static uint64_t replay_cost[14], replay_ns[14];
+static uint64_t replay_clock(void)
+{
+    struct timespec t;
+    CHECK(!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t));
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
 static unsigned replay_cause(const struct v86_frame *f)
 {
     unsigned vector = f->tf.vector;
@@ -459,6 +465,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     struct v86_frame hw = cpu;
     hw.tf.vector = vector; hw.tf.err = err; fake_cr2 = cr2;
     unsigned cost = getenv("GUEST_COSTS") ? replay_cause(&hw) : 13;
+    uint64_t begin = getenv("GUEST_COSTS") ? replay_clock() : 0;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
     traps++;
     if (vector == 1) {
@@ -474,6 +481,7 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     if (getenv("GUEST_COSTS")) {
         if ((hw.tf.eflags & V86_VM) != (cpu.tf.eflags & V86_VM)) cost = 5;
         replay_cost[cost]++;
+        replay_ns[cost] += replay_clock() - begin;
     }
     g_current = &caller; sti();
 }
@@ -803,8 +811,9 @@ static void stats(const char *name)
     if (getenv("GUEST_COSTS")) {
         static const char *const causes[14] = {"rm_int", "rm_iret", "rm_flags", "pm_int", "pm_flags", "switch",
             "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other"};
-        for (unsigned i = 0; i < 14; i++) printf("  replay_cost phase=%s cause=%s exits=%llu\n", name, causes[i],
-            (unsigned long long)replay_cost[i]);
+        for (unsigned i = 0; i < 14; i++) printf("  replay_cost phase=%s cause=%s exits=%llu us=%llu avg_ns=%llu\n", name, causes[i],
+            (unsigned long long)replay_cost[i], (unsigned long long)(replay_ns[i] / 1000),
+            (unsigned long long)(replay_cost[i] ? replay_ns[i] / replay_cost[i] : 0));
         printf("  replay_vectors phase=%s gp=%u pf=%u db=%u timer=%u other=%u pm=%u\n", name,
             gv->perf.exits[0], gv->perf.exits[1], gv->perf.exits[2], gv->perf.exits[3], gv->perf.exits[4], gv->perf.exits[5]);
     }
@@ -895,6 +904,7 @@ int main(int argc, char **argv)
             printf("f3-28 Quake CRT data alias: %s (EXEC=%u reopened=%u aliases=%u active=%u entries=%u terminations=%u verdict=%s)\n",
                    pass ? "PASS" : "FAIL", quake_exec_checked, quake_reopened, quake_alias_calls,
                    gv->dpmi.active, gv->dpmi.stats.entries, gv->dpmi.stats.terminations, gv->info.verdict_detail);
+            if (getenv("GUEST_COSTS")) stats("quake-crt");
             if (!pass) { failures++; screen(); }
             break;
         }
@@ -904,7 +914,11 @@ int main(int argc, char **argv)
                    (unsigned long long)(g_ticks - ms), gv->dpmi.stats.irqs_pm - startup_irqs);
             stats("video-startup");
             if (r != 1) { failures++; screen(); }
-            else if (menu && !menu_replay()) { failures++; fault_dump(); screen(); }
+            else if (menu) {
+                bool pass = menu_replay();
+                if (getenv("GUEST_COSTS")) stats("menu");
+                if (!pass) { failures++; fault_dump(); screen(); }
+            }
             break;
         }
         printf("  -> %s %s detail=%s state=%u reason=%u vector=%u after %llu instructions, %llu ms\n",

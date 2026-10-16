@@ -740,23 +740,27 @@ bool dosvm_trap(struct trap_frame *tf)
             }
         }
         else if (tf->vector == 13) {
-            uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
-            uint64_t flags_insn[4] = {0}, hlts = 0;
-            {
-                for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
-                hlts = v->monitor.stats.insn[V86_HLT];
-            }
-            v->perf.cause = DOSVM_COST_RM_FLAGS;
             v86_retire_shadow(&v->monitor, f);
-            e = v86_emulate(&v->monitor, f);
-            if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
-            if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
-            {
-                for (unsigned i = 0; i < 4; i++) if (v->monitor.stats.insn[V86_PUSHF + i] != flags_insn[i])
-                    v->perf.cause = DOSVM_COST_RM_PUSHF + i;
-                if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;
+            if (!dosvm_io_fast(v, f, 0, &e)) {
+                uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
+                uint64_t flags_insn[4] = {0}, hlts = 0;
+                {
+                    for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
+                    hlts = v->monitor.stats.insn[V86_HLT];
+                }
+                v->perf.cause = DOSVM_COST_RM_FLAGS;
+                e = v86_emulate(&v->monitor, f);
+                if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
+                if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
+                {
+                    for (unsigned i = 0; i < 4; i++) if (v->monitor.stats.insn[V86_PUSHF + i] != flags_insn[i])
+                        v->perf.cause = DOSVM_COST_RM_PUSHF + i;
+                    if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;
+                }
             }
-            if (!e && !v->frame_pm && v->perf.cause == DOSVM_COST_VGA_IO) e = dosvm_io_burst(v, f);
+            if (!e && !v->frame_pm && (v->perf.cause == DOSVM_COST_VGA_IO ||
+                (v->perf.cause == DOSVM_COST_PIT_PIC && v->perf.io_port >= 0x40 &&
+                 v->perf.io_port <= 0x43))) e = dosvm_io_burst(v, f);
         }
         else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) {
             dr6 = dpmi_debug_status(v, dr6);
@@ -879,7 +883,7 @@ bool dosvm_trap(struct trap_frame *tf)
 static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
-    if (idle_safe(v)) {
+    if ((vector == 0x28 || vector == 0x2F || vector == 0x16) && idle_safe(v)) {
         if (vector == 0x28 || (vector == 0x2F && (uint16_t)f->tf.eax == 0x1680))
             idle_wait(v, vector == 0x28 ? DOSVM_IDLE_28 : DOSVM_IDLE_2F);
         if (vector == 0x16) idle_track_poll(v, f, false);

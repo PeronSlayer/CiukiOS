@@ -324,6 +324,15 @@ clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
     "${guest_cpu[@]}" -o "$out/dosvm_audio_cost_test"
 CIUKI_VM_AUDIO_COST=1 "$out/dosvm_audio_cost_test"
 
+# f3-33: aggregate production exit costs with fake CPU trap transport.
+clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_exit_bench.c" \
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
+    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" -o "$out/dosvm_exit_bench"
+"$out/dosvm_exit_bench"
+
 # f3-16: production window/dirty-page replay and presenter costs. Sequential
 # with every other host suite; synthetic frames, no image rebuild or QEMU.
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \

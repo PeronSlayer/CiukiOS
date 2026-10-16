@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
-#include <ciuki/cpu.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
 
@@ -471,6 +470,21 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         irq_restore(flags);
         if (!write) *value = b;
         return 0;
+    }
+    /* The default PIT registration is stable across reads/latches. Keep
+     * registration/unregistration authoritative (including custom handlers)
+     * while avoiding the generic registry search for its cached owner. */
+    unsigned pit = v->port_hint[0];
+    if (port >= 0x40 && port <= 0x43 && pit < DOSVM_PORTS &&
+        v->ports[pit].handler == dosvm_pit_port &&
+        port >= v->ports[pit].first && port <= v->ports[pit].last) {
+        v->perf.cause = DOSVM_COST_PIT_PIC;
+        uint32_t flags = irq_save();
+        int result = dosvm_pit_port(v, port, width, write, value, v->ports[pit].arg);
+        irq_restore(flags);
+        if (!result && write && (port != 0x43 || (((uint8_t)*value >> 6) < 3 && (*value & 0x30))))
+            dosvm_trace(v, DOSVM_TRACE_PIT, &v->frame, port, (uint8_t)*value, 0);
+        return result;
     }
     unsigned kind = (port >= 0x40 && port <= 0x43) || port == 0x61 ? 0 :
         port == 0x60 || port == 0x64 ? 1 : port >= 0x3B0 && port <= 0x3DF ? 2 : 3;

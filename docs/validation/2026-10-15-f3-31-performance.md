@@ -110,3 +110,61 @@ startup DB exits (4.6% less host DB time); total startup remains unchanged
 within noise. The final full suite also checks INT 80h cost/vector attribution
 through its direct IDT gate and the early IRQ accounting guard. QEMU and T23
 validation, sound-enabled gameplay and the hardware FPS targets remain open.
+
+F3-33 research and implementation decision, 2026-10-16:
+
+- Intel's [8254 datasheet, pp. 7–8](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8254.pdf)
+  specifies that a counter latch holds its value until the programmed reads
+  consume it; a repeated latch before consumption is ignored. Extend the
+  bounded VGA burst to byte PIT/PIC IN/OUT and flag-preserving MOV setup,
+  using the same virtual device handlers and stopping at the existing IRQ,
+  shadow, debug, return-tracker and reschedule boundaries.
+- Intel's [8259A datasheet, pp. 14–16](https://www.scs.stanford.edu/10wi-cs140/pintos/specs/8259A.pdf)
+  defines OCW2 EOI, mask and priority behavior. Direct instruction dispatch
+  must retain the authoritative PIC model, including initialization, poll,
+  priority rotation and cascade state; no physical port permissions change.
+- The [Intel SDM V86 chapter](https://cdrdv2-public.intel.com/874250/253669-090-sdm-vol-3b.pdf)
+  defines the real-mode interrupt stack and IRET operand widths. Combine
+  adjacent checked stack transfers while retaining the scalar path for
+  16-bit stack wrap and preserving preflight before interrupt-frame writes.
+  Read each current IVT entry; never cache guest hooks across exits.
+- [DPMI virtual interrupts](https://www.delorie.com/djgpp/doc/dpmi/ch4.4.1.html)
+  distinguishes physical IF from virtual IF and warns that protected POPF
+  does not restore the latter. Keep the existing saved-image proof, its
+  bounds and the return tracker. Reduce proof fetch overhead within each
+  invocation, and reject work early only when no register or stack image
+  can satisfy the existing equality check. No backwards signature matching
+  or timeout-based IF restoration is introduced.
+
+Host costs include fake trap transport, production frame save/dispatch/return
+and host paging callbacks. They cannot measure physical privilege transitions,
+register-save assembly or CPU IRET latency. The lead must compare the T23
+`vm_perf_cost` rows on the integrated image. Implementation results and exact
+commands are recorded in `build/codex/f3-33-report.md`.
+
+F3-33 host results: the full sanitized suite passes, including 9,201,587 VM
+checks; the i686 kernel build and integer-only audit pass. Three alternating
+O2 host runs have median latch/read/read sequence cost 220 to 152 ns (three
+exits to one), RM INT/IRET pair cost 242 to 174 ns, reflection alone 67 to
+27 ns, and a 512-byte saved-FLAGS proof exit 4846 to 1834 ns. The same proof
+with an impossible image falls from 4845 to 116 ns. Pure PIC dispatch and
+return preparation remain 7/9 ns; a lone PIC exit is flat within host noise.
+These isolate fake transport/production helpers, not CPU exception latency.
+
+Real DOOM graphics startup and Quake CRT preserve their exact baseline
+instruction/trap counts; end-to-end DOOM startup is unchanged within noise.
+The existing DOOM menu restoration mismatch and the Quake runner's x87
+subset limit reproduce in both binaries. The read-only DOS image also
+passes window keys, DPMI16/32, DOS/4GW, the expected privileged fault and the
+host TCG model. Detailed per-exit costs, complete-demo comparison, commands,
+input hashes and remaining lead qualification are in the F3-33 report.
+
+The F3-33 full DOOM DEMO1 before/after comparison passes all 5,026 tics with
+identical 5,096,860,656 instructions / 12,717,948 traps, zero unexpected
+instructions, prompt restoration and full DPMI cleanup. PM flag means fall
+867 to 765 ns and RM IRET 712 to 680 ns; PIT/PIC is flat within host noise.
+A single wall-time pair is 558.627/520.175 s, while completed-exit CPU sums
+remain approximately unchanged. This is not a hardware speedup claim. A
+startup comparison with the existing runtime GUEST_SLICE=64000 option also
+passes with identical before/after counts; it does not reproduce the T23's
+80 us PM flag cost. The exact physical cost attribution remains for the lead.

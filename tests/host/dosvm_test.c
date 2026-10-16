@@ -655,6 +655,7 @@ static void test_memory_services(void)
 #include "dosvm_irq_stall_test.inc"
 #include "dosvm_speed_test.inc"
 #include "dosvm_cost_test.inc"
+#include "dosvm_exit_test.inc"
 #include "dosvm_idle_test.inc"
 #include "dosvm_fullscreen_test.inc"
 #include "dosvm_quake_start_test.inc"
@@ -665,6 +666,7 @@ int main(void)
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
+    if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
@@ -675,6 +677,7 @@ int main(void)
     test_irq_stall();
     test_speed();
     test_cost_bursts();
+    test_exit_cost();
     test_idle();
     test_fullscreen_transport();
     test_fullscreen_service();

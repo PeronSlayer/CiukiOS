@@ -52,8 +52,8 @@ struct v86_ops {
 struct v86 {
     struct v86_ops ops;
     /* Optional DOS services; absent for the serialized firmware VM. copy
-     * transfers checked ranges across noncontiguous private pages. memory
-     * remains the complete-range validation hook. io returns -ENOSYS to
+     * validates complete ranges and transfers across noncontiguous private
+     * pages. memory validates fetches and stack preflight. io returns -ENOSYS to
      * delegate PIC/PIT byte devices to this monitor. */
     int (*copy)(void *arg, uint32_t linear, void *buffer, unsigned bytes, bool write);
     int (*io)(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value);

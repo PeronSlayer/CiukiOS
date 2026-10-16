@@ -1,6 +1,6 @@
-/* Bounded VGA output coalescing at an actual trapped instruction boundary.
+/* Bounded virtual VGA/PIT/PIC I/O at an actual trapped instruction boundary.
  * No speculative memory writes, branch execution or physical I/O. Ordinary
- * MOV-immediate setup is committed only when followed by another VGA OUT.
+ * MOV setup is committed only when followed by another supported I/O cycle.
  * TF, watchpoints, IF restoration, shadows, enabled IRQs and rescheduling
  * all stop the burst. SPDX-License-Identifier: GPL-2.0-only */
 #define DOSVM_IO_BUDGET 64u
@@ -14,7 +14,14 @@ static bool io_burst_fetch(struct dosvm *v, const struct v86_frame *f, unsigned 
         if (f->tf.cs > 0xFFFF || ip > 0xFFFF) return false;
         linear = (f->tf.cs << 4) + ip;
     }
-    return !(linear >= 0xA0000 && linear < 0xC0000) && !dosvm_read(v, linear, byte, 1);
+    if (linear >= 0xA0000 && linear < 0xC0000) return false;
+    if (!v->frame_pm) {
+        const uint8_t *p = v->monitor.ops.memory(v->monitor.ops.arg, linear, 1, false);
+        if (!p) return false;
+        *byte = *p;
+        return true;
+    }
+    return !dosvm_read(v, linear, byte, 1);
 }
 static bool burst_blocked(const struct dosvm *v, const struct v86_frame *f)
 {
@@ -22,17 +29,71 @@ static bool burst_blocked(const struct dosvm *v, const struct v86_frame *f)
         v->dpmi.dr7 || v->dpmi.if_armed || v->dpmi.return_steps || v->monitor.shadow || v->dpmi.shadow ||
         (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0);
 }
+static bool io_hot_port(uint16_t port)
+{
+    return (port >= 0x40 && port <= 0x43) || port == 0x20 || port == 0x21 || port == 0xA0 || port == 0xA1;
+}
+/* Common unprefixed byte cycles need no generic instruction decoder. Prefixes,
+ * wider and string operations retain the scalar emulator's exact checks. */
+static bool io_fast_fetch(struct dosvm *v, const struct v86_frame *f,
+                          const struct dpmi_seg *cs, unsigned at, uint8_t *byte)
+{
+    if (!cs) return io_burst_fetch(v, f, at, byte);
+    uint32_t off = f->tf.eip + at;
+    if (!cs->big) off &= 0xFFFF;
+    return off <= cs->limit && !dosvm_read(v, cs->base + off, byte, 1);
+}
+bool dosvm_io_fast(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs, int *error)
+{
+    uint8_t op, imm;
+    if (!io_fast_fetch(v, f, cs, 0, &op) || (op != 0xE4 && op != 0xE6 && op != 0xEC && op != 0xEE)) return false;
+    uint16_t port = (uint16_t)f->tf.edx;
+    unsigned len = 1;
+    if (op < 0xE8) {
+        if (!io_fast_fetch(v, f, cs, len++, &imm)) return false;
+        port = imm;
+    }
+    if (!io_hot_port(port)) return false;
+    bool write = op & 2;
+    uint32_t value = f->tf.eax;
+    *error = v86_io(&v->monitor, port, 1, write, &value);
+    if (*error) {
+        if (!v->frame_pm) *error = v86_abort(&v->monitor, f, *error);
+        return true;
+    }
+    if (!write) f->tf.eax = (f->tf.eax & ~255u) | (uint8_t)value;
+    f->tf.eip += len;
+    if (!cs || !cs->big) f->tf.eip &= 0xFFFF;
+    if (!v->frame_pm) {
+        v->monitor.stats.insn[write ? V86_OUT : V86_IN]++;
+        if (v->monitor.shadow) {
+            v->monitor.shadow = false;
+            f->tf.eflags &= ~V86_TF;
+        }
+    }
+    return true;
+}
 int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
 {
+    unsigned cause = v->perf.cause;
     for (unsigned budget = 1; budget < DOSVM_IO_BUDGET && !burst_blocked(v, f); budget++) {
+        uint8_t op;
+        if (!io_burst_fetch(v, f, 0, &op)) return 0;
+        /* Most scalar EOIs end in POP/IRET. Avoid a frame copy and full
+         * prefix decoder when no supported burst instruction can follow. */
+        if (!(op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 ||
+            (op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF) || op == 0x6E || op == 0x6F ||
+            op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E ||
+            op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3)) return 0;
         struct v86_frame n = *f;
         struct dpmi_seg cs;
         bool big = v->frame_pm && dpmi_seg(v, (uint16_t)n.tf.cs, &cs) && cs.big;
         unsigned len = 0, width = big ? 4 : 2, moves = 0;
         bool rep = false;
-        uint8_t op;
+        bool first = true;
         for (;;) {
-            if (len >= 15 || !io_burst_fetch(v, &n, len++, &op)) return 0;
+            if (!first && (len >= 15 || !io_burst_fetch(v, &n, len, &op))) return 0;
+            first = false; len++;
             if (op == 0x66) { width = big ? 2 : 4; continue; }
             if (op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E || op == 0x64 || op == 0x65) continue;
             if (op == 0xF3 || op == 0xF2) { rep = true; continue; }
@@ -42,6 +103,7 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
             /* The first element already completed in the scalar emulator.
              * Reuse its complete per-element segment, DF and fault checks. */
             int e = v->frame_pm ? dpmi_io_repeat(v, f) : v86_emulate(&v->monitor, f);
+            v->perf.cause = cause;
             if (e) return e;
             if (f->tf.ecx == n.tf.ecx) return 0; /* exception reflection or empty REP */
             v->perf.batched++;
@@ -49,19 +111,26 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
             continue;
         }
         if (rep) return 0;
-        while (op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA) {
+        while (op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88) {
             if (++moves > 2) return 0;
-            unsigned bytes = op == 0xB0 || op == 0xB4 ? 1 : width;
-            uint32_t value = 0;
-            for (unsigned i = 0; i < bytes; i++) {
-                uint8_t byte;
-                if (len >= 15 || !io_burst_fetch(v, &n, len++, &byte)) return 0;
-                value |= (uint32_t)byte << (8 * i);
+            if (op == 0x88) {
+                uint8_t modrm;
+                if (len >= 15 || !io_burst_fetch(v, &n, len++, &modrm) || modrm != 0xC4) return 0;
+                n.tf.eax = (n.tf.eax & ~0xFF00u) | ((n.tf.eax & 255) << 8); /* MOV AH,AL */
+            } else {
+                unsigned bytes = op == 0xB0 || op == 0xB4 ? 1 : width;
+                uint32_t value = 0;
+                for (unsigned i = 0; i < bytes; i++) {
+                    uint8_t byte;
+                    if (len >= 15 || !io_burst_fetch(v, &n, len++, &byte)) return 0;
+                    value |= (uint32_t)byte << (8 * i);
+                }
+                uint32_t *reg = op == 0xBA ? &n.tf.edx : &n.tf.eax;
+                unsigned shift = op == 0xB4 ? 8 : 0;
+                uint32_t mask = bytes == 4 ? UINT32_MAX : ((1u << (bytes * 8)) - 1) << shift;
+                *reg = (*reg & ~mask) | (value << shift);
             }
-            uint32_t *reg = op == 0xBA ? &n.tf.edx : &n.tf.eax;
-            unsigned shift = op == 0xB4 ? 8 : 0;
-            uint32_t mask = bytes == 4 ? UINT32_MAX : ((1u << (bytes * 8)) - 1) << shift;
-            *reg = (*reg & ~mask) | (value << shift);
+            if (!big && (n.tf.eip > 0xFFFF || len > 0x10000u - n.tf.eip)) return 0;
             n.tf.eip += len;
             if (!big) n.tf.eip &= 0xFFFF;
             len = 0; width = big ? 4 : 2;
@@ -72,20 +141,27 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
             }
         }
         uint16_t port = (uint16_t)n.tf.edx;
-        if (op == 0xE6 || op == 0xE7) {
+        if (op >= 0xE4 && op <= 0xE7) {
             uint8_t byte;
-            if (!io_burst_fetch(v, &n, len++, &byte)) return 0;
+            if (len >= 15 || !io_burst_fetch(v, &n, len++, &byte)) return 0;
             port = byte;
-        } else if (op != 0xEE && op != 0xEF) return 0;
-        if (port < 0x3B0 || port > 0x3DF) return 0;
+        } else if (op < 0xEC || op > 0xEF) return 0;
         if (!(op & 1)) width = 1;
+        bool write = op & 2;
+        if (!((write && port >= 0x3B0 && port <= 0x3DF) || (width == 1 && io_hot_port(port)))) return 0;
+        if (!big && (n.tf.eip > 0xFFFF || len > 0x10000u - n.tf.eip)) return 0;
         uint32_t value = n.tf.eax;
-        *f = n; /* setup instructions retired even if the OUT fails */
-        int e = v86_io(&v->monitor, port, width, true, &value);
+        *f = n; /* setup instructions retired even if the I/O fails */
+        int e = v86_io(&v->monitor, port, width, write, &value);
+        v->perf.cause = cause; /* mixed bursts retain their first port's cost */
         if (e) return e;
+        if (!write) {
+            uint32_t mask = width == 4 ? UINT32_MAX : (1u << (width * 8)) - 1;
+            f->tf.eax = (f->tf.eax & ~mask) | (value & mask);
+        }
         f->tf.eip += len;
         if (!big) f->tf.eip &= 0xFFFF;
-        if (!v->frame_pm) v->monitor.stats.insn[V86_OUT]++;
+        if (!v->frame_pm) v->monitor.stats.insn[write ? V86_OUT : V86_IN]++;
         v->perf.batched++;
     }
     return 0;
