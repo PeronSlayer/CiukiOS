@@ -92,9 +92,10 @@ struct irq_chain_stats {
  * stays pinned until successful removal.
  *
  * trap.c retains spurious detection and exactly one EOI after this chain's
- * handler returns. The line stays masked until a worker continuation, which
- * necessarily runs after EOI in the non-preemptible kernel. Ring overflow
- * fails closed, retaining the masked line and quarantining all its claims. */
+ * handler returns. A complete bounded pass leaves the PIC mask untouched.
+ * Deferral masks before EOI; the worker finishes the pass and unmasks once
+ * after EOI in the non-preemptible kernel. Quarantine and ring overflow
+ * retain the masked line and quarantine all its claims (usb-contract.md). */
 int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner);
 int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owner);
 bool irq_chain_snapshot(unsigned irq, struct irq_chain_stats *out);

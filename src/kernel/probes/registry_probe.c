@@ -1,6 +1,6 @@
 /* F1 registry evidence, using the production registry and chain algorithm.
  * Research: https://www.kernel.org/doc/html/v6.12/core-api/genericirq.html
- * The live chain API unconditionally unmasks its physical PIC line. To
+ * The live chain API unmasks its first participant's physical PIC line. To
  * exercise it without asserting hardware, compile the SAME registry.c in
  * this TU with private state and fake PIC/work/register boundaries (as in
  * kernel_sync_test.c). No second chain implementation or live-handler swap.
@@ -26,7 +26,7 @@ static struct {
     kwork_fn work;
     void *arg;
     unsigned masks, unmasks, eois, writes, calls_a, calls_b;
-    bool asserted, failed;
+    bool asserted, failed, eoi_pending;
     char conflict[160];
 } fixture_pic;
 static struct ciuki_boot_info fixture_boot;
@@ -34,7 +34,11 @@ static void fixture_outb(uint16_t p, uint8_t v) { (void)p; (void)v; fixture_pic.
 static void fixture_outl(uint16_t p, uint32_t v) { (void)p; (void)v; fixture_pic.writes++; }
 static uint32_t fixture_inl(uint16_t p) { (void)p; return UINT32_MAX; }
 static void fixture_mask(unsigned irq) { fixture_pic.masked[irq] = true; fixture_pic.masks++; }
-static void fixture_unmask(unsigned irq) { fixture_pic.masked[irq] = false; fixture_pic.unmasks++; }
+static void fixture_unmask(unsigned irq)
+{
+    if (fixture_pic.eoi_pending) fixture_pic.failed = true;
+    fixture_pic.masked[irq] = false; fixture_pic.unmasks++;
+}
 static void fixture_handler(unsigned irq, irq_handler_t h) { fixture_pic.handlers[irq] = h; }
 static void fixture_log(const char *fmt, ...)
 {
@@ -75,6 +79,7 @@ static void fixture_seed(void) { }
 #define irq_chain fixture_irq_chain
 #define chains fixture_chains
 #define same_owner fixture_same_owner
+#define chain_mask fixture_chain_mask
 #define chain_quarantine fixture_chain_quarantine
 #define chain_service fixture_chain_service
 #define chain_finish fixture_chain_finish
@@ -133,6 +138,7 @@ static void fixture_seed(void) { }
 #undef irq_chain
 #undef chains
 #undef same_owner
+#undef chain_mask
 #undef chain_quarantine
 #undef chain_service
 #undef chain_finish
@@ -188,13 +194,15 @@ static bool probe_busy(int h, gen_t generation) { (void)h; (void)generation; ret
 
 static bool fixture_a(unsigned irq, const char *owner)
 {
-    if (!fixture_pic.masked[irq] || strncmp(owner, "fixture-a", 10)) fixture_pic.failed = true;
+    if (((read_eflags() & 0x200) && !fixture_pic.masked[irq]) ||
+        strncmp(owner, "fixture-a", 10)) fixture_pic.failed = true;
     fixture_pic.calls_a++;
     return fixture_pic.asserted;
 }
 static bool fixture_b(unsigned irq, const char *owner)
 {
-    if (!fixture_pic.masked[irq] || strncmp(owner, "fixture-b", 10)) fixture_pic.failed = true;
+    if (((read_eflags() & 0x200) && !fixture_pic.masked[irq]) ||
+        strncmp(owner, "fixture-b", 10)) fixture_pic.failed = true;
     fixture_pic.calls_b++;
     return fixture_pic.asserted;
 }
@@ -211,12 +219,16 @@ static bool fixture_pass(unsigned irq)
     if (!fixture_pic.handlers[irq] || fixture_pic.masked[irq]) return false;
     struct trap_frame tf = { .vector = 0x20 + irq, .cs = SEL_KCODE };
     uint32_t f = irq_save();
+    fixture_pic.eoi_pending = true;
     fixture_pic.handlers[irq](&tf);
-    bool masked_line = fixture_pic.masked[irq];
+    struct irq_chain_stats s;
+    fixture_irq_chain_snapshot(irq, &s);
+    bool mask_ok = fixture_pic.masked[irq] == (s.deferred || s.quarantined);
     fixture_pic.eois++;               /* dispatcher epilogue, no physical EOI */
+    fixture_pic.eoi_pending = false;
     irq_restore(f);
     fixture_drain();
-    return masked_line && !fixture_pic.failed;
+    return mask_ok && !fixture_pic.failed;
 }
 static bool fixture_idle(int h, gen_t generation)
 {
@@ -273,7 +285,8 @@ static bool shared_fixture(void)
         fixture_pic.asserted = true;
         ok = fixture_pass((unsigned)irq) && ok;
         ok = fixture_pic.calls_a == 1 && fixture_pic.calls_b == 1 && ok;
-        /* Remove while its deferred rearm is pending, exercising the fence. */
+        /* Remove the stopped participant after a complete shared pass. The
+         * host budget fixture separately covers removal during deferral. */
         struct trap_frame tf = { .vector = 0x20 + (unsigned)irq, .cs = SEL_KCODE };
         uint32_t f = irq_save();
         if (fixture_pic.handlers[irq]) fixture_pic.handlers[irq](&tf);

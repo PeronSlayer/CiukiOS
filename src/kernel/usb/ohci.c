@@ -113,6 +113,8 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     uint64_t begin = h->io.now(h->io.cookie);
     unsigned budget = usb_packet_budget(d, ep, periodic, begin);
     if (!budget) { d->packet_trace.result=-USB_ETIMEDOUT; return -USB_ETIMEDOUT; }
+    usb_ohci_service_done(h); /* consume saved NextTD chains before reuse */
+    if (!h->ready || h->irq_status) return -USB_EIO;
     unsigned frame = usb_read(h, 0x3c, 4) & 0xffff, frames = 0;
     struct usb_packet_trace *trace = &d->packet_trace;
     *trace = (struct usb_packet_trace){.expected=length,.actual=-1,
@@ -131,8 +133,6 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     if (pid != USB_PID_IN && length) memcpy(h->dma + USB_BUFFER, data, length);
     ed[0] = d->address | ep << 7 | (d->low_speed ? 1u << 13 : 0) | mps << 16 | (1u << 14);
     ed[1] = h->dma_phys + USB_TAIL; ed[2] = h->dma_phys + USB_TD; ed[3] = 0;
-    /* DoneHead is acknowledged by usb_hid_service, independently of BOT. */
-    usb_write(h, 0x0c, 0x7f, 4);
     if (!periodic) { usb_write(h, current, 0, 4); usb_write(h, head, h->dma_phys + USB_ED, 4); }
     usb_barrier(); ed[0] &= ~(1u << 14); usb_barrier();
     usb_write(h, 4, (usb_read(h, 4, 4) & 4u) | 0x80 | (periodic ? 4 : bulk ? 0x20 : 0x10), 4);
@@ -142,6 +142,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     unsigned tries = budget + 1;
     int result = -USB_ETIMEDOUT;
     for (unsigned i = 0; i < tries; i++) {
+        usb_ohci_service_done(h);
         if (!h->ready) {
             trace->frames=trace->poll_frames=frames; trace->elapsed_ms=h->io.now(h->io.cookie)-begin;
             trace->result=trace->retired=-USB_EIO; return -USB_EIO;
@@ -170,6 +171,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     ed[0] |= 1u << 14; usb_barrier();
     usb_write(h, 4, (usb_read(h, 4, 4) & 4u) | 0x80, 4);
     int retired = usb_retire_frames(h, 0x3c, 4, 0xffff);
+    usb_ohci_service_done(h);
     frames += (usb_read(h, 0x3c, 4) - frame) & 0xffff;
     usb_barrier(); trace->status=td[0]; trace->token=ed[0]; trace->frames=frames;
     trace->elapsed_ms=h->io.now(h->io.cookie)-begin; trace->retired=retired;

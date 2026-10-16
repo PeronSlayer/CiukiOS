@@ -35,6 +35,7 @@
  * pinned controller allocation. Boot reports need at most eight bytes. */
 #define USB_HID_BASE 4608u
 #define USB_HID_STRIDE 48u
+#define USB_OHCI_DONE_HEADS (USB_DEVICE_MAX * USB_HID_MAX + 1u)
 #define USB_HID_LATENCY_LIMIT 20u
 #define USB_BULK_TD 7680u
 #define USB_BULK_BUFFER 8192u
@@ -191,6 +192,10 @@ struct usb_host {
     bool attempted, ready, quarantined, touched, owned, busy;
     bool irq_attached, irq_pending;
     uint32_t irq_status; /* fatal causes retained after device-local W1C */
+    bool ohci_root_pending; /* RHSC stays disabled until the next root scan */
+    uint32_t ohci_done_heads[USB_OHCI_DONE_HEADS];
+    unsigned ohci_done_read, ohci_done_count;
+    uint64_t ohci_done_batches, ohci_done_tds;
     uint64_t interrupts;
     struct kwait changed;
     bool scanned, schedule_dumped;
@@ -241,6 +246,7 @@ void usb_detach(struct usb_device *, const char *);
  * contiguous DMA pages; attachment takes their registry lease before DMA. */
 int usb_attach(struct usb_host *, const struct pci_func *, const struct usb_io *, uint8_t *, uint32_t);
 bool usb_host_irq(struct usb_host *);
+void usb_ohci_service_done(struct usb_host *); /* transfer mutex held; before TD reuse */
 int usb_control(struct usb_device *, uint8_t type, uint8_t request, uint16_t value,
                 uint16_t index, void *, unsigned length);
 int usb_enumerate(struct usb_host *, unsigned root, unsigned parent, unsigned port, bool low);

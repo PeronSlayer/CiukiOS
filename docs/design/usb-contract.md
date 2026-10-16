@@ -1,5 +1,49 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-72: completion interrupts and shared-line EOI (2026-10-16)
+
+This amendment supersedes F1-71's frame notifications below. The UHCI
+inactive schedule tail has IOC clear; control, bulk and HID TDs retain IOC
+on attached IRQ controllers. OHCI enables WDH, UE, RHSC and MIE
+(`0x80000052`), with SOF disabled. Its handler ignores disabled SOF status
+and acknowledges only observed completion, error and root-hub causes.
+See the appended [research and validation](../validation/f1-71-shared-pci-interrupts.md#f1-72-completion-interrupts-and-pic-mask-writes).
+
+Review corrections: UHCI fatal handling performs bounded source isolation
+and readback in the handler; failure quarantines its attached IRQ lease
+before EOI. OHCI disables RHSC locally until the 250 ms worker scan clears
+port/hub changes, and ignores disabled causes on peer dispatch. One
+IRQ-serialized path saves HccaDoneHead, clears it, issues a barrier and then
+acknowledges WDH. Saved done chains are consumed before descriptor reuse;
+the IRQ takes no sleeping mutex. See the
+[review research and fixtures](../validation/f1-71-shared-pci-interrupts.md#f1-72-review-fatal-containment-rhsc-and-done-head-ownership).
+
+Qualified PCI INTx handlers run with IF clear, acknowledge their own device
+causes and return to the trap dispatcher's single `pic_eoi()` call. A complete
+bounded pass leaves the PIC mask untouched and queues no continuation.
+A source asserting after its member ran remains level asserted and is
+delivered again after EOI. On budget exhaustion the chain masks once before
+returning for EOI, then completes remaining members in the work thread and
+unmasks once with IF clear. An unclaimed streak reaching the existing stuck
+threshold, a stale lease or failed continuation queue quarantines the line:
+mask before EOI and never rearm. Removing the last member also keeps the
+line masked. Quarantine during deferral must not duplicate the mask or
+permit the queued continuation to unmask. Exclusive ISA handlers and
+spurious IRQ7/15 EOI rules retain their existing handling.
+
+This ordering follows [PCI 3.0 §2.2.6](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf)
+(level-sensitive source stays asserted until serviced) and
+[ICH3-M §§5.7.4.6–9](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+(ELCR level detection, source removal before EOI, cascaded PIC EOI).
+
+Host workers wake on completion notifications independently of the unchanged
+absolute 250 ms root/hub scan deadline. Mandatory control/bulk and USB
+reset/recovery sleeps retain their absolute elapsed-time bounds across
+notifications. HID service wakes on completion and retains its 1 ms timer
+fallback for lost interrupts and two-frame retirement. Completion-to-first
+service latency is distinct from queue delivery, which still requires safe
+retirement; no DMA reuse or retirement rule is relaxed.
+
 F1-71 amends the polling-only execution rules below: a qualified firmware
 PIRQ/ELCR route uses the registry's shared INTx chain. See
 [F1-71 research and validation](../validation/f1-71-shared-pci-interrupts.md).

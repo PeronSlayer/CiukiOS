@@ -122,3 +122,123 @@ FPU/SIMD audit: 5,252,248 bytes, SHA-256
 Verbatim results and logs are in the “Review fixes” section of
 `build/codex/f1-71-report.md`. No QEMU, image build, diary or Git mutation
 was performed; canonical-image and hardware qualification remain with the lead.
+
+## F1-72: completion interrupts and PIC mask writes
+
+Research repeated before implementation, 2026-10-16. The preceding F1-71
+results remain historical evidence; this amendment supersedes its heartbeat
+and per-pass mask/rearm choices.
+
+- [QEMU v9.2 UHCI](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-uhci.c),
+  `uhci_handle_td()` and `uhci_complete_td()`, and
+  [ICH3-M §5.16.6.1](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+  confirm that an inactive IOC TD raises an interrupt whenever encountered.
+  Clear IOC on the pinned tail; retain it on actual transfer TDs.
+- [Linux v6.12 OHCI register definitions](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/ohci.h)
+  and [QEMU v9.2 OHCI](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-ohci.c)
+  distinguish SF (bit 2) from WDH/UE/RHSC (bits 1/4/6). Enable only the
+  latter and MIE; ignore latched disabled SF during peer dispatch.
+- [PCI 3.0 §2.2.6](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf)
+  requires level-sensitive INTx to remain asserted until its request is
+  cleared. [ICH3-M §§5.7.4.6–9](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+  describe ELCR and removing a level request before EOI. The existing
+  trap dispatcher owns EOI with IF clear: successful bounded chains need
+  no PIC mask transaction. Deferred/quarantined chains mask before EOI;
+  only a completed healthy deferral unmasks once, in the worker.
+
+Repository comparison: `uhci.c` installed the inactive IOC tail,
+`usb_core.c` enabled OHCI SF and acknowledged it as an owned cause, and
+`registry.c` masked/queued/unmasked every pass. The read-only supplied
+`zz-usb/7fd10c05/serial.log` (image 79df4293) confirms IRQ admission and
+cumulative PIC writes 4133, 6271, 8454 and 10550. Their two-second deltas
+are 2138, 2183 and 2096 writes. At cycle 28 it records handles=19/20 and
+`desktop_contract` failure. A heartbeat race is a hypothesis, not a proved
+cause of that separate handle observation. Keep scan/deadline/retirement
+rules and qualified IRQ/refusal polling gates; measure completion wake and
+idle fallback separately in host fixtures. QEMU write limits and hardware
+qualification remain with the lead.
+
+### F1-72 host outcome
+
+The focused USB, storage and registry host suites pass. The full kernel
+host script also passes (exit 0), including the dependent production shadow
+registry probe, audio, NICs, storage power cuts and all new completion cases.
+Commands run sequentially with `nice -n 19` and ASan/UBSan; full logs and
+verbatim results are in `build/codex/f1-72-report.md`.
+
+With real production HID/TD/IRQ code and independently phased PIT/HC events,
+both UHCI and OHCI measure 0 µs completion-to-first-service with delivered
+IRQ and 500 µs with a lost IRQ or unqualified polling. Each idle HID replay
+records 1000 wakes/s and zero interrupts; the separate worker orchestration
+replay records 4 host scans plus 1000 HID turns = 1004 idle wakes/s and zero
+interrupts. Immediate scheduler dispatch is modeled; these are not measured
+hardware scheduling bounds. Input delivery retains two-frame retirement.
+
+Claiming chain passes perform zero mask writes and queue no continuation,
+including with a full work ring. A healthy deferred pass masks once and
+unmasks once after modeled EOI. Quarantine during deferral and continuation
+overflow mask only once and never rearm; the 1000-unclaimed-pass threshold,
+shared peer removal, late assertions and spurious counters remain covered.
+The shared dispatcher header and the embedded `registry_probe.c` fixture
+are updated to the same EOI/mask contract; no live IRQ fixture is unmasked.
+
+`tests/suites/f1-usb.json` and `scripts/test/run.py` remain unchanged.
+Qualified cases still require `mode=irq reason=ready_irq`; host admission
+refusals still require `mode=poll reason=ready_polling`. No QEMU/image build
+or hardware result is claimed. The lead must measure the directive's idle
+and moving-mouse PIC-write limits on its canonical image.
+
+The kernel-only build also passes: link has no undefined symbols and the
+FPU/SIMD audit passes. `build/f0/VMM.ELF` is 5,439,432 bytes, SHA-256
+`e92604a63a267a260473dab8b9a19ab3f013cb001f27b661c332f4a764b9030a`.
+This artifact is host build evidence, not an OS image or a QEMU result.
+
+### F1-72 review: fatal containment, RHSC and done-head ownership
+
+Research checked again on 2026-10-16 before the review fixes:
+
+- [QEMU v9.2 `uhci_update_irq()`](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-uhci.c)
+  asserts HSE/HCPE independently of USBINTR. The current handler only
+  disabled USBINTR and W1C'd status, leaving isolation to a starvable worker.
+  Perform one bounded register/configuration isolation attempt in IRQ context:
+  clear USB_LEGKEY enables (including USBPIRQEN on
+  [ICH3-M §11.1.16](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)),
+  USBINTR, Run/Stop, status and PCI BME, then read all back, including raw
+  USBSTS/HCHalted. An uncertain result quarantines the attached IRQ lease
+  before EOI. Device detach and any sleeping cleanup remain worker work.
+- [Linux v6.12 OHCI IRQ handling](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/ohci-hcd.c)
+  disables RHSC because implementations can hold it until port changes clear.
+  The current handler leaves it enabled after status W1C. Disable/read back
+  RHSC locally, retain a separate root-work flag until the existing 250 ms
+  scan, clear observed port/hub changes, then acknowledge/re-enable RHSC.
+  Peer dispatch must filter against the current interrupt-enable set.
+- [OpenHCI 1.0a §§6.4.5, 7.1.4 and 7.4.3](https://dl.xkwy2018.com/downloads/documents/hcir1_0a.pdf)
+  hold HccaDoneHead stable until WDH clears; software must save it first.
+  The current IRQ, HID worker and packet setup acknowledge independently.
+  Use one IRQ-serialized capture/clear/barrier/ack path and a bounded queue
+  of saved heads; the worker consumes every saved chain before TD reuse.
+  IRQ capture never takes the sleeping transfer mutex. Queue overflow fails
+  closed without acknowledging an uncaptured head. Hub status acknowledgement
+  writes only OCIC (bit 17); bit 16 is SetGlobalPower on write, not W1C.
+
+Regression fixtures must model fatal reassertion after every W1C without
+worker service, level RHSC until port/hub changes clear, and two HCCA head
+publications before worker service, including polling/IRQ interleaving.
+No heartbeat, common-pass PIC mask writes or timing-policy changes are made.
+
+Review-fix host outcome: USB, storage, the registry fixtures and the complete
+ASan/UBSan kernel host script all pass (exit 0). The persistent-fatal replay
+masks before EOI in one pass with zero worker turns. The level-RHSC replay
+ignores 16 peer passes while disabled and scans/clears/rearms at the 250 ms
+deadline; sticky changes retain polling. Both done-head publications survive
+until worker consumption, both HID reports arrive, the native polling/IRQ
+interleave consumes each list once, and queue overflow preserves HCCA/WDH
+while masking the lease. Existing idle/completion, absolute-delay, shared
+IRQ mask-write, audio and NIC checks still pass.
+
+The kernel-only build passes its FPU/SIMD audit and has no undefined symbols:
+5,445,228 bytes, SHA-256
+`75e07eeb7cdd1794cfc18d35b89b214cac14d8dd46f6e6c60145fcc3645438fd`.
+Commands, exact file/line references and verbatim results are appended under
+“Review fixes” in `build/codex/f1-72-report.md`. No QEMU, OS image, hardware,
+diary or Git mutation evidence is claimed.

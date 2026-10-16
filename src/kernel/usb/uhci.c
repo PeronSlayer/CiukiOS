@@ -28,11 +28,11 @@ static int start(struct usb_host *h)
     volatile uint32_t *control = words(h, USB_UHCI_CONTROL_QH);
     volatile uint32_t *bulk = words(h, USB_UHCI_BULK_QH);
     control[0] = (h->dma_phys + USB_UHCI_BULK_QH) | 2; control[1] = 1;
-    /* An inactive IOC TD is visited once at every frame's schedule tail;
-     * it generates no transaction, including while other queues NAK. */
+    /* Keep the inactive tail silent: IOC here would interrupt every frame,
+     * even with no transaction. Actual transfer TDs request completion. */
     bulk[0] = h->dma_phys + USB_TAIL; bulk[1] = 1;
     words(h, USB_TAIL)[0] = 1;
-    words(h, USB_TAIL)[1] = 1u << 24;
+    words(h, USB_TAIL)[1] = 0;
     for (unsigned i = 0; i < USB_DEVICE_MAX * USB_HID_MAX; i++) {
         volatile uint32_t *pipe = words(h, USB_HID_BASE + i * USB_HID_STRIDE);
         pipe[0] = i + 1 < USB_DEVICE_MAX * USB_HID_MAX ?
