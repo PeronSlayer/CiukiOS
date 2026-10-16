@@ -1,0 +1,22 @@
+# f1-72 — USB interrupts without a per-frame heartbeat; IRQ chain without per-pass mask writes
+
+- **Phase:** F1 (drivers). **Model:** gpt-6.1-sol / xhigh. **Worktree:** `wt/f1-72` from main `bbcd0640`+.
+- **Authority:** `src/kernel/usb/usb_core.c`, `src/kernel/usb/uhci.c`, `src/kernel/usb/ohci.c`, `src/kernel/usb/usb_interrupt.c`, `src/kernel/core/registry.c` (chain dispatcher), their host tests, `docs/design/usb-contract.md` and `docs/validation/f1-71-shared-pci-interrupts.md` (amend, do not rewrite).
+
+## Evidence (image 79df4293, main bbcd0640, QEMU gates of 2026-10-16)
+
+- `usb-input-ohci` run `build/test-runs/zz-usb/7fd10c05/serial.log`: `[usb] controller=ohci … mode=irq reason=ready_irq`, then `[kernel] pic_mask writes=4133 / 6271 / 8454 / 10550` in consecutive two-second windows: about **1,000 PIC mask writes per second** with one idle USB mouse. f1-71 attached an inactive IOC tail TD (UHCI) and enabled SOF (OHCI) so that every frame raises an interrupt, and `chain_irq` (`src/kernel/core/registry.c`) calls `pic_mask(irq)` at entry and `pic_unmask(irq)` at the end of every pass.
+- The same run ended `probe=crash-isolation … cycle=28 … handles=19/20 processes_equal=0 … status=FAIL reason=desktop_contract` after 27 clean cycles: a transient extra handle at the restored-ledger snapshot, consistent with a 1 kHz wake-up storm racing the probe. `usb-input-uhci` passed.
+- T23 (image a395ffa8, `BOOT2.LOG` line 83, f0-30 audit): a `pic_unmask` site cost 1762 us; f0-30 removed redundant writes and added the `pic_mask writes/out_max_us` record, but the per-write cost on that chipset is still unexplained. At 1,000 interrupts/s with two mask transactions each, the T23 would spend more than its whole CPU time in PIC writes. This is a blocker for the hardware image.
+
+## Required
+
+1. **No per-frame heartbeat.** UHCI: the schedule tail TD carries no IOC (or is removed); IOC stays on control/bulk transfer TDs and on HID interrupt-pipe TDs. OHCI: do not enable SOF; keep WDH (done-head), UE, RHSC and MIE. An interrupt is raised only when a transfer completes, errs, or a root-hub change occurs.
+2. **Workers wake on completions, poll as fallback.** The host worker keeps its 250 ms root/hub scan deadline and bounded control/bulk sleeps (absolute elapsed-time deadlines of f1-71 unchanged); the HID worker keeps its 1 ms timer fallback so a lost interrupt cannot stall input, but services a report immediately on its completion notification. Measure on the host model: report-to-service latency with IRQ ≤ 1 ms; idle wake-ups per second ≤ 1,100 (the 1 ms fallback) with zero interrupts.
+3. **Chain dispatcher without mask writes in the common path.** PCI INTx is level-sensitive and every member acknowledges its own device-local cause before returning (f1-71 contract); the dispatcher's single EOI then suffices. Mask the line only when a pass must be deferred (budget exceeded, stuck/unclaimed streak) or when quarantining, and unmask exactly once when the deferral ends. Exclusive ISA lines (UART, PS/2, ATA) keep their current handling. Keep the spurious, passes, handled, unclaimed and budget counters. Document the EOI/mask order in `docs/design/usb-contract.md` or the registry contract with the PCI 3.0 §2.2.6 and ICH3-M references already cited by f1-71.
+4. **Evidence.** The `[kernel] pic_mask writes=` record on QEMU with an idle USB mouse: ≤ 50 writes per 2 s window after enumeration; with the mouse moving, writes ≤ 2 per report. Host tests: a chain pass with a claiming member performs zero mask writes; a deferred pass masks once and unmasks once; the UHCI schedule has no IOC on the tail; OHCI interrupt enable has no SOF; HID completion wakes the worker; polling fallback still services a report when no interrupt arrives.
+5. **Gates kept.** `tests/suites/f1-usb.json` keeps `mode=irq reason=ready_irq` on qualified controllers; the refusal coverage keeps `mode=poll`. No change to `scripts/test/run.py`.
+
+## Constraints
+
+Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits. Host tests one at a time with `nice -n 19`: `tests/host/usb/run.sh`, `tests/host/usb/storage_run.sh`, the registry/chain fixtures in `tests/host/kernel_sync_test.c`, then `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh` and `python3 scripts/build_kernel.py`. Report in `build/codex/f1-72-report.md` with causes, changes (file:line), the measured host numbers and verbatim results.
