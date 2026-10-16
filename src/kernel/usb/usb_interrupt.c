@@ -24,6 +24,10 @@ int usb_interrupt(struct usb_device *d, struct usb_hid *p, void *data, unsigned 
 {
     struct usb_host *h = d->host;
     bool uhci = h->pci.prog_if == 0;
+    if (!uhci) {
+        usb_ohci_service_done(h); /* also covers direct polling/TD reuse */
+        if (!h->ready || h->irq_status) return -USB_EIO;
+    }
     unsigned mask = uhci ? 0x7ff : 0xffff;
     unsigned frame = usb_read(h, uhci ? 6 : 0x3c, uhci ? 2 : 4) & mask;
     unsigned status = usb_read(h, uhci ? 2 : 0x0c, uhci ? 2 : 4);

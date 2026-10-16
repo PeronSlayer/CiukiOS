@@ -612,6 +612,32 @@ static void test_three_shared_devices(void)
     CHECK(masked[7]);
     puts("shared INTx: three devices, interleaved/late assertion, one EOI per pass, failed device release preserves peers PASS");
 }
+static int fatal_irq_lease;
+static unsigned fatal_irq_passes;
+static bool fatal_irq_source(unsigned irq, const char *owner)
+{
+    CHECK(irq == 6 && !strcmp(owner, "fatal-usb") && !flags && eoi_pending);
+    fatal_irq_passes++;
+    CHECK(!registry_quarantine(fatal_irq_lease, registry_get((unsigned)fatal_irq_lease)->generation));
+    CHECK(masked[irq]); /* handler containment must precede dispatcher EOI */
+    return true;       /* a persistent source claims every pass */
+}
+static void test_claimed_fatal_quarantine(void)
+{
+    fatal_irq_lease = irq_claim(6, "fatal-usb");
+    int peer = irq_claim(6, "irq-b");
+    CHECK(!irq_chain_add(6, fatal_irq_source, "fatal-usb"));
+    CHECK(!irq_chain_add(6, irq_b, "irq-b"));
+    unsigned mask_before = masks, unmask_before = unmasks, eoi_before = eois;
+    fake_irq(6);
+    struct irq_chain_stats s;
+    CHECK(irq_chain_snapshot(6, &s) && s.quarantined && s.passes == 1 && !s.unclaimed);
+    CHECK(fatal_irq_passes == 1 && eois == eoi_before + 1 && masked[6]);
+    CHECK(registry_get((unsigned)peer)->state == RS_QUARANTINED);
+    drain_work();
+    CHECK(masked[6] && masks == mask_before + 1 && unmasks == unmask_before);
+    puts("claimed fatal IRQ: handler quarantines attached lease before first EOI, one mask, no worker rearm PASS");
+}
 
 static void test_irq_chain(void)
 {
@@ -791,6 +817,7 @@ int main(void)
     test_work();
     test_irq_chain();
     test_three_shared_devices();
+    test_claimed_fatal_quarantine();
     test_registry_probe();
     test_fs_wait_lock();
     test_work_report_bound();

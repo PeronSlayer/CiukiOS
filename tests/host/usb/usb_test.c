@@ -206,6 +206,7 @@ struct model {
     unsigned root_resets[2], root_enables[2], root_acks[2], hub_acks[USB_PORT_MAX];
     bool ohci,ehci,host_error,freeze,reset_stuck,ownership_stuck,nak,silent,stall,bad_length,bad_dma,malformed;
     bool fatal_reassert, gate_stuck, source_stuck, run_stuck, halt_stuck, bme_stuck;
+    bool rhsc_level, root_change_stuck;
     bool bulk_test, receiver_reports, report_stall;
     bool late_hid;
     unsigned latched_td,latched_ed,late_hid_acks;
@@ -224,6 +225,7 @@ struct model {
     unsigned debounce_changes;
 };
 static struct model m;
+static void (*wdh_ack_hook)(struct model *);
 static void (*frame_hook)(struct model *);
 static void (*report_ack_hook)(struct model *,struct peripheral *);
 static uint8_t *dma_at(struct model *m,unsigned ptr,unsigned len)
@@ -387,6 +389,9 @@ static uint32_t read_reg(void *arg,unsigned off,unsigned width)
     if(!m->ohci && off==6)return m->freeze ? 0:frame&0x7ff;
     if(!m->ohci && off==2)return (m->regs[0]>>16)|((m->regs[0]&1) || m->halt_stuck ? 0:0x20)|(m->host_error?8:0);
     if(m->ohci && off==0x0c && m->host_error)return 0x10;
+    if(m->ohci && off==0x0c && m->rhsc_level &&
+       ((m->regs[0x50/4]&0x20000) || (m->regs[0x54/4]&0x1f0000) ||
+        (m->regs[0x58/4]&0x1f0000)))m->regs[off/4]|=0x40;
     return m->regs[off/4] >> (8*(off&3));
 }
 static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
@@ -411,9 +416,13 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
         return;
     }
     if(m->ohci) {
-        if(off==0x0c){m->regs[off/4]&=~value;return;}
+        if(off==0x0c){
+            if((value&2) && wdh_ack_hook)wdh_ack_hook(m);
+            m->regs[off/4]&=~value;return;
+        }
         if(off==0x10){m->regs[off/4]|=value;return;}
         if(off==0x14){m->regs[0x10/4]&=~value;return;}
+        if(off==0x50){m->regs[off/4]&=~(value&0x20000);return;}
         if(off>=0x54 && off<0x5c) {
             unsigned p=(off-0x54)/4;
             if(value==0x10){m->selected=p;m->dev[p].addr=0;m->dev[p].in_toggle=0;m->root_resets[p]++;m->reset_at[p]=m->now;
@@ -421,7 +430,7 @@ static void write_reg(void *arg,unsigned off,uint32_t value,unsigned width)
                 m->regs[off/4]|=0x100002;return;}
             if(value==2){m->root_enables[p]++;m->regs[off/4]|=2;return;}
             if(value==1){m->regs[off/4]&=~2u;return;}
-            if(value & 0x1f0000){m->root_acks[p]++;m->regs[off/4]&=~(value & 0x1f0000);return;}
+            if(value & 0x1f0000){m->root_acks[p]++;if(!m->root_change_stuck)m->regs[off/4]&=~(value & 0x1f0000);return;}
             return;
         }
     } else if(off==0x10 || off==0x12) {
@@ -452,11 +461,12 @@ static uint32_t config_read(void *arg,unsigned off,unsigned width)
 static void config_write(void *arg,unsigned off,uint32_t value,unsigned width)
 {
     struct model *m=arg;writes++;
+    bool enable_bme=off==4 && (value&4);
     assert(off!=4 || width==2); /* PCI W1C status is never echoed. */
     if(off==0xc0){m->config[off/4]=(m->config[off/4]&(m->gate_stuck ? 0x7040:0x5040))|(value&0x20bf);return;}
     if(off==4 && m->bme_stuck && !(value&4))value|=m->config[off/4]&4;
     m->config[off/4]=value;
-    if(off==4 && (value&4)) {
+    if(enable_bme) {
         assert(m->host.dma && leases[m->host.claims[2]].state==RS_ACTIVE);
         if(m->ohci) assert(m->regs[0x18/4]==m->host.dma_phys);
         else assert(m->regs[8/4]==m->host.dma_phys);
@@ -691,6 +701,7 @@ static struct usb_io io(struct model *m)
 static void setup(bool ohci,bool hub)
 {
     memset(&m,0,sizeof(m));memset(&g_boot,0,sizeof(g_boot));lease_count=0;
+    wdh_ack_hook=NULL;
     route_ready=false;irq_add_error=irq_claim_error=0;irq_added=irq_removed=irq_wakes=0;
     irq_model_attached=irq_masked=false;irq_mode_records=poll_mode_records=0;
     connect_records=disconnect_records=reset_records=enable_records=0;
@@ -1482,6 +1493,86 @@ static void shared_irq(bool ohci)
     }
     printf("PASS USB %s shared IRQ own-status/W1C, 1000 idle frames=0 interrupts, completion/root-change notification, deferred fatal, route/claim/attach refusal mode=poll reason=ready_polling\n",ohci ? "OHCI":"UHCI");
 }
+static void ohci_level_root_irq(void)
+{
+    setup(true,false);route_ready=true;assert(!attach());usb_step(&m.host);
+    m.host.next_scan=m.now+250;
+    unsigned scans=m.host.scan_count,acks=m.root_acks[0];
+    m.rhsc_level=true;m.regs[0x54/4]|=0x10000;m.regs[0x50/4]|=0x20000;
+    assert(usb_host_irq(&m.host)); /* one claiming pass; worker has not run */
+    assert(m.host.ohci_root_pending && !(read_reg(&m,0x10,4)&0x40));
+    assert(read_reg(&m,0x0c,4)&0x40); /* W1C alone did not silence RHSC */
+    unsigned before=writes;
+    for(unsigned pass=0;pass<16;pass++)assert(!usb_host_irq(&m.host));
+    assert(writes==before && !irq_masked); /* peers retain the shared line */
+    usb_step(&m.host);
+    assert(m.host.scan_count==scans && m.host.ohci_root_pending);
+    sleep_ms(&m,249);usb_step(&m.host);
+    assert(m.host.scan_count==scans && m.host.ohci_root_pending);
+    sleep_ms(&m,1);usb_step(&m.host);
+    assert(m.host.ready && m.host.scan_count==scans+1 && m.root_acks[0]>acks);
+    assert(!(read_reg(&m,0x54,4)&0x1f0000) && !(read_reg(&m,0x50,4)&0x20000));
+    assert(!m.host.ohci_root_pending && (read_reg(&m,0x10,4)&0x40));
+    assert(!(read_reg(&m,0x0c,4)&0x40) && !usb_host_irq(&m.host));
+    assert(m.host.next_scan==m.now+250);
+    /* Rearmed RHSC must detect a subsequent change too. */
+    m.regs[0x58/4]|=0x20000;
+    assert(usb_host_irq(&m.host) && m.host.ohci_root_pending);
+    m.root_change_stuck=true;
+    sleep_ms(&m,250);usb_step(&m.host);
+    assert(m.host.ohci_root_pending && !(read_reg(&m,0x10,4)&0x40));
+    assert(m.host.next_scan==m.now+250 && !usb_host_irq(&m.host));
+    m.root_change_stuck=false;
+    sleep_ms(&m,250);usb_step(&m.host);
+    assert(!m.host.ohci_root_pending && (read_reg(&m,0x10,4)&0x40));
+    puts("PASS USB OHCI level RHSC: 1 claiming pass disables source, 16 peer passes ignore disabled RHSC, worker scans at 250 ms, clears port/hub changes and rearms; sticky changes retain polling");
+}
+static unsigned done_ack_checks;
+static void check_done_ack(struct model *model)
+{
+    assert(!*(uint32_t *)(model->dma+0x84));
+    assert(model->host.ohci_done_count==++done_ack_checks);
+}
+static void ohci_done_publications(void)
+{
+    setup(true,false);route_ready=true;assert(!attach());usb_step(&m.host);
+    assert(!m.host.ohci_done_count);
+    uint64_t batches=m.host.ohci_done_batches,tds=m.host.ohci_done_tds;
+    unsigned keys=key_downs;
+    uint32_t first=m.host.dma_phys+USB_HID_BASE+16;
+    uint32_t second=first+USB_HID_MAX*USB_HID_STRIDE;
+    done_ack_checks=0;wdh_ack_hook=check_done_ack;
+    m.dev[0].report[2]=4;m.dev[0].report_len=8;
+    sleep_ms(&m,1);assert(*(uint32_t *)(m.dma+0x84)==first);
+    assert(usb_host_irq(&m.host));
+    m.dev[1].report[1]=1;m.dev[1].report_len=4;
+    sleep_ms(&m,1);assert(*(uint32_t *)(m.dma+0x84)==second);
+    assert(usb_host_irq(&m.host));
+    assert(m.host.ohci_done_count==2 && done_ack_checks==2);
+    unsigned at=m.host.ohci_done_read;
+    assert(m.host.ohci_done_heads[at]==first);
+    assert(m.host.ohci_done_heads[(at+1)%USB_OHCI_DONE_HEADS]==second);
+    wdh_ack_hook=NULL;
+    fs_lock_take(&m.host.transfer_lock);usb_hid_service(&m.host);fs_lock_drop(&m.host.transfer_lock);
+    assert(!m.host.ohci_done_count && m.host.ohci_done_batches==batches+2 && m.host.ohci_done_tds==tds+2);
+    sleep_ms(&m,2);
+    fs_lock_take(&m.host.transfer_lock);usb_hid_service(&m.host);fs_lock_drop(&m.host.transfer_lock);
+    assert(key_downs==keys+1 && last_x==1 && m.host.ready && !irq_masked);
+    puts("PASS USB OHCI WDH: two hardware done-head publications before worker, capture/clear before each ack, both lists consumed and both HID reports delivered");
+
+    /* An impossible overfull producer must never overwrite a saved head or
+     * acknowledge the new HCCA publication. Keep the line masked instead. */
+    setup(true,false);route_ready=true;assert(!attach());
+    for(unsigned i=0;i<=USB_OHCI_DONE_HEADS;i++) {
+        *(uint32_t *)(m.dma+0x84)=m.host.dma_phys+USB_TD;
+        m.regs[0x0c/4]|=2;assert(usb_host_irq(&m.host));
+        if(i<USB_OHCI_DONE_HEADS)assert(!irq_masked && !*(uint32_t *)(m.dma+0x84));
+    }
+    assert(irq_masked && m.host.irq_status && m.host.ohci_done_count==USB_OHCI_DONE_HEADS);
+    assert(*(uint32_t *)(m.dma+0x84)==m.host.dma_phys+USB_TD && (read_reg(&m,0x0c,4)&2));
+    assert(!usb_host_irq(&m.host));
+    puts("PASS USB OHCI done-head queue overflow: saved heads retained, new HCCA/WDH left unacknowledged, IRQ lease masked before EOI");
+}
 int main(void)
 {
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
@@ -1504,5 +1595,6 @@ int main(void)
     delayed_frame_hid(false);delayed_frame_hid(true);late_hid(false);late_hid(true);
     port_flood(false);port_flood(true);
     shared_irq(false);shared_irq(true);
+    ohci_level_root_irq();ohci_done_publications();
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }

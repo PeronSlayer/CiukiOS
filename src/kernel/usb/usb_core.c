@@ -28,6 +28,105 @@ uint32_t usb_read(struct usb_host *h, unsigned at, unsigned width)
 }
 void usb_write(struct usb_host *h, unsigned at, uint32_t v, unsigned width)
 { h->io.write(h->io.cookie, at, v, width); }
+static void quarantine_irq(struct usb_host *h)
+{
+    if (h->irq_attached && h->claims[1] >= 0)
+        registry_quarantine(h->claims[1], h->claim_gen[1]);
+}
+static bool uhci_isolate(struct usb_host *h)
+{
+    /* One bounded, non-sleeping attempt. HSE/HCPE bypass USBINTR, and a
+     * claimed storm can otherwise starve the worker indefinitely. */
+    h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
+    usb_write(h, 4, 0, 2); usb_write(h, 0, 0, 2);
+    usb_write(h, 2, 0x1f, 2);
+    h->io.config_write(h->io.cookie, 4, (h->pci.command | 1u) & ~4u, 2);
+    unsigned legacy = h->io.config_read(h->io.cookie, 0xc0, 2);
+    unsigned intr = h->io.read(h->io.cookie, 4, 2);
+    unsigned run = h->io.read(h->io.cookie, 0, 2);
+    unsigned status = h->io.read(h->io.cookie, 2, 2); /* never irq_status */
+    unsigned command = h->io.config_read(h->io.cookie, 4, 2);
+    return !(legacy & 0x20bf) && !(intr & 15) && !(run & 1) &&
+           (status & 0x3f) == 0x20 && !(command & 4);
+}
+static uint32_t usb_irq_save(void)
+{
+#ifndef CIUKI_USB_HOST
+    return irq_save();
+#else
+    /* Portable controller models dispatch events serially. The native-core
+     * replay exercises the real IRQ exclusion with modeled EFLAGS. */
+    return 0;
+#endif
+}
+static void usb_irq_restore(uint32_t f)
+{
+#ifndef CIUKI_USB_HOST
+    irq_restore(f);
+#else
+    (void)f;
+#endif
+}
+static void ohci_capture_done(struct usb_host *h)
+{
+    uint32_t f = usb_irq_save();
+    /* Re-read under exclusion: the IRQ may have consumed an earlier WDH
+     * between a polling caller's status read and this critical section. */
+    unsigned status = h->io.read(h->io.cookie, 0x0c, 4);
+    if (status != UINT32_MAX && (status & 2)) {
+        volatile uint32_t *hcca = (volatile uint32_t *)(h->dma + 0x84);
+        usb_barrier();
+        uint32_t head = *hcca & ~15u;
+        if (head && h->ohci_done_count == USB_OHCI_DONE_HEADS) {
+            /* Never release the HC's publication interlock without saving
+             * its head. Retain HCCA/WDH and contain a corrupt producer. */
+            h->irq_status |= 0x10;
+            usb_write(h, 0x14, UINT32_MAX, 4);
+            quarantine_irq(h);
+        } else {
+            if (head) {
+                unsigned at = (h->ohci_done_read + h->ohci_done_count) % USB_OHCI_DONE_HEADS;
+                h->ohci_done_heads[at] = head;
+                h->ohci_done_count++;
+            }
+            *hcca = 0;
+            usb_barrier();
+            usb_write(h, 0x0c, 2, 4); /* sole WDH acknowledgement */
+        }
+    }
+    usb_irq_restore(f);
+}
+void usb_ohci_service_done(struct usb_host *h)
+{
+    if (h->pci.prog_if != 0x10) return;
+    ohci_capture_done(h);
+    /* The transfer mutex serializes task consumers and descriptor reuse.
+     * IRQ only appends heads; each list remains pinned until consumed here.
+     * Results still come from each pipe's retired TD/ED, independently of
+     * completion order or whether its interrupt was delivered. */
+    for (unsigned batch = 0; batch < USB_OHCI_DONE_HEADS; batch++) {
+        uint32_t f = usb_irq_save();
+        if (!h->ohci_done_count) { usb_irq_restore(f); break; }
+        uint32_t head = h->ohci_done_heads[h->ohci_done_read];
+        h->ohci_done_read = (h->ohci_done_read + 1) % USB_OHCI_DONE_HEADS;
+        h->ohci_done_count--;
+        usb_irq_restore(f);
+        unsigned count = 0;
+        while (head) {
+            unsigned at = head - h->dma_phys;
+            if (++count > USB_OHCI_DONE_HEADS || (head & 15) ||
+                (at != USB_TD && (at < USB_HID_BASE + 16 ||
+                 at >= USB_HID_BASE + USB_DEVICE_MAX * USB_HID_MAX * USB_HID_STRIDE ||
+                 (at - USB_HID_BASE - 16) % USB_HID_STRIDE))) {
+                usb_host_quarantine(h, "ohci_done_pointer"); return;
+            }
+            usb_barrier();
+            head = *(volatile uint32_t *)(h->dma + at + 8);
+            h->ohci_done_tds++;
+        }
+        h->ohci_done_batches++;
+    }
+}
 bool usb_host_irq(struct usb_host *h)
 {
     /* A retained fatal cause is worker state, not proof that the hardware
@@ -38,13 +137,30 @@ bool usb_host_irq(struct usb_host *h)
     unsigned off = uhci ? 2 : 0x0c, width = uhci ? 2 : 4;
     unsigned status = h->io.read(h->io.cookie, off, width);
     unsigned causes = status & (uhci ? 0x1fu : 0x52u); /* OHCI WDH/UE/RHSC, never SOF */
-    if (!causes) return false;
-    if (status == (uhci ? 0xffffu : UINT32_MAX) || (causes & (uhci ? 0x18u : 0x10u))) {
-        h->irq_status |= status == (uhci ? 0xffffu : UINT32_MAX) ? 0x10 :
-                         causes & (uhci ? 0x18u : 0x10u);
-        usb_write(h, uhci ? 4 : 0x14, uhci ? 0 : UINT32_MAX, width);
+    bool gone = status == (uhci ? 0xffffu : UINT32_MAX);
+    if (!uhci && !gone) {
+        unsigned enabled = h->io.read(h->io.cookie, 0x10, 4);
+        causes &= (enabled & 0x80000000u) ? enabled : 0;
     }
-    if (status != (uhci ? 0xffffu : UINT32_MAX)) usb_write(h, off, causes, width);
+    if (!causes) return false;
+    bool fatal = gone || (causes & (uhci ? 0x18u : 0x10u));
+    if (fatal) {
+        h->irq_status |= gone ? 0x10 : causes & (uhci ? 0x18u : 0x10u);
+        if (uhci) {
+            if (!uhci_isolate(h)) quarantine_irq(h); /* before dispatcher EOI */
+        } else usb_write(h, 0x14, UINT32_MAX, 4);
+    }
+    if (!uhci && !gone) {
+        if (causes & 0x40) {
+            h->ohci_root_pending = true;
+            usb_write(h, 0x14, 0x40, 4);
+            if (h->io.read(h->io.cookie, 0x10, 4) & 0x40) quarantine_irq(h);
+        }
+        if (causes & 2) ohci_capture_done(h);
+        if (causes & ~2u) usb_write(h, off, causes & ~2u, width);
+    } else if (!gone && !fatal) {
+        usb_write(h, off, causes, width);
+    }
     h->interrupts++; h->irq_pending = input_pending = true;
     kwait_wake_all(&h->changed); kwait_wake_all(&input_changed);
     return true;
@@ -98,13 +214,8 @@ void usb_hid_service(struct usb_host *h)
 {
     if (!h->ready || h->quarantined) return;
     if (h->irq_status) { usb_host_quarantine(h, "interrupt_host_error"); return; }
-    if (h->pci.prog_if == 0x10 && ((usb_read(h, 0x0c, 4) & 2) ||
-        (h->irq_attached && *(volatile uint32_t *)(h->dma + 0x84)))) {
-        /* All TDs stay pinned. DI=0 writes back each frame's done chain;
-         * acknowledge it without walking/reusing another pipe's TD. */
-        *(volatile uint32_t *)(h->dma + 0x84) = 0;
-        usb_barrier(); usb_write(h, 0x0c, 2, 4);
-    }
+    usb_ohci_service_done(h);
+    if (!h->ready) return;
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
         struct usb_device *d = &h->devices[i];
         if (!d->present || !d->configured || d->quarantined || d->hid_fault) continue;
@@ -215,26 +326,17 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
     bool isolated = !h->irq_attached;
     if (h->owned) {
         if (h->pci.prog_if == 0) {
-            /* HSE/HCPE bypass USBINTR. Disable ICH's USBPIRQEN too, with
-             * every SMI/trap enable off; never echo RO/W1C legacy bits. */
-            h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
-            usb_write(h, 4, 0, 2); usb_write(h, 0, 0, 2); usb_write(h, 2, 0x1f, 2);
+            isolated = uhci_isolate(h);
         } else if (h->pci.prog_if == 0x10) {
-            usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4); usb_write(h, 0x0c, 0x7f, 4);
+            usb_write(h, 0x14, UINT32_MAX, 4); usb_write(h, 4, 0, 4);
+            ohci_capture_done(h);
+            usb_write(h, 0x0c, 0x7d, 4); /* WDH belongs to capture */
         }
         /* Do not restore firmware DMA on an uncertain failure. */
         h->io.config_write(h->io.cookie, 4, (h->pci.command | (h->pci.prog_if ? 2 : 1)) & ~4u, 2);
         if (h->irq_attached) {
             unsigned command = h->io.config_read(h->io.cookie, 4, 2);
-            if (h->pci.prog_if == 0) {
-                unsigned legacy = h->io.config_read(h->io.cookie, 0xc0, 2);
-                unsigned intr = h->io.read(h->io.cookie, 4, 2);
-                unsigned run = h->io.read(h->io.cookie, 0, 2);
-                /* Read raw status: irq_status deliberately retains faults. */
-                unsigned status = h->io.read(h->io.cookie, 2, 2);
-                isolated = !(command & 4) && !(legacy & 0x20bf) &&
-                           !(intr & 15) && !(run & 1) && (status & 0x3f) == 0x20;
-            } else if (h->pci.prog_if == 0x10) {
+            if (h->pci.prog_if == 0x10) {
                 unsigned intr = h->io.read(h->io.cookie, 0x10, 4);
                 unsigned control = h->io.read(h->io.cookie, 4, 4);
                 unsigned status = h->io.read(h->io.cookie, 0x0c, 4);
@@ -252,6 +354,26 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
      * that lease masks the chain and prevents even queued rearm. */
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0) registry_quarantine(h->claims[i], h->claim_gen[i]);
     klog("[usb] quarantine controller=%s reason=%s irq_isolated=%u", h->owner, reason, isolated);
+}
+static void ohci_root_rearm(struct usb_host *h)
+{
+    if (h->pci.prog_if != 0x10 || !h->ohci_root_pending || !h->ready) return;
+    /* Include scan branches which quarantined a child or disabled its port.
+     * Only observed W1C changes are echoed, never hub power/wakeup controls. */
+    bool clear = true;
+    for (unsigned p = 0; p < h->ports; p++) {
+        h->ops->port_ack_changes(h, p);
+        if (usb_read(h, 0x54 + 4 * p, 4) & 0x1f0000) clear = false;
+    }
+    unsigned hub = usb_read(h, 0x50, 4);
+    if (hub & 0x20000) usb_write(h, 0x50, 0x20000, 4);
+    if (usb_read(h, 0x50, 4) & 0x30000) clear = false;
+    if (!clear) return; /* keep polling at the existing 250 ms deadline */
+    uint32_t f = usb_irq_save();
+    usb_write(h, 0x0c, 0x40, 4);
+    h->ohci_root_pending = false;
+    usb_write(h, 0x10, 0x40, 4);
+    usb_irq_restore(f);
 }
 static int claim(struct usb_host *h, unsigned slot, enum res_type type, uint32_t start, uint32_t end, bool share)
 {
@@ -658,6 +780,7 @@ void usb_step(struct usb_host *h)
             h->root_status[p] = h->ops->port_status(h, p);
         }
         for (unsigned i = 0; i < h->device_count && h->ready; i++) if (h->devices[i].present && h->devices[i].hub_ports) usb_hub_scan(&h->devices[i]);
+        ohci_root_rearm(h);
         usb_uhci_dump_schedule(h);
     }
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {

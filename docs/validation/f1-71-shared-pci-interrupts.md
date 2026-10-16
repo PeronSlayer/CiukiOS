@@ -192,3 +192,53 @@ The kernel-only build also passes: link has no undefined symbols and the
 FPU/SIMD audit passes. `build/f0/VMM.ELF` is 5,439,432 bytes, SHA-256
 `e92604a63a267a260473dab8b9a19ab3f013cb001f27b661c332f4a764b9030a`.
 This artifact is host build evidence, not an OS image or a QEMU result.
+
+### F1-72 review: fatal containment, RHSC and done-head ownership
+
+Research checked again on 2026-10-16 before the review fixes:
+
+- [QEMU v9.2 `uhci_update_irq()`](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/usb/hcd-uhci.c)
+  asserts HSE/HCPE independently of USBINTR. The current handler only
+  disabled USBINTR and W1C'd status, leaving isolation to a starvable worker.
+  Perform one bounded register/configuration isolation attempt in IRQ context:
+  clear USB_LEGKEY enables (including USBPIRQEN on
+  [ICH3-M §11.1.16](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)),
+  USBINTR, Run/Stop, status and PCI BME, then read all back, including raw
+  USBSTS/HCHalted. An uncertain result quarantines the attached IRQ lease
+  before EOI. Device detach and any sleeping cleanup remain worker work.
+- [Linux v6.12 OHCI IRQ handling](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/ohci-hcd.c)
+  disables RHSC because implementations can hold it until port changes clear.
+  The current handler leaves it enabled after status W1C. Disable/read back
+  RHSC locally, retain a separate root-work flag until the existing 250 ms
+  scan, clear observed port/hub changes, then acknowledge/re-enable RHSC.
+  Peer dispatch must filter against the current interrupt-enable set.
+- [OpenHCI 1.0a §§6.4.5, 7.1.4 and 7.4.3](https://dl.xkwy2018.com/downloads/documents/hcir1_0a.pdf)
+  hold HccaDoneHead stable until WDH clears; software must save it first.
+  The current IRQ, HID worker and packet setup acknowledge independently.
+  Use one IRQ-serialized capture/clear/barrier/ack path and a bounded queue
+  of saved heads; the worker consumes every saved chain before TD reuse.
+  IRQ capture never takes the sleeping transfer mutex. Queue overflow fails
+  closed without acknowledging an uncaptured head. Hub status acknowledgement
+  writes only OCIC (bit 17); bit 16 is SetGlobalPower on write, not W1C.
+
+Regression fixtures must model fatal reassertion after every W1C without
+worker service, level RHSC until port/hub changes clear, and two HCCA head
+publications before worker service, including polling/IRQ interleaving.
+No heartbeat, common-pass PIC mask writes or timing-policy changes are made.
+
+Review-fix host outcome: USB, storage, the registry fixtures and the complete
+ASan/UBSan kernel host script all pass (exit 0). The persistent-fatal replay
+masks before EOI in one pass with zero worker turns. The level-RHSC replay
+ignores 16 peer passes while disabled and scans/clears/rearms at the 250 ms
+deadline; sticky changes retain polling. Both done-head publications survive
+until worker consumption, both HID reports arrive, the native polling/IRQ
+interleave consumes each list once, and queue overflow preserves HCCA/WDH
+while masking the lease. Existing idle/completion, absolute-delay, shared
+IRQ mask-write, audio and NIC checks still pass.
+
+The kernel-only build passes its FPU/SIMD audit and has no undefined symbols:
+5,445,228 bytes, SHA-256
+`75e07eeb7cdd1794cfc18d35b89b214cac14d8dd46f6e6c60145fcc3645438fd`.
+Commands, exact file/line references and verbatim results are appended under
+“Review fixes” in `build/codex/f1-72-report.md`. No QEMU, OS image, hardware,
+diary or Git mutation evidence is claimed.

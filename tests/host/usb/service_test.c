@@ -23,6 +23,7 @@ static unsigned phase_frames, phase_ticks, phase_waits;
 static bool completion_replay;
 static bool completion_wait(struct kwait *,kwait_cond_fn,void *,uint64_t);
 static uint32_t config_address, flags=0x200;
+static void (*restore_hook)(void);
 static jmp_buf service_done;
 volatile uint64_t g_ticks;
 
@@ -46,7 +47,7 @@ const struct pci_func *pci_get(unsigned i)
     assert(!i);return &p;
 }
 static uint32_t irq_save(void) { uint32_t f=flags;flags=0;return f; }
-static void irq_restore(uint32_t f) { flags=f; }
+static void irq_restore(uint32_t f) { flags=f;if((f&0x200) && restore_hook)restore_hook(); }
 static uint32_t port_read(uint16_t port,unsigned width)
 {
     sync_model();
@@ -260,10 +261,20 @@ static void fatal_isolation(const char *mode)
     m.run_stuck=!strcmp(mode,"fatal-run-stuck");
     m.halt_stuck=!strcmp(mode,"fatal-halt-stuck");
     m.bme_stuck=!strcmp(mode,"fatal-bme-stuck");
-    /* First HSE is latched by the worker; USBINTR is then zero. A later
-     * HCPE or persistent HSE must still be acknowledged on the shared line. */
+    /* No worker may run before source containment, even when every W1C
+     * reasserts HCPE. Simulate dispatcher EOI only after this assertion. */
     m.regs[0]|=8u<<16;
+    uint64_t tick=m.now;
+    uint32_t f=irq_save();
     assert(usb_host_irq(&m.host) && (m.host.irq_status&8));
+    assert(m.now==tick && !m.host.quarantined && !m.host.ohci_done_count);
+    assert(irq_masked==!relatched); /* before the first EOI, zero worker turns */
+    irq_restore(f);
+    if(m.fatal_reassert) {
+        assert(read_reg(&m,2,2)&0x10);
+        assert(leases[m.host.claims[1]].state==RS_QUARANTINED);
+        puts("PASS USB fatal reassert-after-every-W1C: IRQ11 masked before EOI in 1 pass, 0 worker turns, no sleeping or clock advance");
+    }
     if(!m.source_stuck)assert(!(read_reg(&m,4,2)&15));
     for(unsigned i=0;i<3;i++) {
         m.regs[0]|=0x10u<<16;
@@ -287,9 +298,46 @@ static void fatal_isolation(const char *mode)
     printf("PASS USB fatal isolation %s: repeated HSE/HCPE acknowledged after fatal snapshot; %s\n",
            mode,relatched ? "gate/source/status/BME verified before detach":"failed readback retains callback and quarantines masked IRQ11");
 }
+static unsigned interleave_irqs;
+static void publish_second_done(void)
+{
+    assert(flags&0x200);restore_hook=NULL;
+    assert(m.host.ohci_done_count==1 && !*(uint32_t *)(m.dma+0x84));
+    *(uint32_t *)(m.dma+0x84)=m.host.dma_phys+USB_HID_BASE+16;
+    m.regs[0x0c/4]|=2;
+    uint32_t f=irq_save();
+    assert(usb_host_irq(&m.host));interleave_irqs++;
+    assert(!flags && m.host.ohci_done_count==2);
+    irq_restore(f);
+}
+static void schedule_done_irq(struct model *model)
+{
+    assert(model==&m && !flags && !*(uint32_t *)(m.dma+0x84));
+    assert(m.host.ohci_done_count==1);
+    wdh_ack_hook=NULL;restore_hook=publish_second_done;
+}
+static void done_head_interleave(void)
+{
+    setup(true,false);route_ready=true;assert(!attach());
+    *(uint32_t *)(m.dma+USB_TD+8)=0;
+    *(uint32_t *)(m.dma+USB_HID_BASE+24)=0;
+    *(uint32_t *)(m.dma+0x84)=m.host.dma_phys+USB_TD;
+    m.regs[0x0c/4]|=2;
+    uint64_t tick=m.now;
+    wdh_ack_hook=schedule_done_irq;
+    fs_lock_take(&m.host.transfer_lock);
+    usb_ohci_service_done(&m.host); /* IRQ is delivered as polling restores IF */
+    fs_lock_drop(&m.host.transfer_lock);
+    assert(flags==0x200 && interleave_irqs==1 && !m.host.ohci_done_count);
+    assert(m.host.ohci_done_batches==2 && m.host.ohci_done_tds==2);
+    assert(!*(uint32_t *)(m.dma+0x84) && !(read_reg(&m,0x0c,4)&2));
+    assert(m.host.ready && !irq_masked && m.now==tick);
+    puts("PASS USB OHCI polling/IRQ WDH interleave: capture and ack with IF=0, IRQ delivered on restore, both done lists consumed exactly once without sleeping");
+}
 int main(int argc,char **argv)
 {
     assert(argc==2);setup(false,false);
+    if(!strcmp(argv[1],"done-head-interleave")) {done_head_interleave();return 0;}
     if(!strncmp(argv[1],"completion-",11)) {completion_workers(argv[1]);return 0;}
     if(!strcmp(argv[1],"phased-delays")) {phased_delays();return 0;}
     if(!strncmp(argv[1],"fatal-",6)) {fatal_isolation(argv[1]);return 0;}
