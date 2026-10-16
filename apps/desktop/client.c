@@ -959,38 +959,52 @@ int desk_task_switch(struct desktop *d, uint32_t window_id)
     if (d->clients[i].minimized) desk_minimize(d,i); else desk_focus(d,i);
     return 0;
 }
+static void launch_clear(struct desktop *d)
+{
+    d->launch_arg=NULL;
+    memset(d->launch_argv,0,sizeof(d->launch_argv));
+}
+/* All launch routes replace the entire one-shot payload, including on failure.
+ * A previous single-file/page argument and a vector must never be combined. */
+static int task_launch(struct desktop *d,const struct desk_program *program,
+                       const char *argument,const char *const *args,unsigned count)
+{
+    launch_clear(d);
+    if (d->power.state) return -EBUSY;
+    if (!d->launch) return -ENOSYS;
+    d->launch_arg=argument && argument[0] ? argument : NULL;
+    for (unsigned a=0;a<count;a++) d->launch_argv[a]=args[a];
+    int pid=d->launch(d,program), error=errno;
+    launch_clear(d);
+    return pid<0 ? -(error ? error : EIO) : pid;
+}
 int desk_task_launch_args(struct desktop *d, const char *name, const char *const *args, unsigned count)
 {
-    if (d->power.state) return -EBUSY;
-    if (!count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) return -EINVAL;
-    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
-    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
-        if (!d->launch) return -ENOSYS;
-        for (unsigned a=0; a<count; a++) d->launch_argv[a]=args[a];
-        int pid=d->launch(d,&d->programs[k]);
-        int error=errno;
-        for (unsigned a=0; a<count; a++) d->launch_argv[a]=NULL;
-        return pid<0 ? -(error ? error : EIO) : pid;
+    if (!args || !count || count > sizeof(d->launch_argv) / sizeof(d->launch_argv[0])) {
+        launch_clear(d); return -EINVAL;
     }
+    const char *copy[6];
+    for (unsigned a=0;a<count;a++) copy[a]=args[a];
+    launch_clear(d);
+    if (d->power.state) return -EBUSY;
+    if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
+    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name))
+        return task_launch(d,&d->programs[k],NULL,copy,count);
     return -ENOENT;
 }
 int desk_task_launch(struct desktop *d, const char *name, const char *argument)
 {
+    launch_clear(d);
     if (d->power.state) return -EBUSY;
     if (!strncmp(name,"/Programs/",sizeof("/Programs/")-1)) name+=sizeof("/Programs/")-1;
-    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name)) {
-        if (!d->launch) return -ENOSYS;
-        d->launch_arg=argument && argument[0] ? argument : NULL;
-        int pid=d->launch(d,&d->programs[k]);
-        int error=errno;
-        d->launch_arg=NULL;
-        return pid<0 ? -(error ? error : EIO) : pid;
-    }
+    for (unsigned k=0; k<d->program_count; k++) if (!strcmp(d->programs[k].name,name))
+        return task_launch(d,&d->programs[k],argument,NULL,0);
     return -ENOENT;
 }
 
 int desk_ide_launch(struct desktop *d,const char *path)
 {
+    launch_clear(d);
     if (d->power.state) return -EBUSY;
     size_t n=strlen(path);
     if (n<=11 || n>DESK_ARG_MAX || strncmp(path,"/Documents/",11)) return -EPERM;
@@ -1010,8 +1024,7 @@ int desk_ide_launch(struct desktop *d,const char *path)
        project app gets no Task Manager, mixer, Files or IDE privileges. */
     struct desk_program program={0};
     strcpy(program.name,"ciukide-app"); memcpy(program.path,path,n+1);
-    int pid=d->launch(d,&program), error=errno;
-    return pid<0 ? -(error ? error : EIO) : pid;
+    return task_launch(d,&program,NULL,NULL,0);
 }
 
 /* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.

@@ -176,6 +176,7 @@ int shell_fcntl(int fd, int command, ...)
 }
 static int media_available, media_error, media_query_error;
 static struct ciuki_media_state media_fixture;
+static struct ciuki_media_volume media_volumes[26];
 #define MEDIA_FD 1002
 static int network_available, network_error;
 static unsigned network_opens, network_closes, network_queries;
@@ -211,8 +212,11 @@ int shell_fstat(int fd, struct stat *st)
     errno=EBADF; return -1;
 }
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
-static const char *expect_note_arg, *expect_dosbox[2];
+static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg;
 static unsigned dosbox_spawns;
+#ifndef DESK_FOOTPRINT_TEST
+static unsigned control_spawns;
+#endif
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
@@ -231,8 +235,10 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         assert(!argv[at]);
     } else if (!strcmp(path,"/Programs/dosbox")) {
         /* Programs > Games: the window title, then the command dosbox types at the DOS prompt. */
-        assert(!strcmp(argv[0],"dosbox") && !strcmp(argv[1],"--channel-fd=3") && count==1 && expect_dosbox[0]);
-        assert(!strcmp(argv[2],expect_dosbox[0]) && !strcmp(argv[3],expect_dosbox[1]) && !argv[4]);
+        assert(!strcmp(argv[0],"dosbox") && !strcmp(argv[1],"--channel-fd=3") && count==1);
+        unsigned at=2;
+        for (unsigned i=0;i<2 && expect_dosbox[i];i++) assert(argv[at] && !strcmp(argv[at++],expect_dosbox[i]));
+        assert(!argv[at]);
         dosbox_spawns++;
     } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
     else if (!strcmp(path,"/Programs/music")) assert(!strcmp(argv[0],"music") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
@@ -246,7 +252,14 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         } else assert(count==1);
         if (expect_test) assert(!strcmp(argv[at++],"--test=tasks"));
         assert(!argv[at]);
-    } else if (!strcmp(path,"/Programs/control")) assert(!strcmp(argv[0],"control") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
+    } else if (!strcmp(path,"/Programs/control")) {
+        assert(!strcmp(argv[0],"control") && !strcmp(argv[1],"--channel-fd=3") && count==1);
+        if (expect_control_arg) assert(argv[2] && !strcmp(argv[2],expect_control_arg) && !argv[3]);
+        else assert(!argv[2]);
+#ifndef DESK_FOOTPRINT_TEST
+        control_spawns++;
+#endif
+    }
     else assert(!strcmp(path,"/Programs/demo") && !strcmp(argv[0],"demo") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     if (fail_spawn) { errno=fail_spawn==1 ? ENOEXEC : fail_spawn; return -1; }
     if (timing_model) {
@@ -272,7 +285,11 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
             if (media_query_error) { errno=EIO;return -1; }
             memcpy(record,&media_fixture,size);return 0;
         }
-        if (op==MEDIA_GET_VOLUME) { assert(size==sizeof(struct ciuki_media_volume));return 0; }
+        if (op==MEDIA_GET_VOLUME) {
+            struct ciuki_media_volume *v=record;
+            assert(size==sizeof(*v) && v->drive<26);
+            *v=media_volumes[v->drive]; return 0;
+        }
         if (op==MEDIA_GET_BLOCKERS) {
             struct ciuki_media_blockers *b=record;assert(size==sizeof(*b));
             b->count=1;b->programs[0].pid=42;strcpy(b->programs[0].name,"ciuknote");return 0;
@@ -635,6 +652,10 @@ static void message(struct desktop *d,int index,unsigned opcode,unsigned length)
 static int item_at(const struct sh_menu *m, const char *label)
 { for (int k=0;k<m->count;k++) if (!strcmp(m->items[k].label,label)) return k; return -1; }
 static void key(struct desktop *d,int code) { desk_shell_key(d,code,1); desk_shell_key(d,code,0); }
+#ifndef DESK_FOOTPRINT_TEST
+#include "../../../apps/dosbox/autorun.h"
+#include "launch_input_test.h"
+#endif
 static void test_games_menu(void)
 {
     struct desktop d;
@@ -962,7 +983,7 @@ int main(int argc,char **argv)
     if (argc==3 && !strcmp(argv[1],"--theme-wallpaper-performance")) { test_theme_wallpaper_performance(argv[2]); return 0; }
     if (argc==3 && !strcmp(argv[1],"--memory-footprint")) { test_memory_footprint(argv[2]); return 0; }
 #else
-    (void)argc; (void)argv;
+    if (argc==2 && !strcmp(argv[1],"--launch-input")) { test_launch_input(); return 0; }
 #endif
     test_network_service();
     test_media_removal_service();

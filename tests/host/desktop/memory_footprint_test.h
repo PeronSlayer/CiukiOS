@@ -206,7 +206,10 @@ static void test_memory_footprint(const char *directory)
     struct ciuki_media_volume volumes[26]={{0}};
     volumes[4]=(struct ciuki_media_volume){.version=CIUKI_MEDIA_VERSION,.size=sizeof(volumes[4]),
         .drive=4,.flags=CIUKI_MEDIA_REMOVABLE,.generation=1};
-    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d); assert(d.sh.autoplay.open);
+    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
+    assert(!d.sh.autoplay.open && d.sh.autoplay.waiting==(1u<<4));
+    /* The surviving client retains input until focus returns to the desktop. */
+    desk_focus(&d,-1); desk_autoplay_service(&d); assert(d.sh.autoplay.open);
     assert(!strcmp(d.sh.autoplay.content.music,"/mnt/e")); footprint_frame(&d);
     memset(volumes,0,sizeof(volumes)); desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
     assert(!d.sh.autoplay.open); footprint_frame(&d);

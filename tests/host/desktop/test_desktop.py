@@ -462,6 +462,7 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
+            subprocess.run([str(binary), "--launch-input"], check=True, env=env)
 
     def test_dosbox_autorun(self):
         """/Programs/dosbox COMMAND (Programs > Games): the typed key events (apps/dosbox/autorun.h)."""

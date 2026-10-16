@@ -126,7 +126,11 @@ int main(int argc,char **argv)
     /* Simultaneous arrivals are queued, and an eject removes a queued item. */
     volumes[4]=(struct ciuki_media_volume){.drive=4,.flags=1,.generation=40};
     volumes[6]=(struct ciuki_media_volume){.drive=6,.flags=1,.generation=40};
-    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d); assert(d.sh.autoplay.active.drive==4);
+    desk_autoplay_update(&d,volumes); desk_autoplay_service(&d);
+    /* New media must not steal input from the failed-launch error dialog. */
+    assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && !d.sh.autoplay.open);
+    assert(d.sh.autoplay.waiting==((1u<<4)|(1u<<6)));
+    key(DU_KEY_ESC); desk_autoplay_service(&d); assert(d.sh.autoplay.active.drive==4);
     eject(6); key(DU_KEY_ESC); desk_autoplay_service(&d); assert(!d.sh.autoplay.open); eject(4);
     struct ap_inf inf;
     const char *invalid="[autorun]\nopen=../escape.com\n";
