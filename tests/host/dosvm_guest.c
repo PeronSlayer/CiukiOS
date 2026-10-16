@@ -154,6 +154,13 @@ void klog(const char *fmt, ...)
     printf("  log %s\n", line);
     uart_delay((unsigned)strlen(line) + 2); /* CRLF */
 }
+void klog_diag(const char *fmt,...)
+{
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE) || !uart_baud) return;
+    char line[256];va_list ap;va_start(ap,fmt);
+    vsnprintf(line,sizeof(line),fmt,ap);va_end(ap);klog("%s",line);
+}
+
 void *kmalloc(size_t n) { return malloc(n); }
 void kfree(void *p) { free(p); }
 #include "dosvm_aspace.inc"

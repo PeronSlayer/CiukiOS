@@ -121,6 +121,14 @@ void klog(const char *fmt, ...)
     if (!strncmp(fmt, "[dosvm] disk", 12)) strcpy(last_disk_log, last_dosvm_log);
     dosvm_logs++;
 }
+void klog_diag(const char *fmt,...)
+{
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
+    CHECK(cpu_flags & V86_IF);
+    va_list ap;va_start(ap,fmt);
+    int n=vsnprintf(last_vm_audio_log,sizeof(last_vm_audio_log),fmt,ap);va_end(ap);
+    CHECK(n>0 && n<128);vm_audio_logs++;
+}
 /* The production heap (core/kheap.c) has power-of-two classes up to 2048
  * bytes with an 8-byte header: larger requests always fail there, so they
  * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake

@@ -1,4 +1,6 @@
-/* f3-31 counters: one memory snapshot and disk-only RAM summary per five
+/* f0-34: live disk summaries are protected; rec_diag stop-time history is
+ * droppable regardless of a shared group=vm_perf_* name.
+ * f3-31 counters: one memory snapshot and disk-only RAM summary per five
  * seconds; the verbose UART history is dumped after the worker stops.
  * TSC accounting pauses across task switches; it never includes a sleeping
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */

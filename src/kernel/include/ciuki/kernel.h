@@ -80,6 +80,7 @@ void console_wake(void);                  /* quiet boot failure: draw from histo
 void console_pin_page(const char *);      /* pinned text until panic/reboot; caller retains storage */
 void klog(const char *fmt, ...);          /* serial + screen, plain log line */
 void klog_periodic(const char *fmt, ...); /* same sinks, disk runtime ring only */
+void klog_diag(const char *fmt, ...);     /* DIAG_VERBOSE, droppable disk record */
 void kputs_raw(const char *s);            /* panic-safe output */
 
 /* panic */

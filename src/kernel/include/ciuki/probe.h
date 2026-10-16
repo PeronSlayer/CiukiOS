@@ -34,11 +34,14 @@ void rec_set_run(const char *run8);
 bool rec_active(void);
 void rec_emit(const char *probe, const char *event, const char *fmt, ...);
 /* Bounded runtime diagnostics, DATA framing; boot menu L only. Unlike
- * evidence, these also work without a selected/begun test run. */
+ * evidence, these also work without a selected/begun test run. Disk copies
+ * are droppable verbose records, including historical vm_perf groups. */
 void rec_diag(const char *probe, const char *fmt, ...);
-/* Diagnostic RAM rings (boot log and black box): no console or UART cost. */
+/* Protected low-rate evidence in boot log and black box, including quiet
+ * boots: no console or UART cost. */
 void rec_diag_disk(const char *probe, const char *fmt, ...);
-/* Boot-log runtime RAM ring only; exclude periodic bulk data from black box. */
+/* Protected low-rate boot-log runtime evidence only; exclude recurring
+ * vm_perf families from the independent black-box queue. */
 void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...);
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra);
 

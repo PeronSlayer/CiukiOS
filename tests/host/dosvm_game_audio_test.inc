@@ -132,7 +132,11 @@ static void test_audio_records(void)
     for(unsigned i=0;i<32;i++) { dsp_reset(v); dma8(v,1,0x20000,511,false); }
     CHECK(v->audio.diag.count<=16 && v->audio.diag.used[DOSVM_AUDIO_RESET]==4);
     while(v->audio.diag.count) { ms(100); dosvm_audio_log(v); }
-    ms(2000); dosvm_audio_log(v); CHECK(strstr(last_vm_audio_log,"level_db="));
+    while(v->audio.diag.state_count) { ms(100);dosvm_audio_log(v); }
+    unsigned quiet=vm_audio_logs;
+    ms(2000);dosvm_audio_log(v);CHECK(vm_audio_logs==quiet);
+    g_boot.flags|=CBI_F_DIAG_VERBOSE;
+    ms(100);dosvm_audio_log(v);CHECK(strstr(last_vm_audio_log,"level_db="));
     ms(100); dosvm_audio_log(v); CHECK(strstr(last_vm_audio_log,"buffers_ps=") && strstr(last_vm_audio_log,"starved=0"));
     ms(100); dosvm_audio_log(v); CHECK(strstr(last_vm_audio_log,"pcm=") && strstr(last_vm_audio_log,"fm="));
     CHECK(strstr(last_vm_audio_log,"backend_halts=") && !strstr(last_vm_audio_log," halt="));
@@ -241,7 +245,7 @@ static void test_vm_audio_levels(void)
 }
 static void test_sb_state_records(void)
 {
-    vq_begin(); g_boot.flags=CBI_F_VERBOSE;
+    vq_begin(); g_boot.flags=CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE;
     struct dosvm *v=audio_vm_create(); unsigned logs=vm_audio_logs;
     dsp_reset(v); dma8(v,1,0x63B60,4095,true); dmx_start(v,0xC6);
     CHECK(v->audio.diag.sb_state==DOSVM_SB_RUNNING);

@@ -17,7 +17,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/usb/ohci.c" \
     "$root/src/kernel/usb/usb_hub.c" "$root/src/kernel/usb/usb_hid.c" \
     "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/service_test"
-for mode in ready csc-cleared empty create-failed input-create-failed hid-worker safe forced firmware none \
+for mode in ready diagnostic csc-cleared empty create-failed input-create-failed hid-worker safe forced firmware none \
     phased-delays done-head-interleave fatal-relatched fatal-persistent fatal-reasserted fatal-gate-stuck \
     fatal-source-stuck fatal-run-stuck fatal-halt-stuck fatal-bme-stuck \
     completion-uhci-irq completion-uhci-lost completion-uhci-poll \

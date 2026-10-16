@@ -29,10 +29,11 @@ void kputs_raw(const char *s)
     console_write(s, n);
 }
 
-/* Periodic diagnostics leave queue capacity reserved for evidence.
+/* Periodic UART publications leave queue capacity reserved for evidence.
+ * Disk priority is independent: klog_periodic summaries remain protected.
  * Boot/event logs wait in task context; IRQ/early publications never sleep
  * or poll the UART. Console work follows the bounded serial publication. */
-static void log_line(const char *fmt, va_list ap, bool periodic)
+static void log_line(const char *fmt, va_list ap, bool periodic, bool verbose)
 {
     char buf[256];
     int n = kvsnprintf(buf, sizeof(buf) - 1, fmt, ap);
@@ -41,7 +42,8 @@ static void log_line(const char *fmt, va_list ap, bool periodic)
     buf[n] = '\n';
     buf[n + 1] = 0;
     if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
-    if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
+    if (verbose) bootlog_capture_verbose(buf, (size_t)n + 1);
+    else if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
     else bootlog_capture(buf, (size_t)n + 1);
     size_t wire_bytes = (size_t)n + 1;
     for (int i = 0; i <= n; i++) if (buf[i] == '\n') wire_bytes++;
@@ -54,13 +56,21 @@ static void log_line(const char *fmt, va_list ap, bool periodic)
 void klog(const char *fmt, ...)
 {
     va_list ap;
-    va_start(ap, fmt); log_line(fmt, ap, false); va_end(ap);
+    va_start(ap, fmt); log_line(fmt, ap, false, false); va_end(ap);
 }
 
 void klog_periodic(const char *fmt, ...)
 {
     va_list ap;
-    va_start(ap, fmt); log_line(fmt, ap, true); va_end(ap);
+    va_start(ap, fmt); log_line(fmt, ap, true, false); va_end(ap);
+}
+
+/* High-volume details are opt-in and droppable on the disk sink. */
+void klog_diag(const char *fmt, ...)
+{
+    if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
+    va_list ap;
+    va_start(ap,fmt);log_line(fmt,ap,true,true);va_end(ap);
 }
 
 void rec_set_run(const char *run8)
@@ -74,7 +84,7 @@ void rec_set_run(const char *run8)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence, bool capture_blackbox)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence, bool capture_blackbox, bool verbose)
 {
     char buf[256];
     /* Reserve room before assigning a sequence: a queue wait can dispatch
@@ -92,7 +102,8 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
     buf[n + 1] = 0;
     if (!ordinary && blackbox_panic) blackbox_panic(buf,(size_t)n+1);
     if (ordinary) {
-        if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
+        if (verbose) bootlog_capture_verbose(buf, (size_t)n + 1);
+        else if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
     }
     if (!disk_only) serial_write(buf, (size_t)n + 1);
@@ -123,12 +134,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true, false, false, true, true);
+    emit_line(probe, event, extra, true, false, false, true, true, false);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false, false, false, false, true);
+    emit_line(probe, event, extra, false, false, false, false, true, false);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -143,7 +154,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic, false, !periodic, true);
+    emit_line(probe, "DATA", extra, true, periodic, false, !periodic, true, true);
 }
 
 static void diag_disk(const char *probe, const char *fmt, va_list ap, bool capture_blackbox)
@@ -153,7 +164,7 @@ static void diag_disk(const char *probe, const char *fmt, va_list ap, bool captu
     if (run_selected && !run_begun) return;
     char extra[240];
     kvsnprintf(extra,sizeof(extra),fmt,ap);
-    emit_line(probe,"DATA",extra,true,true,true,false,capture_blackbox);
+    emit_line(probe,"DATA",extra,true,true,true,false,capture_blackbox,false);
 }
 
 void rec_diag_disk(const char *probe, const char *fmt, ...)
@@ -164,8 +175,8 @@ void rec_diag_disk(const char *probe, const char *fmt, ...)
 
 void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
 {
-    /* High-volume performance families must not evict pending fault/event
-     * evidence from the separate persistent black-box queue. */
+    /* Bounded five-second performance families are protected on disk; keep
+     * their independent exclusion from the persistent black-box queue. */
     va_list ap;
     va_start(ap,fmt); diag_disk(probe,fmt,ap,false); va_end(ap);
 }

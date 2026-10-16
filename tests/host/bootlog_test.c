@@ -22,6 +22,8 @@ static unsigned calls, turns, commits, truncations, publications;
 static uint32_t published_size;
 static int fail_seek, fail_write, fail_truncate,fail_commit;
 static bool short_write;
+static void (*device_write)(const char *,unsigned);
+static void (*commit_hook)(void);
 static bool sync_waiting, storage_turn, service_sync,produce_during_sync;
 static void storage_call(void)
 {
@@ -52,6 +54,11 @@ int vfs_log_write(struct vfs_table *t, int h, const void *data, size_t size, uin
     *done = 0; if (fail_write) return -FS_EIO;
     if (short_write) size--;
     if (disk_position > disk_size) memset(disk + disk_size, 0, disk_position - disk_size);
+    if (device_write) {
+        uint32_t position=ring_position==BOOTLOG_LIMIT ? BOOTLOG_PROTECTED : ring_position;
+        CHECK(position>=disk_position && logical_size>=position);
+        device_write((const char *)data+position-disk_position,logical_size-position);
+    }
     memcpy(disk + disk_position, data, size); disk_position += (uint32_t)size;
     disk_size = logical_size;
     *done = size; return 0;
@@ -73,7 +80,7 @@ int vfs_log_publish(struct vfs_table *t, int h, bool finish)
     (void)t; (void)finish; storage_call(); CHECK(h == 1);
     publications++; published_size = disk_size; return fail_commit ? -FS_EIO : 0;
 }
-int vfs_commit(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); commits++; return fail_commit ? -FS_EIO : 0; }
+int vfs_commit(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); commits++;if (commit_hook) commit_hook();return fail_commit ? -FS_EIO : 0; }
 int vfs_close(struct vfs_table *t, int h) { (void)t; storage_call(); CHECK(h == 1); return 0; }
 static struct bootlog_stats snapshot(void) { struct bootlog_stats s; bootlog_snapshot(&s); return s; }
 static void drain(void)
@@ -81,7 +88,7 @@ static void drain(void)
     while (snapshot().queued) {
         uint64_t writes = snapshot().writes;
         model_now += BOOTLOG_DRAIN_MS;
-        CHECK(!bootlog_drain()); CHECK(snapshot().writes == writes + 1);
+        CHECK(!bootlog_drain()); CHECK(snapshot().writes > writes && snapshot().writes <= writes + BOOTLOG_TURN_BLOCKS);
         turns++;
     }
 }
@@ -91,7 +98,7 @@ static void reset_model(void)
     fs.volumes[2] = &volume;
     calls = turns = commits = truncations = disk_position = publications = model_now = 0;
     fail_seek = fail_write = fail_truncate = fail_commit = 0; short_write = false;
-    sync_waiting=storage_turn=service_sync=produce_during_sync=false;
+    sync_waiting=storage_turn=service_sync=produce_during_sync=false;device_write=NULL;commit_hook=NULL;
 }
 static void retention(void)
 {
@@ -292,7 +299,7 @@ static void batching_and_cadence(void)
     static char flood[BOOTLOG_HIGH_WATER]; memset(flood, 'H', sizeof(flood));
     bootlog_capture_ring(flood, sizeof(flood));
     CHECK(bootlog_due(model_now) && !bootlog_drain()); /* high water bypasses rate */
-    CHECK(snapshot().ring_queued == sizeof(flood) - BOOTLOG_BATCH && publications == 1);
+    CHECK(!snapshot().ring_queued && publications == 1);
     CHECK(!bootlog_shutdown() && published_size == snapshot().size);
     CHECK(snapshot().bytes_written == snapshot().writes * BOOTLOG_BATCH);
     CHECK(truncations == 1);
@@ -332,4 +339,159 @@ static void recovered_prefix(void)
     CHECK(disk[sizeof(old_records)]=='N');CHECK(!bootlog_shutdown());
     puts("PASS replay prefix: immutable blackbox head, bounded current-boot prefix, dropped-byte watermark retires, sync completes");
 }
-int main(void) { recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }
+/* 1,024,000 B/s diagnostic traffic plus four protected 128-byte rows each 10 ms.
+ * Device time advances during the production writer, so producers continue
+ * through an in-flight slow write. Verify the actual logical disk stream,
+ * including records crossing aligned batches and on-disk rotations. */
+#define MODEL_END 2000u
+static unsigned device_bps, generated_ms, protected_count, observed_count;
+static unsigned seen[1024], line_length, max_blocks;
+static char line[256];
+static bool arrivals;
+static void produce_until(uint32_t until)
+{
+    static char diagnostic[256];
+    memset(diagnostic,'D',sizeof(diagnostic));diagnostic[255]='\n';
+    while (arrivals && generated_ms<until && generated_ms<MODEL_END) {
+        if (!(generated_ms%10)) for (unsigned row=0;row<4;row++) {
+            char record[128];memset(record,'P',sizeof(record));
+            int n=snprintf(record,sizeof(record),"P%06u:",protected_count++);
+            CHECK(n==8);record[n]='P';record[127]='\n';
+            bootlog_capture_ring(record,sizeof(record));
+        }
+        for (unsigned i=0;i<4;i++) bootlog_capture_verbose(diagnostic,sizeof(diagnostic));
+        generated_ms++;
+    }
+}
+static void paced_device(const char *bytes,unsigned n)
+{
+    for (unsigned i=0;i<n;i++) {
+        CHECK(line_length<sizeof(line));line[line_length++]=bytes[i];
+        if (bytes[i]!='\n') continue;
+        if (line[0]=='P') {
+            unsigned id;CHECK(line_length==128 && sscanf(line,"P%6u:",&id)==1 && id<1024);
+            for (unsigned k=8;k<127;k++) CHECK(line[k]=='P');
+            CHECK(!seen[id]++);observed_count++;
+        } else {
+            CHECK(line_length==256);
+            for (unsigned k=0;k<255;k++) CHECK(line[k]=='D');
+        }
+        line_length=0;
+    }
+    model_now+=(BOOTLOG_BATCH*1000u+device_bps-1)/device_bps;
+    produce_until(model_now);
+}
+static void throughput(unsigned bps)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    device_bps=bps;generated_ms=protected_count=observed_count=line_length=max_blocks=0;
+    memset(seen,0,sizeof(seen));arrivals=true;device_write=paced_device;
+    unsigned pressure_turns=0;
+    while (generated_ms<MODEL_END) {
+        model_now+=10;produce_until(model_now);
+        if (bootlog_due(model_now)) {
+            uint64_t before=snapshot().writes;uint32_t start=model_now;
+            CHECK(!bootlog_drain());
+            unsigned blocks=(unsigned)(snapshot().writes-before);
+            CHECK(blocks<=BOOTLOG_TURN_BLOCKS);
+            if (blocks>max_blocks) max_blocks=blocks;
+            if (blocks>1) CHECK((model_now-start)<BOOTLOG_TURN_MS+(BOOTLOG_BATCH*1000u+bps-1)/bps);
+            if (bootlog_due(model_now)) pressure_turns++;
+        }
+    }
+    arrivals=false;CHECK(!bootlog_shutdown());device_write=NULL;
+    struct bootlog_stats st=snapshot();
+    CHECK(protected_count==800 && observed_count==protected_count && !line_length);
+    for (unsigned i=0;i<protected_count;i++) CHECK(seen[i]==1);
+    CHECK(!st.dropped_protected && !st.records_dropped_protected);
+    CHECK(st.dropped==st.dropped_verbose && st.records_dropped_verbose*256u==st.dropped_verbose);
+    if (bps==300000) CHECK(st.dropped_verbose && pressure_turns && max_blocks==1);
+    else CHECK(!st.dropped_verbose && max_blocks>1);
+    printf("PASS bootlog paced device=%u B/s input=1075200 B/s duration_ms=%u writes=%llu bytes=%llu max_blocks=%u protected=%u/%u dropped_protected=%u dropped_verbose=%u verbose_records=%u\n",
+        bps,model_now,(unsigned long long)st.writes,(unsigned long long)st.bytes_written,max_blocks,
+        observed_count,protected_count,st.dropped_protected,st.dropped_verbose,st.records_dropped_verbose);
+}
+static void class_pressure(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    char protected[256],verbose[256];memset(protected,'P',256);memset(verbose,'D',256);
+    bootlog_capture_ring(protected,256);
+    for (unsigned i=1;i<BOOTLOG_RECORDS;i++) bootlog_capture_verbose(verbose,256);
+    CHECK(!snapshot().dropped);
+    for (unsigned i=0;i<BOOTLOG_RECORDS-1;i++) bootlog_capture_ring(protected,256);
+    CHECK(snapshot().dropped_verbose==(BOOTLOG_RECORDS-1)*256 && !snapshot().dropped_protected);
+    bootlog_capture_verbose(verbose,256); /* cannot evict a protected head */
+    bootlog_capture_ring(protected,256);   /* protected-only exhaustion */
+    CHECK(snapshot().records_dropped_protected==1 && snapshot().dropped_protected==256);
+    CHECK(snapshot().records_dropped_verbose==BOOTLOG_RECORDS);
+    CHECK(!bootlog_shutdown());
+    for (unsigned i=0;i<BOOTLOG_RAM;i++) CHECK(disk[BOOTLOG_PROTECTED+i]=='P');
+    puts("PASS bootlog classes: oldest verbose removed behind protected head, incoming verbose rejected at protected-only saturation, explicit per-class byte/record losses");
+    /* A full-block write boundary splits a droppable record. Pin its
+     * remainder while concurrent overflow removes later whole records. */
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture_verbose("x",1);
+    for (unsigned i=0;i<BOOTLOG_RECORDS-1;i++) bootlog_capture_verbose(verbose,256);
+    /* A 256-slot burst forces pressure; restrict this turn to one block. */
+    model_now=0;
+    CHECK(!drain_owned());
+    CHECK(head!=NONE && records[head].offset==255 && diag_head!=head);
+    unsigned pinned=head;
+    for (unsigned i=0;i<BOOTLOG_RECORDS*2;i++) bootlog_capture_verbose(verbose,256);
+    CHECK(head==pinned && records[head].offset==255);
+    CHECK(!bootlog_shutdown());
+    CHECK(disk[BOOTLOG_PROTECTED]=='x');
+    for (unsigned i=1;i<=256;i++) CHECK(disk[BOOTLOG_PROTECTED+i]=='D');
+    puts("PASS bootlog whole records: partially drained verbose remainder pinned through concurrent overflow");
+}
+static void turn_budget(void)
+{
+    reset_model();
+    static char prefix[BOOTLOG_PROTECTED];memset(prefix,'B',sizeof(prefix));
+    static char runtime[BOOTLOG_RAM];memset(runtime,'R',sizeof(runtime));
+    bootlog_capture(prefix,sizeof(prefix));bootlog_capture_ring(runtime,sizeof(runtime));
+    CHECK(!bootlog_activate(&fs,true,1));
+    CHECK(!bootlog_drain() && snapshot().writes==BOOTLOG_TURN_BLOCKS);
+    CHECK(bootlog_due(model_now)); /* still due without advancing the clock */
+    CHECK(!bootlog_drain() && !snapshot().queued);
+    CHECK(!bootlog_shutdown());
+    puts("PASS bootlog budget: fixed four-block cap with frozen clock, pressure remains due on next turn below high water");
+}
+static void request_during_commit(void)
+{
+    commit_hook=NULL;
+    bootlog_capture_ring("new",3);
+    CHECK(bootlog_try_sync()==-FS_EAGAIN);
+}
+static void commit_race(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    bootlog_capture_ring("old",3);CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    commit_hook=request_during_commit;
+    CHECK(!bootlog_drain() && commits==1 && snapshot().ring_queued==3);
+    CHECK(bootlog_try_sync()==-FS_EAGAIN); /* new bytes were not committed */
+    CHECK(!bootlog_drain() && commits==2 && !snapshot().queued && !bootlog_try_sync());
+    CHECK(!memcmp(disk+BOOTLOG_PROTECTED,"oldnew",6));
+    CHECK(!bootlog_shutdown());
+    puts("PASS bootlog sync: request published during device commit cannot advance durability beyond the captured commit target");
+}
+static void pressure_watermarks(void)
+{
+    reset_model();CHECK(!bootlog_activate(&fs,true,1));
+    char record[256];memset(record,'P',sizeof(record));
+    /* Prefix and ring have independent captured targets; eviction of newer
+     * diagnostics cannot make the old protected head appear durable. */
+    bootlog_capture_ring(record,sizeof(record));CHECK(bootlog_try_sync()==-FS_EAGAIN);
+    memset(record,'D',sizeof(record));
+    for (unsigned i=0;i<BOOTLOG_RECORDS*3;i++) bootlog_capture_verbose(record,sizeof(record));
+    CHECK(!commits && !snapshot().dropped_protected);
+    CHECK(!bootlog_drain() && commits==1 && snapshot().ring_queued);
+    for (unsigned i=0;i<256;i++) CHECK(disk[BOOTLOG_PROTECTED+i]=='P');
+    /* Shutdown must drain bytes newer than a still-pending watermark too. */
+    CHECK(bootlog_try_sync()==-FS_EAGAIN);bootlog_capture("new prefix",10);
+    bootlog_capture_ring("new ring",8);
+    CHECK(!bootlog_shutdown() && !snapshot().queued && !memcmp(disk,"new prefix",10));
+    puts("PASS bootlog watermarks: out-of-order verbose evictions cannot retire older protected bytes; shutdown drains beyond pending sync target");
+}
+
+int main(void) { class_pressure();turn_budget();commit_race();pressure_watermarks();throughput(4000000);throughput(300000);recovered_prefix(); retention(); errors(); synchronous_records();sync_bounds();overlapping_watermarks();nonblocking_records();batching_and_cadence();runtime_summaries(); return 0; }

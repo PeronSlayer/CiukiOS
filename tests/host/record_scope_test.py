@@ -29,6 +29,7 @@ ALLOWED = {
     'probes/f3_probes_audio_state.c', # f3-05 SB16/OPL3/8237 controller (f3:vm-audio-state)
     'probes/f3_probes_dpmi.c', # f3-04 DPMI host row (f3:dpmi)
     'probes/f3_probes_workloads.c', # f3-06 workloads (f3:dos4gw, doom, doom-sound, wolf3d, vm-starve)
+    'vm/dosvm_perf.inc', # bounded protected live rows and droppable stop-time history
     'vm/dosvm.c',         # f3-00 admission/lifecycle reports, guarded by active probe scope
     'vm/dosvm_bios.c',    # f3-00 bounded, escaped DOS record channel
     'drivers/ata_probe.c',
@@ -36,6 +37,15 @@ ALLOWED = {
     'drivers/i8042_probe.c',
 }
 TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
+# Disk publication policy; runtime sink tests verify these at the output boundary.
+PUBLICATION_CLASSES = {
+    'rec_emit': 'protected',
+    'rec_emit_panicsafe': 'panic_raw',
+    'rec_diag': 'verbose',
+    'rec_diag_disk': 'protected',
+    'rec_diag_disk_bootlog': 'protected',
+}
+LOG_CLASSES = {'klog': 'protected', 'klog_periodic': 'protected', 'klog_diag': 'verbose'}
 CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag(?:_disk(?:_bootlog)?)?)\s*\(')
 
 
@@ -56,10 +66,21 @@ assert list(calls('rec_diag_disk_bootlog(p, "group=vm_perf_cpu");')) == [1]
 root = Path(__file__).resolve().parents[2] / 'src/kernel'
 violations = []
 for path in sorted(root.rglob('*')):
-    if path.suffix not in {'.c', '.h'} or path.relative_to(root).as_posix() in ALLOWED:
+    if path.suffix not in {'.c', '.h', '.inc'} or path.relative_to(root).as_posix() in ALLOWED:
         continue
     violations.extend(f'{path.relative_to(root)}:{line}' for line in calls(path.read_text()))
 if violations:
     print('FAIL evidence record scope: ' + ', '.join(violations), file=sys.stderr)
     sys.exit(1)
-print('PASS evidence record scope: explicit probe/output ownership')
+# Check class ownership independently of record group strings: the live and
+# historical rows deliberately reuse vm_perf names.
+perf = (root / 'vm/dosvm_perf.inc').read_text()
+live = perf[perf.index('static void perf_live('):perf.index('void dosvm_perf_report(')]
+dump = perf[perf.index('void dosvm_perf_dump('):]
+for section, expected in ((live, 'protected'), (dump, 'verbose')):
+    names = [m[0].split('(')[0].strip() for m in CALL.finditer(TOKEN.sub(
+        lambda m: ''.join('\n' if c == '\n' else ' ' for c in m[0]), section))]
+    assert names and all(PUBLICATION_CLASSES[name] == expected for name in names), names
+assert PUBLICATION_CLASSES['rec_diag_disk'] == PUBLICATION_CLASSES['rec_emit']
+assert LOG_CLASSES['klog_periodic'] == 'protected'
+print('PASS evidence record scope: explicit probe/output ownership, .inc coverage, protected live / verbose historical classes')

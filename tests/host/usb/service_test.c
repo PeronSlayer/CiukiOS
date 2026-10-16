@@ -341,6 +341,8 @@ int main(int argc,char **argv)
     if(!strncmp(argv[1],"completion-",11)) {completion_workers(argv[1]);return 0;}
     if(!strcmp(argv[1],"phased-delays")) {phased_delays();return 0;}
     if(!strncmp(argv[1],"fatal-",6)) {fatal_isolation(argv[1]);return 0;}
+    bool diagnostic=!strcmp(argv[1],"diagnostic");
+    if(diagnostic) g_boot.flags=CBI_F_DIAG_VERBOSE;
     bool empty=!strcmp(argv[1],"empty");
     if(empty) m.dev[0].present=m.dev[1].present=false;
     create_failed=!strcmp(argv[1],"create-failed");
@@ -367,7 +369,8 @@ int main(int argc,char **argv)
         if(!setjmp(service_done)) { dispatched=true;worker.state=T_RUNNING;worker_fn(worker_arg);assert(!"service returned"); }
         const struct usb_host *h=usb_get(0);
         assert(h->ready && !h->quarantined && h->device_count==(empty?0u:2u) && !h->busy);
-        assert(first_scans==1 && cadence_records>=2 && service_entries==1);
+        assert(first_scans==1 && service_entries==1);
+        assert(diagnostic ? cadence_records>=2 : cadence_records==0);
         if(empty) {
             assert(!usb_input_ready());
             assert(!connect_records && disconnect_records==2 && !descriptor_starts && !descriptor_results && !retired_packets);
