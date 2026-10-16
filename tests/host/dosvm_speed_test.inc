@@ -108,12 +108,14 @@ static void test_speed_accounting(void)
     v->perf.port_count[DOSVM_VGA_SR_MASK] = 1279; v->perf.port_cycles[DOSVM_VGA_SR_MASK] = 789;
     v->monitor.stats.delivered[0] = 140; v->monitor.stats.insn[V86_OUT] = 200;
     v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
+    v->perf.return_hits = 17; v->perf.return_segmented = 11; v->perf.return_fallbacks = 3;
     g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
-    CHECK(disk_records==disk_before+8);
+    CHECK(disk_records==disk_before+9);
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
+    CHECK(s->return_hits == 17 && s->return_segmented == 11 && s->return_fallbacks == 3);
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
     CHECK(s->harvests == 140 && s->pages == 700 && s->harvest_us == 123);
     CHECK(s->port_remaps == 1278 && s->remap_us == 456 && s->burst_insn == 1024 &&

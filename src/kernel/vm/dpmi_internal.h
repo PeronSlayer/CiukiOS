@@ -112,9 +112,12 @@ struct dpmi {
     uint8_t if_step_depth, if_step_client, if_records;
     uint32_t if_target_eip, if_target_sp;
     uint64_t if_wait_tick;
-    /* f3-34: remaining forward-decode budget, never TF single steps.
-     * A spare execute breakpoint observes the next actual boundary. */
+    /* f3-34: sparse execute hints plus bounded fallback at safe boundaries. */
     uint16_t return_steps;
+    bool return_step, return_replan;
+    uint16_t return_step_cs, return_step_target_cs;
+    uint8_t return_irqs;
+    uint64_t return_tick;
     uint8_t return_depth, return_client;
     uint16_t return_cs, return_ss, return_origin_cs;
     uint8_t return_slot, return_hops;

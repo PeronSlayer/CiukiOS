@@ -52,24 +52,30 @@ int main(void)
             CHECK((bool)(s.eflags&0x100)==(form==2 || form==3 || form>=5));
         }
     }
-    for (unsigned bits=0;bits<2;bits++) for (unsigned form=0;form<5;form++) {
-        big=bits!=0;
+    for (unsigned bits=0;bits<3;bits++) for (unsigned form=0;form<6;form++) {
+        big=bits==1;
         memset(memory,0x90,sizeof(memory));
         struct gcpu_state s={.cs=0x87,.ss=0x8F,.ds=0x97,.es=0x97,.fs=0x97,.gs=0x97,
             .esp=0x100,.eflags=0x202,.pm=true,.ldt_limit=159,.dr={0x1000,0x1001,0x1003,0x1004},.dr7=0x55};
+        if (bits==2) { s.pm=false; s.cs=0x100; s.ss=0x200; s.eflags|=0x20000; }
         unsigned pc=0, executed=0, hit=1;
         if (form==1) { s.eflags|=0x10000; pc=executed=1; hit=2; } /* RF skips first only */
         if (form==2) s.eflags|=0x100; /* execute fault precedes TF retirement */
         if (form>=3) {
-            s.eax=0x8F; memory[0x1000]=0x8E; memory[0x1001]=0xD0;
+            s.eax=bits==2?0x200:0x8F; memory[0x1000]=0x8E; memory[0x1001]=0xD0;
             s.dr[0]=0x1002; s.dr[1]=0x1003; s.dr7=5;
             pc=3; executed=2; hit=2; /* MOV SS suppresses the successor's breakpoint */
             if (form==4) { s.eflags|=0x100; hit=0x4000; }
+            if (form==5) { /* POP SS also inhibits the next execute fault. */
+                memory[0x1000]=0x17; memory[0x1001]=0x90;
+                word(0x2100,s.ss,big?4:2);
+                s.dr[0]=0x1001; s.dr[1]=0x1003; executed=3;
+            }
         }
         struct gcpu_event ev;
         CHECK(gcpu_run(&s,20,&ev)==GCPU_TRAP && ev.vector==1 && ev.dr6==hit);
         CHECK(ev.fault==(form!=4) && ev.executed==executed && s.eip==pc);
         CHECK(!(s.eflags&0x10000) && !!(s.eflags&0x100)==(form==2 || form==4));
     }
-    gcpu_done(); printf("guest CPU debug: 16/32-bit POPF/IRET TF, MOV/POP SS delay, execute faults, RF and TF ownership PASS (%u checks)\n",checks); return 0;
+    gcpu_done(); printf("guest CPU debug: 16/32-bit POPF/IRET TF, MOV/POP SS delay, PM/V86 segmented execute faults, RF and TF ownership PASS (%u checks)\n",checks); return 0;
 }

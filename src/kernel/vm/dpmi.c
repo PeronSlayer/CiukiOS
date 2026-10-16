@@ -86,14 +86,13 @@ void dpmi_reload_debug(struct dosvm *v)
     for (unsigned i = 0; i < DPMI_WATCH; i++)
         if (!d->watch[i].used) d->watch[i].addr = 0;
     d->return_slot = DPMI_WATCH;
-    if (d->return_steps && v->frame_pm && d->depth == d->return_depth && d->clients == d->return_client) {
+    if (d->return_steps && !d->return_step && v->frame_pm && d->depth == d->return_depth && d->clients == d->return_client) {
         for (unsigned i = DPMI_WATCH; i-- > 0;) if (!d->watch[i].used) {
             d->return_slot = (uint8_t)i;
             d->watch[i].addr = address[i] = d->return_linear;
             dr7 |= 1u << (i * 2);       /* local, execute, length 1 */
             break;
         }
-        if (d->return_slot == DPMI_WATCH) d->return_steps = 0; /* all slots belong to debugger */
     }
     if (dr7) dr7 |= 1u << 8;            /* LE: exact data breakpoints */
     d->dr7 = dr7;
@@ -103,8 +102,9 @@ void dpmi_reload_debug(struct dosvm *v)
 
 void dpmi_return_cancel(struct dosvm *v)
 {
-    if (!v->dpmi.return_steps && v->dpmi.return_slot >= DPMI_WATCH) return;
+    if (!v->dpmi.return_steps && !v->dpmi.return_step && v->dpmi.return_slot >= DPMI_WATCH) return;
     v->dpmi.return_steps = 0;
+    v->dpmi.return_step = v->dpmi.return_replan = false;
     dpmi_reload_debug(v);
 }
 

@@ -34,7 +34,7 @@ int dpmi_push_record(struct dosvm *v, const struct v86_frame *f, uint8_t kind, s
     r->rstack_top = d->rstack_top;
     dpmi_lock_below(v, f);
     if (d->depth > d->stats.max_depth) d->stats.max_depth = d->depth;
-    if (d->return_steps) dpmi_reload_debug(v); /* parent breakpoint is suspended */
+    if (d->return_steps) { d->return_replan = true; dpmi_reload_debug(v); }
     *out = r;
     return 0;
 }

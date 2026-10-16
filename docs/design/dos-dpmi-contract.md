@@ -305,17 +305,17 @@ This is an amendment proposal for lead review, not hardware qualification.
 | --- | --- | --- |
 | No kernel/other-VM memory access, even with an arbitrary SS:ESP | Ring-3 paging, supervisor mappings, private address space and checked monitor copies. A flat descriptor can span 4 GiB; descriptor limits alone do **not** enforce memory ownership. The tracker does not police every stack write. | Keep paging and `dpmi_ptr`/`dosvm_range` checks. Do not create physical mappings. |
 | No return to privileged code or physical I/O | CPU selector/type/presence/privilege checks, kernel-managed LDT without gates, IOPL=0, TSS bitmap. `dpmi_frame_check` additionally validates every frame used by the kernel's own IRET; guest-edited exception continuations use this path. | Leave these validators and architectural faults authoritative. A rejected acquisition is not a guest fault. |
-| Legacy save/CLI/POPF restores virtual IF | Physical IF is independent of virtual IF. The f3-10 tracker supplies actual instruction boundaries after mixed-selector IRET and near returns. Without those observations the forward proof can miss a save/CLI, leaving virtual IF clear. | Retain exact-image matching at CLI and saved-image TF ownership; acquire a real boundary without tracing ordinary instructions. |
-| No TF leaked by boundary acquisition into PUSHF/POPF or an interrupt frame | f3-10 stops tracing before flags, SS, far/system and interrupt instructions, refuses preexisting TF/NT and confines ownership to client/depth/CS/SS. | Return acquisition must never set live TF or patch an IRET image. Existing saved-image and pending-IRQ recovery TF remain separate owners. |
+| Legacy save/CLI/POPF restores virtual IF | Physical IF is independent of virtual IF. The f3-10 tracker supplies actual instruction boundaries after mixed-selector IRET and near returns. Without those observations the forward proof can miss a save/CLI, leaving virtual IF clear. | Retain exact-image matching at CLI and saved-image TF ownership; acquire a real boundary with sparse execute faults, retaining bounded stepping for unsupported decoding or full client DR allocation. |
+| No TF leaked by boundary acquisition into PUSHF/POPF or an interrupt frame | f3-10 stops tracing before flags, SS, far/system and interrupt instructions, refuses preexisting TF/NT and confines ownership to client/depth/CS/SS. | Sparse acquisition leaves TF untouched. A bounded fallback may own live TF at checked safe boundaries (including a validated same-ring IRET), but never patches an IRET image; it clears TF before flags saves or nested frame construction. Existing saved-image and pending-IRQ recovery TF remain separate owners. |
 | Correct IRQ frame and boundary | CPU traps establish instruction boundaries; `dpmi_deliver` constructs a checked frame before PIC acknowledgement. Nested continuations live in kernel records. The return tracker does not implement this transaction. | Keep frame-before-ack, handler-stack checks, STI shadow, and CPU SS-shadow behavior; an execute #DB is a pre-instruction fault, not retirement. |
-| Client debug events | Enabled B0-B3 are filtered separately from BS/BD/BT; allocated watchpoints switch with the VM. f3-06 already excludes ambiguous debugger stepping of armed compatibility images. | Never steal an allocated DR slot or consume client BS/BD/BT; return acquisition must not introduce another TF owner. Four client slots remain available. |
+| Client debug events | Enabled B0-B3 are filtered separately from BS/BD/BT; allocated watchpoints switch with the VM. f3-06 already excludes ambiguous debugger stepping of armed compatibility images. | Never steal an allocated DR slot or consume client BS/BD/BT; fallback BS belongs only to its recorded client/depth/SS and source/target CS; simultaneous client causes remain visible. Four client slots remain available. |
 | Finite monitoring and context isolation | f3-10 has 512 retired steps, 16-instruction/64-byte epilogue admission and a 32-byte forward-proof stack snapshot; client/depth prevents a callback with identical selectors consuming parent TF. | Bound decoded work and checkpoint count; suspend acquisition through nested contexts, cancel stale/faulted contexts, and capture stack proof only at an observed boundary. |
 
 The old 512-step counter, intermediate TF values and a TF bit patched into
 the extender's IRET image are implementation details, not DPMI guarantees.
 Fixtures asserting them must be replaced with unchanged flags images,
 bounded checkpoint work, exact flag-image arming and nested/debug ownership
-assertions. Unsafe instructions still terminate acquisition; valid ordinary
+assertions. Flags/SS/system barriers still terminate acquisition; valid ordinary
 instructions retain their CPU execution and fault classes.
 
 Research and decision:
@@ -333,13 +333,15 @@ Research and decision:
 - [DPMI virtual interrupts](https://www.delorie.com/djgpp/doc/dpmi/ch4.4.1.html)
   and [0B00h watchpoints](https://www.delorie.com/djgpp/doc/dpmi/api/310b00.html):
   virtualization and debugging are distinct services. Use only a spare DR
-  slot; a client allocation takes priority. With client TF or no spare slot,
-  decline optional acquisition and retain the existing forward proof and
-  explicit virtual-IF APIs. Do not substitute hidden instruction stepping.
+  slot; a client allocation takes priority. With client TF, decline acquisition.
+  With all four slots allocated, use
+  bounded TF acquisition without stealing a slot. Valid unsupported encodings
+  also use one checked TF step, then resume sparse acquisition.
 
 Chosen design: one temporary execute breakpoint, first at the validated
 epilogue's return target, then at the next control-flow or flags/SS barrier
-found by a bounded forward decode. Ordinary instructions run directly.
+found by a bounded forward decode. Decoded ordinary instructions run directly
+when a spare slot is available.
 At a control-flow checkpoint, compute a prospective successor from the live
 frame; it is not an emulated instruction. Only a later CPU trap establishes
 the successor as an actual boundary. A fault, changed descriptor, stack
@@ -353,13 +355,26 @@ ESP changes, near returns and POPF need not trap at CPL3, so it cannot recover
 the f3-10 missing flag-save boundaries by itself. A breakpoint only at the
 first return target is insufficient for the documented result copier's
 stores/LEAVE/RET path; sparse subsequent checkpoints cover that path.
-Acquiring forward stack proof lazily is retained from f3-31, at the observed
-endpoint rather than for every decoded ordinary instruction.
+Capture independent forward proof at every observed checkpoint, never at a
+predicted PC. Replan from the actual resumed boundary after nested execution
+or a physical IRQ; stack and code predictions are not assumed stable across
+that execution. Direct transfers may be followed while preceding decoded instructions are
+provably free of memory writes. Otherwise checkpoint the transfer before
+reading its displacement, so earlier stores cannot invalidate a predecoded
+transfer. A CALL also counts as a possible write through a stack/code alias.
+A hint expires after 100 ms or 64 active physical IRQ observations, even
+without hits; expiry releases the slot without forcing virtual IF and allows
+fresh admission. The 512 work units cover decoding and fallback steps; the
+32-hit cap applies to execute checkpoints. Fallback never steps flags saves,
+SS changes or unvalidated context transfers. Client TF/NT prevents ownership.
+Intel SDM 18.3.1.4 permits a step of IRET with TF set on entry even if its
+image clears TF, allowing full-slot cross-selector acquisition without an
+image patch. IRQ entry clears owned live TF before constructing guest frames.
 
 F3-15's separate 4096-step/100-ms pending-IRQ compatibility escape already
 contradicts this document's earlier absolute timeout prohibition. F3-34
 records that preexisting discrepancy and does not broaden or claim to remove
-that policy. Eliminating return-tracker steps does not promise zero #DB:
+that policy. Sparse return tracking with bounded fallback does not promise zero #DB:
 saved-image restores, guest debuggers and pending-IRQ recovery still use it.
 The <2000/s gameplay target requires same-image QEMU/T23 evidence from the
 lead; host instruction-clock rates are reported separately.
