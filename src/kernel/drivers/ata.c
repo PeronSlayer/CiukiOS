@@ -787,6 +787,13 @@ int ata_channel_discover(struct ata_channel *c)
     task_sleep_ms(2);
     uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
     int found = 0;
+    /* Pass 1: read every unit's reset signature before any command on the
+     * channel. Task-file writes reach both devices (QEMU ide/core.c writes
+     * the Sector Count of both drives; libata-sff classifies dev0 and dev1
+     * right after the soft reset): the SET FEATURES that programs the
+     * master's UDMA mode left 0x45 in the slave's Sector Count and the old
+     * single pass then skipped a present slave (gate evidence 2026-10-16). */
+    struct { bool present; uint8_t status, count, low, mid, high; } sig[ATA_DEVICES] = {{0}};
     for (unsigned i = 0; i < ATA_DEVICES && !e; i++) {
         struct ata_device *d = &c->devices[i];
         /* Do not select another device while reset is still busy. */
@@ -817,21 +824,29 @@ int ata_channel_discover(struct ata_channel *c)
         if (e)
             break;
         /* 9.12: SC=1/LBA Low=1, ATA mid/high=00/00; ATAPI=14/EB. */
-        uint8_t count = reg_read(c, 2), low = reg_read(c, 3);
-        uint8_t mid = reg_read(c, 4), high = reg_read(c, 5);
+        sig[i].present = true; sig[i].status = s;
+        sig[i].count = reg_read(c, 2); sig[i].low = reg_read(c, 3);
+        sig[i].mid = reg_read(c, 4); sig[i].high = reg_read(c, 5);
         /* One line per selected unit so an absent slave can be told from a
          * signature mismatch in the boot log (gate evidence of 2026-10-16). */
-        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, s, count, low, mid, high);
-        if (count != 1 || low != 1)
+        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, s,
+             sig[i].count, sig[i].low, sig[i].mid, sig[i].high);
+    }
+    /* Pass 2: classify and identify. Commands may now change task files. */
+    for (unsigned i = 0; i < ATA_DEVICES && !e; i++) {
+        struct ata_device *d = &c->devices[i];
+        if (!sig[i].present || sig[i].count != 1 || sig[i].low != 1)
             continue;
-        if (mid == 0x14 && high == 0xeb) {
+        reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
+        if (pace(c)) { e = failure(d, start, alternate(c)); break; }
+        if (sig[i].mid == 0x14 && sig[i].high == 0xeb) {
             d->present = d->atapi = true;
             e = identify_packet(d);
             if (e == -FS_EOPNOTSUPP) { e = 0; continue; }
             if (!e) found++;
             continue;
         }
-        if (mid || high)
+        if (sig[i].mid || sig[i].high)
             continue;
         d->present = true;
         /* Edge handler is published before native discovery; nIEN is
