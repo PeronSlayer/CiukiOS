@@ -190,11 +190,21 @@ static int failure(struct ata_device *d, uint64_t start, uint8_t status)
     return -FS_EIO;
 }
 
+/* ATA-6 9.12 / QEMU cmd_identify: EC on a PACKET unit restores its
+ * signature and aborts. This is classification, never a failed I/O retry.
+ * Call only for IDENTIFY, after checking the deadline and clearing BSY. */
+static bool packet_identify_abort(struct ata_channel *c, uint8_t s)
+{
+    return (s & ATA_ERR) && !(s & (ATA_BSY | ATA_DRQ | ATA_DF)) &&
+        reg_read(c, 1) == 0x04 && reg_read(c, 2) == 1 && reg_read(c, 3) == 1 &&
+        reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb;
+}
+
 /* Poll only bounded status transitions at reset/selection or within a
  * data phase. BSY makes every other status bit invalid (7.15). Sleep after
  * short sampling so a stuck device cannot monopolize this UP kernel. */
-static int poll_status(struct ata_device *d, uint64_t start, uint64_t deadline,
-                       uint8_t required, uint8_t forbidden)
+static int poll_status_result(struct ata_device *d, uint64_t start, uint64_t deadline,
+                              uint8_t required, uint8_t forbidden, bool classify)
 {
     struct ata_channel *c = d->channel;
     for (unsigned samples = 0;; samples++) {
@@ -203,6 +213,7 @@ static int poll_status(struct ata_device *d, uint64_t start, uint64_t deadline,
         if (c->stopped || c->quiescing || expired(c, deadline))
             return failure(d, start, s);
         if (!(s & ATA_BSY)) {
+            if (classify && packet_identify_abort(c, s)) return 1;
             if (!s || s == 0xff || (s & (ATA_ERR | ATA_DF)))
                 return failure(d, start, s);
             if ((s & required) == required && !(s & forbidden))
@@ -214,6 +225,11 @@ static int poll_status(struct ata_device *d, uint64_t start, uint64_t deadline,
             task_sleep_ms(1);
     }
 }
+static int poll_status(struct ata_device *d, uint64_t start, uint64_t deadline,
+                       uint8_t required, uint8_t forbidden)
+{
+    return poll_status_result(d, start, deadline, required, forbidden, false);
+}
 
 struct irq_wait { struct ata_channel *channel; uint32_t sequence; gen_t generation; };
 static bool irq_ready(void *arg)
@@ -223,7 +239,8 @@ static bool irq_ready(void *arg)
         (w->channel->irq_sequence != w->sequence && w->channel->irq_generation == w->generation);
 }
 
-static int wait_irq(struct ata_device *d, uint32_t *sequence, uint64_t start, uint64_t deadline)
+static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t start,
+                           uint64_t deadline, bool classify)
 {
     uint64_t check = hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
     if (check && check < deadline) deadline = check;
@@ -237,10 +254,16 @@ static int wait_irq(struct ata_device *d, uint32_t *sequence, uint64_t start, ui
     *sequence = c->irq_sequence;
     irq_restore(f);
     d->status = s;
-    if (c->stopped || c->quiescing || expired(c, deadline) ||
-        (!(s & ATA_BSY) && (s & (ATA_ERR | ATA_DF))))
+    if (c->stopped || c->quiescing || expired(c, deadline))
+        return failure(d, start, s);
+    if (classify && packet_identify_abort(c, s)) return 1;
+    if (!(s & ATA_BSY) && (s & (ATA_ERR | ATA_DF)))
         return failure(d, start, s);
     return 0;
+}
+static int wait_irq(struct ata_device *d, uint32_t *sequence, uint64_t start, uint64_t deadline)
+{
+    return wait_irq_result(d, sequence, start, deadline, false);
 }
 
 static int select_device(struct ata_device *d, uint64_t start, uint64_t deadline, uint8_t head)
@@ -613,9 +636,17 @@ static int identify(struct ata_device *d)
     if (!e)
         e = issue(d, ATA_IDENTIFY, start, &sequence);
     if (!e)
-        e = wait_irq(d, &sequence, start, deadline);
+        e = wait_irq_result(d, &sequence, start, deadline, true);
     if (!e)
-        e = poll_status(d, start, deadline, ATA_DRQ, 0);
+        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, true);
+    if (e == 1) {
+        /* Retire EC's IRQ/generation and restore nIEN before issuing A1.
+         * All reset signatures have already been captured by pass 1. */
+        disarm(c);
+        d->atapi = true;
+        klog("[ata%u] unit=%u identify=packet_signature", c->irq - 14, d->unit);
+        return identify_packet(d);
+    }
     if (!e)
         e = data_block(d, data, false, start, deadline);
     /* 9.5 HPIOI2:HI0: the final data read ends the command; there is
@@ -748,9 +779,11 @@ static int firmware_mode(struct ata_device *d)
         status = alternate(c);
         if (expired(c, deadline)) { e = failure(d, start, status); break; }
         if (status & ATA_BSY) { task_sleep_ms(1); continue; }
-        if ((status & ATA_ERR) && !(status & (ATA_DF | ATA_DRQ)) &&
-            reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb) break;
-        e = poll_status(d, start, deadline, ATA_DRQ, 0);
+        if (packet_identify_abort(c, status)) break;
+        /* The abort may arrive between the status sample above and the
+         * DRQ poll. Classify it there too, before generic containment. */
+        e = poll_status_result(d, start, deadline, ATA_DRQ, 0, true);
+        if (e == 1) { e = 0; break; }
         if (!e) e = data_block(d, data, false, start, deadline);
         if (!e) e = poll_status(d, start, deadline, 0, ATA_DRQ);
         if (!e) d->firmware_udma = (int8_t)ata_dma_mode(data);
@@ -758,6 +791,52 @@ static int firmware_mode(struct ata_device *d)
     }
     reg_read(c, 7); disarm(c);
     return e;
+}
+
+struct reset_signature { uint32_t value; uint8_t status; bool present; };
+
+static int read_reset_signature(struct ata_device *d, struct reset_signature *sig)
+{
+    struct ata_channel *c = d->channel;
+    uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+    /* Wait for the previous selection before switching, then wait for the
+     * newly selected unit. DRDY is deliberately not required for PACKET. */
+    for (;;) {
+        uint8_t s = alternate(c);
+        if (expired(c, deadline)) return failure(d, start, s);
+        if (s == 0xff || !(s & ATA_BSY)) break;
+        task_sleep_ms(1);
+    }
+    reg_write(c, 6, (uint8_t)(0xa0 | d->unit << 4));
+    if (pace(c)) return failure(d, start, alternate(c));
+    bool sampled = false;
+    uint32_t previous = 0;
+    uint8_t previous_status = 0;
+    for (;;) {
+        uint8_t s = alternate(c);
+        if (expired(c, deadline) || c->stopped || c->quiescing)
+            return failure(d, start, s);
+        if (s == 0xff) return 0;
+        if (!(s & ATA_BSY)) {
+            uint32_t value = reg_read(c, 2);
+            value |= (uint32_t)reg_read(c, 3) << 8;
+            value |= (uint32_t)reg_read(c, 4) << 16;
+            value |= (uint32_t)reg_read(c, 5) << 24;
+            /* Bracket the task file with status reads, and require two
+             * identical snapshots separated by a sleep. A single 00/00
+             * cylinder pair while reset/selection settles is not ATA. */
+            uint8_t ending = alternate(c);
+            if (ending == s) {
+                if (sampled && value == previous && s == previous_status) {
+                    sig->value = value; sig->status = s;
+                    sig->present = s || value == 0xeb140101u;
+                    return 0;
+                }
+                sampled = true; previous = value; previous_status = s;
+            } else sampled = false;
+        } else sampled = false;
+        task_sleep_ms(1);
+    }
 }
 
 int ata_channel_discover(struct ata_channel *c)
@@ -783,7 +862,7 @@ int ata_channel_discover(struct ata_channel *c)
     e = c->ops->delay_us(c->port_ctx, 5);
     device_control(c, (uint8_t)(c->control_shadow & ~ATA_SRST));
     task_sleep_ms(2);
-    uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+    uint64_t start = now(c);
     int found = 0;
     /* Pass 1: read every unit's reset signature before any command on the
      * channel. Task-file writes reach both devices (QEMU ide/core.c writes
@@ -791,60 +870,33 @@ int ata_channel_discover(struct ata_channel *c)
      * right after the soft reset): the SET FEATURES that programs the
      * master's UDMA mode left 0x45 in the slave's Sector Count and the old
      * single pass then skipped a present slave (gate evidence 2026-10-16). */
-    struct { bool present; uint8_t status, count, low, mid, high; } sig[ATA_DEVICES] = {{0}};
+    struct reset_signature sig[ATA_DEVICES] = {{0}};
     for (unsigned i = 0; i < ATA_DEVICES && !e; i++) {
         struct ata_device *d = &c->devices[i];
-        /* Do not select another device while reset is still busy. */
-        for (uint8_t s = alternate(c); s & ATA_BSY && s != 0xff; s = alternate(c)) {
-            if (expired(c, deadline)) {
-                e = failure(d, start, s);
-                break;
-            }
-            task_sleep_ms(1);
-        }
-        if (e)
-            break;
-        reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
-        if (pace(c)) { e = failure(d, start, alternate(c)); break; }
-        uint8_t s = alternate(c);
-        if (s == 0xff)
-            continue;
-        /* ATA/ATAPI-6 9.12: a PACKET device keeps DRDY clear after reset but
-         * presents its signature; only an absent device reads status 0 with
-         * no signature (QEMU ide-cd evidence of 2026-10-11, lead fix). */
-        if (!s && !(reg_read(c, 4) == 0x14 && reg_read(c, 5) == 0xeb))
-            continue;
-        while (s & ATA_BSY) {
-            if (expired(c, deadline)) { e = failure(d, start, s); break; }
-            task_sleep_ms(1);
-            s = alternate(c);
-        }
-        if (e)
-            break;
-        /* 9.12: SC=1/LBA Low=1, ATA mid/high=00/00; ATAPI=14/EB. */
-        sig[i].present = true; sig[i].status = s;
-        sig[i].count = reg_read(c, 2); sig[i].low = reg_read(c, 3);
-        sig[i].mid = reg_read(c, 4); sig[i].high = reg_read(c, 5);
+        d->issued = false;
+        e = read_reset_signature(d, &sig[i]);
+        if (e || !sig[i].present) continue;
         /* One line per selected unit so an absent slave can be told from a
          * signature mismatch in the boot log (gate evidence of 2026-10-16). */
-        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, s,
-             sig[i].count, sig[i].low, sig[i].mid, sig[i].high);
+        klog("[ata%u] unit=%u status=%02x signature=%02x%02x%02x%02x", c->irq - 14, i, sig[i].status,
+             sig[i].value & 255, (sig[i].value >> 8) & 255,
+             (sig[i].value >> 16) & 255, sig[i].value >> 24);
     }
     /* Pass 2: classify and identify. Commands may now change task files. */
     for (unsigned i = 0; i < ATA_DEVICES && !e; i++) {
         struct ata_device *d = &c->devices[i];
-        if (!sig[i].present || sig[i].count != 1 || sig[i].low != 1)
+        if (!sig[i].present || (sig[i].value & 0xffff) != 0x0101)
             continue;
         reg_write(c, 6, (uint8_t)(0xa0 | i << 4));
         if (pace(c)) { e = failure(d, start, alternate(c)); break; }
-        if (sig[i].mid == 0x14 && sig[i].high == 0xeb) {
+        if (sig[i].value == 0xeb140101u) {
             d->present = d->atapi = true;
             e = identify_packet(d);
             if (e == -FS_EOPNOTSUPP) { e = 0; continue; }
             if (!e) found++;
             continue;
         }
-        if (sig[i].mid || sig[i].high)
+        if (sig[i].value != 0x00000101u)
             continue;
         d->present = true;
         /* Edge handler is published before native discovery; nIEN is
@@ -852,6 +904,7 @@ int ata_channel_discover(struct ata_channel *c)
         device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
         e = identify(d);
         device_control(c, c->control_shadow | ATA_NIEN);
+        if (e == -FS_EOPNOTSUPP && d->atapi) { e = 0; continue; }
         if (!e)
             found++;
     }
