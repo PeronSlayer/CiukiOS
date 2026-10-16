@@ -5,6 +5,12 @@ static cvga_state fs_card;
 static bool fs_ports,fs_display,fs_refuse;
 static bool fs_stuck_blank;
 static unsigned fs_begins,fs_ends;
+static int fs_end_result;
+static unsigned fs_exit_stage;
+static bool fs_return_order;
+static unsigned fs_watchdog_returns;
+static struct dosvm *fs_expected_owner;
+static uint32_t fs_expected_ptes[32];
 static const char *fs_fail_checkpoint;
 static unsigned fs_checkpoints;
 static bool fs_test_checkpoint_pin;
@@ -12,6 +18,18 @@ void display_fullscreen_return_request(void) {}
 int display_fullscreen_checkpoint(const char *step,int result)
 {
     (void)result; fs_checkpoints++;
+    if (!strcmp(step,"watchdog-return")) fs_watchdog_returns++;
+    if (fs_return_order && !strcmp(step,"guest-revoke")) {
+        CHECK(!fs_exit_stage);fs_exit_stage=1;
+    }
+    if (fs_return_order && !strcmp(step,"vga-capture")) {
+        CHECK(fs_exit_stage==1 && !fs_ports && !fs_expected_owner->fullscreen);
+        for (unsigned i=0;i<32;i++) {
+            uint32_t pte;as_lookup(&fs_expected_owner->as,0xA0000+i*4096,&pte);
+            CHECK((pte&~0x60u)==(fs_expected_ptes[i]&~0x60u));
+        }
+        fs_exit_stage=2;
+    }
     if (fs_test_checkpoint_pin && !strcmp(step,"vm-park"))
         CHECK(dosvm_destroy(dosvm_focused_key(),true)==-EBUSY);
     return fs_fail_checkpoint && !strcmp(step,fs_fail_checkpoint) ? -EIO : 0;
@@ -28,4 +46,8 @@ void *vmm_map_mmio(uint32_t p,uint32_t bytes,bool uncached)
 { CHECK(p==0xA0000 && bytes==0x20000 && uncached); return P2V(p); }
 int display_fullscreen_begin(uint16_t mode)
 { CHECK(cvga_find_mode(mode)); fs_begins++; if (fs_refuse) return -EBUSY; CHECK(!fs_display); fs_display=true; return 0; }
-int display_fullscreen_end(void) { CHECK(fs_display); fs_display=false; fs_ends++; return 0; }
+int display_fullscreen_end(void) {
+    CHECK(fs_display);
+    if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }
+    fs_display=false; fs_ends++; return fs_end_result;
+}

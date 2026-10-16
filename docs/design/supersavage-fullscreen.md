@@ -68,9 +68,9 @@ and the desktop's DAC precision. Save extended state before temporarily
 selecting the legacy aperture. Restore with the display blank, streams off,
 panel/clock state restored and streams reenabled last. Verify writable masks;
 read packed stream MMIO as two halfwords. Readback failures retain the saved
-snapshot, diagnose the exact register and attempt native recovery. Failed
-recovery quarantines the claims and never invokes the BIOS or exposes a
-guessed framebuffer. Unsupported native states keep f3-26's refusal.
+snapshot and diagnose the exact register. The f3-36 amendment below supersedes
+the original quarantine-only exit policy. Unsupported native states keep
+f3-26's refusal.
 
 Checkpoints cover each transaction stage and feed the existing boot log and
 reserved-sector black box. Entry requires durable evidence; recovery always
@@ -87,3 +87,57 @@ return tick without I/O; `lease_return_ms` measures through native restore
 and remapping, and `desktop_frame_ms` includes the first completed compositor
 frame. `restore_us` measures the provider itself, including its checkpoints.
 None of these counters is proof of visible panel output.
+
+## f3-36 restore correction (2026-10-16)
+
+The T23 a79f840c log records `reg=158 expected=0 actual=8 mask=ff`.
+`sw()` encodes sequencer indices as `0x100 + index`: this is **SR58**, not
+CR58, CR67 or MM8158. `stage` formerly named the last attempted stage rather
+than the stage of the first mismatch. The restored panel/clock stage wrote
+SR58 and immediately compared it while the guest VGA timing was still active.
+
+[S3 RE046-B, printed pp. 58–60](https://old.vgamuseum.info/images/stories/doc/s3/savage4_registers.pdf#page=62)
+defines SR58 as a read-only horizontal border value; bit 3 is part of that
+computed value. SR59 and SR5A are also read-only, and SR5B bits 7:1 are derived
+expansion/centering/line-repeat status. Thus 00h -> 08h is not evidence of a
+failed writable stream-enable bit. Applying this shared panel layout to the
+SuperSavage is supported by X.Org's `HZEXP_BORDER`, `HZEXP_FACTOR_IGA1`,
+`VTEXP_BORDER` and `VTEXP_FACTOR_IGA1` definitions in
+[savage_regs.h](https://github.com/NetBSD/xsrc/blob/trunk/external/mit/xf86-video-savage/dist/src/savage_regs.h).
+The IBM `Driver/D/A0400/SSAV1014.INF` confirms 5333:8c2e/01fc:1014 and panel
+preferences, but supplies no register bit definitions.
+
+Continue saving the full panel bytes for diagnostics. Do not write/compare
+SR58–5A; compare only SR5B bit 0 and retain checks on writable compensation,
+PLL, VGA and stream state. Do not invent a special mask that ignores only
+SR58 bit 3. X.Org's eight-byte panel write loop has no readback assertion;
+copying it with full-byte equality introduced this failure. Preserve the
+existing blank -> streams off -> panel/PLL -> VGA/extended timing -> stream
+addresses -> CR67 at retrace -> unblank order, consistent with
+[SavageWriteMode](https://github.com/NetBSD/xsrc/blob/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c),
+[SavageStreamsOff/On](https://github.com/NetBSD/xsrc/blob/trunk/external/mit/xf86-video-savage/dist/src/savage_streams.c)
+and [savagefb_set_par_int](https://github.com/torvalds/linux/blob/master/drivers/video/fbdev/savage/savagefb_driver.c).
+
+On a native failure, disable further native entries for this boot and retain
+the snapshot. Native programming is synchronous CPU I/O, with no DMA, IRQ or
+background writer; after guest revocation and native alias revocation it is
+safe to quiesce/release those access leases even if scanout verification
+failed. This is distinct from proving the mode restored. Registry failures
+remain quarantined; no quarantine reset or ownership bypass is permitted.
+After release, try the existing mediated `biosvm_video_switch` for the saved
+desktop mode. Decode/validate its returned layout before remapping, then
+return the desktop grant and require a completed frame. Log native and VBE
+results independently; overall success means one verified mode was committed.
+If the firmware backend is already disabled, or also fails, report failure
+and leave the framebuffer unavailable rather than expose an unverified mode.
+Clean exits, Alt+Enter and watchdog `return-or-fault` use this same transaction.
+
+The old 200 ms end-to-end target is contradicted by the T23 evidence:
+`restore_us=156307`, but `lease_return_ms=1180`, including guest park/capture,
+durable checkpoints and scheduler contention. Retain 200 ms as the provider
+register-restore target; revise the native lease/first-frame target to 2000 ms
+(1180 ms observed plus 820 ms margin). A VBE recovery gets 4000 ms, allowing
+the existing bounded 2000 ms firmware transaction in addition to that native
+return allowance. These are diagnostic targets, never reasons to abort
+recovery. Report overruns; the independent 10 s missing-frame watchdog remains.
+Neither revised target is hardware-qualified by host tests.

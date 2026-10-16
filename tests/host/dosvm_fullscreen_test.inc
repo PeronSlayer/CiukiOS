@@ -103,7 +103,13 @@ static void test_fullscreen_service(void)
     CHECK(!(v->kbd.held[0x1C>>3]&(1u<<(0x1C&7))));
     CHECK(dosvm_fullscreen_input(INPUT_KEY,0x1C,2) && dosvm_fullscreen_input(INPUT_KEY,0x1C,0));
     CHECK(dosvm_fullscreen_input(INPUT_REL,INPUT_X,10));
+    fs_return_order=true;fs_exit_stage=0;fs_expected_owner=v;
+    memcpy(fs_expected_ptes,saved,sizeof(saved));
+    unsigned exits=fs_ends,returns=fs_watchdog_returns;
     dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display && !fs_ports);
+    CHECK(fs_exit_stage==3 && fs_ends==exits+1 && fs_watchdog_returns==returns+1);
+    CHECK(strstr(last_dosvm_log,"revoke_result=0 restore_result=0"));
+    fs_return_order=false;
     for (unsigned i=0;i<32;i++) { uint32_t pte; as_lookup(&v->as,0xA0000+i*4096,&pte); CHECK((pte&~0x60u)==(saved[i]&~0x60u)); }
     struct ciuki_input_event out;
     CHECK(dosvm_fullscreen_desktop_event(&out) && out.type==CIUKI_INPUT_RESYNC);
@@ -139,6 +145,20 @@ static void test_fullscreen_service(void)
     g_ticks++;dosvm_fullscreen_progress(v,8,0x1235);dosvm_fullscreen_poll();
     CHECK(!v->fullscreen && !fs_display && v->fullscreen_error==-ETIMEDOUT);
     v->idle.sleeping=false;
+    /* The same ordered leave handles a synchronous clean exit, a watchdog
+     * return after successful recovery, and a reported restoration failure. */
+    for (unsigned failure=0;failure<2;failure++) {
+        v->fullscreen_parked=true;CHECK(!dosvm_fullscreen_enter(key));hardware=card_bus;
+        fs_return_order=true;fs_exit_stage=0;fs_end_result=failure ? -EIO : 0;
+        exits=fs_ends;
+        if (!failure) CHECK(!dosvm_fullscreen_leave(key,false));
+        else { fullscreen_return=true;dosvm_fullscreen_poll(); }
+        CHECK(fs_exit_stage==3 && fs_ends==exits+1 && !fs_display && !v->fullscreen && !fs_ports);
+        CHECK(!fullscreen_owner && !fullscreen_busy && !v->fullscreen_hold);
+        CHECK(v->fullscreen_error==fs_end_result);
+        CHECK(strstr(last_dosvm_log,failure ? "revoke_result=0 restore_result=-5" : "revoke_result=0 restore_result=0"));
+        fs_return_order=false;fs_end_result=0;
+    }
     v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
     CHECK(!dosvm_stop(key,DOSVM_FAULT) && !fs_ports);
     dosvm_fullscreen_poll(); CHECK(!v->fullscreen && !fs_display);
@@ -147,4 +167,5 @@ static void test_fullscreen_service(void)
     g_boot.flags=old_flags; g_boot.test_request_len=old_length; memcpy(g_boot.test_request,old_request,sizeof(old_request));
     puts("PASS full-screen service: refusal/rollback, UC aperture grant/revoke, task-local ports, Alt+Enter/Tab consumed, PS/2/USB mouse path, pause/resume, watchdog and fault cleanup");
     puts("PASS f3-26 full-screen: pre-mutation checkpoint failure, rollback before guest grant, VGA register readback, first-write evidence and independent 5 s first-frame timeout");
+    puts("PASS f3-36 VM exit: clean and return-or-fault watchdog share revoke -> capture -> restore, one lease return, exact PTE/port cleanup, restore result and failure surfaced");
 }

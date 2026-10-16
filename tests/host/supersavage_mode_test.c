@@ -14,6 +14,7 @@ struct card {
     uint32_t streams[40];
     uint64_t us;
     unsigned reads,writes,memcycles,pll_edges,retrace_reads;
+    unsigned panel_status_writes;
     bool no_retrace,decorated,freeze_time;
     unsigned drop_cr,drop_sr,drop_mm;
     bool drop_once;
@@ -61,6 +62,8 @@ static void output(void *arg,uint16_t p,uint8_t v)
     }
     if (p==0x3C5 && s>=5) {
         if (s!=8 && c->sr[8]!=6) return;
+        if (s>=0x58 && s<=0x5A) { c->panel_status_writes++; return; }
+        if (s==0x5B) v=(v&1)|(c->sr[s]&0xFE);
         if (s==0x15 && (v&0x20)) c->pll_edges++;
         if (!drop(c,s,1)) c->sr[s]=v;
         return;
@@ -139,7 +142,11 @@ static void restored(void)
     assert(!memcmp(card.vga.dac,original.vga.dac,768));
     assert(!memcmp(card.vga.plane,original.vga.plane,sizeof(card.vga.plane)));
     assert(!memcmp(card.cr,original.cr,256));
-    assert(!memcmp(card.sr,original.sr,256));
+    for (unsigned i=0;i<256;i++) {
+        unsigned mask=i>=0x58 && i<=0x5A ? 0 : i==0x5B ? 1 : 255;
+        assert(!((card.sr[i]^original.sr[i])&mask));
+    }
+    assert(!card.panel_status_writes);
     assert(!memcmp(card.streams,original.streams,sizeof(card.streams)));
     assert(card.vga.seq_index==original.vga.seq_index && card.vga.crtc_index==original.vga.crtc_index);
     assert(card.vga.misc==original.vga.misc && card.vga.enable==original.vga.enable);
@@ -218,6 +225,7 @@ static void failures(void)
     assert(supersavage_mode_restore(&snapshot,&bus)==-EIO && snapshot.saved && snapshot.bad_reg==0x112);
     assert(card.cr[0x67]==original.cr[0x67]); /* remaining recovery did run */
     card.drop_sr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
+    assert(snapshot.bad_stage==0);
     fixture();assert(!supersavage_mode_save(&snapshot,&bus));card.no_retrace=card.freeze_time=true;
     assert(supersavage_mode_enter(&snapshot,&bus,0x13)==-EIO && card.retrace_reads<131080);
     card.no_retrace=card.freeze_time=false;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
@@ -226,4 +234,26 @@ static void failures(void)
     assert(!supersavage_mode_restore(&snapshot,&bus));restored();
     puts("PASS SuperSavage recovery: unknown/inactive panel refusal, each entry checkpoint failure, CR67 write loss, reserved-bit masks, retained snapshot on PLL/stream restore failure, bounded frozen-clock retrace, recovery despite failed durable checkpoint");
 }
-int main(void) { cycles();presentation();failures();puts("SuperSavage native mode host tests: PASS");return 0; }
+static void panel_status(void)
+{
+    const unsigned retained[]={8,0x80,0xFF};
+    for (unsigned i=0;i<ARRAY_SIZE(retained);i++) {
+        fixture();card.sr[0x58]=0;original=card;
+        assert(!supersavage_mode_save(&snapshot,&bus) && !snapshot.sr[0x58]);
+        assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+        card.sr[0x58]=retained[i];card.sr[0x59]^=0x71;
+        card.sr[0x5A]^=0xFF;card.sr[0x5B]^=0xFE;
+        assert(!supersavage_mode_restore(&snapshot,&bus));
+        assert(card.sr[0x58]==retained[i] && !snapshot.mask);restored();
+    }
+    fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+    assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+    card.sr[0x54]^=8;card.drop_sr=0x54;
+    assert(supersavage_mode_restore(&snapshot,&bus)==-EIO && snapshot.saved);
+    assert(snapshot.bad_reg==0x154 && snapshot.mask==255 &&
+           !strcmp(snapshot.bad_stage,"native-restore-panel-clock"));
+    assert(card.cr[0x67]==original.cr[0x67]);
+    card.drop_sr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
+    puts("PASS f3-36 panel restore: SR58 00->08/80/ff and derived SR59/5A/5B retained without writes/false EIO; lost writable SR54 remains EIO with first-failure stage");
+}
+int main(void) { cycles();presentation();failures();panel_status();puts("SuperSavage native mode host tests: PASS");return 0; }

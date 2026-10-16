@@ -64,6 +64,18 @@ int main(void)
     desk_flush(&d,0);
     puts("PASS display maximized: grow/shrink refit, depth-only CONFIGURE, saved restore geometry, mouse/keyboard resize blocked");
     puts("PASS display compositor: 1024x768 -> 640x480 -> 1024x768, clamped windows/pointer, CONFIGURE, bars/icons/wallpaper");
+    /* Full-screen keeps the compositor's RAM scene alive while its physical
+     * grant is unavailable. Returning the grant must allow the retry to
+     * finish without restarting the compositor or discarding its damage. */
+    unsigned presents=fake_presents;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480);
+    fake_fail_present=1;
+    assert(desk_redraw(&d)<0 && !d.frame_stats.completed && d.damage.count);
+    assert(fake_presents==presents);
+    fake_fail_present=0;
+    assert(!desk_redraw(&d) && d.frame_stats.completed && !d.damage.count);
+    assert(fake_presents>presents && d.scanout_valid);
+    puts("PASS f3-36 compositor: unavailable display retains damage; returned lease resumes presents and completes the desktop frame");
     d.sh.cfg.display_mode = 0x118; d.display_mode = 0x118; d.display_pending = 0x111;
     d.damage.count = 0;
     assert(!desk_display_frame_commit(&d,0) && d.sh.cfg.display_mode == 0x118); /* allocation failed: old mode */

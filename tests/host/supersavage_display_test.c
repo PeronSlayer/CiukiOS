@@ -24,7 +24,7 @@ unsigned pci_count(void) { return extra_gpu ? 2 : 1; }
 const struct pci_func *pci_get(unsigned i) { return i<pci_count() ? &gpu : 0; }
 int registry_claim(enum res_type t,uint32_t start,uint32_t end,const char *owner,bool share)
 {
-    assert(!share && !strcmp(owner,"supersavage-mode"));
+    assert(!share && (!strcmp(owner,"supersavage-mode") || !strcmp(owner,"firmware-test")));
     if (++claims_attempted==fail_claim) return -EBUSY;
     for (unsigned i=0;i<nleases;i++)
         assert(leases[i].state==RS_RELEASED || leases[i].end<=start || leases[i].start>=end || leases[i].type!=t);
@@ -104,7 +104,7 @@ static void ownership(void)
     assert(!memcmp(card.vga.plane,original.vga.plane,sizeof(card.vga.plane)));
     puts("PASS SuperSavage provider ownership: side-effect-free PCI/BAR/decode preflight, exclusive VGA/MMIO/A000 leases, halfword stream readback, revoked aliases before release");
 }
-static void refusal_and_quarantine(void)
+static void refusal_and_recovery(void)
 {
     for (unsigned i=1;i<=3;i++) {
         runtime_fixture();assert(!supersavage_display_prepare(&desktop,0x13));fail_claim=i;
@@ -125,14 +125,26 @@ static void refusal_and_quarantine(void)
     runtime_fixture();assert(!supersavage_display_prepare(&desktop,0x13));assert(!supersavage_display_begin(0x13));
     card.sr[0x12]^=1;card.drop_sr=0x12;
     assert(supersavage_display_end()==-EIO && poisoned && saved_mode.saved && revoked==2);
-    for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_QUARANTINED);
+    for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
+    /* Failure of mode proof does not keep CPU-only access claims live.
+     * A mediated firmware caller can acquire them without quarantine reset. */
+    int h=registry_claim(RES_PORT,0x3B0,0x3E0,"firmware-test",false);
+    assert(h>=0 && !registry_activate(h,leases[h].generation));
+    h=registry_claim(RES_MMIO,0xA0000,0xC0000,"firmware-test",false);
+    assert(h>=0 && !registry_activate(h,leases[h].generation));
     assert(supersavage_display_prepare(&desktop,0x13)==-EIO);
     assert(supersavage_display_end()==-EIO && revoked==2); /* no access through revoked aliases */
-    puts("PASS SuperSavage provider failures: each claim/map failure releases untouched resources, unsupported panel restores locks, activation/restore failure retains quarantine and blocks retry");
+    puts("PASS SuperSavage provider failures: claim/map rollback, unsupported panel locks, activation failure quarantined; failed native restore retains snapshot/blocks retry but releases revoked CPU leases for firmware recovery");
+    runtime_fixture();card.sr[0x58]=0;
+    assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
+    card.sr[0x58]=8;
+    assert(!supersavage_display_end() && !poisoned && !saved_mode.saved && revoked==2);
+    for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
+    puts("PASS f3-36 provider retained SR58 bit 3: successful restore and complete lease return");
 }
 int main(void)
 {
-    ownership();refusal_and_quarantine();
+    ownership();refusal_and_recovery();
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);
     puts("SuperSavage display provider host tests: PASS");return 0;
 }

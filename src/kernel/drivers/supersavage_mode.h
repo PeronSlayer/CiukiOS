@@ -18,7 +18,7 @@ struct supersavage_mode {
     uint32_t streams[SUPERSAVAGE_STREAM_REGS];
     uint8_t lock38, lock39, lock08, iga, misc, enable, cr_index, sr_index;
     bool saved, planes_saved, touched;
-    const char *stage;
+    const char *stage, *bad_stage;
     unsigned bad_reg;
     uint32_t expected, actual, mask;
     uint64_t restore_us;
@@ -27,6 +27,7 @@ bool supersavage_mode_supported(uint16_t);
 int supersavage_mode_save(struct supersavage_mode *, const struct supersavage_mode_io *);
 int supersavage_mode_enter(struct supersavage_mode *, const struct supersavage_mode_io *, uint16_t);
 /* Recovery keeps going after readback/checkpoint errors and retains the
- * snapshot on failure. Caller keeps/quarantines ownership until verified. */
+ * snapshot on failure. Access leases may be returned once CPU aliases and
+ * the guest have been revoked; an unverified mode must not be remapped. */
 int supersavage_mode_restore(struct supersavage_mode *, const struct supersavage_mode_io *);
 #endif
