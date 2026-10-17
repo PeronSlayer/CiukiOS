@@ -57,6 +57,7 @@ static int read_dev(struct blkdev *d, uint64_t lba, uint32_t n, void *buf) {
 }
 static int write_dev(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf) {
     struct fake *f=d->ctx; int e=blkdev_range(d,lba,n); if (e) return e;
+    if (f->assert_io_unlocked) fs_assert_io_unlocked();
     if (f->cut) return -FS_EIO;
     for (unsigned i=0;i<n;i++) {
         f->writes++; if (lba+i==f->fail_write) return -FS_EIO;
@@ -75,11 +76,13 @@ static int write_dev(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf
 }
 static int flush_dev(struct blkdev *d) {
     struct fake *f=d->ctx; if (f->cut || f->fail_flush) return -FS_EIO;
+    if (f->assert_io_unlocked) fs_assert_io_unlocked();
     int e=drain(f,false); if (e) return e;
     f->flushes++; return event(f,'B',0);
 }
 int fake_open(struct fake *f, const char *path) {
     memset(f,0,sizeof(*f)); f->fd=open(path,O_RDWR); if (f->fd<0) return -FS_EIO;
+    f->assert_io_unlocked=true;
     struct stat st; if (fstat(f->fd,&st)) { close(f->fd); return -FS_EIO; }
     f->dev=(struct blkdev){.read=read_dev,.write=write_dev,.flush=flush_dev,.capacity=(uint64_t)st.st_size/512,.sector_size=512,.write_cache_state=BLKDEV_CACHE_ENABLED,.ctx=f};
     f->fail_read=f->fail_write=f->torn_lba=UINT64_MAX;

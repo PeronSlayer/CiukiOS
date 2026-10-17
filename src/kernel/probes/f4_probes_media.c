@@ -31,7 +31,7 @@ static int listing(struct fs_ro_volume *ro, uint64_t directory, const char *pref
     memcpy(top->prefix,prefix,strlen(prefix)+1); int e=0;
     while (top) {
         struct fs_ro_node n;
-        fs_lock_take(&optical_table.vfs->lock); e=fs_ro_next(ro,top->directory,&top->cursor,&n); fs_lock_drop(&optical_table.vfs->lock);
+        vfs_lock(optical_table.vfs,vfs_drive_mask(drive)); e=VFS_IO(optical_table.vfs,fs_ro_next(ro,top->directory,&top->cursor,&n)); vfs_unlock(optical_table.vfs);
         if (e==-FS_ENOENT) { struct walk_frame *old=top; top=top->parent; fs_free(old); e=0; continue; }
         if (e) break;
         if (++entries>FS_RO_ENTRIES) { e=-FS_ENOSPC; break; }
@@ -119,9 +119,9 @@ static int probe_optical(void)
         uint32_t gen=d->block.media_generation;
         e=atapi_eject(d); storage_refresh_ro(s);
         size_t n; int old=vfs_read(&optical_table,stale,data,1,&n), old_native=-1;
-        if (native>=0) { fs_lock_take(&s->vfs.lock); old_native=file_io_locked(file_fd(proc_supervisor(),native),data,1,false,false,0,&n); fs_lock_drop(&s->vfs.lock); }
+        if (native>=0) { vfs_lock(&s->vfs,0); old_native=file_io_locked(file_fd(proc_supervisor(),native),data,1,false,false,0,&n); vfs_unlock(&s->vfs); }
         bool absent=!vfs_drive_present(&s->vfs,drive);
-        char cwd[CIUKI_PATH_MAX]; fs_lock_take(&s->vfs.lock); int expired=px_getcwd_locked(proc_supervisor()->cwd,cwd); fs_lock_drop(&s->vfs.lock);
+        char cwd[CIUKI_PATH_MAX]; vfs_lock(&s->vfs,0); int expired=px_getcwd_locked(proc_supervisor()->cwd,cwd); vfs_unlock(&s->vfs);
         rec_emit("optical","DATA","case=cwd expired=%u",expired==-ENOENT); pass &= expired==-ENOENT;
         rec_emit("optical","DATA","case=eject result=%d old=%d native_old=%d letter_absent=%u generation_before=%u generation_after=%u",e,old,old_native,absent,gen,d->block.media_generation);
         pass &= !e && old==-FS_EIO && old_native==-EIO && absent && d->block.media_generation>gen;
@@ -137,7 +137,7 @@ static int probe_optical(void)
             unsigned new_drive=(unsigned)e; ro=s->vfs.ro_volumes[new_drive]; entries=0;
             e=ro->ops->root(ro,&root); if (!e) e=listing(ro,root.id,"",new_drive,2,0);
             old=vfs_read(&optical_table,stale,data,1,&n);
-            if (native>=0) { fs_lock_take(&s->vfs.lock); old_native=file_io_locked(file_fd(proc_supervisor(),native),data,1,false,false,0,&n); fs_lock_drop(&s->vfs.lock); }
+            if (native>=0) { vfs_lock(&s->vfs,0); old_native=file_io_locked(file_fd(proc_supervisor(),native),data,1,false,false,0,&n); vfs_unlock(&s->vfs); }
             rec_emit("optical","DATA","case=reinsert drive=%c generation=%u old=%d native_old=%d result=%d",'A'+new_drive,d->block.media_generation,old,old_native,e);
             pass &= !e && old==-FS_EIO && old_native==-EIO && peer_read(peer,hash,true);
             /* Keep the surprise-removal checks above, then exercise the
@@ -186,7 +186,7 @@ static int ntfs_walk(struct storage_ntfs *n, unsigned cycle)
     struct ntfs_frame *top=fs_alloc(sizeof(*top)); if (!top) return -FS_ENOMEM;
     memset(top,0,sizeof(*top)); top->directory=ntfs_root.id; ntfs_entries=0; e=0;
     while (top) {
-        fs_lock_take(&ntfs_table.vfs->lock); e=fs_ro_next(ro,top->directory,&top->cursor,node); fs_lock_drop(&ntfs_table.vfs->lock);
+        vfs_lock(ntfs_table.vfs,vfs_drive_mask(n->drive)); e=VFS_IO(ntfs_table.vfs,fs_ro_next(ro,top->directory,&top->cursor,node)); vfs_unlock(ntfs_table.vfs);
         if (e) {
             if (e!=-FS_ENOENT) {
                 char hex[65]; path_digest(top->prefix[0] ? top->prefix : "/",hex);
@@ -311,7 +311,7 @@ static int probe_ntfs_ro(void)
         e=storage_ntfs_unmount(s,slot);
         bool gone=!vfs_drive_present(&s->vfs,drive) && !n->ro.mounted;
         char cwd[CIUKI_PATH_MAX]; int expired=-1;
-        if (native>=0) { fs_lock_take(&s->vfs.lock); expired=px_getcwd_locked(proc_supervisor()->cwd,cwd); fs_lock_drop(&s->vfs.lock); }
+        if (native>=0) { vfs_lock(&s->vfs,0); expired=px_getcwd_locked(proc_supervisor()->cwd,cwd); vfs_unlock(&s->vfs); }
         rec_emit("ntfs-ro","DATA","case=unmount stage=clean result=%d letter_absent=%u generation_before=%u generation_after=%u cwd_expired=%u",
                  e,gone,generation,s->vfs.generation[drive],native<0 || expired==-ENOENT);
         pass &= !e && gone && s->vfs.generation[drive]>generation && (native<0 || expired==-ENOENT);
@@ -346,10 +346,10 @@ static int probe_media_remove(void)
     struct storage *s=storage_get(); unsigned drive=26;
     uint64_t deadline=deadline_after_ms(20000);
     while (deadline_after_ms(0)<deadline && drive==26) {
-        fs_lock_take(&s->vfs.lock);
+        vfs_lock(&s->vfs,0);
         for (unsigned d=4;d<26;d++) if (s->volumes[d].present && s->volumes[d].removable &&
             s->vfs.volumes[d]==&s->volumes[d].fat) { drive=d; break; }
-        fs_lock_drop(&s->vfs.lock);
+        vfs_unlock(&s->vfs);
         if (drive==26) task_sleep_ms(100);
     }
     bool pass=drive<26;

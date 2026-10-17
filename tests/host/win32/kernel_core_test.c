@@ -41,6 +41,9 @@ uint64_t arch_w32_counter(void) { return w32_counter_sample(g_ticks, 1193, false
 #include "../../../src/kernel/proc/win32/personality.c"
 #include "../../../src/kernel/proc/win32/syscall.c"
 int px_getcwd_locked(struct px_node *n, char path[CIUKI_PATH_MAX]) { (void)n; strcpy(path, "/"); return 0; }
+/* This fixture mocks the cwd endpoint; no volume admission or I/O occurs. */
+void vfs_lock(struct vfs *v,uint32_t mask) { CHECK(!mask); fs_lock_take(&v->lock); }
+void vfs_unlock(struct vfs *v) { fs_lock_drop(&v->lock); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool kwait_wait_until(struct kwait *q, bool (*p)(void *), void *arg, uint64_t deadline)
 { (void)q; (void)p; (void)arg; (void)deadline; abort(); }

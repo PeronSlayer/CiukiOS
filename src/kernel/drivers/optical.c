@@ -29,9 +29,13 @@ void optical_service(struct storage *s, uint64_t now)
         struct ata_device *d = b->device;
         if (!d || now < b->next_poll) continue;
         b->next_poll = now + OPTICAL_POLL_MS;
-        fs_lock_take(&s->vfs.lock);
-        if (s->stopped) { fs_lock_drop(&s->vfs.lock); return; }
-        int e = atapi_ready(d);
+        vfs_lock(&s->vfs,0);
+        if (s->stopped) { vfs_unlock(&s->vfs); return; }
+        uint32_t mask=0;
+        for (unsigned drive=3;drive<26;drive++) if (s->vfs.ro_volumes[drive]==&s->optical[slot]) mask|=1u<<drive;
+        if (!mask) { unsigned drive=s->next_drive; while (drive<26 && vfs_drive_present(&s->vfs,drive)) drive++; mask=vfs_drive_mask(drive); }
+        vfs_reserve_locked(&s->vfs,mask);
+        int e = VFS_IO(&s->vfs,atapi_ready(d));
         for (unsigned drive = 3; drive < 26; drive++)
             if (s->vfs.ro_volumes[drive] == &s->optical[slot] &&
                 (e || s->optical[slot].mount_generation != d->block.media_generation)) {
@@ -43,7 +47,12 @@ void optical_service(struct storage *s, uint64_t now)
             }
         if (!e && !s->optical[slot].mounted && b->attempted_generation != d->block.media_generation) {
             b->attempted_generation = d->block.media_generation;
-            e = storage_add_ro_locked(s, slot, &d->block, d->session_lba);
+            /* Expiration and a new mount are separate operations. Do not
+             * borrow another letter while holding the old reservation: a
+             * pending shutdown can already have queued that letter. */
+            vfs_unlock(&s->vfs);
+            e = storage_add_ro(s, slot, &d->block, d->session_lba);
+            vfs_lock(&s->vfs,0);
             klog("[optical] bind slot=%u stage=iso drive=%c mode=ro generation=%u session=%u result=%d reason=%s",
                  slot, e >= 3 ? 'A' + e : '-', d->block.media_generation, d->session_lba, e,
                  e >= 3 ? "mounted" : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "mount_refused");
@@ -58,19 +67,19 @@ void optical_service(struct storage *s, uint64_t now)
                  d->ready_error ? d->ready_stage : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
             b->observed_generation = d->block.media_generation; b->result = e;
         }
-        fs_lock_drop(&s->vfs.lock);
+        vfs_unlock(&s->vfs);
     }
 }
 int optical_eject(struct storage *s, unsigned drive, uint32_t generation)
 {
     if (!s || !s->ready || s->stopped || drive < 3 || drive >= 26 || !generation) return -FS_EINVAL;
-    fs_lock_take(&s->vfs.lock);
+    vfs_lock(&s->vfs,vfs_drive_mask(drive));
     int e = -FS_ENOENT;
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
         struct ata_device *d = s->optical_bindings[slot].device;
         struct fs_ro_volume *ro = &s->optical[slot];
         if (!d || s->vfs.ro_volumes[drive] != ro) continue;
-        if (generation != d->block.media_generation || fs_ro_check(ro)) { e = -FS_EIO; break; }
+        if (generation != d->block.media_generation || VFS_IO(&s->vfs,fs_ro_check(ro))) { e = -FS_EIO; break; }
         e = 0;
         for (unsigned i = 0; i < VFS_NODES; i++)
             if (s->vfs.nodes[i].refs && s->vfs.nodes[i].drive == drive &&
@@ -79,7 +88,7 @@ int optical_eject(struct storage *s, unsigned drive, uint32_t generation)
         if (!e) {
             e = vfs_detach_locked(&s->vfs, drive);
             if (!e) {
-                e = atapi_eject(d);
+                e = VFS_IO(&s->vfs,atapi_eject(d));
                 /* A failed eject leaves the disc unmounted. Let readiness
                  * publish it again on the next service turn. */
                 s->optical_bindings[slot].attempted_generation = 0;
@@ -89,7 +98,7 @@ int optical_eject(struct storage *s, unsigned drive, uint32_t generation)
              slot, 'A' + drive, generation, e);
         break;
     }
-    fs_lock_drop(&s->vfs.lock); return e;
+    vfs_unlock(&s->vfs); return e;
 }
 #ifndef FS_HOST
 static void optical_task(void *arg)

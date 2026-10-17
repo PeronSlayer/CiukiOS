@@ -1,5 +1,5 @@
-/* F2 native file view. Lock order: VFS namespace (also node/description I/O)
- * then F1 cache/device. No public ABI records are defined here.
+/* F2 native file view. Lock order: namespace -> volume -> cache -> device.
+ * VFS_IO releases namespace during filesystem work. No ABI records here.
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_FILES_H
 #define CIUKI_FILES_H
@@ -54,7 +54,9 @@ int files_stdio(struct process *p);
 void px_retain(void *node);
 void px_release(void *node);
 int px_error(int error);
-/* All *_locked helpers require space->vfs->lock. Paths are copied once by
+/* All *_locked helpers require vfs_lock/vfs_unlock. They reserve their
+ * volume set before borrowing identities; filesystem work uses VFS_IO.
+ * Paths are copied once by
  * syscalls; missing_leaf admits only a missing FINAL ordinary component. */
 int px_validate(const char *path);
 int px_resolve_locked(struct px_namespace *, struct px_node *cwd, const char *,

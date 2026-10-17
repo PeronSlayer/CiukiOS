@@ -9,6 +9,8 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
     struct file_description *f=file_fd(p,fd);
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
     struct storage *s=storage_get();
+    /* Namespace publication selects immutable mount identity/label fields.
+     * Queries never invoke filesystem/transport callbacks or reserve a drive. */
     if (op==MEDIA_GET_BLOCKERS) {
         /* Static copied output avoids a large device-worker stack frame.
          * No wait between clearing/filling this record and copying it out. */
@@ -19,16 +21,16 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
         if (r.size!=sizeof(out) || r.drive<3 || r.drive>=26 || !r.generation) return -EINVAL;
         if (!s || !s->ready || s->stopped) return -ENODEV;
-        fs_lock_take(&s->vfs.lock);
+        vfs_lock(&s->vfs,0);
         struct storage_volume *fat=&s->volumes[r.drive];
         struct fs_ro_volume *ro=s->vfs.ro_volumes[r.drive];
         struct blkdev *parent=fat->present && fat->removable && s->vfs.volumes[r.drive]==&fat->fat ? fat->part.parent : 0;
         bool optical=false;
         for (unsigned slot=0;slot<STORAGE_DISKS;slot++) if (ro==&s->optical[slot]) optical=true;
         if (!optical) ro=0;
-        struct blkdev *dev=parent ? parent : ro && ro->mounted ? ro->dev : 0;
+        struct blkdev *dev=parent ? parent : ro ? ro->dev : 0;
         if (!dev || dev->quarantined || dev->media_generation!=r.generation) {
-            fs_lock_drop(&s->vfs.lock); return -EIO;
+            vfs_unlock(&s->vfs); return -EIO;
         }
         memset(&out,0,sizeof(out));
         out.version=r.version; out.size=sizeof(out); out.drive=r.drive; out.generation=r.generation;
@@ -51,8 +53,9 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
                 break;
             }
         }
-        fs_lock_drop(&s->vfs.lock);
-        return copy_to_user(address,&out,sizeof(out));
+        int copied=copy_to_user(address,&out,sizeof(out));
+        vfs_unlock(&s->vfs);
+        return copied;
     }
     if (op==MEDIA_GET_VOLUME) {
         struct ciuki_media_volume v;
@@ -64,7 +67,7 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         unsigned d=v.drive;
         memset(&v,0,sizeof(v)); v.version=CIUKI_MEDIA_VERSION; v.size=sizeof(v); v.drive=d;
         if (s && s->ready) {
-            fs_lock_take(&s->vfs.lock);
+            vfs_lock(&s->vfs,0);
             struct storage_volume *fat=&s->volumes[d];
             if (fat->present && fat->removable && s->vfs.volumes[d] && !fat->part.parent->quarantined) {
                 v.flags=CIUKI_MEDIA_REMOVABLE; v.generation=s->vfs.generation[d];
@@ -72,12 +75,12 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
                 memcpy(v.label,fat->fat.volume_label,sizeof(fat->fat.volume_label));
             }
             struct fs_ro_volume *ro=s->vfs.ro_volumes[d];
-            if (ro && ro->ops==&iso9660_ops && ro->mounted && !ro->dev->quarantined && ro->ops->generation(ro)==ro->mount_generation) {
+            if (ro && ro->ops==&iso9660_ops && !ro->dev->quarantined && ro->dev->media_generation==ro->mount_generation) {
                 v.flags=CIUKI_MEDIA_OPTICAL; v.generation=s->vfs.generation[d];
                 ksnprintf(v.id,sizeof(v.id),"iso-%016llx",(unsigned long long)ro->volume_identity);
                 memcpy(v.label,ro->volume_label,sizeof(v.label));
             }
-            fs_lock_drop(&s->vfs.lock);
+            vfs_unlock(&s->vfs);
         }
         return copy_to_user(address,&v,bytes);
     }
@@ -91,7 +94,7 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
             bytes!=(version==CIUKI_MEDIA_VERSION ? sizeof(state) : sizeof(struct ciuki_media_state_v1))) return -EINVAL;
         memset(&state,0,sizeof(state)); state.version=version; state.size=bytes;
         if (s && s->ready) {
-            fs_lock_take(&s->vfs.lock);
+            vfs_lock(&s->vfs,0);
             for (unsigned d=4;d<26;d++) {
                 struct storage_volume *v=&s->volumes[d];
                 if (v->present && v->removable && s->vfs.volumes[d] && !v->part.parent->quarantined) {
@@ -104,13 +107,13 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
             }
             for (unsigned d=3;d<26;d++) {
                 struct fs_ro_volume *ro=s->vfs.ro_volumes[d];
-                if (!ro || !ro->mounted || ro->dev->quarantined || ro->mount_generation!=ro->dev->media_generation) continue;
+                if (!ro || ro->dev->quarantined || ro->mount_generation!=ro->dev->media_generation) continue;
                 for (unsigned slot=0;slot<STORAGE_DISKS;slot++) if (ro==&s->optical[slot]) {
                     state.removable_mask|=1u<<d; state.generation[d]=ro->dev->media_generation;
                     state.type[d]=CIUKI_MEDIA_OPTICAL;
                 }
             }
-            fs_lock_drop(&s->vfs.lock);
+            vfs_unlock(&s->vfs);
         }
         return copy_to_user(address,&state,bytes);
     }

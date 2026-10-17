@@ -49,17 +49,17 @@ int __wrap_fsync(int fd)
     if (fd<NATIVE_FD) return __real_fsync(fd);
     struct file_description *d=file_fd(&supervisor,fd-NATIVE_FD); CHECK(d);
     CHECK(d->node->drive==2 && d->node->volume==&storage_get()->volumes[2].fat);
-    fs_lock_take(&test_space->vfs->lock); int e=file_sync_locked(d);
-    fs_lock_drop(&test_space->vfs->lock); return host_result(e);
+    vfs_lock(test_space->vfs,0); int e=file_sync_locked(d);
+    vfs_unlock(test_space->vfs); return host_result(e);
 }
 int __wrap_stat(const char *p,struct stat *out)
 {
     if (!native_path(p)) return __real_stat(p,out);
     struct px_path path;struct ciuki_stat st;
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=px_resolve_locked(test_space,supervisor.cwd,p,false,&path);
     if (!e) e=px_stat_locked(path.node,&st);
-    fs_lock_drop(&test_space->vfs->lock);
+    vfs_unlock(test_space->vfs);
     if (e) return host_result(e);
     memset(out,0,sizeof(*out));out->st_dev=st.st_dev;out->st_mode=st.st_mode;out->st_size=st.st_size;
     return 0;
@@ -67,23 +67,23 @@ int __wrap_stat(const char *p,struct stat *out)
 int __wrap_unlink(const char *p)
 {
     if (!native_path(p)) return __real_unlink(p);
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=px_remove_locked(test_space,supervisor.cwd,p,false);
-    fs_lock_drop(&test_space->vfs->lock);return host_result(e);
+    vfs_unlock(test_space->vfs);return host_result(e);
 }
 int __wrap_mkdir(const char *p,mode_t mode)
 {
     if (!native_path(p)) return __real_mkdir(p,mode);
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=px_mkdir_locked(test_space,supervisor.cwd,p,(uint32_t)mode);
-    fs_lock_drop(&test_space->vfs->lock);return host_result(e);
+    vfs_unlock(test_space->vfs);return host_result(e);
 }
 int __wrap_rename(const char *a,const char *b)
 {
     if (!native_path(a) && !native_path(b)) return __real_rename(a,b);
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=px_rename_locked(test_space,supervisor.cwd,a,b);
-    fs_lock_drop(&test_space->vfs->lock);return host_result(e);
+    vfs_unlock(test_space->vfs);return host_result(e);
 }
 static struct stream { FILE *file;int fd; } streams[16];
 static ssize_t stream_io(void *cookie,char *buf,size_t n,bool write)
@@ -91,18 +91,18 @@ static ssize_t stream_io(void *cookie,char *buf,size_t n,bool write)
     struct stream *s=cookie;size_t done=0;
     struct file_description *d=file_fd(&supervisor,s->fd);CHECK(d);
     CHECK(d->node->drive==2 && d->node->volume==&storage_get()->volumes[2].fat);
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=file_io_locked(d,buf,n,write,false,0,&done);
-    fs_lock_drop(&test_space->vfs->lock);return e ? host_result(e) : (ssize_t)done;
+    vfs_unlock(test_space->vfs);return e ? host_result(e) : (ssize_t)done;
 }
 static ssize_t stream_read(void *s,char *buf,size_t n) { return stream_io(s,buf,n,false); }
 static ssize_t stream_write(void *s,const char *buf,size_t n) { return stream_io(s,(char *)buf,n,true); }
 static int stream_seek(void *cookie,off64_t *off,int whence)
 {
     struct stream *s=cookie;int64_t result=0;
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     int e=file_seek_locked(file_fd(&supervisor,s->fd),*off,(uint32_t)whence,&result);
-    fs_lock_drop(&test_space->vfs->lock);*off=result;return host_result(e);
+    vfs_unlock(test_space->vfs);*off=result;return host_result(e);
 }
 static int stream_close(void *cookie)
 {
@@ -140,9 +140,9 @@ static void system_file(const char *path,const char *text)
 {
     int fd=file_open(&supervisor,path,O_CREAT|O_WRONLY,0666);CHECK(fd>=3);
     struct file_description *d=file_fd(&supervisor,fd);size_t done;
-    fs_lock_take(&test_space->vfs->lock);
+    vfs_lock(test_space->vfs,0);
     OK(file_io_locked(d,(void *)text,strlen(text),true,false,0,&done));CHECK(done==strlen(text));
-    OK(file_sync_locked(d));fs_lock_drop(&test_space->vfs->lock);OK(file_close(&supervisor,fd));
+    OK(file_sync_locked(d));vfs_unlock(test_space->vfs);OK(file_close(&supervisor,fd));
 }
 static void system_opens(void)
 {
@@ -159,10 +159,10 @@ static void system_opens(void)
         struct file_description *d=file_fd(&supervisor,fd);
         CHECK(d->node->drive==2 && d->node->volume==&storage_get()->volumes[2].fat && !d->node->ro);
         struct ciuki_stat st;size_t done;char bytes[1024];
-        fs_lock_take(&test_space->vfs->lock);OK(px_stat_locked(d->node,&st));CHECK(st.st_dev==3);
+        vfs_lock(test_space->vfs,0);OK(px_stat_locked(d->node,&st));CHECK(st.st_dev==3);
         OK(file_io_locked(d,bytes,sizeof(bytes)-1,false,false,0,&done));CHECK(done>0);bytes[done]=0;
         if (!i) CHECK(strstr(bytes,"\"Master\" = 10533")); /* 37 | 41<<8 */
-        fs_lock_drop(&test_space->vfs->lock);OK(file_close(&supervisor,fd));
+        vfs_unlock(test_space->vfs);OK(file_close(&supervisor,fd));
     }
     CHECK(media[2].reads==usb_reads && media[2].writes==usb_writes && media[2].flushes==usb_flushes);
     CHECK(cd_reads==optical_reads && !cd_writes && !cd_flushes);
@@ -199,7 +199,7 @@ int main(int argc,char **argv)
     OK(px_chdir(&supervisor,"/mnt/f"));system_opens();
     OK(storage_remove_removable(s,&disks[2].dev,true));CHECK(!vfs_drive_present(&s->vfs,5));
     CHECK(file_open(&supervisor,"/mnt/f/SHORT.BIN",O_RDONLY,0)==-ENOENT);
-    struct ciuki_stat st;CHECK(px_stat_locked(file_fd(&supervisor,stale)->node,&st)==-EIO);
+    struct ciuki_stat st;CHECK(namespace_stat(file_fd(&supervisor,stale)->node,&st)==-EIO);
     system_opens();OK(file_close(&supervisor,stale));OK(px_chdir(&supervisor,"/"));
     puts("PASS F1-63 absolute C: paths with live and expired removable cwd; stale handle EIO, fresh path ENOENT, letters do not change current drive");
     CHECK(table.drive==3 && s->vfs.volumes[2]==&s->volumes[2].fat && s->vfs.ro_volumes[3]==&s->optical[2]);

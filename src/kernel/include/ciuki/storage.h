@@ -49,6 +49,7 @@ struct storage {
     struct storage_ntfs ntfs[STORAGE_NTFS];
     int disk_errors[STORAGE_DISKS];
     bool disks[STORAGE_DISKS], ready, stopped;
+    bool writer_running, writer_quiescing; /* protected by vfs namespace */
     unsigned next_drive;
     uint32_t sequence, writer_ticks;
     int writer_error;

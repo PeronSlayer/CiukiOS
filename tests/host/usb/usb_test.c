@@ -10,6 +10,12 @@
 #include "uhci_model.h"
 #include "mouse_descriptor.h"
 struct storage *storage_get(void) { return NULL; }
+/* This transport-only fixture has no filesystem. Reaching a VFS operation
+ * is an error; storage_run.sh links and tests the production implementation. */
+void vfs_lock(struct vfs *v,uint32_t mask) { (void)v;(void)mask; abort(); }
+void vfs_unlock(struct vfs *v) { (void)v; abort(); }
+struct vfs_io_state vfs_io_begin_locked(struct vfs *v) { (void)v; abort(); }
+void vfs_io_end_locked(struct vfs *v,struct vfs_io_state state) { (void)v;(void)state; abort(); }
 int storage_add_removable(struct storage *s,struct blkdev *b) { (void)s;(void)b;assert(0);return -FS_EIO; }
 int storage_add_removable_bounded(struct storage *s,struct blkdev *b,
                                  bool (*cancel)(void *),void (*pause)(void *),void *ctx)

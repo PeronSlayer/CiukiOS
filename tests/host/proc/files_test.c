@@ -52,37 +52,52 @@ static struct proc_thread *client_thread;
 #define USER (CIUKI_IMAGE_BASE + PAGE_SIZE)
 #define USER2 (USER + 1024)
 
+/* Direct host assertions obey the same namespace/admission contract as
+ * native syscall callers; each wrapper releases any drive reservations. */
+static int locked_seek(struct file_description *d,int64_t off,uint32_t whence,int64_t *out)
+{ struct vfs *v=d->node->space->vfs; vfs_lock(v,0); int e=file_seek_locked(d,off,whence,out); vfs_unlock(v); return e; }
+static int locked_truncate(struct file_description *d,uint64_t length)
+{ struct vfs *v=d->node->space->vfs; vfs_lock(v,0); int e=file_truncate_locked(d,length); vfs_unlock(v); return e; }
+static int locked_sync(struct file_description *d)
+{ struct vfs *v=d->node->space->vfs; vfs_lock(v,0); int e=file_sync_locked(d); vfs_unlock(v); return e; }
+static int locked_stat(struct px_node *n,struct ciuki_stat *out)
+{ struct vfs *v=n->space->vfs; vfs_lock(v,0); int e=px_stat_locked(n,out); vfs_unlock(v); return e; }
+static int locked_dents(struct file_description *d,struct ciuki_dirent *out)
+{ struct vfs *v=d->node->space->vfs; vfs_lock(v,0); int e=px_getdents_locked(d,out); vfs_unlock(v); return e; }
+static int locked_cwd(struct px_node *n,char out[CIUKI_PATH_MAX])
+{ struct vfs *v=n->space->vfs; vfs_lock(v,0); int e=px_getcwd_locked(n,out); vfs_unlock(v); return e; }
+
 static int resolve_path(const char *path, struct px_path *r)
 {
-    fs_lock_take(&vfs.lock);
+    vfs_lock(&vfs,0);
     int err = px_resolve_locked(space, client->cwd, path, false, r);
-    fs_lock_drop(&vfs.lock); return err;
+    vfs_unlock(&vfs); return err;
 }
 static int make_dir(const char *path)
 {
-    fs_lock_take(&vfs.lock);
+    vfs_lock(&vfs,0);
     int err = px_mkdir_locked(space, client->cwd, path, 0777);
-    fs_lock_drop(&vfs.lock); return err;
+    vfs_unlock(&vfs); return err;
 }
 static int rename_path(const char *from, const char *to)
 {
-    fs_lock_take(&vfs.lock);
+    vfs_lock(&vfs,0);
     int err = px_rename_locked(space, client->cwd, from, to);
-    fs_lock_drop(&vfs.lock); return err;
+    vfs_unlock(&vfs); return err;
 }
 static int remove_path_native(const char *path, bool dir)
 {
-    fs_lock_take(&vfs.lock);
+    vfs_lock(&vfs,0);
     int err = px_remove_locked(space, client->cwd, path, dir);
-    fs_lock_drop(&vfs.lock); return err;
+    vfs_unlock(&vfs); return err;
 }
 static int io(int fd, void *buffer, size_t bytes, bool write, bool positioned, uint64_t offset)
 {
     struct file_description *d = file_fd(client, fd); CHECK(d);
     size_t done;
-    fs_lock_take(&vfs.lock);
+    vfs_lock(&vfs,0);
     int err = file_io_locked(d, buffer, bytes, write, positioned, offset, &done);
-    fs_lock_drop(&vfs.lock); return done ? (int)done : err;
+    vfs_unlock(&vfs); return done ? (int)done : err;
 }
 static int32_t call(uint32_t nr, uint32_t b, uint32_t c, uint32_t d, uint32_t s, uint32_t i)
 {
@@ -109,7 +124,7 @@ static void test_paths(void)
     CHECK(!resolve_path("//Fixture dir///Nested.bin", &r) && r.node->entry.size == 12345);
     CHECK(!px_chdir(client, "/fixture DIR"));
     CHECK(!resolve_path("./Nested.bin", &r));
-    char cwd[CIUKI_PATH_MAX]; CHECK(!px_getcwd_locked(client->cwd, cwd) && !strcmp(cwd, "/Fixture dir"));
+    char cwd[CIUKI_PATH_MAX]; CHECK(!locked_cwd(client->cwd, cwd) && !strcmp(cwd, "/Fixture dir"));
     CHECK(!px_chdir(client, "/"));
     const char *invalid[] = {"", "C:/SHORT.BIN", "/a\\b", "/x*", "/x?", "/x.", "/x ", "/\xc0\xaf", "/\xed\xa0\x80", "/\xf0\x9f\x90\xb6", "/\xe2\x82"};
     const int errors[] = {ENOENT, EINVAL, EINVAL, EINVAL, EINVAL, EINVAL, EINVAL, EILSEQ, EILSEQ, EILSEQ, EILSEQ};
@@ -178,26 +193,26 @@ static void test_io(void)
     char buffer[128] = { 0 }; CHECK(io(b, buffer, 6, false, true, 0) == 6 && !memcmp(buffer,"aZcdef",6));
     CHECK(file_fd(client,b)->position == 6);
     int64_t position;
-    CHECK(!file_seek_locked(file_fd(client,a), (int64_t)UINT32_MAX + 13, SEEK_SET, &position));
+    CHECK(!locked_seek(file_fd(client,a), (int64_t)UINT32_MAX + 13, SEEK_SET, &position));
     CHECK(position == (int64_t)UINT32_MAX + 13);
     CHECK(!file_fcntl(client,a,F_SETFL,0));
     unsigned writes = disk[0].writes;
     CHECK(io(a,"x",1,true,false,0) == -EFBIG && disk[0].writes == writes);
     CHECK(io(a,buffer,1,false,false,0) == 0);
-    CHECK(!file_seek_locked(file_fd(client,a), INT64_MAX, SEEK_SET, &position));
-    CHECK(file_seek_locked(file_fd(client,a),1,SEEK_CUR,&position) == -EOVERFLOW);
-    CHECK(file_seek_locked(file_fd(client,a),INT64_MIN,SEEK_CUR,&position) == -EINVAL);
-    CHECK(!file_truncate_locked(file_fd(client,a),100));
+    CHECK(!locked_seek(file_fd(client,a), INT64_MAX, SEEK_SET, &position));
+    CHECK(locked_seek(file_fd(client,a),1,SEEK_CUR,&position) == -EOVERFLOW);
+    CHECK(locked_seek(file_fd(client,a),INT64_MIN,SEEK_CUR,&position) == -EINVAL);
+    CHECK(!locked_truncate(file_fd(client,a),100));
     CHECK(file_fd(client,a)->position == INT64_MAX);
     CHECK(io(b,buffer,100,false,true,0) == 100);
     for (unsigned i=6;i<100;i++) CHECK(buffer[i] == 0);
-    CHECK(!file_sync_locked(file_fd(client,a)));
-    struct ciuki_stat st; CHECK(!px_stat_locked(file_fd(client,a)->node,&st));
+    CHECK(!locked_sync(file_fd(client,a)));
+    struct ciuki_stat st; CHECK(!locked_stat(file_fd(client,a)->node,&st));
     CHECK(st.st_dev==3 && st.st_mode==(S_IFREG|0666) && st.st_size==100 && st.st_nlink==1 && st.st_blocks==volumes[0].spc);
     CHECK(st.st_blksize==volumes[0].spc*512 && !st.st_uid && !st.st_gid && !st.reserved);
     uint64_t inode=st.st_ino;
     all_closed(); a=file_open(client,"/io.bin",O_RDONLY,0); CHECK(a>=0);
-    CHECK(!px_stat_locked(file_fd(client,a)->node,&st) && st.st_ino==inode);
+    CHECK(!locked_stat(file_fd(client,a)->node,&st) && st.st_ino==inode);
     CHECK(io(a,buffer,100,false,false,0)==100 && !memcmp(buffer,"aZcdef",6));
     all_closed();
     puts("files I/O: append, positioned I/O, 64-bit seeks, EFBIG before writes, truncate zero-fill, fsync/reopen, stat identity PASS");
@@ -208,12 +223,12 @@ static void test_namespace(void)
     CHECK(!make_dir("/Move")); CHECK(!make_dir("/Move/Child")); CHECK(!make_dir("/Target"));
     CHECK(!px_chdir(client,"/Move/Child"));
     CHECK(!rename_path("/Move","/Target/Renamed"));
-    char path[CIUKI_PATH_MAX]; CHECK(!px_getcwd_locked(client->cwd,path) && !strcmp(path,"/Target/Renamed/Child"));
+    char path[CIUKI_PATH_MAX]; CHECK(!locked_cwd(client->cwd,path) && !strcmp(path,"/Target/Renamed/Child"));
     CHECK(remove_path_native(".",true)==-EINVAL);
     CHECK(remove_path_native("/Target/Renamed/Child",true)==-EBUSY);
     CHECK(!rename_path("/Target/Renamed/Child","/Target/Renamed/Child"));
     CHECK(!rename_path("/Target/Renamed/Child","/Target/Renamed/cHILD"));
-    CHECK(!px_getcwd_locked(client->cwd,path) && !strcmp(path,"/Target/Renamed/cHILD"));
+    CHECK(!locked_cwd(client->cwd,path) && !strcmp(path,"/Target/Renamed/cHILD"));
     CHECK(rename_path("/Target","/Target/Renamed/cHILD/Descendant")==-EINVAL);
     CHECK(rename_path("/io.bin","/Target")==-EISDIR);
     CHECK(rename_path("/Target","/io.bin")==-ENOTDIR);
@@ -238,7 +253,7 @@ static void test_namespace(void)
     CHECK(remove_path_native("/dev",true)==-EBUSY);
     dir=file_open(client,"/",O_DIRECTORY,0); CHECK(dir>=0);
     struct ciuki_dirent entry; int n; uint64_t cookie=0; bool dev=false,mnt=false;
-    while ((n=px_getdents_locked(file_fd(client,dir),&entry))>0) {
+    while ((n=locked_dents(file_fd(client,dir),&entry))>0) {
         CHECK(n==(int)sizeof(struct ciuki_dirent) && entry.d_reclen==(int)sizeof(struct ciuki_dirent) && entry.d_off==(int64_t)++cookie);
         CHECK(entry.d_namlen==strlen(entry.d_name));
         for (unsigned i=entry.d_namlen;i<sizeof(entry.d_name);i++) CHECK(!entry.d_name[i]);
@@ -247,9 +262,9 @@ static void test_namespace(void)
         if (!strcmp(entry.d_name,"mnt")) { CHECK(!mnt); mnt=true; }
     }
     CHECK(!n && dev && mnt);
-    int64_t pos; CHECK(!file_seek_locked(file_fd(client,dir),0,SEEK_SET,&pos));
-    CHECK(px_getdents_locked(file_fd(client,dir),&entry)==(int)sizeof(struct ciuki_dirent) && !strcmp(entry.d_name,".") && entry.d_off==1);
-    CHECK(file_seek_locked(file_fd(client,dir),1,SEEK_SET,&pos)==-EINVAL);
+    int64_t pos; CHECK(!locked_seek(file_fd(client,dir),0,SEEK_SET,&pos));
+    CHECK(locked_dents(file_fd(client,dir),&entry)==(int)sizeof(struct ciuki_dirent) && !strcmp(entry.d_name,".") && entry.d_off==1);
+    CHECK(locked_seek(file_fd(client,dir),1,SEEK_SET,&pos)==-EINVAL);
     all_closed();
     puts("files namespace: rename decision table, cwd after rename, pins, fixed dirents/cookies/rewind PASS");
 }
@@ -303,7 +318,7 @@ static void test_read_interruption(void)
     int fd = file_open(client, "/", O_RDONLY | O_DIRECTORY, 0); CHECK(fd >= 0);
     struct file_description *d = file_fd(client, fd);
     struct ciuki_dirent record;
-    for (unsigned i = 0; i < 4; i++) CHECK(px_getdents_locked(d, &record) == (int)sizeof(struct ciuki_dirent));
+    for (unsigned i = 0; i < 4; i++) CHECK(locked_dents(d, &record) == (int)sizeof(struct ciuki_dirent));
     CHECK(d->position == 4 && d->cursor == 0);
     memset(&record, 0xa5, sizeof(record));
     CHECK(!ua_write(client->memory, USER2, &record, sizeof(record)));
@@ -348,20 +363,20 @@ static void test_lifetime_and_legacy(void)
         uint64_t ino = file_fd(client, fd)->node->ino;
         CHECK(!remove_path_native("/orphan.bin", false));
         struct px_path r; CHECK(resolve_path("/orphan.bin", &r) == -ENOENT);
-        struct ciuki_stat st; CHECK(!px_stat_locked(file_fd(client, fd)->node, &st) && st.st_nlink == 0 && st.st_ino == ino);
+        struct ciuki_stat st; CHECK(!locked_stat(file_fd(client, fd)->node, &st) && st.st_nlink == 0 && st.st_ino == ino);
         int fresh = file_open(client, "/orphan.bin", O_CREAT | O_EXCL | O_RDWR, 0666); CHECK(fresh >= 0);
         CHECK(file_fd(client, fresh)->node->ino != ino);
         CHECK(io(fd, "N", 1, true, true, 1) == 1);
         CHECK(io(fd, data, 3, false, true, 0) == 3 && !memcmp(data, "oNd", 3));
         CHECK(file_fd(client, fresh)->node->entry.size == 0);
-        CHECK(!file_truncate_locked(file_fd(client, fd), 20));
-        CHECK(!file_sync_locked(file_fd(client, fd)));
+        CHECK(!locked_truncate(file_fd(client, fd), 20));
+        CHECK(!locked_sync(file_fd(client, fd)));
         CHECK(!file_close(client, fd));
         fd = fresh;
         int replacement = file_open(client, "/replacement.bin", O_CREAT | O_RDWR, 0666); CHECK(replacement >= 0);
         CHECK(io(replacement, "retain", 6, true, false, 0) == 6);
         CHECK(!rename_path("/orphan.bin", "/replacement.bin"));
-        CHECK(!px_stat_locked(file_fd(client, replacement)->node, &st) && !st.st_nlink);
+        CHECK(!locked_stat(file_fd(client, replacement)->node, &st) && !st.st_nlink);
         CHECK(io(replacement, data, 6, false, true, 0) == 6 && !memcmp(data, "retain", 6));
         CHECK(!file_close(client, replacement));
         /* The last legacy handle, rather than the last native fd, releases
@@ -424,7 +439,7 @@ static void test_overwrite_ctime(void)
         struct px_node *node = file_fd(client, fd)->node;
         struct fat_entry entry = node->entry;
         struct ciuki_stat before, after;
-        CHECK(!px_stat_locked(node, &before));
+        CHECK(!locked_stat(node, &before));
         for (unsigned legacy = 0; legacy < 2; legacy++) {
             for (unsigned repeat = 0; repeat < 2; repeat++) {
                 /* The valid sample remains in one packed FAT interval. The
@@ -438,7 +453,7 @@ static void test_overwrite_ctime(void)
                 } else CHECK(io(fd, &byte, 1, true, true, 0) == 1);
                 CHECK(!memcmp(&entry, &node->entry, sizeof(entry)));
                 CHECK(!memcmp(&entry, &table.handles[old]->node->entry, sizeof(entry)));
-                CHECK(!px_stat_locked(node, &after));
+                CHECK(!locked_stat(node, &after));
                 struct ciuki_timespec now; CHECK(!file_clock_now(CLOCK_REALTIME, client, &now));
                 CHECK(after.st_ctim.tv_sec == now.tv_sec && after.st_ctim.tv_nsec == now.tv_nsec);
                 CHECK(after.st_ctim.tv_sec > before.st_ctim.tv_sec ||
@@ -451,7 +466,7 @@ static void test_overwrite_ctime(void)
             if (legacy) {
                 size_t done = 1; CHECK(!vfs_write(&table, old, "", 0, &done) && !done);
             } else CHECK(!io(fd, "", 0, true, true, 0));
-            CHECK(!px_stat_locked(node, &after));
+            CHECK(!locked_stat(node, &after));
             CHECK(after.st_ctim.tv_sec == before.st_ctim.tv_sec && after.st_ctim.tv_nsec == before.st_ctim.tv_nsec);
         }
         CHECK(!vfs_close(&table, old) && !file_close(client, fd));
@@ -469,9 +484,9 @@ static void *append_worker(void *arg)
     char block[4]; memset(block, test->byte, sizeof(block));
     for (unsigned i = 0; i < 16; i++) {
         size_t done = 0;
-        fs_lock_take(&vfs.lock);
+        vfs_lock(&vfs,0);
         int err = file_io_locked(test->description, block, sizeof(block), true, false, 0, &done);
-        fs_lock_drop(&vfs.lock);
+        vfs_unlock(&vfs);
         if (err || done != sizeof(block)) return (void *)1;
     }
     return 0;
@@ -516,7 +531,7 @@ static void test_write_failures(const char *path)
         } else if (which==1) {
             disk[0].fail_write=volumes[0].fsinfo;
             CHECK(io(fd,"new",3,true,true,volumes[0].spc*512)==3); /* allocation/owning entry committed */
-            CHECK(volumes[0].readonly && file_sync_locked(file_fd(client,fd))==-EIO);
+            CHECK(volumes[0].readonly && locked_sync(file_fd(client,fd))==-EIO);
         } else {
             CHECK(!remove_path_native("/fault.bin",false)); disk[0].fail_flush=true;
             CHECK(file_close(client,fd)==-EIO && file_close(client,fd)==-EBADF);
@@ -610,15 +625,15 @@ static void test_optical_native(void)
     struct fs_ro_volume ro;
     CHECK(!fs_ro_mount(&ro,&iso9660_ops,&cache,&b,0,b.capacity)); CHECK(!vfs_attach_ro(&vfs,4,&ro));
     struct px_path path; CHECK(!resolve_path("/mnt/e/DATA/ODD.BIN",&path));
-    struct ciuki_stat st; CHECK(!px_stat_locked(path.node,&st) && st.st_size==4099 && (st.st_mode&0777)==0444);
+    struct ciuki_stat st; CHECK(!locked_stat(path.node,&st) && st.st_size==4099 && (st.st_mode&0777)==0444);
     int fd=file_open(client,"/mnt/e/DATA/ODD.BIN",O_RDONLY,0); CHECK(fd>=0);
     uint8_t bytes[11]; CHECK(io(fd,bytes,11,false,false,0)==11);
     for (unsigned i=0;i<sizeof(bytes);i++) CHECK(bytes[i]==(uint8_t)(i*17+3));
     CHECK(file_open(client,"/mnt/e/absent",O_RDONLY|O_CREAT,0666)==-EROFS);
     CHECK(file_open(client,"/mnt/e/DATA/ODD.BIN",O_WRONLY|O_TRUNC,0)==-EROFS);
     CHECK(io(fd,bytes,1,true,false,0)==-EROFS);
-    CHECK(file_truncate_locked(file_fd(client,fd),0)==-EROFS);
-    CHECK(!file_sync_locked(file_fd(client,fd)));
+    CHECK(locked_truncate(file_fd(client,fd),0)==-EROFS);
+    CHECK(!locked_sync(file_fd(client,fd)));
     CHECK(make_dir("/mnt/e/absent")==-EROFS); CHECK(remove_path_native("/mnt/e/DATA/ODD.BIN",false)==-EROFS);
     CHECK(rename_path("/mnt/e/DATA/ODD.BIN","/mnt/e/DATA/renamed")==-EROFS);
     CHECK(!px_chdir(client,"/mnt/e/DATA")); b.media_generation++;
@@ -705,7 +720,7 @@ static void test_launch_throughput(void)
     uint64_t saved=file_fd(client,fd)->position;
     CHECK(call(CIUKI_SYS_PWRITE,fd,user,BLKDEV_READ_BYTES+1,0,0)==BLKDEV_READ_BYTES);
     CHECK(file_fd(client,fd)->position==saved && fs_host_contig_live==live);
-    CHECK(fs_lock_try_take(&vfs.lock));fs_lock_drop(&vfs.lock);
+    CHECK(fs_lock_try_take(&vfs.lock));vfs_unlock(&vfs);
     /* A directory poll can complete between the caller's bounded runs. */
     int directory=file_open(client,"/",O_DIRECTORY,0);CHECK(directory>=0);
     CHECK(call(CIUKI_SYS_GETDENTS,directory,user+BLKDEV_READ_BYTES,sizeof(struct ciuki_dirent),0,0)>0);
@@ -745,7 +760,7 @@ int optical_eject(struct storage *s,unsigned drive,uint32_t gen)
 static void test_media_node(void)
 {
     struct px_path path;CHECK(!resolve_path("/dev/media",&path)&&path.node==space->media);
-    struct ciuki_stat st;CHECK(!px_stat_locked(path.node,&st)&&st.st_mode==(S_IFCHR|0444)&&st.st_rdev==6);
+    struct ciuki_stat st;CHECK(!locked_stat(path.node,&st)&&st.st_mode==(S_IFCHR|0444)&&st.st_rdev==6);
     CHECK(file_open(client,"/dev/media",O_RDWR,0)==-EACCES);
     int fd=file_open(client,"/dev/media",O_RDONLY|O_CLOEXEC,0);CHECK(fd>=0);
     CHECK(call(CIUKI_SYS_READ,fd,USER,1,0,0)==-EBADF && call(CIUKI_SYS_LSEEK64,fd,0,0,SEEK_SET,USER)==-ESPIPE);
@@ -827,7 +842,7 @@ static void test_media_node(void)
 static void test_net_node(void)
 {
     struct px_path path; CHECK(!resolve_path("/dev/net", &path) && path.node == space->net);
-    struct ciuki_stat st; CHECK(!px_stat_locked(path.node, &st) && st.st_mode == (S_IFCHR | 0444) && st.st_rdev == 5);
+    struct ciuki_stat st; CHECK(!locked_stat(path.node, &st) && st.st_mode == (S_IFCHR | 0444) && st.st_rdev == 5);
     CHECK(file_open(client, "/dev/net", O_RDWR, 0) == -EACCES);
     CHECK(file_open(client, "/dev/net", O_WRONLY, 0) == -EACCES);
     CHECK(file_open(client, "/dev/net", O_RDONLY | O_TRUNC, 0) == -EINVAL);
@@ -846,7 +861,7 @@ static void test_net_node(void)
     CHECK(call(CIUKI_SYS_DEVCTL, fd, NET_GET_STATE, USER, sizeof(state), 0) == -EBADF);
     int dir = file_open(client, "/dev", O_RDONLY | O_DIRECTORY, 0); CHECK(dir >= 0);
     struct ciuki_dirent entry; bool seen = false; int n;
-    while ((n = px_getdents_locked(file_fd(client, dir), &entry)) > 0)
+    while ((n = locked_dents(file_fd(client, dir), &entry)) > 0)
         if (!strcmp(entry.d_name, "net")) { CHECK(entry.d_type == DT_CHR && !seen); seen = true; }
     CHECK(n == 0 && seen); CHECK(!file_close(client, dir));
     puts("PASS /dev/net namespace: lookup/stat/getdents, readonly fd/close, seek/stream rejection, actual devctl dispatch and user copies");

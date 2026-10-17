@@ -164,28 +164,39 @@ int storage_ntfs_mount(struct storage *s, unsigned slot)
 {
     if (!s || !s->ready || s->stopped || slot >= STORAGE_NTFS || !s->ntfs[slot].present) return -FS_EINVAL;
     struct storage_ntfs *n = &s->ntfs[slot];
-    if (n->ro.mounted) return -FS_EBUSY;
+    vfs_lock(&s->vfs,0);
+    for (unsigned d=3;d<26;d++) if (s->vfs.ro_volumes[d]==&n->ro) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
+    if (n->ro.mounted) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     unsigned d = n->drive;
     if (d < 3 || d >= 26 || vfs_drive_present(&s->vfs, d)) {
         d = 3; while (d < 26 && vfs_drive_present(&s->vfs, d)) d++;
-        if (d >= 26) return n->error = -FS_ENOSPC;
+        if (d >= 26) { n->error=-FS_ENOSPC; vfs_unlock(&s->vfs); return n->error; }
     }
+    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+    if (s->stopped || n->ro.mounted || vfs_drive_present(&s->vfs,d)) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
+    n->drive=d; /* also serializes concurrent preparation of this slot */
     refresh_ntfs(n);
-    int e = fs_ro_mount(&n->ro, &ntfs_ops, &s->cache, &n->io, 0, n->io.capacity);
-    if (!e) e = vfs_attach_ro(&s->vfs, d, &n->ro);
-    if (e && n->ro.mounted) fs_ro_unmount(&n->ro);
+    int e = VFS_IO(&s->vfs,fs_ro_mount(&n->ro, &ntfs_ops, &s->cache, &n->io, 0, n->io.capacity));
+    if (!e) e = vfs_attach_ro_locked(&s->vfs, d, &n->ro);
+    if (e && n->ro.mounted) VFS_IO_VOID(&s->vfs,fs_ro_unmount(&n->ro));
     n->error = e;
-    if (e) return e;
-    n->drive = d;
-    return (int)d;
+    vfs_unlock(&s->vfs); return e ? e : (int)d;
 }
 int storage_ntfs_unmount(struct storage *s, unsigned slot)
 {
     if (!s || !s->ready || slot >= STORAGE_NTFS || !s->ntfs[slot].present) return -FS_EINVAL;
     struct storage_ntfs *n = &s->ntfs[slot];
-    if (!n->ro.mounted) return 0;
-    for (unsigned d = 3; d < 26; d++) if (s->vfs.ro_volumes[d] == &n->ro) return vfs_detach(&s->vfs, d);
-    fs_ro_unmount(&n->ro);
+    for (;;) {
+        vfs_lock(&s->vfs,0); unsigned d=n->drive;
+        vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+        if (n->drive==d) break;
+        vfs_unlock(&s->vfs);
+    }
+    if (!n->ro.mounted) { vfs_unlock(&s->vfs); return 0; }
+    for (unsigned d = 3; d < 26; d++) if (s->vfs.ro_volumes[d] == &n->ro) {
+        int e=vfs_detach_locked(&s->vfs,d); vfs_unlock(&s->vfs); return e;
+    }
+    VFS_IO_VOID(&s->vfs,fs_ro_unmount(&n->ro)); vfs_unlock(&s->vfs);
     return 0;
 }
 int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
@@ -245,7 +256,7 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
  * across device I/O. Only reservation/publication take the namespace lock. */
 static int removable_lock(struct storage *s, bool (*cancel)(void *), void (*pause)(void *), void *ctx)
 {
-    if (!cancel) { fs_lock_take(&s->vfs.lock); return 0; }
+    if (!cancel) { vfs_lock(&s->vfs,0); return 0; }
     while (!cancel(ctx)) {
         if (fs_lock_try_take(&s->vfs.lock)) return 0;
         pause(ctx);
@@ -261,9 +272,9 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
     int e=removable_lock(s,cancel,pause,ctx); if (e) return e;
     for (unsigned d=4;d<26;d++) if ((s->volumes[d].present || s->volumes[d].fat.preparing) &&
         s->volumes[d].removable && s->volumes[d].part.parent==dev) {
-        fs_lock_drop(&s->vfs.lock); return -FS_EBUSY;
+        vfs_unlock(&s->vfs); return -FS_EBUSY;
     }
-    fs_lock_drop(&s->vfs.lock);
+    vfs_unlock(&s->vfs);
     struct partition_table table;
     e=partition_scan(dev,&table);
     uint8_t b[512];
@@ -278,16 +289,16 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
         struct partition *p=&table.entries[i];
         if (!whole && !fat_partition(p->type)) continue;
         r=removable_lock(s,cancel,pause,ctx); if (r) return r;
-        if (s->stopped || dev->quarantined) { fs_lock_drop(&s->vfs.lock); return -FS_EIO; }
+        if (s->stopped || dev->quarantined) { vfs_unlock(&s->vfs); return -FS_EIO; }
         if (s->next_drive<4) s->next_drive=4;
         while (s->next_drive<26 && vfs_drive_present(&s->vfs,s->next_drive)) s->next_drive++;
         unsigned d=s->next_drive++;
-        if (d>=26) { fs_lock_drop(&s->vfs.lock); return -FS_ENOSPC; }
+        if (d>=26) { vfs_unlock(&s->vfs); return -FS_ENOSPC; }
         struct storage_volume *v=&s->volumes[d];
         attempted[attempts++]=d;
         v->removable=true; v->drive=d; v->disk=UINT32_MAX; v->partition=whole ? 0 : i+1;
         r=blkpart_init(&v->part,dev,p);
-        fs_lock_drop(&s->vfs.lock);
+        vfs_unlock(&s->vfs);
         if (!r) {
             v->io=(struct blkdev){.read=volume_read,.write=volume_write,.capacity=p->count,.sector_size=512,.ctx=v};
             refresh_volume(v);
@@ -325,7 +336,7 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
             if (s->vfs.volumes[d]==&v->fat) {s->vfs.volumes[d]=0;s->vfs.generation[d]++;s->vfs.drive_flags[d]=0;}
             v->present=false;
         }
-        fs_lock_drop(&s->vfs.lock);
+        vfs_unlock(&s->vfs);
     }
     if (e) for (unsigned i=0;i<count;i++) {
         struct storage_volume *v=&s->volumes[prepared[i]];v->error=e;v->fat.mounted=false;
@@ -344,6 +355,9 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
 {
     if (!s || !s->ready || !dev) return -FS_EINVAL;
     if (surprise) dev->quarantined=true;
+    uint32_t mask=0;
+    for (unsigned d=4;d<26;d++) if (s->volumes[d].removable && s->volumes[d].part.parent==dev) mask|=1u<<d;
+    vfs_reserve_locked(&s->vfs,mask);
     /* Preflight the entire physical device before flushing/cleaning ANY FAT. */
     if (!surprise) for (unsigned d=4;d<26;d++) {
         struct storage_volume *v=&s->volumes[d];
@@ -356,10 +370,13 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
     if (!surprise) for (unsigned d=4;d<26;d++) {
         struct storage_volume *v=&s->volumes[d];
         if (v->present && v->removable && v->part.parent==dev && v->fat.mounted) {
-            int e=fat_commit(&v->fat); if (e) return e;
+            int e=VFS_IO(&s->vfs,fat_commit(&v->fat)); if (e) return e;
         }
     }
-    if (!surprise && dev->flush) { int e=dev->flush(dev); if (e) return e; }
+    if (!surprise && dev->flush) {
+        struct vfs_io_state io=vfs_io_begin_locked(&s->vfs);
+        int e=dev->flush(dev); vfs_io_end_locked(&s->vfs,io); if (e) return e;
+    }
     for (unsigned d=4;d<26;d++) {
         struct storage_volume *v=&s->volumes[d];
         if (!v->present || !v->removable || v->part.parent!=dev) continue;
@@ -385,37 +402,42 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
 int storage_remove_removable(struct storage *s, struct blkdev *dev, bool surprise)
 {
     if (!s) return -FS_EINVAL;
-    fs_lock_take(&s->vfs.lock);
+    vfs_lock(&s->vfs,0);
     int e=storage_remove_removable_locked(s,dev,surprise);
-    fs_lock_drop(&s->vfs.lock); return e;
+    vfs_unlock(&s->vfs); return e;
 }
 int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
 {
     if (!s || !s->ready || s->stopped || slot>=STORAGE_DISKS || !dev) return -FS_EINVAL;
     if (session >= dev->capacity) return -FS_EINVAL;
     struct fs_ro_volume *ro=&s->optical[slot];
+    for (unsigned d=3;d<26;d++) if (s->vfs.ro_volumes[d]==ro) return -FS_EBUSY;
     if (ro->mounted) return -FS_EBUSY;
     unsigned d=s->next_drive;
     while (d<26 && vfs_drive_present(&s->vfs,d)) d++;
     if (d>=26) return -FS_ENOSPC;
-    int e=fs_ro_mount(ro,&iso9660_ops,&s->cache,dev,session,dev->capacity-session);
+    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+    if (s->stopped || vfs_drive_present(&s->vfs,d) || ro->mounted) return -FS_EBUSY;
+    int e=VFS_IO(&s->vfs,fs_ro_mount(ro,&iso9660_ops,&s->cache,dev,session,dev->capacity-session));
     if (!e) e=vfs_attach_ro_locked(&s->vfs,d,ro);
-    if (e && ro->mounted) fs_ro_unmount(ro);
+    if (e && ro->mounted) VFS_IO_VOID(&s->vfs,fs_ro_unmount(ro));
     return e ? e : (int)d;
 }
 int storage_add_ro(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
 {
     if (!s) return -FS_EINVAL;
-    fs_lock_take(&s->vfs.lock);
+    vfs_lock(&s->vfs,0);
     int e=storage_add_ro_locked(s,slot,dev,session);
-    fs_lock_drop(&s->vfs.lock); return e;
+    vfs_unlock(&s->vfs); return e;
 }
 void storage_refresh_ro(struct storage *s)
 {
     if (!s || !s->ready || s->stopped) return;
-    fs_lock_take(&s->vfs.lock);
-    for (unsigned d=3; d<26; d++) if (s->vfs.ro_volumes[d]) vfs_ro_check_locked(&s->vfs,d);
-    fs_lock_drop(&s->vfs.lock);
+    for (unsigned d=3; d<26; d++) {
+        vfs_lock(&s->vfs,vfs_drive_mask(d));
+        if (s->vfs.ro_volumes[d]) vfs_ro_check_locked(&s->vfs,d);
+        vfs_unlock(&s->vfs);
+    }
 }
 struct storage_volume *storage_volume(struct storage *s, unsigned d)
 {
@@ -445,65 +467,80 @@ int storage_enable_write(struct storage *s, unsigned d)
     if (s->writer_error) return s->writer_error;
     if (v->error) return v->error;
     if (!v->read_gate || v->writes_before_gate) { v->refused++; return -FS_EROFS; }
-    fs_lock_take(&s->vfs.lock);
+    vfs_lock(&s->vfs,vfs_drive_mask(d));
     refresh_volume(v);
-    int e = fat_enable_write(&v->fat);
+    int e = VFS_IO(&s->vfs,fat_enable_write(&v->fat));
     if (!e && !v->write_sequence) v->write_sequence = ++s->sequence;
-    if (!e && d == 2) e = log_directory(&v->fat);
-    fs_lock_drop(&s->vfs.lock);
+    if (!e && d == 2) e = VFS_IO(&s->vfs,log_directory(&v->fat));
+    vfs_unlock(&s->vfs);
     return e;
 }
 int storage_writeback(struct storage *s, uint32_t now)
 {
     if (!s || !s->ready || s->stopped) return -FS_EINVAL;
-    fs_lock_take(&s->vfs.lock);
-    for (unsigned d = 2; d < 26; d++) if (s->volumes[d].present) refresh_volume(&s->volumes[d]);
+    vfs_lock(&s->vfs,0);
+    if (s->stopped || s->writer_running || s->writer_quiescing) {
+        vfs_unlock(&s->vfs); return -FS_EBUSY;
+    }
+    s->writer_running=true;
+    /* Cache writeback has its own block reservations and may span devices;
+     * it never manipulates FAT metadata. Its refresh callback runs under cache. */
+    struct vfs_io_state io_mask=vfs_io_begin_locked(&s->vfs);
     int e = cache_writeback_tick(&s->cache, now);
+    vfs_io_end_locked(&s->vfs,io_mask);
     s->writer_ticks++;
     if (e && !s->writer_error) s->writer_error = e;
+    vfs_unlock(&s->vfs);
     /* Delayed failures revoke the mount immediately, not just next commit. */
     for (unsigned d = 2; d < 26; d++) {
+        vfs_lock(&s->vfs,vfs_drive_mask(d));
         struct storage_volume *v = &s->volumes[d];
-        if (!v->present || !v->fat.mounted) continue;
+        if (!v->present || !v->fat.mounted) { vfs_unlock(&s->vfs); continue; }
         int error = cache_error(&s->cache, &v->io);
         if (error) {
             v->fat.ro_reasons |= FAT_RO_WRITE_ERROR;
             v->fat.operation_file[0]=0; /* delayed cache error has no file owner */
-            fat_revoke_write(&v->fat,"writeback_error",0);
+            VFS_IO_VOID(&s->vfs,fat_revoke_write(&v->fat,"writeback_error",0));
         }
+        vfs_unlock(&s->vfs);
     }
-    fs_lock_drop(&s->vfs.lock);
+    vfs_lock(&s->vfs,0); s->writer_running=false; vfs_unlock(&s->vfs);
+    fs_event_wake(&s->vfs.volume_changed);
     return e;
 }
 int storage_shutdown(struct storage *s)
 {
     if (!s || !s->ready) return -FS_EINVAL;
-    /* Refuse opens before stopping the writer, committing or detaching ANY
-     * volume. Keep the namespace lock through detach: an open may otherwise
-     * race between the preflight and a later per-volume lock acquisition. */
-    fs_lock_take(&s->vfs.lock);
+    /* Reserve all letters before preflight, excluding opens through durable
+     * detach while allowing media snapshots during commit/device waits. */
+    vfs_lock(&s->vfs,0);
+    if (s->writer_quiescing) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
+    s->writer_quiescing=true;
+    while (s->writer_running) fs_event_wait(&s->vfs.volume_changed,&s->vfs.lock);
+    vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES);
     bool busy = false;
     for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive])) busy = true;
     for (unsigned d = 2; d < 26; d++)
         if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) busy = true;
     for (unsigned d=3; d<26; d++)
         if (s->vfs.ro_volumes[d] && px_ro_busy && px_ro_busy(&s->vfs,s->vfs.ro_volumes[d])) busy=true;
-    if (busy) { fs_lock_drop(&s->vfs.lock); return -FS_EBUSY; }
+    if (busy) { s->writer_quiescing=false; vfs_unlock(&s->vfs); return -FS_EBUSY; }
     s->stopped = true;
+    s->writer_quiescing=false;
     int result = s->writer_error;
     /* Preflight all volumes before setting ANY clean flag. */
     for (unsigned d = 2; d < 26; d++) {
         struct storage_volume *v = &s->volumes[d];
         if (!v->present || !v->fat.mounted) continue;
         refresh_volume(v);
-        int e = fat_commit(&v->fat);
+        int e = VFS_IO(&s->vfs,fat_commit(&v->fat));
         if (e && !result) result = e;
     }
     if (!result) for (unsigned d = 2; d < 26; d++) if (vfs_drive_present(&s->vfs,d)) {
         result = vfs_detach_locked(&s->vfs, d);
         if (result) break;
     }
-    fs_lock_drop(&s->vfs.lock);
+    vfs_unlock(&s->vfs);
     return result;
 }
 void storage_destroy(struct storage *s)
@@ -539,18 +576,18 @@ int storage_boot_cfg(struct storage *s, const char *request)
     struct storage_volume *v = storage_volume(s, 2);
     if (!v || v->error || !v->read_gate || s->writer_error ||
         !blkdev_durable(blkpart_device(&v->part))) return -FS_EROFS;
-    fs_lock_take(&s->vfs.lock);
+    vfs_lock(&s->vfs,vfs_drive_mask(2));
     bool mounted = v->fat.mounted, readonly = v->fat.readonly;
     int e = 0;
-    if (!mounted) e = fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false);
+    if (!mounted) e = VFS_IO(&s->vfs,fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false));
     struct fat_entry directory, file;
     char original[128], output[128]; size_t done = 0;
     unsigned used = 0, lines = 0;
-    if (!e) e = fat_lookup(&v->fat, v->fat.type == 32 ? v->fat.root : 0, "SYSTEM", &directory);
+    if (!e) e = VFS_IO(&s->vfs,fat_lookup(&v->fat, v->fat.type == 32 ? v->fat.root : 0, "SYSTEM", &directory));
     if (!e && !(directory.attr & FAT_ATTR_DIR)) e = -FS_ENOTDIR;
-    if (!e) e = fat_lookup(&v->fat, directory.first, "BOOT.CFG", &file);
+    if (!e) e = VFS_IO(&s->vfs,fat_lookup(&v->fat, directory.first, "BOOT.CFG", &file));
     if (!e && (file.attr & (FAT_ATTR_RO | FAT_ATTR_DIR) || file.size > 127)) e = -FS_EROFS;
-    if (!e && file.size) e = fat_read(&v->fat, &file, 0, original, file.size, &done);
+    if (!e && file.size) e = VFS_IO(&s->vfs,fat_read(&v->fat, &file, 0, original, file.size, &done));
     if (!e && done != file.size) e = -FS_EIO;
     if (!e) for (unsigned i = 0; i < file.size;) {
         unsigned begin = i;
@@ -575,26 +612,26 @@ int storage_boot_cfg(struct storage *s, const char *request)
     }
     /* Drain a prior writable workload before attributing any writes to the
      * cursor. This barrier is outside the cursor ledger, even on failure. */
-    if (!e && mounted && !readonly) e = fat_commit(&v->fat);
+    if (!e && mounted && !readonly) e = VFS_IO(&s->vfs,fat_commit(&v->fat));
     if (!e) cursor_volume = v;
-    if (!e) e = fat_enable_write(&v->fat);
+    if (!e) e = VFS_IO(&s->vfs,fat_enable_write(&v->fat));
     bool recovered = v->fat.dirty_recovered;
     if (!e && used) {
-        e = fat_write(&v->fat, &file, 0, output, used, &done);
+        e = VFS_IO(&s->vfs,fat_write(&v->fat, &file, 0, output, used, &done));
         if (!e && done != used) e = -FS_EIO;
     }
-    if (!e) e = fat_truncate(&v->fat, &file, used);
-    if (!e) e = fat_commit(&v->fat);
+    if (!e) e = VFS_IO(&s->vfs,fat_truncate(&v->fat, &file, used));
+    if (!e) e = VFS_IO(&s->vfs,fat_commit(&v->fat));
     /* Restore a closed gate. Never set a clean flag following an I/O error. */
     if (!e && (!mounted || readonly)) {
-        e = fat_unmount(&v->fat);
-        if (!e && mounted) e = fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false);
+        e = VFS_IO(&s->vfs,fat_unmount(&v->fat));
+        if (!e && mounted) e = VFS_IO(&s->vfs,fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false));
         if (!e && mounted) v->fat.dirty_recovered = recovered;
     } else if (e && readonly) {
         v->fat.readonly = true;
     }
     cursor_volume = 0;
-    fs_lock_drop(&s->vfs.lock);
+    vfs_unlock(&s->vfs);
     return e;
 }
 

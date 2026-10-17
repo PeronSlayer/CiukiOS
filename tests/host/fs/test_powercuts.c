@@ -85,13 +85,13 @@ static void unpublished_batches(void)
         if (stalled) {
             /* The writer sees exactly the same try-lock failure as a settings
              * reader that stalls while owning the namespace. */
-            fs_lock_take(&s->vfs.lock);
+            vfs_lock(&s->vfs,0);
             memset(block,'Q',sizeof(block));
             bootlog_capture_ring(block,sizeof(block));bootlog_capture_ring(block,sizeof(block));
             for (unsigned turn=0;turn<3;turn++) CHECK(bootlog_drain()==-FS_EBUSY);
             bootlog_snapshot(&stats);
             CHECK(stats.writes==n && !stats.metadata_writes && stats.ring_queued==2*sizeof(block));
-            fs_lock_drop(&s->vfs.lock);
+            vfs_unlock(&s->vfs);
         }
         discard(s);
         s=start();CHECK(!s->volumes[2].writes);

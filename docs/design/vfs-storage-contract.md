@@ -85,6 +85,55 @@ the same VFS through the bridge defined in `dos-dpmi-contract.md`.
 
 ## Block cache and write ordering
 
+**[F1, f1-79 amendment, 2026-10-17]** The short namespace mutex protects
+tables, shared descriptions, node identity, cwd pins, observers and mount
+publication. Each letter has a separate volume mutex. Lock order is namespace
+→ volumes in ascending letter order → cache → device. Before borrowing
+identities, filesystem operations reserve their complete drive set under namespace;
+contenders sleep with namespace released. Native path preflight follows the
+synthetic `/mnt/<letter>` transitions and cwd ancestry without disk access,
+including intermediate components before `..`; two-path operations reserve
+the union before resolving either path.
+
+Filesystem calls release namespace, keeping the reserved volume mutexes.
+On return they drop those mutexes before reacquiring namespace → volumes.
+The reservation stays published during this handoff, preventing a same-volume
+open, mutation, final close or removal from observing partial publication.
+Global node/description/handle slots are claimed before dropping namespace.
+This replaces the former requirement to keep namespace across commit and
+detach: shutdown prevents new writeback, drains the active writer (including
+delayed-error publication), then reserves every drive before preflight.
+Removable removal reserves every partition of its physical device before any flush. The DOS VM
+gate still spans seek plus transfer on its private disk description.
+
+Attaching a prepared volume is namespace-only publication and refuses a letter
+reserved by another owner. Optical expiration ends its old reservation before
+preparing a new mount; NTFS preparation/unmount use the slot's current letter.
+Legacy relative paths retain a default-drive snapshot across I/O. Native
+`getcwd` reserves its volume before copying names, excluding partial rename
+publication as well as expired mount identities.
+
+Media queries take namespace alone and copy the published mount identity,
+immutable volume label/identifier and current blocker list. They never reserve
+a volume or call filesystem/transport callbacks. Optical preparation occurs
+before publication; detach removes the published pointer before reuse. Waits
+over 100 ms emit the verbose `storage/vfs_wait` record.
+
+Research checked against the former `vfs.c`, native `_locked` helpers,
+`mount.c` and `media_dev.c` before implementation: Linux's
+[filesystem locking](https://docs.kernel.org/filesystems/locking.html) separates
+directory/inode exclusion and description offsets from global bookkeeping;
+[directory locking](https://docs.kernel.org/filesystems/directory-locking.html)
+requires a consistent order for multi-object operations. Its
+[sequence-counter documentation](https://docs.kernel.org/locking/seqlock.html)
+warns against lockless traversal of pointers whose lifetime can end during a
+read: Ciuki therefore retains short namespace exclusion for mount/blocker
+copies rather than introducing a pointer seqlock. The
+[Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+defines cluster chains, directory ownership and FSInfo hints; this change
+preserves the existing FAT algorithms and durability barriers. These sources
+inform the locking decision; the drive-reservation protocol is Ciuki's own.
+
 **[F2, f2-11 amendment]** Durable shutdown MUST preflight every attached
 volume under the shared VFS namespace lock for native volume-backed open
 descriptions and legacy VFS handles before stopping storage, committing or
@@ -94,9 +143,9 @@ later `storage_sync()` after the final close to succeed, provided no I/O error
 intervenes. Duplicated/inherited fds retain their shared description until the
 last close, following the [POSIX open-description lifetime](https://pubs.opengroup.org/onlinepubs/009604499/functions/close.html).
 Cwd pins and structural/synthetic nodes MUST NOT count as open descriptions
-on a volume. The namespace lock MUST remain held from preflight through
-commit and durable detach, preventing concurrent opens from invalidating the
-preflight. Successful detach MUST invalidate native mount identities and
+on a volume. Per-drive reservations MUST remain held from preflight through
+commit and durable detach (f1-79), preventing concurrent opens from invalidating
+the preflight. Successful detach MUST invalidate native mount identities and
 reset legacy per-drive cwd to `/`; native cwd expiration follows
 `posix-subset.md`. Optional native hooks MUST remain weak for standalone F1
 storage. `storage_sync()` first drains/closes the boot-log sink; an EBUSY
@@ -135,7 +184,7 @@ order above: update existing sectors in place, initialize new data and zero
 seek gaps, barrier, publish a detached allocation chain to every FAT copy,
 barrier, extend the previous EOF link, barrier, publish directory size and
 timestamps once, barrier, then update FSInfo hints. Select new clusters under
-the namespace lock without publishing allocation before their data is durable.
+the volume lock without publishing allocation before their data is durable.
 Only explicit truncation retains the existing full-file COW ownership switch;
 ordinary overwrites and appends MUST NOT copy the existing prefix. Overwrite
 contents may be partially updated after a cut; published length remains old or
