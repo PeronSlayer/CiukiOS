@@ -16,7 +16,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
-from loader_model import BootMenu
+from loader_model import BootMenu, LoaderUART
+from loader_uart_machine import LoaderUARTMachine
 
 LOADER_BYTES = 24576
 CONSOLE_HARNESS = r'''
@@ -53,6 +54,60 @@ def scratch():
 
 
 class LoaderTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM tools')
+    def test_assembled_uart_paths_match_model(self):
+        with scratch() as folder:
+            source = Path(folder) / 'uart.asm'
+            binary = Path(folder) / 'uart.bin'
+            # Only export addresses; the first 24576 bytes are the production loader.
+            source.write_text('%include "src/boot/ciukldr.asm"\nsection .uart_symbols\n'
+                              'dw uart_init, uart_putc, uart_budget, boot_info\n')
+            subprocess.run(['nasm', '-f', 'bin', str(source), '-o', str(binary)], cwd=ROOT, check=True)
+            self.assertEqual(binary.stat().st_size, LOADER_BYTES + 8)
+            cases = ({}, {'bda': 0}, {'bda': 0x2f8}, {'scratch': False},
+                     {'lsr': 0xff}, {'divisor_low': 0}, {'divisor_high': 1})
+            for options in cases:
+                with self.subTest(options=options):
+                    model = LoaderUART(flags=0x2003, **options)
+                    machine = LoaderUARTMachine(binary, **options)
+                    # Discovery must replace stale UART fields without losing other flags.
+                    machine.set_field(8, 0x2003)
+                    machine.set_field(0x38, 0x1234)
+                    machine.set_field(0x3c, 0x4321)
+                    machine.run(machine.init)
+                    self.assertEqual((machine.field(15, 1), machine.field(0x38), machine.field(0x3c),
+                                      machine.field(8)), (model.state, model.base, model.divisor, model.flags))
+                    if options.get('bda', 0x3f8) != 0x3f8:
+                        self.assertEqual(machine.reads, [])
+                    else:
+                        self.assertEqual(machine.ports[0x3ff], 0x37)
+                    if model.state in (1, 5):
+                        self.assertEqual(machine.ports[0x3fb], 3)
+                    machine.run(machine.putc)
+                    model.putc(65, options.get('lsr', 0x60))
+                    self.assertEqual(machine.sent, model.sent)
+            for lsr, budget in ((0x60, 1), (0, 16384), (0xff, 16384), (0x60, 0)):
+                with self.subTest(lsr=lsr, budget=budget):
+                    machine = LoaderUARTMachine(binary)
+                    machine.set_field(8, 0x2003)
+                    machine.run(machine.init)
+                    self.assertEqual(machine.read(f'word [0x{machine.budget:x}]'), 16384)
+                    machine.write(f'word [0x{machine.budget:x}]', budget)
+                    machine.lsr = lsr
+                    model = LoaderUART(flags=0x2003)
+                    model.budget = budget
+                    for char in (65, 66, 67):
+                        saved = {reg: machine.read(reg) for reg in ('cx', 'dx')}
+                        machine.run(machine.putc, char)
+                        self.assertEqual({reg: machine.read(reg) for reg in saved}, saved)
+                        model.putc(char, lsr)
+                        self.assertEqual((machine.field(15, 1), machine.field(8), machine.field(0x38),
+                                          machine.field(0x3c), machine.sent),
+                                         (model.state, model.flags, model.base, model.divisor, model.sent))
+                    self.assertEqual(machine.reads.count(0x3fd),
+                                     4097 if lsr == 0 else 1 if budget == 0 else 2)
+                    self.assertEqual(machine.read('ax') & 255, 67)
+
     @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
     def test_boot_info_cleared_at_every_entry_before_discovery(self):
         with scratch() as folder:

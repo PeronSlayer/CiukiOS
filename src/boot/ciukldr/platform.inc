@@ -469,10 +469,15 @@ selection_error db 'L:SELECT_ERROR',13,10,0
 
 ; UART discovery: BDA COM1, scratch-register round-trip and LSR presence.
 uart_init:
+    mov dword [B(uart_base)], 0
+    mov dword [B(uart_divisor)], 0
+    and dword [B(flags)], ~CBI_F_SERIAL_LOG
+    mov byte [B(uart_state)], CBI_UART_NO_BDA
     xor ax, ax
     mov fs, ax
     cmp word [fs:0x400], 0x3f8
     jne .absent
+    mov byte [B(uart_state)], CBI_UART_SCRATCH
     mov dx, 0x3ff
     in al, dx
     mov bl, al
@@ -484,10 +489,15 @@ uart_init:
     out dx, al
     cmp ah, 0x5a
     jne .absent
+    mov byte [B(uart_state)], CBI_UART_LSR
     mov dx, 0x3fd
     in al, dx
     cmp al, 0xff
     je .absent
+    mov byte [B(uart_state)], CBI_UART_DIVISOR
+    mov dx, 0x3fb
+    mov al, 3                    ; clear inherited DLAB before IER
+    out dx, al
     mov dx, 0x3f9
     xor al, al
     out dx, al
@@ -511,6 +521,7 @@ uart_init:
     out dx, al
     mov dword [B(uart_base)], 0x3f8
     mov dword [B(uart_divisor)], 3
+    mov byte [B(uart_state)], CBI_UART_OK
     or dword [B(flags)], CBI_F_SERIAL_LOG
 .absent:
     ret
@@ -552,16 +563,24 @@ uart_putc:
     cmp dword [B(uart_base)], 0
     je .done
     cmp word [uart_budget], 0
-    je .disable
+    je .budget
     dec word [uart_budget]
     mov dx, 0x3fd
     mov cx, 0x1000
 .poll:
     in al, dx
+    cmp al, 0xff                 ; floating bus must not count as THRE
+    je .timeout
     test al, 0x20
     jnz .send
     loop .poll
+.timeout:
+    mov byte [B(uart_state)], CBI_UART_THRE_TIMEOUT
+    jmp .disable
+.budget:
+    mov byte [B(uart_state)], CBI_UART_BUDGET
 .disable:
+    and dword [B(flags)], ~CBI_F_SERIAL_LOG
     mov dword [B(uart_base)], 0
     mov dword [B(uart_divisor)], 0
     jmp .done

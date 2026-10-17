@@ -128,6 +128,14 @@ static void test_bootinfo(void)
     NEG(bi.flags |= 1u << 20, "undefined_flag_bits");
     NEG(bi.flags &= ~CBI_F_A20_MASK, "a20_method");
     NEG(bi.reserved1[3] = 1, "reserved_nonzero");
+    NEG(bi.uart_state = CBI_UART_BUDGET + 1, "uart_state");
+    for (unsigned version = 1; version <= 2; version++)
+        for (unsigned state = CBI_UART_UNKNOWN; state <= CBI_UART_BUDGET; state++) {
+            good_info(&bi); bi.version = version;
+            bi.size = version == 1 ? CIUKI_BOOT_INFO_V1_SIZE : CIUKI_BOOT_INFO_SIZE;
+            bi.uart_state = state;
+            CHECK(bootinfo_validate(&bi, &why) == 0);
+        }
     NEG(bi.e820_count = 129, "e820_count");
     NEG(bi.e820[0].length = 0, "e820_zero_length");
     NEG((bi.e820[0].base = 0xFFFFFFFFFFFFF000ull, bi.e820[0].length = 0x2000), "e820_overflow");

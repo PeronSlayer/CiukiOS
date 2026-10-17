@@ -61,8 +61,11 @@ static void irq_restore(uint32_t f)
 }
 
 static uint8_t regs[8], holding[16], shift;
+static uint8_t divisor_bytes[2];
 static uint16_t model_base=0x3F8;
 static bool present=true, ready, fifo, fifo_enabled, timed, poll_clock, shifting, thr_pending;
+static unsigned scratch_fault, divisor_fault;
+static bool lsr_float;
 static unsigned iir_fault, holding_used, overflows, tx_writes, lsr_reads, io_count, rx_reads;
 static unsigned irq_calls, registrations, unmasks, last_irq_bytes;
 static irq_handler_t handlers[16];
@@ -103,10 +106,15 @@ static uint8_t inb(uint16_t p)
     }
     if (off==5) {
         lsr_reads++;
+        if (lsr_float) return 0xFF;
         if (poll_clock) advance_us(1);
         return ready ? ((!holding_used ? 0x20:0) | (!shifting ? 0x40:0)):0;
     }
-    if (!off) rx_reads++;
+    if (off==7 && ((scratch_fault==1 && regs[7]==0x5A) ||
+                   (scratch_fault==2 && regs[7]==0xA5))) return 0;
+    if ((regs[3]&0x80) && off<2)
+        return divisor_bytes[off] ^ (divisor_fault==off+1 ? 1:0);
+    if (!off && !(regs[3]&0x80)) rx_reads++;
     return regs[off];
 }
 static void outb(uint16_t p,uint8_t value)
@@ -116,6 +124,7 @@ static void outb(uint16_t p,uint8_t value)
     CHECK(p>=model_base && p<model_base+8);
     io_count++;model_ns+=1000;
     unsigned off=p-model_base;
+    if ((regs[3]&0x80) && off<2) { divisor_bytes[off]=value; return; }
     if (off==1 && !(regs[3]&0x80)) {
         if ((regs[1]^value)&2) thr_pending=(value&2) && !holding_used;
     }
@@ -176,7 +185,9 @@ static void reset_uart(bool with_fifo)
 {
     CHECK(flags==0x200 && !preemption);
     memset(regs,0,sizeof(regs));memset(handlers,0,sizeof(handlers));memset(masked,1,sizeof(masked));
+    memset(divisor_bytes,0,sizeof(divisor_bytes));
     fifo=with_fifo;present=ready=true;fifo_enabled=timed=poll_clock=shifting=thr_pending=false;
+    scratch_fault=divisor_fault=0;lsr_float=false;
     iir_fault=holding_used=overflows=tx_writes=lsr_reads=io_count=rx_reads=0;
     irq_calls=registrations=unmasks=last_irq_bytes=emitted_count=preemptions=0;
     clock_units=shift_end=0;g_ticks=0;g_current=NULL;g_need_resched=false;
@@ -185,7 +196,7 @@ static void reset_uart(bool with_fifo)
     CHECK(serial_present() && uart_fifo_bytes==(with_fifo ? 16u:1u));
     CHECK(registrations==1 && unmasks==1 && regs[3]==3 && (regs[4]&8));
     CHECK(!uart_armed && !(regs[1]&2));
-    io_count=0;model_ns=critical_start=critical_max=0;max_section="none";
+    io_count=lsr_reads=rx_reads=0;model_ns=critical_start=critical_max=0;max_section="none";
 }
 static bool irq_pending(void)
 { return ready && (regs[1]&2) && (regs[4]&8) && thr_pending && !masked[uart_irq]; }

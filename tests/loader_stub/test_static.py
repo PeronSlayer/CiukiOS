@@ -19,7 +19,7 @@ SERIAL_SPEC.loader.exec_module(SERIAL)
 OFFSETS = {
     "magic": 0x000, "version": 0x004, "size": 0x006, "flags": 0x008,
     "boot_drive": 0x00C, "memmap_source": 0x00D, "input_policy": 0x00E,
-    "reserved0": 0x00F, "partition_lba": 0x010, "loader_start": 0x014,
+    "uart_state": 0x00F, "partition_lba": 0x010, "loader_start": 0x014,
     "loader_end": 0x018, "kernel_start": 0x01C, "kernel_end": 0x020,
     "kernel_entry_phys": 0x024, "e820_count": 0x028, "e801_low_kib": 0x02C,
     "e801_high_64k": 0x030, "int88_kib": 0x034, "uart_base": 0x038,

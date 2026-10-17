@@ -10,6 +10,28 @@ import loader_model as model
 
 
 class LoaderModelTests(unittest.TestCase):
+    def test_uart_outcomes_and_disable(self):
+        for options, state in (({}, 1), ({'bda': 0}, 2), ({'bda': 0x2f8}, 2),
+                               ({'scratch': False}, 3), ({'lsr': 0xff}, 4),
+                               ({'divisor_low': 0}, 5), ({'divisor_high': 1}, 5)):
+            with self.subTest(options=options):
+                uart = model.LoaderUART(flags=0x2003, **options)
+                self.assertEqual(uart.state, state)
+                self.assertEqual((uart.base, uart.divisor, uart.flags),
+                                 (0x3f8, 3, 0x2003) if state == 1 else (0, 0, 0x2001))
+        uart = model.LoaderUART()
+        for _ in range(16384):
+            uart.putc(65)
+        self.assertEqual((uart.state, uart.budget, len(uart.sent)), (1, 0, 16384))
+        uart.putc(66)
+        self.assertEqual((uart.state, uart.base, uart.divisor, uart.flags), (7, 0, 0, 0))
+        uart.putc(67)
+        self.assertEqual(len(uart.sent), 16384)
+        for lsr in (0, 0xff):
+            uart = model.LoaderUART(flags=0x2003)
+            uart.putc(65, lsr)
+            self.assertEqual((uart.state, uart.base, uart.divisor, uart.flags), (6, 0, 0, 0x2001))
+
     def test_cpu_minimum_features_and_signatures(self):
         for signature,expected in ((0x652,(6,5,2)), (0x623,(6,2,3)),
                                    (0xf29,(15,2,9)), (0x000106a5,(6,26,5)),

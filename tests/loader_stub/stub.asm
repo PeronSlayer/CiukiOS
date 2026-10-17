@@ -44,8 +44,8 @@ stub_entry:
     ja invalid
     test dword [I(flags)], ~0xfff
     jnz invalid
-    cmp byte [I(reserved0)], 0
-    jne invalid
+    cmp byte [I(uart_state)], CBI_UART_BUDGET
+    ja invalid
     cmp dword [I(reserved1)], 0
     jne invalid
     cmp word [I(reserved1)+4], 0

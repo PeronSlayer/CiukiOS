@@ -29,6 +29,15 @@
 %define CBI_A20_KBC           3
 %define CBI_A20_PORT92        4
 
+%define CBI_UART_UNKNOWN      0
+%define CBI_UART_OK           1
+%define CBI_UART_NO_BDA       2
+%define CBI_UART_SCRATCH      3
+%define CBI_UART_LSR          4
+%define CBI_UART_DIVISOR      5
+%define CBI_UART_THRE_TIMEOUT 6
+%define CBI_UART_BUDGET       7
+
 struc ciuki_e820
     .base       resq 1
     .length     resq 1
@@ -56,7 +65,7 @@ struc ciuki_boot_info
     .boot_drive         resb 1      ; 0x00C
     .memmap_source      resb 1      ; 0x00D
     .input_policy       resb 1      ; 0x00E
-    .reserved0          resb 1      ; 0x00F
+    .uart_state         resb 1      ; 0x00F: CBI_UART_*, loader outcome
     .partition_lba      resd 1      ; 0x010
     .loader_start       resd 1      ; 0x014
     .loader_end         resd 1      ; 0x018

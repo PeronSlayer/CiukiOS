@@ -40,10 +40,10 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     memset(&g_boot, 0, sizeof(g_boot));
     memcpy(&g_boot, src, src->size); /* v1 never reads the v2 extension */
 
-    serial_init((uint16_t)g_boot.uart_base, (uint16_t)g_boot.uart_divisor);
     bool text = (g_boot.flags & CBI_F_TEXT_MODE) != 0;
     if (text)
         console_init_text();
+    serial_boot_init();
     klog("Ciuki VMM F0 build %s - CiukiOS", CIUKI_BUILD_ID);
     /* A separate line: scripts/test/physical.py and its host fixtures match
      * the banner above, so its text stays as it is. */

@@ -38,7 +38,15 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why);
 
 /* output sinks */
 void serial_init(uint16_t base, uint16_t divisor);
+/* Validated boot handoff: recover COM1 when loader state is not OK, log
+ * both outcomes, and publish the effective resource fields in g_boot. */
+void serial_boot_init(void);
 bool serial_present(void);
+enum serial_probe_result {
+    SERIAL_PROBE_UNKNOWN, SERIAL_PROBE_OK, SERIAL_PROBE_MAPPING,
+    SERIAL_PROBE_SCRATCH, SERIAL_PROBE_LSR, SERIAL_PROBE_DIVISOR,
+    SERIAL_PROBE_THRE_TIMEOUT
+};
 /* One queue publication; includes console prefixes and final newline.
  * CRLF expansion needs at most twice this many bytes in the byte ring. */
 #define SERIAL_RECORD_MAX 2048u
@@ -62,6 +70,7 @@ struct serial_stats {
     uint32_t queued, dropped;
     bool present;
     uint32_t periodic_dropped, evidence_dropped, resent;
+    enum serial_probe_result probe_result; /* initialization outcome */
 };
 void serial_snapshot(struct serial_stats *);
 void serial_panic(void);                  /* IF clear: drain, then synchronous records */
