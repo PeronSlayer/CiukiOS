@@ -1,5 +1,5 @@
-/* POSIX names over F1's drive namespace. All FAT access and node changes
- * share vfs->lock with legacy callers. See FILES-REPORT.md for sources.
+/* POSIX names over F1's drive namespace. Node changes share the short
+ * namespace lock; filesystem work uses VFS_IO and drive reservations.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
@@ -9,6 +9,55 @@
 #pragma weak audio_device_open
 
 static struct px_namespace *spaces;
+
+/* No symlinks: the synthetic /mnt/<letter> transitions and cached cwd
+ * ancestry determine every drive a path can visit, without filesystem I/O.
+ * Preserve intermediate components (including those before '..') so invalid
+ * paths still have their normal lookup/error semantics. */
+static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const char *path)
+{
+    uint8_t kinds[CIUKI_PATH_MAX/2+2]; unsigned depth=0;
+    kinds[0]=2; /* 0=/mnt, 1=/dev, 2=C root, 3..25=mount letters */
+    if (path[0]!='/' && cwd) {
+        struct px_node *n=cwd; unsigned count=0;
+        while (n!=s->root && count<CIUKI_PATH_MAX/2) {
+            kinds[++count]=n==s->mnt ? 0 : n==s->dev || (!n->volume && !n->ro) ? 1 : n->drive;
+            n=n->parent;
+        }
+        depth=count;
+        for (unsigned i=1;i<=count/2;i++) { unsigned k=kinds[i]; kinds[i]=kinds[count+1-i]; kinds[count+1-i]=k; }
+    }
+    uint32_t mask=path[0]!='/' && cwd && (cwd->ro || (cwd->volume && !cwd->mountpoint)) ? vfs_drive_mask(cwd->drive) : 0;
+    const char *p=path;
+    while (*p) {
+        while (*p=='/') p++;
+        if (!*p) break;
+        const char *start=p; while (*p && *p!='/') p++;
+        unsigned len=(unsigned)(p-start), kind=kinds[depth];
+        if (len==1 && start[0]=='.') continue;
+        if (len==2 && start[0]=='.' && start[1]=='.') { if (depth) depth--; continue; }
+        if (!depth && len==3 && path_upper(start[0])=='M' && path_upper(start[1])=='N' && path_upper(start[2])=='T') kind=0;
+        else if (!depth && len==3 && path_upper(start[0])=='D' && path_upper(start[1])=='E' && path_upper(start[2])=='V') kind=1;
+        else if (kind==0) { kind=len==1 ? (unsigned)(path_upper(start[0])-'A') : 26; if (kind<3 || kind>=26) kind=1; else mask|=1u<<kind; }
+        else if (kind>=2) mask|=vfs_drive_mask(kind);
+        if (depth+1<sizeof(kinds)/sizeof(*kinds)) kinds[++depth]=kind;
+    }
+    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]) : 0);
+}
+static void reserve_paths(struct px_namespace *s,struct px_node *cwd,const char *a,const char *b)
+{
+    uint32_t mask=path_drives(s,cwd,a) | (b ? path_drives(s,cwd,b) : 0);
+    bool nested=s->vfs->active!=0;
+    for (;;) {
+        vfs_reserve_locked(s->vfs,mask);
+        uint32_t now=path_drives(s,cwd,a) | (b ? path_drives(s,cwd,b) : 0);
+        if (!(now & ~s->vfs->active)) return;
+        /* Cwd ancestry may have moved while initial admission slept. No
+         * resolved identities have been borrowed yet; retry the growing set. */
+        if (nested) fs_panic("incomplete path reservation");
+        mask|=now; vfs_unlock(s->vfs); vfs_lock(s->vfs,0);
+    }
+}
 
 int px_error(int e)
 {
@@ -35,6 +84,7 @@ static bool node_available(const struct px_node *n)
 int px_ro_check_locked(struct px_node *n)
 {
     struct vfs *v=n->space->vfs;
+    if (n->volume || n->ro) vfs_reserve_locked(v,vfs_drive_mask(n->drive));
     if (!n->ro) {
         if (!n->volume) return 0;
         return n->drive<26 && n->volume->mounted && !n->volume->dev->quarantined &&
@@ -119,7 +169,7 @@ static struct px_node *mount_root(struct px_namespace *s, unsigned drive)
         if (vfs_ro_check_locked(s->vfs,drive)) return 0;
         for (struct px_node *n=s->nodes; n; n=n->next)
             if (n->linked && n->mountpoint && n->ro==ro && n->drive==drive && n->generation==s->vfs->generation[drive]) return n;
-        struct fs_ro_node entry; if (ro->ops->root(ro,&entry)) return 0;
+        struct fs_ro_node entry; if (VFS_IO(s->vfs,ro->ops->root(ro,&entry))) return 0;
         struct px_node *n=node_new(s,s->mnt,PX_DIRECTORY); if (!n) return 0;
         n->ro=ro; n->ro_id=entry.id; n->ro_size=entry.size; n->drive=drive; n->generation=s->vfs->generation[drive];
         n->mountpoint=true; n->entry.attr=FS_RO_DIRECTORY|FS_RO_READONLY; n->entry.name[0]=(char)('a'+drive);
@@ -141,12 +191,12 @@ static struct px_node *mount_root(struct px_namespace *s, unsigned drive)
 
 int files_attach(struct vfs *v, struct px_namespace **out)
 {
-    fs_lock_take(&v->lock);
+    vfs_lock(v,0);
     struct px_namespace *s = space_find(v);
     int err = 0;
     if (!s) {
         s = kzalloc(sizeof(*s));
-        if (!s) { fs_lock_drop(&v->lock); return -ENOMEM; }
+        if (!s) { vfs_unlock(v); return -ENOMEM; }
         s->vfs = v; s->next = spaces; spaces = s;
         if (!v->volumes[2]) err = -ENOENT;
         if (!err && !mount_root(s, 2)) err = -ENOMEM;
@@ -179,7 +229,7 @@ int files_attach(struct vfs *v, struct px_namespace **out)
         else { s->dev->parent = s->root; s->mnt->parent = s->root; }
     }
     if (!err) *out = s;
-    fs_lock_drop(&v->lock);
+    vfs_unlock(v);
     return err;
 }
 
@@ -201,13 +251,13 @@ void files_detach(struct vfs *v)
 void files_snapshot(struct px_namespace *s, struct file_ledger *out)
 {
     memset(out, 0, sizeof(*out));
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     for (struct px_node *n = s->nodes; n; n = n->next) { out->nodes++; out->pins += n->refs; }
     for (struct file_description *d = s->descriptions; d; d = d->next) out->descriptions++;
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
 }
-void px_retain(void *node) { if (node) ((struct px_node *)node)->refs++; }
-void px_release(void *node) { if (node) ((struct px_node *)node)->refs--; }
+void px_retain(void *node) { if (node) __atomic_add_fetch(&((struct px_node *)node)->refs,1,__ATOMIC_RELAXED); }
+void px_release(void *node) { if (node) __atomic_sub_fetch(&((struct px_node *)node)->refs,1,__ATOMIC_RELAXED); }
 
 int px_validate(const char *path)
 {
@@ -269,12 +319,12 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
     }
     if (p->ro) {
         int err=px_ro_check_locked(p); if (err) return err;
-        struct fs_ro_node entry; err=fs_ro_lookup(p->ro,p->ro_id,name,&entry);
+        struct fs_ro_node entry; err=VFS_IO(s->vfs,fs_ro_lookup(p->ro,p->ro_id,name,&entry));
         if (err) { px_ro_check_locked(p); return px_error(err); }
         *out=ro_node_entry(s,p,&entry); return *out ? 0 : -ENOMEM;
     }
     struct fat_entry entry;
-    int err = fat_lookup(p->volume, p->entry.first, name, &entry);
+    int err = VFS_IO(s->vfs,fat_lookup(p->volume, p->entry.first, name, &entry));
     if (err) return px_error(err);
     *out = node_entry(s, p, &entry);
     return *out ? 0 : -ENOMEM;
@@ -285,6 +335,7 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
 {
     int err = px_validate(path);
     if (err) return err;
+    reserve_paths(s,cwd,path,0);
     memset(out, 0, sizeof(*out));
     struct px_node *n = *path == '/' ? s->root : cwd ? cwd : s->root;
     if (!node_available(n)) return -ENOENT;
@@ -322,6 +373,10 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
 int px_getcwd_locked(struct px_node *n, char out[CIUKI_PATH_MAX])
 {
     if (!node_available(n)) return -ENOENT;
+    if (n->volume || n->ro) {
+        vfs_reserve_locked(n->space->vfs,vfs_drive_mask(n->drive));
+        if (!node_available(n)) return -ENOENT;
+    }
     char backwards[CIUKI_PATH_MAX]; unsigned used = 0, count = 0;
     while (n != n->space->root) {
         if (++count > FS_PATH_CHARS || !n->linked) return -EIO;
@@ -342,7 +397,7 @@ int px_chdir(struct process *p, const char *path)
     if (!cwd) return -ENOENT;
     px_retain(cwd);
     struct px_namespace *s = cwd->space;
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     struct px_path result;
     int err = px_resolve_locked(s, cwd, path, false, &result);
     if (!err && !directory(result.node)) err = -ENOTDIR;
@@ -350,7 +405,7 @@ int px_chdir(struct process *p, const char *path)
         px_retain(result.node); px_release(p->cwd); p->cwd = result.node;
         p->cwd_retain = px_retain; p->cwd_release = px_release;
     }
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     px_release(cwd);
     return err;
 }
@@ -418,7 +473,7 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
         out->st_blocks = ((uint32_t)n->volume->root_entries * 32 + 511) / 512;
     else while (c) {
         if (c < 2 || c >= n->volume->clusters + 2 || ++count > n->volume->clusters) return -EIO;
-        uint32_t next; int err = fat_get_cluster(n->volume, c, &next);
+        uint32_t next; int err = VFS_IO(n->space->vfs,fat_get_cluster(n->volume, c, &next));
         if (err) return px_error(err);
         uint32_t end = n->volume->type == 12 ? 0xff8 : n->volume->type == 16 ? 0xfff8 : 0x0ffffff8;
         out->st_blocks += n->volume->spc;
@@ -461,15 +516,15 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         /* Reserve metadata BEFORE FAT create; allocation failure is pure. */
         struct px_node *n = node_new(s, r.parent, PX_FILE);
         if (!n) return -ENOMEM;
-        n->linked = false;
-        err = fat_create(r.parent->volume, r.parent->entry.first, r.name, 0, &n->entry);
-        if (err) { s->nodes = n->next; kfree(n); return px_error(err); }
+        n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+        err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, 0, &n->entry));
+        if (err) { node_forget(n); return px_error(err); }
         n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
         n->generation = r.parent->generation; r.node = n;
         px_changed_locked(n); px_changed_locked(r.parent);
     }
     if (flags & O_TRUNC) {
-        err = fat_truncate(r.node->volume, &r.node->entry, 0);
+        err = VFS_IO(s->vfs,fat_truncate(r.node->volume, &r.node->entry, 0));
         px_changed_locked(r.node);
         if (err) return px_error(err);
     }
@@ -492,9 +547,9 @@ int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *pat
     if (r.node) return -EEXIST;
     struct px_node *n = node_new(s, r.parent, PX_DIRECTORY);
     if (!n) return -ENOMEM;
-    n->linked = false;
-    err = fat_create(r.parent->volume, r.parent->entry.first, r.name, FAT_ATTR_DIR, &n->entry);
-    if (err) { s->nodes = n->next; kfree(n); return px_error(err); }
+    n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+    err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, FAT_ATTR_DIR, &n->entry));
+    if (err) { node_forget(n); return px_error(err); }
     n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
     n->generation = r.parent->generation;
     px_changed_locked(n); px_changed_locked(r.parent);
@@ -511,7 +566,7 @@ static int remove_node(struct px_node *n)
     if (retain && (!fat_native_ready || !fat_native_ready())) return -EIO;
     struct fat_entry entry = n->entry;
     if (retain) entry.first = 0; /* durable name removal, no chain release */
-    int err = fat_remove(n->volume, &entry, directory(n));
+    int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &entry, directory(n)));
     if (err) return px_error(err);
     n->linked = false;
     if (retain) n->entry.index = UINT32_MAX;
@@ -522,13 +577,14 @@ static int remove_node(struct px_node *n)
 }
 int px_drop_locked(struct px_node *n)
 {
+    if (n->volume || n->ro) vfs_reserve_locked(n->space->vfs,vfs_drive_mask(n->drive));
     px_release(n);
     if (!n->ro && !n->refs && !n->linked && n->kind == PX_FILE && !legacy_open(n) && n->entry.first) {
         /* Detached media names are not open-unlinked files on a live FAT.
          * Closing an expired description must never release its old chain. */
         if (n->drive>=26 || n->space->vfs->generation[n->drive]!=n->generation ||
             n->space->vfs->volumes[n->drive]!=n->volume) { node_forget(n); return 0; }
-        int err = fat_remove(n->volume, &n->entry, false);
+        int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &n->entry, false));
         n->entry.first = 0; n->entry.size = 0;
         node_forget(n);
         return px_error(err);
@@ -555,12 +611,14 @@ int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *pa
 static int empty_directory(struct px_node *n)
 {
     struct fat_entry child; uint32_t cursor = 0; int err;
-    while (!(err = fat_next(n->volume, n->entry.first, &cursor, &child)))
+    while (!(err = VFS_IO(n->space->vfs,fat_next(n->volume, n->entry.first, &cursor, &child))))
         if (!path_equal(child.name, ".") && !path_equal(child.name, "..")) return -ENOTEMPTY;
     return err == -FS_ENOENT ? 0 : px_error(err);
 }
 int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
 {
+    int valid=px_validate(from); if (!valid) valid=px_validate(to); if (valid) return valid;
+    reserve_paths(s,cwd,from,to);
     struct px_path a, b;
     int err = px_resolve_locked(s, cwd, from, false, &a);
     if (!err) err = px_resolve_locked(s, cwd, to, true, &b);
@@ -598,15 +656,15 @@ int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *fr
         if (!fat_rename_replace || !fat_native_ready || !fat_native_ready()) return -EIO;
         bool legacy = b.node->kind == PX_FILE && legacy_open(b.node);
         bool retain = b.node->kind == PX_FILE && (b.node->refs || legacy);
-        err = fat_rename_replace(a.node->volume, &a.node->entry, &b.node->entry,
-                                 b.parent->entry.first, b.name, retain);
+        err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, &b.node->entry,
+                                 b.parent->entry.first, b.name, retain));
         if (b.node->entry.index == UINT32_MAX) {
             b.node->linked = false; px_changed_locked(b.node); node_forget(b.node);
         }
     } else if (fat_rename_replace) {
-        err = fat_rename_replace(a.node->volume, &a.node->entry, 0, b.parent->entry.first, b.name, false);
+        err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, 0, b.parent->entry.first, b.name, false));
     } else {
-        err = fat_rename(a.node->volume, &a.node->entry, b.parent->entry.first, b.name);
+        err = VFS_IO(s->vfs,fat_rename(a.node->volume, &a.node->entry, b.parent->entry.first, b.name));
     }
     if (!err) {
         a.node->parent = b.parent;
@@ -621,6 +679,10 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
 {
     struct px_node *dir = d->node, *n = 0;
     uint64_t listed_size = 0; int64_t listed_mtime = 0; uint8_t listed_type = 0;
+    if (dir==dir->space->mnt) {
+        uint32_t mask=0; for (unsigned i=3;i<26;i++) if (dir->space->vfs->ro_volumes[i]) mask|=1u<<i;
+        vfs_reserve_locked(dir->space->vfs,mask);
+    }
     int live=px_ro_check_locked(dir); if (live) return live;
     if (!directory(dir)) return -ENOTDIR;
     const char *name;
@@ -639,13 +701,13 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     } else if (dir == dir->space->root && d->position < 4) {
         n = d->position == 2 ? dir->space->mnt : dir->space->dev; name = n->entry.name;
     } else if (dir->ro) {
-        struct fs_ro_node entry; int err=fs_ro_next(dir->ro,dir->ro_id,&cursor,&entry);
+        struct fs_ro_node entry; int err=VFS_IO(dir->space->vfs,fs_ro_next(dir->ro,dir->ro_id,&cursor,&entry));
         if (err) { px_ro_check_locked(dir); return err==-FS_ENOENT ? 0 : px_error(err); }
         n=ro_node_entry(dir->space,dir,&entry); if (!n) return -ENOMEM; name=n->entry.name;
     } else {
         struct fat_entry entry; int err;
         for (;;) {
-            err = fat_next(dir->volume, dir->entry.first, &cursor, &entry);
+            err = VFS_IO(dir->space->vfs,fat_next(dir->volume, dir->entry.first, &cursor, &entry));
             if (err) return err == -FS_ENOENT ? 0 : px_error(err);
             if (path_equal(entry.name, ".") || path_equal(entry.name, "..")) continue;
             if (dir == dir->space->root && (path_equal(entry.name, "mnt") || path_equal(entry.name, "dev"))) continue;

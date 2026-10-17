@@ -263,7 +263,7 @@ retry:
 }
 static unsigned meta_needed(unsigned data) { return data>1 ? (data-1+PAGES_PER_META-1)/PAGES_PER_META : 0; }
 int cache_init(struct block_cache *c, size_t bytes) {
-    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_lock_classify(&c->lock,3,0);
+    memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_lock_classify(&c->lock,3,0); fs_lock_classify(&c->workspace_lock,3,0);
     if (!bytes) bytes=CACHE_DEFAULT_BYTES;
     if (bytes<8192 || bytes>32u*1024u*1024u) { cache_destroy(c); return -FS_EINVAL; }
     size_t pages=bytes/4096;

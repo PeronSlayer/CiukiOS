@@ -9,13 +9,13 @@
 #pragma weak audio_device_close
 
 static uint32_t file_descriptions;
-uint32_t file_description_count(void) { return file_descriptions; }
+uint32_t file_description_count(void) { return __atomic_load_n(&file_descriptions,__ATOMIC_RELAXED); }
 static int image_open(void *cwd, const char *path, struct ciuki_file *out);
 static void reserved_ref(struct proc_object *o) { (void)o; }
 static struct proc_object reserved_slot = { reserved_ref, reserved_ref, false };
 static void file_retain(struct proc_object *object)
 {
-    ((struct file_description *)object)->references++;
+    __atomic_add_fetch(&((struct file_description *)object)->references,1,__ATOMIC_RELAXED);
 }
 static void file_release(struct proc_object *object)
 {
@@ -55,24 +55,25 @@ struct file_description *file_description_new(uint32_t flags)
     if (!d) return 0;
     d->object = (struct proc_object){ file_retain, file_release, true };
     d->references = 1; d->stream = 1; d->flags = flags & (O_ACCMODE | O_APPEND | O_NONBLOCK);
-    file_descriptions++;
+    __atomic_add_fetch(&file_descriptions,1,__ATOMIC_RELAXED);
     return d;
 }
 int file_description_close(struct file_description *d)
 {
-    if (--d->references) return 0;
+    if (__atomic_sub_fetch(&d->references,1,__ATOMIC_ACQ_REL)) return 0;
     int err = 0;
     if (audio_device_close) audio_device_close(d);
     if (d->node) {
         struct px_namespace *s = d->node->space;
-        fs_lock_take(&s->vfs->lock);
+        vfs_lock(s->vfs,0);
+        if (d->node->volume || d->node->ro) vfs_reserve_locked(s->vfs,vfs_drive_mask(d->node->drive));
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
         err = px_drop_locked(d->node);
-        fs_lock_drop(&s->vfs->lock);
+        vfs_unlock(s->vfs);
     }
-    file_descriptions--; kfree(d);
+    __atomic_sub_fetch(&file_descriptions,1,__ATOMIC_RELAXED); kfree(d);
     return err;
 }
 int file_close(struct process *p, int32_t fd)
@@ -141,13 +142,13 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
     if (!d) return -ENOMEM;
     p->fds[slot] = (struct proc_fd){ &reserved_slot, FD_CLOEXEC };
     px_retain(cwd);
-    fs_lock_take(&cwd->space->vfs->lock);
+    vfs_lock(cwd->space->vfs,0);
     struct proc_thread *t = proc_thread_for(g_current);
     err = t && (t->process->state == PROC_STOPPING || proc_signal_caught(t)) ? -EINTR : px_open_locked(cwd->space, cwd, path, flags, d);
     px_release(cwd);
     if (!err) p->fds[slot] = (struct proc_fd){ &d->object, flags & O_CLOEXEC ? FD_CLOEXEC : 0 };
     else p->fds[slot] = (struct proc_fd){ 0 };
-    fs_lock_drop(&cwd->space->vfs->lock);
+    vfs_unlock(cwd->space->vfs);
     if (err) file_description_close(d);
     return err ? err : slot;
 }
@@ -192,8 +193,8 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     uint64_t position = positioned ? offset : write && (d->flags & O_APPEND) ? n->entry.size : d->position;
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
     struct fat_entry before = n->entry;
-    int err = n->ro ? fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done) : write ? fat_write(n->volume, &n->entry, position, buffer, bytes, done) :
-                      fat_read(n->volume, &n->entry, position, buffer, bytes, done);
+    int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) : write ? VFS_IO(d->node->space->vfs,fat_write(n->volume, &n->entry, position, buffer, bytes, done)) :
+                      VFS_IO(d->node->space->vfs,fat_read(n->volume, &n->entry, position, buffer, bytes, done));
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* fat_write reports the committed count even if the later FSInfo hint
      * fails. An in-place overwrite can leave the whole entry unchanged;
@@ -215,15 +216,16 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     if (length > INT64_MAX) return -EINVAL;
     if (length > UINT32_MAX) return -EFBIG;
     struct fat_entry before = d->node->entry;
-    int err = fat_truncate(d->node->volume, &d->node->entry, length);
+    int err = VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
     if (memcmp(&before, &d->node->entry, sizeof(before))) px_changed_locked(d->node);
     return err == -FS_EACCES ? -EROFS : px_error(err);
 }
 int file_sync_locked(struct file_description *d)
 {
+    int live=px_ro_check_locked(d->node); if (live) return live;
     if (d->node->ro) return px_ro_check_locked(d->node);
     if (!d->node->volume) return -EINVAL;
-    return px_error(fat_commit(d->node->volume));
+    return px_error(VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
 }
 int files_stdio(struct process *p)
 {
@@ -292,7 +294,7 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     struct file_image *image = kzalloc(sizeof(*image));
     if (!image) return -ENOMEM;
     struct px_namespace *s = cwd->space;
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     struct px_path r;
     int err = px_resolve_locked(s, cwd, path, false, &r);
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
@@ -306,8 +308,8 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
         uint32_t bytes = image->bytes - offset;
         if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
         size_t done = 0;
-        err = px_error(r.node->ro ? fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done) :
-                       fat_read(r.node->volume, &r.node->entry, offset, buffer, bytes, &done));
+        err = px_error(r.node->ro ? VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)) :
+                       VFS_IO(s->vfs,fat_read(r.node->volume, &r.node->entry, offset, buffer, bytes, &done)));
         proc_launch_volume_read(bytes, done);
         if (!err && done != bytes) err = -EIO;
         for (uint32_t off=0; !err && off<bytes; off+=PAGE_SIZE) {
@@ -327,7 +329,7 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
         }
     }
     fs_contig_free(buffer,buffer_bytes);
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     if (err) { image_close(image); return err; }
     *out = (struct ciuki_file){ image, image->bytes, image_read, image_close };
     return 0;

@@ -97,6 +97,7 @@ bool f2_files_post_commit_fault(void)
     fault_node.space = &fault_space; fault_node.volume = &fault_volume; fault_node.kind = PX_FILE;
     fault_node.linked = true; fault_node.drive = 2; fault_node.generation = fault_vfs.generation[2];
     if (!err) err = fat_create(&fault_volume, 2, "fault.bin", 0, &fault_node.entry);
+    vfs_lock(&fault_vfs,vfs_drive_mask(2));
     struct file_description d = { .node = &fault_node, .flags = O_RDWR };
     size_t done = 0;
     if (!err) err = file_io_locked(&d, "old", 3, true, false, 0, &done);
@@ -114,7 +115,7 @@ bool f2_files_post_commit_fault(void)
     rec_emit("fd-table", "DATA", "case=post-commit-fault owner=synthetic_block issued_errors=%u count=%u error=%d fsync=%d sticky=%d committed=%u quarantined=%u",
              fault_disk.failures, (unsigned)done, err, sync, again, fault_node.entry.size == 515, fault_disk.dev.quarantined);
     /* Destroy discards only this disposable device's dirty/error state. */
-    vfs_destroy(&fault_vfs); cache_destroy(&fault_cache);
+    vfs_unlock(&fault_vfs); vfs_destroy(&fault_vfs); cache_destroy(&fault_cache);
     return pass;
 }
 
@@ -168,19 +169,19 @@ static int kernel_io(struct process *p, int fd, void *b, unsigned bytes, bool wr
     struct file_description *d = file_fd(p, fd);
     if (!d) return -EBADF;
     size_t done;
-    fs_lock_take(&d->node->space->vfs->lock);
+    vfs_lock(d->node->space->vfs,0);
     int err = file_io_locked(d, b, bytes, wr, positioned, off, &done);
-    fs_lock_drop(&d->node->space->vfs->lock);
+    vfs_unlock(d->node->space->vfs);
     return done ? (int)done : err;
 }
 static int namespace_op(struct process *p, unsigned op, const char *a, const char *b)
 {
     struct px_node *cwd = p->cwd;
-    fs_lock_take(&cwd->space->vfs->lock);
+    vfs_lock(cwd->space->vfs,0);
     int err = op == 0 ? px_mkdir_locked(cwd->space, cwd, a, 0777) :
               op == 1 ? px_rename_locked(cwd->space, cwd, a, b) :
                         px_remove_locked(cwd->space, cwd, a, op == 2);
-    fs_lock_drop(&cwd->space->vfs->lock); return err;
+    vfs_unlock(cwd->space->vfs); return err;
 }
 static bool kernel_cases(struct process *p)
 {
@@ -210,7 +211,7 @@ static bool kernel_cases(struct process *p)
     pass &= observed("status", 0, file_fcntl(p, a, F_SETFL, 0));
     pass &= observed("status-shared", O_RDWR, file_fcntl(p, b, F_GETFL, 0));
     struct px_namespace *s = ((struct px_node *)p->cwd)->space;
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     int64_t position = 0;
     struct fat_volume *seek_volume = file_fd(p, a)->node->volume;
     uint32_t free_before = seek_volume->free_clusters;
@@ -218,12 +219,12 @@ static bool kernel_cases(struct process *p)
     pass &= !seek_result;
     pass &= position == (int64_t)UINT32_MAX + 10;
     record_seek(position, seek_result, free_before, seek_volume->free_clusters);
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     pass &= observed("efbig", -EFBIG, kernel_io(p, a, "x", 1, true, false, 0));
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     pass &= !file_truncate_locked(file_fd(p, a), sizeof(bytes));
     pass &= !file_sync_locked(file_fd(p, a));
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     pass &= observed("grown-read", sizeof(bytes), kernel_io(p, a, bytes, sizeof(bytes), false, true, 0));
     pass &= !record_growth(bytes, sizeof(bytes));
     struct process *child = 0;
@@ -269,7 +270,7 @@ static bool kernel_cases(struct process *p)
     pass &= observed("case-rename", 0, namespace_op(p, 1, "/tmp/F2Move", "/tmp/f2move"));
     pass &= observed("cross-directory", 0, namespace_op(p, 1, "/tmp/f2move", "/tmp/F2Dest/Moved"));
     char cwd[CIUKI_PATH_MAX];
-    fs_lock_take(&s->vfs->lock); err = px_getcwd_locked(p->cwd, cwd); fs_lock_drop(&s->vfs->lock);
+    vfs_lock(s->vfs,0); err = px_getcwd_locked(p->cwd, cwd); vfs_unlock(s->vfs);
     pass &= !err && !strncmp(cwd, "/tmp/F2Dest/Moved", sizeof("/tmp/F2Dest/Moved"));
     rec_emit("fd-table", "DATA", "operation=cwd expected=/tmp/F2Dest/Moved observed=%s", err ? "error" : cwd);
     pass &= !px_chdir(p, "/");
@@ -288,14 +289,14 @@ static bool kernel_cases(struct process *p)
     else {
         struct ciuki_dirent ent; uint64_t cookie = 0; int n;
         struct sha256_ctx names; sha256_init(&names);
-        fs_lock_take(&s->vfs->lock);
+        vfs_lock(s->vfs,0);
         while ((n = px_getdents_locked(file_fd(p, dir), &ent)) > 0) {
             pass &= n == (int)sizeof(ent) && ent.d_reclen == sizeof(ent) && ent.d_off == (int64_t)++cookie && ent.d_namlen == strlen(ent.d_name);
             sha256_update(&names, ent.d_name, strlen(ent.d_name) + 1);
         }
         pass &= !n && !file_seek_locked(file_fd(p, dir), 0, SEEK_SET, &position);
         pass &= px_getdents_locked(file_fd(p, dir), &ent) == (int)sizeof(ent) && ent.d_off == 1 && !strncmp(ent.d_name, ".", 2);
-        fs_lock_drop(&s->vfs->lock);
+        vfs_unlock(s->vfs);
         rec_emit("fd-table", "DATA", "operation=getdents records=%llu record_bytes=%u rewind_cookie=%lld", cookie, (unsigned)sizeof(ent), ent.d_off);
         record_directory_digest(&names);
         file_close(p, dir);
@@ -304,14 +305,14 @@ static bool kernel_cases(struct process *p)
     if (replaced < 0) pass = false;
     else {
         pass &= observed("replace", 0, namespace_op(p, 1, "/tmp/f2-kernel-a.bin", "/tmp/f2-replaced.bin"));
-        struct ciuki_stat st; fs_lock_take(&s->vfs->lock);
+        struct ciuki_stat st; vfs_lock(s->vfs,0);
         pass &= !px_stat_locked(file_fd(p, replaced)->node, &st) && st.st_nlink == 0;
-        fs_lock_drop(&s->vfs->lock); file_close(p, replaced);
+        vfs_unlock(s->vfs); file_close(p, replaced);
     }
     pass &= observed("unlink-open", 0, namespace_op(p, 3, "/tmp/f2-replaced.bin", 0));
-    struct ciuki_stat st; fs_lock_take(&s->vfs->lock);
+    struct ciuki_stat st; vfs_lock(s->vfs,0);
     pass &= !px_stat_locked(file_fd(p, a)->node, &st) && !st.st_nlink;
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     rec_emit("fd-table", "DATA", "operation=fstat-unlinked inode=%llu links=%u size=%lld", st.st_ino, st.st_nlink, st.st_size);
     while ((result = file_dup(p, a, 0, false, 0)) >= 0) { }
     record_slots(p);
@@ -333,9 +334,9 @@ static bool durable_cases(struct process *owner)
     if (fd < 0) return observed("durable-create", 0, fd);
     bool pass = observed("durable-write", sizeof(content) - 1,
                          kernel_io(owner, fd, (void *)content, sizeof(content) - 1, true, false, 0));
-    fs_lock_take(&file_fd(owner, fd)->node->space->vfs->lock);
+    vfs_lock(file_fd(owner, fd)->node->space->vfs,0);
     int err = file_sync_locked(file_fd(owner, fd));
-    fs_lock_drop(&file_fd(owner, fd)->node->space->vfs->lock);
+    vfs_unlock(file_fd(owner, fd)->node->space->vfs);
     pass = observed("durable-fsync", 0, err) && pass;
     pass = !file_close(owner, fd) && pass;
     fd = file_open(owner, path, O_RDONLY, 0);

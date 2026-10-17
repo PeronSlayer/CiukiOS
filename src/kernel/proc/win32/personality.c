@@ -103,9 +103,9 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     char *path = P2V(scratch); /* image metadata no longer needed */
     if (!err && p->cwd) {
         struct px_node *cwd = p->cwd;
-        fs_lock_take(&cwd->space->vfs->lock);
+        vfs_lock(cwd->space->vfs,0);
         err = px_getcwd_locked(cwd, path);
-        fs_lock_drop(&cwd->space->vfs->lock);
+        vfs_unlock(cwd->space->vfs);
     }
     else { path[0] = '/'; path[1] = 0; }
     if (!err) err = ua_write(p->memory, at, path, (uint32_t)strlen(path) + 1);

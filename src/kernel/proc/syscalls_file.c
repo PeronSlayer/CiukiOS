@@ -97,10 +97,10 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     bool write = tf->eax == CIUKI_SYS_WRITE || tf->eax == CIUKI_SYS_PWRITE;
     bool positioned = tf->eax == CIUKI_SYS_PREAD || tf->eax == CIUKI_SYS_PWRITE;
     struct file_description *d = op->description;
-    fs_lock_take(&d->node->space->vfs->lock);
+    vfs_lock(d->node->space->vfs,(d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
     int media_error=px_ro_check_locked(d->node);
     if (!media_error && write && d->node->ro) media_error=-EROFS;
-    fs_lock_drop(&d->node->space->vfs->lock);
+    vfs_unlock(d->node->space->vfs);
     if (media_error) return media_error;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
@@ -129,7 +129,7 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
     if (!op->buffer) return -ENOMEM;
     if (write && (err = copy_from_user(op->buffer, tf->ecx, bytes))) return err;
     struct vfs *v = d->node->space->vfs;
-    fs_lock_take(&v->lock);
+    vfs_lock(v,(d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
     if (caught()) err = -EINTR;
     uint64_t position = positioned ? (uint64_t)offset : write && (d->flags & O_APPEND) ? d->node->entry.size : d->position;
     /* Check the ENTIRE request before a permitted short transfer. */
@@ -152,7 +152,7 @@ static int byte_io(struct file_operation *op, const struct trap_frame *tf)
         if (copy) { d->position = saved_position; done = 0; err = copy; }
     }
     if (write && d->node->kind == PX_NULL && !err) done = tf->edx;
-    fs_lock_drop(&v->lock);
+    vfs_unlock(v);
     return done ? (int)done : err;
 }
 
@@ -174,7 +174,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
         if (!err) { op->buffer = fs_page_alloc(); if (!op->buffer) err = -ENOMEM; }
     }
     if (err) return err;
-    fs_lock_take(&d->node->space->vfs->lock);
+    vfs_lock(d->node->space->vfs,(d->node->volume || d->node->ro) ? vfs_drive_mask(d->node->drive) : 0);
     if (tf->eax != CIUKI_SYS_LSEEK64 && caught()) err = -EINTR;
     if (!err) switch (tf->eax) {
     case CIUKI_SYS_LSEEK64: {
@@ -216,7 +216,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     case CIUKI_SYS_FTRUNCATE: err = file_truncate_locked(d, (uint64_t)scalar64(tf->ecx, tf->edx)); break;
     default: err = -ENOSYS; break;
     }
-    fs_lock_drop(&d->node->space->vfs->lock);
+    vfs_unlock(d->node->space->vfs);
     return err;
 }
 
@@ -233,7 +233,7 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
         struct process view = *op->process; view.cwd = op->cwd;
         return file_open(&view, op->path[0], tf->ecx, tf->edx);
     }
-    fs_lock_take(&s->vfs->lock);
+    vfs_lock(s->vfs,0);
     if (caught()) err = -EINTR;
     if (!err) switch (tf->eax) {
     case CIUKI_SYS_MKDIR: err = px_mkdir_locked(s, op->cwd, op->path[0], tf->ecx); break;
@@ -259,7 +259,7 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
     }
     default: err = -ENOSYS; break;
     }
-    fs_lock_drop(&s->vfs->lock);
+    vfs_unlock(s->vfs);
     return err;
 }
 
@@ -315,9 +315,9 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
         err = !tf->ecx ? -EINVAL : !op->cwd ? -ENOENT : 0;
         if (!err) { op->path[0] = kmalloc(CIUKI_PATH_MAX); if (!op->path[0]) err = -ENOMEM; }
         if (!err) {
-            fs_lock_take(&op->cwd->space->vfs->lock);
+            vfs_lock(op->cwd->space->vfs,0);
             err = px_getcwd_locked(op->cwd, op->path[0]);
-            fs_lock_drop(&op->cwd->space->vfs->lock);
+            vfs_unlock(op->cwd->space->vfs);
         }
         if (!err) {
             uint32_t bytes = (uint32_t)strlen(op->path[0]) + 1;
