@@ -22,3 +22,12 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No change to the native full-screen provider or the SB16 model (f3-40 owns it). Keep the f3-38 presenter semantics (exact comparison, planar 2x path).
+
+## Review amendment (lead, 2026-10-17 08:35) — presenter cost must not rise
+
+The first delivery bounds the stretches (host replay 30 → 4 ms; max presenter segment 1335 → 19 µs) but its own DOOM replay shows presenter CPU per presented update 83 → 1005 µs and total presenter CPU 443 → 5288 ms: a 267 KB plane snapshot copied per sample plus a `CLOCK_THREAD_CPUTIME_ID`/TSC read at every cooperative point. On the T23 the guest runs natively, so presenter CPU is a direct loss of game time; that regression cannot ship. Required instead, on top of the delivery:
+
+1. Remove the plane snapshot and its 1 MiB of BSS: the scan reads the live planes between cooperative points; a guest store landing between two row groups may show in this or the next sample (tearing in a window is acceptable and is documented in `docs/design/execution-abi.md`); the f3-38 exact comparison keeps using the previous scanout bytes and a changed row is re-sampled next time.
+2. No clock read on the production cooperative path: `kpreempt_point()` only; segment timing exists solely in the host seam (compile-time) or once per sample, never per yield.
+3. Keep: 35/30 Hz sampling with present-on-change and the fast-flip exception, compositor tile yields, VM-creation chunked clear, VBE row yields, the IRQ-preference rule.
+4. Acceptance on the same DOOM replay pair: presenter µs per presented update ≤ 83 and total presenter CPU ≤ the before run; guest-emulator share ≥ before; cpustat replay stretch ≤ 4 ms; the full host suite and `python3 scripts/build_kernel.py` pass. Report the table again in `build/codex/f3-41-report.md` (amendment section).
