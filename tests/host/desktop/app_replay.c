@@ -133,6 +133,20 @@ static unsigned presents;
  * priority and so starved its own clients; an idle desktop presents nothing. */
 static uint64_t present_px, idle_px, idle_from = UINT64_MAX;
 
+/* Files now performs reads on a persistent worker. This replay's VFS has
+ * zero virtual I/O cost, so run a worker turn to its next mailbox wait before
+ * advancing the virtual clock. Slow I/O/preemption has a separate real-time
+ * test (files_async_test.c); do not depend on host pthread scheduling here. */
+struct files_worker_replay {
+    int used, go, runnable, done;
+    struct proc *owner;
+    pthread_t thread;
+    pthread_cond_t cv, *mailbox;
+    void *(*entry)(void *);
+    void *arg;
+};
+static struct files_worker_replay files_workers[MAX_PROCS], *running_worker;
+
 static void fail(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt);
@@ -248,6 +262,73 @@ static void run(struct proc *p)
     cur = p; p->go = 1;
     pthread_cond_signal(&p->cv);
     while (cur) pthread_cond_wait(&sched_cv, &big);
+}
+
+static void *files_worker_thread(void *arg)
+{
+    struct files_worker_replay *w=arg;
+    pthread_mutex_lock(&big);
+    while (!w->go) pthread_cond_wait(&w->cv,&big);
+    w->go=0; running_worker=w;
+    void *result=w->entry(w->arg);
+    w->done=1; running_worker=NULL; cur=NULL;
+    pthread_cond_signal(&sched_cv);pthread_mutex_unlock(&big);
+    return result;
+}
+int rp_files_worker_create(pthread_t *thread,const pthread_attr_t *attr,void *(*entry)(void *),void *arg)
+{
+    assert(cur && !running_worker);
+    for (unsigned i=0;i<MAX_PROCS;i++) if (!files_workers[i].used) {
+        struct files_worker_replay *w=&files_workers[i];
+        memset(w,0,sizeof(*w));w->used=w->runnable=1;w->owner=cur;w->entry=entry;w->arg=arg;
+        int e=pthread_cond_init(&w->cv,NULL);if(e){w->used=0;return e;}
+        e=pthread_create(&w->thread,attr,files_worker_thread,w);
+        if(e){pthread_cond_destroy(&w->cv);w->used=0;return e;}
+        *thread=w->thread;return 0;
+    }
+    return EAGAIN;
+}
+int rp_files_worker_signal(pthread_cond_t *condition)
+{
+    for (unsigned i=0;i<MAX_PROCS;i++) {
+        struct files_worker_replay *w=&files_workers[i];
+        if(w->used && !w->done && w->mailbox==condition)w->runnable=1;
+    }
+    return 0;
+}
+int rp_files_worker_wait(pthread_cond_t *condition,pthread_mutex_t *mutex)
+{
+    struct files_worker_replay *w=running_worker;assert(w && cur==w->owner);
+    w->mailbox=condition;w->runnable=0;
+    assert(!pthread_mutex_unlock(mutex));
+    cur=NULL;running_worker=NULL;pthread_cond_signal(&sched_cv);
+    while(!w->go)pthread_cond_wait(&w->cv,&big);
+    w->go=0;running_worker=w;assert(cur==w->owner);
+    return pthread_mutex_lock(mutex);
+}
+int rp_files_worker_join(pthread_t thread,void **result)
+{
+    for(unsigned i=0;i<MAX_PROCS;i++) {
+        struct files_worker_replay *w=&files_workers[i];
+        if(!w->used || !pthread_equal(w->thread,thread))continue;
+        while(!w->done)yield_until(vnow+MS);
+        int e=pthread_join(thread,result);
+        if(!e){pthread_cond_destroy(&w->cv);w->used=0;}
+        return e;
+    }
+    return ESRCH;
+}
+static int run_files_worker(void)
+{
+    for(unsigned i=0;i<MAX_PROCS;i++) {
+        struct files_worker_replay *w=&files_workers[i];
+        if(!w->used || !w->runnable || w->done)continue;
+        assert(!cur && !running_worker);cur=w->owner;w->go=1;
+        pthread_cond_signal(&w->cv);
+        while(cur)pthread_cond_wait(&sched_cv,&big);
+        return 1;
+    }
+    return 0;
 }
 
 /* ---- ciuki_* system calls -------------------------------------------------- */
@@ -1023,6 +1104,7 @@ int main(int argc, char **argv)
     int stage = 0; uint64_t arm_ns = 0, end_ns = 0;
     unsigned last_cp = 0;
     while (vnow < limit_ns) {
+        if (run_files_worker()) continue;
         /* Controller: survivor ready -> GATE_INTERACT -> its report -> 20 ms -> ARM. */
         if (stage == 0 && probe.reports && probe.survivor_ready) {
             if (!strcmp(case_name, "shell")) shell_window_history(desktop);

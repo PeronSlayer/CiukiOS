@@ -14,10 +14,11 @@
 static pthread_mutex_t poll_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t poll_changed=PTHREAD_COND_INITIALIZER;
 static int poll_hold, poll_entered, poll_release, poll_error;
+static pthread_t poll_frame;
 static int folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
 {
     int e=fake_vfs.list(ctx,path,flags,emit,arg);
-    if (!strcmp(path,DESK_FOLDER) && flags==FM_LIST_NAMES_ONLY) {
+    if (!strcmp(path,DESK_FOLDER) && flags==FM_LIST_NAMES_ONLY && !pthread_equal(pthread_self(),poll_frame)) {
         pthread_mutex_lock(&poll_lock);
         if (poll_hold) {
             poll_entered=1; pthread_cond_broadcast(&poll_changed);
@@ -73,7 +74,7 @@ static void close_message(void)
 { for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i); }
 int main(int argc,char **argv)
 {
-    assert(argc==3); out=argv[1]; fake_reset(); fake_image_tree();
+    assert(argc==3); poll_frame=pthread_self(); out=argv[1]; fake_reset(); fake_image_tree();
     fake_create(DESK_FOLDER,FM_DIR); fake_create(DESK_TRASH,FM_DIR);
     fake_create(DESK_FOLDER "/Projects",FM_DIR); fake_file(DESK_FOLDER "/readme.txt",5,20);
     fake_file(DESK_FOLDER "/Scene.BMP",58,1);

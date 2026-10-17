@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
@@ -18,10 +19,35 @@ enum {
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
-    T_JOB = 1, T_MEDIA
+    T_JOB = 1, T_MEDIA, T_BROWSER
 };
 #define PANE_TOP 92
 #define STATUS_H 20
+
+enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN };
+struct files_scan {
+    struct files_app state; /* Owned data only; never a UI or live model. */
+    struct fm_vfs source;
+    struct files_worker *worker;
+    unsigned revision;
+    enum scan_kind kind;
+    char target[FM_PATH];
+    int delta, error, changed, labels_changed;
+};
+struct files_worker {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    pthread_t thread;
+    struct files_scan *pending, *result;
+    unsigned revision;
+    int stopping, busy;
+};
+static int scan_submit(struct files_app *, enum scan_kind, const char *, int);
+static void scan_poll(struct files_app *);
+static void scan_stop(struct files_app *);
+static void open_item(struct files_app *, unsigned, int);
+static void command(struct files_app *, int);
+static int scan_cancelled(const struct files_scan *);
 
 static const struct du_menu_item file_template[] = {
     {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open with &CiukNote", C_OPEN_NOTE, 0, 0, 0},
@@ -255,8 +281,7 @@ static void places_build(struct files_app *a)
     static const char *const icons[] = {"place:computer", "place:applications", "place:documents", "place:system", "place:folder", "menu:control-panel", "place:desktop"};
     a->place_count = 0;
     for (unsigned i = 0; i < 7; i++) {
-        struct fm_meta meta;
-        if (i == 4 && (a->model.fs.stat_path(a->model.fs.ctx, paths[i], &meta) || meta.type != FM_DIR)) continue;
+        if (i == 4 && !a->games_available) continue;
         struct files_place *p = &a->places[a->place_count++];
         snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", paths[i]);
     }
@@ -294,7 +319,14 @@ static void tree_add(struct files_app *a, unsigned parent)
 {
     struct files_node *p = &a->tree[parent];
     struct names n = {.parent = p->path};
-    if (a->model.fs.list(a->model.fs.ctx, p->path, FM_LIST_NAMES_ONLY, collect_dir, &n)) { free(n.v); p->children = 0; return; }
+    int error = 0;
+    if (a->reading && fm_same_path(p->path, a->model.path)) {
+        /* Reuse the browser's directory snapshot instead of reading a slow
+         * current directory a second time for the tree. */
+        for (unsigned i = 0; i < a->model.count && !error; i++)
+            error = collect_dir(a->model.entries[i].name, &a->model.entries[i].meta, &n);
+    } else error = a->model.fs.list(a->model.fs.ctx, p->path, FM_LIST_NAMES_ONLY, collect_dir, &n);
+    if (error) { free(n.v); p->children = 0; return; }
     sort_names(&n);
     p->children = n.count > 0;
     if (!n.count) set_add(a->leaf, &a->leaf_count, p->path); else set_remove(a->leaf, &a->leaf_count, p->path);
@@ -377,10 +409,11 @@ static int media_drive(const char *path)
 }
 /* Content reads are restricted to arrival/generation or label-source changes.
  * Failures keep the previous successful cache and are retried by media ticks. */
-static int labels_refresh(struct files_app *a)
+static int labels_refresh(struct files_app *a, const struct files_scan *s)
 {
     int changed=0;
     for (unsigned d=3;d<26;d++) {
+        if (scan_cancelled(s)) break;
         struct files_drive_label *label=&a->drive_labels[d];
         if (!(a->media.removable_mask & (1u<<d))) {
             changed|=label->valid; memset(label,0,sizeof(*label)); continue;
@@ -429,9 +462,9 @@ static int removal_target(struct files_app *a)
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
-    int computer = !m->path[0];
+    int computer = !(a->loading ? a->loading_path : m->path)[0];
     char display[FM_PATH];
-    if (fm_display_path(display, m->path)) strcpy(display, "(path too long)");
+    if (fm_display_path(display, a->loading ? a->loading_path : m->path)) strcpy(display, "(path too long)");
     if (m->count > a->capacity) {
         unsigned cap = m->count + 32;
         struct du_item *rows = realloc(a->rows, cap * sizeof(*rows));
@@ -440,7 +473,7 @@ void files_update(struct files_app *a)
         if (texts) a->texts = texts;
         if (rows && texts) a->capacity = cap;
     }
-    unsigned count = m->count < a->capacity ? m->count : a->capacity;
+    unsigned count = a->loading ? 0 : m->count < a->capacity ? m->count : a->capacity;
     uint64_t folder_bytes = 0;
     for (unsigned i = 0; i < count; i++) {
         struct fm_entry *e = &m->entries[i];
@@ -462,18 +495,19 @@ void files_update(struct files_app *a)
     list->items = a->rows; list->count = count;
     list->active = m->active < count ? m->active : 0;
     list->sort = (int)m->sort; list->descending = m->descending;
-    du_set_text(list, "This folder is empty.");
+    du_set_text(list, a->loading ? "Loading..." : "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
     if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
     address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : named("type:folder", 16);
-    uint64_t bytes = 0; unsigned selected = fm_selected(m, &bytes), selected_files = 0;
+    uint64_t bytes = 0; unsigned selected = a->loading ? 0 : fm_selected(m, &bytes), selected_files = 0;
     for (unsigned i = 0; i < count; i++) selected_files += m->entries[i].selected && m->entries[i].meta.type == FM_FILE;
     char size[48] = "", left[200];
     /* Only the selection's size: a folder total would tie the status bar
      * (and the test digests) to unrelated file sizes such as the kernel's. */
     if (selected_files) files_size_text(size, sizeof(size), bytes);
     (void)folder_bytes;
-    if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
+    if (a->loading) snprintf(left, sizeof(left), "Loading...");
+    else if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
     else if (selected) snprintf(left, sizeof(left), "%u object(s) selected", selected);
     else snprintf(left, sizeof(left), "%u object(s)", count);
     snprintf(W(a, W_STATUS)->text, DU_TEXT_MAX, "%s\t%s\t%.*s", left, size, DU_TEXT_MAX - 252, display);
@@ -483,7 +517,7 @@ void files_update(struct files_app *a)
     W(a, C_UP)->disabled = (uint8_t)root;
     W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = W(a, C_DELETE)->disabled = computer || !selected;
     W(a, C_PASTE)->disabled = computer || !m->clipboard_count;
-    W(a, C_PROPERTIES)->disabled = (uint8_t)computer;
+    W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || computer);
     int target=removal_target(a);
     set_flag(a->file_items, 11, C_SAFE_REMOVE, DU_ITEM_DISABLED, target<3);
     for (unsigned i=0;i<11;i++) if (a->file_items[i].id==C_SAFE_REMOVE)
@@ -492,16 +526,16 @@ void files_update(struct files_app *a)
     set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, computer || selected != 1);
-    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, computer);
-    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, computer);
-    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, computer);
+    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer);
+    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer);
+    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || computer);
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || !m->clipboard_count);
     set_flag(a->go_items, 13, C_BACK, DU_ITEM_DISABLED, !m->history_at);
     set_flag(a->go_items, 13, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
     set_flag(a->go_items, 13, C_UP, DU_ITEM_DISABLED, root);
-    set_flag(a->go_items, 13, C_GO_GAMES, DU_ITEM_DISABLED, a->model.fs.stat_path(a->model.fs.ctx, "/Games", &(struct fm_meta){0}) != 0);
+    set_flag(a->go_items, 13, C_GO_GAMES, DU_ITEM_DISABLED, !a->games_available);
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -513,7 +547,8 @@ void files_update(struct files_app *a)
         if (a->place_items[i].selected) place = (int)i;
     }
     if (place >= 0) places->active = (unsigned)place;
-    if (a->tree_dirty) tree_build(a);
+    if (a->tree_dirty && !a->loading && a->worker && !a->job_active)
+        scan_submit(a, SCAN_TREE, NULL, 0);
     tree_items(a);
     a->ui->dirty = 1;
 }
@@ -559,34 +594,253 @@ static void rename_commit(struct files_app *a)
 }
 
 /* ---- navigation ---- */
-int files_navigate(struct files_app *a, const char *path)
+/* The mailbox lock protects pointer ownership only. All storage calls run
+ * outside it, and cancelled scans release their directory stream via list(). */
+static int scan_cancelled(const struct files_scan *s)
 {
-    if (a->rename_index >= 0) rename_hide(a);
-    int r = fm_navigate(&a->model, path);
-    if (r) {
-        char what[FM_PATH + 64]; snprintf(what, sizeof(what), "Cannot open '%s'.", path);
-        error_box(a, "Files", what, r);
-        files_update(a);
-        return r;
+    return s->revision != __atomic_load_n(&s->worker->revision, __ATOMIC_ACQUIRE);
+}
+struct scan_emit { struct files_scan *scan; fm_emit emit; void *arg; };
+static int scan_emit(const char *name, const struct fm_meta *meta, void *arg)
+{
+    struct scan_emit *e = arg;
+    return scan_cancelled(e->scan) ? -ECANCELED : e->emit(name, meta, e->arg);
+}
+static int scan_list(void *ctx, const char *path, unsigned flags, fm_emit emit, void *arg)
+{
+    struct files_scan *s = ctx;
+    if (scan_cancelled(s)) return -ECANCELED;
+    struct scan_emit e = {s, emit, arg};
+    int r = s->source.list(s->source.ctx, path, flags, scan_emit, &e);
+    return scan_cancelled(s) ? -ECANCELED : r;
+}
+static int scan_stat(void *ctx, const char *path, struct fm_meta *meta)
+{
+    struct files_scan *s = ctx;
+    if (scan_cancelled(s)) return -ECANCELED;
+    int r = s->source.stat_path(s->source.ctx, path, meta);
+    return scan_cancelled(s) ? -ECANCELED : r;
+}
+static void scan_free(struct files_scan *s)
+{
+    if (!s) return;
+    fm_destroy(&s->state.model);
+    free(s->state.tree);
+    free(s);
+}
+static int scan_sniff(struct files_scan *s)
+{
+    if (scan_cancelled(s)) return -ECANCELED;
+    int fd = s->source.open(s->source.ctx, s->target, 0);
+    if (fd < 0) return fd;
+    unsigned char h[20]; unsigned used = 0; int error = 0;
+    while (used < sizeof(h) && !scan_cancelled(s)) {
+        int n = s->source.read(s->source.ctx, fd, h + used, sizeof(h) - used);
+        if (n == -EINTR) continue;
+        if (n < 0) { error = n; break; }
+        if (!n) break;
+        if ((unsigned)n > sizeof(h) - used) { error = -EIO; break; }
+        used += (unsigned)n;
     }
-    struct du_widget *list = W(a, W_LIST);
-    list->scroll = list->hscroll = 0;
-    a->note[0] = 0; a->tree_dirty = 1;
-    files_update(a);   /* list items point into the new model entries */
-    du_list_ensure(list, list->active);
-    if (fm_same_path(a->model.path, "/system")) checkpoint(a, 1);
+    int closed = s->source.close(s->source.ctx, fd);
+    if (!error) error = closed;
+    if (scan_cancelled(s)) return -ECANCELED;
+    if (error) return error;
+    s->changed = used == sizeof(h) && !memcmp(h, "\177ELF\1\1\1", 7) && h[16] == 2 && h[18] == 3;
     return 0;
 }
-
-static void after_history(struct files_app *a, int r)
+static void *scan_run(void *arg)
 {
-    if (a->rename_index >= 0) rename_hide(a);
-    if (r && r != -ENOENT) error_box(a, "Files", "Cannot open the folder.", r);
-    struct du_widget *list = W(a, W_LIST);
-    list->scroll = list->hscroll = 0;
-    a->note[0] = 0; a->tree_dirty = 1;
+    struct files_worker *w = arg;
+    for (;;) {
+        pthread_mutex_lock(&w->lock);
+        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed, &w->lock);
+        if (w->stopping) { pthread_mutex_unlock(&w->lock); break; }
+        struct files_scan *s = w->pending; w->pending = NULL; w->busy = 1;
+        pthread_mutex_unlock(&w->lock);
+        struct files_app *a = &s->state;
+        if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
+        else {
+            if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
+                (s->kind == SCAN_NAVIGATE && !a->model.history_count)) {
+                struct ciuki_media_state state = a->media;
+                if (a->media_read && !scan_cancelled(s) && !a->media_read(&state)) {
+                    int d = media_drive(a->model.path);
+                    int expired = d >= 3 && (a->media.removable_mask & (1u << d)) &&
+                        (!(state.removable_mask & (1u << d)) || a->media.generation[d] != state.generation[d]);
+                    s->changed = memcmp(&state, &a->media, sizeof(state)) != 0;
+                    a->media = state;
+                    if (expired && s->kind == SCAN_MEDIA) {
+                        s->kind = SCAN_NAVIGATE; strcpy(s->target, FM_COMPUTER);
+                    }
+                }
+                if (!scan_cancelled(s)) s->labels_changed = labels_refresh(a, s);
+            }
+            if (s->kind == SCAN_NAVIGATE) s->error = fm_navigate(&a->model, s->target);
+            else if (s->kind == SCAN_HISTORY) s->error = fm_history(&a->model, s->delta);
+            else if (s->kind == SCAN_REFRESH || (s->kind == SCAN_MEDIA && s->changed)) s->error = fm_refresh(&a->model);
+            if (!s->error && !scan_cancelled(s) && (s->kind != SCAN_MEDIA || s->changed)) {
+                a->reading = s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY || s->kind == SCAN_REFRESH || (s->kind == SCAN_MEDIA && s->changed);
+                struct fm_meta meta;
+                a->games_available = !scan_stat(s, "/Games", &meta) && meta.type == FM_DIR;
+                tree_build(a);
+            }
+        }
+        pthread_mutex_lock(&w->lock);
+        struct files_scan *old = w->result;
+        if (scan_cancelled(s) || w->stopping) { w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(s); }
+        else { w->result = s; w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(old); }
+    }
+    return NULL;
+}
+static int scan_start(struct files_app *a)
+{
+    struct files_worker *w = calloc(1, sizeof(*w));
+    if (!w) return -ENOMEM;
+    int e = pthread_mutex_init(&w->lock, NULL);
+    if (e) { free(w); return -e; }
+    e = pthread_cond_init(&w->changed, NULL);
+    if (e) { pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    e = pthread_create(&w->thread, NULL, scan_run, w);
+    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    a->worker = w;
+    return 0;
+}
+static int scan_submit(struct files_app *a, enum scan_kind kind, const char *path, int delta)
+{
+    struct files_worker *w = a->worker;
+    if (!w) return -EIO;
+    struct files_scan *s = calloc(1, sizeof(*s));
+    if (!s) return -ENOMEM;
+    s->state.tree = calloc(FILES_TREE, sizeof(*s->state.tree));
+    if (!s->state.tree) { free(s); return -ENOMEM; }
+    struct files_app *b = &s->state;
+    memcpy(b->tree, a->tree, FILES_TREE * sizeof(*b->tree)); b->tree_count = a->tree_count;
+    b->games_available = a->games_available;
+    fm_init(&b->model, &a->model.fs);
+    memcpy(b->model.path, a->model.path, FM_PATH);
+    memcpy(b->model.history, a->model.history, sizeof(b->model.history));
+    b->model.history_count = a->model.history_count; b->model.history_at = a->model.history_at;
+    b->model.sort = a->model.sort; b->model.descending = a->model.descending;
+    memcpy(b->expanded, a->expanded, sizeof(b->expanded)); b->expanded_count = a->expanded_count;
+    memcpy(b->collapsed, a->collapsed, sizeof(b->collapsed)); b->collapsed_count = a->collapsed_count;
+    memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
+    b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
+    b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    s->kind = kind; s->delta = delta; s->worker = w; s->source = a->model.fs;
+    /* Only read callbacks are used through this cancellation adapter. */
+    b->model.fs = (struct fm_vfs){.ctx=s, .list=scan_list, .stat_path=scan_stat};
+    if (path) snprintf(s->target, sizeof(s->target), "%s", path);
+    pthread_mutex_lock(&w->lock);
+    s->revision = __atomic_add_fetch(&w->revision, 1, __ATOMIC_RELEASE);
+    struct files_scan *old = w->pending, *result = w->result;
+    w->pending = s; w->result = NULL;
+    pthread_cond_signal(&w->changed);
+    pthread_mutex_unlock(&w->lock);
+    scan_free(old); scan_free(result);
+    a->tree_dirty = 0; a->reading = 1;
+    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH) {
+        a->loading = 1;
+        snprintf(a->loading_path, sizeof(a->loading_path), "%s", kind == SCAN_REFRESH ? a->model.path : s->target);
+        if (kind == SCAN_HISTORY) {
+            int at = (int)a->model.history_at + delta;
+            if (at >= 0 && (unsigned)at < a->model.history_count) strcpy(a->loading_path, a->model.history[at]);
+        }
+        files_update(a);
+    }
+    return 0;
+}
+static void scan_poll(struct files_app *a)
+{
+    struct files_worker *w = a->worker;
+    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    struct files_scan *s = w->result; w->result = NULL;
+    pthread_mutex_unlock(&w->lock);
+    if (!s) return;
+    if (scan_cancelled(s)) { scan_free(s); return; }
+    struct files_app *b = &s->state;
+    a->reading = 0;
+    if (s->kind == SCAN_MEDIA && !s->error && !s->changed && !s->labels_changed) {
+        scan_free(s); return; /* An unchanged poll must not repaint the window. */
+    }
+    int tree_changed = a->tree_dirty;
+    if (s->kind == SCAN_OPEN) {
+        unsigned index = a->model.count;
+        for (unsigned i = 0; i < a->model.count; i++) {
+            char path[FM_PATH];
+            if (!fm_entry_path(&a->model, i, path) && !strcmp(path, s->target)) { index = i; break; }
+        }
+        if (s->error) error_box(a, "Files", "Cannot read the file:", s->error);
+        else if (index < a->model.count) {
+            a->model.entries[index].meta.exec = (uint32_t)s->changed;
+            /* The negative argument marks an already classified open. */
+            open_item(a, index, -1);
+        }
+        scan_free(s); return;
+    }
+    a->loading = 0;
+    if (s->error) {
+        if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
+    } else {
+        if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || s->changed)) {
+            struct fm_model *m = &a->model, *n = &b->model;
+            int refresh = s->kind == SCAN_REFRESH || s->kind == SCAN_MEDIA;
+            char active[FM_NAME] = "";
+            if (refresh && m->active < m->count) strcpy(active, m->entries[m->active].name);
+            if (refresh) for (unsigned i = 0; i < n->count; i++) for (unsigned j = 0; j < m->count; j++)
+                if (!strcmp(n->entries[i].name, m->entries[j].name)) n->entries[i].selected = m->entries[j].selected;
+            free(m->entries); m->entries = n->entries; n->entries = NULL;
+            m->count = n->count; m->capacity = n->capacity; m->active = n->active; m->anchor = n->anchor;
+            memcpy(m->path, n->path, FM_PATH); memcpy(m->history, n->history, sizeof(m->history));
+            m->history_count = n->history_count; m->history_at = n->history_at;
+            m->find_length = 0; m->find[0] = 0;
+            if (refresh) for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->entries[i].name)) m->active = m->anchor = i;
+            fm_sort(m, m->sort, m->descending);
+            if (!refresh) W(a, W_LIST)->scroll = W(a, W_LIST)->hscroll = 0;
+            if (a->select_created) {
+                fm_select_none(m);
+                for (unsigned i = 0; i < a->job.created_count; i++) fm_select_name(m, a->job.created[i], 1);
+            }
+        }
+        a->media = b->media; memcpy(a->drive_labels, b->drive_labels, sizeof(a->drive_labels));
+        a->games_available = b->games_available;
+        memcpy(a->tree, b->tree, FILES_TREE * sizeof(*a->tree)); a->tree_count = b->tree_count;
+        memcpy(a->leaf, b->leaf, sizeof(a->leaf)); a->leaf_count = b->leaf_count;
+        places_build(a); files_layout(a);
+    }
+    a->tree_dirty = tree_changed; a->select_created = 0;
     files_update(a);
-    du_list_ensure(list, list->active);
+    du_list_ensure(W(a, W_LIST), W(a, W_LIST)->active);
+    int stage = a->refresh_checkpoint; a->refresh_checkpoint = 0;
+    if (!s->error && fm_same_path(a->model.path, "/system")) checkpoint(a, 1);
+    if (!s->error && stage) checkpoint(a, stage);
+    int pending = s->error ? 0 : a->pending_command;
+    a->pending_command = 0;
+    scan_free(s);
+    if (pending) command(a, pending);
+}
+static void scan_stop(struct files_app *a)
+{
+    struct files_worker *w = a->worker;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock);
+    w->stopping = 1; __atomic_add_fetch(&w->revision, 1, __ATOMIC_RELEASE);
+    pthread_cond_signal(&w->changed);
+    pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread, NULL);
+    scan_free(w->pending); scan_free(w->result);
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    free(w); a->worker = NULL;
+}
+int files_navigate(struct files_app *a, const char *path)
+{
+    char target[FM_PATH]; int r = fm_posix_path(target, path);
+    if (r) { error_box(a, "Files", "Cannot open the folder.", r); return r; }
+    if (a->rename_index >= 0) rename_hide(a);
+    a->note[0] = 0; a->select_created = a->refresh_checkpoint = a->pending_command = 0;
+    r = scan_submit(a, SCAN_NAVIGATE, target, 0);
+    if (r) error_box(a, "Files", "Cannot open the folder.", r);
+    return r;
 }
 
 /* ---- opening ---- */
@@ -602,12 +856,19 @@ static int spawn(struct files_app *a, const char *program, char *const argv[])
 
 static void open_item(struct files_app *a, unsigned index, int with_note)
 {
-    if (index >= a->model.count) return;
+    if (a->loading || index >= a->model.count) return;
+    int classified = with_note < 0;
+    if (classified) with_note = 0;
     struct fm_entry *e = &a->model.entries[index];
     char path[FM_PATH];
     if (!a->model.path[0] && with_note) return;
     if (fm_entry_path(&a->model, index, path)) return;
     if (e->meta.type == FM_DIR && !with_note) { files_navigate(a, path); return; }
+    if (!with_note && !classified && e->meta.type == FM_FILE && !e->meta.exec && !strchr(e->name, '.')) {
+        int r = scan_submit(a, SCAN_OPEN, path, (int)index);
+        if (r) error_box(a, "Files", "Cannot open the file.", r);
+        return;
+    }
     enum fm_kind kind = fm_kind(e);
     if (e->meta.exec && !with_note) {
         char *argv[] = {(char *)e->name, NULL};
@@ -667,7 +928,7 @@ static void progress(struct files_app *a)
 
 static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
-    if (a->job_active) return -EBUSY;
+    if (a->job_active || a->loading) return -EBUSY;
     fm_job_destroy(&a->job);
     int r = fm_job_start(&a->job, &a->model.fs, kind, paths, n, destination);
     if (r) {
@@ -734,22 +995,18 @@ static void job_finished(struct files_app *a)
         files_update(a);
         return;
     }
-    fm_refresh(&a->model);
-    if ((kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path)) {
-        fm_select_none(&a->model);
-        for (unsigned i = 0; i < j->created_count; i++) fm_select_name(&a->model, j->created[i], 1);
-    }
+    a->select_created = (kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path);
+    scan_submit(a, SCAN_REFRESH, NULL, 0);
     if (kind == FM_MOVE && j->state == FM_DONE && !j->skipped && a->model.cut) fm_clipboard_consume(&a->model);
     if (j->state == FM_CANCELLED) snprintf(a->note, sizeof(a->note), "Cancelled; %u item(s) completed", j->completed);
     else if (j->state == FM_DONE)
         snprintf(a->note, sizeof(a->note), "%u item(s) %s%s%s", j->completed - j->skipped,
                  kind == FM_COPY ? "copied" : kind == FM_MOVE ? "moved" : "deleted",
                  j->skipped ? ", some skipped" : "", kind == FM_COPY && j->metadata_warnings ? " (dates not kept)" : "");
-    a->tree_dirty = 1;
     files_update(a);
     du_list_ensure(W(a, W_LIST), W(a, W_LIST)->active);
-    if (j->state == FM_DONE && !j->skipped && kind == FM_COPY && j->completed) checkpoint(a, 4);
-    if (j->state == FM_DONE && kind == FM_DELETE && j->completed) checkpoint(a, 5);
+    if (j->state == FM_DONE && !j->skipped && kind == FM_COPY && j->completed) a->refresh_checkpoint = 4;
+    if (j->state == FM_DONE && kind == FM_DELETE && j->completed) a->refresh_checkpoint = 5;
 }
 
 static void replace_prompt(struct files_app *a)
@@ -875,7 +1132,7 @@ static void context(struct files_app *a, const struct du_event *e)
 {
     a->popup_count = 0;
     struct fm_model *m = &a->model;
-    if (e->id == W_LIST && e->index >= 0 && (unsigned)e->index < m->count) {
+    if (!a->loading && e->id == W_LIST && e->index >= 0 && (unsigned)e->index < m->count) {
         if (!m->entries[e->index].selected) fm_select(m, (unsigned)e->index, 0); else fm_focus(m, (unsigned)e->index);
         const struct fm_entry *it = &m->entries[e->index];
         unsigned n = fm_selected(m, NULL);
@@ -957,6 +1214,12 @@ static void command(struct files_app *a, int id)
     m->find_length = 0;
     if (a->rename_index >= 0 && id != C_RENAME) rename_commit(a);
     if (du_dialog_id(a->ui)) return;
+    /* Enter and Ctrl+V may arrive in the same input batch. Preserve Paste
+     * for the accepted destination, then use the ordinary fm_job path. A new
+     * navigation clears it; no operation can target the hidden old rows. */
+    if (a->loading && id == C_PASTE) { a->pending_command = id; return; }
+    if (a->loading && (id == C_OPEN || id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
+        id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_SAFE_REMOVE || id == C_MUSIC)) return;
     if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
         id == C_PASTE_INTO || id == C_DELETE || id == C_RENAME || id == C_PROPERTIES || id == C_NEW_FOLDER || id == C_NEW_TEXT)) return;
     switch (id) {
@@ -975,9 +1238,16 @@ static void command(struct files_app *a, int id)
         else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
     }
-    case C_BACK: after_history(a, fm_history(m, -1)); break;
-    case C_FORWARD: after_history(a, fm_history(m, 1)); break;
-    case C_UP: after_history(a, fm_up(m)); if (fm_same_path(m->path, "/system")) checkpoint(a, 1); break;
+    case C_BACK: case C_FORWARD:
+        if ((id == C_BACK && m->history_at) || (id == C_FORWARD && m->history_at + 1 < m->history_count))
+            scan_submit(a, SCAN_HISTORY, NULL, id == C_BACK ? -1 : 1);
+        break;
+    case C_UP: {
+        char path[FM_PATH];
+        snprintf(path, sizeof(path), "%s", a->loading ? a->loading_path : m->path);
+        if (path[0]) { if (fm_drive_root(path)) path[0] = 0; else fm_parent(path, path); files_navigate(a, path); }
+        break;
+    }
     case C_GO_CONTROL: open_control(a); break;
     case C_GO_ROOT: files_navigate(a, FM_COMPUTER); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
@@ -1003,11 +1273,12 @@ static void command(struct files_app *a, int id)
     case C_SORT_NAME: case C_SORT_SIZE: case C_SORT_TYPE: case C_SORT_MODIFIED:
         fm_sort(m, (unsigned)(id - C_SORT_NAME), 0); files_update(a); break;
     case C_REFRESH: {
+        if (a->loading) { char path[FM_PATH]; strcpy(path, a->loading_path); files_navigate(a, path); break; }
         for (unsigned d=3;d<26;d++) a->drive_labels[d].valid=0;
-        labels_refresh(a);
-        int r = fm_refresh(m);
+        a->note[0] = 0;
+        int r = scan_submit(a, SCAN_REFRESH, NULL, 0);
         if (r) error_box(a, "Files", "Cannot refresh the folder:", r);
-        places_build(a); files_layout(a); a->tree_dirty = 1; a->note[0] = 0; files_update(a); break;
+        break;
     }
     case C_OPEN: if (fm_selected(m, NULL)) open_item(a, m->active < m->count && m->entries[m->active].selected ? m->active : 0, 0); break;
     case C_MUSIC: {
@@ -1058,6 +1329,7 @@ int files_close_request(struct files_app *a)
 
 static void list_select(struct files_app *a, const struct du_event *e)
 {
+    if (a->loading) return;
     struct fm_model *m = &a->model;
     a->note[0] = 0;
     if (e->index < 0) {
@@ -1116,24 +1388,18 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
     if (du_dialog_id(a->ui) && e->type != DU_EV_TICK && e->type != DU_EV_DIALOG && e->type != DU_EV_FOCUS) return;
     switch (e->type) {
     case DU_EV_DRAG:
-        if (e->id==W_LIST && a->drop && !a->job_active && !fm_clipboard(&a->model,!(e->modifiers&DU_CTRL)) && !fm_clipboard_save(&a->model))
+        if (e->id==W_LIST && a->drop && !a->loading && !a->job_active && !fm_clipboard(&a->model,!(e->modifiers&DU_CTRL)) && !fm_clipboard_save(&a->model))
             a->drop(a,e->x,e->y,(e->modifiers&DU_CTRL)!=0);
         break;
     case DU_EV_TICK:
         if (e->id == T_JOB) job_tick(a);
-        else if (e->id == T_MEDIA && a->media_read && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
-            struct ciuki_media_state state={0};
-            if (!a->media_read(&state)) {
-                int drive=media_drive(a->model.path);
-                int expired=drive>=3 && (a->media.removable_mask & (1u<<drive)) &&
-                    (!(state.removable_mask & (1u<<drive)) || a->media.generation[drive]!=state.generation[drive]);
-                int changed=memcmp(&state,&a->media,sizeof(state))!=0;
-                a->media=state;
-                int labels_changed=labels_refresh(a);
-                if (changed) a->tree_dirty=1;
-                if (expired) files_navigate(a,FM_COMPUTER);
-                else if (changed) { fm_refresh(&a->model); files_update(a); }
-                else if (labels_changed) files_update(a);
+        else if (e->id == T_BROWSER) scan_poll(a);
+        else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
+            struct files_worker *w = a->worker;
+            if (w && !pthread_mutex_trylock(&w->lock)) {
+                int idle = !w->busy && !w->pending && !w->result;
+                pthread_mutex_unlock(&w->lock);
+                if (idle) scan_submit(a, SCAN_MEDIA, NULL, 0);
             }
         }
         break;
@@ -1193,8 +1459,6 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->width = u->canvas.width; a->height = u->canvas.height;
     a->rename_index = -1; a->split = a->width >= 700 ? 180 : 150;
     fm_init(&a->model, fs);
-    if (a->media_read && a->media_read(&a->media)) memset(&a->media,0,sizeof(a->media));
-    labels_refresh(a);
     a->tree = calloc(FILES_TREE, sizeof(*a->tree));
     a->tree_items = calloc(FILES_TREE, sizeof(*a->tree_items));
     if (!a->tree || !a->tree_items) return -ENOMEM;
@@ -1239,6 +1503,9 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     places_build(a);
     files_layout(a);
     du_focus(u, W_LIST);
+    int worker_error = scan_start(a);
+    if (worker_error) return worker_error;
+    du_timer_start(u, T_BROWSER, 20000000u, 1);
     if (files_navigate(a, path ? path : FM_COMPUTER)) {
         du_dialog_close(u);
         if (files_navigate(a, FM_COMPUTER)) return -EIO;
@@ -1250,6 +1517,8 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
 void files_destroy(struct files_app *a)
 {
     du_timer_stop(a->ui,T_MEDIA);
+    du_timer_stop(a->ui,T_BROWSER);
+    scan_stop(a);
     if (a->job_active) { fm_job_cancel(&a->job); fm_job_step(&a->job); }
     fm_job_destroy(&a->job);
     fm_destroy(&a->model);
@@ -1259,7 +1528,7 @@ void files_destroy(struct files_app *a)
 
 void files_drop(struct files_app *a, int x, int y, int copy)
 {
-    if (a->job_active || du_dialog_id(a->ui) || a->rename_index>=0) return;
+    if (a->loading || a->job_active || du_dialog_id(a->ui) || a->rename_index>=0) return;
     char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",a->model.path);
     int index=du_list_hit(W(a,W_LIST),x,y);
     if (index>=0 && (unsigned)index<a->model.count && a->model.entries[index].meta.type==FM_DIR)

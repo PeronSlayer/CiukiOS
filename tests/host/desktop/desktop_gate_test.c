@@ -379,8 +379,8 @@ static int gate_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     if (!strcmp(path,"/")) return emit("Documents",&meta,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
     assert(!strcmp(path,DESK_FOLDER));
-    if (flags==FM_LIST_NAMES_ONLY) {
-        assert(!pthread_equal(pthread_self(),gate_main_thread));
+    /* Initial/explicit browser reads are cheap too; stall only the poll. */
+    if (flags==FM_LIST_NAMES_ONLY && !pthread_equal(pthread_self(),gate_main_thread)) {
         atomic_store(&gate_folder_entered,1);
         while (!atomic_load(&gate_folder_release)) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
     }

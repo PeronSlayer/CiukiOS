@@ -42,7 +42,7 @@ class DesktopFolderTests(unittest.TestCase):
             converter=importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
             portrait=folder / 'portrait.xrgb';portrait.write_bytes(converter.convert(ROOT / 'assets/brand/ciuki-logo.png'))
             frames=folder / 'frames';frames.mkdir()
-            result=subprocess.run([str(binary),str(frames),str(portrait)],capture_output=True,text=True,env=env)
+            result=subprocess.run([str(binary),str(frames),str(portrait)],capture_output=True,text=True,env=env,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
             print(result.stdout.strip())
             for raw in frames.glob('*.xrgb'):

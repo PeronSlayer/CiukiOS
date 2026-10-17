@@ -473,6 +473,7 @@ class DesktopTests(unittest.TestCase):
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
             subprocess.run([str(binary), "--autoplay-startup"], check=True, env=env, timeout=20)
             subprocess.run([str(binary), "--slow-stick-folder"], check=True, env=env, timeout=20)
+            subprocess.run([str(binary), "--slow-media-panel"], check=True, env=env, timeout=15)
             result = subprocess.run([str(binary), "--poll-handles"], check=True, env=env, capture_output=True, text=True)
             print(result.stdout, end="")
             for kind, fd in (("net", 20), ("mixer", 21), ("media", 22)):
@@ -695,7 +696,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
-                 ("files_app", posix, ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
+                 ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
                  ("files_transfer", posix, ROOT / "apps/files/transfer.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),

@@ -162,6 +162,7 @@ static void test_wallpaper_boot(const char *directory)
         desk_wall_worker_stop(&wallpaper_worker); wallpaper_worker_started=0;
         cfg_writer_stop(&settings_writer); settings_writer_started=0;
         desk_autoplay_stop(&d);
+        observers_close(&d);
         desk_folder_destroy(&d); drop_all(&d); desk_render_release(&d);
         free(d.sh.wall); free(d.sh.background); free(d.pixels); free(portrait); free(perf_scanout);
         boot_cache_directory=NULL; fake_reset();
