@@ -63,7 +63,7 @@ enum dosvm_vga_reg { DOSVM_VGA_SR_INDEX, DOSVM_VGA_SR_MASK, DOSVM_VGA_SR_OTHER,
 struct dosvm_perf_sample {
     uint32_t return_hits, return_segmented, return_fallbacks;
     uint32_t return_armed, return_expired, return_reacquired;
-    uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows;
+    uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows, present_rate;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
     uint32_t cost_count[DOSVM_COST_COUNT], batched;
@@ -80,6 +80,7 @@ struct dosvm_perf_sample {
 /* Raw cumulative scalars captured with the interval tables detached. Only
  * the reporter reads this bank; producers use the other bank after IF restore. */
 struct dosvm_perf_raw {
+    uint32_t present_rate;
     uint32_t return_hits, return_segmented, return_fallbacks;
     uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
@@ -173,6 +174,10 @@ struct dosvm {
     unsigned video_blank;      /* read index in the vertical blank, 0 outside */
     uint64_t video_vblank_us;  /* host time (us) the next vertical blank is due */
     uint64_t video_tick;
+    uint64_t video_due_us, video_period_us;
+    uint64_t video_flip_us;
+    unsigned video_flip_run, video_present_rate;
+    bool video_flip_seen;
     uint32_t video_display, video_changes, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
     /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
@@ -305,6 +310,7 @@ void dosvm_console_byte(struct dosvm *, uint8_t);
 void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
+const struct task *dosvm_task_irq(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 bool dosvm_io_fast(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, int *);
 uint64_t dosvm_perf_clock(void);
@@ -314,6 +320,7 @@ void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);
 struct dosvm *dosvm_lookup(struct dosvm_key);
 int dosvm_vga_init(struct dosvm *);
+void cvbios_init_point(const cvbios *);
 int dosvm_vga_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 int dosvm_vga_bios(struct dosvm *, struct v86_frame *);
 struct ciuki_rect;

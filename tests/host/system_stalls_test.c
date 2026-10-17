@@ -53,6 +53,34 @@ static struct replay_result replay(bool cooperative)
     CHECK(strstr(records,"[cpu] window_ms=3000") && strstr(records,"[kernel] long_paths"));
     return out;
 }
+static unsigned presentation_replay(bool cooperative)
+{
+    reset();
+    strcpy(hog.name,"dosbox"); strcpy(ui.name,"desktop");
+    hog.prio = ui.prio = P_NORMAL; ui.user = false;
+    audio_focus = irq_focus = &normal;
+    rq_push(&normal); rq_push(&hog); rq_push(&ui); schedule();
+    unsigned rows[2] = {0}, chunk = 0;
+    while (g_ticks < 500) {
+        if (g_current == &normal) {
+            cpu_user_return(); run_tick(0x1234);
+            if (g_need_resched) schedule();
+        } else {
+            CHECK(g_current == &hog || g_current == &ui);
+            rows[g_current == &ui]++;
+            run_tick(0xc011abcd); chunk++;
+            if (chunk == (cooperative ? 4u : 30u)) { chunk = 0; kpreempt_point(); }
+        }
+    }
+    cpu_point();
+    unsigned maximum = ms(stretch_max);
+    g_boot.flags = CBI_F_VERBOSE; cpu_emit();
+    CHECK(strstr(records,"[kernel] stretch_max_ms=") && rows[0] && rows[1]);
+    if (cooperative) CHECK(hog.max_stretch <= 4 * per_ms() && ui.max_stretch <= 4 * per_ms());
+    printf("F3-41 cpustat replay cooperative=%u stretch_max_ms=%u presenter_rows=%u compositor_tiles=%u\n",
+           cooperative, maximum, rows[0], rows[1]);
+    return maximum;
+}
 int main(void)
 {
     struct replay_result before=replay(false),after=replay(true);
@@ -61,6 +89,8 @@ int main(void)
     CHECK(before.usb_delay>=750 && before.desktop_gap>=1000);
     CHECK(after.usb_delay<=16 && after.desktop_gap<=32 && after.frames>before.frames);
     for(unsigned i=0;i<3;i++)CHECK(after.scans[i]>=11 && after.scans[i]>before.scans[i]);
+    unsigned stretch_before = presentation_replay(false), stretch_after = presentation_replay(true);
+    CHECK(stretch_before >= 28 && stretch_after <= 4);
     puts("PASS F0-20 replay ported to cpustat: three P_DEVICE workers and P_NORMAL desktop progress at 64KiB preemption points");
     return 0;
 }

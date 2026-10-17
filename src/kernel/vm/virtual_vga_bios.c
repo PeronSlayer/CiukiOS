@@ -2,6 +2,13 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "virtual_vga_bios.h"
 
+/* Optional bootstrap-only cooperation. The owning adapter decides whether
+ * the model is still unpublished; live INT 10h transactions stay atomic.
+ * Non-kernel/legacy builds need no scheduler dependency. */
+#if defined(__GNUC__)
+extern void cvbios_init_point(const cvbios *) __attribute__((weak));
+#endif
+
 /* Original CiukiOS implementation of the documented IBM VGA BIOS interface
  * (IBM Personal System/2 and Personal Computer BIOS Interface Technical
  * Reference, INT 10h). BDA offsets follow the same reference. Behavioural
@@ -607,6 +614,9 @@ static int set_mode(cvbios *b, cvbios_regs *r)
     if (!cvga_set_bios_mode(v, mode | 0x80, 1)) return 0;
     if (!preserve) {
         for (i = 0; i < 0x10000UL; ++i) {
+#if defined(__GNUC__)
+            if (!(i & 4095u) && cvbios_init_point) cvbios_init_point(b);
+#endif
             uint8_t zero = 0;
             if (m->text && i < 0x8000UL && !(i & 1)) {
                 cvga_store_plane(v, 0, i, 0x20);

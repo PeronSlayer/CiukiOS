@@ -34,6 +34,7 @@ volatile bool g_need_resched;
 static struct task *rq_head[P_COUNT], *rq_tail[P_COUNT];
 extern uint32_t dosvm_task_quantum(const struct task *, uint32_t) __attribute__((weak));
 extern const struct task *dosvm_task_focus(void) __attribute__((weak));
+extern const struct task *dosvm_task_irq(void) __attribute__((weak));
 static const struct task *focus_task;
 static uint64_t focus_window;
 static uint32_t focus_ticks;
@@ -62,7 +63,8 @@ static void rq_push(struct task *t)
 
 static struct task *rq_pop(void)
 {
-    const struct task *focus = dosvm_task_focus ? dosvm_task_focus() : 0;
+    const struct task *focus = dosvm_task_irq ? dosvm_task_irq() : 0;
+    if (!focus) focus = dosvm_task_focus ? dosvm_task_focus() : 0;
     if (focus != focus_task || g_ticks - focus_window >= FOCUS_PERIOD) {
         focus_task = focus; focus_window = g_ticks; focus_ticks = 0;
     }
@@ -400,6 +402,14 @@ void kpreempt_point(void)
     if (!(read_eflags() & 0x200) || !g_current || g_current->preempt_holds)
         return;
     if (cpu_point) cpu_point();
+    /* A virtual timer/SB IRQ is an earlier service deadline than another
+     * same-class presentation tile, even before that tile's slice expires.
+     * Never renew the focused VM's 8/10 budget or bypass device work. */
+    const struct task *urgent = dosvm_task_irq ? dosvm_task_irq() : 0;
+    if (urgent && urgent != g_current && urgent->state == T_READY &&
+        urgent->prio <= g_current->prio &&
+        (urgent != focus_task || g_ticks - focus_window >= FOCUS_PERIOD || focus_ticks < FOCUS_BUDGET))
+        g_need_resched = true;
     if (g_need_resched) schedule();
 }
 

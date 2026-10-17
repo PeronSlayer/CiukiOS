@@ -232,6 +232,33 @@ is implemented, in an update to this contract.
   measured kernel stretch even when no switch is needed. Kernel loops target
   one point per 1 ms (5 ms limit), including each 64 KiB of ELF copying and
   each sixteen newly zeroed pages. A point is never inserted in an IRQ.
+- F3-41 window presentation targets a stricter 4 ms stretch limit: a VGA
+  source/destination row is one conversion/copy unit, with at most four rows
+  between points; compositor submission yields after each staged tile
+  (at most 4096 bytes), with its framebuffer
+  mutex and drawing claim released. Retained surfaces/grants survive that
+  point; cancellation, live display and mapping generation are rechecked.
+  VGA scanout reads live planes between row groups, retaining only derived
+  row addresses/geometry, palette and the previous scanout bytes used by
+  exact comparison. Window tearing is acceptable: guest stores across a
+  point may appear in this sample or the next. New dirt/change counters
+  remain pending and changed rows are re-sampled next time. No complete
+  plane snapshot or per-point timing is added; the host replay times whole
+  samples separately from the production scheduler/cpustat stretch replay.
+  VM creation reserves its commitment before clearing its unpublished slot
+  in 4096-byte chunks, then yields after each initialized guest page.
+- At a safe point a focused DOS VM with a PIC-pending virtual IRQ0 or SB16
+  IRQ requests dispatch ahead of
+  presentation work of the same priority. Device work still wins; the
+  existing 8/10-tick focus budget is neither extended nor renewed by IRQs.
+  After exhausting it, peers run until the next period. Masked/in-service
+  IRQs, blocked/stopping VMs and unrelated input IRQs add no preference.
+  Guest IF/STI shadows do not suppress this scheduling hint: running the
+  guest lets it reach its next delivery boundary. The existing virtual IF,
+  shadow and IRQ-acknowledgement rules remain in the monitor.
+  This preserves the desktop's reserved share under continuous IRQ load.
+  Source comparison and host/physical evidence limits are recorded in
+  [F3-41 validation](../validation/f3-41-bounded-presentation.md).
 - A device task consumes at most ten running PIT ticks without blocking before
   continuing at normal priority. Voluntary yields do not renew this allowance;
   a blocking dispatch restores its device priority and resets its allowance.

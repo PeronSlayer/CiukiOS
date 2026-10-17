@@ -143,6 +143,8 @@ static struct { struct task *t; void (*fn)(void *); void *arg; } tasks[DOSVM_LIM
 static jmp_buf guest_return, worker_return;
 static void (*sleep_hook)(void);
 static void (*schedule_hook)(void);
+static void (*preempt_hook)(void);
+static unsigned preempt_points;
 static void (*guest_enter_hook)(const struct v86_frame *);
 static unsigned native_progress, guest_enters;
 static bool guest_halt;
@@ -169,7 +171,13 @@ void task_reap(struct task *t)
 }
 void task_exit(int reason) { task_kill(g_current,reason); longjmp(worker_return,1); }
 void schedule(void) { native_progress++; g_need_resched = false; if (schedule_hook) schedule_hook(); }
-void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
+void kpreempt_point(void)
+{
+    if (!(cpu_flags & V86_IF) || (g_current && g_current->preempt_holds)) return;
+    preempt_points++;
+    if (preempt_hook) preempt_hook();
+    if (g_need_resched) schedule();
+}
 void crit_begin(void) { }
 void crit_end(void) { }
 void task_sleep_ms(uint32_t ms)

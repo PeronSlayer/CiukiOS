@@ -18,6 +18,9 @@ extern int audio_vm_attach(struct dosvm_key) __attribute__((weak));
 extern void audio_vm_detach(struct dosvm_key) __attribute__((weak));
 extern void audio_vm_kick(void) __attribute__((weak));
 static struct dosvm slots[DOSVM_LIMIT];
+/* Admission remains visible while an unpublished slot is cleared a page
+ * at a time. Other creators cannot reuse it or spend its commitment. */
+static uint32_t initializing[DOSVM_LIMIT];
 static struct dosvm_key input_focus;
 
 /* A 200-byte polled UART record at 38400 baud costs about one BIOS tick.
@@ -349,6 +352,10 @@ void dosvm_snapshot(struct dosvm_ledger *out)
     memset(out, 0, sizeof(*out));
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct dosvm *v = &slots[i];
+        if (initializing[i]) {
+            out->vms++; out->reserved += initializing[i];
+            continue;
+        }
         if (!v->info.key.generation || v->info.state == DOSVM_DEAD) continue;
         out->vms++;
         out->tasks += v->task != 0;
@@ -489,6 +496,18 @@ const struct task *dosvm_task_focus(void)
     struct dosvm *v = dosvm_lookup(input_focus);
     return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
            v->info.state != DOSVM_BLOCKED && !idle_recent(v) ? v->task : 0;
+}
+const struct task *dosvm_task_irq(void)
+{
+    struct dosvm *v = dosvm_lookup(input_focus);
+    if (!v || !v->owner_pid || !v->window_input || v->info.state >= DOSVM_STOPPING ||
+        v->info.state == DOSVM_BLOCKED)
+        return 0;
+    /* Dispatch also helps the guest finish CLI/STI-shadow/IRQ-handler work.
+     * This is only a scheduling hint: virtual IF and acknowledgement rules
+     * still belong entirely to the monitor's existing delivery path. */
+    int irq = dosvm_pic_pending(&v->monitor);
+    return irq == 0 || irq == DOSVM_SB_IRQ ? v->task : 0;
 }
 bool dosvm_client(const struct task *t)
 {
@@ -1085,15 +1104,24 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     struct dosvm *v = 0;
     unsigned slot;
     for (slot = 0; slot < DOSVM_LIMIT; slot++)
-        if (!slots[slot].info.key.generation || slots[slot].info.state == DOSVM_DEAD) { v = &slots[slot]; break; }
+        if (!initializing[slot] && (!slots[slot].info.key.generation || slots[slot].info.state == DOSVM_DEAD)) {
+            v = &slots[slot]; break;
+        }
     if (!v) return -ENOSPC;
     uint32_t generation = gen_alloc();
     if (!generation) return -ENOSPC;
-    memset(v, 0, sizeof(*v));
+    initializing[slot] = commitment;
+    for (size_t at = 0; at < sizeof(*v); at += PAGE_SIZE) {
+        size_t bytes = sizeof(*v) - at;
+        if (bytes > PAGE_SIZE) bytes = PAGE_SIZE;
+        memset((uint8_t *)v + at, 0, bytes);
+        kpreempt_point();
+    }
     v->info.key = (struct dosvm_key){slot + 1, generation};
     v->info.state = DOSVM_CREATING;
     v->info.commitment = commitment;
     v->info.resident = sizeof(*v);
+    initializing[slot] = 0;
     v->base = v->overlay = -1;
     v->a20 = true;
     v->probe = config ? config->probe : 0;
@@ -1112,6 +1140,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
         if (e) { pmm_free(phys); goto fail; }
         v->frames[i] = phys;
         v->info.resident += PAGE_SIZE;
+        kpreempt_point(); /* page initialized and mapping/accounting published */
     }
     v->info.resident += (v->as.tables + 1) * PAGE_SIZE;
     const struct v86_ops ops = {monitor_memory, absent_in, absent_out, v};

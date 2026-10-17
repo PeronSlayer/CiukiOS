@@ -178,8 +178,8 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_share vm=%u gen=%u n=%u guest_permille=%llu monitor_permille=%llu off_cpu_us=%llu",
                   id, gen, n, wall ? s->guest_us * 1000 / wall : 0,
                   wall ? s->monitor_us * 1000 / wall : 0, wall > cpu ? wall - cpu : 0);
-    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_video vm=%u gen=%u n=%u frames=%u flips=%u harvests=%u pages=%u",
-                  id, gen, n, s->frames, s->flips, s->harvests, s->pages);
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_video vm=%u gen=%u n=%u frames=%u flips=%u harvests=%u pages=%u present_rate=%u",
+                  id, gen, n, s->frames, s->flips, s->harvests, s->pages, s->present_rate);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_present vm=%u gen=%u n=%u present_us=%llu harvest_us=%llu rows=%u",
                   id, gen, n, s->present_us, s->harvest_us, s->rows);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_remap vm=%u gen=%u n=%u remaps=%u remap_us=%llu batched=%u",
@@ -226,6 +226,7 @@ void dosvm_perf_report(struct dosvm *v)
     uint64_t tick = g_ticks;
     r->ms = (uint32_t)(tick - v->perf.report_tick);
     r->frames = v->video_frames; r->starts = v->video_starts;
+    r->present_rate = v->video_present_rate;
     r->edges = v->pit.edges; r->idle_blocks = v->idle.blocks;
     memcpy(r->idle_count, v->idle.count, sizeof(r->idle_count));
     memcpy(r->irqs, v->monitor.stats.delivered, sizeof(r->irqs));
@@ -257,6 +258,7 @@ void dosvm_perf_report(struct dosvm *v)
     struct dosvm_perf_sample *s = &v->perf.sample[perf_sample_slot(v->perf.sample_count)];
     *s = (struct dosvm_perf_sample){
         .ms = r->ms,
+        .present_rate = r->present_rate,
         .frames = r->frames - v->perf.last_frames, .flips = r->starts - v->perf.last_starts,
         .harvests = DELTA(harvests, last_harvests), .pages = DELTA(direct_pages, last_pages),
         .converted = DELTA(converted_bytes, last_converted), .rows = DELTA(rows, last_rows),
@@ -378,8 +380,8 @@ void dosvm_perf_dump(struct dosvm *v)
             count - (retained - DOSVM_PERF_FIRST) + row - DOSVM_PERF_FIRST : row;
         const struct dosvm_perf_sample *s = &v->perf.sample[perf_sample_slot(n)];
         unsigned id = v->info.key.id;
-        rec_diag(dosvm_probe(v), "group=vm_perf_video vm=%u n=%u ms=%u frames=%u flips=%u harvests=%u pages=%u",
-            id, n+1, s->ms, s->frames, s->flips, s->harvests, s->pages);
+        rec_diag(dosvm_probe(v), "group=vm_perf_video vm=%u n=%u ms=%u frames=%u flips=%u harvests=%u pages=%u present_rate=%u",
+            id, n+1, s->ms, s->frames, s->flips, s->harvests, s->pages, s->present_rate);
         /* Companion row keeps maximum-width counters within 240 bytes. */
         rec_diag(dosvm_probe(v), "group=vm_perf_harvest vm=%u n=%u dirty_pages=%u harvest_us=%llu",
             id, n+1, s->pages, s->harvest_us);
