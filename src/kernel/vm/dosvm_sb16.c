@@ -6,11 +6,13 @@
  * Staging soundblaster.cpp for undocumented details (behaviour only, no code).
  * Block-boundary rule, IF independence and lateness: f4-audio-media-contract.md
  * "DOS VM audio path". No physical audio or DMA. Research and decisions:
- * docs/design/f3-acceptance.md, section f3-05. SPDX-License-Identifier: GPL-2.0-only */
+ * docs/design/f3-acceptance.md, section f3-05, and
+ * docs/validation/f3-40-sb16-irq.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
 #include <ciuki/audio_vm.h>
+#include <ciuki/timing.h>
 #include "dosvm_internal.h"
 extern void audio_vm_diagnostic(struct dosvm_key, struct audio_vm_diagnostic *) __attribute__((weak));
 
@@ -100,33 +102,52 @@ void dosvm_sb_record_state(struct dosvm *v, unsigned reason, uint16_t port)
 }
 
 /* ---- interrupt line: 82h causes ORed onto the selected IRQ ---- */
-static void sb_cause(struct dosvm *v, uint8_t cause)
+static void sb_cause(struct dosvm *v, uint8_t cause, uint64_t at)
 {
     struct dosvm_sb16 *s = &v->audio.sb;
     bool high = s->causes & 3;
+    if (!(s->causes & cause)) s->cause_at[cause == 2] = at;
     s->causes |= cause;
     /* The 8259A latches the rising edge; a line already high adds none. */
     if (!high) {
         s->irq_tick = g_ticks; s->irq_reported = false;
+        s->irq_at = at; s->irq_tsc = dosvm_perf_clock();
+        s->irq_backlog_us = (v->audio.clock - at) * 1000000u / DOSVM_AUDIO_HZ;
+        s->irq_entry_pending = true; s->irq_entry_ready = false;
         s->irq_edges++; dosvm_irq_raise(v->info.key, s->irq);
     }
+}
+void dosvm_audio_irq_enter(struct dosvm *v, unsigned irq)
+{
+    struct dosvm_sb16 *s = &v->audio.sb;
+    if (irq != s->irq || !s->irq_entry_pending) return;
+    uint64_t us = g_tsc_per_ms ?
+        (dosvm_perf_clock() - s->irq_tsc) * 1000u / g_tsc_per_ms + s->irq_backlog_us :
+        (v->audio.clock - s->irq_at) * 1000000u / DOSVM_AUDIO_HZ;
+    uint32_t latency = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+    s->irq_entry_pending = s->irq_entry_ready = false;
+    s->cadence.irq_entries++;
+    s->cadence.irq_latency_sum_us += latency;
+    if (latency > s->cadence.irq_latency_max_us) s->cadence.irq_latency_max_us = latency;
 }
 static void sb_ack(struct dosvm *v, uint8_t bit)
 {
     struct dosvm_sb16 *s = &v->audio.sb;
     if (s->causes & bit) {
         s->causes &= ~bit;
-        s->services++; s->unserviced = 0;
-        uint64_t latency = v->audio.clock - s->boundary_at;
-        if (latency > s->max_service) s->max_service = (uint32_t)latency;
+        s->services++;
+        if (s->unserviced >= 2) s->cadence.late_acks++;
+        s->unserviced = 0;
+        uint64_t age = v->audio.clock - s->cause_at[bit == 2];
+        uint32_t latency = age > UINT32_MAX ? UINT32_MAX : (uint32_t)age;
+        if (latency > s->max_service) s->max_service = latency;
+        if (latency > s->cadence.ack_max_frames) s->cadence.ack_max_frames = latency;
     }
-    /* Acknowledgement of this transfer's cause ends the boundary wait; the
-     * part of the next block already due on the timeline is consumed now, so
-     * a responsive guest services sub-millisecond blocks without lag. */
-    if (s->x.active && s->x.waiting && bit == (SB_IS16(&s->x) ? 2 : 1)) {
-        s->x.waiting = false;
+    if (!(s->causes & 3)) s->irq_entry_pending = s->irq_entry_ready = false;
+    /* Status acknowledges the line only. It cannot clock DMA or PCM. */
+    if (s->x.waiting && bit == (SB_IS16(&s->x) ? 2 : 1)) {
+        s->x.waiting = !!(s->causes & bit);
         dosvm_sb_record_state(v, DOSVM_SB_IRQ_ACK, s->base + (bit == 1 ? 0xE : 0xF));
-        sb_advance(v);
     }
 }
 
@@ -163,6 +184,7 @@ static void sb_begin(struct dosvm *v, const struct dosvm_sb_transfer *t)
     bool highspeed = s->x.highspeed;
     s->x = *t;
     s->x.active = true; s->x.left = t->units; s->x.highspeed = highspeed;
+    if (!v->audio.diag.next_cadence) v->audio.diag.next_cadence = g_ticks + 5000;
     s->half_valid = s->carry_valid = false;
     s->last_error = DOSVM_AUDIO_OK;
     s->sequence++;
@@ -192,10 +214,12 @@ static void sb_boundary(struct dosvm *v)
     struct dosvm_sb_transfer *x = &s->x;
     uint8_t cause = SB_IS16(x) ? 2 : 1;
     s->boundaries++;
+    s->cadence.blocks++;
+    bool merged = s->causes & 3;
+    if (merged) { s->irq_merged++; s->cadence.merged++; s->late++; }
     if (x->kind == DOSVM_SB_ADPCM) s->adpcm_blocks++;
     sb_close_segment(v, DOSVM_BLOCK_COMPLETE, cause);
-    s->boundary_at = v->audio.clock;
-    sb_cause(v, cause);
+    sb_cause(v, cause, s->pos);
     s->unserviced++;
     if (s->next_valid) {
         struct dosvm_sb_transfer t = s->next;
@@ -209,15 +233,11 @@ static void sb_boundary(struct dosvm *v)
         dosvm_sb_record_state(v, DOSVM_SB_COMPLETE, 0);
         return;
     }
-    /* Generate only to the boundary, then let the guest service it: resume on
-     * acknowledgement or, late, once the next block is due on the nominal
-     * timeline (counted), never sooner than one host tick of real time. */
-    x->waiting = true; x->late = false;
+    /* Auto-init immediately continues on the timer. Waiting describes the
+     * latched IRQ, never a DMA/consumer gate. Unrefilled DMA halves replay. */
+    x->waiting = true; x->late = merged;
     x->stale = s->unserviced >= 2;
     if (x->stale) s->stale_blocks++;
-    uint64_t due = s->pos + ((uint64_t)x->left * x->threshold + x->rate - 1) / x->rate;
-    uint64_t tick = v->audio.clock + DOSVM_AUDIO_PER_MS;
-    s->wait_until = due > tick ? due : tick;
     dosvm_sb_record_state(v, DOSVM_SB_COMPLETE, 0);
 }
 
@@ -280,19 +300,16 @@ static int sb_consume(struct dosvm *v, unsigned n, struct sb_run *r)
 
 /* DSP playback on the VM timeline, driven by dosvm_tick whatever the guest
  * IF/PIC state. Each call processes at most DOSVM_AUDIO_SLICE frames of DSP
- * time and never crosses a block boundary without a service opportunity. */
+ * time. Neither a latched IRQ nor the diagnostic waiting state gates DMA. */
 static void sb_advance(struct dosvm *v)
 {
     struct dosvm_sb16 *s = &v->audio.sb;
     uint64_t now = v->audio.clock;
     uint32_t budget = DOSVM_AUDIO_SLICE;
-    for (unsigned guard = 0; guard < 32 && s->x.active && budget; guard++) {
+    /* At <=45 kHz stereo there are at most two sample units per timeline
+     * frame. Tiny blocks must not inherit the old 32-boundary wait cap. */
+    for (unsigned guard = 0; guard < DOSVM_AUDIO_SLICE * 2u + 1u && s->x.active && budget; guard++) {
         struct dosvm_sb_transfer *x = &s->x;
-        if (x->waiting) {
-            if (now < s->wait_until) return;
-            x->waiting = false; x->late = true; s->late++;
-            dosvm_sb_record_state(v, DOSVM_SB_IRQ_LATE, 0);
-        }
         if (x->paused) { s->pos = now; return; }
         if (now <= s->pos) return;
         uint64_t span = now - s->pos;
@@ -485,8 +502,8 @@ static void sb_execute(struct dosvm *v)
     case 0xE3: for (unsigned i = 0; i < sizeof(sb_copyright); i++) sb_reply(s, (uint8_t)sb_copyright[i]); break;
     case 0xE4: s->test = a[0]; break;
     case 0xE8: sb_reply(s, s->test); break;
-    case 0xF2: s->forced++; sb_cause(v, 1); break;
-    case 0xF3: s->forced++; sb_cause(v, 2); break;
+    case 0xF2: s->forced++; sb_cause(v, 1, v->audio.clock); break;
+    case 0xF3: s->forced++; sb_cause(v, 2, v->audio.clock); break;
     case 0x0F: sb_reply(s, 0); s->unsupported++; break; /* ASP register read: no ASP */
     default: s->unsupported++; break; /* DMA ADC, MIDI input, ASP, E2h and undocumented */
     }
@@ -516,7 +533,7 @@ static void sb_reset_port(struct dosvm *v, uint8_t value)
     s->last_error = DOSVM_AUDIO_OK;
     sb_stop(v, DOSVM_BLOCK_ABORTED, DOSVM_SB_RESET);
     s->uart = false;
-    s->causes = 0; s->unserviced = 0;
+    s->causes = 0; s->unserviced = 0; s->irq_entry_pending = s->irq_entry_ready = false;
     s->in_need = s->in_count = 0; s->out_count = 0;
     if (!restore) { s->rate = 22050; s->rate_from_tc = false; s->speaker = false; }
     s->resets++;
@@ -619,6 +636,18 @@ void dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
      * Keep its original age and a coherent PIC snapshot, even when the
      * ordinary state queue is full. No formatting or output in the tick. */
     struct dosvm_sb16 *s = &v->audio.sb;
+    if (s->irq_entry_pending) {
+        if (v->fullscreen_parked || v->fullscreen_hold || v->fullscreen_suspended)
+            s->cadence.parked += elapsed;
+        else if (g_current != v->task) s->cadence.descheduled += elapsed;
+        else if (!s->irq_entry_ready && !v->monitor.vif) s->cadence.if_clear += elapsed;
+    }
+    if (s->x.active && deadline_passed(v->audio.diag.next_cadence) && !v->audio.diag.cadence_pending) {
+        v->audio.diag.cadence = s->cadence;
+        memset(&s->cadence, 0, sizeof(s->cadence));
+        v->audio.diag.cadence_pending = true;
+        v->audio.diag.next_cadence = g_ticks + 5000;
+    }
     if ((g_boot.flags & CBI_F_VERBOSE) && (s->causes & 3) && !s->irq_reported &&
         g_ticks - s->irq_tick > 500 && !v->audio.diag.irq_wait.pending &&
         v->audio.diag.irq_wait_records < 16) {
@@ -828,7 +857,8 @@ static int sb_level_db(uint32_t peak)
 }
 void dosvm_audio_log(struct dosvm *v)
 {
-    if (!(g_boot.flags & CBI_F_VERBOSE) || v->info.state >= DOSVM_STOPPING) return;
+    if (v->info.state >= DOSVM_STOPPING) return;
+    if (!(g_boot.flags & CBI_F_VERBOSE) && !v->audio.diag.cadence_pending) return;
     for (unsigned i = 0; i < v->dpmi.depth; i++)
         if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) return;
     /* One short line per 100 ms, physical IF enabled, outside the complete
@@ -839,6 +869,24 @@ void dosvm_audio_log(struct dosvm *v)
     uint64_t now = g_ticks;
     if (now < v->audio.diag.next_log) { irq_restore(f); return; }
     v->audio.diag.next_log = now + 100;
+    if (v->audio.diag.cadence_pending) {
+        struct dosvm_sb_cadence c = v->audio.diag.cadence;
+        v->audio.diag.cadence_pending = false;
+        irq_restore(f);
+        struct audio_vm_diagnostic d = {0};
+        if (audio_vm_diagnostic) audio_vm_diagnostic(v->info.key, &d);
+        uint64_t underruns = d.starved >= v->audio.diag.underruns ?
+            d.starved - v->audio.diag.underruns : d.starved;
+        v->audio.diag.underruns = d.starved;
+        klog("[vm-audio] vm=%u cadence blocks=%u late_acks=%u merged=%u ack_max_ms=%u irq_latency_max_us=%u underruns=%llu irq_latency_avg_us=%llu descheduled=%u parked=%u if_clear=%u",
+             v->info.key.id, c.blocks, c.late_acks, c.merged,
+             (unsigned)((c.ack_max_frames + DOSVM_AUDIO_PER_MS - 1ull) / DOSVM_AUDIO_PER_MS),
+             c.irq_latency_max_us, (unsigned long long)underruns,
+             (unsigned long long)(c.irq_entries ? c.irq_latency_sum_us / c.irq_entries : 0),
+             c.descheduled, c.parked, c.if_clear);
+        return;
+    }
+    if (!(g_boot.flags & CBI_F_VERBOSE)) { irq_restore(f); return; }
     /* One record per unserviced line episode, ahead of queued discovery and
      * periodic rows. Drain only outside the guest's complete IRQ chain. */
     if (v->audio.diag.irq_wait.pending) {

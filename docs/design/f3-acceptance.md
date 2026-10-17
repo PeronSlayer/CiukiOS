@@ -792,15 +792,14 @@ host millisecond) whatever the guest IF, IMR or ISR state. DSP consumption
 uses exact integer phase (`rate` per timeline frame, `48000/channels` per
 sample, `48000 x samples` per ADPCM byte), so block boundaries have exact
 nominal times and segment start stamps are reproducible. The block-boundary
-rule: at a boundary the DSP closes the block's segment with its cause,
-latches the cause, raises the edge if the line was low and stops consuming
-until the guest acknowledges that cause, or until the next block is due on
-the nominal timeline and at least one host tick has passed; that resumption
-is counted as `late`, its segment is flagged `LATE`, and a block started
-after two unserviced boundaries is flagged `STALE` (counted). An
-acknowledgement immediately consumes the part of the next block already
-due, so a responsive guest services sub-millisecond blocks without lag and a
-backlog drains one service per block. Each call processes at most 64 ms of
+rule (superseded by f3-40, [research](../validation/f3-40-sb16-irq.md)):
+at a boundary the DSP closes the segment, latches the cause, raises an edge
+only if the line was low, and immediately continues auto-init DMA on its
+nominal timeline. An already asserted line increments `irq_merged` and
+`late`; the following segment is flagged `LATE`, and a block started after
+two unserviced boundaries is flagged `STALE`. `waiting` describes a latched
+cause only. Status reads clear their matching cause without advancing DMA;
+DMA wrap replays unrefilled halves with no tempo change. Each call processes at most 64 ms of
 DSP time; backlog beyond one second is dropped and counted. A DMA channel
 that does not answer (masked, controller disabled, cascade) stalls the DSP
 and the elapsed time is lost, as on the card; a non-read transfer type or an
@@ -913,7 +912,7 @@ D9h all eight IRQs report 02h); the model follows the Creative guide.
 Open items for the lead: ADPCM decoding, E2h DMA identification and MPU-401
 are not advertised; 45h/47h follow the later DSP 4.xx documentation and are
 not in the guide revision above; timing granularity is the 1 ms host tick
-(sub-millisecond blocks rely on acknowledgement-driven catch-up); the
+(sub-millisecond boundaries are processed by timer-driven DMA); the
 ledger `devices` count does not include the audio devices; the mailbox
 address 0000:0600 is shared with VMDEV.COM by convention (separate VMs).
 ## f3-04

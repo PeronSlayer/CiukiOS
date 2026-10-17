@@ -299,9 +299,13 @@ blocks delivery, DSP DMA consumption and block deadlines MUST continue on
 the VM audio timeline. Causes latch/pending bits follow the advertised SB/PIC
 hardware semantics; do not invent an unbounded IRQ queue or force guest IF
 on. At eligibility after STI/MOV-SS shadow, inject the pending cause through
-the current DPMI handler or V86 reflection. If acknowledgement/refill is late
-past the configured block duration, continue bounded hardware-like DMA progress
-and count the lateness and potentially stale samples. A stalled guest never
+the current DPMI handler or V86 reflection. Auto-init DMA MUST never wait
+for acknowledgement: it continues through block boundaries and wraps the
+live guest ring, replaying unrefilled data. A boundary with the line already
+asserted counts a merged IRQ without raising another edge. `irq_wait` is
+diagnostic only; the host consumer MUST NOT gate playback on it. Count late
+acknowledgements, ISR entry latency and potentially stale samples (f3-40,
+[research and validation](../validation/f3-40-sb16-irq.md)). A stalled guest never
 blocks physical refill, native playback, another VM or host preemption.
 
 **[F4]** OPL address/data banks, timer masks/status/reset, key-on, rhythm,

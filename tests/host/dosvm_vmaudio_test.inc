@@ -31,14 +31,18 @@ static void vq_begin(void)
     vq_n = 0; vq_frames = 0; vq_ticks0 = g_ticks; vq_service = 0; vq_arg = 0;
 }
 static void vq_end(void) { audio.ready = audio.running = false; vq_service = 0; }
-static void vq_mix(void)
+static void vq_mix_cursor(void)
 {
-    audio.played_output = audio.output - 7 * AUDIO_QUANTUM; /* the fake transport: seven periods queued */
     audio_mix(vq_out, AUDIO_QUANTUM);
     audio_vm_published(); /* this fake transport accepts the complete period */
     for (unsigned k = 0; k < AUDIO_QUANTUM; k++) if (vq_n < VQ_CAP) {
         vq_cap[vq_n][0] = vq_out[k].left; vq_cap[vq_n][1] = vq_out[k].right; vq_n++;
     }
+}
+static void vq_mix(void)
+{
+    audio.played_output = audio.output - 7 * AUDIO_QUANTUM; /* the fake transport: seven periods queued */
+    vq_mix_cursor();
 }
 static void vq_time(unsigned frames)
 {
@@ -681,9 +685,8 @@ static void test_fullscreen_audio_cadence(void)
     struct audio_vm_stats stats=vstats(v);
     CHECK(g_ticks-start==180 && info.clock==clock_start+180*48);
     CHECK(g.serviced==32 && stats.log_count==32 && !info.active);
-    /* A block boundary waits for acknowledgement, retaining up to two
-     * ticks of DMA work. This intentional wait is included in max_lag. */
-    CHECK(info.max_lag<=96 && info.max_service<=96 && !info.late && !info.stale_blocks);
+    /* DMA never waits for the guest's two-millisecond service cadence. */
+    CHECK(info.max_lag<=48 && info.max_service<=96 && !info.late && !info.stale_blocks);
     CHECK(!stats.starved && !stats.late_frames && !stats.skips && !stats.seq_gaps);
     for (unsigned n=0;n<stats.log_count;n++)
         CHECK(stats.log[n].first[0]==vg_value(&g,n,0) && stats.log[n].frames==64);
@@ -698,8 +701,244 @@ static void test_fullscreen_audio_cadence(void)
     v->fullscreen=false;dsp_reset(v);destroy(v,true);vq_end();empty();
 }
 
+/* DOOM/DMX protocol replay, not execution of a game binary. Two 128-frame
+ * signed stereo halves on DMA5; DSP B6/30 at 11025 Hz, 256 samples/IRQ.
+ * Sweep EVERY integer delay/gap, with a real advancing transport cursor.
+ * Guest lateness leaves the live ring unchanged, so the independent oracle
+ * must hear the same circular waveform, including after missed IRQ edges. */
+static void test_doom_late_ack_cadence(void)
+{
+    static int16_t baseline[VQ_CAP][2];
+    unsigned baseline_n = 0, merged_cases = 0, max_underrun = 0;
+    uint64_t saved_calibration = g_tsc_per_ms;
+    g_tsc_per_ms = 0; /* deterministic physical 1 ms timer, including IRQ age */
+    for (unsigned delay = 0; delay <= 60; delay++) for (unsigned gap = 0; gap <= 40; gap++) {
+        vq_begin();
+        struct dosvm *v = audio_vm_create(); unity(v); dsp_reset(v);
+        vq_time(1200); vq_run(2);
+        uint8_t bytes[1024];
+        for (unsigned i = 0; i < 256; i++) {
+            int16_t l = (int16_t)(3000 + i * 53), r = (int16_t)(-4000 - i * 41);
+            bytes[i*4] = (uint8_t)l; bytes[i*4+1] = (uint8_t)((uint16_t)l >> 8);
+            bytes[i*4+2] = (uint8_t)r; bytes[i*4+3] = (uint8_t)((uint16_t)r >> 8);
+        }
+        CHECK(!dosvm_write(v, 0x30000, bytes, sizeof(bytes)));
+        dma16(v, 5, 0x30000, 511, true);
+        dsp(v, 0x41); dsp(v, 0x2B); dsp(v, 0x11);
+        dsp(v, 0xB6); dsp(v, 0x30); dsp(v, 0xFF); dsp(v, 0);
+        uint64_t clock = v->audio.clock, played = audio.played_output;
+        v->monitor.vif = true;
+        unsigned underrun = 0;
+        for (unsigned t = 1; t <= 600; t++) {
+            bool preempted = t >= 180 && t < 180 + gap;
+            g_current = preempted ? &caller : v->task;
+            ms(1);
+            /* DMA position and unit count depend on time alone. */
+            CHECK(v->audio.sb.pos == clock + t * 48);
+            CHECK(v->audio.sb.units == (uint64_t)t * 11025 * 2 / 1000);
+            if (!preempted && v->audio.sb.irq_entry_pending &&
+                g_ticks - v->audio.sb.irq_tick >= delay) {
+                struct v86_frame f = { .tf = { .cs=0x200, .user_ss=0x300,
+                    .user_esp=0x100, .eflags=V86_VM|V86_IF|2 } };
+                uint32_t entries = v->monitor.stats.delivered[7];
+                CHECK(dosvm_deliver_irq(v, &f) >= 0 && v->monitor.stats.delivered[7] == entries + 1);
+                dosvm_audio_irq_enter(v, 7); /* simulated CPU's IRET into ISR */
+                uint32_t units = v->audio.sb.units;
+                a_in(v, SB + 0xE); CHECK(v->audio.sb.causes == 2); /* wrong width does not ack */
+                a_in(v, SB + 0xF);
+                CHECK(!v->audio.sb.causes && v->audio.sb.units == units);
+                a_out(v, 0x20, 0x20); v->monitor.vif = true;
+            }
+            audio.played_output = played + t * 48;
+            if (audio.played_output > audio.output && audio.played_output - audio.output > underrun)
+                underrun = (unsigned)(audio.played_output - audio.output);
+            if (!preempted)
+                while (audio.output < audio.played_output + 7 * AUDIO_QUANTUM) vq_mix_cursor();
+        }
+        g_current = &caller;
+        struct dosvm_audio_info i = ainfo(v);
+        struct audio_vm_stats s = vstats(v);
+        CHECK(i.boundaries == (600u * 11025u * 2u / 1000u) / 256u && i.frames == 6615);
+        CHECK(v->audio.sb.irq_merged == i.boundaries - i.irq_edges);
+        CHECK(i.dsp_clock == i.clock && !i.overrun_frames && !i.dropped_frames);
+        CHECK(!s.starved && !s.skips && !s.holds && !s.seq_gaps && !s.late_frames);
+        CHECK(underrun <= (128u * 48000u + 11024u) / 11025u); /* at most one block */
+        if (underrun > max_underrun) max_underrun = underrun;
+        if (v->audio.sb.irq_merged) merged_cases++;
+        if (!delay && !gap) {
+            baseline_n = vq_n; memcpy(baseline, vq_cap, vq_n * sizeof(vq_cap[0]));
+            CHECK(first_sound(0) < vq_n && s.pcm.peak[0] >= 15000 && s.pcm.peak[1] >= 13000);
+        } else CHECK(vq_n == baseline_n && !memcmp(baseline, vq_cap, vq_n * sizeof(vq_cap[0])));
+        dsp_reset(v); destroy(v, true); vq_end(); empty();
+    }
+    g_tsc_per_ms = saved_calibration;
+    CHECK(merged_cases > 0);
+    printf("f3-40 DOOM B6/30 DMA5 11025Hz stereo: 2501 cases ISR=0..60ms preemption=0..40ms, exact cadence/waveform, merged_cases=%u source_underruns=0 max_transport_underrun_frames=%u PASS\n",
+           merged_cases, max_underrun);
+}
+
+static struct dosvm *sb_schedule_vm;
+static unsigned sb_schedule_calls;
+static void sb_schedule_edge(void)
+{
+    if (++sb_schedule_calls == 1) { g_need_resched = true; return; }
+    schedule_hook = 0;
+    sb_cause(sb_schedule_vm, 2, sb_schedule_vm->audio.clock);
+}
+static void sb_worker_entry(const struct v86_frame *f)
+{
+    struct dosvm *v = sb_schedule_vm;
+    CHECK(f == &v->frame && v->monitor.stats.delivered[7] == 1 &&
+          v->audio.sb.cadence.irq_entries == 1 && !v->audio.sb.irq_entry_pending);
+    guest_enter_hook = 0;
+    CHECK(!dosvm_stop(v->info.key, DOSVM_TERMINATE));
+}
+static void test_sb_irq_entry_latency(void)
+{
+    uint64_t calibration = g_tsc_per_ms, tsc = fake_tsc;
+    g_tsc_per_ms = 0;
+    for (unsigned mode = 0; mode < 3; mode++) {
+        struct dosvm *v = mode ? dpmi_vm(true) : audio_vm_create();
+        if (mode) {
+            v86_start(); enter(v, mode == 2);
+            v->dpmi.vec[15] = (struct dpmi_vec){ .sel=(uint16_t)cur.tf.cs, .off=0x700 };
+        } else cur = (struct v86_frame){ .tf = { .cs=0x200, .user_ss=0x300,
+            .user_esp=0x100, .eflags=V86_VM|V86_IF|2 } };
+        device_pic_reset(v, 1); a_out(v, 0x21, 0x7F); a_out(v, 0xA1, 0xFF);
+        v->started = true; v->ticks = g_ticks; /* dpmi_vm does not boot a worker */
+        uint16_t ivt[2] = {0, 0x200}; CHECK(!dosvm_write(v, 15*4, ivt, sizeof(ivt)));
+        dsp_reset(v); dma16(v, 5, 0x30000, 511, true);
+        dsp(v, 0x41); dsp(v, 0x2B); dsp(v, 0x11);
+        dsp(v, 0xB6); dsp(v, 0x30); dsp(v, 0xFF); dsp(v, 0);
+        op1(v, 0xFA); /* guest CLI, then physical time still consumes DMA */
+        g_current = v->task; ms(15); g_current = &caller;
+        CHECK(v->audio.sb.irq_entry_pending && !v->audio.sb.cadence.irq_entries &&
+              v->audio.sb.cadence.if_clear > 0);
+        op1(v, 0xFB); /* STI and its successor shadow cannot enter the ISR */
+        CHECK(!v->audio.sb.cadence.irq_entries);
+        step(v, 0x20, 0); CHECK(!v->audio.sb.cadence.irq_entries);
+        cur.tf.eip++; step(v, 0x20, 0); /* the successor retired */
+        uint32_t expected = (uint32_t)((v->audio.clock - v->audio.sb.irq_at) * 1000000u / DOSVM_AUDIO_HZ);
+        CHECK(v->monitor.stats.delivered[7] == 1 && !v->audio.sb.irq_entry_pending);
+        CHECK(v->audio.sb.cadence.irq_entries == 1 &&
+              v->audio.sb.cadence.irq_latency_max_us == expected &&
+              v->audio.sb.cadence.irq_latency_sum_us == expected && expected > 3000);
+        CHECK((mode ? cur.tf.eip == 0x700 : cur.tf.cs == 0x200) && !v->monitor.vif);
+        ms(4); a_in(v, SB + 0xF);
+        CHECK(v->audio.sb.max_service >= (uint64_t)expected * 48 / 1000 + 192);
+        dsp_reset(v); destroy(v, true); empty();
+
+        /* First scheduling point has no IRQ. The last one raises it after
+         * the normal injection loop; final return must still enter it. */
+        v = mode ? dpmi_vm(true) : audio_vm_create();
+        if (mode) {
+            v86_start(); enter(v, mode == 2);
+            v->dpmi.vec[15] = (struct dpmi_vec){ .sel=(uint16_t)cur.tf.cs, .off=0x700 };
+        } else cur = (struct v86_frame){ .tf = { .cs=0x200, .user_ss=0x300,
+            .user_esp=0x100, .eflags=V86_VM|V86_IF|2 } };
+        device_pic_reset(v, 1); a_out(v, 0x21, 0x7F); a_out(v, 0xA1, 0xFF);
+        CHECK(!dosvm_write(v, 15*4, ivt, sizeof(ivt)));
+        v->monitor.vif = true;
+        sb_schedule_vm = v; sb_schedule_calls = 0; schedule_hook = sb_schedule_edge; g_need_resched = true;
+        step(v, 0x20, 0);
+        CHECK(sb_schedule_calls == 2 && !schedule_hook && v->monitor.stats.delivered[7] == 1);
+        CHECK(v->audio.sb.cadence.irq_entries == 1 && !v->audio.sb.irq_entry_pending);
+        CHECK(mode ? cur.tf.eip == 0x700 : cur.tf.cs == 0x200);
+        destroy(v, true); empty();
+    }
+    /* IRQ construction must not hide the completed EXEC return's CF/AX. */
+    struct dosvm *v = audio_vm_create(); v->monitor.vif = true;
+    cur = (struct v86_frame){ .tf = { .cs=0x200, .user_ss=0x300,
+        .user_esp=0x100, .eax=2, .eflags=V86_VM|V86_IF|V86_CF|2 } };
+    v->launch_exec = true; v->launch_cs = 0x200; v->launch_ip = 0;
+    v->launch_ss = 0x300; v->launch_sp = 0x100;
+    dsp(v, 0xF3); step(v, 0x20, 0);
+    CHECK(v->launch_failed && v->launch_error == 2 && v->monitor.stats.delivered[7] == 1);
+    destroy(v, true); empty();
+    /* Calibrated TSC measures sub-tick wall time, including time after
+     * constructing the ISR frame but before returning to the guest. */
+    v = audio_vm_create();
+    g_tsc_per_ms = 1000000; fake_tsc = 1000000;
+    dsp(v, 0xF3);
+    struct v86_frame f = { .tf = { .cs=0x200, .user_ss=0x300,
+        .user_esp=0x100, .eflags=V86_VM|V86_IF|2 } };
+    v->monitor.vif = true;
+    CHECK(dosvm_deliver_irq(v, &f) >= 0 && v->audio.sb.irq_entry_ready);
+    CHECK(!v->audio.sb.cadence.irq_entries); /* frame construction is not ISR entry */
+    ms(2); v->fullscreen_parked = true; ms(2); v->fullscreen_parked = false;
+    CHECK(v->audio.sb.cadence.descheduled == 2 && v->audio.sb.cadence.parked == 2 &&
+          !v->audio.sb.cadence.if_clear);
+    fake_tsc += 4123000;
+    dosvm_audio_irq_enter(v, 7);
+    CHECK(v->audio.sb.cadence.irq_latency_max_us == 4123 && v->audio.sb.cadence.irq_latency_sum_us == 4123);
+    destroy(v, true); empty();
+    g_tsc_per_ms = calibration; fake_tsc = tsc;
+    /* A PM handler reached from V86 uses the worker's mode-change reentry;
+     * do not end its measurement at the return to the kernel worker. */
+    g_tsc_per_ms = 0;
+    v = dpmi_vm(true); v86_start(); enter(v, true);
+    v->dpmi.vec[15] = (struct dpmi_vec){ .sel=(uint16_t)cur.tf.cs, .off=0x700 };
+    cur = (struct v86_frame){ .tf = { .cs=0x200, .user_ss=0x300,
+        .user_esp=0x100, .eflags=V86_VM|V86_IF|2 } };
+    device_pic_reset(v, 1); a_out(v, 0x21, 0x7F); a_out(v, 0xA1, 0xFF);
+    v->started = true; v->ticks = g_ticks; v->monitor.vif = true;
+    dsp(v, 0xF3); step(v, 0x20, 0);
+    CHECK(left && in_pm() && cur.tf.eip == 0x700 && v->audio.sb.irq_entry_ready &&
+          v->audio.sb.irq_entry_pending && !v->audio.sb.cadence.irq_entries);
+    ms(3); dosvm_audio_irq_enter(v, 7); /* worker's final CLI/reentry seam */
+    CHECK(v->audio.sb.cadence.irq_latency_max_us == 3000 && v->audio.sb.cadence.descheduled == 3);
+    destroy(v, true); empty(); g_tsc_per_ms = calibration;
+    /* Also exercise the production worker when the line first rises in
+     * its reentry interval, rather than before the preceding trap return. */
+    v = audio_vm_create(); v->monitor.vif = true; dsp(v, 0xF3);
+    sb_schedule_vm = v; guest_enter_hook = sb_worker_entry;
+    run_worker(v); CHECK(!guest_enter_hook);
+    destroy(v, true); empty();
+    puts("f3-40 IRQ entry: V86/16/32-bit DPMI, CLI/STI shadow, earliest eligible entry, final scheduling edge, mode-change reentry, nominal boundary age, TSC microseconds PASS");
+}
+
+static void test_sb_cadence_record(void)
+{
+    struct dosvm *v = audio_vm_create(); dsp_reset(v);
+    g_boot.flags = 0; /* protected summary is available without DIAG_VERBOSE */
+    dma16(v, 5, 0x30000, 511, true);
+    dsp(v, 0x41); dsp(v, 0x2B); dsp(v, 0x11);
+    dsp(v, 0xB6); dsp(v, 0x30); dsp(v, 0xFF); dsp(v, 0);
+    unsigned logs = vm_audio_logs;
+    for (unsigned t = 1; t <= 5000; t++) {
+        g_current = t < 1700 ? v->task : &caller;
+        v->fullscreen_parked = t >= 3300;
+        ms(1);
+        if (t == 2000) a_in(v, SB + 0xF);
+        if (t < 5000) CHECK(!v->audio.diag.cadence_pending);
+    }
+    g_current = &caller; v->fullscreen_parked = false;
+    CHECK(vm_audio_logs == logs && v->audio.diag.cadence_pending);
+    struct dosvm_sb_cadence c = v->audio.diag.cadence;
+    CHECK(c.blocks == 430 && c.merged == 428 && c.late_acks == 1 && c.ack_max_frames > 90000);
+    CHECK(c.descheduled && c.parked && c.if_clear);
+    dosvm_audio_log(v);
+    CHECK(vm_audio_logs == logs + 1 && !v->audio.diag.cadence_pending);
+    CHECK(strstr(last_vm_audio_log, "cadence blocks=430 late_acks=1 merged=428 ack_max_ms=") &&
+          strstr(last_vm_audio_log, "irq_latency_max_us=0 underruns=0 irq_latency_avg_us=0") &&
+          strstr(last_vm_audio_log, "descheduled=") && strstr(last_vm_audio_log, "parked=") &&
+          strstr(last_vm_audio_log, "if_clear="));
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 1);
+    ms(4999); CHECK(!v->audio.diag.cadence_pending);
+    ms(1); CHECK(v->audio.diag.cadence_pending);
+    v->dpmi.depth = 1; v->dpmi.rec[0].flags = DPMI_RF_HWINT;
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 1 && v->audio.diag.cadence_pending);
+    v->dpmi.depth = 0;
+    dosvm_audio_log(v); CHECK(vm_audio_logs == logs + 2 && !v->audio.diag.cadence_pending);
+    CHECK(v->audio.diag.cadence.blocks == 431 && !v->audio.diag.cadence.late_acks);
+    dsp_reset(v); destroy(v, true); empty();
+    puts("f3-40 protected cadence: five-second snapshots, real late ack age, merged IRQs, parked/descheduled/IF-clear counters, deferred outside ISR, no timer logging PASS");
+}
+
 static void test_vm_audio(void)
 {
+    test_doom_late_ack_cadence();
+    test_sb_irq_entry_latency(); test_sb_cadence_record();
     test_fullscreen_audio_cadence(); test_vm_attach(); test_vm_modes(); test_vm_double_buffer(); test_vm_gap(); test_vm_stall(); test_vm_pacing(); test_vm_idle_tail(); test_vm_gains(); test_vm_default_level(); test_vm_opl(); test_vm_physical_rate(); test_vm_source_budget();
     audio.ready = false;
     puts("DOS VM audio output: PASS (attach/revoke/release, every PCM layout exact at 2:1, DAC, ADPCM refused, 32 fresh blocks and the 16-bit phase through the mixer, pause gap kept, stalled guest beside native and a second VM, hold/skip/re-anchor without replay, CT1745 and source gains, OPL3 exact against a reference chip, routing, late events, GAP)");

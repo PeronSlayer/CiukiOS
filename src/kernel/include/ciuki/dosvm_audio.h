@@ -20,7 +20,7 @@
 #define DOSVM_BLOCK_SILENCE     0x02u /* DSP 80h: silent frames by design */
 #define DOSVM_BLOCK_UNSUPPORTED 0x04u /* Creative ADPCM: timing and IRQs kept, silence produced */
 #define DOSVM_BLOCK_OVERRUN     0x08u /* frames dropped: queue full (consumer late) */
-#define DOSVM_BLOCK_LATE        0x10u /* resumed after the block duration without acknowledgement */
+#define DOSVM_BLOCK_LATE        0x10u /* previous IRQ still asserted at the preceding block boundary */
 #define DOSVM_BLOCK_STALE       0x20u /* two boundaries unserviced: guest data possibly stale */
 #define DOSVM_BLOCK_ABORTED     0x40u /* reset, fault or new command ended the block early */
 

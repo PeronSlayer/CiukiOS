@@ -53,7 +53,8 @@ void dosvm_console_byte(struct dosvm *v, uint8_t byte)
 
 static void dosvm_trace_flush(struct dosvm *v)
 {
-    if (dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING) return;
+    uint32_t flags = irq_save(); irq_restore(flags);
+    if (!(flags & V86_IF) || (dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING)) return;
     uint64_t begin = v->deferred_trace.count || v->deferred_trace.dropped ? dosvm_perf_clock() : 0;
     for (unsigned i = 0; i < v->deferred_trace.count; i++)
         rec_diag(dosvm_probe(v), "%s", v->deferred_trace.line[i]);
@@ -69,7 +70,8 @@ static void dosvm_trace_flush(struct dosvm *v)
 void dosvm_diag(struct dosvm *v, const char *fmt, ...)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;
-    bool defer = dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING;
+    uint32_t flags = irq_save(); irq_restore(flags);
+    bool defer = !(flags & V86_IF) || (dosvm_in_irq(v) && v->info.state != DOSVM_STOPPING);
     if (defer && v->deferred_trace.count == ARRAY_SIZE(v->deferred_trace.line)) {
         if (v->deferred_trace.dropped != UINT32_MAX) v->deferred_trace.dropped++;
         return;
@@ -688,6 +690,27 @@ void dosvm_perf_enter(void)
     if (v && v->continuation && v->perf.phase == 1) perf_phase(v, 2);
 }
 
+/* Commit at eligible monitor boundaries, including the final IF-clear
+ * return after scheduling/reporting. Physical PIC programming is unchanged. */
+static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
+{
+    uint64_t delivered = v->monitor.stats.reflected_irqs;
+    uint32_t sb_delivered = v->monitor.stats.delivered[v->audio.sb.irq & 15];
+    int e = 0;
+    uint32_t flags = irq_save();
+    if (!v->frame_pm) e = dosvm_mouse_dispatch(v, f);
+    if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
+    irq_restore(flags);
+    if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
+    if (v->monitor.stats.delivered[v->audio.sb.irq & 15] != sb_delivered)
+        v->audio.sb.irq_entry_ready = v->audio.sb.irq_entry_pending;
+    if (v->monitor.stats.reflected_irqs != delivered) {
+        v->trace.injected_cs = (uint16_t)f->tf.cs;
+        v->trace.injected_eip = f->tf.eip;
+    }
+    return e;
+}
+
 bool dosvm_trap(struct trap_frame *tf)
 {
     struct dosvm *v = owner(g_current);
@@ -790,16 +813,20 @@ bool dosvm_trap(struct trap_frame *tf)
         else if (tf->vector < 0x20 || tf->vector >= 0x30) e = -EFAULT;
     }
     if (!v->frame_pm) v86_retire_shadow(&v->monitor, f);
-    if (e >= 0 && v->info.state < DOSVM_STOPPING) idle_poll_return(v, f);
-    kpreempt_point(); /* complete emulation transaction, before diagnostics */
-    dosvm_trace_flush(v);
-    if (!dosvm_in_irq(v)) dosvm_audio_log(v);
-    /* Observe the completed DOS IRET, before ordinary instructions can
-     * move past the EXEC return address. No stepping or guest patching. */
+    /* Observe the completed DOS IRET before IRQ construction replaces this
+     * return frame. No stepping or guest patching. */
     if (!v->frame_pm && v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
         f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp && (f->tf.eflags & V86_CF)) {
         v->launch_failed = true; v->launch_error = f->tf.eax & 0xFFFF;
     }
+    /* Restored IF can expose an audio edge now. Commit it before any idle
+     * wait, preemption point or UART/report work. */
+    if (!e && v->info.state < DOSVM_STOPPING && v->monitor.state != V86_HALTED)
+        e = dosvm_deliver_irq(v, f);
+    if (e >= 0 && v->info.state < DOSVM_STOPPING) idle_poll_return(v, f);
+    kpreempt_point(); /* complete emulation transaction, before diagnostics */
+    dosvm_trace_flush(v);
+    if (!dosvm_in_irq(v)) dosvm_audio_log(v);
     if (e < 0) {
         v->info.fault_vector = tf->vector;
         v->info.fault_eip = pm ? dpmi_fault_linear(v, (const struct v86_frame *)tf) : (tf->cs << 4) + tf->eip;
@@ -815,25 +842,7 @@ bool dosvm_trap(struct trap_frame *tf)
             dosvm_stop(v->info.key, DOSVM_TIMEOUT);
             break;
         }
-        uint64_t delivered = v->monitor.stats.reflected_irqs;
-        if (v->dpmi.active) {
-            e = 0;
-            if (!v->frame_pm) {
-                uint32_t flags = irq_save();
-                e = dosvm_mouse_dispatch(v, f);
-                irq_restore(flags);
-            }
-            if (!e) e = dpmi_deliver(v, f);
-        } else {
-            uint32_t flags = irq_save();
-            e = dosvm_mouse_dispatch(v, f);
-            if (!e) e = v86_irq_deliver(&v->monitor, f);
-            irq_restore(flags);
-        }
-        if (v->monitor.stats.reflected_irqs != delivered) {
-            v->trace.injected_cs = (uint16_t)f->tf.cs;
-            v->trace.injected_eip = f->tf.eip;
-        }
+        e = dosvm_deliver_irq(v, f);
         if (e < 0) {
             v->info.fault_vector = tf->vector;
             v->info.fault_eip = dpmi_fault_linear(v, f);
@@ -859,6 +868,7 @@ bool dosvm_trap(struct trap_frame *tf)
         dosvm_trace(v, DOSVM_TRACE_FAULT, f, 0, 0, 0);
         dosvm_stop(v->info.key, DOSVM_FAULT);
     }
+stop_return:
     if (v->info.state == DOSVM_STOPPING) {
         dosvm_trace_flush(v);
         if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
@@ -873,13 +883,28 @@ bool dosvm_trap(struct trap_frame *tf)
     if (tf->vector == 0x20 && v->dpmi.active)
         dosvm_trace(v, DOSVM_TRACE_TIMER, f, 0, 0, 0);
     if (g_need_resched) schedule();
+    dosvm_startup_report(v, false);
+    dosvm_perf_report(v);
+    cli();
+    /* A tick may have arrived in a checkpoint, scheduler or report above.
+     * With physical IF clear there is no new gap between this and IRET. */
+    e = v->monitor.vif && dosvm_pic_pending(&v->monitor) >= 0 ? dosvm_deliver_irq(v, f) : 0;
+    if (e < 0) {
+        sti();
+        v->info.fault_vector = tf->vector;
+        v->info.fault_eip = dpmi_fault_linear(v, f);
+        dosvm_trace(v, DOSVM_TRACE_FAULT, f, 0, 0, 0);
+        dosvm_stop(v->info.key, DOSVM_FAULT);
+        goto stop_return;
+    }
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
     if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
     perf_exit_end(v);
-    dosvm_startup_report(v, false);
-    dosvm_perf_report(v);
     perf_phase(v, 1);
-    cli();
+    /* A mode-changing frame re-enters through worker after v86_leave's STI.
+     * Keep its timestamp pending across any scheduling in that interval. */
+    if (v->frame_pm == pm && v->audio.sb.irq_entry_ready)
+        dosvm_audio_irq_enter(v, v->audio.sb.irq);
     crit_begin();
     if (crit_label) crit_label("dosvm_return");
     if (v->frame_pm != pm) v86_leave(v->continuation);
@@ -946,6 +971,18 @@ static void worker(void *arg)
      * the new frame; only a stopping VM ends the loop. */
     for (;;) {
         perf_phase(v, 1);
+        cli();
+        /* v86_leave enables IF on a mode switch. A newly raised audio
+         * request in that worker interval must also get this boundary. */
+        if (v->audio.sb.irq_entry_pending && !v->audio.sb.irq_entry_ready && v->monitor.vif &&
+            dosvm_deliver_irq(v, &v->frame) < 0) {
+            sti();
+            v->info.fault_vector = v->frame.tf.vector;
+            v->info.fault_eip = dpmi_fault_linear(v, &v->frame);
+            dosvm_stop(v->info.key, DOSVM_FAULT);
+            break;
+        }
+        if (v->audio.sb.irq_entry_ready) dosvm_audio_irq_enter(v, v->audio.sb.irq);
         v86_enter(&v->frame, &v->continuation);
         perf_phase(v, 2);
         if (v->info.state == DOSVM_STOPPING) break;
