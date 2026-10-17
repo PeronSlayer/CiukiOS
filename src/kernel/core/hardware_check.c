@@ -157,7 +157,12 @@ static void input_window(bool mouse,uint64_t until,struct hw_check_result *out)
 static void serial_check(uint64_t until,struct hw_check_result *out)
 {
     struct serial_stats a,b; serial_snapshot(&a);
-    if (!a.present) { out->status=HW_SKIP; ksnprintf(out->detail,sizeof(out->detail),"UART absent"); return; }
+    if (!a.present) {
+        out->status=HW_SKIP;
+        ksnprintf(out->detail,sizeof(out->detail),"UART absent (loader step %u, kernel probe %u)",
+            (unsigned)g_boot.uart_state,(unsigned)a.probe_result);
+        return;
+    }
     /* Wait for older records first; no forced UART mode or busy drain. */
     while (a.queued && check_now(0)<until-12000) { task_sleep_ms(1); serial_snapshot(&a); }
     uint64_t tickets[100]; unsigned accepted=0; uint64_t target=0;

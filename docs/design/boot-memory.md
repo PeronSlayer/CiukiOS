@@ -206,7 +206,7 @@ version is rejected; a later version is a new layout with its own size.
 | `0x00C` | `boot_drive` | u8 | BIOS drive number |
 | `0x00D` | `memmap_source` | u8 | `1` = E820 (the only accepted value) |
 | `0x00E` | `input_policy` | u8 | `0` native i8042 (default), `1` firmware-first from the E500 platform match or explicit request; effective kernel backend may fall back (F0-37) |
-| `0x00F` | `reserved0` | u8 | `0` |
+| `0x00F` | `uart_state` | u8 | loader UART result: 0 unknown (older loader), 1 OK, 2 BDA COM1 not 3F8h, 3 scratch failure, 4 LSR FFh, 5 divisor read-back failure, 6 disabled by THRE timeout, 7 disabled by character budget (F0-38) |
 | `0x010` | `partition_lba` | u32 | FAT32 partition start |
 | `0x014` | `loader_start`, `loader_end` | u32 × 2 | physical extent, reclaimable after copy |
 | `0x01C` | `kernel_start`, `kernel_end` | u32 × 2 | physical extent of all loaded segments |
@@ -231,6 +231,20 @@ version is rejected; a later version is a new layout with its own size.
 | `0x1F0` | `vbe_ctrl` | u8 × 512 | `4F00h` copy |
 | `0x3F0` | `vbe_mode_info` | u8 × 256 | `4F01h` copy of the active mode |
 | `0x4F0` | `e820` | 128 × 24 bytes | normalized map: base u64, length u64, type u32, ext u32 |
+
+### UART diagnosis and recovery (F0-38)
+
+F0-38 UART diagnosis and recovery: `uart_state` describes only the loader;
+the kernel preserves it even after recovery. Loader timeout/budget disable
+clears `uart_base`, `uart_divisor` and `CBI_F_SERIAL_LOG`. When the state is
+not 1, the kernel independently probes 3F8h at divisor 3 (38400 8N1) using
+reversible SCR patterns, LSR presence, both divisor bytes and a bounded THRE
+check. Successful recovery publishes the effective port/divisor and enables
+the serial flag; a failed kernel probe clears those runtime fields. The
+original loader fields and kernel probe result are logged at boot, and the
+H-page absence detail includes both result codes. Unknown state 0 keeps old
+v1/v2 loaders compatible. Research and the kernel result-code table are in
+[F0-38 UART validation](../validation/f0-38-loader-uart.md).
 
 ### BOOT.CFG selector and cursor (F1-28)
 

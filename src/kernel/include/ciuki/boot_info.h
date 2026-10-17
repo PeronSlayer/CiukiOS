@@ -57,6 +57,16 @@ static inline int cbi_quiet_console(uint32_t flags)
 
 #define CBI_E820_RAM           1u
 
+/* Loader UART discovery/output outcome, preserved by kernel recovery. */
+#define CBI_UART_UNKNOWN       0u
+#define CBI_UART_OK            1u
+#define CBI_UART_NO_BDA        2u
+#define CBI_UART_SCRATCH       3u
+#define CBI_UART_LSR           4u
+#define CBI_UART_DIVISOR       5u
+#define CBI_UART_THRE_TIMEOUT  6u
+#define CBI_UART_BUDGET        7u
+
 struct ciuki_e820 {
     uint64_t base;
     uint64_t length;
@@ -84,7 +94,7 @@ struct ciuki_boot_info {
     uint8_t  boot_drive;            /* 0x00C */
     uint8_t  memmap_source;         /* 0x00D */
     uint8_t  input_policy;          /* 0x00E */
-    uint8_t  reserved0;             /* 0x00F */
+    uint8_t  uart_state;            /* 0x00F: CBI_UART_*, loader outcome */
     uint32_t partition_lba;         /* 0x010 */
     uint32_t loader_start;          /* 0x014 */
     uint32_t loader_end;            /* 0x018 */
@@ -130,6 +140,7 @@ struct ciuki_boot_info {
     _Static_assert(__builtin_offsetof(struct ciuki_boot_info, f) == (o), #f)
 CBI_ASSERT_OFF(flags, 0x008);
 CBI_ASSERT_OFF(input_policy, 0x00E);
+CBI_ASSERT_OFF(uart_state, 0x00F);
 CBI_ASSERT_OFF(partition_lba, 0x010);
 CBI_ASSERT_OFF(kernel_entry_phys, 0x024);
 CBI_ASSERT_OFF(uart_base, 0x038);

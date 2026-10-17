@@ -27,5 +27,16 @@ int main(void)
         CHECK(rows==100);
         printf("serial H-page %s: %s, exact wire records=100 PASS\n",kind ? "16550":"16450",result.detail);
     }
+    reset_uart(true); g_boot.uart_state=CBI_UART_NO_BDA;
+    present=false; initializing=true; serial_init(model_base,3); initializing=false;
+    struct hw_check_result absent; page_sleeps=captures=0;
+    serial_check(30000,&absent);
+    CHECK(absent.status==HW_SKIP && !page_sleeps && !captures);
+    CHECK(!strcmp(absent.detail,"UART absent (loader step 2, kernel probe 3)"));
+    reset_uart(true); g_boot.uart_state=CBI_UART_THRE_TIMEOUT; ready=false;
+    initializing=true; serial_init(model_base,3); initializing=false;
+    serial_check(30000,&absent);
+    CHECK(absent.status==HW_SKIP);
+    CHECK(!strcmp(absent.detail,"UART absent (loader step 6, kernel probe 6)"));
     return 0;
 }

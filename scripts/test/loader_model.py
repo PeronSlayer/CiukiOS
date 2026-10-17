@@ -21,6 +21,36 @@ E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)
 VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer'
 
 
+class LoaderUART:
+    """Discovery/disable outcomes in boot-info byte 0x00F (F0-38)."""
+    def __init__(self, bda=0x3f8, scratch=True, lsr=0x60,
+                 divisor_low=3, divisor_high=0, flags=0):
+        self.base = self.divisor = 0
+        self.flags = flags & ~2
+        self.budget = 16384
+        self.sent = bytearray()
+        self.state = (2 if bda != 0x3f8 else 3 if not scratch else
+                      4 if lsr == 0xff else
+                      5 if (divisor_low, divisor_high) != (3, 0) else 1)
+        if self.state == 1:
+            self.base, self.divisor = 0x3f8, 3
+            self.flags |= 2
+
+    def putc(self, value, lsr=0x60):
+        if not self.base:
+            return
+        if not self.budget:
+            self.state = 7
+        else:
+            self.budget -= 1
+            if lsr != 0xff and lsr & 0x20:
+                self.sent.append(value)
+                return
+            self.state = 6
+        self.base = self.divisor = 0
+        self.flags &= ~2
+
+
 def cpu_minimum(cpuid_present, max_basic_leaf=1, signature=0, features_edx=0):
     """ID-bit probe precedes CPUID; leaf 1 CMOV is the instruction baseline.
 

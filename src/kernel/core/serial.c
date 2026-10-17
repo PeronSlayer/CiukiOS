@@ -1,5 +1,6 @@
 /* IRQ-owned 16550 transmitter; producers publish bounded whole records.
- * Research/decisions: docs/validation/f0-29-serial-interrupts.md.
+ * Research/decisions: docs/validation/f0-29-serial-interrupts.md and
+ * docs/validation/f0-38-loader-uart.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -8,6 +9,7 @@
 #include <ciuki/sync.h>
 
 #define UART_POLL_LIMIT 20000u   /* panic only */
+#define UART_INIT_POLL_LIMIT 4096u
 #define UART_DEAD_LIMIT 8u
 #define UART_LSR_THRE 0x20u
 #define UART_LSR_TEMT 0x40u
@@ -20,6 +22,7 @@
 #define UART_EVIDENCE_SLOTS 64u
 
 static uint16_t uart_base;
+static enum serial_probe_result uart_probe_result;
 static bool uart_ok, uart_irq_started, uart_armed, uart_panic_mode, uart_evidence;
 static unsigned uart_irq, uart_fifo_bytes = 1;
 static char uart_log[UART_LOG_BYTES];
@@ -40,6 +43,7 @@ void serial_init(uint16_t base, uint16_t divisor)
     uart_record_head = uart_record_count = 0;
     uart_fifo_bytes = 1;
     kwait_init(&uart_space);
+    uart_probe_result = SERIAL_PROBE_MAPPING;
     /* The boot handoff supplies no independent IRQ number. Do not guess
      * a route for a nonstandard firmware port. */
     switch (base) {
@@ -47,6 +51,7 @@ void serial_init(uint16_t base, uint16_t divisor)
     case 0x2F8: case 0x2E8: uart_irq = 3; break;
     default: return;
     }
+    uart_probe_result = SERIAL_PROBE_SCRATCH;
     uint8_t scratch = inb(base + 7);
     outb(base + 7, 0x5A);
     if (inb(base + 7) != 0x5A) {
@@ -59,13 +64,18 @@ void serial_init(uint16_t base, uint16_t divisor)
         return;
     }
     outb(base + 7, scratch);
+    uart_probe_result = SERIAL_PROBE_LSR;
+    if (inb(base + 5) == 0xFF) return;
     if (!divisor) divisor = 3;      /* 38400 baud, 1.8432 MHz reference */
     outb(base + 3, 0x03);           /* clear inherited DLAB before IER */
     outb(base + 1, 0x00);           /* startup hook enables TX IRQ later */
     outb(base + 3, 0x80);
     outb(base + 0, divisor & 0xFF);
     outb(base + 1, divisor >> 8);
+    uint8_t low = inb(base + 0), high = inb(base + 1);
     outb(base + 3, 0x03);           /* 8N1 */
+    uart_probe_result = SERIAL_PROBE_DIVISOR;
+    if (low != (divisor & 0xFF) || high != (divisor >> 8)) return;
     /* Preserve the hardware off/on/sticky-enable FIFO probe. Broken or
      * unverified FIFOs use one holding byte, including an original 16550. */
     outb(base + 2, 0x00);
@@ -79,10 +89,40 @@ void serial_init(uint16_t base, uint16_t divisor)
     else
         outb(base + 2, 0x00);
     outb(base + 4, 0x0B);           /* DTR/RTS + PC IRQ output gate OUT2 */
-    uart_ok = true;
+    uart_probe_result = SERIAL_PROBE_THRE_TIMEOUT;
+    for (unsigned i = 0; i < UART_INIT_POLL_LIMIT; i++) {
+        uint8_t lsr = inb(base + 5);
+        if (lsr == 0xFF) { uart_probe_result = SERIAL_PROBE_LSR; return; }
+        if (lsr & UART_LSR_THRE) {
+            uart_probe_result = SERIAL_PROBE_OK;
+            uart_ok = true;
+            return;
+        }
+    }
 }
 
 bool serial_present(void) { return uart_ok; }
+
+void serial_boot_init(void)
+{
+    /* Keep the loader's diagnostic byte immutable and log its original
+     * fields before replacing the runtime resource map. */
+    uint32_t base = g_boot.uart_base, divisor = g_boot.uart_divisor;
+    bool recover = g_boot.uart_state != CBI_UART_OK;
+    serial_init(recover ? 0x3F8 : (uint16_t)base, recover ? 3 : (uint16_t)divisor);
+    if (uart_ok) {
+        g_boot.uart_base = uart_base;
+        g_boot.uart_divisor = recover || !divisor ? 3 : divisor;
+        if (recover) g_boot.flags |= CBI_F_SERIAL_LOG;
+    } else {
+        g_boot.uart_base = g_boot.uart_divisor = 0;
+        g_boot.flags &= ~CBI_F_SERIAL_LOG;
+    }
+    klog("[serial] loader_uart state=%u base=%04x divisor=%u",
+         (unsigned)g_boot.uart_state, base, divisor);
+    klog("[serial] kernel_probe result=%u base=%04x divisor=%u",
+         (unsigned)uart_probe_result, g_boot.uart_base, g_boot.uart_divisor);
+}
 
 /* IF is already clear. Only the UART IRQ or panic owns this cursor. */
 static void serial_submit(unsigned count)
@@ -253,6 +293,7 @@ void serial_snapshot(struct serial_stats *out)
     *out = (struct serial_stats){ .accepted = uart_accepted, .sent = uart_sent,
         .queued = uart_used, .dropped = uart_dropped, .present = uart_ok,
         .periodic_dropped = uart_periodic_dropped, .evidence_dropped = uart_evidence_dropped,
-        .resent = 0 }; /* accepted bytes have one forward-only submission cursor */
+        .resent = 0, .probe_result = uart_probe_result };
+    /* Accepted bytes have one forward-only submission cursor. */
     irq_restore(f);
 }

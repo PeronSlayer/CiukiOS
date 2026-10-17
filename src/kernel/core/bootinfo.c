@@ -30,7 +30,9 @@ int bootinfo_validate(const struct ciuki_boot_info *bi, const char **why)
     uint32_t a20 = (bi->flags & CBI_F_A20_MASK) >> CBI_F_A20_SHIFT;
     if (a20 < CBI_A20_ALREADY_ON || a20 > CBI_A20_PORT92)
         FAIL("a20_method");
-    if (bi->reserved0 || !all_zero(bi->reserved1, sizeof(bi->reserved1)))
+    if (bi->uart_state > CBI_UART_BUDGET)
+        FAIL("uart_state");
+    if (!all_zero(bi->reserved1, sizeof(bi->reserved1)))
         FAIL("reserved_nonzero");
     if (bi->memmap_source != CBI_MEMMAP_E820)
         FAIL("memmap_source");
