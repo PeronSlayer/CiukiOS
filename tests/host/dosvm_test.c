@@ -110,7 +110,7 @@ void klog(const char *fmt, ...)
         va_list ap; va_start(ap, fmt);
         int n = vsnprintf(last_vm_audio_log, sizeof(last_vm_audio_log), fmt, ap);
         va_end(ap);
-        CHECK(n > 0 && n < 128); vm_audio_logs++; return;
+        CHECK(n > 0 && n < (int)sizeof(last_vm_audio_log)); vm_audio_logs++; return;
     }
     if (strncmp(fmt, "[dosvm]", 7)) return;
     CHECK(cpu_flags & V86_IF);
@@ -205,10 +205,11 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn fn, void *arg, uint64_t unt
 static bool input_pending;
 static struct input_event input_next;
 bool input_read(struct input_event *e) { if (!input_pending) return false; *e=input_next; input_pending=false; return true; }
-void v86_leave(uint32_t continuation) { CHECK(continuation == 0x12345678); longjmp(guest_return,1); }
+void v86_leave(uint32_t continuation) { CHECK(continuation == 0x12345678); sti(); longjmp(guest_return,1); }
 void v86_enter(const struct v86_frame *initial, uint32_t *continuation)
 {
     *continuation=0x12345678; guest_enters++;
+    sti(); /* trap_return's IRET enables physical IF in either guest mode */
     if (guest_enter_hook) { guest_enter_hook(initial); return; }
     struct v86_frame f = *initial; f.tf.vector=13; f.tf.edx=DOSVM_FAULT_PORT;
     if (guest_halt) {
@@ -689,7 +690,7 @@ int main(void)
     test_fullscreen_vbe();
     test_startup();
     test_quake_start();
-    CHECK(guest_enters==3 && deletes>1);
+    CHECK(guest_enters==4 && deletes>1); /* includes f3-40 worker IRQ reentry */
     test_startup_boot();
     free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;

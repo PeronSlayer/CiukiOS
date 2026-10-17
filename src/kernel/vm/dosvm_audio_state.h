@@ -53,6 +53,13 @@ struct dosvm_sb_transfer {
     bool active, auto_init, exit_pending, paused, highspeed, waiting, reference;
     bool late, stale;
 };
+/* Per reporting interval; producers only update scalars, never format. */
+struct dosvm_sb_cadence {
+    uint32_t blocks, late_acks, merged, ack_max_frames;
+    uint32_t irq_latency_max_us, irq_entries;
+    uint64_t irq_latency_sum_us;
+    uint32_t descheduled, parked, if_clear; /* pending-entry milliseconds */
+};
 struct dosvm_sb16 {
     uint16_t base;
     uint8_t irq, dma8, dma16;
@@ -63,14 +70,17 @@ struct dosvm_sb16 {
     int16_t half;
     uint8_t carry;
     uint32_t rate, block_units, phase, unserviced, sequence;
-    uint64_t pos, wait_until, boundary_at, block_start;
+    uint64_t pos, cause_at[2];
     struct dosvm_sb_transfer x, next;
     uint32_t boundaries, irq_edges, services, late, stale_blocks, forced, units;
     uint32_t dma_wait_frames, unsupported, adpcm_blocks, restarts, resets;
     uint32_t max_service, max_lag, direct_dac, midi_bytes;
     uint64_t dropped_frames;
     uint64_t irq_tick;                  /* first edge, not the latest DMA boundary */
-    bool irq_reported;
+    bool irq_reported, irq_entry_pending, irq_entry_ready;
+    uint64_t irq_at, irq_tsc, irq_backlog_us;
+    uint32_t irq_merged;
+    struct dosvm_sb_cadence cadence;
 };
 
 struct dosvm_opl_timer {
@@ -115,6 +125,9 @@ struct dosvm_audio {
         bool attachment, environment, summary_pending;
         int attach_error;
         uint64_t next_log, next_summary, last_summary, published, next_level;
+        uint64_t next_cadence, underruns;
+        struct dosvm_sb_cadence cadence;
+        bool cadence_pending;
         struct {
             uint64_t age;
             uint16_t isr, irr, imr;
@@ -133,6 +146,8 @@ int dosvm_audio_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void 
 void dosvm_audio_log(struct dosvm *);
 void dosvm_audio_record(struct dosvm *, unsigned kind, uint32_t, uint32_t, uint32_t);
 void dosvm_sb_record_state(struct dosvm *, unsigned reason, uint16_t port);
+/* After successful frame construction/virtual INTA, before guest return. */
+void dosvm_audio_irq_enter(struct dosvm *, unsigned irq);
 /* 8237A */
 void dosvm_dma_init(struct dosvm *);
 uint8_t dosvm_dma_io(struct dosvm *, uint16_t port, bool write, uint8_t value);

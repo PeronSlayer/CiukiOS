@@ -484,7 +484,7 @@ static void test_sb_irq_wait_record(void)
     /* Unsigned age works across clock wrap; quiet boots keep device state
      * and acquire a snapshot when verbose evidence is enabled later. */
     dsp_reset(v); g_boot.flags = 0; uint64_t tick = g_ticks;
-    g_ticks = UINT64_MAX - 250; sb_cause(v, 1); ms(501);
+    g_ticks = UINT64_MAX - 250; sb_cause(v, 1, v->audio.clock); ms(501);
     CHECK(!v->audio.diag.irq_wait.pending);
     g_boot.flags = CBI_F_VERBOSE; ms(1);
     CHECK(v->audio.diag.irq_wait.pending && v->audio.diag.irq_wait.age == 502);
@@ -499,7 +499,7 @@ static void test_sb_irq_wait_record(void)
     CHECK(strstr(last_vm_audio_log, "ms=18446744073709551615 irq=15"));
     v->info.key.id = id; v->info.key.generation = generation;
     for (unsigned i = v->audio.diag.irq_wait_records; i < 18; i++) {
-        a_in(v, SB + 0xE); sb_cause(v, 1); ms(501);
+        a_in(v, SB + 0xE); sb_cause(v, 1, v->audio.clock); ms(501);
         v->audio.diag.next_log = g_ticks; dosvm_audio_log(v);
     }
     CHECK(v->audio.diag.irq_wait_records == 16 && !v->audio.diag.irq_wait.pending);
