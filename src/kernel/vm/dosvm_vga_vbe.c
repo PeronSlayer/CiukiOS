@@ -198,10 +198,19 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     if (v->video_presented && !dirty && v->video_display==v->vga.display_changes) return 0;
     uint32_t display=v->vga.display_changes;
     uint16_t mode=v->vbe_mode;
+    uint32_t base=v->vbe_buffer.base;
+    v->video_present_rate=(unsigned)((1000000u+dos_video_frame_us(m)/2)/dos_video_frame_us(m));
     uint8_t pixels[1600];
     for (unsigned y=0;y<DOSVM_VIDEO_HEIGHT;y++) {
+        if (!(y&3)) kpreempt_point();
+        /* A mode change may release/reallocate the linear buffer. Never
+         * dereference its old extent after a cooperative point. */
+        if (v->vbe_mode!=mode || !v->vbe_buffer.used || v->vbe_buffer.base!=base ||
+            v->fullscreen || v->fullscreen_hold || v->info.state>=DOSVM_STOPPING) {
+            v->video_presented=false;return 0;
+        }
         unsigned sy=y*m->height/DOSVM_VIDEO_HEIGHT;
-        if (dosvm_read(v,v->vbe_buffer.base+sy*m->pitch,pixels,m->pitch)) {
+        if (dosvm_read(v,base+sy*m->pitch,pixels,m->pitch)) {
             v->video_presented=false;return -EFAULT;
         }
         for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) {

@@ -42,7 +42,9 @@ extern void dosvm_tick(void) __attribute__((weak));
 #include "latency_scheduler.inc"
 static struct task idle, normal, hog, ui, reporter;
 static const struct task *audio_focus;
+static const struct task *irq_focus;
 const struct task *dosvm_task_focus(void) { return audio_focus; }
+const struct task *dosvm_task_irq(void) { return irq_focus; }
 uint32_t dosvm_task_quantum(const struct task *t,uint32_t quantum)
 { return t==audio_focus && quantum>2 ? 2 : quantum; }
 static char records[4096];
@@ -74,7 +76,7 @@ static void reset(void)
     ui=(struct task){.id=4,.prio=P_INTERACTIVE,.state=T_READY,.user=true};strcpy(ui.name,"desktop");
     idle.all_next=&normal; normal.all_next=&hog; hog.all_next=&ui; all_tasks=&idle;
     g_current=idle_task=&idle;g_ticks=0;cycles=1;slice_left=10;flags=0x200;
-    focus_task=audio_focus=0;g_need_resched=false;g_starvation_boosts=0;
+    focus_task=audio_focus=irq_focus=0;g_need_resched=false;g_starvation_boosts=0;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));
@@ -152,6 +154,43 @@ static void measured_wake_test(void)
     run_tick(0);schedule();task_sleep_ms(1);
     CHECK(normal.state==T_BLOCKED && ui.state==T_BLOCKED && !g_task_switches_other);
 }
+static void focused_irq_test(void)
+{
+    reset(); hog.prio = ui.prio = P_NORMAL;
+    rq_push(&hog); rq_push(&ui); rq_push(&normal); schedule();
+    CHECK(g_current == &hog && !g_need_resched);
+    kpreempt_point(); CHECK(g_current == &hog); /* no pending IRQ */
+    irq_focus = audio_focus = &normal;
+    kpreempt_hold(); kpreempt_point(); CHECK(g_current == &hog);
+    kpreempt_release(); flags = 0; kpreempt_point(); CHECK(g_current == &hog);
+    flags = 0x200; kpreempt_point(); CHECK(g_current == &normal);
+    for (unsigned i = 0; i < FOCUS_BUDGET; i++) run_tick(0);
+    kpreempt_point(); CHECK(g_current != &normal && focus_ticks == FOCUS_BUDGET);
+    struct task *peer = g_current;
+    g_need_resched = false; kpreempt_point(); CHECK(g_current == peer);
+    /* At the next period the deadline is eligible again, even with an
+     * unexpired peer slice. A device worker still outranks that deadline. */
+    g_ticks = FOCUS_PERIOD; cycles += 2000;
+    kpreempt_point(); CHECK(g_current == &normal);
+    rq_remove(&hog); hog.prio = P_DEVICE; rq_push(&hog);
+    g_need_resched = true; kpreempt_point(); CHECK(g_current == &hog);
+
+    reset(); audio_focus = irq_focus = &normal;
+    rq_push(&normal); rq_push(&ui); schedule();
+    unsigned responses = 0, max_latency = 0;
+    while (g_ticks < 240) {
+        if (g_current == &ui) {
+            unsigned latency = (unsigned)(g_ticks - ui.ready_since);
+            if (latency > max_latency) max_latency = latency;
+            responses++; task_sleep_ms(10);
+        } else {
+            run_tick(0); kpreempt_point();
+        }
+    }
+    CHECK(responses == 24 && max_latency <= 8);
+    printf("f3-41 scheduler: IRQ at next safe point, budget/device/IF/lock guards, desktop=%u/24 max_ready_ms=%u PASS\n",
+           responses, max_latency);
+}
 static void accounting_test(void)
 {
     reset();g_boot.flags=CBI_F_VERBOSE;
@@ -188,7 +227,7 @@ static void accounting_test(void)
 }
 int main(void)
 {
-    wake_test();device_test();fullscreen_refill_test();measured_wake_test();accounting_test();
+    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;
 }

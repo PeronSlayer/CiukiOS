@@ -585,6 +585,12 @@ static void test_desktop_grants(void)
 }
 
 /* Independent pixel oracle enumerates source coordinates, not clipped rows. */
+static void present_mapping_change(void)
+{
+    on_preempt_point = 0;
+    CHECK(!presenter.owner && !g_current->preempt_holds);
+    device.generation++;
+}
 static void test_desktop_present(void)
 {
     struct process *p;
@@ -692,7 +698,14 @@ static void test_desktop_present(void)
     }
     struct ciuki_rect whole = { 0, 0, 0, 0, 2048, 2 };
     unsigned acknowledged = display_frames;
+    unsigned points = preempt_points;
     CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    CHECK(preempt_points - points == 4); /* 2 rows, two 4096-byte tiles/row */
+    points = preempt_points; on_preempt_point = present_mapping_change;
+    CHECK(grant_present(p, grants[0], wide_fd, &whole) == -EIO);
+    CHECK(!on_preempt_point && preempt_points == points + 1 && !presenting &&
+          !t->cleanup && !t->operation && display_frames == acknowledged + 1);
+    device.generation = 1;
     whole.height = 1;
     CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
     /* An old larger surface clipped onto a smaller new screen is not a

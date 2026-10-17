@@ -56,6 +56,7 @@
 #define CIUKI_CPU_H
 uint64_t g_tsc_per_ms;
 static bool guest_perf;
+static uint64_t presenter_sample_max;
 static uint64_t read_tsc_serialized(void)
 {
     if (!guest_perf) return 0;
@@ -591,7 +592,12 @@ static int run(uint64_t budget, bool (*done)(void))
             if (guest_perf && !(g_ticks % 16)) {
                 dosvm_task_switch(&caller);
                 struct ciuki_rect damage;
+                /* Time one whole sample, outside production accounting.
+                 * Per-yield clocks would dominate the cheap row groups. */
+                uint64_t presenter_begin = replay_clock();
                 dosvm_vga_present(gv, perf_row, 0, g_ticks, &damage);
+                uint64_t elapsed = replay_clock() - presenter_begin;
+                if (elapsed > presenter_sample_max) presenter_sample_max = elapsed;
                 dosvm_task_switch(gv->task);
             }
         } else if (ev.executed < slice_left) slice_left -= ev.executed ? ev.executed : (rc == GCPU_BUDGET ? 1 : 0);
@@ -975,6 +981,8 @@ int main(int argc, char **argv)
                (unsigned long long)perf_us(gv->perf.guest_cycles), (unsigned long long)perf_us(gv->perf.monitor_cycles),
                (unsigned long long)perf_us(gv->perf.present_cycles), (unsigned long long)perf_us(gv->perf.harvest_cycles),
                (unsigned long long)perf_us(gv->perf.audio_cycles));
+        printf("host presenter: max_sample_us=%llu (whole-sample thread CPU; no cpustat/physical timer)\n",
+               (unsigned long long)(presenter_sample_max / 1000));
     }
     if (getenv("GUEST_IRQ0_RESTORE") && restore_edges != 1) {
         printf("restore edge: FAIL (requested PM boundary was not reached)\n");

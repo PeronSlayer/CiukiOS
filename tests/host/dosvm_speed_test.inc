@@ -37,16 +37,19 @@ static void test_speed_window(void)
           c.presentation.bands[0] == UINT32_MAX && c.presentation.bands[1] == 0x0FFFFFFF);
     unsigned maps = v->video_linear_maps, harvests = v->perf.harvests;
     linear_store(v, 17 * 320 + 5, 200);
-    g_ticks += 15;
+    g_ticks += 29;
     c = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && c.changed == 1 && c.damage.dst_y == 74 && c.damage.height == 2);
     CHECK(c.presentation.bands[0] == (1u << 9) && !c.presentation.bands[1]);
     CHECK(v->video_direct == VIDEO_LINEAR && v->video_linear_maps == maps && v->perf.harvests == harvests + 1);
     CHECK((*window_pte(v, 0xA1000) & (DOSVM_PTE_DIRTY | PTE_U | PTE_W)) == (PTE_U | PTE_W));
-    /* A flip bypasses the refresh fallback; no fixed 33 ms ceiling. */
+    /* Redundant completion writes retain the half-refresh cap and dirt. */
     linear_store(v, 6 * 320, 100); linear_store(v, 150 * 320, 100);
     port_out(v, 0x3D4, 2, 0x000C);
     g_ticks++;
+    c = command_for(w.id, w.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && !c.changed);
+    g_ticks += 28;
     c = command_for(w.id, w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_PRESENT_BANDS, &c, sizeof(c)) && c.changed);
     CHECK(c.presentation.bands[0] == (1u << 6) &&
@@ -58,6 +61,20 @@ static void test_speed_window(void)
     CHECK(dosvm_task_quantum(&caller, 10) == 10);
     c = command_for(w.id, w.generation); c.focused = 1;
     CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS, &c, sizeof(c)) && dosvm_task_quantum(v->task, 10) == 8 && dosvm_task_focus() == v->task);
+    v->monitor.vif = true; v->monitor.pic[0].irr = 1; v->monitor.pic[0].isr = 0;
+    CHECK(dosvm_task_irq() == v->task);
+    v->monitor.pic[0].imr |= 1;
+    CHECK(!dosvm_task_irq());
+    v->monitor.pic[0].imr &= ~1u; v->monitor.pic[0].isr = 1;
+    CHECK(!dosvm_task_irq());
+    v->monitor.pic[0].isr = 0; v->monitor.shadow = true;
+    CHECK(dosvm_task_irq() == v->task);
+    v->monitor.shadow = false; v->monitor.vif = false;
+    CHECK(dosvm_task_irq() == v->task);
+    v->monitor.vif = true; v->monitor.pic[0].irr = 1u << DOSVM_SB_IRQ;
+    v->monitor.pic[0].imr &= ~(1u << DOSVM_SB_IRQ);
+    CHECK(dosvm_task_irq() == v->task);
+    v->monitor.pic[0].irr = 0;
     v->fullscreen=true;v->audio.sb.x.active=true;
     CHECK(dosvm_task_quantum(v->task,10)==2 && dosvm_task_quantum(v->task,1)==1);
     v->audio.sb.x.active=false;v->audio.q.event_count=1;
@@ -637,11 +654,13 @@ static void test_perf_ranking(void)
         uint64_t begin = perf_monitor_stamp(v); fake_tsc += (i + 1) * 50;
         perf_vector_end(v, i % 3, 0x10 + i, 0, begin);
     }
+    v->video_present_rate = 35;
     g_ticks += DOSVM_PERF_INTERVAL - 1; dosvm_perf_report(v);
     CHECK(!v->perf.sample_count);
     g_ticks++; dosvm_perf_report(v);
     CHECK(v->perf.sample_count == 1);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
+    CHECK(s->present_rate == 35);
     for (unsigned i = 0; i < 5; i++) {
         CHECK(s->top_port[i].id == 0x20 + (6-i)*256 && s->top_port[i].count == 1 &&
               s->top_port[i].cycles == (7-i)*100);
@@ -666,6 +685,164 @@ static void test_perf_ranking(void)
     destroy(v, true); empty();
     puts("f3-31 perf: quiet 5s cadence, ranked port collisions/vector paths, interval reset, explicit saturation and widest record bounds PASS");
 }
+static struct dosvm *preempt_peer;
+static void create_peer_during_zero(void)
+{
+    preempt_hook = 0;
+    struct dosvm_ledger l; dosvm_snapshot(&l);
+    CHECK(l.vms == 1 && l.reserved == DOSVM_LOW_CAP && !l.tasks && !l.resident);
+    preempt_peer = create();
+    dosvm_snapshot(&l);
+    CHECK(l.vms == 2 && l.reserved == 2 * DOSVM_LOW_CAP);
+}
+static struct dosvm *changing_video;
+static void change_scanout_during_present(void)
+{
+    preempt_hook = 0;
+    port_out(changing_video, 0x3C6, 1, 0x3F);
+}
+static int flip_during_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{
+    int e = capture_row(arg, y, pixels, bytes);
+    if (y == 100) port_out(changing_video, 0x3D4, 2, 0x010D);
+    return e;
+}
+static void test_bounded_present(void)
+{
+    unsigned before = preempt_points;
+    preempt_hook = create_peer_during_zero;
+    struct dosvm *v = create();
+    CHECK(v != preempt_peer && dosvm_key(v).id != dosvm_key(preempt_peer).id);
+    CHECK(preempt_points - before >= 2 * (sizeof(*v) / PAGE_SIZE + DOSVM_PAGES));
+    destroy(preempt_peer, true); preempt_peer = 0;
+    int10(v, 0x13, 0, 0, 0);
+    struct ciuki_rect d;
+    before = preempt_points;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &d) == 1);
+    CHECK(preempt_points - before >= DOSVM_VIDEO_HEIGHT / 4 && v->video_present_rate == 35);
+    linear_store(v, 100, 200);
+    unsigned harvests = v->perf.harvests;
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 15, &d) && v->perf.harvests == harvests);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 29, &d) == 1);
+    /* 60 Hz timing gives a 30 Hz ceiling. Changes survive deferral. */
+    v->vga.crtc[6] = 0x0B; v->vga.crtc[7] = (v->vga.crtc[7] & ~0x21u) | 0x20u;
+    v->vga.display_changes++; v->vga.changes++;
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 60, &d));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 63, &d) == 1 && v->video_present_rate == 30);
+    int10(v, 0x13, 0, 0, 0);
+    g_ticks = 100;
+    port_out(v, 0x3D4, 2, 0x010C);
+    g_ticks = 114; port_out(v, 0x3D4, 2, 0x020C);
+    g_ticks = 129; port_out(v, 0x3D4, 2, 0x030C);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 129, &d) == 1 && v->video_present_rate == 70);
+    g_ticks = 143; port_out(v, 0x3D4, 2, 0x040C);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 143, &d) == 1 && v->video_present_rate == 70);
+    struct dosvm *other = create(); int10(other, 0x13, 0, 0, 0);
+    CHECK(dosvm_vga_present(other, capture_row, frame_buffer, 144, &d) == 1 && other->video_present_rate == 35);
+    destroy(other, true);
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 200, &d) && v->video_present_rate == 35);
+    /* Redundant high-byte writes cannot establish fast page flipping. */
+    v->video_flip_run = 0;
+    for (unsigned t = 201; t < 300; t += 14) { g_ticks = t; port_out(v, 0x3D4, 2, 0x040C); }
+    CHECK(!v->video_flip_run);
+    /* A guest register change across a yield stays pending for the next
+     * capped sample, even if some live reads already see its new value. */
+    linear_store(v, 100, 40); changing_video = v;
+    preempt_hook = change_scanout_during_present;
+    (void)dosvm_vga_present(v, capture_row, frame_buffer, 340, &d);
+    CHECK(v->video_presented && v->video_display != v->vga.display_changes);
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 341, &d));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 380, &d) == 1);
+    speed_compare_scanout(v);
+    int10(v, 0x13, 0, 0, 0); linear_store(v, 100, 200);
+    CHECK(dosvm_vga_present(v, flip_during_row, frame_buffer, 420, &d) == 1 && d.height == 480);
+    CHECK(v->video_presented && v->video_display != v->vga.display_changes && v->vga.crtc[13] == 1);
+    v->vga.crtc[13] = 0; speed_compare_scanout(v); v->vga.crtc[13] = 1;
+    destroy(v, true); empty();
+    puts("f3-41 presenter: page zero admission, four-row batches, 35/30 Hz caps, real 70 Hz flips, pending register changes across yields PASS");
+}
+static void store_during_row_group(void)
+{
+    preempt_hook = 0;
+    cvga_store_plane(&changing_video->vga, 0, 9 * 80 + 3, 37);
+    cvga_store_plane(&changing_video->vga, 0, 150 * 80 + 3, 99);
+}
+static int arm_store_during_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{
+    int e = capture_row(arg, y, pixels, bytes);
+    if (y == 60) preempt_hook = store_during_row_group;
+    return e;
+}
+static void test_live_scanout(void)
+{
+    struct dosvm *v = create(); fast_planar(v); changing_video = v;
+    struct ciuki_rect d;
+    CHECK(dosvm_vga_present(v, arm_store_during_row, frame_buffer, 0, &d) == 1);
+    CHECK(!preempt_hook && v->video_changes != v->vga.changes);
+    /* Row 9 was uploaded before the store; row 150 reads live planes after
+     * it. Exact comparison saw the old bytes for both before rendering. */
+    CHECK(!memcmp(frame_buffer + (58 * 640 + 24) * 4, &v->video_lut[0], 4));
+    CHECK(!memcmp(frame_buffer + (340 * 640 + 24) * 4, &v->video_lut[99], 4));
+    CHECK(!v->video_indexes[9][3] && !v->video_indexes[150][3]);
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 1, &d));
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 40, &d) == 1);
+    CHECK(v->video_indexes[9][3] == 37 && v->video_indexes[150][3] == 99);
+    speed_compare_scanout(v);
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 80, &d));
+    destroy(v, true); empty();
+    puts("f3-41 live scanout: stores between row groups appear this/next sample, deferred dirt and exact comparison recover both rows PASS");
+}
+static void test_present_rates(void)
+{
+    struct dosvm *v = create(); struct ciuki_rect d;
+    for (unsigned hz = 0; hz < 2; hz++) {
+        int10(v, 0x13, 0, 0, 0);
+        if (hz) {
+            v->vga.crtc[6] = 0x0B; v->vga.crtc[7] = (v->vga.crtc[7] & ~0x21u) | 0x20u;
+            v->vga.display_changes++; v->vga.changes++;
+        }
+        CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &d) == 1);
+        unsigned frames = 0;
+        for (unsigned tick = 1; tick <= 1000; tick++) {
+            linear_store(v, 100, (uint8_t)tick);
+            frames += dosvm_vga_present(v, capture_row, frame_buffer, tick, &d) == 1;
+        }
+        CHECK(frames == (hz ? 30u : 35u));
+    }
+    int10(v, 0x13, 0, 0, 0);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &d) == 1);
+    unsigned frames = 0;
+    for (unsigned n = 1; n <= 73; n++) {
+        uint64_t tick = n * vga_frame_us(&v->vga) / 1000;
+        g_ticks = tick; port_out(v, 0x3D4, 2, (n << 8) | 0x0D);
+        g_ticks++; port_out(v, 0x3D4, 2, (((n % 3) + 1) << 8) | 0x0C);
+        int e = dosvm_vga_present(v, capture_row, frame_buffer, tick + 1, &d);
+        if (n > 3) frames += e == 1;
+    }
+    CHECK(frames == 70 && v->video_present_rate == 70);
+    destroy(v, true); empty();
+    puts("f3-41 cadence: 1 kHz polling gives 35/30 updates per second; 70 refresh-spaced flips after warm-up, split low/high writes PASS");
+}
+static void leave_vbe_during_present(void)
+{
+    preempt_hook = 0;
+    int10(changing_video, 0x13, 0, 0, 0);
+}
+static void test_bounded_vbe(void)
+{
+    struct dosvm *v; CHECK(!dosvm_create(0, &v));
+    bool available = fs_vbe_available; fs_vbe_available = true;
+    int10(v, 0x4F02, 0x4101, 0, 0);
+    CHECK(v->vbe_mode == 0x101 && v->vbe_buffer.used);
+    struct ciuki_rect d; unsigned before = preempt_points;
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 0, &d) == 1 && d.height == 480);
+    CHECK(preempt_points - before >= DOSVM_VIDEO_HEIGHT / 4);
+    v->video_presented = false; changing_video = v; preempt_hook = leave_vbe_during_present;
+    CHECK(!dosvm_vga_present(v, capture_row, frame_buffer, 40, &d) && !v->vbe_mode && !v->video_presented);
+    CHECK(dosvm_vga_present(v, capture_row, frame_buffer, 40, &d) == 1 && d.height == 480);
+    fs_vbe_available = available; destroy(v, true); empty();
+    puts("f3-41 VBE: four-row batches, mode/extent revalidation after yield, VGA retry PASS");
+}
 static void test_speed(void)
-{ test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
+{ test_present_rates(); test_bounded_present(); test_live_scanout(); test_bounded_vbe(); test_speed_window(); test_speed_accounting(); test_perf_ranking(); test_chain4_conversion(); test_speed_launch_errors(); test_planar_completions(); test_video_pte_batch();
   test_doom_column_replay(); test_modex_conversion(); test_planar_changed_rows(); test_planar_dirty_bitmap(); test_planar_rep_and_pm_burst(); test_planar_strings_differential(); }

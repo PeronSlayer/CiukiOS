@@ -203,6 +203,13 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
                          P2V(op.row_page), width * 4);
             err = fbdev_present(&src, &dst);
             if (err) { if (err == -ENODEV) err = -EIO; break; }
+            /* Conversion/copy is at most one 4 KiB tile. The F1 mutex and
+             * console drawing claim have both been released here. The
+             * operation retains its surface and grant across the yield. */
+            kpreempt_point();
+            if (p->state != PROC_LIVE || (t && proc_signal_caught(t))) err = -EINTR;
+            else if (fbdev_get()->generation != generation || display_live()) err = -EIO;
+            if (err) break;
         }
     }
     bool full_frame = s->width == fbdev_get()->width && s->height == fbdev_get()->height &&
