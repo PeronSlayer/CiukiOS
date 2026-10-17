@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 static struct desktop desktop;
 static struct du_ui ui;
 static struct du_window window;
@@ -50,6 +51,11 @@ int main(int argc,char **argv)
     desk_shell_enable(&desktop);assert(desk_add_client(&desktop,3)==0);
     assert(!du_window_open_resizable(&window,&ui,3,760,520,"Files",600,360));
     fake_reset();fake_image_tree();assert(!files_setup(&app,&ui,&fake_vfs,"/system"));
+    for (unsigned i=0;app.reading && i<5000;i++) {
+        struct du_event e={.type=DU_EV_TICK,.id=3};files_event(&ui,&e,&app);
+        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+    }
+    assert(!app.reading);
     roundtrip();desktop.clients[0].program=DESK_APP_FILES;desk_move(&desktop,0,128,72);
     const char *themes[]={"Platinum","Ciuki Blue","Classic 98"};
     const char *names[]={"platinum","ciuki-blue","classic-98"};

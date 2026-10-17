@@ -52,6 +52,15 @@ static void autoplay_test_service(struct desktop *d)
     if (elapsed>autoplay_test_service_max) autoplay_test_service_max=elapsed;
     assert(elapsed<50000000ull); /* host scheduling margin; held I/O never releases here */
     assert(strcmp(__atomic_load_n(&desktop_watchdog.wait,__ATOMIC_ACQUIRE),"autoplay-service"));
+    /* Confirmation now waits for a fresh asynchronous media observation.
+     * Keep measuring each individual production frame turn. */
+    for (unsigned i=0;media_worker.confirm_pending && i<3000;i++) {
+        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        begin=monotonic();shell_service(d);elapsed=monotonic()-begin;
+        assert(elapsed<50000000ull);
+        if (elapsed>autoplay_test_service_max) autoplay_test_service_max=elapsed;
+    }
+    assert(!media_worker.confirm_pending);
 }
 static void autoplay_test_mount(struct desktop *d,unsigned generation)
 {
@@ -173,6 +182,7 @@ static void test_autoplay_startup(void)
  * 25 ms slow-stick command. Both workers must leave the frame thread free. */
 static pthread_t slow_folder_frame;
 static unsigned slow_folder_lists, slow_folder_revision;
+static int slow_folder_polling;
 static void slow_folder_pause(void)
 { struct timespec pause={0,25000000}; nanosleep(&pause,NULL); }
 static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
@@ -182,7 +192,7 @@ static int slow_folder_list(void *ctx,const char *path,unsigned flags,fm_emit em
     if (!strcmp(path,"/Documents")) return emit("Desktop",&meta,arg);
     int media=!strcmp(path,"/mnt/e");
     assert(media || !strcmp(path,DESK_FOLDER));
-    if (media || flags==FM_LIST_NAMES_ONLY) {
+    if (media || (slow_folder_polling && flags==FM_LIST_NAMES_ONLY)) {
         assert(!pthread_equal(pthread_self(),slow_folder_frame));
         assert(flags==FM_LIST_NAMES_ONLY);
         if (!media) __atomic_add_fetch(&slow_folder_lists,1,__ATOMIC_RELAXED);
@@ -203,7 +213,7 @@ static void test_slow_stick_folder(void)
     static struct desktop d;
     fake_reset(); slow_folder_frame=pthread_self();
     desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
-    assert(!desk_folder_init(&d,&fs)); d.autoplay_fs=&fs;
+    assert(!desk_folder_init(&d,&fs)); slow_folder_polling=1; d.autoplay_fs=&fs;
     assert(!desk_autoplay_prepare(&d));
     d.pixels=calloc(640*480,4); assert(d.pixels); assert(!desk_redraw(&d));
     desktop_watchdog.desktop=&d;

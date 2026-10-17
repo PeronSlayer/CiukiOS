@@ -233,7 +233,11 @@ static int browser_listing(struct fm_vfs *fs, const char *path, struct listing *
         memset(l, 0, sizeof(*l));
         r = fm_volumes(fs, collect, l);
         if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
-    } else r = listing(fs, path, l);
+    } else {
+        memset(l, 0, sizeof(*l));
+        r = fs->list(fs->ctx, path, FM_LIST_NAMES_ONLY, collect, l);
+        if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
+    }
     if (!r) {
         unsigned count = 0;
         for (unsigned i = 0; i < l->count; i++)

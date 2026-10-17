@@ -67,6 +67,6 @@ int main(void)
     emitted=directories=0;
     assert(!fs->list(fs->ctx,"/media",FM_LIST_SNIFF,collect_metadata,NULL));
     assert(emitted==132 && directories==1 && stats==132 && opens==128 && reads==128 && closes==128 && classified==128);
-    puts("PASS F2-79 native VFS: dirent type/size/mtime, cheap listing zero stat/open/read, Files retains stat and 128 ELF sniffs");
+    puts("PASS F2-79 native VFS: dirent type/size/mtime, cheap listing zero stat/open/read, explicit SNIFF mode retains stat and 128 ELF sniffs");
     return 0;
 }

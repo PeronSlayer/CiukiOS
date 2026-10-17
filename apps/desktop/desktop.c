@@ -572,8 +572,11 @@ static int settings_save(struct desktop *d)
     if (result && errno==EAGAIN) { d->sh.want_save=1; return 0; }
     return result;
 }
+static int media_busy(void);
+static void media_stop(void);
 static int shutdown_wait(struct desktop *d)
 {
+    if (media_busy()) return 0;
     if (desk_autoplay_busy(d)) return 0;
     if (desk_folder_busy(d)) return 0;
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
@@ -820,14 +823,27 @@ static void observer_close(int *fd)
 {
     if (*fd>=0) { close(*fd); *fd=-1; }
 }
+static struct {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    pthread_t thread;
+    struct ciuki_media_state state;
+    struct ciuki_media_volume volumes[26];
+    unsigned requested, completed;
+    int started, failed, pending, busy, ready, stopping, observed, ok;
+    unsigned commit;
+    int confirm_pending, rescan, choice, always;
+    struct ciuki_media_volume confirmation;
+} media_worker = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER};
 static void observers_prepare(struct desktop *d)
 {
-    observer_open(&d->media_fd,"/dev/media");
+    if (!media_worker.started) observer_open(&d->media_fd,"/dev/media");
     observer_open(&d->network_fd,"/dev/net");
     if (d->mixer_fd<0) observer_open(&d->mixer_observer_fd,"/dev/mixer");
 }
 static void observers_close(struct desktop *d)
 {
+    media_stop();
     observer_close(&d->media_fd);
     observer_close(&d->network_fd);
     observer_close(&d->mixer_observer_fd);
@@ -855,30 +871,99 @@ static void media_sound(struct desktop *d,int connected)
     const char *key=connected ? "device_connect" : "device_disconnect";
     for (unsigned i=0;i<SOUND_EVENTS;i++) if (!strcmp(sound_keys[i],key)) { desk_sound(d,i); break; }
 }
+/* One bounded snapshot mailbox. The worker owns its descriptor and never
+ * touches desktop/shell state. Device queries are outside the mailbox lock. */
+static void *media_run(void *arg)
+{
+    int fd=(int)(intptr_t)arg;
+    for (;;) {
+        pthread_mutex_lock(&media_worker.lock);
+        while (!media_worker.pending && !media_worker.stopping)
+            pthread_cond_wait(&media_worker.changed,&media_worker.lock);
+        if (media_worker.stopping) { pthread_mutex_unlock(&media_worker.lock); break; }
+        unsigned serial=media_worker.requested;
+        media_worker.pending=0; media_worker.busy=1;
+        pthread_mutex_unlock(&media_worker.lock);
+        struct ciuki_media_state state={.version=CIUKI_MEDIA_VERSION,.size=sizeof(state)};
+        struct ciuki_media_volume volumes[26]={0};
+        observer_open(&fd,"/dev/media");
+        int observed=fd>=0 && !ciuki_devctl(fd,MEDIA_GET_STATE,&state,sizeof(state));
+        int ok=observed;
+        for (unsigned i=3;ok && i<26;i++) {
+            volumes[i]=(struct ciuki_media_volume){.version=CIUKI_MEDIA_VERSION,.size=sizeof(volumes[i]),.drive=i};
+            if (ciuki_devctl(fd,MEDIA_GET_VOLUME,&volumes[i],sizeof(volumes[i]))) ok=0;
+        }
+        if (!ok) observer_close(&fd);
+        pthread_mutex_lock(&media_worker.lock);
+        media_worker.state=state; memcpy(media_worker.volumes,volumes,sizeof(volumes));
+        media_worker.observed=observed; media_worker.ok=ok;
+        media_worker.completed=serial; media_worker.ready=1; media_worker.busy=0;
+        pthread_mutex_unlock(&media_worker.lock);
+    }
+    observer_close(&fd);
+    return NULL;
+}
 static int media_read(struct desktop *d)
 {
-    if (d->power.state && d->power.prepared) return 0;
-    struct ciuki_media_state s={.version=CIUKI_MEDIA_VERSION,.size=sizeof(s)};
-    int fd=observer_open(&d->media_fd,"/dev/media");
-    int observed=0;
-    if (fd>=0) {
-        observed=!ciuki_devctl(fd,MEDIA_GET_STATE,&s,sizeof(s));
-        if (!observed) observer_close(&d->media_fd);
+    if (d->power.state) return 0;
+    if (!media_worker.started && !media_worker.failed) {
+        media_worker.stopping=media_worker.pending=media_worker.busy=media_worker.ready=0;
+        media_worker.commit=0; media_worker.confirm_pending=0;
+        int error=pthread_create(&media_worker.thread,NULL,media_run,(void *)(intptr_t)d->media_fd);
+        if (error) { media_worker.failed=1; desk_shell_notify_error(d,"Media worker unavailable",error); }
+        else { media_worker.started=1; d->media_fd=-1; }
     }
-    if (!observed) return 0; /* An unavailable observer is not a physical unplug. */
-    desk_shell_media_update(d,&s);
-    /* A failed observation preserves prior state, never fabricates an eject. */
-    static struct ciuki_media_volume volumes[26];
-    {
-        int ok=1;
-        for (unsigned i=3;i<26;i++) {
-            struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=i};
-            if (ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v))) { observer_close(&d->media_fd); ok=0; break; }
-            volumes[i]=v;
-        }
-        if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); }
-        return ok;
+    if (!media_worker.started) return 0;
+    /* Polling and submissions never wait for a busy mailbox. */
+    if (pthread_mutex_trylock(&media_worker.lock)) return 0;
+    if (media_worker.rescan || (!media_worker.pending && !media_worker.busy && !media_worker.ready)) {
+        media_worker.rescan=0; media_worker.ready=0;
+        media_worker.requested++; media_worker.pending=1;
+        pthread_cond_signal(&media_worker.changed);
     }
+    pthread_mutex_unlock(&media_worker.lock);
+    return 1;
+}
+static void media_poll(struct desktop *d)
+{
+    if (d->power.state || !media_worker.started || pthread_mutex_trylock(&media_worker.lock)) return;
+    int ready=media_worker.ready, observed=media_worker.observed, ok=media_worker.ok;
+    unsigned serial=media_worker.completed;
+    if (serial < media_worker.requested) ready=0;
+    struct ciuki_media_state state=media_worker.state;
+    struct ciuki_media_volume volumes[26];
+    if (ready) { memcpy(volumes,media_worker.volumes,sizeof(volumes)); media_worker.ready=0; }
+    pthread_mutex_unlock(&media_worker.lock);
+    if (!ready) return;
+    /* An unavailable observation never fabricates an eject. */
+    if (observed) desk_shell_media_update(d,&state);
+    if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); }
+    if (media_worker.commit && serial>=media_worker.commit) {
+        media_worker.commit=0; media_worker.confirm_pending=0;
+        struct desk_autoplay *a=&d->sh.autoplay;
+        const struct ciuki_media_volume *v=&media_worker.confirmation;
+        int same=a->open && a->active.drive==v->drive && a->active.generation==v->generation && !strcmp(a->active.id,v->id);
+        if (same && ok) {
+            a->selected=media_worker.choice; a->always=media_worker.always; a->want_commit=1;
+        } else if (same) desk_shell_message(d,"AutoPlay","The media could not be checked. Please try again.",1);
+    }
+}
+static int media_busy(void)
+{
+    if (!media_worker.started) return 0;
+    if (pthread_mutex_trylock(&media_worker.lock)) return 1;
+    int busy=media_worker.busy || media_worker.pending;
+    pthread_mutex_unlock(&media_worker.lock);
+    return busy;
+}
+static void media_stop(void)
+{
+    if (!media_worker.started) return;
+    pthread_mutex_lock(&media_worker.lock);
+    media_worker.stopping=1; pthread_cond_signal(&media_worker.changed);
+    pthread_mutex_unlock(&media_worker.lock);
+    pthread_join(media_worker.thread,NULL);
+    media_worker.started=0;
 }
 static void media_remove(struct desktop *d)
 {
@@ -895,8 +980,18 @@ static void media_remove(struct desktop *d)
             desk_media_blocker_text(reason,sizeof(reason),&blockers,desk_media_notice_body(d->width,d->height));
         if (e && e!=EBUSY) observer_close(&d->media_fd);
     }
+    /* The successful command already proves this generation was detached.
+     * Apply that fact before the success notice; its later worker observation
+     * must not replace the notice with a duplicate detach notification. */
+    if (!e && r.drive<26 && d->sh.media.generation[r.drive]==r.generation) {
+        struct ciuki_media_state state=d->sh.media;
+        state.removable_mask&=~(1u<<r.drive);
+        state.type[r.drive]=optical ? 0 : CIUKI_MEDIA_SAFE_REMOVED;
+        desk_shell_media_update(d,&state);
+    }
+    observer_close(&d->media_fd);
     d->now_ns=monotonic();
-    media_read(d);
+    media_worker.rescan=1; media_read(d);
     d->now_ns=monotonic();
     if (e==EBUSY) desk_shell_notify(d,"Drive is in use",reason,DU_DLG_ICON_WARNING,SH_NOTIFY_DETAILS);
     else if (e) desk_shell_notify_error(d,"Media removal failed",e);
@@ -1181,13 +1276,30 @@ static void shell_service(struct desktop *d)
     if (sh->want_reload & 2) { desktop_wait("system-read"); system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
     if (sh->want_reload & 4) { desktop_wait("mixer-read"); mixer_read(d); }
     if (sh->want_reload & 16) { desktop_wait("network-read"); network_read(d); }
-    if (sh->want_reload & 32) { desktop_wait("media-read"); media_read(d); }
+    if (sh->want_reload & 32) { desktop_wait("media-submit"); media_read(d); }
     if (sh->want_remove) { desktop_wait("media-remove"); media_remove(d); }
     desktop_wait("autoplay-check");
-    if (sh->autoplay.want_commit && !media_read(d)) {
-        sh->autoplay.want_commit=0;
-        desk_shell_message(d,"AutoPlay","The media could not be checked. Please try again.",1);
+    if (sh->autoplay.want_commit) {
+        sh->autoplay.want_commit=0; media_worker.confirm_pending=1; media_worker.commit=0;
+        media_worker.confirmation=sh->autoplay.active;
+        media_worker.choice=sh->autoplay.selected; media_worker.always=sh->autoplay.always;
     }
+    if (media_worker.confirm_pending && !media_worker.commit) {
+        if (media_read(d)) {
+            /* Require a scan requested after the user's confirmation. */
+            if (!pthread_mutex_trylock(&media_worker.lock)) {
+                media_worker.commit=++media_worker.requested;
+                media_worker.pending=1; pthread_cond_signal(&media_worker.changed);
+                pthread_mutex_unlock(&media_worker.lock);
+            }
+        } else if (!media_worker.started) {
+            media_worker.confirm_pending=0;
+            desk_shell_message(d,"AutoPlay","The media could not be checked. Please try again.",1);
+        }
+    }
+    desktop_wait("media-result");
+    if (media_worker.rescan) media_read(d);
+    media_poll(d);
     desktop_wait("autoplay-service"); desk_autoplay_service(d);
     desktop_wait("autoplay-done");
     sh->want_reload=0;

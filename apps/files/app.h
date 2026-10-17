@@ -29,6 +29,9 @@ struct files_drive_label {
     struct files_label_key key;
 };
 struct files_app {
+    struct files_worker *worker;
+    int loading, reading, games_available, select_created, refresh_checkpoint, pending_command;
+    char loading_path[FM_PATH];
     struct du_ui *ui;
     struct fm_model model;
     struct fm_job job;

@@ -53,7 +53,7 @@ static ssize_t shell_launch_write(int fd,const void *bytes,size_t size)
 }
 #define fcntl shell_fcntl
 #define close shell_close
-#define open shell_open
+#define open(...) shell_open(__VA_ARGS__)
 #define fstat shell_fstat
 /* Parse the writer's field names before redirecting the POSIX write call. */
 #include "../../../apps/desktop/settings_io.h"
@@ -188,6 +188,9 @@ static unsigned mixer_queries,mixer_sets;
 static int mixer_available, mixer_error;
 #endif
 static int media_volume_error;
+static int media_slow;
+static unsigned media_slow_queries;
+static pthread_t media_frame_thread;
 #ifdef DESK_POLL_LEDGER_TEST
 void desktop_poll_host_init(void);
 void desktop_poll_host_open(unsigned);
@@ -314,6 +317,11 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     if (poll_snapshot) desktop_poll_host_check(poll_equal);
 #endif
     if (fd==MEDIA_FD) {
+        if (media_slow) {
+            assert(!pthread_equal(pthread_self(),media_frame_thread));
+            __atomic_add_fetch(&media_slow_queries,1,__ATOMIC_RELAXED);
+            struct timespec pause={0,25000000};nanosleep(&pause,NULL);
+        }
         if (op==MEDIA_GET_STATE) {
             assert(size==sizeof(media_fixture));
             if (media_query_error) { errno=EIO;return -1; }
@@ -352,6 +360,24 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     }
     errno=ENODEV; return -1;
 }
+#include "media_worker_test.h"
+/* Existing device-state assertions wait at observation boundaries; the
+ * production shell_service and the slow-media test keep nonblocking turns. */
+static int media_wait_read(struct desktop *d)
+{
+    media_worker.rescan=1;
+    if (!media_read(d)) return 0;
+    for (unsigned i=0;i<5000;i++) {
+        pthread_mutex_lock(&media_worker.lock);
+        int ready=media_worker.ready && media_worker.completed>=media_worker.requested;
+        int ok=media_worker.ok;
+        pthread_mutex_unlock(&media_worker.lock);
+        if (ready) { media_poll(d); return ok; }
+        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+    }
+    assert(!"media worker timeout");return 0;
+}
+#define media_read media_wait_read
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
@@ -968,10 +994,10 @@ static void test_media_removal_service(void)
     media_fixture.type[4]=CIUKI_MEDIA_USB;media_fixture.generation[4]=77;
     media_read(&d);media_query_error=1;
     assert(!media_read(&d) && d.sh.media.removable_mask==(1u<<4));
-    media_query_error=0;d.sh.want_remove=4;d.sh.remove_generation=77;media_remove(&d);
+    media_query_error=0;d.sh.want_remove=4;d.sh.remove_generation=77;media_remove(&d);media_read(&d);
     assert(d.sh.media.removable_mask && strstr(d.sh.notification.text,"ciuknote (42)"));
     assert(d.sh.notification.expires==monotonic()+8000000000ull);
-    media_error=0;d.sh.want_remove=4;media_remove(&d);
+    media_error=0;d.sh.want_remove=4;media_remove(&d);media_read(&d);
     assert(!d.sh.media.removable_mask && strstr(d.sh.notification.text,"safe to unplug"));
     assert(!d.sh.notification.balloon && d.sh.notification.started==monotonic());
     desk_shell_tick(&d);assert(d.sh.notification.active);
@@ -1021,6 +1047,7 @@ static void test_network_service(void)
 #endif
 int main(int argc,char **argv)
 {
+    if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
 #ifdef DESK_POLL_LEDGER_TEST
     if (argc==2 && !strcmp(argv[1],"--poll-handles")) { test_poll_handles(); return 0; }
 #endif

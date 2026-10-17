@@ -28,6 +28,7 @@ static void test_poll_handles(void)
     poll_snapshot=0; desktop_poll_host_check(1);
 
     observers_prepare(&d); assert(d.network_fd>=0 && d.media_fd>=0 && d.mixer_observer_fd>=0 && d.mixer_fd<0);
+    assert(media_read(&d)); /* Warm the worker-owned observation descriptor. */
     desktop_poll_host_baseline(); poll_snapshot=1; poll_equal=1;
     unsigned opens=network_opens, queries=mixer_queries;
     for (unsigned i=0;i<100;i++) {
@@ -41,14 +42,15 @@ static void test_poll_handles(void)
     desktop_poll_host_leak(1); desktop_poll_host_check(0);
     desktop_poll_host_leak(0); desktop_poll_host_check(1);
 
-    /* Failed observations release only the affected observer; later reads
+    /* Media's retained descriptor belongs to its worker after startup.
+     * Failed observations release only the affected observer; later reads
      * reopen it. An absent medium/NIC/audio device is still a valid query. */
-    network_error=1; network_read(&d); assert(d.network_fd<0 && d.media_fd>=0 && d.mixer_observer_fd>=0);
+    network_error=1; network_read(&d); assert(d.network_fd<0 && d.media_fd<0 && d.mixer_observer_fd>=0);
     network_error=0; network_read(&d); assert(d.network_fd>=0);
     media_query_error=1; assert(!media_read(&d) && d.media_fd<0);
-    media_query_error=0; assert(media_read(&d) && d.media_fd>=0);
+    media_query_error=0; assert(media_read(&d) && d.media_fd<0);
     media_volume_error=1; assert(!media_read(&d) && d.media_fd<0);
-    media_volume_error=0; assert(media_read(&d) && d.media_fd>=0);
+    media_volume_error=0; assert(media_read(&d) && d.media_fd<0);
     mixer_error=1; mixer_read(&d); assert(d.mixer_observer_fd<0 && d.sh.mixer_state<0);
     mixer_error=0; mixer_read(&d); assert(d.mixer_observer_fd>=0 && d.sh.mixer_state==1);
     desktop_poll_host_check(1);
@@ -64,7 +66,7 @@ static void test_poll_handles(void)
     poll_snapshot=0;
     desk_power_cancel(&d); /* prepared remains set; cancellation must allow recovery */
     network_read(&d); assert(media_read(&d)); mixer_read(&d);
-    assert(d.network_fd>=0 && d.media_fd>=0 && d.mixer_observer_fd>=0 && d.sh.mixer_state==1);
+    assert(d.network_fd>=0 && d.media_fd<0 && d.mixer_observer_fd>=0 && d.sh.mixer_state==1);
     observers_close(&d); observers_close(&d); /* idempotent shutdown */
     desktop_poll_host_finish(); poll_bridge=0;
     desk_render_release(&d); fake_reset();

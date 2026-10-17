@@ -122,7 +122,8 @@ class DeskuiTests(unittest.TestCase):
             output.mkdir()
             extra = [str(a(folder)) if callable(a) else str(a) for a in args]
             result = subprocess.run([str(binary), *([str(output)] if frames else []), *extra],
-                                    check=True, env=env, capture_output=True, text=True)
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             print(result.stdout.strip())
             if name == "files-ui":
                 from PIL import Image
@@ -149,6 +150,12 @@ class DeskuiTests(unittest.TestCase):
             "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
+
+    def test_files_slow_listing_responsive(self):
+        stdout, _ = self.run_harness("files-async", ["tests/host/desktop/files_async_test.c",
+            "apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"])
+        self.assertIn("PASS Files worker", stdout)
 
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",

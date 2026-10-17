@@ -20,7 +20,8 @@ struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int6
 struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
 /* Cheap enumeration metadata (type/size/mtime/ino); SNIFF requests the
- * browser's full stat metadata plus bounded ELF header classification. */
+ * full stat metadata plus bounded ELF header classification for explicit jobs.
+ * Browser listings always use NAMES_ONLY; classification is deferred to open. */
 enum { FM_LIST_NAMES_ONLY = 0, FM_LIST_SNIFF = 1u };
 /* Every error is -errno; reads/writes return a positive short count or zero. */
 struct fm_vfs {

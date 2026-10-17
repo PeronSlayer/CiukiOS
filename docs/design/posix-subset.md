@@ -356,6 +356,10 @@ and currently report mtime zero, matching stat. FAT values come from the
 entry just enumerated, without stat, FAT chain traversal, or another lookup.
 `fm_vfs.list(..., flags, ...)` uses `FM_LIST_NAMES_ONLY` for this cheap metadata
 and `FM_LIST_SNIFF` for the existing Files browser metadata/header classification.
+F2-80 supersedes that browser choice: Files now uses `FM_LIST_NAMES_ONLY` on
+every volume and classifies extension-less programs on open, on its worker.
+The explicit `FM_LIST_SNIFF` adapter mode remains available to existing file
+operations. This changes no directory record, SDK header or syscall ABI.
 AutoPlay stops after 256 root or 64 subdirectory entries, eight file-prefix
 probes, or 2 seconds of monotonic elapsed worker time, discards partial content
 on exhaustion and asks with generic choices. Checks surround VFS calls and run

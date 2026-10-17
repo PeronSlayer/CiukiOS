@@ -1,5 +1,34 @@
 # Desktop folder (f2-42)
 
+## F2-80: asynchronous browser and media snapshots
+
+Research before implementation (2026-10-17): POSIX
+[thread creation](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
+provides independently scheduled work;
+[mutex trylock](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_mutex_lock.html)
+allows consumers to defer a busy mailbox, while
+[join](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
+waits for termination and therefore belongs only to teardown.
+[Directory streams](https://pubs.opengroup.org/onlinepubs/007904875/functions/readdir_r.html)
+reuse returned storage, so the worker copies names and metadata into its owned
+result. [Read](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html)
+permits short transfers and EINTR; on-open ELF classification handles both.
+
+The existing Files controller calls canonicalization, listing, tree enumeration,
+Games availability checks and media-label reads on its UI thread. Move these
+reads to one cancellable worker, publish owned snapshots with a revision, and
+apply them only on the UI thread. Cancellation is cooperative at VFS call and
+entry boundaries; an in-flight device call must return before it can stop.
+Browser enumeration always uses FM_LIST_NAMES_ONLY and the existing Ciuki
+dirent metadata extension. Extension-less files are classified on open, on the
+worker, after the browser has painted; the initial icons use name/type only.
+Paste arriving in the same input batch as navigation waits for its accepted
+revision; a newer navigation discards that pending action. Explicit operations
+retain fm_job. Desktop media observations similarly use a
+worker-owned descriptor and a mailbox; shell state and AutoPlay decisions are
+updated only by the frame thread. AutoPlay confirmation waits for a fresh media
+observation. Failed observations preserve the previous successful state.
+
 The shell projects `/Documents/Desktop` after Computer, Documents and Trash.
 File operations reuse the Files VFS/model and incremental copy/move engine;
 Trash is `/Documents/Trash`, with unique names and no overwriting. The image

@@ -11,6 +11,10 @@
 #include <errno.h>
 #include <string.h>
 
+static void raw_files_event(struct du_ui *u,const struct du_event *e,void *arg)
+{ files_event(u,e,arg); }
+#include "files_wait.h"
+
 #define WIDTH 760
 #define HEIGHT 520
 static uint32_t *pixels;
@@ -35,6 +39,7 @@ static void event(int type, int code, int value, int value2)
     clock_ns += 20000000ull;
     struct ciuki_input_event e = {.type = (uint32_t)type, .code = code, .value = value, .value2 = value2, .monotonic_ns = clock_ns};
     du_input(&ui, &e);
+    files_test_wait(&app);
 }
 static void motion(int x, int y) { event(CIUKI_INPUT_MOTION, 0, x, y); }
 static void press(int b) { event(CIUKI_INPUT_BUTTON, b, 1, 0); }
@@ -43,7 +48,7 @@ static void click(int x, int y) { motion(x, y); press(1); release(1); clock_ns +
 static void rclick(int x, int y) { motion(x, y); press(2); release(2); clock_ns += 600000000ull; }
 static void key(int code) { event(CIUKI_INPUT_KEY, code, 1, 0); event(CIUKI_INPUT_KEY, code, 0, 0); }
 static void chord(int mod, int code) { event(CIUKI_INPUT_KEY, mod, 1, 0); key(code); event(CIUKI_INPUT_KEY, mod, 0, 0); }
-static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 5000000ull; du_tick(&ui, clock_ns); } }
+static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 5000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); } }
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
 static int control_spawned;
@@ -209,7 +214,9 @@ static void label_cache_tests(void)
     for (unsigned i=0;i<8;i++) files_update(&app);
     assert(label_calls[4]==1 && key_calls[4]==1);
     struct du_event poll={.type=DU_EV_TICK,.id=2};
+    ui.dirty=0;
     for (unsigned i=0;i<4;i++) files_event(&ui,&poll,&app);
+    assert(!ui.dirty); /* Unchanged worker observations do not repaint. */
     assert(label_calls[4]==1 && label_calls[5]==1); /* metadata only */
     label_keys[4].modified=1;files_event(&ui,&poll,&app);
     assert(label_calls[4]==2 && label_calls[5]==1 && strstr(app.removal_label,"Drive 4 label 1"));
@@ -416,8 +423,12 @@ int main(int argc, char **argv)
     key(0x30); assert(!strcmp(app.model.entries[app.model.active].name, "BOOT.CFG"));
     chord(DU_KEY_LCTRL, 0x2e); assert(app.model.clipboard_count == 1);
     key(0x2e); assert(!strcmp(app.model.entries[app.model.active].name, "Ciuki"));
-    key(DU_KEY_ENTER); assert(fm_same_path(app.model.path, "/system/Ciuki") && app.model.count == 0);
-    chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
+    struct du_event open_batch={.type=DU_EV_OPEN,.id=107,.index=(int)app.model.active};
+    raw_files_event(&ui,&open_batch,&app);assert(app.loading);
+    struct du_event paste_batch={.type=DU_EV_ACTIVATE,.id=6};
+    raw_files_event(&ui,&paste_batch,&app);assert(app.pending_command==6);
+    files_test_wait(&app);
+    assert(fm_same_path(app.model.path, "/system/Ciuki") && app.model.count == 0 && app.job_active);
     dump("copy-progress");
     tick();
     assert(!app.job_active && checkpoint_count == 4 && fake_lookup("/system/Ciuki/BOOT.CFG") >= 0);
