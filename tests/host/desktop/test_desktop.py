@@ -38,15 +38,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # only the dialog frames change.
 # 2026-10-18 (main after f4-30 + f2-81): the dialogs frames re-recorded on the combined tree (Places pane in the two-bar shell), reviewed by the lead.
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
+# F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "0e2eda15a6a1af067e99f192cf8d5bd8a2a8b68d4898a9f92264fb085c7d60b1",
-    "ciuki-blue-dialogs.ppm": "c9dc78c4a6c950db60da63e0ab36018beb128dc95d72ee6d12e42c9f5ea397ed",
-    "ciuki-blue-tray-disabled.ppm": "1469603613a63dd163148a1788ad5cda642b623996047f2bf27c4472b26ae69f",
-    "ciuki-blue-tray-media.ppm": "67ba65759bf4b0b0faa991df1de21568f0463dc026c9de1fd9fe07b1779d318c",
-    "platinum-desktop.ppm": "2f73053772726ed82aaf7a6f15fdf9970647f1342fbae8025d932ef571879b6b",
-    "platinum-dialogs.ppm": "8646c5ce631a8cc84d91e32bba1aff7921ebac5d51764fc3e429231b8f855125",
-    "platinum-tray-disabled.ppm": "697a5074dd382b432aa81011f235b8a2138327ec47715f699119b7c7b796eddd",
-    "platinum-tray-media.ppm": "b2bed075ebe611ea80afc1dcc80e38c407e8755969aad83d9f582ed80a3dad6c"
+    "ciuki-blue-desktop.ppm": "7be82fba7a1fbc2c76749e2d5b82e2c0f0446f66804d39f55f9a74f5ed15f236",
+    "ciuki-blue-dialogs.ppm": "06611ac97f8a704e637f76f18b35fd2602ef84c3030e6bf85861e070e5c10f4a",
+    "ciuki-blue-tray-disabled.ppm": "ff074a348a95ca8ba515e85f6d83440cea13e5a7d70f15235f127a43884b2e09",
+    "ciuki-blue-tray-media.ppm": "9f80d80f02a8d3e0b966957100a6c857056fd2db75508e884d8a5ef5d4dcf00e",
+    "platinum-desktop.ppm": "a6618af64babd303c822f2c249a2fff00e0a80b4d674383a543d576a4842884b",
+    "platinum-dialogs.ppm": "92da071be98f2a25bdc3c8a6f38d41acd9c53d3db283b6a1ed0ecda3d3629f35",
+    "platinum-tray-disabled.ppm": "0de6d2ccfbbbbb9f707f070ff4f975809ac6116e52db8be2bfd67bea59415618",
+    "platinum-tray-media.ppm": "3382fcae2977be32494b2f8330d54178cb2b82b73e8356f24f57fb3b92be42f6"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -171,7 +172,7 @@ class DesktopTests(unittest.TestCase):
                 if mode == "plain":
                     # F2-62: the missing-settings desktop now uses Ciuki Blue.
                     # F2-63: re-recorded for the pinned FreeType UI atlases.
-                    pinned = "b11b0c5d3ffe69d20cd5798127037aebb0afc1dfac171b18ac4e63b3d9422b64"
+                    pinned = "ab5eef0dfb084cd58fd8a272f1bffe5cff4ad296fc6a2679715c7b9d137e5a0e"
                     actual = hashlib.sha256(pixels).hexdigest()
                     self.assertEqual(actual, pinned)
                 else:

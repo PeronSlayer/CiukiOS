@@ -28,9 +28,10 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 # F2-72: re-recorded with --benchmark --frames 2 for the DMZ-White cursor overlay.
 # F2-82: shell scene includes the larger orb and well.
+# F2-83: deliberately re-recorded for the shared shaded bar surfaces/tasks.
 GOLDENS = {
-    "Ciuki Blue": "8f46361965714e6772ddcf8208da3f2976722a37563fc31e2e00ac17795c9450",
-    "Platinum": "ba704c5da512c9885d472a3eff8d14f30b30e00c29703c82801ba8cca4045b9e"
+    "Ciuki Blue": "d68872b688b33202b46eb25e5757aa2a71f0c9b74d3fa38750e1521c1e7b3569",
+    "Platinum": "1a88dd0880e48fd507575c4838d7c6e096704a3be6ae3f4a2886f093488813d5"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

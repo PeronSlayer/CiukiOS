@@ -43,13 +43,17 @@ static void geometry(const char *text, int media)
 }
 static void icon(enum sh_tray_icon which, const char *name, int disabled)
 {
-    uint32_t pixels[256];
-    for (int i = 0; i < 256; i++) pixels[i] = desk_theme->topbar;
+    uint32_t pixels[256], background[1024*DESK_BAR];
+    struct desk_box b = desk_shell_tray_icon_box(&d, which);
+    assert(d.width<=1024);
+    struct desk_paint p={background,(int)d.width,DESK_BAR,0,0,(int)d.width,DESK_BAR};
+    desk_paint_bar(&p,0,0,d.width,DESK_BAR,desk_theme->topbar,d.lfb_bytes_per_pixel==2);
+    for (int y=0; y<16; y++)
+        memcpy(pixels+y*16,background+(b.y+y)*d.width+b.x,16*4);
     struct du_canvas c = {pixels, 16, 16, {0, 0, 16, 16}};
     const uint32_t *source = du_icon_argb(name, 16); assert(source);
     assert(desk_shell_icon(name, 16) == source);
     du_icon_blit(&c, 0, 0, source, 16, disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
-    struct desk_box b = desk_shell_tray_icon_box(&d, which);
     for (int y = 0; y < 16; y++)
         assert(!memcmp(d.pixels + (b.y + y) * d.width + b.x, pixels + y * 16, 16 * 4));
 }
@@ -155,13 +159,14 @@ int main(void)
     FILE *f=fopen(DU_ICON_PORTRAIT_PATH,"rb"); assert(f);
     assert(fread(portrait,4,256*256,f)==256*256 && !fclose(f));
     const unsigned widths[] = {320, 640, 800, 1024}, heights[]={240,480,600,768};
-    for (int theme = 0; theme < desk_theme_count(); theme++) for (unsigned size = 0; size < 4; size++) {
+    for (int theme = 0; theme < desk_theme_count(); theme++) for (unsigned size = 0; size < 4; size++) for (int rgb565=0; rgb565<2; rgb565++) {
         fake_reset(); desk_init(&d, &fake_ops, widths[size], heights[size]);
         d.hw_cursor=1; /* Scene parity; cursor movement is covered by the presenter replay. */
         d.portrait=portrait;
         d.icon = store; desk_shell_enable(&d);
         snprintf(d.sh.cfg.theme, sizeof(d.sh.cfg.theme), "%s", desk_theme_at(theme)->name);
         desk_shell_apply(&d);
+        d.lfb_bytes_per_pixel=rgb565 ? 2 : 4;
         d.pixels = calloc((size_t)d.width * d.height, 4); assert(d.pixels);
         for (int i = 0; i < DESK_CLIENTS; i++) { d.clients[i].window = 1; d.clients[i].minimized = 1; }
         d.realtime_second = 12 * 3600; d.sh.cfg.clock_24h = 1; d.sh.cfg.clock_seconds = 0;
