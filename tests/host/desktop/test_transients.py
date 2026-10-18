@@ -17,17 +17,17 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-74: balloon/notification include the explicit close affordance; media replay is pinned separately.
 # F2-82: orb changes in frames containing desktop chrome; dialogs stay pinned.
 GOLDENS = {
-    "balloon": "9fa57eba71861fae519da8c89d4e472d1e0e4fdd8cd806b15a361c2555f626df",
+    "balloon": "c03920f5967b64d0d7a430cf2bf38d97d5db496ca75606b26f3bd5065f36840c",
     "error": "310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a",
     "info": "50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53",
     "loading": "c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1",
-    "notification": "60af77232670729bcdafc7619fa48a71f38961b9e058aa85ce98dad33339b27c",
+    "notification": "7f787df9f46a267edf71eb7e02075a555ce4716c785fb1f3fcfbd47c51a53a5d",
     "question": "a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06",
-    "tooltip": "76b851afa53d3f6c0c19eb8ae3eda960a191bb453fa90d866f57c0bf5a611b9d",
-    "tooltip-media": "33475de8acdab984dd3d9f574d3f1d2d8c3f24577d0a67a423fcbc5928e02be6",
-    "tooltip-network": "3f46a7922fc218b479aecf3ef520e356a6fd8b5b1098b931bbe5516309fa7298",
-    "tooltip-task": "990426e00196181d7cf6daae096216bde03fd96e7d2939584e1dc09a9382687a",
-    "tooltip-volume": "9f6ddc3d8c7adf2f7fdd673b28b74554494ef856d42f196e699880bdcc4316b3",
+    "tooltip": "9e8d07b108d4e94031ef460564dec546ee40fc674fffe736780928694ef7fc93",
+    "tooltip-media": "208435941a6183ce3f93bbce4e110c7aee18e78a45b27c8c86ea02fc87b74bdc",
+    "tooltip-network": "73b292eb2fd6ae4b51a4273bb761d57d4708abaee0f7f8d31a001fc7289b15f7",
+    "tooltip-task": "59ed82a6d3d3435cca1fd79e3d731d2e2c278281dd600ada23205420c14af86b",
+    "tooltip-volume": "39f555c4780bc87e71c651428af8d3107e9d4fa285feab0b8b2f208991c0230b",
     "warning": "43a94b327cd5807be7f35b7c2aad42f07341c63d8208f757cf6b3000c4951177"
 }
 

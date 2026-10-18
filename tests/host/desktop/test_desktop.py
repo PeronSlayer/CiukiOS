@@ -39,14 +39,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # 2026-10-18 (main after f4-30 + f2-81): the dialogs frames re-recorded on the combined tree (Places pane in the two-bar shell), reviewed by the lead.
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "e83962b627e16dbb4ede60571762f291107e1190674ee7b2ad0f58f24df71db6",
-    "ciuki-blue-dialogs.ppm": "67129ffcf4c954f76133d946a1898c5e1dc16ef1c7d2ce40b94c6c70ed8c1ce1",
-    "ciuki-blue-tray-disabled.ppm": "f6d70f673505225ef5cb545fe034d5c75f41f1e40e70337f6332e304b75fa453",
-    "ciuki-blue-tray-media.ppm": "2f2e403c8861b1090a93b73c67f09a4e90ee5195ce72938e0232a3600694d399",
-    "platinum-desktop.ppm": "68b9ab76fbe277a6d3445c6e36f6662dd4b639363caa0bf4dfa2db3cd8a3d56f",
-    "platinum-dialogs.ppm": "b97a9f31604b70167b59bb866191656a342254b21cf810ba53db5ed53e77d7b7",
-    "platinum-tray-disabled.ppm": "23ca194246f3273ed44a05c50b4458c8d9272fc299a155ea4c2c8f743d730149",
-    "platinum-tray-media.ppm": "97ec4c72f59c7c706085fb4a78e5a905d603ca136c871a3dbf7973d82b3cafa2"
+    "ciuki-blue-desktop.ppm": "0e2eda15a6a1af067e99f192cf8d5bd8a2a8b68d4898a9f92264fb085c7d60b1",
+    "ciuki-blue-dialogs.ppm": "c9dc78c4a6c950db60da63e0ab36018beb128dc95d72ee6d12e42c9f5ea397ed",
+    "ciuki-blue-tray-disabled.ppm": "1469603613a63dd163148a1788ad5cda642b623996047f2bf27c4472b26ae69f",
+    "ciuki-blue-tray-media.ppm": "67ba65759bf4b0b0faa991df1de21568f0463dc026c9de1fd9fe07b1779d318c",
+    "platinum-desktop.ppm": "2f73053772726ed82aaf7a6f15fdf9970647f1342fbae8025d932ef571879b6b",
+    "platinum-dialogs.ppm": "8646c5ce631a8cc84d91e32bba1aff7921ebac5d51764fc3e429231b8f855125",
+    "platinum-tray-disabled.ppm": "697a5074dd382b432aa81011f235b8a2138327ec47715f699119b7c7b796eddd",
+    "platinum-tray-media.ppm": "b2bed075ebe611ea80afc1dcc80e38c407e8755969aad83d9f582ed80a3dad6c"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -176,7 +176,7 @@ class DesktopTests(unittest.TestCase):
                     self.assertEqual(actual, pinned)
                 else:
                     # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
-                    # approved portrait area-averaged to 28 px (shell.c desk_shell_icon "ciuki"), centred
+                    # approved portrait area-averaged to 24 px (shell.c desk_shell_icon "ciuki"), centred
                     # in the orb and pressed in by 1 px while the menu is open
                     # ("shell" mode). Every cell the portrait covers fully is the exact average of its
                     # source block.
@@ -855,8 +855,10 @@ class AppCaseReplayTests(unittest.TestCase):
         self.assertEqual(out["GATE"]["motion"], "36")
         self.assertEqual(out["GATE"]["buttons"], "12")
         reports = re.findall(r'USB mouse report dx=(-?\d+) dy=(-?\d+) buttons=(\d+)', out["text"])
+        orb=json.loads((ROOT / "apps/desktop/start-orb.json").read_text())["orb_box"]
+        tail=tuple(str(orb[i]+orb[i+2]//2-127) for i in range(2))+("0",)
         self.assertEqual(reports[:7], [("-127", "-127", "0")] * 5 +
-                         [("-99", "-105", "0"), ("0", "0", "1")])
+                         [tail, ("0", "0", "1")])
         self.assertGreater(int(out["USB"]["compressed"]), 0)
         self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("0", "0"))
         self.assertEqual(out["USB"]["pending_mouse"], "0")

@@ -14,15 +14,15 @@ import hashlib
 
 # F2-82: boot shell frames include the larger orb and clipped recess.
 BOOT_GOLDENS = {
-    "absent-ro": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "absent-rw": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "identical-unpresented": "4e18a6ff002b75259ff4273fb9611f701c5deffa0fccff151ced69b66b1327df",
-    "present-ro": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "present-ro-seeded": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "present-rw": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "present-rw-seeded": "1650920b8ad2b4cf74af2ebde916682481ef6fae6aa4e75613315dbc002cfcd9",
-    "theme": "dfcd509aaa2b96c57c0a892aec0be1f0de0ce1d28c7006b353d03553cd37b2b1",
-    "wallpaper-change": "4e18a6ff002b75259ff4273fb9611f701c5deffa0fccff151ced69b66b1327df"
+    "absent-ro": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "absent-rw": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "identical-unpresented": "c7c2dcd677bb5bfdf3e39ce1ad31f5192d5dbf16570ac8d149a10ba690a17a75",
+    "present-ro": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "present-ro-seeded": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "present-rw": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "present-rw-seeded": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
+    "theme": "3fd172708970918dc0a403b0a4d6f05c63c202ad6ee29e2a31027d0db858574d",
+    "wallpaper-change": "c7c2dcd677bb5bfdf3e39ce1ad31f5192d5dbf16570ac8d149a10ba690a17a75"
 }
 
 class MemoryFootprintTests(unittest.TestCase):

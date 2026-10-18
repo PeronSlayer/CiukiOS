@@ -544,7 +544,7 @@ static void test_shell(void)
     desk_focus(&d,a); pointer(DESK_START_X+DESK_START_W/2,DESK_START_Y+DESK_START_H/2); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
     { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
-      assert(s.x==DESK_START_X && s.y+s.h>DESK_BAR && s.w==44 && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
+      assert(s.x==DESK_START_X && s.y+s.h>DESK_BAR && s.w==38 && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
     /* Negotiated v2, request survives backlog and deadline survives EOF. */

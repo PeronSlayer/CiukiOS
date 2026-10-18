@@ -33,14 +33,19 @@ as shell chrome above windows. Notifications keep their existing expiry,
 replacement and action semantics. These references inform behavior; the
 owner's Vista-like geometry is drawn locally without Microsoft artwork.
 
-The signature control is a 44-pixel orb at (6,0), extending 12 pixels below
-the 32-pixel bar (approximately the requested 10 pixels, with the whole
-circle visible). A concentric 48-pixel concave well is clipped to the bar.
+Amendment 2 research rechecked the [EWMH specification](https://specifications.freedesktop.org/wm/latest-single/)
+and [PNG specification](https://www.w3.org/TR/png/) on 2026-10-18 against
+the existing shared geometry and pinned converter. Decision: resize through
+the generated geometry and existing deterministic portrait scaler; preserve
+the reserved work area, stacking and approved source pixels.
+
+The signature control is a 38-pixel orb at (6,0), extending 6 pixels below
+the 32-pixel bar. A concentric 42-pixel concave well is clipped to the bar.
 Integer radial shading, a soft elliptical highlight, a thin dark outline
-and a one-pixel shadow surround the unchanged, deterministic 28-pixel area
+and a one-pixel shadow surround the unchanged, deterministic 24-pixel area
 average of the approved portrait. Hover brightens the gloss; menu-open
 inverts the gradient and shifts the portrait one pixel. The existing scaler
-already supports 28 pixels; no additional bitmap is required.
+already supports 24 pixels; no additional bitmap is required.
 
 `convert_portrait.py --geometry` generates `start-orb.h` and `start-orb.json`
 from one geometry definition. The build validates both; the desktop uses

@@ -3,18 +3,18 @@
   "orb_box": [
     6,
     0,
-    44,
-    44
+    38,
+    38
   ],
   "portrait": {
     "offset": [
-      8,
-      8
+      7,
+      7
     ],
     "pressed_shift": 1,
-    "size": 28
+    "size": 24
   },
   "shadow": 1,
   "version": 1,
-  "well_diameter": 48
+  "well_diameter": 42
 }

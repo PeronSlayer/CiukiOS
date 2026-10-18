@@ -135,7 +135,7 @@ static void shell_layout(void)
     /* The direct fixture title edit also changes its bottom task label. */
     desk_composite(&d,(struct desk_box){0,0,d.width,d.height});
     struct desk_box orb=desk_start_button(&d);
-    assert(orb.w==44 && orb.h==44 && orb.y+orb.h>DESK_BAR);
+    assert(orb.w==38 && orb.h==38 && orb.y+orb.h-DESK_BAR==6);
     d.mouse_x=orb.x+orb.w/2; d.mouse_y=orb.y+orb.h/2;
     d.damage.count=0; desk_shell_motion(&d); assert(d.sh.start_hot); redraw();
     assert(memcmp(top,d.pixels,bytes)); memcpy(top,d.pixels,bytes);

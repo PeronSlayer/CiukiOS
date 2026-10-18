@@ -25,7 +25,12 @@ class StartOrbTests(unittest.TestCase):
     def test_generated_shared_geometry(self):
         converter = load("orb_geometry", ROOT / "apps/desktop/convert_portrait.py")
         converter.check_geometry()
-        self.assertEqual(json.loads(converter.geometry_files()["start-orb.json"])["portrait"]["size"], 28)
+        geometry = json.loads(converter.geometry_files()["start-orb.json"])
+        self.assertEqual(geometry["orb_box"], [6, 0, 38, 38])
+        self.assertEqual(geometry["bar_height"], 32)
+        self.assertEqual(geometry["well_diameter"], 42)
+        self.assertEqual(geometry["shadow"], 1)
+        self.assertEqual(geometry["portrait"], {"size": 24, "offset": [7, 7], "pressed_shift": 1})
 
     def test_render_hits_layering_damage_and_goldens(self):
         desktop = load("orb_desktop", ROOT / "tests/host/desktop/test_desktop.py")

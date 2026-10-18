@@ -161,7 +161,7 @@ void klog(const char *f,...) {(void)f;}
             a=self.write_screen('after.ppm',width,height,after)
             observed=runner.observe_desktop_screen(b,a)
             self.assertEqual(observed['ppm_sha256'],hashlib.sha256(a.read_bytes()).hexdigest())
-            self.assertGreater(observed['portrait_pixels_checked'],100);self.assertEqual(observed['portrait_region'][2:],[28,28])
+            self.assertGreater(observed['portrait_pixels_checked'],100);self.assertEqual(observed['portrait_region'][2:],[24,24])
             self.assertTrue(runner.desktop_mark_visible(b));self.assertTrue(runner.desktop_mark_visible(a))
             self.assertGreaterEqual(observed['cursor_changed_pixels'],16)
             with self.assertRaisesRegex(EvidenceError,'cursor'):runner.observe_desktop_screen(b,b)
