@@ -15,6 +15,10 @@ int main(int argc, char **argv)
     strcpy(s.playlist.path[0],"/Documents/Music/First tone.wav"); strcpy(s.playlist.path[1],"/Documents/Music/Ciuki theme.ogg");
     strcpy(s.playlist.path[2],"/Documents/Music/Evening.mp3"); s.playlist.count=3;
     music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-playing",&ui);
+    s.state=MUSIC_LOADING; music_update(&app,&s);
+    assert(strstr(du_get(&ui,M_STATUS)->text,"Loading..."));
+    du_render(&ui); at_save(argv[1],"music-loading",&ui);
+    s.state=MUSIC_PLAYING; music_update(&app,&s);
     at_click_widget(&ui,M_PAUSE); assert(last.action==MUSIC_PAUSE);
     ui.focus=-1; at_tap(&ui,DU_KEY_SPACE); assert(last.action==MUSIC_PAUSE);
     at_tap(&ui,DU_KEY_PGDN); assert(last.action==MUSIC_NEXT);
@@ -25,8 +29,13 @@ int main(int argc, char **argv)
     du_get(&ui,M_VOLUME)->value=40; struct du_event volume={.type=DU_EV_CHANGE,.id=M_VOLUME}; music_event(&ui,&volume,&app);
     volume.type=DU_EV_TICK; volume.id=M_APPLY; music_event(&ui,&volume,&app); assert(master==40);
     s.state=MUSIC_PAUSED; music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-paused",&ui);
-    s.state=MUSIC_ERROR; s.error=-ENODEV; music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-unavailable",&ui);
+    s.state=MUSIC_ERROR; s.error=-ENODEV; strcpy(s.error_path,"/mnt/e/Original tone.mp3");
+    music_update(&app,&s); assert(strstr(du_get(&ui,M_STATUS)->text,"Cannot open Original tone.mp3:"));
+    du_render(&ui); at_save(argv[1],"music-unavailable",&ui);
     static uint32_t small[420*300]; du_resize(&ui,small,420,300); du_render(&ui); at_save(argv[1],"music-small",&ui);
     assert(du_get(&ui,M_LIST)->box.h>0 && du_get(&ui,M_NEXT)->box.x+du_get(&ui,M_NEXT)->box.w<420);
+    memset(s.error_path,'a',sizeof(s.error_path)-1); s.error_path[sizeof(s.error_path)-1]=0;
+    music_update(&app,&s);
+    assert(strstr(du_get(&ui,M_STATUS)->text,"...:") && du_text_width(du_get(&ui,M_STATUS)->text)<420);
     assert(sends>=7); du_release(&ui); puts("PASS music UI: controls, shortcuts, master volume, resize and renders"); return 0;
 }

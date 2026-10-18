@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +19,47 @@ def load(name, path):
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); return m
 
 class MusicTests(unittest.TestCase):
+    def test_slow_removable_volume(self):
+        parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='music-slow-', dir=parent) as temp:
+            folder = Path(temp); volume = folder/'mnt/e'; volume.mkdir(parents=True)
+            # Repeat our checked-in CC0 tone, stripping its leading ID3 tag
+            # and Xing count so this exercises a long stream of unknown length.
+            mp3 = (ROOT/'tests/fixtures/music/tone.mp3').read_bytes()
+            if mp3[:3] == b'ID3':
+                size = 10 + sum(mp3[6+i] << (21-7*i) for i in range(4))
+                mp3 = mp3[size:]
+            mp3 = mp3.replace(b'Xing', b'Junk').replace(b'Info', b'Junk')
+            (volume/'A long name with spaces - original synthetic tone.mp3').write_bytes(mp3*1024)
+            (volume/'late-error.mp3').write_bytes(mp3*1024)
+            (volume/'cover-art.mp3').write_bytes(b'ID3\x04\x00\x00\x00\x40\x00\x00' + bytes(1<<20) + mp3)
+            nested = volume/('Long removable folder ' + 'x'*160); nested.mkdir()
+            shutil.copyfile(ROOT/'tests/fixtures/music/tone.mp3', nested/'Original tone.mp3')
+            shutil.copyfile(ROOT/'tests/fixtures/music/pcm-16-2-96000.wav', volume/'tone.wav')
+            shutil.copyfile(ROOT/'tests/fixtures/music/tone.ogg', volume/'tone.ogg')
+            for name in ('denied.mp3', 'read-error.mp3', 'invalid.mp3', 'read-error.wav', 'read-error.ogg'):
+                (volume/name).write_bytes(b'not audio')
+            binary = folder/'slow'
+            sources = ['decoder.c', 'vorbis.c', 'playlist.c', 'player.c', 'runtime.c']
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
+                '-fno-omit-frame-pointer', '-pthread', '-Wl,--wrap=fopen',
+                *(str(ROOT/'apps/music'/s) for s in sources),
+                str(ROOT/'tests/host/desktop/music_slow_test.c'), '-lm', '-o', str(binary)], check=True)
+            result = subprocess.run([str(binary), temp], text=True, capture_output=True,
+                env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            print(result.stdout.strip())
+            self.assertIn('[music] open path=', result.stderr)
+            self.assertTrue(all(len(line) <= 240 for line in result.stderr.splitlines()))
+            self.assertIn('[music] path part=0 value=', result.stderr)
+            for fmt in ('mp3', 'wav', 'ogg'):
+                self.assertRegex(result.stderr, rf'\[music\] decode format={fmt} rate=\d+ channels=2 first_pcm_ms=\d+')
+            self.assertIn('[music] error stage=open errno=', result.stderr)
+            self.assertIn('[music] error stage=decode errno=', result.stderr)
+            self.assertIn('[music] error stage=playlist-open errno=', result.stderr)
+            self.assertRegex(result.stderr, r'\[music\] open path=.*denied.mp3 result=-\d+ ms=\d+')
+
     def harness(self, name, sources, *args):
         parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='music-', dir=parent) as temp:

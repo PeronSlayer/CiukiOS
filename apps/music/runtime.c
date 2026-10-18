@@ -17,6 +17,8 @@ static int cancel(void *ctx)
     struct music_runtime *r=ctx; pthread_mutex_lock(&r->lock); int closing=r->closing;
     pthread_mutex_unlock(&r->lock); return closing;
 }
+static void publish(void *ctx, const struct music_snapshot *view)
+{ struct music_runtime *r=ctx; pthread_mutex_lock(&r->lock); r->snapshot=*view; pthread_mutex_unlock(&r->lock); }
 static void *worker(void *ctx)
 {
     struct music_runtime *r=ctx;
@@ -50,6 +52,7 @@ struct music_runtime *music_runtime_start(const struct music_output *output)
     err=pthread_cond_init(&r->changed,NULL);
     if (err) { pthread_mutex_destroy(&r->lock); free(r); errno=err; return NULL; }
     music_player_init(&r->player,output,cancel,r);
+    r->player.changed=publish;
     err=pthread_create(&r->thread,NULL,worker,r);
     if (err) { pthread_cond_destroy(&r->changed); pthread_mutex_destroy(&r->lock); free(r); errno=err; return NULL; }
     return r;

@@ -96,8 +96,12 @@ int main(int argc, char **argv)
     }
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
     music_attach(&m->app,&m->ui,&m->backend);
-    if (path && strlen(path)>=MUSIC_PATH) { music_runtime_destroy(m->runtime); du_window_destroy(&m->window); free(m); return 2; }
-    if (path) { struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path); send(m,&c); }
+    if (path) {
+        struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path);
+        m->app.local_error=strlen(path)>=MUSIC_PATH ? -ENAMETOOLONG : send(m,&c);
+        if (!m->app.local_error) m->snapshot.state=MUSIC_LOADING;
+        music_update(&m->app,&m->snapshot);
+    }
     if (test) du_window_move(&m->window,24,48);
     int r=du_run(&m->window,idle,m);
     music_runtime_destroy(m->runtime); if (m->mixer>=0) close(m->mixer);

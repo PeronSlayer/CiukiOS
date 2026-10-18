@@ -25,10 +25,11 @@
 struct music_decoder {
     FILE *file; stb_vorbis *ogg; char *vorbis_memory; mp3dec_t mp3;
     unsigned kind, rate, channels, bits, output_rate;
-    uint64_t frames, position, source_index; unsigned phase;
+    uint64_t frames, position, source_index, mp3_decoded; unsigned phase;
     long data; uint32_t bytes;
     uint8_t raw[4096];
     uint8_t input[MP3_INPUT]; unsigned input_count;
+    unsigned sync_bytes;
     int16_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]; unsigned count, offset;
     int16_t left[2], right[2]; int primed, error;
     music_cancel cancel; void *ctx;
@@ -36,6 +37,37 @@ struct music_decoder {
 static unsigned u16(const unsigned char *p) { return p[0] | (unsigned)p[1] << 8; }
 static uint32_t u32(const unsigned char *p) { return u16(p) | (uint32_t)u16(p+2) << 16; }
 static int cancelled(struct music_decoder *d) { return d->cancel && d->cancel(d->ctx); }
+static uint32_t be32(const uint8_t *p)
+{ return (uint32_t)p[0]<<24 | (uint32_t)p[1]<<16 | (uint32_t)p[2]<<8 | p[3]; }
+static void mp3_length(struct music_decoder *d, const uint8_t *h, unsigned bytes, unsigned samples)
+{
+    if (d->mp3_decoded || bytes<4) return;
+    unsigned side=(h[1]&8) ? ((h[3]>>6)==3 ? 17 : 32) : ((h[3]>>6)==3 ? 9 : 17);
+    unsigned off=4+(!(h[1]&1) ? 2 : 0)+side;
+    if (bytes>=off+12 && (!memcmp(h+off,"Xing",4) || !memcmp(h+off,"Info",4)) && (be32(h+off+4)&1)) {
+        uint32_t n=be32(h+off+8);
+        /* Preserve the existing raw decoder timeline, including the tag frame.
+         * Encoder delay/padding trimming is not part of this adapter. */
+        if (n) d->frames=((uint64_t)n+1)*samples;
+    }
+}
+static int mp3_start(struct music_decoder *d)
+{
+    uint8_t h[10];
+    if (cancelled(d)) return -ECANCELED;
+    size_t n=fread(h,1,sizeof(h),d->file);
+    if (ferror(d->file)) return -(errno ? errno : EIO);
+    long start=0;
+    if (n==10 && !memcmp(h,"ID3",3)) {
+        if (h[3]<2 || h[3]>4 || h[4]==255 || (h[6]|h[7]|h[8]|h[9])&128) return -EINVAL;
+        start=10+((long)h[6]<<21)+((long)h[7]<<14)+((long)h[8]<<7)+h[9];
+        if (h[3]==4 && (h[5]&16)) start+=10;
+        if (fseek(d->file,0,SEEK_END)) return -EIO;
+        long end=ftell(d->file); if (end<start) return -EINVAL;
+    }
+    d->data=start;
+    return fseek(d->file,start,SEEK_SET) ? -EIO : 0;
+}
 static int wav_open(struct music_decoder *d)
 {
     unsigned char h[16];
@@ -67,19 +99,36 @@ static int wav_open(struct music_decoder *d)
 static int mp3_block(struct music_decoder *d)
 {
     while (!cancelled(d)) {
-        size_t n=fread(d->input+d->input_count,1,MP3_INPUT-d->input_count,d->file);
-        d->input_count+=(unsigned)n;
-        if (ferror(d->file)) return -EIO;
-        if (!d->input_count) return 0;
+        /* Refill in batches, not a tiny storage read for every MPEG frame.
+         * Accumulate short reads without discarding an incomplete frame. */
+        if (d->input_count<MP3_INPUT/2 && !feof(d->file)) {
+            while (d->input_count<MP3_INPUT && !feof(d->file)) {
+                if (cancelled(d)) return -ECANCELED;
+                size_t n=fread(d->input+d->input_count,1,MP3_INPUT-d->input_count,d->file);
+                d->input_count+=(unsigned)n;
+                if (ferror(d->file)) return -(errno ? errno : EIO);
+                if (!d->mp3_decoded && (d->sync_bytes+=(unsigned)n)>256*1024) return -EINVAL;
+                if (!n && !feof(d->file)) return -EIO;
+            }
+        }
+        if (!d->input_count) { d->frames=d->mp3_decoded; return 0; }
         mp3dec_frame_info_t info={0};
         int frames=mp3dec_decode_frame(&d->mp3,d->input,(int)d->input_count,d->pcm,&info);
-        if (info.frame_bytes<=0) { d->input_count=0; if (feof(d->file)) return 0; continue; }
+        if (info.frame_bytes<=0) {
+            if (feof(d->file)) { d->frames=d->mp3_decoded; return 0; }
+            /* A full window with no sync: retain a possible split header. */
+            unsigned keep=d->input_count<3 ? d->input_count : 3;
+            memmove(d->input,d->input+d->input_count-keep,keep); d->input_count=keep;
+            continue;
+        }
+        if (frames) mp3_length(d,d->input+info.frame_offset,(unsigned)(info.frame_bytes-info.frame_offset),(unsigned)frames);
         d->input_count-=(unsigned)info.frame_bytes;
         memmove(d->input,d->input+info.frame_bytes,d->input_count);
         if (!frames) continue;
         if (info.layer!=3 || (info.channels!=1 && info.channels!=2) || info.hz<=0) return -EINVAL;
         if (d->rate && (d->rate!=(unsigned)info.hz || d->channels!=(unsigned)info.channels)) return -ENOTSUP;
         d->rate=(unsigned)info.hz; d->channels=(unsigned)info.channels;
+        d->mp3_decoded+=(unsigned)frames;
         d->offset=0; d->count=(unsigned)frames; return frames;
     }
     return -ECANCELED;
@@ -105,7 +154,7 @@ static int source(struct music_decoder *d, int16_t out[2])
             int n=mp3_block(d); if (n<=0) return n;
         } else {
             int n=stb_vorbis_get_samples_short_interleaved(d->ogg,(int)d->channels,d->pcm,2048);
-            if (!n) return stb_vorbis_get_error(d->ogg) ? -EIO : 0;
+            if (!n) return ferror(d->file) ? -(errno ? errno : EIO) : stb_vorbis_get_error(d->ogg) ? -EIO : 0;
             d->count=(unsigned)n;
         }
     }
@@ -117,10 +166,10 @@ static int rewind_source(struct music_decoder *d, uint64_t frame)
     d->count=d->offset=d->input_count=0; d->primed=d->error=0;
     if (d->kind==1) return fseek(d->file,d->data+(long)(frame*d->channels*d->bits/8),SEEK_SET) ? -EIO : 0;
     if (d->kind==3) return stb_vorbis_seek(d->ogg,(unsigned)frame) ? 0 : -EIO;
-    if (fseek(d->file,0,SEEK_SET)) return -EIO;
-    clearerr(d->file); mp3dec_init(&d->mp3);
+    if (fseek(d->file,d->data,SEEK_SET)) return -EIO;
+    clearerr(d->file); mp3dec_init(&d->mp3); d->mp3_decoded=0; d->sync_bytes=0;
     int16_t discard[2];
-    for (uint64_t i=0;i<frame;i++) { int r=source(d,discard); if (r<=0) return r ? r : -EIO; }
+    for (uint64_t i=0;i<frame;i++) { int r=source(d,discard); if (r<=0) return r; }
     return 0;
 }
 int music_decoder_open(struct music_decoder **out, const char *path, unsigned rate, music_cancel cancel, void *ctx)
@@ -133,9 +182,9 @@ int music_decoder_open(struct music_decoder **out, const char *path, unsigned ra
     d->file=fopen(path,"rb"); if (!d->file) { err=-errno; goto done; }
     if (!strcasecmp(ext,".wav")) { d->kind=1; err=wav_open(d); }
     else if (!strcasecmp(ext,".mp3")) {
-        d->kind=2; mp3dec_init(&d->mp3); int r;
-        while ((r=mp3_block(d))>0) d->frames+=(unsigned)r;
-        err=r<0 ? r : !d->frames ? -EINVAL : rewind_source(d,0);
+        d->kind=2; d->frames=UINT64_MAX; mp3dec_init(&d->mp3);
+        err=mp3_start(d);
+        if (!err) { int r=mp3_block(d); err=r>0 ? 0 : r<0 ? r : -EINVAL; }
     } else if (!strcasecmp(ext,".ogg")) {
         d->kind=3; int e;
         d->vorbis_memory=malloc(1u<<20);
@@ -149,19 +198,24 @@ int music_decoder_open(struct music_decoder **out, const char *path, unsigned ra
             err=(!d->rate || (d->channels!=1 && d->channels!=2) || !d->frames) ? -EINVAL : 0;
         }
     }
+    if (ferror(d->file)) err=-(errno ? errno : EIO);
     if (!err && cancelled(d)) err=-ECANCELED;
 done:
     if (err) music_decoder_close(d); else *out=d;
     return err;
 }
 uint64_t music_decoder_length(const struct music_decoder *d)
-{ return d ? (d->frames*d->output_rate+d->rate-1)/d->rate : 0; }
+{ return d && d->rate && d->frames!=UINT64_MAX ? (d->frames*d->output_rate+d->rate-1)/d->rate : 0; }
 unsigned music_decoder_rate(const struct music_decoder *d) { return d ? d->rate : 0; }
+unsigned music_decoder_channels(const struct music_decoder *d) { return d ? d->channels : 0; }
 int music_decoder_seek(struct music_decoder *d, uint64_t frame)
 {
-    uint64_t length=music_decoder_length(d); if (frame>length) frame=length;
+    uint64_t length=music_decoder_length(d); if (length && frame>length) frame=length;
     uint64_t target=frame*d->rate/d->output_rate; if (target>=d->frames) target=d->frames-1;
     int r=rewind_source(d,target); if (r) return r;
+    /* Replaying an unknown-length stream may discover EOF before the target. */
+    length=music_decoder_length(d);
+    if (length && frame>length) { frame=length; target=d->frames-1; }
     d->position=frame; d->source_index=target; d->phase=(unsigned)(frame*d->rate%d->output_rate);
     return 0;
 }
@@ -169,10 +223,10 @@ int music_decoder_read(struct music_decoder *d, int16_t *out, unsigned frames)
 {
     if (d->error) return d->error;
     unsigned n=0;
-    while (n<frames && d->position<music_decoder_length(d)) {
+    while (n<frames && (d->frames==UINT64_MAX || d->position<music_decoder_length(d))) {
         if (cancelled(d)) return -ECANCELED;
         if (!d->primed) {
-            int r=source(d,d->left); if (r<=0) { d->error=r ? r : -EIO; break; }
+            int r=source(d,d->left); if (r<=0) { d->error=r; break; }
             r=source(d,d->right); if (r<0) { d->error=r; break; }
             if (!r) memcpy(d->right,d->left,sizeof(d->right));
             d->primed=1;

@@ -52,6 +52,27 @@ static void decoders(const char *fixtures, const char *scratch)
     assert(music_decoder_open(&d,f,48000,NULL,NULL)==-EINVAL && !d);
     path(f,scratch,"bad.ogg"); out=fopen(f,"wb"); assert(out); fputs("not Ogg",out); fclose(out);
     assert(music_decoder_open(&d,f,48000,NULL,NULL)==-EINVAL && !d);
+    /* A tag larger than two compressed windows is skipped without decoding
+     * artwork. Without a Xing count the duration becomes exact at EOF. */
+    char original[MUSIC_PATH]; path(original,fixtures,"tone.mp3");
+    FILE *in=fopen(original,"rb"); assert(in); unsigned char encoded[8192];
+    size_t encoded_size=fread(encoded,1,sizeof(encoded),in); assert(feof(in)); fclose(in);
+    for (size_t i=0;i+4<=encoded_size;i++) if (!memcmp(encoded+i,"Xing",4) || !memcmp(encoded+i,"Info",4)) memcpy(encoded+i,"Junk",4);
+    path(f,scratch,"large-tag.mp3"); out=fopen(f,"wb"); assert(out);
+    unsigned char tag[10]={'I','D','3',4,0,0,0,4,0,0}; /* 65536 bytes of payload */
+    fwrite(tag,1,sizeof(tag),out); for (unsigned i=0;i<65536;i++) fputc(0,out);
+    fwrite(encoded,1,encoded_size,out); fclose(out);
+    assert(!music_decoder_open(&d,f,48000,NULL,NULL) && !music_decoder_length(d));
+    unsigned total=0; int n;
+    while ((n=music_decoder_read(d,all+total*2,137))>0) { total+=(unsigned)n; assert(total<48000); }
+    assert(!n && total>4800 && music_decoder_length(d)==total);
+    assert(!music_decoder_seek(d,total/2)); int16_t samples[100];
+    assert(music_decoder_read(d,samples,50)==50 && !memcmp(samples,all+total/2*2,sizeof(samples)));
+    music_decoder_close(d);
+    assert(!music_decoder_open(&d,f,48000,NULL,NULL) && !music_decoder_length(d));
+    assert(!music_decoder_seek(d,48000*3600) && music_decoder_length(d)==total);
+    assert(!music_decoder_read(d,samples,50)); /* clamp a seek beyond unknown EOF */
+    music_decoder_close(d);
     free(all);
 }
 static void playlists(const char *fixtures, const char *scratch)
@@ -88,7 +109,7 @@ static int sink_status(void *ctx, uint64_t *consumed, unsigned *queued, uint64_t
 static void sink_close(void *ctx) { struct sink *s=ctx; s->closes++; s->queued=0; }
 static uint64_t sink_now(void *ctx) { return ((struct sink *)ctx)->now; }
 static void consume(struct sink *s) { s->consumed+=s->queued; s->queued=0; s->now+=2000000; }
-static void engine(const char *fixtures)
+static void engine(const char *fixtures, const char *scratch)
 {
     struct music_player *p=calloc(1,sizeof(*p)); assert(p);
     struct sink s={0}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s};
@@ -116,6 +137,10 @@ static void engine(const char *fixtures)
     s.error=-ENODEV; c.action=MUSIC_PLAY; assert(music_player_command(p,&c)==-ENODEV && p->view.state==MUSIC_ERROR);
     s.error=0; c.action=MUSIC_PLAY; assert(!music_player_command(p,&c));
     c.action=MUSIC_CLEAR; assert(!music_player_command(p,&c) && !p->view.playlist.count && !p->decoder);
+    c.action=MUSIC_OPEN; path(c.path,scratch,"large-tag.mp3");
+    assert(!music_player_command(p,&c) && !p->view.duration);
+    c.action=MUSIC_SEEK; c.value=48000*3600;
+    assert(!music_player_command(p,&c) && p->view.duration && p->view.position==p->view.duration && p->view.state==MUSIC_PLAYING);
     music_player_destroy(p); assert(p->view.state==MUSIC_CLOSING && s.opens==s.closes); free(p);
 }
 static void runtime(const char *fixtures)
@@ -133,7 +158,7 @@ static void runtime(const char *fixtures)
 }
 int main(int argc, char **argv)
 {
-    assert(argc==3); decoders(argv[1],argv[2]); playlists(argv[1],argv[2]); engine(argv[1]); runtime(argv[1]);
+    assert(argc==3); decoders(argv[1],argv[2]); playlists(argv[1],argv[2]); engine(argv[1],argv[2]); runtime(argv[1]);
     const char *exts[]={"wav","mp3","ogg","m3u","bmp","png","jpg","gif"};
     for (unsigned i=0;i<8;i++) { char name[32]; snprintf(name,sizeof(name),"/file.%s",exts[i]); const struct desk_catalog_entry *e=desk_catalog_file(name); assert(e && !strcmp(e->name,i<4 ? "music" : "viewer")); }
     assert(!strcmp(desk_catalog_file("/Music.TONE.MP3")->name,"music"));

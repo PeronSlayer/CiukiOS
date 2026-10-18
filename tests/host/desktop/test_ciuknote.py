@@ -30,6 +30,8 @@ TEXTAREA_SCREENS = {
     'ta-plain.xrgb': 'fb9a313f1a54d109e21735aa28049a1cd71d3f632c5255bceef2a07351b99cce',
     'ta-scrolled.xrgb': '33d61b4ba794401e2fbc8ae712df3e6466c836e0a5ef57b569b690de48059021',
 }
+# F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
+# only the dialog frames change.
 APP_SCREENS = {
     'cn-about.xrgb': 'de423649ddeedb3807983783ba540cb28d6cc872194e40013dccc0fed252e061',
     'cn-bold.xrgb': 'dbb6e00d030ec73460eb09788b033173f87782a6c1075aeeead4aec5d559f976',
@@ -41,11 +43,11 @@ APP_SCREENS = {
     'cn-limit.xrgb': '200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d',
     'cn-menu-edit.xrgb': '1e116d6bf0b76ed52d7f28cfd1bfcb01bb61e6685605e46c80f7b1ece428f962',
     'cn-menu-file.xrgb': '8373e57ec17b178ef87538570d77303d42a7265e4afb9aa994e3bd9c3ed58f13',
-    'cn-open-root.xrgb': '2d7b41ab10aa32fe1a2649c4f2850ad372a6bf999a07c7faf4848030632462c0',
-    'cn-open-tests.xrgb': '82358668fee80e56394a30a6be45d2140046b9bd9f6e807dbc8bb8738b9c99c9',
+    'cn-open-root.xrgb': '31c0813f08d9ded09f97c9a41a39a72a2331c5c008547a70da06e2ef5a8e36e1',
+    'cn-open-tests.xrgb': 'ae632eeb42e0a5184db2ab11e11232564551b5bc43c3b0b987fa0a926d1e1af0',
     'cn-prompt-changes.xrgb': '1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2',
     'cn-replace-bar.xrgb': '95039478d4218b647d6e842cf3c7553e130d8eb2bbcc22a8e8ed7afb2c1da801',
-    'cn-save-page.xrgb': 'fdeccd1dede0221d93450ebf8e6ecd1288e09937db413f096dd6d1df835a06ab',
+    'cn-save-page.xrgb': 'de5affaa20dc00ffe5d24ae002e467033140c1aea5a4ad5f284f123a0a7081ed',
     'cn-saved.xrgb': 'c31ebaddb8dc2b5f791cee0cfc693a942fafa3e1e12902490bb1ceb7198da3a5',
     'cn-scrolled-bars.xrgb': '06804b6ef253b27c12cf0f48b6ab0ff63faa3d073d9b13cde8a9e938be7ab366',
     'cn-status-hidden.xrgb': '7b12865ddbc38c28518557e9b58151831dc6a27b5dd376c1443217dd7b2380ff',

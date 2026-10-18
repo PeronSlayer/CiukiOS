@@ -18,6 +18,7 @@ enum music_action { MUSIC_OPEN, MUSIC_ADD, MUSIC_SAVE, MUSIC_PLAY, MUSIC_PAUSE, 
 struct music_command { enum music_action action; uint64_t value; char path[MUSIC_PATH]; };
 struct music_snapshot {
     enum music_state state; int error; unsigned current, rate, revision;
+    char error_path[MUSIC_PATH];
     uint64_t position, duration; struct music_playlist playlist;
 };
 struct music_player {
@@ -25,6 +26,9 @@ struct music_player {
     const struct music_output *output; struct music_decoder *decoder;
     int16_t ring[MUSIC_RING*2]; unsigned head, count;
     int device, eof; uint64_t base, tail_deadline;
+    uint64_t load_started; int first_pcm;
+    const char *stage;
+    void (*changed)(void *, const struct music_snapshot *);
     music_cancel cancel; void *ctx;
 };
 void music_player_init(struct music_player *, const struct music_output *, music_cancel, void *);

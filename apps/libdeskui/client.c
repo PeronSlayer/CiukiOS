@@ -292,6 +292,7 @@ int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 
 void du_window_destroy(struct du_window *w)
 {
+    if (w->back && w->ui) du_dialog_close(w->ui);
     release_old(w);
     if (w->pixels) { munmap(w->pixels, w->info.allocation_bytes); w->pixels = NULL; }
     free(w->back); w->back = NULL;

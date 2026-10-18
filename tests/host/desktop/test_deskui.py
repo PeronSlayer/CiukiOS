@@ -33,11 +33,13 @@ TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
 # F2-64 recorded affected transient frames; remaining frames await lead review.
 # 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
+# F4-30 (2026-10-18): only deskui-open changes for the shared Places pane;
+# the four dialog-places-goldens.json frames cover mounted media and Save.
 TOOLKIT_FRAMES = {
     'deskui-input.xrgb': '72e8a91f02bdb8b2b5ef0bafe23a9dc1332152aef2280790299cfb5951c16da6',
     'deskui-menu.xrgb': 'a9ffa04ca2ea5565a6a7ca8a99b32dc3c3b3d7e0edba6646be7d7ee31946cea9',
     'deskui-message.xrgb': '23bca4045904f0bdc3311b8578b025328a1baa30b2b202b2f872ec8242f36f41',
-    'deskui-open.xrgb': '320f5dbb45dd8bbb279d6bdce84ad1e83b65785ee8e032bcac2edd6461e03a73',
+    'deskui-open.xrgb': 'fc912b457c774d912452593b94c8dbea73c0f0222c7fb4de97f441a86f06552e',
     'deskui-popup.xrgb': '0d67abb32369b6a755ed7f5247dea1389049a56297cef185087485cd8ec8035c',
     'deskui-progress.xrgb': 'af6ac5d3e8525d71376d9d0768b53a9d45c4b0403e0289a1d2aab3837e7c9b76',
     'deskui-view0.xrgb': '9269da40f4bd59ba2b6331b8382dcd432b1dd1089456a608fbeef7986f823c05',
@@ -135,6 +137,8 @@ class DeskuiTests(unittest.TestCase):
             digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob("*.xrgb"))}
             for p in output.glob("*.xrgb"):
                 width, height = (760, 520) if name == "files-ui" else (400, 300)
+                if p.with_suffix('.size').exists():
+                    width, height = map(int, p.with_suffix('.size').read_text().split())
                 capture(p.stem, p.read_bytes(), width, height)
             return result.stdout, digests
 
@@ -150,6 +154,13 @@ class DeskuiTests(unittest.TestCase):
             "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
+
+    def test_dialog_places(self):
+        sources = ['tests/host/desktop/dialog_places_test.c',
+                   *(s for s in TOOLKIT if s != 'apps/libdeskui/dialog.c')]
+        _, digests = self.run_harness('places', sources, frames=True)
+        expected = json.loads((ROOT/'tests/host/desktop/dialog-places-goldens.json').read_text())
+        self.check_frames(digests, expected, 'PLACES')
 
     def test_files_slow_listing_responsive(self):
         stdout, _ = self.run_harness("files-async", ["tests/host/desktop/files_async_test.c",

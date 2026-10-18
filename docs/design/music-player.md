@@ -1,13 +1,50 @@
 # F4-07 native Music Player
 
+## F4-30 removable-volume startup and shared Places (2026-10-18)
+
+Research before implementation: [minimp3 usage and duration detection](https://github.com/lieff/minimp3#usage)
+requires preserving unconsumed bytes and recommends 16 KiB lookahead. Its
+[upstream streaming adapter](https://raw.githubusercontent.com/lieff/minimp3/master/minimp3_ex.h)
+also permits starting without a whole-stream duration scan. The current
+adapter instead decodes the entire MP3 during open, then reads it again for
+playback, and refills after each frame. At removable-volume latency that
+delays first PCM in proportion to song length. Keep the existing worker,
+publish Loading before blocking I/O, decode only the first frame at open,
+and refill the compressed window in batches. Read Xing/Info frame counts
+when present; otherwise show an unknown duration until natural EOF, keeping
+the seek API able to replay decoded audio precisely. Do not estimate VBR
+duration from the first frame's bitrate.
+If a forward seek discovers the end of an unknown-length stream, clamp to
+the newly established duration instead of reporting a file error.
+
+[ID3v2.4 section 3.1](https://id3.org/id3v2.4.0-structure) defines a ten-byte
+header, a synchsafe payload length and an optional footer. Skip a validated
+leading tag by seeking, so large cover art does not enter the MP3 sync loop.
+[newlib fread](https://sourceware.org/newlib/libc.html#fread) distinguishes
+short counts from stream errors: accumulate compressed input and report
+actual I/O errors rather than dropping a partial frame.
+[stb_vorbis v1.22](https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_vorbis.c)
+already provides file streaming and bounded end-page duration lookup; retain
+it. [Microsoft RIFF](https://learn.microsoft.com/en-us/windows/win32/xaudio2/resource-interchange-file-format--riff-)
+continues to govern the existing WAV chunk bounds and padding.
+
+The shared file dialog uses the existing `MEDIA_GET_STATE` / `MEDIA_GET_VOLUME`
+ABI (`src/kernel/include/ciuki/abi.h`) for mounted volume types, generations
+and cached labels. Its Places column includes the four personal folders,
+the fixed system root, and mounted USB/optical roots. Poll these metadata
+snapshots while the dialog is open; closing the dialog releases the observer.
+No new kernel ABI or desktop IPC operation is needed. Diagnostics use the
+same native raw debug sink as desktop watchdog records, independently of
+stdio/VFS file locks; host builds write the same records to stderr.
+
 Written directive: `docs/directives/f4-07-music-player.md`. Research checked
 2026-10-13 before implementation:
 
 - [minimp3 upstream](https://github.com/lieff/minimp3): CC0; frame decoding
   consumes `frame_bytes`, returns frames per channel, and requires substantial
   compressed lookahead (16 KiB). Use the scalar decoder with bounded file I/O,
-  not a whole-song allocation or an unbounded seek index. Opening measures
-  duration in cancellable frame steps; MP3 seek replays from the start so the
+  not a whole-song allocation or an unbounded seek index. F4-30 replaces the
+  original duration scan during open; MP3 seek replays from the start so the
   bit reservoir is populated correctly.
 - [stb_vorbis upstream](https://github.com/nothings/stb/blob/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_vorbis.c):
   interleaved signed-16 streaming and PCM-frame seeking. Reuse the exact
