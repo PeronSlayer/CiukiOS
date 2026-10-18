@@ -79,8 +79,8 @@ def frame(width=1024, height=768, background=runner.DESK_BACKGROUND, top=runner.
         for row in range(y, y + h):
             pixels[(row * width + x) * 3:(row * width + x + w) * 3] = colour(c) * w
     fill(0, 0, width, 32, top)
-    fill(4, 4, 24, 24, button)                         # the Ciuki button at the left of the top bar
-    fill(7, 7, 18, 18, 0x9a7a5a)                      # its portrait mark
+    fill(*runner.DESK_START_BOX, button)
+    fill(*runner.desktop_portrait_region(), 0x9a7a5a)
     fill((width - 256) // 2, 200, 256, 256, 0x9a7a5a)  # portrait stand-in
     fill(0, height - 32, width, 32, taskbar)
     fill(width - 64, 5, 48, 7, 0xf5f8fb)    # taskbar clock
@@ -279,7 +279,9 @@ class NormalBootUnitTests(unittest.TestCase):
         compositor = (ROOT / 'apps/desktop/compositor.c').read_text()
         console = (ROOT / 'src/kernel/core/console.c').read_text()
         output = (ROOT / 'src/kernel/core/output.c').read_text()
-        self.assertIn('#define DESK_BAR %d' % runner.DESK_BAR_ROWS, header)
+        geometry_header = (ROOT / 'apps/desktop/start-orb.h').read_text()
+        self.assertIn('#include "start-orb.h"', header)
+        self.assertIn('#define DESK_BAR %d' % runner.DESK_BAR_ROWS, geometry_header)
         # DESK_BACKGROUND remains the saved-settings sentinel; screen colours
         # come from the selected default theme, independently of table order.
         theme_header = (ROOT / 'apps/desktop/theme.h').read_text()
@@ -295,12 +297,12 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertIn('fill(d,bar,clip,t->taskbar);', compositor)
         # The Ciuki button: its box (desktop.h, compositor.c) and its face colours (shell.c draw_start).
         for name, value in zip(('X', 'Y'), runner.DESK_START_BOX[:2]):
-            self.assertIn('#define DESK_START_%s %d\n' % (name, value), header)
+            self.assertIn('#define DESK_START_%s %d\n' % (name, value), geometry_header)
         self.assertIn('return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H};', compositor)
         shell = (ROOT / 'apps/desktop/shell.c').read_text()
         self.assertIn('uint32_t base = t->topbar_accent;', shell)
-        self.assertIn('#define DESK_START_H (DESK_BAR - 2 * DESK_START_Y)', header)
-        self.assertIn('#define DESK_START_W DESK_START_H', header)
+        for name, value in zip(('W', 'H'), runner.DESK_START_BOX[2:]):
+            self.assertIn('#define DESK_START_%s %d\n' % (name, value), geometry_header)
         self.assertIn('{0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}', compositor)
         self.assertIn('fg = 0x%06X, bg = 0x%06X;' % (runner.CONSOLE_COLOURS[1], runner.CONSOLE_COLOURS[0]), console)
         self.assertIn('console_set_color(0xFFFFFF, 0x%06X);' % runner.CONSOLE_COLOURS[2], output)

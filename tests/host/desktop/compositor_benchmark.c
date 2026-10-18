@@ -192,11 +192,11 @@ static void bounded_damage(struct desktop *d)
         .value = DESK_START_X + 10 - d->mouse_x, .value2 = DESK_START_Y + 10 - d->mouse_y};
     desk_input(d, &e); assert(d->damage.count == 1);
     b = d->damage.boxes[0];
-    assert(b.x == DESK_START_X && b.y == DESK_START_Y && b.w == DESK_START_W && b.h == DESK_START_H);
+    assert(b.x == DESK_START_X && b.y == DESK_START_Y && b.w == DESK_START_W && b.h == DESK_START_H+DESK_START_SHADOW);
     d->damage.count = 0;
     e.value = 120 - d->mouse_x; e.value2 = 16 - d->mouse_y;
     desk_input(d, &e); assert(d->damage.count == 1);
-    assert(d->damage.boxes[0].w * d->damage.boxes[0].h == DESK_START_W * DESK_START_H);
+    assert(d->damage.boxes[0].w * d->damage.boxes[0].h == DESK_START_W * (DESK_START_H+DESK_START_SHADOW));
     d->damage.count = 0;
     e.value = W - 20 - d->mouse_x; e.value2 = H - 16 - d->mouse_y;
     desk_input(d, &e); assert(!d->damage.count);

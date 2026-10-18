@@ -119,6 +119,7 @@ int desk_contains(struct desk_box b, int32_t x, int32_t y)
 { return x >= b.x && y >= b.y && (int64_t)x < (int64_t)b.x+b.w && (int64_t)y < (int64_t)b.y+b.h; }
 int desk_hit(const struct desktop *d, int32_t x, int32_t y)
 {
+    if (d->shell && desk_start_contains(d,x,y)) return -1;
     int best = -1;
     for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].window && !d->clients[i].minimized &&
         (desk_contains(d->clients[i].frame, x, y) || desk_resize_hit(&d->clients[i], x, y)) &&

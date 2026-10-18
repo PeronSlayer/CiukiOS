@@ -1,20 +1,11 @@
 """Start menu geometry of the desktop shell (apps/desktop/shell.c) at 1024x768, for the scripted QEMU cases.
 
-The tray ends at x 1020 and spans y 740..765. Its width is 12 px of inner
-margins plus the displayed clock's measured text width C and 20 px per visible
-icon (16 px icon + 4 px gap). At the default 24-hour time 12:00, C=31, so
-without removable media the tray spans x 937..1020; network x 943..959,
-volume x 963..979, clock x 983..1014. Visible media adds a slot at x 923..939
-and moves the tray's left edge to x 917. All icons span y 744..760; the clock's
-capital top is y 748. With seconds or 12-hour time, measure the formatted text
-instead of assuming C=31. Task buttons stop 8 px before the tray's left edge.
-The scripted Task Manager click (300, 751) remains within its button; desktop
-case digests are relations and need no literal digest updates.
+System status and clock/date are at the top right; task buttons occupy the
+bottom bar. Scripted Task Manager clicks stay within their bottom buttons.
 
-The Ciuki (Start) button sits at the left end of the 32 px top bar, x 4..100, y 4..28 (desktop.h
-DESK_START_*). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
-from y 32 (the top bar's bottom edge) at x 4, so it spans y 32..226 and its first row, Programs, y 35..65
-(x 4..188). Hovering or clicking Programs opens its submenu at x 185..335 with rows of 22 px, top-aligned
+The Ciuki (Start) button sits at the left end of the 32 px top bar, x 6..50, y 0..44 (generated start-orb.json / start-orb.h). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
+from y 32 (the top bar's bottom edge) at x 6, so it spans y 32..226 and its first row, Programs, y 35..65
+(x 6..190). Hovering or clicking Programs opens its submenu at x 187..337 with rows of 22 px, top-aligned
 with Programs (y 32): the known programs present in /Programs in PROGRAM_ORDER, then "Accessories" when an
 accessory is present, "Games" when dosbox is present (the bundled shareware games, owner decision
 2026-10-12), then a separator (8 px) and "Developer" when any other program is present (shell.c build(),
@@ -37,9 +28,10 @@ import sys
 PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint", "terminal"]
 ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
 SCREEN_W, SCREEN_H = 1024, 768
-TOP_BAR = 32
-START_BUTTON = (4, 4, 24, 24)              # x, y, w, h (desktop.h DESK_START_X/Y/W/H)
-START_CLICK = (16, 16)
+ORB = json.loads((Path(__file__).resolve().parents[3] / "apps/desktop/start-orb.json").read_text())
+TOP_BAR = ORB["bar_height"]
+START_BUTTON = tuple(ORB["orb_box"])
+START_CLICK = (START_BUTTON[0]+START_BUTTON[2]//2, START_BUTTON[1]+START_BUTTON[3]//2)
 MENU_X, MENU_W = START_BUTTON[0], 184
 START_TOP = TOP_BAR
 PROGRAMS_ROW = (START_TOP + 3, START_TOP + 3 + 30)

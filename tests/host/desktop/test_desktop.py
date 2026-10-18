@@ -37,15 +37,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
 # only the dialog frames change.
 # 2026-10-18 (main after f4-30 + f2-81): the dialogs frames re-recorded on the combined tree (Places pane in the two-bar shell), reviewed by the lead.
+# F2-82: intentional orb geometry, well and sphere changes in shell frames.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "92be431fbfa2742ac188c836b8776cc4e32c8672ad3d3ae6aa06b7bae9c61654",
-    "ciuki-blue-dialogs.ppm": "294abf3d751fceb2a7714dbd1210f93cca00510ea6544d779e605b4c2b8b18d0",
-    "ciuki-blue-tray-disabled.ppm": "cdaa374dd4e8f0cf949f6b52e602d1b65a9dc7f266b7bb48d1e94f06fcb70ff7",
-    "ciuki-blue-tray-media.ppm": "1b50d2d8ce2247e887bdb0847a5b8943df2edc3131b9cf12d6b9904a3f5f3281",
-    "platinum-desktop.ppm": "6734d5e09dc5bd285f218e93aeb99fcdee6af240fe01f9756c42fe10d47f374d",
-    "platinum-dialogs.ppm": "539afd04e538a59f3f3165b3a484c27e1a35ecbf4df99b7bbda5066b18ab233d",
-    "platinum-tray-disabled.ppm": "b8700318bff6123dcd84f03998f159ac2f0daa4d4086ffb1e84f5fa1d646c95f",
-    "platinum-tray-media.ppm": "96aa790f6fff6b100b05848a41f4a10b479b7c90455c98f44f4a9eef2b826c71"
+    "ciuki-blue-desktop.ppm": "e83962b627e16dbb4ede60571762f291107e1190674ee7b2ad0f58f24df71db6",
+    "ciuki-blue-dialogs.ppm": "67129ffcf4c954f76133d946a1898c5e1dc16ef1c7d2ce40b94c6c70ed8c1ce1",
+    "ciuki-blue-tray-disabled.ppm": "f6d70f673505225ef5cb545fe034d5c75f41f1e40e70337f6332e304b75fa453",
+    "ciuki-blue-tray-media.ppm": "2f2e403c8861b1090a93b73c67f09a4e90ee5195ce72938e0232a3600694d399",
+    "platinum-desktop.ppm": "68b9ab76fbe277a6d3445c6e36f6662dd4b639363caa0bf4dfa2db3cd8a3d56f",
+    "platinum-dialogs.ppm": "b97a9f31604b70167b59bb866191656a342254b21cf810ba53db5ed53e77d7b7",
+    "platinum-tray-disabled.ppm": "23ca194246f3273ed44a05c50b4458c8d9272fc299a155ea4c2c8f743d730149",
+    "platinum-tray-media.ppm": "97ec4c72f59c7c706085fb4a78e5a905d603ca136c871a3dbf7973d82b3cafa2"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -175,12 +176,15 @@ class DesktopTests(unittest.TestCase):
                     self.assertEqual(actual, pinned)
                 else:
                     # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
-                    # approved portrait area-averaged to 18 px (shell.c desk_shell_icon "ciuki"), centred
+                    # approved portrait area-averaged to 28 px (shell.c desk_shell_icon "ciuki"), centred
                     # in the orb and pressed in by 1 px while the menu is open
                     # ("shell" mode). Every cell the portrait covers fully is the exact average of its
                     # source block.
-                    size, shift = 18, 1 if mode == "shell" else 0
-                    x0, y0 = 4 + (24 - size) // 2 + shift, 4 + (24 - size) // 2 + shift
+                    geometry=json.loads((ROOT / "apps/desktop/start-orb.json").read_text())
+                    size=geometry["portrait"]["size"]
+                    shift=geometry["portrait"]["pressed_shift"] if mode == "shell" else 0
+                    x0=geometry["orb_box"][0]+geometry["portrait"]["offset"][0]+shift
+                    y0=geometry["orb_box"][1]+geometry["portrait"]["offset"][1]+shift
                     full = 0
                     for y in range(size):
                         for x in range(size):
@@ -818,6 +822,8 @@ class AppCaseReplayTests(unittest.TestCase):
         through the production desktop's F12 selector, launch, drag, close/reap.
         No repeats are needed; keyboard edges remain independent of the mouse.
         """
+        orb=json.loads((ROOT / "apps/desktop/start-orb.json").read_text())["orb_box"]
+        centre=(orb[0]+orb[2]//2,orb[1]+orb[3]//2)
         models = {"usb-10ms": ["--usb-poll-ms", "10", "--start-delay-ms", "800"],
                   "usb-late-start": ["--usb-poll-ms", "10", *REPLAY_MODELS["late-start"]]}
         for case_id in ("usb-input-uhci", "usb-input-ohci"):
@@ -829,7 +835,8 @@ class AppCaseReplayTests(unittest.TestCase):
                 self.assertEqual(out["USB"]["read_keys"], "4")
                 self.assertEqual(out["USB"]["pending_mouse"], "0")
                 self.assertEqual(out["USB"]["pending_keys"], "0")
-                self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("16", "16"))
+                self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]),
+                                 tuple(map(str,centre)))
 
     def test_usb_shell_slow_poll_misses_start(self):
         """The evidence has 1.4--2.5 s between USB reports, versus 20--100 ms
@@ -849,7 +856,7 @@ class AppCaseReplayTests(unittest.TestCase):
         self.assertEqual(out["GATE"]["buttons"], "12")
         reports = re.findall(r'USB mouse report dx=(-?\d+) dy=(-?\d+) buttons=(\d+)', out["text"])
         self.assertEqual(reports[:7], [("-127", "-127", "0")] * 5 +
-                         [("-111", "-111", "0"), ("0", "0", "1")])
+                         [("-99", "-105", "0"), ("0", "0", "1")])
         self.assertGreater(int(out["USB"]["compressed"]), 0)
         self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("0", "0"))
         self.assertEqual(out["USB"]["pending_mouse"], "0")
@@ -891,7 +898,7 @@ def load_tests(loader, tests, pattern):
     # Discovery finds these sibling modules itself. Explicit desktop runs include
     # both refinement groups once, without duplicating them during discovery.
     if pattern is None:
-        for name in ("test_interaction", "test_text_selection"):
+        for name in ("test_interaction", "test_text_selection", "test_start_orb"):
             tests.addTests(loader.loadTestsFromModule(load(name, ROOT / "tests/host/desktop" / (name + ".py"))))
     return tests
 

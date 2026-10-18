@@ -3,11 +3,11 @@
 #define CIUKI_APP_DESKTOP_H
 #include "protocol.h"
 #include "theme.h"
+#include "start-orb.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
 #define DESK_TX_MAX 64
-#define DESK_BAR 32
 #define DESK_BORDER DESK_FRAME_BORDER   /* theme.h: one frame geometry for windows and dialogs */
 #define DESK_TITLE DESK_FRAME_TITLE
 #define DESK_RESIZE_MARGIN 7
@@ -17,10 +17,6 @@
 #define DESK_EDGE_BOTTOM 8u
 /* The Ciuki (Start) button at the left end of the top bar; the Start menu
  * drops from it. Task buttons start DESK_TASK_X from the taskbar's left edge. */
-#define DESK_START_X 4
-#define DESK_START_Y 4
-#define DESK_START_H (DESK_BAR - 2 * DESK_START_Y)
-#define DESK_START_W DESK_START_H
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
@@ -254,6 +250,9 @@ void desk_collapse(struct desktop *, int index);                /* toggle window
 void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
 struct desk_box desk_start_button(const struct desktop *);       /* top bar, left end */
+struct desk_box desk_start_bounds(const struct desktop *);       /* includes soft shadow */
+int desk_start_contains(const struct desktop *, int32_t, int32_t);
+int desk_shell_chrome_intersects(const struct desktop *, struct desk_box);
 int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
 struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);

@@ -1,0 +1,20 @@
+{
+  "bar_height": 32,
+  "orb_box": [
+    6,
+    0,
+    44,
+    44
+  ],
+  "portrait": {
+    "offset": [
+      8,
+      8
+    ],
+    "pressed_shift": 1,
+    "size": 28
+  },
+  "shadow": 1,
+  "version": 1,
+  "well_diameter": 48
+}

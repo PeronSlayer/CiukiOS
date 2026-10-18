@@ -27,9 +27,10 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-63: re-recorded for the pinned FreeType UI atlases (before/after PNGs in build/host/f2-63).
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 # F2-72: re-recorded with --benchmark --frames 2 for the DMZ-White cursor overlay.
+# F2-82: shell scene includes the larger orb and well.
 GOLDENS = {
-    "Ciuki Blue": "e31b305c71e80ac1fb9cd8783bd81c823d6534ee8735a0e25f0c2df8e08c945e",
-    "Platinum": "93073bf3732b60bd5a3633337d5eee3a3a7d1835efb3823e4639b3287a9e2db2"
+    "Ciuki Blue": "856ac4e57f28d3aad732d5a281655b1365fd576bdbb6ec7fead2cc5ce94354c1",
+    "Platinum": "56074a84850f27fcdd977a7e12ee408738dd76ef3f86b8b69ec867afcdb47670"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

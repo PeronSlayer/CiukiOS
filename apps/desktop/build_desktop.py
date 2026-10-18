@@ -93,6 +93,7 @@ def validate_payloads():
     if m["files"]["tango.cis"] != icons.store_record()["store_sha256"] or m["icons"] != icon_record(icons):
         raise ValueError("Tango icon store provenance mismatch")
     converter = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
+    converter.check_geometry()
     if (m["files"]["ciuki-portrait.xrgb"] != converter.ARRAY_SHA256 or
             digest(ROOT / "assets/brand/ciuki-logo.png") != converter.SOURCE_SHA256 or
             m["portrait"] != portrait_record(converter)):
@@ -129,6 +130,7 @@ def build():
     icons.check_store_record()
     module("desktop_font_build", ROOT / "apps/desktop/convert_fonts.py").check()
     c = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
+    c.check_geometry()
     data = c.convert(ROOT / "assets/brand/ciuki-logo.png")
     if hashlib.sha256(data).hexdigest() != c.ARRAY_SHA256:
         raise ValueError("converted portrait differs from recorded SHA-256")

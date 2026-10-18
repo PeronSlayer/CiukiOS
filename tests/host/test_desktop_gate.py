@@ -135,9 +135,8 @@ void klog(const char *f,...) {(void)f;}
         c = importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
         portrait = c.convert(ROOT/'assets/brand/ciuki-logo.png')
         pixels = bytearray(bytes((0x37,0x55,0x64))*width*height)
-        # The Ciuki button mark (2026-10-12): the 18 px area average of the portrait at
-        # (7,7) in the top bar; cells touching the transparent surround keep the bar colour.
-        size=18;x0=4+(24-size)//2;y0=4+(24-size)//2
+        # The shared orb geometry; opaque cells must match the pinned source.
+        x0,y0,size,_=runner.desktop_portrait_region()
         for y in range(size):
             for x in range(size):
                 block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
@@ -162,7 +161,8 @@ void klog(const char *f,...) {(void)f;}
             a=self.write_screen('after.ppm',width,height,after)
             observed=runner.observe_desktop_screen(b,a)
             self.assertEqual(observed['ppm_sha256'],hashlib.sha256(a.read_bytes()).hexdigest())
-            self.assertGreater(observed['portrait_pixels_checked'],100);self.assertEqual(observed['portrait_region'][2:],[18,18])
+            self.assertGreater(observed['portrait_pixels_checked'],100);self.assertEqual(observed['portrait_region'][2:],[28,28])
+            self.assertTrue(runner.desktop_mark_visible(b));self.assertTrue(runner.desktop_mark_visible(a))
             self.assertGreaterEqual(observed['cursor_changed_pixels'],16)
             with self.assertRaisesRegex(EvidenceError,'cursor'):runner.observe_desktop_screen(b,b)
             clock_only=bytearray(before);clock_only[:30]=b'\xff'*30
@@ -171,6 +171,7 @@ void klog(const char *f,...) {(void)f;}
             x,y,_,_=observed['portrait_region'];after[((y+9)*width+x+9)*3]^=1   # the centre cell of the mark is portrait ink
             a=self.write_screen('corrupt.ppm',width,height,after)
             with self.assertRaisesRegex(EvidenceError,'portrait'):runner.observe_desktop_screen(b,a)
+            self.assertFalse(runner.desktop_mark_visible(a))
         for data in (b'P3\n640 480\n255\n',b'P6\n640 480\n256\n',b'P6\n640 480\n255\nshort',b'P6\n# missing newline'):
             path=self.folder/'malformed.ppm';path.write_bytes(data)
             with self.assertRaises(EvidenceError):runner.read_ppm(path)
@@ -249,15 +250,16 @@ void klog(const char *f,...) {(void)f;}
                     self.assertIn('no input, production present captured PASS',result.stdout)
                     pixels=target.read_bytes();self.assertEqual(len(pixels),320*320*4)
                     checked=0
-                    # The released shell button: exact 18 px mark at (7,7), before any input.
-                    for y in range(18):
-                        for x in range(18):
+                    # The released orb: exact shared portrait cells, before any input.
+                    x0,y0,size,_=runner.desktop_portrait_region()
+                    for y in range(size):
+                        for x in range(size):
                             block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
-                                   for yy in range(y*256//18,(y+1)*256//18)
-                                   for xx in range(x*256//18,(x+1)*256//18)]
+                                   for yy in range(y*256//size,(y+1)*256//size)
+                                   for xx in range(x*256//size,(x+1)*256//size)]
                             if any(b==bytes((0x64,0x55,0x37)) for b in block):continue
                             expected=bytes(sum(b[k] for b in block)//len(block) for k in range(3))
-                            off=((7+y)*320+7+x)*4
+                            off=((y0+y)*320+x0+x)*4
                             self.assertEqual(pixels[off:off+3],expected,(mode,x,y))
                             checked+=1
                     self.assertGreater(checked,100)

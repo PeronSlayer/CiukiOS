@@ -852,18 +852,27 @@ def read_ppm(path):
     return width,height,pixels
 
 
-def desktop_mark_visible(ppm, root=ROOT):
-    """True when the approved 18 px Ciuki mark of the top-bar button is present in
-    the screendump (same cells and placement as observe_desktop_screen). The
-    desktop may still be repainting after a fault when the probe arms the
-    interaction; the runner waits, bounded, for the mark before the pre-input
-    screendump instead of trusting a fixed delay."""
+def desktop_orb_geometry(root=ROOT):
+    """Generated alongside start-orb.h by the pinned portrait converter."""
+    return json.loads((root/'apps/desktop/start-orb.json').read_text())
+
+
+def desktop_portrait_region(shift=0, root=ROOT):
+    geometry = desktop_orb_geometry(root)
+    x, y, _, _ = geometry['orb_box']
+    portrait = geometry['portrait']
+    dx, dy = portrait['offset']
+    size = portrait['size']
+    return x+dx+shift, y+dy+shift, size, size
+
+
+def desktop_portrait_model(root=ROOT):
+    """Opaque source cells stay exact; transparent edges blend with the sphere."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
     converter = importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
     portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
-    width,height,pixels = read_ppm(ppm)
-    size = 18
+    size = desktop_orb_geometry(root)['portrait']['size']
     cells = []
     for y in range(size):
         for x in range(size):
@@ -871,51 +880,43 @@ def desktop_mark_visible(ppm, root=ROOT):
                      for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
             if any(b == bytes((0x64,0x55,0x37)) for b in block):continue
             cells.append((x,y,bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]))
-    def mark_matches(shift):
-        x0 = 4+(96-size-6-53)//2+shift; y0 = 4+(24-size)//2+shift
-        return all(pixels[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
-    return any(mark_matches(s) for s in (0,1))
+    if len(cells) <= 100:raise EvidenceError('portrait mark model has too few covered cells')
+    return converter, cells
+
+
+def desktop_mark_matches(pixels, width, cells, shift, root):
+    x0, y0, _, _ = desktop_portrait_region(shift,root)
+    return all(pixels[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
+
+
+def desktop_mark_visible(ppm, root=ROOT):
+    """Bounded stall observer: require the approved orb portrait before input."""
+    _, cells = desktop_portrait_model(root)
+    width, _, pixels = read_ppm(ppm)
+    shifts = (0,desktop_orb_geometry(root)['portrait']['pressed_shift'])
+    return any(desktop_mark_matches(pixels,width,cells,s,root) for s in shifts)
+
 
 def observe_desktop_screen(before, after, root=ROOT):
-    """Independent pixels from the pinned portrait converter used by T0.
+    """Pinned converter cells at shared orb geometry, plus cursor interaction.
 
-    Since the Ciuki button moved into the top bar and the default wallpaper
-    became the owner's scene (2026-10-12), the approved portrait on the
-    desktop is the 18 px area average drawn in that button (shell.c
-    desk_shell_icon "ciuki"; desktop.h DESK_START_*, Inter 13 Bold "CiukiOS"
-    53 px wide): every mark cell fully covered by portrait ink must equal the
-    exact average of its 256 px source block, in both screens, with the
-    button released (shift 0) or pressed (shift 1). Clock changes cannot
-    establish interaction: require changes within the old cursor's 8x16
-    footprint.
+    Every opaque portrait cell must match exactly in both frames, released
+    or pressed. Theme gradients are tolerated outside those cells only.
+    Clock changes cannot establish input: require the old cursor to change.
     """
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('screen_portrait',root/'apps/desktop/convert_portrait.py')
-    converter = importlib.util.module_from_spec(spec);spec.loader.exec_module(converter)
-    portrait = converter.convert(root/'assets/brand/ciuki-logo.png')
+    converter, cells = desktop_portrait_model(root)
     bw,bh,bp = read_ppm(before);width,height,pixels = read_ppm(after)
     if (bw,bh) != (width,height):raise EvidenceError('desktop screen geometry changed')
-    size = 18
-    cells = []
-    for y in range(size):
-        for x in range(size):
-            block = [portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
-                     for yy in range(y*256//size,(y+1)*256//size) for xx in range(x*256//size,(x+1)*256//size)]
-            if any(b == bytes((0x64,0x55,0x37)) for b in block):continue   # transparent surround (#375564, BGR bytes)
-            cells.append((x,y,bytes(sum(b[k] for b in block)//len(block) for k in range(3))[::-1]))   # RGB
-    if len(cells) <= 100:raise EvidenceError('portrait mark model has too few covered cells')
-    def mark_matches(frame, shift):
-        x0 = 4+(96-size-6-53)//2+shift; y0 = 4+(24-size)//2+shift
-        return all(frame[((y0+y)*width+x0+x)*3:((y0+y)*width+x0+x)*3+3] == rgb for x,y,rgb in cells)
-    shifts = [s for s in (0,1) if mark_matches(bp,s)]
-    if not shifts or not any(mark_matches(pixels,s) for s in (0,1)):
+    states = (0,desktop_orb_geometry(root)['portrait']['pressed_shift'])
+    shifts = [s for s in states if desktop_mark_matches(bp,width,cells,s,root)]
+    if not shifts or not any(desktop_mark_matches(pixels,width,cells,s,root) for s in states):
         raise EvidenceError('approved Ciuki portrait region mismatch')
-    x0 = 4+(96-size-6-53)//2+shifts[0]; y0 = 4+(24-size)//2+shifts[0]
+    region = desktop_portrait_region(shifts[0],root)
     changed = sum(bp[(y*width+x)*3:(y*width+x)*3+3] != pixels[(y*width+x)*3:(y*width+x)*3+3]
                   for y in range(height//2,height//2+16) for x in range(width//2,width//2+8))
     if changed < 16:raise EvidenceError('post-fault cursor footprint did not change')
     return {'before_ppm_sha256':sha(before),'ppm_sha256':sha(after),'width':width,'height':height,
-            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':[x0,y0,size,size],
+            'portrait_array_sha256':converter.ARRAY_SHA256,'portrait_region':list(region),
             'portrait_pixels_checked':len(cells),'cursor_changed_pixels':changed}
 
 
@@ -998,16 +999,17 @@ NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # background). test_normal_boot.py checks these literals against those
 # sources. A persisted non-default theme (/system/settings/desktop.cfg) is
 # outside this heuristic: test images carry no settings file.
-DESK_BAR_ROWS = 32
+DESK_BAR_ROWS = desktop_orb_geometry()['bar_height']
 DESK_TOP_BAR = 0x203a50
 DESK_TASKBAR = 0xdce4ec
-DESK_START_BOX = (4, 4, 96, 24)  # x, y, w, h: the Ciuki button in the top bar
-DESK_START_BUTTON = (0xe5c189, 0xd6ae6c)  # menu closed / open
+DESK_START_BOX = tuple(desktop_orb_geometry()['orb_box'])
+DESK_START_BUTTON = (0xf0c27a, 0xd6ae6c)  # menu closed / open
 # Blue's face is visibly shaded; its base colours alone cover too
 # little of draw_start's gradient. Samples span that face without widening
 # the per-channel tolerance or reducing the required occupied fraction.
-DESK_START_GRADIENT = (0xefd9b7, 0xead2ac, 0xe6cba1, 0xe1c496, 0xdcbd8b,
-                       0xc8a663, 0xd1ae6f, 0xdab67a)
+DESK_START_GRADIENT = (0xf7dfb9, 0xefd8b3, 0xe7d1ae, 0xdfcaa8, 0xd7c3a2,
+                       0xcfbc9d, 0xc7b597, 0xbfae91, 0xb7a78b, 0xafa086,
+                       0xa79980, 0x9f927a, 0x978b75, 0x8f846f, 0x877d69, 0x7f7664)
 DESK_BACKGROUND = 0x2b4a63
 CONSOLE_COLOURS = (0x10243c, 0xe8e8e8, 0x800000)  # console bg, fg, panic bg
 SCREEN_TOLERANCE = 8  # per channel: also accepts a 16-bpp (565) framebuffer
