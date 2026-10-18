@@ -5,6 +5,7 @@
 #include <ciuki/abi.h>
 #include "supersavage_mode.h"
 #include <ciuki/dos_video_modes.h>
+#include <ciuki/task.h>
 
 struct reg8 { uint8_t index, mask; };
 /* X.Org SavageSave, plus the bank/stride overflow and active-output state
@@ -90,6 +91,7 @@ static int retrace(const struct supersavage_mode_io *b)
             bool active=!!(in(b,0x3DA)&8);
             if (active==(edge!=0)) { seen=true; break; }
             if (b->now_us(b->vga.arg)-started>=40000) return -ETIMEDOUT;
+            if (!(i&63)) kpreempt_point();
         }
         if (!seen) return -ETIMEDOUT;
     }

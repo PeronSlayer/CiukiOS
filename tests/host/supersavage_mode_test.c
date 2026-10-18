@@ -8,6 +8,9 @@
 #include <ciuki/abi.h>
 #include "../../src/kernel/drivers/supersavage_mode.h"
 #include <ciuki/dos_video_modes.h>
+/* Standalone register model: clock/device operations below are deterministic.
+ * The scheduler-backed transport replay measures the production safe points. */
+void kpreempt_point(void) { }
 
 struct card {
     cvga_state vga;

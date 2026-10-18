@@ -206,12 +206,19 @@ static void test_irq_restore(uint32_t f) {
                     end += 1
                 block += source[match.start():end] + '\n'
             (temp / 'latency_scheduler.inc').write_text(block)
-            binary = temp / 'latency'
-            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
-                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
-                            '-I', str(temp), str(ROOT / 'tests/host/kernel_latency_test.c'),
-                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
-            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            for unit, extra in (
+                ('kernel_latency_test.c', []),
+                ('fs/wait_latency_test.c', []),
+                ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
+            ):
+                binary = temp / Path(unit).stem
+                subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                                '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                                '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                                '-I', str(temp), str(ROOT / 'tests/host' / unit),
+                                *(str(ROOT / path) for path in extra),
+                                str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+                subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
     def test_console_rows(self):
         out = ROOT / 'build/host'

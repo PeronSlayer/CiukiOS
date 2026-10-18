@@ -34,7 +34,8 @@ void file_clock_tick(void) { }
 #define fpu_task_switch(t) ((void)(t))
 #define crit_end() ((void)0)
 #define crit_begin() ((void)0)
-#define switch_context(a,b) ((void)(a),(void)(b))
+static void (*latency_switch_hook)(void);
+#define switch_context(a,b) ((void)(a),(void)(b),latency_switch_hook ? latency_switch_hook() : (void)0)
 extern uint32_t dosvm_task_cr3(const struct task *,uint32_t) __attribute__((weak));
 extern uint32_t dosvm_task_esp0(const struct task *,uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak));
@@ -69,6 +70,7 @@ __attribute__((noreturn)) void panic(const char *fmt,...)
 static void reset(void)
 {
     (void)next_id;
+    latency_switch_hook=0;
     memset(rq_head,0,sizeof(rq_head));memset(rq_tail,0,sizeof(rq_tail));
     idle=(struct task){.id=1,.prio=P_IDLE,.state=T_RUNNING};strcpy(idle.name,"idle");
     normal=(struct task){.id=2,.prio=P_NORMAL,.state=T_READY,.user=true};strcpy(normal.name,"worker");

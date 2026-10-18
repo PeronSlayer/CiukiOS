@@ -2,6 +2,9 @@
  * f3-20 firmware ownership amendment for latch/readback limitations.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "vga_hardware.h"
+#include <ciuki/task.h>
+/* Keep indexed register pairs and latch replay
+ * indivisible; service the slow UC aperture every 256 bytes instead. */
 static uint8_t hw_rd(const struct vga_hardware_bus *b, uint16_t p) { return b->in(b->arg,p); }
 static void hw_wr(const struct vga_hardware_bus *b, uint16_t p, uint8_t v) { b->out(b->arg,p,v); }
 static void indexed(const struct vga_hardware_bus *b, uint16_t p, unsigned i, uint8_t v)
@@ -24,7 +27,10 @@ static void registers(const cvga_state *v, const struct vga_hardware_bus *b, int
     }
     hw_wr(b,c+6,v->feature);
     hw_wr(b,0x3C6,v->dac_mask); hw_wr(b,0x3C8,0);
-    for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++) hw_wr(b,0x3C9,v->dac[i][k]);
+    for (unsigned i=0;i<256;i++) {
+        for (unsigned k=0;k<3;k++) hw_wr(b,0x3C9,v->dac[i][k]);
+        if (!(i&15)) kpreempt_point();
+    }
 }
 static void indexes(const cvga_state *v, const struct vga_hardware_bus *b)
 {
@@ -59,8 +65,10 @@ void vga_hardware_read_registers(cvga_state *v, const struct vga_hardware_bus *b
         hw_rd(b,crport(v)+6); hw_wr(b,0x3C0,i); v->attr[i]=hw_rd(b,0x3C1);
     }
     hw_wr(b,0x3C7,0);
-    for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++)
-        v->dac[i][k]=hw_rd(b,0x3C9)&(dac8 ? 255 : 63);
+    for (unsigned i=0;i<256;i++) {
+        for (unsigned k=0;k<3;k++) v->dac[i][k]=hw_rd(b,0x3C9)&(dac8 ? 255 : 63);
+        if (!(i&15)) kpreempt_point();
+    }
     indexes(v,b);
 }
 void vga_hardware_capture_planes(cvga_state *v, const struct vga_hardware_bus *b)
@@ -68,7 +76,10 @@ void vga_hardware_capture_planes(cvga_state *v, const struct vga_hardware_bus *b
     planar(b);
     for (unsigned p=0;p<4;p++) {
         indexed(b,0x3CE,4,p);
-        for (unsigned a=0;a<CVGA_PLANE_SIZE;a++) v->plane[p][a]=b->read(b->arg,a);
+        for (unsigned a=0;a<CVGA_PLANE_SIZE;a++) {
+            v->plane[p][a]=b->read(b->arg,a);
+            if ((a&255)==255) kpreempt_point();
+        }
     }
     /* No standard latch readback exists. Preserve every VRAM byte, and make
      * the model agree with the latches loaded by the final capture read. */
@@ -87,7 +98,10 @@ static void load(const cvga_state *v, const struct vga_hardware_bus *b, int blan
     registers(v,b,1); planar(b);
     for (unsigned p=0;p<4;p++) {
         indexed(b,0x3C4,2,1u<<p);
-        for (unsigned a=0;a<CVGA_PLANE_SIZE;a++) b->write(b->arg,a,v->plane[p][a]);
+        for (unsigned a=0;a<CVGA_PLANE_SIZE;a++) {
+            b->write(b->arg,a,v->plane[p][a]);
+            if ((a&255)==255) kpreempt_point();
+        }
     }
     /* Load latches through a temporary byte, then restore the original byte
      * with mode-0 writes (writes do not load latches). No reserved guest byte. */

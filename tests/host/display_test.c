@@ -34,6 +34,7 @@ static unsigned accel_stops;
 static bool is_supersavage,log_active=true;
 static int log_sync_error;
 static unsigned log_syncs;
+static unsigned log_requests,log_errors;
 static unsigned blackbox_syncs;
 static int blackbox_error;
 int blackbox_checkpoint(void) { blackbox_syncs++; return blackbox_error; }
@@ -45,6 +46,7 @@ static char native_results[256],return_timing[256],frame_timing[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
+int bootlog_try_sync(void) { log_requests++; return log_sync_error; }
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window, check_boot;
 static bool fail_framebuffer_claim;
 static uint8_t *aperture, *window;
@@ -91,6 +93,7 @@ int biosvm_video_switch(uint16_t id, uint8_t m[256])
     return 0;
 }
 void klog(const char *fmt, ...) {
+    if (strstr(fmt,"fullscreen_log error=")) log_errors++;
     char *out=strstr(fmt,"native_result=") ? native_results :
         strstr(fmt,"lease_return_ms=") ? return_timing :
         strstr(fmt,"desktop_frame_ms=") ? frame_timing : NULL;
@@ -182,9 +185,11 @@ static void fixture(void)
     fullscreen_display=fullscreen_native=awaiting_native_frame=suspended=fs_begin_failure=fs_end_failure=false;
     native_supported=false;native_begin_error=native_end_error=0;
     fullscreen_return_timed=false;fullscreen_return_tick=0;
+    fullscreen_recovering=fullscreen_log_failed=false;
     native_prepares=native_begins=native_ends=native_completes=blackbox_syncs=0;native_recovered=false;blackbox_error=0;
     native_results[0]=return_timing[0]=frame_timing[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
+    log_requests=log_errors=0;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
@@ -311,12 +316,12 @@ static void fullscreen_tests(void)
     assert(!suspended && !fullscreen_display && !changing && !switching && awaiting_frame);
     assert(strstr(native_results,"native_result=-5 fallback_attempted=1 fallback_result=0 result=0"));
     assert(native_completes==1 && native_recovered);
-    assert(strstr(return_timing,"lease_return_ms=1180 budget_ms=4000 overrun=0 result=0"));
+    assert(strstr(return_timing,"lease_return_ms=1180 budget_ms=2000 overrun=0 result=0"));
     uint32_t rgb=0x00123456;
     struct fb_surface frame={&rgb,1,1,4,4};struct fb_rect rect={0,0,1,1};
     assert(!fbdev_present(&frame,&rect) && fbdev_get()->mapped[0]==0x56 && fbdev_get()->mapped[2]==0x12);
     display_frame_complete(fbdev_get()->generation);
-    assert(!awaiting_frame && strstr(frame_timing,"budget_ms=4000 overrun=0"));
+    assert(!awaiting_frame && strstr(frame_timing,"budget_ms=2000 overrun=0"));
     g_ticks+=10000;display_watchdog_poll();assert(switches==1);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x13));native_end_error=-EIO;fail_restore=true;
@@ -385,8 +390,36 @@ static void worker_tests(void)
     assert(!display_fullscreen_end());
     puts("PASS display worker: started once before any mode switch, reused by full-screen entry");
 }
+static void return_logging_tests(void)
+{
+    for (unsigned failure=0;failure<3;failure++) {
+        fixture();is_supersavage=native_supported=true;
+        assert(!display_fullscreen_begin(0x13));
+        unsigned syncs=log_syncs,raws=blackbox_syncs;
+        /* A busy worker queues, a failed/inactive sink reports once. */
+        log_sync_error=failure==0 ? -EAGAIN : -EIO;
+        if (failure==2) log_active=false;
+        display_fullscreen_return_request();
+        uint64_t start=g_ticks;
+        assert(display_fullscreen_checkpoint("watchdog-return",0)==(failure ? -EIO : 0));
+        assert(display_fullscreen_checkpoint("guest-revoke",0)==(failure ? -EIO : 0));
+        assert(!display_fullscreen_end() && fbdev_get()->present && !suspended);
+        assert(!fullscreen_recovering && !fullscreen_display);
+        assert(log_syncs==syncs && blackbox_syncs==raws);
+        assert(log_requests==(failure==2 ? 0u : 4u));
+        assert(log_errors==(failure ? 1u : 0u));
+        assert(g_ticks-start<=50 && g_ticks-start<=NATIVE_RETURN_MS);
+        printf("F1-80 display return log failure=%u watchdog-return->desktop-restored=%llums synchronous_io=0 errors=%u PASS\n",
+               failure,(unsigned long long)(g_ticks-start),log_errors);
+        /* The next entry must regain its synchronous durability gate. */
+        log_sync_error=0;log_active=true;
+        assert(!display_fullscreen_checkpoint("vm-park",0));
+        assert(log_syncs==syncs+1 && blackbox_syncs==raws+1);
+    }
+}
 int main(void)
 {
+    return_logging_tests();
     fixture(); assert(display_check_begin(0x111)==-EPERM && !switches);
     g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;
     assert(!display_check_begin(0x111) && fbdev_get()->bpp==16);

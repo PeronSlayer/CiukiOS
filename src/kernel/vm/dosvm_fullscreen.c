@@ -18,10 +18,19 @@ static uint64_t fullscreen_frame_deadline;
 static bool fullscreen_frame_seen;
 static bool fullscreen_linear,fullscreen_model_changed;
 static uint32_t fullscreen_palette;
-static uint8_t fs_in(void *arg, uint16_t p) { (void)arg; return inb(p); }
-static void fs_out(void *arg, uint16_t p, uint8_t v) { (void)arg; outb(p,v); }
-static uint8_t fs_read(void *arg, unsigned a) { return ((volatile uint8_t *)arg)[a]; }
-static void fs_write(void *arg, unsigned a, uint8_t v) { ((volatile uint8_t *)arg)[a]=v; }
+static const struct task *fullscreen_service_task;
+/* A VM may yield halfway through a synthetic VGA BIOS transfer. After a
+ * forced return its C continuation may finish, but must never touch the
+ * restored adapter. The display worker retains its independent access. */
+static bool fs_access(void) {
+    return g_current==fullscreen_service_task ||
+        (fullscreen_owner && fullscreen_owner->task==g_current &&
+         fullscreen_owner->fullscreen && !fullscreen_owner->fullscreen_hold);
+}
+static uint8_t fs_in(void *arg, uint16_t p) { (void)arg; return fs_access() ? inb(p) : 0xFF; }
+static void fs_out(void *arg, uint16_t p, uint8_t v) { (void)arg; if (fs_access()) outb(p,v); }
+static uint8_t fs_read(void *arg, unsigned a) { return fs_access() ? ((volatile uint8_t *)arg)[a] : 0xFF; }
+static void fs_write(void *arg, unsigned a, uint8_t v) { if (fs_access()) ((volatile uint8_t *)arg)[a]=v; }
 static struct vga_hardware_bus hardware;
 int dosvm_fullscreen_port(uint16_t port, unsigned width, bool write, uint32_t *value)
 {
@@ -87,15 +96,15 @@ void dosvm_fullscreen_checkpoint(struct dosvm *v)
         task_sleep_ms(1);
     v->fullscreen_parked=false;
 }
-static int park(struct dosvm *v)
+static int park(struct dosvm *v,unsigned timeout)
 {
     v->fullscreen_hold=true;
     dosvm_idle_wake(v);
     uint32_t flags=irq_save(); dosvm_fullscreen_switch(g_current); irq_restore(flags);
-    uint64_t until=deadline_after_ms(2000);
+    uint64_t until=deadline_after_ms(timeout);
     while (v->started && v->task && task_alive(v->task) &&
            !v->fullscreen_parked) {
-        if (deadline_passed(until)) { unhold(v); return -EBUSY; }
+        if (deadline_passed(until)) return -EBUSY;
         task_sleep_ms(1);
     }
     return 0;
@@ -150,6 +159,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if (v->vbe_mode ? !display_fullscreen_supported(mode) : !cvga_find_mode(mode))
         return entry_windowed(key,-EOPNOTSUPP);
     fullscreen_busy=true;
+    fullscreen_service_task=g_current;
     fullscreen_linear=v->vbe_mode!=0; fullscreen_model_changed=false;
     v->fullscreen_error=0;
     /* Persistence sleeps: pin the VM before the first record can yield. */
@@ -158,8 +168,8 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     int e=display_fullscreen_checkpoint("vm-park",0);
     bool recovery_failed=false;
     if (e) goto resume;
-    e=park(v);
-    if (e) goto done;
+    e=park(v,2000);
+    if (e) goto resume;
     if (!dosvm_valid(key)) { e=-ESRCH; goto resume; }
     if ((e=display_fullscreen_checkpoint("vga-save",0))) goto resume;
     dosvm_vga_sync(v,true);
@@ -213,7 +223,6 @@ rollback:
     }
 resume:
     unhold(v);
-done:
     fullscreen_busy=false;
     if (e && !recovery_failed) return entry_windowed(key,e);
     entry_error(key,e);
@@ -224,27 +233,31 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     if (!dosvm_fullscreen_active(key)) return 0;
     if (fullscreen_busy) return -EBUSY;
     fullscreen_busy=true;
+    fullscreen_service_task=g_current;
     struct dosvm *v=fullscreen_owner;
     display_fullscreen_return_request();
     display_fullscreen_checkpoint("guest-revoke",0);
-    int e=park(v);
-    if (e) { fullscreen_busy=false; return e; }
+    /* Leave at least 1750 ms of the 2 s return budget for capture/native
+     * recovery. A blocked device owner cannot be killed or forcibly unlocked.
+     * Revoke its physical lease and suspend it at its next VM checkpoint. */
+    int parked=park(v,250);
+    if (parked) klog("[dosvm] fullscreen_quiesced vm=%u generation=%u park_ms=250",key.id,key.generation);
     uint32_t flags=irq_save();
     arch_vga_io(false); v->fullscreen=false;
-    e=map_aperture(v,false);
+    int e=map_aperture(v,false);
     irq_restore(flags);
     display_fullscreen_checkpoint("vga-capture",0);
-    if (!fullscreen_linear && !fullscreen_model_changed) vga_hardware_capture(&v->vga,&hardware);
+    if (!parked && !fullscreen_linear && !fullscreen_model_changed) vga_hardware_capture(&v->vga,&hardware);
     v->fullscreen_model=false;
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
     int restored=display_fullscreen_end();
     int revoked=e;
     if (!e) e=restored;
-    if (e) v->fullscreen_error=e;
+    if (e || parked) v->fullscreen_error=e ? e : -ETIMEDOUT;
     fullscreen_owner=0; fullscreen_return=false;
     desktop_next=0; desktop_pending=background && fullscreen_background ? 5 : 1;
-    v->fullscreen_suspended=background && v->fullscreen_pause && dosvm_valid(key);
+    v->fullscreen_suspended=(parked || (background && v->fullscreen_pause)) && dosvm_valid(key);
     unhold(v);
     klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u revoke_result=%d restore_result=%d",
         key.id,key.generation,e,v->fullscreen_suspended,revoked,restored);

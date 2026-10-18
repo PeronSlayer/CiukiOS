@@ -55,13 +55,14 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(len(model.display_inventory(c,[])['oem']),63)
         print('PASS loader controller strings: normalized far pointers, one-MiB bounds, printable ASCII, NUL/truncation')
 
-    def build_run(self, names, include=()):
+    def build_run(self, names, include=(), cflags=()):
         parent=ROOT/'build/host'; parent.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='display-',dir=parent) as folder:
             env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',TMPDIR=folder)
             binary=Path(folder)/'test'
             subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
                             '-fsanitize=address,undefined','-I',str(ROOT/'src/kernel/include'),
+                            *cflags,
                             *sum((['-I',str(ROOT/i)] for i in include),[]),
                             *(str(ROOT/n) for n in names),'-o',str(binary)],check=True,env=env)
             result=subprocess.run([str(binary)],capture_output=True,text=True,env=env)
@@ -70,6 +71,11 @@ class DisplayTests(unittest.TestCase):
 
     def test_kernel_switch(self):
         self.build_run(['tests/host/display_test.c'])
+
+    def test_checkpoint_queue(self):
+        self.build_run(['tests/host/fullscreen_checkpoint_test.c'], cflags=[
+            '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread',
+            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections'])
 
     def test_compositor_and_settings(self):
         self.build_run(['tests/host/desktop/display_modes_test.c','tests/host/desktop/fake.c',
