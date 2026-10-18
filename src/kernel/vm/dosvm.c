@@ -1023,6 +1023,8 @@ static void worker(void *arg)
     }
     write_cr3(vmm_kernel_pd());
     tss_set_kernel_stack((uint32_t)v->task->kstack + KSTACK_SIZE);
+    klog("[dosvm] lifecycle stage=stop vm=%u generation=%u reason=%u vector=%u eip=%08x",
+         v->info.key.id,v->info.key.generation,v->info.reason,v->info.fault_vector,v->info.fault_eip);
     uint8_t code[8] = {0};
     if (v->info.reason == DOSVM_FAULT) dosvm_read(v, v->info.fault_eip, code, sizeof(code));
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x address=%08x error=%x code=%02x%02x%02x%02x%02x%02x%02x%02x",
@@ -1063,12 +1065,20 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     dosvm_stop(key, forced ? DOSVM_TERMINATE : DOSVM_EXIT);
     uint64_t until = deadline_after_ms(6000);
     while (v->task && task_alive(v->task)) {
-        if (deadline_passed(until)) return -16; /* retain resources until quiescent */
+        if (deadline_passed(until)) {
+            klog("[dosvm] failure stage=destroy-wait vm=%u generation=%u result=%d fallback=retain",
+                 key.id,key.generation,-EBUSY);
+            return -16; /* retain resources until quiescent */
+        }
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
     int video_error=dosvm_fullscreen_leave(key,false);
-    if (video_error) return video_error;
+    if (video_error) {
+        klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",
+             key.id,key.generation,video_error);
+        return video_error;
+    }
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
@@ -1091,6 +1101,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     /* A failed unlink retains the generation/table for retry, never reuses
      * a slot while its private scratch file still exists. */
     v->info.state = v->overlay_created ? DOSVM_STOPPING : DOSVM_DEAD;
+    klog("[dosvm] lifecycle stage=cleanup vm=%u generation=%u result=%d data_loss=%u retained=%u",
+         key.id,key.generation,e,v->info.data_loss,v->overlay_created);
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
              key.id, key.generation, v->info.data_loss, e);
     return e;

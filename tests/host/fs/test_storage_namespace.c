@@ -495,7 +495,8 @@ static void writer_shutdown_test(void)
     }
     pthread_mutex_lock(&writer_mutex); writer_release=true; pthread_cond_broadcast(&writer_changed); pthread_mutex_unlock(&writer_mutex);
     CHECK(!pthread_join(a,0) && !pthread_join(b,0)); media[0].dev.write=saved;
-    CHECK(write.result==-FS_EIO && shutdown.result==-FS_EIO && s->writer_error==-FS_EIO);
+    CHECK(write.result==-FS_EIO && shutdown.result==-FS_EIO && !s->writer_error);
+    CHECK(cache_error(&s->cache,&s->volumes[2].io)==-FS_EIO);
     CHECK(s->stopped && !s->writer_running && !s->writer_quiescing);
     namespace_stop(s,true);
     puts("PASS shutdown/writeback race: namespace remains available, writer drains before shutdown preflight, delayed EIO remains sticky");

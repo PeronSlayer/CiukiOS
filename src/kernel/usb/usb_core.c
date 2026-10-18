@@ -348,7 +348,9 @@ void usb_device_quarantine(struct usb_device *d, const char *reason)
         hub->hub_blocked[d->port] = true;
         if (h->ready && hub->present && !hub->quarantined &&
             usb_control(hub, 0x23, 1, 1, d->port + 1u, 0, 0))
-            usb_host_quarantine(h, "hub_disable_failed");
+            /* The hub cannot isolate its child. Isolate the hub's root
+             * port, retaining devices attached to other root ports. */
+            usb_device_quarantine(hub, "hub_disable_failed");
     }
     /* A device fault cannot authorize re-enumerating that port until reboot. */
     klog("[usb] quarantine device addr=%u reason=%s stage=%s", d->address, reason,
@@ -796,11 +798,25 @@ void usb_step(struct usb_host *h)
                     h->root_status[p] = s; continue;
                 }
                 int err = h->ops->port_reset(h, p);
-                if (err) { usb_host_quarantine(h, "root_port_reset"); break; }
+                if (err) {
+                    if (!h->ready || h->quarantined) break;
+                    h->root_blocked[p] = true;
+                    h->ops->port_disable(h, p);
+                    klog("[usb] quarantine controller=%s port=%u stage=root_port_reset result=%d scope=port",
+                         h->owner,p+1,err);
+                    continue;
+                }
                 s = h->ops->port_status(h, p);
                 err = usb_enumerate(h, p, 0, p, !!(s & USB_PORT_LOW));
                 if (err > 0) h->root_child[p] = (uint8_t)err;
-                else { h->ops->port_disable(h, p); usb_host_quarantine(h, "device_capacity"); break; }
+                else {
+                    if (!h->ready || h->quarantined) break;
+                    h->root_blocked[p] = true;
+                    h->ops->port_disable(h, p);
+                    klog("[usb] quarantine controller=%s port=%u stage=enumerate result=%d scope=port",
+                         h->owner,p+1,err);
+                    continue;
+                }
             } else if (!(s & USB_PORT_ENABLED) && usb_port_has_live_child(h, p)) {
                 /* PEDC/CSC do not revoke a live address while CCS stays set.
                  * Recover PE without resetting the device or its toggles. */

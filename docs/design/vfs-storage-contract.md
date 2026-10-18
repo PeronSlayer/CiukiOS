@@ -515,6 +515,20 @@ preceding hash reads still use detected DMA. This preserves the established
 PIO whole-channel quarantine test. DMA fault/fallback is tested at the host
 register boundary; native DMA fault injection remains lead qualification.
 
+## F0-40 delayed-error isolation
+
+`storage.writer_error` denotes failure of the shared writer service itself
+(for example, its startup allocation), not a device's delayed write/flush
+error. Those errors remain sticky in the existing per-device cache state;
+writeback revokes only affected FAT volumes and emits a protected
+`failure stage=writeback drive=... disk=... result=... scope=volume
+fallback=readonly` record on first revocation. Healthy volumes can still
+enable writing and persist BOOT.CFG. All-volume shutdown continues checking
+each volume and fails on the affected device, retaining dirty state and
+never declaring a failed volume clean. No error is cleared or retried by
+this isolation policy. The concurrent shutdown test and two-device
+write/flush injection are in the [F0-40 audit](../validation/f0-40-reliability-audit.md).
+
 ## Open questions
 
 - Whether the 5-second flush window is acceptable for the owner's use

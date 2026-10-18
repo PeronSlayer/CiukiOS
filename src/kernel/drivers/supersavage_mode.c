@@ -51,7 +51,7 @@ static int step(struct supersavage_mode *s, const struct supersavage_mode_io *b,
 static int compare(struct supersavage_mode *s, unsigned reg, uint32_t want, uint32_t got, uint32_t mask)
 {
     if (!((want^got)&mask)) return 0;
-    if (!s->mask) {
+    if (!s->bad_stage) {
         s->bad_stage=s->stage;
         s->bad_reg=reg; s->expected=want; s->actual=got; s->mask=mask;
     }
@@ -70,6 +70,15 @@ static int mw(struct supersavage_mode *s, const struct supersavage_mode_io *b, u
      * No guessed zero value for reserved bits and no engine/status reads. */
     return compare(s,r,v,b->read32(b->vga.arg,r),UINT32_MAX);
 }
+static int delay(struct supersavage_mode *s, const struct supersavage_mode_io *b, const char *stage)
+{
+    int e=b->delay_us(b->vga.arg,100);
+    if (e) {
+        (void)b->checkpoint(b->vga.arg,stage,e);
+        if (!s->bad_stage) s->bad_stage=stage;
+    }
+    return e;
+}
 static void unlock(const struct supersavage_mode_io *b)
 { out(b,0x3C3,1); out(b,0x3C2,in(b,0x3CC)|1); cr(b,0x38,0x48); cr(b,0x39,0xA5); sr(b,8,6); sr(b,0x26,0x40); }
 static void locks(struct supersavage_mode *s, const struct supersavage_mode_io *b)
@@ -79,23 +88,38 @@ static void locks(struct supersavage_mode *s, const struct supersavage_mode_io *
     out(b,0x3C2,s->misc); out(b,0x3C3,s->enable);
     out(b,0x3C4,s->sr_index); out(b,(s->misc&1) ? 0x3D4 : 0x3B4,s->cr_index);
 }
-/* Same two-edge wait as X.Org VerticalRetraceWait, with a time deadline
- * as well as a read cap. Frozen clocks and missing retrace are failures. */
-static int retrace(const struct supersavage_mode_io *b)
+/* Same two-edge wait as X.Org/Linux VerticalRetraceWait, bounded even if
+ * timing stops. Recovery must still reenable the saved stream controls:
+ * a missing edge while blanked is not a failed writable-register readback. */
+static int retrace(struct supersavage_mode *s, const struct supersavage_mode_io *b,
+                   bool recovery, const char *stage)
 {
     if (!(rd(b,0x3D4,0x17)&0x80)) return 0;
     uint64_t started=b->now_us(b->vga.arg);
+    unsigned actual=0, expected=0;
     for (unsigned edge=0;edge<2;edge++) {
         bool seen=false;
+        expected=edge ? 8 : 0;
         for (unsigned i=0;i<65536;i++) {
-            bool active=!!(in(b,0x3DA)&8);
+            actual=in(b,0x3DA)&8;
+            bool active=!!actual;
             if (active==(edge!=0)) { seen=true; break; }
-            if (b->now_us(b->vga.arg)-started>=40000) return -ETIMEDOUT;
+            if (b->now_us(b->vga.arg)-started>=40000) goto timeout;
             if (!(i&63)) kpreempt_point();
         }
-        if (!seen) return -ETIMEDOUT;
+        if (!seen) goto timeout;
     }
     return 0;
+timeout:
+    /* The checkpoint is protected and names the actual wait, independent
+     * of the last programming stage. Do not overwrite a prior mismatch. */
+    (void)b->checkpoint(b->vga.arg,stage,-ETIMEDOUT);
+    if (recovery) return 0;
+    if (!s->bad_stage) {
+        s->bad_stage=stage; s->bad_reg=0x3DA;
+        s->expected=expected; s->actual=actual; s->mask=8;
+    }
+    return -ETIMEDOUT;
 }
 bool supersavage_mode_supported(uint16_t mode)
 { return dos_video_mode(mode) || (mode<0x80 && cvga_find_mode(mode)); }
@@ -142,7 +166,7 @@ int supersavage_mode_save(struct supersavage_mode *s, const struct supersavage_m
     e=step(s,b,"native-save-planes"); if (e) return e;
     s->touched=true;
     sr(b,1,s->vga.seq[1]|0x20);
-    if ((e=b->delay_us(b->vga.arg,100))) return e; /* >= three VGA HSYNCs */
+    if ((e=delay(s,b,"native-save-blank-delay"))) return e; /* >= three VGA HSYNCs */
     /* RE046-B CR31.3 overrides standard planar addressing; CR3A.3 can
      * redirect VGA memory to the top of VRAM. Clear both before capture. */
     if ((e=cw(s,b,0x31,0,0x4F)) ||
@@ -178,12 +202,12 @@ static int pll(struct supersavage_mode *s, const struct supersavage_mode_io *b,
     uint8_t tmp=r15&~0x21u;
     sr(b,0x15,tmp|3); sr(b,0x15,tmp|0x23); sr(b,0x15,tmp|3);
     e|=sw(s,b,0x15,r15,0xDF);
-    int delay=b->delay_us(b->vga.arg,100);
-    return e ? -EIO : delay;
+    int waited=delay(s,b,"native-pll-delay");
+    return e ? -EIO : waited;
 }
-static int streams_off(struct supersavage_mode *s, const struct supersavage_mode_io *b)
+static int streams_off(struct supersavage_mode *s, const struct supersavage_mode_io *b, bool recovery)
 {
-    int e=retrace(b);
+    int e=retrace(s,b,recovery,recovery ? "native-restore-retrace-off" : "native-entry-retrace-off");
     if (cw(s,b,0x67,rd(b,0x3D4,0x67)&~0x0Eu,255)) return -EIO;
     static const unsigned regs[]={0x81C8,0x81B8,0x81C0,0x81C4,0x81B0,0x81B4};
     for (unsigned i=0;i<ARRAY_SIZE(regs);i++) e|=mw(s,b,regs[i],0);
@@ -247,7 +271,7 @@ int supersavage_mode_enter(struct supersavage_mode *s, const struct supersavage_
 {
     if (!s->saved || !s->planes_saved || !supersavage_mode_supported(mode)) return -EOPNOTSUPP;
     int e=step(s,b,"native-streams-off"); if (e) return e;
-    if ((e=streams_off(s,b))) return e;
+    if ((e=streams_off(s,b,false))) return e;
     e=step(s,b,"native-panel-clock"); if (e) return e;
     const struct dos_video_mode *packed=dos_video_mode(mode);
     /* Panel timing, expansion coefficients and MCLK stay firmware selected.
@@ -304,14 +328,14 @@ int supersavage_mode_restore(struct supersavage_mode *s, const struct supersavag
         cr(b,0x40,s->cr[0x40]); locks(s,b); s->saved=false; return 0;
     }
     uint64_t began=b->now_us(b->vga.arg);
-    s->mask=0; s->bad_stage=0;
+    s->bad_reg=s->expected=s->actual=s->mask=0; s->bad_stage=0;
     (void)step(s,b,"native-restore-blank");
     unlock(b); sr(b,1,rd(b,0x3C4,1)|0x20);
     int e=cw(s,b,0x40,rd(b,0x3D4,0x40)|1,1);
     if (e) goto done;
-    e=b->delay_us(b->vga.arg,100);
+    e=delay(s,b,"native-restore-blank-delay");
     /* A failed retrace/readback must not skip the remaining recovery. */
-    e|=streams_off(s,b);
+    e|=streams_off(s,b,true);
     (void)step(s,b,"native-restore-panel-clock");
     for (unsigned i=0;i<ARRAY_SIZE(sr_regs);i++) {
         unsigned r=sr_regs[i].index;
@@ -343,8 +367,8 @@ int supersavage_mode_restore(struct supersavage_mode *s, const struct supersavag
     (void)step(s,b,"native-restore-streams");
     if (!(rd(b,0x3D4,0x67)&0x0E)) {
         for (unsigned i=0;i<SUPERSAVAGE_STREAM_REGS;i++) e|=mw(s,b,stream_reg(i),s->streams[i]);
-    } else e=-EIO;
-    e|=retrace(b); e|=cw(s,b,0x67,s->cr[0x67],255);
+    } else e|=compare(s,0x67,0,rd(b,0x3D4,0x67),0x0E);
+    e|=retrace(s,b,true,"native-restore-retrace-on"); e|=cw(s,b,0x67,s->cr[0x67],255);
     e|=cw(s,b,0x40,s->cr[0x40],255);
     vga_hardware_unblank(&s->vga,&b->vga);
     unsigned bad=vga_hardware_verify(&s->vga,&b->vga);

@@ -21,6 +21,9 @@ static unsigned ownership_after;
 static uint16_t pm1a, pm1b;
 static uint32_t irq_flags = 0x200;
 static bool timeout_logged;
+static char power_record[256],power_durable_record[256];
+static unsigned checkpoint_calls;
+static int checkpoint_error;
 static struct storage disk;
 static struct process desktop;
 struct ciuki_boot_info g_boot;
@@ -44,7 +47,10 @@ void task_sleep_ms(uint32_t ms)
 void klog(const char *fmt, ...)
 {
     if (strstr(fmt, "SCI_EN")) timeout_logged = true;
+    va_list ap;va_start(ap,fmt);vsnprintf(power_record,sizeof(power_record),fmt,ap);va_end(ap);
 }
+int blackbox_checkpoint(void)
+{ CHECK(irq_flags==0x200);checkpoint_calls++;strcpy(power_durable_record,power_record);return checkpoint_error; }
 __attribute__((noreturn)) void kernel_reboot(void) { reboots++; longjmp(reboot_return, 1); }
 #include "../../src/kernel/core/power.c"
 static void reset_power(void)
@@ -54,6 +60,7 @@ static void reset_power(void)
     soft_off_state = 1;
     sync_calls = writes = enables = sleeps = reboots = 0;
     pm1a = pm1b = 1; sync_error = 0; ownership_after = 0; timeout_logged = false;
+    checkpoint_calls=0;checkpoint_error=0;power_record[0]=power_durable_record[0]=0;
 }
 static void test_power_sync_retry(void)
 {
@@ -64,6 +71,7 @@ static void test_power_sync_retry(void)
                 if (!setjmp(reboot_return)) CHECK(power_syscall(action) == sync_error);
                 else CHECK(false);
                 CHECK(sync_calls == attempt + 1 && !writes && !reboots);
+                CHECK(strstr(power_durable_record,"storage flush failed:") && checkpoint_calls==attempt+1);
             }
             sync_error = 0;
             if (!setjmp(reboot_return)) {
@@ -88,7 +96,15 @@ static void test_power_sci(void)
     reset_power(); pm1a = pm1b = 0; soft_off.pm1b_cnt = 0x644; ownership_after = 3;
     CHECK(power_syscall(CIUKI_POWER_OFF) == -EIO && writes == 4 && enables == 1 && sleeps == 3 && !reboots);
     reset_power(); CHECK(power_syscall(CIUKI_POWER_OFF) == -EIO && writes == 2 && !enables);
+    CHECK(strstr(power_durable_record,"soft-off had no effect") && checkpoint_calls==2);
+    reset_power();pm1a=0;checkpoint_error=-EIO;
+    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_OFF);CHECK(false); }
+    CHECK(reboots==1 && !writes && checkpoint_calls==1 && strstr(power_durable_record,"SCI_EN"));
+    reset_power();soft_off_state=-1;
+    CHECK(power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !writes && checkpoint_calls==1);
+    CHECK(strstr(power_durable_record,"safe to turn off"));
     puts("power SCI_EN: missing handshake/PM1a/PM1b timeout refuses PM writes and reboots, ownership succeeds PASS");
+    puts("power f0-40: post-FAT-shutdown failures checkpoint the raw recorder, failed recorder never prevents reset fallback PASS");
 }
 int main(void)
 {

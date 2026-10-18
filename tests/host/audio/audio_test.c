@@ -22,6 +22,7 @@ static char ec_records[64][256];
 static unsigned ec_record_count;
 static unsigned audio_log_count;
 static unsigned backend_failure_logs;
+static char backend_failure_record[256];
 static unsigned analog_warning_logs, response_warning_logs;
 static unsigned cold_reset_logs, qemu_reset_logs;
 static bool slow_playback_log;
@@ -34,7 +35,9 @@ void klog(const char *fmt, ...)
         CHECK(ec_record_count < sizeof(ec_records)/sizeof(ec_records[0]));
         memcpy(ec_records[ec_record_count++],audio_log,sizeof(audio_log));
     }
-    if(strstr(audio_log,"backend failure ")) backend_failure_logs++;
+    if(strstr(audio_log,"backend failure ")) {
+        backend_failure_logs++;strcpy(backend_failure_record,audio_log);
+    }
     /* A physical polled UART record can take 84 ms (T23 transcript).
      * Let the fake DMA clock observe that delay on the next worker call. */
     if (slow_playback_log && !serial_is_buffered) g_ticks += 84;

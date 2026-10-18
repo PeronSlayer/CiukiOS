@@ -519,6 +519,8 @@ boot_menu:
     mov bp, 55 ; At least three seconds at the BIOS 18.2 Hz rate.
     call deadline_start
 .poll:
+    call progress_check
+    jc .done
     call menu_getc
     jc .deadline
     cmp al, 'n'
@@ -595,6 +597,8 @@ boot_menu:
     call deadline_start
     xor di, di
 .line:
+    call progress_check
+    jc .invalid
     call menu_getc
     jc .line_deadline
     cmp al, 13

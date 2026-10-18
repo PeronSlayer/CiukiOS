@@ -156,6 +156,7 @@ elf_load:
     je .bss
     call file_seek
 .chunk:
+    call progress_require
     cmp dword [copy_left], 0
     je .bss
     mov ecx, [copy_left]
@@ -181,6 +182,7 @@ elf_load:
     sub [copy_left], eax
     jmp .chunk
 .bss:
+    call progress_require
     ; Zero in short bursts too, retaining BIOS timer service between bursts.
     cmp dword [zero_left], 0
     je .loaded

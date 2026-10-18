@@ -365,6 +365,8 @@ static void test_second_set(void)
         second.stop_stuck=true; unsigned held=pages_used;
         unsigned masks_before=second_pic_masks, unmasks_before=second_pic_unmasks;
         audio_backend_shutdown(); CHECK(audio.quarantined && audio_dma.state.quarantine && pages_used==held);
+        CHECK(strstr(audio_log,"failure stage=shutdown backend=") &&
+              strstr(audio_log,"reason=stop_unproved") && strstr(audio_log,"fallback=quarantine"));
         if (kind==AUDIO_SB16) CHECK(second_pic_masked && second_pic_masks==masks_before+1 && second_pic_unmasks==unmasks_before);
         second.stop_stuck=false; audio_backend_shutdown(); CHECK(pages_used==held && audio_dma.state.quarantine);
         if (kind==AUDIO_SB16) CHECK(second_pic_masks==masks_before+1 && second_pic_unmasks==unmasks_before);

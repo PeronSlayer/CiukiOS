@@ -10,6 +10,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/version.h>
 #include <ciuki/timing.h>
+#include "loader_progress.inc"
 
 struct ciuki_boot_info g_boot;
 
@@ -48,6 +49,12 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     /* A separate line: scripts/test/physical.py and its host fixtures match
      * the banner above, so its text stays as it is. */
     klog("CiukiOS %s", CIUKI_VERSION);
+    /* Only the current real-mode loader has this optional private trailer.
+     * Read it before reclaim; klog retains protected early-boot records even
+     * when both firmware and kernel UART probes find no serial port. */
+    if (g_boot.loader_start>=0x500 && g_boot.loader_start<=0x100000u-24576 &&
+        g_boot.loader_end>=g_boot.loader_start+24576)
+        loader_progress_report(P2V(g_boot.loader_start+24544),32);
 
     cpu_detect();
     gdt_init();

@@ -175,11 +175,11 @@ static void test_recovery_failure_record(void)
         unsigned logs=backend_failure_logs;
         audio_service();
         CHECK(audio.error==-EIO && !audio.ready && backend_failure_logs==logs+1);
-        CHECK(strstr(audio_log,"backend failure err=-5 op=") && strstr(audio_log," civ=8 lvi="));
-        CHECK(strstr(audio_log," piv=8 picb=") && strstr(audio_log," sr=") && strstr(audio_log," published=233 retired="));
-        CHECK(strstr(audio_log," running=1 active=1") && !strstr(audio_log,"play=failed"));
+        CHECK(strstr(backend_failure_record,"backend failure err=-5 op=") && strstr(backend_failure_record," civ=8 lvi="));
+        CHECK(strstr(backend_failure_record," piv=8 picb=") && strstr(backend_failure_record," sr=") && strstr(backend_failure_record," published=233 retired="));
+        CHECK(strstr(backend_failure_record," running=1 active=1") && !strstr(backend_failure_record,"play=failed"));
         if(fault>=4) {
-            CHECK(strstr(audio_log,"op=recover_stop civ=8 lvi=8 piv=8 picb=0 sr=0003 published=233 retired=232 running=1"));
+            CHECK(strstr(backend_failure_record,"op=recover_stop civ=8 lvi=8 piv=8 picb=0 sr=0003 published=233 retired=232 running=1"));
             CHECK(ac97.quarantine && hw.starts==1);
             if(fault==4) CHECK(!hw.resets && ac97.published==233);
             else CHECK(hw.resets==1 && hw.civ==0); /* log retains the original CIV=8 */
@@ -195,9 +195,9 @@ static void test_wide_failure_record(void)
     hw.civ=hw.lvi=hw.piv=255; hw.remaining=65535; hw.sr=0xffff;
     first_playback=true; playback_start=0; g_ticks=UINT64_MAX-1;
     audio_service();
-    CHECK(audio.error==-EIO && strstr(audio_log,"civ=255 lvi=255 piv=255 picb=65535 sr=ffff"));
-    CHECK(strstr(audio_log,"published=18446744073709551615 retired=18446744073709551607 running=1"));
-    CHECK(strstr(audio_log,"elapsed_ms=18446744073709551614") && strlen(audio_log)<254);
+    CHECK(audio.error==-EIO && strstr(backend_failure_record,"civ=255 lvi=255 piv=255 picb=65535 sr=ffff"));
+    CHECK(strstr(backend_failure_record,"published=18446744073709551615 retired=18446744073709551607 running=1"));
+    CHECK(strstr(backend_failure_record,"elapsed_ms=18446744073709551614") && strlen(backend_failure_record)<254);
     late_cleanup();
     puts("audio failure record: maximum-width indices/counters fit the production 256-byte log buffer PASS");
 }

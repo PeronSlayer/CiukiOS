@@ -16,6 +16,8 @@ struct ciuki_boot_info g_boot;
 static char output[8192];
 static unsigned ordinary_writes,console_writes,ring_captures,verbose_captures;
 static unsigned blackbox_captures;
+static unsigned protected_captures;
+static char last_protected[256];
 static char last_ring[256], last_blackbox[256];
 static void append_output(const char *s,size_t n)
 {
@@ -29,7 +31,8 @@ void console_write(const char *s, size_t n) { (void)s; (void)n;console_writes++;
 void serial_panic(void) { if (cpu_flags & 0x200) abort(); }
 void console_reclaim(void) {}
 void console_set_color(uint32_t fg, uint32_t bg) { (void)fg; (void)bg; }
-void bootlog_capture(const char *s, size_t n) { (void)s; (void)n; }
+void bootlog_capture(const char *s, size_t n)
+{ if(n>=sizeof(last_protected)) abort();memcpy(last_protected,s,n);last_protected[n]=0;protected_captures++; }
 void bootlog_capture_ring(const char *s, size_t n)
 { if (n >= sizeof(last_ring)) abort(); memcpy(last_ring,s,n); last_ring[n]=0; ring_captures++; }
 void bootlog_capture_verbose(const char *s, size_t n)
@@ -37,6 +40,7 @@ void bootlog_capture_verbose(const char *s, size_t n)
 void blackbox_capture(const char *s, size_t n)
 { if (n >= sizeof(last_blackbox)) abort(); memcpy(last_blackbox,s,n); last_blackbox[n]=0; blackbox_captures++; }
 #include "../../src/kernel/core/output.c"
+#include "../../src/kernel/core/loader_progress.inc"
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); return 1; } } while (0)
 int main(void)
 {
@@ -93,6 +97,26 @@ int main(void)
     output[0]=0;klog_periodic("[cpu] window_ms=%u idle=%u top=%s",2000u,900u,"desktop#4:100");
     CHECK(!strcmp(output,"[cpu] window_ms=2000 idle=900 top=desktop#4:100\n"));
     CHECK(ordinary_writes==ordinary+1 && console_writes==screen+1 && ring_captures==ring+1);
+    /* No UART policy bit or probe BEGIN is needed for a loader failure to
+     * enter the protected disk class; no pointer survives loader reclaim. */
+    g_boot.flags=0;
+    uint8_t trail[32]="CLDRPRG1";
+    uint32_t masks[]={15,15,2,0};memcpy(trail+8,masks,sizeof(masks));
+    unsigned protected_before=protected_captures,verbose_before=verbose_captures;
+    output[0]=0;loader_progress_report(trail,sizeof(trail));
+    CHECK(protected_captures==protected_before+4 && verbose_captures==verbose_before);
+    CHECK(strstr(output,"[loader] stage=video completed=1 stalled=1 failed=0"));
+    CHECK(strstr(last_protected,"stage=handoff completed=1 stalled=0 failed=0"));
+    masks[0]=4;masks[1]=0;masks[2]=4;masks[3]=4;memcpy(trail+8,masks,sizeof(masks));
+    loader_progress_report(trail,sizeof(trail));
+    CHECK(strstr(last_protected,"stage=elf completed=0 stalled=1 failed=1"));
+    protected_before=protected_captures;
+    loader_progress_report(trail,31);
+    trail[0]='X';loader_progress_report(trail,32);trail[0]='C';
+    masks[3]=16;memcpy(trail+8,masks,sizeof(masks));loader_progress_report(trail,32);
+    masks[3]=2;memcpy(trail+8,masks,sizeof(masks));loader_progress_report(trail,32);
+    CHECK(protected_captures==protected_before);
+    puts("record f0-40: validated loader stage/failure replay reaches protected BOOT.LOG with serial policy off; malformed trailers ignored PASS");
     puts("record runtime: normal launch silent, L diagnostics framed, evidence remains gated until BEGIN PASS");
     puts("record F0-20: periodic CPU records use runtime RAM ring and normal serial queue PASS");
     puts("record f3-31: vm_perf rows reach boot-log ring only; ordinary disk records still reach black box; BEGIN gate preserved PASS");

@@ -27,6 +27,8 @@ static bool eoi_pending;
 static irq_handler_t handlers[16];
 static char last_log[256];
 static unsigned budget_reports;
+static unsigned detached_reports;
+static char last_detached[256];
 static bool expect_panic;
 static jmp_buf panic_env;
 static struct task tasks[4];
@@ -58,6 +60,9 @@ void klog(const char *fmt, ...)
     vsnprintf(last_log, sizeof(last_log), fmt, ap);
     va_end(ap);
     if (strstr(last_log, "budget exceeded")) budget_reports++;
+    if (strstr(last_log,"[irq] member_detached ")) {
+        detached_reports++;strcpy(last_detached,last_log);
+    }
 }
 
 __attribute__((noreturn)) void panic(const char *fmt, ...)
@@ -662,8 +667,15 @@ static void test_claimed_fatal_quarantine(void)
     puts("shared IRQ: self-quarantine clears one member before EOI; peers continue without mask writes PASS");
 }
 
+static unsigned newcomer_calls;
+static bool irq_newcomer(unsigned irq,const char *owner)
+{
+    CHECK((!(flags&0x200) || masked[irq]) && !strcmp(owner,"irq-c"));
+    newcomer_calls++;return true;
+}
 static void test_chain_smi_budget(void)
 {
+    unsigned detached_before=detached_reports;
     current(0); irq_clock_model = true; g_cpu_tsc = true; g_tsc_per_ms = 1000;
     source_a = source_b = true;
     int a = irq_claim(4, "irq-a"), b = irq_claim(4, "irq-b");
@@ -686,12 +698,27 @@ static void test_chain_smi_budget(void)
     }
     CHECK(registry_get((unsigned)a)->state == RS_QUARANTINED);
     CHECK(calls_b == nb + 4);
+    CHECK(detached_reports==detached_before+1 && strstr(last_detached,"irq=4 owner=irq-a"));
+    /* f0-40: the failed lease must not reject an unrelated future member
+     * while the surviving peer still owns this healthy shared line. */
+    CHECK(registry_claim(RES_IRQ,4,5,"irq-a",true)==-EINVAL); /* no self-restart */
+    CHECK(registry_claim(RES_IRQ,4,5,"exclusive",false)==-EINVAL);
+    int newcomer=registry_claim(RES_IRQ,4,5,"irq-c",true);
+    CHECK(newcomer>=0);if(newcomer<0)exit(1);
+    CHECK(strstr(last_log,"stage=irq-member-admit irq=4 owner=irq-c retained=irq-a"));
+    gen_t admitted=registry_get((unsigned)newcomer)->generation;
+    CHECK(!registry_activate(newcomer,admitted) && !irq_chain_add(4,irq_newcomer,"irq-c"));
+    irq_work_us=0;nb=calls_b;fake_irq(4);drain_work();
+    CHECK(newcomer_calls==1 && calls_b==nb+1 && !masked[4] && !chains[4].stats.quarantined);
+    CHECK(registry_get((unsigned)a)->state==RS_QUARANTINED);
+    CHECK(!irq_chain_remove(4,irq_newcomer,"irq-c"));release_active(newcomer);
     /* Replay a lease already released elsewhere: never invoke that slot. */
     res[b].state = RS_RELEASED;
     nb = calls_b; fake_irq(4); drain_work();
     CHECK(calls_b == nb && !chains[4].stats.participants && !chains[4].stats.quarantined);
     res[b].state = RS_ACTIVE; /* restore fixture accounting for real release */
     release_active(b);
+    CHECK(registry_claim(RES_IRQ,4,5,"empty-line",true)==-EINVAL);
     /* A stale generation is skipped and cleared without poisoning peers. */
     a = irq_claim(3, "irq-a"); b = irq_claim(3, "irq-b");
     CHECK(!irq_chain_add(3, irq_a, "irq-a") && !irq_chain_add(3, irq_b, "irq-b"));

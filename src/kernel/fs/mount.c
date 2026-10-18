@@ -489,7 +489,8 @@ int storage_writeback(struct storage *s, uint32_t now)
     int e = cache_writeback_tick(&s->cache, now);
     vfs_io_end_locked(&s->vfs,io_mask);
     s->writer_ticks++;
-    if (e && !s->writer_error) s->writer_error = e;
+    /* cache_error is sticky per device. Do not turn one removable-media
+     * failure into a global writer-service failure on every volume. */
     vfs_unlock(&s->vfs);
     /* Delayed failures revoke the mount immediately, not just next commit. */
     for (unsigned d = 2; d < 26; d++) {
@@ -498,6 +499,9 @@ int storage_writeback(struct storage *s, uint32_t now)
         if (!v->present || !v->fat.mounted) { vfs_unlock(&s->vfs); continue; }
         int error = cache_error(&s->cache, &v->io);
         if (error) {
+            if (!(v->fat.ro_reasons & FAT_RO_WRITE_ERROR))
+                klog("[storage] failure stage=writeback drive=%c disk=%u result=%d scope=volume fallback=readonly",
+                     'A'+d,v->disk,error);
             v->fat.ro_reasons |= FAT_RO_WRITE_ERROR;
             v->fat.operation_file[0]=0; /* delayed cache error has no file owner */
             VFS_IO_VOID(&s->vfs,fat_revoke_write(&v->fat,"writeback_error",0));

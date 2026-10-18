@@ -537,3 +537,19 @@ No BIOS preparation, video call or firmware fallback participates on this
 adapter. Unsupported states keep the f3-26 refusal; failed native recovery
 quarantines its resources and keeps the LFB inaccessible. Other adapters
 retain the existing mediated standard-VGA firmware provider.
+
+## F0-40 retained IRQ-member admission
+
+Quarantining a member detaches its handler as in f0-39 and retains its own
+resource/generation. That retained shareable IRQ row must not become
+exclusive ownership of an otherwise still-used line: a different owner may
+claim the exact shared IRQ range while the line has surviving chain members
+and is not itself quarantined. A protected `stage=irq-member-admit` row names
+the new and retained owners. This does not release/reuse the failed lease.
+
+The quarantined owner cannot restart under its old name. Exclusive IRQ,
+port/MMIO/DMA claims, an empty retained line and whole-line quarantine remain
+refused. No PIC writes or dispatch/budget policy changes. The source recheck
+([Linux shared IRQ identity/removal](https://docs.kernel.org/core-api/genericirq.html#c.free_irq)),
+before/after admission failure and host coverage are in the
+[F0-40 audit](../validation/f0-40-reliability-audit.md).
