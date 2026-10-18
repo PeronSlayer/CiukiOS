@@ -52,6 +52,13 @@ enum dosvm_perf_cause {
 #define DOSVM_PERF_INTERVAL 5000u
 #define DOSVM_PERF_TOP 5u
 #define DOSVM_PERF_PORTS 256u
+enum dosvm_if_path { DOSVM_IF_TRAMPOLINE, DOSVM_IF_STI, DOSVM_IF_IRET,
+    DOSVM_IF_POPF, DOSVM_IF_API, DOSVM_IF_FORCED, DOSVM_IF_PATHS };
+struct dosvm_isr_cost {
+    uint64_t us, ms;
+    uint32_t count, max_us, max_ms, bins[8];
+    uint8_t vector;
+};
 struct dosvm_hot_cost {
     uint64_t cycles;
     uint32_t count;
@@ -233,6 +240,9 @@ struct dosvm {
         struct dosvm_vector_cost vector[3][256]; /* RM dispatch, synthetic BIOS, PM INT */
         uint64_t disk_bytes;
         uint32_t disk_reads, disk_max, disk_hits;
+        struct dosvm_isr_cost isr[16];
+        uint64_t if_samples_ms, if_clear_ms, if_outside_ms;
+        uint32_t if_enable[DOSVM_IF_PATHS], isr_max_depth;
     } perf;
     struct {
         uint64_t tick;
@@ -315,6 +325,9 @@ int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 bool dosvm_io_fast(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, int *);
 uint64_t dosvm_perf_clock(void);
 uint64_t dosvm_perf_task_clock(void);
+void dosvm_vif_restore(struct dosvm *, bool, enum dosvm_if_path);
+void dosvm_isr_begin(struct dosvm *, struct dpmi_record *, unsigned irq);
+void dosvm_isr_end(struct dosvm *, const struct dpmi_record *);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);

@@ -432,10 +432,11 @@ int dpmi_v86_return(struct dosvm *v, struct v86_frame *f)
         return -EFAULT;
     struct v86_frame result = *f;
     bool result_vif = v->monitor.vif;
+    dosvm_isr_end(v, &rec);
     pop_record(v);
     dpmi_set_pm(v, rec.saved_pm);
     *f = rec.saved;
-    v->monitor.vif = rec.vif;
+    dosvm_vif_restore(v, rec.vif, DOSVM_IF_TRAMPOLINE);
     if (rec.kind == DPMI_REC_HOSTCALL) {
         if (rec.op == DPMI_OP_ENTRY) return dpmi_entry_complete(v, f, (uint16_t)result.tf.ebx);
         if (rec.op == DPMI_OP_TERMCHECK) {

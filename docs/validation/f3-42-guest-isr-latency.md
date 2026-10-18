@@ -1,0 +1,52 @@
+# F3-42: guest ISR return latency
+
+Research before implementation, 2026-10-18. The directive names behavior,
+not source URLs. Primary references consulted:
+
+- [Intel SDM, Vol. 2A, IRET and HLT](https://cdrdv2.intel.com/v1/dl/getContent/671199):
+  same-ring IRET changes IF only when CPL <= IOPL; HLT at CPL 3 faults.
+- [DPMI 0.9, sections 2.3, 2.4.1 and 3.1.2](https://www.phatcode.net/res/262/files/dpmi09.html):
+  hardware handlers enter with virtual interrupts disabled on a locked
+  stack; nested handlers share that stack. IRET/POPF need not restore IF.
+- [DPMI virtual interrupts](https://www.delorie.com/djgpp/doc/dpmi/ch4.4.1.html)
+  and [hardware interrupts](https://www.delorie.com/djgpp/doc/dpmi/ch4.4.2.html):
+  physical IF can stay enabled throughout a client's virtual CLI region;
+  it cannot be copied back into virtual IF at arbitrary host exits.
+- [Microsoft's Win95 implementation account](https://devblogs.microsoft.com/oldnewthing/20160411-00/?p=93281/):
+  saved-image TF observes a legacy POPF restore one instruction later.
+  This concerns Windows 95 DOS sessions, not Windows NT NTVDM.
+
+Repository comparison: `dpmi_enter_pm_handler` already constructs an IRET
+frame targeting `DPMI_PM_IRQRET`, a host-owned HLT. `pmint_return` restores
+the interrupted context and its virtual IF. Default reflection instead
+returns via `DPMI_RM_RETURN` and `dpmi_v86_return`. V86 IRET/POPF are emulated
+and apply their saved IF directly. PM CLI compatibility also arms selected
+saved flags images with TF, and pending-IRQ recovery can step to a restore.
+
+The baseline sound-on shooting replay meets the latency target but spends
+19,843 debug traps outside the saved-image/return trackers, versus 848 with
+`-nosound`. Pending-IRQ recovery is allowed inside active hardware frames,
+including the IRQ0 mixer. Those frames intentionally disable virtual IF
+and already guarantee observation through a host return trap. Exclude them
+and their nested real calls/callbacks from recovery stepping and its timeout;
+leave ordinary-code recovery separate. Preserve guest STI and verified
+saved-image restores inside handlers, PIC masks, priority and EOI semantics.
+The legacy timeout outside hardware frames remains a known compatibility
+policy; no claim is made that it mirrors every unobserved ordinary POPF.
+
+The four observed ordinary-code forced restores follow a save/CLI at
+`01df:00247543`, outside any hardware frame. Their prior boundary seeds are
+in distant game code; do not invent a backward instruction proof. The
+baseline already passed the numeric host targets. Acceptance must therefore
+include the reduction in recovery traps and exact nested-return tests, not
+claim reproduction of the T23 40 percent window.
+
+Decision: measure the existing paths first. Collect inclusive hardware ISR
+duration (delivery to observed host return), nested depth, virtual-IF-clear
+timer samples inside/outside hardware ISR records, and enable-path counts.
+The host reports calibrated clock duration (thread CPU on the host) and
+instruction-clock milliseconds; neither proves T23 wall latency. Sound-on
+replay must demonstrate SB16 DMA, IRQ and block progress.
+
+Implementation findings and before/after evidence are recorded in
+`build/codex/f3-42-report.md`; QEMU and hardware evidence belong to the lead.

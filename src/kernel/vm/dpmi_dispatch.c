@@ -273,6 +273,7 @@ static int pmint_return(struct dosvm *v, struct v86_frame *f)
     }
     struct dpmi_record rec = *r;
     struct v86_frame result = *f;
+    dosvm_isr_end(v, &rec);
     dpmi_unwind(v, d->depth - 1);
     dpmi_set_pm(v, rec.saved_pm);
     *f = rec.saved;
@@ -280,7 +281,7 @@ static int pmint_return(struct dosvm *v, struct v86_frame *f)
         dpmi_gprs(f, &result);
         f->tf.eflags = (f->tf.eflags & ~0x08D5u) | (result.tf.eflags & 0x08D5u);
     }
-    v->monitor.vif = rec.vif;           /* the virtual state saved at delivery */
+    dosvm_vif_restore(v, rec.vif, DOSVM_IF_TRAMPOLINE);
     if (rec.flags & DPMI_RF_HWINT) {
         d->decode_valid = rec.decode_valid;
         d->decode_cs = rec.decode_cs;
@@ -726,7 +727,7 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     if (!d->if_armed || d->if_step || !step) return false;
     d->if_armed = false;
     f->tf.eflags &= ~V86_TF;
-    v->monitor.vif = true;
+    dosvm_vif_restore(v, true, DOSVM_IF_POPF);
     d->stats.if_restored++;
     dosvm_trace(v, DOSVM_TRACE_FLAGS, f, 1, 1, 0);
     return true;
@@ -837,7 +838,7 @@ static bool if_recovery_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
         d->if_steps++;
         if (d->if_restore_step && d->if_restore_vif &&
             f->tf.eip == d->if_target_eip && f->tf.user_esp == d->if_target_sp) {
-            v->monitor.vif = true;
+            dosvm_vif_restore(v, true, DOSVM_IF_POPF);
             d->if_armed = false;
             d->stats.if_restored++;
             dosvm_boundary(v, f, "if_step_restore");
@@ -860,6 +861,16 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     uint64_t tick = g_ticks;
     irq_restore(flags);
     if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }
+    /* Hardware frames already return through an immediate host trap (PM
+     * HLT or RM INT FE). Their entry intentionally clears virtual IF.
+     * Stepping a mixer while another IRQ is pending makes that legitimate
+     * critical section much slower, and a watchdog must not enable it in
+     * the middle. Include real calls/callbacks nested under the frame. */
+    for (unsigned i = 0; i < d->depth; i++) {
+        if (!(d->rec[i].flags & DPMI_RF_HWINT)) continue;
+        if_recovery_end(v, f);
+        return;
+    }
     if (!d->if_waiting) { d->if_waiting = true; d->if_wait_tick = tick; d->if_steps = 0; }
     uint64_t age = tick - d->if_wait_tick;
     if (age >= DPMI_IF_WAIT_MS || d->if_steps >= DPMI_IF_STEPS) {
@@ -867,7 +878,7 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
         if_recovery_end(v, f);
         /* A previously patched saved image can still load TF later. Keep
          * its owner until flags_restored consumes it; never orphan that TF. */
-        v->monitor.vif = true;
+        dosvm_vif_restore(v, true, DOSVM_IF_FORCED);
         dosvm_boundary(v, f, "if_forced");
         return;
     }
@@ -1058,7 +1069,7 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
              * single-stepped: TF would leak into a PUSHF image (PUSHF does
              * not trap at IOPL 0 in protected mode). dpmi_pm_trap ends the
              * shadow at the first trap that is not an IRQ at that address. */
-            v->monitor.vif = true;
+            dosvm_vif_restore(v, true, DOSVM_IF_STI);
             f->tf.eip = next & mask;
             d->shadow = true;
             d->shadow_cs = (uint16_t)f->tf.cs;
@@ -1277,6 +1288,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     if (!hooked) e = dpmi_to_real_int(v, f, DPMI_REC_REFLECT, (uint8_t)(h.off - DPMI_PM_INT), DPMI_RF_HWINT);
     else e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT);
     if (!e) {
+        dosvm_isr_begin(v, &d->rec[d->depth - 1], (unsigned)irq);
         dosvm_pic_ack(&v->monitor);
         v->monitor.stats.reflected_irqs++;
         v->monitor.stats.delivered[irq & 15]++;

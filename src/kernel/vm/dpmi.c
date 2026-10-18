@@ -697,7 +697,7 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
         if (ax > 0x0902) return 1;
         bool old = v->monitor.vif;
         if (ax == 0x0900) v->monitor.vif = false;
-        else if (ax == 0x0901) v->monitor.vif = true;
+        else if (ax == 0x0901) dosvm_vif_restore(v, true, DOSVM_IF_API);
         f->tf.eax = (f->tf.eax & ~0xFFu) | (old ? 1u : 0u);
         return 0;
     }

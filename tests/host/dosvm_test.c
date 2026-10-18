@@ -666,6 +666,7 @@ static void test_memory_services(void)
 #include "dosvm_workloads_test.inc"
 #include "dosvm_menu_test.inc"
 #include "dosvm_irq_stall_test.inc"
+#include "dosvm_isr_test.inc"
 #include "dosvm_speed_test.inc"
 #include "dosvm_cost_test.inc"
 #include "dosvm_exit_test.inc"
@@ -688,6 +689,7 @@ int main(void)
     test_timer();
     test_menu();
     test_irq_stall();
+    test_isr_recovery_boundary(); test_isr_nested_hardware();
     test_speed();
     test_cost_bursts();
     test_exit_cost();
