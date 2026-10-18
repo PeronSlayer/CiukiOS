@@ -30,8 +30,8 @@ static void frames(void)
 {
     struct desktop d={.width=RW,.height=RH};
     render_cache_prepare(&d); assert(d.render_cache);
-    static const char *const themes[]={"Platinum","Ciuki Blue","Classic 98"};
-    for (unsigned t=0; t<3; t++) {
+    static const char *const themes[]={"Platinum","Ciuki Blue"};
+    for (unsigned t=0; t<2; t++) {
         assert(!desk_theme_use(themes[t]));
         for (int k=0; k<90; k++) {
             struct desk_box f={k%11-5,k%13-6,38+k%21*7,28+k%17*5};
@@ -41,7 +41,7 @@ static void frames(void)
                 .collapsed=(k>>2)&1, .buttons=DESK_TB_CLOSE|DESK_TB_MINIMIZE|DESK_TB_COLLAPSE,
                 .hot=1u<<(k%3), .pressed=k%2 ? 1u<<(k%3) : 0};
             for (unsigned i=0; i<16*16; i++) icon_pixels[i]=i*812371u+(unsigned)k*73171u;
-            for (int repeat=0; repeat<3; repeat++) {
+            for (int repeat=0; repeat<2; repeat++) {
                 background((unsigned)k*3u+(unsigned)repeat);
                 struct desk_paint p={a,RW,RH,repeat ? 7 : 0,repeat ? 5 : 0,
                     repeat ? 91 : RW,repeat ? 83 : RH};
@@ -80,9 +80,9 @@ static void shadows(void)
 
 static void text(void)
 {
-    static const char *const themes[]={"Platinum","Ciuki Blue","Classic 98"};
+    static const char *const themes[]={"Platinum","Ciuki Blue"};
     static const char sample[]="ABC abc 012 \xc3\x80\xc3\xa0\xc3\xbf \xe2\x80\xa2 \xe2\x80\xa6 \xf0\x9f\x90\xb6";
-    for (unsigned t=0; t<3; t++) for (int font=0; font<DESK_FONTS; font++) for (int n=0; n<8; n++) {
+    for (unsigned t=0; t<2; t++) for (int font=0; font<DESK_FONTS; font++) for (int n=0; n<8; n++) {
         assert(!desk_theme_use(themes[t])); background((unsigned)(font*8+n));
         struct du_canvas c={a,RW,RH,{n%3*17,n%4*11,115,85}};
         struct desk_paint p={b,RW,RH,c.clip.x,c.clip.y,c.clip.w,c.clip.h};

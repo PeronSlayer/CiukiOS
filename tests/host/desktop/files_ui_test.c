@@ -237,7 +237,7 @@ static void label_cache_tests(void)
 }
 static void blocker_dialog_tests(void)
 {
-    for (unsigned theme=0;theme<3;theme++) for (int small=0;small<2;small++) for (int long_names=0;long_names<2;long_names++) {
+    for (unsigned theme=0;theme<(unsigned)desk_theme_count();theme++) for (int small=0;small<2;small++) for (int long_names=0;long_names<2;long_names++) {
         desk_theme_use(desk_theme_at(theme)->name);
         int width=small ? 620 : WIDTH, height=small ? 380 : HEIGHT;
         du_init(&ui,pixels,width,height);

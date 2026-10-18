@@ -56,7 +56,7 @@ void desk_paint_round_blend(struct desk_paint *, int x, int y, int w, int h, int
 void desk_paint_icon(struct desk_paint *, int x, int y, const uint32_t *argb, int size);
 enum { DESK_GLYPH_CLOSE, DESK_GLYPH_MINIMIZE, DESK_GLYPH_ZOOM, DESK_GLYPH_COLLAPSE, DESK_GLYPH_EXPAND, DESK_GLYPH_RESTORE };
 /* One title-bar button in the current theme at its hit box (x, y, w, h):
- * the theme's square (or Classic caption button) centred in that box. */
+ * the theme's square centred in that box. */
 void desk_paint_title_button(struct desk_paint *, int x, int y, int w, int h, int kind, int active, int hot, int pressed);
 
 /* ---- window frames ----
@@ -87,7 +87,7 @@ void desk_paint_frame_border(struct desk_paint *, int x, int y, int w, int h, co
 
 /* ---- themes ---- */
 enum { DESK_TITLE_FLAT, DESK_TITLE_GRADIENT, DESK_TITLE_PINSTRIPE, DESK_TITLE_HGRADIENT };
-enum { DESK_CONTROLS_CLASSIC, DESK_CONTROLS_PLATINUM };
+enum { DESK_CONTROLS_PLATINUM = 1 };
 enum { DESK_FOCUS_DOTTED, DESK_FOCUS_RING };
 
 struct desk_theme {
@@ -115,6 +115,9 @@ extern const struct desk_theme *desk_theme;                  /* current, never N
 int desk_theme_count(void);
 const struct desk_theme *desk_theme_at(int index);
 const struct desk_theme *desk_theme_named(const char *name); /* ASCII case-insensitive */
+/* Exact saved name, or NULL. Migrates the removed theme to the default,
+ * logging once per process; does not make it a selectable theme. */
+const char *desk_theme_preference(const char *name);
 int desk_theme_use(const char *name);                         /* 0, or -1 (unchanged) */
 
 /* ---- settings file (owned by the shell) ----

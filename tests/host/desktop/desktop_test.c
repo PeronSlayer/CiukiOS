@@ -541,7 +541,7 @@ static void test_shell(void)
     pointer(d.clients[b].frame.x+5,d.clients[b].frame.y+8); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.drag==b); event(CIUKI_INPUT_RESYNC,0,0,0); assert(d.drag<0);
     /* The Ciuki button at the left end of the top bar; its menu drops below the bar. */
-    desk_focus(&d,a); pointer(40,16); event(CIUKI_INPUT_BUTTON,1,1,0);
+    desk_focus(&d,a); pointer(DESK_START_X+DESK_START_W/2,DESK_START_Y+DESK_START_H/2); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
     { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
       assert(s.x==DESK_START_X && s.y+s.h<=DESK_BAR && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
@@ -704,7 +704,7 @@ static void test_menu(void)
     for (int i=0;i<DESK_CLIENTS;i++) {
         d.clients[i].window=1;
         struct desk_box task=desk_task_button(&d,i);
-        assert(task.x>=DESK_TASK_X && task.x+task.w<=desk_shell_tray_box(&d).x-8 && task.w>0);
+        assert(task.x>=DESK_TASK_X && task.x+task.w<=(int)d.width-DESK_TASK_X && task.w>0);
     }
     for (int i=0;i<DESK_CLIENTS;i++) d.clients[i].window=0;
     cleanup();
@@ -819,8 +819,8 @@ static void test_volume_steps(void)
     d.sh.volume=0;assert(desk_shell_key(&d,0x12e,1) && !d.sh.want_mixer);
     d.sh.volume_open=1;d.sh.volume=50;
     /* The popup follows the volume icon, including the measured clock width. */
-    struct desk_box icon=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME), tray=desk_shell_tray_box(&d);
-    int track_top=tray.y-SH_TRAY_GAP-168+30;
+    struct desk_box icon=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME);
+    int track_top=DESK_BAR+SH_TRAY_GAP+30;
     d.mouse_x=icon.x+icon.w-92+46;d.mouse_y=track_top+20;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(d.sh.volume_drag && d.sh.volume==80 && d.sh.want_mixer);

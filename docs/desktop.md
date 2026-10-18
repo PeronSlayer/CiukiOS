@@ -98,7 +98,7 @@ in-flight proposals, read-only transferred descriptors, EOF and allocation/map
 failures. `desktop_test` checks v2.1 wire rejection rules, borders/corners,
 tracking steps, zoom restore, windowshade, fixed clients and backlog recovery.
 `test_window_resize.py` replays six Files swaps through the production client
-and desktop, at 600×380 and 760×520 in all three themes. It also exercises zoom to the full work area and restore across windowshade.
+and desktop, at 600×380 and 760×520 in both themes. It also exercises zoom to the full work area and restore across windowshade.
 It compares every content pixel with the toolkit frame, incremental redraw with
 a complete composition, and surface/descriptor/mapping counts with their baseline.
 `CIUKI_RESIZE_FRAMES` optionally saves the six host compositor PNGs. Existing
@@ -199,7 +199,7 @@ unchanged; compositor.c references the shell through weak symbols so the demo
 and the libdeskui programs, which reuse compositor.c, link without it.
 
 - **Start menu** (the Ciuki button at the left end of the top bar: the
-  approved portrait and "CiukiOS" on a rounded gradient face, pressed in while
+  approved portrait inside a circular accent orb, pressed in while
   the menu is open; the menu drops below the bar, submenus open to the
   right): Programs (CiukNote,
   Files, Task Manager, DOS Box, Ciuki Demo, Lua, Control Panel, then the
@@ -210,12 +210,13 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
   keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
   and "CiukiOS". Menus are 30 px (top) and 22 px rows, all with 16 px icons.
-- **Taskbar:** task buttons (icon, title, pressed state for the active
-  window; right click: Restore, Minimize, Close) from x 4, at most 160 px
-  each, and a tray with a volume icon and the clock (24/12 h, optional
-  seconds; the date as a tooltip after 0.6 s). The top bar keeps the identity
-  colours and shows the Ciuki button, the focused window's title (or a
-  notice) and the date.
+- **Bars:** the top bar holds the Ciuki orb, free space, system tray icons,
+  notification anchor and clock/date (24/12 h, optional seconds, full date
+  tooltip). The bottom bar contains only left-aligned task buttons from x 4,
+  at most 160 px each, including minimized windows. The active window is
+  highlighted; right click opens its system menu. Window captions appear in
+  their own frames and as task labels, never in the top bar. Tray popups and
+  notifications open below the top bar. See [shell design](design/desktop-shell.md).
 - **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
@@ -284,7 +285,7 @@ file before writing it and then asks the desktop to apply it.
 | Key | Values | Default |
 | --- | --- | --- |
 | `version` | 1 | 1 |
-| `theme` | `Platinum`, `Ciuki Blue`, `Classic 98` | `Platinum` |
+| `theme` | `Platinum`, `Ciuki Blue` | `Ciuki Blue` |
 | `wallpaper` | `ciuki` (the approved portrait on the desktop colour, exactly where the f2 compositor draws it), `none`, `builtin:<id>` (`dawn`, `pinstripe`, `deepblue`, `twilight`, `linen`, `blueprint`), or an absolute path to a PNG, JPEG or BMP | `/system/wallpapers/Ciuk2.png` |
 | `wallpaper_mode` | `center`, `stretch`, `tile`, `fit`, `fill` | `fill` |
 | `desktop_color` | six hex digits RRGGBB | `375564` |
@@ -699,7 +700,7 @@ is the scenario's second counted edge and later uses of the key belong to the pr
 F12: shell (stage machine, `demo`). F9: Task Manager (stage machine, `tasks`).
 F11: Files and F10: CiukNote are *app scenarios* sharing one mechanism (`app_test` in
 `desktop.c`): the first program started from the Ciuki menu with that name is launched with
-`--test=<its name>`, the taskbar clock is fixed at 12:00:00, the program sends checkpoint
+`--test=<its name>`, the top-bar clock is fixed at 12:00:00, the program sends checkpoint
 PINGs with serial base+n (Files `0xf2310000`, 5 checkpoints; CiukNote `0xf2320000`, 3: ready,
 saved, opened), each presented frame is reported once as ` files=1 checkpoint=N` or
 ` note=1 checkpoint=N` and hashed by the controller, which opens the write gate for these
@@ -734,7 +735,7 @@ surface bytes (little-endian words), which contains no clock, so the host reprod
 **QEMU case `ciuknote-qemu-t23`** (`tests/suites/f2-desktop.json`; the selector and
 predicates of `files-qemu-t23` with `note-*` records and three checkpoints): F10 down/up;
 the cursor is clamped to the top-left corner (two (-381, -381) moves); click the
-Ciuki button in the top bar at (40, 16), Programs at (40, 50) and the `ciuknote` row of
+Ciuki button in the top bar at (16, 16), Programs at (40, 50) and the `ciuknote` row of
 the Programs submenu (`tests/host/desktop/shell_menu.py` models the geometry and
 regenerates the scripted cases); wait 3.6 s; type `Hello
 CiukNote`, Enter, `Ciuki says woof.`, Enter, F5; Ctrl+S, type `/system/tests/note.txt`,
@@ -961,7 +962,7 @@ exits. Mixing versions or sending this opcode in v1 disconnects that peer.
 The exact shared `protocol.h` is installed as `ciuki/desktop.h` by the SDK build.
 
 Use [POSIX clocks](https://pubs.opengroup.org/onlinepubs/000095399/functions/clock_getres.html):
-MONOTONIC for deadlines and REALTIME in UTC for the taskbar; label the build-seed
+MONOTONIC for deadlines and REALTIME in UTC for the top-bar clock; label the build-seed
 fallback in About, using the kernel's existing `uname` release/version/source.
 About also shows `Version <uname version>` (the CiukiOS version string of
 `config/version.json`, drawn only when `uname` supplied one) under the dedication.

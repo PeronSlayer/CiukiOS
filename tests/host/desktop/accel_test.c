@@ -176,6 +176,7 @@ static void scenario(unsigned available)
     /* F2-74: disjoint client writes, scrolls and moves keep their shortcuts.
      * Both copy endpoints, shadows and the entry sweep remain protected. */
     desk_shell_enable(&d);
+    desk_move(&d,i,50,240); redraw();
     desk_shell_notify(&d,"Removable media","E: is ready to use.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
     struct desk_box sweep=desk_shell_notification_bounds(&d);
     assert(d.sh.notification.slide==20);
@@ -193,7 +194,7 @@ static void scenario(unsigned available)
     dirty_client(i);redraw();
     if (available&2u) assert(window_copies==before_copies+1);
     before_copies=window_copies;
-    desk_move(&d,i,120,110);assert(d.copy_pending);redraw();
+    desk_move(&d,i,60,260);assert(d.copy_pending);redraw();
     if (available&2u) assert(window_copies==before_copies+1);
     /* Only the destination intersects. Then only the source intersects. */
     desk_move(&d,i,settled.x+10,settled.y+10);assert(!d.copy_pending);redraw();
@@ -205,17 +206,17 @@ static void scenario(unsigned available)
     memmove(pixels+5*width,pixels,(height-5)*width*4);
     for (unsigned p=0;p<5*width;p++) pixels[p]=(p*5939u)&0xffffff;
     dirty_client(i);redraw();assert(window_copies==before_copies);
-    desk_move(&d,i,120,110);assert(!d.copy_pending);redraw();
+    desk_move(&d,i,60,260);assert(!d.copy_pending);redraw();
     /* A frame whose rightmost client column touches only the left shadow. */
     int shadow_x=settled.x-(int)width-DESK_BORDER;
     desk_move(&d,i,shadow_x,settled.y);assert(!d.copy_pending);redraw();
-    desk_move(&d,i,120,110);assert(!d.copy_pending);redraw();
+    desk_move(&d,i,60,260);assert(!d.copy_pending);redraw();
     /* The lower, clipped entry sweep is protected too. */
     assert(desk_notification_intersects(&d,(struct desk_box){settled.x,settled.y+settled.h-1,1,1}));
     assert(!desk_notification_intersects(&d,(struct desk_box){settled.x-1,settled.y,1,1}));
     /* Coalescing a safe move must check the retained original source. */
-    desk_move(&d,i,125,115);assert(d.copy_pending);
-    desk_move(&d,i,130,120);assert(d.copy_pending);redraw();
+    desk_move(&d,i,65,265);assert(d.copy_pending);
+    desk_move(&d,i,70,270);assert(d.copy_pending);redraw();
     desk_shell_key(&d,DU_KEY_ESC,1);redraw();
     d.shell=0;desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480);redraw();
     int j=window_new(11,21,130,90,130,110);redraw();

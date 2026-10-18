@@ -195,8 +195,8 @@ int main(int argc, char **argv)
     static const char old[] = "version=1\ntheme=Classic 98\nwallpaper=/system/wallpapers/Ciuk1.png\nwallpaper_mode=center\n";
     memcpy(saved, old, sizeof(old)); saved_n = sizeof(old) - 1;
     attach(CP_DISPLAY);
-    assert(a.cfg.wallpaper_mode == CFG_WALL_CENTER && !strcmp(a.cfg.theme, "Classic 98"));
-    for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Classic 98")));
+    assert(a.cfg.wallpaper_mode == CFG_WALL_CENTER && !strcmp(a.cfg.theme, "Ciuki Blue"));
+    for (int k = 0; k < CFG_THEMES; k++) assert(a.theme_items[k].selected == (k == cfg_theme_index("Ciuki Blue")));
     check_marked(CFG_WALL_CENTER);
     for (int k = 0; k < 5; k++) assert(du_text_width(labels[k]) + 8 <= find(DU_BUTTON, labels[k])->box.w);
     render_settled(&u);
@@ -206,7 +206,7 @@ int main(int argc, char **argv)
     assert(a.cfg.wallpaper_mode == CFG_WALL_FILL && strstr(saved, "\nwallpaper=/system/wallpapers/Ciuk1.png\nwallpaper_mode=fill\n"));
     render_settled(&u);
     check_preview();
-    at_save(renders, "control-display-classic-fill", &u);
+    at_save(renders, "control-display-migrated-fill", &u);
     cp_detach(&a);
     /* Platinum remains a valid persisted choice, including its selection. */
     cfg_defaults(&parsed); strcpy(parsed.theme, "Platinum");

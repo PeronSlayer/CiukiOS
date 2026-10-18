@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-const char *const cfg_theme_names[CFG_THEMES] = {"Platinum", "Ciuki Blue", "Classic 98"};
+const char *const cfg_theme_names[CFG_THEMES] = {"Platinum", "Ciuki Blue"};
 const char *const cfg_mode_names[CFG_WALL_MODES] = {"center", "stretch", "tile", "fit", "fill"};
 const char *const cfg_keyboard_names[CFG_KEYS_COUNT] = {"us", "it"};
 const char *const cfg_keyboard_labels[CFG_KEYS_COUNT] = {"English (US)", "Italian"};
@@ -84,8 +84,9 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     int n;
     if (!strcmp(key, "version")) return number(v, 1, 1000, &n);
     if (!strcmp(key, "theme")) {
-        if (cfg_theme_index(v) < 0) return 0;
-        snprintf(s->theme, sizeof(s->theme), "%s", v); return 1;
+        const char *name = desk_theme_preference(v);
+        if (!name) return 0;
+        snprintf(s->theme, sizeof(s->theme), "%s", name); return 1;
     }
     if (!strcmp(key, "wallpaper")) {
         if (strlen(v) >= sizeof(s->wallpaper) || !wallpaper_value(v)) return 0;

@@ -31,7 +31,7 @@ full runs use `-s tests/host/desktop -t tests/host`.
 | Secondary click activation | Secondary clicks do not activate the target application | wrong |
 | Launch activation | CREATE_WINDOW focuses the new client; a held menu defers focus until it closes | ok |
 | Close and peer exit | Cooperative close, deadline, surface cleanup; selects highest remaining order, without preferring another window of the same process | wrong |
-| Active and inactive captions | Shared frame painter and task buttons follow focus; three-theme scene goldens | ok |
+| Active and inactive captions | Shared frame painter and task buttons follow focus; Ciuki Blue/Platinum scene goldens | ok |
 | Title drag | Retained client surface moves; screen clamp keeps the full window in the work area | ok |
 | Title double click | Rolls up the window instead of maximizing; `input.c` title-click branch | wrong |
 | Maximize button | Uses resize and saved restore rectangle, but draws a roll-up glyph and allows resize while maximized | wrong |

@@ -70,7 +70,7 @@ class WindowResizeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             print(result.stdout.strip())
             frames = sorted(folder.glob("files-*.xrgb"))
-            self.assertEqual(len(frames), 6)
+            self.assertEqual(len(frames), 4)
             for frame in frames:
                 self.assertEqual(frame.stat().st_size, 1024 * 768 * 4)
                 target = os.environ.get("CIUKI_RESIZE_FRAMES")

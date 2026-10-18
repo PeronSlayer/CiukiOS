@@ -18,6 +18,8 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     assert(!strcmp(desk_theme->name, "Ciuki Blue"));
+    assert(desk_theme_count() == 2 && CFG_THEMES == 2);
+    assert(!desk_theme_named("Classic 98") && cfg_theme_index("Classic 98") == -1);
     struct ciuki_settings s, restored;
     cfg_defaults(&s); assert(!strcmp(s.theme, "Ciuki Blue"));
     const char invalid[] = "theme=unknown\n";
@@ -31,8 +33,8 @@ int main(int argc, char **argv)
         assert(!strcmp(restored.theme, s.theme));
         assert(!desk_settings_theme(text, n, name, sizeof(name)) && !strcmp(name, s.theme));
     }
-    /* Missing file, a user's choice, poll throttle, invalid key, last valid
-     * key, and deletion. Valid Platinum/Classic settings remain explicit. */
+    /* Missing file, choice, throttle, invalid key, removed theme after a
+     * valid entry, repeated reload, and deletion. */
     assert(!desk_theme_use("Platinum"));
     assert(desk_theme_poll(argv[1], 0) && !strcmp(desk_theme->name, "Ciuki Blue"));
     settings_file(argv[1], "theme=Platinum\n");
@@ -41,9 +43,14 @@ int main(int argc, char **argv)
     settings_file(argv[1], invalid);
     assert(desk_theme_poll(argv[1], 4000000000ull) && !strcmp(desk_theme->name, "Ciuki Blue"));
     settings_file(argv[1], "theme=Platinum\r\ntheme=Classic 98\ntheme=unknown\n");
-    assert(desk_theme_poll(argv[1], 6000000000ull) && !strcmp(desk_theme->name, "Classic 98"));
+    assert(!desk_theme_use("Platinum"));
+    assert(desk_theme_poll(argv[1], 6000000000ull) && !strcmp(desk_theme->name, "Ciuki Blue"));
+    const char removed[] = "theme=Platinum\ntheme=Classic 98\n";
+    cfg_defaults(&s);
+    assert(!cfg_parse(&s, removed, sizeof(removed)-1) && !strcmp(s.theme, "Ciuki Blue"));
+    assert(!desk_theme_poll(argv[1], 8000000000ull));
     assert(!remove(argv[1]));
-    assert(desk_theme_poll(argv[1], 8000000000ull) && !strcmp(desk_theme->name, "Ciuki Blue"));
+    assert(!desk_theme_poll(argv[1], 10000000000ull) && !strcmp(desk_theme->name, "Ciuki Blue"));
 
     const struct desk_theme *t = desk_theme;
     pair("dialog", t->ink, t->face); pair("window", t->ink, t->window);

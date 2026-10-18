@@ -29,8 +29,8 @@ static int drawn(const char *s)
 { for (unsigned i = 0; i < text_count; i++) if (!strcmp(texts[i], s)) return 1; return 0; }
 static void render(void)
 {
-    for (unsigned i = 0; i < d.width * d.height; i++) d.pixels[i] = DU_FACE;
-    text_count = 0; desk_shell_overlay(&d, (struct desk_box){0, 0, d.width, d.height});
+    for (unsigned i = 0; i < d.width * d.height; i++) d.pixels[i] = desk_theme->topbar;
+    text_count = 0; desk_shell_topbar(&d,(struct desk_box){0,0,d.width,DESK_BAR}); desk_shell_overlay(&d, (struct desk_box){0, 0, d.width, d.height});
 }
 static void click(int x, int y)
 {
@@ -42,7 +42,7 @@ static uint32_t icon_pixels[16 * 16];
 static void check_icon(const char *name, int disabled)
 {
     struct du_canvas c = {icon_pixels, 16, 16, {0, 0, 16, 16}};
-    for (unsigned i = 0; i < 256; i++) icon_pixels[i] = DU_FACE;
+    for (unsigned i = 0; i < 256; i++) icon_pixels[i] = desk_theme->topbar;
     du_icon_blit(&c, 0, 0, desk_shell_icon(name, 16), 16, disabled ? DU_ICON_DISABLED : DU_ICON_NORMAL);
     struct desk_box b = desk_shell_tray_icon_box(&d, SH_TRAY_NETWORK);
     int x = b.x, y = b.y;
@@ -79,7 +79,7 @@ int main(void)
     assert(d.damage.count && d.sh.notification.active && d.sh.notification.action==SH_NOTIFY_NETWORK);
     struct desk_box tray = desk_shell_tray_box(&d);
     struct desk_box expected = desk_shell_tray_box(&d);
-    assert(!memcmp(&tray, &expected, sizeof(tray)) && tray.y == 452 && tray.h == 25);
+    assert(!memcmp(&tray, &expected, sizeof(tray)) && tray.y == 4 && tray.h == 25);
     render(); check_icon("network-offline", 0);
     hover(nx, ny); assert(drawn("Network: no cable"));
     click(nx, ny); render();
@@ -100,7 +100,7 @@ int main(void)
     assert(d.damage.count && d.damage.count<=DESK_DAMAGE_MAX);
     /* Preserve the exact union even where the popup shadow overlaps the
      * tray; bounding-box merging used to include clean corner pixels. */
-    struct desk_box popup={ni.x+ni.w-272-4,332,282,122};
+    struct desk_box popup={ni.x+ni.w-272-4,DESK_BAR+SH_TRAY_GAP-4,282,122};
     for (int y=0;y<480;y++) for (int x=0;x<640;x++) {
         unsigned covered=0;
         for (unsigned i=0;i<d.damage.count;i++) covered+=(unsigned)desk_contains(d.damage.boxes[i],x,y);
@@ -109,7 +109,7 @@ int main(void)
     }
     for (unsigned i = 0; i < d.damage.count; i++) {
         struct desk_box b = d.damage.boxes[i];
-        assert(b.x >= popup.x && b.y >= 332 && b.x + b.w <= 640 && b.y + b.h <= 478);
+        assert(b.x >= popup.x && b.y >= 0 && b.x + b.w <= 640 && b.y + b.h <= popup.y+popup.h);
     }
     render(); assert(drawn("State: quarantined") && drawn("Reason: link_fault"));
     click(nx + 20, ny); assert(!d.sh.network_open && d.sh.volume_open);

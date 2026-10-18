@@ -1078,7 +1078,7 @@ int main(int argc,char **argv)
     assert(launch_program(&d,&program)==-1 && errno==ENOEXEC && !fake_live());
     assert(!strcmp(launch_record,"[launch] name=demo error=8 path=/Programs/demo operation=spawn"));
     fail_spawn=0;
-    d.shell_test=1; d.mouse_x=40; d.mouse_y=16;   /* the Ciuki button in the top bar */
+    d.shell_test=1; d.mouse_x=DESK_START_X+DESK_START_W/2; d.mouse_y=DESK_START_Y+DESK_START_H/2;   /* the Ciuki button in the top bar */
     assert(desk_shell_click(&d) && d.menu_open && d.shell_stage==1);
     int pid=launch_program(&d,&program);
     assert(pid==100 && d.clients[0].pid==100 && d.children[0].pid==100 && fake_live()==1);

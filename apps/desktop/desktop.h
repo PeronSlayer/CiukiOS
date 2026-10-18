@@ -19,8 +19,8 @@
  * drops from it. Task buttons start DESK_TASK_X from the taskbar's left edge. */
 #define DESK_START_X 4
 #define DESK_START_Y 4
-#define DESK_START_W 96
-#define DESK_START_H 24
+#define DESK_START_H (DESK_BAR - 2 * DESK_START_Y)
+#define DESK_START_W DESK_START_H
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256

@@ -9,9 +9,8 @@
  * accent, pinstriped active title bars over a soft vertical gradient,
  * gradient bevels, rounded window tops and a soft shadow. Ciuki Blue:
  * horizontal slate-blue title bars with raised buttons and the portrait's tan
- * as accent. Classic 98: flat 3-D greys, navy gradient captions and aliased
- * text. title[0]/title[1] are the caption's top and bottom colours (Blue and
- * Classic 98: left and right). Frame geometry (border 3, title 24, title-button hit
+ * as accent. title[0]/title[1] are the caption's top and bottom colours
+ * (Blue: left and right). Frame geometry (border 3, title 24, title-button hit
  * boxes) is the same in every theme, so hit areas never move with the theme. */
 static const struct desk_theme themes[] = {
     {
@@ -54,26 +53,6 @@ static const struct desk_theme themes[] = {
         .font_ui = DESK_FONT_UI, .font_bold = DESK_FONT_BOLD, .font_title = DESK_FONT_TITLE,
         .font_mono = DESK_FONT_MONO, .font_mono_bold = DESK_FONT_MONO_BOLD, .font_large = DESK_FONT_LARGE,
     },
-    {
-        .name = "Classic 98", .description = "Flat 3-D greys, navy captions and crisp aliased text",
-        .desktop = 0x008080u, .desktop_label = 0xffffffu,
-        .topbar = 0xc0c0c0u, .topbar_edge = 0x808080u, .topbar_text = 0x000000u, .topbar_accent = 0x000080u,
-        .taskbar = 0xc0c0c0u, .taskbar_text = 0x000000u, .start = 0xc0c0c0u, .start_open = 0xb4b4b4u,
-        .start_text = 0x000000u, .task_active = 0xe0e0e0u, .task_active_text = 0x000000u,
-        .face = 0xc0c0c0u, .light = 0xdfdfdfu, .hilite = 0xffffffu, .shadow = 0x808080u, .dark = 0x000000u,
-        .outline = 0x000000u, .face_top = 0xc0c0c0u, .face_bottom = 0xc0c0c0u, .hover = 0xc0c0c0u,
-        .window = 0xffffffu, .ink = 0x000000u, .gray = 0x808080u, .select = 0x000080u, .select_ink = 0xffffffu,
-        .accent = 0x000080u, .focus = 0x000000u,
-        .frame = 0x000000u, .frame_inactive = 0x000000u,
-        .title = {0x000080u, 0x1084d0u}, .title_inactive = {0x808080u, 0xc0c0c0u},
-        .title_text = 0xffffffu, .title_text_inactive = 0xc0c0c0u,
-        .stripe_light = 0xffffffu, .stripe_dark = 0x808080u, .drop_shadow = 0x000000u,
-        .title_style = DESK_TITLE_GRADIENT, .title_center = 0, .control_style = DESK_CONTROLS_CLASSIC,
-        .focus_style = DESK_FOCUS_DOTTED, .text_aa = 0, .radius = 0, .shadow_size = 0, .button = 16,
-        .icon_small = 16, .icon_toolbar = 22, .icon_large = 32,
-        .font_ui = DESK_FONT_UI, .font_bold = DESK_FONT_BOLD, .font_title = DESK_FONT_BOLD,
-        .font_mono = DESK_FONT_MONO, .font_mono_bold = DESK_FONT_MONO_BOLD, .font_large = DESK_FONT_LARGE,
-    },
 };
 #define THEMES (int)(sizeof(themes) / sizeof(themes[0]))
 const struct desk_theme *desk_theme = &themes[1];
@@ -104,6 +83,20 @@ int desk_theme_use(const char *name)
     if (!t) return -1;
     desk_theme = t;
     return 0;
+}
+
+const char *desk_theme_preference(const char *name)
+{
+    static int logged;
+    if (!strcmp(name, "Classic 98")) {
+        if (!logged) {
+            fprintf(stderr, "desktop: saved theme Classic 98 removed; using Ciuki Blue\n");
+            logged = 1;
+        }
+        return DESK_THEME_DEFAULT;
+    }
+    for (int i = 0; i < THEMES; i++) if (!strcmp(themes[i].name, name)) return themes[i].name;
+    return NULL;
 }
 
 /* ---- fonts ---- */
@@ -296,20 +289,6 @@ void desk_paint_raised(struct desk_paint *p, int x, int y, int w, int h, int pre
 {
     const struct desk_theme *t = desk_theme;
     if (w <= 0 || h <= 0) return;
-    if (t->control_style == DESK_CONTROLS_CLASSIC) {
-        desk_paint_fill(p, x, y, w, h, t->face);
-        if (pressed) {
-            desk_paint_fill(p, x, y, w, 1, t->dark); desk_paint_fill(p, x, y, 1, h, t->dark);
-            desk_paint_fill(p, x, y + h - 1, w, 1, t->dark); desk_paint_fill(p, x + w - 1, y, 1, h, t->dark);
-            desk_paint_fill(p, x + 1, y + 1, w - 2, 1, t->shadow); desk_paint_fill(p, x + 1, y + 1, 1, h - 2, t->shadow);
-            return;
-        }
-        desk_paint_fill(p, x, y, w - 1, 1, t->hilite); desk_paint_fill(p, x, y, 1, h - 1, t->hilite);
-        desk_paint_fill(p, x, y + h - 1, w, 1, t->dark); desk_paint_fill(p, x + w - 1, y, 1, h, t->dark);
-        desk_paint_fill(p, x + 1, y + 1, w - 3, 1, t->light); desk_paint_fill(p, x + 1, y + 1, 1, h - 3, t->light);
-        desk_paint_fill(p, x + 1, y + h - 2, w - 2, 1, t->shadow); desk_paint_fill(p, x + w - 2, y + 1, 1, h - 2, t->shadow);
-        return;
-    }
     /* Platinum: rounded outline, vertical gradient, inner light and shade. */
     uint32_t top = pressed ? t->shadow : hot ? desk_mix(t->hover, t->face_top, 160) : t->face_top;
     uint32_t bottom = pressed ? t->face : hot ? desk_mix(t->hover, t->face_bottom, 110) : t->face_bottom;
@@ -411,7 +390,7 @@ void desk_paint_icon(struct desk_paint *p, int x, int y, const uint32_t *argb, i
 /* ---- title-bar buttons ----
  * Platinum and Ciuki Blue: a square of the theme's size with crisp 7x7
  * glyphs (an anti-aliased cross, a bar, a roll-up/down triangle), hover and
- * pressed faces. Classic 98: the raised 16x14 caption button. Inactive
+ * pressed faces. Inactive
  * frames keep their buttons in a quiet, flat form. */
 static unsigned glyph_alpha(int kind, int i, int j)
 {
@@ -451,29 +430,6 @@ void desk_paint_title_button(struct desk_paint *p, int x, int y, int w, int h, i
 {
     const struct desk_theme *t = desk_theme;
     if (w <= 0 || h <= 0) return;
-    if (t->control_style == DESK_CONTROLS_CLASSIC) {
-        /* Caption button: 16x14, raised, sunken while held. */
-        int bw = w < 16 ? w : 16, bh = h < 14 ? h : 14;
-        int bx = x + (w - bw) / 2, by = y + (h - bh + 1) / 2;
-        desk_paint_raised(p, bx, by, bw, bh, pressed, 0);
-        int ox = bx + pressed + (bw - 8) / 2, oy = by + pressed + (bh - 7) / 2;
-        uint32_t ink = t->ink;
-        if (kind == DESK_GLYPH_CLOSE) {
-            for (int i = 0; i < 7; i++) {
-                desk_paint_fill(p, ox + i, oy + i, 2, 1, ink); desk_paint_fill(p, ox + 6 - i, oy + i, 2, 1, ink);
-            }
-        } else if (kind == DESK_GLYPH_MINIMIZE) desk_paint_fill(p, ox + 1, oy + 5, 6, 2, ink);
-        else if (kind==DESK_GLYPH_RESTORE) glyph(p,ox,oy,kind,ink,255);
-        else if (kind == DESK_GLYPH_COLLAPSE || kind == DESK_GLYPH_EXPAND) {
-            int up = kind == DESK_GLYPH_COLLAPSE;
-            for (int i = 0; i < 4; i++) desk_paint_fill(p, ox + 4 - i, oy + (up ? 1 + i : 4 - i), 1 + 2 * i, 1, ink);
-            desk_paint_fill(p, ox + 1, oy + (up ? 6 : 0), 7, 1, ink);
-        } else {
-            desk_paint_fill(p, ox, oy, 8, 2, ink); desk_paint_fill(p, ox, oy, 1, 7, ink);
-            desk_paint_fill(p, ox + 7, oy, 1, 7, ink); desk_paint_fill(p, ox, oy + 6, 8, 1, ink);
-        }
-        return;
-    }
     int s = t->button;
     if (s > w) s = w;
     if (s > h) s = h;
@@ -616,7 +572,7 @@ static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const 
     const struct desk_theme *t = desk_theme;
     if (w <= 2 || h <= 2) return;
     struct frame f = {*p, x, y, w, h, t->radius};
-    int classic = t->control_style == DESK_CONTROLS_CLASSIC, platinum = t->title_style == DESK_TITLE_PINSTRIPE;
+    int platinum = t->title_style == DESK_TITLE_PINSTRIPE;
     int active = s->active, T = DESK_FRAME_TITLE;
     static const unsigned order[3] = {DESK_TB_CLOSE, DESK_TB_MINIMIZE, DESK_TB_COLLAPSE};
     int boxes[3][4], right = x + w - 4;   /* right: the title area ends 4 px before the first button */
@@ -643,59 +599,41 @@ static void paint_frame(struct desk_paint *p, int x, int y, int w, int h, const 
         ffill(&f,x+w-DESK_FRAME_BORDER,y+T,DESK_FRAME_BORDER,h-T,t->face);
         ffill(&f,x,y+h-DESK_FRAME_BORDER,w,DESK_FRAME_BORDER,t->face);
     }
-    if (classic) {
-        /* Classic 98: raised 3-D frame, inset caption, icon and left-aligned title. */
-        desk_paint_fill(&f.p, x, y, w - 1, 1, t->light); desk_paint_fill(&f.p, x, y, 1, h - 1, t->light);
-        desk_paint_fill(&f.p, x + 1, y + 1, w - 3, 1, t->hilite); desk_paint_fill(&f.p, x + 1, y + 1, 1, h - 3, t->hilite);
-        desk_paint_fill(&f.p, x, y + h - 1, w, 1, t->dark); desk_paint_fill(&f.p, x + w - 1, y, 1, h, t->dark);
-        desk_paint_fill(&f.p, x + 1, y + h - 2, w - 2, 1, t->shadow); desk_paint_fill(&f.p, x + w - 2, y + 1, 1, h - 2, t->shadow);
-        desk_paint_hgradient(&f.p, x + 3, y + 3, w - 6, T - 5, a0, a1);
-        int tx = x + 7;
-        if (s->icon) { desk_paint_icon(&f.p, x + 5, y + 4, s->icon, 16); tx = x + 25; }
-        struct desk_paint tp = sub(&f.p, x + 4, y, right - x - 4, T);
-        desk_paint_text(&tp, font, tx, y + 17, title, ink);
-    } else {
-        /* Rounded frames: Platinum's vertical pinstripes or Blue's
-         * left-to-right caption, with the same title-button hit boxes. */
-        int horizontal = t->title_style == DESK_TITLE_HGRADIENT;
-        if (horizontal) fhgradient(&f, x + 1, y + 1, w - 2, T - 2, a0, a1);
-        else {
-            fvgradient(&f, x + 1, y + 1, w - 2, T - 2, a0, a1);
-            ffill(&f, x + 1, y + 1, w - 2, 1, platinum ? t->hilite : desk_mix(0xffffffu, a0, 80));
-        }
-        int left = x + 6, has_icon = !platinum && s->icon;
-        if (has_icon) { desk_paint_icon(&f.p, x + 6, y + 4, s->icon, 16); left = x + 28; }
-        int tx = t->title_center ? x + (w - tw) / 2 : left + 4;
-        if (tx + tw > right - 6) tx = right - 6 - tw;
-        if (tx < left + 4) tx = left + 4;
-        if (platinum && active && !s->alert) {
-            /* Pinstripes either side of the title: dark lines on rows 5, 7 .. 17
-             * and light lines offset by a pixel between them, blended into the band. */
-            for (int k = 0; k < 2; k++) {
-                int sx = k ? tx + tw + 8 : x + 6, ex = k ? right : tx - 8;
-                for (int r = 5; r <= 17 && ex > sx; r++) {
-                    if (r & 1) desk_paint_blend(&f.p, sx, y + r, ex - sx, 1, t->stripe_dark, 190);
-                    else desk_paint_blend(&f.p, sx + 1, y + r, ex - sx - 1, 1, t->stripe_light, 220);
-                }
+    /* Rounded frames: Platinum's vertical pinstripes or Blue's
+     * left-to-right caption, with the same title-button hit boxes. */
+    int horizontal = t->title_style == DESK_TITLE_HGRADIENT;
+    if (horizontal) fhgradient(&f, x + 1, y + 1, w - 2, T - 2, a0, a1);
+    else {
+        fvgradient(&f, x + 1, y + 1, w - 2, T - 2, a0, a1);
+        ffill(&f, x + 1, y + 1, w - 2, 1, platinum ? t->hilite : desk_mix(0xffffffu, a0, 80));
+    }
+    int left = x + 6, has_icon = !platinum && s->icon;
+    if (has_icon) { desk_paint_icon(&f.p, x + 6, y + 4, s->icon, 16); left = x + 28; }
+    int tx = t->title_center ? x + (w - tw) / 2 : left + 4;
+    if (tx + tw > right - 6) tx = right - 6 - tw;
+    if (tx < left + 4) tx = left + 4;
+    if (platinum && active && !s->alert) {
+        /* Pinstripes either side of the title: dark lines on rows 5, 7 .. 17
+         * and light lines offset by a pixel between them, blended into the band. */
+        for (int k = 0; k < 2; k++) {
+            int sx = k ? tx + tw + 8 : x + 6, ex = k ? right : tx - 8;
+            for (int r = 5; r <= 17 && ex > sx; r++) {
+                if (r & 1) desk_paint_blend(&f.p, sx, y + r, ex - sx, 1, t->stripe_dark, 190);
+                else desk_paint_blend(&f.p, sx + 1, y + r, ex - sx - 1, 1, t->stripe_light, 220);
             }
         }
-        struct desk_paint tp = sub(&f.p, left, y, right - left, T);
-        uint32_t emboss = platinum ? desk_mix(t->hilite, a1, 200) : desk_mix(0x000000u, a1, 120);
-        if (!horizontal) desk_paint_text(&tp, font, tx, y + 17, title, emboss);
-        desk_paint_text(&tp, font, tx, y + 16, title, ink);
     }
+    struct desk_paint tp = sub(&f.p, left, y, right - left, T);
+    uint32_t emboss = platinum ? desk_mix(t->hilite, a1, 200) : desk_mix(0x000000u, a1, 120);
+    if (!horizontal) desk_paint_text(&tp, font, tx, y + 17, title, emboss);
+    desk_paint_text(&tp, font, tx, y + 16, title, ink);
+
     for (int k = 0; k < 3; k++) {
         if (boxes[k][2] <= 0) continue;
         int kind = order[k] == DESK_TB_CLOSE ? DESK_GLYPH_CLOSE : order[k] == DESK_TB_MINIMIZE ? DESK_GLYPH_MINIMIZE :
                    s->collapsed ? DESK_GLYPH_EXPAND : s->maximized ? DESK_GLYPH_RESTORE : DESK_GLYPH_ZOOM;
         desk_paint_title_button(&f.p, boxes[k][0], boxes[k][1], boxes[k][2], boxes[k][3], kind, active,
                                 s->hot == order[k], s->pressed == order[k]);
-    }
-    if (classic) {
-        /* Classic frames are bevels only: a dark outer edge, the light top-left restored. */
-        frame_outline(&f, t->dark);
-        desk_paint_fill(&f.p, x, y, w - 1, 1, t->light); desk_paint_fill(&f.p, x, y, 1, h - 1, t->light);
-        return;
     }
     /* Side bevels, the line under the title and the content well. */
     int blue = t->title_style == DESK_TITLE_HGRADIENT;
@@ -750,10 +688,9 @@ int desk_settings_theme(const char *text, size_t length, char *name, size_t size
         if (k1 - k0 != 5 || memcmp(text + k0, "theme", 5) || v1 - v0 >= size || v1 - v0 >= 64) continue;
         char value[64];
         memcpy(value, text + v0, v1 - v0); value[v1 - v0] = 0;
-        int known = 0;
-        for (int i = 0; i < THEMES; i++) known |= !strcmp(themes[i].name, value);   /* exact, as cfg_theme_index */
-        if (!known) continue;
-        snprintf(name, size, "%s", value);
+        const char *canonical = desk_theme_preference(value);
+        if (!canonical) continue;
+        snprintf(name, size, "%s", canonical);
         found = 1;
     }
     return found ? 0 : -1;
