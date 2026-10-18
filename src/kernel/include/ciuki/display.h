@@ -6,7 +6,9 @@ int32_t display_syscall(struct trap_frame *);
 int display_query(struct ciuki_display_info *);
 int display_set(struct process *, uint16_t mode);
 uint32_t display_change_counter(void);
-void display_frame_complete(uint32_t generation);
+/* Successful desktop upload. Mode changes require a full frame; verified
+ * full-screen restoration accepts the first upload in the new generation. */
+void display_frame_complete(uint32_t generation, bool full_frame);
 void display_watchdog_poll(void);
 int display_worker_start(void);
 /* Entry refused safely: desktop is still/restored writable. No guest lease.

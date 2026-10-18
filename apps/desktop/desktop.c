@@ -679,6 +679,16 @@ static void display_poll(struct desktop *d)
     for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].current) mode = info.modes[i].id;
     if (counter == d->display_counter && mode == d->display_mode) return;
     if (!info.width || !info.height || info.width > 1600 || info.height > 1200) return;
+    struct ciuki_framebuffer_info fb;
+    if (ciuki_display_info(d->display,&fb) || fb.width!=info.width || fb.height!=info.height) return;
+    /* Full-screen return changes the lease, usually with the same layout.
+     * Learn its generation and damage it without allocating another surface. */
+    if (info.width==d->width && info.height==d->height) {
+        desk_accel_reset(d,fb.generation);
+        d->display_counter=counter; d->display_mode=mode;
+        d->lfb_bytes_per_pixel=(info.bpp+7)/8; d->display_pending=mode;
+        return;
+    }
     int output = ciuki_surface_create(info.width, info.height, CIUKI_SURFACE_XRGB8888);
     uint32_t *pixels = output < 0 ? MAP_FAILED : ciuki_surface_map(output, PROT_READ | PROT_WRITE);
     if (pixels == MAP_FAILED) { if (output >= 0) close(output); return; }
@@ -686,8 +696,7 @@ static void display_poll(struct desktop *d)
     close(d->output);
     d->pixels = pixels; d->output = output;
     desk_display_relayout(d, info.width, info.height);
-    struct ciuki_framebuffer_info fb;
-    if (!ciuki_display_info(d->display,&fb)) desk_accel_reset(d,fb.generation);
+    desk_accel_reset(d,fb.generation);
     if (d->shell) wallpaper_update(d);
     d->display_counter = counter;
     d->display_mode = mode;
@@ -1419,6 +1428,7 @@ int main(int argc, char **argv)
     d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
+    d->display_info=ciuki_display_info;
     d->gfx_benchmark=gfx_benchmark;
     if (desk_load_portrait(portrait)) { fprintf(stderr,"desktop: approved Ciuki asset unavailable\n"); free(portrait); free(d); return gate_setup_error(gate,GATE_SETUP_PORTRAIT,EIO); }
     d->portrait=portrait;

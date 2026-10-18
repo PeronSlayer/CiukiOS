@@ -20,11 +20,14 @@ static unsigned nres;
 static uint32_t inventory_generation;
 static bool inventory_truncated;
 static bool idle_proven[MAX_RES];
+static const char *takeover_owner[MAX_RES];
+static uint32_t takeover_revision[MAX_RES];
 static struct registry_stats counters;
 static struct pci_func pci[MAX_PCI];
 static unsigned npci;
 static bool irq_claim_attached(int h, gen_t generation);
 static void irq_quarantine_claim(int h, gen_t generation);
+static bool same_owner(const char *a, const char *b);
 
 static bool overlaps(const struct resource *r, enum res_type t, uint32_t s, uint32_t e)
 {
@@ -54,11 +57,19 @@ static int claim(enum res_type type, uint32_t start, uint32_t end, const char *o
         return -EINVAL;
     uint32_t f = irq_save();
     unsigned slot = nres;
+    bool takeover = false;
     for (unsigned i = 0; i < nres; i++) {
         if (slot == nres && res[i].state == RS_RELEASED)
             slot = i;
         bool shared = share && res[i].shareable && start == res[i].start && end == res[i].end &&
                       (res[i].state == RS_CLAIMED || res[i].state == RS_ACTIVE) && state == RS_CLAIMED;
+        if (overlaps(&res[i], type, start, end) && state == RS_CLAIMED && !share &&
+            res[i].state == RS_QUARANTINED && takeover_owner[i] &&
+            same_owner(owner, takeover_owner[i]) && start == res[i].start && end == res[i].end) {
+            slot = i;
+            takeover = true;
+            continue;
+        }
         if (overlaps(&res[i], type, start, end) && !shared) {
             const char *old_owner = res[i].owner;
             counters.conflicts++;
@@ -79,9 +90,11 @@ static int claim(enum res_type type, uint32_t start, uint32_t end, const char *o
     }
     res[slot] = (struct resource){ type, start, end, owner, generation, state, share };
     idle_proven[slot] = false;
+    takeover_owner[slot] = 0;
     if (slot == nres)
         nres++;
-    counters.live++;
+    if (takeover) counters.releases++;
+    else counters.live++;
     inventory_generation++;
     if (state == RS_CLAIMED)
         counters.claims++;
@@ -149,8 +162,37 @@ int registry_quarantine(int h, gen_t generation)
         counters.quarantines++;
         irq_quarantine_claim(h, generation);
     }
+    takeover_owner[h] = 0;
+    takeover_revision[h]++;
     irq_restore(f);
     return 0;
+}
+
+int registry_offer_takeover(int h, gen_t generation, const char *successor,
+                            registry_idle_proof_fn proof)
+{
+    if (!successor || !*successor || !proof || !(read_eflags() & 0x200)) return -EINVAL;
+    uint32_t f = irq_save();
+    if (!matches(h, generation) ||
+        (res[h].type != RES_PORT && res[h].type != RES_MMIO) ||
+        res[h].state == RS_RELEASED || res[h].state == RS_FIRMWARE ||
+        res[h].state == RS_DISCOVERED) {
+        irq_restore(f);
+        return -EINVAL;
+    }
+    registry_quarantine(h, generation);
+    uint32_t revision = takeover_revision[h];
+    irq_restore(f);
+    bool idle = proof(h, generation);
+    f = irq_save();
+    int e = -EINVAL;
+    if (matches(h, generation) && res[h].state == RS_QUARANTINED &&
+        takeover_revision[h] == revision) {
+        e = idle ? 0 : -EFAULT;
+        if (idle) { takeover_owner[h] = successor; inventory_generation++; }
+    }
+    irq_restore(f);
+    return e;
 }
 
 int registry_quiesce(int h, gen_t generation, registry_idle_proof_fn proof)

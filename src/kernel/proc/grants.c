@@ -18,7 +18,7 @@ int grants_display_suspend(bool suspended)
     display_suspended = suspended;
     return 0;
 }
-extern void display_frame_complete(uint32_t generation) __attribute__((weak));
+extern void display_frame_complete(uint32_t generation, bool full_frame) __attribute__((weak));
 bool grants_display_owner(const struct process *p)
 {
     if (!p || p->pid != grant_owner) return false;
@@ -219,7 +219,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
     present_cleanup(&op);
     if (!err) {
         activity.presents++;
-        if (display_frame_complete && full_frame) display_frame_complete(generation);
+        if (display_frame_complete) display_frame_complete(generation, full_frame);
     }
     return err;
 }

@@ -15,6 +15,7 @@ volatile uint64_t g_ticks;
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
 static struct resource leases[32];
+static bool offered[32];
 static unsigned nleases,claims_attempted,mapped,revoked;
 static unsigned fail_claim,fail_map,fail_activate;
 static bool extra_gpu;
@@ -28,10 +29,16 @@ int registry_claim(enum res_type t,uint32_t start,uint32_t end,const char *owner
 {
     assert(!share && (!strcmp(owner,"supersavage-mode") || !strcmp(owner,"firmware-test")));
     if (++claims_attempted==fail_claim) return -EBUSY;
-    for (unsigned i=0;i<nleases;i++)
-        assert(leases[i].state==RS_RELEASED || leases[i].end<=start || leases[i].start>=end || leases[i].type!=t);
-    assert(nleases<ARRAY_SIZE(leases));unsigned h=nleases++;
-    leases[h]=(struct resource){t,start,end,owner,h+1,RS_CLAIMED,false};return (int)h;
+    unsigned h=nleases;
+    for (unsigned i=0;i<nleases;i++) {
+        if (leases[i].state==RS_RELEASED || leases[i].end<=start || leases[i].start>=end || leases[i].type!=t) continue;
+        if (offered[i] && leases[i].state==RS_QUARANTINED && start==leases[i].start && end==leases[i].end &&
+            !strcmp(owner,"supersavage-mode")) h=i;
+        else return -EBUSY;
+    }
+    assert(h<ARRAY_SIZE(leases));if (h==nleases) nleases++;
+    gen_t next=leases[h].generation+1;
+    leases[h]=(struct resource){t,start,end,owner,next,RS_CLAIMED,false};offered[h]=false;return (int)h;
 }
 const struct resource *registry_get(unsigned h) { if (h==99) return &framebuffer;assert(h<nleases);return &leases[h]; }
 int registry_activate(int h,gen_t g)
@@ -91,7 +98,7 @@ static void runtime_fixture(void)
     register_window=aperture_window=linear_window=0;register_mapping=aperture_mapping=linear_mapping=0;
     memset(&saved_mode,0,sizeof(saved_mode));native_strikes=0;session_struck=restore_failed=recovery_confirmed=false;strike_count=0;adapter=0;
     for (unsigned i=0;i<3;i++) claims[i]=-1;
-    memset(leases,0,sizeof(leases));nleases=claims_attempted=mapped=revoked=0;
+    memset(leases,0,sizeof(leases));memset(offered,0,sizeof(offered));nleases=claims_attempted=mapped=revoked=0;
     fail_claim=fail_map=fail_activate=0;extra_gpu=false;runtime_fail_step=0;
     fixture();gpu.command=3;gpu.bar[0]=0xF0000000;gpu.bar[1]=0xE0000000;
     g_boot=(struct ciuki_boot_info){.kernel_start=0x100000,.kernel_end=0x500000,.e820_count=1};
@@ -116,6 +123,25 @@ static void ownership(void)
     for (unsigned i=0;i<3;i++) assert(leases[i].state==RS_RELEASED);
     assert(!memcmp(card.vga.plane,original.vga.plane,sizeof(card.vga.plane)));
     puts("PASS SuperSavage provider ownership: side-effect-free PCI/BAR/decode preflight, exclusive VGA/MMIO/A000 leases, halfword stream readback, revoked aliases before release");
+}
+static void accelerator_quarantine(void)
+{
+    for (unsigned offer=0;offer<2;offer++) {
+        runtime_fixture();
+        leases[0]=(struct resource){RES_PORT,0x3B0,0x3E0,"savage-vga",71,RS_QUARANTINED,false};
+        leases[1]=(struct resource){RES_MMIO,0xF0000000,0xF0080000,"savage2d",72,RS_QUARANTINED,false};
+        nleases=2;offered[0]=offered[1]=offer;
+        assert(!supersavage_display_prepare(&desktop,0x13));
+        int e=supersavage_display_begin(0x13);
+        if (!offer) {
+            assert(e==-EBUSY && !card.reads && leases[0].generation==71 && leases[1].generation==72);
+        } else {
+            assert(!e && leases[0].state==RS_ACTIVE && leases[1].state==RS_ACTIVE);
+            assert(leases[0].generation!=71 && leases[1].generation!=72);
+        }
+        assert(!supersavage_display_end());
+    }
+    puts("PASS f3-43 SuperSavage: accelerator quarantine with proven access handoff enters native mode; unoffered quarantine refuses without VGA access");
 }
 static void packed_ownership(void)
 {
@@ -234,7 +260,7 @@ static void strikes_and_retry(void)
 }
 int main(void)
 {
-    ownership();packed_ownership();refusal_and_recovery();strikes_and_retry();
+    ownership();accelerator_quarantine();packed_ownership();refusal_and_recovery();strikes_and_retry();
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);
     puts("SuperSavage display provider host tests: PASS");return 0;
 }

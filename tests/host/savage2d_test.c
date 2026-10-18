@@ -14,13 +14,15 @@ static struct pci_func binding_gpu;
 static bool binding_allowed;
 static struct resource binding_resources[4];
 static bool binding_port_conflict;
+static unsigned binding_fail_activate, binding_fail_claim, binding_fail_release;
+static const char *binding_successor[4];
 static int binding_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,bool share)
 {
     CHECK(!share && !strcmp(o,t==RES_PORT ? "savage-vga" : "savage2d"));
     if (t==RES_PORT) CHECK(s==0x3b0 && e==0x3e0);
     else CHECK(t==RES_MMIO && s==(binding_gpu.bar[0]&~15u) && e==s+SAVAGE_MMIO_BYTES);
     binding_claims++;
-    if (!binding_allowed || (t==RES_PORT && binding_port_conflict)) return -EBUSY;
+    if (!binding_allowed || binding_claims==binding_fail_claim || (t==RES_PORT && binding_port_conflict)) return -EBUSY;
     unsigned h=t==RES_PORT ? 1 : 2;
     CHECK(binding_resources[h].state==RS_RELEASED || !binding_resources[h].owner);
     binding_resources[h]=(struct resource){t,s,e,o,43+h,RS_CLAIMED,false};
@@ -29,7 +31,7 @@ static int binding_claim(enum res_type t,uint32_t s,uint32_t e,const char *o,boo
 static const struct resource *binding_get(unsigned i)
 { return i==1 || i==2 ? &binding_resources[i] : registry_get(i); }
 static int binding_activate(int h, gen_t gen)
-{ CHECK((h==1 || h==2) && gen==43u+h && binding_resources[h].state==RS_CLAIMED); binding_resources[h].state=RS_ACTIVE; return 0; }
+{ CHECK((h==1 || h==2) && gen==43u+h && binding_resources[h].state==RS_CLAIMED); if ((unsigned)h==binding_fail_activate) return -EIO; binding_resources[h].state=RS_ACTIVE; return 0; }
 static int binding_quarantine(int h, gen_t gen)
 { CHECK((h==1 || h==2) && gen==43u+h); binding_resources[h].state=RS_QUARANTINED; return 0; }
 static int binding_quiesce(int h, gen_t gen, registry_idle_proof_fn proof)
@@ -39,7 +41,16 @@ static int binding_quiesce(int h, gen_t gen, registry_idle_proof_fn proof)
     return proof(h,gen) ? 0 : -EIO;
 }
 static int binding_release(int h, uint32_t gen)
-{ CHECK((h==1 || h==2) && gen==43u+h && binding_resources[h].state==RS_QUIESCING); binding_resources[h].state=RS_RELEASED; return 0; }
+{ CHECK((h==1 || h==2) && gen==43u+h && binding_resources[h].state==RS_QUIESCING); if ((unsigned)h==binding_fail_release) return -EIO; binding_resources[h].state=RS_RELEASED; return 0; }
+static int binding_offer_takeover(int h, gen_t gen, const char *successor, registry_idle_proof_fn proof)
+{
+    CHECK((h==1 || h==2) && gen==43u+h && !strcmp(successor,"supersavage-mode"));
+    binding_resources[h].state=RS_QUARANTINED;
+    if (!proof(h,gen)) return -EFAULT;
+    binding_successor[h]=successor; return 0;
+}
+static bool binding_available(unsigned h)
+{ return binding_resources[h].state==RS_RELEASED || binding_successor[h]; }
 static uint8_t test_inb(uint16_t);
 static void test_outb(uint16_t,uint8_t);
 static void *binding_reserve(uint32_t capacity)
@@ -50,6 +61,7 @@ static void *binding_reserve(uint32_t capacity)
 #define registry_quarantine binding_quarantine
 #define registry_quiesce binding_quiesce
 #define registry_release binding_release
+#define registry_offer_takeover binding_offer_takeover
 #define inb test_inb
 #define outb test_outb
 #define vmm_reserve_mmio binding_reserve
@@ -67,6 +79,7 @@ static void sweep_free(void *p,size_t n) { (void)n; free(p); }
 #undef registry_quarantine
 #undef registry_quiesce
 #undef registry_release
+#undef registry_offer_takeover
 #undef inb
 #undef outb
 #undef vmm_reserve_mmio
@@ -716,6 +729,8 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
     binding_allowed=true; binding_claims=0; binding_pci_count=1;
     binding_port_conflict=false; memset(binding_resources,0,sizeof(binding_resources));
+    binding_fail_activate=binding_fail_claim=binding_fail_release=0;
+    memset(binding_successor,0,sizeof(binding_successor));
     binding_gpu=(struct pci_func){.class_code=3,.vendor=0x5333,.device=0x8c2e,.command=3,
         .bar={0xe1000000,device.phys}};
     settings_volume=(struct fat_volume){.mounted=true};
@@ -995,10 +1010,50 @@ static void port_ownership(void)
     savage2d_quarantine("ownership_test"); acceleration=NULL;
     CHECK(!fbdev_accel_info(device.generation,&snapshot) && snapshot.quarantined && !snapshot.capabilities &&
         snapshot.driver==CIUKI_ACCEL_DRIVER_SAVAGE);
-    CHECK(!(m.cr[0x40]&1u) && !engine.active && binding_resources[1].state==RS_QUARANTINED);
-    CHECK(binding_resources[2].state==RS_QUARANTINED && port_claim>=0 && reg_claim>=0);
+    CHECK(!(m.cr[0x40]&1u) && !engine.active && binding_resources[1].state==RS_RELEASED);
+    CHECK((engine.submitted && !engine.cpu_safe ? binding_resources[2].state==RS_QUARANTINED && !binding_successor[2] : binding_available(2)) && port_claim<0 && reg_claim<0);
     finish();
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
+static void failed_access_handoff(void)
+{
+    for (unsigned failure=0;failure<6;failure++) {
+        boot_fixture_accel(false);
+        if (failure==0) binding_fail_activate=1;
+        if (failure==1) binding_fail_claim=2;
+        if (failure==2) binding_fail_activate=2;
+        if (failure>=3) m.ignore_fill=true;
+        if (failure==4) binding_fail_release=1;
+        if (failure==5) binding_fail_release=2;
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        CHECK(!acceleration && engine.quarantined && port_claim<0);
+        CHECK(binding_available(1));
+        if (failure>=2) CHECK(binding_available(2));
+        if (failure==4) CHECK(binding_successor[1] && binding_resources[1].state==RS_QUARANTINED);
+        if (failure==5) CHECK(binding_successor[2] && binding_resources[2].state==RS_QUARANTINED);
+        unsigned reads=m.port_reads,writes=m.port_writes,claims=binding_claims;
+        CHECK(disk_size>=14); /* first boot failure survives a power cut */
+        fbdev_accel_schedule(&settings_vfs);
+        CHECK(!accel_marker_pending(NULL) && binding_claims==claims);
+        CHECK(m.port_reads==reads && m.port_writes==writes);
+        software_desktop();finish();
+    }
+    boot_fixture_accel(false);
+    attempt_in_progress=true; /* BEGIN has not yet committed/closed the marker. */
+    struct savage_io io=model_io();
+    CHECK(!init_with_io(&device,0,&io) && !binding_claims && !m.port_reads && !m.port_writes && !m.packets);
+    CHECK(log_matches("attempt_not_persisted")==1);
+    finish();
+    const int unqualified[]={0,3,24}; /* measured failure, block writes, tiling */
+    for (unsigned i=0;i<ARRAY_SIZE(unqualified);i++) {
+        boot_fixture_accel(false);registry_setting_present=true;registry_setting=unqualified[i];
+        fbdev_accel_schedule(&settings_vfs);run_accel_init();
+        CHECK(!acceleration && !binding_claims && !marker_commits && !m.port_reads && !m.port_writes && !m.packets);
+        CHECK(log_matches("config_unqualified")==1);
+        finish();
+    }
+    registry_setting_present=false;
+    puts("PASS f3-43 Savage: activation/register-claim/pixel-test failures release VGA access, failed release offers exact native takeover, absent durable authorization touches no registers");
 }
 static void decorated_readbacks(void)
 {
@@ -1454,7 +1509,7 @@ static void gbd_idle_and_async_regressions(void)
         CHECK(!memcmp(last,&before,4));
         if (failure) {
             CHECK(!acceleration && engine.quarantined && engine.cpu_safe && engine.final_idle_checked);
-            CHECK(disk_size==30 && binding_resources[1].state==RS_QUARANTINED && binding_resources[2].state==RS_QUARANTINED);
+            CHECK(disk_size==30 && binding_resources[1].state==RS_RELEASED && (engine.submitted && !engine.cpu_safe ? binding_resources[2].state==RS_QUARANTINED && !binding_successor[2] : binding_available(2)));
             CHECK(log_matches("bci_test_readback_failed")>=1 && log_matches("savage init reg=")<=40);
             if (failure==2) CHECK(log_matches("read=664a8166 read_valid=1 restored=1")==1);
         } else {
@@ -1570,8 +1625,8 @@ static void queued_gbd_depth(void)
             CHECK(log_matches(bpp==32 ? "wrote=008641b6 read=008641b6" : "wrote=000041b6 read=000041b6")==1);
             CHECK(log_matches("bci_test result=ok error=0")==1);
         } else {
-            CHECK(disk_size==30 && binding_resources[1].state==RS_QUARANTINED &&
-                binding_resources[2].state==RS_QUARANTINED);
+            CHECK(disk_size==30 && binding_resources[1].state==RS_RELEASED &&
+                (engine.submitted && !engine.cpu_safe ? binding_resources[2].state==RS_QUARANTINED && !binding_successor[2] : binding_available(2)));
             CHECK(log_matches(variant==2 ? "bci_test_readback_failed" : "idle_timeout")>=1);
             CHECK(log_matches(variant>=3 ? "bci_test result=skipped" : "bci_test result=failed")==1);
             CHECK(engine.cpu_safe==(variant!=3));
@@ -1700,6 +1755,13 @@ static void hardware_sweep_default(void)
         memcpy(last,&before,4);
         fbdev_accel_schedule(&settings_vfs); run_accel_init();
         bool pass=config!=0;
+        if (!pass) {
+            CHECK(!engine.touched && !engine.active && !engine.submitted && !acceleration);
+            CHECK(!disk_size && !marker_commits && !binding_claims && !m.port_reads && !m.port_writes);
+            CHECK(log_matches("config_unqualified")==1);
+            CHECK(!memcmp(last,&before,4));
+            finish(); continue;
+        }
         CHECK(engine.descriptor==(pass ? 0x10200401u : 0x10200409u));
         CHECK(engine.active==pass && engine.quarantined==!pass);
         CHECK(!!engine.ops.capabilities(&engine)==pass);
@@ -1734,7 +1796,7 @@ int main(void)
     glue_stalled_clock(0);            /* never idle, frozen clock */
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
     deferred_boots(); async_marker(); optional_alias();
-    port_bootstrap(); port_ownership();
+    port_bootstrap(); port_ownership(); failed_access_handoff();
     decorated_readbacks(); activation_timing(); initial_idle_diagnostics();
     supersavage_window_and_records();
     halfword_glue_and_16bit_marker();

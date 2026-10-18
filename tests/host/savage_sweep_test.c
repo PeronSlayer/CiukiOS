@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <ciuki/kernel.h>
 #include <ciuki/savage2d.h>
+#include <ciuki/registry.h>
 unsigned fs_host_contig_fail,fs_host_contig_live;
 struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
@@ -14,6 +15,13 @@ bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
 uint64_t ktime_cycles(void) { return 0; }
 int registry_quarantine(int handle,uint32_t generation) { (void)handle;(void)generation;return 0; }
+const struct resource *registry_get(unsigned handle) { (void)handle;assert(0);return 0; }
+int registry_quiesce(int h,gen_t g,registry_idle_proof_fn proof)
+{ (void)h;(void)g;(void)proof;assert(0);return -EIO; }
+int registry_release(int h,uint32_t g) { (void)h;(void)g;assert(0);return -EIO; }
+int registry_offer_takeover(int h,gen_t g,const char *owner,registry_idle_proof_fn proof)
+{ (void)h;(void)g;(void)owner;(void)proof;assert(0);return -EIO; }
+void vmm_revoke_mmio(void *p,uint32_t bytes) { (void)p;(void)bytes;assert(0); }
 int udelay(uint32_t us) { (void)us;return 0; }
 void framebuffer_write_drain(void) {}
 bool fbdev_rect_valid(const struct fb_rect *r) { return r && r->x>=0 && r->y>=0 && r->width>0 && r->height>0; }

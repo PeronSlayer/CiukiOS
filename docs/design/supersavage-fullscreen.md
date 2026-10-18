@@ -3,6 +3,36 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## f3-43 lease and desktop-present amendment (2026-10-18)
+
+The [accelerator ownership amendment](savage-2d.md#f3-43-failed-acceleration-relinquishes-scanout-access)
+records the X.Org/Linux source recheck and port/MMIO split. The native
+provider can consume an exact, explicitly offered `supersavage-mode` lease
+after a failed accelerator has finished CPU I/O and revoked its safe aliases.
+Unsafe MMIO and unoffered quarantines still conflict. This changes ownership,
+not the f3-36/f3-37/f3-39 mode programming or three-strike policy.
+
+A refusal before framebuffer revocation does not arm `awaiting_frame`.
+Rollback after actual revocation still requests a desktop repaint. Native or
+firmware restoration already verifies scanout, so its first successful desktop
+upload in the current framebuffer generation clears that wait, including a
+strip upload. Failed uploads and stale generations do not acknowledge it.
+Display Properties mode changes retain their full-frame watchdog requirement.
+
+The desktop reads the existing framebuffer-info query before drawing pending
+damage, refreshing its accelerator generation and requesting full damage when
+the lease changed. A busy query preserves damage for retry. The notification
+counter path also requires a successful framebuffer-info query before consuming
+the counter; same-layout returns reuse the desktop surface. RESYNC already
+invalidates scanout, and a new generation additionally calls `desk_accel_reset`.
+This ensures a first-frame whole-screen upload even if damage precedes the
+counter poll, without weakening stale-generation validation in the kernel.
+
+Host coverage checks refused-entry retry inside 100 ms, first upload inside
+one frame, unsafe/quarantined lease rejection and a safe accelerator handoff
+followed by native entry. These are host-model results; T23 and QEMU evidence
+on a built image belongs to the lead.
+
 ## f3-37 mode inventory and guest VBE amendment (2026-10-16)
 
 The implementation previously admitted every BIOS mode in `cvga_find_mode`,

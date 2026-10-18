@@ -175,6 +175,8 @@ int supersavage_display_begin(uint16_t mode)
     const uint32_t starts[]={0x3B0,adapter->bar[0]&~15u,0xA0000};
     const uint32_t lengths[]={0x30,MODE_MMIO_BYTES,0x20000};
     for (unsigned i=0;i<3;i++) {
+        /* The registry can consume an exact-range offer from a stopped
+         * accelerator. Unoffered/unsafe quarantines still conflict. */
         claims[i]=registry_claim(types[i],starts[i],starts[i]+lengths[i],"supersavage-mode",false);
         if (claims[i]<0) { e=claims[i]; claims[i]=-1; goto failed; }
         generations[i]=registry_get(claims[i])->generation;

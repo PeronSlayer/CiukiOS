@@ -36,6 +36,7 @@ static unsigned selected_config;
 static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
 static void init_failure_readback(struct savage2d *);
+static void relinquish_access(void);
 static uint8_t port_cr_read(struct savage2d *s, uint8_t index)
 {
     s->io.write_port(s->io.ctx, 0x3d4, index);
@@ -226,7 +227,7 @@ static int sync_engine(void *ctx)
          * quarantined engine at frame rate, even if it remains unsafe. */
         if (!s->final_idle_checked) {
             s->final_idle_checked = true;
-            if (s->submitted && s->status_ready) {
+            if (s->submitted && s->status_ready && !s->cpu_safe) {
                 s->io.drain(s->io.ctx);
                 (void)wait_idle(s);
             }
@@ -553,7 +554,7 @@ static uint64_t hw_now(void *ctx)
 static uint64_t (*activation_now)(void *) = hw_now;
 static void *activation_ctx;
 static uint64_t activation_start, trace_us;
-static bool attempt_in_progress;
+static bool attempt_in_progress, attempt_persisted;
 static uint64_t activation_elapsed(void)
 { return activation_now(activation_ctx) - activation_start; }
 static void init_record(const char *bank, uint32_t reg, unsigned width, uint32_t wrote, uint32_t read)
@@ -691,6 +692,7 @@ const struct accel_ops *savage2d_fallback_ops(void)
 {
     if (!engine.quarantined || !engine.submitted) return 0;
     (void)sync_engine(&engine);
+    relinquish_access();
     return engine.cpu_safe ? 0 : &engine.ops;
 }
 struct bci_probe {
@@ -753,9 +755,7 @@ static void hw_fault(void *ctx)
     (void)ctx;
     engine.active = false;
     restore_mmio(&engine);
-    if (reg_claim >= 0) registry_quarantine(reg_claim, reg_generation);
-    if (cursor_claim >= 0) registry_quarantine(cursor_claim, cursor_generation);
-    if (port_claim >= 0) registry_quarantine(port_claim, port_generation);
+    relinquish_access();
     record();
 }
 static bool safe_extent(uint32_t base, uint32_t size)
@@ -771,26 +771,53 @@ static bool safe_extent(uint32_t base, uint32_t size)
 static bool cursor_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;
-    if (!engine.cpu_safe) return false;
-    vmm_revoke_mmio(cursor_mapping, PAGE_SIZE); cursor_mapping = 0;
+    if (engine.submitted && !engine.cpu_safe) return false;
+    if (cursor_mapping) vmm_revoke_mmio(cursor_mapping, PAGE_SIZE);
+    cursor_mapping = 0;
     return true;
 }
 static bool register_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;
-    if (!engine.cpu_safe) return false;
-    vmm_revoke_mmio((void *)registers,SAVAGE_MMIO_BYTES); registers=0;
+    if (engine.submitted && !engine.cpu_safe) return false;
+    if (registers) vmm_revoke_mmio((void *)registers,SAVAGE_MMIO_BYTES);
+    registers=0;
     return true;
 }
 static bool port_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;
-    return !engine.active && !engine.mmio_saved && engine.cpu_safe;
+    /* VGA I/O is synchronous CPU work. An outstanding BCI command retains
+     * MMIO and its guard, but cannot perform a CPU port access. */
+    return !engine.active && !engine.mmio_saved;
+}
+static void release_access(int *handle, gen_t generation, registry_idle_proof_fn proof)
+{
+    if (*handle < 0) return;
+    const struct resource *r = registry_get(*handle);
+    if (!r || r->generation != generation || r->state == RS_RELEASED) {
+        *handle = -1;
+        return;
+    }
+    int e = -EIO;
+    if (r->state == RS_ACTIVE) {
+        e = registry_quiesce(*handle, generation, proof);
+        if (!e) e = registry_release(*handle, generation);
+    }
+    if (e) e = registry_offer_takeover(*handle, generation, "supersavage-mode", proof);
+    if (!e) *handle = -1;
+    else registry_quarantine(*handle, generation);
+}
+static void relinquish_access(void)
+{
+    release_access(&port_claim, port_generation, port_idle);
+    release_access(&cursor_claim, cursor_generation, cursor_idle);
+    release_access(&reg_claim, reg_generation, register_idle);
 }
 static int runtime_stop(void *ctx)
 {
     int err = stop_engine(ctx);
-    if (err || engine.quarantined) return err;
+    if (err || engine.quarantined) { hw_fault(0); return err; }
     if (cursor_claim >= 0 && cursor_mapping) {
         err = registry_quiesce(cursor_claim, cursor_generation, cursor_idle);
         if (!err) err = registry_release(cursor_claim, cursor_generation);
@@ -868,6 +895,7 @@ static const struct accel_ops *decline(const char *reason)
     klog("[accel] savage quarantined reason=%s us=%llu reset_us=%llu poll_us=%llu trace_us=%llu status=%08x status_valid=%u",
         reason, activation_elapsed(), engine.reset_us, engine.poll_us, trace_us, engine.status, engine.status_logged);
     attempt_in_progress = false;
+    attempt_persisted = false;
     return 0;
 }
 static const char *eligibility(const struct fb_device *d, const struct pci_func **found)
@@ -911,6 +939,12 @@ static void load_config(struct vfs *vfs)
         setting>=0 && setting<(int32_t)SAVAGE_CONFIGS) selected_config=(unsigned)setting;
     klog("[accel] savage EngineConfig=%u",selected_config);
 }
+static bool production_config(const struct pci_func *gpu)
+{
+    /* Hardware-check evidence qualifies the established linear production
+     * recipe, not every diagnostic EngineConfig override. */
+    return selected_config == (gpu->device == 0x8a22 ? 0u : 1u);
+}
 static const struct accel_ops *init_with_io(const struct fb_device *d, struct vfs *vfs,
                                           const struct savage_io *io)
 {
@@ -923,6 +957,8 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
     const char *reason = eligibility(d, &gpu);
     if (reason) return decline(reason);
     if (vfs) load_config(vfs);
+    if (!production_config(gpu)) return decline("config_unqualified");
+    if (!vfs && !attempt_persisted) return decline("attempt_not_persisted");
     /* With a VFS the marker is handled here (host harness); the kernel caller
      * passes NULL and persists/clears it outside the presenter mutex
      * (savage2d_attempt_begin/end): file I/O takes the ATA channel mutex and
@@ -938,6 +974,9 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
         if (marker) { attempt_blocked = true; return decline("marker_unavailable"); }
         klog("[accel] savage attempt persisted");
     }
+    /* Consume one durable authorization. BEGIN is allowed to yield during
+     * file I/O, so its in-progress flag alone cannot authorize hardware. */
+    attempt_persisted = false;
     klog("[accel] savage probe pci=%04x:%04x cmd=%04x bar0=%08x bar1=%08x lfb=%08x vram=%u",
         gpu->vendor, gpu->device, gpu->command, gpu->bar[0], gpu->bar[1], d->phys,
         g_boot.display.tag == CBI_DISPLAY_TAG ? g_boot.display.vram_bytes : 0);
@@ -1018,8 +1057,14 @@ int savage2d_attempt_begin(struct vfs *vfs)
 {
     load_config(vfs);
     activation_now = hw_now; activation_ctx = 0; activation_start = hw_now(0);
-    trace_us = 0; attempt_in_progress = true;
+    trace_us = 0; attempt_in_progress = true; attempt_persisted = false;
     if (engine.quarantined || attempt_blocked) { attempt_in_progress = false; return -1; }
+    const struct pci_func *gpu;
+    const char *reason = eligibility(fbdev_get(), &gpu);
+    if (reason || !production_config(gpu)) {
+        decline(reason ? reason : "config_unqualified");
+        return -1;
+    }
     bool previous = false;
     int marker = attempt_marker(vfs, false, &previous);
     if (previous) {
@@ -1029,6 +1074,7 @@ int savage2d_attempt_begin(struct vfs *vfs)
         return -1;
     }
     if (marker) { attempt_blocked = true; decline("marker_unavailable"); return -1; }
+    attempt_persisted = true;
     klog("[accel] savage attempt persisted");
     return 0;
 }

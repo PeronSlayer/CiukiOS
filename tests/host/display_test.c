@@ -190,6 +190,7 @@ static void fixture(void)
     native_results[0]=return_timing[0]=frame_timing[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     log_requests=log_errors=0;
+    awaiting_restored_frame=false;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
@@ -245,8 +246,9 @@ static void switch_tests(void)
     assert(fbdev_get()->mode_id == 0x111 && fbdev_get()->phys == 0xE1000003 && fbdev_get()->bpp == 16 && display_change_counter() == 1);
     struct ciuki_display_info q = {.version = 1, .size = sizeof(q)}; assert(!display_query(&q) && q.modes[1].current);
     assert(display_set(&desktop, 0x118) == -EBUSY);
-    display_frame_complete(fbdev_get()->generation - 1); assert(awaiting_frame);
-    display_frame_complete(fbdev_get()->generation); assert(!awaiting_frame);
+    display_frame_complete(fbdev_get()->generation - 1, true); assert(awaiting_frame);
+    display_frame_complete(fbdev_get()->generation, false); assert(awaiting_frame);
+    display_frame_complete(fbdev_get()->generation, true); assert(!awaiting_frame);
     g_ticks += 10001; display_watchdog_poll(); assert(switches == 1);
     uint32_t rgb = 0x00FF8000;
     struct fb_surface s = {&rgb, 1, 1, 4, 4}; struct fb_rect r = {0,0,1,1};
@@ -272,7 +274,7 @@ static void watchdog_tests(void)
 {
     fixture(); assert(!display_set(&desktop, 0x111));
     g_ticks += 9999; display_watchdog_poll(); assert(switches == 1);
-    g_ticks++; display_frame_complete(fbdev_get()->generation); assert(awaiting_frame);
+    g_ticks++; display_frame_complete(fbdev_get()->generation, true); assert(awaiting_frame);
     display_watchdog_poll(); assert(switches == 2 && fbdev_get()->mode_id == 0x118 && display_change_counter() == 2);
     display_watchdog_poll(); assert(switches == 2);
     fixture(); g_ticks = UINT64_MAX - 5000; assert(!display_set(&desktop, 0x111));
@@ -320,7 +322,7 @@ static void fullscreen_tests(void)
     uint32_t rgb=0x00123456;
     struct fb_surface frame={&rgb,1,1,4,4};struct fb_rect rect={0,0,1,1};
     assert(!fbdev_present(&frame,&rect) && fbdev_get()->mapped[0]==0x56 && fbdev_get()->mapped[2]==0x12);
-    display_frame_complete(fbdev_get()->generation);
+    display_frame_complete(fbdev_get()->generation, true);
     assert(!awaiting_frame && strstr(frame_timing,"budget_ms=2000 overrun=0"));
     g_ticks+=10000;display_watchdog_poll();assert(switches==1);
     fixture();is_supersavage=native_supported=true;
@@ -338,7 +340,7 @@ static void fullscreen_tests(void)
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x13));display_fullscreen_return_request();g_ticks+=1180;
     assert(!display_fullscreen_end() && strstr(return_timing,"budget_ms=2000 overrun=0 result=0"));
-    g_ticks+=821;display_frame_complete(fbdev_get()->generation);
+    g_ticks+=821;display_frame_complete(fbdev_get()->generation, true);
     assert(strstr(frame_timing,"desktop_frame_ms=2001 budget_ms=2000 overrun=1") && !awaiting_frame);
     fixture();is_supersavage=native_supported=true;
     assert(!display_fullscreen_begin(0x13));fail_framebuffer_claim=true;
@@ -355,7 +357,7 @@ static void fullscreen_tests(void)
         assert(!display_fullscreen_end() && fbdev_get()->present && fbdev_get()->mapped && !suspended);
         assert(switches==failure && native_ends==1);
         assert(display_fullscreen_write(0,"x",1)==-EIO);
-        display_frame_complete(fbdev_get()->generation);
+        display_frame_complete(fbdev_get()->generation, true);
         assert(!awaiting_frame && !awaiting_native_frame);
     }
     puts("PASS f3-37 display: all four packed modes retain native success / mediated VBE fallback, returned grant and first desktop frame; writes confined to active transaction");
@@ -369,7 +371,7 @@ static void fullscreen_tests(void)
     const unsigned expected[]={0,1,2,3,9,10,5,6,7,8};
     assert(sequence_count==ARRAY_SIZE(expected) && !memcmp(sequence,expected,sizeof(expected)));
     assert(!display_fullscreen_end());
-    display_frame_complete(fbdev_get()->generation); assert(!awaiting_frame);
+    display_frame_complete(fbdev_get()->generation, true); assert(!awaiting_frame);
     fixture(); fs_begin_failure=true;
     assert(display_fullscreen_begin(3)==DISPLAY_FULLSCREEN_WINDOWED && !suspended && fbdev_get()->present);
     fixture(); assert(!display_fullscreen_begin(3)); fs_end_failure=true;
@@ -389,6 +391,34 @@ static void worker_tests(void)
     assert(!display_fullscreen_begin(0x13) && workers_created == 1);
     assert(!display_fullscreen_end());
     puts("PASS display worker: started once before any mode switch, reused by full-screen entry");
+}
+static void refused_retry_tests(void)
+{
+    fixture(); is_supersavage=true;
+    uint32_t old_generation=fbdev_get()->generation;
+    assert(display_fullscreen_begin(0x13)==DISPLAY_FULLSCREEN_WINDOWED);
+    assert(!awaiting_frame && !awaiting_restored_frame && !changing && !suspended);
+    assert(fbdev_get()->generation==old_generation && !sequence_count);
+    g_ticks+=50; native_supported=true;
+    assert(!display_fullscreen_begin(0x13));
+    assert(!display_fullscreen_end() && awaiting_frame && awaiting_restored_frame);
+    assert(fbdev_get()->generation!=old_generation);
+    display_frame_complete(old_generation,false); assert(awaiting_frame);
+    g_ticks+=16;
+    /* Successful strip upload after a verified restore acknowledges the new
+     * lease. display_set still requires a full frame (switch_tests). */
+    display_frame_complete(fbdev_get()->generation,false);
+    assert(!awaiting_frame && !awaiting_restored_frame && !awaiting_native_frame);
+    assert(!display_fullscreen_begin(0x13));
+    assert(!display_fullscreen_end());
+    fixture(); is_supersavage=native_supported=true; native_begin_error=-EINVAL;
+    assert(display_fullscreen_begin(0x13)==DISPLAY_FULLSCREEN_WINDOWED);
+    assert(awaiting_frame && awaiting_restored_frame && !suspended && fbdev_get()->present);
+    g_ticks+=16; display_frame_complete(fbdev_get()->generation,false);
+    native_begin_error=0;
+    assert(!display_fullscreen_begin(0x13) && native_begins==2);
+    assert(!display_fullscreen_end());
+    puts("PASS f3-43 display: refusal without revoke retries in 50ms; failed-entry restore accepts first new-generation strip in 16ms, stale frame refused, immediate retry");
 }
 static void return_logging_tests(void)
 {
@@ -419,6 +449,7 @@ static void return_logging_tests(void)
 }
 int main(void)
 {
+    refused_retry_tests();
     return_logging_tests();
     fixture(); assert(display_check_begin(0x111)==-EPERM && !switches);
     g_boot.flags|=CBI_F_HW_CHECK; check_boot=true;

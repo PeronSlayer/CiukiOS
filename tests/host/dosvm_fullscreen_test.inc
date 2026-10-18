@@ -108,6 +108,12 @@ static void test_fullscreen_service(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&refused,sizeof(refused)) &&
           !(refused.changed & CIUKI_DOSVM_FULLSCREEN_REFUSED));
     fs_refuse=false;
+    uint64_t retry_tick=g_ticks;
+    g_ticks+=50;
+    CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && !v->fullscreen_error);
+    CHECK(g_ticks-retry_tick<100);
+    CHECK(!dosvm_fullscreen_leave(key,false) && !v->fullscreen && !v->fullscreen_hold);
+    CHECK(!v->fullscreen_error && !fs_ports);
     fs_test_checkpoint_pin=true;
     fs_fail_checkpoint="vm-park";
     unsigned before=fs_begins;

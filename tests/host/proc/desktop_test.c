@@ -68,7 +68,8 @@ static unsigned operator_prompts;
 void console_operator_prompt(bool announce) { if (announce) operator_prompts++; }
 /* f3-02: the screen console stays dark while a process holds the display grant. */
 static bool console_owned; static unsigned console_owned_changes;
-static unsigned display_frames;
+static unsigned display_frames, display_uploads;
+static bool display_full_frame;
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
 void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -707,7 +708,9 @@ static void test_desktop_present(void)
           !t->cleanup && !t->operation && display_frames == acknowledged + 1);
     device.generation = 1;
     whole.height = 1;
+    unsigned uploaded=display_uploads;
     CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    CHECK(display_uploads==uploaded+1 && !display_full_frame);
     /* An old larger surface clipped onto a smaller new screen is not a
      * complete compositor frame for the mode watchdog. */
     device.width = 1024; whole.height = 2;
@@ -1440,5 +1443,6 @@ int main(int argc, char **argv)
     return 0;
 }
 
-void display_frame_complete(uint32_t gen) { CHECK(gen == 1); display_frames++; }
+void display_frame_complete(uint32_t gen, bool full_frame)
+{ CHECK(gen == 1); display_uploads++; display_full_frame=full_frame; if (full_frame) display_frames++; }
 uint32_t display_change_counter(void) { return 42; }

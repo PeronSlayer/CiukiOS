@@ -15,6 +15,17 @@ void desk_test_profile(const char *name) { if (!strcmp(name,"bars_menus")) shell
 static uint32_t *scanout;
 static unsigned caps, copies, window_copies, fills, uploads, cursor_moves;
 static uint64_t uploaded_pixels;
+static uint32_t expected_generation=55;
+static unsigned full_uploads;
+static int query_failure;
+static int display_info(int display,struct ciuki_framebuffer_info *out)
+{
+    assert(display==7);
+    if (query_failure) { errno=EBUSY; return -1; }
+    *out=(struct ciuki_framebuffer_info){.size=sizeof(*out),.width=d.width,.height=d.height,
+        .bpp=32,.generation=expected_generation};
+    return 0;
+}
 static int fail_copy, fail_cursor, fail_cursor_set, fail_fill, shown, cursor_x, cursor_y;
 static struct ciuki_accel_request cursor;
 static int upload(int display,int surface,const struct ciuki_rect *r)
@@ -24,6 +35,7 @@ static int upload(int display,int surface,const struct ciuki_rect *r)
         memcpy(scanout+((uint32_t)r->dst_y+y)*d.width+(uint32_t)r->dst_x,
                d.pixels+((uint32_t)r->src_y+y)*d.width+(uint32_t)r->src_x,r->width*4);
     uploads++; uploaded_pixels+=(uint64_t)r->width*r->height;
+    if (!r->dst_x && !r->dst_y && r->width==d.width && r->height==d.height) full_uploads++;
     return 0;
 }
 static void completed_ram_frame(void)
@@ -37,7 +49,7 @@ static void completed_ram_frame(void)
 }
 static int service(int display,const struct ciuki_accel_request *q)
 {
-    assert(display==7 && q->size==sizeof(*q) && q->generation==55);
+    assert(display==7 && q->size==sizeof(*q) && q->generation==expected_generation);
     if (q->operation==CIUKI_ACCEL_QUERY) return caps;
     if (q->operation==CIUKI_ACCEL_COPY || q->operation==CIUKI_ACCEL_FILL) completed_ram_frame();
     if (q->operation==CIUKI_ACCEL_COPY) {
@@ -271,6 +283,18 @@ int main(void)
     uint32_t *pixels=(uint32_t *)d.clients[i].pixels;
     for(unsigned y=0;y<80;y++)for(unsigned x=0;x<120;x++)pixels[y*120+x]=0x203040+y/2*4173+x*89;
     dirty_client(i);redraw();assert(copies>0);
+    /* A return can arrive as damage before the display-counter poll. Learn
+     * the same-layout lease generation before any engine request, then send
+     * the first repaint as one complete CPU upload. A busy query preserves
+     * damage and the old generation for a later service turn. */
+    d.display_info=display_info; expected_generation=56;
+    query_failure=1; dirty_client(i);
+    unsigned old_uploads=uploads;
+    assert(desk_redraw(&d)==-1 && d.accel_generation==55 && d.damage.count && uploads==old_uploads);
+    query_failure=0; full_uploads=0;
+    redraw(); assert(d.accel_generation==56 && d.scanout_valid && full_uploads==1);
+    assert(uploads==old_uploads+1 && d.frame_stats.completed);
+    puts("PASS f3-43 desktop: restore damage queries the new generation before acceleration, failed query retains damage, first resumed frame is one full present");
     for(int k=0;k<DESK_CLIENTS;k++)desk_drop_client(&d,k);
     desk_render_release(&d);free(d.pixels);free(scanout);assert(!fake_live());
     puts("PASS localized notification protection: client-only painter, disjoint scroll/move COPY, source/destination overlap, shadow and entry sweep");
