@@ -215,16 +215,21 @@ static int packet(struct usb_device *d, unsigned endpoint, unsigned pid, unsigne
             usb_host_quarantine(h, "uhci_host_error"); return -USB_EIO;
         }
         usb_barrier(); unsigned v = td[1];
-        if (!(v & (1u << 23))) {
+        if (!(v & (1u << 23)) &&
+            (!endpoint || periodic || (v & 0x00760000u) || (qh[1] & 1))) {
             break;
         }
         if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
         if (usb_expired(h, end)) break;
-        usb_sleep(h, 1);
+        usb_poll_pause(h, 1);
     }
     trace->poll_frames=frames;
+    /* Status precedes QH writeback. Only an HC-written terminating element
+     * proves a successful bulk TD cannot still write the shared queue. */
+    usb_barrier();
+    bool completed = endpoint && !periodic && !(td[1] & 0x00f60000u) && (qh[1] & 1);
     qh[1] = 1; usb_barrier();
-    int retired = usb_retire_frames(h, 6, 2, 0x7ff);
+    int retired = completed ? 0 : usb_retire_frames(h, 6, 2, 0x7ff);
     frames += (usb_read(h, 6, 2) - frame) & 0x7ff;
     usb_barrier(); unsigned v = td[1];
     trace->status=v; trace->token=td[2]; trace->frames=frames;
@@ -295,7 +300,7 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
             unsigned n=bytes-offset; if (n>mps) n=mps;
             volatile uint32_t *td=words(h,USB_BULK_TD+i*16);
             td[0]=i+1<count ? (h->dma_phys+USB_BULK_TD+(i+1)*16)|4 : 1;
-            td[1]=(1u<<23)|(h->irq_attached ? 1u<<24 : 0)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
+            td[1]=(1u<<23)|(h->irq_attached && i+1==count ? 1u<<24 : 0)|(3u<<27)|(in ? 1u<<29 : 0)|0x7ff;
             td[2]=(in ? USB_PID_IN : USB_PID_OUT)|(unsigned)d->address<<8|ep<<15|
                   (*toggle^(i&1))<<19|(n-1)<<21;
             td[3]=h->dma_phys+USB_BULK_BUFFER+i*64;
@@ -305,6 +310,7 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
         usb_barrier(); qh[1]=h->dma_phys+USB_BULK_TD; usb_barrier();
         unsigned frame=usb_read(h,6,2)&0x7ff, frames=0, progress=0, hc=0;
         int failure=0;
+        bool completed_batch=false;
         /* ACK progress can renew the binding wait, but never the aggregate
          * deadline. The finite poll count also bounds a frozen clock. */
         for (unsigned polls=0;polls<=USB_BULK_TIMEOUT_MS;polls++) {
@@ -337,12 +343,15 @@ static int bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsig
              * prefix walk and this decision. Re-reading Active here could
              * mistake a full ACK for a short/error and unlink the unfinished
              * suffix. Decide using the exact snapshot that stopped the walk. */
-            if (progress==count || !(stopped&(1u<<23))) break;
+            if (progress==count) {
+                usb_barrier();
+                if (qh[1]&1) { completed_batch=true; break; }
+            } else if (!(stopped&(1u<<23))) break;
             if (usb_expired(h,s->bulk_deadline)) break;
-            usb_sleep(h,1);
+            usb_poll_pause(h,1);
         }
         qh[1]=1; usb_barrier();
-        int retired=usb_retire_frames(h,6,2,0x7ff);
+        int retired=completed_batch ? 0 : usb_retire_frames(h,6,2,0x7ff);
         unsigned all_frames=frames+((usb_read(h,6,2)-frame)&0x7ff);
         if (s->binding) { s->bind_poll_frames+=frames; s->bind_retire_frames+=all_frames-frames; }
         if (retired) return -USB_EIO;

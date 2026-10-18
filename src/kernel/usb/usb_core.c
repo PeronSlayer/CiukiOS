@@ -123,6 +123,7 @@ void usb_ohci_service_done(struct usb_host *h)
             }
             usb_barrier();
             head = *(volatile uint32_t *)(h->dma + at + 8);
+            if (at == USB_TD) h->ohci_packet_done = true;
             h->ohci_done_tds++;
         }
         h->ohci_done_batches++;
@@ -872,10 +873,10 @@ static void native_sleep(void *arg, unsigned ms)
     struct usb_host *h = arg;
     if (!h->irq_attached) { task_sleep_ms(ms); return; }
     uint64_t end = deadline_after_ms(ms);
-    do {
-        uint32_t f = irq_save(); h->irq_pending = false; irq_restore(f);
-        kwait_wait_until(&h->changed, host_pending, h, end);
-    } while (!usb_expired(h, end));
+    uint32_t f = irq_save(); h->irq_pending = false; irq_restore(f);
+    /* Completion callers must recheck TD/QH state on notifications. Mandatory
+     * USB delays use usb_sleep, which preserves its absolute deadline. */
+    kwait_wait_until(&h->changed, host_pending, h, end);
 }
 static void service(void *arg)
 {
