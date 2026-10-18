@@ -51,6 +51,7 @@ void audio_stream_reset(struct audio_stream *s)
 {
     s->discarded += s->queued;
     s->head = s->queued = s->phase = 0;
+    s->have_previous = false;
     s->configured = s->started = s->draining = s->drain_latched = false;
     s->generation = gen_alloc();
     if (!s->generation) audio_fail(-EIO);

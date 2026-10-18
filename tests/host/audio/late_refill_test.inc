@@ -38,7 +38,7 @@ static void late_setup(void)
     for(unsigned i=0;i<12;i++) ac97.claims[i]=-1;
     audio.ready=true; audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
     idle_since=non_silent_end=0; first_playback=playback_logged=quantum_pending=quantum_mixed=false;
-    idle_notice.pending=false;
+    transport_next=g_ticks+5000;
     vm_active_hook=vm_attached_hook=vm_nonzero_hook=false;
     g_boot.flags=CBI_F_VERBOSE; g_ticks=hw.tick=1000;
 }
@@ -108,14 +108,14 @@ static void test_exhausted_recovery(void)
         uint64_t output=audio.output;
         audio_service();
         CHECK(audio.ready && !audio.error && audio.running && ac97.running && hw.starts==2 && hw.resets==1);
-        CHECK(audio_log_count==logs && audio.halts==1 && ac97.retired==0 && ac97.published==AUDIO_LEAD);
+        CHECK(audio_log_count>=logs+3 && audio.halts==1 && ac97.retired==0 && ac97.published==audio.lead_periods);
         CHECK(ac97.fetched==10*AUDIO_QUANTUM && ac97.frame_base==output && !ac97.generation_fetched);
-        CHECK(audio.output==output+AUDIO_LEAD*AUDIO_QUANTUM && s->consumed==2*AUDIO_QUANTUM);
-        for(unsigned i=0;i<AUDIO_LEAD;i++) for(unsigned j=0;j<AUDIO_QUANTUM;j++)
+        CHECK(audio.output==output+audio.lead_periods*AUDIO_QUANTUM && s->consumed==2*AUDIO_QUANTUM);
+        for(unsigned i=0;i<audio.lead_periods;i++) for(unsigned j=0;j<AUDIO_QUANTUM;j++)
             CHECK(!ac97.pcm[i][j].left && !ac97.pcm[i][j].right);
         mock_advance(512); g_ticks+=6; hw.tick+=6; audio_service();
         CHECK(!audio.error && ac97.fetched==11*AUDIO_QUANTUM && audio.played_output==output+AUDIO_QUANTUM);
-        if(!inactive) CHECK(s->consumed==3*AUDIO_QUANTUM && ac97.pcm[8][0].left==1002);
+        if(!inactive) CHECK(s->consumed==3*AUDIO_QUANTUM && ac97.pcm[audio.lead_periods][0].left==1002);
         else CHECK(s->consumed==2*AUDIO_QUANTUM && idle_since);
         audio_stream_close(s); late_cleanup();
     }
@@ -137,12 +137,6 @@ static void test_publication_retry(void)
      * then silence; no second mix and no loss of its output position. */
     if(inactive) s->started=false;
     mock_advance(512); g_ticks+=6; hw.tick+=6; audio_service();
-    if(inactive) {
-        CHECK(!audio.error && !audio.running && ac97.published==1 && !quantum_pending);
-        /* The source ended: complete the retained quantum's new silence
-         * lead even though no source now requests startup. */
-        for(unsigned i=1;i<AUDIO_LEAD;i++) { g_ticks++; hw.tick++; audio_service(); }
-    }
     CHECK(!audio.error && audio.running && !quantum_pending && ac97.published==AUDIO_LEAD);
     CHECK(s->consumed==AUDIO_QUANTUM && ac97.pcm[0][0].left==1000);
     CHECK(ac97.frame_base==8*AUDIO_QUANTUM && s->last_output==9*AUDIO_QUANTUM);
@@ -174,16 +168,16 @@ static void test_recovery_failure_record(void)
         if(fault==6) { ac97.bdl_phys=0x4000; hw.bdbar_stuck=true; } /* post-reset readback fails */
         unsigned logs=backend_failure_logs;
         audio_service();
-        CHECK(audio.error==-EIO && !audio.ready && backend_failure_logs==logs+1);
-        CHECK(strstr(audio_log,"backend failure err=-5 op=") && strstr(audio_log," civ=8 lvi="));
-        CHECK(strstr(audio_log," piv=8 picb=") && strstr(audio_log," sr=") && strstr(audio_log," published=233 retired="));
-        CHECK(strstr(audio_log," running=1 active=1") && !strstr(audio_log,"play=failed"));
-        if(fault>=4) {
+        if(fault<4) {
+            CHECK(!audio.error && audio.ready && audio.running && hw.starts==2 && hw.resets==1);
+            CHECK(backend_failure_logs==logs && audio.underruns==1);
+        } else {
+            CHECK(audio.error==-EIO && !audio.ready && backend_failure_logs==logs+1);
             CHECK(strstr(audio_log,"op=recover_stop civ=8 lvi=8 piv=8 picb=0 sr=0003 published=233 retired=232 running=1"));
             CHECK(ac97.quarantine && hw.starts==1);
             if(fault==4) CHECK(!hw.resets && ac97.published==233);
-            else CHECK(hw.resets==1 && hw.civ==0); /* log retains the original CIV=8 */
-        } else CHECK(!hw.resets && hw.starts==1);
+            else CHECK(hw.resets==1 && hw.civ==0);
+        }
         late_cleanup();
     }
     puts("audio failure snapshot: unexpected/partial halt, LVI/RUN mismatch, failed pause/reset/readback, one complete pre-rollback record PASS");

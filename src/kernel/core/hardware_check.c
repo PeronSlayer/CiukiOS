@@ -256,10 +256,12 @@ static void audio_check(struct hw_check_result *out)
 {
     struct ciuki_audio_diagnostics d={.version=1,.size=sizeof(d)}; audio_diagnostics(&d);
     uint32_t frames=0;
-    int e=audio.ready ? audio_check_tone(&frames) : audio.init_error;
-    out->status=audio.ready && !e && frames==AUDIO_RATE ? HW_PASS : audio.backend_touched ? HW_FAIL : HW_SKIP;
-    ksnprintf(out->detail,sizeof(out->detail),"codec=%08x ready=%u power=%04x frames=%u tone=1s error=%d (listen)",
-        d.codec_id,audio.ready,d.power,frames,e);
+    uint64_t underruns=audio.underruns;
+    int e=audio.ready ? audio_check_duration(10,&frames) : audio.init_error;
+    struct ciuki_audio_diagnostics after; audio_diagnostics(&after);
+    out->status=audio.ready && !e && frames==10*AUDIO_RATE ? HW_PASS : audio.backend_touched ? HW_FAIL : HW_SKIP;
+    ksnprintf(out->detail,sizeof(out->detail),"frames=%u underruns=%u irqs=%u lead=%u error=%d (listen)",
+        frames,(unsigned)(audio.underruns-underruns),(unsigned)(after.irqs-d.irqs),audio.lead_periods,e);
 }
 static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_result *out)
 {

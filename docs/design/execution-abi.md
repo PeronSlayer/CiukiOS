@@ -1218,8 +1218,21 @@ start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
 | format | rate, format, channels, output_rate (input zero), reserved[2] |
 | gain | left, right, reserved[2] |
 | command | reserved[2] |
-| status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, reserved |
+| status | queued_frames, state (0=idle,1=started,2=failed), output_rate, generation, u64 accepted_frames, consumed_frames, output_frames, fetched_frames, source_starvation, fifo_errors, dma_halts, deadline_misses; i32 last_error; stream_generation, max_service_us, max_irq_us, transport_frames, latency_frames |
+
 | master | left, right, mute (0/1), save_state (0=defaults,1=saved,2=applied_unsaved), i32 save_error, reserved |
+
+f4-31 assigns the former final reserved status word (offset 108) to output
+`latency_frames`, retaining v1/112-byte layout. Status has no reserved input
+words and can be reused for queries. Latency is the current source queue
+converted upward to output frames, plus outstanding DMA frames and the caps
+drain allowance, saturated at UINT32_MAX. It estimates the delay to the last
+accepted frame from the latest worker cursor; it is not a measured analog
+DAC position. `transport_frames` keeps its prior meaning. Native write on a
+stopped, healthy device establishes RUN before returning successfully.
+When its source queue is empty, latency uses that stream's last mixed output
+position instead of subsequent sources/idle silence. A stream with no accepted
+data has zero latency. Music position and EOF use this stream-specific delay.
 
 F4-11 transport IDs (record layout and existing commands unchanged): 1 is the
 Intel-layout AC'97 engine (Intel ICH, SiS 7012, nForce/nForce2), 2 ES1370,

@@ -53,6 +53,13 @@ static void stretch_end(struct task *t, uint64_t now, uint32_t eip)
     }
     if (d > 20 * per_ms()) threshold = true;
 }
+void cpu_stretch_snapshot(char name[16], uint32_t *duration_ms)
+{
+    uint32_t flags = irq_save();
+    memcpy(name, stretch_name, 16);
+    *duration_ms = ms(stretch_max);
+    irq_restore(flags);
+}
 
 static void charge(struct task *t, uint64_t now)
 {

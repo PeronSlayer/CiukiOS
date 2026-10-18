@@ -103,11 +103,12 @@ class AudioWaveTests(unittest.TestCase):
                 self.assertEqual(args.count('AC97,audiodev=cap'), 1)
                 self.assertNotIn('audio_expectations', case)
                 continue
-            self.assertEqual(profile['ram_mib'], 512)
+            self.assertGreaterEqual(profile['ram_mib'], 128)
             self.assertEqual(request, 'f4:audio-native run=12345678')
             self.assertIn('none,id=silent', args)
             self.assertIn('wav,id=cap,path=audio.wav', args)
-            self.assertEqual(args.count('AC97,audiodev=cap'), 1)
+            backend = {'ac97': 'AC97', 'es1370': 'es1370', 'sb16': 'sb16'}[case['device_exceptions']['audio']]
+            self.assertEqual(args.count(backend + ',audiodev=cap'), 1)
             self.assertNotIn('AC97,audiodev=silent', args)
             broken = {**case, 'device_exceptions': {'audio': 'unknown'}}
             with self.assertRaises(runner.res.Refusal):
@@ -124,6 +125,20 @@ class AudioWaveTests(unittest.TestCase):
                 self.assertIn('wav,id=cap,path=audio.wav', args)
                 self.assertNotIn('AC97,audiodev=silent', args)
                 self.assertNotIn('AC97,audiodev=cap', args)
+
+    def test_second_set_suite_cases(self):
+        cases = runner.load(ROOT / 'tests/suites/f4-audio.json')['cases']
+        for backend, profile in (('es1370', 'qemu-desktop-2002'), ('sb16', 'qemu-desktop-1998')):
+            selected = [c for c in cases if c.get('device_exceptions', {}).get('audio') == backend]
+            self.assertEqual(len(selected), 1)
+            case = selected[0]
+            self.assertEqual(case['profile'], profile)
+            self.assertEqual(case['probe'], 'audio-native')
+            self.assertIn('audio_expectations', case)
+            rows = {p['where'].get('case'): p['fields'] for p in case['expected']['predicates']}
+            self.assertEqual(rows['transport']['accepted_rate'], {'eq': 44100})
+            self.assertEqual(rows['service']['max_service_us'], {'le': 2000})
+            self.assertNotIn('codec_paths', rows)
 
     def test_vm_audio_selector_and_absent_backend(self):
         selected = selector('f4:vm-audio run=12345678', 'fw_cfg', True)
@@ -156,7 +171,7 @@ class AudioWaveTests(unittest.TestCase):
             return parser
         expected = runner.load(ROOT/'tests/suites/f4-audio.json')['cases'][0]['expected']
         self.assertTrue(parsed(records).check(expected))
-        for index,field,value in ((5,'consumed',191999),(7,'max_service_us',1001),(8,'after_pages',14)):
+        for index,field,value in ((5,'consumed',191999),(7,'max_service_us',2001),(8,'after_pages',14)):
             broken=copy.deepcopy(records);broken[index][field]=value
             with self.assertRaises(runner.EvidenceError):
                 parsed(broken).check(expected)

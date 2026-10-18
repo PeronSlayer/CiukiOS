@@ -12,4 +12,7 @@ void cpu_irq_leave(uint64_t start);
 void cpu_stall_record(const char *text, size_t bytes) __attribute__((weak));
 enum cpu_path { CPU_CONSOLE, CPU_BOOTLOG, CPU_ELF, CPU_ZERO, CPU_PATHS };
 void cpu_path_add(enum cpu_path path, uint64_t cycles) __attribute__((weak));
+/* Snapshot the same window maximum used by stretch_max_ms diagnostics.
+ * Task name is copied under IRQ exclusion; never return a task pointer. */
+void cpu_stretch_snapshot(char name[16], uint32_t *duration_ms) __attribute__((weak));
 #endif

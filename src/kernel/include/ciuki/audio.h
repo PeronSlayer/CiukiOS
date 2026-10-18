@@ -9,26 +9,31 @@
 #define AUDIO_RING 2048u
 #define AUDIO_QUANTUM 256u
 #define AUDIO_LEAD 8u
+#define AUDIO_VM_LEAD 4u
 #define AUDIO_RATE 48000u
 struct audio_frame { int16_t left, right; };
-/* Refill lead policy of audio_service (audio_dev.c): returns the periods kept
- * published and sets *limit to the most one service publishes. Active
- * sources restore AUDIO_LEAD in a bounded burst after a late service; the idle tail (silence
- * only) is cushioned to AUDIO_TAIL_LEAD in one burst at its start (QEMU
- * evidence 2026-10-11: the worker is not scheduled for ~130 ms while native
- * clients exit), except while a DOS VM source is attached: a VM plays on its
- * own timeline and cannot wait behind ~150 ms of queued silence. Its next
- * transfer would stop the refill until the cushion drains to AUDIO_LEAD, and
- * the source would then skip that timeline and drop the PCM as late (f4-05,
- * QEMU campaign 12: VMPLAY stage 3 started inside the tail). The tail keeps
- * AUDIO_LEAD then; an underrun ends it as a normal transport stop. */
-#define AUDIO_TAIL_LEAD 28u     /* silence periods kept ahead during the idle tail (BDL holds 31) */
+/* T23 observed gap: 112933 us; display stretch: 134 ms. Two periods of
+ * margin require 28 periods at 48 kHz. See validation/f4-31-audio-audit.md.
+ * Deep silence is cut on source arrival, after stop proof; active lateness
+ * grows the session lead and exposes the resulting latency in status/logs. */
+#define AUDIO_GAP_BUDGET_US 134000u
+#define AUDIO_MAX_LEAD 30u
+#define AUDIO_SERVICE_US 2000u
+#define AUDIO_TAIL_LEAD 28u
 #define AUDIO_IDLE_TAIL_MS 500u /* silence published after the last source before the transport stops */
+static inline unsigned audio_gap_lead(unsigned gap_us, unsigned rate)
+{
+    /* Bound first so the product fits 32 bits at every supported rate. */
+    if (gap_us > 150000u) return AUDIO_MAX_LEAD;
+    unsigned periods = (gap_us * (rate / 100u) + AUDIO_QUANTUM * 10000u - 1) /
+        (AUDIO_QUANTUM * 10000u) + 2u;
+    return periods > AUDIO_MAX_LEAD ? AUDIO_MAX_LEAD : periods;
+}
 static inline unsigned audio_refill_lead(bool active, bool tail_start, bool vm_attached, unsigned *limit)
 {
-    unsigned tail = vm_attached ? AUDIO_LEAD : AUDIO_TAIL_LEAD;
-    *limit = active ? AUDIO_LEAD : tail_start ? tail : 1u;
-    return active ? AUDIO_LEAD : tail;
+    unsigned lead = active ? (vm_attached ? AUDIO_VM_LEAD : AUDIO_LEAD) : AUDIO_TAIL_LEAD;
+    *limit = active || tail_start ? lead : 1u;
+    return lead;
 }
 struct audio_stream {
     struct audio_frame *ring[2];
@@ -36,6 +41,8 @@ struct audio_stream {
     uint32_t gain[2], generation;
     uint64_t accepted, consumed, discarded, starvation, last_output, drain_goal, drain_output;
     bool started, configured, draining, drain_latched;
+    struct audio_frame previous;
+    bool have_previous;
     struct kwait changed;
 };
 struct audio_state {
@@ -43,14 +50,15 @@ struct audio_state {
     struct ciuki_mixer_master master;
     struct ciuki_audio_caps caps;
     struct kwait changed;
-    uint64_t output, fetched, played_output, fifo, halts, deadlines;
+    uint64_t output, fetched, played_output, fifo, halts, deadlines, underruns, restarts;
     uint64_t last_service_cycles;
     uint32_t commitment_pages, max_service_us, max_irq_us, max_service_gap_us, max_control_us;
+    uint32_t lead_periods, adaptive_lead;
     int error, init_error;
     bool initialized, ready, running, pending, quarantined, master_in_codec, master_in_hardware;
     const char *reason, *settings_reason, *backend_name;
     struct pci_func backend_pci;
-    bool backend_touched;
+    bool backend_touched, linear_resampling;
 };
 extern struct audio_state audio;
 static inline unsigned audio_output_rate(void) { return audio.caps.output_rate ? audio.caps.output_rate : AUDIO_RATE; }
@@ -81,6 +89,7 @@ void audio_settings_load(struct vfs *);
 bool audio_registry_load(struct vfs *, struct ciuki_mixer_master *);
 void audio_diagnostics(struct ciuki_audio_diagnostics *);
 int audio_check_tone(uint32_t *frames);
+int audio_check_duration(uint32_t seconds, uint32_t *frames);
 static inline bool audio_boot_tone_enabled(uint32_t flags)
 {
     return (flags & CBI_F_VERBOSE) && !(flags & (CBI_F_SAFE_MODE | CBI_F_TEST_REQUEST));

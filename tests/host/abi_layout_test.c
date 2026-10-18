@@ -564,7 +564,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_audio_status.max_service_us", __builtin_offsetof(struct ciuki_audio_status, max_service_us), 96u},
     {"offsetof.ciuki_audio_status.max_irq_us", __builtin_offsetof(struct ciuki_audio_status, max_irq_us), 100u},
     {"offsetof.ciuki_audio_status.transport_frames", __builtin_offsetof(struct ciuki_audio_status, transport_frames), 104u},
-    {"offsetof.ciuki_audio_status.reserved", __builtin_offsetof(struct ciuki_audio_status, reserved), 108u},
+    {"offsetof.ciuki_audio_status.latency_frames", __builtin_offsetof(struct ciuki_audio_status, latency_frames), 108u},
     {"sizeof.ciuki_mixer_master", sizeof(struct ciuki_mixer_master), 32u},
     {"sizeof.ciuki_audio_diagnostics", sizeof(struct ciuki_audio_diagnostics), 64u},
     {"alignof.ciuki_audio_diagnostics", _Alignof(struct ciuki_audio_diagnostics), 4u},

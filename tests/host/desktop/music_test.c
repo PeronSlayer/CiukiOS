@@ -116,8 +116,13 @@ static void engine(const char *fixtures, const char *scratch)
     music_player_init(p,&o,NULL,NULL); struct music_command c={.action=MUSIC_OPEN}; path(c.path,fixtures,"tone.ogg");
     assert(!music_player_command(p,&c) && p->view.state==MUSIC_PLAYING && p->view.playlist.count==1);
     s.blocked=1;
-    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(p->count<=MUSIC_RING); }
+    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(p->count+s.queued<=256); }
     assert(p->count>0 && !s.accepted && !p->view.position);
+    s.blocked=0;
+    for(unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(p->count+s.queued<=256); }
+    /* The one-period prefill includes partial writes still in userspace. */
+    assert(s.queued==256 && !p->count); consume(&s);
+    s.accepted=s.consumed=0;
     s.blocked=0; assert(!music_player_pump(p) && s.accepted==17); consume(&s); music_player_pump(p);
     c.action=MUSIC_PAUSE; assert(!music_player_command(p,&c));
     assert(p->view.state==MUSIC_PAUSED && !p->device && !p->count && p->view.position==17);

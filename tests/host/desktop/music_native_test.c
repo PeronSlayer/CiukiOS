@@ -24,6 +24,7 @@ static int fake_close(int);
 #undef open
 static int audio_closed, mixer_closed, blocked, malformed, fail_control, queue_failed;
 static unsigned fake_rate=48000;
+static unsigned idle_transport;
 static struct ciuki_message sent;
 static int fake_open(const char *path, int flags, ...)
 {
@@ -45,7 +46,7 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t bytes)
         assert(f->channels==2 && f->format==CIUKI_AUDIO_S16LE && f->rate==fake_rate); f->output_rate=fake_rate;
     } else if (op==AUDIO_GET_STATUS) {
         assert(fd==40); struct ciuki_audio_status *s=record;
-        s->consumed_frames=123; s->queued_frames=64; s->output_rate=fake_rate; s->transport_frames=480;
+        s->consumed_frames=5000; s->queued_frames=64; s->output_rate=fake_rate; s->transport_frames=480+idle_transport; s->latency_frames=64+480+fake_rate/50;
     } else {
         assert(fd==41 && op==MIXER_GET_MASTER); struct ciuki_mixer_master *m=record;
         m->left=40; m->right=80; m->mute=1;
@@ -62,7 +63,9 @@ int main(void)
     blocked=1; assert(audio_write(m,pcm,4)==-EAGAIN); blocked=0;
     malformed=1; assert(audio_write(m,pcm,4)==-EIO); malformed=0;
     uint64_t consumed,tail; unsigned queued;
-    assert(!audio_status(m,&consumed,&queued,&tail) && consumed==123 && queued==64 && tail==30000000);
+    assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && queued==64 && tail==30000000);
+    idle_transport=6400;
+    assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && tail==30000000);
     audio_close(m); assert(m->audio==-1 && audio_closed==1);
     fail_control=1; assert(audio_open(m,&rate)==-ENODEV && m->audio==-1 && audio_closed==2); fail_control=0;
     assert(!master_get(m,&rate) && rate==80);

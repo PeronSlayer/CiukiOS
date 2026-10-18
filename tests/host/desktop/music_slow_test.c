@@ -55,7 +55,9 @@ static int sink_write(void *ctx,const int16_t *pcm,unsigned n)
     return (int)n;
 }
 static int sink_status(void *ctx,uint64_t *consumed,unsigned *queued,uint64_t *tail)
-{ (void)ctx; *consumed=0; *queued=1024; *tail=0; return 0; }
+/* This sink consumes writes immediately. A permanent 1024-frame source
+ * queue would correctly block the player's new one-period prefill policy. */
+{ (void)ctx; *consumed=0; *queued=0; *tail=0; return 0; }
 static void sink_close(void *ctx) { (void)ctx; }
 static uint64_t sink_now(void *ctx) { (void)ctx; return clock_ns(); }
 static void pause_ms(unsigned ms) { struct timespec t={ms/1000,(long)(ms%1000)*1000000}; nanosleep(&t,NULL); }

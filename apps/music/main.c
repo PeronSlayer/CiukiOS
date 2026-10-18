@@ -36,8 +36,12 @@ static int audio_status(void *ctx, uint64_t *consumed, unsigned *queued, uint64_
     if (ciuki_devctl(m->audio,AUDIO_GET_STATUS,&s,sizeof(s))) return -errno;
     if (s.last_error) return s.last_error;
     if (!s.output_rate) return -EIO;
-    *consumed=s.consumed_frames; *queued=s.queued_frames;
-    *tail=(uint64_t)m->drain_ms*1000000+(uint64_t)s.transport_frames*1000000000/s.output_rate; return 0;
+    /* Format is the physical output rate. Subtract pending DMA and codec
+     * allowance from mixer consumption to display audible position. */
+    uint32_t pending=s.latency_frames>s.queued_frames ? s.latency_frames-s.queued_frames : 0;
+    *consumed=s.consumed_frames>pending ? s.consumed_frames-pending : 0;
+    *queued=s.queued_frames;
+    *tail=(uint64_t)pending*1000000000/s.output_rate; return 0;
 }
 static void audio_close(void *ctx) { struct music_main *m=ctx; if (m->audio>=0) close(m->audio); m->audio=-1; }
 static uint64_t now(void *ctx) { (void)ctx; return du_now(); }

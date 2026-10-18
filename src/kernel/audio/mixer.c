@@ -20,6 +20,17 @@ static int32_t interpolate(int16_t a, int16_t b, unsigned phase, unsigned rate)
     int32_t step = (int32_t)(magnitude * phase / rate);
     return a + (delta < 0 ? -step : step);
 }
+/* Catmull-Rom, Q10 phase, Horner form. Coefficients are at most 8*32768;
+ * every product fits signed 32 bits. Division preserves signed truncation.
+ * Clamp edge taps at producer boundaries, retain history across ring wrap. */
+static int32_t cubic(int16_t p, int16_t a, int16_t b, int16_t c, unsigned phase)
+{
+    int32_t t = (int32_t)(phase * 1024u / AUDIO_RATE);
+    int32_t v = (-(int32_t)p + 3*(int32_t)a - 3*(int32_t)b + c) * t / 1024;
+    v = (v + 2*(int32_t)p - 5*(int32_t)a + 4*(int32_t)b - c) * t / 1024;
+    v = (v - p + b) * t / 1024;
+    return a + v / 2;
+}
 static int16_t master_sample(int64_t value, unsigned gain)
 {
     if (!gain) return 0;
@@ -32,6 +43,7 @@ static int16_t master_sample(int64_t value, unsigned gain)
 }
 static void mixer_retire(struct audio_stream *s, unsigned rate)
 {
+    s->previous = *audio_frame_at(s, s->head); s->have_previous = true;
     s->phase-=rate; s->head=(s->head+1)%AUDIO_RING; s->queued--; s->consumed++;
     if (s->draining && !s->drain_latched && s->consumed+s->discarded>=s->drain_goal) {
         s->drain_output=s->last_output; s->drain_latched=true;
@@ -60,8 +72,15 @@ void audio_mix(struct audio_frame *out, unsigned frames)
             int32_t l = a.left, r = a.right;
             if (s->phase) {
                 struct audio_frame b = s->queued > 1 ? *audio_frame_at(s, (s->head + 1) % AUDIO_RING) : a;
-                l = interpolate(a.left, b.left, s->phase, output_rate);
-                r = interpolate(a.right, b.right, s->phase, output_rate);
+                if (s->rate == 44100 && output_rate == AUDIO_RATE && !audio.linear_resampling) {
+                    struct audio_frame p = s->have_previous ? s->previous : a;
+                    struct audio_frame c = s->queued > 2 ? *audio_frame_at(s, (s->head + 2) % AUDIO_RING) : b;
+                    l = cubic(p.left, a.left, b.left, c.left, s->phase);
+                    r = cubic(p.right, a.right, b.right, c.right, s->phase);
+                } else {
+                    l = interpolate(a.left, b.left, s->phase, output_rate);
+                    r = interpolate(a.right, b.right, s->phase, output_rate);
+                }
             }
             sums[i][0] += l * (int32_t)s->gain[0] / 100;
             sums[i][1] += r * (int32_t)s->gain[1] / 100;

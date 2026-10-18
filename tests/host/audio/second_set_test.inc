@@ -116,7 +116,7 @@ static void second_write(void *cookie,uint16_t port,uint32_t value,unsigned widt
         return;
     }
     if (off==d->channel+1) {
-        if (value&0x40) { if (!h->stop_stuck) { h->active=false; h->stops++; } }
+        if (value&0x40) { if (!h->stop_stuck) { h->active=h->pending_start=false; h->stops++; } }
         else if (value&0x80) { h->pending_start=true; h->active_at=h->tick+h->start_delay; h->active=false; h->starts++; h->frame=0; CHECK(!d->state.ready || !d->proving); }
         return;
     }
@@ -299,7 +299,7 @@ static void test_second_set(void)
         second.frame=9*256; second.tick+=40;
         if (kind==AUDIO_SB16) second.mixer[0x82]=2;
         else second.regs[(kind>=AUDIO_VIA686 ? d->channel : 4)/4]|=causes;
-        CHECK(backend_irq(d->state.irq,d->name) && d->inhibited && audio.error==-EIO);
+        CHECK(backend_irq(d->state.irq,d->name) && d->inhibited && !audio.error);
         CHECK(kind==AUDIO_SB16 ? second.mask : !second.active);
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages);
         CHECK(second_pic_masks+second_pic_unmasks==pic_before);

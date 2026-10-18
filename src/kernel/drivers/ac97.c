@@ -432,7 +432,8 @@ int ac97_publish(struct ac97_device *d, const struct audio_frame *pcm)
 }
 int ac97_start(struct ac97_device *d)
 {
-    if (!d->ready || d->quarantine || d->published - d->retired != AUDIO_LEAD) return -EIO;
+    if (!d->ready || d->quarantine || d->published - d->retired < 2 ||
+        d->published - d->retired > AUDIO_MAX_LEAD) return -EIO;
     wr(d, 0x1b, 0x1d, 1);
     d->running = true; d->last_progress = d->io.now(d->io.cookie); d->cursor_retrying = false;
     return 0;

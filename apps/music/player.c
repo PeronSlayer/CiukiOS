@@ -164,9 +164,9 @@ int music_player_pump(struct music_player *p)
     p->stage="audio-status";
     uint64_t tail; int queued=position(p,&tail);
     if (queued<0) return fail(p,queued);
-    if (!p->eof && p->count<MUSIC_RING-512) {
+    if (!p->eof && !p->count && queued < 256) {
         unsigned end=(p->head+p->count)%MUSIC_RING, space=MUSIC_RING-end;
-        if (space>512) space=512;
+        if (space>256u-(unsigned)queued) space=256u-(unsigned)queued;
         p->stage="decode";
         int n=music_decoder_read(p->decoder,p->ring+2*end,space);
         if (n<0) return fail(p,n);
@@ -180,8 +180,9 @@ int music_player_pump(struct music_player *p)
         }
         if (!n) p->eof=1; else p->count+=(unsigned)n;
     }
-    if (p->count) {
-        unsigned n=MUSIC_RING-p->head; if (n>p->count) n=p->count; if (n>512) n=512;
+    if (p->count && queued < 256) {
+        unsigned n=MUSIC_RING-p->head; if (n>p->count) n=p->count;
+        if (n>256u-(unsigned)queued) n=256u-(unsigned)queued;
         p->stage="audio-write";
         int r=p->output->write(p->output->ctx,p->ring+2*p->head,n);
         if (r<0 && r!=-EAGAIN && r!=-EINTR) return fail(p,r);
@@ -189,7 +190,7 @@ int music_player_pump(struct music_player *p)
             if ((unsigned)r>n) return fail(p,-EIO);
             p->head=(p->head+(unsigned)r)%MUSIC_RING; p->count-=(unsigned)r;
         }
-    } else if (p->eof && !queued) {
+    } else if (!p->count && p->eof && !queued) {
         uint64_t now=p->output->now(p->output->ctx);
         if (!p->tail_deadline) p->tail_deadline=now+tail+1;
         if (now>=p->tail_deadline) {

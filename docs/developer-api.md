@@ -859,7 +859,12 @@ struct ciuki_audio_status {
     uint32_t max_service_us;
     uint32_t max_irq_us;
     uint32_t transport_frames;
-    uint32_t reserved;
+    uint32_t latency_frames;
+```
+
+output frames: source queue + DMA + drain allowance
+
+```c
 };
 struct ciuki_mixer_master {
     uint32_t version;

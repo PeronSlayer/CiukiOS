@@ -7,10 +7,9 @@
 #include <ciuki/dosvm.h>
 #include <ciuki/audio.h>
 
-/* Target latency from the VM timeline to physical output: the eight published
- * periods plus 640 frames of source slack (56 ms at 48 kHz, inside the
- * provisional 60 ms budget). */
-#define AUDIO_VM_LATENCY (AUDIO_LEAD * AUDIO_QUANTUM + 640u)
+/* Four periods plus one VM tick and one source quantum: 27.667 ms nominal.
+ * Adaptive transport lead can exceed this target; never read future DMA. */
+#define AUDIO_VM_LATENCY (AUDIO_VM_LEAD * AUDIO_QUANTUM + 304u)
 /* A quantum is rendered at least one VM tick plus one quantum behind the VM
  * clock, so f3-05 has produced its frames. */
 #define AUDIO_VM_FLOOR (AUDIO_QUANTUM + 48u)
@@ -78,6 +77,7 @@ void audio_vm_mix(int64_t (*sums)[2], unsigned frames);
 void audio_vm_tap(const struct audio_frame *out, unsigned frames);
 bool audio_vm_active(void);
 bool audio_vm_playing(void); /* read-only snapshot for mixer diagnostics */
+unsigned audio_vm_playing_count(void);
 /* Any VM source attached (refill policy, audio_refill_lead). */
 bool audio_vm_attached(void);
 /* Successful physical publication, and a small coherent diagnostic snapshot.
