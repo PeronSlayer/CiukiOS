@@ -75,14 +75,14 @@ static void interactions(const char *dir)
     desk_shell_notify(&d,"Network","The network cable is connected.",DU_DLG_ICON_INFO,SH_NOTIFY_NETWORK);
     assert(d.focus==-1); repaint();
     for (int i=0;i<5;i++) { d.now_ns+=40000000ull; desk_shell_tick(&d); repaint(); }
-    int top=452-4-112;
-    d.mouse_x=400; d.mouse_y=top+30;
+    int top=DESK_BAR+SH_TRAY_GAP;
+    d.mouse_x=desk_shell_tray_icon_box(&d,SH_TRAY_NOTIFICATION).x-100; d.mouse_y=top+30;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(!d.sh.notification.active && d.sh.network_open && d.focus==-1); repaint();
     desk_shell_key(&d,DU_KEY_ESC,1); repaint();
     desk_shell_notify_error(&d,"Settings not saved",-EROFS); repaint();
     d.now_ns+=200000000ull; desk_shell_tick(&d); repaint();
-    d.mouse_x=400; d.mouse_y=top+30;
+    d.mouse_x=desk_shell_tray_icon_box(&d,SH_TRAY_NOTIFICATION).x-100; d.mouse_y=top+30;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(!d.sh.notification.active && d.focus>=0);
     assert(!strcmp(d.sh.message_text,"Read-only file system (30)"));
@@ -94,7 +94,7 @@ static void interactions(const char *dir)
     uint64_t started=d.sh.notification.started;
     assert(desk_shell_key(&d,0x130,2)); assert(d.sh.notification.started==started);
     assert(strstr(d.sh.notification.text,"22%")); repaint();
-    d.mouse_x=400; d.mouse_y=top+30;
+    d.mouse_x=desk_shell_tray_icon_box(&d,SH_TRAY_NOTIFICATION).x-100; d.mouse_y=top+30;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(!d.sh.notification.active && d.sh.volume_open && d.focus==-1); repaint();
     desk_shell_key(&d,DU_KEY_ESC,1); assert(!d.sh.volume_open); repaint();
@@ -110,7 +110,7 @@ static void interactions(const char *dir)
     struct ciuki_media_state m={.version=CIUKI_MEDIA_VERSION,.size=sizeof(m),.removable_mask=1u<<4};
     desk_shell_media_update(&d,&m); m.generation[4]++;desk_shell_media_update(&d,&m);
     assert(d.sh.notification.active && d.sh.notification.action==SH_NOTIFY_MEDIA);
-    d.mouse_x=400; d.mouse_y=top+30;
+    d.mouse_x=desk_shell_tray_icon_box(&d,SH_TRAY_NOTIFICATION).x-100; d.mouse_y=top+30;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));
     assert(!d.sh.notification.active && d.sh.media_open); repaint();
     desk_shell_key(&d,DU_KEY_ESC,1); assert(!d.sh.media_open);

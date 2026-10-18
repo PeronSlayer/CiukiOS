@@ -19,16 +19,17 @@ _review_spec = _review_util.spec_from_file_location("frame_review", __file__.rsp
 _review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
 capture = _review.capture
 
+# F2-81: intentional two-bar shell/theme changes; docs/design/desktop-shell.md.
+
 ROOT = Path(__file__).resolve().parents[3]
-THEMES = ("Platinum", "Ciuki Blue", "Classic 98")
-# F2-62: Blue polish; explicitly selected Platinum/Classic 98 are unchanged.
+THEMES = ("Platinum", "Ciuki Blue")
+# F2-62: Blue polish; explicitly selected Platinum was unchanged.
 # F2-63: re-recorded for the pinned FreeType UI atlases (before/after PNGs in build/host/f2-63).
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 # F2-72: re-recorded with --benchmark --frames 2 for the DMZ-White cursor overlay.
 GOLDENS = {
-    "Platinum": "fec49fcf160a9302c5d58aa741e121d2dc8edb2e22c4f6568a316aeff84904a2",
-    "Ciuki Blue": "b691cf28a5a8332ea0cfecded9dac04ef2691ace1b408a4be96a64c0ded5bb22",
-    "Classic 98": "e0c9340926c65568ee215c8573f5404919c7cba8b427a688b49e43411017ebe9",
+    "Ciuki Blue": "e31b305c71e80ac1fb9cd8783bd81c823d6534ee8735a0e25f0c2df8e08c945e",
+    "Platinum": "93073bf3732b60bd5a3633337d5eee3a3a7d1835efb3823e4639b3287a9e2db2"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

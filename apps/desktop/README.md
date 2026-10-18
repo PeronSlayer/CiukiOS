@@ -42,8 +42,7 @@ title-button size, icon slots (16/22/32) and the font faces. Built-in
 themes: **Platinum** (platinum greys, blue accent, pinstriped
 active title bars, gradient bevels, rounded window tops, soft shadow),
 **Ciuki Blue** (default: horizontal slate-blue captions, cool 3D bevels,
-Ciuki's tan Start accent and dark inactive caption text) and
-**Classic 98** (flat 3-D greys, navy gradient captions, aliased text). Frame
+Ciuki's tan Start accent and dark inactive caption text). Frame
 geometry (`DESK_BORDER` 3, `DESK_TITLE` 24, close/minimise hit boxes) is the
 same in every theme, so scripted coordinates never depend on the theme.
 
@@ -109,21 +108,15 @@ Frames and the Ciuki button (ui-polish, 2026-10-12):
   hover face and a pressed face; inactive frames keep quiet flat buttons and
   no stripes. Ciuki Blue: the same layout on a vertical slate-blue gradient
   with glassy buttons, tan hover outline and the window icon at the left.
-  Classic 98: 3-D bevel, navy caption, left title, 16x14 caption buttons.
   Hover follows the pointer (`desk_title_code`), pressed the held left button.
-- The Ciuki (Start) button is at the left end of the top bar
-  (`DESK_START_X/Y/W/H` = 4, 4, 96, 24; owner request, 2026-10-12), in the
-  spirit of the classic Mac OS menu bar, whose pull-down menus drop from
-  their titles and whose system menu is a standard menu
-  ([Inside Macintosh: Overview, "About Menus"](https://discmaster.textfiles.com/file/32774/Dev.CD%20Dec%2098%20RL2.toast/Technical%20Publications/mac/IMOverview/IMOverview-45.html?html=true);
-  platinum menu bar with bevelled edges and anti-aliased corners:
-  [Mac OS 8 HIG, "Menu Bar Changes"](https://discmaster.textfiles.com/file/32774/Dev.CD%20Dec%2098%20RL2.toast/Technical%20Publications/mac/HIGOS8Guide/thig-54.html?html=true)):
-  the approved portrait (area-averaged, 18 px) and "CiukiOS" on a rounded
-  (radius 7, anti-aliased) softly bevelled gradient face around the theme's
-  `start` colour, lit on hover, pressed in (`start_open`) while the menu is
-  open. The Start menu drops from it at (4, 32), submenus open to the right;
-  Win and Ctrl+Esc still open it. The taskbar keeps the task buttons (from
-  `DESK_TASK_X` 4, at most 160 px) and the tray.
+- The Ciuki Start orb sits at (4, 4), 24x24 within the 32 px top bar.
+  Its circular radial gradient follows the theme accent; the exact approved
+  portrait uses the existing deterministic 18 px area average. Hover lights
+  the face; the open-menu state presses it in. Start drops from (4, 32), and
+  Win and Ctrl+Esc keep their keyboard behavior. The top right holds tray
+  icons, the notification anchor, and a two-line clock/date; no window title
+  appears in the bar. The bottom bar contains only left-aligned window
+  buttons, at most 160 px each. See [shell design](../../docs/design/desktop-shell.md).
 Reference frames: `DesktopTests.test_look_reference_frames` builds
 `tests/host/desktop/look_capture.c` (desktop with a window of every control,
 dialogs, Start menu, one pair of 1024x768 frames per theme); with

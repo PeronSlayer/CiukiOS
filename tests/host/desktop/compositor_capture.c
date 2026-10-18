@@ -12,6 +12,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef CAPTURE_ICONS
+#include "../../../apps/libdeskui/deskui.h"
+static const uint32_t *capture_icon(const char *name,unsigned size) { return du_icon_argb(name,size); }
+#endif
 static void programs(struct desktop *d)
 {
     static const char *const names[] = {"ciuknote", "control", "demo", "dosbox", "files", "hello", "libc_smoke", "lua", "tasks"};
@@ -56,6 +60,9 @@ int main(int argc,char **argv)
     uint32_t *portrait=malloc(256*256*4); assert(portrait);
     FILE *f=fopen(argv[1],"rb"); assert(f && fread(portrait,4,256*256,f)==256*256 && !fclose(f));
     d->portrait=portrait;
+#ifdef CAPTURE_ICONS
+    d->icon=capture_icon;
+#endif
     uint32_t *guarded=calloc((size_t)W*H+2,4); assert(guarded);
     guarded[0]=guarded[(size_t)W*H+1]=0xfeedface; d->pixels=guarded+1;
     const char *mode=argv[3];
@@ -88,7 +95,7 @@ int main(int argc,char **argv)
         desk_shell_enable(d);
         desk_shell_wallpaper_update(d);
         if (!strcmp(mode,"start") || !strcmp(mode,"documents") || !strcmp(mode,"settings")) {
-            hover(d,40,16); press(d,1);   /* the Ciuki button in the top bar */
+            hover(d,DESK_START_X+DESK_START_W/2,DESK_START_Y+DESK_START_H/2); press(d,1);   /* the Ciuki button in the top bar */
             struct desk_box m=desk_menu_box(d);
             int row = !strcmp(mode,"start") ? 0 : !strcmp(mode,"documents") ? 1 : 2;
             hover(d,60,m.y+3+row*SH_START_ROW+14);

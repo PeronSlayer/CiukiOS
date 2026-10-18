@@ -73,10 +73,10 @@ static void controls(struct du_ui *u, uint32_t *pixels, int w, int h)
     tabs[0].text[0] = "General"; tabs[1].text[0] = "Appearance"; tabs[2].text[0] = "About";
     t->items = tabs; t->count = 3; t->active = 1;
     du_add(u, DU_GROUP, 151, (struct du_rect){18, 126, 232, 94}, "&Theme");
-    static const char *const names[] = {"&Platinum", "Ciuki &Blue", "Classic &98"};
-    for (int i = 0; i < 3; i++) {
+    static const char *const names[] = {"&Platinum", "Ciuki &Blue"};
+    for (int i = 0; i < 2; i++) {
         struct du_widget *r = du_add(u, DU_RADIO, 152 + i, (struct du_rect){30, 144 + i * 22, 200, 20}, names[i]);
-        r->total = 1; r->value = !strcmp(desk_theme->name, i == 0 ? "Platinum" : i == 1 ? "Ciuki Blue" : "Classic 98");
+        r->total = 1; r->value = !strcmp(desk_theme->name, i == 0 ? "Platinum" : "Ciuki Blue");
     }
     du_add(u, DU_GROUP, 156, (struct du_rect){260, 126, w - 278, 94}, "&Options");
     struct du_widget *c1 = du_add(u, DU_CHECKBOX, 157, (struct du_rect){272, 144, 220, 20}, "&Smooth fonts");
@@ -116,7 +116,7 @@ static void note(struct du_ui *u, struct du_textarea *ta, uint32_t *pixels, int 
 {
     du_init(u, pixels, w, h);
     u->menus = note_menus; u->menu_count = 5;
-    static const char text[] = "CiukiOS - A modern Retro OS\n\nDedicated to Ciuki.\n\n"
+    static const char text[] = "CiukiOS - Classic computing, one woof at a time.\n\nDedicated to Ciuki.\n\n"
                                "Inconsolata 12 for text, Inter 12 for the UI.\nCaf\xc3\xa9, perch\xc3\xa9, citt\xc3\xa0 \xe2\x80\xa2 \xc2\xa9 2026\n\n"
                                "int main(void) { return 0; }\n";
     assert(!du_ta_init(ta, 4096));

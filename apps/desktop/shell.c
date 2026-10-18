@@ -4,7 +4,7 @@
  * other window-manager shortcuts. Drawing goes through the libdeskui
  * primitives and the theme painter (theme.h) on the compositor's frame:
  * colours, bevels and the anti-aliased Inter faces follow the current
- * theme (Platinum, Ciuki Blue, Classic 98). No file or kernel access here
+ * theme (Platinum, Ciuki Blue). No file or kernel access here
  * (shell.h). Integer-only. */
 #include "desktop.h"
 #include "../libdeskui/deskui.h"
@@ -797,14 +797,18 @@ static struct desk_box network_icon_box(const struct desktop *d)
 { return desk_shell_tray_icon_box(d, SH_TRAY_NETWORK); }
 static struct desk_box media_icon_box(const struct desktop *d)
 { return desk_shell_tray_icon_box(d, SH_TRAY_MEDIA); }
+static struct desk_box notification_icon_box(const struct desktop *d)
+{ return desk_shell_tray_icon_box(d, SH_TRAY_NOTIFICATION); }
 static struct desk_box tooltip_box(const struct desktop *d);
+static struct desk_box notification_outer(const struct desktop *d);
 static struct desk_box tray_popup(const struct desktop *d, struct desk_box anchor, int w, int h)
 {
     if (w > (int)d->width) w = (int)d->width;
     int x = anchor.x + anchor.w - w;
     if (x < 0) x = 0;
     if (x + w > (int)d->width) x = (int)d->width - w;
-    return (struct desk_box){x, tray_box(d).y - SH_TRAY_GAP - h, w, h};
+    int y = anchor.y < DESK_BAR ? DESK_BAR + SH_TRAY_GAP : anchor.y - SH_TRAY_GAP - h;
+    return (struct desk_box){x, y, w, h};
 }
 static unsigned media_count(const struct desktop *d)
 { unsigned n=0; for (unsigned i=3;i<26;i++) if (d->sh.media.removable_mask & (1u<<i)) n++; return n; }
@@ -844,7 +848,7 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
         state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;
     if (!state->removable_mask) d->sh.media_open=0;
-    damage(d, resized ? desk_taskbar(d) : tray_box(d));
+    damage(d, resized ? (struct desk_box){0,0,(int)d->width,DESK_BAR} : tray_box(d));
     if (d->sh.media_open) damage(d,outer(media_popup(d)));
 }
 void desk_shell_media_labels(struct desktop *d,const struct ciuki_media_volume volumes[26])
@@ -902,6 +906,7 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
         }
         return;
     }
+    if (d->sh.tooltip==5) { snprintf(text,size,"Notifications"); return; }
     if (d->sh.tooltip != 2) { date_text(d, text, size, 1); return; }
     const struct ciuki_net_state *n = &d->sh.network;
     if (!n->present) snprintf(text, size, "No network adapter");
@@ -938,7 +943,7 @@ static struct desk_box tooltip_box(const struct desktop *d)
     if (h>(int)d->height-2*DESK_BAR-12) h=(int)d->height-2*DESK_BAR-12;
     struct desk_box anchor=d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
         d->sh.tooltip==2 ? network_icon_box(d) : d->sh.tooltip==3 ? volume_icon_box(d) :
-        d->sh.tooltip==4 ? media_icon_box(d) : clock_box(d);
+        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) : clock_box(d);
     return tray_popup(d,anchor,w,h);
 }
 static void damage_moved_popup(struct desktop *d, struct desk_box anchor, int dx, int w, int h)
@@ -952,12 +957,16 @@ void desk_shell_tray_damage(struct desktop *d, int previous_width)
     struct desk_box t = tray_box(d);
     int dx = t.w - previous_width;
     if (!dx) { damage(d, t); return; }
-    damage(d, desk_taskbar(d));
+    damage(d, (struct desk_box){0,0,(int)d->width,DESK_BAR});
     if (d->sh.volume_open) damage_moved_popup(d, volume_icon_box(d), dx, 92, 168);
     if (d->sh.network_open) damage_moved_popup(d, network_icon_box(d), dx, 272, 112);
     if (d->sh.media_open) damage_moved_popup(d, media_icon_box(d), dx, 248, 28 + (int)media_rows(d) * 22);
     if (d->sh.tooltip) {
         struct desk_box b=tooltip_box(d);
+        damage(d,b); b.x+=dx; damage(d,b);
+    }
+    if (d->sh.notification.active) {
+        struct desk_box b=notification_outer(d);
         damage(d,b); b.x+=dx; damage(d,b);
     }
 }
@@ -991,14 +1000,13 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
     const struct desk_theme *t = desk_theme;
     struct desk_box bar = desk_taskbar(d), b;
     if (!desk_intersect(bar, clip, &b)) return;
-    struct du_canvas c = canvas(d, b);
-    /* Task buttons from the left margin (the Ciuki button is in the top bar), tray at the right. */
+    /* Both themes align tasks from the left; the whole bar belongs to windows. */
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_box button = desk_task_button(d, i), part;
         if (!desk_intersect(button, b, &part)) continue;
         struct du_canvas bc = canvas(d, part);
         struct du_rect r = {button.x + 1, button.y, button.w - 2, button.h};
-        int active = d->focus == i;
+        int active = d->focus == i && !d->clients[i].minimized;
         if (active) {
             /* The focused window's button is pressed in. */
             du_fill(&bc, r, t->task_active);
@@ -1018,8 +1026,11 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
                          active ? t->task_active_text : t->taskbar_text);
         }
     }
-    struct desk_box tray = tray_box(d);
-    du_edge(&c, R(tray), DU_SUNKEN_THIN);
+}
+static void draw_tray(struct desktop *d, struct du_canvas *canvas)
+{
+    const struct desk_theme *t = desk_theme;
+    struct du_canvas c = *canvas;
     const char *net_icon = !d->sh.network.present ? "network-error" :
                           d->sh.network.link == CIUKI_NET_LINK_UP ? "network-wired" : "network-offline";
     struct desk_box ni = network_icon_box(d);
@@ -1032,10 +1043,19 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
         struct desk_box mi=media_icon_box(d);
         du_icon_blit(&c,mi.x,mi.y,desk_shell_icon("drive-removable-media",16),16,DU_ICON_NORMAL);
     }
+    struct desk_box notification = notification_icon_box(d);
+    du_icon_blit(&c,notification.x,notification.y,desk_shell_icon("dialog-information",16),16,
+                 d->sh.notification.active ? DU_ICON_NORMAL : DU_ICON_GHOST);
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
-    du_text(&c, cb.x, cb.y + (cb.h - text_h()) / 2, clock, t->taskbar_text);
+    int width=du_text_width(clock);
+    du_text(&c, cb.x + (cb.w-width)/2, cb.y, clock, t->topbar_text);
+    int year, month, day, weekday; char date[24];
+    civil(wall_seconds(d),&year,&month,&day,&weekday);
+    snprintf(date,sizeof(date),"%04d-%02d-%02d",year,month,day);
+    width=du_text_width(date);
+    du_text(&c,cb.x+(cb.w-width)/2,cb.y+cb.h-text_h(),date,t->topbar_text);
 }
 static void check_mark(struct du_canvas *c, int x, int y, uint32_t ink)
 {
@@ -1114,18 +1134,18 @@ static struct desk_box notification_box(const struct desktop *d)
     int lines=du_text_wrap(NULL,(struct du_rect){0,0,w-68,0},d->sh.notification.text,0);
     int h=lines*line_h()+64; if (h<102) h=102;
     if (h>(int)d->height-2*DESK_BAR-20) h=(int)d->height-2*DESK_BAR-20;
-    struct desk_box b=tray_popup(d,clock_box(d),w,h+10);
+    struct desk_box b=tray_popup(d,notification_icon_box(d),w,h);
     b.h=h; b.y+=d->sh.notification.slide;
     return b;
 }
 static struct desk_box notification_outer(const struct desktop *d)
 {
-    struct desk_box b=notification_box(d); b.h+=10; return outer(b);
+    struct desk_box b=notification_box(d); b.y-=10; b.h+=10; return outer(b);
 }
 static struct du_rect notification_area(const struct desktop *d)
-{ return (struct du_rect){0,DESK_BAR,(int)d->width,tray_box(d).y-SH_TRAY_GAP-DESK_BAR}; }
+{ return (struct du_rect){0,DESK_BAR,(int)d->width,(int)d->height-2*DESK_BAR}; }
 /* Include the whole entry sweep, balloon tail and theme shadow. The painter
- * clips this overlay above the tray; the exclusion must use the same clip. */
+ * clips this overlay between the bars; the exclusion must use the same clip. */
 struct desk_box desk_shell_notification_bounds(const struct desktop *d)
 {
     if (!d->shell || !d->sh.notification.active) return (struct desk_box){0};
@@ -1153,6 +1173,7 @@ void desk_shell_notify(struct desktop *d,const char *title,const char *text,int 
     snprintf(n->text,sizeof(n->text),"%s",text);
     tooltip_hide(d);
     damage(d,notification_outer(d));
+    damage(d,notification_icon_box(d));
     if (n->balloon) desk_sound(d,du_message_sound(icon));
 }
 void desk_shell_notify_error(struct desktop *d,const char *title,int error)
@@ -1183,9 +1204,9 @@ static void draw_notification(struct desktop *d,struct desk_box clip)
     if (n->balloon) {
         int x=b.x+b.w-28;
         for (int row=0;row<10;row++) {
-            du_hline(&c,x+row,b.y+b.h+row,11-row,DU_FACE);
-            du_fill(&c,(struct du_rect){x+row,b.y+b.h+row,1,1},desk_theme->outline);
-            du_fill(&c,(struct du_rect){x+10,b.y+b.h+row,1,1},desk_theme->outline);
+            du_hline(&c,x+row,b.y-row,11-row,DU_FACE);
+            du_fill(&c,(struct du_rect){x+row,b.y-row,1,1},desk_theme->outline);
+            du_fill(&c,(struct du_rect){x+10,b.y-row,1,1},desk_theme->outline);
         }
     }
 }
@@ -1555,65 +1576,48 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
     }
     draw_icons(d, clip);
 }
-/* The Ciuki (Start) button: the approved portrait (deterministic area
- * scaling of the exact asset) and "CiukiOS" on a rounded, softly bevelled
- * gradient face; pressed in while its menu is open, lit under the pointer.
- * Classic 98 draws the raised 3-D button of that theme. */
+/* A circular accent orb; portrait pixels use the existing deterministic
+ * area scaler. Integer radial shading and four coverage samples per pixel. */
 static void draw_start(struct desktop *d, struct du_canvas *c)
 {
     const struct desk_theme *t = desk_theme;
     struct desk_box b = desk_start_button(d);
     struct desk_paint p = painter(c);
     int open = d->menu_open, hot = d->sh.start_hot && !open;
-    uint32_t base = open ? t->start_open : t->start;
-    if (t->control_style == DESK_CONTROLS_CLASSIC) desk_paint_raised(&p, b.x, b.y, b.w, b.h, open, 0);
-    else {
-        /* A soft gradient around the theme's start colour (the normal-boot
-         * heuristic of scripts/test/run.py reads that colour), lighter on hover. */
-        uint32_t top = open ? desk_mix(t->dark, base, 24) : desk_mix(t->hilite, base, hot ? 190 : 100);
-        uint32_t bottom = open ? desk_mix(t->hilite, base, 24) : desk_mix(t->shadow, base, hot ? 30 : 22);
-        desk_paint_round_rect(&p, b.x, b.y, b.w, b.h, SH_START_RADIUS, top, bottom,
-                              open ? t->outline : desk_mix(t->outline, t->topbar, 170), 255);
-        /* Soft bevel: a light line under the top edge, or a shade while pressed. */
-        desk_paint_blend(&p, b.x + SH_START_RADIUS, b.y + 1, b.w - 2 * SH_START_RADIUS, 1, open ? t->dark : t->hilite, open ? 70 : 200);
-        if (!open) desk_paint_blend(&p, b.x + SH_START_RADIUS, b.y + b.h - 2, b.w - 2 * SH_START_RADIUS, 1, t->shadow, 60);
+    uint32_t base = t->topbar_accent;
+    uint32_t light = desk_mix(t->hilite, base, open ? 40 : hot ? 170 : 120);
+    uint32_t dark = desk_mix(t->outline, base, open ? 150 : 90);
+    int radius = b.w * 2, rr = radius * radius;
+    for (int y = 0; y < b.h; y++) for (int x = 0; x < b.w; x++) {
+        unsigned covered = 0;
+        for (int sy = 1; sy <= 3; sy += 2) for (int sx = 1; sx <= 3; sx += 2) {
+            int dx = x * 4 + sx - radius, dy = y * 4 + sy - radius;
+            covered += dx * dx + dy * dy <= rr;
+        }
+        if (!covered) continue;
+        int dx = x * 4 + 2 - radius, dy = y * 4 + 2 - radius * 2 / 3;
+        unsigned distance = (unsigned)(dx * dx + dy * dy) * 255 / (unsigned)rr;
+        if (distance > 255) distance = 255;
+        uint32_t face = desk_mix(dark, light, distance);
+        dx = x * 4 + 2 - radius; dy = y * 4 + 2 - radius;
+        if (dx * dx + dy * dy > (radius - 4) * (radius - 4))
+            face = desk_mix(open ? t->outline : t->hilite, face, open ? 130 : 80);
+        desk_paint_blend(&p,b.x+x,b.y+y,1,1,face,covered*255/4);
     }
-    int font = t->font_title, shift = open ? 1 : 0, tw = desk_text_measure(font, "CiukiOS");
-    int x = b.x + (b.w - SH_START_MARK - 6 - tw) / 2 + shift, y = b.y + (b.h - SH_START_MARK) / 2 + shift;
-    du_icon_blit(c, x, y, desk_shell_icon("ciuki", SH_START_MARK), SH_START_MARK, DU_ICON_NORMAL);
-    if (t->text_aa && !open) desk_paint_text(&p, font, x + SH_START_MARK + 6, b.y + 17 + shift, "CiukiOS", desk_mix(t->hilite, base, 150));
-    desk_paint_text(&p, font, x + SH_START_MARK + 6, b.y + 16 + shift, "CiukiOS", t->start_text);
+    int shift = open ? 1 : 0;
+    int x = b.x + (b.w - SH_START_MARK) / 2 + shift;
+    int y = b.y + (b.h - SH_START_MARK) / 2 + shift;
+    du_icon_blit(c,x,y,desk_shell_icon("ciuki",SH_START_MARK),SH_START_MARK,DU_ICON_NORMAL);
 }
 void desk_shell_topbar(struct desktop *d, struct desk_box clip)
 {
-    /* The compositor fills the bar and its edges in the theme; the shell
-     * adds the Ciuki button, the active window title or notice (no tagline:
-     * owner request 2026-10-12) and the date. */
-    const struct desk_theme *t = desk_theme;
-    struct desk_box bar = {0, 0, (int32_t)d->width, DESK_BAR}, b;
-    if (!desk_intersect(bar, clip, &b)) return;
+    /* Free space separates the orb and system status; captions stay in frames. */
+    struct desk_box bar = {0,0,(int32_t)d->width,DESK_BAR}, b;
+    if (!desk_intersect(bar,clip,&b)) return;
     bind(d);
-    struct du_canvas c = canvas(d, b);
-    struct desk_paint p = painter(&c);
-    draw_start(d, &c);
-    struct desk_box start = desk_start_button(d);
-    int x = start.x + start.w;
-    const char *what = d->notice[0] ? d->notice : NULL;
-    char line[96];
-    if (!what && d->focus >= 0 && d->clients[d->focus].window) { snprintf(line, sizeof(line), "%s", d->clients[d->focus].title); what = line; }
-    char date[48];
-    date_text(d, date, sizeof(date), 1);
-    int dw = desk_text_measure(t->font_ui, date), room = (int)d->width - dw - 24 - (x + 14);
-    if (room > 0) {
-        struct desk_paint tp = p;
-        struct desk_box tb;
-        if (what && desk_intersect((struct desk_box){x + 14, 0, room, DESK_BAR}, b, &tb)) {
-            tp.cx = tb.x; tp.cy = tb.y; tp.cw = tb.w; tp.ch = tb.h;
-            desk_paint_text(&tp, t->font_ui, x + 14, 20, what,
-                            d->notice[0] ? t->topbar_accent : desk_mix(t->topbar_text, t->topbar, 170));
-        }
-    }
-    desk_paint_text(&p, t->font_ui, (int)d->width - dw - 12, 20, date, t->topbar_text);
+    struct du_canvas c = canvas(d,b);
+    draw_start(d,&c);
+    draw_tray(d,&c);
 }
 void desk_shell_overlay(struct desktop *d, struct desk_box clip)
 {
@@ -2132,7 +2136,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
             struct sh_notification *n=&d->sh.notification;
             struct desk_box b=notification_box(d);
             int close=desk_contains((struct desk_box){b.x+b.w-26,b.y+12,18,18},x,y);
-            damage(d,notification_outer(d)); n->active=0;
+            damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d));
             if (close) return 1;
             if (n->action==SH_NOTIFY_NETWORK) { d->sh.network_open=1; damage(d,outer(network_popup(d))); }
             else if (n->action==SH_NOTIFY_VOLUME) { d->sh.volume_open=1; damage(d,outer(volume_popup(d))); }
@@ -2142,14 +2146,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         return 1;
     }
     if (d->sh.notification.active) {
-        damage(d,notification_outer(d)); d->sh.notification.active=0;
+        damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
     }
     struct desk_box bar = desk_taskbar(d);
     if (desk_contains(start_button(d), x, y)) {
         if (button == CIUKI_BUTTON_LEFT) desk_menu_open(d, SH_MENU_START, 0, 0);
         return 1;
     }
-    if (desk_contains(bar, x, y)) {
+    if (y >= 0 && y < DESK_BAR) {
         if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
             damage(d,outer(media_popup(d))); return 1;
@@ -2164,6 +2168,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
             damage(d, outer(volume_popup(d)));
             return 1;
         }
+        if (desk_contains(notification_icon_box(d),x,y) && button==CIUKI_BUTTON_LEFT) {
+            /* The current slot remains available through its top-bar anchor. */
+            if (d->sh.notification.title[0])
+                desk_shell_message_class(d,d->sh.notification.title,d->sh.notification.text,d->sh.notification.icon);
+        }
+        return 1;
+    }
+    if (desk_contains(bar,x,y)) {
         for (int i = 0; i < DESK_CLIENTS; i++) if (desk_contains(desk_task_button(d, i), x, y)) {
             if (button == CIUKI_BUTTON_RIGHT) {
                 d->sh.menu_owner = i;
@@ -2211,6 +2223,7 @@ static int hover_target(const struct desktop *d)
     if (desk_contains(network_icon_box(d),x,y)) return 2;
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
     if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y)) return 4;
+    if (desk_contains(notification_icon_box(d),x,y)) return 5;
     for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
     return 0;
 }
@@ -2253,7 +2266,7 @@ void desk_shell_tick(struct desktop *d)
     if (n->active) {
         uint64_t age=d->now_ns>=n->started ? d->now_ns-n->started : 0;
         int slide=age>=160000000ull ? 0 : 20-(int)(age/8000000ull);
-        if (d->now_ns>=n->expires) { damage(d,notification_outer(d)); n->active=0; }
+        if (d->now_ns>=n->expires) { damage(d,notification_outer(d)); n->active=0; damage(d,notification_icon_box(d)); }
         else if (slide!=n->slide) {
             damage(d,notification_outer(d)); n->slide=slide; damage(d,notification_outer(d));
         }
@@ -2299,7 +2312,7 @@ void desk_shell_clock_damage(struct desktop *d, uint64_t previous)
     }
     if (d->sh.cfg.clock_seconds || d->realtime_second/60!=previous/60) {
         /* Proportional digits and 12-hour rollover can move every tray icon
-         * and resize task buttons. Erase their previous positions as well. */
+         * in the top bar. Erase their previous positions as well. */
         uint64_t old = d->app_test ? 12 * 3600 : previous;
         int dx = desk_shell_clock_width_at(d, wall_seconds(d)) - desk_shell_clock_width_at(d, old);
         if (dx) desk_shell_tray_damage(d, tray_box(d).w - dx);
@@ -2556,7 +2569,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (d->sh.volume_open && code == DU_KEY_ESC) { if (value) { d->sh.volume_open = 0; damage(d, outer(volume_popup(d))); } return 1; }
     if (d->sh.notification.active && code==DU_KEY_ESC) {
-        if (value) { damage(d,notification_outer(d)); d->sh.notification.active=0; }
+        if (value) { damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d)); }
         return 1;
     }
     if (d->focus >= 0 && d->clients[d->focus].internal) {

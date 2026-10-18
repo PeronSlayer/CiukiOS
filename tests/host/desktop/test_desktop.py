@@ -21,6 +21,8 @@ from unittest.mock import patch
 import zlib
 
 sys.dont_write_bytecode = True
+# F2-81: intentional two-bar shell/theme changes; docs/design/desktop-shell.md.
+
 ROOT = Path(__file__).resolve().parents[3]
 # The desktop shell's units (apps/desktop/build_desktop.py SHELL, without the stb decoder) and the toolkit
 # primitives it draws with: every host build of the production desktop links them.
@@ -35,18 +37,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
 # only the dialog frames change.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "af53527c00b4ffebb4909c880cf571a3a77586fc21fadcc2d879d1511c674fd1",
-    "ciuki-blue-dialogs.ppm": "ad5fded4e5aa6e642b316e98ffd21f6a1e05fed1a0fbeffefa12f21196eca760",
-    "ciuki-blue-tray-disabled.ppm": "5bf8a5c6dffc04e3550ac7993ec875bd41dbcbb0c8cb012c793d864c9ed0cf8d",
-    "ciuki-blue-tray-media.ppm": "b9024012e844d5c3df06d5cc14ac178a002d095c124be161d1d566926175005e",
-    "classic-98-desktop.ppm": "a469d45db5cd51560ede504dc6514c8ad1817888a3c97bdea4a250e1d01fd5a2",
-    "classic-98-dialogs.ppm": "c6eece8d8875b25b2cf111e05cc73d8899766af2e474cccaa2d4899a95eb18e9",
-    "classic-98-tray-disabled.ppm": "38363a9f344a2abe17e5e04fef55f8eb8deed44e2c5f593d3f8062fd4f763937",
-    "classic-98-tray-media.ppm": "4103806b91770a66daedb3dbebdd99fcfbef29d70946c18eb0f617d959c28174",
-    "platinum-desktop.ppm": "2dcb28b6aebb38944f8e4c90d2ed6745fd45876e545a32ff6687d0b66b788e47",
-    "platinum-dialogs.ppm": "a7679d4da59ea8249b5d3d92a4ae3d4b4398538d8283fe15904129a31a2eaed3",
-    "platinum-tray-disabled.ppm": "1586c8a2457d6265247d3c61451a5a3983714706a1f4f3ce377b0fee8d51ecd2",
-    "platinum-tray-media.ppm": "54c00f1c4acb4038fb9ac6769a0d879892014e897da2c4f271e35dbf3c07528a"
+    "ciuki-blue-desktop.ppm": "92be431fbfa2742ac188c836b8776cc4e32c8672ad3d3ae6aa06b7bae9c61654",
+    "ciuki-blue-dialogs.ppm": "7aa51b282c98f4a6c5a3591654add1de58b1a35e5475cb01db66f604fa43bda4",
+    "ciuki-blue-tray-disabled.ppm": "cdaa374dd4e8f0cf949f6b52e602d1b65a9dc7f266b7bb48d1e94f06fcb70ff7",
+    "ciuki-blue-tray-media.ppm": "1b50d2d8ce2247e887bdb0847a5b8943df2edc3131b9cf12d6b9904a3f5f3281",
+    "platinum-desktop.ppm": "6734d5e09dc5bd285f218e93aeb99fcdee6af240fe01f9756c42fe10d47f374d",
+    "platinum-dialogs.ppm": "773246338ff7b8737c124dfc5ae9155974c8cce69f67665b926baebad74d13fe",
+    "platinum-tray-disabled.ppm": "b8700318bff6123dcd84f03998f159ac2f0daa4d4086ffb1e84f5fa1d646c95f",
+    "platinum-tray-media.ppm": "96aa790f6fff6b100b05848a41f4a10b479b7c90455c98f44f4a9eef2b826c71"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -177,14 +175,11 @@ class DesktopTests(unittest.TestCase):
                 else:
                     # The Ciuki button at the left end of the top bar (desktop.h DESK_START_*) shows the
                     # approved portrait area-averaged to 18 px (shell.c desk_shell_icon "ciuki"), centred
-                    # with "CiukiOS" in the title face and pressed in by 1 px while the menu is open
+                    # in the orb and pressed in by 1 px while the menu is open
                     # ("shell" mode). Every cell the portrait covers fully is the exact average of its
                     # source block.
                     size, shift = 18, 1 if mode == "shell" else 0
-                    fonts = load("capture_font_metadata", ROOT / "apps/desktop/convert_fonts.py")
-                    title = json.loads((ROOT / "apps/desktop/ui-fonts.json").read_text())["faces"]["DESK_FONT_TITLE"]
-                    tw = sum(title["advances"][fonts.CODES.index(ord(ch))] for ch in "CiukiOS")
-                    x0, y0 = 4 + (96 - size - 6 - tw) // 2 + shift, 4 + (24 - size) // 2 + shift
+                    x0, y0 = 4 + (24 - size) // 2 + shift, 4 + (24 - size) // 2 + shift
                     full = 0
                     for y in range(size):
                         for x in range(size):
@@ -229,12 +224,12 @@ class DesktopTests(unittest.TestCase):
             frames = folder / "frames"; frames.mkdir()
             subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(frames)], check=True, env=env, capture_output=True)
             names = sorted(p.name for p in frames.glob("*.ppm"))
-            self.assertEqual(names, sorted(f"{t}-{w}.ppm" for t in ("platinum", "ciuki-blue", "classic-98")
+            self.assertEqual(names, sorted(f"{t}-{w}.ppm" for t in ("platinum", "ciuki-blue")
                                            for w in ("desktop", "dialogs", "tray-disabled", "tray-media")))
             digests = {n: hashlib.sha256((frames / n).read_bytes()).hexdigest() for n in names}
             for n in names:
                 capture("look-" + Path(n).stem, (frames / n).read_bytes())
-            self.assertEqual(len(set(digests.values())), 12)
+            self.assertEqual(len(set(digests.values())), 8)
             # Desktop icon labels over the default wallpaper, the owner's Ciuk2 scene (owner feedback 2026-10-12:
             # labels must stay readable on any wallpaper): look_capture's wallpaper mode renders the six desktop
             # icons with Documents selected, and the same desktop with the icons off.
@@ -243,7 +238,7 @@ class DesktopTests(unittest.TestCase):
                            check=True, env=env, capture_output=True)
             for p in wall.glob("*.ppm"):
                 capture("look-" + p.stem, p.read_bytes())
-            for theme in ("platinum", "ciuki-blue", "classic-98"):
+            for theme in ("platinum", "ciuki-blue"):
                 with self.subTest(theme=theme):
                     self.check_icon_labels(wall / f"{theme}-wallpaper.ppm", wall / f"{theme}-wallpaper-plain.ppm")
             target = os.environ.get("CIUKI_LOOK_FRAMES")
@@ -331,39 +326,45 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "image.c")]
             sources += SHELL_SOURCES + [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c","icon_map.c")]
+            icons=load("wall_icons",ROOT / "tests/host/desktop/icon_assets.py")
             subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror", "-DCAPTURE_DECODE",
+                            "-DCAPTURE_ICONS",*icons.defines(),
                             "-fsanitize=address,undefined", "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             *map(str, sources), "-o", str(binary)], check=True, env=env)
             c = load("wall_portrait", ROOT / "apps/desktop/convert_portrait.py")
             (folder / "portrait.xrgb").write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
-            target = folder / "default.xrgb"
-            result = subprocess.run([str(binary), str(folder / "portrait.xrgb"), str(target),
-                                     "wallfile=" + str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png"), "1024x768"],
-                                    check=True, env=env, capture_output=True, text=True)
-            self.assertIn("WALLPAPER /system/wallpapers/Ciuk2.png 1448x1086 mode=fill", result.stdout)
-            data = target.read_bytes()
-            self.assertEqual(len(data), 1024 * 768 * 4)
-            rgb = xrgb_to_rgb(data)
-            ppm = folder / "default.ppm"
-            ppm.write_bytes(b"P6\n1024 768\n255\n" + rgb)
             path = str(ROOT / "scripts/test")
-            sys.path.insert(0, path)
+            sys.path.insert(0,path)
             try:
-                runner = load("desktop_wall_runner", ROOT / "scripts/test/run.py")
+                runner = load("desktop_wall_runner",ROOT / "scripts/test/run.py")
             finally:
                 sys.path.remove(path)
-            observed = runner.observe_normal_boot_screen(ppm, {"geometry": [1024, 768]})
-            frames = os.environ.get("CIUKI_WALL_FRAMES")
-            if frames:
-                Path(frames).mkdir(parents=True, exist_ok=True)
-                write_png(Path(frames) / "default-desktop.png", 1024, 768, rgb)
-        self.assertEqual(observed["failures"], [])
-        self.assertLessEqual(observed["regions"]["background"]["fraction"], 0.02)
-        # Fill covers the work area: neither edge column shows the desktop colour (fit would leave 42 px bands).
-        desktop = bytes(((runner.DESK_BACKGROUND >> 16) & 255, (runner.DESK_BACKGROUND >> 8) & 255, runner.DESK_BACKGROUND & 255))
-        for x in (0, 1023):
-            self.assertFalse(any(rgb[(y * 1024 + x) * 3:(y * 1024 + x) * 3 + 3] == desktop for y in range(32, 736)), x)
-        print("DEFAULT_DESKTOP", json.dumps({k: v["fraction"] for k, v in observed["regions"].items()}, sort_keys=True))
+            for width,height in ((1024,768),(800,600)):
+                geometry=f"{width}x{height}"
+                target=folder / "default.xrgb"
+                result=subprocess.run([str(binary),str(folder / "portrait.xrgb"),str(target),
+                    "wallfile="+str(ROOT / "assets/wallpapers/ciuki/Ciuk2.png"),geometry],
+                    check=True,env=env,capture_output=True,text=True)
+                self.assertIn("WALLPAPER /system/wallpapers/Ciuk2.png 1448x1086 mode=fill",result.stdout)
+                data=target.read_bytes(); self.assertEqual(len(data),width*height*4)
+                rgb=xrgb_to_rgb(data)
+                ppm=folder / "default.ppm"
+                ppm.write_bytes(f"P6\n{width} {height}\n255\n".encode()+rgb)
+                observed=runner.observe_normal_boot_screen(ppm,{"geometry":[width,height]})
+                self.assertEqual(observed["failures"],[],geometry)
+                self.assertLessEqual(observed["regions"]["background"]["fraction"],0.02)
+                # This independent observer verifies the exact approved portrait's new position.
+                self.assertTrue(runner.desktop_mark_visible(ppm),geometry)
+                frames=os.environ.get("CIUKI_WALL_FRAMES")
+                if frames:
+                    Path(frames).mkdir(parents=True,exist_ok=True)
+                    write_png(Path(frames) / f"default-desktop-{geometry}.png",width,height,rgb)
+                desktop=bytes(((runner.DESK_BACKGROUND>>16)&255,(runner.DESK_BACKGROUND>>8)&255,runner.DESK_BACKGROUND&255))
+                for x in (0,width-1):
+                    self.assertFalse(any(rgb[(y*width+x)*3:(y*width+x)*3+3]==desktop
+                                         for y in range(32,height-32)),(geometry,x))
+                print("DEFAULT_DESKTOP",geometry,json.dumps({k:v["fraction"] for k,v in observed["regions"].items()},sort_keys=True))
 
     def test_control_display_positions(self):
         """Control Panel Display page: Center/Tile/Stretch/Fit/Fill in two rows under the monitor, clear of the
@@ -394,7 +395,7 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertIn("PASS control display", result.stdout)
             names = sorted(p.stem for p in renders.glob("*.xrgb"))
-            self.assertEqual(names, ["control-display-classic-fill", "control-display-fill", "control-display-fit"])
+            self.assertEqual(names, ["control-display-fill", "control-display-fit", "control-display-migrated-fill"])
             for name in names:
                 width, height = map(int, (renders / f"{name}.size").read_text().split())
                 control_frame(self,name,(renders / f"{name}.xrgb").read_bytes(),width,height)
@@ -827,7 +828,7 @@ class AppCaseReplayTests(unittest.TestCase):
                 self.assertEqual(out["USB"]["read_keys"], "4")
                 self.assertEqual(out["USB"]["pending_mouse"], "0")
                 self.assertEqual(out["USB"]["pending_keys"], "0")
-                self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("40", "16"))
+                self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("16", "16"))
 
     def test_usb_shell_slow_poll_misses_start(self):
         """The evidence has 1.4--2.5 s between USB reports, versus 20--100 ms
@@ -847,7 +848,7 @@ class AppCaseReplayTests(unittest.TestCase):
         self.assertEqual(out["GATE"]["buttons"], "12")
         reports = re.findall(r'USB mouse report dx=(-?\d+) dy=(-?\d+) buttons=(\d+)', out["text"])
         self.assertEqual(reports[:7], [("-127", "-127", "0")] * 5 +
-                         [("-87", "-111", "0"), ("0", "0", "1")])
+                         [("-111", "-111", "0"), ("0", "0", "1")])
         self.assertGreater(int(out["USB"]["compressed"]), 0)
         self.assertEqual((out["USB"]["first_click_x"], out["USB"]["first_click_y"]), ("0", "0"))
         self.assertEqual(out["USB"]["pending_mouse"], "0")

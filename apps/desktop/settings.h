@@ -23,12 +23,12 @@
 enum { CFG_WALL_CENTER, CFG_WALL_STRETCH, CFG_WALL_TILE, CFG_WALL_FIT, CFG_WALL_FILL, CFG_WALL_MODES };
 /* Keyboard layouts (keyboard). */
 enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
-#define CFG_THEMES 3
+#define CFG_THEMES 2
 #define CFG_MOUSE_MIN 1
 #define CFG_MOUSE_MAX 10
 #define CFG_MOUSE_NORMAL 5
 struct ciuki_settings {
-    char theme[32];                 /* "Platinum", "Ciuki Blue", "Classic 98" */
+    char theme[32];                 /* "Platinum", "Ciuki Blue" */
     char wallpaper[CFG_PATH_MAX];   /* "ciuki", "none", "builtin:<name>" or an absolute file path */
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */

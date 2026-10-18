@@ -3215,7 +3215,7 @@ function of the widget state: equal state gives equal pixels.
 ```
 
 Colours, fonts and styles come from the current theme (desk_theme,
-apps/desktop/theme.h): Ciuki Blue (default), Platinum or Classic 98.
+apps/desktop/theme.h): Ciuki Blue (default) or Platinum.
 These names describe control roles; they are not constants.
 
 ```c
@@ -3409,7 +3409,7 @@ void du_shadow(struct du_canvas *, struct du_rect, int size);
 
 soft drop shadow
 
-Current theme by name (Platinum, Ciuki Blue, Classic 98): 0, or -1 and no
+Current theme by name (Platinum, Ciuki Blue): 0, or -1 and no
 change. Marks the UI dirty. Persisting it is the caller's job (the theme
 key of DESK_SETTINGS_PATH, written with settings.c cfg_format); every
 client follows the file through desk_theme_poll.

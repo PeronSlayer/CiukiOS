@@ -136,8 +136,8 @@ void klog(const char *f,...) {(void)f;}
         portrait = c.convert(ROOT/'assets/brand/ciuki-logo.png')
         pixels = bytearray(bytes((0x37,0x55,0x64))*width*height)
         # The Ciuki button mark (2026-10-12): the 18 px area average of the portrait at
-        # (13,7) in the top bar; cells touching the transparent surround keep the bar colour.
-        size=18;x0=4+(96-size-6-53)//2;y0=4+(24-size)//2
+        # (7,7) in the top bar; cells touching the transparent surround keep the bar colour.
+        size=18;x0=4+(24-size)//2;y0=4+(24-size)//2
         for y in range(size):
             for x in range(size):
                 block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
@@ -249,7 +249,7 @@ void klog(const char *f,...) {(void)f;}
                     self.assertIn('no input, production present captured PASS',result.stdout)
                     pixels=target.read_bytes();self.assertEqual(len(pixels),320*320*4)
                     checked=0
-                    # The released shell button: exact 18 px mark at (13,7), before any input.
+                    # The released shell button: exact 18 px mark at (7,7), before any input.
                     for y in range(18):
                         for x in range(18):
                             block=[portrait[(yy*256+xx)*4:(yy*256+xx)*4+3]
@@ -257,7 +257,7 @@ void klog(const char *f,...) {(void)f;}
                                    for xx in range(x*256//18,(x+1)*256//18)]
                             if any(b==bytes((0x64,0x55,0x37)) for b in block):continue
                             expected=bytes(sum(b[k] for b in block)//len(block) for k in range(3))
-                            off=((7+y)*320+13+x)*4
+                            off=((7+y)*320+7+x)*4
                             self.assertEqual(pixels[off:off+3],expected,(mode,x,y))
                             checked+=1
                     self.assertGreater(checked,100)

@@ -114,9 +114,6 @@ void desk_focus(struct desktop *d, int i)
         if (raised) desk_damage_add(&d->damage,desk_outer(&d->clients[i]),d->width,d->height);
         focus_damage(d,i);
     }
-    if (d->shell) {
-        desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},d->width,d->height);   /* top bar title */
-    }
 }
 int desk_contains(struct desk_box b, int32_t x, int32_t y)
 { return x >= b.x && y >= b.y && (int64_t)x < (int64_t)b.x+b.w && (int64_t)y < (int64_t)b.y+b.h; }

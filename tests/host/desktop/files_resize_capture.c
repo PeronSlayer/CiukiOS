@@ -57,9 +57,9 @@ int main(int argc,char **argv)
     }
     assert(!app.reading);
     roundtrip();desktop.clients[0].program=DESK_APP_FILES;desk_move(&desktop,0,128,72);
-    const char *themes[]={"Platinum","Ciuki Blue","Classic 98"};
-    const char *names[]={"platinum","ciuki-blue","classic-98"};
-    for(unsigned t=0;t<3;t++) {
+    const char *themes[]={"Platinum","Ciuki Blue"};
+    const char *names[]={"platinum","ciuki-blue"};
+    for(unsigned t=0;t<2;t++) {
         assert(!desk_theme_use(themes[t]));desk_theme_changed(&desktop);ui.dirty=1;roundtrip();
         assert(!desk_redraw(&desktop));
         for(unsigned size=0;size<2;size++) {
@@ -99,6 +99,6 @@ int main(int argc,char **argv)
     du_window_destroy(&window);
     assert(!rt_surfaces() && !rt_handles() && !rt_mappings());rt_reset();
     free(desktop.pixels);free(portrait);
-    puts("PASS Files resize replay: six live swaps/two sizes/three themes plus zoom/restore, exact content, incremental/full render agreement, model/focus preserved, surface counts 1->2->1->0");
+    puts("PASS Files resize replay: four live swaps/two sizes/both themes plus zoom/restore, exact content, incremental/full render agreement, model/focus preserved, surface counts 1->2->1->0");
     return 0;
 }

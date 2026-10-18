@@ -21,8 +21,8 @@
 #define SH_TRAY_ICON_SIZE 16
 #define SH_TRAY_GAP 4
 #define SH_TRAY_MARGIN 6
-/* From the clock leftwards; append future icons after removable media. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_MEDIA };
+/* Tray identifiers; geometry places Notifications next to the clock. */
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 struct sh_notification {
     char title[64], text[320];
@@ -33,7 +33,6 @@ struct sh_notification {
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
 #define SH_SEPARATOR 8
-#define SH_START_RADIUS 7       /* the Ciuki button's corners */
 #define SH_START_MARK 18        /* the portrait mark in the Ciuki button */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,

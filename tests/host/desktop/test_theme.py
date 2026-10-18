@@ -37,6 +37,7 @@ class ThemeTests(unittest.TestCase):
                                     capture_output=True, text=True,
                                     env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr.count("saved theme Classic 98 removed; using Ciuki Blue"), 1)
             self.assertIn("PASS Blue default", result.stdout)
             minima = {}
             for line in result.stdout.splitlines():

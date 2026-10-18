@@ -10,12 +10,18 @@ from unittest.mock import patch
 from .test_desktop import ROOT, SHELL_SOURCES
 import hashlib
 
+# F2-81: intentional two-bar shell/theme changes; docs/design/desktop-shell.md.
+
 BOOT_GOLDENS = {
-    **dict.fromkeys(("absent-rw", "present-rw", "absent-ro", "present-ro", "present-rw-seeded", "present-ro-seeded"),
-                    "c75b366359526301e56b7738e090e5bb9c56d8b4cc8c0b1d809a64ffee1f40bb"),
-    "theme": "3868795aaa5706f292de47822b6979f191fd9686dc3868436637fdb21ad36f3c",
-    "wallpaper-change": "8bcf3f0d03f1d325a28f9a9e1f2f1caf2a26043255d712eebb9526cd303bed7b",
-    "identical-unpresented": "8bcf3f0d03f1d325a28f9a9e1f2f1caf2a26043255d712eebb9526cd303bed7b",
+    "absent-ro": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "absent-rw": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "identical-unpresented": "4663d7d70a70a47b1829d39000b966d3edae4b9c76085125b682322b64c656c5",
+    "present-ro": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "present-ro-seeded": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "present-rw": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "present-rw-seeded": "deec217481f5922a5c58888779fe67344b0969b3827dd7692a48fb1c5c305891",
+    "theme": "db04c927f1a31f5147f03b68df26221765c6b51744cdbe3be35fe7f3505d27ee",
+    "wallpaper-change": "4663d7d70a70a47b1829d39000b966d3edae4b9c76085125b682322b64c656c5"
 }
 
 

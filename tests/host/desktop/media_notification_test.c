@@ -69,7 +69,7 @@ static void replay(const char *dir,unsigned width,unsigned height,unsigned theme
     struct ciuki_media_state m={.version=CIUKI_MEDIA_VERSION,.size=sizeof(m)};desk_shell_media_update(&d,&m);redraw();
     m.removable_mask=1u<<4;m.generation[4]=77;m.type[4]=CIUKI_MEDIA_USB;desk_shell_media_update(&d,&m);
     assert(d.sh.notification.active && d.sh.notification.slide==20);redraw();
-    const char *name=theme==0 ? "platinum" : theme==1 ? "ciuki-blue" : "classic";
+    const char *name=theme==0 ? "platinum" : "ciuki-blue";
     capture(dir,name,"attach-enter");settle();capture(dir,name,"attach");
     /* This precise client-only damage used to overwrite the notice. */
     struct desk_box dirty={(int)width-280,(int)height-130,200,40};
@@ -92,7 +92,8 @@ static void replay(const char *dir,unsigned width,unsigned height,unsigned theme
     m.removable_mask=0;desk_shell_media_update(&d,&m);settle();capture(dir,name,"cd-eject");
     assert(strstr(d.sh.notification.text,"Disc ejected"));
     /* Close affordance dismisses without opening the media menu/dialog. */
-    d.mouse_x=(int)width-28;d.mouse_y=(int)height-DESK_BAR-SH_TRAY_GAP-10-102+20;
+    d.mouse_x=desk_shell_tray_icon_box(&d,SH_TRAY_NOTIFICATION).x+SH_TRAY_ICON_SIZE-18;
+    d.mouse_y=DESK_BAR+SH_TRAY_GAP+20;
     assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1));assert(!d.sh.notification.active && !d.sh.media_open);redraw();
     desk_shell_notify(&d,"Removable media","A notification to dismiss.",DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);settle();
     /* Outside click dismisses without stealing the following ordinary click. */
@@ -105,8 +106,8 @@ static void replay(const char *dir,unsigned width,unsigned height,unsigned theme
 int main(int argc,char **argv)
 {
     assert(argc==3);FILE *f=fopen(argv[2],"rb");assert(f && fread(portrait,4,256*256,f)==256*256 && !fclose(f));
-    for (unsigned theme=0;theme<3;theme++) { replay(argv[1],640,480,theme);replay(argv[1],1024,768,theme); }
-    puts("PASS blocker notification rows: 30 short/64 long wrapped names, visible exact remainder, three themes and two resolutions");
-    puts("PASS removable notification replay: attach/write/busy/safe/detach/CD/unsafe, entry/expiry/Escape/outside click, opaque client damage, three themes and two resolutions");
+    for (unsigned theme=0;theme<(unsigned)desk_theme_count();theme++) { replay(argv[1],640,480,theme);replay(argv[1],1024,768,theme); }
+    puts("PASS blocker notification rows: 30 short/64 long wrapped names, visible exact remainder, both themes and two resolutions");
+    puts("PASS removable notification replay: attach/write/busy/safe/detach/CD/unsafe, entry/expiry/Escape/outside click, opaque client damage, both themes and two resolutions");
     return 0;
 }
