@@ -81,6 +81,8 @@ static void fixture_seed(void) { }
 #define chains fixture_chains
 #define same_owner fixture_same_owner
 #define chain_mask fixture_chain_mask
+#define chain_detach fixture_chain_detach
+#define chain_detached_report fixture_chain_detached_report
 #define chain_quarantine fixture_chain_quarantine
 #define chain_service fixture_chain_service
 #define chain_finish fixture_chain_finish
@@ -142,6 +144,8 @@ static void fixture_seed(void) { }
 #undef chains
 #undef same_owner
 #undef chain_mask
+#undef chain_detach
+#undef chain_detached_report
 #undef chain_quarantine
 #undef chain_service
 #undef chain_finish
@@ -311,14 +315,14 @@ static bool shared_fixture(void)
         struct irq_chain_stats s;
         fixture_irq_chain_snapshot((unsigned)irq, &s);
         ok = s.quarantined && s.unclaimed == IRQ_CHAIN_STUCK_PASSES && s.passes == 1003 &&
-             s.participants == 1 && s.quarantines == 1 && fixture_pic.masked[irq] &&
+             s.participants == 0 && s.quarantines == 1 && fixture_pic.masked[irq] &&
              fixture_registry_get((unsigned)b)->state == RS_QUARANTINED && !fixture_pic.writes && ok;
         rec_emit("registry", "DATA", "case=shared_irq irq=%u boundary=production_shadow frame=synthetic physical_unmasks=0 device_writes=%u callbacks_a=%u callbacks_b=%u",
                  (unsigned)irq, fixture_pic.writes, fixture_pic.calls_a, fixture_pic.calls_b);
         rec_emit("registry", "DATA", "case=stuck_irq owner=fixture-b generation=%u passes=%llu unclaimed=%llu quarantined=%u eois=%u removed_a=1 masked=%u ok=%u",
                  fixture_registry_get((unsigned)b)->generation, s.passes, s.unclaimed, s.quarantined,
                  fixture_pic.eois, fixture_pic.masked[irq], ok);
-        ok = !fixture_irq_chain_remove((unsigned)irq, fixture_b, "fixture-b") && ok;
+        ok = fixture_irq_chain_remove((unsigned)irq, fixture_b, "fixture-b") == -EINVAL && ok;
     }
     ok = !registry_quiesce(live, live_gen, probe_idle) && ok;
     ok = !registry_release(live, live_gen) && ok;

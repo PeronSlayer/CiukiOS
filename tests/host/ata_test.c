@@ -187,6 +187,8 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
 
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/lib/stackprot.c"
+static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
+#include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/ata_dma.c"
 #include "../../src/kernel/drivers/ata.c"

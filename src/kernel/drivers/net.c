@@ -125,14 +125,17 @@ static bool irq_handler(unsigned irq, const char *owner)
 bool netif_irq(struct netif *d)
 {
     if (!d || !d->running || d->stopping || d->quarantined) return false;
-    uint64_t start = ktime_cycles();
+    struct irq_stamp start = irq_budget_stamp();
     bool handled = d->driver->interrupt(d);
     if (handled) { d->irq_pending = true; d->stats.interrupts++; }
-    uint64_t us = g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0;
+    struct irq_elapsed elapsed = irq_budget_elapsed(start);
+    uint64_t us = elapsed.us;
     if (us > d->stats.max_irq_us) d->stats.max_irq_us = us;
-    /* A callback uses at most 50 us of the chain's 250 us aggregate limit.
-     * Source already masked by interrupt(); fault cleanup runs in thread. */
-    if (us > 50) { d->stats.budget_violations++; d->fault_pending = true; }
+    if (elapsed.smi_attributed) d->stats.smi_attributed++;
+    /* Keep isolated samples visible; fault cleanup follows three actual
+     * work overruns in 100 ms, using the same policy as the shared chain. */
+    if (elapsed.work_us > 50) d->stats.budget_violations++;
+    if (irq_budget_fault(&d->irq_budget, elapsed, 50)) d->fault_pending = true;
     return handled;
 }
 static bool idle_proof(int handle, gen_t generation)
@@ -325,6 +328,10 @@ void netif_poll(struct netif *d)
     if (!d || !d->driver) return;
     kmutex_lock(&d->mutex);
     if (!d->running || d->stopping || d->quarantined) { kmutex_unlock(&d->mutex); return; }
+    if (d->smi_reported != d->stats.smi_attributed) {
+        d->smi_reported = d->stats.smi_attributed;
+        klog("[net] smi_attributed owner=%s count=%llu", d->owner, d->smi_reported);
+    }
     for (unsigned i = 0; i < 3; i++) if (d->claims[i] >= 0 && !registry_valid(d->claims[i], d->claim_generation[i])) d->fault_pending = true;
     if (d->fault_pending) { quarantine_locked(d, "irq_or_registry_fault"); kmutex_unlock(&d->mutex); return; }
     d->servicing = true;

@@ -268,12 +268,12 @@ static void fatal_isolation(const char *mode)
     uint32_t f=irq_save();
     assert(usb_host_irq(&m.host) && (m.host.irq_status&8));
     assert(m.now==tick && !m.host.quarantined && !m.host.ohci_done_count);
-    assert(irq_masked==!relatched); /* before the first EOI, zero worker turns */
+    assert(!irq_masked && irq_model_attached==relatched); /* member-only revocation before EOI */
     irq_restore(f);
     if(m.fatal_reassert) {
         assert(read_reg(&m,2,2)&0x10);
         assert(leases[m.host.claims[1]].state==RS_QUARANTINED);
-        puts("PASS USB fatal reassert-after-every-W1C: IRQ11 masked before EOI in 1 pass, 0 worker turns, no sleeping or clock advance");
+        puts("PASS USB fatal reassert-after-every-W1C: faulty member detached before EOI, peers retain IRQ11");
     }
     if(!m.source_stuck)assert(!(read_reg(&m,4,2)&15));
     for(unsigned i=0;i<3;i++) {
@@ -287,16 +287,16 @@ static void fatal_isolation(const char *mode)
         assert(!m.host.irq_attached && irq_removed==1 && !irq_masked);
         assert(!(config_read(&m,0xc0,2)&0x20bf) && !(read_reg(&m,2,2)&0x1f));
     } else {
-        assert(m.host.irq_attached && !irq_removed && irq_masked);
+        assert(m.host.irq_attached && !irq_removed && !irq_masked && !irq_model_attached);
         assert(leases[m.host.claims[1]].state==RS_QUARANTINED);
-        /* Even an unexpected dispatch after quarantine cannot abandon an
-         * unacknowledged source. The production registry keeps IRQ11 masked. */
+        /* Direct callback replay still acknowledges a retained fatal source;
+         * registry dispatch has already detached this quarantined member. */
         m.regs[0]|=8u<<16;
         unsigned before=writes;
         assert(usb_host_irq(&m.host) && writes>before);
     }
     printf("PASS USB fatal isolation %s: repeated HSE/HCPE acknowledged after fatal snapshot; %s\n",
-           mode,relatched ? "gate/source/status/BME verified before detach":"failed readback retains callback and quarantines masked IRQ11");
+           mode,relatched ? "gate/source/status/BME verified before detach":"failed readback quarantines resources and detaches only this member");
 }
 static unsigned interleave_irqs;
 static void publish_second_done(void)

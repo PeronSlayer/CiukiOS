@@ -47,8 +47,10 @@ void klog(const char *fmt,...)
 void usb_hid_poll(struct usb_device *d,struct usb_hid *h) { if(hid_poll_hook)hid_poll_hook(d,h); }
 void usb_hid_release(struct usb_device *d,struct usb_hid *h) { (void)d;(void)h; }
 int registry_quarantine(int h,gen_t g) { (void)h;(void)g;assert(!"unexpected host quarantine");return 0; }
+static bool irq_lease_lost;
+bool registry_valid(int h,gen_t g) { (void)g;return h!=1 || !irq_lease_lost; }
 int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
-{ (void)irq;(void)handler;(void)owner;assert(!"no IRQ was attached");return -EINVAL; }
+{ (void)irq;(void)handler;(void)owner;assert(irq_lease_lost);return -EINVAL; }
 unsigned irq_wakes;
 void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++; }
 const struct usb_hc_ops usb_ohci_ops={0};
@@ -80,6 +82,7 @@ static struct model {
     uint64_t command_at;
     uint32_t injected_status;
     uint32_t latched_qh, hc_status;
+    unsigned interrupt_mask, native_gate;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
 static struct usb_device *device(void);
@@ -142,12 +145,17 @@ static uint32_t read_reg(void *c,unsigned off,unsigned width)
     (void)c;assert(width==2);
     if(off==0) return 0xc1;
     if(off==2) return m.hc_status;
+    if(off==4) return m.interrupt_mask;
     if(off==6) return (unsigned)(m.now+m.frame_offset)&0x7ff;
     if(off==0x10 || off==0x12) {if(port_read_hook)port_read_hook();return m.connected ? 0x85 : 0x80;}
     assert(!"unexpected UHCI register");return 0;
 }
 static void write_reg(void *c,unsigned off,uint32_t value,unsigned width)
-{ (void)c;assert(off==2 && width==2);m.hc_status&=~value; }
+{ (void)c;assert((off==2 || off==4) && width==2);if(off==4)m.interrupt_mask=value;else m.hc_status&=~value; }
+static uint32_t irq_config_read(void *c,unsigned off,unsigned width)
+{ (void)c;assert(off==0xc0 && width==2);return m.native_gate; }
+static void irq_config_write(void *c,unsigned off,uint32_t value,unsigned width)
+{ (void)c;assert(off==0xc0 && width==2);m.native_gate=value&0x20bf; }
 static unsigned port_status(struct usb_host *h,unsigned p)
 { (void)h; assert(p==device()->root_port); return m.connected ? 3 : 0; }
 static void failed(unsigned key,unsigned asc)
@@ -285,6 +293,8 @@ static struct blkdev *block(void) {return &device()->storage.block;}
 static void setup(const char *path,bool partitioned)
 {
     memset(&m,0,sizeof(m));records_at=0;records[0]=0;m.inquiry_bytes=36;m.capacity_bytes=8;
+    irq_lease_lost=false;
+    for(unsigned i=0;i<3;i++)m.h.claims[i]=-1;
     m.connected=true;m.sector_size=512;m.offset=partitioned?8:0;m.not_ready_ascq=1;
     int fd=open(path,O_RDONLY);assert(fd>=0);struct stat st;assert(!fstat(fd,&st));m.bytes=(size_t)st.st_size;
     m.image=mmap(NULL,m.bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,0);assert(m.image!=MAP_FAILED);close(fd);
@@ -300,6 +310,7 @@ static void use_uhci(void)
 {
     m.uhci=true;m.h.ops=&usb_uhci_ops;m.h.dma=m.dma;m.h.dma_phys=0x100000;m.frame_offset=1990;
     m.h.io.read=read_reg;m.h.io.write=write_reg;
+    m.h.io.config_read=irq_config_read;m.h.io.config_write=irq_config_write;
     volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_UHCI_CONTROL_QH);
     qh[0]=(m.h.dma_phys+USB_UHCI_BULK_QH)|2;qh[1]=1;
     qh=(volatile uint32_t *)(m.dma+USB_UHCI_BULK_QH);qh[0]=qh[1]=1;

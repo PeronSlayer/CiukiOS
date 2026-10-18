@@ -5,6 +5,7 @@
 #define CIUKI_NET_H
 #include <ciuki/registry.h>
 #include <ciuki/abi.h>
+#include <ciuki/irq_budget.h>
 
 #define NETIF_MAX 4u
 #define NET_FRAME_MAX 1514u
@@ -44,6 +45,7 @@ struct net_stats {
     uint64_t rx_packets, rx_bytes, rx_errors, rx_dropped;
     uint64_t tx_submitted, tx_completed, tx_bytes, tx_errors, tx_busy;
     uint64_t interrupts, budget_violations, max_irq_us, quarantines;
+    uint64_t smi_attributed;
     unsigned queued, queue_peak;
 };
 /* Static device contexts and queue storage remain pinned even on quarantine.
@@ -65,6 +67,8 @@ struct netif {
     gen_t claim_generation[3];
     struct kmutex mutex;
     struct net_stats stats;
+    struct irq_budget irq_budget;
+    uint64_t smi_reported;
     struct net_packet queue[NET_QUEUE_MAX], scratch;
     unsigned queue_head, queue_count, rx_offset, rx_head, rx_tail;
     bool tx_used[4];

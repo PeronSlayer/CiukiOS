@@ -28,6 +28,8 @@ void timing_stalls_begin(void);
 void timing_stalls_end(struct timing_stall_stats *, struct timing_stats *);
 /* Frozen trace only; copies one record under a fixed-size IRQ section. */
 bool timing_stall_get(unsigned index, struct timing_stall *);
+/* Feed a measured no-work gap into the active diagnostic trace. */
+void timing_stall_observe(uint64_t start, uint64_t end, const char *section) __attribute__((weak));
 
 struct timing_stats {
     uint32_t tsc_khz;

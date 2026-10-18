@@ -88,7 +88,7 @@ void registry_snapshot(struct registry_stats *out);
 typedef bool (*irq_chain_handler_t)(unsigned irq, const char *owner);
 struct irq_chain_stats {
     uint64_t passes, handled, unclaimed, spurious, budget_violations;
-    uint64_t max_service_us;
+    uint64_t max_service_us, smi_attributed;
     unsigned participants, consecutive_unclaimed, quarantines;
     bool quarantined, deferred;
 };
@@ -106,7 +106,9 @@ struct irq_chain_stats {
  * handler returns. A complete bounded pass leaves the PIC mask untouched.
  * Deferral masks before EOI; the worker finishes the pass and unmasks once
  * after EOI in the non-preemptible kernel. Quarantine and ring overflow
- * retain the masked line and quarantine all its claims (usb-contract.md). */
+ * retain the masked line and quarantine all its claims (usb-contract.md).
+ * A stale/released/quarantined member alone is detached and logged; peers
+ * survive, including a queued rearm. Per-member overruns use irq_budget.h. */
 int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner);
 int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owner);
 bool irq_chain_snapshot(unsigned irq, struct irq_chain_stats *out);

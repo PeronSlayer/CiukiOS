@@ -54,7 +54,7 @@ bool pci_irq_routed(const struct pci_func *p) { (void)p; return route_ready; }
 int irq_chain_add(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { assert(irq==11 && handler && owner);irq_added++;if(!irq_add_error)irq_model_attached=true;return irq_add_error; }
 int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
-{ assert(irq==11 && handler && owner && irq_model_attached);irq_removed++;irq_model_attached=false;return 0; }
+{ assert(irq==11 && handler && owner);if(!irq_model_attached)return -EINVAL;irq_removed++;irq_model_attached=false;return 0; }
 static void (*wake_hook)(struct kwait *);
 void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++;if(wake_hook)wake_hook(q); }
 static unsigned port_actions,recovery_records,descriptor_records;
@@ -81,7 +81,7 @@ bool registry_valid(int h,gen_t g) { return leases[h].generation==g && leases[h]
 int registry_quarantine(int h,gen_t g)
 {
     assert(leases[h].generation==g); leases[h].state=RS_QUARANTINED;
-    if(leases[h].type==RES_IRQ && irq_model_attached)irq_masked=true;
+    if(leases[h].type==RES_IRQ)irq_model_attached=false;
     return 0;
 }
 static void (*record_hook)(const char *);
@@ -1588,10 +1588,41 @@ static void ohci_done_publications(void)
         m.regs[0x0c/4]|=2;assert(usb_host_irq(&m.host));
         if(i<USB_OHCI_DONE_HEADS)assert(!irq_masked && !*(uint32_t *)(m.dma+0x84));
     }
-    assert(irq_masked && m.host.irq_status && m.host.ohci_done_count==USB_OHCI_DONE_HEADS);
+    assert(!irq_model_attached && !irq_masked && m.host.irq_status && m.host.ohci_done_count==USB_OHCI_DONE_HEADS);
     assert(*(uint32_t *)(m.dma+0x84)==m.host.dma_phys+USB_TD && (read_reg(&m,0x0c,4)&2));
     assert(!usb_host_irq(&m.host));
-    puts("PASS USB OHCI done-head queue overflow: saved heads retained, new HCCA/WDH left unacknowledged, IRQ lease masked before EOI");
+    puts("PASS USB OHCI done-head queue overflow: saved heads retained, new HCCA/WDH left unacknowledged, faulty member detached before EOI");
+}
+static unsigned lost_irq_records;
+static void lost_irq_record(const char *record)
+{ if(strstr(record,"[usb] irq_lost controller="))lost_irq_records++; }
+static void irq_loss_polling(bool ohci)
+{
+    setup(ohci,false);route_ready=true;assert(!attach());model_step();
+    struct usb_host *h=&m.host;
+    assert(h->device_count==2 && h->irq_attached && h->ready);
+    unsigned detached=usb_detaches, command=config_read(&m,4,2), count=lost_irq_records;
+    record_hook=lost_irq_record;
+    assert(!registry_quarantine(h->claims[1],h->claim_gen[1]));
+    usb_step(h);
+    assert(!h->irq_attached && h->ready && !h->quarantined && !irq_model_attached);
+    assert(lost_irq_records==count+1 && usb_detaches==detached);
+    assert(registry_valid(h->claims[0],h->claim_gen[0]) && registry_valid(h->claims[2],h->claim_gen[2]));
+    assert(config_read(&m,4,2)==command);
+    if(ohci)assert(!read_reg(&m,0x10,4) && (read_reg(&m,4,4)&0xc0)==0x80);
+    else assert(!read_reg(&m,4,2) && (read_reg(&m,0,2)&1));
+    m.dev[0].report[2]=0x45;m.dev[0].report_len=8;
+    m.dev[1].report[1]=3;m.dev[1].report[2]=5;m.dev[1].report_len=4;
+    for(unsigned i=0;i<40;i++) {sleep_ms(&m,1);model_step();}
+    assert(held[0x58] && last_x==3 && last_y==5);
+    uint8_t desc[18];
+    assert(usb_control(&h->devices[0],0x80,6,0x100,0,desc,sizeof(desc))==(int)sizeof(desc) && desc[1]==1);
+    assert(h->ready && !h->quarantined && usb_detaches==detached && lost_irq_records==count+1);
+    record_hook=NULL;
+    /* Losing register/DMA authority is still a controller fault. */
+    assert(!registry_quarantine(h->claims[2],h->claim_gen[2]));usb_step(h);
+    assert(h->quarantined && !h->ready);
+    printf("PASS USB %s IRQ lease loss: one poll fallback, live keyboard/mouse/control, pinned DMA; DMA lease loss still quarantines\n",ohci?"OHCI":"UHCI");
 }
 int main(void)
 {
@@ -1615,6 +1646,7 @@ int main(void)
     delayed_frame_hid(false);delayed_frame_hid(true);late_hid(false);late_hid(true);
     port_flood(false);port_flood(true);
     shared_irq(false);shared_irq(true);
+    irq_loss_polling(false);irq_loss_polling(true);
     ohci_level_root_irq();ohci_done_publications();
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }

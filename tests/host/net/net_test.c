@@ -37,6 +37,14 @@ static void outl(uint16_t p, uint32_t v) { route_write(p, v); }
 struct ciuki_boot_info g_boot;
 volatile uint64_t g_ticks;
 uint64_t g_tsc_per_ms = 1000;
+bool g_cpu_tsc = true;
+static unsigned stall_read;
+static uint32_t read_eflags(void) { return host_flags; }
+static uint64_t read_tsc_serialized(void)
+{
+    if (stall_read && !--stall_read) cycles += 2100;
+    return cycles;
+}
 uint64_t ktime_cycles(void) { return cycles; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >= 0; }
@@ -116,6 +124,7 @@ static struct pci_func functions[2];
 unsigned pci_count(void) { return 2; }
 const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 
+#include "../../../src/kernel/core/irq_budget.c"
 #include "../../../src/kernel/drivers/net.c"
 #include "../../../src/kernel/core/pci_irq.c"
 #include "../../../src/kernel/drivers/net_rtl8139.c"
@@ -465,9 +474,13 @@ static void test_faults(enum model_kind kind)
     uint8_t frame[60] = {0}; CHECK(netif_transmit(&d, d.generation, frame, 60) == -19);
 
     model_setup(&h, &d, kind); CHECK(!model_attach(&h, &d));
-    model_receive(&h, frame, 60, false); h.read_cost = 60;
-    uint32_t flags = irq_save(); CHECK(netif_irq(&d)); irq_restore(flags);
-    CHECK(d.stats.budget_violations == 1 && d.fault_pending);
+    h.read_cost = 60;
+    for (unsigned i = 0; i < IRQ_BUDGET_STRIKES; i++) {
+        model_receive(&h, frame, 60, false);
+        uint32_t flags = irq_save(); CHECK(netif_irq(&d)); irq_restore(flags);
+        CHECK(d.fault_pending == (i + 1 == IRQ_BUDGET_STRIKES));
+    }
+    CHECK(d.stats.budget_violations == IRQ_BUDGET_STRIKES && d.fault_pending);
     netif_poll(&d); CHECK(d.quarantined && !releases);
 
     model_setup(&h, &d, kind); CHECK(!model_attach(&h, &d)); h.tx_auto = false;
@@ -675,8 +688,50 @@ static void test_public_state(void)
 }
 #include "second_set_test.c"
 #include "e100_irq_test.c"
+static unsigned callback_work_us;
+static bool timed_e100_interrupt(struct netif *d)
+{
+    bool handled = net_e100.interrupt(d);
+    cycles += callback_work_us;
+    return handled;
+}
+static void test_smi_budget(void)
+{
+    struct model h; struct netif d;
+    model_setup(&h, &d, M_E100); CHECK(!model_attach(&h, &d));
+    uint8_t frame[60] = {0};
+    model_receive(&h, frame, sizeof(frame), false);
+    /* Fourth serialized timestamp: second read of the end probe, no driver
+     * work between the two reads. Production e100 interrupt still runs. */
+    stall_read = 4;
+    uint32_t f = irq_save(); CHECK(netif_irq(&d)); irq_restore(f);
+    CHECK(d.stats.smi_attributed == 1 && !d.stats.budget_violations && !d.fault_pending);
+    CHECK(d.stats.max_irq_us == 2100);
+    netif_poll(&d); CHECK(d.running && !d.quarantined);
+    struct netif_driver slow = net_e100; slow.interrupt = timed_e100_interrupt; d.driver = &slow;
+    callback_work_us = 2100; /* same elapsed magnitude, actual callback work */
+    for (unsigned i = 0; i < 3; i++) {
+        model_receive(&h, frame, sizeof(frame), false);
+        f = irq_save(); CHECK(netif_irq(&d)); irq_restore(f);
+        CHECK(d.stats.smi_attributed == 1 && d.stats.budget_violations == i + 1);
+        CHECK(d.fault_pending == (i == 2));
+        if (i < 2) { netif_poll(&d); CHECK(!d.quarantined); }
+    }
+    netif_poll(&d); CHECK(d.quarantined);
+    model_setup(&h, &d, M_E100); CHECK(!model_attach(&h, &d)); d.driver = &slow;
+    for (unsigned i = 0; i < 5; i++) {
+        cycles += 101000;
+        model_receive(&h, frame, sizeof(frame), false);
+        f = irq_save(); CHECK(netif_irq(&d)); irq_restore(f);
+        CHECK(!d.fault_pending);
+        netif_poll(&d); CHECK(!d.quarantined);
+    }
+    CHECK(!netif_stop(&d)); callback_work_us = 0;
+    puts("net F0-39: 2100us no-work SMI vs same-length real work; third strike quarantines, sparse overruns survive PASS");
+}
 int main(void)
 {
+    test_smi_budget();
     test_e100_irq();
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }
     struct model h; struct netif d; model_setup(&h, &d, M_E100); h.ee_bits = 8;
