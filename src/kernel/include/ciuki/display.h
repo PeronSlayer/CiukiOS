@@ -26,7 +26,8 @@ int display_check_end(void);
  * A deadline requests rollback; only a restored/idle sweep may permit it. */
 int display_check_sweep_begin(void);
 void display_check_sweep_end(bool restored);
-/* Thread context; commits the preceding transaction records on hardware. */
+/* Thread context; entry commits the preceding records on hardware. Return
+ * queues the watermark for the storage worker without waiting for device I/O. */
 int display_fullscreen_checkpoint(const char *step, int result);
 int grants_display_suspend(bool suspended);
 uint32_t grants_display_pid(void);

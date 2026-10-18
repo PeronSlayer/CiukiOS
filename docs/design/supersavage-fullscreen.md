@@ -239,3 +239,27 @@ the existing bounded 2000 ms firmware transaction in addition to that native
 return allowance. These are diagnostic targets, never reasons to abort
 recovery. Report overruns; the independent 10 s missing-frame watchdog remains.
 Neither revised target is hardware-qualified by host tests.
+
+## F1-80 return scheduling and logging amendment (2026-10-18)
+
+The return target is 2000 ms through `desktop-restored`, including fallback;
+the counter no longer grants an extra 2000 ms after native failure. A needed
+hardware recovery must still run to completion rather than stop midway at a
+diagnostic deadline. The host replay demonstrates the target for the modeled
+slow-aperture and stalled-VM cases; firmware/hardware qualification remains
+separate.
+
+Return checkpoints enqueue the existing BOOT.LOG watermark and raw trail for
+the storage task. They do not wait for durability or issue device I/O on the
+display worker. `EAGAIN` from the watermark request denotes a queued commit;
+an unavailable/failed sink produces one `fullscreen_log error` per return.
+Entry retains synchronous checkpoints before granting physical access.
+
+The VM park handshake takes at most 250 ms. On timeout, revoke the VGA PTEs
+and task-local ports, skip unsafe guest capture, restore the desktop and leave
+the VM suspended at its next checkpoint. Do not kill a possible storage lock
+owner. A yielded synthetic VGA BIOS continuation cannot use physical transport
+after revocation. VGA planes cooperate every 256 bytes, DAC transfers every
+16 entries, and retrace polling every 64 reads, retaining indexed-register
+pairs and the latch replay as indivisible operations. Research and measured
+host evidence: [F1-80 validation](../validation/f1-80-host-replay.md).

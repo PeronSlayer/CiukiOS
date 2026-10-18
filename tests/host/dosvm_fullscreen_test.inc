@@ -1,9 +1,19 @@
 /* Stateful hardware bus, plus the real ownership service and syscall adapter. */
-static uint8_t card_read(void *arg,unsigned a) { return cvga_read_vram(arg,0xA0000+a); }
-static void card_write(void *arg,unsigned a,uint8_t b) { cvga_write_vram(arg,0xA0000+a,b); }
+static bool fs_slow_aperture;
+static unsigned fs_aperture_bytes;
+static void card_access(void) {
+    if (fs_slow_aperture && !(++fs_aperture_bytes%500)) g_ticks++; /* 2 us/byte */
+}
+static uint8_t card_read(void *arg,unsigned a) { card_access();return cvga_read_vram(arg,0xA0000+a); }
+static void card_write(void *arg,unsigned a,uint8_t b) { card_access();cvga_write_vram(arg,0xA0000+a,b); }
 static uint8_t card_in(void *arg,uint16_t p) { return cvga_read_port(arg,p,0); }
 static void card_out(void *arg,uint16_t p,uint8_t b) { cvga_write_port(arg,p,b); }
 static struct vga_hardware_bus card_bus={&fs_card,card_in,card_out,card_read,card_write};
+static struct dosvm *fs_waiting_vm;
+static uint64_t fs_park_tick;
+static void delayed_fullscreen_park(void) {
+    if (g_ticks>=fs_park_tick) fs_waiting_vm->fullscreen_parked=true;
+}
 /* Guest register tweaks, not provider presets. 13h has no unique BIOS
  * number for these rasters; preserve the entire programmed state. */
 static void tweak_mode(cvga_state *g,unsigned width,unsigned height,bool chain)
@@ -192,6 +202,54 @@ static void test_fullscreen_service(void)
         CHECK(v->fullscreen_error==fs_end_result);
         CHECK(strstr(last_dosvm_log,failure ? "revoke_result=0 restore_result=-5" : "revoke_result=0 restore_result=0"));
         fs_return_order=false;fs_end_result=0;
+    }
+    /* Slow UC capture plus native recovery; a stuck VM cannot consume the
+     * recovery budget or retain its physical aperture/port lease. */
+    for (unsigned delay=0;delay<3;delay++) {
+        bool stuck=delay==2;
+        v->fullscreen_parked=true;v->fullscreen_suspended=false;
+        CHECK(!dosvm_fullscreen_enter(key));hardware=card_bus;
+        v->started=true;v->fullscreen_parked=delay==0;
+        if (stuck) {
+            uint64_t began=g_ticks;unsigned before=fs_ends;
+            /* Negative control: the old 2 s handshake expires while leaving
+             * the physical display/owner in place, without desktop restore. */
+            CHECK(park(v,2000)==-EBUSY && g_ticks-began==2000);
+            unhold(v);
+            CHECK(v->fullscreen && fs_display && fullscreen_owner==v && fs_ends==before);
+            puts("F1-80 old park policy elapsed_ms=2000 result=-16 desktop_restored=0 PASS");
+        }
+        if (delay==1) {
+            fs_waiting_vm=v;fs_park_tick=g_ticks+100;sleep_hook=delayed_fullscreen_park;
+        }
+        fs_slow_aperture=true;fs_aperture_bytes=0;fs_recovery_ms=160;
+        uint64_t began=g_ticks;unsigned before=fs_ends;
+        fullscreen_return=true;dosvm_fullscreen_poll();
+        sleep_hook=0;fs_waiting_vm=0;
+        CHECK(!v->fullscreen && !fs_display && !fs_ports && fs_ends==before+1);
+        CHECK(g_ticks-began<=2000 && !fullscreen_owner && !v->fullscreen_hold);
+        CHECK(v->fullscreen_suspended==!!stuck);
+        CHECK(!stuck || v->fullscreen_error==-ETIMEDOUT);
+        for (unsigned i=0;i<32;i++) {
+            uint32_t pte;as_lookup(&v->as,0xA0000+i*4096,&pte);
+            CHECK((pte&~0x60u)==(saved[i]&~0x60u));
+        }
+        /* Resume a C transport continuation after revocation: no physical
+         * port/aperture access may escape, even though the task stays alive. */
+        struct task *prior=g_current;g_current=v->task;
+        uint8_t byte=0x5a;fs_write(&byte,0,0);CHECK(byte==0x5a && fs_read(&byte,0)==0xff);
+        CHECK(fs_in(0,0x3c4)==0xff);fs_out(0,0x3c4,4);
+        /* A later lease must not reauthorize this old continuation. */
+        static struct dosvm later_owner;
+        later_owner.task=prior;later_owner.fullscreen=true;
+        fullscreen_owner=&later_owner;fullscreen_service_task=prior;
+        fs_write(&byte,0,0);CHECK(byte==0x5a && fs_read(&byte,0)==0xff);
+        CHECK(fs_in(0,0x3c4)==0xff);fs_out(0,0x3c4,4);
+        fullscreen_owner=0;
+        g_current=prior;
+        printf("F1-80 VM park_delay=%u stuck=%u watchdog-return->desktop-restored=%llums aperture_bytes=%u PASS\n",
+               delay==1 ? 100u : 0u,stuck,(unsigned long long)(g_ticks-began),fs_aperture_bytes);
+        fs_slow_aperture=false;fs_recovery_ms=0;v->fullscreen_suspended=false;
     }
     v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_enter(key)); hardware=card_bus;
     CHECK(!dosvm_stop(key,DOSVM_FAULT) && !fs_ports);

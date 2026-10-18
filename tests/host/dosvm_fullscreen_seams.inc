@@ -15,6 +15,7 @@ static uint32_t fs_expected_ptes[32];
 static const char *fs_fail_checkpoint;
 static unsigned fs_checkpoints;
 static bool fs_test_checkpoint_pin;
+static unsigned fs_recovery_ms;
 static bool fs_vbe_available;
 static uint8_t fs_linear[DOS_VBE_BYTES];
 static unsigned fs_linear_writes;
@@ -62,5 +63,6 @@ int display_fullscreen_begin(uint16_t mode)
 int display_fullscreen_end(void) {
     CHECK(fs_display);
     if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }
+    g_ticks+=fs_recovery_ms;
     fs_display=false; fs_ends++; return fs_end_result;
 }

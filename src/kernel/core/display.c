@@ -16,11 +16,12 @@ static bool fullscreen_display;
 static bool fullscreen_native;
 static bool awaiting_native_frame;
 static bool fullscreen_return_timed;
+static bool fullscreen_log_failed;
+static bool fullscreen_recovering;
 static uint64_t fullscreen_return_tick;
 /* T23 a79f840c: 156307 us registers, 1180 ms complete return with durable
  * checkpoints/capture. See the f3-36 amendment; recovery must never abort. */
 #define NATIVE_RETURN_MS 2000u
-#define NATIVE_RECOVERY_MS 4000u
 static unsigned fullscreen_return_budget;
 extern void dosvm_fullscreen_poll(void) __attribute__((weak));
 static uint32_t changes;
@@ -44,11 +45,24 @@ int display_fullscreen_checkpoint(const char *step, int result)
     klog("[display] fullscreen_step=%s result=%d tick=%llu",step,result,g_ticks);
     struct bootlog_stats stats;
     bootlog_snapshot(&stats);
-    int e=stats.active ? bootlog_sync(checkpoint_cancel,checkpoint_pause,0) : -EIO;
-    /* The reserved-sector trail must survive a failed FAT/firmware path too. */
-    int raw=blackbox_checkpoint();
-    if (!e) e=raw;
-    if (e) klog("[display] fullscreen_log error=%d step=%s",e,step);
+    int e;
+    if (fullscreen_recovering) {
+        /* Recovery cannot depend on a slow/quarantined storage controller.
+         * klog already queued both trails. Request the FAT watermark without
+         * device I/O; the storage worker commits it (and the raw trail).
+         * EAGAIN means queued, never a failed return checkpoint. */
+        e=stats.active ? bootlog_try_sync() : -EIO;
+        if (e==-EAGAIN) e=0;
+    } else {
+        e=stats.active ? bootlog_sync(checkpoint_cancel,checkpoint_pause,0) : -EIO;
+        /* Entry must commit both trails before granting hardware access. */
+        int raw=blackbox_checkpoint();
+        if (!e) e=raw;
+    }
+    if (e && (!fullscreen_recovering || !fullscreen_log_failed)) {
+        fullscreen_log_failed=true;
+        klog("[display] fullscreen_log error=%d step=%s",e,step);
+    }
     return e;
 }
 
@@ -237,6 +251,7 @@ void display_fullscreen_return_request(void)
     /* Input/stop paths can call from IRQ context: only publish the clock. */
     if (fullscreen_display && !fullscreen_return_timed) {
         fullscreen_return_tick=g_ticks; fullscreen_return_timed=true;
+        fullscreen_recovering=true; fullscreen_log_failed=false;
     }
 }
 
@@ -450,7 +465,6 @@ int display_fullscreen_end(void)
     fullscreen_native=false;
     grants_display_suspend(false);
     if (native) {
-        if (fallback) fullscreen_return_budget=NATIVE_RECOVERY_MS;
         klog("[display] native_supersavage native_result=%d fallback_attempted=%u fallback_result=%d result=%d",
             native_result,(unsigned)fallback,fallback_result,e);
         klog("[display] native_supersavage lease_return_ms=%llu budget_ms=%u overrun=%u result=%d",
@@ -464,5 +478,6 @@ int display_fullscreen_end(void)
     switching=false;
     log_mode(previous.mode_id,e);
     display_fullscreen_checkpoint("desktop-restored",e);
+    fullscreen_recovering=false;
     return e;
 }
