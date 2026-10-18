@@ -4,12 +4,12 @@
 #define DESK_BAR 32
 #define DESK_START_X 6
 #define DESK_START_Y 0
-#define DESK_START_W 44
-#define DESK_START_H 44
-#define DESK_START_WELL 48
+#define DESK_START_W 38
+#define DESK_START_H 38
+#define DESK_START_WELL 42
 #define DESK_START_SHADOW 1
-#define SH_START_MARK 28
-#define DESK_START_MARK_X 8
-#define DESK_START_MARK_Y 8
+#define SH_START_MARK 24
+#define DESK_START_MARK_X 7
+#define DESK_START_MARK_Y 7
 #define DESK_START_PRESSED_SHIFT 1
 #endif

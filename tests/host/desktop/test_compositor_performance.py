@@ -29,8 +29,8 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-72: re-recorded with --benchmark --frames 2 for the DMZ-White cursor overlay.
 # F2-82: shell scene includes the larger orb and well.
 GOLDENS = {
-    "Ciuki Blue": "856ac4e57f28d3aad732d5a281655b1365fd576bdbb6ec7fead2cc5ce94354c1",
-    "Platinum": "56074a84850f27fcdd977a7e12ee408738dd76ef3f86b8b69ec867afcdb47670"
+    "Ciuki Blue": "8f46361965714e6772ddcf8208da3f2976722a37563fc31e2e00ac17795c9450",
+    "Platinum": "ba704c5da512c9885d472a3eff8d14f30b30e00c29703c82801ba8cca4045b9e"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",

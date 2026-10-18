@@ -3,7 +3,7 @@
 System status and clock/date are at the top right; task buttons occupy the
 bottom bar. Scripted Task Manager clicks stay within their bottom buttons.
 
-The Ciuki (Start) button sits at the left end of the 32 px top bar, x 6..50, y 0..44 (generated start-orb.json / start-orb.h). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
+The Ciuki (Start) button sits at the left end of the 32 px top bar, x 6..44, y 0..38 (generated start-orb.json / start-orb.h). Its menu drops from it: 6 rows of 30 px plus one 8 px separator and 6 px of frame (194 px)
 from y 32 (the top bar's bottom edge) at x 6, so it spans y 32..226 and its first row, Programs, y 35..65
 (x 6..190). Hovering or clicking Programs opens its submenu at x 187..337 with rows of 22 px, top-aligned
 with Programs (y 32): the known programs present in /Programs in PROGRAM_ORDER, then "Accessories" when an

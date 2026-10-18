@@ -59,16 +59,17 @@ static void window(void)
 static void exercise(const char *directory)
 {
     struct desk_box b=desk_start_button(&d), shadow=desk_start_bounds(&d);
-    assert(b.x==6 && b.y==0 && b.w==44 && b.h==44 && shadow.h==45);
+    assert(b.x==6 && b.y==0 && b.w==38 && b.h==38 && shadow.h==39);
+    int cx=b.x+b.w/2, cy=b.y+b.h/2, py=b.y+b.h-4;
     /* Entire circle, including both sides of the bar boundary; corners pass through. */
-    assert(desk_start_contains(&d,28,0) && desk_start_contains(&d,28,43));
-    assert(desk_start_contains(&d,6,22) && desk_start_contains(&d,49,22));
-    assert(!desk_start_contains(&d,6,0) && !desk_start_contains(&d,6,43));
-    assert(!desk_start_contains(&d,28,44) && !desk_start_contains(&d,50,22));
-    assert(desk_shell_chrome_intersects(&d,(struct desk_box){20,44,1,1}));
-    assert(!desk_shell_chrome_intersects(&d,(struct desk_box){51,44,1,1}));
+    assert(desk_start_contains(&d,cx,0) && desk_start_contains(&d,cx,b.h-1));
+    assert(desk_start_contains(&d,6,cy) && desk_start_contains(&d,b.x+b.w-1,cy));
+    assert(!desk_start_contains(&d,6,0) && !desk_start_contains(&d,6,b.h-1));
+    assert(!desk_start_contains(&d,cx,b.h) && !desk_start_contains(&d,b.x+b.w,cy));
+    assert(desk_shell_chrome_intersects(&d,(struct desk_box){20,b.h,1,1}));
+    assert(!desk_shell_chrome_intersects(&d,(struct desk_box){b.x+b.w+1,b.h,1,1}));
     full(); d.damage.count=0; frame(directory,"idle");
-    point(28,40); assert(d.sh.start_hot); parity(); frame(directory,"hover");
+    point(cx,py); assert(d.sh.start_hot); parity(); frame(directory,"hover");
     click(); assert(d.menu_open && d.sh.levels==1); parity(); frame(directory,"pressed");
     assert(desk_menu_box(&d).x==b.x && desk_menu_box(&d).y==DESK_BAR);
     /* Click the protrusion again; the overlaid menu must not steal it. */
@@ -79,15 +80,15 @@ static void exercise(const char *directory)
     assert(desk_shell_key(&d,0x15b,0)); assert(d.menu_open); parity();
     assert(desk_shell_key(&d,DU_KEY_ESC,1)); assert(!d.menu_open); parity();
     desk_menu_open(&d,SH_MENU_DESKTOP,100,100); parity();
-    point(28,40); parity(); click();
+    point(cx,py); parity(); click();
     assert(d.menu_open && d.sh.menus[0].kind==SH_MENU_START); parity();
     click(); assert(!d.menu_open); parity(); point(100,80); parity();
     window(); parity(); frame(directory,"maximized");
-    assert(desk_hit(&d,28,40)==-1 && desk_title_code(&d,28,40)==0);
-    assert(desk_hit(&d,6,43)==0);  /* bounding-box corner belongs to the window */
-    uint32_t orb=d.pixels[40*d.width+28];
+    assert(desk_hit(&d,cx,py)==-1 && desk_title_code(&d,cx,py)==0);
+    assert(desk_hit(&d,6,b.h-1)==0);  /* bounding-box corner belongs to the window */
+    uint32_t orb=d.pixels[py*d.width+cx];
     desk_composite(&d,(struct desk_box){20,DESK_BAR,16,13});
-    assert(d.pixels[40*d.width+28]==orb);
+    assert(d.pixels[py*d.width+cx]==orb);
     /* The copy source or destination would contain orb/shadow pixels. */
     d.frame_valid=1; d.damage.count=0;
     desk_zoom(&d,0); parity();
@@ -97,7 +98,7 @@ static void exercise(const char *directory)
     desk_zoom(&d,0); parity();
     desk_shell_notify(&d,"Notification","Shell chrome over the maximized window",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
     parity(); frame(directory,"notification");
-    assert(d.pixels[40*d.width+28]==orb);
+    assert(d.pixels[py*d.width+cx]==orb);
     assert(desk_shell_key(&d,DU_KEY_ESC,1)); parity();
     /* At 320 px the notification and orb really overlap. */
     unsigned width=d.width; d.width=320;
@@ -109,8 +110,8 @@ static void exercise(const char *directory)
     struct desk_box overlap;
     assert(desk_intersect(desk_shell_notification_bounds(&d),b,&overlap));
     parity();
-    assert(d.pixels[40*d.width+28]==orb);
-    point(28,40); parity(); click();
+    assert(d.pixels[py*d.width+cx]==orb);
+    point(cx,py); parity(); click();
     assert(d.menu_open && !d.sh.notification.active); parity();
     click(); assert(!d.menu_open); parity(); d.width=width;
 }
