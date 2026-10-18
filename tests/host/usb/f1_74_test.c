@@ -4,6 +4,23 @@
 #include "storage_test.c"
 #undef main
 static unsigned races;
+static void irq_loss_reads(const char *path)
+{
+    setup(path,false);use_uhci();m.h.irq_attached=true;attach();
+    m.h.claims[1]=1;m.interrupt_mask=0x0d;m.native_gate=0x2000;
+    m.h.io.config_read=irq_config_read;m.h.io.config_write=irq_config_write;
+    irq_lease_lost=true;
+    unsigned interrupts=m.h.interrupts;
+    fs_lock_take(&m.h.transfer_lock);usb_hid_service(&m.h);fs_lock_drop(&m.h.transfer_lock);
+    assert(!m.h.irq_attached && m.h.ready && !m.h.quarantined);
+    uint8_t *buf=malloc(BLKDEV_READ_BYTES);assert(buf);
+    assert(!block()->read(block(),0,128,buf) && !memcmp(buf,m.image,BLKDEV_READ_BYTES));
+    assert(!block()->quarantined && !m.h.quarantined && m.h.interrupts==interrupts);
+    assert(!m.interrupt_mask && !(m.native_gate&0x20bf));
+    assert(strstr(records,"[usb] irq_lost controller=") && !strstr(records,"lease_invalid"));
+    free(buf);cleanup();
+    puts("PASS F0-39 USB IRQ loss: production BOT/UHCI 128-sector read survives in polling mode with identical data and no new interrupts");
+}
 static void read_recovery(const char *path)
 {
     for(unsigned kind=1;kind<=3;kind++) for(unsigned failures=1;failures<=2;failures++) {
@@ -104,6 +121,7 @@ static void metadata_commands(const char *path) {
 int main(int argc,char **argv)
 {
     assert(argc==2);
+    irq_loss_reads(argv[1]);
     metadata_commands(argv[1]);
     setup(argv[1],false);use_uhci();m.h.irq_attached=true;irq_wakes=races=0;
     attach();port_read_hook=complete_between_observations;

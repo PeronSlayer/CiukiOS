@@ -378,8 +378,13 @@ static void test_second_faults(enum second_kind kind)
     CHECK(netif_stop(&d) && d.quarantined && page_count == NIC_DMA_PAGES && !releases);
     second_setup(&h, &d, kind); CHECK(!second_attach(&h, &d)); h.absent = true;
     netif_poll(&d); CHECK(d.quarantined && !releases);
-    second_setup(&h, &d, kind); CHECK(!second_attach(&h, &d)); second_receive(&h, frame, 60, false); h.fixture.read_cost = 60;
-    uint32_t f = irq_save(); CHECK(netif_irq(&d)); irq_restore(f); CHECK(d.fault_pending && d.stats.budget_violations);
+    second_setup(&h, &d, kind); CHECK(!second_attach(&h, &d)); h.fixture.read_cost = 60;
+    for (unsigned i = 0; i < IRQ_BUDGET_STRIKES; i++) {
+        second_receive(&h, frame, 60, false);
+        uint32_t f = irq_save(); CHECK(netif_irq(&d)); irq_restore(f);
+        CHECK(d.fault_pending == (i + 1 == IRQ_BUDGET_STRIKES));
+    }
+    CHECK(d.fault_pending && d.stats.budget_violations == IRQ_BUDGET_STRIKES);
     netif_poll(&d); CHECK(d.quarantined && !releases);
     second_setup(&h, &d, kind); CHECK(!second_attach(&h, &d)); h.tx_error = true;
     CHECK(!netif_transmit(&d, d.generation, frame, sizeof(frame))); netif_poll(&d); CHECK(d.stats.tx_errors == 1 && !d.stats.tx_completed);

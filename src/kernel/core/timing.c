@@ -24,6 +24,7 @@ static struct timing_stall stalls[TIMING_STALL_CAPACITY];
 static unsigned stall_count, stall_dropped;
 static bool stall_active;
 static uint64_t stall_begin, stall_per_ms;
+static uint64_t stall_sample_begin, stall_sample_end;
 struct timing_raw { uint64_t per_ms, maximum, pic_max; };
 static void snapshot_locked(struct timing_stats *, struct timing_raw *);
 static void snapshot_convert(struct timing_stats *, const struct timing_raw *);
@@ -68,7 +69,8 @@ void crit_end(void)
         crit_window_max = d;
     if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US)
         budget_violations++;
-    if (stall_active && start >= stall_begin && stall_per_ms && d > stall_per_ms) {
+    if (stall_active && start >= stall_begin && stall_per_ms && d > stall_per_ms &&
+        !(start <= stall_sample_begin && end >= stall_sample_end)) {
         if (stall_count < TIMING_STALL_CAPACITY)
             stalls[stall_count++] = (struct timing_stall){start,end,crit_site,crit_section};
         else if (stall_dropped != UINT32_MAX)
@@ -81,10 +83,22 @@ void timing_stalls_begin(void)
     uint32_t f = irq_save();
     stall_active = false;
     stall_count = stall_dropped = 0;
+    stall_sample_begin = stall_sample_end = 0;
     stall_per_ms = g_tsc_per_ms;
     stall_begin = g_cpu_tsc ? rdtsc() : 0;
     stall_active = g_cpu_tsc && stall_per_ms;
     irq_restore(f);
+}
+
+void timing_stall_observe(uint64_t start, uint64_t end, const char *section)
+{
+    /* IRQ budget probes call with IF clear; no allocation, I/O or logging. */
+    if (!stall_active || start < stall_begin || !stall_per_ms || end - start <= stall_per_ms) return;
+    /* The enclosing crit_end must not count this same stall a second time. */
+    stall_sample_begin = start; stall_sample_end = end;
+    if (stall_count < TIMING_STALL_CAPACITY)
+        stalls[stall_count++] = (struct timing_stall){start, end, 0, section};
+    else if (stall_dropped != UINT32_MAX) stall_dropped++;
 }
 
 bool timing_stall_get(unsigned index, struct timing_stall *out)

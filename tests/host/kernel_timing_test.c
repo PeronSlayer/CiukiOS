@@ -49,6 +49,15 @@ int main(void)
         cycles+=900;timing_timer_irq();
     }
     timing_snapshot(&s);CHECK(s.critical_us==100 && !s.budget_violations && !s.gaps_software && !s.gaps_unclassified);
+    timing_reset();timing_stalls_begin();
+    f=irq_save();uint64_t start=cycles;cycles+=2100;
+    timing_stall_observe(start,cycles,"smi_attributed");irq_restore(f);
+    struct timing_stall_stats trace;struct timing_stall event;
+    timing_stalls_end(&trace,&s);
+    CHECK(trace.count==1 && !trace.dropped && s.critical_us==2100);
+    CHECK(timing_stall_get(0,&event) && !strcmp(event.section,"smi_attributed"));
+    CHECK(event.end_tsc-event.start_tsc==2100);
+    puts("kernel timing F0-39: no-work SMI retained in F0-35 trace, enclosing section not double counted PASS");
     g_cpu_tsc=false;g_tsc_per_ms=0;timing_snapshot(&s);CHECK(!s.critical_us);
     puts("kernel timing: longest section/address, 4230us reproduction, software/external gaps, reset and <=500us sections with zero gaps PASS");
     return 0;

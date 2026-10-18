@@ -179,6 +179,8 @@ void pic_mask(unsigned n) { CHECK(n < 16); }
 void panic_frame(struct trap_frame *tf, const char *s) { (void)tf; fprintf(stderr, "PANIC %s\n", s); exit(2); }
 __asm__(".pushsection .rodata\n.globl biosvm_mouse_stub, biosvm_mouse_stub_end\nbiosvm_mouse_stub:\n.byte 0xcb\nbiosvm_mouse_stub_end:\n.popsection\n");
 
+static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
+#include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"

@@ -122,6 +122,16 @@ void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[
 #define V2P(p) ((uint32_t)(uintptr_t)(p))
 #include "../../src/kernel/fs/fs_port.h"
 #include "../../src/kernel/core/sync.c"
+static bool irq_clock_model;
+static uint64_t irq_test_cycles;
+static unsigned irq_stall_read, irq_work_us;
+static uint64_t read_tsc_serialized(void)
+{
+    if (!irq_clock_model) return ktime_cycles();
+    if (irq_stall_read && !--irq_stall_read) irq_test_cycles += 2100;
+    return irq_test_cycles;
+}
+#include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/work.c"
 #include "../../src/kernel/lib/stackprot.c"
 #include "../../src/kernel/core/registry.c"
@@ -539,6 +549,7 @@ static bool irq_a(unsigned irq, const char *owner)
 {
     CHECK((!(flags & 0x200) || masked[irq]) && strcmp(owner, "irq-a") == 0);
     calls_a++;
+    if (irq_clock_model) irq_test_cycles += irq_work_us;
     return source_a;
 }
 static bool irq_b(unsigned irq, const char *owner)
@@ -627,7 +638,7 @@ static bool fatal_irq_source(unsigned irq, const char *owner)
     CHECK(irq == 6 && !strcmp(owner, "fatal-usb") && !flags && eoi_pending);
     fatal_irq_passes++;
     CHECK(!registry_quarantine(fatal_irq_lease, registry_get((unsigned)fatal_irq_lease)->generation));
-    CHECK(masked[irq]); /* handler containment must precede dispatcher EOI */
+    CHECK(!masked[irq]); /* only this member is revoked, before EOI */
     return true;       /* a persistent source claims every pass */
 }
 static void test_claimed_fatal_quarantine(void)
@@ -639,12 +650,61 @@ static void test_claimed_fatal_quarantine(void)
     unsigned mask_before = masks, unmask_before = unmasks, eoi_before = eois;
     fake_irq(6);
     struct irq_chain_stats s;
-    CHECK(irq_chain_snapshot(6, &s) && s.quarantined && s.passes == 1 && !s.unclaimed);
-    CHECK(fatal_irq_passes == 1 && eois == eoi_before + 1 && masked[6]);
-    CHECK(registry_get((unsigned)peer)->state == RS_QUARANTINED);
+    CHECK(irq_chain_snapshot(6, &s) && !s.quarantined && s.participants == 1 && s.passes == 1 && !s.unclaimed);
+    CHECK(fatal_irq_passes == 1 && eois == eoi_before + 1 && !masked[6]);
+    CHECK(registry_get((unsigned)peer)->state == RS_ACTIVE);
     drain_work();
-    CHECK(masked[6] && masks == mask_before + 1 && unmasks == unmask_before);
-    puts("claimed fatal IRQ: handler quarantines attached lease before first EOI, one mask, no worker rearm PASS");
+    unsigned calls = calls_b;
+    fake_irq(6); drain_work();
+    CHECK(fatal_irq_passes == 1 && calls_b == calls + 1);
+    CHECK(!masked[6] && masks == mask_before && unmasks == unmask_before);
+    CHECK(!chains[6].members[0].handler);
+    puts("shared IRQ: self-quarantine clears one member before EOI; peers continue without mask writes PASS");
+}
+
+static void test_chain_smi_budget(void)
+{
+    current(0); irq_clock_model = true; g_cpu_tsc = true; g_tsc_per_ms = 1000;
+    source_a = source_b = true;
+    int a = irq_claim(4, "irq-a"), b = irq_claim(4, "irq-b");
+    CHECK(!irq_chain_add(4, irq_a, "irq-a") && !irq_chain_add(4, irq_b, "irq-b"));
+    unsigned nb = calls_b;
+    irq_stall_read = 6; /* second read of the first member's end probe */
+    fake_irq(4);
+    struct irq_chain_stats s;
+    CHECK(irq_chain_snapshot(4, &s) && s.deferred && s.smi_attributed == 1 && !s.quarantined);
+    CHECK(calls_b == nb && !chains[4].members[0].budget.count);
+    drain_work(); CHECK(calls_b == nb + 1 && !masked[4]);
+    irq_work_us = 2100;
+    for (unsigned i = 0; i < 3; i++) {
+        /* Detachment logging must not steal the last continuation slot. */
+        if (i == 2) for (unsigned j = 1; j < KWORK_CAPACITY; j++) CHECK(kwork_queue(tick_work, 0));
+        fake_irq(4); drain_work();
+        CHECK(irq_chain_snapshot(4, &s) && !s.quarantined && !masked[4]);
+        CHECK(s.smi_attributed == 1 && s.participants == (i == 2 ? 1u : 2u));
+        CHECK(registry_get((unsigned)b)->state == RS_ACTIVE);
+    }
+    CHECK(registry_get((unsigned)a)->state == RS_QUARANTINED);
+    CHECK(calls_b == nb + 4);
+    /* Replay a lease already released elsewhere: never invoke that slot. */
+    res[b].state = RS_RELEASED;
+    nb = calls_b; fake_irq(4); drain_work();
+    CHECK(calls_b == nb && !chains[4].stats.participants && !chains[4].stats.quarantined);
+    res[b].state = RS_ACTIVE; /* restore fixture accounting for real release */
+    release_active(b);
+    /* A stale generation is skipped and cleared without poisoning peers. */
+    a = irq_claim(3, "irq-a"); b = irq_claim(3, "irq-b");
+    CHECK(!irq_chain_add(3, irq_a, "irq-a") && !irq_chain_add(3, irq_b, "irq-b"));
+    chains[3].members[0].generation++;
+    nb = calls_b; fake_irq(3); drain_work();
+    CHECK(!chains[3].members[0].handler && calls_b == nb + 1 && !masked[3]);
+    CHECK(registry_get((unsigned)b)->state == RS_ACTIVE && !chains[3].stats.quarantined);
+    /* A mismatched IRQ identity is corruption of the line itself. */
+    res[b].end++;
+    fake_irq(3); drain_work();
+    CHECK(chains[3].stats.quarantined && masked[3]);
+    irq_clock_model = false; irq_work_us = 0; g_tsc_per_ms = 1ull << 40;
+    puts("shared IRQ F0-39: measured SMI defers without fault; third genuine overrun detaches only offender; stale skip and corrupt-line quarantine PASS");
 }
 
 static void test_irq_chain(void)
@@ -693,13 +753,13 @@ static void test_irq_chain(void)
         CHECK(s.quarantined == (i + 1 == IRQ_CHAIN_STUCK_PASSES));
         CHECK(masks == mask_before + (s.quarantined ? 1u : 0u) && unmasks == unmask_before);
     }
-    CHECK(masked[11] && s.quarantines == 1 && s.participants == 1);
+    CHECK(masked[11] && s.quarantines == 1 && s.participants == 0);
     CHECK(s.handled == 4 && s.unclaimed == 1000 && s.passes == 1004);
     CHECK(registry_get((unsigned)b)->state == RS_QUARANTINED);
     CHECK(registry_release(b, registry_get((unsigned)b)->generation) == -EINVAL);
     CHECK(registry_claim(RES_IRQ, 11, 12, "new-sharer", true) == -EINVAL);
     CHECK(irq_chain_add(11, irq_b, "irq-b") == -EINVAL);
-    CHECK(irq_chain_remove(11, irq_b, "irq-b") == 0 && masked[11]);
+    CHECK(irq_chain_remove(11, irq_b, "irq-b") == -EINVAL && masked[11]);
 
     /* Remaining handlers run in the worker after the aggregate IRQ budget. */
     a = irq_claim(10, "irq-a");
@@ -752,8 +812,7 @@ static void test_irq_chain(void)
     CHECK(!irq_chain_remove(10, irq_a, "irq-a") && !handlers[10] && !masked[10]);
     release_active(a);
 
-    /* A failed proof between IRQ service and deferred rearm must not let
-     * the worker reopen the quarantined line or retain an active peer. */
+    /* A failed member proof during deferral preserves the peer/rearm. */
     a = irq_claim(5, "irq-a");
     b = irq_claim(5, "irq-b");
     CHECK(irq_chain_add(5, irq_a, "irq-a") == 0);
@@ -765,10 +824,10 @@ static void test_irq_chain(void)
     CHECK(chains[5].stats.deferred && masks == mask_before + 1);
     CHECK(registry_quiesce(a, registry_get((unsigned)a)->generation, idle_bad) == -EFAULT);
     drain_work();
-    CHECK(irq_chain_snapshot(5, &s) && s.quarantined && masked[5]);
+    CHECK(irq_chain_snapshot(5, &s) && !s.quarantined && !masked[5] && s.participants == 1);
     CHECK(registry_get((unsigned)a)->state == RS_QUARANTINED);
-    CHECK(registry_get((unsigned)b)->state == RS_QUARANTINED);
-    CHECK(masks == mask_before + 1 && unmasks == unmask_before);
+    CHECK(registry_get((unsigned)b)->state == RS_ACTIVE);
+    CHECK(masks == mask_before + 1 && unmasks == unmask_before + 1);
 
     /* No continuation slot: line and claims must remain quarantined. */
     a = irq_claim(9, "irq-a");
@@ -848,6 +907,7 @@ int main(void)
     test_irq_chain();
     test_three_shared_devices();
     test_claimed_fatal_quarantine();
+    test_chain_smi_budget();
     test_registry_probe();
     test_fs_wait_lock();
     test_work_report_bound();

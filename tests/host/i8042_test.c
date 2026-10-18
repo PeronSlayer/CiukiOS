@@ -445,6 +445,8 @@ int udelay(uint32_t us)
     return 0;
 }
 #include "../../src/kernel/lib/stackprot.c"
+static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
+#include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/drivers/fwinput_adapter.c"

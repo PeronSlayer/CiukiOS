@@ -1,5 +1,25 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F0-39: IRQ loss preserves polling service (2026-10-18)
+
+This amendment supersedes the whole-line stale-lease/fatal-member policy
+below; see [device ownership](device-firmware-ownership.md#f0-39-shared-irq-fault-isolation-and-external-stalls).
+IRQ lease revocation clears only its chain member. UHCI/OHCI retain their
+valid register and DMA leases, schedule, frame clock, configured devices and
+workers. They emit `[usb] irq_lost controller=... mode=poll` once and use the
+existing frame polling/1 ms HID fallback and worker storage cadence.
+Fallback reuses existing local interrupt-disable masks and readback, without
+new register definitions, PIC/routing changes, controller reset or BME changes.
+Lost IRQ leases remain pinned and cannot authorize resource/DMA release.
+Register/DMA lease loss, retained fatal status and a failed local mask remain
+controller faults. OHCI done-head capture and two-frame retirement are retained.
+
+Research: [UHCI 1.1 §2.1.3](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf)
+retains status for polling when interrupts are disabled. The existing
+[OpenHCI 1.0a §§7.1.5–6](https://dl.xkwy2018.com/downloads/documents/hcir1_0a.pdf)
+interrupt masks and [upstream OHCI completion path](https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/usb/host/ohci-hcd.c)
+separate controller progress/done processing from interrupt delivery.
+
 ## F1-74: bulk completion snapshot and removable publication (2026-10-16)
 
 Research before implementation: [UHCI 1.1 §§3.2/3.4/4.1](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf)

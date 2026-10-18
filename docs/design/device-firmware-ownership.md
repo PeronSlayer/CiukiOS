@@ -327,6 +327,45 @@ Retain the principle in `src/vm/session_gpu_savage.c:cvsavage_release` and
 `session_gpu_mach64.c:cvmach64_release`: uncertain engine shutdown retains
 ownership and forbids CPU framebuffer fallback until safe.
 
+## F0-39: shared IRQ fault isolation and external stalls
+
+Research checked 2026-10-18: [Linux generic IRQ handling, free_irq](https://www.kernel.org/doc/html/v6.12/core-api/genericirq.html)
+removes one shared device's handler while retaining its peers;
+[ICH3-M §§5.7.4.6–9](https://edbatalha.info/compaq-n610c/Intel%2082801%20ICH3-M%2029071601.pdf)
+requires removing a level source before EOI. Neither makes one member's
+software lease the health of the whole line. [Intel SDM 3C §§32.1–2](https://cdrdv2-public.intel.com/789585/326019-sdm-vol-3c.pdf)
+describes SMI as independent of IF and transparent to interrupted software.
+The F0-35 T23 trace in the F0-39 directive supplies the observed 2.0–2.3 ms
+signature; elapsed callback time alone does not establish its cause.
+
+Decision: a released, stale or quarantined member is cleared and logged as
+`[irq] member_detached`, without masking or quarantining healthy peers.
+Quiescing members may still drain. Registry corruption of the chain's own
+IRQ identity/state, an unclaimed streak of `IRQ_CHAIN_STUCK_PASSES` (1000),
+or inability to queue a required continuation leaves the line quarantined.
+The last case cannot safely complete the mask/EOI/rearm transaction.
+An isolated lease fault during deferral permits the surviving peers to run
+and the existing continuation to rearm. An unisolated physical source can
+still cause the normal stuck-line quarantine; detachment is not an idle proof
+and does not free DMA or release a quarantined resource.
+
+Only measured 2000–2300 us gaps between adjacent P6-compatible serialized
+TSC reads with IF clear, with no callback or I/O between them, are recorded
+as `smi_attributed` (an attribution consistent with F0-35, not identification
+of a firmware source). These samples also enter the active F0-35 trace.
+Nested chain/NIC measurements subtract the same observed stall once from
+each enclosing interval. Unknown gaps, including SMIs outside these probes,
+remain unattributed. A genuine slow callback of the same elapsed length is
+therefore not automatically excused. No chipset programming is added.
+
+Both NIC (50 us) and per-chain-member (250 us) checks quarantine only on
+three unattributed overruns in a sliding 100 ms TSC window. Isolated samples
+remain visible in counters and maxima. The 250 us aggregate hard-IRQ bound
+always uses elapsed time, including attributed stalls, and still defers
+remaining members after masking before EOI; aggregate exhaustion alone does
+not blame the last callback for its predecessors' work. Logs run in thread
+context. Polling and retirement cadence are unchanged.
+
 ## Latency budgets
 
 **[F0]** These are initial engineering limits, not measured notebook facts:

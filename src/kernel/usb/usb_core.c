@@ -211,10 +211,43 @@ bool usb_port_record(struct usb_host *h, unsigned port, const char *event, int r
 }
 bool usb_expired(struct usb_host *h, uint64_t deadline)
 { return (int64_t)(h->io.now(h->io.cookie) - deadline) >= 0; }
+static bool usb_leases_valid(struct usb_host *h)
+{
+    /* IRQ is optional; register and DMA authority are not. */
+    for (unsigned i = 0; i < 3; i += 2)
+        if (h->claims[i] >= 0 && !registry_valid(h->claims[i], h->claim_gen[i])) {
+            usb_host_quarantine(h, "lease_invalid"); return false;
+        }
+    if (!h->irq_attached || h->claims[1] < 0 || registry_valid(h->claims[1], h->claim_gen[1])) return true;
+    bool uhci = h->pci.prog_if == 0;
+    /* Reuse existing local interrupt masks; keep the frame engine, schedule,
+     * PCI command, routing and PIC intact. A mask readback failure is fatal. */
+    if (uhci) {
+        usb_write(h, 4, 0, 2);
+        h->io.config_write(h->io.cookie, 0xc0, 0x8f00, 2);
+        if ((h->io.read(h->io.cookie, 4, 2) & 15) ||
+            (h->io.config_read(h->io.cookie, 0xc0, 2) & 0x20bf)) {
+            usb_host_quarantine(h, "irq_mask_failed"); return false;
+        }
+    } else {
+        usb_write(h, 0x14, UINT32_MAX, 4);
+        if (h->io.read(h->io.cookie, 0x10, 4) & 0x8000007f) {
+            usb_host_quarantine(h, "irq_mask_failed"); return false;
+        }
+    }
+    /* Registry revocation may already have removed the callback. */
+    (void)irq_chain_remove(h->pci.irq_line, usb_irq, h->owner);
+    h->irq_attached = h->irq_pending = false;
+    for (unsigned i = 0; i < USB_HOST_MAX; i++) if (irq_hosts[i] == h) irq_hosts[i] = 0;
+    h->reason = "ready_polling";
+    klog("[usb] irq_lost controller=%s mode=poll", h->owner);
+    return true;
+}
 void usb_hid_service(struct usb_host *h)
 {
     if (!h->ready || h->quarantined) return;
     if (h->irq_status) { usb_host_quarantine(h, "interrupt_host_error"); return; }
+    if (!usb_leases_valid(h)) return;
     usb_ohci_service_done(h);
     if (!h->ready) return;
     for (unsigned i = 0; i < h->device_count && h->ready; i++) {
@@ -351,8 +384,8 @@ void usb_host_quarantine(struct usb_host *h, const char *reason)
         for (unsigned i = 0; i < USB_HOST_MAX; i++) if (irq_hosts[i] == h) irq_hosts[i] = 0;
     }
     for (unsigned i = 0; i < h->device_count; i++) usb_detach(&h->devices[i], "controller_quarantined");
-    /* A failed isolation/removal keeps the IRQ lease attached. Quarantining
-     * that lease masks the chain and prevents even queued rearm. */
+    /* Failed isolation retains DMA/resources in quarantine. IRQ revocation
+     * detaches this member; a physically stuck line still has its own gate. */
     for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0) registry_quarantine(h->claims[i], h->claim_gen[i]);
     klog("[usb] quarantine controller=%s reason=%s irq_isolated=%u", h->owner, reason, isolated);
 }
@@ -373,7 +406,7 @@ static void ohci_root_rearm(struct usb_host *h)
     uint32_t f = usb_irq_save();
     usb_write(h, 0x0c, 0x40, 4);
     h->ohci_root_pending = false;
-    usb_write(h, 0x10, 0x40, 4);
+    if (h->irq_attached) usb_write(h, 0x10, 0x40, 4);
     usb_irq_restore(f);
 }
 static int claim(struct usb_host *h, unsigned slot, enum res_type type, uint32_t start, uint32_t end, bool share)
@@ -694,9 +727,7 @@ void usb_step(struct usb_host *h)
     if (h->busy) { fs_lock_drop(&h->transfer_lock); return; }
     if (!h->ready || h->quarantined) { fs_lock_drop(&h->transfer_lock); usb_storage_service(h); return; }
     h->busy = true;
-    for (unsigned i = 0; i < 3; i++) if (h->claims[i] >= 0 && !registry_valid(h->claims[i], h->claim_gen[i])) {
-        usb_host_quarantine(h, "lease_invalid"); usb_host_drop(h); return;
-    }
+    if (!usb_leases_valid(h)) { usb_host_drop(h); return; }
     if (usb_expired(h, h->next_scan)) {
         uint64_t tick = h->io.now(h->io.cookie);
         bool first_scan = !h->scanned;

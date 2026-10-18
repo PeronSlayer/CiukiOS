@@ -9,6 +9,7 @@
 #include <ciuki/arch.h>
 #include <ciuki/work.h>
 #include <ciuki/timing.h>
+#include <ciuki/irq_budget.h>
 #include <ciuki/init.h>
 
 #define MAX_RES 64
@@ -385,13 +386,16 @@ struct irq_member {
     const char *owner;
     int handle;
     gen_t generation;
+    struct irq_budget budget;
 };
 static struct irq_chain {
     struct irq_member members[IRQ_CHAIN_MAX];
     struct irq_chain_stats stats;
     unsigned next;
-    bool servicing, claimed, report, masked;
+    bool servicing, claimed, report, masked, detach_queued, budget_smi;
     char budget_owner[32];
+    char detached[IRQ_CHAIN_MAX][32];
+    uint64_t budget_us;
 } chains[16];
 
 static bool irq_claim_attached(int h, gen_t generation)
@@ -420,6 +424,46 @@ static void chain_mask(unsigned irq)
     }
 }
 
+static void chain_detached_report(void *arg)
+{
+    unsigned irq = (unsigned)(uintptr_t)arg;
+    struct irq_chain *c = &chains[irq];
+    uint32_t f = irq_save();
+    c->detach_queued = false;
+    irq_restore(f);
+    for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++) {
+        char owner[32];
+        f = irq_save();
+        memcpy(owner, c->detached[i], sizeof(owner));
+        c->detached[i][0] = 0;
+        irq_restore(f);
+        if (!owner[0]) continue;
+        klog("[irq] member_detached irq=%u owner=%s", irq, owner);
+        if (c->stats.quarantined)
+            klog("[irq] quarantined irq=%u owner=%s unclaimed=%u", irq,
+                 owner, c->stats.consecutive_unclaimed);
+    }
+}
+
+static void chain_detach(unsigned irq, unsigned slot)
+{
+    struct irq_chain *c = &chains[irq];
+    struct irq_member *m = &c->members[slot];
+    if (!m->handler) return;
+    unsigned k = 0;
+    for (; k < sizeof(c->detached[slot]) - 1 && m->owner[k]; k++)
+        c->detached[slot][k] = m->owner[k];
+    c->detached[slot][k] = 0;
+    memset(m, 0, sizeof(*m));
+    c->stats.participants--;
+    /* Reporting never changes the PIC transaction. On a full work ring the
+     * retained names are retried by the next pass/continuation. */
+    /* A callback must not consume the final work slot with a log before
+     * this pass has reserved its required continuation. */
+    if (!c->servicing && !c->detach_queued)
+        c->detach_queued = kwork_queue(chain_detached_report, (void *)(uintptr_t)irq);
+}
+
 static void chain_quarantine(unsigned irq)
 {
     struct irq_chain *c = &chains[irq];
@@ -438,40 +482,59 @@ static void chain_quarantine(unsigned irq)
 
 static void irq_quarantine_claim(int h, gen_t generation)
 {
-    /* A late failed proof must also prevent an already queued rearm from
-     * reopening this line. chain_quarantine publishes its flag before
-     * visiting members, so cascading quarantine is idempotent. */
-    if (irq_claim_attached(h, generation) && !chains[res[h].start].stats.quarantined)
-        chain_quarantine(res[h].start);
+    if (res[h].type != RES_IRQ) return;
+    unsigned irq = res[h].start;
+    struct irq_chain *c = &chains[irq];
+    for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++)
+        if (c->members[i].handler && c->members[i].handle == h &&
+            gen_matches(c->members[i].generation, generation))
+            chain_detach(irq, i);
 }
 
 static void chain_service(unsigned irq, bool hard_irq)
 {
     struct irq_chain *c = &chains[irq];
-    uint64_t start = ktime_cycles();
+    struct irq_stamp start = irq_budget_stamp();
     c->servicing = true;
     while (c->next < IRQ_CHAIN_MAX && !c->stats.quarantined) {
-        struct irq_member *m = &c->members[c->next++];
+        unsigned slot = c->next++;
+        struct irq_member *m = &c->members[slot];
         if (!m->handler)
             continue;
-        if (!registry_valid(m->handle, m->generation) ||
-            (res[m->handle].state != RS_ACTIVE && res[m->handle].state != RS_QUIESCING)) {
+        if (!matches(m->handle, m->generation) || res[m->handle].state == RS_RELEASED ||
+            res[m->handle].state == RS_QUARANTINED) {
+            chain_detach(irq, slot);
+            continue;
+        }
+        const struct resource *r = &res[m->handle];
+        if (r->type != RES_IRQ || r->start != irq || r->end != irq + 1 || !r->shareable ||
+            !same_owner(r->owner, m->owner) || (r->state != RS_ACTIVE && r->state != RS_QUIESCING)) {
             chain_quarantine(irq);
             break;
         }
+        /* A callback may quarantine its own lease and clear this slot. */
+        struct irq_member member = *m;
+        struct irq_stamp member_start = irq_budget_stamp();
         uint32_t before = read_eflags();
-        if (m->handler(irq, m->owner))
+        if (member.handler(irq, member.owner))
             c->claimed = true;
         if ((read_eflags() ^ before) & 0x200)
-            panic("irq: handler changed IF irq=%u owner=%s", irq, m->owner);
-        if (hard_irq && ktime_elapsed_us(start, CRIT_BUDGET_US)) {
+            panic("irq: handler changed IF irq=%u owner=%s", irq, member.owner);
+        struct irq_elapsed duration = irq_budget_elapsed(member_start);
+        if (hard_irq && m->handler && irq_budget_fault(&m->budget, duration, CRIT_BUDGET_US))
+            registry_quarantine(member.handle, member.generation);
+        struct irq_elapsed elapsed = irq_budget_elapsed(start);
+        if (hard_irq && elapsed.us >= CRIT_BUDGET_US) {
             c->stats.budget_violations++;
-            uint64_t us = (ktime_cycles() - start) * 1000 / g_tsc_per_ms;
+            uint64_t us = elapsed.us;
             if (us > c->stats.max_service_us)
                 c->stats.max_service_us = us;
+            c->budget_us = us;
+            c->budget_smi = elapsed.smi_attributed;
+            if (c->budget_smi) c->stats.smi_attributed++;
             unsigned k = 0;
-            for (; k < sizeof(c->budget_owner) - 1 && m->owner[k]; k++)
-                c->budget_owner[k] = m->owner[k];
+            for (; k < sizeof(c->budget_owner) - 1 && member.owner[k]; k++)
+                c->budget_owner[k] = member.owner[k];
             c->budget_owner[k] = 0;
             break;                      /* finish the pass after EOI, in thread context */
         }
@@ -503,10 +566,11 @@ static void chain_resume(void *arg)
         chain_finish(irq);
     }
     if (c->budget_owner[0]) {
-        klog("[irq] budget exceeded irq=%u owner=%s us=%llu pending=%u", irq,
-             c->budget_owner, c->stats.max_service_us, IRQ_CHAIN_MAX - c->next);
+        klog("[irq] budget exceeded irq=%u owner=%s us=%llu pending=%u smi_attributed=%u", irq,
+             c->budget_owner, c->budget_us, IRQ_CHAIN_MAX - c->next, c->budget_smi);
         c->budget_owner[0] = 0;
     }
+    chain_detached_report(arg);
     if (c->report) {
         c->report = false;
         for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++)
@@ -529,14 +593,21 @@ static void chain_irq(struct trap_frame *tf)
     struct irq_chain *c = &chains[irq];
     if (c->stats.quarantined || c->stats.deferred)
         return;
+    for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++)
+        if (c->detached[i][0] && !c->detach_queued)
+            c->detach_queued = kwork_queue(chain_detached_report, (void *)(uintptr_t)irq);
     c->stats.passes++;
     c->next = 0;
     c->claimed = false;
     chain_service(irq, true);
     if (c->next == IRQ_CHAIN_MAX)
         chain_finish(irq);
-    if (c->next == IRQ_CHAIN_MAX && !c->stats.quarantined && !c->budget_owner[0])
+    if (c->next == IRQ_CHAIN_MAX && !c->stats.quarantined && !c->budget_owner[0]) {
+        for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++)
+            if (c->detached[i][0] && !c->detach_queued)
+                c->detach_queued = kwork_queue(chain_detached_report, (void *)(uintptr_t)irq);
         return;                         /* source acknowledged; dispatcher EOI suffices */
+    }
     chain_mask(irq);                     /* defer remaining work/logging past EOI */
     c->stats.deferred = true;
     if (!kwork_queue(chain_resume, (void *)(uintptr_t)irq)) {
@@ -576,19 +647,21 @@ int irq_chain_add(unsigned irq, irq_chain_handler_t handler, const char *owner)
         return -EINVAL;
     }
     for (unsigned i = 0; i < IRQ_CHAIN_MAX; i++) {
-        if (c->members[i].handler)
+        if (c->members[i].handler || c->detached[i][0])
             continue;
-        c->members[i] = (struct irq_member){ handler, owner, h, res[h].generation };
+        c->members[i] = (struct irq_member){ .handler=handler, .owner=owner,
+            .handle=h, .generation=res[h].generation };
         c->stats.participants++;
-        break;
-    }
-    irq_set_handler(irq, chain_irq);
-    if (!c->stats.deferred && c->stats.participants == 1) {
-        pic_unmask(irq);
-        c->masked = false;
+        irq_set_handler(irq, chain_irq);
+        if (!c->stats.deferred && c->stats.participants == 1) {
+            pic_unmask(irq);
+            c->masked = false;
+        }
+        irq_restore(f);
+        return 0;
     }
     irq_restore(f);
-    return 0;
+    return -EINVAL;
 }
 
 int irq_chain_remove(unsigned irq, irq_chain_handler_t handler, const char *owner)
