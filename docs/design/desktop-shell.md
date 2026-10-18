@@ -1,5 +1,67 @@
 # Desktop shell bars and protruding Start orb (f2-82)
 
+## Bar surface quality (f2-83)
+
+Primary-source research checked on 2026-10-19 before implementation:
+
+- Microsoft's Windows 7 [taskbar guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/winenv-taskbar)
+  separates window identification, activation and notification controls;
+  its [colour guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-color)
+  favours restrained colour and checking reduced-colour displays. The
+  [theme format documentation](https://learn.microsoft.com/en-us/windows/win32/controls/themesfileformat-overview)
+  distinguishes Aero and Windows 7 Basic colour roles (face, light, shadow
+  and dark shadow). Use these as inspiration for opaque depth and distinct
+  button states, without borrowed art.
+- Apple's [toolbar HIG](https://developer.apple.com/design/human-interface-guidelines/toolbars)
+  recommends deliberate controls and consistent grouping. Keep the existing
+  top status group, bottom window group and every geometry/hit-test box.
+- GNOME's [UI styling HIG](https://developer.gnome.org/hig/guidelines/ui-styling.html)
+  calls for theme variables, accessibility testing and state cues beyond
+  colour. The [WCAG contrast definition](https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum)
+  supplies the measurable 4.5:1 label target; test actual shaded faces in
+  both themes and after RGB565 conversion.
+- [FreeType glyph retrieval](https://freetype.org/freetype2/docs/reference/ft2-glyph_retrieval.html)
+  documents normal hinting and 8-bit coverage. The existing pinned Inter
+  12/13 px atlases already use them (`sdk/freetype/ui_raster.c`); retain the
+  atlases and blend a soft one-pixel text shadow on the dark top bar.
+- [OpenVG 1.1, section 6](https://registry.khronos.org/OpenVG/specs/openvg-1.1.pdf)
+  describes coverage antialiasing. Use deterministic integer 4x4 sample
+  coverage for circles, their inset rims and three-pixel rounded tasks.
+  Its image-copy discussion also recommends dithering when reducing colour
+  depth, with stable results for successive animation frames (pp. 148–149).
+
+Repository comparison: bars were flat fills, task labels were hard-clipped,
+and circle edges had only four samples. The portrait already has a pinned
+source and deterministic area scaler; native Tango tray sprites are 16 px.
+Decision: reuse those assets and metrics. Both bars use a two-stop vertical
+surface with a one-pixel light top edge, dark bottom edge and subtle inner
+shadow; steps in light/shade use roughly 8–12 percent mixes. Cool slate-blue
+and neutral platinum retain their existing theme roles. Menus and notification
+faces use the same surface treatment. Focused tasks have a darker face and
+two-pixel accent, hover has a brighter bevel, minimized tasks a lighter face
+with upright text. Overlong labels end with the existing U+2026 glyph.
+The normal-boot observer's default taskbar colour literal follows the new
+Ciuki Blue base, with samples spanning each bar's new gradient (as already
+done for the orb). Its geometry, tolerance and occupied-fraction thresholds
+are unchanged. The companion host source guard checks the shared surface
+painter rather than the former flat fills.
+
+RGB565 surfaces use a screen-anchored ordered 4x4 Bayer threshold before the
+existing scanout truncation (`fbdev.c`, `pack_565`); XRGB8888 keeps its smooth full-colour ramp.
+The threshold chooses neighbouring channel levels, with no random state or
+frame-dependent phase. Tests check adjacent body rows (excluding the explicitly
+contrasting edge/inner-shadow lines): at most one 8-bit step in 32 bpp and
+one native channel step between adjacent 4x4 band means in RGB565. They also
+check that dithering actually mixes neighbouring levels within a row, and
+that partial repaint matches a whole repaint. All painting remains integer-only.
+
+F2-83 deliberately re-records 122 existing shell/compositor, bar-preview,
+interaction, notification and boot-frame references, and adds eight bar
+references (both themes, both sizes, XRGB8888/RGB565). App-only controls and
+dialog-only references remain unchanged apart from the three theme bar
+previews. Review PNGs and 2x inspection crops live in
+`build/codex/f2-83-frames/`; host captures are not guest evidence.
+
 Research checked before implementation, 2026-10-18:
 
 - The [EWMH specification](https://specifications.freedesktop.org/wm/latest-single/)

@@ -16,18 +16,19 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-72: only balloon, notification and tooltip include the changed DMZ-White overlay.
 # F2-74: balloon/notification include the explicit close affordance; media replay is pinned separately.
 # F2-82: orb changes in frames containing desktop chrome; dialogs stay pinned.
+# F2-83: shaded bars and notification surfaces; dialog-only hashes stay pinned.
 GOLDENS = {
-    "balloon": "c03920f5967b64d0d7a430cf2bf38d97d5db496ca75606b26f3bd5065f36840c",
+    "balloon": "1a4a287b2b05e6cda6e27ed3cdc2f4d092342b792394a7e5104301b7944338e8",
     "error": "310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a",
     "info": "50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53",
     "loading": "c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1",
-    "notification": "7f787df9f46a267edf71eb7e02075a555ce4716c785fb1f3fcfbd47c51a53a5d",
+    "notification": "54981284086da5ab4d108dabdeaa2f58cb8e2ee41927fedfc49cdf2f2b3bb0a5",
     "question": "a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06",
-    "tooltip": "9e8d07b108d4e94031ef460564dec546ee40fc674fffe736780928694ef7fc93",
-    "tooltip-media": "208435941a6183ce3f93bbce4e110c7aee18e78a45b27c8c86ea02fc87b74bdc",
-    "tooltip-network": "73b292eb2fd6ae4b51a4273bb761d57d4708abaee0f7f8d31a001fc7289b15f7",
-    "tooltip-task": "59ed82a6d3d3435cca1fd79e3d731d2e2c278281dd600ada23205420c14af86b",
-    "tooltip-volume": "39f555c4780bc87e71c651428af8d3107e9d4fa285feab0b8b2f208991c0230b",
+    "tooltip": "def4017559abd2e10099397d6b46c8afb830508864cc93fd3aea2d096d3dfe66",
+    "tooltip-media": "30f60a4a05266e870b4c44e4bb51fb4cf9e17b37ad76f8128bb23933a4599141",
+    "tooltip-network": "a2978376035d6af7ea973748346082db8017a5050d8843370a38247244d3c406",
+    "tooltip-task": "c728cae274d9b57c6d786e3bb8b48cbc89488a0188dd6062802a83508b6f15d1",
+    "tooltip-volume": "ce0789616d6adc38fca93074fe4d8d59b33c9fa6e3e1c15d5e04ea55fa698cbb",
     "warning": "43a94b327cd5807be7f35b7c2aad42f07341c63d8208f757cf6b3000c4951177"
 }
 

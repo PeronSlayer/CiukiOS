@@ -13,16 +13,17 @@ import hashlib
 # F2-81: intentional two-bar shell/theme changes; docs/design/desktop-shell.md.
 
 # F2-82: boot shell frames include the larger orb and clipped recess.
+# F2-83: deliberately re-recorded for the new bar gradients and coverage rims.
 BOOT_GOLDENS = {
-    "absent-ro": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "absent-rw": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "identical-unpresented": "c7c2dcd677bb5bfdf3e39ce1ad31f5192d5dbf16570ac8d149a10ba690a17a75",
-    "present-ro": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "present-ro-seeded": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "present-rw": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "present-rw-seeded": "51f65a04719478e67d9f8014c6a69e8b235dcd722699458749f3aced4050668a",
-    "theme": "3fd172708970918dc0a403b0a4d6f05c63c202ad6ee29e2a31027d0db858574d",
-    "wallpaper-change": "c7c2dcd677bb5bfdf3e39ce1ad31f5192d5dbf16570ac8d149a10ba690a17a75"
+    "absent-ro": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "absent-rw": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "identical-unpresented": "587622d3f8baed652eb99637898d2d3d67682355ea6e3471fe9802ac98e2c02c",
+    "present-ro": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "present-ro-seeded": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "present-rw": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "present-rw-seeded": "24e618918949bf244e506a50db97b79a9d3d9e7344ac658cd1954a96e2b88f86",
+    "theme": "bd4cffcf7cf5c595db3b70ccc0fe81a0c9af159bce5eafa3e253ea8327ff2d1e",
+    "wallpaper-change": "587622d3f8baed652eb99637898d2d3d67682355ea6e3471fe9802ac98e2c02c"
 }
 
 class MemoryFootprintTests(unittest.TestCase):

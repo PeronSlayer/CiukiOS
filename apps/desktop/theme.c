@@ -17,7 +17,7 @@ static const struct desk_theme themes[] = {
         .name = "Platinum", .description = "Platinum greys, pinstriped title bars and a blue accent",
         .desktop = 0x375564u, .desktop_label = 0xf6dfb6u,
         .topbar = 0xdcdcdcu, .topbar_edge = 0x8a8a8au, .topbar_text = 0x161616u, .topbar_accent = 0x31639cu,
-        .taskbar = 0xd6d6d6u, .taskbar_text = 0x161616u, .start = 0xf2f2f2u, .start_open = 0xb9b9b9u,
+        .taskbar = 0xbfbfbfu, .taskbar_text = 0x161616u, .start = 0xf2f2f2u, .start_open = 0xb9b9b9u,
         .start_text = 0x161616u, .task_active = 0xc4c4c4u, .task_active_text = 0x000000u,
         .face = 0xddddddu, .light = 0xeeeeeeu, .hilite = 0xffffffu, .shadow = 0x9a9a9au, .dark = 0x666666u,
         .outline = 0x3a3a3au, .face_top = 0xf7f7f7u, .face_bottom = 0xd2d2d2u, .hover = 0xe6eef8u,
@@ -37,7 +37,7 @@ static const struct desk_theme themes[] = {
         .name = "Ciuki Blue", .description = "Blue gradient captions, cool bevels and Ciuki's tan accent",
         .desktop = 0x2b4a63u, .desktop_label = 0xf6dfb6u,
         .topbar = 0x203a50u, .topbar_edge = 0x0f1e2au, .topbar_text = 0xf5f8fbu, .topbar_accent = 0xf0c27au,
-        .taskbar = 0xdce4ecu, .taskbar_text = 0x101a24u, .start = 0xe5c189u, .start_open = 0xd6ae6cu,
+        .taskbar = 0xb8c9d9u, .taskbar_text = 0x101a24u, .start = 0xe5c189u, .start_open = 0xd6ae6cu,
         .start_text = 0x2a1a08u, .task_active = 0xb8cbddu, .task_active_text = 0x101a24u,
         .face = 0xdce4ecu, .light = 0xedf2f7u, .hilite = 0xffffffu, .shadow = 0x8193a5u, .dark = 0x41566bu,
         .outline = 0x2b3e50u, .face_top = 0xf5f8fbu, .face_bottom = 0xcbd7e3u, .hover = 0xe3eef8u,
@@ -212,6 +212,39 @@ void desk_paint_hgradient(struct desk_paint *p, int x, int y, int w, int h, uint
         desk_paint_fill(p, i, y0, 1, h0, desk_mix(right, left, w > 1 ? (unsigned)((i - x) * 255 / (w - 1)) : 0));
 }
 
+static uint32_t surface_pixel(uint32_t colour, int x, int y, int rgb565)
+{
+    if (!rgb565) return colour;
+    static const uint8_t bayer[4][4] = {{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
+    unsigned threshold = 2 * bayer[(unsigned)y & 3][(unsigned)x & 3] + 1;
+    uint32_t out = 0;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        unsigned bits = shift == 8 ? 2 : 3, step = 1u << bits;
+        unsigned v = (colour >> shift) & 255, level = v >> bits;
+        /* Preserve the kernel's truncating RGB565 levels; round the
+         * fractional remainder spatially, saturating at the top level. */
+        if ((v & (step - 1)) * 32 > threshold * step && level < (255u >> bits)) level++;
+        out |= (level << bits) << shift;
+    }
+    return out;
+}
+
+void desk_paint_bar(struct desk_paint *p, int x, int y, int w, int h, uint32_t base, int rgb565)
+{
+    int vx=x, vy=y, vw=w, vh=h;
+    if (!clip(p,&vx,&vy,&vw,&vh)) return;
+    uint32_t top=desk_mix(0xffffffu,base,20), bottom=desk_mix(0,base,20);
+    for (int yy=vy; yy<vy+vh; yy++) {
+        int row=yy-y;
+        uint32_t face=desk_mix(bottom,top,h>1 ? (unsigned)(row*255/(h-1)) : 0);
+        if (!row) face=desk_mix(0xffffffu,face,28);
+        else if (row==h-1) face=desk_mix(0,face,28);
+        else if (row<=2) face=desk_mix(0,face,row==1 ? 8 : 4);
+        uint32_t *dst=p->pixels+(size_t)yy*p->width;
+        for (int xx=vx; xx<vx+vw; xx++) dst[xx]=surface_pixel(face,xx,yy,rgb565);
+    }
+}
+
 void desk_paint_shadow(struct desk_paint *p, int x, int y, int w, int h, int size, uint32_t colour)
 {
     /* Soft drop shadow of the box offset by (size/3, size/2), falling off
@@ -270,6 +303,22 @@ int desk_paint_text_n_aa(struct desk_paint *p, int font, int x, int baseline, co
 int desk_paint_text(struct desk_paint *p, int font, int x, int baseline, const char *s, uint32_t colour)
 { return desk_paint_text_n(p, font, x, baseline, s, (size_t)-1, colour); }
 
+int desk_paint_text_ellipsis(struct desk_paint *p, int font, int x, int baseline,
+                             const char *s, int width, uint32_t colour)
+{
+    if (width<=0) return 0;
+    struct desk_paint clipped=*p;
+    int vx=x, vy=p->cy, vw=width, vh=p->ch;
+    if (!clip(p,&vx,&vy,&vw,&vh)) return 0;
+    clipped.cx=vx; clipped.cy=vy; clipped.cw=vw; clipped.ch=vh;
+    if (desk_text_measure(font,s)<=width) return desk_paint_text(&clipped,font,x,baseline,s,colour);
+    int ellipsis=desk_text_advance(font,0x2026);
+    if (ellipsis>width) return 0;
+    size_t chars=desk_text_fit_chars(font,s,width-ellipsis);
+    int used=desk_paint_text_n(&clipped,font,x,baseline,s,chars,colour);
+    return used+desk_paint_text(&clipped,font,x+used,baseline,"\xe2\x80\xa6",colour);
+}
+
 void desk_paint_pinstripes(struct desk_paint *p, int x, int y, int w, int h, uint32_t light, uint32_t dark)
 {
     /* Platinum: pairs of one dark and one light line on every other row. */
@@ -322,6 +371,37 @@ static unsigned round_cover(int col, int row, int w, int h, int r)
         n += dx * dx + dy * dy <= limit;
     }
     return n;
+}
+
+void desk_paint_task(struct desk_paint *p, int x, int y, int w, int h, unsigned state, int rgb565)
+{
+    int vx=x, vy=y, vw=w, vh=h;
+    if (!clip(p,&vx,&vy,&vw,&vh)) return;
+    const struct desk_theme *t=desk_theme;
+    int active=(state & DESK_TASK_ACTIVE)!=0, hot=(state & DESK_TASK_HOT)!=0;
+    uint32_t base=active ? desk_mix(0,t->task_active,20) : t->taskbar;
+    if (state & DESK_TASK_MINIMIZED) base=desk_mix(t->hilite,base,56);
+    if (hot) base=desk_mix(t->hover,base,112);
+    uint32_t top=active ? desk_mix(t->shadow,base,36) : desk_mix(t->hilite,base,48);
+    uint32_t bottom=active ? base : desk_mix(t->shadow,base,24);
+    uint32_t edge=desk_mix(t->outline,base,active ? 140 : hot ? 115 : 90);
+    int radius=w<6 ? w/2 : h<6 ? h/2 : 3;
+    for (int yy=vy; yy<vy+vh; yy++) for (int xx=vx; xx<vx+vw; xx++) {
+        int col=xx-x, row=yy-y;
+        unsigned outer=round_cover(col,row,w,h,radius);
+        if (!outer) continue;
+        unsigned inner=round_cover(col-1,row-1,w-2,h-2,radius>0 ? radius-1 : 0);
+        if (inner>outer) inner=outer;
+        uint32_t face=desk_mix(bottom,top,h>1 ? (unsigned)(row*255/(h-1)) : 0);
+        if (row==1) face=desk_mix(active ? t->shadow : t->hilite,face,90);
+        if (row==h-2) face=desk_mix(active ? t->hilite : t->shadow,face,55);
+        if (active && row>=h-3 && row<=h-2 && col>=4 && col<w-4) face=t->accent;
+        /* Disjoint coverage weights: compose once so the face and border
+         * cannot darken each other's partially covered corner pixels. */
+        uint32_t ink=inner ? desk_mix(face,edge,inner*255/outer) : edge;
+        uint32_t *dst=p->pixels+(size_t)yy*p->width+xx;
+        *dst=surface_pixel(desk_mix(ink,*dst,outer*255/16),xx,yy,rgb565);
+    }
 }
 
 void desk_paint_round_rect(struct desk_paint *p, int x, int y, int w, int h, int r,

@@ -36,6 +36,13 @@ void desk_paint_fill(struct desk_paint *, int x, int y, int w, int h, uint32_t);
 void desk_paint_blend(struct desk_paint *, int x, int y, int w, int h, uint32_t, unsigned alpha);
 void desk_paint_vgradient(struct desk_paint *, int x, int y, int w, int h, uint32_t top, uint32_t bottom);
 void desk_paint_hgradient(struct desk_paint *, int x, int y, int w, int h, uint32_t left, uint32_t right);
+/* Shell surfaces; rgb565 enables screen-anchored ordered 4x4 quantization. */
+void desk_paint_bar(struct desk_paint *, int x, int y, int w, int h, uint32_t base, int rgb565);
+enum { DESK_TASK_ACTIVE = 1, DESK_TASK_HOT = 2, DESK_TASK_MINIMIZED = 4 };
+void desk_paint_task(struct desk_paint *, int x, int y, int w, int h, unsigned state, int rgb565);
+/* Truncate by whole UTF-8 characters, including a U+2026 when it fits. */
+int desk_paint_text_ellipsis(struct desk_paint *, int font, int x, int baseline,
+                             const char *utf8, int width, uint32_t colour);
 void desk_paint_shadow(struct desk_paint *, int x, int y, int w, int h, int size, uint32_t colour);
 /* Draws at the pen (x, baseline); returns the advance. */
 int desk_paint_text(struct desk_paint *, int font, int x, int baseline, const char *utf8, uint32_t colour);

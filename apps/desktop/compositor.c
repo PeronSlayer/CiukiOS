@@ -374,8 +374,16 @@ static void portrait_at(struct desktop *d, struct desk_box clip, int32_t x, int3
     int stride=(int)d->width;
     for (int32_t yy=b.y; yy<b.y+b.h; yy++) {
         uint32_t *dst=first_dst+(size_t)(yy-b.y)*stride;
-        const uint32_t *src=d->portrait+((yy-y)*DESK_PORTRAIT_SIZE/size)*DESK_PORTRAIT_SIZE;
-        for (int32_t xx=0; xx<b.w; xx++) dst[xx]=src[(b.x+xx-x)*DESK_PORTRAIT_SIZE/size];
+        int y0=(yy-y)*DESK_PORTRAIT_SIZE/size, y1=(yy-y+1)*DESK_PORTRAIT_SIZE/size;
+        for (int32_t xx=0; xx<b.w; xx++) {
+            int x0=(b.x+xx-x)*DESK_PORTRAIT_SIZE/size, x1=(b.x+xx-x+1)*DESK_PORTRAIT_SIZE/size;
+            uint32_t r=0,g=0,blue=0,n=0;
+            for (int sy=y0; sy<y1; sy++) for (int sx=x0; sx<x1; sx++) {
+                uint32_t v=d->portrait[sy*DESK_PORTRAIT_SIZE+sx];
+                r+=(v>>16)&255; g+=(v>>8)&255; blue+=v&255; n++;
+            }
+            dst[xx]=(r/n)<<16 | (g/n)<<8 | blue/n;
+        }
     }
 }
 /* Frames are opaque away from their rounded corners. Keep per-window bounded
@@ -597,15 +605,13 @@ int desk_program_kind(const char *name)
          !strcmp(name,"ciukide") ? DESK_APP_IDE : !strcmp(name,"terminal") ? DESK_APP_TERMINAL : 0; }
 void desk_shell_draw(struct desktop *d, struct desk_box clip)
 {
-    /* Taskbar in the current theme: flat face with a light top edge; the
+    /* Shared shaded surface; the
      * shell (shell.c) adds the task buttons, the tray, menus and popups.
      * The Ciuki (Start) button lives in the top bar (desk_shell_topbar). */
     const struct desk_theme *t=desk_theme;
     struct desk_box bar=desk_taskbar(d);
     struct desk_paint p=paint_of(d,clip);
-    fill(d,bar,clip,t->taskbar);
-    desk_paint_fill(&p,bar.x,bar.y,bar.w,1,t->light);
-    desk_paint_fill(&p,bar.x,bar.y+1,bar.w,1,t->hilite);
+    desk_paint_bar(&p,bar.x,bar.y,bar.w,bar.h,t->taskbar,d->lfb_bytes_per_pixel==2);
     if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
 _Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISION+1,"generic cursor inventory");
@@ -704,10 +710,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     /* Cache maintenance does not write pixels, even with a covered desktop. */
     if (d->shell && desk_shell_background) desk_shell_background(d,(struct desk_box){0,0,0,0});
     visible_paint(d,clip,windows,count,paint_background,-1);
-    /* Top bar: a Platinum-style menu bar with the Ciuki mark. */
-    fill(d,(struct desk_box){0,0,(int32_t)d->width,DESK_BAR},clip,t->topbar);
-    desk_paint_fill(&p,0,DESK_BAR-1,(int)d->width,1,t->topbar_edge);
-    desk_paint_fill(&p,0,0,(int)d->width,1,desk_mix(0xffffffu,t->topbar,160));
+    desk_paint_bar(&p,0,0,(int)d->width,DESK_BAR,t->topbar,d->lfb_bytes_per_pixel==2);
     if (d->shell && desk_shell_topbar) DESK_PROFILE("bars_menus", desk_shell_topbar(d,clip));
     else {
         portrait_at(d,clip,8,6,20);

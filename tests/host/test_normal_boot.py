@@ -293,8 +293,8 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertIn('.topbar = 0x%06xu,' % runner.DESK_TOP_BAR, default)
         self.assertIn('.taskbar = 0x%06xu,' % runner.DESK_TASKBAR, default)
         self.assertIn('.topbar_accent = 0x%06xu,' % runner.DESK_START_BUTTON[0], default)
-        self.assertIn('DESK_BAR},clip,t->topbar);', compositor)
-        self.assertIn('fill(d,bar,clip,t->taskbar);', compositor)
+        self.assertIn('desk_paint_bar(&p,0,0,(int)d->width,DESK_BAR,t->topbar,d->lfb_bytes_per_pixel==2);', compositor)
+        self.assertIn('desk_paint_bar(&p,bar.x,bar.y,bar.w,bar.h,t->taskbar,d->lfb_bytes_per_pixel==2);', compositor)
         # The Ciuki button: its box (desktop.h, compositor.c) and its face colours (shell.c draw_start).
         for name, value in zip(('X', 'Y'), runner.DESK_START_BOX[:2]):
             self.assertIn('#define DESK_START_%s %d\n' % (name, value), geometry_header)
