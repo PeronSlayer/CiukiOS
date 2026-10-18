@@ -65,6 +65,8 @@ static void fixture_seed(void) { }
 #define inventory_generation fixture_inventory_generation
 #define inventory_truncated fixture_inventory_truncated
 #define idle_proven fixture_idle_proven
+#define takeover_owner fixture_takeover_owner
+#define takeover_revision fixture_takeover_revision
 #define counters fixture_counters
 #define pci fixture_pci
 #define npci fixture_npci
@@ -95,6 +97,7 @@ static void fixture_seed(void) { }
 #define registry_claim_reserved fixture_registry_claim_reserved
 #define registry_activate fixture_registry_activate
 #define registry_quarantine fixture_registry_quarantine
+#define registry_offer_takeover fixture_registry_offer_takeover
 #define registry_quiesce fixture_registry_quiesce
 #define registry_release fixture_registry_release
 #define registry_snapshot fixture_registry_snapshot
@@ -128,6 +131,8 @@ static void fixture_seed(void) { }
 #undef inventory_generation
 #undef inventory_truncated
 #undef idle_proven
+#undef takeover_owner
+#undef takeover_revision
 #undef counters
 #undef pci
 #undef npci
@@ -158,6 +163,7 @@ static void fixture_seed(void) { }
 #undef registry_claim_reserved
 #undef registry_activate
 #undef registry_quarantine
+#undef registry_offer_takeover
 #undef registry_quiesce
 #undef registry_release
 #undef registry_snapshot

@@ -892,6 +892,47 @@ static void test_generation_exhaustion(void)
     CHECK(before.live == after.live && before.claims == after.claims);
 }
 
+static bool takeover_idle(int h, gen_t g)
+{
+    CHECK(flags & 0x200);
+    CHECK(registry_get(h)->state==RS_QUARANTINED);
+    CHECK(registry_release(h,g)==-EINVAL);
+    return true;
+}
+static bool takeover_busy(int h, gen_t g) { (void)h; (void)g; return false; }
+static bool takeover_cancelled(int h, gen_t g)
+{ CHECK(!registry_quarantine(h,g)); return true; }
+static void test_takeover(void)
+{
+    for (unsigned kind=0;kind<2;kind++) {
+        enum res_type type=kind ? RES_MMIO : RES_PORT;
+        uint32_t start=kind ? 0xF0000000 : 0x3B0, end=kind ? 0xF0080000 : 0x3E0;
+        int h=registry_claim(type,start,end,"savage-vga",false); CHECK(h>=0);
+        gen_t g=registry_get(h)->generation;
+        CHECK(!registry_activate(h,g) && !registry_quarantine(h,g));
+        CHECK(registry_claim(type,start,end,"supersavage-mode",false)==-EINVAL);
+        CHECK(registry_offer_takeover(h,g+1,"supersavage-mode",takeover_idle)==-EINVAL);
+        flags=0; CHECK(registry_offer_takeover(h,g,"supersavage-mode",takeover_idle)==-EINVAL); flags=0x200;
+        CHECK(registry_offer_takeover(h,g,"supersavage-mode",takeover_busy)==-EFAULT);
+        CHECK(registry_claim(type,start,end,"supersavage-mode",false)==-EINVAL);
+        CHECK(registry_offer_takeover(h,g,"supersavage-mode",takeover_cancelled)==-EINVAL);
+        CHECK(registry_claim(type,start,end,"supersavage-mode",false)==-EINVAL);
+        CHECK(!registry_offer_takeover(h,g,"supersavage-mode",takeover_idle));
+        struct registry_stats before,after; registry_snapshot(&before);
+        CHECK(registry_claim(type,start,end,"intruder",false)==-EINVAL);
+        CHECK(registry_claim(type,start+1,end,"supersavage-mode",false)==-EINVAL);
+        CHECK(registry_claim(type,start,end+1,"supersavage-mode",false)==-EINVAL);
+        CHECK(registry_claim(type,start,end,"supersavage-mode",false)==h);
+        gen_t next=registry_get(h)->generation;
+        CHECK(next!=g && registry_valid(h,next) && !registry_valid(h,g));
+        CHECK(registry_quarantine(h,g)==-EINVAL && registry_release(h,g)==-EINVAL);
+        registry_snapshot(&after);
+        CHECK(after.live==before.live && after.claims==before.claims+1 && after.releases==before.releases+1);
+        CHECK(!registry_activate(h,next)); release_active(h);
+    }
+    puts("PASS f3-43 registry: idle-authorized exact port/MMIO takeover only, unsafe/unoffered/foreign/stale rejected, fresh generation and live counters");
+}
+
 int main(void)
 {
     memset(masked, true, sizeof(masked));
@@ -911,6 +952,7 @@ int main(void)
     test_registry_probe();
     test_fs_wait_lock();
     test_work_report_bound();
+    test_takeover();
     test_generation_exhaustion();
     printf("kernel services: %s (%u failures)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

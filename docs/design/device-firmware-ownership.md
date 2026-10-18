@@ -104,6 +104,13 @@ only then free buffers/claims. Generations MUST reject stale completions.
 Unknown devices MUST receive no VMM enablement. Firmware dependencies remain
 reserved; blindly clearing every PCI bus-master bit is not safe isolation.
 
+**[F3, f3-43]** A stopped CPU PORT/MMIO access lease can explicitly offer
+takeover to a named successor after a separate proof revokes its aliases and
+establishes safety. Only an exact type/range claim consumes the offer, with
+a fresh generation; renewed quarantine cancels an in-flight proof/offer.
+Uncertain writers and ordinary quarantines remain excluded. See the
+[Savage handoff decision](savage-2d.md#f3-43-failed-acceleration-relinquishes-scanout-access).
+
 ## Physical and virtual interrupts
 
 **[F0]** Only the PIC service MUST program the 8259A pair: master vectors

@@ -12,6 +12,7 @@
 #include <ciuki/supersavage_display.h>
 
 static bool switching, awaiting_frame;
+static bool awaiting_restored_frame;
 static bool fullscreen_display;
 static bool fullscreen_native;
 static bool awaiting_native_frame;
@@ -235,15 +236,17 @@ int display_check_end(void)
     return check_result;
 }
 
-void display_frame_complete(uint32_t generation)
+void display_frame_complete(uint32_t generation, bool full_frame)
 {
-    if (!switching && awaiting_frame && generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
+    if (!switching && awaiting_frame && (full_frame || awaiting_restored_frame) &&
+        generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
         if (awaiting_native_frame && fullscreen_return_timed)
             klog("[display] native_supersavage desktop_frame_ms=%llu budget_ms=%u overrun=%u",
                 g_ticks-fullscreen_return_tick,fullscreen_return_budget,
                 (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget));
         awaiting_frame = false;
         awaiting_native_frame = false;
+        awaiting_restored_frame = false;
     }
 }
 void display_fullscreen_return_request(void)
@@ -269,6 +272,7 @@ void display_watchdog_poll(void)
     if (!awaiting_frame || switching || !deadline_passed(frame_deadline) || grants_display_busy()) return;
     switching = true;
     awaiting_frame = false;
+    awaiting_restored_frame = false;
     if (awaiting_native_frame) {
         /* The native provider already restored and verified scanout. A
          * missing desktop repaint cannot authorize a quarantined BIOS call. */
@@ -322,6 +326,7 @@ int display_set(struct process *p, uint16_t id)
         else {
             changed();
             awaiting_frame = true;
+            awaiting_restored_frame = false;
             awaiting_native_frame = false;
             frame_deadline = deadline_after_ms(10000);
         }
@@ -472,7 +477,12 @@ int display_fullscreen_end(void)
             (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget),e);
     }
     if (!e) {
+        /* This path is reached only after fbdev_change_begin revoked the
+         * desktop. Preflight refusals never arm a repaint wait. Scanout is
+         * verified; the first successful new-generation upload proves that
+         * the desktop has resumed, even when its compositor uses strips. */
         changed(); awaiting_frame=true; awaiting_native_frame=native;
+        awaiting_restored_frame=true;
         frame_deadline=deadline_after_ms(10000);
     }
     switching=false;

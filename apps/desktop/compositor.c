@@ -1018,6 +1018,18 @@ void desk_stats_sample(struct desktop *d)
 int desk_redraw(struct desktop *d)
 {
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
+    /* A RESYNC/damage can precede the mode-counter service turn. Refresh
+     * the existing grant query before any generation-tagged engine request;
+     * an unchanged layout can still have a new framebuffer lease. */
+    if (d->display_info) {
+        struct ciuki_framebuffer_info fb;
+        if (d->display_info(d->display,&fb)) return -1;
+        if (fb.width!=d->width || fb.height!=d->height) { errno=EAGAIN; return -1; }
+        if (fb.generation!=d->accel_generation) {
+            d->lfb_bytes_per_pixel=(fb.bpp+7)/8;
+            desk_accel_reset(d,fb.generation);
+        }
+    }
     uint64_t frame_begin=time_now(d);
     render_cache_prepare(d);
     if (!d->rows || d->row_height!=d->height) {

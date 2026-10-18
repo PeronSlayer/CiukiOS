@@ -78,9 +78,16 @@ typedef bool (*registry_idle_proof_fn)(int handle, gen_t generation);
  * registry irq lock. Proof must stop sources, drain callbacks, establish
  * idle and revoke mappings before success. Release is barred while it runs
  * or while the claim still has an attached IRQ handler.
- * A false proof quarantines permanently; no release/reclaim/reset bypass. */
+ * A false proof quarantines; ordinary release/reclaim cannot bypass it.
+ * A stopped access lease needs a separate explicit takeover proof below. */
 int registry_quiesce(int handle, gen_t generation, registry_idle_proof_fn proof);
 int registry_quarantine(int handle, gen_t generation);
+/* Explicit handoff of a stopped CPU access lease. The proof runs in thread
+ * context, IF=1, after quarantine. Only an exact PORT/MMIO claim by the named
+ * successor may consume the offer, with a fresh generation. Ordinary
+ * quarantine never permits takeover; the successor name must remain pinned. */
+int registry_offer_takeover(int handle, gen_t generation, const char *successor,
+                            registry_idle_proof_fn proof);
 void registry_snapshot(struct registry_stats *out);
 
 #define IRQ_CHAIN_MAX 8u

@@ -4,6 +4,41 @@ Status: implemented for host validation; T23 qualification belongs to the lead.
 Research date: 2026-10-13. Register constants and behaviour are independently
 implemented; no upstream implementation is copied.
 
+## f3-43: failed acceleration relinquishes scanout access
+
+Research rechecked online on 2026-10-18 against X.Org's
+[engine/GBD setup](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c),
+[MMIO enable and idle checks](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c)
+and Linux's
+[engine setup](https://raw.githubusercontent.com/torvalds/linux/master/drivers/video/fbdev/savage/savagefb_driver.c).
+These sources distinguish CPU VGA access from queued BCI commands. Releasing
+the CPU port lease does not prove that an outstanding engine command is idle.
+
+The saved-pixel test uses the BCI FIFO at MM10000, status MM48C60 and the
+last framebuffer pixel. It performs no VGA I/O on success. Existing setup
+requires ports 3C2/3CC (misc output), 3C3 (VGA enable), 3C4/3C5 (SR08/SR26),
+and 3D4/3D5 (CR38/39/40, CR66 reset, CR31/50 depth and CR45/55 cursor state).
+Failure teardown uses CR45 and restores CR40. Keep that recipe and its
+exclusive port claim; do not add register programming to fix ownership.
+
+Decision: after the final CPU VGA access, quiesce/release the port claim
+independently of engine idle. Retain unsafe MMIO and the rejecting framebuffer
+guard. Once idle is proven, revoke/release MMIO too. If ordinary release fails,
+an explicit idle-proof-backed offer permits only an exact-range claim by
+`supersavage-mode`, with a fresh registry generation. Unoffered quarantines,
+foreign owners and unsafe engine MMIO remain unavailable.
+
+Production accepts the existing device/decode/aperture/geometry verdicts and
+only the established production configurations (SuperSavage 1, Savage4 0).
+Other `EngineConfig` overrides remain diagnostic candidates, not production
+qualification. In particular, the measured failed SuperSavage configuration 0
+cannot trigger another production pixel test. The H sweep remains explicit
+diagnostics; it has no persisted per-configuration qualification database.
+Commit and close the existing boot-volume `C:/system/settings/accel.cfg`
+attempt before claims/register access. A missing marker authorization, failed
+commit/close, nonempty retained marker or unqualified configuration refuses
+the attempt. Only a fully successful attempt clears the marker.
+
 ## f1-69: select the measured SuperSavage configuration
 
 Research rechecked online and against the seven local references on
