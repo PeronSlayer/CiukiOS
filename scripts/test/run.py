@@ -1001,7 +1001,38 @@ NORMAL_BOOT_EXPECTED_KEYS = {'evidence_kind','settle_seconds','screen'}
 # outside this heuristic: test images carry no settings file.
 DESK_BAR_ROWS = desktop_orb_geometry()['bar_height']
 DESK_TOP_BAR = 0x203a50
-DESK_TASKBAR = 0xdce4ec
+DESK_TASKBAR = 0xb8c9d9
+
+
+def desk_mix(a, b, alpha):
+    """apps/desktop/theme.c desk_mix: a over b with alpha/255, rounded."""
+    if alpha >= 255: return a & 0xffffff
+    if not alpha: return b & 0xffffff
+    out = 0
+    for shift in (0, 8, 16):
+        out |= ((((a >> shift) & 255) * alpha + ((b >> shift) & 255) * (255 - alpha) + 127) // 255) << shift
+    return out
+
+
+def bar_surface_rows(base, rows):
+    """The 32-bpp row colours of a shell bar painted by theme.c desk_paint_bar
+    (f2-83): a two-stop gradient between base+20 % white and base+20 % black,
+    a 28 % light top edge, a 28 % dark bottom edge and two inner shadow rows.
+    The RGB565 framebuffer dithers each row around these values within the
+    per-channel tolerance."""
+    top, bottom = desk_mix(0xffffff, base, 20), desk_mix(0, base, 20)
+    out = []
+    for row in range(rows):
+        face = desk_mix(bottom, top, row * 255 // (rows - 1) if rows > 1 else 0)
+        if row == 0: face = desk_mix(0xffffff, face, 28)
+        elif row == rows - 1: face = desk_mix(0, face, 28)
+        elif row <= 2: face = desk_mix(0, face, 8 if row == 1 else 4)
+        out.append(face)
+    return tuple(out)
+
+
+DESK_TOP_BAR_SURFACE = bar_surface_rows(DESK_TOP_BAR, DESK_BAR_ROWS)
+DESK_TASKBAR_SURFACE = bar_surface_rows(DESK_TASKBAR, DESK_BAR_ROWS)
 DESK_START_BOX = tuple(desktop_orb_geometry()['orb_box'])
 DESK_START_BUTTON = (0xf0c27a, 0xd6ae6c)  # menu closed / open
 # Blue's face is visibly shaded; its base colours alone cover too
@@ -1112,9 +1143,9 @@ def normal_boot_regions(width, height):
     The top bar regions start right of the Ciuki button, which has its own."""
     x, y, w, h = DESK_START_BOX
     left = x+w+4; top = max(min(width,256),left+64)
-    return (('top_bar',(left,0,top-left,DESK_BAR_ROWS),(DESK_TOP_BAR,),'min',0.5,1),
+    return (('top_bar',(left,0,top-left,DESK_BAR_ROWS),DESK_TOP_BAR_SURFACE,'min',0.5,1),
             ('console_absent',(left,0,top-left,DESK_BAR_ROWS),CONSOLE_COLOURS,'max',0.02,1),
-            ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),(DESK_TASKBAR,),'min',0.5,1),
+            ('taskbar',(0,height-DESK_BAR_ROWS,width,DESK_BAR_ROWS),DESK_TASKBAR_SURFACE,'min',0.5,1),
             ('start_button',DESK_START_BOX,DESK_START_BUTTON+DESK_START_GRADIENT,'min',0.4,1),
             # Heuristic 3: the default wallpaper is the owner's Ciuk2 scene, so the
             # work area is only required to be free of the kernel console colours.
