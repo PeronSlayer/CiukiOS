@@ -19,3 +19,9 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. Identity rules of AGENTS.md (exact approved portrait, deterministic conversion only). No Microsoft artwork: the shape and placement are the reference, the drawing is ours.
+
+## Amendment (lead, 2026-10-18 21:25) — the runner's desktop observer must follow the orb
+
+On main `df31084a` (f2-81 merged) `tests/host/desktop/test_desktop.py::test_default_desktop_wallpaper` fails with `observed["failures"] == ['start_button']` and `tests/host/test_desktop_gate.py` fails with `approved Ciuki portrait region mismatch`: `scripts/test/run.py` `observe_desktop_screen` (lines ~879–915) hardcodes the old Start button geometry (`x0 = 4+(96-size-6-53)//2+shift`, `y0 = 4+(24-size)//2+shift`, portrait 18 px beside the 53 px "CiukiOS" text) and compares the portrait cells against the pinned converter. The same observer runs in the QEMU gates (`desktop_screen` cases), so the gates would fail too.
+
+Required in addition: the observer derives the portrait region (position and size) from one shared source with the desktop (a small JSON written by the desktop build or by `apps/desktop/convert_portrait.py` describing the orb geometry and the portrait size/offset per bar height, read by `run.py`), keeps the pinned-converter cell comparison on the orb's portrait at its new size (28 px), tolerates the orb's gradient only outside the portrait cells, and the two failing tests plus `tests/host/test_normal_boot.py` pass on the merged tree before the report is written.
