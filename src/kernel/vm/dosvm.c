@@ -789,6 +789,10 @@ bool dosvm_trap(struct trap_frame *tf)
             }
         }
         else if (tf->vector == 13) {
+            bool was_vif = v->monitor.vif;
+            uint64_t iret_count = v->monitor.stats.insn[V86_IRET];
+            uint64_t popf_count = v->monitor.stats.insn[V86_POPF];
+            uint64_t sti_count = v->monitor.stats.insn[V86_STI];
             v86_retire_shadow(&v->monitor, f);
             if (!dosvm_io_fast(v, f, 0, &e)) {
                 uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
@@ -806,6 +810,11 @@ bool dosvm_trap(struct trap_frame *tf)
                         v->perf.cause = DOSVM_COST_RM_PUSHF + i;
                     if (v->monitor.stats.insn[V86_HLT] != hlts) v->perf.cause = DOSVM_COST_RM_HLT;
                 }
+            }
+            if (!was_vif && v->monitor.vif) {
+                if (v->monitor.stats.insn[V86_IRET] != iret_count) v->perf.if_enable[DOSVM_IF_IRET]++;
+                else if (v->monitor.stats.insn[V86_POPF] != popf_count) v->perf.if_enable[DOSVM_IF_POPF]++;
+                else if (v->monitor.stats.insn[V86_STI] != sti_count) v->perf.if_enable[DOSVM_IF_STI]++;
             }
             if (!e && !v->frame_pm && (v->perf.cause == DOSVM_COST_VGA_IO ||
                 (v->perf.cause == DOSVM_COST_PIT_PIC && v->perf.io_port >= 0x40 &&
@@ -1245,6 +1254,11 @@ void dosvm_tick(void)
         if (!v->started || !dosvm_valid(v->info.key)) continue;
         v->monitor.ticks = g_ticks;
         uint64_t elapsed = g_ticks - v->ticks;
+        v->perf.if_samples_ms += elapsed;
+        if (!v->monitor.vif) {
+            v->perf.if_clear_ms += elapsed;
+            if (!dosvm_in_irq(v)) v->perf.if_outside_ms += elapsed;
+        }
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         uint64_t begin = dosvm_perf_clock();

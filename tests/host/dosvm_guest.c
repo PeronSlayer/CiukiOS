@@ -339,6 +339,10 @@ static void input_hook(void)
 }
 static struct v86_frame cpu;
 static uint64_t instructions, traps;
+static struct v86_frame last_cli;
+static uint16_t last_cli_seed_cs;
+static uint32_t last_cli_seed_ip;
+static unsigned last_cli_depth;
 /* Optional startup cost replay, usable with both pre-f3-14 and current VM
  * sources. Classify the trapped bytes, never execute or patch guest code. */
 static uint64_t replay_cost[14], replay_ns[14];
@@ -475,6 +479,14 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     unsigned cost = getenv("GUEST_COSTS") ? replay_cause(&hw) : 13;
     uint64_t begin = getenv("GUEST_COSTS") ? replay_clock() : 0;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
+    unsigned forced = gv->perf.if_enable[DOSVM_IF_FORCED];
+    if (guest_perf && vector == 13 && !err && !(hw.tf.eflags & V86_VM)) {
+        uint8_t op;
+        if (!dosvm_read(gv, dpmi_fault_linear(gv, &hw), &op, 1) && op == 0xFA) {
+            last_cli = hw; last_cli_seed_cs = gv->dpmi.decode_cs;
+            last_cli_seed_ip = gv->dpmi.decode_eip; last_cli_depth = gv->dpmi.depth;
+        }
+    }
     traps++;
     if (vector == 1) {
         const char *owner = dosvm_step_owner(gv, &cpu, dpmi_debug_status(gv, debug_dr6));
@@ -490,6 +502,10 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
     if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
     else cpu = gv->frame;
+    if (guest_perf && gv->perf.if_enable[DOSVM_IF_FORCED] != forced)
+        printf("isr_forced cli=%04x:%08x ss:sp=%04x:%08x depth=%u seed=%04x:%08x at=%04x:%08x\n",
+               last_cli.tf.cs, last_cli.tf.eip, last_cli.tf.user_ss, last_cli.tf.user_esp,
+               last_cli_depth, last_cli_seed_cs, last_cli_seed_ip, hw.tf.cs, hw.tf.eip);
     if (getenv("GUEST_COSTS")) {
         if ((hw.tf.eflags & V86_VM) != (cpu.tf.eflags & V86_VM)) cost = 5;
         replay_cost[cost]++;
@@ -529,6 +545,7 @@ static int run(uint64_t budget, bool (*done)(void))
                    s.esi & 0xFFFF, s.edi & 0xFFFF, s.ebp & 0xFFFF, s.ss, s.esp & 0xFFFF, s.ds, s.es, s.eflags & 0xFFFF);
         }
         unsigned n = slice_left;
+        g_current = gv->task; /* guest execution/ticks belong to the VM */
         if (ring_on < 0) ring_on = getenv("GUEST_RING") != 0;
         if (ring_on && s.pm) {
             n = 1;
@@ -823,6 +840,7 @@ static bool menu_replay(void)
            gv->video_starts - flips, transfers, edges, gv->trace.heartbeats);
     return pass;
 }
+#include "dosvm_guest_isr.inc"
 static void stats(const char *name)
 {
     if (getenv("GUEST_COSTS")) {
@@ -904,6 +922,7 @@ int main(int argc, char **argv)
         bool rc = !strncmp(argv[i], "rc:", 3);
         bool video = !strncmp(argv[i], "video:", 6);
         bool menu = !strncmp(argv[i], "menu:", 5);
+        bool isr = !strncmp(argv[i], "isr:", 4);
         quake_exec_mode = !strncmp(argv[i], "quake:", 6);
         if (!strncmp(argv[i], "keys:", 5)) {
             CHECK(!strcmp(argv[i + 1], "VMVIDEO"));
@@ -911,7 +930,7 @@ int main(int argc, char **argv)
             if (window_vmvideo(argv[i] + 5)) { failures++; screen(); break; }
             continue;
         }
-        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : menu ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
+        const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : isr ? argv[i] + 4 : menu ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
         dosvm_expect(gv, argv[i + 1]);
@@ -921,7 +940,13 @@ int main(int argc, char **argv)
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
         r = run(budget ? strtoull(budget, 0, 10) : 2000000000ull,
-                fault ? 0 : quake_exec_mode ? quake_exec_done : video || menu ? video_started : verdict);
+                fault ? 0 : quake_exec_mode ? quake_exec_done : video || menu || isr ? video_started : verdict);
+        if (isr) {
+            bool pass = r == 1 && isr_replay();
+            printf("ISR shooting replay: %s\n", pass ? "PASS" : "FAIL");
+            if (!pass) { failures++; fault_dump(); screen(); }
+            break;
+        }
         if (quake_exec_mode) {
             bool pass = r == 1 && quake_alias_returned && quake_alias_calls == 1 &&
                 gv->dpmi.active && !gv->info.verdict_done && !gv->dpmi.stats.terminations && !gv->dpmi.stats.faults;

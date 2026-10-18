@@ -15,6 +15,35 @@ uint64_t dosvm_perf_task_clock(void)
      * excludes suspension and physical IRQ time; host seams use fake TSC. */
     return g_tsc_per_ms ? (cpu_path_clock ? cpu_path_clock() : dosvm_perf_clock()) : 0;
 }
+/* The physical frame's IF stays set at CPL 3. Count only changes to the
+ * software virtual flag, at the instruction/host return that restores it. */
+void dosvm_vif_restore(struct dosvm *v, bool enabled, enum dosvm_if_path path)
+{
+    if (enabled && !v->monitor.vif) v->perf.if_enable[path]++;
+    v->monitor.vif = enabled;
+}
+void dosvm_isr_begin(struct dosvm *v, struct dpmi_record *r, unsigned irq)
+{
+    r->isr_measured = true; r->isr_irq = irq;
+    r->isr_tsc = dosvm_perf_clock(); r->isr_tick = g_ticks;
+    unsigned depth = 0;
+    for (unsigned i = 0; i < v->dpmi.depth; i++)
+        if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) depth++;
+    if (depth > v->perf.isr_max_depth) v->perf.isr_max_depth = depth;
+}
+void dosvm_isr_end(struct dosvm *v, const struct dpmi_record *r)
+{
+    if (!r->isr_measured) return;
+    struct dosvm_isr_cost *s = &v->perf.isr[r->isr_irq];
+    uint64_t ms = g_ticks - r->isr_tick;
+    uint64_t us = g_tsc_per_ms ? (dosvm_perf_clock() - r->isr_tsc) * 1000 / g_tsc_per_ms : ms * 1000;
+    static const uint32_t bounds[7] = {10, 100, 500, 1000, 2000, 5000, 10000};
+    unsigned bin = 0;
+    while (bin < ARRAY_SIZE(bounds) && us > bounds[bin]) bin++;
+    s->vector = r->vector; s->count++; s->us += us; s->ms += ms; s->bins[bin]++;
+    if (us > s->max_us) s->max_us = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+    if (ms > s->max_ms) s->max_ms = ms > UINT32_MAX ? UINT32_MAX : (uint32_t)ms;
+}
 static void perf_phase(struct dosvm *v, unsigned phase)
 {
     uint32_t flags = irq_save();
