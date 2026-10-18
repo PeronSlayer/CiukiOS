@@ -19,6 +19,7 @@ extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attr
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_shell_start(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_internal_paint(struct desktop *, int, struct desk_box, struct desk_box) __attribute__((weak));
 extern const uint32_t *desk_shell_window_icon(struct desktop *, int, int) __attribute__((weak));
 #include "catalog.h"
@@ -67,6 +68,7 @@ static int inside(struct desk_box b, int32_t x, int32_t y)
 { return x>=b.x && y>=b.y && (int64_t)x<(int64_t)b.x+b.w && (int64_t)y<(int64_t)b.y+b.h; }
 int desk_title_code(const struct desktop *d, int32_t x, int32_t y)
 {
+    if (d->shell && desk_start_contains(d,x,y)) return 0;
     /* desk_hit's rule (topmost visible window), kept here: the toolkit
      * programs link this file without input.c. */
     int i=-1;
@@ -168,6 +170,25 @@ int32_t desk_menu_row(const struct desktop *d)
 /* The Ciuki (Start) button at the left end of the top bar. */
 struct desk_box desk_start_button(const struct desktop *d)
 { (void)d; return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H}; }
+struct desk_box desk_start_bounds(const struct desktop *d)
+{
+    struct desk_box b=desk_start_button(d);
+    b.h+=DESK_START_SHADOW;
+    return b;
+}
+int desk_start_contains(const struct desktop *d, int32_t x, int32_t y)
+{
+    struct desk_box b=desk_start_button(d);
+    if (!inside(b,x,y)) return 0;
+    int dx=2*(x-b.x)+1-b.w, dy=2*(y-b.y)+1-b.h;
+    return dx*dx+dy*dy<=b.w*b.w;
+}
+int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
+{
+    struct desk_box ignored;
+    return desk_notification_intersects(d,box) ||
+        (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored));
+}
 /* The Start menu's box (open or not): shell.c drops it from the start
  * button, under the top bar, kept above the taskbar on short screens. */
 struct desk_box desk_menu_box(const struct desktop *d)
@@ -655,7 +676,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
-    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_notification_intersects(d,clip) && !d->sh.switcher &&
+    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
         clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
         for (int i=0;i<DESK_CLIENTS;i++) {
             struct desk_client *c=&d->clients[i];
@@ -710,6 +731,7 @@ static void scene(struct desktop *d, struct desk_box clip)
             desk_paint_fill(&p,b.x+b.w-1-k,b.y+k,1,b.h-2*k,ink);
         }
     }
+    if (d->shell && desk_shell_start) DESK_PROFILE("bars_menus", desk_shell_start(d,clip));
 }
 static void cursor(struct desktop *d, struct desk_box clip)
 {
@@ -813,7 +835,7 @@ static int scroll_plan(struct desktop *d, struct ciuki_rect *out)
         for (unsigned j=0; j<DESK_CLIENTS; j++) if (j!=i && d->clients[j].window && !d->clients[j].minimized &&
             d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),b,&ignored)) visible=0;
         for (unsigned j=0; j<d->damage.count; j++) if (desk_intersect(d->damage.boxes[j],b,&ignored)) damaged=1;
-        if (!visible || !damaged || desk_notification_intersects(d,b)) continue;
+        if (!visible || !damaged || desk_shell_chrome_intersects(d,b)) continue;
         for (int delta=1; delta<=64 && delta<b.h/2; delta++) for (int dir=-1; dir<=1; dir+=2) {
             int sy=dir<0 ? delta : 0, dy=dir<0 ? 0 : delta, same=1, changed=0;
             const uint32_t *a=c->pixels+(uint32_t)dy*c->info.width;

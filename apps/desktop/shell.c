@@ -497,7 +497,7 @@ void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
         if (!d->menu_open) { d->menu_focus = d->focus; desk_focus(d, -1); }
         d->menu_open = 1;
         if (d->shell_test && d->shell_stage == 0) d->shell_stage = 1;
-        damage(d, desk_start_button(d));
+        damage(d, desk_start_bounds(d));
     } else layout(d, &d->sh.menus[0], x, y, 0);
     damage(d, outer(d->sh.menus[0].box));
 }
@@ -511,7 +511,7 @@ void desk_menu_close(struct desktop *d)
     if (start) {
         d->menu_open = 0;
         desk_focus(d, d->menu_focus);
-        damage(d, desk_start_button(d));
+        damage(d, desk_start_bounds(d));
     }
 }
 static void submenu(struct desktop *d, int level, int index)
@@ -1576,8 +1576,41 @@ void desk_shell_background(struct desktop *d, struct desk_box clip)
     }
     draw_icons(d, clip);
 }
-/* A circular accent orb; portrait pixels use the existing deterministic
- * area scaler. Integer radial shading and four coverage samples per pixel. */
+/* Four coverage samples per pixel, in quarter-pixel integer coordinates. */
+static unsigned circle_coverage(int x, int y, int diameter)
+{
+    int radius=diameter*2, rr=radius*radius;
+    unsigned covered=0;
+    for (int sy=1; sy<=3; sy+=2) for (int sx=1; sx<=3; sx+=2) {
+        int dx=x*4+sx-radius, dy=y*4+sy-radius;
+        covered+=dx*dx+dy*dy<=rr;
+    }
+    return covered;
+}
+/* A concave well in bar colours, clipped by the caller to the bar. */
+static void draw_start_well(struct desktop *d, struct du_canvas *c)
+{
+    struct desk_box b=desk_start_button(d);
+    int size=DESK_START_WELL, pad=(size-b.w)/2;
+    struct desk_box ignored;
+    if (!desk_intersect((struct desk_box){b.x-pad,b.y-pad,size,size},
+                        (struct desk_box){c->clip.x,c->clip.y,c->clip.w,c->clip.h},&ignored)) return;
+    struct desk_paint p=painter(c);
+    const struct desk_theme *t=desk_theme;
+    uint32_t dark=desk_mix(t->outline,t->topbar,150);
+    uint32_t light=desk_mix(t->hilite,t->topbar,90);
+    for (int y=0; y<size; y++) for (int x=0; x<size; x++) {
+        unsigned covered=circle_coverage(x,y,size);
+        if (!covered) continue;
+        int dx=4*x+2-2*size, dy=4*y+2-2*size;
+        int rim=dx*dx+dy*dy>(2*size-4)*(2*size-4);
+        uint32_t face=desk_mix(light,dark,(unsigned)y*255/(size-1));
+        if (rim) face=dy<0 ? dark : light;
+        desk_paint_blend(&p,b.x-pad+x,b.y-pad+y,1,1,face,covered*255/4);
+    }
+}
+/* Shell chrome above windows and overlays. Portrait pixels are blitted last,
+ * unchanged by the gloss, using the pinned deterministic area scaler. */
 static void draw_start(struct desktop *d, struct du_canvas *c)
 {
     const struct desk_theme *t = desk_theme;
@@ -1585,28 +1618,35 @@ static void draw_start(struct desktop *d, struct du_canvas *c)
     struct desk_paint p = painter(c);
     int open = d->menu_open, hot = d->sh.start_hot && !open;
     uint32_t base = t->topbar_accent;
-    uint32_t light = desk_mix(t->hilite, base, open ? 40 : hot ? 170 : 120);
-    uint32_t dark = desk_mix(t->outline, base, open ? 150 : 90);
+    uint32_t light = desk_mix(t->hilite, base, 120);
+    uint32_t dark = desk_mix(t->outline, base, 150);
     int radius = b.w * 2, rr = radius * radius;
+    /* One pixel of soft shadow only outside the lower, protruding circle. */
+    for (int y=DESK_BAR; y<b.y+b.h+DESK_START_SHADOW; y++) for (int x=0; x<b.w; x++) {
+        unsigned shadow=circle_coverage(x,y-b.y-DESK_START_SHADOW,b.w);
+        unsigned face=circle_coverage(x,y-b.y,b.w);
+        if (shadow>face) desk_paint_blend(&p,b.x+x,y,1,1,t->drop_shadow,(shadow-face)*36);
+    }
     for (int y = 0; y < b.h; y++) for (int x = 0; x < b.w; x++) {
-        unsigned covered = 0;
-        for (int sy = 1; sy <= 3; sy += 2) for (int sx = 1; sx <= 3; sx += 2) {
-            int dx = x * 4 + sx - radius, dy = y * 4 + sy - radius;
-            covered += dx * dx + dy * dy <= rr;
-        }
+        unsigned covered = circle_coverage(x,y,b.w);
         if (!covered) continue;
         int dx = x * 4 + 2 - radius, dy = y * 4 + 2 - radius * 2 / 3;
         unsigned distance = (unsigned)(dx * dx + dy * dy) * 255 / (unsigned)rr;
         if (distance > 255) distance = 255;
-        uint32_t face = desk_mix(dark, light, distance);
+        uint32_t face = open ? desk_mix(light,dark,distance) : desk_mix(dark,light,distance);
+        /* Soft white ellipse over the upper hemisphere, brighter on hover. */
+        int hx=x*2+1-b.w, hy=y*2+1-b.h/2;
+        int ellipse=hx*hx*64+hy*hy*225, limit=b.w*b.w*36;
+        if (y<b.h/2 && ellipse<limit)
+            face=desk_mix(0xffffffu,face,(unsigned)(limit-ellipse)*(hot ? 66 : open ? 18 : 40)/limit);
         dx = x * 4 + 2 - radius; dy = y * 4 + 2 - radius;
         if (dx * dx + dy * dy > (radius - 4) * (radius - 4))
-            face = desk_mix(open ? t->outline : t->hilite, face, open ? 130 : 80);
+            face = desk_mix(t->outline,face,210);
         desk_paint_blend(&p,b.x+x,b.y+y,1,1,face,covered*255/4);
     }
-    int shift = open ? 1 : 0;
-    int x = b.x + (b.w - SH_START_MARK) / 2 + shift;
-    int y = b.y + (b.h - SH_START_MARK) / 2 + shift;
+    int shift = open ? DESK_START_PRESSED_SHIFT : 0;
+    int x = b.x + DESK_START_MARK_X + shift;
+    int y = b.y + DESK_START_MARK_Y + shift;
     du_icon_blit(c,x,y,desk_shell_icon("ciuki",SH_START_MARK),SH_START_MARK,DU_ICON_NORMAL);
 }
 void desk_shell_topbar(struct desktop *d, struct desk_box clip)
@@ -1616,8 +1656,16 @@ void desk_shell_topbar(struct desktop *d, struct desk_box clip)
     if (!desk_intersect(bar,clip,&b)) return;
     bind(d);
     struct du_canvas c = canvas(d,b);
-    draw_start(d,&c);
+    draw_start_well(d,&c);
     draw_tray(d,&c);
+}
+void desk_shell_start(struct desktop *d, struct desk_box clip)
+{
+    struct desk_box b;
+    if (!desk_intersect(desk_start_bounds(d),clip,&b)) return;
+    bind(d);
+    struct du_canvas c=canvas(d,b);
+    draw_start(d,&c);
 }
 void desk_shell_overlay(struct desktop *d, struct desk_box clip)
 {
@@ -2012,7 +2060,6 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
 }
 
 /* ---- input ------------------------------------------------------------- */
-static struct desk_box start_button(const struct desktop *d) { return desk_start_button(d); }
 static void volume_set_from(struct desktop *d, int32_t y)
 {
     struct desk_box t = volume_track(d);
@@ -2074,6 +2121,13 @@ int desk_shell_button(struct desktop *d, int button, int down)
     tooltip_hide(d);
     d->sh.hover_since = d->now_ns;
     if (d->sh.switcher) switcher_finish(d, 0);
+    /* The protrusion is above the menu too: clicking it toggles Start. */
+    if (d->sh.levels && desk_start_contains(d,x,y)) {
+        int start=d->sh.menus[0].kind==SH_MENU_START;
+        desk_menu_close(d);
+        if (!start && button==CIUKI_BUTTON_LEFT) desk_menu_open(d,SH_MENU_START,0,0);
+        return 1;
+    }
     if (d->sh.levels) {
         for (int l = d->sh.levels - 1; l >= 0; l--) {
             int k = menu_hit(&d->sh.menus[l], x, y);
@@ -2081,9 +2135,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (k >= 0 && button != CIUKI_BUTTON_MIDDLE) activate(d, l, k);
             return 1;
         }
-        int start = d->sh.menus[0].kind == SH_MENU_START;
         desk_menu_close(d);
-        if (start && desk_contains(start_button(d), x, y)) return 1;
     }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
@@ -2131,6 +2183,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         damage(d, outer(p));
         if (desk_contains(volume_icon_box(d), x, y)) return 1;
     }
+    /* The visible orb wins input over notifications underneath its circle. */
+    if (desk_start_contains(d, x, y)) {
+        if (d->sh.notification.active) {
+            damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
+        }
+        if (button == CIUKI_BUTTON_LEFT) desk_menu_open(d, SH_MENU_START, 0, 0);
+        return 1;
+    }
     if (d->sh.notification.active && du_contains(notification_area(d),x,y) && desk_contains(notification_box(d),x,y)) {
         if (button==CIUKI_BUTTON_LEFT) {
             struct sh_notification *n=&d->sh.notification;
@@ -2149,10 +2209,6 @@ int desk_shell_button(struct desktop *d, int button, int down)
         damage(d,notification_outer(d)); d->sh.notification.active=0; damage(d,notification_icon_box(d));
     }
     struct desk_box bar = desk_taskbar(d);
-    if (desk_contains(start_button(d), x, y)) {
-        if (button == CIUKI_BUTTON_LEFT) desk_menu_open(d, SH_MENU_START, 0, 0);
-        return 1;
-    }
     if (y >= 0 && y < DESK_BAR) {
         if (d->sh.media.removable_mask && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
             d->sh.media_open=1; d->sh.want_reload|=32;
@@ -2235,7 +2291,7 @@ void desk_shell_motion(struct desktop *d)
     if (d->sh.volume_drag) volume_set_from(d, y);
     for (int l = d->sh.levels - 1; l >= 0; l--) {
         struct sh_menu *m = &d->sh.menus[l];
-        int k = menu_hit(m, x, y);
+        int k = desk_start_contains(d,x,y) ? -1 : menu_hit(m, x, y);
         if (k == -1) continue;
         int hot = k >= 0 ? k : -1;
         if (hot != m->hot) { m->hot = hot; damage(d, m->box); }
@@ -2246,8 +2302,8 @@ void desk_shell_motion(struct desktop *d)
         }
         break;
     }
-    int over_start = desk_contains(start_button(d), x, y);
-    if (over_start != d->sh.start_hot) { d->sh.start_hot = over_start; damage(d, start_button(d)); }
+    int over_start = desk_start_contains(d, x, y);
+    if (over_start != d->sh.start_hot) { d->sh.start_hot = over_start; damage(d, desk_start_bounds(d)); }
     int target=hover_target(d);
     if (target!=d->sh.hover_target) {
         tooltip_hide(d); d->sh.hover_target=target;

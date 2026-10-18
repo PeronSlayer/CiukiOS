@@ -341,7 +341,7 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
         (struct desk_box){d->copy_rect.src_x,d->copy_rect.src_y,(int)d->copy_rect.width,(int)d->copy_rect.height} :
         (struct desk_box){frame.x,frame.y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
     struct desk_box destination={x,y+desk_theme->radius,frame.w,frame.h-desk_theme->radius};
-    if (desk_notification_intersects(d,source) || desk_notification_intersects(d,destination)) copy=0;
+    if (desk_shell_chrome_intersects(d,source) || desk_shell_chrome_intersects(d,destination)) copy=0;
 
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
         frame.y+frame.h > (int32_t)d->height) copy=0;
