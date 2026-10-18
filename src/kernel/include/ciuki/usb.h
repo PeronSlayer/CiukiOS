@@ -195,6 +195,7 @@ struct usb_host {
     bool ohci_root_pending; /* RHSC stays disabled until the next root scan */
     uint32_t ohci_done_heads[USB_OHCI_DONE_HEADS];
     unsigned ohci_done_read, ohci_done_count;
+    bool ohci_packet_done; /* USB_TD consumed from its published done chain */
     uint64_t ohci_done_batches, ohci_done_tds;
     uint64_t interrupts;
     struct kwait changed;

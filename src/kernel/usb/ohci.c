@@ -115,6 +115,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     if (!budget) { d->packet_trace.result=-USB_ETIMEDOUT; return -USB_ETIMEDOUT; }
     usb_ohci_service_done(h); /* consume saved NextTD chains before reuse */
     if (!h->ready || h->irq_status) return -USB_EIO;
+    h->ohci_packet_done = false;
     unsigned frame = usb_read(h, 0x3c, 4) & 0xffff, frames = 0;
     struct usb_packet_trace *trace = &d->packet_trace;
     *trace = (struct usb_packet_trace){.expected=length,.actual=-1,
@@ -160,17 +161,21 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
         usb_barrier(); unsigned cc = td[0] >> 28;
         /* ED HeadP retirement, not only TD CC: hardware may still write
          * NextTD/DoneHead until the packet has been removed from the ED. */
-        if (cc < 14 && ((ed[2] & ~15u) == ed[1] || (ed[2] & 1))) {
+        if (cc < 14 && ((ed[2] & ~15u) == ed[1] || (ed[2] & 1)) &&
+            (!bulk || h->ohci_packet_done)) {
             break;
         }
         if (periodic && frames >= 2) { result = -USB_EAGAIN; break; }
         if (usb_expired(h, end)) break;
-        usb_sleep(h, 1);
+        usb_poll_pause(h, 1);
     }
     trace->poll_frames=frames;
+    usb_barrier();
+    bool completed = bulk && h->ohci_packet_done && (td[0] >> 28) < 14 &&
+        ((ed[2] & ~15u) == ed[1] || (ed[2] & 1));
     ed[0] |= 1u << 14; usb_barrier();
     usb_write(h, 4, (usb_read(h, 4, 4) & 4u) | 0x80, 4);
-    int retired = usb_retire_frames(h, 0x3c, 4, 0xffff);
+    int retired = completed ? 0 : usb_retire_frames(h, 0x3c, 4, 0xffff);
     usb_ohci_service_done(h);
     frames += (usb_read(h, 0x3c, 4) - frame) & 0xffff;
     usb_barrier(); trace->status=td[0]; trace->token=ed[0]; trace->frames=frames;

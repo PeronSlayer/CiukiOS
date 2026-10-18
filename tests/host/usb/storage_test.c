@@ -24,6 +24,7 @@ static void (*sleep_hook)(void);
 static void (*port_read_hook)(void);
 static void (*hid_poll_hook)(struct usb_device *,struct usb_hid *);
 static bool (*private_transaction_hook)(uint32_t,uint32_t,volatile uint32_t *);
+static void (*qh_advance_hook)(void *,uint32_t,volatile uint32_t *,uint32_t);
 void klog_diag(const char *fmt,...)
 {
     if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
@@ -81,7 +82,7 @@ static struct model {
     unsigned mode_csw_stalls;
     uint64_t command_at;
     uint32_t injected_status;
-    uint32_t latched_qh, hc_status;
+    uint32_t latched_qh, latched_td, hc_status;
     unsigned interrupt_mask, native_gate;
 } m;
 static int packet(struct usb_device *,unsigned,unsigned,unsigned,void *,unsigned,bool);
@@ -110,7 +111,7 @@ static bool uhci_transaction(void *c,uint32_t address,uint32_t qh,volatile uint3
     int got=packet(device(),(td[2]>>15)&15,td[2]&255,(td[2]>>19)&1,m.dma+(td[3]-m.h.dma_phys),n,false);
     if(got==-USB_EAGAIN) {
         td[1]|=1u<<19;m.naks++;
-        if(m.late_ack) {m.latched=true;m.latched_qh=qh;}
+        if(m.late_ack) {m.latched=true;m.latched_qh=qh;m.latched_td=address;}
         return false;
     }
     td[1]&=~(0xffu<<16|0x7ffu);
@@ -126,17 +127,18 @@ static void sleep_ms(void *c,unsigned ms)
         m.now++;
         if(!m.uhci) { if(sleep_hook)sleep_hook();continue; }
         unsigned frame=(unsigned)(m.now+m.frame_offset)&1023;
-        struct uhci_model_io io={NULL,uhci_dma,uhci_transaction,&m.hc_status};
+        struct uhci_model_io io={NULL,uhci_dma,uhci_transaction,&m.hc_status,qh_advance_hook};
         assert(!uhci_model_frame(&io,((uint32_t *)m.dma)[frame]));
         if(m.latched && (uhci_dma(NULL,m.latched_qh,8)[1]&1)) {
             /* The HC fetched this TD before unlink and completes it while
              * the driver is waiting for retirement. No new TD is queued. */
-            volatile uint32_t *td=(volatile uint32_t *)(m.dma+USB_TD);
+            volatile uint32_t *td=uhci_dma(NULL,m.latched_td,16);
             assert(td[1]&(1u<<23));m.latched=false;m.late_ack=false;
             m.inquiry_delay=0;m.late_acks++;
-            assert(uhci_transaction(NULL,m.h.dma_phys+USB_TD,m.latched_qh,td));
+            assert(uhci_transaction(NULL,m.latched_td,m.latched_qh,td));
         }
-        if(m.h.irq_attached && m.hc_status) assert(usb_host_irq(&m.h));
+        if(m.h.irq_attached && m.interrupt_mask && (m.native_gate&0x2000) && m.hc_status)
+            assert(usb_host_irq(&m.h));
         if(sleep_hook)sleep_hook();
     }
 }
@@ -311,6 +313,7 @@ static void use_uhci(void)
     m.uhci=true;m.h.ops=&usb_uhci_ops;m.h.dma=m.dma;m.h.dma_phys=0x100000;m.frame_offset=1990;
     m.h.io.read=read_reg;m.h.io.write=write_reg;
     m.h.io.config_read=irq_config_read;m.h.io.config_write=irq_config_write;
+    m.interrupt_mask=0x0d;m.native_gate=0x2000;
     volatile uint32_t *qh=(volatile uint32_t *)(m.dma+USB_UHCI_CONTROL_QH);
     qh[0]=(m.h.dma_phys+USB_UHCI_BULK_QH)|2;qh[1]=1;
     qh=(volatile uint32_t *)(m.dma+USB_UHCI_BULK_QH);qh[0]=qh[1]=1;
@@ -568,7 +571,8 @@ static void failed_mount(const char *path)
                 assert(strstr(records,needle));
             }
             assert(strstr(records,"packets=8 index=7 offset=448 stop=packet"));
-            assert(strstr(records,"expected=64 actual=-1 result=-110 td=188807ff"));
+            assert((t->packet.status&0x208807ff)==0x208807ff); /* SPD, Active, NAK */
+            assert(strstr(records,"expected=64 actual=-1 result=-110 td="));
             /* Recovery control packets reuse DMA, but not the data-stage history. */
             assert(device()->packet_trace.pid!=USB_PID_IN || device()->packet_trace.expected!=64);
             if(mode==3)assert(strstr(records,"[usb-storage] terminal_fault addr=1 reason=data_transfer"));

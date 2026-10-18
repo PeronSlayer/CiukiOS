@@ -216,6 +216,7 @@ struct model {
     unsigned hub_change[USB_PORT_MAX],hub_status[USB_PORT_MAX];
     uint64_t now;
     uint32_t done_head;
+    unsigned done_publish_delay;
     unsigned sleep_gap; /* scheduler overshoot, independent of the HC frame */
     bool check_sleep_lock;
     struct usb_host *sleep_host;
@@ -554,13 +555,16 @@ static bool uhci_transaction(void *arg,uint32_t td_address,uint32_t qh_address,v
 static void execute_uhci(struct model *m,uint32_t link)
 {
     uint32_t status=m->regs[0]>>16;
-    struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status};
+    struct uhci_model_io io={m,uhci_dma,uhci_transaction,&status,NULL};
     assert(!uhci_model_frame(&io,link));
     m->regs[0]|=status<<16;
     if(m->bulk_record && m->bulk_recorded) {
-        volatile uint32_t *td=uhci_dma(m,m->host.dma_phys+USB_TD,16);
-        if(!(td[1]&(1u<<23)))
-            assert(uhci_dma(m,m->host.dma_phys+USB_UHCI_BULK_QH,8)[1]==1);
+        uint32_t element=uhci_dma(m,m->host.dma_phys+USB_UHCI_BULK_QH,8)[1];
+        if (!(element&1)) {
+            volatile uint32_t *td=uhci_dma(m,element&~15u,16);
+            assert((td[1]&(1u<<23)) || (td[1]&0x00760000u) ||
+                   (((td[1]&0x7ff)+1)&0x7ff)<((((td[2]>>21)&0x7ff)+1)&0x7ff));
+        }
     }
 }
 /* Independent small schedules test the decision table, not the production
@@ -598,7 +602,7 @@ static void rules_setup(unsigned depth)
 }
 static void uhci_schedule_rules(void)
 {
-    struct uhci_model_io io={&rules,rules_dma,rules_transaction,&rules.status};
+    struct uhci_model_io io={&rules,rules_dma,rules_transaction,&rules.status,NULL};
     for(unsigned depth=0;depth<2;depth++) {
         rules_setup(depth);assert(!uhci_model_frame(&io,0x100002));
         assert(rules.order[0]==64 && rules.order[rules.count-1]==96);
@@ -702,7 +706,8 @@ static void sleep_ms(void *arg,unsigned ms)
             if(m->regs[1]&0x10)execute_ohci(m,m->regs[0x20/4],false);
             if(m->regs[1]&0x20)execute_ohci(m,m->regs[0x28/4],false);
             complete_late_hid(m);
-            if(m->done_head && !(m->regs[0x0c/4]&2)) {
+            if(m->done_head && !(m->regs[0x0c/4]&2) &&
+               (!m->done_publish_delay || !--m->done_publish_delay)) {
                 *(uint32_t *)(m->dma+0x84)=m->done_head;m->done_head=0;m->regs[0x0c/4]|=2;
             }
         } else {
@@ -1077,7 +1082,7 @@ static void bulk_engine(bool ohci)
     assert(d->packet_trace.valid && d->packet_trace.expected==64 && d->packet_trace.actual==36 && !d->packet_trace.retired);
     m.bulk_short=true;m.bulk_short_bytes=0;
     assert(!usb_bulk(d,true,data,64,&n) && !n && d->storage.in_toggle==toggle);
-    assert(!d->packet_trace.actual && d->packet_trace.frames>=2);
+    assert(!d->packet_trace.actual && d->packet_trace.frames>=(ohci ? 1u : 2u));
     m.bulk_ready_at=m.now+750;
     assert(!usb_bulk(d,true,data,64,&n) && n==64 && d->storage.in_toggle==(toggle^1));
     assert(d->packet_trace.frames>=750 && d->packet_trace.elapsed_ms>=750);
@@ -1101,6 +1106,33 @@ static void bulk_engine(bool ohci)
     d->low_speed=true;assert(usb_parse_config(d,cfg,sizeof(cfg))==-USB_EPROTO);
     printf("PASS USB %s bulk: CBW/CSW-sized packets, 512-byte IN/OUT, bounded eight-packet prefix of 1024-byte IN, short IN/ZLP, NAK budget, STALL/timeout toggles, descriptor MPS, retired DMA, invalid endpoints/speed\n",ohci?"OHCI":"UHCI");
 }
+static void bulk_completion_latency(bool ohci)
+{
+    setup(ohci,false);assert(!attach());assert(!m.host.ops->port_reset(&m.host,0));m.bulk_test=true;
+    struct usb_device *d=&m.host.devices[0];
+    *d=(struct usb_device){.host=&m.host,.present=true,.configured=true,.ep0=64};
+    d->storage=(struct usb_storage){.bound=true,.in=1,.out=2,.in_packet=64,.out_packet=64};
+    uint8_t data[512];unsigned actual;
+    usb_host_take(&m.host);
+    uint64_t begin=m.now;
+    assert(!usb_bulk(d,true,data,13,&actual) && actual==13 && m.now-begin==1);
+    assert(d->packet_trace.frames==1 && !d->packet_trace.retired);
+    begin=m.now;
+    assert(!usb_bulk(d,true,data,sizeof(data),&actual) && actual==sizeof(data));
+    assert(m.now-begin==(ohci ? 8u : 1u));
+    if (ohci) {
+        /* TD CC and ED dequeue are visible a frame before HCCA/WDH. The
+         * shared TD cannot be reused until its exact done link is consumed. */
+        m.done_publish_delay=2;begin=m.now;
+        uint64_t done=m.host.ohci_done_tds;
+        assert(!usb_bulk(d,true,data,13,&actual) && actual==13 && m.now-begin==2);
+        assert(m.host.ohci_packet_done && m.host.ohci_done_tds==done+1);
+        assert(!m.done_head && !m.host.ohci_done_count && !*(uint32_t *)(m.dma+0x84));
+    }
+    usb_host_drop(&m.host);
+    printf("PASS F1-81 %s: completed bulk packet 1 ms, 512-byte phase %u ms, exact completion proof before DMA reuse\n",
+           ohci ? "OHCI" : "UHCI",ohci ? 8u : 1u);
+}
 static void binding_eighth_packet(void)
 {
     for(unsigned initial=0;initial<2;initial++) for(unsigned mode=0;mode<4;mode++) {
@@ -1116,7 +1148,7 @@ static void binding_eighth_packet(void)
         uint64_t begin=m.now;
         m.bulk_ready_at=begin+(mode==1 ? USB_BIND_BULK_MS-20:0);
         if(mode==2)m.bulk_block_after=7; /* genuinely pending eighth TD */
-        if(mode==3)d->storage.bind_deadline=begin+USB_BIND_FINISH_MS+21;
+        if(mode==3) {d->storage.bind_deadline=begin+USB_BIND_FINISH_MS+21;m.bulk_block_after=7;}
         uint8_t data[512];memset(data,0xcc,sizeof(data));unsigned actual;
         usb_host_take(&m.host);
         int e=usb_bulk(d,true,data,sizeof(data),&actual);
@@ -1131,15 +1163,16 @@ static void binding_eighth_packet(void)
         else {
             assert(e==-USB_ETIMEDOUT && actual==448 && t->packets[7].actual==-1);
             assert(t->packets[7].result==-USB_ETIMEDOUT && t->packets[7].toggle==(initial^1));
-            assert(t->packets[7].valid==(mode==2));
+            assert(t->packets[7].valid);
             if(mode==2) {
                 assert((t->packets[7].status&0x00880000)==0x00880000);
-                assert(t->packets[7].elapsed_ms==USB_BIND_BULK_MS+2);
+                assert(t->packets[7].elapsed_ms==USB_BIND_BULK_MS+3); /* first ACK renews at frame 1 */
                 assert(!strcmp(t->bulk_stop,"packet"));
             } else {
-                assert(!t->packets[7].status && !t->packets[7].token);
-                assert(t->bind_remaining_ms==USB_BIND_FINISH_MS);
-                assert(!strcmp(t->bulk_stop,"bind_deadline"));
+                assert(t->packets[7].status&(1u<<23));
+                assert(t->packets[7].elapsed_ms==23);
+                assert(t->bind_remaining_ms==USB_BIND_FINISH_MS-2);
+                assert(!strcmp(t->bulk_stop,"packet"));
             }
         }
         assert(m.bulk_recorded==acks && d->storage.in_toggle==(initial^(acks&1)));
@@ -1635,6 +1668,7 @@ int main(void)
     t23_receiver(false);t23_receiver(true);
     uhci_schedule_rules();uhci_schedule_regression();
     bulk_engine(false);bulk_engine(true);
+    bulk_completion_latency(false);bulk_completion_latency(true);
     assert(usb_mouse_wheel_layout(wheel_desc,sizeof(wheel_desc)));
     for(unsigned i=0;i<sizeof(wheel_desc)-1;i++) {
         /* Truncation can omit final collection ends, but never inputs. */

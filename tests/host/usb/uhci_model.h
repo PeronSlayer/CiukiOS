@@ -8,6 +8,8 @@ struct uhci_model_io {
     volatile uint32_t *(*dma)(void *, uint32_t, unsigned);
     bool (*transaction)(void *, uint32_t, uint32_t, volatile uint32_t *);
     uint32_t *status;
+    /* Optional separation of TD status from the later QH element writeback. */
+    void (*advance)(void *, uint32_t, volatile uint32_t *, uint32_t);
 };
 static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
 {
@@ -36,8 +38,8 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
         bool active = td[1] & (1u << 23);
         if (active && !transactions--) return 0;
         bool ack = active && io->transaction(io->cookie, address, qh ? qh_address : 0, td);
-        /* IOC is status, not permission to execute an inactive TD. No fixture
-         * IRQ is routed: production leaves USBINTR masked. */
+        /* IOC is status, not permission to execute an inactive TD. The caller
+         * routes the resulting status only when its IRQ gate is enabled. */
         if ((td[1] & (1u << 24)) && !(td[1] & (1u << 23))) *io->status |= 1;
         if (td[1] & (1u << 20)) return 0; /* babble ends this frame */
         if (!qh) { link = td[0]; reserved = 8; continue; }
@@ -45,7 +47,10 @@ static int uhci_model_frame(const struct uhci_model_io *io, uint32_t link)
         unsigned actual = ((td[1] & 0x7ff) + 1) & 0x7ff;
         bool short_packet = ack && (td[1] & (1u << 29)) && (td[2] & 255) == USB_PID_IN && actual < expected;
         if (short_packet) *io->status |= 1;
-        if (ack && !short_packet) qh[1] = td[0];
+        if (ack && !short_packet) {
+            if (io->advance) io->advance(io->cookie, address, qh, td[0]);
+            else qh[1] = td[0];
+        }
         if (ack && !short_packet && (td[0] & 4)) { link = td[0]; reserved = 8; }
         else { link = horizontal; qh = NULL; reserved = 12; }
     }

@@ -1,5 +1,38 @@
 # F1 USB host, boot HID and mass storage contract
 
+## F1-81: completion-based bulk retirement (2026-10-18)
+
+Research before implementation: [UHCI 1.1 §§3.4.1.3/4.1.2](https://mirrors.telepoint.bg/pub/NetBSD/misc/blymn/uhci11d.pdf)
+orders TD status before successful QH element advancement; IOC notifies at
+the end of the completing frame. SPD, STALL and uncompleted TDs do not
+advance the QH. [OpenHCI 1.0a §§6.4.4.6/6.4.5](https://dl.xkwy2018.com/downloads/documents/hcir1_0a.pdf)
+orders ED dequeue before done-queue insertion and publishes the done list
+through HCCA/WDH; a TD condition code alone is insufficient. DI=0 requests
+the earliest done publication. [BOT 1.0 §§5.3/6.3–6.7](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf)
+still requires completion of data before CSW and the existing stall/reset
+recovery sequence.
+
+Repository comparison: small UHCI phases (including 512-byte metadata) used
+one schedule submission and two retirement frames per packet; larger phases
+used bounded 32-TD depth-first batches with the same retirement floor. The
+native notification wait also consumed its full millisecond after an IRQ.
+
+Decision: use the existing pinned 32-TD window for every nonempty UHCI bulk
+phase, with IOC only on the last TD of each batch. A full successful prefix
+and the HC-written terminating QH element prove completion, allowing reuse
+without extra retirement frames. Polling checks this proof every millisecond;
+the native wait may return on an IRQ so the caller can recheck DMA immediately.
+OHCI bulk packets require both ED dequeue and consumption of that exact TD
+from the saved HCCA done chain before reuse. IRQ delivery alone never proves
+retirement. OHCI retains its packet-at-a-time data schedule.
+
+This supersedes the blanket two-frame bulk rule below only for proven
+completion. Short/error/timeout/cancelled UHCI batches and incomplete OHCI
+packets still unlink/skip and wait two HC frames; late ACK accounting,
+frozen-frame containment, F1-74 recovery and the 128-sector read limit remain.
+Control, HID schedules and mandatory elapsed-time reset/recovery/debounce
+delays retain their existing rules. No register or PIC programming is added.
+
 ## F0-39: IRQ loss preserves polling service (2026-10-18)
 
 This amendment supersedes the whole-line stale-lease/fatal-member policy

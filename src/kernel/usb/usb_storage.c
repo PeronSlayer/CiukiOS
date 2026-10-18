@@ -55,7 +55,7 @@ static int bulk_result(struct usb_device *d, int result, const char *stop)
     return result;
 }
 /* Caller owns the host lock. ACK alone advances toggle, including a ZLP.
- * One retired TD per packet uses the existing controller bounce buffer. */
+ * A controller may chain a phase in its private bounded DMA window. */
 int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned *actual)
 {
     if (actual) *actual=0;
@@ -70,7 +70,7 @@ int usb_bulk(struct usb_device *d, bool in, void *data, unsigned bytes, unsigned
     uint64_t end=bulk_end(d);
     t->packet_count=0; t->packet_index=0; t->packet_offset=0;
     t->bulk_started_ms=d->host->io.now(d->host->io.cookie); t->bulk_deadline=end;
-    if (bytes>512 && d->host->ops->bulk) {
+    if (bytes && d->host->ops->bulk) {
         s->bulk_deadline=end;
         int e=d->host->ops->bulk(d,in,data,bytes,actual);
         s->bulk_deadline=0;

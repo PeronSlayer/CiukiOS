@@ -225,9 +225,15 @@ static void phased_delays(void)
     route_ready=true;assert(!attach());phased_replay=true;
     g_ticks=m.now=phase_us=0;phase_fixed_deadline=50;
     native_sleep(&m.host,50);
-    assert(phase_us==50000 && phase_ticks==50 && phase_frames==50 && phase_waits==51);
+    assert(phase_us==500 && !phase_ticks && phase_frames==1 && phase_waits==1);
     phase_fixed_deadline=0;
+    /* The completion wait returns at the half-frame IRQ. usb_sleep retains
+     * the mandatory elapsed-time bound around that same native backend. */
+    g_ticks=m.now=phase_us=0;phase_frames=phase_waits=0;
     usb_host_take(&m.host);
+    m.host.io.sleep=phase_native_sleep;
+    usb_sleep(&m.host,50);
+    assert(phase_us==50000 && phase_ticks==50 && phase_frames==50 && phase_waits==100);
     /* Also replay an I/O backend that returns at every PIT/USB event:
      * usb_sleep itself must count elapsed time, never wakeup iterations. */
     m.host.io.sleep=phase_early_sleep;
@@ -248,7 +254,7 @@ static void phased_delays(void)
     assert(phase_us-begin==61000 && m.root_resets[0]==1 && m.root_enables[0]==1);
     assert(m.recovery_at[0]-m.reset_at[0]==50);
     usb_host_drop(&m.host);
-    puts("PASS USB phased delays: PIT n ms, USB n+0.5 ms; native 50 ms deadline survives 50 IRQ wakes; reset/address/debounce 50/2/100 ms; production root reset 61 ms; optional retry backoff separate");
+    puts("PASS USB phased delays: native completion wait returns at 0.5 ms IRQ; mandatory sleep retains 50 ms across IRQ wakes; reset/address/debounce 50/2/100 ms; production root reset 61 ms");
 }
 static void fatal_isolation(const char *mode)
 {
