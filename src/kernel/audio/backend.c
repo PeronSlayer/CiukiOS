@@ -82,6 +82,7 @@ static int backend_dma_progress_locked(struct audio_dma_device *d)
 {
     struct audio_transport *s = &d->state;
     s->tail_drained = false;
+    if (d->inhibited) return -EIO; /* thread must prove halt/reset before reuse */
     if (!s->running) return d->inhibited ? -EIO : 0;
     uint64_t now = d->io.now(d->io.cookie);
     /* Modulo cursors cannot distinguish a whole missed revolution. Fail
@@ -131,7 +132,8 @@ int audio_dma_publish(struct audio_dma_device *d, const struct audio_frame *pcm)
 }
 int audio_dma_start(struct audio_dma_device *d)
 {
-    if (!d->state.ready || d->state.quarantine || d->inhibited || d->state.published != AUDIO_LEAD) return -EIO;
+    if (!d->state.ready || d->state.quarantine || d->inhibited || d->state.published < 2 ||
+        d->state.published > AUDIO_MAX_LEAD) return -EIO;
     kmutex_lock(&d->register_lock);
     if (!d->state.ready || d->state.quarantine || audio.error) { kmutex_unlock(&d->register_lock); return -EIO; }
     d->state.running = true;
@@ -182,7 +184,7 @@ static bool backend_irq(unsigned irq, const char *owner)
      * the immediate register operations in ack(); service then proves stop. */
     if (!d->proving && d->state.running) {
         int e=audio_dma_progress(d);
-        if (e && e!=-EAGAIN) { d->inhibited = true; d->ops->inhibit(d); audio_fail(-EIO); }
+        if (e && e!=-EAGAIN) { d->inhibited = true; d->ops->inhibit(d); }
     }
     audio_wake();
     uint64_t us = g_tsc_per_ms ? (ktime_cycles() - begin) * 1000 / g_tsc_per_ms : 0;
@@ -346,6 +348,7 @@ void audio_backend_snapshot(struct audio_transport *s)
 {
     if (dma_selected) { uint32_t f=irq_save(); *s=audio_dma.state; irq_restore(f); return; }
     struct ac97_device *d = &ac97;
+    uint32_t flags = irq_save(); /* 64-bit IRQ counters must not tear on i686 */
     *s = (struct audio_transport){.published=d->published,.retired=d->retired,.fetched=d->fetched,
         .generation_fetched=d->generation_fetched,.frame_base=d->frame_base,.fifo_errors=d->fifo_errors,
         .dma_halts=d->dma_halts,.deadline_misses=d->deadline_misses,.irqs=d->irqs,.codec_id=d->codec_id,
@@ -353,6 +356,7 @@ void audio_backend_snapshot(struct audio_transport *s)
         .slot=d->cursor.civ,.prefetch=d->cursor.piv,.lvi=d->cursor.lvi,.status=d->cursor.status,
         .irq=d->pci.irq_line,.ready=d->ready,.running=d->running,.quarantine=d->quarantine,
         .idle_tail=d->idle_tail,.tail_drained=d->tail_drained};
+    irq_restore(flags);
 }
 void audio_backend_idle(bool idle) { if (dma_selected) audio_dma.state.idle_tail=idle; else ac97.idle_tail=idle; }
 void audio_backend_rebase(uint64_t frame) { if (dma_selected) audio_dma.state.frame_base=frame; else ac97.frame_base=frame; }

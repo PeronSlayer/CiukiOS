@@ -148,7 +148,7 @@ static int probe_vm_audio(void)
     rec_emit(VP, "DATA", "case=identity vendor=%04x device=%04x codec=%08x generation=%u",
              audio.caps.vendor, audio.caps.device, audio.caps.codec_id, audio.caps.generation);
     rec_emit(VP, "DATA", "case=transport accepted_rate=%u period_frames=%u published_periods=%u latency_frames=%u master_left=%u master_right=%u mute=%u",
-             AUDIO_RATE, AUDIO_QUANTUM, AUDIO_LEAD, AUDIO_VM_LATENCY, audio.master.left, audio.master.right, audio.master.mute);
+             AUDIO_RATE, AUDIO_QUANTUM, AUDIO_VM_LEAD, AUDIO_VM_LATENCY, audio.master.left, audio.master.right, audio.master.mute);
     struct dosvm *v = 0; int error = 0;
     struct play_mail m = {0};
     struct dosvm_audio_info a = {0}, b = {0};

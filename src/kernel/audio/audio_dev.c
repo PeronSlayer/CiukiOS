@@ -9,9 +9,11 @@
 #include <ciuki/signal.h>
 #include <ciuki/timing.h>
 #include <ciuki/thinkpad_ec.h>
+#include <ciuki/cpustat.h>
 #include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
 static struct vfs *settings_vfs;
 static struct kmutex control_lock;
+static struct kmutex service_lock; /* serialize write-side startup and worker */
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
 struct audio_cfg { uint32_t magic, sequence, checksum, reserved; struct ciuki_mixer_master master; };
 _Static_assert(sizeof(struct audio_cfg) == 48, "durable audio record");
@@ -23,6 +25,7 @@ static struct audio_frame quantum[AUDIO_QUANTUM];
  * native-only host harness does not link audio/vm_source.c). */
 extern bool audio_vm_active(void) __attribute__((weak));
 extern bool audio_vm_playing(void) __attribute__((weak));
+extern unsigned audio_vm_playing_count(void) __attribute__((weak));
 extern bool audio_vm_attached(void) __attribute__((weak));
 extern void audio_vm_published(void) __attribute__((weak));
 extern void serial_buffered(bool) __attribute__((weak));
@@ -139,19 +142,33 @@ static bool playback_logged;
 static uint64_t playback_start, playback_next;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
 static bool quantum_pending, quantum_mixed; /* retry a refused publication without mixing twice */
-/* Coalesce idle-stop notices; formatting/sinks run only after service and
- * while stopped. A restart can defer a notice to the next idle interval. */
-static struct {
-    bool pending;
-    int error;
-    uint64_t published, retired, halts, tail_ms;
-} idle_notice;
-static void idle_stop_notice(const struct audio_transport *b, int error)
+static uint64_t transport_next;
+static unsigned native_source_count(void)
 {
-    idle_notice.pending = true; idle_notice.error = error;
-    idle_notice.published = b->published; idle_notice.retired = b->retired;
-    idle_notice.halts = b->dma_halts;
-    idle_notice.tail_ms = idle_since ? g_ticks - idle_since : 0;
+    unsigned count = 0;
+    for (unsigned i = 0; i < AUDIO_STREAMS; i++) {
+        struct audio_stream *s = audio.streams[i];
+        if (s && s->started && s->queued) count++;
+    }
+    return count;
+}
+static unsigned source_count(void)
+{
+    return native_source_count() + (audio_vm_playing_count ? audio_vm_playing_count() :
+        audio_vm_playing && audio_vm_playing() ? 1 : 0);
+}
+static void transport_log(const char *reason, const struct audio_transport *b)
+{
+    char name[16] = "unknown"; uint32_t stretch = 0;
+    if (cpu_stretch_snapshot) cpu_stretch_snapshot(name, &stretch);
+    name[15] = 0;
+    /* Protected disk class, queued UART share: no polled serial or sink wait
+     * in the refill path. One record fits the 254-byte payload bound. */
+    klog_periodic("[audio] transport %s published=%llu retired=%llu halts=%llu underruns=%llu gap_us=%u lead_periods=%u sources=%u rate=%u task=%s stretch_ms=%u",
+        reason, (unsigned long long)b->published, (unsigned long long)b->retired,
+        (unsigned long long)b->dma_halts, (unsigned long long)audio.underruns,
+        audio.max_service_gap_us, audio.lead_periods, source_count(), audio_output_rate(), name, stretch);
+    transport_next = g_ticks + 5000;
 }
 void audio_diagnostics(struct ciuki_audio_diagnostics *out)
 {
@@ -187,13 +204,12 @@ static void playback_log(bool failed)
 }
 static void audio_flush_logs(void)
 {
-    if (audio.running) return;
-    if (idle_notice.pending) {
-        idle_notice.pending = false;
-        klog("[audio] idle-tail transport stop err=%d published=%llu retired=%llu halts=%llu tail_ms=%llu",
-             idle_notice.error, (unsigned long long)idle_notice.published,
-             (unsigned long long)idle_notice.retired, (unsigned long long)idle_notice.halts,
-             (unsigned long long)idle_notice.tail_ms);
+    if (audio.running) {
+        if (g_ticks >= transport_next) {
+            struct audio_transport b; audio_backend_snapshot(&b);
+            transport_log("running", &b);
+        }
+        return;
     }
     playback_log(false);
 }
@@ -209,24 +225,36 @@ void audio_fail(int error)
     audio_wake();
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
-void audio_service(void)
+static void audio_service_locked(void)
 {
     if (!audio.ready) return;
     struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
+    uint32_t service_gap = 0;
     if (audio.running && audio.last_service_cycles && g_tsc_per_ms) {
         uint64_t gap = (start - audio.last_service_cycles) * 1000 / g_tsc_per_ms;
+        service_gap = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
         if (gap > audio.max_service_gap_us) audio.max_service_gap_us = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
     }
     audio.last_service_cycles = start;
-    bool active = false;
-    for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] && audio.streams[i]->started) active = true;
+    bool active = native_source_count() != 0;
     if (audio_vm_active && audio_vm_active()) active = true;
+    bool attached = audio_vm_attached && audio_vm_attached();
+    unsigned nominal = attached ? AUDIO_VM_LEAD : AUDIO_LEAD;
+    if (active && !idle_since && service_gap > nominal * AUDIO_QUANTUM * 1000000u / audio_output_rate()) {
+        unsigned gap = service_gap > AUDIO_GAP_BUDGET_US ? service_gap : AUDIO_GAP_BUDGET_US;
+        unsigned grown = audio_gap_lead(gap, audio_output_rate());
+        if (grown > audio.adaptive_lead) {
+            audio.adaptive_lead = grown;
+            audio.lead_periods = grown;
+            transport_log("late-grow", &b);
+        }
+    }
     /* An inactive VM can still have nonzero PCM queued. Source state alone
      * does not prove that the DMA lead is silence. */
     bool tail = audio.running && (!active || idle_since);
     audio_backend_idle(tail && b.frame_base + b.retired * AUDIO_QUANTUM >= non_silent_end);
-    bool control = false; /* a transport stop has its own deadline, not the 1 ms service budget */
+    bool control = false; /* hardware stop has its own bounded deadline */
     bool recovering = false;
     struct audio_transport stop_snapshot;
     bool stop_failed = false;
@@ -234,13 +262,17 @@ void audio_service(void)
     int err = audio_backend_progress();
     if (err==-EAGAIN) return; /* transient coherent-cursor retry, no source consumed */
     audio_backend_snapshot(&b);
+    if (b.fifo_errors > audio.fifo && !err) {
+        audio.underruns += b.fifo_errors - audio.fifo;
+        transport_log("fifo-underrun", &b);
+    }
     /* Even the current period must be known silence: DCH proves fetch,
      * not that nonzero data in the codec FIFO has reached the output. */
     bool silent = b.frame_base + b.retired * AUDIO_QUANTUM >= non_silent_end;
     if (err && tail && silent && b.tail_drained) {
         /* Idle tail: an underrun carries no client data. Stop the transport
          * normally instead of failing the backend; a source restarts it. */
-        idle_stop_notice(&b, err);
+        transport_log("idle-halt", &b);
         error_op = "stop";
         stop_snapshot = b;
         err = audio_backend_stop(); stop_failed = err != 0;
@@ -256,7 +288,7 @@ void audio_service(void)
          * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
          * tail kept while a DOS VM is attached drained between VMPLAY stages
          * 4 and 5). Inside the tail that period is silence: stop as above. */
-        idle_stop_notice(&b, 0);
+        transport_log("idle-stop", &b);
         error_op = "stop";
         stop_snapshot = b;
         err = audio_backend_stop(); stop_failed = err != 0;
@@ -271,6 +303,9 @@ void audio_service(void)
          * Pause must still prove RUN clear and a stable halted cursor before
          * reset or any payload reuse. Prime a new silence lead, preserving
          * an unpublished quantum if publication raced the final fetch. */
+        audio.underruns++;
+        transport_log("underrun", &b);
+        transport_log("recover-stop", &b);
         error_op = "recover_stop";
         stop_snapshot = b;
         err = audio_backend_stop(); stop_failed = err != 0;
@@ -278,6 +313,33 @@ void audio_service(void)
             audio.running = false;
             audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
             idle_since = 0; audio_backend_idle(false); recovering = true;
+        }
+        control = true;
+    } else if (err && b.ready && !b.quarantine && b.running && b.slot < 32 &&
+               b.prefetch < 32 && b.lvi < 32 && b.status != 0xffff &&
+               b.published >= b.retired && b.published - b.retired <= AUDIO_MAX_LEAD) {
+        /* A readable runtime error may be reset only after the normal halt
+         * proof. Never infer retirement from a damaged/ambiguous cursor. */
+        audio.underruns++;
+        transport_log("error-halt", &b);
+        error_op = "error_stop"; stop_snapshot = b;
+        err = audio_backend_stop(); stop_failed = err != 0;
+        if (!err) {
+            audio.running = false;
+            audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            idle_since = 0; audio_backend_idle(false); recovering = active || quantum_pending;
+        }
+        control = true;
+    } else if (!err && active && silent && b.running &&
+               b.published - b.retired > (audio.adaptive_lead ? audio.adaptive_lead : nominal)) {
+        /* Cut only proven silent tail on arrival. A paused VM is no reason
+         * to make a native writer wait behind the 134 ms silence cushion. */
+        transport_log("source-stop", &b);
+        error_op = "source_stop"; stop_snapshot = b;
+        err = audio_backend_stop(); stop_failed = err != 0;
+        if (!err) {
+            audio.running = false; audio_backend_rebase(audio.output);
+            idle_since = 0; audio_backend_idle(false);
         }
         control = true;
     }
@@ -288,27 +350,47 @@ void audio_service(void)
     /* Publish until the lead is restored: one period per service let any
      * service delay erode the lead permanently (QEMU evidence 2026-10-11:
      * published=770 retired=769 → CELV/DCH halt). */
-    /* Active sources restore the latency lead in a bounded burst. The
-     * idle tail (silence only) is cushioned deeper in one burst at its
-     * start, before the clients' exits delay this worker (QEMU evidence
-     * 2026-10-11); the burst is a control operation outside the 1 ms budget.
-     * While a DOS VM source is attached the tail stays at AUDIO_LEAD
-     * (audio_refill_lead, f4-05). */
+    /* Restore the lead in bounded turns. Deep idle silence is safe even
+     * with a paused VM: arrival cuts it only after silence/stop proof. */
     bool tail_start = !active && audio.running && !idle_since;
     if (tail_start) { idle_since = g_ticks; control = true; }
     unsigned limit, published_now = 0;
-    unsigned lead = audio_refill_lead(active, tail_start, audio_vm_attached && audio_vm_attached(), &limit);
+    unsigned lead = audio_refill_lead(active, tail_start, attached, &limit);
+    if (!active) lead = audio_gap_lead(AUDIO_GAP_BUDGET_US, audio_output_rate());
+    else if (audio.adaptive_lead > lead) lead = audio.adaptive_lead;
+    audio.lead_periods = lead;
+    if (active || tail_start) limit = lead;
     /* A recovered inactive source still needs a complete silence lead in
      * this service; otherwise the worker leaves a stopped one-period ring. */
-    if (recovering) lead = limit = AUDIO_LEAD;
-    if (!audio.running && !recovering) limit = 1; /* normal startup pacing */
-    while (!err && (active || audio.running || recovering || quantum_pending || b.published) &&
+    if (!audio.running) {
+        if (!recovering && !active && !quantum_pending && !b.published) return;
+        if (!active) lead = nominal;
+        audio.lead_periods = lead; limit = lead;
+    }
+    while (!err && audio.ready && !audio.error && (active || audio.running || recovering || quantum_pending || b.published) &&
            b.published - b.retired < lead && published_now++ < limit) {
         if (!quantum_pending) {
             quantum_mixed = audio.running && active;
-            if (!audio.running || (!active && !(audio_vm_attached && audio_vm_attached()))) {
+            /* No live source means silence, even with a paused VM attached.
+             * Do not run an idle VM's resampler/OPL for the deep cushion;
+             * its next actual render re-anchors to the VM clock. */
+            if (!audio.running || !active) {
                 memset(quantum, 0, sizeof(quantum)); audio.output += AUDIO_QUANTUM;
-            } else audio_mix(quantum, AUDIO_QUANTUM);
+            } else {
+                uint64_t mixed_start = ktime_cycles();
+                audio_mix(quantum, AUDIO_QUANTUM);
+                /* Conservative measured fallback on slower CPUs. A 256-frame
+                 * 48 kHz period has a 106 us budget at 2% CPU. VM/preemption
+                 * time can also trigger fallback, but never a quality upgrade
+                 * during a pressured session. Host -O2 cost is in the audit. */
+                if (!audio.linear_resampling && audio_output_rate() == AUDIO_RATE &&
+                    g_tsc_per_ms && ktime_elapsed_us(mixed_start, 106)) {
+                    for (unsigned i = 0; i < AUDIO_STREAMS; i++)
+                        if (audio.streams[i] && audio.streams[i]->rate == 44100) {
+                            audio.linear_resampling = true; transport_log("resample-linear", &b); break;
+                        }
+                }
+            }
             quantum_pending = true;
         }
         bool mixed = quantum_mixed;
@@ -327,11 +409,15 @@ void audio_service(void)
                 non_silent_end = audio.output; break;
             }
         }
-        if (!err && !audio.running && b.published == AUDIO_LEAD) {
+        if (!err && !audio.running && b.published >= lead) {
             if (serial_buffered) serial_buffered(true);
             error_op = "start";
             err = audio_backend_start(); audio.running = !err; audio_backend_snapshot(&b);
+            if (!err) { audio.restarts++; transport_log(recovering ? "recover-start" : "start", &b); }
         }
+        /* Reserve the second millisecond for one conversion/publication and
+         * bookkeeping. If one quantum itself overruns, count it below. */
+        if (ktime_elapsed_us(start, AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
     }
     if (!err && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
@@ -342,17 +428,19 @@ void audio_service(void)
         if (idle_since && g_ticks - idle_since >= AUDIO_IDLE_TAIL_MS && silent) {
             error_op = "stop";
             stop_snapshot = b;
+            transport_log("idle-stop", &b);
             err = audio_backend_stop(); stop_failed = err != 0;
             if (!err) {
                 audio.running = false;
                 audio_backend_rebase(audio.output); idle_since = 0; audio_backend_idle(false);
+                audio.adaptive_lead = 0;
             }
             control = true;
         }
     } else if (active) {
         idle_since = 0; /* a new source cancels the idle tail */
     }
-    if (!control && ktime_elapsed_us(start, 1000)) { audio.deadlines++; audio_backend_deadline(); }
+    if (!control && ktime_elapsed_us(start, AUDIO_SERVICE_US)) { audio.deadlines++; audio_backend_deadline(); }
     uint64_t elapsed = (g_tsc_per_ms ? (ktime_cycles() - start) * 1000 / g_tsc_per_ms : 0);
     /* Transport control (stop, the idle-tail burst) is accounted apart from refill work. */
     uint32_t *peak = control ? &audio.max_control_us : &audio.max_service_us;
@@ -363,6 +451,7 @@ void audio_service(void)
          * counters. Keep the triggering ring snapshot if recovery failed. */
         if (stop_failed) b = stop_snapshot;
         else audio_backend_snapshot(&b);
+        transport_log("failed", &b);
         /* At most 227 bytes even with maximum-width counters: klog's
          * 256-byte buffer must retain the complete snapshot in one line. */
         klog("[audio] backend failure err=%d op=%s civ=%u lvi=%u piv=%u picb=%u sr=%04x published=%llu retired=%llu running=%u active=%u gap_us=%u elapsed_ms=%llu",
@@ -375,18 +464,32 @@ void audio_service(void)
     }
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i]) kwait_wake_all(&audio.streams[i]->changed);
 }
+void audio_service(void)
+{
+    kmutex_lock(&service_lock);
+    audio_service_locked();
+    kmutex_unlock(&service_lock);
+}
+static void audio_write_service(void)
+{
+    kmutex_lock(&service_lock);
+    /* Observe real DMA, including a halt/inhibit which preceded the worker's
+     * next turn. The logical RUN flag alone cannot establish hardware RUN. */
+    if (audio.ready && !audio.error && (!audio.running || idle_since || audio_backend_progress())) audio_service_locked();
+    kmutex_unlock(&service_lock);
+}
 static bool refill_pending(void *arg) { (void)arg; return audio.pending || audio.error; }
 static void audio_worker_wait(void)
 {
     struct audio_transport b; audio_backend_snapshot(&b);
     bool fullscreen=display_fullscreen_active && display_fullscreen_active();
     unsigned wait_ms=audio.running ? (fullscreen ? 2 : 4) :
-        b.published && b.published<AUDIO_LEAD ? 1 : 50;
+        b.published && b.published<audio.lead_periods ? 1 : 50;
     /* A ready condition returns without sleeping. Under IRQ/refill overlap,
      * that can demote this P_DEVICE task after 10 accumulated ticks. Retain
      * pending work and force one real block, without resetting the guard or
      * promoting a task from outside the scheduler. */
-    if (fullscreen && audio.pending && !audio.error) task_sleep_ms(1);
+    if (audio.pending && !audio.error) task_sleep_ms(1);
     kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
 }
 static void audio_worker(void *arg)
@@ -394,10 +497,12 @@ static void audio_worker(void *arg)
     (void)arg;
     for (;;) {
         if (audio.error) {
+            kmutex_lock(&service_lock);
             kmutex_lock(&control_lock);
             struct audio_transport b; audio_backend_snapshot(&b);
             if (b.ready) audio_backend_shutdown();
             kmutex_unlock(&control_lock);
+            kmutex_unlock(&service_lock);
             task_sleep_ms(1000); continue;
         }
         audio.pending = false;
@@ -425,29 +530,36 @@ static int16_t boot_sample(unsigned frame)
     return sample;
 }
 static struct audio_frame boot_pcm[AUDIO_QUANTUM];
-int audio_check_tone(uint32_t *frames)
+int audio_check_duration(uint32_t seconds, uint32_t *frames)
 {
     if (frames) *frames = 0;
+    if (!seconds || seconds > 10) return -EINVAL;
     if (!audio.ready) return -ENODEV;
     /* The boot tone uses the same configured master as every UI sound. */
     int err = 0;
     struct audio_stream *s = 0;
     err = audio_stream_open(&s);
-    uint64_t limit = deadline_after_ms(3000);
+    uint64_t limit = deadline_after_ms(seconds * 1000 + 2000);
+    unsigned total = seconds * AUDIO_RATE;
+    uint64_t underruns = audio.underruns;
+    struct audio_transport before; audio_backend_snapshot(&before);
+    unsigned lead_min = AUDIO_MAX_LEAD, lead_max = 0;
     unsigned sent = 0;
-    if (s) { s->draining = true; s->drain_goal = AUDIO_RATE; }
-    while (!err && sent < AUDIO_RATE) {
+    if (s) { s->draining = true; s->drain_goal = total; }
+    while (!err && sent < total) {
         if (deadline_passed(limit)) { err = -ETIMEDOUT; break; }
-        unsigned count = AUDIO_RATE - sent;
+        unsigned count = total - sent;
         if (count > AUDIO_QUANTUM) count = AUDIO_QUANTUM;
         for (unsigned i = 0; i < count; i++) {
-            int16_t sample = boot_sample(sent + i);
+            int16_t sample = boot_sample((sent + i) % AUDIO_RATE);
             boot_pcm[i] = (struct audio_frame){sample, sample};
         }
         int wrote = audio_stream_enqueue(s, boot_pcm, count * sizeof(*boot_pcm));
         if (wrote > 0) sent += (unsigned)wrote / sizeof(*boot_pcm);
         else if (wrote != -EAGAIN) err = wrote;
-        if (!err && sent < AUDIO_RATE) task_sleep_ms(1);
+        if (audio.lead_periods < lead_min) lead_min = audio.lead_periods;
+        if (audio.lead_periods > lead_max) lead_max = audio.lead_periods;
+        if (!err && sent < total) task_sleep_ms(1);
     }
     while (!err && (!s->drain_latched || audio.played_output < s->drain_output)) {
         if (audio.error) err = audio.error;
@@ -457,10 +569,23 @@ int audio_check_tone(uint32_t *frames)
     if (!err) task_sleep_ms(audio.caps.drain_ms);
     if (s) audio_stream_close(s);
     playback_log(err != 0);
-    klog("[audio] boot_tone=1khz frames=%u result=%d restore=0", sent, err);
+    if (seconds == 1) klog("[audio] boot_tone=1khz frames=%u result=%d restore=0", sent, err);
+    else {
+        struct audio_transport after; audio_backend_snapshot(&after);
+        uint64_t irqs = after.irqs - before.irqs;
+        uint64_t elapsed = (seconds * 1000 + 2000) - (limit - g_ticks);
+        uint64_t missed = audio.underruns - underruns;
+        unsigned expected = seconds * audio_output_rate() / AUDIO_QUANTUM;
+        if (!err && (missed || irqs < expected/2 || irqs > expected*2+2 ||
+                     after.fifo_errors != before.fifo_errors)) err = -EIO;
+        klog("[audio] transport check10s frames=%u underruns=%llu irqs=%llu irq_mean_us=%u lead_min=%u lead_max=%u error=%d",
+            sent, (unsigned long long)missed, (unsigned long long)irqs,
+            irqs ? (unsigned)(elapsed * 1000 / irqs) : 0, lead_min, lead_max, err);
+    }
     if (frames) *frames = sent;
     return err;
 }
+int audio_check_tone(uint32_t *frames) { return audio_check_duration(1, frames); }
 static void audio_boot_tone(void)
 {
     if (audio_boot_tone_enabled(g_boot.flags) && !(g_boot.flags & CBI_F_HW_CHECK))
@@ -485,7 +610,7 @@ void audio_init(struct vfs *v)
 {
     if (audio.initialized) return;
     audio.initialized = true;
-    kwait_init(&audio.changed); kmutex_init(&control_lock);
+    kwait_init(&audio.changed); kmutex_init(&control_lock); kmutex_init(&service_lock);
     audio_settings_load(v);
     thinkpad_ec_init();
     if (g_boot.flags & CBI_F_SAFE_MODE) { audio.reason = "safe_mode"; return; }
@@ -592,6 +717,17 @@ int audio_write_user(struct file_description *d, uint32_t address, uint32_t byte
         int wrote = audio_stream_enqueue(s, o->copied, take);
         if (wrote < 0) { err = wrote; break; }
         done += wrote;
+        /* RUN is established before a successful native write returns,
+         * including writes made after the VM drained/stopped the transport.
+         * The worker and this kick share the service mutex. */
+        {
+            audio_write_service();
+            uint64_t limit = deadline_after_ms(20);
+            while (!audio.running && !audio.error && !deadline_passed(limit)) {
+                task_sleep_ms(1); audio_service();
+            }
+            if (!audio.running || audio.error) { err = audio.error ? audio.error : -ETIMEDOUT; done = 0; break; }
+        }
         if (d->flags & O_NONBLOCK) break;
     }
     operation_end(o);
@@ -624,7 +760,7 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     int err = copy_from_user(record, address, size);
     if (!err && record[0] != 1) err = -EOPNOTSUPP;
     if (!err && record[1] != size) err = -EINVAL;
-    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER || op == AUDIO_GET_STATUS ? 1 : 2);
+    unsigned reserved = size / 4 - (op >= MIXER_GET_MASTER ? 1 : op == AUDIO_GET_STATUS ? 0 : 2);
     for (unsigned i = reserved; !err && i < size / 4; i++) if (record[i]) err = -EINVAL;
     if (!err) { err = ua_pin(p->memory, &o->pin, address, size, true); o->pinned = !err; }
     struct audio_stream *s = d->audio;
@@ -647,6 +783,13 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
             .last_error=audio.error, .stream_generation=s->generation,
             .max_service_us=audio.max_service_us, .max_irq_us=audio.max_irq_us,
             .transport_frames=(uint32_t)(b.published * AUDIO_QUANTUM - b.generation_fetched) };
+        uint64_t queued = ((uint64_t)s->queued * audio_output_rate() + s->rate - 1) / s->rate;
+        /* Once the source queue is empty, later mixed sources/idle silence
+         * are not this stream's latency. Retain its own last contribution. */
+        uint64_t latency = queued ? queued + status.transport_frames :
+            s->last_output > audio.played_output ? s->last_output - audio.played_output : 0;
+        if (s->accepted) latency += (uint64_t)audio.caps.drain_ms * audio_output_rate() / 1000;
+        status.latency_frames = latency > UINT32_MAX ? UINT32_MAX : (uint32_t)latency;
         memcpy(record, &status, size); break;
     }
     case AUDIO_RESET: audio_stream_reset(s); break;

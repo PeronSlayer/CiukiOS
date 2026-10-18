@@ -579,8 +579,12 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
     if (!dosvm_audio_info(s->key, &info)) { revoke(s, epoch); return; }
     uint64_t now = info.clock;
     uint64_t queued = output > played ? output - played : 0;
-    if (queued > (AUDIO_LEAD + 1) * AUDIO_QUANTUM) queued = (AUDIO_LEAD + 1) * AUDIO_QUANTUM;
-    uint64_t target = now + queued > AUDIO_VM_LATENCY ? now + queued - AUDIO_VM_LATENCY : 0;
+    unsigned lead_periods = audio.lead_periods ? audio.lead_periods : AUDIO_VM_LEAD;
+    unsigned lead_frames = lead_periods * AUDIO_QUANTUM * AUDIO_RATE / audio_output_rate();
+    unsigned latency = lead_frames + AUDIO_VM_FLOOR;
+    unsigned max_queued = (lead_periods + 1) * AUDIO_QUANTUM * AUDIO_RATE / audio_output_rate();
+    if (queued > max_queued) queued = max_queued;
+    uint64_t target = now + queued > latency ? now + queued - latency : 0;
     if (!s->anchored || s->rendered_to != output) {
         /* First quantum, or the output was not rendered for this source
          * (transport restarted): re-anchor, never moving back in time. */
@@ -589,16 +593,16 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
         s->anchored = true; s->hold = 0;
     }
     int64_t lead = (int64_t)(now + queued) - (int64_t)s->next_t;
-    if (lead > (int64_t)(AUDIO_VM_LATENCY + AUDIO_VM_SKIP_BAND)) {
-        uint64_t skip = (uint64_t)lead - AUDIO_VM_LATENCY;
+    if (lead > (int64_t)(latency + AUDIO_VM_SKIP_BAND)) {
+        uint64_t skip = (uint64_t)lead - latency;
         skip_to(s, token, s->next_t + skip);
         if (s->state == AUDIO_VM_FREE) return;
         s->stats.skips++; s->stats.skipped_frames += skip;
-        lead = AUDIO_VM_LATENCY;
+        lead = latency;
     }
     int64_t lag = (int64_t)now - (int64_t)s->next_t;
-    if (!s->hold && (lag < (int64_t)AUDIO_VM_FLOOR || lead < (int64_t)(AUDIO_VM_LATENCY - AUDIO_VM_HOLD_BAND))) {
-        int64_t need = (int64_t)AUDIO_VM_LATENCY - lead, floor = (int64_t)AUDIO_VM_FLOOR - lag;
+    if (!s->hold && (lag < (int64_t)AUDIO_VM_FLOOR || lead < (int64_t)(latency - AUDIO_VM_HOLD_BAND))) {
+        int64_t need = (int64_t)latency - lead, floor = (int64_t)AUDIO_VM_FLOOR - lag;
         if (floor > need) need = floor;
         if (need > 0) { s->hold = (uint32_t)need; s->stats.holds++; }
     }
@@ -744,18 +748,20 @@ void audio_vm_diagnostic(struct dosvm_key key, struct audio_vm_diagnostic *out)
     irq_restore(f);
 }
 /* Public diagnostics must only observe; do not revoke tokens or arm wakeups. */
-bool audio_vm_playing(void)
+unsigned audio_vm_playing_count(void)
 {
+    unsigned count = 0;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct vm_slot *s = &vm_slots[i];
         if (s->state == AUDIO_VM_FREE) continue;
-        if (s->busy && s->live_epoch == s->epoch) return true;
+        if (s->busy && s->live_epoch == s->epoch) { count++; continue; }
         struct dosvm_audio_info info;
         if (dosvm_audio_info(s->key, &info) && (info.active || info.pcm_queued || info.blocks_queued || info.events_queued))
-            return true;
+            count++;
     }
-    return false;
+    return count;
 }
+bool audio_vm_playing(void) { return audio_vm_playing_count() != 0; }
 bool audio_vm_active(void)
 {
     bool any = false;

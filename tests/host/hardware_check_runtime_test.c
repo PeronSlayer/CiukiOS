@@ -55,8 +55,8 @@ void console_wake(void) {}
 void console_pin_page(const char *s) { assert(strstr(s,"Hardware check complete")); complete=true; }
 void bootlog_snapshot(struct bootlog_stats *s) { *s=(struct bootlog_stats){.active=true}; }
 int bootlog_try_sync(void) { return 0; }
-void audio_diagnostics(struct ciuki_audio_diagnostics *d) { (void)d; tone_checked=true; }
-int audio_check_tone(uint32_t *frames) { *frames=AUDIO_RATE; return 0; }
+void audio_diagnostics(struct ciuki_audio_diagnostics *d) { memset(d,0,sizeof(*d)); tone_checked=true; }
+int audio_check_duration(uint32_t seconds,uint32_t *frames) { assert(seconds==10); *frames=seconds*AUDIO_RATE; return 0; }
 uint32_t fnv1a32(const void *s,size_t n,uint32_t seed) { (void)s; (void)n; assert(0); return seed; }
 
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
@@ -130,7 +130,7 @@ int display_check_end(void)
 }
 static void fixture(void)
 {
-    g_ticks=0; host=(struct usb_host){.ready=true,.scanned=true}; audio=(struct audio_state){0};
+    g_ticks=0; host=(struct usb_host){.ready=true,.scanned=true}; audio=(struct audio_state){.ready=true};
     has_host=live_prompt=event_sent=retained=swept=winner=false;
     scan_ms=attach_ms=prompt_ms=sweep_calls=mode_calls=restores=clears=line_count=0; scenario=0;
     complete=tone_checked=false; summary_bytes=0; collecting_summary=false;

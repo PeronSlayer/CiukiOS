@@ -15,7 +15,9 @@ static uint8_t inb(uint16_t p) { (void)p; return 0; }
 static uint32_t inl(uint16_t p) { (void)p; return 0; }
 static void outb(uint16_t p, uint8_t v) { (void)p; (void)v; }
 static void outl(uint16_t p, uint32_t v) { (void)p; (void)v; }
-uint64_t ktime_cycles(void) { return g_ticks * 1000; }
+static uint64_t modeled_cycles;
+static unsigned modeled_mix_us;
+uint64_t ktime_cycles(void) { return g_ticks * 1000 + modeled_cycles; }
 static char audio_log[256]; /* match the production klog record capacity */
 static bool capture_ec_records;
 static char ec_records[64][256];
@@ -42,6 +44,11 @@ void klog(const char *fmt, ...)
     if(strstr(audio_log,"result=analog_warning_accepted"))response_warning_logs++;
     if(strstr(audio_log,"reset=cold "))cold_reset_logs++;
     if(strstr(audio_log,"reset=qemu_model "))qemu_reset_logs++;
+}
+void klog_periodic(const char *fmt, ...)
+{
+    char line[256]; va_list a; va_start(a,fmt); vsnprintf(line,sizeof(line),fmt,a); va_end(a);
+    klog("%s",line);
 }
 bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - start >= us; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -785,6 +792,13 @@ static void test_boot_transport_case(unsigned left,unsigned right,unsigned mute,
     CHECK(!memcmp(&audio.master,&boot_expected_master,sizeof(audio.master))&&ac97.master==volume);
     CHECK(boot_peak==(mute ? 0u : software ? 8192u*left/100u : 8192u));
     CHECK(!audio.streams[0] && pages_used==pages && heap_blocks==heap && !audio.commitment_pages);
+    if(left==20 && !mute && !software) {
+        uint32_t frames=0; on_schedule=boot_host_worker;
+        CHECK(!audio_check_duration(10,&frames) && frames==10*AUDIO_RATE);
+        on_schedule=0;
+        CHECK(strstr(audio_log,"transport check10s frames=480000 underruns=0"));
+        CHECK(strstr(audio_log,"irq_mean_us=") && !audio.commitment_pages);
+    }
     CHECK(!ac97_stop(&ac97));audio.running=false;
     /* No worker progress: startup remains bounded and restores the master. */
     uint64_t before=g_ticks;audio_boot_tone();
@@ -873,7 +887,7 @@ static void test_cursor_handoff(void)
 }
 static void test_formats(void)
 {
-    audio.ready=true;audio.master.left=audio.master.right=100;
+    audio.ready=true;audio.master.left=audio.master.right=100;audio.linear_resampling=true;
     for(unsigned format=1;format<=2;format++)for(unsigned channels=1;channels<=2;channels++) {
         struct audio_stream *s;CHECK(!audio_stream_open(&s));
         struct ciuki_audio_format f={1,32,48000,format,channels,0,{0}};
@@ -941,6 +955,7 @@ static void test_formats(void)
         alloc_fail=failure;CHECK(audio_stream_open(&s)==-ENOMEM);alloc_fail=-1;
         CHECK(pages_used==before && heap_blocks==heap_before && !audio.commitment_pages);
     }
+    audio.linear_resampling=false;
     puts("audio converter: every integer rate 8000..48000, all formats, mono/stereo, sum/master/clipping and split phase PASS");
 }
 static void test_shutdown(void)
@@ -1022,7 +1037,8 @@ bool audio_vm_playing(void) { return vm_active_hook; }
 bool audio_vm_attached(void) { return vm_attached_hook; }
 void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
 {
-    if (vm_nonzero_hook) for (unsigned i=0;i<frames;i++) sums[i][0]=sums[i][1]=12000;
+    modeled_cycles += modeled_mix_us;
+    if (vm_nonzero_hook) for (unsigned i=0;i<frames;i++) { sums[i][0]+=12000; sums[i][1]+=12000; }
 }
 /* The idle tail with a DOS VM attached keeps AUDIO_LEAD periods. A worker that
  * runs late can find the DMA on the last valid period (published-retired 1)
@@ -1031,42 +1047,27 @@ void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
  * a VM sound arrives in that service, and the next sound restarts it
  * (QEMU campaign 13, image 22320ccc: the backend died between VMPLAY stages
  * 4 and 5, after_pages 17 -> 8, no OPL3 event consumed). */
-static void transport_restart(void)
-{
-    vm_active_hook=true;
-    for(unsigned i=0;i<AUDIO_LEAD;i++) { g_ticks++;audio_service(); }
-    CHECK(audio.running && ac97.running && ac97.published==AUDIO_LEAD && !audio.error && audio.ready);
-    hw.sr=0;hw.civ=0;hw.piv=1;hw.remaining=512;
-    vm_active_hook=false;g_ticks++;audio_service(); /* the VM goes idle: the shallow tail starts */
-    CHECK(idle_since && ac97.published-ac97.retired==AUDIO_LEAD);
-}
 static void test_idle_tail_drain(void)
 {
-    static struct ac97_bd bdl[32];static struct audio_frame buffers[32][256];
-    hardware_setup(&ac97);hw.any_pcm=true;
-    ac97.bdl=bdl;ac97.ready=true;for(unsigned i=0;i<32;i++)ac97.pcm[i]=buffers[i];
-    for(unsigned i=0;i<12;i++)ac97.claims[i]=-1;
-    audio.ready=true;audio.error=0;audio.running=false;audio.output=0;idle_since=0;
-    vm_attached_hook=true;g_ticks=1000;
-    transport_restart();
-    /* Late worker: seven periods played, the DMA still on the last one. */
-    hw.civ=7;hw.piv=8;hw.remaining=300;hw.tick+=40;g_ticks+=40;
-    audio_service();
-    printf("idle tail drained: error=%d ready=%u running=%u published=%llu halts=%llu\n",audio.error,audio.ready,audio.running,
-           (unsigned long long)ac97.published,(unsigned long long)audio.halts);
-    CHECK(!audio.error && audio.ready && !audio.running && !ac97.running && !ac97.published && ac97.frame_base==audio.output);
-    transport_restart();
-    /* Halted at the last period (underrun) when a VM sound arrives in the same service. */
-    hw.civ=7;hw.piv=8;hw.remaining=0;hw.sr=AC97_DCH|AC97_CELV;hw.tick+=50;g_ticks+=50;
-    vm_active_hook=true;audio_service();
-    printf("idle tail halted, source arriving: error=%d ready=%u running=%u published=%llu halts=%llu\n",audio.error,audio.ready,
-           audio.running,(unsigned long long)ac97.published,(unsigned long long)audio.halts);
-    CHECK(!audio.error && audio.ready && !audio.running && ac97.published==1 && !audio.halts); /* restarting: first silent period */
-    for(unsigned i=1;i<AUDIO_LEAD;i++) { g_ticks++;audio_service(); }
-    CHECK(audio.running && ac97.running && !audio.error && !audio.halts && !audio.deadlines);
-    vm_active_hook=vm_attached_hook=false;audio.ready=audio.running=false;idle_since=0;
-    memset(&ac97,0,sizeof(ac97));
-    puts("audio idle tail: drained or halted VM tail stops the transport, a VM sound restarts it, no backend failure PASS");
+    static struct ac97_bd bdl[32]; static struct audio_frame buffers[32][AUDIO_QUANTUM];
+    hardware_setup(&ac97); hw.any_pcm=true;
+    ac97.bdl=bdl; ac97.ready=true; for(unsigned i=0;i<32;i++) ac97.pcm[i]=buffers[i];
+    for(unsigned i=0;i<12;i++) ac97.claims[i]=-1;
+    audio.ready=true; audio.error=0; audio.running=false; audio.output=0;
+    audio.adaptive_lead=0; idle_since=non_silent_end=0;
+    vm_attached_hook=vm_active_hook=true; g_ticks=hw.tick=1000;
+    audio_service(); CHECK(audio.running && ac97.published==AUDIO_VM_LEAD);
+    vm_active_hook=false; g_ticks++; hw.tick++; audio_service();
+    CHECK(idle_since && ac97.published==AUDIO_TAIL_LEAD);
+    /* Deep silence covers the measured 134 ms gap even with a paused VM. */
+    mock_advance(134*96); g_ticks+=134; hw.tick+=134; audio_service();
+    CHECK(!audio.error && audio.running && !audio.halts);
+    /* Source arrival cuts only silence, without waiting for the deep tail. */
+    vm_active_hook=true; audio_service();
+    CHECK(!audio.error && audio.running && ac97.published-ac97.retired==audio.lead_periods);
+    vm_active_hook=vm_attached_hook=false; audio.ready=audio.running=false;
+    audio.adaptive_lead=0; idle_since=non_silent_end=0; memset(&ac97,0,sizeof(ac97));
+    puts("audio idle tail: paused VM receives measured-gap cushion, source cuts proven silence PASS");
 }
 static void test_idle_tail_cursor_error(void)
 {
@@ -1078,10 +1079,11 @@ static void test_idle_tail_cursor_error(void)
     audio.ready=true; audio.error=0; audio.running=false; audio.output=0; idle_since=0;
     audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
     vm_attached_hook=vm_active_hook=true; g_ticks=1000;
-    for(unsigned i=0;i<AUDIO_LEAD;i++) { g_ticks++; audio_service(); }
+    audio.adaptive_lead=0; non_silent_end=0;
+    audio_service();
     hw.sr=0; hw.civ=1; hw.piv=2; hw.remaining=512;
     vm_nonzero_hook=fault!=4; g_ticks++; audio_service();
-    CHECK(ac97.published==AUDIO_LEAD+1 && buffers[AUDIO_LEAD][0].left==(fault==4?0:12000));
+    CHECK(ac97.published==AUDIO_VM_LEAD+1 && buffers[AUDIO_VM_LEAD][0].left==(fault==4?0:12000));
     vm_nonzero_hook=vm_active_hook=false;
     /* Source becomes inactive after rendering silence; the earlier PCM is
      * still queued. Invalid CIV cannot establish that it was fetched. */
@@ -1096,7 +1098,8 @@ static void test_idle_tail_cursor_error(void)
         hw.tick+=3; g_ticks+=3; audio_service();
     }
     printf("idle cursor error with queued PCM: error=%d ready=%u running=%u published=%llu\n",audio.error,audio.ready,audio.running,(unsigned long long)ac97.published);
-    CHECK(audio.error==-EIO && !audio.ready); /* no successful silent-tail reset */
+    if(fault<2 || fault==4) CHECK(audio.error==-EIO && !audio.ready);
+    else CHECK(!audio.error && audio.ready && !audio.running); /* stop proof allows error recovery */
     vm_active_hook=vm_attached_hook=false; audio.ready=audio.running=false; idle_since=0;
     memset(&ac97,0,sizeof(ac97)); non_silent_end=0;
     }
@@ -1122,7 +1125,7 @@ static int ctl(int fd,unsigned op,void *record,unsigned bytes)
 static void test_stream_syscalls(void)
 {
     audio.ready=false;CHECK(file_open(client,"/dev/audio",O_WRONLY,0)==-ENODEV);
-    audio.ready=true;audio.error=0;
+    audio.ready=true;audio.error=0;audio.running=true;idle_since=0; /* fd-only fixture: transport already running */
     CHECK(file_open(client,"/dev/audio",O_RDONLY,0)==-EACCES);
     CHECK(file_open(client,"/dev/mixer",O_RDWR,0)==-EACCES);
     int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0);CHECK(fd>=0);
@@ -1141,8 +1144,15 @@ static void test_stream_syscalls(void)
     ac97.published=8;ac97.generation_fetched=128;
     struct ciuki_audio_status status={.version=1,.size=112};
     CHECK(!ctl(fd,AUDIO_GET_STATUS,&status,sizeof(status)));
-    CHECK(status.queued_frames==2048 && status.transport_frames==1920 && !status.reserved);
+    CHECK(status.queued_frames==2048 && status.transport_frames==1920 && status.latency_frames>=status.transport_frames);
     CHECK(!ctl(fd,AUDIO_GET_STATUS,&status,sizeof(status))); /* output field is not reserved input */
+    unsigned drain=audio.caps.drain_ms; uint64_t played=audio.played_output;
+    audio.caps.drain_ms=20; audio.played_output=1000; waiting_stream->last_output=1100;
+    waiting_stream->queued=0; ac97.published=28; ac97.generation_fetched=0;
+    CHECK(!ctl(fd,AUDIO_GET_STATUS,&status,sizeof(status)));
+    CHECK(status.transport_frames==7168 && status.latency_frames==1060); /* excludes later idle silence */
+    waiting_stream->queued=2048; waiting_stream->last_output=0;
+    audio.caps.drain_ms=drain; audio.played_output=played;
     ac97.published=ac97.generation_fetched=0;
     CHECK(call(CIUKI_SYS_WRITE,fd,UINT32_MAX,0,0,0)==0);
     CHECK(call(CIUKI_SYS_LSEEK64,fd,0,0,SEEK_SET,USER2)==-ESPIPE);
@@ -1219,6 +1229,7 @@ static void test_persistence(void)
 #include "late_refill_test.inc"
 #include "thinkpad_ec_test.inc"
 #include "deadline_test.inc"
+#include "pipeline_test.inc"
 static void registry_fixture(const char *text)
 {
     static struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
@@ -1258,13 +1269,13 @@ int main(int argc,char **argv)
 {
     CHECK(argc==3);ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);
     controller.state=T_RUNNING;g_current=&controller;proc_init();
-    if(getenv("CIUKI_AUDIO_COST")) { test_service_budget();test_cost_breakdown();free(ram);return 0; }
+    if(getenv("CIUKI_AUDIO_COST")) { test_service_budget();test_cost_breakdown();test_cubic_cost();free(ram);return 0; }
     CHECK(!fake_open(&disk[0],argv[1])&&!fake_open(&disk[1],argv[2]));
     disk[0].undo_enabled=disk[1].undo_enabled=true;CHECK(!cache_init(&cache,0));vfs_init(&vfs);
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

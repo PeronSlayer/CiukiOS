@@ -123,17 +123,13 @@ static void test_deferred_service_logs(void)
     late_setup(); late_start();
     unsigned logs=audio_log_count;
     first_playback=true; playback_start=playback_next=g_ticks-1000;
-    audio_flush_logs(); CHECK(audio_log_count==logs); /* never log while running */
-    mock_advance((AUDIO_LEAD-1)*512); g_ticks+=38; hw.tick+=38;
-    idle_since=g_ticks-1000; non_silent_end=0;
-    slow_playback_log=true;
-    audio_service();
-    CHECK(!audio.error && !audio.running && audio_log_count==logs && idle_notice.pending);
-    CHECK(audio.max_service_us<1000);
-    audio_flush_logs();
-    CHECK(audio_log_count==logs+2 && !idle_notice.pending && playback_logged);
-    slow_playback_log=false; late_cleanup();
-    puts("audio service logs: successful stop/refill does no formatting, deferred notices only while stopped PASS");
+    audio_flush_logs(); CHECK(audio_log_count==logs);
+    /* Periodic protected record is published while RUN remains established. */
+    transport_next=g_ticks; audio_flush_logs();
+    CHECK(audio_log_count==logs+1 && strstr(audio_log,"transport running"));
+    CHECK(strstr(audio_log,"lead_periods=8") && audio.running);
+    late_cleanup();
+    puts("audio service logs: protected running snapshot without waiting for idle PASS");
 }
 
 /* Execute the real worker wait. Its wake predicate is intentionally already

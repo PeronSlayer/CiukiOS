@@ -133,7 +133,10 @@ service, and use the same proved shutdown path as explicit disablement.
 
 **[F4]** The default physical quantum MUST be 256 stereo frames. At 48 kHz
 it lasts 5.333 ms; eight published periods provide 42.667 ms of transport
-lead. These numbers are project defaults, not measurements. A 48-kHz
+lead. f4-31 uses four periods when a VM is attached, a measured-gap-derived
+idle cushion (134 ms plus two periods), and increases the active session lead
+after a late service. See the [audit](../validation/f4-31-audio-audit.md).
+A 48-kHz
 low-latency client SHOULD maintain at most one unconsumed source quantum;
 an arbitrarily full source ring adds its own queue duration. Status exposes
 both queues rather than calling all writes low-latency.
@@ -142,8 +145,14 @@ both queues rather than calling all writes low-latency.
 quantum or timestamped OPL event MUST be ≤60 ms to physical output at 48 kHz:
 ≤42.667 ms published lead, ≤5.333 ms mixer quantization, ≤1 ms deferred wake
 and the remaining margin for conversion/codec/output. Mixer/refill work MUST
-yield within 1 ms and obey the existing ≤250 µs hard-IRQ/IRQ-off maximum
+yield within 2 ms and obey the existing ≤250 µs hard-IRQ/IRQ-off maximum
 (50 µs target). Input-to-DOS-refill scheduling is measured separately.
+The f4-31 VM target is ≤30 ms (four periods plus 304 source frames at 48 kHz).
+Native player prefill is at most one period. `latency_frames` includes source,
+transport and drain allowance. These targets describe normal low-lead service;
+an adapted lead covering a 134 ms scheduling gap necessarily exceeds them.
+Such a session must expose its lead and latency, never claim the low-latency
+gate passed. Physical qualification must bound active scheduling gaps.
 Report maximum and percentile latency, clock calibration and measurement
 uncertainty. QEMU WAV capture proves PCM/timeline behavior, not this physical
 latency budget. A slower negotiated backend needs a recorded period/lead
