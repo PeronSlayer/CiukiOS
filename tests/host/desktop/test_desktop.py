@@ -36,13 +36,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-67 + F2-68: caption changes and selection rendering combined; shared frames re-recorded.
 # F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
 # only the dialog frames change.
+# 2026-10-18 (main after f4-30 + f2-81): the dialogs frames re-recorded on the combined tree (Places pane in the two-bar shell), reviewed by the lead.
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "92be431fbfa2742ac188c836b8776cc4e32c8672ad3d3ae6aa06b7bae9c61654",
-    "ciuki-blue-dialogs.ppm": "7aa51b282c98f4a6c5a3591654add1de58b1a35e5475cb01db66f604fa43bda4",
+    "ciuki-blue-dialogs.ppm": "294abf3d751fceb2a7714dbd1210f93cca00510ea6544d779e605b4c2b8b18d0",
     "ciuki-blue-tray-disabled.ppm": "cdaa374dd4e8f0cf949f6b52e602d1b65a9dc7f266b7bb48d1e94f06fcb70ff7",
     "ciuki-blue-tray-media.ppm": "1b50d2d8ce2247e887bdb0847a5b8943df2edc3131b9cf12d6b9904a3f5f3281",
     "platinum-desktop.ppm": "6734d5e09dc5bd285f218e93aeb99fcdee6af240fe01f9756c42fe10d47f374d",
-    "platinum-dialogs.ppm": "773246338ff7b8737c124dfc5ae9155974c8cce69f67665b926baebad74d13fe",
+    "platinum-dialogs.ppm": "539afd04e538a59f3f3165b3a484c27e1a35ecbf4df99b7bbda5066b18ab233d",
     "platinum-tray-disabled.ppm": "b8700318bff6123dcd84f03998f159ac2f0daa4d4086ffb1e84f5fa1d646c95f",
     "platinum-tray-media.ppm": "96aa790f6fff6b100b05848a41f4a10b479b7c90455c98f44f4a9eef2b826c71"
 }
