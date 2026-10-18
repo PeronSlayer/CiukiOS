@@ -28,7 +28,7 @@ void dosvm_isr_begin(struct dosvm *v, struct dpmi_record *r, unsigned irq)
     r->isr_tsc = dosvm_perf_clock(); r->isr_tick = g_ticks;
     unsigned depth = 0;
     for (unsigned i = 0; i < v->dpmi.depth; i++)
-        if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) depth++;
+        if ((v->dpmi.rec[i].flags & DPMI_RF_HWINT) && !v->dpmi.rec[i].isr_expired) depth++;
     if (depth > v->perf.isr_max_depth) v->perf.isr_max_depth = depth;
 }
 void dosvm_isr_end(struct dosvm *v, const struct dpmi_record *r)
@@ -198,6 +198,25 @@ static const char *const perf_names[DOSVM_COST_COUNT] = {
     "vga_io", "vga_pf", "pit_pic", "kbd", "io", "db", "timer", "other",
     "rm_pushf", "rm_popf", "rm_cli", "rm_sti", "rm_hlt", "pm_hlt", "dpmi", "host_irq"
 };
+/* f3-44 (lead): cumulative virtual-IF and ISR counters on the disk record,
+ * so a hardware trial shows which path re-enables IF and how long ISRs run.
+ * Copied under IF-off because producers update them in trap context. */
+static void perf_if_live(struct dosvm *v, unsigned n)
+{
+    uint32_t enable[DOSVM_IF_PATHS], depth, retired, expired, c0, m0, c7, m7, c5, m5;
+    uint64_t samples, clear, outside;
+    uint32_t flags = irq_save();
+    memcpy(enable, v->perf.if_enable, sizeof(enable));
+    samples = v->perf.if_samples_ms; clear = v->perf.if_clear_ms; outside = v->perf.if_outside_ms;
+    depth = v->perf.isr_max_depth; retired = v->perf.isr_retired; expired = v->perf.isr_expired;
+    c0 = v->perf.isr[0].count; m0 = v->perf.isr[0].max_us;
+    c7 = v->perf.isr[7].count; m7 = v->perf.isr[7].max_us;
+    c5 = v->perf.isr[5].count; m5 = v->perf.isr[5].max_us;
+    irq_restore(flags);
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_if vm=%u gen=%u n=%u enable=%u,%u,%u,%u,%u,%u samples_ms=%llu clear_ms=%llu outside_ms=%llu isr_depth=%u isr_retired=%u isr_expired=%u isr0=%u/%u isr5=%u/%u isr7=%u/%u",
+                  v->info.key.id, v->info.key.generation, n, enable[0], enable[1], enable[2], enable[3], enable[4], enable[5],
+                  samples, clear, outside, depth, retired, expired, c0, m0, c5, m5, c7, m7);
+}
 static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsigned n)
 {
     unsigned id = v->info.key.id, gen = v->info.key.generation;
@@ -222,6 +241,7 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_tracker vm=%u gen=%u n=%u armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u",
                          id, gen, n, s->return_armed, s->return_hits, s->return_expired,
                          s->return_fallbacks, s->return_reacquired, s->return_segmented);
+    perf_if_live(v, n);
     for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) if (s->cost_count[i])
         rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_cost vm=%u gen=%u n=%u cause=%s exits=%u us=%llu",
                       id, gen, n, perf_names[i], s->cost_count[i], s->cost_us[i]);

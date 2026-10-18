@@ -243,6 +243,7 @@ struct dosvm {
         struct dosvm_isr_cost isr[16];
         uint64_t if_samples_ms, if_clear_ms, if_outside_ms;
         uint32_t if_enable[DOSVM_IF_PATHS], isr_max_depth;
+        uint32_t isr_retired, isr_expired;
     } perf;
     struct {
         uint64_t tick;

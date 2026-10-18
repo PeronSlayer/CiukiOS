@@ -50,3 +50,31 @@ replay must demonstrate SB16 DMA, IRQ and block progress.
 
 Implementation findings and before/after evidence are recorded in
 `build/codex/f3-42-report.md`; QEMU and hardware evidence belong to the lead.
+
+## F3-44 research and implementation decision (2026-10-19)
+
+Rechecked the primary sources above before implementation, including Intel's
+[80386 POPF reference](https://pdos.csail.mit.edu/6.828/2005/readings/i386/POPF.htm)
+and [IRET reference](https://pdos.csail.mit.edu/6.828/2005/readings/i386/IRET.htm).
+CPL 3 POPF/IRET silently preserve physical IF and IOPL; CLI/STI fault.
+The libx86emu wrapper sanitized flags only at slice entry/exit, leaving
+intermediate PUSHF instructions exposed to libx86emu's unrestricted restores.
+Preserve IF/IOPL after each emulated instruction, and test inside the slice.
+
+The corrected CPU baseline still delivers 700 IRQ0 and 430 IRQ7 in 5000 ms,
+with 556 us average SB latency, 4 ms pending IF-clear and no merged blocks.
+It does **not** reproduce the T23 failure. Do not manufacture a hardware
+schedule or claim that this model correction reproduced the physical defect.
+
+Keep verified saved-image TF and exact POPF/IRET retirement as the preferred
+IF evidence. Replace the 100 ms ordinary-code fallback with a pending-IRQ
+bound of two 1 kHz ticks (more than 1 ms), restarted by every CLI or DPMI
+disable. Physical IF is never evidence for virtual IF. Reconcile hardware
+records on monitor entry and before delivery: a consumed constructed frame
+or an exact interrupted PC/stack retires the record without replacing the
+current CPU frame. At 50 ms expire its hardware-ISR obligation, retaining
+only a continuation for a possible late trampoline; this prevents both
+permanent recovery suppression and a stale-return fault. Neither expiry
+nor return evidence sends PIC EOI. Stack switches alone are not return proof.
+The host trampoline remains the immediate, complete-context return path.
+See the F3-44 rule in `execution-abi.md` and `build/codex/f3-44-report.md`.

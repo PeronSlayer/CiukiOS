@@ -357,8 +357,9 @@ static int software_int(struct dosvm *v, struct v86_frame *f, uint8_t n)
  * virtual IF into the image's TF. The POPF or IRET that later loads the
  * image sets TF, and the single-step trap one instruction later tells the
  * host that the client re-enabled: the host clears TF and sets the virtual
- * IF. Nothing is stepped in between, IOPL stays 0 and no timeout enables
- * interrupts (contract). An image saved while virtually disabled is left
+ * IF. Nothing is stepped in between and IOPL stays 0. The independent
+ * F3-44 bounded fallback below covers unobserved restores. An image saved
+ * while virtually disabled is left
  * alone: its restore keeps IF clear, as on hardware. Once a client holds an
  * armed image, a single-step trap without a watchpoint hit is the host's
  * (a client debugger single-stepping it is not supported). */
@@ -782,7 +783,8 @@ static bool return_step_safe(struct dosvm *v, const struct v86_frame *f)
  * See docs/validation/2026-10-14-f3-15-virtual-if.md. The time bound also
  * covers a restore that retired before tracing began, or an unsafe barrier. */
 #define DPMI_IF_STEPS 4096u
-#define DPMI_IF_WAIT_MS 100u
+#define DPMI_IF_WAIT_MS 2u
+#define DPMI_ISR_WAIT_MS 50u
 #define DPMI_IF_RECORDS 16u
 static bool if_step_context(const struct dpmi *d, const struct v86_frame *f, bool retired)
 {
@@ -861,20 +863,25 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     uint64_t tick = g_ticks;
     irq_restore(flags);
     if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }
-    /* Hardware frames already return through an immediate host trap (PM
-     * HLT or RM INT FE). Their entry intentionally clears virtual IF.
-     * Stepping a mixer while another IRQ is pending makes that legitimate
-     * critical section much slower, and a watchdog must not enable it in
-     * the middle. Include real calls/callbacks nested under the frame. */
+    /* Handlers/callbacks are not ordinary client code. F3-44 expires stale
+     * hardware obligations by evidence/time; their retained late-return
+     * continuations cannot lock virtual IF. Other host handler frames
+     * still have an observed return and keep their explicit IF state. */
     for (unsigned i = 0; i < d->depth; i++) {
-        if (!(d->rec[i].flags & DPMI_RF_HWINT)) continue;
+        const struct dpmi_record *r = &d->rec[i];
+        bool handler = r->flags & DPMI_RF_HWINT ? !r->isr_expired :
+            r->kind == DPMI_REC_PMINT || r->kind == DPMI_REC_EXCEPTION || r->kind == DPMI_REC_CALLBACK;
+        if (!handler) continue;
         if_recovery_end(v, f);
         return;
     }
     if (!d->if_waiting) { d->if_waiting = true; d->if_wait_tick = tick; d->if_steps = 0; }
     uint64_t age = tick - d->if_wait_tick;
-    if (age >= DPMI_IF_WAIT_MS || d->if_steps >= DPMI_IF_STEPS) {
-        if_recovery_record(v, f, age, age >= DPMI_IF_WAIT_MS ? "time" : "budget");
+    /* Host stubs and halted clients are not ordinary client execution.
+     * Do not turn a scheduling delay at such a boundary into IF evidence. */
+    bool ordinary = (uint16_t)f->tf.cs != DPMI_HOST_CS && v->monitor.state != V86_HALTED;
+    if (ordinary && age >= DPMI_IF_WAIT_MS) {
+        if_recovery_record(v, f, age, "time");
         if_recovery_end(v, f);
         /* A previously patched saved image can still load TF later. Keep
          * its owner until flags_restored consumes it; never orphan that TF. */
@@ -882,7 +889,7 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
         dosvm_boundary(v, f, "if_forced");
         return;
     }
-    if (d->if_step) return;
+    if (d->if_step || d->if_steps >= DPMI_IF_STEPS) return;
     /* Return acquisition is inactive when virtual IF is clear. Retire
      * its checkpoint before recovery; never clear a client's TF here. */
     if (d->return_steps && return_context(d, f)) dpmi_return_cancel(v);
@@ -924,6 +931,57 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     d->if_step_depth = (uint8_t)d->depth; d->if_step_client = (uint8_t)d->clients;
     d->if_step = true;
     f->tf.eflags |= V86_TF;
+}
+
+/* F3-44: reconcile monitor obligations, never replay an interrupted CPU
+ * frame on inferred return. The client may have edited its IRET target.
+ * A mere move to a private stack is not proof. Keep timed-out records as
+ * continuations so a late host-owned trampoline still has its exact state.
+ * Research/limits: execution-abi.md and f3-42-guest-isr-latency.md. */
+void dpmi_irq_resync(struct dosvm *v, struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!d->active) return;
+    /* The normal return paths own these boundaries, even if the physical
+     * timer interrupts just before the HLT/INT FE executes. */
+    if ((v->frame_pm && (uint16_t)f->tf.cs == DPMI_HOST_CS) ||
+        (!v->frame_pm && f->tf.cs == 0xF000 &&
+         (f->tf.eip == DPMI_RM_RETURN || f->tf.eip == DPMI_RM_RETURN + 2))) return;
+    struct dpmi_seg ss = {0};
+    bool stack_ok = !v->frame_pm || dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss);
+    uint32_t sp = v->frame_pm && ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+    for (unsigned n = d->depth; n; n--) {
+        struct dpmi_record *r = &d->rec[n - 1];
+        if (!(r->flags & DPMI_RF_HWINT) || (!r->isr_measured && !r->isr_expired) ||
+            r->client != d->clients) continue;
+        bool returned = r->saved_pm == v->frame_pm && f->tf.cs == r->saved.tf.cs &&
+            f->tf.eip == r->saved.tf.eip && f->tf.user_ss == r->saved.tf.user_ss &&
+            f->tf.user_esp == r->saved.tf.user_esp;
+        bool consumed = stack_ok && r->isr_pm == v->frame_pm &&
+            (uint16_t)f->tf.user_ss == r->isr_ss &&
+            (v->frame_pm ? ss.base == r->isr_stack_base && ss.big == r->isr_stack_big : true) &&
+            sp >= r->isr_stack_end;
+        if (returned || consumed) {
+            bool vif = r->vif;
+            if_recovery_end(v, f);
+            dpmi_return_cancel(v);
+            for (unsigned i = n - 1; i < d->depth; i++) dosvm_isr_end(v, &d->rec[i]);
+            dpmi_unwind(v, n - 1);
+            /* An edited IRET can leave ordinary code on the host stack.
+             * Preserve its live bytes when the next IRQ allocates a frame. */
+            dpmi_lock_below(v, f);
+            d->decode_valid = d->decode_stack_valid = d->decode_ds_valid = false;
+            v->perf.isr_retired++;
+            dosvm_vif_restore(v, vif, DOSVM_IF_TRAMPOLINE);
+            continue;
+        }
+        if (!r->isr_expired && g_ticks - r->isr_tick >= DPMI_ISR_WAIT_MS) {
+            dosvm_isr_end(v, r);
+            r->isr_measured = false;
+            r->isr_expired = true;
+            v->perf.isr_expired++;
+        }
+    }
 }
 /* A return value may be computed before the pops/RET. These complete
  * encodings write only registers other than SP; no future return slot can
@@ -1053,6 +1111,10 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     switch (op) {
     case 0xFA: {
         v->perf.cause = DOSVM_COST_PM_FLAGS;
+        /* A fresh CLI starts a fresh ordinary-code grace period even if
+         * virtual IF was already clear and an IRQ has long been pending. */
+        d->if_waiting = false;
+        d->if_steps = 0;
         bool armed = v->monitor.vif && arm_flags_image(v, f, &cs);
         if (armed) {
             d->if_armed = true;
@@ -1256,6 +1318,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
 int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
+    dpmi_irq_resync(v, f);
     return_resume(v, f);
     if_recovery_prepare(v, f);
     if (!v->monitor.vif || v->monitor.shadow || d->shadow) return 0;
@@ -1288,7 +1351,15 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     if (!hooked) e = dpmi_to_real_int(v, f, DPMI_REC_REFLECT, (uint8_t)(h.off - DPMI_PM_INT), DPMI_RF_HWINT);
     else e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT);
     if (!e) {
-        dosvm_isr_begin(v, &d->rec[d->depth - 1], (unsigned)irq);
+        struct dpmi_record *r = &d->rec[d->depth - 1];
+        r->isr_pm = v->frame_pm;
+        r->isr_ss = (uint16_t)f->tf.user_ss;
+        struct dpmi_seg ss = {0};
+        r->isr_stack_big = v->frame_pm && dpmi_seg(v, r->isr_ss, &ss) && ss.big;
+        r->isr_stack_base = v->frame_pm ? ss.base : (uint32_t)r->isr_ss << 4;
+        uint32_t sp = r->isr_stack_big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+        r->isr_stack_end = sp + (v->frame_pm ? 3 * dpmi_width(v) : 6);
+        dosvm_isr_begin(v, r, (unsigned)irq);
         dosvm_pic_ack(&v->monitor);
         v->monitor.stats.reflected_irqs++;
         v->monitor.stats.delivered[irq & 15]++;

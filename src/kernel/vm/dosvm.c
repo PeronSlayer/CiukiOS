@@ -32,7 +32,7 @@ static struct dosvm_key input_focus;
 static bool dosvm_in_irq(const struct dosvm *v)
 {
     for (unsigned i = 0; i < v->dpmi.depth; i++)
-        if (v->dpmi.rec[i].flags & DPMI_RF_HWINT) return true;
+        if ((v->dpmi.rec[i].flags & DPMI_RF_HWINT) && !v->dpmi.rec[i].isr_expired) return true;
     return false;
 }
 
@@ -754,6 +754,7 @@ bool dosvm_trap(struct trap_frame *tf)
     v->frame_pm = pm;
     crit_end();
     sti();
+    dpmi_irq_resync(v, f);
     dosvm_fullscreen_checkpoint(v);
     dosvm_fullscreen_progress(v,f->tf.cs,f->tf.eip);
     dosvm_pic_stall(v, f);

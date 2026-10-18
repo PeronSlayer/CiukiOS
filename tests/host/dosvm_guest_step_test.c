@@ -22,6 +22,29 @@ static void word(unsigned at, uint32_t v, unsigned width)
 int main(void)
 {
     const struct gcpu_ops ops={read_memory,write_memory,descriptor,unexpected,0}; gcpu_init(&ops);
+    for (unsigned bits=0;bits<2;bits++) for (unsigned prefix=0;prefix<2;prefix++)
+        for (unsigned iret=0;iret<2;iret++) for (unsigned image_if=0;image_if<2;image_if++) {
+            big=bits!=0; unsigned w=(big!=!!prefix)?4:2;
+            memset(memory,0,sizeof(memory));
+            struct gcpu_state s={.cs=0x87,.ss=0x8F,.ds=0x97,.es=0x97,.fs=0x97,.gs=0x97,
+                .esp=0x100,.eflags=0x202,.pm=true,.ldt_limit=159};
+            unsigned at=0;
+            if(prefix) memory[0x1000+at++]=0x66;
+            memory[0x1000+at++]=iret?0xCF:0x9D;
+            unsigned next=iret?0x20:at;
+            if(iret) { word(0x2100,next,w); word(0x2100+w,s.cs,w); }
+            word(0x2100+(iret?2*w:0),0x3003u|(image_if?0x200u:0),w);
+            /* Observe physical flags inside the same slice, before the
+             * wrapper's final sanitation can hide a bad POPF/IRET. */
+            memory[0x1000+next]=0x9C; memory[0x1001+next]=0x58;
+            memory[0x1002+next]=0xFA;
+            struct gcpu_event ev;
+            CHECK(gcpu_run(&s,20,&ev)==GCPU_TRAP && ev.vector==13 && !ev.err && ev.fault);
+            CHECK(ev.executed==3 && s.eip==next+2 && (s.eax&0x3201)==0x201);
+            CHECK((s.eflags&0x3201)==0x201 && s.esp==0x100+(iret?3*w:w));
+            memory[0x1002+next]=0xFB;
+            CHECK(gcpu_run(&s,20,&ev)==GCPU_TRAP && ev.vector==13 && !ev.err && ev.fault && !ev.executed);
+        }
     for(unsigned bits=0;bits<2;bits++) {
         big=bits!=0; unsigned w=big?4:2;
         for(unsigned form=0;form<7;form++) {
@@ -77,5 +100,5 @@ int main(void)
         CHECK(ev.fault==(form!=4) && ev.executed==executed && s.eip==pc);
         CHECK(!(s.eflags&0x10000) && !!(s.eflags&0x100)==(form==2 || form==4));
     }
-    gcpu_done(); printf("guest CPU debug: 16/32-bit POPF/IRET TF, MOV/POP SS delay, PM/V86 segmented execute faults, RF and TF ownership PASS (%u checks)\n",checks); return 0;
+    gcpu_done(); printf("guest CPU debug: CPL3 POPF/IRET preserve IF/IOPL within slices, CLI/STI #GP, 16/32-bit TF, MOV/POP SS delay, PM/V86 execute faults, RF ownership PASS (%u checks)\n",checks); return 0;
 }

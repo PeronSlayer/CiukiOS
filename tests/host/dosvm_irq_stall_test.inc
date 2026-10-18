@@ -275,13 +275,13 @@ static void test_if_stall_watchdog(void)
     unsigned before=records; uint64_t began=v->dpmi.if_wait_tick;
     v->trace.used[DOSVM_TRACE_TIMER]=255;
     v->trace.used[DOSVM_TRACE_IRQ0]=255;
-    g_ticks=began+99; step(v,0x20,0);
+    g_ticks=began+DPMI_IF_WAIT_MS-1; step(v,0x20,0);
     CHECK(records==before && !v->monitor.vif && !v->dpmi.depth);
-    g_ticks=began+100; step(v,0x20,0);
+    g_ticks=began+DPMI_IF_WAIT_MS; step(v,0x20,0);
     CHECK(records==before+2 && v->dpmi.if_records==1 && !v->dpmi.if_waiting && !v->dpmi.if_step &&
           cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 && v->monitor.pic[0].isr==1);
     CHECK(strstr(recent_records[before%8],"group=vm_if_stall") &&
-          strstr(recent_records[before%8],"vif=0 arm=0") && strstr(recent_records[before%8],"ms=100") &&
+          strstr(recent_records[before%8],"vif=0 arm=0") && strstr(recent_records[before%8],"ms=2") &&
           strstr(recent_records[before%8],"reason=time"));
     CHECK(strstr(recent_records[(before+1)%8],"code=ebfe0000000000000000000000000000") &&
           strstr(recent_records[(before+1)%8],"stack=00000202,12345678,a5a5a5a5"));
@@ -307,10 +307,13 @@ static void test_if_stall_watchdog(void)
         CHECK(v->dpmi.if_step && !v->monitor.vif && !v->monitor.stats.delivered[0]);
         debug_dr6=1u<<14; step(v,1,0);
     }
+    CHECK(!v->monitor.vif && !v->monitor.stats.delivered[0] && !v->dpmi.if_step);
+    step(v,0x20,0); CHECK(!v->dpmi.if_step && !v->monitor.vif); /* bounded tracing, no early enable */
+    g_ticks += DPMI_IF_WAIT_MS; step(v,0x20,0);
     CHECK(cur.tf.eip==0x700 && v->monitor.stats.delivered[0]==1 && !v->dpmi.if_step &&
           !v->dpmi.stats.if_restored && v->dpmi.if_armed); /* patched image owner survives */
     destroy(v,true); empty();
-    puts("f3-15 watchdog: 99/100ms snapshot once, code/stack/PIC/seed, original gate then handler commit; masked IRQ waits; 4096 BS budget with fixed time and saved-image ownership PASS");
+    puts("f3-44 watchdog: 1/2ms snapshot once, code/stack/PIC/seed, original gate then handler commit; masked IRQ waits; 4096 BS budget with fixed time and saved-image ownership PASS");
 }
 static void test_if_trace_barriers(void)
 {

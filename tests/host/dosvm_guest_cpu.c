@@ -447,6 +447,7 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
         }
         bool ss_load = loads_ss(emu->x86.R_CS_BASE + emu->x86.R_EIP);
         uint32_t saved_eip = emu->x86.R_EIP;
+        uint32_t privileged_flags = emu->x86.R_EFLG & 0x3200u;
         bool rf_before = emu->x86.R_EFLG & 0x10000u;
         watch_hits = 0;
         emu->max_instr = emu->x86.R_TSC + 1;
@@ -457,6 +458,12 @@ int gcpu_run(struct gcpu_state *s, unsigned max, struct gcpu_event *ev)
             rc = GCPU_FAULT;
             break;
         }
+        /* libx86emu's POPF/IRET load IF/IOPL without CPL checks. A DPMI
+         * client is CPL 3, IOPL 0: these bits silently stay unchanged,
+         * including between instructions in this slice (a later PUSHF
+         * must see physical IF=1). CLI/STI still #GP in trap_check.
+         * Intel SDM POPF/IRET operation; DPMI 0.9 section 2.3. */
+        if (s->pm) emu->x86.R_EFLG = (emu->x86.R_EFLG & ~0x3200u) | privileged_flags;
         executed++;
         if (rf_before || (emu->x86.R_EFLG & 0x10000u)) {
             uint8_t opcode = 0;
