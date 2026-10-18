@@ -232,8 +232,14 @@ void supersavage_display_complete(bool recovered)
 {
     /* Only the display service can prove the mediated VBE fallback and
      * framebuffer commit succeeded. Never retry a stale desktop snapshot. */
+    if (restore_failed) {
+        klog("[display] native_supersavage recovery=%s stage=%s",
+            recovered ? "verified" : "failed",saved_mode.bad_stage ? saved_mode.bad_stage : saved_mode.stage);
+        /* A recovered restore is usable. Only an unrecovered restore (or
+         * the independently recorded entry failure) consumes a strike. */
+        if (!recovered) strike();
+    }
     if (!recovered) return;
-    if (restore_failed) strike();
     restore_failed=false;
     recovery_confirmed=true;
     (void)claims_retained();

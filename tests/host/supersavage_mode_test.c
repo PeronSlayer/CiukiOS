@@ -20,7 +20,9 @@ struct card {
     unsigned reads,writes,memcycles,pll_edges,retrace_reads;
     unsigned panel_status_writes;
     uint8_t cr33_readback;
-    bool no_retrace,decorated,freeze_time;
+    bool no_retrace,decorated,freeze_time,stuck_high,fail_delay;
+    unsigned wait_warnings;
+    const char *last_wait;
     unsigned drop_cr,drop_sr,drop_mm;
     bool drop_once;
     const char *fail_step;
@@ -45,7 +47,7 @@ static uint8_t input(void *arg,uint16_t p)
     if (p==0x3C5 && s>=5) return c->sr[s];
     if (p==0x3DA) {
         (void)cvga_read_port(&c->vga,p,0);
-        return c->no_retrace ? 0 : (++c->retrace_reads&1) ? 0 : 8;
+        return c->no_retrace ? (c->stuck_high ? 8 : 0) : (++c->retrace_reads&1) ? 0 : 8;
     }
     return cvga_read_port(&c->vga,p,0);
 }
@@ -112,11 +114,12 @@ static void mm_write(void *arg,unsigned at,uint32_t v)
     if (!drop(c,at,2)) c->streams[(at-0x8180)/4]=v;
     if (!c->freeze_time) c->us++;
 }
-static int delay(void *arg,unsigned us) { struct card *c=arg; c->us+=us; return 0; }
+static int delay(void *arg,unsigned us) { struct card *c=arg; c->us+=us; return c->fail_delay ? -EIO : 0; }
 static uint64_t now(void *arg) { return ((struct card *)arg)->us; }
 static int checkpoint(void *arg,const char *name,int error)
 {
-    struct card *c=arg; (void)error;
+    struct card *c=arg;
+    if (error==-ETIMEDOUT) { c->wait_warnings++; c->last_wait=name; }
     assert(c->stage_count<ARRAY_SIZE(c->stages)); c->stages[c->stage_count++]=name;
     return c->fail_step && !strcmp(c->fail_step,name) ? -EIO : 0;
 }
@@ -243,6 +246,35 @@ static void failures(void)
     assert(!supersavage_mode_restore(&snapshot,&bus));restored();
     puts("PASS SuperSavage recovery: unknown/inactive panel refusal, each entry checkpoint failure, CR67 write loss, reserved-bit masks, retained snapshot on PLL/stream restore failure, bounded frozen-clock retrace, recovery despite failed durable checkpoint");
 }
+static void restore_without_retrace(void)
+{
+    for (unsigned high=0;high<2;high++) for (unsigned frozen=0;frozen<2;frozen++) {
+        fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+        assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+        card.no_retrace=true;card.stuck_high=high;card.freeze_time=frozen;
+        /* T23's -5/mask=0 replay: every writable register works, but the
+         * blanked pipeline never presents a VGA retrace edge. */
+        assert(!supersavage_mode_restore(&snapshot,&bus));
+        assert(card.wait_warnings==2 && !strcmp(card.last_wait,"native-restore-retrace-on"));
+        assert(!snapshot.mask && !snapshot.bad_stage);
+        restored();
+    }
+    fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+    assert(!supersavage_mode_enter(&snapshot,&bus,0x13));
+    card.no_retrace=true;card.drop_sr=0x12;card.sr[0x12]^=1;
+    assert(supersavage_mode_restore(&snapshot,&bus)==-EIO && snapshot.saved);
+    assert(snapshot.bad_reg==0x112 && snapshot.mask==255 && card.wait_warnings==2);
+    fixture();assert(!supersavage_mode_save(&snapshot,&bus));card.no_retrace=true;
+    assert(supersavage_mode_enter(&snapshot,&bus,0x13)==-EIO);
+    assert(snapshot.bad_reg==0x3DA && snapshot.mask==8 &&
+           !strcmp(snapshot.bad_stage,"native-entry-retrace-off"));
+    fixture();assert(!supersavage_mode_save(&snapshot,&bus));
+    assert(!supersavage_mode_enter(&snapshot,&bus,0x13));card.fail_delay=true;
+    assert(supersavage_mode_restore(&snapshot,&bus)==-EIO && snapshot.saved);
+    assert(!strcmp(snapshot.bad_stage,"native-restore-blank-delay"));
+    card.fail_delay=false;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
+    puts("PASS f0-40 retrace: stuck low/high and frozen clock restore all verified registers with named warnings; real write loss remains fatal; entry timeout names status port/edge");
+}
 static void panel_status(void)
 {
     const unsigned retained[]={8,0x80,0xFF};
@@ -290,4 +322,4 @@ static void cr33_reserved(void)
     card.drop_cr=0;assert(!supersavage_mode_restore(&snapshot,&bus));restored();
     puts("PASS f3-39 CR33: T23 01/80/81 and reserved 04/85 readback accepted, all five writable bits and lost entry write remain strict EIO");
 }
-int main(void) { cycles();presentation();failures();panel_status();cr33_reserved();puts("SuperSavage native mode host tests: PASS");return 0; }
+int main(void) { cycles();presentation();failures();restore_without_retrace();panel_status();cr33_reserved();puts("SuperSavage native mode host tests: PASS");return 0; }

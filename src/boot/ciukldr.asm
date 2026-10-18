@@ -41,6 +41,7 @@ entry:
     mov dword [B(loader_start)], LOAD_BASE
     mov dword [B(loader_end)], LOAD_BASE+loader_bss_end
     call uart_init
+    call progress_init
     ; Reject minimum CPU/firmware failures before even EDD disk discovery.
     call cpu_minimum
     call memory_collect
@@ -57,9 +58,22 @@ entry:
     call a20_enable
     call fat_mount
     call config_read
+    mov al, 0
+    call progress_begin
     call boot_menu
+    call progress_end
+    mov al, 1
+    call progress_begin
     call video_select
+    call progress_end
+    mov al, 2
+    call progress_begin
     call elf_load
+    call progress_require
+    call progress_end
+    mov al, 3
+    call progress_begin
+    call progress_end
     cli
     cld
     mov al, 0xff
@@ -75,17 +89,17 @@ entry:
 ; All errors terminate without entering the kernel. SI names a short code.
 fatal:
     mov byte [screen_quiet], 0
+    call progress_failure
     call print
     mov si, newline
     call print
-    xor ax, ax
-    int 0x16
     cli
 .halt:
     hlt
     jmp .halt
 
 %include "src/boot/ciukldr/platform.inc"
+%include "src/boot/ciukldr/progress.inc"
 %include "src/boot/input_platform.inc"
 %include "src/boot/ciukldr/memory.inc"
 %include "src/boot/ciukldr/disk.inc"
@@ -98,7 +112,6 @@ align 16, db 0
 boot_info times CIUKI_BOOT_INFO_SIZE db 0
 align 8, db 0
 raw_map times CIUKI_E820_MAX*24 db 0
-sector times 512 db 0
 cluster times 4096 db 0
 elf_header times 52 db 0
 ph_table times MAX_PH*32 db 0
@@ -137,7 +150,12 @@ image_end:
 %if image_end-$$ > 24576
 %error F0 loader must fit its fixed 24576-byte image
 %endif
-times 24576-($-$$) db 0
+; Private, versioned loader trail in the last 32 bytes of the fixed image.
+; core/loader_progress.inc copies it before the loader extent is reclaimed.
+times 24544-($-$$) db 0
+progress_trail db 'CLDRPRG1'
+    dd 0,0,0,0 ; entered, completed, stalled, failed stage masks
+    dq 0
 image_padded_end:
 ; Loader-only scratch beyond the file image but inside the reported loader
 ; extent (loader_end); its contents are undefined until video_select writes
@@ -151,4 +169,7 @@ selector_buffer resb 65
 ; ELF segment bounce buffer: file_read initializes exactly copy_count bytes
 ; before the copy loop consumes them. Keep scratch out of the 48-sector file.
 cfg_buffer resb 512
+; Every successful disk_read fills all 512 bytes before a consumer runs.
+; Keep scratch out of the fixed file, leaving room for progress diagnostics.
+sector resb 512
 loader_bss_end:

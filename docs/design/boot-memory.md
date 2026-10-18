@@ -457,3 +457,21 @@ Safe mode also selects firmware first. Policy 1 without forced, detected or
 safe flags is logged as an unknown source and treated as native. See the
 [input activation amendment](hardware-check.md#f0-37-input-activation-and-ebda-2026-10-16)
 for the PCI BIOS sources and fallback order.
+
+## F0-40 loader progress trail
+
+The fixed 48-sector loader now exposes short menu/video/ELF/handoff tokens
+on both screen and available UART. Cooperative deadlines cover loader loops
+and returning BIOS calls, with a separate finite poll budget for a stopped
+BDA clock. Optional video falls back to text; a timed-out partial ELF stops
+visibly and never waits for a key or transfers control to the kernel.
+
+An optional private `CLDRPRG1` trail occupies the file's last 32 bytes;
+boot_info v1/v2 and the public ABI stay unchanged. The kernel validates and
+replays its stage masks through protected `klog` before loader-memory reclaim.
+The sector scratch buffer moves after `cfg_buffer` in reported loader BSS;
+all 512 bytes are initialized by a successful BIOS read before use. Fixed
+file size and the page-rounded reservation are preserved. The format,
+deadlines, assembled tests and limits (including nonreturning BIOS calls
+and pre-kernel disk persistence) are in the
+[F0-40 audit](../validation/f0-40-reliability-audit.md#loader-trail-and-limits).

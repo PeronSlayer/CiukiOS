@@ -18,6 +18,8 @@ video_select:
     mov si, [B(vbe_ctrl)+14]
     xor bx, bx
 .list:
+    call progress_check
+    jc .text
     cmp si, 65534
     ja .text
     mov ax, [fs:si]
@@ -33,6 +35,8 @@ video_select:
     mov [mode_bytes], bx
     xor bp, bp
 .mode:
+    call progress_check
+    jc .text
     cmp bp, [mode_bytes]
     jae .pick
     mov cx, [ds:mode_list+bp]
@@ -62,6 +66,8 @@ video_select:
     mov dx, 0xffff
     mov bp, 0xffff
 .best:
+    call progress_check
+    jc .text
     cmp bx, [mode_bytes]
     jae .try
     cmp [mode_scores+bx], dx
@@ -72,6 +78,8 @@ video_select:
     add bx, 2
     jmp .best
 .try:
+    call progress_check
+    jc .text
     cmp bp, 0xffff
     je .text
     mov word [ds:mode_scores+bp], 0xffff
@@ -152,6 +160,8 @@ video_select:
     mov cx, 256
     rep stosb
 .edid:
+    call progress_check
+    jc .bad_edid
     mov ax, 0x4f15
     mov bx, 1
     xor cx, cx

@@ -72,6 +72,7 @@ static void fixture_seed(void) { }
 #define npci fixture_npci
 #define irq_claim_attached fixture_irq_claim_attached
 #define irq_quarantine_claim fixture_irq_quarantine_claim
+#define irq_line_accepts_peer fixture_irq_line_accepts_peer
 #define overlaps fixture_overlaps
 #define matches fixture_matches
 #define claim fixture_claim
@@ -138,6 +139,7 @@ static void fixture_seed(void) { }
 #undef npci
 #undef irq_claim_attached
 #undef irq_quarantine_claim
+#undef irq_line_accepts_peer
 #undef overlaps
 #undef matches
 #undef claim

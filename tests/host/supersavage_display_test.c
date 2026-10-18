@@ -210,6 +210,16 @@ static void refusal_and_recovery(void)
 static void strikes_and_retry(void)
 {
     runtime_fixture();
+    for (unsigned n=0;n<4;n++) {
+        assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
+        card.sr[0x12]^=1;card.drop_sr=0x12;
+        assert(supersavage_display_end()==-EIO && saved_mode.saved);
+        card=original;
+        supersavage_display_complete(true);
+        assert(!native_strikes && !strike_count && !saved_mode.saved);
+        assert(supersavage_display_supported(&desktop,0x13));
+    }
+    runtime_fixture();
     for (unsigned n=1;n<=3;n++) {
         assert(supersavage_display_supported(&desktop,0x13));
         assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
@@ -220,7 +230,8 @@ static void strikes_and_retry(void)
         unsigned reads=card.reads;
         assert(!supersavage_display_end() && card.reads==reads); /* revoked aliases */
         supersavage_display_complete(false);
-        assert(native_strikes==n-1 && saved_mode.saved);
+        supersavage_display_complete(false); /* failed fallback is idempotent */
+        assert(native_strikes==n && saved_mode.saved);
         card=original; /* mediated firmware recovery, independently verified by display tests */
         supersavage_display_complete(true);
         supersavage_display_complete(true); /* idempotent */
@@ -256,7 +267,7 @@ static void strikes_and_retry(void)
     assert(!supersavage_display_prepare(&desktop,0x13) && !supersavage_display_begin(0x13));
     assert(!supersavage_display_end());supersavage_display_complete(true);
     assert(native_strikes==1 && strike_count==1);
-    puts("PASS f3-39 strikes: recovered restores and entry failures log 1/2/3 once per session, retries below cap, unrecovered snapshot retained, success preserves count, fourth entry performs no I/O");
+    puts("PASS f0-40 strikes: four recovered restores cost zero; failed native+fallback and entry failures log 1/2/3 once per session; unrecovered snapshot retained; fourth entry at cap performs no I/O");
 }
 int main(void)
 {

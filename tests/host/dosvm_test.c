@@ -90,6 +90,7 @@ static char last_disk_log[256], last_launch_log[256];
 static unsigned log_sequence, launch_stages, launch_errors, launch_stage_sequence, launch_error_sequence;
 static unsigned launch_stage_pages;
 static unsigned vm_audio_logs;
+static char lifecycle_stop[256],lifecycle_cleanup[256];
 static char last_vm_audio_log[256];
 void klog(const char *fmt, ...)
 {
@@ -119,6 +120,8 @@ void klog(const char *fmt, ...)
     va_end(ap);
     CHECK(n > 0 && n < (int)sizeof(last_dosvm_log));
     if (!strncmp(fmt, "[dosvm] disk", 12)) strcpy(last_disk_log, last_dosvm_log);
+    if (strstr(last_dosvm_log,"lifecycle stage=stop")) strcpy(lifecycle_stop,last_dosvm_log);
+    if (strstr(last_dosvm_log,"lifecycle stage=cleanup")) strcpy(lifecycle_cleanup,last_dosvm_log);
     dosvm_logs++;
 }
 void klog_diag(const char *fmt,...)
@@ -505,7 +508,11 @@ static void test_lifecycle_records(void)
     struct v86_frame f={0}; waiting=v; sleep_hook=enqueue_key; unsigned progress=native_progress;
     CHECK(!dosvm_bios(v,&f,0x16) && f.tf.eax==0x1E61 && native_progress>progress && v->info.state==DOSVM_RUNNABLE);
     CHECK(dosvm_keyboard(expired,0x3062)); f.tf.eax=0x100; CHECK(!dosvm_bios(v,&f,0x16) && f.tf.eax==0x3062 && v->key_count==1);
-    run_worker(v); CHECK(v->info.state==DOSVM_STOPPING && v->info.reason==DOSVM_FAULT && v->info.fault_vector==13); destroy(v,true); empty();
+    lifecycle_stop[0]=lifecycle_cleanup[0]=0;
+    run_worker(v); CHECK(v->info.state==DOSVM_STOPPING && v->info.reason==DOSVM_FAULT && v->info.fault_vector==13);
+    CHECK(strstr(lifecycle_stop,"stage=stop vm=") && strstr(lifecycle_stop,"vector=13 eip="));
+    destroy(v,true); empty();
+    CHECK(strstr(lifecycle_cleanup,"stage=cleanup vm=") && strstr(lifecycle_cleanup,"result=0") && strstr(lifecycle_cleanup,"retained=0"));
     struct dosvm *next=create(); CHECK(dosvm_key(next).id==expired.id && dosvm_key(next).generation!=expired.generation && !dosvm_keyboard(expired,'X'));
     CHECK(!dosvm_boot(next)); value=1; CHECK(!v86_io(&next->monitor,0x92,1,true,&value) && next->info.reason==DOSVM_RESET); destroy(next,true); empty();
     /* OUT hands the handler the whole EAX: a dirty AH must not hide the command byte (QEMU 2026-10-11). */

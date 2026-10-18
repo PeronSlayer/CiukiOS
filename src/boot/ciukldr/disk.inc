@@ -2,6 +2,7 @@
 %define CIUKI_FAT_RESERVED_SECTORS 160
 ; Read-only BIOS sector access. EAX=LBA, ES:BX=512-byte destination.
 disk_read:
+    call progress_require
     pushad
     mov [disk_dap+8], eax
     mov [disk_dap+4], bx
@@ -50,6 +51,7 @@ disk_read:
     jmp .retry
 .ok:
     popad
+    call progress_require
     ret
 disk_error:
     mov si, disk_msg

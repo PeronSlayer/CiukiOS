@@ -215,7 +215,12 @@ static int backend_codec_restore(struct audio_dma_device *d)
 }
 void audio_backend_shutdown(void)
 {
-    if (!dma_selected) { ac97_shutdown(); return; }
+    if (!dma_selected) {
+        ac97_shutdown();
+        if (audio.quarantined)
+            klog("[audio] failure stage=shutdown backend=ac97 reason=stop_unproved fallback=quarantine");
+        return;
+    }
     struct audio_dma_device *d = &audio_dma; d->state.ready = false;
     bool unsafe = d->state.quarantine;
     if (d->touched) {
@@ -248,6 +253,8 @@ void audio_backend_shutdown(void)
     }
     if (unsafe) {
         if (d->kind == AUDIO_SB16) pic_mask(5); /* uncertain source: quarantine only */
+        klog("[audio] failure stage=shutdown backend=%s reason=stop_unproved irq=%u fallback=quarantine",
+             d->name,d->state.irq);
         audio.quarantined = true; audio.reason = "stop_unproved"; return;
     }
     if (d->phys) {

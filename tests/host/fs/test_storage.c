@@ -36,10 +36,12 @@ static struct disk disks[3];
 static unsigned readonly_reports;
 static char readonly_record[256];
 static char log_repair_record[256];
+static char writeback_record[256];
 void klog(const char *fmt, ...) {
     char line[256]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(line)); }
     if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(line));
+    if (strstr(line,"failure stage=writeback")) memcpy(writeback_record,line,sizeof(line));
     if (blackbox_capture) { blackbox_capture(line,strlen(line));blackbox_capture("\n",1); }
     bootlog_capture(line,strlen(line)); bootlog_capture("\n",1);
 }
@@ -377,6 +379,32 @@ static void failure_tests(void) {
     CHECK(readonly_reports>0);
     printf("PASS delayed write/flush errors: sticky caller result, RO revocation, no clean unmount; logger no recursion\n");
 }
+static void writeback_isolation(void) {
+    for (unsigned fault=0;fault<2;fault++) {
+        struct storage *s=start();disk_init(2);
+        media[2].undo_enabled=true;
+        OK(storage_add_disk(s,2,&disks[2].dev));
+        struct storage_volume *bad=storage_volume(s,3),*boot=storage_volume(s,2);
+        CHECK(bad && bad->fat.type==16 && boot->fat.readonly);
+        OK(storage_enable_write(s,3));
+        uint8_t data[512]={0};OK(cache_write(&s->cache,&bad->io,2,data));
+        if (fault) media[2].fail_flush=true; else media[2].fail_write=2;
+        writeback_record[0]=0;
+        CHECK(storage_writeback(s,fs_now_ms()+5001)==-FS_EIO);
+        CHECK(bad->fat.readonly && !s->writer_error);
+        CHECK(strstr(writeback_record,"drive=D disk=2 result=-5 scope=volume fallback=readonly"));
+        CHECK(cache_error(&s->cache,&bad->io)==-FS_EIO);
+        OK(storage_enable_write(s,2));
+        CHECK(!boot->fat.readonly && !cache_error(&s->cache,&boot->io));
+        OK(vfs_mkdir(&table,"C:/HEALTHY",0));
+        OK(vfs_rmdir(&table,"C:/HEALTHY"));
+        /* All-volume shutdown still reports the failed disk and never
+         * declares its dirty volume clean. */
+        vfs_table_destroy(&table);CHECK(storage_shutdown(s)==-FS_EIO && bad->fat.mounted);
+        storage_destroy(s);fake_reset(&media[2]);reset();
+    }
+    puts("PASS f0-40 storage isolation: removable write/flush failure stays per-device, names drive/stage, healthy boot volume remains writable, global shutdown retains error");
+}
 int probe_fat_read(void);
 int probe_fat_write(void);
 int probe_cache(void);
@@ -532,6 +560,7 @@ static void sweep_write_tests(void) {
     printf("PASS sweep cursor accounting: FAT read PASS/fixtures_absent, bootlog cold reopen, real stray writes before/during rejected\n");
 }
 static unsigned recorder_writes, recorder_flushes;
+static char recorder_record[481];
 static int recorder_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
     CHECK(!blkdev_range(d,lba,n)); memset(buf,0,n*512);
     for (unsigned i=0;i<n;i++) {
@@ -552,6 +581,8 @@ static int recorder_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
 }
 static int recorder_write(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
     CHECK(buf && !blkdev_range(d,lba,n) && lba>=BLACKBOX_FIRST);
+    const uint8_t *sector=buf;unsigned bytes=fs_rd16(sector+12);CHECK(bytes<=480);
+    memcpy(recorder_record,sector+16,bytes);recorder_record[bytes]=0;
     recorder_writes+=n;return 0;
 }
 static int recorder_flush(struct blkdev *d) { (void)d;recorder_flushes++;return 0; }
@@ -583,6 +614,23 @@ static void cache_fault_recorder(void) {
     CHECK(real->mounted && real->readonly && recorder_writes && recorder_flushes);
     stop(s,false);reset();
     puts("PASS F1-73 synthetic unmount: sticky write/flush EIO, zero raw-recorder commands; real revocation still checkpoints");
+}
+static void shutdown_recorder(void) {
+    if (!blackbox_bind) return;
+    struct storage *s=start();OK(storage_enable_write(s,2));
+    struct blkdev recorder={.read=recorder_read,.write=recorder_write,.flush=recorder_flush,
+        .capacity=BLACKBOX_RESERVED,.sector_size=512,.write_cache_state=BLKDEV_CACHE_ENABLED};
+    blackbox_reset();OK(blackbox_bind(&recorder,0,recorder.capacity,0));
+    vfs_table_destroy(&table);OK(storage_sync());CHECK(s->stopped);
+    unsigned writes=recorder_writes,flushes=recorder_flushes;
+    unsigned fat_writes=media[0].writes;
+    klog("[power] failure stage=acpi-off reason=no_effect");
+    OK(blackbox_checkpoint());
+    CHECK(recorder_writes>writes && recorder_flushes>flushes);
+    CHECK(strstr(recorder_record,"[power] failure stage=acpi-off reason=no_effect"));
+    CHECK(s->stopped && media[0].writes==fat_writes);
+    storage_destroy(s);reset();
+    puts("PASS f0-40 final power record: real raw checkpoint after storage_sync, FAT stays stopped with zero further filesystem writes");
 }
 static void unsupported_flush_views(void) {
     for (unsigned writable=0;writable<2;writable++) {
@@ -652,7 +700,7 @@ static void probe_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); probe_tests(); mount_probe_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

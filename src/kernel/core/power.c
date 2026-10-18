@@ -29,7 +29,9 @@
 #include <ciuki/storage.h>
 #include <ciuki/reboot.h>
 #include <ciuki/net.h>
+#include <ciuki/blackbox.h>
 #pragma weak net_shutdown
+#pragma weak blackbox_checkpoint
 #endif
 
 #define ACPI_TABLE_MAX   (256u * 1024u)   /* a DSDT above this is refused */
@@ -292,6 +294,14 @@ static const uint8_t *map_phys(void *ctx, uint32_t phys, uint32_t len)
 static struct acpi_soft_off soft_off;
 static int soft_off_state;              /* 0 unknown, 1 available, -1 absent */
 
+static void power_checkpoint(void)
+{
+    /* storage_sync already uses this raw sink after FAT shutdown. Preserve
+     * final power failures for next-boot replay with no filesystem restart.
+     * Sink failure must not prevent an already requested hardware fallback. */
+    if (blackbox_checkpoint) (void)blackbox_checkpoint();
+}
+
 static bool soft_off_available(void)
 {
     if (!soft_off_state) {
@@ -325,11 +335,14 @@ static int acpi_power_off(void)
     }
     if (!owned) {
         klog("[power] ACPI enable failed: SCI_EN not set; rebooting");
+        power_checkpoint();
         kernel_reboot();
     }
     uint16_t cnta = (uint16_t)((inw(a->pm1a_cnt) & ~(SLP_TYP_MASK | SLP_EN)) | (uint16_t)(a->slp_typa << 10));
     uint16_t cntb = a->pm1b_cnt ?
         (uint16_t)((inw(a->pm1b_cnt) & ~(SLP_TYP_MASK | SLP_EN)) | (uint16_t)(a->slp_typb << 10)) : 0;
+    klog("[power] stage=acpi-off state=prepared");
+    power_checkpoint();
     uint32_t flags = irq_save();
     outw(a->pm1a_cnt, cnta);
     if (a->pm1b_cnt) outw(a->pm1b_cnt, cntb);
@@ -338,6 +351,7 @@ static int acpi_power_off(void)
     irq_restore(flags);
     task_sleep_ms(2000);                 /* still running: the write had no effect */
     klog("[power] acpi soft-off had no effect");
+    power_checkpoint();
     return -EIO;
 }
 
@@ -348,7 +362,10 @@ static int flush_storage(void)
     struct storage *s = storage_get();
     if (!s || !s->ready) return 0;
     int e = storage_sync();
-    if (e) klog("[power] storage flush failed: %d", e);
+    if (e) {
+        klog("[power] storage flush failed: %d", e);
+        power_checkpoint();
+    }
     return e;
 }
 
@@ -367,9 +384,14 @@ int32_t power_syscall(uint32_t action)
     int e = flush_storage();
     if (e) return e;
     if (net_shutdown) net_shutdown();
-    if (!off) kernel_reboot();
+    if (!off) {
+        klog("[power] stage=reset fallback=8042-triple-fault");
+        power_checkpoint();
+        kernel_reboot();
+    }
     if (soft_off_state <= 0) {
         klog("[power] no soft-off method; storage stopped, safe to turn off");
+        power_checkpoint();
         return -ENOTSUP;
     }
     return acpi_power_off();

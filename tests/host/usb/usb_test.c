@@ -232,7 +232,7 @@ struct model {
     bool bulk_short;
     unsigned bulk_short_bytes;
     uint64_t bulk_ready_at;
-    bool hub_stuck,hub_status_error;
+    bool hub_stuck,hub_status_error,hub_disable_error;
     unsigned hub_power_requests,hub_reset_requests;
     unsigned bulk_in_toggle, bulk_out_toggle, bulk_packets;
     unsigned bulk_block_after;
@@ -385,7 +385,7 @@ static int transaction(struct model *m,unsigned address,unsigned ep,unsigned pid
             else if(req==1 && value>=16 && value<=20) {
                 m->hub_acks[index-1]++;m->hub_change[index-1]&=~(1u<<(value-16));
             }
-            else {assert(req==1 && value==1);m->hub_status[index-1]&=~2u;}
+            else {assert(req==1 && value==1);if(m->hub_disable_error)return -USB_EPIPE;m->hub_status[index-1]&=~2u;}
         }
         return 0;
     }
@@ -1657,6 +1657,70 @@ static void irq_loss_polling(bool ohci)
     assert(h->quarantined && !h->ready);
     printf("PASS USB %s IRQ lease loss: one poll fallback, live keyboard/mouse/control, pinned DMA; DMA lease loss still quarantines\n",ohci?"OHCI":"UHCI");
 }
+static unsigned failed_port_resets;
+static bool reset_controller_failure;
+static unsigned port_isolations;
+static void (*real_port_disable)(struct usb_host *,unsigned);
+static char isolated_port_record[256];
+static int fail_root_reset(struct usb_host *h,unsigned port)
+{
+    assert(!port);failed_port_resets++;
+    if(reset_controller_failure)usb_host_quarantine(h,"test-reset-controller-fault");
+    return -USB_ETIMEDOUT;
+}
+static void isolate_root_port(struct usb_host *h,unsigned port)
+{ assert(h->ready && !h->quarantined);port_isolations++;real_port_disable(h,port); }
+static void isolation_record(const char *record)
+{ if (strstr(record,"scope=port") || strstr(record,"reason=hub_disable_failed")) snprintf(isolated_port_record,sizeof(isolated_port_record),"%s",record); }
+static void root_port_isolation(bool ohci)
+{
+    for (unsigned fault=0;fault<3;fault++) {
+        bool capacity=fault==1;
+        setup(ohci,false);assert(!attach());model_step();
+        struct usb_host *h=&m.host;
+        assert(h->device_count==2 && h->root_child[1]==2);
+        usb_detach(&h->devices[0],"test-reconnect");h->root_child[0]=0;
+        struct usb_hc_ops ops=*h->ops;
+        reset_controller_failure=fault==2;port_isolations=0;
+        real_port_disable=ops.port_disable;ops.port_disable=isolate_root_port;h->ops=&ops;
+        if (capacity) h->device_count=USB_DEVICE_MAX;
+        else ops.port_reset=fail_root_reset;
+        unsigned detached=usb_detaches;failed_port_resets=0;isolated_port_record[0]=0;
+        record_hook=isolation_record;
+        h->next_scan=0;m.now+=300;model_step();
+        if(reset_controller_failure) {
+            assert(h->quarantined && !h->ready && !port_isolations);
+            record_hook=NULL;continue;
+        }
+        assert(h->ready && !h->quarantined && h->root_blocked[0] && !h->root_blocked[1]);
+        assert(h->devices[1].present && h->devices[1].hid[0].active && usb_detaches==detached);
+        assert(port_isolations==1);
+        assert(strstr(isolated_port_record,capacity ? "stage=enumerate result=-28" : "stage=root_port_reset result=-110"));
+        assert(strstr(isolated_port_record,"port=1") && strstr(isolated_port_record,"scope=port"));
+        m.dev[1].report[1]=7;m.dev[1].report[2]=9;m.dev[1].report_len=4;
+        m.now+=300;model_step();
+        assert(last_x==7 && last_y==9 && usb_detaches==detached && h->ready);
+        assert(failed_port_resets==(capacity ? 0u : 1u)); /* no retry storm */
+        record_hook=NULL;
+    }
+    printf("PASS f0-40 USB %s root reset/capacity isolation: failed port blocked with stage record; sibling mouse keeps delivering, no retry storm; no port write after HC quarantine\n",ohci?"OHCI":"UHCI");
+    setup(ohci,true);m.dev[1].present=true;
+    if(ohci)m.regs[0x58/4]=0x201;else m.regs[0x10/4]|=0x181u<<16;
+    assert(!attach());model_step();
+    struct usb_host *h=&m.host;
+    assert(h->device_count==4 && h->devices[1].hid[0].active); /* root sibling mouse */
+    m.hub_disable_error=true;
+    record_hook=isolation_record;isolated_port_record[0]=0;
+    usb_device_quarantine(&h->devices[2],"test-child-fault");
+    assert(h->ready && !h->quarantined && h->root_blocked[0] && !h->root_blocked[1]);
+    assert(h->devices[0].quarantined && !strcmp(h->devices[0].reason,"hub_disable_failed"));
+    assert(strstr(isolated_port_record,"reason=hub_disable_failed") && strstr(isolated_port_record,"stage="));
+    assert(h->devices[1].present && h->devices[1].hid[0].active);
+    m.dev[1].report[1]=11;m.dev[1].report_len=4;m.now+=300;model_step();
+    assert(last_x==11 && h->ready);
+    record_hook=NULL;
+    printf("PASS f0-40 USB %s failed hub child-disable: hub root port isolated; independent root mouse survives\n",ohci?"OHCI":"UHCI");
+}
 int main(void)
 {
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
@@ -1681,6 +1745,7 @@ int main(void)
     port_flood(false);port_flood(true);
     shared_irq(false);shared_irq(true);
     irq_loss_polling(false);irq_loss_polling(true);
+    root_port_isolation(false);root_port_isolation(true);
     ohci_level_root_irq();ohci_done_publications();
     puts("PASS usb host suite (production UHCI/OHCI/core/hub/HID, ASan+UBSan)");return 0;
 }

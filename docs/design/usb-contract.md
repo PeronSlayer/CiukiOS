@@ -617,3 +617,21 @@ are limited to sixteen 32-byte chunks at attachment. The public wheel route
 and three-button ABI remain unchanged. The QEMU wheel case requires both signed
 kernel wheel records and corresponding desktop consumption records, in addition
 to the existing desktop shell checks.
+
+## F0-40 port quarantine isolation
+
+A root-port reset timeout or exhausted device/address capacity blocks and
+disables that port using existing HC operations and records controller,
+one-based port, stage, result and `scope=port`. Other root-port devices keep
+their schedules, generations and leases. The blocked port is not repeatedly
+reset/re-enumerated. When a hub cannot disable a faulted child, quarantine
+the hub and its root port rather than the entire HC; the other root ports
+remain independent. A root hub still constitutes one physical domain.
+
+Controller-wide quarantine remains necessary after loss of register/DMA
+authority, fatal HC state, stopped frame clock or uncertain controller-level
+DMA/interrupt isolation. IRQ lease loss retains the existing polling
+fallback; neither port quarantine nor a detached shared IRQ member may
+disable a peer's claims. No register sequence or transfer recovery policy
+changes. Sources and both UHCI/OHCI failure-injection cases are listed in
+the [F0-40 audit](../validation/f0-40-reliability-audit.md).

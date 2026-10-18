@@ -293,3 +293,27 @@ after revocation. VGA planes cooperate every 256 bytes, DAC transfers every
 16 entries, and retrace polling every 64 reads, retaining indexed-register
 pairs and the latch replay as indivisible operations. Research and measured
 host evidence: [F1-80 validation](../validation/f1-80-host-replay.md).
+
+## F0-40 recovery wait and strike amendment (2026-10-19)
+
+This supersedes the f3-39 policy for a recovered restore. Native entry
+failures still cost one strike per session. A failed native restore costs a
+strike only if the display service also fails to commit a verified native/VBE
+desktop. Successful VBE recovery costs zero, clears the stale snapshot only
+after lease revocation, and leaves native full screen available. Failed or
+foreign-generation ownership proof remains a resource refusal.
+
+Both restore retrace waits remain bounded (40 ms / 65536 reads per wait).
+Their expiry emits a protected `fullscreen_step=native-restore-retrace-off`
+or `native-restore-retrace-on result=-110` and continues to the saved stream
+control writes and strict readback. A missing edge in the blanked pipeline
+does not itself prove that restoring a register failed. Entry still refuses
+a missing edge and reports port 3DAh / expected edge / mask 08h. Delay errors
+and stream/VGA/PLL readback errors still fail restore and request fallback;
+they identify the first failing wait/register rather than the last stage run.
+This adds no register programming or readback-mask relaxation. The prior
+`-5 reg=0 mask=0` was ambiguous because a wait/delay error could survive until
+the last streams stage; the new records distinguish those cases.
+
+Primary references, reasoning limits, exact host injections and remaining
+T23 qualification: [F0-40 reliability audit](../validation/f0-40-reliability-audit.md).

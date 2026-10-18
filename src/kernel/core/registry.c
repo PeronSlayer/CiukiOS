@@ -28,6 +28,7 @@ static unsigned npci;
 static bool irq_claim_attached(int h, gen_t generation);
 static void irq_quarantine_claim(int h, gen_t generation);
 static bool same_owner(const char *a, const char *b);
+static bool irq_line_accepts_peer(unsigned irq);
 
 static bool overlaps(const struct resource *r, enum res_type t, uint32_t s, uint32_t e)
 {
@@ -58,11 +59,15 @@ static int claim(enum res_type type, uint32_t start, uint32_t end, const char *o
     uint32_t f = irq_save();
     unsigned slot = nres;
     bool takeover = false;
+    const char *retained_peer = 0;
     for (unsigned i = 0; i < nres; i++) {
         if (slot == nres && res[i].state == RS_RELEASED)
             slot = i;
+        bool retained_irq = type == RES_IRQ && res[i].state == RS_QUARANTINED &&
+                            !same_owner(owner,res[i].owner) && irq_line_accepts_peer(start);
         bool shared = share && res[i].shareable && start == res[i].start && end == res[i].end &&
-                      (res[i].state == RS_CLAIMED || res[i].state == RS_ACTIVE) && state == RS_CLAIMED;
+                      (res[i].state == RS_CLAIMED || res[i].state == RS_ACTIVE || retained_irq) && state == RS_CLAIMED;
+        if (shared && retained_irq && res[i].type == type) retained_peer=res[i].owner;
         if (overlaps(&res[i], type, start, end) && state == RS_CLAIMED && !share &&
             res[i].state == RS_QUARANTINED && takeover_owner[i] &&
             same_owner(owner, takeover_owner[i]) && start == res[i].start && end == res[i].end) {
@@ -99,6 +104,8 @@ static int claim(enum res_type type, uint32_t start, uint32_t end, const char *o
     if (state == RS_CLAIMED)
         counters.claims++;
     irq_restore(f);
+    if (retained_peer)
+        klog("[registry] stage=irq-member-admit irq=%u owner=%s retained=%s",start,owner,retained_peer);
     return (int)slot;
 }
 
@@ -439,6 +446,13 @@ static struct irq_chain {
     char detached[IRQ_CHAIN_MAX][32];
     uint64_t budget_us;
 } chains[16];
+
+static bool irq_line_accepts_peer(unsigned irq)
+{
+    /* A retained member is not exclusive ownership of a still-used line.
+     * Do not resurrect an empty/unsafe line or the quarantined owner. */
+    return irq<16 && chains[irq].stats.participants && !chains[irq].stats.quarantined;
+}
 
 static bool irq_claim_attached(int h, gen_t generation)
 {
