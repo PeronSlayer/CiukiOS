@@ -690,6 +690,7 @@ int main(void)
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();
+    test_isr_return_evidence(); test_isr_expiry(); test_if_cli_epoch(); test_if_handler_scope();
     test_speed();
     test_cost_bursts();
     test_exit_cost();

@@ -72,9 +72,11 @@ struct dpmi_vec { uint32_t off; uint16_t sel; };
 struct dpmi_record {
     uint8_t kind, client, vector, flags, op;
     bool saved_pm, vif;
-    bool isr_measured;
+    bool isr_measured, isr_expired, isr_pm, isr_stack_big;
     uint8_t isr_irq;
     uint64_t isr_tsc, isr_tick;
+    uint16_t isr_ss;
+    uint32_t isr_stack_base, isr_stack_end;
     bool decode_valid;
     uint16_t decode_cs;
     uint32_t decode_eip;             /* interrupted boundary proof, HWINT only */
@@ -209,6 +211,7 @@ int dpmi_entry(struct dosvm *, struct v86_frame *);
 int dpmi_entry_complete(struct dosvm *, struct v86_frame *, uint16_t psp);
 void dpmi_reload_debug(struct dosvm *);
 void dpmi_return_cancel(struct dosvm *);
+void dpmi_irq_resync(struct dosvm *, struct v86_frame *);
 int dpmi_terminate(struct dosvm *, bool from_pm);
 int dpmi_terminate_int(struct dosvm *, struct v86_frame *, uint8_t vector, const struct v86_frame *regs);
 int dpmi_dos_complete(struct dosvm *, struct v86_frame *, struct dpmi_record *, const struct v86_frame *result);
