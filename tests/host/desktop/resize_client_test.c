@@ -54,7 +54,9 @@ void rt_client_tests(void)
     assert(rt_pop(&m) && desk_get32(m.data+20)==3); rt_close(m.fds[0]);
     configured(700,460,3,1); assert(du_window_turn(&w,7)==1); drain();
     assert(!w.replacement && rt_surfaces()==1 && rt_mappings()==1 && rt_handles()==1);
-    du_window_destroy(&w); assert(!rt_surfaces());
+    assert(!du_file_dialog(&u,900,0,"Open","/","",NULL,NULL));
+    assert(u.dialog.places && u.dialog.entries);
+    du_window_destroy(&w); assert(!rt_surfaces() && !u.dialog.kind && !u.dialog.places && !u.dialog.entries);
     /* Cursor requests use the production FIFO and suppress unchanged shapes. */
     open_window(&w,&u); u.mouse_x=300; u.mouse_y=200;
     for (unsigned shape=1;shape<DESK_CURSOR_COUNT;shape++) {

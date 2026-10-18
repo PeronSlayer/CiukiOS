@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if defined(__i386__) || defined(DU_NATIVE_MEDIA)
+#include <fcntl.h>
+#include <unistd.h>
+int ciuki_devctl(int, uint32_t, void *, uint32_t);
+#endif
 
 #define TITLE_H (DESK_FRAME_TITLE - 3)   /* the window frame: body at box.y + 24 */
 #define BTN_W 75
@@ -16,8 +21,92 @@
 #define LINE_H 15
 #define TAB_X 84
 
-enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000 };
-enum { F_OK, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME, F_LOOK, F_FILE };
+enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000, ID_PLACES = -8000 };
+enum { F_ACCEPT, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME, F_LOOK, F_FILE, F_PLACES, F_PLACES_TITLE };
+#define PLACE_MAX 31
+struct du_dialog_places {
+    struct du_item rows[PLACE_MAX];
+    struct { char path[32], label[64]; } entries[PLACE_MAX];
+    unsigned count;
+    uint64_t next_poll;
+    int fd;
+};
+static void places_close(struct du_dialog *d)
+{
+    if (!d->places) return;
+#if defined(__i386__) || defined(DU_NATIVE_MEDIA)
+    if (d->places->fd>=0) close(d->places->fd);
+#endif
+    free(d->places); d->places=NULL;
+}
+static void places_select(struct du_dialog *d)
+{
+    if (!d->places) return;
+    struct du_dialog_places *p=d->places;
+    size_t best=0; unsigned active=0;
+    for (unsigned i=0;i<p->count;i++) {
+        const char *path=p->entries[i].path; size_t n=strlen(path);
+        p->rows[i].selected=0;
+        if (n>best && !strncmp(d->folder,path,n) && (n==1 || !d->folder[n] || d->folder[n]=='/')) { best=n; active=i; }
+    }
+    if (best) p->rows[active].selected=1;
+    d->items[F_PLACES].active=active;
+}
+static void place_add(struct du_dialog_places *p, const char *label, const char *path, const char *icon)
+{
+    if (p->count==PLACE_MAX) return;
+    unsigned i=p->count++;
+    snprintf(p->entries[i].path,sizeof(p->entries[i].path),"%s",path);
+    snprintf(p->entries[i].label,sizeof(p->entries[i].label),"%s",label);
+    p->rows[i]=(struct du_item){0}; p->rows[i].text[0]=p->entries[i].label;
+    p->rows[i].icon16=du_icon_argb(du_icon_name(icon),16);
+}
+void du_dialog_tick(struct du_ui *u)
+{
+    struct du_dialog *d=&u->dialog; struct du_dialog_places *p=d->places;
+    if (!p || u->now<p->next_poll) return;
+    p->next_poll=u->now+500000000ull;
+    p->count=0;
+    place_add(p,"Desktop","/Documents/Desktop","place:desktop");
+    place_add(p,"Documents","/Documents","place:documents");
+    place_add(p,"Music","/Documents/Music","audio-x-generic");
+    place_add(p,"Pictures","/Documents/Pictures","image-x-generic");
+    place_add(p,"CiukiOS (C:)","/","drive-harddisk");
+#if defined(__i386__) || defined(DU_NATIVE_MEDIA)
+    if (p->fd<0) p->fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    struct ciuki_media_state state={.version=CIUKI_MEDIA_VERSION,.size=sizeof(state)};
+    if (p->fd>=0) {
+        if (ciuki_devctl(p->fd,MEDIA_GET_STATE,&state,sizeof(state))) { close(p->fd); p->fd=-1; }
+        else for (unsigned drive=3;drive<26;drive++) {
+            if (!(state.removable_mask&(1u<<drive)) ||
+                (state.type[drive]!=CIUKI_MEDIA_USB && state.type[drive]!=CIUKI_MEDIA_OPTICAL)) continue;
+            struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
+            if (ciuki_devctl(p->fd,MEDIA_GET_VOLUME,&v,sizeof(v)) || !v.generation || !v.flags) continue;
+            v.label[sizeof(v.label)-1]=0;
+            for (unsigned k=0;v.label[k];k++) if ((unsigned char)v.label[k]<32 || (unsigned char)v.label[k]==127) v.label[k]='?';
+            char label[64],path[16];
+            snprintf(label,sizeof(label),"%s (%c:)",v.label[0] ? v.label : state.type[drive]==CIUKI_MEDIA_USB ? "Removable Volume" : "CD-ROM",'A'+drive);
+            snprintf(path,sizeof(path),"/mnt/%c",'a'+drive);
+            place_add(p,label,path,state.type[drive]==CIUKI_MEDIA_OPTICAL ? "drive-optical" : "drive-removable-media");
+        }
+        /* Mount generations returned by GET_VOLUME differ from the transport
+         * generations in GET_STATE. Recheck the latter across enumeration. */
+        if (p->fd>=0) {
+            struct ciuki_media_state after={.version=CIUKI_MEDIA_VERSION,.size=sizeof(after)};
+            if (ciuki_devctl(p->fd,MEDIA_GET_STATE,&after,sizeof(after)) || memcmp(&state,&after,sizeof(state))) {
+                p->count=5; p->next_poll=u->now+100000000ull;
+            }
+        }
+    }
+#endif
+    struct du_widget *w=&d->items[F_PLACES];
+    w->items=p->rows; w->count=p->count;
+    int max=(int)p->count-du_list_page(w); if (max<0) max=0;
+    if (w->scroll>max) w->scroll=max;
+    places_select(d); u->dirty=1;
+}
+uint64_t du_dialog_deadline(const struct du_ui *u)
+{ return u->dialog.places ? u->dialog.places->next_poll : UINT64_MAX; }
 
 static int line_width(const char *s, size_t n)
 {
@@ -82,6 +171,7 @@ static struct du_widget *item(struct du_dialog *d, unsigned i, enum du_kind kind
 static void begin(struct du_ui *u, enum du_dialog_kind kind, int id, const char *title, const char *text)
 {
     struct du_dialog *d = &u->dialog;
+    places_close(d);
     free(d->entries); free(d->rows);
     memset(d, 0, sizeof(*d));
     d->kind = kind; d->id = id; d->capture = -1;
@@ -227,6 +317,7 @@ static int navigate(struct du_ui *u, const char *path)
     struct du_widget *list = &d->items[F_LIST];
     list->items = d->rows; list->count = count; list->active = 0; list->scroll = list->hscroll = 0;
     du_set_text(&d->items[F_FOLDER], d->folder);
+    places_select(d);
     u->dirty = 1;
     return 0;
 }
@@ -245,24 +336,32 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
     d->lister = lister ? lister : du_posix_lister; d->lister_ctx = ctx;
     d->entries = calloc(DU_FILE_ENTRIES, sizeof(*d->entries));
     d->rows = calloc(DU_FILE_ENTRIES, sizeof(*d->rows));
-    if (!d->entries || !d->rows) { free(d->entries); free(d->rows); memset(d, 0, sizeof(*d)); return -ENOMEM; }
+    d->places=calloc(1,sizeof(*d->places));
+    if (d->places) d->places->fd=-1;
+    if (!d->entries || !d->rows || !d->places) { places_close(d); free(d->entries); free(d->rows); memset(d, 0, sizeof(*d)); return -ENOMEM; }
     d->buttons = 2; d->cancel = 1; d->focus = F_NAME;
-    place(u, 440, 320);
+    place(u, 540, 360);
     struct du_rect b = d->box; int y = body_y(d) + 10, right = b.x + b.w - 14;
-    item(d, F_OK, DU_BUTTON, ID_BUTTON, save ? "&Save" : "&Open")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - 2 * BTN_H - 6, BTN_W, BTN_H};
+    item(d, F_ACCEPT, DU_BUTTON, ID_BUTTON, save ? "&Save" : "&Open")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - 2 * BTN_H - 6, BTN_W, BTN_H};
     item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
     item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){right - 40, y, 40, 22};
     item(d, F_FOLDER, DU_EDIT, ID_FOLDER, folder)->box = (struct du_rect){b.x + 80, y, right - 46 - b.x - 80, 22};
     d->items[F_FOLDER].icon = du_icon_argb(du_icon_name("type:folder"), 16);
     struct du_widget *list = item(d, F_LIST, DU_LISTVIEW, ID_LIST, "");
     list->view = DU_LIST; list->inactive_selection = 1;
-    list->box = (struct du_rect){b.x + 14, y + 30, b.w - 28, d->items[F_OK].box.y - 10 - (y + 30)};
-    item(d, F_NAME, DU_EDIT, ID_NAME, name)->box = (struct du_rect){b.x + 80, d->items[F_OK].box.y, right - BTN_W - 10 - b.x - 80, 22};
+    int pane=b.w>=460 ? 150 : 120;
+    list->box = (struct du_rect){b.x + 14 + pane + 8, y + 30, b.w - 36 - pane, d->items[F_ACCEPT].box.y - 10 - (y + 30)};
+    struct du_widget *places=item(d,F_PLACES,DU_TREE,ID_PLACES,"");
+    places->inactive_selection=1;
+    places->box=(struct du_rect){b.x+14,y+48,pane,list->box.h-18};
+    item(d,F_PLACES_TITLE,DU_HEADER,0,"Places")->box=(struct du_rect){b.x+14,y+30,pane,18};
+    item(d, F_NAME, DU_EDIT, ID_NAME, name)->box = (struct du_rect){b.x + 80, d->items[F_ACCEPT].box.y, right - BTN_W - 10 - b.x - 80, 22};
     d->items[F_NAME].anchor = 0;
     item(d, F_LOOK, DU_LABEL, 0, "Look &in:")->box = (struct du_rect){b.x + 14, y, 64, 22};
-    item(d, F_FILE, DU_LABEL, 0, "File &name:")->box = (struct du_rect){b.x + 14, d->items[F_OK].box.y, 64, 22};
+    item(d, F_FILE, DU_LABEL, 0, "File &name:")->box = (struct du_rect){b.x + 14, d->items[F_ACCEPT].box.y, 64, 22};
     int r = navigate(u, folder && folder[0] ? folder : "/");
-    if (r && navigate(u, "/")) { free(d->entries); free(d->rows); memset(d, 0, sizeof(*d)); return r; }
+    if (r && navigate(u, "/")) { du_dialog_close(u); return r; }
+    du_dialog_tick(u);
     return 0;
 }
 
@@ -276,6 +375,7 @@ struct du_rect du_dialog_button(const struct du_ui *u, unsigned i)
 void du_dialog_close(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
+    places_close(d);
     free(d->entries); free(d->rows);
     memset(d, 0, sizeof(*d)); d->capture = -1;
     u->dirty = 1;
@@ -341,6 +441,10 @@ static void process(struct du_ui *u)
             int index = ID_BUTTON - e->id;
             if (file && index == 0) accept_file(u); else finish(u, index);
         } else if (e->type == DU_EV_ACTIVATE && e->id == ID_UP) parent_folder(u);
+        else if ((e->type==DU_EV_SELECT || e->type==DU_EV_OPEN) && e->id==ID_PLACES && e->index>=0 && d->places && (unsigned)e->index<d->places->count) {
+            if (!navigate(u,d->places->entries[e->index].path)) du_set_text(&d->items[F_NAME],"");
+            places_select(d);
+        }
         else if (e->type == DU_EV_SELECT && e->id == ID_LIST && e->index >= 0 && (unsigned)e->index < d->entry_count) {
             for (unsigned i = 0; i < d->entry_count; i++) d->rows[i].selected = i == (unsigned)e->index;
             if (!d->entries[e->index].directory) du_set_text(&d->items[F_NAME], d->entries[e->index].name);

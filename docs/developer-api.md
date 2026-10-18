@@ -3696,7 +3696,13 @@ struct du_dialog {
     unsigned progress, progress_total;
     du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
-    int dragging, drag_x, drag_y, capture;
+    struct du_dialog_places *places;
+```
+
+owned, live file-dialog Places observer
+
+```c
+int dragging, drag_x, drag_y, capture;
     int close_hot;
 ```
 

@@ -25,15 +25,21 @@ static void send(struct music_app *a, enum music_action action, const char *path
         strcpy(c.path,path);
     }
     a->local_error=a->backend->send(a->backend->ctx,&c); a->ui->dirty=1;
+    if (!a->local_error && (action==MUSIC_OPEN || action==MUSIC_SELECT || action==MUSIC_NEXT || action==MUSIC_PREV)) {
+        a->snapshot.state=MUSIC_LOADING; a->snapshot.error=0;
+        music_update(a,&a->snapshot);
+    }
 }
 void music_update(struct music_app *a, const struct music_snapshot *s)
 {
     a->snapshot=*s; struct du_ui *u=a->ui;
-    char text[200]; const char *name=s->playlist.count ? acc_basename(s->playlist.path[s->current]) : "Music Player";
+    char text[DU_TEXT_MAX]; const char *name=s->playlist.count ? acc_basename(s->playlist.path[s->current]) : "Music Player";
     du_set_text(du_get(u,M_TITLE),name);
     uint64_t seconds=s->rate ? s->position/s->rate : 0, total=s->rate ? s->duration/s->rate : 0;
     snprintf(text,sizeof(text),"%llu:%02llu / %llu:%02llu",(unsigned long long)(seconds/60),(unsigned long long)(seconds%60),
              (unsigned long long)(total/60),(unsigned long long)(total%60));
+    if (!s->duration && s->state==MUSIC_PLAYING) snprintf(text,sizeof(text),"%llu:%02llu / --:--",
+        (unsigned long long)(seconds/60),(unsigned long long)(seconds%60));
     du_set_text(du_get(u,M_TIME),text);
     struct du_widget *seek=du_get(u,M_SEEK);
     seek->disabled=!s->duration;
@@ -45,10 +51,16 @@ void music_update(struct music_app *a, const struct music_snapshot *s)
     struct du_widget *list=du_get(u,M_LIST); list->items=a->rows; list->count=s->playlist.count;
     if (list->active>=list->count) list->active=0;
     int error=a->local_error ? a->local_error : s->error;
-    if (error) snprintf(text,sizeof(text),"%s (error %d)",error==-ENODEV || error==-ENOENT ? "File or audio device unavailable" :
-                             error==-EINVAL ? "Unsupported file or invalid playlist" : error==-EBUSY ? "Busy; try again" : "Music Player error",error);
+    if (error) {
+        const char *file=acc_basename(s->error_path[0] ? s->error_path : name);
+        const char *reason=error==-EINVAL ? "Unsupported file or invalid playlist" : strerror(-error);
+        char suffix[200]; snprintf(suffix,sizeof(suffix),"...: %s",reason);
+        int room=u->canvas.width-16-du_text_width("Cannot open ")-du_text_width(suffix);
+        size_t fit=desk_text_fit_chars(desk_theme->font_ui,file,room>0 ? room : 0);
+        snprintf(text,sizeof(text),"Cannot open %.*s%s: %s",(int)fit,file,file[fit] ? "..." : "",reason);
+    }
     else snprintf(text,sizeof(text),"%s   %u tracks   Space: play/pause, S: stop, PgUp/PgDn: previous/next",
-                  s->state==MUSIC_PLAYING ? "Playing" : s->state==MUSIC_PAUSED ? "Paused" : s->state==MUSIC_LOADING ? "Loading" :
+                  s->state==MUSIC_PLAYING ? "Playing" : s->state==MUSIC_PAUSED ? "Paused" : s->state==MUSIC_LOADING ? "Loading..." :
                   s->state==MUSIC_CLOSING ? "Closing" : "Stopped",s->playlist.count);
     du_set_text(du_get(u,M_STATUS),text);
     snprintf(text,sizeof(text),a->volume_error ? "No mixer" : "Master: %d%%",a->volume);

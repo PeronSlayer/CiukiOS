@@ -32,17 +32,19 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # 2026-10-15 (main after f2-63 + f2-64): the three dialogs frames re-recorded on the combined tree (f2-64 message boxes in FreeType), reviewed against the 9a05ab9f renders.
 # F2-67: recorded caption controls and owner-centred shell messages; paired PNGs await lead review.
 # F2-67 + F2-68: caption changes and selection rendering combined; shared frames re-recorded.
+# F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
+# only the dialog frames change.
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "af53527c00b4ffebb4909c880cf571a3a77586fc21fadcc2d879d1511c674fd1",
-    "ciuki-blue-dialogs.ppm": "924fa1c72c6ff205845dd84a2ac27d8e545f438f1b92916099cc1e5050737377",
+    "ciuki-blue-dialogs.ppm": "ad5fded4e5aa6e642b316e98ffd21f6a1e05fed1a0fbeffefa12f21196eca760",
     "ciuki-blue-tray-disabled.ppm": "5bf8a5c6dffc04e3550ac7993ec875bd41dbcbb0c8cb012c793d864c9ed0cf8d",
     "ciuki-blue-tray-media.ppm": "b9024012e844d5c3df06d5cc14ac178a002d095c124be161d1d566926175005e",
     "classic-98-desktop.ppm": "a469d45db5cd51560ede504dc6514c8ad1817888a3c97bdea4a250e1d01fd5a2",
-    "classic-98-dialogs.ppm": "43320f8495431339069a822ecdee7d5bcc6460b2b01c1872e2c33682df119c80",
+    "classic-98-dialogs.ppm": "c6eece8d8875b25b2cf111e05cc73d8899766af2e474cccaa2d4899a95eb18e9",
     "classic-98-tray-disabled.ppm": "38363a9f344a2abe17e5e04fef55f8eb8deed44e2c5f593d3f8062fd4f763937",
     "classic-98-tray-media.ppm": "4103806b91770a66daedb3dbebdd99fcfbef29d70946c18eb0f617d959c28174",
     "platinum-desktop.ppm": "2dcb28b6aebb38944f8e4c90d2ed6745fd45876e545a32ff6687d0b66b788e47",
-    "platinum-dialogs.ppm": "6adccd756e38abce08059364a40022e86bc6a36e0beef2520e428dc40876cb22",
+    "platinum-dialogs.ppm": "a7679d4da59ea8249b5d3d92a4ae3d4b4398538d8283fe15904129a31a2eaed3",
     "platinum-tray-disabled.ppm": "1586c8a2457d6265247d3c61451a5a3983714706a1f4f3ce377b0fee8d51ecd2",
     "platinum-tray-media.ppm": "54c00f1c4acb4038fb9ac6769a0d879892014e897da2c4f271e35dbf3c07528a"
 }

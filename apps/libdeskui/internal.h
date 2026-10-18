@@ -56,4 +56,6 @@ void du_dialog_wheel(struct du_ui *, int detents);
 void du_dialog_press(struct du_ui *, int button);
 void du_dialog_motion(struct du_ui *);
 void du_dialog_release(struct du_ui *, int button);
+void du_dialog_tick(struct du_ui *);
+uint64_t du_dialog_deadline(const struct du_ui *);
 #endif

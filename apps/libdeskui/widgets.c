@@ -288,6 +288,7 @@ void du_timer_stop(struct du_ui *u, int id)
 void du_tick(struct du_ui *u, uint64_t now)
 {
     if (now > u->now) u->now = now;
+    du_dialog_tick(u);
     for (int i = 0; i < DU_TIMERS; i++) {
         struct du_timer *t = &u->timers[i];
         if (!t->active || u->now < t->deadline) continue;
@@ -300,7 +301,7 @@ void du_tick(struct du_ui *u, uint64_t now)
 
 uint64_t du_next_deadline(const struct du_ui *u)
 {
-    uint64_t next = UINT64_MAX;
+    uint64_t next = du_dialog_deadline(u);
     for (int i = 0; i < DU_TIMERS; i++) if (u->timers[i].active && u->timers[i].deadline < next) next = u->timers[i].deadline;
     return next;
 }

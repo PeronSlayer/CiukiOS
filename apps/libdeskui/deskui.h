@@ -278,6 +278,7 @@ struct du_dialog {
     unsigned progress, progress_total;
     du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
+    struct du_dialog_places *places;        /* owned, live file-dialog Places observer */
     int dragging, drag_x, drag_y, capture;
     int close_hot;                          /* the pointer is over the close button */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
