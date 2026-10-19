@@ -124,7 +124,7 @@ class ReadbackTests(unittest.TestCase):
             reference_blob=mbr+bytes(62*512)+boot
             identity["boot"]=dict(boot_pin,installed_sha256=install.sha(boot))
             identity["mbr_sha256"]=install.sha(mbr)
-            reference["/D48/REF.JSON"]=json.dumps(identity).encode()
+            reference["/D48/REF.JSN"]=json.dumps(identity).encode()
             reference["/FDCONFIG.SYS"]=install.CONFIG;reference["/FDAUTO.BAT"]=install.AUTO
             image=folder/"not-a-real-image";image.write_bytes(b"mock outer bytes")
             def read(source,path,offset=0):

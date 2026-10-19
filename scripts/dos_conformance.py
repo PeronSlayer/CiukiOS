@@ -254,7 +254,7 @@ def readback(image, probes_manifest):
     expected_plan=("\n".join(r["tag"]+" "+r["fixture"] for r in expected["cases"])+"\n").encode()
     if expected_plan!=read_file(io.BytesIO(candidate),"/D48/PLAN.TXT"):
         raise ValueError("runtime plan differs from authoritative cases")
-    identity=json.loads(member(reference,"/D48/REF.JSON"))
+    identity=json.loads(member(reference,"/D48/REF.JSN"))
     _,pinned=reference_files()
     result=dict(schema_version=1,dos_conformance_adapter=1,image_sha256=conformance.digest(image),
                 probes_sha256=sha(manifest_data),freedos_release="1.3",read_back="canonical-image",profile=PROFILE,payloads=[],
@@ -302,7 +302,7 @@ def build_reference(out, system_files, directories, games_files=None, folder=REL
     mbr=reference_mbr()
     identity["mbr_sha256"]=sha(mbr)
     identity["boot"]=dict(boot_pin,installed_sha256=sha(bytes(boot)))
-    files["/D48/REF.JSON"]=(json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
+    files["/D48/REF.JSN"]=(json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
     dos.write_fat16(out,bytes(boot),b"",files,directories=directories,label="FREEDOS13",sectors=dos.SECTORS-REFERENCE_START)
     subprocess.run(["fsck.fat","-n",str(out)],check=True,stdout=subprocess.DEVNULL)
     for path,data in files.items():

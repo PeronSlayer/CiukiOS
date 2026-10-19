@@ -587,7 +587,9 @@ def build(out=None, dos_image=None, root=ROOT):
     dos, fixtures = _dos_build(), _fixtures()
     boot, loader, system, dos_sha = fixtures.dos_system(dos_image)
     files = [(path, data, {"role": "dos_system", "redistribution": "ciukios"}) for path, data in sorted(system.items())]
-    packages, licenses, directories = [], [], []
+    packages, licenses = [], []
+    # The DOS VM payloads keep their nested directories (/SYSTEM, /D48 since f3-51).
+    directories = sorted({path.rsplit("/", 1)[0] for path in system if path.count("/") > 1})
     for package in PACKAGES:
         record, members, documents = package_files(package, root)
         directories.append("/" + record["install"]["directory"])
