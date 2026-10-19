@@ -2,6 +2,7 @@
  * bad buffers/full fd tables cannot consume a head message.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h>
 extern uint32_t file_description_count(void) __attribute__((weak));
 #define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
 #include <ciuki/desktop.h>
@@ -17,7 +18,24 @@ struct channel {
     struct channel_queue inbox[2];
     struct kwait changed[2];
     bool open[2];
+    struct { uint32_t id, generation; } receiver[2];
 };
+
+static struct task *channel_receiver(struct channel *c, unsigned side)
+{
+    for (struct task *t = sched_tasks(); t; t = t->all_next)
+        if (t->id == c->receiver[side].id && t->generation == c->receiver[side].generation &&
+            t->state != T_ZOMBIE && t->state != T_DEAD) return t;
+    return 0;
+}
+static bool channel_ui_authority(struct process *p)
+{
+    for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
+        struct desktop_description *d = desktop_fd(p, (int)i);
+        if (d && d->kind == DESKTOP_INPUT && d->owner == p->pid) return true;
+    }
+    return false;
+}
 struct channel_operation {
     struct desktop_description *endpoint;
     struct channel_message *message;
@@ -39,6 +57,10 @@ void channel_release(struct desktop_description *d)
     struct channel *c = d->u.endpoint.channel;
     if (!c) return;
     unsigned side = d->u.endpoint.side;
+    uint32_t f = irq_save();
+    struct task *receiver = channel_receiver(c, side);
+    if (receiver && receiver->focused) task_focus(0);
+    irq_restore(f);
     c->open[side] = false;
     struct channel_message *m = c->inbox[side].head;
     while (m) {
@@ -134,7 +156,10 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
 {
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != DESKTOP_CHANNEL) return -EBADF;
-    if (flags & ~DONTWAIT) return -EINVAL;
+    if (flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)) return -EINVAL;
+    unsigned hints = flags & ~DONTWAIT;
+    if ((hints & CIUKI_CHANNEL_FOCUS) && (hints & CIUKI_CHANNEL_UNFOCUS)) return -EINVAL;
+    if (hints && !channel_ui_authority(p)) return -EPERM;
     struct channel_operation *op = channel_begin(p, d);
     if (!op) return -ENOMEM;
     op->message = kzalloc(sizeof(*op->message));
@@ -171,6 +196,17 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             q->tail = op->message;
             q->count++;
             desktop_objects.messages++;
+            /* The successful enqueue is delivery; failed/full queues and
+             * polling never grant a boost. Identify the endpoint's UI thread,
+             * not an arbitrary first thread in its process. */
+            uint32_t f = irq_save();
+            c->receiver[d->u.endpoint.side].id = g_current->id;
+            c->receiver[d->u.endpoint.side].generation = g_current->generation;
+            struct task *receiver = channel_receiver(c, peer);
+            if (receiver && (hints & CIUKI_CHANNEL_FOCUS)) task_focus(receiver);
+            if (receiver && (hints & CIUKI_CHANNEL_UNFOCUS) && receiver->focused) task_focus(g_current);
+            if (hints & CIUKI_CHANNEL_INPUT) task_input_delivered(receiver);
+            irq_restore(f);
             kwait_wake_all(&c->changed[peer]);
             op->message = 0;
             return channel_end(op, 0);
@@ -236,6 +272,8 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             if (err > 0) {
                 err = copy_to_user(message, &out, sizeof(out));
                 if (!err) {
+                    c->receiver[side].id = g_current->id;
+                    c->receiver[side].generation = g_current->generation;
                     for (unsigned i = 0; i < out.fd_count; i++) {
                         p->fds[out.fds[i]] = (struct proc_fd){ &m->attachments[i]->object, FD_CLOEXEC };
                         m->attachments[i] = 0;

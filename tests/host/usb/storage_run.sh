@@ -32,8 +32,8 @@ from pathlib import Path
 import re, sys
 root, out = map(Path, sys.argv[1:])
 s = (root / "src/kernel/core/task.c").read_text()
-body = s[s.index("static struct task *rq_head"):s.index("static struct task *all_tasks")]
-for name in ("rq_push", "rq_pop"):
+body = s[s.index("static struct task *rq_head"):s.index("static struct task *all_tasks")].replace("static ","static __attribute__((unused)) ")
+for name in ("rq_remove", "priority_base", "priority_init", "rq_link", "rq_push", "tick_reached", "device_throttled", "device_urgent", "rq_take", "rq_pop"):
     match = re.search(r"^static [^\n]+\b"+name+r"\([^\n]*\)\n\{",s,re.M)
     assert match, name
     depth, end = 1, match.end()

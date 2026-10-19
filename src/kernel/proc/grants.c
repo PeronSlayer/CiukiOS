@@ -289,6 +289,7 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
             desktop_input_event(&in, (uint32_t)in.lost_count, (uint32_t)in.value, &out);
             err = copy_to_user(events + count * sizeof(out), &out, sizeof(out));
             if (err) break;
+            if (out.type != CIUKI_INPUT_RESYNC) task_input_delivered(g_current);
             if (++count == capacity) break;
             continue;
         }

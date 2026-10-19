@@ -1,4 +1,4 @@
-/* Tasks and the scheduler: fixed priorities, round-robin inside a priority,
+/* Tasks and the scheduler: effective priorities, round-robin inside a priority,
  * preemption of ring-3 code on timer ticks; the kernel itself is
  * non-preemptible in F0 (docs/design/execution-abi.md).
  * SPDX-License-Identifier: GPL-2.0-only */
@@ -31,94 +31,257 @@ volatile bool g_measure_stop;
 uint32_t g_starvation_boosts;
 volatile bool g_need_resched;
 
-static struct task *rq_head[P_COUNT], *rq_tail[P_COUNT];
+static struct task *rq_head[SCHED_LEVELS], *rq_tail[SCHED_LEVELS];
 extern uint32_t dosvm_task_quantum(const struct task *, uint32_t) __attribute__((weak));
 extern const struct task *dosvm_task_focus(void) __attribute__((weak));
 extern const struct task *dosvm_task_irq(void) __attribute__((weak));
 static const struct task *focus_task;
-static uint64_t focus_window;
-static uint32_t focus_ticks;
+static struct task *ui_focus;
+static uint32_t focus_ticks, ordinary_ticks;
 #define FOCUS_PERIOD 10u
 #define FOCUS_BUDGET 8u
+#define DEVICE_BUDGET 4u
+static uint16_t device_history;
+static unsigned device_used;
+static uint64_t device_cpu[FOCUS_PERIOD], device_cpu_total, device_cpu_tick, device_cpu_scale = 1;
+static unsigned device_cpu_slot;
+static bool device_cpu_refresh;
+static struct sched_stats scheduler_stats;
 static struct task *all_tasks;
 static struct task *idle_task;
 static uint32_t next_id = 1;
 static uint32_t slice_left;
-/* Timer-preempted user transitions can pass through deferred device work.
- * Count the user-to-user cause, without counting the intermediate kernel. */
 static struct task *last_measured;
 static bool last_preempted;
-uint64_t g_idle_ticks;              /* in the extracted scheduler block for host replays */
+uint64_t g_idle_ticks;
 
-static void rq_push(struct task *t)
+static void rq_remove(struct task *t)
 {
-    t->next = 0;
-    t->ready_since = g_ticks;
-    if (rq_tail[t->prio])
-        rq_tail[t->prio]->next = t;
-    else
-        rq_head[t->prio] = t;
-    rq_tail[t->prio] = t;
+    struct task **pp = &rq_head[t->effective_priority], *prev = 0;
+    while (*pp) {
+        if (*pp == t) {
+            *pp = t->next;
+            if (rq_tail[t->effective_priority] == t) rq_tail[t->effective_priority] = prev;
+            t->next = 0;
+            return;
+        }
+        prev = *pp; pp = &(*pp)->next;
+    }
 }
 
+static unsigned priority_base(struct task *t)
+{
+    static const uint8_t bases[P_COUNT] = { SCHED_DEVICE, SCHED_FOREGROUND, SCHED_NORMAL, 0, SCHED_HIGH };
+    unsigned base = t->configured_priority ? t->configured_priority : bases[t->prio];
+    if (t->focused && t->prio == P_NORMAL) base += 2;
+    return base > SCHED_BOOST_CAP && t->prio != P_DEVICE ? SCHED_BOOST_CAP : base;
+}
+
+static void priority_init(struct task *t)
+{
+    if (t->priority_valid) return;
+    t->priority_valid = true;
+    t->base_priority = t->effective_priority = priority_base(t);
+}
+
+/* Reinsert without resetting ready_since: priority changes are not progress. */
+static void rq_link(struct task *t)
+{
+    t->next = 0;
+    if (rq_tail[t->effective_priority]) rq_tail[t->effective_priority]->next = t;
+    else rq_head[t->effective_priority] = t;
+    rq_tail[t->effective_priority] = t;
+}
+static bool device_urgent(const struct task *t);
+static void device_cpu_advance(void)
+{
+    uint64_t elapsed = g_ticks - device_cpu_tick;
+    if (elapsed >= FOCUS_PERIOD) {
+        memset(device_cpu, 0, sizeof(device_cpu));
+        device_cpu_total = 0; device_cpu_slot = 0;
+    } else while (elapsed--) {
+        if (++device_cpu_slot == FOCUS_PERIOD) device_cpu_slot = 0;
+        device_cpu_total -= device_cpu[device_cpu_slot];
+        device_cpu[device_cpu_slot] = 0;
+    }
+    device_cpu_tick = g_ticks;
+}
+static bool device_throttled(void)
+{
+    return device_used >= DEVICE_BUDGET || device_cpu_total >= DEVICE_BUDGET * device_cpu_scale;
+}
+void sched_charge_runtime(struct task *t, uint64_t cycles, uint64_t scale)
+{
+    if (!t || !cycles || !scale || t->effective_priority < SCHED_SERVICE_MIN) return;
+    if (device_cpu_scale != scale) {
+        memset(device_cpu, 0, sizeof(device_cpu));
+        device_cpu_total = 0; device_cpu_scale = scale;
+    }
+    device_cpu_advance();
+    device_cpu[device_cpu_slot] += cycles;
+    device_cpu_total += cycles;
+    if (device_throttled()) { device_cpu_refresh = true; g_need_resched = true; }
+}
+
+static void priority_update(struct task *t)
+{
+    priority_init(t);
+    t->base_priority = priority_base(t);
+    t->device_demoted = t->prio == P_DEVICE && device_throttled() && !device_urgent(t);
+    if (t->input_priority) {
+        unsigned input = t->base_priority + 2;
+        t->input_priority = input > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : input;
+    }
+    if (t->io_priority) {
+        unsigned io = t->base_priority + 1;
+        t->io_priority = io > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : io;
+    }
+    unsigned p = t->device_demoted ? SCHED_NORMAL : t->base_priority;
+    if (t->input_priority > p) p = t->input_priority;
+    if (t->io_priority > p) p = t->io_priority;
+    if (t->boosted && p < SCHED_BOOST_CAP) p = SCHED_BOOST_CAP;
+    if (t->inherited_priority > p) p = t->inherited_priority;
+    if (p == t->effective_priority) return;
+    /* Close the old service interval before donation/boost withdrawal;
+     * otherwise a short inherited turn could disappear at unlock. */
+    if (t == g_current && cpu_account) cpu_account();
+    if (t->state == T_READY) rq_remove(t);
+    t->effective_priority = p;
+    if (t->state == T_READY) rq_link(t);
+    if (g_current && ((t->state == T_READY && p > g_current->effective_priority) || t == g_current))
+        g_need_resched = true;
+    if (ksync_priority_changed) ksync_priority_changed(t);
+}
+
+void task_set_class(struct task *t, enum task_prio prio)
+{
+    uint32_t f = irq_save();
+    t->prio = prio;
+    t->configured_priority = 0;
+    priority_update(t);
+    irq_restore(f);
+}
+void task_set_base(struct task *t, enum task_prio prio, unsigned level)
+{
+    uint32_t f = irq_save();
+    t->prio = prio;
+    t->configured_priority = level < SCHED_LEVELS ? level : SCHED_LEVELS - 1;
+    priority_update(t);
+    irq_restore(f);
+}
+void task_set_inherited(struct task *t, unsigned p)
+{
+    uint32_t f = irq_save();
+    t->inherited_priority = p < SCHED_LEVELS ? p : SCHED_LEVELS - 1;
+    priority_update(t);
+    irq_restore(f);
+}
+void task_focus(struct task *t)
+{
+    uint32_t f = irq_save();
+    if (ui_focus != t) {
+        struct task *old = ui_focus;
+        ui_focus = t;
+        if (old) {
+            old->focused = false;
+            if (old->input_priority) scheduler_stats.input_expired++;
+            old->input_priority = 0; old->input_expiry = 0;
+            priority_update(old);
+        }
+        if (t) { t->focused = true; priority_update(t); }
+    }
+    irq_restore(f);
+}
+void task_input_delivered(struct task *t)
+{
+    uint32_t f = irq_save();
+    /* The compositor owns shell/internal windows after the last client
+     * leaves. Its owned input grant is the delivery boundary in that case. */
+    if (t && !ui_focus && t->prio == P_INTERACTIVE) task_focus(t);
+    if (t && t == ui_focus && t->prio != P_DEVICE && t->prio != P_IDLE) {
+        priority_init(t);
+        unsigned p = t->base_priority + 2;
+        t->input_priority = p > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : p;
+        t->input_expiry = g_ticks + 20;
+        scheduler_stats.input_granted++;
+        priority_update(t);
+    }
+    irq_restore(f);
+}
+void task_io_completed(struct task *t)
+{
+    uint32_t f = irq_save();
+    if (t && t->state == T_BLOCKED && t->prio != P_DEVICE && t->prio != P_IDLE) {
+        priority_init(t);
+        unsigned p = t->base_priority + 1;
+        t->io_priority = p > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : p;
+        t->io_ticks = 10;
+        scheduler_stats.io_granted++;
+        priority_update(t);
+    }
+    irq_restore(f);
+}
+void task_device_deadline(struct task *t, uint64_t deadline)
+{
+    uint32_t f = irq_save(); t->service_deadline = deadline; irq_restore(f);
+}
+void sched_snapshot(struct sched_stats *out)
+{
+    uint32_t f = irq_save(); *out = scheduler_stats; irq_restore(f);
+}
+static void rq_push(struct task *t)
+{
+    priority_init(t);
+    t->ready_since = g_ticks;
+    rq_link(t);
+}
+static bool tick_reached(uint64_t deadline)
+{ return g_ticks - deadline < (1ull << 63); }
+static bool device_urgent(const struct task *t)
+{
+    return t->prio == P_DEVICE && t->service_deadline && tick_reached(t->service_deadline);
+}
+static struct task *rq_take(unsigned p)
+{
+    struct task *t = rq_head[p];
+    rq_head[p] = t->next;
+    if (!rq_head[p]) rq_tail[p] = 0;
+    t->next = 0;
+    return t;
+}
 static struct task *rq_pop(void)
 {
     const struct task *focus = dosvm_task_irq ? dosvm_task_irq() : 0;
     if (!focus) focus = dosvm_task_focus ? dosvm_task_focus() : 0;
-    if (focus != focus_task || g_ticks - focus_window >= FOCUS_PERIOD) {
-        focus_task = focus; focus_window = g_ticks; focus_ticks = 0;
-    }
-    /* Device work (including the existing starvation boost) still wins.
-     * Within the rest, dosvm_task_focus grants a busy focused DOS window
-     * 8/10 ticks. Idle VMs withdraw the focus token, including the short
-     * event-handling tail after a wake; other tasks then use normal queues. */
-    if (!rq_head[P_DEVICE] && focus && focus_ticks < FOCUS_BUDGET) {
-        for (int p = 0; p < P_COUNT; p++) {
-            struct task **link = &rq_head[p], *prev = 0;
-            while (*link && *link != focus) { prev = *link; link = &(*link)->next; }
-            if (*link) {
-                struct task *t = *link;
-                *link = t->next;
-                if (rq_tail[p] == t) rq_tail[p] = prev;
-                t->next = 0;
-                return t;
-            }
-        }
-    }
-    for (int p = 0; p < P_COUNT; p++) {
-        struct task *t = rq_head[p];
-        if (t) {
-            rq_head[p] = t->next;
-            if (!rq_head[p])
-                rq_tail[p] = 0;
-            t->next = 0;
+    focus_task = focus;
+    /* Starvation dispatch and native input/inheritance take precedence over
+     * DOS preference. Service budget is aggregate, including voluntary yields. */
+    for (int p = SCHED_LEVELS - 1; p >= 0; p--) {
+        for (struct task *t = rq_head[p]; t; t = t->next) if (device_urgent(t) || t->inherited_priority >= SCHED_SERVICE_MIN) {
+            rq_remove(t);
+            if (device_throttled()) scheduler_stats.audio_urgent++;
             return t;
         }
     }
+    /* Reserve a bounded overdue dispatch before nonurgent device work;
+     * actual service deadlines above retain precedence. */
+    for (struct task *t = rq_head[SCHED_BOOST_CAP]; t; t = t->next)
+        if (t->boosted) { rq_remove(t); return t; }
+    for (int p = SCHED_LEVELS - 1; p >= (int)SCHED_BOOST_CAP; p--)
+        if (rq_head[p]) return rq_take(p);
+    if (focus && focus->state == T_READY && focus_ticks < FOCUS_BUDGET &&
+        focus->effective_priority >= SCHED_NORMAL) {
+        /* A foreground native input boost or donated lock owner beats a VM. */
+        for (int p = SCHED_BOOST_CAP - 1; p > (int)focus->effective_priority; p--)
+            if (rq_head[p] && (p > (int)SCHED_FOREGROUND || rq_head[p]->input_priority || rq_head[p]->inherited_priority)) return rq_take(p);
+        struct task *t = (struct task *)focus; rq_remove(t); return t;
+    }
+    for (int p = SCHED_LEVELS - 1; p >= 0; p--) if (rq_head[p]) return rq_take(p);
     return 0;
 }
-
-static void rq_remove(struct task *t)
-{
-    struct task **pp = &rq_head[t->prio], *prev = 0;
-    while (*pp) {
-        if (*pp == t) {
-            *pp = t->next;
-            if (rq_tail[t->prio] == t)
-                rq_tail[t->prio] = prev;
-            t->next = 0;
-            return;
-        }
-        prev = *pp;
-        pp = &(*pp)->next;
-    }
-}
-
 static bool rq_any(void)
 {
-    for (int p = 0; p < P_COUNT; p++)
-        if (rq_head[p])
-            return true;
+    for (unsigned p = 0; p < SCHED_LEVELS; p++) if (rq_head[p]) return true;
     return false;
 }
 
@@ -162,6 +325,7 @@ static struct task *task_alloc(const char *name, enum task_prio prio, bool user)
     t->id = next_id++;
     t->generation = 1;
     t->prio = prio;
+    priority_init(t);
     t->user = user;
     t->state = T_BLOCKED;
     unsigned i = 0;
@@ -237,9 +401,13 @@ struct task *task_create_user(const char *name, enum task_prio prio, uint32_t en
 void task_start(struct task *t)
 {
     uint32_t f = irq_save();
+    if (t->state != T_BLOCKED) { irq_restore(f); return; }
+    if (ksync_task_ready) ksync_task_ready(t);
+    priority_update(t);
+    scheduler_stats.wakeups++;
     t->state = T_READY;
     rq_push(t);
-    if (g_current && t->prio < g_current->prio) g_need_resched = true;
+    if (g_current && t->effective_priority > g_current->effective_priority) g_need_resched = true;
     irq_restore(f);
 }
 
@@ -248,6 +416,8 @@ struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
     struct task *t = task_alloc(p->name[0] ? p->name : "native", P_NORMAL, true);
     if (!t)
         return 0;
+    task_set_base(t, P_NORMAL, p->personality == PROC_WIN32 ?
+        (unsigned)proc_priority_win32(0x20, 0, false) : (unsigned)proc_priority_posix(0, 0, 0));
     t->as = p->memory->as;           /* borrowed directory, never destroyed by task */
     struct trap_frame tf;
     memset(&tf, 0, sizeof(tf));
@@ -273,10 +443,30 @@ void task_native_frame(struct task *t, uint32_t esp)
 void schedule(void)
 {
     uint32_t f = irq_save();
+    /* Capture short turns that ended between PIT ticks before choosing the
+     * next task. This also covers repeated voluntary device yields. */
+    if (cpu_account) cpu_account();
+    device_cpu_advance();
+    if (device_cpu_refresh) {
+        device_cpu_refresh = false;
+        for (struct task *t = all_tasks; t; t = t->all_next) if (t->prio == P_DEVICE) {
+            bool was_demoted = t->device_demoted;
+            priority_update(t);
+            if (!was_demoted && t->device_demoted) {
+                scheduler_stats.budget_exhausted++;
+                if (cpu_overrun) cpu_overrun(t);
+            }
+        }
+    }
     struct task *prev = g_current;
+    priority_init(prev);
     bool preempted = prev->state == T_RUNNING && g_need_resched;
+    if (prev->boosted) {
+        prev->boosted = false;
+        scheduler_stats.starvation_expired++;
+        priority_update(prev);
+    }
     if (prev->state == T_BLOCKED) {
-        if (prev->device_demoted) { prev->prio = P_DEVICE; prev->device_demoted = false; }
         prev->device_ticks = 0;
     }
     if (prev->state == T_RUNNING && prev != idle_task) {
@@ -290,18 +480,21 @@ void schedule(void)
     struct task *next = rq_pop();
     if (!next)
         next = idle_task;
-    if (next->boosted) {
-        next->boosted = false;            /* one boosted dispatch, then normal priority */
-        next->prio = P_NORMAL;
-    }
     g_need_resched = false;
     slice_left = dosvm_task_quantum ? dosvm_task_quantum(next, g_quantum_ticks) : g_quantum_ticks;
+    if (next->boosted || next->prio == P_DEVICE || next->effective_priority >= SCHED_SERVICE_MIN) {
+        if (slice_left > 2) slice_left = 2;
+    }
     if (next == focus_task && focus_ticks < FOCUS_BUDGET && slice_left > FOCUS_BUDGET - focus_ticks)
         slice_left = FOCUS_BUDGET - focus_ticks;
-    if (focus_task && focus_task->state == T_READY && next != focus_task && next->prio != P_DEVICE) {
-        uint32_t remaining = FOCUS_PERIOD - (uint32_t)(g_ticks - focus_window);
-        if (slice_left > remaining) slice_left = remaining;
+    if (focus_task && focus_task->state == T_READY && next != focus_task && next->prio != P_DEVICE && slice_left > 2)
+        slice_left = 2;
+    if (device_urgent(next)) {
+        next->state = T_RUNNING; /* already removed from the ready queue */
+        next->device_demoted = false;
+        priority_update(next);
     }
+    next->service_deadline = 0; /* a dispatch serves the annotated wake deadline */
     if (cpu_switch) cpu_switch(prev, next);
     if (next == prev) {
         prev->state = T_RUNNING;
@@ -357,42 +550,56 @@ void schedule(void)
 
 void sched_tick(void)
 {
-    if (g_current == focus_task && focus_ticks < FOCUS_BUDGET) focus_ticks++;
+    device_cpu_advance();
+    bool charged = g_current && g_current->effective_priority >= SCHED_SERVICE_MIN;
+    if (device_history & (1u << 9)) device_used--;
+    device_history = ((device_history << 1) | charged) & 1023u;
+    if (charged) device_used++;
+    if (g_current && g_current != idle_task && !charged) {
+        ordinary_ticks++;
+        if (g_current == focus_task) focus_ticks++;
+        if (ordinary_ticks == FOCUS_PERIOD) ordinary_ticks = focus_ticks = 0;
+    }
     file_clock_tick();
     if (dosvm_tick) dosvm_tick();
     for (struct task *t = all_tasks; t; t = t->all_next) {
+        if (t->input_priority && tick_reached(t->input_expiry)) {
+            t->input_priority = 0; t->input_expiry = 0; scheduler_stats.input_expired++;
+            priority_update(t);
+        }
+        if (t == g_current && t->io_ticks && !--t->io_ticks) {
+            t->io_priority = 0; scheduler_stats.io_expired++; priority_update(t);
+        }
+        if (t == g_current && t->boosted) {
+            t->boosted = false; scheduler_stats.starvation_expired++; priority_update(t);
+        }
+        if (t->prio == P_DEVICE) {
+            bool demote = device_throttled() && !device_urgent(t);
+            if (demote != t->device_demoted) {
+                t->device_demoted = demote; priority_update(t);
+                if (demote) {
+                    scheduler_stats.budget_exhausted++;
+                    if (cpu_overrun) cpu_overrun(t);
+                }
+            }
+        }
         if (t->state == T_BLOCKED && t->wake_tick && g_ticks >= t->wake_tick) {
             t->wake_tick = 0;
-            t->state = T_READY;
-            rq_push(t);
-            if (g_current && t->prio < g_current->prio) g_need_resched = true;
+            task_start(t);
         }
-        /* Starvation guard: a normal task ready for one second is boosted
-         * once to the interactive queue (execution-abi.md). */
+        /* One bounded dispatch at 15; preserve the original ready timestamp. */
         if (t->state == T_READY && t->prio == P_NORMAL && !t->boosted &&
-            g_ticks - t->ready_since >= 1000) {
-            rq_remove(t);
-            t->prio = P_DEVICE;           /* top priority: one guaranteed dispatch */
-            t->boosted = true;
-            rq_push(t);
-            g_starvation_boosts++;
+            g_ticks - t->ready_since >= 100) {
+            t->boosted = true; priority_update(t);
+            g_starvation_boosts++; scheduler_stats.starvation_granted++;
             g_need_resched = true;
         }
-    }
-    if (g_current && g_current->prio == P_DEVICE && !g_current->boosted &&
-        ++g_current->device_ticks >= 10) {
-        g_current->prio = P_NORMAL;
-        g_current->device_demoted = true;
-        g_need_resched = true;
-        if (cpu_overrun) cpu_overrun(g_current);
     }
     if (g_current == idle_task) {
         g_idle_ticks++;
-        if (rq_any())
-            g_need_resched = true;
-    } else if (slice_left && --slice_left == 0) {
-        g_need_resched = true;
-    }
+        if (rq_any()) g_need_resched = true;
+    } else if (slice_left && --slice_left == 0) g_need_resched = true;
+    if (g_current == focus_task && focus_ticks >= FOCUS_BUDGET) g_need_resched = true;
 }
 
 struct task *sched_tasks(void) { return all_tasks; }
@@ -407,8 +614,8 @@ void kpreempt_point(void)
      * Never renew the focused VM's 8/10 budget or bypass device work. */
     const struct task *urgent = dosvm_task_irq ? dosvm_task_irq() : 0;
     if (urgent && urgent != g_current && urgent->state == T_READY &&
-        urgent->prio <= g_current->prio &&
-        (urgent != focus_task || g_ticks - focus_window >= FOCUS_PERIOD || focus_ticks < FOCUS_BUDGET))
+        urgent->effective_priority >= g_current->effective_priority &&
+        (urgent != focus_task || focus_ticks < FOCUS_BUDGET))
         g_need_resched = true;
     if (g_need_resched) schedule();
 }
@@ -434,7 +641,8 @@ void task_exit(int code)
     struct task *t = g_current;
     bool native = proc_task_exiting(t, code);
     t->exit_code = code;
-    ksync_task_exit(t);                 /* held mutex here is a kernel bug */
+    if (ui_focus == t) task_focus(0);
+    ksync_task_exit(t);
     if (!native)
         fpu_task_release(t);
     t->state = T_ZOMBIE;
@@ -452,12 +660,12 @@ void task_kill(struct task *t, int code)
         return;
     }
     uint32_t f = irq_save();
-    if (t->state == T_READY)
-        rq_remove(t);
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
         bool native = proc_task_exiting(t, code);
         t->exit_code = code;
+        if (ui_focus == t) task_focus(0);
         ksync_task_exit(t);
+        if (t->state == T_READY) rq_remove(t);
         t->state = T_ZOMBIE;
         if (!native)
             fpu_task_release(t);

@@ -117,7 +117,10 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
     if (!err) {
         task_native_frame(thread->task, esp);
-        if (desktop) thread->task->prio = P_INTERACTIVE;
+        if (desktop) {
+            task_set_class(thread->task, P_INTERACTIVE);
+            task_focus(thread->task);
+        }
     }
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
@@ -276,4 +279,3 @@ void supervisor_observe_end(void)
     observed_probe[0] = 0;
     observed_pid = 0;
 }
-

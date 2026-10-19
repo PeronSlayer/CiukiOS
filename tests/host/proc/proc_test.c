@@ -58,8 +58,20 @@ void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); if (!as->pd_phys) return -ENOMEM; memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }
 void as_destroy(struct aspace *as) { CHECK(!as->pages && !as->tables); if (as->pd_phys) pmm_free(as->pd_phys); memset(as, 0, sizeof(*as)); }
-void kwait_init(struct kwait *q) { q->head = 0; }
+void kwait_init(struct kwait *q) { memset(q,0,sizeof(*q)); }
 void kwait_wake_all(struct kwait *q) { (void)q; }
+void kwait_wake_io(struct kwait *q) { (void)q; }
+void task_device_deadline(struct task *t,uint64_t d) { t->service_deadline=d; }
+void task_set_class(struct task *t,enum task_prio p) { t->prio=p; }
+static struct task *fixture_focus;
+unsigned fixture_inputs;
+void task_focus(struct task *t) {
+    if (fixture_focus) fixture_focus->focused=false;
+    fixture_focus=t;if(t)t->focused=true;
+}
+void task_input_delivered(struct task *t) { if(t && t==fixture_focus)fixture_inputs++; }
+static struct task *fixture_tasks;
+struct task *sched_tasks(void) { return fixture_tasks ? fixture_tasks : g_current; }
 void fpu_task_release(struct task *t) { t->fpu_valid = false; }
 void arch_tls_switch(uint32_t base, bool native) { tls_base = native ? base : 0; }
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)

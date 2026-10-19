@@ -20,6 +20,7 @@ struct overrun_event { char name[16]; uint32_t id, count; };
 static struct overrun_event overrun_events[16];
 static unsigned overrun_used, overrun_lost;
 static bool forced, threshold, resched_pending;
+static struct sched_stats sched_base;
 
 static uint64_t stamp(void) { return g_tsc_per_ms ? ktime_cycles() : g_ticks; }
 static uint64_t per_ms(void) { return g_tsc_per_ms ? g_tsc_per_ms : 1; }
@@ -68,7 +69,9 @@ static void charge(struct task *t, uint64_t now)
     t->run_cycles += d;
     classes[t->account_prio] += d;
     t->account_start = now;
+    sched_charge_runtime(t, d, per_ms());
 }
+void cpu_account(void) { if (g_current) charge(g_current, stamp()); }
 void cpu_switch(struct task *prev, struct task *next)
 {
     uint64_t now = stamp();
@@ -86,7 +89,7 @@ void cpu_switch(struct task *prev, struct task *next)
     if (!prev) window_start = now;
     if (prev != next) switches++;
     next->account_start = now;
-    next->account_prio = next->prio;
+    next->account_prio = next->device_demoted ? P_NORMAL : next->prio;
     next->stretch_start = now; next->stretch_sampled = false; next->active_stretch_eip = 0;
 }
 void cpu_reap(struct task *t)
@@ -203,6 +206,20 @@ static void cpu_emit(void)
     uint64_t irq_time = irq_cycles, exited_time = exited_cycles;
     uint64_t stretch_time = stretch_max, latency_time = resched_max;
     uint32_t sw = switches, ov = overruns, boosts = g_starvation_boosts - boost_base;
+    struct sched_stats sched_now;
+    sched_snapshot(&sched_now);
+    struct sched_stats sched_delta = {
+        .input_granted = sched_now.input_granted - sched_base.input_granted,
+        .input_expired = sched_now.input_expired - sched_base.input_expired,
+        .io_granted = sched_now.io_granted - sched_base.io_granted,
+        .io_expired = sched_now.io_expired - sched_base.io_expired,
+        .starvation_granted = sched_now.starvation_granted - sched_base.starvation_granted,
+        .starvation_expired = sched_now.starvation_expired - sched_base.starvation_expired,
+        .budget_exhausted = sched_now.budget_exhausted - sched_base.budget_exhausted,
+        .audio_urgent = sched_now.audio_urgent - sched_base.audio_urgent,
+        .wakeups = sched_now.wakeups - sched_base.wakeups
+    };
+    sched_base = sched_now;
     uint32_t site = stretch_eip, sid = stretch_id;
     char name[16], late[16];
     name_copy(name, stretch_name); name_copy(late, resched_name);
@@ -230,11 +247,21 @@ static void cpu_emit(void)
             .user_ticks = t->user_ticks - t->user_base, .stretch = t->max_stretch };
         name_copy(sample.name, t->name); sample.name[8] = 0;
         bool is_idle = t->prio == P_IDLE;
+        struct { unsigned class, base, effective, input, io, inherited, starvation, io_ticks;
+                 uint64_t expiry; } priority = {
+            t->prio, t->base_priority, t->effective_priority, t->input_priority,
+            t->io_priority, t->inherited_priority, t->boosted, t->io_ticks, t->input_expiry
+        };
         t->window_base = t->run_cycles; t->kernel_base = t->kernel_ticks; t->user_base = t->user_ticks;
         t->max_stretch = 0; t->stretch_eip = 0;
         if (t->stretch_start) t->stretch_start = now;
         t->stretch_sampled = false; t->active_stretch_eip = 0;
         irq_restore(f);
+        if (emit && !is_idle)
+            klog_periodic("[cpu] task=%s#%u class=%u base=%u effective=%u input=%u io=%u inherited=%u starvation=%u input_until=%llu io_ticks=%u",
+                sample.name, sample.id, priority.class, priority.base, priority.effective,
+                priority.input, priority.io, priority.inherited, priority.starvation,
+                priority.expiry, priority.io_ticks);
         if (!is_idle) for (unsigned i = 0; i < ARRAY_SIZE(top); i++) {
             if (d <= top[i].cycles) continue;
             for (unsigned j = ARRAY_SIZE(top) - 1; j > i; j--) top[j] = top[j - 1];
@@ -254,6 +281,10 @@ static void cpu_emit(void)
     unsigned normal = 1000 - idle - irq - device - interactive;
     klog_periodic("[cpu] window_ms=%u idle_pm=%u irq_pm=%u device_pm=%u interactive_pm=%u normal_pm=%u switches=%u boosts=%u overruns=%u exited_pm=%u",
         window, idle, irq, device, interactive, normal, sw, boosts, ov, exited);
+    klog_periodic("[cpu] boosts_input=%u/%u boosts_io=%u/%u boosts_starvation=%u/%u device_budget=%u audio_urgent=%u wakeups=%u",
+        sched_delta.input_granted, sched_delta.input_expired, sched_delta.io_granted, sched_delta.io_expired,
+        sched_delta.starvation_granted, sched_delta.starvation_expired, sched_delta.budget_exhausted,
+        sched_delta.audio_urgent, sched_delta.wakeups);
     char line[230]; unsigned at = 0;
     for (unsigned i = 0; i < ARRAY_SIZE(top) && top[i].cycles; i++)
     {

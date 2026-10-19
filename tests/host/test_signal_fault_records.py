@@ -54,7 +54,11 @@ static struct task *all_tasks, *idle_task;
 static uint32_t slice_left;
 /* f3-14: the focused DOS window's tick budget lives in the scheduler block */
 static const struct task *focus_task;
-static uint32_t focus_ticks;
+static uint32_t focus_ticks, ordinary_ticks, device_used;
+static uint16_t device_history;
+static struct sched_stats scheduler_stats;
+#define DEVICE_BUDGET 4u
+#define FOCUS_PERIOD 10u
 #define FOCUS_BUDGET 8u
 uint32_t g_starvation_boosts;
 uint64_t g_idle_ticks;   /* f2-33: the extracted sched_tick counts idle ticks */
@@ -64,6 +68,14 @@ void file_clock_tick(void) { }
 static bool rq_any(void) { return queued != 0; }
 static void rq_push(struct task *t) { CHECK(t == &subject_task); queued++; }
 static void rq_remove(struct task *t) { (void)t; CHECK(false); }
+/* This fixture verifies signal expiry states; full priority behavior uses
+ * production helpers in scheduler_priorities_test.c. */
+static void priority_update(struct task *t) { (void)t; (void)rq_remove; }
+static void device_cpu_advance(void) { }
+static bool device_throttled(void) { return device_used>=DEVICE_BUDGET; }
+static bool device_urgent(const struct task *t) { (void)t;return false; }
+static bool tick_reached(uint64_t deadline) { return g_ticks-deadline < (1ull<<63); }
+void task_start(struct task *t) { t->state=T_READY;rq_push(t); }
 SCHED_TICK
 RELEASE_INJECTION
 

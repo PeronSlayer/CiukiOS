@@ -126,6 +126,7 @@ void irq_set_handler(unsigned irq, irq_handler_t h) { CHECK(irq < 16); handlers[
 #define P2V(p) ((void *)(uintptr_t)(p))
 #define V2P(p) ((uint32_t)(uintptr_t)(p))
 #include "../../src/kernel/fs/fs_port.h"
+#include "scheduler_stubs.h"
 #include "../../src/kernel/core/sync.c"
 static bool irq_clock_model;
 static uint64_t irq_test_cycles;
@@ -441,7 +442,7 @@ static void test_sync(void)
     kmutex_init(&mutexes[1]);
     kmutex_lock(&mutexes[0]);
     PANICS(kmutex_lock(&mutexes[0]));
-    PANICS(ksync_task_exit(g_current));
+    /* Owner-death release is exercised in the production scheduler replay. */
     kmutex_lock(&mutexes[1]);
     PANICS(kmutex_unlock(&mutexes[0]));
     kmutex_unlock(&mutexes[1]);
@@ -461,6 +462,16 @@ static void test_sync(void)
     tasks[2].wake_tick = 99;
     ksync_task_exit(&tasks[2]);
     CHECK(!test_wait.head && !waiters && !tasks[2].wake_tick);
+    /* The void API reports a persistent cycle after one real safety wait;
+     * callers using the timed API can recover instead (scheduler replay). */
+    struct kwait dependency; kwait_init(&dependency);dependency.owner=&tasks[1];
+    tasks[0].waiting_on=&dependency;kmutex_init(&mutexes[0]);
+    mutexes[0].owner=&tasks[0];kwait_set_owner(&mutexes[0].wait,&tasks[0]);
+    current(1);uint64_t cycle_started=g_ticks;
+    PANICS(kmutex_lock(&mutexes[0]));
+    CHECK(strstr(last_log,"cyclic wait timeout") && g_ticks-cycle_started==1000 && !waiters);
+    kwait_set_owner(&mutexes[0].wait,0);mutexes[0].owner=0;tasks[0].waiting_on=0;
+    CHECK(!owned_queues);
     printf("kernel services sync: PASS (fake schedule, IRQ wake, mutex/exit checks)\n");
 }
 

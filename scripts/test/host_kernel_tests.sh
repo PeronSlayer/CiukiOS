@@ -440,9 +440,9 @@ import re, sys
 root, out = map(Path, sys.argv[1:])
 source = (root / "src/kernel/core/task.c").read_text()
 declarations = source[source.index("static struct task *rq_head"):
-                      source.index("static void rq_push")]
+                      source.index("void task_stack_init")]
 functions = []
-for name in ("rq_push", "rq_pop", "rq_remove", "rq_any", "schedule", "sched_tick", "task_sleep_ms"):
+for name in ("schedule", "sched_tick", "task_sleep_ms", "task_start"):
     match = re.search(r"^(?:static )?[^\n]+\b" + name + r"\([^\n]*\)\n\{", source, re.M)
     assert match, name
     depth = 1
@@ -451,7 +451,7 @@ for name in ("rq_push", "rq_pop", "rq_remove", "rq_any", "schedule", "sched_tick
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
     functions.append(source[match.start():end] + "\n")
-(out / "signal_scheduler.inc").write_text(declarations + "\n".join(functions))
+(out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + declarations + "\n".join(functions))
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" -I "$out" \

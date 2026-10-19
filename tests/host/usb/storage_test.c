@@ -54,6 +54,7 @@ int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { (void)irq;(void)handler;(void)owner;assert(irq_lease_lost);return -EINVAL; }
 unsigned irq_wakes;
 void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++; }
+void kwait_wake_io(struct kwait *q) { kwait_wake_all(q); }
 const struct usb_hc_ops usb_ohci_ops={0};
 static struct model {
     struct usb_host h;

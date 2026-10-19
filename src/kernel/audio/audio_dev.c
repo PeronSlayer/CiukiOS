@@ -496,12 +496,16 @@ static void audio_worker_wait(void)
     bool fullscreen=display_fullscreen_active && display_fullscreen_active();
     unsigned wait_ms=cursor_retry ? 1 : audio.running ? (fullscreen ? 2 : 4) :
         b.published && b.published<audio.lead_periods ? 1 : 50;
-    /* A ready condition returns without sleeping. Under IRQ/refill overlap,
-     * that can demote this P_DEVICE task after 10 accumulated ticks. Retain
-     * pending work and force one real block, without resetting the guard or
-     * promoting a task from outside the scheduler. */
-    if (audio.pending && !audio.error) task_sleep_ms(1);
-    kwait_wait_until(&audio.changed, refill_pending, 0, deadline_after_ms(wait_ms));
+    /* A ready condition returns without sleeping. Retain pending work and
+     * force one real block between services. Aggregate device credit remains
+     * scheduler-owned; annotations preserve the existing active wake bounds. */
+    if (audio.pending && !audio.error) {
+        task_device_deadline(g_current, audio.running ? deadline_after_ms(1) : 0);
+        task_sleep_ms(1);
+    }
+    uint64_t deadline = deadline_after_ms(wait_ms);
+    task_device_deadline(g_current, audio.running ? deadline : 0);
+    kwait_wait_until(&audio.changed, refill_pending, 0, deadline);
 }
 static void audio_worker(void *arg)
 {

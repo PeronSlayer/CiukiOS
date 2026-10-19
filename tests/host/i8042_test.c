@@ -436,6 +436,7 @@ void kwork_yield(void) { CHECK(false); }
 /* sync.c contains RDTSC, never executed: g_cpu_tsc is false in this test.
  * Replace ONLY udelay: privileged native pacing becomes fake PIT time. */
 #define udelay sync_udelay
+#include "../../tests/host/scheduler_stubs.h"
 #include "../../src/kernel/core/sync.c"
 #undef udelay
 int udelay(uint32_t us)

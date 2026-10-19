@@ -380,6 +380,37 @@ static void test_desktop_channels(void)
     puts("desktop channels: queue cap, drain/EOF, SIGPIPE, atomic receive, attachment lifetime PASS");
 }
 
+static void test_desktop_scheduler_hints(void)
+{
+    struct process *p; struct proc_thread *t=make_process(proc_supervisor(),&p);desktop_select(t);
+    int32_t pair[2],grants[2];CHECK(!channel_pair(p,pair));
+    struct ciuki_message m={.length=1,.data={1}};desktop_message(p,&m);
+    CHECK(channel_send(p,pair[0],BUFFER,CIUKI_CHANNEL_FOCUS)==-EPERM);
+    CHECK(!grants_install(p,grants));
+    CHECK(channel_send(p,pair[0],BUFFER,CIUKI_CHANNEL_FOCUS|CIUKI_CHANNEL_UNFOCUS)==-EINVAL);
+    /* The window belongs to a different thread from the compositor. */
+    struct proc_thread *owner;
+    CHECK(!proc_thread_prepare(p,CIUKI_IMAGE_BASE,0,CIUKI_IMAGE_BASE,CIUKI_THREAD_STACK_MIN,0,0,false,&owner));
+    task_start(owner->task);
+    t->task->id=1001;owner->task->id=1002;t->task->generation=owner->task->generation=1;
+    fixture_tasks=t->task;t->task->all_next=owner->task;
+    desktop_select(owner);CHECK(!channel_send(p,pair[1],BUFFER,0));
+    desktop_select(t);CHECK(channel_recv(p,pair[0],BUFFER,DONTWAIT)==1);
+    desktop_message(p,&m);unsigned inputs=fixture_inputs;
+    CHECK(!channel_send(p,pair[0],BUFFER,CIUKI_CHANNEL_FOCUS|CIUKI_CHANNEL_INPUT));
+    CHECK(fixture_focus==owner->task && fixture_inputs==inputs+1);
+    for(unsigned i=1;i<CIUKI_CHANNEL_QUEUE_MAX;i++)CHECK(!channel_send(p,pair[0],BUFFER,0));
+    CHECK(channel_send(p,pair[0],BUFFER,DONTWAIT|CIUKI_CHANNEL_INPUT)==-EAGAIN && fixture_inputs==inputs+1);
+    desktop_select(owner);CHECK(channel_recv(p,pair[1],BUFFER,DONTWAIT)==1);
+    desktop_select(t);desktop_message(p,&m);
+    CHECK(!channel_send(p,pair[0],BUFFER,CIUKI_CHANNEL_UNFOCUS));CHECK(fixture_focus==t->task);
+    desktop_select(owner);CHECK(channel_recv(p,pair[1],BUFFER,DONTWAIT)==1);
+    desktop_select(t);desktop_message(p,&m);
+    CHECK(!channel_send(p,pair[0],BUFFER,CIUKI_CHANNEL_INPUT) && fixture_inputs==inputs+1);
+    task_focus(0);fixture_tasks=0;
+    desktop_clean(p);
+    puts("desktop scheduler hints: input-grant authority, endpoint thread identity, successful delivery only, focus loss PASS");
+}
 static void test_desktop_channel_rollback(void)
 {
     struct process *p; struct proc_thread *t = make_process(proc_supervisor(), &p); desktop_select(t);
@@ -1418,7 +1449,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
     test_native_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

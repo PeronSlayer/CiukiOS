@@ -47,7 +47,7 @@ static int hid_poll_result;
 static unsigned schedule_entries,schedule_qhs,schedule_tds,schedule_invalid;
 static bool route_ready;
 static int irq_add_error, irq_claim_error;
-static unsigned irq_added, irq_removed, irq_wakes;
+static unsigned irq_added, irq_removed, irq_wakes, irq_io_wakes;
 static bool irq_model_attached, irq_masked;
 static unsigned irq_mode_records, poll_mode_records;
 bool pci_irq_routed(const struct pci_func *p) { (void)p; return route_ready; }
@@ -57,6 +57,7 @@ int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 { assert(irq==11 && handler && owner);if(!irq_model_attached)return -EINVAL;irq_removed++;irq_model_attached=false;return 0; }
 static void (*wake_hook)(struct kwait *);
 void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++;if(wake_hook)wake_hook(q); }
+void kwait_wake_io(struct kwait *q) { irq_io_wakes++;kwait_wake_all(q); }
 static unsigned port_actions,recovery_records,descriptor_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }
@@ -725,7 +726,7 @@ static void setup(bool ohci,bool hub)
 {
     memset(&m,0,sizeof(m));memset(&g_boot,0,sizeof(g_boot));lease_count=0;
     wdh_ack_hook=NULL;
-    route_ready=false;irq_add_error=irq_claim_error=0;irq_added=irq_removed=irq_wakes=0;
+    route_ready=false;irq_add_error=irq_claim_error=0;irq_added=irq_removed=irq_wakes=irq_io_wakes=0;
     irq_model_attached=irq_masked=false;irq_mode_records=poll_mode_records=0;
     connect_records=disconnect_records=reset_records=enable_records=0;
     descriptor_starts=descriptor_results=descriptor_failures=0;
@@ -1521,18 +1522,19 @@ static void shared_irq(bool ohci)
     unsigned w=writes;assert(!usb_host_irq(&m.host) && writes==w && !irq_wakes);
     if(ohci)m.regs[off/4]|=2;
     else m.regs[0]|=1u<<16;
-    assert(usb_host_irq(&m.host) && m.host.interrupts==1 && m.host.irq_pending && irq_wakes==2);
+    assert(usb_host_irq(&m.host) && m.host.interrupts==1 && m.host.irq_pending && irq_wakes==2 && irq_io_wakes==1);
     assert(!(read_reg(&m,off,width)&(ohci ? 2u : 1u)));
     assert(!usb_host_irq(&m.host));
     if(ohci) {
         m.regs[off/4]|=0x44; /* root change plus unrelated disabled SF */
-        assert(usb_host_irq(&m.host) && m.host.interrupts==2 && irq_wakes==4);
+        assert(usb_host_irq(&m.host) && m.host.interrupts==2 && irq_wakes==4 && irq_io_wakes==1);
         assert(read_reg(&m,off,width)==4 && !usb_host_irq(&m.host));
     }
     /* W1C in IRQ must not hide a fatal cause from the worker. */
     if(ohci)m.regs[off/4]|=0x10;
     else m.regs[0]|=8u<<16;
     assert(usb_host_irq(&m.host) && m.host.irq_status==(ohci ? 0x10u : 8u) && !m.host.quarantined);
+    assert(irq_io_wakes==1); /* fatal/root/poll notifications are not completions */
     usb_step(&m.host);
     assert(m.host.quarantined && !m.host.irq_attached && irq_removed==1);
     for(unsigned failure=0;failure<3;failure++) {

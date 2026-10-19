@@ -132,7 +132,15 @@ void desk_flush(struct desktop *d, int i)
     struct desk_client *c = &d->clients[i];
     unsigned budget = DESK_TX_MAX;
     while (c->channel >= 0 && c->tx_count && budget--) {
-        int r = d->ops.send(c->channel, &c->tx[c->tx_head], DONTWAIT);
+        struct ciuki_message *message = &c->tx[c->tx_head];
+        unsigned flags = DONTWAIT;
+        if (message->data[1] == DESK_FOCUS && message->length == 8)
+            flags |= desk_get32(message->data+4) ? CIUKI_CHANNEL_FOCUS : CIUKI_CHANNEL_UNFOCUS;
+        if (i == d->focus && message->length == 44 &&
+            (message->data[1] == DESK_KEY || message->data[1] == DESK_BUTTON || message->data[1] == DESK_MOTION) &&
+            desk_get32(message->data+16) != CIUKI_INPUT_RESYNC)
+            flags |= CIUKI_CHANNEL_INPUT;
+        int r = d->ops.send(c->channel, message, flags);
         if (r < 0) {
             if (errno == EPIPE || errno == EBADF) desk_drop_client(d, i);
             return;
