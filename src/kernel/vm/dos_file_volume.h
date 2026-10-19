@@ -12,6 +12,10 @@ struct dos_file_volume {
 };
 int dos_file_volume_open(struct dos_file_volume *,struct block_cache *workspace,struct blkdev *logical_provider,bool writable);
 int dos_file_volume_close(struct dos_file_volume *);
+/* After a failed close, discard this quiescent private logical mount without
+ * I/O. Refuses other tables/claims/in-flight operations; caller retains and
+ * reports the original durability error. Never applies to native volumes. */
+int dos_file_volume_discard(struct dos_file_volume *);
 /* The BIOS path enters this same reservation; provider callbacks used by FAT
  * must call the source directly, rather than recursively entering this gate. */
 int dos_file_volume_raw(struct dos_file_volume *,uint32_t lba,void *sector,bool write,const struct vfs_request *);

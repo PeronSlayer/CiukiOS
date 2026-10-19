@@ -1150,16 +1150,19 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         destroying[slot]=false;
         return video_error;
     }
+    int file_cleanup=0;
     if (dosvm_file_destroy) {
         int file_error=dosvm_file_destroy(v);
         if (file_error) {
             v->info.cleanup_error=file_error; v->info.data_loss=v->info.dirty;
             destroying[slot]=false; return file_error;
         }
+        file_cleanup=v->info.cleanup_error;
     }
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);
     int e = dosvm_disk_close(v, forced || v->info.reason != DOSVM_EXIT);
+    if (!e) e=file_cleanup;
     if (e && v->info.dirty) v->info.data_loss = true;
     if (audio_vm_detach) audio_vm_detach(key); /* f4-05: revoke the mixer source first */
     dosvm_audio_close(v);

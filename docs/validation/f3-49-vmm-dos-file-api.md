@@ -141,3 +141,83 @@ games and hardware timing. The lead owns f3-47 integration and source review.
 The checkout used here predates the f3-47 cache commits; the source provider seam
 is ready for their `disk_read_locked`/`disk_write_locked` implementations, but
 the focused harness does not qualify the incoming LRU itself.
+
+## Continuation after f1-83 (2026-10-19)
+
+Amendment 1 supplies a task-scoped request context through the existing f1-83
+pool, including controller-worker calldowns and nested private-image VFS access.
+Logical FAT reads/writes/flushes use that same request interface. Provider-gate,
+cache admission/fill/batch waits and namespace reacquisition observe its original
+2000 ms deadline. Queued cancellation unlinks and completes a request even when
+an unrelated command is issued; issued buffers remain owned until the existing
+controller stop/retirement path completes. ATA/USB changes only consult this
+request seam at existing polling/timeout boundaries; register programming and
+uncertain-write retry policy are unchanged.
+
+Cancellation is a caller outcome rather than a sticky cache-device failure.
+Interrupted mutations retain FAT's existing ordered-publication/read-only
+failure policy: a lost allocation is permitted after an uncertain failure;
+duplicate ownership or a published short chain is not. Refused durable unmount
+remains an error. A quiescent failed private mount can be discarded without I/O;
+live tables, native/legacy claims, range locks or operations refuse discard.
+Native mounts retain their existing policy. The bridge's first `cleanup_status`
+is preserved in the controller's `cleanup_error`, including after successful
+reference teardown. Bookkeeping reacquisition must retire its already-published
+references under the original short lock; cancellation does not abandon a stack
+fill or a VFS mutation guard. Its completion bound depends on the R1 bounded
+namespace/cache holder and controller retirement contracts, not on forcibly
+freeing a live buffer at the deadline.
+
+An exhausted DTA no longer destroys authority for other copies. Identical
+PSP/directory/pattern/mask queries reuse authority while retaining each DTA's
+position. Authority is reclaimed at owning PSP exit, VM stop and mount-generation
+change; another PSP's exit cannot revoke it. The fixed 32-authority admission
+limit remains explicit: different queries can exhaust it until those lifetime
+boundaries. Invisible guest copies cannot safely be counted or evicted at EOF.
+This is a bounded resource policy, not unlimited copied-search storage.
+
+The cache-only RO directory loops now cooperate during insertion-sort shifts,
+duplicate detection, alias collision scans, assignment and lookup. The host
+latency test instruments those production loops (512 reverse-order colliding
+names), using 1 us per metadata-page traversal, 64 us per maximum-name comparison
+and 2 us per pair of node copies. Its measured modeled longest span is 1.5962 ms;
+these conservative CPU costs are not physical T23 measurements.
+
+Primary-source reconciliation for the continuation:
+
+- Microsoft [MS-DOS 3.3 reference, 40h/4Eh/4Fh](https://www.pcjs.org/documents/books/mspl13/msdos/dosref33/)
+  and [RBIL FindNext](https://fd.lod.bz/rbil/interrup/dos_kernel/214f.html):
+  search continuation resides in the DTA; preserve independent copied positions.
+- [RBIL 6C00h](https://fd.lod.bz/rbil/interrup/dos_kernel/216c00.html):
+  BH commit/no-critical bits retain their existing DOS meanings. Fault tests
+  distinguish exact partial counts from errors and exercise real flush failures.
+- Microsoft [DDK IOS services](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F60.HTM),
+  [load groups](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F5A.HTM),
+  [deadlocks](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM),
+  [IFSMgr FileIO](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM):
+  retain packet/handle ownership and completion semantics across calldowns;
+  do not claim NTVDM architecture or infer a historical numerical deadline.
+- Microsoft [Q223282](https://helparchive.huntertur.net/document/108125) and
+  [VxD architecture](https://techshelps.github.io/MSDN/TECHART/html/msdn_chicvxd.htm)
+  remain accessible. Complete DDK hook/reflection/SFT topics remain unavailable;
+  these two documents do not fill that source-access gap.
+- FreeDOS [master dosfns.c](https://raw.githubusercontent.com/FDOS/kernel/master/kernel/dosfns.c)
+  (`DosRWSft`, `DosCloseSft`) is accessible as a behavioral cross-check;
+  [ke2043 inthndlr.c](https://raw.githubusercontent.com/FDOS/kernel/ke2043/kernel/inthndlr.c)
+  is accessible, but the ke2043 dosfns URL remains unavailable. No continuation
+  behavior is adopted from unpinned master and no FreeDOS implementation is
+  copied. FreeDOS 1.3 executable equivalence remains for f3-51.
+- Microsoft's [FAT on-disk specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+  establishes chains and owning directory entries. Cancellation does not change
+  the separately contracted native FAT durability order or add f1-84 features.
+
+The extended focused harness covers all baseline H49 groups plus copied-search
+reclamation, initial/reacquired namespace, provider and controller request waits,
+cache fill/writeback cancellation, and each observed allocation/I/O point in
+create/write/truncate/rename/delete/close/autocommit, including stop injection.
+Its read-only remount checks unique ownership and sufficient chain length after
+each mutation fault. Full commands and final counts are in the local continuation
+report `build/codex/f3-49b-report.md`. The production provider gate is additionally
+executed by the DOS VM host harness. F3-50 binding is absent in this checkout;
+H49-01 live CPU replay remains explicitly pending for f3-51. No QEMU, image build
+or hardware qualification is claimed by this continuation.

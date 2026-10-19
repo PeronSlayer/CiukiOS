@@ -40,6 +40,30 @@ class KernelLatencyTests(unittest.TestCase):
                                 str(ROOT / 'src/kernel/fs/fs_port.c'), *extra, '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+    def test_bounded_dos_metadata_names(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='bounded-names-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/fs/fs_ro.c').read_text()
+            source = source.replace('for (struct ro_page *p = v->pages; p; p = p->next) {',
+                                    'for (struct ro_page *p = v->pages; p; p = p->next) { model_charge(1000);')
+            source = source.replace('const uint8_t *x=(const uint8_t *)a->name,',
+                                    'model_charge(64000); const uint8_t *x=(const uint8_t *)a->name,')
+            source = source.replace('*at(v,j)=*at(v,j-1);', 'model_charge(2000); *at(v,j)=*at(v,j-1);')
+            source = source.replace('path_equal(', 'model_equal(')
+            (temp / 'bounded_names.inc').write_text(source)
+            binary = temp / 'names'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(ROOT / 'src/kernel/fs'), '-I', str(temp),
+                            str(ROOT / 'tests/host/fs/bounded_dos_names_test.c'),
+                            *[str(ROOT / ('src/kernel/fs/' + name + '.c')) for name in
+                              ('fs_port', 'blkreq', 'cache', 'path')], '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_bounded_memory_walks(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)

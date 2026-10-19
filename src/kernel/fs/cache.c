@@ -45,6 +45,7 @@ static struct cache_device *device(struct block_cache *c, struct blkdev *d) {
     return 0;
 }
 static int remember(struct block_cache *c, struct blkdev *d, int e) {
+    if (e==-VFS_ETIMEOUT || e==-VFS_ECANCELLED) return e;
     struct cache_device *s=device(c,d);
     if (s && e && !s->error) s->error=e;
     return e;
@@ -71,6 +72,7 @@ static void clean(struct block_cache *c, struct cache_block *b) {
 /* Local timed event wait: preserve the port's event sequence handshake, but
  * do not turn a missing writer into an unbounded reader allocation wait. */
 static void wait_changed(struct block_cache *c, uint32_t ms) {
+    if (fs_request_current()) { (void)fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); return; }
 #ifdef FS_HOST
     struct timespec end; clock_gettime(CLOCK_REALTIME,&end);
     end.tv_sec+=ms/1000; end.tv_nsec+=(long)(ms%1000)*1000000;
@@ -79,10 +81,10 @@ static void wait_changed(struct block_cache *c, uint32_t ms) {
     fs_lock_drop(&c->lock); pthread_mutex_lock(&c->changed.mutex);
     while (seq==__atomic_load_n(&c->changed.sequence,__ATOMIC_ACQUIRE))
         if (pthread_cond_timedwait(&c->changed.changed,&c->changed.mutex,&end)) break;
-    pthread_mutex_unlock(&c->changed.mutex); fs_lock_take(&c->lock);
+    pthread_mutex_unlock(&c->changed.mutex); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
 #else
     struct fs_event_ticket t={&c->changed,c->changed.sequence}; fs_lock_drop(&c->lock);
-    kwait_wait_until(&c->changed.wait,fs_event_changed,&t,deadline_after_ms(ms)); fs_lock_take(&c->lock);
+    kwait_wait_until(&c->changed.wait,fs_event_changed,&t,deadline_after_ms(ms)); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
 #endif
 }
 static void scan_service(unsigned *work);
@@ -96,8 +98,9 @@ static struct cache_fill *filling(struct block_cache *c, struct blkdev *d, uint6
 }
 static int join_fill(struct block_cache *c, struct cache_fill *f, uint64_t lba, uint32_t count, void *buf) {
     f->waiters++;
-    while (!f->complete) fs_event_wait(&c->changed,&c->lock);
-    int e=f->error;
+    int e=0;
+    while (!f->complete && !e) e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE);
+    if (!e) e=f->error;
     if (c->refresh) c->refresh(c->refresh_ctx,f->dev);
     struct cache_device *state=device(c,f->dev);
     if (!e && (!state || state->epoch!=f->epoch || f->dev->media_generation!=f->generation || f->dev->quarantined)) e=-FS_EIO;
@@ -116,7 +119,7 @@ static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba,
     c->fills=&fill;
     fs_lock_drop(&c->lock);
     int e=blkdev_read(d,lba,count,buf);
-    fs_lock_take(&c->lock);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     state=device(c,d);
     if (!e && (!state || state->epoch!=epoch || d->media_generation!=generation || d->quarantined)) e=-FS_EIO;
@@ -131,12 +134,13 @@ static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba,
 static int wait_block(struct block_cache *c, struct cache_block *b) {
     if (b->waiters==255) fs_panic("cache waiters");
     b->waiters++;
-    while (b->busy) fs_event_wait(&c->changed,&c->lock);
+    int interrupted=0;
+    while (b->busy && !interrupted) interrupted=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE);
     struct cache_device *owner=b->dirty ? device(c,b->dev) : 0;
     int e=owner ? owner->error : b->io_error;
     if (b->invalid || (b->dev && b->generation!=b->dev->media_generation)) e=-FS_EIO;
     b->waiters--; fs_event_wake(&c->changed);
-    return e;
+    return interrupted ? interrupted : e;
 }
 static void unhash(struct block_cache *, struct cache_block *);
 /* Caller holds cache lock; reserve the bytes while the transport sleeps.
@@ -156,7 +160,7 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
     b->busy=true;
     fs_lock_drop(&c->lock);
     e=blkdev_request(d,BLK_WRITE,b->lba,1,b->data,BLK_BACKGROUND,s->frontier);
-    fs_lock_take(&c->lock);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!e && (b->invalid || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
     b->busy=false;
@@ -307,7 +311,8 @@ static int get(struct block_cache *c, struct blkdev *d, uint64_t lba, bool read,
 retry:
     fs_service();
     if (c->refresh) c->refresh(c->refresh_ctx,d);
-    int e=blkdev_range(d,lba,1); if (e) return e;
+    int e=fs_request_check(); if (e) return e;
+    e=blkdev_range(d,lba,1); if (e) return e;
     if (!d->read) return -FS_EINVAL;
     if (!device(c,d)) return -FS_ENOSPC;
     if ((e=layout_for(c,d))) return e;
@@ -340,7 +345,7 @@ retry:
             }
             c->cache_sync_evictions++; (void)write_block(c,dirty); goto retry;
         }
-        if (pending) { fs_event_wait(&c->changed,&c->lock); goto retry; }
+        if (pending) { int e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) return e; goto retry; }
         return blocked;
     }
     unhash(c,b); c->misses++;
@@ -423,7 +428,7 @@ void cache_destroy(struct block_cache *c) {
 }
 int cache_attach(struct block_cache *c, struct blkdev *d) {
     if (!c || !d || (d->sector_size!=512 && d->sector_size!=2048)) return -FS_EINVAL;
-    fs_lock_take(&c->lock);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     int e=device(c,d) ? layout_for(c,d) : -FS_ENOSPC;
     fs_lock_drop(&c->lock); return e;
 }
@@ -437,12 +442,13 @@ static void stats_locked(struct block_cache *c, struct cache_stats *out) {
         .cache_sync_evictions=c->cache_sync_evictions,.writer_waits=c->writer_waits,.writer_wait_ms=c->writer_wait_ms };
 }
 void cache_stats(struct block_cache *c, struct cache_stats *out) {
-    fs_lock_take(&c->lock); stats_locked(c,out);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); stats_locked(c,out);
     fs_lock_drop(&c->lock);
 }
 int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf) {
     if (!buf) return -FS_EINVAL;
-    fs_lock_take(&c->lock); struct cache_block *b;
+    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (admission) return admission;
+    struct cache_block *b;
     struct cache_fill *fill=d ? filling(c,d,lba) : 0;
     if (fill && !find(c,d,lba)) {
         int e=join_fill(c,fill,lba,1,buf); fs_lock_drop(&c->lock); return e;
@@ -451,7 +457,7 @@ int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf)
     uint32_t generation=d ? d->media_generation : 0;
     int e=get(c,d,lba,true,&b,&issued);
     if (!e) memcpy(buf,b->data,d->sector_size);
-    else if (!issued && !blkdev_range(d,lba,1) && d->read) {
+    else if (!issued && !fs_request_check() && !blkdev_range(d,lba,1) && d->read) {
         /* All slots may contain dirty data pinned by failed writeback.
          * A miss still has a read transport; never retry an issued read. */
         struct cache_device *state=device(c,d);
@@ -465,9 +471,9 @@ int cache_read(struct block_cache *c, struct blkdev *d, uint64_t lba, void *buf)
 }
 int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *buf) {
     if (!c || !d || !buf || d->sector_size!=512 || !count || count>BLKDEV_READ_SECTORS) return -FS_EINVAL;
-    fs_lock_take(&c->lock);
+    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (admission) return admission;
     if (c->refresh) c->refresh(c->refresh_ctx,d);
-    int e=blkdev_range(d,lba,count);
+    int e=fs_request_check(); if (!e) e=blkdev_range(d,lba,count);
     if (!e && !d->read) e=-FS_EINVAL;
     if (!e && !device(c,d)) e=-FS_ENOSPC;
     struct cache_device *state=!e ? device(c,d) : 0;
@@ -538,9 +544,9 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
 }
 int cache_read_ahead(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32_t count, void *sector) {
     if (!c || !d || !sector || d->sector_size!=512 || !count || count>BLKDEV_READ_SECTORS) return -FS_EINVAL;
-    fs_lock_take(&c->lock);
+    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (admission) return admission;
     if (c->refresh) c->refresh(c->refresh_ctx,d);
-    int e=blkdev_range(d,lba,count);
+    int e=fs_request_check(); if (!e) e=blkdev_range(d,lba,count);
     bool hit=!e && find(c,d,lba);
     fs_lock_drop(&c->lock);
     if (e) return e;
@@ -558,13 +564,14 @@ static int flush_device(struct block_cache *, struct blkdev *);
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!buf || !blkdev_durable(d)) return d && d->quarantined ? -FS_EQUARANTINED : -FS_EROFS;
-    fs_lock_take(&c->lock); struct cache_device *s=device(c,d); struct cache_block *b;
+    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (admission) return admission;
+    struct cache_device *s=device(c,d); struct cache_block *b;
     int e=!s ? -FS_ENOSPC : s->error;
     uint32_t generation=d->media_generation, epoch=s ? s->epoch : 0;
     if (!e && c->writer_online && s->dirty_bytes>2*c->dirty_budget) {
         uint32_t start=fs_now_ms(); c->writer_waits++;
         uint32_t progress=start, previous=s->dirty_bytes; bool assist=false;
-        while (!s->error && s->epoch==epoch && generation==d->media_generation && !d->quarantined &&
+        while (!(e=fs_request_check()) && !s->error && s->epoch==epoch && generation==d->media_generation && !d->quarantined &&
                s->dirty_bytes>=c->dirty_budget && c->writer_online) {
             request_writeback(c,s);
             if (assist) {
@@ -629,7 +636,7 @@ static int write_batch(struct block_cache *c, struct blkdev *d, uint32_t *flushe
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
     if (s->error) return s->error;
     uint32_t generation=d->media_generation, epoch=s->epoch;
-    while (c->batch_busy) fs_event_wait(&c->changed,&c->lock);
+    while (c->batch_busy) { int e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) return e; }
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     /* The buffer wait may outlive this media or even reuse its device slot.
      * An old barrier must not borrow a replacement device's dirty count. */
@@ -685,7 +692,7 @@ selected:
         if (!e) {
             const void *data=c->writeback_buffer ? c->writeback_buffer+i*d->sector_size : blocks[i]->data;
             uint64_t lba=blocks[i]->lba;
-            fs_lock_drop(&c->lock); e=blkdev_request(d,BLK_WRITE,lba,end-i,(void *)data,BLK_BACKGROUND,s->frontier); fs_lock_take(&c->lock);
+            fs_lock_drop(&c->lock); e=blkdev_request(d,BLK_WRITE,lba,end-i,(void *)data,BLK_BACKGROUND,s->frontier); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
             if (c->refresh) c->refresh(c->refresh_ctx,d);
             if (!e && (s->epoch!=epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
             for (unsigned j=i;j<end;j++) if (blocks[j]->invalid) e=-FS_EIO;
@@ -722,7 +729,7 @@ static int flush_device(struct block_cache *c, struct blkdev *d) {
     if (d->write_cache_state!=BLKDEV_CACHE_DISABLED) {
         uint32_t generation=d->media_generation,epoch=s->epoch;
         uint64_t frontier=s->frontier++;
-        fs_lock_drop(&c->lock); int e=blkdev_request(d,BLK_FLUSH,0,0,0,BLK_BACKGROUND,frontier); fs_lock_take(&c->lock);
+        fs_lock_drop(&c->lock); int e=blkdev_request(d,BLK_FLUSH,0,0,0,BLK_BACKGROUND,frontier); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
         if (c->refresh) c->refresh(c->refresh_ctx,d);
         if (s->epoch!=epoch || generation!=d->media_generation) return -FS_EIO;
         if (!e && d->quarantined) e=-FS_EIO;
@@ -737,24 +744,24 @@ static int barrier(struct block_cache *c, struct blkdev *d) {
     if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
     while (s->dirty_bytes) {
         uint32_t flushed=0; int e=write_batch(c,d,&flushed); if (e) return e;
-        if (!flushed) fs_event_wait(&c->changed,&c->lock);
+        if (!flushed) { int e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) return e; }
     }
     return flush_device(c,d);
 }
 int cache_barrier(struct block_cache *c, struct blkdev *d) {
-    fs_lock_take(&c->lock); int e=barrier(c,d); fs_lock_drop(&c->lock); return e;
+    int e=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (e) return e; e=barrier(c,d); fs_lock_drop(&c->lock); return e;
 }
 bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
     return __atomic_load_n(&c->writeback_pending,__ATOMIC_ACQUIRE) &&
         (int32_t)(now-__atomic_load_n(&c->next_writeback,__ATOMIC_ACQUIRE))>=0;
 }
 void cache_writer_wait(struct block_cache *c, uint32_t ms) {
-    fs_lock_take(&c->lock);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     if (!cache_writeback_due(c,fs_now_ms())) wait_changed(c,ms);
     fs_lock_drop(&c->lock);
 }
 bool cache_writeback_report(struct block_cache *c, uint32_t now, struct cache_stats *out) {
-    fs_lock_take(&c->lock); bool report=false;
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); bool report=false;
     if (!c->dirty_bytes) c->report_time=now;
     else if ((uint32_t)(now-c->report_time)>=5000) {
         c->report_time=now; stats_locked(c,out); report=true;
@@ -762,7 +769,7 @@ bool cache_writeback_report(struct block_cache *c, uint32_t now, struct cache_st
     fs_lock_drop(&c->lock); return report;
 }
 int cache_writeback_tick(struct block_cache *c, uint32_t now) {
-    fs_lock_take(&c->lock); int result=0; c->tick_flushed=0;
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); int result=0; c->tick_flushed=0;
     if (!cache_writeback_due(c,now)) { fs_lock_drop(&c->lock); return 0; }
     uint32_t start=fs_now_ms();
     for (unsigned i=0;i<CACHE_DEVICES;i++) {
@@ -795,11 +802,11 @@ int cache_writeback_tick(struct block_cache *c, uint32_t now) {
 int cache_error(struct block_cache *c, struct blkdev *d) {
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (d && d->quarantined) return -FS_EIO;
-    fs_lock_take(&c->lock); struct cache_device *s=device(c,d);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); struct cache_device *s=device(c,d);
     int e=s ? s->error : -FS_ENOSPC; fs_lock_drop(&c->lock); return e;
 }
 void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
-    fs_lock_take(&c->lock);
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     unsigned work=0;
     for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
         scan_service(&work);

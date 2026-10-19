@@ -306,6 +306,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/v86.c"
 #include "dosvm_work.inc"
 #include "../../src/kernel/vm/dosvm.c"
+#include "dosvm_request_context.inc"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
 #include "../../src/kernel/vm/dosvm_pit.c"

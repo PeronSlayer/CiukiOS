@@ -217,3 +217,22 @@ static void test_disk_latency(void)
     }
     puts("f3-47 latency: exact 100/1000/10000/50000us boundaries, interval reset, full-width records, allocation unwind PASS");
 }
+
+static uint64_t provider_test_clock(void *arg) { (void)arg; return (uint64_t)g_ticks*1000; }
+static unsigned provider_test_work;
+static void provider_test_pause(void *arg) { (void)arg; g_ticks++; provider_test_work++; }
+static void test_disk_provider_deadline(void) {
+    struct dosvm *v; struct dosvm_config cfg={.dpmi=true}; CHECK(!dosvm_create(&cfg,&v));
+    struct blkdev provider; dosvm_disk_provider_init(v,&provider);
+    struct vfs_wait_info info={0};
+    struct vfs_request r={.deadline=provider_test_clock(0)+2000000,.now=provider_test_clock,
+        .pause=provider_test_pause,.owner=49,.wait=&info};
+    host_storage_request=&r; v->disk_busy=true; uint8_t sector[512]; memset(sector,0xa5,sizeof(sector));
+    unsigned before=disk_reads;
+    CHECK(provider.read(&provider,0,1,sector)==-VFS_ETIMEOUT);
+    CHECK(provider_test_clock(0)==r.deadline && info.reason==VFS_WAIT_PROVIDER && info.elapsed_us==2000000);
+    CHECK(info.outcome==-VFS_ETIMEOUT && sector[0]==0xa5 && sector[511]==0xa5 && disk_reads==before && provider_test_work==2000);
+    v->disk_busy=false; host_storage_request=0;
+    CHECK(!provider.read(&provider,0,1,sector)); destroy(v,true); empty();
+    puts("H49-08 provider: PASS production disk gate, exact 2000 ms deadline, successor and unrelated work");
+}

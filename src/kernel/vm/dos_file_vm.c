@@ -109,9 +109,16 @@ int dosvm_file_disk(struct dosvm *v,uint32_t lba,void *sector,bool write) {
     return v->file_volume ? dos_file_volume_raw(v->file_volume,lba,sector,write,0) : -ENOSYS;
 }
 int dosvm_file_destroy(struct dosvm *v) {
-    if (v->files) dos_file_cancel(v->files);
+    if (v->files) { dos_file_cancel(v->files); v->info.cleanup_error=v->files->cleanup_status; }
     if (v->file_volume) {
-        int e=dos_file_volume_close(v->file_volume); if (e) return e;
+        int e=dos_file_volume_close(v->file_volume);
+        if (e) {
+            if (!v->info.cleanup_error) v->info.cleanup_error=e;
+            /* The worker is joined. A failed private image cannot pin the
+             * VM forever; report its durability loss while retiring its
+             * quiescent mount. Other clients/claims still force retention. */
+            if (dos_file_volume_discard(v->file_volume)) return e;
+        }
         v->file_volume=0;
     }
     return 0;

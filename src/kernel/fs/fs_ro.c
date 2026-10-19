@@ -14,7 +14,7 @@ static struct fs_ro_node *at(struct fs_ro_view *v, unsigned i)
 }
 static void view_free(struct fs_ro_view *v)
 {
-    while (v->pages) { struct ro_page *p = v->pages; v->pages = p->next; fs_page_free(p); }
+    while (v->pages) { fs_service(); struct ro_page *p = v->pages; v->pages = p->next; fs_page_free(p); }
     fs_free(v);
 }
 int fs_ro_mount(struct fs_ro_volume *v, const struct fs_ro_ops *ops, struct block_cache *c,
@@ -49,6 +49,8 @@ int fs_ro_check(struct fs_ro_volume *v)
 static bool conflict(struct fs_ro_view *v, const char *name, unsigned self)
 {
     for (unsigned i = 0; i < v->count; i++) if (i != self) {
+        /* Four UTF-8 comparisons/page walks: <= 1 ms at 250 us each. */
+        if (!(i&3)) { fs_service(); if (fs_request_check()) return true; }
         struct fs_ro_node *n = at(v, i);
         if (path_equal(name, n->name) || (n->alias[0] && path_equal(name, n->alias))) return true;
     }
@@ -84,13 +86,18 @@ static int byte_order(const struct fs_ro_node *a,const struct fs_ro_node *b) {
     if (*x!=*y) return *x<*y ? -1 : 1;
     return a->id<b->id ? -1 : a->id>b->id;
 }
-static void sort_view(struct fs_ro_view *v) {
+static int sort_view(struct fs_ro_view *v) {
     /* Once per directory generation, before aliases are assigned. */
     for (unsigned i=1;i<v->count;i++) {
+        fs_service(); int e=fs_request_check(); if (e) return e;
         struct fs_ro_node node=*at(v,i); unsigned j=i;
-        while (j && byte_order(&node,at(v,j-1))<0) { *at(v,j)=*at(v,j-1); j--; }
+        while (j && byte_order(&node,at(v,j-1))<0) {
+            if (!(j&1)) { fs_service(); if ((e=fs_request_check())) return e; }
+            *at(v,j)=*at(v,j-1); j--;
+        }
         *at(v,j)=node;
     }
+    return 0;
 }
 
 static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
@@ -102,6 +109,7 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
     memset(v, 0, sizeof(*v)); v->directory = dir;
     struct fs_ro_cursor cursor = { {0} }; struct ro_page **tail = &v->pages;
     for (;;) {
+        fs_service(); if ((e=fs_request_check())) break;
         struct fs_ro_node n;
         struct fs_ro_cursor before = cursor;
         e = vol->ops->readdir(vol, dir, &cursor, &n);
@@ -111,7 +119,10 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
         uint16_t units[256]; unsigned length;
         if ((e = path_validate_name(n.name, units, &length))) break;
         if (v->count == FS_RO_ENTRIES) { e = -FS_ENOSPC; break; }
-        for (unsigned i = 0; i < v->count; i++) if (path_equal(n.name, at(v, i)->name)) { e = -FS_EIO; break; }
+        for (unsigned i = 0; i < v->count; i++) {
+            if (!(i&3)) fs_service();
+            if (path_equal(n.name, at(v, i)->name)) { e = -FS_EIO; break; }
+        }
         if (e) break;
         if (!*tail || (*tail)->count == 4) {
             if (*tail) tail = &(*tail)->next;
@@ -119,8 +130,9 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
         }
         (*tail)->nodes[(*tail)->count++] = n; v->count++;
     }
-    if (!e) sort_view(v);
+    if (!e) e=sort_view(v);
     for (unsigned i = 0; !e && i < v->count; i++) {
+        fs_service(); if ((e=fs_request_check())) break;
         struct fs_ro_node *n = at(v, i); char alias[40];
         if (n->alias[0]) {
             if (!fs_ro_short_name(n->alias, alias) || conflict(v, alias, i)) { e = -FS_EIO; break; }
@@ -128,6 +140,7 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
         }
     }
     for (unsigned i = 0; !e && i < v->count; i++) {
+        fs_service(); if ((e=fs_request_check())) break;
         struct fs_ro_node *n = at(v, i); if (n->alias[0]) continue;
         if (fs_ro_short_name(n->name, n->alias) && !conflict(v, n->alias, i)) continue;
         n->alias[0] = 0;
@@ -146,6 +159,7 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
             ext[ne++]=short_character(ch) ? ch : '_';
         }
         for (unsigned serial=1;serial<=999999;serial++) {
+            fs_service(); if ((e=fs_request_check())) break;
             uint16_t result[12]; char digits[6]; unsigned nd=0,x=serial;
             do { digits[nd++]=(char)('0'+x%10); x/=10; } while (x);
             unsigned keep=nb<7-nd ? nb : 7-nd,used=0;
@@ -171,6 +185,7 @@ int fs_ro_lookup(struct fs_ro_volume *v, uint64_t dir, const char *name, struct 
     struct fs_ro_view *names; int e = view(v, dir, &names); if (e) return e;
     struct fs_ro_node *hit = 0;
     for (unsigned i = 0; i < names->count && !hit; i++) {
+        if (!(i&3)) { fs_service(); if ((e=fs_request_check())) return e; }
         struct fs_ro_node *n = at(names, i);
         if (path_equal(name, n->name) || path_equal(name, n->alias)) hit = n;
     }
@@ -181,8 +196,10 @@ int fs_ro_lookup(struct fs_ro_volume *v, uint64_t dir, const char *name, struct 
         struct fs_ro_node found;
         e = v->ops->lookup(v, dir, name, &found);
         if (e) return e;
-        for (unsigned i = 0; i < names->count && !hit; i++)
+        for (unsigned i = 0; i < names->count && !hit; i++) {
+            if (!(i&3)) { fs_service(); if ((e=fs_request_check())) return e; }
             if (at(names, i)->id == found.id) hit = at(names, i);
+        }
         if (!hit) return -FS_ENOENT;
     }
     if (!hit) return -FS_ENOENT;

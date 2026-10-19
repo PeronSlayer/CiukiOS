@@ -71,6 +71,8 @@ void arch_debug_load(const uint32_t a[4], uint32_t dr7) { debug_dr7=dr7; for (un
 uint32_t arch_debug_take(void) { uint32_t d=debug_dr6; debug_dr6=0; return d; }
 uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
+static int simulated_file_cleanup;
+int dosvm_file_destroy(struct dosvm *v) { v->info.cleanup_error=simulated_file_cleanup; return 0; }
 #include "dosvm_fullscreen_seams.inc"
 static bool allocation_fails(void) { return ++allocation_calls == fail_at; }
 /* Deterministic work accounting, enabled only for the F0-41 replay. */
@@ -436,6 +438,7 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #define cvga_peek_vram creation_cost_peek
 #define cvga_write_vram creation_cost_store
 #include "../../src/kernel/vm/dosvm.c"
+#include "dosvm_request_context.inc"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
@@ -614,6 +617,10 @@ static void test_lifecycle_records(void)
 }
 static void test_cleanup_errors(void)
 {
+    struct dosvm *files=create(); simulated_file_cleanup=-VFS_ECANCELLED;
+    CHECK(dosvm_destroy(dosvm_key(files),true)==-VFS_ECANCELLED);
+    CHECK(files->info.state==DOSVM_DEAD && files->info.cleanup_error==-VFS_ECANCELLED);
+    simulated_file_cleanup=0; empty();
     struct dosvm *v=create(); uint8_t sector[512]={7}; CHECK(!dosvm_disk_write(v,5,sector)); unsigned committed=commits;
     fail_delete=true; CHECK(dosvm_destroy(dosvm_key(v),false)==-V86_EIO && v->info.state==DOSVM_STOPPING && !used_pages && !handles && scratch==1 && tables==1 && commits==committed+1);
     fail_delete=false; destroy(v,false); empty();
@@ -782,7 +789,7 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
-    test_disk_cache(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
+    test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();

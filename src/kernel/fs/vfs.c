@@ -53,7 +53,7 @@ struct vfs_waiter { struct vfs_waiter *next; uint32_t mask, ticket[26]; };
 static void request_wait(const struct vfs_request *r,uint64_t begin,uint32_t mask,enum vfs_wait_reason reason,int outcome) {
     if (!r || !r->wait) return;
     uint64_t elapsed=r->now(r->arg)-begin;
-    if (elapsed || outcome) *r->wait=(struct vfs_wait_info){r->owner,elapsed,mask,reason,outcome,true};
+    if ((elapsed || outcome) && (!r->wait->valid || !r->wait->outcome)) *r->wait=(struct vfs_wait_info){r->owner,elapsed,mask,reason,outcome,true};
 }
 /* Every queued ticket, including native untimed callers, is represented while
  * sleeping. Cancellation advances over holes without stealing a live ticket. */
@@ -67,7 +67,9 @@ static void advance_cancelled(struct vfs *v) {
     }
 }
 static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    if (!request) request=fs_request_current();
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
+    if (mask && request && request->wait && !request->wait->outcome) request->wait->drives=mask;
     if (!mask) return vfs_request_check(request);
     struct vfs_waiter waiter={.next=v->waiters,.mask=mask};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
@@ -88,7 +90,7 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
             (waiter.ticket[d]!=v->serving[d] || v->readers[d] || (v->mutating&(1u<<d)))) ready=false;
         if (error || ready) break;
         if (request) {
-            fs_lock_drop(&v->lock); request->pause(request->arg); fs_lock_take(&v->lock);
+            fs_lock_drop(&v->lock); request->pause(request->arg); (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
         } else fs_event_wait(&v->volume_changed,&v->lock);
     }
     struct vfs_waiter **link=&v->waiters;
@@ -106,9 +108,16 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
     return 0;
 }
-void vfs_reserve_locked(struct vfs *v,uint32_t mask) { (void)reserve_request(v,mask,0); }
-int vfs_admit(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+void vfs_reserve_locked(struct vfs *v,uint32_t mask) {
+    /* Legacy void helpers cannot return partial admission. They are also used
+     * to retire published references; only int-returning admission may cancel. */
+    struct fs_request_scope scope; fs_request_enter(&scope,0);
+    (void)reserve_request(v,mask,0); fs_request_leave(&scope);
+}
+static int admit_request(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    if (!request) request=fs_request_current();
     if (!request) { vfs_lock(v,mask); return 0; }
+    if (request->wait && !request->wait->valid) request->wait->drives=mask;
     int error; uint32_t start=fs_now_ms(); uint64_t begin=request->now(request->arg);
     while (!fs_lock_try_take(&v->lock)) {
         if ((error=vfs_request_check(request))) {
@@ -122,6 +131,13 @@ int vfs_admit(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
     error=reserve_request(v,mask,request);
     if (error) { fs_lock_drop(&v->lock); return error; }
     v->default_drive=26; return 0;
+}
+
+int vfs_admit(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,request ? request : fs_request_current());
+    int error=admit_request(v,mask,request);
+    fs_request_leave(&scope); return error;
 }
 
 void vfs_lock(struct vfs *v,uint32_t mask) {
@@ -159,7 +175,7 @@ struct vfs_io_state vfs_io_begin_locked(struct vfs *v) {
 void vfs_io_end_locked(struct vfs *v,struct vfs_io_state state) {
     uint32_t mask=state.drives;
     if (!state.logical) volume_mutexes(v,mask,false);
-    namespace_take(v,mask);
+    (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
     volume_mutexes(v,mask,true); v->active=mask;
     v->default_drive=state.default_drive;
     __atomic_store_n(&v->holder,first_drive(mask),__ATOMIC_RELAXED);
@@ -500,9 +516,10 @@ static uint32_t handle_mask(struct vfs_table *t,int h) {
  * Cleanup after issued I/O still reacquires namespace unconditionally. */
 static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request *request,
                             uint32_t start,uint64_t begin) {
+    if (!request) request=fs_request_current();
     if (!request) { fs_event_wait(&v->volume_changed,&v->lock); return 0; }
     char holder=first_drive((v->reserved|v->mutating)&mask);
-    fs_lock_drop(&v->lock); request->pause(request->arg); fs_lock_take(&v->lock);
+    fs_lock_drop(&v->lock); request->pause(request->arg); (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
     int error=vfs_request_check(request);
     request_wait(request,begin,mask,VFS_WAIT_VOLUME,error);
     if (error) wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : "volume:cancelled");
@@ -544,6 +561,7 @@ int vfs_handle_times(struct vfs_table *t,int h,uint16_t date,uint16_t time) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_request_check(const struct vfs_request *r) {
+    if (!r) r=fs_request_current();
     if (!r) return 0;
     if (r->cancelled && r->cancelled(r->arg)) return -VFS_ECANCELLED;
     return r->now(r->arg)>=r->deadline ? -VFS_ETIMEOUT : 0;
@@ -656,7 +674,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         struct fat_entry entry=node->entry;
         vfs_unlock(v);
         int e=fat_read(&view,&entry,position,buf,n,done);
-        vfs_lock(v,0);
+        (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
         d->position+=*done; d->io_active=false; v->readers[drive]--;
         if (view.readonly_reason) {
             fs_event_wake(&v->volume_changed);

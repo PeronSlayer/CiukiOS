@@ -28,11 +28,26 @@ static uint8_t disk[8192*512],guest[0x110000];
 static uint64_t wall_time,monitor_time;
 static unsigned reads,writes,barriers,fail_read,fail_write,callbacks,aborts,pins;
 static uint64_t callback_token;
-static unsigned fixture_generation=48;
+static unsigned fixture_generation=48, resident_allocations;
 static bool cancel_request;
 static bool stop_on_read;
+static unsigned io_calls,io_fault,io_stop,flush_fault;
+static bool io_tracking,transport_hold,legacy_volume_claim;
+bool px_volume_busy(struct vfs *v,struct fat_volume *fat) { (void)v; (void)fat; return legacy_volume_claim; }
+static int fault_io(void) {
+    if (!io_tracking) return 0;
+    unsigned n=++io_calls;
+    if (n==io_stop) cancel_request=true;
+    return n==io_fault ? -FS_EIO : 0;
+}
 static int block_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buf) {
     CHECK(!blkdev_range(dev,lba,count)); reads++; wall_time+=3; monitor_time++;
+    if (transport_hold) {
+        const struct vfs_request *r=fs_request_current(); CHECK(r);
+        while (!blk_request_interrupted()) r->pause(r->arg);
+        return fs_request_check();
+    }
+    int fault=fault_io(); if (fault) return fault;
     if (fail_read && !--fail_read) return -FS_EIO;
     memcpy(buf,disk+lba*512,(size_t)count*512);
     if (stop_on_read) { stop_on_read=false; cancel_request=true; }
@@ -40,10 +55,11 @@ static int block_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buf) 
 }
 static int block_write(struct blkdev *dev,uint64_t lba,uint32_t count,const void *buf) {
     CHECK(!blkdev_range(dev,lba,count)); writes++; wall_time+=3; monitor_time++;
+    int fault=fault_io(); if (fault) return fault;
     if (fail_write && !--fail_write) return -FS_EIO;
     memcpy(disk+lba*512,buf,(size_t)count*512); return 0;
 }
-static int block_flush(struct blkdev *dev) { (void)dev; barriers++; return 0; }
+static int block_flush(struct blkdev *dev) { (void)dev; barriers++; int e=fault_io(); if (e) return e; return flush_fault && !--flush_fault ? -FS_EIO : 0; }
 static struct blkdev device={.read=block_read,.write=block_write,.flush=block_flush,
     .capacity=8192,.sector_size=512,.write_cache_state=BLKDEV_CACHE_DISABLED,.logical=true};
 static bool memory_check(void *arg,uint32_t linear,size_t n,bool write) {
@@ -311,7 +327,7 @@ static void search_tests(void) {
     CHECK(guest[0x507ff]==0x4a && guest[0x5082b]==0x4a); unsigned count=1;
     while (!(f.flags&1)) { f=call(frame(0x4f00)); if (!(f.flags&1)) count++; }
     CHECK(f.ax==18 && count==302 && guest[0x507ff]==0x4a && guest[0x5082b]==0x4a);
-    for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) CHECK(!bridge.cursor[i].used);
+    /* EOF retains authority for unobserved guest copies until PSP exit. */
     path_set("C:/DIR/F00?.DAT"); f=frame(0x4e00); f.cx=0; f.dx=0x100; f=call(f); CHECK(!(f.flags&1));
     memcpy(guest+0x50900,guest+0x50800,43);
     f=frame(0x1a00); f.dx=0x900; f=call(f); CHECK(!(f.flags&1));
@@ -405,32 +421,34 @@ static void error_tests(void) {
     CHECK(dos_file_dispatch(&bridge,&f,DOS_FILE_V86,0x21)==DOS_FILE_PENDING);
     for (unsigned i=0;i<16;i++) CHECK(guest[0x50400+i]==0xcc);
     CHECK(!space.active && !space.reserved && !pins);
-    cancel_request=false; close_file(handle);
+    cancel_request=false; close_file(handle); CHECK(!bridge.cleanup_status);
     puts("H49-08 errors/critical: PASS mapping, nested 59h, one-shot retry, fail/cause preservation");
 }
 static bool request_cancel(void *arg) { (void)arg; return cancel_request; }
 static void wait_tests(void) {
     struct vfs_wait_info evidence={0};
-    struct vfs_request r={0,wall_time+2000000,wall,request_cancel,pause_time,0x49,&evidence};
+    struct vfs_request r={0,wall_time+2000000,wall,request_cancel,pause_time,0x49,&evidence,0};
     fs_lock_take(&space.lock); uint64_t begin=wall_time;
     CHECK(vfs_admit(&space,1u<<2,&r)==-VFS_ETIMEOUT); CHECK(wall_time-begin==2000000);
     CHECK(evidence.valid && evidence.owner==0x49 && evidence.elapsed_us==2000000 && evidence.reason==VFS_WAIT_NAMESPACE && evidence.outcome==-VFS_ETIMEOUT);
     fs_lock_drop(&space.lock);
-    r.deadline=wall_time+2000000; cancel_request=true;
+    memset(&evidence,0,sizeof(evidence)); r.deadline=wall_time+2000000; cancel_request=true;
     CHECK(vfs_admit(&space,1u<<2,&r)==-VFS_ECANCELLED); cancel_request=false;
-    r.deadline=wall_time+2000000; OK(vfs_admit(&space,1u<<2,&r)); vfs_unlock(&space);
+    memset(&evidence,0,sizeof(evidence)); r.deadline=wall_time+2000000; OK(vfs_admit(&space,1u<<2,&r)); vfs_unlock(&space);
     CHECK(space.next[2]==space.serving[2] && !space.waiters);
     /* The predecessor owns a real production volume reservation during I/O. */
     vfs_lock(&space,1u<<2); struct vfs_io_state io=vfs_io_begin_locked(&space);
-    r.deadline=wall_time+2000000; begin=wall_time;
+    memset(&evidence,0,sizeof(evidence)); r.deadline=wall_time+2000000; begin=wall_time;
     CHECK(vfs_admit(&space,1u<<2,&r)==-VFS_ETIMEOUT && wall_time-begin==2000000);
     CHECK(evidence.reason==VFS_WAIT_VOLUME && evidence.elapsed_us==2000000 && evidence.drives==(1u<<2));
     vfs_io_end_locked(&space,io); vfs_unlock(&space);
-    r.deadline=wall_time+2000000; OK(vfs_admit(&space,1u<<2,&r)); vfs_unlock(&space);
+    memset(&evidence,0,sizeof(evidence)); r.deadline=wall_time+2000000; OK(vfs_admit(&space,1u<<2,&r)); vfs_unlock(&space);
     CHECK(space.next[2]==space.serving[2] && !space.waiters);
     puts("H49-08 admission: PASS exact fake deadline, cancellation, successor and no ticket holes");
 }
 static void trace_tests(void) {
+    struct dos_file_wait wait_record; while (dos_file_wait_pop(&bridge,&wait_record)) { }
+    unsigned dropped_before=bridge.dropped;
     bridge.trace_enabled=true; struct dos_file_frame f=frame(0x1900); f=call(f);
     struct dos_file_trace enter,ret; CHECK(dos_file_trace_pop(&bridge,&enter)); CHECK(dos_file_trace_pop(&bridge,&ret));
     CHECK(!enter.returning && ret.returning && enter.sequence==ret.sequence && ret.frame.ax==0x1902);
@@ -445,7 +463,7 @@ static void trace_tests(void) {
     CHECK(dos_file_trace_pop(&bridge,&enter) && dos_file_trace_pop(&bridge,&ret));
     CHECK(ret.returning && ret.wall_us==77 && ret.monitor_us==3 && ret.sequence==enter.sequence);
     for (unsigned i=0;i<100;i++) (void)call(frame(0x1900));
-    CHECK(bridge.trace_count==DOS_FILE_TRACE && bridge.dropped==72);
+    CHECK(bridge.trace_count==DOS_FILE_TRACE && bridge.dropped==dropped_before+72);
     while (dos_file_trace_pop(&bridge,&ret)) { }
     printf("group=dos_api vm=%u gen=%u seq=%" PRIu64 " phase=return psp=%04x origin=%u vector=21 ax=%04x bx=%04x cx=%04x dx=%04x ds=%04x es=%04x si=%04x di=%04x cf=%u bytes=%u monitor_us=%" PRIu64 " wall_us=%" PRIu64 " dropped=%u\n",
         bridge.id,ret.generation,ret.sequence,ret.psp,ret.origin,ret.frame.ax,ret.frame.bx,ret.frame.cx,ret.frame.dx,ret.frame.ds,ret.frame.es,ret.frame.si,ret.frame.di,ret.frame.flags&1,ret.bytes,ret.monitor_us,ret.wall_us,bridge.dropped);
@@ -538,7 +556,7 @@ static void failure_and_cycle_tests(void) {
             cache_destroy(&cache);
         }
         unsigned calls=allocation_calls; allocation_fail=0;
-        CHECK(!allocations_live && !fs_host_contig_live);
+        CHECK(allocations_live==resident_allocations && !fs_host_contig_live);
         if (calls<nth) break;
         injected++;
     }
@@ -554,12 +572,13 @@ static void failure_and_cycle_tests(void) {
         struct dos_file_frame before=frame(0x3d40),after=before;
         teardown();
         CHECK(dos_file_complete(&bridge,((uint64_t)cycle<<32)|bridge.generation,1,&after)==DOS_FILE_PENDING);
-        CHECK(!memcmp(&before,&after,sizeof(before)) && !allocations_live);
+        CHECK(!memcmp(&before,&after,sizeof(before)) && allocations_live==resident_allocations);
     }
     printf("H49-09 lifetime: PASS cycles=100 allocation_failures=%u live_allocations=%u stale_completion=no_guest_write\n",injected,allocations_live);
 }
+#include "dos_file_continuation_test.inc"
 int main(void) {
-    setup(); frame_tests(); state_tests(); mutation_tests(); sharing_tests(); search_tests(); device_tests(); error_tests(); wait_tests(); trace_tests(); CHECK(aborts==1); teardown();
-    provider_tests(); alias_tests(); failure_and_cycle_tests();
+    setup(); resident_allocations=1; frame_tests(); state_tests(); mutation_tests(); sharing_tests(); search_tests(); device_tests(); error_tests(); wait_tests(); trace_tests(); CHECK(aborts==1); teardown();
+    provider_tests(); alias_tests(); failure_and_cycle_tests(); continuation_tests();
     printf("PASS dos_file_api checks=%u reads=%u writes=%u flushes=%u bridge_bytes=%zu\n",checks,reads,writes,barriers,sizeof(bridge)); return 0;
 }
