@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from vm_creation_model import write_model
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,6 +84,7 @@ int main(void)
         with tempfile.TemporaryDirectory(prefix='system-stalls-', dir=base) as scratch:
             scratch = Path(scratch)
             (scratch / 'latency_scheduler.inc').write_text(declarations + '\n'.join(functions))
+            write_model(scratch / 'vm_creation_model.inc')
             binary = scratch / 'system-stalls'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',

@@ -369,6 +369,12 @@ void dosvm_snapshot(struct dosvm_ledger *out)
     }
 }
 
+/* The VM worker owns monitor/VGA transactions. Only independent callers
+ * (creation, controller copies/text snapshots) may schedule inside a copy.
+ * Disk gate holders must finish seek/transfer/cache publication first. */
+static bool copy_preemptible(const struct dosvm *v)
+{ return g_current && g_current != v->task && !v->disk_busy; }
+
 bool dosvm_range(const struct dosvm *v, uint32_t linear, unsigned bytes, bool write)
 {
     uint32_t end=VM_POOL_BASE+v->memory.quota;
@@ -376,12 +382,14 @@ bool dosvm_range(const struct dosvm *v, uint32_t linear, unsigned bytes, bool wr
     bool pool=linear>=VM_POOL_BASE && linear<=end && bytes<=end-linear;
     if ((!low && !pool) || !v->as.pd_phys)
         return false;
+    unsigned pages = 0;
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (!(linear >= 0xA0000 && linear < 0xC0000) &&
             !as_range_ok(&v->as, linear, n, write)) return false;
         linear += n; bytes -= n;
+        if (!(++pages & 15u) && copy_preemptible(v)) kpreempt_point();
     }
     return true;
 }
@@ -397,6 +405,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
                 volatile uint8_t *aperture = P2V(linear);
                 for (unsigned i=0;i<n;i++) {
                     if (write) aperture[i]=b[i]; else b[i]=aperture[i];
+                    if (!((i + 1) & 255u) && copy_preemptible(v)) kpreempt_point();
                 }
                 b+=n; linear+=n; bytes-=n; continue;
             }
@@ -406,6 +415,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
             for (unsigned i = 0; i < n; i++) {
                 if (write) cvga_write_vram(&v->vga, linear + i, b[i]);
                 else b[i] = cvga_peek_vram(&v->vga, linear + i);
+                if (!((i + 1) & 255u) && copy_preemptible(v)) kpreempt_point();
             }
             b += n; linear += n; bytes -= n; continue;
         }
@@ -414,6 +424,7 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         if (write) memcpy(P2V(phys), b, n);
         else memcpy(b, P2V(phys), n);
         b += n; linear += n; bytes -= n;
+        if ((bytes || n == PAGE_SIZE) && copy_preemptible(v)) kpreempt_point();
     }
     return 0;
 }
@@ -1174,20 +1185,26 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->monitor.pic[0].imr = 0xF8; /* timer and cascade, no physical input IRQ */
     v->monitor.pic[1].imr = 0xFF;
     dosvm_pit_init(v); dosvm_kbd_init(v); dosvm_mouse_init(v);
+    kpreempt_point();
     if ((e = dosvm_port_register(v->info.key, 0x40, 0x43, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x61, 0x61, dosvm_pit_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x60, 0x60, dosvm_kbd_port, 0)) ||
         (e = dosvm_port_register(v->info.key, 0x64, 0x64, dosvm_kbd_port, 0)) ||
         (e = dosvm_audio_init(v))) goto fail; /* f3-05 SB16, OPL3 and 8237 */
+    kpreempt_point();
     e = dosvm_bios_init(v);
     if (e) goto fail;
+    kpreempt_point();
     e = dosvm_memory_init(v, config);
     if (e) goto fail;
+    kpreempt_point();
     e = dosvm_vga_init(v);
     if (e) goto fail;
     if ((e = dpmi_rom_init(v))) goto fail;
+    kpreempt_point();
     e = dosvm_disk_open(v, config ? config->base : 0);
     if (e) goto fail;
+    kpreempt_point();
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
@@ -1211,6 +1228,7 @@ int dosvm_boot(struct dosvm *v)
     int e = dosvm_disk_read(v, 0, v->sector);
     if (e || v->sector[510] != 0x55 || v->sector[511] != 0xAA) return -V86_EIO;
     if ((e = dosvm_write(v, 0x7C00, v->sector, 512))) return e;
+    kpreempt_point(); /* boot sector copied; no monitor transaction started */
     memset(&v->frame, 0, sizeof(v->frame));
     v->frame.tf.eip = 0x7C00;
     v->frame.tf.edx = 0x80;

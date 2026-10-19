@@ -252,3 +252,109 @@ qualify an image SHA or visible output on physical hardware.
    VM load on the canonical image. The five physical trials were reviewed
    read-only in the main checkout. f4-31/f3-44 integration and confirmation remain
    with their owners; no audio transport or VIF fix is claimed here.
+
+
+## F0-41 research and implementation decision (2026-10-19)
+
+Research completed before implementation. The directive names no URLs;
+the relevant primary references from the latency/audio audits were checked:
+[Linux v6.12 softirq.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/softirq.c)
+(2 ms and finite restart bounds), and
+[Linux locking rules](https://docs.kernel.org/locking/locktypes.html).
+Decision: retain voluntary preemption, with checkpoints only after complete
+page ownership/accounting updates, outside IRQ-off/spinlocked sections.
+Shared VM copies must exclude the owning VM worker's emulation transactions
+and the private disk gate. No DPMI dispatch changes.
+[Linux intel8x0.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/pci/intel8x0.c)
+and the [ALSA PCM interface](https://www.alsa-project.org/alsa-doc/alsa-lib/pcm.html)
+separate period service from buffer capacity and recovery. Decision: fix
+the producer's scheduling gap and replay the unchanged audio policy; do
+not reduce its adaptive safety margin to conceal a stall.
+
+The physical 110 ms stretch is an aggregate, not a per-page microbenchmark.
+At the maximum 24 MiB pool, 6144 pages give 110000/6144 = 17.90 us/page
+(about 19694 cycles at 1.1 GHz). Model allocate + zero + map at 18 us/page;
+16 pages cost 288 us, leaving over 6x margin to 2 ms. Charge 0.2 us per
+checkpoint (220 cycles) in host replay. These are explicitly model costs,
+not a new hardware measurement. Preserve eager backing and admission.
+
+
+### Bounded sites and host model
+
+Model units below are CPU work, excluding time sleeping for disk/device
+completion or execution of another task. Pool costs are 4 us allocation,
+8 us zero and 6 us mapping per page; checkpoints add 0.2 us. Bulk memory
+is charged at 8 us/4096 bytes; VGA model byte operations at a conservative
+2 us/byte. These deliberately different bandwidths represent ordinary RAM
+and emulated VGA operations, respectively. The before control disables
+checkpoints while retaining the same work and mappings. The full lifecycle
+also runs with real host address-space functions, page ownership, admission
+and allocation-failure unwinding, rather than the replay's single scratch page.
+
+| Site | Loop/work bound | Checkpoints | Worst span before → after (host model) |
+| --- | --- | --- | --- |
+| `dosvm_create` slot clear | One 4096-byte chunk | Existing, every page | 8 → 8 us per chunk |
+| Low-memory backing | 272 pages; at most one additional page-table allocation at a boundary | Existing, after each completed page/map/ledger update | At most 28 → 28 us for one backing page plus table work |
+| `dosvm_memory_init` eager pool | 6144 pages at maximum 24 MiB quota | Added after 16 pages and final partial batch | 110592 → 288.2 us; one extra table allocation adds model margin well below 2 ms |
+| Creation device/BIOS/memory/ROM/disk stages | Fixed 6 audio pages, 256 IVT entries, 2000 text cells; ROM fonts already yield every 16 glyphs and BIOS initialization already has safe points | Added between completed stages, outside registration/allocator/VFS calls | Full-creation replay: maximum 117378.552 → 292.2 us; total 117378552 → 117567752 ns (+0.1612%); the before control disables all checkpoints |
+| `dosvm_range` external validation | Maximum 6144 pool pages | Added every 16 validated pages | 6144 → 16 page validations (1 us/check envelope: 6144 → 16.2 us) |
+| `transfer` ordinary RAM | One physical page per copy; external caller only | Added after completed page fragments | Maximum pool copy: 49152 → 8.2 us per copy slice, plus bounded range validation |
+| `transfer` VGA model and physical aperture | At most 256 byte operations per slice; external caller only | Added after every 256 completed byte cycles | Model page: 8192 → 512.2 us; physical aperture uses the same slice bound |
+| `dosvm_text` | 4000 VGA byte peeks plus cursor/mouse bookkeeping | Inherits 15 internal checkpoints from `transfer`; latches unchanged | 8000 → 512.2 us for the text read, plus final bounded bookkeeping |
+| `dosvm_boot` | One 512-byte boot-sector read/copy, then fixed register/frame setup | After disk-gate release and after boot-sector copy, before monitor setup | RAM copy ≤1 us; no quota-sized loop remains |
+| `dosvm_disk_read` | At most 1024 overlay rows, two cache windows, one read of at most 128 sectors (64 KiB) | Added only after dropping disk gate; excludes VM-worker INT 13h transactions | Local index/copy work <2 ms in the 1 us/row + 8 us/page envelope; storage waits sleep. Underlying FAT chain walks remain a separate caveat below |
+| `storage_enable_write` (`mount.c`) | FAT census/check/reclaim already service every 128 clusters; directory scan services each iteration | Retained inner `fs_service`; added service after all outer VFS locks are released | Existing 128 → 128-entry batch; including the 1 ms service-clock gate, a 1 us/entry envelope gives ≤1128 us; no scheduling point inserted under a namespace/cache/spin lock |
+| Failed-creation teardown dependency | Up to 6144 pool pages plus low pages in `core/vmm.c::as_destroy` | Existing cleanup has no internal checkpoint; `vmm.c` is outside write authority | Ownership/rollback tested; maximum cleanup span not qualified by this creation model |
+
+`kernel_latency_test.c` replays the exact production pool loop with the
+production scheduler and CPU sampler: the negative control records a
+110 ms `dosbox` stretch, and the checkpointed replay records 288200 ns
+(maximum before integer-ms formatting). Total modeled pool time is
+110592000 → 110668800 ns (+0.0694%). The audio harness independently
+regenerates that loop and advances DMA at 48 kHz; a 1 ms timer wake can
+only run refill at the next checkpoint. The uncheckpointed control must
+emit one `late-grow` and reach 28 periods. The repaired case must retain
+8 periods with no `late-grow`, halt or deadline miss. The passing audio replay
+records 110592 us / 28 periods / one growth without points, versus 1153 us /
+8 periods / zero growth with points. No audio policy or
+DPMI implementation changed.
+
+### Limits and remaining qualification
+
+The directive's aggregate T23 evidence does not measure each allocator,
+VGA byte operation or FAT entry. The host cost model cannot certify a
+physical 2 ms bound. Claude must run the canonical kernel/image and QEMU
+regressions, then check the T23 `stretch_max_ms`, refill-gap and lead logs.
+The known IRQ 11/SMI attribution is unchanged.
+
+The disk's seek/read pair remains under its sleeping serialization gate;
+adding a point there would break the directive's lock/transaction rule.
+FAT scans already have service points, but `fat.c::chain_at` has no internal
+service point and a sufficiently long cached outer-image chain could still
+consume more than 2 ms. A fragmented or unusually large directory can reach
+that helper during lookup/repair too. `fat.c` is outside this directive's
+write authority. Also, `dosvm_vga_model` may perform the existing indivisible
+harvest/exchange before a copy; `dosvm_vga.c` explicitly forbids yielding
+inside that model transaction and is outside the permitted files. No
+universal all-media/all-VGA-state 2 ms guarantee is claimed for those
+pre-existing dependencies. These sources require a separate storage/VGA
+review if physical evidence identifies a residual stretch. The new host
+creation/attach replay itself must show no residual lead growth.
+
+Failed-creation teardown additionally reaches `core/vmm.c::as_destroy`,
+which walks/frees every mapped page without an internal checkpoint. That
+file is outside this directive's allowed core changes (`task`/scheduler
+helper only). Allocation-failure rollback correctness passes, but the timing
+model stops at creation return, so it does not qualify a late-failure cleanup
+stretch. This is another dependency for a bounded cleanup review.
+
+### Verification completed in this worktree
+
+`ASAN_OPTIONS=detect_leaks=0 nice -n 19 bash scripts/test/host_kernel_tests.sh`
+completed with exit 0, including DOS VM, storage/log recovery/power cuts,
+audio, USB, networking, OPL reference and Win32 host cases. Standalone
+`ASAN_OPTIONS=detect_leaks=0 nice -n 19 bash tests/host/audio/run.sh` also
+completed with exit 0. `nice -n 19 python3 scripts/build_kernel.py` built
+`build/f0/VMM.ELF` (5775492 bytes) and passed its FPU/SIMD audit. No OS image
+was built and no QEMU/hardware test ran. Full logs and the per-site report
+are under `build/codex/f0-41-*` in this worktree.

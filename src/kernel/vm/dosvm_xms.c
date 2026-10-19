@@ -134,6 +134,11 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
             pmm_free(phys); v->info.resident+=(v->as.tables-tables)*PAGE_SIZE; return -ENOMEM;
         }
         v->info.resident+=PAGE_SIZE;
+        /* F0-41: 110 ms / 6144 pages ~= 18 us/page on the T23.
+         * Sixteen complete allocate/zero/map operations ~= 288 us.
+         * No allocator/address-space lock survives this checkpoint. */
+        if (!((off / PAGE_SIZE + 1) & 15u) || off + PAGE_SIZE >= v->memory.quota)
+            kpreempt_point();
     }
     v->info.resident+=(v->as.tables-tables)*PAGE_SIZE;
     /* Far entry: short jump (patchable XMS convention), INT FE, RETF.

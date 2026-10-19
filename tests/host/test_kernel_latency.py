@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from vm_creation_model import write_model
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -206,6 +207,7 @@ static void test_irq_restore(uint32_t f) {
                     end += 1
                 block += source[match.start():end] + '\n'
             (temp / 'latency_scheduler.inc').write_text(block)
+            write_model(temp / 'vm_creation_model.inc')
             for unit, extra in (
                 ('kernel_latency_test.c', []),
                 ('fs/wait_latency_test.c', []),

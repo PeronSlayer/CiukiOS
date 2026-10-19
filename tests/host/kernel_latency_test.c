@@ -67,6 +67,7 @@ struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum 
 __attribute__((noreturn)) void panic(const char *fmt,...)
 { fprintf(stderr,"panic: %s\n",fmt); exit(1); }
 #include "../../src/kernel/core/cpustat.c"
+#include "vm_creation_model.inc"
 static void reset(void)
 {
     (void)next_id;
@@ -93,6 +94,35 @@ static void run_tick(uint32_t eip)
     cycles+=1000;g_ticks++;
     struct trap_frame tf={.vector=0x20,.cs=g_current->user?0x1b:8,.eip=eip};
     uint64_t start=cpu_irq_enter(&tf);sched_tick();cpu_irq_leave(start);
+}
+static void creation_cpu_service(uint64_t ns)
+{
+    cycles += ns;
+    kpreempt_point();
+}
+static void vm_creation_test(void)
+{
+    struct creation_result result[2];
+    for (unsigned points = 0; points < 2; points++) {
+        reset(); normal.user = false; strcpy(normal.name, "dosbox");
+        rq_push(&normal); schedule();
+        g_tsc_per_ms = 1000000; /* nanoseconds, deterministic cost model */
+        result[points] = creation_replay(points != 0, creation_cpu_service);
+        cpu_point();
+        char name[16]; uint32_t duration;
+        cpu_stretch_snapshot(name, &duration);
+        CHECK(!strcmp(name, "dosbox"));
+        CHECK(stretch_max == result[points].maximum);
+        if (points) CHECK(stretch_max <= 2000000 && duration <= 2);
+        else CHECK(stretch_max >= 110000000 && duration >= 110);
+    }
+    CHECK(result[1].pages == result[0].pages && result[1].pages == 6144);
+    CHECK(result[1].ns >= result[0].ns && result[1].ns <= result[0].ns * 110 / 100);
+    CHECK(result[1].points == 384);
+    printf("F0-41 creation replay: pages=%u total=%llu->%lluns max=%llu->%lluns, production dosbox stretch<=2ms PASS\n",
+           result[1].pages, (unsigned long long)result[0].ns, (unsigned long long)result[1].ns,
+           (unsigned long long)result[0].maximum, (unsigned long long)result[1].maximum);
+    g_tsc_per_ms = 1000;
 }
 static void wake_test(void)
 {
@@ -229,7 +259,7 @@ static void accounting_test(void)
 }
 int main(void)
 {
-    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();
+    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;
 }

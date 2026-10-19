@@ -14,6 +14,8 @@ static uint32_t irq_save(void) { return 0x200; }
 static void irq_restore(uint32_t flags) { (void)flags; }
 #include <ciuki/task.h>
 #include <ciuki/sync.h>
+static struct task disk_caller;
+struct task *g_current = &disk_caller;
 uint64_t deadline_after_ms(uint32_t ms) { return fs_now_ms()+ms; }
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *ctx, uint64_t end)
 { (void)q; (void)end; CHECK(cond(ctx)); return true; }
@@ -21,6 +23,7 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 void task_sleep_ms(uint32_t ms) { (void)ms; CHECK(false); }
 #include "../../../src/kernel/vm/dosvm_disk.c"
 static struct dosvm vm;
+void kpreempt_point(void) { CHECK(!vm.disk_busy); }
 static const uint8_t program[]={0xb8,0x00,0x4c,0xcd,0x21};
 
 static void readable_tree(struct fat_volume *v, uint32_t dir, unsigned depth)

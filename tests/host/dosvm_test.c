@@ -68,8 +68,19 @@ uint8_t arch_cpu_family(void) { return 6; }
 #include "../../src/kernel/vm/dosvm_internal.h"
 #include "dosvm_fullscreen_seams.inc"
 static bool allocation_fails(void) { return ++allocation_calls == fail_at; }
+/* Deterministic work accounting, enabled only for the F0-41 replay. */
+static bool creation_cost_enabled, creation_cost_points;
+static uint64_t creation_cost_ns, creation_cost_span, creation_cost_max;
+static void creation_cost_charge(uint64_t ns)
+{ if (creation_cost_enabled) { creation_cost_ns += ns; creation_cost_span += ns; } }
+static void creation_cost_boundary(void)
+{
+    if (creation_cost_span > creation_cost_max) creation_cost_max = creation_cost_span;
+    creation_cost_span = 0;
+}
 uint32_t pmm_alloc(void)
 {
+    creation_cost_charge(4000);
     if (allocation_fails()) return 0;
     /* Deliberately separate consecutive mappings in physical memory. */
     for (unsigned n = 0; n < HOST_PAGES; n++) {
@@ -177,6 +188,9 @@ void schedule(void) { native_progress++; g_need_resched = false; if (schedule_ho
 void kpreempt_point(void)
 {
     if (!(cpu_flags & V86_IF) || (g_current && g_current->preempt_holds)) return;
+    if (creation_cost_enabled && creation_cost_points) {
+        creation_cost_charge(200); creation_cost_boundary();
+    }
     preempt_points++;
     if (preempt_hook) preempt_hook();
     if (g_need_resched) schedule();
@@ -373,6 +387,21 @@ void rec_diag(const char *probe, const char *fmt, ...)
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
+static void *creation_cost_clear(void *p, int value, size_t n)
+{ creation_cost_charge(n * 8000 / PAGE_SIZE); return memset(p, value, n); }
+static void *creation_cost_copy(void *to, const void *from, size_t n)
+{ creation_cost_charge(n * 8000 / PAGE_SIZE); return memcpy(to, from, n); }
+static int creation_cost_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
+{ creation_cost_charge(6000); return as_map(as, va, phys, flags); }
+static uint8_t creation_cost_peek(const cvga_state *v, uint32_t at)
+{ creation_cost_charge(2000); return cvga_peek_vram(v, at); }
+static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
+{ creation_cost_charge(2000); cvga_write_vram(v, at, byte); }
+#define memset creation_cost_clear
+#define memcpy creation_cost_copy
+#define as_map creation_cost_map
+#define cvga_peek_vram creation_cost_peek
+#define cvga_write_vram creation_cost_store
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
@@ -394,6 +423,11 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_dma.c"
 #include "../../src/kernel/vm/dosvm_opl.c"
 #include "../../src/kernel/vm/dosvm_sb16.c"
+#undef cvga_write_vram
+#undef cvga_peek_vram
+#undef as_map
+#undef memcpy
+#undef memset
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"
@@ -681,6 +715,7 @@ static void test_memory_services(void)
 #include "dosvm_fullscreen_test.inc"
 #include "dosvm_quake_start_test.inc"
 #include "dosvm_startup_test.inc"
+#include "dosvm_creation_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -688,6 +723,7 @@ int main(void)
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
+    test_maximum_creation();
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
