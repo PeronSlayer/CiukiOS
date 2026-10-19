@@ -15,3 +15,7 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No cap or admission change; no page-out I/O; no new `panic()` paths; no production-behaviour change under `#ifndef NDEBUG`.
+
+## Amendment 1 (lead, 2026-10-19 20:50, before launch): PFN descriptor array sized to the installed RAM
+
+f0-47 delivered the per-PFN descriptors as a fixed array covering the 768 MiB direct-map limit (196,608 × 24 B = 4.5 MiB of kernel BSS on every profile: 3.5 % of a 128 MiB machine). This directive, which consumes the descriptors for replacement, also sizes them to the machine: at boot the PMM allocates the descriptor array for the installed RAM reported by E820 (rounded up to the direct-map granule, plus the fixed reserve for hot-plug-free systems: none), places it in the first NORMAL pages after the kernel image, records its size in the `[mm]` boot record and in the f0-43 ledger as `MM_PFN_DESCRIPTORS`, and keeps the 768 MiB direct-map limit as the upper bound. Host tests cover 128/256/512 MiB and the maximum; the 128 MiB cost becomes 768 KiB. No other f0-47 interface changes.
