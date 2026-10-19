@@ -748,6 +748,7 @@ static int write_data(struct fat_volume *v, uint32_t c, uint64_t base,
     }
     return 0;
 }
+static int write_span(struct fat_volume *, struct fat_entry *, uint64_t, const void *, size_t, uint32_t, size_t *);
 int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, size_t *done) {
     context(v,file->name);
     *done=0; int e=writable(v); if (e) return e;
@@ -756,9 +757,25 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
     if (!data && size) return -FS_EINVAL;
     if (pos>UINT32_MAX || size>UINT32_MAX-pos) return -FS_EFBIG;
     if (!size) return 0;
+    return write_span(v,file,pos,data,size,(uint32_t)(pos+size),done);
+}
+/* f0-49: in-place zero-filled extension through the same publication path
+ * as an append (data, detached chain, tail link, then length). Existing
+ * clusters never move; no data buffer beyond one stack sector is needed. */
+int fat_extend(struct fat_volume *v, struct fat_entry *file, uint32_t size) {
+    context(v,file->name);
+    int e=writable(v); if (e) return e;
+    if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
+    if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
+    if (size<=file->size) return size==file->size ? 0 : -FS_EINVAL;
+    size_t done;
+    return write_span(v,file,file->size,0,0,size,&done);
+}
+static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, uint32_t end, size_t *done) {
+    int e;
     identity_changed(v,file,file,FAT_ID_WRITE);
     if ((e=publication_stage(v,FAT_P_DATA))) return e;
-    uint32_t cb=(uint32_t)v->spc*512, end=(uint32_t)(pos+size);
+    uint32_t cb=(uint32_t)v->spc*512;
     uint32_t count=file->size/cb+(file->size%cb!=0), tail=0;
     uint32_t need=end/cb+(end%cb!=0), extra=0;
     if (end>file->size) {

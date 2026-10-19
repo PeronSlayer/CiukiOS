@@ -8,6 +8,7 @@
 #include <ciuki/process.h>
 #include <ciuki/cpustat.h>
 #include <ciuki/reclaim.h>
+#include <ciuki/pager.h>
 
 extern struct process *proc_current(void) __attribute__((weak));
 extern int w32_view_access(struct uaddr *,uint32_t,bool) __attribute__((weak));
@@ -37,12 +38,23 @@ static void walk_drop(const struct uaddr *u, struct ua_pin *pin)
  * exist at reservation, frames only at touch. Index links form the resident set. */
 #define SLOT_COMMIT 1u
 #define SLOT_NEW 2u
+#define SLOT_SWAPPED 4u /* no frame: swap holds the only copy (f0-49) */
 #define NO_SLOT UINT32_MAX
-struct ua_frame { uint32_t phys, refs; bool zero; struct reclaim_page reclaim; };
+/* refs: object slots sharing the PFN (COW). holds: reclaim queue lifetime,
+ * never a sharing reference. object: sole owner while refs==1 (else NULL;
+ * a once-shared frame stays resident). swap: pager slot with a copy that is
+ * valid while the PFN descriptor's dirty epoch is zero. */
+struct ua_frame {
+    uint32_t phys, refs; bool zero; uint16_t holds;
+    struct reclaim_page reclaim;
+    struct memory_object *object;
+    uint32_t swap;
+};
 struct ua_slot {
     struct ua_frame *frame;
     uint32_t previous, next, index;
     uint16_t flags, waiters;
+    uint32_t swap; /* SLOT_SWAPPED backing slot handle */
 };
 #define OBJECT_BUCKETS 32u
 #define OBJECT_SLOTS 64u
@@ -51,7 +63,8 @@ struct ua_slot_block {
     uint32_t first;
     struct ua_slot slots[OBJECT_SLOTS];
 };
-_Static_assert(sizeof(struct ua_slot_block)<=2040,"resident metadata fits small heap");
+/* The kernel is i686: the block fits the 2 KiB small-heap class there. */
+_Static_assert(sizeof(void *)!=4 || sizeof(struct ua_slot_block)<=2040,"resident metadata fits small heap");
 struct memory_object {
     uint32_t refs, count, resident, first;
     uint64_t generation;
@@ -76,6 +89,9 @@ static void object_free(struct memory_object *o)
 {
     for (unsigned i=0;i<OBJECT_BUCKETS;i++) while (o->blocks[i]) {
         struct ua_slot_block *b=o->blocks[i]; o->blocks[i]=b->next;
+        /* Defensive: a slot outside every area still returns its swap slot. */
+        for (unsigned j=0;j<OBJECT_SLOTS;j++) if ((b->slots[j].flags&SLOT_SWAPPED) && pager_slot_free)
+            pager_slot_free(b->slots[j].swap);
         kfree(b); kpreempt_point();
     }
     kfree(o);
@@ -92,23 +108,35 @@ static void frame_get(struct ua_frame *f)
     if (d) d->refs=f->refs;
     irq_restore(flags);
 }
+/* IRQ exclusion held; refs and holds are both zero. */
+static uint32_t frame_retire(struct ua_frame *f)
+{
+    if (reclaim_untrack) reclaim_untrack(&f->reclaim);
+    if (f==zero_frame) zero_frame=0;
+    uint32_t swap=f->swap; f->swap=0; f->object=0;
+    return swap;
+}
 static void frame_put(struct ua_frame *f)
 {
     if (!f) return;
     uint32_t flags=irq_save();
-    if (--f->refs) {
-        struct mm_page_descriptor *d=frame_descriptor(f);
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (--f->refs || f->holds) {
+        /* A reclaim queue hold keeps the PFN until its completion. */
         if (d) d->refs=f->refs;
         irq_restore(flags);
         return;
     }
-    if (reclaim_untrack) reclaim_untrack(&f->reclaim);
-    if (f==zero_frame) zero_frame=0;
+    uint32_t swap=frame_retire(f);
     irq_restore(flags);
+    if (swap && pager_slot_free) pager_slot_free(swap);
     mm_free(f->phys,MM_USER_PRIVATE); kfree(f);
 }
+static const struct reclaim_backing ua_backing;
 static struct ua_frame *frame_new(bool zero,uint32_t owner_id)
 {
+    /* Allocation may wait for reclaim: never inside pager page-out/slot/I/O. */
+    if (pager_order_check && !pager_order_check(PAGER_ORDER_ALLOC,(uintptr_t)__builtin_return_address(0))) return 0;
     uint32_t flags=irq_save();
     if (zero && zero_frame) {
         struct ua_frame *shared=zero_frame; frame_get(shared); irq_restore(flags); return shared;
@@ -125,7 +153,7 @@ static struct ua_frame *frame_new(bool zero,uint32_t owner_id)
     memset(P2V(phys),0,PAGE_SIZE);
     if (d) d->io_in_flight=0;
     f->reclaim=(struct reclaim_page){.phys=phys,.generation=++fault_epoch,
-        .owner=MM_USER_PRIVATE,.owner_id=owner_id};
+        .owner=MM_USER_PRIVATE,.owner_id=owner_id,.backing=zero?0:&ua_backing};
     if (reclaim_track) reclaim_track(&f->reclaim);
     if (zero) zero_frame=f;
     return f;
@@ -158,16 +186,34 @@ static void slot_link(struct memory_object *o,uint32_t index,struct ua_frame *f)
     s->frame=f; s->previous=NO_SLOT; s->next=o->first;
     if (o->first!=NO_SLOT) object_slot(o,o->first)->previous=index;
     o->first=index; o->resident++;
+    /* Only a sole private owner can be paged; sharing makes it resident. */
+    f->object=f->refs==1 && !f->zero ? o : 0;
+}
+/* Resident-set unlink without yielding (pager callbacks use it too). */
+static struct ua_slot *slot_quiet(struct memory_object *o,uint32_t index)
+{
+    for (struct ua_slot_block *b=o->blocks[(index/OBJECT_SLOTS)%OBJECT_BUCKETS];b;b=b->next)
+        if (index>=b->first && index-b->first<OBJECT_SLOTS) return &b->slots[index-b->first];
+    return 0;
+}
+static void slot_unlink(struct memory_object *o,struct ua_slot *s,bool quiet)
+{
+    struct ua_slot *(*lookup)(struct memory_object *,uint32_t)=quiet?slot_quiet:object_slot;
+    if (s->previous!=NO_SLOT) lookup(o,s->previous)->next=s->next;
+    else o->first=s->next;
+    if (s->next!=NO_SLOT) lookup(o,s->next)->previous=s->previous;
+    s->previous=s->next=NO_SLOT; o->resident--;
 }
 static void slot_clear(struct memory_object *o,uint32_t index)
 {
     struct ua_slot *s=object_slot(o,index);
     if (s->frame) {
-        if (s->previous!=NO_SLOT) object_slot(o,s->previous)->next=s->next;
-        else o->first=s->next;
-        if (s->next!=NO_SLOT) object_slot(o,s->next)->previous=s->previous;
-        frame_put(s->frame); o->resident--;
+        struct ua_frame *f=s->frame;
+        slot_unlink(o,s,false);
+        if (f->object==o) f->object=0; /* a queued page-out sees the owner gone */
+        frame_put(f);
     }
+    if ((s->flags&SLOT_SWAPPED) && pager_slot_free) pager_slot_free(s->swap);
     if ((s->flags&SLOT_COMMIT) && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
     *s=(struct ua_slot){.index=index,.previous=NO_SLOT,.next=NO_SLOT};
 }
@@ -268,6 +314,135 @@ static void set_pte(struct uaddr *u, uint32_t va, uint32_t *p, uint32_t value)
     flush(u, va);
 }
 
+/* f0-49 pager provider. Every callback runs without yielding: cooperative
+ * (non-preemptible, UP) atomicity replaces the object busy flag, so unmap,
+ * mprotect and faults never observe a pager transaction as EBUSY. A busy
+ * object (fault/alias/page-in in progress) defers the page instead. */
+static struct ua_frame *frame_of(struct reclaim_page *p)
+{ return (struct ua_frame *)(void *)((char *)p-offsetof(struct ua_frame,reclaim)); }
+static struct ua_slot *frame_slot(struct ua_frame *f)
+{
+    struct memory_object *o=f->object;
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (!o || !d || f->zero || f->refs!=1 || o->busy ||
+        (o->kind!=MM_BACKING_PRIVATE && o->kind!=MM_BACKING_SHARED)) return 0;
+    struct ua_slot *s=slot_quiet(o,d->backing_slot);
+    if (!s || s->frame!=f || !(s->flags&SLOT_COMMIT)) return 0;
+    for (struct ua_extent *a=o->areas;a;a=a->object_next) {
+        uint32_t index=d->backing_slot;
+        if (index<a->page_index || index-a->page_index>=(a->end-a->base)/PAGE_SIZE) continue;
+        if (a->preparing || a->w32_locked || !a->space) return 0; /* VirtualLock stays resident */
+    }
+    return s;
+}
+/* Fold A/D of every alias. revoke clears the translations (page-out);
+ * otherwise only D (and A when asked) is cleared with invalidation, keeping
+ * the mapping (prewrite). Returns whether any alias had been accessed. */
+static bool alias_sample(struct memory_object *o,uint32_t index,bool revoke,bool clear_accessed)
+{
+    bool accessed=false;
+    for (struct ua_extent *a=o->areas;a;a=a->object_next) {
+        if (index<a->page_index || index-a->page_index>=(a->end-a->base)/PAGE_SIZE) continue;
+        uint32_t va=a->base+(index-a->page_index)*PAGE_SIZE, *p=pte(a->space,va,false);
+        if (!p || !(*p&PTE_OWN)) continue;
+        if (*p&PTE_A) accessed=true;
+        if (revoke) { a->space->backing--; set_pte(a->space,va,p,0); continue; }
+        uint32_t clear=PTE_D|(clear_accessed?PTE_A:0);
+        if (!(*p&clear)) continue;
+        struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(*p&~4095u):0;
+        if (d && (*p&PTE_D)) d->dirty_epoch=d->dirty_epoch==UINT32_MAX?1:d->dirty_epoch+1;
+        if (d && (*p&PTE_A)) { d->accessed_epoch=++fault_epoch; d->reserved|=MM_PAGE_TOUCHED; }
+        *p&=~clear; flush(a->space,va);
+    }
+    return accessed;
+}
+static bool copy_valid(const struct ua_frame *f,const struct mm_page_descriptor *d)
+{ return f->swap && !d->dirty_epoch && pager_slot_readable && pager_slot_readable(f->swap); }
+static bool ua_page_valid(struct reclaim_page *p)
+{
+    struct ua_frame *f=frame_of(p);
+    if (!frame_slot(f)) return false;
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (copy_valid(f,d)) return true; /* clean discard */
+    return f->swap || (pager_can_reserve && pager_can_reserve());
+}
+static void ua_page_retain(struct reclaim_page *p) { frame_of(p)->holds++; }
+static bool ua_page_release(struct reclaim_page *p)
+{
+    struct ua_frame *f=frame_of(p);
+    if (f->holds) f->holds--;
+    if (f->refs || f->holds) return false;
+    uint32_t swap=frame_retire(f);
+    if (swap && pager_slot_free) pager_slot_free(swap);
+    mm_free(f->phys,MM_USER_PRIVATE); kfree(f);
+    return true;
+}
+static bool ua_page_prewrite(struct reclaim_page *p)
+{
+    struct ua_frame *f=frame_of(p);
+    if (!frame_slot(f)) return false;
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (alias_sample(f->object,d->backing_slot,false,true)) { p->chances=2; return false; }
+    if (p->chances) { p->chances--; return false; }
+    return !copy_valid(f,d);
+}
+static void ua_page_prepare(struct reclaim_page *p,struct reclaim_io *io,void *buffer)
+{
+    struct ua_frame *f=frame_of(p);
+    if (!f->object) { io->outcome=RECLAIM_GONE; return; }
+    struct ua_slot *s=frame_slot(f);
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (!s || d->pins>1) { io->outcome=RECLAIM_DEFER; return; } /* user pin since queueing */
+    /* Page-out revokes every alias first; a racing access faults and
+     * re-publishes the still-linked frame, which finish detects. */
+    alias_sample(f->object,d->backing_slot,!io->prewrite,false);
+    io->slot=f->swap;
+    if (copy_valid(f,d)) { io->outcome=RECLAIM_CLEAN; return; }
+    if (!buffer) { io->outcome=RECLAIM_DEFER; return; }
+    memcpy(buffer,P2V(f->phys),PAGE_SIZE);
+    io->outcome=RECLAIM_WRITE;
+}
+static bool ua_page_finish(struct reclaim_page *p,const struct reclaim_io *io,bool clean)
+{
+    struct ua_frame *f=frame_of(p);
+    bool fresh=io->outcome==RECLAIM_WRITE && io->slot && io->slot!=f->swap;
+    struct memory_object *o=f->object;
+    if (!o || io->outcome==RECLAIM_GONE || io->outcome==RECLAIM_DEFER) {
+        if (fresh && pager_slot_free) pager_slot_free(io->slot);
+        return true;
+    }
+    if (o->busy) return false; /* a fault is in progress: complete later */
+    struct ua_slot *s=frame_slot(f);
+    struct mm_page_descriptor *d=frame_descriptor(f);
+    if (!s) { if (fresh && pager_slot_free) pager_slot_free(io->slot); return true; }
+    if (io->outcome==RECLAIM_WRITE) {
+        if (io->written) {
+            /* Adopt the copy; it stays valid only while the page is clean. */
+            if (fresh) { if (f->swap && pager_slot_free) pager_slot_free(f->swap); f->swap=io->slot; }
+            if (pager_slot_commit) pager_slot_commit(f->swap);
+        } else {
+            if (fresh && pager_slot_free) pager_slot_free(io->slot); /* no-op on a failed slot */
+            else if (io->slot && !(pager_slot_readable && pager_slot_readable(io->slot))) f->swap=0;
+            return true; /* resident page and its dirty version stay intact */
+        }
+    }
+    if (!clean) return true;
+    if (io->prewrite) { alias_sample(o,d->backing_slot,false,false); return true; }
+    alias_sample(o,d->backing_slot,true,false); /* aliases re-published during I/O */
+    if (d->dirty_epoch!=io->epoch || d->pins>1 || !f->swap || !(pager_slot_readable && pager_slot_readable(f->swap)))
+        return true;
+    /* The slot is now the only copy: detach the frame; the queue hold keeps
+     * the PFN until release, after the last alias was invalidated above. */
+    slot_unlink(o,s,true);
+    s->frame=0; s->flags|=SLOT_SWAPPED; s->swap=f->swap;
+    uint32_t flags=irq_save();
+    f->swap=0; f->object=0; f->refs=0; d->refs=0;
+    irq_restore(flags);
+    return true;
+}
+static const struct reclaim_backing ua_backing={ua_page_valid,ua_page_retain,ua_page_release,
+    ua_page_finish,ua_page_prepare,ua_page_prewrite};
+
 static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_new)
 {
     for (uint32_t va = base; va < end; va += PAGE_SIZE) {
@@ -326,7 +501,13 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         if (object_area(e)) {
             struct ua_slot *slot=area_slot(e,va);
             if (!(slot->flags&SLOT_COMMIT)) {
-                if (ledger_commit) { if (!ledger_commit(MM_USER_PRIVATE,1)) goto fail; }
+                if (ledger_commit) {
+                    /* Beyond RAM: let the pager grow its prevalidated extents
+                     * (sleepable, no object/pager level held), then retry once. */
+                    if (!ledger_commit(MM_USER_PRIVATE,1) &&
+                        !(pager_commit_wait && pager_commit_wait((end-va)/PAGE_SIZE) &&
+                          ledger_commit(MM_USER_PRIVATE,1))) goto fail;
+                }
                 else if (ledger_promise) ledger_promise(MM_USER_PRIVATE,0,1);
                 slot->flags|=SLOT_COMMIT|SLOT_NEW;
             }
@@ -704,6 +885,7 @@ bool ua_range(const struct uaddr *u, uint32_t va, uint32_t bytes, uint32_t prot)
 
 /* All callers retain a range pin before a possible service/sleep. UP object
  * ownership coalesces even faults through different address-space aliases. */
+#define FRAME_WAIT_TRIES 500u /* 10 ms each: 5 s for reclaim to make progress */
 static bool fault_cancelled(struct uaddr *u)
 {
     struct process *p=proc_current?proc_current():0;
@@ -733,51 +915,90 @@ static int resolve_page(struct uaddr *u,uint32_t va,bool write,bool supervisor)
     struct ua_slot *s=area_slot(e,va);
     if (!(s->flags&SLOT_COMMIT) || (e->kind==UA_W32 && e->w32_state!=W32_MEM_COMMIT)) return -EFAULT;
     uint64_t generation=e->generation, object_generation=o->generation;
-    while (o->busy) {
-        if (reclaim_fault) reclaim_fault(true);
-        s->waiters++;
-        struct ua_frame *waiting=s->frame;
-        if (waiting) {
-            frame_get(waiting);
-            struct mm_page_descriptor *d=frame_descriptor(waiting);
-            if (d) d->waiters++;
-        }
-        task_sleep_ms(1);
-        if (waiting) {
-            struct mm_page_descriptor *d=frame_descriptor(waiting);
-            if (d) d->waiters--;
-            frame_put(waiting);
-        }
-        s->waiters--;
-        /* The pin keeps metadata alive; every wake revalidates identity. */
-        if (fault_cancelled(u)) return u->closing?-EFAULT:-EINTR;
-        if (e->generation!=generation || o->generation!=object_generation) return -EFAULT;
-    }
-    o->busy=true;
-    bool needs=!s->frame || (write && (s->frame->zero || s->frame->refs>1));
-    if (needs && ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
-    if (needs && g_current && g_current->preempt_holds) { o->busy=false; return -EBUSY; }
     struct ua_frame *fresh=0, *retired=0;
     int err=0;
-    if (needs) {
-        /* Ordinary task context, before any pager/filesystem lock. Retain
-         * operation ownership across the service and recheck generation. */
-        kpreempt_point();
-        if (fault_cancelled(u)) { err=u->closing?-EFAULT:-EINTR; goto done; }
-        if (e->generation!=generation || o->generation!=object_generation) { err=-EFAULT; goto done; }
-        fresh=frame_new(!write,u->as.pd_phys);
-        if (!fresh) { err=-ENOMEM; goto done; }
-        if (write && s->frame && !s->frame->zero) {
-            struct mm_page_descriptor *d=frame_descriptor(fresh);
-            if (d) d->io_in_flight=1;
-            memcpy(P2V(fresh->phys),P2V(s->frame->phys),PAGE_SIZE);
-            if (d) d->io_in_flight=0;
+    /* Frames are obtained before the object is marked busy: a wait for
+     * reclaim/page-out must not freeze the rest of this object, whose cold
+     * pages may be exactly what the pager needs to free. */
+    for (unsigned attempt=0;;attempt++) {
+        while (o->busy) {
+            if (reclaim_fault) reclaim_fault(true);
+            s->waiters++;
+            struct ua_frame *waiting=s->frame;
+            if (waiting) {
+                frame_get(waiting);
+                struct mm_page_descriptor *d=frame_descriptor(waiting);
+                if (d) d->waiters++;
+            }
+            task_sleep_ms(1);
+            if (waiting) {
+                struct mm_page_descriptor *d=frame_descriptor(waiting);
+                if (d) d->waiters--;
+                frame_put(waiting);
+            }
+            s->waiters--;
+            /* The pin keeps metadata alive; every wake revalidates identity. */
+            if (fault_cancelled(u)) { frame_put(fresh); return u->closing?-EFAULT:-EINTR; }
+            if (e->generation!=generation || o->generation!=object_generation) { frame_put(fresh); return -EFAULT; }
         }
+        bool swapped=!s->frame && (s->flags&SLOT_SWAPPED);
+        bool needs=swapped || !s->frame || (write && (s->frame->zero || s->frame->refs>1));
+        bool zero=!write && !swapped;
+        if (fresh && (!needs || fresh->zero!=zero)) { frame_put(fresh); fresh=0; }
+        if (!needs || fresh) break; /* no yield from here until busy is taken */
+        if (attempt>=64) return -EBUSY;
+        if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
+        if (g_current && g_current->preempt_holds) return -EBUSY;
+        /* Ordinary task context, before any pager/filesystem lock. */
+        kpreempt_point();
+        if (fault_cancelled(u)) return u->closing?-EFAULT:-EINTR;
+        if (e->generation!=generation || o->generation!=object_generation) return -EFAULT;
+        /* Committed memory may wait for reclaim/page-out while the pager is
+         * online (bounded); without it the M2 ENOMEM containment applies. */
+        for (unsigned tries=0;;tries++) {
+            fresh=frame_new(zero,u->as.pd_phys);
+            if (fresh || tries>=FRAME_WAIT_TRIES || !(pager_online && pager_online()) ||
+                (g_current && g_current->preempt_holds)) break;
+            if (reclaim_hurry) reclaim_hurry(); else if (reclaim_wake) reclaim_wake();
+            if (pager_wake) pager_wake();
+            task_sleep_ms(10);
+            if (fault_cancelled(u)) return u->closing?-EFAULT:-EINTR;
+            if (e->generation!=generation || o->generation!=object_generation) return -EFAULT;
+        }
+        if (!fresh) return -ENOMEM;
+    }
+    /* Non-recursive order: an object fault inside pager page-out/slot/I/O
+     * context, or a nested object fault, is refused before taking busy. */
+    if (pager_order_enter && !pager_order_enter(PAGER_ORDER_OBJECT,(uintptr_t)__builtin_return_address(0))) {
+        frame_put(fresh); return -EDEADLK;
+    }
+    o->busy=true;
+    if (fresh && !s->frame && (s->flags&SLOT_SWAPPED)) {
+        /* Verified page-in into the unpublished frame, or a contained
+         * backing error: never zeros, never another owner's bytes. The
+         * busy object coalesces other faults on this page into this I/O. */
+        struct mm_page_descriptor *d=frame_descriptor(fresh);
+        if (d) d->io_in_flight=1;
+        int in=pager_page_in ? pager_page_in(s->swap,P2V(fresh->phys)) : -EIO;
+        if (d) d->io_in_flight=0;
+        if (!in && fault_cancelled(u)) in=u->closing?-EFAULT:-EINTR;
+        else if (!in && (e->generation!=generation || o->generation!=object_generation)) in=-EFAULT;
+        else if (in && in!=-EDEADLK) in=-EIO;
+        if (in) { frame_put(fresh); fresh=0; err=in; goto done; }
+        if (pager_keep_copy && pager_keep_copy()) fresh->swap=s->swap;
+        else if (pager_slot_free) pager_slot_free(s->swap);
+        s->swap=0; s->flags&=~SLOT_SWAPPED;
+        if (d) d->dirty_epoch=0; /* a kept slot copy matches until written */
+    } else if (fresh && write && s->frame && !s->frame->zero) {
+        struct mm_page_descriptor *d=frame_descriptor(fresh);
+        if (d) d->io_in_flight=1;
+        memcpy(P2V(fresh->phys),P2V(s->frame->phys),PAGE_SIZE);
+        if (d) d->io_in_flight=0;
     }
     uint32_t page=PAGE_ALIGN_DOWN(va), *entry=pte(u,page,true);
     if (!entry) { err=-ENOMEM; frame_put(fresh); goto done; }
     if (fresh) {
-        if (s->frame) { retired=s->frame; s->frame=fresh; }
+        if (s->frame) { retired=s->frame; s->frame=fresh; fresh->object=fresh->zero?0:o; }
         else slot_link(o,s->index,fresh);
     }
     struct ua_frame *f=s->frame;
@@ -810,6 +1031,7 @@ done:
      * including across every service point in the alias walk. */
     frame_put(retired);
     o->busy=false;
+    if (pager_order_exit) pager_order_exit(PAGER_ORDER_OBJECT);
     return err;
 }
 int ua_fault(struct uaddr *u,uint32_t address,uint32_t error)
@@ -866,11 +1088,18 @@ int32_t ua_alias(struct uaddr *dst,struct uaddr *src,uint32_t base,uint32_t byte
     if (!object_area(source) || end>source->end || (prot&~source->maximum)) return -EACCES;
     struct memory_object *old=source->backing;
     if (private_copy && old->kind!=MM_BACKING_PRIVATE) return -EOPNOTSUPP;
+    /* A private copy shares resident PFNs: bring swapped pages back first.
+     * While old is busy below, the pager cannot swap any of them out. */
+    for (uint32_t off=0;private_copy && off<bytes;off+=PAGE_SIZE) {
+        struct ua_slot *slot=area_slot(source,base+off);
+        if (slot->flags&SLOT_SWAPPED) { int e=resolve_page(src,base+off,false,true); if (e) return e; }
+    }
     struct ua_pin pin={.base=base,.end=end,.mutation=true,.task=g_current,.next=src->pins};
     src->pins=&pin; old->busy=true;
     uint32_t address=0; int err=0;
     for (uint32_t off=0;off<bytes;off+=PAGE_SIZE) {
         if (!(area_slot(source,base+off)->flags&SLOT_COMMIT)) { err=-EFAULT; break; }
+        if (private_copy && (area_slot(source,base+off)->flags&SLOT_SWAPPED)) { err=-EAGAIN; break; }
         if (!((off/PAGE_SIZE+1)&15u)) kpreempt_point();
     }
     if (!err) {
@@ -1021,7 +1250,8 @@ static int zero_range(struct uaddr *u, uint32_t base, uint32_t end)
 {
     while (base < end) {
         struct ua_extent *e=ua_find(u,base);
-        if (!object_area(e) || !area_slot(e,base)->frame) return 0; /* untouched tail is zero */
+        struct ua_slot *slot=object_area(e)?area_slot(e,base):0;
+        if (!slot || (!slot->frame && !(slot->flags&SLOT_SWAPPED))) return 0; /* untouched tail is zero */
         int err=resolve_page(u,base,true,true); if (err) return err;
         uint32_t *p = pte(u, base, false);
         uint32_t n = PAGE_SIZE - (base & (PAGE_SIZE - 1));

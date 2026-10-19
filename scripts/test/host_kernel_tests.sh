@@ -175,6 +175,13 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
     "$root/tests/host/reclaim_test.c" -o "$out/reclaim_test"
 "$out/reclaim_test"
 
+# M4 (f0-49): pager, backing slots, page-out/page-in, prewrite, lock order,
+# on the production PMM/ledger/VMM/uaddr/reclaim with a host storage model.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
+    "$root/tests/host/pager_test.c" -o "$out/pager_test"
+"$out/pager_test"
+
 # f4-04: the physical allocator's contiguous run behind the NTFS mount workspace.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"

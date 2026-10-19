@@ -33,7 +33,8 @@ _Static_assert(sizeof(ledger) <= 16384, "M1 kernel data budget");
 static unsigned zone(uint32_t pfn) { return pfn < 256 ? ZONE_LOW : pfn < 4096 ? ZONE_DMA : ZONE_NORMAL; }
 static const char *const owners[MM_OWNERS] = {
     "reserved", "image", "kernel", "heap", "stack", "tables", "dma", "device",
-    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool", "io_request", "pfn_descriptors"
+    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool", "io_request", "pfn_descriptors",
+    "pager"
 };
 static void pressure_update(void)
 {
@@ -145,9 +146,9 @@ void ledger_promise(enum mm_owner owner, int32_t reserved, int32_t committed)
     else { ledger.value.reserved_va[owner] += reserved; ledger.value.commit_ram[owner] += committed; }
     ledger.sequence++; irq_restore(f);
 }
-bool ledger_commit(enum mm_owner owner, uint32_t pages)
+/* PMM exclusion held. RAM that can back promises, and all promises. */
+static void commit_capacity(uint64_t *ram, uint64_t *promised_out)
 {
-    uint32_t f=irq_save();
     uint64_t free=0, resident=0, promised=0, pageable_commit=0;
     for (unsigned z=0;z<3;z++) {
         if (z!=ZONE_LOW) free+=ledger.value.zone[z].free;
@@ -171,10 +172,31 @@ bool ledger_commit(enum mm_owner owner, uint32_t pages)
         for (unsigned z=0;z<3;z++) pages+=ledger.value.zone[z].resident[i];
         resident+=pages<ledger.value.commit_ram[i]?pages:ledger.value.commit_ram[i];
     }
+    *ram=free+resident; *promised_out=promised;
+}
+bool ledger_commit(enum mm_owner owner, uint32_t pages)
+{
+    uint32_t f=irq_save();
+    uint64_t ram, promised; commit_capacity(&ram,&promised);
+    /* Pagefile slots count only once published by the pager: extents are
+     * allocated and flushed before admission may rely on them. */
     bool ok=(unsigned)owner<MM_OWNERS && pages<=INT32_MAX &&
-            promised+pages<=free+resident;
+            promised+pages<=ram+ledger.value.swap_capacity;
     if (ok) { ledger.value.commit_ram[owner]+=pages; ledger.sequence++; }
     irq_restore(f); return ok;
+}
+int64_t ledger_commit_headroom(void)
+{
+    uint32_t f=irq_save();
+    uint64_t ram, promised; commit_capacity(&ram,&promised);
+    int64_t headroom=(int64_t)(ram+ledger.value.swap_capacity)-(int64_t)promised;
+    irq_restore(f); return headroom;
+}
+void ledger_swap(uint32_t capacity, uint32_t used)
+{
+    uint32_t f=irq_save();
+    ledger.value.swap_capacity=capacity; ledger.value.swap_used=used; ledger.sequence++;
+    irq_restore(f);
 }
 void ledger_mapping(int32_t mappings, int32_t shared)
 {
@@ -185,7 +207,13 @@ void ledger_mapping(int32_t mappings, int32_t shared)
     ledger.sequence++; irq_restore(f);
 }
 void ledger_snapshot(struct mm_ledger *out)
-{ uint32_t f = irq_save(); *out = ledger.value; irq_restore(f); }
+{
+    uint32_t f = irq_save(); *out = ledger.value;
+    /* Pageable promises beyond RAM backing: what the pagefile carries. */
+    uint64_t ram, promised; commit_capacity(&ram,&promised);
+    out->commit_pagefile = promised > ram ? (uint32_t)(promised - ram) : 0;
+    irq_restore(f);
+}
 bool ledger_pressure(void)
 { uint32_t f = irq_save(); bool p = ledger.value.pressure; irq_restore(f); return p; }
 

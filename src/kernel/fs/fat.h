@@ -88,6 +88,9 @@ int fat_read_stream(struct fat_volume *, const struct fat_entry *, uint64_t pos,
                     void *, size_t, size_t *, struct cache_stream *);
 int fat_write(struct fat_volume *, struct fat_entry *, uint64_t position, const void *, size_t, size_t *done);
 int fat_truncate(struct fat_volume *, struct fat_entry *, uint64_t size);
+/* f0-49 pagefile growth: zero-filled in-place extension to size bytes via the
+ * append publication order; live clusters are never relocated. */
+int fat_extend(struct fat_volume *, struct fat_entry *, uint32_t size);
 /* Reserved boot-log chain only: data writes do not allocate or publish
  * metadata. Caller owns the chain and bounds writes by its reservation. */
 int fat_write_reserved(struct fat_volume *, const struct fat_entry *, uint32_t capacity,

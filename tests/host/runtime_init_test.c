@@ -216,6 +216,8 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
 void task_start(struct task *task) { CHECK(task != 0); }
 int bootlog_activate(struct vfs *vfs, bool qualified, uint32_t seq)
 { (void)vfs; (void)qualified; (void)seq; return 0; }
+int storage_pagefile_bind(struct storage *s, unsigned drive, const char *path)
+{ CHECK(s && drive == 2 && path); return 0; }
 int atapi_ready(struct ata_device *d) { (void)d; return -FS_EIO; }
 int optical_bind(struct storage *s,unsigned slot,struct ata_device *d)
 { (void)s; (void)slot; (void)d; CHECK(false); return -FS_EIO; }

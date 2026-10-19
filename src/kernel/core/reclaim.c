@@ -7,6 +7,7 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
+#include <ciuki/pager.h>
 
 extern void ledger_reclaim_account(const struct reclaim_result *, unsigned, unsigned, unsigned);
 extern void ledger_reclaim_owner_delta(unsigned, int32_t);
@@ -14,7 +15,7 @@ extern void ledger_reclaim_owner_delta(unsigned, int32_t);
 extern void vmm_sample_reset(void) __attribute__((weak));
 #endif
 static struct block_cache *reclaim_cache;
-static struct reclaim_page *resident_head, *resident_cursor;
+static struct reclaim_page *resident_head, *resident_cursor, *prewrite_cursor;
 static struct kwait pressure_wait;
 static bool worker_online, active;
 static uint32_t work_active;
@@ -32,6 +33,7 @@ static struct {
     uint32_t dirty_epoch;
     bool taken, completing;
 } modified[RECLAIM_QUEUE_SIZE];
+static unsigned prewrite_queued;
 static void end_episode(const struct mm_ledger *);
 
 static uint64_t reclaim_clock(void) { return cpu_path_clock?cpu_path_clock():ktime_cycles(); }
@@ -82,6 +84,7 @@ void reclaim_untrack(struct reclaim_page *p)
      * during exit. A premature untrack is refused without freeing its slot. */
     if (p->linked && !p->queued) {
         if (resident_cursor==p) resident_cursor=p->next;
+        if (prewrite_cursor==p) prewrite_cursor=p->next;
         if (p->prev) p->prev->next=p->next; else resident_head=p->next;
         if (p->next) p->next->prev=p->prev;
         p->linked=false; p->prev=p->next=0;
@@ -138,7 +141,7 @@ void reclaim_poll(uint64_t now)
     klog("[mem] reclaim episodes=%u active=%u scanned=%u reclaimed=%u dirty=%u inflight=%u pinned=%u stalls=%u faults=%u max_us=%u owners=%u du=%d dc=%d dv=%d",
          episodes,ongoing,scanned,reclaimed,dirty,inflight,pinned,stalls,faults,max_us,changed,du,dc,dv);
 }
-static bool queue_page(struct reclaim_page *p,struct mm_page_descriptor *d)
+static bool queue_page(struct reclaim_page *p,struct mm_page_descriptor *d,bool prewrite)
 {
     if (!p->backing || !p->backing->valid || !p->backing->retain ||
         !p->backing->release || !p->backing->finish || !p->backing->valid(p)) return false;
@@ -148,29 +151,72 @@ static bool queue_page(struct reclaim_page *p,struct mm_page_descriptor *d)
         p->queued=true; d->io_in_flight=1; d->pins++;
         modified[i].page=p;
         modified[i].io=(struct reclaim_io){.ticket=++next_ticket,.phys=p->phys,
-            .generation=p->generation,.dirty=d->dirty_epoch!=0};
+            .generation=p->generation,.dirty=d->dirty_epoch!=0,.prewrite=prewrite,
+            .epoch=d->dirty_epoch};
         modified[i].taken=modified[i].completing=false;
         modified[i].dirty_epoch=d->dirty_epoch;
+        if (prewrite) prewrite_queued++;
+        if (pager_wake) pager_wake(); /* nonblocking deferred wake */
         return true;
     }
     ledger_reclaim_account(0,0,0,1); return false;
 }
-bool reclaim_writeback_take(struct reclaim_io *out)
+bool reclaim_writeback_take_class(struct reclaim_io *out, bool prewrite)
 {
     if (!out) return false;
     uint32_t f=irq_save();
-    for (unsigned i=0;i<RECLAIM_QUEUE_SIZE;i++) if (modified[i].page && !modified[i].taken) {
+    for (unsigned i=0;i<RECLAIM_QUEUE_SIZE;i++) if (modified[i].page && !modified[i].taken &&
+        modified[i].io.prewrite==prewrite) {
         modified[i].taken=true; *out=modified[i].io; irq_restore(f); return true;
     }
     irq_restore(f); return false;
 }
-bool reclaim_writeback_complete(const struct reclaim_io *io, bool success)
+bool reclaim_writeback_take(struct reclaim_io *out)
+{ return reclaim_writeback_take_class(out,false) || reclaim_writeback_take_class(out,true); }
+bool reclaim_writeback_waiting(void)
 {
-    if (!io) return false;
-    uint32_t f=irq_save(); unsigned i;
+    uint32_t f=irq_save(); bool waiting=false;
+    for (unsigned i=0;i<RECLAIM_QUEUE_SIZE && !waiting;i++) waiting=modified[i].page && !modified[i].taken;
+    irq_restore(f); return waiting;
+}
+static unsigned entry_of(const struct reclaim_io *io)
+{
+    unsigned i;
     for (i=0;i<RECLAIM_QUEUE_SIZE;i++) if (modified[i].page && modified[i].taken &&
         modified[i].io.ticket==io->ticket && modified[i].io.generation==io->generation &&
         modified[i].io.phys==io->phys) break;
+    return i;
+}
+bool reclaim_writeback_live(const struct reclaim_io *io)
+{
+    if (!io) return false;
+    uint32_t f=irq_save(); bool live=entry_of(io)<RECLAIM_QUEUE_SIZE; irq_restore(f);
+    return live;
+}
+bool reclaim_writeback_prepare(struct reclaim_io *io, void *buffer)
+{
+    if (!io) return false;
+    uint32_t f=irq_save(); unsigned i=entry_of(io);
+    if (i==RECLAIM_QUEUE_SIZE || modified[i].completing) { irq_restore(f); return false; }
+    struct reclaim_page *p=modified[i].page;
+    modified[i].completing=true; work_active++;
+    irq_restore(f);
+    io->outcome=RECLAIM_WRITE;
+    /* Task context, no yield: the provider snapshot folds dirty bits first,
+     * so the redirty check starts from exactly the copied version. */
+    if (p->backing->prepare) p->backing->prepare(p,io,buffer);
+    struct mm_page_descriptor *d=pmm_descriptor(p->phys);
+    f=irq_save();
+    modified[i].dirty_epoch=io->epoch=d->dirty_epoch;
+    modified[i].io.outcome=io->outcome; modified[i].io.slot=io->slot; modified[i].io.epoch=io->epoch;
+    modified[i].completing=false; work_active--;
+    irq_restore(f);
+    return true;
+}
+bool reclaim_writeback_complete(const struct reclaim_io *io, bool success)
+{
+    if (!io) return false;
+    uint32_t f=irq_save(); unsigned i=entry_of(io);
     if (i==RECLAIM_QUEUE_SIZE || modified[i].completing) { irq_restore(f); return false; }
     struct reclaim_page *p=modified[i].page;
     if (p->generation!=io->generation) { irq_restore(f); return false; }
@@ -181,11 +227,16 @@ bool reclaim_writeback_complete(const struct reclaim_io *io, bool success)
      * and pin still own the frame. May require repeated completion calls. */
     struct mm_page_descriptor *d=pmm_descriptor(p->phys);
     bool clean=success && d->dirty_epoch==modified[i].dirty_epoch;
-    bool done=p->backing->finish(p,clean);
+    struct reclaim_io copy=modified[i].io;
+    copy.slot=io->slot; copy.written=io->written; copy.outcome=io->outcome;
+    bool done=p->backing->finish(p,&copy,clean);
     f=irq_save(); modified[i].completing=false;
     if (!done) { work_active--; irq_restore(f); return false; }
-    if (clean) d->dirty_epoch=0;
+    /* finish may fold a later dirty bit while revoking aliases: never clear
+     * a version newer than the one written. */
+    if (clean && d->dirty_epoch==modified[i].dirty_epoch) d->dirty_epoch=0;
     d->io_in_flight=0; d->pins--; p->queued=false;
+    if (modified[i].io.prewrite && prewrite_queued) prewrite_queued--;
     modified[i].page=0;
     /* Keep final publication and reference drop indivisible: otherwise a
      * scanner could requeue the node between clearing queued and unlinking
@@ -213,6 +264,8 @@ static void age_step(void)
 }
 void reclaim_slice(void)
 {
+    /* Reclaim is what allocation waits for: never nested in pager I/O. */
+    if (pager_order_check && !pager_order_check(PAGER_ORDER_ALLOC,(uintptr_t)__builtin_return_address(0))) return;
     uint64_t start=reclaim_clock();
     uint32_t start_flags=irq_save();
     struct mm_ledger memory; ledger_snapshot(&memory);
@@ -265,7 +318,7 @@ void reclaim_slice(void)
                             unsigned owner=0;
                             while (owner<owner_count && owners_used[owner].id!=p->owner_id) owner++;
                             if (owner==owner_count) { owners_used[owner].id=p->owner_id; owners_used[owner].pages=0; owner_count++; }
-                            if (owners_used[owner].pages<RECLAIM_OWNER_LIMIT && queue_page(p,d)) owners_used[owner].pages++;
+                            if (owners_used[owner].pages<RECLAIM_OWNER_LIMIT && queue_page(p,d,false)) owners_used[owner].pages++;
                         }
                     }
                 }
@@ -284,13 +337,46 @@ void reclaim_slice(void)
     if (active && !memory.pressure && !work_active) end_episode(&memory);
     irq_restore(f);
 }
+/* Idle prewrite (M4): same bounded slice rules, separate cursor, no cache
+ * phase and no frame release. The provider samples the candidate's own
+ * aliases (second chance) so aging progresses without a pressure episode. */
+unsigned reclaim_prewrite_slice(unsigned limit)
+{
+    uint64_t start=reclaim_clock();
+    unsigned queued=0, budget=g_tsc_per_ms?RECLAIM_SLICE_PAGES:1u;
+    for (unsigned steps=0;steps<budget && reclaim_us(start)<500;steps++) {
+        uint32_t f=irq_save();
+        if (prewrite_queued>=limit || ledger_pressure()) { irq_restore(f); break; }
+        struct reclaim_page *p=prewrite_cursor;
+        if (!p) { prewrite_cursor=resident_head; irq_restore(f); if (!resident_head) break; continue; }
+        prewrite_cursor=p->next;
+        struct mm_page_descriptor *d=pmm_descriptor(p->phys);
+        if (d && !d->pins && !d->io_in_flight && !p->queued && p->backing &&
+            p->backing->prewrite && p->backing->prewrite(p) && queue_page(p,d,true)) queued++;
+        irq_restore(f);
+    }
+    return queued;
+}
 static bool pressure_ready(void *arg) { (void)arg; return ledger_pressure(); }
+/* f0-49: a task waiting for a frame (committed memory) asks for slices
+ * back to back for 100 ms instead of one per 10 ms; each slice is still
+ * bounded and followed by a safe point (R1). */
+static volatile uint64_t hurry_until;
+void reclaim_hurry(void)
+{
+    uint64_t until=g_ticks+100;
+    if (until>hurry_until) hurry_until=until;
+    if (worker_online) kwait_wake_irq(&pressure_wait,false);
+}
 static void reclaim_worker(void *arg)
 {
     (void)arg;
     for (;;) {
         kwait_wait_until(&pressure_wait,pressure_ready,0,deadline_after_ms(1000));
-        if (ledger_pressure()) { reclaim_slice(); task_sleep_ms(10); }
+        if (ledger_pressure()) {
+            reclaim_slice();
+            if (g_ticks<hurry_until) kpreempt_point(); else task_sleep_ms(10);
+        }
     }
 }
 void reclaim_init(void)

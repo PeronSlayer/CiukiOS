@@ -84,6 +84,7 @@ struct task {
     uint64_t ready_since, max_wait_ticks;
     struct task *next, *rq_prev;    /* constant-time timer-driven reinsert */
     struct task *all_next;
+    uint8_t pager_order;            /* f0-49 held lock-order levels (bitmask) */
 };
 
 extern struct task *g_current;

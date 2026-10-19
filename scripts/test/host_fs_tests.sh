@@ -55,6 +55,24 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
+# f0-49: production pagefile adapter: slot map oracle, in-place growth and
+# shrink, exclusivity, reserved records, I/O failures and power cuts.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/pagefile.c \
+    tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_pagefile.c -o build/host/fs/test_pagefile
+rm -f build/host/fs/pagefile32.img
+truncate -s 288M build/host/fs/pagefile32.img
+mkfs.fat --invariant -F 32 -S 512 -s 8 -f 2 -i 00C1A049 build/host/fs/pagefile32.img > /dev/null
+MTOOLSRC=build/host/fs/mtoolsrc mcopy -i build/host/fs/pagefile32.img build/host/fs/seed.bin ::/SEED.BIN
+cp --sparse=always build/host/fs/fat32.img build/host/fs/pagefile-small.img
+cp --sparse=always build/host/fs/fat16.img build/host/fs/pagefile-full.img
+build/host/fs/test_pagefile build/host/fs/pagefile32.img build/host/fs/pagefile-small.img build/host/fs/pagefile-full.img
+fsck.fat -n build/host/fs/pagefile32.img > /dev/null
+MTOOLSRC=build/host/fs/mtoolsrc mcopy -n -i build/host/fs/pagefile32.img ::/SEED.BIN build/host/fs/pagefile-seed.bin
+cmp build/host/fs/seed.bin build/host/fs/pagefile-seed.bin
+rm -f build/host/fs/pagefile32.img build/host/fs/pagefile-small.img build/host/fs/pagefile-full.img build/host/fs/pagefile-seed.bin
 # F1-85: actual controller, ledger profiles, stream priority/cancellation, FAT EOF.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \

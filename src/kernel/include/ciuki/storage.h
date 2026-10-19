@@ -87,6 +87,10 @@ struct storage *storage_get(void);
 bool storage_readonly_info(unsigned drive, char *text, unsigned bytes);
 void storage_init(void);
 int storage_sync(void);
+/* f0-49: bind the pager's backing file on a writable fixed FAT volume. */
+struct pagefile;
+int storage_pagefile_bind(struct storage *, unsigned drive, const char *path);
+struct pagefile *storage_pagefile(void);
 
 /* Production probe helpers: no hardware or records in these decisions. */
 bool storage_probe_readonly(const char *selector, unsigned length);

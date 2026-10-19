@@ -113,8 +113,7 @@ their existing owner/pins and are not made pageable by this change.
 
 The 32-entry modified-page interface carries non-reused tickets, PFN and
 object generation. Only a registered valid backing provider can enter it;
-**there is no production private backing provider until f0-49**, hence no
-anonymous page-out is attempted now. The provider freezes mutable aliases,
+f0-49 supplies the production private provider (see M4 below). The provider freezes mutable aliases,
 holds a frame/object reference and completes bounded alias revocation before
 the queue pin/reference is released. Partial completion keeps ownership;
 failed or redirtied versions preserve dirty state; stale/duplicate completion
@@ -128,6 +127,129 @@ owner deltas and physical resident/hot/cold counters accompany the 30-second led
 in cpustat context, never in the allocator or IRQ. Host traces and slice
 CPU measurements are in `build/codex/f0-48-report.md`; no physical or QEMU
 qualification is claimed here.
+
+## Backing store and idle prewrite (M4, f0-49)
+
+Research, 2026-10-19 (sources registered in the
+[audit](../validation/f0-42-resource-management-audit.md)): P33 (Windows 98
+Resource Kit ch. 26/28) confirms dynamic swap growth/shrink, demand paging
+and idle prewrite of modified memory, without growth increments or a shrink
+timer. P05 ([KB Q223294](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/223294);
+direct fetch returns 403 again, the indexed text was read for the audit)
+places the asynchronous prewrite in VFAT's idle callback after pending VFAT
+writes drain; `ConservativeSwapfileUsage` defaults to 0 on Windows 98 (1
+disables the prewrite). P10 ([IFSMgr_Ring0_FileIO](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM),
+re-read) marks swap I/O with a privileged swapper flag, bypasses the cache
+(`R0_NO_CACHE`) and requires the file system to avoid deadlocks on that
+path. The [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+defines the cluster chain the extent map is derived from. Decision: CiukiOS
+keeps the 98 roles (dynamic file, idle prewrite after pending writes, cache
+bypass, no swap ABI) with the CiukiOS numbers below; prewrite is enabled by
+default as in 98 (`ConservativeSwapfileUsage=0` semantics, no option).
+
+Repository before f0-49: M2 objects had `MM_BACKING_SWAP` and descriptor
+`backing_slot` fields but refused any non-RAM page-in; M3's 32-entry
+modified queue had no provider; the ledger carried zero `swap_*` fields;
+f1-83's pool had no reservations; FAT growth (`fat_truncate`) copies the
+whole chain, so it could not grow a live pagefile.
+
+| Policy (CiukiOS, not 98 values) | Value |
+| --- | --- |
+| File | `C:/SYSTEM/PAGEFILE.SWP`, hidden+system, writable fixed FAT system volume only |
+| Initial size / minimum | 16 MiB (one extent) |
+| Growth / maximum | 16 MiB extents, before admission needs them (headroom < one extent); 64 extents = 1 GiB metadata bound |
+| Disk-free reserve | growth only while free ≥ max(16 MiB, 5 % of volume) + 16 MiB |
+| Shrink | trailing extents with no live slot, after 30 s without page I/O or growth, never below commitment + one extent of headroom |
+| Bounded storage steps | growth 256 KiB, shrink 1 MiB, map 512 FAT hops per volume reservation |
+| Page-out batch | ≤ 8 contiguous slots per request, 8 pinned bounce pages (one f0-43 token) |
+| Reserved f1-83 records | 4 page-in, 1 page-out; ordinary requests never consume them |
+| Prewrite | no pressure, NORMAL free ≤ 1.5 × high, no dirty cache bytes and empty controller queue, ≥ 100 ms after demand I/O, one slice per 50 ms, ≤ 8 speculative queue entries, > 8 free slots kept for mandatory page-out |
+| Errors | failed slot retired; 4 consecutive failed batches stop page-out (sticky); read failure = contained `-EIO` |
+
+**Object.** `core/pager.c` owns up to 64 extent records (one metadata page
+each, `MM_PAGER`): a 2-bit state per slot (free, reserved, used, failed), a
+free bitmap and ≤ 32 contiguous LBA runs mapped from the FAT chain. A slot
+outside a run (a page straddling discontiguous <4 KiB clusters, or runs
+beyond 32) is failed capacity. Global counters give capacity (published
+slots minus failed), used/reserved/free, outstanding I/O, store state
+(off/active/quiesced/failed) and a sticky error. Slots are never relocated;
+handles are 1-based `extent * 4096 + slot + 1`. Swap contents are never
+trusted: every boot publishes existing extents empty, reads only slots
+written in this boot, and newly exposed anonymous pages stay demand-zero.
+
+**Commit.** `ledger_commit` admits pageable commitment against
+RAM + published swap capacity; `commit_pagefile` reports promises beyond
+RAM. A failed or quiesced store publishes only its live slots, so no new
+commitment is admitted against failed capacity. A refused commitment calls
+`pager_commit_wait` (sleepable, no object/pager level held), which asks the
+manager for the deficit and waits ≤ 10 s; a refused growth is retried only
+after 30 s. Win32 and section commits (f5-04) use the same path.
+
+**Page-out.** The reclaim worker queues cold private pages through the uaddr
+provider (sole owner, not busy, not pinned or VirtualLocked, and either a
+valid copy or a reservable slot). The pager worker takes up to eight entries
+(mandatory first), the provider revokes every alias (folding D into the
+dirty epoch) and copies the page into the pinned bounce, slots are reserved
+as contiguous runs, and one reserved request writes each run. Completion
+revokes aliases again: unchanged pages detach (`SLOT_SWAPPED`), the frame
+is freed by the queue release; a redirtied page keeps its frame and a stale
+copy; a failed write retires the slot and leaves the page and its dirty
+version intact. A page with a clean copy is discarded without I/O. Pager
+callbacks never yield, so unmap/mprotect never see a pager transaction; a
+busy object defers the page instead.
+
+**Page-in.** A fault allocates its frame *before* marking the object busy
+(waiting ≤ 5 s for reclaim while the pager is online, with back-to-back
+reclaim slices for 100 ms), then holds the object busy across one reserved
+demand read, which coalesces other faults on that page. The copy stays
+associated while clean. Any failure returns `-EIO` to the faulting process
+(signal) or syscall; the slot stays swapped; data is never fabricated.
+
+**Prewrite.** Under the prewrite conditions above, the reclaim scanner's
+separate cursor samples each candidate's own aliases (second chance) and
+queues cold pages without a valid copy as speculative entries; frames stay
+mapped. A demand page-in cancels a queued speculative request (f1-83
+cancellation) and suppresses prewrite for 100 ms; mandatory page-out is
+never cancelled and keeps f1-83 aging/promotion.
+
+**Lock and resource order** (outermost first; a task may acquire a level
+only while every level it holds is lower; recorded and refused otherwise;
+trylock probes create no wait edge):
+
+| Level | Held by | May do | Never |
+| --- | --- | --- | --- |
+| 1 address space | range/mutation pins | wait for 2 (commit growth) | — |
+| 2 manager | extent growth/shrink/open | VFS namespace → volume → cache → device, allocate | wait for 3–7 |
+| 3 object | fault, page-in, alias transaction | 4, 6, 7 | a second object level |
+| 4 allocation | reclaimable frame allocation | wait for reclaim/page-out | under 5–7 |
+| 5 page-out | pager worker | probe objects (no wait), 6, 7 | allocate, reclaim, manager, fault, commit wait |
+| 6 slots | slot map (cooperative atomic) | ledger update | sleep, allocate |
+| 7 I/O | reserved request submit/wait | controller queue | namespace, FAT, cache |
+
+`pager_order_*` keeps a per-task mask (`struct task::pager_order`);
+`frame_new`, `reclaim_slice`, `resolve_page`, the manager and the commit wait
+assert it. Host tests include the negative control (allocation, reclaim,
+manager, recursive fault and commit wait inside page-out I/O: five
+violations, each refused). No new panic path; violations are rate-limited
+`[pager] order violation` records.
+
+**Volume dependency.** The pager holds the file with an exclusive
+(`VFS_DENY_ALL`) handle: readers, delete and detach of the volume are
+refused. `storage_shutdown` first quiesces the store (no page-out, prewrite
+or growth; in-flight I/O drains ≤ 30 s or the shutdown is refused with
+`EBUSY`), then closes the handle; live slots remain readable through their
+runs. A failed shutdown resumes the store after re-mapping the file and
+verifying identical runs. Safe removal of the pagefile volume is refused;
+surprise loss fails the store (page-ins `-EIO`, capacity = live slots).
+Page I/O routes through the partition view to the physical controller
+queue with the volume's generation checks; it never flushes (swap is not
+durable state) and never passes through the block cache.
+
+Records: `[pager] attach/grow/shrink/shutdown/resume/stats` (stats at most
+every 30 s from cpustat), `[storage] pagefile`, `[mem] ledger … swap_*`.
+Host evidence: `tests/host/pager_test.c` (kernel suite) and
+`tests/host/fs/test_pagefile.c` (filesystem suite); report
+`build/codex/f0-49-report.md`. No physical qualification is claimed.
 
 ## Resource ledger (M1, f0-43)
 
