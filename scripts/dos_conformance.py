@@ -312,7 +312,10 @@ def build_reference(out, system_files, directories, games_files=None, folder=REL
     with out.open("rb") as stream:
         while block:=stream.read(65536):
             if block.rstrip(b"\0"): used=stream.tell()-len(block)+len(block.rstrip(b"\0"))
-    with out.open("r+b") as stream: stream.truncate((used+511)//512*512)
+    # Keep whole clusters: the read-back (and DOS) reads the last cluster entirely.
+    base,cluster=dos.DATA_LBA*512,dos.SPC*512
+    used=base+(used-base+cluster-1)//cluster*cluster if used>base else (used+511)//512*512
+    with out.open("r+b") as stream: stream.truncate(used)
     # Shift the small used private payload in place. Never copy the canonical
     # full image or change its VMM disk capacity. The ordinary FAT BPB carries
     # the hidden-sector count used by the exact pinned FreeDOS VBR.
