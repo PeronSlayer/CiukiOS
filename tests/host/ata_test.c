@@ -185,6 +185,7 @@ void rec_emit(const char *name, const char *event, const char *fmt, ...)
     }
 }
 
+#include "scheduler_stubs.h"
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/lib/stackprot.c"
 static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }

@@ -169,6 +169,7 @@ void schedule(void)
     /* The caller reacquires its queue lock after schedule returns. */
     CHECK(flags==0x200 && waiter->state==T_READY);waiter->state=T_RUNNING;
 }
+#include "scheduler_stubs.h"
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/core/serial.c"
 static unsigned queue_size(void) { return uart_used; }

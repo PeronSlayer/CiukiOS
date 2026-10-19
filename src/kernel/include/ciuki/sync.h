@@ -8,7 +8,13 @@
 
 struct task;
 struct kwaiter;
-struct kwait { struct kwaiter *head; };
+struct kwait {
+    struct kwaiter *head;
+    struct task *owner;            /* only mutex/ticket-lock queues donate */
+    struct kwait *owned_next;
+    void (*owner_died)(struct kwait *);
+    void (*ticket_cancelled)(struct kwait *);
+};
 struct kmutex {
     struct task *owner;
     struct kwait wait;
@@ -23,14 +29,24 @@ struct kmutex {
  * No mutex may cross a user return or firmware entry.
  *
  * Integration: task exit/kill MUST call ksync_task_exit before changing the
- * task state or freeing its stack. It cancels waits and panics on held locks.
+ * task state or freeing its stack. It cancels waits and retires held locks.
  * task.c is outside f1-00's allowed files; its lead must install that hook. */
 typedef bool (*kwait_cond_fn)(void *arg);
 void kwait_init(struct kwait *q);
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t deadline_ticks);
+/* FIFO tickets stay reserved across safety timeouts. Task cancellation closes
+ * the abandoned ticket and shifts later live tickets, preserving their order. */
+bool kwait_wait_ticket_until(struct kwait *q, kwait_cond_fn cond, void *arg,
+                             uint64_t deadline_ticks, uint32_t *ticket);
 void kwait_wake_all(struct kwait *q);
+/* Completion-only wake; false predicates and already-ready tasks earn nothing. */
+void kwait_wake_io(struct kwait *q);
+void kwait_set_owner(struct kwait *q, struct task *owner);
+void ksync_task_ready(struct task *t) __attribute__((weak));
+void ksync_priority_changed(struct task *t) __attribute__((weak));
 void kmutex_init(struct kmutex *m);
 void kmutex_lock(struct kmutex *m);
+bool kmutex_lock_until(struct kmutex *m, uint64_t deadline_ticks);
 void kmutex_unlock(struct kmutex *m);
 void ksync_task_exit(struct task *t);
 

@@ -164,7 +164,9 @@ bool usb_host_irq(struct usb_host *h)
         usb_write(h, off, causes, width);
     }
     h->interrupts++; h->irq_pending = input_pending = true;
-    kwait_wake_all(&h->changed); kwait_wake_all(&input_changed);
+    if (!fatal && !gone && (causes & (uhci ? 1u : 2u))) kwait_wake_io(&h->changed);
+    else kwait_wake_all(&h->changed);
+    kwait_wake_all(&input_changed);
     return true;
 }
 static bool usb_irq(unsigned irq, const char *owner)

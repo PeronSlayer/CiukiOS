@@ -89,7 +89,7 @@ void audio_mix(struct audio_frame *out, unsigned frames)
             while (s->phase >= output_rate && s->queued) mixer_retire(s,output_rate);
         }
         if (starved) s->starvation++;
-        kwait_wake_all(&s->changed);
+        kwait_wake_io(&s->changed);
     }
     if (audio_vm_mix) audio_vm_mix(sums, frames); /* every admitted VM, focused or not */
     bool hardware = audio.master_in_codec || audio.master_in_hardware;

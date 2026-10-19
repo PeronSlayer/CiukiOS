@@ -41,7 +41,7 @@ unsigned fake_live(void)
 }
 static int send(int fd, const struct ciuki_message *m, uint32_t flags)
 {
-    assert(flags==DONTWAIT);
+    assert((flags & DONTWAIT) && !(flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)));
     if (fd==fake_closed_peer) { raise(SIGPIPE); errno=EPIPE; return -1; }
     if (!fds[fd].live) { errno=EPIPE; return -1; }
     if (fake_block) { errno=EAGAIN; return -1; }

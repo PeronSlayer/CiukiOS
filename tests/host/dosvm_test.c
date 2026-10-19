@@ -214,6 +214,7 @@ uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t t) { return g_ticks - t < (1ull << 63); }
 void kwait_init(struct kwait *q) { q->head=0; }
 void kwait_wake_all(struct kwait *q) { (void)q; }
+void kwait_wake_io(struct kwait *q) { (void)q; }
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK((cpu_flags&V86_IF) && !m->owner); m->owner=g_current; }
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner==g_current); m->owner=0; }

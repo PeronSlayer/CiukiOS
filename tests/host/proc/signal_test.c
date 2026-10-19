@@ -67,7 +67,17 @@ extern void serial_tick(void) __attribute__((weak));
 #define crit_begin() ((void)0)
 #define crit_end() ((void)0)
 #define switch_context(old, next) ((void)(old), (void)(next))
+#define task_set_class timing_task_set_class
+#define task_focus timing_task_focus
+#define task_input_delivered timing_task_input_delivered
+#define task_device_deadline timing_task_device_deadline
+#define task_start timing_task_start
 #include <signal_scheduler.inc>
+#undef task_set_class
+#undef task_focus
+#undef task_input_delivered
+#undef task_device_deadline
+#undef task_start
 #undef switch_context
 #undef crit_end
 #undef crit_begin
@@ -86,12 +96,12 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
 
 static void test_focused_budget(void)
 {
-    struct task vm = {.state=T_READY, .prio=P_NORMAL}, peers[5] = {0}, idle = {.state=T_RUNNING};
+    struct task vm = {.state=T_READY, .prio=P_NORMAL}, peers[5] = {0}, idle = {.state=T_RUNNING, .prio=P_IDLE};
     struct task *saved_current = g_current;
     uint64_t saved_ticks = g_ticks;
     g_ticks = 0; g_current = idle_task = &idle; all_tasks = &vm;
     memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
-    focus_task = 0; test_focus = &vm;
+    focus_task = 0; test_focus = &vm;ordinary_ticks=focus_ticks=device_used=device_history=0;
     rq_push(&vm);
     for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) {
         peers[i].state = T_READY; peers[i].prio = P_NORMAL;
@@ -112,9 +122,9 @@ static void test_focused_budget(void)
     memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
     vm.state = T_READY; g_current = &idle; idle.state = T_RUNNING; rq_push(&vm);
     for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) {
-        peers[i].prio = P_INTERACTIVE; peers[i].state = T_READY; rq_push(&peers[i]); native_ticks[i] = 0;
+        peers[i].prio = P_INTERACTIVE; peers[i].priority_valid=false; peers[i].state = T_READY; rq_push(&peers[i]); native_ticks[i] = 0;
     }
-    vm_ticks = 0; timing_schedule();
+    vm_ticks = 0;ordinary_ticks=focus_ticks=0; timing_schedule();
     for (unsigned tick = 0; tick < 1000; tick++) {
         vm_ticks += g_current == &vm;
         for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) native_ticks[i] += g_current == &peers[i];
@@ -129,7 +139,7 @@ static void test_focused_budget(void)
     /* f3-17: the monitor withdraws this token after an idle indication.
      * Even with eight focused ticks left, normal queue order now wins. */
     memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
-    focus_task = &vm; focus_ticks = 0; focus_window = g_ticks;
+    focus_task = &vm; focus_ticks = 0; ordinary_ticks = 0;
     vm.state = T_READY; peers[0].state = T_READY;
     rq_push(&peers[0]); rq_push(&vm);
     CHECK(rq_pop() == &peers[0] && !focus_task && rq_pop() == &vm);
@@ -540,7 +550,7 @@ static void interrupt_sleep(void)
      * sleeper gets a turn after at most the three queued peers. */
     CHECK(g_ticks - sleep_started >= 10 && g_ticks - sleep_started <= 13);
     if (sleep_paced_peers) CHECK(g_ticks - sleep_started == 10);
-    for (unsigned i = 0; i < P_COUNT; i++) rq_head[i] = rq_tail[i] = 0;
+    for (unsigned i = 0; i < SCHED_LEVELS; i++) rq_head[i] = rq_tail[i] = 0;
     all_tasks = idle_task = 0;
     sleeper->all_next = old_next;
     host_cr3 = saved_cr3;

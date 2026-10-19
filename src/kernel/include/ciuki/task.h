@@ -9,12 +9,26 @@
 #include "arch.h"
 
 enum task_state { T_READY, T_RUNNING, T_BLOCKED, T_ZOMBIE, T_DEAD };
-enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_COUNT };
+/* Stable class encodings; larger internal levels below run first. */
+enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_HIGH, P_COUNT };
+#define SCHED_LEVELS 32u
+#define SCHED_NORMAL 7u
+#define SCHED_FOREGROUND 9u
+#define SCHED_HIGH 13u
+#define SCHED_DEVICE 24u
+#define SCHED_SERVICE_MIN 16u
+#define SCHED_BOOST_CAP 15u
 
 #define EXIT_FAULT_BASE 0x100      /* exit code = 0x100 + vector for faults */
 #define KSTACK_CANARY   0xC1A0CA7Au /* lowest word of every kernel stack */
 #define KSTACK_FILL     0xA5u
 struct task;
+struct kwait;
+struct sched_stats {
+    uint32_t input_granted, input_expired, io_granted, io_expired;
+    uint32_t starvation_granted, starvation_expired, budget_exhausted, audio_urgent;
+    uint32_t wakeups;
+};
 void task_stack_init(void *base);  /* unused stack only, before its first frame */
 /* Bytes touched since creation, excluding the reserved canary word. A damaged
  * canary reports KSTACK_SIZE. Scan only a live, unreaped task's stack; this is
@@ -32,6 +46,11 @@ struct task {
     char name[16];
     enum task_state state;
     enum task_prio prio;
+    uint8_t base_priority, effective_priority, inherited_priority, configured_priority;
+    uint8_t input_priority, io_priority, io_ticks;
+    bool priority_valid, focused;
+    uint64_t input_expiry, service_deadline;
+    struct kwait *waiting_on;      /* mutex dependency only; never device waits */
     bool user;
     bool measured;                 /* counted by the preemption measurement */
     bool boosted;                  /* starvation boost applied (once per episode) */
@@ -78,6 +97,19 @@ struct task *task_create_user(const char *name, enum task_prio prio, uint32_t en
 __attribute__((noreturn)) void sched_start(void);
 extern uint64_t g_switch_target;
 void task_start(struct task *t);
+void task_set_class(struct task *t, enum task_prio prio);
+/* Kernel-only translation result; callers enforce elevation authority. */
+void task_set_base(struct task *t, enum task_prio prio, unsigned level);
+void task_set_inherited(struct task *t, unsigned priority);
+void task_focus(struct task *t);  /* NULL withdraws foreground promotion */
+void task_input_delivered(struct task *t);
+void task_io_completed(struct task *t);
+void task_device_deadline(struct task *t, uint64_t deadline);
+void sched_snapshot(struct sched_stats *out);
+/* cpustat charges actual execution at IRQ/switch boundaries. Tick accounting
+ * remains a conservative fallback before a calibrated clock is available. */
+void sched_charge_runtime(struct task *t, uint64_t cycles, uint64_t cycles_per_ms);
+void cpu_account(void) __attribute__((weak));
 void schedule(void);
 void sched_tick(void);
 void task_yield(void);

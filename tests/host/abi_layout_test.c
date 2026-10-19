@@ -8,6 +8,9 @@
 struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
     /* f5-03a literal wire schema. */
+    {"constant.CIUKI_CHANNEL_FOCUS", CIUKI_CHANNEL_FOCUS, 2u},
+    {"constant.CIUKI_CHANNEL_UNFOCUS", CIUKI_CHANNEL_UNFOCUS, 4u},
+    {"constant.CIUKI_CHANNEL_INPUT", CIUKI_CHANNEL_INPUT, 8u},
     {"constant.CIUKI_SYS_W32", CIUKI_SYS_W32, 96u},
     {"constant.CIUKI_W32_VERSION", CIUKI_W32_VERSION, 1u},
     {"constant.CIUKI_W32_FS_INDEX", CIUKI_W32_FS_INDEX, 9u},

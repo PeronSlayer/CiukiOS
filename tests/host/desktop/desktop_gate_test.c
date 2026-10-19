@@ -202,7 +202,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
-    assert(flags==DONTWAIT && fd>=3 && fd<256);
+    assert((flags & DONTWAIT) && !(flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)) && fd>=3 && fd<256);
     if (burst && m->data[1]==DESK_CONFIGURE && configure_attempts++<4) {
         errno=EAGAIN; blocked_sends++; return -1;
     }

@@ -25,6 +25,10 @@ struct proc_launch {
     bool active, configured, damaged, finished;
 };
 enum proc_personality { PROC_NATIVE, PROC_WIN32 };
+/* Pure translations, not permission to elevate. SCHED_OTHER is policy 0;
+ * unsupported realtime policies/classes remain rejected by public APIs. */
+int proc_priority_posix(int policy, int priority, int nice_value);
+int proc_priority_win32(uint32_t priority_class, int relative, bool foreground);
 struct w32_delivery;
 struct process {
     uint32_t pid, ppid, pgid, slot;

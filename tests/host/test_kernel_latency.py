@@ -196,8 +196,8 @@ static void test_irq_restore(uint32_t f) {
         with tempfile.TemporaryDirectory(prefix='latency-', dir=out) as directory:
             temp = Path(directory)
             source = (ROOT / 'src/kernel/core/task.c').read_text()
-            block = source[source.index('static struct task *rq_head'):source.index('static void rq_push')]
-            for name in ('rq_push', 'rq_pop', 'rq_remove', 'rq_any', 'schedule', 'sched_tick',
+            block = source[source.index('static struct task *rq_head'):source.index('void task_stack_init')]
+            for name in ('schedule', 'sched_tick',
                          'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
                 match = re.search(r'^(?:static )?[^\n]+\b' + name + r'\([^\n]*\)\s*\{', source, re.M)
                 self.assertIsNotNone(match, name)
@@ -206,10 +206,11 @@ static void test_irq_restore(uint32_t f) {
                     depth += (source[end] == '{') - (source[end] == '}')
                     end += 1
                 block += source[match.start():end] + '\n'
-            (temp / 'latency_scheduler.inc').write_text(block)
+            (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + block)
             write_model(temp / 'vm_creation_model.inc')
             for unit, extra in (
                 ('kernel_latency_test.c', []),
+                ('scheduler_priorities_test.c', []),
                 ('fs/wait_latency_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):
@@ -221,6 +222,16 @@ static void test_irq_restore(uint32_t f) {
                                 *(str(ROOT / path) for path in extra),
                                 str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
+            if os.environ.get('CIUKI_SCHED_BENCH') == '1':
+                binary = temp / 'scheduler_benchmark'
+                subprocess.run(['clang', '-std=c17', '-O2', '-Wall', '-Wextra', '-Werror',
+                                '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                                '-I', str(ROOT / 'src/kernel/include'), '-I', str(temp),
+                                str(ROOT / 'tests/host/scheduler_priorities_test.c'),
+                                str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+                for _ in range(5):
+                    subprocess.run([str(binary), '--benchmark'], check=True)
 
     def test_console_rows(self):
         out = ROOT / 'build/host'

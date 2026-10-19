@@ -90,24 +90,35 @@ struct fs_ticket { fs_lock *lock; uint32_t ticket; };
 static inline bool fs_ticket_ready(void *arg) {
     struct fs_ticket *t=arg; return t->lock->serving==t->ticket;
 }
-static inline void fs_lock_init(fs_lock *l) { memset(l,0,sizeof(*l)); kwait_init(&l->wait); }
+static inline void fs_lock_owner_died(struct kwait *q) {
+    fs_lock *l=(fs_lock *)((char *)q - __builtin_offsetof(fs_lock,wait));
+    l->held=false; l->serving++;
+}
+static inline void fs_lock_ticket_cancelled(struct kwait *q) {
+    fs_lock *l=(fs_lock *)((char *)q - __builtin_offsetof(fs_lock,wait));
+    l->next--;
+}
+static inline void fs_lock_init(fs_lock *l) {
+    memset(l,0,sizeof(*l)); kwait_init(&l->wait); l->wait.owner_died=fs_lock_owner_died;
+    l->wait.ticket_cancelled=fs_lock_ticket_cancelled;
+}
 static inline void fs_lock_destroy(fs_lock *l) { (void)l; }
 static inline bool fs_lock_try_take(fs_lock *l) {
     uint32_t f=irq_save(); bool free=l->next==l->serving;
-    if (free) { l->next++; l->held=true; kpreempt_hold(); }
+    if (free) { l->next++; l->held=true; kwait_set_owner(&l->wait,g_current); kpreempt_hold(); }
     irq_restore(f); return free;
 }
 static inline void fs_lock_take(fs_lock *l) {
     uint32_t f=irq_save(); struct fs_ticket t={l,l->next++}; irq_restore(f);
     for (;;) {
         f=irq_save();
-        if (fs_ticket_ready(&t)) { l->held=true; kpreempt_hold(); irq_restore(f); return; }
+        if (fs_ticket_ready(&t)) { l->held=true; kwait_set_owner(&l->wait,g_current); kpreempt_hold(); irq_restore(f); return; }
         irq_restore(f);
-        kwait_wait_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000));
+        kwait_wait_ticket_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000),&t.ticket);
     }
 }
 static inline void fs_lock_drop(fs_lock *l) {
-    uint32_t f=irq_save(); l->held=false; l->serving++; kpreempt_release(); irq_restore(f); kwait_wake_all(&l->wait);
+    uint32_t f=irq_save(); l->held=false; l->serving++; kwait_set_owner(&l->wait,0); kpreempt_release(); irq_restore(f); kwait_wake_all(&l->wait);
 }
 struct fs_event { struct kwait wait; uint32_t sequence; };
 struct fs_event_ticket { struct fs_event *event; uint32_t sequence; };

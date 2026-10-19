@@ -47,6 +47,9 @@ void vfs_unlock(struct vfs *v) { fs_lock_drop(&v->lock); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool kwait_wait_until(struct kwait *q, bool (*p)(void *), void *arg, uint64_t deadline)
 { (void)q; (void)p; (void)arg; (void)deadline; abort(); }
+void kwait_set_owner(struct kwait *q,struct task *owner) { q->owner=owner; }
+bool kwait_wait_ticket_until(struct kwait *q,kwait_cond_fn p,void *arg,uint64_t deadline,uint32_t *ticket)
+{ (void)ticket;return kwait_wait_until(q,p,arg,deadline); }
 static void vm_init(struct uaddr *u) { CHECK(!ua_init(u,u)); u->win32 = true; }
 static struct ciuki_w32_vm request(uint32_t address, uint32_t bytes, uint32_t flags, uint32_t protect)
 { return (struct ciuki_w32_vm){ .address=address,.bytes=bytes,.flags=flags,.protect=protect }; }

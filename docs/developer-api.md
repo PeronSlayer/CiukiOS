@@ -274,6 +274,15 @@ Contract constants use their published names. No host headers required.
 #define CIUKI_SURFACE_DIMENSION_MAX 2048
 #define CIUKI_SURFACE_PIXEL_BYTES 4
 #define DONTWAIT 1
+```
+
+channel_send delivery hints. Only the owner of an input grant may use
+these. No priority elevation is exposed to ordinary clients.
+
+```c
+#define CIUKI_CHANNEL_FOCUS 2u
+#define CIUKI_CHANNEL_UNFOCUS 4u
+#define CIUKI_CHANNEL_INPUT 8u
 #define CIUKI_INPUT_KEY 1
 #define CIUKI_INPUT_TEXT 2
 #define CIUKI_INPUT_MOTION 3

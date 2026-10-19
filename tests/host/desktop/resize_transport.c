@@ -83,7 +83,7 @@ int rt_unmap(void *pixels,size_t bytes)
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
-    assert(fd==3 && flags==DONTWAIT);
+    assert(fd==3 && (flags & DONTWAIT) && !(flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)));
     if(rt_block) { errno=EAGAIN; return -1; }
     assert(out_count<256 && m->fd_count<=1);
     struct ciuki_message copy=*m; copy.sender_pid=42;
@@ -108,6 +108,6 @@ void rt_push(const struct ciuki_message *m)
     in[(in_head+in_count++)%256].sender_pid=7;
 }
 static int server_send(int fd,const struct ciuki_message *m,uint32_t flags)
-{ assert(fd==3 && flags==DONTWAIT); rt_push(m); return 0; }
+{ assert(fd==3 && (flags & DONTWAIT) && !(flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT))); rt_push(m); return 0; }
 static int present(int d,int s,const struct ciuki_rect *r) { (void)d;(void)s;(void)r; return 0; }
 const struct desk_ops rt_ops={server_send,ciuki_surface_info,ciuki_surface_map,rt_unmap,rt_close,present};

@@ -10,7 +10,7 @@ ELF executable linked at `0xC0100000`. Native programs are static ELF32
 executables with no interpreter. Ring-3 code enters the kernel only through
 the DPL 3 interrupt gate `0x80` with arguments in registers. The kernel is
 uniprocessor, non-preemptible in F0–F1 (it runs with interrupts enabled and
-yields only at defined points), schedules threads preemptively by fixed
+yields only at defined points), schedules threads preemptively by effective
 priority with round-robin inside a priority, keeps x87 out of the kernel,
 and switches user FPU state lazily through `#NM`. Every process resource
 has one owner and a defined teardown order.
@@ -218,11 +218,37 @@ is implemented, in an update to this contract.
 
 ## Threads and scheduling
 
+Research closure for f0-45 (2026-10-19): the original Microsoft SDK
+[Priority Inversion](https://techshelps.github.io/Win32Api%20Documentation/html/o9bn.3.htm)
+describes Windows 95 dependency-owner boosting, distinct from the NT heuristic.
+The original DDK [Deadlocks](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM)
+distinguishes the ring-0 scheduler/time slicer from Kernel32's ring-3 waits.
+[Pietrek, thread priorities pp. 138–142](https://manualzz.com/doc/46388115/microsoft-windows-system-programming-secrets-manual)
+describes 32 levels, foreground/background normal bases 9/7, high 13 and
+temporary I/O boosts for Windows 95. The
+[Oney 1996 scan](https://archive.org/details/systemsprogrammi00oney) remains
+access-restricted; the accessible Win95 DDK topics and searches for the 98
+time-slicer topics do not establish exact Windows 98 input/starvation/decay
+constants. R2's boost amounts, expiry, budgets and quantum are **CiukiOS
+policy**, not claimed Windows 98 constants. The implementation replaces the
+repository's four queues, 1000 ms starvation guard and absolute DOS 8/10
+allowance, while retaining public priority encodings and R3 audio policy.
+
 - A process has one or more threads (F0 probes: one each). Kernel threads
   exist for deferred device work.
-- Fixed priorities, highest first: `device` (deferred interrupt work and
-  audio refill), `interactive` (desktop, focused DOS VM), `normal`, `idle`.
-  Round-robin within a priority; time slice 10 ms (10 PIT ticks).
+- Thirty-two internal levels, highest first; FIFO round-robin within a
+  level. The stable class encodings remain device=0, interactive=1,
+  normal=2, idle=3; privileged high=4 is kernel-only. Their default levels
+  are 24, 9, 7, 0 and 13. Native foreground promotion adds two to ordinary
+  configured base (default 7 → 9). Effective priority is the maximum of
+  base, input boost, I/O boost, starvation promotion and inherited priority.
+  Every change explicitly reinserts READY tasks without resetting ready age.
+  Ordinary quantum stays 10 ms; existing DOS/audio-sensitive quanta stay
+  2 ms. Input delivery to the focused endpoint's owner adds two (cap 15)
+  for 20 ms, refreshing rather than stacking. Focus loss clears it.
+  Valid device completion wakes add one (cap 15) for ten running PIT ticks;
+  polling, false completion predicates and already-ready tasks earn nothing.
+  Class/foreground changes recompute active boosts from the new base.
 - Ring-3 timer preemption also honours a newly ready higher-priority task.
   Measurement counters preserve timer-caused transitions between measured
   users when an intervening device dispatch services the wake; intermediate
@@ -250,8 +276,11 @@ is implemented, in an update to this contract.
 - At a safe point a focused DOS VM with a PIC-pending virtual IRQ0 or SB16
   IRQ requests dispatch ahead of
   presentation work of the same priority. Device work still wins; the
-  existing 8/10-tick focus budget is neither extended nor renewed by IRQs.
-  After exhausting it, peers run until the next period. Masked/in-service
+  focus budget is neither extended nor renewed by IRQs. It now counts
+  eight of ten **non-device-service running ticks**, instead of eight of
+  ten elapsed ticks. After exhausting it, peers run for the remaining two
+  ordinary ticks. Input boosts, donated owners, privileged high work and
+  overdue normal dispatches take precedence over DOS preference. Masked/in-service
   IRQs, blocked/stopping VMs and unrelated input IRQs add no preference.
   Guest IF/STI shadows do not suppress this scheduling hint: running the
   guest lets it reach its next delivery boundary. The existing virtual IF,
@@ -259,11 +288,19 @@ is implemented, in an update to this contract.
   This preserves the desktop's reserved share under continuous IRQ load.
   Source comparison and host/physical evidence limits are recorded in
   [F3-41 validation](../validation/f3-41-bounded-presentation.md).
-- A device task consumes at most ten running PIT ticks without blocking before
-  continuing at normal priority. Voluntary yields do not renew this allowance;
-  a blocking dispatch restores its device priority and resets its allowance.
-  Overruns request a switch at the next safe point and are reported by cpustat
-  (sixteen distinct task names per window; further event loss is counted).
+- Device-priority service uses at most four running ticks in a rolling
+  ten-tick history across **all** device workers. CPU-cycle charges at
+  IRQ/switch boundaries also debit ten rolling 1 ms buckets, so short turns
+  between PIT ticks cannot escape accounting. The PIT history remains a
+  conservative additional guard; neither budget is renewed by a yield.
+  At exhaustion, device work
+  is reinserted at ordinary level, retaining its configured device class;
+  neither yielding nor blocking renews aggregate credit. Credit returns as
+  charged ticks leave the history. The audio worker annotates its existing
+  absolute wake deadline; due service runs even beyond budget and increments
+  `audio_urgent`. Such overload is reported, not treated as admitted load.
+  A device/starvation turn is at most 2 ms. IRQ-off/unsafe kernel holds still
+  defer switching; R1 bounds require qualified safe points.
 - The supervisor gives only the desktop's initial UI thread interactive
   priority, before publication. Further native threads retain normal priority.
 - Interrupt handlers do the minimum (acknowledge, capture state) and defer
@@ -271,8 +308,54 @@ is implemented, in an update to this contract.
   except to mark a thread runnable.
 - Interrupt-disabled sections are bounded; the budget is set in
   `device-firmware-ownership.md` and measured by an F0 probe.
-- Starvation guard: a runnable `normal` thread that has not run for 1 s is
-  boosted once (logged).
+- Starvation guard: at 100 ms READY age, an ordinary thread receives one
+  bounded dispatch at 15, without changing class. Actual device deadlines
+  retain precedence; overdue dispatches precede nonurgent device work.
+  The promotion expires on the first running tick or voluntary redispatch.
+  `[cpu]` windows include granted/expired input, I/O and starvation counters,
+  wakeups, budget exhaustion and urgent audio exceptions; per-task list
+  records show class/base/effective/input/I/O/inherited levels and expiry.
+- Mutex waiters donate their highest effective priority transitively through
+  owned mutex queues. Unlock, ready/timeout, cancellation and owner death
+  withdraw the edge and recompute all affected owners. Device queues have no
+  owner and never donate. A cycle produces a protected `[sched]
+  donation_cycle` record and its closing edge does not donate; the actual
+  wait still follows its condition/deadline. `kmutex_lock_until` provides
+  a finite timeout. Address-ordered acquisition remains mandatory outside
+  detected cycles. The void lock API waits without donation for its 1000 ms
+  safety interval, then panics on a persistent cycle instead of deadlocking
+  indefinitely; callers needing recovery use the timed API. Owner death retires kmutex ownership
+  and wakes waiters before the owner's stack is freed. FIFO filesystem
+  ticket locks retain their serving order and donate to the current holder.
+
+Internal API translation (f0-45, `proc/priority.c`; **CiukiOS policy**):
+
+| API value | Internal base level |
+| --- | --- |
+| POSIX SCHED_OTHER=0, sched_priority=0, nice=0 | 7 |
+| POSIX nice −20..19 | Explicit monotonic table from 13 down to 1; roughly three nice values per internal level |
+| Other POSIX policy/nonzero sched_priority | Rejected; no public realtime elevation |
+| Win32 IDLE_PRIORITY_CLASS=0x40 | 4 (distinct from kernel idle 0) |
+| Win32 NORMAL_PRIORITY_CLASS=0x20 | 7 background / 9 foreground |
+| Win32 HIGH_PRIORITY_CLASS=0x80 | 13, kernel-authorized only |
+| Win32 relative −2, −1, 0, +1, +2 | Add to class base, clamp 1..15 |
+| Win32 THREAD_PRIORITY_IDLE=−15 / TIME_CRITICAL=15 | 1 / 15, subject to authorization |
+| Win32 REALTIME_PRIORITY_CLASS=0x100 | Rejected/reserved |
+
+These translations preserve the API encodings. Native/Win32 initial threads
+use the normal translation. They do not add public priority setters or grant
+elevation authority; existing unsupported APIs remain unsupported. Channel
+send adds delivery hints (FOCUS=2, UNFOCUS=4, INPUT=8), accepted only from an
+owned input grant. The desktop derives them from its existing focus/input
+messages. Only a successfully enqueued message applies a hint. Receiver IDs
+and generations identify the actual endpoint thread. Focus loss returns
+focus to the compositor. Successful owned-grant input reads boost the
+compositor only when it owns focus (including shell/internal windows after
+client teardown); failed sends, empty reads and resynchronization events
+grant nothing. The kernel does not parse
+the desktop message protocol. Task Manager's process record layout remains
+unchanged; full scheduling state is available in the kernel task list and
+per-task `[cpu]` records.
 
 ### Bounded output and CPU evidence (f0-21)
 
