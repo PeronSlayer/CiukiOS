@@ -1,0 +1,21 @@
+{
+  "commit": "b073859675060c9211fcbccfd90e4e87520dc2c2",
+  "files": {
+    "codecs/avifil32/Makefile.in": "61d1049a4e601f73651212f7ee43b79f4fb85a7ef2c95f988bd532a3947cb932",
+    "codecs/avifil32/avifil32.spec": "9f7c932977ee3f7d69e1c166810a8d920720f0f7d0a6b208bda323a71107ee57",
+    "codecs/iccvid/Makefile.in": "0e5168645e39374b70965dda71ae2f2f3551b0e24886d618f1770fd1d6d61f80",
+    "codecs/iccvid/iccvid.spec": "297bd7a0fc967787b23bf0b8e1282d1bd261b29e6fb4456154fdf3f27345aac2",
+    "codecs/imaadp32.acm/Makefile.in": "acd472f9c40f9cd55d12d84b85e9e4410177c5ec4bfc30b7294fc7e1946a43d0",
+    "codecs/imaadp32.acm/imaadp32.acm.spec": "8959fc514fc0a97b57e203d74edbdcf15ff1b86919bfe8b0ebf50e09cb706a5e",
+    "codecs/msacm32/Makefile.in": "936b652333b37b58e8d65472d598cbac6f75cf12eecd46160e6e39fa345f4331",
+    "codecs/msacm32/msacm32.spec": "e5a41b55fac09dd0d60594d5c4f4df65339cc68006dfd3e9e1220b17a9acf483",
+    "codecs/msadp32.acm/Makefile.in": "7a9d11ef3d5213caaf6bfaa9ed92ed15407e883fc2513f3cf6b8904f2beef34b",
+    "codecs/msadp32.acm/msadp32.acm.spec": "8959fc514fc0a97b57e203d74edbdcf15ff1b86919bfe8b0ebf50e09cb706a5e",
+    "codecs/msrle32/Makefile.in": "6235361a7934d54ea87b666379db41899740ec4318485a81f7d9421912539465",
+    "codecs/msrle32/msrle32.spec": "723f04dd0019ff6207006445b0e9f721a3a52f6bc43a0ed5f5bf15277801e768",
+    "codecs/msvfw32/Makefile.in": "8114d19a3ad0a70ff7fc23c98e8c02984dee53fd4547de55266fc4c0533492d5",
+    "codecs/msvfw32/msvfw32.spec": "7580ae2d7c04f4974f5021e782c06de39367df291057e2be52854b1bf6a9c958",
+    "codecs/msvidc32/Makefile.in": "e63eb8fe049f97be2450808166fd00a04b73df151e9a2e19bb4378480de1a289",
+    "codecs/msvidc32/msvidc32.spec": "93b730dee626abf204e8c2f00369feb8f3f8ba7bcf82a36d3dae86c00289e7aa"
+  }
+}

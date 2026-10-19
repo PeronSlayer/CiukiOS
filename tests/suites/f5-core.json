@@ -551,6 +551,39 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-codecs-qemu-t23",
+      "probe": "w32-codecs",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-codecs run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "codecs"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "adpcm": {
+                "eq": 1
+              },
+              "video": {
+                "eq": 1
+              },
+              "dlls": {
+                "eq": 8
+              }
+            }
+          }
+        ]
+      },
+      "integration_pending": "authored, unrun: lead supplies guest codec probe and T23 execution; host models do not qualify the guest"
     }
   ]
 }

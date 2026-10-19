@@ -4,6 +4,56 @@ Date: 2026-10-14. Host-only evidence for the lead before the core ABI freeze.
 The machine-readable census is `config/wine-audit.json`; the release and
 tool/source pins are in `config/wine-pin.json`.
 
+## Milestone C research and implementation boundary (2026-10-19)
+
+All Wine references below refer to commit
+`b073859675060c9211fcbccfd90e4e87520dc2c2`, never installed Wine headers.
+The archive is still unavailable (sandbox DNS failure); individual tagged
+files were read through the GitHub connector. The eight requested modules
+are msacm32, imaadp32.acm, msadp32.acm, msvfw32, avifil32, msrle32,
+msvidc32 and iccvid. The last two missing audit roots, avifil32 and iccvid,
+must not be mistaken for modules measured by milestone A.
+
+Primary sources and decisions, recorded before implementation:
+
+- [IMA recommended practices, revision 3](https://www.cs.columbia.edu/~hgs/audio/dvi/IMA_ADPCM.pdf):
+  use the integer step/index algorithm, saturation and little-endian WAVE
+  block predictors; stereo payload groups contain four bytes per channel.
+- [Microsoft RIFF multimedia update](https://www-mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/Docs/RIFFNEW.pdf)
+  and the pinned [IMA](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/imaadp32.acm/imaadp32.c)
+  / [MS ADPCM](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/msadp32.acm/msadp32.c)
+  drivers: validate block headers, coefficient tables and samples per block;
+  preserve predictor arithmetic and channel order. XAudio2's extended ADPCM
+  is a different format and is not the WAVE_FORMAT_ADPCM target.
+- [Microsoft bitmap compression](https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-compression):
+  implement RLE4/RLE8 encoded runs, word-padded absolute runs, EOL/EOB and
+  delta coordinates with explicit source and destination bounds.
+- Pinned [Video 1 decoder by Mike Melanson](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/msvidc32/msvideo1.c)
+  and [Cinepak decoder by Tim Ferguson](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/iccvid/iccvid.c):
+  preserve block order, palette/RGB555 values, codebook inheritance and
+  frame skipping. Bound every chunk and index; retain codebooks per handle,
+  rather than using Wine's file-global input cursor.
+- [acmFormatSuggest](https://learn.microsoft.com/en-us/windows/win32/api/msacm/nf-msacm-acmformatsuggest),
+  [acmStreamSize](https://learn.microsoft.com/en-us/windows/win32/api/msacm/nf-msacm-acmstreamsize),
+  pinned msacm32 stream/format sources, and
+  [ICDecompress](https://learn.microsoft.com/en-us/windows/win32/api/vfw/nf-vfw-icdecompress):
+  distinguish public ACM handles from driver messages; preserve i386
+  stdcall/cdecl and the packed WAVE/ACM layouts. Unsupported operations
+  return errors, never success without an operation.
+- The pinned avifil32 Makefile imports msacm32, msvfw32, winmm, ole32,
+  user32, advapi32 and rpcrt4. The existing default Wine PE recipe adds
+  ucrtbase/kernel32/ntdll, and milestone A's version.dll demonstrates
+  kernelbase and Wine-private debug dependencies. These dependencies are
+  not made available by importing a Unix Wine runtime into CiukiOS.
+  Bounded original implementations avoid this backend dependency; their
+  resulting size, imports and coverage are measured separately. No Wine
+  PE sizes or successful Wine runtime loads are inferred from source scans.
+
+The original-game census has no supplied media or FourCC traces; the
+research union imports ICInfo/MCIWndCreateA/MCIWndRegisterClass from
+msvfw32, but does not establish an acceptance game's compressed format.
+MCI window/playback belongs to f5-12B and remains distinct from decoding.
+
 ## Research and method decisions
 
 - Select Wine **10.0**, the stable 10.x release, rather than a development
@@ -826,3 +876,80 @@ the production import parser with synthetic named/ordinal/delay/truncated
 PE/INF inputs. Neither suite proves a Ciuki DLL load, API fidelity, actual
 title imports, hardware behavior, complete reachable protocol, licence release
 arrangements or a 128 MiB runtime fit. Those remain lead integration evidence.
+
+### Milestone C measured implementation decision
+
+The P5 PE images are original bounded LGPL-2.1-or-later implementations.
+The unmodified Wine paths are not selected: their default UCRT/modern-provider
+closure has no qualified CiukiOS backend, and the pinned Cinepak reader has
+unchecked global-cursor/chunk reads. This is a dependency/safety decision,
+not a claim that an unbuilt Wine DLL exceeded the memory budget. No Wine
+candidate file size or Wine resident measurement is available without the
+staged release tree. The lead must review this alternative under f5-14C's
+Wine-versus-native decision rule. No new core exports are introduced.
+
+The table describes `make CAP= apps`'s O1 store build. Standalone host
+reproducibility builds use the recipe's O2 flags and their own fixed link bases;
+their hashes are recorded separately and are not the image's hashes.
+
+| Module | Decision | File bytes | SizeOfImage | Shared seed pages | Private COW credits | Cold resident pages |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| msacm32.dll | bounded native | 10240 | 61440 | 6 | 9 | 15 |
+| imaadp32.acm | bounded native | 8704 | 61440 | 6 | 9 | 15 |
+| msadp32.acm | bounded native | 8704 | 61440 | 6 | 9 | 15 |
+| msvfw32.dll | bounded native | 11776 | 28672 | 6 | 1 | 7 |
+| avifil32.dll | bounded native | 12288 | 28672 | 6 | 1 | 7 |
+| msrle32.dll | bounded native | 10240 | 28672 | 6 | 1 | 7 |
+| msvidc32.dll | bounded native | 10240 | 28672 | 6 | 1 | 7 |
+| iccvid.dll | bounded native | 10240 | 28672 | 6 | 1 | 7 |
+
+Totals: 82,432 file bytes, 327,680 image bytes, 80 cold pages (320 KiB).
+This is 0.2441% of 128 MiB, excluding core DLLs, page tables, loader metadata
+and active stream/frame allocations. The model follows
+`src/kernel/proc/win32/sections.c`: `image_seed` eagerly seeds the union of
+header/raw pages; `map_view` preallocates writable-page COW credits. Image
+reservation is separate; BSS backing is demand-created. These are calculated
+cold-store figures, not guest RSS or a full-system 128 MiB qualification.
+
+| DLLs | Exact imports | Missing |
+| --- | --- | --- |
+| msacm32, imaadp32.acm, msadp32.acm | none | none |
+| msvfw32, msrle32, msvidc32, iccvid | kernel32: GetProcessHeap, HeapAlloc, HeapFree | none |
+| avifil32 | kernel32: CloseHandle, CreateFileA, GetFileSize, GetProcessHeap, HeapAlloc, HeapFree, ReadFile, SetFilePointer, WideCharToMultiByte; msvfw32: ICClose, ICDecompress, ICLocate, ICSendMessage | none |
+
+The initially missing `kernel32!CreateFileW` was removed from the native
+consumer: AVIFileOpenW uses existing WideCharToMultiByte with no-best-fit and
+checks substitution before CreateFileA. Non-ACP paths fail rather than open a
+different filename. No Wine-private export, Unix library, wineserver or WinMM
+private API is imported. T1 checks the exact P5 set, PE hashes, license/origin,
+source/notices hashes and import closure against actual provider PE exports.
+
+All eight images export the pinned spec names (and explicit ordinals). Their
+machine-readable coverage distinguishes implemented functions/constants from
+clean unsupported entries. Unknown historical stub conventions do not become
+compatibility claims. Synchronous decode and read-only AVI are implemented;
+filters, chooser/UI, encoding, arbitrary installable drivers, AVI editing/COM,
+OpenDML and MCI window integration are not supplied by this subset. See
+`tests/host/win32/codecs/README.md` for format/output and resource boundaries.
+The full upstream Wine programs are not claimed as passing; selected portable
+assertions are run on the native adapter and rebuilt as PE. H1 PE execution is
+skipped on the adapter's SIGSYS/seccomp restriction. QEMU/T23 remain unrun.
+
+### Milestone C host validation result
+
+Final Win32 discovery: 118 tests, 107 passed and 11 environment skips, no
+failures. The codec group covers exact authored ADPCM output, pinned frame
+digests, DriverProc and i386 layouts, 24,000 ASan/UBSan mutations, and actual
+production-loader H0 mapping/binding/unload. Selected upstream assertions
+pass natively and compile as PE; SIGSYS blocks H1 execution in this sandbox.
+The other skips are existing i386/Wine socket restrictions and unavailable
+optional milestone-A caches. `make CAP= apps` and API-reference regeneration/
+check pass. Both consecutive standalone recipe runs have identical hashes;
+canonical O1 records match an independently rebuilt H0 store for all eight
+DLLs. The 28-entry canonical inventory passes T1 and has no missing P5 imports.
+
+Detailed hashes, notices, coverage and qualification limits are recorded in
+`build/codex/f5-14c-report.md` and `build/codex/f5-14c-evidence.json` for lead
+review. Guest probes, QEMU, T23, native-substitution approval and wider API/
+thread conformance remain distinct gates. No image or guest evidence was
+produced.

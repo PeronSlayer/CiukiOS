@@ -10,6 +10,8 @@ case ${1:-} in
   --help|-h)
     cat <<'EOF'
 Usage: build-wine-dlls.sh [SOURCE_DIRECTORY [OUTPUT_DIRECTORY]]
+       build-wine-dlls.sh --codecs [OUTPUT_DIRECTORY]
+--codecs builds the original P5 implementations; it needs no Wine tree.
 Uses the hash-pinned Wine 10.0 sources, clang/lld, llvm-ar, llvm-dlltool,
 and the explicitly pinned host wrc. All builds run sequentially at nice 19.
 Outputs: tools/{winebuild,winegcc}, version.dll, version-pe.json, hashes.json.
@@ -19,6 +21,10 @@ SHA-256 before extraction; the script additionally checks every audited file.
 EOF
     exit 0 ;;
 esac
+if [[ ${1:-} == --codecs ]]; then
+    [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
+    exec nice -n 19 python3 "$repo/scripts/win32/codecs.py" "${2:-$repo/build/host/win32/codecs/pe}"
+fi
 source_dir=${1:-$source_dir}
 output_dir=${2:-$output_dir}
 [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }

@@ -466,6 +466,10 @@ def win32_payloads(folder=None):
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
              "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md",
              "/system/licenses/TinySoundFont.txt":ROOT / "sdk/win32/audio/tsf/LICENSE"}
+    if any(d.get("origin")=="CiukiOS bounded P5 implementation" for d in store["dlls"]):
+        sources["/WINDOWS/SYSTEM/codecs-inventory.json"]=folder / "codecs-inventory.json"
+        for name in ("LICENSE","COPYING.LIB","AUTHORS","SOURCE-OFFER.txt","PATCHES.md","README.md","codecs-sources.json"):
+            sources["/system/licenses/WINE-"+name]=ROOT / "third_party/wine" / name
     for dll in store["dlls"]:
         require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
         sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]
