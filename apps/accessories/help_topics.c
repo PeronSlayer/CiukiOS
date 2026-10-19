@@ -116,7 +116,7 @@ const struct help_topic help_topics[] = {
 "About CiukiOS\n"
 "\n"
 "CiukiOS - Classic computing, one woof at a time.\n"
-"Version 0.9.0 pre-alpha\n"
+"Version 0.9.2 pre-alpha\n"
 "\n"
 "Dedicated to Ciuki\n"
 "\n"

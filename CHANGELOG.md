@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.9.0 pre-alpha (unreleased, `main`, from 2026-10-09)
+## 0.9.2 pre-alpha (unreleased, `main`, from 2026-10-20)
+
+Version identity moved from 0.9.0 to 0.9.2 on 2026-10-20 (owner decision,
+dev diary 2026-10-20-01). It covers everything merged on `main` since 0.9.0
+began: the 0.9.0 section below stays the detailed record. Nothing of 0.9.2
+is published; hardware qualification is open.
+
+## 0.9.0 pre-alpha (not released, `main`, 2026-10-09 to 2026-10-19)
 
 First version of the Ciuki VMM line. The 0.8 line is frozen on branch
 `legacy-0.8`; prerelease 0.8.3 build 849 (`868cac9`) is its last release.
@@ -20,7 +27,7 @@ raise `#AC`, so the fault probe falls back on a page fault there while
 hardware must still raise vector 17).
 
 - Version identity: `config/version.json` is the single source
-  (`0.9.0`, `pre-alpha`). The kernel logs `CiukiOS <version>` after its build
+  (`0.9.2`, `pre-alpha`, previously `0.9.0`). The kernel logs `CiukiOS <version>` after its build
   banner, `uname` returns it in `version` (`release` stays the build ID), the
   desktop About window and the loader menu title show it, and
   `build-manifest.json` records it. `tests/host/test_version.py` checks that
@@ -349,7 +356,7 @@ Detailed qualification and limits: current status.
 
 
 All notable project-level changes are tracked here.
-This changelog is intentionally concise. Every completed task should update the topmost unreleased section (`0.9.0 pre-alpha`) unless the task cuts a release section.
+This changelog is intentionally concise. Every completed task should update the topmost unreleased section (`0.9.2 pre-alpha`) unless the task cuts a release section.
 
 ## Earlier development snapshot — 2026-10-01
 

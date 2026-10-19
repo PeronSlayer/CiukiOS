@@ -6,8 +6,8 @@
 of the 1990s on the computers of the 1990s. Dedicated to **Ciuki**, the dog
 in the boot splash. Code under [GNU GPLv2](LICENSE).
 
-**Version: 0.9.0 pre-alpha** on `main` (the Ciuki VMM line, built on a new
-32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 0.9.0
+**Version: 0.9.2 pre-alpha** on `main` (the Ciuki VMM line, built on a new
+32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 0.9.2
 is not released: its results are QEMU evidence plus partial ThinkPad T23
 sweeps, hardware qualification is open and publication is suspended
 ([Changelog](CHANGELOG.md)).
@@ -144,7 +144,7 @@ Actual Linux QEMU captures of 0.8.3 ([capture details](docs/screenshots/0.8.3/RE
 ## Build and test the new kernel (Linux)
 
 ```bash
-make build-full        # kernel build/f0/VMM.ELF + 512 MiB FAT32 image build/f0/ciukios.img (config/version.json: 0.9.0 pre-alpha)
+make build-full        # kernel build/f0/VMM.ELF + 512 MiB FAT32 image build/f0/ciukios.img (config/version.json: 0.9.2 pre-alpha)
 make test-host         # host unit tests (kernel library, loader statics, runner, fixtures)
 make qemu-test-full    # boot smoke through the test runner (QEMU TCG, pentium3)
 make qemu-run-full     # boot interactively; scripts/run_f0.sh "f0:all run=00000001" runs every probe
