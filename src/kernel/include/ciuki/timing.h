@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define CRIT_BUDGET_US 250u
+#define CRIT_BUDGET_US 100u
 
 /* A ten-second window contains fewer than 10000 disjoint >1 ms sections.
  * Static diagnostic storage; no allocation, formatting or I/O in crit_end. */
@@ -40,6 +40,12 @@ struct timing_stats {
     uint64_t pit_irqs;
     uint32_t critical_site;
     const char *critical_section; /* static label, otherwise "irq_save" */
+    uint32_t critical_work_us, firmware_us, firmware_gaps, unclassified_irqoff;
+    uint32_t raw_work_us, raw_firmware_us; /* charges for the raw maximum's owner/site */
+    char interrupt_owner[16];
+    uint32_t work_site;
+    const char *work_section;
+    char work_owner[16];
     uint32_t pic_mask_writes, pic_mask_out_max_us;
 };
 
@@ -47,6 +53,7 @@ extern uint64_t g_tsc_per_ms;
 void crit_begin(void);
 void crit_end(void);
 void crit_label(const char *section) __attribute__((weak));
+void crit_owner(const char *owner, uint32_t site) __attribute__((weak));
 void timing_timer_irq(void);
 void timing_calibrate(void);
 void timing_reset(void);

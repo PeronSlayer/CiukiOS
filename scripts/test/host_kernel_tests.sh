@@ -453,7 +453,7 @@ source = (root / "src/kernel/core/task.c").read_text()
 declarations = source[source.index("static struct task *rq_head"):
                       source.index("void task_stack_init")]
 functions = []
-for name in ("schedule", "sched_tick", "task_sleep_ms", "task_start"):
+for name in ("schedule", "sched_vm_tick_work", "sched_tick", "task_sleep_ms", "task_start"):
     match = re.search(r"^(?:static )?[^\n]+\b" + name + r"\([^\n]*\)\n\{", source, re.M)
     assert match, name
     depth = 1
@@ -462,6 +462,8 @@ for name in ("schedule", "sched_tick", "task_sleep_ms", "task_start"):
         depth += (source[end] == "{") - (source[end] == "}")
         end += 1
     functions.append(source[match.start():end] + "\n")
+timers = (root / "src/kernel/core/sync.c").read_text()
+(out / "deadline_timers.inc").write_text(timers[timers.index("/* F0-46 timers:"):timers.index("/* End F0-46 timers. */")])
 (out / "signal_scheduler.inc").write_text("void task_start(struct task *);\n" + declarations + "\n".join(functions))
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
@@ -552,6 +554,7 @@ bash "$root/tests/host/usb/storage_run.sh"
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
 
+
 # f4-05: the kernel's integer OPL3 port sample for sample against the pinned
 # upstream DBOPL C++ (third_party/vsbhda, archive hash checked first), and
 # its generated tables against their floating-point formulas.
@@ -575,3 +578,6 @@ python3 "$root/tests/host/test_opl3_tables.py"
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py
+
+# F0-46: instrument executed production IRQ and deferred paths.
+python3 -B "$root/tests/host/irq_work_replay.py"

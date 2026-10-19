@@ -23,7 +23,8 @@ static unsigned failures, checks;
 static uint32_t host_flags = 0x200;
 static uint32_t read_eflags(void) { return host_flags; }
 static uint32_t irq_save(void) { uint32_t f = host_flags; host_flags = 0; return f; }
-static void irq_restore(uint32_t f) { host_flags = f; }
+static void drain_input_deferred(void);
+static void irq_restore(uint32_t f) { host_flags = f; if (f & 0x200) drain_input_deferred(); }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
 static uint16_t cpu_inw(uint16_t port) { (void)port; return UINT16_MAX; }
@@ -430,7 +431,18 @@ __asm__(".pushsection .rodata\n"
         ".global payload_start\npayload_start:\n.byte 0\n"
         ".global payload_end\npayload_end:\n.popsection\n");
 int kwork_init(void) { return 0; }
-bool kwork_queue(kwork_fn fn, void *arg) { (void)fn; (void)arg; CHECK(false); return false; }
+static kwork_fn input_deferred;
+static bool defer_input_delivery;
+static void *input_deferred_arg;
+bool kwork_queue(kwork_fn fn, void *arg) { input_deferred=fn;input_deferred_arg=arg;return true; }
+static void drain_input_deferred(void)
+{
+    static bool draining;
+    if(draining || defer_input_delivery) return;
+    draining=true;
+    for(unsigned n=0;input_deferred && n<1024;n++) { kwork_fn fn=input_deferred;input_deferred=0;fn(input_deferred_arg); }
+    draining=false;
+}
 void kwork_yield(void) { CHECK(false); }
 
 /* sync.c contains RDTSC, never executed: g_cpu_tsc is false in this test.
@@ -647,6 +659,7 @@ static void test_policy_and_lifecycle(void)
     fake_push(&hw, false, 0xF0, 0);
     fake_push(&hw, false, 0x1C, 0);
     struct trap_frame tf = { .vector = 0x2C };
+    uint64_t captured_tick = g_ticks; defer_input_delivery = true;
     for (unsigned i = 0; i < 3; i++) {
         unsigned before = hw.count;
         uint32_t f = irq_save();
@@ -654,8 +667,9 @@ static void test_policy_and_lifecycle(void)
         irq_restore(f);
         CHECK(hw.count + 1 == before);
     }
+    hw.now += 5; g_ticks = hw.now; defer_input_delivery = false; drain_input_deferred();
     struct input_event event;
-    CHECK(input_read(&event) && event.type == INPUT_KEY && event.code == INPUT_KEY_A && event.value == 1);
+    CHECK(input_read(&event) && event.type == INPUT_KEY && event.code == INPUT_KEY_A && event.value == 1 && event.tick == captured_tick);
     CHECK(input_read(&event) && event.type == INPUT_TEXT && event.code == 'a');
     CHECK(input_read(&event) && event.value == 0 && !input_read(&event));
     hw.ack_delay = 1;

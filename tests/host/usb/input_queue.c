@@ -12,3 +12,5 @@ static void outb(uint16_t port, uint8_t value) { (void)port; (void)value; }
 int udelay(uint32_t us) { (void)us; assert(!"unexpected physical i8042 access"); return -EINVAL; }
 uint64_t ktime_cycles(void) { assert(!"unexpected physical i8042 clock access"); return 0; }
 #include "../../../src/kernel/drivers/i8042.c"
+bool kwork_queue(kwork_fn fn, void *arg)
+{ (void)fn; (void)arg; assert(!"unexpected native IRQ work in merged-queue fixture"); return false; }

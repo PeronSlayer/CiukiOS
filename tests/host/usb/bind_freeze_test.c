@@ -9,6 +9,15 @@
 /* The fixtures contain FAT partitions only. */
 const struct fs_ro_ops ntfs_ops={0};
 volatile uint64_t g_ticks;
+/* This fixture extracts run-queue policy only and never runs a timer tick.
+ * Queue/deadline/lifetime behavior is replayed with production sync/work in
+ * timer_audio_load_test.c; a callback here would cross the fixture boundary. */
+static void task_timer_event(void *owner,uint32_t generation,unsigned kind)
+{ (void)owner;(void)generation;(void)kind;assert(!"unexpected timer dispatch in bind queue fixture"); }
+void ktimer_arm(struct ktimer *t,uint64_t deadline,unsigned kind,void *owner,
+                const uint32_t *generation,ktimer_fn callback)
+{ (void)t;(void)deadline;(void)kind;(void)owner;(void)generation;assert(callback==task_timer_event); }
+bool ktimer_cancel(struct ktimer *t) { (void)t;return true; }
 #include "usb_bind_queues.inc"
 
 static struct task desktop_task, writer_task, other_usb_task;

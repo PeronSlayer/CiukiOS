@@ -8,6 +8,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/timing.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/work.h>
 #include "dosvm_internal.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
@@ -1342,11 +1343,15 @@ bool dosvm_keyboard(struct dosvm_key key, uint16_t bios_key)
     if (ok) { v->keyboard[tail] = bios_key; v->key_count++; dosvm_idle_wake(v); }
     irq_restore(flags); return ok;
 }
-void dosvm_tick(void)
+/* The ring holds the generation value, never a pointer to a mutable key.
+ * gen_alloc() does not reuse generations. Only permanent slot headers are
+ * examined until the generation and live-state checks have passed. */
+static void dosvm_clock_work(void *arg)
 {
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         struct dosvm *v = &slots[i];
-        if (!v->started || !dosvm_valid(v->info.key)) continue;
+        if (v->info.key.generation != (uint32_t)(uintptr_t)arg) continue;
+        if (!v->started || !dosvm_valid(v->info.key)) return;
         v->monitor.ticks = g_ticks;
         uint64_t elapsed = g_ticks - v->ticks;
         v->perf.if_samples_ms += elapsed;
@@ -1357,14 +1362,26 @@ void dosvm_tick(void)
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         uint64_t begin = dosvm_perf_clock();
-        dosvm_pit_advance(v, elapsed);
+        if (elapsed) dosvm_pit_advance(v, elapsed);
         uint64_t audio = dosvm_perf_clock();
-        dosvm_audio_advance(v, elapsed);
+        bool pending = dosvm_audio_advance(v, elapsed);
         uint64_t end = dosvm_perf_clock();
-        v->perf.ticks++;
+        if (elapsed) v->perf.ticks++;
         v->perf.audio_cycles += end - audio;
         v->perf.timer_cycles += end - begin;
         if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
+        if (pending) kwork_queue(dosvm_clock_work, arg);
+        return; /* One VM and one bounded DMA slice per worker turn. */
+    }
+}
+void dosvm_tick(void)
+{
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
+        struct dosvm *v = &slots[i];
+        if (v->started && dosvm_valid(v->info.key)) {
+            v->audio.clock_descheduled = g_current != v->task;
+            kwork_queue(dosvm_clock_work, (void *)(uintptr_t)v->info.key.generation);
+        }
     }
 }
 const uint16_t *dosvm_text(const struct dosvm *v, unsigned *cursor)

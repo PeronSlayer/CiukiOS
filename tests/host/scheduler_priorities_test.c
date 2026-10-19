@@ -1,6 +1,7 @@
 /* Production scheduler + sleeping mutexes; only CPU/context boundaries faked.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/process.h>
+#define HOST_SYNC_TIMERS
 #define main latency_fixture_main
 #include "kernel_latency_test.c"
 #undef main
@@ -8,6 +9,11 @@
 #define ktime_cycles sync_unused_cycles
 #include "../../src/kernel/core/sync.c"
 #undef ktime_cycles
+static void timer_fixture_reset(void)
+{
+    timer_root=timer_first=timer_due_head=timer_due_tail=0;
+    memset(&timer_stats,0,sizeof(timer_stats));deferred_fn=0;
+}
 #define P2V(p) ((void *)(uintptr_t)(p))
 #define V2P(p) ((uint32_t)(uintptr_t)(p))
 #include "../../src/kernel/fs/fs_port.h"
@@ -24,7 +30,7 @@ static void priority_reset(void)
 {
     reset(); waiters=0; held=0; owned_queues=0; propagating=false; cycle_records=0;
     normal.state=hog.state=ui.state=T_BLOCKED;
-    middle=(struct task){.id=5,.prio=P_NORMAL,.state=T_BLOCKED};
+    middle=(struct task){.id=5,.generation=1,.prio=P_NORMAL,.state=T_BLOCKED};
     strcpy(middle.name,"middle");ui.all_next=&middle;
     kmutex_init(&locks[0]);kmutex_init(&locks[1]);
 }

@@ -268,7 +268,7 @@ static void test_sb_state_records(void)
         level|=strstr(last_vm_audio_log,"level_db=")!=0;
     }
     CHECK(pause && fault && dma && level && !v->audio.diag.state_count);
-    dosvm_tick(); /* settle worker-only clock jumps while the failed DSP is inactive */
+    host_clock_tick(); /* settle worker-only clock jumps while the failed DSP is inactive */
     /* Verify DSP IRQ-boundary and ACK transitions with production PIC
      * arbitration; no guest ISR execution is claimed by this replay. */
     dsp_reset(v); dma8(v,1,0x63B60,4095,true); dmx_start(v,0xC6); ms(24);

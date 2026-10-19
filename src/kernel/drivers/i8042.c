@@ -64,6 +64,7 @@
 #include <ciuki/biosvm.h>
 #include <ciuki/init.h>
 #include <ciuki/timing.h>
+#include <ciuki/work.h>
 
 #define DATA_PORT 0x60u
 #define STATUS_PORT 0x64u
@@ -180,9 +181,10 @@ static const char us[0x59] = {
 };
 char input_unshifted(uint16_t code) { return code < sizeof(us) ? us[code] : 0; }
 
-/* All decoder/queue helpers below run under the caller's short irq_save.
- * One byte has constant work (at most five events plus RESYNC), no allocation/logging,
- * port polling, sleeps or deferred callbacks requiring shutdown fences. */
+/* Decoder producers never yield. Native IRQs only append raw bytes, so the
+ * thread consumer may decode with IF enabled; USB/firmware producers retain
+ * their short queue exclusion. One byte produces at most five events plus
+ * RESYNC, without allocation, logging, polling or sleeping. */
 static void queue_event(struct controller *c, uint16_t type, uint16_t code, int32_t value,
                         uint64_t tick, uint64_t lost)
 {
@@ -363,7 +365,12 @@ static bool dequeue(struct controller *c, struct input_event *out)
     return have;
 }
 
-bool input_read(struct input_event *out) { return dequeue(&native, out); }
+static void input_retry(void);
+bool input_read(struct input_event *out)
+{
+    input_retry();
+    return dequeue(&native, out);
+}
 void input_snapshot(struct input_stats *out)
 {
     if (!out) return;
@@ -482,7 +489,7 @@ static void poll_pause(struct controller *c, struct poll_deadline *d)
     if (!(d->polls % 32)) task_yield();
 }
 
-static void capture(struct controller *c, uint8_t status, uint8_t b)
+static void capture_at(struct controller *c, uint8_t status, uint8_t b, uint64_t tick)
 {
     bool aux = (status & AUX) != 0;
     /* Boot traffic predates the configured raw set-2/three-byte protocol.
@@ -511,10 +518,12 @@ static void capture(struct controller *c, uint8_t status, uint8_t b)
         return;
     }
     if (c->init_recording) { c->stats.drained++; return; }
-    uint64_t tick = c->io->now(c->io_arg);
     if (aux) mouse_byte(c, b, tick);
     else keyboard_byte(c, b, tick);
 }
+
+static void capture(struct controller *c, uint8_t status, uint8_t b)
+{ capture_at(c, status, b, c->io->now(c->io_arg)); }
 
 static bool capture_one(struct controller *c, bool discard)
 {
@@ -895,12 +904,63 @@ static bool claims_active(struct controller *c)
     return true;
 }
 
+/* IRQ only captures a byte. Decoding, resync and guest delivery are thread
+ * work, one byte per turn. Storage is permanent; generation rejects stop /
+ * restart completions. Overflow is retained and reported by the consumer. */
+static struct { uint8_t status, byte; gen_t generation; uint64_t tick; } raw_input[64];
+static unsigned raw_read, raw_count, raw_lost;
+static gen_t raw_generation;
+static void input_work(void *arg)
+{
+    (void)arg;
+    uint32_t f = irq_save();
+    if (raw_lost) {
+        if (native.accepting && raw_generation == native.stats.generation) {
+            native.queue.stats.overflow += raw_lost;
+            native.queue.stats.bytes += raw_lost;
+            native.queue.stats.state_lost = true;
+        }
+        raw_lost = 0;
+    }
+    bool have = raw_count != 0;
+    uint8_t status = 0, byte = 0; gen_t generation = 0; uint64_t tick = 0;
+    if (have) {
+        unsigned at = raw_read;
+        status = raw_input[at].status; byte = raw_input[at].byte;
+        generation = raw_input[at].generation; tick = raw_input[at].tick;
+        raw_read = (raw_read + 1) % ARRAY_SIZE(raw_input); raw_count--;
+    }
+    bool more = raw_count != 0;
+    irq_restore(f);
+    if (have && native.accepting && generation == native.stats.generation)
+        capture_at(&native, status, byte, tick);
+    if (more) kwork_queue(input_work, 0);
+}
+
+static void input_retry(void)
+{
+    uint32_t f = irq_save(); bool pending = raw_count || raw_lost; irq_restore(f);
+    if (pending) kwork_queue(input_work, 0);
+}
 static void input_irq(struct trap_frame *tf)
 {
     (void)tf;
     if (crit_label) crit_label("i8042_irq");
-    if (native.accepting && !native.stats.quarantined && claims_active(&native))
-        capture_one(&native, false);    /* exactly one byte; dispatcher owns EOI */
+    if (!native.accepting || native.stats.quarantined || !claims_active(&native)) return;
+    uint8_t status = read_port(&native, STATUS_PORT);
+    if (!(status & OBF)) return;
+    uint8_t byte = read_port(&native, DATA_PORT);
+    if (raw_generation != native.stats.generation) {
+        raw_generation = native.stats.generation; raw_read = raw_count = raw_lost = 0;
+    }
+    if (raw_count == ARRAY_SIZE(raw_input)) { if (raw_lost != UINT32_MAX) raw_lost++; }
+    else {
+        unsigned at = (raw_read + raw_count) % ARRAY_SIZE(raw_input);
+        raw_input[at].status = status; raw_input[at].byte = byte;
+        raw_input[at].generation = native.stats.generation;
+        raw_input[at].tick = native.io->now(native.io_arg); raw_count++;
+    }
+    kwork_queue(input_work, 0); /* coalesced; dispatcher owns EOI */
 }
 
 static bool no_hardware(int handle, gen_t generation)

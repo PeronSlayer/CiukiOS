@@ -299,16 +299,17 @@ static int sb_consume(struct dosvm *v, unsigned n, struct sb_run *r)
 }
 
 /* DSP playback on the VM timeline, driven by dosvm_tick whatever the guest
- * IF/PIC state. Each call processes at most DOSVM_AUDIO_SLICE frames of DSP
- * time. Neither a latched IRQ nor the diagnostic waiting state gates DMA. */
+ * IF/PIC state. Worker returns split the original DOSVM_AUDIO_SLICE allowance
+ * into DOSVM_AUDIO_TURN frames without resetting DMA phase or block state.
+ * Neither a latched IRQ nor the diagnostic waiting state gates DMA. */
 static void sb_advance(struct dosvm *v)
 {
     struct dosvm_sb16 *s = &v->audio.sb;
     uint64_t now = v->audio.clock;
-    uint32_t budget = DOSVM_AUDIO_SLICE;
+    uint32_t budget = DOSVM_AUDIO_TURN;
     /* At <=45 kHz stereo there are at most two sample units per timeline
      * frame. Tiny blocks must not inherit the old 32-boundary wait cap. */
-    for (unsigned guard = 0; guard < DOSVM_AUDIO_SLICE * 2u + 1u && s->x.active && budget; guard++) {
+    for (unsigned guard = 0; guard < DOSVM_AUDIO_TURN * 2u + 1u && s->x.active && budget; guard++) {
         struct dosvm_sb_transfer *x = &s->x;
         if (x->paused) { s->pos = now; return; }
         if (now <= s->pos) return;
@@ -318,6 +319,8 @@ static void sb_advance(struct dosvm *v)
             s->pos = now - DOSVM_AUDIO_BACKLOG; span = DOSVM_AUDIO_BACKLOG;
         }
         if (span > s->max_lag) s->max_lag = (uint32_t)span;
+        if (s->pos >= v->audio.advance_end) return;
+        if (span > v->audio.advance_end - s->pos) span = v->audio.advance_end - s->pos;
         if (span > budget) span = budget;
         uint64_t due = ((uint64_t)s->phase + span * x->rate) / x->threshold;
         bool boundary = due >= x->left;
@@ -625,12 +628,21 @@ void dosvm_audio_close(struct dosvm *v)
     q->page_count = 0;
     memset(q->pcm, 0, sizeof(q->pcm)); memset(q->events, 0, sizeof(q->events));
 }
-void dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
+bool dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
 {
-    if (!v->audio.q.page_count) return;
+    if (!v->audio.q.page_count) return false;
     v->audio.ms += elapsed;
     v->audio.clock += elapsed * DOSVM_AUDIO_PER_MS;
     v->audio.opl.io_us = 0;
+    if (elapsed) {
+        /* Apply the old backlog rule once to the full absolute gap. Merely
+         * returning to the work ring must not replenish the 64 ms allowance. */
+        uint64_t pos = v->audio.sb.pos;
+        if (v->audio.clock > pos && v->audio.clock - pos > DOSVM_AUDIO_BACKLOG)
+            pos = v->audio.clock - DOSVM_AUDIO_BACKLOG;
+        v->audio.advance_end = pos + DOSVM_AUDIO_SLICE;
+        if (v->audio.advance_end > v->audio.clock) v->audio.advance_end = v->audio.clock;
+    }
     sb_advance(v);
     /* The line can stay asserted across many auto-init block boundaries.
      * Keep its original age and a coherent PIC snapshot, even when the
@@ -639,7 +651,7 @@ void dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
     if (s->irq_entry_pending) {
         if (v->fullscreen_parked || v->fullscreen_hold || v->fullscreen_suspended)
             s->cadence.parked += elapsed;
-        else if (g_current != v->task) s->cadence.descheduled += elapsed;
+        else if (v->audio.clock_descheduled) s->cadence.descheduled += elapsed;
         else if (!s->irq_entry_ready && !v->monitor.vif) s->cadence.if_clear += elapsed;
     }
     if (s->x.active && deadline_passed(v->audio.diag.next_cadence) && !v->audio.diag.cadence_pending) {
@@ -660,6 +672,7 @@ void dosvm_audio_advance(struct dosvm *v, uint64_t elapsed)
         v->audio.diag.irq_wait.pending = true;
         v->audio.diag.irq_wait_records++;
     }
+    return s->x.active && !s->x.paused && s->pos < v->audio.advance_end;
 }
 
 /* ---- F4 consumer interface (ciuki/dosvm_audio.h) ---- */

@@ -16,7 +16,7 @@ static void mixer_w(struct dosvm *v, uint8_t i, uint8_t x) { a_out(v, SB + 4, i)
 static uint8_t mixer_r(struct dosvm *v, uint8_t i) { a_out(v, SB + 4, i); return a_in(v, SB + 5); }
 static void opl_w(struct dosvm *v, uint16_t base, unsigned bank, uint8_t reg, uint8_t x)
 { a_out(v, base + bank * 2, reg); a_out(v, base + bank * 2 + 1, x); }
-static void ms(unsigned n) { for (unsigned i = 0; i < n; i++) { g_ticks++; dosvm_tick(); } }
+static void ms(unsigned n) { for (unsigned i = 0; i < n; i++) { g_ticks++; host_clock_tick(); } }
 static void dma8(struct dosvm *v, unsigned ch, uint32_t address, uint16_t count, bool autoinit)
 {
     static const uint8_t page[4] = {0x87, 0x83, 0x81, 0x82};
@@ -530,7 +530,7 @@ static void test_audio_queue_limits(void)
     /* Long timer gaps: device work per tick is bounded, the timeline is not;
      * backlog beyond one second is dropped and counted. */
     uint32_t boundaries = ainfo(v).boundaries;
-    g_ticks += 3000; dosvm_tick();
+    g_ticks += 3000; host_clock_tick();
     i = ainfo(v);
     CHECK(i.dropped_frames >= 2000u * 48u && i.dropped_frames <= 2001u * 48u && i.boundaries <= boundaries + 3 && i.clock - i.dsp_clock <= 1000u * 48u);
     for (unsigned t = 0; t < 40; t++) { a_in(v, SB + 0xF); ms(1); }
@@ -549,6 +549,9 @@ static void test_audio_queue_limits(void)
     destroy(v, true); destroy(w, true); empty();
 }
 
+extern void irq_model_phase(unsigned) __attribute__((weak));
+static unsigned clock_peer_turns;
+static void clock_peer(void *arg) { (void)arg; clock_peer_turns++; }
 static void test_audio_tiny_auto_init(void)
 {
     struct dosvm *v = audio_vm_create(); dsp_reset(v);
@@ -560,11 +563,69 @@ static void test_audio_tiny_auto_init(void)
     CHECK(v->audio.sb.pos == v->audio.clock && v->audio.sb.x.waiting);
     a_in(v, SB + 0xE); CHECK(v->audio.sb.causes == 2 && v->audio.sb.units == 90);
     a_in(v, SB + 0xF); CHECK(!v->audio.sb.causes && v->audio.sb.units == 90 && !v->audio.sb.x.waiting);
-    g_ticks += 40; dosvm_tick(); /* a delayed physical callback catches up through every boundary */
+    struct kwork_stats before, after;
+    kwork_snapshot(&before);
+    unsigned allocations = allocation_calls, yields = vm_clock_yields;
+    uint64_t pos = v->audio.sb.pos;
+    g_ticks += 40;
+    for (unsigned n = 0; n < 1000; n++) dosvm_tick();
+    kwork_snapshot(&after);
+    CHECK(after.pending == 1 && after.coalesced == before.coalesced + 999);
+    CHECK(v->audio.sb.pos == pos); /* capture cannot advance inline */
+    unsigned turns = 0;
+    if (irq_model_phase) irq_model_phase(40);
+    while (vm_work_one()) {
+        CHECK(v->audio.sb.pos - pos <= DOSVM_AUDIO_TURN);
+        pos = v->audio.sb.pos;
+        CHECK(++turns <= 80);
+    }
+    if (irq_model_phase) irq_model_phase(0);
+    CHECK(turns == 80 && vm_clock_yields == yields + turns && allocation_calls == allocations);
     CHECK(v->audio.sb.units == 3690 && v->audio.sb.boundaries == 1845 && v->audio.sb.irq_edges == 2);
     CHECK(v->audio.sb.irq_merged == 1843 && v->audio.sb.pos == v->audio.clock);
+    /* A peer queued while the catch-up is active gets its own turn before
+     * the continuation drains. The callback cannot chain itself inline. */
+    unsigned peer = clock_peer_turns;
+    g_ticks += 2; dosvm_tick(); CHECK(vm_work_one());
+    CHECK(kwork_queue(clock_peer, 0));
+    CHECK(vm_work_one() && clock_peer_turns == peer);
+    CHECK(vm_work_one() && clock_peer_turns == peer + 1);
+    vm_work_drain();
     destroy(v, true); empty();
     puts("f3-40 tiny auto-init: 45 blocks/tick and 1800-block timer catch-up, one edge while asserted, acknowledgements never clock DMA PASS");
+}
+
+static void test_audio_clock_lifetime(void)
+{
+    struct dosvm *v = audio_vm_create();
+    CHECK(!kwork_init()); vm_work_drain();
+    struct dosvm_key old = dosvm_key(v);
+    uint64_t tick = v->ticks;
+    struct kwork_stats before, after;
+    kwork_snapshot(&before);
+    for (unsigned n = 0; n < KWORK_CAPACITY; n++)
+        CHECK(kwork_queue(clock_peer, (void *)(uintptr_t)n));
+    g_ticks += 40; dosvm_tick();
+    kwork_snapshot(&after);
+    CHECK(after.lost == before.lost + 1 && v->ticks == tick);
+    vm_work_drain(); dosvm_tick(); vm_work_drain();
+    CHECK(v->ticks == tick + 40 && v->clock_ms == 40);
+    /* Stop with a queued continuation; stale work cannot touch audio pages.
+     * Requeue the same immutable token after destroy to cover slot reuse
+     * even if the fake stop waiter happened to dispatch its first copy. */
+    g_ticks++; dosvm_tick(); CHECK(!dosvm_stop(old, DOSVM_TERMINATE));
+    vm_work_drain(); CHECK(v->ticks == tick + 40);
+    destroy(v, true); empty();
+    CHECK(kwork_queue(dosvm_clock_work, (void *)(uintptr_t)old.generation));
+    struct dosvm *next = audio_vm_create();
+    CHECK(next == v && dosvm_key(next).generation != old.generation);
+    tick = next->ticks; g_ticks += 3;
+    vm_work_drain();
+    CHECK(next->ticks == tick && !next->audio.clock && !next->clock_ms && !next->pit.clocks);
+    dosvm_tick(); vm_work_drain();
+    CHECK(next->audio.clock == 3 * DOSVM_AUDIO_PER_MS && next->pit.clocks == 3 * 1193);
+    destroy(next, true); empty();
+    puts("f0-46 VM clock: 80 bounded catch-up turns, counted coalescing, full-ring retry, stopped/reused generation rejection PASS");
 }
 
 #include "audio/vm_late_test.inc"
@@ -573,6 +634,7 @@ static void test_audio(void)
 {
     test_vm_late();
     test_audio_tiny_auto_init();
+    test_audio_clock_lifetime();
     test_audio_detect(); test_audio_dma8_single(); test_audio_modes(); test_audio_double_buffer();
     test_audio_if_clear(); test_audio_pause_exit(); test_audio_dma_controller(); test_audio_opl(); test_audio_queue_limits();
     puts("DOS audio: PASS (SB16 DSP 4.05 detection/mixer/80h-82h, every PCM mode, 32 fresh blocks with a fake output clock, IF/mask/ISR 100 ms, pause/exit/continue, 8237A, OPL3 timers/banks/events, queue limits)");

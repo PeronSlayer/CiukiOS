@@ -298,11 +298,20 @@ static void cpu_emit(void)
     }
     if (!at) line[0] = 0;
     klog_periodic("[cpu] top=%s", line);
-    klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u",
-        stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified);
-    klog_periodic("[kernel] irqoff_section=%s site=%08x irqoff_max_us=%u violations=%u",
+    klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u work_us=%u",
+        stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified, timing.critical_work_us);
+    klog_periodic("[kernel] irqoff_section=%s site=%08x irqoff_max_us=%u violations=%u work_us=%u firmware_us=%u unclassified=%u owner=%s",
         timing.critical_section ? timing.critical_section : "none", timing.critical_site,
-        timing.critical_us, timing.budget_violations);
+        timing.critical_us, timing.budget_violations, timing.raw_work_us,
+        timing.raw_firmware_us, timing.unclassified_irqoff, timing.interrupt_owner[0] ? timing.interrupt_owner : "none");
+    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u",
+        timing.critical_us, timing.critical_work_us, timing.firmware_us,
+        timing.firmware_gaps, timing.unclassified_irqoff);
+    klog_periodic("[cpu] irqwork max_us=%u owner=%s site=%08x section=%s",
+        timing.critical_work_us, timing.work_owner[0] ? timing.work_owner : "none", timing.work_site,
+        timing.work_section ? timing.work_section : "none");
+    klog_periodic("[cpu] deferred max_turn_us=%llu max_service_us=%llu coalesced=%llu turn_violations=%llu service_violations=%llu",
+        work.max_run_us, work.max_service_us, work.coalesced, work.budget_violations, work.service_violations);
     klog_periodic("[kernel] pic_mask writes=%u out_max_us=%u",
         timing.pic_mask_writes, timing.pic_mask_out_max_us);
     klog_periodic("[kernel] long_paths serial_spin_ms=0 serial_drop=%u console_repaint_ms=%u bootlog_drain_ms=%u bootlog_queued=%u elf_load_ms=%u zero_pages_ms=%u work_max_us=%llu",

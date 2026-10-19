@@ -6,18 +6,36 @@
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
 #include <ciuki/timing.h>
+#include <ciuki/cpustat.h>
 
-static struct { kwork_fn fn; void *arg; } ring[KWORK_CAPACITY];
+static struct { kwork_fn fn; void *arg; unsigned notifications; } ring[KWORK_CAPACITY];
 static unsigned head, tail;
 static struct kwork_stats stats;
 static struct task *worker;
 static struct kwait available;
 static uint64_t slice_start, slice_tick, reported_lost;
 static bool running;
+static unsigned notifications;
+static uint64_t service_us;
+
+unsigned kwork_notifications(void) { return notifications; }
+bool kwork_current(void) { return worker && g_current == worker; }
+static uint64_t slice_us(void)
+{
+    return g_cpu_tsc && g_tsc_per_ms ? ((cpu_path_clock ? cpu_path_clock() : ktime_cycles()) - slice_start) * 1000 / g_tsc_per_ms :
+        (deadline_after_ms(0) - slice_tick) * 1000;
+}
+static void slice_charge(void)
+{
+    uint64_t us = slice_us();
+    service_us += us;
+    if (us > stats.max_run_us) stats.max_run_us = us;
+    if (us > 1000) stats.budget_violations++;
+}
 
 static void slice_begin(void)
 {
-    slice_start = ktime_cycles();
+    slice_start = cpu_path_clock ? cpu_path_clock() : ktime_cycles();
     slice_tick = deadline_after_ms(0);
 }
 
@@ -26,6 +44,7 @@ void kwork_yield(void)
     if (g_current != worker || !(read_eflags() & 0x200))
         panic("work: yield outside worker");
     uint32_t f = irq_save();
+    if (running) slice_charge();
     stats.yields++;
     irq_restore(f);
     task_yield();
@@ -42,6 +61,12 @@ void kwork_snapshot(struct kwork_stats *out)
 bool kwork_queue(kwork_fn fn, void *arg)
 {
     uint32_t f = irq_save();
+    if (fn && worker) for (unsigned n = 0, i = head; n < stats.pending; n++, i = (i + 1) % KWORK_CAPACITY) {
+        if (ring[i].fn == fn && ring[i].arg == arg) {
+            if (ring[i].notifications != UINT32_MAX) ring[i].notifications++;
+            stats.coalesced++; irq_restore(f); return true;
+        }
+    }
     if (!fn || !worker || stats.pending == KWORK_CAPACITY) {
         stats.lost++;
         irq_restore(f);
@@ -49,6 +74,7 @@ bool kwork_queue(kwork_fn fn, void *arg)
     }
     ring[tail].fn = fn;
     ring[tail].arg = arg;
+    ring[tail].notifications = 1;
     tail = (tail + 1) % KWORK_CAPACITY;
     stats.pending++;
     stats.queued++;
@@ -81,23 +107,23 @@ bool kwork_run_one(void)
     }
     kwork_fn fn = ring[head].fn;
     void *arg = ring[head].arg;
+    notifications = ring[head].notifications;
+    service_us = 0;
     head = (head + 1) % KWORK_CAPACITY;
     stats.pending--;
     irq_restore(f);
     running = true;
     fn(arg);
-    running = false;
     if (!(read_eflags() & 0x200))
         panic("work: callback left interrupts disabled");
-    uint64_t us = g_cpu_tsc && g_tsc_per_ms ? (ktime_cycles() - slice_start) * 1000 / g_tsc_per_ms :
-                                           (deadline_after_ms(0) - slice_tick) * 1000;
+    uint64_t us = slice_us();
     bool overrun = us > 1000;
     f = irq_save();
+    slice_charge();
+    running = false;
     stats.completed++;
-    if (us > stats.max_run_us)
-        stats.max_run_us = us;
-    if (overrun)
-        stats.budget_violations++;
+    if (service_us > stats.max_service_us) stats.max_service_us = service_us;
+    if (service_us > 2000) stats.service_violations++;
     unsigned pending = stats.pending, violations = stats.budget_violations;
     irq_restore(f);
     /* The report itself feeds the boot log, whose drain runs on this worker:

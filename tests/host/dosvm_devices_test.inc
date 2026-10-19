@@ -96,7 +96,7 @@ static void test_device_pit(void)
     uint32_t bad=0xAF; device_out(v,0x43,0x11);
     CHECK(v86_io(&v->monitor,0x40,1,true,&bad)==-V86_EPERM && c->null_count);
     dosvm_pit_init(v); CHECK(!dosvm_boot(v)); v->monitor.vif=false;
-    uint64_t start=v->clock_ms; g_ticks+=1000; dosvm_tick();
+    uint64_t start=v->clock_ms; g_ticks+=1000; host_clock_tick();
     CHECK(v->clock_ms==start+1000 && v->pit.dropped_ticks==936 && v->pit.clocks==64*1193 && (v->monitor.pic[0].irr&1));
     destroy(v,true); empty();
 }

@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/win32.h>
+#include <ciuki/work.h>
 extern void w32_shared_tick(void) __attribute__((weak));
 extern void serial_tick(void) __attribute__((weak));
 
@@ -68,12 +69,17 @@ void pic_mask(unsigned irq)
     irq_restore(f);
 }
 
+static void shared_tick_work(void *arg)
+{
+    (void)arg;
+    if (w32_shared_tick) w32_shared_tick(); /* fixed 64 process slots, IF enabled */
+}
 static void timer_irq(struct trap_frame *tf)
 {
     (void)tf;
     g_ticks++;
     if (serial_tick) serial_tick();  /* idle TX rearm only; no polling or FIFO writes */
-    if (w32_shared_tick) w32_shared_tick();
+    if (w32_shared_tick) kwork_queue(shared_tick_work, 0);
     timing_timer_irq();
     sched_tick();
 }

@@ -217,7 +217,9 @@ static void audio_flush_logs(void)
 }
 void audio_wake(void)
 {
-    audio.pending = true; kwait_wake_all(&audio.changed);
+    audio.pending = true;
+    if (read_eflags() & 0x200) kwait_wake_all(&audio.changed);
+    else kwait_wake_irq(&audio.changed, false);
 }
 void audio_fail(int error)
 {

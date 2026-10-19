@@ -9,7 +9,14 @@
 #include <ciuki/task.h>
 
 uint64_t g_tsc_per_ms;               /* 0 until calibrated */
-static uint64_t crit_start;
+static uint64_t crit_start, crit_firmware_start, firmware_cycles;
+static uint64_t crit_work_max, firmware_max, firmware_window;
+static uint64_t raw_max_work, raw_max_firmware;
+static uint32_t firmware_gaps, unclassified_irqoff;
+static char interrupt_owner[16], maximum_owner[16];
+static char work_owner[16];
+static uint32_t work_site;
+static const char *work_section = "none";
 static uint64_t crit_max_cycles;     /* since last reset */
 static uint64_t crit_window_max;     /* since the previous timer IRQ */
 static uint32_t budget_violations;
@@ -25,7 +32,7 @@ static unsigned stall_count, stall_dropped;
 static bool stall_active;
 static uint64_t stall_begin, stall_per_ms;
 static uint64_t stall_sample_begin, stall_sample_end;
-struct timing_raw { uint64_t per_ms, maximum, pic_max; };
+struct timing_raw { uint64_t per_ms, maximum, pic_max, work_max, firmware_max, raw_work, raw_firmware; };
 static void snapshot_locked(struct timing_stats *, struct timing_raw *);
 static void snapshot_convert(struct timing_stats *, const struct timing_raw *);
 
@@ -40,11 +47,22 @@ void crit_begin(void)
 {
     if (g_cpu_tsc) {
         crit_start = rdtsc();
+        crit_firmware_start = firmware_cycles;
+        interrupt_owner[0] = 0;
         crit_site = (uint32_t)(uintptr_t)__builtin_return_address(0);
         crit_section = "irq_save";
     }
 }
 void crit_label(const char *section) { if (crit_start) crit_section=section; }
+
+void crit_owner(const char *owner, uint32_t site)
+{
+    if (!crit_start) return;
+    unsigned i = 0;
+    for (; i < sizeof(interrupt_owner) - 1 && owner && owner[i]; i++) interrupt_owner[i] = owner[i];
+    for (; i < sizeof(interrupt_owner); i++) interrupt_owner[i] = 0;
+    crit_site = site;
+}
 
 void timing_pic_mask_write(uint64_t cycles)
 {
@@ -58,16 +76,29 @@ void crit_end(void)
     if (!g_cpu_tsc || !crit_start)
         return;
     uint64_t end = rdtsc(), start = crit_start;
-    uint64_t d = end - start;
+    uint64_t d = end - start, firmware = firmware_cycles - crit_firmware_start;
+    if (firmware > d) firmware = 0;
+    uint64_t work = d - firmware;
+    if (work > crit_work_max) {
+        crit_work_max = work; work_site = crit_site; work_section = crit_section;
+        memcpy(work_owner, interrupt_owner, sizeof(work_owner));
+    }
+    if (firmware > firmware_max) firmware_max = firmware;
+    if (firmware > firmware_window) firmware_window = firmware;
+    if (firmware) firmware_gaps++;
+    if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US && !firmware)
+        unclassified_irqoff++;
     crit_start = 0;
     if (d > crit_max_cycles) {
         crit_max_cycles = d;
+        raw_max_work = work; raw_max_firmware = firmware;
         crit_max_site = crit_site;
         crit_max_section = crit_section;
+        memcpy(maximum_owner, interrupt_owner, sizeof(maximum_owner));
     }
-    if (d > crit_window_max)
-        crit_window_max = d;
-    if (g_tsc_per_ms && d * 1000 > g_tsc_per_ms * CRIT_BUDGET_US)
+    if (work > crit_window_max)
+        crit_window_max = work;
+    if (g_tsc_per_ms && work * 1000 > g_tsc_per_ms * CRIT_BUDGET_US)
         budget_violations++;
     if (stall_active && start >= stall_begin && stall_per_ms && d > stall_per_ms &&
         !(start <= stall_sample_begin && end >= stall_sample_end)) {
@@ -92,6 +123,9 @@ void timing_stalls_begin(void)
 
 void timing_stall_observe(uint64_t start, uint64_t end, const char *section)
 {
+    /* Attribution is independent of whether diagnostic tracing is active.
+     * Only adjacent serialized no-work probes supply this heuristic tag. */
+    if (section && !strncmp(section, "smi_attributed", sizeof("smi_attributed"))) firmware_cycles += end - start;
     /* IRQ budget probes call with IF clear; no allocation, I/O or logging. */
     if (!stall_active || start < stall_begin || !stall_per_ms || end - start <= stall_per_ms) return;
     /* The enclosing crit_end must not count this same stall a second time. */
@@ -154,12 +188,12 @@ void timing_timer_irq(void)
         if (gap > 2 * g_tsc_per_ms) {
             if (crit_window_max > 2 * g_tsc_per_ms)
                 gaps_software++;
-            else
+            else if (firmware_window <= 2 * g_tsc_per_ms)
                 gaps_unclassified++;   /* no software cause measured: unresolved */
         }
     }
     last_timer_tsc = now;
-    crit_window_max = 0;
+    crit_window_max = firmware_window = 0;
 }
 
 void timing_calibrate(void)
@@ -182,7 +216,11 @@ void timing_calibrate(void)
 void timing_reset(void)
 {
     uint32_t f = irq_save();
-    crit_max_cycles = 0;
+    crit_max_cycles = crit_work_max = firmware_max = firmware_window = 0;
+    raw_max_work = raw_max_firmware = 0;
+    firmware_gaps = unclassified_irqoff = 0;
+    maximum_owner[0] = 0;
+    work_owner[0] = 0; work_site = 0; work_section = "none";
     crit_max_site = 0; crit_max_section = "none";
     crit_window_max = last_timer_tsc = 0;
     budget_violations = 0;
@@ -194,7 +232,11 @@ void timing_reset(void)
 
 static void snapshot_locked(struct timing_stats *s, struct timing_raw *raw)
 {
-    *raw=(struct timing_raw){g_tsc_per_ms,crit_max_cycles,pic_mask_out_max};
+    *raw=(struct timing_raw){g_tsc_per_ms,crit_max_cycles,pic_mask_out_max,crit_work_max,firmware_max,raw_max_work,raw_max_firmware};
+    s->firmware_gaps = firmware_gaps; s->unclassified_irqoff = unclassified_irqoff;
+    memcpy(s->interrupt_owner, maximum_owner, sizeof(maximum_owner));
+    s->work_site = work_site; s->work_section = work_section;
+    memcpy(s->work_owner, work_owner, sizeof(work_owner));
     s->pic_mask_writes = pic_mask_writes;
     s->budget_violations = budget_violations;
     s->gaps_software = gaps_software;
@@ -205,6 +247,10 @@ static void snapshot_locked(struct timing_stats *s, struct timing_raw *raw)
 
 static void snapshot_convert(struct timing_stats *s, const struct timing_raw *r)
 {
+    s->critical_work_us = r->per_ms ? (uint32_t)(r->work_max * 1000 / r->per_ms) : 0;
+    s->raw_work_us = r->per_ms ? (uint32_t)(r->raw_work * 1000 / r->per_ms) : 0;
+    s->raw_firmware_us = r->per_ms ? (uint32_t)(r->raw_firmware * 1000 / r->per_ms) : 0;
+    s->firmware_us = r->per_ms ? (uint32_t)(r->firmware_max * 1000 / r->per_ms) : 0;
     s->tsc_khz = (uint32_t)r->per_ms;
     s->critical_us = r->per_ms ? (uint32_t)(r->maximum * 1000 / r->per_ms) : 0;
     s->critical_ns = r->per_ms ? (uint32_t)(r->maximum * 1000000 / r->per_ms) : 0;

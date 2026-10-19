@@ -1,6 +1,7 @@
 /* Reuse f2-02's fake RAM/scheduler fixtures, not its signal adapter. All
  * signal decisions, copies, waits, validators and FPU translations are real.
  * SPDX-License-Identifier: GPL-2.0-only */
+#define HOST_TIMER_QUEUE
 #define main proc_fixture_main
 #define fpu_task_release fixture_fpu_release
 #include "proc_test.c"
@@ -72,6 +73,14 @@ extern void serial_tick(void) __attribute__((weak));
 #define task_input_delivered timing_task_input_delivered
 #define task_device_deadline timing_task_device_deadline
 #define task_start timing_task_start
+#include <ciuki/work.h>
+static kwork_fn signal_work;
+static void *signal_work_arg;
+bool kwork_queue(kwork_fn fn,void *arg) { signal_work=fn;signal_work_arg=arg;return true; }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
+static uint32_t read_eflags(void) { return host_flags; }
+void task_start(struct task *);
+#include <deadline_timers.inc>
 #include <signal_scheduler.inc>
 #undef task_set_class
 #undef task_focus
@@ -113,6 +122,7 @@ static void test_focused_budget(void)
         vm_ticks += g_current == &vm;
         for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) native_ticks[i] += g_current == &peers[i];
         g_ticks++; timing_tick();
+        for(unsigned n=0;signal_work && n<1024;n++) { kwork_fn fn=signal_work; signal_work=0;fn(signal_work_arg); }
         if (g_need_resched) timing_schedule();
     }
     CHECK(vm_ticks == 800);
@@ -129,6 +139,7 @@ static void test_focused_budget(void)
         vm_ticks += g_current == &vm;
         for (unsigned i = 0; i < ARRAY_SIZE(peers); i++) native_ticks[i] += g_current == &peers[i];
         g_ticks++; timing_tick();
+        for(unsigned n=0;signal_work && n<1024;n++) { kwork_fn fn=signal_work; signal_work=0;fn(signal_work_arg); }
         if (g_need_resched) timing_schedule();
     }
     CHECK(vm_ticks == 800);
@@ -145,6 +156,8 @@ static void test_focused_budget(void)
     CHECK(rq_pop() == &peers[0] && !focus_task && rq_pop() == &vm);
     memset(rq_head, 0, sizeof(rq_head)); memset(rq_tail, 0, sizeof(rq_tail));
     focus_task = 0; all_tasks = idle_task = 0;
+    fixture_cancel_timers(&vm);fixture_cancel_timers(&idle);fixture_cancel_timers(&device);
+    for(unsigned i=0;i<ARRAY_SIZE(peers);i++)fixture_cancel_timers(&peers[i]);
     g_current = saved_current; g_ticks = saved_ticks; g_need_resched = false;
     puts("f3-14 scheduler: focused VM 800/1000 ticks, five normal/interactive peers 40 ticks each, device priority preserved PASS");
     puts("f3-17 scheduler: withdrawn idle focus token restores native run-queue order PASS");
@@ -509,7 +522,7 @@ static void interrupt_sleep(void)
     idle_task = &idle;
     probe.prio = P_INTERACTIVE;
     probe.state = T_BLOCKED;
-    probe.wake_tick = g_ticks + 1;
+    probe.generation=1; ktimer_wait_task(&probe,g_ticks+1);
     all_tasks = &probe;
     probe.all_next = sleeper;
     sleeper->all_next = &peers[0];
@@ -541,7 +554,8 @@ static void interrupt_sleep(void)
         } else {
             /* A spinning peer consumes its real 10-tick quantum. Sleeping
              * peers voluntarily switch before a timer quantum elapses. */
-            do { g_ticks++; timing_tick(); } while (!g_need_resched);
+            do { g_ticks++; timing_tick();
+        for(unsigned n=0;signal_work && n<1024;n++) { kwork_fn fn=signal_work; signal_work=0;fn(signal_work_arg); } } while (!g_need_resched);
             timing_schedule();
         }
     }
@@ -552,6 +566,8 @@ static void interrupt_sleep(void)
     if (sleep_paced_peers) CHECK(g_ticks - sleep_started == 10);
     for (unsigned i = 0; i < SCHED_LEVELS; i++) rq_head[i] = rq_tail[i] = 0;
     all_tasks = idle_task = 0;
+    fixture_cancel_timers(&probe);fixture_cancel_timers(&idle);
+    for(unsigned i=0;i<ARRAY_SIZE(peers);i++)fixture_cancel_timers(&peers[i]);
     sleeper->all_next = old_next;
     host_cr3 = saved_cr3;
     tls_base = saved_tls;

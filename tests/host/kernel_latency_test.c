@@ -41,8 +41,22 @@ extern uint32_t dosvm_task_cr3(const struct task *,uint32_t) __attribute__((weak
 extern uint32_t dosvm_task_esp0(const struct task *,uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
-static bool latency_model_tasks;
-static unsigned latency_task_visits;
+static void timer_fixture_reset(void);
+static kwork_fn deferred_fn;
+static void *deferred_arg;
+#ifndef HOST_REAL_WORK
+bool kwork_queue(kwork_fn fn, void *arg) { deferred_fn=fn; deferred_arg=arg; return true; }
+#endif
+#ifndef HOST_SYNC_TIMERS
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
+gen_t gen_alloc(void) { static gen_t generation; return ++generation; }
+#include "deadline_timers.inc"
+static void timer_fixture_reset(void)
+{
+    timer_root=timer_first=timer_due_head=timer_due_tail=0;
+    memset(&timer_stats,0,sizeof(timer_stats));deferred_fn=0;
+}
+#endif
 #include "latency_scheduler.inc"
 static struct task idle, normal, hog, ui, reporter;
 static const struct task *audio_focus;
@@ -63,7 +77,9 @@ void klog_periodic(const char *fmt,...)
 static struct timing_stats timing_fixture;
 void timing_snapshot(struct timing_stats *s) { *s=timing_fixture; }
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s)); }
+#ifndef HOST_REAL_WORK
 void kwork_snapshot(struct kwork_stats *s) { memset(s,0,sizeof(*s)); }
+#endif
 uint32_t serial_dropped(void) { return 0; }
 struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum task_prio p)
 { (void)n;(void)fn;(void)arg;(void)p; return &reporter; }
@@ -73,6 +89,7 @@ __attribute__((noreturn)) void panic(const char *fmt,...)
 #include "vm_creation_model.inc"
 static void reset(void)
 {
+    timer_fixture_reset();
     (void)next_id;
     latency_switch_hook=0;
     memset(rq_head,0,sizeof(rq_head));memset(rq_tail,0,sizeof(rq_tail));
@@ -81,6 +98,7 @@ static void reset(void)
     hog=(struct task){.id=3,.prio=P_DEVICE,.state=T_READY};strcpy(hog.name,"hog");
     ui=(struct task){.id=4,.prio=P_INTERACTIVE,.state=T_READY,.user=true};strcpy(ui.name,"desktop");
     idle.all_next=&normal; normal.all_next=&hog; hog.all_next=&ui; all_tasks=&idle;
+    idle.generation=normal.generation=hog.generation=ui.generation=1;
     g_current=idle_task=&idle;g_ticks=0;cycles=1;slice_left=10;flags=0x200;
     focus_task=audio_focus=irq_focus=0;ui_focus=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
     memset(device_cpu,0,sizeof(device_cpu));device_cpu_total=device_cpu_tick=0;
@@ -99,6 +117,11 @@ static void run_tick(uint32_t eip)
     cycles+=1000;g_ticks++;
     struct trap_frame tf={.vector=0x20,.cs=g_current->user?0x1b:8,.eip=eip};
     uint64_t start=cpu_irq_enter(&tf);sched_tick();cpu_irq_leave(start);
+#ifndef HOST_REAL_WORK
+    uint32_t saved_flags=flags; flags=0x200;
+    for(unsigned n=0;deferred_fn && n<1024;n++) { kwork_fn fn=deferred_fn;deferred_fn=0;fn(deferred_arg); }
+    flags=saved_flags;
+#endif
 }
 static void creation_cpu_service(uint64_t ns)
 {
@@ -132,7 +155,7 @@ static void vm_creation_test(void)
 static void wake_test(void)
 {
     reset();rq_push(&normal);schedule();CHECK(g_current==&normal);
-    hog.state=T_BLOCKED;hog.wake_tick=1;
+    hog.state=T_BLOCKED;ktimer_wait_task(&hog,1);
     run_tick(0x1234);CHECK(g_need_resched && hog.state==T_READY);
     schedule();CHECK(g_current==&hog && normal.state==T_READY);
 }
@@ -179,7 +202,7 @@ static void measured_wake_test(void)
 {
     reset();normal.measured=ui.measured=true;ui.prio=P_NORMAL;
     rq_push(&normal);rq_push(&ui);schedule();CHECK(g_current==&normal);
-    hog.state=T_BLOCKED;hog.wake_tick=1;g_switch_target=2;
+    hog.state=T_BLOCKED;ktimer_wait_task(&hog,1);g_switch_target=2;
     run_tick(0);schedule();CHECK(g_current==&hog && !g_task_switches);
     task_sleep_ms(1);CHECK(g_current==&ui && g_task_switches==1);
     run_tick(0);schedule();CHECK(g_current==&hog && g_task_switches==1);
@@ -246,7 +269,7 @@ static void accounting_test(void)
     CHECK(win==2000 && id+ir+de+in+no==1000 && id==50 && de==650 && no==300);
     CHECK(strstr(records,"eip=deadbeef") && strstr(records,"task=hog#3"));
     CHECK(!(g_boot.flags & CBI_F_DIAG_VERBOSE));
-    CHECK(strstr(records,"[kernel] irqoff_section=serial_tx_byte site=c011e445 irqoff_max_us=2120 violations=1\n"));
+    CHECK(strstr(records,"[kernel] irqoff_section=serial_tx_byte site=c011e445 irqoff_max_us=2120 violations=1 work_us=0 firmware_us=0 unclassified=0 owner=none\n"));
     CHECK(strstr(records,"[kernel] long_paths") && strstr(records,"timer_gaps=0/0"));
     record_bytes=0;records[0]=0;g_boot.flags=0;cycles+=2000000;cpu_emit();CHECK(!record_bytes);
     /* A desktop stall wakes the reporter immediately, even in a quiet boot. */
@@ -265,19 +288,24 @@ static void maximum_tasks_test(void)
     static struct task peers[1360];
     reset(); all_tasks=&idle; idle.all_next=peers;
     for (unsigned i=0;i<1360;i++) {
-        peers[i]=(struct task){.id=i+10,.prio=P_NORMAL,.state=T_BLOCKED,.wake_tick=1,
+        peers[i]=(struct task){.id=i+10,.prio=P_NORMAL,.state=T_BLOCKED,.generation=1,
             .all_next=i+1<1360 ? &peers[i+1] : 0};
+        ktimer_wait_task(&peers[i],1);
     }
-    latency_model_tasks=true; latency_task_visits=0;
-    run_tick(0); latency_model_tasks=false;
-    CHECK(latency_task_visits==1361 && latency_task_visits<=2000);
-    unsigned ready=0;
-    for (unsigned i=0;i<1360;i++) ready+=peers[i].state==T_READY;
-    CHECK(ready==1360 && g_need_resched);
+    /* F0-46: the timer IRQ moves at most KTIMER_IRQ_BATCH due entries with
+     * interrupts disabled and the wakes run as bounded deferred work; the
+     * F0-44 task population walk no longer exists (F0-44 bound by design). */
+    unsigned ready=0, ticks=0;
+    while (ready<1360 && ticks<8) {
+        run_tick(0); ticks++; ready=0;
+        for (unsigned i=0;i<1360;i++) ready+=peers[i].state==T_READY;
+    }
+    struct ktimer_stats stats; ktimer_snapshot(&stats);
+    CHECK(stats.max_irq_batch>0 && stats.max_irq_batch<=KTIMER_IRQ_BATCH);
+    CHECK(stats.completed==1360 && ready==1360 && g_need_resched);
     kpreempt_point(); CHECK(g_current==&peers[0]);
-    /* Tick/IRQ accounting belongs to f0-46; this is a task-count and
-     * wake-at-next-safe-point test, not an IRQ-duration qualification. */
-    puts("F0-44 maximum tasks: 1360 stack slots / 256 native cap, 1361us IRQ scan model (f0-46 unqualified), wake and next-point dispatch PASS");
+    printf("F0-44 maximum tasks: 1360 stack slots / 256 native cap, IRQ batch<=%u (f0-46 timer queue, %u tick(s)), wake and next-point dispatch PASS\n",
+           (unsigned)KTIMER_IRQ_BATCH, ticks);
 }
 int main(void)
 {

@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
+#include <ciuki/work.h>
 
 #define UART_POLL_LIMIT 20000u   /* panic only */
 #define UART_INIT_POLL_LIMIT 4096u
@@ -162,7 +163,7 @@ static void serial_irq(struct trap_frame *tf)
         outb(uart_base + 1, 0);
         uart_armed = false;
     }
-    kwait_wake_all(&uart_space);
+    kwait_wake_irq(&uart_space, false);
 }
 
 void serial_writer_init(void)
@@ -199,7 +200,7 @@ uint32_t serial_evidence_begin(size_t bytes)
         if ((f & 0x200) && crit_label) crit_label("serial_queue");
         if (!uart_irq_started || bytes > UART_RECORD_BYTES || serial_room(&bytes) ||
             !(f & 0x200) || !g_current || g_current->state != T_RUNNING ||
-            g_current->preempt_holds) {
+            g_current->preempt_holds || (kwork_current && kwork_current())) {
             uart_evidence = true;
             return f; /* caller publishes exactly once, then restores IF */
         }

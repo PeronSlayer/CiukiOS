@@ -7,6 +7,7 @@
 #include <ciuki/ac97.h>
 #include <ciuki/registry_value.h>
 #include <ciuki/timing.h>
+static uint32_t read_eflags(void) { return host_flags; }
 static bool vm_active_hook;
 static bool fullscreen_hook;
 struct ciuki_boot_info g_boot;

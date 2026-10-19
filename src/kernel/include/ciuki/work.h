@@ -10,7 +10,7 @@
 typedef void (*kwork_fn)(void *arg);
 struct kwork_stats {
     uint64_t queued, completed, lost, yields, budget_violations;
-    uint64_t max_run_us;
+    uint64_t max_run_us, max_service_us, service_violations, coalesced;
     unsigned pending;
 };
 
@@ -26,6 +26,12 @@ struct kwork_stats {
  * accumulate into an unbounded batch. */
 int kwork_init(void);
 bool kwork_queue(kwork_fn fn, void *arg);
+/* Count represented by the current callback, saturated at UINT32_MAX. A
+ * notification during execution reserves a later turn rather than chaining. */
+unsigned kwork_notifications(void);
+/* IRQ notifications use this worker; its own serial records must not wait
+ * for UART space and thereby block the notification consumer. */
+bool kwork_current(void) __attribute__((weak));
 void kwork_yield(void);
 bool kwork_run_one(void);          /* worker step, also usable by host tests */
 void kwork_snapshot(struct kwork_stats *out);

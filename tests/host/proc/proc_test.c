@@ -58,9 +58,13 @@ void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); if (!as->pd_phys) return -ENOMEM; memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }
 void as_destroy(struct aspace *as) { CHECK(!as->pages && !as->tables); if (as->pd_phys) pmm_free(as->pd_phys); memset(as, 0, sizeof(*as)); }
+#ifndef HOST_TIMER_QUEUE
+void ktimer_wait_task(struct task *t, uint64_t d) { t->wake_tick=d; }
+#endif
 void kwait_init(struct kwait *q) { memset(q,0,sizeof(*q)); }
 void kwait_wake_all(struct kwait *q) { (void)q; }
 void kwait_wake_io(struct kwait *q) { (void)q; }
+void kwait_wake_irq(struct kwait *q, bool io) { if(io) kwait_wake_io(q); else kwait_wake_all(q); }
 void task_device_deadline(struct task *t,uint64_t d) { t->service_deadline=d; }
 void task_set_class(struct task *t,enum task_prio p) { t->prio=p; }
 static struct task *fixture_focus;
@@ -78,7 +82,7 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
 {
     (void)name; (void)fn; (void)arg;
     struct task *t = kzalloc(sizeof(*t));
-    if (t) { t->state = T_BLOCKED; t->prio = prio; g_task_count++; }
+    if (t) { t->generation = 1; t->state = T_BLOCKED; t->prio = prio; g_task_count++; }
     return t;
 }
 struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
@@ -89,10 +93,24 @@ struct task *task_create_native(struct process *p, uint32_t entry, uint32_t esp)
     return t;
 }
 void task_native_frame(struct task *t, uint32_t esp) { t->saved_esp = esp; }
-void task_start(struct task *t) { CHECK(t->state == T_BLOCKED); t->state = T_READY; }
+static void fixture_cancel_timers(struct task *t)
+{
+#ifdef HOST_TIMER_QUEUE
+    ktimer_cancel(&t->wake_timer);ktimer_cancel(&t->input_timer);ktimer_cancel(&t->ready_timer);
+#else
+    (void)t;
+#endif
+}
+void task_start(struct task *t) {
+    CHECK(t->state == T_BLOCKED);
+#ifdef HOST_TIMER_QUEUE
+    ktimer_cancel(&t->wake_timer);t->wake_tick=0;
+#endif
+    t->state = T_READY;
+}
 bool task_alive(const struct task *t) { return t->state != T_ZOMBIE && t->state != T_DEAD; }
-void task_kill(struct task *t, int code) { if (!task_alive(t)) return; proc_task_exiting(t, code); t->exit_code = code; t->state = T_ZOMBIE; }
-void task_reap(struct task *t) { CHECK(t != g_current && t->state == T_ZOMBIE && !t->as.pd_phys); g_task_count--; kfree(t); }
+void task_kill(struct task *t, int code) { if (!task_alive(t)) return; fixture_cancel_timers(t); proc_task_exiting(t, code); t->exit_code = code; t->state = T_ZOMBIE; }
+void task_reap(struct task *t) { CHECK(t != g_current && t->state == T_ZOMBIE && !t->as.pd_phys); fixture_cancel_timers(t); g_task_count--; kfree(t); }
 void task_exit(int code) { CHECK(expect_exit); task_kill(g_current, code); longjmp(exited, 1); }
 void schedule(void)
 {
