@@ -80,6 +80,9 @@ static uint64_t read_tsc_serialized(void)
 #define SLICE 4000u
 static unsigned guest_slice = SLICE;
 static unsigned used_pages, unexpected;
+#ifdef CIUKI_DOSVM_FILE_CPU
+static unsigned h50_fail_pages;
+#endif
 static bool allocated[HOST_PAGES];
 static uint8_t *ram;
 static uint32_t cpu_cr3, cpu_flags = V86_IF, next_pfn = 4096, fake_cr2;
@@ -147,6 +150,9 @@ uint32_t pmm_alloc(void)
 }
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
+#ifdef CIUKI_DOSVM_FILE_CPU
+    if (h50_fail_pages && pages==h50_fail_pages) { h50_fail_pages=0; return 0; }
+#endif
     for (unsigned first = 4096; first + pages <= HOST_PAGES; first++) {
         unsigned n = 0;
         while (n < pages && !allocated[first + n]) n++;
@@ -230,6 +236,18 @@ static FILE *disk_image, *cow;
 static char cow_path[96];
 static uint64_t pos[2];
 struct storage *storage_get(void) { return &store; }
+#ifdef CIUKI_DOSVM_FILE_CPU
+#define vfs_table_init transport_vfs_table_init
+#define vfs_table_destroy transport_vfs_table_destroy
+#define vfs_stat transport_vfs_stat
+#define vfs_open transport_vfs_open
+#define vfs_close transport_vfs_close
+#define vfs_delete transport_vfs_delete
+#define vfs_seek transport_vfs_seek
+#define vfs_read transport_vfs_read
+#define vfs_write transport_vfs_write
+#define vfs_commit transport_vfs_commit
+#endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
 /* The image's real size: a cut base (the bundled games disk, owner decision
@@ -265,6 +283,7 @@ int vfs_write(struct vfs_table *table, int handle, const void *data, size_t byte
 { (void)table; CHECK(handle == 1 && fseek(cow, (long)pos[1], SEEK_SET) == 0); *done = fwrite(data, 1, bytes, cow); return 0; }
 int vfs_commit(struct vfs_table *table, int handle) { (void)table; (void)handle; return 0; }
 
+static struct dosvm *gv;
 static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
 {
@@ -276,6 +295,15 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         for (const char *p = data + 6; p[0] && p[1] && k + 1 < sizeof(text); p += 2) text[k++] = (char)(hexv(p[0]) * 16 + hexv(p[1]));
         text[k] = 0;
         printf("  guest: %s\n", text);
+#ifdef CIUKI_DOSVM_FILE_CPU
+        /* Transport adapter for the unchanged, hash-pinned f3-48 COM format. */
+        if (gv && !strncmp(gv->verdict_name,"D48",3) && !strncmp(text,gv->verdict_name,6) && text[6]==' ') {
+            bool pass=!strcmp(text+7,"PASS 0000");
+            bool fail=!strncmp(text+7,"FAIL ",5) && strlen(text+7)==9;
+            if (pass || fail) { gv->info.verdict_done=true; gv->info.verdict_pass=pass;
+                if (fail) memcpy(gv->info.verdict_detail,text+12,5); }
+        }
+#endif
         return;
     }
     printf("  record %s %s %s\n", probe, event, extra);
@@ -307,6 +335,19 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "dosvm_work.inc"
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
+#ifdef CIUKI_DOSVM_FILE_CPU
+#undef vfs_table_init
+#undef vfs_table_destroy
+#undef vfs_stat
+#undef vfs_open
+#undef vfs_close
+#undef vfs_delete
+#undef vfs_seek
+#undef vfs_read
+#undef vfs_write
+#undef vfs_commit
+#endif
+
 #include "../../src/kernel/vm/dosvm_bios.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
@@ -327,6 +368,9 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"
 #include "../../src/kernel/vm/dpmi.c"
+#ifdef CIUKI_DOSVM_FILE_CPU
+#include "../../src/kernel/vm/dos_file_vm.c"
+#endif
 
 /* ---- guest CPU glue ---- */
 static struct dosvm *gv;
@@ -343,6 +387,10 @@ static void input_hook(void)
     bool cooperative = gv->idle.sleeping && ip >= 2 &&
         !dosvm_read(gv, (gv->frame.tf.cs << 4) + ip - 2, op, sizeof(op)) && op[0] == 0xCD &&
         (op[1] == 0x28 || (op[1] == 0x2F && (uint16_t)gv->frame.tf.eax == 0x1680));
+#ifdef CIUKI_DOSVM_FILE_CPU
+    /* A probe's 1680h yield is not the command interpreter waiting for input. */
+    if (cooperative && !strncmp(gv->verdict_name,"D48",3) && !gv->info.verdict_done) return;
+#endif
     if (cooperative || (gv->frame.tf.cs == 0xF000 && ip == 0x16 * 16 + 2)) {
         gv->info.state = DOSVM_RUNNABLE;
         gv->idle.sleeping = false; gv->idle.last_tick = g_ticks;
@@ -914,10 +962,28 @@ int main(int argc, char **argv)
         if (!strcmp(tracker, "breakpoint")) g_boot.flags &= ~CBI_F_SMBIOS_QEMU;
     }
     CHECK(fseek(disk_image, 0, SEEK_END) == 0); disk_bytes = (uint64_t)ftell(disk_image);
+#ifdef CIUKI_DOSVM_FILE_CPU
+    CHECK(!cache_init(&store.cache,65536)); vfs_init(&store.vfs);
+#endif
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
     CHECK(dosvm_create(&config, &gv) == 0);
     printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
+#ifdef CIUKI_DOSVM_FILE_CPU
+    const char *disabled=getenv("GUEST_NO_FILE_HOOK");
+    if (disabled && !strcmp(disabled,"alloc")) h50_fail_pages=(sizeof(struct file_runtime)+PAGE_SIZE-1)/PAGE_SIZE;
+    else if (disabled) {
+        uint8_t *descriptor=(uint8_t *)P2V(gv->frames[0xf1])+(DOS_HOOK_DESCRIPTOR&0xfff);
+        if (!strcmp(disabled,"swap")) {
+            uint32_t gate=vm_u32(descriptor+12); vm_w32(descriptor+12,vm_u32(descriptor+16)); vm_w32(descriptor+16,gate);
+        } else if (!strcmp(disabled,"overlap")) vm_w32(descriptor+16,vm_u32(descriptor+12));
+        else if (!strcmp(disabled,"occupied")) vm_w16(descriptor+12,DPMI_RM_RETURN);
+        else if (!strcmp(disabled,"outside")) vm_w16(descriptor+16,0xfffe);
+        else if (!strcmp(disabled,"old")) vm_w16(descriptor+4,0);
+        else if (!strcmp(disabled,"short")) vm_w16(descriptor+6,19);
+        else descriptor[0]='?';
+    }
+#endif
     CHECK(dosvm_boot(gv) == 0);
     cpu = gv->frame;
     int failures = 0;
@@ -926,8 +992,24 @@ int main(int argc, char **argv)
     printf("boot: %s after %llu instructions, %llu traps, %llu ms\n", r > 0 ? "prompt" : "FAILED",
            (unsigned long long)instructions, (unsigned long long)traps, (unsigned long long)g_ticks);
     if (r <= 0) { screen(); return 1; }
+#ifdef CIUKI_DOSVM_FILE_CPU
+    if (getenv("GUEST_FILE_TRACE") && gv->files) gv->files->trace_enabled=true;
+#endif
     if (getenv("GUEST_COSTS")) stats("boot");
     for (int i = 2; i + 1 < argc; i += 2) {
+#ifdef CIUKI_DOSVM_FILE_CPU
+        if (!strncmp(argv[i],"shell:",6)) {
+            printf("H50 SHELL %s\n",argv[i]+6);
+            type(argv[i]+6);
+            CHECK(run(30000000ull,0)==2 && prompt());
+            if (gv->files && argv[i+1][0]=='?') {
+                struct fat_entry entry;
+                int found=vfs_stat(gv->files->view[2].table,argv[i+1]+2,&entry);
+                CHECK(argv[i+1][1]=='+' ? !found : found==-FS_ENOENT);
+            }
+            continue;
+        }
+#endif
         bool fault = !strncmp(argv[i], "fault:", 6), gate = !strncmp(argv[i], "gate:", 5);
         /* f3-06 rc: the payload reports a child's exit code (RUNREC): any
          * verdict counts; the shell then gets its prompt back, and the screen
@@ -946,9 +1028,18 @@ int main(int argc, char **argv)
         const char *command = fault ? argv[i] + 6 : gate ? argv[i] + 5 : rc ? argv[i] + 3 : isr ? argv[i] + 4 : menu ? argv[i] + 5 : video || quake_exec_mode ? argv[i] + 6 : argv[i];
         gv->dpmi_enabled = !gate;       /* gate: as a VM created without dosvm_config.dpmi */
         uint64_t start = instructions, ms = g_ticks;
+#ifdef CIUKI_DOSVM_FILE_CPU
+        /* Real monitor throttles records to 16/s; controller waits between COMs. */
+        task_sleep_ms(1000);
+#endif
         dosvm_expect(gv, argv[i + 1]);
         startup_irqs = gv->dpmi.stats.irqs_pm;
         printf("run %s (expect %s%s)\n", command, argv[i + 1], fault ? ", VM fault" : gate ? ", no DPMI host" : "");
+#ifdef CIUKI_DOSVM_FILE_CPU
+        if (gv->files && getenv("GUEST_FILE_TRACE")) {
+            struct dos_file_trace discarded; while (dos_file_trace_pop(gv->files,&discarded)) { }
+        }
+#endif
         type(command);
         /* GUEST_BUDGET (instructions per command): long workloads (f3-06 DOOM). */
         const char *budget = getenv("GUEST_BUDGET");
@@ -1008,9 +1099,24 @@ int main(int argc, char **argv)
             if (r != 2 || gv->dpmi.active || (expect && !latched_has(expect))) { failures++; break; }
             continue;
         }
-        if (!gv->info.verdict_pass) { failures++; screen(); break; }
+        if (!gv->info.verdict_pass) {
+#ifdef CIUKI_DOSVM_FILE_CPU
+            if (gv->files) {
+                struct dos_file_trace tr;
+                while (dos_file_trace_pop(gv->files,&tr)) printf("H50 trace seq=%llu ret=%u ax=%04x bx=%04x cx=%04x dx=%04x ds=%04x flags=%04x cs:ip=%04x:%04x psp=%04x\n",
+                    (unsigned long long)tr.sequence,tr.returning,tr.frame.ax,tr.frame.bx,tr.frame.cx,tr.frame.dx,tr.frame.ds,tr.frame.flags,tr.frame.cs,tr.frame.ip,tr.psp);
+            }
+#endif
+            failures++; screen(); break;
+        }
         r = run(400000000ull, 0);
         stats("after-exit");
+#ifdef CIUKI_DOSVM_FILE_CPU
+        if (gv->files) {
+            unsigned processes=0; for (unsigned n=0;n<DOS_FILE_PSPS;n++) processes+=gv->files->process[n].used;
+            printf("H50 live PSPs=%u selected=%04x owning=%04x\n",processes,gv->files->selected,gv->files->owning);
+        }
+#endif
         if (r != 2 || gv->dpmi.active) { failures++; screen(); break; }
     }
     if (guest_perf) {
@@ -1036,6 +1142,16 @@ int main(int argc, char **argv)
     if (uart_baud) printf("UART timing: baud=%u records=%u ms=%llu\n", uart_baud, uart_records, (unsigned long long)uart_ms);
     printf("guest runner: %s (%llu instructions, %llu traps, %u unexpected)\n", failures || unexpected ? "FAIL" : "PASS",
            (unsigned long long)instructions, (unsigned long long)traps, unexpected);
+#ifdef CIUKI_DOSVM_FILE_CPU
+    printf("H50 CPU binding=%u dispatches=%llu resident=%u\n",gv->files && gv->files->personality.live,
+           (unsigned long long)(gv->files ? gv->files->sequence : 0),gv->info.resident);
+    if (!getenv("GUEST_NO_FILE_HOOK")) CHECK(gv->files && gv->files->personality.live);
+    else CHECK(!gv->files);
+    unsigned file_pages=gv->file_bytes/PAGE_SIZE, before_pages=used_pages;
+    CHECK(!dosvm_file_destroy(gv));
+    CHECK(!gv->files && !gv->file_volume && used_pages+file_pages==before_pages);
+    vfs_destroy(&store.vfs); cache_destroy(&store.cache);
+#endif
     if (cow) { fclose(cow); unlink(cow_path); }
     gcpu_done();
     return failures || unexpected;

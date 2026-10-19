@@ -593,3 +593,5 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 
 # f5-06 kernel32 production VFS endpoints and direct-file INI parity.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
+# f3-50: bound personality, native FAT/VFS and production V86/DPMI CPU model.
+bash "$root/tests/host/dos/run_hook_cpu.sh"

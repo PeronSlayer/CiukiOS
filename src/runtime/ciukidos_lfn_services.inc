@@ -16,6 +16,14 @@ kernel_lfn_api_table:
     dw CLFN_LEAVE_DOS, 1, kernel_lfn_leave_dos, 0
 
 kernel_runtime_lfn_api_service:
+    ; The CLFN sector extension is the disabled-binding personality's owner.
+    ; A bound VM must not install a second FAT interpreter over the VFS mount.
+    cmp byte [cs:dos_hook_active], 1
+    jne .fallback
+    mov ax, 1
+    stc
+    retf
+.fallback:
     push bx
     mov ax, cs
     mov ds, ax

@@ -137,6 +137,7 @@ struct dosvm {
     struct dos_file *files; /* published only after f3-50's checked BIND */
     struct dos_file_volume *file_volume;
     struct v86_frame file_saved;
+    uint32_t file_phys,file_bytes;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */
@@ -342,6 +343,7 @@ void dosvm_file_dump(struct dosvm *) __attribute__((weak));
 void dosvm_file_deadline(struct dosvm *) __attribute__((weak));
 int dosvm_file_disk(struct dosvm *,uint32_t,void *,bool) __attribute__((weak));
 void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);
+void dosvm_file_rom_init(struct dosvm *) __attribute__((weak));
 void dosvm_file_ops_init(struct dosvm *,struct dos_file_ops *);
 uint64_t dosvm_file_monitor_us(void *);
 static inline void dosvm_boundary(struct dosvm *v, const struct v86_frame *f, const char *event)

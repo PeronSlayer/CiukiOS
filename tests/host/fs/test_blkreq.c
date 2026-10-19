@@ -13,7 +13,7 @@ struct disk {
     struct blk_queue queue;
     uint8_t data[256*1024];
     uint64_t order[128]; unsigned calls, sizes[128];
-    unsigned delay_ms; bool fail, cancel_issued;
+    unsigned delay_ms; bool fail, cancel_issued, cleanup_issued;
     uint64_t frontier; enum blk_priority priority;
 };
 static int transfer(struct blkdev *d,uint64_t lba,uint32_t n,void *buf,bool write) {
@@ -21,6 +21,7 @@ static int transfer(struct blkdev *d,uint64_t lba,uint32_t n,void *buf,bool writ
     assert(n<=128 && lba*512+n*512<=sizeof(m->data));
     unsigned call=m->calls++; assert(call<128); m->order[call]=lba; m->sizes[call]=n;
     m->frontier=m->queue.active->frontier; m->priority=m->queue.active->priority;
+    if (m->cleanup_issued) assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
     if (m->delay_ms) { struct timespec t={0,(long)m->delay_ms*1000000}; nanosleep(&t,0); }
     if (m->cancel_issued) blk_queue_cancel_device(&m->queue,d);
     if (m->fail) return -FS_EIO;
@@ -171,4 +172,25 @@ static void aged_split(void) {
     assert(!blk_queue_destroy(&m.queue));
     puts("PASS an aged bulk request earns one command; splitting still admits the next demand read");
 }
-int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); return 0; }
+static void pool_cleanup(void) {
+    assert(!blk_request_pool_host_cleanup());
+    for (unsigned cycle=0;cycle<2;cycle++) {
+        struct disk m; init(&m); uint8_t b[512]; m.cleanup_issued=true;
+        struct blk_request *r=prepare(&m,BLK_READ,0,sizeof(b),b,BLK_DEMAND,0);
+        assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
+        assert(!blk_request_submit(r));
+        assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
+        assert(!blk_request_wait(r) && r->state==BLK_COMPLETED);
+        assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
+        assert(!blk_request_release(r));
+        r=prepare(&m,BLK_READ,0,sizeof(b),b,BLK_DEMAND,0);
+        assert(blk_request_cancel(r) && r->state==BLK_CANCELLED);
+        assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
+        drop(r,-FS_EAGAIN);
+        assert(!blk_queue_destroy(&m.queue));
+        assert(!blk_request_pool_host_cleanup());
+        assert(!blk_request_pool_host_cleanup());
+    }
+    puts("PASS host pool cleanup: rejects prepared/queued/issued/completed/cancelled owners, reinitializes after teardown");
+}
+int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); pool_cleanup(); return 0; }
