@@ -6,12 +6,14 @@
 #include <string.h>
 struct atom { struct atom *next; uint32_t id,pid,refs; char *name; };
 struct window { struct window *next; struct w32r_window value; char *title; };
-struct directory { struct atom *atoms; struct window *windows; uint32_t next_atom; uint64_t sequence; unsigned slot; };
+struct clip_data { struct clip_data *next; uint32_t format,bytes; uint8_t data[]; };
+struct directory { uint32_t clip_pid,clip_tid,clip_window,clip_owner,clip_owner_pid,clip_viewer; struct clip_data *clip; struct atom *atoms; struct window *windows; uint32_t next_atom; uint64_t sequence; unsigned slot; };
 static uint32_t rd(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
 static void put(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;i++)p[i]=(uint8_t)(n>>(i*8));}
 void wr_directory_free(struct wr_server *s)
 {
     struct directory *d=s->directory;if(!d)return;
+    while(d->clip){struct clip_data *c=d->clip;d->clip=c->next;free(c);}
     while(d->atoms){struct atom *a=d->atoms;d->atoms=a->next;free(a->name);free(a);}
     while(d->windows){struct window *w=d->windows;d->windows=w->next;free(w->title);free(w);}free(d);s->directory=NULL;
 }
@@ -94,6 +96,38 @@ static uint32_t integer_atom(const char *s)
 uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_request *r,const char *name,const void *data,struct w32r_reply *out,uint8_t *bytes)
 {
     struct directory *d=s->directory;
+    if(r->op>=W32R_CLIP_OPEN&&r->op<=W32R_CLIP_CHAIN){
+        out->key=d->clip_owner;out->type=d->clip_viewer;
+        if(r->op==W32R_CLIP_OPEN){
+            if(d->clip_pid)return 5;
+            if(!r->index)return 87;
+            if(r->key){struct window *w=d->windows;while(w&&w->value.hwnd!=r->key)w=w->next;if(!w||w->value.pid!=pid)return 1400;}
+            d->clip_pid=pid;d->clip_tid=r->index;d->clip_window=r->key;return 0;
+        }
+        if(r->op==W32R_CLIP_OWNER)return 0;
+        if(r->op==W32R_CLIP_VIEWER){
+            struct window *w=d->windows;while(w&&w->value.hwnd!=r->key)w=w->next;
+            if(!w||w->value.pid!=pid)return 1400;out->key=d->clip_viewer;d->clip_viewer=r->key;return 0;
+        }
+        if(r->op==W32R_CLIP_CHAIN){if(d->clip_viewer==r->key)d->clip_viewer=r->flags;return 0;}
+        if(r->op==W32R_CLIP_QUERY){for(struct clip_data *c=d->clip;c;c=c->next)if(c->format==r->type){out->disposition=1;break;}return 0;}
+        if(d->clip_pid!=pid||d->clip_tid!=r->index)return 1418;
+        if(r->op==W32R_CLIP_CLOSE){d->clip_pid=d->clip_tid=d->clip_window=0;return 0;}
+        if(r->op==W32R_CLIP_EMPTY){
+            out->disposition=d->clip_owner;while(d->clip){struct clip_data *c=d->clip;d->clip=c->next;free(c);}
+            d->clip_owner=d->clip_window;d->clip_owner_pid=pid;out->key=d->clip_owner;return 0;
+        }
+        if(r->op==W32R_CLIP_GET){for(struct clip_data *c=d->clip;c;c=c->next)if(c->format==r->type){memcpy(bytes,c->data,c->bytes);out->data_bytes=c->bytes;return 0;}return 6;}
+        if(r->op==W32R_CLIP_SET){
+            if(d->clip_owner_pid!=pid||!d->clip_owner)return 5;
+            if(r->type!=1&&r->type!=2&&r->type!=7&&r->type!=8&&r->type!=13)return 120;
+            struct clip_data *copy=malloc(sizeof(*copy)+r->data_bytes);if(!copy)return 8;
+            copy->format=r->type;copy->bytes=r->data_bytes;memcpy(copy->data,data,r->data_bytes);
+            struct clip_data **at=&d->clip;while(*at&&(*at)->format!=r->type)at=&(*at)->next;
+            if(*at){struct clip_data *old=*at;copy->next=old->next;free(old);}else copy->next=NULL;*at=copy;return 0;
+        }
+        return 120;
+    }
     if(r->op==W32R_SHUTDOWN)return 5; /* f5-07B supplies a supervisor authority. */
     if(r->op>=W32R_ATOM_ADD&&r->op<=W32R_ATOM_NAME){
         if(r->index>1)return 87;uint32_t scope=r->index?pid:0;
@@ -128,14 +162,17 @@ uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_re
         w->next=d->windows;d->windows=w;uint32_t e=save(s);if(e){d->windows=w->next;free(w->title);free(w);}else out->key=w->value.hwnd;return e;
     }
     struct window **at=&d->windows;
-    if(r->op==W32R_WINDOW_ENUM){uint32_t i=0;while(*at){if(!(*at)->value.parent&&i++==r->index)break;at=&(*at)->next;}}
+    if(r->op==W32R_WINDOW_ENUM){uint32_t i=0;while(*at){if((r->flags&1||!(*at)->value.parent)&&i++==r->index)break;at=&(*at)->next;}}
     else while(*at&&(*at)->value.hwnd!=r->key)at=&(*at)->next;
     struct window *w=*at;if(!w)return r->op==W32R_WINDOW_ENUM?259:1400;
     if(r->op==W32R_WINDOW_GET||r->op==W32R_WINDOW_ENUM){
         out->key=w->value.hwnd;out->data_bytes=24+(uint32_t)strlen(w->title)+1;memcpy(bytes,&w->value,24);memcpy(bytes+24,w->title,strlen(w->title)+1);return 0;
     }
+    if(r->op==W32R_WINDOW_CLASS){
+        for(struct atom *a=d->atoms;a;a=a->next)if(a->id==w->value.class_atom&&(!a->pid||a->pid==w->value.pid)){out->data_bytes=(uint32_t)strlen(a->name)+1;memcpy(bytes,a->name,out->data_bytes);return 0;}return 1411;
+    }
     if(w->value.pid!=pid)return 5;
-    if(r->op==W32R_WINDOW_FREE){*at=w->next;uint32_t e=save(s);if(e)*at=w;else{free(w->title);free(w);}return e;}
+    if(r->op==W32R_WINDOW_FREE){if(d->clip_owner==w->value.hwnd)d->clip_owner=d->clip_owner_pid=0;if(d->clip_viewer==w->value.hwnd)d->clip_viewer=0;*at=w->next;uint32_t e=save(s);if(e)*at=w;else{free(w->title);free(w);}return e;}
     if(r->op==W32R_WINDOW_SET){
         if(r->data_bytes<25||r->data_bytes>24+W32R_NAME)return 87;
         struct w32r_window v;memcpy(&v,data,24);const char *title=(const char *)data+24;
@@ -150,6 +187,9 @@ uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_re
 uint32_t wr_directory_exit(struct wr_server *s,uint32_t pid)
 {
     struct directory *d=s->directory;
+    if(d->clip_pid==pid)d->clip_pid=d->clip_tid=d->clip_window=0;
+    if(d->clip_owner_pid==pid)d->clip_owner=d->clip_owner_pid=0;
+    for(struct window *w=d->windows;w;w=w->next)if(w->value.pid==pid&&w->value.hwnd==d->clip_viewer)d->clip_viewer=0;
     /* Remove one at a time through the same durable mutation path. */
     for(;;){struct atom *a=d->atoms;while(a&&a->pid!=pid)a=a->next;if(!a)break;
         uint32_t refs=a->refs;a->refs=1;struct w32r_request r={.op=W32R_ATOM_DELETE,.index=1,.key=a->id};struct w32r_reply out={0};uint8_t b[1];

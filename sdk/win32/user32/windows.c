@@ -1,0 +1,1116 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#include "internal.h"
+static UINT zserial;
+static BOOL atom_name(const char *name) { return (uintptr_t)name <= 65535; }
+static int equal(const char *a, const char *b) {
+  while (*a && *b) {
+    unsigned x = (uint8_t)*a++, y = (uint8_t)*b++;
+    if (x >= 'A' && x <= 'Z')
+      x += 32;
+    if (y >= 'A' && y <= 'Z')
+      y += 32;
+    if (x != y)
+      return 0;
+  }
+  return *a == *b;
+}
+struct u32_class *u32_class(const char *n, HINSTANCE instance) {
+  for (UINT i = 0; i < U32_CLASSES; i++) {
+    struct u32_class *c = &u32_classes[i];
+    if (c->atom && (!instance || c->c.hInstance == instance) &&
+        (atom_name(n) ? c->atom == (uintptr_t)n : equal(c->name, n)))
+      return c;
+  }
+  return 0;
+}
+ATOM W32API RegisterClassExA(const WNDCLASSEXA *c) {
+  U32_GUARD;
+  if (!c || c->cbSize != sizeof(*c) || !c->lpfnWndProc || !c->lpszClassName ||
+      atom_name(c->lpszClassName) || w32_strlen(c->lpszClassName) > 255 ||
+      c->cbClsExtra < 0 || c->cbWndExtra < 0 || c->cbClsExtra > 4096 ||
+      c->cbWndExtra > 4096)
+    return u32_fail(87);
+  if (u32_class(c->lpszClassName, c->hInstance))
+    return u32_fail(1410);
+  struct u32_class *slot = 0;
+  for (UINT i = 0; i < U32_CLASSES; i++)
+    if (!u32_classes[i].atom) {
+      slot = &u32_classes[i];
+      break;
+    }
+  if (!slot)
+    return u32_fail(8);
+  uint8_t *extra = c->cbClsExtra ? u32_alloc(c->cbClsExtra) : 0;
+  if (c->cbClsExtra && !extra)
+    return 0;
+  struct w32r_reply r;
+  if (!u32_directory(W32R_ATOM_ADD, 0, 1, 0, 0, c->lpszClassName, 0, 0, &r, 0,
+                     0)) {
+    u32_free(extra);
+    return 0;
+  }
+  slot->atom = (ATOM)r.key;
+  slot->c = *c;
+  w32_copy(slot->name, c->lpszClassName, w32_strlen(c->lpszClassName) + 1);
+  slot->c.lpszClassName = slot->name;
+  slot->extra = extra;
+  return slot->atom;
+}
+ATOM W32API RegisterClassA(const WNDCLASSA *c) {
+  U32_GUARD;
+  if (!c)
+    return u32_fail(87);
+  WNDCLASSEXA x = {sizeof(x),       c->style,         c->lpfnWndProc,
+                   c->cbClsExtra,   c->cbWndExtra,    c->hInstance,
+                   c->hIcon,        c->hCursor,       c->hbrBackground,
+                   c->lpszMenuName, c->lpszClassName, 0};
+  return RegisterClassExA(&x);
+}
+BOOL W32API GetClassInfoExA(HINSTANCE i, const char *n, WNDCLASSEXA *out) {
+  U32_GUARD;
+  struct u32_class *c = u32_class(n, i);
+  if (!c || !out || out->cbSize != sizeof(*out))
+    return u32_fail(c ? 87 : 1411);
+  *out = c->c;
+  return 1;
+}
+BOOL W32API GetClassInfoA(HINSTANCE i, const char *n, WNDCLASSA *out) {
+  U32_GUARD;
+  struct u32_class *c = u32_class(n, i);
+  if (!c || !out)
+    return u32_fail(c ? 87 : 1411);
+  *out = (WNDCLASSA){c->c.style,      c->c.lpfnWndProc,   c->c.cbClsExtra,
+                     c->c.cbWndExtra, c->c.hInstance,     c->c.hIcon,
+                     c->c.hCursor,    c->c.hbrBackground, c->c.lpszMenuName,
+                     c->name};
+  return 1;
+}
+BOOL W32API UnregisterClassA(const char *n, HINSTANCE i) {
+  U32_GUARD;
+  struct u32_class *c = u32_class(n, i);
+  if (!c)
+    return u32_fail(1411);
+  if (c->refs)
+    return u32_fail(1412);
+  struct w32r_reply r;
+  if (!u32_directory(W32R_ATOM_DELETE, (HWND)(uintptr_t)c->atom, 1, 0, 0, "", 0,
+                     0, &r, 0, 0))
+    return 0;
+  u32_free(c->extra);
+  w32_fill(c, 0, sizeof(*c));
+  return 1;
+}
+HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
+                            DWORD style, int x, int y, int width, int height,
+                            HWND parent, HANDLE menu, HINSTANCE instance,
+                            void *param) {
+  U32_GUARD;
+  struct u32_class *c = u32_class(klass, instance);
+  if (!c) {
+    u32_fail(1407);
+    return 0;
+  }
+  if ((style & WS_CHILD) && !u32_window(parent)) {
+    u32_fail(1400);
+    return 0;
+  }
+  if (title && w32_strlen(title) > 255) {
+    u32_fail(87);
+    return 0;
+  }
+  if (x == (int)0x80000000)
+    x = 32;
+  if (y == (int)0x80000000)
+    y = 32;
+  if (width == (int)0x80000000)
+    width = 640;
+  if (height == (int)0x80000000)
+    height = 480;
+  if (width < 0 || height < 0 || width > 2048 || height > 2048 || x < -8192 ||
+      x > 8192 || y < -8192 || y > 8192) {
+    u32_fail(87);
+    return 0;
+  }
+  struct u32_window *w = 0;
+  for (UINT i = 0; i < U32_WINDOWS; i++)
+    if (!u32_windows[i].handle) {
+      w = &u32_windows[i];
+      break;
+    }
+  if (!w) {
+    u32_fail(8);
+    return 0;
+  }
+  struct w32r_reply r;
+  if (!u32_directory(W32R_WINDOW_ALLOC, 0, u32_tid(), c->atom, style, title, 0,
+                     0, &r, 0, 0))
+    return 0;
+  w32_fill(w, 0, sizeof(*w));
+  w->surface.fd = -1;
+  w->handle = (HWND)(uintptr_t)r.key;
+  w->tid = u32_tid();
+  w->pid = u32_pid();
+  w->style = style;
+  w->exstyle = ex;
+  w->proc = c->c.lpfnWndProc;
+  w->cls = c;
+  w->instance = instance;
+  w->id = U32_PTR(menu);
+  w->redraw = 1;
+  w->creating = 1;
+  w->z = ++zserial;
+  w->rect = (RECT){x, y, x + width, y + height};
+  if (style & WS_CHILD)
+    w->parent = parent;
+  else
+    w->owner = parent;
+  if (title)
+    w32_copy(w->title, title, w32_strlen(title) + 1);
+  c->refs++;
+  if (c->c.cbWndExtra) {
+    w->extra = u32_alloc(c->c.cbWndExtra);
+    if (!w->extra)
+      goto fail;
+  }
+  if (!u32_sync_window(w))
+    goto fail;
+  if (!(style & WS_CHILD) && !u32_create_wire(w))
+    goto fail;
+  HWND hwnd = w->handle;
+  CREATESTRUCTA cs = {param, instance, menu,        parent, height, width,
+                      y,     x,        (LONG)style, title,  klass,  ex};
+  if (!u32_invoke(hwnd, WM_NCCREATE, 0, (LPARAM)&cs) || !IsWindow(hwnd))
+    goto fail_live;
+  if (u32_invoke(hwnd, WM_CREATE, 0, (LPARAM)&cs) == -1 || !IsWindow(hwnd))
+    goto fail_live;
+  w->creating = 0;
+  if (style & WS_VISIBLE) {
+    u32_invoke(hwnd, WM_SHOWWINDOW, 1, 0);
+    InvalidateRect(hwnd, 0, 1);
+  }
+  return hwnd;
+fail_live:
+  if (IsWindow(hwnd))
+    DestroyWindow(hwnd);
+  return 0;
+fail:
+  u32_directory(W32R_WINDOW_FREE, w->handle, 0, 0, 0, "", 0, 0, &r, 0, 0);
+  u32_free(w->extra);
+  c->refs--;
+  w32_fill(w, 0, sizeof(*w));
+  return 0;
+}
+BOOL W32API IsWindow(HWND h) {
+  U32_GUARD;
+  if (u32_window(h))
+    return 1;
+  struct w32r_window v;
+  return h && u32_directory_window(h, &v, 0);
+}
+BOOL W32API IsChild(HWND p, HWND h) {
+  U32_GUARD;
+  for (UINT i = 0; h && i < 4096; i++) {
+    struct u32_window *w = u32_window(h);
+    if (w) {
+      if (!w->parent)
+        return 0;
+      h = w->parent;
+    } else {
+      struct w32r_window value;
+      if (!u32_directory_window(h, &value, 0) || !value.parent)
+        return 0;
+      h = (HWND)(uintptr_t)value.parent;
+    }
+    if (h == p)
+      return 1;
+  }
+  return 0;
+}
+BOOL W32API IsWindowVisible(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  for (UINT i = 0; w && i < U32_WINDOWS; i++) {
+    if (!(w->style & WS_VISIBLE))
+      return 0;
+    if (!w->parent)
+      return 1;
+    w = u32_window(w->parent);
+  }
+  return 0;
+}
+BOOL W32API IsWindowEnabled(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  return w && !(w->style & WS_DISABLED);
+}
+BOOL W32API IsWindowUnicode(HWND h) {
+  U32_GUARD;
+  (void)h;
+  return 0;
+}
+BOOL W32API IsIconic(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  return w && !!(w->style & WS_MINIMIZE);
+}
+BOOL W32API IsZoomed(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  return w && !!(w->style & WS_MAXIMIZE);
+}
+BOOL W32API EnableWindow(HWND h, BOOL enabled) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  BOOL disabled = !!(w->style & WS_DISABLED);
+  if (disabled == !!enabled) {
+    if (enabled)
+      w->style &= ~WS_DISABLED;
+    else
+      w->style |= WS_DISABLED;
+    u32_invoke(h, WM_ENABLE, !!enabled, 0);
+  }
+  return disabled;
+}
+extern void u32_destroy_paint(struct u32_window *);
+BOOL W32API DestroyWindow(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (w->tid != u32_tid())
+    return u32_fail(5);
+  if (w->destroying)
+    return 1;
+  w->destroying = 1;
+  /* Directive f5-10A explicitly selects children-first destruction. */
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *q = &u32_windows[i];
+    if (q->handle && (q->parent == h || q->owner == h))
+      DestroyWindow(q->handle);
+  }
+  if (u32_capture == h)
+    ReleaseCapture();
+  if (GetFocus() == h)
+    SetFocus(0);
+  if (GetActiveWindow() == h)
+    SetActiveWindow(0);
+  if (u32_foreground == h)
+    u32_foreground = 0;
+  u32_invoke(h, WM_DESTROY, 0, 0);
+  for (UINT i = 0; i < U32_TIMERS; i++)
+    if (u32_timers[i].tid && u32_timers[i].hwnd == h)
+      w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
+  u32_invoke(h, WM_NCDESTROY, 0, 0);
+  u32_destroy_paint(w);
+  while (w->props) {
+    struct u32_prop *p = w->props;
+    w->props = p->next;
+    u32_free(p->name);
+    u32_free(p);
+  }
+  if (w->wire)
+    u32_wire(w, DESK_CLOSE, 0, 0, -1);
+  u32_backend.drop_surface(&w->surface);
+  struct w32r_reply r;
+  BOOL ok = u32_directory(W32R_WINDOW_FREE, h, 0, 0, 0, "", 0, 0, &r, 0, 0);
+  w->cls->refs--;
+  u32_free(w->extra);
+  w32_fill(w, 0, sizeof(*w));
+  u32_mark();
+  return ok;
+}
+void u32_frame(DWORD style, DWORD ex, int *bx, int *by) {
+  if (!(style & WS_CHILD)) {
+    BOOL popup =
+        (style & WS_POPUP) && !(style & WS_CAPTION) && !(ex & WS_EX_TOOLWINDOW);
+    *bx = popup ? 0 : 3;
+    *by = popup ? 0 : 24;
+    return;
+  }
+  int border = style & (WS_BORDER | WS_DLGFRAME | WS_THICKFRAME) ? 1 : 0;
+  if (ex & WS_EX_CLIENTEDGE)
+    border += 2;
+  else if (ex & WS_EX_STATICEDGE)
+    border++;
+  *bx = border;
+  *by = border + ((style & WS_CAPTION) == WS_CAPTION ? 18 : 0);
+}
+BOOL W32API GetClientRect(HWND h, RECT *r) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !r)
+    return u32_fail(1400);
+  int bx, by;
+  u32_frame(w->style, w->exstyle, &bx, &by);
+  int width = w->rect.right - w->rect.left - 2 * bx,
+      height = w->rect.bottom - w->rect.top - by - bx;
+  return SetRect(r, 0, 0, width > 0 ? width : 0, height > 0 ? height : 0);
+}
+POINT u32_origin(struct u32_window *w) {
+  POINT p = {0, 0};
+  for (UINT i = 0; w && i < U32_WINDOWS; i++) {
+    int bx, by;
+    u32_frame(w->style, w->exstyle, &bx, &by);
+    p.x += w->rect.left + bx;
+    p.y += w->rect.top + by;
+    w = u32_window(w->parent);
+  }
+  return p;
+}
+BOOL W32API GetWindowRect(HWND h, RECT *r) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !r)
+    return u32_fail(1400);
+  *r = w->rect;
+  if (w->parent) {
+    POINT p = u32_origin(u32_window(w->parent));
+    OffsetRect(r, p.x, p.y);
+  }
+  return 1;
+}
+BOOL W32API ClientToScreen(HWND h, POINT *p) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !p)
+    return u32_fail(1400);
+  POINT o = u32_origin(w);
+  p->x += o.x;
+  p->y += o.y;
+  return 1;
+}
+BOOL W32API ScreenToClient(HWND h, POINT *p) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !p)
+    return u32_fail(1400);
+  POINT o = u32_origin(w);
+  p->x -= o.x;
+  p->y -= o.y;
+  return 1;
+}
+int W32API MapWindowPoints(HWND from, HWND to, POINT *p, UINT n) {
+  U32_GUARD;
+  POINT a = {0}, b = {0};
+  if ((from && !ClientToScreen(from, &a)) || (to && !ClientToScreen(to, &b)) ||
+      (!p && n))
+    return 0;
+  int x = a.x - b.x, y = a.y - b.y;
+  for (UINT i = 0; i < n; i++)
+    p[i].x += x, p[i].y += y;
+  return (uint16_t)x | ((uint32_t)(uint16_t)y << 16);
+}
+BOOL W32API AdjustWindowRectEx(RECT *r, DWORD style, BOOL menu, DWORD ex) {
+  U32_GUARD;
+  if (!r)
+    return u32_fail(87);
+  int bx, by;
+  u32_frame(style, ex, &bx, &by);
+  r->left -= bx;
+  r->right += bx;
+  r->top -= by + (menu ? 18 : 0);
+  r->bottom += bx;
+  return 1;
+}
+BOOL W32API AdjustWindowRect(RECT *r, DWORD style, BOOL menu) {
+  U32_GUARD;
+  return AdjustWindowRectEx(r, style, menu, 0);
+}
+BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
+                         UINT flags) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (!(flags & SWP_NOMOVE) && (x < -8192 || x > 8192 || y < -8192 || y > 8192))
+    return u32_fail(87);
+  RECT before = w->rect;
+  DWORD old_style = w->style, old_exstyle = w->exstyle;
+  UINT old_z = w->z;
+  if (!(flags & SWP_NOMOVE)) {
+    w->rect.right += x - w->rect.left;
+    w->rect.bottom += y - w->rect.top;
+    w->rect.left = x;
+    w->rect.top = y;
+  }
+  if (!(flags & SWP_NOSIZE)) {
+    if (cx < 0 || cy < 0 || cx > 2048 || cy > 2048) {
+      w->rect = before;
+      return u32_fail(87);
+    }
+    w->rect.right = w->rect.left + cx;
+    w->rect.bottom = w->rect.top + cy;
+  }
+  if (!(flags & SWP_NOZORDER)) {
+    if (after == HWND_TOPMOST)
+      w->exstyle |= WS_EX_TOPMOST;
+    else if (after == HWND_NOTOPMOST)
+      w->exstyle &= ~WS_EX_TOPMOST;
+    else if (after && after != HWND_BOTTOM && !u32_window(after)) {
+      w->rect = before;
+      return u32_fail(1400);
+    }
+    w->z = after == HWND_BOTTOM ? 0 : ++zserial;
+  }
+  if (flags & SWP_SHOWWINDOW)
+    w->style |= WS_VISIBLE;
+  if (flags & SWP_HIDEWINDOW)
+    w->style &= ~WS_VISIBLE;
+  if (!w->parent && !u32_place(w)) {
+    w->rect = before;
+    w->style = old_style;
+    w->exstyle = old_exstyle;
+    w->z = old_z;
+    return 0;
+  }
+  u32_sync_window(w);
+  if (before.left != w->rect.left || before.top != w->rect.top)
+    u32_invoke(h, WM_MOVE, 0,
+               (uint16_t)w->rect.left |
+                   ((uint32_t)(uint16_t)w->rect.top << 16));
+  if (before.right - before.left != cx || before.bottom - before.top != cy) {
+    if (!(flags & SWP_NOSIZE)) {
+      RECT client;
+      GetClientRect(h, &client);
+      u32_invoke(h, WM_SIZE, IsIconic(h) ? 1 : 0,
+                 (uint16_t)client.right |
+                     ((uint32_t)(uint16_t)client.bottom << 16));
+      InvalidateRect(h, 0, 1);
+    }
+  }
+  if (!(flags & SWP_NOACTIVATE) && (w->style & WS_VISIBLE))
+    SetActiveWindow(h);
+  return 1;
+}
+BOOL W32API MoveWindow(HWND h, int x, int y, int cx, int cy, BOOL paint) {
+  U32_GUARD;
+  BOOL r = SetWindowPos(h, 0, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+  if (r && paint)
+    UpdateWindow(h);
+  return r;
+}
+BOOL W32API ShowWindow(HWND h, int cmd) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  BOOL old = !!(w->style & WS_VISIBLE);
+  DWORD prev = w->style;
+  if (!cmd)
+    w->style &= ~WS_VISIBLE;
+  else
+    w->style |= WS_VISIBLE;
+  if (cmd == 2 || cmd == 6 || cmd == 7)
+    w->style |= WS_MINIMIZE;
+  else if (cmd) {
+    w->style &= ~WS_MINIMIZE;
+    if (cmd == 3)
+      w->style |= WS_MAXIMIZE;
+    else
+      w->style &= ~WS_MAXIMIZE;
+  }
+  if (!w->parent)
+    u32_place(w);
+  u32_sync_window(w);
+  if (old != !!(w->style & WS_VISIBLE))
+    u32_invoke(h, WM_SHOWWINDOW, !!cmd, 0);
+  if ((prev ^ w->style) & WS_MINIMIZE) {
+    RECT r;
+    GetClientRect(h, &r);
+    u32_invoke(h, WM_SIZE, IsIconic(h) ? 1 : 0,
+               IsIconic(h) ? 0
+                           : ((uint16_t)r.right |
+                              ((uint32_t)(uint16_t)r.bottom << 16)));
+  }
+  if (cmd && cmd != 4 && cmd != 7 && cmd != 8)
+    SetActiveWindow(h);
+  if (cmd)
+    InvalidateRect(h, 0, 1);
+  return old;
+}
+HWND W32API GetParent(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (w)
+    return w->parent ? w->parent : w->owner;
+  struct w32r_window v;
+  return u32_directory_window(h, &v, 0) ? (HWND)(uintptr_t)v.parent : 0;
+}
+HWND W32API SetParent(HWND h, HWND parent) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || (parent && !u32_window(parent)) || h == parent ||
+      IsChild(h, parent)) {
+    u32_fail(87);
+    return 0;
+  }
+  HWND old = w->parent;
+  BOOL was_top = !w->parent;
+  if (was_top && parent) {
+    u32_destroy_paint(w);
+    u32_wire(w, DESK_CLOSE, 0, 0, -1);
+    u32_backend.drop_surface(&w->surface);
+    w->wire = 0;
+  }
+  w->parent = parent;
+  if (!parent && !was_top && !u32_create_wire(w)) {
+    w->parent = old;
+    return 0;
+  }
+  u32_sync_window(w);
+  InvalidateRect(h, 0, 1);
+  return old;
+}
+LONG W32API GetWindowLongA(HWND h, int index) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w) {
+    u32_fail(1400);
+    return 0;
+  }
+  switch (index) {
+  case GWL_WNDPROC:
+    return (LONG)(intptr_t)w->proc;
+  case GWL_HINSTANCE:
+    return (LONG)(intptr_t)w->instance;
+  case GWL_HWNDPARENT:
+    return (LONG)(intptr_t)GetParent(h);
+  case GWL_ID:
+    return w->id;
+  case GWL_STYLE:
+    return w->style;
+  case GWL_EXSTYLE:
+    return w->exstyle;
+  case GWL_USERDATA:
+    return w->userdata;
+  default:
+    if (index >= 0 && index <= w->cls->c.cbWndExtra - 4)
+      return w32_u32(w->extra + index);
+    u32_fail(1413);
+    return 0;
+  }
+}
+LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w) {
+    u32_fail(1400);
+    return 0;
+  }
+  LONG old = GetWindowLongA(h, index);
+  switch (index) {
+  case GWL_WNDPROC:
+    w->proc = (WNDPROC)(intptr_t)value;
+    break;
+  case GWL_HINSTANCE:
+    w->instance = (HINSTANCE)(intptr_t)value;
+    break;
+  case GWL_HWNDPARENT:
+    if (w->parent)
+      SetParent(h, (HWND)(intptr_t)value);
+    else
+      w->owner = (HWND)(intptr_t)value;
+    break;
+  case GWL_ID:
+    w->id = value;
+    break;
+  case GWL_STYLE:
+    w->style = value;
+    u32_sync_window(w);
+    if (!w->parent)
+      u32_place(w);
+    break;
+  case GWL_EXSTYLE:
+    w->exstyle = value;
+    if (!w->parent)
+      u32_place(w);
+    break;
+  case GWL_USERDATA:
+    w->userdata = value;
+    break;
+  default:
+    if (index < 0 || index > w->cls->c.cbWndExtra - 4) {
+      u32_fail(1413);
+      return 0;
+    }
+    w32_put32(w->extra + index, value);
+  }
+  return old;
+}
+uintptr_t W32API GetClassLongA(HWND h, int index) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w) {
+    u32_fail(1400);
+    return 0;
+  }
+  struct u32_class *c = w->cls;
+  switch (index) {
+  case -32:
+    return c->atom;
+  case -26:
+    return c->c.style;
+  case -24:
+    return (uintptr_t)c->c.lpfnWndProc;
+  case -20:
+    return c->c.cbClsExtra;
+  case -18:
+    return c->c.cbWndExtra;
+  case -16:
+    return (uintptr_t)c->c.hInstance;
+  case -14:
+    return (uintptr_t)c->c.hIcon;
+  case -12:
+    return (uintptr_t)c->c.hCursor;
+  case -10:
+    return (uintptr_t)c->c.hbrBackground;
+  case -34:
+    return (uintptr_t)c->c.hIconSm;
+  default:
+    if (index >= 0 && index <= c->c.cbClsExtra - 4)
+      return w32_u32(c->extra + index);
+    u32_fail(1413);
+    return 0;
+  }
+}
+uintptr_t W32API SetClassLongA(HWND h, int index, intptr_t value) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  uintptr_t old = GetClassLongA(h, index);
+  struct u32_class *c = w->cls;
+  switch (index) {
+  case -26:
+    c->c.style = value;
+    break;
+  case -24:
+    c->c.lpfnWndProc = (WNDPROC)value;
+    break;
+  case -14:
+    c->c.hIcon = (HICON)value;
+    break;
+  case -12:
+    c->c.hCursor = (HCURSOR)value;
+    break;
+  case -10:
+    c->c.hbrBackground = (HBRUSH)value;
+    break;
+  case -34:
+    c->c.hIconSm = (HICON)value;
+    break;
+  default:
+    if (index < 0 || index > c->c.cbClsExtra - 4)
+      return u32_fail(1413);
+    w32_put32(c->extra + index, value);
+  }
+  return old;
+}
+uint16_t W32API GetWindowWord(HWND h, int n) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || n < 0 || n > w->cls->c.cbWndExtra - 2)
+    return (uint16_t)GetWindowLongA(h, n);
+  return w32_u16(w->extra + n);
+}
+uint16_t W32API SetWindowWord(HWND h, int n, uint16_t v) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || n < 0 || n > w->cls->c.cbWndExtra - 2)
+    return (uint16_t)SetWindowLongA(h, n, v);
+  uint16_t old = w32_u16(w->extra + n);
+  w32_put16(w->extra + n, v);
+  return old;
+}
+int W32API GetWindowTextLengthA(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (w)
+    return w32_strlen(w->title);
+  char t[256];
+  struct w32r_window v;
+  return u32_directory_window(h, &v, t) ? w32_strlen(t) : 0;
+}
+int W32API GetWindowTextA(HWND h, char *out, int n) {
+  U32_GUARD;
+  if (!out || n <= 0)
+    return 0;
+  struct u32_window *w = u32_window(h);
+  char title[256];
+  struct w32r_window v;
+  const char *s = w ? w->title : title;
+  if (!w && !u32_directory_window(h, &v, title))
+    return 0;
+  UINT count = w32_strlen(s);
+  if (count >= (UINT)n)
+    count = n - 1;
+  w32_copy(out, s, count);
+  out[count] = 0;
+  return count;
+}
+BOOL W32API SetWindowTextA(HWND h, const char *text) {
+  U32_GUARD;
+  return !!SendMessageA(h, WM_SETTEXT, 0, (LPARAM)(text ? text : ""));
+}
+int W32API GetClassNameA(HWND h, char *out, int n) {
+  U32_GUARD;
+  if (!out || n <= 0)
+    return 0;
+  struct u32_window *w = u32_window(h);
+  if (w) {
+    UINT len = w32_strlen(w->cls->name);
+    if (len >= (UINT)n)
+      len = n - 1;
+    w32_copy(out, w->cls->name, len);
+    out[len] = 0;
+    return len;
+  }
+  struct w32r_reply reply;
+  char name[1021];
+  if (!u32_directory(W32R_WINDOW_CLASS, h, 0, 0, 0, "", 0, 0, &reply, name,
+                     sizeof(name)))
+    return 0;
+  UINT at = 0;
+  const uint8_t *p = (void *)name;
+  while (*p && at + 1 < (UINT)n) {
+    unsigned c = *p++;
+    if (c >= 0xe0) {
+      c &= 15;
+      c = (c << 6) | (*p++ & 63);
+      c = (c << 6) | (*p++ & 63);
+    } else if (c >= 0xc0) {
+      c &= 31;
+      c = (c << 6) | (*p++ & 63);
+    }
+    out[at++] = u32_ansi(c);
+  }
+  out[at] = 0;
+  return at;
+}
+DWORD W32API GetWindowThreadProcessId(HWND h, DWORD *pid) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  struct w32r_window v;
+  if (w) {
+    if (pid)
+      *pid = w->pid;
+    return w->tid;
+  }
+  if (!u32_directory_window(h, &v, 0))
+    return 0;
+  if (pid)
+    *pid = v.pid;
+  return v.tid;
+}
+static UINT list(HWND p, HWND out[U32_WINDOWS], BOOL descendants) {
+  UINT n = 0;
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *w = &u32_windows[i];
+    if (w->handle && (descendants ? IsChild(p, w->handle) : w->parent == p))
+      out[n++] = w->handle;
+  }
+  for (UINT i = 0; i < n; i++)
+    for (UINT j = i + 1; j < n; j++) {
+      struct u32_window *a = u32_window(out[i]), *b = u32_window(out[j]);
+      BOOL atop = !!(a->exstyle & WS_EX_TOPMOST),
+           btop = !!(b->exstyle & WS_EX_TOPMOST);
+      if (btop > atop || (btop == atop && b->z > a->z)) {
+        HWND h = out[i];
+        out[i] = out[j];
+        out[j] = h;
+      }
+    }
+  return n;
+}
+static UINT directory_list(HWND *hs, BOOL all) {
+  UINT n = 0;
+  for (; n < 4096; n++) {
+    struct w32r_reply r;
+    uint8_t data[1045];
+    if (!u32_directory(W32R_WINDOW_ENUM, 0, n, 0, all ? 1 : 0, "", 0, 0, &r,
+                       data, sizeof(data))) {
+      if (GetLastError() != 259)
+        return UINT32_MAX;
+      break;
+    }
+    hs[n] = (HWND)(uintptr_t)r.key;
+  }
+  return n;
+}
+BOOL W32API EnumWindows(WNDENUMPROC proc, LPARAM l) {
+  U32_GUARD;
+  if (!proc)
+    return u32_fail(87);
+  HWND *hs = u32_alloc(4096 * sizeof(*hs));
+  if (!hs)
+    return 0;
+  UINT n = directory_list(hs, 0);
+  BOOL ok = n != UINT32_MAX;
+  if (ok)
+    for (UINT i = 0; i < n; i++)
+      if (IsWindow(hs[i])) {
+        UINT saved = u32_suspend();
+        BOOL more = proc(hs[i], l);
+        u32_resume(saved);
+        if (!more) {
+          ok = 0;
+          break;
+        }
+      }
+  u32_free(hs);
+  return ok;
+}
+BOOL W32API EnumChildWindows(HWND parent, WNDENUMPROC proc, LPARAM l) {
+  U32_GUARD;
+  if (!proc)
+    return u32_fail(87);
+  HWND *hs = u32_alloc(4096 * sizeof(*hs));
+  if (!hs)
+    return 0;
+  UINT n = directory_list(hs, 1);
+  BOOL ok = n != UINT32_MAX;
+  if (ok)
+    for (UINT i = 0; i < n; i++)
+      if (IsChild(parent, hs[i])) {
+        UINT saved = u32_suspend();
+        BOOL more = proc(hs[i], l);
+        u32_resume(saved);
+        if (!more) {
+          ok = 0;
+          break;
+        }
+      }
+  u32_free(hs);
+  return ok;
+}
+HWND W32API FindWindowExA(HWND parent, HWND after, const char *klass,
+                          const char *title) {
+  U32_GUARD;
+  HWND *hs = u32_alloc(4096 * sizeof(*hs));
+  if (!hs)
+    return 0;
+  UINT n = directory_list(hs, !!parent);
+  BOOL skip = !!after;
+  HWND result = 0;
+  if (n != UINT32_MAX)
+    for (UINT i = 0; i < n; i++) {
+      struct w32r_window value;
+      char text[256];
+      if (!u32_directory_window(hs[i], &value, text) ||
+          value.parent != U32_PTR(parent))
+        continue;
+      if (skip) {
+        if (hs[i] == after)
+          skip = 0;
+        continue;
+      }
+      if (title && !equal(text, title))
+        continue;
+      if (klass) {
+        if (atom_name(klass)) {
+          if (value.class_atom != (uintptr_t)klass)
+            continue;
+        } else {
+          char name[256];
+          if (!GetClassNameA(hs[i], name, sizeof(name)) || !equal(name, klass))
+            continue;
+        }
+      }
+      result = hs[i];
+      break;
+    }
+  u32_free(hs);
+  return result;
+}
+HWND W32API FindWindowA(const char *c, const char *t) {
+  U32_GUARD;
+  return FindWindowExA(0, 0, c, t);
+}
+HWND W32API GetTopWindow(HWND p) {
+  U32_GUARD;
+  HWND hs[U32_WINDOWS];
+  return list(p, hs, 0) ? hs[0] : 0;
+}
+HWND W32API GetWindow(HWND h, UINT cmd) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return 0;
+  if (cmd == 4)
+    return w->owner;
+  if (cmd == 5)
+    return GetTopWindow(h);
+  HWND hs[U32_WINDOWS];
+  UINT n = list(w->parent, hs, 0);
+  if (!n)
+    return 0;
+  if (cmd == 0)
+    return hs[0];
+  if (cmd == 1)
+    return hs[n - 1];
+  for (UINT i = 0; i < n; i++)
+    if (hs[i] == h) {
+      if (cmd == 2 && i + 1 < n)
+        return hs[i + 1];
+      if (cmd == 3 && i)
+        return hs[i - 1];
+    }
+  return 0;
+}
+HWND W32API GetLastActivePopup(HWND h) {
+  U32_GUARD;
+  for (UINT i = 0; i < U32_WINDOWS; i++)
+    if (u32_windows[i].owner == h && u32_windows[i].handle == u32_foreground)
+      return u32_foreground;
+  return h;
+}
+BOOL W32API BringWindowToTop(HWND h) {
+  U32_GUARD;
+  return SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+}
+BOOL W32API ShowOwnedPopups(HWND h, BOOL show) {
+  U32_GUARD;
+  for (UINT i = 0; i < U32_WINDOWS; i++)
+    if (u32_windows[i].handle && u32_windows[i].owner == h)
+      ShowWindow(u32_windows[i].handle, show ? 8 : 0);
+  return 1;
+}
+static struct u32_prop **property(struct u32_window *w, const char *n) {
+  struct u32_prop **p = &w->props;
+  while (*p && (atom_name(n) ? (*p)->atom != (uintptr_t)n
+                             : !(*p)->name || !equal((*p)->name, n)))
+    p = &(*p)->next;
+  return p;
+}
+BOOL W32API SetPropA(HWND h, const char *name, HANDLE value) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !name)
+    return u32_fail(1400);
+  struct u32_prop **at = property(w, name);
+  if (!*at) {
+    struct u32_prop *p = u32_alloc(sizeof(*p));
+    if (!p)
+      return 0;
+    if (atom_name(name))
+      p->atom = (ATOM)(uintptr_t)name;
+    else {
+      DWORD n = w32_strlen(name);
+      if (n > 255) {
+        u32_free(p);
+        return u32_fail(87);
+      }
+      p->name = u32_alloc(n + 1);
+      if (!p->name) {
+        u32_free(p);
+        return 0;
+      }
+      w32_copy(p->name, name, n + 1);
+    }
+    *at = p;
+  }
+  (*at)->value = value;
+  return 1;
+}
+HANDLE W32API GetPropA(HWND h, const char *name) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !name)
+    return 0;
+  struct u32_prop *p = *property(w, name);
+  return p ? p->value : 0;
+}
+HANDLE W32API RemovePropA(HWND h, const char *name) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !name)
+    return 0;
+  struct u32_prop **at = property(w, name), *p = *at;
+  if (!p)
+    return 0;
+  HANDLE value = p->value;
+  *at = p->next;
+  u32_free(p->name);
+  u32_free(p);
+  return value;
+}
+LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  switch (msg) {
+  case WM_DESTROYCLIPBOARD:
+    u32_clipboard_owned_clear();
+    return 0;
+  case WM_NCCREATE:
+    return 1;
+  case WM_CLOSE:
+    return DestroyWindow(h), 0;
+  case WM_PAINT: {
+    PAINTSTRUCT ps;
+    if (BeginPaint(h, &ps))
+      EndPaint(h, &ps);
+    return 0;
+  }
+  case WM_ERASEBKGND:
+    if (w && w->cls->c.hbrBackground && u32_gdi && u32_gdi->fill) {
+      RECT r;
+      GetClientRect(h, &r);
+      return u32_gdi->fill((HDC)wp, &r, w->cls->c.hbrBackground);
+    }
+    return 0;
+  case WM_SETREDRAW:
+    if (w) {
+      w->redraw = !!wp;
+      if (wp)
+        InvalidateRect(h, 0, 1);
+      u32_mark();
+    }
+    return 0;
+  case WM_GETTEXT:
+    return GetWindowTextA(h, (char *)lp, (int)wp);
+  case WM_GETTEXTLENGTH:
+    return GetWindowTextLengthA(h);
+  case WM_SETTEXT: {
+    if (!w || !lp || w32_strlen((char *)lp) > 255)
+      return u32_fail(87);
+    char old[256];
+    w32_copy(old, w->title, 256);
+    w32_copy(w->title, (char *)lp, w32_strlen((char *)lp) + 1);
+    if (!u32_sync_window(w)) {
+      w32_copy(w->title, old, 256);
+      return 0;
+    }
+    if (w->wire) {
+      uint8_t b[68];
+      UINT n = u32_utf8((char *)b + 4, 64, w->title);
+      desk_put32(b, n);
+      return u32_wire(w, DESK_SET_TITLE, b, n + 4, -1);
+    }
+    return 1;
+  }
+  case WM_SETCURSOR:
+    if (w && w->cls->c.hCursor)
+      SetCursor(w->cls->c.hCursor);
+    return 1;
+  case WM_SYSCOMMAND:
+    switch (wp & 0xfff0) {
+    case 0xf060:
+      SendMessageA(h, WM_CLOSE, 0, 0);
+      break;
+    case 0xf020:
+      ShowWindow(h, 6);
+      break;
+    case 0xf120:
+      ShowWindow(h, 9);
+      break;
+    case 0xf030:
+      ShowWindow(h, 3);
+      break;
+    }
+    return 0;
+  default:
+    return 0;
+  }
+}

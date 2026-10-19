@@ -2133,3 +2133,41 @@ provided and qualified. Host wrappers do not establish PE instruction execution.
 The FILE OPEN record uses private flag bit `0x10000` for handle inheritance,
 leaving the FAT read-only attribute bit independent. Other FILE actions assign
 flags by action (for example positioned I/O and short/long path lookup).
+
+
+### F5-10A: additive USER queue actions
+
+Call 96 operations 0x101/0x104 retain their frozen record sizes (56/76 bytes)
+and numbers. Existing actions 1–6 and zero-reserved waits keep their behavior.
+`ciuki_w32_message_args.action` adds SELECT=7, MARK=8, CANCEL=9, NOTIFY=10,
+QUIT=11 and START=12. SELECT takes an inclusive message range in
+`message.message/wparam`, HWND in `message.window` (zero all, -1 thread-only),
+and optionally a copied array of at most 256 HWNDs in buffer/bytes for child
+filters. Input token bits are REMOVE=1 and SENT_ONLY=2; returned token is a send
+reply token. Sent records precede matching posted records, then input. A peek
+retains a posted record; sent dispatch always removes its delivery record.
+A coalesced QUIT retains its latest exit code independently of range/window
+filters and is never consumed by sent-only draining.
+
+STATUS returns current QS classes in result, changed classes in message.wparam,
+posted count in token, and clears changed classes selected by bits (zero retains
+the old all-class status operation). MARK replaces synthetic bits selected by
+message.wparam with bits. A nonzero tid can mark only another thread of the same
+process: USER uses this to wake a UI thread after routing a v3 event from its
+shared channel. Kernel node counts remain independent of synthetic classes.
+
+START allocates the same copied relay as SEND and returns immediately with its
+token. POLL_REPLY retains WAIT_PENDING/WAIT_SENT continuations, and clears token
+only when a completed reply is consumed. This avoids confusing an application
+LRESULT with those continuation values. CANCEL disposes the calling sender's
+pending token; an already delivered receiver cannot reply into freed storage.
+NOTIFY sends asynchronously and releases its relay on reply/receiver teardown.
+Copied pointer payloads remain limited to SETTEXT, GETTEXT and COPYDATA; the
+USER COPYDATA encoding is two u32 metadata words followed by counted bytes.
+Other documented pointer-bearing messages are rejected across processes.
+
+Wait reserved bit W32_WAIT_NEW_INPUT=1 selects changed-and-still-present QS
+classes; zero keeps existing unread-input behavior. USER selects zero for
+MWMO_INPUTAVAILABLE, bit one otherwise. Handle and queue readiness are still
+acquired atomically by the production kernel wait path. No native syscall was
+added, renumbered or widened.

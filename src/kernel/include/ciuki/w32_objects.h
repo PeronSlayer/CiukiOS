@@ -66,7 +66,8 @@ struct w32_object {
         } timer;
         struct {
             void *head, *tail;
-            uint32_t count, bits, tid, classes[8];
+            uint32_t count, bits, tid, classes[8], changed, synthetic, quit_code;
+            bool quit;
         } queue;
         struct {
             struct file_description *description;
@@ -120,6 +121,7 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
 void w32_messages_thread_died(struct proc_thread *t);
 void w32_queue_destroy(struct w32_object *o);
 uint32_t w32_queue_bits(struct proc_thread *t);
+uint32_t w32_queue_changed(struct proc_thread *t);
 uint32_t w32_section_call(struct proc_thread *t, struct ciuki_w32_section_args *a);
 uint32_t w32_view_call(struct proc_thread *t, struct ciuki_w32_view_args *a);
 void w32_section_destroy(struct w32_object *o);

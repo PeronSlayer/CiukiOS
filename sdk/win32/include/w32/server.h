@@ -21,7 +21,13 @@ enum w32r_op {
     W32R_INFO, W32R_FLUSH, W32R_USERNAME,
     W32R_ATOM_ADD, W32R_ATOM_FIND, W32R_ATOM_DELETE, W32R_ATOM_NAME,
     W32R_WINDOW_ALLOC, W32R_WINDOW_SET, W32R_WINDOW_GET, W32R_WINDOW_ENUM,
-    W32R_WINDOW_FREE, W32R_SHUTDOWN
+    W32R_WINDOW_FREE, W32R_SHUTDOWN,
+    /* Ephemeral clipboard, copied data; key=HWND, index=TID, type=format.
+     * Reply key=owner or prior viewer, type=head viewer, disposition=old owner.
+     * OPEN/CLOSE are authenticated PID+TID locks, never persisted. */
+    W32R_CLIP_OPEN=0x100, W32R_CLIP_CLOSE, W32R_CLIP_EMPTY, W32R_CLIP_SET,
+    W32R_CLIP_GET, W32R_CLIP_QUERY, W32R_CLIP_OWNER, W32R_CLIP_VIEWER,
+    W32R_CLIP_CHAIN, W32R_WINDOW_CLASS
 };
 /* No pointers on the wire. Request tail = path NUL, name NUL, data bytes.
  * Strings are UTF-8; value bytes are canonical UTF-16LE for string types.
@@ -38,7 +44,8 @@ struct w32r_reply {
     uint32_t count, max_name, max_data, name_bytes, data_bytes;
 };
 /* WINDOW_SET data is this fixed record followed by title UTF-8 NUL.
- * Only the owning PID can set/free; ENUM index visits top-level windows.
+ * Only the owning PID can set/free; ENUM index visits top-level windows
+ * (flags bit 0 includes children); WINDOW_CLASS returns UTF-8 class name.
  * HWND generations and atom identities are checkpointed before publication.
  * Atom index selects 0=global or 1=process-local; key carries an atom ID.
  * Names compare case-insensitively; atoms 1..0xbfff are integer atoms. */

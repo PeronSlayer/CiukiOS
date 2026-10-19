@@ -8,7 +8,7 @@ struct w32_send {
     struct process *payer;
     uint32_t token, sender, receiver, value, error, bytes, output;
     void *buffer;
-    bool replied, delivered;
+    bool replied, delivered, notify;
 };
 struct w32_message_node {
     struct w32_message_node *next;
@@ -73,7 +73,12 @@ static struct w32_object *queue_for(struct proc_thread *t, bool create)
 uint32_t w32_queue_bits(struct proc_thread *t)
 {
     struct w32_object *q = queue_for(t, false);
-    return q ? q->u.queue.bits : 0;
+    return q ? q->u.queue.bits | q->u.queue.synthetic | (q->u.queue.quit ? W32_QS_POSTMESSAGE : 0) : 0;
+}
+uint32_t w32_queue_changed(struct proc_thread *t)
+{
+    struct w32_object *q = queue_for(t, false);
+    return q ? q->u.queue.changed & w32_queue_bits(t) : 0;
 }
 static void queue_classes(struct w32_object *q, uint32_t bits, bool add)
 {
@@ -157,6 +162,7 @@ void w32_messages_thread_died(struct proc_thread *t)
         if (s->sender == t->tid)
             send_free(s);
         else if (s->receiver == t->tid) {
+            if (s->notify) { send_free(s); continue; }
             s->replied = true;
             s->error = 1062;
         }
@@ -174,7 +180,7 @@ static uint32_t enqueue(
     if (!n)
         return 1816;
     n->message = *message;
-    n->message.time = (uint32_t)w32_now();
+    if (!n->message.time) n->message.time = (uint32_t)w32_now();
     n->bits = bits;
     n->send = send;
     if (q->u.queue.tail)
@@ -183,6 +189,7 @@ static uint32_t enqueue(
         q->u.queue.head = n;
     q->u.queue.tail = n;
     queue_classes(q, bits, true);
+    q->u.queue.changed |= bits;
     if (!send)
         q->u.queue.count++;
     w32_accounts.messages++;
@@ -214,9 +221,33 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         if (!q)
             a->error = 8;
         else {
-            a->result = q->u.queue.bits;
+            a->result = w32_queue_bits(t);
             a->token = q->u.queue.count;
+            a->message.wparam = q->u.queue.changed;
+            q->u.queue.changed &= ~(a->bits ? a->bits : W32_QS_ALL);
         }
+        return 0;
+    }
+    if (a->action == W32_MSG_MARK || a->action == W32_MSG_QUIT) {
+        struct proc_thread *target = a->action == W32_MSG_MARK && a->tid ? thread_id(a->tid) : t;
+        if (!target || target->process != t->process) { a->error = 5; return 0; }
+        struct w32_object *q = queue_for(target, true);
+        if (!q) { a->error = 8; return 0; }
+        if (a->action == W32_MSG_QUIT) {
+            q->u.queue.quit = true; q->u.queue.quit_code = a->message.wparam;
+            q->u.queue.changed |= W32_QS_POSTMESSAGE;
+        } else {
+            uint32_t mask = a->message.wparam;
+            if (mask & ~W32_QS_ALL) { a->error = 87; return 0; }
+            q->u.queue.changed |= a->bits & mask & ~q->u.queue.synthetic;
+            q->u.queue.synthetic = (q->u.queue.synthetic & ~mask) | (a->bits & mask);
+        }
+        a->result = 1; w32_changed_wake(); return 0;
+    }
+    if (a->action == W32_MSG_CANCEL) {
+        struct w32_send *s = find_send(a->token);
+        if (!s || s->sender != t->tid) a->error = 6;
+        else { send_free(s); a->result = 1; }
         return 0;
     }
     if (a->action == W32_MSG_POST) {
@@ -230,25 +261,53 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         a->result = !a->error;
         return 0;
     }
-    if (a->action == W32_MSG_GET) {
+    if (a->action == W32_MSG_GET || a->action == W32_MSG_SELECT) {
         struct w32_object *q = queue_for(t, true);
-        if (!q) {
-            a->error = 8;
-            return 0;
+        if (!q) { a->error = 8; return 0; }
+        bool select = a->action == W32_MSG_SELECT;
+        uint32_t flags = select ? a->token : W32_SELECT_REMOVE;
+        uint32_t window = a->message.window, lo = a->message.message, hi = a->message.wparam;
+        uint32_t windows[256], count = select ? a->bytes / 4 : 0;
+        if (select && ((a->bytes & 3) || count > 256 || flags & ~3u
+            || (count && copy_from_user(windows, a->buffer, count * 4)))) {
+            a->error = 87; return 0;
         }
+        q->u.queue.changed &= ~(a->bits ? a->bits : W32_QS_ALL);
         struct w32_message_node **at = (struct w32_message_node **)&q->u.queue.head;
-        /* Sent records have priority over posted records. */
-        while (*at && !(*at)->send)
-            at = &(*at)->next;
-        if (!*at) {
-            at = (struct w32_message_node **)&q->u.queue.head;
-            while (*at && a->bits && !((*at)->bits & a->bits))
-                at = &(*at)->next;
+        while (*at && (!(*at)->send || (a->bits && !(a->bits & W32_QS_SENDMESSAGE)))) at = &(*at)->next;
+        if (!*at && !(flags & W32_SELECT_SENT_ONLY)) {
+            /* FIFO within each category; posted precedes hardware input. */
+            for (unsigned pass = 0; pass < 2; pass++) {
+                at = (struct w32_message_node **)&q->u.queue.head;
+                while (*at) {
+                    struct w32_message_node *n = *at;
+                    bool match = n->message.message == 0x12 || !select || ((!window || window == n->message.window
+                        || (window == UINT32_MAX && !n->message.window))
+                        && ((!lo && !hi) || (n->message.message >= lo && n->message.message <= hi)));
+                    if (select && count && n->message.message != 0x12) {
+                        match = false;
+                        for (unsigned i = 0; i < count; i++) if (windows[i] == n->message.window) match = true;
+                        match = match && ((!lo && !hi) || (n->message.message >= lo && n->message.message <= hi));
+                    }
+                    bool posted = !!(n->bits & (W32_QS_POSTMESSAGE | W32_QS_HOTKEY));
+                    if (!n->send && match && (!a->bits || (n->bits & a->bits)) && posted == (pass == 0)) break;
+                    at = &n->next;
+                }
+                if (*at) break;
+            }
         }
         struct w32_message_node *n = *at;
         if (!n) {
-            a->result = 0;
+            a->token = 0; a->result = 0;
+            if (q->u.queue.quit && !(flags & W32_SELECT_SENT_ONLY) && (!a->bits || (a->bits & W32_QS_POSTMESSAGE))) {
+                a->message = (struct ciuki_w32_message){ .message = 0x12, .wparam = q->u.queue.quit_code };
+                a->result = 1;
+                if (flags & W32_SELECT_REMOVE) q->u.queue.quit = false;
+            }
             return 0;
+        }
+        if (select && !n->send && !(flags & W32_SELECT_REMOVE)) {
+            a->message = n->message; a->token = 0; a->result = 1; return 0;
         }
         if (n->send) {
             if (a->bytes < n->send->bytes) {
@@ -299,11 +358,13 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         }
         s->value = a->message.lparam;
         s->replied = true;
+        bool notify = s->notify;
+        if (notify) send_free(s);
         w32_changed_wake();
         a->result = 1;
         return 0;
     }
-    if (a->action != W32_MSG_SEND && a->action != W32_MSG_POLL_REPLY) {
+    if (a->action != W32_MSG_SEND && a->action != W32_MSG_POLL_REPLY && a->action != W32_MSG_NOTIFY && a->action != W32_MSG_START) {
         a->error = 87;
         return 0;
     }
@@ -335,6 +396,14 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
             a->error = 8;
             return 0;
         }
+        /* Reject documented pointer-bearing system messages outside the
+         * explicit copied allowlist. Custom messages remain scalar records. */
+        uint32_t m = a->message.message;
+        if (target->process != t->process && (m == 1 || m == 0x81 || m == 0x24
+            || m == 0x2b || m == 0x2c || m == 0x46 || m == 0x47 || m == 0x83)) {
+            queue_free(t->process, s, sizeof(*s)); a->error = 87; return 0;
+        }
+        s->notify = a->action == W32_MSG_NOTIFY;
         s->payer = t->process;
         s->token = next_send++;
         s->sender = t->tid;
@@ -364,6 +433,8 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
             return 0;
         }
     }
+    if (s->notify) { a->token = 0; a->result = 1; return 0; }
+    if (a->action == W32_MSG_START) { a->result = W32_WAIT_PENDING; return 0; }
     /* Returning SENT is an explicit user-dispatch continuation: kernel32 must
      * drain sent records, reply and re-enter SEND with this token. No callback
      * is ever invoked from this blocked kernel invocation. */
@@ -385,5 +456,6 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         return 0;
     }
     send_free(s);
+    a->token = 0;
     return 0;
 }
