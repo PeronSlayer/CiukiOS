@@ -15,6 +15,8 @@ int main(int argc, char **argv)
     strcpy(s.playlist.path[0],"/Documents/Music/First tone.wav"); strcpy(s.playlist.path[1],"/Documents/Music/Ciuki theme.ogg");
     strcpy(s.playlist.path[2],"/Documents/Music/Evening.mp3"); s.playlist.count=3;
     music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-playing",&ui);
+    s.buffering=1; music_update(&app,&s);
+    assert(strstr(du_get(&ui,M_STATUS)->text,"Buffering...")); s.buffering=0;
     s.state=MUSIC_LOADING; music_update(&app,&s);
     assert(strstr(du_get(&ui,M_STATUS)->text,"Loading..."));
     du_render(&ui); at_save(argv[1],"music-loading",&ui);

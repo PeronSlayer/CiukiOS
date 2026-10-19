@@ -101,51 +101,67 @@ static void playlists(const char *fixtures, const char *scratch)
     assert(music_playlist_append(p,"/one-too-many.mp3")==-E2BIG);
     free(p); free(q);
 }
-struct sink { uint64_t consumed, accepted, now; unsigned queued, opens, closes; int blocked, error; };
+struct sink { uint64_t consumed, accepted, now; unsigned queued, opens, closes; int blocked, error; int16_t last[34]; };
 static int sink_open(void *ctx, unsigned *rate) { struct sink *s=ctx; if (s->error) return s->error; s->opens++; s->consumed=s->accepted=s->queued=0; *rate=48000; return 0; }
-static int sink_write(void *ctx, const int16_t *pcm, unsigned n) { (void)pcm; struct sink *s=ctx; if (s->blocked) return -EAGAIN; if (n>17) n=17; s->queued+=n; s->accepted+=n; return (int)n; }
+static int sink_write(void *ctx, const int16_t *pcm, unsigned n) { struct sink *s=ctx; if (s->blocked) return -EAGAIN; if (n>17) n=17; memcpy(s->last,pcm,n*2*sizeof(*pcm)); s->queued+=n; s->accepted+=n; return (int)n; }
 static int sink_status(void *ctx, uint64_t *consumed, unsigned *queued, uint64_t *tail)
 { struct sink *s=ctx; if (s->error) return s->error; *consumed=s->consumed; *queued=s->queued; *tail=40000000; return 0; }
 static void sink_close(void *ctx) { struct sink *s=ctx; s->closes++; s->queued=0; }
 static uint64_t sink_now(void *ctx) { return ((struct sink *)ctx)->now; }
 static void consume(struct sink *s) { s->consumed+=s->queued; s->queued=0; s->now+=2000000; }
+static void tick(struct music_player *p, struct sink *s)
+{
+    consume(s); assert(!music_player_pump(p));
+    struct timespec delay={0,100000}; nanosleep(&delay,NULL);
+}
+static void ready(struct music_player *p)
+{
+    struct timespec delay={0,1000000};
+    for (unsigned i=0;i<2000 && p->view.state==MUSIC_LOADING;i++) {
+        assert(!music_player_pump(p)); nanosleep(&delay,NULL);
+    }
+    assert(p->view.state==MUSIC_PLAYING);
+}
 static void engine(const char *fixtures, const char *scratch)
 {
+    _Static_assert(sizeof(((struct music_player *)0)->ring)==512*1024,"reservoir budget");
     struct music_player *p=calloc(1,sizeof(*p)); assert(p);
-    struct sink s={0}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s};
+    struct sink s={.blocked=1}; struct music_output o={sink_open,sink_write,sink_status,sink_close,sink_now,&s};
     music_player_init(p,&o,NULL,NULL); struct music_command c={.action=MUSIC_OPEN}; path(c.path,fixtures,"tone.ogg");
-    assert(!music_player_command(p,&c) && p->view.state==MUSIC_PLAYING && p->view.playlist.count==1);
-    s.blocked=1;
-    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(p->count+s.queued<=256); }
-    assert(p->count>0 && !s.accepted && !p->view.position);
+    assert(!music_player_command(p,&c) && p->view.state==MUSIC_LOADING && p->view.playlist.count==1);
+    ready(p);
+    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(s.queued<=256); }
+    assert(p->view.reservoir_frames>=4800 && !s.accepted && !p->view.position);
     s.blocked=0;
-    for(unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(p->count+s.queued<=256); }
-    /* The one-period prefill includes partial writes still in userspace. */
-    assert(s.queued==256 && !p->count); consume(&s);
-    s.accepted=s.consumed=0;
-    s.blocked=0; assert(!music_player_pump(p) && s.accepted==17); consume(&s); music_player_pump(p);
+    for(unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(s.queued<=256); }
+    assert(s.queued==256); /* the device lead excludes the decoded reservoir */
+    tick(p,&s); assert(p->view.position==256);
+    int16_t pending[34]; memcpy(pending,s.last,sizeof(pending));
     c.action=MUSIC_PAUSE; assert(!music_player_command(p,&c));
-    assert(p->view.state==MUSIC_PAUSED && !p->device && !p->count && p->view.position==17);
+    assert(p->view.state==MUSIC_PAUSED && !p->device && p->view.reservoir_frames>0 && p->view.position==256);
     uint64_t paused=p->view.position; music_player_pump(p); assert(p->view.position==paused);
     c.action=MUSIC_PLAY; assert(!music_player_command(p,&c) && p->device);
-    c.action=MUSIC_SEEK; c.value=2400; assert(!music_player_command(p,&c) && p->view.position==2400 && !p->count);
-    music_player_pump(p); consume(&s);
-    c.action=MUSIC_STOP; assert(!music_player_command(p,&c) && !p->view.position && p->view.state==MUSIC_STOPPED && !p->device);
+    assert(!music_player_pump(p) && !memcmp(s.last,pending,sizeof(pending)));
+    c.action=MUSIC_SEEK; c.value=2400; assert(!music_player_command(p,&c) && p->view.position==2400);
+    ready(p); tick(p,&s);
+    c.action=MUSIC_STOP; assert(!music_player_command(p,&c) && !p->view.position && p->view.state==MUSIC_STOPPED && !p->device && !p->count);
+    c.action=MUSIC_PLAY; assert(!music_player_command(p,&c)); ready(p); /* restart reader after stop */
     c.action=MUSIC_ADD; path(c.path,fixtures,"tone.mp3"); assert(!music_player_command(p,&c) && p->view.playlist.count==2);
-    c.action=MUSIC_NEXT; assert(!music_player_command(p,&c) && p->view.current==1);
-    c.action=MUSIC_PREV; assert(!music_player_command(p,&c) && p->view.current==0);
+    c.action=MUSIC_NEXT; assert(!music_player_command(p,&c) && p->view.current==1); ready(p);
+    c.action=MUSIC_PREV; assert(!music_player_command(p,&c) && p->view.current==0); ready(p);
     /* EOF auto-advances only after queued audio and transport tail have ended. */
-    for (unsigned i=0;i<2000 && p->view.current==0;i++) { consume(&s); assert(!music_player_pump(p)); }
-    assert(p->view.current==1 && p->view.state==MUSIC_PLAYING);
-    for (unsigned i=0;i<2000 && p->view.state==MUSIC_PLAYING;i++) { consume(&s); assert(!music_player_pump(p)); }
+    for (unsigned i=0;i<3000 && p->view.current==0;i++) tick(p,&s);
+    assert(p->view.current==1); ready(p);
+    for (unsigned i=0;i<3000 && p->view.state==MUSIC_PLAYING;i++) tick(p,&s);
     assert(p->view.state==MUSIC_STOPPED && p->view.position==p->view.duration);
     s.error=-ENODEV; c.action=MUSIC_PLAY; assert(music_player_command(p,&c)==-ENODEV && p->view.state==MUSIC_ERROR);
-    s.error=0; c.action=MUSIC_PLAY; assert(!music_player_command(p,&c));
+    s.error=0; c.action=MUSIC_PLAY; assert(!music_player_command(p,&c)); ready(p);
     c.action=MUSIC_CLEAR; assert(!music_player_command(p,&c) && !p->view.playlist.count && !p->decoder);
     c.action=MUSIC_OPEN; path(c.path,scratch,"large-tag.mp3");
-    assert(!music_player_command(p,&c) && !p->view.duration);
+    assert(!music_player_command(p,&c));
     c.action=MUSIC_SEEK; c.value=48000*3600;
-    assert(!music_player_command(p,&c) && p->view.duration && p->view.position==p->view.duration && p->view.state==MUSIC_PLAYING);
+    assert(!music_player_command(p,&c) && p->view.duration && p->view.position==p->view.duration);
+    ready(p);
     music_player_destroy(p); assert(p->view.state==MUSIC_CLOSING && s.opens==s.closes); free(p);
 }
 static void runtime(const char *fixtures)
