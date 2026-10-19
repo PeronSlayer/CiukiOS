@@ -13,6 +13,16 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -o build/host/dos/dos_file_api_test
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
     build/host/dos/dos_file_api_test
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    build/host/dos/dos_file_api_test --continuation
+# A cancelled f1-84 waiter must neither steal the barrier nor advance its group.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+    -fno-omit-frame-pointer -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    tests/host/fs/cache_barrier_request_test.c -o build/host/dos/cache_barrier_request_test
+ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+    build/host/dos/cache_barrier_request_test
 # Keep H49 itself unchanged; qualify its admission contract together with
 # f1-83's ticket retirement and ticket-free per-file read/seek paths.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \

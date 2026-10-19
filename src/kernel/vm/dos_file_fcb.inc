@@ -61,7 +61,7 @@ static void fcb_set_random(uint8_t *b,uint32_t n) {
 static int fcb_find(struct dos_file *d,struct dos_file_process *p,struct dos_file_fcb *m,
                     uint8_t *b,uint8_t attr,bool extended,bool first,struct fat_entry *entry) {
     struct dos_file_cursor *c=0; int e;
-    for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (d->cursor[i].used && d->cursor[i].id==m->search_id && d->cursor[i].psp==p->psp) c=&d->cursor[i];
+    for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (d->cursor[i].used && d->cursor[i].fcb && d->cursor[i].id==m->search_id && d->cursor[i].psp==p->psp) c=&d->cursor[i];
     if (first) {
         if (c) c->used=false;
         c=0; for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (!d->cursor[i].used) { c=&d->cursor[i]; break; }
@@ -71,7 +71,7 @@ static int fcb_find(struct dos_file *d,struct dos_file_process *p,struct dos_fil
         struct vfs_find find;
         e=vfs_find_first(t,native,(uint8_t)(attr|VFS_FIND_DOS),&find,entry);
         if (e) return e;
-        *c=(struct dos_file_cursor){.used=true,.id=++d->search_sequence,.psp=p->psp,.drive=(uint8_t)drive,.find=find,.table=t};
+        *c=(struct dos_file_cursor){.used=true,.fcb=true,.id=++d->search_sequence,.psp=p->psp,.drive=(uint8_t)drive,.find=find,.table=t};
         m->search_id=c->id;
     } else {
         if (!c) return NO_MORE;

@@ -277,7 +277,9 @@ static int release_slot(struct dos_file *d,struct dos_file_process *p,unsigned h
             vfs_unlock(v);
         }
     }
-    p->handles[handle]=255; if (!--s->refs) memset(s,0,sizeof(*s)); return e;
+    p->handles[handle]=255; if (!--s->refs) memset(s,0,sizeof(*s));
+    if (e && !d->cleanup_status) d->cleanup_status=e;
+    return e;
 }
 static int fcb_release(struct dos_file *,struct dos_file_fcb *);
 static int release_process(struct dos_file *d,struct dos_file_process *p) {
@@ -486,22 +488,38 @@ static int path_error(struct vfs_table *t,char *native,int error) {
 }
 static int search(struct dos_file *d,struct dos_file_process *p,struct dos_file_frame *f,bool first) {
     if (!check(d,p->dta,43,true)) return BAD_POINTER;
-    struct dos_file_cursor *c=0; uint8_t bytes[43]; struct fat_entry entry; int e=0;
+    struct dos_file_cursor *c=0; uint8_t bytes[43]; struct fat_entry entry; int e=0; uint32_t first_position=0;
     read_guest(d,p->dta,bytes,43);
+    for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) {
+        struct dos_file_cursor *old=&d->cursor[i];
+        if (old->used && (old->find.generation!=old->table->vfs->generation[old->find.drive] ||
+            d->view[old->drive].generation!=old->find.generation)) old->used=false;
+    }
     if (first) {
         char path[FS_PATH_BYTES],native[FS_PATH_BYTES]; struct vfs_table *t; unsigned g;
         e=guest_string(d,f->ds,f->dx,path); if (e) return e;
         e=route(d,path,&t,native,&g,false); if (e) return e;
-        for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (!d->cursor[i].used) { c=&d->cursor[i]; break; }
-        if (!c) return -FS_EMFILE;
+
         struct vfs_find find;
         e=vfs_find_first(t,native,(uint8_t)((f->cx&0x3f)|VFS_FIND_DOS),&find,&entry);
         if (e) { if (e!=-FS_ENOENT) return e; e=path_error(t,native,e); return e==-FS_ENOENT ? NO_MORE : e; }
-        *c=(struct dos_file_cursor){.used=true,.id=++d->search_sequence,.nonce=d->search_sequence^d->generation^0xd05f49u,
+        first_position=find.cursor;
+        for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) {
+            struct dos_file_cursor *old=&d->cursor[i];
+            if (!old->used && !c) c=old;
+            if (old->used && !old->fcb && old->psp==p->psp && old->table==t && old->drive==g &&
+                old->find.directory==find.directory && old->find.ro_directory==find.ro_directory &&
+                old->find.generation==find.generation && old->find.attr_mask==find.attr_mask &&
+                !strncmp(old->find.pattern,find.pattern,sizeof(find.pattern))) {
+                c=old; if (find.cursor>c->find.cursor) c->find.cursor=find.cursor; break;
+            }
+        }
+        if (!c) return -FS_EMFILE;
+        if (!c->used) *c=(struct dos_file_cursor){.used=true,.id=++d->search_sequence,.nonce=d->search_sequence^d->generation^0xd05f49u,
             .psp=p->psp,.drive=(uint8_t)g,.find=find,.table=t};
     } else {
         if (fs_rd16(bytes)!=0x49df || fs_rd32(bytes+10)!=d->generation || fs_rd16(bytes+14)!=p->psp) return NO_MORE;
-        for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (d->cursor[i].used && d->cursor[i].id==fs_rd32(bytes+2) &&
+        for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (d->cursor[i].used && !d->cursor[i].fcb && d->cursor[i].id==fs_rd32(bytes+2) &&
             (d->cursor[i].nonce ^ (fs_rd32(bytes+16)*0x9e3779b1u))==fs_rd32(bytes+6) && d->cursor[i].psp==p->psp) { c=&d->cursor[i]; break; }
         if (!c) return NO_MORE;
         /* Each copied DTA has its own cursor position. The bounded live record
@@ -510,11 +528,11 @@ static int search(struct dos_file *d,struct dos_file_process *p,struct dos_file_
         if (find.cursor>c->find.cursor) return NO_MORE;
         c->table->request=&d->request; c->table->owner=owner(d,p->psp); d->active_drive=c->drive;
         e=vfs_find_next(c->table,&find,&entry);
-        if (e) { c->used=false; return e==-FS_ENOENT ? NO_MORE : e; }
+        if (e) { if (e!=-FS_ENOENT) c->used=false; return e==-FS_ENOENT ? NO_MORE : e; }
         if (find.cursor>c->find.cursor) c->find.cursor=find.cursor;
         fs_wr32(bytes+16,find.cursor);
     }
-    uint32_t position=first ? c->find.cursor : fs_rd32(bytes+16);
+    uint32_t position=first ? first_position : fs_rd32(bytes+16);
     memset(bytes,0,sizeof(bytes)); fs_wr16(bytes,0x49df); fs_wr32(bytes+2,c->id);
     fs_wr32(bytes+6,c->nonce ^ (position*0x9e3779b1u));
     fs_wr32(bytes+10,d->generation); fs_wr16(bytes+14,p->psp); fs_wr32(bytes+16,position);
@@ -655,7 +673,7 @@ static __attribute__((noinline)) int handle_service(struct dos_file *d,struct do
             size_t n=f->cx-total; if (n>sizeof(d->transfer)) n=sizeof(d->transfer); size_t done=0;
             if (writing) { read_guest(d,plus(data,(unsigned)total),d->transfer,n); e=vfs_write(t,s->handle,d->transfer,n,&done); }
             else { e=vfs_read(t,s->handle,d->transfer,n,&done);
-                if (!request_cancelled(d) && done) write_guest(d,plus(data,(unsigned)total),d->transfer,done); }
+                if (!vfs_request_check(&d->request) && done) write_guest(d,plus(data,(unsigned)total),d->transfer,done); }
             total+=done; if (e || done<n || d->dead) break;
         }
         d->transferred=(uint32_t)total;
@@ -784,7 +802,7 @@ static bool critical_frame(struct dos_file *d,const struct dos_file_frame *origi
     d->callback.bp=d->binding.critical_device.seg; d->callback.si=d->binding.critical_device.off;
     return true;
 }
-static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,bool retry) {
+static enum dos_file_result execute_request(struct dos_file *d,struct dos_file_frame *f,bool retry) {
     struct dos_file_process *p=process(d,d->selected); struct dos_file_frame output=*f;
     int e=preflight(d,p); bool memory_ok=!e;
     if (!e && retry && d->pending_commit) {
@@ -804,7 +822,7 @@ static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,
             if (e!=-VFS_ECRITICAL_SHARE && e!=-VFS_ELOCK) break;
         }
     }
-    if (request_cancelled(d)) { d->ops.release(d->ops.arg); return DOS_FILE_PENDING; }
+    if (request_cancelled(d)) { retain_wait(d); d->ops.release(d->ops.arg); return DOS_FILE_PENDING; }
     if (e) {
         if (!p) { f->ax=6; f->flags|=1; retain_wait(d); trace_return(d,f); d->ops.release(d->ops.arg); return DOS_FILE_DONE; }
         bool writing=(f->ax>>8)==0x40; dos_file_error_from_fs(&p->error,e,writing);
@@ -843,6 +861,11 @@ complete:
     retain_wait(d);
     trace_return(d,f);
     d->ops.release(d->ops.arg); return DOS_FILE_DONE;
+}
+static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,bool retry) {
+    struct fs_request_scope scope; fs_request_enter(&scope,&d->request);
+    enum dos_file_result result=execute_request(d,f,retry);
+    fs_request_leave(&scope); return result;
 }
 enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame *f,enum dos_file_origin origin,unsigned vector) {
     if (!d || !d->bound || d->dead) return DOS_FILE_CHAIN;
@@ -887,7 +910,7 @@ enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame 
     if (origin==DOS_FILE_DPMI_0300 || origin==DOS_FILE_EXTENDER || origin==DOS_FILE_HOST) observe(d,f,seq,wall,monitor,origin,vector);
     d->request_wall=wall; d->request_monitor=monitor; d->deadline=wall+DOS_FILE_BUDGET_US;
     memset(&d->wait,0,sizeof(d->wait));
-    d->request=(struct vfs_request){d,d->deadline,request_now,request_cancelled,request_pause,owner(d,d->selected),&d->wait};
+    d->request=(struct vfs_request){d,d->deadline,request_now,request_cancelled,request_pause,owner(d,d->selected),&d->wait,&d->cleanup_status};
     d->dispatch_depth++;
     enum dos_file_result result=execute(d,f,false);
     d->dispatch_depth--;

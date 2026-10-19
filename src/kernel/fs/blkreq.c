@@ -7,6 +7,56 @@
 #include <ciuki/kernel.h>
 #endif
 
+static struct fs_request_scope *contexts;
+#ifdef FS_HOST
+static pthread_mutex_t context_lock=PTHREAD_MUTEX_INITIALIZER;
+static uintptr_t context_take(void) { pthread_mutex_lock(&context_lock); return 0; }
+static void context_drop(uintptr_t f) { (void)f; pthread_mutex_unlock(&context_lock); }
+#else
+static uintptr_t context_take(void) { return irq_save(); }
+static void context_drop(uintptr_t f) { irq_restore(f); }
+#endif
+static uintptr_t executor_id(void);
+void fs_request_enter(struct fs_request_scope *s,const struct vfs_request *r) {
+    uintptr_t f=context_take();
+    *s=(struct fs_request_scope){contexts,executor_id(),r}; contexts=s;
+    context_drop(f);
+}
+void fs_request_leave(struct fs_request_scope *s) {
+    uintptr_t f=context_take(); struct fs_request_scope **at=&contexts;
+    while (*at && *at!=s) at=&(*at)->next;
+    if (*at) *at=s->next;
+    context_drop(f);
+}
+const struct vfs_request *fs_request_current(void) {
+    uintptr_t f=context_take(), task=executor_id(); const struct vfs_request *r=0;
+    for (struct fs_request_scope *s=contexts;s;s=s->next)
+        if (s->task==task) { r=s->request; break; }
+    context_drop(f); return r;
+}
+int fs_request_check(void) {
+    const struct vfs_request *r=fs_request_current();
+    if (!r) return 0;
+    if (r->cancelled && r->cancelled(r->arg)) return -VFS_ECANCELLED;
+    return r->now(r->arg)>=r->deadline ? -VFS_ETIMEOUT : 0;
+}
+void fs_request_wait(enum vfs_wait_reason reason,uint64_t begin,int error) {
+    const struct vfs_request *r=fs_request_current(); if (!r || !r->wait) return;
+    uint64_t elapsed=r->now(r->arg)-begin;
+    if ((elapsed || error) && (!r->wait->valid || !r->wait->outcome)) {
+        uint32_t drives=r->wait->drives;
+        *r->wait=(struct vfs_wait_info){r->owner,elapsed,drives,reason,error,true};
+    }
+}
+bool blk_request_interrupted(void) { return fs_request_check()!=0; }
+uint32_t blk_request_remaining_ms(void) {
+    const struct vfs_request *r=fs_request_current(); if (!r) return UINT32_MAX;
+    uint64_t now=r->now(r->arg);
+    if (now>=r->deadline || (r->cancelled && r->cancelled(r->arg))) return 0;
+    uint64_t left=(r->deadline-now+999)/1000;
+    return left>UINT32_MAX ? UINT32_MAX : (uint32_t)left;
+}
+
 #ifdef FS_HOST
 static pthread_mutex_t pool_init_lock=PTHREAD_MUTEX_INITIALIZER;
 static fs_lock pool_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -125,6 +175,7 @@ struct blk_request *blk_request_prepare(struct blkdev *d,enum blk_operation op,
         r->timeout=timeout; r->state=BLK_PREPARED; break;
     }
     fs_lock_drop(&pool_lock);
+    if (r) r->context=fs_request_current();
     if (q) {
         if (r) q->requests++; else q->stats.backpressure++;
         fs_lock_drop(&q->lock);
@@ -167,10 +218,13 @@ static uintptr_t executor_id(void) {
 #endif
 }
 static int execute(struct blk_request *r,uint32_t bytes) {
+    struct fs_request_scope scope; fs_request_enter(&scope,r->context);
     fs_lock_take(&pool_lock); r->executor=executor_id(); fs_lock_drop(&pool_lock);
-    int result=execute_raw(r,bytes);
+    int result=fs_request_check();
+    if (!result) result=execute_raw(r,bytes);
     if (!result && (r->device->media_generation!=r->generation || r->device->quarantined)) result=-FS_EIO;
     fs_lock_take(&pool_lock); r->executor=0; fs_lock_drop(&pool_lock);
+    fs_request_leave(&scope);
     return result;
 }
 int blk_request_submit(struct blk_request *r) {
@@ -254,7 +308,7 @@ bool blk_queue_run_one(struct blk_queue *q) {
         for (struct blk_request *p=q->head;p;p=p->next) {
             if (p->operation==r->operation && p->device==r->device &&
                 p->generation==r->generation && p->priority==r->priority &&
-                p->frontier==r->frontier && p->pin_owner==r->pin_owner &&
+                p->frontier==r->frontier && p->context==r->context && p->pin_owner==r->pin_owner &&
                 !p->bytes && !p->cancel && eligible(q,p) &&
                 p->lba==r->lba+r->length/r->device->sector_size &&
                 (uint8_t *)r->buffer+r->length==p->buffer &&
@@ -307,9 +361,22 @@ int blk_request_wait(struct blk_request *r) {
         return r->result;
     }
     struct blk_queue *q=r->queue;
+    const struct vfs_request *context=r->context;
+    uint64_t begin=context ? context->now(context->arg) : 0;
     for (;;) {
+        int interrupted=fs_request_check();
+        if (interrupted) (void)blk_request_cancel(r);
         fs_lock_take(&q->lock);
-        if (terminal(r)) { int e=r->result; fs_lock_drop(&q->lock); return e; }
+        if (terminal(r)) {
+            int e=r->result; fs_lock_drop(&q->lock);
+            fs_request_wait(VFS_WAIT_TRANSPORT,begin,interrupted);
+            return interrupted && (e || r->operation==BLK_READ) ? interrupted : e;
+        }
+        if (context) {
+            fs_lock_drop(&q->lock);
+            if (!q->worker && blk_queue_run_one(q)) continue;
+            context->pause(context->arg); continue;
+        }
         if (q->worker) {
             fs_event_wait(&r->event,&q->lock); fs_lock_drop(&q->lock); continue;
         }
@@ -336,6 +403,9 @@ bool blk_request_cancel(struct blk_request *r) {
     if (accepted) {
         r->cancel=true;
         if (r->state==BLK_PREPARED) finish(r,-FS_EAGAIN);
+        else if (q && r->state==BLK_QUEUED) {
+            unlink_request(q,r); q->stats.cancelled++; finish(r,-FS_EAGAIN);
+        }
     }
     if (q) { fs_event_wake(&q->changed); fs_lock_drop(&q->lock); }
     return accepted;
@@ -407,6 +477,9 @@ static void queue_timer(void *arg,uint32_t generation,unsigned kind) {
 #endif
 int blkdev_request(struct blkdev *d,enum blk_operation op,uint64_t lba,uint32_t n,
                    void *buf,enum blk_priority priority,uint64_t frontier) {
+    const struct vfs_request *context=fs_request_current();
+    uint64_t begin=context ? context->now(context->arg) : 0;
+    int interrupted=fs_request_check(); if (interrupted) return interrupted;
     if (!d || (unsigned)op>BLK_FLUSH || (unsigned)priority>=BLK_PRIORITIES) return -FS_EINVAL;
     if (d->quarantined) return -FS_EQUARANTINED;
     if (op!=BLK_FLUSH) {
@@ -436,12 +509,17 @@ int blkdev_request(struct blkdev *d,enum blk_operation op,uint64_t lba,uint32_t 
         priority=pool[i].priority; frontier=pool[i].frontier; deadline=pool[i].deadline; break;
     }
     fs_lock_drop(&pool_lock);
+    uint32_t timeout=op==BLK_FLUSH ? 60000 : 30000;
+    uint32_t remaining=blk_request_remaining_ms(); if (remaining<timeout) timeout=remaining;
     struct blk_request *r=blk_request_prepare(d,op,lba,op==BLK_FLUSH ? 0 : n*d->sector_size,buf,
-        priority,frontier,deadline,op==BLK_FLUSH ? 60000 : 30000);
+        priority,frontier,deadline,timeout);
     if (!r) return -FS_EAGAIN;
     int e=blk_request_submit(r);
     if (!e) e=blk_request_wait(r);
     else blk_request_cancel(r);
+    interrupted=fs_request_check();
+    if (interrupted && (e || op==BLK_READ)) e=interrupted;
+    fs_request_wait(VFS_WAIT_TRANSPORT,begin,interrupted);
     (void)blk_request_release(r); return e;
 }
 int blkdev_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {

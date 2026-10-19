@@ -171,6 +171,20 @@ static void disk_gate_take(struct dosvm *v)
         kwait_wait_until(&v->disk_wait, disk_gate_free, &v->disk_busy, deadline_after_ms(1000));
     }
 }
+/* f1-83 calldown context supplies the original DOS deadline. */
+static int disk_gate_request(struct dosvm *v)
+{
+    const struct vfs_request *r=fs_request_current();
+    if (!r) { disk_gate_take(v); return 0; }
+    uint64_t begin=r->now(r->arg); int e;
+    for (;;) {
+        e=fs_request_check(); if (e) break;
+        uint32_t flags=irq_save();
+        if (!v->disk_busy) { v->disk_busy=true; irq_restore(flags); break; }
+        irq_restore(flags); r->pause(r->arg);
+    }
+    fs_request_wait(VFS_WAIT_PROVIDER,begin,e); return e;
+}
 static void disk_gate_drop(struct dosvm *v) { v->disk_busy = false; kwait_wake_all(&v->disk_wait); }
 static void disk_access(struct dosvm *v, uint32_t lba)
 {
@@ -333,20 +347,20 @@ int dosvm_disk_write(struct dosvm *v, uint32_t lba, const void *sector)
 static int provider_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buffer)
 {
     int e=blkdev_range(dev,lba,count); if (e) return e;
-    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    struct dosvm *v=dev->ctx; int admission=disk_gate_request(v); if (admission) return admission;
     for (uint32_t i=0;!e && i<count;i++) e=disk_read_locked(v,(uint32_t)lba+i,(uint8_t *)buffer+i*512u);
     disk_gate_drop(v); return e;
 }
 static int provider_write(struct blkdev *dev,uint64_t lba,uint32_t count,const void *buffer)
 {
     int e=blkdev_range(dev,lba,count); if (e) return e;
-    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    struct dosvm *v=dev->ctx; int admission=disk_gate_request(v); if (admission) return admission;
     for (uint32_t i=0;!e && i<count;i++) e=disk_write_locked(v,(uint32_t)lba+i,(const uint8_t *)buffer+i*512u);
     disk_gate_drop(v); return e;
 }
 static int provider_flush(struct blkdev *dev)
 {
-    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    struct dosvm *v=dev->ctx; int admission=disk_gate_request(v); if (admission) return admission;
     int e=v->overlay_open ? vfs_commit(&v->disk_table,v->overlay) : 0;
     disk_gate_drop(v); return e;
 }

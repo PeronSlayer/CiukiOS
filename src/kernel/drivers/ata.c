@@ -82,7 +82,7 @@ static void device_control(struct ata_channel *c, uint8_t v)
 }
 static uint64_t now(struct ata_channel *c) { return c->ops->now_ms(c->port_ctx); }
 static bool expired(struct ata_channel *c, uint64_t d) {
-    return (hardware_check_io_cancelled && hardware_check_io_cancelled()) || now(c) - d < (1ull << 63);
+    return (blk_request_interrupted && blk_request_interrupted()) || (hardware_check_io_cancelled && hardware_check_io_cancelled()) || now(c) - d < (1ull << 63);
 }
 static int pace(struct ata_channel *c)
 {
@@ -260,7 +260,7 @@ struct irq_wait { struct ata_channel *channel; uint32_t sequence; gen_t generati
 static bool irq_ready(void *arg)
 {
     struct irq_wait *w = arg;
-    return w->channel->stopped || w->channel->quiescing ||
+    return (blk_request_interrupted && blk_request_interrupted()) || w->channel->stopped || w->channel->quiescing ||
         (w->channel->irq_sequence != w->sequence && w->channel->irq_generation == w->generation);
 }
 
@@ -270,6 +270,8 @@ static int wait_irq_result(struct ata_device *d, uint32_t *sequence, uint64_t st
     uint64_t check = hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
     if (check && check < deadline) deadline = check;
     struct ata_channel *c = d->channel;
+    uint32_t left=blk_request_remaining_ms ? blk_request_remaining_ms() : UINT32_MAX;
+    if (left!=UINT32_MAX && now(c)+left<deadline) deadline=now(c)+left;
     struct irq_wait w = { c, *sequence, c->request_generation };
     if (expired(c, deadline) || !kwait_wait_until(&c->wait, irq_ready, &w,
                                                 c->ops->deadline_ticks(c->port_ctx, deadline)))

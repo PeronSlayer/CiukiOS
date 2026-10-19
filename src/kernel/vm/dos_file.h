@@ -79,7 +79,8 @@ struct dos_file_description {
     bool negative_position,written;
 };
 struct dos_file_device { char name[9]; struct dos_file_far header; uint16_t info; bool used; };
-struct dos_file_cursor { bool used; uint32_t id,nonce; uint16_t psp; uint8_t drive;
+/* FCB cursors own mutable positions; handle authorities admit copied DTAs. */
+struct dos_file_cursor { bool used,fcb; uint32_t id,nonce; uint16_t psp; uint8_t drive;
     struct vfs_find find; struct vfs_table *table; };
 struct dos_file_trace {
     struct dos_file_frame frame;

@@ -334,6 +334,9 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/v86.c"
 #include "dosvm_work.inc"
 #include "../../src/kernel/vm/dosvm.c"
+#ifndef CIUKI_DOSVM_FILE_CPU
+#include "dosvm_request_context.inc"
+#endif
 #include "../../src/kernel/vm/dosvm_disk.c"
 #ifdef CIUKI_DOSVM_FILE_CPU
 #undef vfs_table_init

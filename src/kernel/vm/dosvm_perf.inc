@@ -512,11 +512,11 @@ void dosvm_file_dump(struct dosvm *v) {
             r.bytes,r.monitor_us,r.wall_us,v->files->dropped);
     if (dos_file_wait_pop) {
         struct dos_file_wait w;
-        static const char *const reason[]={"-","namespace","volume","provider","transport"};
+        static const char *const reason[]={"-","namespace","volume","provider","transport","cache"};
         while (dos_file_wait_pop(v->files,&w))
             rec_diag(dosvm_probe(v),"group=vfs_wait vm=%u gen=%u seq=%llu drive=%c owner=%llu psp=%04x reason=%s elapsed_ms=%llu outcome=%s",
                 v->info.key.id,w.generation,w.sequence,'A'+w.drive,w.info.owner,w.psp,
-                w.info.reason<=VFS_WAIT_TRANSPORT ? reason[w.info.reason] : "-",w.info.elapsed_us/1000,
+                w.info.reason<=VFS_WAIT_CACHE ? reason[w.info.reason] : "-",w.info.elapsed_us/1000,
                 w.info.outcome==-VFS_ETIMEOUT ? "timeout" : w.info.outcome==-VFS_ECANCELLED ? "cancelled" : "done");
     }
 }

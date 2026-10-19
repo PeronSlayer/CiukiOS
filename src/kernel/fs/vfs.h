@@ -41,19 +41,6 @@ enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 #define VFS_ECRITICAL_SHARE 202
 #define VFS_ELOCK 203
 #define VFS_ELOCKFULL 204
-#define VFS_ETIMEOUT 205
-#define VFS_ECANCELLED 206
-enum vfs_wait_reason { VFS_WAIT_NAMESPACE=1,VFS_WAIT_VOLUME,VFS_WAIT_PROVIDER,VFS_WAIT_TRANSPORT };
-struct vfs_wait_info { uint64_t owner,elapsed_us; uint32_t drives; enum vfs_wait_reason reason; int outcome; bool valid; };
-struct vfs_request {
-    void *arg;
-    uint64_t deadline;
-    uint64_t (*now)(void *);
-    bool (*cancelled)(void *);
-    void (*pause)(void *);
-    uint64_t owner;
-    struct vfs_wait_info *wait; /* microsecond clock, retained admission cause */
-};
 int vfs_request_check(const struct vfs_request *);
 int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
                   unsigned new_mode, unsigned new_access, uint64_t new_owner, bool readonly);
@@ -179,9 +166,10 @@ int vfs_range_check(struct vfs *, struct vfs_node *, struct vfs_description *,
                     uint64_t owner, uint64_t start, uint64_t length);
 int vfs_handle_stat(struct vfs_table *, int, struct fat_entry *, uint64_t *position);
 int vfs_handle_times(struct vfs_table *, int, uint16_t date, uint16_t time);
-/* Timed initial admission only. Reacquisition and synchronous transport still
- * require the f3-49 storage cancellation integration; this is not an
- * end-to-end deadline guarantee. */
+/* Admission observes the explicit request or the task-scoped f1-83 calldown
+ * context. Reacquisition retires published references under short bookkeeping
+ * locks even after cancellation; it never issues more storage on an expired
+ * request. Controller buffers remain owned until DMA retirement. */
 int vfs_admit(struct vfs *, uint32_t drives, const struct vfs_request *);
 int vfs_close(struct vfs_table *, int handle);
 /* dst=-1 selects first free handle. Duplicates/inherited handles share position.
