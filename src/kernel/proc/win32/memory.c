@@ -1,4 +1,4 @@
-/* Windows reservation/commit semantics over uaddr's eager backing.
+/* Windows reservation/commit semantics over uaddr's demand-zero objects.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/w32_objects.h>

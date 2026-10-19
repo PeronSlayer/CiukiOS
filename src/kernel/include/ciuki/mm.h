@@ -13,6 +13,18 @@
 #define ZONE_DMA        1
 #define ZONE_NORMAL     2
 
+/* Resident PFN metadata. PFN is the array index, never a duplicated address.
+ * Reserved for future verified page-in: slot, io_in_flight and waiters. */
+enum mm_backing_kind { MM_BACKING_PRIVATE, MM_BACKING_SHARED, MM_BACKING_ZERO,
+                       MM_BACKING_FILE, MM_BACKING_DEVICE, MM_BACKING_SWAP };
+struct mm_page_descriptor {
+    uint32_t refs, accessed_epoch, dirty_epoch, backing_slot;
+    uint16_t pins, waiters;
+    uint8_t backing_kind, io_in_flight;
+    uint16_t reserved;
+};
+struct mm_page_descriptor *pmm_descriptor(uint32_t phys) __attribute__((weak));
+
 /* physical pages */
 void pmm_init(void);
 uint32_t pmm_alloc(void);                  /* NORMAL then DMA; returns phys or 0 */
@@ -79,6 +91,7 @@ struct aspace {
     uint32_t pages;                        /* user pages mapped */
     uint32_t tables;                       /* user page tables allocated */
     enum mm_owner owner;                  /* data frames; tables are MM_TABLE */
+    struct uaddr *memory;                 /* object-backed areas, NULL for VM/device */
     uint32_t pool_base;                    /* VM pool boundary, zero otherwise */
 };
 int as_create(struct aspace *as);

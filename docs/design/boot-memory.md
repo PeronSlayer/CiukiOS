@@ -3,6 +3,50 @@
 Contract 2 of 7 required by decision D11. Author: Claude (lead). Reviewer:
 Codex. Status: approved after the Claude–Codex cross-review, 2026-10-09.
 
+## Memory objects (M2, f0-47)
+
+Research before implementation (2026-10-19): [Mitchell, chapter 10,
+pp. 213–240](https://pdfcoffee.com/inside-the-windows95-file-system-3-pdf-free.html)
+describes commitment associating pages with a pager, first-touch virgin-in,
+zero-initializing pagers and separate copy-on-write mapped-file behavior.
+[Microsoft DDK, Pageable VxDs](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A5.HTM)
+and [Deadlocks](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM)
+require stable resident metadata and prohibit depending on IRQ exclusion to
+prevent paging preemption. [Intel SDM, volume 3A, §§4.6–4.10](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+defines present/write/user/accessed/dirty bits, #PF error bits and invalidation.
+The original King link (P21) was unavailable; a follow-up read of the indexed
+[original scan, p. 121](https://vtda.org/books/Computing/OperatingSystems/Inside_Windows_95_Adrian_King_1994.pdf)
+confirms that locked kernel pages are distinct from RAM contested by application,
+cache and DMA allocations. No Windows 95 numerical budget is imported. P02's full Windows 98 VMM service reference remains unavailable;
+the accessible inherited DDK context rules above are the evidence used here.
+The Resource Kit closure in f0-42 confirms demand paging but supplies no
+additional commitment/COW service contract. These mechanisms implement M2,
+not an assertion of identical undocumented Windows 98 internals.
+
+Decision: virtual areas retain object identity, page offset, generation,
+permissions and commitment independently of PTEs. Anonymous commitment reserves
+RAM capacity before publication; pagefile capacity remains zero. Read faults
+share a read-only zero frame; stores install a cleared private frame. Private
+aliases reserve their full potential write commitment before sharing PFNs;
+shared aliases retain one object. Frames are initialized before any user PTE
+publication. Fault preparation precedes user-copy assembly and lock-protected
+I/O. Existing externally owned surfaces and Win32 section backing remain
+separate adapters; native file mmap stays unsupported, with the C5 file/page
+identity reserved in the object representation. Replacement and disk paging
+are deferred to f0-48/49. Metadata and release walks service the scheduler in
+bounded slices; no test-only production behavior is introduced.
+
+Each PFN descriptor is 24 bytes. The fixed array covers the entire existing
+768 MiB direct-map ceiling and consumes 4,718,592 bytes (4.5 MiB) on every
+profile: 36/18/9 KiB per MiB of physical RAM on 128/256/512 MiB machines.
+Its entry density is 6 KiB per represented MiB. Object slots use 64-entry
+small-heap blocks, indexed by 32 buckets, with resident-set index links;
+large reservations never require an oversized small-heap allocation.
+Object ownership serializes synchronous fault preparation across aliases;
+waiters revalidate area/object generations after every sleep. No filesystem
+page-in implementation is added by the file placeholder. Section COW credits
+now reserve commitment without preallocating private data frames.
+
 ## Resource ledger (M1, f0-43)
 
 `core/ledger.c` keeps page counters under the same `irq_save` exclusion as
@@ -27,8 +71,8 @@ mismatch` record and increments a persistent counter, without panicking.
 The allocator probe includes the result in its verdict.
 
 Virtual reservation and RAM commitment counters are separate from resident
-pages. Native eager private backing contributes a promise until release,
-including PROT_NONE backing; shared surface backing contributes once for the
+pages. Native committed object slots contribute a promise until final release,
+including backing retained across PROT_NONE protection; shared surface backing contributes once for the
 object, with each present alias counted separately. The VM admission promise
 is charged before construction and rolled back through ordinary teardown.
 Pagefile commitments and swap capacity/use remain zero. No admission value,

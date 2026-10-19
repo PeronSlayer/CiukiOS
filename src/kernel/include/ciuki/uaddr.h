@@ -16,6 +16,7 @@ struct ua_shared {
     void (*release)(void *object);
     uint32_t (*page)(void *object, uint32_t index);
 };
+struct memory_object;
 struct ua_extent {
     uint32_t base, end, prot, maximum, owner;
     uint64_t generation;
@@ -25,9 +26,13 @@ struct ua_extent {
     enum ua_kind kind;
     struct ua_extent *next;
     struct ua_shared shared;
+    struct memory_object *backing;
+    uint32_t page_index;
+    struct uaddr *space;
+    struct ua_extent *object_next;
 };
 struct ua_pin {
-    uint32_t base, end;
+    uint32_t base, end, prepared_end;
     bool mutation; /* blocks new pins while a protection transaction yields */
     struct task *task;
     struct ua_pin *next;
@@ -38,7 +43,7 @@ struct uaddr {
     struct ua_pin *pins;
     uint32_t heap_base, brk, extents, arena_extents, backing;
     void *identity;
-    bool win32;
+    bool win32, closing;
 };
 /* Internal Win32 transactions: page-aligned ranges, one allocation. */
 int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
@@ -53,6 +58,15 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
                        uint32_t prot, uint32_t maximum, const struct ua_shared *shared)
     __attribute__((weak));
 int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *args);
+/* Internal object aliases; no syscall/ABI change. One source area, page aligned. */
+int32_t ua_alias(struct uaddr *dst, struct uaddr *src, uint32_t base,
+                 uint32_t bytes, uint32_t prot, bool private_copy);
+/* #PF error semantics: only valid user accesses can demand-populate. */
+int ua_fault(struct uaddr *, uint32_t address, uint32_t error);
+struct vfs_file_identity;
+/* Section adapter retains the C5 identity for the lifetime of these areas. */
+void ua_backing_identity(struct uaddr *, uint32_t base, uint32_t bytes,
+                          struct vfs_file_identity *, uint64_t generation, uint64_t page);
 int ua_munmap(struct uaddr *u, uint32_t base, uint32_t bytes);
 int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot);
 int32_t ua_brk(struct uaddr *u, uint32_t end);

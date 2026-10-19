@@ -242,7 +242,7 @@ static void test_arena(void)
     struct uaddr u; CHECK(ua_init(&u, &u) == 0);
     struct ciuki_mmap_args a = map_args(3 * PAGE_SIZE - 1, PROT_READ | PROT_WRITE);
     CHECK(ua_mmap(&u, &a) == CIUKI_MMAP_BASE);
-    CHECK(u.backing == 3 && u.arena_extents == 1);
+    CHECK(u.backing == 0 && u.arena_extents == 1);
     put_word(&u, CIUKI_MMAP_BASE, 0xdeadbeef); put_word(&u, CIUKI_MMAP_BASE + 2 * PAGE_SIZE, 0x12345678);
     a.hint = CIUKI_MMAP_BASE + 17; a.length = PAGE_SIZE;
     CHECK(ua_mmap(&u, &a) == CIUKI_MMAP_BASE + 3 * PAGE_SIZE);
@@ -268,7 +268,7 @@ static void test_arena(void)
     CHECK(ua_munmap(&u, CIUKI_MMAP_BASE, UINT32_MAX) == -EINVAL);
     CHECK(ua_mprotect(&u, CIUKI_MAIN_STACK_BASE, PAGE_SIZE, PROT_READ) == -EBUSY);
     a = map_args(PAGE_SIZE, PROT_NONE); a.hint = 0x90000017;
-    CHECK((uint32_t)ua_mmap(&u, &a) == 0x90000000); CHECK(u.backing == 4);
+    CHECK((uint32_t)ua_mmap(&u, &a) == 0x90000000); CHECK(u.backing == 3);
     CHECK(ua_mprotect(&u, 0x90000000, PAGE_SIZE, PROT_READ | PROT_WRITE) == 0);
     CHECK(get_word(&u, 0x90000000) == 0);
     struct ua_pin pin; CHECK(ua_pin(&u, &pin, 0x90000000, 4, true) == 0);
@@ -880,7 +880,7 @@ static void test_bounded_mapping(void)
     preparing_memory = &u; preempt_points = 0; on_preempt_point = concurrent_mapping;
     CHECK(!ua_map_at(&u, CIUKI_MMAP_BASE, 64 * PAGE_SIZE, PROT_READ|PROT_WRITE,
                     PROT_READ|PROT_WRITE, UA_ANON, 0));
-    CHECK(preempt_points >= 9 && !on_preempt_point && u.extents == 2 && u.backing == 65);
+    CHECK(preempt_points >= 9 && !on_preempt_point && u.extents == 2 && u.backing == 0);
     CHECK(ua_range(&u, CIUKI_MMAP_BASE, 64 * PAGE_SIZE, PROT_READ|PROT_WRITE));
     uint8_t byte=1;CHECK(!ua_read(&u,&byte,CIUKI_MMAP_BASE+64*PAGE_SIZE-1,1) && byte==0);
     ua_destroy(&u);
@@ -889,7 +889,7 @@ static void test_bounded_mapping(void)
     CHECK(!ua_map_at(&u, CIUKI_MMAP_BASE+16*PAGE_SIZE, 64*PAGE_SIZE, PROT_NONE, PROT_READ|PROT_WRITE, UA_ANON, 0));
     preempt_points=0;on_preempt_point=concurrent_protection;
     CHECK(!ua_mprotect(&u, CIUKI_MMAP_BASE, 80*PAGE_SIZE, PROT_READ|PROT_WRITE));
-    CHECK(preempt_points>=10 && !on_preempt_point && !u.pins && u.backing==80);
+    CHECK(preempt_points>=10 && !on_preempt_point && !u.pins && u.backing==0);
     ua_destroy(&u);
     CHECK(!ua_init(&u, 0)); preempt_points = 0;
     struct elf_image image = { .count=1, .end=CIUKI_IMAGE_BASE+3*65536,
@@ -951,7 +951,7 @@ static void test_elf_cooperative(void)
     struct uaddr u;CHECK(!ua_init(&u,&u));zero_observed=&u;
     zero_turns=copy_turns=last_backing=protect_turns=0;fail_after_zero=false;on_preempt_point=zero_peer_turn;
     CHECK(!elf_load(&file,&image,&u));on_preempt_point=NULL;
-    CHECK(zero_turns==64 && protect_turns>=64 && copy_turns>=2 && u.backing==1024);
+    CHECK(zero_turns==0 && protect_turns>=64 && copy_turns>=2 && u.backing==33);
     uint8_t bytes[PAGE_SIZE];
     for(uint32_t at=CIUKI_IMAGE_BASE+131077;at<CIUKI_IMAGE_BASE+4*1024*1024;) {
         uint32_t n=CIUKI_IMAGE_BASE+4*1024*1024-at;
@@ -962,10 +962,10 @@ static void test_elf_cooperative(void)
     CHECK(!ua_init(&u,&u));zero_observed=&u;zero_turns=last_backing=0;
     fail_after_zero=true;on_preempt_point=zero_peer_turn;
     CHECK(elf_load(&file,&image,&u)==-ENOMEM);on_preempt_point=NULL;alloc_fail=-1;
-    CHECK(zero_turns==1 && !u.backing && !u.head && !u.as.tables);
+    CHECK(zero_turns==0 && !u.backing && !u.as.tables);
     ua_destroy(&u);CHECK(pages_used==base_pages && heap_blocks==base_heap);
     g_current=saved;
-    puts("proc ELF F0-20: 4MiB BSS 64 preemption points/64KiB, copy 2 points/64KiB, every BSS byte zero, allocation-failure rollback PASS");
+    puts("proc ELF M2: untouched 4MiB BSS has no data frames, bounded metadata/copy, every BSS byte zero, allocation-failure rollback PASS");
 }
 int main(int argc, char **argv)
 {
