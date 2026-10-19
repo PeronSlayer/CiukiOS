@@ -83,6 +83,9 @@ int fat_next_dos(struct fat_volume *, uint32_t directory, uint32_t *cursor, stru
 int fat_lookup(struct fat_volume *, uint32_t directory, const char *, struct fat_entry *);
 int fat_create(struct fat_volume *, uint32_t directory, const char *, uint8_t attr, struct fat_entry *);
 int fat_read(struct fat_volume *, const struct fat_entry *, uint64_t position, void *, size_t, size_t *done);
+/* Same demand path; schedules shared-cache speculation after two adjacent reads. */
+int fat_read_stream(struct fat_volume *, const struct fat_entry *, uint64_t pos,
+                    void *, size_t, size_t *, struct cache_stream *);
 int fat_write(struct fat_volume *, struct fat_entry *, uint64_t position, const void *, size_t, size_t *done);
 int fat_truncate(struct fat_volume *, struct fat_entry *, uint64_t size);
 /* Reserved boot-log chain only: data writes do not allocate or publish

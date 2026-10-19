@@ -198,7 +198,17 @@ static struct storage system_storage;
 static bool initialized;
 static void storage_timer(void *arg) { (void)arg; CHECK(false); }
 void fs_calendar_init(void) { called('S'); }
-int storage_setup(struct storage *s, size_t bytes) { (void)bytes; memset(s, 0, sizeof(*s)); s->ready = true; return 0; }
+void ledger_snapshot(struct mm_ledger *out) {
+    memset(out,0,sizeof(*out)); out->zone[ZONE_NORMAL].usable=28672;
+    out->zone[ZONE_NORMAL].free=24576; out->high=2048;
+}
+uint32_t cache_initial_bytes(uint32_t usable,uint32_t free_pages,uint32_t high) {
+    CHECK(usable==28672 && free_pages==24576 && high==2048); return CACHE_DEFAULT_BYTES;
+}
+int cache_adaptive_enable(struct block_cache *cache,uint32_t usable) {
+    CHECK(cache==&system_storage.cache && usable==28672); cache->adaptive=true; return 0;
+}
+int storage_setup(struct storage *s, size_t bytes) { CHECK(bytes==CACHE_DEFAULT_BYTES); memset(s, 0, sizeof(*s)); s->ready = true; return 0; }
 bool storage_probe_readonly(const char *selector, unsigned length) { return selector && length; }
 int kwork_init(void) { return 0; }
 struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg, enum task_prio prio)

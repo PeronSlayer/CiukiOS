@@ -7,6 +7,22 @@
 #define CACHE_DIRTY_AGE_MS 1000u
 #define CACHE_WRITEBACK_BLOCKS 64u
 #define CACHE_CLEAN_WAIT_MS 20u
+#define CACHE_FLOOR_BYTES (2u*1024u*1024u)
+#define CACHE_CEILING_BYTES (32u*1024u*1024u)
+#define CACHE_WINDOW_MS 100u
+#define CACHE_STEP_PAGES 64u
+#define CACHE_PREFETCH_MIN 16384u
+#define CACHE_PREFETCH_MAX 65536u
+/* One open description, shared by dup/inheritance. All fields are protected
+ * by its cache lock. No private file data or independently mapped frames. */
+struct cache_stream {
+    struct cache_stream *next;
+    struct block_cache *cache;
+    struct blkdev *dev;
+    uint64_t last_offset, lba, useful, wasted, last_useful;
+    uint32_t sequential, window_bytes, generation, media_generation;
+    uint32_t pending, outstanding, resident;
+};
 /* f4-04 page layouts. One 4096-byte data page is two 2048-byte halves; each
  * half serves four 512-byte slots or one 2048-byte slot, chosen by the sector
  * size of the devices attached (a whole page is eight 512-byte slots or two
@@ -19,10 +35,10 @@ struct cache_block {
     struct blkdev *dev;
     uint8_t *data;
     uint64_t lba;
-    union { uint32_t since; int io_error; };
-    uint32_t generation;
+    union { uint32_t since; int io_error; struct cache_stream *prefetch_owner; };
+    uint32_t generation, prefetch_generation;
     uint16_t sector_size, capacity;
-    bool dirty, busy, invalid;
+    bool dirty:1, busy:1, invalid:1, speculative:1;
     uint8_t waiters;
 };
 struct cache_page {
@@ -72,8 +88,18 @@ struct block_cache {
     uint32_t next_writeback;
     bool writeback_pending;
     bool workspace_in_use; /* reservation only; no mutex held across scan I/O */
+    struct cache_stream *streams;
+    struct cache_meta *reclaim_meta;
+    uint32_t reclaim_index, floor_pages, ceiling_pages, window_time, useful_windows;
+    uint32_t speculative_bytes, speculative_peak, demand_active;
+    uint32_t growths, reclaims, reclaimed_pages, scanned_pages, slice_pages, slice_scanned, max_slice_us;
+    uint32_t blocked_pinned, blocked_dirty, blocked_error;
+    uint64_t demand_hits, demand_misses, window_hits, window_misses;
+    uint64_t prefetch_useful, prefetch_wasted, prefetch_commands;
+    bool adaptive, pressure;
 };
-/* Allocate only at init. bytes includes metadata and scan workspace. One
+/* Fixed allocation contract; optional adaptive service is configured later.
+ * bytes includes metadata and scan workspace. One
  * instance is shared by ALL mounted devices. Destroy requires quiescence and
  * explicitly discards dirty data; normal callers barrier/unmount first. */
 int cache_init(struct block_cache *, size_t bytes);
@@ -88,9 +114,28 @@ struct cache_stats {
     uint64_t hits, misses, writes;
     uint32_t dirty_bytes, dirty_budget, throttle_bytes, tick_flushed, max_flush_ms, max_writer_wait_ms;
     uint64_t cache_sync_evictions, writer_waits, writer_wait_ms;
+    uint32_t floor_pages, ceiling_pages, growths, reclaims, reclaimed_pages;
+    uint32_t speculative_bytes, speculative_peak, slice_pages, slice_scanned, max_slice_us;
+    uint32_t blocked_pinned, blocked_dirty, blocked_error;
+    /* Whole data frames, counted once even when multiple blocked reasons
+     * overlap. The fraction is unreclaimable_data / data_pages. */
+    uint32_t pinned_data, dirty_data, error_data, unreclaimable_data;
+    uint64_t prefetch_useful, prefetch_wasted, prefetch_commands;
 };
 void cache_stats(struct block_cache *, struct cache_stats *);
 void cache_destroy(struct block_cache *);
+/* M1 inputs are pages of usable/free NORMAL RAM, not installed RAM. A zero
+ * initial result means the floor cannot fit above the pressure reserve. */
+uint32_t cache_initial_bytes(uint32_t usable, uint32_t free_pages, uint32_t high);
+int cache_adaptive_enable(struct block_cache *, uint32_t usable);
+/* Task context only; no transport or PMM lock held by the caller. */
+void cache_adaptive_tick(struct block_cache *, uint32_t now, uint32_t free_pages, uint32_t high, bool pressure);
+void cache_stream_begin(struct block_cache *, struct cache_stream *, struct blkdev *, uint64_t offset);
+uint32_t cache_stream_end(struct cache_stream *, uint64_t offset, size_t done, bool success);
+void cache_stream_queue(struct cache_stream *, uint64_t lba, uint32_t sectors);
+void cache_stream_cancel(struct cache_stream *); /* seek/write: generation cancellation */
+void cache_stream_close(struct cache_stream *); /* quiesces requests before freeing description */
+bool cache_prefetch_tick(struct block_cache *); /* one bounded lowest-priority read */
 int cache_read(struct block_cache *, struct blkdev *, uint64_t lba, void *sector);
 /* FAT run read, 512-byte sectors, at most BLKDEV_READ_SECTORS. Shared cache
  * hits (including dirty data) split physical requests; no private cache. */

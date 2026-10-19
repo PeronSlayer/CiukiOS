@@ -2,10 +2,14 @@
 #include "cache.h"
 #ifndef FS_HOST
 #include <ciuki/ledger.h>
+#include <ciuki/timing.h>
 static void cache_claim(void *p, enum mm_owner owner) { if (p) mm_claim(V2P(p),1,owner); }
 static void cache_unclaim(void *p, enum mm_owner owner) { if (p) mm_release(V2P(p),1,owner); }
 #else
 #include <ciuki/ledger.h>
+#pragma weak ledger_page_pinned
+#pragma weak ledger_snapshot
+#pragma weak ledger_pressure
 static void cache_claim(void *p, enum mm_owner owner) { (void)p; (void)owner; }
 static void cache_unclaim(void *p, enum mm_owner owner) { (void)p; (void)owner; }
 #endif
@@ -19,23 +23,42 @@ extern bool file_read_cancelled(void) __attribute__((weak));
  * hold only media bytes: a page is two 2048-byte halves and a half is four
  * 512-byte slots or one 2048-byte slot. Descriptors (struct cache_block) are
  * packed into descriptor pages carved from the same byte budget, the first
- * page header living inside struct block_cache. All pages are allocated by
- * cache_init; attaching a 2048-byte device only converts halves in place. */
+ * page header living inside struct block_cache. Adaptive growth uses the same
+ * layout; attaching a 2048-byte device only converts halves in place. */
 #define HALF 2048u
 #define SLOTS_512 4u
 _Static_assert(sizeof(struct cache_page) <= 4096, "cache page header");
 #define PAGES_PER_META ((4096u - (unsigned)offsetof(struct cache_meta, pages)) / (unsigned)sizeof(struct cache_page))
 _Static_assert(PAGES_PER_META >= 1, "descriptor page");
 #ifdef __i386__
-/* On the real target a descriptor page holds 11 page headers: a cache of 20 or
+/* On the real target a descriptor page holds 10 page headers: a cache of 20 or
  * more pages packs at least F1's 7 FAT slots per data/metadata budget page.
- * The default, including its 8-page writeback buffer, retains 14016 slots
+ * The default, including its 8-page writeback buffer, retains 13904 slots
  * against F1's 13440. The 64-bit host packs fewer headers. */
-_Static_assert(PAGES_PER_META >= 11, "i686 descriptor density");
+_Static_assert(PAGES_PER_META >= 10, "i686 descriptor density");
 #endif
 
 static unsigned cls(const struct cache_block *b) { return b->capacity >= 2048 ? 1u : 0u; }
 static unsigned bucket(struct blkdev *d, uint64_t lba) { return (unsigned)((uintptr_t)d/16 ^ lba ^ (lba>>32)) & 255; }
+static uint32_t total_pages(const struct block_cache *c) {
+    return c->data_pages+c->meta_pages+c->workspace_pages+c->writeback_pages;
+}
+static bool page_pinned(void *p) {
+#ifdef FS_HOST
+    return ledger_page_pinned && ledger_page_pinned((uint32_t)((uintptr_t)p>>12));
+#else
+    return ledger_page_pinned(V2P(p)>>12);
+#endif
+}
+static void prefetch_finish(struct block_cache *c, struct cache_block *b, bool use) {
+    if (!b->speculative) return;
+    struct cache_stream *s=b->prefetch_owner;
+    use=use && b->prefetch_generation==s->generation;
+    if (use) { s->useful+=b->sector_size; c->prefetch_useful+=b->sector_size; }
+    else { s->wasted+=b->sector_size; c->prefetch_wasted+=b->sector_size; }
+    c->speculative_bytes-=b->sector_size; s->resident-=b->sector_size;
+    b->speculative=false; b->io_error=0;
+}
 static struct cache_device *device(struct block_cache *c, struct blkdev *d) {
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) return &c->devices[i];
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (!c->devices[i].dev) {
@@ -141,7 +164,7 @@ static int wait_block(struct block_cache *c, struct cache_block *b) {
     int interrupted=0;
     while (b->busy && !interrupted) interrupted=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE);
     struct cache_device *owner=b->dirty ? device(c,b->dev) : 0;
-    int e=owner ? owner->error : b->io_error;
+    int e=owner ? owner->error : b->speculative ? 0 : b->io_error;
     if (b->invalid || (b->dev && b->generation!=b->dev->media_generation)) e=-FS_EIO;
     b->waiters--; fs_event_wake(&c->changed);
     return interrupted ? interrupted : e;
@@ -173,6 +196,7 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
     fs_event_wake(&c->changed); return e;
 }
 static void unhash(struct block_cache *c, struct cache_block *b) {
+    prefetch_finish(c,b,false);
     if (!b->dev) return;
     struct cache_block **p=&c->hash[bucket(b->dev,b->lba)];
     unsigned work=0;
@@ -262,6 +286,7 @@ static void half_deactivate(struct block_cache *c, struct cache_page *pg, unsign
     c->blocks-=count; c->slots[layout]-=count;
 }
 static int convert_half(struct block_cache *c, struct cache_page *pg, unsigned h) {
+    if (page_pinned(pg->data)) return -FS_EBUSY;
     /* Never drop the mutex halfway through changing a layout. A dirty
      * write may sleep, so restart the complete half preflight afterwards. */
     for (unsigned k=0;k<SLOTS_512;k++) {
@@ -275,6 +300,7 @@ static int convert_half(struct block_cache *c, struct cache_page *pg, unsigned h
     half_deactivate(c,pg,h); half_activate(c,pg,h,1,true); return 0;
 }
 static void convert_page(struct block_cache *c, struct cache_page *pg, unsigned halves, unsigned *done, int *blocked) {
+    if (!pg->data) return;
     fs_service(); /* <=two complete half preflights before the next page */
     for (unsigned h=0;h<2 && *done<halves;h++) if (!pg->layout[h]) {
         fs_service();
@@ -323,7 +349,8 @@ retry:
     struct cache_block *b=find(c,d,lba);
     if (b) {
         if (b->busy) { if (issued && read) *issued=true; e=wait_block(c,b); if (e) return e; goto retry; }
-        c->hits++; touch(c,b); *out=b; return 0;
+        c->hits++; if (read) c->demand_hits++;
+        prefetch_finish(c,b,read); touch(c,b); *out=b; return 0;
     }
     int blocked=-FS_ENOMEM; bool pending=false; struct cache_block *dirty=0;
     unsigned work=0;
@@ -333,7 +360,7 @@ retry:
              * LRU/hash nodes and this candidate retain their identity. */
             scan_service(&work);
             if (x->capacity<d->sector_size) continue;
-            if (x->busy || x->waiters) { pending=true; continue; }
+            if (x->busy || x->waiters || page_pinned(x->data)) { pending=true; continue; }
             struct cache_device *owner=x->dirty ? device(c,x->dev) : 0;
             if (!x->dirty) { b=x; break; }
             if (owner && !owner->error) { if (!dirty) dirty=x; }
@@ -352,7 +379,7 @@ retry:
         if (pending) { int e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) return e; goto retry; }
         return blocked;
     }
-    unhash(c,b); c->misses++;
+    unhash(c,b); c->misses++; if (read) c->demand_misses++;
     b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
     b->invalid=false; b->io_error=0;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
@@ -417,7 +444,289 @@ int cache_init(struct block_cache *c, size_t bytes) {
     return 0;
 fail: cache_destroy(c); return -FS_ENOMEM;
 }
+/* C4 controller. No transport is called here: dirty debt is only scheduled.
+ * Descriptor addresses stay stable; holes are reused, never compacted. */
+uint32_t cache_initial_bytes(uint32_t usable, uint32_t free_pages, uint32_t high) {
+    uint32_t ceiling=usable/8, initial=CACHE_DEFAULT_BYTES/4096;
+    if (ceiling>CACHE_CEILING_BYTES/4096) ceiling=CACHE_CEILING_BYTES/4096;
+    if (initial>ceiling) initial=ceiling;
+    uint32_t available=free_pages>high ? free_pages-high : 0;
+    if (initial>available) initial=available;
+    return initial<CACHE_FLOOR_BYTES/4096 ? 0 : initial*4096;
+}
+int cache_adaptive_enable(struct block_cache *c, uint32_t usable) {
+    fs_lock_take(&c->lock);
+    uint32_t ceiling=usable/8;
+    if (ceiling>CACHE_CEILING_BYTES/4096) ceiling=CACHE_CEILING_BYTES/4096;
+    int e=ceiling<CACHE_FLOOR_BYTES/4096 || total_pages(c)>ceiling ||
+        total_pages(c)<CACHE_FLOOR_BYTES/4096 ? -FS_ENOMEM : 0;
+    if (!e) {
+        c->floor_pages=CACHE_FLOOR_BYTES/4096; c->ceiling_pages=ceiling;
+        c->adaptive=true; c->window_time=fs_now_ms();
+        c->window_hits=c->demand_hits; c->window_misses=c->demand_misses;
+    }
+    fs_lock_drop(&c->lock); return e;
+}
+static void stream_decay(struct cache_stream *s) {
+    __atomic_add_fetch(&s->generation,1,__ATOMIC_RELEASE); s->pending=0; s->sequential=0; s->window_bytes=0;
+    s->last_useful=s->useful;
+}
+static uint64_t slice_clock(void) {
+#ifdef FS_HOST
+    struct timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t);
+    return (uint64_t)t.tv_sec*1000000+(uint32_t)t.tv_nsec/1000;
+#else
+    return ktime_cycles();
+#endif
+}
+static uint32_t slice_us(uint64_t start) {
+#ifdef FS_HOST
+    return (uint32_t)(slice_clock()-start);
+#else
+    uint64_t delta=ktime_cycles()-start;
+    return g_tsc_per_ms ? (uint32_t)(delta/g_tsc_per_ms*1000+(delta%g_tsc_per_ms)*1000/g_tsc_per_ms) : 0;
+#endif
+}
+static bool reclaim_page(struct block_cache *c, struct cache_page *pg) {
+    bool pinned=page_pinned(pg->data), dirty=false, error=false;
+    uint32_t speculative=0;
+    for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
+        if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
+        struct cache_block *b=&pg->b[i];
+        pinned|=b->busy || b->waiters;
+        if (b->speculative) speculative+=b->sector_size;
+        if (b->dirty) {
+            dirty=true; struct cache_device *s=device(c,b->dev);
+            if (s && s->error) error=true;
+            else if (s) request_writeback(c,s);
+        } else if (!b->speculative && b->io_error) error=true;
+    }
+    c->blocked_pinned+=pinned; c->blocked_dirty+=dirty; c->blocked_error+=error;
+    if (pinned || dirty || error || c->speculative_bytes-speculative>(total_pages(c)-1)*4096u/8) return false;
+    half_deactivate(c,pg,0); half_deactivate(c,pg,1);
+    cache_unclaim(pg->data,MM_CACHE_DATA); fs_page_free(pg->data); pg->data=0;
+    c->data_pages--; return true;
+}
+static void reclaim_slice(struct block_cache *c) {
+    uint64_t start=slice_clock();
+    c->slice_pages=c->slice_scanned=0;
+    c->blocked_pinned=c->blocked_dirty=c->blocked_error=0;
+    /* At most 64 page preflights (eight descriptors each). Stop at 500 us,
+     * leaving 500 us for the final preflight/unhash/free and accounting.
+     * The rotating cursor makes a dirty/pinned prefix unable to starve clean
+     * pages later in the cache. The inline page and fixed workspace remain. */
+    while (total_pages(c)>c->floor_pages && c->slice_pages<CACHE_STEP_PAGES &&
+           c->slice_scanned<CACHE_STEP_PAGES && slice_us(start)<500) {
+        if (!c->meta) break;
+        if (!c->reclaim_meta) { c->reclaim_meta=c->meta; c->reclaim_index=0; }
+        struct cache_meta *m=c->reclaim_meta;
+        if (c->reclaim_index>=m->count) {
+            c->reclaim_meta=m->next ? m->next : c->meta; c->reclaim_index=0; continue;
+        }
+        struct cache_page *pg=&m->pages[c->reclaim_index++]; c->slice_scanned++;
+        if (pg->data && reclaim_page(c,pg)) c->slice_pages++;
+        bool empty=true;
+        for (unsigned i=0;i<m->count;i++) if (m->pages[i].data) { empty=false; break; }
+        if (empty && !page_pinned(m) && c->slice_pages<CACHE_STEP_PAGES && total_pages(c)>c->floor_pages &&
+            c->speculative_bytes<=(total_pages(c)-1)*4096u/8) {
+            struct cache_meta **at=&c->meta;
+            while (*at!=m) at=&(*at)->next;
+            *at=m->next; c->reclaim_meta=m->next; c->reclaim_index=0;
+            cache_unclaim(m,MM_CACHE_META); fs_page_free(m); c->meta_pages--; c->slice_pages++;
+        }
+    }
+    c->scanned_pages+=c->slice_scanned; c->reclaimed_pages+=c->slice_pages;
+    if (c->slice_pages) c->reclaims++;
+    uint32_t us=slice_us(start); if (us>c->max_slice_us) c->max_slice_us=us;
+}
+static void grow_window(struct block_cache *c, uint32_t allowance) {
+    unsigned before=total_pages(c), limit=before+allowance;
+    if (limit>c->ceiling_pages) limit=c->ceiling_pages;
+    while (total_pages(c)<limit) {
+#ifdef FS_HOST
+        if (ledger_snapshot && ledger_pressure)
+#endif
+        {
+            struct mm_ledger memory; ledger_snapshot(&memory);
+            if (ledger_pressure() || memory.zone[2].free<=memory.high+2) break;
+        }
+        struct cache_page *pg=0; struct cache_meta *m=0;
+        for (m=c->meta;m && !pg;m=m->next) {
+            for (unsigned i=0;i<m->count;i++) if (!m->pages[i].data) { pg=&m->pages[i]; break; }
+            if (!pg && m->count<PAGES_PER_META) pg=&m->pages[m->count++];
+        }
+        if (!pg) {
+            if (total_pages(c)+2>limit) break;
+            m=fs_normal_page_alloc(); if (!m) break;
+            cache_claim(m,MM_CACHE_META); m->next=c->meta; c->meta=m; c->meta_pages++;
+            pg=&m->pages[m->count++];
+        }
+        pg->data=fs_normal_page_alloc(); if (!pg->data) break;
+        cache_claim(pg->data,MM_CACHE_DATA); c->data_pages++;
+        half_activate(c,pg,0,0,true); half_activate(c,pg,1,0,true);
+        if (!(c->data_pages&15u)) fs_service();
+    }
+    if (total_pages(c)>before) c->growths++;
+}
+void cache_adaptive_tick(struct block_cache *c, uint32_t now, uint32_t free_pages, uint32_t high, bool pressure) {
+    if (!c->adaptive) return;
+    fs_lock_take(&c->lock);
+    if (pressure && !c->pressure) {
+        for (struct cache_stream *s=c->streams;s;s=s->next) stream_decay(s);
+    }
+    c->pressure=pressure;
+    if (pressure) { c->useful_windows=0; reclaim_slice(c); }
+    uint32_t elapsed=now-c->window_time;
+    if (elapsed>=CACHE_WINDOW_MS) {
+        uint64_t hits=c->demand_hits-c->window_hits, misses=c->demand_misses-c->window_misses;
+        bool poor=c->prefetch_wasted>=CACHE_PREFETCH_MIN && c->prefetch_wasted>c->prefetch_useful;
+        bool useful=!pressure && free_pages>high+CACHE_STEP_PAGES && !poor &&
+            c->dirty_bytes<=c->dirty_budget && hits && misses;
+        if (elapsed>=2*CACHE_WINDOW_MS) c->useful_windows=0;
+        c->useful_windows=useful ? c->useful_windows+1 : 0;
+        if (c->useful_windows>=2) {
+            grow_window(c,CACHE_STEP_PAGES); c->useful_windows=2;
+        }
+        c->window_time=now; c->window_hits=c->demand_hits; c->window_misses=c->demand_misses;
+    }
+    /* Preserve C1's formula as C changes, including its 1 MiB ceiling. */
+    c->dirty_budget=total_pages(c)*4096u/8;
+    if (c->dirty_budget>1024u*1024u) c->dirty_budget=1024u*1024u;
+    fs_lock_drop(&c->lock);
+}
+void cache_stream_begin(struct block_cache *c, struct cache_stream *s, struct blkdev *d, uint64_t offset) {
+    fs_lock_take(&c->lock);
+    if (!s->cache) { s->cache=c; s->next=c->streams; c->streams=s; s->generation=1; }
+    c->demand_active++;
+    for (struct cache_stream *other=c->streams;other;other=other->next)
+        if (other!=s && (other->pending || other->outstanding || other->resident)) stream_decay(other);
+    if (s->dev!=d || s->media_generation!=d->media_generation || offset!=s->last_offset || c->pressure) stream_decay(s);
+    s->dev=d; s->media_generation=d->media_generation;
+    fs_lock_drop(&c->lock);
+}
+uint32_t cache_stream_end(struct cache_stream *s, uint64_t offset, size_t done, bool success) {
+    struct block_cache *c=s->cache; if (!c) return 0;
+    fs_lock_take(&c->lock); c->demand_active--;
+    if (!success || !done || c->pressure || s->dev->media_generation!=s->media_generation) stream_decay(s);
+    else {
+        s->last_offset=offset+done;
+        if (s->sequential<2) s->sequential++;
+        if (s->sequential>=2) {
+            if (!s->window_bytes) s->window_bytes=CACHE_PREFETCH_MIN;
+            else if (s->useful>s->last_useful && s->window_bytes<CACHE_PREFETCH_MAX) s->window_bytes*=2;
+        }
+        s->last_useful=s->useful;
+    }
+    uint32_t window=!s->pending && !s->outstanding && s->resident<s->window_bytes/2 ? s->window_bytes : 0;
+    fs_lock_drop(&c->lock); return window;
+}
+void cache_stream_queue(struct cache_stream *s, uint64_t lba, uint32_t count) {
+    struct block_cache *c=s->cache; if (!c || !count) return;
+    fs_lock_take(&c->lock);
+    if (!c->pressure && !s->pending && !s->outstanding && s->window_bytes &&
+        s->media_generation==s->dev->media_generation && !blkdev_range(s->dev,lba,count)) {
+        s->lba=lba; s->pending=count>s->window_bytes/512 ? s->window_bytes/512 : count;
+        fs_event_wake(&c->changed);
+    }
+    fs_lock_drop(&c->lock);
+}
+void cache_stream_cancel(struct cache_stream *s) {
+    struct block_cache *c=s->cache; if (!c) return;
+    fs_lock_take(&c->lock); stream_decay(s); fs_lock_drop(&c->lock);
+}
+void cache_stream_close(struct cache_stream *s) {
+    struct block_cache *c=s->cache; if (!c) return;
+    fs_lock_take(&c->lock); stream_decay(s);
+    while (s->outstanding) fs_event_wait(&c->changed,&c->lock);
+    unsigned work=0;
+    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
+        scan_service(&work);
+        if (b->speculative && b->prefetch_owner==s) unhash(c,b);
+    }
+    struct cache_stream **at=&c->streams; while (*at && *at!=s) at=&(*at)->next;
+    if (*at) *at=s->next;
+    s->cache=0; s->next=0; fs_lock_drop(&c->lock);
+}
+struct prefetch_context { struct cache_stream *stream;
+    struct blkdev *dev; uint32_t generation, media_generation; };
+static bool prefetch_cancelled(void *arg) {
+    struct prefetch_context *p=arg; struct cache_stream *s=p->stream;
+    /* Worker context callbacks cannot acquire cache (the transport may be
+     * called while reacquiring it). Acquire loads publish cancellation. */
+    return __atomic_load_n(&s->generation,__ATOMIC_ACQUIRE)!=p->generation ||
+        p->dev->media_generation!=p->media_generation || p->dev->quarantined;
+}
+static uint64_t prefetch_now(void *arg) { (void)arg; return fs_now_ms(); }
+static void prefetch_pause(void *arg) {
+    (void)arg;
+#ifdef FS_HOST
+    struct timespec t={0,100000}; nanosleep(&t,0);
+#else
+    task_sleep_ms(1);
+#endif
+}
+bool cache_prefetch_tick(struct block_cache *c) {
+    fs_lock_take(&c->lock);
+    struct cache_stream *s=c->streams;
+    while (s && (!s->pending || s->outstanding)) s=s->next;
+    if (!s || c->pressure || c->demand_active || c->batch_busy || !c->writeback_buffer || c->dirty_bytes>c->dirty_budget) {
+        fs_lock_drop(&c->lock); return false;
+    }
+    struct blkdev *d=s->dev;
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    if (d->logical || d->sector_size!=512 || s->media_generation!=d->media_generation || d->quarantined) {
+        stream_decay(s); fs_lock_drop(&c->lock); return false;
+    }
+    /* Skip shared hits, including dirty data, without touching or crediting
+     * them. Only genuinely missing, cleanly reservable blocks are speculative. */
+    while (s->pending && find(c,d,s->lba)) { s->lba++; s->pending--; }
+    uint32_t count=s->pending, cap=total_pages(c)*4096u/8;
+    uint32_t room=cap>c->speculative_bytes ? (cap-c->speculative_bytes)/512 : 0;
+    if (count>room) count=room;
+    if (count>c->writeback_pages*8) count=c->writeback_pages*8;
+    for (unsigned i=0;i<count;i++) if (find(c,d,s->lba+i) || filling(c,d,s->lba+i)) { count=i; break; }
+    struct cache_block *blocks[CACHE_WRITEBACK_BLOCKS]; unsigned n=0;
+    for (struct cache_block *b=c->lru[0].oldest;b && n<count;b=b->next) {
+        if (b->busy || b->waiters || b->dirty || b->speculative || page_pinned(b->data)) continue;
+        unhash(c,b); b->dev=d; b->lba=s->lba+n; b->generation=d->media_generation;
+        b->sector_size=512; b->invalid=false; b->io_error=0; b->busy=true;
+        unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b; blocks[n++]=b;
+    }
+    if (!n) { s->pending=0; fs_lock_drop(&c->lock); return false; }
+    uint64_t lba=s->lba; s->lba+=n; s->pending-=n; s->outstanding++; c->batch_busy=true;
+    /* In-flight bytes also consume the speculation cap, not just completions. */
+    c->speculative_bytes+=n*512; s->resident+=n*512;
+    if (c->speculative_bytes>c->speculative_peak) c->speculative_peak=c->speculative_bytes;
+    struct cache_device *state=device(c,d); uint32_t epoch=state ? state->epoch : 0;
+    struct prefetch_context context={s,d,s->generation,s->media_generation};
+    struct vfs_request request={.arg=&context,.deadline=UINT64_MAX,.now=prefetch_now,
+        .cancelled=prefetch_cancelled,.pause=prefetch_pause};
+    fs_lock_drop(&c->lock);
+    struct fs_request_scope scope; fs_request_enter(&scope,&request);
+    int e=blkdev_request(d,BLK_READ,lba,n,c->writeback_buffer,BLK_SPECULATIVE,0);
+    fs_request_leave(&scope);
+    fs_lock_take(&c->lock);
+    if (c->refresh) c->refresh(c->refresh_ctx,d);
+    state=device(c,d);
+    if (!state || state->epoch!=epoch || prefetch_cancelled(&context)) e=-VFS_ECANCELLED;
+    c->prefetch_commands++;
+    c->speculative_bytes-=n*512; s->resident-=n*512;
+    for (unsigned i=0;i<n;i++) {
+        struct cache_block *b=blocks[i]; b->busy=false; b->io_error=0;
+        if (e || b->invalid) { unhash(c,b); s->wasted+=512; c->prefetch_wasted+=512; }
+        else {
+            memcpy(b->data,c->writeback_buffer+i*512,512); b->speculative=true;
+            b->prefetch_owner=s; b->prefetch_generation=context.generation;
+            c->speculative_bytes+=512; s->resident+=512;
+        }
+    }
+    if (e) stream_decay(s);
+    s->outstanding--; c->batch_busy=false; fs_event_wake(&c->changed);
+    fs_lock_drop(&c->lock); return true;
+}
+
 void cache_destroy(struct block_cache *c) {
+    while (c->streams) cache_stream_close(c->streams);
     if (c->writeback_buffer) for (unsigned i=0;i<c->writeback_pages;i++) cache_unclaim(c->writeback_buffer+i*4096u,MM_CACHE_WORK);
     fs_contig_free(c->writeback_buffer,c->writeback_pages*4096u);
     if (c->inline_page.data) { cache_unclaim(c->inline_page.data,MM_CACHE_DATA); fs_page_free(c->inline_page.data); }
@@ -436,6 +745,19 @@ int cache_attach(struct block_cache *c, struct blkdev *d) {
     int e=device(c,d) ? layout_for(c,d) : -FS_ENOSPC;
     fs_lock_drop(&c->lock); return e;
 }
+static void stats_page(struct block_cache *c, struct cache_page *pg, struct cache_stats *out) {
+    if (!pg->data) return;
+    bool pinned=page_pinned(pg->data), dirty=false, error=false;
+    for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
+        if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
+        struct cache_block *b=&pg->b[i];
+        pinned|=b->busy || b->waiters; dirty|=b->dirty;
+        if (b->dirty) { struct cache_device *owner=device(c,b->dev); error|=owner && owner->error; }
+        else if (!b->speculative && b->io_error) error=true;
+    }
+    out->pinned_data+=pinned; out->dirty_data+=dirty; out->error_data+=error;
+    out->unreclaimable_data+=pinned || dirty || error;
+}
 static void stats_locked(struct block_cache *c, struct cache_stats *out) {
     *out=(struct cache_stats){ .pages=c->workspace_pages+c->data_pages+c->meta_pages+c->writeback_pages,
         .data_pages=c->data_pages, .meta_pages=c->meta_pages, .workspace_pages=c->workspace_pages,
@@ -444,6 +766,18 @@ static void stats_locked(struct block_cache *c, struct cache_stats *out) {
         .dirty_bytes=c->dirty_bytes,.dirty_budget=c->dirty_budget,.throttle_bytes=2*c->dirty_budget,
         .tick_flushed=c->tick_flushed,.max_flush_ms=c->max_flush_ms,.max_writer_wait_ms=c->max_writer_wait_ms,
         .cache_sync_evictions=c->cache_sync_evictions,.writer_waits=c->writer_waits,.writer_wait_ms=c->writer_wait_ms };
+    out->floor_pages=c->floor_pages; out->ceiling_pages=c->ceiling_pages;
+    out->growths=c->growths; out->reclaims=c->reclaims; out->reclaimed_pages=c->reclaimed_pages;
+    out->speculative_bytes=c->speculative_bytes; out->speculative_peak=c->speculative_peak;
+    out->slice_pages=c->slice_pages; out->slice_scanned=c->slice_scanned; out->max_slice_us=c->max_slice_us;
+    out->blocked_pinned=c->blocked_pinned; out->blocked_dirty=c->blocked_dirty; out->blocked_error=c->blocked_error;
+    out->prefetch_useful=c->prefetch_useful; out->prefetch_wasted=c->prefetch_wasted;
+    out->prefetch_commands=c->prefetch_commands;
+    stats_page(c,&c->inline_page,out);
+    unsigned work=0;
+    for (struct cache_meta *m=c->meta;m;m=m->next) for (unsigned i=0;i<m->count;i++) {
+        scan_service(&work); stats_page(c,&m->pages[i],out);
+    }
 }
 void cache_stats(struct block_cache *c, struct cache_stats *out) {
     (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); stats_locked(c,out);
@@ -488,6 +822,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         struct cache_block *b=find(c,d,lba+i);
         if (b && b->busy) { e=wait_block(c,b); if (e) break; b=find(c,d,lba+i); }
         if (b) {
+            prefetch_finish(c,b,true); c->demand_hits++;
             memcpy((uint8_t *)buf+i*512,b->data,512);
             hits[i/32]|=1u<<(i%32); c->hits++; touch(c,b);
         } else {
@@ -505,6 +840,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         struct cache_block *existing=find(c,d,lba+i);
         if (existing) {
             if (existing->busy) { e=wait_block(c,existing); continue; }
+            prefetch_finish(c,existing,true); c->demand_hits++;
             memcpy((uint8_t *)buf+i*512,existing->data,512); i++; continue;
         }
         struct cache_fill *fill=filling(c,d,lba+i);
@@ -521,7 +857,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
             for (unsigned list=0; list<2 && !b; list++)
                 for (struct cache_block *x=c->lru[list].oldest; x; x=x->next) {
                     scan_service(&work);
-                    if (!x->busy && !x->waiters && !x->dirty) { b=x; break; }
+                    if (!x->busy && !x->waiters && !x->dirty && !page_pinned(x->data)) { b=x; break; }
                 }
             if (!b) continue;
             unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
@@ -529,6 +865,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
             unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b;
             touch(c,b); reserved[j]=b; c->misses++;
         }
+        c->demand_misses+=end-i;
         if (file_read_cancelled && file_read_cancelled()) e=-4;
         if (!e) e=blkdev_range(d,lba+i,end-i);
         if (!e) {

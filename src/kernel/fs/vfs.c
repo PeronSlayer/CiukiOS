@@ -282,6 +282,10 @@ void vfs_page_put(struct vfs *v, struct vfs_page_identity *page) {
     fs_lock_drop(&v->identity_lock);
 }
 void vfs_identity_expire(struct vfs *v, struct fat_volume *vol) {
+    for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) {
+        struct vfs_description *d=&v->descriptions[i];
+        if (d->refs && d->node->volume==vol) cache_stream_cancel(&d->stream);
+    }
     fs_lock_take(&v->identity_lock);
     for (unsigned i=0;i<VFS_IDENTITIES;i++) if (v->identities[i].volume==vol) {
         v->identities[i].valid=false; invalidate_pages(v,&v->identities[i]);
@@ -300,7 +304,15 @@ bool vfs_identity_busy(struct vfs *v, struct fat_volume *vol) {
 }
 static void identity_change(void *ctx, struct fat_volume *vol, const struct fat_entry *old,
                              const struct fat_entry *entry, enum fat_identity_change why) {
-    struct vfs *v=ctx; fs_lock_take(&v->identity_lock);
+    struct vfs *v=ctx;
+    /* The caller reserves this volume through publication. Description
+     * slots on it cannot close/reopen until this callback has returned. */
+    for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) {
+        struct vfs_description *d=&v->descriptions[i];
+        if (d->refs && d->node->volume==vol && d->node->entry.parent==old->parent &&
+            d->node->entry.index==old->index) cache_stream_cancel(&d->stream);
+    }
+    fs_lock_take(&v->identity_lock);
     struct vfs_file_identity *id=identity_find(v,vol,old);
     if (id) {
         if (why==FAT_ID_RENAME) { id->parent=entry->parent; id->index=entry->index; id->linked=true; }
@@ -509,6 +521,19 @@ static int release_description(struct vfs *v,struct vfs_description *d) {
     if (!d) return 0;
     int e=0;
     if (d->refs==1) {
+        if (d->stream.cache) {
+            /* Retain the closing slots/volume guard through retirement, but
+             * never hold namespace across an issued speculative command.
+             * Identified unrelated readers may pass this close phase. */
+            unsigned drive=d->node->drive;
+            struct vfs_node *previous=v->io_file[drive];
+            bool announce=(v->active&vfs_drive_mask(drive)) && !previous;
+            if (announce) v->io_file[drive]=d->node;
+            struct vfs_io_state io=vfs_io_begin_locked(v);
+            cache_stream_close(&d->stream);
+            vfs_io_end_locked(v,io);
+            if (announce) v->io_file[drive]=previous;
+        }
         for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) if (v->range_locks[i].description==d)
             memset(&v->range_locks[i],0,sizeof(v->range_locks[i]));
         /* Retain the slots until final-close callbacks finish their I/O. */
@@ -828,7 +853,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         d->io_active=true; d->refs++; v->readers[drive]++; uint64_t position=d->position;
         struct fat_entry entry=node->entry;
         vfs_unlock(v);
-        int e=fat_read(&view,&entry,position,buf,n,done);
+        int e=fat_read_stream(&view,&entry,position,buf,n,done,&d->stream);
         (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
         d->position+=*done; d->io_active=false; v->readers[drive]--;
         if (view.readonly_reason) {
@@ -863,6 +888,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     else if ((e=table_range_check(t,d->node,d,d->position,n))) { }
     else if (d->node->log_capacity) e=-FS_EBUSY;
     else {
+        cache_stream_cancel(&d->stream);
         struct fat_entry before=d->node->entry;
         t->vfs->io_file[d->node->drive]=d->node;
         e=VFS_IO(t->vfs,fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done;
@@ -894,7 +920,7 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
         uint64_t magnitude=off<0 ? (uint64_t)(-(off+1))+1 : (uint64_t)off;
         if (off<0 && magnitude>base) e=-FS_EINVAL;
         else if (off>=0 && magnitude>UINT64_MAX-base) e=-FS_EINVAL;
-        else { d->position=off<0 ? base-magnitude : base+magnitude; *position=d->position; }
+        else { cache_stream_cancel(&d->stream); d->position=off<0 ? base-magnitude : base+magnitude; *position=d->position; }
     }
     vfs_unlock(t->vfs); return e;
 }

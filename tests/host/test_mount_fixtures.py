@@ -95,6 +95,10 @@ volatile uint64_t g_ticks;
 static unsigned ata_calls, ata_lookups, sequence;
 static bool initialized;
 static void storage_timer(void *arg) { (void)arg; CHECK(false); }
+void ledger_snapshot(struct mm_ledger *out) {
+    memset(out,0,sizeof(*out)); out->zone[2].usable=28672;
+    out->zone[2].free=24576; out->high=2048;
+}
 int kwork_init(void) { CHECK(false); return -FS_EIO; }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
 { (void)n; (void)fn; (void)arg; (void)p; CHECK(false); return 0; }
@@ -109,8 +113,9 @@ void optical_service(struct storage *s,uint64_t now) { (void)s; (void)now; }
 void optical_start_service(struct storage *s) { (void)s; CHECK(false); }
 int fbdev_init(void) { CHECK(false); return 0; }
 int i8042_init(void) { return 0; }
-int biosvm_init(void) { CHECK(false); return 0; }
-int fwinput_adapter_init(void) { CHECK(false); return 0; }
+/* Safe boot selects the firmware input boundary; no device I/O here. */
+int biosvm_init(void) { return 0; }
+int fwinput_adapter_init(void) { return 0; }
 unsigned registry_count(void) { CHECK(false); return 0; }
 const struct resource *registry_get(unsigned i) { (void)i; CHECK(false); return 0; }
 void file_clock_start(int64_t epoch, bool rtc) { (void)epoch; CHECK(rtc); }
