@@ -159,7 +159,8 @@ Eight periods also exceed the original missed-service budget of
 `480 + 256 + 256 = 992` frames and ICH3's `256 + 256 + 256 = 768` frames.
 The nominal target applies before a measured scheduling gap increases the
 session lead. The measured 113 ms T23 gap still requires adaptive growth.
-Native player prefill is at most one period. `latency_frames` includes source,
+The first native player write is at most one period; subsequent turns may fill
+the 2048-frame source stream (F4-36). `latency_frames` includes source,
 transport and drain allowance. These targets describe normal low-lead service;
 an adapted lead covering a 134 ms scheduling gap necessarily exceeds them.
 Such a session must expose its lead and latency, never claim the low-latency
@@ -190,21 +191,41 @@ it before seek/close/replacement; no decoder handle has concurrent callers.
 The writer never holds a reservoir mutex across file I/O. The bounded stereo
 S16 ring holds 131072 frames (512 KiB, 2.731 s at 48 kHz); supported output
 rates must permit at least two seconds within that cap. Start after 100 ms
-of decoded PCM or EOF. Keep only 256 source frames queued in the device.
+of decoded PCM or EOF. F4-36 supersedes the original 256-frame device queue:
+limit only the first successful write to 256 frames, then write up to all free
+space whenever the 2048-frame stream is below 1792 frames.
 Retain submitted but not yet audible PCM in the same ring for exact pause
 replay; pause preserves decoded PCM. Seek/stop/track changes flush it.
 
 Use a separate 256 KiB stdio read-ahead buffer, installed before any stream
 operation and retained through fclose, for MP3, WAV and Ogg. Keep minimp3's
 small synchronization window so a bulk storage refill does not cause a
-256 KiB memmove on every MPEG frame. Yield between reader batches and after
-adapter reads. Decoder code and resampling arithmetic remain scalar.
+256 KiB memmove on every MPEG frame. Decode in batches of up to 4096 frames. Yield only above half-full; cached
+adapter reads no longer force a yield. Wait on `space` below one free batch,
+and signal when audible history retirement crosses that threshold. Submission
+moves PCM into retained history, so it does not itself release a ring slot.
+Decoder code and resampling arithmetic remain scalar.
 
 Position remains the device's audible source cursor (written minus
 latency), never the decoder cursor. A starved stream contributes the existing
 kernel silence; the writer submits no stale PCM or artificial source frames.
-Expose Buffering... and a bounded diagnostic (at most one per second), with
-an episode count in the close record. No kernel or stream ABI change.
+Expose Buffering... after 300 ms of continuous starvation; clear it after two
+seconds without starvation. Keep a bounded diagnostic (at most one per second)
+and an episode count in the close record. No kernel or stream ABI change.
+
+F4-36 publishes changed displayed fields at most ten times per second,
+coalescing steady progress to two publications per second. The view invalidates
+only changed title/status/time/list/mixer regions and changed seek-thumb pixels.
+The position label changes at whole seconds. Unchanged mixer polling is free.
+A protected `[music] level` record every five seconds of playing reports sampled
+reservoir min/mean/max, output reader frames/s, elapsed decode microseconds per
+output PCM frame (including I/O and preemption), successful writes/s, accepted
+bytes in the window, sampled device queue min/max, starvation episodes, and UI
+publications/renders. `ui_mps` and `repaint_mps` are milli-events per second
+(2000 means 2/s). UI render counts come from the actual paint callback and
+include input/dialog redraws. Counters share the reservoir mutex, except the
+UI counters which are atomic. See [Music research and host model](music-player.md#f4-36-contention-research-and-implementation-decision-2026-10-19)
+for the primary sources and the limits of host scheduling evidence.
 
 ### Volume and persistence
 

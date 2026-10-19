@@ -75,14 +75,22 @@ static void quit(void *ctx) { struct music_main *m=ctx; close_request(&m->window
 static void message(struct du_window *w, const struct desk_packet *p, void *ctx)
 {
     (void)w; struct music_main *m=ctx;
-    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_MIXER_SET && p->serial==m->sent) { m->app.waiting=0; m->app.local_error=p->result; }
+    if (p->opcode==DESK_TASK_RESULT && p->request==DESK_MIXER_SET && p->serial==m->sent) {
+        m->app.waiting=0; m->app.local_error=p->result; music_update(&m->app,&m->app.snapshot);
+    }
+}
+static void painted(struct du_ui *u, void *ctx)
+{
+    (void)u; struct music_app *a=ctx; struct music_main *m=a->backend->ctx;
+    music_runtime_repaint(m->runtime);
 }
 static void idle(void *ctx)
 {
     struct music_main *m=ctx;
     if (m->closing && music_runtime_done(m->runtime)) { du_window_close(&m->window); return; }
     uint64_t tick=du_now(); if (tick-m->last_poll<100000000ull) return; m->last_poll=tick;
-    music_runtime_snapshot(m->runtime,&m->snapshot); music_update(&m->app,&m->snapshot);
+    music_runtime_snapshot(m->runtime,&m->snapshot);
+    if (m->snapshot.publication!=m->app.snapshot.publication) music_update(&m->app,&m->snapshot);
 }
 int main(int argc, char **argv)
 {
@@ -100,6 +108,7 @@ int main(int argc, char **argv)
     }
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
     music_attach(&m->app,&m->ui,&m->backend);
+    m->ui.paint=painted;
     if (path) {
         struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path);
         m->app.local_error=strlen(path)>=MUSIC_PATH ? -ENAMETOOLONG : send(m,&c);

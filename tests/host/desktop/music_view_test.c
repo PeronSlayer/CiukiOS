@@ -15,8 +15,21 @@ int main(int argc, char **argv)
     strcpy(s.playlist.path[0],"/Documents/Music/First tone.wav"); strcpy(s.playlist.path[1],"/Documents/Music/Ciuki theme.ogg");
     strcpy(s.playlist.path[2],"/Documents/Music/Evening.mp3"); s.playlist.count=3;
     music_update(&app,&s); du_render(&ui); at_save(argv[1],"music-playing",&ui);
+    music_update(&app,&s); assert(!ui.dirty); /* Identical snapshots are free. */
+    s.position++; music_update(&app,&s); assert(!ui.dirty); /* Same second/pixel. */
+    struct du_event poll={.type=DU_EV_TICK,.id=M_POLL}; music_event(&ui,&poll,&app);
+    assert(!ui.dirty); /* Unchanged mixer polling must not repaint. */
+    s.position+=24000; music_update(&app,&s);
+    assert(ui.dirty==3 && ui.invalid.y==du_get(&ui,M_SEEK)->box.y &&
+           ui.invalid.h==du_get(&ui,M_SEEK)->box.h);
+    du_render(&ui);
+    static uint32_t partial[560*420]; memcpy(partial,pixels,sizeof(partial));
+    ui.dirty=1; du_render(&ui); assert(!memcmp(partial,pixels,sizeof(partial)));
     s.buffering=1; music_update(&app,&s);
-    assert(strstr(du_get(&ui,M_STATUS)->text,"Buffering...")); s.buffering=0;
+    assert(strstr(du_get(&ui,M_STATUS)->text,"Buffering..."));
+    assert(ui.dirty==3 && ui.invalid.y==du_get(&ui,M_STATUS)->box.y);
+    du_render(&ui); s.buffering=0; s.position=48000*23;
+
     s.state=MUSIC_LOADING; music_update(&app,&s);
     assert(strstr(du_get(&ui,M_STATUS)->text,"Loading..."));
     du_render(&ui); at_save(argv[1],"music-loading",&ui);

@@ -101,7 +101,7 @@ static void playlists(const char *fixtures, const char *scratch)
     assert(music_playlist_append(p,"/one-too-many.mp3")==-E2BIG);
     free(p); free(q);
 }
-struct sink { uint64_t consumed, accepted, now; unsigned queued, opens, closes; int blocked, error; int16_t last[34]; };
+struct sink { uint64_t consumed, accepted; _Atomic uint64_t now; unsigned queued, opens, closes; int blocked, error; int16_t last[34]; };
 static int sink_open(void *ctx, unsigned *rate) { struct sink *s=ctx; if (s->error) return s->error; s->opens++; s->consumed=s->accepted=s->queued=0; *rate=48000; return 0; }
 static int sink_write(void *ctx, const int16_t *pcm, unsigned n) { struct sink *s=ctx; if (s->blocked) return -EAGAIN; if (n>17) n=17; memcpy(s->last,pcm,n*2*sizeof(*pcm)); s->queued+=n; s->accepted+=n; return (int)n; }
 static int sink_status(void *ctx, uint64_t *consumed, unsigned *queued, uint64_t *tail)
@@ -130,15 +130,16 @@ static void engine(const char *fixtures, const char *scratch)
     music_player_init(p,&o,NULL,NULL); struct music_command c={.action=MUSIC_OPEN}; path(c.path,fixtures,"tone.ogg");
     assert(!music_player_command(p,&c) && p->view.state==MUSIC_LOADING && p->view.playlist.count==1);
     ready(p);
-    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(s.queued<=256); }
+    for (unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(s.queued<=2048); }
     assert(p->view.reservoir_frames>=4800 && !s.accepted && !p->view.position);
     s.blocked=0;
-    for(unsigned i=0;i<100;i++) { assert(!music_player_pump(p)); assert(s.queued<=256); }
-    assert(s.queued==256); /* the device lead excludes the decoded reservoir */
-    tick(p,&s); assert(p->view.position==256);
+    for(unsigned i=0;i<200;i++) { assert(!music_player_pump(p)); assert(s.queued<=2048); }
+    assert(s.queued>=1792); /* device lead excludes the decoded reservoir */
+    unsigned lead=s.queued;
+    tick(p,&s); assert(p->view.position==lead);
     int16_t pending[34]; memcpy(pending,s.last,sizeof(pending));
     c.action=MUSIC_PAUSE; assert(!music_player_command(p,&c));
-    assert(p->view.state==MUSIC_PAUSED && !p->device && p->view.reservoir_frames>0 && p->view.position==256);
+    assert(p->view.state==MUSIC_PAUSED && !p->device && p->view.reservoir_frames>0 && p->view.position==lead);
     uint64_t paused=p->view.position; music_player_pump(p); assert(p->view.position==paused);
     c.action=MUSIC_PLAY; assert(!music_player_command(p,&c) && p->device);
     assert(!music_player_pump(p) && !memcmp(s.last,pending,sizeof(pending)));

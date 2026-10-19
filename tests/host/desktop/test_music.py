@@ -88,6 +88,12 @@ class MusicTests(unittest.TestCase):
             records = [line for line in result.stderr.splitlines() if line.startswith('[music] starve ')]
             self.assertGreaterEqual(len(records), 2)
             self.assertLessEqual(len(records), 3)
+            levels = [line for line in result.stderr.splitlines() if line.startswith('[music] level ')]
+            self.assertGreaterEqual(len(levels), 4)
+            for record in levels:
+                self.assertRegex(record, r'ms=\d+ reservoir=\d+/\d+/\d+ reader_fps=\d+ decode_us_frame=\d+\.\d{3} '
+                                 r'writes_ps=\d+ bytes=\d+ queued=\d+/\d+ starvations=\d+ ui_mps=\d+ repaint_mps=\d+$')
+            print('Real-codec telemetry:', levels[0])
             self.assertIn('[music] close starvations=1', result.stderr)
             self.assertTrue(all(len(line) <= 240 for line in result.stderr.splitlines()))
 
@@ -111,6 +117,25 @@ class MusicTests(unittest.TestCase):
     def test_engine(self):
         self.harness('engine', ['apps/music/decoder.c', 'apps/music/vorbis.c', 'apps/music/playlist.c', 'apps/music/player.c',
                                'apps/music/runtime.c', 'tests/host/desktop/music_test.c'], ROOT/'tests/fixtures/music')
+
+    def test_pump_publication_and_debounce(self):
+        acc = load('music_policy_acc', ROOT/'tests/host/desktop/test_accessories.py')
+        self.harness('policy', ['apps/music/decoder.c', 'apps/music/vorbis.c', 'apps/music/playlist.c',
+                               'apps/music/player.c', 'apps/music/view.c', 'apps/accessories/acc.c',
+                               *acc.TOOLKIT, 'tests/host/desktop/music_policy_test.c'])
+
+    def test_contention_model(self):
+        model = load('music_contention', ROOT/'tests/host/desktop/music_contention_model.py')
+        for scale in (10, 30):
+            before = model.run(legacy=True, cost_us=0.021393, scale=scale)
+            after = model.run(legacy=False, cost_us=0.021393, scale=scale)
+            self.assertGreater(before['starvations_per_minute'], 900)
+            self.assertEqual(before['reservoir_min'], 0)
+            self.assertLess(before['position_seconds'], 30)
+            self.assertEqual(after['starvations_per_minute'], 0)
+            self.assertEqual(after['device_gaps_per_minute'], 0)
+            self.assertLess(abs(after['position_seconds'] / after['wall_seconds'] - 1), .01)
+            self.assertLessEqual(after['repaints_per_second'], 2)
 
     def test_native_adapters(self):
         self.harness('native', ['tests/host/desktop/music_native_test.c', 'apps/desktop/protocol.c'])

@@ -61,13 +61,15 @@ current backend's output rate is 48000. Native Music Player queries caps and
 resamples every source rate to that output rate before submitting S16 stereo.
 Integer rational interpolation keeps phase across decode blocks. The stream
 has no pause opcode: pause discards its queued audio by closing the handle and
-repositions the decoder to the consumed-frame position. Stop and seek also
+replays retained PCM from the audible-frame position. Stop and seek also
 close the handle, preventing stale samples from surviving a transition.
 Master volume uses read-only `MIXER_GET_MASTER` and delegated desktop
 `DESK_MIXER_SET`, as Volume Control already does; it never opens a privileged
 mixer control handle.
 
-A single worker owns decoders, playlist filesystem operations, and audio I/O.
+A command/pump worker owns playlist filesystem operations and audio I/O.
+A normal-priority reader exclusively owns decoding while active; commands join
+it before seeking or replacing a decoder.
 The UI sends bounded commands and reads snapshots under a short mutex; no
 file parsing, decoding, directory traversal, or audio drain runs on the UI
 thread. PCM pending storage is a bounded ring. Shutdown/close sets a cancellation
@@ -81,11 +83,12 @@ and their shortcuts; retain those controls.
 
 Implementation limits: Vorbis uses a fixed 1 MiB codec arena (oversized setup
 headers fail rather than growing the heap); minimp3 keeps a 16 KiB compressed
-lookahead and a roughly 17 KiB decode frame on the SDK default 1 MiB worker
-stack. The PCM ring is 4096 stereo frames (16 KiB). Playlist text imports
+lookahead and a roughly 17 KiB decode frame on the SDK default 1 MiB decoder-thread
+stack. The PCM ring is 131072 stereo frames (512 KiB), including retained
+submitted history for exact pause replay. Playlist text imports
 are capped at 140000 bytes and folder recursion at eight levels; FAT32 has
 no symlinks. Folder imports sort local audio paths, while M3U imports retain
-entry order. Pause discards pending stream frames; already mixed DMA audio
+entry order. Pause drops the native stream queue and retains its PCM for replay; already mixed DMA audio
 may still play for the bounded transport tail, as with system sounds.
 
 Files double-click launches a new player for audio/M3U paths. Its folder
@@ -100,3 +103,38 @@ launch-owned `desk_client.mixer`, assigned only to `/Programs/mixer` in
 ordinary clients still receive EPERM and requests during shutdown receive
 EBUSY. This is necessary for the directive's master-volume control and keeps
 the kernel control descriptor inside the desktop.
+
+## F4-36 contention research and implementation decision (2026-10-19)
+
+Before implementation, rechecked the pinned [minimp3 README](https://raw.githubusercontent.com/lieff/minimp3/ea99364f61c14656440e8d77e9c233ccf3124633/README.md)
+and [decoder source](https://raw.githubusercontent.com/lieff/minimp3/ea99364f61c14656440e8d77e9c233ccf3124633/minimp3.h),
+[stb_vorbis v1.22](https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_vorbis.c),
+and upstream newlib [setvbuf](https://raw.githubusercontent.com/mirror/newlib-cygwin/master/newlib/libc/stdio/setvbuf.c).
+The scalar MP3 configuration already defines `MINIMP3_ONLY_MP3` and
+`MINIMP3_NO_SIMD`, returns S16 directly, and uses integer output interpolation.
+Keep those settings and codec provenance. Internal minimp3 synthesis still
+uses floating point; S16 output does not make it a fixed-point decoder.
+Vorbis short-interleaved output and exclusive decoder ownership stay intact.
+Keep read-ahead installed before I/O and alive through fclose. Remove adapter
+yields: the reader can decide whether to yield from reservoir occupancy,
+whereas an unconditional yield after a cached stdio read cannot.
+
+The pre-change scalar benchmark at -O2 on a synthetic 48 kHz MP3 measured
+24.645 microseconds per MPEG frame (1152 output PCM frames). The deterministic
+single-CPU model in `tests/host/desktop/music_contention_model.py` uses that
+cost, a higher-priority virtual competitor occupying 10 ms of every 20 ms,
+and explicit normal-reader redispatch sensitivity. Cost x10/x30 alone does
+not explain an empty reservoir. With one normal quantum between dispatches,
+the shallow queue advances about 40 s in 60 s while the reservoir stays full.
+With three normal quanta after each reader yield, the old 1024-frame batches
+advance about 21 s in 60 s and repeatedly empty the reservoir. This models a
+scheduling hypothesis, not measured T23 scheduler behavior; an empty ring at
+every pump turn is not reproduced (a turn submitting PCM has nonempty input).
+
+Decision: keep the existing 2 ms pump timer, fill the 2048-frame stream when
+it falls below 1792 frames, and limit only the first successful submission
+to 256 frames. Retain audible-history accounting for exact pause replay.
+Decode up to 4096 frames per batch, yield only above half-full, and wake the
+reader when audible retirement frees a complete batch. Publishing PCM does
+not block or rendezvous with the pump. Existing timed pumping needs no new
+kernel readiness feature.

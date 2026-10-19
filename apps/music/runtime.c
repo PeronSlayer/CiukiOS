@@ -9,6 +9,7 @@ struct music_runtime {
     pthread_t thread; pthread_mutex_t lock; pthread_cond_t changed;
     struct music_command commands[MUSIC_COMMANDS]; unsigned head, count;
     atomic_int closing; int done;
+    uint64_t last_publish;
     struct music_snapshot snapshot;
     struct music_player player;
 };
@@ -16,8 +17,31 @@ static int cancel(void *ctx)
 {
     struct music_runtime *r=ctx; return atomic_load(&r->closing);
 }
+static int displayed_changed(const struct music_snapshot *a, const struct music_snapshot *b)
+{
+    if (a->state!=b->state || a->error!=b->error || a->current!=b->current || a->rate!=b->rate ||
+        a->revision!=b->revision || a->playlist.count!=b->playlist.count || a->duration!=b->duration ||
+        (!b->error && a->buffering!=b->buffering) || (b->error && strcmp(a->error_path,b->error_path))) return 1;
+    if (b->rate && a->position/b->rate!=b->position/b->rate) return 1;
+    return b->duration && a->position*1000/b->duration!=b->position*1000/b->duration;
+}
 static void publish(void *ctx, const struct music_snapshot *view)
-{ struct music_runtime *r=ctx; pthread_mutex_lock(&r->lock); r->snapshot=*view; pthread_mutex_unlock(&r->lock); }
+{
+    struct music_runtime *r=ctx;
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
+    uint64_t now=(uint64_t)t.tv_sec*1000000000+t.tv_nsec;
+    pthread_mutex_lock(&r->lock);
+    /* Coalesce steady progress to two frames/s. State/buffering changes can
+     * publish at 10 Hz; unchanged diagnostic counters never wake the view. */
+    uint64_t interval=view->state==MUSIC_PLAYING && r->snapshot.state==MUSIC_PLAYING &&
+        !view->buffering && !r->snapshot.buffering ? 500000000 : 100000000;
+    if ((!r->snapshot.publication || now-r->last_publish>=interval) && displayed_changed(&r->snapshot,view)) {
+        unsigned publication=r->snapshot.publication+1;
+        r->snapshot=*view; r->snapshot.publication=publication ? publication : 1;
+        r->last_publish=now; atomic_fetch_add(&r->player.ui_publishes,1);
+    }
+    pthread_mutex_unlock(&r->lock);
+}
 static void *worker(void *ctx)
 {
     struct music_runtime *r=ctx;
@@ -29,11 +53,12 @@ static void *worker(void *ctx)
         if (closing) break;
         if (have) (void)music_player_command(&r->player,&c);
         (void)music_player_pump(&r->player);
+        publish(r,&r->player.view);
         pthread_mutex_lock(&r->lock);
-        r->snapshot=r->player.view;
         if (!r->closing && !r->count) {
-            if (r->snapshot.state==MUSIC_PLAYING || r->snapshot.state==MUSIC_LOADING) {
-                struct timespec until; clock_gettime(CLOCK_REALTIME,&until); until.tv_nsec+=2000000;
+            int playing=r->player.view.state==MUSIC_PLAYING || r->player.view.state==MUSIC_LOADING;
+            if (playing || displayed_changed(&r->snapshot,&r->player.view)) {
+                struct timespec until; clock_gettime(CLOCK_REALTIME,&until); until.tv_nsec+=playing ? 2000000 : 100000000;
                 if (until.tv_nsec>=1000000000) { until.tv_sec++; until.tv_nsec-=1000000000; }
                 pthread_cond_timedwait(&r->changed,&r->lock,&until);
             } else pthread_cond_wait(&r->changed,&r->lock);
@@ -68,6 +93,8 @@ int music_runtime_send(struct music_runtime *r, const struct music_command *c)
 }
 void music_runtime_snapshot(struct music_runtime *r, struct music_snapshot *s)
 { pthread_mutex_lock(&r->lock); *s=r->snapshot; pthread_mutex_unlock(&r->lock); }
+void music_runtime_repaint(struct music_runtime *r)
+{ atomic_fetch_add(&r->player.ui_repaints,1); }
 void music_runtime_close(struct music_runtime *r)
 { pthread_mutex_lock(&r->lock); r->closing=1; r->count=0; pthread_cond_signal(&r->changed); pthread_mutex_unlock(&r->lock); }
 int music_runtime_done(struct music_runtime *r)
