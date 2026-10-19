@@ -60,7 +60,7 @@ static int write_dev(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf
     if (f->assert_io_unlocked) fs_assert_io_unlocked();
     if (f->cut) return -FS_EIO;
     for (unsigned i=0;i<n;i++) {
-        f->writes++; if (lba+i==f->fail_write) return -FS_EIO;
+        f->writes++; if (f->writes==f->fail_write_call || lba+i==f->fail_write) return -FS_EIO;
         const uint8_t *b=(const uint8_t *)buf+i*512;
         if (lba+i==f->torn_lba) { if ((e=wr(f,lba+i,b,f->torn_bytes))) return e; f->cut=true; return -FS_EIO; }
         if (f->reorder) {
@@ -75,7 +75,7 @@ static int write_dev(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf
     return 0;
 }
 static int flush_dev(struct blkdev *d) {
-    struct fake *f=d->ctx; if (f->cut || f->fail_flush) return -FS_EIO;
+    struct fake *f=d->ctx; f->flush_calls++; if (f->cut || f->fail_flush || f->flush_calls==f->fail_flush_call) return -FS_EIO;
     if (f->assert_io_unlocked) fs_assert_io_unlocked();
     int e=drain(f,false); if (e) return e;
     f->flushes++; return event(f,'B',0);
@@ -93,7 +93,8 @@ int fake_open(struct fake *f, const char *path) {
 void fake_close(struct fake *f) { close(f->fd); free(f->undo); free(f->pending); free(f->trace); }
 void fake_reset(struct fake *f) {
     for (unsigned i=0;i<f->undo_count;i++) if (pwrite(f->fd,f->undo[i].data,512,(off_t)(f->undo[i].lba*512))!=512) abort();
-    f->undo_count=f->pending_count=0; f->events=f->writes=f->reads=f->flushes=0;
+    f->undo_count=f->pending_count=0; f->events=f->writes=f->reads=f->flushes=f->flush_calls=0;
+    f->fail_write_call=f->fail_flush_call=0;
     f->cut_at=0; f->cut=false; f->fail_flush=false; f->dev.quarantined=false;
     f->fail_read=f->fail_write=f->torn_lba=UINT64_MAX;
 }

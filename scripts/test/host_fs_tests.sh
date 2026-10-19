@@ -55,6 +55,15 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
+# F1-84: common file/page identities and all native/Win32/DOS lock pairs.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_publication.c -o build/host/fs/test_publication
+for bits in 12 16 32; do
+    build/host/fs/test_publication "build/host/fs/fat${bits}.img"
+done
 # C3 replay, including the former same-volume ticket as negative control.
 clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
@@ -128,6 +137,7 @@ for bits in 12 16 32; do
     python3 tests/host/fs/verify.py build/host/fs/work.img
     rm build/host/fs/work.img
 done
+python3 tests/host/fs/test_crash_classifier.py
 python3 tests/host/fs/classify_crashes.py
 python3 - <<'PY'
 from pathlib import Path

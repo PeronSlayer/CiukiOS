@@ -40,9 +40,13 @@ static struct cache_device *device(struct block_cache *c, struct blkdev *d) {
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) return &c->devices[i];
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (!c->devices[i].dev) {
         if (c->device_epoch==UINT32_MAX) return 0;
-        c->devices[i].dev=d; c->devices[i].epoch=++c->device_epoch; return &c->devices[i];
+        c->devices[i].dev=d; c->devices[i].generation=d->media_generation; c->devices[i].epoch=++c->device_epoch; return &c->devices[i];
     }
     return 0;
+}
+static bool current(struct cache_device *s, struct blkdev *d, uint32_t epoch, uint32_t generation) {
+    return s && s->dev==d && s->epoch==epoch && s->generation==generation &&
+        d->media_generation==generation && !d->quarantined;
 }
 static int remember(struct block_cache *c, struct blkdev *d, int e) {
     struct cache_device *s=device(c,d);
@@ -561,6 +565,7 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
     fs_lock_take(&c->lock); struct cache_device *s=device(c,d); struct cache_block *b;
     int e=!s ? -FS_ENOSPC : s->error;
     uint32_t generation=d->media_generation, epoch=s ? s->epoch : 0;
+    if (!e && !current(s,d,epoch,generation)) e=-FS_EIO;
     if (!e && c->writer_online && s->dirty_bytes>2*c->dirty_budget) {
         uint32_t start=fs_now_ms(); c->writer_waits++;
         uint32_t progress=start, previous=s->dirty_bytes; bool assist=false;
@@ -593,7 +598,18 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
         if (!b->dirty) unhash(c,b);
         e=-FS_EIO;
     }
+    /* get/throttle may sleep. Do not publish bytes into a captured barrier.
+     * Reacquire the slot after waiting: it may have been evicted meanwhile. */
+    while (!e && s->barrier_active) {
+        fs_event_wait(&c->changed,&c->lock);
+        if (!current(s,d,epoch,generation)) e=-FS_EIO;
+        else if (s->error) e=s->error;
+        else if (!s->barrier_active) e=get(c,d,lba,false,&b,0);
+    }
+    if (!e && !current(s,d,epoch,generation)) e=-FS_EIO;
+    if (!e && s->accepted==UINT64_MAX) e=remember(c,d,-FS_EIO);
     if (!e) {
+        s->accepted++; s->buffered_completions++;
         memcpy(b->data,buf,d->sector_size);
         if (!b->dirty) {
             b->since=fs_now_ms();
@@ -718,10 +734,11 @@ static int flush_device(struct block_cache *c, struct blkdev *d) {
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
     if (s->error) return s->error;
     if (c->refresh) c->refresh(c->refresh_ctx,d);
+    if (!current(s,d,s->epoch,s->generation)) return -FS_EIO;
     if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
     if (d->write_cache_state!=BLKDEV_CACHE_DISABLED) {
         uint32_t generation=d->media_generation,epoch=s->epoch;
-        uint64_t frontier=s->frontier++;
+        uint64_t frontier=s->frontier;
         fs_lock_drop(&c->lock); int e=blkdev_request(d,BLK_FLUSH,0,0,0,BLK_BACKGROUND,frontier); fs_lock_take(&c->lock);
         if (c->refresh) c->refresh(c->refresh_ctx,d);
         if (s->epoch!=epoch || generation!=d->media_generation) return -FS_EIO;
@@ -730,19 +747,71 @@ static int flush_device(struct block_cache *c, struct blkdev *d) {
     }
     return 0;
 }
-static int barrier(struct block_cache *c, struct blkdev *d) {
+static void completion_record(struct cache_device *s, struct cache_completion *out) {
+    if (out) *out=(struct cache_completion){.accepted=s->accepted,.durable=s->durable,
+        .group=s->frontier,.buffered_completions=s->buffered_completions,
+        .durable_completions=s->durable_completions,.generation=s->generation,
+        .epoch=s->epoch,.error=s->error,.incomplete=s->durability_lost || s->durable<s->accepted};
+}
+static int barrier(struct block_cache *c, struct blkdev *d, struct cache_completion *out) {
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
-    if (s->error) return s->error;
-    if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
+    uint32_t epoch=s->epoch,generation=s->generation;
+    while (s->barrier_active && current(s,d,epoch,generation)) fs_event_wait(&c->changed,&c->lock);
+    if (!current(s,d,epoch,generation)) return -FS_EIO;
+    if (s->error) { completion_record(s,out); return s->error; }
+    if (!blkdev_durable(d)) return remember(c,d,-FS_EROFS);
+    s->barrier_active=true;
+    uint64_t version=s->accepted; /* finite: write admission is frozen */
+    completion_record(s,out);
+    int e=0;
     while (s->dirty_bytes) {
-        uint32_t flushed=0; int e=write_batch(c,d,&flushed); if (e) return e;
+        uint32_t flushed=0; e=write_batch(c,d,&flushed); if (e) break;
+        if (!current(s,d,epoch,generation)) { e=-FS_EIO; break; }
         if (!flushed) fs_event_wait(&c->changed,&c->lock);
+        if (!current(s,d,epoch,generation)) { e=-FS_EIO; break; }
     }
-    return flush_device(c,d);
+    if (!e) e=flush_device(c,d);
+    if (current(s,d,epoch,generation)) {
+        if (!e) { s->durable=version; s->durable_completions++; }
+        else s->durability_lost=true;
+        s->barrier_active=false; completion_record(s,out);
+    } else { e=-FS_EIO; if (out) { out->error=e; out->incomplete=true; } }
+    fs_event_wake(&c->changed); return e;
 }
-int cache_barrier(struct block_cache *c, struct blkdev *d) {
-    fs_lock_take(&c->lock); int e=barrier(c,d); fs_lock_drop(&c->lock); return e;
+int cache_barrier_record(struct block_cache *c, struct blkdev *d, struct cache_completion *out) {
+    if (out) memset(out,0,sizeof(*out));
+    fs_lock_take(&c->lock); int e=barrier(c,d,out);
+    if (out && e) { out->error=e; out->incomplete=true; }
+    fs_lock_drop(&c->lock); return e;
+}
+int cache_barrier(struct block_cache *c, struct blkdev *d) { return cache_barrier_record(c,d,0); }
+int cache_completion(struct block_cache *c, struct blkdev *d, struct cache_completion *out) {
+    if (!out || !d) return -FS_EINVAL;
+    fs_lock_take(&c->lock); struct cache_device *s=device(c,d);
+    int e=s ? 0 : -FS_ENOSPC;
+    if (s) { completion_record(s,out); if (!current(s,d,s->epoch,s->generation)) { out->error=-FS_EIO; out->incomplete=true; e=-FS_EIO; } }
+    fs_lock_drop(&c->lock); return e;
+}
+int cache_group_begin(struct block_cache *c, struct blkdev *d, uint64_t *group) {
+    if (!d || !group) return -FS_EINVAL;
+    fs_lock_take(&c->lock); struct cache_device *s=device(c,d);
+    int e=s ? 0 : -FS_ENOSPC;
+    if (!e) {
+        uint32_t epoch=s->epoch,generation=s->generation;
+        while (s->barrier_active && current(s,d,epoch,generation)) fs_event_wait(&c->changed,&c->lock);
+        if (!current(s,d,epoch,generation)) e=-FS_EIO;
+        else if (s->error) e=s->error;
+        else if (s->frontier==UINT64_MAX) e=remember(c,d,-FS_EIO);
+        else *group=++s->frontier;
+    }
+    fs_lock_drop(&c->lock); return e;
+}
+void cache_media_lost(struct block_cache *c, struct blkdev *d) {
+    fs_lock_take(&c->lock); struct cache_device *s=device(c,d);
+    if (s) { s->durability_lost=true; if (!s->error) s->error=-FS_EIO; }
+    fs_lock_drop(&c->lock);
+    cache_invalidate(c,d,false);
 }
 bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
     return __atomic_load_n(&c->writeback_pending,__ATOMIC_ACQUIRE) &&
@@ -812,7 +881,7 @@ void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
     fs_event_wake(&c->changed);
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) {
         if (c->device_epoch==UINT32_MAX) fs_panic("cache epoch exhausted");
-        c->devices[i].epoch=++c->device_epoch;
+        c->devices[i].epoch=++c->device_epoch; c->devices[i].barrier_active=false;
         if (forget) memset(&c->devices[i],0,sizeof(c->devices[i]));
     }
     fs_lock_drop(&c->lock);

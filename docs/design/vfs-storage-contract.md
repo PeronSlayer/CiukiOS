@@ -746,3 +746,137 @@ After commit, a temporary sparse FAT32 host fixture with specification BPBs
 is checked by fsck.fat and COPY.BIN is independently extracted/compared with
 mtools, then both temporary files are removed. This host timing model is not
 physical timing evidence.
+
+## Publication groups
+
+F1-84 research (2026-10-19): read the primary [DDK IFSMgr ring-0 I/O
+interface](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM)
+(P10), [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+(P23, sections 4, 5 and 7), and Mitchell's [Inside the Windows 95 File
+System](https://pdfcoffee.com/inside-the-windows95-file-system-3-pdf-free.html)
+(P26, VFAT and VCACHE chapters). P10 distinguishes context-owned record
+locks and file handles. P23 specifies allocation and validates LFN ordinals
+and checksums; FSInfo is advisory. Mitchell describes client-keyed cache
+blocks, held/dirty blocks and memory-manager cooperation. None establishes
+a complete asynchronous power-loss publication protocol for Windows 98.
+The P29/P30 closure in `win98-class-resource-management.md` confirms commit
+semantics and an optional removable write-behind setting, without a universal
+installed default. Decision: preserve synchronous FAT barriers and the owner's
+conservative removable write-through policy. No asynchronous default switch,
+on-disk format change or journal is justified by these sources.
+
+Groups carry increasing numbers within a mounted volume and device generation.
+Ordinary growth initializes data, constructs a detached chain, publishes its
+link, publishes directory ownership/size, then updates FSInfo. Delete removes
+the owning entry before reclamation; cross-directory rename removes the source
+before publishing the destination. Existing COW/directory allocation can build
+a detached chain before initializing its data, with both durable before an
+owning entry/link is published. Clean flags keep their per-copy barriers.
+Each group records start, stable completion or failure; transport requests use
+the existing f1-83 frontier field. A barrier freezes only that device's write
+admission and captures the accepted version. It drains a finite set of dirty
+versions and issued writes, then requires a qualified flush or verified disabled
+hardware cache. New writes wait without namespace/cache locks and cannot extend
+this capture. Reads and other devices continue. This conservative admission
+protocol deliberately retains the synchronous throughput limitation.
+
+`cache_write` acknowledges buffered bytes; `cache_barrier_record` acknowledges
+stable bytes and returns accepted/durable versions, group, media generation,
+cache epoch, counts and incomplete/error state. A background write is not a
+successful durable barrier record. `fat_commit` (and native fsync), explicit
+sync, durable removal and shutdown use these barriers. Errors remain sticky
+per device. Current ordinary FAT writes already include the durable publication
+barriers, including on removable media. Surprise removal records incomplete
+durability, cancels physical queued work and expires aliases; it cannot flush
+absent media or retire DMA pins. f1-83/f0-43 retain issued transport/pin ownership
+until stop/completion proof. Replacement media require a new cache epoch.
+
+## Locks
+
+An LFN and its validated 8.3 alias resolve to the same owning short-entry
+location and node. Explicit share masks deny read, write, both or neither;
+checks are bidirectional. DOS compatibility modes retain their existing
+read-only exception and critical/share-error distinction. Owner identity is
+the pair `(personality, context id)`; numeric PID/PSP equality across native,
+Win32 and DOS grants no privilege. `vfs_table_set_owner` registers a context
+before it opens files; unregistered native tables have distinct live-table
+contexts. The DOS bridge can adopt this interface without a DOS
+API change in this directive. Existing untyped owner release is confined to
+the native owner namespace; new clients use `vfs_release_lock_owner`.
+
+Range locks are mandatory, half-open intervals. Read, write and truncate
+check overlaps, including through the other personality's ordinary file path.
+Only the owning context and description can unlock an exact claim; same-file
+independent opens do not bypass it. Duplicate/inherited handles share one
+description and position, with the caller's context retained for range claims.
+Closing/replacing a handle releases that context's claims on the description;
+final description release removes all remaining claims, and table destruction
+performs those closes. Typed owner-death release cannot clear another
+personality's equal-numbered context. Sharing lasts as long as an inherited
+open description. The existing DOS bridge owns its no-inherit open flag policy.
+
+## Mapping identity
+
+The bounded identity table assigns a never-reused file serial to a validated
+owning entry, shared by legacy nodes and native descriptions. Generation is
+the mount generation paired with the block-device media generation. A page
+key is `(volume generation, stable file serial, file-page index)`. Referenced
+file or page slots cannot be recycled. A new directory occupant receives a
+new serial; rename moves a retained identity, while unlink detaches its name.
+The native description pins the common identity through final close. Page
+references independently retain identity after close and block safe detach.
+Raw/external writes and removal expire identities and page aliases. Writes
+and truncate invalidate page metadata before changing bytes, including failed
+or partial operations. The current hook conservatively invalidates every
+page of the affected file, including a partial EOF page. This prepares the
+f0-47 integration; it allocates no mapping data pages and enables no native
+file-backed mmap feature.
+
+Before enabling file-backed mappings, f0-47 must bind data pages to this table
+and enforce the following protocol:
+
+- MAP_SHARED views and ordinary I/O see the same bytes across processes.
+  Subsector cache views share backing or flush/invalidate synchronously under
+  the volume's mutation reservation; two dirty copies are forbidden. A dirty
+  shared mapping must be reconciled before an ordinary read/write proceeds.
+- MAP_PRIVATE writes use private COW and never enter the file's dirty queue.
+  File changes invalidate shared aliases; private COW pages retain their
+  private contents, subject to the truncate/EOF access policy.
+- Populate the last page with file bytes and zero its tail. Tail writes beyond
+  EOF do not extend the file or become persistent. Access to a whole page past
+  current EOF fails; truncate revokes affected PTEs/TLBs and in-flight fills
+  before releasing storage. Extension zeros newly exposed bytes.
+- fsync captures dirty shared pages plus the required FAT dependency frontier,
+  writes them through the one cache protocol, and propagates sticky errors.
+  Close releases a descriptor; mappings and their file identity survive until
+  their final unmap. Closing a descriptor alone is not a durability operation.
+- Rename preserves mapping keys. An unlinked mapped file retains its chain
+  until the final descriptor/mapping reference; replacement cannot acquire
+  that old key. Existing chain-lifetime integration must be extended to mapping
+  references before enabling those mappings.
+- Raw writers must quiesce filesystem users, durably drain dirty state and
+  invalidate block and file-page aliases before proceeding. Detected external
+  writes expire existing identities; callers cannot keep using stale aliases.
+  Surprise removal cancels queued work and invalidates keys. Issued DMA pins
+  stay with transport until stop/completion proof; insertion gets a new epoch.
+
+These are implementation requirements for f0-47, not claims of mapped-data
+coherence tests in f1-84. Here the tests cover the metadata identity, reference
+lifetime and invalidation protocol through real FAT/VFS operations.
+
+F1-84 crash-diagnostic closure: the expanded append matrix can stop after a
+live tail is durable and before the larger directory size, leaving an owned
+excess chain. A shorter same-index rename can leave an old orphan LFN fragment
+or a new LFN checksum that does not match the still-old short name. These are
+existing recoverable publication outcomes, not permission for short owned
+chains or cross-links. Checked the primary dosfstools 4.2
+[`check_file`](https://github.com/dosfstools/dosfstools/blob/v4.2/src/check.c)
+and [LFN parser](https://github.com/dosfstools/dosfstools/blob/v4.2/src/lfn.c):
+the former distinguishes dropping excess clusters at unchanged EOF from
+shortening a file whose chain is too short; the latter discards unmatched LFN
+sets. The host classifier now recognizes only the exact new workload's
+multiline diagnostics, unchanged EOF and rounded cluster bound. Negative tests
+reject short-chain/data truncation, malformed/missing diagnostic context,
+unexpected names and any corrupt/cross-linked owner. Both independent FAT-copy
+ownership scans and production reboot validation remain mandatory; fsck runs
+with `-n` and never repairs these test inputs.

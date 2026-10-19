@@ -227,11 +227,17 @@ static void removable_namespace_tests(void)
     OK(storage_add_removable(s,&media[2].dev));CHECK(s->vfs.volumes[4] && s->vfs.drive_flags[4]==VFS_DRIVE_REMOVABLE);
     int fd=file_open(&supervisor,"/mnt/e/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);
     struct px_node *node=file_fd(&supervisor,fd)->node;px_retain(node);
+    struct vfs_page_identity *page;
+    OK(file_mapping_identity(file_fd(&supervisor,fd),0,&page));
+    uint64_t old_generation=page->key.generation;
     int legacy=vfs_open(&table,"E:/SHORT.BIN",VFS_READ,VFS_DENY_NONE,0);CHECK(legacy>=0);
     unsigned writes=media[2].writes,flushes=media[2].flushes;
     CHECK(storage_remove_removable(s,&media[2].dev,false)==-FS_EBUSY);
     CHECK(media[2].writes==writes && media[2].flushes==flushes);
     OK(storage_remove_removable(s,&media[2].dev,true));CHECK(!s->vfs.volumes[4]);
+    CHECK(!page->valid && !page->file->valid && s->volumes[4].fat.completion.incomplete);
+    CHECK(s->volumes[4].fat.completion.error==-FS_EIO);
+    vfs_page_put(&s->vfs,page);
     struct ciuki_stat stat;CHECK(namespace_stat(node,&stat)==-EIO);
     uint8_t bytes[512];size_t done;CHECK(vfs_read(&table,legacy,bytes,sizeof(bytes),&done)<0);
     CHECK(resolve_cwd(space,node,".")==-ENOENT);
@@ -240,6 +246,12 @@ static void removable_namespace_tests(void)
     media[2].dev.quarantined=false;
     OK(storage_add_removable(s,&media[2].dev));CHECK(s->vfs.volumes[5] && !s->vfs.volumes[4]);
     CHECK(namespace_stat(node,&stat)==-EIO); /* expired mount root is retained separately */
+    fd=file_open(&supervisor,"/mnt/f/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);
+    OK(file_mapping_identity(file_fd(&supervisor,fd),0,&page));
+    CHECK(page->valid && page->key.generation!=old_generation);
+    OK(file_close(&supervisor,fd));
+    CHECK(storage_remove_removable(s,&media[2].dev,false)==-FS_EBUSY);
+    vfs_page_put(&s->vfs,page);
     OK(storage_remove_removable(s,&media[2].dev,false));CHECK(!s->vfs.volumes[5]);
     px_release(node);
     namespace_stop(s,true);
@@ -571,7 +583,10 @@ static void latency_tests(void)
         latency_owners[0]=latency_owners[1]=0;
         px_release(r.slow.cwd); px_release(r.fast.cwd); free(r.slow.fds); free(r.fast.fds);
     }
-    OK(file_close(&supervisor,control)); OK(storage_remove_removable(s,&media[2].dev,false));
+    OK(file_close(&supervisor,control));
+    CHECK(storage_remove_removable(s,&media[2].dev,false)==-FS_EBUSY); /* retained E:/Scan cwd */
+    OK(vfs_chdir(&table,"E:/"));
+    OK(storage_remove_removable(s,&media[2].dev,false));
     OK(vfs_detach(&s->vfs,3));
     media[2].dev.media_generation=0;
     namespace_stop(s,true); fake_reset(&media[2]);

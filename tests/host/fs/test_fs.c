@@ -134,19 +134,25 @@ static void write_tests(struct fake *f) {
     mounted(f,false); OK(vfs_stat(&table,"C:/Target/Moved cluster.bin",&e)); CHECK(e.size==cb); unmounted();
     groups++; printf("PASS FAT%u write/4MiB/overwrite/truncate/dir-growth/collisions/rename/delete/shared-handles\n",vol.type);
 }
+static void publication_observe(void *,uint64_t,enum fat_publication_stage,char,int);
+static uint64_t publication_last;
 /* Small, mixed workload replayed with a new cache and VFS at EVERY cut. */
 static int crash_workload(struct fake *f) {
     int e=cache_init(&cache,2*1024*1024); if (e) return e;
     e=fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true);
     if (e || vol.readonly) { cache_destroy(&cache); return e ? e : -FS_EROFS; }
+    publication_last=0; vol.publication_observer=publication_observe;
     struct fat_entry a,b,file; size_t n;
     if (vol.type==12) vol.next_free=680;
     e=fat_create(&vol,vol.root,"Crash A",FAT_ATTR_DIR,&a);
     if (!e) e=fat_create(&vol,vol.root,"Crash B",FAT_ATTR_DIR,&b);
     if (!e) e=fat_create(&vol,a.first,"Crash file long.bin",0,&file);
-    if (!e) e=fat_write(&vol,&file,0,big,vol.spc*1024+300,&n);
+    if (!e) e=fat_write(&vol,&file,0,big,vol.spc*1536+300,&n); /* crosses FAT12's packed boundary with a nonsplit live tail */
     if (!e) e=fat_write(&vol,&file,19,big+19,30,&n);
+    if (!e) e=fat_write(&vol,&file,file.size,big,vol.spc*512,&n); /* live EOF-link group */
     if (!e) e=fat_rename(&vol,&file,b.first,"Renamed file.bin");
+    if (!e) e=fat_rename(&vol,&file,b.first,"R.bin"); /* shorter LFN at the same owning index */
+    if (!e) e=fat_rename(&vol,&a,b.first,"Moved directory"); /* ordered '..' publication */
     if (!e) e=fat_truncate(&vol,&file,17);
     if (!e) e=fat_remove(&vol,&file,false);
     if (!e) e=fat_unmount(&vol);
@@ -166,6 +172,12 @@ static void crash_fsck(struct fake *f, unsigned mode, unsigned cut, unsigned bit
     fclose(input); int status; CHECK(waitpid(child,&status,0)==child); CHECK(WIFEXITED(status));
     fprintf(log,"exit=%d\n",WEXITSTATUS(status)); fclose(log);
     CHECK(WEXITSTATUS(status)==0 || WEXITSTATUS(status)==1);
+}
+static unsigned publication_started[FAT_P_STAGES],publication_finished[FAT_P_STAGES];
+static void publication_observe(void *ctx,uint64_t group,enum fat_publication_stage stage,char event,int error) {
+    (void)ctx; CHECK(stage<FAT_P_STAGES && group);
+    if (event=='G') { CHECK(stage!=FAT_P_FSINFO || vol.type==32); CHECK(stage!=FAT_P_FLAGS || vol.type!=12); CHECK(group>publication_last); publication_last=group; publication_started[stage]++; }
+    if (event=='B') { CHECK(!error && group==publication_last); publication_finished[stage]++; }
 }
 static void crash_tests(struct fake *f) {
     f->undo_enabled=true; unsigned trials=0,divergent=0,lost=0,dirty=0;
@@ -192,6 +204,29 @@ static void crash_tests(struct fake *f) {
             cache_destroy(&cache); fake_reset(f); trials++;
         }
     }
+    /* Independent pre-issue failure at EVERY write/flush call, with reboot.
+     * Cuts above also cover uncertain post-issue completion and persistence. */
+    unsigned failures=0;
+    fake_reset(f); f->reorder=true; OK(crash_workload(f));
+    unsigned write_calls=f->writes,flush_calls=f->flush_calls;
+    for (unsigned kind=0;kind<2;kind++) for (unsigned call=1;call<=(kind ? flush_calls : write_calls);call++) {
+        fake_reset(f); if (kind) f->fail_flush_call=call; else f->fail_write_call=call;
+        CHECK(crash_workload(f)<0);
+        CHECK((kind ? f->flush_calls : f->writes)==call); /* no uncertain retry */
+        fake_power_loss(f);
+        struct scan_result scan=independent_scan(f->fd,0),second=independent_scan(f->fd,1);
+        CHECK(!scan.crosslinks && !scan.corrupt && !second.crosslinks && !second.corrupt);
+        OK(cache_init(&cache,2*1024*1024)); OK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true));
+        if (vol.readonly) CHECK(vol.ro_reasons&(FAT_RO_COPIES|FAT_RO_CORRUPT));
+        cache_destroy(&cache); failures++;
+    }
+    fake_reset(f);
+    CHECK(publication_started[FAT_P_DATA] && publication_started[FAT_P_CHAIN] && publication_started[FAT_P_LINK] &&
+          publication_started[FAT_P_DIRECTORY] && publication_started[FAT_P_DELETE] && publication_started[FAT_P_RENAME] && publication_started[FAT_P_RECLAIM]);
+    if (vol.type==32) CHECK(publication_started[FAT_P_FSINFO]);
+    for (unsigned stage=0;stage<FAT_P_STAGES;stage++) if (publication_started[stage])
+        printf("PUBLICATION FAT%u stage=%u starts=%u stable=%u\n",vol.type,stage,publication_started[stage],publication_finished[stage]);
+    printf("PASS FAT%u fail-every-call writes=%u flushes=%u trials=%u\n",vol.type,write_calls,flush_calls,failures);
     f->reorder=false; f->undo_enabled=false;
     groups++; printf("PASS FAT%u crash: cuts=%u modes=4 copies_diverged=%u lost=%u dirty=%u crosslinks=0 corrupt_owners=0\n",vol.type,trials,divergent,lost,dirty);
 }

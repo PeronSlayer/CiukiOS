@@ -28,6 +28,7 @@ struct file_description {
     struct file_description *next;
     struct px_node *node;
     struct audio_stream *audio;
+    struct vfs_file_identity *identity; /* common FAT identity retained through final close */
     bool mixer_control;
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
@@ -81,6 +82,8 @@ struct proc_object *file_fd_object(const struct process *, int32_t fd);
 struct file_description *file_fd(const struct process *, int32_t fd);
 struct file_description *file_description_new(uint32_t flags);
 int file_description_close(struct file_description *);
+/* Metadata reference only; does not enable mmap or create a dirty page copy. */
+int file_mapping_identity(struct file_description *, uint64_t page_index, struct vfs_page_identity **);
 int file_close(struct process *, int32_t fd);
 int file_dup(struct process *, int32_t fd, int32_t target, bool exact, uint32_t flags);
 int file_fcntl(struct process *, int32_t fd, uint32_t cmd, uint32_t arg);

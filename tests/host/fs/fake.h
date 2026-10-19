@@ -13,7 +13,8 @@ struct fake {
     size_t torn_bytes;
     unsigned read_delay_ms, read_calls, in_read;
     bool assert_io_unlocked;
-    unsigned events, writes, reads, flushes, cut_at, cut_mode;
+    unsigned events, writes, reads, flushes, flush_calls, cut_at, cut_mode;
+    unsigned fail_write_call, fail_flush_call;
     bool cut, reorder, fail_flush, undo_enabled;
     struct fake_sector *undo, *pending;
     unsigned undo_count, pending_count;

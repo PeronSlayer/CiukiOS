@@ -303,6 +303,7 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
             v->io=(struct blkdev){.read=volume_read,.write=volume_write,.capacity=p->count,.sector_size=512,.ctx=v};
             refresh_volume(v);
             r=fat_prepare_removable(&v->fat,&s->cache,&v->io,0,p->count);
+            v->fat.write_through=true;
         }
         v->writes_before_gate=v->writes;
         if (!r && (s->stopped || dev->quarantined || (cancel && cancel(ctx)))) r=-FS_EIO;
@@ -354,7 +355,24 @@ int storage_add_removable_bounded(struct storage *s, struct blkdev *dev,
 int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool surprise)
 {
     if (!s || !s->ready || !dev) return -FS_EINVAL;
-    if (surprise) dev->quarantined=true;
+    if (surprise) {
+        dev->quarantined=true;
+        blk_queue_cancel_device(dev->queue,dev); /* leaves issued pins with the controller */
+        /* Publish loss before waiting for active volume operations. Their
+         * barriers must wake with EIO, never flush a vanished medium. */
+        for (unsigned d=4;d<26;d++) {
+            struct storage_volume *v=&s->volumes[d];
+            if (!v->present || !v->removable || v->part.parent!=dev) continue;
+            v->io.quarantined=true;
+            cache_completion(&s->cache,&v->io,&v->fat.completion);
+            v->fat.completion.error=-FS_EIO; v->fat.completion.incomplete=true;
+            cache_media_lost(&s->cache,&v->io);
+            vfs_identity_expire(&s->vfs,&v->fat);
+            klog("[storage] completion drive=%c kind=durable result=%d incomplete=1 generation=%u accepted=%llu durable=%llu",
+                 'A'+d,-FS_EIO,v->fat.completion.generation,
+                 (unsigned long long)v->fat.completion.accepted,(unsigned long long)v->fat.completion.durable);
+        }
+    }
     uint32_t mask=0;
     for (unsigned d=4;d<26;d++) if (s->volumes[d].removable && s->volumes[d].part.parent==dev) mask|=1u<<d;
     vfs_reserve_locked(&s->vfs,mask);
@@ -364,6 +382,8 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
         if (!v->present || !v->removable || v->part.parent!=dev) continue;
         for (unsigned i=0;i<VFS_NODES;i++) if (s->vfs.nodes[i].refs && s->vfs.nodes[i].volume==&v->fat) return -FS_EBUSY;
         if (px_volume_busy && px_volume_busy(&s->vfs,&v->fat)) return -FS_EBUSY;
+        if (vfs_identity_busy(&s->vfs,&v->fat)) return -FS_EBUSY;
+        for (unsigned i=0;i<VFS_TABLES;i++) if (s->vfs.tables[i] && s->vfs.tables[i]->cwd_cluster[d]) return -FS_EBUSY;
         refresh_volume(v);
         int e=cache_error(&s->cache,&v->io); if (e) return e;
     }
@@ -390,7 +410,8 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
                 }
             } else { int e=vfs_detach_locked(&s->vfs,d); if (e) return e; }
         }
-        cache_invalidate(&s->cache,&v->io,true); s->vfs.drive_flags[d]=0;
+        if (!surprise) cache_invalidate(&s->cache,&v->io,true);
+        s->vfs.drive_flags[d]=0;
         v->fat.mounted=false; v->present=false;
     }
     if (!surprise) for (unsigned d=4;d<26;d++) {
@@ -539,6 +560,7 @@ int storage_shutdown(struct storage *s)
     vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES);
     bool busy = false;
     for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive])) busy = true;
+    for (unsigned d=2;d<26;d++) if (s->vfs.volumes[d] && vfs_identity_busy(&s->vfs,s->vfs.volumes[d])) busy=true;
     for (unsigned d = 2; d < 26; d++)
         if (s->vfs.volumes[d] && px_volume_busy && px_volume_busy(&s->vfs, s->vfs.volumes[d])) busy = true;
     for (unsigned d=3; d<26; d++)
@@ -553,6 +575,11 @@ int storage_shutdown(struct storage *s)
         if (!v->present || !v->fat.mounted) continue;
         refresh_volume(v);
         int e = VFS_IO(&s->vfs,fat_commit(&v->fat));
+        klog("[storage] completion drive=%c kind=durable result=%d incomplete=%u generation=%u group=%llu accepted=%llu durable=%llu buffered_completions=%llu durable_completions=%llu",
+             'A'+d,e,v->fat.completion.incomplete,v->fat.completion.generation,
+             (unsigned long long)v->fat.completion.group,(unsigned long long)v->fat.completion.accepted,
+             (unsigned long long)v->fat.completion.durable,(unsigned long long)v->fat.completion.buffered_completions,
+             (unsigned long long)v->fat.completion.durable_completions);
         if (e && !result) result = e;
     }
     if (!result) for (unsigned d = 2; d < 26; d++) if (vfs_drive_present(&s->vfs,d)) {
@@ -644,7 +671,27 @@ int storage_boot_cfg(struct storage *s, const char *request)
     /* Restore a closed gate. Never set a clean flag following an I/O error. */
     if (!e && (!mounted || readonly)) {
         e = VFS_IO(&s->vfs,fat_unmount(&v->fat));
-        if (!e && mounted) e = VFS_IO(&s->vfs,fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false));
+        if (!e && mounted) {
+            /* Closing the write gate reloads FAT geometry, not the VFS mount.
+             * Keep its identity and group epochs across fat_mount's reset. */
+            uint32_t identity_epoch=v->fat.identity_mount_generation, generation=v->io.media_generation;
+            uint64_t groups=v->fat.publication_count, frontier=v->fat.publication_frontier;
+            struct cache_completion completion=v->fat.completion;
+            void (*changed)(void *,struct fat_volume *,const struct fat_entry *,const struct fat_entry *,enum fat_identity_change)=v->fat.identity_changed;
+            void *identity_ctx=v->fat.identity_ctx;
+            void (*observer)(void *,uint64_t,enum fat_publication_stage,char,int)=v->fat.publication_observer;
+            void *observer_ctx=v->fat.publication_ctx;
+            e=VFS_IO(&s->vfs,fat_mount(&v->fat,&s->cache,&v->io,0,v->io.capacity,false));
+            if (!e && generation!=v->io.media_generation) e=-FS_EIO;
+            if (!e) {
+                v->fat.identity_mount_generation=identity_epoch;
+                v->fat.identity_changed=changed; v->fat.identity_ctx=identity_ctx;
+                v->fat.publication_count=v->fat.publication_group=v->fat.publication_durable=groups;
+                v->fat.publication_frontier=frontier; v->fat.publication_generation=generation;
+                v->fat.completion=completion;
+                v->fat.publication_observer=observer; v->fat.publication_ctx=observer_ctx;
+            } else vfs_identity_expire(&s->vfs,&v->fat);
+        }
         if (!e && mounted) v->fat.dirty_recovered = recovered;
     } else if (e && readonly) {
         v->fat.readonly = true;
