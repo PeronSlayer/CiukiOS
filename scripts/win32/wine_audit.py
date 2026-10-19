@@ -67,6 +67,11 @@ def parse_spec(text):
             continue
         if not line:
             continue
+        if line.startswith('apiset '):
+            # winebuild(1): "apiset apiset_dll = target.dll [host.dll:target.dll]"
+            # declares an API-set alias of the module (kernelbase.spec in Wine
+            # 10.0); it defines no importable export and is not an i386 name.
+            continue
         match = SPEC.fullmatch(line)
         if not match:
             raise ValueError(f'unsupported spec syntax at line {number}: {raw}')
@@ -171,10 +176,20 @@ def collect(source, pin):
     for makefile in sorted((source / 'dlls').glob('*/Makefile.in')):
         info = parse_makefile(makefile.read_text())
         name = makefile.parent.name
+        if info['module'] and info['module'].endswith(('.exe16', '.dll16', '.drv16')):
+            # Win16 modules (krnl386.exe16, user.exe16, ...) are not reusable
+            # upper DLLs: the Win16 subsystem is CiukiOS's own (f5-19), and
+            # their specs mix 16-bit pascal and win32 entries under one name.
+            continue
         if info['module'] and info['module'].endswith('.dll'):
             name = info['module'][:-4]
         elif info['module'] and info['module'].endswith('.drv'):
-            name = info['module'][:-4]
+            # winspool.drv keeps its bare name (the audit tables use it); a
+            # driver whose stem is also a DLL module (msacm32.drv beside
+            # msacm32.dll in Wine 10.0) keeps the full module name instead of
+            # overwriting the DLL's entry with the driver's sources.
+            stem = info['module'][:-4]
+            name = info['module'] if (source / 'dlls' / stem).is_dir() else stem
         graph[name] = info
         info['makefile'] = makefile.relative_to(source).as_posix()
         for path in sorted(makefile.parent.glob('*.spec')):
