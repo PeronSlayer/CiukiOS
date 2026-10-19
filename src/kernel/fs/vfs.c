@@ -71,20 +71,21 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     if (!mask) return vfs_request_check(request);
     struct vfs_waiter waiter={.next=v->waiters,.mask=mask};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
-        if (v->active && v->next[d]!=v->serving[d]) {
+        if (v->active && (v->next[d]!=v->serving[d] || v->readers[d] || (v->mutating&(1u<<d)))) {
             if (request) return -FS_EBUSY;
             fs_panic("late volume reservation");
         }
     }
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) waiter.ticket[d]=v->next[d]++;
     v->waiters=&waiter;
-    uint32_t start=fs_now_ms(); char holder=first_drive(v->reserved & mask);
+    uint32_t start=fs_now_ms(); char holder=first_drive((v->reserved|v->mutating) & mask);
     uint64_t request_start=request ? request->now(request->arg) : 0;
     int error=0;
     for (;;) {
         error=vfs_request_check(request);
         bool ready=true;
-        for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) && waiter.ticket[d]!=v->serving[d]) ready=false;
+        for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) &&
+            (waiter.ticket[d]!=v->serving[d] || v->readers[d] || (v->mutating&(1u<<d)))) ready=false;
         if (error || ready) break;
         if (request) {
             fs_lock_drop(&v->lock); request->pause(request->arg); fs_lock_take(&v->lock);
@@ -97,6 +98,9 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume");
     if (error) { advance_cancelled(v); fs_event_wake(&v->volume_changed); return error; }
     v->reserved |= mask;
+    v->active_tickets |= mask;
+    /* A free additional letter can precede an existing one. Reacquire the
+     * complete set in order, retaining all reservations under namespace. */
     volume_mutexes(v,v->active,false); v->active |= mask;
     volume_mutexes(v,v->active,true);
     __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
@@ -124,8 +128,9 @@ void vfs_lock(struct vfs *v,uint32_t mask) {
     namespace_take(v,mask); vfs_reserve_locked(v,mask); v->default_drive=26;
 }
 void vfs_unlock(struct vfs *v) {
-    uint32_t mask=v->active; v->active=0; v->reserved &= ~mask;
-    for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->serving[d]++;
+    uint32_t mask=v->active,tickets=v->active_tickets;
+    v->active=0; v->active_tickets=0; v->reserved &= ~mask; v->mutating &= ~mask;
+    for (unsigned d=0;d<26;d++) if (tickets&(1u<<d)) v->serving[d]++;
     advance_cancelled(v);
     __atomic_store_n(&v->holder,'-',__ATOMIC_RELAXED);
     volume_mutexes(v,mask,false); fs_lock_drop(&v->lock);
@@ -136,9 +141,18 @@ struct vfs_io_state vfs_io_begin_locked(struct vfs *v) {
     for (unsigned d=0;d<26;d++) if ((v->active&(1u<<d)) &&
         (!v->volumes[d] || !v->volumes[d]->dev || !v->volumes[d]->dev->logical)) state.logical=false;
     /* A logical provider can enter the outer physical VFS. Retain its
-     * reservation, but no inner mutex across the outer namespace entry. */
+     * mutation guard, but no inner mutex across the outer namespace entry. */
     if (state.logical) volume_mutexes(v,v->active,false);
-    v->active=0;
+    /* Transfer lifetime/ordering ownership to the mutation guard. It is
+     * distinct from the FIFO metadata ticket and never borrowed by a data
+     * reader. Repeated FAT phases retain this guard, preserving every C2
+     * boundary while no ticket spans a transport wait. */
+    uint32_t tickets=v->active_tickets;
+    v->mutating|=v->active; v->reserved&=~v->active;
+    v->active=0; v->active_tickets=0;
+    for (unsigned d=0;d<26;d++) if (tickets&(1u<<d)) v->serving[d]++;
+    advance_cancelled(v);
+    if (tickets) fs_event_wake(&v->volume_changed);
     __atomic_store_n(&v->holder,'-',__ATOMIC_RELAXED);
     fs_lock_drop(&v->lock); return state;
 }
@@ -171,7 +185,7 @@ int vfs_attach_locked(struct vfs *v, unsigned d, struct fat_volume *vol) {
     /* Publication is namespace-only. A preparer/teardown that owns this
      * letter must finish first; queued, unadmitted operations borrow no
      * identity yet and will inspect the new publication when admitted. */
-    if ((v->reserved & ~v->active) & vfs_drive_mask(d)) return -FS_EBUSY;
+    if (((v->reserved|v->mutating) & ~v->active) & vfs_drive_mask(d)) return -FS_EBUSY;
     int e=0;
     if (vfs_drive_present(v,d)) e=-FS_EBUSY;
     for (unsigned i=0;i<26;i++) if (v->volumes[i]) {
@@ -190,7 +204,7 @@ bool vfs_drive_present(struct vfs *v, unsigned d) { return d < 26 && (v->volumes
 int vfs_attach_ro_locked(struct vfs *v, unsigned d, struct fs_ro_volume *vol)
 {
     if (d < 3 || d >= 26 || !vol || !vol->mounted) return -FS_EINVAL;
-    if ((v->reserved & ~v->active) & vfs_drive_mask(d)) return -FS_EBUSY;
+    if (((v->reserved|v->mutating) & ~v->active) & vfs_drive_mask(d)) return -FS_EBUSY;
     int e = vfs_drive_present(v, d) ? -FS_EBUSY : 0;
     for (unsigned i = 0; !e && i < 26; i++) {
         if (v->volumes[i] && (v->volumes[i]->cache != vol->cache || v->volumes[i]->dev == vol->dev)) e = -FS_EBUSY;
@@ -481,9 +495,28 @@ static uint32_t handle_mask(struct vfs_table *t,int h) {
     struct vfs_description *d=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
     return d ? vfs_drive_mask(d->node->drive) : 0;
 }
+/* Per-file readers and seeks can wait without taking a metadata ticket.
+ * Keep their admission cancellable, with the same evidence as ticket waits.
+ * Cleanup after issued I/O still reacquires namespace unconditionally. */
+static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request *request,
+                            uint32_t start,uint64_t begin) {
+    if (!request) { fs_event_wait(&v->volume_changed,&v->lock); return 0; }
+    char holder=first_drive((v->reserved|v->mutating)&mask);
+    fs_lock_drop(&v->lock); request->pause(request->arg); fs_lock_take(&v->lock);
+    int error=vfs_request_check(request);
+    request_wait(request,begin,mask,VFS_WAIT_VOLUME,error);
+    if (error) wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : "volume:cancelled");
+    return error;
+}
 static int handle_lock(struct vfs_table *t,int h) {
+    uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
     for (;;) {
         int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
+        struct vfs_description *desc=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
+        if (desc && desc->io_active) {
+            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin);
+            vfs_unlock(t->vfs); if (error) return error; continue;
+        }
         uint32_t mask=handle_mask(t,h); error=reserve_request(t->vfs,mask,t->request);
         if (error) { vfs_unlock(t->vfs); return error; }
         if (handle_mask(t,h)==mask) return 0;
@@ -590,6 +623,54 @@ int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
 }
 int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
+    struct vfs *v=t->vfs;
+    uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
+    /* Open identities pin the chain against namespace removal. A published
+     * writer names its node before dropping namespace. Never borrow a mutable
+     * entry or volume diagnostic workspace across a different file's I/O. */
+    for (;;) {
+        int admission=vfs_admit(v,0,t->request); if (admission) return admission;
+        struct vfs_description *d=get(t,h);
+        if (!d || d->node->ro || !(d->access&VFS_READ)) { vfs_unlock(v); break; }
+        struct vfs_node *node=d->node; unsigned drive=node->drive;
+        if (drive>=26 || node->generation!=v->generation[drive] || v->volumes[drive]!=node->volume) {
+            vfs_unlock(v); return -FS_EIO;
+        }
+        uint32_t mask=vfs_drive_mask(drive);
+        bool admitted=((v->reserved|v->mutating)&mask) ? v->io_file[drive] && v->io_file[drive]!=node :
+            v->next[drive]==v->serving[drive];
+        if (d->io_active || !admitted) {
+            int error=file_wait_locked(v,mask,t->request,start,begin);
+            vfs_unlock(v); if (error) return error; continue;
+        }
+        int locked=vfs_range_check(v,node,d,t->owner,d->position,n);
+        if (locked) { vfs_unlock(v); return locked; }
+        struct fat_volume *vol=node->volume;
+        uint32_t media_generation=vol->dev->media_generation;
+        struct fat_volume view={.cache=vol->cache,.dev=vol->dev,.start=vol->start,.sectors=vol->sectors,
+            .reserved=vol->reserved,.fat_sectors=vol->fat_sectors,.root_sector=vol->root_sector,
+            .data_sector=vol->data_sector,.clusters=vol->clusters,.root=vol->root,
+            .root_entries=vol->root_entries,.type=vol->type,.spc=vol->spc,.fats=vol->fats,
+            .media=vol->media,.active_fat=vol->active_fat,.mounted=true};
+        d->io_active=true; d->refs++; v->readers[drive]++; uint64_t position=d->position;
+        struct fat_entry entry=node->entry;
+        vfs_unlock(v);
+        int e=fat_read(&view,&entry,position,buf,n,done);
+        vfs_lock(v,0);
+        d->position+=*done; d->io_active=false; v->readers[drive]--;
+        if (view.readonly_reason) {
+            fs_event_wake(&v->volume_changed);
+            vfs_reserve_locked(v,mask);
+            if (v->generation[drive]==node->generation && v->volumes[drive]==vol &&
+                vol->dev->media_generation==media_generation) {
+                vol->ro_reasons|=view.ro_reasons;
+                if (!vol->readonly_reason) memcpy(vol->operation_file,view.operation_file,sizeof(vol->operation_file));
+                fat_revoke_write(vol,view.readonly_reason,view.readonly_cluster);
+            }
+        }
+        (void)release_description(v,d);
+        fs_event_wake(&v->volume_changed); vfs_unlock(v); return e;
+    }
     int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF;
     else if (d->node->generation!=t->vfs->generation[d->node->drive]) e=-FS_EIO;
@@ -610,14 +691,27 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     else if (d->node->log_capacity) e=-FS_EBUSY;
     else {
         struct fat_entry before=d->node->entry;
+        t->vfs->io_file[d->node->drive]=d->node;
         e=VFS_IO(t->vfs,fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done;
+        t->vfs->io_file[d->node->drive]=0;
         if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,*done != 0);
     }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, uint64_t *position) {
     if (!position || whence>VFS_SEEK_END) return -FS_EINVAL;
-    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h); int e=0;
+    uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
+    for (;;) {
+        int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
+        struct vfs_description *desc=get(t,h);
+        if (desc && (desc->io_active || t->vfs->io_file[desc->node->drive]==desc->node)) {
+            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin);
+            vfs_unlock(t->vfs); if (error) return error; continue;
+        }
+        if (desc && desc->node->ro) { vfs_unlock(t->vfs); error=handle_lock(t,h); if (error) return error; }
+        break;
+    }
+    struct vfs_description *d=get(t,h); int e=0;
     if (!d) e=-FS_EBADF;
     else if (d->node->ro && (e=ro_handle(t->vfs,d->node))) { }
     else {

@@ -9,14 +9,14 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
     -I "$root/src/kernel/include" "$root/tests/host/usb/usb_test.c" \
     "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" \
     "$root/src/kernel/usb/ohci.c" "$root/src/kernel/usb/usb_hub.c" \
-    "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/usb_test"
+    "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/usb_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/usb_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
     -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/usb/service_test.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/usb/ohci.c" \
     "$root/src/kernel/usb/usb_hub.c" "$root/src/kernel/usb/usb_hid.c" \
-    "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/service_test"
+    "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/lib/fmt.c" -o "$out/service_test"
 for mode in ready diagnostic csc-cleared empty create-failed input-create-failed hid-worker safe forced firmware none \
     phased-delays done-head-interleave fatal-relatched fatal-persistent fatal-reasserted fatal-gate-stuck \
     fatal-source-stuck fatal-run-stuck fatal-halt-stuck fatal-bme-stuck \
@@ -42,7 +42,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-unused-function \
     -I "$root/src/kernel/include" "$root/tests/host/usb/latency_test.c" \
     "$root/tests/host/usb/input_queue.c" "$root/src/kernel/usb/usb_core.c" \
     "$root/src/kernel/usb/usb_hid.c" "$root/src/kernel/usb/usb_hub.c" \
-    "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/usb/usb_interrupt.c" \
+    "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/usb/usb_storage.c" "$root/src/kernel/usb/usb_interrupt.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/ohci.c" "$root/src/kernel/lib/fmt.c" \
     -o "$out/latency_test"
 ASAN_OPTIONS=detect_leaks=0 "$out/latency_test"

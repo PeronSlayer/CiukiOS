@@ -65,6 +65,7 @@ struct ata_channel {
     uint16_t base, control;
     unsigned irq;
     struct kmutex mutex;
+    struct blk_queue requests;
     struct kwait wait;
     struct ata_device devices[ATA_DEVICES];
     struct ata_device *active;

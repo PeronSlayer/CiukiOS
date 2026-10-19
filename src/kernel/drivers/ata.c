@@ -109,6 +109,7 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
     c->dma.claim = -1;
     c->control_shadow = ATA_NIEN;   /* ATA-6: all other implemented bits zero */
     kmutex_init(&c->mutex);
+    blk_queue_init(&c->requests,index ? "ata1" : "ata0",BLKREQ_COMMAND_BYTES);
     kwait_init(&c->wait);
     for (unsigned i = 0; i < 3; i++)
         c->claims[i] = -1;
@@ -118,6 +119,7 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
         c->devices[i].firmware_udma = -1;
         c->devices[i].block.ctx = &c->devices[i];
         c->devices[i].block.sector_size = BLKDEV_SECTOR_SIZE;
+        c->devices[i].block.queue = &c->requests;
     }
     return 0;
 }
@@ -642,7 +644,7 @@ static int identify_packet(struct ata_device *d)
         uint8_t ch = data[54 + (i ^ 1)]; d->model[i] = ch >= 33 && ch <= 126 && ch != '=' ? (char)ch : '_';
     }
     d->model[40] = 0;
-    d->identified = true; d->block.read = atapi_read; d->block.write = 0; d->block.flush = 0;
+    d->identified = true; d->block.request_read = atapi_read; d->block.read = blkdev_read; d->block.write = 0; d->block.flush = 0;
     d->block.sector_size = 2048; d->block.media_generation = 1; d->block.media_check = atapi_check_block;
     klog("[ata%u] unit=%u kind=atapi type=%u packet_bytes=%u", c->irq - 14, d->unit, d->packet_type, d->packet_bytes);
     return 0;
@@ -715,10 +717,11 @@ static int identify(struct ata_device *d)
     d->flush_ext = d->lba48 && (w83 & (1u << 13));
     d->block.capacity = cap;
     d->block.write_cache_state = cache;
-    d->block.read = ata_read;
-    d->block.write = ata_write;
+    d->block.request_read = ata_read; d->block.read = blkdev_read;
+    d->block.request_write = ata_write; d->block.write = blkdev_write;
     d->block.emergency_write=ata_emergency_write;
-    d->block.flush = supported_valid && ((w83 & (1u << 12)) || d->flush_ext) ? ata_flush : 0;
+    d->block.request_flush = supported_valid && ((w83 & (1u << 12)) || d->flush_ext) ? ata_flush : 0;
+    d->block.flush = d->block.request_flush ? blkdev_flush : 0;
     /* 8.15.22/28: word 47 advertises support independently of word 59's
      * bit 8, which validates only the current (possibly disabled) setting. */
     unsigned maximum = fs_rd16(data + 47 * 2) & 255;
@@ -1061,7 +1064,7 @@ static int ata_transfer(struct blkdev *b, uint64_t lba, uint32_t n, void *buf, b
         e = -FS_EQUARANTINED;
     uint8_t *p = buf;
     while (!e && n) {
-        uint32_t chunk = n > 256 ? 256 : n;
+        uint32_t chunk = n > BLKDEV_READ_SECTORS ? BLKDEV_READ_SECTORS : n;
         e = command_data(d, lba, chunk, p, write);
         if (e)
             break;
@@ -1247,6 +1250,12 @@ int ata_init(void)
         }
         int found = ata_channel_discover(c);
         if (found > 0) {
+            if (blk_queue_start(&c->requests)) {
+                klog("[storage] queue name=%s worker=unavailable",i ? "ata1" : "ata0");
+                c->stopped=true;
+                for (unsigned unit=0;unit<ATA_DEVICES;unit++) c->devices[unit].block.quarantined=true;
+                continue;
+            }
             for (unsigned j = 0; j < 3; j++)
                 if (registry_activate(c->claims[j], c->generations[j])) {
                     failure(&c->devices[0], now(c), alternate(c));

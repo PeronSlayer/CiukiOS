@@ -2,6 +2,9 @@
  * Included by ata_test.c. SPDX-License-Identifier: GPL-2.0-only */
 static _Alignas(4) struct ata_prd dma_table[ATA_DMA_PRDS];
 static _Alignas(4096) uint8_t dma_bounce[ATA_DMA_BYTES];
+static _Alignas(4096) uint8_t scatter_data[3*4096];
+static bool scatter_mapping;
+static const uint32_t scatter_phys[3]={0x210000,0x350000,0x280000};
 static void dma_out32(void *ctx, uint16_t port, uint32_t value)
 {
     struct fake *f = ctx;
@@ -12,6 +15,11 @@ static bool dma_physical(void *ctx, const void *buf, uint32_t bytes, bool writab
 {
     struct fake *f = ctx;
     (void)bytes; (void)writable;
+    if (scatter_mapping) {
+        uintptr_t address=(uintptr_t)buf,base=(uintptr_t)scatter_data;
+        if (address<base || address>=base+sizeof(scatter_data) || bytes>4096-(address&4095u)) return false;
+        *phys=scatter_phys[(address-base)/4096]+(address&4095u); return true;
+    }
     if (f->noncontiguous) return false;
     f->direct_buffer = (void *)buf;
     *phys = f->direct_phys;
@@ -24,11 +32,12 @@ static void dma_bus_start(struct fake *f)
     CHECK(f->dma_command && m->armed && f->bm_table == m->prd_phys);
     CHECK(!!(f->bm_command & 8) == !f->writing);
     uint32_t bytes = 0, phys = m->bounced ? m->bounce_phys : f->direct_phys;
-    uint8_t *data = m->bounced ? m->bounce : f->direct_buffer;
+    uint8_t *data = m->bounced ? m->bounce : scatter_mapping ? scatter_data : f->direct_buffer;
     for (unsigned i = 0; i < ATA_DMA_PRDS; i++) {
         struct ata_prd *prd = &m->prd[i];
         uint32_t count = prd->count ? prd->count : 65536;
-        CHECK(prd->address == phys + bytes && !(prd->address & 1) && !(count & 1));
+        uint32_t expected=scatter_mapping && !m->bounced ? scatter_phys[bytes/4096]+bytes%4096 : phys+bytes;
+        CHECK(prd->address == expected && !(prd->address & 1) && !(count & 1));
         CHECK((prd->address & 65535) + count <= 65536 && !(prd->flags & 0x7fff));
         bytes += count;
         if (prd->flags & 0x8000) break;
@@ -189,6 +198,20 @@ static void test_dma(void)
 {
     test_dma_prds_modes();
     test_dma_attachment();
+    for (unsigned fail=0;fail<2;fail++) {
+        struct fake f; struct blkdev *b=dma_qualify(&f,false);
+        unsigned pinned=dma_pin_live;
+        scatter_mapping=true; dma_pin_fail=fail ? 2 : 0;
+        memset(scatter_data,0,sizeof(scatter_data));
+        CHECK(!b->read(b,0,sizeof(scatter_data)/512,scatter_data));
+        CHECK(f.channel.dma.bounced==!!fail && !f.channel.dma.pin_count && dma_pin_live==pinned);
+        for (unsigned i=0;i<sizeof(scatter_data);i+=2)
+            CHECK(fs_rd16(scatter_data+i)==sector_word(i/512,(i%512)/2));
+        CHECK(!b->write(b,0,sizeof(scatter_data)/512,scatter_data));
+        CHECK(dma_pin_live==pinned && !f.channel.dma.pin_count);
+        scatter_mapping=false; dma_pin_fail=0;
+    }
+    puts("ata DMA: scattered page vectors, direct pin retirement and partial pin failure bounce rollback: PASS");
     uint8_t *buf = malloc(513u * 512 + 1); CHECK(buf);
     const unsigned counts[] = { 1, 2, 127, 128, 129, 255, 256, 257, 513 };
     for (unsigned ext = 0; ext < 2; ext++) for (unsigned bounce = 0; bounce < 3; bounce++)
@@ -204,7 +227,7 @@ static void test_dma(void)
             for (unsigned sector = 0; sector < n; sector++) for (unsigned word = 0; word < 256; word++)
                 CHECK(fs_rd16(buf + sector * 512 + word * 2) == sector_word(lba + sector, word));
             CHECK(f.command == (ext ? 0x25 : 0xc8) && f.data_reads == before);
-            CHECK(f.dma_starts == (n + 255) / 256 && f.delivered - delivered == f.dma_starts);
+            CHECK(f.dma_starts == (n + 127) / 128 && f.delivered - delivered == f.dma_starts);
             CHECK(f.channel.devices[0].dma_bytes == n * 512 && f.channel.devices[0].dma_bounces == (bounce ? f.dma_starts : 0));
             CHECK(!b->write(b, lba, n, buf));
             CHECK(f.command == (ext ? 0x35 : 0xca) && !f.data_writes);
@@ -310,6 +333,6 @@ int ata_host_dma_io(uint8_t *media, uint32_t sectors, uint64_t lba, uint32_t cou
     f.media_bytes = media; f.media_sectors = sectors;
     f.noncontiguous = true; b->capacity = sectors;
     int e = write ? b->write(b, lba, count, buf) : b->read(b, lba, count, buf);
-    CHECK(f.dma_starts == (count + 255) / 256 && f.channel.devices[0].dma_enabled && !f.data_writes);
+    CHECK(f.dma_starts == (count + 127) / 128 && f.channel.devices[0].dma_enabled && !f.data_writes);
     return failures ? -FS_EIO : e;
 }

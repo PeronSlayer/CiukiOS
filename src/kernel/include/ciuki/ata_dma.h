@@ -2,8 +2,9 @@
 #ifndef CIUKI_ATA_DMA_H
 #define CIUKI_ATA_DMA_H
 #include <ciuki/registry.h>
+#include <ciuki/ledger.h>
 #define ATA_DMA_BYTES 131072u
-#define ATA_DMA_PRDS 3u
+#define ATA_DMA_PRDS 33u
 #define ATA_BM_ACTIVE 1u
 #define ATA_BM_ERROR 2u
 #define ATA_BM_IRQ 4u
@@ -28,6 +29,11 @@ struct ata_dma {
     bool armed, bounced, started;
     int claim;
     gen_t generation;
+    /* One token per virtual page fragment. The PRD table and bounce run
+     * retain their permanent attach pins; direct mappings use these tokens. */
+    struct mm_pin pins[33];
+    const struct mm_pin *bounce_pin;
+    unsigned pin_count;
 };
 struct ata_channel;
 int ata_dma_prd(struct ata_prd *, unsigned capacity, uint32_t phys, uint32_t bytes);

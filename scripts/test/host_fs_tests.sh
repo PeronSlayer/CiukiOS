@@ -18,41 +18,65 @@ for tool in clang python3 mkfs.fat fsck.fat mcopy mmd mdir mtype nm; do
 done
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
     tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_fs.c \
     -o build/host/fs/test_fs
 printf '%s\n' 'PASS host compile: clang C17 ASan/UBSan -Wall -Wextra -Werror'
+# F1-83: the same bounded request engine used by cache and ATA/USB adapters.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/blkreq.c \
+    tests/host/fs/test_blkreq.c -o build/host/fs/test_blkreq
+build/host/fs/test_blkreq
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs tests/host/fs/test_blkreq_timer.c \
+    -o build/host/fs/test_blkreq_timer
+build/host/fs/test_blkreq_timer
 # f4-04: cache page layouts per device sector size (mixed 512/2048-byte devices).
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
 # F1-82: deterministic dirty-budget/reservation/error cases, then the timed
 # 10 MiB production FAT/VFS copy versus a 16 KiB / 20 ms reader.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache_writeback.c -o build/host/fs/test_cache_writeback
 build/host/fs/test_cache_writeback
 clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
     tests/host/fs/test_writeback.c -Wl,--wrap=cache_read_ahead,--wrap=cache_write -o build/host/fs/test_writeback
 build/host/fs/test_writeback
+if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
+python3 tests/host/fs/fixtures.py
+# C3 replay, including the former same-volume ticket as negative control.
+clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    -DCIUKI_USB_HOST -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    tests/host/fs/test_fairness.c tests/host/usb/f1_83_source.c \
+    src/kernel/usb/usb_core.c src/kernel/usb/usb_storage.c src/kernel/usb/uhci.c src/kernel/usb/usb_interrupt.c \
+    src/kernel/lib/fmt.c src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/fs/mount.c \
+    -Wl,--wrap=cache_read_ahead,--wrap=cache_write -o build/host/fs/test_fairness
+build/host/fs/test_fairness
 # Sparse virtual layouts exercise capacity without creating multi-GiB images.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     src/kernel/fs/fat.c src/kernel/fs/path.c tests/host/fs/test_mount_budget.c \
     -o build/host/fs/test_mount_budget
 build/host/fs/test_mount_budget
 # f1-39: production coalescing, shared hits and request accounting.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     src/kernel/fs/fat.c src/kernel/fs/path.c tests/host/fs/test_throughput.c \
     -o build/host/fs/test_throughput
 build/host/fs/test_throughput
@@ -64,18 +88,16 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -Dmain=ata_fixture_main -std=c17 \
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -DATA_DMA_THROUGHPUT -std=c17 \
     -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs build/host/fs/ata_dma_fixture.o \
-    src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
     src/kernel/fs/fat.c src/kernel/fs/path.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
     src/kernel/fs/iso9660.c src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c \
     src/kernel/core/bootlog.c src/kernel/probes/fat_probes.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
     tests/host/fs/test_throughput.c -o build/host/fs/test_throughput_dma
 build/host/fs/test_throughput_dma
 python3 tests/host/fs/kernel_compile.py
-if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
-python3 tests/host/fs/fixtures.py
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
-    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
     tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_write_in_place.c \
     -o build/host/fs/test_write_in_place
@@ -83,7 +105,7 @@ build/host/fs/test_write_in_place build/host/fs/fat12.img build/host/fs/fat16.im
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs -Isrc/kernel/include \
-    src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c \
     src/kernel/core/bootlog.c src/kernel/drivers/blkpart.c src/kernel/probes/fat_probes.c \
     src/kernel/lib/sha256.c src/kernel/lib/fmt.c tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_storage.c \

@@ -31,7 +31,7 @@ class VolumeResolutionTests(unittest.TestCase):
                             '-I'+str(ROOT / 'src/kernel/include'), '-c',
                             str(ROOT / 'apps/desktop/master_storage.c'), '-o', str(master)], check=True, env=env)
             sources = ['src/kernel/fs/'+n+'.c' for n in
-                       ('fs_port', 'cache', 'partition', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount')]
+                       ('fs_port', 'blkreq', 'cache', 'partition', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount')]
             sources += ['src/kernel/core/bootlog.c', 'src/kernel/drivers/blkpart.c',
                         'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c',
                         'tests/host/fs/fake.c', 'tests/host/fs/scan.c', 'tests/host/fs/volume_resolution_test.c']

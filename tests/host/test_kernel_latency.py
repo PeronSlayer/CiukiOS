@@ -29,7 +29,8 @@ class KernelLatencyTests(unittest.TestCase):
             (temp / 'bounded_cache.inc').write_text(source)
             for mode in ('FAT', 'CACHE'):
                 binary = temp / mode
-                extra = [str(ROOT / 'src/kernel/fs/cache.c')] if mode == 'FAT' else []
+                extra = [str(ROOT / 'src/kernel/fs/blkreq.c')]
+                if mode == 'FAT': extra.append(str(ROOT / 'src/kernel/fs/cache.c'))
                 subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                                 '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-DBOUNDED_' + mode, '-pthread',
                                 '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
