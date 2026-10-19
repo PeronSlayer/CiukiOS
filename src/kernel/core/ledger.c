@@ -105,6 +105,37 @@ void ledger_promise(enum mm_owner owner, int32_t reserved, int32_t committed)
     else { ledger.value.reserved_va[owner] += reserved; ledger.value.commit_ram[owner] += committed; }
     ledger.sequence++; irq_restore(f);
 }
+bool ledger_commit(enum mm_owner owner, uint32_t pages)
+{
+    uint32_t f=irq_save();
+    uint64_t free=0, resident=0, promised=0, pageable_commit=0;
+    for (unsigned z=0;z<3;z++) {
+        if (z!=ZONE_LOW) free+=ledger.value.zone[z].free;
+        resident+=ledger.value.zone[z].resident[MM_USER_PRIVATE]+
+                  ledger.value.zone[z].resident[MM_USER_SHARED]+
+                  ledger.value.zone[z].resident[MM_VM_PRIVATE]+
+                  ledger.value.zone[z].resident[MM_VM_POOL];
+    }
+    for (unsigned i=0;i<MM_OWNERS;i++) {
+        uint32_t commit=ledger.value.commit_ram[i]; promised+=commit;
+        if (i==MM_USER_PRIVATE || i==MM_USER_SHARED || i==MM_VM_PRIVATE || i==MM_VM_POOL)
+            pageable_commit+=commit;
+    }
+    /* VM pool PFNs are covered by the existing VM_PRIVATE admission promise.
+     * Other resident commitments (e.g. Win32 metadata) already occupy RAM;
+     * subtract only their still-unmaterialized part, never charge twice. */
+    if (resident>pageable_commit) resident=pageable_commit;
+    for (unsigned i=0;i<MM_OWNERS;i++) {
+        if (i==MM_USER_PRIVATE || i==MM_USER_SHARED || i==MM_VM_PRIVATE || i==MM_VM_POOL) continue;
+        uint32_t pages=0;
+        for (unsigned z=0;z<3;z++) pages+=ledger.value.zone[z].resident[i];
+        resident+=pages<ledger.value.commit_ram[i]?pages:ledger.value.commit_ram[i];
+    }
+    bool ok=(unsigned)owner<MM_OWNERS && pages<=INT32_MAX &&
+            promised+pages<=free+resident;
+    if (ok) { ledger.value.commit_ram[owner]+=pages; ledger.sequence++; }
+    irq_restore(f); return ok;
+}
 void ledger_mapping(int32_t mappings, int32_t shared)
 {
     uint32_t f = irq_save();
@@ -222,7 +253,16 @@ int mm_pin(struct mm_pin *pin)
         ledger.pins[slot]=(struct pin_slot){.pin=*pin,.live=true,.min_pfn=min_pfn,.max_pfn=max_pfn};
         ledger.value.pin_tokens++; ledger.value.pinned_pages+=pin->pages+!!pin->pfn_table;
         ledger.sequence++;
-        irq_restore(f); return 0;
+        irq_restore(f);
+        for (uint32_t j=0;j<pin->pages;) {
+            f=irq_save(); uint32_t end=pin->pages-j>32?j+32:pin->pages;
+            for (;j<end;j++) if (pmm_descriptor) pmm_descriptor(pin_pfn(pin,j)*PAGE_SIZE)->pins++;
+            irq_restore(f);
+        }
+        if (pin->pfn_table && pmm_descriptor) {
+            f=irq_save(); pmm_descriptor(pin->pfn_table)->pins++; irq_restore(f);
+        }
+        return 0;
     }
 }
 
@@ -253,6 +293,14 @@ int mm_unpin(struct mm_pin *pin, uint32_t generation)
     /* Keep ticket in the caller: repeated completion is distinguishable from
      * a fresh zero-initialized token, including after a registry slot is reused. */
     irq_restore(f);
+    for (uint32_t j=0;j<saved.pin.pages;) {
+        f=irq_save(); uint32_t end=saved.pin.pages-j>32?j+32:saved.pin.pages;
+        for (;j<end;j++) if (pmm_descriptor) pmm_descriptor(pin_pfn(&saved.pin,j)*PAGE_SIZE)->pins--;
+        irq_restore(f);
+    }
+    if (saved.pin.pfn_table && pmm_descriptor) {
+        f=irq_save(); pmm_descriptor(saved.pin.pfn_table)->pins--; irq_restore(f);
+    }
     if (saved.retired) for (uint32_t i = 0; i < saved.pin.pages; i++) {
         uint32_t phys = (saved.pin.first_pfn + i) * PAGE_SIZE;
         mm_release(phys, 1, saved.owner); pmm_free(phys);

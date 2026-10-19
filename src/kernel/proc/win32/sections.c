@@ -8,10 +8,12 @@
 #include <ciuki/sha256.h>
 /* Internal uaddr bind flag, never a user protection value. */
 #define SECTION_COW_BIND 0x80000000u
+#define COW_PROMISE (UINT32_MAX-1u)
 struct section_data {
     struct w32_object *object, *file;
     uint32_t refs, kind, bytes, count, protect, image_base, writer, writable_views;
     uint32_t *pages, *protection;
+    uint32_t committed;
     uint8_t digest[32];
     struct kmutex lock;
     bool syncing;
@@ -44,8 +46,11 @@ static uint32_t section_page(struct section_data *s, unsigned index)
     if (!page)
         return 0;
     mm_claim(page, 1, MM_USER_SHARED);
-    if (ledger_promise)
-        ledger_promise(MM_USER_SHARED, 0, 1);
+    struct mm_page_descriptor *descriptor=pmm_descriptor?pmm_descriptor(page):0;
+    if (descriptor) {
+        descriptor->backing_kind=s->file?MM_BACKING_FILE:MM_BACKING_SHARED;
+        descriptor->backing_slot=index; descriptor->io_in_flight=1;
+    }
     memset(P2V(page), 0, PAGE_SIZE);
     if (s->file) {
         struct file_description *d = s->file->u.file.description;
@@ -60,11 +65,10 @@ static uint32_t section_page(struct section_data *s, unsigned index)
         s->syncing = false;
         if (err || done != n) {
             mm_free(page, MM_USER_SHARED);
-            if (ledger_promise)
-                ledger_promise(MM_USER_SHARED, 0, -1);
             return 0;
         }
     }
+    if (descriptor) descriptor->io_in_flight=0;
     s->pages[index] = page;
     w32_accounts.pages++;
     return page;
@@ -77,10 +81,9 @@ void w32_section_destroy(struct w32_object *o)
     for (unsigned i = 0; i < s->count; i++)
         if (s->pages[i]) {
             mm_free(s->pages[i], MM_USER_SHARED);
-            if (ledger_promise)
-                ledger_promise(MM_USER_SHARED, 0, -1);
             w32_accounts.pages--;
         }
+    if (s->committed && ledger_promise) ledger_promise(MM_USER_SHARED,0,-(int32_t)s->committed);
     w32_release(s->file);
     w32_free(s->pages, s->count * 4);
     w32_free(s->protection, s->count * 4);
@@ -109,8 +112,16 @@ static int section_initialize(struct w32_object *o, uint32_t kind, uint32_t byte
         w32_free(s, sizeof(*s));
         return -ENOMEM;
     }
-    for (unsigned i = 0; i < s->count; i++)
+    if (ledger_commit && !ledger_commit(MM_USER_SHARED,s->count)) {
+        w32_free(s->pages,s->count*4); w32_free(s->protection,s->count*4);
+        w32_free(s,sizeof(*s)); return -ENOMEM;
+    }
+    if (!ledger_commit && ledger_promise) ledger_promise(MM_USER_SHARED,0,s->count);
+    s->committed=s->count;
+    for (unsigned i = 0; i < s->count; i++) {
         s->protection[i] = protect;
+        if (!((i+1)&15u)) kpreempt_point();
+    }
     o->u.section = s;
     o->section_limit = bytes;
     o->section_protect = protect;
@@ -214,13 +225,15 @@ int w32_view_access(struct uaddr *u, uint32_t va, bool write)
     uint32_t page = section_page(s, index);
     int err = page ? 0 : -ENOMEM;
     if (!err && v->cow && write && v->credits && v->credits[local] && v->credits[local] != UINT32_MAX) {
-        uint32_t credit = v->credits[local];
+        uint32_t credit = pmm_alloc();
+        if (!credit) { kmutex_unlock(&s->lock); v->active--; return -ENOMEM; }
+        mm_claim(credit,1,MM_USER_PRIVATE);
         memcpy(P2V(credit), P2V(page), PAGE_SIZE);
         err = ua_w32_bind(u, va & ~4095u, credit, protection, false);
         if (!err) {
             v->credits[local] = UINT32_MAX;
             w32_accounts.cow_credits--;
-        }
+        } else mm_free(credit,MM_USER_PRIVATE);
     } else if (!err) {
         /* Existing private COW PTEs are never rebound to shared bytes. */
         err = ua_w32_bind(u, va & ~4095u, page, protection | (v->cow ? SECTION_COW_BIND : 0), true);
@@ -245,7 +258,7 @@ static void view_free(struct w32_view *v)
     if (v->credits) {
         for (unsigned i = 0; i < v->bytes / PAGE_SIZE; i++)
             if (v->credits[i] && v->credits[i] != UINT32_MAX) {
-                mm_free(v->credits[i], MM_USER_PRIVATE);
+                if (v->credits[i]!=COW_PROMISE) mm_free(v->credits[i], MM_USER_PRIVATE);
                 if (ledger_promise)
                     ledger_promise(MM_USER_PRIVATE, 0, -1);
                 w32_accounts.cow_credits--;
@@ -314,15 +327,11 @@ static int map_view(struct process *p, struct w32_object *o, uint32_t *address, 
             uint32_t prot;
             w32_protection(s->protection[offset / PAGE_SIZE + i], &prot);
             if (!image || prot & PROT_WRITE) {
-                uint32_t page = pmm_alloc();
-                if (!page) {
-                    view_free(v);
-                    return -ENOMEM;
+                if (ledger_commit && !ledger_commit(MM_USER_PRIVATE,1)) {
+                    view_free(v); return -ENOMEM;
                 }
-                mm_claim(page, 1, MM_USER_PRIVATE);
-                if (ledger_promise)
-                    ledger_promise(MM_USER_PRIVATE, 0, 1);
-                v->credits[i] = page;
+                if (!ledger_commit && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,1);
+                v->credits[i] = COW_PROMISE;
                 w32_accounts.cow_credits++;
             }
             if (!(i & 15))
@@ -375,6 +384,8 @@ static int map_view(struct process *p, struct w32_object *o, uint32_t *address, 
         view_free(v);
         return err;
     }
+    struct vfs_file_identity *identity=s->file?s->file->u.file.description->identity:0;
+    ua_backing_identity(p->memory,base,v->bytes,identity,identity?identity->generation:0,offset/PAGE_SIZE);
     v->registered = true;
     v->next = p->w32->views;
     p->w32->views = v;
@@ -455,23 +466,21 @@ static uint32_t view_protect_inner(struct uaddr *u, struct ciuki_w32_vm *a)
             return W32_STATUS_NO_MEMORY;
         for (unsigned i = 0; i < count; i++)
             if (!v->credits[(start - v->base) / PAGE_SIZE + i]) {
-                fresh[i] = pmm_alloc();
-                if (!fresh[i]) {
-                    for (unsigned j = 0; j < i; j++)
-                        if (fresh[j])
-                            mm_free(fresh[j], MM_USER_PRIVATE);
-                    w32_free(fresh, count * 4);
-                    return W32_STATUS_NO_MEMORY;
+                if (ledger_commit && !ledger_commit(MM_USER_PRIVATE,1)) {
+                    for (unsigned j=0;j<i;j++) if (fresh[j] && ledger_promise)
+                        ledger_promise(MM_USER_PRIVATE,0,-1);
+                    w32_free(fresh,count*4); return W32_STATUS_NO_MEMORY;
                 }
-                mm_claim(fresh[i], 1, MM_USER_PRIVATE);
+                if (!ledger_commit && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,1);
+                fresh[i]=COW_PROMISE;
             }
     }
     int err = ua_w32_change(u, start, end - start, W32_VM_PROTECT, a->protect, native, true);
     if (err) {
         if (fresh) {
             for (unsigned i = 0; i < count; i++)
-                if (fresh[i])
-                    mm_free(fresh[i], MM_USER_PRIVATE);
+                if (fresh[i] && ledger_promise)
+                    ledger_promise(MM_USER_PRIVATE,0,-1);
             w32_free(fresh, count * 4);
         }
         return w32_status(err);
@@ -481,8 +490,6 @@ static uint32_t view_protect_inner(struct uaddr *u, struct ciuki_w32_vm *a)
             if (fresh[i]) {
                 v->credits[(start - v->base) / PAGE_SIZE + i] = fresh[i];
                 w32_accounts.cow_credits++;
-                if (ledger_promise)
-                    ledger_promise(MM_USER_PRIVATE, 0, 1);
             }
         w32_free(fresh, count * 4);
     }
@@ -646,6 +653,8 @@ uint32_t w32_section_call(struct proc_thread *t, struct ciuki_w32_section_args *
             /* Existing section aliases retain their own size/protection. Grow
              * the common backing transactionally before publishing an alias. */
             if (fresh->count > shared->count) {
+                uint32_t extra=fresh->count-shared->count;
+                shared->committed+=extra; fresh->committed-=extra;
                 memcpy(fresh->pages, shared->pages, shared->count * 4);
                 w32_free(shared->pages, shared->count * 4);
                 w32_free(shared->protection, shared->count * 4);

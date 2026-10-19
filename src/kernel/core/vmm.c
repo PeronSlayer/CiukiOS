@@ -251,6 +251,7 @@ int as_create(struct aspace *as)
         v[i] = kpd[i];
     v[1023] = pd | PTE_P | PTE_W;
     as->pd_phys = pd;
+    as->memory = 0;
     as->owner = MM_KERNEL; as->pool_base = 0;
     as->pages = 0;
     as->tables = 0;

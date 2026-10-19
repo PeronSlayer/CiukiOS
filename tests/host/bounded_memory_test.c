@@ -22,6 +22,7 @@ static void *host_physical(uint32_t pa) { CHECK(pa>=4096 && pa<770*4096); return
 static uint32_t read_cr3(void) { return 0; }
 static void write_cr3(uint32_t p) { (void)p; }
 static void invlpg(uint32_t p) { (void)p; }
+void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
 void kpreempt_point(void) { if (points) { charge(200); boundary(); if (on_point) on_point(); } }
 void pmm_free(uint32_t pa) { unsigned p=pa/4096; CHECK(p<sizeof(freed) && !freed[p]); freed[p]=1; releases++; charge(6000); }
 uint32_t pmm_alloc(void) { abort(); }
@@ -111,5 +112,21 @@ int main(void)
     CHECK(ua_find(&u,255*PAGE_SIZE)==&nodes[255] && !on_point && !u.pins);
     puts("F0-44 metadata service: concurrent insertion refused, no leaked walk pin PASS");
     free(nodes);
+    /* New M2 reservation/slot lookup/split/teardown walks, with actual
+     * object metadata and no data PFNs. Same R1 cost model and bound. */
+    for (unsigned count=6144;count<=131072;count=131072) {
+        memset(tables,0,sizeof(tables)); memset(freed,0,sizeof(freed));
+        u=(struct uaddr){.as={.pd_phys=PAGE_SIZE}};
+        total=work_span=maximum=0; points=true;
+        CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,count*PAGE_SIZE,PROT_READ|PROT_WRITE,
+                        PROT_READ|PROT_WRITE,UA_ANON,0));
+        CHECK(!u.backing && !u.as.tables);
+        CHECK(!ua_mprotect(&u,CIUKI_MMAP_BASE+PAGE_SIZE,PAGE_SIZE,PROT_READ));
+        CHECK(!ua_munmap(&u,CIUKI_MMAP_BASE+2*PAGE_SIZE,PAGE_SIZE));
+        ua_destroy(&u); boundary();
+        CHECK(maximum<=2000000 && !u.head && !u.pins);
+        printf("F0-47 object walks: pages=%u span=%lluns <=2ms PASS\n",count,(unsigned long long)maximum);
+        if (count==131072) break;
+    }
     return 0;
 }

@@ -43,13 +43,21 @@ void klog(const char *fmt, ...)
         context_records++; memcpy(context_record,line,(size_t)n+1);
     }
 }
-void *kzalloc(size_t bytes) { return calloc(1,bytes); }
-void *kmalloc(size_t bytes) { return malloc(bytes); }
+static int memory_failure=-1;
+static bool memory_allocation_fails(void)
+{ if (memory_failure<0) return false; if (!memory_failure) return true; memory_failure--; return false; }
+void *kmalloc(size_t bytes) { return memory_allocation_fails()?0:malloc(bytes); }
+void *kzalloc(size_t bytes) { void *p=kmalloc(bytes); if (p) memset(p,0,bytes); return p; }
 void kfree(void *p) { free(p); }
-void kpreempt_point(void) { CHECK(flags==0x200); }
+static void (*memory_service)(void), (*memory_sleep)(void);
+void kpreempt_point(void) { CHECK(flags==0x200); if (memory_service) memory_service(); }
+void task_sleep_ms(uint32_t ms) { CHECK(ms && flags==0x200 && memory_sleep); memory_sleep(); }
 void ww_cancel(void *identity,uint64_t generation,uint32_t base,uint32_t end)
 { (void)identity;(void)generation;(void)base;(void)end; }
+#define pmm_alloc physical_alloc
 #include "../../src/kernel/core/pmm.c"
+#undef pmm_alloc
+uint32_t pmm_alloc(void) { return memory_allocation_fails()?0:physical_alloc(); }
 #include "../../src/kernel/core/ledger.c"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpointer-to-int-cast"
@@ -330,6 +338,198 @@ static void dosvm_profiles(int argc, char **argv)
         mm_release(syscache,2048,MM_CACHE_DATA); release_run(syscache,2048);
     }
 }
+static struct uaddr *racing_space;
+static void unmap_during_fault(void)
+{
+    memory_service=0;
+    CHECK(ua_munmap(racing_space,CIUKI_MMAP_BASE,PAGE_SIZE)==-EBUSY);
+}
+static void exit_during_fault(void)
+{ memory_service=0; racing_space->closing=true; }
+static struct memory_object *waiting_object;
+static struct ua_extent *waiting_area;
+static void complete_other_fault(void)
+{
+    memory_sleep=0;
+    struct ua_slot *s=object_slot(waiting_object,0);
+    CHECK(s->waiters==1 && waiting_object->busy);
+    slot_link(waiting_object,0,frame_new(false));
+    waiting_object->busy=false;
+}
+static void cancel_waiting_fault(void)
+{ memory_sleep=0; waiting_object->busy=false; waiting_area->generation++; }
+static struct ua_slot *retiring_slot;
+static uint32_t retiring_phys;
+static bool retirement_observed;
+static void observe_zero_retirement(void)
+{
+    if (retiring_slot->frame->phys==retiring_phys) return;
+    memory_service=0; retirement_observed=true;
+    CHECK(!pmm_page_free(retiring_phys/PAGE_SIZE) && pmm_descriptor(retiring_phys)->refs);
+}
+static struct uaddr *alias_target;
+static bool alias_pending_observed;
+static void observe_alias_publication(void)
+{
+    memory_service=0;
+    struct ua_extent *e=ua_find(alias_target,CIUKI_MMAP_BASE);
+    if (e) {
+        CHECK(e->preparing); alias_pending_observed=true;
+        CHECK(ua_fault(alias_target,e->base,4)==-EFAULT);
+        CHECK(ua_munmap(alias_target,e->base,PAGE_SIZE)==-EBUSY);
+    }
+    memory_service=observe_alias_publication;
+}
+static uint32_t memory_word(struct uaddr *u,uint32_t at)
+{ uint32_t value=~0u; CHECK(!ua_read(u,&value,at,4)); return value; }
+static void memory_store(struct uaddr *u,uint32_t at,uint32_t value)
+{ CHECK(!ua_write(u,at,&value,4)); }
+static void memory_objects(void)
+{
+    fresh(64);
+    struct task task={0}; g_current=&task;
+    uint32_t baseline=pmm_free_count();
+    struct mm_ledger initial=snapshot();
+    uint32_t kernel_pages=pmm_zone_free(ZONE_NORMAL), kernel=pmm_alloc_contig(kernel_pages);
+    CHECK(kernel); ledger_promise(MM_KERNEL,0,kernel_pages);
+    CHECK(ledger_commit(MM_USER_PRIVATE,1)); /* resident commitments are not charged twice */
+    ledger_promise(MM_USER_PRIVATE,0,-1); ledger_promise(MM_KERNEL,0,-(int32_t)kernel_pages);
+    release_run(kernel,kernel_pages); CHECK(pmm_free_count()==baseline);
+    for (unsigned cycle=0;cycle<100;cycle++) {
+        struct uaddr u,v;
+        CHECK(!ua_init(&u,&u) && !ua_init(&v,&v));
+        uint32_t after_directories=pmm_free_count();
+        CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,8*PAGE_SIZE,3,3,UA_ANON,0));
+        CHECK(!u.backing && !u.as.tables && pmm_free_count()==after_directories);
+        CHECK(snapshot().commit_ram[MM_USER_PRIVATE]==8 && !snapshot().commit_pagefile);
+        CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,4));
+        CHECK(memory_word(&u,CIUKI_MMAP_BASE)==0);
+        uint32_t zero=as_lookup(&u.as,CIUKI_MMAP_BASE,0);
+        CHECK(zero && pmm_descriptor(zero)->backing_kind==MM_BACKING_ZERO);
+        CHECK(!ua_fault(&u,CIUKI_MMAP_BASE+PAGE_SIZE,4));
+        CHECK(as_lookup(&u.as,CIUKI_MMAP_BASE+PAGE_SIZE,0)==zero);
+        CHECK(pmm_descriptor(zero)->refs==2);
+        CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,7));
+        uint32_t own=as_lookup(&u.as,CIUKI_MMAP_BASE,0), stable=pmm_free_count();
+        CHECK(own!=zero && !memory_word(&u,CIUKI_MMAP_BASE));
+        memory_store(&u,CIUKI_MMAP_BASE,0x12345678);
+        memory_store(&u,CIUKI_MMAP_BASE,0x87654321);
+        CHECK(pmm_free_count()==stable && pmm_descriptor(own)->dirty_epoch);
+        int32_t copy=ua_alias(&v,&u,CIUKI_MMAP_BASE,8*PAGE_SIZE,3,true);
+        CHECK(copy>0 && pmm_descriptor(own)->refs==2 && snapshot().commit_ram[MM_USER_PRIVATE]==16);
+        CHECK(memory_word(&v,copy)==0x87654321);
+        CHECK(!ua_fault(&v,copy,7)); memory_store(&v,copy,42);
+        CHECK(*(uint32_t *)P2V(own)==0x87654321 && memory_word(&v,copy)==42);
+        CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,7)); /* sole surviving COW reference */
+        int32_t shared=ua_alias(&v,&u,CIUKI_MMAP_BASE,8*PAGE_SIZE,3,false);
+        CHECK(shared>0 && shared!=copy && snapshot().commit_ram[MM_USER_PRIVATE]==16);
+        CHECK(!memory_word(&v,shared+2*PAGE_SIZE));
+        CHECK(!memory_word(&u,CIUKI_MMAP_BASE+2*PAGE_SIZE));
+        memory_store(&v,shared+2*PAGE_SIZE,99);
+        CHECK(memory_word(&u,CIUKI_MMAP_BASE+2*PAGE_SIZE)==99);
+        CHECK(!ua_mprotect(&v,copy,PAGE_SIZE,PROT_READ));
+        CHECK(ua_fault(&v,copy,7)==-EFAULT);
+        CHECK(!ua_mprotect(&v,copy,PAGE_SIZE,PROT_NONE));
+        CHECK(ua_fault(&v,copy,4)==-EFAULT);
+        CHECK(ua_fault(&v,CIUKI_MMAP_BASE+100*PAGE_SIZE,4)==-EFAULT);
+        CHECK(ua_fault(&u,CIUKI_MMAP_BASE,0)==-EFAULT && ua_fault(&u,CIUKI_MMAP_BASE,12)==-EFAULT);
+        CHECK(!ua_map_at(&v,CIUKI_MAIN_STACK_BASE,PAGE_SIZE,0,0,UA_GUARD,1));
+        CHECK(ua_fault(&v,CIUKI_MAIN_STACK_BASE,4)==-EFAULT);
+        ua_destroy(&u); ua_destroy(&v);
+        struct mm_ledger after=snapshot();
+        CHECK(pmm_free_count()==baseline && !zero_frame && ledger_reconcile());
+        CHECK(!memcmp(after.commit_ram,initial.commit_ram,sizeof(after.commit_ram)));
+        CHECK(!memcmp(after.reserved_va,initial.reserved_va,sizeof(after.reserved_va)));
+        CHECK(!after.mappings && !after.shared_mappings && !after.mismatches && !after.pin_tokens);
+    }
+    /* Allocation failure at every area/object/block/frame/PT stage. Each
+     * failed fault keeps its commitment, publishes no uninitialized frame. */
+    for (int point=0;point<9;point++) {
+        struct uaddr u; CHECK(!ua_init(&u,&u));
+        memory_failure=point;
+        int err=ua_map_at(&u,CIUKI_MMAP_BASE,65*PAGE_SIZE,3,3,UA_ANON,0);
+        memory_failure=-1;
+        CHECK(!err || err==-ENOMEM);
+        if (err) CHECK(!u.head && !u.backing && !u.as.tables);
+        ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    }
+    for (int point=0;point<4;point++) for (unsigned write=0;write<2;write++) {
+        struct uaddr u; CHECK(!ua_init(&u,&u));
+        CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,3,UA_ANON,0));
+        uint32_t before=pmm_free_count();
+        memory_failure=point; int err=ua_fault(&u,CIUKI_MMAP_BASE,4|(write?2:0)); memory_failure=-1;
+        if (point<3) CHECK(err==-ENOMEM && !u.backing && !u.as.tables && pmm_free_count()==before);
+        else CHECK(!err);
+        CHECK(snapshot().commit_ram[MM_USER_PRIVATE]==1);
+        ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    }
+    struct uaddr u,v; CHECK(!ua_init(&u,&u) && !ua_init(&v,&v));
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,32*PAGE_SIZE,3,3,UA_ANON,0));
+    for (unsigned i=0;i<32;i++) memory_store(&u,CIUKI_MMAP_BASE+i*PAGE_SIZE,i+1);
+    alias_target=&v; alias_pending_observed=false; memory_service=observe_alias_publication;
+    CHECK(ua_alias(&v,&u,CIUKI_MMAP_BASE,32*PAGE_SIZE,3,true)>0);
+    memory_service=0; CHECK(alias_pending_observed);
+    for (unsigned i=0;i<32;i++) {
+        uint32_t entry=0; CHECK(as_lookup(&u.as,CIUKI_MMAP_BASE+i*PAGE_SIZE,&entry) && !(entry&PTE_W));
+    }
+    ua_destroy(&u); ua_destroy(&v); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    CHECK(!ua_init(&u,&u));
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,3,UA_ANON,0));
+    struct memory_object *placeholder=ua_find(&u,CIUKI_MMAP_BASE)->backing;
+    const enum mm_backing_kind unsupported[]={MM_BACKING_FILE,MM_BACKING_SWAP,MM_BACKING_DEVICE};
+    uint32_t untouched=pmm_free_count();
+    for (unsigned i=0;i<3;i++) {
+        placeholder->kind=unsupported[i];
+        CHECK(ua_fault(&u,CIUKI_MMAP_BASE,4)==-EFAULT && !u.backing && pmm_free_count()==untouched);
+    }
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    CHECK(!ua_init(&u,&u)); racing_space=&u;
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,2*PAGE_SIZE,3,3,UA_ANON,0));
+    memory_service=unmap_during_fault;
+    CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,6) && !memory_service);
+    memory_service=exit_during_fault;
+    CHECK(ua_fault(&u,CIUKI_MMAP_BASE+PAGE_SIZE,6)==-EFAULT && !memory_service);
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    CHECK(!ua_init(&u,&u));
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,3,UA_ANON,0));
+    CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,4));
+    for (unsigned alias=0;alias<128;alias++) {
+        int32_t at=ua_alias(&u,&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,false);
+        CHECK(at>0 && !ua_fault(&u,at,4));
+    }
+    retiring_slot=area_slot(ua_find(&u,CIUKI_MMAP_BASE),CIUKI_MMAP_BASE);
+    retiring_phys=retiring_slot->frame->phys; retirement_observed=false;
+    memory_service=observe_zero_retirement; memory_store(&u,CIUKI_MMAP_BASE,123);
+    CHECK(retirement_observed && !memory_service && pmm_page_free(retiring_phys/PAGE_SIZE));
+    for (struct ua_extent *e=u.head;e;e=e->next) CHECK(memory_word(&u,e->base)==123);
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    CHECK(!ua_init(&u,&u));
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,3,UA_ANON,0));
+    waiting_area=ua_find(&u,CIUKI_MMAP_BASE); waiting_object=waiting_area->backing;
+    waiting_object->busy=true; memory_sleep=complete_other_fault;
+    CHECK(!ua_fault(&u,CIUKI_MMAP_BASE,6) && !memory_sleep && waiting_object->resident==1);
+    waiting_object->busy=true; memory_sleep=cancel_waiting_fault;
+    CHECK(ua_fault(&u,CIUKI_MMAP_BASE,6)==-EFAULT && !memory_sleep);
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    /* Pin preparation is rejected before a pager can enter a held lock. A
+     * prepared range subsequently copies under that lock without allocating. */
+    CHECK(!ua_init(&u,&u)); CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,PAGE_SIZE,3,3,UA_ANON,0));
+    struct ua_pin pin; task.preempt_holds=1;
+    CHECK(ua_pin(&u,&pin,CIUKI_MMAP_BASE,4,false)==-EBUSY && !u.backing && !u.pins);
+    task.preempt_holds=0; CHECK(!ua_pin(&u,&pin,CIUKI_MMAP_BASE,4,false));
+    uint32_t phys=as_lookup(&u.as,CIUKI_MMAP_BASE,0), before=pmm_free_count();
+    CHECK(pmm_descriptor(phys)->pins==1);
+    task.preempt_holds=1; CHECK(!memory_word(&u,CIUKI_MMAP_BASE) && pmm_free_count()==before);
+    task.preempt_holds=0; ua_unpin(&u,&pin); CHECK(!pmm_descriptor(phys)->pins);
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    CHECK(!ua_init(&u,&u)); racing_space=&u;
+    CHECK(!ua_map_at(&u,CIUKI_MMAP_BASE,32*PAGE_SIZE,3,3,UA_ANON,0));
+    CHECK(!ua_pin(&u,&pin,CIUKI_MMAP_BASE,32*PAGE_SIZE,true));
+    memory_service=unmap_during_fault; ua_unpin(&u,&pin); CHECK(!memory_service && !u.pins);
+    ua_destroy(&u); CHECK(pmm_free_count()==baseline && ledger_reconcile()); g_current=0;
+    puts("PASS M2: 100 cycles, deferred zero/COW/shared aliases, permissions/guards, all allocation stages, unmap/exit interleavings, coalescing/wake generation, pin-before-lock, ledger reconciliation");
+}
+
 int main(int argc, char **argv)
 {
     ram=calloc(1,(argc>1 ? 512u : 64u)<<20); CHECK(ram);
@@ -337,7 +537,7 @@ int main(int argc, char **argv)
         CHECK(!strcmp(argv[1],"--dosvm-profile")); emit_profiles=true;
         dosvm_profiles(argc,argv); free(ram); return 0;
     }
-    profiles(); aliases_and_rollback(); pins(); scattered_pool(); reporting_and_context(); pinned_context();
+    profiles(); memory_objects(); aliases_and_rollback(); pins(); scattered_pool(); reporting_and_context(); pinned_context();
     struct mm_ledger maximum=snapshot();
     maximum.mappings=maximum.shared_mappings=maximum.pin_tokens=maximum.pinned_pages=UINT32_MAX;
     maximum.retired_pages=maximum.mismatches=maximum.double_unpins=maximum.bad_context=UINT32_MAX;

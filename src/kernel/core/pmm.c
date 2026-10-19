@@ -9,6 +9,11 @@
 
 extern char __kernel_start[], __kernel_end[];
 
+static struct mm_page_descriptor descriptors[PMM_MAX_PAGES];
+_Static_assert(sizeof(struct mm_page_descriptor) == 24, "PFN descriptor budget");
+struct mm_page_descriptor *pmm_descriptor(uint32_t phys)
+{ return phys / PAGE_SIZE < PMM_MAX_PAGES ? &descriptors[phys / PAGE_SIZE] : 0; }
+
 static uint32_t bitmap[PMM_MAX_PAGES / 32];     /* 1 = not free */
 static uint32_t zone_total[3], zone_free[3];
 static uint32_t hint[3];
@@ -27,8 +32,12 @@ static int zone_of(uint32_t pfn)
 }
 
 static bool used(uint32_t pfn) { return bitmap[pfn >> 5] & (1u << (pfn & 31)); }
-static void set_used(uint32_t pfn) { bitmap[pfn >> 5] |= 1u << (pfn & 31); }
-static void set_free(uint32_t pfn) { bitmap[pfn >> 5] &= ~(1u << (pfn & 31)); }
+static void set_used(uint32_t pfn) { bitmap[pfn >> 5] |= 1u << (pfn & 31);
+    descriptors[pfn] = (struct mm_page_descriptor){ .refs=1 };
+}
+static void set_free(uint32_t pfn) { bitmap[pfn >> 5] &= ~(1u << (pfn & 31));
+    descriptors[pfn] = (struct mm_page_descriptor){0};
+}
 
 static void add_res(uint32_t start, uint32_t end, const char *why)
 {
@@ -71,6 +80,7 @@ unsigned pmm_reservations(const struct pmm_reservation **out)
 
 void pmm_init(void)
 {
+    memset(descriptors, 0, sizeof(descriptors));
     memset(bitmap, 0xFF, sizeof(bitmap));
     memset(zone_total, 0, sizeof(zone_total));
     ledger_init();
@@ -219,7 +229,7 @@ void pmm_free(uint32_t phys)
     if (pfn >= PMM_MAX_PAGES || pfn < 256 || pmm_is_reserved(phys))
         panic("pmm_free: invalid page %08x", phys);
     uint32_t f = irq_save();
-    if (ledger_page_pinned(pfn)) {
+    if (descriptors[pfn].pins || ledger_page_pinned(pfn)) {
         irq_restore(f);
         panic("pmm_free: pinned page %08x", phys);
     }

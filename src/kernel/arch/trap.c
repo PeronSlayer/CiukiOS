@@ -163,7 +163,13 @@ void trap_dispatch(struct trap_frame *tf)
         if (proc_thread_for(g_current)) {
             uint32_t cr2 = tf->vector == 14 ? read_cr2() : 0;
             sti();
-            if (!w32_fault || !w32_fault(tf, cr2)) proc_signal_fault(tf, cr2);
+            struct proc_thread *thread=proc_thread_for(g_current);
+            bool saved_syscall=thread->in_syscall;
+            thread->in_syscall=true; /* a sleeping pager must unwind on exit */
+            int page=tf->vector==14?ua_fault(thread->process->memory,cr2,tf->err):-EFAULT;
+            thread->in_syscall=saved_syscall;
+            if (thread->process->state==PROC_STOPPING) task_exit(thread->process->raw_exit);
+            if (page && (!w32_fault || !w32_fault(tf, cr2))) proc_signal_fault(tf, cr2);
             cli();
             cpu_user_return();
             return;

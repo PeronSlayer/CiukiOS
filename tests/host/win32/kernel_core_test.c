@@ -134,13 +134,13 @@ static void test_memory(void)
     struct ciuki_w32_vm a = request(0x10003,0x1000,W32_MEM_RESERVE,W32_PAGE_READWRITE);
     CHECK(!w32_vm_alloc(&u,&a) && a.address==0x10000 && a.bytes==0x2000 && !u.backing && !u.as.pages);
     a = request(0x10fff,2,W32_MEM_COMMIT,W32_PAGE_EXECUTE_READWRITE);
-    CHECK(!w32_vm_alloc(&u,&a) && a.address==0x10000 && a.bytes==0x2000 && u.backing==2);
+    CHECK(!w32_vm_alloc(&u,&a) && a.address==0x10000 && a.bytes==0x2000 && u.backing==0);
     CHECK(ua_range(&u,0x10000,8192,PROT_READ|PROT_WRITE|PROT_EXEC));
     uint32_t value=0xfeed,read=0; CHECK(!ua_write(&u,0x10000,&value,4));
     a = request(0x10000,4096,W32_MEM_COMMIT,W32_PAGE_READONLY);
     CHECK(!w32_vm_alloc(&u,&a) && !ua_read(&u,&read,0x10000,4) && read==value && ua_find(&u,0x10000)->w32_protect==W32_PAGE_EXECUTE_READWRITE);
     a = request(0x10fff,2,0,W32_PAGE_NOACCESS);
-    CHECK(!w32_vm_protect(&u,&a) && a.old_protect==W32_PAGE_EXECUTE_READWRITE && u.backing==2 && !u.as.pages);
+    CHECK(!w32_vm_protect(&u,&a) && a.old_protect==W32_PAGE_EXECUTE_READWRITE && u.backing==1 && !u.as.pages);
     struct ciuki_w32_memory_info q;
     CHECK(!w32_vm_query(&u,0x10100,&q) && q.base==0x10000 && q.allocation_base==0x10000 && q.region_size==8192 && q.state==W32_MEM_COMMIT && q.protect==W32_PAGE_NOACCESS);
     a = request(0x10000,0,W32_MEM_DECOMMIT,0);
@@ -180,7 +180,7 @@ static void test_memory(void)
         if(status){failures++;CHECK(status==W32_STATUS_NO_MEMORY && !u.head && !u.backing && !u.as.tables && pages_used==baseline && heap_blocks==blocks);}
         ua_destroy(&u);
     }
-    CHECK(failures>=22);
+    CHECK(failures==3); /* area, object and one metadata block; data/PT faults tested separately */
     puts("w32 memory: rounding, W+X, noaccess commitment, repeated commit, queries, pins, zero recommit, guard, OOM rollback PASS");
 }
 static void test_records(void)
