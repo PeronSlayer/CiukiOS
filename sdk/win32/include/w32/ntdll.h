@@ -91,6 +91,8 @@ struct w32_teb {
     uint8_t reserved[0xe10 - 0x3c];
     void *TlsSlots[64];
     /* Private core extension, outside the frozen Windows-compatible prefix. */
+    ULONG CoreTlsGeneration[64];
+    ULONG CoreSocketError;
     ULONG CoreFilterDepth, CoreDebugIndex;
     char CoreDebug[4][256];
 };

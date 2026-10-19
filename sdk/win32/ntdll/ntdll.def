@@ -35,6 +35,7 @@ EXPORTS
     RtlCaptureContext
     RtlDispatchException
     RtlRaiseException
+    RaiseException
     RtlRaiseStatus
     RtlUnwind
     KiUserExceptionDispatcher
@@ -61,3 +62,20 @@ EXPORTS
     __wine_dbg_strdup
     __wine_dbg_get_channel_flags
     __wine_dbg_write
+    w32_ciuki_call
+    w32_get_services
+    w32_copy
+    w32_fill
+    w32_strlen
+    w32_strcmp
+    w32_stricmp
+    w32_copy_string
+    w32_put16
+    w32_put32
+    w32_diag
+    w32_terminate
+    memcpy
+    memset
+    CiukiThreadAttach
+    CiukiThreadDetach
+    CiukiProcessDetach

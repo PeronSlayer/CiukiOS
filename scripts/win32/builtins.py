@@ -9,7 +9,7 @@ import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
-from scripts.win32 import stubs
+from scripts.win32 import stubs, kernel32
 
 def build(out=None):
     out=Path(out or ROOT/'build/apps/win32');out.mkdir(parents=True,exist_ok=True)
@@ -38,6 +38,10 @@ def build(out=None):
     store=stubs.build(generated,out/'ntdll.lib')
     import shutil
     for dll in store['dlls']:shutil.copyfile(generated/dll['path'],out/dll['path'])
+    kernel_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    for i,dll in enumerate(store['dlls']):
+        if dll['name']=='kernel32.dll':store['dlls'][i]=kernel32.build(out,kernel_base,flags)
+        if dll['name']=='wsock32.dll':store['dlls'][i]=kernel32.build_offline(out,dll['base'],flags)
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='builtin placeholder pending f5-14B measured replacement'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

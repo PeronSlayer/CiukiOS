@@ -98,6 +98,15 @@ int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool wri
  * exercised by display_present_test.c. */
 uint32_t w32_display_call(struct proc_thread *t,struct ciuki_w32_display_args *a)
 { (void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED; }
+#include <ciuki/w32_core.h>
+/* Cwd conversion is independently exercised by kernel32_files.c. */
+uint32_t w32_native_path(struct process *p,const char *n,char *out,char *full){(void)p;(void)n;(void)out;(void)full;return 2;}
+int px_chdir(struct process *p,const char *path){(void)p;(void)path;return -ENOENT;}
+#include "../../../src/kernel/proc/win32/process.c"
+uint32_t w32_file_call(struct proc_thread *t,struct ciuki_w32_file_args *a){(void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED;}
+void task_yield(void){if(on_schedule)schedule();}
+#include "../../../src/kernel/proc/win32/system.c"
+#include "../../../src/kernel/proc/win32/snapshot.c"
 #include "../../../src/kernel/proc/win32/syscall.c"
 int px_getcwd_locked(struct px_node *n, char path[CIUKI_PATH_MAX]) { (void)n; strcpy(path, "/"); return 0; }
 /* This fixture mocks the cwd endpoint; no volume admission or I/O occurs. */

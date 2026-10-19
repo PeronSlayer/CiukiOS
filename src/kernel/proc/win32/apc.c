@@ -149,6 +149,7 @@ void w32_user_return(struct proc_thread *t, struct trap_frame *tf)
     if (!t->w32)
         return;
     struct w32_thread *s = t->w32;
+    if(s->terminate_requested)proc_thread_exit(s->terminate_code);
     if (!s->suspend)
         return;
     if (!s->context)
@@ -168,13 +169,14 @@ void w32_user_return(struct proc_thread *t, struct trap_frame *tf)
         fpu_w32_import(t->task, s->context);
     }
     s->safe = false;
+    if(s->terminate_requested)proc_thread_exit(s->terminate_code);
 }
 static struct proc_thread *context_target(struct proc_thread *caller, uint32_t handle)
 {
     struct w32_object *o = w32_lookup(caller, handle, W32_OBJ_THREAD);
     for (unsigned i = 0; o && i < CIUKI_THREAD_MAX; i++) {
         struct proc_thread *t = proc_thread_slot(i);
-        if (t && t->process == caller->process && t->w32 && t->w32->identity == o && !t->w32->ending)
+        if (t && t->w32 && t->w32->identity == o && !t->w32->ending)
             return t;
     }
     return 0;
@@ -212,8 +214,13 @@ static void merge_context(struct ciuki_w32_context *dst, const struct ciuki_w32_
 uint32_t w32_context_call(struct proc_thread *caller, struct ciuki_w32_context_args *a)
 {
     struct proc_thread *t = context_target(caller, a->thread);
-    if (!t) {
+    if (!t || ((a->action == W32_CTX_GET || a->action == W32_CTX_SET) &&
+               t->process != caller->process)) {
         a->error = 6;
+        return 0;
+    }
+    if (t->process->personality != PROC_WIN32) {
+        a->error = 120;
         return 0;
     }
     struct w32_thread *s = t->w32;

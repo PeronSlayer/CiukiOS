@@ -43,7 +43,7 @@ static bool consume(struct w32_object *o, uint32_t tid)
 }
 static uint32_t acquire(struct w32_wait *w)
 {
-    if (w->thread->process->state != PROC_LIVE || w->thread->stopped)
+    if (w->thread->process->state != PROC_LIVE || w->thread->stopped || w->thread->w32->terminate_requested)
         return W32_WAIT_FAILED;
     if (w->alertable && w->thread->w32->head)
         return W32_WAIT_IO_COMPLETION;

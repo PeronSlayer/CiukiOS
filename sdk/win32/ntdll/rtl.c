@@ -104,6 +104,14 @@ ULONG W32API RtlNtStatusToDosError(NTSTATUS s) {
     switch (s) {
     case STATUS_SUCCESS:
         return 0;
+    case (NTSTATUS)0xc0000001: return 31;
+    case (NTSTATUS)0xc0000005: return 998;
+    case (NTSTATUS)0xc0000018: return 487;
+    case (NTSTATUS)0xc0000022: return 5;
+    case (NTSTATUS)0xc0000034: return 2;
+    case (NTSTATUS)0xc000007b: return 193;
+    case (NTSTATUS)0x80000011: return 170;
+    case (NTSTATUS)0x8000001a: return 259;
     case STATUS_NO_MEMORY:
         return 8;
     case STATUS_INVALID_PARAMETER:

@@ -43,6 +43,12 @@ static void wait_interleave(void)
         w32_changed_wake();
     }
 }
+static void terminate_wait_interleave(void)
+{
+    struct ciuki_w32_system_args a={.action=W32_S_TERMINATE_THREAD,.handle=W32_CURRENT_THREAD,.value=0x12345678};
+    CHECK(!w32_system_call(interleave_thread,&a)&&!a.error);
+    on_schedule=0;
+}
 static void pulse_interleave(void)
 {
     struct ciuki_w32_object_args a = { .action = W32_OBJ_PULSE, .handle = interleave_step };
@@ -277,6 +283,13 @@ static void test_objects_sections(void)
         && mo->u.mutex.recursion == 2);
     struct ciuki_w32_object_args a = { .action = W32_OBJ_RELEASE, .handle = mh };
     CHECK(!w32_object_call(peer, &a) && a.error == 288);
+    /* Before the abandonment simulation marks this identity as exited. */
+    interleave_thread=t;
+    on_schedule=terminate_wait_interleave;
+    struct ciuki_w32_wait_args termination_sleep={.timeout=W32_INFINITE};
+    CHECK(!w32_wait_call(t,&termination_sleep)&&!termination_sleep.error&&termination_sleep.result==W32_WAIT_FAILED);
+    CHECK(t->w32->terminate_requested&&t->w32->terminate_code==0x12345678);
+    t->w32->terminate_requested=false;t->interrupted=false;
     w32_thread_died(t);
     CHECK(w32_wait_try(peer, &mh, 1, false, 0) == 128 && mo->u.mutex.owner == peer->tid);
     t->w32->ending = false;

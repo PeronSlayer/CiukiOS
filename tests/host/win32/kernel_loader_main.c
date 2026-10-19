@@ -25,6 +25,8 @@ static LONG handler(struct w32_exception *e, struct w32_seh *frame, struct w32_c
 static LONG filter(struct w32_exception_pointers *p) {
     return p->ExceptionRecord->ExceptionCode == 0xdead ? -1 : 0;
 }
+extern int w32_kernel32_runtime(void);
+extern void w32_kernel_model_spawn_test(void);
 static int runtime(void) {
     RTL_CRITICAL_SECTION *cs = host.services.alloc(0, sizeof(*cs));
     CHECK(cs);
@@ -139,7 +141,9 @@ int main(int argc, char **argv) {
         host.services.diagnostic(0,"load","fixture.dll","missing-export");
         w32_kernel_model_finish();return 0;
     }
-    int result = !w32_strcmp(argv[2], "runtime")   ? runtime()
+    if(!w32_strcmp(argv[2],"spawn")){w32_kernel_model_spawn_test();w32_kernel_model_finish();return 0;}
+    int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
+                 : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()
                  : !w32_strcmp(argv[2], "store") ? store_test()
                  : !w32_strcmp(argv[2], "attach-fail") ? attach_failure()
