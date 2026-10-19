@@ -85,3 +85,29 @@ EXPORTS
     CiukiThreadDetach
     CiukiProcessDetach
     w32_server_exchange
+    ; f5-20A: NT native API and compiler helpers the reused Wine DLLs import
+    LdrAddRefDll
+    NtAllocateVirtualMemory
+    NtClose
+    NtCreateKey
+    NtDeleteKey
+    NtOpenKey
+    NtQueryInformationFile
+    NtQuerySystemTime
+    RtlAreBitsClear
+    RtlAreBitsSet
+    RtlCreateUnicodeStringFromAsciiz
+    RtlGUIDFromString
+    RtlImageRvaToVa
+    RtlInitializeBitMap
+    RtlIsTextUnicode
+    RtlRandom
+    RtlSetBits
+    RtlTimeToSecondsSince1970
+    RtlUnicodeToMultiByteN
+    RtlUnicodeToMultiByteSize
+    _alldiv
+    _allrem
+    _aulldiv
+    _chkstk
+    w32_registry_forget

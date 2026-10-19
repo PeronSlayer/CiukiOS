@@ -17,6 +17,19 @@ FORWARDS={name:'ntdll.'+target for name,target in {
     'SetUnhandledExceptionFilter':'SetUnhandledExceptionFilter',
     'UnhandledExceptionFilter':'UnhandledExceptionFilter',
 }.items()}
+# f5-20A: the LZ expansion API is implemented once, by the CiukiOS LZ32
+# facade; KERNEL32 forwards the names the reused Wine DLLs bind there.
+FORWARDS.update({name:'lz32.'+name for name in ('LZClose','LZCopy','LZOpenFileW','LZRead','LZSeek')})
+UPPER=ROOT/'config/wine-upper.json'
+def upper_decisions(dll):
+    """core-implement/core-w21-stub decisions of the reused Wine DLLs owned by `dll`."""
+    rows={}
+    for e in json.loads(UPPER.read_text())['decisions']:
+        if e['owner']==dll and e['action'] in ('core-implement','core-w21-stub'):
+            row=rows.setdefault(e['name'],{'name':e['name'],'action':e['action'],'rule':e['rule'],
+                                           'importers':set(),'symbols':set()})
+            row['importers'].add(e['importer']);row['symbols'].add(e['symbol'])
+    return [dict(r,importers=sorted(r['importers']),symbols=sorted(r['symbols'])) for _,r in sorted(rows.items())]
 # Required lock entry points are implemented on F1-84, including names outside the census.
 REQUIRED_VFS={'LockFile','LockFileEx','UnlockFile','UnlockFileEx'}
 UNICODE_STUBS={'CompareStringW','GetLocaleInfoW','GetStringTypeW','LCMapStringW'}
@@ -29,7 +42,7 @@ def build(out,base,flags):
         subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True)
         objects.append(str(obj))
         nm=subprocess.run(['llvm-nm','--defined-only',str(obj)],capture_output=True,text=True,check=True).stdout
-        for name,bytes_ in re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M):
+        for name,bytes_ in re.findall(r'\bT _([A-Za-z_][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M):
             if name.startswith('k32_'):continue
             exports[name]=f'_{name}@{bytes_}'
             if name.endswith('W'):
@@ -68,13 +81,21 @@ def build(out,base,flags):
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0];size=struct.unpack_from('<I',raw,pe+80)[0]
     coverage=[]
     for name in sorted(imported):
-        row={'name':name,'status':'W21 returning Unicode stub (120)' if name in UNICODE_STUBS else 'implemented' if name in exports else 'ntdll forwarder' if name in FORWARDS else 'W21 typed failure'}
+        row={'name':name,'status':'W21 returning Unicode stub (120)' if name in UNICODE_STUBS else 'implemented' if name in exports else 'forwarder '+FORWARDS[name] if name in FORWARDS else 'W21 typed failure'}
         if name in missing:
             _,_,audit=stub_signatures.body('kernel32.dll',name,'audit',0)
             row['failure']=audit['failure'];row['abi']=audit
             if audit['failure'].startswith('nonreturning'):row['status']='W21 nonreturning stub'
         coverage.append(row)
-    (out/'kernel32-coverage.json').write_text(json.dumps({'schema':1,'scope':'provisional research union plus authored fixtures; original acceptance media absent','exports':coverage,'deferred_vfs':[], 'required_vfs':sorted(REQUIRED_VFS)},indent=2)+'\n')
+    upper=[]
+    for row in upper_decisions('kernel32.dll'):
+        name=row['name']
+        if name not in exports and name not in FORWARDS:
+            raise ValueError('kernel32 lacks the decided reused-DLL export '+name)
+        status='W21 typed failure' if row['action']=='core-w21-stub' else 'forwarder '+FORWARDS[name] if name in FORWARDS else 'implemented'
+        upper.append(dict(row,status=status))
+    (out/'kernel32-coverage.json').write_text(json.dumps({'schema':1,'scope':'provisional research union plus authored fixtures; original acceptance media absent','exports':coverage,'deferred_vfs':[], 'required_vfs':sorted(REQUIRED_VFS),
+        'upper_scope':'f5-20A: core-implement and core-w21-stub decisions of config/wine-upper.json owned by kernel32.dll','upper':upper},indent=2)+'\n')
     return {'name':'kernel32.dll','path':'kernel32.dll','base':base,'size':size,
         'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}
 

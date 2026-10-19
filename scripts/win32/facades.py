@@ -32,13 +32,19 @@ def build(out):
                'GetProcessHeap': 0, 'HeapAlloc': 12, 'HeapFree': 12,
                'SetLastError': 4, 'OpenFile': 12, '_lread': 12, '_lwrite': 12,
                '_llseek': 12, '_lclose': 4, 'WideCharToMultiByte': 32,
-               'MultiByteToWideChar': 24}
+               'MultiByteToWideChar': 24,
+               # f5-20A: RegGetValue/RegLoadMUIString environment expansion and
+               # string-table lookup.
+               'ExpandEnvironmentStringsA': 12, 'ExpandEnvironmentStringsW': 12,
+               'LoadLibraryExA': 12, 'FreeLibrary': 4, 'FindResourceA': 12,
+               'LoadResource': 8, 'SizeofResource': 8}
     definition = out / 'kernel32-imports.def'
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n' + ''.join(f' {n}@{a}\n' for n, a in imports.items()))
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'kernel32.lib'])
     definition = out/'ntdll-imports.def'
-    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n w32_server_exchange\n')
-    run(['llvm-dlltool', '-m', 'i386', '-d', definition, '-l', out/'ntdll.lib'])
+    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n w32_server_exchange\n'
+                          ' w32_registry_forget\n RtlAllocateHeap@12\n RtlFreeHeap@12\n')
+    run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'ntdll.lib'])
     store = {'schema': 1, 'dlls': []}
     coverage = {}
     base = 0x71000000
@@ -46,7 +52,7 @@ def build(out):
         stem = dll[:-4]
         sources = [CORE/'services/bytes.c', CORE/'services/stack.S']
         if stem == 'advapi32':
-            sources += [CORE/'advapi32'/n for n in ('registry.c','text.c','rpc.c','gate.S')]
+            sources += [CORE/'advapi32'/n for n in ('registry.c','registry_ex.c','security.c','text.c','rpc.c','gate.S')]
         elif stem == 'version':
             sources += [CORE/'version/version.c', CORE/'services/files.c', CORE/'advapi32/text.c']
         else:
@@ -72,7 +78,7 @@ def build(out):
             nm = subprocess.run(['llvm-nm','--defined-only',str(obj)],check=True,capture_output=True,text=True).stdout
             # Public facade implementations have stdcall decoration; helper
             # functions and the cdecl libmspack API never become PE exports.
-            if source.name in ('registry.c','version.c','lz32.c'):
+            if source.name in ('registry.c','registry_ex.c','security.c','version.c','lz32.c'):
                 implemented.update(re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)@\d+\b', nm))
                 for name,bytes_ in re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*W)@(\d+)\b',nm):
                     run(['llvm-objcopy','--redefine-sym',f'_{name}@{bytes_}=_w32_real_{name}@{bytes_}',obj])
@@ -100,7 +106,7 @@ def build(out):
         run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no',
              '/base:'+hex(base),'/timestamp:0','/incremental:no','/subsystem:windows,4.0',
              '/osversion:4.0','/def:'+str(definition),'/out:'+str(image),*objects,resource,
-             out/'ntdll.lib',*([out/'kernel32.lib'] if stem != 'advapi32' else [])])
+             out/'ntdll.lib',out/'kernel32.lib'])
         raw = image.read_bytes()
         pe = census.PE(raw)
         coverage[dll] = {n: 'implemented' if n in implemented else 'W21 stub' for n in sorted(names.get(dll,()))}
@@ -111,6 +117,17 @@ def build(out):
                               'sha256':hashlib.sha256(raw).hexdigest(),'version':[0,0,0,0]})
         base += (pe.size+65535)&~65535
     (out/'builtin-store.json').write_text(json.dumps(store,indent=2,sort_keys=True)+'\n')
+    # f5-20A: every decision of config/wine-upper.json owned by these DLLs.
+    from scripts.win32 import kernel32
+    upper = {}
+    for dll in ('advapi32.dll', 'version.dll'):
+        actual = {n for e in census.inspect((out/dll).read_bytes())['exports'] for n in e['names']}
+        upper[dll] = []
+        for row in kernel32.upper_decisions(dll):
+            if row['name'] not in actual:
+                raise ValueError(dll + ' lacks the decided reused-DLL export ' + row['name'])
+            upper[dll].append(dict(row, status='W21 typed failure' if row['action'] == 'core-w21-stub' else 'implemented'))
+    (out/'upper-coverage.json').write_text(json.dumps(upper, indent=2, sort_keys=True)+'\n')
     (out/'coverage.json').write_text(json.dumps(coverage,indent=2,sort_keys=True)+'\n')
     stubs.verify_store(out/'builtin-store.json')
     return store

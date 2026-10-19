@@ -56,6 +56,22 @@ typedef struct {
   char name[260], alternate[14];
 } WIN32_FIND_DATAA;
 typedef struct {
+  DWORD attributes;
+  FILETIME creation, access, write;
+  DWORD size_high, size_low, reserved[2];
+  WCHAR name[260], alternate[14];
+} WIN32_FIND_DATAW;
+typedef struct {
+  DWORD attributes;
+  FILETIME creation, access, write;
+  DWORD size_high, size_low;
+} WIN32_FILE_ATTRIBUTE_DATA;
+typedef struct {
+  DWORD attributes;
+  FILETIME creation, access, write;
+  DWORD serial, size_high, size_low, links, index_high, index_low;
+} BY_HANDLE_FILE_INFORMATION;
+typedef struct {
   LONG bias;
   WCHAR standard_name[32];
   SYSTEMTIME standard_date;
@@ -138,4 +154,40 @@ BOOL W32API TlsFree(DWORD);
 void *W32API TlsGetValue(DWORD);
 BOOL W32API TlsSetValue(DWORD, void *);
 void W32API ExitThread(DWORD);
+/* f5-20A: ANSI cores and conversion helpers shared by the Unicode layer. */
+BOOL W32API FindNextFileA(HANDLE, WIN32_FIND_DATAA *);
+HANDLE W32API FindFirstFileA(const char *, WIN32_FIND_DATAA *);
+BOOL W32API GetFileAttributesExA(const char *, DWORD, void *);
+DWORD W32API GetEnvironmentVariableA(const char *, char *, DWORD);
+DWORD W32API GetModuleFileNameA(HANDLE, char *, DWORD);
+DWORD W32API SearchPathA(const char *, const char *, const char *, DWORD, char *, char **);
+int W32API GetLocaleInfoA(DWORD, DWORD, char *, int);
+DWORD W32API GetUserDefaultLCID(void);
+DWORD W32API GetSystemDefaultLCID(void);
+BOOL W32API IsValidLocale(DWORD, DWORD);
+BOOL W32API CreateDirectoryA(const char *, SECURITY_ATTRIBUTES *);
+DWORD W32API GetTempFileNameA(const char *, const char *, DWORD, char *);
+void W32API OutputDebugStringA(const char *);
+HANDLE W32API CreateThread(SECURITY_ATTRIBUTES *, DWORD, DWORD(W32API *)(void *), void *,
+                           DWORD, DWORD *);
+DWORD W32API SleepEx(DWORD, BOOL);
+BOOL W32API GetFileTime(HANDLE, FILETIME *, FILETIME *, FILETIME *);
+BOOL W32API DosDateTimeToFileTime(uint16_t, uint16_t, FILETIME *);
+BOOL W32API GetVolumeInformationA(const char *, char *, DWORD, DWORD *, DWORD *,
+                                  DWORD *, char *, DWORD);
+/* ACP 1252 conversion: k32_narrow fails with `error` on a character outside
+ * the code page (ERROR_INVALID_NAME for names) and with 206 when too long. */
+int k32_narrow(const WCHAR *, char *, DWORD, DWORD);
+char *k32_narrow_dup(const WCHAR *, DWORD *, DWORD);
+void k32_widen(const char *, WCHAR *, DWORD);
+DWORD k32_wlen(const WCHAR *);
+/* Little-endian reads; ntdll keeps w32_u16/w32_u32 private. */
+static inline uint16_t k32_u16(const void *v) {
+  const uint8_t *p = v;
+  return (uint16_t)(p[0] | p[1] << 8);
+}
+static inline uint32_t k32_u32(const void *v) {
+  const uint8_t *p = v;
+  return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
 #endif

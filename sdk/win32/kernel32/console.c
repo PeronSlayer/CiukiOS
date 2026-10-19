@@ -100,3 +100,70 @@ BOOL W32API WriteConsoleW(HANDLE h, const WCHAR *data, DWORD n, DWORD *done,
   k32_free(bytes, n);
   return ok;
 }
+/* f5-20A: console queries over the log console. The console handle is the
+ * one AllocConsole created; it has a mode word but no interactive input, so
+ * reads find nothing pending (Peek: none; ReadConsole: zero bytes; a
+ * blocking ReadConsoleInput: end of input). Other handles are not console
+ * handles (ERROR_INVALID_HANDLE), as on Windows. */
+static DWORD console_mode = 7;
+static int console(HANDLE h) {
+  if (h && h == log_handle)
+    return 1;
+  SetLastError(6);
+  return 0;
+}
+BOOL W32API GetConsoleMode(HANDLE h, DWORD *mode) {
+  if (!mode) {
+    SetLastError(87);
+    return 0;
+  }
+  if (!console(h))
+    return 0;
+  *mode = console_mode;
+  return 1;
+}
+BOOL W32API SetConsoleMode(HANDLE h, DWORD mode) {
+  if (!console(h))
+    return 0;
+  if (mode & ~0x1ffu) {
+    SetLastError(87);
+    return 0;
+  }
+  console_mode = mode;
+  return 1;
+}
+BOOL W32API VerifyConsoleIoHandle(HANDLE h) { return h && h == log_handle; }
+BOOL W32API PeekConsoleInputA(HANDLE h, void *records, DWORD n, DWORD *done) {
+  (void)records;
+  (void)n;
+  if (!done) {
+    SetLastError(87);
+    return 0;
+  }
+  if (!console(h))
+    return 0;
+  *done = 0;
+  return 1;
+}
+BOOL W32API ReadConsoleA(HANDLE h, void *buffer, DWORD n, DWORD *done, void *control) {
+  (void)control;
+  if (!done || (!buffer && n)) {
+    SetLastError(87);
+    return 0;
+  }
+  if (!console(h))
+    return 0;
+  *done = 0;
+  return 1;
+}
+BOOL W32API ReadConsoleInputW(HANDLE h, void *records, DWORD n, DWORD *done) {
+  if (!done || !records || !n) {
+    SetLastError(87);
+    return 0;
+  }
+  *done = 0;
+  if (!console(h))
+    return 0;
+  SetLastError(38);
+  return 0;
+}

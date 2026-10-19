@@ -19,7 +19,7 @@ def build(out=None):
            '-O1','-Wall','-Wextra','-Werror','-I'+str(core/'include'),'-I'+str(ROOT/'src/kernel/include')]
     objects=[]
     sources=sorted((core/'ldr').glob('*.c'))+sorted((core/'ntdll').glob('*.c'))+[
-        core/'ntdll/context.S',core/'services/ciuki.c',core/'services/start.c']
+        core/'ntdll/context.S',core/'ntdll/runtime.S',core/'services/ciuki.c',core/'services/start.c']
     for source in sources:
         obj=out/(source.parent.name+'-'+source.stem+'.obj')
         subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True);objects.append(str(obj))
@@ -67,6 +67,16 @@ def build(out=None):
     from scripts.win32 import upper_dlls
     upper_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     store['dlls']+=upper_dlls.build(out,upper_base,flags)
+    # f5-20A: the f5-07A ADVAPI32/VERSION/LZ32 facades replace their census
+    # placeholders, at the facade bases (0x71000000 up, below the reused
+    # Wine region), so the loader and the reused-DLL audit see one core.
+    from scripts.win32 import facades
+    facade_store=facades.build(out/'facades')
+    for facade in facade_store['dlls']:
+        shutil.copyfile(out/'facades'/facade['path'],out/facade['path'])
+        replacement=dict(facade,version=stubs.image_version((out/facade['path']).read_bytes()))
+        store['dlls']=[replacement if d['name']==facade['name'] else d for d in store['dlls']]
+    shutil.copyfile(out/'facades'/'upper-coverage.json',out/'facades-upper-coverage.json')
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='msvcrt.dll: Wine 10.0 PE selected by measurement (config/wine-upper.json, f5-14B); not staged until qualified'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

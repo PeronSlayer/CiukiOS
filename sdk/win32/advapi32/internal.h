@@ -10,4 +10,8 @@ void w32r_pause(void);
 void w32r_last_error(uint32_t);
 int w32r_to_utf8(char *,uint32_t,const void *,int wide);
 uint32_t w32r_from_utf8(void *,uint32_t,const char *,int wide);
+/* Process-heap blocks for the f5-20A entry points (NULL-safe free). */
+void *w32r_alloc(uint32_t);
+void w32r_free(void *);
+uint32_t w32r_registry_access(uint32_t);
 #endif

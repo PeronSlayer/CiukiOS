@@ -147,6 +147,76 @@ static int upper_store_test(const char *name) {
     printf("PASS kernel DirectSetup store H0 %s bind/callback observation only\n",name?name:"baseline");
     return 0;
 }
+/* f5-20A: every core export the reused Wine DLLs import (a list written
+ * by the host test) resolves through the production loader and store,
+ * forwarders included; loader reference, resource and NT services. */
+extern NTSTATUS W32API LdrAddRefDll(ULONG, void *);
+extern NTSTATUS W32API NtClose(void *);
+extern NTSTATUS W32API NtQuerySystemTime(int64_t *);
+extern NTSTATUS W32API NtAllocateVirtualMemory(void *, void **, ULONG, ULONG *, ULONG, ULONG);
+extern HANDLE W32API FindResourceW(HANDLE, const WCHAR *, const WCHAR *);
+extern HANDLE W32API FindResourceExW(HANDLE, const WCHAR *, const WCHAR *, uint16_t);
+extern HANDLE W32API FindResourceA(HANDLE, const char *, const char *);
+typedef BOOL(W32API *name_proc)(HANDLE, const void *, void *, intptr_t);
+extern BOOL W32API EnumResourceNamesW(HANDLE, const WCHAR *, name_proc, intptr_t);
+extern BOOL W32API EnumResourceNamesA(HANDLE, const char *, name_proc, intptr_t);
+extern HANDLE W32API CreateEventA(SECURITY_ATTRIBUTES *, BOOL, BOOL, const char *);
+static BOOL W32API count_names(HANDLE h, const void *type, void *name, intptr_t p) {
+    (void)h;
+    CHECK((uintptr_t)type == 16 && (uintptr_t)name == 1);
+    (*(unsigned *)p)++;
+    return 1;
+}
+static int upper_core(const char *images) {
+    struct w32_loader loader;
+    w32_ldr_init(&loader,&host.services,&host.peb);w32_ldr_bind(&loader);
+    struct w32_file manifest;
+    CHECK(w32_ciuki_store(&loader,&manifest));
+    CHECK(w32_ldr_thread_attach(&loader,&host.teb));
+    char path[600];snprintf(path,sizeof(path),"%s/System/Win32/upper-symbols.txt",images);
+    FILE *list=fopen(path,"r");CHECK(list);
+    char dll[64],name[128];unsigned count=0;
+    while(fscanf(list,"%63s %127s",dll,name)==2){
+        struct w32_module *m;
+        CHECK(w32_ldr_load(&loader,dll,0,&m)&&m->builtin);
+        if(!w32_ldr_proc(&loader,m,name,0,0xffffffffu)){fprintf(stderr,"unresolved %s!%s\n",dll,name);exit(1);}
+        count++;
+    }
+    fclose(list);
+    struct w32_module *k=w32_ldr_module(&loader,"kernel32.dll"),*lz=w32_ldr_module(&loader,"lz32.dll");
+    CHECK(k&&lz&&lz->builtin);
+    void *base=k->pe.image;
+    CHECK(!LdrAddRefDll(0,base)&&!LdrAddRefDll(1,base)&&k->entry.LoadCount==65535);
+    CHECK(LdrAddRefDll(2,base)==STATUS_INVALID_PARAMETER&&LdrAddRefDll(0,(void *)0x1000)==STATUS_DLL_NOT_FOUND);
+    struct w32_module *plain;
+    CHECK(w32_ldr_load(&loader,"/exports.dll",0,&plain)&&!plain->builtin);
+    ULONG references=plain->references;
+    CHECK(!LdrAddRefDll(0,plain->pe.image)&&plain->references==references+1);
+    CHECK(!LdrAddRefDll(1,plain->pe.image)&&w32_ldr_free(&loader,plain)&&w32_ldr_free(&loader,plain));
+    CHECK(w32_ldr_module(&loader,"exports.dll")==plain&&plain->entry.LoadCount==65535);
+    const WCHAR one[]={'#','1',0},sixteen[]={'#','1','6',0};
+    HANDLE version=FindResourceW(base,(const WCHAR *)(uintptr_t)1,(const WCHAR *)(uintptr_t)16);
+    CHECK(version&&FindResourceW(base,one,sixteen)==version&&FindResourceA(base,"#1","#16")==version);
+    CHECK(FindResourceExW(base,(const WCHAR *)(uintptr_t)16,(const WCHAR *)(uintptr_t)1,0)==version);
+    CHECK(!FindResourceW(base,(const WCHAR *)(uintptr_t)2,(const WCHAR *)(uintptr_t)16)&&GetLastError()==1814);
+    const WCHAR bad[]={'#','x',0};
+    CHECK(!FindResourceW(base,bad,sixteen)&&GetLastError()==1814);
+    unsigned names=0;
+    CHECK(EnumResourceNamesW(base,(const WCHAR *)(uintptr_t)16,count_names,(intptr_t)&names)&&names==1);
+    CHECK(EnumResourceNamesA(base,(const char *)(uintptr_t)16,count_names,(intptr_t)&names)&&names==2);
+    CHECK(!EnumResourceNamesW(base,(const WCHAR *)(uintptr_t)99,count_names,(intptr_t)&names)&&GetLastError()==1813);
+    CHECK(!EnumResourceNamesW(base,(const WCHAR *)(uintptr_t)16,0,0)&&GetLastError()==87);
+    int64_t now=0;CHECK(!NtQuerySystemTime(&now)&&now>0&&NtQuerySystemTime(0));
+    void *region=0;ULONG bytes=5000;
+    CHECK(!NtAllocateVirtualMemory((void *)(intptr_t)-1,&region,0,&bytes,0x3000,4)&&region&&bytes==8192);
+    bytes=1;CHECK(NtAllocateVirtualMemory((void *)(intptr_t)-2,&region,0,&bytes,0x3000,4)==(NTSTATUS)0xc0000008);
+    bytes=0;CHECK(NtAllocateVirtualMemory((void *)(intptr_t)-1,&region,0,&bytes,0x3000,4)==(NTSTATUS)0xc00000f2);
+    HANDLE event=CreateEventA(0,0,0,0);
+    CHECK(event&&!NtClose(event)&&NtClose(event)==(NTSTATUS)0xc0000008);
+    w32_ldr_shutdown(&loader);RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
+    printf("PASS kernel f5-20A upper core exports=%u loader references resources NT services\n",count);
+    return 0;
+}
 extern HANDLE W32API LoadLibraryA(const char *);
 extern DWORD W32API GetModuleFileNameA(HANDLE,char *,DWORD);
 extern BOOL W32API FreeLibrary(HANDLE);
@@ -197,6 +267,7 @@ int main(int argc, char **argv) {
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()
                  : !w32_strcmp(argv[2], "store") ? store_test()
+                 : !w32_strcmp(argv[2], "upper-core") ? upper_core(argv[1])
                  : !w32_strcmp(argv[2], "attach-fail") ? attach_failure()
                                                    : host_main(argc - 1, argv + 1);
     w32_kernel_model_finish();

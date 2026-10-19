@@ -762,3 +762,83 @@ BOOL W32API ReadProcessMemory(HANDLE h, const void *src, void *dst, DWORD n, DWO
 BOOL W32API WriteProcessMemory(HANDLE h, void *dst, const void *src, DWORD n, DWORD *done) {
   return process_memory(h,src,dst,n,done,W32_S_WRITE_MEMORY);
 }
+/* f5-20A: synchronization, process and heap queries the reused Wine DLLs
+ * import. The kernel validates a semaphore maximum even for an open, so
+ * OpenSemaphore passes a neutral one; the open ignores it. */
+HANDLE W32API OpenSemaphoreA(DWORD access, BOOL inherit, const char *n) {
+  if (!n) {
+    SetLastError(87);
+    return 0;
+  }
+  return named_a(W32_OBJ_SEMAPHORE, W32_OBJ_OPEN, n, inherit, 0, 1, access);
+}
+static int process_handle(HANDLE h) {
+  if (h == K32_INVALID)
+    return 1;
+  struct ciuki_w32_object_args a = {.action = W32_OBJ_QUERY,
+                                    .handle = K32_PTR(h)};
+  if (!object(&a))
+    return 0;
+  if (a.type != W32_OBJ_PROCESS) {
+    SetLastError(6);
+    return 0;
+  }
+  return 1;
+}
+/* 32-bit Windows: a valid process handle is never a WOW64 process. */
+BOOL W32API IsWow64Process(HANDLE h, BOOL *wow64) {
+  if (!wow64) {
+    SetLastError(87);
+    return 0;
+  }
+  if (!process_handle(h))
+    return 0;
+  *wow64 = 0;
+  return 1;
+}
+/* Windows 98 has a single session: every live process is in session 0. */
+BOOL W32API ProcessIdToSessionId(DWORD pid, DWORD *session) {
+  if (!session) {
+    SetLastError(87);
+    return 0;
+  }
+  if (pid != GetCurrentProcessId()) {
+    HANDLE h = OpenProcess(0x400, 0, pid);
+    if (!h) {
+      SetLastError(87);
+      return 0;
+    }
+    CloseHandle(h);
+  }
+  *session = 0;
+  return 1;
+}
+/* The thread object query carries no identifier: the current-thread pseudo
+ * handle answers; another valid thread handle gets ERROR_NOT_SUPPORTED. */
+DWORD W32API GetThreadId(HANDLE h) {
+  if (h == GetCurrentThread())
+    return GetCurrentThreadId();
+  struct ciuki_w32_object_args a = {.action = W32_OBJ_QUERY,
+                                    .handle = K32_PTR(h)};
+  if (!object(&a))
+    return 0;
+  SetLastError(a.type == W32_OBJ_THREAD ? 50 : 6);
+  return 0;
+}
+/* Largest free block of the heap; NO_ERROR with zero when none is free. */
+DWORD W32API HeapCompact(HANDLE h, DWORD flags) {
+  (void)flags;
+  struct w32_heap_entry e;
+  w32_fill(&e, 0, sizeof(e));
+  DWORD largest = 0;
+  NTSTATUS s;
+  while (!(s = RtlWalkHeap(h, &e)))
+    if (!(e.Flags & 3) && e.DataSize > largest)
+      largest = e.DataSize;
+  if ((ULONG)s != 0x8000001au) {
+    SetLastError(6);
+    return 0;
+  }
+  SetLastError(0);
+  return largest;
+}
