@@ -602,10 +602,10 @@
                 "eq": 256
               },
               "published_periods": {
-                "eq": 4
+                "eq": 8
               },
               "latency_frames": {
-                "eq": 1328
+                "eq": 2352
               },
               "mute": {
                 "eq": 0
@@ -893,12 +893,12 @@
             },
             "fields": {
               "lead_min": {
-                "ge": 1140,
-                "le": 1340
+                "ge": 2164,
+                "le": 2364
               },
               "lead_max": {
-                "ge": 1240,
-                "le": 1440
+                "ge": 2264,
+                "le": 2400
               },
               "lag_min": {
                 "ge": 164,
@@ -1054,10 +1054,10 @@
                 "eq": 256
               },
               "published_periods": {
-                "eq": 4
+                "eq": 8
               },
               "latency_frames": {
-                "eq": 1328
+                "eq": 2352
               },
               "mute": {
                 "eq": 0
@@ -1345,12 +1345,12 @@
             },
             "fields": {
               "lead_min": {
-                "ge": 1140,
-                "le": 1340
+                "ge": 2164,
+                "le": 2364
               },
               "lead_max": {
-                "ge": 1240,
-                "le": 1440
+                "ge": 2264,
+                "le": 2400
               },
               "lag_min": {
                 "ge": 164,
@@ -1506,10 +1506,10 @@
                 "eq": 256
               },
               "published_periods": {
-                "eq": 4
+                "eq": 8
               },
               "latency_frames": {
-                "eq": 1328
+                "eq": 2352
               },
               "mute": {
                 "eq": 0
@@ -1797,12 +1797,12 @@
             },
             "fields": {
               "lead_min": {
-                "ge": 1140,
-                "le": 1340
+                "ge": 2164,
+                "le": 2364
               },
               "lead_max": {
-                "ge": 1240,
-                "le": 1440
+                "ge": 2264,
+                "le": 2400
               },
               "lag_min": {
                 "ge": 164,

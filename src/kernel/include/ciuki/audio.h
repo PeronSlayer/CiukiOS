@@ -9,7 +9,15 @@
 #define AUDIO_RING 2048u
 #define AUDIO_QUANTUM 256u
 #define AUDIO_LEAD 8u
-#define AUDIO_VM_LEAD 4u
+/* F4-32 Amendment 1: a single 1024-frame capacity callback drains a
+ * four-period frontier before the worker runs. Eight periods retain 1024
+ * frames of margin; lead evidence has intact PCM at 8, startup halts at 4.
+ * 8 * 256 + 304 source frames = 2352 / 48000 = 49.0 ms, <=50 ms nominal.
+ * Also covers one missed 10 ms service + one period + one period margin
+ * (480 + 256 + 256 = 992 frames); ICH3 needs 3 * 256 = 768 frames.
+ * A 10 ms QEMU timer does not bound callback capacity. Measured gaps still
+ * grow the session lead (below), exceeding the nominal latency target. */
+#define AUDIO_VM_LEAD 8u
 #define AUDIO_RATE 48000u
 struct audio_frame { int16_t left, right; };
 /* T23 observed gap: 112933 us; display stretch: 134 ms. Two periods of

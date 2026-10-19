@@ -133,7 +133,7 @@ service, and use the same proved shutdown path as explicit disablement.
 
 **[F4]** The default physical quantum MUST be 256 stereo frames. At 48 kHz
 it lasts 5.333 ms; eight published periods provide 42.667 ms of transport
-lead. f4-31 uses four periods when a VM is attached, a measured-gap-derived
+lead. F4-32 Amendment 1 uses eight periods also when a VM is attached, a measured-gap-derived
 idle cushion (134 ms plus two periods), and increases the active session lead
 after a late service. See the [audit](../validation/f4-31-audio-audit.md).
 A 48-kHz
@@ -147,12 +147,30 @@ quantum or timestamped OPL event MUST be ≤60 ms to physical output at 48 kHz:
 and the remaining margin for conversion/codec/output. Mixer/refill work MUST
 yield within 2 ms and obey the existing ≤250 µs hard-IRQ/IRQ-off maximum
 (50 µs target). Input-to-DOS-refill scheduling is measured separately.
-The f4-31 VM target is ≤30 ms (four periods plus 304 source frames at 48 kHz).
+F4-32 Amendment 1 replaces the f4-31 VM target with ≤50 ms nominal at 48 kHz:
+`8 × 256 + 304 = 2352` frames, or 49.0 ms including the source floor.
+The host capacity-callback replay exhausts four periods in a single 1024-frame
+request without a worker turn; eight periods retain 1024 frames of margin.
+The lead's startup-halt evidence on all three QEMU VM profiles with four
+periods, versus intact PCM with eight, selects this frontier. QEMU's 10 ms
+timer is not a bound on callback capacity; see the
+[F4-32 audit and primary sources](../validation/f4-31-audio-audit.md#f4-32).
+Eight periods also exceed the original missed-service budget of
+`480 + 256 + 256 = 992` frames and ICH3's `256 + 256 + 256 = 768` frames.
+The nominal target applies before a measured scheduling gap increases the
+session lead. The measured 113 ms T23 gap still requires adaptive growth.
 Native player prefill is at most one period. `latency_frames` includes source,
 transport and drain allowance. These targets describe normal low-lead service;
 an adapted lead covering a 134 ms scheduling gap necessarily exceeds them.
 Such a session must expose its lead and latency, never claim the low-latency
 gate passed. Physical qualification must bound active scheduling gaps.
+An uncertain cursor retains the last committed position. It MUST NOT block
+publication into slots independently proved free, and MUST re-arm the refill
+worker after a real block of at most 1 ms. The 2 ms handoff retry deadline is
+not extended to match an emulator's audio callback interval. After proven
+stop/reset, recovery silence MUST preserve the next unrendered VM frame,
+including a pending publication and converter lookahead. Source recovery
+delay is reflected in the VM pacing lead; it is not permission to skip PCM.
 Report maximum and percentile latency, clock calibration and measurement
 uncertainty. QEMU WAV capture proves PCM/timeline behavior, not this physical
 latency budget. A slower negotiated backend needs a recorded period/lead

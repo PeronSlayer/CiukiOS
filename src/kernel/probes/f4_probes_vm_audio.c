@@ -21,6 +21,26 @@
 #include <ciuki/task.h>
 
 #define VP "vm-audio"
+/* Attribute long controller stretches without printing in the measured
+ * path. Values are wall time (including a callee's sleeps), not CPU time. */
+enum { SP_WRITE, SP_CREATE, SP_BOOT, SP_TYPE, SP_TEXT, SP_STATS, SP_INFO, SP_CHECK, SP_COUNT };
+static uint32_t span_us[SP_COUNT];
+static void span_end(unsigned which, uint64_t began)
+{
+    uint64_t us = g_tsc_per_ms ? (ktime_cycles() - began) * 1000 / g_tsc_per_ms : 0;
+    if (us > span_us[which]) span_us[which] = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+    kpreempt_point(); /* completed observation/transaction; no IRQ lock held */
+}
+static bool probe_audio_stats(struct dosvm_key key, struct audio_vm_stats *out)
+{
+    uint64_t began = ktime_cycles();
+    bool ok = audio_vm_stats(key, out); span_end(SP_STATS, began); return ok;
+}
+static bool probe_audio_info(struct dosvm_key key, struct dosvm_audio_info *out)
+{
+    uint64_t began = ktime_cycles();
+    bool ok = dosvm_audio_info(key, out); span_end(SP_INFO, began); return ok;
+}
 struct play_mail {
     uint16_t magic, stage, command, irqs, last82, error, version, reset, isrbad;
     uint16_t master, voice, fm, ticks, oplstat, buffer[2], base, irq, dma, hdma;
@@ -38,7 +58,7 @@ static int play_stage(struct dosvm *v, unsigned stage, struct play_mail *m, uint
         if (m->magic == 0xF405 && m->stage == stage) return 0;
         if (info.state >= DOSVM_STOPPING) return -EIO;
         if (deadline_passed(deadline)) {
-            struct dosvm_audio_info a = {0}; dosvm_audio_info(dosvm_key(v), &a);
+            struct dosvm_audio_info a = {0}; probe_audio_info(dosvm_key(v), &a);
             rec_emit(VP, "DATA", "case=stage_timeout wanted=%u stage=%u command=%u irqs=%u last82=%02x error=%u isrbad=%u active=%u boundaries=%u services=%u",
                      stage, m->stage, m->command, m->irqs, m->last82, m->error, m->isrbad, a.active, a.boundaries, a.services);
             return -V86_ETIMEDOUT;
@@ -48,15 +68,19 @@ static int play_stage(struct dosvm *v, unsigned stage, struct play_mail *m, uint
 }
 static bool play_prompt(struct dosvm *v)
 {
-    const uint16_t *text = dosvm_text(v, 0);
-    for (unsigned i = 0; i < 1997; i++)
+    uint64_t began = ktime_cycles();
+    const uint16_t *text = dosvm_text(v, 0); span_end(SP_TEXT, began);
+    for (unsigned i = 0; i < 1997; i++) {
+        if (!(i & 63u)) kpreempt_point();
         if ((uint8_t)text[i] == 'C' && (uint8_t)text[i + 1] == ':' && (uint8_t)text[i + 2] == '\\')
             for (unsigned j = i + 3; j < 2000 && j < i + 80; j++) if ((uint8_t)text[j] == '>') return true;
+    }
     return false;
 }
 static int play_boot(struct dosvm *v)
 {
-    int e = dosvm_boot(v);
+    uint64_t began = ktime_cycles();
+    int e = dosvm_boot(v); span_end(SP_BOOT, began);
     if (e) return e;
     uint64_t deadline = deadline_after_ms(30000);
     for (;;) {
@@ -70,8 +94,14 @@ static int play_boot(struct dosvm *v)
 static int play_type(struct dosvm *v, const char *text)
 {
     struct dosvm_key key = dosvm_key(v);
-    for (unsigned i = 0; text[i]; i++) if (!dosvm_keyboard(key, (uint8_t)text[i])) return -ENOSPC;
-    return dosvm_keyboard(key, 0x1C0D) ? 0 : -ENOSPC;
+    for (unsigned i = 0; text[i]; i++) {
+        uint64_t began = ktime_cycles();
+        bool ok = dosvm_keyboard(key, (uint8_t)text[i]); span_end(SP_TYPE, began);
+        if (!ok) return -ENOSPC;
+    }
+    uint64_t began = ktime_cycles();
+    bool ok = dosvm_keyboard(key, 0x1C0D); span_end(SP_TYPE, began);
+    return ok ? 0 : -ENOSPC;
 }
 static uint32_t isqrt64(uint64_t x)
 {
@@ -90,12 +120,12 @@ static void play_rendered(struct dosvm_key key, uint32_t blocks, struct audio_vm
 {
     uint64_t deadline = deadline_after_ms(4000);
     while (!deadline_passed(deadline)) {
-        if (!audio_vm_stats(key, st)) break;
+        if (!probe_audio_stats(key, st)) break;
         if (st->log_count >= blocks) break;
         task_sleep_ms(5);
     }
     task_sleep_ms(150);
-    audio_vm_stats(key, st);
+    probe_audio_stats(key, st);
 }
 static struct audio_vm_stats stats, before;
 static struct audio_vm_tap ring_tap;
@@ -104,6 +134,7 @@ static struct audio_vm_tap ring_tap;
 static void block_check(const struct audio_vm_stats *st, bool wide, uint32_t count, uint32_t frames,
                         uint32_t *fresh, uint32_t *repeats, uint32_t *gaps)
 {
+    uint64_t began = ktime_cycles();
     *fresh = *repeats = *gaps = 0;
     for (uint32_t i = 0; i < count && i < st->log_count && i < AUDIO_VM_LOG; i++) {
         const struct audio_vm_block_log *b = &st->log[i];
@@ -112,7 +143,9 @@ static void block_check(const struct audio_vm_stats *st, bool wide, uint32_t cou
         if (b->first[0] == l && b->first[1] == r && b->frames == frames && !(b->flags & ~DOSVM_BLOCK_COMPLETE)) (*fresh)++;
         if (i && b->first[0] == st->log[i - 1].first[0] && b->first[1] == st->log[i - 1].first[1]) (*repeats)++;
         if (i && b->sequence != st->log[i - 1].sequence + 1) (*gaps)++;
+        if (!(i & 15u)) kpreempt_point();
     }
+    span_end(SP_CHECK, began);
 }
 
 static int probe_vm_master(struct ciuki_mixer_master *m)
@@ -122,6 +155,7 @@ static int probe_vm_master(struct ciuki_mixer_master *m)
 }
 static int probe_vm_audio(void)
 {
+    memset(span_us, 0, sizeof(span_us));
     rec_emit(VP, "BEGIN", "probe_version=1 build_id=%s", CIUKI_BUILD_ID);
     rec_emit(VP, "DATA", "case=memory usable_kib=%u free_pages=%u audio_pages=%u vm_source_bytes=%u",
              pmm_total_usable() * 4, pmm_free_count(), audio.commitment_pages, (unsigned)sizeof(struct audio_vm_stats));
@@ -158,10 +192,14 @@ static int probe_vm_audio(void)
     bool ok;
     dosvm_snapshot(&baseline);
     const struct dosvm_config config = {.commitment = DOSVM_LOW_CAP, .probe = VP};
-    if ((error = storage_enable_write(storage_get(), 2))) goto cleanup;
-    if ((error = dosvm_create(&config, &v)) || (error = play_boot(v))) goto cleanup;
+    uint64_t began = ktime_cycles();
+    error = storage_enable_write(storage_get(), 2); span_end(SP_WRITE, began);
+    if (error) goto cleanup;
+    began = ktime_cycles();
+    error = dosvm_create(&config, &v); span_end(SP_CREATE, began);
+    if (error || (error = play_boot(v))) goto cleanup;
     struct dosvm_key key = dosvm_key(v);
-    ok = audio_vm_stats(key, &stats) && stats.state != AUDIO_VM_FREE;
+    ok = probe_audio_stats(key, &stats) && stats.state != AUDIO_VM_FREE;
     rec_emit(VP, "DATA", "case=attach ok=%u state=%u epoch=%u", ok, stats.state, stats.epoch);
     if (!ok) { error = -ENODEV; goto cleanup; }
     if ((error = play_type(v, "\\VMPLAY.COM"))) goto cleanup; /* the shell starts in C:\APPS */
@@ -174,9 +212,9 @@ static int probe_vm_audio(void)
     if (!ok) { error = -EFAULT; goto cleanup; }
 
     /* 2. The f4-05 regression: 32 fresh 64-unit blocks at 8000 Hz, rendered in sequence. */
-    audio_vm_tap_reset(key); audio_vm_stats(key, &before); dosvm_audio_info(key, &b);
+    audio_vm_tap_reset(key); probe_audio_stats(key, &before); probe_audio_info(key, &b);
     if ((error = play_command(v, 2)) || (error = play_stage(v, 2, &m, 10000))) goto cleanup;
-    play_rendered(key, 32, &stats); dosvm_audio_info(key, &a); audio_vm_ring(&ring_tap);
+    play_rendered(key, 32, &stats); probe_audio_info(key, &a); audio_vm_ring(&ring_tap);
     block_check(&stats, false, 32, 64, &fresh, &repeats, &gaps);
     ok = m.irqs == 32 && !m.isrbad && stats.log_count == 32 && fresh == 32 && !repeats && !gaps &&
          a.services - b.services == 32 && a.boundaries - b.boundaries == 32 && stats.pcm.frames == 12288 &&
@@ -190,7 +228,7 @@ static int probe_vm_audio(void)
     if (!ok) { error = -EFAULT; goto cleanup; }
 
     /* 3. 16-bit signed stereo at 12000 Hz, voice 25/31: 8 blocks of 64 frames. */
-    audio_vm_tap_reset(key); audio_vm_stats(key, &before);
+    audio_vm_tap_reset(key); probe_audio_stats(key, &before);
     if ((error = play_command(v, 3)) || (error = play_stage(v, 3, &m, 10000))) goto cleanup;
     play_rendered(key, 8, &stats); audio_vm_ring(&ring_tap);
     block_check(&stats, true, 8, 64, &fresh, &repeats, &gaps);
@@ -205,10 +243,10 @@ static int probe_vm_audio(void)
 
     /* 4-5. OPL2 440 Hz on both outputs; OPL3 880 Hz on output A (left) only. */
     for (unsigned stage = 4; stage <= 5; stage++) {
-        audio_vm_tap_reset(key); audio_vm_stats(key, &before);
+        audio_vm_tap_reset(key); probe_audio_stats(key, &before);
         if ((error = play_command(v, (uint16_t)stage)) || (error = play_stage(v, stage, &m, 10000))) goto cleanup;
         task_sleep_ms(250);
-        audio_vm_stats(key, &stats); audio_vm_ring(&ring_tap);
+        probe_audio_stats(key, &stats); audio_vm_ring(&ring_tap);
         const struct audio_vm_tap *t = &stats.opl;
         uint32_t hz10 = t->frames ? (uint32_t)((uint64_t)t->crossings[0] * 480000u / t->frames) : 0;
         uint32_t want = stage == 4 ? 4400 : 8800;
@@ -228,7 +266,7 @@ static int probe_vm_audio(void)
     if ((error = play_command(v, 6)) || (error = play_stage(v, 6, &m, 10000))) goto cleanup;
     uint64_t until = deadline_after_ms(10000);
     while (!play_prompt(v) && !deadline_passed(until)) task_sleep_ms(1);
-    audio_vm_stats(key, &stats);
+    probe_audio_stats(key, &stats);
     rec_emit(VP, "DATA", "case=pacing lead=%d lead_min=%d lead_max=%d lag_min=%d holds=%u skips=%u reanchors=%u late=%llu starved=%llu",
              stats.lead, stats.lead_min, stats.lead_max, stats.lag_min, stats.holds, stats.skips, stats.reanchors,
              stats.late_frames, stats.starved);
@@ -246,7 +284,7 @@ cleanup:
     {
         struct dosvm_key key0 = v ? dosvm_key(v) : (struct dosvm_key){0, 0};
         if (v) { int e = dosvm_destroy(key0, error != 0); if (!error) error = e; }
-        bool detached = !v || (audio_vm_stats(key0, &stats) && stats.state == AUDIO_VM_FREE);
+        bool detached = !v || (probe_audio_stats(key0, &stats) && stats.state == AUDIO_VM_FREE);
         dosvm_snapshot(&final);
         bool restored = !memcmp(&baseline, &final, sizeof(final));
         rec_emit(VP, "DATA", "case=clock fifo=%llu halts=%llu deadlines=%llu max_service_us=%u max_irq_us=%u quarantine=%u",
@@ -257,6 +295,11 @@ cleanup:
     }
     if (probe_vm_master(&saved_master) && !error) error = -EIO;
     audio.master = saved_master;
+    /* Two records also fit the 240-byte wire limit at UINT32_MAX. */
+    rec_emit(VP, "DATA", "case=stretch_attribution part=1 write_us=%u create_us=%u boot_us=%u type_us=%u",
+             span_us[SP_WRITE], span_us[SP_CREATE], span_us[SP_BOOT], span_us[SP_TYPE]);
+    rec_emit(VP, "DATA", "case=stretch_attribution part=2 text_us=%u stats_us=%u info_us=%u check_us=%u",
+             span_us[SP_TEXT], span_us[SP_STATS], span_us[SP_INFO], span_us[SP_CHECK]);
     rec_emit(VP, "END", "status=%s error=%d", error ? "FAIL" : "PASS", error);
     return error ? 1 : 0;
 }

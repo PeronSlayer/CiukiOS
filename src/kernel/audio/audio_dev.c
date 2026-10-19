@@ -28,6 +28,7 @@ extern bool audio_vm_playing(void) __attribute__((weak));
 extern unsigned audio_vm_playing_count(void) __attribute__((weak));
 extern bool audio_vm_attached(void) __attribute__((weak));
 extern void audio_vm_published(void) __attribute__((weak));
+extern void audio_vm_reanchor(void) __attribute__((weak));
 extern void serial_buffered(bool) __attribute__((weak));
 extern bool display_fullscreen_active(void) __attribute__((weak));
 
@@ -142,6 +143,7 @@ static bool playback_logged;
 static uint64_t playback_start, playback_next;
 static uint64_t non_silent_end; /* output position after the last nonzero published quantum */
 static bool quantum_pending, quantum_mixed; /* retry a refused publication without mixing twice */
+static bool cursor_retry; /* service-lock owned; worker must block at most 1 ms */
 static uint64_t transport_next;
 static unsigned native_source_count(void)
 {
@@ -260,7 +262,11 @@ static void audio_service_locked(void)
     bool stop_failed = false;
     const char *error_op = "progress";
     int err = audio_backend_progress();
-    if (err==-EAGAIN) return; /* transient coherent-cursor retry, no source consumed */
+    cursor_retry = err == -EAGAIN;
+    /* Uncertain progress leaves the committed retirement unchanged. It
+     * cannot forbid filling already free slots: publish independently
+     * checks DMA ownership. Never invent retirement to meet the lead. */
+    if (cursor_retry) err = 0;
     audio_backend_snapshot(&b);
     if (b.fifo_errors > audio.fifo && !err) {
         audio.underruns += b.fifo_errors - audio.fifo;
@@ -282,7 +288,7 @@ static void audio_service_locked(void)
             idle_since = 0; audio_backend_idle(false);
         }
         control = true;
-    } else if (!err && tail && silent && b.published - b.retired <= 1) {
+    } else if (!err && !cursor_retry && tail && silent && b.published - b.retired <= 1) {
         /* Drained to the period the DMA plays: ac97_publish never rewrites the
          * CIV/PIV slots, so the queue cannot be extended and the refusal
          * failed the backend (QEMU campaign 13, image 22320ccc: the AUDIO_LEAD
@@ -312,6 +318,7 @@ static void audio_service_locked(void)
         if (!err) {
             audio.running = false;
             audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            if (audio_vm_reanchor) audio_vm_reanchor();
             idle_since = 0; audio_backend_idle(false); recovering = true;
         }
         control = true;
@@ -327,10 +334,11 @@ static void audio_service_locked(void)
         if (!err) {
             audio.running = false;
             audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+            if (audio_vm_reanchor) audio_vm_reanchor();
             idle_since = 0; audio_backend_idle(false); recovering = active || quantum_pending;
         }
         control = true;
-    } else if (!err && active && silent && b.running &&
+    } else if (!err && !cursor_retry && active && silent && b.running &&
                b.published - b.retired > (audio.adaptive_lead ? audio.adaptive_lead : nominal)) {
         /* Cut only proven silent tail on arrival. A paused VM is no reason
          * to make a native writer wait behind the 134 ms silence cushion. */
@@ -396,7 +404,7 @@ static void audio_service_locked(void)
         bool mixed = quantum_mixed;
         error_op = "publish";
         err = audio_backend_publish(quantum);
-        if (err == -EAGAIN) { err = 0; break; } /* CIV/PIV still own the slot; retain quantum */
+        if (err == -EAGAIN) { cursor_retry = true; err = 0; break; } /* retain quantum */
         if (!err) quantum_pending = false;
         if (!err && mixed && audio_vm_published) audio_vm_published();
         audio_backend_snapshot(&b);
@@ -419,7 +427,7 @@ static void audio_service_locked(void)
          * bookkeeping. If one quantum itself overruns, count it below. */
         if (ktime_elapsed_us(start, AUDIO_SERVICE_US / 2)) { audio_wake(); break; }
     }
-    if (!err && !active && audio.running && !quantum_pending) {
+    if (!err && !cursor_retry && !active && audio.running && !quantum_pending) {
         /* Client drains have already waited their fetched/tail allowance.
          * Silence still in the queue is not client data. Keep publishing
          * silence for an idle tail before stopping: the QEMU AC97 backend
@@ -483,7 +491,7 @@ static void audio_worker_wait(void)
 {
     struct audio_transport b; audio_backend_snapshot(&b);
     bool fullscreen=display_fullscreen_active && display_fullscreen_active();
-    unsigned wait_ms=audio.running ? (fullscreen ? 2 : 4) :
+    unsigned wait_ms=cursor_retry ? 1 : audio.running ? (fullscreen ? 2 : 4) :
         b.published && b.published<audio.lead_periods ? 1 : 50;
     /* A ready condition returns without sleeping. Under IRQ/refill overlap,
      * that can demote this P_DEVICE task after 10 accumulated ticks. Retain

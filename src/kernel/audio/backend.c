@@ -9,6 +9,9 @@
 #include <ciuki/audio_backend.h>
 struct audio_dma_device audio_dma;
 static bool dma_selected;
+/* One selected cyclic engine; IRQ and worker serialize these with irq_save. */
+static bool dma_cursor_retrying;
+static uint64_t dma_cursor_retry_since;
 static uint32_t backend_read_io(void *c, uint16_t p, unsigned w)
 {
     (void)c; if (w == 1) return inb(p); if (w == 4) return inl(p);
@@ -93,8 +96,13 @@ static int backend_dma_progress_locked(struct audio_dma_device *d)
     }
     unsigned frame;
     int e = d->ops->cursor(d, &frame);
-    if (e==-EAGAIN && now-d->last_observation<=2) return -EAGAIN;
+    if (e == -EAGAIN) {
+        if (!dma_cursor_retrying) { dma_cursor_retrying = true; dma_cursor_retry_since = now; }
+        if (now - dma_cursor_retry_since <= 2 && now - d->last_progress <= 100) return -EAGAIN;
+        s->deadline_misses++; return -EIO;
+    }
     if (e || frame >= AUDIO_HW_SLOTS * AUDIO_QUANTUM) return -EIO;
+    dma_cursor_retrying = false;
     unsigned delta = (frame + AUDIO_HW_SLOTS * AUDIO_QUANTUM - d->last_frame) % (AUDIO_HW_SLOTS * AUDIO_QUANTUM);
     uint64_t next = s->generation_fetched + delta;
     if (next >= s->published * AUDIO_QUANTUM) {
@@ -118,12 +126,27 @@ int audio_dma_progress(struct audio_dma_device *d)
 int audio_dma_publish(struct audio_dma_device *d, const struct audio_frame *pcm)
 {
     struct audio_transport *s = &d->state;
+    if (s->retired > s->published) return -EIO;
     if (s->quarantine || d->inhibited || s->published - s->retired >= 30) return -EAGAIN;
     unsigned slot = s->published % AUDIO_HW_SLOTS;
     if (s->running) {
-        int e = audio_dma_progress(d); if (e) return e;
-        unsigned current = d->last_frame / AUDIO_QUANTUM;
-        if (slot == current || slot == (current + 1) % AUDIO_HW_SLOTS) return -EIO;
+        uint32_t flags = irq_save();
+        int e = backend_dma_progress_locked(d);
+        if (e && e != -EAGAIN) { irq_restore(flags); return e; }
+        /* A cyclic engine cannot publish LVI. When its cursor is uncertain,
+         * protect every frame it could have reached since the last coherent
+         * observation, plus its following prefetched period. This bound is
+         * only an ownership guard: never commit it as fetched/retired. */
+        unsigned rate = s->rate ? s->rate : AUDIO_RATE;
+        /* progress already rejects an entire ring interval (<190 ms at
+         * supported rates), so this product fits 32 bits with IF clear. */
+        unsigned elapsed = (unsigned)(d->io.now(d->io.cookie) - d->last_observation);
+        unsigned advance = e ? (elapsed * rate + 999) / 1000 : 0;
+        unsigned distance = (slot * AUDIO_QUANTUM + AUDIO_HW_SLOTS * AUDIO_QUANTUM - d->last_frame) %
+            (AUDIO_HW_SLOTS * AUDIO_QUANTUM);
+        bool owned = slot == d->last_frame / AUDIO_QUANTUM || distance <= advance + AUDIO_QUANTUM;
+        irq_restore(flags);
+        if (owned) return -EAGAIN;
     }
     memcpy(d->pcm + slot * AUDIO_QUANTUM, pcm, AUDIO_QUANTUM * sizeof(*pcm));
     __asm__ volatile("" ::: "memory");
@@ -139,6 +162,7 @@ int audio_dma_start(struct audio_dma_device *d)
     d->state.running = true;
     int e = d->ops->start(d, false);
     d->last_observation = d->last_progress = d->io.now(d->io.cookie);
+    dma_cursor_retrying = false;
     kmutex_unlock(&d->register_lock); return e;
 }
 int audio_dma_stop(struct audio_dma_device *d)
@@ -149,6 +173,7 @@ int audio_dma_stop(struct audio_dma_device *d)
     d->state.running = false; d->inhibited = false;
     d->state.published = d->state.retired = d->state.generation_fetched = 0;
     d->last_frame = 0;
+    dma_cursor_retrying = false;
     if (d->pcm) memset(d->pcm, 0, AUDIO_HW_BYTES);
     kmutex_unlock(&d->register_lock); return 0;
 }

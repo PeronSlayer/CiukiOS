@@ -41,6 +41,8 @@ struct vm_slot {
     /* Render state, owned by the refill worker, valid for live_epoch. */
     uint32_t live_epoch;
     bool anchored, busy;
+    bool recover_anchor;
+    uint64_t recovery_latency; /* silence inserted by transport recovery, VM frames */
     uint64_t next_t;      /* next VM timeline frame to render */
     uint64_t rendered_to; /* output frame after the last rendered quantum */
     uint32_t hold;        /* output frames of silence before the timeline resumes */
@@ -199,6 +201,7 @@ int audio_vm_attach(struct dosvm_key key)
     s->key = key; s->token = token;
     if (!++s->epoch) s->epoch = 1;
     s->state = AUDIO_VM_PENDING; s->gain[0] = s->gain[1] = 100; s->muted = false;
+    s->recover_anchor = false;
     s->published = 0;
     memset(&s->level, 0, sizeof(s->level)); s->level.start = g_ticks;
     if (first) { memset(&ring_level, 0, sizeof(ring_level)); ring_level.start = g_ticks; }
@@ -288,6 +291,7 @@ static void slot_reset(struct vm_slot *s, uint32_t epoch)
     s->anchored = s->busy = s->stream = s->starving = s->gap_ahead = s->seg_known = false;
     s->block_open = s->block_first_set = s->opl_used = s->resync = s->head_started = false;
     s->next_t = s->rendered_to = 0; s->hold = 0;
+    s->recover_anchor = false; s->recovery_latency = 0;
     s->rate = s->frac = 0; s->origin = s->idx = s->win_first = 0; s->win_count = 0;
     s->seq_last = 0; s->ev_head = s->ev_count = 0; s->dac = 0; s->dac_until = 0;
     s->chip = chip_template;
@@ -581,10 +585,42 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
     uint64_t queued = output > played ? output - played : 0;
     unsigned lead_periods = audio.lead_periods ? audio.lead_periods : AUDIO_VM_LEAD;
     unsigned lead_frames = lead_periods * AUDIO_QUANTUM * AUDIO_RATE / audio_output_rate();
-    unsigned latency = lead_frames + AUDIO_VM_FLOOR;
+    uint64_t latency = lead_frames + AUDIO_VM_FLOOR;
     unsigned max_queued = (lead_periods + 1) * AUDIO_QUANTUM * AUDIO_RATE / audio_output_rate();
     if (queued > max_queued) queued = max_queued;
     uint64_t target = now + queued > latency ? now + queued - latency : 0;
+    if (s->recover_anchor) {
+        if (!s->anchored) {
+            /* A startup halt can precede the first source render. Its
+             * oldest queued PCM/event is still unconsumed, even if the VM
+             * clock advanced during stop/reset. Anchor before that data. */
+            struct dosvm_audio_block b;
+            int got = peek(s, token, &b);
+            if (got >= 0 && b.frames > b.offset) {
+                uint64_t first = b.start + timeline_div((uint64_t)b.offset * VM_HZ, b.rate ? b.rate : 1, 0);
+                if (first < target) target = first;
+            }
+            if (!s->ev_count) {
+                int n = dosvm_audio_events(s->key, token, s->ev, VM_EVENTS);
+                if (n < 0) { revoke(s, epoch); return; }
+                s->ev_head = 0; s->ev_count = (unsigned)n;
+            }
+            if (s->ev_count && s->ev[s->ev_head].clock < target) target = s->ev[s->ev_head].clock;
+            s->next_t = target; s->anchored = true;
+        }
+        /* Stop/reset and silence priming advance physical output, not this
+         * source. Preserve the window, rational phase, events and next_t;
+         * account for the inserted silence as latency instead of dropping
+         * source frames to chase the VM clock. A pending mixed quantum was
+         * already consumed and will be published exactly once by service. */
+        uint64_t lead = now + queued > s->next_t ? now + queued - s->next_t : 0;
+        if (lead > latency + s->recovery_latency) s->recovery_latency = lead - latency;
+        s->rendered_to = output; s->stats.reanchors++;
+    }
+    s->recover_anchor = false;
+    if (s->anchored && s->rendered_to != output) s->recovery_latency = 0; /* ordinary idle arrival */
+    latency += s->recovery_latency;
+    target = now + queued > latency ? now + queued - latency : 0;
     if (!s->anchored || s->rendered_to != output) {
         /* First quantum, or the output was not rendered for this source
          * (transport restarted): re-anchor, never moving back in time. */
@@ -649,7 +685,10 @@ static void vm_mix_48(int64_t (*sums)[2], unsigned frames, uint64_t output, uint
         if (state == AUDIO_VM_PENDING) s->state = AUDIO_VM_ACTIVE;
         irq_restore(f);
         if (state == AUDIO_VM_FREE) { s->live_epoch = 0; s->busy = false; continue; }
-        if (s->live_epoch != epoch) slot_reset(s, epoch);
+        if (s->live_epoch != epoch) {
+            bool recover = s->recover_anchor;
+            slot_reset(s, epoch); s->recover_anchor = recover;
+        }
         render(s, token, epoch, sums, frames, output, played);
     }
 }
@@ -661,20 +700,42 @@ static void vm_mix_48(int64_t (*sums)[2], unsigned frames, uint64_t output, uint
 static int64_t vm_rate_samples[VM_RATE_WINDOW][2];
 static int32_t vm_rate_cache[2][2];
 static uint64_t vm_rate_next;
+static uint64_t vm_rate_first;
+static uint32_t vm_rate_phase;
 static unsigned vm_rate_cached;
 static uint32_t vm_rate_epoch;
+static bool vm_rate_recover;
+void audio_vm_reanchor(void)
+{
+    /* Same serialized refill worker as vm_mix_48. No source is consumed. */
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
+        struct vm_slot *s = &vm_slots[i];
+        if (s->state != AUDIO_VM_FREE)
+            s->recover_anchor = true;
+    }
+    vm_rate_recover = true;
+}
 void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
 {
     if (frames > AUDIO_QUANTUM) frames=AUDIO_QUANTUM;
     unsigned rate=audio_output_rate();
+    if (vm_rate_recover) {
+        /* Keep the 44.1 kHz converter's already rendered lookahead too. */
+        if (rate == 44100) vm_rate_first = timeline_div(audio.output * VM_HZ, rate, 0);
+        vm_rate_next = audio.output; vm_rate_recover = false;
+    }
     if (rate==VM_HZ) { vm_rate_cached=0; vm_mix_48(sums,frames,audio.output,audio.played_output); return; }
     /* Only the directed 44.1 kHz and 48 kHz physical rates are admitted. */
     if (rate!=44100 || !frames) return;
     uint32_t phase;
     uint64_t first=timeline_div(audio.output*VM_HZ,rate,&phase);
+    bool continuous=vm_rate_next==audio.output && vm_rate_epoch==rate_epoch;
+    if (continuous) { first=vm_rate_first; phase=vm_rate_phase; }
     unsigned count=(phase+(frames-1)*VM_HZ)/rate+2;
-    uint64_t played=timeline_div(audio.played_output*VM_HZ,rate,0);
-    if (vm_rate_next!=audio.output || vm_rate_epoch!=rate_epoch) vm_rate_cached=0;
+    uint64_t queued=audio.output>audio.played_output ?
+        timeline_div((audio.output-audio.played_output)*VM_HZ,rate,0) : 0;
+    uint64_t played=first>queued ? first-queued : 0;
+    if (!continuous) vm_rate_cached=0;
     memset(vm_rate_samples,0,sizeof(vm_rate_samples));
     for (unsigned i=0;i<vm_rate_cached;i++) for (unsigned c=0;c<2;c++) vm_rate_samples[i][c]=vm_rate_cache[i][c];
     for (unsigned i=vm_rate_cached;i<count;) {
@@ -692,6 +753,7 @@ void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
     vm_rate_cached=count-index;
     for (unsigned i=0;i<vm_rate_cached;i++) for (unsigned c=0;c<2;c++) vm_rate_cache[i][c]=(int32_t)vm_rate_samples[index+i][c];
     vm_rate_next=audio.output+frames; vm_rate_epoch=rate_epoch;
+    vm_rate_first=first+index; vm_rate_phase=phase;
 }
 void audio_vm_tap(const struct audio_frame *out, unsigned frames)
 {
