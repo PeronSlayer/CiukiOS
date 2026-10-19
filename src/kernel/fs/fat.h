@@ -14,9 +14,13 @@ enum fat_ro_reason { FAT_RO_REQUEST=1, FAT_RO_DURABILITY=2, FAT_RO_DIRTY=4,
     FAT_RO_IO_FLAG=8, FAT_RO_COPIES=16, FAT_RO_CORRUPT=32, FAT_RO_LOST=64, FAT_RO_WRITE_ERROR=128,
     FAT_RO_ACTIVE_ONLY=256 };
 struct fat_times { uint16_t create_date, create_time, access_date, write_date, write_time; uint8_t create_tenths; };
+enum fat_publication_stage { FAT_P_DATA, FAT_P_CHAIN, FAT_P_LINK, FAT_P_DIRECTORY,
+    FAT_P_FSINFO, FAT_P_DELETE, FAT_P_RENAME, FAT_P_RECLAIM, FAT_P_FLAGS, FAT_P_STAGES };
+enum fat_identity_change { FAT_ID_WRITE, FAT_ID_TRUNCATE, FAT_ID_RENAME, FAT_ID_UNLINK };
 struct fat_entry {
     char name[FS_NAME_BYTES], alias[40];
     uint32_t parent, index, first, size, lfn_index;
+    uint64_t identity; /* volatile VFS file identity; never encoded on disk */
     uint8_t lfn_count, attr;
     struct fat_times times;
     /* Caller-serialized write cursor; not encoded on disk. Reset on COW. */
@@ -44,6 +48,18 @@ struct fat_volume {
     uint32_t readonly_cluster;
     /* Read observations, possibly repeated by lookups; never on-disk counts. */
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
+    uint64_t publication_group, publication_frontier, publication_count, publication_durable;
+    uint32_t publication_generation, identity_mount_generation;
+    enum fat_publication_stage publication_stage;
+    bool publication_pending, write_through;
+    struct cache_completion completion;
+    /* Called under the volume reservation, without namespace/cache locks.
+     * Observer records group start ('G') and durable barrier ('B') or error ('E'). */
+    void (*publication_observer)(void *, uint64_t, enum fat_publication_stage, char, int);
+    void *publication_ctx;
+    void (*identity_changed)(void *, struct fat_volume *, const struct fat_entry *,
+                              const struct fat_entry *, enum fat_identity_change);
+    void *identity_ctx;
     struct fat_entry alias_scratch; /* serialized alias collision walk; saves kernel stack */
 };
 /* Mount does not write unless requested AND validation and durability pass.

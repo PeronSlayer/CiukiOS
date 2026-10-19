@@ -18,6 +18,23 @@
 #define VFS_FIND_DOS 128u
 /* Bitmask of access denied to other opens, checked in BOTH directions. */
 enum vfs_share { VFS_DENY_NONE=0, VFS_DENY_READ=1, VFS_DENY_WRITE=2, VFS_DENY_ALL=3 };
+enum vfs_owner_type { VFS_OWNER_NATIVE, VFS_OWNER_WIN32, VFS_OWNER_DOS, VFS_OWNER_TYPES };
+struct vfs_lock_owner { enum vfs_owner_type type; uint64_t id; };
+#define VFS_IDENTITIES 256u
+#define VFS_PAGE_IDENTITIES 256u
+struct vfs_file_identity {
+    struct fat_volume *volume;
+    uint64_t serial, generation;
+    uint32_t parent, index, refs, pages;
+    bool valid, linked;
+};
+struct vfs_page_key { uint64_t generation, file, index; };
+struct vfs_page_identity {
+    struct vfs_file_identity *file;
+    struct vfs_page_key key;
+    uint32_t refs;
+    bool valid;
+};
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 /* Internal DOS bridge errors; never user syscall errno values. */
 #define VFS_ESHARE 201
@@ -42,11 +59,11 @@ int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
                   unsigned new_mode, unsigned new_access, uint64_t new_owner, bool readonly);
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
-    uint32_t log_capacity; };
+    uint32_t log_capacity; struct vfs_file_identity *identity; };
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
-    uint64_t owner; unsigned dos_mode; bool io_active; };
+    uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
-    uint64_t owner, start, end; uint32_t length; };
+    uint64_t owner, start, end; uint32_t length; enum vfs_owner_type owner_type; };
 #define VFS_RANGE_LOCKS 128u
 struct vfs_waiter;
 struct vfs_table;
@@ -81,6 +98,11 @@ struct vfs {
     struct vfs_table *tables[VFS_TABLES];
     struct vfs_range_lock range_locks[VFS_RANGE_LOCKS];
     struct vfs_waiter *waiters;
+    fs_lock identity_lock; /* short table updates; no I/O or namespace acquisition */
+    uint64_t next_identity;
+    uint32_t next_identity_generation;
+    struct vfs_file_identity identities[VFS_IDENTITIES];
+    struct vfs_page_identity page_identities[VFS_PAGE_IDENTITIES];
 };
 struct vfs_table {
     struct vfs *vfs;
@@ -89,7 +111,9 @@ struct vfs_table {
     uint32_t cwd_cluster[26]; /* zero denotes the volume root */
     char cwd[26][FS_PATH_BYTES];
     const struct vfs_request *request; /* caller-owned, one operation at a time */
-    uint64_t owner; /* effective PSP identity, zero is a native client */
+    uint64_t owner; /* context id within owner_type, not a global PID namespace */
+    enum vfs_owner_type owner_type;
+    bool owner_registered; /* legacy DOS tables still set owner directly until bridge adoption */
 };
 struct vfs_find {
     unsigned drive; uint32_t generation, directory, cursor;
@@ -144,7 +168,13 @@ int vfs_open(struct vfs_table *, const char *path, unsigned flags, enum vfs_shar
 int vfs_open_claim(struct vfs_table *, const char *, unsigned flags, enum vfs_share,
                    uint8_t attr, unsigned mode, unsigned *status);
 int vfs_lock_range(struct vfs_table *, int, uint32_t start, uint32_t length, bool unlock);
-void vfs_release_owner(struct vfs *, uint64_t owner);
+/* Register a personality/context before opening handles. DOS bridge uses this
+ * interface; never infer a personality from a numeric PID/PSP. */
+int vfs_table_set_owner(struct vfs_table *, enum vfs_owner_type, uint64_t);
+void vfs_release_lock_owner(struct vfs *, struct vfs_lock_owner);
+void vfs_release_owner(struct vfs *, uint64_t owner); /* legacy native-namespace release */
+int vfs_range_check_owner(struct vfs *, struct vfs_node *, struct vfs_description *,
+                          struct vfs_lock_owner, uint64_t start, uint64_t length);
 int vfs_range_check(struct vfs *, struct vfs_node *, struct vfs_description *,
                     uint64_t owner, uint64_t start, uint64_t length);
 int vfs_handle_stat(struct vfs_table *, int, struct fat_entry *, uint64_t *position);
@@ -162,6 +192,19 @@ int vfs_write(struct vfs_table *, int, const void *, size_t, size_t *done);
 int vfs_seek(struct vfs_table *, int, int64_t offset, enum vfs_whence, uint64_t *position);
 int vfs_truncate(struct vfs_table *, int, uint64_t size);
 int vfs_commit(struct vfs_table *, int);
+int vfs_completion(struct vfs_table *, int, struct cache_completion *);
+/* Identity calls serialize internally and retain no data pages. A mapping must
+ * own a file/page reference independently of its descriptor. */
+int vfs_identity_get(struct vfs *, struct fat_volume *, struct fat_entry *, struct vfs_file_identity **);
+void vfs_identity_put(struct vfs *, struct vfs_file_identity *);
+bool vfs_identity_live(struct vfs *, struct vfs_file_identity *);
+int vfs_page_get(struct vfs *, struct vfs_file_identity *, uint64_t index, struct vfs_page_identity **);
+void vfs_page_put(struct vfs *, struct vfs_page_identity *);
+void vfs_identity_expire(struct vfs *, struct fat_volume *);
+bool vfs_identity_busy(struct vfs *, struct fat_volume *);
+/* External/raw write detection expires identities; caller quiesces I/O and
+ * resolves dirty block-cache data before authorizing the external writer. */
+void vfs_raw_changed(struct vfs *, struct fat_volume *);
 int vfs_flush_drive(struct vfs_table *,unsigned drive);
 /* Internal, exclusive boot-log sink. Reserve once; write aligned data in
  * place; publish logical EOF periodically; finish releases unused clusters. */

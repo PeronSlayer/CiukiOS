@@ -195,7 +195,59 @@ static void fallback(void) {
     fs_host_contig_fail=1; CHECK(cache_init(&c,1024*1024)==-FS_ENOMEM && !fs_host_contig_live);
     fs_host_page_fail=1; CHECK(cache_init(&c,1024*1024)==-FS_ENOMEM && !fs_host_contig_live);
 }
+static void finite_frontier(void) {
+    struct model m; init(&m,1024*1024,512); dirty(&m,130);
+    m.block=true;
+    struct call barrier={.m=&m,.barrier=&m.dev},later={.m=&m,.write=true}; pthread_t bt,wt;
+    CHECK(!pthread_create(&bt,0,call,&barrier)); entered(&m);
+    struct cache_completion captured;
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured));
+    CHECK(captured.accepted==130 && captured.durable==0 && captured.incomplete);
+    CHECK(!pthread_create(&wt,0,call,&later));
+    while (!atomic_load(&later.started)) { struct timespec t={0,1000000}; nanosleep(&t,0); }
+    /* Demand reads and a different device's buffered admission still pass. */
+    uint8_t data[512]; CHECK(!cache_read(&m.cache,&m.dev,50000,data));
+    memset(data,0x51,sizeof(data)); struct blkdev healthy=m.dev; CHECK(!cache_write(&m.cache,&healthy,50001,data));
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured) && captured.accepted==130);
+    CHECK(!atomic_load(&later.done) && !atomic_load(&barrier.done));
+    release(&m); CHECK(!pthread_join(bt,0) && !pthread_join(wt,0));
+    CHECK(!barrier.result && !later.result);
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured));
+    CHECK(captured.accepted==131 && captured.durable==130 && captured.incomplete);
+    CHECK(!cache_barrier(&m.cache,&m.dev));
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured) && captured.accepted==captured.durable && !captured.incomplete);
+    /* Same device object with a new generation never borrows an old epoch. */
+    m.dev.media_generation++;
+    memset(data,0x51,sizeof(data));
+    CHECK(cache_write(&m.cache,&m.dev,20,data)==-FS_EIO && cache_barrier(&m.cache,&m.dev)==-FS_EIO);
+    cache_invalidate(&m.cache,&m.dev,true);
+    CHECK(!cache_write(&m.cache,&m.dev,20,data));
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured) && captured.accepted==1 && !captured.durable);
+    cache_media_lost(&m.cache,&m.dev);
+    unsigned flushes=m.flushes;
+    CHECK(cache_barrier(&m.cache,&m.dev)==-FS_EIO && m.flushes==flushes);
+    CHECK(!cache_completion(&m.cache,&m.dev,&captured) && captured.incomplete && captured.error==-FS_EIO);
+    finish(&m);
+    puts("PASS F1-84 finite barrier: later writes excluded, buffered/durable versions, peer/read progress, new-generation/loss fencing");
+}
+static void surprise_inflight(void) {
+    struct model m; init(&m,1024*1024,512); dirty(&m,130); m.block=true;
+    struct call c={.m=&m,.barrier=&m.dev}; pthread_t thread;
+    CHECK(!pthread_create(&thread,0,call,&c)); entered(&m);
+    cache_media_lost(&m.cache,&m.dev); unsigned calls=m.calls,flushes=m.flushes;
+    CHECK(!atomic_load(&c.done)); /* issued bytes stay reserved until completion */
+    struct cache_completion record; CHECK(!cache_completion(&m.cache,&m.dev,&record));
+    CHECK(record.error==-FS_EIO && record.incomplete && record.durable==0);
+    release(&m); CHECK(!pthread_join(thread,0)); CHECK(c.result==-FS_EIO && m.calls==calls && m.flushes==flushes);
+    uint8_t data[512]; memset(data,0x51,sizeof(data));
+    struct blkdev healthy=m.dev; CHECK(!cache_write(&m.cache,&healthy,12,data));
+    CHECK(!cache_barrier(&m.cache,&healthy) && !cache_error(&m.cache,&healthy));
+    CHECK(cache_barrier(&m.cache,&m.dev)==-FS_EIO && m.flushes==flushes+1);
+    finish(&m);
+    puts("PASS F1-84 surprise loss during issued write: reserved bytes retained, no absent flush, no next issue, healthy device durable");
+}
 int main(void) {
+    finite_frontier(); surprise_inflight();
     policy(); reservations(false,false); reservations(false,true); reservations(true,true);
     completed_group(false); completed_group(true); buffer_epoch(); throttle(false); throttle(true);
     stalled_writer(0); stalled_writer(1); stalled_writer(2); fallback(); CHECK(!fs_host_contig_live);

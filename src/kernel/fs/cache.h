@@ -35,7 +35,10 @@ struct cache_lru { struct cache_block *oldest, *newest; };
 struct cache_device {
     struct blkdev *dev; int error; uint32_t epoch;
     uint32_t dirty_bytes, oldest;
-    uint64_t frontier; /* advanced by each existing synchronous FAT barrier */
+    uint64_t frontier; /* numbered publication boundary, passed to f1-83 requests */
+    uint64_t accepted, durable, buffered_completions, durable_completions;
+    uint32_t generation;
+    bool barrier_active, durability_lost;
     bool requested;
 };
 /* Stack-owned transport reservation; owner waits for joined readers before
@@ -96,7 +99,21 @@ int cache_read_run(struct block_cache *, struct blkdev *, uint64_t lba, uint32_t
  * temporary transport workspace is released before returning. */
 int cache_read_ahead(struct block_cache *, struct blkdev *, uint64_t, uint32_t, void *);
 int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void *sector);
+/* A barrier freezes this device's write admission while draining a captured
+ * version. Reads and other devices continue. Later writers cannot extend it.
+ * The returned record remains meaningful after removal; it is not a pin. */
+struct cache_completion {
+    uint64_t accepted, durable, group, buffered_completions, durable_completions;
+    uint32_t generation, epoch;
+    int error;
+    bool incomplete;
+};
+int cache_barrier_record(struct block_cache *, struct blkdev *, struct cache_completion *);
+int cache_completion(struct block_cache *, struct blkdev *, struct cache_completion *);
+int cache_group_begin(struct block_cache *, struct blkdev *, uint64_t *group);
 int cache_barrier(struct block_cache *, struct blkdev *);
+/* No transport, no DMA-pin retirement. Cancel queues at the physical owner. */
+void cache_media_lost(struct block_cache *, struct blkdev *);
 int cache_writeback_tick(struct block_cache *, uint32_t now_ms);
 bool cache_writeback_due(const struct block_cache *, uint32_t now_ms);
 /* Writer event sleep (bounded safety poll), never a volume reservation.

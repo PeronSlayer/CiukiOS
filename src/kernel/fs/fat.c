@@ -127,19 +127,56 @@ static int writable(struct fat_volume *v) {
     if (!blkdev_durable(v->dev)) return write_error(v,-FS_EIO);
     return 0;
 }
+static int barrier(struct fat_volume *v);
+static int publication_stage(struct fat_volume *v, enum fat_publication_stage stage) {
+    if (v->publication_pending && v->publication_stage!=stage) {
+        int e=barrier(v); if (e) return e;
+    }
+    v->publication_stage=stage; return 0;
+}
+static int publication_begin(struct fat_volume *v) {
+    if (v->publication_pending) return 0;
+    if (v->publication_count==UINT64_MAX ||
+        (v->publication_count && v->publication_generation!=v->dev->media_generation)) return write_error(v,-FS_EIO);
+    v->publication_generation=v->dev->media_generation;
+    int e=0;
+    if (!v->preparing && !v->dev->logical) e=cache_group_begin(v->cache,v->dev,&v->publication_frontier);
+    else v->publication_frontier=v->publication_count+1;
+    if (e) return write_error(v,e);
+    v->publication_group=++v->publication_count; v->publication_pending=true;
+    if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'G',0);
+    return 0;
+}
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     static unsigned work;
-    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service(); /* four complete sectors, ordering unchanged */
+    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service();
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
+    int e=publication_begin(v); if (e) return e;
     if (v->prepare_cache) for (unsigned i=0;i<3;i++)
         if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
             v->prepare_cache->count[i]=0;
-    return write_error(v,(v->preparing || v->dev->logical) ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
+    e=(v->preparing || v->dev->logical) ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b);
+    if (e && v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'E',e);
+    return write_error(v,e);
 }
 static int barrier(struct fat_volume *v) {
-    if (!v->preparing && !v->dev->logical) return write_error(v,cache_barrier(v->cache,v->dev));
-    if (!blkdev_durable(v->dev)) return write_error(v,-FS_EROFS);
-    return write_error(v,v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 : v->dev->flush(v->dev));
+    int e;
+    if (!v->preparing && !v->dev->logical) e=cache_barrier_record(v->cache,v->dev,&v->completion);
+    else {
+        e=!blkdev_durable(v->dev) ? -FS_EROFS :
+            v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 : v->dev->flush(v->dev);
+        v->completion=(struct cache_completion){.group=v->publication_group,
+            .generation=v->dev->media_generation,.error=e,.incomplete=e!=0};
+    }
+    if (v->publication_pending) {
+        if (!e) { v->publication_durable=v->publication_count; v->publication_pending=false; }
+        if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,e ? 'E' : 'B',e);
+    }
+    return write_error(v,e);
+}
+static void identity_changed(struct fat_volume *v, const struct fat_entry *before,
+                             const struct fat_entry *after, enum fat_identity_change why) {
+    if (v->identity_changed) v->identity_changed(v->identity_ctx,v,before,after,why);
 }
 static uint32_t offset(struct fat_volume *v, uint32_t c) { return v->type==12 ? c+c/2 : c*(v->type/8); }
 static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t *p, unsigned n, bool wr) {
@@ -201,6 +238,7 @@ static int set_cluster(struct fat_volume *v, uint32_t c, uint32_t value) {
  * Preserve the hard-error flag and FAT32's reserved upper nibble. */
 static int set_clean(struct fat_volume *v, bool clean) {
     if (!cleanbit(v)) return 0;
+    int stage_error=publication_stage(v,FAT_P_FLAGS); if (stage_error) return stage_error;
     unsigned n=v->type/8;
     for (unsigned f=0;f<v->fats;f++) {
         uint8_t b[4]; int e=fat_bytes(v,f,offset(v,1),b,n,false);
@@ -333,6 +371,7 @@ int fat_lookup(struct fat_volume *v, uint32_t dir, const char *name, struct fat_
     return err;
 }
 static int update(struct fat_volume *v, const struct fat_entry *e) {
+    int stage_error=publication_stage(v,FAT_P_DIRECTORY); if (stage_error) return stage_error;
     if (e->index==UINT32_MAX && !(e->attr&FAT_ATTR_DIR)) return 0; /* open-unlinked */
     uint8_t b[32]; int err=dir_read(v,e->parent,e->index,b); if (err) return write_error(v,err);
     encode_entry(v,b,e); if ((err=dir_write(v,e->parent,e->index,b))) return err;
@@ -340,12 +379,14 @@ static int update(struct fat_volume *v, const struct fat_entry *e) {
 }
 static int hints(struct fat_volume *v) {
     if (v->type!=32) return 0;
+    int stage_error=publication_stage(v,FAT_P_FSINFO); if (stage_error) return stage_error;
     uint8_t b[512]; int e=readsec(v,v->fsinfo,b); if (e) return write_error(v,e);
     fs_wr32(b+488,v->free_clusters); fs_wr32(b+492,v->next_free);
     if ((e=writesec(v,v->fsinfo,b))) return e;
     return barrier(v);
 }
 static int release_chain(struct fat_volume *v, uint32_t c) {
+    int stage_error=publication_stage(v,FAT_P_RECLAIM); if (stage_error) return stage_error;
     for (uint32_t i=0;c && i<v->clusters;i++) {
         if (!valid(v,c)) return corrupt(v,"chain_bounds",c);
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return write_error(v,e);
@@ -359,6 +400,7 @@ static int release_chain(struct fat_volume *v, uint32_t c) {
 }
 static bool split12(struct fat_volume *v, uint32_t c) { return v->type==12 && offset(v,c)%512==511; }
 static int allocate(struct fat_volume *v, uint32_t n, bool directory, uint32_t *first) {
+    int stage_error=publication_stage(v,FAT_P_CHAIN); if (stage_error) return stage_error;
     *first=0; if (n>v->free_clusters) return -FS_ENOSPC;
     uint32_t tail=0, found=0, c=v->next_free;
     for (uint32_t scanned=0;scanned<v->clusters && found<n;scanned++) {
@@ -377,6 +419,7 @@ static int allocate(struct fat_volume *v, uint32_t n, bool directory, uint32_t *
     return barrier(v);
 }
 static int zero_chain(struct fat_volume *v, uint32_t c) {
+    int stage_error=publication_stage(v,FAT_P_DATA); if (stage_error) return stage_error;
     uint8_t b[512]; memset(b,0,sizeof(b));
     for (uint32_t i=0;i<v->clusters;i++) {
         for (unsigned s=0;s<v->spc;s++) { int e=writesec(v,cluster_sector(v,c)+s,b); if (e) return e; }
@@ -397,7 +440,7 @@ static int grow_directory(struct fat_volume *v, uint32_t dir) {
             if (split12(v,c)) return -FS_EOPNOTSUPP;
             uint32_t newc; if ((e=allocate(v,1,true,&newc))) return e;
             if ((e=zero_chain(v,newc))) return e;
-            if ((e=set_cluster(v,c,newc))) return e;
+            if ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,c,newc))) return e;
             return barrier(v);
         }
         if (!valid(v,n)) return corrupt(v,"chain_link",n); c=n;
@@ -421,6 +464,7 @@ static int slots(struct fat_volume *v, uint32_t dir, unsigned need, uint32_t *st
                      * foreign volume. Clear every newly exposed slot and a
                      * new terminator DURABLY while the old terminator still
                      * hides them. Otherwise a crash can expose stale owners. */
+                    if ((e=publication_stage(v,FAT_P_DIRECTORY))) return e;
                     uint8_t zero[32]; memset(zero,0,sizeof(zero));
                     for (uint32_t j=first_zero+1;j<=i;j++)
                         if ((e=dir_write(v,dir,j,zero))) return e;
@@ -480,6 +524,7 @@ static int make_alias(struct fat_volume *v, uint32_t dir, const uint16_t *u, uns
     return -FS_ENOSPC;
 }
 static int publish(struct fat_volume *v, struct fat_entry *e, const uint16_t *u, unsigned n, const uint8_t alias[11]) {
+    int stage_error=publication_stage(v,FAT_P_DIRECTORY); if (stage_error) return stage_error;
     /* LFN entries own no clusters. Make them durable before the sole owning
      * short entry, including when entries span multiple sectors. */
     uint8_t b[32]; uint8_t sum=checksum(alias);
@@ -495,8 +540,10 @@ static int publish(struct fat_volume *v, struct fat_entry *e, const uint16_t *u,
     alias_decode(b,e->alias); path_from_ucs2(u,n,e->name,sizeof(e->name)); return 0;
 }
 static int unlink_entry(struct fat_volume *v, const struct fat_entry *e) {
+    int stage_error=publication_stage(v,FAT_P_DELETE); if (stage_error) return stage_error;
     uint8_t b[32]; int err=dir_read(v,e->parent,e->index,b); if (err) return err;
     b[0]=0xe5; if ((err=dir_write(v,e->parent,e->index,b)) || (err=barrier(v))) return err;
+    identity_changed(v,e,0,FAT_ID_UNLINK);
     for (unsigned i=0;i<e->lfn_count;i++) {
         if ((err=dir_read(v,e->parent,e->lfn_index+i,b))) return err;
         b[0]=0xe5; if ((err=dir_write(v,e->parent,e->lfn_index+i,b))) return err;
@@ -586,6 +633,7 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
 static int replace(struct fat_volume *v, struct fat_entry *file, uint32_t size, uint64_t pos, const void *data, size_t amount) {
     uint32_t cb=(uint32_t)v->spc*512, count=size/cb+(size%cb!=0), first=0;
     int e=allocate(v,count,false,&first); if (e) return e;
+    if ((e=publication_stage(v,FAT_P_DATA))) return e;
     uint32_t c=first, oldc=file->first; uint64_t at=0;
     for (uint32_t i=0;i<count;i++) {
         for (unsigned s=0;s<v->spc;s++,at+=512) {
@@ -665,6 +713,8 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
     if (!data && size) return -FS_EINVAL;
     if (pos>UINT32_MAX || size>UINT32_MAX-pos) return -FS_EFBIG;
     if (!size) return 0;
+    identity_changed(v,file,file,FAT_ID_WRITE);
+    if ((e=publication_stage(v,FAT_P_DATA))) return e;
     uint32_t cb=(uint32_t)v->spc*512, end=(uint32_t)(pos+size);
     uint32_t count=file->size/cb+(file->size%cb!=0), tail=0;
     uint32_t need=end/cb+(end%cb!=0), extra=0;
@@ -714,6 +764,7 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
         last=c; last_index=count+i;
     }
     if ((e=barrier(v))) return e; /* data before any allocation links */
+    if ((e=publication_stage(v,FAT_P_CHAIN))) return e;
     uint32_t first=0, previous=0;
     cursor=v->next_free; scanned=0;
     for (uint32_t i=0;i<extra;i++) {
@@ -727,7 +778,7 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
     if (extra) {
         v->next_free=valid(v,cursor) ? cursor : 2;
         if ((e=barrier(v))) return e; /* complete detached chain */
-        if (tail && ((e=set_cluster(v,tail,first)) || (e=barrier(v)))) return e;
+        if (tail && ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,tail,first)) || (e=barrier(v)))) return e;
     }
     struct fat_entry changed=*file;
     if (!changed.first) changed.first=first;
@@ -746,6 +797,7 @@ int fat_truncate(struct fat_volume *v, struct fat_entry *file, uint64_t size) {
     if (size>UINT32_MAX) return -FS_EFBIG;
     /* A zero-length reserved file may still own its entire crash tail. */
     if (size==file->size && (size || !file->first)) return 0;
+    identity_changed(v,file,file,FAT_ID_TRUNCATE);
     return replace(v,file,(uint32_t)size,0,0,0);
 }
 int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint32_t capacity,
@@ -755,6 +807,8 @@ int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint3
     if (file->attr&(FAT_ATTR_RO|FAT_ATTR_DIR)) return -FS_EACCES;
     if ((!data && size) || pos>capacity || size>capacity-pos || (pos&511) || (size&511)) return -FS_EINVAL;
     if (!size) return 0;
+    identity_changed(v,file,file,FAT_ID_WRITE);
+    if ((e=publication_stage(v,FAT_P_DATA))) return e;
     uint32_t cb=(uint32_t)v->spc*512, c;
     if ((e=chain_at(v,file->first,(uint32_t)pos/cb,&c))) return e;
     unsigned off=(uint32_t)pos%cb;
@@ -791,7 +845,7 @@ int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool fini
      * crash between these barriers leaves owned excess, never a short chain. */
     if ((e=update(v,file))) return e;
     if (last && tail) {
-        if ((e=set_cluster(v,last,mask(v))) || (e=barrier(v))) return e;
+        if ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,last,mask(v))) || (e=barrier(v))) return e;
     }
     if (tail && (e=release_chain(v,tail))) return e;
     return tail ? hints(v) : 0;
@@ -825,6 +879,7 @@ int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, co
     memcpy(short_entry,alias,11);
     if (!alias_decode(short_entry,short_name) && !strncmp(short_name,name,sizeof(short_name))) dest.lfn_count=0;
     if (parent==file->parent) {
+        if ((e=publication_stage(v,FAT_P_RENAME))) return e;
         /* Keep the owning short entry at the SAME index. Extend only into
          * contiguous deleted entries before it; never create two owners. */
         if (dest.index<dest.lfn_count) return -FS_ENOSPC;
@@ -842,6 +897,7 @@ int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, co
         dest.index=dest.lfn_index+dest.lfn_count;
         if ((e=unlink_entry(v,file))) return e;
         if (file->attr&FAT_ATTR_DIR) {
+            if ((e=publication_stage(v,FAT_P_RENAME))) return e;
             uint8_t b[32]; if ((e=dir_read(v,file->first,1,b))) return e;
             uint32_t first=(parent==v->root || !parent) ? 0 : parent;
             fs_wr16(b+26,(uint16_t)first); fs_wr16(b+20,v->type==32 ? (uint16_t)(first>>16) : 0);
@@ -849,6 +905,7 @@ int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, co
         }
     }
     if ((e=publish(v,&dest,u,n,alias))) return e;
+    identity_changed(v,file,&dest,FAT_ID_RENAME);
     *file=dest; return hints(v);
 }
 /* Native replacement reserves alias and destination capacity before either
@@ -890,6 +947,7 @@ int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
     }
     if ((e=unlink_entry(v,file))) return e;
     if ((file->attr&FAT_ATTR_DIR) && parent!=file->parent) {
+        if ((e=publication_stage(v,FAT_P_RENAME))) return e;
         uint8_t b[32]; if ((e=dir_read(v,file->first,1,b))) return e;
         uint32_t first=(parent==v->root || !parent) ? 0 : parent;
         fs_wr16(b+26,(uint16_t)first); fs_wr16(b+20,v->type==32 ? (uint16_t)(first>>16) : 0);
@@ -898,6 +956,7 @@ int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
     if ((e=publish(v,&dest,u,n,alias))) return e;
     memcpy(dest.name,name,strlen(name)+1);
     uint8_t raw[32]={0}; memcpy(raw,alias,11); alias_decode(raw,dest.alias);
+    identity_changed(v,file,&dest,FAT_ID_RENAME);
     *file=dest;
     return hints(v);
 }
@@ -1079,14 +1138,14 @@ static int repair_file_tail(struct fat_volume *v, uint32_t dir, struct fat_entry
          * proved active link in both copies before publishing the larger size.
          * Otherwise a second cut could expose a short chain in that mirror. */
         if (file->size>published && a!=b &&
-            ((e=set_cluster(v,last,a)) || (e=barrier(v)))) return e;
+            ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,last,a)) || (e=barrier(v)))) return e;
     }
     if (!excess && file->size==published) return 0;
     if ((e=fat_publish_reserved(v,file,true))) return e;
     if (a!=b) {
         /* If the active copy was already EOC, publish_reserved had no
          * active tail to detach. Normalize the other mirror before reclaim. */
-        if (eoc(v,a) && ((e=set_cluster(v,last,mask(v))) || (e=barrier(v)))) return e;
+        if (eoc(v,a) && ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,last,mask(v))) || (e=barrier(v)))) return e;
         v->repaired_copies++;
     }
     if (log) {
@@ -1169,6 +1228,7 @@ static uint32_t repair_value(struct fat_volume *v, struct fat_scan_state *s, uin
     return a==mask(v)-8 || b==mask(v)-8 ? mask(v)-8 : 0;
 }
 static int scan_reclaim(struct fat_volume *v, struct fat_scan_state *s) {
+    int stage_error=publication_stage(v,FAT_P_RECLAIM); if (stage_error) return stage_error;
     /* FAT12's packed entries overlap; its small volumes retain the existing
      * preserving writer. FAT16/32 coalesce all changes in each FAT sector. */
     uint8_t a[512],b[512];uint32_t sector=UINT32_MAX;bool dirty_a=false,dirty_b=false;

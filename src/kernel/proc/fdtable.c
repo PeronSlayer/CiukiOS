@@ -70,11 +70,17 @@ int file_description_close(struct file_description *d)
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
+        vfs_identity_put(s->vfs,d->identity);
         err = px_drop_locked(d->node);
         vfs_unlock(s->vfs);
     }
     __atomic_sub_fetch(&file_descriptions,1,__ATOMIC_RELAXED); kfree(d);
     return err;
+}
+int file_mapping_identity(struct file_description *d, uint64_t index, struct vfs_page_identity **out)
+{
+    if (!d || !d->node || d->node->kind!=PX_FILE || !d->identity) return -EINVAL;
+    return px_error(vfs_page_get(d->node->space->vfs,d->identity,index,out));
 }
 int file_close(struct process *p, int32_t fd)
 {
@@ -146,6 +152,8 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
     struct proc_thread *t = proc_thread_for(g_current);
     err = t && (t->process->state == PROC_STOPPING || proc_signal_caught(t)) ? -EINTR : px_open_locked(cwd->space, cwd, path, flags, d);
     px_release(cwd);
+    if (!err && d->node->kind==PX_FILE && d->node->volume)
+        err=px_error(vfs_identity_get(cwd->space->vfs,d->node->volume,&d->node->entry,&d->identity));
     if (!err) p->fds[slot] = (struct proc_fd){ &d->object, flags & O_CLOEXEC ? FD_CLOEXEC : 0 };
     else p->fds[slot] = (struct proc_fd){ 0 };
     vfs_unlock(cwd->space->vfs);
@@ -156,6 +164,7 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
 int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, int64_t *out)
 {
     int live=px_ro_check_locked(d->node); if (live) return live;
+    if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (whence > SEEK_END) return -EINVAL;
     if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
@@ -178,6 +187,7 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
     int live=px_ro_check_locked(d->node); if (live) return live;
+    if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (write && d->node->ro) return -EROFS;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
@@ -217,6 +227,7 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
     int live=px_ro_check_locked(d->node); if (live) return live;
+    if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return -EROFS;
     if ((d->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if (d->node->kind != PX_FILE) return d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE ? -EINVAL : -EISDIR;
@@ -233,6 +244,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
 int file_sync_locked(struct file_description *d)
 {
     int live=px_ro_check_locked(d->node); if (live) return live;
+    if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return px_ro_check_locked(d->node);
     if (!d->node->volume) return -EINVAL;
     return px_error(VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
