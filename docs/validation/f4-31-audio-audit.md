@@ -1,5 +1,9 @@
 # f4-31 audio pipeline audit
 
+The f4-31 four-period/≤30 ms policy below is historical. The
+[F4-32 amendment](#host-evidence-and-lead-decision) supersedes it with eight
+periods and a ≤50 ms nominal VM target.
+
 Research completed before implementation, 2026-10-19. Baseline: worktree
 `wt/f4-31`, commit `6fcaf761a5a0`. Physical measurements below are the directive's
 T23 observations, checked against the read-only neighboring checkout's
@@ -157,3 +161,151 @@ as evidence that the physical 60/30 ms gates passed.
 
 No result here qualifies an untested physical
 backend, proves analog DAC delay, or substitutes a host CPU for the T23.
+
+## F4-32
+
+Research before implementation (2026-10-19): Intel's
+[ICH3-M datasheet 290716-001](https://datasheet.lcsc.com/datasheet/pdf/7d520883a0f21f1845e4892c5243848a.pdf?productCode=C3247608),
+§13.2.2–7, specifies CIV, software LVI publication, fetch completion/DCH,
+PICB and PIV. Preserve the existing ownership checks and halt/reset proof.
+Linux v6.12 [intel8x0.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/pci/intel8x0.c),
+`snd_intel8x0_pcm_pointer`, retries zero PICB and retains its last position
+on a reload race; an uncertain position must never retire a period.
+
+The directive's suggested QEMU ordering is not the upstream ordering:
+[QEMU v9.2.0 ac97.c](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/audio/ac97.c),
+`transfer_audio` lines 993–1010, advances CIV/PIV and fetches the next BDL
+entry **before** `update_sr` raises completion IRQ. Its callback accepts
+available output capacity, not a fixed 10 ms PCM quantum.
+[audio.c](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/audio/audio.c),
+`audio_validate_opts`, defaults the timer to 10000 µs. A host fixture holding
+zero PICB for an entire timer interval is an adversarial handoff model,
+not evidence that QEMU exposes that state to guest services.
+
+Implementation decision: progress and publication are separate operations.
+Keep the last committed retirement during `-EAGAIN`, permit publication into
+provably free slots using independent ownership checks, and block the worker
+for at most 1 ms before retrying. Keep the 2 ms cursor deadline and 100 ms
+stuck-progress bound; do not accept a 10 ms persistent zero cursor as normal.
+Recovery must preserve the next unrendered VM frame across silence priming.
+Host replay results, lead arithmetic and stretch attribution follow below.
+
+### Host evidence and lead decision
+
+**Amendment 1 (lead decision, 2026-10-19): nominal lead 8, ≤50 ms at 48 kHz.**
+`8 × 256 + 304 = 2352` frames / 48000 = **49.0 ms**, replacing the f4-31
+≤30 ms target. The original missed-service budget remains covered:
+`480 + 256 + 256 = 992` frames, or `256 + 256 + 256 = 768` at ICH3's
+5.333 ms IRQ cadence. That budget alone cannot bound callback capacity.
+One 1024-frame capacity callback exhausts four periods before any worker
+turn; eight periods leave 1024 frames (21.333 ms) of transport margin.
+The lead reports intact pcm8 on three QEMU profiles with image `2fc3c429`
+(lead 8), and startup `published=4 retired=3` halts on all three with image
+`1fa1e62e` (lead 4). This evidence selects eight, rather than extrapolating
+a capacity bound from QEMU's nominal 10 ms timer.
+
+Primary-source recheck for this amendment:
+[QEMU v9.2.0 audio.c](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/audio/audio.c),
+`audio_rate_peek_bytes`/`audio_rate_get_bytes` (lines 2123–2155), computes
+elapsed virtual-clock demand minus bytes sent, bounded by available capacity;
+[ac97.c](https://raw.githubusercontent.com/qemu/qemu/v9.2.0/hw/audio/ac97.c),
+`po_callback`/`transfer_audio`, can consume several descriptors per call.
+No register, ownership or deadline rule changes follow from this policy.
+At 44.1 kHz, eight physical periods plus the 48 kHz source floor take
+`2048/44100 + 304/48000 = 52.773 ms`; the ≤50 ms nominal target is for
+48 kHz, and slower backends still need separate physical qualification.
+The 113 ms T23 gap continues to require adaptive growth to 28 periods.
+Measured gaps/recovery may exceed the nominal target and remain exposed.
+
+The three VM suite transport predicates now require 8 periods / 2352 frames.
+The 1024-frame increase shifts the existing latency-relative `lead_min`
+window to 2164–2364 and the `lead_max` lower bound to 2264. Its maximum
+uses the same nominal-time rule as before: `50 × 48 = 2400` frames
+(formerly `30 × 48 = 1440`). Other predicates, including lag, deadlines,
+fresh blocks and exact PCM frames, are unchanged.
+
+| Host replay | Before | After |
+| --- | --- | --- |
+| 100 callbacks of 480 frames / 10 ms, coherent cursor | 187 IRQs, published 191, retired 187, halts/deadlines 0 | Lead 8: 187 IRQs, published 195, retired 187, halts/deadlines 0 |
+| Free committed slot, transitional progress | Published 4, retired 1, fetched 256; no source consumed or publication | Lead 8: published 9, retired 1, fetched 256; exactly one quantum published |
+| Worker after transitional progress | Blocks 4 ms | Blocks 1 ms; coherent progress restores 4 ms policy |
+| Startup recovery, VM clock advances 127 frames before first render | 32 blocks, fresh 31, PCM output 12161, source frames 2027, late 21 | 32 blocks, fresh 32, PCM output 12288, source frames 2048, late 0 |
+
+The source-loss replay uses the production renderer and a deterministic
+f3-05 queue boundary; it reproduces the old counter pattern, not the original
+QEMU execution schedule. Mid-stream, retained-quantum and 28-period adapted
+lead recovery also pass;
+48 kHz output matches the uninterrupted PCM sequence sample for sample after
+excluding inserted silence. At 44.1 kHz every source frame/block is retained;
+interpolation at inserted silence edges is not asserted sample-identical.
+All cases retain exactly 12288 VM timeline frames; at 44.1 kHz the physical
+nonzero-frame counts differ by at most two due to those interpolated edges.
+Common cyclic-backend fixtures cover ES1370/1371, SB16 and VIA686/8233,
+including refusal of possibly owned slots and a real 1 ms worker block.
+Persistent uncertainty still expires after 2 ms and increments the deadline
+counter. Neither a zero cursor nor a time bound is committed as retirement.
+
+The **zero-at-IRQ hypothesis is not confirmed as the QEMU failure cause**.
+Both coherent and adversarial short handoffs work at the 10 ms cadence.
+A different legal callback input, 1024 frames requested in one burst, gave
+exactly `published=4 retired=3 halts=1 deadlines=0` in the first delivery,
+with no intervening publication or `-EAGAIN`. Amendment 1 adds two replays:
+1024 frames at 21 ms with lead 8 must leave the engine running with no halt,
+underrun or deadline; 2048 frames at 43 ms must exhaust the frontier once
+and recover with silence, no source discard and no deadline miss. The
+production-renderer companion checks full-lead startup recovery at 48/44.1
+kHz: 32 fresh blocks, 2048 source frames, 12288 VM frames, late/skips zero,
+and sample-exact 48 kHz PCM after excluding inserted silence. The transport
+fixture and source-boundary fixture are separate host models. Neither runs
+the full DOS scheduler or qualifies the original suite on a new image.
+
+### Stretch attribution and qualification limits
+
+The available old record has `eip=c017df83` on revision `287551c6`; the
+neighboring retained ELF is revision `2277ee3a`, so resolving that address
+against it would give an invalid attribution. `cpu_stretch_snapshot` returns
+the historical maximum task/stretch: the transport's `task=probes` is not
+the current worker's stack or a timestamp for that stretch. The old run's
+15 µs maximum IRQ-off section excludes its stats/info copies as the source
+of a single 66 ms IRQ-off wait; it does not exclude non-preemptible kernel
+work with IRQs enabled.
+
+F4-32 adds deferred `case=stretch_attribution` maxima for write enable,
+VM create, boot call, each typed key, `dosvm_text`, stats/info copies and
+block checks. These are wall times including callee sleeps, not exclusive
+CPU costs. Prompt scans yield every 64 entries, block checks every 16,
+typing after each completed key, and completed observations/transactions
+have explicit preemption points. Existing wait loops still sleep.
+
+The exact 76/66 ms section remains **unattributed** until that record runs.
+Calls outside this directive's authority requiring lead review are
+`src/kernel/vm/dosvm.c:388–419` (`dosvm_text`'s transfer/model loop) and
+`src/kernel/vm/dosvm_xms.c:129–138` (eager pool allocation/zero/map without a
+preemption point; the probe's LOW_CAP configuration makes that pool zero,
+so it cannot explain this probe's stretch). `dosvm_create` already yields
+after each structure/low-page initialization. Storage write enable reaches
+the full-volume scan (`src/kernel/fs/mount.c:472`); its inner FAT/cache work
+already calls `fs_service`, and timing evidence is needed before blaming it.
+No assertion is made that the remaining paths stay below 10 ms on T23.
+
+`tests/host/audio/run.sh` passes (ASan/UBSan, optimized costs, i686 codegen).
+The full kernel host script passes the VM audio and unchanged 2501-case
+DMA/waveform oracle, then fails at
+`tests/host/dosvm_speed_test.inc:138`, `disk_records==disk_before+10`.
+Relinking the same harness with the original `vm_source.c` reproduces that
+failure. Kernel compilation/FPU audit, API generation and `make CAP= apps`
+pass. Full commands and logs are in `build/codex/f4-32-report.md`.
+There is no new image, QEMU result or hardware qualification.
+
+Amendment 1 verification (2026-10-19): the audio host suite passes with
+11217537 production checks, both new capacity bursts, full-lead startup
+source recovery at 48/44.1 kHz and unchanged i686 codegen checks. The
+1024-frame/21 ms burst has zero halts, underruns and deadlines. The
+2048-frame/43 ms burst recovers once with zero deadlines and grows the lead
+to 28 through the existing measured-gap policy. Kernel build/FPU audit,
+API generation and `make CAP= apps` pass. A structured suite comparison
+confirms only the authorized VM lead/latency values changed. The broader
+host script again passes the 2501 DMA cases and unchanged timed digests,
+then stops at the same lead-owned `disk_records` assertion; that assertion
+is untouched. Logs and the before/after table are in the report's
+"Amendment 1" section. All jobs ran sequentially at `nice -n 19`.

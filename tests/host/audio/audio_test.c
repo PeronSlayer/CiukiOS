@@ -156,6 +156,7 @@ struct mock_hw {
     uint16_t codec[128], posted_reg, posted_value;
     uint8_t civ, piv, cr, lvi;
     uint16_t sr, remaining;
+    uint64_t zero_until; /* adversarial IRQ handoff: reload on the next time step */
     uint64_t silence_words;
     int16_t completed[128];
     unsigned completed_count;
@@ -267,7 +268,7 @@ static uint32_t mock_read(void *cookie, uint16_t port, unsigned width)
         if(!h->cr && !h->stop_stuck && h->tick >= h->stop_after)h->sr|=AC97_DCH;
         return h->sr;
     }
-    if(off==0x18)return h->remaining;
+    if(off==0x18)return h->tick < h->zero_until ? 0 : h->remaining;
     if(off==0x1b) {
         if((h->cr&2) && !h->reset_stuck && h->tick>=h->reset_at)h->cr=0;
         return h->cr;
@@ -1233,6 +1234,7 @@ static void test_persistence(void)
 #include "thinkpad_ec_test.inc"
 #include "deadline_test.inc"
 #include "pipeline_test.inc"
+#include "transient_test.inc"
 static void registry_fixture(const char *text)
 {
     static struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
@@ -1278,6 +1280,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
+    test_transient_transport();
     test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}

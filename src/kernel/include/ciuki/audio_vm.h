@@ -7,7 +7,8 @@
 #include <ciuki/dosvm.h>
 #include <ciuki/audio.h>
 
-/* Four periods plus one VM tick and one source quantum: 27.667 ms nominal.
+/* Eight periods plus one VM tick and one source quantum: 49.0 ms nominal
+ * at 48 kHz (2352 frames), within the F4-32 Amendment 1 <=50 ms target.
  * Adaptive transport lead can exceed this target; never read future DMA. */
 #define AUDIO_VM_LATENCY (AUDIO_VM_LEAD * AUDIO_QUANTUM + 304u)
 /* A quantum is rendered at least one VM tick plus one quantum behind the VM
@@ -93,5 +94,8 @@ struct audio_vm_diagnostic {
     bool ready, attached, running, muted, master_muted, master_in_codec;
 };
 void audio_vm_published(void);
+/* Refill worker, after proven stop/reset: keep the next unrendered VM
+ * frame through the new generation's silence prime and any retained quantum. */
+void audio_vm_reanchor(void);
 void audio_vm_diagnostic(struct dosvm_key, struct audio_vm_diagnostic *);
 #endif

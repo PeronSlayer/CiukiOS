@@ -386,6 +386,10 @@ int ac97_progress(struct ac97_device *d)
     }
     uint64_t now = d->io.now(d->io.cookie);
     if (!coherent) {
+        /* This bounds a register handoff, not the host audio timer period.
+         * Service retries after a real 1 ms block and may independently
+         * publish safe slots meanwhile. Persistent zero PICB is still an
+         * error after 2 ms on physical ICH; do not hide it with a 10 ms grace. */
         if (!d->cursor_retrying) { d->cursor_retrying = true; d->cursor_retry_since = now; }
         if (now - d->cursor_retry_since > 2 || now - d->last_progress > 100) {
             d->deadline_misses++; return -EIO;

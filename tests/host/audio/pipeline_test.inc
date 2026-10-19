@@ -9,7 +9,7 @@ static void test_pipeline_lifecycle(void)
 {
     late_setup(); vm_attached_hook=vm_active_hook=vm_nonzero_hook=true;
     audio_service(); CHECK(audio.running && ac97.published==AUDIO_VM_LEAD);
-    pipeline_step(256,6); CHECK(ac97.pcm[4][0].left==12000);
+    pipeline_step(256,6); CHECK(ac97.pcm[AUDIO_VM_LEAD][0].left==12000);
     vm_active_hook=vm_nonzero_hook=false;
     for(unsigned i=0;i<100 && audio.running;i++) pipeline_step(256,6);
     CHECK(!audio.running && audio.ready && !audio.error && vm_attached_hook);
@@ -25,9 +25,17 @@ static void test_pipeline_lifecycle(void)
     CHECK(audio.running && ac97.running && g_ticks-wrote_at<5);
     struct audio_stream *s=file_fd(client,fd)->audio;
     for(unsigned i=0;i<7;i++) CHECK(audio_stream_enqueue(s,input,sizeof(input))==sizeof(input));
-    pipeline_step(256,6); CHECK(ac97.pcm[4][0].left==1234);
-    while(hw.completed_count<5) pipeline_step(256,6);
-    CHECK(hw.completed[4]==1234 && g_ticks-wrote_at<=50);
+    pipeline_step(256,6); CHECK(ac97.pcm[AUDIO_VM_LEAD][0].left==1234);
+    /* Round cumulative 48 kHz frame time up to the next millisecond.
+     * Rounding every period to 6 ms would invent 6 ms of delay at lead 8. */
+    while(hw.completed_count<AUDIO_VM_LEAD+1) {
+        /* Keep the source running while the first queued period reaches
+         * the DAC; the longer transport lead outlasts one source ring. */
+        CHECK(audio_stream_enqueue(s,input,sizeof(input))==sizeof(input));
+        unsigned elapsed=((hw.completed_count+1)*AUDIO_QUANTUM*1000+AUDIO_RATE-1)/AUDIO_RATE;
+        pipeline_step(AUDIO_QUANTUM,elapsed-(g_ticks-wrote_at));
+    }
+    CHECK(hw.completed[AUDIO_VM_LEAD]==1234 && g_ticks-wrote_at<=50);
     printf("audio latency stopped VM -> native: first DAC-model period completed in %llu ms, lead=%u PASS\n",
         (unsigned long long)(g_ticks-wrote_at),AUDIO_VM_LEAD);
     /* Resume VM while more native data plays: actual mixer sums both. */
@@ -124,7 +132,8 @@ static void test_pipeline_backends(void)
         /* Cyclic IRQ inhibits immediately; worker recovers without killing
          * native fd state, and without any PIC mutation. */
         unsigned pic=second_pic_masks+second_pic_unmasks;
-        second.frame=5*256; second.tick+=30; g_ticks+=30;
+        second.frame=(AUDIO_VM_LEAD+1)*AUDIO_QUANTUM;
+        second.tick+=(AUDIO_VM_LEAD+1)*6; g_ticks+=(AUDIO_VM_LEAD+1)*6;
         if(kinds[i]==AUDIO_SB16) second.mixer[0x82]=2;
         else second.regs[(kinds[i]>=AUDIO_VIA686 ? audio_dma.channel : 4)/4]|=2;
         CHECK(backend_irq(audio_dma.state.irq,audio_dma.name) && audio_dma.inhibited && !audio.error);
