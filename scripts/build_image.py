@@ -425,6 +425,31 @@ def check_image(image, volume):
     print("T1 PASS: MBR, FAT32 geometry, fsck, loader size and CRC32")
 
 
+def soundfont_payloads(folder=None):
+    """Install only measured, pinned banks; never fetch or generate an image input."""
+    folder=Path(folder or ROOT / "assets/audio/soundfonts")
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec=spec_from_file_location("ciuki_soundfont_recipe", ROOT / "assets/audio/soundfonts/prepare.py")
+    recipe=module_from_spec(spec);spec.loader.exec_module(recipe)
+    inventory=folder / "inventory.json"
+    require(inventory.is_file(), "FluidR3 banks missing: stage pinned archive and run assets/audio/soundfonts/prepare.py")
+    record=json.loads(inventory.read_text())
+    require(record.get("schema")==1 and record.get("archive_sha256")==recipe.ARCHIVE_SHA256, "FluidR3 source archive pin")
+    banks=record.get("banks", [])
+    require({b["file"] for b in banks}=={"FluidR3_GM.sf2", "FluidR3_Ciuki.sf2"} and len(banks)==2, "two FluidR3 banks required")
+    sources={"/WINDOWS/SYSTEM/soundfonts.json":inventory}
+    for bank in banks:
+        name=bank["file"];path=folder/name
+        require(path.is_file() and path.stat().st_size==bank["bytes"] and sha256(path)==bank["sha256"], "FluidR3 bank size/hash")
+        require(bank.get("license")=="MIT" and bank.get("gm_programs")==128 and bank.get("drum_bank")==128, "FluidR3 GM coverage/licence")
+        if name=="FluidR3_GM.sf2":require(bank["sha256"]==recipe.FULL_SHA256, "full FluidR3 pin")
+        else:require(bank["bytes"]<=32*1024*1024, "reduced FluidR3 budget")
+        sources["/WINDOWS/SYSTEM/"+name]=path
+    for name in ("LICENSE-FluidR3.txt", "AUTHORS-FluidR3.txt"):
+        sources["/system/licenses/"+name]=folder/name
+    return sources, record
+
+
 def win32_payloads(folder=None):
     """T1: inspect every builtin before image mutation; payload readback hashes
     cover both manifests and every DLL. Never build or fetch from this path."""
@@ -439,7 +464,8 @@ def win32_payloads(folder=None):
     sources={"/WINDOWS/SYSTEM/builtin-store.json": manifest,
              "/WINDOWS/SYSTEM/BUILTIN.BIN": folder / "BUILTIN.BIN",
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
-             "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md"}
+             "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md",
+             "/system/licenses/TinySoundFont.txt":ROOT / "sdk/win32/audio/tsf/LICENSE"}
     for dll in store["dlls"]:
         require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
         sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]
@@ -496,6 +522,8 @@ def build(kernel, out, boot_cfg):
     builtin_sources, builtin_directories, metadata["win32"] = win32_payloads()
     sources.update(builtin_sources)
     directories.update(builtin_directories)
+    bank_sources,metadata["soundfonts"]=soundfont_payloads()
+    sources.update(bank_sources)
     registry_sources, registry_directories = registry_payloads(out.parent / "registry")
     sources.update(registry_sources)
     directories.update(registry_directories)

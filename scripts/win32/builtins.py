@@ -42,6 +42,10 @@ def build(out=None):
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='kernel32.dll':store['dlls'][i]=kernel32.build(out,kernel_base,flags)
         if dll['name']=='wsock32.dll':store['dlls'][i]=kernel32.build_offline(out,dll['base'],flags)
+    from scripts.win32 import audio
+    audio_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    audio_dlls=audio.build(out,audio_base,flags)
+    store['dlls']=[d for d in store['dlls'] if d['name'] not in ('dsound.dll','winmm.dll')]+audio_dlls
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='builtin placeholder pending f5-14B measured replacement'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

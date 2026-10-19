@@ -19,3 +19,12 @@ The generated placeholder DLLs have project version **0.0.0.0**, including an
 actual VERSIONINFO resource. These are not qualified Windows 98 compatibility
 version values. In particular, ordinal 2 of winmm is an opaque NONAME stub with
 no invented public identity or calling convention.
+
+The audio facade contains TinySoundFont v0.9, by Bernhard Schelling, based
+on SFZero by Steve Folta, under the MIT licence in `audio/tsf/LICENSE`.
+Upstream `tsf.h` Git blob: `a81f25d5ca2e210720d646dec2dbfaeb119acb09`.
+Local changes borrow shared S16 samples, use defined offsetof expressions
+and stream callback signatures, and steal the oldest active voice after
+release-first exhaustion. The surrounding audio facade is original code.
+The image must retain this licence as `/system/licenses/TinySoundFont.txt`.
+FluidR3 bank notices are separate; see `assets/audio/soundfonts/README.md`.

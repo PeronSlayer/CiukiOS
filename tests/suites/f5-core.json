@@ -445,6 +445,42 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-audio-qemu-t23",
+      "probe": "w32-audio",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-audio run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "lead": {
+                "le": 512
+              },
+              "streams": {
+                "eq": 1
+              },
+              "pcm": {
+                "eq": 1
+              },
+              "callbacks": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      },
+      "integration_pending": "authored, unrun: lead supplies guest audio probe, WAV capture and T23 listening"
     }
   ]
 }
