@@ -258,6 +258,16 @@ Follow `docs/design/test-architecture.md`:
   the owner's request. The same entry records the owner's requirement that
   disk, memory, cache and real-time management follow the Windows 98/ME
   model completely (`docs/directives/f0-42`).
+- Owner mandate 2026-10-19 14:40 (dev diary 2026-10-19-07): the lead runs
+  the whole programme autonomously with Codex and parallel agents until it
+  is complete (the resource-management contract sequence, the DOS file API
+  in the VMM, F5 complete including original installers and real Windows
+  applications); no intermediate hardware image unless the owner asks; every
+  merge still needs green host suites and a canonical build. The owner's
+  Windows 98 Resource Kit media live in `third_party/mswin98rskt/`
+  (ignored, never committed or redistributed; the book is extracted to
+  `build/rskt/` for research). QEMU is allowed only for the DOS conformance
+  battery of `f3-48` (dev diary 2026-10-19-06).
 
 ## Code Search Policy
 
