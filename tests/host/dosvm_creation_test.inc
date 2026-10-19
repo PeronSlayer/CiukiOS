@@ -93,3 +93,70 @@ static void test_maximum_creation(void)
     fail_at = 0; empty();
     printf("F0-41 maximum VM: 6144 zeroed/reserved pool pages, max allocation span=%u pages, copy/text/boot points and transaction guards, pool rollback PASS\n", creation_alloc_max);
 }
+
+/* Full maximum lifecycle: both quiescent normal stop and a disk-open failure
+ * after the entire 24 MiB pool exists. Disable only modeled service for the
+ * control, keeping the production loops, mappings and cleanup unchanged. */
+static struct dosvm_key teardown_key;
+static void repeat_teardown_point(void)
+{
+    preempt_hook=0;
+    CHECK(dosvm_destroy(teardown_key,true)==-EBUSY);
+}
+static void test_maximum_teardown(void)
+{
+    for (unsigned failure=0; failure<2; failure++) {
+        uint64_t total[2], maximum[2];
+        for (unsigned points=0; points<2; points++) {
+            empty(); struct dosvm *v=0;
+            if (!failure) CHECK(!dosvm_create(0,&v));
+            creation_cost_ns=creation_cost_span=creation_cost_max=0;
+            creation_cost_enabled=true; creation_cost_points=points!=0;
+            if (failure) {
+                io_fail_at=io_calls+1;
+                CHECK(dosvm_create(0,&v)<0 && !v); io_fail_at=0;
+            } else {
+                if (points) { teardown_key=dosvm_key(v); preempt_hook=repeat_teardown_point; }
+                destroy(v,false); CHECK(!preempt_hook);
+            }
+            creation_cost_boundary(); creation_cost_enabled=false;
+            total[points]=creation_cost_ns; maximum[points]=creation_cost_max;
+            empty();
+        }
+        CHECK(maximum[0]>=40000000 && maximum[1]<=2000000);
+        CHECK(total[1]>=total[0] && total[1]<=total[0]*110/100);
+        printf("F0-44 %s cleanup: total=%llu->%lluns max=%llu->%lluns no ownership leaks PASS\n",
+               failure ? "late-failed-creation" : "normal-stop",
+               (unsigned long long)total[0],(unsigned long long)total[1],
+               (unsigned long long)maximum[0],(unsigned long long)maximum[1]);
+    }
+}
+
+static void test_vga_transaction_bound(void)
+{
+    struct dosvm *v=create();
+    video_exchange(v,VIDEO_LINEAR);
+    uint32_t *pd=P2V(v->as.pd_phys), *pt=P2V(pd[0]&~0xfffu);
+    for (unsigned i=0;i<VIDEO_WINDOW_PAGES;i++) {
+        memset(P2V(v->frames[VIDEO_WINDOW_PAGE+i]),0x44,PAGE_SIZE);
+        pt[VIDEO_WINDOW_PAGE+i]|=0x40;
+    }
+    for (unsigned plane=0;plane<4;plane++) v->video_pending[plane]=0xffff;
+    uint8_t latches[4]; memcpy(latches,v->vga.latch,4);
+    unsigned before=preempt_points;
+    creation_cost_ns=creation_cost_span=creation_cost_max=0;
+    creation_cost_enabled=creation_cost_points=true;
+    video_harvest(v);
+    /* Charge the entire fixed aperture for each scalar conversion (8 ns
+     * per byte, rounded up from 4 * 8 us / 4096). Mask and PTE accounting
+     * is charged conservatively even when a particular entry is unchanged. */
+    creation_cost_charge(CVGA_PLANE_SIZE*8u+64u*1000u);
+    video_linear_seed(v); creation_cost_charge(CVGA_PLANE_SIZE*8u);
+    video_exchange(v,0); creation_cost_charge(128000);
+    creation_cost_boundary(); creation_cost_enabled=false;
+    CHECK(preempt_points==before && creation_cost_max<=2000000);
+    CHECK(!memcmp(latches,v->vga.latch,4));
+    printf("F0-44 VGA combined transaction: aperture=65536 bytes span=%lluns no internal point, latches preserved PASS\n",
+           (unsigned long long)creation_cost_max);
+    destroy(v,true); empty();
+}

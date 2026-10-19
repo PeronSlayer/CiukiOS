@@ -92,6 +92,7 @@ void panic(const char *fmt, ...) { (void)fmt; abort(); }
 static uint8_t ram[2 * 1024 * 1024] __attribute__((aligned(4096)));
 #undef P2V
 #define P2V(p) ((void *)(ram + (uint32_t)(p)))
+void kpreempt_point(void) { }
 #include "../../src/kernel/core/vmm.c"
 
 static void bios_range(unsigned slot, uint64_t base, uint64_t size, unsigned type)

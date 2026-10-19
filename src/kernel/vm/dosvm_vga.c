@@ -234,6 +234,13 @@ static uint32_t video_frame(struct dosvm *v, unsigned want, unsigned page)
 }
 /* Reuse the VM's own aperture pages, which normally stay supervisor-only.
  * The model uses physical offsets: chain-4 clears A0/A1 without shifting. */
+/* F0-44 indivisible transaction envelope: the aperture is 16 * 4096
+ * bytes regardless of VM quota. Scalar chain-4 conversion is charged at
+ * 4x ordinary RAM copy (32 us/page), <=512 us per seed/harvest. A combined
+ * harvest + seed + 64 mask updates + 32 PTE checks/updates is <=1280 us.
+ * This is a host cost model, not physical qualification. Never yield while
+ * plane state, dirty bits and window PTEs describe different generations. */
+_Static_assert(VIDEO_WINDOW_PAGES == 16 && PAGE_SIZE == 4096, "VGA transaction bound");
 static void video_linear_seed(struct dosvm *v)
 {
     for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++) {

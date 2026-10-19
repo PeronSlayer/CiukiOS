@@ -34,6 +34,8 @@ static bool refill(unsigned c)
     uint8_t *page = P2V(p);
     unsigned sz = class_size(c);
     void *first = 0, *last = 0;
+    /* At most 128 slots * 1 us = 128 us, constructed privately before
+     * the constant-time IRQ-off publication. No reclaim walk exists. */
     for (unsigned off = 0; off + sz <= PAGE_SIZE; off += sz) {
         if (!last) last = page + off;
         *(void **)(page + off) = first;

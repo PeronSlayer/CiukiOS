@@ -85,9 +85,13 @@ static void wait_changed(struct block_cache *c, uint32_t ms) {
     kwait_wait_until(&c->changed.wait,fs_event_changed,&t,deadline_after_ms(ms)); fs_lock_take(&c->lock);
 #endif
 }
+static void scan_service(unsigned *work);
 static struct cache_fill *filling(struct block_cache *c, struct blkdev *d, uint64_t lba) {
-    for (struct cache_fill *f=c->fills; f; f=f->next)
+    unsigned work=0;
+    for (struct cache_fill *f=c->fills; f; f=f->next) {
+        scan_service(&work);
         if (f->dev==d && lba>=f->lba && lba-f->lba<f->count) return f;
+    }
     return 0;
 }
 static int join_fill(struct block_cache *c, struct cache_fill *f, uint64_t lba, uint32_t count, void *buf) {
@@ -119,7 +123,9 @@ static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba,
     if (!e && proc_launch_disk_read) proc_launch_disk_read(count*d->sector_size);
     fill.error=e; fill.complete=true; fs_event_wake(&c->changed);
     while (fill.waiters) fs_event_wait(&c->changed,&c->lock);
-    struct cache_fill **at=&c->fills; while (*at!=&fill) at=&(*at)->next;
+    unsigned work=0;
+    struct cache_fill **at=&c->fills;
+    while (*at!=&fill) { scan_service(&work); at=&(*at)->next; }
     *at=fill.next; return e;
 }
 static int wait_block(struct block_cache *c, struct cache_block *b) {
@@ -161,12 +167,44 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
 static void unhash(struct block_cache *c, struct cache_block *b) {
     if (!b->dev) return;
     struct cache_block **p=&c->hash[bucket(b->dev,b->lba)];
-    while (*p && *p!=b) p=&(*p)->hash_next;
+    unsigned work=0;
+    while (*p && *p!=b) { scan_service(&work); p=&(*p)->hash_next; }
     if (*p) *p=b->hash_next;
     b->hash_next=0; b->dev=0;
 }
-/* Two LRU lists, one per slot capacity, so a 2048-byte miss never walks the
- * many 512-byte slots. Maintenance loops visit both through first/next. */
+/* Descriptor pages never move during the cache lifetime. Unlike LRU links,
+ * this cursor survives cooperative service, touches and layout conversions.
+ * Inspect layout under the cache lock at each visit; never return inactive
+ * 512-byte descriptors from a half that now holds one 2048-byte block. */
+struct cache_scan { struct cache_meta *meta; unsigned page, slot; bool in_meta; };
+static struct cache_block *scan_next(struct block_cache *c, struct cache_scan *scan)
+{
+    for (;;) {
+        struct cache_page *pg;
+        if (!scan->in_meta) pg=&c->inline_page;
+        else {
+            if (!scan->meta) return 0;
+            pg=&scan->meta->pages[scan->page];
+        }
+        if (scan->slot==CACHE_PAGE_SLOTS || !pg->data) {
+            scan->slot=0;
+            if (!scan->in_meta) { scan->in_meta=true; scan->meta=c->meta; }
+            else if (++scan->page==scan->meta->count) { scan->page=0; scan->meta=scan->meta->next; }
+            continue;
+        }
+        unsigned slot=scan->slot++;
+        if (pg->layout[slot/SLOTS_512] && slot%SLOTS_512) continue;
+        return &pg->b[slot];
+    }
+}
+/* 16 descriptor visits, each <=64 insertion comparisons/moves at 0.25 us,
+ * plus device checks <=2 us: <300 us. The 1 ms fs_service clock gate
+ * therefore leaves margin below a 2 ms software span. fs_service retains only sleeping
+ * filesystem reservations; there is no IRQ-off section or spinlock here. */
+static void scan_service(unsigned *work)
+{ if (!(++*work & 15u)) fs_service(); }
+/* Invalidation retains the sleeping cache reservation while preparing all
+ * old blocks, then publishes the device epoch in one constant-time step. */
 static struct cache_block *first_block(struct block_cache *c) {
     return c->lru[0].oldest ? c->lru[0].oldest : c->lru[1].oldest;
 }
@@ -229,6 +267,7 @@ static int convert_half(struct block_cache *c, struct cache_page *pg, unsigned h
     half_deactivate(c,pg,h); half_activate(c,pg,h,1,true); return 0;
 }
 static void convert_page(struct block_cache *c, struct cache_page *pg, unsigned halves, unsigned *done, int *blocked) {
+    fs_service(); /* <=two complete half preflights before the next page */
     for (unsigned h=0;h<2 && *done<halves;h++) if (!pg->layout[h]) {
         fs_service();
         int e=convert_half(c,pg,h);
@@ -253,8 +292,11 @@ static int layout_for(struct block_cache *c, struct blkdev *d) {
     return convert(c,pages*2);
 }
 static struct cache_block *find(struct block_cache *c, struct blkdev *d, uint64_t lba) {
-    for (struct cache_block *b=c->hash[bucket(d,lba)]; b; b=b->hash_next)
+    unsigned work=0;
+    for (struct cache_block *b=c->hash[bucket(d,lba)]; b; b=b->hash_next) {
+        scan_service(&work);
         if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) return b;
+    }
     return 0;
 }
 /* Reserve a miss before dropping the lock. Failed fills retain their result
@@ -275,8 +317,12 @@ retry:
         c->hits++; touch(c,b); *out=b; return 0;
     }
     int blocked=-FS_ENOMEM; bool pending=false; struct cache_block *dirty=0;
+    unsigned work=0;
     for (unsigned list=d->sector_size==2048 ? 1u : 0u; list<2 && !b; list++) {
         for (struct cache_block *x=c->lru[list].oldest; x; x=x->next) {
+            /* The sleeping cache reservation stays held across service, so
+             * LRU/hash nodes and this candidate retain their identity. */
+            scan_service(&work);
             if (x->capacity<d->sector_size) continue;
             if (x->busy || x->waiters) { pending=true; continue; }
             struct cache_device *owner=x->dirty ? device(c,x->dev) : 0;
@@ -335,13 +381,15 @@ int cache_init(struct block_cache *c, size_t bytes) {
     }
     c->workspace_pages=(uint32_t)(pages/16); if (!c->workspace_pages) c->workspace_pages=1;
     if (c->workspace_pages>256) c->workspace_pages=256;
-    for (unsigned i=0;i<c->workspace_pages;i++) { if (!(c->workspace[i]=fs_page_alloc())) goto fail; cache_claim(c->workspace[i],MM_CACHE_WORK); }
+    for (unsigned i=0;i<c->workspace_pages;i++) { fs_service(); if (!(c->workspace[i]=fs_page_alloc())) goto fail; cache_claim(c->workspace[i],MM_CACHE_WORK); }
     /* Budget: workspace + writeback + data + descriptors == bytes/4096. */
     unsigned room=(unsigned)(pages-c->workspace_pages-c->writeback_pages), data=room;
     while (data && data+meta_needed(data)>room) data--;
     if (!data) goto fail;
     struct cache_meta *m=0;
     for (unsigned i=0;i<data;i++) {
+        /* 16 allocation/zero pages * 18 us <=288 us. */
+        if (!(i & 15u)) fs_service();
         struct cache_page *pg;
         if (!i) pg=&c->inline_page;
         else {
@@ -366,10 +414,10 @@ void cache_destroy(struct block_cache *c) {
     if (c->inline_page.data) { cache_unclaim(c->inline_page.data,MM_CACHE_DATA); fs_page_free(c->inline_page.data); }
     while (c->meta) {
         struct cache_meta *m=c->meta; c->meta=m->next;
-        for (unsigned i=0;i<m->count;i++) { cache_unclaim(m->pages[i].data,MM_CACHE_DATA); fs_page_free(m->pages[i].data); }
+        for (unsigned i=0;i<m->count;i++) { fs_service(); cache_unclaim(m->pages[i].data,MM_CACHE_DATA); fs_page_free(m->pages[i].data); }
         cache_unclaim(m,MM_CACHE_META); fs_page_free(m);
     }
-    for (unsigned i=0;i<c->workspace_pages;i++) { cache_unclaim(c->workspace[i],MM_CACHE_WORK); fs_page_free(c->workspace[i]); }
+    for (unsigned i=0;i<c->workspace_pages;i++) { fs_service(); cache_unclaim(c->workspace[i],MM_CACHE_WORK); fs_page_free(c->workspace[i]); }
     fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed);
     memset(c,0,sizeof(*c));
 }
@@ -426,6 +474,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
     uint32_t epoch=state ? state->epoch : 0;
     uint32_t hits[BLKDEV_READ_SECTORS/32]={0}, generation=d->media_generation;
     for (unsigned i=0; !e && i<count; i++) {
+        if (!(i & 15u)) fs_service(); /* 16 short hash walks plus <=8 KiB copy */
         struct cache_block *b=find(c,d,lba+i);
         if (b && b->busy) { e=wait_block(c,b); if (e) break; b=find(c,d,lba+i); }
         if (b) {
@@ -440,6 +489,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         }
     }
     for (unsigned i=0; !e && i<count;) {
+        if (!(i & 15u)) fs_service();
         if (hits[i/32] & (1u<<(i%32))) { i++; continue; }
         /* Recheck after any preceding unlocked transport. */
         struct cache_block *existing=find(c,d,lba+i);
@@ -455,10 +505,14 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
         /* Reserve only available clean slots. A run larger than the cache
          * still uses one command; uncached bytes remain in the caller buffer. */
         for (unsigned j=i; j<end; j++) {
+            if (!(j & 15u)) fs_service();
             struct cache_block *b=0;
+            unsigned work=0;
             for (unsigned list=0; list<2 && !b; list++)
-                for (struct cache_block *x=c->lru[list].oldest; x; x=x->next)
+                for (struct cache_block *x=c->lru[list].oldest; x; x=x->next) {
+                    scan_service(&work);
                     if (!x->busy && !x->waiters && !x->dirty) { b=x; break; }
+                }
             if (!b) continue;
             unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
             b->busy=true; b->invalid=false; b->io_error=0;
@@ -552,6 +606,21 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
     }
     fs_lock_drop(&c->lock); return e;
 }
+static void select_dirty(struct block_cache *c, struct blkdev *d, struct cache_block *b,
+                         struct cache_block **blocks, unsigned *count, unsigned limit)
+{
+    if (b->dev!=d || !b->dirty || b->invalid || b->busy || b->waiters) return;
+    unsigned n=*count, at=0;
+    while (at<n && blocks[at]->lba<b->lba) at++;
+    if (at>=limit) return;
+    if (n<limit) n++;
+    else {
+        struct cache_block *old=blocks[n-1]; old->busy=false;
+        if (old->invalid) { clean(c,old); unhash(c,old); old->io_error=-FS_EIO; }
+    }
+    for (unsigned j=n-1;j>at;j--) blocks[j]=blocks[j-1];
+    blocks[at]=b; b->busy=true; *count=n;
+}
 /* A bounded selection in LBA order. Pins every selected block before any
  * unlock; bytes are immutable until that reservation is completed. The
  * preallocated bounce buffer lets discontiguous cache pages share commands.
@@ -567,32 +636,40 @@ static int write_batch(struct block_cache *c, struct blkdev *d, uint32_t *flushe
     if (s->dev!=d || s->epoch!=epoch || generation!=d->media_generation) return -FS_EIO;
     if (s->error) return s->error;
     if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
-    struct cache_block *blocks[CACHE_WRITEBACK_BLOCKS]; unsigned n=0,seen=0;
+    struct cache_block *blocks[CACHE_WRITEBACK_BLOCKS]; unsigned n=0;
+    unsigned work=0;
+    struct cache_scan scan={0};
+    c->batch_busy=true;
     unsigned limit=c->writeback_buffer ? c->writeback_pages*4096u/d->sector_size : 1;
     if (limit>CACHE_WRITEBACK_BLOCKS) limit=CACHE_WRITEBACK_BLOCKS;
-    /* Dirty blocks are normally newest. Stop once every dirty byte of this
-     * device was seen, avoiding an 8 MiB clean-cache scan at each FAT commit. */
+    /* Keep the short newest-first fast path used by FAT commits. If the
+     * scan is longer, switch to a stable descriptor cursor; no LRU cursor
+     * survives service. Selected slots are busy until transport/cancel. */
+    unsigned seen=0, probes=0;
     for (unsigned list=0;list<2;list++)
         for (struct cache_block *b=c->lru[list].newest;b;b=b->prev) {
-            if (b->dev!=d || !b->dirty || b->invalid) continue;
-            seen+=b->sector_size;
-            if (!b->busy && !b->waiters) {
-                unsigned at=0; while (at<n && blocks[at]->lba<b->lba) at++;
-                if (at<limit) {
-                    if (n<limit) n++;
-                    for (unsigned j=n-1;j>at;j--) blocks[j]=blocks[j-1];
-                    blocks[at]=b;
-                }
-            }
+            if (++probes>32) goto long_scan;
+            if (b->dev==d && b->dirty && !b->invalid) seen+=b->sector_size;
+            select_dirty(c,d,b,blocks,&n,limit);
             if (seen>=s->dirty_bytes) goto selected;
         }
-selected:
-    if (!n) return 0;
-    for (unsigned i=0;i<n;i++) {
-        if (blocks[i]->generation!=generation) return remember(c,d,-FS_EIO);
-        int e=blkdev_range(d,blocks[i]->lba,1); if (e) return remember(c,d,e);
+    goto selected;
+long_scan:
+    fs_service();
+    for (;;) {
+        scan_service(&work);
+        struct cache_block *b=scan_next(c,&scan); if (!b) break;
+        if (s->epoch!=epoch || s->dev!=d || generation!=d->media_generation || s->error) goto cancelled;
+        select_dirty(c,d,b,blocks,&n,limit);
+        /* New dirty entries behind this cursor are requested by the age
+         * pass; they cannot extend this finite batch's selection forever. */
     }
-    c->batch_busy=true;
+selected:
+    if (!n) { c->batch_busy=false; fs_event_wake(&c->changed); return 0; }
+    for (unsigned i=0;i<n;i++) {
+        if (blocks[i]->invalid || blocks[i]->generation!=generation) goto cancelled;
+        int e=blkdev_range(d,blocks[i]->lba,1); if (e) { remember(c,d,e); goto cancelled; }
+    }
     for (unsigned i=0;i<n;i++) {
         blocks[i]->busy=true;
         if (c->writeback_buffer) memcpy(c->writeback_buffer+i*d->sector_size,blocks[i]->data,d->sector_size);
@@ -629,6 +706,13 @@ selected:
         if (b->invalid) { clean(c,b); unhash(c,b); b->io_error=-FS_EIO; }
     }
     c->batch_busy=false; fs_event_wake(&c->changed); return result;
+cancelled:
+    for (unsigned i=0;i<n;i++) {
+        struct cache_block *b=blocks[i]; b->busy=false;
+        if (b->invalid) { clean(c,b); unhash(c,b); b->io_error=-FS_EIO; }
+    }
+    c->batch_busy=false; fs_event_wake(&c->changed);
+    return s->epoch==epoch && s->error ? s->error : -FS_EIO;
 }
 static int flush_device(struct block_cache *c, struct blkdev *d) {
     struct cache_device *s=device(c,d); if (!s) return -FS_ENOSPC;
@@ -694,8 +778,10 @@ int cache_writeback_tick(struct block_cache *c, uint32_t now) {
     }
     __atomic_store_n(&c->writeback_pending,false,__ATOMIC_RELEASE);
     for (unsigned i=0;i<CACHE_DEVICES;i++) c->devices[i].oldest=now;
-    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
-        fs_service();
+    unsigned work=0; struct cache_scan scan={0};
+    for (;;) {
+        scan_service(&work);
+        struct cache_block *b=scan_next(c,&scan); if (!b) break;
         struct cache_device *owner=b->dirty && !b->invalid ? device(c,b->dev) : 0;
         if (owner && !owner->error) {
             if ((int32_t)(b->since-owner->oldest)<0) owner->oldest=b->since;
@@ -713,7 +799,10 @@ int cache_error(struct block_cache *c, struct blkdev *d) {
 }
 void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
     fs_lock_take(&c->lock);
-    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) if (b->dev==d) {
+    unsigned work=0;
+    for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
+        scan_service(&work);
+        if (b->dev!=d) continue;
         if (b->busy) {
             if (b->dirty && !b->invalid) { c->dirty_bytes-=b->sector_size; device(c,d)->dirty_bytes-=b->sector_size; }
             b->invalid=true;
@@ -733,7 +822,7 @@ int cache_workspace_begin(struct block_cache *c, uint32_t bytes) {
     if (c->workspace_in_use) { fs_lock_drop(&c->workspace_lock); return -FS_EBUSY; }
     c->workspace_in_use=true;
     fs_lock_drop(&c->workspace_lock);
-    for (unsigned i=0;i<(bytes+4095)/4096;i++) memset(c->workspace[i],0,4096);
+    for (unsigned i=0;i<(bytes+4095)/4096;i++) { memset(c->workspace[i],0,4096); fs_service(); }
     return 0;
 }
 uint8_t *cache_workspace_byte(struct block_cache *c, uint32_t off) {

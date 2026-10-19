@@ -86,6 +86,43 @@ static struct creation_result creation_replay(bool points, void (*service)(uint6
 }
 ''')
 
+    # F0-44 audio/scheduler replay uses the actual destruction loop as well.
+    source = (ROOT / 'src/kernel/core/vmm.c').read_text()
+    start = source.index('void as_destroy(')
+    opening = source.index('{', start)
+    end, depth = opening + 1, 1
+    while depth:
+        depth += (source[end] == '{') - (source[end] == '}')
+        end += 1
+    body = source[start:end].replace('void as_destroy(', 'static void creation_destroy_loop(')
+    body = body.replace('uint32_t old = pt[j];', 'creation_charge(1000); uint32_t old = pt[j];')
+    body = body.replace('if (pd[i] & PTE_P) {', 'creation_charge(1000); if (pd[i] & PTE_P) {')
+    body = body.replace('table_va(', 'creation_table_va(').replace('mm_free(', 'creation_release(')
+    body = body.replace('g_user_mappings', 'creation_mappings').replace('kpd_phys', '0')
+    body = body.replace('read_cr3()', '0u').replace('write_cr3(0)', '((void)0)')
+    body = body.replace('kpreempt_point()', 'creation_point()')
+    with Path(destination).open('a') as stream:
+        stream.write(r'''
+static uint32_t creation_tables[8][1024], creation_mappings;
+static uint32_t *creation_table_va(uint32_t p)
+{ CHECK(p>=PAGE_SIZE && p<=sizeof(creation_tables)); return creation_tables[p/PAGE_SIZE-1]; }
+static void creation_release(uint32_t p, enum mm_owner owner)
+{ (void)p; (void)owner; creation_charge(6000); }
+''' + body + r'''
+static inline struct creation_result creation_cleanup_replay(bool points, void (*service)(uint64_t))
+{
+    memset(&creation,0,sizeof(creation)); memset(creation_tables,0,sizeof(creation_tables));
+    creation_points=points; creation_service=service;
+    struct aspace as={.pd_phys=PAGE_SIZE,.pages=6416,.tables=7,.owner=MM_VM_PRIVATE,.pool_base=0x110000};
+    creation_mappings=as.pages;
+    for (unsigned i=0;i<7;i++) creation_tables[0][i]=(i+2)*PAGE_SIZE|PTE_P;
+    for (unsigned i=0;i<6416;i++) creation_tables[1+i/1024][i%1024]=(10000+i)*PAGE_SIZE|PTE_P;
+    creation_destroy_loop(&as); creation_boundary();
+    CHECK(!as.pd_phys && !creation_mappings);
+    return creation;
+}
+''')
+
 
 if __name__ == '__main__':
     write_model(sys.argv[1])

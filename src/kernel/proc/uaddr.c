@@ -12,6 +12,22 @@
 #define PTE_NEW 0x400u
 #define PTE_SHARED 0x800u
 static uint64_t next_generation;
+/* Read/mutate metadata in bounded slices. A stack-owned mutation pin keeps
+ * existing extent nodes alive across service; disjoint new maps may still be
+ * inserted. Never retain a raw list predecessor over an unreserved yield.
+ * 128 cached extent visits * 1 us = 128 us; the counter spans nested walks. */
+static unsigned walk_work;
+static void walk_hold(const struct uaddr *u, struct ua_pin *pin)
+{
+    struct uaddr *owner=(struct uaddr *)u;
+    *pin=(struct ua_pin){.base=0,.end=CIUKI_MAIN_STACK_LIMIT,.mutation=true,
+                         .task=g_current,.next=owner->pins};
+    owner->pins=pin;
+}
+static void walk_step(void)
+{ if (!(++walk_work & 127u)) kpreempt_point(); }
+static void walk_drop(const struct uaddr *u, struct ua_pin *pin)
+{ ua_unpin((struct uaddr *)u,pin); }
 
 static bool span(uint32_t base, uint32_t bytes, uint32_t *end)
 {
@@ -75,6 +91,9 @@ static void set_pte(struct uaddr *u, uint32_t va, uint32_t *p, uint32_t value)
 static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_new)
 {
     for (uint32_t va = base; va < end; va += PAGE_SIZE) {
+        /* 16 * (6 us release + 1 us check) <=112 us, including holes.
+         * No spinlock/IRQ hold; caller reserves the changing extent. */
+        if (!(((va - base) / PAGE_SIZE) & 15u)) kpreempt_point();
         uint32_t *p = pte(u, va, false);
         if (!p || (only_new && !(*p & PTE_NEW)))
             continue;
@@ -90,12 +109,14 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
      * provisional tables created for a PROT_NONE reservation. */
     uint32_t *pd = P2V(u->as.pd_phys);
     for (uint32_t i = base >> 22; i <= (end - 1) >> 22; i++) {
+        kpreempt_point();
         if (!(pd[i] & PTE_P))
             continue;
         uint32_t *pt = P2V(pd[i] & ~(PAGE_SIZE - 1));
         unsigned j = 0;
-        while (j < 1024 && !pt[j])
-            j++;
+        /* Indivisible emptiness test: 1024 * 0.25 us = 256 us.
+         * A yield here could free pt or populate an already checked entry. */
+        while (j < 1024 && !pt[j]) j++;
         if (j == 1024) {
             mm_free(pd[i] & ~(PAGE_SIZE - 1), MM_TABLE);
             pd[i] = 0;
@@ -110,8 +131,10 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         uint32_t *p = pte(u, va, true);
         if (!p)
             goto fail;
-        if (*p & PTE_OWN)
+        if (*p & PTE_OWN) {
+            if (((va - base) / PAGE_SIZE + 1) % 16 == 0) kpreempt_point();
             continue;
+        }
         uint32_t phys = pmm_alloc();
         if (!phys)
             goto fail;
@@ -131,6 +154,8 @@ fail:
 static void protect_pages(struct uaddr *u, uint32_t base, uint32_t end, uint32_t prot)
 {
     for (uint32_t va = base; va < end; va += PAGE_SIZE) {
+        /* 16 PTE updates * 6 us = 96 us, counting reserved holes. */
+        if (!(((va - base) / PAGE_SIZE) & 15u)) kpreempt_point();
         uint32_t *p = pte(u, va, false);
         if (!p || !(*p & PTE_OWN))
             continue;
@@ -150,10 +175,13 @@ int ua_init(struct uaddr *u, void *identity)
 
 struct ua_extent *ua_find(const struct uaddr *u, uint32_t va)
 {
-    for (struct ua_extent *e = u->head; e && e->base <= va; e = e->next)
-        if (va < e->end)
-            return e;
-    return 0;
+    struct ua_pin walk; walk_hold(u,&walk);
+    struct ua_extent *found=0;
+    for (struct ua_extent *e = u->head; e && e->base <= va; e = e->next) {
+        walk_step();
+        if (va < e->end) { found=e; break; }
+    }
+    walk_drop(u,&walk); return found;
 }
 
 static bool arena(const struct ua_extent *e)
@@ -163,10 +191,12 @@ static bool arena(const struct ua_extent *e)
 
 static bool vacant(const struct uaddr *u, uint32_t base, uint32_t end)
 {
-    for (const struct ua_extent *e = u->head; e; e = e->next)
-        if (base < e->end && end > e->base)
-            return false;
-    return true;
+    struct ua_pin walk; walk_hold(u,&walk); bool free=true;
+    for (const struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
+        if (base < e->end && end > e->base) { free=false; break; }
+    }
+    walk_drop(u,&walk); return free;
 }
 
 int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
@@ -177,8 +207,14 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
     if (err)
         return err;
     if (!span(base, bytes, &end) || base < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) ||
-        (u->win32 && end > CIUKI_W32_SHARED + PAGE_SIZE) || !vacant(u, base, end))
+        (u->win32 && end > CIUKI_W32_SHARED + PAGE_SIZE))
         return -EINVAL;
+    /* Metadata service pins serialize insertion too: otherwise a peer could
+     * invalidate a prepared split's extent-count debit while its walker
+     * yielded. Ordinary range pins retain disjoint mapping concurrency. */
+    for (const struct ua_pin *pin=u->pins; pin; pin=pin->next)
+        if (pin->mutation && base<pin->end && end>pin->base) return -EBUSY;
+    if (!vacant(u,base,end)) return -EINVAL;
     bool in_arena = kind != UA_W32 && base >= CIUKI_MMAP_BASE && end <= CIUKI_MMAP_LIMIT;
     if ((in_arena && u->arena_extents == CIUKI_MAPPING_MAX) || next_generation == UINT64_MAX)
         return -ENOMEM;
@@ -187,19 +223,23 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
         return -ENOMEM;
     *e = (struct ua_extent){ .base = base, .end = end, .prot = PROT_NONE, .maximum = maximum,
         .kind = kind, .owner = owner, .generation = ++next_generation, .preparing = true };
+    struct ua_pin walk; walk_hold(u,&walk);
     struct ua_extent **at = &u->head;
-    while (*at && (*at)->base < base) at = &(*at)->next;
+    while (*at && (*at)->base < base) { walk_step(); at = &(*at)->next; }
     e->next = *at; *at = e;
+    walk_drop(u,&walk);
     u->extents++;
     if (in_arena) u->arena_extents++;
     uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
     if (prot && (err = reserve_pages(u, base, end))) {
         /* Other disjoint mappings may have changed the list while yielded. */
+        walk_hold(u,&walk);
         at = &u->head;
-        while (*at != e) at = &(*at)->next;
+        while (*at != e) { walk_step(); at = &(*at)->next; }
         *at = e->next; u->extents--;
         if (in_arena) u->arena_extents--;
         kfree(e);
+        walk_drop(u,&walk);
         return err;
     }
     protect_pages(u, base, end, prot);
@@ -211,14 +251,17 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
 
 static uint32_t first_fit(const struct uaddr *u, uint32_t bytes)
 {
+    struct ua_pin walk; walk_hold(u,&walk);
     uint32_t base = CIUKI_MMAP_BASE;
     for (const struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
         if (e->end <= base)
             continue;
         if (e->base >= base && bytes <= e->base - base)
             break;
         base = e->end;
     }
+    walk_drop(u,&walk);
     return base <= CIUKI_MMAP_LIMIT && bytes <= CIUKI_MMAP_LIMIT - base ? base : 0;
 }
 
@@ -253,12 +296,16 @@ int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *a)
 
 static bool pinned(const struct uaddr *u, uint32_t base, uint32_t end)
 {
-    for (const struct ua_extent *e = u->head; e; e = e->next)
-        if (e->preparing && base < e->end && end > e->base) return true;
-    for (const struct ua_pin *p = u->pins; p; p = p->next)
-        if (base < p->end && end > p->base)
-            return true;
-    return false;
+    struct ua_pin walk; walk_hold(u,&walk); bool busy=false;
+    for (const struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
+        if (e->preparing && base < e->end && end > e->base) { busy=true; break; }
+    }
+    /* Pins are stack-owned by active callers (<=16 process threads plus
+     * bounded kernel callers); do not yield while following their links. */
+    for (const struct ua_pin *p = walk.next; !busy && p; p = p->next)
+        if (base < p->end && end > p->base) busy=true;
+    walk_drop(u,&walk); return busy;
 }
 
 /* At most two new records: the boundaries of a single transaction. Allocate
@@ -270,10 +317,14 @@ static int prepare_split(struct uaddr *u, uint32_t base, uint32_t end, bool remo
     struct ua_extent *a = ua_find(u, base), *b = ua_find(u, end - 1);
     bool l = a && base > a->base, r = b && end < b->end;
     int final = (int)u->arena_extents + (l && arena(a)) + (r && arena(b));
-    if (removing)
-        for (struct ua_extent *e = u->head; e; e = e->next)
-            if (arena(e) && e->base < end && e->end > base)
-                final--;
+    if (removing) {
+        struct ua_pin walk; walk_hold(u,&walk);
+        for (struct ua_extent *e = u->head; e; e = e->next) {
+            walk_step();
+            if (arena(e) && e->base < end && e->end > base) final--;
+        }
+        walk_drop(u,&walk);
+    }
     if (final > CIUKI_MAPPING_MAX)
         return -ENOMEM;
     if (l && !(*left = kmalloc(sizeof(**left))))
@@ -303,13 +354,18 @@ static void split(struct uaddr *u, uint32_t at, struct ua_extent *fresh)
 
 static void remove_range(struct uaddr *u, uint32_t base, uint32_t end)
 {
+    struct ua_pin walk; walk_hold(u,&walk);
     struct ua_extent **at = &u->head;
     while (*at) {
+        walk_step();
         struct ua_extent *e = *at;
         if (e->base >= base && e->end <= end) {
             if (ledger_promise) ledger_promise(e->kind==UA_SHARED ? MM_USER_SHARED : MM_USER_PRIVATE,-(int32_t)((e->end-e->base)/PAGE_SIZE),0);
             ww_cancel(u->identity, e->generation, e->base, e->end);
+            e->preparing = true;
             free_pages(u, e->base, e->end, false);
+            at = &u->head;
+            while (*at != e) { walk_step(); at = &(*at)->next; }
             if (e->shared.object) e->shared.release(e->shared.object);
             *at = e->next;
             u->extents--;
@@ -320,6 +376,7 @@ static void remove_range(struct uaddr *u, uint32_t base, uint32_t end)
             at = &e->next;
         }
     }
+    walk_drop(u,&walk);
 }
 
 static bool protected_kind(const struct ua_extent *e)
@@ -334,9 +391,13 @@ int ua_munmap(struct uaddr *u, uint32_t base, uint32_t bytes)
         return -EINVAL;
     if (pinned(u, base, end))
         return -EBUSY;
-    for (struct ua_extent *e = u->head; e; e = e->next)
-        if (base < e->end && end > e->base && protected_kind(e))
-            return -EBUSY;
+    struct ua_pin walk; walk_hold(u,&walk); bool protected=false;
+    for (struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
+        if (base < e->end && end > e->base && protected_kind(e)) { protected=true; break; }
+    }
+    walk_drop(u,&walk);
+    if (protected) return -EBUSY;
     struct ua_extent *l, *r;
     int err = prepare_split(u, base, end, true, &l, &r);
     if (err)
@@ -371,24 +432,25 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
     err = prepare_split(u, base, end, false, &l, &r);
     if (err)
         return err;
-    /* Pin whole boundary extents: a disjoint split of the same extent
-     * would otherwise invalidate prepare_split's allocation assumptions.
-     * Existing readable pages retain their normal copy/pin semantics. */
+    /* Retain metadata ownership through backing, protection and publication.
+     * Whole-space mutation pins keep predecessor nodes and split debits
+     * stable while page and extent walks service unrelated tasks. */
     struct ua_extent *first = ua_find(u, base), *last = ua_find(u, end - 1);
-    struct ua_pin transaction = { .base = first->base, .end = last->end, .mutation = true, .next = u->pins };
+    struct ua_pin transaction = { .base = 0, .end = CIUKI_MAIN_STACK_LIMIT, .mutation = true, .next = u->pins };
     u->pins = &transaction;
     unsigned debit = (l && arena(first)) + (r && arena(last));
     u->arena_extents += debit;
     if (prot) err = reserve_pages(u, base, end);
     u->arena_extents -= debit;
-    ua_unpin(u, &transaction);
-    if (err) { kfree(l); kfree(r); return err; }
+    if (err) { ua_unpin(u, &transaction); kfree(l); kfree(r); return err; }
     split(u, base, l);
     split(u, end, r);
     protect_pages(u, base, end, prot);
-    for (struct ua_extent *e = u->head; e; e = e->next)
-        if (e->base >= base && e->end <= end)
-            e->prot = prot;
+    for (struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
+        if (e->base >= base && e->end <= end) e->prot = prot;
+    }
+    ua_unpin(u, &transaction);
     return 0;
 }
 
@@ -446,11 +508,14 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
     if (va < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) || va >= CIUKI_MAIN_STACK_LIMIT ||
         bytes > CIUKI_MAIN_STACK_LIMIT - va)
         return -EFAULT;
+    struct uaddr *owner=(struct uaddr *)u;
+    struct ua_pin transaction={.base=va,.end=va+bytes,.mutation=true,.next=owner->pins};
+    owner->pins=&transaction;
+    unsigned pages=0; int result=0;
     uint8_t *b = buffer;
     while (bytes) {
         uint32_t *p = pte((struct uaddr *)u, va, false);
-        if (!p || !(*p & PTE_OWN))
-            return -EFAULT;
+        if (!p || !(*p & PTE_OWN)) { result=-EFAULT; break; }
         uint32_t off = va & (PAGE_SIZE - 1), n = PAGE_SIZE - off;
         if (n > bytes)
             n = bytes;
@@ -460,8 +525,12 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
         va += n;
         b += n;
         bytes -= n;
+        /* 16 direct-map copies * 8 us = 128 us, with the whole range
+         * reserved against unmap/protect until the supervisor copy ends. */
+        if (!(++pages & 15u)) kpreempt_point();
     }
-    return 0;
+    ua_unpin(owner,&transaction);
+    return result;
 }
 
 int ua_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
@@ -526,16 +595,17 @@ int32_t ua_brk(struct uaddr *u, uint32_t end)
 
 void ua_release_owner(struct uaddr *u, uint32_t owner)
 {
-    struct ua_extent *e = u->head;
-    while (e) {
+    if (!owner) return;
+    for (;;) {
+        struct ua_pin walk; walk_hold(u,&walk);
+        struct ua_extent *e = u->head;
+        while (e && e->owner != owner) { walk_step(); e = e->next; }
+        walk_drop(u,&walk);
+        if (!e) break;
         uint32_t base = e->base, end = e->end;
-        bool owned = e->owner == owner && owner;
-        e = e->next;
-        if (owned) {
-            if (pinned(u, base, end))
-                panic("uaddr: releasing pinned thread mapping");
-            remove_range(u, base, end);
-        }
+        if (pinned(u, base, end))
+            panic("uaddr: releasing pinned thread mapping");
+        remove_range(u, base, end);
     }
 }
 
@@ -583,6 +653,7 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
     int err = ua_map_at(u, base, bytes, PROT_NONE, maximum, UA_SHARED, 0);
     if (err) return err;
     struct ua_extent *e = ua_find(u, base);
+    e->preparing = true;
     e->shared = *shared;
     e->shared.retain(e->shared.object);
     for (uint32_t off = 0; off < bytes; off += PAGE_SIZE) {
@@ -590,9 +661,11 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
         if (!p) { remove_range(u, base, base + bytes); return -ENOMEM; }
         *p = shared->page(shared->object, off / PAGE_SIZE) | PTE_OWN | PTE_SHARED;
         u->backing++;
+        /* One mapping/table allocation per page, <=18 us; batch <=288 us. */
+        if (!((off / PAGE_SIZE + 1) & 15u)) kpreempt_point();
     }
     protect_pages(u, base, base + bytes, prot);
-    e->prot = prot;
+    e->prot = prot; e->preparing = false;
     return (int32_t)base;
 }
 
@@ -602,6 +675,7 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
 static void w32_coalesce(struct uaddr *u)
 {
     for (struct ua_extent *e = u->head; e && e->next;) {
+        walk_step();
         struct ua_extent *n = e->next;
         if (e->kind == UA_W32 && n->kind == UA_W32 && e->end == n->base &&
             e->w32_allocation == n->w32_allocation && e->w32_state == n->w32_state &&
@@ -620,7 +694,7 @@ int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
     if (!u->win32 || !span(base, bytes, &end) || end > CIUKI_W32_SHARED + PAGE_SIZE)
         return -EINVAL;
     if (pinned(u, base, end)) return -EBUSY;
-    struct ua_extent *first = ua_find(u, base), *last = ua_find(u, end - 1);
+    struct ua_extent *first = ua_find(u, base);
     if (!first || first->kind != UA_W32) return -EEXIST;
     for (uint32_t va = base; va < end;) {
         struct ua_extent *e = ua_find(u, va);
@@ -634,14 +708,14 @@ int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
     struct ua_extent *l, *r;
     int err = prepare_split(u, base, end, false, &l, &r);
     if (err) return err;
-    struct ua_pin transaction = { .base = first->base, .end = last->end,
+    struct ua_pin transaction = { .base = 0, .end = CIUKI_MAIN_STACK_LIMIT,
         .mutation = true, .next = u->pins };
     u->pins = &transaction;
     if (operation == W32_VM_ALLOC) err = reserve_pages(u, base, end);
-    ua_unpin(u, &transaction);
-    if (err) { kfree(l); kfree(r); return err; }
+    if (err) { ua_unpin(u, &transaction); kfree(l); kfree(r); return err; }
     split(u, base, l); split(u, end, r);
     for (struct ua_extent *e = u->head; e; e = e->next) {
+        walk_step();
         if (e->base < base || e->end > end) continue;
         if (operation == W32_VM_FREE) {
             ww_cancel(u->identity, e->generation, e->base, e->end);
@@ -656,6 +730,7 @@ int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
         }
     }
     w32_coalesce(u);
+    ua_unpin(u, &transaction);
     return 0;
 }
 
@@ -664,11 +739,16 @@ int ua_w32_release(struct uaddr *u, uint32_t base, bool internal)
     struct ua_extent *e = ua_find(u, base);
     if (!e || e->kind != UA_W32 || e->w32_allocation != base || e->base != base)
         return -EEXIST;
+    struct ua_pin walk; walk_hold(u,&walk);
     uint32_t end = base;
     for (struct ua_extent *it = e; it && it->w32_allocation == base; it = it->next) {
-        if (!internal && (it->w32_locked || it->w32_type != W32_MEM_PRIVATE)) return -EACCES;
+        walk_step();
+        if (!internal && (it->w32_locked || it->w32_type != W32_MEM_PRIVATE)) {
+            walk_drop(u,&walk); return -EACCES;
+        }
         end = it->end;
     }
+    walk_drop(u,&walk);
     if (pinned(u, base, end)) return -EBUSY;
     remove_range(u, base, end);
     return 0;

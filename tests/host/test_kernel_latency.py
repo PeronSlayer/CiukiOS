@@ -12,6 +12,56 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class KernelLatencyTests(unittest.TestCase):
+    def test_bounded_cached_filesystem_walks(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='bounded-fs-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/fs/fat.c').read_text()
+            source = source.replace('uint32_t off=offset(v,c), x;', 'model_charge(1000); uint32_t off=offset(v,c), x;')
+            (temp / 'bounded_fat.inc').write_text(source)
+            source = (ROOT / 'src/kernel/fs/cache.c').read_text()
+            source = source.replace('if (++probes>32)', 'model_charge(1000); if (++probes>32)')
+            source = source.replace('static void scan_service(unsigned *work)\n{ if',
+                                    'static void scan_service(unsigned *work)\n{ model_charge(1000); if')
+            source = source.replace('blocks[at]->lba<b->lba', '(model_charge(250), blocks[at]->lba<b->lba)')
+            source = source.replace('blocks[j]=blocks[j-1];', '{ model_charge(250); blocks[j]=blocks[j-1]; }')
+            (temp / 'bounded_cache.inc').write_text(source)
+            for mode in ('FAT', 'CACHE'):
+                binary = temp / mode
+                extra = [str(ROOT / 'src/kernel/fs/cache.c')] if mode == 'FAT' else []
+                subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                                '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-DBOUNDED_' + mode, '-pthread',
+                                '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                                '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                                '-I', str(ROOT / 'src/kernel/fs'), '-I', str(temp),
+                                str(ROOT / 'tests/host/fs/bounded_work_test.c'),
+                                str(ROOT / 'src/kernel/fs/fs_port.c'), *extra, '-o', str(binary)], check=True)
+                subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
+    def test_bounded_memory_walks(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='bounded-memory-', dir=out) as directory:
+            temp = Path(directory)
+            source = (ROOT / 'src/kernel/core/vmm.c').read_text().split('/* ---- user address spaces ---- */', 1)[1]
+            source = source.replace('uint32_t old = pt[j];', 'charge(1000); uint32_t old = pt[j];')
+            source = source.replace('if (pd[i] & PTE_P) {', 'charge(1000); if (pd[i] & PTE_P) {')
+            (temp / 'bounded_aspace.inc').write_text(source)
+            source = (ROOT / 'src/kernel/proc/uaddr.c').read_text()
+            source = source.replace('for (uint32_t va = base; va < end; va += PAGE_SIZE) {',
+                                    'for (uint32_t va = base; va < end; va += PAGE_SIZE) { charge(1000);')
+            source = source.replace('while (j < 1024 && !pt[j]) j++;',
+                                    'while (j < 1024 && !pt[j]) { charge(250); j++; }')
+            source = source.replace('walk_step();', 'charge(1000); walk_step();')
+            (temp / 'bounded_uaddr.inc').write_text(source)
+            binary = temp / 'memory'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/bounded_memory_test.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_pic_mask_write_sites(self):
         # Enumerate the owners, not just a call total: adding an IMR toggle
         # to a request path must fail even if another site is removed.
@@ -207,6 +257,10 @@ static void test_irq_restore(uint32_t f) {
                     depth += (source[end] == '{') - (source[end] == '}')
                     end += 1
                 block += source[match.start():end] + '\n'
+            # Count actual maximum-task visits without changing scheduling time
+            # in the existing CPU-accounting tests. One visit costs 1 model us.
+            block = block.replace('for (struct task *t = all_tasks; t; t = t->all_next) {',
+                                  'for (struct task *t = all_tasks; t; t = t->all_next) { if (latency_model_tasks) latency_task_visits++;')
             (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + block)
             write_model(temp / 'vm_creation_model.inc')
             for unit, extra in (

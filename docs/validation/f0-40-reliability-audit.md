@@ -358,3 +358,175 @@ completed with exit 0. `nice -n 19 python3 scripts/build_kernel.py` built
 `build/f0/VMM.ELF` (5775492 bytes) and passed its FPU/SIMD audit. No OS image
 was built and no QEMU/hardware test ran. Full logs and the per-site report
 are under `build/codex/f0-41-*` in this worktree.
+
+## F0-44 bounded-work inventory and decision (2026-10-19)
+
+Inventory recorded before implementation on `wt/f0-44`. Authority is
+[f0-44](../directives/f0-44-bounded-teardown-allocation-chain-audit.md).
+Research checked the primary documents behind R1/M06/S05 and f0-41/f1-82:
+[Linux v6.12 softirq finite restart/time bounds](https://raw.githubusercontent.com/torvalds/linux/v6.12/kernel/softirq.c),
+[Linux locking rules](https://docs.kernel.org/locking/locktypes.html),
+[Microsoft DDK deadlocks](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM),
+[Microsoft FAT 1.03](https://www.pcjs.org/documents/papers/microsoft/MS_FAT_OVERVIEW_103-2000-12-06.pdf),
+[Linux dirty-page controls](https://www.kernel.org/doc/html/v6.12/admin-guide/sysctl/vm.html).
+Decision: finite work batches, complete ownership updates before yielding,
+no point inside guest/device publication, preserve FAT ordering and f1-82
+writeback policy. `fs_service` explicitly permits cooperative service under
+sleeping filesystem reservations; these are not spinlocks. Cache cursors
+must survive concurrent LRU movement, invalidation and layout conversion.
+Neither the DDK nor Linux supplies a Pentium III timing guarantee.
+
+### Initial inventory (all size-dependent loops in authority)
+
+Costs are deterministic T23-class envelopes, not new physical measurements:
+18 us allocate/zero/map page; 8 us bulk 4 KiB; 6 us release/update page;
+1 us cached FAT decode; 0.2 us checkpoint. Table/bitmap/descriptor checks
+use 1 us unless a smaller transaction-specific envelope is stated. A
+512 MiB volume with 4 KiB clusters has at most 131072 clusters; other
+supported geometries can have more, and retain their geometry-derived bounds.
+8 MiB is 2048 budget pages, not blocks: i686 has 14016 512-byte slots after
+workspace/metadata/writeback overhead (upper bound 16384); supported 32 MiB
+caches have at most 65536 slots. A process has at most 786432 VA pages
+below C0000000; physical private backing is additionally RAM limited.
+
+| File / functions (each size-dependent loop) | Original bound and cost / physical maximum |
+| --- | --- |
+| `core/vmm.c::vmm_init` | 255 kernel tables; 256 low pages; E820 descriptor count and up to 196608 direct-map pages; text/rodata pages. Boot-only, before runnable tasks; no runtime latency qualification. |
+| `map_physical`, `vmm_revoke_mmio`, `replace_mmio` | MMIO region 120 MiB / 30720 pages; mapping publication must remain indivisible; 1 us/PTE provisional envelope, unqualified for maximum arbitrary mapping. |
+| `kstack_alloc/free`, `as_create`, `as_replace_pages` | 1360 slots, eight stack pages, 255 PDE copies, at most 32 PTE validations/updates; fixed counts previously without model. |
+| `as_destroy` | 768 PDEs x 1024 PTEs, frees all present pages; no points, 6 us/free plus 1 us/check. Failed creation and normal destruction share it. |
+| `as_range_ok` | At most 786432 pages, no points, 1 us/PTE lookup. |
+| `core/kheap.c::kheap_init/refill/kmalloc` | Seven classes; at most 128 free slots on one page; at most seven class tests. No reclaim walk exists; kfree is constant. Refill private construction then short IRQ publication. |
+| `proc/uaddr.c::free_pages` | Up to 786432 pages plus 768 x 1024 empty-table checks, no points. |
+| `reserve_pages`, `protect_pages`, `ua_map_shared` | Up to 786432 pages; reserve has 16-page points only on newly allocated pages; protection/shared setup have none. |
+| `ua_find/vacant/ua_map_at/first_fit/pinned/prepare_split/split/remove_range/ua_munmap/ua_mprotect/ua_range/ua_pin/ua_unpin/ua_cancel_pins/ua_release_owner/w32_coalesce/ua_w32_change/ua_w32_release` | Extent/pin walks bounded by disjoint VA pages / active tasks, native mmap arena cap 256; Win32 extents can exceed 256. No internal service; metadata mutation/validation transactions require stable references. Nested ua_find walks amplify cost. |
+| `transfer/zero_range` | Page fragments; transfer caller bytes up to VA span (public I/O normally 1 MiB); zero_range actually < one page in brk caller. No internal points. |
+| `fs/fat.c::chain_at/release_chain/allocate/zero_chain/grow_directory/write_free/fat_write` | Geometry-bounded chain/census/allocation iterations; cached walks no internal points. Mutations retain barriers. |
+| `fat_next/fat_lookup/slots/alias_exists/make_alias/fat_remove/fat_rename/fat_rename_replace` | Directory entries up to clusters*spc*16 (UINT32 capped), numeric aliases <=999999; nested chain_at. No internal cached-loop bound; string/LFN subloops <=260 characters/20 entries. |
+| `fat_read/replace/write_data/fat_write_reserved` | Size/sector loops, coalesced run <=64 KiB, FAT cluster hops; no cached-work service bound. |
+| `scan_release/scan_memory/scan_reset` | SCAN_PAGES budget and workspace <=256 pages; no points in page allocation/clear/release. |
+| `scan_chain/scan_census/scan_check/scan_reclaim/scan_tree/recover_log_size/scan_volume/fat_prepare` | Existing 128-entry points in chain/census/repair, per-tree-entry/per-log-sector points; repeated geometry-derived ownership passes. Paired FAT reads multiply per-iteration cost. |
+| `fs/cache.c::device/filling/join_fill/read_transport/wait_block/unhash/find` | 32 devices, active fills/tasks, hash chain <=slots; waits sleep. Hash/list operations require stable lock ownership. |
+| `convert/convert_page/convert_half/half_activate/half_deactivate/get` | All data pages / LRU slots, four slots per half; service exists in conversion/get but cached candidate scans have no internal points. |
+| `cache_init/destroy/cache_workspace_begin` | 2048 budget pages default, 8192 maximum; allocation/unwind/clear loops have no points. |
+| `cache_read_run/cache_read_ahead` | <=128 sectors, nested LRU victim walks up to slots; reservation/publication transactions. |
+| `write_batch/barrier/cache_writeback_tick/cache_invalidate` | Selection and dirty-age scans up to slots, sorting <=64 selected entries; 32 KiB copies/writes; transport unlocks, scan does not. Existing per-entry tick fs_service follows mutable LRU links. |
+| `vm/dosvm.c::pool_pin/pool_unpin` | <=7 pin records, each ledger helper can inspect <=1024 PFNs; helper cost unqualified (ledger outside authority). |
+| `dosvm_create/dosvm_range/transfer` | VM slot clear, 272 low pages (per-page points), 6144 pool pages (16-page points); external range 16 pages, RAM copies per-page, VGA per-256 bytes. Preserve f0-41. |
+| `dosvm_destroy/dosvm_snapshot` | <=4 VMs; worker quiescence sleeps with 6s deadline; cleanup delegates to memory_close/as_destroy. |
+| `vm/dosvm_xms.c::pool_find/dosvm_pool_query/dosvm_pool_alloc/free/resize/dosvm_copy_region/dosvm_memory_init/close` | <=6144 pool pages, 272 low mappings, 16 EMS aliases; allocation and resize zero whole pool without points. Copies already schedule after complete 256-byte exchange; guest state must stay indivisible. |
+| `vm/dosvm_vga.c::video_linear_seed/video_exchange/video_harvest` | Exactly <=16 aperture pages (64 KiB), <=4x16 pending masks, <=32 PTEs; indivisible, no points allowed. |
+| `dosvm_vga_present/rom_fonts/video_planar_changed` | <=480 rows, <=640 pixels/row, four planes; existing four-row/16-glyph points, bounded presenter transaction. Guest decode/string/burst loops have explicit instruction bounds; no points inside guest emulation. |
+
+Other loops in dosvm.c are fixed device/port/trace/context arrays, or the
+long-lived worker's bounded instruction/event iterations with sleeps and
+existing transaction-boundary service. They do not scale with RAM/VM/file/
+cache size. IRQ/timer budgets and DPMI dispatch remain outside this change.
+
+### Implemented bounds and per-site evidence
+
+All numbers below are microseconds of deterministic CPU work. “Construction”
+means an arithmetic bound from the production loop and the stated envelope,
+not a separate timed hardware result. The controls execute the same production
+loops with modeled checkpoints disabled. They retain the f0-41 110 ms negative
+control. Every paired replay asserts maximum <=2000 us and total work <=110%
+of its control. Host ASan/UBSan replays exercise actual page ownership, failed
+creation cleanup and FS reservations; synthetic PFNs avoid allocating 3 GiB
+of host RAM for the architectural VA maximum.
+
+| Site | Iteration / physical maximum | Service or transaction bound | Before -> after worst CPU span (us) |
+| --- | --- | --- | --- |
+| `vmm.c::as_destroy` | 768 PDEs, 786432 PTEs; physical pages limited by RAM; VM pool 6144 pages | Every 16 PDEs and every 16 PTEs, including holes; clear PTE/counters before service | Architectural synthetic: 5510406 ->119.2; 512 MiB page count with empty high tables: 1578246 ->119.2 |
+| `vmm.c::map_physical` | At most 30719 pages plus guard in 120 MiB region | Reserve VA before preparation, publish pointer on return, every 128 PTEs | Construction <=30719 ->128.2; runtime replacement discussed below |
+| `vmm.c::kstack_alloc/free/as_create/as_replace_pages/as_range_ok` | 1360 slots, eight stack pages; 255 PDE copies; <=32 exchanged PTEs | Indivisible small transactions: <=484 us stack allocation, <=72 us directory creation, <=64 us exchange, excluding allocator internals | Construction unchanged. Actual as_range_ok callers validate one VM page, <=240-byte legacy strings, or <=4096-byte probe buffer: at most two PTE checks (<2 us) |
+| `kheap.c::refill/kmalloc/kfree` | 128 slots/page, seven classes; no reclaim walk exists | <=128 us private refill construction, constant IRQ publication/free; no point needed | Construction unchanged <=128 us, excluding allocator internals |
+| `uaddr.c::free_pages` | Up to 786432 VA pages; <=768 empty-table tests | Every 16 VA pages, even holes and only-new skips; one service per PDE; 1024-check emptiness test remains atomic (256 us) | Synthetic maximum 5706240 ->262.2; 512 MiB page count 1774080 ->262.2 |
+| `uaddr.c::reserve_pages/protect_pages` | Same VA maximum | Preserve 16-page allocation points; also checkpoint existing-backing skips; protection every 16 pages | Existing-backing maximum 786432 ->16.2; protection 786432 ->16.2 for check-only replay, conservative update envelope <=96.2 |
+| `uaddr.c::ua_find/vacant/first_fit/pinned/prepare_split/ua_map_at/remove_range/ua_munmap/ua_mprotect/ua_range/ua_release_owner/w32_coalesce/ua_w32_change/ua_w32_release` | Native mmap arena <=256 extents; architectural disjoint-page maximum 786432 records; Win32 has no 256-record cap | Shared 128-visit counter also bounds nested lookups; stack mutation pins retain all nodes and split-count assumptions over service. Overlapping insertion/mutation returns EBUSY while this metadata reservation exists | Actual maximum lookup/vacancy replays 786432 ->128.2; callers inherit the same visit bound plus bounded page work |
+| `uaddr.c::ua_pin/ua_unpin/ua_cancel_pins` | Active stack-owned pins (16 native threads/process plus kernel callers/nested transactions) | No service while following another caller's stack links; see qualification limit below | Construction only; not a measured maximum kernel-caller pin fan-out |
+| `uaddr.c::transfer/zero_range/ua_map_shared` | Transfer/aliases <=VA span; brk zero tail <4096 bytes | Transfer every 16 page fragments with mutation reservation; shared mapping every 16 pages while preparing; zero tail indivisible <=8 us | Construction: bulk transfer <=128.2, shared table/backing work <=288.2; page ownership and rollback checked by process/ledger suites |
+| `dosvm.c::dosvm_destroy` / `dosvm_xms.c::dosvm_memory_close` | One VM; 272 low pages +6144 pool pages +tables; <=4 VMs globally | Low-frame restoration every 16 pages, then bounded as_destroy; repeat destroy returns EBUSY while cleanup is yielded | Full normal-stop maximum 48151.514 ->132.839; no ownership/admission leaks |
+| `dosvm_create` late failure | Full maximum pool already allocated; first disk-open operation fails | Same real cleanup and idempotent generation guard; creation points preserved | Full create+failed unwind 165530.066 ->292.2; work 165530066 ->165821666 ns (+0.177%) |
+| `dosvm_xms.c::dosvm_pool_alloc/resize/free` | <=6144 pages | Zero/occupancy/accounting complete before each 16-page allocation/growth point; free every 128 bitmap updates, accounting published before point | Construction allocation/growth <=128 us zero per batch plus lookup/accounting; bitmap release <=128.2 us; no quota change |
+| `dosvm_xms.c::pool_find/dosvm_pool_query/resize` adjacency | <=6144 byte entries | Read-only bitmap transaction, 0.1 us/simple byte check =>614.4 us; no yield into guest state | Construction unchanged <=614.4; not a calibrated physical byte-check cost |
+| `dosvm_xms.c::dosvm_copy_region` | At most quota bytes, 256-byte slices | Retain existing reschedule after a completed copy/exchange slice; XMS/EMS endpoints are validated RAM | Existing slice construction: <=2 us bulk copy work; guest validation/dispatch remains separately owned |
+| `dosvm_vga.c::video_harvest/video_linear_seed/video_exchange` | Exactly <=65536 aperture bytes, 16 PTEs, <=4x16 pending masks | No internal point. Scalar conversion charged at 8 ns/byte (rounded upward from 4x bulk-copy cost), plus mask/PTE work | Combined actual transaction + fixed-size charges: 1248.576 ->1248.576; no point, latch change or extra backing |
+| `fat.c::chain_at` / common `get_copy` | 131072 randomized clusters on the specified 512 MiB/4 KiB-cluster profile | Decoder service every 128 entries; read/write-sector paths every four calls. All original link validity checks/barriers retained | All links resident: 131071 ->4.2, no post-warm transport reads; work +5.16% |
+| `fat.c::scan_census/scan_chain/scan_check/scan_reclaim/scan_tree/recover_log_size` | Geometry-bounded census, paired copies, tree passes and log sectors | Common decoder/sector points plus existing 128-entry/tree-entry/log-sector points | Two-copy census 262148 ->4.2; ownership chain 393216 ->4.2; work +5.24% /+5.21%. Resident mount-window decoder envelope <=128.2 |
+| `fat.c::release_chain/allocate/zero_chain/grow_directory/write_free/fat_write/fat_read/replace/write_data/fat_write_reserved/fat_next/fat_lookup/slots/alias_exists/make_alias/fat_remove/fat_rename/fat_rename_replace` | Geometry/size/directory bounded; alias tails <=999999; LFN <=260 chars | Inherit common decoder and four-sector points, <=512 us bulk per four 64 KiB cached runs; no FAT format, copy order, publication or durability barrier changed | Construction from common points; existing fsck/mtools, cut/error, mount-budget and concurrency suites verify ordering/correctness, not new physical transport deadlines |
+| `fat.c::scan_memory/scan_reset/scan_release` | <=256 scan pages or cache workspace pages | Per allocated/cleared/freed page, after complete ownership update | Construction <=18.2 /8.2 /6.2 |
+| `cache.c::cache_init/cache_destroy/cache_workspace_begin` | 2048 budget pages default; 8192 maximum | Allocation every 16 data pages (with descriptor-page margin), per workspace allocation/free/clear; no runtime resizing policy | Actual 8 MiB init 38404.765 ->358.2; destroy 12251.765 ->17.765; workspace 1024 ->8.2; total overhead <=2.94% |
+| `cache.c::write_batch/cache_writeback_tick` | Default i686 14016 512-byte slots; host 13384; <=64 selected blocks /32 KiB | Short <=32-visit newest-first fast path preserved; long stable descriptor walk every 16 visits; selected slots pinned before service and released on all errors; dirty-age scan uses stable cursor | All-dirty 8 MiB: 227121 ->272.2; work 240506000 ->240840600 ns (+0.139%). LRU touch/invalidation during selection leaves no busy pins |
+| `cache.c::find/unhash/get/cache_read_run/filling/read_transport/convert/cache_invalidate` | <=all cache slots or active fills; read runs <=128 sectors | Every 16 hash/victim/fill visits; read-run hit/reservation bookkeeping every 16 sectors; conversion per page. Sleeping cache ownership remains held across service. Epoch publication follows preparation | Maximum hash lookup/unlink/victim replay: 13384 /13383 /13384 ->16.2; work +1.25%. Nested short walks have <=624 us conservative slices before the 1 ms service gate |
+| `cache.c::device/half_activate/half_deactivate/convert_half/write_batch` inner sort/copy/completion / `barrier` | 32 devices, four half-slots, 64 sorted blocks, 32 KiB snapshot; waits sleep | Fixed transactions: <=8 us device lookup at 0.25 us/check, <=64 us bulk snapshot; selection comparison+move total <=64/visit; barrier batches transport/wait between iterations | Construction included in <=300 us selection slices; transport and sleeping excluded. No dirty thresholds, writeback age, batch byte limit or media/error policy changed |
+| `task.c::sched_tick` test only | 256 native threads, stronger 1360-stack-slot ceiling +idle | Production scheduler unchanged; count actual scan visits and assert <=2000 us at 1 us/visit; next-point wake/dispatch tested | 1361 ->1361 model us; IRQ-off <=100 us target remains f0-46, not passed here |
+
+`fs_service` retains its existing one-millisecond clock gate. A modeled call
+boundary is not a claim that every invocation dispatches another task: add
+up to one millisecond before the next eligible checkpoint. The largest new
+FS selection slice is <300 us (nested short cache walks <=624 us), leaving
+margin below two milliseconds under the stated model. Sleeping reservations
+still serialize competing operations; this patch does not qualify a reader
+latency deadline or replace the f1-82 writeback policy.
+
+Metadata pins now cover a complete page/protection/publication or list-walk
+phase. Native/Win32 callers can observe transient EBUSY for a mutation or
+insertion conflicting with that reservation. This is required to keep extent
+nodes, page tables and split accounting stable at the added checkpoints;
+readable mappings retain their rights and public structures/ABI are unchanged.
+Host coverage includes rejected concurrent insertion, concurrent preparing-map
+access/protection, overlap pin refusals, shared mappings, rollback and exit.
+
+### Explicit remaining qualification / ownership boundary
+
+- T23 physical calibration and end-to-end audio/reader evidence are pending;
+  no QEMU, hardware run or OS image build is claimed. Host costs are conservative
+  policy envelopes inherited from f0-41 plus explicitly stated new envelopes,
+  not measurements of every allocator, cache miss, firmware or chipset state.
+- `vmm_revoke_mmio` / `replace_mmio` keep the old aperture-replacement
+  transaction indivisible. Their 120 MiB region ceiling alone allows 30720
+  PTEs: at 1 us/PTE a maximum arbitrary revoke/replace exceeds two milliseconds.
+  Only private new-map preparation is sliced here. Maximum runtime remapping
+  needs a separately reviewed device-publication protocol and physical record;
+  a blanket all-MMIO R1 closure is **not** claimed.
+- `pmm_alloc*` fragmentation scans and `ledger.c::mm_pin/mm_unpin` PFN walks
+  are outside f0-44 authority. Seven VM pin records can each inspect 1024 PFNs.
+  The modeled 18 us allocation cost and six-us release cost do not prove their
+  maximum internal runtime. No memory cap, direct map, pool quota or admission
+  headroom was changed to hide this dependency.
+- Stack-owned pin lists are deliberately not yielded while their owners could
+  return. Native thread fan-out is bounded by the process contract; the maximum
+  kernel-caller/nested-pin fan-out still needs a dedicated ledger audit. Shared
+  object callbacks and `ww_cancel` similarly retain their owners' contracts.
+- `copy_user` assembly used by `copy_from_user`/`copy_to_user` is outside this
+  authority; only the supervisor direct-map transfer loop is sliced. Guest
+  instruction/REP/DPMI dispatch, VGA bursts and device/firmware callbacks keep
+  their existing transaction limits and remain with their owners.
+- Boot-only `vmm_init` precedes runnable service; IRQ/timer/scheduler work and
+  <=100 us IRQ-off qualification remain f0-45/f0-46. The 1361 us task-scan model
+  explicitly does not pass the IRQ-off gate. No task.c or sync.c change was made.
+- Only the specified 131072-cluster and 8 MiB cache maxima get new worst-case
+  host data here. Larger supported FAT geometries and the 32 MiB cache ceiling
+  inherit iteration batches, but require their own transport/CPU calibration.
+  No universal Windows 98/ME policy equivalence or whole-kernel R1 closure is
+  inferred from the passing host cases.
+
+### F0-44 verification completed
+
+All four required commands completed with exit 0, sequentially under
+`nice -n 19`: kernel host suite and filesystem host suite with
+`ASAN_OPTIONS=detect_leaks=0`, standalone `tests/host/audio/run.sh`, and
+`python3 scripts/build_kernel.py`. The FS suite passed all groups, three
+fsck checks and three independent mtools comparisons; its 1681 crash cuts
+had zero unknown fsck diagnostics. The audio lifecycle replay retained eight
+lead periods without growth; its negative control retained 28. The optional
+DOSBOOT payload runner reported the existing missing-header/payload SKIP;
+that optional payload case is not claimed as passing.
+
+`build/f0/VMM.ELF` is 5915356 bytes, build `11229c27b559-dirty`, with the
+FPU/SIMD audit passing and SHA-256
+`39a391de096fced4848ce2601cd9be47546567fc6d1ac44fa216f25a485f4134`.
+This is an ELF hash, not an image qualification. Full logs and the report
+are in `build/codex/f0-44-*`. No public-header/ABI change occurred, so the
+conditional API-reference/apps rebuild was not triggered. No QEMU, systemd
+scope, OS image build, commit/push or diary edit was performed.

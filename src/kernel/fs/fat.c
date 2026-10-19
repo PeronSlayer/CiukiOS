@@ -87,6 +87,10 @@ static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
     return 0;
 }
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
+    /* Four 64 KiB cached runs * 128 us bulk <=512 us. Batching also
+     * keeps a 1 us cached FAT decode below 10% checkpoint overhead. */
+    static unsigned work;
+    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service();
     if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
     if (file_read_cancelled && file_read_cancelled()) return -4; /* EINTR, before issuance */
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
@@ -124,6 +128,8 @@ static int writable(struct fat_volume *v) {
     return 0;
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
+    static unsigned work;
+    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service(); /* four complete sectors, ordering unchanged */
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
     if (v->prepare_cache) for (unsigned i=0;i<3;i++)
         if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
@@ -152,6 +158,11 @@ static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t 
  * copy a sector or acquire the shared cache mutex for each FAT entry. FAT12
  * entries spanning sectors retain the byte decoder. */
 static int get_copy(struct fat_volume *v, unsigned copy, uint32_t c, uint32_t *out) {
+    /* Cached entry decode: 128 * 1 us = 128 us. This also covers callers
+     * whose outer loops skip allocated clusters or follow fragmented links.
+     * The volume reservation retains FAT ordering across fs_service. */
+    static unsigned work;
+    if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 127u)) fs_service();
     uint32_t off=offset(v,c), x;
     if (v->prepare_cache && (v->type!=12 || off%512!=511)) {
         const uint8_t *p;struct fat_prepare_cache *w=v->prepare_cache;
@@ -905,18 +916,19 @@ static bool scan_owned(struct fat_volume *v, struct fat_scan_state *s, uint32_t 
 }
 static void scan_release(struct fat_volume *v, struct fat_scan_state *s) {
     if (s->workspace) cache_workspace_end(v->cache);
-    for (unsigned i=0;i<s->page_count;i++) fs_page_free(s->pages[i]);
+    for (unsigned i=0;i<s->page_count;i++) { fs_page_free(s->pages[i]); fs_service(); }
 }
 static int scan_memory(struct fat_volume *v, struct fat_scan_state *s) {
     v->scan_needed_bytes=(v->scan_extent+7)/8;
     uint32_t pages=(v->scan_needed_bytes+4095)/4096;
     if (pages>SCAN_PAGES) pages=SCAN_PAGES;
     for (;s->page_count<pages;s->page_count++) {
+        fs_service(); /* <=18 us allocation/zero per private scan page */
         s->pages[s->page_count]=fs_normal_page_alloc();
         if (!s->pages[s->page_count]) break;
     }
     if (s->page_count==pages) { v->scan_available_bytes=pages*4096; return 0; }
-    for (unsigned i=0;i<s->page_count;i++) fs_page_free(s->pages[i]);
+    for (unsigned i=0;i<s->page_count;i++) { fs_page_free(s->pages[i]); fs_service(); }
     s->page_count=0;
     v->scan_available_bytes=v->cache->workspace_pages*4096;
     int e=cache_workspace_begin(v->cache,v->scan_available_bytes);
@@ -935,6 +947,7 @@ static void scan_reset(struct fat_volume *v, struct fat_scan_state *s, uint32_t 
     for (unsigned i=0;i<pages;i++) {
         void *p=s->workspace ? v->cache->workspace[i] : s->pages[i];
         memset(p,0,4096);
+        fs_service(); /* 8 us per completed clear */
     }
     memset(s->log_eof,0,sizeof(s->log_eof));
 }

@@ -41,6 +41,8 @@ extern uint32_t dosvm_task_cr3(const struct task *,uint32_t) __attribute__((weak
 extern uint32_t dosvm_task_esp0(const struct task *,uint32_t) __attribute__((weak));
 extern void dosvm_task_switch(const struct task *) __attribute__((weak));
 extern void dosvm_tick(void) __attribute__((weak));
+static bool latency_model_tasks;
+static unsigned latency_task_visits;
 #include "latency_scheduler.inc"
 static struct task idle, normal, hog, ui, reporter;
 static const struct task *audio_focus;
@@ -256,9 +258,30 @@ static void accounting_test(void)
     CHECK(resched_max==21000 && threshold);
     record_bytes=0;records[0]=0;cpu_emit();CHECK(strstr(records,"resched_lat_max_ms=21"));
 }
+static void maximum_tasks_test(void)
+{
+    /* Native threads are capped at 256; include the harder 1360 kernel
+     * stack-slot ceiling without changing the scheduler's tick policy. */
+    static struct task peers[1360];
+    reset(); all_tasks=&idle; idle.all_next=peers;
+    for (unsigned i=0;i<1360;i++) {
+        peers[i]=(struct task){.id=i+10,.prio=P_NORMAL,.state=T_BLOCKED,.wake_tick=1,
+            .all_next=i+1<1360 ? &peers[i+1] : 0};
+    }
+    latency_model_tasks=true; latency_task_visits=0;
+    run_tick(0); latency_model_tasks=false;
+    CHECK(latency_task_visits==1361 && latency_task_visits<=2000);
+    unsigned ready=0;
+    for (unsigned i=0;i<1360;i++) ready+=peers[i].state==T_READY;
+    CHECK(ready==1360 && g_need_resched);
+    kpreempt_point(); CHECK(g_current==&peers[0]);
+    /* Tick/IRQ accounting belongs to f0-46; this is a task-count and
+     * wake-at-next-safe-point test, not an IRQ-duration qualification. */
+    puts("F0-44 maximum tasks: 1360 stack slots / 256 native cap, 1361us IRQ scan model (f0-46 unqualified), wake and next-point dispatch PASS");
+}
 int main(void)
 {
-    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();
+    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;
 }
