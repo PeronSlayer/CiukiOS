@@ -14,6 +14,7 @@
 #undef ktime_cycles
 static void timer_fixture_reset(void) { timer_root=timer_first=timer_due_head=timer_due_tail=0; memset(&timer_stats,0,sizeof(timer_stats)); deferred_fn=0; }
 #include "../../../src/kernel/fs/vfs.c"
+#include "../../../src/kernel/fs/blkreq.c"
 bool g_cpu_tsc;
 uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
 void klog(const char *fmt,...) { (void)fmt; }

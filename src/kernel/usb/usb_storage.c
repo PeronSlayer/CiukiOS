@@ -12,7 +12,7 @@ static void put32(uint8_t *p, uint32_t n)
 static bool live(struct usb_device *d)
 {
     struct usb_host *h=d->host;
-    if (!d->present || d->quarantined || !h->ready || h->quarantined) return false;
+    if ((blk_request_interrupted && blk_request_interrupted()) || !d->present || d->quarantined || !h->ready || h->quarantined) return false;
     unsigned status=h->ops->port_status(h,d->root_port);
     return (status & (USB_PORT_CONNECTED|USB_PORT_ENABLED|USB_PORT_CHANGED|USB_PORT_OVERCURRENT)) ==
            (USB_PORT_CONNECTED|USB_PORT_ENABLED);
@@ -30,7 +30,10 @@ static uint64_t bulk_end(struct usb_device *d)
         (s->binding ? USB_BIND_BULK_MS : USB_BULK_TIMEOUT_MS);
     if (s->binding && (int64_t)(end-(s->bind_deadline-USB_BIND_FINISH_MS))>0)
         end=s->bind_deadline-USB_BIND_FINISH_MS;
+    uint32_t left=blk_request_remaining_ms ? blk_request_remaining_ms() : UINT32_MAX;
+    uint64_t request_end=left==UINT32_MAX ? 0 : d->host->io.now(d->host->io.cookie)+left;
     uint64_t check=hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
+    if (request_end && (!check || request_end<check)) check=request_end;
     if (check && check<end) end=check;
     return end;
 }
@@ -317,7 +320,10 @@ static int flush_locked(struct usb_device *d)
 { uint8_t cdb[10]={0x35}; return command(d,cdb,10,false,0,0); }
 static bool block_take(struct usb_device *d)
 {
+    uint32_t left=blk_request_remaining_ms ? blk_request_remaining_ms() : UINT32_MAX;
+    uint64_t request_end=left==UINT32_MAX ? 0 : d->host->io.now(d->host->io.cookie)+left;
     uint64_t check=hardware_check_io_deadline ? hardware_check_io_deadline() : 0;
+    if (request_end && (!check || request_end<check)) check=request_end;
     if (check) return usb_host_take_until(d->host,check);
     if (!d->storage.binding) { usb_host_take(d->host); return true; }
     return usb_host_take_until(d->host,d->storage.bind_deadline-USB_BIND_FINISH_MS);

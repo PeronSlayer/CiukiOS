@@ -41,6 +41,9 @@ sources += [root/'src/kernel/drivers/optical.c']
 # F0-23: boot-only calibration, UART bounds, port pacing and live RO inventory.
 sources += [root/'src/kernel/core'/name for name in ('serial.c', 'output.c', 'timing.c', 'main.c', 'devices.c')]
 sources += [root/'src/kernel/drivers/i8042.c']
+# f3-49b: compile the production DOS adapter/teardown with the target ABI.
+sources += [root/'src/kernel/vm'/name for name in
+            ('dos_file.c', 'dos_file_volume.c', 'dos_file_vm.c', 'dosvm_disk.c', 'dosvm.c')]
 for source in sources:
     subprocess.run(['clang',*flags,'-I'+str(root/'src/kernel/include'),'-fstack-usage','-c',str(source),
                     '-o',str(out/(source.stem+'.o'))],check=True)

@@ -78,7 +78,7 @@ static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
         p->count[slot]=0;
         if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
         if (file_read_cancelled && file_read_cancelled()) return -4;
-        int e=(v->preparing || v->dev->logical) ? v->dev->read(v->dev,v->start+base,count,p->data[slot]) :
+        int e=(v->preparing || v->dev->logical) ? blkdev_read(v->dev,v->start+base,count,p->data[slot]) :
             cache_read_run(v->cache,v->dev,v->start+base,count,p->data[slot]);
         if (e) return e;
         p->start[slot]=base; p->count[slot]=count;
@@ -87,6 +87,7 @@ static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
     return 0;
 }
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
+    int interrupted=fs_request_check(); if (interrupted) return interrupted;
     /* Four 64 KiB cached runs * 128 us bulk <=512 us. Batching also
      * keeps a 1 us cached FAT decode below 10% checkpoint overhead. */
     static unsigned work;
@@ -98,7 +99,7 @@ static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (v->prepare_cache) {
         const uint8_t *p;
         e=window_sector(v,s,&p); if (!e) memcpy(b,p,512);
-    } else if (v->preparing || v->dev->logical) e=v->dev->read(v->dev,v->start+s,1,b);
+    } else if (v->preparing || v->dev->logical) e=blkdev_read(v->dev,v->start+s,1,b);
     else {
         uint64_t end=s+1;
         if (v->type && v->fat_sectors && s>=v->reserved && s<v->reserved+(uint64_t)v->fats*v->fat_sectors)
@@ -118,7 +119,11 @@ static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
 }
 static int write_error(struct fat_volume *v, int e) {
-    if (e) { v->ro_reasons|=FAT_RO_WRITE_ERROR; fat_revoke_write(v,"write_error",0); }
+    if (e) {
+        v->ro_reasons|=FAT_RO_WRITE_ERROR; fat_revoke_write(v,"write_error",0);
+        const struct vfs_request *r=fs_request_current();
+        if (r && r->cleanup_status && !*r->cleanup_status) *r->cleanup_status=e;
+    }
     return e;
 }
 static int writable(struct fat_volume *v) {
@@ -148,6 +153,7 @@ static int publication_begin(struct fat_volume *v) {
     return 0;
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
+    int interrupted=fs_request_check(); if (interrupted) return write_error(v,interrupted);
     static unsigned work;
     if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service();
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
@@ -155,16 +161,20 @@ static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     if (v->prepare_cache) for (unsigned i=0;i<3;i++)
         if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
             v->prepare_cache->count[i]=0;
-    e=(v->preparing || v->dev->logical) ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b);
+    e=(v->preparing || v->dev->logical) ?
+        blkdev_request(v->dev,BLK_WRITE,v->start+s,1,(void *)b,BLK_BACKGROUND,v->publication_frontier) :
+        cache_write(v->cache,v->dev,v->start+s,b);
     if (e && v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'E',e);
     return write_error(v,e);
 }
 static int barrier(struct fat_volume *v) {
-    int e;
-    if (!v->preparing && !v->dev->logical) e=cache_barrier_record(v->cache,v->dev,&v->completion);
+    int e=fs_request_check();
+    if (e) { v->completion.error=e; v->completion.incomplete=true; }
+    else if (!v->preparing && !v->dev->logical) e=cache_barrier_record(v->cache,v->dev,&v->completion);
     else {
         e=!blkdev_durable(v->dev) ? -FS_EROFS :
-            v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 : v->dev->flush(v->dev);
+            v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 :
+            blkdev_request(v->dev,BLK_FLUSH,0,0,0,BLK_BACKGROUND,v->publication_frontier);
         v->completion=(struct cache_completion){.group=v->publication_group,
             .generation=v->dev->media_generation,.error=e,.incomplete=e!=0};
     }
@@ -610,7 +620,7 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
             }
             if (file_read_cancelled && file_read_cancelled()) return -4;
             if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v,"read_bounds",c);
-            e=v->dev->logical ? v->dev->read(v->dev,v->start+sector,n,(uint8_t *)buf+*done) :
+            e=v->dev->logical ? blkdev_read(v->dev,v->start+sector,n,(uint8_t *)buf+*done) :
                 cache_read_run(v->cache,v->dev,v->start+sector,n,(uint8_t *)buf+*done);
             if (e) {
                 if (e==-FS_EQUARANTINED || v->dev->quarantined) {

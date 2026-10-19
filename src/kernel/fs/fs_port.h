@@ -4,6 +4,26 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+/* Request context is task scoped and follows f1-83 calldowns, including a
+ * controller worker. The caller keeps it alive until transport retirement. */
+#define VFS_ETIMEOUT 205
+#define VFS_ECANCELLED 206
+enum vfs_wait_reason { VFS_WAIT_NAMESPACE=1,VFS_WAIT_VOLUME,VFS_WAIT_PROVIDER,VFS_WAIT_TRANSPORT,VFS_WAIT_CACHE };
+struct vfs_wait_info { uint64_t owner,elapsed_us; uint32_t drives; enum vfs_wait_reason reason; int outcome; bool valid; };
+struct vfs_request {
+    void *arg; uint64_t deadline;
+    uint64_t (*now)(void *);
+    bool (*cancelled)(void *);
+    void (*pause)(void *);
+    uint64_t owner; struct vfs_wait_info *wait;
+    int *cleanup_status; /* first failed mutation cleanup, not ordinary DOS errors */
+};
+struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const struct vfs_request *request; };
+void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);
+void fs_request_leave(struct fs_request_scope *);
+const struct vfs_request *fs_request_current(void);
+int fs_request_check(void);
+void fs_request_wait(enum vfs_wait_reason,uint64_t begin,int outcome);
 #ifdef FS_HOST
 #include <stdlib.h>
 #include <string.h>
@@ -164,6 +184,35 @@ static inline void fs_contig_free(void *v, size_t n) {
 }
 static inline uint32_t fs_now_ms(void) { return ticks_lo(); }
 #endif
+static inline int fs_lock_take_request(fs_lock *lock,enum vfs_wait_reason reason) {
+    const struct vfs_request *r=fs_request_current();
+    if (!r) { fs_lock_take(lock); return 0; }
+    uint64_t begin=r->now(r->arg); int error=fs_request_check(); bool blocked=false;
+    while (!error && !fs_lock_try_take(lock)) {
+        blocked=true; r->pause(r->arg); error=fs_request_check();
+    }
+    if (blocked) fs_request_wait(reason,begin,error); return error;
+}
+/* A published reservation/reference must retire under its bookkeeping lock.
+ * Cancellation is observed during reacquisition; no further storage is issued.
+ * Namespace/cache critical sections never sleep in production. */
+static inline int fs_lock_retake(fs_lock *lock,enum vfs_wait_reason reason) {
+    int error=fs_lock_take_request(lock,reason);
+    if (error) {
+        const struct vfs_request *r=fs_request_current();
+        while (!fs_lock_try_take(lock)) r->pause(r->arg);
+    }
+    return error;
+}
+static inline int fs_event_wait_request(struct fs_event *event,fs_lock *lock,enum vfs_wait_reason reason) {
+    const struct vfs_request *r=fs_request_current();
+    if (!r) { fs_event_wait(event,lock); return 0; }
+    uint64_t begin=r->now(r->arg);
+    fs_lock_drop(lock); r->pause(r->arg);
+    int error=fs_lock_retake(lock,reason);
+    if (!error) error=fs_request_check();
+    fs_request_wait(reason,begin,error); return error;
+}
 /* Install only at boot/quiescence. F0 exports monotonic PIT time, no RTC.
  * A calendar provider supplies packed DOS date/time; absence uses 1980-01-01.
  * The same hook is used by the host, keeping FAT independent of the target. */

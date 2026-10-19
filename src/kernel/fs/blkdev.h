@@ -75,6 +75,7 @@ struct blk_request {
     _Atomic(enum blk_state) state;
     int result;
     _Atomic(bool) cancel;
+    const struct vfs_request *context;
     /* Pin owner identity is explicit; zero never authorizes merging. A DMA
      * adapter supplies its generation-safe token(s), never an unlocked PFN. */
     const struct mm_pin *pin_owner;
@@ -124,4 +125,7 @@ int blkdev_request(struct blkdev *, enum blk_operation, uint64_t, uint32_t,
 int blkdev_read(struct blkdev *, uint64_t, uint32_t, void *);
 int blkdev_write(struct blkdev *, uint64_t, uint32_t, const void *);
 int blkdev_flush(struct blkdev *);
+/* Queue-adapter polling seam; no register programming or retry changes. */
+bool blk_request_interrupted(void) __attribute__((weak));
+uint32_t blk_request_remaining_ms(void) __attribute__((weak));
 #endif
