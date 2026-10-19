@@ -34,6 +34,8 @@ int entry(void) {
   AdapterInput(1, 17, -9, 111);
   AdapterInput(11, 500, 400, 0);
   AdapterInput(1, -4, 3, 112);
+  /* One notification per buffered axis record (two per motion). */
+  EXPECT(AdapterInput(13, 0, 0, 0) == 4, 26);
   DIMOUSESTATE2 state;
   EXPECT(m->GetDeviceState(mouse, 20, &state) == DI_OK && state.lX == 13 &&
              state.lY == -6,
@@ -65,6 +67,8 @@ int entry(void) {
   EXPECT(m->Release(mouse) == 0 && k->Release(keyboard) == 0, 23);
   EXPECT(input->lpVtbl->Release(input) == 0 && old->lpVtbl->Release(old) == 0,
          24);
-  EXPECT(AdapterInput(14, 0, 0, 0) == 0 && AdapterInput(13, 0, 0, 0) == 4, 25);
+  /* Loss of acquisition is a device state change that also sets the event
+   * (Microsoft, IDirectInputDevice8::SetEventNotification): 4 records + 1. */
+  EXPECT(AdapterInput(14, 0, 0, 0) == 0 && AdapterInput(13, 0, 0, 0) == 5, 25);
   return 0;
 }

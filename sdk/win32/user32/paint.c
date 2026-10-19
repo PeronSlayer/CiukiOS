@@ -2,6 +2,10 @@
 #include "internal.h"
 static struct u32_dc dcs[64];
 static DWORD next_frame;
+HWND u32_dc_window(HDC dc) {
+  for (UINT i = 0; i < 64; i++) if (dcs[i].dc == dc) return dcs[i].hwnd;
+  return 0;
+}
 static void piece(struct u32_region *out, RECT r) {
   if (IsRectEmpty(&r))
     return;

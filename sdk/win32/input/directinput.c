@@ -177,13 +177,6 @@ static LONG sum(LONG a, LONG b) {
          : n < (-0x7fffffff - 1) ? (-0x7fffffff - 1)
                                  : (LONG)n;
 }
-static LONG ranged(struct device *d, UINT axis, LONG value) {
-  if (value < d->minimum[axis])
-    return d->minimum[axis];
-  if (value > d->maximum[axis])
-    return d->maximum[axis];
-  return value;
-}
 static void data(struct device *d, UINT id, DWORD value, DWORD time,
                  DWORD serial) {
   if (d->offsets[id] == DI_INFINITE)
@@ -241,31 +234,24 @@ static void W32API receive(void *context, HWND window,
           data(d, code, value, time, serial);
         }
       } else if (!d->keyboard) {
-        if (kind == 1 && e->type == CIUKI_INPUT_MOTION &&
-            d->mode == DIPROPAXISMODE_REL) {
+        /* Microsoft "Interpreting Mouse Axis Data": absolute mouse axes are
+         * the accumulated raw counts from an arbitrary origin, independent of
+         * the cursor, its clipping and Control Panel speed; relative axes are
+         * the same raw counts since the previous read. Neither is clamped. */
+        if (kind == 1 && e->type == CIUKI_INPUT_MOTION) {
           LONG values[] = {e->value, e->value2};
           for (UINT i = 0; i < 2; i++)
             if (values[i]) {
               d->axes[i] = sum(d->axes[i], values[i]);
-              data(d, i, values[i], time, serial);
+              data(d, i, d->mode == DIPROPAXISMODE_REL ? values[i] : d->axes[i],
+                   time, serial);
             }
-        } else if (!kind && e->type == CIUKI_INPUT_MOTION &&
-                   d->mode == DIPROPAXISMODE_ABS) {
-          for (UINT i = 0; i < 2; i++) {
-            LONG value = ranged(d, i, i ? state.cursor.y : state.cursor.x);
-            if (value != d->axes[i]) {
-              d->axes[i] = value;
-              data(d, i, value, time, serial);
-            }
-          }
         } else if (!kind && e->type == CIUKI_INPUT_WHEEL) {
           int64_t wheel = (int64_t)e->value * 120;
           LONG value = wheel > 0x7fffffff          ? 0x7fffffff
                        : wheel < (-0x7fffffff - 1) ? (-0x7fffffff - 1)
                                                    : (LONG)wheel;
           d->axes[2] = sum(d->axes[2], value);
-          if (d->mode == DIPROPAXISMODE_ABS)
-            d->axes[2] = ranged(d, 2, d->axes[2]);
           data(d, 2, d->mode == DIPROPAXISMODE_REL ? value : d->axes[2], time,
                serial);
         } else if (!kind && e->type == CIUKI_INPUT_BUTTON && e->code >= 1 &&
@@ -815,12 +801,6 @@ static HRESULT W32API get_state(IDirectInputDevice *p, DWORD bytes, void *out) {
     hr = DIERR_INVALIDPARAM;
   if (!hr) {
     w32_fill(out, 0, bytes);
-    struct w32_input_snapshot snapshot;
-    CiukiUserInputSnapshot(&snapshot);
-    if (!d->keyboard && d->mode == DIPROPAXISMODE_ABS) {
-      d->axes[0] = ranged(d, 0, snapshot.cursor.x);
-      d->axes[1] = ranged(d, 1, snapshot.cursor.y);
-    }
     for (UINT id = 0; id < object_count(d); id++)
       if (d->offsets[id] != DI_INFINITE) {
         uint8_t *target = (uint8_t *)out + d->offsets[id];

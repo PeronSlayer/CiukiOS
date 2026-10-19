@@ -7,6 +7,7 @@ static DWORD colors[29] = {0xc0c0c0, 0x808000, 0x800000, 0x808080, 0xc0c0c0,
                            0xffffff, 0x000000, 0xdfdfdf, 0x000000, 0xe1ffff,
                            0x000000, 0x000000, 0xd0d0d0, 0x000000};
 static DWORD settings[128];
+int u32_spi_metric(int, int);
 static uint8_t setting_written[128];
 DWORD W32API GetSysColor(int n) {
   U32_GUARD;
@@ -83,12 +84,12 @@ int W32API GetSystemMetrics(int n) {
   case 34:
   case 35:
     return 112;
+  case 23:
   case 36:
   case 37:
-    return 4;
   case 38:
   case 39:
-    return 75;
+    return u32_spi_metric(n, 0);
   case 40:
     return 0;
   case 43:
@@ -125,60 +126,79 @@ static void logfont(uint8_t *out, BOOL bold) {
   out[27] = 0x22;
   w32_copy(out + 28, "MS Sans Serif", 14);
 }
-BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
-                                  UINT flags) {
-  U32_GUARD;
-  (void)flags;
-  static const struct {
-    UINT get, set, value;
-  } values[] = {{5, 6, 1},   {10, 11, 31},    {14, 15, 600}, {16, 17, 0},
-                {22, 23, 1}, {38, 37, 0},     {70, 71, 500}, {74, 75, 0},
-                {94, 93, 0}, {102, 103, 400}, {104, 105, 3}, {106, 107, 400}};
-  for (UINT i = 0; i < sizeof(values) / sizeof(*values); i++) {
-    UINT key = values[i].get;
-    if (action == key) {
-      if (!out)
-        return u32_fail(87);
-      *(DWORD *)out = setting_written[key] ? settings[key] : values[i].value;
-      return 1;
-    }
-    if (action == values[i].set) {
-      settings[key] = param;
-      setting_written[key] = 1;
-      return 1;
-    }
+/* SystemParametersInfo state is process-global for every GUI thread and
+ * never persisted: SPIF_UPDATEINIFILE is accepted without writing native
+ * desktop settings; SPIF_SENDCHANGE notifies this process's top-level windows
+ * with WM_SETTINGCHANGE (wParam = action). Each setter follows the argument
+ * convention Microsoft documents for its action (uiParam value, pvParam
+ * value, or pvParam structure). Windows 98 SE defaults. */
+static struct {
+  int mouse[3];
+  UINT mouse_speed, icon_x, icon_y, title_wrap, menu_drop, click_w, click_h,
+      swap, beep, saver_running, keyboard_pref, show_sounds, min_animate;
+  RECT work;
+  BOOL work_set, ncm_set, font_set, minimized_set, icons_set;
+  uint8_t ncm[340], icon_font[60], minimized[20], icon_metrics[76];
+} spi = {.mouse = {6, 10, 1}, .mouse_speed = 10, .icon_x = 75, .icon_y = 75,
+         .title_wrap = 1, .click_w = 4, .click_h = 4, .beep = 1,
+         .min_animate = 1};
+int u32_spi_metric(int n, int fallback) {
+  switch (n) {
+  case 23: /* SM_SWAPBUTTON */
+    return (int)spi.swap;
+  case 36: /* SM_CXDOUBLECLK */
+    return (int)spi.click_w;
+  case 37:
+    return (int)spi.click_h;
+  case 38: /* SM_CXICONSPACING */
+    return (int)spi.icon_x;
+  case 39:
+    return (int)spi.icon_y;
+  default:
+    return fallback;
   }
+}
+static BOOL put_bool(void *out, UINT value) {
+  if (!out)
+    return u32_fail(87);
+  *(BOOL *)out = (BOOL)value;
+  return 1;
+}
+static BOOL spi_get(UINT action, UINT param, void *out) {
   switch (action) {
-  case 48:
+  case 1: /* SPI_GETBEEP */
+    return put_bool(out, spi.beep);
+  case 3: /* SPI_GETMOUSE */
     if (!out)
       return u32_fail(87);
-    GetSystemMetrics(0);
-    *(RECT *)out = (RECT){0, 32, u32_screen_w, u32_screen_h};
+    w32_copy(out, spi.mouse, sizeof(spi.mouse));
     return 1;
-  case 2:
-    if (!out)
-      return u32_fail(87);
-    ((int *)out)[0] = 6;
-    ((int *)out)[1] = 10;
-    ((int *)out)[2] = 1;
-    return 1;
-  case 13:
+  case 13: /* SPI_ICONHORIZONTALSPACING / 24 VERTICAL: get when pvParam */
   case 24:
-    if (param)
-      return u32_fail(120);
+    if (!out)
+      return -1;
+    *(int *)out = (int)(action == 13 ? spi.icon_x : spi.icon_y);
+    return 1;
+  case 25: /* SPI_GETICONTITLEWRAP */
+    return put_bool(out, spi.title_wrap);
+  case 27: /* SPI_GETMENUDROPALIGNMENT */
+    return put_bool(out, spi.menu_drop);
+  case 31: /* SPI_GETICONTITLELOGFONT */
     if (!out)
       return u32_fail(87);
-    *(UINT *)out = 75;
+    if (spi.font_set)
+      w32_copy(out, spi.icon_font, 60);
+    else
+      logfont(out, 0);
     return 1;
-  case 31:
-    if (!out)
-      return u32_fail(87);
-    logfont(out, 0);
-    return 1;
-  case 41: {
+  case 41: { /* SPI_GETNONCLIENTMETRICS */
     if (!out || w32_u32(out) != 340)
       return u32_fail(87);
     uint8_t *p = out;
+    if (spi.ncm_set) {
+      w32_copy(p + 4, spi.ncm + 4, 336);
+      return 1;
+    }
     w32_fill(p + 4, 0, 336);
     w32_put32(p + 4, 1);
     w32_put32(p + 8, 16);
@@ -196,32 +216,202 @@ BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
     logfont(p + 280, 0);
     return 1;
   }
-  case 43:
+  case 43: /* SPI_GETMINIMIZEDMETRICS */
     if (!out || w32_u32(out) != 20)
       return u32_fail(87);
+    if (spi.minimized_set) {
+      w32_copy((uint8_t *)out + 4, spi.minimized + 4, 16);
+      return 1;
+    }
     w32_put32((uint8_t *)out + 4, 160);
     w32_put32((uint8_t *)out + 8, 0);
     w32_put32((uint8_t *)out + 12, 0);
     w32_put32((uint8_t *)out + 16, 8);
     return 1;
-  case 45:
+  case 45: /* SPI_GETICONMETRICS */
     if (!out || w32_u32(out) != 76)
       return u32_fail(87);
-    w32_put32((uint8_t *)out + 4, 75);
-    w32_put32((uint8_t *)out + 8, 75);
-    w32_put32((uint8_t *)out + 12, 1);
+    if (spi.icons_set) {
+      w32_copy((uint8_t *)out + 4, spi.icon_metrics + 4, 72);
+      return 1;
+    }
+    w32_put32((uint8_t *)out + 4, spi.icon_x);
+    w32_put32((uint8_t *)out + 8, spi.icon_y);
+    w32_put32((uint8_t *)out + 12, spi.title_wrap);
     logfont((uint8_t *)out + 16, 0);
     return 1;
-  case 72:
+  case 48: /* SPI_GETWORKAREA */
+    if (!out)
+      return u32_fail(87);
+    GetSystemMetrics(0);
+    *(RECT *)out =
+        spi.work_set ? spi.work : (RECT){0, 32, u32_screen_w, u32_screen_h};
+    return 1;
+  case 56: /* SPI_GETSHOWSOUNDS */
+    return put_bool(out, spi.show_sounds);
+  case 68: /* SPI_GETKEYBOARDPREF */
+    return put_bool(out, spi.keyboard_pref);
+  case 72: /* SPI_GETANIMATION */
     if (!out || w32_u32(out) != 8)
       return u32_fail(87);
-    w32_put32((uint8_t *)out + 4, 1);
+    w32_put32((uint8_t *)out + 4, spi.min_animate);
     return 1;
-  case 32:
-    return SetDoubleClickTime(param);
+  case 112: /* SPI_GETMOUSESPEED */
+    if (!out)
+      return u32_fail(87);
+    *(int *)out = (int)spi.mouse_speed;
+    return 1;
+  case 114: /* SPI_GETSCREENSAVERRUNNING */
+    return put_bool(out, spi.saver_running);
   default:
-    return u32_fail(120);
+    (void)param;
+    return -1;
   }
+}
+static BOOL spi_set(UINT action, UINT param, void *in) {
+  switch (action) {
+  case 2: /* SPI_SETBEEP: uiParam */
+    spi.beep = !!param;
+    return 1;
+  case 4: /* SPI_SETMOUSE: pvParam int[3] */
+    if (!in)
+      return u32_fail(87);
+    w32_copy(spi.mouse, in, sizeof(spi.mouse));
+    return 1;
+  case 13: /* pvParam NULL: uiParam is the new spacing */
+  case 24:
+    if (param < 32 || param > 4096)
+      return u32_fail(87);
+    *(action == 13 ? &spi.icon_x : &spi.icon_y) = param;
+    return 1;
+  case 20: /* SPI_SETDESKWALLPAPER, 21 SETDESKPATTERN: the desktop owns these */
+  case 21:
+  case 87: /* SPI_SETCURSORS / 88 SPI_SETICONS: reload from the registry */
+  case 88:
+    return 1;
+  case 26: /* SPI_SETICONTITLEWRAP: uiParam */
+    spi.title_wrap = !!param;
+    return 1;
+  case 28: /* SPI_SETMENUDROPALIGNMENT: uiParam */
+    spi.menu_drop = !!param;
+    return 1;
+  case 29: /* SPI_SETDOUBLECLKWIDTH / 30 HEIGHT: uiParam */
+  case 30:
+    if (param > 1024)
+      return u32_fail(87);
+    *(action == 29 ? &spi.click_w : &spi.click_h) = param;
+    return 1;
+  case 32: /* SPI_SETDOUBLECLICKTIME: uiParam */
+    return SetDoubleClickTime(param);
+  case 33: /* SPI_SETMOUSEBUTTONSWAP: uiParam */
+    spi.swap = !!param;
+    return 1;
+  case 34: /* SPI_SETICONTITLELOGFONT: pvParam LOGFONTA, uiParam its size */
+    if (!in || (param && param != 60))
+      return u32_fail(87);
+    w32_copy(spi.icon_font, in, 60);
+    spi.font_set = 1;
+    return 1;
+  case 42: /* SPI_SETNONCLIENTMETRICS */
+    if (!in || w32_u32(in) != 340)
+      return u32_fail(87);
+    w32_copy(spi.ncm, in, 340);
+    spi.ncm_set = 1;
+    return 1;
+  case 44: /* SPI_SETMINIMIZEDMETRICS */
+    if (!in || w32_u32(in) != 20)
+      return u32_fail(87);
+    w32_copy(spi.minimized, in, 20);
+    spi.minimized_set = 1;
+    return 1;
+  case 46: /* SPI_SETICONMETRICS */
+    if (!in || w32_u32(in) != 76)
+      return u32_fail(87);
+    w32_copy(spi.icon_metrics, in, 76);
+    spi.icon_x = w32_u32(spi.icon_metrics + 4);
+    spi.icon_y = w32_u32(spi.icon_metrics + 8);
+    spi.title_wrap = !!w32_u32(spi.icon_metrics + 12);
+    spi.icons_set = 1;
+    return 1;
+  case 47: { /* SPI_SETWORKAREA: pvParam RECT, NULL = the full screen */
+    GetSystemMetrics(0);
+    RECT screen = {0, 0, u32_screen_w, u32_screen_h}, r;
+    if (!in) {
+      spi.work = screen;
+      spi.work_set = 1;
+      return 1;
+    }
+    r = *(const RECT *)in;
+    if (IsRectEmpty(&r) || r.left < 0 || r.top < 0 ||
+        r.right > screen.right || r.bottom > screen.bottom)
+      return u32_fail(87);
+    spi.work = r;
+    spi.work_set = 1;
+    return 1;
+  }
+  case 57: /* SPI_SETSHOWSOUNDS: uiParam */
+    spi.show_sounds = !!param;
+    return 1;
+  case 69: /* SPI_SETKEYBOARDPREF: uiParam */
+    spi.keyboard_pref = !!param;
+    return 1;
+  case 73: /* SPI_SETANIMATION: pvParam ANIMATIONINFO */
+    if (!in || w32_u32(in) != 8)
+      return u32_fail(87);
+    spi.min_animate = !!w32_u32((const uint8_t *)in + 4);
+    return 1;
+  case 97: /* SPI_SETSCREENSAVERRUNNING: uiParam; pvParam receives old */
+    if (in)
+      *(BOOL *)in = (BOOL)spi.saver_running;
+    spi.saver_running = !!param;
+    return 1;
+  case 113: /* SPI_SETMOUSESPEED: the value is pvParam itself (1..20) */
+    if ((uintptr_t)in < 1 || (uintptr_t)in > 20)
+      return u32_fail(87);
+    spi.mouse_speed = (UINT)(uintptr_t)in;
+    return 1;
+  default:
+    return -1;
+  }
+}
+BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
+                                  UINT flags) {
+  U32_GUARD;
+  static const struct {
+    UINT get, set, value;
+  } values[] = {{5, 6, 1},   {10, 11, 31},    {14, 15, 600}, {16, 17, 0},
+                {22, 23, 1}, {38, 37, 0},     {70, 71, 0},   {74, 75, 0},
+                {94, 93, 0}, {102, 103, 400}, {104, 105, 3}, {106, 107, 400}};
+  BOOL setter = 0, result = (BOOL)-1;
+  for (UINT i = 0; i < sizeof(values) / sizeof(*values); i++) {
+    UINT key = values[i].get;
+    if (action == key) {
+      if (!out)
+        return u32_fail(87);
+      *(DWORD *)out = setting_written[key] ? settings[key] : values[i].value;
+      return 1;
+    }
+    if (action == values[i].set) {
+      settings[key] = param;
+      setting_written[key] = 1;
+      setter = 1;
+      result = 1;
+    }
+  }
+  if (result == (BOOL)-1) {
+    result = spi_get(action, param, out);
+    if (result == (BOOL)-1) {
+      result = spi_set(action, param, out);
+      setter = result == 1;
+    }
+  }
+  if (result == (BOOL)-1)
+    return u32_fail(120);
+  if (setter && (flags & 2))
+    for (UINT i = 0; i < U32_WINDOWS; i++)
+      if (u32_windows[i].handle && !u32_windows[i].parent)
+        SendNotifyMessageA(u32_windows[i].handle, 0x1a, action, 0);
+  return result;
 }
 BOOL W32API MessageBeep(UINT type) {
   U32_GUARD;

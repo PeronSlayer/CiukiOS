@@ -48,6 +48,10 @@ static struct {
   int(W32API *object)(DWORD, int, void *);
   int(W32API *get_dibits)(DWORD, DWORD, UINT, UINT, void *, void *, UINT);
   BOOL(W32API *icon)(DWORD, int, int, int, int, DWORD, DWORD);
+  int(W32API *set_dibits)(DWORD, DWORD, UINT, UINT, const void *, const void *, UINT);
+  DWORD(W32API *compatible_dc)(DWORD);
+  BOOL(W32API *stretch)(DWORD, int, int, int, int, DWORD, int, int, int, int, DWORD);
+  void(W32API *palette_hook)(void (*)(void *, DWORD, UINT), void *);
 } g;
 struct binding {
   DWORD dc;
@@ -195,7 +199,7 @@ static BOOL bitmap_view(HANDLE h, struct u32_surface *s, BOOL release) {
 static BOOL icon(HDC dc, int x, int y, int width, int height,
                  const DWORD *pixels, const uint8_t *and, UINT size,
                  UINT flags) {
-  if (size != 32 || flags & ~0xb)
+  if (size != 32 || flags & ~0xf || !(flags & 3))
     return 0;
   struct u32_surface s = {(void *)pixels, 32, 32, 128, 1, -1};
   DWORD color = U32_PTR(create_bitmap(&s));
@@ -205,8 +209,19 @@ static BOOL icon(HDC dc, int x, int y, int width, int height,
     if (and[p])
       mask[p / 8] |= 128 >> (p & 7);
   DWORD mono = g.bitmap(32, 32, 1, 1, mask);
-  BOOL ok =
-      color && mono && g.icon(U32_PTR(dc), x, y, width, height, color, mono);
+  BOOL ok = 0;
+  if (color && mono) {
+    if ((flags & 3) == 3) ok = g.icon(U32_PTR(dc), x, y, width, height, color, mono);
+    else {
+      DWORD source = g.compatible_dc(0);
+      if (source) {
+        DWORD old = g.select(source, flags & 2 ? color : mono);
+        ok = old && g.stretch(U32_PTR(dc), x, y, width, height, source, 0, 0, 32, 32, 0x00cc0020);
+        if (old) g.select(source, old);
+        g.delete_dc(source);
+      }
+    }
+  }
   if (mono)
     g.delete_object(mono);
   if (color)
@@ -247,6 +262,111 @@ static BOOL set_region(HRGN handle, const RECT *r, UINT n) {
 static const struct u32_gdi adapter = {1,          acquire,     release,
                                        fill,       icon,        rects,
                                        set_region, bitmap_view, create_bitmap};
+/* CF_BITMAP synthesised from CF_DIB (Microsoft GetClipboardData/CreateDIBitmap):
+ * the DIB's depth, colour table, BI_BITFIELDS masks and orientation are
+ * converted by the gdi32 engine into a display-compatible bitmap. The USER
+ * desktop is XRGB8888, so the result is a 32-bpp top-down GDI bitmap. */
+HANDLE u32_dib_bitmap(const void *data, DWORD bytes) {
+  u32_gdi_ensure();
+  if (!data || bytes < 40 || !g.set_dibits)
+    return 0;
+  const uint8_t *p = data;
+  DWORD header = w32_u32(p), depth = w32_u16(p + 14),
+        compression = w32_u32(p + 16);
+  LONG width = (LONG)w32_u32(p + 4), height = (LONG)w32_u32(p + 8);
+  if (header < 40 || header > 124 || header > bytes || width <= 0 ||
+      width > 2048 || !height || height < -2048 || height > 2048 ||
+      w32_u16(p + 12) != 1 ||
+      (depth != 1 && depth != 4 && depth != 8 && depth != 16 && depth != 24 &&
+       depth != 32) ||
+      (compression != 0 && compression != 3) ||
+      (compression == 3 && depth != 16 && depth != 32) ||
+      (compression == 3 && header > 40 && header < 52))
+    return 0;
+  DWORD colors = w32_u32(p + 32);
+  if (depth <= 8) {
+    if (!colors)
+      colors = 1u << depth;
+    if (colors > (1u << depth))
+      return 0;
+  } else if (colors > 256)
+    return 0;
+  uint64_t offset = header + (compression == 3 && header == 40 ? 12 : 0) +
+                    (uint64_t)colors * 4;
+  uint64_t pitch = (((uint64_t)width * depth + 31) / 32) * 4;
+  UINT lines = (UINT)(height < 0 ? -height : height);
+  if (offset + pitch * lines > bytes)
+    return 0;
+  struct bitmap_info info = {.size = 40,
+                             .width = width,
+                             .height = -(LONG)lines,
+                             .planes = 1,
+                             .bpp = 32};
+  void *bits = 0;
+  DWORD h = g.dib_section(0, &info, 0, &bits, 0, 0);
+  if (!h || !bits) {
+    if (h)
+      g.delete_object(h);
+    return 0;
+  }
+  if (g.set_dibits(0, h, 0, lines, p + offset, data, 0) != (int)lines) {
+    g.delete_object(h);
+    return 0;
+  }
+  return (HANDLE)(uintptr_t)h;
+}
+/* gdi32 reports palette realisation while holding its own lock, and USER
+ * calls into gdi32 under the USER lock: taking the USER lock here could
+ * deadlock (lock-order inversion). The callback therefore only appends to a
+ * single-producer ring (producers are serialised by the gdi32 lock) that
+ * USER drains under its own lock before any queue is examined. */
+#define PALETTE_EVENTS 16u
+static struct {
+  DWORD dc;
+  UINT message;
+} palette_events[PALETTE_EVENTS];
+static DWORD palette_head, palette_tail, palette_overflow;
+static void palette_notify(void *opaque, DWORD dc, UINT message) {
+  (void)opaque;
+  DWORD tail = __atomic_load_n(&palette_tail, __ATOMIC_RELAXED);
+  if (tail - __atomic_load_n(&palette_head, __ATOMIC_ACQUIRE) >=
+      PALETTE_EVENTS) {
+    __atomic_store_n(&palette_overflow, 1, __ATOMIC_RELEASE);
+    return;
+  }
+  palette_events[tail % PALETTE_EVENTS].dc = dc;
+  palette_events[tail % PALETTE_EVENTS].message = message;
+  __atomic_store_n(&palette_tail, tail + 1, __ATOMIC_RELEASE);
+}
+static void palette_broadcast(UINT message, HWND source) {
+  for (UINT i = 0; i < U32_WINDOWS; i++)
+    if (u32_windows[i].handle && !u32_windows[i].parent &&
+        !u32_windows[i].destroying)
+      PostMessageA(u32_windows[i].handle, message, (WPARAM)source, 0);
+}
+/* gdi32 0x030f = a foreground realisation is about to replace the system
+ * palette (WM_PALETTEISCHANGING to the top-level windows); 0x0311 = the
+ * system palette changed (WM_PALETTECHANGED to every top-level window,
+ * including the source, wParam = the window that caused the change). The
+ * messages are posted: Microsoft's synchronous send would re-enter
+ * RealizePalette's caller inside gdi32. */
+void u32_palette_deliver(void) {
+  DWORD head = __atomic_load_n(&palette_head, __ATOMIC_RELAXED);
+  while (head != __atomic_load_n(&palette_tail, __ATOMIC_ACQUIRE)) {
+    DWORD dc = palette_events[head % PALETTE_EVENTS].dc;
+    UINT message = palette_events[head % PALETTE_EVENTS].message;
+    __atomic_store_n(&palette_head, ++head, __ATOMIC_RELEASE);
+    struct u32_window *w =
+        u32_root(u32_window(dc ? u32_dc_window((HDC)(uintptr_t)dc) : 0));
+    HWND source = w ? w->handle : u32_foreground;
+    if (message == 0x30f && source)
+      palette_broadcast(WM_PALETTEISCHANGING, source);
+    else if (message == 0x311)
+      palette_broadcast(WM_PALETTECHANGED, source);
+  }
+  if (__atomic_exchange_n(&palette_overflow, 0, __ATOMIC_ACQ_REL))
+    palette_broadcast(WM_PALETTECHANGED, u32_foreground);
+}
 void u32_gdi_ensure(void) {
   if (u32_gdi)
     return;
@@ -276,6 +396,11 @@ void u32_gdi_ensure(void) {
   RESOLVE(object, "GetObjectA");
   RESOLVE(get_dibits, "GetDIBits");
   RESOLVE(icon, "w32_gdi_draw_icon");
+  RESOLVE(set_dibits, "SetDIBits");
+  RESOLVE(compatible_dc, "CreateCompatibleDC");
+  RESOLVE(stretch, "StretchBlt");
+  RESOLVE(palette_hook, "w32_gdi_palette_hook");
 #undef RESOLVE
   u32_set_gdi(&adapter);
+  g.palette_hook(palette_notify, 0);
 }

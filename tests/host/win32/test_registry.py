@@ -54,6 +54,11 @@ class RegistryTests(unittest.TestCase):
         self.assertIn('PASS',p.stdout)
         print(p.stdout,end='')
 
+    def test_advapi32_shares_the_serialized_service_transport(self):
+        # f5-10A amendment 1 item 3: the facade's registry client and USER use
+        # the same ntdll w32_server_exchange (FastPebLock over the transaction).
+        imports=census.inspect((self.out/'builtin/advapi32.dll').read_bytes())['imports']
+        self.assertTrue(any(i['dll'].lower()=='ntdll.dll' and 'w32_server_exchange' in i['symbols'] for i in imports))
     def test_registry_public_api_errors_and_aliases(self):self.execute('basics')
     def test_compatibility_reader_and_authorized_writer(self):self.execute('compat')
     def test_all_types_names_and_hive_limits(self):self.execute('limits')

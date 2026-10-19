@@ -254,8 +254,10 @@ BOOL u32_sync_window(struct u32_window *w) {
   w32_copy(data, &v, 24);
   UINT n = u32_utf8((char *)data + 24, 1021, w->title);
   struct w32r_reply r;
-  return u32_directory(W32R_WINDOW_SET, w->handle, 0, 0, 0, "", data, 25 + n,
-                       &r, 0, 0);
+  BOOL ok = u32_directory(W32R_WINDOW_SET, w->handle, 0, 0, 0, "", data, 25 + n,
+                          &r, 0, 0);
+  u32_display_cache();
+  return ok;
 }
 BOOL W32API SetRect(RECT *r, int l, int t, int x, int b) {
   if (!r)
@@ -403,4 +405,69 @@ void u32_clear_thread_input(void) {
     w32_fill(threads[i].keys,0,256);threads[i].text_count=0;
     threads[i].key_window=threads[i].translate_window=0;threads[i].key_lparam=0;
   }
+}
+BOOL u32_exiting;
+/* TID zero selects every thread of the process (DLL_PROCESS_DETACH). */
+static void cleanup_thread(DWORD tid, UINT mode) {
+  BOOL identity = 0;
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *w = &u32_windows[i];
+    if (w->handle && (!tid || w->tid == tid)) {
+      identity = 1;
+      /* A victim may have died inside DestroyWindow: finish that teardown. */
+      if (mode != U32_NORMAL) w->destroying = 0;
+      u32_destroy(w, mode);
+    }
+  }
+  for (UINT i = 0; i < U32_TIMERS; i++)
+    if (!tid || u32_timers[i].tid == tid) w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
+  u32_hooks_cleanup(tid);
+  u32_clipboard_cleanup(tid);
+  u32_desktop_cleanup(tid);
+  for (UINT i = 0; i < U32_THREADS; i++) {
+    struct u32_thread *t = &threads[i];
+    if (t->id && (!tid || t->id == tid)) {
+      identity = 1;
+      while (t->events) {
+        struct u32_pending_event *e = t->events; t->events = e->next; u32_free(e);
+      }
+      for (struct u32_send_frame *f = t->send; f; f = f->prev) {
+        u32_free(f->data); f->data = 0;
+      }
+      w32_fill(t, 0, sizeof(*t));
+    }
+  }
+  /* Safety net for the server-side identity (a window free or clipboard close
+   * refused above); threads that never used USER cost no transaction. */
+  if (identity) {
+    struct w32r_reply r;
+    u32_directory(W32R_USER_CLEANUP, 0, tid, 0, 0, "", 0, 0, &r, 0, 0);
+  }
+}
+void W32API w32_user_thread_cleanup(DWORD tid) {
+  if (!tid) return;
+  /* The admitted victim cannot resume user instructions. Its recursive USER
+   * lock may have been abandoned at a syscall boundary. */
+  DWORD expected = tid;
+  if (tid != u32_tid() && __atomic_compare_exchange_n(&owner, &expected, 0, 0,
+      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) depth = 0;
+  U32_GUARD;
+  cleanup_thread(tid, U32_VICTIM);
+}
+BOOL W32API UserDllMain(void *module, DWORD reason, void *reserved) {
+  (void)module; (void)reserved;
+  if (reason == 3) {
+    U32_GUARD;
+    cleanup_thread(u32_tid(), U32_NORMAL);
+  } else if (!reason) {
+    U32_GUARD;
+    u32_exiting = 1;
+    cleanup_thread(0, U32_TEARDOWN);
+    for (UINT i = 0; i < U32_CLASSES; i++) {
+      u32_free(u32_classes[i].extra);
+      w32_fill(&u32_classes[i], 0, sizeof(u32_classes[i]));
+    }
+    u32_icons_cleanup();
+  }
+  return 1;
 }

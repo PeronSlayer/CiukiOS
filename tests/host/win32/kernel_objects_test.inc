@@ -46,7 +46,7 @@ static void wait_interleave(void)
 static void terminate_wait_interleave(void)
 {
     struct ciuki_w32_system_args a={.action=W32_S_TERMINATE_THREAD,.handle=W32_CURRENT_THREAD,.value=0x12345678};
-    CHECK(!w32_system_call(interleave_thread,&a)&&!a.error);
+    CHECK(!w32_system_call(interleave_thread,&a)&&!a.error&&a.result==interleave_thread->tid);
     on_schedule=0;
 }
 static void pulse_interleave(void)

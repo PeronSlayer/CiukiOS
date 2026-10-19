@@ -1433,6 +1433,71 @@ void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
     }
     desk_shell_message(d,"Error Starting Program",text,1);
 }
+static int v3_order(struct desktop *d, int peer, int i, const struct desk_packet *p)
+{
+    struct desk_client *c=&d->clients[i];
+    int after=-1, owner=-1;
+    if ((p->flags&DESK_V3_ORDER_Z) && p->index && p->index<DESK_V3_ORDER_NOTOPMOST) {
+        after=v3_find(d,peer,p->index,p->serial);
+        if (after<0) return -ENOENT;
+        if (after==i) return -EINVAL;
+    }
+    if ((p->flags&DESK_V3_ORDER_OWNER) && p->owner) {
+        owner=v3_find(d,peer,p->owner,p->owner_generation);
+        if (owner<0) return -ENOENT;
+        for (int k=owner, n=0;k>=0 && n<DESK_CLIENTS;n++) {
+            if (k==i) return -EINVAL;
+            unsigned id=d->clients[k].owner_id; k=-1;
+            for (int j=0;id && j<DESK_CLIENTS;j++) if (d->clients[j].window_id==id) { k=j; break; }
+        }
+    }
+    if ((p->flags&DESK_V3_ORDER_OWNER) && owner<0 && (c->v3_style&DESK_V3_MODAL)) return -EINVAL;
+    if (p->flags&DESK_V3_ORDER_OWNER) c->owner_id=owner<0 ? 0 : d->clients[owner].window_id;
+    if (p->flags&DESK_V3_ORDER_Z) {
+        if (p->index==DESK_V3_ORDER_TOPMOST) c->v3_style|=DESK_V3_TOPMOST;
+        else if (p->index==DESK_V3_ORDER_BOTTOM || p->index==DESK_V3_ORDER_NOTOPMOST ||
+                 (after>=0 && !(d->clients[after].v3_style&DESK_V3_TOPMOST))) {
+            c->v3_style&=~DESK_V3_TOPMOST;
+            /* SetWindowPos: a window made non-topmost takes its owners and its
+             * owned windows out of the topmost band (a topmost owner cannot
+             * own a non-topmost window). */
+            unsigned id=c->owner_id;
+            for (int n=0;id && n<DESK_CLIENTS;n++) {
+                int k=-1;for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].window_id==id) { k=j;break; }
+                if (k<0) break;
+                d->clients[k].v3_style&=~DESK_V3_TOPMOST;id=d->clients[k].owner_id;
+            }
+            for (int k=0;k<DESK_CLIENTS;k++) {
+                unsigned up=d->clients[k].window ? d->clients[k].owner_id : 0;
+                for (int n=0;up && n<DESK_CLIENTS;n++) {
+                    if (up==c->window_id) { d->clients[k].v3_style&=~DESK_V3_TOPMOST; break; }
+                    int j=-1;for (int q=0;q<DESK_CLIENTS;q++) if (d->clients[q].window_id==up) { j=q;break; }
+                    up=j<0 ? 0 : d->clients[j].owner_id;
+                }
+            }
+        } else if (after>=0) c->v3_style|=d->clients[after].v3_style&DESK_V3_TOPMOST;
+        int list[DESK_CLIENTS], n=0;
+        for (int k=0;k<DESK_CLIENTS;k++) if (k!=i && d->clients[k].window) {
+            int at=n++;
+            while (at && d->clients[list[at-1]].order>d->clients[k].order) { list[at]=list[at-1];at--; }
+            list[at]=k;
+        }
+        int at=n;
+        if (p->index==DESK_V3_ORDER_BOTTOM) at=0;
+        else if (after>=0) { for (at=0;at<n && list[at]!=after;at++); }
+        memmove(list+at+1,list+at,(size_t)(n-at)*sizeof(*list));list[at]=i;n++;
+        for (int k=0;k<n;k++) d->clients[list[k]].order=++d->order;
+    }
+    /* Propagate the owner's band through every owned descendant. */
+    for (int pass=0;pass<DESK_CLIENTS;pass++) for (int k=0;k<DESK_CLIENTS;k++) {
+        struct desk_client *w=&d->clients[k];
+        for (int j=0;w->window && w->owner_id && j<DESK_CLIENTS;j++)
+            if (d->clients[j].window_id==w->owner_id && (d->clients[j].v3_style&DESK_V3_TOPMOST)) w->v3_style|=DESK_V3_TOPMOST;
+    }
+    desk_v3_restack(d);
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    return 0;
+}
 int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
 {
     struct desk_client *anchor=&d->clients[peer];
@@ -1498,6 +1563,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if (!c->minimized) desk_damage_add(&d->damage,b,d->width,d->height);
         break;
     }
+    case DESK_V3_WINDOW_ORDER:
+        error=v3_order(d,peer,i,&p); break;
     case DESK_V3_PLACE:
         if ((p.style&DESK_V3_MODAL) && !c->owner_id) { error=-EINVAL; break; }
         if (c->owner_id) for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==c->owner_id &&

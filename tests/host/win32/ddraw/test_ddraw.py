@@ -127,6 +127,18 @@ class DirectDrawTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(actual).hexdigest(),pins[name],name)
                 path.unlink()
 
+    def test_native_adapter_on_production_user_seam(self):
+        # f5-10A amendment 1 item 6: sdk/win32/ddraw/native.c bound through
+        # GetProcAddress to the production user32 seam (lease, poll, clip,
+        # owner-thread activation, same-mode regrant) and gdi32 publication,
+        # on the USER fixture's kernel queues and v3 desktop transport.
+        from tests.host.win32.user32 import test_user32
+        out=self.out/'user-seam'
+        code,output=test_user32.run_fixture(out,test_user32.build_fixture(out))
+        self.assertEqual(code,0,output)
+        self.assertIn('TRACE ddraw on USER seam',output)
+        self.assertIn('TRACE display seam',output)
+
     def test_scalar_flip_cost_and_exercise_driver(self):
         binary=self.out/'benchmark'
         subprocess.run(['clang',*self.flags,'-mno-sse','-mno-sse2','-mno-mmx',*map(str,self.units),'-pthread','-o',str(binary)],check=True,env=self.env)

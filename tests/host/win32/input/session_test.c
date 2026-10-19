@@ -426,8 +426,18 @@ static void stream(HWND h) {
   CHECK(vt->GetProperty(mouse, DIPROP_DEADZONE, &prop.diph) == DI_OK &&
         prop.dwData == 300);
   CHECK(vt->Acquire(mouse) == DI_OK && SetCursorPos(55, 60));
-  CHECK(vt->GetDeviceState(mouse, 12, packed) == DI_OK &&
-        w32_u32(packed) == 60 && w32_u32(packed + 8) == 55);
+  /* f5-13 amendment 1: absolute mouse axes are accumulated raw counts from an
+   * arbitrary origin (Microsoft, Interpreting Mouse Axis Data), so neither the
+   * cursor position nor the -100..100 DIPROP_RANGE applies, and a read does
+   * not reset them. */
+  CHECK(vt->GetDeviceState(mouse, 12, packed) == DI_OK && !w32_u32(packed) &&
+        !w32_u32(packed + 8));
+  di_event(h, DESK_V3_RELATIVE_EVENT, CIUKI_INPUT_MOTION, 0, 6, -2, 1022);
+  di_event(h, DESK_V3_RELATIVE_EVENT, CIUKI_INPUT_MOTION, 0, 150, 5, 1023);
+  CHECK(SetCursorPos(10, 10));
+  for (UINT i = 0; i < 2; i++)
+    CHECK(vt->GetDeviceState(mouse, 12, packed) == DI_OK &&
+          (LONG)w32_u32(packed) == 3 && (LONG)w32_u32(packed + 8) == 156);
   IDirectInputDevice *conflict = device(input, &GUID_SysMouse, &c_dfDIMouse, h,
                                         DISCL_EXCLUSIVE | DISCL_FOREGROUND);
   CHECK(conflict->lpVtbl->Acquire(conflict) == DIERR_OTHERAPPHASPRIO);

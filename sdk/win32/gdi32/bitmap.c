@@ -207,14 +207,19 @@ static int scan_transfer(struct w32_dib *dst, unsigned start, unsigned lines,
   if (lines > height - start)
     lines = height - start;
   unsigned width = dst->width < src->width ? dst->width : src->width;
+  /* Scan lines are numbered in the caller's DIB orientation (bottom-up DIBs
+   * count from the bottom row); the bitmap side is addressed in logical
+   * top-down rows, so orientation never depends on how the bitmap object
+   * itself is stored (Microsoft SetDIBits/GetDIBits uStartScan). */
+  const struct w32_dib *dib = get ? dst : src;
   for (unsigned i = 0; i < lines; i++)
     for (unsigned x = 0; x < width; x++) {
       unsigned sy =
-          get ? (src->top_down ? start + i : src->height - 1 - start - i)
-              : (src->top_down ? i : lines - 1 - i);
+          get ? (dib->top_down ? start + i : src->height - 1 - start - i)
+              : (dib->top_down ? i : lines - 1 - i);
       unsigned dy =
-          get ? (dst->top_down ? i : lines - 1 - i)
-              : (dst->top_down ? start + i : dst->height - 1 - start - i);
+          get ? (dib->top_down ? i : lines - 1 - i)
+              : (dib->top_down ? start + i : dst->height - 1 - start - i);
       w32_dib_put(dst, (int)x, (int)dy,
                   w32_dib_encode(dst, w32_dib_rgb(src, (int)x, (int)sy)));
     }

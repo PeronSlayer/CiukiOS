@@ -336,10 +336,23 @@ V3 wire rules, relative to the 16-byte envelope above:
 | CRASH (74) | exception code, address, module byte count + UTF-8 | client; authenticated sender PID only |
 | RESTART (75) | ExitWindowsEx flags | client; confirmation before service callback |
 | POINTER_STATE (76) | current pointer flags (zero releases capture/clip) | server |
+| WINDOW_ORDER (77) | flags (Z=1, OWNER=2), insert-after id or sentinel, its generation, owner id, owner generation | client; no fd; ids name only the sender's own windows |
 | CONFIGURE | logical w/h, scale, serial, physical client x/y, show, style | server |
 | KEY/MOTION/BUTTON | 40-byte input record | server; ordinary motion uses logical client coordinates |
 | PING/PONG | UI-progress token | either direction |
 | CLOSE / CLOSE_REQUEST / CLOSED | empty | client / server / server |
+
+WINDOW_ORDER (f5-10A amendment 1, item 2) is additive: v1/v2.1 and every
+earlier v3 opcode keep their values and frames. Z places the window directly
+below the named sibling (`hWndInsertAfter` precedes it), or uses the sentinels
+TOP 0, BOTTOM 0xffffffff, TOPMOST 0xfffffffe, NOTOPMOST 0xfffffffd, whose
+generation must be zero. Following Microsoft `SetWindowPos`, a window inserted
+behind a topmost window joins the topmost band, and a window leaving it takes
+its owners and owned windows along; owned windows stay above their owner and
+inherit a topmost owner's band. OWNER sets (or clears with zero/zero) the owner
+of a top-level window; cycles, self-reference and clearing a modal window's
+owner return -EINVAL, unknown or stale ids -ENOENT. Unselected fields must be
+zero; violations are protocol errors that drop the connection.
 
 All scalars are 32-bit little-endian, including signed two's-complement fields;
 input timestamps keep their existing low/high halves. Reserved header bytes,

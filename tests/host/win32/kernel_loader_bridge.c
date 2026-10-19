@@ -215,7 +215,7 @@ void w32_kernel_model_spawn_test(void){
     struct ciuki_w32_context_args remote_context={.action=W32_CTX_GET,.thread=a.thread_handle};
     CHECK(!w32_context_call(model_thread,&remote_context)&&remote_context.error==6);
     struct ciuki_w32_system_args terminate={.action=W32_S_TERMINATE_THREAD,.handle=a.thread_handle,.value=0xfeed};
-    CHECK(!w32_system_call(model_thread,&terminate)&&!terminate.error&&main->w32->terminate_requested&&main->w32->terminate_code==0xfeed);
+    CHECK(!w32_system_call(model_thread,&terminate)&&!terminate.error&&!terminate.result&&main->w32->terminate_requested&&main->w32->terminate_code==0xfeed);
     uint32_t parameters=0;
     struct ciuki_w32_parameters_v3 v;
     CHECK(!ua_read(child->memory,&parameters,child->w32_peb+0x10,4));

@@ -16,6 +16,8 @@
 #include "../../../../apps/w32srv/registry.h"
 #include "session.h"
 #include <unistd.h>
+#include <pthread.h>
+#include <ciuki/present_abi.h>
 #define CHECK(x)                                                               \
   do {                                                                         \
     if (!(x)) {                                                                \
@@ -114,17 +116,59 @@ DWORD W32API SizeofResource(HANDLE h, HANDLE r) {
   (void)r;
   return 0;
 }
-HANDLE W32API LoadLibraryA(const char *s) {
-  (void)s;
-  return 0;
-}
+HANDLE W32API GetModuleHandleA(const char *);
+HANDLE W32API LoadLibraryA(const char *s) { return GetModuleHandleA(s); }
+/* Until the GDI phase USER runs on the fixture adapter (test_gdi below); then
+ * gdi32.dll and user32.dll resolve to the production objects linked in. */
+static BOOL host_modules, real_gdi;
+#define HOST_GDI ((HANDLE)(uintptr_t)0x6d000000)
+#define HOST_USER ((HANDLE)(uintptr_t)0x6e000000)
+/* Weak: tests/host/win32/input reuses this harness without gdi32/ddraw. */
+__attribute__((weak)) void *host_gdi_proc(const char *);
 HANDLE W32API GetModuleHandleA(const char *s) {
-  (void)s;
+  if (!host_modules || !s)
+    return 0;
+  return !strcmp(s, "gdi32.dll") ? HOST_GDI
+         : !strcmp(s, "user32.dll") ? HOST_USER
+                                    : 0;
+}
+#define USER_EXPORT(name) {#name, (void *)name}
+void *W32API GetProcAddress(HANDLE h, const char *s) {
+  static const struct {
+    const char *name;
+    void *proc;
+  } user[] = {USER_EXPORT(w32_user_display_lease),
+              USER_EXPORT(w32_user_display_release),
+              USER_EXPORT(w32_user_display_poll),
+              USER_EXPORT(w32_user_display_clip),
+              USER_EXPORT(w32_user_thread_cleanup),
+              USER_EXPORT(GetDC),
+              USER_EXPORT(ReleaseDC),
+              USER_EXPORT(ClientToScreen),
+              USER_EXPORT(GetWindowLongA),
+              USER_EXPORT(AdjustWindowRectEx),
+              USER_EXPORT(SetWindowPos)};
+  if (h == HOST_GDI)
+    return host_gdi_proc ? host_gdi_proc(s) : 0;
+  for (UINT i = 0; h == HOST_USER && i < sizeof(user) / sizeof(*user); i++)
+    if (!strcmp(user[i].name, s))
+      return user[i].proc;
   return 0;
 }
-void *W32API GetProcAddress(HANDLE h, const char *s) {
+void *W32API CreateThread(void *security, DWORD stack,
+                          DWORD(W32API *entry)(void *), void *argument,
+                          DWORD flags, DWORD *id) {
+  (void)security;
+  (void)stack;
+  (void)entry;
+  (void)argument;
+  (void)flags;
+  (void)id;
+  return 0; /* the fixture drives w32_ddraw_tick itself */
+}
+DWORD W32API WaitForSingleObject(HANDLE h, DWORD ms) {
   (void)h;
-  (void)s;
+  (void)ms;
   return 0;
 }
 int32_t w32_ciuki_call(void *r, uint32_t n) { return ui_kernel_call(r, n); }
@@ -163,7 +207,9 @@ int W32API WideCharToMultiByte(DWORD page, DWORD flags, const WCHAR *s, int n,
   return n;
 }
 static struct wr_server server;
+static UINT exchanges;
 DWORD w32r_exchange(const void *r, DWORD n, void *out, DWORD cap, DWORD *used) {
+  exchanges++;
   size_t total = 0;
   DWORD error = wr_dispatch(&server, ui_kernel_pid(), r, n, out, cap, &total);
   *used = total;
@@ -199,6 +245,27 @@ static void drop(struct u32_surface *s) {
 }
 static struct ciuki_message outgoing[2048], incoming[256];
 static UINT outgoing_count, in_head, in_tail, reject_opcode;
+static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
+static DWORD frames_seen, frames_refused, frame_token, frame_generation;
+static uint64_t fake_ns;
+/* Fake desktop lease: GRANTED (state 1) carries the full 72-byte tuple. */
+static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
+                        DWORD h, DWORD bpp) {
+  CHECK(in_tail - in_head < 256);
+  struct ciuki_message *m = &incoming[in_tail++ % 256];
+  desk_v3_message(m, DESK_V3_LEASE_EVENT, 72, 0, id, generation);
+  uint8_t *b = m->data + 16;
+  DWORD pitch = (w * (bpp / 8) + 3) & ~3u;
+  DWORD words[18] = {state, ++lease_serial, w, h, bpp};
+  if (state == 1) {
+    DWORD tuple[13] = {++lease_token, ++lease_generation, 7, 1, w, h, pitch,
+                       pitch * h, bpp == 8 ? 4 : bpp == 16 ? 2 : 1, 800, 600,
+                       32, 0};
+    memcpy(words + 5, tuple, sizeof(tuple));
+  }
+  for (UINT i = 0; i < 18; i++)
+    desk_put32(b + i * 4, words[i]);
+}
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
   (void)a;
   (void)c;
@@ -206,6 +273,13 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
+      DWORD flags = desk_get32(sent->data + 16);
+      lease_event(desk_get32(sent->data + 8), desk_get32(sent->data + 12),
+                  flags ? 1 : 3, flags ? desk_get32(sent->data + 20) : 320,
+                  flags ? desk_get32(sent->data + 24) : 200,
+                  flags ? desk_get32(sent->data + 28) : 8);
+    }
     if (sent->data[0] == 3 && desk_get32(sent->data + 4)) {
       CHECK(in_tail - in_head < 256);
       struct ciuki_message *reply = &incoming[in_tail++ % 256];
@@ -239,6 +313,45 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
         return 0;
       }
     return (DWORD)-9;
+  }
+  if (call == CIUKI_SYS_W32 && host_modules) {
+    struct ciuki_w32_display_args *r = (void *)(uintptr_t)a;
+    if (r->header.operation != W32_DISPLAY)
+      return (DWORD)-38;
+    /* The kernel admits only the current holder's token and generation. */
+    if (r->token != lease_token || r->generation != lease_generation) {
+      r->error = 1;
+      __atomic_add_fetch(&frames_refused, 1, __ATOMIC_SEQ_CST);
+      return 0;
+    }
+    if (r->action == W32_DISPLAY_FRAME) {
+      frame_token = r->token;
+      frame_generation = r->generation;
+      __atomic_add_fetch(&frames_seen, 1, __ATOMIC_SEQ_CST);
+    }
+    r->result = 1;
+    return 0;
+  }
+  if (call == CIUKI_SYS_CLOCK_GETTIME && host_modules) {
+    uint64_t ns = __atomic_add_fetch(&fake_ns, 20000000ull, __ATOMIC_SEQ_CST);
+    struct ciuki_timespec *t = (void *)(uintptr_t)b;
+    t->tv_sec = (int64_t)(ns / 1000000000ull);
+    t->tv_nsec = (int32_t)(ns % 1000000000ull);
+    return 0;
+  }
+  if (call == CIUKI_SYS_DISPLAY && host_modules && a == CIUKI_DISPLAY_QUERY) {
+    struct ciuki_display_info *info = (void *)(uintptr_t)b;
+    *info = (struct ciuki_display_info){.version = CIUKI_DISPLAY_VERSION,
+                                        .size = sizeof(*info),
+                                        .width = 800,
+                                        .height = 600,
+                                        .bpp = 32,
+                                        .pitch = 3200,
+                                        .vram_bytes = 8u << 20,
+                                        .mode_count = 2};
+    info->modes[0] = (struct ciuki_display_mode){1, 640, 480, 32, 2560, 1, 0};
+    info->modes[1] = (struct ciuki_display_mode){2, 800, 600, 32, 3200, 1, 1};
+    return 0;
   }
   if (call == CIUKI_SYS_CLOSE)
     return 0;
@@ -344,7 +457,7 @@ static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     CHECK(BeginPaint(h, &ps));
     RECT r;
     GetClientRect(h, &r);
-    CHECK(fill(ps.hdc, &r, (HBRUSH)1));
+    CHECK(real_gdi ? FillRect(ps.hdc, &r, (HBRUSH)1) : fill(ps.hdc, &r, (HBRUSH)1));
     CHECK(EndPaint(h, &ps));
     return 0;
   }
@@ -663,6 +776,646 @@ static void test_extras(void) {
   printf("TRACE hooks LIFO timer callback global enumeration desktop rejection "
          "standard icons metrics thread routing\n");
 }
+
+/* Last WINDOW_ORDER request sent for W, as {flags, after, gen, owner, gen}. */
+static BOOL last_order(struct u32_window *w, UINT out[5]) {
+  for (UINT i = outgoing_count; i--;)
+    if (outgoing[i].data[1] == DESK_V3_WINDOW_ORDER &&
+        desk_get32(outgoing[i].data + 8) == w->wire &&
+        desk_get32(outgoing[i].data + 12) == w->generation) {
+      CHECK(outgoing[i].length == 36 && !outgoing[i].fd_count);
+      for (UINT k = 0; k < 5; k++)
+        out[k] = desk_get32(outgoing[i].data + 16 + k * 4);
+      return 1;
+    }
+  return 0;
+}
+static UINT trace_index(HWND h, UINT m) {
+  for (UINT i = 0; i < traces; i++)
+    if (trace[i].h == h && trace[i].m == m)
+      return i;
+  return 9999;
+}
+static void test_order(void) {
+  const UINT quiet = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  HWND a = CreateWindowExA(0, "USER fixture", "a", WS_VISIBLE | WS_CAPTION,
+                           200, 10, 40, 40, 0, 0, 0, 0),
+       b = CreateWindowExA(0, "USER fixture", "b", WS_VISIBLE | WS_CAPTION,
+                           210, 20, 40, 40, 0, 0, 0, 0);
+  CHECK(a && b);
+  struct u32_window *wa = u32_window(a), *wb = u32_window(b);
+  CHECK(GetWindow(b, 2) == a);
+  UINT o[5];
+  outgoing_count = 0;
+  /* hWndInsertAfter names the window that precedes: b goes directly below a. */
+  CHECK(SetWindowPos(b, a, 0, 0, 0, 0, quiet));
+  CHECK(last_order(wb, o) && o[0] == DESK_V3_ORDER_Z && o[1] == wa->wire &&
+        o[2] == wa->generation && !o[3] && !o[4]);
+  CHECK(GetWindow(a, 2) == b && wb->z < wa->z);
+  CHECK(SetWindowPos(a, HWND_BOTTOM, 0, 0, 0, 0, quiet));
+  CHECK(last_order(wa, o) && o[1] == DESK_V3_ORDER_BOTTOM && !o[2]);
+  CHECK(GetWindow(a, 1) == a);
+  CHECK(SetWindowPos(a, HWND_TOPMOST, 0, 0, 0, 0, quiet));
+  CHECK(last_order(wa, o) && o[1] == DESK_V3_ORDER_TOPMOST &&
+        (GetWindowLongA(a, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+        GetWindow(b, 0) == a);
+  /* Behind a topmost window: the topmost band is joined. */
+  CHECK(SetWindowPos(b, a, 0, 0, 0, 0, quiet));
+  CHECK((GetWindowLongA(b, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+        GetWindow(a, 2) == b);
+  CHECK(SetWindowPos(a, HWND_NOTOPMOST, 0, 0, 0, 0, quiet));
+  CHECK(last_order(wa, o) && o[1] == DESK_V3_ORDER_NOTOPMOST &&
+        !(GetWindowLongA(a, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+        (GetWindowLongA(b, GWL_EXSTYLE) & WS_EX_TOPMOST));
+  CHECK(!SetWindowPos(a, child, 0, 0, 0, 0, quiet) && GetLastError() == 1400);
+  CHECK(!SetWindowPos(a, a, 0, 0, 0, 0, quiet) && GetLastError() == 1400);
+  /* A refused desktop transaction leaves the local order untouched. */
+  UINT before = wa->z;
+  reject_opcode = DESK_V3_WINDOW_ORDER;
+  CHECK(!SetWindowPos(a, HWND_TOP, 0, 0, 0, 0, quiet) && wa->z == before);
+  reject_opcode = 0;
+  /* GWL_HWNDPARENT changes the owner of a top-level window. */
+  outgoing_count = 0;
+  CHECK(SetWindowLongA(a, GWL_HWNDPARENT, (LONG)(uintptr_t)b) == 0);
+  CHECK(GetWindow(a, 4) == b && last_order(wa, o) &&
+        o[0] == DESK_V3_ORDER_OWNER && !o[1] && !o[2] && o[3] == wb->wire &&
+        o[4] == wb->generation);
+  /* The owner is topmost, so the owned window joins its band above it. */
+  CHECK((GetWindowLongA(a, GWL_EXSTYLE) & WS_EX_TOPMOST) && GetWindow(a, 2) == b);
+  CHECK(!SetWindowLongA(b, GWL_HWNDPARENT, (LONG)(uintptr_t)a) &&
+        GetLastError() == 87 && !GetWindow(b, 4));
+  CHECK(!SetWindowLongA(a, GWL_HWNDPARENT, (LONG)(uintptr_t)child) &&
+        GetLastError() == 87);
+  /* Leaving the topmost band takes owned windows along. */
+  CHECK(SetWindowPos(b, HWND_NOTOPMOST, 0, 0, 0, 0, quiet));
+  CHECK(!(GetWindowLongA(a, GWL_EXSTYLE) & WS_EX_TOPMOST));
+  CHECK(SetWindowLongA(a, GWL_HWNDPARENT, 0) == (LONG)(uintptr_t)b &&
+        !GetWindow(a, 4) && last_order(wa, o) && o[0] == DESK_V3_ORDER_OWNER &&
+        !o[3] && !o[4]);
+  /* Cross-thread dependent destruction: thread 1's window owned by b is
+   * destroyed on thread 1 (WM_DESTROY there) before b itself. */
+  ui_kernel_switch(1);
+  HWND owned = CreateWindowExA(0, "USER fixture", "owned",
+                               WS_VISIBLE | WS_CAPTION, 230, 30, 40, 40, b, 0,
+                               0, 0);
+  CHECK(owned && GetWindow(owned, 4) == b);
+  ValidateRect(owned, 0);
+  /* The private destroy request cannot be forged by an application. */
+  CHECK(!SendMessageA(owned, U32_DESTROY, 0, 0) && IsWindow(owned));
+  ui_kernel_switch(0);
+  traces = 0;
+  ui_kernel_schedule(schedule_peer);
+  CHECK(DestroyWindow(b));
+  ui_kernel_schedule(0);
+  CHECK(!IsWindow(owned) && !IsWindow(b));
+  CHECK(trace_index(owned, WM_DESTROY) < trace_index(b, WM_DESTROY) &&
+        trace_index(owned, WM_NCDESTROY) < trace_index(b, WM_DESTROY));
+  CHECK(DestroyWindow(a));
+  printf("TRACE window order: insert-after bottom topmost notopmost owner "
+         "cycle refusal cross-thread owned destruction\n");
+}
+
+#define SEAM_INVALID ((int32_t)0x80070057u)
+#define SEAM_NOCLIP ((int32_t)0x887602cdu)
+#define SEAM_MORE ((int32_t)0x887602b2u)
+static UINT sent_count(UINT opcode) {
+  UINT n = 0;
+  for (UINT i = 0; i < outgoing_count; i++)
+    n += outgoing[i].data[1] == opcode;
+  return n;
+}
+static struct {
+  uintptr_t hwnd;
+  volatile int done;
+  struct dd_lease lease;
+  DWORD count;
+  int32_t clip;
+} worker;
+/* The DirectDraw pacing worker: no USER lock, no desktop I/O. */
+static void *poll_worker(void *unused) {
+  (void)unused;
+  for (UINT i = 0; i < 1000; i++) {
+    w32_user_display_poll(worker.hwnd, &worker.lease);
+    worker.count = 0;
+    worker.clip = w32_user_display_clip(worker.hwnd, 0, &worker.count);
+  }
+  __atomic_store_n(&worker.done, 1, __ATOMIC_RELEASE);
+  return 0;
+}
+static void test_display(void) {
+  HWND g = CreateWindowExA(0, "USER fixture", "game", WS_VISIBLE | WS_POPUP, 0,
+                           0, 320, 200, 0, 0, 0, 0);
+  CHECK(g);
+  ValidateRect(g, 0);
+  struct u32_window *w = u32_window(g);
+  struct dd_lease l, p;
+  outgoing_count = 0;
+  CHECK(w32_user_display_lease((uintptr_t)g, 320, 200, 8, &l) == 0);
+  CHECK(sent_count(DESK_V3_LEASE) == 1 && l.active && l.token == lease_token &&
+        l.generation == lease_generation && l.width == 320 && l.height == 200 &&
+        l.bpp == 8 && l.pitch == 320);
+  w32_user_display_poll((uintptr_t)g, &p);
+  CHECK(!memcmp(&p, &l, sizeof(p)));
+  /* Same logical mode: the cached grant, no second desktop transaction. */
+  CHECK(w32_user_display_lease((uintptr_t)g, 320, 200, 8, &p) == 0 &&
+        !memcmp(&p, &l, sizeof(p)) && sent_count(DESK_V3_LEASE) == 1);
+  CHECK(w32_user_display_lease((uintptr_t)g, 320, 200, 12, &p) == SEAM_INVALID &&
+        !p.active);
+  /* Only the owner thread sends lease requests. */
+  ui_kernel_switch(1);
+  CHECK(w32_user_display_lease((uintptr_t)g, 320, 200, 8, &p) == SEAM_INVALID);
+  ui_kernel_switch(0);
+  /* Deactivation clears the cached lease before any procedure runs. */
+  UINT off[2] = {0, 0}, on[2] = {1, 1};
+  event(w, DESK_V3_ACTIVATE, off, 2);
+  u32_pump();
+  w32_user_display_poll((uintptr_t)g, &p);
+  CHECK(!p.active && !p.token);
+  /* Same-mode regrant after reactivation: new token and generation. */
+  event(w, DESK_V3_ACTIVATE, on, 2);
+  lease_event(w->wire, w->generation, 1, 320, 200, 8);
+  u32_pump();
+  discard();
+  w32_user_display_poll((uintptr_t)g, &p);
+  CHECK(p.active && p.token == lease_token && p.token != l.token &&
+        p.generation == lease_generation && p.width == 320);
+  /* A grant for another logical mode is not this window's lease. */
+  lease_event(w->wire, w->generation, 1, 640, 480, 16);
+  u32_pump();
+  w32_user_display_poll((uintptr_t)g, &p);
+  CHECK(!p.active);
+  lease_event(w->wire, w->generation, 1, 320, 200, 8);
+  u32_pump();
+  /* Visible clip: half-open screen rectangles minus windows above. */
+  RECT r[8];
+  DWORD n = 0;
+  CHECK(w32_user_display_clip((uintptr_t)g, 0, &n) == 0 && n == 1);
+  n = 8;
+  CHECK(w32_user_display_clip((uintptr_t)g, r, &n) == 0 && n == 1 &&
+        r[0].left == 0 && r[0].top == 0 && r[0].right == 320 &&
+        r[0].bottom == 200);
+  HWND cover = CreateWindowExA(0, "USER fixture", "cover",
+                               WS_VISIBLE | WS_POPUP, 100, 50, 50, 50, 0, 0, 0,
+                               0);
+  CHECK(cover);
+  ValidateRect(cover, 0);
+  n = 2;
+  CHECK(w32_user_display_clip((uintptr_t)g, r, &n) == SEAM_MORE && n == 4);
+  n = 8;
+  CHECK(w32_user_display_clip((uintptr_t)g, r, &n) == 0 && n == 4);
+  long area = 0;
+  for (UINT i = 0; i < n; i++) {
+    RECT hole;
+    CHECK(!IntersectRect(&hole, &r[i], &(RECT){100, 50, 150, 100}));
+    area += (r[i].right - r[i].left) * (r[i].bottom - r[i].top);
+  }
+  CHECK(area == 320 * 200 - 50 * 50);
+  CHECK(w32_user_display_clip((uintptr_t)g, r, 0) == SEAM_INVALID);
+  CHECK(w32_user_display_clip(0x7777, r, &n) == SEAM_NOCLIP && !n);
+  /* A child window's list is clipped by its parent's client area. */
+  HWND inner = CreateWindowExA(0, "USER fixture", "inner",
+                               WS_CHILD | WS_VISIBLE, 300, 10, 40, 30, g, 0, 0,
+                               0);
+  CHECK(inner);
+  ValidateRect(inner, 0);
+  n = 8;
+  CHECK(w32_user_display_clip((uintptr_t)inner, r, &n) == 0 && n == 1 &&
+        r[0].left == 300 && r[0].right == 320 && r[0].top == 10 &&
+        r[0].bottom == 40);
+  w32_user_display_poll((uintptr_t)inner, &p);
+  CHECK(!p.active);
+  /* Worker reads complete while the GUI side holds the USER lock. */
+  worker.hwnd = (uintptr_t)g;
+  worker.done = 0;
+  u32_lock();
+  pthread_t thread;
+  CHECK(!pthread_create(&thread, 0, poll_worker, 0));
+  for (UINT i = 0; i < 5000 && !__atomic_load_n(&worker.done, __ATOMIC_ACQUIRE); i++)
+    usleep(1000);
+  CHECK(__atomic_load_n(&worker.done, __ATOMIC_ACQUIRE));
+  u32_unlock(0);
+  CHECK(!pthread_join(thread, 0));
+  CHECK(worker.lease.active && worker.lease.token == lease_token &&
+        worker.clip == 0 && worker.count == 4);
+  /* Release: one LEASE(0) transaction, cached state cleared at once. */
+  outgoing_count = 0;
+  w32_user_display_release((uintptr_t)g);
+  w32_user_display_poll((uintptr_t)g, &p);
+  CHECK(!p.active && sent_count(DESK_V3_LEASE) == 1 &&
+        !desk_get32(outgoing[0].data + 16));
+  u32_pump();
+  CHECK(DestroyWindow(cover) && DestroyWindow(g));
+  CHECK(w32_user_display_clip((uintptr_t)g, r, &n) == SEAM_NOCLIP);
+  printf("TRACE display seam: lease poll same-mode regrant deactivation clip "
+         "lists child clip lock-free worker release\n");
+}
+
+BOOL W32API UserDllMain(void *, DWORD, void *);
+static UINT hook_hits;
+static LRESULT W32API hook_count(int code, WPARAM wp, LPARAM lp) {
+  hook_hits++;
+  return CallNextHookEx(0, code, wp, lp);
+}
+static void test_lifecycle(void) {
+  MSG msg;
+  /* Forced termination: the victim's windows, timers, hooks and clipboard
+   * lock are released without running its procedures; a dependent owned by
+   * the terminating thread is destroyed there with WM_DESTROY. */
+  ui_kernel_switch(1);
+  DWORD victim = u32_tid();
+  HWND v = CreateWindowExA(0, "USER fixture", "victim",
+                           WS_VISIBLE | WS_CAPTION, 10, 10, 50, 50, 0, 0, 0, 0);
+  CHECK(v);
+  ValidateRect(v, 0);
+  CHECK(SetTimer(v, 9, 10, 0) == 9);
+  CHECK(SetWindowsHookExA(3, hook_count, 0, victim));
+  CHECK(OpenClipboard(v));
+  ui_kernel_switch(0);
+  HWND dependent = CreateWindowExA(0, "USER fixture", "dependent",
+                                   WS_VISIBLE | WS_CAPTION, 20, 20, 50, 50, v,
+                                   0, 0, 0);
+  CHECK(dependent && GetWindow(dependent, 4) == v);
+  ValidateRect(dependent, 0);
+  CHECK(!OpenClipboard(dependent));
+  traces = 0;
+  w32_user_thread_cleanup(victim);
+  CHECK(!IsWindow(v) && !IsWindow(dependent));
+  CHECK(trace_index(v, WM_DESTROY) == 9999 &&
+        trace_index(v, WM_NCDESTROY) == 9999 &&
+        trace_index(dependent, WM_DESTROY) <
+            trace_index(dependent, WM_NCDESTROY));
+  CHECK(OpenClipboard(0) && CloseClipboard());
+  ui_kernel_switch(1);
+  ui_kernel_pause(20);
+  CHECK(!PeekMessageA(&msg, 0, WM_TIMER, WM_TIMER, 1));
+  HWND w1 = CreateWindowExA(0, "USER fixture", "exiting",
+                            WS_VISIBLE | WS_CAPTION, 30, 30, 50, 50, 0, 0, 0,
+                            0);
+  CHECK(w1);
+  ValidateRect(w1, 0);
+  hook_hits = 0;
+  CHECK(PostMessageA(w1, WM_USER + 60, 0, 0) &&
+        PeekMessageA(&msg, w1, WM_USER + 60, WM_USER + 60, 1) && !hook_hits);
+  /* Ordinary ExitThread: DLL_THREAD_DETACH destroys the exiting thread's
+   * windows on that thread, procedures included. */
+  traces = 0;
+  CHECK(UserDllMain(0, 3, 0));
+  CHECK(!IsWindow(w1) &&
+        trace_index(w1, WM_DESTROY) < trace_index(w1, WM_NCDESTROY) &&
+        trace_index(w1, WM_NCDESTROY) < 9999);
+  /* A thread without USER state (here: already detached) costs no service
+   * transaction at DLL_THREAD_DETACH. */
+  ui_kernel_switch(2);
+  CHECK(UserDllMain(0, 3, 0));
+  UINT before = exchanges;
+  CHECK(UserDllMain(0, 3, 0) && exchanges == before);
+  ui_kernel_switch(0);
+  /* Service identity teardown: the per-thread request removes a record the
+   * process left behind; malformed requests are refused. */
+  struct w32r_reply r;
+  CHECK(u32_directory(W32R_WINDOW_ALLOC, 0, victim, 1, 0, "orphan", 0, 0, &r,
+                      0, 0));
+  HWND orphan = (HWND)(uintptr_t)r.key;
+  struct w32r_window value;
+  char title[1024];
+  CHECK(u32_directory_window(orphan, &value, title) && value.tid == victim);
+  CHECK(!u32_directory(W32R_USER_CLEANUP, (HWND)1, victim, 0, 0, "", 0, 0, &r,
+                       0, 0) &&
+        GetLastError() == 87);
+  CHECK(u32_directory(W32R_USER_CLEANUP, 0, victim, 0, 0, "", 0, 0, &r, 0, 0));
+  CHECK(!u32_directory_window(orphan, &value, title));
+  enum_count = 0;
+  CHECK(EnumWindows(enumerate, 0) && enum_count == 0);
+  printf("TRACE lifecycle: forced thread cleanup without callbacks, live "
+         "dependent WM_DESTROY, timers hooks clipboard released, thread detach "
+         "destruction, service identity teardown\n");
+}
+static void test_spi(void) {
+  int mouse[3] = {0}, value = 0;
+  CHECK(SystemParametersInfoA(3, 0, mouse, 0) && mouse[0] == 6 &&
+        mouse[1] == 10 && mouse[2] == 1);
+  int faster[3] = {4, 12, 2};
+  CHECK(SystemParametersInfoA(4, 0, faster, 0) &&
+        SystemParametersInfoA(3, 0, mouse, 0) && mouse[1] == 12);
+  BOOL beep = 0;
+  CHECK(SystemParametersInfoA(1, 0, &beep, 0) && beep);
+  CHECK(SystemParametersInfoA(2, 0, 0, 0) &&
+        SystemParametersInfoA(1, 0, &beep, 0) && !beep);
+  CHECK(SystemParametersInfoA(13, 0, &value, 0) && value == 75);
+  CHECK(SystemParametersInfoA(13, 90, 0, 0) &&
+        SystemParametersInfoA(13, 0, &value, 0) && value == 90 &&
+        GetSystemMetrics(38) == 90);
+  CHECK(SystemParametersInfoA(29, 8, 0, 0) && GetSystemMetrics(36) == 8);
+  CHECK(SystemParametersInfoA(33, 1, 0, 0) && GetSystemMetrics(23) == 1);
+  CHECK(SystemParametersInfoA(33, 0, 0, 0) && !GetSystemMetrics(23));
+  RECT work = {0, 0, 0, 0}, set = {0, 0, 640, 400};
+  CHECK(SystemParametersInfoA(48, 0, &work, 0) && work.top == 32);
+  CHECK(SystemParametersInfoA(47, 0, &set, 0) &&
+        SystemParametersInfoA(48, 0, &work, 0) && work.bottom == 400);
+  set.right = 5000;
+  CHECK(!SystemParametersInfoA(47, 0, &set, 0) && GetLastError() == 87);
+  CHECK(SystemParametersInfoA(113, 0, (void *)(uintptr_t)15, 0) &&
+        SystemParametersInfoA(112, 0, &value, 0) && value == 15);
+  CHECK(!SystemParametersInfoA(113, 0, (void *)(uintptr_t)21, 0));
+  BOOL old = 1;
+  CHECK(SystemParametersInfoA(97, 1, &old, 0) && !old);
+  CHECK(SystemParametersInfoA(97, 0, &old, 0) && old);
+  uint8_t ncm[340] = {0};
+  w32_put32(ncm, 340);
+  CHECK(SystemParametersInfoA(41, 340, ncm, 0));
+  w32_put32(ncm + 20, 25);
+  CHECK(SystemParametersInfoA(42, 340, ncm, 0));
+  w32_fill(ncm + 4, 0, 336);
+  CHECK(SystemParametersInfoA(41, 340, ncm, 0) && w32_u32(ncm + 20) == 25);
+  UINT window = traces;
+  CHECK(SystemParametersInfoA(105, 5, 0, 2));
+  CHECK(SystemParametersInfoA(104, 0, &value, 0) && value == 5);
+  MSG msg;
+  for (UINT i = 0; i < 16 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  BOOL notified = 0;
+  for (UINT i = window; i < traces; i++)
+    notified |= trace[i].h == windows[0] && trace[i].m == 0x1a &&
+                trace[i].wp == 105;
+  CHECK(notified);
+  CHECK(!SystemParametersInfoA(9999, 0, 0, 0) && GetLastError() == 120);
+  printf("TRACE SystemParametersInfo setters: uiParam pvParam-value and "
+         "structure conventions, metrics, SPIF_SENDCHANGE\n");
+}
+
+#define HOST_WEAK __attribute__((weak))
+HOST_WEAK DWORD host_canvas(int, int, DWORD, DWORD *, uint32_t **);
+HOST_WEAK void host_canvas_free(DWORD, DWORD);
+HOST_WEAK DWORD host_mono(int, int, const uint8_t *);
+HOST_WEAK DWORD host_color(int, int, const uint32_t *);
+HOST_WEAK void host_gdi_delete(DWORD);
+HOST_WEAK int host_bitmap(DWORD, int *, int *, int *, uint32_t *, int);
+HOST_WEAK DWORD host_palette(DWORD, unsigned *);
+HOST_WEAK BOOL host_animate(DWORD);
+HOST_WEAK void host_gdi_exit(void);
+struct seam_hooks {
+  void (*deactivate)(void);
+  void (*regrant)(void);
+  void (*hold_user)(int);
+  DWORD (*frames)(DWORD *, DWORD *, DWORD *);
+  DWORD (*lease_token)(void);
+  uintptr_t (*cover)(void);
+  uint32_t (*pixel)(uintptr_t, int, int);
+};
+HOST_WEAK void host_ddraw_seam(uintptr_t, const struct seam_hooks *);
+static HWND dd_window, dd_cover;
+static void seam_deactivate(void) {
+  UINT off[2] = {0, 0};
+  struct u32_window *w = u32_window(dd_window);
+  event(w, DESK_V3_ACTIVATE, off, 2);
+  lease_event(w->wire, w->generation, 3, 320, 200, 8);
+  u32_pump();
+  discard();
+}
+static void seam_regrant(void) {
+  UINT on[2] = {1, 1};
+  struct u32_window *w = u32_window(dd_window);
+  traces = 0;
+  event(w, DESK_V3_ACTIVATE, on, 2);
+  lease_event(w->wire, w->generation, 1, 320, 200, 8);
+  u32_pump();
+  discard();
+  /* Activation offers the foreground palette before the focus arrives. */
+  CHECK(trace_index(dd_window, WM_QUERYNEWPALETTE) <
+        trace_index(dd_window, WM_SETFOCUS));
+}
+static void seam_hold(int on) {
+  if (on)
+    u32_lock();
+  else
+    u32_unlock(0);
+}
+static DWORD seam_frames(DWORD *token, DWORD *generation, DWORD *refused) {
+  *token = frame_token;
+  *generation = frame_generation;
+  *refused = __atomic_load_n(&frames_refused, __ATOMIC_SEQ_CST);
+  return __atomic_load_n(&frames_seen, __ATOMIC_SEQ_CST);
+}
+static DWORD seam_token(void) { return lease_token; }
+static uintptr_t seam_cover(void) {
+  dd_cover = CreateWindowExA(0, "USER fixture", "cover", WS_VISIBLE | WS_POPUP,
+                             100, 50, 50, 50, 0, 0, 0, 0);
+  ValidateRect(dd_cover, 0);
+  return (uintptr_t)dd_cover;
+}
+static uint32_t seam_pixel(uintptr_t h, int x, int y) {
+  struct u32_window *w = u32_window((HWND)h);
+  return w32_u32((uint8_t *)w->surface.pixels + y * w->surface.pitch + x * 4) &
+         0xffffff;
+}
+/* 3x2 test image, top row first: red green blue / white black yellow. */
+static const uint32_t rgb6[6] = {0xff0000, 0x00ff00, 0x0000ff,
+                                 0xffffff, 0x000000, 0xffff00};
+static void dib_header(uint8_t *b, int height, UINT bpp, UINT compression,
+                       UINT colors) {
+  memset(b, 0, 40);
+  w32_put32(b, 40);
+  w32_put32(b + 4, 3);
+  w32_put32(b + 8, (DWORD)height);
+  w32_put16(b + 12, 1);
+  w32_put16(b + 14, bpp);
+  w32_put32(b + 16, compression);
+  w32_put32(b + 32, colors);
+}
+static void clipboard_bitmap(const uint8_t *dib, DWORD n,
+                             const uint32_t *expected) {
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  HANDLE block = GlobalAlloc(2, n);
+  memcpy(GlobalLock(block), dib, n);
+  CHECK(SetClipboardData(CF_DIB, block) == block);
+  HANDLE bitmap = GetClipboardData(CF_BITMAP);
+  if (!expected) {
+    CHECK(!bitmap && GetLastError() == 120);
+  } else {
+    int w = 0, h = 0, bpp = 0;
+    uint32_t pixels[6];
+    CHECK(bitmap && host_bitmap(U32_PTR(bitmap), &w, &h, &bpp, pixels, 6));
+    CHECK(w == 3 && h == 2 && bpp == 32);
+    for (UINT i = 0; i < 6; i++)
+      if ((pixels[i] & 0xffffff) != expected[i]) {
+        fprintf(stderr, "CF_BITMAP bpp=%u height=%d pixel %u: %06x != %06x\n",
+                w32_u16(dib + 14), (int)w32_u32(dib + 8), i,
+                pixels[i] & 0xffffff, expected[i]);
+        CHECK(0);
+      }
+  }
+  CHECK(CloseClipboard());
+}
+static void test_cf_bitmap(void) {
+  uint8_t b[256];
+  /* 32 bpp top-down BI_RGB. */
+  dib_header(b, -2, 32, 0, 0);
+  memcpy(b + 40, rgb6, 24);
+  clipboard_bitmap(b, 64, rgb6);
+  /* 24 bpp bottom-up, 12-byte padded rows (B, G, R). */
+  dib_header(b, 2, 24, 0, 0);
+  for (UINT row = 0; row < 2; row++)
+    for (UINT x = 0; x < 3; x++) {
+      uint32_t c = rgb6[(1 - row) * 3 + x];
+      uint8_t *p = b + 40 + row * 12 + x * 3;
+      p[0] = c & 255, p[1] = c >> 8 & 255, p[2] = c >> 16;
+    }
+  clipboard_bitmap(b, 64, rgb6);
+  /* 16 bpp BI_RGB (5-5-5) bottom-up. */
+  const uint16_t x555[6] = {0x7c00, 0x03e0, 0x001f, 0x7fff, 0, 0x7fe0};
+  dib_header(b, 2, 16, 0, 0);
+  for (UINT row = 0; row < 2; row++)
+    for (UINT x = 0; x < 3; x++)
+      w32_put16(b + 40 + row * 8 + x * 2, x555[(1 - row) * 3 + x]);
+  clipboard_bitmap(b, 56, rgb6);
+  /* 16 bpp BI_BITFIELDS (5-6-5) top-down, masks after the 40-byte header. */
+  const uint16_t x565[6] = {0xf800, 0x07e0, 0x001f, 0xffff, 0, 0xffe0};
+  dib_header(b, -2, 16, 3, 0);
+  w32_put32(b + 40, 0xf800);
+  w32_put32(b + 44, 0x07e0);
+  w32_put32(b + 48, 0x001f);
+  for (UINT i = 0; i < 6; i++)
+    w32_put16(b + 52 + (i / 3) * 8 + (i % 3) * 2, x565[i]);
+  clipboard_bitmap(b, 68, rgb6);
+  /* 8 bpp bottom-up with a six-entry colour table (B, G, R, 0). */
+  dib_header(b, 2, 8, 0, 6);
+  for (UINT i = 0; i < 6; i++)
+    w32_put32(b + 40 + i * 4, rgb6[i]);
+  for (UINT row = 0; row < 2; row++)
+    for (UINT x = 0; x < 3; x++)
+      b[64 + row * 4 + x] = (uint8_t)((1 - row) * 3 + x);
+  clipboard_bitmap(b, 72, rgb6);
+  /* 4 bpp top-down, packed high nibble first. */
+  dib_header(b, -2, 4, 0, 6);
+  for (UINT i = 0; i < 6; i++)
+    w32_put32(b + 40 + i * 4, rgb6[i]);
+  memset(b + 64, 0, 8);
+  b[64] = 0x01, b[65] = 0x20, b[68] = 0x34, b[69] = 0x50;
+  clipboard_bitmap(b, 72, rgb6);
+  /* 1 bpp bottom-up with a black/white table. */
+  const uint32_t mono[6] = {0xffffff, 0, 0xffffff, 0, 0xffffff, 0};
+  dib_header(b, 2, 1, 0, 2);
+  w32_put32(b + 40, 0);
+  w32_put32(b + 44, 0xffffff);
+  memset(b + 48, 0, 8);
+  b[48] = 0x40; /* bottom row: 0 1 0 */
+  b[52] = 0xa0; /* top row: 1 0 1 */
+  clipboard_bitmap(b, 56, mono);
+  /* Truncated pixel data is refused, never read past the block. */
+  dib_header(b, -2, 32, 0, 0);
+  clipboard_bitmap(b, 60, 0);
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard() && CloseClipboard());
+  printf("TRACE CF_BITMAP from CF_DIB through gdi32: 32 24 16(555) "
+         "16(565 bitfields) 8 4 1 bpp, both orientations, truncation\n");
+}
+static void icon_case(HICON icon, HBRUSH brush, UINT flags, DWORD background,
+                      const uint32_t expected[4]) {
+  DWORD dc = 0;
+  uint32_t *bits = 0;
+  DWORD canvas = host_canvas(32, 32, background, &dc, &bits);
+  CHECK(canvas);
+  CHECK(DrawIconEx((HDC)(uintptr_t)dc, 0, 0, icon, 0, 0, 0, brush, flags));
+  /* Quadrants: top-left, top-right (mask 1), bottom-left, bottom-right. */
+  const UINT at[4] = {2 * 32 + 2, 2 * 32 + 20, 20 * 32 + 2, 20 * 32 + 20};
+  for (UINT i = 0; i < 4; i++)
+    CHECK((bits[at[i]] & 0xffffff) == expected[i]);
+  host_canvas_free(dc, canvas);
+}
+static void test_draw_icon(void) {
+  uint32_t color[32 * 32];
+  uint8_t mask[32 * 4];
+  for (UINT i = 0; i < 32 * 32; i++)
+    color[i] = i % 32 < 16 ? 0xff0000 : 0x00ff00;
+  memset(mask, 0xff, 16 * 4);
+  memset(mask + 16 * 4, 0, 16 * 4);
+  DWORD cb = host_color(32, 32, color), mb = host_mono(32, 32, mask);
+  CHECK(cb && mb);
+  ICONINFO info = {1, 0, 0, (HANDLE)(uintptr_t)mb, (HANDLE)(uintptr_t)cb};
+  HICON icon = CreateIconIndirect(&info);
+  CHECK(icon);
+  /* DI_NORMAL: destination AND mask, then XOR image (Microsoft DrawIconEx). */
+  icon_case(icon, 0, 3, 0x0000ff,
+            (const uint32_t[4]){0xff00ff, 0x00ffff, 0xff0000, 0x00ff00});
+  /* DI_IMAGE alone copies the image; DI_MASK alone copies the mask
+   * (1 = background colour white, 0 = text colour black). */
+  icon_case(icon, 0, 2, 0x0000ff,
+            (const uint32_t[4]){0xff0000, 0x00ff00, 0xff0000, 0x00ff00});
+  icon_case(icon, 0, 1, 0x0000ff,
+            (const uint32_t[4]){0xffffff, 0xffffff, 0, 0});
+  /* hbrFlickerFreeDraw: background brush first (COLOR_WINDOW, white). */
+  icon_case(icon, (HBRUSH)(uintptr_t)6, 3 | 8, 0x0000ff,
+            (const uint32_t[4]){0x00ffff, 0xff00ff, 0xff0000, 0x00ff00});
+  CHECK(!DrawIconEx(0, 0, 0, icon, 0, 0, 0, 0, 0) && GetLastError() == 87);
+  CHECK(!DrawIconEx(0, 0, 0, icon, 0, 0, 0, 0, 0x13) && GetLastError() == 87);
+  CHECK(!DrawIconEx(0, 0, 0, icon, -1, 0, 0, 0, 3) && GetLastError() == 87);
+  CHECK(DestroyIcon(icon));
+  host_gdi_delete(cb);
+  host_gdi_delete(mb);
+  printf("TRACE DrawIconEx DI_NORMAL DI_IMAGE DI_MASK flicker-free brush, "
+         "flag validation\n");
+}
+static BOOL take(UINT message, HWND source) {
+  MSG m;
+  BOOL found = 0;
+  while (PeekMessageA(&m, 0, message, message, 1))
+    found |= m.wParam == (WPARAM)source;
+  return found;
+}
+static void test_palette(void) {
+  HDC dc = GetDC(windows[0]);
+  CHECK(dc);
+  unsigned changed = 0;
+  DWORD palette = host_palette(U32_PTR(dc), &changed);
+  CHECK(palette);
+  /* Delivered at the next USER entry, never from inside gdi32's lock. */
+  CHECK(take(WM_PALETTEISCHANGING, windows[0]) &&
+        take(WM_PALETTECHANGED, windows[0]));
+  ui_kernel_switch(1);
+  CHECK(take(WM_PALETTECHANGED, windows[0]));
+  ui_kernel_switch(0);
+  CHECK(host_animate(palette));
+  MSG m;
+  CHECK(PeekMessageA(&m, 0, WM_PALETTECHANGED, WM_PALETTECHANGED, 1));
+  CHECK(ReleaseDC(windows[0], dc));
+  host_gdi_delete(palette);
+  discard();
+  ui_kernel_switch(1);
+  discard();
+  ui_kernel_switch(0);
+  printf("TRACE palette callbacks: WM_PALETTEISCHANGING WM_PALETTECHANGED to "
+         "every top-level window, AnimatePalette\n");
+}
+static void test_production_gdi(void) {
+  CHECK(host_gdi_proc && host_ddraw_seam);
+  host_modules = 1;
+  real_gdi = 1;
+  u32_gdi = 0; /* resolve the production gdi32 through GetProcAddress */
+  u32_gdi_ensure();
+  CHECK(u32_gdi && u32_gdi != &test_gdi);
+  /* The window procedure paints through the production engine. */
+  struct u32_window *w = u32_window(windows[0]);
+  CHECK(InvalidateRect(windows[0], 0, 1) && UpdateWindow(windows[0]));
+  CHECK(w32_u32((uint8_t *)w->surface.pixels + 5 * w->surface.pitch + 5 * 4) ==
+        0xc0c0c0);
+  test_cf_bitmap();
+  test_draw_icon();
+  test_palette();
+  dd_window = CreateWindowExA(0, "USER fixture", "dd", WS_VISIBLE | WS_POPUP,
+                              0, 0, 320, 200, 0, 0, 0, 0);
+  CHECK(dd_window);
+  ValidateRect(dd_window, 0);
+  const struct seam_hooks hooks = {seam_deactivate, seam_regrant,
+                                   seam_hold,       seam_frames,
+                                   seam_token,      seam_cover,
+                                   seam_pixel};
+  host_ddraw_seam((uintptr_t)dd_window, &hooks);
+  CHECK(DestroyWindow(dd_cover) && DestroyWindow(dd_window));
+  discard();
+  u32_set_gdi(&test_gdi);
+  real_gdi = 0;
+  host_modules = 0;
+  host_gdi_exit();
+}
 static void run(void) {
   puts("STEP init");
   ui_kernel_init();
@@ -716,6 +1469,10 @@ static void run(void) {
   puts("STEP clipboard");
   test_clipboard();
   test_extras();
+  test_spi();
+  test_order();
+  test_display();
+  test_production_gdi();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));
   UINT child_destroy = 999, parent_destroy = 999;
@@ -734,6 +1491,7 @@ static void run(void) {
     CHECK(DestroyWindow(windows[i]));
   }
   ui_kernel_switch(0);
+  test_lifecycle();
   CHECK(UnregisterClassA("USER fixture", 0));
   wr_destroy(&server);
   for (unsigned i = 0; i < 2; i++) {

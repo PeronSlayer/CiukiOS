@@ -7,6 +7,7 @@ extern BOOL W32API GlobalUnlock(HANDLE);
 extern DWORD W32API GlobalSize(HANDLE);
 static HANDLE owned[5], returned[5];
 static BOOL opened;
+static DWORD open_tid;
 void u32_clipboard_owned_clear(void) {
   for (UINT i = 0; i < 5; i++)
     if (owned[i]) {
@@ -36,6 +37,7 @@ BOOL W32API OpenClipboard(HWND h) {
   if (!call(W32R_CLIP_OPEN, h, 0, 0, 0, 0, &r, 0, 0))
     return 0;
   opened = 1;
+  open_tid = u32_tid();
   return 1;
 }
 BOOL W32API CloseClipboard(void) {
@@ -44,6 +46,7 @@ BOOL W32API CloseClipboard(void) {
   if (!call(W32R_CLIP_CLOSE, 0, 0, 0, 0, 0, &r, 0, 0))
     return 0;
   opened = 0;
+  open_tid = 0;
   for (UINT i = 0; i < 5; i++)
     if (returned[i]) {
       if (i == 4) {
@@ -122,6 +125,7 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
   struct u32_surface bitmap = {0};
   uint8_t *dib = 0;
   if (f == CF_BITMAP) {
+    u32_gdi_ensure();
     if (!u32_gdi || !u32_gdi->bitmap || !u32_gdi->bitmap(block, &bitmap, 0)) {
       u32_fail(120);
       return 0;
@@ -203,17 +207,7 @@ HANDLE W32API GetClipboardData(UINT f) {
   DWORD bytes = r.data_bytes;
   HANDLE h = 0;
   if (f == CF_BITMAP) {
-    if (bytes >= 40 && w32_u32(data) == 40 && w32_u16(data + 14) == 32 &&
-        u32_gdi && u32_gdi->bitmap_create) {
-      LONG height = (LONG)w32_u32(data + 8);
-      UINT width = w32_u32(data + 4);
-      if (height >= -2048 && height < 0 && width && width <= 2048 &&
-          (uint32_t)(-height) <= 2048 &&
-          40 + (uint64_t)width * (-height) * 4 <= bytes) {
-        struct u32_surface s = {data + 40, width, -height, width * 4, 1, -1};
-        h = u32_gdi->bitmap_create(&s);
-      }
-    }
+    h = u32_dib_bitmap(data, bytes);
     u32_free(data);
     if (!h)
       u32_fail(120);
@@ -279,4 +273,18 @@ HANDLE W32API GetClipboardData(UINT f) {
     GlobalFree(returned[i]);
   returned[i] = h;
   return h;
+}
+void u32_clipboard_cleanup(DWORD tid) {
+  if (opened && (!tid || open_tid == tid)) {
+    struct w32r_reply r;
+    u32_directory(W32R_CLIP_CLOSE, 0, open_tid, 0, 0, "", 0, 0, &r, 0, 0);
+    opened = 0; open_tid = 0;
+    for (UINT i = 0; i < 5; i++) if (returned[i]) {
+      if (i == 4) {
+        if (u32_gdi && u32_gdi->bitmap) u32_gdi->bitmap(returned[i], 0, 1);
+      } else GlobalFree(returned[i]);
+      returned[i] = 0;
+    }
+  }
+  if (!tid) u32_clipboard_owned_clear();
 }

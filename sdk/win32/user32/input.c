@@ -338,6 +338,10 @@ void u32_activate(struct u32_window *w, BOOL focused, BOOL active) {
         SendNotifyMessageA(u32_windows[i].handle, WM_ACTIVATEAPP, active,
                            w->tid);
   if (focused) {
+    /* WM_QUERYNEWPALETTE: the window is about to receive the keyboard focus
+     * and may realise its logical palette in the foreground. */
+    if (old != h)
+      SendMessageA(h, WM_QUERYNEWPALETTE, 0, 0);
     if (!t->focus || u32_root(u32_window(t->focus)) != w)
       SetFocus(h);
   } else if (t->focus && u32_root(u32_window(t->focus)) == w) {

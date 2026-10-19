@@ -9,6 +9,7 @@
 #define U32_THREADS 64
 #define U32_TIMERS 128
 #define U32_RECTS 64
+#define U32_DESTROY 0x7fffffffu /* private, same-process sent request */
 #define U32_PTR(x) ((DWORD)(uintptr_t)(x))
 struct u32_region {
   RECT r[U32_RECTS];
@@ -44,6 +45,10 @@ struct u32_window {
   struct u32_prop *props;
   BOOL destroying, creating, redraw, erase, internal_paint;
   UINT dcs;
+  struct dd_lease lease;
+  DWORD lease_w, lease_h, lease_bpp;
+  BOOL lease_wanted;
+  BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
 };
 struct u32_send_frame {
   struct u32_send_frame *prev;
@@ -134,6 +139,22 @@ BOOL u32_connect(void);
 BOOL u32_wire(struct u32_window *, UINT, const void *, UINT, int);
 BOOL u32_create_wire(struct u32_window *);
 BOOL u32_place(struct u32_window *);
+BOOL u32_order_wire(struct u32_window *, HWND, HWND, UINT);
+void u32_restack(struct u32_window *, HWND);
+/* SetWindowPos hWndInsertAfter sentinels never name a window. */
+#define U32_ORDER_SENTINEL(h) ((h) == HWND_TOP || (h) == HWND_BOTTOM || (h) == HWND_TOPMOST || (h) == HWND_NOTOPMOST)
+enum { U32_TEARDOWN, U32_NORMAL, U32_VICTIM };
+extern BOOL u32_exiting;
+BOOL u32_destroy(struct u32_window *, UINT);
+HANDLE u32_dib_bitmap(const void *, DWORD);
+void u32_palette_deliver(void);
+HWND u32_dc_window(HDC);
+void u32_hooks_cleanup(DWORD);
+void u32_desktop_cleanup(DWORD);
+void u32_clipboard_cleanup(DWORD);
+void u32_icons_cleanup(void);
+void u32_display_event(struct u32_window *, const struct desk_packet *);
+void u32_display_cache(void);
 BOOL u32_resize(struct u32_window *);
 void u32_clipboard_owned_clear(void);
 void u32_event(const struct desk_packet *);

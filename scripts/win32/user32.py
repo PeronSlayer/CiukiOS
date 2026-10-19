@@ -111,7 +111,7 @@ def build(out, base, flags):
     rc=objdir/'version.rc';rc.write_text((out/'generated/user32.rc').read_text().replace('CiukiOS placeholder user32.dll','CiukiOS USER core'))
     res=objdir/'version.res';subprocess.run(['llvm-rc','/fo',str(res),str(rc)],check=True)
     image=out/'user32.dll'
-    subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no','/timestamp:0',
+    subprocess.run(['lld-link','/machine:x86','/dll','/entry:UserDllMain@12','/nodefaultlib','/safeseh:no','/timestamp:0',
         '/incremental:no','/fixed','/base:'+hex(base),'/def:'+str(definition),'/out:'+str(image),
         *objects,str(res),str(lib),str(out/'ntdll.lib')],check=True)
     coverage=[{'name':name,'status':'implemented' if name in exports else 'W21 stub'} for name in sorted(names)]

@@ -1,6 +1,54 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 static UINT zserial;
+void u32_restack(struct u32_window *w, HWND after) {
+  struct u32_window *a = U32_ORDER_SENTINEL(after) ? 0 : u32_window(after),
+                    *order[U32_WINDOWS];
+  UINT n = 0;
+  if (after == HWND_TOPMOST) w->exstyle |= WS_EX_TOPMOST;
+  else if (after == HWND_BOTTOM || after == HWND_NOTOPMOST ||
+           (a && !(a->exstyle & WS_EX_TOPMOST))) {
+    /* SetWindowPos: a window made non-topmost takes its owners and its owned
+     * windows with it; a topmost owner cannot own a non-topmost window. */
+    w->exstyle &= ~WS_EX_TOPMOST;
+    for (struct u32_window *o = u32_window(w->owner); o; o = u32_window(o->owner))
+      o->exstyle &= ~WS_EX_TOPMOST;
+    for (UINT i = 0; i < U32_WINDOWS; i++) {
+      struct u32_window *q = &u32_windows[i];
+      UINT depth = 0;
+      for (struct u32_window *o = q->handle ? u32_window(q->owner) : 0;
+           o && depth < U32_WINDOWS; o = u32_window(o->owner), depth++)
+        if (o == w) { q->exstyle &= ~WS_EX_TOPMOST; break; }
+    }
+  } else if (a) w->exstyle |= a->exstyle & WS_EX_TOPMOST;
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *q = &u32_windows[i];
+    if (!q->handle || q == w || q->parent != w->parent) continue;
+    UINT at = n++;
+    while (at && order[at-1]->z > q->z) { order[at] = order[at-1]; at--; }
+    order[at] = q;
+  }
+  UINT at = after == HWND_BOTTOM ? 0 : n;
+  if (a) for (at = 0; at < n && order[at] != a; at++);
+  for (UINT i = n; i > at; i--) order[i] = order[i-1];
+  order[at] = w; n++;
+  for (UINT pass = 0; pass < n; pass++) for (UINT i = 0; i < n; i++) {
+    struct u32_window *o = u32_window(order[i]->owner);
+    if (o && (o->exstyle & WS_EX_TOPMOST)) order[i]->exstyle |= WS_EX_TOPMOST;
+  }
+  for (UINT pass = 0; pass < n; pass++) for (UINT i = 0; i + 1 < n; i++)
+    if ((order[i]->exstyle & WS_EX_TOPMOST) && !(order[i+1]->exstyle & WS_EX_TOPMOST)) {
+      struct u32_window *q = order[i]; order[i] = order[i+1]; order[i+1] = q;
+    }
+  for (UINT pass = 0; pass < n; pass++) for (UINT i = 0; i < n; i++)
+    for (UINT j = i+1; j < n; j++) if (order[i]->owner == order[j]->handle) {
+      struct u32_window *q = order[i];
+      for (UINT k = i; k < j; k++) order[k] = order[k+1];
+      order[j] = q; break;
+    }
+  for (UINT i = 0; i < n; i++) order[i]->z = ++zserial;
+  u32_display_cache();
+}
 static BOOL atom_name(const char *name) { return (uintptr_t)name <= 65535; }
 static int equal(const char *a, const char *b) {
   while (*a && *b) {
@@ -281,29 +329,56 @@ BOOL W32API DestroyWindow(HWND h) {
     return u32_fail(1400);
   if (w->tid != u32_tid())
     return u32_fail(5);
+  return u32_destroy(w, U32_NORMAL);
+}
+/* MODE: U32_TEARDOWN releases without any callback or send (process exit);
+ * U32_NORMAL is DestroyWindow on the owning thread; U32_VICTIM releases a
+ * terminated thread's window without running its procedures, while live
+ * dependents still receive WM_DESTROY on their own threads. */
+BOOL u32_destroy(struct u32_window *w, UINT mode) {
+  HWND h = w->handle;
+  BOOL callbacks = mode == U32_NORMAL;
   if (w->destroying)
     return 1;
   w->destroying = 1;
-  /* Directive f5-10A explicitly selects children-first destruction. */
+  /* Directive f5-10A explicitly selects children-first destruction; a
+   * dependent owned by another thread of this process is destroyed on that
+   * thread through a private sent request (DestroyWindow is thread-bound). */
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *q = &u32_windows[i];
-    if (q->handle && (q->parent == h || q->owner == h))
-      DestroyWindow(q->handle);
+    if (!q->handle || (q->parent != h && q->owner != h))
+      continue;
+    if (mode == U32_TEARDOWN || (mode == U32_VICTIM && q->tid == w->tid))
+      u32_destroy(q, mode);
+    else if (q->tid == u32_tid())
+      u32_destroy(q, U32_NORMAL);
+    else {
+      q->destroy_request = 1;
+      BOOL sent = SendMessageA(q->handle, U32_DESTROY, 0, 0) != 0;
+      if (q->handle && !sent && mode == U32_NORMAL) {
+        q->destroy_request = 0;
+        w->destroying = 0;
+        return 0;
+      }
+      if (q->handle) /* unreachable owner thread: release, never leak */
+        u32_destroy(q, U32_TEARDOWN);
+    }
   }
-  if (u32_capture == h)
+  if (callbacks && u32_capture == h)
     ReleaseCapture();
-  if (GetFocus() == h)
+  else if (u32_capture == h) u32_capture = 0;
+  if (callbacks && GetFocus() == h)
     SetFocus(0);
-  if (GetActiveWindow() == h)
+  if (callbacks && GetActiveWindow() == h)
     SetActiveWindow(0);
   if (u32_foreground == h)
     u32_foreground = 0;
   u32_input_focus();
-  u32_invoke(h, WM_DESTROY, 0, 0);
+  if (callbacks) u32_invoke(h, WM_DESTROY, 0, 0);
   for (UINT i = 0; i < U32_TIMERS; i++)
     if (u32_timers[i].tid && u32_timers[i].hwnd == h)
       w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
-  u32_invoke(h, WM_NCDESTROY, 0, 0);
+  if (callbacks) u32_invoke(h, WM_NCDESTROY, 0, 0);
   u32_destroy_paint(w);
   while (w->props) {
     struct u32_prop *p = w->props;
@@ -311,7 +386,9 @@ BOOL W32API DestroyWindow(HWND h) {
     u32_free(p->name);
     u32_free(p);
   }
-  if (w->wire)
+  /* At process detach the desktop connection is closed next, which drops
+   * every window of the connection in one step. */
+  if (w->wire && !u32_exiting)
     u32_wire(w, DESK_CLOSE, 0, 0, -1);
   u32_backend.drop_surface(&w->surface);
   struct w32r_reply r;
@@ -319,6 +396,7 @@ BOOL W32API DestroyWindow(HWND h) {
   w->cls->refs--;
   u32_free(w->extra);
   w32_fill(w, 0, sizeof(*w));
+  u32_display_cache();
   u32_mark();
   return ok;
 }
@@ -427,6 +505,10 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
     return u32_fail(1400);
   if (!(flags & SWP_NOMOVE) && (x < -8192 || x > 8192 || y < -8192 || y > 8192))
     return u32_fail(87);
+  struct u32_window *sibling = U32_ORDER_SENTINEL(after) ? 0 : u32_window(after);
+  if (!(flags & SWP_NOZORDER) && !U32_ORDER_SENTINEL(after) &&
+      (!sibling || sibling->parent != w->parent || sibling == w))
+    return u32_fail(1400);
   RECT before = w->rect;
   DWORD old_style = w->style, old_exstyle = w->exstyle;
   UINT old_z = w->z;
@@ -449,11 +531,6 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
       w->exstyle |= WS_EX_TOPMOST;
     else if (after == HWND_NOTOPMOST)
       w->exstyle &= ~WS_EX_TOPMOST;
-    else if (after && after != HWND_BOTTOM && !u32_window(after)) {
-      w->rect = before;
-      return u32_fail(1400);
-    }
-    w->z = after == HWND_BOTTOM ? 0 : ++zserial;
   }
   if (flags & SWP_SHOWWINDOW)
     w->style |= WS_VISIBLE;
@@ -465,6 +542,14 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
     w->exstyle = old_exstyle;
     w->z = old_z;
     return 0;
+  }
+  if (!(flags & SWP_NOZORDER)) {
+    if (!w->parent && !u32_order_wire(w, after, 0, DESK_V3_ORDER_Z)) {
+      w->rect = before; w->style = old_style; w->exstyle = old_exstyle;
+      u32_place(w);
+      return 0;
+    }
+    u32_restack(w, after);
   }
   u32_sync_window(w);
   if (before.left != w->rect.left || before.top != w->rect.top)
@@ -611,8 +696,16 @@ LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
   case GWL_HWNDPARENT:
     if (w->parent)
       SetParent(h, (HWND)(intptr_t)value);
-    else
-      w->owner = (HWND)(intptr_t)value;
+    else {
+      HWND owner = (HWND)(uintptr_t)(DWORD)value;
+      struct u32_window *o = u32_window(owner);
+      if (owner && (!o || o->parent || o->pid != w->pid)) return u32_fail(87);
+      for (struct u32_window *q = o; q; q = u32_window(q->owner))
+        if (q == w) return u32_fail(87);
+      if (!u32_order_wire(w, 0, owner, DESK_V3_ORDER_OWNER)) return 0;
+      w->owner = owner;
+      u32_restack(w, HWND_TOP);
+    }
     break;
   case GWL_ID:
     w->id = value;

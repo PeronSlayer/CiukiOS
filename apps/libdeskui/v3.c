@@ -47,3 +47,11 @@ int du3_ui_progress(struct du3_connection *c, uint32_t id, uint32_t generation, 
     struct ciuki_message m; desk_v3_message(&m,DESK_PONG,4,0,id,generation); desk_put32(m.data+16,ping);
     return c->transport.send(c->channel,&m,DONTWAIT);
 }
+uint32_t du3_window_order(struct du3_connection *c, uint32_t id, uint32_t generation,
+    uint32_t flags, uint32_t after, uint32_t after_generation, uint32_t owner, uint32_t owner_generation)
+{
+    uint8_t b[20];
+    desk_put32(b,flags); desk_put32(b+4,after); desk_put32(b+8,after_generation);
+    desk_put32(b+12,owner); desk_put32(b+16,owner_generation);
+    return du3_request(c,DESK_V3_WINDOW_ORDER,id,generation,b,sizeof(b),-1);
+}
