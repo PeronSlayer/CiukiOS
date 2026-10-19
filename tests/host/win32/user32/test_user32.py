@@ -43,6 +43,7 @@ class User32Tests(unittest.TestCase):
         output=trace.read_text()
         self.assertEqual(result.returncode,0,output)
         self.assertIn('PASS USER production kernel queues and teardown',output)
+        self.assertIn('[win32] exit pid=',output)
         self.assertIn('PASS USER windows messages input paint clipboard',output)
         print(output,end='')
 

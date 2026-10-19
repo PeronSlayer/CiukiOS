@@ -108,6 +108,41 @@ static BOOL handle_call(HANDLE h, DWORD op) {
 }
 BOOL W32API SetEndOfFile(HANDLE h) { return handle_call(h, W32_F_TRUNCATE); }
 BOOL W32API FlushFileBuffers(HANDLE h) { return handle_call(h, W32_F_FLUSH); }
+static BOOL range_lock(HANDLE h, DWORD flags, DWORD low, DWORD high,
+                       DWORD bytes, DWORD upper, DWORD action) {
+  struct ciuki_w32_file_args a = {.action=action,.handle=K32_PTR(h),
+      .flags=flags,.low=low,.high=high,.bytes=bytes,.share=upper};
+  return k32_file(&a);
+}
+BOOL W32API LockFile(HANDLE h, DWORD low, DWORD high, DWORD n, DWORD upper) {
+  return range_lock(h,3,low,high,n,upper,W32_F_LOCK);
+}
+BOOL W32API UnlockFile(HANDLE h, DWORD low, DWORD high, DWORD n, DWORD upper) {
+  return range_lock(h,0,low,high,n,upper,W32_F_UNLOCK);
+}
+static BOOL range_ex(HANDLE h, DWORD flags, DWORD reserved, DWORD n,
+                     DWORD upper, OVERLAPPED *ov, DWORD action) {
+  if (reserved || !ov || (flags & ~3u)) { SetLastError(87); return 0; }
+  BOOL ok=range_lock(h,flags,ov->offset,ov->offset_high,n,upper,action);
+  /* Contract: file OVERLAPPED requests complete synchronously. */
+  if (ok) {
+    ov->internal=0; ov->internal_high=0;
+    if (ov->event) {
+      struct ciuki_w32_object_args a={.header={1,sizeof(a),W32_OBJECT,0},
+          .action=W32_OBJ_SET,.handle=K32_PTR(ov->event)};
+      w32_ciuki_call(&a,sizeof(a));
+    }
+  }
+  return ok;
+}
+BOOL W32API LockFileEx(HANDLE h, DWORD flags, DWORD reserved, DWORD n,
+                       DWORD upper, OVERLAPPED *ov) {
+  return range_ex(h,flags,reserved,n,upper,ov,W32_F_LOCK);
+}
+BOOL W32API UnlockFileEx(HANDLE h, DWORD reserved, DWORD n, DWORD upper,
+                         OVERLAPPED *ov) {
+  return range_ex(h,0,reserved,n,upper,ov,W32_F_UNLOCK);
+}
 static int stat_file(HANDLE h, const char *name,
                      struct ciuki_w32_file_info *f) {
   char path[778];

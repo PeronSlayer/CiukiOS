@@ -39,7 +39,7 @@ struct wr_server {
     struct wr_handle *handles;
     struct wr_hive hive[2];
     struct wr_io io;
-    uint32_t next_id, reserved_id;
+    uint32_t next_id, reserved_id, profile_owner;
     uint32_t compat_writer_pid; /* authenticated desktop owner; zero denies writes */
     uint64_t now;
     void *directory;

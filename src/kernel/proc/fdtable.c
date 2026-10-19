@@ -58,6 +58,13 @@ struct file_description *file_description_new(uint32_t flags)
     __atomic_add_fetch(&file_descriptions,1,__ATOMIC_RELAXED);
     return d;
 }
+static bool win32_protected_file(const struct file_description *d)
+{
+    if (!d->win32) return false;
+    for (const struct px_node *n=d->node;n && n->parent && n!=n->parent;n=n->parent)
+        if (n->drive==2 && n->parent->mountpoint && path_equal(n->entry.name,"System")) return true;
+    return false;
+}
 int file_description_close(struct file_description *d)
 {
     if (__atomic_sub_fetch(&d->references,1,__ATOMIC_ACQ_REL)) return 0;
@@ -70,8 +77,12 @@ int file_description_close(struct file_description *d)
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
+        vfs_description_unlock_locked(s->vfs,&d->lock_description);
+        if (d->delete_on_close && !win32_protected_file(d)) d->node->delete_pending=true;
+        if (d->node->generation==s->vfs->generation[d->node->drive] && d->node->volume==s->vfs->volumes[d->node->drive])
+            err=px_delete_finish_locked(d->node);
         vfs_identity_put(s->vfs,d->identity);
-        err = px_drop_locked(d->node);
+        { int drop=px_drop_locked(d->node); if (!err) err=drop; }
         vfs_unlock(s->vfs);
     }
     __atomic_sub_fetch(&file_descriptions,1,__ATOMIC_RELAXED); kfree(d);
@@ -181,13 +192,14 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
 }
 extern int w32_file_sync(struct px_node *) __attribute__((weak));
 extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __attribute__((weak));
-int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
-                    bool positioned, uint64_t offset, size_t *done)
+static int description_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
+                    bool positioned, uint64_t offset, size_t *done, bool section)
 {
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
+    if (write && win32_protected_file(d)) return -EACCES;
     if (write && d->node->ro) return -EROFS;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
@@ -206,7 +218,7 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
     /* DOS record locks are mandatory for native clients as well. Namespace
      * and this volume's reservation already protect the common node list. */
-    int locked=px_range_locked(n,position,bytes); if (locked) return locked;
+    int locked=section ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
     if(w32_file_sync){int sync=w32_file_sync(n);if(sync)return sync;}
     struct fat_entry before = n->entry;
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) : write ? VFS_IO(d->node->space->vfs,fat_write(n->volume, &n->entry, position, buffer, bytes, done)) :
@@ -224,8 +236,21 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
      * change remains effective without exposing EACCES outside the ABI set. */
     return err == -EACCES ? -EROFS : err;
 }
+int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool write,
+                    bool positioned,uint64_t offset,size_t *done)
+{
+    return description_io_locked(d,buffer,bytes,write,positioned,offset,done,false);
+}
+/* Private section endpoint. Win32 byte locks do not apply to mapped views;
+ * generation, access, protected ancestry and durability still apply. */
+int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,bool write,
+                           bool positioned,uint64_t offset,size_t *done)
+{
+    return description_io_locked(d,buffer,bytes,write,positioned,offset,done,true);
+}
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
+    if (win32_protected_file(d)) return -EACCES;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return -EROFS;
@@ -235,7 +260,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     if (length > UINT32_MAX) return -EFBIG;
     struct fat_entry before = d->node->entry;
     uint64_t start=length<before.size ? length : before.size;
-    int locked=px_range_locked(d->node,start,length<before.size ? before.size-length : length-before.size);
+    int locked=px_description_range_locked(d,start,length<before.size ? before.size-length : length-before.size,true);
     if (locked) return locked;
     int err = VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
     if (memcmp(&before, &d->node->entry, sizeof(before))) px_changed_locked(d->node);

@@ -22,6 +22,7 @@ enum w32r_op {
     W32R_ATOM_ADD, W32R_ATOM_FIND, W32R_ATOM_DELETE, W32R_ATOM_NAME,
     W32R_WINDOW_ALLOC, W32R_WINDOW_SET, W32R_WINDOW_GET, W32R_WINDOW_ENUM,
     W32R_WINDOW_FREE, W32R_SHUTDOWN, W32R_COMPAT,
+    W32R_PROFILE_ACQUIRE = 24, W32R_PROFILE_RELEASE,
     /* Ephemeral clipboard, copied data; key=HWND, index=TID, type=format.
      * Reply key=owner or prior viewer, type=head viewer, disposition=old owner.
      * OPEN/CLOSE are authenticated PID+TID locks, never persisted. */
@@ -72,4 +73,6 @@ struct w32r_service {
     uint32_t action, service, pid, endpoint, result, error;
 };
 _Static_assert(sizeof(struct w32r_service) == 40, "service record");
+/* Process-wide serialized transport shared by kernel32 and advapi32. */
+uint32_t w32_server_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *);
 #endif

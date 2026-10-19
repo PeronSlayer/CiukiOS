@@ -17,9 +17,9 @@ FORWARDS={name:'ntdll.'+target for name,target in {
     'SetUnhandledExceptionFilter':'SetUnhandledExceptionFilter',
     'UnhandledExceptionFilter':'UnhandledExceptionFilter',
 }.items()}
-# Required file-lock entry points await the common VFS owner from F1-84.
-# Keep them callable as explicit W21 refusals even outside the provisional census.
-DEFERRED_VFS={'LockFile','LockFileEx','UnlockFile','UnlockFileEx'}
+# Required lock entry points are implemented on F1-84, including names outside the census.
+REQUIRED_VFS={'LockFile','LockFileEx','UnlockFile','UnlockFileEx'}
+UNICODE_STUBS={'CompareStringW','GetLocaleInfoW','GetStringTypeW','LCMapStringW'}
 # BOOL-returning critical-section APIs are wrappers, including the BOOLEAN
 # to BOOL widening; VOID APIs can forward to the ntdll operations.
 def build(out,base,flags):
@@ -44,7 +44,7 @@ def build(out,base,flags):
     subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True);objects.append(str(obj))
     imported=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text())['kernel32.dll']
     imported|=stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('kernel32.dll',set())
-    missing=sorted((imported|DEFERRED_VFS)-exports.keys()-FORWARDS.keys())
+    missing=sorted((imported|REQUIRED_VFS)-exports.keys()-FORWARDS.keys())
     stub=['/* SPDX-License-Identifier: LGPL-2.1-or-later */',stub_signatures.DECLARATIONS]
     definitions=['; SPDX-License-Identifier: LGPL-2.1-or-later','LIBRARY kernel32.dll','EXPORTS']
     definitions += ['    '+name+'='+value for name,value in sorted(exports.items())]
@@ -68,13 +68,13 @@ def build(out,base,flags):
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0];size=struct.unpack_from('<I',raw,pe+80)[0]
     coverage=[]
     for name in sorted(imported):
-        row={'name':name,'status':'implemented' if name in exports else 'ntdll forwarder' if name in FORWARDS else 'W21 typed failure'}
+        row={'name':name,'status':'W21 returning Unicode stub (120)' if name in UNICODE_STUBS else 'implemented' if name in exports else 'ntdll forwarder' if name in FORWARDS else 'W21 typed failure'}
         if name in missing:
             _,_,audit=stub_signatures.body('kernel32.dll',name,'audit',0)
             row['failure']=audit['failure'];row['abi']=audit
             if audit['failure'].startswith('nonreturning'):row['status']='W21 nonreturning stub'
         coverage.append(row)
-    (out/'kernel32-coverage.json').write_text(json.dumps({'schema':1,'scope':'provisional research union plus authored fixtures; original acceptance media absent','exports':coverage,'deferred_vfs':sorted(DEFERRED_VFS)},indent=2)+'\n')
+    (out/'kernel32-coverage.json').write_text(json.dumps({'schema':1,'scope':'provisional research union plus authored fixtures; original acceptance media absent','exports':coverage,'deferred_vfs':[], 'required_vfs':sorted(REQUIRED_VFS)},indent=2)+'\n')
     return {'name':'kernel32.dll','path':'kernel32.dll','base':base,'size':size,
         'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}
 

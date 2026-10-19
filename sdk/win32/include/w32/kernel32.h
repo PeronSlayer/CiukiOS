@@ -29,7 +29,7 @@ typedef struct {
 typedef struct {
   DWORD length, load;
   uint64_t total_phys, avail_phys, total_pagefile, avail_pagefile,
-      total_virtual, avail_virtual, avail_extended;
+      total_virtual, avail_virtual, avail_extended_virtual;
 } MEMORYSTATUSEX;
 typedef struct {
   uint16_t architecture, reserved;
@@ -70,6 +70,8 @@ typedef struct {
 DWORD W32API GetLastError(void);
 void W32API SetLastError(DWORD);
 int k32_status(int32_t);
+int k32_profile_begin(void);
+void k32_profile_end(void);
 int k32_file(struct ciuki_w32_file_args *);
 int k32_path(const char *, char[778]);
 /* Private core uses 3-byte UCS2 UTF-8; this facade supports ACP 1252. */
@@ -99,6 +101,13 @@ BOOL W32API WriteFile(HANDLE, const void *, DWORD, DWORD *, OVERLAPPED *);
 DWORD W32API SetFilePointer(HANDLE, LONG, LONG *, DWORD);
 BOOL W32API SetEndOfFile(HANDLE);
 BOOL W32API FlushFileBuffers(HANDLE);
+BOOL W32API LockFile(HANDLE, DWORD, DWORD, DWORD, DWORD);
+BOOL W32API UnlockFile(HANDLE, DWORD, DWORD, DWORD, DWORD);
+BOOL W32API LockFileEx(HANDLE, DWORD, DWORD, DWORD, DWORD, OVERLAPPED *);
+BOOL W32API UnlockFileEx(HANDLE, DWORD, DWORD, DWORD, OVERLAPPED *);
+BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *);
+BOOL W32API ReadProcessMemory(HANDLE, const void *, void *, DWORD, DWORD *);
+BOOL W32API WriteProcessMemory(HANDLE, void *, const void *, DWORD, DWORD *);
 BOOL W32API DeleteFileA(const char *);
 DWORD W32API GetFileSize(HANDLE, DWORD *);
 DWORD W32API GetFileAttributesA(const char *);
@@ -108,6 +117,7 @@ DWORD W32API GetEnvironmentVariableA(const char *, char *, DWORD);
 DWORD W32API GetCurrentDirectoryA(DWORD, char *);
 DWORD W32API GetFullPathNameA(const char *, DWORD, char *, char **);
 DWORD W32API GetTickCount(void);
+void W32API Sleep(DWORD);
 int W32API MultiByteToWideChar(DWORD, DWORD, const char *, int, WCHAR *, int);
 int W32API WideCharToMultiByte(DWORD, DWORD, const WCHAR *, int, char *, int,
                                const char *, BOOL *);

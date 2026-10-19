@@ -18,8 +18,14 @@ static uint32_t dos_error(int e) {
   case -EPERM:
   case -EROFS:
     return 5;
+  case -VFS_ELOCK:
+    return 33;
+  case -VFS_ELOCKFULL:
+    return 36;
   case -EBADF:
     return 6;
+  case -EINTR:
+    return 995;
   case -EFAULT:
     return 998;
   case -ENOMEM:
@@ -196,6 +202,20 @@ static struct vfs_table *temporary_table(struct vfs *v) {
       memcpy(table->cwd[i], "/", 2);
   }
   return table;
+}
+void w32_file_handle_close(struct process *p,struct w32_object *o) {
+  struct file_description *d=o->u.file.description;
+  if (!d || !d->node) return;
+  struct vfs *v=d->node->space->vfs;
+  vfs_lock(v,0);
+  for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) {
+    struct vfs_range_lock *l=&v->range_locks[i];
+    if (l->description==&d->lock_description && l->owner_type==VFS_OWNER_WIN32 && l->owner==p->pid)
+      memset(l,0,sizeof(*l));
+  }
+  if (d->delete_on_close && !system_node(d->node)) d->node->delete_pending=true;
+  fs_event_wake(&v->volume_changed);
+  vfs_unlock(v);
 }
 uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   struct process *p = t->process;
@@ -406,7 +426,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   }
   if (a->action == W32_F_READ || a->action == W32_F_WRITE ||
       a->action == W32_F_SEEK || a->action == W32_F_TRUNCATE ||
-      a->action == W32_F_FLUSH ||
+      a->action == W32_F_FLUSH || a->action == W32_F_LOCK || a->action == W32_F_UNLOCK ||
       ((a->action == W32_F_STAT || a->action == W32_F_TIMES) && !a->path)) {
     struct w32_object *o = w32_lookup(t, a->handle, W32_OBJ_FILE);
     if (!o) {
@@ -415,7 +435,30 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     }
     w32_retain(o);
     struct file_description *d = o->u.file.description;
-    if (a->action == W32_F_READ || a->action == W32_F_WRITE) {
+    if (a->action == W32_F_LOCK || a->action == W32_F_UNLOCK) {
+      if (!(o->u.file.access & 0xc0000000u) || a->flags & ~3u) error=87;
+      else {
+        struct vfs *v=d->node->space->vfs;
+        struct vfs_lock_owner owner={VFS_OWNER_WIN32,p->pid};
+        uint64_t offset=((uint64_t)a->high<<32)|a->low;
+        uint64_t length=((uint64_t)a->share<<32)|a->bytes;
+        int e;
+        do {
+          vfs_lock(v,0);
+          d->lock_node=(struct vfs_node){.volume=d->node->volume,.entry=d->node->entry,
+            .generation=d->node->generation,.drive=d->node->drive,.identity=d->identity,
+            .ro=d->node->ro,.ro_id=d->node->ro_id};
+          d->lock_description.node=&d->lock_node;
+          e=vfs_description_lock_locked(v,&d->lock_description,owner,offset,length,
+              !!(a->flags&2),a->action==W32_F_UNLOCK);
+          vfs_unlock(v);
+          if (e!=-VFS_ELOCK || a->action==W32_F_UNLOCK || (a->flags&1)) break;
+          if (p->state!=PROC_LIVE || (t->w32 && t->w32->terminate_requested)) { e=-EINTR; break; }
+          task_sleep_ms(1);
+        } while (true);
+        error=dos_error(e);
+      }
+    } else if (a->action == W32_F_READ || a->action == W32_F_WRITE) {
       bool write = a->action == W32_F_WRITE;
       if (!(o->u.file.access & (write ? 0x40000000u : 0x80000000u))) {
         error = 5;
@@ -441,11 +484,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
        * shared synchronous file pointer cannot interleave mid-call. Pinning
        * the entire user span above validates it before the first mutation. */
       vfs_lock(s->vfs, vfs_drive_mask(d->node->drive));
+      if (write && system_node(d->node)) e=-EACCES;
       do {
         uint32_t chunk = a->bytes - total;
         if (chunk > n)
           chunk = n;
-        if (write && chunk)
+        if (!e && write && chunk)
           e = copy_from_user(buffer, a->buffer + total, chunk);
         size_t copied = 0;
         if (!e)
@@ -477,12 +521,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
           a->high = (uint32_t)((uint64_t)pos >> 32);
         }
       } else if (a->action == W32_F_TRUNCATE)
-        e = file_truncate_locked(d, d->position);
+        e = system_node(d->node) ? -EACCES : file_truncate_locked(d, d->position);
       else if (a->action == W32_F_FLUSH)
         e = file_sync_locked(d);
       else if (a->action == W32_F_TIMES) {
         struct ciuki_w32_file_info f;
-        if (!(o->u.file.access & 0x40000000u))
+        if (!(o->u.file.access & 0x40000000u) || system_node(d->node))
           e = -EACCES;
         else if (a->bytes != sizeof(f) ||
                  copy_from_user(&f, a->buffer, sizeof(f)))
@@ -527,7 +571,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     drives |= vfs_drive_mask((unsigned)(full2[0] - 'A'));
   vfs_lock(s->vfs, drives);
   bool write = a->action == W32_F_OPEN
-                   ? (a->access & 0x40000000u) || a->disposition != 3
+                   ? (a->access & 0x40010000u) || (a->flags & 0x04000000u) || a->disposition != 3
                    : a->action == W32_F_DELETE || a->action == W32_F_MOVE ||
                          a->action == W32_F_MKDIR || a->action == W32_F_RMDIR ||
                          a->action == W32_F_ATTR || a->action == W32_F_TIMES;
@@ -540,11 +584,9 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   int e = 0;
   if (!error && a->action == W32_F_OPEN) {
     if (!a->path || a->disposition < 1 || a->disposition > 5 ||
-        a->share & ~7u || a->access & ~0xc0000000u ||
+        a->share & ~7u || a->access & ~0xc0010000u ||
         (a->disposition == 5 && !(a->access & 0x40000000u)))
       error = 87;
-    else if (a->flags & 0x04000000u)
-      error = 120; /* requires F1-84 delete ownership */
     else {
       uint32_t flags = (a->access & 0x40000000u)
                            ? (a->access & 0x80000000u) ? O_RDWR : O_WRONLY
@@ -561,7 +603,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       bool exists = !px_resolve_locked(s, cwd, path, true, &r) && r.node;
       if (exists && (r.node->kind == PX_DIRECTORY)) {
         if (!(a->flags & 0x02000000u) || a->disposition != 3 ||
-            a->access & 0x40000000u)
+            a->access & 0x40000000u || (a->flags&0x04000000u))
           error = 5;
         else
           flags |= O_DIRECTORY;
@@ -570,18 +612,26 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       if (!d)
         error = 8;
       else {
-        d->deny = (~a->share) & 3u;
+        d->win32=true;
+
+        d->lock_owner=(struct vfs_lock_owner){VFS_OWNER_WIN32,p->pid};
+        d->share_access=(a->access&0x80000000u ? 1u : 0) |
+            (a->access&0x40000000u ? 2u : 0) | ((a->access&0x10000u) || (a->flags&0x04000000u) ? 4u : 0);
+        d->deny = d->share_access ? (~a->share) & 7u : 0;
         if (exists && px_share_locked(r.node,
-                                      (a->access & 0x80000000u ? 1 : 0) |
-                                          (a->access & 0x40000000u ? 2 : 0),
+                                      d->share_access,
                                       d->deny))
           error = 32;
+        if (!error && exists && (r.node->delete_pending ||
+            (d->share_access&4 && ((r.node->entry.attr&1) || !r.node->volume || r.node->volume->readonly)))) error=5;
         if (!error && exists && a->disposition == 2 &&
             (r.node->entry.attr & 6) &&
             ((a->flags & 6) != (r.node->entry.attr & 6)))
           error = 5;
         if (!error)
           e = px_open_locked(s, cwd, path, flags, d);
+        if (!error && !e && d->node->kind==PX_FILE && d->node->volume)
+          e=px_error(vfs_identity_get(s->vfs,d->node->volume,&d->node->entry,&d->identity));
         if (!error && !e && !exists && d->node->volume && (a->flags & 39)) {
           e = px_error(
               VFS_IO(s->vfs, fat_set_metadata(d->node->volume, &d->node->entry,
@@ -602,6 +652,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
             o->signalled = true;
             error = w32_handle_install(p, o, a->access, !!(a->flags & 0x10000u),
                                        &a->result);
+            if (!error) d->delete_on_close=!!(a->flags&0x04000000u);
             w32_release(o);
             if (!error && (a->disposition == 2 || a->disposition == 4))
               a->error = exists ? 183 : 0;
@@ -626,7 +677,14 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       }
       break;
     case W32_F_DELETE:
-      e = px_remove_locked(s, cwd, path, false);
+      e=px_resolve_locked(s,cwd,path,false,&r);
+      if (!e && r.node->kind!=PX_FILE) error=5;
+      if (!e && !error && px_share_locked(r.node,4,0)) error=32;
+      if (!e && !error && ((r.node->entry.attr&1) || r.node->delete_pending)) error=5;
+      if (!e && !error) {
+        r.node->delete_pending=true;
+        e=px_delete_finish_locked(r.node);
+      }
       break;
     case W32_F_RMDIR:
       e = px_remove_locked(s, cwd, path, true);
@@ -639,8 +697,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       if (!e) {
         if (r.node)
           error = 183;
-        else
-          e = px_rename_locked(s, cwd, path, path2);
+        else {
+          struct px_path from;
+          e=px_resolve_locked(s,cwd,path,false,&from);
+          if (!e && px_share_locked(from.node,4,0)) error=32;
+          if (!e && !error) e = px_rename_locked(s, cwd, path, path2);
+        }
       }
       break;
     case W32_F_ATTR:

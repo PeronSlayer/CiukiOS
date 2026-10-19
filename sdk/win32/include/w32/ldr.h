@@ -7,6 +7,10 @@
 #define W32_MAX_MODULES 256
 #define W32_MAX_TLS 64
 #define W32_PATH_MAX 1024
+/* Private loader path encoding is UTF-8; public ANSI text uses ACP1252. */
+int w32_utf16_path(const WCHAR *, ULONG, char *, ULONG);
+int w32_utf8_path(const char *, WCHAR *, ULONG);
+WCHAR w32_acp_character(uint8_t);
 struct w32_error {
     ULONG code;
     const char *reason;
@@ -70,7 +74,7 @@ struct w32_module {
     struct w32_pe pe;
     struct w32_ldr_entry entry;
     WCHAR wide_path[W32_PATH_MAX], wide_name[256];
-    char path[W32_PATH_MAX], name[256];
+    char path[W32_PATH_MAX], name[W32_PATH_MAX];
     ULONG references, busy, load_flags, load_order, initialization_order, tls_index;
     ULONG tls_template, tls_size, tls_zero, tls_alignment;
     struct w32_module *dependencies[W32_MAX_MODULES];

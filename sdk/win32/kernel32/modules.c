@@ -1,7 +1,7 @@
 /* Loader facade; ntdll owns the module lists and loader lock.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
-HANDLE W32API LoadLibraryExW(const WCHAR *name, HANDLE file, DWORD flags) {
+HANDLE W32API k32_load_w(const WCHAR *name, HANDLE file, DWORD flags) {
   if (!name || file || flags & ~3u) {
     SetLastError(87);
     return 0;
@@ -20,14 +20,12 @@ HANDLE W32API LoadLibraryExA(const char *name, HANDLE file, DWORD flags) {
   WCHAR w[260];
   if (!MultiByteToWideChar(1252, 0, name, -1, w, 260))
     return 0;
-  return LoadLibraryExW(w, file, flags);
+  return k32_load_w(w, file, flags);
 }
 HANDLE W32API LoadLibraryA(const char *name) {
   return LoadLibraryExA(name, 0, 0);
 }
-HANDLE W32API LoadLibraryW(const WCHAR *name) {
-  return LoadLibraryExW(name, 0, 0);
-}
+
 BOOL W32API FreeLibrary(HANDLE h) {
   NTSTATUS s = LdrUnloadDll(h);
   if (s) {
@@ -36,7 +34,7 @@ BOOL W32API FreeLibrary(HANDLE h) {
   }
   return 1;
 }
-HANDLE W32API GetModuleHandleW(const WCHAR *name) {
+HANDLE W32API k32_module_w(const WCHAR *name) {
   UNICODE_STRING u;
   void *p = 0;
   if (name)
@@ -50,7 +48,7 @@ HANDLE W32API GetModuleHandleA(const char *name) {
   WCHAR w[260];
   if (name && !MultiByteToWideChar(1252, 0, name, -1, w, 260))
     return 0;
-  return GetModuleHandleW(name ? w : 0);
+  return k32_module_w(name ? w : 0);
 }
 void *W32API GetProcAddress(HANDLE h, const char *name) {
   if (!name) {
@@ -69,7 +67,7 @@ void *W32API GetProcAddress(HANDLE h, const char *name) {
     SetLastError(RtlNtStatusToDosError(result));
   return result ? 0 : p;
 }
-DWORD W32API GetModuleFileNameW(HANDLE h, WCHAR *out, DWORD cap) {
+DWORD W32API k32_filename_w(HANDLE h, WCHAR *out, DWORD cap) {
   struct w32_peb *peb = NtCurrentTeb()->ProcessEnvironmentBlock;
   if (!h)
     h = peb->ImageBaseAddress;
@@ -98,7 +96,7 @@ DWORD W32API GetModuleFileNameW(HANDLE h, WCHAR *out, DWORD cap) {
 }
 DWORD W32API GetModuleFileNameA(HANDLE h, char *out, DWORD cap) {
   WCHAR w[260];
-  DWORD n = GetModuleFileNameW(h, w, 260);
+  DWORD n = k32_filename_w(h, w, 260);
   if (!n)
     return 0;
   if (!cap || !out) {

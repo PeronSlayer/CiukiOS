@@ -14,6 +14,7 @@ static DWORD disk_size;
 static int exists = 1;
 static DWORD position;
 static unsigned allocations;
+static unsigned lease;
 #define CHECK(c)                                                               \
   do {                                                                         \
     if (!(c)) {                                                                \
@@ -21,6 +22,8 @@ static unsigned allocations;
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
+int k32_profile_begin(void) { CHECK(!lease);lease=1;return 1; }
+void k32_profile_end(void) { CHECK(lease);lease=0; }
 DWORD W32API GetLastError(void) { return error; }
 void W32API SetLastError(DWORD n) { error = n; }
 void *k32_alloc(DWORD n) {
@@ -68,6 +71,7 @@ HANDLE W32API CreateFileA(const char *path, DWORD access, DWORD share,
     return K32_INVALID;
   }
   if (disposition == 2) {
+    CHECK(lease);
     disk_size = 0;
     exists = 1;
   }

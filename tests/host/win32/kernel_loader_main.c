@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "adapter/linux.h"
 #include <w32/store.h>
+#include <w32/kernel32.h>
 #include <stdio.h>
 #include <stdlib.h>
 extern void w32_kernel_model_init(const char *, uint32_t *, uint32_t *);
@@ -27,6 +28,7 @@ static LONG filter(struct w32_exception_pointers *p) {
 }
 extern int w32_kernel32_runtime(void);
 extern void w32_kernel_model_spawn_test(void);
+extern void w32_kernel_model_spawn_edges(void);
 static int runtime(void) {
     RTL_CRITICAL_SECTION *cs = host.services.alloc(0, sizeof(*cs));
     CHECK(cs);
@@ -145,6 +147,26 @@ static int upper_store_test(const char *name) {
     printf("PASS kernel DirectSetup store H0 %s bind/callback observation only\n",name?name:"baseline");
     return 0;
 }
+extern HANDLE W32API LoadLibraryA(const char *);
+extern DWORD W32API GetModuleFileNameA(HANDLE,char *,DWORD);
+extern BOOL W32API FreeLibrary(HANDLE);
+static int unicode_paths(void) {
+    struct w32_loader loader;w32_ldr_init(&loader,&host.services,&host.peb);w32_ldr_bind(&loader);
+    CHECK(w32_ldr_thread_attach(&loader,&host.teb));
+    const char *path="C:\\caf\xe9\\Euro\x80.dll";
+    HANDLE h=LoadLibraryA(path);CHECK(h);
+    char out[260];CHECK(GetModuleFileNameA(h,out,sizeof(out))==w32_strlen(path)&&!w32_strcmp(out,path));
+    struct w32_module *m=w32_ldr_module(&loader,"Euro\xe2\x82\xac.dll");CHECK(m);
+    CHECK(m->entry.FullDllName.Buffer[6]==0xe9&&m->entry.BaseDllName.Buffer[4]==0x20ac);
+    CHECK(FreeLibrary(h));
+    char long_path[260];w32_copy_string(long_path,sizeof(long_path),"C:\\caf\xe9\\");
+    for(unsigned i=0;i<200;i++)long_path[8+i]=(char)0xe9;
+    w32_copy_string(long_path+208,sizeof(long_path)-208,".dll");
+    h=LoadLibraryA(long_path);CHECK(h);
+    CHECK(GetModuleFileNameA(h,out,sizeof(out))==w32_strlen(long_path)&&!w32_strcmp(out,long_path));
+    CHECK(FreeLibrary(h));w32_ldr_shutdown(&loader);RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
+    puts("PASS kernel32 ACP1252 UTF8 module path round trip");return 0;
+}
 int main(int argc, char **argv) {
     if (argc < 4)
         return 2;
@@ -163,6 +185,7 @@ int main(int argc, char **argv) {
         host.services.diagnostic(0,"load","fixture.dll","missing-export");
         w32_kernel_model_finish();return 0;
     }
+    if(!w32_strcmp(argv[2],"spawn-edges")){w32_kernel_model_spawn_edges();w32_kernel_model_finish();return 0;}
     if(!w32_strcmp(argv[2],"spawn")){w32_kernel_model_spawn_test();w32_kernel_model_finish();return 0;}
     if(!w32_strcmp(argv[2],"upper-store-baseline")||!w32_strcmp(argv[2],"upper-store-dsetup")||!w32_strcmp(argv[2],"upper-store-dsetup32")){
         const char *name=!w32_strcmp(argv[2],"upper-store-baseline")?0:
@@ -170,6 +193,7 @@ int main(int argc, char **argv) {
         int result=upper_store_test(name);w32_kernel_model_finish();return result;
     }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
+                 : !w32_strcmp(argv[2], "unicode-paths") ? unicode_paths()
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()
                  : !w32_strcmp(argv[2], "store") ? store_test()

@@ -37,7 +37,7 @@ def build(out):
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n' + ''.join(f' {n}@{a}\n' for n, a in imports.items()))
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'kernel32.lib'])
     definition = out/'ntdll-imports.def'
-    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n')
+    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n w32_server_exchange\n')
     run(['llvm-dlltool', '-m', 'i386', '-d', definition, '-l', out/'ntdll.lib'])
     store = {'schema': 1, 'dlls': []}
     coverage = {}

@@ -461,21 +461,21 @@ def win32_payloads(folder=None):
     store=json.loads(manifest.read_text())
     require(any(d["name"] == "ntdll.dll" for d in store["dlls"]), "missing builtin ntdll")
     binary=struct.pack("<II", 1, len(store["dlls"]))
-    sources={"/WINDOWS/SYSTEM/builtin-store.json": manifest,
+    sources={"/System/Win32/builtin-store.json": manifest,
              "/System/Win32/SHIMS.INI": ROOT / "assets/win32/SHIMS.INI",
-             "/WINDOWS/SYSTEM/BUILTIN.BIN": folder / "BUILTIN.BIN",
+             "/System/Win32/BUILTIN.BIN": folder / "BUILTIN.BIN",
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
              "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md",
              "/system/licenses/TinySoundFont.txt":ROOT / "sdk/win32/audio/tsf/LICENSE"}
     if any(d.get("origin")=="CiukiOS bounded P5 implementation" for d in store["dlls"]):
-        sources["/WINDOWS/SYSTEM/codecs-inventory.json"]=folder / "codecs-inventory.json"
+        sources["/System/Win32/codecs-inventory.json"]=folder / "codecs-inventory.json"
         for name in ("LICENSE","COPYING.LIB","AUTHORS","SOURCE-OFFER.txt","PATCHES.md","README.md","codecs-sources.json"):
             sources["/system/licenses/WINE-"+name]=ROOT / "third_party/wine" / name
     if any(d.get("origin")=="CiukiOS DirectSetup installation identity" for d in store["dlls"]):
-        sources["/WINDOWS/SYSTEM/upper-builtins-inventory.json"]=folder / "upper-builtins-inventory.json"
+        sources["/System/Win32/upper-builtins-inventory.json"]=folder / "upper-builtins-inventory.json"
     for dll in store["dlls"]:
         require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
-        sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]
+        sources["/System/Win32/" + dll["name"]]=folder / dll["path"]
         binary+=struct.pack("<64s65s3xII4H", dll["name"].encode("ascii"), dll["sha256"].encode("ascii"),
                             dll["base"], dll["size"], *dll["version"])
     require((folder / "BUILTIN.BIN").read_bytes() == binary, "builtin binary manifest")

@@ -3,7 +3,7 @@
 #define CIUKI_W32_STORE_H
 #include "ldr.h"
 /* Deterministic on-disk companion of builtin-store.json, little-endian.
- * Names are basenames; runtime paths always use C:\WINDOWS\SYSTEM. */
+ * Names are basenames; runtime paths always use C:\System\Win32. */
 struct w32_store_row {
     char name[64], sha256[65];
     uint8_t reserved[3];

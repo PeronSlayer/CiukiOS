@@ -290,6 +290,7 @@ BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
   RTL_CRITICAL_SECTION *lock =
       NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
   RtlEnterCriticalSection(lock);
+  if (!k32_profile_begin()) { RtlLeaveCriticalSection(lock); return 0; }
   DWORD size;
   char *s = read_ini(file, &size), *out = k32_alloc(INI_MAX + 1);
   BOOL ok = s && out;
@@ -369,6 +370,7 @@ BOOL W32API WritePrivateProfileStringA(const char *section, const char *key,
     SetLastError(s && out ? 112 : 8);
   k32_free(s, INI_MAX + 1);
   k32_free(out, INI_MAX + 1);
+  k32_profile_end();
   RtlLeaveCriticalSection(lock);
   return ok;
 }
@@ -504,6 +506,7 @@ BOOL W32API WritePrivateProfileSectionA(const char *section, const char *values,
   RTL_CRITICAL_SECTION *lock =
       NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
   RtlEnterCriticalSection(lock);
+  if (!k32_profile_begin()) { RtlLeaveCriticalSection(lock); return 0; }
   DWORD size = 0, n = 0;
   char *s = read_ini(file, &size), *out = k32_alloc(INI_MAX + 1);
   BOOL ok = s && out;
@@ -538,6 +541,7 @@ BOOL W32API WritePrivateProfileSectionA(const char *section, const char *values,
     SetLastError(s && out ? 112 : 8);
   k32_free(s, INI_MAX + 1);
   k32_free(out, INI_MAX + 1);
+  k32_profile_end();
   RtlLeaveCriticalSection(lock);
   return ok;
 }

@@ -29,7 +29,7 @@ static DWORD env_size(const WCHAR *s) {
     }
   return n + 1 + (n == 0);
 }
-DWORD W32API GetEnvironmentVariableW(const WCHAR *name, WCHAR *out, DWORD cap) {
+DWORD W32API k32_environment_w(const WCHAR *name, WCHAR *out, DWORD cap) {
   if (!name || !*name) {
     SetLastError(87);
     return 0;
@@ -81,7 +81,7 @@ DWORD W32API GetEnvironmentVariableA(const char *name, char *out, DWORD cap) {
     return 0;
   }
   value[0] = 0;
-  DWORD r = GetEnvironmentVariableW(key, value, 32768);
+  DWORD r = k32_environment_w(key, value, 32768);
   if (r >= 32768) {
     k32_free(value, 65536);
     return r;
@@ -244,7 +244,7 @@ char *W32API GetEnvironmentStringsA(void) { return GetEnvironmentStrings(); }
 BOOL W32API FreeEnvironmentStringsA(char *s) {
   return FreeEnvironmentStringsW((void *)s);
 }
-WCHAR *W32API GetCommandLineW(void) { return params()->CommandLine.Buffer; }
+
 char *W32API GetCommandLineA(void) {
   static char *command;
   RTL_CRITICAL_SECTION *lock =

@@ -53,6 +53,7 @@ static uint8_t result[W32R_MAX];
 static uint32_t rpc(struct wr_server *s,uint32_t pid,unsigned op,uint32_t key,const char *path,const char *name,unsigned type,const void *data,uint32_t n,uint32_t index)
 {
     uint8_t input[W32R_MAX];struct w32r_request a={1,op,key,index,type,0xf003f,0,(uint32_t)strlen(path)+1,(uint32_t)strlen(name)+1,n};
+    if (op==W32R_PROFILE_ACQUIRE || op==W32R_PROFILE_RELEASE) a.access=0;
     memcpy(input,&a,40);memcpy(input+40,path,a.path_bytes);memcpy(input+40+a.path_bytes,name,a.name_bytes);if(n)memcpy(input+40+a.path_bytes+a.name_bytes,data,n);
     size_t used;CHECK(!wr_dispatch(s,pid,input,40+a.path_bytes+a.name_bytes+n,result,sizeof(result),&used));memcpy(&r,result,40);return r.error;
 }
@@ -282,6 +283,13 @@ static void malformed(void)
     for(unsigned i=0;i<42;i++){uint8_t input[42]={0};CHECK(!wr_dispatch(&s,10,input,i,out,sizeof(out),&n));CHECK(((struct w32r_reply *)out)->error==87);}
     CHECK(rpc(&s,10,0,W32R_HKLM,"","",0,NULL,0,0)==120);
     CHECK(rpc(&s,10,W32R_WINDOW_ALLOC,0,"","",0,NULL,0,0)==87);
+    CHECK(!rpc(&s,10,W32R_PROFILE_ACQUIRE,0,"","",0,NULL,0,0)&&s.profile_owner==10);
+    CHECK(rpc(&s,20,W32R_PROFILE_ACQUIRE,0,"","",0,NULL,0,0)==170&&s.profile_owner==10);
+    CHECK(rpc(&s,20,W32R_PROFILE_RELEASE,0,"","",0,NULL,0,0)==5&&s.profile_owner==10);
+    CHECK(!wr_exit(&s,10)&&!s.profile_owner);
+    CHECK(!rpc(&s,20,W32R_PROFILE_ACQUIRE,0,"","",0,NULL,0,0)&&s.profile_owner==20);
+    CHECK(rpc(&s,20,W32R_PROFILE_RELEASE,0,"","bad",0,NULL,0,0)==87&&s.profile_owner==20);
+    CHECK(!rpc(&s,20,W32R_PROFILE_RELEASE,0,"","",0,NULL,0,0)&&!s.profile_owner);
     struct wr_session session={.pid=10};struct w32r_packet p={.version=1,.id=1,.kind=W32R_WRITE,.total=40},q;
     CHECK(!wr_packet(&s,&session,&p,&q)&&q.error==87);p.kind=W32R_BEGIN;p.total=W32R_MAX+1;CHECK(!wr_packet(&s,&session,&p,&q)&&q.error==87);
     p.total=500;p.offset=0;CHECK(!wr_packet(&s,&session,&p,&q)&&!q.error);p.kind=W32R_WRITE;p.offset=231;CHECK(!wr_packet(&s,&session,&p,&q)&&q.error==87);wr_session_close(&session);

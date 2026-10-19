@@ -68,6 +68,14 @@ int w32_kernel32_runtime(void) {
         GetLastError() == 87);
   CHECK(VirtualProtect(p, 8192, 2, &old) && old == 4);
   CHECK(VirtualFree(p, 0, 0x8000));
+  p=VirtualAlloc(0,8192,0x3000,4);CHECK(p);
+  char *src=p,*dst=(char *)p+4096;src[0]='A';src[1]='B';DWORD copied=99;
+  CHECK(ReadProcessMemory(K32_INVALID,src,dst,2,&copied)&&copied==2&&dst[0]=='A'&&dst[1]=='B');
+  dst[0]='C';CHECK(WriteProcessMemory(K32_INVALID,src,dst,2,&copied)&&src[0]=='C'&&copied==2);
+  CHECK(VirtualProtect(dst,4096,2,&old));
+  CHECK(!WriteProcessMemory(K32_INVALID,dst,src,2,&copied)&&GetLastError()==299&&!copied&&dst[0]=='C');
+  CHECK(!ReadProcessMemory((HANDLE)0xdead,src,src,2,&copied)&&GetLastError()==6&&!copied);
+  CHECK(VirtualFree(p,0,0x8000));
   HANDLE heap = HeapCreate(0, 4096, 0);
   CHECK(heap);
   uint8_t *b = HeapAlloc(heap, 8, 31);
@@ -163,7 +171,7 @@ int w32_kernel32_runtime(void) {
   MEMORYSTATUS memory;
   GlobalMemoryStatus(&memory);
   CHECK(memory.length == 32 && memory.avail_phys <= memory.total_phys &&
-        memory.total_virtual == 0x7fffffff);
+        memory.total_virtual == 0x7ffe0000u);
   static struct w32_process_parameters params;
   host.peb.ProcessParameters = &params;
   CHECK(SetEnvironmentVariableA("TEMP", "C:\\TEMP"));

@@ -50,7 +50,7 @@ struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned re
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
     uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream; };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
-    uint64_t owner, start, end; uint32_t length; enum vfs_owner_type owner_type; };
+    uint64_t owner, start, end, length; enum vfs_owner_type owner_type; bool shared; };
 #define VFS_RANGE_LOCKS 128u
 struct vfs_waiter;
 struct vfs_table;
@@ -155,6 +155,13 @@ int vfs_open(struct vfs_table *, const char *path, unsigned flags, enum vfs_shar
 int vfs_open_claim(struct vfs_table *, const char *, unsigned flags, enum vfs_share,
                    uint8_t attr, unsigned mode, unsigned *status);
 int vfs_lock_range(struct vfs_table *, int, uint32_t start, uint32_t length, bool unlock);
+/* Namespace held. Native and Win32 descriptions use the same identity/owner
+ * table as DOS; ranges are 64-bit, including locks beyond EOF. */
+int vfs_description_lock_locked(struct vfs *, struct vfs_description *,
+    struct vfs_lock_owner, uint64_t, uint64_t, bool exclusive, bool unlock);
+int vfs_description_io_locked(struct vfs *, struct vfs_node *, struct vfs_description *,
+    struct vfs_lock_owner, uint64_t, uint64_t, bool write);
+void vfs_description_unlock_locked(struct vfs *, struct vfs_description *);
 /* Register a personality/context before opening handles. DOS bridge uses this
  * interface; never infer a personality from a numeric PID/PSP. */
 int vfs_table_set_owner(struct vfs_table *, enum vfs_owner_type, uint64_t);
