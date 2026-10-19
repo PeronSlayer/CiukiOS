@@ -1782,3 +1782,89 @@ only for Win32 with CPU FXSR+SSE; native ELF still observes #UD. Lazy state
 transitions temporarily enable OSFXSR for XMM preservation. No native signal
 record is extended. See the contract amendment for rounding, errors, safe
 context restoration, loader handoff and emergency exception-stack semantics.
+
+## f5-04 — Win32 objects, sections and service channels (2026-10-19)
+
+This is additive to call 96. Native F2 numbers and record layouts do not change.
+`ciuki/w32_objects.h` freezes the version-1 records below (all words/pointers
+are 32 bits, alignment 4, no host pointer or compiler enum on the wire).
+Header/version/size/reserved and zero output fields are validated before effects.
+The transport returns NTSTATUS/native validation errors; successful transport
+returns the Win32 operation result and last-error in `result`/`error`.
+`ERROR_ALREADY_EXISTS` is a successful named-object open with a valid handle.
+
+| Operation | Record size | Authority |
+| --- | ---: | --- |
+| 0x100 object create/open/close/duplicate/signal/query/timer | 72 | Live Win32 process; duplicate resolves source and target through process handles held by the caller. |
+| 0x101 waits and signal-and-wait | 56 | Live Win32 thread; 0–64 handles (zero for SleepEx), optional own queue mask, retained object identities. |
+| 0x102 APC queue/dispatcher registration/return | 40 | Win32; registration only in mapped builtin executable memory. Return requires an outstanding kernel-owned APC context. |
+| 0x103 suspend/resume/get/set context | 40 | Win32, thread of the same process. Context requires the suspended user-return boundary; debug flags accepted with zero registers. |
+| 0x104 posted/sent message/get/reply/status | 76 | Win32; reply tokens bound to the receiving TID; copied payloads limited to 64 KiB for WM_COPYDATA/WM_SETTEXT/WM_GETTEXT. |
+| 0x105 create section | 48 | Win32; file handle retains a VFS description and its access/share metadata. |
+| 0x106 map/unmap/flush view | 56 | Own Win32 views; offsets and requested bases aligned to 64 KiB. |
+| 0x200 service registration/connect/accept/priority/focus/input | 40 | Native registration/accept only for a path-delegated service role; Win32 connect and own permitted priorities; focus/input only for the registered supervisor desktop. |
+
+The 24-byte process-parameters prefix remains intact. Version 2 has size 32
+and appends desktop and w32srv private F2 endpoint descriptors; UINT32_MAX
+means absent. Missing services do not prevent PE startup. A later connection
+returns ERROR_SERVICE_NOT_ACTIVE (1062) while the server is absent and can be
+retried after registration. Only the exact `/Programs/desktop` started by PID 1
+and `/System/Win32/w32srv` started by that supervisor desktop gain service
+roles. A basename, arbitrary PID or inherited channel conveys no service role.
+Native callers have no authority for core/object/context/memory operations.
+Both ends of a service channel are noninheritable. Channels keep existing
+queue limits, description charges, donation and delivery hints. Win32 endpoint
+links also consume one of the 8192 object credits; loss of either service drops
+its links, without stopping clients. Restart permits fresh endpoints.
+
+Handles encode an 18-bit generation and 12-bit slot, shifted left by two.
+Generation zero and exhausted slots are unavailable; a closed generation never
+wraps. A table has 4096 slots in 64 lazily allocated chunks. Names are UTF-16,
+flat, case sensitive, at most 260 characters, with contract-defined prefix
+stripping. Metadata uses the ledger-accounted kernel heap, while section pages
+and COW credits use MM_USER_SHARED/MM_USER_PRIVATE and RAM commit promises.
+Reference/handle/payload/backing counts are separately observable. Empty message
+queues allocate no record array; posted records are charged to the target's
+4 MiB personality-data budget and synchronous relay buffers to the sender.
+
+Wait-all tests readiness and consumes its entire set in one UP publication;
+wait-any consumes the lowest ready index. Wait enrollment retains objects and
+PulseEvent satisfies enrolled waiters before resetting. Timeouts use the same
+PIT millisecond epoch published in shared user data. Termination interrupts
+blocked waits. APCs drain FIFO through a registered user dispatcher and a
+kernel-owned original context; APC_RETURN resumes delivery until drained, then
+restores that context. No kernel lock crosses a user callback. Suspend counts
+stop threads only at return to user mode, never while holding a kernel lock.
+A context request before that boundary reports busy and may be retried.
+
+Sent-message relay uses an opaque token. SEND blocks for a reply; if the
+caller receives a sent message, it returns WAIT_SENT and its outstanding token.
+The user32 relay drains and dispatches sent records in user mode, replies, then
+re-enters SEND with that token. This explicitly supports reentrant send chains
+without invoking window procedures in the kernel. GET copies approved payloads
+into a receiver-provided buffer and substitutes that VA for the sender's lParam.
+The desktop protocol/window-procedure layer remains f5-09.
+
+Sections retain backing independently of handles. Image identity includes the
+file SHA-256 and fixed image base: identical EXEs/application DLLs at the same
+base can share as well as builtins. Writable image/copy views reserve physical
+COW credits at map time and copy bytes on first write, ensuring RAM commitment
+without swap/overcommit. Pagefile data is zero-filled and populated on demand.
+The clock/gate page has one shared physical backing. VirtualProtect preserves
+private COW identity and refuses permissions beyond the view's maximum.
+
+File sections share backing by retained VFS file identity, including separately
+named section objects. Their aliases retain individual size/protection limits.
+Mapped stores are immediately visible to other section aliases; flush/unmap/exit
+write resident data through `file_io_locked` into f1-82's cache/barrier path.
+Native file I/O first writes mapped data to that same cache; successful native
+writes refresh resident section pages. Flush failure leaves a public view
+mapped and retryable; exit logs its error before teardown. This does not claim
+coherence with legacy direct FAT writers outside that native VFS boundary;
+the common identity/range-lock work belongs to f1-84. The contracted departure
+remains: a file may have writable shared views in only one process at a time;
+private FILE_MAP_COPY views do not acquire that writer lease. Device durability
+continues to belong to the VFS and is not invented by the view layer.
+
+Research and host budget evidence: [f5-04 validation](../validation/f5-04-objects-sections.md).
+The `w32-objects-qemu-t23` case is registered and deliberately unrun.

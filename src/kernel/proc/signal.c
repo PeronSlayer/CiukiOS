@@ -288,6 +288,7 @@ void proc_signal_fault(struct trap_frame *tf, uint32_t cr2)
     enter_handler(t, tf, &info);
 }
 
+extern void w32_user_return(struct proc_thread *,struct trap_frame *) __attribute__((weak));
 void proc_signal_return_to_user(struct trap_frame *tf)
 {
     if ((tf->cs & 3) != 3)
@@ -298,6 +299,8 @@ void proc_signal_return_to_user(struct trap_frame *tf)
     proc_signal_refresh(t->process);
     if (t->process->state == PROC_STOPPING)
         task_exit(t->process->raw_exit);
+    if(w32_user_return && t->process->personality==PROC_WIN32)w32_user_return(t,tf);
+    if(t->process->state==PROC_STOPPING)task_exit(t->process->raw_exit);
     bool from_process = false;
     uint32_t signo = proc_signal_next(t, &from_process);
     if (!signo)

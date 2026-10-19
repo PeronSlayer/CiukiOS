@@ -160,6 +160,46 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-objects-qemu-t23",
+      "probe": "w32-objects",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-objects run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "objects"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "atomic": {
+                "eq": 1
+              },
+              "cow": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "teardown"
+            },
+            "fields": {
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

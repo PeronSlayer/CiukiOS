@@ -170,6 +170,8 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
     *out = (int64_t)d->position;
     return 0;
 }
+extern int w32_file_sync(struct px_node *) __attribute__((weak));
+extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __attribute__((weak));
 int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
                     bool positioned, uint64_t offset, size_t *done)
 {
@@ -192,9 +194,11 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     }
     uint64_t position = positioned ? offset : write && (d->flags & O_APPEND) ? n->entry.size : d->position;
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
+    if(w32_file_sync){int sync=w32_file_sync(n);if(sync)return sync;}
     struct fat_entry before = n->entry;
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) : write ? VFS_IO(d->node->space->vfs,fat_write(n->volume, &n->entry, position, buffer, bytes, done)) :
                       VFS_IO(d->node->space->vfs,fat_read(n->volume, &n->entry, position, buffer, bytes, done));
+    if(write && *done && w32_file_changed)w32_file_changed(n,position,buffer,(uint32_t)*done);
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* fat_write reports the committed count even if the later FSInfo hint
      * fails. An in-place overwrite can leave the whole entry unchanged;

@@ -30,9 +30,12 @@ enum proc_personality { PROC_NATIVE, PROC_WIN32 };
 int proc_priority_posix(int policy, int priority, int nice_value);
 int proc_priority_win32(uint32_t priority_class, int relative, bool foreground);
 struct w32_delivery;
+struct w32_process;
+struct w32_thread;
 struct process {
     uint32_t pid, ppid, pgid, slot;
     enum proc_personality personality;
+    struct w32_process *w32;
     uint32_t w32_image, w32_peb, w32_dispatcher, w32_stack_reserve, w32_stack_commit;
     enum proc_state state;
     int32_t status, raw_exit;
@@ -59,6 +62,7 @@ struct proc_thread {
     uint32_t tid, slot, value, tls, stack_base, stack_bytes;
     uint32_t teb, emergency, stack_limit, stack_guard, w32_reserve;
     struct w32_delivery *w32_delivery;
+    struct w32_thread *w32;
     struct process *process;
     struct process *launch_loading; /* provisional child for this thread's spawn I/O */
     struct task *task;

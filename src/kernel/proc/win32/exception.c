@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 #include <ciuki/signal.h>
 struct w32_frame {
     uint32_t return_address, exception_address, context_address;
@@ -76,6 +76,12 @@ bool w32_fault(struct trap_frame *tf, uint32_t address)
 {
     struct proc_thread *t = proc_thread_for(g_current);
     if (!t || t->process->personality != PROC_WIN32) return false;
+    if(tf->vector==14 && w32_view_contains(t->process->memory,address)){
+        bool entered=t->in_syscall;t->in_syscall=true;
+        int error=w32_view_access(t->process->memory,address,!!(tf->err&2));
+        t->in_syscall=entered;
+        if(!error || t->process->state!=PROC_LIVE)return true;
+    }
     struct ciuki_w32_context ctx;
     w32_context_capture(&ctx, tf); fpu_w32_export(t->task, &ctx);
     bool privileged = false, sysenter = false;

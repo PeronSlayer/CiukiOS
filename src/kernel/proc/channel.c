@@ -297,3 +297,21 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
     channel_receive_cleanup(&op);
     return err;
 }
+
+/* Internal service connection: reuse duplex queues and description limits;
+ * move the peer into the server without exposing a cross-process F2 syscall. */
+int channel_connect(struct process *client, struct process *server, int32_t fds[2])
+{
+    int slot=desktop_fd_slot(server,0);
+    if(slot<0)return -EMFILE;
+    int err=channel_pair(client,fds);if(err)return err;
+    /* channel_pair allocates and can reach a voluntary point. Recheck the
+     * destination and both lifetimes before publishing the transferred end. */
+    slot=desktop_fd_slot(server,0);
+    if(slot<0 || client->state==PROC_STOPPING || server->state!=PROC_LIVE){
+        desktop_close(client,fds[0]);desktop_close(client,fds[1]);return slot<0?-EMFILE:-EINTR;
+    }
+    server->fds[slot]=client->fds[fds[1]];
+    client->fds[fds[1]]=(struct proc_fd){0};
+    fds[1]=slot;return 0;
+}

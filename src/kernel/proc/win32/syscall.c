@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread *a)
 {
     struct process *p = self->process;
@@ -13,16 +13,17 @@ static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread 
      * an allocation which can yield. Passed in proc_thread.w32_reserve. */
     struct proc_thread *t;
     int err = proc_thread_prepare(p, a->entry, a->argument, a->trampoline,
-        a->stack_bytes, CIUKI_THREAD_DETACHED | a->flags, self->mask, false, &t);
+        a->stack_bytes, CIUKI_THREAD_DETACHED | (a->flags & W32_THREAD_RESERVATION), self->mask, false, &t);
     if (err) return w32_status(err);
     if (p->state != PROC_LIVE) { proc_thread_discard(t); return W32_STATUS_ACCESS_DENIED; }
+    if(a->flags&W32_CREATE_SUSPENDED)t->w32->suspend=1;
     a->tid = t->tid; task_start(t->task);
     return 0;
 }
 int32_t w32_syscall(struct trap_frame *tf)
 {
     struct proc_thread *self = proc_thread_for(g_current);
-    if (!self || self->process->personality != PROC_WIN32 || self->process->state != PROC_LIVE) {
+    if (!self || self->process->state != PROC_LIVE) {
         tf->eax = (uint32_t)-EPERM; return -EPERM;
     }
     if (tf->edx || tf->esi || tf->edi || tf->ebp || tf->ecx < 16 || tf->ecx > 240) {
@@ -35,12 +36,20 @@ int32_t w32_syscall(struct trap_frame *tf)
     int err = ua_pin(u, &pin, va, bytes, true);
     if (err) { tf->eax = (uint32_t)err; return err; }
     err = copy_from_user(record, va, bytes);
-    if (!err) err = w32_record_validate(record, bytes, true);
+    if (!err) err = w32_record_validate(record, bytes, self->process->personality==PROC_WIN32);
     uint32_t status = 0;
     bool replaced = false;
     if (!err) {
         struct ciuki_w32_header *h = (void *)record;
         switch (h->operation) {
+        case W32_OBJECT: status=w32_object_call(self,(void *)record);break;
+        case W32_WAIT: status=w32_wait_call(self,(void *)record);break;
+        case W32_APC: status=w32_apc_call(self,(void *)record,tf,&replaced);break;
+        case W32_CONTEXT: status=w32_context_call(self,(void *)record);break;
+        case W32_MESSAGE: status=w32_message_call(self,(void *)record);break;
+        case W32_SECTION: status=w32_section_call(self,(void *)record);break;
+        case W32_VIEW: status=w32_view_call(self,(void *)record);break;
+        case W32_SERVICE: status=w32_service_call(self,(void *)record);break;
         case W32_IDENTITY: w32_identity((void *)record); break;
         case W32_COUNTER: {
             struct ciuki_w32_counter *a = (void *)record;
@@ -95,5 +104,8 @@ int32_t w32_syscall(struct trap_frame *tf)
     ua_unpin(u, &pin);
     int32_t result = err ? err : (int32_t)status;
     if (!replaced) tf->eax = (uint32_t)result;
+    if(!err && !status && !replaced && ((struct ciuki_w32_header *)record)->operation==W32_WAIT &&
+       ((struct ciuki_w32_wait_args *)record)->result==W32_WAIT_IO_COMPLETION)
+        if(!w32_apc_deliver(self,tf)){tf->eax=W32_STATUS_NO_MEMORY;return (int32_t)W32_STATUS_NO_MEMORY;}
     return result;
 }

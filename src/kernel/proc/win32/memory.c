@@ -1,7 +1,7 @@
 /* Windows reservation/commit semantics over uaddr's eager backing.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 
 uint32_t w32_protection(uint32_t protect, uint32_t *native)
 {
@@ -72,6 +72,7 @@ uint32_t w32_vm_alloc(struct uaddr *u, struct ciuki_w32_vm *a)
         base = placement(u, bytes, CIUKI_W32_APP_LIMIT, !!(a->flags & W32_MEM_TOP_DOWN));
         if (!base) return W32_STATUS_NO_MEMORY;
     } else if (base < CIUKI_W32_LOW) return W32_STATUS_CONFLICTING_ADDRESSES;
+    if(!reserving){const struct ua_extent *e=ua_find(u,base);if(e&&e->w32_type!=W32_MEM_PRIVATE)return W32_STATUS_ACCESS_DENIED;}
     int err = reserving ? reserve(u, base, bytes, a->protect, 0) : 0;
     bool fresh = reserving && !err;
     if (!err && (a->flags & W32_MEM_COMMIT))
@@ -110,6 +111,7 @@ uint32_t w32_vm_free(struct uaddr *u, struct ciuki_w32_vm *a)
 
 uint32_t w32_vm_protect(struct uaddr *u, struct ciuki_w32_vm *a)
 {
+    if(w32_view_contains(u,a->address))return w32_view_protect(u,a);
     uint32_t base, end, native, status = w32_protection(a->protect, &native);
     if (status) return status;
     if (a->flags || !round_span(a->address, a->bytes, PAGE_SIZE, CIUKI_W32_BUILTIN_LIMIT, &base, &end))

@@ -8,6 +8,8 @@
 #include <ciuki/process.h>
 #include <ciuki/cpustat.h>
 
+extern int w32_view_access(struct uaddr *,uint32_t,bool) __attribute__((weak));
+
 #define PTE_OWN 0x200u
 #define PTE_NEW 0x400u
 #define PTE_SHARED 0x800u
@@ -95,7 +97,7 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
          * No spinlock/IRQ hold; caller reserves the changing extent. */
         if (!(((va - base) / PAGE_SIZE) & 15u)) kpreempt_point();
         uint32_t *p = pte(u, va, false);
-        if (!p || (only_new && !(*p & PTE_NEW)))
+        if (!p || (only_new && (!(*p & PTE_NEW) || (*p & PTE_SHARED))))
             continue;
         if (*p & PTE_OWN) {
             if (!(*p & PTE_SHARED))
@@ -159,9 +161,13 @@ static void protect_pages(struct uaddr *u, uint32_t base, uint32_t end, uint32_t
         uint32_t *p = pte(u, va, false);
         if (!p || !(*p & PTE_OWN))
             continue;
-        uint32_t value = (*p & ~(PAGE_SIZE - 1)) | PTE_OWN | (*p & PTE_SHARED);
+        /* Shared+NEW denotes a stable COW alias; NEW alone is provisional
+         * private backing. Never expose shared COW pages as writable, even
+         * during a yielding VirtualProtect transaction. */
+        bool cow=(*p&PTE_SHARED)&&(*p&PTE_NEW);
+        uint32_t value = (*p & ~(PAGE_SIZE - 1)) | PTE_OWN | (*p & PTE_SHARED) | (cow?PTE_NEW:0);
         if (prot != PROT_NONE)
-            value |= PTE_P | PTE_U | ((prot & PROT_WRITE) ? PTE_W : 0);
+            value |= PTE_P | PTE_U | ((prot & PROT_WRITE) && !cow ? PTE_W : 0);
         set_pte(u, va, p, value);
     }
 }
@@ -477,6 +483,10 @@ int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, b
         return -EFAULT;
     for (struct ua_pin *p = u->pins; p; p = p->next)
         if (p->mutation && base < p->end && base + bytes > p->base) return -EBUSY;
+    if (u->win32 && w32_view_access)
+        for (uint32_t va=base&~4095u; va < (uint64_t)base+bytes; va+=PAGE_SIZE) {
+            int err=w32_view_access(u,va,write); if(err)return err;
+        }
     *pin = (struct ua_pin){ .base = base, .end = base + bytes, .task = g_current, .next = u->pins };
     u->pins = pin;
     return 0;
@@ -514,6 +524,7 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
     unsigned pages=0; int result=0;
     uint8_t *b = buffer;
     while (bytes) {
+        if (u->win32 && w32_view_access) { result=w32_view_access(owner,va,write); if(result)break; }
         uint32_t *p = pte((struct uaddr *)u, va, false);
         if (!p || !(*p & PTE_OWN)) { result=-EFAULT; break; }
         uint32_t off = va & (PAGE_SIZE - 1), n = PAGE_SIZE - off;
@@ -752,4 +763,18 @@ int ua_w32_release(struct uaddr *u, uint32_t base, bool internal)
     if (pinned(u, base, end)) return -EBUSY;
     remove_range(u, base, end);
     return 0;
+}
+
+/* f5-04 backend hook: section retains shared frames; private COW credits are
+ * transferred exactly once to PTE_OWN. Native mappings never use this hook. */
+int ua_w32_bind(struct uaddr *u,uint32_t va,uint32_t phys,uint32_t prot,bool shared)
+{
+    if(!u->win32 || (va&4095) || !phys || (phys&4095))return -EINVAL;
+    uint32_t *p=pte(u,va,true);if(!p)return -ENOMEM;
+    if((*p&PTE_OWN)&&!(*p&PTE_SHARED))return 0;
+    if(!(*p&PTE_OWN))u->backing++;
+    bool cow=shared&&!!(prot&0x80000000u);prot&=7;
+    uint32_t value=phys|PTE_OWN|(shared?PTE_SHARED:0)|(cow?PTE_NEW:0);
+    if(prot)value|=PTE_P|PTE_U|((prot&PROT_WRITE)&&!cow?PTE_W:0);
+    set_pte(u,va,p,value);return 0;
 }

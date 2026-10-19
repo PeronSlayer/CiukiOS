@@ -7,6 +7,10 @@
 #include <ciuki/signal.h>
 #include <ciuki/supervisor.h>
 
+extern void w32_process_cleanup(struct process *) __attribute__((weak));
+extern void w32_process_died(struct process *) __attribute__((weak));
+extern void w32_thread_died(struct proc_thread *) __attribute__((weak));
+
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
 static struct task *supervisor_task;
@@ -289,6 +293,8 @@ bool proc_task_exiting(struct task *task, int code)
         proc_stop(p, code, sig);
     }
     if (!t->stopped) {
+        if(!t->exiting)t->value = (uint32_t)code;
+        if(w32_thread_died)w32_thread_died(t);
         t->stopped = t->exiting = true;
         p->live_threads--;
         /* Cancellation cannot requeue a victim already removed by task_kill. */
@@ -304,6 +310,7 @@ bool proc_task_exiting(struct task *task, int code)
 
 static void close_resources(struct process *p)
 {
+    if(w32_process_cleanup)w32_process_cleanup(p);
     if (p->fds) {
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
             struct proc_object *o = p->fds[i].object;
