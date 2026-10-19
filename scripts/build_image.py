@@ -471,6 +471,8 @@ def win32_payloads(folder=None):
         sources["/WINDOWS/SYSTEM/codecs-inventory.json"]=folder / "codecs-inventory.json"
         for name in ("LICENSE","COPYING.LIB","AUTHORS","SOURCE-OFFER.txt","PATCHES.md","README.md","codecs-sources.json"):
             sources["/system/licenses/WINE-"+name]=ROOT / "third_party/wine" / name
+    if any(d.get("origin")=="CiukiOS DirectSetup installation identity" for d in store["dlls"]):
+        sources["/WINDOWS/SYSTEM/upper-builtins-inventory.json"]=folder / "upper-builtins-inventory.json"
     for dll in store["dlls"]:
         require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
         sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]

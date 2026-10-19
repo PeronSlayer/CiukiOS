@@ -108,7 +108,7 @@ static int store_test(void) {
     w32_ldr_init(&loader,&host.services,&host.peb);
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader,&manifest));
-    CHECK(loader.builtin_count==28);
+    CHECK(loader.builtin_count==30);
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader,&host.peb,"/builtin-import.exe","","C:\\","\0\0",&main));
     struct w32_module *core=w32_ldr_module(&loader,"ntdll.dll");
@@ -122,6 +122,28 @@ static int store_test(void) {
     CHECK(w32_ldr_proc(&loader,core,"__wine_dbg_strdup",0,0xffffffffu));
     w32_ldr_shutdown(&loader);RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
     puts("PASS kernel builtin store imports helpers pinning");return 0;
+}
+static int upper_store_test(const char *name) {
+    struct w32_loader loader;
+    w32_ldr_init(&loader,&host.services,&host.peb);
+    w32_ldr_bind(&loader);
+    struct w32_file manifest;
+    CHECK(w32_ciuki_store(&loader,&manifest));
+    CHECK(w32_ldr_thread_attach(&loader,&host.teb));
+    ULONG before=host.invocations;
+    if(name) {
+        struct w32_module *module;
+        CHECK(w32_ldr_load(&loader,name,0,&module));
+        CHECK(module->builtin);
+        CHECK(w32_ldr_proc(&loader,module,"DirectXSetupA",0,0xffffffffu));
+        CHECK(w32_ldr_proc(&loader,module,"DirectXSetupW",0,0xffffffffu));
+        CHECK(w32_ldr_proc(&loader,module,"DirectXSetupGetVersion",0,0xffffffffu));
+        CHECK(host.invocations-before==1);
+    }
+    w32_ldr_shutdown(&loader);
+    CHECK(host.invocations-before==(name?2u:0u));
+    printf("PASS kernel DirectSetup store H0 %s bind/callback observation only\n",name?name:"baseline");
+    return 0;
 }
 int main(int argc, char **argv) {
     if (argc < 4)
@@ -142,6 +164,11 @@ int main(int argc, char **argv) {
         w32_kernel_model_finish();return 0;
     }
     if(!w32_strcmp(argv[2],"spawn")){w32_kernel_model_spawn_test();w32_kernel_model_finish();return 0;}
+    if(!w32_strcmp(argv[2],"upper-store-baseline")||!w32_strcmp(argv[2],"upper-store-dsetup")||!w32_strcmp(argv[2],"upper-store-dsetup32")){
+        const char *name=!w32_strcmp(argv[2],"upper-store-baseline")?0:
+                         !w32_strcmp(argv[2],"upper-store-dsetup")?"dsetup.dll":"dsetup32.dll";
+        int result=upper_store_test(name);w32_kernel_model_finish();return result;
+    }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()

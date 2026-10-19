@@ -9,6 +9,14 @@ Rebuild with clang/lld and Python using scripts/win32/build-wine-dlls.sh
 --codecs. There are no secret source patches or binary-only codec payloads.
 You may modify, rebuild and replace these DLLs, subject to the LGPL.
 
+The original CiukiOS DirectSetup identity DLLs (dsetup.dll and dsetup32.dll)
+are also LGPL-2.1-or-later. Their complete corresponding source is supplied
+in sdk/win32/upper/dsetup.c with scripts/win32/upper_dlls.py and the shell
+entry point scripts/win32/build-wine-dlls.sh --installer-builtins.
+They contain no Wine implementation. No reused P4 Wine binary is supplied
+by the current B delivery; there is no claim that a URL-only source offer
+would suffice for distributing one.
+
 The referenced Wine sources are Wine 10.0, commit
 b073859675060c9211fcbccfd90e4e87520dc2c2, available at:
 https://github.com/wine-mirror/wine/tree/b073859675060c9211fcbccfd90e4e87520dc2c2

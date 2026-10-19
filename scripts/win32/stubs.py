@@ -154,6 +154,8 @@ def image_version(raw):
 
 def verify_store(path):
     path=Path(path);data=json.loads(path.read_text());ranges=[];names=set()
+    from scripts.win32 import upper_dlls
+    upper_dlls.reject_unqualified_wine(path.parent,data)
     for dll in data['dlls']:
         name=dll['name'].lower();base=dll['base'];size=dll['size']
         if dll['path']!=dll['name']: raise ValueError('builtin path')
@@ -187,6 +189,7 @@ def verify_store(path):
                 if codecs.sha(ROOT/'third_party/wine'/notice)!=digest: raise ValueError('P5 notice hash')
         audit=codecs.audit_imports(path.parent,list(records.values()))
         if any(e['missing'] for entries in audit.values() for e in entries): raise ValueError('P5 unresolved imports')
+    upper_dlls.verify_builtins(path.parent,data)
     return len(names)
 
 def main():

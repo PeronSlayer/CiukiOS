@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the freestanding CiukiOS core and census placeholders, never Wine binaries."""
+"""Build the freestanding CiukiOS core, authored DLLs and census placeholders."""
 # SPDX-License-Identifier: LGPL-2.1-or-later
 import hashlib
 import json
@@ -57,8 +57,11 @@ def build(out=None):
     codec_dlls=codecs.build(out,codec_base,flags)
     names={d['name'] for d in codec_dlls}
     store['dlls']=[d for d in store['dlls'] if d['name'] not in names]+codec_dlls
+    from scripts.win32 import upper_dlls
+    upper_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']+=upper_dlls.build(out,upper_base,flags)
     store['dlls'].insert(0,record)
-    store['msvcrt_policy']='builtin placeholder pending f5-14B measured replacement'
+    store['msvcrt_policy']='msvcrt is not qualified or staged; Wine 10.0 versus CiukiOS libc measurement pending (f5-14B incomplete)'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')
     stubs.verify_store(manifest)
     binary=struct.pack('<II',1,len(store['dlls']))

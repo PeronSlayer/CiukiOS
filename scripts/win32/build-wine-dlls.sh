@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wine 10.0 host tools + version.dll experiment; no OS image or guest execution.
+# Wine 10.0 PE experiment, upper audit and authored builtins; no OS images.
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
 
@@ -11,7 +11,14 @@ case ${1:-} in
     cat <<'EOF'
 Usage: build-wine-dlls.sh [SOURCE_DIRECTORY [OUTPUT_DIRECTORY]]
        build-wine-dlls.sh --codecs [OUTPUT_DIRECTORY]
+       build-wine-dlls.sh --installer-builtins [OUTPUT_DIRECTORY]
+       build-wine-dlls.sh --upper-audit PE_DIRECTORY OUTPUT_JSON
+       build-wine-dlls.sh --upper-source-audit PE_DIRECTORY OUTPUT_JSON
 --codecs builds the original P5 implementations; it needs no Wine tree.
+--installer-builtins builds the original DirectSetup identity DLLs.
+--upper-audit checks actual eager/delayed imports and recursive PE forwards.
+--upper-source-audit compares pinned source candidates with actual core PEs.
+The latter is discovery evidence, not proof of linked imports or runtime loads.
 Uses the hash-pinned Wine 10.0 sources, clang/lld, llvm-ar, llvm-dlltool,
 and the explicitly pinned host wrc. All builds run sequentially at nice 19.
 Outputs: tools/{winebuild,winegcc}, version.dll, version-pe.json, hashes.json.
@@ -21,6 +28,19 @@ SHA-256 before extraction; the script additionally checks every audited file.
 EOF
     exit 0 ;;
 esac
+case ${1:-} in
+  --installer-builtins)
+    [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
+    exec nice -n 19 python3 "$repo/scripts/win32/upper_dlls.py" build-builtins \
+        "${2:-$repo/build/host/win32/upper/pe}"
+    ;;
+  --upper-audit|--upper-source-audit)
+    [[ $# -eq 3 ]] || { echo 'Expected PE_DIRECTORY OUTPUT_JSON' >&2; exit 2; }
+    command=audit
+    [[ $1 != --upper-source-audit ]] || command=source-audit
+    exec nice -n 19 python3 "$repo/scripts/win32/upper_dlls.py" "$command" "$2" "$3"
+    ;;
+esac
 if [[ ${1:-} == --codecs ]]; then
     [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
     exec nice -n 19 python3 "$repo/scripts/win32/codecs.py" "${2:-$repo/build/host/win32/codecs/pe}"
@@ -28,6 +48,11 @@ fi
 source_dir=${1:-$source_dir}
 output_dir=${2:-$output_dir}
 [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
+[[ -d $source_dir ]] || {
+    echo "Pinned Wine 10.0 source tree unavailable: $source_dir" >&2
+    echo 'Stage the pinned release archive or complete tagged sources; installed Wine is not a substitute.' >&2
+    exit 2
+}
 source_dir=$(cd -- "$source_dir" && pwd)
 mkdir -p -- "$output_dir"
 output_dir=$(cd -- "$output_dir" && pwd)

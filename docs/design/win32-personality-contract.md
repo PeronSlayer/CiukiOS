@@ -2381,6 +2381,37 @@ Wine 10.0 residency. The audit retains the provisional/core-freeze-blocked
 status. Offline host checks verify source/spec/table consistency and the
 recorded small PE imports; they supply no Ciuki runtime or 128 MiB fit evidence.
 
+### f5-14B findings (2026-10-19; incomplete)
+
+The complete pinned Wine source cache is absent in this worktree and the
+release-archive request failed with DNS error (curl 6). Individually checked
+tagged Makefiles/specs and selected COM/RPC/SetupAPI sources support research,
+not a full-source build or source-distribution claim.
+
+Original CiukiOS DirectSetup builtins implement the Q4 7.0a installation
+identity (version `0x00040007`, revision 716), with no-copy setup success 0
+and nonzero version-query success. The existing census-sized IMM32 W21
+placeholder remains. There is no later-package version parameter in
+DirectXSetup; the installer preflight gate remains unqualified.
+Unknown component flags, including Managed DirectX, fail with -1 rather
+than acknowledging unsupported components.
+
+The actual-PE audit checks names, ordinals, eager/delayed imports and recursive
+export forwarders against actual provider tables. The source-candidate audit
+separately lists present exports (including W21 coverage) and missing names.
+T1 checks the authored builtin inventory, license, source/binary hashes and
+store-model page counts, refuses unlisted PEs and rejects unqualified reused
+Wine records. Cold seed residency and private COW commitment promises are
+reported separately, excluding DllMain heaps, metadata and page tables.
+
+The reused upper builds, Wine transport/RPCSS patches, each-DLL loads and
+selected upstream conformance tests, measured Wine-vs-libc MSVCRT choice,
+and 128 MiB system fit remain open. The source and linked audits cannot close
+these gates. `w32-upper-dlls-qemu-t23` is an authored, unrun integration case;
+it requires a guest exercise driver from the lead before use. See
+[the dependency audit](win32-wine-dependency-audit.md) and
+`build/codex/f5-14b-report.md` for measured host results and missing inputs.
+
 ## Win16 subsystem contract proposal — 2026-10-14 (f5-19 contract)
 
 [win16-subsystem-contract.md](win16-subsystem-contract.md) specifies the full
