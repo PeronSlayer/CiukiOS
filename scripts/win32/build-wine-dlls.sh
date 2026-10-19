@@ -10,10 +10,19 @@ case ${1:-} in
   --help|-h)
     cat <<'EOF'
 Usage: build-wine-dlls.sh [SOURCE_DIRECTORY [OUTPUT_DIRECTORY]]
+       build-wine-dlls.sh --upper-build [OUTPUT_DIRECTORY]
+       build-wine-dlls.sh --upper-decisions [OUTPUT_DIRECTORY [CORE_DIRECTORY]]
        build-wine-dlls.sh --codecs [OUTPUT_DIRECTORY]
        build-wine-dlls.sh --installer-builtins [OUTPUT_DIRECTORY]
        build-wine-dlls.sh --upper-audit PE_DIRECTORY OUTPUT_JSON
        build-wine-dlls.sh --upper-source-audit PE_DIRECTORY OUTPUT_JSON
+--upper-build extracts the SHA-256-checked Wine 10.0 archive afresh, applies
+third_party/wine/patches in order and builds the reused P4 DLLs (plus the
+measured IMM32 and MSVCRT) with clang/lld at fixed builtin-region bases;
+two consecutive runs give identical hashes (config/wine-upper.json).
+--upper-decisions audits those PEs against the CiukiOS core PEs
+(default build/apps/win32) and classifies every missing export.
+scripts/win32/wine_upper.py record/render/check update and verify the record.
 --codecs builds the original P5 implementations; it needs no Wine tree.
 --installer-builtins builds the original DirectSetup identity DLLs.
 --upper-audit checks actual eager/delayed imports and recursive PE forwards.
@@ -29,6 +38,16 @@ EOF
     exit 0 ;;
 esac
 case ${1:-} in
+  --upper-build)
+    [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
+    exec nice -n 19 python3 "$repo/scripts/win32/wine_upper.py" build \
+        "${2:-$repo/build/host/win32/wine-upper}"
+    ;;
+  --upper-decisions)
+    [[ $# -le 3 ]] || { echo 'Too many arguments' >&2; exit 2; }
+    exec nice -n 19 python3 "$repo/scripts/win32/wine_upper.py" audit \
+        "${2:-$repo/build/host/win32/wine-upper}" "${3:-$repo/build/apps/win32}"
+    ;;
   --installer-builtins)
     [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
     exec nice -n 19 python3 "$repo/scripts/win32/upper_dlls.py" build-builtins \

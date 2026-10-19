@@ -2412,6 +2412,26 @@ it requires a guest exercise driver from the lead before use. See
 [the dependency audit](win32-wine-dependency-audit.md) and
 `build/codex/f5-14b-report.md` for measured host results and missing inputs.
 
+Continuation (2026-10-19, staged archive): `build-wine-dlls.sh --upper-build`
+builds COMCTL32, COMDLG32, SHELL32, SHLWAPI, OLE32, COMBASE, OLEAUT32,
+RPCRT4, RICHED20, RICHED32, CABINET, ADVPACK, SETUPAPI, IMM32, MSVCRT and the
+in-process pieces COML2 and SHCORE from the SHA-256-checked archive with five
+recorded patches (in-process RPC only, no RPCSS activation, SetupDi failing,
+one MSVCRT CRT instead of UCRTBASE, builtin-region bases), clang/lld, at fixed
+bases from `0x74000000`; two consecutive runs are identical
+(`config/wine-upper.json`). Every missing core export has one recorded
+decision (core implementation, W21 stub, Wine-side retarget/compile-in/removal,
+W21 stub DLL for absent delay-loaded DLLs, lazy forwarder). The production
+loader (H0) binds none of the sixteen reused DLLs yet: each stops at a decided
+missing export, and SHELL32 also exceeds the PE parser's 4,096-entry resource
+walk (5,132 entries). MSVCRT decision: the Wine PE (all 85 imported functions
+and the MSVCRT ABI; 614,400 SizeOfImage) over the newlib port (72 of 85, no
+MSVCRT ABI). IMM32 stays the CiukiOS W21 placeholder. The sixteen reused DLLs
+total 15,486,976 SizeOfImage bytes, above the 14 MiB installer budget; SHELL32
+icons (7,543,454 bytes, mostly 32-bpp and PNG formats Windows 98 does not use)
+dominate. That overage returns to the lead. Details:
+[the dependency audit](win32-wine-dependency-audit.md).
+
 ## Win16 subsystem contract proposal — 2026-10-14 (f5-19 contract)
 
 [win16-subsystem-contract.md](win16-subsystem-contract.md) specifies the full

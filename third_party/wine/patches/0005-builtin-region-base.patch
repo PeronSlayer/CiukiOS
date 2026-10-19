@@ -1,0 +1,16 @@
+CiukiOS Wine 10.0: builtin-region-base
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-19. LGPL-2.1-or-later.
+Drop the upstream fixed RICHED20 image base; the CiukiOS recipe links
+each reused DLL at its builtin-store base (0x74000000 region).
+
+--- a/dlls/riched20/Makefile.in
++++ b/dlls/riched20/Makefile.in
+@@ -2,7 +2,6 @@
+ IMPORTLIB = riched20
+ IMPORTS   = uuid ole32 oleaut32 imm32 user32 gdi32 msvcrt
+ 
+-EXTRADLLFLAGS = -Wl,--image-base,0x7ac00000
+ 
+ SOURCES = \
+ 	caret.c \

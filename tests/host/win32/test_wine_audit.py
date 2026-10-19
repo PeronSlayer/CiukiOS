@@ -107,7 +107,8 @@ class PinnedAuditTests(unittest.TestCase):
     def test_source_candidate_status_is_not_an_abi_gate(self):
         self.assertIn('core-freeze-blocked', AUDIT['status'])
         self.assertIsNone(AUDIT['title_census']['core_exports'])
-        self.assertEqual(PIN['status'], 'pending-download')
+        self.assertEqual(PIN['status'], 'archive-verified')
+        self.assertGreater(len(AUDIT['graph']), 600)
         self.assertEqual(sum(row['pe_build'] == 'built-experiment' for row in AUDIT['roots'].values()), 1)
         self.assertTrue(all(not row['unresolved_modules'] for row in AUDIT['roots'].values()))
 

@@ -23,3 +23,12 @@ https://github.com/wine-mirror/wine/tree/b073859675060c9211fcbccfd90e4e87520dc2c
 https://dl.winehq.org/wine/source/10.0/wine-10.0.tar.xz
 These links supplement the supplied corresponding source; they do not
 replace an obligation to supply corresponding source with distribution.
+
+For the continuation's experimental reused P4 PEs, complete corresponding
+source consists of the exact Wine 10.0 archive (SHA-256 in wine-pin.json),
+third_party/wine/patches/ (applied in the order of PATCHES.md),
+scripts/win32/wine_upper.py, the shell entry point, that pin and the build
+record config/wine-upper.json. Archive verification and the patch order are enforced by the
+recipe. Any future binary distribution must make this source set available
+from the same distribution location, with these notices; the local ignored
+archive and the upstream links alone are not a published source distribution.

@@ -1,0 +1,485 @@
+CiukiOS Wine 10.0: single-msvcrt-crt
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-19. LGPL-2.1-or-later.
+Link the P4 upper DLLs against msvcrt.dll (the Windows 98 system CRT)
+instead of ucrtbase.dll; keep _recalloc, round() and _swprintf_l locally.
+
+--- a/dlls/advpack/Makefile.in
++++ b/dlls/advpack/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = advpack.dll
+ IMPORTLIB = advpack
+-IMPORTS   = ole32 setupapi version advapi32
++IMPORTS   = ole32 setupapi version advapi32 msvcrt
+ 
+ SOURCES = \
+ 	advpack.c \
+--- a/dlls/cabinet/Makefile.in
++++ b/dlls/cabinet/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = cabinet.dll
+ IMPORTLIB = cabinet
+-IMPORTS   = $(ZLIB_PE_LIBS)
++IMPORTS   = $(ZLIB_PE_LIBS) msvcrt
+ EXTRAINCL = $(ZLIB_PE_CFLAGS)
+ 
+ SOURCES = \
+--- a/dlls/combase/Makefile.in
++++ b/dlls/combase/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -DWINOLE32API=
+ MODULE    = combase.dll
+ IMPORTLIB = combase
+-IMPORTS   = advapi32 ole32 user32 gdi32 uuid rpcrt4
++IMPORTS   = advapi32 ole32 user32 gdi32 uuid rpcrt4 msvcrt
+ DELAYIMPORTS = oleaut32
+ 
+ SOURCES = \
+--- a/dlls/comctl32/Makefile.in
++++ b/dlls/comctl32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_COMCTL32_
+ MODULE    = comctl32.dll
+ IMPORTLIB = comctl32
+-IMPORTS   = uuid user32 gdi32 advapi32 imm32 kernelbase
++IMPORTS   = uuid user32 gdi32 advapi32 imm32 kernelbase msvcrt
+ DELAYIMPORTS = winmm uxtheme
+ 
+ SOURCES = \
+--- a/dlls/comdlg32/Makefile.in
++++ b/dlls/comdlg32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_COMDLG32_
+ MODULE    = comdlg32.dll
+ IMPORTLIB = comdlg32
+-IMPORTS   = uuid shell32 shlwapi comctl32 winspool user32 gdi32 advapi32
++IMPORTS   = uuid shell32 shlwapi comctl32 winspool user32 gdi32 advapi32 msvcrt
+ DELAYIMPORTS = ole32
+ 
+ SOURCES = \
+--- a/dlls/coml2/Makefile.in
++++ b/dlls/coml2/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -DWINOLE32API=
+ MODULE    = coml2.dll
+ IMPORTLIB = coml2
+-IMPORTS   = uuid
++IMPORTS   = uuid msvcrt
+ 
+ SOURCES = \
+ 	memlockbytes.c \
+--- a/dlls/imm32/Makefile.in
++++ b/dlls/imm32/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = imm32.dll
+ IMPORTLIB = imm32
+-IMPORTS   = user32 gdi32 advapi32 kernelbase win32u
++IMPORTS   = user32 gdi32 advapi32 kernelbase win32u msvcrt
+ DELAYIMPORTS = ole32
+ 
+ SOURCES = \
+--- a/dlls/ole32/Makefile.in
++++ b/dlls/ole32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_OLE32_
+ MODULE    = ole32.dll
+ IMPORTLIB = ole32
+-IMPORTS   = uuid advapi32 user32 gdi32 combase rpcrt4 kernelbase coml2
++IMPORTS   = uuid advapi32 user32 gdi32 combase rpcrt4 kernelbase coml2 msvcrt
+ DELAYIMPORTS = oleaut32
+ 
+ SOURCES = \
+--- a/dlls/oleaut32/Makefile.in
++++ b/dlls/oleaut32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_OLEAUT32_
+ MODULE    = oleaut32.dll
+ IMPORTLIB = oleaut32
+-IMPORTS   = uuid ole32 rpcrt4 user32 gdi32 advapi32
++IMPORTS   = uuid ole32 rpcrt4 user32 gdi32 advapi32 msvcrt
+ DELAYIMPORTS = comctl32 urlmon windowscodecs
+ 
+ SOURCES = \
+--- a/dlls/oleaut32/vartype.c
++++ b/dlls/oleaut32/vartype.c
+@@ -29,6 +29,11 @@
+ #include "locale.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(variant);
++
++/* CiukiOS: msvcrt.dll exports _snwprintf_l with the same arguments;
++ * _swprintf_l is a UCRT-only name. */
++int __cdecl _snwprintf_l(wchar_t *, size_t, const wchar_t *, _locale_t, ...);
++#define _swprintf_l _snwprintf_l
+ 
+ extern HMODULE hProxyDll;
+ 
+--- a/dlls/riched20/Makefile.in
++++ b/dlls/riched20/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = riched20.dll
+ IMPORTLIB = riched20
+-IMPORTS   = uuid ole32 oleaut32 imm32 user32 gdi32
++IMPORTS   = uuid ole32 oleaut32 imm32 user32 gdi32 msvcrt
+ 
+ EXTRADLLFLAGS = -Wl,--image-base,0x7ac00000
+ 
+--- a/dlls/riched32/Makefile.in
++++ b/dlls/riched32/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE    = riched32.dll
+-IMPORTS   = riched20 user32
++IMPORTS   = riched20 user32 msvcrt
+ 
+ SOURCES = \
+ 	richedit.c \
+--- a/dlls/rpcrt4/Makefile.in
++++ b/dlls/rpcrt4/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_RPCRT4_ -DMSWMSG
+ MODULE    = rpcrt4.dll
+ IMPORTLIB = rpcrt4
+-IMPORTS   = uuid advapi32
++IMPORTS   = uuid advapi32 msvcrt
+ DELAYIMPORTS = iphlpapi wininet secur32 user32 ws2_32 ole32 oleaut32
+ 
+ SOURCES = \
+--- a/dlls/setupapi/Makefile.in
++++ b/dlls/setupapi/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_SETUPAPI_
+ MODULE    = setupapi.dll
+ IMPORTLIB = setupapi
+-IMPORTS   = uuid advapi32 rpcrt4 kernelbase
++IMPORTS   = uuid advapi32 rpcrt4 kernelbase msvcrt
+ DELAYIMPORTS = cabinet shell32 wintrust ole32 comdlg32 user32
+ 
+ SOURCES = \
+--- a/dlls/setupapi/parser.c
++++ b/dlls/setupapi/parser.c
+@@ -38,6 +38,36 @@
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(setupapi);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ #define CONTROL_Z  '\x1a'
+ #define MAX_SECTION_NAME_LEN  255
+--- a/dlls/setupapi/stringtable.c
++++ b/dlls/setupapi/stringtable.c
+@@ -32,6 +32,36 @@
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(setupapi);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ DECLARE_HANDLE(HSTRING_TABLE);
+ 
+--- a/dlls/shcore/Makefile.in
++++ b/dlls/shcore/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = shcore.dll
+ IMPORTLIB = shcore
+-IMPORTS   = advapi32
++IMPORTS   = advapi32 msvcrt
+ DELAYIMPORTS = user32 ole32
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+--- a/dlls/shcore/main.c
++++ b/dlls/shcore/main.c
+@@ -36,6 +36,36 @@
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shcore);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ static DWORD shcore_tls;
+ static IUnknown *process_ref;
+--- a/dlls/shell32/Makefile.in
++++ b/dlls/shell32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_SHELL32_
+ MODULE    = shell32.dll
+ IMPORTLIB = shell32
+-IMPORTS   = uuid shlwapi user32 gdi32 advapi32
++IMPORTS   = uuid shlwapi user32 gdi32 advapi32 msvcrt
+ DELAYIMPORTS = ole32 oleaut32 shdocvw version comctl32 comdlg32 gdiplus
+ 
+ SOURCES = \
+--- a/dlls/shell32/control.c
++++ b/dlls/shell32/control.c
+@@ -43,6 +43,36 @@
+ #define MAX_STRING_LEN      1024
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shlctrl);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ void Control_UnloadApplet(CPlApplet* applet)
+ {
+--- a/dlls/shell32/shlfileop.c
++++ b/dlls/shell32/shlfileop.c
+@@ -46,6 +46,36 @@
+ #include "wine/list.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shell);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ #define IsAttrib(x, y)  ((INVALID_FILE_ATTRIBUTES != (x)) && ((x) & (y)))
+ #define IsAttribFile(x) (!((x) & FILE_ATTRIBUTE_DIRECTORY))
+--- a/dlls/shlwapi/Makefile.in
++++ b/dlls/shlwapi/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_SHLWAPI_
+ MODULE    = shlwapi.dll
+ IMPORTLIB = shlwapi
+-IMPORTS   = uuid shcore user32 gdi32 advapi32 kernelbase
++IMPORTS   = uuid shcore user32 gdi32 advapi32 kernelbase msvcrt
+ DELAYIMPORTS = userenv oleaut32 ole32 comctl32 comdlg32 mpr mlang urlmon shell32 winmm
+ 
+ SOURCES = \
+--- a/dlls/shlwapi/ordinal.c
++++ b/dlls/shlwapi/ordinal.c
+@@ -48,6 +48,36 @@
+ 
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shell);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ /* DLL handles for late bound calls */
+ extern HINSTANCE shlwapi_hInstance;
+--- a/dlls/shlwapi/regstream.c
++++ b/dlls/shlwapi/regstream.c
+@@ -34,6 +34,36 @@
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shell);
++
++/* CiukiOS: these modules link the single system msvcrt.dll instead of
++ * ucrtbase.dll. _recalloc is an MSVCR80+ export, so keep its documented
++ * semantics locally: grow/shrink, zero the added bytes, fail on overflow. */
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++static void *ciuki_recalloc(void *mem, size_t num, size_t size)
++{
++    size_t old_size, total;
++    void *ret;
++
++    if (!mem) return calloc(num, size);
++    if (size && num > (size_t)-1 / size)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    total = num * size;
++    old_size = _msize(mem);
++    ret = realloc(mem, total);
++    if (!ret)
++    {
++        errno = ENOMEM;
++        return NULL;
++    }
++    if (total > old_size) memset((char *)ret + old_size, 0, total - old_size);
++    return ret;
++}
++#define _recalloc ciuki_recalloc
+ 
+ typedef struct
+ {
+--- a/dlls/shlwapi/string.c
++++ b/dlls/shlwapi/string.c
+@@ -39,6 +39,20 @@
+ #include "resource.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(shell);
++
++/* CiukiOS: msvcrt.dll has no C99 round(); round half away from zero exactly
++ * (x - floor(x) is exact for doubles), as the MSVCR120+ export does. */
++#include <math.h>
++static double ciuki_round(double x)
++{
++    double r;
++
++    if (x < 0.0) return -ciuki_round(-x);
++    r = floor(x);
++    if (x - r >= 0.5) r += 1.0;
++    return r;
++}
++#define round ciuki_round
+ 
+ extern HINSTANCE shlwapi_hInstance;
+ 
