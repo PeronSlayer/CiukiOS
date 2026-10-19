@@ -1,0 +1,48 @@
+{
+  "release": "1.3",
+  "distribution_url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/",
+  "kernel": {
+    "archive": "kernel.zip",
+    "url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/kernel.zip",
+    "package_sha256": "1efdba830a473891bf4c5c81e1858d86c247a0c2a03f00d69b5f40969c442905",
+    "member": "BIN/KERNL386.SYS",
+    "sha256": "932c0c155701eddb7b902f7269a1b2ce31f5c82a6dc195172f2336d18a74e1fb",
+    "version": "2043",
+    "license": "GPL-2.0-or-later",
+    "license_member": "DOC/KERNEL/COPYING",
+    "license_sha256": "2ec21c4f10e9fc6bafbc619cf905424162a0b6443e482d599a6d0d7718e9ae58"
+  },
+  "shell": {
+    "archive": "freecom.zip",
+    "url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/freecom.zip",
+    "package_sha256": "25fef0309e94e87b88b634452b780bd2821fb6d94b0d0e149ad97633ea7d6be7",
+    "member": "BIN/COMMAND.COM",
+    "sha256": "93ed257d3aa2454821aa305b731544550dcccff898865b590deb972c47b48610",
+    "version": "0.85a",
+    "license": "GPL-2.0",
+    "license_member": "BIN/FREECOM/LICENSE.TXT",
+    "license_sha256": "45ece956c40ccac10202a455c0841da8bf42b28412f8c992357da826bb107eae"
+  },
+  "share": {
+    "archive": "share.zip",
+    "url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/share.zip",
+    "package_sha256": "e9dd873b3f009f723def66204668d8932a4c60e8fdc32f6f93d02983f48d9a3f",
+    "member": "BIN/SHARE.COM",
+    "sha256": "b51a1af2188d41096e7983b2eef7a7bff8ef9fccffbbb3db93d4e49eb10b6e55",
+    "version": "08/2006a",
+    "license": "GPL (APPINFO/SHARE.LSM Copying-policy)",
+    "license_member": "APPINFO/SHARE.LSM",
+    "license_sha256": "7879d8d51c768822febdd9a23cd97da75242555354646101f9203ab2dd4c0fa9"
+  },
+  "boot": {
+    "archive": "FD13-FloppyEdition.zip",
+    "url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.3/official/FD13-FloppyEdition.zip",
+    "package_sha256": "75a4e11a7fce6f124e20927b3022b4b715a2a3f7324c5f5bfea42d90d80eb072",
+    "member": "144m/x86BOOT.img",
+    "member_sha256": "3f7834ea4575ba05d106e4b8f59f886da7bfb1979ee386be2a2deba8df518925",
+    "offset": 0,
+    "sha256": "f8c60bba305fb128a51dd56ed33ab214bf0afabbee0b12e5cbfb98d3c4f6267d",
+    "version": "1.3",
+    "license": "GPL-2.0-or-later (FreeDOS kernel SYS boot sector)"
+  }
+}
