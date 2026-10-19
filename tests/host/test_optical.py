@@ -162,7 +162,7 @@ class OpticalHarness(unittest.TestCase):
         out=ROOT/'build/host/optical'
         out.mkdir(parents=True,exist_ok=True)
         cls.binary=out/'test_optical'
-        sources=['tests/host/fs/test_optical.c','src/kernel/fs/fs_port.c','src/kernel/fs/cache.c',
+        sources=['tests/host/fs/test_optical.c','src/kernel/fs/fs_port.c','src/kernel/fs/blkreq.c','src/kernel/fs/cache.c',
                  'src/kernel/fs/path.c','src/kernel/fs/fat.c','src/kernel/fs/vfs.c',
                  'src/kernel/fs/fs_ro.c','src/kernel/fs/iso9660.c','src/kernel/lib/sha256.c']
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',

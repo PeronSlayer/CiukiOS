@@ -34,7 +34,7 @@ class KernelStackTests(unittest.TestCase):
         source = cls.work / "fd-stack.c"
         source.write_text(cls.watermark + f'\n#include "{ROOT / "tests/host/proc/files_stack_test.c"}"\n')
         sources = ["tests/host/proc/signal_legacy.c", "tests/host/proc/desktop_legacy.c",
-                   "src/kernel/fs/fs_port.c", "src/kernel/fs/cache.c", "src/kernel/fs/path.c",
+                   "src/kernel/fs/fs_port.c", "src/kernel/fs/blkreq.c", "src/kernel/fs/cache.c", "src/kernel/fs/path.c",
                    "src/kernel/fs/fat.c", "src/kernel/fs/vfs.c", "src/kernel/fs/fs_ro.c", "src/kernel/fs/iso9660.c", "tests/host/fs/fake.c",
                    "src/kernel/lib/sha256.c"]  # fmt.c is included by files_test.c (f2-51)
         subprocess.run(["clang", "-std=c17", "-O2", "-g", "-Wall", "-Wextra", "-Werror",

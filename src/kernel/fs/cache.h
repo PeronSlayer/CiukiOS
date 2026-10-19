@@ -35,6 +35,7 @@ struct cache_lru { struct cache_block *oldest, *newest; };
 struct cache_device {
     struct blkdev *dev; int error; uint32_t epoch;
     uint32_t dirty_bytes, oldest;
+    uint64_t frontier; /* advanced by each existing synchronous FAT barrier */
     bool requested;
 };
 /* Stack-owned transport reservation; owner waits for joined readers before

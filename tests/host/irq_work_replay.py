@@ -120,7 +120,7 @@ void serial_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 void bootlog_capture(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 ''')
-        ata_fs = ['partition', 'fs_port', 'cache', 'fat', 'path', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount']
+        ata_fs = ['partition', 'fs_port', 'blkreq', 'cache', 'fat', 'path', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount']
         replay(folder, 'ata', 'ata_test.c', [('ata_channel_irq', 'ATA-status-capture', 100), ('ata_dma_irq', 'ATA-DMA-stop-ack', 100)],
                ['fake_in8', 'fake_out8'],
                [*(f'src/kernel/fs/{n}.c' for n in ata_fs), 'src/kernel/core/bootlog.c', 'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c'],
@@ -128,10 +128,10 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
         usb_sources = ['usb_core', 'uhci', 'usb_interrupt', 'ohci', 'usb_hub', 'usb_hid', 'usb_storage']
         replay(folder, 'usb', 'usb/usb_test.c', [('usb_host_irq', 'UHCI-OHCI', 100)],
                ['read_reg', 'write_reg', 'config_read', 'config_write'],
-               [*(f'src/kernel/usb/{n}.c' for n in usb_sources), 'src/kernel/lib/fmt.c'],
+               [*(f'src/kernel/usb/{n}.c' for n in usb_sources), 'src/kernel/fs/blkreq.c', 'src/kernel/lib/fmt.c'],
                ['-DCIUKI_USB_HOST', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread'])
         subprocess.run(['python3', str(HOST / 'fs/fixtures.py')], check=True, env=ENV, stdout=subprocess.DEVNULL)
-        fs_sources = ['fs_port', 'cache', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660']
+        fs_sources = ['fs_port', 'blkreq', 'cache', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660']
         audio_source=(HOST / 'audio/audio_test.c').read_text().replace('int main(int argc,char **argv)', 'int irq_fixture_main(int argc,char **argv)').replace('test_service_budget();', '')
         audio_source=re.sub(r'(#include \")([^\"]+)(\")', lambda m:m[1]+str((HOST / 'audio' / m[2]).resolve())+m[3],audio_source)
         replay(folder, 'audio', None,

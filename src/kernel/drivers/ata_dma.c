@@ -164,6 +164,7 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
     }
     mm_claim(table,1,MM_DMA); mm_claim(bounce,ATA_DMA_BYTES/PAGE_SIZE,MM_DMA);
     c->dma.claim = claim; c->dma.generation = generation;
+    c->dma.bounce_pin=&pins[1];
     c->dma.pci_config = address;
 }
 
@@ -174,15 +175,65 @@ int ata_dma_prepare(struct ata_channel *c, void *buf, uint32_t bytes, bool write
     /* DMA ports are already owned; never prepare over active hardware. */
     if ((m->ops->in8(m->ctx, m->base) & 1) ||
         (m->ops->in8(m->ctx, m->base + 2) & ATA_BM_ACTIVE)) return -FS_EIO;
-    uint32_t phys = 0;
-    m->bounced = !m->ops->physical(m->ctx, buf, bytes, !write, &phys) || (phys & 1) ||
-                  (uint64_t)phys + bytes > (1ull << 32);
+    uint32_t phys = 0, offset=0;
+    unsigned entries=0;
+    m->pin_count=0;
+    m->bounced=false;
+    if (m->ops->physical(m->ctx,buf,bytes,!write,&phys) && !(phys&1) &&
+        (uint64_t)phys+bytes<=(1ull<<32)) {
+        struct mm_pin *pin=&m->pins[0];
+        *pin=(struct mm_pin){.generation=m->generation,.first_pfn=phys/4096,
+            .pages=((phys&4095u)+bytes+4095u)/4096,.address_mask=UINT32_MAX,.alignment=2,
+            .direction=write ? MM_PIN_TO_DEVICE : MM_PIN_FROM_DEVICE};
+        if (!mm_pin || !mm_pin(pin)) {
+            int n=ata_dma_prd(m->prd,ATA_DMA_PRDS,phys,bytes);
+            if (n>0) { entries=(unsigned)n; offset=bytes; m->pin_count=1; }
+            else if (mm_unpin && pin->ticket) (void)mm_unpin(pin,pin->generation);
+        }
+    }
+    /* Translate page fragments independently: virtual adjacency does not
+     * imply physical adjacency. Every direct fragment is pinned before any
+     * descriptor becomes visible to the controller. */
+    while (offset<bytes) {
+        uintptr_t address=(uintptr_t)buf+offset;
+        uint32_t take=4096u-(address&4095u); if (take>bytes-offset) take=bytes-offset;
+        if ((take&1) || entries==ATA_DMA_PRDS ||
+            !m->ops->physical(m->ctx,(uint8_t *)buf+offset,take,!write,&phys) || (phys&1) ||
+            (phys&4095u)+take>4096u || (phys&65535u)+take>65536u) {
+            m->bounced=true; break;
+        }
+        struct mm_pin *pin=&m->pins[m->pin_count];
+        *pin=(struct mm_pin){.generation=m->generation,.first_pfn=phys/4096,.pages=1,
+            .address_mask=UINT32_MAX,.alignment=2,
+            .direction=write ? MM_PIN_TO_DEVICE : MM_PIN_FROM_DEVICE};
+        if (mm_pin && mm_pin(pin)) { m->bounced=true; break; }
+        m->pin_count++;
+        m->prd[entries++]=(struct ata_prd){phys,(uint16_t)take,0};
+        offset+=take;
+    }
     if (m->bounced) {
+        for (unsigned i=0;i<m->pin_count;i++) if (mm_unpin && m->pins[i].ticket)
+            (void)mm_unpin(&m->pins[i],m->pins[i].generation);
+        m->pin_count=0;
         phys = m->bounce_phys;
         if (write) memcpy(m->bounce, buf, bytes);
+        int n = ata_dma_prd(m->prd, ATA_DMA_PRDS, phys, bytes);
+        if (n < 0) return n;
+        entries=(unsigned)n;
+    } else {
+        m->prd[entries-1].flags=0x8000;
     }
-    int n = ata_dma_prd(m->prd, ATA_DMA_PRDS, phys, bytes);
-    if (n < 0) return n;
+    struct blk_request *request=c->requests.active;
+    if (request) {
+        request->page_count=0;
+        for (unsigned i=0;i<entries && i<BLKREQ_PAGES;i++) {
+            request->pages[i]=(struct blk_page){.physical=m->prd[i].address,
+                .bytes=m->prd[i].count ? m->prd[i].count : 65536u,
+                .pin=m->bounced ? m->bounce_pin : &m->pins[m->pin_count==1 ? 0 : i]};
+            request->page_count++;
+        }
+        request->pin_owner=m->bounced ? m->bounce_pin : &m->pins[0];
+    }
     m->bytes = bytes; m->direction = write ? 0 : ATA_BM_READ;
     m->started = false;
     m->irq_status = 0;
@@ -240,4 +291,7 @@ void ata_dma_finish(struct ata_channel *c, void *buf, bool write, bool success)
 {
     __asm__ volatile("" ::: "memory");
     if (success && !write && c->dma.bounced) memcpy(buf, c->dma.bounce, c->dma.bytes);
+    for (unsigned i=0;i<c->dma.pin_count;i++) if (mm_unpin && c->dma.pins[i].ticket)
+        (void)mm_unpin(&c->dma.pins[i],c->dma.pins[i].generation);
+    c->dma.pin_count=0;
 }

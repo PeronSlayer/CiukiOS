@@ -191,4 +191,4 @@ static void replay(void) {
     vfs_table_destroy(&t->copy); vfs_table_destroy(&t->reader); vfs_destroy(&t->vfs);
     finish(&t->disk,&t->cache); free(t);
 }
-int main(void) { audit(); replay(); CHECK(!fs_host_contig_live); puts("PASS F1-82 allocation audit and copy/reader replay"); }
+int main(void) { audit(); replay(); CHECK(!fs_host_contig_live); puts("PASS F1-82 allocation audit and copy/reader replay"); return 0; }

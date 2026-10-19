@@ -33,6 +33,17 @@ static uint16_t native_dma_pci_command;
 static uint32_t native_dma_config_address;
 static unsigned native_dma_allocs, native_dma_frees, native_dma_alloc_fail, native_dma_config_writes;
 static unsigned page_count;
+static unsigned dma_pin_live, dma_pin_sequence, dma_pin_fail;
+int mm_pin(struct mm_pin *pin) {
+    CHECK(flags&0x200);
+    if (dma_pin_fail && !--dma_pin_fail) return -ENOMEM;
+    CHECK(pin && pin->pages && !pin->ticket);
+    pin->ticket=++dma_pin_sequence; dma_pin_live++; return 0;
+}
+int mm_unpin(struct mm_pin *pin,uint32_t generation) {
+    CHECK((flags&0x200) && pin && pin->ticket && pin->generation==generation && dma_pin_live);
+    pin->ticket=0; dma_pin_live--; return 0;
+}
 static bool survivor_started;
 static unsigned probe_ends, probe_passes, probe_errors;
 static void *host_page(uint32_t phys) {
@@ -681,12 +692,12 @@ static void test_data(void)
             memset(buf, 0, n * 512 + 1);
             CHECK(b->read(b, lba, n, buf + 1) == 0);
             CHECK(!memcmp(buf + 1, expected, n * 512) && buf[0] == 0);
-            CHECK(f.commands - commands == (n + 255) / 256 && f.delivered - irqs == n);
+            CHECK(f.commands - commands == (n + 127) / 128 && f.delivered - irqs == n);
             CHECK(!f.channel.active && !f.channel.mutex.owner);
             CHECK(f.command == (ext ? 0x24 : 0x20));
             commands = f.commands; irqs = f.delivered;
             CHECK(b->write(b, lba, n, buf + 1) == 0);
-            CHECK(f.commands - commands == (n + 255) / 256 && f.delivered - irqs == n);
+            CHECK(f.commands - commands == (n + 127) / 128 && f.delivered - irqs == n);
             CHECK(f.command == (ext ? 0x34 : 0x30) && f.data_writes == n * 256);
             CHECK(b->flush(b) == 0 && f.command == (ext ? 0xea : 0xe7));
             CHECK(f.irq_acks == f.delivered && (f.control & 2));
@@ -737,13 +748,13 @@ static void test_multiple(void)
             fill(expected,lba,n); memset(buf,0,n*512+1);
             f.immediate=(i&1)!=0;
             CHECK(!b->read(b,lba,n,buf+1) && !memcmp(buf+1,expected,n*512) && !buf[0]);
-            CHECK(f.commands-commands==(n+255)/256 && f.delivered-irqs==phases);
+            CHECK(f.commands-commands==(n+127)/128 && f.delivered-irqs==phases);
             CHECK(f.command==(ext ? 0x29 : 0xc4) && f.max_burst<=1024);
             CHECK(f.delays-delays<n*256); /* no microsecond delay per word */
             if (n>4) CHECK(yields>y);
             commands=f.commands; irqs=f.delivered;
             CHECK(!b->write(b,lba,n,buf+1));
-            CHECK(f.commands-commands==(n+255)/256 && f.delivered-irqs==phases);
+            CHECK(f.commands-commands==(n+127)/128 && f.delivered-irqs==phases);
             CHECK(f.command==(ext ? 0x39 : 0xc5) && !f.channel.active && !f.channel.mutex.owner);
             CHECK(f.irq_acks==f.delivered && !b->quarantined);
         }

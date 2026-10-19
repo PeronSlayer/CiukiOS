@@ -152,7 +152,7 @@ python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$o
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" \
     "$root/tests/host/ata_test.c" "$root/src/kernel/fs/partition.c" \
-    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
+    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
@@ -512,7 +512,7 @@ python3 "$root/tests/host/fs/fixtures.py"
 # F1 shutdown with F2's production bootstrap/path/fd namespace linked. Also
 # retain the weak-hook-only storage harness as a separate regression check.
 storage_sources=(
-    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c"
+    "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c"
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c"
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c"
     "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c"
@@ -539,7 +539,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
     "$root/tests/host/proc/files_test.c" "$root/tests/host/proc/signal_legacy.c" \
     "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
-    "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
+    "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
 "$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"

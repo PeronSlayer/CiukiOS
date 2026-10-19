@@ -115,7 +115,7 @@ static int read_transport(struct block_cache *c, struct blkdev *d, uint64_t lba,
     struct cache_fill fill={.next=c->fills,.dev=d,.lba=lba,.count=count,.buffer=buf,.generation=generation,.epoch=epoch};
     c->fills=&fill;
     fs_lock_drop(&c->lock);
-    int e=d->read(d,lba,count,buf);
+    int e=blkdev_read(d,lba,count,buf);
     fs_lock_take(&c->lock);
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     state=device(c,d);
@@ -155,7 +155,7 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
     uint32_t since=b->since;
     b->busy=true;
     fs_lock_drop(&c->lock);
-    e=d->write(d,b->lba,1,b->data);
+    e=blkdev_request(d,BLK_WRITE,b->lba,1,b->data,BLK_BACKGROUND,s->frontier);
     fs_lock_take(&c->lock);
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!e && (b->invalid || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
@@ -685,7 +685,7 @@ selected:
         if (!e) {
             const void *data=c->writeback_buffer ? c->writeback_buffer+i*d->sector_size : blocks[i]->data;
             uint64_t lba=blocks[i]->lba;
-            fs_lock_drop(&c->lock); e=d->write(d,lba,end-i,data); fs_lock_take(&c->lock);
+            fs_lock_drop(&c->lock); e=blkdev_request(d,BLK_WRITE,lba,end-i,(void *)data,BLK_BACKGROUND,s->frontier); fs_lock_take(&c->lock);
             if (c->refresh) c->refresh(c->refresh_ctx,d);
             if (!e && (s->epoch!=epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
             for (unsigned j=i;j<end;j++) if (blocks[j]->invalid) e=-FS_EIO;
@@ -721,7 +721,8 @@ static int flush_device(struct block_cache *c, struct blkdev *d) {
     if (!blkdev_durable(d)) return remember(c,d,d->quarantined ? -FS_EQUARANTINED : -FS_EROFS);
     if (d->write_cache_state!=BLKDEV_CACHE_DISABLED) {
         uint32_t generation=d->media_generation,epoch=s->epoch;
-        fs_lock_drop(&c->lock); int e=d->flush(d); fs_lock_take(&c->lock);
+        uint64_t frontier=s->frontier++;
+        fs_lock_drop(&c->lock); int e=blkdev_request(d,BLK_FLUSH,0,0,0,BLK_BACKGROUND,frontier); fs_lock_take(&c->lock);
         if (c->refresh) c->refresh(c->refresh_ctx,d);
         if (s->epoch!=epoch || generation!=d->media_generation) return -FS_EIO;
         if (!e && d->quarantined) e=-FS_EIO;

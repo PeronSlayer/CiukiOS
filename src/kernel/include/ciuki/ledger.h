@@ -10,7 +10,7 @@ enum mm_owner {
     MM_RESERVED, MM_KERNEL_IMAGE, MM_KERNEL, MM_HEAP, MM_STACK,
     MM_TABLE, MM_DMA, MM_DEVICE, MM_CACHE_DATA, MM_CACHE_META,
     MM_CACHE_WORK, MM_USER_PRIVATE, MM_USER_SHARED, MM_VM_PRIVATE,
-    MM_VM_POOL, MM_OWNERS
+    MM_VM_POOL, MM_IO_REQUEST, MM_OWNERS
 };
 struct mm_zone_ledger {
     uint32_t usable, free, reserved, resident[MM_OWNERS];
