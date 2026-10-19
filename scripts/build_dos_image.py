@@ -134,12 +134,13 @@ def shortname(name):
     return parts[0].ljust(8) + (parts[1] if len(parts) == 2 else "").ljust(3)
 
 
-def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
+def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=(), sectors=SECTORS):
     """Deterministic FAT16 volume with explicitly approved nested 8.3 directories.
     Each subdirectory holds one cluster (126 entries, including children)."""
     if len(boot) != 512 or boot[510:] != b"\x55\xaa" or len(loader) > 4096:
         raise ValueError("DOS boot/loader bounds")
-    clusters = (SECTORS - DATA_LBA) // SPC
+    if not DATA_LBA < sectors <= SECTORS: raise ValueError("private volume exceeds disk geometry")
+    clusters = (sectors - DATA_LBA) // SPC
     if not 4085 <= clusters < 65525 or clusters + 2 > FAT_SECTORS * 256:
         raise ValueError("FAT16 cluster-count/capacity mismatch")
     if len(label) > 11:
@@ -174,7 +175,7 @@ def write_fat16(out, boot, loader, files, label="CIUKIOSFULL", directories=()):
         return first
 
     with out.open("w+b") as stream:
-        stream.truncate(SECTORS * 512)
+        stream.truncate(sectors * 512)
         stream.write(boot)
         stream.write(loader)
         first_cluster = {name: allocate(folders[name]) for name in names}

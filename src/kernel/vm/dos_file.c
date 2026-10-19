@@ -282,6 +282,7 @@ static int release_slot(struct dos_file *d,struct dos_file_process *p,unsigned h
     return e;
 }
 static int fcb_release(struct dos_file *,struct dos_file_fcb *);
+static void trace_terminal(struct dos_file *,const struct dos_file_frame *,uint64_t,unsigned,unsigned,uint16_t);
 static int release_process(struct dos_file *d,struct dos_file_process *p) {
     int error=0;
     for (unsigned i=0;i<DOS_FILE_FCBS;i++) if (d->fcb[i].used && d->fcb[i].psp==p->psp) {
@@ -292,7 +293,13 @@ static int release_process(struct dos_file *d,struct dos_file_process *p) {
         int e=release_slot(d,p,i); if (e && !error) error=e;
     }
     for (unsigned i=0;i<DOS_FILE_SEARCHES;i++) if (d->cursor[i].used && d->cursor[i].psp==p->psp) d->cursor[i].used=false;
-    for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].psp==p->psp) { d->observer[i].used=false; d->dropped++; }
+    for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].psp==p->psp) {
+        struct dos_file_observer *o=&d->observer[i]; unsigned ah=o->input.ax>>8;
+        if (o->vector==0x21 && (ah==0 || ah==0x31 || ah==0x4c))
+            trace_terminal(d,&o->input,o->sequence,o->origin,o->vector,o->psp);
+        else d->dropped++;
+        o->used=false;
+    }
     for (unsigned i=0;i<26;i++) if (d->view[i].table) vfs_release_owner(d->view[i].table->vfs,owner(d,p->psp));
     memset(p,0,sizeof(*p));
     if (error && !d->cleanup_status) d->cleanup_status=error;
@@ -359,6 +366,23 @@ int dos_file_lifecycle(struct dos_file *d,enum dos_file_event event,uint16_t psp
     d->ops.release(d->ops.arg); return e;
 }
 void dos_file_cancel(struct dos_file *d) {
+    /* VM stop cancels an outstanding shell/device wait. Export that edge
+     * explicitly: it is neither a returned result nor a dropped record. */
+    bool request_closed=false;
+    for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used) {
+        struct dos_file_observer *o=&d->observer[i];
+        unsigned count=d->trace_count;
+        trace_terminal(d,&o->input,o->sequence,o->origin,o->vector,o->psp);
+        if (d->trace_count>count) d->trace[(d->trace_head+d->trace_count-1)%DOS_FILE_TRACE].terminated=2;
+        if (o->sequence==d->request_sequence) request_closed=true;
+        o->used=false;
+    }
+    if (d->request_inflight && !request_closed) {
+        unsigned count=d->trace_count;
+        trace_terminal(d,&d->pending,d->request_sequence,d->origin,d->vector,d->selected);
+        if (d->trace_count>count) d->trace[(d->trace_head+d->trace_count-1)%DOS_FILE_TRACE].terminated=2;
+    }
+    d->request_inflight=false;
     d->dead=true; d->critical=false; d->token=0;
     for (unsigned i=0;i<DOS_FILE_PSPS;i++) if (d->process[i].used) release_process(d,&d->process[i]);
     d->selected=d->owning=0;
@@ -376,7 +400,12 @@ static void trace(struct dos_file *d,const struct dos_file_frame *f,uint64_t seq
     if (!d->trace_enabled) return;
     if (d->trace_count==DOS_FILE_TRACE) { d->dropped++; return; }
     unsigned i=(d->trace_head+d->trace_count++)%DOS_FILE_TRACE;
-    d->trace[i]=(struct dos_file_trace){*f,seq,wall,monitor,d->generation,bytes,d->dropped,psp,(uint8_t)origin,(uint8_t)vector,returning};
+    d->trace[i]=(struct dos_file_trace){*f,seq,wall,monitor,d->generation,bytes,d->dropped,psp,(uint8_t)origin,(uint8_t)vector,returning,false};
+}
+static void trace_terminal(struct dos_file *d,const struct dos_file_frame *f,uint64_t seq,unsigned origin,unsigned vector,uint16_t psp) {
+    unsigned count=d->trace_count;
+    trace(d,f,seq,origin,vector,psp,false,0,0,0);
+    if (d->trace_count>count) d->trace[(d->trace_head+d->trace_count-1)%DOS_FILE_TRACE].terminated=true;
 }
 bool dos_file_trace_pop(struct dos_file *d,struct dos_file_trace *out) {
     if (!d->trace_count) return false; *out=d->trace[d->trace_head];
@@ -777,6 +806,7 @@ static void observe(struct dos_file *d,const struct dos_file_frame *f,uint64_t s
     else d->observer[i]=(struct dos_file_observer){true,*f,seq,wall,monitor,d->selected,(uint8_t)origin,(uint8_t)vector,0};
 }
 static void trace_return(struct dos_file *d,const struct dos_file_frame *f) {
+    d->request_inflight=false;
     if (d->origin==DOS_FILE_DPMI_0300 || d->origin==DOS_FILE_EXTENDER || d->origin==DOS_FILE_HOST) {
         for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].sequence==d->request_sequence)
             d->observer[i].bytes=d->transferred;
@@ -907,6 +937,7 @@ enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame 
     if (d->personality.live && origin==DOS_FILE_HOOK && f->cs==d->personality.code_seg && check(d,d->binding.indos,1,false))
         read_guest(d,d->binding.indos,&d->request_indos,1);
     d->request_sequence=seq; d->origin=origin; d->vector=(uint8_t)vector; d->transferred=0; d->pending_commit=false;
+    d->pending=*f;d->request_inflight=true;
     if (origin==DOS_FILE_DPMI_0300 || origin==DOS_FILE_EXTENDER || origin==DOS_FILE_HOST) observe(d,f,seq,wall,monitor,origin,vector);
     d->request_wall=wall; d->request_monitor=monitor; d->deadline=wall+DOS_FILE_BUDGET_US;
     memset(&d->wait,0,sizeof(d->wait));
@@ -926,10 +957,12 @@ enum dos_file_result dos_file_complete(struct dos_file *d,uint64_t token,unsigne
     d->critical=false; d->token=0; *f=d->pending;
     struct dos_file_process *p=process(d,d->selected);
     if (reply==2) { uint16_t psp=d->owning ? d->owning : d->selected; p=process(d,psp);
+        trace_terminal(d,&d->pending,d->request_sequence,d->origin,d->vector,d->selected);
+        d->request_inflight=false;
         d->aborted_psp=psp;
         if (d->ops.abort_process) d->ops.abort_process(d->ops.arg,psp);
+        for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].sequence==d->request_sequence) d->observer[i].used=false;
         if (p) { uint16_t parent=p->parent; release_process(d,p); d->selected=d->owning=parent; }
-        for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].sequence==d->request_sequence) { d->observer[i].used=false; d->dropped++; }
         d->ops.release(d->ops.arg); return DOS_FILE_PENDING; }
     if (reply==1 && !vfs_request_check(&d->request)) {
         enum dos_file_result result=execute(d,f,true);

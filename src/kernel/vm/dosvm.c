@@ -1039,8 +1039,15 @@ static int interrupt_service(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
     uint16_t ax = f->tf.eax;
+    uint16_t cs=f->tf.cs,ip=f->tf.eip,ss=f->tf.user_ss,sp=f->tf.user_esp;
     uint64_t begin = perf_monitor_stamp(v);
     int e = interrupt_dispatch(arg, f, vector);
+    /* Native multiplex replies (notably DPMI 1687h) return directly from
+     * the monitor, without an IRET. Close only a completed original frame;
+     * reflected/handler/mode-changing calls keep their existing return edge. */
+    if (!e && vector==0x2f && dosvm_file_return &&
+        f->tf.cs==cs && f->tf.eip==ip && (uint16_t)f->tf.user_ss==ss && (uint16_t)f->tf.user_esp==sp)
+        dosvm_file_return(v,f);
     perf_vector_end(v, 0, vector, ax, begin);
     return e;
 }

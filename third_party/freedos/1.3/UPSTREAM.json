@@ -44,5 +44,22 @@
     "sha256": "f8c60bba305fb128a51dd56ed33ab214bf0afabbee0b12e5cbfb98d3c4f6267d",
     "version": "1.3",
     "license": "GPL-2.0-or-later (FreeDOS kernel SYS boot sector)"
+  },
+  "boot_fat16": {
+    "archive": "kernel.zip",
+    "url": "https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/kernel.zip",
+    "package_sha256": "1efdba830a473891bf4c5c81e1858d86c247a0c2a03f00d69b5f40969c442905",
+    "member": "BIN/SYS.COM",
+    "member_sha256": "74e663071019cf6447d43af8245e65948d8b864ffb4f08842467c579fdf89bdd",
+    "template": "boot16.bin",
+    "sha256": "39586cd0f55f7732791a990770163d4af9827623e418203921d6f23819b94cb5",
+    "version": "2043 SYS.COM embedded FAT16 template",
+    "license": "GPL-2.0-or-later",
+    "extraction": {
+      "segment": "1000",
+      "offset": "2fc8",
+      "stop": "first INT21 AX=4A00 CS:IP=1000:0197",
+      "tool": "libx86emu CPU-only; tests/host/dos/reference_boot_test.c"
+    }
   }
 }

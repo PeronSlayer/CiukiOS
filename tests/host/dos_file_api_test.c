@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "../../src/kernel/vm/dos_file_hook.h"
 #include "../../src/kernel/vm/dos_file_volume.h"
+#include "../../src/kernel/vm/dos_conformance_fixture.h"
 #include <assert.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -516,6 +517,53 @@ static void provider_tests(void) {
     cache_destroy(&cache); CHECK(!fs_host_contig_live);
     puts("H49-03 provider: PASS one native FAT mount, raw/file interleave, 10000 reads, no duplicate cache pages");
 }
+static struct d48_media d48_test_media;
+static int d48_test_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buffer) {
+    int e=blkdev_range(dev,lba,count);
+    for (unsigned i=0;!e && i<count;i++) e=d48_sector(dev->ctx,D48_E_START+(unsigned)lba+i,(uint8_t *)buffer+i*512,false);
+    return e;
+}
+static void d48_fixture_tests(void) {
+    for (unsigned reply=1;reply<=3;reply++) {
+        setup(); static struct dos_file_volume removable;
+        d48_reset(&d48_test_media,reply==1 ? 1 : 2,++fixture_generation);
+        struct blkdev dev={.read=d48_test_read,.capacity=D48_VOLUME_SECTORS,.sector_size=512,
+            .media_generation=fixture_generation,.logical=true,.ctx=&d48_test_media};
+        OK(dos_file_volume_open(&removable,&cache,&dev,false));
+        OK(dos_file_map(&bridge,4,&removable.table,2,true));
+        struct dos_file_frame opened=path_call(0x3d00,"E:/D48FAULT.DAT");
+        CHECK(!(opened.flags&1) && !d48_test_media.failures);
+        unsigned handle=opened.ax;
+        struct dos_file_frame entry=frame(0x3d00);
+        d48_open_enter(&d48_test_media,&entry,true);
+        struct dos_file_frame returned=entry;returned.ax=(uint16_t)handle;returned.flags&=~1u;
+        d48_open_return(&d48_test_media,&returned,false);
+        CHECK(d48_test_media.armed && d48_test_media.opens==1);
+        struct dos_file_frame f=frame(0x3f00);f.bx=(uint16_t)handle;f.cx=4096;f.dx=0x400;
+        bridge.trace_enabled=true;
+        unsigned before=callbacks;
+        CHECK(dos_file_dispatch(&bridge,&f,DOS_FILE_V86,0x21)==DOS_FILE_PENDING);
+        CHECK(callbacks==before+1 && d48_test_media.failures==1);
+        CHECK(dos_file_complete(&bridge,callback_token,reply,&f)==(reply==2 ? DOS_FILE_PENDING : DOS_FILE_DONE));
+        struct dos_file_trace enter,returned_trace;
+        CHECK(dos_file_trace_pop(&bridge,&enter) && dos_file_trace_pop(&bridge,&returned_trace));
+        CHECK(!enter.returning && !enter.terminated && enter.sequence==returned_trace.sequence);
+        CHECK(reply==2 ? returned_trace.terminated==1 && !returned_trace.returning : returned_trace.returning && !returned_trace.terminated);
+        if (reply==1) { CHECK(!(f.flags&1) && f.ax==4096);for (unsigned i=0;i<4096;i++) CHECK(guest[0x50400+i]=='F');close_file(handle); }
+        if (reply==3) {
+            CHECK((f.flags&1) && f.ax==83);
+            struct dos_file_frame error=frame(0x5900);error.bx=0;error=call(error);CHECK(error.ax==30);
+            close_file(handle);
+        }
+        if (reply==2) CHECK(bridge.aborted_psp==0x2000);
+        CHECK(d48_test_media.failures==1);
+        dos_file_cancel(&bridge);bridge.view[4]=(struct dos_file_view){0};
+        OK(dos_file_volume_close(&removable));teardown();
+        d48_reset(&d48_test_media,1,++fixture_generation);
+        CHECK(!d48_test_media.armed && !d48_test_media.failures && !d48_test_media.opens);
+    }
+    puts("H51 critical fixture: PASS real FAT/VFS provider open/read, one-shot Retry, persistent Fail/Abort, fresh generation and teardown");
+}
 static bool alias_reverse;
 static unsigned alias_enumerations;
 static uint32_t alias_generation(struct fs_ro_volume *v) { (void)v; return 1; }
@@ -594,7 +642,7 @@ int main(int argc,char **argv) {
         setup(); h50_hook(); teardown();
         setup(); h50_partial_retry(); teardown();
     }
-    provider_tests(); alias_tests(); failure_and_cycle_tests();
+    provider_tests(); alias_tests(); failure_and_cycle_tests(); d48_fixture_tests();
     if (continuation) continuation_tests();
     printf("PASS dos_file_api %s checks=%u reads=%u writes=%u flushes=%u bridge_bytes=%zu\n",continuation ? "H49-continuation" : "H50",checks,reads,writes,barriers,sizeof(bridge));
     if (!continuation) { merged_search_tests(); merged_discard_identity_tests(); }

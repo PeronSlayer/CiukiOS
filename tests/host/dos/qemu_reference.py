@@ -116,6 +116,26 @@ def capture(argv, log, run_id, guest, timeout):
         log.write_bytes(data)
 
 
+def reconcile_overlay(overlay, image, serial, disk, run_id, guest):
+    """Read only bounded DOS logs after our process has been reaped."""
+    from overlay import Overlay
+    from trace import reconcile, calls
+    sys.path.insert(0,str(ROOT/"scripts"))
+    import dos_conformance
+    chunks=[]
+    with Overlay(overlay,image) as view:
+        for name in ("BOOT2.LOG","BOOT1.LOG","BOOT.LOG"):
+            try: chunks.append(dos_conformance.read_file(view,"/SYSTEM/LOGS/"+name,2048*512))
+            except ValueError as error:
+                if "missing/ambiguous FAT payload" not in str(error) or name=="BOOT.LOG": raise
+    content=b"\n".join(chunks)
+    disk.write_bytes(content)
+    records=reconcile(serial.read_text(),content.decode("ascii",errors="strict"),run_id)
+    # The bridge-disabled reference correctly has no candidate DOS trace.
+    observed=calls(records) if guest=="ciukidos" else []
+    return dict(records=len(records),calls=len(observed),serial_sha256=digest(serial),disk_sha256=digest(disk))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--image", type=Path, required=True)
@@ -142,7 +162,7 @@ def main():
         if digest(args.image)!=sha:
             raise ValueError("canonical image changed before suite lock")
         for repeat in range(2):
-            results = {}
+            results = {};ledgers={}
             current = out / str(repeat + 1)
             current.mkdir()
             for guest in suite["differential"]["guests"]:
@@ -154,6 +174,8 @@ def main():
                     results[guest] = capture(command(args.qemu, overlay, selector, profile),
                                              current / (guest + ".serial.log"), run_id, guest,
                                              suite["differential"]["timeout_seconds"])
+                    ledgers[guest]=reconcile_overlay(overlay,args.image,current/(guest+".serial.log"),
+                        current/(guest+".disk.log"),run_id,guest)
                 finally:
                     # Serial evidence survives; no owned overlay remains on
                     # timeout, failed create, parser error or normal completion.
@@ -166,6 +188,7 @@ def main():
             (current / "evidence.json").write_text(json.dumps(dict(image_sha256=sha, run_id=run_id,
                 repeat=repeat+1, profile=profile, probes_sha256=digest(args.probes_manifest),
                 integration=json.loads(args.integration_manifest.read_text()),
+                trace_ledgers=ledgers,
                 verdict="PASS" if ok else "FAIL"), indent=2) + "\n")
             # An independent second pair has a fresh nonce, same immutable base.
             run_id = secrets.token_hex(4)

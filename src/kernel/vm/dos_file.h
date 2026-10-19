@@ -86,7 +86,7 @@ struct dos_file_trace {
     struct dos_file_frame frame;
     uint64_t sequence,wall_us,monitor_us;
     uint32_t generation,bytes,dropped;
-    uint16_t psp; uint8_t origin,vector; bool returning;
+    uint16_t psp; uint8_t origin,vector; bool returning; uint8_t terminated;
 };
 struct dos_file_observer { bool used; struct dos_file_frame input;
     uint64_t sequence,wall,monitor; uint16_t psp; uint8_t origin,vector; uint32_t bytes; };
@@ -96,7 +96,7 @@ struct dos_file {
     struct dos_file_personality personality;
     struct dos_file_fcb fcb[DOS_FILE_FCBS];
     unsigned dispatch_depth,adapter_depth;
-    uint32_t id,generation; bool bound,a20,dead,trace_enabled,critical,pending_commit;
+    uint32_t id,generation; bool bound,a20,dead,trace_enabled,critical,pending_commit,request_inflight;
     uint8_t drive,active_drive; uint16_t selected,owning,aborted_psp;
     uint16_t retry_pause,retry_count;
     int cleanup_status; /* first cleanup error, retained even after PSP release */

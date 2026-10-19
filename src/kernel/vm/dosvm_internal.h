@@ -37,6 +37,10 @@
 enum dosvm_idle_reason { DOSVM_IDLE_2F, DOSVM_IDLE_28, DOSVM_IDLE_16, DOSVM_IDLE_HLT, DOSVM_IDLE_REASONS };
 #include "dosvm_memory.h"
 #include "dpmi_internal.h"
+#include "dos_conformance_fixture.h"
+void rec_sequence_ledger(const char *) __attribute__((weak));
+void rec_dos_trace(const char *,const char *) __attribute__((weak));
+void dosvm_file_trace_close(struct dosvm *,unsigned);
 enum dosvm_trace_kind { DOSVM_TRACE_VECTOR, DOSVM_TRACE_PIT, DOSVM_TRACE_IRQ0,
     DOSVM_TRACE_DB_PM, DOSVM_TRACE_DB_RM, DOSVM_TRACE_FLAGS, DOSVM_TRACE_TIMER,
     DOSVM_TRACE_FAULT, DOSVM_TRACE_COUNT };
@@ -176,6 +180,9 @@ struct dosvm {
     uint8_t midnight, disk_status;
     const char *probe;
     bool disable_file_bridge;
+    struct d48_media conformance_media; /* controller configures before boot */
+    uint64_t file_trace_exported;
+    bool file_trace_busy;
     uint8_t game, kernel;
     void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
     void *record_arg;

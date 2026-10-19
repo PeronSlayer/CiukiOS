@@ -64,7 +64,9 @@ int main(void)
     g_boot.flags = CBI_F_VERBOSE;
     rec_diag("vm-window", "group=vm_heartbeat pm=1 vif=0");
     CHECK(strstr(output, "run=00000000") && strstr(output, "group=vm_heartbeat") && !rec_premature_records());
+    uint32_t selected_first=seq+1;
     rec_set_run("12345678");
+    CHECK(sequence_first==selected_first && selected_first>1);
     g_boot.flags=CBI_F_DIAG_VERBOSE;
     unsigned selected_ring=ring_captures;
     unsigned selected_blackbox=blackbox_captures;
@@ -72,6 +74,7 @@ int main(void)
     rec_diag_disk("disk","group=disk_event status=early");CHECK(blackbox_captures==selected_blackbox);
     CHECK(!rec_active());
     output[0] = 0; rec_diag("vm-window", "group=early"); CHECK(!output[0]);
+    rec_dos_trace("vm-window","group=dos_api row=1 part=1");rec_sequence_ledger("vm-window");CHECK(!output[0]);
     /* A mistaken evidence producer is still rejected and counted. */
     rec_emit("vm-window", "DATA", "group=early");
     CHECK(rec_premature_records() == 1 && strstr(output, "dropped premature evidence record"));
@@ -92,6 +95,22 @@ int main(void)
     }
     if (rec_active()) rec_emit("vm-window", "DATA", "group=admission");
     CHECK(strstr(output, "run=12345678") && strstr(output, "group=admission"));
+    {
+        unsigned first=seq,ring_before=ring_captures,blackbox_before=blackbox_captures;
+        unsigned prefix_before=protected_captures,verbose_before=verbose_captures;
+        output[0]=0;
+        rec_dos_trace("vm-window","group=dos_api vm=1 gen=1 row=1 part=1 call=1 edge=0 psp=2000 origin=0 vector=21");
+        CHECK(seq==first+1 && strstr(output,"group=dos_api"));
+        CHECK(ring_captures==ring_before && protected_captures==prefix_before &&
+              verbose_captures==verbose_before && blackbox_captures==blackbox_before);
+        rec_diag_disk_bootlog("vm-window","group=disk_only_test");
+        CHECK(seq==first+2 && ring_captures==ring_before+1 && !strstr(output,"group=disk_only_test"));
+        char expected[96];snprintf(expected,sizeof(expected),"group=record_ledger first=%u last=%u records=%u",selected_first,first+2,first+3-selected_first);
+        rec_sequence_ledger("vm-window");
+        CHECK(seq==first+3 && strstr(output,expected) && strstr(last_ring,expected));
+        CHECK(cpu_flags==0x200);
+        puts("H51 records: PASS gated protected UART trace, disk-only shared sequence, exact closing ledger; no duplicate trace charge to disk budget");
+    }
     rec_set_run("87654321"); CHECK(!rec_active());
     unsigned ordinary=ordinary_writes,screen=console_writes,ring=ring_captures;
     output[0]=0;klog_periodic("[cpu] window_ms=%u idle=%u top=%s",2000u,900u,"desktop#4:100");

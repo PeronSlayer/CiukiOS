@@ -418,6 +418,51 @@ void dosvm_perf_report(struct dosvm *v)
 #undef DELTA
 }
 
+static void file_trace_record(struct dosvm *v,const char *format,...) {
+    char line[180]; va_list args; va_start(args,format);
+    int n=kvsnprintf(line,sizeof(line),format,args); va_end(args);
+    if (n<0 || n>=(int)sizeof(line)) { v->files->dropped++;return; }
+    if (rec_dos_trace) rec_dos_trace(dosvm_probe(v),line);
+    else if (rec_active()) rec_emit(dosvm_probe(v),"DATA","%s",line);
+    else rec_diag_disk_bootlog(dosvm_probe(v),"%s",line);
+}
+void dosvm_file_dump(struct dosvm *v) {
+    if (!v->files || !dos_file_trace_pop) return;
+    uint32_t flags=irq_save();
+    if (v->file_trace_busy) { irq_restore(flags);return; }
+    v->file_trace_busy=true;irq_restore(flags);
+    struct dos_file_trace r;
+    while (dos_file_trace_pop(v->files,&r)) {
+        unsigned long long record=++v->file_trace_exported;
+        file_trace_record(v,"group=dos_api vm=%u gen=%u row=%llu part=1 call=%llu edge=%u psp=%04x origin=%u vector=%02x",
+            v->info.key.id,r.generation,record,r.sequence,r.terminated ? r.terminated+1 : r.returning,r.psp,r.origin,r.vector);
+        file_trace_record(v,"group=dos_api vm=%u gen=%u row=%llu part=2 ax=%04x bx=%04x cx=%04x dx=%04x ds=%04x es=%04x si=%04x di=%04x",
+            v->info.key.id,r.generation,record,r.frame.ax,r.frame.bx,r.frame.cx,r.frame.dx,r.frame.ds,r.frame.es,r.frame.si,r.frame.di);
+        file_trace_record(v,"group=dos_api vm=%u gen=%u row=%llu part=3 bp=%04x flags=%04x cs=%04x ip=%04x ss=%04x sp=%04x bytes=%u",
+            v->info.key.id,r.generation,record,r.frame.bp,r.frame.flags,r.frame.cs,r.frame.ip,r.frame.ss,r.frame.sp,r.bytes);
+        file_trace_record(v,"group=dos_api vm=%u gen=%u row=%llu part=4 monitor_us=%llu wall_us=%llu dropped=%u",
+            v->info.key.id,r.generation,record,r.monitor_us,r.wall_us,r.dropped);
+    }
+    if (dos_file_wait_pop) {
+        struct dos_file_wait w;
+        static const char *const reason[]={"-","namespace","volume","provider","transport","cache"};
+        while (dos_file_wait_pop(v->files,&w))
+            rec_diag(dosvm_probe(v),"group=vfs_wait vm=%u gen=%u call=%llu drive=%c owner=%llu psp=%04x reason=%s elapsed_ms=%llu outcome=%s",
+                v->info.key.id,w.generation,w.sequence,'A'+w.drive,w.info.owner,w.psp,
+                w.info.reason<=VFS_WAIT_CACHE ? reason[w.info.reason] : "-",w.info.elapsed_us/1000,
+                w.info.outcome==-VFS_ETIMEOUT ? "timeout" : w.info.outcome==-VFS_ECANCELLED ? "cancelled" : "done");
+    }
+    flags=irq_save();v->file_trace_busy=false;irq_restore(flags);
+}
+
+void dosvm_file_trace_close(struct dosvm *v,unsigned pending) {
+    if (!v->files || !v->files->trace_enabled) return;
+    file_trace_record(v,"group=dos_trace_end vm=%u gen=%u records=%llu dropped=%u pending=%u",
+        v->info.key.id,v->info.key.generation,v->file_trace_exported,v->files->dropped,pending);
+    if (rec_sequence_ledger && (!v->probe || strncmp(v->probe,"dos-conformance",sizeof("dos-conformance"))))
+        rec_sequence_ledger(dosvm_probe(v));
+}
+
 void dosvm_perf_dump(struct dosvm *v)
 {
     if (dosvm_file_dump) dosvm_file_dump(v);
@@ -500,23 +545,4 @@ void dosvm_perf_dump(struct dosvm *v)
         if (g_need_resched) schedule(); /* slow polled UART must permit native work */
     }
     v->perf.sample_count = 0;
-}
-
-void dosvm_file_dump(struct dosvm *v) {
-    if (!v->files || !dos_file_trace_pop) return;
-    struct dos_file_trace r;
-    while (dos_file_trace_pop(v->files,&r))
-        rec_diag(dosvm_probe(v),"group=dos_api vm=%u gen=%u seq=%llu phase=%s psp=%04x origin=%u vector=%02x ax=%04x bx=%04x cx=%04x dx=%04x ds=%04x es=%04x si=%04x di=%04x cf=%u bytes=%u monitor_us=%llu wall_us=%llu dropped=%u",
-            v->info.key.id,r.generation,r.sequence,r.returning ? "return" : "enter",r.psp,r.origin,r.vector,
-            r.frame.ax,r.frame.bx,r.frame.cx,r.frame.dx,r.frame.ds,r.frame.es,r.frame.si,r.frame.di,r.frame.flags&1,
-            r.bytes,r.monitor_us,r.wall_us,v->files->dropped);
-    if (dos_file_wait_pop) {
-        struct dos_file_wait w;
-        static const char *const reason[]={"-","namespace","volume","provider","transport","cache"};
-        while (dos_file_wait_pop(v->files,&w))
-            rec_diag(dosvm_probe(v),"group=vfs_wait vm=%u gen=%u seq=%llu drive=%c owner=%llu psp=%04x reason=%s elapsed_ms=%llu outcome=%s",
-                v->info.key.id,w.generation,w.sequence,'A'+w.drive,w.info.owner,w.psp,
-                w.info.reason<=VFS_WAIT_CACHE ? reason[w.info.reason] : "-",w.info.elapsed_us/1000,
-                w.info.outcome==-VFS_ETIMEOUT ? "timeout" : w.info.outcome==-VFS_ECANCELLED ? "cancelled" : "done");
-    }
 }

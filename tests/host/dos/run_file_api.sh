@@ -41,8 +41,10 @@ from pathlib import Path
 import subprocess
 spec=importlib.util.spec_from_file_location('kernel_flags','scripts/build_kernel.py')
 k=importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-for unit in ('dos_file','dos_file_vm','dosvm_bios'):
-    subprocess.run(['clang',*k.CFLAGS,'-I','src/kernel/include','-c',f'src/kernel/vm/{unit}.c',
+for source in ('vm/dos_file','vm/dos_file_vm','vm/dosvm_bios','vm/dosvm',
+               'core/output','probes/f3_probes_dos_conformance'):
+    unit=source.rsplit('/',1)[-1]
+    subprocess.run(['clang',*k.CFLAGS,'-I','src/kernel/include','-c',f'src/kernel/{source}.c',
                     '-o',f'build/host/dos/{unit}.i686.o'],check=True)
 print('H50 i686: changed production units compile with kernel frame/integer flags')
 PY

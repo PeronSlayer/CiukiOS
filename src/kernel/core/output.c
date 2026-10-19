@@ -15,7 +15,7 @@
 #pragma weak blackbox_panic
 
 static char run_id[9] = "00000000";
-static uint32_t seq, premature_records;
+static uint32_t seq, sequence_first=1, premature_records;
 static bool run_selected, run_begun, premature_noted;
 
 uint32_t rec_premature_records(void) { return premature_records; }
@@ -94,6 +94,7 @@ void klog_diag(const char *fmt, ...)
 
 void rec_set_run(const char *run8)
 {
+    sequence_first=seq+1;
     for (int i = 0; i < 8; i++)
         run_id[i] = run8[i];
     run_id[8] = 0;
@@ -103,7 +104,7 @@ void rec_set_run(const char *run8)
 
 /* A record above 240 bytes is never truncated silently: an ERROR record
  * replaces it so the evidence fails loudly. */
-static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence, bool capture_blackbox, bool verbose)
+static void emit_line(const char *probe, const char *event, const char *extra, bool ordinary, bool periodic, bool disk_only, bool evidence, bool capture_blackbox, bool verbose, bool disk_copy)
 {
     char buf[256];
     /* Reserve room before assigning a sequence: a queue wait can dispatch
@@ -120,7 +121,7 @@ static void emit_line(const char *probe, const char *event, const char *extra, b
     buf[n] = '\n';
     buf[n + 1] = 0;
     if (!ordinary && blackbox_panic) blackbox_panic(buf,(size_t)n+1);
-    if (ordinary) {
+    if (ordinary && disk_copy) {
         if (verbose) bootlog_capture_verbose(buf, (size_t)n + 1);
         else if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);
         else bootlog_capture(buf, (size_t)n + 1);
@@ -153,12 +154,12 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
         kvsnprintf(extra, sizeof(extra), fmt, ap);
         va_end(ap);
     }
-    emit_line(probe, event, extra, true, false, false, true, true, false);
+    emit_line(probe, event, extra, true, false, false, true, true, false, true);
 }
 
 void rec_emit_panicsafe(const char *probe, const char *event, const char *extra)
 {
-    emit_line(probe, event, extra, false, false, false, false, true, false);
+    emit_line(probe, event, extra, false, false, false, false, true, false, true);
 }
 
 void rec_diag(const char *probe, const char *fmt, ...)
@@ -173,7 +174,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
      * and later emitted with fmt="%s". Evidence rec_emit stays protected. */
     bool periodic = !strncmp(extra, "group=vm_heartbeat ", sizeof("group=vm_heartbeat ") - 1) ||
                     !strncmp(extra, "group=vm_perf_", sizeof("group=vm_perf_") - 1);
-    emit_line(probe, "DATA", extra, true, periodic, false, !periodic, true, true);
+    emit_line(probe, "DATA", extra, true, periodic, false, !periodic, true, true, true);
 }
 
 static void diag_disk(const char *probe, const char *fmt, va_list ap, bool capture_blackbox)
@@ -183,7 +184,7 @@ static void diag_disk(const char *probe, const char *fmt, va_list ap, bool captu
     if (run_selected && !run_begun) return;
     char extra[240];
     kvsnprintf(extra,sizeof(extra),fmt,ap);
-    emit_line(probe,"DATA",extra,true,true,true,false,capture_blackbox,false);
+    emit_line(probe,"DATA",extra,true,true,true,false,capture_blackbox,false,true);
 }
 
 void rec_diag_disk(const char *probe, const char *fmt, ...)
@@ -198,6 +199,26 @@ void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
      * their independent exclusion from the persistent black-box queue. */
     va_list ap;
     va_start(ap,fmt); diag_disk(probe,fmt,ap,false); va_end(ap);
+}
+
+/* Internal conformance witness. Snapshot and publication share emit_line's
+ * IRQ exclusion, so a disk-only record cannot race the closing watermark. */
+void rec_sequence_ledger(const char *probe)
+{
+    if (run_selected && !run_begun) return;
+    uint32_t flags=serial_evidence_begin ? serial_evidence_begin(512) : irq_save();
+    char extra[128];
+    ksnprintf(extra,sizeof(extra),"group=record_ledger first=%u last=%u records=%u",sequence_first,seq,seq-sequence_first+1);
+    emit_line(probe,"DATA",extra,true,true,false,true,true,false,true);
+    irq_restore(flags);
+}
+
+/* High-volume trace rows own the protected UART path, leaving the bounded
+ * disk ring to disk-only records. Both allocate from the same sequence. */
+void rec_dos_trace(const char *probe,const char *line)
+{
+    if (run_selected && !run_begun) return;
+    emit_line(probe,"DATA",line,true,true,false,true,false,false,false);
 }
 
 static volatile int in_panic;

@@ -119,26 +119,29 @@ class ReadbackTests(unittest.TestCase):
             folder=Path(d)
             files,manifest=install.probes(folder/"probes")
             candidate=dict(files);reference=dict(files)
-            identity={}
-            for role,path in (("kernel","/KERNEL.SYS"),("shell","/COMMAND.COM"),("share","/SHARE.COM")):
-                binary=(role+" synthetic identity").encode();reference[path]=binary
-                identity[role]=dict(version="host-test",sha256=install.sha(binary))
-            identity["boot"]={"installed_sha256":install.sha(b"reference")}
+            binaries,identity=install.reference_files();reference.update(binaries)
+            boot,boot_pin=install.installed_boot();mbr=install.reference_mbr()
+            reference_blob=mbr+bytes(62*512)+boot
+            identity["boot"]=dict(boot_pin,installed_sha256=install.sha(boot))
+            identity["mbr_sha256"]=install.sha(mbr)
             reference["/D48/REF.JSON"]=json.dumps(identity).encode()
             reference["/FDCONFIG.SYS"]=install.CONFIG;reference["/FDAUTO.BAT"]=install.AUTO
             image=folder/"not-a-real-image";image.write_bytes(b"mock outer bytes")
             def read(source,path,offset=0):
                 if source==image:
                     self.assertEqual(offset,2048*512)
-                    return {"/SYSTEM/DOS/DOSBOOT.IMG":b"candidate", "/SYSTEM/DOS/FREEDOS.IMG":b"reference",
+                    return {"/SYSTEM/DOS/DOSBOOT.IMG":b"candidate", "/SYSTEM/DOS/FREEDOS.IMG":reference_blob,
+                            "/SYSTEM/DOS/FREEDOS.SHA":(install.sha(reference_blob)+"\n").encode(),
                             "/SYSTEM/DOS/D48PLAN.TXT":files["/D48/PLAN.TXT"]}[path]
-                return (candidate if source.getvalue()==b"candidate" else reference)[path]
+                candidate_source=source.getvalue()==b"candidate"
+                self.assertEqual(offset,0 if candidate_source else install.REFERENCE_START*512)
+                return (candidate if candidate_source else reference)[path]
             with patch.object(install,"read_file",side_effect=read):
                 result=install.readback(image,folder/"probes/manifest.json")
                 self.assertEqual(result["freedos_kernel_sha256"],identity["kernel"]["sha256"])
                 self.assertEqual(result["freedos_profile_sha256"],install.sha(install.CONFIG+install.AUTO))
                 for path in ("/D48/D48001.COM","/D48/D48CHILD.COM","/D48/D48DONE.COM","/D48/PLAN.TXT",
-                             "/KERNEL.SYS","/FDCONFIG.SYS","/FDAUTO.BAT"):
+                             "/KERNEL.SYS","/D48/KERNEL.LIC","/D48/MANIFEST.JSN","/FDCONFIG.SYS","/FDAUTO.BAT"):
                     saved=reference[path];reference[path]=b"corrupt"
                     with self.subTest(path=path),self.assertRaises((ValueError,KeyError,json.JSONDecodeError)):
                         install.readback(image,folder/"probes/manifest.json")
