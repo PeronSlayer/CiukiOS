@@ -970,12 +970,16 @@ int main(int argc, char **argv)
 #endif
     gcpu_init(&guest_ops);
     struct dosvm_config config = {.commitment = 0, .probe = "dpmi", .dpmi = true};
+#ifdef CIUKI_DOSVM_FILE_CPU
+    const char *bridge_policy=getenv("GUEST_NO_FILE_HOOK");
+    config.disable_file_bridge=bridge_policy && !strcmp(bridge_policy,"disabled");
+#endif
     CHECK(dosvm_create(&config, &gv) == 0);
     printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
 #ifdef CIUKI_DOSVM_FILE_CPU
     const char *disabled=getenv("GUEST_NO_FILE_HOOK");
     if (disabled && !strcmp(disabled,"alloc")) h50_fail_pages=(sizeof(struct file_runtime)+PAGE_SIZE-1)/PAGE_SIZE;
-    else if (disabled) {
+    else if (disabled && strcmp(disabled,"disabled")) {
         uint8_t *descriptor=(uint8_t *)P2V(gv->frames[0xf1])+(DOS_HOOK_DESCRIPTOR&0xfff);
         if (!strcmp(disabled,"swap")) {
             uint32_t gate=vm_u32(descriptor+12); vm_w32(descriptor+12,vm_u32(descriptor+16)); vm_w32(descriptor+16,gate);

@@ -533,6 +533,13 @@ static void test_client_boundary(void)
     c.version = CIUKI_DOSVM_VERSION; c.size = 100; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
     c.size = sizeof(c); user_fault = true; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EFAULT); user_fault = false;
     c.state = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.state = 0;
+    c.launch.kernel=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.kernel=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); /* shell */
+    c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.game=1; c.launch.reserved[0]=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.reserved[0]=0; workload_disk=true;
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EIO && fake_surface[0].references==1);
+    workload_disk=false; c.launch.kernel=c.launch.game=0;
     c.id = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.id = 0;
     c.name[0] = 0; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
     c.name[0] = '\n'; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);

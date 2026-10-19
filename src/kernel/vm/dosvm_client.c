@@ -147,6 +147,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     allowed.version = c.version; allowed.size = c.size;
     if (op == CIUKI_DOSVM_CREATE) {
         allowed.surface_fd = c.surface_fd;
+        if (c.launch.kernel>CIUKI_DOSVM_FREEDOS13 || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
+            (c.launch.kernel && !c.launch.game)) return -EINVAL;
+        allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
         unsigned n = 0;
         while (n < sizeof(c.name) && c.name[n]) {
             if (c.name[n] < 32 || c.name[n] > 126) return -EINVAL;
@@ -194,14 +197,28 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * owner-visible DOOM window. Without it, the bundled shareware games
          * disk (C:\GAMES\CIUKIGAM.IMG, owner decision 2026-10-12) does.
          * Errors of that required bundled base fail this window launch. */
-        char workload[24];
-        int found = dosvm_window_base(workload);
+        char workload[32];
+        int found = 0;
+        if (c.launch.kernel==CIUKI_DOSVM_FREEDOS13) {
+            /* This reference contains the pinned shareware corpus. An attached
+             * local workload is a different base: never silently substitute
+             * its executable/data with another edition under the override. */
+            char local[24];
+            found=dosvm_workload_base(local);
+            if (!found) found=-EINVAL;
+            else if (found==-ENOENT) {
+                found=0;
+                memcpy(workload,"C:\\SYSTEM\\DOS\\FREEDOS.IMG",sizeof("C:\\SYSTEM\\DOS\\FREEDOS.IMG"));
+            }
+        } else found=dosvm_window_base(workload);
         if (found) { creating[reservation] = 0; e = closed_error(found); goto out; }
         /* Creation may sleep opening storage; another thread may close the
          * descriptor meanwhile, so the VM holds its own surface reference. */
         struct surface *surface = d->u.surface;
         surface_retain(surface);
-        const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true};
+        const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
+            .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
+            .disable_file_bridge=c.launch.kernel==CIUKI_DOSVM_FREEDOS13};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = closed_error(e); goto out; }

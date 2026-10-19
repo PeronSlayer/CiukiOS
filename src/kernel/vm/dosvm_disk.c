@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/abi.h>
+#include <ciuki/sha256.h>
 #include "dosvm_internal.h"
 
 /* f3-06: base names a read-only image of the same private geometry (a
@@ -123,6 +124,8 @@ static int read_cache_open(struct dosvm *v)
     v->read_recent = 0; v->read_oldest = blocks ? blocks - 1 : 0;
     return 0;
 }
+static void disk_gate_take(struct dosvm *v);
+static void disk_gate_drop(struct dosvm *v);
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
@@ -144,10 +147,40 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
+    if (v->game || v->kernel) {
+        struct sha256_ctx hash; uint8_t binary[32];
+        sha256_init(&hash);
+        for (uint32_t at=0;at<entry.size;) {
+            unsigned amount=entry.size-at; if (amount>sizeof(v->sector)) amount=sizeof(v->sector);
+            size_t got=0; uint64_t position=0;
+            disk_gate_take(v);
+            int read_error=vfs_seek(&v->disk_table,v->base,at,VFS_SEEK_SET,&position);
+            if (!read_error) read_error=vfs_read(&v->disk_table,v->base,v->sector,amount,&got);
+            disk_gate_drop(v);
+            if (read_error || got!=amount) return read_error ? read_error : -FS_EIO;
+            sha256_update(&hash,v->sector,amount); at+=amount;
+            kpreempt_point();
+        }
+        sha256_final(&hash,binary); sha256_hex(binary,v->base_sha256);
+        if (v->kernel==1) {
+            char expected[66];
+            int identity=vfs_open(&v->disk_table,"C:\\SYSTEM\\DOS\\FREEDOS.SHA",VFS_READ,VFS_DENY_WRITE,0);
+            if (identity<0) return identity;
+            size_t got=0;
+            disk_gate_take(v);
+            int read_error=vfs_read(&v->disk_table,identity,expected,sizeof(expected),&got);
+            disk_gate_drop(v);
+            int closed=vfs_close(&v->disk_table,identity);
+            if (read_error || got!=65 || expected[64]!='\n' || memcmp(expected,v->base_sha256,64) || closed) return -FS_EIO;
+        }
+    }
     e = read_cache_open(v);
     if (e) return e; /* lifecycle failure unwinds the base/table as before */
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
+    if (v->game || v->kernel)
+        ksnprintf(v->overlay_path,sizeof(v->overlay_path),"C:\\SYSTEM\\DOS\\G%uK%u%sV%08x.COW",
+                  v->game,v->kernel,v->base_sha256,v->info.key.generation);
     v->overlay = vfs_open(&v->disk_table, v->overlay_path,
         VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE, VFS_DENY_ALL, 0);
     /* A metadata write gate must not hide readable game sectors. A caller

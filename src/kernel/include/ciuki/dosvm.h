@@ -29,6 +29,10 @@ struct dosvm_config {
      * cut, which then read as zeros); NULL selects C:\SYSTEM\DOS\DOSBOOT.IMG.
      * The writable overlay always stays in C:\SYSTEM\DOS (any base volume). */
     const char *base;
+    bool disable_file_bridge; /* FreeDOS reference/fallback must never bind */
+    uint8_t game, kernel; /* game 1..3; kernel 0=CiukiDOS, 1=FreeDOS 1.3 */
+    void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
+    void *record_arg; /* selected controller only, lifetime through destroy */
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after

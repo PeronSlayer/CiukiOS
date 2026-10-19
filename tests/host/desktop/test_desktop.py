@@ -515,10 +515,10 @@ class DesktopTests(unittest.TestCase):
             shutil.copy2(ROOT / "apps/desktop/protocol.h", inc / "desktop.h")
             binary = folder / "loading-test"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
-                            "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
+                            '-DDOSBOX_SETTINGS_DIR="'+str(folder/"prefs")+'"', "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
                             str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
                             "-o", str(binary)], check=True)
-            for scenario in range(9):
+            for scenario in range(13):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")

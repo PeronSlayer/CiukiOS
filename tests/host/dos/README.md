@@ -177,3 +177,51 @@ finished [f3-49](../../../docs/directives/f3-49-vmm-dos-file-api.md),
 [f3-50](../../../docs/directives/f3-50-ciukidos-vmm-hook-fcb-nls.md),
 [f3-51](../../../docs/directives/f3-51-dos-conformance-games-and-fallback.md)
 directives.
+
+## f3-51 integration status
+
+The canonical DOS builder now installs the unchanged COM/helper manifest,
+controller shell-return witness and scratch directories. The runtime selector
+accepts exactly `f3:dos-conformance run=<8 hex> guest=freedos|ciukidos`; ordinary
+sweeps do not select this battery. Each basic/SHARE/input case uses a fresh
+VM/COW and must return to the shell and restore the VMM ledger.
+
+Critical cases currently fail explicitly with `fault_backend_unavailable`.
+The E: removable fixture/injection backend is not implemented: this is an open
+M1 requirement, not a skip or guest PASS. FreeDOS's block driver contains BIOS
+retry logic; an isolated INT13 error is not sufficient evidence that INT24 ran.
+The lead must resolve/qualify that injection boundary against the release.
+
+Official release packages are absent here. `scripts/dos_conformance.py` accepts
+only separately provisioned `third_party/freedos/1.3/UPSTREAM.json` pins with
+`release`, `distribution_url`, and `kernel`/`shell`/`share` records. Each record
+contains `archive`, `url`, `package_sha256`, `member`, `sha256`, `version`,
+`license`, `license_member`, and `license_sha256`. These must describe the actual
+official release archives and binaries; no sample/fabricated pin is installed.
+A separate `boot` pin describes an official release archive/member, its package
+and complete member hashes, boot-sector offset, 512-byte sector hash, version
+and license. No boot code or kernel is compiled from master.
+Canonical builds without that input remain CiukiDOS-only and produce no
+integration manifest. A present but corrupt reference fails the build.
+
+With provisioned packages the same canonical build installs `FREEDOS.IMG` and
+`FREEDOS.SHA`, then writes `build/f0/dos-conformance.json` by reading back the
+outer image and both embedded FAT fixtures. Its probe manifest is
+`build/f0/dos/conformance/manifest.json`. The runner independently repeats that
+read-back before accepting the evidence manifest. This does not qualify boot,
+SHARE execution, media faults, games or physical performance.
+
+The lead-only runner requires an ordered complete transcript, matching run
+and guest identities, increasing VMM serial sequence, zero reported dropped records,
+and `D48 CLEAN ... handles=0 searches=0 locks=0 vms=0 dropped=0` before END.
+It performs two independent guest pairs on the identical base SHA. It always
+reaps its owned processes and removes its COWs, including failure paths;
+bounded serial logs and comparison tables remain as text evidence. Disk-only
+diagnostics use the same sequence allocator, so generic sequence gaps require
+the lead's disk logs; they cannot be classified as UART loss from serial alone. This
+supersedes the earlier paragraph about retaining failed QEMU overlays.
+
+`reachability.py` decompresses the seven LZEXE members in memory and follows
+explicit decoded edges. It retains unknown selectors and unresolved transfers.
+DOOM's bound LE body, Quake's go32/runtime body and actual title paths still
+require the lead's disassembly/trace inputs; static results are not executions.

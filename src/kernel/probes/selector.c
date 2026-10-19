@@ -37,6 +37,7 @@ bool probes_operator_wait(bool (*event)(void *), uint64_t (*now)(uint32_t),
 /* F2 crash-isolation additionally accepts [server=desktop|standin] last. */
 bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, struct probe_selection *selection)
 {
+    if (!s || !selection) return false;
     struct sweep_cursor cursor;
     if (sweep_parse(s, len, &cursor)) {
         struct probe_selection parsed = { .phase = cursor.phase };
@@ -70,7 +71,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
-                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen" };
+                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove" };
     static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects" };
     static const char *const f6_names[] = { "net-arp" };
@@ -92,6 +93,12 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     }
     parsed.run[8] = 0;
     i += 12;
+    if (parsed.phase == 3 && !strncmp(parsed.probe,"dos-conformance",sizeof(parsed.probe))) {
+        if (len-i == 14 && !memcmp(s+i," guest=freedos",14)) parsed.flags |= PROBE_DOS_FREEDOS;
+        else if (len-i != 15 || memcmp(s+i," guest=ciukidos",15)) return false;
+        *selection=parsed;
+        return true;
+    }
     /* optional suffixes, in order, each at most once. F3 takes the platform
      * override like F1/F2 (the qemu-e500 profile appends it); no safe mode. */
     if (len - i >= 14 && strncmp(s + i, " platform=e500", 14) == 0) {
@@ -171,7 +178,12 @@ static bool multiboot(const char *name)
 unsigned sweep_count(unsigned phase, const struct probe_tables *t)
 {
     if (phase == SWEEP_ALL_PHASE) return sweep_count(0, t) + sweep_count(1, t) + sweep_count(2, t) + sweep_count(3, t);
-    if (phase == 3) return t->f3_count;
+    if (phase == 3) {
+        unsigned count=0;
+        for (unsigned i=0;i<t->f3_count;i++)
+            if (strncmp(t->f3[i].name,"dos-conformance",16)) count++;
+        return count;
+    }
     if (phase == 0) return t->f0_count + 1;
     if (phase == 2) return t->f2_count;
     unsigned n = t->f1_count;
@@ -194,8 +206,12 @@ bool sweep_at(unsigned phase, unsigned step, const struct probe_tables *t, struc
         s.index = step; s.panic = step == t->f0_count;
         s.name = s.panic ? "panic" : t->f0[step].name;
     } else if (phase == 3) {
-        if (step >= t->f3_count) return false;
-        s.index = step; s.name = t->f3[step].name;
+        bool found=false;
+        for (unsigned i=0;i<t->f3_count;i++) {
+            if (!strncmp(t->f3[i].name,"dos-conformance",16)) continue;
+            if (!step--) { s.index=i; s.name=t->f3[i].name; found=true; break; }
+        }
+        if (!found) return false;
     } else if (phase == 2) {
         if (step >= t->f2_count) return false;
         s.index = step; s.name = t->f2[step].name;
@@ -278,6 +294,7 @@ void probes_dispatch(const struct probe_selection *selection,
     unsigned count = selection->phase == 3 ? tables->f3_count : selection->phase == 1 ? tables->f1_count : tables->f0_count;
     unsigned ran = 0;
     for (unsigned i = 0; i < count; i++) {
+        if (selection->phase==3 && (all || core) && !strncmp(table[i].name,"dos-conformance",16)) continue;
         if (all || core || !strncmp(probe, table[i].name, sizeof(selection->probe))) {
             int failed = table[i].fn();
             ran++;

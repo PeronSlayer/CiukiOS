@@ -532,11 +532,37 @@ def build(kernel, out, boot_cfg):
     dos_spec.loader.exec_module(dos_build)
     dos_image, dos_manifest = dos_build.build()
     sources["/system/dos/DOSBOOT.IMG"] = dos_image
+    sources["/system/dos/D48PLAN.TXT"] = dos_image.parent/"conformance/PLAN.TXT"
     directories.add("/system/dos")
     metadata["dos"] = dos_manifest
     games_sources, games_directories, metadata["games"], free = games_payloads(dos_image)
     sources.update(games_sources)
     directories.update(games_directories)
+    # Optional until the official reference has been provisioned. Never label
+    # an absent reference qualified, nor replace the default CiukiDOS base.
+    conformance_spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
+    conformance=importlib.util.module_from_spec(conformance_spec); conformance_spec.loader.exec_module(conformance)
+    if (conformance.RELEASE/"UPSTREAM.json").is_file():
+        import io
+        system_files={p["path"]:conformance.read_file(dos_image,p["path"]) for p in dos_manifest["payloads"]}
+        game_module=conformance.module("d51_games",ROOT/"scripts/build_games_disk.py")
+        game_files={}
+        for package in game_module.PACKAGES:
+            _,members,_=game_module.package_files(package)
+            for path,data,_ in members: game_files[path]=data
+        game_files["/DOOM/CIUKI.CFG"]=game_module._fixtures().DOOM_CONFIG
+        reference=dos_image.parent/"FREEDOS.IMG"
+        import sys
+        sys.path.insert(0,str(ROOT/"tests/host/dos"))
+        from cases import CASES
+        reference_dirs=("D48","D48TEST",*("D48TEST/D48%03d"%i for i in range(1,len(CASES)+1)),
+                        "WOLF3D","DOOM","QUAKE","QUAKE/ID1")
+        conformance.build_reference(reference,system_files,reference_dirs,game_files)
+        sources["/system/dos/FREEDOS.IMG"]=reference
+        sources["/system/dos/FREEDOS.SHA"]=reference.with_suffix(".SHA")
+        metadata["dos_conformance"]={"reference":"installed-unqualified"}
+    else:
+        metadata["dos_conformance"]={"reference":"absent", "reason":"official FreeDOS 1.3 pins/packages not provisioned"}
     out.parent.mkdir(parents=True, exist_ok=True)
     # Large scratch files stay on disk beside the output, never in /tmp.
     with tempfile.TemporaryDirectory(prefix=".image-", dir=out.parent) as directory:
@@ -608,6 +634,13 @@ def build(kernel, out, boot_cfg):
         os.replace(candidate, out)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)
+    if "/system/dos/FREEDOS.IMG" in sources:
+        import sys
+        sys.path.insert(0,str(ROOT/"tests/host/dos"))
+        evidence=conformance.readback(out,dos_image.parent/"conformance/manifest.json")
+        (out.parent/"dos-conformance.json").write_text(json.dumps(evidence,indent=2)+"\n")
+    else:
+        (out.parent/"dos-conformance.json").unlink(missing_ok=True)
     print(f"SHA256 {image_sha}  {out}")
 
 

@@ -2144,3 +2144,25 @@ provided and qualified. Host wrappers do not establish PE instruction execution.
 The FILE OPEN record uses private flag bit `0x10000` for handle inheritance,
 leaving the FAT read-only attribute bit independent. Other FILE actions assign
 flags by action (for example positioned I/O and short/long path lookup).
+
+### F3-51 CREATE game kernel selection (2026-10-19, pending lead review)
+
+The existing 136-byte version-1 record retains its layout. On CREATE only,
+`launch.kernel` at offset 72 and `launch.game` at offset 76 occupy the union
+used by INPUT/PRESENT operations. Kernel 0 is CiukiDOS; 1 is the pinned FreeDOS
+1.3 reference. Game 0 is the ordinary shell, and 1–3 identify the existing
+Wolf3D/DOOM/Quake catalog entries. Every other union byte remains zero.
+An unknown kernel/game or a FreeDOS request with game 0 returns EINVAL.
+Existing zero-initialized clients retain their default behavior.
+
+The desktop launcher derives the game id from the exact unchanged catalog
+command. It persists each game's `DOS kernel` setting separately under
+`/system/settings/`, defaults absent/invalid values to CiukiDOS, and exposes
+the choices through F12. Changes apply on the next launch. A failed FreeDOS
+launch retains its preference and reports that the pinned reference must be
+installed or repaired. Its CREATE uses the separate reference base with the
+candidate file bridge disabled; it never rewrites the ordinary DOS base.
+Private COW names contain the game, kernel, complete base SHA-256 and fresh VM
+generation. CLOSE/owner death use the existing stop/destroy ownership path.
+The ordinary closed syscall error set is retained; reference storage or hash
+failures return EIO. Runtime dual-kernel game qualification remains open.
