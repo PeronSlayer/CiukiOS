@@ -343,6 +343,12 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
     if ((mask & QS_PAINT) && w->handle && w->tid == t->id && w->redraw &&
         (w->update.n || w->internal_paint) && !IsIconic(w->handle) &&
         filter(w->handle, WM_PAINT, h, lo, hi)) {
+      /* Parents paint before their children (f5-10C classic painting). */
+      for (struct u32_window *p = u32_window(w->parent); p;
+           p = u32_window(p->parent))
+        if (p->tid == t->id && p->redraw && (p->update.n || p->internal_paint) &&
+            filter(p->handle, WM_PAINT, h, lo, hi))
+          w = p;
       *out = (MSG){w->handle, WM_PAINT, 0, 0, u32_ticks(), u32_pointer};
       if (!w->update.n && (flags & 1))
         w->internal_paint = 0;

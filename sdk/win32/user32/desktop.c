@@ -96,10 +96,9 @@ BOOL u32_create_wire(struct u32_window *w) {
   w->generation = ++generation;
   if (!generation)
     return u32_fail(8);
-  RECT r;
-  GetClientRect(w->handle, &r);
-  UINT width = r.right > 0 ? (UINT)r.right : 1,
-       height = r.bottom > 0 ? (UINT)r.bottom : 1;
+  /* The surface holds the client area and the personality-owned bands. */
+  UINT width, height;
+  u32_surface_size(w, &width, &height);
   if (!u32_backend.surface(width, height, &w->surface)) {
     w->wire = 0;
     return 0;
@@ -113,7 +112,7 @@ BOOL u32_create_wire(struct u32_window *w) {
     desk_put32(data + 4, owner->wire);
     desk_put32(data + 8, owner->generation);
   }
-  POINT p = u32_origin(w);
+  POINT p = u32_surface_origin(w);
   desk_put32(data + 12, p.x);
   desk_put32(data + 16, p.y);
   desk_put32(data + 20, width);
@@ -133,10 +132,8 @@ BOOL u32_create_wire(struct u32_window *w) {
 BOOL u32_resize(struct u32_window *w) {
   if (!w || w->destroying || w->creating || w->dcs || !w->serial)
     return 1;
-  RECT r;
-  GetClientRect(w->handle, &r);
-  UINT width = r.right > 0 ? (UINT)r.right : 1,
-       height = r.bottom > 0 ? (UINT)r.bottom : 1;
+  UINT width, height;
+  u32_surface_size(w, &width, &height);
   if (w->surface.width == width && w->surface.height == height)
     return 1;
   struct u32_surface replacement = {.fd = -1};
@@ -159,14 +156,14 @@ BOOL u32_resize(struct u32_window *w) {
 BOOL u32_place(struct u32_window *w) {
   if (!w->wire)
     return 1;
-  RECT r;
-  GetClientRect(w->handle, &r);
-  POINT p = u32_origin(w);
+  UINT width, height;
+  u32_surface_size(w, &width, &height);
+  POINT p = u32_surface_origin(w);
   uint8_t b[32];
   desk_put32(b, p.x);
   desk_put32(b + 4, p.y);
-  desk_put32(b + 8, r.right > 0 ? r.right : 1);
-  desk_put32(b + 12, r.bottom > 0 ? r.bottom : 1);
+  desk_put32(b + 8, width);
+  desk_put32(b + 12, height);
   desk_put32(b + 16, 1);
   desk_put32(b + 20, !(w->style & WS_VISIBLE) ? 2
                      : IsIconic(w->handle)    ? 1

@@ -121,4 +121,8 @@ void gdi_palette_targets(void);
 void gdi_palette_reset(void);
 int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
              const int *, int);
+/* f5-10C selection layer (font.c). */
+void gdi_font_stock(unsigned, struct font *);
+void gdi_font_exit(void);
+int gdi_font_validate(const void *, DWORD);
 #endif

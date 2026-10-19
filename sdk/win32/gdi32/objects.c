@@ -72,7 +72,11 @@ static void init(void) {
     stocks[i].u.pen = (LOGPEN){
         i == 8 ? PS_NULL : PS_SOLID, {1, 0}, i == 6 ? RGB(255, 255, 255) : 0};
   }
-  stocks[13].type = GDI_FONT;
+  static const unsigned fonts[] = {10, 11, 12, 13, 14, 16, 17};
+  for (unsigned i = 0; i < sizeof(fonts) / sizeof(*fonts); i++) {
+    stocks[fonts[i]].type = GDI_FONT;
+    gdi_font_stock(fonts[i], &stocks[fonts[i]].u.font);
+  }
   stocks[15].type = GDI_PALETTE;
   DWORD system[256];
   gdi_system_palette(system);
@@ -154,8 +158,7 @@ COLORREF gdi_colorref(DWORD c) { return gdi_color(c); }
 HGDIOBJ W32API GetStockObject(int n) {
   GDI_GUARD;
   init();
-  if (n == 10 || n == 11 || n == 12 || n == 14 || n == 16 || n == 17)
-    n = 13;
+  /* f5-10C: the font stocks are distinct realized logical fonts. */
   return n >= 0 && n < 20 && stocks[n].type ? stock_handle((unsigned)n) : 0;
 }
 static void state_refs(struct dc_state *s, int delta) {
@@ -457,10 +460,16 @@ void W32API w32_gdi_process_exit(void) {
   for (unsigned i = 21; i < SLOTS; i++)
     if (slots[i].object)
       DeleteObject((slots[i].generation << 12) | (i + 1));
-  struct font *font = &stocks[13].u.font;
-  if (font->provider.release)
-    font->provider.release(font->face);
-  *font = (struct font){0};
+  static const unsigned fonts[] = {10, 11, 12, 13, 14, 16, 17};
+  for (unsigned i = 0; i < sizeof(fonts) / sizeof(*fonts); i++) {
+    struct font *font = &stocks[fonts[i]].u.font;
+    if (font->provider.release)
+      font->provider.release(font->face);
+    *font = (struct font){0};
+  }
+  gdi_font_exit();
+  for (unsigned i = 0; i < sizeof(fonts) / sizeof(*fonts); i++)
+    gdi_font_stock(fonts[i], &stocks[fonts[i]].u.font);
   desktop = (struct w32_dib){0};
   gdi_palette_reset();
 }

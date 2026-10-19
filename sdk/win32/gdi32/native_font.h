@@ -6,4 +6,6 @@
 /* Opens an owned SDK face; DeleteObject/process detach closes it. This adapter
  * is native code; the lead's PE-to-native bridge installs these callbacks. */
 HFONT w32_gdi_native_font_open(const char *, unsigned);
+/* f5-10C face backend over the same SDK API, for w32_gdi_set_face_backend. */
+const struct w32_gdi_face_backend *w32_gdi_native_backend(void);
 #endif

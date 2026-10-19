@@ -305,9 +305,21 @@ RELOCATION-TYPES none
 DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
 
 FILE compiled-resources.exe
-SHA256 d1e9d10c0fe93c67672211456d613171bda750f335dd95788bb606af40adb0e9
+SHA256 321832d882f6e764021f2cc21694dc219a9d313d258db85294bbf5680c90b993
 FORMAT PE32 i386 EXE
 SUBSYSTEM console LINKER 14.0
+RESOURCE {"language": 1033, "name": 400, "size": 104, "type": 2}
+RESOURCE {"language": 1033, "name": 200, "size": 252, "type": 4}
+RESOURCE {"language": 1033, "name": 201, "size": 134, "type": 4}
+RESOURCE {"language": 1033, "name": 100, "size": 590, "type": 5}
+RESOURCE {"language": 1033, "name": 101, "size": 1336, "type": 5}
+RESOURCE {"language": 1033, "name": 102, "size": 170, "type": 5}
+RESOURCE {"language": 1033, "name": 103, "size": 296, "type": 5}
+RESOURCE {"language": 1033, "name": 110, "size": 588, "type": 5}
+RESOURCE {"language": 1033, "name": 111, "size": 376, "type": 5}
+RESOURCE {"language": 1033, "name": 1, "size": 42, "type": 6}
+RESOURCE {"language": 1033, "name": 2, "size": 70, "type": 6}
+RESOURCE {"language": 1033, "name": 300, "size": 32, "type": 9}
 RESOURCE {"language": 1033, "name": "NAMED", "size": 6, "type": 10}
 RESOURCE {"language": 1033, "name": 1, "size": 6, "type": 10}
 RESOURCE {"language": 1040, "name": 1, "size": 6, "type": 10}

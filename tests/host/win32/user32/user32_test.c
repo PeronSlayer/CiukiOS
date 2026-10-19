@@ -35,6 +35,8 @@ void W32API SetLastError(DWORD n) { errors[ui_kernel_current()] = n; }
 DWORD W32API GetCurrentThreadId(void) { return ui_kernel_tid(); }
 DWORD W32API GetCurrentProcessId(void) { return ui_kernel_pid(); }
 DWORD W32API GetTickCount(void) { return ui_kernel_ticks(); }
+#ifndef U32_TEST_EXTERNAL_MODULES
+/* tests/host/win32/dialogs supplies file, module and resource services. */
 HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
                           SECURITY_ATTRIBUTES *security, DWORD creation,
                           DWORD flags, HANDLE template) {
@@ -60,6 +62,7 @@ BOOL W32API CloseHandle(HANDLE h) {
   (void)h;
   return 1;
 }
+#endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
 static unsigned allocations;
 void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
@@ -98,6 +101,7 @@ BOOL W32API GlobalUnlock(HANDLE h) {
   return 0;
 }
 DWORD W32API GlobalSize(HANDLE h) { return h ? ((DWORD *)h)[-7] : 0; }
+#ifndef U32_TEST_EXTERNAL_MODULES
 HANDLE W32API FindResourceA(HANDLE h, const void *n, const void *t) {
   (void)h;
   (void)n;
@@ -127,6 +131,7 @@ void *W32API GetProcAddress(HANDLE h, const char *s) {
   (void)s;
   return 0;
 }
+#endif
 int32_t w32_ciuki_call(void *r, uint32_t n) { return ui_kernel_call(r, n); }
 void w32_diag(const char *a, const char *b, const char *c) {
   printf("[win32] %s %s!%s\n", a, b, c);

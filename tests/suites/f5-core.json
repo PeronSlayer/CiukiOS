@@ -880,6 +880,87 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-dialogs-qemu-t23",
+      "probe": "w32-dialogs",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-dialogs run={run_id}",
+      "timeout": 120,
+      "integration_pending": "f5-10C dialogs/controls/menus/fonts; needs the PE-to-native font bridge and a guest dialog probe; authored, unrun",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dialog_units"
+            },
+            "fields": {
+              "system_x": {
+                "eq": 8
+              },
+              "system_y": {
+                "eq": 16
+              },
+              "dialog_x": {
+                "eq": 6
+              },
+              "dialog_y": {
+                "eq": 13
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dialog_keyboard"
+            },
+            "fields": {
+              "steps": {
+                "ge": 15
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "font_budget"
+            },
+            "fields": {
+              "total_peak": {
+                "le": 2097152
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dialog_teardown"
+            },
+            "fields": {
+              "live_windows": {
+                "eq": 0
+              },
+              "live_menus": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

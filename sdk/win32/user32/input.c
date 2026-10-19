@@ -156,8 +156,8 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
   } else {
     POINT p = u32_pointer;
     if (e->type == CIUKI_INPUT_MOTION) {
-      p = (POINT){e->value, e->value2};
-      ClientToScreen(root->handle, &p);
+      POINT so = u32_surface_origin(root);
+      p = (POINT){e->value + so.x, e->value2 + so.y};
       u32_pointer = p;
       u32_input_notify(root->handle, e, 0);
     }
@@ -167,6 +167,9 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
     POINT client = p;
     ScreenToClient(h, &client);
     lp = (uint16_t)client.x | ((uint32_t)(uint16_t)client.y << 16);
+    /* f5-10C: points over a personality-owned band (menu bar, border,
+     * scroll bar) become WM_NC* messages with the hit-test code. */
+    UINT hit = u32_capture ? 1 : u32_hit_test(h, p);
     mask = e->type == CIUKI_INPUT_MOTION ? QS_MOUSEMOVE : QS_MOUSEBUTTON;
     wp = (async_keys[1] & 128 ? 1 : 0) | (async_keys[2] & 128 ? 2 : 0) |
          (async_keys[16] & 128 ? 4 : 0) | (async_keys[17] & 128 ? 8 : 0) |
@@ -215,12 +218,17 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
         }
       }
     }
+    if (hit > 1 && m >= WM_MOUSEMOVE && m <= 0x209u) {
+      m = m - WM_MOUSEMOVE + 0xa0u;
+      wp = hit;
+      lp = (uint16_t)p.x | ((uint32_t)(uint16_t)p.y << 16);
+    }
     struct {
       POINT pt;
       HWND hwnd;
       UINT hit;
       uintptr_t extra;
-    } mouse = {p, h, 1, 0};
+    } mouse = {p, h, hit ? hit : 1, 0};
     if (u32_hooks(7, 0, m, (LPARAM)&mouse))
       return;
   }
@@ -380,7 +388,7 @@ static BOOL pointer_request(HWND h, BOOL capture) {
   desk_put32(b, (capture ? DESK_V3_CAPTURE : 0) |
                     (use_clip ? DESK_V3_CLIP : 0) |
                     (relative_window ? DESK_V3_RELATIVE : 0));
-  POINT origin = u32_origin(w);
+  POINT origin = u32_surface_origin(w);
   desk_put32(b + 4, use_clip ? bounds.left - origin.x : 0);
   desk_put32(b + 8, use_clip ? bounds.top - origin.y : 0);
   desk_put32(b + 12, use_clip ? bounds.right - bounds.left : 0);
