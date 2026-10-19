@@ -33,13 +33,7 @@ static NTSTATUS result(void) {
 static int narrow(char *out, const UNICODE_STRING *s) {
     if (!s || s->Length & 1 || s->Length / 2 >= W32_PATH_MAX || (!s->Buffer && s->Length))
         return 0;
-    for (ULONG i = 0; i < s->Length / 2; i++) {
-        if (s->Buffer[i] > 255 || !s->Buffer[i])
-            return 0;
-        out[i] = (char)s->Buffer[i];
-    }
-    out[s->Length / 2] = 0;
-    return 1;
+    return w32_utf16_path(s->Buffer,s->Length/2,out,W32_PATH_MAX);
 }
 NTSTATUS W32API LdrLoadDll(const WCHAR *path, ULONG *flags, UNICODE_STRING *name, void **base) {
     (void)path;

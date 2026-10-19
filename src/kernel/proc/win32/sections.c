@@ -8,6 +8,8 @@
 #include <ciuki/sha256.h>
 /* Internal uaddr bind flag, never a user protection value. */
 #define SECTION_COW_BIND 0x80000000u
+extern int file_section_io_locked(struct file_description *,void *,size_t,bool,bool,uint64_t,size_t *);
+
 struct section_data {
     struct w32_object *object, *file;
     uint32_t refs, kind, bytes, count, protect, image_base, writer, writable_views;
@@ -55,7 +57,7 @@ static uint32_t section_page(struct section_data *s, unsigned index)
             n = PAGE_SIZE;
         s->syncing = true;
         vfs_lock(d->node->space->vfs, 0);
-        int err = file_io_locked(d, P2V(page), n, false, true, off, &done);
+        int err = file_section_io_locked(d, P2V(page), n, false, true, off, &done);
         vfs_unlock(d->node->space->vfs);
         s->syncing = false;
         if (err || done != n) {
@@ -137,7 +139,7 @@ static int section_flush(struct section_data *s, bool locked)
             if (n > PAGE_SIZE)
                 n = PAGE_SIZE;
             size_t done = 0;
-            err = file_io_locked(d, P2V(s->pages[i]), n, true, true, off, &done);
+            err = file_section_io_locked(d, P2V(s->pages[i]), n, true, true, off, &done);
             if (!err && done != n)
                 err = -EIO;
         }

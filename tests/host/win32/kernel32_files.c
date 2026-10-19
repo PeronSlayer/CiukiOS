@@ -88,6 +88,67 @@ static struct ciuki_w32_file_args open_request(const char *path,
   CHECK(!w32_file_call(client_thread, &a));
   return a;
 }
+static uint32_t lock_request(uint32_t h,unsigned op,uint64_t offset,uint64_t bytes,unsigned flags) {
+  struct ciuki_w32_file_args a={.action=op,.handle=h,.low=(uint32_t)offset,
+      .high=(uint32_t)(offset>>32),.bytes=(uint32_t)bytes,.share=(uint32_t)(bytes>>32),.flags=flags};
+  CHECK(!w32_file_call(client_thread,&a));return a.error;
+}
+static void amendment_files(void) {
+  struct ciuki_w32_file_args a=open_request("C:\\WINDOWS\\locks.bin",0xc0000000u,7,1);
+  CHECK(!a.error);uint32_t h=a.result;
+  a=open_request("C:\\WINDOWS\\locks.bin",0xc0000000u,7,3);
+  CHECK(!a.error);uint32_t second=a.result;
+  CHECK(handles[h/4]->u.file.description->identity);
+  CHECK(handles[h/4]->u.file.description->identity==handles[second/4]->u.file.description->identity);
+  CHECK(!lock_request(h,W32_F_LOCK,0,4,3));
+  CHECK(lock_request(second,W32_F_LOCK,0,4,3)==33);
+  CHECK(lock_request(second,W32_F_UNLOCK,0,4,0)==33);
+  int fd=file_open(client,"/WINDOWS/locks.bin",O_RDWR,0);CHECK(fd>=0);
+  char byte='X';CHECK(io(fd,&byte,1,false,true,0)==-EACCES);
+  struct vfs_table table;CHECK(!vfs_table_init(&vfs,&table,2));
+  for (unsigned type=0;type<VFS_OWNER_TYPES;type++) {
+    CHECK(!vfs_table_set_owner(&table,type,client->pid));
+    int old=vfs_open(&table,"C:/WINDOWS/locks.bin",VFS_READ|VFS_WRITE,VFS_DENY_NONE,0);CHECK(old>=0);
+    size_t got=99;CHECK(vfs_read(&table,old,&byte,1,&got)==-VFS_ELOCK&&!got);
+    CHECK(vfs_lock_range(&table,old,0,1,false)==-VFS_ELOCK);
+    CHECK(!vfs_close(&table,old));
+  }
+  CHECK(!lock_request(h,W32_F_UNLOCK,0,4,0));
+  CHECK(!lock_request(h,W32_F_LOCK,0,4,1)); /* shared */
+  CHECK(!lock_request(second,W32_F_LOCK,0,4,1));
+  CHECK(io(fd,&byte,1,true,true,0)==-EACCES);
+  size_t mapped=0;vfs_lock(&vfs,0);
+  CHECK(!file_section_io_locked(file_fd(client,fd),&byte,1,true,true,0,&mapped)&&mapped==1);
+  vfs_unlock(&vfs);
+  CHECK(io(fd,&byte,1,false,true,0)==1); /* shared reads admitted */
+  CHECK(!lock_request(second,W32_F_UNLOCK,0,4,0));
+  CHECK(!lock_request(h,W32_F_UNLOCK,0,4,0));
+  CHECK(!lock_request(h,W32_F_LOCK,UINT64_C(0x100000010),UINT64_C(0x100000000),3));
+  CHECK(lock_request(second,W32_F_LOCK,UINT64_C(0x100000011),1,3)==33);
+  close_handle(h); /* final close releases all this description's claims */
+  CHECK(!lock_request(second,W32_F_LOCK,UINT64_C(0x100000011),1,3));
+  close_handle(second);CHECK(!file_close(client,fd));vfs_table_destroy(&table);
+  a=open_request("C:\\WINDOWS\\locks.bin",0x80000000u,3,3);CHECK(!a.error);h=a.result;
+  CHECK(path_request("C:\\WINDOWS\\locks.bin",W32_F_DELETE)==32);close_handle(h);
+  a=open_request("C:\\WINDOWS\\locks.bin",0x80000000u,7,3);CHECK(!a.error);h=a.result;
+  CHECK(!path_request("C:\\WINDOWS\\locks.bin",W32_F_DELETE));
+  a=open_request("C:\\WINDOWS\\locks.bin",0x80000000u,7,3);CHECK(a.error==5);
+  close_handle(h);CHECK(open_request("C:\\WINDOWS\\locks.bin",0,7,3).error==2);
+  put_path(USER,"C:\\WINDOWS\\delete.bin");
+  a=(struct ciuki_w32_file_args){.action=W32_F_OPEN,.path=USER,.access=0xc0000000u,.share=7,.disposition=1,.flags=0x04000000};
+  CHECK(!w32_file_call(client_thread,&a)&&!a.error);h=a.result;
+  a=open_request("C:\\WINDOWS\\delete.bin",0x80000000u,7,3);CHECK(!a.error);second=a.result;
+  close_handle(h);CHECK(open_request("C:\\WINDOWS\\delete.bin",0,7,3).error==5);
+  close_handle(second);CHECK(open_request("C:\\WINDOWS\\delete.bin",0,7,3).error==2);
+  CHECK(!make_dir("/System"));
+  a=open_request("C:\\WINDOWS\\protect.bin",0xc0000000u,7,1);CHECK(!a.error);h=a.result;
+  vfs_lock(&vfs,0);CHECK(!px_rename_locked(space,client->cwd,"/WINDOWS/protect.bin","/System/protect.bin"));vfs_unlock(&vfs);
+  a=(struct ciuki_w32_file_args){.action=W32_F_WRITE,.handle=h,.buffer=USER2,.bytes=1};
+  CHECK(!w32_file_call(client_thread,&a)&&a.error==5&&!a.result);
+  a=(struct ciuki_w32_file_args){.action=W32_F_TRUNCATE,.handle=h};CHECK(!w32_file_call(client_thread,&a)&&a.error==5);
+  close_handle(h);
+  puts("PASS amendment common owner locks shared high ranges delete sharing pending-close protected-handle rename");
+}
 int main(int argc, char **argv) {
   CHECK(argc == 3);
   ram = calloc(HOST_PAGES, PAGE_SIZE);
@@ -116,6 +177,7 @@ int main(int argc, char **argv) {
   client->cwd_release = px_release;
   CHECK(path_request("C:\\WINDOWS", W32_F_MKDIR) == 0);
   CHECK(path_request("C:\\System", W32_F_MKDIR) == 5);
+  amendment_files();
   struct ciuki_w32_file_args a =
       open_request("C:\\WINDOWS\\Long File.txt", 0xc0000000u, 1, 1);
   CHECK(!a.error && a.result);

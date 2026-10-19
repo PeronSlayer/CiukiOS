@@ -11,7 +11,12 @@
 #undef kmalloc
 #undef kzalloc
 #undef kfree
-void *kmalloc(size_t n){return n>2040?0:fixture_kmalloc(n);}
+static void (*w32_allocation_hook)(void);
+void *kmalloc(size_t n){
+    void *p=n>2040?0:fixture_kmalloc(n);
+    if(p&&w32_allocation_hook){void (*hook)(void)=w32_allocation_hook;w32_allocation_hook=0;hook();}
+    return p;
+}
 void *kzalloc(size_t n){void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
 void kfree(void *p){fixture_kfree(p);}
 uint32_t pmm_alloc_contig(uint32_t n){if(fail_alloc()||!n)return 0;for(unsigned first=1;first+n<=HOST_PAGES;first++){unsigned i=0;while(i<n&&!allocated[first+i])i++;if(i!=n){first+=i;continue;}for(i=0;i<n;i++){allocated[first+i]=true;pages_used++;memset(P2V((first+i)*PAGE_SIZE),0xa5,PAGE_SIZE);}return first*PAGE_SIZE;}return 0;}
@@ -81,6 +86,9 @@ int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool wri
     if(write){memcpy(model_data+off,buffer,bytes);w32_file_changed(d->node,off,buffer,(uint32_t)bytes);}else memcpy(buffer,model_data+off,bytes);
     *done=bytes;return 0;
 }
+int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,bool write,
+                           bool positioned,uint64_t off,size_t *done)
+{return file_io_locked(d,buffer,bytes,write,positioned,off,done);}
 #include "../../../src/kernel/proc/win32/objects.c"
 #include "../../../src/kernel/proc/win32/wait.c"
 #include "../../../src/kernel/proc/win32/apc.c"
@@ -276,7 +284,7 @@ static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put3
     }
 }
 static bool loader_missing;
-static int loader_open(void *cwd,const char *path,struct ciuki_file *out){(void)cwd;CHECK(!strcmp(path,"/WINDOWS/SYSTEM/ntdll.dll"));if(loader_missing)return -ENOENT;*out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;}
+static int loader_open(void *cwd,const char *path,struct ciuki_file *out){(void)cwd;CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;*out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;}
 static void test_spawn_exceptions(void)
 {
     proc_init();make_pe(pe_data,false);make_pe(loader_data,true);

@@ -122,11 +122,13 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     }
     case W32_FILE: {
         const struct ciuki_w32_file_args *a=record;
-        return a->result||a->error||a->action<1||a->action>W32_F_DISK?-EINVAL:0;
+        return a->result||a->error||a->action<1||a->action>W32_F_UNLOCK?-EINVAL:0;
     }
     case W32_SYSTEM: {
         const struct ciuki_w32_system_args *a=record;
-        return a->result||a->error||a->low||a->high||(a->extra&&(a->action!=W32_S_TERMINATE_THREAD||a->handle))||a->action<1||a->action>W32_S_QUERY_PRIORITY?-EINVAL:0;
+        if (a->action==W32_S_READ_MEMORY || a->action==W32_S_WRITE_MEMORY)
+            return a->result||a->error?-EINVAL:0;
+        return a->result||a->error||a->low||a->high||(a->extra&&(a->action!=W32_S_TERMINATE_THREAD||a->handle))||a->action<1||a->action>W32_S_WRITE_MEMORY?-EINVAL:0;
     }
     case W32_LOADER: {
         const struct ciuki_w32_loader_args *a=record;

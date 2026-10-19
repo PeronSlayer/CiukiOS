@@ -384,7 +384,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-kernel32 run={run_id}",
       "timeout": 120,
-      "integration_pending": "f5-06: PE runtime exercise and guest probe remain unqualified; authored case, never run",
+      "integration_pending": "f5-06 Amendment 1: builtins at C:\\System\\Win32 (ntdll.dll, BUILTIN.BIN); guest probe remains unqualified; authored case, never run",
       "expected": {
         "terminal": "END",
         "predicates": [

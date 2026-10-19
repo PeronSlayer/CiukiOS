@@ -68,7 +68,8 @@ def build_model(out,main=None):
     sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))
     binary=out/'w32model'
     run(['clang','-DW32_HOST_MODEL','-ffreestanding','-fno-builtin','-fno-omit-frame-pointer',
-         '-O1','-Wall','-Wextra','-Werror','-pthread','-I'+str(CORE/'include'),'-I'+str(ADAPTER),
+         '-O1','-Wall','-Wextra','-Werror','-pthread','-I'+str(CORE/'include'),
+         '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ADAPTER),
          *sources,ADAPTER/'model.c',main or ADAPTER/'main.c','-o',binary])
     return binary
 
@@ -81,3 +82,22 @@ if __name__=='__main__':
     args=ap.parse_args()
     try: print(build_model(args.output,args.main) if args.model else build(args.output,args.main,not args.linux_only))
     except subprocess.CalledProcessError as e: sys.exit(e.returncode)
+
+def build_kernel32_runtime(out):
+    """Execute the production i386 fiber switch and APC dispatcher on Linux."""
+    out=Path(out);out.mkdir(parents=True,exist_ok=True)
+    flags=['--target=i386-unknown-linux-gnu','-march=pentiumpro','-ffreestanding','-fno-builtin',
+           '-fno-stack-protector','-fno-omit-frame-pointer','-fno-pic','-fno-pie',
+           '-mno-sse','-mno-sse2','-mno-mmx','-mstack-alignment=4','-O1','-Wall','-Wextra','-Werror',
+           '-ffunction-sections','-fdata-sections','-I'+str(CORE/'include'),
+           '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ADAPTER)]
+    sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[
+        CORE/'ntdll/context.S',CORE/'kernel32/core.c',CORE/'kernel32/fiber.c',CORE/'kernel32/fiber.S',
+        CORE/'kernel32/apc.c',ADAPTER/'linux.c',ADAPTER/'start.S',ADAPTER/'kernel32_runtime.c']
+    objects=[]
+    for i,source in enumerate(sources):
+        obj=out/f'{i}.o';run(['clang',*flags,'-c',source,'-o',obj]);objects.append(obj)
+    program=out/'runtime'
+    run(['ld.lld','-m','elf_i386','-static','--gc-sections','--entry=_start',
+         '--image-base=0x60000000','-o',program,*objects])
+    return program

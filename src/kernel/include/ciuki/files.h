@@ -20,7 +20,7 @@ struct px_node {
     uint64_t ino;
     uint32_t refs, generation, drive;
     enum px_kind kind;
-    bool linked, mountpoint;
+    bool linked, mountpoint, delete_pending;
 };
 struct audio_stream;
 struct file_description {
@@ -29,6 +29,11 @@ struct file_description {
     struct px_node *node;
     struct audio_stream *audio;
     struct vfs_file_identity *identity; /* common FAT identity retained through final close */
+    struct vfs_node lock_node;
+    struct vfs_description lock_description;
+    struct vfs_lock_owner lock_owner;
+    uint32_t share_access; /* Win32 read/write/delete; native derives access from flags */
+    bool win32, delete_on_close;
     bool mixer_control;
     uint64_t position;
     uint32_t references, flags, deny, cursor, stream;
@@ -73,6 +78,8 @@ void px_changed_locked(struct px_node *);
 int px_drop_locked(struct px_node *);
 int px_share_locked(struct px_node *, uint32_t access, uint32_t deny);
 int px_range_locked(struct px_node *, uint64_t start, uint64_t length);
+int px_description_range_locked(struct file_description *, uint64_t, uint64_t, bool write);
+int px_delete_finish_locked(struct px_node *);
 int px_open_locked(struct px_namespace *, struct px_node *, const char *, uint32_t,
                    struct file_description *);
 uint32_t file_description_count(void);

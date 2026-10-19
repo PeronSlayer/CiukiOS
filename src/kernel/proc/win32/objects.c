@@ -7,6 +7,7 @@
 #include <ciuki/files.h>
 extern void w32_snapshot_destroy(struct w32_object *);
 extern void w32_find_destroy(struct w32_object *) __attribute__((weak));
+extern void w32_file_handle_close(struct process *,struct w32_object *) __attribute__((weak));
 void w32_apc_contexts_cleanup(struct proc_thread *t);
 struct w32_account w32_accounts;
 struct w32_object *w32_objects;
@@ -185,6 +186,9 @@ uint32_t w32_handle_install(
             struct w32_handle_entry *chunk = w32_alloc(64 * sizeof(*chunk));
             if (!chunk)
                 return 8;
+            if (!p->w32 || p->w32->closing || p->state==PROC_STOPPING || p->state==PROC_ZOMBIE) {
+                w32_free(chunk,64*sizeof(*chunk));return 5;
+            }
             for (unsigned i = 0; i < 64; i++)
                 chunk[i].generation = 1;
             if (p->w32->chunks[c])
@@ -218,6 +222,7 @@ uint32_t w32_handle_close(struct process *p, uint32_t h)
     e->generation++;
     p->w32->handles--;
     w32_accounts.handles--;
+    if (o->type==W32_OBJ_FILE && w32_file_handle_close) w32_file_handle_close(p,o);
     w32_release(o);
     return 0;
 }
@@ -240,6 +245,9 @@ uint32_t w32_handles_inherit(struct process *child, const struct process *parent
             struct w32_handle_entry *chunk = w32_alloc(64 * sizeof(*chunk));
             if (!chunk)
                 return 8;
+            if (!child->w32 || child->w32->closing || !parent->w32 || parent->w32->closing) {
+                w32_free(chunk,64*sizeof(*chunk));return 5;
+            }
             for (unsigned i = 0; i < 64; i++)
                 chunk[i].generation = 1;
             child->w32->chunks[c] = chunk;

@@ -568,7 +568,7 @@ static struct vfs_node *node_find(struct vfs *v, struct fat_volume *vol, const s
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol && v->nodes[i].generation==v->generation[v->nodes[i].drive] && v->nodes[i].entry.parent==ent->parent && v->nodes[i].entry.index==ent->index) return &v->nodes[i];
     return 0;
 }
-static int table_range_check(struct vfs_table *,struct vfs_node *,struct vfs_description *,uint64_t,uint64_t);
+static int table_range_check(struct vfs_table *,struct vfs_node *,struct vfs_description *,uint64_t,uint64_t,bool);
 static int handle_free(struct vfs_table *t) { for (unsigned i=0;i<VFS_HANDLES;i++) if (!t->handles[i]) return (int)i; return -FS_EMFILE; }
 int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum vfs_share deny, uint8_t attr, unsigned mode, unsigned *status) {
     if (!(flags&3) || flags&~63u || deny>VFS_DENY_ALL || (flags&VFS_TRUNCATE && !(flags&VFS_WRITE)) || (flags&VFS_EXCLUSIVE && !(flags&VFS_CREATE))) return -FS_EINVAL;
@@ -617,7 +617,7 @@ int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum v
     if (!node->identity && (e=vfs_identity_get(v,vol,&node->entry,&node->identity))) goto undo;
     if (flags&VFS_TRUNCATE) {
         struct fat_entry before=node->entry;
-        e=table_range_check(t,node,d,0,before.size); if (e) goto undo;
+        e=table_range_check(t,node,d,0,before.size,true); if (e) goto undo;
         e=VFS_IO(v,fat_truncate(vol,&node->entry,0));
         if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry,false);
         if (e) goto undo;
@@ -706,45 +706,69 @@ int vfs_dos_share(unsigned old_mode,unsigned old_access,uint64_t old_owner,
     if (!old_mode) return old_access==VFS_READ && access==VFS_READ && readonly && (mode==2 || mode==4) ? 0 : -VFS_ESHARE;
     return old_access==VFS_READ && access==VFS_READ && readonly && (old_mode==2 || old_mode==4) ? 0 : -VFS_ECRITICAL_SHARE;
 }
-int vfs_range_check_owner(struct vfs *v,struct vfs_node *node,struct vfs_description *description,
-                          struct vfs_lock_owner owner,uint64_t start,uint64_t length) {
+/* Equal retained identity survives aliases and rename. Synthetic native nodes
+ * are snapshots of that identity; never equate a reused directory slot. */
+static bool lock_same_file(const struct vfs_node *a, const struct vfs_node *b) {
+    if (a==b) return true;
+    if (a->identity && b->identity) return a->identity==b->identity;
+    if (a->entry.identity && b->entry.identity && a->volume==b->volume && a->generation==b->generation)
+        return a->entry.identity==b->entry.identity;
+    return a->generation==b->generation && (a->ro ? a->ro==b->ro && a->ro_id==b->ro_id :
+        a->volume==b->volume && a->entry.parent==b->entry.parent && a->entry.index==b->entry.index);
+}
+int vfs_description_io_locked(struct vfs *v,struct vfs_node *node,struct vfs_description *description,
+                              struct vfs_lock_owner owner,uint64_t start,uint64_t length,bool write) {
     if (!length) return 0;
     if (length>UINT64_MAX-start) return -FS_EINVAL;
     for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) {
         struct vfs_range_lock *l=&v->range_locks[i];
-        if (l->description && l->node==node &&
-            (l->owner!=owner.id || l->owner_type!=owner.type || l->description!=description) &&
-            start<l->end && l->start<start+length) return -VFS_ELOCK;
+        if (!l->description || !lock_same_file(l->node,node) || start>=l->end || l->start>=start+length) continue;
+        bool mine=l->description==description && l->owner==owner.id && l->owner_type==owner.type;
+        if (l->shared ? write : !mine) return -VFS_ELOCK;
     }
     return 0;
+}
+int vfs_range_check_owner(struct vfs *v,struct vfs_node *node,struct vfs_description *description,
+                          struct vfs_lock_owner owner,uint64_t start,uint64_t length) {
+    return vfs_description_io_locked(v,node,description,owner,start,length,true);
 }
 int vfs_range_check(struct vfs *v,struct vfs_node *node,struct vfs_description *d,
                     uint64_t owner,uint64_t start,uint64_t length) {
     return vfs_range_check_owner(v,node,d,(struct vfs_lock_owner){d ? d->owner_type : VFS_OWNER_NATIVE,owner},start,length);
 }
 static int table_range_check(struct vfs_table *t, struct vfs_node *node, struct vfs_description *d,
-                              uint64_t start, uint64_t length) {
-    return vfs_range_check_owner(t->vfs,node,d,(struct vfs_lock_owner){t->owner_type,t->owner},start,length);
+                              uint64_t start,uint64_t length,bool write) {
+    return vfs_description_io_locked(t->vfs,node,d,(struct vfs_lock_owner){t->owner_type,t->owner},start,length,write);
+}
+void vfs_description_unlock_locked(struct vfs *v,struct vfs_description *d) {
+    for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) if (v->range_locks[i].description==d)
+        memset(&v->range_locks[i],0,sizeof(v->range_locks[i]));
+}
+int vfs_description_lock_locked(struct vfs *v,struct vfs_description *d,struct vfs_lock_owner owner,
+                                uint64_t start,uint64_t length,bool exclusive,bool unlock) {
+    if (!d || !d->node || owner.type>=VFS_OWNER_TYPES || length>UINT64_MAX-start) return -FS_EINVAL;
+    if (d->node->generation!=v->generation[d->node->drive] || !vfs_identity_live(v,d->node->identity)) return -FS_EIO;
+    struct vfs_range_lock *slot=0,*match=0;
+    for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) {
+        struct vfs_range_lock *l=&v->range_locks[i];
+        if (!l->description) { if (!slot) slot=l; continue; }
+        if (!lock_same_file(l->node,d->node)) continue;
+        bool mine=l->description==d && l->owner==owner.id && l->owner_type==owner.type;
+        if (mine && l->start==start && l->length==length && (!match || !l->shared)) match=l;
+        if (!unlock && length && l->length && start<l->end && l->start<start+length &&
+            (exclusive || (!l->shared && !mine))) return -VFS_ELOCK;
+    }
+    if (unlock) { if (!match) return -VFS_ELOCK; memset(match,0,sizeof(*match)); return 0; }
+    if (!slot) return -VFS_ELOCKFULL;
+    *slot=(struct vfs_range_lock){.description=d,.node=d->node,.owner=owner.id,.owner_type=owner.type,
+        .start=start,.end=start+length,.length=length,.shared=!exclusive};
+    return 0;
 }
 int vfs_lock_range(struct vfs_table *t,int h,uint32_t start,uint32_t length,bool unlock) {
     int e=handle_lock(t,h); if (e) return e;
     struct vfs_description *d=get(t,h);
-    uint64_t end=(uint64_t)start+length;
-    e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : end>UINT32_MAX ? -FS_EINVAL : 0;
-    struct vfs_range_lock *free_slot=0,*match=0;
-    for (unsigned i=0;!e && i<VFS_RANGE_LOCKS;i++) {
-        struct vfs_range_lock *l=&t->vfs->range_locks[i];
-        if (!l->description) { if (!free_slot) free_slot=l; continue; }
-        if (l->node!=d->node) continue;
-        if (l->description==d && l->owner==t->owner && l->owner_type==t->owner_type && l->start==start && l->length==length) match=l;
-        if (!unlock && length && l->length && start<l->end && l->start<end) e=-VFS_ELOCK;
-    }
-    if (!e && unlock) { if (!match) e=-VFS_ELOCK; else memset(match,0,sizeof(*match)); }
-    else if (!e) {
-        if (!free_slot) e=-VFS_ELOCKFULL;
-        else *free_slot=(struct vfs_range_lock){.description=d,.node=d->node,.owner=t->owner,
-            .start=start,.end=end,.length=length,.owner_type=t->owner_type};
-    }
+    e=!d ? -FS_EBADF : (uint64_t)start+length>UINT32_MAX ? -FS_EINVAL :
+        vfs_description_lock_locked(t->vfs,d,(struct vfs_lock_owner){t->owner_type,t->owner},start,length,true,unlock);
     vfs_unlock(t->vfs); return e;
 }
 int vfs_table_set_owner(struct vfs_table *t, enum vfs_owner_type type, uint64_t owner) {
@@ -816,7 +840,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
             int error=file_wait_locked(v,mask,t->request,start,begin);
             vfs_unlock(v); if (error) return error; continue;
         }
-        int locked=table_range_check(t,node,d,d->position,n);
+        int locked=table_range_check(t,node,d,d->position,n,false);
         if (locked) { vfs_unlock(v); return locked; }
         struct fat_volume *vol=node->volume;
         uint32_t media_generation=vol->dev->media_generation;
@@ -848,7 +872,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     if (!d) e=-FS_EBADF;
     else if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) e=-FS_EIO;
     else if (!(d->access&VFS_READ)) e=-FS_EACCES;
-    else if ((e=table_range_check(t,d->node,d,d->position,n))) { }
+    else if ((e=table_range_check(t,d->node,d,d->position,n,false))) { }
     else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=VFS_IO(t->vfs,fs_ro_read(d->node->ro,d->node->ro_id,d->position,buf,n,done)); if (e) ro_handle(t->vfs,d->node); d->position+=*done; }
     else { e=VFS_IO(t->vfs,fat_read(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done; }
     vfs_unlock(t->vfs); return e;
@@ -860,7 +884,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
     else if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) e=-FS_EIO;
     else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
     else if (!(d->access&VFS_WRITE)) e=-FS_EACCES;
-    else if ((e=table_range_check(t,d->node,d,d->position,n))) { }
+    else if ((e=table_range_check(t,d->node,d,d->position,n,true))) { }
     else if (d->node->log_capacity) e=-FS_EBUSY;
     else {
         struct fat_entry before=d->node->entry;
@@ -905,7 +929,7 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     if (d && d->node->log_capacity && !e) e=-FS_EBUSY;
     if (!e) {
         uint64_t old=d->node->entry.size,start=size<old ? size : old;
-        e=table_range_check(t,d->node,d,start,size<old ? old-size : size-old);
+        e=table_range_check(t,d->node,d,start,size<old ? old-size : size-old,true);
     }
     if (!e) {
         struct fat_entry before=d->node->entry;

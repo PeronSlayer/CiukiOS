@@ -116,6 +116,8 @@ void W32API GetSystemTime(SYSTEMTIME *s) {
 }
 void W32API GetLocalTime(SYSTEMTIME *s) { GetSystemTime(s); }
 DWORD W32API GetTimeZoneInformation(TIME_ZONE_INFORMATION *t) {
+  static volatile ULONG once;
+  if (!__atomic_exchange_n(&once,1,__ATOMIC_RELAXED)) w32_diag("load","kernel32.dll","timezone=UTC");
   if (!t) {
     SetLastError(87);
     return ~0u;
@@ -185,24 +187,7 @@ BOOL W32API GetVersionExA(OSVERSIONINFOA *out) {
   *out = v;
   return 1;
 }
-BOOL W32API GetVersionExW(OSVERSIONINFOW *out) {
-  if (!out || out->size != sizeof(*out)) {
-    SetLastError(87);
-    return 0;
-  }
-  struct ciuki_w32_identity a;
-  if (!identity(&a))
-    return 0;
-  OSVERSIONINFOW v = {.size = sizeof(v),
-                      .major = a.major,
-                      .minor = a.minor,
-                      .build = a.build,
-                      .platform = a.platform};
-  for (unsigned i = 0; i < 4; i++)
-    v.csd[i] = a.csd[i];
-  *out = v;
-  return 1;
-}
+
 static DWORD cpu_signature(DWORD *features) {
   DWORD a, b, c, d;
   __asm__ volatile("cpuid"
@@ -247,21 +232,28 @@ void W32API GetSystemInfo(SYSTEM_INFO *s) {
       (uint16_t)((((cpu >> 4) & 15) | ((cpu >> 12) & 0xf0)) << 8) | (cpu & 15);
   *s = v;
 }
+BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *m) {
+  if (!m || m->length!=sizeof(*m)) { SetLastError(87); return 0; }
+  struct ciuki_w32_system_args a={.header={1,sizeof(a),W32_SYSTEM,0},.action=W32_S_MEMORY};
+  if (!k32_status(w32_ciuki_call(&a,sizeof(a)))) return 0;
+  if (a.error) { SetLastError(a.error); return 0; }
+  uint64_t total=(uint64_t)a.low*4096,avail=(uint64_t)a.high*4096;
+  if (avail>total) avail=total;
+  /* Match GetSystemInfo: inclusive maximum 0x7ffeffff, minimum 0x10000. */
+  uint64_t virt=0x7ffe0000u,reserved=(uint64_t)a.extra*4096;
+  /* This image has physical-backed commitment, no enabled paging file. The
+   * pagefile fields describe commitment capacity, never disk free space. */
+  *m=(MEMORYSTATUSEX){sizeof(*m),total ? (DWORD)((total-avail)*100/total) : 0,
+      total,avail,total,avail,virt,reserved>virt ? 0 : virt-reserved,0};
+  return 1;
+}
+static DWORD mem32(uint64_t n) { return n>0x7fffffffu ? 0x7fffffffu : (DWORD)n; }
 void W32API GlobalMemoryStatus(MEMORYSTATUS *m) {
-  if (!m)
-    return;
-  struct ciuki_w32_system_args a = {.action = W32_S_MEMORY};
-  a.header = K32_HEADER(W32_SYSTEM, a);
-  if (!k32_status(w32_ciuki_call(&a, sizeof(a))))
-    return;
-  uint64_t total = (uint64_t)a.low * 4096, avail = (uint64_t)a.high * 4096;
-  DWORD t = total > 0x7fffffff ? 0x7fffffff : (DWORD)total,
-        f = avail > 0x7fffffff ? 0x7fffffff : (DWORD)avail;
-  *m = (MEMORYSTATUS){
-      sizeof(*m), total ? (DWORD)((total - avail) * 100 / total) : 0,
-      t,          f,
-      t,          f,
-      0x7fffffff, a.extra > 524287 ? 0 : 0x7fffffff - a.extra * 4096};
+  if (!m) return;
+  MEMORYSTATUSEX x={.length=sizeof(x)};
+  if (!GlobalMemoryStatusEx(&x)) return;
+  *m=(MEMORYSTATUS){sizeof(*m),x.load,mem32(x.total_phys),mem32(x.avail_phys),
+      mem32(x.total_pagefile),mem32(x.avail_pagefile),mem32(x.total_virtual),mem32(x.avail_virtual)};
 }
 BOOL W32API GetComputerNameA(char *out, DWORD *n) {
   if (!n || !out) {

@@ -73,27 +73,33 @@ BOOL W32API CreateProcessA(const char *application, char *command,
       return 0;
     env = owned;
   }
-  DWORD bytes = 0;
-  while (bytes < 32767 && env[bytes]) {
-    while (bytes < 32767 && env[bytes])
-      bytes++;
+  if ((flags & 0x400) && environment) {
+    const WCHAR *wide=environment;
+    DWORD chars=0;
+    while (chars<32767 && (wide[chars] || wide[chars+1])) chars++;
+    if (chars==32767) { SetLastError(87); return 0; }
+    chars+=2;
+    owned=k32_alloc(chars);
+    if (!owned) { SetLastError(8); return 0; }
+    BOOL used=0;
+    if (!WideCharToMultiByte(1252,0,wide,(int)chars,owned,(int)chars,0,&used) || used) {
+      k32_free(owned,chars);SetLastError(1113);return 0;
+    }
+    env=owned;
+  }
+  DWORD bytes=0;
+  while (bytes<32767 && env[bytes]) {
+    while (bytes<32767 && env[bytes]) bytes++;
     bytes++;
   }
   bytes++;
-  if (bytes < 2)
-    bytes = 2;
-  if (bytes > 32768) {
-    if (owned)
-      FreeEnvironmentStringsA(owned);
-    SetLastError(87);
-    return 0;
+  if (bytes<2) bytes=2;
+  if (bytes>32768) {
+    if (owned) { if ((flags&0x400) && environment) k32_free(owned,bytes); else FreeEnvironmentStringsA(owned); }
+    SetLastError(87);return 0;
   }
-  if (flags & 0x400) {
-    if (owned)
-      FreeEnvironmentStringsA(owned);
-    SetLastError(120);
-    return 0;
-  }
+  int unicode_owned=(flags&0x400) && environment;
+  flags&=~0x400u;
   struct ciuki_w32_startup wire = {.x = startup->x,
                                    .y = startup->y,
                                    .width = startup->width,
@@ -139,14 +145,12 @@ BOOL W32API CreateProcessA(const char *application, char *command,
     module[n] = 0;
     module_end = q;
     if (!k32_path(module, path)) {
-      if (owned)
-        FreeEnvironmentStringsA(owned);
+      if (owned) { if (unicode_owned) k32_free(owned,bytes); else FreeEnvironmentStringsA(owned); }
       return 0;
     }
     a.error = 0;
   }
-  if (owned)
-    FreeEnvironmentStringsA(owned);
+  if (owned) { if (unicode_owned) k32_free(owned,bytes); else FreeEnvironmentStringsA(owned); }
   if (!k32_status(status))
     return 0;
   if (a.error) {

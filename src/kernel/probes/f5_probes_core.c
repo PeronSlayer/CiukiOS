@@ -26,7 +26,7 @@ static struct probe_image exe_image, loader_image, native_image;
 static int core_open(void *cwd, const char *path, struct ciuki_file *out)
 {
     (void)cwd;
-    if (strncmp(path,"/WINDOWS/SYSTEM/ntdll.dll",sizeof("/WINDOWS/SYSTEM/ntdll.dll"))) return -ENOENT;
+    if (strncmp(path,"/System/Win32/ntdll.dll",sizeof("/System/Win32/ntdll.dll"))) return -ENOENT;
     *out = (struct ciuki_file){ .cookie=&loader_image, .bytes=loader_image.bytes, .read=core_read };
     return 0;
 }

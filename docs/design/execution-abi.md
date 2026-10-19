@@ -2144,3 +2144,19 @@ provided and qualified. Host wrappers do not establish PE instruction execution.
 The FILE OPEN record uses private flag bit `0x10000` for handle inheritance,
 leaving the FAT read-only attribute bit independent. Other FILE actions assign
 flags by action (for example positioned I/O and short/long path lookup).
+
+### F5-06 Amendment 1 additive operations
+
+CIUKI_SYS_W32 (96) keeps its number and record sizes. W32_FILE adds actions
+20/21 (LOCK/UNLOCK): low/high are the 64-bit offset, bytes/share the 64-bit
+length, flags bit 0 fails immediately and bit 1 requests exclusive access.
+Synchronous file completion applies to locks as to OVERLAPPED I/O.
+W32_SYSTEM adds actions 10/11 (READ_MEMORY/WRITE_MEMORY): handle must name
+the caller, low/high are source/destination VAs, extra is byte count;
+result is the copied count. Both complete spans are pinned before mutation.
+There is no native F2 syscall or record change.
+The private w32srv v1 protocol adds PROFILE_ACQUIRE/PROFILE_RELEASE (23/24),
+with empty path/name and no payload. Authenticated PID owns the global INI
+update lease; contention is ERROR_BUSY, foreign release ERROR_ACCESS_DENIED,
+and disconnect/death releases ownership. All kernel32 and advapi32 fragments
+share ntdll's recursive per-process transport lock and request sequence.

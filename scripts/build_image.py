@@ -461,14 +461,14 @@ def win32_payloads(folder=None):
     store=json.loads(manifest.read_text())
     require(any(d["name"] == "ntdll.dll" for d in store["dlls"]), "missing builtin ntdll")
     binary=struct.pack("<II", 1, len(store["dlls"]))
-    sources={"/WINDOWS/SYSTEM/builtin-store.json": manifest,
-             "/WINDOWS/SYSTEM/BUILTIN.BIN": folder / "BUILTIN.BIN",
+    sources={"/System/Win32/builtin-store.json": manifest,
+             "/System/Win32/BUILTIN.BIN": folder / "BUILTIN.BIN",
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
              "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md",
              "/system/licenses/TinySoundFont.txt":ROOT / "sdk/win32/audio/tsf/LICENSE"}
     for dll in store["dlls"]:
         require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
-        sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]
+        sources["/System/Win32/" + dll["name"]]=folder / dll["path"]
         binary+=struct.pack("<64s65s3xII4H", dll["name"].encode("ascii"), dll["sha256"].encode("ascii"),
                             dll["base"], dll["size"], *dll["version"])
     require((folder / "BUILTIN.BIN").read_bytes() == binary, "builtin binary manifest")

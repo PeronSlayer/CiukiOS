@@ -42,6 +42,9 @@ int W32API MultiByteToWideChar(DWORD cp, DWORD flags, const char *src, int n,
   /* Composite and glyph conversions need multicodepoint mappings. Refuse
    * rather than silently claiming those distinct modes. */
   if (flags & (2u | 4u)) {
+    static volatile ULONG once;
+    if (!__atomic_exchange_n(&once,1,__ATOMIC_RELAXED))
+      w32_diag("stub","kernel32.dll","MultiByteToWideChar composite/glyph flags");
     SetLastError(1004);
     return 0;
   }

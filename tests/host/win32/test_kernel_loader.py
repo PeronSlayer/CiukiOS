@@ -74,9 +74,26 @@ class KernelLoaderTests(unittest.TestCase):
     def test_kernel32_wrappers_on_kernel_model(self):
         self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",self.command("kernel32",self.images/"console.exe"))
 
+    def test_kernel32_non_ascii_module_paths(self):
+        import shutil
+        directory=self.images/'café';directory.mkdir(exist_ok=True)
+        shutil.copyfile(self.images/'exports.dll',directory/'Euro€.dll')
+        self.assertIn('PASS kernel32 ACP1252 UTF8 module path round trip',
+                      self.command('unicode-paths',self.images/'console.exe'))
+
     def test_kernel32_create_process_transaction(self):
-        builtins.build(self.images/'WINDOWS/SYSTEM')
+        builtins.build(self.images/'System/Win32')
         self.assertIn("PASS kernel32 kernel CreateProcess",self.command("spawn",self.images/'console.exe'))
+
+    def test_kernel32_search_and_spawn_exit_races(self):
+        builtins.build(self.images/'System/Win32')
+        source=self.out/'native-child.c';source.write_text('void _start(void) { for (;;) {} }\n')
+        obj=self.out/'native-child.o'
+        subprocess.run(['clang','--target=i686-unknown-elf','-ffreestanding','-fno-stack-protector',
+                        '-c',str(source),'-o',str(obj)],check=True)
+        subprocess.run(['ld.lld','-m','elf_i386','--entry=_start','-Ttext=0x400000',
+                        '-o',str(self.images/'native-child.exe'),str(obj)],check=True)
+        self.assertIn('PASS kernel32 search precedence=5',self.command('spawn-edges',self.images/'console.exe'))
 
     def test_runtime_services_on_kernel_model(self):
         self.assertIn('PASS kernel heap critical waits SEH filter',self.command('runtime',self.images/'console.exe'))
@@ -88,18 +105,19 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn('[win32] load check=dllmain-attach-failed',out)
 
     def test_production_builtin_store_through_kernel_loader(self):
-        builtins.build(self.images/'WINDOWS/SYSTEM')
+        builtins.build(self.images/'System/Win32')
         from scripts.win32 import census
-        coverage=json.loads((self.images/'WINDOWS/SYSTEM/kernel32-coverage.json').read_text())
-        exports={name for e in census.inspect((self.images/'WINDOWS/SYSTEM/kernel32.dll').read_bytes())['exports'] for name in e['names']}
+        coverage=json.loads((self.images/'System/Win32/kernel32-coverage.json').read_text())
+        exports={name for e in census.inspect((self.images/'System/Win32/kernel32.dll').read_bytes())['exports'] for name in e['names']}
         expected=set()
         from scripts.win32 import stubs
         for source in ('docs/design/research/win32-layer-2026-10-14.md','docs/design/win32-census/fixtures.txt'):
             expected.update(stubs.imports((ROOT/source).read_text()).get('kernel32.dll',set()))
         self.assertEqual({e['name'] for e in coverage['exports']},expected)
         self.assertTrue(expected<=exports)
-        self.assertEqual(set(coverage['deferred_vfs']),{'LockFile','LockFileEx','UnlockFile','UnlockFileEx'})
-        self.assertTrue(set(coverage['deferred_vfs'])<=exports)
+        self.assertEqual(coverage['deferred_vfs'],[])
+        self.assertEqual(set(coverage['required_vfs']),{'LockFile','LockFileEx','UnlockFile','UnlockFileEx'})
+        self.assertTrue(set(coverage['required_vfs'])<=exports)
         self.assertIn('provisional',coverage['scope'])
         self.assertIn('PASS kernel builtin store imports helpers pinning',self.command('store',self.images/'builtin-import.exe'))
 
@@ -110,8 +128,10 @@ class KernelLoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.out) as temporary:
             folder=Path(temporary);builtins.build(folder)
             sources,directories,meta=image.win32_payloads(folder)
-            self.assertIn('/WINDOWS/SYSTEM/ntdll.dll',sources)
-            self.assertIn('/WINDOWS/SYSTEM',directories)
+            self.assertIn('/System/Win32/ntdll.dll',sources)
+            self.assertIn('/System/Win32',directories)
+            self.assertIn('/System/Win32/BUILTIN.BIN',sources)
+            self.assertFalse(any(p.startswith('/WINDOWS/SYSTEM/') for p in sources))
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
             self.assertEqual(len(meta['builtins']),21)
