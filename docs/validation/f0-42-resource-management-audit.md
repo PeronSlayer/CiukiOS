@@ -4,8 +4,9 @@ Research/audit date: 2026-10-19. Source baseline:
 `21eec37245463bd9676ac7025c93745c702b3b31`, branch `wt/f0-42`.
 Directive: [f0-42](../directives/f0-42-windows-98-class-resource-management-audit-and-contract.md).
 Target: [proposed contract](../design/win98-class-resource-management.md).
-Status: submitted for Claude's cross-review; historical-source gaps below
-must be closed before claiming exact Windows 98/ME policy equivalence.
+Status: lead cross-review is recorded in the contract; f0-42b adds the
+licensed 1998 Resource Kit reading on 2026-10-19. Historical-source gaps
+still listed below prevent a claim of exact Windows 98/ME policy equivalence.
 This is a documentation delivery, not an implementation or qualification.
 
 ## Source register and provenance
@@ -47,29 +48,123 @@ book text is imported into the repository.
 | P25 | Mark Russinovich / Bryce Cogswell, [Examining VxD Service Hooking](https://jacobfilipp.com/DrDobbs/articles/DDJ/1996/9605/9605c/9605c.htm), May 1996 | Full original investigation read. VCMon observes cache demand, hit/miss/free-memory/page-fault feedback used to resize VCACHE. No fixed Win98 sampling period established. |
 | P26 | Stan Mitchell, Inside the Windows 95 File System (1997), ch. 10–11, [book text](https://pdfcoffee.com/inside-the-windows95-file-system-3-pdf-free.html) | Relevant original investigation read. Page-based VCACHE reservations/commit, held blocks and memory-manager cooperation; VFAT is a client, not simply a raw cache synonym. Win95 reverse-engineered constants are not transplanted into 98. |
 | P27 | Creative, [Sound Blaster hardware programming guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf), DMA chapters | Relevant hardware reference read. ISA DMA channel/address/count constraints differ from PCI IDE PRDs; audio buffers need stable DMA ownership. |
+| P28 | Microsoft Windows 98 Resource Kit Book Online, 1998 CD, ch. 26, **Performance Tuning Overview** (`build/rskt/wrkc26_1.htm`) and **Optimizing File System Performance** (`wrkc26_4.htm`); ch. 28, **Installable File Systems → File System Drivers → Virtual File Allocation Table** (`wrkc28_5.htm`) | Full relevant topics read locally. Cache adapts to demand/free memory, shrinks during heavy paging; growth with network use and shrink as applications start are described. No numerical growth/reclaim thresholds, cadence, or chunk increment. `MinFileCache`/`MaxFileCache` are not documented in these extracted books; P03 remains the version-limited source for their units. |
+| P29 | Same edition, ch. 26, **Optimizing File System Performance → Optimizing File System Performance with Profiles / Using File System Troubleshooting Options** (`build/rskt/wrkc26_4.htm`); ch. 10, **File System Management** (`wrkc10_7.htm`) | VFAT lazy writes; `BufferIdleTimeout`, `BufferAgeTimeout`, `VolumeIdleTimeout` are named without values. Commit ordinarily writes to disk before returning; disabling synchronous commits weakens this. `DriveWriteBehind=0` disables write-behind for all drives. The spelling `AsyncFileCommit` does not occur; no registry encoding inferred for the commit checkbox. |
+| P30 | Same edition, ch. 26, **Optimizing File System Performance → Optimizing Removable Disk Drive Performance** (`build/rskt/wrkc26_4.htm`) | Documents enabling/disabling removable write-behind (ZIP/JAZ examples). Does not explicitly state the installed checkbox default or SE/ME exceptions. |
+| P31 | Same edition, ch. 10, **Technical Notes on Disk Device Support → VCACHE and CDFS Supplemental Cache** (`build/rskt/wrkc10_6.htm`); ch. 26, **Optimizing File System Performance → Optimizing CD-ROM File System Performance** (`wrkc26_4.htm`) | File-system read-ahead and separate, pageable CDFS cache established. CDFS table values are not disk `ReadAheadThreshold` values. That setting's name, units, default, range and request-generation rule are not in the extracted book/tools help. |
+| P32 | Same edition, ch. 26, **WinAlign and MapCache** (`build/rskt/wrkc26_10.htm`) and **Optimizing File System Performance** (`wrkc26_4.htm`); ch. 28, **Installable File Systems** (`wrkc28_5.htm`) | Aligned executable sections use 4 KB boundaries; mapping from cache avoids duplicate copies of many pages. Mapped files/executables use cache, ordinary swap-file I/O bypasses it. No writable-alias/truncate/raw-write coherency protocol specified. |
+| P33 | Same edition, ch. 26, **Optimizing the Swap File** (`build/rskt/wrkc26_3.htm`), **Optimizing File System Performance** (`wrkc26_4.htm`); ch. 28, **Virtual Machine Manager → Memory Paging** (`wrkc28_4.htm`); ch. 31, **Administrating with the Registry → System.ini entries retained and supported in the user interface** (`wrkc31_3.htm`) | Dynamic growth/shrink, idle dirty-memory prewrite and demand paging confirmed. UI minimum/maximum values are in kilobytes. `MinPagingFileSize`/`MaxPagingFileSize` retained under `[386Enh]`; no defaults/increments given. `ConservativeSwapfileUsage` absent; P05 supplies its documented 98 default, not the book. |
+| P34 | Same edition, ch. 28, **Virtual Machine Manager → Process Scheduling and Multitasking** (`build/rskt/wrkc28_4.htm`), **Core System Components → User / Kernel** (`wrkc28_8.htm`) | Win32 preemptive threads, cooperative Win16 and asynchronous input queues described without boost magnitudes/decay, starvation policy or quantum. These numbers are not in the Resource Kit. |
+| P35 | Same edition, ch. 28, **Understanding Device Drivers → The Virtualization Driver** (`build/rskt/wrkc28_3.htm`), **Core System Components → User** (`wrkc28_8.htm`) | VTD identified as a timer virtualization driver; input interrupts become queued messages. No VPICD service contract, timer resolution, interrupt/wakeup latency bound or VTD scheduling guarantee. |
+| P36 | Same edition, ch. 26, **Tracking Performance with System Monitor**, tables 26.7–26.10 (`build/rskt/wrkc26_9.htm`); ch. 26, **Understanding System Performance** (`wrkc26_2.htm`) | Cache recycling, filesystem, CPU/thread/VM, memory and swap counters read in full. LRU recycle searches oldest buffers for new cache data or memory-manager borrowing; random and failed recycles also counted. Resource capacity is distinct from free physical RAM. |
+| P37 | Microsoft Windows 98 Resource Kit Tools Help, same CD, `build/rskt2/{winalign,tlist,usbview,filewise,fileinfo,filever,windiff,compreg,reg,srchreg,sredit,task_registry_scanreg,task_registry_using_scanreg,using_system_monitor}.htm`; CD `README.DOC` and `TMC/{PERFORM,CONFIG,FILETOOL,DXTSHOOT,REGTOOL}.HTM` | Tool functions and CD category layout read, not executed. System Monitor/Registry Checker are Windows components documented by the kit, not executables in PERFTOOL. SYSFILES is supporting DLLs/controls, not a separate counter suite. HLP inspection limits below. |
+| P38 | Same book, ch. 27, **Troubleshooting Tools → Using Registry Checker** (`build/rskt/wrkc27_2.htm`); ch. 2, **Preparing to Run Setup**, table listing System Tools (`wrkc02_3.htm`) | Registry integrity scan, daily successful-start backup and restore/repair roles; System Resource Meter listed as a component. The book does not supply its detailed counter definitions. |
+| P39 | Microsoft [KB300059, How to Use the System Resource Meter Tool in Windows 98 and Windows Millennium Edition](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/300059) | Supplemental internet corroboration, not CD content: search-index text read; direct retrieval 403. Meter shows free system, USER and GDI resource percentages. Covers 98/SE/ME; does not turn those values into free physical RAM. |
 
-### Research closure required for exact historical claims
+### Research closure: Resource Kit findings (f0-42b, 2026-10-19)
 
-The available sources establish the mechanisms, but do not complete the
-directive's full reading requirement. Before approving a claim of exact
-98/ME equivalence, the lead must supply/access the original full P01/P02,
-P13/P14 supplements and relevant P19/P20 chapters. Record edition/build,
-topic/page and the facts established, rather than upgrading this register's
-access status by inference. Specifically unresolved:
+Edition/provenance for every P28–P38 finding: **Microsoft Windows 98
+Resource Kit Book Online / Tools Help, English, 1998 CD**, with tool dates
+in March–April 1998 and both CHMs dated 1998-04-30. The book's `#SYSTEM`
+reports **HHA Version 4.72.8033**, a help-compiler version, **not a Windows
+kernel build**. No explicit book revision or tested OS build was found in
+the introduction/metadata; do not substitute RTM build 1998 or extend this
+edition's claims to SE/ME. Identity is reproducible from the local originals:
 
-| Question | Present evidence | Required resolution |
+| Local input | Bytes | SHA-256 |
 | --- | --- | --- |
-| 98/SE/ME cache growth/reclaim thresholds and cadence | Dynamic feedback established; 95 internals available | 98 DDK/VCACHE supplement and Resource Kit tuning sections; mark undocumented values as such if the originals do not specify them. |
-| Dirty age, idle write delay, removable default, eviction and lazy-write ordering | Delayed VFAT writes and explicit flush/lock paths established | Original VFAT/VCACHE/IOS topics; no invented “Windows writes after 1 s/5 s” claim. |
-| `ReadAheadThreshold` units/default/range and request-generation rule | Setting named by the directive; numerical semantics not verified | Resource Kit filesystem registry topic / DDK; do not use internet tweak recipes as specifications. |
-| Mapped-file/ordinary-I/O coherency and 98 MapCache corner cases | MapCache and cache-page reuse established at overview level | Original mapping/cache-pager topics; particularly truncate, writable aliases and external/raw writes. |
-| Page replacement sampling, trimming, swap growth increments | Global LRU-style ancestry and 98 idle prewrite established | Full VMM memory-manager/pager services, including the complete service list; no NT balance-set manager assumption. |
-| Foreground/input/I/O/starvation boost magnitudes/decay and 98/ME quantum | P18 gives Win95 values, P17 dependency boost | 98 DDK scheduler/time-slicer topics and Oney; no NT “15 for two quanta” substitution. |
-| VTD/VPICD timing guarantees | Asynchronous timeouts, device callbacks | Full 98 timer/interrupt services. A resolution value alone cannot establish interrupt or wake latency. |
+| `third_party/mswin98rskt/HELP/RK98BOOK.CHM` | 3255721 | `85cbf8e3a82a07009f7f4340912af68629b0f38aba9347343fef6d47c1a5bf17` |
+| `third_party/mswin98rskt/HELP/WIN98RK.CHM` | 311429 | `436b33f09bb52bce1bc97855c496b955abea7c00c7a3c4d863064dfb1be88751` |
 
-The contract labels its own numeric policies as proposals and makes this
-source closure part of review. It does not quietly convert these missing
-historical facts into verified requirements.
+Inputs were read in the neighboring main checkout
+`/home/peronslayer/Desktop/CiukiOS/`; the paths above and P28–P38 paths are
+relative to that checkout. No media or extracted text files were copied into
+this worktree. `git check-ignore` confirms both media and extraction paths
+remain ignored. The book TOC is `build/rskt/rk98book.hhc`.
+
+The following resolves what this edition actually establishes. Short quotes
+are literal; other facts are paraphrased. **D** = documented default or
+normal behavior, **T** = tunable (not necessarily a stated default), **N** =
+description without policy numbers, **U** = not specified in this edition.
+An absence closes this media lookup, not the underlying historical question.
+
+| Question | Fact and classification | Source: chapter/topic/file | Effect on contract / remaining evidence |
+| --- | --- | --- | --- |
+| 1. Cache growth/reclaim thresholds, cadence, bounds, chunks | **N:** “The cache grows and shrinks as needed.” Cache shrinks with heavy paging; network demand can grow it. **N:** oldest-first LRU recycle and random recycle are exposed separately. **U:** growth/shrink thresholds, sample interval and chunk increment; no cache-growth chunk specification found. `MinFileCache`/`MaxFileCache` absent; KiB bounds remain P03 (WfW/95), not a new 98 default. | P28, ch. 26 **Optimizing File System Performance**, `wrkc26_4.htm`; ch. 28 **Installable File Systems**, `wrkc28_5.htm`; P36, ch. 26 **Tracking Performance with System Monitor**, `wrkc26_9.htm`, table 26.7 | C4/M3 dynamic resizing and pressure reclaim **confirmed in role**. Keep 100 ms windows, two-window trigger, 256 KiB steps and 2/8/32 MiB bounds as CiukiOS policy. P02/P13 needed for internal constants. |
+| 2. Dirty age, idle delay, removable default, eviction, lazy-write ordering and profiles | **T:** `BufferIdleTimeout`, `BufferAgeTimeout`, `VolumeIdleTimeout` control buffered-write delay, with no numerical values. **D:** ordinary commit writes to disk before returning; async-commit troubleshooting option weakens integrity. **T:** `DriveWriteBehind=0` disables all write-behind; removable write-behind can be enabled/disabled, default unstated. **T:** profile PathCache/NameCache values below. **N:** oldest-first/random cache recycling; no dirty-victim or FAT publication-order specification. `AsyncFileCommit` spelling/value absent. | P29/P30, ch. 26 **Optimizing File System Performance**, `wrkc26_4.htm`, profiles/removable/troubleshooting topics; P36 table 26.7 | C1's 12.5%/1 s cannot be called a Win98 default; retain accepted policy. C2 finite synchronous commit behavior **confirmed in role**; do not enable weak commits. Write-through removable policy retained because no explicit historical default was found. Exact age/delay, dirty eviction and crash ordering still need P02/P13/P14. |
+| 3. `ReadAheadThreshold`: units, default, range, generation | **N:** VCACHE supports filesystem read-ahead; CDFS has a distinct cache and parallel reads. **U:** `ReadAheadThreshold` name and all four requested semantics absent from book/tools help. CDFS size table is a different control. | P31, ch. 10 **Technical Notes on Disk Device Support**, `wrkc10_6.htm`, **VCACHE and CDFS Supplemental Cache**; P29, ch. 26 `wrkc26_4.htm`, CD-ROM topic | C4's two adjacent reads, 16–64 KiB stream window and C/8 speculation cap remain CiukiOS policy. Do not label them an implementation of the registry setting or adopt tweak-site values. P02/original registry reference still needed. |
+| 4. Mapped files and ordinary I/O coherency | **N:** “memory-mapped files and executable files do” use cache (in contrast to swap-file I/O); MapCache shares many pages instead of duplicating them. **T/mechanism:** WinAlign aligns sections to 4 KB boundaries. **U:** ordering/visibility across ordinary writes, writable mappings, truncate and raw external writes. | P32, ch. 26 **Optimizing File System Performance**, `wrkc26_4.htm`; **WinAlign and MapCache**, `wrkc26_10.htm` | C5 single identity/shared frames **confirmed in role** only. No claim that MapCache alone proves full writable coherence. f1-84 and f0-47 must specify/test aliases and invalidation using P02/P13. |
+| 5. Page replacement, swap growth, `ConservativeSwapfileUsage`, `MinPagingFileSize` | **N:** demand paging, idle dirty-memory prewrite, dynamic swap growth/shrink confirmed; no replacement scan, trimming period or growth increment. **T:** UI min/max in kilobytes; `[386Enh]` `MinPagingFileSize` retained, no numerical default. **U:** `ConservativeSwapfileUsage` absent in the book; P05 separately documents 98 default 0 (95 default 1) and 1 disabling idle async prewrite. | P33, ch. 26 **Optimizing the Swap File**, `wrkc26_3.htm`, and `wrkc26_4.htm`; ch. 28 **Virtual Machine Manager**, `wrkc28_4.htm`; ch. 31 **Administrating with the Registry**, `wrkc31_3.htm` | M3 global second chance/64-page slices remain CiukiOS policy. M4 dynamic backing and idle prewrite **confirmed in role**; 16 MiB extents and 30 s shrink remain CiukiOS choices. P05's VFAT-idle ordering retained. Full P02 pager services still needed. |
+| 6. Foreground/input/I/O/starvation boosts, decay, 98/ME quantum | **N:** “preemptive multitasking” for Win32, cooperative Win16 and per-thread slices/input queues. **U:** requested boost magnitudes, expiry/decay and quantum **not in the Resource Kit**. | P34, ch. 28 **Virtual Machine Manager → Process Scheduling and Multitasking**, `wrkc28_4.htm`; **Core System Components → User / Kernel**, `wrkc28_8.htm` | R2 stays CiukiOS policy: 10/2 ms quanta; +2/20 ms input, +1/one quantum I/O, 100 ms starvation threshold. P18's 20 ms is Win95 evidence only. Need P02/Oney; no NT values substituted. |
+| 7. VTD/VPICD timing | **N:** “a virtualization driver for a timer device is a VTD”; input IRQs feed queued processing. **U:** no VPICD service timing, VTD resolution or interrupt/wakeup guarantee **in the Resource Kit**. | P35, ch. 28 **Understanding Device Drivers → The Virtualization Driver**, `wrkc28_3.htm`; **Core System Components → User**, `wrkc28_8.htm` | R1/R3 100 µs IRQ-off work, 1 kHz PIT and service deadlines remain CiukiOS policy. P15/P16 keep their narrower timeout/Win95 precision meanings. Need P02 timer/interrupt service contexts, not an inferred latency guarantee. |
+
+Profile details (P29, table 26.3 and following bullets; **registry tunables**):
+
+| Typical role | PathCache paths | NameCache names / storage | Other stated behavior |
+| --- | --- | --- | --- |
+| Desktop computer | 32 | about 677 / 8 KB | Assumes more than minimum RAM and mains power. |
+| Mobile or docking system | 16 | about 337 / 4 KB | Assumes limited RAM/battery; frequent flushing described without an interval. |
+| Network server | 64 | about 2729 / 16 KB | Assumes adequate RAM and frequent disk activity. |
+
+Templates live under `HKLM\Software\Microsoft\Windows\CurrentVersion\FS Templates`;
+active values under `HKLM\System\CurrentControlSet\Control\FileSystem`.
+Path/name caches use the general system heap; these are not VCACHE data
+budgets. P29 also states a default contiguous-allocation search of **0.5 MB**
+(`ContigFileAllocSize`, rendered once with a space in the book), then fallback
+to first-available allocation. This is not a dirty threshold, prefetch window
+or swap growth increment; any adoption belongs to reviewed allocation work.
+
+Search coverage: relevant chapters 10/26/28/31 and their topic headings were
+read; case-insensitive searches of both extracted books' HTML and TOC/index
+covered the named settings, chunks, read-ahead, replacement/LRU, priorities,
+quantum, VTD and VPICD. `chunk` occurs only in unrelated hypertext/clipboard
+descriptions. The directive's suggested chunk-growth description was not
+found; neither 4 KB executable alignment nor 4096-byte swap slots proves a
+cache growth increment. The removable enabling instructions do not explicitly
+establish the installed default. These are limits of this edition, not proof
+that the settings or mechanisms do not exist in Windows 98.
+
+Internet corroboration before edits: P03 full Microsoft KB text was read
+again; P05 full article text was available through the search index (direct
+access still 403), confirming its default/idle-order statements. The original
+P01 TechNet endpoint remained inaccessible. No tuning forum or modern NT
+documentation supplies missing values. P01 now has the local full-chapter
+supplement P28–P36; P02, P13/P14 and P19/P20 reading gaps remain.
+
+### Native diagnostic functions to mirror (P36–P39)
+
+This is input to the H page and Task Manager, not a new implementation
+directive or an approval to run/ship Microsoft tools. Counter names below
+identify documented measurements; the CiukiOS presentation/units must avoid
+inheriting misleading overlaps in the old memory counters.
+
+| Function / original location | Documented measurements or output | CiukiOS use |
+| --- | --- | --- |
+| System Monitor: Disk Cache, book `wrkc26_9.htm`, table 26.7 | Active buffers (including compressed), hits, misses, current/min/max pages; failed, oldest-first LRU and random recycles | H cache demand/reclaim history; label unsupported compression/random recycle unavailable rather than fabricating zero. |
+| System Monitor: File System, table 26.8 | Read/write bytes per second, read/write operations per second, dirty bytes (cache-block-rounded, possibly exceeding actual changed bytes) | H per-device and aggregate throughput/debt; Task Manager owner attribution is a CiukiOS extension. |
+| System Monitor: Kernel, table 26.9 | Approximate CPU busy %, thread count, VM count | Task Manager activity and H totals; account observer overhead. |
+| System Monitor: Memory Manager VMM32, table 26.10 | Allocated/other/swappable/locked bytes, locked non-cache pages; unused physical bytes; page/instance faults, discards, page-ins, page-outs per second; current/min/mid/max disk cache; pages mapped from cache | H ledger and fault/reclaim rates, Task Manager residency/pins. Page-ins include executable/mapped-file reads, not only swap. Old allocated/locked/swappable figures overlap cache; do not sum them as disjoint physical ownership. |
+| System Monitor: swap, table 26.10 | Swap file size, bytes in use, defective bytes; defect granularity 4096 bytes even for one bad sector | H backing capacity/used/bad slots, paging rates; distinguish file size, commitment and live data. |
+| System Monitor chart/log function, `wrkc26_9.htm`; tools help `using_system_monitor.htm` | Line/bar/numeric charts, logging, configurable update interval; remote counters via appropriate agent | Local time-series export for trial evidence; remote monitoring remains F6. |
+| System Resource Meter, book `wrkc02_3.htm` / resource discussion `wrkc26_2.htm`; supplemental P39 | CD confirms component/resource-capacity distinction. P39 separately identifies free system, USER and GDI resource percentages; their exact calculation is not supplied by this CD | Offer native UI resource/handle pressure and exhaustion diagnostics; clearly label counts/limits and free percentages. Do not equate free RAM with free UI resources or reproduce historical heap limits. |
+| Registry Checker (Windows component), `wrkc27_2.htm`; tools help `task_registry_scanreg.htm`, `task_registry_using_scanreg.htm`; `CONFIG/SREDIT.EXE` documented in `sredit.htm` | Consistency scan, successful-start daily backup, restore/repair; SREdit selects backup directory/count, additional files and compaction | Native configuration integrity/recovery status; expose last check/result, last good backup, retained count and restore result as **proposed CiukiOS status fields**, not historical performance counters. |
+| `REGISTRY/{REG,COMPREG,SRCHREG}.EXE`, tools help `reg.htm`, `compreg.htm`, `srchreg.htm` / TMC `REGTOOL.HTM` | Registry query/search/export/backup/restore and comparison of keys | Native effective-policy inspection and before/after configuration differences; no periodic performance counters. |
+| `PERFTOOL/WINALIGN.EXE`, tools help `winalign.htm`, book `wrkc26_10.htm` | 4 KB executable section alignment; effects observed with mapped-cache pages and swap-in-use counters | Loader/layout diagnostics and mapping reuse counters; no automatic rewriting of installed binaries. |
+| `DIAGNOSE/TLIST.EXE`, tools help `tlist.htm`; `USBVIEW.EXE`, `usbview.htm` | PID/name/window title; USB descriptors, connection status and power information from hub drivers | Task Manager process identity, H device/transport context; these are inventories, not latency counters. |
+| `DIAGNOSE/{FILEWISE,FILEINFO}.EXE`, tools help `filewise.htm`, `fileinfo.htm`; `FILE/FILEVER.EXE`, `filever.htm` | CRC32/change report and version/language/flags; system-file sizes/dates/install and CAB locations; file version inspection | Native integrity/version manifest and change reports; use CiukiOS files/metadata, never Microsoft's file database. |
+| `FILE/WINDIFF.EXE`, tools help `windiff.htm`; `DIAGNOSE/DEPENDS.EXE`, TMC `DXTSHOOT.HTM` | File/directory comparison; module dependency tree | Native comparison/dependency diagnostics; no resource-policy constants derived from these tools. |
+
+CD layout check (`README.DOC`, TMC pages): PERFTOOL contains WinAlign;
+SYSFILES contains runtime libraries/controls, not System Monitor binaries.
+`7z l` could not open `DIAGNOSE/DEPENDS.HLP` or `FILE/WINDIFF.HLP`; `strings`
+produced fragmented compressed text, insufficient for substantive claims.
+Their functions above come from readable TMC/Tools Help, not guessed HLP
+content. No Windows executable, script in the TMC, or bundled DLL was run.
+
+Contract reconciliation: mechanism-level confirmations above are recorded
+beside C1/C2/C4/C5/M3/M4/R2/R3. No contradictory historical dirty/read-ahead
+number was found and none was invented. Keep the lead's accepted policies;
+adoption candidates and owners are in `build/codex/f0-42b-report.md`.
 
 ## Physical evidence register
 

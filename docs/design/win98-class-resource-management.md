@@ -1,8 +1,9 @@
 # Windows 98/ME-class resource management
 
 Proposed contract, 2026-10-19. Author: Codex, f0-42 implementer. Claude's
-cross-review and implementation directives are pending. This document adds
-no code, public header, ABI, allocation change or hardware qualification.
+cross-review is recorded below; implementation follows separate directives.
+This document adds no code, public header, ABI, allocation change or
+hardware qualification.
 
 Authority: [f0-42](../directives/f0-42-windows-98-class-resource-management-audit-and-contract.md)
 and the [owner's decision](../../dev_diary/2026-10-19-03-decisioni-modello-win98-me-completo-gate-qemu-sospesi.md).
@@ -31,8 +32,10 @@ later implementations. This delivery performs none of those builds/runs.
 All new numbers in acceptance criteria below are **proposed CiukiOS policy**,
 not undocumented Windows constants. Historical observations have their
 version and source stated. The audit's research-closure table is a blocking
-item for an assertion of exact historical policy parity. Missing full texts
-must be checked before their related implementation directives are approved.
+item for an assertion of exact historical policy parity. The lead's review
+below permits mechanism work while historical constants remain open.
+Resource Kit findings are resolved by P28–P38 on 2026-10-19 to the extent
+stated in the audit; absence of a value in that edition does not verify it.
 
 The detailed authorities are cross-referenced, not rewritten by this draft:
 [storage](vfs-storage-contract.md), [boot/memory](boot-memory.md),
@@ -65,12 +68,12 @@ resizing. [Mitchell, ch. 10–11](https://pdfcoffee.com/inside-the-windows95-fil
 
 | Required historical behavior | Established model | Numerical/version limit |
 | --- | --- | --- |
-| Sizing triggers and eviction | Demand/pressure feedback; unheld clean blocks can be reclaimed, dirty/held data needs client cooperation | Exact 98 growth/shrink sampling periods and victim algorithm not established by the retrieved full topics. |
-| Lazy writing | File writes may complete into cache; writeback, explicit flush, close/removal and shutdown are distinct events | No verified universal 98/ME “flush every N seconds.” Dirty age, idle delay and completion delay must not be conflated. |
-| Ordering | IFSMgr separates operations and contexts; filesystem ordering must respect on-disk ownership and requested durability | FAT's on-disk specification is not a transactional/journaling guarantee for VFAT. Exact historical ordering remains to be checked in the original DDK. |
-| Read-ahead | Sequential/anticipated reads use shared cached data; the requested `ReadAheadThreshold` setting belongs in the historical comparison | Units/default/range and the precise 98 heuristic remain unverified. No 64 KiB/1.875 MiB tweak value is adopted as fact. |
-| Removable write-behind | Media change, lock/removal and pending requests need an explicit lifetime protocol | Exact default and exceptions for 98/SE/ME removable media remain unresolved. A safe-remove result must not imply that an unplugged device can still be flushed. |
-| Coherency | File operations, mappings and raw media access need a common identity and invalidation protocol | Full 98 MapCache/mapped-file/truncate rules require the cache/pager documentation; not inferred from modern NT. |
+| Sizing triggers and eviction | Demand/pressure feedback; oldest-first LRU recycling for cache fills or memory-manager borrowing, with random/failed recycles also exposed | Resolved by P28/P36 on 2026-10-19: dynamic sizing and recycle roles confirmed; thresholds, cadence and growth chunks not in the Resource Kit. Dirty/held eligibility still requires DDK documentation. |
+| Lazy writing | File writes may complete into cache; writeback, explicit flush, close/removal and shutdown are distinct events | Resolved by P29 on 2026-10-19: `BufferIdleTimeout`, `BufferAgeTimeout`, `VolumeIdleTimeout` named without values. No verified universal 98/ME flush interval or dirty percentage; CiukiOS C1 numbers stay explicit policy. |
+| Ordering | Ordinary file commit writes to disk before returning; disabling synchronous commits weakens integrity | Resolved by P29 on 2026-10-19: commit role confirmed; `DriveWriteBehind=0` disables write-behind globally. `AsyncFileCommit` encoding and exact VFAT publication/crash ordering not specified in this edition; retain C2 barriers. |
+| Read-ahead | Filesystems use VCACHE; CDFS has a separate cache/read-ahead scheme | Resolved by P31 on 2026-10-19: `ReadAheadThreshold` units/default/range/generation rule not in the Resource Kit. CDFS table values cannot supply them. C4 retains byte-valued CiukiOS policy. |
+| Removable write-behind | Book documents enabling/disabling write-behind for removable disks (ZIP/JAZ examples) | Resolved by P30 on 2026-10-19: explicit installed default and SE/ME exceptions not stated. Keep CiukiOS write-through pending f1-85 review; safe removal still requires a drain. |
+| Coherency | Memory-mapped files/executables use cache; mapped execution can share pages rather than duplicate them | Resolved by P32 on 2026-10-19: sharing role confirmed; writable aliases, truncate and raw-write coherence are not specified. C5 remains a separately tested protocol. |
 
 For interface ancestry see [DDK IFSMgr_Ring0_FileIO](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM):
 LFN operations, context-specific record locks, no-cache and privileged
@@ -100,6 +103,13 @@ OOM policy. Growth increments, replacement scan cadence and precise 98/ME
 resident-set trimming remain research gaps, not invented constants.
 [KB223294](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/223294),
 [Resource Kit excerpt](https://www.oocities.org/~budallen/98performance.html).
+
+Resolved by P33 on 2026-10-19: the full 1998 book confirms dynamic swap
+growth/shrink and idle dirty-memory prewrite. The minimum/maximum UI fields
+are in kilobytes; `[386Enh]` `MinPagingFileSize` remains supported, without
+a stated default or growth increment. `ConservativeSwapfileUsage` is not in
+the book; P05 independently documents default 0 for 98, 1 for 95, with 1
+disabling async prewrite. No SE/ME constant is inferred from this edition.
 
 The following is a **service-role checklist**, not a claim that the full
 Windows 98 VMM service list has been retrieved:
@@ -154,6 +164,11 @@ input, foreground and starvation boost amounts/durations remain open.
 The historical SDK documents dependency-owner priority boosting for
 Windows 95. [Priority inversion](https://techshelps.github.io/Win32Api%20Documentation/html/o9bn.3.htm).
 
+Resolved by P34 on 2026-10-19: the Resource Kit confirms preemptive Win32
+threads and cooperative Win16 behavior, but the requested foreground/input/
+I/O/starvation boost magnitudes, decay and 98/ME quantum are **not in the
+Resource Kit**. R2's numerical policies remain CiukiOS choices.
+
 Timer precision, timer-callback delivery, scheduling quantum and maximum
 service gap are different measurements. Historical `timeGetTime` documents
 1 ms precision for Win95; this is not a 1 ms upper bound on dispatch latency.
@@ -166,6 +181,11 @@ critical state can stop multitasking. Windows 9x is not a source of a hard
 real-time guarantee for arbitrary VxDs or firmware stalls.
 [DDK virtual devices](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S22EB.HTM),
 [DDK deadlock rules](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM).
+
+Resolved by P35 on 2026-10-19: the Resource Kit identifies VTD as a timer
+virtualization driver and describes input IRQ-to-message queues. It supplies
+no VTD/VPICD timing bound or service contract; R1/R3 deadlines and PIT cadence
+remain CiukiOS policy, with full DDK service/context research still required.
 
 DOS boxes use V86/PM clients, virtual hardware interrupts, and protected I/O
 services; a VM is not itself a compatibility defect. DOS disk/file work must
@@ -242,6 +262,15 @@ versions stay dirty after an older version completes.
 The exact proposed B/H/R defaults need the C4/M1 ledgers before activation;
 no current 8 MiB allocation or boot-memory limit changes in this directive.
 
+Historical comparison, resolved by P29/P36 on 2026-10-19: Windows 98 names
+buffer/volume idle and buffer age timeouts but supplies no numeric defaults
+or dirty-byte budget in this Resource Kit. Keep CiukiOS `B=min(1 MiB,C/8)`,
+`H=2B`, `R=max(64 KiB,C/8)` and 1000 ms aging under the lead's f1-82 decision;
+they address the measured reader/producer problem rather than implement a
+verified Windows constant. Oldest-first cache recycling is documented, but
+its dirty-victim and on-disk ordering rules are not; f1-83/f1-84 must preserve
+the explicit dependency/durability protocol.
+
 ### C2: ordering, errors and removable media (S05/S07/S08)
 
 Use monotonically numbered dependency groups per volume/device generation:
@@ -263,8 +292,11 @@ implicitly.
 
 Propose write-through completion for removable-media ordinary writes by
 default; any later write-behind option requires explicit media policy and
-the same safe-remove drain. This is a proposed conservative choice pending
-the historical removable-default research, not an assertion of 98 defaults.
+the same safe-remove drain. Resolved by P29/P30 on 2026-10-19: Windows 98
+documents a removable write-behind option, without an explicit installed
+default; the normal commit API writes before returning, while disabling
+synchronous commits risks data loss. CiukiOS keeps write-through for safety
+and finite durable barriers; f1-85 owns any later media-policy adoption.
 Surprise removal cancels unissued requests, invalidates generation-bound
 aliases and records incomplete durability; it never reports a successful
 flush of absent media. Issued DMA pins survive until hardware stop/completion
@@ -349,8 +381,23 @@ cancel/decay on seek, close, pressure or competing demand. Total speculative
 resident bytes ≤C/8. Retain bounded FAT metadata read-ahead, file/volume
 extent checks and dirty-cache hits; never read across EOF or media generation.
 No second private data cache is introduced. A compatibility setting analogous
-to `ReadAheadThreshold` can be specified only after P02/Resource Kit research
+to `ReadAheadThreshold` can be specified only after an original reference
 fixes its units; CiukiOS's initial knobs have explicit byte units.
+
+Historical comparison, resolved by P28/P31/P36 on 2026-10-19: adaptive
+growth/shrink and memory-manager cache borrowing are **confirmed in role**.
+The book gives no 100 ms/256 KiB growth policy, 2/8/32 MiB cache bounds,
+growth chunk size, or `ReadAheadThreshold` units/default/range/request rule.
+Keep these CiukiOS numbers and the two-read/16–64 KiB/C/8 prefetch policy
+pending f0-48/f1-85 evidence. The book's separate CDFS cache table is not a
+replacement disk-prefetch specification.
+
+P29's role-profile tunables are paths/names rather than data-cache bytes:
+Desktop 32/about 677 (8 KB), Mobile 16/about 337 (4 KB), Network server
+64/about 2729 (16 KB). Mobile flushing is described as frequent without an
+interval. Keep one detected image and measured M1/C4 budgets; f1-84/f1-85
+may evaluate bounded path/name caches, rather than equate these profiles to
+per-machine images. No profile or historical bound is activated here.
 
 Host traces must show cache growth under useful repeated reads, shrink under
 anonymous-memory pressure, zero reclaimed pinned/dirty pages, and bounded
@@ -374,6 +421,13 @@ them. Host tests must alternate mapped and ordinary writes/reads through two
 processes, verify private writes stay private, and exercise truncate/EOF and
 in-flight I/O/removal races. Byte-range/share-lock matrix tests cover native,
 Win32 and DOS ownership; every close/death releases exactly its locks.
+
+Historical comparison, resolved by P32 on 2026-10-19: Windows 98's mapped
+files/executables use cache, and MapCache avoids duplicate copies of many
+pages; 4 KB executable-section alignment supports this. C5 shared ownership
+is **confirmed in role**, but writable mapping/ordinary-I/O visibility,
+truncate and raw-write rules are not specified. Keep the stronger explicit
+CiukiOS protocol; f1-84/f0-47 own its implementation and evidence.
 
 ## Target memory contract
 
@@ -466,6 +520,12 @@ invalidation, fault coalescing, pressure hysteresis and shared cache pages.
 Verify progress and no double-free under concurrent write/exit/reclaim. The
 algorithm's scan/decay constants are CiukiOS choices, not claimed 98 values.
 
+Historical comparison, resolved by P33/P36 on 2026-10-19: demand paging,
+clean discards and memory-manager borrowing from cache are confirmed; no
+page-replacement sampling/trim cadence is supplied. Cache LRU/random recycle
+counters do not establish the anonymous-page replacement algorithm. Keep
+second chance and 64-page/1 ms slices as CiukiOS policy for f0-48 review.
+
 ### M4: dynamic backing file and idle prewrite (M03)
 
 Add a backing-store object with fixed page slots, reserved/used/free states,
@@ -493,6 +553,15 @@ of the 98 idle manager, with explicit CiukiOS scheduling limits. Once idle
 for 30 s, free unused trailing 16 MiB extents down to the configured minimum;
 never relocate a live slot during truncation. Growth/shrink must not hold
 IRQ-off or a volume lock for an unbounded CPU span.
+
+Historical comparison, resolved by P33 on 2026-10-19: Windows 98 dynamic
+swap growth/shrink and idle prewrite are **confirmed in role**, not as
+16 MiB increments or a 30 s shrink timer. The book gives no numeric
+`MinPagingFileSize` default. Keep CiukiOS's initial 16 MiB, 16 MiB extents,
+disk-free reserve and 30 s timer pending f0-49 ledger/replay evidence.
+Retain P05's prewrite-after-pending-VFAT-writes ordering; the book does not
+document `ConservativeSwapfileUsage`, so its Windows 98 default 0 remains
+attributed to P05. Do not adopt the disable-prewrite option as a default.
 
 A failed page-out leaves the resident page and its dirty version intact;
 no commitment is admitted against failed capacity. A failed page-in returns
@@ -581,6 +650,12 @@ it may use at most 80% of that remainder, preserving desktop/background
 progress. This is a proposed reconciliation of the existing 8/10 policy,
 requiring measured game/desktop evidence before replacement.
 
+Historical comparison, resolved by P34 on 2026-10-19: boost magnitudes,
+decay and 98/ME quantum are **not in the Resource Kit**. Keep the CiukiOS
+values above, including +2/20 ms input, +1/one quantum I/O, 100 ms aging and
+10/2 ms quanta; f0-45 owns any evidence-based change. P18's Win95 20 ms
+observation does not supply a missing 98/ME default.
+
 Host tests cover input/focus changes, I/O completion, boost decay, two-level
 inversion, waiter cancellation, device saturation and a CPU-hog VM. Under
 admitted load, input-to-UI-ready dispatch ≤10 ms, normal ready wait ≤100 ms,
@@ -597,6 +672,12 @@ or wheel to avoid an unbounded per-tick walk as process count grows. A timer
 IRQ only moves due events to bounded work. Cancellation/destruction must
 prevent an old callback from touching a reused owner; test wraparound,
 rearm, concurrent cancel/expiry, tick loss and firmware pauses.
+
+Historical comparison, resolved by P35 on 2026-10-19: the Resource Kit gives
+no VTD/VPICD timing guarantee or PIT divisor. Keep divisor 1193/nominal
+1 kHz and the R1/R3 bounds as CiukiOS policy requiring measurement; driver
+naming and asynchronous input descriptions do not prove interrupt delivery
+latency.
 
 Retain 256-frame audio periods (5.333 ms at 48 kHz), P_DEVICE refill,
 ≤1 ms work before continuation and 2 ms maximum refill service. Refill wake
@@ -730,10 +811,10 @@ subsequent directive and the lead; no QEMU gate is resumed implicitly.
 | 20 ms historical Win95 slice versus 2 ms audio/VM service | Keep 10 ms ordinary / current 2 ms sensitive policy and prove response deadlines. Exact 98 slice research remains open; changing to 20 ms merely for numerical resemblance would conflict with measured requirements. |
 | 100 µs IRQ-off software target versus T23 raw 2.1 ms pauses | Bound driver work, retain raw/attributed/unclassified metrics; no firmware takeover. Lead must judge physical end-to-end qualification; attribution alone cannot pass it. |
 | Eight-period nominal latency versus a 134 ms service gap; ≤50 ms at 44.1 kHz | Fix scheduling/storage stalls; preserve current recovery and report actual latency. A new audio/timeline/rate policy needs a separate reviewed directive; no lead/owner audio decision is changed here. |
-| 1 s dirty age / 12.5% budget versus unverified historical numeric policy | Proposed CiukiOS acceptance driven by E82 and f1-82, not asserted as a Microsoft default. Lead resolves any later primary-source conflict explicitly. |
+| 1 s dirty age / 12.5% budget versus unverified historical numeric policy | Resolved by P29 on 2026-10-19: Resource Kit names delay tunables without values or a dirty budget. Keep accepted CiukiOS policy driven by E82/f1-82; no conflicting numeric default established. |
 | f1-82 cache-only fix versus same-volume FAT barriers | Instrument and retain f1-78 transport unlocking; credits/staged publication must not retain a reader-excluding reservation across waits. Keep integrity even if the first stage cannot meet C3; f1-84 supplies the ordering redesign. |
 | Full pager versus existing eager VM admission and fixed caps | Preserve caps/headroom now. Change commitment/residency only after ledger, pager and alias evidence; do not infer free RAM from an early boot count. |
-| Removable write-through proposal versus unresolved 98 write-behind default | Conservative proposal pending source closure and lead decision; no present behavior changed. Qualified explicit write-behind must still drain safely. |
+| Removable write-through proposal versus unresolved 98 write-behind default | Resolved by P30 on 2026-10-19: option documented, installed default unstated. Keep conservative write-through under the lead's decision; f1-85 owns any reviewed write-behind adoption and safe drain. |
 
 Acceptance of this draft requires resolving the audit's source gaps and these
 conflicts in the lead's cross-review. Completion of the later resource work
@@ -771,3 +852,8 @@ these resolutions of the conflicts table and of the research closure:
    f0-48 → f0-49 → f3-46. Each step lands on `main` after host suites and a
    canonical build; physical acceptance per image on the T23 per the owner's
    current process (QEMU gates suspended).
+
+Research addendum, f0-42b: resolved by P28–P38 on 2026-10-19 as recorded
+in the audit's seven-row table. The supplied book closes the full Resource
+Kit reading gap, not the missing DDK/supplement/literature or SE/ME gaps.
+No accepted number or lead decision above is superseded by this research.
