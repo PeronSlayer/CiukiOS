@@ -12,7 +12,7 @@ static char first_drive(uint32_t mask) {
 }
 static void wait_report(uint32_t start,char drive,char holder,const char *reason) {
     uint32_t ms=fs_now_ms()-start;
-    if (ms<=100) return;
+    if (ms<100) return;
 #ifndef FS_HOST
     klog_diag("[storage] vfs_wait drive=%c ms=%u holder=%c reason=%s",drive,ms,holder,reason);
 #endif

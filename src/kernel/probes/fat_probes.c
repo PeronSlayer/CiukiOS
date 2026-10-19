@@ -527,15 +527,15 @@ int probe_cache(void)
     uint8_t buf[512]; memset(buf, 0x59, sizeof(buf));
     uint32_t start = fs_now_ms();
     e = cache_write(&c, d, 3, buf);
-    if (!e) e = cache_writeback_tick(&c, start + 4999);
+    if (!e) e = cache_writeback_tick(&c, start + CACHE_DIRTY_AGE_MS - 1);
     if (!e && cache_fixture.writes) e = -FS_EIO;
     /* The host tests supply exact boundary time; the guest waits real PIT
      * ticks, then observes the same production hook. */
 #ifndef FS_HOST
-    task_sleep_ms(5000);
+    task_sleep_ms(CACHE_DIRTY_AGE_MS);
     uint32_t now = fs_now_ms();
 #else
-    uint32_t now = start + 5001;
+    uint32_t now = start + CACHE_DIRTY_AGE_MS + 1;
 #endif
     if (!e) e = cache_writeback_tick(&c, now);
     if (!e && (cache_fixture.persisted != 1 || memcmp(cache_fixture.stable[3], buf, 512))) e = -FS_EIO;

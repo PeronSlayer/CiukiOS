@@ -74,10 +74,13 @@ static int read_blocks(struct blkdev *d,uint64_t lba,uint32_t n,void *out) {
     return 0;
 }
 static int write_blocks(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
-    struct media *m=d->ctx;assert(!blkdev_range(d,lba,n) && n==1);m->writes++;
-    unsigned i=0;for (;i<m->saved;i++) if (m->changes[i].lba==lba) break;
-    assert(i<64);if (i==m->saved) m->saved++;
-    m->changes[i].lba=lba;memcpy(m->changes[i].bytes,buf,512);return 0;
+    struct media *m=d->ctx;assert(!blkdev_range(d,lba,n) && n<=CACHE_WRITEBACK_BLOCKS);m->writes+=n;
+    for (unsigned k=0;k<n;k++) {
+        unsigned i=0;for (;i<m->saved;i++) if (m->changes[i].lba==lba+k) break;
+        assert(i<64);if (i==m->saved) m->saved++;
+        m->changes[i].lba=lba+k;memcpy(m->changes[i].bytes,(const uint8_t *)buf+k*512,512);
+    }
+    return 0;
 }
 static int flush_blocks(struct blkdev *d) { ((struct media *)d->ctx)->flushes++;return 0; }
 static void init(struct media *m,unsigned gib,unsigned spc) {

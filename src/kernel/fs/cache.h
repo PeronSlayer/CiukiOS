@@ -4,6 +4,9 @@
 #include "blkdev.h"
 #define CACHE_DEFAULT_BYTES (8u*1024u*1024u)
 #define CACHE_DEVICES 32u
+#define CACHE_DIRTY_AGE_MS 1000u
+#define CACHE_WRITEBACK_BLOCKS 64u
+#define CACHE_CLEAN_WAIT_MS 20u
 /* f4-04 page layouts. One 4096-byte data page is two 2048-byte halves; each
  * half serves four 512-byte slots or one 2048-byte slot, chosen by the sector
  * size of the devices attached (a whole page is eight 512-byte slots or two
@@ -29,7 +32,11 @@ struct cache_page {
 };
 struct cache_meta { struct cache_meta *next; unsigned count; struct cache_page pages[]; };
 struct cache_lru { struct cache_block *oldest, *newest; };
-struct cache_device { struct blkdev *dev; int error; uint32_t epoch; };
+struct cache_device {
+    struct blkdev *dev; int error; uint32_t epoch;
+    uint32_t dirty_bytes, oldest;
+    bool requested;
+};
 /* Stack-owned transport reservation; owner waits for joined readers before
  * returning. Covers uncached sectors when a run exceeds the cache capacity. */
 struct cache_fill {
@@ -49,6 +56,11 @@ struct block_cache {
     uint32_t workspace_pages, blocks;
     uint32_t data_pages, meta_pages, slots[2], device_epoch;
     uint64_t hits, misses, writes;
+    uint64_t cache_sync_evictions, writer_waits, writer_wait_ms;
+    uint32_t dirty_budget, dirty_bytes, tick_flushed, max_flush_ms, max_writer_wait_ms;
+    uint32_t report_time, writeback_pages;
+    uint8_t *writeback_buffer;
+    bool batch_busy, writer_online; /* online installed at boot/quiescence */
     /* f1-09: refresh frozen block-view scalars even on cache hits. The
      * callback must be short, nonblocking and must not enter the cache. */
     void (*refresh)(void *, struct blkdev *);
@@ -68,8 +80,10 @@ int cache_init(struct block_cache *, size_t bytes);
  * a pinned failed dirty block. cache_read/write attach implicitly. */
 int cache_attach(struct block_cache *, struct blkdev *);
 struct cache_stats {
-    uint32_t pages, data_pages, meta_pages, workspace_pages, slots_512, slots_2048;
+    uint32_t pages, data_pages, meta_pages, workspace_pages, writeback_pages, slots_512, slots_2048;
     uint64_t hits, misses, writes;
+    uint32_t dirty_bytes, dirty_budget, throttle_bytes, tick_flushed, max_flush_ms, max_writer_wait_ms;
+    uint64_t cache_sync_evictions, writer_waits, writer_wait_ms;
 };
 void cache_stats(struct block_cache *, struct cache_stats *);
 void cache_destroy(struct block_cache *);
@@ -84,6 +98,10 @@ int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void 
 int cache_barrier(struct block_cache *, struct blkdev *);
 int cache_writeback_tick(struct block_cache *, uint32_t now_ms);
 bool cache_writeback_due(const struct block_cache *, uint32_t now_ms);
+/* Writer event sleep (bounded safety poll), never a volume reservation.
+ * Set writer_online only with a live service; standalone caches need none. */
+void cache_writer_wait(struct block_cache *, uint32_t max_ms);
+bool cache_writeback_report(struct block_cache *, uint32_t now_ms, struct cache_stats *);
 int cache_error(struct block_cache *, struct blkdev *);
 /* Invalidate only after durable unmount or externally established media loss.
  * forget_error is for a new media generation, never automatic error recovery. */

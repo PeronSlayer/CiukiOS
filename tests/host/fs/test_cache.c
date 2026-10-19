@@ -58,19 +58,20 @@ static void budget(void) {
         CHECK(s.pages <= sizes[i] / 4096);
         CHECK(s.pages >= sizes[i] / 4096 - 1);   /* a tiny cache may leave one page unused */
         CHECK(s.slots_512 == 8 * s.data_pages && !s.slots_2048 && c.blocks == s.slots_512);
-        CHECK(s.workspace_pages == c.workspace_pages && s.data_pages + s.meta_pages + s.workspace_pages == s.pages);
+        CHECK(s.workspace_pages == c.workspace_pages && s.data_pages + s.meta_pages + s.workspace_pages + s.writeback_pages == s.pages);
         cache_destroy(&c);
     }
-    /* Default budget: 8 MiB = 2048 pages, 128 workspace, 1920 for data and
-     * descriptors. F1 had 7 slots in each of those 1920 pages (13440). The
-     * i686 layout packs 11 page headers per descriptor page (static assert in
-     * cache.c): 14080 slots. The host's 64-bit pointers pack 7: 13440, equal. */
+    /* Default budget: 8 MiB = 2048 pages, 128 workspace, 8 writeback,
+     * 1912 for data/descriptors. F1 had 13440 slots. The i686 layout packs
+     * 11 headers per descriptor page: 14016 slots. Host pointers pack 7. */
     struct block_cache c; struct cache_stats s; CHECK(!cache_init(&c, 0)); cache_stats(&c, &s);
-    CHECK(s.workspace_pages == 128 && s.pages == 2048 && s.slots_512 >= 13440);
+    CHECK(s.workspace_pages == 128 && s.writeback_pages==8 && s.pages == 2048);
+    CHECK(s.slots_512 == 8*model_data(1920-8,7));
     cache_destroy(&c);
     CHECK(8 * model_data(1920, 11) == 14080 && 8 * model_data(1920, 11) >= 7 * 1920);
     CHECK(8 * model_data(1920, 7) == 13440);
-    printf("PASS budget: pages <= bytes/4096, 8 slots per data page, default 8 MiB keeps F1's 13440 FAT slots (i686 model 14080)\n");
+    CHECK(8*model_data(1920-8,11)>=13440);
+    printf("PASS budget: pages <= bytes/4096 including 32 KiB writeback buffer, 8 slots per data page, i686 default retains >=13440 FAT slots\n");
 }
 
 static void attach_on_demand(void) {
@@ -187,8 +188,8 @@ static void failed_victim_read(void) {
     for (unsigned i=0;i<4;i++) CHECK(!cache_write(&c,&bad.dev,i,sector));
     for (unsigned i=0;i<4;i++) CHECK(good(&good_disk,&c,i));
     bad.fail_all=true;
-    /* The oldest victim fails its writeback; this same read still succeeds. */
-    CHECK(good(&good_disk,&c,10));CHECK(cache_error(&c,&bad.dev)==-FS_EIO);
+    /* Clean victims take priority over the older writer debt. */
+    CHECK(good(&good_disk,&c,10));CHECK(!cache_error(&c,&bad.dev));
     for (unsigned i=11;i<20;i++) CHECK(good(&good_disk,&c,i));
     cache_destroy(&c);bad.fail_all=false;
     CHECK(!cache_init(&c,8192));
@@ -198,7 +199,7 @@ static void failed_victim_read(void) {
     uint8_t bytes[1024];CHECK(!cache_read_run(&c,&good_disk.dev,22,2,bytes));
     CHECK(bytes[0]==pattern(&good_disk,22,0) && bytes[512]==pattern(&good_disk,23,0));
     cache_destroy(&c);mem_free(&bad);mem_free(&good_disk);
-    puts("PASS read isolation: first failed dirty eviction pins its device, current and later reads use healthy slots");
+    puts("PASS read isolation: clean victims avoid dirty debt; failed dirty slots still permit uncached reads");
 }
 static void explicit_errors(void) {
     struct block_cache c; struct mem cd; mem_init(&cd, 11, 2048, 8);

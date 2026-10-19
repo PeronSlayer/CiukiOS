@@ -42,6 +42,12 @@ static int disk_write(struct blkdev *d, uint64_t lba, uint32_t n, const void *bu
 static int disk_flush(struct blkdev *d) { ((struct disk *)d->ctx)->flushes++; return -FS_EROFS; }
 
 static struct storage *storage;
+/* Parser workspaces are temporary; the cache owns its separately budgeted
+ * writeback buffer until storage_destroy. Count parser allocations only. */
+static unsigned parser_allocations(void)
+{
+    return fs_host_contig_live-(storage && storage->cache.writeback_buffer ? 1u : 0u);
+}
 static struct vfs_table table;
 static const char *image_path;
 static struct storage *start(void)
@@ -370,7 +376,7 @@ static int mode_refusal(void)
     CHECK(n->present && n->error && !n->ro.mounted && !storage->vfs.ro_volumes[n->drive] && !vfs_drive_present(&storage->vfs, n->drive));
     CHECK(!n->ro.state && n->ro.diagnostic);
     printf("R\t%d\t%s\n", n->error, n->ro.diagnostic ? n->ro.diagnostic : "");
-    extern unsigned fs_host_contig_live; CHECK(!fs_host_contig_live);
+    extern unsigned fs_host_contig_live; CHECK(!parser_allocations());
     zero_writes();
     stop(); return failures ? 1 : 0;
 }
@@ -387,7 +393,7 @@ static int mode_lifecycle(void)
 {
     extern unsigned fs_host_contig_live;
     start(); struct storage_ntfs *n = volume(); CHECK(n->present && !n->error && n->ro.mounted);
-    unsigned drive = n->drive; CHECK(drive == 3 && fs_host_contig_live == 1);
+    unsigned drive = n->drive; CHECK(drive == 3 && parser_allocations() == 1);
     tables(); char p[FS_PATH_BYTES + 3];
     uint32_t generation = storage->vfs.generation[drive]; uint64_t before = tree_hash_all();
     /* Open files and a cwd pin refuse unmount; closing releases it. */
@@ -398,12 +404,12 @@ static int mode_lifecycle(void)
     OK(vfs_chdir(&table, volume_path(p, "/")));
     OK(storage_ntfs_unmount(storage, 0));
     CHECK(!n->ro.mounted && !vfs_drive_present(&storage->vfs, drive) && storage->vfs.generation[drive] > generation);
-    CHECK(fs_host_contig_live == 0 && !n->ro.state);
+    CHECK(parser_allocations() == 0 && !n->ro.state);
     struct fat_entry st; CHECK(vfs_stat(&table, volume_path(p, "/resident.txt"), &st) < 0);
     CHECK(!strcmp(table.cwd[drive], "/"));
     /* Remount: the same letter, a new VFS generation, identical content. */
     uint64_t reads = disk.reads; generation = storage->vfs.generation[drive];
-    CHECK(storage_ntfs_mount(storage, 0) == (int)drive && fs_host_contig_live == 1);
+    CHECK(storage_ntfs_mount(storage, 0) == (int)drive && parser_allocations() == 1);
     CHECK(storage->vfs.generation[drive] > generation && disk.reads > reads);   /* cache was invalidated */
     CHECK(tree_hash_all() == before);
     expect_file("/resident.txt", "Ciuki NTFS resident\n", 20);
@@ -415,7 +421,7 @@ static int mode_lifecycle(void)
     OK(vfs_chdir(&table, volume_path(p, "/")));
     disk.dev.quarantined = true;                       /* media loss: quarantine of the disk */
     CHECK(vfs_read(&table, h, data, 20, &got) == -FS_EIO && !got);
-    CHECK(!vfs_drive_present(&storage->vfs, drive) && !n->ro.mounted && fs_host_contig_live == 0);
+    CHECK(!vfs_drive_present(&storage->vfs, drive) && !n->ro.mounted && parser_allocations() == 0);
     CHECK(vfs_find_next(&table, &find, &find_entry) == -FS_EIO && !strcmp(table.cwd[drive], "/"));
     CHECK(storage_ntfs_mount(storage, 0) < 0);         /* refused while quarantined */
     disk.dev.quarantined = false;
@@ -427,10 +433,10 @@ static int mode_lifecycle(void)
     OK(vfs_close(&table, h));
     /* Counters: not one block write or flush reached the disk or the view. */
     zero_writes();
-    OK(storage_ntfs_unmount(storage, 0)); CHECK(fs_host_contig_live == 0);
+    OK(storage_ntfs_unmount(storage, 0)); CHECK(parser_allocations() == 0);
     CHECK(storage_ntfs_unmount(storage, 0) == 0);      /* idempotent */
     zero_writes();
-    stop(); CHECK(fs_host_contig_live == 0);
+    stop(); CHECK(parser_allocations() == 0);
     printf("PASS lifecycle checks=%u failures=%u\n", checks, failures);
     return failures ? 1 : 0;
 }
@@ -456,11 +462,11 @@ static int mode_faults(void)
 {
     extern unsigned fs_host_contig_fail, fs_host_contig_live;
     /* Allocation failure: explicit ENOMEM, no letter, nothing leaked. */
-    fs_host_contig_fail = 1; start(); struct storage_ntfs *n = volume();
-    CHECK(n->present && n->error == -FS_ENOMEM && !n->ro.mounted && !strcmp(n->ro.diagnostic, "ntfs_workspace") && !fs_host_contig_live);
+    fs_host_contig_fail = 2; start(); struct storage_ntfs *n = volume();
+    CHECK(n->present && n->error == -FS_ENOMEM && !n->ro.mounted && !strcmp(n->ro.diagnostic, "ntfs_workspace") && !parser_allocations());
     CHECK(!vfs_drive_present(&storage->vfs, n->drive));
-    CHECK(storage_ntfs_mount(storage, 0) == (int)n->drive && fs_host_contig_live == 1);
-    stop(); CHECK(!fs_host_contig_live);
+    CHECK(storage_ntfs_mount(storage, 0) == (int)n->drive && parser_allocations() == 1);
+    stop(); CHECK(!parser_allocations());
     /* Count the device reads of a good mount, then fail each one in turn. */
     start(); uint64_t mount_reads = disk.reads; CHECK(volume()->ro.mounted); stop();
     CHECK(mount_reads > 20);
@@ -471,14 +477,14 @@ static int mode_faults(void)
         bool failed = e < 0 || (n->present && n->error);
         CHECK(failed == (at <= mount_reads));
         if (failed) {
-            CHECK(!fs_host_contig_live && !n->ro.mounted && (!n->present || !vfs_drive_present(&storage->vfs, n->drive)));
+            CHECK(!parser_allocations() && !n->ro.mounted && (!n->present || !vfs_drive_present(&storage->vfs, n->drive)));
             if (n->present) {
                 CHECK(n->error == -FS_EIO);
-                disk.fail_read_at = 0; CHECK(storage_ntfs_mount(storage, 0) == (int)n->drive && fs_host_contig_live == 1);
+                disk.fail_read_at = 0; CHECK(storage_ntfs_mount(storage, 0) == (int)n->drive && parser_allocations() == 1);
             }
-        } else CHECK(n->present && n->ro.mounted && fs_host_contig_live == 1);
+        } else CHECK(n->present && n->ro.mounted && parser_allocations() == 1);
         CHECK(!disk.writes && !disk.flushes && !n->writes && !n->flushes);
-        storage_destroy(storage); close(disk.fd); CHECK(!fs_host_contig_live);
+        storage_destroy(storage); close(disk.fd); CHECK(!parser_allocations());
     }
     /* A device error while a directory view is built is returned as that
      * error, never recorded as a per-file status; the next attempt succeeds. */
@@ -500,7 +506,7 @@ static int mode_faults(void)
     }
     CHECK(failed_views >= 10);
     CHECK(!disk.writes && !disk.flushes && !n->writes && !n->flushes);
-    stop(); CHECK(!fs_host_contig_live);
+    stop(); CHECK(!parser_allocations());
     printf("PASS faults mount_reads=%llu view_reads=%llu failed_views=%u checks=%u failures=%u\n",
            (unsigned long long)mount_reads, (unsigned long long)view_reads, failed_views, checks, failures);
     return failures ? 1 : 0;

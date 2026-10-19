@@ -29,6 +29,19 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+# F1-82: deterministic dirty-budget/reservation/error cases, then the timed
+# 10 MiB production FAT/VFS copy versus a 16 KiB / 20 ms reader.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c \
+    tests/host/fs/test_cache_writeback.c -o build/host/fs/test_cache_writeback
+build/host/fs/test_cache_writeback
+clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    tests/host/fs/test_writeback.c -Wl,--wrap=cache_read_ahead,--wrap=cache_write -o build/host/fs/test_writeback
+build/host/fs/test_writeback
 # Sparse virtual layouts exercise capacity without creating multi-GiB images.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
