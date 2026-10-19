@@ -11,6 +11,41 @@
 #define DESK_VERSION 1u
 #define DESK_SHELL_VERSION 2u
 #define DESK_RESIZE_MINOR 1u       /* v2.1: header byte 2; v1/v2.0 remain unchanged */
+#define DESK_V3_VERSION 3u
+#define DESK_V3_HEADER 16u
+#define DESK_V3_OVERLAPPED 0u
+#define DESK_V3_POPUP 1u
+#define DESK_V3_TOOL 2u
+#define DESK_V3_TOPMOST 4u
+#define DESK_V3_MODAL 8u
+#define DESK_V3_STYLES 15u
+#define DESK_V3_CAPTURE 1u
+#define DESK_V3_CLIP 2u
+#define DESK_V3_RELATIVE 4u
+#define DESK_V3_HIDDEN 8u
+/* V3 payloads after the 16-byte envelope, all u32 unless noted:
+ * HELLO: empty; CREATE: style,owner,owner-generation,x,y,w,h,scale,title-bytes,title;
+ * DAMAGE: x,y,w,h; RESIZE: w,h,configure-serial + one surface fd;
+ * PLACE: x,y,w,h,scale,show (0 normal,1 minimized,2 hidden),style;
+ * TITLE: byte-count,UTF-8; CURSOR: shape,id,visibility-count;
+ * CURSOR_BITMAP: id,hot-x,hot-y + one 32x32 ARGB8888 surface fd;
+ * POINTER: flags,clip-x,clip-y,clip-w,clip-h; WARP: logical client x,y;
+ * LEASE: action (0 release,1 request),w,h,bpp;
+ * RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
+ * ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
+ * KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
+ * CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
+ * POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
+ * CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+ * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+ * CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
+ */
+enum desk_v3_opcode {
+    DESK_V3_RESIZE = 64, DESK_V3_PLACE, DESK_V3_CURSOR_BITMAP,
+    DESK_V3_POINTER, DESK_V3_WARP, DESK_V3_LEASE, DESK_V3_RESULT,
+    DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
+    DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE
+};
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -73,6 +108,7 @@ enum desk_opcode {
 #define DESK_WINDOW_FLAGS 31u
 struct desk_packet {
     unsigned opcode;
+    uint32_t generation, owner, owner_generation, style, scale;
     int32_t x, y;
     uint32_t width, height, serial, focused;
     char title[DESK_TITLE_MAX + 1];   /* also WINDOW_INFO title and LAUNCH name */
@@ -94,6 +130,9 @@ struct desk_packet {
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
 };
+int desk_utf8_valid(const uint8_t *, unsigned);
+void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,
+                     uint32_t request, uint32_t id, uint32_t generation);
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
 void desk_message(struct ciuki_message *m, unsigned opcode, unsigned length);

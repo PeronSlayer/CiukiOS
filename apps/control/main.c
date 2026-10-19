@@ -342,6 +342,14 @@ static void idle(void *arg)
     uint64_t t = now(m);
     if (t != m->last_tick) { m->last_tick = t; cp_tick(&m->app); if (m->app.page == CP_DATETIME) m->ui.dirty = 1; }
 }
+__attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
+{ (void)out; (void)cap; return -ENOSYS; }
+__attribute__((weak)) int ciuki_win32_uninstall_run(const char *key)
+{ (void)key; return -ENOSYS; }
+static int win32_uninstall_list(void *ctx, struct desk_uninstall_entry *out, unsigned cap)
+{ (void)ctx; return ciuki_win32_uninstall_list(out,cap); }
+static int win32_uninstall_run(void *ctx, const char *key)
+{ (void)ctx; return ciuki_win32_uninstall_run(key); }
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -357,6 +365,7 @@ int main(int argc, char **argv)
     if (!m) return 1;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
+    h->uninstall_list=win32_uninstall_list; h->uninstall_run=win32_uninstall_run;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;

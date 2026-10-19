@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -1330,8 +1332,159 @@ static void shell_service(struct desktop *d)
     }
     desktop_wait("shell-done");
 }
+/* Optional f5-07A/f5-08 adapters. Until integrated, operations fail explicitly. */
+__attribute__((weak)) int ciuki_win32_shell_launch(const struct desk_launch_record *record)
+{ (void)record; return -ENOSYS; }
+__attribute__((weak)) int ciuki_win32_shell_restart(uint32_t pid, uint32_t flags)
+{ (void)pid; (void)flags; return -ENOSYS; }
+/* f5-08 supplies this transaction: switch/delegate, or synchronously revoke
+ * and restore the desktop. The default cannot change the physical display. */
+__attribute__((weak)) int ciuki_win32_presenter_lease(uint32_t pid, int acquire, int mode,
+    uint32_t w, uint32_t h, uint32_t bpp, uint32_t generation)
+{ (void)pid; (void)acquire; (void)mode; (void)w; (void)h; (void)bpp; (void)generation; return -ENOSYS; }
+static int win32_lease(struct desktop *d, uint32_t pid, int acquire,
+                       uint32_t w, uint32_t h, uint32_t bpp, uint32_t generation)
+{
+    (void)d;
+    int mode=0;
+    if (acquire) {
+        struct ciuki_display_info info;
+        if (ciuki_display_query(&info)) return -errno;
+        mode=desk_v3_mode(&info,w,h,bpp); if (mode<0) return mode;
+    }
+    return ciuki_win32_presenter_lease(pid,acquire,mode,w,h,bpp,generation);
+}
+static int win32_restart(struct desktop *d, uint32_t pid, uint32_t flags)
+{ (void)d; return ciuki_win32_shell_restart(pid,flags); }
+static int link_read(struct desktop *d, const char *path, struct desk_launch_record *record)
+{
+    (void)d;
+    FILE *f=fopen(path,"rb"); if (!f) return -errno;
+    uint8_t *bytes=malloc(DESK_LINK_BYTES+1); if (!bytes) { fclose(f); return -ENOMEM; }
+    size_t n=fread(bytes,1,DESK_LINK_BYTES+1,f); int bad=ferror(f);
+    if (fclose(f)) bad=1;
+    int result=bad || n>DESK_LINK_BYTES || !desk_link_decode(bytes,(unsigned)n,record) ? -EINVAL : 0;
+    free(bytes); return result;
+}
+static void links_directory(struct desktop *d, const char *path, unsigned desktop,
+                            struct desk_link_entry *out, unsigned cap, unsigned *count,
+                            unsigned depth, unsigned *budget)
+{
+    if (!depth || !*budget || *count>=cap) return;
+    DIR *dir=opendir(path); if (!dir) return;
+    struct dirent *entry;
+    while (*budget && *count<cap && (entry=readdir(dir))) {
+        (*budget)--;
+        if (entry->d_name[0]=='.' || strchr(entry->d_name,'/') || strchr(entry->d_name,'\\')) continue;
+        char file[260]; int n=snprintf(file,sizeof(file),"%s/%s",path,entry->d_name);
+        if (n<0 || n>=(int)sizeof(file)) continue;
+        struct stat st; if (stat(file,&st)) continue;
+        if (S_ISDIR(st.st_mode)) links_directory(d,file,desktop,out,cap,count,depth-1,budget);
+        else if (S_ISREG(st.st_mode) && n>=4 && !strcasecmp(file+n-4,".lnk") && !link_read(d,file,&out[*count].launch)) {
+            snprintf(out[*count].source,sizeof(out[*count].source),"%s",file); out[*count].desktop=desktop; (*count)++;
+        }
+    }
+    closedir(dir);
+}
+static int links_list(struct desktop *d, struct desk_link_entry *out, unsigned cap)
+{
+    unsigned count=0, budget=128;
+    links_directory(d,"/Windows/Start Menu/Programs",0,out,cap/2,&count,3,&budget);
+    budget=128;
+    links_directory(d,"/Windows/Desktop",1,out,cap,&count,1,&budget);
+    /* Stable labels independent of FAT enumeration order. */
+    for (unsigned i=1;i<count;i++) for (unsigned j=i;j && strcmp(out[j-1].launch.label,out[j].launch.label)>0;j--) {
+        struct desk_link_entry *temp=malloc(sizeof(*temp)); if (!temp) return (int)count;
+        *temp=out[j-1]; out[j-1]=out[j]; out[j]=*temp; free(temp);
+    }
+    return (int)count;
+}
+/* Discovery and stale-link reads share one sleeping worker. The shell never
+ * waits for directory/disk/RPC I/O; it consumes only complete snapshots. */
+struct links_worker {
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    int scan_requested, launch_requested, launch_busy, completed, result;
+    unsigned count;
+    char source[260];
+    struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
+};
+static struct links_worker *links_worker;
+static void *links_thread(void *arg)
+{
+    struct links_worker *w=arg;
+    for (;;) {
+        pthread_mutex_lock(&w->mutex);
+        while (!w->scan_requested && !w->launch_requested) pthread_cond_wait(&w->changed,&w->mutex);
+        int launch=w->launch_requested; char path[260];
+        if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
+        else w->scan_requested=0;
+        pthread_mutex_unlock(&w->mutex);
+        if (launch) {
+            struct desk_launch_record *r=malloc(sizeof(*r));
+            int result=r ? link_read(NULL,path,r) : -ENOMEM;
+            if (!result) result=ciuki_win32_shell_launch(r);
+            free(r);
+            pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; pthread_mutex_unlock(&w->mutex);
+        } else {
+            int count=links_list(NULL,w->scratch,DESK_LINKS);
+            pthread_mutex_lock(&w->mutex);
+            w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
+            memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
+            pthread_mutex_unlock(&w->mutex);
+        }
+    }
+    return NULL;
+}
+static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsigned cap)
+{
+    struct links_worker *w=links_worker;
+    if (!w || pthread_mutex_trylock(&w->mutex)) return -EAGAIN;
+    unsigned n=w->count<cap ? w->count : cap;
+    int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
+    memcpy(out,w->published,n*sizeof(*out)); w->scan_requested=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
+}
+static int link_cached(struct desktop *d,const char *source,struct desk_launch_record *out)
+{
+    for (unsigned k=0;k<d->v3_link_count;k++) if (!strcmp(source,d->v3_links[k].source)) { *out=d->v3_links[k].launch; return 0; }
+    return -ENOENT;
+}
+static int link_launch_async(struct desktop *d,const struct desk_launch_record *record)
+{
+    struct links_worker *w=links_worker;
+    if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
+    if (w->launch_requested || w->launch_busy || w->completed) { pthread_mutex_unlock(&w->mutex); return -EBUSY; }
+    const char *source=NULL;
+    for (unsigned k=0;k<d->v3_link_count;k++) if (!memcmp(record,&d->v3_links[k].launch,sizeof(*record))) source=d->v3_links[k].source;
+    if (!source) { pthread_mutex_unlock(&w->mutex); return -ENOENT; }
+    snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
+}
+static void links_start(struct desktop *d)
+{
+    if (links_worker) return;
+    struct links_worker *w=calloc(1,sizeof(*w)); if (!w) return;
+    if (pthread_mutex_init(&w->mutex,NULL)) { free(w); return; }
+    if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
+    w->scan_requested=1;
+    if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
+    links_worker=w;
+    d->v3_links_list=links_snapshot; d->v3_link_read=link_cached; d->v3_launch=link_launch_async;
+}
+static void links_service(struct desktop *d)
+{
+    struct links_worker *w=links_worker; if (!w || pthread_mutex_trylock(&w->mutex)) return;
+    int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
+    if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+}
 static void shell_setup(struct desktop *d, int gate)
 {
+    if (!gate) {
+        links_start(d); d->v3_lease=win32_lease;
+        d->v3_restart=win32_restart;
+    }
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
     d->autoplay_fs=fm_native_vfs(); d->autoplay_preference=autoplay_preference; d->media_sound=media_sound;
     d->self_pid=(uint32_t)getpid();
@@ -1483,7 +1636,7 @@ int main(int argc, char **argv)
                 d->realtime_second=(uint64_t)rtc.tv_sec;
                 desk_shell_clock_damage(d,previous);
             }
-            if (!d->power.state) { desktop_wait("shell-tick"); desk_shell_tick(d); }
+            if (!d->power.state) { desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d); }
         }
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;
@@ -1583,7 +1736,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_IPC);
         for (int i=0; i<DESK_CLIENTS; i++) {
             struct desk_client *c=&d->clients[i];
-            for (unsigned n=0; n<16 && c->channel>=0; n++) {
+            for (unsigned n=0; n<16 && c->channel>=0 && !c->v3_peer; n++) {
                 struct ciuki_message m;
                 int r=ciuki_channel_recv(c->channel,&m,DONTWAIT);
                 if (r==1) desk_receive(d,i,&m);

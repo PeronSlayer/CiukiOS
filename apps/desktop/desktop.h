@@ -4,6 +4,7 @@
 #include "protocol.h"
 #include "theme.h"
 #include "start-orb.h"
+#include "shell_link.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -62,6 +63,15 @@ struct desk_client {
     int configure_pending, focus_pending, close_pending;
     int commit_pending, resizable, zoomed;
     unsigned cursor;
+    /* V3 child slots share the transport's fd but never receive/close it. */
+    unsigned v3_peer, v3_id, v3_generation, v3_style, v3_scale;
+    unsigned v3_failed, v3_last[DESK_CLIENTS], v3_pointer;
+    struct desk_box v3_clip;
+    int32_t v3_visibility;
+    unsigned v3_cursor, v3_cursor_valid;
+    uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp, v3_lease_wanted;
+    uint32_t v3_cursor_pixels[4][1024];
+    uint8_t v3_hot_x[4], v3_hot_y[4];
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int collapsed;                /* retained shade state, independent of maximize */
@@ -94,6 +104,11 @@ struct desk_client {
     struct ciuki_message tx[DESK_TX_MAX];
     unsigned tx_head, tx_count;
 };
+static inline int desk_task_visible(const struct desk_client *c)
+{
+    return c->window && (c->version!=DESK_V3_VERSION ||
+        ((c->v3_style&3)!=DESK_V3_TOOL && !c->owner_id && c->minimized!=2));
+}
 struct desk_ops {
     int (*send)(int, const struct ciuki_message *, uint32_t);
     int (*info)(int, struct ciuki_surface_info *);
@@ -125,6 +140,17 @@ struct desk_render_cache;
 struct desktop {
     struct desk_ops ops;
     int display, input, output, focus, drag;
+    int v3_pointer_window; /* slot + 1, zero means no capture/clip */
+    unsigned v3_cursor_id, v3_cursor_slot, v3_cursor_hidden;
+    uint32_t v3_lease_window, v3_lease_generation, v3_lease_state, v3_lease_pid;
+    uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp;
+    /* f5-08 adapter: choose/set mode + delegate atomically; revoke synchronously
+     * and restore/repaint desktop before returning. No grant/fb mapping to peer. */
+    int (*v3_lease)(struct desktop *, uint32_t pid, int acquire,
+                    uint32_t w, uint32_t h, uint32_t bpp, uint32_t generation);
+    int (*v3_restart)(struct desktop *, uint32_t pid, uint32_t flags);
+    uint32_t v3_dialog_pid, v3_restart_flags;
+    int v3_dialog_kind; /* 1 crash, 2 restart confirmation */
     uint32_t width, height, *pixels;
     const uint32_t *portrait;
     /* Shell icons (desktop.c: libdeskui's Tango store, icon_map.c keys such as
@@ -182,6 +208,13 @@ struct desktop {
     uint64_t realtime_second;
     int realtime_source;
     char build_identity[65], version[65], notice[64];
+    struct desk_link_entry *v3_links;
+    unsigned v3_link_count;
+    uint64_t v3_links_next;
+    /* Enumerate a fresh bounded snapshot; read source again before launch. */
+    int (*v3_links_list)(struct desktop *, struct desk_link_entry *, unsigned);
+    int (*v3_link_read)(struct desktop *, const char *, struct desk_launch_record *);
+    int (*v3_launch)(struct desktop *, const struct desk_launch_record *);
     struct desk_program programs[DESK_MENU_MAX];
     unsigned program_count;
     int pictures_exists;        /* runtime stat of the owner's /Documents/Pictures */
@@ -290,6 +323,15 @@ void desk_shell_draw(struct desktop *, struct desk_box);
 void desk_damage_add(struct desk_damage *, struct desk_box, uint32_t, uint32_t);
 static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
+int desk_v3_receive(struct desktop *, int, const struct ciuki_message *);
+void desk_v3_revoke(struct desktop *);
+void desk_v3_pointer_release(struct desktop *);
+void desk_v3_restack(struct desktop *);
+void desk_v3_reactivate(struct desktop *, int);
+int desk_v3_mode(const struct ciuki_display_info *, unsigned w, unsigned h, unsigned bpp);
+int desk_v3_dialog_accept(struct desktop *);
+void desk_links_refresh(struct desktop *);
+int desk_link_launch(struct desktop *, unsigned);
 int desk_ignore_sigpipe(void);
 int desk_add_client(struct desktop *, int channel);
 void desk_drop_client(struct desktop *, int index);

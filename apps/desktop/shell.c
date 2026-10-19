@@ -272,7 +272,7 @@ static const char *client_icon(const struct desktop *d, int i)
     const struct desk_client *c = &d->clients[i];
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
-    if (c->internal == DESK_INTERNAL_TRANSFER) return "folder";
+    if (c->internal == DESK_INTERNAL_TRANSFER || c->internal==DESK_INTERNAL_PROGRAMS) return "folder";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return du_message_icon_name(d->sh.message_kind) ? du_message_icon_name(d->sh.message_kind) : "dialog-information";
     if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
@@ -331,6 +331,12 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
+        desk_links_refresh(d);
+        if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
+        unsigned preview=0;
+        for (unsigned k=0;k<d->v3_link_count && preview<8;k++) if (!d->v3_links[k].desktop) {
+            item(m,d->v3_links[k].launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); preview++;
+        }
         int developer = 0, accessories = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
@@ -486,6 +492,7 @@ static void menus_damage(struct desktop *d)
 }
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
+    desk_v3_revoke(d); desk_v3_pointer_release(d);
     tooltip_hide(d);
     if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
     desk_sound(d,SOUND_MENU_OPEN);
@@ -591,6 +598,10 @@ static void act(struct desktop *d, const struct sh_item *it)
             snprintf(argument,sizeof(argument),"--panel=%s",cp_applets[k].name); launch_named(d,"control",argument); break;
         }
         break;
+    case SH_ACT_WIN32_LINK:
+        if (desk_link_launch(d,(unsigned)it->arg)<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+        break;
+    case SH_ACT_PROGRAMS_FOLDER: desk_internal_open(d,DESK_INTERNAL_PROGRAMS); break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
     case SH_ACT_GAME: launch_game(d, it->arg); break;
     case SH_ACT_KEYS:
@@ -993,7 +1004,7 @@ void desk_shell_network_update(struct desktop *d, const struct ciuki_net_state *
 int desk_task_count(const struct desktop *d)
 {
     int n = 0;
-    for (int i = 0; i < DESK_CLIENTS; i++) n += d->clients[i].window != 0;
+    for (int i = 0; i < DESK_CLIENTS; i++) n += desk_task_visible(&d->clients[i]);
     return n;
 }
 static void draw_taskbar(struct desktop *d, struct desk_box clip)
@@ -1298,7 +1309,11 @@ static void icon_open(struct desktop *d, int index)
 {
     if (index < 0 || index >= d->sh.icon_count) return;
     const struct sh_icon *ic = &d->sh.icons[index];
-    if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
+    if (ic->action==SH_ACT_WIN32_LINK) {
+        unsigned k=(unsigned)strtoul(ic->argument,NULL,10);
+        if (desk_link_launch(d,k)<0) desk_shell_message(d,"Desktop","This shortcut is unavailable or its target could not be started.",1);
+    }
+    else if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
     else desk_shell_message(d, "Trash", "The Trash is empty.\n\nCiukiOS does not keep deleted files yet:\nFiles deletes them permanently.", 0);
 }
 static int icon_hit(const struct desktop *d, int32_t x, int32_t y)
@@ -1457,7 +1472,7 @@ static void switcher_start(struct desktop *d, int reverse)
     for (int n = 0; n < DESK_CLIENTS; n++) {
         int best = -1;
         for (int i = 0; i < DESK_CLIENTS; i++) {
-            if (!d->clients[i].window) continue;
+            if (!desk_task_visible(&d->clients[i])) continue;
             int taken = 0;
             for (int k = 0; k < d->sh.switch_count; k++) taken |= d->sh.switch_list[k] == i;
             if (!taken && (best < 0 || d->clients[i].order > d->clients[best].order)) best = i;
@@ -1705,6 +1720,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
 {
     switch (kind) {
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
+    case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
     case DESK_INTERNAL_ABOUT: *w = 440; *h = 300; break;
     case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
@@ -1732,6 +1748,7 @@ static int internal_find(const struct desktop *d, int kind)
 }
 int desk_internal_open(struct desktop *d, int kind)
 {
+    desk_v3_revoke(d); desk_v3_pointer_release(d);
     uint32_t owner=kind==DESK_INTERNAL_MESSAGE && d->focus>=0 ?
         (d->clients[d->focus].internal==DESK_INTERNAL_MESSAGE ? d->clients[d->focus].owner_id : d->clients[d->focus].window_id) : 0;
     int i = internal_find(d, kind);
@@ -1753,7 +1770,7 @@ int desk_internal_open(struct desktop *d, int kind)
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
     snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
-             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : d->sh.message_title);
+             kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
     if (kind == DESK_INTERNAL_ABOUT) { d->about = i; d->sh.about_tab = 0; d->sh.want_reload |= 2; }
     if (kind == DESK_INTERNAL_RUN) { d->sh.run_length = 0; d->sh.run_text[0] = 0; }
@@ -1775,6 +1792,9 @@ int desk_internal_open(struct desktop *d, int kind)
 void desk_internal_closed(struct desktop *d, int index)
 {
     if (d->about == index) d->about = -1;
+    if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->v3_dialog_kind) {
+        d->v3_dialog_kind=0; d->v3_dialog_pid=0;
+    }
     if (d->clients[index].internal == DESK_INTERNAL_AUTOPLAY) d->sh.autoplay.open=0;
 }
 void desk_shell_message(struct desktop *d, const char *title, const char *text, int error)
@@ -1795,6 +1815,13 @@ static struct desk_box button_box(struct desk_box content, int index, int count)
     /* Right-aligned 75x23 buttons along the bottom edge. */
     int32_t x = content.x + content.w - 10 - (count - index) * 81 + 6;
     return (struct desk_box){x, content.y + content.h - 33, 75, 23};
+}
+static struct desk_box message_button_box(const struct desktop *d, struct desk_box content, int index)
+{
+    int count=d->v3_dialog_kind==2 ? 2 : 1;
+    if (!d->v3_dialog_kind) return button_box(content,index,count);
+    return (struct desk_box){content.x+content.w-12-(count-index)*140-(count-index-1)*8,
+                            content.y+content.h-33,140,23};
 }
 static void push_button(struct du_canvas *c, struct desk_box b, const char *label, int def)
 {
@@ -1939,6 +1966,16 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         for (size_t k = 0; k < sizeof(credits) / sizeof(credits[0]); k++) du_text(c, x, y + (int32_t)k * (step + 1), credits[k], SH_INK);
     }
 }
+static int programs_entry(const struct desktop *d, int row)
+{
+    for (unsigned k=0;k<d->v3_link_count;k++) if (!d->v3_links[k].desktop && row--==0) return (int)k;
+    return -1;
+}
+static void programs_open_selected(struct desktop *d)
+{
+    int k=programs_entry(d,d->sh.programs_selected);
+    if (k>=0 && desk_link_launch(d,(unsigned)k)<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+}
 void desk_internal_paint(struct desktop *d, int index, struct desk_box content, struct desk_box clip)
 {
     const struct desk_client *cl = &d->clients[index];
@@ -1970,6 +2007,18 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         du_text(&c,content.x+34,content.y+184,"Always do this for this device",a->active.id[0] ? SH_INK : DU_GRAY);
         push_button(&c,button_box(content,0,2),"OK",1);
         push_button(&c,button_box(content,1,2),"Cancel",0);
+        break;
+    }
+    case DESK_INTERNAL_PROGRAMS: {
+        du_text(&c,content.x+12,content.y+12,"Double-click a program, or select it and press Enter.",SH_INK);
+        if (programs_entry(d,0)<0) du_text(&c,content.x+12,content.y+48,"No Windows program shortcuts are installed.",SH_INK);
+        for (int row=d->sh.programs_scroll, y=content.y+40;y+22<content.y+content.h-8;row++,y+=22) {
+            int k=programs_entry(d,row); if (k<0) break;
+            int selected=row==d->sh.programs_selected;
+            if (selected) du_fill(&c,(struct du_rect){content.x+8,y,content.w-16,22},SH_HOT);
+            du_icon_blit(&c,content.x+12,y+3,desk_shell_icon("application-x-executable",16),16,DU_ICON_NORMAL);
+            du_text_fit(&c,content.x+36,y+4,content.w-48,d->v3_links[k].launch.label,selected ? SH_HOT_INK : SH_INK);
+        }
         break;
     }
     case DESK_INTERNAL_ABOUT:
@@ -2012,7 +2061,9 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     default:
         du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(d->sh.message_kind), 32), 32, DU_ICON_NORMAL);
         du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},d->sh.message_text,SH_INK);
-        push_button(&c, button_box(content, 0, 1), "OK", 1);
+        push_button(&c, message_button_box(d,content,0),
+                    d->v3_dialog_kind==1 ? "Close program" : d->v3_dialog_kind==2 ? "Restart Windows" : "OK",1);
+        if (d->v3_dialog_kind==2) push_button(&c,message_button_box(d,content,1),"Cancel",0);
         break;
     }
 }
@@ -2045,6 +2096,16 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     struct desk_client *cl = &d->clients[index];
     struct desk_box content = desk_content(cl);
     switch (cl->internal) {
+    case DESK_INTERNAL_PROGRAMS: {
+        int row=(y-content.y-40)/22+d->sh.programs_scroll;
+        if (y<content.y+40 || programs_entry(d,row)<0) return 1;
+        if (d->sh.programs_click==row && d->now_ns-d->sh.programs_click_ns<(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+            d->sh.programs_selected=row; programs_open_selected(d); d->sh.programs_click_ns=0;
+        } else {
+            d->sh.programs_selected=row; d->sh.programs_click=row; d->sh.programs_click_ns=d->now_ns;
+        }
+        damage(d,desk_outer(cl)); return 1;
+    }
     case DESK_INTERNAL_TRANSFER: desk_folder_dialog_click(d,x,y); return 1;
     case DESK_INTERNAL_AUTOPLAY: {
         struct desk_autoplay *a=&d->sh.autoplay;
@@ -2070,7 +2131,12 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         }
         return 1;
     default:
-        if (desk_contains(button_box(content, 0, 1), x, y)) desk_request_close(d, index);
+        if (desk_contains(message_button_box(d,content,0),x,y)) {
+            if (d->v3_dialog_kind) (void)desk_v3_dialog_accept(d);
+            desk_request_close(d,index);
+        } else if (d->v3_dialog_kind==2 && desk_contains(message_button_box(d,content,1),x,y)) {
+            d->v3_dialog_kind=0; desk_request_close(d,index);
+        }
         return 1;
     }
 }
@@ -2443,6 +2509,17 @@ static int internal_key(struct desktop *d, int index, int code, int value)
     if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_dialog_key(d,code,value); return 1; }
     if (value == 0) return 1;
     switch (c->internal) {
+    case DESK_INTERNAL_PROGRAMS:
+        if (code==DU_KEY_ESC) desk_request_close(d,index);
+        else if (code==DU_KEY_ENTER) programs_open_selected(d);
+        else if (code==DU_KEY_UP && d->sh.programs_selected>0) d->sh.programs_selected--;
+        else if (code==DU_KEY_DOWN && programs_entry(d,d->sh.programs_selected+1)>=0) d->sh.programs_selected++;
+        {
+            int rows=(desk_content(c).h-48)/22; if (rows<1) rows=1;
+            if (d->sh.programs_selected<d->sh.programs_scroll) d->sh.programs_scroll=d->sh.programs_selected;
+            if (d->sh.programs_selected>=d->sh.programs_scroll+rows) d->sh.programs_scroll=d->sh.programs_selected-rows+1;
+        }
+        damage(d,desk_outer(c)); return 1;
     case DESK_INTERNAL_AUTOPLAY: {
         struct desk_autoplay *a=&d->sh.autoplay;
         if (code==DU_KEY_ESC) desk_request_close(d,index);
@@ -2480,7 +2557,10 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
         return 1;
     default:
-        if (code == DU_KEY_ESC || code == DU_KEY_ENTER || code == DU_KEY_SPACE) desk_request_close(d, index);
+        if (code==DU_KEY_ENTER || code==DU_KEY_SPACE) {
+            if (d->v3_dialog_kind) (void)desk_v3_dialog_accept(d);
+            desk_request_close(d,index);
+        } else if (code==DU_KEY_ESC) { d->v3_dialog_kind=0; desk_request_close(d,index); }
         return 1;
     }
 }
@@ -2527,7 +2607,20 @@ int desk_shell_key(struct desktop *d, int code, int value)
         return 1;
     }
     if (value) d->sh.logo_down = 0;
+    if (value==1 && code==0x153 && (d->sh.modifiers&(DU_CTRL|DU_ALT))==(DU_CTRL|DU_ALT)) {
+        desk_v3_revoke(d); desk_v3_pointer_release(d); launch_named(d,"tasks",NULL); d->sh.alt_used=1; return 1;
+    }
     if (d->sh.modifiers & DU_ALT) {
+        if (code==DU_KEY_ENTER && d->focus>=0 && d->clients[d->focus].version==DESK_V3_VERSION) {
+            if (value==1) {
+                struct desk_client *c=&d->clients[d->focus]; struct ciuki_message m;
+                desk_v3_message(&m,DESK_V3_LEASE_EVENT,20,0,c->v3_id,c->v3_generation);
+                desk_put32(m.data+16,0); desk_put32(m.data+20,d->v3_lease_generation ? d->v3_lease_generation : 1);
+                desk_put32(m.data+24,c->info.width); desk_put32(m.data+28,c->info.height); desk_put32(m.data+32,32);
+                desk_v3_revoke(d); desk_queue(d,d->focus,&m);
+            }
+            d->sh.alt_used=1; return 1;
+        }
         if (code==DU_KEY_SPACE) {
             if (value==1 && d->focus>=0) {
                 int i=desk_modal_target(d,d->focus);
@@ -2538,7 +2631,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
             d->sh.alt_used=1; return 1;
         }
         if (code == DU_KEY_TAB) {
-            if (value) { if (!d->sh.switcher) switcher_start(d, (d->sh.modifiers & DU_SHIFT) != 0); else switcher_step(d, (d->sh.modifiers & DU_SHIFT) != 0); }
+            if (value) { desk_v3_revoke(d); desk_v3_pointer_release(d); if (!d->sh.switcher) switcher_start(d, (d->sh.modifiers & DU_SHIFT) != 0); else switcher_step(d, (d->sh.modifiers & DU_SHIFT) != 0); }
             d->sh.alt_used = 1;
             return 1;
         }
@@ -2745,4 +2838,31 @@ int desk_shell_wallpaper_update(struct desktop *d)
     d->sh.image_failed = r < 0;
     damage_all(d);
     return r;
+}
+
+void desk_links_refresh(struct desktop *d)
+{
+    if (!d->v3_links_list || d->now_ns<d->v3_links_next) return;
+    d->v3_links_next=d->now_ns+2000000000ull;
+    if (!d->v3_links) d->v3_links=calloc(DESK_LINKS,sizeof(*d->v3_links));
+    if (!d->v3_links) return;
+    int n=d->v3_links_list(d,d->v3_links,DESK_LINKS);
+    if (n==-EAGAIN) return;
+    d->v3_link_count=n>0 && n<=(int)DESK_LINKS ? (unsigned)n : 0;
+    /* Rebuild the native folder icons first, then append validated link icons. */
+    icons_build(d);
+    for (unsigned k=0;k<d->v3_link_count;k++) if (d->v3_links[k].desktop && desk_launch_valid(&d->v3_links[k].launch)) {
+        char index[12]; snprintf(index,sizeof(index),"%u",k);
+        icon_add(d,d->v3_links[k].launch.label,"",index,"application-x-executable",SH_ACT_WIN32_LINK,0);
+    }
+    icons_layout(d);
+}
+int desk_link_launch(struct desktop *d, unsigned index)
+{
+    if (index>=d->v3_link_count || !d->v3_link_read || !d->v3_launch) return -ENOENT;
+    struct desk_launch_record *record=malloc(sizeof(*record)); if (!record) return -ENOMEM;
+    int result=d->v3_link_read(d,d->v3_links[index].source,record);
+    if (!result && !desk_launch_valid(record)) result=-EINVAL;
+    if (!result) result=d->v3_launch(d,record);
+    free(record); return result;
 }

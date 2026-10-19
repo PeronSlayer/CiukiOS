@@ -8,6 +8,7 @@
 #include "../libdeskui/deskui.h"
 #include "../libdeskui/textarea.h"
 #include "../desktop/settings.h"
+#include "../desktop/shell_link.h"
 #include "../desktop/sounds.h"
 #include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
@@ -58,6 +59,10 @@ struct cp_host {
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
+    /* f5-07A RPC adapter; enumerate HKLM and HKCU Uninstall, never open hives.
+     * Run re-resolves the selected key and command at the service. */
+    int (*uninstall_list)(void *, struct desk_uninstall_entry *, unsigned);
+    int (*uninstall_run)(void *, const char *key);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -66,6 +71,9 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct desk_uninstall_entry uninstall[DESK_UNINSTALL_MAX];
+    struct du_item uninstall_items[DESK_UNINSTALL_MAX];
+    unsigned uninstall_count, uninstall_selected;
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;

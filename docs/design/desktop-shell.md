@@ -220,3 +220,173 @@ hits above and below the bar, menu/keyboard activation, notification input
 priority on a narrow screen, shadow damage, copy exclusions and exact
 incremental/full-frame parity. Host qualification also retains the
 no-allocation-after-first-frame and DOS transition checks.
+
+## F5-09 desktop protocol v3 (2026-10-19)
+
+Research before implementation: Microsoft's [Shell Links](https://learn.microsoft.com/en-us/windows/win32/shell/links)
+requires retaining target, arguments, working directory, icon/index and show
+state; [Uninstall registry key](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)
+identifies DisplayName and UninstallString. [SetCapture](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcapture)
+limits capture to a foreground window, while id's original
+[Quake II input](https://raw.githubusercontent.com/id-Software/Quake-2/master/win32/in_win.c)
+uses capture, clipping and repeated recentering. Preserve raw input deltas before
+pointer acceleration, clipping or coordinate conversion. Microsoft's
+[SetCooperativeLevel](https://learn.microsoft.com/en-us/windows/win32/api/ddraw/nf-ddraw-idirectdraw7-setcooperativelevel)
+requires foreground exclusive ownership; [ExitWindowsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-exitwindowsex)
+and [EXCEPTION_RECORD](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-exception_record)
+supply restart flags and exception code/address semantics. These modern API pages
+are behavioral references, not evidence of executing Windows 98 binaries.
+
+Repository comparison: v2.1 has one window per channel, XRGB8888 surfaces and
+ASCII captions. The kernel already supplies raw motion counts. The checked-out
+ABI has neither f5-08 delegated presenter calls nor f5-07A Win32 registry RPC.
+V3 keeps native clients unchanged, uses the existing XRGB8888 surface contract,
+and exposes explicit failing integration callbacks for those pending services.
+It does not invent syscall numbers or read another service's hive files.
+
+V3 is opt-in (header major 3, minor/reserved zero). The 16-byte envelope is
+`u8 major, opcode, 0, 0; u32 request, window, generation`, little endian.
+The transport has a PID authenticated by channel sender metadata. Its zero
+window/generation addresses HELLO only. Every visible window has its own
+nonzero client id and strictly increasing generation. Owners belong to that
+same transport; their lifetime and activation never confer authority over a
+native PID. Surface replacement is atomic and acknowledged before releasing
+its old mapping. Backpressure never blocks the shell; exhausting the v3 reply
+queue disconnects the transport and all its windows rather than losing a
+lifecycle acknowledgement. See protocol.h for payloads and bounds.
+
+Shell links use the documented CiukiOS binary `CIUKLNK3` format, with counted
+UTF-8 fields, bounded at 4096 bytes. It retains all six ShellLink properties;
+f5-15's IShellLink writer must use this format. Native shell launch records
+carry separate target, arguments and working directory: never interpolate them
+into a shell command or truncate them to v2's single 160-byte argument.
+A stale/invalid record fails closed. Registry enumeration and launch use an
+RPC adapter, not a second hive writer. Runtime qualification and connecting
+the parallel f5-07A/f5-08 adapters remain lead integration work.
+
+The f2-84/f2-85 worker and close-deferral reports were also checked against
+this implementation. Shortcut discovery, stale-link reads and launch RPCs run
+on a persistent sleeping worker. The UI uses try-lock snapshots and a bounded
+single launch mailbox; it never waits for that worker's disk/RPC operations.
+There are at most 64 cached links (32 initial Programs slots, remaining slots
+for Desktop), 128 scanned directory entries per root and three directory levels
+under Programs. The Start menu shows eight shortcuts plus the native Programs
+folder view, which provides keyboard scrolling for the complete cached list.
+Labels are sorted; activation reads the link again on the worker. No temporary
+file, command interpreter or v2 single-argument conversion is used.
+
+`apps/libdeskui/v3.h` is the f5-10/f5-19 user-mode handoff. `du3_request` validates
+outgoing payloads and returns a request token; `du3_next` validates server events.
+A PING requires an explicit `du3_ui_progress` after the guest UI makes progress;
+a transport thread must not reply for a frozen guest task. Native toolkit
+windows still use their existing implementation and wire versions.
+
+V3 wire rules, relative to the 16-byte envelope above:
+
+| Message | Payload | Direction and attachment |
+| --- | --- | --- |
+| HELLO | empty; request/window/generation all zero | client; no fd |
+| CREATE_WINDOW | style, owner id/generation, physical x/y, logical w/h, scale, title byte count + UTF-8 | client; one XRGB8888 surface fd |
+| DAMAGE | logical source x/y/w/h | client; no fd |
+| RESIZE (64) | logical w/h, configure serial | client; one replacement surface fd |
+| PLACE (65) | physical x/y, logical w/h, scale, show (normal/minimized/hidden), style | client; no fd |
+| SET_TITLE | count + UTF-8 | client; no fd |
+| SET_CURSOR | shape, custom id (0 builtin, 1–4 cached), signed ShowCursor count | client; no fd |
+| CURSOR_BITMAP (66) | id, hotspot x/y | client; one 32×32 surface, ARGB in the source pixels |
+| POINTER (67) | capture/clip/relative/hidden flags, logical client clip x/y/w/h | client; no fd |
+| WARP (68) | signed logical client x/y | focused process only; no synthetic raw motion |
+| LEASE (69) | request/release, logical w/h, depth | focused window; no fd |
+| RESULT (70) | request opcode, signed negative errno or zero | server; envelope request matches client token |
+| ACTIVATE (71) | keyboard focus, application activation | server event, or client activation request |
+| LEASE_EVENT (72) | state, lease generation, logical w/h/depth | server; 0 toggle request, 1 active, 3 revoked |
+| RELATIVE_EVENT (73) | original 40-byte input record | server; raw kernel counts before acceleration/clipping |
+| CRASH (74) | exception code, address, module byte count + UTF-8 | client; authenticated sender PID only |
+| RESTART (75) | ExitWindowsEx flags | client; confirmation before service callback |
+| POINTER_STATE (76) | current pointer flags (zero releases capture/clip) | server |
+| CONFIGURE | logical w/h, scale, serial, physical client x/y, show, style | server |
+| KEY/MOTION/BUTTON | 40-byte input record | server; ordinary motion uses logical client coordinates |
+| PING/PONG | UI-progress token | either direction |
+| CLOSE / CLOSE_REQUEST / CLOSED | empty | client / server / server |
+
+All scalars are 32-bit little-endian, including signed two's-complement fields;
+input timestamps keep their existing low/high halves. Reserved header bytes,
+trailing bytes, descriptor slots and message reserved fields must be zero.
+Dimensions are 1–2048 logical pixels; scale is 1–3; position is bounded to
+±8192 physical pixels. Native surface allocation/stride limits remain in force.
+Window ids are client-local 1–16, with nonzero generations increasing without
+wrap or reuse within a transport. The existing 16 desktop slots include transport
+anchors, so a single v3 transport can own at most 15 simultaneous windows.
+This bounded capacity is not a claim of unrestricted Win32 window counts.
+
+Creation queues CONFIGURE, RESULT and activation in that order. PLACE queues a
+new CONFIGURE before its RESULT. RESIZE accepts only the latest nonzero serial,
+queues RESULT before releasing the old server mapping/fd, and rejects duplicate
+or superseded commits with ENOENT. The client keeps its old backing until RESULT.
+An owner must already exist on the same transport; the immutable relationship
+cannot form a cycle. Topmost windows stay above ordinary windows; owned windows
+stay above their owner, and internal system dialogs stay above both groups.
+Only modal owned windows redirect activation. Tool/owned/hidden windows do not
+get their own task button or Alt+Tab entry. Overlapped windows use the existing
+interactive resize path; popups have no frame, shadow or caption hit targets.
+
+The lease callback is a transaction boundary. Mode choice prefers an exact
+listed geometry/depth, then an integer multiple at 16/32 bpp, then the smallest
+suitable listed mode. Failed acquisition leaves desktop presentation enabled.
+Revocation precedes focus loss, menus, modal dialogs, hot keys or disconnect;
+failed revocation keeps composition paused and is retried. Reacquisition uses a
+new generation and the retained logical mode. The kernel adapter must guarantee
+synchronous cancellation and mode restoration, including holder death. The
+checked-out ABI cannot supply that adapter yet: no working exclusive scanout,
+mode switch or two-second hardware recovery is claimed here.
+
+The native adapter symbols are `ciuki_win32_presenter_lease`,
+`ciuki_win32_shell_launch`, `ciuki_win32_shell_restart`,
+`ciuki_win32_uninstall_list` and `ciuki_win32_uninstall_run`.
+Their weak default implementations return ENOSYS, rather than successful fake
+results. f5-07A supplies authorized HKLM/HKCU enumeration and selected-key launch;
+f5-07B/f5-15 supply session shutdown, hive commit, WININIT and RunOnce restart
+processing. The Control Panel never edits hives or expands UninstallString into
+a shell command. The bounded command decoder preserves the argument tail and
+requires an explicit absolute executable path; ambiguous unquoted paths fail.
+
+Final compatibility checks used Microsoft's optional `lpWindowName` in
+[CreateWindowEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowexw)
+and the [surface damage coordinate distinction](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_surface).
+V3 accepts empty captions as well as valid UTF-8 captions up to 63 bytes; native
+caption constraints remain unchanged. During an outstanding resize, source
+DAMAGE is mapped outwards through the retained backing's actual stretch ratio.
+The host test compares the incremental result with a complete redraw.
+
+V3 CLOSE_ACK carries one disposition word (0 decline, 1 defer), scoped to its
+window. A frame-close request does not start the native process-wide timeout:
+closing one top-level window cannot terminate its siblings. Explicit End Task
+uses the authenticated host PID and the existing termination authority, and
+works independently of guest UI progress. Legacy Task Manager window lists
+retain their v2 ASCII schema; only non-ASCII code points are replaced by `?`
+in that legacy view, while v3 captions remain intact. Empty captions use
+`Windows program` there. Lease release is idempotent, regrant notification
+precedes activation, and applying a clip immediately confines the current
+pointer without manufacturing a raw motion event.
+
+Native adapter signatures (strong definitions replace the failing defaults):
+
+```c
+int ciuki_win32_presenter_lease(uint32_t pid, int acquire, int hardware_mode,
+    uint32_t logical_w, uint32_t logical_h, uint32_t bpp, uint32_t generation);
+int ciuki_win32_shell_launch(const struct desk_launch_record *record);
+int ciuki_win32_shell_restart(uint32_t requesting_pid, uint32_t flags);
+int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned capacity);
+int ciuki_win32_uninstall_run(const char *key);
+```
+
+Presenter success is zero; failure is negative errno and must leave the previous
+lease/mode intact. For release, hardware_mode is zero and the generation/owner
+still identify the revoked lease, including after a channel disconnect.
+Launch returns zero or a positive accepted PID on success, negative errno on
+failure. Restart and uninstall_run return zero on success, negative errno on
+failure. The listing returns a count up to capacity, or negative errno;
+keys identify HKLM/HKCU entries, not an executable string supplied by the UI.
+The service must re-resolve and authorize the key before starting its command.
+Shell launches run on the sleeping worker; the UI sees only queued acceptance
+and a later failure dialog. Restart confirmation is UI-only; its adapter owns
+the separate service transaction and must not perform a machine reboot.
