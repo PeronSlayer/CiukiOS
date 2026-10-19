@@ -1,5 +1,41 @@
 # Desktop shell bars and protruding Start orb (f2-82)
 
+## Files worker transfers (f2-84)
+
+Research checked before implementation on 2026-10-19:
+
+- [POSIX read](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html)
+  and [write](https://pubs.opengroup.org/onlinepubs/9799919799/functions/write.html)
+  permit short transfers and EINTR before transferring data. Keep short-I/O
+  positions, and sleep at least 1 ms before retrying interrupted transfer I/O.
+- [POSIX condition waits](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cond_wait.html)
+  atomically release the mutex while sleeping and require a predicate loop.
+  The transfer worker owns its job; the UI only reads a locked snapshot and
+  sends answers/cancellation. No VFS operation holds the mailbox mutex.
+- [Microsoft progress guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/progress-bars)
+  recommends real determinate progress, meaningful file details, cancellation,
+  and delaying remaining-time estimates until enough samples exist. Count
+  bytes/items on the worker before mutation, poll at 100 ms, show elapsed time,
+  and estimate rate/remaining time after two seconds. Delete uses item counts.
+- [QEMU request-rate throttling](https://www.qemu.org/docs/master/system/invocation.html)
+  supplies a host-side slow-device mechanism. The existing runner exposes
+  `throttle_iops` on a USB fixture; qualification remains the lead's QEMU work.
+
+Repository comparison: Files ran 24 synchronous 16 KiB steps per 2 ms UI
+turn, reported only selected roots, and redrew its whole client on every
+progress update. Use a dedicated persistent pthread, 64 KiB chunks (128
+512-byte sectors, matching the directive's f1-81 bulk-command number), a
+cheap metadata listing pass without ELF sniffing, and clipped dialog-only
+repaints. Preserve the temporary-file/fsync/atomic-rename publication path.
+The desktop folder also uses this shared model on its UI thread; keep its
+16 KiB default and select 64 KiB explicitly in the Files worker.
+
+The existing shell starts an unconditional two-second termination deadline
+when it sends a window close request (`apps/desktop/client.c`). Files can
+confirm and defer its own close, but cannot suspend that shell deadline from
+within its authorized scope. Shell-close confirmation therefore still needs
+lead integration of a close-veto/defer protocol; do not claim it is qualified.
+
 ## Bar surface quality (f2-83)
 
 Primary-source research checked on 2026-10-19 before implementation:

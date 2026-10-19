@@ -184,12 +184,25 @@ int main(void)
     /* Recursive copy with short I/O; metadata adapter called per item. */
     struct fm_job j; char *system[] = {"/system"}, *file[] = {"/system/readme.txt"};
     fixture(); fake_short_io = 1;
-    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/Documents")); finish(&j);
+    assert(!fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/Documents"));
+    while (j.counting && j.state==FM_RUNNING) fm_job_step(&j);
+    assert(j.total_bytes==33018 && j.total_items==5 && !j.bytes && !j.items_done);
+    assert(!fake_reads.calls && fake_lookup("/Documents/system")<0);
+    finish(&j);
+    assert(j.bytes==j.total_bytes && j.items_done==j.total_items);
     assert(j.state == FM_DONE && !j.metadata_warnings && fake_metadata_count == 5 && j.created_count == 1 && !strcmp(j.created[0], "system"));
     same("/system/readme.txt", "/Documents/system/readme.txt"); same("/system/sub/a.txt", "/Documents/system/sub/a.txt");
     fm_job_destroy(&j); fake_assert_clean();
     fixture(); assert(fm_job_start(&j, &fake_vfs, FM_COPY, system, 1, "/system/sub") == -EINVAL);
     char *root[] = {"/"}; assert(fm_job_start(&j, &fake_vfs, FM_DELETE, root, 1, NULL) == -EBUSY);
+
+    /* Same-volume directory rename credits the counted subtree, with no
+     * content reads or per-file durability calls. */
+    fixture(); assert(!fm_job_start(&j,&fake_vfs,FM_MOVE,system,1,"/Documents")); finish(&j);
+    assert(j.state==FM_DONE && j.bytes==33018 && j.total_bytes==33018);
+    assert(j.items_done==5 && j.total_items==5 && !fake_reads.calls);
+    assert(fake_lookup("/system")<0 && fake_lookup("/Documents/system/sub/a.txt")>=0);
+    fm_job_destroy(&j); fake_assert_clean();
 
     /* Cancel mid-copy removes the unfinished copy and keeps the source. */
     fixture(); assert(!fm_job_start(&j, &fake_vfs, FM_COPY, file, 1, "/Documents"));

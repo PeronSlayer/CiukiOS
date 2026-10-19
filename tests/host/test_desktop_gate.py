@@ -387,8 +387,8 @@ void klog(const char *f,...) {(void)f;}
         files=[c for c in suite['cases'] if c['id'].startswith(('files-','ciuknote-'))] # f2-31/f2-32: app scripts with checkpoint digests
         self.assertEqual({c['profile'] for c in normal},{'qemu-t23','qemu-e500','qemu-min128','qemu-desktop-1998','qemu-desktop-2002'})
         self.assertEqual({c['profile'] for c in shell},{'qemu-t23','qemu-e500'})
-        self.assertEqual([c['profile'] for c in files],['qemu-t23','qemu-t23'])
-        self.assertEqual(len(suite['cases']),16) # f2-30 two desktop-shell cases, f2-31 files-qemu-t23, f2-33 tasks-qemu-t23, f2-32 ciuknote-qemu-t23
+        self.assertEqual([c['profile'] for c in files],['qemu-t23','qemu-t23','qemu-t23'])
+        self.assertEqual(len(suite['cases']),17) # f2-30 two desktop-shell cases, f2-31 files-qemu-t23, f2-33 tasks-qemu-t23, f2-32 ciuknote-qemu-t23
         shell=shell+files
         for case in suite['cases']:
             native=case in normal or case in shell;server='desktop' if native else 'standin'

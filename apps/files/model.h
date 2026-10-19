@@ -10,7 +10,7 @@
 #define FM_ENTRIES 4096
 #define FM_HISTORY 32
 #define FM_DEPTH 32
-#define FM_CHUNK 16384
+#define FM_CHUNK 65536
 #define FM_CREATED 64
 /* Empty is a virtual location, never a filesystem pathname. */
 #define FM_COMPUTER ""
@@ -19,10 +19,10 @@ enum fm_kind { FM_KIND_FOLDER, FM_KIND_TEXT, FM_KIND_APP, FM_KIND_IMAGE, FM_KIND
 struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; };
 struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
-/* Cheap enumeration metadata (type/size/mtime/ino); SNIFF requests the
- * full stat metadata plus bounded ELF header classification for explicit jobs.
- * Browser listings always use NAMES_ONLY; classification is deferred to open. */
-enum { FM_LIST_NAMES_ONLY = 0, FM_LIST_SNIFF = 1u };
+/* Cheap enumeration metadata (type/size/mtime/ino); METADATA fills missing
+ * portable-host metadata without opening contents. SNIFF also classifies ELF.
+ * Browser listings use NAMES_ONLY; transfer/counting passes use METADATA. */
+enum { FM_LIST_NAMES_ONLY = 0, FM_LIST_SNIFF = 1u, FM_LIST_METADATA = 2u };
 /* Every error is -errno; reads/writes return a positive short count or zero. */
 struct fm_vfs {
     void *ctx;
@@ -58,8 +58,13 @@ struct fm_job {
     char destination[FM_PATH], temporary[FM_PATH]; unsigned serial;
     struct fm_frame frames[FM_DEPTH];
     int input, output, error, cleanup_error, yes_all, cancel, skip_seen, prompt_dir;
-    unsigned used, written; unsigned char buffer[FM_CHUNK];
+    unsigned used, written, chunk; unsigned char buffer[FM_CHUNK];
     uint64_t bytes, files, folders, total_bytes;
+    uint64_t file_bytes;
+    unsigned total_items, items_done;
+    int counting;
+    struct fm_totals { uint64_t bytes; unsigned items; } *totals;
+    struct fm_meta property_meta;
     char created[FM_CREATED][FM_NAME]; unsigned created_count;
 };
 int fm_join(char *, const char *, const char *);

@@ -9,6 +9,10 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdarg.h>
+#ifdef __i386__
+#include <ciuki/raw.h>
+#endif
 
 enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
@@ -17,7 +21,7 @@ enum {
     C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC,
     T_JOB = 1, T_MEDIA, T_BROWSER
 };
@@ -911,34 +915,197 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
 static const char *verb(enum fm_job_kind kind)
 { return kind == FM_COPY ? "copy" : kind == FM_MOVE ? "move" : kind == FM_DELETE ? "delete" : "read"; }
 
+/* Only the worker touches fm_job while running. The mailbox lock protects
+ * snapshots/commands only; it is never held across VFS calls or cleanup. */
+struct transfer_view {
+    enum fm_job_state state;
+    uint64_t bytes, total, file_bytes, file_total, elapsed, rate, files, folders;
+    unsigned items, count;
+    int counting, prompt_dir;
+    struct fm_meta meta, existing;
+    char target[FM_PATH], source[FM_PATH];
+};
+struct files_transfer {
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    pthread_t thread;
+    struct files_app *app;
+    struct transfer_view view;
+    uint64_t samples_started; /* worker-owned, after preflight */
+    uint64_t started_at, progress_logged; /* UI-owned; advance during blocked I/O */
+    int pending, stopping, cancel, answer, finished;
+};
+static uint64_t job_now(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+static void job_record(const char *fmt, ...)
+{
+    int saved = errno; char line[241]; va_list ap;
+    va_start(ap, fmt); int n = vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
+    if (n > 0) {
+        if ((unsigned)n >= sizeof(line)) n = sizeof(line)-1;
+#ifdef __i386__
+        (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line, (uint32_t)n, 0, 0, 0, 0);
+#else
+        fprintf(stderr, "%s\n", line);
+#endif
+    }
+    errno = saved;
+}
+static void transfer_publish(struct files_transfer *w, uint64_t started, int finished)
+{
+    struct fm_job *j = &w->app->job;
+    struct transfer_view v = {.state=j->state, .bytes=j->bytes, .total=j->total_bytes,
+        .elapsed=job_now()-started, .items=j->items_done,
+        .count=j->total_items, .counting=j->counting, .files=j->files, .folders=j->folders};
+    uint64_t sampled=w->samples_started ? job_now()-w->samples_started : 0;
+    if (sampled >= 2000000000ull && !v.counting) v.rate = v.bytes * 1000ull / (sampled / 1000000ull);
+    const char *source = j->sources[0];
+    if (j->depth) {
+        struct fm_frame *f=&j->frames[j->depth-1]; source=f->source;
+        v.file_total=f->meta.size;
+        if (!j->counting && f->meta.type==FM_FILE && (f->phase==1 || f->phase==3)) v.file_bytes=j->file_bytes;
+        v.meta=f->meta; v.existing=f->existing; v.prompt_dir=j->prompt_dir;
+        snprintf(v.target,sizeof(v.target),"%s",f->target);
+    }
+    else if (j->next) source=j->sources[j->next-1];
+    snprintf(v.source, sizeof(v.source), "%s", source);
+    pthread_mutex_lock(&w->lock);
+    w->view = v;
+    w->finished = finished;
+    pthread_mutex_unlock(&w->lock);
+}
+static void *transfer_run(void *arg)
+{
+    struct files_transfer *w = arg;
+    for (;;) {
+        pthread_mutex_lock(&w->lock);
+        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed, &w->lock);
+        if (w->stopping && !w->pending) { pthread_mutex_unlock(&w->lock); break; }
+        w->pending = 0; pthread_mutex_unlock(&w->lock);
+        struct fm_job *j = &w->app->job;
+        uint64_t started=job_now();
+        w->samples_started=0;
+        int announced=0;
+        for (;;) {
+            pthread_mutex_lock(&w->lock);
+            int cancel=w->cancel || w->stopping, answer=w->answer;
+            w->answer=-1;
+            pthread_mutex_unlock(&w->lock);
+            if (cancel) fm_job_cancel(j);
+            else if (answer >= 0) fm_job_answer(j, (enum fm_replace)answer);
+            if (j->state == FM_RUNNING) fm_job_step(j);
+            uint64_t now=job_now();
+            if (!j->counting && !w->samples_started) w->samples_started=now;
+            if (!announced && (!j->counting || j->state != FM_RUNNING)) {
+                if (j->kind != FM_PROPERTIES) job_record("[files] job=%s start items=%u bytes=%llu", verb(j->kind), j->total_items, (unsigned long long)j->total_bytes);
+                announced=1;
+            }
+            transfer_publish(w, started, 0);
+            if (j->state == FM_REPLACE) {
+                pthread_mutex_lock(&w->lock);
+                if (!w->stopping && !w->cancel && w->answer < 0) {
+                    uint64_t paused=job_now();
+                    pthread_cond_wait(&w->changed, &w->lock);
+                    if (w->samples_started) w->samples_started += job_now()-paused;
+                }
+                pthread_mutex_unlock(&w->lock);
+                continue;
+            }
+            if (j->state != FM_RUNNING) break;
+        }
+        if (j->kind != FM_PROPERTIES) {
+            uint64_t ms=(job_now()-started)/1000000ull;
+            if (j->state == FM_CANCELLED) job_record("[files] job=%s cancel", verb(j->kind));
+            job_record("[files] job=%s done ms=%u bytes=%llu rate_kbs=%u errors=%u", verb(j->kind),
+                (unsigned)ms, (unsigned long long)j->bytes, (unsigned)(ms ? j->bytes*1000/(ms*1024) : 0), j->error ? 1u : 0u);
+        }
+        /* Publish terminal ownership only after the last job access. */
+        transfer_publish(w, started, 1);
+    }
+    return NULL;
+}
+static int transfer_start(struct files_app *a)
+{
+    if (a->transfer) return 0;
+    struct files_transfer *w=calloc(1,sizeof(*w));
+    if (!w) return -ENOMEM;
+    w->app=a; w->answer=-1;
+    int e=pthread_mutex_init(&w->lock,NULL);
+    if (e) { free(w); return -e; }
+    e=pthread_cond_init(&w->changed,NULL);
+    if (e) { pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    e=pthread_create(&w->thread,NULL,transfer_run,w);
+    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    a->transfer=w; return 0;
+}
+static void transfer_command(struct files_app *a, int cancel, int answer)
+{
+    struct files_transfer *w=a->transfer;
+    if (!w || !a->job_active) return;
+    pthread_mutex_lock(&w->lock);
+    if (cancel) w->cancel=1;
+    if (answer >= 0) w->answer=answer;
+    if (cancel || answer >= 0) w->view.state=FM_RUNNING;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+}
+static void transfer_stop(struct files_app *a)
+{
+    struct files_transfer *w=a->transfer;
+    if (!w) return;
+    pthread_mutex_lock(&w->lock); w->stopping=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread,NULL);
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    free(w); a->transfer=NULL;
+}
 static void progress(struct files_app *a)
 {
-    struct fm_job *j = &a->job;
-    const char *source = j->depth ? j->frames[j->depth - 1].source : j->next ? j->sources[j->next - 1] : j->sources[0];
-    char parent[FM_PATH], text[DU_DIALOG_TEXT];
-    fm_parent(parent, source);
-    if (j->kind == FM_PROPERTIES) snprintf(text, sizeof(text), "Counting: %.200s\n%llu files, %llu folders", fm_basename(source),
-                                           (unsigned long long)j->files, (unsigned long long)j->folders);
-    else if (j->kind == FM_DELETE) snprintf(text, sizeof(text), "Deleting: %.200s\nFrom: %.300s", fm_basename(source), parent);
-    else snprintf(text, sizeof(text), "%s: %.200s\nFrom: %.300s\nTo: %.300s", j->kind == FM_COPY ? "Copying" : "Moving",
-                  fm_basename(source), parent, j->destination);
-    const char *title = j->kind == FM_COPY ? "Copying..." : j->kind == FM_MOVE ? "Moving..." : j->kind == FM_DELETE ? "Deleting..." : "Properties";
-    du_progress(a->ui, D_PROGRESS, title, text, j->completed, j->count);
+    struct files_transfer *w=a->transfer; struct transfer_view v;
+    if (!w || pthread_mutex_trylock(&w->lock)) return;
+    v=w->view; pthread_mutex_unlock(&w->lock);
+    v.elapsed=job_now()-w->started_at;
+    enum fm_job_kind kind=a->job.kind; /* immutable until the job is retired */
+    char name[201], text[DU_DIALOG_TEXT];
+    snprintf(name,sizeof(name),"%.200s",fm_basename(v.source));
+    fm_parent(v.source,v.source); fm_display_path(v.source,v.source);
+    snprintf(v.target,sizeof(v.target),"%s",a->job.destination);
+    fm_display_path(v.target,v.target);
+    const char *title=kind==FM_COPY ? "Copying..." : kind==FM_MOVE ? "Moving..." : kind==FM_DELETE ? "Deleting..." : "Properties";
+    unsigned percent=v.total ? (unsigned)((v.bytes > v.total ? v.total : v.bytes)*100/v.total) : 0;
+    if (percent==100 && v.state!=FM_DONE) percent=99;
+    if (kind==FM_PROPERTIES) snprintf(text,sizeof(text),"Counting: %.200s\n%llu files, %llu folders",name,(unsigned long long)v.files,(unsigned long long)v.folders);
+    else if (kind==FM_DELETE) snprintf(text,sizeof(text),"%s: %.70s\nFrom: %.70s\nItems: %u of %u\nElapsed: %llu s",v.counting ? "Counting" : "Deleting",name,v.source,v.items,v.count,(unsigned long long)(v.elapsed/1000000000ull));
+    else {
+        char rate[100]="Rate: calculating...   Remaining: calculating...";
+        if (v.rate) snprintf(rate,sizeof(rate),"Rate: %llu KB/s   Remaining: %llu s",(unsigned long long)(v.rate/1024),(unsigned long long)((v.total>v.bytes ? v.total-v.bytes : 0)/v.rate));
+        snprintf(text,sizeof(text),"%s: %.65s\nFrom: %.65s\nTo: %.65s\nBytes: %llu of %llu (%u%%)\nFile: %llu of %llu bytes\nItems: %u of %u   Elapsed: %llu s\n%s",v.counting ? "Counting" : kind==FM_COPY ? "Copying" : "Moving",name,v.source,v.target,(unsigned long long)v.bytes,(unsigned long long)v.total,percent,(unsigned long long)v.file_bytes,(unsigned long long)v.file_total,v.items,v.count,(unsigned long long)(v.elapsed/1000000000ull),rate);
+    }
+    unsigned value=kind==FM_DELETE ? v.items : percent, total=kind==FM_DELETE ? v.count : 100;
+    du_progress(a->ui,D_PROGRESS,title,text,value,total);
 }
-
 static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
     if (a->job_active || a->loading) return -EBUSY;
+    int r=transfer_start(a);
+    if (r) { error_box(a,"Files","Cannot start the file worker:",r); return r; }
     fm_job_destroy(&a->job);
-    int r = fm_job_start(&a->job, &a->model.fs, kind, paths, n, destination);
-    if (r) {
-        char what[160]; snprintf(what, sizeof(what), "Cannot %s the selected items:", verb(kind));
-        error_box(a, "Files", what, r);
-        return r;
-    }
-    a->job_active = 1;
-    du_timer_start(a->ui, T_JOB, 2000000u, 1);
+    r=fm_job_start(&a->job,&a->model.fs,kind,paths,n,destination);
+    if (r) { error_box(a,"Files","Cannot start the selected operation:",r); return r; }
+    a->job.chunk=FM_CHUNK;
+    struct files_transfer *w=a->transfer;
+    pthread_mutex_lock(&w->lock);
+    w->view=(struct transfer_view){.state=FM_RUNNING,.counting=a->job.counting};
+    snprintf(w->view.source,sizeof(w->view.source),"%s",paths[0]);
+    w->finished=w->cancel=0; w->answer=-1; w->started_at=w->progress_logged=job_now();
+    a->job_active=1;
+    pthread_mutex_unlock(&w->lock);
+    du_timer_start(a->ui,T_JOB,100000000u,1);
     progress(a);
+    pthread_mutex_lock(&w->lock); w->pending=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
     return 0;
 }
 
@@ -946,9 +1113,8 @@ static void properties_dialog(struct files_app *a)
 {
     struct fm_job *j = &a->job;
     char text[DU_DIALOG_TEXT], size[48], g[32], contains[96] = "", type[48], when[24] = "", parent[FM_PATH];
-    struct fm_meta meta = {0};
+    struct fm_meta meta = j->property_meta;
     const char *path = j->sources[0];
-    a->model.fs.stat_path(a->model.fs.ctx, path, &meta);
     files_size_text(size, sizeof(size), j->bytes); group(g, sizeof(g), j->bytes);
     fm_parent(parent, path);
     if (j->count == 1 && fm_drive_root(path)) strcpy(parent, path);
@@ -1011,34 +1177,43 @@ static void job_finished(struct files_app *a)
 
 static void replace_prompt(struct files_app *a)
 {
-    struct fm_job *j = &a->job;
-    struct fm_frame *f = &j->frames[j->depth - 1];
+    struct transfer_view v;
+    pthread_mutex_lock(&a->transfer->lock); v=a->transfer->view; pthread_mutex_unlock(&a->transfer->lock);
     char text[DU_DIALOG_TEXT], a1[48], a2[48], t1[24], t2[24];
-    const char *name = fm_basename(f->target);
-    if (j->prompt_dir)
+    const char *name = fm_basename(v.target);
+    if (v.prompt_dir)
         snprintf(text, sizeof(text), "This folder already contains a folder named '%.120s'.\n\n"
                  "If files in the existing folder have the same names as files in\n"
                  "the folder you are copying, you will be asked before each one\n"
                  "is replaced. Do you still want to copy or move the folder?", name);
     else {
-        files_size_text(a1, sizeof(a1), f->existing.size); files_size_text(a2, sizeof(a2), f->meta.size);
-        time_text(t1, sizeof(t1), f->existing.modified); time_text(t2, sizeof(t2), f->meta.modified);
+        files_size_text(a1, sizeof(a1), v.existing.size); files_size_text(a2, sizeof(a2), v.meta.size);
+        time_text(t1, sizeof(t1), v.existing.modified); time_text(t2, sizeof(t2), v.meta.modified);
         snprintf(text, sizeof(text), "This folder already contains a file named '%.120s'.\n\n"
                  "Would you like to replace the existing file\n\t%s, modified %s\n\nwith this one?\n\t%s, modified %s",
                  name, a1, t1[0] ? t1 : "-", a2, t2[0] ? t2 : "-");
     }
-    du_message(a->ui, D_REPLACE, j->prompt_dir ? "Confirm Folder Replace" : "Confirm File Replace", text,
+    du_message(a->ui, D_REPLACE, v.prompt_dir ? "Confirm Folder Replace" : "Confirm File Replace", text,
                DU_DLG_ICON_QUESTION, replace_buttons, 4, 0, 3);
 }
 
 static void job_tick(struct files_app *a)
 {
     if (!a->job_active) return;
-    struct fm_job *j = &a->job;
-    for (unsigned n = 0; n < 24 && j->state == FM_RUNNING; n++) fm_job_step(j);
-    if (j->state == FM_REPLACE) { if (du_dialog_id(a->ui) != D_REPLACE) replace_prompt(a); return; }
-    if (j->state == FM_RUNNING) { progress(a); return; }
-    job_finished(a);
+    struct files_transfer *w=a->transfer;
+    if (pthread_mutex_trylock(&w->lock)) return;
+    enum fm_job_state state=w->view.state; int finished=w->finished;
+    uint64_t bytes=w->view.bytes; unsigned items=w->view.items;
+    pthread_mutex_unlock(&w->lock);
+    uint64_t now=job_now();
+    if (!finished && a->job.kind!=FM_PROPERTIES && now-w->progress_logged>=5000000000ull) {
+        job_record("[files] job=%s progress items=%u bytes=%llu",verb(a->job.kind),items,(unsigned long long)bytes);
+        w->progress_logged=now;
+    }
+    if (du_dialog_id(a->ui)==D_CANCEL_JOB) return;
+    if (finished) { job_finished(a); return; }
+    if (state==FM_REPLACE) { if (du_dialog_id(a->ui)!=D_REPLACE) replace_prompt(a); return; }
+    progress(a);
 }
 
 /* ---- commands ---- */
@@ -1308,22 +1483,25 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
     switch (e->id) {
     case D_DELETE: if (e->index == 0) run_selection_job(a, FM_DELETE); break;
     case D_REPLACE:
-        fm_job_answer(&a->job, e->index == 0 ? FM_YES : e->index == 1 ? FM_YES_ALL : e->index == 2 ? FM_NO : FM_CANCEL);
+        transfer_command(a, 0, e->index == 0 ? FM_YES : e->index == 1 ? FM_YES_ALL : e->index == 2 ? FM_NO : FM_CANCEL);
         if (a->job_active) progress(a);
         break;
-    case D_PROGRESS: fm_job_cancel(&a->job); if (a->job_active) progress(a); break;
+    case D_PROGRESS: transfer_command(a, 1, -1); if (a->job_active) progress(a); break;
+    case D_CANCEL_JOB:
+        if (e->index==0) { a->close_pending=1; transfer_command(a,1,-1); }
+        if (a->job_active) job_tick(a);
+        break;
     default: break;
     }
 }
 
-/* The shell terminates a client two seconds after its close request, so a
- * confirmation could not be answered: cancel the job (its cleanup removes
- * the unfinished copy, never a source) and close once it has stopped. */
+/* Defers Files' own close until confirmation and worker cleanup. The shell's
+ * independent forced-close deadline still requires a protocol extension. */
 int files_close_request(struct files_app *a)
 {
     if (!a->job_active) return 1;
-    a->close_pending = 1;
-    fm_job_cancel(&a->job);
+    if (du_dialog_id(a->ui)!=D_CANCEL_JOB && !a->close_pending)
+        du_message(a->ui,D_CANCEL_JOB,"Cancel Operation?","Cancel the current operation and close Files?",DU_DLG_ICON_QUESTION,yes_no,2,1,1);
     return 0;
 }
 
@@ -1519,7 +1697,8 @@ void files_destroy(struct files_app *a)
     du_timer_stop(a->ui,T_MEDIA);
     du_timer_stop(a->ui,T_BROWSER);
     scan_stop(a);
-    if (a->job_active) { fm_job_cancel(&a->job); fm_job_step(&a->job); }
+    du_timer_stop(a->ui,T_JOB);
+    transfer_stop(a);
     fm_job_destroy(&a->job);
     fm_destroy(&a->model);
     free(a->rows); free(a->texts); free(a->tree); free(a->tree_items);

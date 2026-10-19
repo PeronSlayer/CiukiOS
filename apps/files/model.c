@@ -1,3 +1,6 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 /* SPDX-License-Identifier: MIT
  * Files model. Paths are absolute POSIX paths; FAT names compare without case. */
 #include "model.h"
@@ -5,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int compare(const char *a, const char *b)
@@ -219,7 +223,7 @@ static int collect(const char *name, const struct fm_meta *meta, void *ctx)
 static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 {
     memset(l, 0, sizeof(*l));
-    int r = fs->list(fs->ctx, path, FM_LIST_SNIFF, collect, l);
+    int r = fs->list(fs->ctx, path, FM_LIST_METADATA, collect, l);
     if (r) { free(l->entries); memset(l, 0, sizeof(*l)); }
     return r;
 }
@@ -573,6 +577,7 @@ static void pop(struct fm_job *j)
     if (j->depth == 1 && (j->kind == FM_COPY || j->kind == FM_MOVE) && j->created_count < FM_CREATED && f->target[0])
         snprintf(j->created[j->created_count++], FM_NAME, "%s", fm_basename(f->target));
     free_frame(&j->frames[--j->depth]);
+    j->items_done++;
     if (!j->depth) j->completed++;
 }
 static int push(struct fm_job *j, const char *source, const char *target)
@@ -587,11 +592,16 @@ static int push(struct fm_job *j, const char *source, const char *target)
 int fm_job_start(struct fm_job *j, const struct fm_vfs *fs, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
     memset(j, 0, sizeof(*j)); j->input = j->output = -1; j->fs = *fs; j->kind = kind;
+    /* The desktop folder still advances jobs on its UI thread. Preserve its
+     * former step bound; Files explicitly selects the worker-sized chunk. */
+    j->chunk = 16384;
     if (!n || n > FM_ENTRIES) return -EINVAL;
     if ((kind == FM_COPY || kind == FM_MOVE) && (!destination || strlen(destination) >= FM_PATH)) return -EINVAL;
     if (destination) strcpy(j->destination, destination);
     j->sources = calloc(n, sizeof(*j->sources));
     if (!j->sources) return -ENOMEM;
+    j->totals = calloc(n, sizeof(*j->totals));
+    if (!j->totals) { fm_job_destroy(j); return -ENOMEM; }
     j->count = n;
     for (unsigned i = 0; i < n; i++) {
         if (paths[i][0] != '/' || strlen(paths[i]) >= FM_PATH) { fm_job_destroy(j); return -EINVAL; }
@@ -602,6 +612,7 @@ int fm_job_start(struct fm_job *j, const struct fm_vfs *fs, enum fm_job_kind kin
         if ((kind == FM_COPY || kind == FM_MOVE) && fm_beneath(destination, paths[i])) { fm_job_destroy(j); return -EINVAL; }
         if (!strcmp(paths[i], "/") && kind != FM_PROPERTIES) { fm_job_destroy(j); return -EBUSY; }
     }
+    j->counting = kind != FM_PROPERTIES;
     j->state = FM_RUNNING;
     return 0;
 }
@@ -628,7 +639,7 @@ static int begin_file(struct fm_job *j, struct fm_frame *f)
         if (r != -EEXIST) return r;
     }
     if (j->output < 0) return -EEXIST;
-    j->used = j->written = 0; f->phase = 1;
+    j->used = j->written = 0; j->file_bytes = 0; f->phase = 1;
     return 0;
 }
 
@@ -649,6 +660,51 @@ static int copy_name(struct fm_job *j, const char *source, char *target)
     return -EEXIST;
 }
 
+/* Count using directory metadata, never opening/sniffing file contents.
+ * The same bounded stack is reused by the mutation pass. */
+static int count_step(struct fm_job *j)
+{
+    if (!j->depth) {
+        if (j->next == j->count) { j->next = 0; j->counting = 0; return 1; }
+        int r = push(j, j->sources[j->next++], NULL);
+        if (r) return fail(j, r);
+    }
+    struct fm_frame *f = &j->frames[j->depth-1];
+    struct fm_totals *t = &j->totals[j->next-1];
+    if (!f->phase) {
+        if (j->depth == 1) {
+            int r = j->fs.stat_path(j->fs.ctx, f->source, &f->meta);
+            if (r) return fail(j, r);
+        }
+        if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
+        j->total_items++; t->items++;
+        if (f->meta.type == FM_FILE) {
+            j->total_bytes += f->meta.size; t->bytes += f->meta.size;
+            free_frame(&j->frames[--j->depth]); return 1;
+        }
+        struct listing l = {0};
+        int r = j->fs.list(j->fs.ctx, f->source, FM_LIST_METADATA, collect, &l);
+        if (r) { free(l.entries); return fail(j, r); }
+        f->entries = l.entries; f->count = l.count; f->phase = 2;
+        return 1;
+    }
+    if (f->next < f->count) {
+        struct fm_entry *e = &f->entries[f->next++]; char source[FM_PATH];
+        int r = fm_join(source, f->source, e->name);
+        if (!r) r = push(j, source, NULL);
+        if (r) return fail(j, r);
+        j->frames[j->depth-1].meta = e->meta;
+    } else free_frame(&j->frames[--j->depth]);
+    return 1;
+}
+
+static int interrupted(void)
+{
+    struct timespec delay = {.tv_sec=0, .tv_nsec=1000000};
+    while (nanosleep(&delay, &delay) && errno == EINTR) {}
+    return 1;
+}
+
 int fm_job_step(struct fm_job *j)
 {
     if (j->state != FM_RUNNING) return 0;
@@ -658,6 +714,7 @@ int fm_job_step(struct fm_job *j)
         if (r) j->error = -r;
         return r;
     }
+    if (j->counting) return count_step(j);
     if (!j->depth) {
         if (j->next == j->count) { j->state = FM_DONE; return 0; }
         const char *source = j->sources[j->next++];
@@ -665,7 +722,7 @@ int fm_job_step(struct fm_job *j)
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
             r = fm_join(target, j->destination, fm_basename(source));
             if (!r && fm_same_path(target, source)) {
-                if (j->kind == FM_MOVE) { j->completed++; return 1; }
+                if (j->kind == FM_MOVE) { j->completed++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items; return 1; }
                 r = copy_name(j, source, target);
             }
         }
@@ -679,6 +736,7 @@ int fm_job_step(struct fm_job *j)
         if (r) return fail(j, r);
         if (f->meta.type == FM_OTHER) return fail(j, -ENOTSUP);
         if (j->kind == FM_PROPERTIES) {
+            if (j->depth == 1 && j->next == 1) j->property_meta = f->meta;
             if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; pop(j); return 1; }
             if (j->depth > 1) j->folders++;
         } else if (j->kind == FM_DELETE && f->meta.type == FM_FILE) {
@@ -692,12 +750,16 @@ int fm_job_step(struct fm_job *j)
             if (f->exists && f->existing.dev == f->meta.dev && f->existing.ino == f->meta.ino) return fail(j, -EINVAL);
             if (f->exists && f->existing.type != f->meta.type) return fail(j, f->meta.type == FM_DIR ? -ENOTDIR : -EISDIR);
             if (f->exists && !f->approved && !j->yes_all) { j->prompt_dir = f->meta.type == FM_DIR; j->state = FM_REPLACE; return 0; }
-            if (j->kind == FM_MOVE && !(f->exists && f->meta.type == FM_DIR)) {
+            if (j->kind == FM_MOVE && (f->meta.type == FM_FILE || (j->depth == 1 && !f->exists))) {
                 r = j->fs.rename(j->fs.ctx, f->source, f->target);
-                if (!r) { if (f->meta.type == FM_FILE) j->files++; else j->folders++; pop(j); return 1; }
+                if (!r) {
+                    if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; }
+                    else { j->folders++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items-1; }
+                    pop(j); return 1;
+                }
                 if (r != -EXDEV) return fail(j, r);
             }
-            if (f->meta.type == FM_FILE) { j->total_bytes += f->meta.size; r = begin_file(j, f); if (r) return fail(j, r); return 1; }
+            if (f->meta.type == FM_FILE) { r = begin_file(j, f); if (r) return fail(j, r); return 1; }
             if (!f->exists) { r = j->fs.mkdir(j->fs.ctx, f->target); if (r) return fail(j, r); }
             j->folders++;
         }
@@ -710,16 +772,17 @@ int fm_job_step(struct fm_job *j)
     if (f->phase == 1) {
         if (j->written < j->used) {
             r = j->fs.write(j->fs.ctx, j->output, j->buffer + j->written, j->used - j->written);
-            if (r == -EINTR) return 1;
+            if (r == -EINTR) return interrupted();
             if (r <= 0) return fail(j, r ? r : -EIO);
             if ((unsigned)r > j->used - j->written) return fail(j, -EIO);
-            j->written += (unsigned)r; j->bytes += (unsigned)r;
+            j->written += (unsigned)r; j->bytes += (unsigned)r; j->file_bytes += (unsigned)r;
             return 1;
         }
-        r = j->fs.read(j->fs.ctx, j->input, j->buffer, FM_CHUNK);
-        if (r == -EINTR) return 1;
+        unsigned chunk = j->chunk && j->chunk <= FM_CHUNK ? j->chunk : FM_CHUNK;
+        r = j->fs.read(j->fs.ctx, j->input, j->buffer, chunk);
+        if (r == -EINTR) return interrupted();
         if (r < 0) return fail(j, r);
-        if (r > FM_CHUNK) return fail(j, -EIO);
+        if ((unsigned)r > chunk) return fail(j, -EIO);
         if (r) { j->used = (unsigned)r; j->written = 0; return 1; }
         r = j->fs.sync(j->fs.ctx, j->output);
         if (r) return fail(j, r);
@@ -787,5 +850,6 @@ void fm_job_destroy(struct fm_job *j)
     for (unsigned i = 0; i < j->depth; i++) free_frame(&j->frames[i]);
     for (unsigned i = 0; i < j->count; i++) free(j->sources ? j->sources[i] : NULL);
     free(j->sources);
+    free(j->totals);
     memset(j, 0, sizeof(*j)); j->input = j->output = -1;
 }

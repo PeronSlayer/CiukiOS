@@ -30,6 +30,7 @@ struct files_drive_label {
 };
 struct files_app {
     struct files_worker *worker;
+    struct files_transfer *transfer;
     int loading, reading, games_available, select_created, refresh_checkpoint, pending_command;
     char loading_path[FM_PATH];
     struct du_ui *ui;

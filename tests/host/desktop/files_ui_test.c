@@ -48,7 +48,7 @@ static void click(int x, int y) { motion(x, y); press(1); release(1); clock_ns +
 static void rclick(int x, int y) { motion(x, y); press(2); release(2); clock_ns += 600000000ull; }
 static void key(int code) { event(CIUKI_INPUT_KEY, code, 1, 0); event(CIUKI_INPUT_KEY, code, 0, 0); }
 static void chord(int mod, int code) { event(CIUKI_INPUT_KEY, mod, 1, 0); key(code); event(CIUKI_INPUT_KEY, mod, 0, 0); }
-static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 5000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); } }
+static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 100000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); struct timespec pause={0,1000000}; nanosleep(&pause,NULL); } }
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
 static int control_spawned;
@@ -544,6 +544,9 @@ int main(int argc, char **argv)
     chord(DU_KEY_LCTRL, 0x1e); chord(DU_KEY_LCTRL, 0x2e);
     assert(!files_navigate(&app, "/system/Ciuki")); chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
     assert(!files_close_request(&app) && !closed);
+    assert(strstr(ui.dialog.title,"Cancel Operation"));
+    struct du_event confirm={.type=DU_EV_DIALOG,.id=ui.dialog.id,.index=0};
+    du_dialog_close(&ui); files_event(&ui,&confirm,&app);
     tick(); assert(closed && !app.job_active && app.job.state == FM_CANCELLED);
     closed = 0;
     /* Alt+F4 closes. */
