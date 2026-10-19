@@ -43,10 +43,12 @@ int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out)
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y)
 { return (struct desk_box){x,y,(int32_t)w+DESK_BORDER*2,(int32_t)h+DESK_TITLE+DESK_BORDER}; }
 struct desk_box desk_content(const struct desk_client *c)
-{ return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,c->frame.w-2*DESK_BORDER,c->collapsed ? 0 : c->frame.h-DESK_TITLE-DESK_BORDER}; }
+{ if ((c->v3_style&3)==DESK_V3_POPUP) return c->frame;
+  return (struct desk_box){c->frame.x+DESK_BORDER,c->frame.y+DESK_TITLE,c->frame.w-2*DESK_BORDER,c->collapsed ? 0 : c->frame.h-DESK_TITLE-DESK_BORDER}; }
 /* The frame plus its theme's drop shadow: the area a frame change repaints. */
 struct desk_box desk_outer(const struct desk_client *c)
 {
+    if ((c->v3_style&3)==DESK_V3_POPUP) return c->frame;
     int32_t s=desk_theme->shadow_size;
     if (!s) return c->frame;
     return (struct desk_box){c->frame.x-s+s/3,c->frame.y-s+s/2,c->frame.w+2*s,c->frame.h+2*s};
@@ -54,6 +56,7 @@ struct desk_box desk_outer(const struct desk_client *c)
 /* Title-bar hit boxes: theme.c desk_title_button_box, the same in every theme. */
 static struct desk_box title_box(const struct desk_client *c, unsigned button)
 {
+    if ((c->v3_style&3)==DESK_V3_POPUP || ((c->v3_style&3)==DESK_V3_TOOL && button!=DESK_TB_CLOSE)) return (struct desk_box){0};
     int b[4];
     desk_title_button_box(c->frame.x,c->frame.y,c->frame.w,button,b);
     return (struct desk_box){b[0],b[1],b[2],b[3]};
@@ -153,8 +156,8 @@ struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_i
 struct desk_box desk_task_button(const struct desktop *d, int index)
 {
     unsigned count=0, position=0;
-    if (index<0 || index>=DESK_CLIENTS || !d->clients[index].window) return (struct desk_box){0,0,0,0};
-    for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window) {
+    if (index<0 || index>=DESK_CLIENTS || !desk_task_visible(&d->clients[index])) return (struct desk_box){0,0,0,0};
+    for (int i=0; i<DESK_CLIENTS; i++) if (desk_task_visible(&d->clients[i])) {
         if (i<index) position++;
         count++;
     }
@@ -551,6 +554,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
     struct desk_box outer=desk_outer(c), area, f=c->frame;
     if (!desk_intersect(outer,clip,&area)) return;
     struct desk_paint p=paint_of(d,area);
+    if ((c->v3_style&3)==DESK_V3_POPUP) { client_rows(d,c,clip); return; }
     if (t->shadow_size) DESK_PROFILE("shadows", desk_shadow_rows(&p,f.x,f.y,f.w,f.h,t->shadow_size,t->drop_shadow));
     if (!desk_intersect(f,clip,&clip)) return;
     p=paint_of(d,clip);
@@ -562,7 +566,7 @@ static void window(struct desktop *d, int i, struct desk_box clip)
         .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
         .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
         .active=i==d->focus && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
-        .buttons=d->shell && !c->owner_id ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
+        .buttons=d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
     DESK_PROFILE("captions", {
         if (c->internal || c->collapsed) desk_paint_frame(&p,f.x,f.y,f.w,f.h,&s);
@@ -618,6 +622,10 @@ _Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISI
 _Static_assert(DESK_CURSOR_ERASER+1==DESK_CURSOR_COUNT,"paint cursor inventory");
 static struct desk_cursor_raster cursor_raster(const struct desktop *d)
 {
+    if (d->v3_cursor_id) {
+        const struct desk_client *c=&d->clients[d->v3_cursor_slot]; unsigned id=d->v3_cursor_id-1;
+        return (struct desk_cursor_raster){.hot_x=c->v3_hot_x[id],.hot_y=c->v3_hot_y[id],.width=32,.height=32};
+    }
     unsigned shape=d->cursor_shape;
     if (shape<=DESK_CURSOR_PRECISION) return desk_cursors[shape];
     if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
@@ -741,12 +749,21 @@ static void cursor(struct desktop *d, struct desk_box clip)
     struct desk_box b;
     struct desk_box box=pointer_box(d);
     struct desk_cursor_raster r=cursor_raster(d);
-    if (d->hw_cursor || !desk_intersect(box,clip,&b)) return;
+    if (d->hw_cursor || d->v3_cursor_hidden || !desk_intersect(box,clip,&b)) return;
     uint32_t *first_dst=d->pixels+(size_t)b.y*d->width+b.x;
     int stride=(int)d->width;
     for (int y=0; y<b.h; y++) {
         uint32_t *dst=first_dst+(size_t)y*stride;
         for (int x=0; x<b.w; x++) {
+            if (d->v3_cursor_id) {
+                unsigned px=(unsigned)(b.x+x-box.x), py=(unsigned)(b.y+y-box.y);
+                uint32_t colour=d->clients[d->v3_cursor_slot].v3_cursor_pixels[d->v3_cursor_id-1][py*32+px];
+                unsigned alpha=colour>>24, inv=255-alpha;
+                unsigned red=(((colour>>16)&255)*alpha+((dst[x]>>16)&255)*inv+127)/255;
+                unsigned green=(((colour>>8)&255)*alpha+((dst[x]>>8)&255)*inv+127)/255;
+                unsigned blue=((colour&255)*alpha+(dst[x]&255)*inv+127)/255;
+                dst[x]=(red<<16)|(green<<8)|blue; continue;
+            }
             uint32_t bit=0x80000000u>>(b.x+x-box.x);
             unsigned row=(unsigned)(b.y+y-box.y);
             if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : 0x101010u;
@@ -786,7 +803,7 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
     d->cursor_loaded=DESK_CURSOR_COUNT;
-    if (d->accel_caps&2u) {
+    if ((d->accel_caps&2u) && !d->v3_cursor_id && !d->v3_cursor_hidden) {
         q=(struct ciuki_accel_request){.operation=CIUKI_ACCEL_CURSOR_SET,.colour=0xffffff,.background=0x101010};
         struct desk_cursor_raster r=cursor_raster(d);
         memcpy(q.cursor_mask,r.mask,sizeof(q.cursor_mask)); memcpy(q.cursor_image,r.image,sizeof(q.cursor_image));
@@ -1046,6 +1063,11 @@ void desk_stats_sample(struct desktop *d)
 }
 int desk_redraw(struct desktop *d)
 {
+    if (d->v3_lease_state) return 0;
+    if ((d->v3_cursor_id || d->v3_cursor_hidden) && d->hw_cursor) {
+        struct ciuki_accel_request hide={.operation=CIUKI_ACCEL_CURSOR_SHOW,.colour=0};
+        (void)accel_call(d,&hide); d->hw_cursor=0;
+    }
     if (!d->damage.count && !d->move_damage.count && !d->present_damage.count && !d->cursor_dirty) return 0;
     /* A RESYNC/damage can precede the mode-counter service turn. Refresh
      * the existing grant query before any generation-tagged engine request;

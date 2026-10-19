@@ -2578,6 +2578,44 @@ Byte encoding, independent of C alignment/padding. SDK: ciuki/desktop.h.
 v2.1: header byte 2; v1/v2.0 remain unchanged
 
 ```c
+#define DESK_V3_VERSION 3u
+#define DESK_V3_HEADER 16u
+#define DESK_V3_OVERLAPPED 0u
+#define DESK_V3_POPUP 1u
+#define DESK_V3_TOOL 2u
+#define DESK_V3_TOPMOST 4u
+#define DESK_V3_MODAL 8u
+#define DESK_V3_STYLES 15u
+#define DESK_V3_CAPTURE 1u
+#define DESK_V3_CLIP 2u
+#define DESK_V3_RELATIVE 4u
+#define DESK_V3_HIDDEN 8u
+```
+
+V3 payloads after the 16-byte envelope, all u32 unless noted:
+HELLO: empty; CREATE: style,owner,owner-generation,x,y,w,h,scale,title-bytes,title;
+DAMAGE: x,y,w,h; RESIZE: w,h,configure-serial + one surface fd;
+PLACE: x,y,w,h,scale,show (0 normal,1 minimized,2 hidden),style;
+TITLE: byte-count,UTF-8; CURSOR: shape,id,visibility-count;
+CURSOR_BITMAP: id,hot-x,hot-y + one 32x32 ARGB8888 surface fd;
+POINTER: flags,clip-x,clip-y,clip-w,clip-h; WARP: logical client x,y;
+LEASE: action (0 release,1 request),w,h,bpp;
+RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
+ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
+KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
+CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
+POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
+CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
+
+```c
+enum desk_v3_opcode {
+    DESK_V3_RESIZE = 64, DESK_V3_PLACE, DESK_V3_CURSOR_BITMAP,
+    DESK_V3_POINTER, DESK_V3_WARP, DESK_V3_LEASE, DESK_V3_RESULT,
+    DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
+    DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE
+};
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -2728,6 +2766,7 @@ full tone accepted: asynchronous TASK_RESULT
 #define DESK_WINDOW_FLAGS 31u
 struct desk_packet {
     unsigned opcode;
+    uint32_t generation, owner, owner_generation, style, scale;
     int32_t x, y;
     uint32_t width, height, serial, focused;
     char title[DESK_TITLE_MAX + 1];
@@ -2789,6 +2828,9 @@ optional 64-byte PRESENTED
 
 ```c
 };
+int desk_utf8_valid(const uint8_t *, unsigned);
+void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,
+                     uint32_t request, uint32_t id, uint32_t generation);
 uint32_t desk_get32(const uint8_t *p);
 void desk_put32(uint8_t *p, uint32_t v);
 void desk_message(struct ciuki_message *m, unsigned opcode, unsigned length);
@@ -4304,5 +4346,47 @@ int du_ta_mouse_down(struct du_textarea *, struct du_rect box, int x, int y, uns
 int du_ta_mouse_move(struct du_textarea *, struct du_rect box, int x, int y);
 void du_ta_mouse_up(struct du_textarea *);
 int du_ta_wheel(struct du_textarea *, struct du_rect box, int detents);
+#endif
+```
+
+## `deskui/v3.h`
+
+Source: `apps/libdeskui/v3.h`.
+
+SPDX-License-Identifier: MIT
+User-mode personality bridge. Window/task ids are never native PIDs.
+PONG is explicit: an I/O thread must not hide a stalled guest UI.
+
+```c
+#ifndef CIUKI_DESKUI_V3_H
+#define CIUKI_DESKUI_V3_H
+#include "../desktop/protocol.h"
+struct du3_transport {
+    int (*send)(int, const struct ciuki_message *, uint32_t);
+    int (*recv)(int, struct ciuki_message *, uint32_t);
+    int (*info)(int, struct ciuki_surface_info *);
+    int (*close)(int);
+};
+struct du3_connection {
+    int channel, disconnected;
+    uint32_t request;
+    struct du3_transport transport;
+};
+int du3_connect(struct du3_connection *, int channel, const struct du3_transport *);
+```
+
+Returns request token, or zero with errno. Caller retains its fd on send;
+transport transfers a reference. Payload is the documented byte encoding.
+
+```c
+uint32_t du3_request(struct du3_connection *, unsigned opcode, uint32_t window,
+                     uint32_t generation, const void *payload, unsigned bytes, int fd);
+```
+
+1 event, 0 clean EOF, -1 errno (including EAGAIN); no implicit PONG.
+
+```c
+int du3_next(struct du3_connection *, struct desk_packet *);
+int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generation, uint32_t ping);
 #endif
 ```

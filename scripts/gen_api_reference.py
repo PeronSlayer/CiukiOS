@@ -14,6 +14,7 @@ def headers(root=ROOT):
     result["ciuki/abi.h"] = root / "src/kernel/include/ciuki/abi.h"
     result["ciuki/desktop.h"] = root / "apps/desktop/protocol.h"
     result["deskui.h"] = root / "apps/libdeskui/deskui.h"
+    result["deskui/v3.h"] = root / "apps/libdeskui/v3.h"
     result["deskui/textarea.h"] = root / "apps/libdeskui/textarea.h"
     return dict(sorted(result.items()))
 

@@ -65,9 +65,172 @@ static int valid_event(unsigned op, const struct ciuki_input_event *e)
            e->code >= 1 && e->code <= 3 && e->value >= 0 &&
            e->value <= 1 && !e->value2 && !e->lost_count;
 }
+int desk_utf8_valid(const uint8_t *s, unsigned n)
+{
+    for (unsigned i=0;i<n;) {
+        uint32_t c=s[i++], minimum=0; unsigned extra=0;
+        if (c<0x80) { if (c<32 || c==127) return 0; continue; }
+        if (c>=0xc2 && c<=0xdf) { c&=31; extra=1; minimum=0x80; }
+        else if (c>=0xe0 && c<=0xef) { c&=15; extra=2; minimum=0x800; }
+        else if (c>=0xf0 && c<=0xf4) { c&=7; extra=3; minimum=0x10000; }
+        else return 0;
+        if (extra>n-i) return 0;
+        while (extra--) { uint32_t b=s[i++]; if ((b&0xc0)!=0x80) return 0; c=(c<<6)|(b&63); }
+        if (c<minimum || c>0x10ffff || (c>=0xd800 && c<=0xdfff) ||
+            (c>=0x80 && c<0xa0)) return 0;
+    }
+    return 1;
+}
+void desk_v3_message(struct ciuki_message *m, unsigned op, unsigned payload,
+                     uint32_t request, uint32_t id, uint32_t generation)
+{
+    desk_message(m,op,DESK_V3_HEADER+payload); m->data[0]=DESK_V3_VERSION;
+    desk_put32(m->data+4,request); desk_put32(m->data+8,id); desk_put32(m->data+12,generation);
+}
+static int v3_parse(const struct ciuki_message *m, int client,
+                    const struct ciuki_surface_info *s, struct desk_packet *p)
+{
+    if (m->length<16 || m->length>256 || m->reserved || m->data[2] || m->data[3] || m->fd_count>1) return 0;
+    for (unsigned k=m->length;k<256;k++) if (m->data[k]) return 0;
+    for (unsigned k=m->fd_count;k<4;k++) if (m->fds[k]) return 0;
+    if (m->fd_count && m->fds[0]<0) return 0;
+    memset(p,0,sizeof(*p)); p->opcode=m->data[1];
+    p->request=desk_get32(m->data+4); p->window_id=desk_get32(m->data+8); p->generation=desk_get32(m->data+12);
+    const uint8_t *b=m->data+16; unsigned n=m->length-16, expected=0, fd=0;
+    if (p->opcode==DESK_HELLO) return client && !n && !m->fd_count && !p->window_id && !p->generation && !p->request;
+    if (!p->window_id || !p->generation) return 0;
+    switch (p->opcode) {
+    case DESK_CREATE_WINDOW:
+        if (!client || n<36) return 0;
+        p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);
+        p->x=(int32_t)desk_get32(b+12); p->y=(int32_t)desk_get32(b+16);
+        p->width=desk_get32(b+20); p->height=desk_get32(b+24); p->scale=desk_get32(b+28);
+        p->count=desk_get32(b+32);
+        if (p->count>DESK_TITLE_MAX || n!=36+p->count || !desk_utf8_valid(b+36,p->count) ||
+            (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL ||
+            (!!p->owner != !!p->owner_generation) || ((p->style&DESK_V3_MODAL) && !p->owner)) return 0;
+        memcpy(p->title,b+36,p->count); fd=1; expected=n; break;
+    case DESK_V3_PLACE:
+        if (!client || n!=28) return 0;
+        p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
+        p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->scale=desk_get32(b+16);
+        p->flags=desk_get32(b+20); p->style=desk_get32(b+24);
+        if (p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        expected=28; break;
+    case DESK_V3_RESIZE:
+        if (!client || n!=12) return 0;
+        p->width=desk_get32(b); p->height=desk_get32(b+4); p->serial=desk_get32(b+8);
+        if (!p->serial) return 0;
+        expected=12; fd=1; break;
+    case DESK_DAMAGE:
+        if (!client || n!=16 || !desk_surface_valid(s)) return 0;
+        p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
+        p->width=desk_get32(b+8); p->height=desk_get32(b+12);
+        if (p->x<0 || p->y<0 || (unsigned)p->x>s->width || (unsigned)p->y>s->height ||
+            p->width>s->width-(unsigned)p->x || p->height>s->height-(unsigned)p->y) return 0;
+        expected=16; break;
+    case DESK_SET_TITLE: case DESK_V3_CRASH: {
+        unsigned offset=p->opcode==DESK_SET_TITLE ? 4 : 12;
+        if (!client || n<offset) return 0;
+        p->count=desk_get32(b+offset-4);
+        if ((p->opcode==DESK_V3_CRASH && !p->count) || p->count>DESK_TITLE_MAX || n!=offset+p->count || !desk_utf8_valid(b+offset,p->count)) return 0;
+        memcpy(p->title,b+offset,p->count);
+        if (offset==12) { p->flags=desk_get32(b); p->values[0]=desk_get32(b+4); }
+        expected=n; break;
+    }
+    case DESK_SET_CURSOR:
+        if (!client || n!=12) return 0;
+        p->flags=desk_get32(b); p->index=desk_get32(b+4); p->result=(int32_t)desk_get32(b+8);
+        if (p->flags>=DESK_CURSOR_COUNT || p->index>4 || p->result < -32768 || p->result>32767) return 0;
+        expected=12; break;
+    case DESK_V3_CURSOR_BITMAP:
+        if (!client || n!=12 || !desk_surface_valid(s) || s->width!=32 || s->height!=32) return 0;
+        p->index=desk_get32(b); p->x=(int32_t)desk_get32(b+4); p->y=(int32_t)desk_get32(b+8);
+        if (!p->index || p->index>4 || p->x<0 || p->x>31 || p->y<0 || p->y>31) return 0;
+        expected=12; fd=1; break;
+    case DESK_V3_POINTER:
+        if (!client || n!=20) return 0;
+        p->flags=desk_get32(b); p->x=(int32_t)desk_get32(b+4); p->y=(int32_t)desk_get32(b+8);
+        p->width=desk_get32(b+12); p->height=desk_get32(b+16);
+        if ((p->flags&~15u) || ((p->flags&DESK_V3_RELATIVE) && !(p->flags&(DESK_V3_CAPTURE|DESK_V3_CLIP))) ||
+            ((p->flags&DESK_V3_CLIP) && (!p->width || !p->height || p->width>2048 || p->height>2048)) ||
+            (!(p->flags&DESK_V3_CLIP) && (p->x || p->y || p->width || p->height))) return 0;
+        if (p->x < -8192 || p->x>8192 || p->y < -8192 || p->y>8192) return 0;
+        expected=20; break;
+    case DESK_V3_WARP:
+        if (!client || n!=8) return 0;
+        p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4); expected=8; break;
+    case DESK_V3_LEASE:
+        if (!client || n!=16) return 0;
+        p->flags=desk_get32(b); p->width=desk_get32(b+4); p->height=desk_get32(b+8); p->bpp=desk_get32(b+12);
+        if (p->flags>1 || (!p->flags && (p->width || p->height || p->bpp)) ||
+            (p->flags && (!p->width || !p->height || p->width>2048 || p->height>2048 ||
+                (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)))) return 0;
+        expected=16; break;
+    case DESK_V3_POINTER_STATE:
+        if (client || n!=4) return 0;
+        p->flags=desk_get32(b); if (p->flags&~15u) return 0;
+        expected=4; break;
+    case DESK_V3_RESTART:
+        if (!client || n!=4) return 0;
+        p->flags=desk_get32(b); if (p->flags&~15u) return 0;
+        expected=4; break;
+    case DESK_CLOSE_ACK:
+        if (!client || n!=4) return 0;
+        p->flags=desk_get32(b); if (p->flags>1) return 0;
+        expected=4; break;
+    case DESK_CLOSE: if (!client) return 0; break;
+    case DESK_CLOSED: case DESK_CLOSE_REQUEST: if (client) return 0; break;
+    case DESK_PING: case DESK_PONG:
+        if (n!=4) return 0;
+        p->serial=desk_get32(b); expected=4; break;
+    case DESK_CONFIGURE:
+        if (client || n!=32) return 0;
+        p->width=desk_get32(b); p->height=desk_get32(b+4); p->scale=desk_get32(b+8); p->serial=desk_get32(b+12);
+        p->x=(int32_t)desk_get32(b+16); p->y=(int32_t)desk_get32(b+20);
+        p->flags=desk_get32(b+24); p->style=desk_get32(b+28);
+        if (!p->serial || p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        expected=32; break;
+    case DESK_V3_RESULT:
+        if (client || n!=8) return 0;
+        p->index=desk_get32(b); p->result=(int32_t)desk_get32(b+4);
+        if (!p->request || p->result>0 || p->result < -4095) return 0;
+        expected=8; break;
+    case DESK_V3_ACTIVATE:
+        if (n!=8) return 0;
+        p->focused=desk_get32(b); p->flags=desk_get32(b+4);
+        if (p->focused>1 || p->flags>1 || (client && p->focused!=p->flags)) return 0;
+        expected=8; break;
+    case DESK_V3_LEASE_EVENT:
+        if (client || n!=20) return 0;
+        p->flags=desk_get32(b); p->serial=desk_get32(b+4); p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->bpp=desk_get32(b+16);
+        if (p->flags>3 || !p->serial || !p->width || !p->height || p->width>2048 || p->height>2048 ||
+            (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)) return 0;
+        expected=20; break;
+    case DESK_KEY: case DESK_MOTION: case DESK_BUTTON: case DESK_V3_RELATIVE_EVENT: {
+        if (client || n!=40) return 0;
+        struct ciuki_input_event *e=&p->event;
+        e->sequence=desk_get32(b); e->source=desk_get32(b+4); e->generation=desk_get32(b+8); e->type=desk_get32(b+12);
+        e->monotonic_ns=(uint64_t)desk_get32(b+16)|(uint64_t)desk_get32(b+20)<<32;
+        e->code=(int32_t)desk_get32(b+24); e->value=(int32_t)desk_get32(b+28); e->value2=(int32_t)desk_get32(b+32); e->lost_count=desk_get32(b+36);
+        if (!valid_event(p->opcode==DESK_V3_RELATIVE_EVENT ? DESK_MOTION : p->opcode,e) ||
+            (p->opcode==DESK_V3_RELATIVE_EVENT && e->type!=CIUKI_INPUT_MOTION)) return 0;
+        expected=40; break;
+    }
+    default: return 0;
+    }
+    if ((p->opcode==DESK_CREATE_WINDOW || p->opcode==DESK_V3_PLACE || p->opcode==DESK_CONFIGURE || p->opcode==DESK_V3_RESIZE) &&
+        (!p->width || !p->height || p->width>2048 || p->height>2048 ||
+         (p->opcode!=DESK_V3_RESIZE && (!p->scale || p->scale>3)) ||
+         p->x < -8192 || p->y < -8192 || p->x>8192 || p->y>8192)) return 0;
+    if ((p->opcode==DESK_CREATE_WINDOW || p->opcode==DESK_V3_RESIZE) &&
+        (!desk_surface_valid(s) || s->width!=p->width || s->height!=p->height)) return 0;
+    return n==expected && m->fd_count==fd;
+}
 int desk_parse(const struct ciuki_message *m, int client,
                const struct ciuki_surface_info *s, struct desk_packet *p)
 {
+    if (m->length && m->data[0]==DESK_V3_VERSION) return v3_parse(m,client,s,p);
     if (m->length < 4 || m->length > 256 || m->fd_count > 4 || m->reserved ||
         (m->data[0] != DESK_VERSION && m->data[0] != DESK_SHELL_VERSION) ||
         m->data[3] || (m->data[2] &&

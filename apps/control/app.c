@@ -21,8 +21,8 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -418,6 +418,16 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case 952: if (e->type==DU_EV_ACTIVATE) build(a); break;
+    case 982:
+        if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->uninstall_count) a->uninstall_selected=(unsigned)e->index;
+        break;
+    case 983:
+        if (e->type==DU_EV_ACTIVATE && a->uninstall_selected<a->uninstall_count && a->host.uninstall_run) {
+            int result=a->host.uninstall_run(a->host.ctx,a->uninstall[a->uninstall_selected].key);
+            text(a,C_STATUS,result ? "The uninstaller could not be started. Refresh the list and try again." : "Uninstaller started.");
+        }
+        break;
+    case 984: if (e->type==DU_EV_ACTIVATE) build(a); break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
     case CP_CATEGORY:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_CATEGORIES) {
@@ -1073,6 +1083,24 @@ static void build(struct cp_app *a)
     add(a, DU_BUTTON, C_SECONDS, 24, 164, 200, 24, "");
     add(a, DU_LABEL, C_TIME_NOTE1, 24, 202, 452, 14, "The clock reads the computer's real-time clock (UTC).");
     add(a, DU_LABEL, C_TIME_NOTE2, 24, 216, 452, 14, "Setting it is not available yet: the kernel has no call for it.");
+    } else if (a->page==CP_UNINSTALL) {
+        int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,DESK_UNINSTALL_MAX) : -ENOSYS;
+        a->uninstall_count=count>=0 && count<=(int)DESK_UNINSTALL_MAX ? (unsigned)count : 0;
+        a->uninstall_selected=0;
+        for (unsigned k=0;k<a->uninstall_count;k++) {
+            struct desk_uninstall_entry *r=&a->uninstall[k];
+            r->name[sizeof(r->name)-1]=0; r->key[sizeof(r->key)-1]=0;
+            memset(&a->uninstall_items[k],0,sizeof(a->uninstall_items[k]));
+            a->uninstall_items[k].text[0]=r->name;
+        }
+        add(a,DU_LABEL,981,24,48,508,16,"Select a Windows program to remove.");
+        w=add(a,DU_LISTVIEW,982,24,76,508,224,"");
+        w->items=a->uninstall_items; w->count=a->uninstall_count; list_style(w,"Installed program");
+        w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+        du_set_text(w,count<0 ? "Windows registry service is unavailable." : "No Windows programs are registered.");
+        add(a,DU_BUTTON,983,24,316,180,24,"Remove")->disabled=!a->uninstall_count || !a->host.uninstall_run;
+        add(a,DU_BUTTON,984,216,316,96,24,"Refresh");
+        add(a,DU_LABEL,985,24,350,508,16,"The program's own uninstaller will be started.");
     } else if (a->page==CP_AUTOPLAY) {
         static const char *const actions[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
         int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;

@@ -68,6 +68,7 @@ int desk_modal_target(const struct desktop *d, int i)
     for (unsigned depth=0; i>=0 && i<DESK_CLIENTS && depth<DESK_CLIENTS; depth++) {
         int next=-1;
         for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window && !d->clients[k].minimized &&
+            (d->clients[k].version!=DESK_V3_VERSION || (d->clients[k].v3_style&DESK_V3_MODAL)) &&
             d->clients[k].owner_id && d->clients[k].owner_id==d->clients[i].window_id &&
             (next<0 || d->clients[k].order>d->clients[next].order)) next=k;
         if (next<0) break;
@@ -94,6 +95,8 @@ void desk_focus(struct desktop *d, int i)
     if (d->power.state && i>=0 && i<DESK_CLIENTS && d->clients[i].internal!=DESK_INTERNAL_POWER) return;
     if (i >= 0 && (i >= DESK_CLIENTS || !d->clients[i].window || d->clients[i].minimized)) return;
     if (i == d->focus) return;
+    if (d->v3_lease_state) desk_v3_revoke(d);
+    desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
     release(d, &e);
     if (d->keyboard_geometry) desk_geometry_end(d,1);
@@ -101,10 +104,18 @@ void desk_focus(struct desktop *d, int i)
     struct ciuki_message m;
     desk_message(&m, DESK_FOCUS, 8);
     if (d->focus >= 0) {
-        desk_queue(d, d->focus, &m);
+        if (d->clients[d->focus].version==DESK_V3_VERSION) {
+            struct desk_client *old=&d->clients[d->focus]; struct ciuki_message active;
+            desk_v3_message(&active,DESK_V3_ACTIVATE,8,0,old->v3_id,old->v3_generation);
+            desk_put32(active.data+20,i>=0 && d->clients[i].pid==old->pid);
+            desk_queue(d,d->focus,&active);
+        } else desk_queue(d, d->focus, &m);
         focus_damage(d,d->focus);
     }
     d->focus = i;
+    /* Publish the new lease generation before activation can dispatch a
+     * WM_ACTIVATEAPP handler that immediately calls DirectDraw Restore. */
+    desk_v3_reactivate(d,i);
     if (i >= 0) {
         int raised=0;
         for (int k=0;k<DESK_CLIENTS;k++) if (k!=i && d->clients[k].window && !d->clients[k].minimized &&
@@ -114,6 +125,7 @@ void desk_focus(struct desktop *d, int i)
         if (raised) desk_damage_add(&d->damage,desk_outer(&d->clients[i]),d->width,d->height);
         focus_damage(d,i);
     }
+    desk_v3_restack(d);
 }
 int desk_contains(struct desk_box b, int32_t x, int32_t y)
 { return x >= b.x && y >= b.y && (int64_t)x < (int64_t)b.x+b.w && (int64_t)y < (int64_t)b.y+b.h; }
@@ -181,6 +193,17 @@ void desk_cursor_update(struct desktop *d)
         else shape=edges==(DESK_EDGE_LEFT|DESK_EDGE_TOP) || edges==(DESK_EDGE_RIGHT|DESK_EDGE_BOTTOM) ?
             DESK_CURSOR_RESIZE_NWSE : DESK_CURSOR_RESIZE_NESW;
     }
+    unsigned old_custom=d->v3_cursor_id, old_slot=d->v3_cursor_slot, old_hidden=d->v3_cursor_hidden;
+    d->v3_cursor_id=0; d->v3_cursor_hidden=0;
+    int vi=d->v3_pointer_window ? d->v3_pointer_window-1 : desk_hit(d,d->mouse_x,d->mouse_y);
+    if (vi>=0 && !d->sh.levels && !d->sh.switcher && !d->power.state && d->drag<0) {
+        struct desk_client *vc=&d->clients[vi];
+        if (vc->version==DESK_V3_VERSION && (d->v3_pointer_window || desk_contains(desk_content(vc),d->mouse_x,d->mouse_y))) {
+            d->v3_cursor_id=vc->v3_cursor; d->v3_cursor_slot=(unsigned)vi;
+            d->v3_cursor_hidden=vc->v3_visibility<0 || (vc->v3_pointer&DESK_V3_HIDDEN);
+        }
+    }
+    if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) d->cursor_dirty=1;
     if (shape>=DESK_CURSOR_COUNT) shape=DESK_CURSOR_ARROW;
     if (d->cursor_shape!=shape) { d->cursor_shape=shape; d->cursor_dirty=1; }
 }
@@ -264,6 +287,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
     }
     switch (e.type) {
     case CIUKI_INPUT_RESYNC:
+        desk_v3_pointer_release(d);
         /* The input stream was cut: keys are released below, and the screen may
          * have been owned by someone else meanwhile (a DOS full-screen session
          * restores the desktop mode and sends exactly this event). Since f2-65
@@ -327,12 +351,28 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         }
         break;
     case CIUKI_INPUT_MOTION:
+        if (d->v3_pointer_window) {
+            int vi=d->v3_pointer_window-1;
+            struct desk_client *vc=&d->clients[vi];
+            if ((vc->v3_pointer&DESK_V3_RELATIVE) && d->focus>=0 && d->clients[d->focus].pid==vc->pid)
+                route(d,vi,DESK_V3_RELATIVE_EVENT,&e);
+        }
         d->cursor_dirty=1;
         {
             int32_t dx = e.value, dy = e.value2;
             desk_shell_scale_motion(d, &dx, &dy);   /* Control Panel mouse speed; 1:1 by default */
             d->mouse_x = axis(d->mouse_x, dx, d->width);
             d->mouse_y = axis(d->mouse_y, dy, d->height);
+        }
+        if (d->v3_pointer_window) {
+            struct desk_client *vc=&d->clients[d->v3_pointer_window-1];
+            if (vc->v3_pointer&DESK_V3_CLIP) {
+                struct desk_box b=vc->v3_clip;
+                if (d->mouse_x<b.x) d->mouse_x=b.x;
+                if (d->mouse_x>=b.x+b.w) d->mouse_x=b.x+b.w-1;
+                if (d->mouse_y<b.y) d->mouse_y=b.y;
+                if (d->mouse_y>=b.y+b.h) d->mouse_y=b.y+b.h-1;
+            }
         }
         if (d->shell) desk_shell_motion(d);
         if (d->drag >= 0 && !d->keyboard_geometry) {
@@ -346,12 +386,14 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                 desk_resize(d, d->drag, f);
             } else desk_move(d, d->drag, d->mouse_x - d->drag_x, d->mouse_y - d->drag_y);
         } else title_track(d);
-        int target=d->routed_buttons ? d->focus : desk_hit(d,d->mouse_x,d->mouse_y);
+        int target=d->v3_pointer_window && (d->clients[d->v3_pointer_window-1].v3_pointer&DESK_V3_CAPTURE) ?
+            d->v3_pointer_window-1 : d->routed_buttons ? d->focus : desk_hit(d,d->mouse_x,d->mouse_y);
         if (d->drag < 0 && target>=0 && desk_modal_target(d,target)==target) {
             struct desk_box content = desk_content(&d->clients[target]);
             /* MOTION carries client-relative absolute position in value/value2;
              * original delta is intentionally replaced at the protocol boundary. */
-            e.code = 0; e.value = d->mouse_x-content.x; e.value2 = d->mouse_y-content.y;
+            unsigned scale=d->clients[target].v3_scale ? d->clients[target].v3_scale : 1;
+            e.code = 0; e.value = (d->mouse_x-content.x)/(int)scale; e.value2 = (d->mouse_y-content.y)/(int)scale;
             route(d, target, DESK_MOTION, &e);
         }
         break;
@@ -365,6 +407,10 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         }
         if (e.value && d->keyboard_geometry && e.code==CIUKI_BUTTON_LEFT) { desk_geometry_end(d,0); break; }
         int i = desk_hit(d,d->mouse_x,d->mouse_y);
+        if (d->v3_pointer_window && (d->clients[d->v3_pointer_window-1].v3_pointer&DESK_V3_CAPTURE)) {
+            int vi=d->v3_pointer_window-1;
+            e.value2=0; route(d,vi,DESK_BUTTON,&e); break;
+        }
         /* Start menu, taskbar, tray, desktop icons and context menus (shell.c). */
         if (d->shell && desk_shell_button(d, e.code, e.value)) break;
         if (e.value && i>=0 && desk_modal_target(d,i)!=i) { desk_focus(d,i); break; }
@@ -399,7 +445,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                     d->resize_start = c->frame; d->drag_x = d->mouse_x; d->drag_y = d->mouse_y;
                     d->title_click_window = -1; break;
                 }
-                if (d->mouse_y < c->frame.y + DESK_TITLE) {
+                if ((c->v3_style&3)!=DESK_V3_POPUP && d->mouse_y < c->frame.y + DESK_TITLE) {
                     /* A stationary second title click toggles maximize. */
                     int32_t dx = d->mouse_x - d->title_click_x, dy = d->mouse_y - d->title_click_y;
                     uint64_t interval=(uint64_t)d->sh.cfg.double_click_ms*1000000ull;
