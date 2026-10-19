@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <ciuki/w32_diagnostics.h>
 static unsigned starts,signals;
 static int authorized=1;
 static unsigned native_launches;
@@ -22,6 +23,7 @@ void desk_shell_message(struct desktop *d,const char *title,const char *text,int
 {(void)d;(void)title;(void)text;(void)error;assert(0);}
 uint32_t desk_w32_record(void *record,uint32_t bytes)
 {
+    if(((struct ciuki_w32_header *)record)->operation==W32_REPORT){assert(bytes==sizeof(struct ciuki_w32_report_args));return 0;}
     struct w32r_service *a=record;assert(bytes==sizeof(*a) && a->service==1);
     if(a->action==1){if(authorized)a->result=1;else a->error=5;}
     else assert(a->action==3);

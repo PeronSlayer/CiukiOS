@@ -37,6 +37,7 @@ struct uaddr {
     struct ua_extent *head;
     struct ua_pin *pins;
     uint32_t heap_base, brk, extents, arena_extents, backing;
+    uint32_t peak_backing;
     void *identity;
     bool win32;
 };

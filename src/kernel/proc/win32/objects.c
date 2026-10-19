@@ -202,6 +202,7 @@ uint32_t w32_handle_install(
             e->inherit = inherit;
             w32_retain(o);
             p->w32->handles++;
+            if(p->w32->handles>p->w32->peak_handles)p->w32->peak_handles=p->w32->handles;
             w32_accounts.handles++;
             return 0;
         }
@@ -253,6 +254,7 @@ uint32_t w32_handles_inherit(struct process *child, const struct process *parent
                 child->w32->chunks[c][i] = *s;
                 w32_retain(s->object);
                 child->w32->handles++;
+                if(child->w32->handles>child->w32->peak_handles)child->w32->peak_handles=child->w32->handles;
                 w32_accounts.handles++;
             }
     return 0;
@@ -584,6 +586,7 @@ void w32_process_died(struct process *p)
 {
     if (!p->w32)
         return;
+    w32_diagnostic_exit(p);
     p->w32->identity->signalled = true;
     p->w32->identity->exit_code = (uint32_t)p->raw_exit;
     w32_changed_wake();
@@ -621,6 +624,7 @@ void w32_process_cleanup(struct process *p)
         }
     }
     w32_process_died(p);
+    w32_diagnostic_cleanup(p);
     for(unsigned d=0;d<26;d++)if(p->w32->drive_cwd[d]&&p->cwd_release)p->cwd_release(p->w32->drive_cwd[d]);
     w32_services_cleanup(p);
     w32_views_cleanup(p);

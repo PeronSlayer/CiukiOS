@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ciuki/w32_diagnostics.h>
 static struct desktop d;
 static uint32_t token;
 static uint32_t portrait[256*256];
@@ -398,9 +399,18 @@ static void frames(const char *folder)
         frame(folder,themes[t],"ctrl-alt-del"); d.clients[2].v3_lease_wanted=0;
         struct ciuki_message m; msg(&m,DESK_V3_CRASH,20,2,1); desk_put32(m.data+16,0xc0000005); desk_put32(m.data+20,0x401234); desk_put32(m.data+24,8); memcpy(m.data+28,"game.exe",8);
         d.terminate=terminate; assert(!desk_v3_receive(&d,root,&m)); frame(folder,themes[t],"crash");
+        assert(strstr(d.sh.message_text,"game.exe has performed an illegal operation and will be shut down."));
+        key(0x0f,1);key(0x0f,0);assert(d.v3_details_open);frame(folder,themes[t],"crash-details");
+        assert(strstr(d.v3_details,"Exception: c0000005")&&strstr(d.v3_details,"????????"));
         key(0x1c,1); key(0x1c,0); assert(terminated==t+1);
         d.v3_restart=restart; msg(&m,DESK_V3_RESTART,4,2,1); desk_put32(m.data+16,2); assert(!desk_v3_receive(&d,root,&m)); frame(folder,themes[t],"restart");
         key(0x1c,1); key(0x1c,0); assert(restart_count==t+1); flush(); cleanup();
+        for(unsigned reason=1;reason<=7;reason++){
+            setup();struct ciuki_w32_fault fault={.kind=W32_REPORT_REFUSE,.code=reason,.pid=42};
+            strcpy(fault.exe,"fixture.exe");strcpy(fault.module,"fixture.dll");desk_w32_fault_dialog(&d,&fault);
+            assert(d.v3_dialog_kind==3);char name[32];snprintf(name,sizeof(name),"refuse-%u",reason);frame(folder,themes[t],name);
+            key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();
+        }
     }
 }
 #ifdef DESKTOP_GUEST_FIXTURE

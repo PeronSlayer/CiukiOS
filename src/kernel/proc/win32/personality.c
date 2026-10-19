@@ -23,6 +23,7 @@ int w32_thread_init(struct proc_thread *t, bool main)
 {
     if(w32_thread_objects_init(t))return -ENOMEM;
     struct process *p = t->process;
+    if(p->live_threads>p->w32->peak_threads)p->w32->peak_threads=p->live_threads;
     struct uaddr *u = p->memory;
     uint32_t reserve = t->w32_reserve ? t->w32_reserve : p->w32_stack_reserve ? p->w32_stack_reserve : 1024 * 1024;
     uint32_t commit = main || !t->stack_bytes ? p->w32_stack_commit : t->stack_bytes;
@@ -67,16 +68,18 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     struct w32_image *im = P2V(scratch);
     _Static_assert(sizeof(*im) <= PAGE_SIZE, "PE metadata scratch");
     int err = w32_pe_validate(file, im);
-    if (err) { klog("[win32] load check=%s error=193", im->failure ? im->failure : "read"); goto done; }
+    if (err) { klog("[win32] load check=%s error=193", im->failure ? im->failure : "read");
+        w32_refusal_queue(p,im->failure&&(!strncmp(im->failure,"machine-not-i386",17)||!strncmp(im->failure,"unsupported-subsystem",21)||!strncmp(im->failure,"optional-magic-not-pe32",23)||!strncmp(im->failure,"unsupported-runtime",20))?W32_REFUSE_RUNTIME:W32_REFUSE_IMAGE,p->name,193);goto done; }
     if (im->flags & 0x2000) { klog("[win32] load check=expected-executable error=193");err = -ENOEXEC; goto done; }
     p->personality = PROC_WIN32; p->memory->win32 = true;
+    err=w32_diagnostic_image(p,im->timestamp,im->bytes);if(err)goto done;
     p->w32_image = im->base; p->w32_stack_reserve = im->stack_reserve; p->w32_stack_commit = im->stack_commit;
     err = w32_image_map(p, file, im, false);
     if (err) {klog("[win32] load check=image-address-range error=193");goto done;}
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     struct ciuki_file loader = {0};
     err = ops ? ops->open(p->cwd, "/WINDOWS/SYSTEM/ntdll.dll", &loader) : -ENOENT;
-    if (err) { klog("[win32] load pid=%u check=missing-dll error=126",p->pid); goto done; }
+    if (err) { klog("[win32] load pid=%u check=missing-dll error=126",p->pid);w32_refusal_queue(p,W32_REFUSE_MISSING_DLL,"ntdll.dll",126); goto done; }
     err = w32_pe_validate(&loader, im);
     if (!err && !(im->flags & 0x2000)) err = -ENOEXEC;
     if (!err) err = w32_image_map(p, &loader, im, true);

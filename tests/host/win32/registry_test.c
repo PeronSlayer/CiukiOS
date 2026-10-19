@@ -289,10 +289,28 @@ static void malformed(void)
 }
 extern void version_tests(const char *);
 extern void lz_tests(const char *);
+static void compatibility(void)
+{
+    struct disk d={0};struct wr_server s;start(&s,&d);
+    const char *path="Software\\CiukiOS\\Win32\\AppCompat";
+    CHECK(rpc(&s,10,W32R_CREATE,W32R_HKLM,path,"",0,NULL,0,0)==5);
+    s.compat_writer_pid=99;
+    CHECK(!rpc(&s,99,W32R_CREATE,W32R_HKLM,path,"",0,NULL,0,0));uint32_t h=r.key;
+    const char database[]="[fixture.exe]\nfile-size=12\nshims=heap-zero@1\n";
+    CHECK(!rpc(&s,99,W32R_SET,h,"","Database",3,database,sizeof(database)-1,0));
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,path,"",0,NULL,0,0));uint32_t untrusted=r.key;
+    CHECK(rpc(&s,10,W32R_SET,untrusted,"","Database",3,"private",7,0)==5);
+    CHECK(rpc(&s,10,W32R_DELETE_VALUE,untrusted,"","Database",0,NULL,0,0)==5);
+    CHECK(rpc(&s,10,W32R_DELETE_KEY,W32R_HKLM,"Software\\CiukiOS","",0,NULL,0,0)==5);
+    CHECK(!rpc(&s,10,W32R_COMPAT,0,"","",0,NULL,0,0)&&r.type==3&&r.data_bytes==sizeof(database)-1&&!memcmp(result+40,database,sizeof(database)-1));
+    CHECK(!wr_flush(&s));wr_destroy(&s);start(&s,&d);
+    CHECK(!rpc(&s,10,W32R_COMPAT,0,"","",0,NULL,0,0)&&r.data_bytes==sizeof(database)-1);
+    wr_destroy(&s);clear(&d);puts("PASS AppCompat desktop-only writer, protected ancestor deletion, read-only startup snapshot and persistence");
+}
 int main(int argc,char **argv)
 {
     CHECK(argc>=2);
-    if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
+    if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
     else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
     else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;

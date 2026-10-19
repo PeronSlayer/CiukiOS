@@ -91,6 +91,11 @@ int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool wri
 #include "../../../src/kernel/core/fpu.c"
 #include "../../../src/kernel/proc/win32/memory.c"
 #include "../../../src/kernel/proc/win32/records.c"
+#define w32_log klog
+#define ksnprintf snprintf
+#include "../../../src/kernel/proc/win32/diagnostics.c"
+#undef ksnprintf
+#undef w32_log
 #include "../../../src/kernel/proc/win32/context.c"
 #include "../../../src/kernel/proc/win32/exception.c"
 #include "../../../src/kernel/proc/win32/pe.c"
@@ -296,6 +301,12 @@ static void test_spawn_exceptions(void)
     uint8_t gate[3];CHECK(!ua_read(p->memory,gate,CIUKI_W32_GATE,3)&&gate[0]==0xcd&&gate[1]==0x80&&gate[2]==0xc3);
     p->w32_dispatcher=0x70011000;t->task->win32=true;
     uint8_t fp[512] __attribute__((aligned(16)));t->task->fpu_area=fp;g_cpu_fxsr=true;g_cpu_sse=true;fpu_init();g_current=t->task;t->task->state=T_RUNNING;
+    uint32_t original_source=p->w32_source;
+    struct ciuki_w32_compat_args fingerprint={.action=1,.settings=t->teb+1024,.bytes=65};
+    CHECK(original_source&&!w32_compat_call(t,&fingerprint)&&p->w32_source==original_source&&fingerprint.image_size==0x3000);
+    CHECK(!ua_write(p->memory,t->teb+1536,"/fixture.exe",13));
+    struct ciuki_w32_loader_args original_open={.action=W32_LDR_OPEN,.path=t->teb+1536};
+    CHECK(!w32_loader_call(t,&original_open)&&original_open.address==original_source&&!p->w32_source);
     struct trap_frame tf={.vector=6,.gs=0x23,.fs=0x4b,.es=0x23,.ds=0x23,.cs=0x1b,.user_ss=0x23,.eip=0x401000,.user_esp=t->stack_base+t->stack_bytes-32,.eflags=0x202};
     struct ciuki_w32_context ctx;w32_context_capture(&ctx,&tf);fpu_w32_export(t->task,&ctx);
     struct ciuki_w32_exception exc={.code=W32_EXCEPTION_ILLEGAL,.address=tf.eip};

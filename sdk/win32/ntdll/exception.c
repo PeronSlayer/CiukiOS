@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright 2026 CiukiOS contributors. Original x86 SEH implementation. */
 #include <w32/ntdll.h>
+#include <w32/shims.h>
 #define END_CHAIN ((struct w32_seh *)~(uintptr_t)0)
 struct nested_frame {
     struct w32_seh registration;
@@ -172,7 +173,7 @@ static W32_NORETURN void finish(struct w32_exception *r, struct w32_context *c, 
             RtlRaiseException(&nested);
         }
     }
-    w32_diag("crash", "exception", "unhandled");
+    w32_report_exception(r,c);
     w32_terminate(status == STATUS_UNHANDLED_EXCEPTION ? r->ExceptionCode : (ULONG)status);
 }
 /* Kernel (or host adapter) delivery entry: record and context on the user

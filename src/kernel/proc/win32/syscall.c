@@ -48,6 +48,8 @@ int32_t w32_syscall(struct trap_frame *tf)
     if (!err) {
         struct ciuki_w32_header *h = (void *)record;
         switch (h->operation) {
+        case W32_COMPAT: status=w32_compat_call(self,(void *)record);break;
+        case W32_REPORT: status=w32_report_call(self,(void *)record);break;
         case W32_SNAPSHOT: status=w32_snapshot_call(self,(void *)record);break;
         case W32_PROCESS: status=w32_process_call(self,(void *)record);break;
         case W32_FILE: status=w32_file_call(self,(void *)record);break;
@@ -111,14 +113,7 @@ int32_t w32_syscall(struct trap_frame *tf)
         case W32_DIAGNOSTIC: {
             struct ciuki_w32_diagnostic *a = (void *)record;
             a->pid = self->process->pid; a->tid = self->tid;
-            /* One protected record; process-wide W21 stub budget supplements
-             * each generated export's once flag. Fatal load/crash records
-             * remain available after the warning budget is exhausted. */
-            if(a->kind==3 && self->process->w32){
-                if(self->process->w32->diagnostic_count>=64)break;
-                self->process->w32->diagnostic_count++;
-            }
-            klog("[win32] %s pid=%u tid=%u", (const char *)a->payload,a->pid,a->tid); break;
+            w32_diagnostic_record(self,a);break;
         }
         default: err = -ENOSYS; break;
         }

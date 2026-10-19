@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.win32 import census, stubs
+from scripts.win32 import census, stubs, stub_signatures
 
 CORE = ROOT / 'sdk/win32'
 CENSUS = ROOT / 'docs/design/research/win32-layer-2026-10-14.md'
@@ -37,7 +37,7 @@ def build(out):
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n' + ''.join(f' {n}@{a}\n' for n, a in imports.items()))
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'kernel32.lib'])
     definition = out/'ntdll-imports.def'
-    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n')
+    definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n')
     run(['llvm-dlltool', '-m', 'i386', '-d', definition, '-l', out/'ntdll.lib'])
     store = {'schema': 1, 'dlls': []}
     coverage = {}
@@ -54,6 +54,7 @@ def build(out):
             sources += [CORE/'lz32/mspack'/n for n in ('kwajd.c','szddd.c','lzssd.c','mszipd.c')]
         objects = []
         implemented = set()
+        wide = []
         for i, source in enumerate(sources):
             obj = out/f'{stem}-{i}.obj'
             flags = ['--target=i686-pc-windows-msvc', '-march=pentiumpro', '-mno-sse', '-mno-sse2',
@@ -73,17 +74,24 @@ def build(out):
             # functions and the cdecl libmspack API never become PE exports.
             if source.name in ('registry.c','version.c','lz32.c'):
                 implemented.update(re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)@\d+\b', nm))
+                for name,bytes_ in re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*W)@(\d+)\b',nm):
+                    run(['llvm-objcopy','--redefine-sym',f'_{name}@{bytes_}=_w32_real_{name}@{bytes_}',obj])
+                    wide.append((name,int(bytes_)))
+        gates=out/(stem+'-wide.c')
+        gates.write_text(stub_signatures.DECLARATIONS+'\n__declspec(dllimport) int w32_shim_w_stub(const char *);\n'+
+            '\n'.join(stub_signatures.wide_gate(dll,n,b,i) for i,(n,b) in enumerate(wide))+'\n')
+        obj=out/(stem+'-wide.obj')
+        run(['clang',*flags,'-c',gates,'-o',obj]);objects.append(obj)
         unresolved = names.get(dll,set()) - implemented
         source = out/(stem+'-stubs.c')
-        source.write_text('__declspec(dllimport) void w32_stub_hit(volatile unsigned *,const char *,const char *);\n' +
-                          '\n'.join(f'static volatile unsigned once{i}; void stub{i}(void) {{ w32_stub_hit(&once{i},"{dll}","{n}"); __builtin_trap(); }}'
-                                    for i,n in enumerate(sorted(unresolved))))
+        bodies=[stub_signatures.body(dll,n,f'stub{i}',i) for i,n in enumerate(sorted(unresolved))]
+        source.write_text(stub_signatures.DECLARATIONS+'\n'+'\n'.join(b[0] for b in bodies))
         obj = out/(stem+'-stubs.obj')
         run(['clang','--target=i686-pc-windows-msvc','-march=pentiumpro','-ffreestanding','-fno-stack-protector','-O1','-c',source,'-o',obj])
         objects.append(obj)
         definition = out/(stem+'.def')
         definition.write_text('LIBRARY '+dll+'\nEXPORTS\n'+''.join(' '+n+'\n' for n in sorted(implemented))+
-                              ''.join(f' {n}=stub{i}\n' for i,n in enumerate(sorted(unresolved))))
+                              ''.join(f' {n}={bodies[i][1]}\n' for i,n in enumerate(sorted(unresolved))))
         resource = out/(stem+'.res')
         rc = out/(stem+'.rc')
         rc.write_text(rc.read_text().replace('placeholder', 'system facade'))

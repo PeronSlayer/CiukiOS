@@ -53,6 +53,11 @@ EXPORTS
     RtlImageDirectoryEntryToData
     NtCurrentTeb=w32_current_teb
     w32_stub_hit
+    w32_shim_stub
+    w32_shim_w_stub
+    w32_shim_version
+    w32_shim_current
+    w32_report_refusal
     w32_set_services PRIVATE
     w32_ldr_bind PRIVATE
     SetUnhandledExceptionFilter

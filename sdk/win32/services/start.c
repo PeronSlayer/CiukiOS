@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright 2026 CiukiOS contributors. Production personality startup. */
 #include <w32/store.h>
+#include <w32/shims.h>
 #include <ciuki/abi.h>
 #include <ciuki/w32_core.h>
 int w32_ciuki_store(struct w32_loader *l, struct w32_file *snapshot) {
@@ -97,6 +98,7 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
     peb->SubSystemData = peb->ProcessParameters; /* retain v2 endpoints/startup handoff */
     peb->ProcessParameters = p;
     w32_copy_string(l->current_directory, sizeof(l->current_directory), directory);
+    if(!w32_shim_start(l,exe))return STATUS_INVALID_PARAMETER;
     if (!w32_ldr_thread_attach(l, NtCurrentTeb()))
         return STATUS_NO_MEMORY;
     if (l->builtin_count) {
@@ -133,6 +135,10 @@ W32_NORETURN void W32API CiukiProcessStart(struct w32_peb *peb) {
                                      .entry = (ULONG)(uintptr_t)KiUserExceptionDispatcher};
     if (w32_ciuki_call(&d, sizeof(d)))
         w32_terminate(STATUS_INVALID_PARAMETER);
+    const struct ciuki_w32_parameters_v2 *services=(const void *)peb->ProcessParameters;
+    if(services->desktop_endpoint==UINT32_MAX||services->w32srv_endpoint==UINT32_MAX){
+        w32_report_refusal(W32_REFUSE_SERVER,"w32srv",1062);w32_terminate(STATUS_DLL_INIT_FAILED);
+    }
     /* start() resets the loader; retain manifest ownership outside it. */
     if (!w32_ciuki_store(&process_loader, &store_snapshot)) {
         w32_diag("load", "builtin-store", "builtin-manifest");

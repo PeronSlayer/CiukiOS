@@ -5,7 +5,18 @@
 #include <ciuki/files.h>
 /* Translate only the loader's Windows namespace; native open stays unchanged.
  * /mnt/<letter> is the existing VFS view, never a hardcoded disk identity. */
+bool w32_refuse_image_name(struct process *p,const char *name){
+    const char *base=name;for(const char *q=name;*q;q++)if(*q=='/'||*q=='\\')base=q+1;
+    unsigned len=(unsigned)strlen(base);
+    bool msi=len>=4&&path_upper((uint8_t)base[len-4])=='.'&&path_upper((uint8_t)base[len-3])=='M'&&path_upper((uint8_t)base[len-2])=='S'&&path_upper((uint8_t)base[len-1])=='I';
+    char lower[16];unsigned k=0;for(;base[k]&&k+1<sizeof(lower);k++)lower[k]=(char)path_upper((uint8_t)base[k]);lower[k]=0;
+    if(msi||!strncmp(lower,"MSIEXEC.EXE",12)||!strncmp(lower,"MSI.DLL",8)){
+        w32_refusal_queue(p,W32_REFUSE_MSI,base,120);return true;
+    }
+    return false;
+}
 int w32_loader_open(struct process *p, const char *name, struct ciuki_file *out) {
+    if(w32_refuse_image_name(p,name))return -ENOSYS;
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     if (!ops)
         return -ENOENT;

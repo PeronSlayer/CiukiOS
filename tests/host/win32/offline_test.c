@@ -35,7 +35,8 @@ int main(void) {
         teb.LastErrorValue == 42);
   int length = 16;
   CHECK(getsockname(0, data, &length) == -1 && length == 16 &&
-        data[0] == 0x55 && records == 1);
+        data[0] == 0x55 && records == 3);
+  CHECK(getsockname(0,data,&length)==-1&&records==3);
   CHECK(WSACleanup() == -1 && WSAGetLastError() == 10093);
   CHECK(htons(0x1234) == 0x3412 && inet_addr("127.0.0.1") == 0x0100007f &&
         inet_addr("999.0.0.1") == ~0u);

@@ -7,6 +7,7 @@
  * unless HEAP_FREE_CHECKING_ENABLED asks for the debug fill: titles of the era
  * read freed blocks (contract, "Sections, heaps and file mappings"). */
 #include <w32/ntdll.h>
+#include <w32/shims.h>
 #define HEAP_MAGIC 0x43554850u
 #define BLOCK_MAGIC 0x4355424cu
 #define MAX_HEAP_SIZE 0x20000000u
@@ -113,7 +114,7 @@ static struct block *find(struct heap *h, const void *p) {
 static int tail_ok(struct heap *h, struct block *b) {
     if (!(h->flags & HEAP_TAIL_CHECKING_ENABLED) || !b->used)
         return 1;
-    uint8_t *p = (uint8_t *)(b + 1) + b->size;
+    uint8_t *p = (uint8_t *)(b + 1) + b->size + w32_shims.heap_pad;
     for (unsigned i = 0; i < 8; i++)
         if (p[i] != 0xab)
             return 0;
@@ -191,7 +192,7 @@ static void absorb(struct heap *h, struct block *b) {
 }
 static void stamp(struct heap *h, struct block *b) {
     if (h->flags & HEAP_TAIL_CHECKING_ENABLED)
-        w32_fill((uint8_t *)(b + 1) + b->size, 0xab, 8);
+        w32_fill((uint8_t *)(b + 1) + b->size + w32_shims.heap_pad, 0xab, 8);
 }
 static void *failure(ULONG flags) {
     if (flags & HEAP_GENERATE_EXCEPTIONS)
@@ -200,7 +201,7 @@ static void *failure(ULONG flags) {
 }
 static ULONG capacity_for(struct heap *h, uint32_t size) {
     ULONG tail = (h->flags & HEAP_TAIL_CHECKING_ENABLED) ? 8 : 0;
-    return ((size ? size : 1) + tail + 7) & ~7u;
+    return ((size ? size : 1) + w32_shims.heap_pad + tail + 7) & ~7u;
 }
 void *W32API RtlCreateHeap(ULONG flags, void *base, uint32_t reserve, uint32_t commit, void *lock,
                            void *params) {
@@ -251,7 +252,7 @@ void *W32API RtlDestroyHeap(void *p) {
 }
 static void *allocate_locked(struct heap *h, ULONG flags, uint32_t size) {
     ULONG combined = flags | h->flags;
-    if (size > MAX_HEAP_SIZE - 16)
+    if (size > MAX_HEAP_SIZE - 16 - w32_shims.heap_pad)
         return 0;
     ULONG cap = capacity_for(h, size);
     struct block *b = cap >= LARGE_BLOCK ? 0 : bin_take(h, cap);
@@ -265,7 +266,7 @@ static void *allocate_locked(struct heap *h, ULONG flags, uint32_t size) {
     b->used = 1;
     split(h, b, cap);
     b->size = size;
-    if (combined & HEAP_ZERO_MEMORY)
+    if ((combined & HEAP_ZERO_MEMORY) || (w32_shims.mask&W32_SHIM_BIT(W32_SH_HEAP_ZERO)))
         w32_fill(b + 1, 0, size);
     else if (h->flags & HEAP_FREE_CHECKING_ENABLED) {
         uint8_t *d = (void *)(b + 1);
@@ -338,10 +339,10 @@ void *W32API RtlReAllocateHeap(void *p, ULONG flags, void *data, uint32_t size) 
     if (!data || !lock_heap(h, flags))
         return 0;
     struct block *b = find(h, data);
-    ULONG combined = h->flags | flags;
-    if (!b || !b->used || !tail_ok(h, b) || size > MAX_HEAP_SIZE - 16) {
+    ULONG combined = h->flags | flags | ((w32_shims.mask&W32_SHIM_BIT(W32_SH_HEAP_ZERO))?HEAP_ZERO_MEMORY:0);
+    if (!b || !b->used || !tail_ok(h, b) || size > MAX_HEAP_SIZE - 16 - w32_shims.heap_pad) {
         unlock_heap(h, flags);
-        return size > MAX_HEAP_SIZE - 16 && b ? failure(combined) : 0;
+        return size > MAX_HEAP_SIZE - 16 - w32_shims.heap_pad && b ? failure(combined) : 0;
     }
     ULONG old = b->size, cap = capacity_for(h, size);
     ULONG available = b->capacity;

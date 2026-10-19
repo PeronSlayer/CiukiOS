@@ -12,6 +12,39 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include "win32_crash.h"
+uint32_t desk_w32_record(void *,uint32_t);
+extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
+extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
+static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
+static void *crash_disk_worker(void *p)
+{
+    pthread_mutex_lock(&crash_disk_lock);
+    int error=desk_w32_crash_store?desk_w32_crash_store("/WINDOWS/CRASH",p):-ENOSYS;
+    pthread_mutex_unlock(&crash_disk_lock);
+    if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
+    free(p);return NULL;
+}
+static int fault_close(uint32_t pid)
+{
+    struct ciuki_w32_report_args a={.header={1,sizeof(a),W32_REPORT,0},.action=W32_REPORT_CLOSE,.code=pid};
+    return desk_w32_record(&a,sizeof(a))?-EIO:0;
+}
+static void fault_poll(struct desktop *d)
+{
+    if(d->v3_dialog_kind||!desk_w32_fault_dialog)return;
+    struct ciuki_w32_fault f={0};
+    struct ciuki_w32_report_args a={.header={1,sizeof(a),W32_REPORT,0},.action=W32_REPORT_NEXT,
+        .buffer=(uint32_t)(uintptr_t)&f,.bytes=sizeof(f)};
+    if(desk_w32_record(&a,sizeof(a))||!a.result)return;
+    if(f.kind==W32_REPORT_CRASH){
+        struct ciuki_w32_fault *copy=malloc(sizeof(*copy));
+        if(copy){*copy=f;pthread_t thread;if(pthread_create(&thread,NULL,crash_disk_worker,copy)){free(copy);fprintf(stderr,"[win32] warning check=crash-file-worker\n");}else pthread_detach(thread);}
+        else fprintf(stderr,"[win32] warning check=crash-file-allocation\n");
+    }
+    d->v3_fault_close=fault_close;desk_w32_fault_dialog(d,&f);
+}
 uint32_t desk_w32_record(void *,uint32_t);
 static uint64_t clock_ns(void)
 {struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint64_t)t.tv_sec*1000000000+(uint32_t)t.tv_nsec;}
@@ -194,6 +227,7 @@ void desk_w32_start(struct desktop *d)
 void desk_w32_poll(struct desktop *d)
 {
     if(!authorized)return;
+    fault_poll(d);
     uint64_t now=clock_ns();
     if(!d->power.state){
         shutdown_pending=shutdown_done=shutdown_error=0;

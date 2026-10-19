@@ -55,12 +55,13 @@ def imports(text):
     return result
 
 def generate(inputs,out,implemented=None):
+    from scripts.win32 import stub_signatures
     all_imports={}
     for path in inputs:
         for dll,names in imports(Path(path).read_text()).items(): all_imports.setdefault(dll,set()).update(names)
     implemented=implemented or {}
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
-    manifest={'schema':1,'license':'LGPL-2.1-or-later','stub_behavior':'diagnose-once; noncontinuable STATUS_NOT_IMPLEMENTED','dlls':[]}
+    manifest={'schema':1,'license':'LGPL-2.1-or-later','stub_behavior':'diagnose-once; typed failure; no-defined-failure or unknown ABI raises STATUS_NOT_IMPLEMENTED','dlls':[]}
     for dll,names in sorted(all_imports.items()):
         stem=dll.rsplit('.',1)[0]
         assignments=ORDINALS.get(dll,{})
@@ -69,28 +70,28 @@ def generate(inputs,out,implemented=None):
         normalized=set(by_ordinal.get(int(n[1:]),n) if n.startswith('#') else n for n in names)
         entries=[];c=['/* SPDX-License-Identifier: LGPL-2.1-or-later */',
           '/* Copyright 2026 CiukiOS contributors. Generated; do not edit. */',
-          '__declspec(dllimport) void w32_stub_hit(volatile unsigned *, const char *, const char *);']
+          stub_signatures.DECLARATIONS]
         definition=['; SPDX-License-Identifier: LGPL-2.1-or-later','LIBRARY '+dll,'EXPORTS']
         for i,name in enumerate(sorted(normalized)):
             ordinal=int(name[1:]) if name.startswith('#') else assignments.get(name)
             symbol=f'w32_stub_{i:04d}'
             implementation=implemented.get(dll,{}).get(name)
+            audit=None
             if implementation:
                 # Use a PE forwarder to an implementation; do not generate a
                 # competing placeholder for an already implemented export.
                 if not re.fullmatch(r'[\w-]+\.[\w?$@]+',implementation): raise ValueError('invalid implementation forwarder')
                 target=implementation
             else:
-                c += [f'static volatile unsigned once_{i:04d};',
-                      f'void {symbol}(void) {{ w32_stub_hit(&once_{i:04d}, "{dll}", "{name}"); __builtin_trap(); }}']
-                target=symbol
+                source,target,audit=stub_signatures.body(dll,name,symbol,i)
+                c.append(source)
             export=name if not name.startswith('#') else f'W32_Ordinal_{ordinal}'
             line=f'    {export}={target}'
             if ordinal is not None: line+=f' @{ordinal}'
             if name.startswith('#'): line+=' NONAME'
             definition.append(line)
             entries.append({'name':None if name.startswith('#') else name,'ordinal':ordinal,
-                            'implementation':implementation,'diagnostic':name})
+                            'implementation':implementation,'diagnostic':name,'audit':audit})
         (out/(stem+'.c')).write_text('\n'.join(c)+'\n')
         (out/(stem+'.def')).write_text('\n'.join(definition)+'\n')
         (out/(stem+'.rc')).write_text(

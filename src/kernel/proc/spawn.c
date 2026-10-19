@@ -174,10 +174,12 @@ int proc_stack_build(struct uaddr *u, const struct proc_strings *s,
 
 extern bool w32_is_pe(const struct ciuki_file *) __attribute__((weak));
 extern int w32_spawn(struct process *, const struct ciuki_file *, const struct proc_strings *, uint64_t) __attribute__((weak));
+extern bool w32_refuse_image_name(struct process *,const char *) __attribute__((weak));
 
 static int prepare_image(struct process *p, const struct ciuki_file *file,
                           const struct proc_strings *strings, uint64_t mask)
 {
+    if(w32_refuse_image_name&&w32_refuse_image_name(p,p->name))return -ENOSYS;
     if (w32_is_pe && w32_is_pe(file)) return w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
     struct elf_image image;
     int err = elf_validate(file, &image);
@@ -208,7 +210,7 @@ static void name_from_argv0(struct process *p, const struct proc_strings *s)
         char c = ((const char *)P2V(s->pages[at / PAGE_SIZE]))[at % PAGE_SIZE];
         if (!c)
             break;
-        if (c == '/')
+        if (c == '/' || c == '\\')
             n = 0;
         else if (n < sizeof(name) - 1)
             name[n++] = c;

@@ -1734,7 +1734,8 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     }
     default: {
         int width,height;
-        du_message_size(d->sh.message_text,d->sh.message_kind,1,(int)d->width-20,&width,&height);
+        du_message_size(d->v3_dialog_kind==1&&d->v3_details_open?d->v3_details:d->sh.message_text,d->sh.message_kind,1,(int)d->width-20,&width,&height);
+        if(d->v3_dialog_kind==1){if(width<420)width=420;if(d->v3_details_open){width=610;height=320;}}
         *w=(uint32_t)width; *h=(uint32_t)height;
     }
     }
@@ -1793,6 +1794,7 @@ void desk_internal_closed(struct desktop *d, int index)
 {
     if (d->about == index) d->about = -1;
     if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->v3_dialog_kind) {
+        if(d->v3_dialog_kind==1)(void)desk_v3_dialog_accept(d);
         d->v3_dialog_kind=0; d->v3_dialog_pid=0;
     }
     if (d->clients[index].internal == DESK_INTERNAL_AUTOPLAY) d->sh.autoplay.open=0;
@@ -1818,7 +1820,7 @@ static struct desk_box button_box(struct desk_box content, int index, int count)
 }
 static struct desk_box message_button_box(const struct desktop *d, struct desk_box content, int index)
 {
-    int count=d->v3_dialog_kind==2 ? 2 : 1;
+    int count=d->v3_dialog_kind==1||d->v3_dialog_kind==2 ? 2 : 1;
     if (!d->v3_dialog_kind) return button_box(content,index,count);
     return (struct desk_box){content.x+content.w-12-(count-index)*140-(count-index-1)*8,
                             content.y+content.h-33,140,23};
@@ -2060,9 +2062,10 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     default:
         du_icon_blit(&c, content.x + 14, content.y + 14, desk_shell_icon(du_message_icon_name(d->sh.message_kind), 32), 32, DU_ICON_NORMAL);
-        du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},d->sh.message_text,SH_INK);
+        du_text_wrap(&c,(struct du_rect){content.x+60,content.y+16,content.w-76,content.h-67},d->v3_dialog_kind==1&&d->v3_details_open?d->v3_details:d->sh.message_text,SH_INK);
         push_button(&c, message_button_box(d,content,0),
-                    d->v3_dialog_kind==1 ? "Close program" : d->v3_dialog_kind==2 ? "Restart Windows" : "OK",1);
+                    d->v3_dialog_kind==1 ? "Close" : d->v3_dialog_kind==2 ? "Restart Windows" : "OK",1);
+        if (d->v3_dialog_kind==1) push_button(&c,message_button_box(d,content,1),"Details",0);
         if (d->v3_dialog_kind==2) push_button(&c,message_button_box(d,content,1),"Cancel",0);
         break;
     }
@@ -2134,6 +2137,10 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         if (desk_contains(message_button_box(d,content,0),x,y)) {
             if (d->v3_dialog_kind) (void)desk_v3_dialog_accept(d);
             desk_request_close(d,index);
+        } else if (d->v3_dialog_kind==1 && desk_contains(message_button_box(d,content,1),x,y)) {
+            d->v3_details_open=!d->v3_details_open;
+            uint32_t w,h;internal_size(d,DESK_INTERNAL_MESSAGE,&w,&h);
+            cl->frame=desk_frame(w,h,cl->frame.x,cl->frame.y);damage_all(d);
         } else if (d->v3_dialog_kind==2 && desk_contains(message_button_box(d,content,1),x,y)) {
             d->v3_dialog_kind=0; desk_request_close(d,index);
         }
@@ -2557,10 +2564,15 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
         return 1;
     default:
+        if(d->v3_dialog_kind==1&&(code==DU_KEY_TAB||code==0x20)){
+            d->v3_details_open=!d->v3_details_open;
+            uint32_t w,h;internal_size(d,DESK_INTERNAL_MESSAGE,&w,&h);
+            c->frame=desk_frame(w,h,c->frame.x,c->frame.y);damage_all(d);return 1;
+        }
         if (code==DU_KEY_ENTER || code==DU_KEY_SPACE) {
             if (d->v3_dialog_kind) (void)desk_v3_dialog_accept(d);
             desk_request_close(d,index);
-        } else if (code==DU_KEY_ESC) { d->v3_dialog_kind=0; desk_request_close(d,index); }
+        } else if (code==DU_KEY_ESC) { if(d->v3_dialog_kind==1)(void)desk_v3_dialog_accept(d);d->v3_dialog_kind=0; desk_request_close(d,index); }
         return 1;
     }
 }

@@ -56,6 +56,13 @@ static int copy_path(uint32_t va, char out[FS_PATH_BYTES]) {
   }
   return -ENAMETOOLONG;
 }
+static bool driver_destination(const char *full){
+  static const char root[]="C:\\WINDOWS\\";
+  for(unsigned i=0;i<sizeof(root)-1;i++)if(path_upper((uint8_t)full[i])!=(uint8_t)root[i])return false;
+  unsigned n=(unsigned)strlen(full);if(n<4||full[n-4]!='.')return false;
+  char ext[4];for(unsigned i=0;i<3;i++)ext[i]=(char)path_upper((uint8_t)full[n-3+i]);ext[3]=0;
+  return !strncmp(ext,"VXD",4)||!strncmp(ext,"SYS",4)||!strncmp(ext,"DRV",4);
+}
 /* Trim each component before lexical normalization, so ".. " is a parent.
  * UNC and device prefixes are classified before slash conversion. */
 uint32_t w32_native_path(struct process *p, const char *name,
@@ -527,6 +534,9 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   if (write && (protected_path(s, cwd, path) ||
                 (a->path2 && protected_path(s, cwd, path2))))
     error = 5;
+  if(write&&(driver_destination(full)||(a->path2&&driver_destination(full2)))){
+    error=5;w32_refusal_queue(p,W32_REFUSE_DRIVER,a->path2?full2:full,5);
+  }
   int e = 0;
   if (!error && a->action == W32_F_OPEN) {
     if (!a->path || a->disposition < 1 || a->disposition > 5 ||

@@ -68,6 +68,9 @@ def build(out=None):
         '/base:0x00400000','/subsystem:windows,4.0','/osversion:4.0','/timestamp:0',
         '/incremental:no','/out:'+str(peer_exe),str(peer)],check=True)
     hashes[peer_exe.name]=hashlib.sha256(peer_exe.read_bytes()).hexdigest()
+    # Same authored PE bytes under a separate, explicitly shimmed identity.
+    shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
+    hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()
     (out/'fixtures').mkdir(exist_ok=True)
     for name in hashes:shutil.copyfile(fixture_source/name,out/'fixtures'/name)
     (out/'fixtures.json').write_text(json.dumps({'schema':1,'files':hashes},sort_keys=True,indent=2)+'\n')

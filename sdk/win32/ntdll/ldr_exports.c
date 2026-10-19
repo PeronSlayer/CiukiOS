@@ -26,6 +26,8 @@ static NTSTATUS result(void) {
         return STATUS_DLL_INIT_FAILED;
     case 193:
         return (NTSTATUS)0xc000007b;
+    case 120:
+        return STATUS_NOT_IMPLEMENTED;
     default:
         return STATUS_INVALID_PARAMETER;
     }

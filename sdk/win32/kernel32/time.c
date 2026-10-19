@@ -1,6 +1,7 @@
 /* Gregorian conversion in the Windows FILETIME epoch. UTC fallback.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
+#include <w32/shims.h>
 static int leap(unsigned y) { return !(y % 4) && (y % 100 || !(y % 400)); }
 static unsigned days(unsigned y, unsigned m) {
   static const uint8_t d[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -162,38 +163,43 @@ BOOL W32API FileTimeToDosDateTime(const FILETIME *f, uint16_t *date,
 static int identity(struct ciuki_w32_identity *a) {
   w32_fill(a, 0, sizeof(*a));
   a->header = K32_HEADER(W32_IDENTITY, *a);
-  return k32_status(w32_ciuki_call(a, sizeof(*a)));
+  int ok=k32_status(w32_ciuki_call(a, sizeof(*a)));
+  if(ok)w32_shim_version(a);
+  return ok;
 }
 DWORD W32API GetVersion(void) {
   struct ciuki_w32_identity a;
   return identity(&a) ? a.get_version : 0;
 }
 BOOL W32API GetVersionExA(OSVERSIONINFOA *out) {
-  if (!out || out->size != sizeof(*out)) {
+  if (!out || (out->size != sizeof(*out)&&out->size!=sizeof(OSVERSIONINFOEXA))) {
     SetLastError(87);
     return 0;
   }
   struct ciuki_w32_identity a;
   if (!identity(&a))
     return 0;
-  OSVERSIONINFOA v = {.size = sizeof(v),
+  DWORD requested=out->size;
+  OSVERSIONINFOA v = {.size = requested,
                       .major = a.major,
                       .minor = a.minor,
                       .build = a.build,
                       .platform = a.platform};
   w32_copy(v.csd, a.csd, 4);
   *out = v;
+  if(requested==sizeof(OSVERSIONINFOEXA)){OSVERSIONINFOEXA *ex=(void *)out;ex->service_major=0;ex->service_minor=0;ex->suite=0;ex->product=1;ex->reserved=0;}
   return 1;
 }
 BOOL W32API GetVersionExW(OSVERSIONINFOW *out) {
-  if (!out || out->size != sizeof(*out)) {
+  if (!out || (out->size != sizeof(*out)&&out->size!=sizeof(OSVERSIONINFOEXW))) {
     SetLastError(87);
     return 0;
   }
   struct ciuki_w32_identity a;
   if (!identity(&a))
     return 0;
-  OSVERSIONINFOW v = {.size = sizeof(v),
+  DWORD requested=out->size;
+  OSVERSIONINFOW v = {.size = requested,
                       .major = a.major,
                       .minor = a.minor,
                       .build = a.build,
@@ -201,7 +207,43 @@ BOOL W32API GetVersionExW(OSVERSIONINFOW *out) {
   for (unsigned i = 0; i < 4; i++)
     v.csd[i] = a.csd[i];
   *out = v;
+  if(requested==sizeof(OSVERSIONINFOEXW)){OSVERSIONINFOEXW *ex=(void *)out;ex->service_major=0;ex->service_minor=0;ex->suite=0;ex->product=1;ex->reserved=0;}
   return 1;
+}
+uint64_t W32API VerSetConditionMask(uint64_t mask,DWORD type,uint8_t condition){
+  if(condition<1||condition>7)return mask;
+  for(unsigned i=0;i<8;i++)if(type&(1u<<i)){mask&=~(7ull<<(3*i));mask|=(uint64_t)condition<<(3*i);}
+  return mask;
+}
+static BOOL verify_version(DWORD major,DWORD minor,DWORD build,DWORD platform,DWORD spmajor,DWORD spminor,DWORD suite,DWORD product,DWORD type,uint64_t mask){
+  if(!type||(type&~255u)){SetLastError(87);return 0;}
+  struct ciuki_w32_identity a;if(!identity(&a))return 0;
+  const DWORD have[8]={a.minor,a.major,a.build,a.platform,0,0,0,1};
+  const DWORD want[8]={minor,major,build,platform,spminor,spmajor,suite,product};
+  /* Version fields compare lexicographically, as Microsoft's hierarchy:
+   * major, minor, service-pack major, service-pack minor. */
+  const unsigned order[8]={1,0,5,4,2,3,6,7};int decided=0;unsigned hierarchy=0;
+  for(unsigned j=0;j<8;j++){
+    unsigned i=order[j];if(!(type&(1u<<i)))continue;
+    unsigned op=(unsigned)(mask>>(i*3))&7;if(!op||(i!=6&&op>5)||(i==6&&op<6)){SetLastError(87);return 0;}
+    if(j<4&&decided)continue;
+    DWORD x=have[i],y=want[i];int ok=op==1?x==y:op==2?x>y:op==3?x>=y:op==4?x<y:op==5?x<=y:op==6?(x&y)==y:(x&y)!=0;
+    if(j<4){
+      if(!hierarchy&&op!=1)hierarchy=op;
+      if(hierarchy){if(x==y)continue;op=hierarchy;ok=op==2||op==3?x>y:x<y;}
+    }
+    if(!ok){SetLastError(1150);return 0;}if(j<4&&x!=y)decided=1;
+  }
+  if(!decided&&(hierarchy==2||hierarchy==4)){SetLastError(1150);return 0;}
+  return 1;
+}
+BOOL W32API VerifyVersionInfoA(OSVERSIONINFOEXA *v,DWORD type,uint64_t mask){
+  if(!v||v->base.size!=sizeof(*v)){SetLastError(87);return 0;}
+  return verify_version(v->base.major,v->base.minor,v->base.build,v->base.platform,v->service_major,v->service_minor,v->suite,v->product,type,mask);
+}
+BOOL W32API VerifyVersionInfoW(OSVERSIONINFOEXW *v,DWORD type,uint64_t mask){
+  if(!v||v->base.size!=sizeof(*v)){SetLastError(87);return 0;}
+  return verify_version(v->base.major,v->base.minor,v->base.build,v->base.platform,v->service_major,v->service_minor,v->suite,v->product,type,mask);
 }
 static DWORD cpu_signature(DWORD *features) {
   DWORD a, b, c, d;
@@ -255,6 +297,8 @@ void W32API GlobalMemoryStatus(MEMORYSTATUS *m) {
   if (!k32_status(w32_ciuki_call(&a, sizeof(a))))
     return;
   uint64_t total = (uint64_t)a.low * 4096, avail = (uint64_t)a.high * 4096;
+  uint64_t cap=(uint64_t)w32_shim_current()->memory_mib*1048576;
+  if(cap){if(total>cap)total=cap;if(avail>total)avail=total;}
   DWORD t = total > 0x7fffffff ? 0x7fffffff : (DWORD)total,
         f = avail > 0x7fffffff ? 0x7fffffff : (DWORD)avail;
   *m = (MEMORYSTATUS){
@@ -262,6 +306,15 @@ void W32API GlobalMemoryStatus(MEMORYSTATUS *m) {
       t,          f,
       t,          f,
       0x7fffffff, a.extra > 524287 ? 0 : 0x7fffffff - a.extra * 4096};
+}
+BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *m){
+  if(!m||m->length!=sizeof(*m)){SetLastError(87);return 0;}
+  struct ciuki_w32_system_args a={.action=W32_S_MEMORY};a.header=K32_HEADER(W32_SYSTEM,a);
+  if(!k32_status(w32_ciuki_call(&a,sizeof(a))))return 0;
+  uint64_t total=(uint64_t)a.low*4096,available=(uint64_t)a.high*4096,cap=(uint64_t)w32_shim_current()->memory_mib*1048576;
+  if(cap&&total>cap)total=cap;if(available>total)available=total;
+  *m=(MEMORYSTATUSEX){sizeof(*m),total?(DWORD)((total-available)*100/total):0,total,available,total,available,
+      0x7fffffff,a.extra>524287?0:0x7fffffff-a.extra*4096,0};return 1;
 }
 BOOL W32API GetComputerNameA(char *out, DWORD *n) {
   if (!n || !out) {

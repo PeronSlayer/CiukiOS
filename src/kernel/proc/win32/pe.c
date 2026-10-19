@@ -31,6 +31,7 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
     PE_CHECK(pe32(pe) == 0x4550, "pe-signature");
     PE_CHECK(pe16(pe + 4) == 0x14c, "machine-not-i386");
     im->count = pe16(pe + 6); im->flags = pe16(pe + 22);
+    im->timestamp=pe32(pe+8);
     PE_CHECK(im->count && im->count <= 96, "section-count");
     PE_CHECK(im->flags & 2, "not-executable-image");
     uint32_t olen = pe16(pe + 20), o = off + 24;
@@ -79,6 +80,7 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
         }
         im->directories[i * 2] = r; im->directories[i * 2 + 1] = n;
     }
+    PE_CHECK(!im->directories[29],"unsupported-runtime"); /* CLR header */
     if (pe16(op + 48) > 5) klog("[win32] load warning=newer-subsystem-version major=%u", pe16(op + 48));
     return 0;
 }

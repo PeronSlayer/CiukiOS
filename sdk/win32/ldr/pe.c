@@ -48,6 +48,7 @@ int w32_pe_parse(struct w32_pe *p, const void *bytes, ULONG size, struct w32_err
     CHECK(w32_u16(f + o) == 0x10b, "optional-magic-not-pe32");
     ULONG nd = w32_u32(f + o + 92);
     CHECK(nd <= 16 && olen >= 96 + nd * 8, "directory-count");
+    CHECK(nd<=14||!w32_u32(f+o+96+14*8+4),"unsupported-runtime");
     p->preferred = p->base = w32_u32(f + o + 28);
     p->entry = w32_u32(f + o + 16);
     ULONG sa = w32_u32(f + o + 32), fa = w32_u32(f + o + 36);

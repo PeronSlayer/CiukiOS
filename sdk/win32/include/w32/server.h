@@ -21,7 +21,7 @@ enum w32r_op {
     W32R_INFO, W32R_FLUSH, W32R_USERNAME,
     W32R_ATOM_ADD, W32R_ATOM_FIND, W32R_ATOM_DELETE, W32R_ATOM_NAME,
     W32R_WINDOW_ALLOC, W32R_WINDOW_SET, W32R_WINDOW_GET, W32R_WINDOW_ENUM,
-    W32R_WINDOW_FREE, W32R_SHUTDOWN
+    W32R_WINDOW_FREE, W32R_SHUTDOWN, W32R_COMPAT
 };
 /* No pointers on the wire. Request tail = path NUL, name NUL, data bytes.
  * Strings are UTF-8; value bytes are canonical UTF-16LE for string types.

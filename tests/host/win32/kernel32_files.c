@@ -6,6 +6,7 @@
 #include "../proc/files_test.c"
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+void w32_refusal_queue(struct process *p,uint32_t why,const char *name,uint32_t error){(void)p;(void)name;CHECK(why==W32_REFUSE_DRIVER&&error==5);}
 static struct w32_object *handles[64];
 static unsigned core_allocations;
 void *w32_alloc(uint32_t n) {
@@ -115,6 +116,11 @@ int main(int argc, char **argv) {
   client->cwd_retain = px_retain;
   client->cwd_release = px_release;
   CHECK(path_request("C:\\WINDOWS", W32_F_MKDIR) == 0);
+  for(unsigned i=0;i<3;i++){
+    const char *drivers[]={"C:\\WINDOWS\\fixture.sys","C:\\windows\\fixture.VXD","C:\\WINDOWS\\fixture.drv"};
+    struct ciuki_w32_file_args refused=open_request(drivers[i],0xc0000000u,3,2);
+    CHECK(refused.error==5&&!refused.result);
+  }
   CHECK(path_request("C:\\System", W32_F_MKDIR) == 5);
   struct ciuki_w32_file_args a =
       open_request("C:\\WINDOWS\\Long File.txt", 0xc0000000u, 1, 1);

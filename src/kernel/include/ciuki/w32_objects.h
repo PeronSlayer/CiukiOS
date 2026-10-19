@@ -5,6 +5,8 @@
 #include <ciuki/w32_transport.h>
 #include <ciuki/win32.h>
 #include <ciuki/ledger.h>
+#include <ciuki/w32_diagnostics.h>
+struct w32_diagnostic_state;
 struct w32_object;
 struct w32_process;
 struct w32_thread;
@@ -30,6 +32,8 @@ struct w32_process {
     struct px_node *drive_cwd[26];
     uint32_t handles, private_bytes, apc_dispatcher;
     uint32_t endpoint[2], service, diagnostic_count, priority_class;
+    uint32_t peak_handles, peak_threads, exit_reason;
+    struct w32_diagnostic_state *diagnostics;
     bool closing;
 };
 struct w32_apc_node {
@@ -137,4 +141,16 @@ void w32_service_delegate(struct process *parent, struct process *child, const c
 int w32_services_attach(struct process *p, uint32_t endpoints[2]);
 void w32_services_cleanup(struct process *p);
 int channel_connect(struct process *client, struct process *server, int32_t fds[2]);
+uint32_t w32_compat_call(struct proc_thread *, struct ciuki_w32_compat_args *);
+uint32_t w32_report_call(struct proc_thread *, struct ciuki_w32_report_args *);
+void w32_diagnostic_record(struct proc_thread *, const struct ciuki_w32_diagnostic *);
+void w32_diagnostic_exit(struct process *);
+void w32_diagnostic_cleanup(struct process *);
+void w32_crash_capture(struct proc_thread *, const struct ciuki_w32_context *, uint32_t, const char *, uint32_t);
+bool w32_io_emulate(struct proc_thread *, struct trap_frame *, const uint8_t *, unsigned);
+uint32_t w32_initial_cw(struct process *);
+void w32_log(const char *, ...);
+void w32_refusal_queue(struct process *, uint32_t, const char *, uint32_t);
+bool w32_refuse_image_name(struct process *, const char *);
+int w32_diagnostic_image(struct process *,uint32_t,uint32_t);
 #endif

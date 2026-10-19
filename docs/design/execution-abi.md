@@ -2166,3 +2166,65 @@ Private COW names contain the game, kernel, complete base SHA-256 and fresh VM
 generation. CLOSE/owner death use the existing stop/destroy ownership path.
 The ordinary closed syscall error set is retained; reference storage or hash
 failures return EIO. Runtime dual-kernel game qualification remains open.
+## f5-16 — compatibility and diagnostics (2026-10-19)
+
+The additive wire layouts are in `ciuki/w32_diagnostics.h` (kernel and SDK
+copies are identical). Existing record layouts and syscall numbers remain
+unchanged. All requests use version 1, exact size and zero reserved/output
+words. The regular transport still pins/copies its request before effects.
+
+| Operation | Bytes | Meaning |
+| --- | ---: | --- |
+| `W32_COMPAT` (`0x10d`) | 48 | action 1 hashes a readable original snapshot into 65 ASCII SHA-256 bytes and returns PE timestamp, image size and file size; action 2 copies the 800-byte shim settings exactly once before EXE/DLL callbacks. |
+| `W32_REPORT` (`0x10e`) | 48 | action 1 submits exception code/context; action 2 submits a refusal enum/error/module; action 3 copies the next 224-byte fault to the authorized native desktop; action 4 closes its crashed PID using the retained exception exit code; action 5 tags the calling Win32 process for virtual restart. |
+
+Report actions 3/4 require the live delegated desktop PID; ordinary native
+processes cannot consume another process's registers. Fault data contains no
+pointers: kind, PID, TID, code, EIP, module offset, eight-bit stack-valid mask,
+nine registers (EAX, EBX, ECX, EDX, ESI, EDI, EBP, ESP, EFLAGS), eight stack
+words and two 64-byte name arrays. The kernel resolves the module through
+bounded safe reads of the copied loader-list ABI. Unreadable/cyclic lists and
+invalid/wrapped stack addresses cannot fault the formatter. A missing stack
+word has value zero, a clear valid bit, and is displayed as `????????`.
+
+An unhandled user-dispatcher report waits for desktop Close while that
+desktop exists. Close stops the process with its exception code. An absent
+desktop, full 16-record mailbox or emergency kernel failure still records
+the fault and allows termination; diagnostics must not introduce a panic or
+leave a permanently blocked task when its server dies. The native desktop
+writes crash files on a disk worker, separately from dialog rendering.
+
+Protected serial/boot-log formats (single logical lines):
+
+```text
+[win32] start pid=<decimal> exe=<escaped-title-path> pe=<8hex>:<8hex> shims=<canonical-name@version(parameters),...>
+[win32] crash pid=<decimal> tid=<decimal> code=<8hex> module=<basename>+<8hex-offset> eip=<8hex> r=<nine comma-separated 8hex words> s=<2hex-valid-mask>:<eight comma-separated 8hex words>
+[win32] stub DLL!FUNCTION pid=<decimal> tid=<decimal>
+[win32] warning check=<reason-token> module=<basename> pid=<decimal> tid=<decimal>
+[win32] warning pid=<decimal> suppressed=<decimal>
+[win32] refuse <msi|driver|runtime|missing-dll|missing-export|invalid-image|no-server> pid=<decimal> module=<basename> error=<decimal>
+[win32] exit pid=<decimal> code=<8hex> reason=<normal|crash|killed|restart> peak_commit=<bytes> peak_handles=<count> threads=<peak-live-count>
+```
+
+`r` order is the register order above. Title paths retain drive/separators;
+nonidentifier bytes are escaped as underscores. Other strings are bounded
+basenames or DLL/export/reason tokens. Debug strings, dialog text, registry
+values and command lines never enter the protected diagnostic path. Stubs
+are deduplicated by exact DLL/export per process, up to 4096 identities; their
+budget is independent of the 64 warnings (including structural PE warnings). One aggregate
+suppression record appears on exit. Fatal crash/refusal records are independent
+of warning exhaustion. Start/crash records use a separate 1536-byte formatter
+so the ordinary 256-byte log buffer cannot silently truncate their facts.
+
+Peak commit is the high-water count of eagerly backed user pages in this
+kernel, converted to bytes; reserved VA is excluded. Peak handles and live
+threads survive subsequent closes/exits. Executable basenames for process
+enumeration recognize both slash forms within the existing native name bound.
+
+The desktop writes `C:\WINDOWS\CRASH\CRASH0.TXT` through `CRASH7.TXT`, replacing
+the lowest persisted sequence. Fixed fields and names bound every file below
+2 KiB (the contract permits 16 KiB); only the eight stack words are included.
+Read/write failure leaves the protected record available and emits a fixed
+warning. There is no memory-dump interface. The AppCompat grammar, reader,
+writer authority and version/requalification rule are in
+`docs/design/f5-16-diagnostics.md`.

@@ -5,6 +5,8 @@
 #include "base.h"
 struct w32_context;
 struct w32_exception;
+struct w32_shim_identity;
+struct ciuki_w32_compat;
 struct w32_file {
     const uint8_t *bytes;
     uint32_t size;
@@ -38,7 +40,10 @@ struct w32_services {
     int (*invoke)(void *, void *, void *, uint32_t, int);
     void *(*image)(void *, const struct w32_file *, uint32_t, int, int);
     int (*raise)(void *, struct w32_exception *, struct w32_context *);
-
+    int (*fingerprint)(void *, struct w32_shim_identity *);
+    int (*compat_database)(void *, void *, uint32_t, uint32_t *);
+    int (*configure)(void *, const struct ciuki_w32_compat *, const struct w32_shim_identity *);
+    void (*report)(void *, uint32_t, uint32_t, struct w32_context *, const char *, uint32_t);
 };
 extern const struct w32_services w32_ciuki_services;
 extern const struct w32_services w32_ciuki_services_stub; /* part A compatibility */
