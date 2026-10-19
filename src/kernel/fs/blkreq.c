@@ -153,7 +153,42 @@ int blk_queue_destroy(struct blk_queue *q) {
     fs_lock_drop(&q->lock);
     fs_event_destroy(&q->changed); fs_lock_destroy(&q->lock); return 0;
 }
+/* f0-49: records promised to reservations, and those currently prepared. */
+static unsigned reserved_total, reserved_used;
+int blk_request_reserve(struct blk_reservation *res,unsigned count) {
+    if (!res || res->live || !count || count>BLKREQ_CAPACITY) return -FS_EINVAL;
+    initialize(); if (!pool) return -FS_ENOMEM;
+    fs_lock_take(&pool_lock);
+    unsigned free=0;
+    for (unsigned i=0;i<BLKREQ_CAPACITY;i++) free+=pool[i].state==BLK_FREE;
+    int e=0;
+    /* A promise must be satisfiable now, beside every earlier promise. */
+    if (reserved_total+count>BLKREQ_CAPACITY || free<reserved_total-reserved_used+count) e=-FS_EAGAIN;
+    else { reserved_total+=count; *res=(struct blk_reservation){.count=count,.live=true}; }
+    fs_lock_drop(&pool_lock); return e;
+}
+int blk_request_unreserve(struct blk_reservation *res) {
+    if (!res || !res->live) return -FS_EINVAL;
+    fs_lock_take(&pool_lock);
+    int e=res->used ? -FS_EBUSY : 0;
+    if (!e) { reserved_total-=res->count; res->live=false; res->count=0; }
+    fs_lock_drop(&pool_lock); return e;
+}
+static struct blk_request *prepare(struct blk_reservation *res,struct blkdev *d,enum blk_operation op,
+    uint64_t lba,uint32_t bytes,void *buf,enum blk_priority priority,uint64_t frontier,
+    uint32_t deadline,uint32_t timeout);
 struct blk_request *blk_request_prepare(struct blkdev *d,enum blk_operation op,
+    uint64_t lba,uint32_t bytes,void *buf,enum blk_priority priority,uint64_t frontier,
+    uint32_t deadline,uint32_t timeout) {
+    return prepare(0,d,op,lba,bytes,buf,priority,frontier,deadline,timeout);
+}
+struct blk_request *blk_request_prepare_reserved(struct blk_reservation *res,struct blkdev *d,
+    enum blk_operation op,uint64_t lba,uint32_t bytes,void *buf,enum blk_priority priority,
+    uint64_t frontier,uint32_t deadline,uint32_t timeout) {
+    if (!res || !res->live) return 0;
+    return prepare(res,d,op,lba,bytes,buf,priority,frontier,deadline,timeout);
+}
+static struct blk_request *prepare(struct blk_reservation *res,struct blkdev *d,enum blk_operation op,
     uint64_t lba,uint32_t bytes,void *buf,enum blk_priority priority,uint64_t frontier,
     uint32_t deadline,uint32_t timeout) {
     if (!d || (unsigned)op>BLK_FLUSH || (unsigned)priority>=BLK_PRIORITIES || !timeout ||
@@ -167,12 +202,17 @@ struct blk_request *blk_request_prepare(struct blkdev *d,enum blk_operation op,
         if (q->stopped) { fs_lock_drop(&q->lock); return 0; }
     }
     fs_lock_take(&pool_lock); struct blk_request *r=0;
-    for (unsigned i=0;i<BLKREQ_CAPACITY;i++) if (pool[i].state==BLK_FREE) {
-        r=&pool[i]; memset(r,0,offsetof(struct blk_request,event));
+    unsigned free=0, first=BLKREQ_CAPACITY;
+    for (unsigned i=0;i<BLKREQ_CAPACITY;i++) if (pool[i].state==BLK_FREE) { if (!free++) first=i; }
+    /* Unused promised records are never consumed by ordinary callers. */
+    bool admitted=res ? res->used<res->count && free : free>reserved_total-reserved_used;
+    if (admitted && first<BLKREQ_CAPACITY) {
+        r=&pool[first]; memset(r,0,offsetof(struct blk_request,event));
         r->device=d; r->queue=d->queue; r->operation=op; r->lba=lba;
         r->length=bytes; r->buffer=buf; r->generation=d->media_generation;
         r->priority=priority; r->frontier=frontier; r->deadline=deadline;
-        r->timeout=timeout; r->state=BLK_PREPARED; break;
+        r->timeout=timeout; r->state=BLK_PREPARED;
+        if (res) { r->reservation=res; res->used++; reserved_used++; }
     }
     fs_lock_drop(&pool_lock);
     if (r) r->context=fs_request_current();
@@ -413,7 +453,9 @@ bool blk_request_cancel(struct blk_request *r) {
 int blk_request_release(struct blk_request *r) {
     if (!r || !terminal(r)) return -FS_EBUSY;
     struct blk_queue *q=r->queue;
-    fs_lock_take(&pool_lock); r->state=BLK_FREE; fs_lock_drop(&pool_lock);
+    fs_lock_take(&pool_lock); r->state=BLK_FREE;
+    if (r->reservation) { r->reservation->used--; reserved_used--; r->reservation=0; }
+    fs_lock_drop(&pool_lock);
     if (q) { fs_lock_take(&q->lock); q->requests--; fs_event_wake(&q->changed); fs_lock_drop(&q->lock); }
     return 0;
 }

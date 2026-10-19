@@ -15,6 +15,14 @@
 #include <ciuki/init.h>
 #include <ciuki/vfs_hooks.h>
 #include <ciuki/reboot.h>
+#include <ciuki/pager.h>
+#include "pagefile.h"
+/* Fixtures that link mount.c without the adapter keep RAM-only commit. */
+#pragma weak pagefile_init
+#pragma weak pagefile_backend
+#pragma weak pagefile_detach
+#pragma weak pagefile_reattach
+#pragma weak pagefile_close
 #ifndef FS_HOST
 #include <ciuki/ata.h>
 #include <ciuki/sync.h>
@@ -26,6 +34,29 @@ static struct storage system_storage;
 static uint64_t system_sweep_writes;
 static struct storage_volume *cursor_volume;
 static int volume_flush(struct blkdev *);
+/* f0-49: one pagefile per boot, on the system volume (host fixtures may
+ * bind another storage instance). It is an active volume dependency. */
+static struct pagefile system_pagefile;
+struct pagefile *storage_pagefile(void) { return system_pagefile.vfs ? &system_pagefile : 0; }
+static bool pagefile_on(const struct storage *s, const struct fat_volume *fat)
+{ return system_pagefile.vfs==&s->vfs && (!fat || system_pagefile.volume==fat); }
+int storage_pagefile_bind(struct storage *s, unsigned d, const char *path)
+{
+    struct storage_volume *v=storage_volume(s,d);
+    /* Writable fixed FAT only: never removable, optical or NTFS media. */
+    const char *reason=!v ? "absent" : v->error ? "error" : v->removable ? "removable" :
+        !v->fat.mounted ? "unmounted" : v->fat.readonly ? "readonly" : !v->part.parent ? "unbound" : 0;
+    if (reason) {
+        klog("[pager] volume drive=%c usable=0 reason=%s commit=ram",'A'+(d<26?d:0),reason);
+        return -FS_EROFS;
+    }
+    if (system_pagefile.vfs) return -FS_EBUSY;
+    if (!pagefile_init || !&pagefile_backend) return -FS_EOPNOTSUPP;
+    int e=pagefile_init(&system_pagefile,&s->vfs,d,path,blkpart_device(&v->part));
+    if (!e && pager_attach) e=pager_attach(&pagefile_backend,&system_pagefile);
+    if (e) memset(&system_pagefile,0,sizeof(system_pagefile));
+    return e;
+}
 
 uint64_t storage_sweep_writes(const struct storage_volume *v)
 {
@@ -364,6 +395,7 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
             struct storage_volume *v=&s->volumes[d];
             if (!v->present || !v->removable || v->part.parent!=dev) continue;
             v->io.quarantined=true;
+            if (pagefile_on(s,&v->fat)) { system_pagefile.lost=true; if (pager_media_lost) pager_media_lost(); }
             cache_completion(&s->cache,&v->io,&v->fat.completion);
             v->fat.completion.error=-FS_EIO; v->fat.completion.incomplete=true;
             cache_media_lost(&s->cache,&v->io);
@@ -380,6 +412,7 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
     if (!surprise) for (unsigned d=4;d<26;d++) {
         struct storage_volume *v=&s->volumes[d];
         if (!v->present || !v->removable || v->part.parent!=dev) continue;
+        if (pagefile_on(s,&v->fat)) return -FS_EBUSY; /* live slots or I/O depend on it */
         for (unsigned i=0;i<VFS_NODES;i++) if (s->vfs.nodes[i].refs && s->vfs.nodes[i].volume==&v->fat) return -FS_EBUSY;
         if (px_volume_busy && px_volume_busy(&s->vfs,&v->fat)) return -FS_EBUSY;
         if (vfs_identity_busy(&s->vfs,&v->fat)) return -FS_EBUSY;
@@ -555,9 +588,24 @@ int storage_writeback(struct storage *s, uint32_t now)
     fs_event_wake(&s->vfs.volume_changed);
     return e;
 }
+static int shutdown_volumes(struct storage *s);
 int storage_shutdown(struct storage *s)
 {
     if (!s || !s->ready) return -FS_EINVAL;
+    /* The pagefile handle is the volume dependency: page-out and growth
+     * stop and in-flight page I/O retires before detach may proceed. Live
+     * slots stay readable through their runs; a refused shutdown resumes. */
+    bool paged=pagefile_on(s,0) && !system_pagefile.detached;
+    if (paged) {
+        int e=pager_shutdown ? pager_shutdown() : pagefile_detach ? pagefile_detach(&system_pagefile) : 0;
+        if (e) return e;
+    }
+    int e=shutdown_volumes(s);
+    if (e && paged) { if (pager_resume) pager_resume(); else if (pagefile_reattach) pagefile_reattach(&system_pagefile); }
+    return e;
+}
+static int shutdown_volumes(struct storage *s)
+{
     /* Reserve all letters before preflight, excluding opens through durable
      * detach while allowing media snapshots during commit/device waits. */
     vfs_lock(&s->vfs,0);
@@ -600,6 +648,7 @@ void storage_destroy(struct storage *s)
 {
     if (s==&system_storage && blackbox_reset) blackbox_reset();
     if (!s || !s->ready) return;
+    if (pagefile_on(s,0) && !pager_attach && pagefile_close) { pagefile_close(&system_pagefile); memset(&system_pagefile,0,sizeof(system_pagefile)); }
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
     for (unsigned i=0; i<STORAGE_NTFS; i++) if (s->ntfs[i].ro.mounted) fs_ro_unmount(&s->ntfs[i].ro);
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
@@ -818,6 +867,10 @@ void storage_init(void)
         struct storage_volume *boot = storage_volume(s, 2);
         e = bootlog_activate(&s->vfs, boot && !boot->error && !boot->fat.readonly, s->sequence);
         klog("[storage] disk_log=%s error=%d", e ? "unavailable" : "available", e);
+        /* M4: the pager manager opens and grows the file asynchronously;
+         * without it commit stays RAM-only and the system remains usable. */
+        e = storage_pagefile_bind(s, 2, "C:/SYSTEM/PAGEFILE.SWP");
+        klog("[storage] pagefile drive=C result=%d", e);
         if (timer) task_start(timer);
         else klog("[storage] writeback unavailable; volumes read-only error=%d", s->writer_error);
     }

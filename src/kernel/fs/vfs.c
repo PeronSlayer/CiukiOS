@@ -1035,6 +1035,93 @@ int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
     }
     vfs_unlock(t->vfs); return e;
 }
+/* f0-49 pagefile. Only the pager's exclusive VFS_DENY_ALL read/write handle
+ * qualifies; each call holds one volume reservation for one bounded step.
+ * Data is never read through the cache and live clusters never move. */
+static int pagefile_handle(struct vfs_table *t, int h, struct vfs_description **out) {
+    struct vfs_description *d=get(t,h); *out=d;
+    if (!d) return -FS_EBADF;
+    if (d->node->ro || !d->node->volume) return -FS_EROFS;
+    if ((d->access&(VFS_READ|VFS_WRITE))!=(VFS_READ|VFS_WRITE) || d->deny!=VFS_DENY_ALL ||
+        d->node->log_capacity) return -FS_EACCES;
+    if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) return -FS_EIO;
+    return 0;
+}
+int vfs_pagefile_extend(struct vfs_table *t, int h, uint32_t size) {
+    int admission=handle_lock(t,h); if (admission) return admission;
+    struct vfs_description *d; int e=pagefile_handle(t,h,&d);
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        t->vfs->io_file[d->node->drive]=d->node;
+        e=VFS_IO(t->vfs,fat_extend(d->node->volume,&d->node->entry,size));
+        t->vfs->io_file[d->node->drive]=0;
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,!e);
+    }
+    vfs_unlock(t->vfs); return e;
+}
+int vfs_pagefile_trim(struct vfs_table *t, int h, uint32_t size) {
+    int admission=handle_lock(t,h); if (admission) return admission;
+    struct vfs_description *d; int e=pagefile_handle(t,h,&d);
+    if (!e && size>d->node->entry.size) e=-FS_EINVAL;
+    if (!e && size<d->node->entry.size) {
+        /* Shorter length first, then the trailing link and chain release:
+         * a cut leaves owned excess (reused by the next extension). */
+        struct fat_entry before=d->node->entry;
+        d->node->entry.size=size;
+        e=VFS_IO(t->vfs,fat_publish_reserved(d->node->volume,&d->node->entry,true));
+        if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,false);
+    }
+    vfs_unlock(t->vfs); return e;
+}
+static bool pagefile_end(const struct fat_volume *v, uint32_t n) {
+    uint32_t mask=v->type==12 ? 0xfffu : v->type==16 ? 0xffffu : 0x0fffffffu;
+    return (n&mask)>=mask-7;
+}
+static int pagefile_walk(struct fat_volume *v, const struct fat_entry *entry, struct vfs_pagefile_cursor *c,
+                         uint32_t index, uint32_t count, struct vfs_pagefile_run *runs, unsigned max,
+                         unsigned *used, uint32_t *mapped) {
+    if (c->first!=entry->first || c->index>index || !c->cluster) {
+        c->first=entry->first; c->cluster=entry->first; c->index=0;
+    }
+    uint32_t work=0;
+    while (c->index<index) {
+        if (work++>=PAGEFILE_MAP_WORK) return 0; /* bounded step, resumable */
+        uint32_t next; int e=fat_get_cluster(v,c->cluster,&next); if (e) return e;
+        if (pagefile_end(v,next) || next<2 || next>=v->clusters+2) return -FS_EIO;
+        c->cluster=next; c->index++;
+    }
+    while (*mapped<count && work++<PAGEFILE_MAP_WORK) {
+        if (c->cluster<2 || c->cluster>=v->clusters+2) return -FS_EIO;
+        uint64_t lba=v->start+v->data_sector+(uint64_t)(c->cluster-2)*v->spc;
+        struct vfs_pagefile_run *r=*used ? &runs[*used-1] : 0;
+        if (r && r->lba+r->sectors==lba && r->sectors<=UINT32_MAX-v->spc) r->sectors+=v->spc;
+        else {
+            if (*used==max) return 0; /* caller supplies another run array */
+            runs[(*used)++]=(struct vfs_pagefile_run){.lba=lba,.sectors=v->spc};
+        }
+        (*mapped)++;
+        uint32_t next; int e=fat_get_cluster(v,c->cluster,&next); if (e) return e;
+        if (pagefile_end(v,next)) { c->index++; c->cluster=0; return *mapped<count ? -FS_EIO : 0; }
+        c->cluster=next; c->index++;
+    }
+    return 0;
+}
+int vfs_pagefile_map(struct vfs_table *t, int h, struct vfs_pagefile_cursor *c, uint32_t index,
+                     uint32_t count, struct vfs_pagefile_run *runs, unsigned max, unsigned *used,
+                     uint32_t *mapped, uint32_t *cluster_bytes) {
+    if (!c || !runs || !max || !used || !mapped || *used>max) return -FS_EINVAL;
+    *mapped=0;
+    int admission=handle_lock(t,h); if (admission) return admission;
+    struct vfs_description *d; int e=pagefile_handle(t,h,&d);
+    if (!e) {
+        struct fat_volume *v=d->node->volume;
+        if (cluster_bytes) *cluster_bytes=(uint32_t)v->spc*512;
+        uint32_t clusters=d->node->entry.size/((uint32_t)v->spc*512);
+        if (!d->node->entry.first || index>clusters || count>clusters-index) e=-FS_EINVAL;
+        else e=VFS_IO(t->vfs,pagefile_walk(v,&d->node->entry,c,index,count,runs,max,used,mapped));
+    }
+    vfs_unlock(t->vfs); return e;
+}
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) {

@@ -106,9 +106,9 @@ static bool provider_release(struct reclaim_page *p)
     if (t->exiting || t->discarded) { CHECK(t->refs==1); reclaim_untrack(p); mm_free(p->phys,p->owner); t->refs=0; return true; }
     return false;
 }
-static bool provider_finish(struct reclaim_page *p,bool success)
+static bool provider_finish(struct reclaim_page *p,const struct reclaim_io *io,bool success)
 {
-    struct test_page *t=(void *)p;
+    struct test_page *t=(void *)p; CHECK(io && io->ticket);
     CHECK(p->queued && pmm_descriptor(p->phys)->pins && t->refs==2);
     if (!success && !t->exiting) { t->failed=true; return true; }
     unsigned limit=t->partial?t->revoked+1:2;
@@ -119,7 +119,7 @@ static bool provider_finish(struct reclaim_page *p,bool success)
     if (t->revoked!=2) return false;
     t->discarded=true; return true;
 }
-static const struct reclaim_backing provider={provider_valid,provider_retain,provider_release,provider_finish};
+static const struct reclaim_backing provider={provider_valid,provider_retain,provider_release,provider_finish,0,0};
 static void owner_traces(void)
 {
     fresh(128); uint32_t baseline=pmm_free_count();

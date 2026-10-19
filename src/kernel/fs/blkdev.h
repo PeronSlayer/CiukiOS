@@ -61,6 +61,9 @@ enum blk_state { BLK_FREE, BLK_PREPARED, BLK_QUEUED, BLK_ISSUED, BLK_COMPLETED, 
 /* The caller owns buffer storage until completion, including cancellation
  * after issue. Pins are owned by the executing DMA adapter until stop proof. */
 struct blk_page { uint32_t physical, bytes; const struct mm_pin *pin; };
+/* f0-49 pool reservation: count records stay available to this owner only.
+ * Ordinary prepares leave every unused reserved record free. */
+struct blk_reservation { unsigned count, used; bool live; };
 struct blk_request {
     struct blk_request *next;
     struct blkdev *device;
@@ -81,6 +84,7 @@ struct blk_request {
     const struct mm_pin *pin_owner;
     struct blk_page pages[BLKREQ_PAGES];
     unsigned page_count;
+    struct blk_reservation *reservation; /* returned at release */
     struct fs_event event;
 };
 struct blk_queue_stats {
@@ -107,6 +111,14 @@ int blk_queue_destroy(struct blk_queue *); /* only after all completions */
 struct blk_request *blk_request_prepare(struct blkdev *, enum blk_operation,
     uint64_t lba, uint32_t bytes, void *, enum blk_priority, uint64_t frontier,
     uint32_t deadline, uint32_t timeout);
+/* Reserve/unreserve whole records (task context). unreserve refuses while
+ * any reserved record is unreleased. prepare_reserved never blocks: it
+ * returns NULL only when the owner's own records are all in use. */
+int blk_request_reserve(struct blk_reservation *, unsigned count);
+int blk_request_unreserve(struct blk_reservation *);
+struct blk_request *blk_request_prepare_reserved(struct blk_reservation *, struct blkdev *,
+    enum blk_operation, uint64_t lba, uint32_t bytes, void *, enum blk_priority,
+    uint64_t frontier, uint32_t deadline, uint32_t timeout);
 int blk_request_submit(struct blk_request *);
 int blk_request_wait(struct blk_request *);
 bool blk_request_cancel(struct blk_request *); /* issued writes may complete */

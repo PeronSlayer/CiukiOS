@@ -208,6 +208,18 @@ int vfs_log_write(struct vfs_table *, int, const void *, size_t, uint32_t logica
 int vfs_log_publish(struct vfs_table *, int, bool finish);
 int vfs_log_rotate(struct vfs_table *, const char *current, const char *previous,
                    const char *oldest, uint32_t capacity);
+/* f0-49 pagefile, exclusive VFS_DENY_ALL read/write handle only. extend and
+ * trim keep live clusters in place; map converts clusters [index,index+count)
+ * to device-relative sector runs in bounded, resumable steps (mapped may be
+ * below count with success: call again with the updated cursor). */
+#define PAGEFILE_MAP_WORK 512u
+struct vfs_pagefile_run { uint64_t lba; uint32_t sectors; };
+struct vfs_pagefile_cursor { uint32_t first, cluster, index; };
+int vfs_pagefile_extend(struct vfs_table *, int, uint32_t size);
+int vfs_pagefile_trim(struct vfs_table *, int, uint32_t size);
+int vfs_pagefile_map(struct vfs_table *, int, struct vfs_pagefile_cursor *, uint32_t index,
+                     uint32_t count, struct vfs_pagefile_run *, unsigned max, unsigned *used,
+                     uint32_t *mapped, uint32_t *cluster_bytes);
 int vfs_stat(struct vfs_table *, const char *, struct fat_entry *);
 int vfs_attrib(struct vfs_table *, const char *, uint8_t attr);
 int vfs_times(struct vfs_table *, const char *, const struct fat_times *);

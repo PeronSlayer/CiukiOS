@@ -10,7 +10,7 @@ enum mm_owner {
     MM_RESERVED, MM_KERNEL_IMAGE, MM_KERNEL, MM_HEAP, MM_STACK,
     MM_TABLE, MM_DMA, MM_DEVICE, MM_CACHE_DATA, MM_CACHE_META,
     MM_CACHE_WORK, MM_USER_PRIVATE, MM_USER_SHARED, MM_VM_PRIVATE,
-    MM_VM_POOL, MM_IO_REQUEST, MM_PFN_DESCRIPTORS, MM_OWNERS
+    MM_VM_POOL, MM_IO_REQUEST, MM_PFN_DESCRIPTORS, MM_PAGER, MM_OWNERS
 };
 struct mm_zone_ledger {
     uint32_t usable, free, reserved, resident[MM_OWNERS];
@@ -51,9 +51,13 @@ void ledger_free_page(uint32_t pfn);
  * its old category; transfer and free are performed under the PMM lock. */
 void ledger_move(uint32_t phys, uint32_t pages, enum mm_owner from, enum mm_owner to) __attribute__((weak));
 void ledger_promise(enum mm_owner, int32_t reserved, int32_t committed) __attribute__((weak));
-/* Reserve only RAM backing already available after existing promises.
- * No policy/cap changes; swap commitment remains zero. */
+/* Reserve backing already available after existing promises: RAM plus the
+ * pager's published (prevalidated, not failed) slot capacity (f0-49). */
 bool ledger_commit(enum mm_owner, uint32_t pages) __attribute__((weak));
+/* Admissible pages before the next refusal; negative when overcommitted
+ * (failed capacity). Pager publishes absolute slot capacity/use. */
+int64_t ledger_commit_headroom(void) __attribute__((weak));
+void ledger_swap(uint32_t capacity, uint32_t used) __attribute__((weak));
 void ledger_mapping(int32_t mappings, int32_t shared) __attribute__((weak));
 void ledger_snapshot(struct mm_ledger *);
 bool ledger_reconcile(void);
