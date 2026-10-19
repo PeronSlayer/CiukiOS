@@ -34,6 +34,7 @@ static int disk_read(void *cookie, uint32_t off, void *dst, uint32_t n) {
 static void disk_close(void *cookie) { fclose(cookie); }
 static int disk_open(void *cwd, const char *path, struct ciuki_file *file) {
     (void)cwd;
+    if (!strcmp(path,"/access-denied.exe")) return -EACCES;
     char name[2048];
     if (strlen(model_root) + strlen(path) + 2 >= sizeof(name))
         return -ENOENT;
@@ -133,6 +134,7 @@ void w32_kernel_model_init(const char *root, uint32_t *pid, uint32_t *tid) {
     CHECK(!w32_process_init(model_process));
     CHECK(!proc_thread_prepare(model_process, 0x400000, 0, 0, 0, 0, 0, true, &model_thread));
     model_process->state = PROC_LIVE;
+    model_process->published = true;
     g_current = model_thread->task;
     g_current->state = T_RUNNING;
     struct ciuki_w32_vm a = {.address = 0x6fff0000,
@@ -177,4 +179,52 @@ static void release_model_word(void) {
 void w32_kernel_model_release_word(uint32_t address) {
     scheduled_word = address;
     on_schedule = release_model_word;
+}
+
+void w32_kernel_model_spawn_test(void){
+    struct ciuki_w32_vm scratch={.bytes=4096,.flags=W32_MEM_RESERVE|W32_MEM_COMMIT,.protect=W32_PAGE_READWRITE};
+    CHECK(!w32_vm_alloc(model_process->memory,&scratch));
+    CHECK(!ua_write(model_process->memory,scratch.address,"/console",9));
+    CHECK(!ua_write(model_process->memory,scratch.address+256,"console.exe /unchanged",23));
+    CHECK(!ua_write(model_process->memory,scratch.address+512,"A=B\0\0",5));
+    struct ciuki_w32_startup startup={.x=7,.width=640,.flags=1,.show=3,.title=scratch.address+1024};
+    CHECK(!ua_write(model_process->memory,scratch.address+768,&startup,sizeof(startup)));
+    CHECK(!ua_write(model_process->memory,scratch.address+1024,"Fixture title",14));
+    struct ciuki_w32_spawn_args a={.image=scratch.address,.command=scratch.address+256,.environment=scratch.address+512,.environment_bytes=5,.flags=4|0x80,.startup=scratch.address+768};
+    CHECK(!w32_process_call(model_thread,&a));
+    CHECK(!a.error&&a.process_handle&&a.thread_handle&&a.pid&&a.tid);
+    struct process *child=proc_find(a.pid);CHECK(child&&child->published&&child->personality==PROC_WIN32);
+    struct proc_thread *main=proc_thread_find(child,a.tid);CHECK(main&&main->w32->suspend==1);
+    CHECK(child->w32->priority_class==0x80&&main->task->base_priority==proc_priority_win32(0x80,0,false));
+    struct ciuki_w32_context_args resume={.action=W32_CTX_RESUME,.thread=a.thread_handle};
+    CHECK(!w32_context_call(model_thread,&resume)&&!resume.error&&resume.result==1&&!main->w32->suspend);
+    struct ciuki_w32_context_args remote_context={.action=W32_CTX_GET,.thread=a.thread_handle};
+    CHECK(!w32_context_call(model_thread,&remote_context)&&remote_context.error==6);
+    struct ciuki_w32_system_args terminate={.action=W32_S_TERMINATE_THREAD,.handle=a.thread_handle,.value=0xfeed};
+    CHECK(!w32_system_call(model_thread,&terminate)&&!terminate.error&&main->w32->terminate_requested&&main->w32->terminate_code==0xfeed);
+    uint32_t parameters=0;
+    struct ciuki_w32_parameters_v3 v;
+    CHECK(!ua_read(child->memory,&parameters,child->w32_peb+0x10,4));
+    CHECK(!ua_read(child->memory,&v,parameters,sizeof(v)));
+    CHECK(v.inherited.core.version==3&&v.inherited.core.size==sizeof(v));
+    CHECK(v.startup.x==7&&v.startup.width==640&&v.startup.show==3&&v.startup.flags==1);
+    char title[14];CHECK(!ua_read(child->memory,title,v.startup.title,sizeof(title))&&!strcmp(title,"Fixture title"));
+    CHECK(!w32_handle_close(model_process,a.process_handle)&&!w32_handle_close(model_process,a.thread_handle));
+    proc_discard(child);
+    startup.title=0xdeadc000;
+    CHECK(!ua_write(model_process->memory,scratch.address+768,&startup,sizeof(startup)));
+    a=(struct ciuki_w32_spawn_args){.image=scratch.address,.command=scratch.address+256,.environment=scratch.address+512,.environment_bytes=5,.startup=scratch.address+768};
+    CHECK(!w32_process_call(model_thread,&a)&&a.error==998&&!a.pid&&!a.process_handle&&!a.thread_handle);
+    a=(struct ciuki_w32_spawn_args){.flags=0x100};
+    CHECK(!w32_process_call(model_thread,&a)&&a.error==5&&!a.pid);
+    a=(struct ciuki_w32_spawn_args){.flags=0x20|0x40};
+    CHECK(!w32_process_call(model_thread,&a)&&a.error==87&&!a.pid);
+    CHECK(!ua_write(model_process->memory,scratch.address,"/not-present.exe",17));
+    a=(struct ciuki_w32_spawn_args){.image=scratch.address,.command=scratch.address+256,.environment=scratch.address+512,.environment_bytes=5};
+    CHECK(!w32_process_call(model_thread,&a)&&a.error==2&&!a.pid&&!a.process_handle&&!a.thread_handle);
+    CHECK(!ua_write(model_process->memory,scratch.address,"/access-denied.exe",19));
+    a=(struct ciuki_w32_spawn_args){.image=scratch.address,.command=scratch.address+256,.environment=scratch.address+512,.environment_bytes=5};
+    CHECK(!w32_process_call(model_thread,&a)&&a.error==5&&!a.pid&&!a.process_handle&&!a.thread_handle);
+    struct ciuki_w32_vm release={.address=scratch.address,.flags=W32_MEM_RELEASE};CHECK(!w32_vm_free(model_process->memory,&release));
+    sync_from_kernel();puts("PASS kernel32 kernel CreateProcess search suspended handles rollback");
 }

@@ -76,6 +76,13 @@ static void no_terminate(void *o, uint32_t code) {
     (void)code;
     stop();
 }
+/* f5-06 exports the kernel transport from ntdll; the Linux adapter has no
+ * CIUKI_SYS_W32 and answers every record with ENOSYS (negative status). */
+int32_t w32_ciuki_call(void *record, uint32_t size) {
+    (void)record;
+    (void)size;
+    return -38;
+}
 const struct w32_services w32_ciuki_services_stub = {
     .opaque = 0,
     .alloc = no_alloc,

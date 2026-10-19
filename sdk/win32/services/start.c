@@ -2,6 +2,7 @@
  * Copyright 2026 CiukiOS contributors. Production personality startup. */
 #include <w32/store.h>
 #include <ciuki/abi.h>
+#include <ciuki/w32_core.h>
 int w32_ciuki_store(struct w32_loader *l, struct w32_file *snapshot) {
     const struct w32_services *s = l->services;
     if (!s->open(s->opaque, "C:\\WINDOWS\\SYSTEM\\BUILTIN.BIN", snapshot))
@@ -65,6 +66,15 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
     w32_fill(p, 0, sizeof(*p));
     p->MaximumLength = p->Length = sizeof(*p);
     p->Flags = 1;
+    const struct ciuki_w32_parameters *boot=(const void *)peb->ProcessParameters;
+    if(boot&&boot->version==3&&boot->size>=sizeof(struct ciuki_w32_parameters_v3)){
+        const struct ciuki_w32_startup *v=&((const struct ciuki_w32_parameters_v3 *)boot)->startup;
+        p->StartingX=v->x;p->StartingY=v->y;p->CountX=v->width;p->CountY=v->height;
+        p->CountCharsX=v->chars_x;p->CountCharsY=v->chars_y;p->FillAttribute=v->fill;p->WindowFlags=v->flags;p->ShowWindowFlags=v->show;
+        if(v->flags&0x100){p->StandardInput=(void *)(uintptr_t)v->input;p->StandardOutput=(void *)(uintptr_t)v->output;p->StandardError=(void *)(uintptr_t)v->error;}
+        if(v->title&&!unicode(l->services,(const char *)(uintptr_t)v->title,&p->WindowTitle))return STATUS_NO_MEMORY;
+    }
+
     if (!unicode(l->services, exe, &p->ImagePathName) ||
         !unicode(l->services, command, &p->CommandLine) ||
         !unicode(l->services, directory, &p->CurrentDirectory.DosPath))
@@ -112,7 +122,7 @@ int W32API CiukiDllMain(void *module, ULONG reason, void *reserved) {
 W32_NORETURN void W32API CiukiProcessStart(struct w32_peb *peb) {
     struct ciuki_w32_parameters bootstrap =
         *(const struct ciuki_w32_parameters *)peb->ProcessParameters;
-    if (bootstrap.version != 2 || bootstrap.size < 32) {
+    if ((bootstrap.version != 2 && bootstrap.version != 3) || bootstrap.size < 32) {
         w32_set_services(&w32_ciuki_services);
         w32_terminate(STATUS_INVALID_PARAMETER);
     }
@@ -142,6 +152,13 @@ W32_NORETURN void W32API CiukiProcessStart(struct w32_peb *peb) {
                         (const char *)(uintptr_t)bootstrap.environment, &main);
     if (status)
         w32_terminate(status);
+    if(main->pe.subsystem==3&&!peb->ProcessParameters->StandardOutput){
+        struct w32_module *kernel;
+        if(w32_ldr_load(&process_loader,"kernel32.dll",0,&kernel)){
+            void *allocate=w32_ldr_proc(&process_loader,kernel,"AllocConsole",0,0xffffffffu);
+            if(allocate)((int(W32API *)(void))allocate)();
+        }
+    }
     ULONG result = ((ULONG(W32API *)(void))(main->pe.image + main->pe.entry))();
     w32_ldr_shutdown(&process_loader);
     w32_terminate(result);

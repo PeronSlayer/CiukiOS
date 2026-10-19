@@ -95,7 +95,8 @@ class KernelCoreTests(unittest.TestCase):
         suite=json.loads((ROOT/'tests/suites/f5-core.json').read_text())
         self.assertEqual([c['id'] for c in suite['cases']],
                          ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
-                          'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23','w32-registry-qemu-t23'])
+                          'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23','w32-registry-qemu-t23',
+                          'w32-kernel32-qemu-t23'])
         for case in suite['cases']:
             if case['probe']=='w32-registry':
                 self.assertIn('authored, unrun',case['integration_pending'])
@@ -113,7 +114,7 @@ class KernelCoreTests(unittest.TestCase):
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])
-            if case['probe'] in ('w32-objects','w32-fixtures'):
+            if case['probe'] in ('w32-objects','w32-fixtures','w32-kernel32'):
                 continue
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})

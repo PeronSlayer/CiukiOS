@@ -2082,3 +2082,54 @@ uses the same NtContinue endpoint. Invalid privilege state remains fatal only
 to the calling process. Stub diagnostics additionally have a process-wide
 64-record kernel budget, preserving fatal load/crash diagnostics after that
 budget is exhausted. Raw Wine debug text is not emitted into W21 records.
+
+## f5-06 — kernel32 transport amendment (2026-10-19)
+
+Global call 96 and every existing record retain their numbers and layouts.
+`ciuki/w32_transport.h` now contains the unchanged f5-04 wire declarations;
+`w32_objects.h` includes it and retains the private kernel object definitions.
+The additive records in `ciuki/w32_core.h` are version 1:
+
+| Operation | Bytes | Meaning |
+| --- | ---: | --- |
+| `W32_FILE` (`0x109`) | 72 | Drive path or Win32 file handle, copied buffer, access/share/disposition/flags, split offset, result and DOS error. Actions 1–19 are enumerated in the header. |
+| `W32_SYSTEM` (`0x10a`) | 48 | FILETIME, physical-memory pages, process/thread termination, or current-thread exit. |
+| `W32_PROCESS` (`0x10b`) | 72 | Image name, original command line, optional cwd, explicit double-NUL environment and byte count, inheritance and creation flags; process/thread handles and PID/TID returned after admission; optional startup record and returned-handle inheritance flags. |
+
+Transport errors are NTSTATUS (negative errno for malformed/faulting transport);
+API errors are in `error`, not disguised as successful results. Output words
+must be zero on entry. File buffers contain either bytes, an 832-byte
+`ciuki_w32_file_info` or a 120-byte `ciuki_w32_disk_info`. Names in these records
+are VFS UTF-8; kernel32 converts CP1252 paths and results. Packed FAT calendar
+fields are converted to FILETIME in user mode. Existing VM/section/wait records
+are reused without renumbering. `SYSTEM/TERMINATE_THREAD` with a handle queues
+termination at a user-return boundary. Its private cancellation form uses
+handle=0 and extra=TID within the caller's process, allowing CreateThread to
+cancel a suspended initializer after handle admission fails. Other extra/input
+output words remain zero. Native F2 processes cannot submit these records.
+
+`W32_SNAPSHOT` (`0x10c`, 48 bytes) creates an immutable process/thread/module
+snapshot or reads the first/next record of one kind. Its copied output record
+is 552 bytes; kernel cursors advance only after successful publication. Snapshot
+handles use the same generational table and CloseHandle teardown. Other-process
+module lists may be empty. Heap snapshots are refused with error 120.
+
+CreateProcess can hand off version-3 startup parameters (84 bytes, preserving
+the version-2 prefix), scalar STARTUPINFO fields, inherited standard handles
+and a copied title. Ntdll still accepts version 2 for existing launchers.
+SYSTEM also provides yield, thread/process priority and priority query actions.
+The existing F0-45 restriction on REALTIME_PRIORITY_CLASS is retained; this is
+a pending contract discrepancy, not a claim of realtime-class parity.
+
+The file description is retained across blocking I/O and shared by duplicated
+handles. The native fd table is not used for Win32 opens. The existing VFS
+provides sharing and aliases; F1-84's common byte-lock/delete ownership remains
+unmerged and is not represented as an isolated Win32 lock registry.
+
+The unrun `w32-kernel32-qemu-t23` case describes future guest evidence. Its
+integration-pending annotation must be removed only when an executing probe is
+provided and qualified. Host wrappers do not establish PE instruction execution.
+
+The FILE OPEN record uses private flag bit `0x10000` for handle inheritance,
+leaving the FAT read-only attribute bit independent. Other FILE actions assign
+flags by action (for example positioned I/O and short/long path lookup).

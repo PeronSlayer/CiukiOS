@@ -377,6 +377,74 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-kernel32-qemu-t23",
+      "probe": "w32-kernel32",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-kernel32 run={run_id}",
+      "timeout": 120,
+      "integration_pending": "f5-06: PE runtime exercise and guest probe remain unqualified; authored case, never run",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "files"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "memory"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "threads"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "profile"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "teardown"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

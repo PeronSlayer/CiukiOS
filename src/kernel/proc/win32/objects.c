@@ -5,6 +5,8 @@
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/files.h>
+extern void w32_snapshot_destroy(struct w32_object *);
+extern void w32_find_destroy(struct w32_object *) __attribute__((weak));
 void w32_apc_contexts_cleanup(struct proc_thread *t);
 struct w32_account w32_accounts;
 struct w32_object *w32_objects;
@@ -62,7 +64,7 @@ uint64_t w32_now(void)
 }
 struct w32_object *w32_object_new(uint32_t type)
 {
-    if (type < W32_OBJ_PROCESS || type > W32_OBJ_ENDPOINT || w32_accounts.objects >= W32_OBJECT_MAX)
+    if (type < W32_OBJ_PROCESS || type > W32_OBJ_SNAPSHOT || w32_accounts.objects >= W32_OBJECT_MAX)
         return 0;
     struct w32_object *o = w32_alloc(sizeof(*o));
     if (!o)
@@ -93,6 +95,8 @@ void w32_release(struct w32_object *o)
         at = &(*at)->next;
     if (*at)
         *at = o->next;
+    if (o->type == W32_OBJ_SNAPSHOT) w32_snapshot_destroy(o);
+    if (o->type == W32_OBJ_FIND && w32_find_destroy) w32_find_destroy(o);
     if (o->type == W32_OBJ_SECTION)
         w32_section_destroy(o);
     if (o->type == W32_OBJ_QUEUE)
@@ -122,6 +126,7 @@ int w32_process_init(struct process *p)
     }
     s->identity->id = p->pid;
     s->owner = p;
+    s->priority_class=0x20;
     s->next = w32_processes;
     w32_processes = s;
     p->w32 = s;
@@ -616,6 +621,7 @@ void w32_process_cleanup(struct process *p)
         }
     }
     w32_process_died(p);
+    for(unsigned d=0;d<26;d++)if(p->w32->drive_cwd[d]&&p->cwd_release)p->cwd_release(p->w32->drive_cwd[d]);
     w32_services_cleanup(p);
     w32_views_cleanup(p);
     for (unsigned c = 0; c < 64; c++)

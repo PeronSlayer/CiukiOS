@@ -27,9 +27,9 @@ class KernelLoaderTests(unittest.TestCase):
         sdk=ROOT/'sdk/win32';objects=[cls.bridge]
         common=[*flags,'-DW32_HOST_MODEL','-DW32_KERNEL_MODEL','-ffreestanding','-fno-builtin',
             '-I'+str(sdk/'include'),'-I'+str(ROOT/'tests/host/win32/adapter')]
-        sources=sorted((sdk/'ldr').glob('*.c'))+sorted((sdk/'ntdll').glob('*.c'))+[
+        sources=sorted((sdk/'ldr').glob('*.c'))+sorted((sdk/'ntdll').glob('*.c'))+sorted((sdk/'kernel32').glob('*.c'))+[
             sdk/'services/ciuki.c',sdk/'services/start.c',ROOT/'tests/host/win32/adapter/model.c',
-            ROOT/'tests/host/win32/adapter/main.c',ROOT/'tests/host/win32/kernel_loader_main.c']
+            ROOT/'tests/host/win32/adapter/main.c',ROOT/'tests/host/win32/kernel_loader_main.c',ROOT/'tests/host/win32/kernel32_runtime.c']
         for i,source in enumerate(sources):
             obj=cls.out/f'core-{i}.o';objects.append(obj)
             extra=['-Dmain=adapter_model_main'] if source.name=='model.c' else []
@@ -71,6 +71,13 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn('[win32] load check=missing-export',out)
         self.assertIn('pid=2 tid=1',out)
 
+    def test_kernel32_wrappers_on_kernel_model(self):
+        self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",self.command("kernel32",self.images/"console.exe"))
+
+    def test_kernel32_create_process_transaction(self):
+        builtins.build(self.images/'WINDOWS/SYSTEM')
+        self.assertIn("PASS kernel32 kernel CreateProcess",self.command("spawn",self.images/'console.exe'))
+
     def test_runtime_services_on_kernel_model(self):
         self.assertIn('PASS kernel heap critical waits SEH filter',self.command('runtime',self.images/'console.exe'))
         out=self.command('startup',self.images/'compiled-tls.exe')
@@ -82,6 +89,18 @@ class KernelLoaderTests(unittest.TestCase):
 
     def test_production_builtin_store_through_kernel_loader(self):
         builtins.build(self.images/'WINDOWS/SYSTEM')
+        from scripts.win32 import census
+        coverage=json.loads((self.images/'WINDOWS/SYSTEM/kernel32-coverage.json').read_text())
+        exports={name for e in census.inspect((self.images/'WINDOWS/SYSTEM/kernel32.dll').read_bytes())['exports'] for name in e['names']}
+        expected=set()
+        from scripts.win32 import stubs
+        for source in ('docs/design/research/win32-layer-2026-10-14.md','docs/design/win32-census/fixtures.txt'):
+            expected.update(stubs.imports((ROOT/source).read_text()).get('kernel32.dll',set()))
+        self.assertEqual({e['name'] for e in coverage['exports']},expected)
+        self.assertTrue(expected<=exports)
+        self.assertEqual(set(coverage['deferred_vfs']),{'LockFile','LockFileEx','UnlockFile','UnlockFileEx'})
+        self.assertTrue(set(coverage['deferred_vfs'])<=exports)
+        self.assertIn('provisional',coverage['scope'])
         self.assertIn('PASS kernel builtin store imports helpers pinning',self.command('store',self.images/'builtin-import.exe'))
 
     def test_builtin_image_payload_rules_without_image_build(self):

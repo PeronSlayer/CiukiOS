@@ -270,3 +270,7 @@ void *W32API RtlImageDirectoryEntryToData(void *base, BOOLEAN image, uint16_t in
         *size = n;
     return b + rva;
 }
+
+int W32API CiukiThreadAttach(void){return loader&&w32_ldr_thread_attach(loader,NtCurrentTeb());}
+void W32API CiukiThreadDetach(void){if(loader)w32_ldr_thread_detach(loader,NtCurrentTeb());}
+void W32API CiukiProcessDetach(void){if(loader)w32_ldr_shutdown(loader);}

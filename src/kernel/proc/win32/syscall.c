@@ -4,6 +4,11 @@
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/display.h>
+#include <ciuki/w32_core.h>
+extern uint32_t w32_snapshot_call(struct proc_thread *,struct ciuki_w32_snapshot_args *);
+extern uint32_t w32_process_call(struct proc_thread *,struct ciuki_w32_spawn_args *);
+extern uint32_t w32_file_call(struct proc_thread *,struct ciuki_w32_file_args *);
+extern uint32_t w32_system_call(struct proc_thread *,struct ciuki_w32_system_args *);
 static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread *a)
 {
     struct process *p = self->process;
@@ -43,6 +48,10 @@ int32_t w32_syscall(struct trap_frame *tf)
     if (!err) {
         struct ciuki_w32_header *h = (void *)record;
         switch (h->operation) {
+        case W32_SNAPSHOT: status=w32_snapshot_call(self,(void *)record);break;
+        case W32_PROCESS: status=w32_process_call(self,(void *)record);break;
+        case W32_FILE: status=w32_file_call(self,(void *)record);break;
+        case W32_SYSTEM: status=w32_system_call(self,(void *)record);break;
         case W32_LOADER: status=w32_loader_call(self,(void *)record);break;
         case W32_WORD: {
             struct ciuki_w32_word_args *a=(void *)record;

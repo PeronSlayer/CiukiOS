@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/w32_core.h>
 uint32_t w32_status(int error)
 {
     switch (error) {
@@ -46,6 +47,10 @@ uint32_t w32_record_size(uint32_t operation)
     case W32_RAISE: return sizeof(struct ciuki_w32_raise);
     case W32_THREAD: return sizeof(struct ciuki_w32_thread);
     case W32_DIAGNOSTIC: return sizeof(struct ciuki_w32_diagnostic);
+    case W32_SNAPSHOT: return sizeof(struct ciuki_w32_snapshot_args);
+    case W32_PROCESS: return sizeof(struct ciuki_w32_spawn_args);
+    case W32_FILE: return sizeof(struct ciuki_w32_file_args);
+    case W32_SYSTEM: return sizeof(struct ciuki_w32_system_args);
     case W32_LOADER: return sizeof(struct ciuki_w32_loader_args);
     case W32_WORD: return sizeof(struct ciuki_w32_word_args);
     case W32_OBJECT: return sizeof(struct ciuki_w32_object_args);
@@ -106,6 +111,22 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
             else if (terminated || c < 32 || c > 126) return -EINVAL;
         }
         return terminated ? 0 : -EINVAL;
+    }
+    case W32_SNAPSHOT: {
+        const struct ciuki_w32_snapshot_args *a=record;
+        return a->result||a->error||a->action<1||a->action>3?-EINVAL:0;
+    }
+    case W32_PROCESS: {
+        const struct ciuki_w32_spawn_args *a=record;
+        return !a->image||!a->command||!a->environment||a->environment_bytes<2||a->environment_bytes>32768||a->inherit>1||a->handle_flags&~3u||a->process_handle||a->thread_handle||a->pid||a->tid||a->error?-EINVAL:0;
+    }
+    case W32_FILE: {
+        const struct ciuki_w32_file_args *a=record;
+        return a->result||a->error||a->action<1||a->action>W32_F_DISK?-EINVAL:0;
+    }
+    case W32_SYSTEM: {
+        const struct ciuki_w32_system_args *a=record;
+        return a->result||a->error||a->low||a->high||(a->extra&&(a->action!=W32_S_TERMINATE_THREAD||a->handle))||a->action<1||a->action>W32_S_QUERY_PRIORITY?-EINVAL:0;
     }
     case W32_LOADER: {
         const struct ciuki_w32_loader_args *a=record;
