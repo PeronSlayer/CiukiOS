@@ -105,3 +105,47 @@ int w32_stricmp(const char *a, const char *b) {
   }
   return (unsigned char)*a - (unsigned char)*b;
 }
+/* f5-10C selection layer imports. The engine tests install their own
+ * providers; the font store is exercised by tests/host/win32/dialogs. */
+void *W32API CreateFileA(const char *n, DWORD a, DWORD s, void *sa, DWORD c,
+                         DWORD f, void *t) {
+  (void)n, (void)a, (void)s, (void)sa, (void)c, (void)f, (void)t;
+  return (void *)(intptr_t)-1;
+}
+BOOL W32API ReadFile(void *h, void *d, DWORD n, DWORD *got, void *o) {
+  (void)h, (void)d, (void)n, (void)got, (void)o;
+  return 0;
+}
+BOOL W32API WriteFile(void *h, const void *d, DWORD n, DWORD *put, void *o) {
+  (void)h, (void)d, (void)n, (void)put, (void)o;
+  return 0;
+}
+DWORD W32API GetFileSize(void *h, DWORD *high) {
+  (void)h, (void)high;
+  return 0xffffffffu;
+}
+DWORD W32API SetFilePointer(void *h, LONG at, LONG *high, DWORD how) {
+  (void)h, (void)at, (void)high, (void)how;
+  return 0xffffffffu;
+}
+BOOL W32API CloseHandle(void *h) {
+  (void)h;
+  return 1;
+}
+BOOL W32API CopyFileA(const char *a, const char *b, BOOL f) {
+  (void)a, (void)b, (void)f;
+  return 0;
+}
+BOOL W32API DeleteFileA(const char *a) {
+  (void)a;
+  return 0;
+}
+void *W32API LoadLibraryA(const char *a) {
+  (void)a;
+  return 0;
+}
+void *W32API GetProcAddress(void *m, const char *a) {
+  (void)m, (void)a;
+  return 0;
+}
+void W32API SetLastError(DWORD e) { (void)e; }

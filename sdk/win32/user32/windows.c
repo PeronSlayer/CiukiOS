@@ -65,7 +65,7 @@ static int equal(const char *a, const char *b) {
 struct u32_class *u32_class(const char *n, HINSTANCE instance) {
   for (UINT i = 0; i < U32_CLASSES; i++) {
     struct u32_class *c = &u32_classes[i];
-    if (c->atom && (!instance || c->c.hInstance == instance) &&
+    if (c->atom && (!instance || !c->c.hInstance || c->c.hInstance == instance) &&
         (atom_name(n) ? c->atom == (uintptr_t)n : equal(c->name, n)))
       return c;
   }
@@ -153,7 +153,18 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
                             HWND parent, HANDLE menu, HINSTANCE instance,
                             void *param) {
   U32_GUARD;
+  /* f5-10C: predefined control atoms and the dialog class register lazily. */
+  static const char *const predefined[] = {"BUTTON",  "EDIT",      "STATIC",
+                                           "LISTBOX", "SCROLLBAR", "COMBOBOX"};
+  if ((uintptr_t)klass >= 0x80 && (uintptr_t)klass <= 0x85)
+    klass = predefined[(uintptr_t)klass - 0x80];
+  if ((uintptr_t)klass == 32770)
+    klass = "#32770";
   struct u32_class *c = u32_class(klass, instance);
+  if (!c) {
+    u32_controls_register();
+    c = u32_class(klass, instance);
+  }
   if (!c) {
     u32_fail(1407);
     return 0;
@@ -203,7 +214,15 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
   w->proc = c->c.lpfnWndProc;
   w->cls = c;
   w->instance = instance;
-  w->id = U32_PTR(menu);
+  w->id = style & WS_CHILD ? U32_PTR(menu) : 0;
+  if (!(style & WS_CHILD)) {
+    w->menu = menu;
+    if (!menu && c->c.lpszMenuName)
+      w->menu = LoadMenuA(c->c.hInstance ? c->c.hInstance : instance,
+                          c->c.lpszMenuName);
+    if (w->menu && !IsMenu(w->menu))
+      w->menu = 0;
+  }
   w->redraw = 1;
   w->creating = 1;
   w->z = ++zserial;
@@ -379,6 +398,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
     if (u32_timers[i].tid && u32_timers[i].hwnd == h)
       w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
   if (callbacks) u32_invoke(h, WM_NCDESTROY, 0, 0);
+  u32_classic_destroy(h); /* USER-owned control/dialog/menu/caret records, also at thread exit */
   u32_destroy_paint(w);
   while (w->props) {
     struct u32_prop *p = w->props;
@@ -421,19 +441,21 @@ BOOL W32API GetClientRect(HWND h, RECT *r) {
   struct u32_window *w = u32_window(h);
   if (!w || !r)
     return u32_fail(1400);
-  int bx, by;
+  int bx, by, top, right, bottom;
   u32_frame(w->style, w->exstyle, &bx, &by);
-  int width = w->rect.right - w->rect.left - 2 * bx,
-      height = w->rect.bottom - w->rect.top - by - bx;
+  u32_nonclient(w, &top, &right, &bottom);
+  int width = w->rect.right - w->rect.left - 2 * bx - right,
+      height = w->rect.bottom - w->rect.top - by - bx - top - bottom;
   return SetRect(r, 0, 0, width > 0 ? width : 0, height > 0 ? height : 0);
 }
 POINT u32_origin(struct u32_window *w) {
   POINT p = {0, 0};
   for (UINT i = 0; w && i < U32_WINDOWS; i++) {
-    int bx, by;
+    int bx, by, top, right, bottom;
     u32_frame(w->style, w->exstyle, &bx, &by);
+    u32_nonclient(w, &top, &right, &bottom);
     p.x += w->rect.left + bx;
-    p.y += w->rect.top + by;
+    p.y += w->rect.top + by + top;
     w = u32_window(w->parent);
   }
   return p;
@@ -671,11 +693,15 @@ LONG W32API GetWindowLongA(HWND h, int index) {
     return w->exstyle;
   case GWL_USERDATA:
     return w->userdata;
-  default:
+  default: {
+    LONG value = 0;
+    if (u32_dialog_long(h, index, &value, 0))
+      return value;
     if (index >= 0 && index <= w->cls->c.cbWndExtra - 4)
       return w32_u32(w->extra + index);
     u32_fail(1413);
     return 0;
+  }
   }
 }
 LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
@@ -724,12 +750,16 @@ LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
   case GWL_USERDATA:
     w->userdata = value;
     break;
-  default:
+  default: {
+    LONG v = value;
+    if (u32_dialog_long(h, index, &v, 1))
+      break;
     if (index < 0 || index > w->cls->c.cbWndExtra - 4) {
       u32_fail(1413);
       return 0;
     }
     w32_put32(w->extra + index, value);
+  }
   }
   return old;
 }
@@ -818,8 +848,9 @@ uint16_t W32API SetWindowWord(HWND h, int n, uint16_t v) {
   w32_put16(w->extra + n, v);
   return old;
 }
-int W32API GetWindowTextLengthA(HWND h) {
-  U32_GUARD;
+/* The stored title; GetWindowText sends WM_GETTEXT to the process's own
+ * windows (controls keep their text), DefWindowProc reads this. */
+static int title_length(HWND h) {
   struct u32_window *w = u32_window(h);
   if (w)
     return w32_strlen(w->title);
@@ -827,8 +858,24 @@ int W32API GetWindowTextLengthA(HWND h) {
   struct w32r_window v;
   return u32_directory_window(h, &v, t) ? w32_strlen(t) : 0;
 }
+static int title_copy(HWND h, char *out, int n);
+int W32API GetWindowTextLengthA(HWND h) {
+  U32_GUARD;
+  if (u32_window(h))
+    return (int)SendMessageA(h, WM_GETTEXTLENGTH, 0, 0);
+  return title_length(h);
+}
 int W32API GetWindowTextA(HWND h, char *out, int n) {
   U32_GUARD;
+  if (!out || n <= 0)
+    return 0;
+  if (u32_window(h)) {
+    out[0] = 0;
+    return (int)SendMessageA(h, WM_GETTEXT, (WPARAM)n, (LPARAM)out);
+  }
+  return title_copy(h, out, n);
+}
+static int title_copy(HWND h, char *out, int n) {
   if (!out || n <= 0)
     return 0;
   struct u32_window *w = u32_window(h);
@@ -1133,6 +1180,10 @@ HANDLE W32API RemovePropA(HWND h, const char *name) {
 LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);
+  BOOL classic = 0;
+  LRESULT result = u32_classic_default(h, msg, wp, lp, &classic);
+  if (classic)
+    return result;
   switch (msg) {
   case WM_DESTROYCLIPBOARD:
     u32_clipboard_owned_clear();
@@ -1163,9 +1214,9 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return 0;
   case WM_GETTEXT:
-    return GetWindowTextA(h, (char *)lp, (int)wp);
+    return title_copy(h, (char *)lp, (int)wp);
   case WM_GETTEXTLENGTH:
-    return GetWindowTextLengthA(h);
+    return title_length(h);
   case WM_SETTEXT: {
     if (!w || !lp || w32_strlen((char *)lp) > 255)
       return u32_fail(87);

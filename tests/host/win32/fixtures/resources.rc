@@ -4,3 +4,148 @@ LANGUAGE 9, 1
 NAMED RCDATA { 4, 5, 6 }
 LANGUAGE 16, 1
 1 RCDATA { 7, 8, 9 }
+// f5-10C dialog-manager, menu, accelerator and string fixtures. Numeric
+// styles keep the file independent of SDK headers; English UI copy.
+LANGUAGE 9, 1
+100 DIALOG 0, 0, 220, 140
+STYLE 0x80C800C0
+CAPTION "Setup Options"
+FONT 8, "MS Sans Serif"
+BEGIN
+  LTEXT "&Name:", -1, 7, 9, 40, 8
+  EDITTEXT 101, 50, 7, 163, 14, 0x00810080
+  LTEXT "&Folder:", -1, 7, 27, 40, 8
+  EDITTEXT 102, 50, 25, 163, 14, 0x00810080
+  GROUPBOX "Install type", -1, 7, 45, 100, 54
+  AUTORADIOBUTTON "&Typical", 103, 14, 57, 80, 10, 0x00030000
+  AUTORADIOBUTTON "&Compact", 104, 14, 70, 80, 10
+  AUTORADIOBUTTON "C&ustom", 105, 14, 83, 80, 10
+  AUTOCHECKBOX "Create &shortcuts", 106, 115, 57, 98, 10, 0x00030000
+  AUTOCHECKBOX "&Launch when done", 107, 115, 70, 98, 10
+  DEFPUSHBUTTON "OK", 1, 109, 119, 50, 14, 0x00030000
+  PUSHBUTTON "Cancel", 2, 163, 119, 50, 14
+END
+101 DIALOGEX 0, 0, 300, 196
+STYLE 0x80C80848
+EXSTYLE 0x00000100
+CAPTION "Control Gallery"
+FONT 8, "MS Shell Dlg", 400, 0, 1
+BEGIN
+  PUSHBUTTON "&Push", 201, 7, 7, 50, 14
+  DEFPUSHBUTTON "&Default", 202, 61, 7, 50, 14
+  PUSHBUTTON "Disabled", 203, 115, 7, 50, 14, 0x08000000
+  AUTOCHECKBOX "Check &box", 204, 7, 26, 70, 10
+  AUTO3STATE "&Three state", 205, 80, 26, 70, 10
+  AUTORADIOBUTTON "Radio &1", 206, 7, 39, 60, 10, 0x00030000
+  AUTORADIOBUTTON "Radio &2", 207, 80, 39, 60, 10
+  GROUPBOX "&Group box", 208, 170, 7, 123, 44
+  LTEXT "Left aligned text", 209, 176, 18, 110, 8
+  CTEXT "Centered", 210, 176, 28, 110, 8
+  RTEXT "Right aligned", 211, 176, 38, 110, 8
+  LTEXT "A long label that ends with an ellipsis when clipped", 212, 7, 54, 120, 8, 0x00004000
+  CONTROL "", 213, "Static", 0x00000010, 7, 66, 286, 2
+  EDITTEXT 214, 7, 72, 90, 14, 0x00810080
+  EDITTEXT 215, 101, 72, 90, 14, 0x008100A0
+  EDITTEXT 216, 195, 72, 98, 14, 0x00810880
+  EDITTEXT 217, 7, 90, 140, 40, 0x00A11044
+  LISTBOX 218, 151, 90, 70, 44, 0x00A10003
+  COMBOBOX 219, 225, 90, 68, 60, 0x00210003
+  COMBOBOX 220, 225, 108, 68, 60, 0x00210002
+  COMBOBOX 221, 7, 134, 100, 44, 0x00210001
+  SCROLLBAR 222, 111, 136, 110, 10, 0x00010000
+  SCROLLBAR 223, 225, 126, 10, 48, 0x00010001
+  CONTROL "", 224, "Static", 0x00000012, 241, 128, 52, 20
+  CONTROL "", 225, "Static", 0x00000003, 241, 152, 21, 20
+  PUSHBUTTON "OK", 1, 189, 176, 50, 14, 0x00010000
+  PUSHBUTTON "Cancel", 2, 243, 176, 50, 14, 0x00010000
+END
+102 DIALOG 10, 10, 160, 60
+STYLE 0x80C80080
+CAPTION "System Font"
+BEGIN
+  LTEXT "Base units from the System font.", -1, 7, 7, 146, 10
+  DEFPUSHBUTTON "OK", 1, 55, 39, 50, 14, 0x00010000
+END
+103 DIALOGEX 0, 0, 200, 60
+STYLE 0x50000444
+EXSTYLE 0x00010000
+FONT 8, "MS Shell Dlg", 400, 0, 1
+BEGIN
+  LTEXT "&Destination folder:", -1, 0, 2, 120, 8
+  EDITTEXT 301, 0, 12, 140, 14, 0x00810080
+  PUSHBUTTON "B&rowse...", 302, 146, 12, 50, 14, 0x00010000
+  LTEXT "Space required: 1.2 MB", 303, 0, 32, 196, 8
+END
+110 DIALOGEX 0, 0, 266, 150
+STYLE 0x80C80848
+CAPTION "Ciuki Sample Setup"
+FONT 8, "MS Shell Dlg", 400, 0, 1
+BEGIN
+  CONTROL "", 1018, "Static", 0x00000007, 0, 0, 266, 30
+  LTEXT "Choose Install Location", 1037, 10, 6, 240, 8
+  LTEXT "Choose the folder in which to install Ciuki Sample.", 1038, 15, 16, 240, 8
+  CONTROL "", 1035, "Static", 0x00000010, 0, 30, 266, 1
+  CONTROL "", 1036, "Static", 0x00000010, 0, 125, 266, 1
+  PUSHBUTTON "< &Back", 3, 99, 130, 50, 14, 0x00010000
+  DEFPUSHBUTTON "&Next >", 1, 149, 130, 50, 14, 0x00010000
+  PUSHBUTTON "Cancel", 2, 209, 130, 50, 14, 0x00010000
+END
+111 DIALOGEX 0, 0, 236, 90
+STYLE 0x50000444
+EXSTYLE 0x00010000
+FONT 8, "MS Shell Dlg", 400, 0, 1
+BEGIN
+  LTEXT "Please review the license terms before installing Ciuki Sample.", -1, 0, 0, 236, 8
+  EDITTEXT 1000, 0, 12, 236, 56, 0x00A00844
+  AUTOCHECKBOX "I &accept the terms in the License Agreement", 1034, 0, 74, 236, 10, 0x00010000
+END
+200 MENU
+BEGIN
+  POPUP "&File"
+  BEGIN
+    MENUITEM "&Open...\tCtrl+O", 1001
+    MENUITEM "&Save\tCtrl+S", 1002, GRAYED
+    MENUITEM SEPARATOR
+    POPUP "&Recent"
+    BEGIN
+      MENUITEM "readme.txt", 1010
+    END
+    MENUITEM "E&xit", 1003
+  END
+  POPUP "&View"
+  BEGIN
+    MENUITEM "&Toolbar", 1004, CHECKED
+    MENUITEM "&Status bar", 1005
+  END
+  POPUP "&Help"
+  BEGIN
+    MENUITEM "&About...", 1006
+  END
+END
+201 MENUEX
+BEGIN
+  POPUP "&Game", 0, 0, 0
+  BEGIN
+    MENUITEM "&New", 1101, 0, 0
+    MENUITEM "", 0, 0x00000800, 0
+    MENUITEM "&Easy", 1102, 0x00000200, 0x00000008
+    MENUITEM "&Hard", 1103, 0x00000200, 0
+  END
+END
+300 ACCELERATORS
+BEGIN
+  "O", 1001, VIRTKEY, CONTROL
+  "S", 1002, VIRTKEY, CONTROL
+  0x70, 1006, VIRTKEY
+  "x", 1003, ALT
+END
+STRINGTABLE
+BEGIN
+  1, "Ready"
+  17, "Setup has finished."
+END
+// A 4x4 32-bpp checker as a raw RT_BITMAP packed DIB (no file header).
+400 2
+BEGIN
+  0x28, 0x0, 0x4, 0x0, 0x4, 0x0, 0x1, 0x20, 0x0, 0x0, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xffff, 0xff, 0x0, 0xc0, 0xffff, 0xff, 0x0, 0xc0, 0x0, 0xc0, 0xffff, 0xff, 0x0, 0xc0, 0xffff, 0xff, 0xffff, 0xff, 0x0, 0xc0, 0xffff, 0xff, 0x0, 0xc0, 0x0, 0xc0, 0xffff, 0xff, 0x0, 0xc0, 0xffff, 0xff
+END

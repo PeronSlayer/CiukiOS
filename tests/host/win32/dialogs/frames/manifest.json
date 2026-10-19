@@ -1,0 +1,130 @@
+{
+  "fonts": {
+    "LiberationMono-Bold.ttf": "bd62a0672d0b9b6710b01df434c80ad54fa5f0835207eb7b17b7a761463067bb",
+    "LiberationMono-BoldItalic.ttf": "79451f3c09fe25116098853b7a2ca6e2436220ccc11af022979adbcf195be130",
+    "LiberationMono-Italic.ttf": "605c01c711b44480a7508d349dfbf3264e81fa43d69e61cfa7d10b86e764c4d1",
+    "LiberationMono-Regular.ttf": "f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+    "LiberationSans-Bold.ttf": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173",
+    "LiberationSans-BoldItalic.ttf": "698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee",
+    "LiberationSans-Italic.ttf": "e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0",
+    "LiberationSans-Regular.ttf": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+    "LiberationSerif-Bold.ttf": "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce",
+    "LiberationSerif-BoldItalic.ttf": "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7",
+    "LiberationSerif-Italic.ttf": "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e",
+    "LiberationSerif-Regular.ttf": "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74"
+  },
+  "frames": {
+    "combo-dropped-640x480": {
+      "height": 480,
+      "sha256": "5e2f7f9745f494b65d2924e8dfb463a67206157e88cb63daec7b362f1cf9bc5c",
+      "width": 640
+    },
+    "combo-dropped-800x600": {
+      "height": 600,
+      "sha256": "7a78bd2473476481bf39e87318ba9568b1bdff3f9d011b7bf8cae37ba1c2cc58",
+      "width": 800
+    },
+    "controls-edit-focus-640x480": {
+      "height": 480,
+      "sha256": "0703b6efef4b9c803be0b1235c7bec163654ec4f59a5ec78e657f33ecdf40b0f",
+      "width": 640
+    },
+    "controls-edit-focus-800x600": {
+      "height": 600,
+      "sha256": "305d02af719ca9fbf1da43b7ef9c0d25d3f57e5e3321ed42c6d390ce217e1c66",
+      "width": 800
+    },
+    "controls-gallery-640x480": {
+      "height": 480,
+      "sha256": "225b64afb8818e0f7af17a15e36ccc89ac897ca1de560769bda62cf4bcc559dd",
+      "width": 640
+    },
+    "controls-gallery-800x600": {
+      "height": 600,
+      "sha256": "a664cf12240b8d13ad9d8379b675c430ae091d2a745f396cdfdae3755f2809b0",
+      "width": 800
+    },
+    "dialog-classic-640x480": {
+      "height": 480,
+      "sha256": "58fba8da520562a5121de63bda5632bb615bb555c4d6ef5aa0f2a42ef58b9509",
+      "width": 640
+    },
+    "dialog-classic-800x600": {
+      "height": 600,
+      "sha256": "370ba5f37c06bca7202c543f5a65b1a452bce753998a63c75e6519743f890297",
+      "width": 800
+    },
+    "dialog-system-font-640x480": {
+      "height": 480,
+      "sha256": "9b0a40e9db34f13065e68d4e22e99fda01d0c19ce9e8231fc4b60a56db71ca23",
+      "width": 640
+    },
+    "dialog-system-font-800x600": {
+      "height": 600,
+      "sha256": "d8c8fdaaa1ad00956d1b6616f1dff7907d2580e181775d29af6da1c9834cfc92",
+      "width": 800
+    },
+    "menu-bar-640x480": {
+      "height": 480,
+      "sha256": "acf32f37602d8e0356103e495841fd7a630659663e5992357f9f4640bd97b4ea",
+      "width": 640
+    },
+    "menu-bar-800x600": {
+      "height": 600,
+      "sha256": "6ee466935f6e2a0c26fbdd2d5d1bd3e30ccec7a57fa4d97675713f2a628de8eb",
+      "width": 800
+    },
+    "menu-open-submenu-640x480": {
+      "height": 480,
+      "sha256": "d8dd4d68335e7068dd2d2be2c2edc4be05b28139f3da11f3a59a0308ff9af715",
+      "width": 640
+    },
+    "menu-open-submenu-800x600": {
+      "height": 600,
+      "sha256": "c10de4fc13cb860df1d4a6f658b3fe1269962e79612d2f20d37ae4471164f23b",
+      "width": 800
+    },
+    "msgbox-abortretryignore-hand-640x480": {
+      "height": 480,
+      "sha256": "9367a3c8ef08fa1759f9930a69f2f5fe08a18cbd6821037671ab6b42652cf1c7",
+      "width": 640
+    },
+    "msgbox-abortretryignore-hand-800x600": {
+      "height": 600,
+      "sha256": "2e1cd231b86177e447c2554f117bae28f023dfb6a7f3a451a4f01464419c7800",
+      "width": 800
+    },
+    "msgbox-ok-information-640x480": {
+      "height": 480,
+      "sha256": "9a242349bef30dafff7c2632e7b6ae3752008bf040d49981d5847633701f0864",
+      "width": 640
+    },
+    "msgbox-ok-information-800x600": {
+      "height": 600,
+      "sha256": "8a48a5b978fc4f961f689b7b9bd87713ba905d2b47bbb70721708519c1e33106",
+      "width": 800
+    },
+    "msgbox-okcancel-exclamation-640x480": {
+      "height": 480,
+      "sha256": "b36cf09bad0189037068f57d0bb67bd9c6a89d2f0ed1f90c72a9bfcfe0b21827",
+      "width": 640
+    },
+    "msgbox-okcancel-exclamation-800x600": {
+      "height": 600,
+      "sha256": "b74d8063c314598f1fe0a51c4e0193692deb99da49109f2217b04c3466551a84",
+      "width": 800
+    },
+    "msgbox-yesnocancel-question-640x480": {
+      "height": 480,
+      "sha256": "073070f44a18af57242e320459ecd6e6f51966d65c87ffeaf8bd2126a82542f2",
+      "width": 640
+    },
+    "msgbox-yesnocancel-question-800x600": {
+      "height": 600,
+      "sha256": "75d8a97680ce36217da4561fc625a6bfd7e022979af9d9ed791af7d758deb00b",
+      "width": 800
+    }
+  },
+  "provenance": "CiukiOS production USER/GDI host renders (classic look from primitives, FreeType 2.13.3 v35, Liberation 2.1.5); not Windows captures",
+  "schema": 1
+}

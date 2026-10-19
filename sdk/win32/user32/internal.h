@@ -49,6 +49,13 @@ struct u32_window {
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
+  /* f5-10C classic state: control/dialog records, menus, scroll bars. */
+  void *control, *dialog;
+  HANDLE menu, system_menu;
+  struct u32_scroll_state {
+    int minimum, maximum, position, track;
+    UINT page, disabled;
+  } scroll[3];
 };
 struct u32_send_frame {
   struct u32_send_frame *prev;
@@ -184,5 +191,19 @@ BOOL u32_rect_intersect(RECT *, RECT, RECT);
 BOOL u32_pointer_message(UINT);
 int u32_ansi(unsigned);
 unsigned u32_scalar(uint8_t);
+/* f5-10C classic hooks (classic.c, scroll.c, dialog.c, menu.c). */
+void u32_controls_register(void);
+int u32_dialog_long(HWND, int, LONG *, BOOL);
+void u32_classic_destroy(HWND);
+LRESULT u32_classic_default(HWND, UINT, WPARAM, LPARAM, BOOL *);
+void u32_nonclient(struct u32_window *, int *, int *, int *);
+POINT u32_surface_origin(struct u32_window *);
+void u32_surface_size(struct u32_window *, UINT *, UINT *);
+void u32_paint_frame(HWND);
+void u32_caret_paint(HWND, HDC);
+UINT u32_hit_test(HWND, POINT);
+void u32_invalidate_children(struct u32_window *, RECT, BOOL);
+HANDLE W32API LoadMenuA(HINSTANCE, const char *);
+BOOL W32API IsMenu(HANDLE);
 UINT u32_utf8(char *, UINT, const char *);
 #endif

@@ -225,3 +225,128 @@ about 8 KiB (atlases), Demo by 127,480 bytes because it now links the atlases.
 `libfont.a` grows from 221,622 to 1,321,514 bytes (SDK only). `stb_truetype.h`
 is removed from `third_party/stb`; its notice in `/system/licenses` is replaced
 by the three FreeType files (9,028 bytes).
+
+## Win32 font selection (f5-10C, 2026-10-19)
+
+The `gdi32` selection layer (`sdk/win32/gdi32/font.c`) realizes `LOGFONT`
+requests on the store faces and hands the f5-10B text boundary a provider
+per logical font. A native face backend (`w32_gdi_set_face_backend`: open,
+lookup, raster, free, resident) supplies FreeType 2.13.3 coverage through the
+unchanged SDK `libfont` API (`w32_gdi_native_backend()` in
+`native_font.c`). Until the PE-to-native bridge installs that backend in the
+guest personality, the layer runs metric-only: metrics, extents and layout
+come from the validated tables (hmtx advances rounded to whole pixels) and no
+coverage is drawn. Host evidence: `tests/host/win32/dialogs` (`fonts`,
+`parser`, frames).
+
+**Store.** `C:\WINDOWS\FONTS` maps to `/System/fonts` (the twelve pinned
+Liberation 2.1.5 faces, read-only). Faces installed by `AddFontResource`
+are copied, after validation, into the writable install directory configured
+with `w32_gdi_font_store` (default `C:\WINDOWS\FONTS`; the f5-06 drive
+service must present that view as the union of the read-only system faces
+and a writable per-personality directory) and registered as
+`HKLM\Software\Microsoft\Windows\CurrentVersion\Fonts\"<full name> (TrueType)"`
+= file name, with the original path in `HKLM\Software\CiukiOS\Win32\Fonts`.
+Registered faces load again in later sessions. `RemoveFontResource` of the
+last reference removes the copy and both values; while a logical font still
+uses the face, removal completes when that font is deleted. `.FON`/`.FNT`
+raster resources and CFF/collection files are refused (error 13, W21).
+`CreateScalableFontResource` writes a CiukiOS reference file (`CIUKIFOT`
+signature and the TrueType path) that `AddFontResource` accepts; Windows
+NE-format `.FOT` files are not parsed (W21).
+
+**Families.** The Windows 98 core names are virtual families backed by the
+metric-compatible faces; the physical `Liberation *` families and installed
+faces are enumerated too. `GetTextFace` reports the realized family name.
+
+| Request (and substitutes) | Face | Plan |
+| --- | --- | --- |
+| Arial (Helvetica) | Liberation Sans R/B/I/BI | scalable |
+| Times New Roman (Times) | Liberation Serif R/B/I/BI | scalable |
+| Courier New (Courier 10 Pitch) | Liberation Mono R/B/I/BI | scalable |
+| MS Sans Serif (Helv, MS Shell Dlg), Tahoma (MS Shell Dlg 2), Small Fonts | Liberation Sans | raster-size rule |
+| MS Serif (Tms Rmn) | Liberation Serif | raster-size rule |
+| Courier | Liberation Mono | raster-size rule |
+| System | Liberation Sans Bold | 13 px em, 16 px cell |
+| Fixedsys | Liberation Mono | 13 px em, 15 px cell |
+| Terminal (OEM_CHARSET) | Liberation Mono | 10 px em, 12 px cell |
+
+Substitution order: WIN.INI `[FontSubstitutes]` (the Windows 98 location,
+through `GetProfileString`), then
+`HKLM\Software\Microsoft\Windows NT\CurrentVersion\FontSubstitutes`, then the
+built-in list above. **Raster-size rule:** a positive (cell) height selects
+the largest integer em whose cell is not taller than the request, as the
+mapper treats bitmap sizes; a negative height is the em. Stock objects:
+`SYSTEM_FONT`/`DEVICE_DEFAULT_FONT` System 16, `DEFAULT_GUI_FONT` MS Sans
+Serif -11, `ANSI_VAR_FONT` MS Sans Serif 13, `ANSI_FIXED_FONT` Courier 13,
+`SYSTEM_FIXED_FONT` Fixedsys 15, `OEM_FIXED_FONT` Terminal 12.
+
+**Windows 98 dialog-font plan (host-measured, FreeType 2.13.3 v35).** Dialog
+base units follow Windows: horizontal = (extent of `A`–`Z``a`–`z` / 26 + 1)
+/ 2, vertical = `tmHeight`; `MapDialogRect` uses `MulDiv(x, base, 4)` and
+`MulDiv(y, base, 8)`. The directive's references are 8x16 for the System font
+and 6x13 for MS Sans Serif 8 pt at 96 dpi.
+
+| Request | Realized | Cell (ascent+descent) | Internal leading | Avg width | Base units |
+| --- | --- | --- | --- | --- | --- |
+| System (stock) | Liberation Sans Bold, 13 px | 16 (13+3, pinned) | 3 | — | 8x16 |
+| MS Sans Serif 8 pt (-11 or 13) | Liberation Sans, 11 px | 13 (10+3) | 2 | 6 | 6x13 |
+| MS Shell Dlg / Helv 8 pt | as MS Sans Serif | 13 | 2 | 6 | 6x13 |
+| Tahoma 8 pt | Liberation Sans, 11 px | 13 | 2 | 6 | 6x13 |
+
+Only the System cell is pinned (natural 15 → 16, ascent raised to 13); the
+8 pt dialog sizes are natural. With these units the dialog geometry equals the
+Windows 98 references exactly (0 px per 100 units; `MapDialogRect` of 100x100
+gives 150x163). Glyph shapes and other sizes are FreeType/Liberation, not
+Microsoft raster fonts.
+
+**Matching.** Each candidate (virtual family styles first, then physical
+faces, in store order) receives the published Windows font-mapper penalties
+(R. Gery, [Windows Font Mapping](https://learn.microsoft.com/en-us/previous-versions/ms969909(v=msdn.10)),
+MSDN 1992, table 1): CharSet 65000, FixedPitch 15000, FaceName 10000, Family
+9000, FamilyUnknown 8000, FaceNameSubst 500, PitchVariable 350,
+FamilyUnlikely 50, Italic 4, Weight 3 per 10 units, ItalicSim 1,
+DefaultPitchFixed 1; the lowest total wins and ties keep the first
+candidate. The table documents Windows 3.0/3.1; Windows 98 is understood to
+retain the core mapper, but no Windows 98-specific weight table was found, so
+this remains a documented approximation. TrueType candidates carry no height,
+width or aspect penalties (as in the source). `DEFAULT_CHARSET` matches the
+ANSI faces (code page 1252 system). A full face name such as "Arial Bold"
+matches that style.
+
+**Metrics.** Ascent/descent are the OS/2 `usWin` values scaled to 26.6
+(rounded, like the rasteriser's size metrics) and rounded outward to whole
+pixels; a positive height fixes `tmHeight` to the request. External leading
+uses the TrueType Windows formula max(0, lineGap − ((usWinAscent +
+usWinDescent) − (ascender − descender))). `tmAveCharWidth` is OS/2
+`xAvgCharWidth`, `tmMaxCharWidth` hhea `advanceWidthMax`; ANSI fonts report
+`tmFirstChar` 30, `tmDefaultChar` 31, `tmBreakChar` 32. Advances and ABC
+widths are the hinted FreeType advances. Text output applies no pair kerning
+(GDI does not); `GetKerningPairs` reports the legacy `kern` table (Liberation
+Sans/Serif have one, Mono none). Synthesis only for missing styles:
+emboldening (+1 px coverage and advance), italic shear (21/64), underline
+and strike-out bars from `post`/`OS/2`, and a threshold for
+`NONANTIALIASED_QUALITY`. `w32_gdi_glyph.top` is the distance above the
+baseline; `libfont` reports a y-down offset, which the backend negates.
+
+**Budget (≤ 2 MiB shared).** Open faces (backend-reported resident bytes:
+file, a 64 KiB face allowance and the SDK cache trimmed to 64 KiB) are an LRU
+within 2 MiB minus the 256 KiB glyph cache (LRU, 1,024 entries, coverage after
+synthesis) and the store records. Host measurement over 45 logical fonts (three
+families, 8–36 px): total peak 1,837,350 bytes, faces 1,513,810 peak with 3
+open, glyph cache 223,162 peak, 4,826 glyph and 9 face evictions.
+
+**Parser bounds.** The table directory and every required table (`head`,
+`hhea`, `maxp`, `hmtx`, `cmap` format 4, `name`, `post`, optional `OS/2`,
+`kern` format 0) are range-checked before use; `glyf`/`loca` must exist; CFF
+(`OTTO`), collections and NE files are refused. Host fuzzing truncates at
+every offset up to the last table end, makes table lengths and offsets
+overlong and flips bytes in 3,000 rounds without a fault.
+
+**Limitations (W21 or open).** No rotated output for `lfEscapement`/
+`lfOrientation`; `lfWidth` does not scale glyphs; heights are realized at
+creation in `MM_TEXT` units; em sizes above 128 px clamp; no symbol faces
+(Symbol/Wingdings requests fall back by penalty); OEM text uses the code-page
+1252 glyph mapping; `GetGlyphOutline` serves `GGO_METRICS`, `GGO_BITMAP` and
+`GGO_GRAY*_BITMAP` with the identity matrix only (`GGO_NATIVE`/`GGO_BEZIER`
+return `GDI_ERROR`); `GetFontData` reads the store file per call.

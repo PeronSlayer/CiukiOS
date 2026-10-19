@@ -460,4 +460,194 @@ BOOL W32API GetTextExtentExPointA(HDC, const char *, int, int, int *, int *,
                                   SIZE *);
 BOOL W32API GetTextExtentExPointW(HDC, const WCHAR *, int, int, int *, int *,
                                   SIZE *);
+/* f5-10C Win32 font selection. PE32 layouts: LOGFONTA 60, LOGFONTW 92,
+ * TEXTMETRICA 56, TEXTMETRICW 60, NEWTEXTMETRICEXA 96, ENUMLOGFONTEXA 188,
+ * OUTLINETEXTMETRICA 212 (string members are byte offsets). */
+#define LF_FACESIZE 32
+#define FW_DONTCARE 0
+#define FW_NORMAL 400
+#define FW_SEMIBOLD 600
+#define FW_BOLD 700
+#define ANSI_CHARSET 0
+#define DEFAULT_CHARSET 1
+#define SYMBOL_CHARSET 2
+#define OEM_CHARSET 255
+#define DEFAULT_PITCH 0
+#define FIXED_PITCH 1
+#define VARIABLE_PITCH 2
+#define FF_DONTCARE 0x00
+#define FF_ROMAN 0x10
+#define FF_SWISS 0x20
+#define FF_MODERN 0x30
+#define FF_SCRIPT 0x40
+#define FF_DECORATIVE 0x50
+#define TMPF_FIXED_PITCH 1
+#define TMPF_VECTOR 2
+#define TMPF_TRUETYPE 4
+#define NONANTIALIASED_QUALITY 3
+#define RASTER_FONTTYPE 1
+#define TRUETYPE_FONTTYPE 4
+#define NTM_ITALIC 1
+#define NTM_BOLD 0x20
+#define NTM_REGULAR 0x40
+#define GGO_METRICS 0
+#define GGO_BITMAP 1
+#define GGO_NATIVE 2
+#define GGO_GRAY2_BITMAP 4
+#define GGO_GRAY4_BITMAP 5
+#define GGO_GRAY8_BITMAP 6
+#define GGO_GLYPH_INDEX 0x80
+#define GDI_ERROR 0xffffffffu
+typedef struct {
+  LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
+  uint8_t lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision,
+      lfClipPrecision, lfQuality, lfPitchAndFamily;
+  char lfFaceName[LF_FACESIZE];
+} LOGFONTA;
+typedef struct {
+  LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
+  uint8_t lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision,
+      lfClipPrecision, lfQuality, lfPitchAndFamily;
+  WCHAR lfFaceName[LF_FACESIZE];
+} LOGFONTW;
+typedef struct {
+  LONG tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading,
+      tmAveCharWidth, tmMaxCharWidth, tmWeight, tmOverhang, tmDigitizedAspectX,
+      tmDigitizedAspectY;
+  uint8_t tmFirstChar, tmLastChar, tmDefaultChar, tmBreakChar, tmItalic,
+      tmUnderlined, tmStruckOut, tmPitchAndFamily, tmCharSet;
+} TEXTMETRICA;
+typedef struct {
+  LONG tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading,
+      tmAveCharWidth, tmMaxCharWidth, tmWeight, tmOverhang, tmDigitizedAspectX,
+      tmDigitizedAspectY;
+  WCHAR tmFirstChar, tmLastChar, tmDefaultChar, tmBreakChar;
+  uint8_t tmItalic, tmUnderlined, tmStruckOut, tmPitchAndFamily, tmCharSet;
+} TEXTMETRICW;
+typedef struct {
+  LONG tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading,
+      tmAveCharWidth, tmMaxCharWidth, tmWeight, tmOverhang, tmDigitizedAspectX,
+      tmDigitizedAspectY;
+  uint8_t tmFirstChar, tmLastChar, tmDefaultChar, tmBreakChar, tmItalic,
+      tmUnderlined, tmStruckOut, tmPitchAndFamily, tmCharSet;
+  DWORD ntmFlags;
+  unsigned ntmSizeEM, ntmCellHeight, ntmAvgWidth;
+} NEWTEXTMETRICA;
+typedef struct {
+  DWORD fsUsb[4], fsCsb[2];
+} FONTSIGNATURE;
+typedef struct {
+  NEWTEXTMETRICA ntmTm;
+  FONTSIGNATURE ntmFontSig;
+} NEWTEXTMETRICEXA;
+typedef struct {
+  LOGFONTA elfLogFont;
+  uint8_t elfFullName[64], elfStyle[32];
+} ENUMLOGFONTA;
+typedef struct {
+  LOGFONTA elfLogFont;
+  uint8_t elfFullName[64], elfStyle[32], elfScript[32];
+} ENUMLOGFONTEXA;
+typedef struct {
+  int abcA;
+  unsigned abcB;
+  int abcC;
+} ABC;
+typedef struct {
+  unsigned gmBlackBoxX, gmBlackBoxY;
+  POINT gmptGlyphOrigin;
+  int16_t gmCellIncX, gmCellIncY;
+} GLYPHMETRICS;
+typedef struct {
+  uint16_t fract;
+  int16_t value;
+} FIXED;
+typedef struct {
+  FIXED eM11, eM12, eM21, eM22;
+} MAT2;
+typedef struct {
+  uint16_t wFirst, wSecond;
+  int iKernAmount;
+} KERNINGPAIR;
+typedef struct {
+  uint8_t bFamilyType, bSerifStyle, bWeight, bProportion, bContrast,
+      bStrokeVariation, bArmStyle, bLetterform, bMidline, bXHeight;
+} PANOSE;
+typedef struct {
+  unsigned otmSize;
+  TEXTMETRICA otmTextMetrics;
+  uint8_t otmFiller;
+  PANOSE otmPanoseNumber;
+  unsigned otmfsSelection, otmfsType;
+  int otmsCharSlopeRise, otmsCharSlopeRun, otmItalicAngle;
+  unsigned otmEMSquare;
+  int otmAscent, otmDescent;
+  unsigned otmLineGap, otmsCapEmHeight, otmsXHeight;
+  RECT otmrcFontBox;
+  int otmMacAscent, otmMacDescent;
+  unsigned otmMacLineGap, otmusMinimumPPEM;
+  POINT otmptSubscriptSize, otmptSubscriptOffset, otmptSuperscriptSize,
+      otmptSuperscriptOffset;
+  unsigned otmsStrikeoutSize;
+  int otmsStrikeoutPosition, otmsUnderscoreSize, otmsUnderscorePosition;
+  DWORD otmpFamilyName, otmpFaceName, otmpStyleName, otmpFullName;
+} OUTLINETEXTMETRICA;
+typedef int(W32API *FONTENUMPROCA)(const LOGFONTA *, const TEXTMETRICA *,
+                                   DWORD, intptr_t);
+/* Native face backend behind the selection layer. open() receives the native
+ * path of a validated store file; lookup() and raster() return nonzero on
+ * success. raster() returns owned coverage (released by free_glyph) with a
+ * hinted 26.6 advance. resident() reports the bytes the open face holds,
+ * counted against the shared 2 MiB font budget. */
+struct w32_gdi_face_backend {
+  void *(*open)(const char *native_path);
+  void (*close)(void *);
+  int (*lookup)(void *, DWORD codepoint, unsigned *glyph);
+  int (*raster)(void *, unsigned glyph, unsigned em26,
+                struct w32_gdi_glyph *);
+  void (*free_glyph)(void *, struct w32_gdi_glyph *);
+  DWORD (*resident)(void *);
+};
+struct w32_gdi_font_stats {
+  DWORD faces, open_faces, face_bytes, face_peak, glyphs, glyph_bytes,
+      glyph_peak, total_peak, budget, hits, misses, evictions, face_evictions,
+      store_bytes;
+};
+BOOL W32API w32_gdi_set_face_backend(const struct w32_gdi_face_backend *);
+/* Win32 and native directories of the immutable system store and of the
+ * writable directory that receives faces installed by AddFontResource. */
+BOOL W32API w32_gdi_font_store(const char *, const char *, const char *,
+                               const char *);
+void W32API w32_gdi_font_statistics(struct w32_gdi_font_stats *);
+HFONT W32API CreateFontIndirectA(const LOGFONTA *);
+HFONT W32API CreateFontIndirectW(const LOGFONTW *);
+HFONT W32API CreateFontA(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD,
+                         DWORD, DWORD, DWORD, DWORD, const char *);
+HFONT W32API CreateFontW(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD,
+                         DWORD, DWORD, DWORD, DWORD, const WCHAR *);
+BOOL W32API GetTextMetricsA(HDC, TEXTMETRICA *);
+BOOL W32API GetTextMetricsW(HDC, TEXTMETRICW *);
+int W32API GetTextFaceA(HDC, int, char *);
+int W32API GetTextFaceW(HDC, int, WCHAR *);
+BOOL W32API GetCharWidthA(HDC, unsigned, unsigned, int *);
+BOOL W32API GetCharWidth32A(HDC, unsigned, unsigned, int *);
+BOOL W32API GetCharWidth32W(HDC, unsigned, unsigned, int *);
+BOOL W32API GetCharWidthW(HDC, unsigned, unsigned, int *);
+BOOL W32API GetCharABCWidthsA(HDC, unsigned, unsigned, ABC *);
+BOOL W32API GetCharABCWidthsW(HDC, unsigned, unsigned, ABC *);
+unsigned W32API GetOutlineTextMetricsA(HDC, unsigned, OUTLINETEXTMETRICA *);
+DWORD W32API GetGlyphOutlineA(HDC, unsigned, unsigned, GLYPHMETRICS *, DWORD,
+                              void *, const MAT2 *);
+DWORD W32API GetGlyphOutlineW(HDC, unsigned, unsigned, GLYPHMETRICS *, DWORD,
+                              void *, const MAT2 *);
+int W32API EnumFontFamiliesA(HDC, const char *, FONTENUMPROCA, intptr_t);
+int W32API EnumFontFamiliesExA(HDC, LOGFONTA *, FONTENUMPROCA, intptr_t,
+                               DWORD);
+int W32API EnumFontsA(HDC, const char *, FONTENUMPROCA, intptr_t);
+int W32API AddFontResourceA(const char *);
+BOOL W32API RemoveFontResourceA(const char *);
+DWORD W32API GetFontData(HDC, DWORD, DWORD, void *, DWORD);
+DWORD W32API GetKerningPairsA(HDC, DWORD, KERNINGPAIR *);
+int W32API GetTextCharset(HDC);
+DWORD W32API SetMapperFlags(HDC, DWORD);
 #endif
