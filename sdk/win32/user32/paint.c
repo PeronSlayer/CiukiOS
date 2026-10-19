@@ -70,12 +70,37 @@ BOOL W32API InvalidateRect(HWND h, const RECT *rect, BOOL erase) {
     return u32_fail(1400);
   RECT client, r;
   GetClientRect(h, &client);
-  if (IntersectRect(&r, rect ? rect : &client, &client))
+  if (IntersectRect(&r, rect ? rect : &client, &client)) {
     u32_region_add(&w->update, r);
+    /* Without WS_CLIPCHILDREN the parent paints over its children, which
+     * are invalidated too (classic USER behaviour). */
+    if (!(w->style & WS_CLIPCHILDREN))
+      u32_invalidate_children(w, r, erase);
+  }
   if (erase)
     w->erase = 1;
   u32_mark();
   return 1;
+}
+void u32_invalidate_children(struct u32_window *w, RECT r, BOOL erase) {
+  POINT po = u32_origin(w);
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *c = &u32_windows[i];
+    if (!c->handle || c->parent != w->handle || !(c->style & WS_VISIBLE))
+      continue;
+    RECT window, hit;
+    GetWindowRect(c->handle, &window);
+    OffsetRect(&window, -po.x, -po.y);
+    if (!IntersectRect(&hit, &r, &window))
+      continue;
+    POINT co = u32_origin(c);
+    OffsetRect(&hit, po.x - co.x, po.y - co.y);
+    InvalidateRect(c->handle, &hit, erase);
+    /* A child border may lie outside its client rectangle. */
+    if (c->style & (WS_BORDER | WS_DLGFRAME | 0x00300000u /* scroll bars */) ||
+        c->exstyle & (WS_EX_CLIENTEDGE | WS_EX_STATICEDGE))
+      c->internal_paint = 1;
+  }
 }
 BOOL W32API ValidateRect(HWND h, const RECT *rect) {
   U32_GUARD;
@@ -172,7 +197,7 @@ static HDC acquire(HWND h, BOOL frame, const struct u32_region *paint) {
     u32_fail(8);
     return 0;
   }
-  POINT ro = u32_origin(root), o = u32_origin(w);
+  POINT ro = u32_surface_origin(root), o = u32_origin(w);
   o.x -= ro.x;
   o.y -= ro.y;
   RECT client;
@@ -287,9 +312,13 @@ HDC W32API BeginPaint(HWND h, PAINTSTRUCT *ps) {
     return 0;
   }
   struct u32_region snapshot = w->update;
+  u32_caret_paint(h, 0);
+  u32_paint_frame(h);
   HDC dc = acquire(h, 0, &snapshot);
-  if (!dc)
+  if (!dc) {
+    u32_caret_paint(h, (HDC)(uintptr_t)1);
     return 0;
+  }
   w32_fill(ps, 0, sizeof(*ps));
   ps->hdc = dc;
   for (UINT i = 0; i < snapshot.n; i++)
@@ -305,7 +334,11 @@ HDC W32API BeginPaint(HWND h, PAINTSTRUCT *ps) {
 }
 BOOL W32API EndPaint(HWND h, const PAINTSTRUCT *ps) {
   U32_GUARD;
-  return ps ? ReleaseDC(h, ps->hdc) : u32_fail(87);
+  if (!ps)
+    return u32_fail(87);
+  BOOL ok = ReleaseDC(h, ps->hdc);
+  u32_caret_paint(h, (HDC)(uintptr_t)1);
+  return ok;
 }
 void u32_destroy_paint(struct u32_window *w) {
   for (UINT i = 0; i < 64; i++)
@@ -316,7 +349,7 @@ void u32_damage(struct u32_window *w, RECT r) {
   struct u32_window *root = u32_root(w);
   if (!root)
     return;
-  POINT a = u32_origin(w), b = u32_origin(root);
+  POINT a = u32_origin(w), b = u32_surface_origin(root);
   OffsetRect(&r, a.x - b.x, a.y - b.y);
   RECT bounds = {0, 0, root->surface.width, root->surface.height}, cut;
   if (IntersectRect(&cut, &r, &bounds))
@@ -414,7 +447,7 @@ int W32API ScrollWindowEx(HWND h, int dx, int dy, const RECT *scroll,
     return 1;
   }
   IntersectRect(&area, &area, &client);
-  POINT o = u32_origin(w), ro = u32_origin(root);
+  POINT o = u32_origin(w), ro = u32_surface_origin(root);
   o.x -= ro.x;
   o.y -= ro.y;
   RECT backing = {-o.x, -o.y, (LONG)root->surface.width - o.x,

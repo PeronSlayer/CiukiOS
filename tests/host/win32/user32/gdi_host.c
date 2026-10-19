@@ -66,6 +66,41 @@ int w32_stricmp(const char *a, const char *b) {
   }
   return (unsigned char)*a - (unsigned char)*b;
 }
+/* f5-10C font-store imports. user32_test.c supplies CreateFileA (always
+ * INVALID_HANDLE_VALUE) and ReadFile/CloseHandle, so the font files are never
+ * opened here; the remaining file imports of gdi32/font.c refuse. The font
+ * store itself is exercised by tests/host/win32/dialogs. */
+DWORD W32API GetFileSize(void *h, DWORD *high) {
+  (void)h;
+  (void)high;
+  return 0xffffffffu;
+}
+DWORD W32API SetFilePointer(void *h, LONG at, LONG *high, DWORD how) {
+  (void)h;
+  (void)at;
+  (void)high;
+  (void)how;
+  return 0xffffffffu;
+}
+BOOL W32API WriteFile(void *h, const void *data, DWORD bytes, DWORD *put,
+                      void *o) {
+  (void)h;
+  (void)data;
+  (void)bytes;
+  (void)put;
+  (void)o;
+  return 0;
+}
+BOOL W32API CopyFileA(const char *from, const char *to, BOOL fail_exists) {
+  (void)from;
+  (void)to;
+  (void)fail_exists;
+  return 0;
+}
+BOOL W32API DeleteFileA(const char *name) {
+  (void)name;
+  return 0;
+}
 #define EXPORT(name) {#name, (void *)name}
 static const struct {
   const char *name;

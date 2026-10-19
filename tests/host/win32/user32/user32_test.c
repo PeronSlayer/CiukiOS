@@ -37,6 +37,8 @@ void W32API SetLastError(DWORD n) { errors[ui_kernel_current()] = n; }
 DWORD W32API GetCurrentThreadId(void) { return ui_kernel_tid(); }
 DWORD W32API GetCurrentProcessId(void) { return ui_kernel_pid(); }
 DWORD W32API GetTickCount(void) { return ui_kernel_ticks(); }
+#ifndef U32_TEST_EXTERNAL_MODULES
+/* tests/host/win32/dialogs supplies file, module and resource services. */
 HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
                           SECURITY_ATTRIBUTES *security, DWORD creation,
                           DWORD flags, HANDLE template) {
@@ -62,6 +64,7 @@ BOOL W32API CloseHandle(HANDLE h) {
   (void)h;
   return 1;
 }
+#endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
 static unsigned allocations;
 void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
@@ -100,6 +103,7 @@ BOOL W32API GlobalUnlock(HANDLE h) {
   return 0;
 }
 DWORD W32API GlobalSize(HANDLE h) { return h ? ((DWORD *)h)[-7] : 0; }
+#ifndef U32_TEST_EXTERNAL_MODULES
 HANDLE W32API FindResourceA(HANDLE h, const void *n, const void *t) {
   (void)h;
   (void)n;
@@ -118,6 +122,7 @@ DWORD W32API SizeofResource(HANDLE h, HANDLE r) {
 }
 HANDLE W32API GetModuleHandleA(const char *);
 HANDLE W32API LoadLibraryA(const char *s) { return GetModuleHandleA(s); }
+#endif
 /* Until the GDI phase USER runs on the fixture adapter (test_gdi below); then
  * gdi32.dll and user32.dll resolve to the production objects linked in. */
 static BOOL host_modules, real_gdi;
@@ -125,6 +130,7 @@ static BOOL host_modules, real_gdi;
 #define HOST_USER ((HANDLE)(uintptr_t)0x6e000000)
 /* Weak: tests/host/win32/input reuses this harness without gdi32/ddraw. */
 __attribute__((weak)) void *host_gdi_proc(const char *);
+#ifndef U32_TEST_EXTERNAL_MODULES
 HANDLE W32API GetModuleHandleA(const char *s) {
   if (!host_modules || !s)
     return 0;
@@ -155,6 +161,7 @@ void *W32API GetProcAddress(HANDLE h, const char *s) {
       return user[i].proc;
   return 0;
 }
+#endif
 void *W32API CreateThread(void *security, DWORD stack,
                           DWORD(W32API *entry)(void *), void *argument,
                           DWORD flags, DWORD *id) {

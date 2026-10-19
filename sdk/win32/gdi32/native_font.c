@@ -101,3 +101,66 @@ HFONT w32_gdi_native_font_open(const char *path, unsigned em) {
   release(f);
   return h;
 }
+
+/* f5-10C selection-layer backend. The SDK face keeps the file bytes and its
+ * own 128-glyph cache; the selection layer caches processed glyphs, so the
+ * SDK cache is trimmed to 64 KiB to keep the shared budget honest. */
+#include <stdio.h>
+struct store_face {
+  struct ciuki_font_face *face;
+  DWORD length;
+};
+static void *store_open(const char *path) {
+  FILE *file = fopen(path, "rb");
+  if (!file)
+    return 0;
+  long length = fseek(file, 0, SEEK_END) ? -1 : ftell(file);
+  fclose(file);
+  struct store_face *f = gdi_alloc(sizeof(*f));
+  if (!f || length <= 0)
+    goto fail;
+  f->length = (DWORD)length;
+  if (ciuki_font_open(path, &f->face))
+    goto fail;
+  return f;
+fail:
+  if (f)
+    gdi_free(f, sizeof(*f));
+  return 0;
+}
+static void store_close(void *o) {
+  struct store_face *f = o;
+  ciuki_font_close(f->face);
+  gdi_free(f, sizeof(*f));
+}
+static int store_lookup(void *o, DWORD cp, unsigned *glyph) {
+  return !ciuki_font_lookup(((struct store_face *)o)->face, cp, glyph) &&
+         *glyph;
+}
+static int store_raster(void *o, unsigned glyph, unsigned em26,
+                        struct w32_gdi_glyph *out) {
+  struct store_face *f = o;
+  struct ciuki_font_bitmap b;
+  if (ciuki_font_raster(f->face, glyph, em26, &b))
+    return 0;
+  /* libfont reports the top row as a y-down offset from the baseline;
+   * w32_gdi_glyph.top is the distance above the baseline (text.c compose). */
+  *out = (struct w32_gdi_glyph){b.width, b.height, b.stride, b.left,
+                                -b.top,  b.advance, b.coverage};
+  struct ciuki_font_cache_stats stats;
+  if (!ciuki_font_cache_info(f->face, &stats) && stats.bytes > (64u << 10))
+    ciuki_font_cache_clear(f->face);
+  return 1;
+}
+static DWORD store_resident(void *o) {
+  struct store_face *f = o;
+  struct ciuki_font_cache_stats stats = {0};
+  ciuki_font_cache_info(f->face, &stats);
+  return f->length + (64u << 10) + (DWORD)stats.bytes;
+}
+const struct w32_gdi_face_backend *w32_gdi_native_backend(void) {
+  static const struct w32_gdi_face_backend backend = {
+      store_open, store_close, store_lookup, store_raster, free_glyph,
+      store_resident};
+  return &backend;
+}
