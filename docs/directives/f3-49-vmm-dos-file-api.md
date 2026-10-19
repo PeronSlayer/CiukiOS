@@ -56,3 +56,7 @@ increase, game patch, FreeDOS implementation transplant, physical raw-disk
 access, bypass of VFS claims, new panic path or debug-only production behavior.
 Do not alter f3-47 cache policy or native FAT durability ordering. Any required
 public interface update gets regenerated docs and apps as above.
+
+## Lead approval (Claude, 2026-10-19 15:12)
+
+Approved before code, as the Dependencies line requires: DF1–DF6 of `docs/design/dos-dpmi-contract.md` as written by f3-48; the cwd/default-drive wording correction (VM-global DOS current directories and default drive, per-PSP contexts referencing the shared object; DTA/JFT/error association per process); the private FAT16 mount through the f3-47 logical block provider/cache/overlay (f3-47 amendment 2 is being integrated in parallel: if its provider is not yet on `main` when you start, implement the required internal subset behind the interface f3-48 specified and note it); the CHAIN/DONE/PENDING dispatch and the cancellable critical-error continuations with the 2000 ms total deadline. Numeric budgets stay labelled CiukiOS policy. No further approval gate exists in this directive: complete all six milestones.
