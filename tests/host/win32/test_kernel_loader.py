@@ -114,7 +114,10 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertIn('/WINDOWS/SYSTEM',directories)
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            self.assertEqual(len(meta['builtins']),21)
+            self.assertEqual(len(meta['builtins']),28)
+            self.assertIn('/WINDOWS/SYSTEM/imaadp32.acm',sources)
+            self.assertIn('/system/licenses/WINE-SOURCE-OFFER.txt',sources)
+            self.assertIn('/WINDOWS/SYSTEM/codecs-inventory.json',sources)
             manifest=folder/'builtin-store.json';original=manifest.read_text()
             data=json.loads(original);data['dlls'][1]['base']=data['dlls'][0]['base'];manifest.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError,'overlap'):image.win32_payloads(folder)

@@ -52,6 +52,11 @@ def build(out=None):
     user_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='user32.dll':store['dlls'][i]=user32.build(out,user_base,flags)
+    from scripts.win32 import codecs
+    codec_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    codec_dlls=codecs.build(out,codec_base,flags)
+    names={d['name'] for d in codec_dlls}
+    store['dlls']=[d for d in store['dlls'] if d['name'] not in names]+codec_dlls
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='builtin placeholder pending f5-14B measured replacement'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

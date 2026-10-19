@@ -1,0 +1,17 @@
+CiukiOS P5 multimedia libraries are free software under LGPL version 2.1
+or (at your option) any later version. See COPYING.LIB and upstream LICENSE.
+There is no warranty, including merchantability or fitness for a purpose.
+
+Complete corresponding source for the shipped P5 libraries is supplied in
+this CiukiOS source distribution: sdk/win32/codecs/, scripts/win32/codecs.py,
+third_party/wine/codecs/, and the build integration in scripts/win32/.
+Rebuild with clang/lld and Python using scripts/win32/build-wine-dlls.sh
+--codecs. There are no secret source patches or binary-only codec payloads.
+You may modify, rebuild and replace these DLLs, subject to the LGPL.
+
+The referenced Wine sources are Wine 10.0, commit
+b073859675060c9211fcbccfd90e4e87520dc2c2, available at:
+https://github.com/wine-mirror/wine/tree/b073859675060c9211fcbccfd90e4e87520dc2c2
+https://dl.winehq.org/wine/source/10.0/wine-10.0.tar.xz
+These links supplement the supplied corresponding source; they do not
+replace an obligation to supply corresponding source with distribution.

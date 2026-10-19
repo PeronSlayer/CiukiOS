@@ -18,7 +18,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[2]
 if __package__ in (None,''): sys.path.insert(0,str(ROOT))
 IDENT=re.compile(r'[A-Za-z_?$@][A-Za-z0-9_?$@]*\Z')
-DLL=re.compile(r'[A-Za-z0-9_-]+\.(?:dll|drv)\Z',re.I)
+DLL=re.compile(r'[A-Za-z0-9_-]+\.(?:dll|drv|acm)\Z',re.I)
 # Explicit public assignments checked against upstream Wine specs on 2026-10-14.
 ORDINALS={
  'wsock32.dll':dict(zip(('accept','bind','closesocket','connect','getpeername','getsockname','getsockopt','htonl','htons','inet_addr','inet_ntoa','ioctlsocket','listen','ntohl','ntohs','recv','recvfrom','select','send','sendto','setsockopt','shutdown','socket'),range(1,24))) | {
@@ -170,6 +170,23 @@ def verify_store(path):
         if p+84>len(raw) or raw[p:p+4]!=b'PE\0\0' or int.from_bytes(raw[p+52:p+56],'little')!=base or int.from_bytes(raw[p+80:p+84],'little')!=size: raise ValueError('builtin image metadata')
         if image_version(raw)!=dll['version']: raise ValueError('builtin version mismatch')
         names.add(name);ranges.append((base,size))
+    if (path.parent/'codecs-inventory.json').exists() or any(d.get('origin')=='CiukiOS bounded P5 implementation' for d in data['dlls']):
+        from scripts.win32 import codecs
+        codecs.verify_sources()
+        expected={m if m.endswith('.acm') else m+'.dll' for m in codecs.MODULES}
+        records={d['name']:d for d in data['dlls'] if d.get('origin')=='CiukiOS bounded P5 implementation'}
+        if set(records)!=expected: raise ValueError('P5 builtin inventory')
+        inventory=json.loads((path.parent/'codecs-inventory.json').read_text())
+        if inventory['dlls']!=list(records.values()): raise ValueError('P5 image inventory mismatch')
+        for dll in records.values():
+            if dll.get('license')!='LGPL-2.1-or-later' or dll.get('wine_reused') is not False: raise ValueError('P5 license/origin')
+            if dll.get('interface_sha256')!=codecs.sha(ROOT/'third_party/wine/codecs-sources.json'): raise ValueError('P5 interface pin')
+            required={'LICENSE','COPYING.LIB','AUTHORS','SOURCE-OFFER.txt','PATCHES.md'}
+            if set(dll.get('notices',{}))!=required: raise ValueError('P5 notices')
+            for notice,digest in dll['notices'].items():
+                if codecs.sha(ROOT/'third_party/wine'/notice)!=digest: raise ValueError('P5 notice hash')
+        audit=codecs.audit_imports(path.parent,list(records.values()))
+        if any(e['missing'] for entries in audit.values() for e in entries): raise ValueError('P5 unresolved imports')
     return len(names)
 
 def main():
