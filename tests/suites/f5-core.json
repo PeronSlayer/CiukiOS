@@ -285,6 +285,61 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-registry-qemu-t23",
+      "probe": "w32-registry",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-registry run={run_id}",
+      "timeout": 90,
+      "integration_pending": "f5-06 production PE backend and f5-09 desktop service supervision/probe driver; authored, unrun",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "registry_recovery"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "registry_restart"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "registry_writers"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

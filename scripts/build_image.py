@@ -224,11 +224,17 @@ def application_payloads():
     tcc_spec.loader.exec_module(tcc_build)
     tcc_sources, tcc_directories, tcc_metadata = tcc_build.image_payloads()
     sources.update(tcc_sources)
+    w32_spec = importlib.util.spec_from_file_location("image_w32srv", ROOT / "apps/w32srv/build_w32srv.py")
+    w32_build = importlib.util.module_from_spec(w32_spec)
+    w32_spec.loader.exec_module(w32_build)
+    w32_sources, w32_directories, w32_metadata = w32_build.image_payloads()
+    sources.update(w32_sources)
     directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/Documents/Trash", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)
     directories.update(tcc_directories)
+    directories.update(w32_directories)
     metadata = {"sdk_manifest_sha256": expected["sdk_manifest_sha256"],
                 "lua": {"version": manifest["version"],
                         "manifest_sha256": sha256(LUA / "manifest.json"),
@@ -237,6 +243,7 @@ def application_payloads():
                         "upstream_mode": manifest["upstream_mode"], "patches": manifest["patches"]}}
     metadata["desktop"] = desktop_metadata
     metadata["tcc"] = tcc_metadata
+    metadata["w32srv"] = w32_metadata
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
     # absolute path as an alias; both copies are separately verified in T1.
     # Runtime provenance cannot be recovered from a host-only build manifest.

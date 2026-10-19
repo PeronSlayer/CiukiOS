@@ -579,6 +579,8 @@ python3 "$root/tests/host/test_opl3_tables.py"
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py
+python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_registry.py
+python3 -B -m unittest discover -s "$root/tests/host/proc" -p test_w32srv.py
 
 # F0-46: instrument executed production IRQ and deferred paths.
 python3 -B "$root/tests/host/irq_work_replay.py"
