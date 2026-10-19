@@ -19,3 +19,11 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. f1-82 (`wt/f1-82`) and f0-45 (`wt/f0-45`) run in parallel: do not edit `src/kernel/fs/cache.c` policy or `src/kernel/core/task.c`/`sync.c`; registering a ledger category in cache.c is the only allowed touch there.
+
+## Amendment 1 (lead review, 2026-10-19 14:40)
+
+The delivery is accepted except for one point. `ledger_assert_pinned_context()` calls `panic()` under `#ifndef NDEBUG` when a reclaimable allocation or a page fault happens in IRQ or audio-refill context; the production kernel is not built with `NDEBUG` and the next image goes straight to the T23 without QEMU. A new panic path on an unqualified rule is not acceptable for a hardware-only cycle. Required:
+
+1. In the kernel the guard never panics: it counts (`bad_context`), emits one protected record `[mem] pinned_context violation task=%s irq=%u site=%08x` per second at most (with the return address of the allocation call), and the allocation proceeds as before. The rule becomes fatal only when a build-time option `CIUKI_LEDGER_STRICT` is defined, which the host tests set for the "debug context failure" case; no production build defines it.
+2. The same for the vector 14 check in `trap.c`: count and record, never a new panic.
+3. Keep everything else. Rerun `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh` and `python3 scripts/build_kernel.py`; append an "Amendment 1" section to the report with the record format and the test change.
