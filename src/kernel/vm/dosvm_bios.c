@@ -339,6 +339,7 @@ int dosvm_bios_init(struct dosvm *v)
     memcpy(rom + 9 * 16, keyboard_irq, sizeof(keyboard_irq));
     uint8_t *callback_rom = (uint8_t *)P2V(v->frames[0xF1]) + (DOSVM_MOUSE_RETURN & 0xFFF);
     callback_rom[0] = 0xCD; callback_rom[1] = 0xFD; callback_rom[2] = 0xF4;
+    if (dosvm_file_rom_init) dosvm_file_rom_init(v);
     return 0;
 }
 

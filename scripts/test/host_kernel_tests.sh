@@ -588,3 +588,6 @@ python3 -B "$root/tests/host/irq_work_replay.py"
 
 # f5-05B real CIUKI_SYS_W32 backend over production VM/sections, H0 only.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loader.py
+
+# f3-50: bound personality, native FAT/VFS and production V86/DPMI CPU model.
+bash "$root/tests/host/dos/run_hook_cpu.sh"

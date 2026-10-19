@@ -50,6 +50,8 @@ kernel_runtime_initialize:
     mov word [cs:kernel_runtime_last_term_psp], 0
     mov byte [cs:kernel_runtime_last_exit_code], 0
     mov byte [cs:kernel_runtime_last_term_type], 0
+    call int21_get_list_of_lists
+    call dos_hook_initialize
     pop dx
     pop bx
     pop ax

@@ -1,7 +1,7 @@
 /* DOS2-6 handle services over the production VFS. No FAT parser or data cache.
  * Research/decisions: docs/validation/f3-49-vmm-dos-file-api.md.
  * SPDX-License-Identifier: GPL-2.0-only */
-#include "dos_file.h"
+#include "dos_file_hook.h"
 #define BAD_POINTER (-207)
 #define BAD_DRIVE (-208)
 #define BAD_MODE (-209)
@@ -116,6 +116,7 @@ static void short_fcb(const char *name,uint8_t out[11]) {
         uint16_t ch; if (path_decode(&name,&ch)) break;
         if (ch=='.') { at=8; continue; }
         int byte=path_cp437(path_upper(ch));
+        if (byte<0) byte=path_cp437(ch);
         if (at<11) out[at++]=(uint8_t)(byte<0 ? '_' : byte);
     }
 }
@@ -157,7 +158,7 @@ entry_done:
     if (!p) return error;
     write_guest(d,p->jft,p->handles,p->count);
     uint8_t state[0x20]; read_guest(d,d->binding.sda,state,sizeof(state));
-    state[0]=d->critical; state[1]=0; state[2]=d->critical ? d->active_drive : 255; state[3]=p->error.locus;
+    state[0]=d->critical; state[1]=(uint8_t)(!d->critical && d->dispatch_depth!=0); state[2]=d->critical ? d->active_drive : 255; state[3]=p->error.locus;
     far_write(state+8,d->binding.critical_device);
     fs_wr16(state+4,p->error.code); state[6]=p->error.action; state[7]=p->error.class_;
     far_write(state+0xc,p->dta); fs_wr16(state+0x10,p->psp); state[0x16]=d->drive;
@@ -165,6 +166,7 @@ entry_done:
     write_guest(d,d->binding.indos,state+1,1);
     write_guest(d,d->binding.selected_psp,state+0x10,2);
     write_guest(d,d->binding.dta,state+0x0c,4);
+    if (d->personality.live) write_guest(d,d->personality.drive,&d->drive,1);
     return error;
 }
 void dos_file_error_from_fs(struct dos_file_error *e,int error,bool write) {
@@ -277,8 +279,12 @@ static int release_slot(struct dos_file *d,struct dos_file_process *p,unsigned h
     }
     p->handles[handle]=255; if (!--s->refs) memset(s,0,sizeof(*s)); return e;
 }
+static int fcb_release(struct dos_file *,struct dos_file_fcb *);
 static int release_process(struct dos_file *d,struct dos_file_process *p) {
     int error=0;
+    for (unsigned i=0;i<DOS_FILE_FCBS;i++) if (d->fcb[i].used && d->fcb[i].psp==p->psp) {
+        int e=fcb_release(d,&d->fcb[i]); if (e && !error) error=e; d->fcb[i].used=false;
+    }
     for (unsigned i=0;i<26;i++) if (d->view[i].table) d->view[i].table->request=0;
     for (unsigned i=0;i<DOS_FILE_JFT;i++) if (p->handles[i]!=255) {
         int e=release_slot(d,p,i); if (e && !error) error=e;
@@ -292,6 +298,10 @@ static int release_process(struct dos_file *d,struct dos_file_process *p) {
 }
 int dos_file_lifecycle(struct dos_file *d,enum dos_file_event event,uint16_t psp,uint16_t parent,struct dos_file_far expanded) {
     struct dos_file_process *p=process(d,psp),*ancestor=process(d,parent); int e=0;
+    uint16_t selected_before=d->selected,owning_before=d->owning,refs_before[DOS_FILE_SFT];
+    struct dos_file_process saved={0}; if (p) saved=*p;
+    for (unsigned i=0;i<DOS_FILE_SFT;i++) refs_before[i]=(uint16_t)d->sft[i].refs;
+    bool created=false; uint8_t old_header[0x22];
     if (!d->bound || d->dead) return -FS_EINVAL;
     if (event==DOS_FILE_VM_DESTROY) { dos_file_cancel(d); return 0; }
     if (event==DOS_FILE_PSP_CREATE || event==DOS_FILE_EXEC_BEGIN) {
@@ -302,6 +312,7 @@ int dos_file_lifecycle(struct dos_file *d,enum dos_file_event event,uint16_t psp
         if (!p) e=-FS_EMFILE;
         else if (!check(d,header,0x22,true) || !check(d,expanded,DOS_FILE_JFT,true)) e=BAD_POINTER;
         if (!e) {
+            read_guest(d,header,old_header,sizeof(old_header)); created=true;
             memset(p,0,sizeof(*p)); p->used=true; p->psp=psp; p->parent=parent;
             p->count=20; p->jft=header; p->dta=(struct dos_file_far){0x80,psp}; p->expanded=expanded;
             p->provisional=event==DOS_FILE_EXEC_BEGIN; memset(p->handles,255,sizeof(p->handles));
@@ -331,14 +342,24 @@ int dos_file_lifecycle(struct dos_file *d,enum dos_file_event event,uint16_t psp
     else if (event==DOS_FILE_EXEC_COMMIT) { p->provisional=false; d->selected=d->owning=psp; }
     else if (event==DOS_FILE_TSR) { p->resident=true; d->selected=d->owning=p->parent; }
     else e=-FS_EINVAL;
+    struct dos_file_process *target=p;
     p=process(d,d->selected);
     if (e && p) dos_file_error_from_fs(&p->error,e,false);
-    if (p && !preflight(d,p)) { int snapshot=mirror(d,p,0); if (!e) e=snapshot; }
+    if (p) { int snapshot=preflight(d,p); if (!snapshot) snapshot=mirror(d,p,0); if (!e) e=snapshot; }
+    bool reversible=created || event==DOS_FILE_PSP_SELECT || event==DOS_FILE_EXEC_COMMIT || event==DOS_FILE_TSR;
+    if (e && reversible) {
+        d->selected=selected_before; d->owning=owning_before;
+        if (target) { if (created) { memset(target,0,sizeof(*target)); write_guest(d,(struct dos_file_far){0x18,psp},old_header,sizeof(old_header)); }
+            else *target=saved; }
+        for (unsigned i=0;i<DOS_FILE_SFT;i++) d->sft[i].refs=refs_before[i];
+        p=process(d,d->selected); if (p && !preflight(d,p)) (void)mirror(d,p,0);
+    }
     d->ops.release(d->ops.arg); return e;
 }
 void dos_file_cancel(struct dos_file *d) {
     d->dead=true; d->critical=false; d->token=0;
     for (unsigned i=0;i<DOS_FILE_PSPS;i++) if (d->process[i].used) release_process(d,&d->process[i]);
+    d->selected=d->owning=0;
     memset(d->observer,0,sizeof(d->observer));
     d->ops.release(d->ops.arg);
 }
@@ -386,12 +407,12 @@ void dos_file_observe_return(struct dos_file *d,const struct dos_file_frame *f) 
     }
 }
 bool dos_file_serves(unsigned vector,uint16_t ax) {
-    if (vector==0x2f) return ax==0x1000;
+    if (vector==0x2f) return ax==0x1000 || ax==0x1203 || ax==0x1216 || ax==0x1220 || ax==0x1226 || ax==0x122d;
     if (vector!=0x21) return false;
     unsigned ah=ax>>8;
     if (ah==0x43 || ah==0x57 || ah==0x5c) return (ax&255)<=1;
     if (ah==0x6c) return ax==0x6c00;
-    return ah==0x0d || ah==0x0e || ah==0x19 || ah==0x1a || ah==0x1b || ah==0x1c || ah==0x2f || ah==0x36 ||
+    return (ah>=0x0f && ah<=0x17) || (ah>=0x21 && ah<=0x24) || ah==0x27 || ah==0x28 || ah==0x29 || ah==0x38 || ah==0x65 || ah==0x66 || ah==0x0d || ah==0x0e || ah==0x19 || ah==0x1a || ah==0x1b || ah==0x1c || ah==0x2f || ah==0x36 ||
         (ah>=0x39 && ah<=0x47) || ah==0x4e || ah==0x4f || ah==0x56 || ah==0x57 || ah==0x59 ||
         ah==0x5a || ah==0x5b || ah==0x5c || ah==0x60 || ah==0x67 || ah==0x68 || ah==0x6c;
 }
@@ -502,10 +523,11 @@ static int search(struct dos_file *d,struct dos_file_process *p,struct dos_file_
     int conversion=dos_name(name,(char *)bytes+30,13,true);
     if (conversion) { c->used=false; return conversion; } write_guest(d,p->dta,bytes,43); return 0;
 }
-static int service(struct dos_file *d,struct dos_file_process *p,struct dos_file_frame *f) {
+#include "dos_file_fcb.inc"
+#include "dos_file_nls.inc"
+static __attribute__((noinline)) int handle_service(struct dos_file *d,struct dos_file_process *p,struct dos_file_frame *f) {
     unsigned ah=f->ax>>8,al=f->ax&255; int e=0; char path[FS_PATH_BYTES],native[FS_PATH_BYTES];
     struct vfs_table *t=0; unsigned g=0; struct fat_entry ent;
-    if (d->vector==0x2f) { f->ax=(uint16_t)((f->ax&0xff00)|255); return 0; }
     if (ah==0x59) {
         if (f->bx) return -FS_EOPNOTSUPP;
         f->ax=p->error.code; f->bx=(uint16_t)((p->error.class_<<8)|p->error.action); f->cx=(uint16_t)((f->cx&255)|(p->error.locus<<8)); return 0;
@@ -624,7 +646,10 @@ static int service(struct dos_file *d,struct dos_file_process *p,struct dos_file
             return e;
         }
         if (f->cx && !check(d,data,f->cx,!writing)) return BAD_POINTER;
-        size_t total=0;
+        /* Retry resumes the checked original buffer at the already completed
+         * prefix; VFS positions advanced by exactly that prefix on failure. */
+        size_t total=d->transferred;
+        if (total>f->cx) return -FS_EIO;
         while (total<f->cx) {
             if ((e=vfs_request_check(&d->request))) break;
             size_t n=f->cx-total; if (n>sizeof(d->transfer)) n=sizeof(d->transfer); size_t done=0;
@@ -652,7 +677,7 @@ static int service(struct dos_file *d,struct dos_file_process *p,struct dos_file
     if (ah==0x57 || ah==0x59 || ah==0x5c || ah==0x6c) {
         if ((ah==0x6c && al) || (ah==0x59 && f->bx)) return -FS_EOPNOTSUPP;
     }
-    e=guest_string(d,f->ds,ah==0x6c ? f->si : f->dx,path); if (e) return e;
+    e=guest_string(d,f->ds,(ah==0x6c || ah==0x60) ? f->si : f->dx,path); if (e) return e;
     if (ah==0x60) {
         char full[FS_PATH_BYTES]; unsigned drive; struct dos_file_far output={f->di,f->es};
         e=route(d,path,&t,native,&g,false); if (e) return e;
@@ -714,6 +739,16 @@ static int service(struct dos_file *d,struct dos_file_process *p,struct dos_file
     } else e=-FS_EOPNOTSUPP;
     return path_error(t,native,e);
 }
+/* Keep the large path workspace out of FCB/NLS/internal call stacks. */
+static int service(struct dos_file *d,struct dos_file_process *p,struct dos_file_frame *f) {
+    unsigned ah=f->ax>>8;
+    if (d->vector==0x2f) return dos_internal(d,p,f);
+    if (fcb_function(ah)) { d->adapter_depth++;
+        int status=fcb_service(d,p,f); d->adapter_depth--; return status; }
+    if (ah==0x29) return fcb_parse(d,p,f);
+    if (ah==0x65 || ah==0x66 || ah==0x38) return nls_service(d,p,f);
+    return handle_service(d,p,f);
+}
 static void clear_requests(struct dos_file *d) {
     for (unsigned i=0;i<26;i++) if (d->view[i].table) d->view[i].table->request=0;
 }
@@ -774,6 +809,9 @@ static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,
         if (!p) { f->ax=6; f->flags|=1; retain_wait(d); trace_return(d,f); d->ops.release(d->ops.arg); return DOS_FILE_DONE; }
         bool writing=(f->ax>>8)==0x40; dos_file_error_from_fs(&p->error,e,writing);
         output=*f; output.ax=p->error.code; output.flags|=1;
+        if (d->vector==0x21 && (fcb_function(f->ax>>8) || (f->ax>>8)==0x29)) {
+            output.ax=(uint16_t)((f->ax&0xff00)|255); output.flags=f->flags;
+        }
         if (e==-VFS_ESHARE || e==-VFS_ECRITICAL_SHARE) output.ax=5;
         bool critical=e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EAGAIN || e==-FS_EROFS ||
             (e==-VFS_ELOCK && ((f->ax>>8)==0x3f || (f->ax>>8)==0x40));
@@ -794,7 +832,7 @@ static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,
             d->critical=false; d->token=0;
             memory_ok=!preflight(d,p);
         }
-    } else output.flags&=(uint16_t)~1u;
+    } else if (d->vector!=0x21 || (!fcb_function(f->ax>>8) && (f->ax>>8)!=0x29)) output.flags&=(uint16_t)~1u;
 complete:
     if (memory_ok) {
         int snapshot=mirror(d,p,&d->request);
@@ -808,6 +846,7 @@ complete:
 }
 enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame *f,enum dos_file_origin origin,unsigned vector) {
     if (!d || !d->bound || d->dead) return DOS_FILE_CHAIN;
+    if (d->dispatch_depth && !d->critical) { f->ax=5; f->flags|=1; return DOS_FILE_DONE; }
     if (d->critical && !(vector==0x21 && (f->ax>>8)==0x59 && !f->bx)) {
         if (vector==0x21 && (!(f->ax>>8) || (f->ax>>8)>0x0c)) {
             uint64_t sequence=++d->sequence;
@@ -841,12 +880,23 @@ enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame 
         struct dos_file_frame output=*f; (void)service(d,p,&output); *f=output;
         trace(d,f,seq,origin,vector,d->selected,true,0,0,0); d->ops.release(d->ops.arg); return DOS_FILE_DONE;
     }
+    d->request_indos=0;
+    if (d->personality.live && origin==DOS_FILE_HOOK && f->cs==d->personality.code_seg && check(d,d->binding.indos,1,false))
+        read_guest(d,d->binding.indos,&d->request_indos,1);
     d->request_sequence=seq; d->origin=origin; d->vector=(uint8_t)vector; d->transferred=0; d->pending_commit=false;
     if (origin==DOS_FILE_DPMI_0300 || origin==DOS_FILE_EXTENDER || origin==DOS_FILE_HOST) observe(d,f,seq,wall,monitor,origin,vector);
     d->request_wall=wall; d->request_monitor=monitor; d->deadline=wall+DOS_FILE_BUDGET_US;
     memset(&d->wait,0,sizeof(d->wait));
     d->request=(struct vfs_request){d,d->deadline,request_now,request_cancelled,request_pause,owner(d,d->selected),&d->wait};
-    return execute(d,f,false);
+    d->dispatch_depth++;
+    enum dos_file_result result=execute(d,f,false);
+    d->dispatch_depth--;
+    if (result==DOS_FILE_DONE) {
+        uint8_t restore=d->request_indos;
+        write_guest(d,plus(d->binding.sda,1),&restore,1); write_guest(d,d->binding.indos,&restore,1);
+        d->ops.release(d->ops.arg);
+    }
+    return result;
 }
 enum dos_file_result dos_file_complete(struct dos_file *d,uint64_t token,unsigned reply,struct dos_file_frame *f) {
     if (request_cancelled(d) || !d->critical || token!=d->token || (uint32_t)token!=d->generation) return DOS_FILE_PENDING;
@@ -858,11 +908,18 @@ enum dos_file_result dos_file_complete(struct dos_file *d,uint64_t token,unsigne
         if (p) { uint16_t parent=p->parent; release_process(d,p); d->selected=d->owning=parent; }
         for (unsigned i=0;i<DOS_FILE_OBSERVERS;i++) if (d->observer[i].used && d->observer[i].sequence==d->request_sequence) { d->observer[i].used=false; d->dropped++; }
         d->ops.release(d->ops.arg); return DOS_FILE_PENDING; }
-    if (reply==1 && !vfs_request_check(&d->request)) return execute(d,f,true);
+    if (reply==1 && !vfs_request_check(&d->request)) {
+        enum dos_file_result result=execute(d,f,true);
+        if (result==DOS_FILE_DONE) { write_guest(d,plus(d->binding.sda,1),&d->request_indos,1);
+            write_guest(d,d->binding.indos,&d->request_indos,1); d->ops.release(d->ops.arg); }
+        return result;
+    }
     /* Ignore is not offered for these file requests. Preserve the cause in
      * 59h while returning DOS's fail-result code to the interrupted call. */
     f->ax=83; f->flags|=1;
     if (p && !preflight(d,p)) (void)mirror(d,p,&d->request);
+    write_guest(d,plus(d->binding.sda,1),&d->request_indos,1);
+    write_guest(d,d->binding.indos,&d->request_indos,1);
     retain_wait(d);
     trace_return(d,f);
     d->ops.release(d->ops.arg); return DOS_FILE_DONE;
@@ -871,3 +928,5 @@ bool dos_file_poll(struct dos_file *d,struct dos_file_frame *f) {
     if (!d || !d->critical || d->dead || d->ops.wall(d->ops.arg)<d->deadline) return false;
     return dos_file_complete(d,d->token,3,f)==DOS_FILE_DONE;
 }
+
+#include "dos_file_hook.inc"

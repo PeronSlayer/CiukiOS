@@ -1,7 +1,7 @@
 /* Production bridge + native FAT/VFS, fake guest memory/time/block transport.
  * No Python filesystem model, guest boot, QEMU or hardware claim.
  * SPDX-License-Identifier: GPL-2.0-only */
-#include "../../src/kernel/vm/dos_file.h"
+#include "../../src/kernel/vm/dos_file_hook.h"
 #include "../../src/kernel/vm/dos_file_volume.h"
 #include <assert.h>
 #include <stdio.h>
@@ -28,11 +28,13 @@ static uint8_t disk[8192*512],guest[0x110000];
 static uint64_t wall_time,monitor_time;
 static unsigned reads,writes,barriers,fail_read,fail_write,callbacks,aborts,pins;
 static uint64_t callback_token;
+static uint32_t fail_lba;
 static unsigned fixture_generation=48;
 static bool cancel_request;
 static bool stop_on_read;
 static int block_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buf) {
     CHECK(!blkdev_range(dev,lba,count)); reads++; wall_time+=3; monitor_time++;
+    if (fail_lba && lba<=fail_lba && count>fail_lba-lba) { fail_lba=0; return -FS_EIO; }
     if (fail_read && !--fail_read) return -FS_EIO;
     memcpy(buf,disk+lba*512,(size_t)count*512);
     if (stop_on_read) { stop_on_read=false; cancel_request=true; }
@@ -47,7 +49,8 @@ static int block_flush(struct blkdev *dev) { (void)dev; barriers++; return 0; }
 static struct blkdev device={.read=block_read,.write=block_write,.flush=block_flush,
     .capacity=8192,.sector_size=512,.write_cache_state=BLKDEV_CACHE_DISABLED,.logical=true};
 static bool memory_check(void *arg,uint32_t linear,size_t n,bool write) {
-    (void)arg; (void)write; pins++;
+    (void)arg; pins++;
+    if (write && linear>=0xf0000 && linear<0x100000) return false;
     return linear<sizeof(guest) && n<=sizeof(guest)-linear && !(linear<=0xf0000 && n>0xf0000-linear);
 }
 static void memory_read(void *arg,uint32_t linear,void *buf,size_t n) { (void)arg; CHECK(linear+n<=sizeof(guest)); memcpy(buf,guest+linear,n); }
@@ -132,7 +135,7 @@ static struct dos_file_frame transfer_file(unsigned ax,unsigned h,unsigned count
 static void frame_tests(void) {
     unsigned served[]={0x0d,0x0e,0x19,0x1a,0x1b,0x1c,0x2f,0x36,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x4e,0x4f,0x56,0x57,0x59,0x5a,0x5b,0x5c,0x60,0x67,0x68,0x6c};
     for (unsigned i=0;i<sizeof(served)/sizeof(served[0]);i++) CHECK(dos_file_serves(0x21,(uint16_t)(served[i]<<8)));
-    unsigned chained[]={0x2500,0x3500,0x2600,0x3100,0x4800,0x4900,0x4a00,0x4b00,0x4c00,0x4d00,0x3400,0x5000,0x5100,0x5200,0x5500,0x6200,0x6500,0xf100,0x1800,0x4302,0x5702,0x5c02,0x6c01};
+    unsigned chained[]={0x2500,0x3500,0x2600,0x3100,0x4800,0x4900,0x4a00,0x4b00,0x4c00,0x4d00,0x3400,0x5000,0x5100,0x5200,0x5500,0x6200,0xf100,0x1800,0x4302,0x5702,0x5c02,0x6c01};
     uint8_t stack[32]; memcpy(stack,guest+0x68000,32);
     for (unsigned i=0;i<sizeof(chained)/sizeof(chained[0]);i++) {
         struct dos_file_frame f=frame(chained[i]),saved=f;
@@ -248,7 +251,7 @@ static void mutation_tests(void) {
     path_set("C:/UNIQUE.DAT"); f=frame(0x5b00); f.dx=0x100; f.cx=0; f=call(f); CHECK(!(f.flags&1)); close_file(f.ax);
     path_set("C:/DIR/"); f=frame(0x5a00); f.dx=0x100; f.cx=0; f=call(f); CHECK(!(f.flags&1));
     CHECK(!strncmp((char *)guest+0x50100,"C:\\DIR\\",7) && strlen((char *)guest+0x50100)==15); close_file(f.ax);
-    f=frame(0x6000); path_set("C:/DIR/../UNIQUE.DAT"); f.dx=0x100; f.di=0x300; f=call(f);
+    f=frame(0x6000); path_set("C:/DIR/../UNIQUE.DAT"); f.si=0x100; f.di=0x300; f=call(f);
     CHECK(!(f.flags&1) && !strcmp((char *)guest+0x50300,"C:\\UNIQUE.DAT"));
     f=path_call(0x3900,"C:/REMOVE"); CHECK(!(f.flags&1)); f=path_call(0x3a00,"C:/REMOVE"); CHECK(!(f.flags&1));
     f=path_call(0x4100,"C:/UNIQUE.DAT"); CHECK(!(f.flags&1));
@@ -558,8 +561,12 @@ static void failure_and_cycle_tests(void) {
     }
     printf("H49-09 lifetime: PASS cycles=100 allocation_failures=%u live_allocations=%u stale_completion=no_guest_write\n",injected,allocations_live);
 }
+#include "dos_file_h50_test.inc"
 int main(void) {
     setup(); frame_tests(); state_tests(); mutation_tests(); sharing_tests(); search_tests(); device_tests(); error_tests(); wait_tests(); trace_tests(); CHECK(aborts==1); teardown();
+    setup(); h50_nls(); h50_fcbs(); h50_internal(); teardown();
+    setup(); h50_hook(); teardown();
+    setup(); h50_partial_retry(); teardown();
     provider_tests(); alias_tests(); failure_and_cycle_tests();
     printf("PASS dos_file_api checks=%u reads=%u writes=%u flushes=%u bridge_bytes=%zu\n",checks,reads,writes,barriers,sizeof(bridge)); return 0;
 }

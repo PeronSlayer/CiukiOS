@@ -12,6 +12,7 @@
 #define DOS_FILE_WAITS 16u
 #define DOS_FILE_DEVICES 22u
 #define DOS_FILE_BUDGET_US 2000000u
+#define DOS_FILE_FCBS 32u
 struct dos_file_far { uint16_t off, seg; };
 struct dos_file_frame {
     uint16_t ax,bx,cx,dx,ds,es,si,di,bp,flags,cs,ip,ss,sp;
@@ -48,9 +49,22 @@ struct dos_file_binding {
     struct dos_file_far critical_return,critical_device,media;
     struct dos_file_far selected_psp,dta;
 };
+/* Internal extension, never a public native ABI or guest memory layout. */
+struct dos_file_personality {
+    struct dos_file_far old21,result,drive,expanded;
+    struct dos_file_far country,upper,lower,filename,terminator,collating,dbcs;
+    uint16_t code_seg,stack_seg,stack_off,stack_bytes;
+    bool live;
+};
+struct dos_file_fcb {
+    bool used,closed;
+    uint16_t psp;
+    uint32_t identity,generation,search_id;
+    uint8_t index,name[12];
+};
 struct dos_file_view { struct vfs_table *table; unsigned drive; uint32_t generation; bool readonly; };
 struct dos_file_process {
-    bool used,resident,provisional;
+    bool used,resident,provisional,copy_psp;
     uint16_t psp,parent,count;
     struct dos_file_far dta,jft,expanded;
     uint8_t handles[DOS_FILE_JFT];
@@ -78,12 +92,15 @@ struct dos_file_observer { bool used; struct dos_file_frame input;
 struct dos_file_wait { struct vfs_wait_info info; uint64_t sequence; uint32_t generation; uint16_t psp; uint8_t drive; };
 struct dos_file {
     struct dos_file_ops ops; struct dos_file_binding binding;
+    struct dos_file_personality personality;
+    struct dos_file_fcb fcb[DOS_FILE_FCBS];
+    unsigned dispatch_depth,adapter_depth;
     uint32_t id,generation; bool bound,a20,dead,trace_enabled,critical,pending_commit;
     uint8_t drive,active_drive; uint16_t selected,owning,aborted_psp;
     uint16_t retry_pause,retry_count;
     int cleanup_status; /* first cleanup error, retained even after PSP release */
     uint64_t sequence,request_sequence,deadline,token,request_wall,request_monitor;
-    enum dos_file_origin origin; uint8_t vector;
+    enum dos_file_origin origin; uint8_t vector,request_indos;
     uint32_t transferred,search_sequence,temp_sequence;
     struct dos_file_frame pending,callback;
     struct vfs_request request;
