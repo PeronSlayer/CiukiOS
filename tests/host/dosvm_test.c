@@ -392,6 +392,7 @@ static char last_record[256];
 static char recent_records[8][256];
 static unsigned records, guest_records, max_record;
 static void (*diag_time_hook)(void);
+static void (*evidence_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
@@ -420,6 +421,7 @@ void rec_emit(const char *probe, const char *event, const char *fmt, ...)
     CHECK(n>0 && n<=240); if ((unsigned)n>max_record) max_record=n;
     memcpy(recent_records[(records - 1) % 8], last_record, sizeof(last_record));
     if (strstr(extra,"group=guest ")) guest_records++;
+    if (evidence_hook) { void (*hook)(void)=evidence_hook;evidence_hook=0;hook(); }
 }
 void rec_diag(const char *probe, const char *fmt, ...)
 {
@@ -793,6 +795,7 @@ static void test_memory_services(void)
 #include "dosvm_disk_trace_test.inc"
 #include "dosvm_disk_cache_test.inc"
 #include "dosvm_zone_memory_test.inc"
+#include "dosvm_conformance_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -802,6 +805,7 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
+    test_d48_bios_and_export();
     test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_maximum_creation();
     test_maximum_teardown();

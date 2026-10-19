@@ -186,13 +186,18 @@ accepts exactly `f3:dos-conformance run=<8 hex> guest=freedos|ciukidos`; ordinar
 sweeps do not select this battery. Each basic/SHARE/input case uses a fresh
 VM/COW and must return to the shell and restore the VMM ledger.
 
-Critical cases currently fail explicitly with `fault_backend_unavailable`.
-The E: removable fixture/injection backend is not implemented: this is an open
-M1 requirement, not a skip or guest PASS. FreeDOS's block driver contains BIOS
-retry logic; an isolated INT13 error is not sufficient evidence that INT24 ran.
-The lead must resolve/qualify that injection boundary against the release.
+Critical cases use disposable E: media with 4096 known `F` bytes. The controller
+selects the fixture before boot. A matched successful open return arms it;
+metadata reads and BIOS resets cannot consume or rearm the failure. FreeDOS
+2043's `LBA_Transfer` retries five times (`N_RETRY=5`), so one fault episode
+fails five BIOS completions before INT24. The candidate fails one logical VFS
+provider completion. One-shot clears for DOS Retry; persistent remains armed
+through Fail/Abort. A fresh VM resets generation, cache and injection state.
+Keyboard case D48036 receives X,Y only after `DOSKEY READY`. The COM programs
+and EXEC helper remain unchanged. Actual guest INT24 counts still need lead
+qualification on the final image.
 
-Official release packages are absent here. `scripts/dos_conformance.py` accepts
+Official release packages are provisioned and pinned. `scripts/dos_conformance.py` accepts
 only separately provisioned `third_party/freedos/1.3/UPSTREAM.json` pins with
 `release`, `distribution_url`, and `kernel`/`shell`/`share` records. Each record
 contains `archive`, `url`, `package_sha256`, `member`, `sha256`, `version`,
@@ -200,7 +205,11 @@ contains `archive`, `url`, `package_sha256`, `member`, `sha256`, `version`,
 official release archives and binaries; no sample/fabricated pin is installed.
 A separate `boot` pin describes an official release archive/member, its package
 and complete member hashes, boot-sector offset, 512-byte sector hash, version
-and license. No boot code or kernel is compiled from master.
+and license. The floppy `boot` sector is FAT12; the installed FAT16 template
+comes from the pinned package's compressed SYS.COM (`boot_fat16`), reproduced
+by a CPU-only host extraction test. See the [reference provenance](../../../third_party/freedos/1.3/README.md).
+No boot code or kernel is compiled from master. The reference has one MBR
+partition at LBA 63, within the unchanged VMM disk capacity.
 Canonical builds without that input remain CiukiDOS-only and produce no
 integration manifest. A present but corrupt reference fails the build.
 
@@ -217,11 +226,36 @@ and `D48 CLEAN ... handles=0 searches=0 locks=0 vms=0 dropped=0` before END.
 It performs two independent guest pairs on the identical base SHA. It always
 reaps its owned processes and removes its COWs, including failure paths;
 bounded serial logs and comparison tables remain as text evidence. Disk-only
-diagnostics use the same sequence allocator, so generic sequence gaps require
-the lead's disk logs; they cannot be classified as UART loss from serial alone. This
+diagnostics use the same sequence allocator. Before deleting each overlay,
+the runner reads its bounded BOOT/BOOT1/BOOT2 logs through a read-only qcow2
+view, without conversion, mounting or copying the base. It reconciles every
+global sequence through the closing ledger with the serial log. Missing,
+conflicting or duplicate records fail. A log read-back/reconciliation failure
+still removes the owned overlay. This
 supersedes the earlier paragraph about retaining failed QEMU overlays.
 
 `reachability.py` decompresses the seven LZEXE members in memory and follows
 explicit decoded edges. It retains unknown selectors and unresolved transfers.
-DOOM's bound LE body, Quake's go32/runtime body and actual title paths still
-require the lead's disassembly/trace inputs; static results are not executions.
+It also maps DOOM's bound MZ/LE executable objects and Quake's DJGPP COFF text,
+then decodes direct edges from the structurally established entries. Backward
+targets are decoded at their actual boundaries. Indirect/far edges, relocations
+and unproved alternate entries remain open; static results are not executions.
+
+DOS API trace export uses four bounded `group=dos_api` fragments per row,
+with a VM/generation, monotonic row, call sequence, registers, PSP/origin,
+timing and byte count. `edge=0/1/2/3` means entry/return/process-termination/
+VM-cancellation. Termination/cancellation is never a fabricated return result.
+The protected UART carries trace rows; the disk budget holds disk-only rows.
+`dos_trace_end` closes each VM's trace count and pending ledger, and
+`record_ledger` closes the shared output sequence. Rows drain at each dispatch
+and return, rather than waiting for the finite ring to overflow.
+
+For title paths the lead supplies measured stage ranges and concrete coverage
+in an evidence JSON (image/source/original-executable SHA-256, title, VM and
+generation, coverage, paths and individually approved errors).
+`trace.py --serial ... --disk ...
+--run <id> --image <canonical-image> --evidence ... --out ...` requires loader,
+start, menu, demo, play, save, load, config-write, config-reopen and exit ranges,
+each containing actual reconciled calls. Missing fragments, unreturned calls,
+cancelled accepted stages, unknown selectors, unsupported DOS functions and
+unapproved errors fail. No complete title trace has been collected by Codex.

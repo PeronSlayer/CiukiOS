@@ -58,18 +58,21 @@ static int disk_bios(struct dosvm *v, struct v86_frame *f)
     uint32_t lba = 0, buffer = 0, dap = 0;
     unsigned amount = 0;
     bool write = fn == 3 || fn == 0x43, verify = fn == 4 || fn == 0x44;
-    if ((uint8_t)f->tf.edx != 0x80) return disk_result(v, f, 1);
+    bool fixture=(uint8_t)f->tf.edx==0x81 && v->conformance_media.mode;
+    unsigned sectors=fixture ? D48_DISK_SECTORS : DOSVM_SECTORS;
+    if ((uint8_t)f->tf.edx != 0x80 && !fixture) return disk_result(v, f, 1);
     switch (fn) {
     case 0: return disk_result(v, f, 0);
     case 1: return disk_result(v, f, v->disk_status);
     case 8: {
-        unsigned cylinder = (DOSVM_SECTORS + 1007) / 1008 - 1;
+        unsigned cylinder = (sectors + 1007) / 1008 - 1;
         low(&f->tf.ecx, ((cylinder & 255) << 8) | ((cylinder >> 2) & 0xC0) | 63);
-        low(&f->tf.edx, 0x0F01); /* max head 15, one hard disk */
+        low(&f->tf.edx, 0x0F00 | (v->conformance_media.mode ? 2 : 1));
         f->es = 0; low(&f->tf.edi, 0);
         return disk_result(v, f, 0);
     }
     case 0x15:
+        if (fixture) { carry(f,false);ah(f,2);return 0; } /* removable, change line */
         low(&f->tf.ecx, DOSVM_SECTORS >> 16); low(&f->tf.edx, (uint16_t)DOSVM_SECTORS);
         carry(f, false); ah(f, 3); return 0;
     case 0x41:
@@ -83,10 +86,10 @@ static int disk_bios(struct dosvm *v, struct v86_frame *f)
         if (dosvm_read(v, address, length, 2) || u16(length) < 26 || offset > 0x10000u - 26 ||
             !dosvm_range(v, address, 26, true)) return disk_result(v, f, 1);
         memset(packet, 0, sizeof(packet));
-        w16(packet, 26); w16(packet + 2, 2);
-        w32(packet + 4, (DOSVM_SECTORS + 1007) / 1008);
+        w16(packet, 26); w16(packet + 2, fixture ? 6 : 2);
+        w32(packet + 4, (sectors + 1007) / 1008);
         w32(packet + 8, 16); w32(packet + 12, 63);
-        w32(packet + 16, DOSVM_SECTORS); w16(packet + 24, 512);
+        w32(packet + 16, sectors); w16(packet + 24, 512);
         return disk_result(v, f, dosvm_write(v, address, packet, 26) ? 1 : 0);
     }
     case 2: case 3: case 4: {
@@ -115,17 +118,21 @@ static int disk_bios(struct dosvm *v, struct v86_frame *f)
             return disk_result(v, f, 9);
         break;
     }
+    case 0x16: return disk_result(v,f,fixture ? 0 : 1); /* stable fresh media */
     default: return disk_result(v, f, 1);
     }
     /* Complete preflight before any sector is read/written or any DAP changed. */
-    if (!amount || amount > 127 || lba >= DOSVM_SECTORS || amount > DOSVM_SECTORS - lba)
+    if (!amount || amount > 127 || lba >= sectors || amount > sectors - lba)
         return disk_result(v, f, 4);
     if (!verify && !dosvm_range(v, buffer, amount * 512u, !write))
         return disk_result(v, f, 9);
     unsigned completed = 0;
     int error = 0;
     for (; completed < amount; completed++) {
-        if (write) {
+        if (fixture) {
+            error=write ? -FS_EROFS : d48_sector(&v->conformance_media,lba+completed,v->sector,true);
+            if (!error && !verify) error=dosvm_write(v,buffer+completed*512,v->sector,512);
+        } else if (write) {
             error = dosvm_read(v, buffer + completed * 512, v->sector, 512);
             if (!error) error = dosvm_disk_write(v, lba + completed, v->sector);
         } else {

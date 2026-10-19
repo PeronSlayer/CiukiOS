@@ -68,6 +68,11 @@ int dosvm_read(struct dosvm *v, uint32_t at, void *out, uint32_t n)
 { (void)v; (void)at; (void)out; (void)n; abort(); }
 void rec_diag(const char *probe, const char *fmt, ...)
 { (void)probe; (void)fmt; abort(); }
+bool rec_active(void) { return false; }
+void rec_emit(const char *probe,const char *event,const char *fmt,...)
+{ (void)probe;(void)event;(void)fmt;abort(); }
+int kvsnprintf(char *out,size_t size,const char *fmt,va_list args)
+{ return vsnprintf(out,size,fmt,args); }
 void schedule(void) { abort(); }
 
 #define memcpy work_memcpy

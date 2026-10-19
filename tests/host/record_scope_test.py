@@ -45,9 +45,11 @@ PUBLICATION_CLASSES = {
     'rec_diag': 'verbose',
     'rec_diag_disk': 'protected',
     'rec_diag_disk_bootlog': 'protected',
+    'rec_dos_trace': 'protected',
+    'rec_sequence_ledger': 'protected',
 }
 LOG_CLASSES = {'klog': 'protected', 'klog_periodic': 'protected', 'klog_diag': 'verbose'}
-CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag(?:_disk(?:_bootlog)?)?)\s*\(')
+CALL = re.compile(r'\b(?:rec_emit(?:_panicsafe)?|rec_diag(?:_disk(?:_bootlog)?)?|rec_dos_trace|rec_sequence_ledger)\s*\(')
 
 
 def calls(source):

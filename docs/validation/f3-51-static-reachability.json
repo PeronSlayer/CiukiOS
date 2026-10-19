@@ -10,7 +10,7 @@
       "load_sha256": "6fd9684e93ead153d87fdd9337b8afa52fc7f09967b952601d37aac4d8f50248",
       "original_entry": 13216,
       "static": {
-        "instructions": 61,
+        "instructions": 63,
         "interrupts": [
           {
             "offset": 13234,
@@ -31,17 +31,8 @@
             "evidence": "static-direct-reachability"
           }
         ],
-        "unresolved": [
-          {
-            "offset": 8668,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 8666,
-            "reason": "target not in decoded instruction boundaries"
-          }
-        ],
-        "complete": false
+        "unresolved": [],
+        "complete": true
       },
       "candidate_count": 23
     },
@@ -378,8 +369,744 @@
     {
       "path": "/DOOM/DOOM.EXE",
       "sha256": "b8020523561a5ad9706e009a52d61c578f37faafd85ac471962308406292ce27",
-      "format": "DOS/4GW",
-      "status": "body-format-and-runtime-reachability-open"
+      "format": "DOS/4GW-LE",
+      "original_entry": 265032,
+      "objects": [
+        {
+          "index": 1,
+          "address": 65536,
+          "size": 282481,
+          "bits": 32,
+          "load_sha256": "79f9969d5a90213c39f8e22e6ee91a594233ed114effba8bf7a936c98f11ae74",
+          "static": {
+            "instructions": 33455,
+            "interrupts": [
+              {
+                "offset": 263904,
+                "vector": "21",
+                "ax": "3D??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 263958,
+                "vector": "21",
+                "ax": "3E??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264001,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264019,
+                "vector": "21",
+                "ax": "3E??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264103,
+                "vector": "21",
+                "ax": "3C??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264125,
+                "vector": "21",
+                "ax": "3E??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264148,
+                "vector": "21",
+                "ax": "3D??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264409,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264459,
+                "vector": "21",
+                "ax": "3E??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264581,
+                "vector": "21",
+                "ax": "3F??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 264633,
+                "vector": "21",
+                "ax": "3F??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265191,
+                "vector": "21",
+                "ax": "30??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265272,
+                "vector": "21",
+                "ax": "4A??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265310,
+                "vector": "21",
+                "ax": "4A??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265348,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265668,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265689,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265701,
+                "vector": "21",
+                "ax": "4C??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265742,
+                "vector": "21",
+                "ax": "25??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265752,
+                "vector": "21",
+                "ax": "25??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 265802,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 266377,
+                "vector": "21",
+                "ax": "43??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 267254,
+                "vector": "21",
+                "ax": "39??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 267757,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 267810,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 267958,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 268042,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 268093,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 271335,
+                "vector": "21",
+                "ax": "49??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 271876,
+                "vector": "21",
+                "ax": "48??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 271896,
+                "vector": "21",
+                "ax": "48??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 271913,
+                "vector": "21",
+                "ax": "49??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 272129,
+                "vector": "21",
+                "ax": "4800",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 272386,
+                "vector": "21",
+                "ax": "44??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 278685,
+                "vector": "21",
+                "ax": "3F??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 278875,
+                "vector": "21",
+                "ax": "01??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 279721,
+                "vector": "21",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 279762,
+                "vector": "21",
+                "ax": "40??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 279811,
+                "vector": "21",
+                "ax": "41??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 280058,
+                "vector": "21",
+                "ax": "ED??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 280082,
+                "vector": "21",
+                "ax": "4A??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 280101,
+                "vector": "21",
+                "ax": "4A??",
+                "evidence": "static-direct-reachability"
+              }
+            ],
+            "unresolved": [
+              {
+                "offset": 275546,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 266219,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f56c]"
+              },
+              {
+                "offset": 266225,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f570]"
+              },
+              {
+                "offset": 266235,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f570]"
+              },
+              {
+                "offset": 266241,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f574]"
+              },
+              {
+                "offset": 119399,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x1d1c4]"
+              },
+              {
+                "offset": 276439,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276555,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276574,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276597,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276630,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276670,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276765,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276695,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 276718,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 277462,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f860]"
+              },
+              {
+                "offset": 102998,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [eax+0x4]"
+              },
+              {
+                "offset": 90752,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [eax+0x4]"
+              },
+              {
+                "offset": 89364,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx+0x8]"
+              },
+              {
+                "offset": 147085,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [eax+0xa]"
+              },
+              {
+                "offset": 261594,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0x157e8]"
+              },
+              {
+                "offset": 261638,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0x157ec]"
+              },
+              {
+                "offset": 261661,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0x157f0]"
+              },
+              {
+                "offset": 131791,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x20134]"
+              },
+              {
+                "offset": 93059,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x16b1c]"
+              },
+              {
+                "offset": 100352,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [eax+0x18]"
+              },
+              {
+                "offset": 100664,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [eax+0x1c]"
+              },
+              {
+                "offset": 99546,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:ebx*4+0x1841c]"
+              },
+              {
+                "offset": 98268,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98287,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 97948,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98006,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edi+0x14]"
+              },
+              {
+                "offset": 98566,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98589,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98614,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98640,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98666,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98692,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98718,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98744,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98770,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98796,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98822,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebp+0x14]"
+              },
+              {
+                "offset": 98850,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx+0x10]"
+              },
+              {
+                "offset": 144421,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x2b69c]"
+              },
+              {
+                "offset": 146148,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edx+0xc]"
+              },
+              {
+                "offset": 146027,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edx+0xc]"
+              },
+              {
+                "offset": 146248,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edx+0xc]"
+              },
+              {
+                "offset": 146262,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edx+0xc]"
+              },
+              {
+                "offset": 107150,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x1a180]"
+              },
+              {
+                "offset": 228169,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39010]"
+              },
+              {
+                "offset": 222712,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39010]"
+              },
+              {
+                "offset": 221603,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39004]"
+              },
+              {
+                "offset": 224015,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39010]"
+              },
+              {
+                "offset": 224163,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39010]"
+              },
+              {
+                "offset": 224330,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x39010]"
+              },
+              {
+                "offset": 132259,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:edx*4+0x2040c]"
+              },
+              {
+                "offset": 133138,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x20434]"
+              },
+              {
+                "offset": 184466,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0xc]"
+              },
+              {
+                "offset": 181621,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esp]"
+              },
+              {
+                "offset": 181716,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esp]"
+              },
+              {
+                "offset": 120563,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x1d66c]"
+              },
+              {
+                "offset": 196770,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [cs:eax*4+0x2ffa0]"
+              },
+              {
+                "offset": 90705,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx+0x8]"
+              },
+              {
+                "offset": 103829,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x64]"
+              },
+              {
+                "offset": 103887,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x38]"
+              },
+              {
+                "offset": 103960,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x4e8]"
+              },
+              {
+                "offset": 104012,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x4c4]"
+              },
+              {
+                "offset": 104097,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x570]"
+              },
+              {
+                "offset": 104152,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x9a60]"
+              },
+              {
+                "offset": 104222,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x5a4]"
+              },
+              {
+                "offset": 104264,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x53c]"
+              },
+              {
+                "offset": 104375,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0xbdc]"
+              },
+              {
+                "offset": 269021,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 269021,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 273436,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx]"
+              },
+              {
+                "offset": 273467,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx+0x4]"
+              },
+              {
+                "offset": 272770,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esi]"
+              },
+              {
+                "offset": 272788,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esi+0x4]"
+              },
+              {
+                "offset": 274842,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esi]"
+              },
+              {
+                "offset": 275334,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [edx]"
+              },
+              {
+                "offset": 275182,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esi+0x4]"
+              },
+              {
+                "offset": 273660,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx]"
+              },
+              {
+                "offset": 273762,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx+0x4]"
+              },
+              {
+                "offset": 274162,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx]"
+              },
+              {
+                "offset": 274658,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0x4]"
+              },
+              {
+                "offset": 274709,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [0x1f864]"
+              },
+              {
+                "offset": 273541,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ebx]"
+              },
+              {
+                "offset": 274038,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx]"
+              },
+              {
+                "offset": 274083,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [ecx+0x4]"
+              },
+              {
+                "offset": 273132,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword near [esi]"
+              },
+              {
+                "offset": 275479,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              }
+            ],
+            "complete": false
+          }
+        },
+        {
+          "index": 2,
+          "address": 393216,
+          "size": 25,
+          "bits": 16,
+          "load_sha256": "53e055d255a1fc77ff9b98a5b68f63e0583ec4e1ed89d3cd3bfd1b76fe606c34",
+          "status": "no-proven-entry; relocation/runtime-evidence-required"
+        }
+      ],
+      "relocations": "not-applied; absolute/indirect edges remain open"
     },
     {
       "path": "/DOOM/DWANGO.EXE",
@@ -559,7 +1286,7 @@
       "load_sha256": "3229531821d3950b8d1f129ec98d7048860d88d5174dda9573e8d89972acd52f",
       "original_entry": 256,
       "static": {
-        "instructions": 5854,
+        "instructions": 5870,
         "interrupts": [
           {
             "offset": 265,
@@ -853,18 +1580,6 @@
             "instruction": "call word near [bp+0x4]"
           },
           {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
             "offset": 1632,
             "reason": "indirect/far transfer",
             "instruction": "call word far [0x8f4a]"
@@ -875,29 +1590,9 @@
             "instruction": "call word far [0x8f4a]"
           },
           {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
             "offset": 1181,
             "reason": "indirect/far transfer",
             "instruction": "call word far [0x8f4a]"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 18296,
-            "reason": "target not in decoded instruction boundaries"
           },
           {
             "offset": 1218,
@@ -962,7 +1657,7 @@
       "load_sha256": "cc5702c69db85b39ff91e0f49f1d8393460f4f4592a9a331e341ebac667db8dd",
       "original_entry": 256,
       "static": {
-        "instructions": 6792,
+        "instructions": 6891,
         "interrupts": [
           {
             "offset": 265,
@@ -1235,12 +1930,9 @@
             "instruction": "jmp word near [cs:bx+0x2e7b]"
           },
           {
-            "offset": 2596,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 3221,
-            "reason": "target not in decoded instruction boundaries"
+            "offset": 12406,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bp-0x4]"
           },
           {
             "offset": 23761,
@@ -1288,11 +1980,6 @@
             "instruction": "jmp word near [cs:bx+0xa16]"
           },
           {
-            "offset": 12406,
-            "reason": "indirect/far transfer",
-            "instruction": "call word far [bp-0x4]"
-          },
-          {
             "offset": 787,
             "reason": "indirect/far transfer",
             "instruction": "call word far [es:bx+0x2]"
@@ -1315,7 +2002,7 @@
       "load_sha256": "b415bae7109ad01bad4301edc8407e77ce43a8a9ac34dcebf76360498abe4883",
       "original_entry": 0,
       "static": {
-        "instructions": 455,
+        "instructions": 472,
         "interrupts": [
           {
             "offset": 10,
@@ -1471,14 +2158,6 @@
             "offset": 598,
             "reason": "indirect/far transfer",
             "instruction": "call word near [es:bx+0x2]"
-          },
-          {
-            "offset": 675,
-            "reason": "target not in decoded instruction boundaries"
-          },
-          {
-            "offset": 675,
-            "reason": "target not in decoded instruction boundaries"
           }
         ],
         "complete": false
@@ -1506,8 +2185,992 @@
     {
       "path": "/QUAKE/QUAKE.EXE",
       "sha256": "7cdb244122cc607cc6f162524bfcac60f6d11d8ca2ff07473d6cd962311161fb",
-      "format": "go32",
-      "status": "body-format-and-runtime-reachability-open"
+      "format": "go32-COFF",
+      "original_entry": 0,
+      "objects": [
+        {
+          "name": ".text",
+          "address": 4264,
+          "offset": 2216,
+          "size": 368984,
+          "load_sha256": "2d74185267d74185bc141ff8f66fa0e4d62d6d3c7a6f92860194d8d1e23b3cf7",
+          "static": {
+            "instructions": 56405,
+            "interrupts": [
+              {
+                "offset": 83,
+                "vector": "21",
+                "ax": "4C??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 168,
+                "vector": "21",
+                "ax": "4C??",
+                "evidence": "static-direct-reachability"
+              },
+              {
+                "offset": 318912,
+                "vector": "2f",
+                "ax": null,
+                "evidence": "static-direct-reachability"
+              }
+            ],
+            "unresolved": [
+              {
+                "offset": 567,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword far [cs:0x5c070]"
+              },
+              {
+                "offset": 318835,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 318857,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 318890,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 282196,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 281739,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 361909,
+                "reason": "indirect/far transfer",
+                "instruction": "call edi"
+              },
+              {
+                "offset": 362163,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 362303,
+                "reason": "indirect/far transfer",
+                "instruction": "call edx"
+              },
+              {
+                "offset": 682,
+                "reason": "indirect/far transfer",
+                "instruction": "call dword far [0x5c070]"
+              },
+              {
+                "offset": 279055,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 278877,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 339396,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x53e74]"
+              },
+              {
+                "offset": 118589,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 116347,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 281880,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 282027,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 241904,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 283193,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 283114,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 278970,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 278884,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 235512,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 235582,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301490,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301502,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 51186,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0xd8a2]"
+              },
+              {
+                "offset": 219694,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x36ade]"
+              },
+              {
+                "offset": 70683,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x60624]"
+              },
+              {
+                "offset": 183774,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x5e050]"
+              },
+              {
+                "offset": 177257,
+                "reason": "indirect/far transfer",
+                "instruction": "call edx"
+              },
+              {
+                "offset": 103180,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 109184,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 109231,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105187,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105208,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105230,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105257,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105280,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105297,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105314,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108113,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108128,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108143,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107135,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107153,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107179,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107216,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107236,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107261,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107549,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107567,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107593,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107613,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107652,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 107673,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108600,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106614,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106629,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106654,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106669,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106713,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 106778,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105728,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105869,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105881,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108971,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 109017,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 109030,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 103421,
+                "reason": "indirect/far transfer",
+                "instruction": "call edx"
+              },
+              {
+                "offset": 103528,
+                "reason": "indirect/far transfer",
+                "instruction": "call edx"
+              },
+              {
+                "offset": 103570,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 103583,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 103603,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 108771,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105469,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105484,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 104984,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 104998,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 105011,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112911,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112949,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112997,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 113010,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 113023,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 113037,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 113050,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 113269,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112319,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112337,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112420,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112439,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112662,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 112748,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110942,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110980,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110992,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111004,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111060,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111083,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111101,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111121,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111138,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111155,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111204,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111275,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111316,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111334,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111359,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111398,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111418,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111438,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111589,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111700,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111715,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111733,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111820,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111851,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 111951,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 109870,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110016,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110390,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 110490,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 196614,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 196806,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 193308,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x303cc]"
+              },
+              {
+                "offset": 68941,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 214696,
+                "reason": "indirect/far transfer",
+                "instruction": "call edx"
+              },
+              {
+                "offset": 99871,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x5cc94]"
+              },
+              {
+                "offset": 100332,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 100332,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 81030,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 174776,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x2bb68]"
+              },
+              {
+                "offset": 158752,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [edx*4+0x27cd0]"
+              },
+              {
+                "offset": 116876,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 117204,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 116468,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 117054,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 10520,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 10569,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 17169,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x53c0]"
+              },
+              {
+                "offset": 10896,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 10925,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 55817,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 100332,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 100332,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 266345,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [edx*4+0x42118]"
+              },
+              {
+                "offset": 275729,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x445c0]"
+              },
+              {
+                "offset": 116107,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 118833,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 118866,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 118930,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 53932,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 51471,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [edx*4+0xd9be]"
+              },
+              {
+                "offset": 345807,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [ebx*4+0x5577e]"
+              },
+              {
+                "offset": 346332,
+                "reason": "indirect/far transfer",
+                "instruction": "call ecx"
+              },
+              {
+                "offset": 346368,
+                "reason": "indirect/far transfer",
+                "instruction": "call ecx"
+              },
+              {
+                "offset": 118357,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 118407,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301113,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301128,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301167,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 301179,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 80916,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 57813,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 60481,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 60502,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 60761,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 60784,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 279010,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 278884,
+                "reason": "conflicting decoded instruction boundaries"
+              },
+              {
+                "offset": 328972,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 338101,
+                "reason": "indirect/far transfer",
+                "instruction": "jmp dword near [eax*4+0x53964]"
+              },
+              {
+                "offset": 368829,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368751,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368272,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368302,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368329,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368427,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              },
+              {
+                "offset": 368395,
+                "reason": "indirect/far transfer",
+                "instruction": "call eax"
+              }
+            ],
+            "complete": false
+          }
+        }
+      ],
+      "relocations": "not-applied; absolute/indirect edges remain open"
     }
   ]
 }

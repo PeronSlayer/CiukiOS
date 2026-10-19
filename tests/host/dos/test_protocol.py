@@ -115,6 +115,7 @@ class RunnerOwnershipTests(unittest.TestCase):
                      patch.object(runner,"qualified",return_value={"image_sha256":conformance.digest(image)}), \
                      patch.object(runner,"capped"),patch.object(runner.subprocess,"run",side_effect=create), \
                      patch.object(runner,"capture",capture), \
+                     patch.object(runner,"reconcile_overlay",return_value={"records":1}), \
                      patch.object(runner.res,"ExclusiveLock",side_effect=lambda _:contextlib.nullcontext()), \
                      patch.object(runner.res,"slot_paths",return_value=[]), \
                      patch.object(runner.res,"common_lock",return_value=folder/"mock-lock"):

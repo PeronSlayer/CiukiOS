@@ -20,3 +20,24 @@ archives are ignored by git: stage them from the URLs in `UPSTREAM.json`
 (kernel `DOC/KERNEL/COPYING`, FreeCOM `BIN/FREECOM/LICENSE.TXT`, SHARE's
 copying policy in `APPINFO/SHARE.LSM`); the reference image carries them as
 `/D48/*.LIC`. Provisioned by the lead on 2026-10-19 from the ibiblio mirror.
+
+Amendment 1 continuation: the floppy sector above is a **FAT12** loader. Its
+executable code cannot boot the private FAT16 disk by changing BPB fields.
+The installed reference uses the exact FAT16 template embedded in the same
+official package's `BIN/SYS.COM`, without rebuilding a FreeDOS component.
+`boot16.bin` is that 512-byte template (SHA-256
+`39586cd0f55f7732791a990770163d4af9827623e418203921d6f23819b94cb5`).
+`UPSTREAM.json::boot_fat16` records the package, compressed SYS member and
+extraction stop/address. `tests/host/dos/reference_boot_test.c` reproduces
+these bytes with the existing host CPU emulator, stopping at the unpacker's
+first INT21, before SYS's installation logic or any DOS/block services run.
+The original floppy pin is retained as provenance, not used as a FAT16 VBR.
+
+The template is GPL-2.0-or-later, copyright Svante Frey (1997) and the FreeDOS
+contributors. `COPYING` is the exact kernel package license. Corresponding
+source is `SOURCE/KERNEL/SOURCES.ZIP::boot/boot.asm` in the pinned official
+`kernel.zip` at the URL above; `sys/sys.c::put_boot` selects the FAT16 template.
+The canonical builder changes only its OEM/BPB/volume-label fields, and wraps
+it in a deterministic MBR with one partition at LBA 63. The kernel, shell and
+SHARE binaries retain the original pinned hashes. Actual boot qualification
+remains lead-owned.

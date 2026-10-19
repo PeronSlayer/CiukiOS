@@ -3,7 +3,7 @@
   "image": "full",
   "host_tests": true,
   "cases": [],
-  "status": "integration-open-reference-media-and-critical-fault-backend",
+  "status": "host-implementation-delivered-runtime-unqualified",
   "runner": "tests/host/dos/qemu_reference.py",
   "differential": {
     "profile": "qemu-t23",

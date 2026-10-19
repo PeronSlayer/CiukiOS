@@ -5,12 +5,20 @@
 #include <ciuki/cpu.h>
 #include <ciuki/probe.h>
 #include <ciuki/storage.h>
+#include <ciuki/bootlog.h>
 #include "selector.h"
 #include "../vm/dosvm_internal.h"
 #include "../vm/dos_file.h"
 
 static struct vfs_table plan_table;
 static char plan[4096];
+static volatile bool log_stop;
+static void d51_log_writer(void *arg)
+{
+    (void)arg;
+    while (!log_stop) { (void)bootlog_drain();task_sleep_ms(10); }
+    task_exit(0);
+}
 struct d51_case { char tag[7]; unsigned results; bool bad,ready,shell,pass; };
 
 static void d51_observe(struct dosvm *v,const char *line,unsigned n,void *arg)
@@ -67,6 +75,7 @@ static void d51_line(const char *line)
 {
     serial_write(line,strlen(line)); /* whole bounded controller record */
 }
+static void d51_log_pause(void *arg) { (void)arg;task_sleep_ms(1); }
 static int d51_run(void)
 {
     struct probe_selection selected;
@@ -78,7 +87,11 @@ static int d51_run(void)
     char message[160];
     ksnprintf(message,sizeof(message),"D48 BEGIN run=%s guest=%s\n",selected.run,guest); d51_line(message);
     struct storage *storage=storage_get();
-    int error=!storage || !storage->ready ? -V86_EIO : vfs_table_init(&storage->vfs,&plan_table,2);
+    /* Selected probes start read-only and without the normal storage writer.
+     * Open only the canonical overlay's existing write gate; log draining is
+     * owned/joined by this controller, never by the VM or an IRQ callback. */
+    int error=!storage || !storage->ready ? -V86_EIO : storage_enable_write(storage,2);
+    if (!error) error=vfs_table_init(&storage->vfs,&plan_table,2);
     int amount=0;
     if (!error) {
         if (freedos) {
@@ -104,6 +117,14 @@ static int d51_run(void)
         vfs_table_destroy(&plan_table);
     }
     if (error) { rec_emit(name,"END","status=FAIL reason=missing_plan error=%d",error); return 1; }
+    error=bootlog_activate(&storage->vfs,true,storage->sequence);
+    struct task *writer=0;
+    if (!error) {
+        log_stop=false;writer=task_create_kernel("d48-log",d51_log_writer,0,P_DEVICE);
+        if (!writer) error=-ENOMEM;
+        else task_start(writer);
+    }
+    if (error) { rec_emit(name,"END","status=FAIL reason=log_writer error=%d",error);return 1; }
     unsigned count=0,at=0;
     struct dosvm_ledger baseline,after; dosvm_snapshot(&baseline);
     while (at<(unsigned)amount && !error) {
@@ -116,18 +137,14 @@ static int d51_run(void)
         if (memcmp(plan+at,state.tag,6) || plan[at+6]!=' ') { error=-EINVAL; break; }
         const char *fixture=plan+at+7;
         bool keys=!strncmp(fixture,"keys-XY",8);
-        if (strncmp(fixture,"basic",6) && strncmp(fixture,"share",6) && !keys) {
-            /* A removable INT13/provider fault backend is not present in the
-             * current VMM. Refuse this case explicitly. Calling INT24 here or
-             * treating a missing E: file as equivalent would be false evidence. */
-            rec_emit(name,"ERROR","case=%s status=FAIL reason=fault_backend_unavailable",state.tag);
-            error=-ENOSYS; break;
-        }
+        unsigned fault=!strncmp(fixture,"fault-once",11) ? 1 : !strncmp(fixture,"fault-always",13) ? 2 : 0;
+        if (strncmp(fixture,"basic",6) && strncmp(fixture,"share",6) && !keys && !fault) { error=-EINVAL;break; }
         struct dosvm *v=0;
         const struct dosvm_config config={.probe=name,.dpmi=true,.kernel=freedos,
             .disable_file_bridge=freedos,.base=freedos ? "C:\\SYSTEM\\DOS\\FREEDOS.IMG" : 0,
             .record_observer=d51_observe,.record_arg=&state};
         error=dosvm_create(&config,&v);
+        if (!error) d48_reset(&v->conformance_media,fault,dosvm_key(v).generation);
         if (!error) error=dosvm_boot(v);
         if (!error) error=d51_wait(v,&state,0,false);
         if (!error && (freedos ? v->files!=0 : v->files==0)) error=-V86_EIO;
@@ -142,6 +159,10 @@ static int d51_run(void)
         if (!error) error=d51_wait(v,&state,2,false);
         if (!error && (!state.pass || state.results!=1)) error=-V86_EIO;
         if (v) {
+            if (fault && (v->conformance_media.bad || v->conformance_media.opens!=1 ||
+                v->conformance_media.failures!=(freedos ? D48_BIOS_RETRIES : 1))) error=-V86_EIO;
+            if (fault) rec_emit(name,"DATA","group=d48_fault case=%s opens=%u failures=%u generation=%u",
+                state.tag,v->conformance_media.opens,v->conformance_media.failures,v->conformance_media.generation);
             if (v->files && (v->files->dropped || v->files->cleanup_status)) error=-V86_EIO;
             struct dosvm_info info; dosvm_info(v,&info);
             if (info.dropped_records || info.cleanup_error) error=-V86_EIO;
@@ -157,6 +178,19 @@ static int d51_run(void)
         task_sleep_ms(1000); /* ordinary guest record budget is unchanged */
     }
     if (!count) error=-V86_EIO;
+    if (!error) {
+        struct bootlog_stats log; bootlog_snapshot(&log);
+        if (!log.active || log.error)
+            error=-V86_EIO;
+        if (!error && rec_sequence_ledger) rec_sequence_ledger(name);
+        else error=-V86_EIO;
+        if (!error) error=bootlog_sync(0,d51_log_pause,0);
+    }
+    log_stop=true;
+    uint64_t stopped=deadline_after_ms(6000);
+    while (task_alive(writer) && !deadline_passed(stopped)) task_sleep_ms(1);
+    if (task_alive(writer)) error=-V86_ETIMEDOUT;
+    else task_reap(writer);
     if (!error) {
         ksnprintf(message,sizeof(message),"D48 CLEAN run=%s guest=%s handles=0 searches=0 locks=0 vms=0 dropped=0\n",selected.run,guest);
         d51_line(message);
