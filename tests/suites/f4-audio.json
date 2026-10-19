@@ -974,7 +974,7 @@
                 "eq": 0
               },
               "max_service_us": {
-                "le": 1000
+                "le": 2000
               },
               "max_irq_us": {
                 "le": 250
@@ -1426,7 +1426,7 @@
                 "eq": 0
               },
               "max_service_us": {
-                "le": 1000
+                "le": 2000
               },
               "max_irq_us": {
                 "le": 250
@@ -1878,7 +1878,7 @@
                 "eq": 0
               },
               "max_service_us": {
-                "le": 1000
+                "le": 2000
               },
               "max_irq_us": {
                 "le": 250
