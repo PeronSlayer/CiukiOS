@@ -47,8 +47,13 @@ bool dosvm_pool_alloc(struct dosvm *v, struct vm_block *b, uint32_t bytes)
         uint32_t va=next.base+i*PAGE_SIZE;
         memset(P2V(as_lookup(&v->as,va,0)),0,PAGE_SIZE);
         v->memory.occupied[first+i]=1;
+        v->memory.used_pages++;
+        v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
+        /* Private pool preparation: 16 * 8 us zero = 128 us. The VM
+         * worker cannot execute guest code until this call publishes b. */
+        if (!((i + 1) & 15u)) kpreempt_point();
     }
-    next.pages=pages; v->memory.used_pages+=pages;
+    next.pages=pages;
     v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
     *b=next;
     return true;
@@ -61,6 +66,9 @@ void dosvm_pool_free(struct dosvm *v, struct vm_block *b)
     for (unsigned i=0;i<b->pages;i++) {
         v->memory.occupied[first+i]=0;
         v->memory.used_pages--;
+        v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
+        /* 128 bitmap/accounting updates * 1 us = 128 us. */
+        if (!((i + 1) & 127u)) kpreempt_point();
     }
     memset(b,0,sizeof(*b));
     v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
@@ -102,9 +110,11 @@ bool dosvm_pool_resize(struct dosvm *v, struct vm_block *b, uint32_t bytes)
         for (unsigned i=b->pages;i<pages;i++) {
             memset(P2V(as_lookup(&v->as,b->base+i*PAGE_SIZE,0)),0,PAGE_SIZE);
             v->memory.occupied[first+i]=1;
+            v->memory.used_pages++;
+            v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
+            /* 16 completed zero/accounting updates * 8 us =128 us. */
+            if (!((i + 1) & 15u)) kpreempt_point();
         }
-        v->memory.used_pages+=pages-b->pages;
-        v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
         b->bytes=bytes; b->pages=pages; return true;
     }
 
@@ -169,8 +179,11 @@ void dosvm_memory_close(struct dosvm *v)
     if (!v->as.pd_phys) return;
     /* Restore every owned low page, even windows currently unmapped. This
      * removes all EMS aliases; as_destroy then sees each physical page once. */
-    for (unsigned i=0;i<DOSVM_PAGES;i++) if (v->frames[i])
-        as_map(&v->as,i*PAGE_SIZE,v->frames[i],dosvm_low_flags(i));
+    for (unsigned i=0;i<DOSVM_PAGES;i++) {
+        if (v->frames[i]) as_map(&v->as,i*PAGE_SIZE,v->frames[i],dosvm_low_flags(i));
+        /* Worker is quiescent: 16 * 6 us remap <=96 us. */
+        if (!((i + 1) & 15u)) kpreempt_point();
+    }
     v->a20=true;
 }
 

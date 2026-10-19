@@ -1109,6 +1109,8 @@ static void worker(void *arg)
     task_exit(v->info.reason);
 }
 
+static bool destroying[DOSVM_LIMIT];
+
 int dosvm_destroy(struct dosvm_key key, bool forced)
 {
     struct dosvm *v = dosvm_lookup(key);
@@ -1116,12 +1118,16 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
     if (v->fullscreen_hold) return -EBUSY; /* switch pins the VM/address space */
     if (v->task == g_current) return -V86_EPERM;
+    unsigned slot=key.id-1;
+    if (destroying[slot]) return -EBUSY;
+    destroying[slot]=true;
     dosvm_stop(key, forced ? DOSVM_TERMINATE : DOSVM_EXIT);
     uint64_t until = deadline_after_ms(6000);
     while (v->task && task_alive(v->task)) {
         if (deadline_passed(until)) {
             klog("[dosvm] failure stage=destroy-wait vm=%u generation=%u result=%d fallback=retain",
                  key.id,key.generation,-EBUSY);
+            destroying[slot]=false;
             return -16; /* retain resources until quiescent */
         }
         task_sleep_ms(1);
@@ -1131,6 +1137,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     if (video_error) {
         klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",
              key.id,key.generation,video_error);
+        destroying[slot]=false;
         return video_error;
     }
     dosvm_perf_dump(v);
@@ -1163,6 +1170,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
              key.id, key.generation, v->info.data_loss, e);
     if (ledger_record) ledger_record("vm-teardown");
+    destroying[slot]=false;
     return e;
 }
 
@@ -1183,7 +1191,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     struct dosvm *v = 0;
     unsigned slot;
     for (slot = 0; slot < DOSVM_LIMIT; slot++)
-        if (!initializing[slot] && (!slots[slot].info.key.generation || slots[slot].info.state == DOSVM_DEAD)) {
+        if (!destroying[slot] && !initializing[slot] && (!slots[slot].info.key.generation || slots[slot].info.state == DOSVM_DEAD)) {
             v = &slots[slot]; break;
         }
     if (!v) return -ENOSPC;

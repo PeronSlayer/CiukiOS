@@ -5,6 +5,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
 #include <ciuki/mtrr.h>
+#include <ciuki/task.h>
 
 extern char __text_start[], __rodata_end[];
 
@@ -122,9 +123,14 @@ static void *map_physical(uint32_t phys, uint32_t bytes, uint32_t flags)
         return 0;
     uint32_t span = (uint32_t)span64;
     uint32_t va = mmio_next;
-    for (uint32_t i = 0; i < span; i += PAGE_SIZE)
+    /* Reserve the private window before yielding so another mapper cannot
+     * borrow it. The caller publishes the device pointer only on return.
+     * 128 completed PTE updates * 1 us =128 us per preparation slice. */
+    mmio_next += span + PAGE_SIZE;
+    for (uint32_t i = 0; i < span; i += PAGE_SIZE) {
         kmap(va + i, (phys & ~0xFFFu) + i, flags);
-    mmio_next += span + PAGE_SIZE;            /* unmapped gap between mappings */
+        if (!((i / PAGE_SIZE + 1) & 127u)) kpreempt_point();
+    }
     return (void *)(uintptr_t)(va + off);
 }
 
@@ -326,24 +332,37 @@ void as_destroy(struct aspace *as)
     if (read_cr3() == as->pd_phys)
         write_cr3(kpd_phys);
     uint32_t *pd = table_va(as->pd_phys);
+    /* 16 * (6 us release + 1 us PTE check) = 112 us. Count absent
+     * entries too: a sparse address space must not evade the batch bound.
+     * The owner is quiescent; clear ownership before any service point. */
     for (unsigned i = 0; i < 768; i++) {
-        if (!(pd[i] & PTE_P))
-            continue;
-        uint32_t *pt = table_va(pd[i] & ~0xFFFu);
-        for (unsigned j = 0; j < 1024; j++)
-            if (pt[j] & PTE_P) {
-                mm_free(pt[j] & ~0xFFFu, as->pool_base && (i * 1024u + j) * PAGE_SIZE >= as->pool_base ? MM_VM_POOL : as->owner);
-                if (as->owner==MM_USER_PRIVATE && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
-                g_user_mappings--;
-                if (ledger_mapping) ledger_mapping(-1, 0);
+        if (pd[i] & PTE_P) {
+            uint32_t *pt = table_va(pd[i] & ~0xFFFu);
+            for (unsigned j = 0; j < 1024; j++) {
+                uint32_t old = pt[j];
+                if (old & PTE_P) {
+                    pt[j] = 0;
+                    mm_free(old & ~0xFFFu, as->pool_base && (i * 1024u + j) * PAGE_SIZE >= as->pool_base ? MM_VM_POOL : as->owner);
+                    if (as->owner==MM_USER_PRIVATE && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
+                    as->pages--; g_user_mappings--;
+                    if (ledger_mapping) ledger_mapping(-1, 0);
+                }
+                if (!((j + 1) & 15u)) kpreempt_point();
             }
-        mm_free(pd[i] & ~0xFFFu, MM_TABLE);
+            uint32_t table = pd[i] & ~0xFFFu;
+            pd[i] = 0; as->tables--;
+            mm_free(table, MM_TABLE);
+        }
+        if (!((i + 1) & 15u)) kpreempt_point();
     }
     mm_free(as->pd_phys, MM_TABLE);
     as->pd_phys = 0;
     as->pages = as->tables = 0;
 }
 
+/* Guest validation calls this for at most one page inside an indivisible
+ * emulation transaction. Legacy syscall buffers are capped at their public
+ * limits; keep their validation atomic too (see F0-44 caller inventory). */
 bool as_range_ok(const struct aspace *as, uint32_t va, uint32_t len, bool write)
 {
     if (len == 0)

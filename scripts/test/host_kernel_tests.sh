@@ -264,7 +264,12 @@ import subprocess
 import sys
 root, out = map(Path, sys.argv[1:])
 source = (root / "src/kernel/core/vmm.c").read_text()
-(out / "dosvm_aspace.inc").write_text(source.split("/* ---- user address spaces ---- */", 1)[1])
+aspace = source.split("/* ---- user address spaces ---- */", 1)[1]
+# F0-44: charge actual production teardown PTE/PDE visits, including holes.
+aspace = aspace.replace("uint32_t old = pt[j];", "AS_AUDIT_CHARGE(1000); uint32_t old = pt[j];")
+aspace = aspace.replace("if (pd[i] & PTE_P) {", "AS_AUDIT_CHARGE(1000); if (pd[i] & PTE_P) {")
+(out / "dosvm_aspace.inc").write_text(
+    "#ifndef AS_AUDIT_CHARGE\n#define AS_AUDIT_CHARGE(ns) ((void)0)\n#endif\n" + aspace + "\n#undef AS_AUDIT_CHARGE\n")
 # F4-13: replay the exact production cursor functions beside VM sources,
 # replacing only the register transport, as for the paging functions above.
 source = (root / "src/kernel/drivers/ac97.c").read_text()

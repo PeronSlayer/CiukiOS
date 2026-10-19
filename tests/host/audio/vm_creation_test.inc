@@ -36,6 +36,17 @@ static void test_vm_creation_lead(void)
         } else {
             CHECK(late_grow_logs == grows + 1 && audio.lead_periods == 28);
         }
+        if (points) {
+            unsigned initial_grows=late_grow_logs;
+            struct creation_result cleanup=creation_cleanup_replay(true,creation_audio_service);
+            CHECK(cleanup.maximum<=2000000 && late_grow_logs==initial_grows);
+            CHECK(audio.lead_periods==8 && !audio.adaptive_lead && !audio.halts && !audio.deadlines);
+            /* Replay late failed creation: all backing exists before unwind. */
+            creation_replay(true,creation_audio_service);
+            creation_cleanup_replay(true,creation_audio_service);
+            CHECK(late_grow_logs==initial_grows && audio.lead_periods==8 && !audio.adaptive_lead);
+            puts("F0-44 audio normal teardown and failed-creation unwind: no lead growth PASS");
+        }
         printf("F0-41 audio creation: points=%u lead_periods=%u late-grow=%u max_gap_us=%u PASS\n",
                result.points, audio.lead_periods, late_grow_logs - grows, audio.max_service_gap_us);
         modeled_cycles = 0;

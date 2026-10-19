@@ -91,7 +91,7 @@ uint32_t pmm_alloc(void)
     return 0;
 }
 uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_NORMAL); return pmm_alloc(); }
-void pmm_free(uint32_t p) { CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; used_pages--; }
+void pmm_free(uint32_t p) { creation_cost_charge(6000); CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; used_pages--; }
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
@@ -151,6 +151,7 @@ static void *harness_alloc(size_t n) { if (allocation_fails()) return 0; void *p
 void *kmalloc(size_t n) { return n > 2040 ? 0 : harness_alloc(n); }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 /* Generated from the unmodified production user-address-space section. */
+#define AS_AUDIT_CHARGE creation_cost_charge
 #include "dosvm_aspace.inc"
 
 static struct { struct task *t; void (*fn)(void *); void *arg; } tasks[DOSVM_LIMIT];
@@ -744,6 +745,8 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     test_maximum_creation();
+    test_maximum_teardown();
+    test_vga_transaction_bound();
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
