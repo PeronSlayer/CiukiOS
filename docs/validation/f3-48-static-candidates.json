@@ -1,0 +1,2251 @@
+{
+  "schema_version": 1,
+  "runtime_trace": "not-collected",
+  "files": [
+    {
+      "package": "wolf3d-shareware",
+      "path": "/WOLF3D/W3DHELP.EXE",
+      "size": 33161,
+      "sha256": "ea226934cbfa1d11060992c2201aabe6c5e2310a117225dd0388a068d5b23684",
+      "entry_offset": 11806,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 5610,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 6513,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "wolf3d-shareware",
+      "path": "/WOLF3D/WOLF3D.EXE",
+      "size": 109959,
+      "sha256": "75bd63f1db75be77a9dfd317144fec2a86d2a409dd3b6847a251a2565b646280",
+      "entry_offset": 107166,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 42,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3765,
+          "vector": "21",
+          "ax": "3600",
+          "al_known": false,
+          "bytes": "b436cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 10472,
+          "vector": "21",
+          "ax": "2F00",
+          "al_known": false,
+          "bytes": "b42fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 50209,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 54999,
+          "vector": "2F",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 56940,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": true,
+          "bytes": "b8003dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 65725,
+          "vector": "21",
+          "ax": "2C00",
+          "al_known": false,
+          "bytes": "b42ccd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/DM.EXE",
+      "size": 33640,
+      "sha256": "2725df25c7536aa98a4e6282e61e17186777f54074e6fa56d9a38825dd1c7e09",
+      "entry_offset": 32622,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 42,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 21381,
+          "vector": "21",
+          "ax": "0B00",
+          "al_known": false,
+          "bytes": "b40bcd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/DOOM.EXE",
+      "size": 709905,
+      "sha256": "b8020523561a5ad9706e009a52d61c578f37faafd85ac471962308406292ce27",
+      "entry_offset": 16706,
+      "signatures": [
+        "DOS/4GW"
+      ],
+      "candidates": [
+        {
+          "offset": 12616,
+          "vector": "21",
+          "ax": "5200",
+          "al_known": false,
+          "bytes": "b452cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 12919,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 13175,
+          "vector": "21",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 13342,
+          "vector": "21",
+          "ax": "352F",
+          "al_known": true,
+          "bytes": "b82f35cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 13362,
+          "vector": "21",
+          "ax": "252F",
+          "al_known": true,
+          "bytes": "b82f25cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 13516,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": true,
+          "bytes": "b8004ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 15557,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 16750,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 16776,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 16786,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": true,
+          "bytes": "b80044cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 16932,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 20081,
+          "vector": "21",
+          "ax": "0D00",
+          "al_known": false,
+          "bytes": "b40dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 32115,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": true,
+          "bytes": "b8003dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 32140,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": true,
+          "bytes": "b80042cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 32164,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 32180,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 32201,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 33797,
+          "vector": "21",
+          "ax": "3300",
+          "al_known": true,
+          "bytes": "b80033cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 34475,
+          "vector": "21",
+          "ax": "3800",
+          "al_known": true,
+          "bytes": "b80038cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 34610,
+          "vector": "21",
+          "ax": "5000",
+          "al_known": false,
+          "bytes": "b450cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 35364,
+          "vector": "2F",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 35388,
+          "vector": "2F",
+          "ax": "4310",
+          "al_known": true,
+          "bytes": "b81043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 35662,
+          "vector": "2F",
+          "ax": "1687",
+          "al_known": true,
+          "bytes": "b88716cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 36209,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 36562,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 36895,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37010,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": false,
+          "bytes": "b425cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37079,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37582,
+          "vector": "2F",
+          "ax": "1600",
+          "al_known": true,
+          "bytes": "b80016cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37600,
+          "vector": "2F",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37611,
+          "vector": "2F",
+          "ax": "4310",
+          "al_known": true,
+          "bytes": "b81043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 37650,
+          "vector": "2F",
+          "ax": "1681",
+          "al_known": true,
+          "bytes": "b88116cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 38027,
+          "vector": "21",
+          "ax": "3567",
+          "al_known": true,
+          "bytes": "b86735cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 41163,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": true,
+          "bytes": "b8004ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 43038,
+          "vector": "21",
+          "ax": "4CFE",
+          "al_known": true,
+          "bytes": "b8fe4ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 45439,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 45590,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55707,
+          "vector": "21",
+          "ax": "4B00",
+          "al_known": true,
+          "bytes": "b8004bcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55722,
+          "vector": "21",
+          "ax": "4D00",
+          "al_known": false,
+          "bytes": "b44dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55741,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55795,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55807,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 55818,
+          "vector": "21",
+          "ax": "4CFF",
+          "al_known": true,
+          "bytes": "b8ff4ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 73703,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 74220,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": false,
+          "bytes": "b425cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75323,
+          "vector": "21",
+          "ax": "2901",
+          "al_known": true,
+          "bytes": "b80129cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75399,
+          "vector": "21",
+          "ax": "0B00",
+          "al_known": false,
+          "bytes": "b40bcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75413,
+          "vector": "21",
+          "ax": "4B00",
+          "al_known": false,
+          "bytes": "b44bcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75420,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75494,
+          "vector": "21",
+          "ax": "4D00",
+          "al_known": false,
+          "bytes": "b44dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75502,
+          "vector": "21",
+          "ax": "3500",
+          "al_known": true,
+          "bytes": "b80035cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75660,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": true,
+          "bytes": "b80044cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75822,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75848,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": true,
+          "bytes": "b80025cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75869,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": false,
+          "bytes": "b425cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 75936,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 76604,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77324,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77392,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77498,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": true,
+          "bytes": "b80044cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77515,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77536,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77558,
+          "vector": "21",
+          "ax": "4201",
+          "al_known": true,
+          "bytes": "b80142cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77800,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 77902,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 80037,
+          "vector": "21",
+          "ax": "4201",
+          "al_known": true,
+          "bytes": "b80142cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 80073,
+          "vector": "21",
+          "ax": "4202",
+          "al_known": true,
+          "bytes": "b80242cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 80092,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": true,
+          "bytes": "b80042cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 80108,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": false,
+          "bytes": "b442cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 80809,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 81251,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 81442,
+          "vector": "2F",
+          "ax": "1686",
+          "al_known": true,
+          "bytes": "b88616cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 86061,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 86065,
+          "vector": "21",
+          "ax": "4CFF",
+          "al_known": true,
+          "bytes": "b8ff4ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 93395,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 125416,
+          "vector": "21",
+          "ax": "0800",
+          "al_known": false,
+          "bytes": "b408cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 128575,
+          "vector": "21",
+          "ax": "1900",
+          "al_known": false,
+          "bytes": "b419cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 130278,
+          "vector": "21",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153022,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153078,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153285,
+          "vector": "21",
+          "ax": "3D01",
+          "al_known": true,
+          "bytes": "b8013dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153307,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153317,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153338,
+          "vector": "21",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153388,
+          "vector": "21",
+          "ax": "4700",
+          "al_known": false,
+          "bytes": "b447cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 153411,
+          "vector": "21",
+          "ax": "1900",
+          "al_known": false,
+          "bytes": "b419cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 155766,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 155772,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 155795,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 155859,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156180,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156199,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156213,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156225,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156240,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 156626,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": true,
+          "bytes": "b80044cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157617,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": false,
+          "bytes": "b43dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157659,
+          "vector": "21",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157692,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157711,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157745,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157761,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157819,
+          "vector": "21",
+          "ax": "3C00",
+          "al_known": false,
+          "bytes": "b43ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157833,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 157855,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": false,
+          "bytes": "b43dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158009,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": true,
+          "bytes": "b80044cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158040,
+          "vector": "21",
+          "ax": "4401",
+          "al_known": true,
+          "bytes": "b80144cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158146,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158186,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158278,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 158339,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": false,
+          "bytes": "b442cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159030,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159036,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159182,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159188,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159354,
+          "vector": "21",
+          "ax": "1A00",
+          "al_known": false,
+          "bytes": "b41acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159366,
+          "vector": "21",
+          "ax": "2900",
+          "al_known": false,
+          "bytes": "b429cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159383,
+          "vector": "21",
+          "ax": "2900",
+          "al_known": false,
+          "bytes": "b429cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159959,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": false,
+          "bytes": "b442cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 159985,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 160089,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 161463,
+          "vector": "21",
+          "ax": "4200",
+          "al_known": false,
+          "bytes": "b442cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 161505,
+          "vector": "21",
+          "ax": "4100",
+          "al_known": false,
+          "bytes": "b441cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534258,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": false,
+          "bytes": "b43dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534312,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534355,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534373,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534457,
+          "vector": "21",
+          "ax": "3C00",
+          "al_known": false,
+          "bytes": "b43ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534479,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534502,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": false,
+          "bytes": "b43dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534678,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": false,
+          "bytes": "b444cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534717,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": false,
+          "bytes": "b444cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534813,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534935,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 534987,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 535545,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 535626,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 535664,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 535701,
+          "vector": "21",
+          "ax": "FF00",
+          "al_known": true,
+          "bytes": "b800ffcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536021,
+          "vector": "21",
+          "ax": "3D01",
+          "al_known": true,
+          "bytes": "b8013dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536043,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536055,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536096,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": false,
+          "bytes": "b425cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536106,
+          "vector": "21",
+          "ax": "2500",
+          "al_known": false,
+          "bytes": "b425cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536472,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536484,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": false,
+          "bytes": "b43dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 536731,
+          "vector": "21",
+          "ax": "4300",
+          "al_known": false,
+          "bytes": "b443cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 537608,
+          "vector": "21",
+          "ax": "3900",
+          "al_known": false,
+          "bytes": "b439cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538164,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538312,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538396,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538447,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538517,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": false,
+          "bytes": "b444cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 538640,
+          "vector": "21",
+          "ax": "5700",
+          "al_known": false,
+          "bytes": "b457cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 541689,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 542230,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 542250,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 542267,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 542740,
+          "vector": "21",
+          "ax": "4400",
+          "al_known": false,
+          "bytes": "b444cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 549039,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 549229,
+          "vector": "21",
+          "ax": "0100",
+          "al_known": false,
+          "bytes": "b401cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 550116,
+          "vector": "21",
+          "ax": "4000",
+          "al_known": false,
+          "bytes": "b440cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 550165,
+          "vector": "21",
+          "ax": "4100",
+          "al_known": false,
+          "bytes": "b441cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 550412,
+          "vector": "21",
+          "ax": "ED00",
+          "al_known": false,
+          "bytes": "b4edcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 550436,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 550455,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/DWANGO.EXE",
+      "size": 65021,
+      "sha256": "724486508cb23da93986c34336299972fbfaa2509a9ed18b0ec2832e07d600ca",
+      "entry_offset": 63278,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 42,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 9614,
+          "vector": "21",
+          "ax": "4C03",
+          "al_known": true,
+          "bytes": "b8034ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 11405,
+          "vector": "21",
+          "ax": "2F00",
+          "al_known": false,
+          "bytes": "b42fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 25504,
+          "vector": "21",
+          "ax": "0B00",
+          "al_known": false,
+          "bytes": "b40bcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 53509,
+          "vector": "21",
+          "ax": "3500",
+          "al_known": false,
+          "bytes": "b435cd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/IPXSETUP.EXE",
+      "size": 18051,
+      "sha256": "1e5eeb2e3b6f526d603f19ed08c00668e04bd2b7e6439c109b84b1c61d283d51",
+      "entry_offset": 17710,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 860,
+          "vector": "2F",
+          "ax": "7A00",
+          "al_known": true,
+          "bytes": "b8007acd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 8207,
+          "vector": "21",
+          "ax": "4C03",
+          "al_known": true,
+          "bytes": "b8034ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 10127,
+          "vector": "21",
+          "ax": "1900",
+          "al_known": false,
+          "bytes": "b419cd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/SERSETUP.EXE",
+      "size": 20257,
+      "sha256": "94cf23eac5fc43da942f9529e9ff4dd6dc5aab82fe348bd72eb7de971d9170f5",
+      "entry_offset": 19902,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 9932,
+          "vector": "21",
+          "ax": "4C03",
+          "al_known": true,
+          "bytes": "b8034ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 11872,
+          "vector": "21",
+          "ax": "1900",
+          "al_known": false,
+          "bytes": "b419cd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "doom-shareware",
+      "path": "/DOOM/SETUP.EXE",
+      "size": 45884,
+      "sha256": "c9d328bff268854414feae5459870aac6f779e55a9cbf4568a83fef9b7be6e15",
+      "entry_offset": 44462,
+      "signatures": [
+        "LZ91"
+      ],
+      "candidates": [
+        {
+          "offset": 42,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 7829,
+          "vector": "21",
+          "ax": "4C03",
+          "al_known": true,
+          "bytes": "b8034ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 9739,
+          "vector": "21",
+          "ax": "1900",
+          "al_known": false,
+          "bytes": "b419cd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "quake-shareware",
+      "path": "/QUAKE/CWSDPMI.EXE",
+      "size": 25920,
+      "sha256": "0a890815df6cbdc052915a856c16944cedec825267e7b6e453c351a0cdc695f2",
+      "entry_offset": 512,
+      "signatures": [
+        "CWSDPMI"
+      ],
+      "candidates": [
+        {
+          "offset": 520,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 870,
+          "vector": "21",
+          "ax": "3500",
+          "al_known": true,
+          "bytes": "b80035cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 883,
+          "vector": "21",
+          "ax": "3504",
+          "al_known": true,
+          "bytes": "b80435cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 896,
+          "vector": "21",
+          "ax": "3505",
+          "al_known": true,
+          "bytes": "b80535cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 909,
+          "vector": "21",
+          "ax": "3506",
+          "al_known": true,
+          "bytes": "b80635cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1084,
+          "vector": "21",
+          "ax": "6200",
+          "al_known": false,
+          "bytes": "b462cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1098,
+          "vector": "21",
+          "ax": "5000",
+          "al_known": false,
+          "bytes": "b450cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1486,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1496,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 2014,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 2093,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 2502,
+          "vector": "21",
+          "ax": "3100",
+          "al_known": true,
+          "bytes": "b80031cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3087,
+          "vector": "21",
+          "ax": "6200",
+          "al_known": false,
+          "bytes": "b462cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3709,
+          "vector": "21",
+          "ax": "3600",
+          "al_known": false,
+          "bytes": "b436cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 4705,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 4709,
+          "vector": "21",
+          "ax": "4C01",
+          "al_known": true,
+          "bytes": "b8014ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 5052,
+          "vector": "21",
+          "ax": "4C01",
+          "al_known": true,
+          "bytes": "b8014ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 7622,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 7768,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 7852,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17504,
+          "vector": "2F",
+          "ax": "1687",
+          "al_known": true,
+          "bytes": "b88716cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17516,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17520,
+          "vector": "21",
+          "ax": "4C01",
+          "al_known": true,
+          "bytes": "b8014ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17539,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17562,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": true,
+          "bytes": "b8004ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17755,
+          "vector": "21",
+          "ax": "5800",
+          "al_known": true,
+          "bytes": "b80058cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17763,
+          "vector": "21",
+          "ax": "5802",
+          "al_known": true,
+          "bytes": "b80258cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17945,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 17988,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 18633,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 18960,
+          "vector": "2F",
+          "ax": "4300",
+          "al_known": true,
+          "bytes": "b80043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 18972,
+          "vector": "2F",
+          "ax": "4310",
+          "al_known": true,
+          "bytes": "b81043cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 18989,
+          "vector": "21",
+          "ax": "4C01",
+          "al_known": true,
+          "bytes": "b8014ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 19072,
+          "vector": "21",
+          "ax": "3567",
+          "al_known": true,
+          "bytes": "b86735cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 19085,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": true,
+          "bytes": "b8003dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 19094,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "quake-shareware",
+      "path": "/QUAKE/PDIPX.COM",
+      "size": 26511,
+      "sha256": "868c16e2a561ebc955ab873013a8b2a5e6d2cdd95d185915da51a9294dea15e9",
+      "entry_offset": null,
+      "signatures": [],
+      "candidates": [
+        {
+          "offset": 3022,
+          "vector": "2F",
+          "ax": "1681",
+          "al_known": true,
+          "bytes": "b88116cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3110,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3234,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3264,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3318,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3356,
+          "vector": "2F",
+          "ax": "1681",
+          "al_known": true,
+          "bytes": "b88116cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3404,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 3417,
+          "vector": "2F",
+          "ax": "1682",
+          "al_known": true,
+          "bytes": "b88216cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22742,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22777,
+          "vector": "21",
+          "ax": "4900",
+          "al_known": false,
+          "bytes": "b449cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22802,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22857,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22897,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22913,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 22924,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 23986,
+          "vector": "21",
+          "ax": "3D00",
+          "al_known": true,
+          "bytes": "b8003dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 24030,
+          "vector": "21",
+          "ax": "3E00",
+          "al_known": false,
+          "bytes": "b43ecd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 24172,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 24795,
+          "vector": "2F",
+          "ax": "7A00",
+          "al_known": true,
+          "bytes": "b8007acd2f",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "quake-shareware",
+      "path": "/QUAKE/QLAUNCH.EXE",
+      "size": 314880,
+      "sha256": "83ce5209f15623fd0a00726e1e6cfee900829971e3294270b8efbca28ea1aac3",
+      "entry_offset": 64,
+      "signatures": [],
+      "candidates": [
+        {
+          "offset": 69,
+          "vector": "21",
+          "ax": "0900",
+          "al_known": false,
+          "bytes": "b409cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 73,
+          "vector": "21",
+          "ax": "4C01",
+          "al_known": true,
+          "bytes": "b8014ccd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    },
+    {
+      "package": "quake-shareware",
+      "path": "/QUAKE/QUAKE.EXE",
+      "size": 404480,
+      "sha256": "7cdb244122cc607cc6f162524bfcac60f6d11d8ca2ff07473d6cd962311161fb",
+      "entry_offset": 596,
+      "signatures": [
+        "go32stub",
+        "CWSDPMI"
+      ],
+      "candidates": [
+        {
+          "offset": 607,
+          "vector": "21",
+          "ax": "3000",
+          "al_known": false,
+          "bytes": "b430cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 650,
+          "vector": "21",
+          "ax": "4A00",
+          "al_known": false,
+          "bytes": "b44acd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 731,
+          "vector": "2F",
+          "ax": "1687",
+          "al_known": true,
+          "bytes": "b88716cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 836,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 905,
+          "vector": "21",
+          "ax": "3F00",
+          "al_known": false,
+          "bytes": "b43fcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1055,
+          "vector": "21",
+          "ax": "4800",
+          "al_known": false,
+          "bytes": "b448cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1623,
+          "vector": "21",
+          "ax": "4CFF",
+          "al_known": true,
+          "bytes": "b8ff4ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1629,
+          "vector": "21",
+          "ax": "0200",
+          "al_known": false,
+          "bytes": "b402cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1760,
+          "vector": "21",
+          "ax": "4B00",
+          "al_known": true,
+          "bytes": "b8004bcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1769,
+          "vector": "21",
+          "ax": "4D00",
+          "al_known": false,
+          "bytes": "b44dcd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1788,
+          "vector": "21",
+          "ax": "5800",
+          "al_known": true,
+          "bytes": "b80058cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 1797,
+          "vector": "21",
+          "ax": "5802",
+          "al_known": true,
+          "bytes": "b80258cd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 2297,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 2382,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 321125,
+          "vector": "2F",
+          "ax": "1680",
+          "al_known": true,
+          "bytes": "b88016cd2f",
+          "evidence": "unvalidated-static-candidate"
+        },
+        {
+          "offset": 374914,
+          "vector": "21",
+          "ax": "4C00",
+          "al_known": false,
+          "bytes": "b44ccd21",
+          "evidence": "unvalidated-static-candidate"
+        }
+      ]
+    }
+  ]
+}

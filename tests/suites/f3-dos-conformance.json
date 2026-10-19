@@ -1,0 +1,26 @@
+{
+  "schema_version": 48,
+  "image": "full",
+  "host_tests": true,
+  "cases": [],
+  "status": "written-unrun-requires-f3-51-runtime-probe",
+  "runner": "tests/host/dos/qemu_reference.py",
+  "differential": {
+    "profile": "qemu-t23",
+    "guests": ["freedos", "ciukidos"],
+    "reference_release": "FreeDOS 1.3 with SHARE loaded; ANSI and redirector absent",
+    "selector": "f3:dos-conformance run={run_id} guest={guest}",
+    "timeout_seconds": 900,
+    "probe_manifest": "build/codex/dos-conformance/manifest.json",
+    "result_format": "D48NNN PASS 0000 or D48NNN FAIL HHHH",
+    "comparison": "all cases present once; both PASS 0000; identical failures fail",
+    "fixtures": ["basic", "share", "fault-once", "fault-always", "keys-XY"],
+    "terminal": "D48 END run={run_id} guest={guest} count={case_count}",
+    "integration_required": [
+      "f3-49 DOS VMM API and fault injection seam",
+      "f3-50 CiukiDOS hook and FCB/NLS",
+      "f3-51 runtime selector and serial controller, exact COM manifest installed in private fixture",
+      "pinned FreeDOS 1.3 kernel and SHARE, per-guest bridge policy, image/hash integration manifest"
+    ]
+  }
+}

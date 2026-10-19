@@ -75,13 +75,27 @@ the same VFS through the bridge defined in `dos-dpmi-contract.md`.
   VM) table point to open descriptions; duplicated and inherited handles
   share the description and therefore its position (DOS `45h`/`46h` and
   EXEC inheritance). FAT files above `0xFFFFFFFF` bytes fail with `EFBIG`.
-- This contract owns the DOS compatibility-mode and sharing/locking matrix;
-  it MUST be written here before the F4 bridge is implemented.
+- This contract owns the DOS compatibility-mode and sharing/locking matrix.
+  The proposed f3-48 amendment below anticipates that bridge into F3 and must
+  be cross-reviewed before implementation.
 - Share modes (deny none / read / write / all) are checked at open against
   every existing handle of the node, with DOS compatibility-mode semantics
   provided by the bridge.
 - Byte-range locks are per node, owned by a handle, released when the handle
   closes or its owner is torn down (F3, needed by INT 21h `5Ch`).
+
+**[F3-48 proposal: DOS claims]** Explicit modes use the symmetric matrix
+`(new_access & old_deny) || (old_access & new_deny)`: a nonzero result refuses
+the open. Access READ/WRITE bits are 1/2; deny-none/read/write/all are 0/1/2/3.
+DOS compatibility is a separate owner-sensitive state, not mask 0. Implement
+the DOS 2–6.22 table [RBIL #01403](https://fd.lod.bz/rbil/interrup/dos_kernel/213d.html#table-01403),
+including same-owner compatibility reopens, read-only exceptions and cases
+requiring INT24 instead of direct error 5. Native and DOS claims share node
+identity and check both directions; drive/name aliases never create another
+claim registry. The full ownership, inheritance, range-lock close rules and
+conformance requirements are [DF2/DF4](dos-dpmi-contract.md#df4-sharing-and-record-locks).
+This amendment is a contract proposal, not a claim that current VFS already
+implements compatibility mode or range locks.
 
 ## Block cache and write ordering
 
