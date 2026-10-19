@@ -2,7 +2,7 @@
  * Validation follows the f5-02 structural fixture parser.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 static uint16_t pe16(const uint8_t *p) { return (uint16_t)(p[0] | (uint16_t)p[1] << 8); }
 static uint32_t pe32(const uint8_t *p) { return (uint32_t)pe16(p) | (uint32_t)pe16(p + 2) << 16; }
 static bool power2(uint32_t n) { return n && !(n & (n - 1)); }
@@ -85,58 +85,7 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
 }
 #undef PE_CHECK
 
-static int seed_bytes(struct uaddr *u, uint32_t address, const struct ciuki_file *f, uint32_t off, uint32_t bytes)
+int w32_image_map(struct process *p,const struct ciuki_file *f,const struct w32_image *im,bool builtin)
 {
-    uint8_t buffer[256];
-    if (off >= f->bytes) return 0; /* bounded raw tail, already zero committed */
-    if (bytes > f->bytes - off) bytes = f->bytes - off;
-    while (bytes) {
-        uint32_t n = bytes < sizeof(buffer) ? bytes : sizeof(buffer);
-        int err = read_file(f, off, buffer, n);
-        if (!err) err = ua_write(u, address, buffer, n);
-        if (err) return err;
-        bytes -= n; off += n; address += n;
-        kpreempt_point();
-    }
-    return 0;
-}
-
-int w32_image_map(struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin)
-{
-    struct uaddr *u = p->memory;
-    uint32_t limit = builtin ? CIUKI_W32_BUILTIN_LIMIT : CIUKI_W32_APP_LIMIT;
-    if (im->base < (builtin ? CIUKI_W32_APP_LIMIT : CIUKI_W32_LOW) || (im->base & 65535) ||
-        im->bytes > limit - im->base || im->base >= limit) return -ENOEXEC;
-    uint32_t bytes = PAGE_ALIGN_UP(im->bytes);
-    if (ua_find(u, im->base)) return -ENOEXEC;
-    /* A builtin seed uses an internal fixed-range reservation. */
-    int err = ua_map_at(u, im->base, bytes, 0, 7, UA_W32, 0);
-    if (err) return err;
-    struct ua_extent *e = ua_find(u, im->base);
-    e->w32_allocation = im->base; e->w32_allocation_protect = W32_PAGE_READONLY;
-    e->w32_state = W32_MEM_RESERVE; e->w32_type = W32_MEM_IMAGE;
-    err = ua_w32_change(u, im->base, bytes, W32_VM_ALLOC, W32_PAGE_NOACCESS, 0, true);
-    if (!err) err = seed_bytes(u, im->base, f, 0, im->headers);
-    for (unsigned i = 0; !err && i < im->count; i++)
-        err = seed_bytes(u, im->base + im->section[i].rva, f, im->section[i].offset, im->section[i].raw);
-    /* Low-alignment sections may share pages. Union their access bits. */
-    for (uint32_t page = 0; !err && page < bytes; page += PAGE_SIZE) {
-        uint32_t prot = page < im->headers ? PROT_READ : 0;
-        for (unsigned i = 0; i < im->count; i++) {
-            const struct w32_section *s = &im->section[i];
-            if (!s->bytes || page >= s->rva + s->bytes || page + PAGE_SIZE <= s->rva) continue;
-            if (s->flags & 0x40000000) prot |= PROT_READ;
-            if (s->flags & 0x80000000) prot |= PROT_READ | PROT_WRITE;
-            if (s->flags & 0x20000000) prot |= PROT_READ | PROT_EXEC;
-        }
-        uint32_t wp = !prot ? W32_PAGE_NOACCESS : prot & PROT_EXEC ?
-            (prot & PROT_WRITE ? W32_PAGE_EXECUTE_READWRITE : W32_PAGE_EXECUTE_READ) :
-            (prot & PROT_WRITE ? W32_PAGE_READWRITE : W32_PAGE_READONLY);
-        err = ua_w32_change(u, im->base + page, PAGE_SIZE, W32_VM_PROTECT, wp, prot, true);
-    }
-    if (!err && !ua_range(u, im->base + im->entry, 1, PROT_EXEC)) err = -ENOEXEC;
-    if (err) { ua_w32_release(u, im->base, true); return err; }
-    if (builtin)
-        for (e = ua_find(u, im->base); e && e->w32_allocation == im->base; e = e->next) e->w32_locked = true;
-    return 0;
+    return w32_image_section_map(p,f,im,builtin);
 }

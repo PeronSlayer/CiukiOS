@@ -8,6 +8,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
 
+extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
+
 static const struct ciuki_file_ops *file_ops;
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { file_ops = ops; }
 const struct ciuki_file_ops *proc_get_file_ops(void) { return file_ops; }
@@ -354,6 +356,7 @@ int proc_spawn(uint32_t args_va)
         }
         if (supervisor_dosvm_delegate)
             supervisor_dosvm_delegate(self->process, op->child, path);
+        if(w32_service_delegate)w32_service_delegate(self->process,op->child,path);
         proc_publish(op->child, a.flags);
         err = (int)op->child->pid;
         op->child = 0;

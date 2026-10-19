@@ -71,7 +71,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
                                             "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove" };
-    static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory" };
+    static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects" };
     static const char *const f6_names[] = { "net-arp" };
     const char *const *names = parsed.phase == 5 ? f5_names : parsed.phase == 6 ? f6_names : parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
     unsigned count = parsed.phase == 5 ? ARRAY_SIZE(f5_names) : parsed.phase == 6 ? ARRAY_SIZE(f6_names) : parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);

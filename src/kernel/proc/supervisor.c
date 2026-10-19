@@ -10,6 +10,7 @@ extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak proc_authority_install
 
 static const struct supervisor_io_ops *supervisor_io;
+extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
 static uint32_t desktop_pid, desktop_deaths;
 static bool bootstrap_attempted;
 static char observed_probe[24];
@@ -125,6 +126,7 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
     if (err) { if (p) proc_discard(p); return err; }
+    if(w32_service_delegate)w32_service_delegate(proc_supervisor(),p,path);
     proc_publish(p, CIUKI_SPAWN_NEW_GROUP);
     *out = p;
     return (int)p->pid;

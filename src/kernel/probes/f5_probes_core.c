@@ -4,7 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/probe.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 #include <ciuki/sha256.h>
 #include <ciuki/signal.h>
 __asm__(".pushsection .rodata.w32_fixture,\"a\"\n.balign 4\n"
@@ -39,6 +39,42 @@ static int core_spawn(struct process *parent, struct probe_image *im, const char
     struct ciuki_file f = { .cookie=im, .bytes=im->bytes, .read=core_read };
     if (!err) err = proc_spawn_file(parent,&f,s,0,0,0,0,out);
     proc_strings_free(s); return err;
+}
+static bool objects_evidence(const char *name)
+{
+    struct w32_account before,after;w32_snapshot(&before);
+    struct process *p=0;struct proc_thread *t=0;
+    bool pass=!proc_prepare(proc_supervisor(),&p);
+    if(pass){p->personality=PROC_WIN32;p->memory->win32=true;pass=!w32_process_init(p);}
+    if(pass)pass=!proc_thread_prepare(p,0x400000,0,0,0,CIUKI_THREAD_DETACHED,0,true,&t);
+    uint32_t handles[2]={0};
+    if(pass){
+        p->state=PROC_LIVE;
+        for(unsigned i=0;i<2;i++){
+            struct ciuki_w32_object_args a={.action=W32_OBJ_CREATE,.type=W32_OBJ_EVENT,.value=i,.maximum=0};
+            w32_object_call(t,&a);handles[i]=a.result;pass=pass&&!a.error;
+        }
+        pass=pass&&w32_wait_try(t,handles,2,true,0)==W32_WAIT_PENDING;
+        struct ciuki_w32_object_args a={.action=W32_OBJ_SET,.handle=handles[0]};w32_object_call(t,&a);
+        pass=pass&&!a.error&&w32_wait_try(t,handles,2,true,0)==0;
+        pass=pass&&w32_wait_try(t,handles,2,false,0)==W32_WAIT_PENDING;
+        struct ciuki_w32_section_args section={.kind=W32_SEC_PAGEFILE,.bytes=65536,.protect=W32_PAGE_READWRITE};
+        w32_section_call(t,&section);pass=pass&&!section.error;
+        struct ciuki_w32_view_args view={.action=W32_VIEW_MAP,.section=section.result,.bytes=4096,.access=W32_FILE_MAP_COPY};
+        w32_view_call(t,&view);pass=pass&&!view.error;
+        uint32_t value=0xfeed1234,read=1;
+        if(pass)pass=!ua_read(p->memory,&read,view.address,4)&&!read&&!ua_write(p->memory,view.address,&value,4)&&!ua_read(p->memory,&read,view.address,4)&&read==value;
+    }
+    if(p)proc_discard(p);
+    w32_snapshot(&after);bool clean=!memcmp(&before,&after,sizeof(before));
+    rec_emit(name,"DATA","case=objects errors=%u atomic=%u cow=%u",pass?0:1,pass,pass);
+    rec_emit(name,"DATA","case=teardown clean=%u",clean);
+    return pass&&clean&&ledger_reconcile();
+}
+static int objects_probe(void)
+{
+    rec_emit("w32-objects","BEGIN",0);bool pass=objects_evidence("w32-objects");
+    rec_emit("w32-objects","END",pass?"status=PASS":"status=FAIL reason=win32_objects");return pass?0:1;
 }
 static int run_core(const char *name, const char *mode)
 {
@@ -92,6 +128,7 @@ static int run_core(const char *name, const char *mode)
     bool clean=before.processes==after.processes&&before.threads==after.threads&&before.backing==after.backing&&before.extents==after.extents&&before.tables==after.tables;
     pass=pass&&clean;
     rec_emit(name,"DATA","case=teardown clean=%u",clean);
+    if(mode[0]=='a')pass=objects_evidence(name)&&pass;
     rec_emit(name,"END",pass?"status=PASS":"status=FAIL reason=win32_core");
     return pass?0:1;
 }
@@ -101,3 +138,5 @@ static int memory_probe(void){return run_core("w32-memory","memory");}
 CIUKI_F5_PROBE("f5-core",core_probe);
 CIUKI_F5_PROBE("w32-exceptions",exception_probe);
 CIUKI_F5_PROBE("w32-memory",memory_probe);
+
+CIUKI_F5_PROBE("w32-objects",objects_probe);

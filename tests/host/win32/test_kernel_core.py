@@ -69,7 +69,7 @@ class KernelCoreTests(unittest.TestCase):
 
     def test_i386_elf_and_both_coff_layouts(self):
         source=self.out/'wire.c'
-        source.write_text('#include <ciuki/abi.h>\n'
+        source.write_text('#include <ciuki/w32_objects.h>\n'
                           '_Static_assert(sizeof(void*)==4,"pointer");\n'
                           '_Static_assert(sizeof(long)==4,"long");\n'
                           '_Static_assert(sizeof(uint16_t)==2,"WCHAR");\n'
@@ -93,11 +93,13 @@ class KernelCoreTests(unittest.TestCase):
         from loader_model import selector
         suite=json.loads((ROOT/'tests/suites/f5-core.json').read_text())
         self.assertEqual([c['id'] for c in suite['cases']],
-                         ['w32-exceptions-qemu-t23','w32-memory-qemu-t23'])
+                         ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23'])
         for case in suite['cases']:
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])
+            if case['probe']=='w32-objects':
+                continue
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})
         # QEMU TCG never raises #XM (vector 19): nine faults are the TCG floor and the fixture

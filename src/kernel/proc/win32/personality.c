@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
 #include <ciuki/files.h>
 
 static int copy_string(struct uaddr *u, uint32_t dst, const struct proc_strings *s,
@@ -21,6 +21,7 @@ static int copy_string(struct uaddr *u, uint32_t dst, const struct proc_strings 
 
 int w32_thread_init(struct proc_thread *t, bool main)
 {
+    if(w32_thread_objects_init(t))return -ENOMEM;
     struct process *p = t->process;
     struct uaddr *u = p->memory;
     uint32_t reserve = t->w32_reserve ? t->w32_reserve : p->w32_stack_reserve ? p->w32_stack_reserve : 1024 * 1024;
@@ -51,6 +52,7 @@ int w32_thread_init(struct proc_thread *t, bool main)
 
 void w32_thread_cleanup(struct proc_thread *t)
 {
+    w32_thread_objects_cleanup(t);
     while (t->w32_delivery) {
         struct w32_delivery *d = t->w32_delivery;
         t->w32_delivery = d->next; kfree(d);
@@ -85,20 +87,21 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     uint32_t parameters = 0;
     if (!err) err = w32_map_system(p->memory, PAGE_ALIGN_UP(s->used + CIUKI_PATH_MAX + 64), 0, &parameters);
     if (err) goto done;
-    struct ciuki_w32_parameters params = { .version = 1, .size = sizeof(params) };
-    uint32_t at = parameters + sizeof(params), bytes;
-    params.image_path = at;
+    struct ciuki_w32_parameters_v2 extended = { .core = { .version = 2, .size = sizeof(extended) }, .desktop_endpoint=UINT32_MAX, .w32srv_endpoint=UINT32_MAX };
+    struct ciuki_w32_parameters *params = &extended.core;
+    uint32_t at = parameters + sizeof(extended), bytes;
+    params->image_path = at;
     err = copy_string(p->memory, at, s, s->argv[0], &bytes); at += bytes;
-    params.command_line = at;
+    params->command_line = at;
     if (!err && s->argc == 2) err = copy_string(p->memory, at, s, s->argv[1], &bytes);
     else { bytes = 1; } /* zero backing supplies the empty command line */
     at += bytes;
-    params.environment = at;
+    params->environment = at;
     for (unsigned i = 0; !err && i < s->envc; i++) {
         err = copy_string(p->memory, at, s, s->envp[i], &bytes); at += bytes;
     }
     at += s->envc ? 1 : 2; /* double NUL */
-    params.directory = at;
+    params->directory = at;
     /* Cwd is retained by the native spawn transaction. */
     char *path = P2V(scratch); /* image metadata no longer needed */
     if (!err && p->cwd) {
@@ -109,23 +112,15 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     }
     else { path[0] = '/'; path[1] = 0; }
     if (!err) err = ua_write(p->memory, at, path, (uint32_t)strlen(path) + 1);
-    if (!err) err = ua_write(p->memory, parameters, &params, sizeof(params));
+    uint32_t endpoints[2];
+    if(!err)err=w32_services_attach(p,endpoints);
+    if(!err){extended.desktop_endpoint=endpoints[0];extended.w32srv_endpoint=endpoints[1];}
+    if (!err) err = ua_write(p->memory, parameters, &extended, sizeof(extended));
     if (!err) err = ua_write(p->memory, p->w32_peb + 8, &p->w32_image, 4);
     if (!err) err = ua_write(p->memory, p->w32_peb + 0x10, &parameters, 4);
     uint32_t version[4] = {4, 10, 2222, 1};
     if (!err) err = ua_write(p->memory, p->w32_peb + 0xa4, version, sizeof(version));
-    if (!err) {
-        err = ua_map_at(p->memory, CIUKI_W32_SHARED, PAGE_SIZE, 0, PROT_READ, UA_W32, 0);
-        if (!err) {
-            struct ua_extent *e = ua_find(p->memory, CIUKI_W32_SHARED);
-            e->w32_allocation = CIUKI_W32_SHARED; e->w32_type = W32_MEM_MAPPED;
-            e->w32_allocation_protect = W32_PAGE_READONLY;
-            err = ua_w32_change(p->memory, CIUKI_W32_SHARED, PAGE_SIZE, W32_VM_ALLOC, W32_PAGE_READONLY, PROT_READ, true);
-            e = ua_find(p->memory, CIUKI_W32_SHARED); e->w32_locked = true;
-            const uint8_t gate[] = {0xcd, 0x80, 0xc3};
-            if (!err) err = ua_write(p->memory, CIUKI_W32_GATE, gate, sizeof(gate));
-        }
-    }
+    if(!err)err=w32_shared_map(p);
     struct proc_thread *t = 0;
     if (!err) err = proc_thread_prepare(p, entry, p->w32_peb, 0, 0, 0, mask, true, &t);
     if (!err) {

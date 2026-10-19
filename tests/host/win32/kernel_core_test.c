@@ -1,10 +1,20 @@
 /* Production personality mechanisms on the native process RAM fixture.
  * Only hardware/scheduling/VFS endpoints are mocked.
  * SPDX-License-Identifier: GPL-2.0-only */
+#define kmalloc fixture_kmalloc
+#define kzalloc fixture_kzalloc
+#define kfree fixture_kfree
 #define main proc_fixture_main
 #define fpu_task_release fixture_fpu_release
 #include "../proc/proc_test.c"
 #undef main
+#undef kmalloc
+#undef kzalloc
+#undef kfree
+void *kmalloc(size_t n){return n>2040?0:fixture_kmalloc(n);}
+void *kzalloc(size_t n){void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
+void kfree(void *p){fixture_kfree(p);}
+uint32_t pmm_alloc_contig(uint32_t n){if(fail_alloc()||!n)return 0;for(unsigned first=1;first+n<=HOST_PAGES;first++){unsigned i=0;while(i<n&&!allocated[first+i])i++;if(i!=n){first+=i;continue;}for(i=0;i<n;i++){allocated[first+i]=true;pages_used++;memset(P2V((first+i)*PAGE_SIZE),0xa5,PAGE_SIZE);}return first*PAGE_SIZE;}return 0;}
 #undef fpu_task_release
 #define SEL_UCODE 0x1b
 #define SEL_UDATA 0x23
@@ -14,7 +24,8 @@
 #define CR0_NE (1u << 5)
 #define CR4_OSFXSR (1u << 9)
 #define CR4_OSXMMEXCPT (1u << 10)
-#include <ciuki/win32.h>
+#include <ciuki/w32_objects.h>
+#include <ciuki/files.h>
 static uint32_t fake_cr0, fake_cr4;
 bool g_cpu_fxsr, g_cpu_sse;
 static uint8_t hardware[512] __attribute__((aligned(16)));
@@ -31,6 +42,47 @@ void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware, 0, 512); }
 void klog(const char *fmt, ...) { (void)fmt; }
 void arch_w32_fs_switch(uint32_t base) { (void)base; }
 uint64_t arch_w32_counter(void) { return w32_counter_sample(g_ticks, 1193, false, 1190); }
+#include "../../../src/kernel/lib/sha256.c"
+#include "../../../src/kernel/proc/surface.c"
+#include "../../../src/kernel/proc/channel.c"
+#include "../../../src/kernel/proc/priority.c"
+void task_set_base(struct task *t,enum task_prio p,unsigned level){t->prio=p;t->base_priority=(uint8_t)level;}
+uint32_t supervisor_desktop_pid(void){return fake_desktop_pid;}
+void grant_release(struct desktop_description *d){(void)d;}
+void proc_signal_pipe(struct proc_thread *t){(void)t;}
+void kmutex_init(struct kmutex *m){memset(m,0,sizeof(*m));}
+void kmutex_lock(struct kmutex *m){CHECK(!m->owner);m->owner=g_current;}
+void kmutex_unlock(struct kmutex *m){CHECK(m->owner==g_current);m->owner=0;}
+int file_clock_now(uint32_t clock,const struct process *p,struct ciuki_timespec *out){(void)clock;(void)p;*out=(struct ciuki_timespec){.tv_sec=1700000000+(int64_t)(g_ticks/1000),.tv_nsec=(int32_t)(g_ticks%1000)*1000000};return 0;}
+static int32_t promises[MM_OWNERS][2], mapping_count, shared_mapping_count;
+void ledger_promise(enum mm_owner owner,int32_t reserved,int32_t committed){promises[owner][0]+=reserved;promises[owner][1]+=committed;}
+void ledger_mapping(int32_t maps,int32_t shared){mapping_count+=maps;shared_mapping_count+=shared;}
+static struct file_description model_file;
+static struct px_node model_node;
+static struct px_namespace model_space;
+static struct vfs model_vfs;
+static uint8_t model_data[131072];
+static bool model_io_error;
+static void (*model_io_interleave)(void);
+static unsigned model_file_refs;
+static void model_file_retain(struct proc_object *o){(void)o;model_file_refs++;}
+static void model_file_release(struct proc_object *o){(void)o;CHECK(model_file_refs);model_file_refs--;}
+struct file_description *file_fd(const struct process *p,int32_t fd){return p&&p->fds&&fd>=0&&fd<CIUKI_OPEN_MAX&&p->fds[fd].object==&model_file.object?&model_file:0;}
+int file_truncate_locked(struct file_description *d,uint64_t bytes){if(bytes>sizeof(model_data))return -EFBIG;d->node->entry.size=(uint32_t)bytes;return 0;}
+int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool write,bool positioned,uint64_t off,size_t *done){
+    CHECK(d==&model_file&&positioned);*done=0;if(model_io_error)return -EIO;
+    if(model_io_interleave)model_io_interleave();
+    if(off>sizeof(model_data)||bytes>sizeof(model_data)-off)return -EINVAL;
+    int err=w32_file_sync(d->node);if(err)return err;
+    if(write){memcpy(model_data+off,buffer,bytes);w32_file_changed(d->node,off,buffer,(uint32_t)bytes);}else memcpy(buffer,model_data+off,bytes);
+    *done=bytes;return 0;
+}
+#include "../../../src/kernel/proc/win32/objects.c"
+#include "../../../src/kernel/proc/win32/wait.c"
+#include "../../../src/kernel/proc/win32/apc.c"
+#include "../../../src/kernel/proc/win32/message.c"
+#include "../../../src/kernel/proc/win32/sections.c"
+#include "../../../src/kernel/proc/win32/service.c"
 #include "../../../src/kernel/proc/sigframe.c"
 #include "../../../src/kernel/core/fpu.c"
 #include "../../../src/kernel/proc/win32/memory.c"
@@ -46,7 +98,7 @@ void vfs_lock(struct vfs *v,uint32_t mask) { CHECK(!mask); fs_lock_take(&v->lock
 void vfs_unlock(struct vfs *v) { fs_lock_drop(&v->lock); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool kwait_wait_until(struct kwait *q, bool (*p)(void *), void *arg, uint64_t deadline)
-{ (void)q; (void)p; (void)arg; (void)deadline; abort(); }
+{ (void)q; if(p(arg))return true; CHECK(deadline>=g_ticks); schedule();return p(arg); }
 void kwait_set_owner(struct kwait *q,struct task *owner) { q->owner=owner; }
 bool kwait_wait_ticket_until(struct kwait *q,kwait_cond_fn p,void *arg,uint64_t deadline,uint32_t *ticket)
 { (void)ticket;return kwait_wait_until(q,p,arg,deadline); }
@@ -238,6 +290,8 @@ static int blob_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
     if (off > b->bytes || bytes > b->bytes - off) return -EIO;
     memcpy(dst, b->data + off, bytes); return 0;
 }
+
+#include "kernel_objects_test.inc"
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--pe")) {
@@ -252,6 +306,6 @@ int main(int argc, char **argv)
         free(parsed);free(b.data);return 0;
     }
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);controller.state=T_RUNNING;g_current=&controller;
-    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();
+    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }
