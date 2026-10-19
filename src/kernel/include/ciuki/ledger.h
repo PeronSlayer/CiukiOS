@@ -10,7 +10,7 @@ enum mm_owner {
     MM_RESERVED, MM_KERNEL_IMAGE, MM_KERNEL, MM_HEAP, MM_STACK,
     MM_TABLE, MM_DMA, MM_DEVICE, MM_CACHE_DATA, MM_CACHE_META,
     MM_CACHE_WORK, MM_USER_PRIVATE, MM_USER_SHARED, MM_VM_PRIVATE,
-    MM_VM_POOL, MM_IO_REQUEST, MM_OWNERS
+    MM_VM_POOL, MM_IO_REQUEST, MM_PFN_DESCRIPTORS, MM_OWNERS
 };
 struct mm_zone_ledger {
     uint32_t usable, free, reserved, resident[MM_OWNERS];
@@ -22,6 +22,10 @@ struct mm_ledger {
     uint32_t mappings, shared_mappings, pin_tokens, pinned_pages, retired_pages;
     uint32_t low, high, pressure_crossings, pressure_suppressed;
     uint32_t mismatches, double_unpins, bad_context;
+    uint32_t hot[MM_OWNERS], cold[MM_OWNERS];
+    uint32_t reclaim_episodes, reclaim_scanned, reclaim_reclaimed;
+    uint32_t reclaim_dirty, reclaim_inflight, reclaim_pinned, reclaim_stalls, reclaim_faults;
+    int32_t reclaim_owner_delta[MM_OWNERS];
     bool pressure;
 };
 enum mm_direction { MM_PIN_CPU, MM_PIN_TO_DEVICE, MM_PIN_FROM_DEVICE, MM_PIN_BIDIRECTIONAL };

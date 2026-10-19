@@ -169,6 +169,12 @@ for ledger_mode in normal strict; do
     "$out/ledger_test_$ledger_mode"
 done
 
+# M3: actual global sampler/scanner with controlled accessed-bit traces.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -fsanitize=address,undefined -I "$root/src/kernel/include" \
+    "$root/tests/host/reclaim_test.c" -o "$out/reclaim_test"
+"$out/reclaim_test"
+
 # f4-04: the physical allocator's contiguous run behind the NTFS mount workspace.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"

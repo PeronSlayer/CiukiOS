@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "cache.h"
+#include <ciuki/reclaim.h>
 #ifndef FS_HOST
 #include <ciuki/ledger.h>
 #include <ciuki/timing.h>
+#include <ciuki/cpu.h>
 static void cache_claim(void *p, enum mm_owner owner) { if (p) mm_claim(V2P(p),1,owner); }
 static void cache_unclaim(void *p, enum mm_owner owner) { if (p) mm_release(V2P(p),1,owner); }
 #else
@@ -18,6 +20,7 @@ static void cache_unclaim(void *p, enum mm_owner owner) { (void)p; (void)owner; 
 void proc_launch_disk_read(uint32_t bytes);
 #pragma weak proc_launch_disk_read
 extern bool file_read_cancelled(void) __attribute__((weak));
+extern bool ledger_pin_transition(void) __attribute__((weak));
 
 /* f4-04 page layouts (docs/design/f4-acceptance.md, "## f4-04"). Data pages
  * hold only media bytes: a page is two 2048-byte halves and a half is four
@@ -432,7 +435,7 @@ int cache_init(struct block_cache *c, size_t bytes) {
             if (!m || m->count==PAGES_PER_META) {
                 struct cache_meta *n=fs_page_alloc(); if (!n) goto fail;
                 cache_claim(n,MM_CACHE_META);
-                n->next=c->meta; c->meta=n; c->meta_pages++; m=n;
+                n->next=c->meta; if (c->meta) c->meta->prev=n; n->prev=0; c->meta=n; c->meta_pages++; m=n;
             }
             pg=&m->pages[m->count];
         }
@@ -463,6 +466,7 @@ int cache_adaptive_enable(struct block_cache *c, uint32_t usable) {
     if (!e) {
         c->floor_pages=CACHE_FLOOR_BYTES/4096; c->ceiling_pages=ceiling;
         c->adaptive=true; c->window_time=fs_now_ms();
+        if (reclaim_cache_register) reclaim_cache_register(c);
         c->window_hits=c->demand_hits; c->window_misses=c->demand_misses;
     }
     fs_lock_drop(&c->lock); return e;
@@ -487,6 +491,30 @@ static uint32_t slice_us(uint64_t start) {
     return g_tsc_per_ms ? (uint32_t)(delta/g_tsc_per_ms*1000+(delta%g_tsc_per_ms)*1000/g_tsc_per_ms) : 0;
 #endif
 }
+/* A transitioning scattered pin may still require a vector lookup. Reclaim
+ * waits for its descriptor publication, then excludes a new transition
+ * through the final single-frame release. No large pin walk in this hook. */
+static bool trim_free_begin(uint32_t *flags) {
+#ifndef FS_HOST
+    *flags=irq_save();
+#else
+    *flags=0;
+#endif
+    if (ledger_pin_transition && ledger_pin_transition()) {
+#ifndef FS_HOST
+        irq_restore(*flags);
+#endif
+        return false;
+    }
+    return true;
+}
+static void trim_free_end(uint32_t flags) {
+#ifndef FS_HOST
+    irq_restore(flags);
+#else
+    (void)flags;
+#endif
+}
 static bool reclaim_page(struct block_cache *c, struct cache_page *pg) {
     bool pinned=page_pinned(pg->data), dirty=false, error=false;
     uint32_t speculative=0;
@@ -507,7 +535,7 @@ static bool reclaim_page(struct block_cache *c, struct cache_page *pg) {
     cache_unclaim(pg->data,MM_CACHE_DATA); fs_page_free(pg->data); pg->data=0;
     c->data_pages--; return true;
 }
-static void reclaim_slice(struct block_cache *c) {
+static void cache_reclaim_slice(struct block_cache *c) {
     uint64_t start=slice_clock();
     c->slice_pages=c->slice_scanned=0;
     c->blocked_pinned=c->blocked_dirty=c->blocked_error=0;
@@ -531,13 +559,102 @@ static void reclaim_slice(struct block_cache *c) {
             c->speculative_bytes<=(total_pages(c)-1)*4096u/8) {
             struct cache_meta **at=&c->meta;
             while (*at!=m) at=&(*at)->next;
-            *at=m->next; c->reclaim_meta=m->next; c->reclaim_index=0;
+            *at=m->next; if (m->next) m->next->prev=m->prev; c->reclaim_meta=m->next; c->reclaim_index=0;
             cache_unclaim(m,MM_CACHE_META); fs_page_free(m); c->meta_pages--; c->slice_pages++;
         }
     }
     c->scanned_pages+=c->slice_scanned; c->reclaimed_pages+=c->slice_pages;
     if (c->slice_pages) c->reclaims++;
     uint32_t us=slice_us(start); if (us>c->max_slice_us) c->max_slice_us=us;
+}
+/* f0-48 calls the C4 hook one physical-frame preflight at a time. Empty
+ * descriptor slots and cursor advances consume the same scan allowance.
+ * Empty metadata pages use constant-time unlinking, as separate preflights. */
+void cache_reclaim_step(struct block_cache *c, bool speculative, struct reclaim_result *out)
+{
+    *out=(struct reclaim_result){0};
+    fs_lock_take(&c->lock);
+    if (!c->adaptive || total_pages(c)<=c->floor_pages || !c->meta) {
+        c->trim_page=0; c->trim_prev=0;
+        out->done=true; fs_lock_drop(&c->lock); return;
+    }
+    out->scanned=1;
+    if (ledger_pin_transition && ledger_pin_transition()) { out->pinned=1; goto done; }
+    if (!c->trim_page) {
+        if (!c->reclaim_meta) { c->reclaim_meta=c->meta; c->reclaim_index=0; }
+        struct cache_meta *m=c->reclaim_meta;
+        if (c->reclaim_index>=m->count) {
+            c->reclaim_meta=m->next; c->reclaim_index=0;
+            bool empty=true;
+            for (unsigned i=0;i<m->count;i++) if (m->pages[i].data) { empty=false; break; }
+            if (empty && !page_pinned(m) && c->speculative_bytes<=(total_pages(c)-1)*4096u/8) {
+                uint32_t flags;
+                if (!trim_free_begin(&flags)) { out->pinned=1; goto done; }
+                if (m->prev) m->prev->next=m->next; else c->meta=m->next;
+                if (m->next) m->next->prev=m->prev;
+                cache_unclaim(m,MM_CACHE_META); fs_page_free(m); c->meta_pages--;
+                out->reclaimed=1; c->reclaimed_pages++; c->reclaims++;
+                trim_free_end(flags);
+            }
+            out->done=!c->reclaim_meta; goto done;
+        }
+        c->trim_page=&m->pages[c->reclaim_index++]; c->trim_slot=0; c->trim_prev=0;
+    }
+    struct cache_page *pg=c->trim_page;
+    if (!pg->data) goto skip;
+    bool unused=true, error=false; uint32_t spec=0;
+    out->pinned=page_pinned(pg->data);
+    for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
+        if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
+        struct cache_block *b=&pg->b[i];
+        out->pinned|=b->waiters!=0; out->inflight|=b->busy;
+        if (b->dev && !b->speculative) unused=false;
+        if (b->speculative) spec+=b->sector_size;
+        if (b->dirty) {
+            out->dirty=1; struct cache_device *d=device(c,b->dev);
+            if (d && !d->error) request_writeback(c,d);
+        } else if (!b->speculative && b->io_error) error=true;
+    }
+    if (out->pinned || out->inflight || out->dirty || error || (speculative && !unused) ||
+        c->speculative_bytes-spec>(total_pages(c)-1)*4096u/8) goto skip;
+    /* Do not run C4's unbounded hash search in a scanner preflight. Detach
+     * at most 32 links per continuation. Descriptors stay resident; a saved
+     * predecessor is usable only while it still belongs to this bucket.
+     * Readers/writers may reuse detached slots between calls: recheck the
+     * whole frame on every continuation and before final release. */
+    unsigned probes=0;
+    while (c->trim_slot<CACHE_PAGE_SLOTS) {
+        unsigned i=c->trim_slot;
+        if ((pg->layout[i/SLOTS_512] && i%SLOTS_512) || !pg->b[i].dev) {
+            c->trim_slot++; c->trim_prev=0; continue;
+        }
+        struct cache_block *b=&pg->b[i], *prev=c->trim_prev;
+        unsigned h=bucket(b->dev,b->lba);
+        if (prev==b || (prev && (!prev->dev || bucket(prev->dev,prev->lba)!=h))) prev=0;
+        struct cache_block **at=prev?&prev->hash_next:&c->hash[h];
+        while (*at && *at!=b && probes<32) {
+            prev=*at; at=&prev->hash_next; probes++;
+        }
+        if (probes==32) { c->trim_prev=prev; goto done; }
+        if (!*at) goto skip; /* concurrent identity change: retry a later pass */
+        *at=b->hash_next; b->hash_next=0; prefetch_finish(c,b,false); b->dev=0;
+        c->trim_slot++; c->trim_prev=0; probes++;
+        if (probes==32) goto done;
+    }
+    for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) if (pg->b[i].dev) {
+        c->trim_slot=0; c->trim_prev=0; goto done;
+    }
+    uint32_t flags;
+    if (!trim_free_begin(&flags)) { out->pinned=1; goto skip; }
+    half_deactivate(c,pg,0); half_deactivate(c,pg,1);
+    cache_unclaim(pg->data,MM_CACHE_DATA); fs_page_free(pg->data); pg->data=0;
+    c->data_pages--; out->reclaimed=1; c->reclaimed_pages++; c->reclaims++;
+    trim_free_end(flags);
+skip:
+    c->trim_page=0; c->trim_prev=0;
+done:
+    c->scanned_pages+=out->scanned;
+    fs_lock_drop(&c->lock);
 }
 static void grow_window(struct block_cache *c, uint32_t allowance) {
     unsigned before=total_pages(c), limit=before+allowance;
@@ -558,7 +675,7 @@ static void grow_window(struct block_cache *c, uint32_t allowance) {
         if (!pg) {
             if (total_pages(c)+2>limit) break;
             m=fs_normal_page_alloc(); if (!m) break;
-            cache_claim(m,MM_CACHE_META); m->next=c->meta; c->meta=m; c->meta_pages++;
+            cache_claim(m,MM_CACHE_META); m->next=c->meta; if (c->meta) c->meta->prev=m; m->prev=0; c->meta=m; c->meta_pages++;
             pg=&m->pages[m->count++];
         }
         pg->data=fs_normal_page_alloc(); if (!pg->data) break;
@@ -575,7 +692,7 @@ void cache_adaptive_tick(struct block_cache *c, uint32_t now, uint32_t free_page
         for (struct cache_stream *s=c->streams;s;s=s->next) stream_decay(s);
     }
     c->pressure=pressure;
-    if (pressure) { c->useful_windows=0; reclaim_slice(c); }
+    if (pressure) { c->useful_windows=0; if (!reclaim_cache_register) cache_reclaim_slice(c); }
     uint32_t elapsed=now-c->window_time;
     if (elapsed>=CACHE_WINDOW_MS) {
         uint64_t hits=c->demand_hits-c->window_hits, misses=c->demand_misses-c->window_misses;
@@ -726,6 +843,7 @@ bool cache_prefetch_tick(struct block_cache *c) {
 }
 
 void cache_destroy(struct block_cache *c) {
+    if (reclaim_cache_unregister) reclaim_cache_unregister(c);
     while (c->streams) cache_stream_close(c->streams);
     if (c->writeback_buffer) for (unsigned i=0;i<c->writeback_pages;i++) cache_unclaim(c->writeback_buffer+i*4096u,MM_CACHE_WORK);
     fs_contig_free(c->writeback_buffer,c->writeback_pages*4096u);
