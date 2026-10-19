@@ -686,6 +686,59 @@
         ]
       },
       "integration_pending": "authored, unrun: lead supplies guest codec probe and T23 execution; host models do not qualify the guest"
+    },
+    {
+      "id": "w32-upper-dlls-qemu-t23",
+      "probe": "w32-upper-dlls",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-upper-dlls run={run_id}",
+      "timeout": 120,
+      "integration_pending": "authored, unrun: complete Wine upper PE builds, source patches, core amendments and lead guest exercise driver required; current DirectSetup host evidence does not close this gate",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "upper_dlls"
+            },
+            "fields": {
+              "dlls": {
+                "eq": 18
+              },
+              "unresolved_imports": {
+                "eq": 0
+              },
+              "unresolved_forwards": {
+                "eq": 0
+              },
+              "attach_errors": {
+                "eq": 0
+              },
+              "conformance_errors": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "upper_teardown"
+            },
+            "fields": {
+              "detach_errors": {
+                "eq": 0
+              },
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

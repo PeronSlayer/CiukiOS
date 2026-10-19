@@ -114,7 +114,10 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertIn('/WINDOWS/SYSTEM',directories)
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            self.assertEqual(len(meta['builtins']),28)
+            self.assertEqual(len(meta['builtins']),30)
+            self.assertIn('/WINDOWS/SYSTEM/dsetup.dll',sources)
+            self.assertIn('/WINDOWS/SYSTEM/dsetup32.dll',sources)
+            self.assertIn('/WINDOWS/SYSTEM/upper-builtins-inventory.json',sources)
             self.assertIn('/WINDOWS/SYSTEM/imaadp32.acm',sources)
             self.assertIn('/system/licenses/WINE-SOURCE-OFFER.txt',sources)
             self.assertIn('/WINDOWS/SYSTEM/codecs-inventory.json',sources)
@@ -128,5 +131,21 @@ class KernelLoaderTests(unittest.TestCase):
             binary.write_bytes(original_binary)
             raw=bytearray((folder/'ntdll.dll').read_bytes());raw[-1]^=1;(folder/'ntdll.dll').write_bytes(raw)
             with self.assertRaisesRegex(ValueError,'SHA256'):image.win32_payloads(folder)
+
+    def test_upper_directsetup_store_measurements(self):
+        import re
+        builtins.build(self.images/'WINDOWS/SYSTEM')
+        results={}
+        for name,mode in (('baseline','upper-store-baseline'),('dsetup.dll','upper-store-dsetup'),
+                          ('dsetup32.dll','upper-store-dsetup32')):
+            out=self.command(mode,self.images/'console.exe')
+            self.assertIn('PASS kernel DirectSetup store H0 '+name,out)
+            self.assertIn('bind/callback observation only',out)
+            results[name]={'peak_bytes':int(re.search(r'peak_bytes=(\d+)',out)[1]),
+                           'peak_cow_commitments':int(re.search(r'cow_credits=(\d+)',out)[1])}
+        for name in ('dsetup.dll','dsetup32.dll'):
+            self.assertGreater(results[name]['peak_bytes'],results['baseline']['peak_bytes'])
+            results[name]['increment_over_baseline_bytes']=results[name]['peak_bytes']-results['baseline']['peak_bytes']
+        (self.out/'directsetup-store-results.json').write_text(json.dumps(results,indent=2)+'\n')
 
 if __name__=='__main__':unittest.main()

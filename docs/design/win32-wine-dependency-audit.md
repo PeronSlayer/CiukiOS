@@ -4,6 +4,85 @@ Date: 2026-10-14. Host-only evidence for the lead before the core ABI freeze.
 The machine-readable census is `config/wine-audit.json`; the release and
 tool/source pins are in `config/wine-pin.json`.
 
+## Milestone B research and delivery boundary (2026-10-19)
+
+Research precedes implementation. The pinned Wine 10.0 Makefiles and export
+specifications for all fifteen upper candidates were re-read through the GitHub
+connector at commit `b073859675060c9211fcbccfd90e4e87520dc2c2`.
+Examples: [COMCTL32](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/comctl32/Makefile.in),
+[COMBASE](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/combase/Makefile.in),
+[RPCRT4](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/rpcrt4/Makefile.in),
+[MSVCRT](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/msvcrt/Makefile.in).
+The checked-in, hash-pinned snapshots remain the offline authority.
+
+The actual [RPC transport implementation](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/rpcrt4/rpc_transport.c)
+contains named-pipe, local RPC, TCP and HTTP paths; removing just WS2_32 from
+IMPORTS would not disable those transports. The
+[COMBASE RPCSS implementation](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/combase/rpc.c)
+starts a service and contacts RPCSS. Both require real source patches and
+behavioral tests before qualification. No fabricated patch or successful COM
+load is recorded while the complete source tree is unavailable.
+
+Decision: audit actual PE names and ordinals, eager and delayed imports, and
+all exported forwarders recursively against actual provider PEs. Keep linked
+evidence separate from the existing source-reference candidates. Missing
+core exports require an explicit core amendment or an implemented Wine-side
+patch; no generic zero-return substitute is an implementation decision.
+The production section store eagerly seeds header/raw pages, but currently
+records writable COW promises rather than allocating all private pages at
+load. Report seed residency and COW commitment separately; neither includes
+DllMain heaps, page tables, metadata, or whole-system 128 MiB qualification.
+
+For DirectSetup, [Microsoft's installation documentation](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/directx-setup-for-game-developers)
+distinguishes core runtime identity from optional components. The original
+CiukiOS builtins implement the contract's 7.0a no-copy identity, with success
+0 (no reboot); version query success is nonzero. ABI/constant cross-checks:
+[upstream DirectSetup declarations](https://github.com/reactos/reactos/blob/master/sdk/include/dxsdk/dsetup.h),
+[upstream compatibility shim](https://github.com/reactos/reactos/blob/master/dll/appcompat/shims/layer/forcedxsetupsuccess.c).
+No implementation is copied. Version is `0x00040007`, revision 716
+([Microsoft's period clarification](https://groups.google.com/g/microsoft.public.directx/c/08tNGC7hF9A)).
+DirectXSetup has no requested-version parameter: recognizing later packages
+requires installer preflight, and remains an explicit unqualified gate.
+Unknown component flags (including Managed DirectX) return
+`DSETUPERR_BADWINDOWSVERSION` (-1); the period component/UI/test flag set
+returns the approved already-installed success without copying anything.
+
+IMM32 retains the existing census-sized W21 placeholder rather than pretending
+to supply an IME. Its full Wine candidate also imports WIN32U. The allowed stub
+choice is not a measured size comparison against an unbuilt Wine DLL.
+[ImmGetContext](https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetcontext)
+and [ImmGetCompositionString](https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetcompositionstringa)
+remain distinct APIs with different failure conventions.
+
+Wine's [LICENSE](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/LICENSE),
+[AUTHORS](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/AUTHORS)
+and [LGPL 2.1](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html) were checked.
+Distributing reused PEs requires complete corresponding source, modifications
+and build instructions; upstream URLs alone do not supply that source.
+
+The release-archive attempt on this worktree failed with curl exit 6 (DNS).
+There is no full Wine source cache or original ten-title import census here.
+Consequently Wine upper PE builds, patched transports/RPCSS, Wine conformance,
+the MSVCRT comparison and the 128 MiB gate remain incomplete. The B tools and
+report must preserve these facts and refuse unqualified reused inventory.
+
+B host evidence: both authored DirectSetup DLLs are 2,560 file bytes and
+16,384 SizeOfImage bytes, with four cold seed pages and zero writable COW
+promises each. Fresh production kernel-store H0 runs peak at 77,824 bytes
+versus a 45,056-byte store-only baseline (32,768-byte increment per DLL),
+and return model resources to zero. PE callbacks are observed; actual i386
+execution is blocked by seccomp. Two consecutive standalone build script
+runs have identical hashes. These are not Wine DLL or hardware measurements.
+
+API reference generation, apps and the unchanged kernel builder pass. The
+focused upper/store/metadata checks pass (11 tests, one explicit seccomp skip).
+Full Win32 discovery runs 137 tests: 124 pass, 12 skip and the unchanged
+USER32 production test fails with an ASan call through address zero; that
+failure reproduces alone. The source state has no staged MSVCRT PE, so its
+manifest policy now says so explicitly rather than implying a placeholder
+exists. Exact artifacts, missing candidate names and remaining gates are
+recorded in `build/codex/f5-14b-report.md`.
+
 ## Milestone C research and implementation boundary (2026-10-19)
 
 All Wine references below refer to commit
