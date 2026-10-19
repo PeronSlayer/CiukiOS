@@ -78,3 +78,62 @@ permanent recovery suppression and a stale-return fault. Neither expiry
 nor return evidence sends PIC EOI. Stack switches alone are not return proof.
 The host trampoline remains the immediate, complete-context return path.
 See the F3-44 rule in `execution-abi.md` and `build/codex/f3-44-report.md`.
+
+## F3-45 research and implementation decision (2026-10-19)
+
+Read before changing code:
+
+- [DPMI 0.9, sections 2.4/2.4.1 and 3.1.2–3.1.4](https://www.phatcode.net/res/262/files/dpmi09.html):
+  handlers return with IRET or chain; hardware handlers use locked memory.
+  The host switches onto its locked stack for the first handler, nested
+  handlers share the current stack, and the host keeps the suspended
+  context private.
+- [Open Watcom Programmer's Guide, DOS/4GW interrupt handling, 32-Bit Gates
+  and Chaining 16-bit and 32-bit Handlers](https://open-watcom.github.io/open-watcom-1.9/pguide.html):
+  DOS/4GW interposes a stack switch before invoking the handler; a handler
+  must IRET/IRETD or chain. The handler's stack need not be the interrupted
+  stack. These conventions do not prove any particular DOOM stack address.
+
+Repository comparison: F3-44's `dpmi_irq_resync` equates ESP at or above
+the constructed frame's end with consumption. Flat selectors cover many
+private stacks, so the same selector, base and width can satisfy that test
+while a handler is still live. `handler_frame` deliberately keeps private
+stacks for nested handlers. The inference can therefore discard a valid
+IRQRET continuation, and `pmint_return` then faults at the host stub.
+
+Decision (supersedes F3-44's consumed-frame rule): only the exact saved
+mode/CS:EIP/SS:ESP or a host return stub retires a hardware continuation.
+Keep the separate 50 ms obligation expiry and existing IF recovery policy.
+IRQRET may unwind to the newest hardware continuation of the current
+client when other records obscure it. The host restores its own saved
+context; guest stack contents cannot supply a replacement. With no such
+continuation the return still faults. Count every recovery, bound its
+protected log to once per second per VM, and protect fault registers, the
+first stack row and record-stack metadata against verbose-ring overflow.
+
+Host evidence: the new flat-stack regression, run first with the original
+F3-44 retirement logic, stopped at `reason=2 vector=13 pc=000f1320 depth=1
+retired=1 irq7=1 irq0=1`. IRQ7's record had been dropped during delivery
+of IRQ0 on the higher stack. With F3-45 it returns through both IRQRET
+stubs, keeps the enclosing software continuation until SOFTRET, and closes
+each IRQ sample once (`isr_retired=0`, since that counter tracks resync,
+not normal trampoline completion). Exact PM/V86 returns still retire;
+16/32-bit edited-target cases now retain their continuations. Existing
+nested IRQ7/IRQ0, 49/50 ms expiry and expired late returns pass.
+
+Additional host checks cover each mismatched context component, newest
+current-client selection below software/foreign-client records, exactly-once
+duration closure for skipped measured records, unchanged PIC ISR bits until
+guest EOI, logs at 0/999/1000/2000 ms, and rejection of missing/foreign-only
+hardware continuations. Quiet, probe-inactive fault shutdown with a full
+deferred verbose queue publishes protected PC/metadata, registers and the
+first stack words. The sanitized VM harness passes 24,009,196 checks; its
+largest record is 237 bytes. This reproduces the retirement/fault mechanism
+on synthetic production-code boundaries, not DOOM gameplay or T23 timing.
+QEMU and the next physical trial remain the lead's validation work.
+
+Final checks: complete `host_kernel_tests.sh` passes with ASan/UBSan and
+exit 0 (the optional DOS guest runner skips because its payload image is
+absent). `scripts/build_kernel.py` compiles and links `VMM.ELF` and passes
+the FPU/SIMD audit. API reference regeneration is unchanged. Host tests ran
+sequentially with `nice -n 19`; no QEMU or disk-image build was performed.

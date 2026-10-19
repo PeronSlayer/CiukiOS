@@ -44,6 +44,49 @@ static void test_isr_recovery_boundary(void)
     puts("f3-42 ISR return: 16/32-bit, pending IRQ, nested software frame, no recovery TF/timeout, immediate return delivery PASS");
 }
 
+static void test_isr_flat_private_stack(void)
+{
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    struct dpmi *d = &v->dpmi;
+    uint16_t code = (uint16_t)cur.tf.cs;
+    d->vec[8] = (struct dpmi_vec){.sel=code, .off=0x700};
+    d->vec[15] = (struct dpmi_vec){.sel=code, .off=0x720};
+    d->vec[0x1C] = (struct dpmi_vec){.sel=code, .off=0x740};
+    device_out(v, 0x21, 0x7E);
+    struct v86_frame original = cur;
+    /* An enclosing handler gives nested delivery its real private-stack
+     * scope. Both IRQs then use one flat selector, as in DOS/4GW. */
+    CHECK(!dpmi_enter_pm_handler(v, &cur, 0x1C, 0));
+    struct v86_frame software = cur;
+    client_desc(v, 902, 0, 0xFFFFFFFFu, 0xF2, 0xC0);
+    cur.tf.user_ss = DPMI_SEL(902); cur.tf.user_esp = 0x18000;
+    v->monitor.vif = true;
+    CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
+    CHECK(d->depth == 2 && cur.tf.user_ss == DPMI_SEL(902) && cur.tf.user_esp == 0x18000 - 12);
+    struct v86_frame handler = cur;
+    cur.tf.user_esp = 0x1A000; cur.tf.eip++;
+    v->monitor.vif = true;
+    CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+    CHECK(cur.tf.eip == 0x700);
+    const uint8_t eoi[] = {0xE6, 0x20}; cur.tf.eax = 0x20;
+    exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+    /* Return from the private stack to the original IRQ7 IRET frame.
+     * F3-44 already discarded that record at the nested IRQ0 delivery. */
+    cur = handler; cur.tf.eax = 0x20;
+    exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+    if (v->info.state >= DOSVM_STOPPING)
+        fprintf(stderr, "f3-45 IRQRET failure: reason=%u vector=%u pc=%08x depth=%u retired=%u irq7=%u irq0=%u\n",
+                v->info.reason, v->info.fault_vector, v->info.fault_eip, d->depth,
+                v->perf.isr_retired, v->perf.isr[7].count, v->perf.isr[0].count);
+    CHECK(v->info.state < DOSVM_STOPPING && d->depth == 1);
+    CHECK(v->perf.isr[7].count == 1 && v->perf.isr[0].count == 1 && !v->perf.isr_retired);
+    CHECK(!v->monitor.pic[0].isr && !v->perf.isr_late_return);
+    cur = software; pm_iret(v); at_stub(v, DPMI_PM_SOFTRET);
+    CHECK(!d->depth && cur.tf.eip == original.tf.eip && cur.tf.user_esp == original.tf.user_esp);
+    destroy(v, true); empty();
+    puts("f3-45 flat private stack: nested IRQ0 above IRQ7 frame on same selector, IRQRET survives, each ISR closes once PASS");
+}
+
 static void test_isr_return_evidence(void)
 {
     for (unsigned bits = 0; bits < 2; bits++) for (unsigned form = 0; form < 3; form++) {
@@ -62,19 +105,42 @@ static void test_isr_return_evidence(void)
         struct v86_frame original = cur;
         CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
         CHECK(v->dpmi.depth == 1 && dosvm_in_irq(v));
-        struct dpmi_record r = v->dpmi.rec[0];
+        struct v86_frame handler = cur;
         if (!form) {
-            /* IRET consumed the constructed frame but the client changed
-             * its target. Preserve the actual returned frame/registers. */
-            cur.tf.user_esp = r.isr_stack_end;
+            /* F3-45: an edited target and ESP above the frame cannot
+             * distinguish return from a still-live private stack. */
+            cur.tf.user_esp += 3 * dpmi_width(v);
             cur.tf.eip = 0x760;
-        } else { cur = original; v->frame_pm = form != 2; }
+        } else {
+            cur = original; v->frame_pm = form != 2;
+            /* Each part of the exact saved context matters independently. */
+            for (unsigned mismatch = 0; mismatch < 5; mismatch++) {
+                struct v86_frame near = original;
+                if (!mismatch) near.tf.cs ^= 8;
+                else if (mismatch == 1) near.tf.eip++;
+                else if (mismatch == 2) near.tf.user_ss ^= 8;
+                else if (mismatch == 3) near.tf.user_esp++;
+                else v->frame_pm = !v->frame_pm;
+                dpmi_irq_resync(v, &near);
+                CHECK(v->dpmi.depth == 1 && !v->perf.isr_retired && !v->perf.isr[7].count);
+                v->frame_pm = form != 2;
+            }
+        }
         cur.tf.eax = 0x12345678;
         struct v86_frame returned = cur;
         dpmi_irq_resync(v, &cur);
-        CHECK(!v->dpmi.depth && !dosvm_in_irq(v) && v->monitor.vif && v->perf.isr_retired == 1);
-        CHECK(v->perf.isr[7].count == 1 && !memcmp(&cur, &returned, sizeof(cur)));
-        CHECK(v->monitor.pic[0].isr == 0x80); /* expiry is never a PIC EOI */
+        CHECK(!memcmp(&cur, &returned, sizeof(cur)));
+        if (!form) {
+            CHECK(v->dpmi.depth == 1 && dosvm_in_irq(v) && !v->monitor.vif &&
+                  !v->perf.isr_retired && !v->perf.isr[7].count);
+            dpmi_irq_resync(v, &cur); CHECK(!v->perf.isr[7].count);
+            cur = handler; pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+            CHECK(!v->dpmi.depth && v->monitor.vif && v->perf.isr[7].count == 1 && !v->perf.isr_retired);
+        } else {
+            CHECK(!v->dpmi.depth && !dosvm_in_irq(v) && v->monitor.vif && v->perf.isr_retired == 1);
+            CHECK(v->perf.isr[7].count == 1);
+        }
+        CHECK(v->monitor.pic[0].isr == 0x80); /* return is never a PIC EOI */
         dpmi_irq_resync(v, &cur); CHECK(v->perf.isr[7].count == 1);
         destroy(v, true); empty();
     }
@@ -94,7 +160,7 @@ static void test_isr_return_evidence(void)
     CHECK(!v->dpmi.depth && !dosvm_in_irq(v) && v->perf.isr[7].count == 1 &&
           v->monitor.pic[0].isr == 0x81);
     destroy(v, true); empty();
-    puts("f3-44 ISR evidence: 16/32-bit consumed/edited IRET, exact PM/V86 prompt return, nested retirement, actual registers preserved, no synthetic EOI PASS");
+    puts("f3-45 ISR evidence: 16/32-bit edited target retains continuation, exact PM/V86 prompt return retires, nested retirement, actual registers preserved, no synthetic EOI PASS");
 }
 
 static void test_isr_expiry(void)

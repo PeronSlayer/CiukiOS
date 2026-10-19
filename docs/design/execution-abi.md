@@ -1447,20 +1447,32 @@ PUSHF following an IF-clear POPF sees the same physical flags as hardware.
 
 On every monitor entry and before IRQ delivery, reconcile the hardware ISR
 records against the actual guest context. The host HLT/INT FE return remains
-the immediate path that restores the complete interrupted context. Outside
-those stubs, a stack pointer at or above the end of the constructed IRET
-frame, in the same mode and stack descriptor, or the exact interrupted
-CS:IP and SS:SP, retires that IRQ and nested continuation records. Preserve
-the actual guest registers and any edited IRET target; restore virtual IF
-from the interrupted host record. Moving to an unrelated private stack is
-not sufficient evidence. Keep the allocator below a still-live host stack.
-Observed return to a V86 DOS prompt MUST leave no outstanding IRQ record.
+the immediate path that restores the complete interrupted context. F3-45
+supersedes the consumed-frame inference: outside those stubs, only the exact
+saved mode, CS:EIP and SS:ESP retires that IRQ and nested continuation
+records. Preserve the actual guest registers and restore virtual IF from
+the interrupted host record. An edited target or a stack pointer at or above
+the constructed frame MUST NOT prove return: a flat-model client's single
+selector can cover several private stacks, including higher addresses used
+by a still-running handler. DOS/4GW also interposes its own stack switching.
+Keep the allocator below a still-live host stack with `dpmi_lock_below` after
+an exact return. Exact return to an interrupted V86 DOS prompt MUST leave
+no outstanding IRQ record.
+
+At IRQRET, if the top record is not the current client's hardware PMINT,
+use the newest hardware continuation belonging to that client and retire
+all records above it. Close each measured ISR once and restore only the
+host-owned saved context. Count these late returns and emit their protected
+diagnostic at most once per second per VM. With no matching hardware
+continuation, IRQRET MUST still fault; SOFTRET MUST still match a software
+PMINT. No guest-supplied return frame grants authority to invent a saved
+context. Research and regressions: `f3-42-guest-isr-latency.md`, F3-45.
 
 A hardware ISR obligation expires after 50 ms even without return proof.
 Its duration is closed once; it no longer blocks ordinary-code IF recovery
 or deferred diagnostics. Retain its continuation until a proven return or
 the normal trampoline, so a late return still restores the right context.
-Neither inferred return nor expiry acknowledges the virtual PIC: guest EOI,
+Neither exact return nor expiry acknowledges the virtual PIC: guest EOI,
 masks, priorities and STI shadows continue to determine eligibility.
 
 Verified saved-image TF, as used by Windows 95, and checked POPF/IRET

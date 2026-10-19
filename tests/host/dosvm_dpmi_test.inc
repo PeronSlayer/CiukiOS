@@ -807,6 +807,69 @@ static void test_dpmi_irq_exceptions(void)
     printf("DPMI dispatch: IRQ reflection/PM handler from both modes, STI shadow, EOI, exceptions, edited/forged frames\n");
 }
 
+static void test_dpmi_irq_late_return(void)
+{
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    struct dpmi *d = &v->dpmi;
+    uint16_t code = (uint16_t)cur.tf.cs;
+    d->vec[8] = (struct dpmi_vec){.sel=code, .off=0x700};
+    d->vec[15] = (struct dpmi_vec){.sel=code, .off=0x720};
+    d->vec[0x1C] = (struct dpmi_vec){.sel=code, .off=0x740};
+    device_out(v, 0x21, 0x7E);
+    uint64_t saved_ticks = g_ticks;
+    const unsigned ticks[] = {0, 999, 1000, 2000};
+    unsigned logs = dosvm_logs, stale = d->stats.stale;
+    for (unsigned i = 0; i < ARRAY_SIZE(ticks); i++) {
+        g_ticks = ticks[i];
+        struct v86_frame original = cur;
+        CHECK(dosvm_irq_raise(v->info.key, 7)); step(v, 0x20, 0);
+        struct v86_frame handler = cur;
+        cur.tf.eip++; v->monitor.vif = true;
+        CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
+        CHECK(d->depth == 2);
+        struct v86_frame inner = cur, interrupted = d->rec[1].saved;
+        interrupted.tf.vector = interrupted.tf.err = 0;
+        CHECK(!dpmi_enter_pm_handler(v, &cur, 0x1C, 0));
+        /* A foreign client's record cannot be selected, but a measured
+         * obligation above the chosen continuation must close once. */
+        struct dpmi_record *foreign;
+        CHECK(!dpmi_push_record(v, &cur, DPMI_REC_PMINT, &foreign));
+        foreign->flags = DPMI_RF_HWINT; foreign->client = d->clients + 1;
+        dosvm_isr_begin(v, foreign, 5);
+        cur = inner; pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+        CHECK(v->info.state < DOSVM_STOPPING && d->depth == 1 && d->stats.stale == stale);
+        CHECK(!memcmp(&cur, &interrupted, sizeof(cur)) && v->perf.isr_late_return == i + 1);
+        CHECK(v->perf.isr[0].count == i + 1 && v->perf.isr[5].count == i + 1 &&
+              v->perf.isr[7].count == i && v->monitor.pic[0].isr == 0x81);
+        CHECK(dosvm_logs == logs + (i ? i : 1)); /* tick zero, 999ms suppressed, 1000ms allowed */
+        CHECK(strstr(last_dosvm_log, "[dosvm] isr late_return") &&
+              strstr(last_dosvm_log, "depth=4 skipped=2 cs=1fff eip=00000120"));
+        /* Guest supplies no context: arbitrary registers at IRQRET cannot
+         * replace the host's saved frame. The outer IRQ remains live. */
+        cur = handler; pm_iret(v); cur.tf.eax = 0xDEADBEEF; cur.tf.user_esp = 0xFFFF0000;
+        at_stub(v, DPMI_PM_IRQRET);
+        CHECK(!d->depth && cur.tf.eax == original.tf.eax && cur.tf.eip == original.tf.eip &&
+              cur.tf.user_esp == original.tf.user_esp && v->perf.isr[7].count == i + 1);
+        device_out(v, 0x20, 0x20); device_out(v, 0x20, 0x20);
+    }
+    /* No current-client continuation: even a foreign hardware record
+     * cannot turn a forged IRQRET into a valid return. */
+    struct dpmi_record *foreign;
+    CHECK(!dpmi_push_record(v, &cur, DPMI_REC_PMINT, &foreign));
+    foreign->flags = DPMI_RF_HWINT; foreign->client = d->clients + 1;
+    cur.tf.cs = DPMI_HOST_CS; cur.tf.eip = DPMI_PM_IRQRET; step(v, 13, 0);
+    CHECK(v->info.state == DOSVM_STOPPING && v->info.reason == DOSVM_FAULT &&
+          d->stats.stale == stale + 1 && d->depth == 1 && v->perf.isr_late_return == 4);
+    CHECK(strstr(fault_pc_record, "depth=1 kind=4 flags=2"));
+    destroy(v, true); empty(); g_ticks = saved_ticks;
+    /* An empty record stack is still a forged return. */
+    v = dpmi_vm(true); v86_start(); enter(v, true);
+    cur.tf.cs = DPMI_HOST_CS; cur.tf.eip = DPMI_PM_IRQRET; step(v, 13, 0);
+    CHECK(v->info.state == DOSVM_STOPPING && v->info.reason == DOSVM_FAULT && v->dpmi.stats.stale == 1);
+    destroy(v, true); empty();
+    puts("f3-45 late IRQRET: newest current-client continuation, skipped ISR closes once, host-owned frame, 1s protected log bound, foreign/empty forged return faults PASS");
+}
+
 static void test_dpmi_io_watch(void)
 {
     struct dosvm *v = dpmi_vm(true);
@@ -1165,6 +1228,7 @@ static void test_dpmi(void)
     test_dpmi_memory_misc();
     test_dpmi_dos_memory();
     test_dpmi_irq_exceptions();
+    test_dpmi_irq_late_return();
     test_dpmi_io_watch();
     test_dpmi_nesting_chaining();
     test_dpmi_stale_frames();
