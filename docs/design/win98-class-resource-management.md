@@ -740,3 +740,34 @@ conflicts in the lead's cross-review. Completion of the later resource work
 requires every applicable C/M/R/D criterion on the same integrated image;
 neither this document nor a passing isolated host model constitutes that
 completion.
+
+## Lead cross-review (Claude, 2026-10-19)
+
+Decision: the contract is accepted as the binding design for the owner's
+requirement of 2026-10-19 (dev diary 2026-10-19-03 and 2026-10-19-04), with
+these resolutions of the conflicts table and of the research closure:
+
+1. Every number in the acceptance criteria is CiukiOS policy until a primary
+   source states the Windows 98/ME value; an implementation directive may
+   change a number only with the measured evidence that motivates it. The
+   seven open research questions stay open in the audit; the lead asks the
+   owner for the original Windows 98 DDK and Resource Kit media. No directive
+   waits for that closure: mechanisms are implemented now, constants are
+   revisited when the sources arrive.
+2. Not adopted from Windows 98, as proposed: cooperative Win16 scheduling,
+   VxD binary loading and the INT 20h service ABI, system-arena exhaustion
+   and permissive protection, VREDIR/VSERVER caching.
+3. Quanta: 10 ms ordinary and 2 ms sensitive stay (R2); the historical 20 ms
+   slice is not adopted. IRQ-off software target 100 µs stays, firmware
+   pauses are attributed, never hidden. Audio nominal lead (f4-32) and the
+   timeline policy (f4-35) stay; a change needs its own reviewed directive.
+4. Dirty budget 12.5 % / 1 s age (C1) is accepted as the f1-82 policy with
+   its host replay; the same-volume reader fairness (C3) and staged FAT
+   publication (C2/C5) follow in f1-83/f1-84 as sequenced.
+5. Removable media: write-through pending source closure; no behaviour
+   change until f1-85.
+6. Order and parallelism: f1-82 (in progress) → f0-43 and f0-45 in parallel
+   (disjoint files) → f0-44 → f0-46 → f1-83 → f1-84 → f1-85 → f0-47 →
+   f0-48 → f0-49 → f3-46. Each step lands on `main` after host suites and a
+   canonical build; physical acceptance per image on the T23 per the owner's
+   current process (QEMU gates suspended).
