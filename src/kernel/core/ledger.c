@@ -6,6 +6,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/ledger.h>
 #include <ciuki/task.h>
+#include <ciuki/reclaim.h>
 
 #define PIN_SLOTS 64u
 struct pin_slot {
@@ -19,7 +20,7 @@ static struct {
     struct pin_slot pins[PIN_SLOTS];
     struct mm_ledger profile[3];
     uint64_t profile_tick[3];
-    uint32_t ticket, sequence, critical, irq_context, profiles;
+    uint32_t ticket, sequence, critical, irq_context, profiles, pin_updates;
     const struct task *critical_task;
     uint64_t desktop_due;
     uint32_t record_id;
@@ -32,14 +33,15 @@ _Static_assert(sizeof(ledger) <= 16384, "M1 kernel data budget");
 static unsigned zone(uint32_t pfn) { return pfn < 256 ? ZONE_LOW : pfn < 4096 ? ZONE_DMA : ZONE_NORMAL; }
 static const char *const owners[MM_OWNERS] = {
     "reserved", "image", "kernel", "heap", "stack", "tables", "dma", "device",
-    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool", "io_request"
+    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool", "io_request", "pfn_descriptors"
 };
 static void pressure_update(void)
 {
     struct mm_ledger *v = &ledger.value;
     uint32_t free = v->zone[ZONE_NORMAL].free;
     bool next = v->pressure ? free <= v->high : free < v->low;
-    if (next != v->pressure) { v->pressure = next; v->pressure_crossings++; }
+    if (next != v->pressure) { v->pressure = next; v->pressure_crossings++;
+        if (reclaim_wake) reclaim_wake(); }
     ledger.sequence++;
 }
 void ledger_init(void) { memset(&ledger, 0, sizeof(ledger)); }
@@ -50,7 +52,10 @@ void ledger_boot_page(uint32_t pfn, enum mm_owner owner, bool free)
     if (free) z->free++;
     else {
         z->resident[owner]++;
-        if (owner == MM_RESERVED || owner == MM_KERNEL_IMAGE) z->reserved++;
+        ledger.value.cold[owner]++;
+        struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(pfn*PAGE_SIZE):0;
+        if (d) d->reserved=owner;
+        if (owner == MM_RESERVED || owner == MM_KERNEL_IMAGE || owner == MM_PFN_DESCRIPTORS) z->reserved++;
     }
 }
 void ledger_boot_done(void)
@@ -64,6 +69,9 @@ void ledger_alloc_page(uint32_t pfn)
 {
     struct mm_zone_ledger *z = &ledger.value.zone[zone(pfn)];
     z->free--; z->resident[MM_KERNEL]++; pressure_update();
+    ledger.value.cold[MM_KERNEL]++;
+    struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(pfn*PAGE_SIZE):0;
+    if (d) d->reserved=MM_KERNEL;
 }
 void ledger_free_page(uint32_t pfn)
 {
@@ -71,6 +79,9 @@ void ledger_free_page(uint32_t pfn)
     if (!z->resident[MM_KERNEL]) ledger.value.mismatches++;
     else z->resident[MM_KERNEL]--;
     z->free++; pressure_update();
+    struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(pfn*PAGE_SIZE):0;
+    uint32_t *temperature=d && (d->reserved&MM_PAGE_HOT)?ledger.value.hot:ledger.value.cold;
+    if (temperature[MM_KERNEL]) temperature[MM_KERNEL]--;
 }
 void ledger_move(uint32_t phys, uint32_t pages, enum mm_owner from, enum mm_owner to)
 {
@@ -88,11 +99,40 @@ void ledger_move(uint32_t phys, uint32_t pages, enum mm_owner from, enum mm_owne
     for (unsigned z = 0; z < 3; z++) if (ledger.value.zone[z].resident[from] < counts[z]) {
         ledger.value.mismatches++; irq_restore(f); return;
     }
-    for (unsigned z = 0; z < 3; z++) {
-        ledger.value.zone[z].resident[from] -= counts[z];
-        ledger.value.zone[z].resident[to] += counts[z];
+    for (uint32_t p=first;p<end;) {
+        uint32_t limit=end-p>32?p+32:end;
+        for (;p<limit;p++) {
+            struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(p*PAGE_SIZE):0;
+            bool hot=d && (d->reserved&MM_PAGE_HOT);
+            uint32_t *temperature=hot?ledger.value.hot:ledger.value.cold;
+            if (temperature[from]) temperature[from]--;
+            /* Releasing to the allocator also drops its activity history. */
+            bool keep_hot=hot && to!=MM_KERNEL;
+            (keep_hot?ledger.value.hot:ledger.value.cold)[to]++;
+            if (d) d->reserved=(d->reserved&~(MM_PAGE_OWNER_MASK|MM_PAGE_HOT))|to|(keep_hot?MM_PAGE_HOT:0);
+            ledger.value.zone[zone(p)].resident[from]--;
+            ledger.value.zone[zone(p)].resident[to]++;
+        }
+        ledger.sequence++;
+        irq_restore(f); f=irq_save();
     }
     ledger.sequence++;
+    irq_restore(f);
+}
+void ledger_page_activity(uint32_t phys, bool hot)
+{
+    uint32_t f=irq_save();
+    struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(phys):0;
+    if (d && !pmm_page_free(phys/PAGE_SIZE)) {
+        unsigned owner=d->reserved&MM_PAGE_OWNER_MASK;
+        bool was=!!(d->reserved&MM_PAGE_HOT);
+        if (owner<MM_OWNERS && was!=hot) {
+            uint32_t *old=was?ledger.value.hot:ledger.value.cold;
+            if (old[owner]) old[owner]--;
+            (hot?ledger.value.hot:ledger.value.cold)[owner]++;
+            d->reserved=(d->reserved&~MM_PAGE_HOT)|(hot?MM_PAGE_HOT:0);
+        }
+    }
     irq_restore(f);
 }
 void ledger_promise(enum mm_owner owner, int32_t reserved, int32_t committed)
@@ -175,11 +215,35 @@ bool ledger_reconcile(void)
             if (accounted != v.zone[z].usable || free[z] != v.zone[z].free ||
                 free[z] != pmm_zone_free(z) || v.zone[z].usable != pmm_zone_total(z)) ok = false;
         }
+        for (unsigned o=0;o<MM_OWNERS;o++) {
+            uint32_t resident=0;
+            for (unsigned z=0;z<3;z++) resident+=v.zone[z].resident[o];
+            if (v.hot[o]+v.cold[o]!=resident) ok=false;
+        }
         if (!ok) { ledger.value.mismatches++; ledger.reported_mismatches=ledger.value.mismatches; }
         irq_restore(f);
         if (!ok) klog("[mem] ledger mismatch sequence=%u count=%u", seq, v.mismatches + 1);
         return ok;
     }
+}
+
+void ledger_reclaim_account(const struct reclaim_result *r,unsigned episodes,unsigned faults,unsigned stalls)
+{
+    uint32_t f=irq_save();
+    ledger.value.reclaim_episodes+=episodes;
+    ledger.value.reclaim_faults+=faults; ledger.value.reclaim_stalls+=stalls;
+    if (r) {
+        ledger.value.reclaim_scanned+=r->scanned; ledger.value.reclaim_reclaimed+=r->reclaimed;
+        ledger.value.reclaim_dirty+=r->dirty; ledger.value.reclaim_inflight+=r->inflight;
+        ledger.value.reclaim_pinned+=r->pinned;
+    }
+    irq_restore(f);
+}
+void ledger_reclaim_owner_delta(unsigned owner,int32_t delta)
+{
+    uint32_t f=irq_save();
+    if (owner<MM_OWNERS) ledger.value.reclaim_owner_delta[owner]+=delta;
+    irq_restore(f);
 }
 
 static uint32_t pin_pfn(const struct mm_pin *pin, uint32_t index)
@@ -190,7 +254,7 @@ static uint32_t pin_pfn(const struct mm_pin *pin, uint32_t index)
     }
     return pin->first_pfn + index;
 }
-bool ledger_page_pinned(uint32_t pfn)
+static bool registry_page_pinned(uint32_t pfn)
 {
     for (unsigned i = 0; i < PIN_SLOTS; i++) {
         const struct pin_slot *s = &ledger.pins[i];
@@ -202,6 +266,16 @@ bool ledger_page_pinned(uint32_t pfn)
     }
     return false;
 }
+bool ledger_page_pinned(uint32_t pfn)
+{
+    struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(pfn*PAGE_SIZE):0;
+    if (d && d->pins) return true;
+    /* Completed registry tokens are fully represented in M2 descriptors.
+     * The transition fallback preserves partial-publication protection. */
+    if (d && !ledger.pin_updates) return false;
+    return registry_page_pinned(pfn);
+}
+bool ledger_pin_transition(void) { return ledger.pin_updates!=0; }
 static bool power2(uint32_t v) { return v && !(v & (v - 1)); }
 int mm_pin(struct mm_pin *pin)
 {
@@ -234,7 +308,7 @@ int mm_pin(struct mm_pin *pin)
                 if (p<min_pfn) min_pfn=p;
                 if (p>max_pfn) max_pfn=p;
                 if (p>=PMM_MAX_PAGES || p==pin->pfn_table/PAGE_SIZE ||
-                    pmm_is_reserved(p*PAGE_SIZE) || pmm_page_free(p) || ledger_page_pinned(p)) {
+                    pmm_is_reserved(p*PAGE_SIZE) || pmm_page_free(p) || registry_page_pinned(p)) {
                     irq_restore(f); return -EINVAL;
                 }
                 uint32_t address=p*PAGE_SIZE;
@@ -252,6 +326,7 @@ int mm_pin(struct mm_pin *pin)
         pin->ticket=++ledger.ticket;
         ledger.pins[slot]=(struct pin_slot){.pin=*pin,.live=true,.min_pfn=min_pfn,.max_pfn=max_pfn};
         ledger.value.pin_tokens++; ledger.value.pinned_pages+=pin->pages+!!pin->pfn_table;
+        ledger.pin_updates++;
         ledger.sequence++;
         irq_restore(f);
         for (uint32_t j=0;j<pin->pages;) {
@@ -262,6 +337,7 @@ int mm_pin(struct mm_pin *pin)
         if (pin->pfn_table && pmm_descriptor) {
             f=irq_save(); pmm_descriptor(pin->pfn_table)->pins++; irq_restore(f);
         }
+        f=irq_save(); ledger.pin_updates--; irq_restore(f);
         return 0;
     }
 }
@@ -288,6 +364,7 @@ int mm_unpin(struct mm_pin *pin, uint32_t generation)
     uint32_t f = irq_save(); struct pin_slot *s = find_pin(pin, generation);
     if (!s) { ledger.value.double_unpins++; irq_restore(f); return -EINVAL; }
     struct pin_slot saved = *s; s->live = false; ledger.sequence++;
+    ledger.pin_updates++;
     ledger.value.pin_tokens--; ledger.value.pinned_pages -= saved.pin.pages + !!saved.pin.pfn_table;
     if (saved.retired) ledger.value.retired_pages -= saved.pin.pages;
     /* Keep ticket in the caller: repeated completion is distinguishable from
@@ -301,6 +378,7 @@ int mm_unpin(struct mm_pin *pin, uint32_t generation)
     if (saved.pin.pfn_table && pmm_descriptor) {
         f=irq_save(); pmm_descriptor(saved.pin.pfn_table)->pins--; irq_restore(f);
     }
+    f=irq_save(); ledger.pin_updates--; irq_restore(f);
     if (saved.retired) for (uint32_t i = 0; i < saved.pin.pages; i++) {
         uint32_t phys = (saved.pin.first_pfn + i) * PAGE_SIZE;
         mm_release(phys, 1, saved.owner); pmm_free(phys);
@@ -351,6 +429,11 @@ static void record_snapshot(const char *profile,const struct mm_ledger *snapshot
          id,v.pin_tokens,v.pinned_pages,v.retired_pages,v.mismatches,v.double_unpins,v.bad_context);
     klog("[mem] ledger snapshot=%u va_reserved=%u commit_ram=%u commit_pagefile=%u swap_capacity=%u swap_used=%u",
          id,reserve,commit,v.commit_pagefile,v.swap_capacity,v.swap_used);
+    klog("[mem] reclaim snapshot=%u episodes=%u scanned=%u reclaimed=%u dirty=%u inflight=%u pinned=%u stalls=%u faults=%u",
+         id,v.reclaim_episodes,v.reclaim_scanned,v.reclaim_reclaimed,v.reclaim_dirty,
+         v.reclaim_inflight,v.reclaim_pinned,v.reclaim_stalls,v.reclaim_faults);
+    for (unsigned o=0;o<MM_OWNERS;o++) if (v.hot[o] || v.cold[o])
+        klog("[mem] activity snapshot=%u owner=%s hot=%u cold=%u trim_delta=%d",id,owners[o],v.hot[o],v.cold[o],v.reclaim_owner_delta[o]);
     for (unsigned o=0;o<MM_OWNERS;o++) if (v.reserved_va[o] || v.commit_ram[o])
         klog("[mem] ledger snapshot=%u owner=%s va_reserved=%u commit_ram=%u",
              id,owners[o],v.reserved_va[o],v.commit_ram[o]);

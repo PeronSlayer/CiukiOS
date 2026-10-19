@@ -9,6 +9,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/work.h>
 #include <ciuki/ledger.h>
+#include <ciuki/reclaim.h>
 
 static struct task *stat_task;
 static uint64_t window_start, irq_cycles, exited_cycles, classes[P_COUNT];
@@ -327,12 +328,13 @@ static void cpu_emit(void)
 static void cpu_worker(void *arg)
 {
     (void)arg;
-    for (;;) { task_sleep_ms(1000); ledger_poll(g_ticks);
-        task_sleep_ms(1000); ledger_poll(g_ticks); cpu_emit(); }
+    for (;;) { task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks);
+        task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks); cpu_emit(); }
 }
 void cpu_init(void)
 {
     window_start = stamp();
+    if (reclaim_init) reclaim_init();
     stat_task = task_create_kernel("cpustat", cpu_worker, 0, P_DEVICE);
     if (!stat_task) panic("cpu: cannot create cpustat");
     task_start(stat_task);

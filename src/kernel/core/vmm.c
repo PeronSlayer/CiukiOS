@@ -23,6 +23,23 @@ static uint32_t kpd_phys;
 static uint32_t *kpd;                        /* via direct map */
 static uint32_t mmio_next = MMIO_REGION;
 static uint8_t stack_slot_used[STACK_SLOTS];
+/* Only the PFN descriptor reservation is borrowed before the full RAM map.
+ * 4.5 MiB at an arbitrary 4 MiB offset needs at most three page tables. */
+static uint32_t descriptor_boot_pt[3][1024] __attribute__((aligned(4096)));
+void vmm_bootstrap_ram(uint32_t phys, uint32_t bytes)
+{
+    uint32_t *pd=P2V(read_cr3());
+    uint32_t first=phys>>22, last=(phys+bytes-1)>>22;
+    for (uint32_t i=first;i<=last;i++) {
+        uint32_t *pt=descriptor_boot_pt[i-first];
+        for (uint32_t j=0;j<1024;j++) {
+            uint32_t p=(i<<22)+(j<<12);
+            pt[j]=p>=phys && p-phys<bytes ? p|PTE_P|PTE_W : 0;
+        }
+        pd[768+i]=V2P(pt)|PTE_P|PTE_W;
+    }
+    write_cr3(read_cr3());
+}
 uint32_t g_user_mappings;
 
 static uint32_t *table_va(uint32_t phys) { return (uint32_t *)P2V(phys); }
@@ -237,10 +254,90 @@ void kstack_free(void *base)
     stack_slot_used[s] = 0;
 }
 
+/* Global alias sampling is incremental even for sparse spaces. The cursor
+ * is repaired before teardown can free an address-space owner. No user PTEs
+ * are global; inactive spaces flush on their next CR3 load (UP kernel). */
+#define CIUKI_VMM_SAMPLER 1
+static struct aspace *sample_spaces, *sample_space;
+static uint32_t sample_va;
+void vmm_sample_reset(void)
+{
+    uint32_t f=irq_save(); sample_space=sample_spaces; sample_va=0; irq_restore(f);
+}
+void vmm_sample_register(struct aspace *as)
+{
+    uint32_t f=irq_save();
+    as->sample_next=sample_spaces; as->sample_prev=0;
+    if (sample_spaces) sample_spaces->sample_prev=as;
+    sample_spaces=as; irq_restore(f);
+}
+void vmm_sample_unregister(struct aspace *as)
+{
+    uint32_t f=irq_save();
+    if (sample_space==as) { sample_space=as->sample_next; sample_va=0; }
+    if (as->sample_prev) as->sample_prev->sample_next=as->sample_next;
+    else if (sample_spaces==as) sample_spaces=as->sample_next;
+    if (as->sample_next) as->sample_next->sample_prev=as->sample_prev;
+    as->sample_prev=as->sample_next=0;
+    irq_restore(f);
+}
+uint32_t as_sample_page(struct aspace *as, uint32_t va)
+{
+    uint32_t f=irq_save(), value=0;
+    if (as->pd_phys && va<KERNEL_VBASE) {
+        uint32_t de=table_va(as->pd_phys)[va>>22];
+        if (de&PTE_P) {
+            uint32_t *p=&table_va(de&~4095u)[(va>>12)&1023];
+            value=*p;
+            if (value&(PTE_A|PTE_D)) {
+                *p=value&~(PTE_A|PTE_D);
+                if (read_cr3()==as->pd_phys) invlpg(va);
+            }
+        }
+    }
+    irq_restore(f); return value;
+}
+bool vmm_sample_step(uint32_t epoch)
+{
+    uint32_t f=irq_save();
+    if (!sample_space) { sample_space=sample_spaces; sample_va=0; }
+    if (!sample_space) { irq_restore(f); return true; }
+    struct aspace *as=sample_space;
+    uint32_t de=table_va(as->pd_phys)[sample_va>>22];
+    if (de&PTE_P) {
+        uint32_t old=as_sample_page(as,sample_va);
+        /* PTE_OWN also retains PROT_NONE translations. They cannot count as
+         * physical references twice and a cleared bit never authorizes reuse. */
+        if (old&(PTE_P|0x200u)) {
+            struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(old&~4095u):0;
+            if (d && (d->reserved&MM_PAGE_OWNER_MASK)!=MM_RESERVED) {
+                if (old&PTE_A) { d->accessed_epoch=epoch; d->reserved|=MM_PAGE_TOUCHED; }
+                if (old&PTE_D) d->dirty_epoch=d->dirty_epoch==UINT32_MAX?1:d->dirty_epoch+1;
+            }
+        }
+        sample_va+=PAGE_SIZE;
+    } else sample_va=(sample_va&~0x3fffffu)+0x400000u;
+    bool done=false;
+    if (sample_va>=KERNEL_VBASE) {
+        sample_space=as->sample_next; sample_va=0; done=!sample_space;
+    }
+    irq_restore(f); return done;
+}
+
 /* ---- user address spaces ---- */
+
+/* O(1) registry mutation; fixtures that extract just address-space routines
+ * deliberately omit the global sampler. */
+#ifndef CIUKI_VMM_SAMPLER
+void vmm_sample_register(struct aspace *) __attribute__((weak));
+void vmm_sample_unregister(struct aspace *) __attribute__((weak));
+#endif
 
 int as_create(struct aspace *as)
 {
+#ifndef CIUKI_VMM_SAMPLER
+    extern void vmm_sample_register(struct aspace *) __attribute__((weak));
+#endif
     uint32_t pd = pmm_alloc();
     if (!pd)
         return -ENOMEM;
@@ -255,6 +352,8 @@ int as_create(struct aspace *as)
     as->owner = MM_KERNEL; as->pool_base = 0;
     as->pages = 0;
     as->tables = 0;
+    as->sample_prev=as->sample_next=0;
+    if (&vmm_sample_register) vmm_sample_register(as);
     return 0;
 }
 
@@ -328,8 +427,12 @@ uint32_t as_lookup(const struct aspace *as, uint32_t va, uint32_t *pte_out)
 
 void as_destroy(struct aspace *as)
 {
+#ifndef CIUKI_VMM_SAMPLER
+    extern void vmm_sample_unregister(struct aspace *) __attribute__((weak));
+#endif
     if (!as->pd_phys)
         return;
+    if (&vmm_sample_unregister) vmm_sample_unregister(as);
     if (read_cr3() == as->pd_phys)
         write_cr3(kpd_phys);
     uint32_t *pd = table_va(as->pd_phys);

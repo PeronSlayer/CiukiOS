@@ -4,12 +4,15 @@
 #include "vfs.h"
 #include "fake.h"
 #include <ciuki/ledger.h>
+#include <ciuki/reclaim.h>
 #include <stdio.h>
 #include <assert.h>
 #include <stdatomic.h>
 #define MIB (1024u*1024u)
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL C4 %u: %s\n",__LINE__,#x); abort(); } } while (0)
 static uint32_t pinned;
+static bool pin_transition;
+bool ledger_pin_transition(void) { return pin_transition; }
 bool ledger_page_pinned(uint32_t pfn) { return pinned && pfn==pinned; }
 struct disk {
     struct blkdev dev; struct blk_queue queue;
@@ -433,9 +436,67 @@ static void vfs_close_retirement(const char *path) {
     CHECK(!blk_request_pool_host_cleanup());
     puts("PASS C4 VFS final close waits for issued retirement with namespace available to unrelated operations");
 }
+static void global_reclaim_hook(void) {
+    struct block_cache c; struct disk m; struct cache_stream stream={0};
+    init_disk(&m); CHECK(!cache_init(&c,8*MIB) && !cache_adaptive_enable(&c,28672));
+    uint8_t bytes[4096];
+    for (unsigned i=0;i<c.data_pages-6;i++) CHECK(!cache_read_run(&c,&m.dev,i*256,8,bytes));
+    stream_read(&c,&m,&stream,64*1024,4096); stream_read(&c,&m,&stream,64*1024+4096,4096);
+    CHECK(cache_prefetch_tick(&c) && c.speculative_bytes==16384);
+    void *dirty_page=0,*pin_page=0,*busy_page=0,*clean_page=0;
+    CHECK(!cache_write(&c,&m.dev,(c.data_pages-10)*256,bytes));
+    struct cache_block *dirty=block(&c,&m.dev,(c.data_pages-10)*256,&dirty_page);
+    struct cache_block *pin=block(&c,&m.dev,(c.data_pages-20)*256,&pin_page);
+    struct cache_block *busy=block(&c,&m.dev,(c.data_pages-30)*256,&busy_page);
+    struct cache_block *clean_block=block(&c,&m.dev,(c.data_pages-40)*256,&clean_page);
+    CHECK(dirty && pin && busy && clean_block && clean_page!=c.inline_page.data);
+    pinned=(uint32_t)((uintptr_t)pin_page>>12); busy->busy=true;
+    /* Reverse valid bucket chains to model the adverse insertion order;
+     * the scanner must continue long removals without a long callback. */
+    for (unsigned h=0;h<256;h++) {
+        struct cache_block *at=c.hash[h],*prev=0;
+        while (at) { struct cache_block *next=at->hash_next; at->hash_next=prev; prev=at; at=next; }
+        c.hash[h]=prev;
+    }
+    uint32_t data=c.data_pages,meta=c.meta_pages,reclaimed=0,blocked_dirty=0,blocked_pin=0,inflight=0;
+    uint64_t writes=m.writes,commands=m.commands,max_us=0;
+    CHECK(!cache_read(&c,&m.dev,(c.data_pages-40)*256,bytes) && !cache_read(&c,&m.dev,(c.data_pages-40)*256,bytes) && m.commands==commands);
+    struct reclaim_result r; bool wrote_during_trim=false;
+    pin_transition=true; cache_reclaim_step(&c,true,&r);
+    CHECK(r.pinned && !r.reclaimed && c.data_pages==data);
+    pin_transition=false;
+    for (unsigned stage=0;stage<2;stage++) {
+        unsigned calls=0;
+        do {
+            uint64_t start=cpu_us(); cache_reclaim_step(&c,stage==0,&r);
+            uint64_t elapsed=cpu_us()-start; if (elapsed>max_us) max_us=elapsed;
+            CHECK(r.scanned<=1 && r.reclaimed<=1 && ++calls<2000000);
+            if (stage && !wrote_during_trim && c.trim_page && c.trim_prev) {
+                for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
+                    struct cache_block *target=&c.trim_page->b[i];
+                    if (target->dev && !target->dirty && !target->busy) {
+                        CHECK(!cache_write(&c,target->dev,target->lba,bytes));
+                        wrote_during_trim=true; break;
+                    }
+                }
+            }
+            reclaimed+=r.reclaimed; blocked_dirty+=r.dirty; blocked_pin+=r.pinned; inflight+=r.inflight;
+        } while (!r.done);
+        if (!stage) {
+            CHECK(!c.speculative_bytes && stream.resident==0);
+            CHECK(clean_block->data==clean_page && clean_block->dev==&m.dev);
+        }
+    }
+    CHECK(reclaimed==data-c.data_pages+meta-c.meta_pages && meta>c.meta_pages && blocked_dirty && blocked_pin && inflight);
+    CHECK(dirty->dirty && pin->data==pin_page && busy->busy && m.writes==writes);
+    CHECK(c.writeback_pending && max_us<=1000 && wrote_during_trim);
+    printf("TRACE M3 C4 hook reclaimed_frames=%u shared_hits=2 physical_count=1 dirty=%u pinned=%u inflight=%u max_step_cpu_us=%llu io_writes=0 concurrent_redirty=retained\n",
+        reclaimed,blocked_dirty,blocked_pin,inflight,(unsigned long long)max_us);
+    pinned=0; busy->busy=false; cache_stream_close(&stream); cache_destroy(&c); end_disk(&m);
+}
 int main(int argc,char **argv) {
     CHECK(argc==2); setvbuf(stdout,0,_IONBF,0);
-    profiles(); dirty_prefetch_hit(); policy_edges(); speculative_cap(); sequential(4096); sequential(16384); fat_sequential(4096); fat_sequential(16384); same_stream_join(); cancellation(); random_reads(); vfs_eof(argv[1]); vfs_close_retirement(argv[1]);
+    global_reclaim_hook(); profiles(); dirty_prefetch_hit(); policy_edges(); speculative_cap(); sequential(4096); sequential(16384); fat_sequential(4096); fat_sequential(16384); same_stream_join(); cancellation(); random_reads(); vfs_eof(argv[1]); vfs_close_retirement(argv[1]);
     puts("PASS C4 adaptive cache and stream read-ahead");
     return 0;
 }

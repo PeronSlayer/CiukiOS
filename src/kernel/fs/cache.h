@@ -46,7 +46,7 @@ struct cache_page {
     uint8_t layout[2];      /* per half: 0 = 4 x 512, 1 = 1 x 2048 */
     struct cache_block b[CACHE_PAGE_SLOTS];
 };
-struct cache_meta { struct cache_meta *next; unsigned count; struct cache_page pages[]; };
+struct cache_meta { struct cache_meta *next, *prev; unsigned count; struct cache_page pages[]; };
 struct cache_lru { struct cache_block *oldest, *newest; };
 struct cache_device {
     struct blkdev *dev; int error; uint32_t epoch;
@@ -90,6 +90,9 @@ struct block_cache {
     bool workspace_in_use; /* reservation only; no mutex held across scan I/O */
     struct cache_stream *streams;
     struct cache_meta *reclaim_meta;
+    struct cache_page *trim_page;
+    struct cache_block *trim_prev;
+    uint32_t trim_slot;
     uint32_t reclaim_index, floor_pages, ceiling_pages, window_time, useful_windows;
     uint32_t speculative_bytes, speculative_peak, demand_active;
     uint32_t growths, reclaims, reclaimed_pages, scanned_pages, slice_pages, slice_scanned, max_slice_us;

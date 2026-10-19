@@ -19,6 +19,9 @@ static void charge(uint64_t ns) { total+=ns; work_span+=ns; }
 static void boundary(void) { if (work_span>maximum) maximum=work_span; work_span=0; }
 static void *host_physical(uint32_t pa) { CHECK(pa>=4096 && pa<770*4096); return (uint8_t *)tables+pa-4096; }
 #define P2V(p) host_physical(p)
+static uint32_t irq_flags=0x200;
+static uint32_t irq_save(void) { uint32_t f=irq_flags; irq_flags=0; return f; }
+static void irq_restore(uint32_t f) { irq_flags=f; }
 static uint32_t read_cr3(void) { return 0; }
 static void write_cr3(uint32_t p) { (void)p; }
 static void invlpg(uint32_t p) { (void)p; }

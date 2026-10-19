@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
 #include <ciuki/cpustat.h>
+#include <ciuki/reclaim.h>
 
 extern struct process *proc_current(void) __attribute__((weak));
 extern int w32_view_access(struct uaddr *,uint32_t,bool) __attribute__((weak));
@@ -37,7 +38,7 @@ static void walk_drop(const struct uaddr *u, struct ua_pin *pin)
 #define SLOT_COMMIT 1u
 #define SLOT_NEW 2u
 #define NO_SLOT UINT32_MAX
-struct ua_frame { uint32_t phys, refs; bool zero; };
+struct ua_frame { uint32_t phys, refs; bool zero; struct reclaim_page reclaim; };
 struct ua_slot {
     struct ua_frame *frame;
     uint32_t previous, next, index;
@@ -85,24 +86,34 @@ static struct mm_page_descriptor *frame_descriptor(struct ua_frame *f)
 { return pmm_descriptor ? pmm_descriptor(f->phys) : 0; }
 static void frame_get(struct ua_frame *f)
 {
+    uint32_t flags=irq_save();
     f->refs++;
     struct mm_page_descriptor *d=frame_descriptor(f);
     if (d) d->refs=f->refs;
+    irq_restore(flags);
 }
 static void frame_put(struct ua_frame *f)
 {
     if (!f) return;
+    uint32_t flags=irq_save();
     if (--f->refs) {
         struct mm_page_descriptor *d=frame_descriptor(f);
         if (d) d->refs=f->refs;
+        irq_restore(flags);
         return;
     }
+    if (reclaim_untrack) reclaim_untrack(&f->reclaim);
     if (f==zero_frame) zero_frame=0;
+    irq_restore(flags);
     mm_free(f->phys,MM_USER_PRIVATE); kfree(f);
 }
-static struct ua_frame *frame_new(bool zero)
+static struct ua_frame *frame_new(bool zero,uint32_t owner_id)
 {
-    if (zero && zero_frame) { frame_get(zero_frame); return zero_frame; }
+    uint32_t flags=irq_save();
+    if (zero && zero_frame) {
+        struct ua_frame *shared=zero_frame; frame_get(shared); irq_restore(flags); return shared;
+    }
+    irq_restore(flags);
     struct ua_frame *f=kmalloc(sizeof(*f));
     if (!f) return 0;
     uint32_t phys=pmm_alloc();
@@ -113,6 +124,9 @@ static struct ua_frame *frame_new(bool zero)
     if (d) { d->io_in_flight=1; d->backing_kind=zero?MM_BACKING_ZERO:MM_BACKING_PRIVATE; }
     memset(P2V(phys),0,PAGE_SIZE);
     if (d) d->io_in_flight=0;
+    f->reclaim=(struct reclaim_page){.phys=phys,.generation=++fault_epoch,
+        .owner=MM_USER_PRIVATE,.owner_id=owner_id};
+    if (reclaim_track) reclaim_track(&f->reclaim);
     if (zero) zero_frame=f;
     return f;
 }
@@ -239,7 +253,7 @@ static void set_pte(struct uaddr *u, uint32_t va, uint32_t *p, uint32_t value)
         if (d && (*p&0x60u)) {
             uint32_t epoch=++fault_epoch;
             if (*p&0x20u) d->accessed_epoch=epoch;
-            if (*p&0x40u) d->dirty_epoch=epoch;
+            if (*p&0x40u) d->dirty_epoch=d->dirty_epoch==UINT32_MAX?1:d->dirty_epoch+1;
         }
     }
     if ((*p&~4095u)==(value&~4095u)) value|=*p&0x60u;
@@ -274,13 +288,16 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
         uint32_t *p = pte(u, va, false);
         if (!p || (only_new && (!(*p & PTE_NEW) || (*p & PTE_SHARED))))
             continue;
-        if (*p & PTE_OWN) {
-            if (!(*p & PTE_SHARED))
-                mm_free(*p & ~(PAGE_SIZE - 1), MM_USER_PRIVATE);
-            if (!(*p & PTE_SHARED) && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
+        uint32_t old=*p;
+        /* Revoke and flush eager/COW translations before PMM can publish
+         * their frame as free, just as for object-backed aliases above. */
+        set_pte(u, va, p, 0);
+        if (old & PTE_OWN) {
+            if (!(old & PTE_SHARED))
+                mm_free(old & ~(PAGE_SIZE - 1), MM_USER_PRIVATE);
+            if (!(old & PTE_SHARED) && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
             u->backing--;
         }
-        set_pte(u, va, p, 0);
     }
     /* Empty page tables are reclaimed on rollback and on unmap, including
      * provisional tables created for a PROT_NONE reservation. */
@@ -717,6 +734,7 @@ static int resolve_page(struct uaddr *u,uint32_t va,bool write,bool supervisor)
     if (!(s->flags&SLOT_COMMIT) || (e->kind==UA_W32 && e->w32_state!=W32_MEM_COMMIT)) return -EFAULT;
     uint64_t generation=e->generation, object_generation=o->generation;
     while (o->busy) {
+        if (reclaim_fault) reclaim_fault(true);
         s->waiters++;
         struct ua_frame *waiting=s->frame;
         if (waiting) {
@@ -747,7 +765,7 @@ static int resolve_page(struct uaddr *u,uint32_t va,bool write,bool supervisor)
         kpreempt_point();
         if (fault_cancelled(u)) { err=u->closing?-EFAULT:-EINTR; goto done; }
         if (e->generation!=generation || o->generation!=object_generation) { err=-EFAULT; goto done; }
-        fresh=frame_new(!write);
+        fresh=frame_new(!write,u->as.pd_phys);
         if (!fresh) { err=-ENOMEM; goto done; }
         if (write && s->frame && !s->frame->zero) {
             struct mm_page_descriptor *d=frame_descriptor(fresh);
@@ -766,7 +784,9 @@ static int resolve_page(struct uaddr *u,uint32_t va,bool write,bool supervisor)
     struct mm_page_descriptor *d=frame_descriptor(f);
     if (d) {
         d->accessed_epoch=++fault_epoch;
-        if (write) d->dirty_epoch=fault_epoch;
+        d->reserved|=MM_PAGE_TOUCHED;
+        if (ledger_page_activity) ledger_page_activity(f->phys,true);
+        if (write) d->dirty_epoch=d->dirty_epoch==UINT32_MAX?1:d->dirty_epoch+1;
         d->backing_slot=s->index;
         d->backing_kind=f->zero?MM_BACKING_ZERO:o->kind;
     }
@@ -794,6 +814,7 @@ done:
 }
 int ua_fault(struct uaddr *u,uint32_t address,uint32_t error)
 {
+    if (reclaim_fault) reclaim_fault(false);
     if (!u || !(error&4) || (error&8) || address>=CIUKI_MAIN_STACK_LIMIT || fault_cancelled(u)) return -EFAULT;
     uint32_t wanted=(error&16)?PROT_EXEC:PROT_READ|((error&2)?PROT_WRITE:0);
     if (!ua_range(u,address,1,wanted)) return -EFAULT; /* unpublished/guard/invalid stays a fault */

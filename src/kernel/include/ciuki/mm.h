@@ -24,6 +24,12 @@ struct mm_page_descriptor {
     uint16_t reserved;
 };
 struct mm_page_descriptor *pmm_descriptor(uint32_t phys) __attribute__((weak));
+uint32_t pmm_descriptor_count(void);
+/* reserved packs physical ownership and sampled temperature, not aliases. */
+#define MM_PAGE_OWNER_MASK 31u
+#define MM_PAGE_HOT 32u
+#define MM_PAGE_TOUCHED 64u
+void ledger_page_activity(uint32_t phys, bool hot) __attribute__((weak));
 
 /* physical pages */
 void pmm_init(void);
@@ -57,6 +63,8 @@ unsigned pmm_reservations(const struct pmm_reservation **out);
 #define PTE_U    0x004u
 #define PTE_PWT  0x008u
 #define PTE_PCD  0x010u
+#define PTE_A    0x020u
+#define PTE_D    0x040u
 #define PTE_G    0x100u
 
 /* kernel virtual memory */
@@ -93,7 +101,12 @@ struct aspace {
     enum mm_owner owner;                  /* data frames; tables are MM_TABLE */
     struct uaddr *memory;                 /* object-backed areas, NULL for VM/device */
     uint32_t pool_base;                    /* VM pool boundary, zero otherwise */
+    struct aspace *sample_prev, *sample_next; /* resident registry, UP exclusion */
 };
+/* One PDE skip or PTE sample, including holes, per call. No object pointers
+ * escape IRQ exclusion. Returns true at the end of one global alias pass. */
+bool vmm_sample_step(uint32_t epoch) __attribute__((weak));
+uint32_t as_sample_page(struct aspace *, uint32_t va);
 int as_create(struct aspace *as);
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags);
 /* Replace 1..32 already-present pages within one table; no allocation or

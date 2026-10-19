@@ -15,11 +15,19 @@ static uint8_t *ram;
 static unsigned checks;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr,"FAIL ledger:%d %s\n",__LINE__,#x); exit(1); } } while (0)
 static uint32_t flags=0x200, cr3;
+static void (*memory_irq_restore)(void);
 static uint32_t irq_save(void) { uint32_t f=flags; flags=0; return f; }
-static void irq_restore(uint32_t f) { flags=f; }
+static void irq_restore(uint32_t f) {
+    flags=f;
+    if ((f&0x200) && memory_irq_restore) {
+        void (*observe)(void)=memory_irq_restore; memory_irq_restore=0;
+        observe(); memory_irq_restore=observe;
+    }
+}
 static uint32_t read_cr3(void) { return cr3; }
-static void write_cr3(uint32_t p) { cr3=p; }
-static void invlpg(uint32_t p) { (void)p; }
+static unsigned invalidations, reloads;
+static void write_cr3(uint32_t p) { cr3=p; reloads++; }
+static void invlpg(uint32_t p) { (void)p; invalidations++; }
 struct ciuki_boot_info g_boot;
 struct task *g_current;
 volatile uint64_t g_ticks;
@@ -30,7 +38,7 @@ static unsigned mismatch_records, pressure_records, profile_records;
 static unsigned context_records;
 static bool emit_profiles;
 static char context_record[256];
-void panic(const char *fmt, ...) { (void)fmt; if (expected_panic) longjmp(panic_return,1); abort(); }
+void panic(const char *fmt, ...) { if (expected_panic) longjmp(panic_return,1); va_list ap; va_start(ap,fmt); vfprintf(stderr,fmt,ap); va_end(ap); abort(); }
 void klog(const char *fmt, ...)
 {
     char line[256]; va_list ap; va_start(ap,fmt);
@@ -85,8 +93,8 @@ static void release_run(uint32_t phys,uint32_t pages)
 { for (uint32_t i=0;i<pages;i++) pmm_free(phys+i*PAGE_SIZE); CHECK(ledger_reconcile()); }
 static void profiles(void)
 {
-    const unsigned sizes[]={128,256,512};
-    for (unsigned i=0;i<3;i++) {
+    const unsigned sizes[]={128,256,512,768};
+    for (unsigned i=0;i<4;i++) {
         fresh(sizes[i]); struct mm_ledger v=snapshot();
         uint32_t u=(sizes[i]-16)*256, low=u/32>1024 ? u/32 : 1024;
         CHECK(v.zone[ZONE_NORMAL].usable==u && v.low==low && v.high==2*low);
@@ -95,10 +103,14 @@ static void profiles(void)
         printf("PASS ledger profile=%u NORMAL=%u low=%u high=%u DMA_free=%u reconciled=1\n",
             sizes[i],u,low,2*low,v.zone[ZONE_DMA].free);
         /* Exhaust both allocatable zones, including NORMAL->DMA fallback. */
-        uint32_t n=pmm_alloc_contig(u), dma=pmm_zone_free(ZONE_DMA), d=pmm_alloc_dma_run(dma,1);
+        uint32_t available=u-descriptor_bytes/PAGE_SIZE;
+        CHECK(descriptor_count==sizes[i]*256 && descriptor_bytes==sizes[i]*6144);
+        CHECK(resident(MM_PFN_DESCRIPTORS)==descriptor_bytes/PAGE_SIZE);
+        printf("TRACE PFN profile=%u entries=%u bytes=%u NORMAL_reserved=%u\n",sizes[i],descriptor_count,descriptor_bytes,descriptor_bytes/PAGE_SIZE);
+        uint32_t n=pmm_alloc_contig(available), dma=pmm_zone_free(ZONE_DMA), d=pmm_alloc_dma_run(dma,1);
         CHECK(n && d && !pmm_alloc() && ledger_pressure()); CHECK(ledger_reconcile());
         CHECK(!pmm_alloc_contig(2) && !pmm_alloc_zone(ZONE_LOW));
-        release_run(n,u); release_run(d,dma); CHECK(!ledger_pressure());
+        release_run(n,available); release_run(d,dma); CHECK(!ledger_pressure());
         CHECK(snapshot().zone[ZONE_DMA].free==v.zone[ZONE_DMA].free);
     }
 }
@@ -173,9 +185,9 @@ static void reporting_and_context(void)
     CHECK(snapshot().zone[ZONE_NORMAL].free==capture_free-1);
     ledger_poll(5001); pmm_free(temporary);
     CHECK(profile_records==before+2);
-    uint32_t p=pmm_alloc_contig(pmm_zone_free(ZONE_NORMAL));
+    uint32_t normal=pmm_zone_free(ZONE_NORMAL), p=pmm_alloc_contig(normal);
     ledger_poll(6000); CHECK(pressure_records==1); ledger_poll(6500); CHECK(pressure_records==1);
-    release_run(p,(128-16)*256); ledger_poll(7000); CHECK(pressure_records==2);
+    release_run(p,normal); ledger_poll(7000); CHECK(pressure_records==2);
     ledger_poll(30000); CHECK(profile_records==before+3);
     /* Corrupt a count, prove nonfatal protected mismatch, then restore. */
     ledger.value.zone[ZONE_NORMAL].free++;
@@ -353,7 +365,7 @@ static void complete_other_fault(void)
     memory_sleep=0;
     struct ua_slot *s=object_slot(waiting_object,0);
     CHECK(s->waiters==1 && waiting_object->busy);
-    slot_link(waiting_object,0,frame_new(false));
+    slot_link(waiting_object,0,frame_new(false,waiting_area->space->as.pd_phys));
     waiting_object->busy=false;
 }
 static void cancel_waiting_fault(void)
@@ -542,7 +554,7 @@ int main(int argc, char **argv)
     maximum.mappings=maximum.shared_mappings=maximum.pin_tokens=maximum.pinned_pages=UINT32_MAX;
     maximum.retired_pages=maximum.mismatches=maximum.double_unpins=maximum.bad_context=UINT32_MAX;
     record_snapshot("maximum-vm-created",&maximum,UINT64_MAX);
-    printf("PASS resource ledger checks=%u static_data=%zu bytes strict=%u\n",checks,sizeof(ledger),
+    printf("PASS resource ledger checks=%u static_data=%zu bytes invlpg=%u cr3_reload=%u strict=%u\n",checks,sizeof(ledger),invalidations,reloads,
 #ifdef CIUKI_LEDGER_STRICT
         1u
 #else

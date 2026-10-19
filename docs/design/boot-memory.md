@@ -32,14 +32,21 @@ shared aliases retain one object. Frames are initialized before any user PTE
 publication. Fault preparation precedes user-copy assembly and lock-protected
 I/O. Existing externally owned surfaces and Win32 section backing remain
 separate adapters; native file mmap stays unsupported, with the C5 file/page
-identity reserved in the object representation. Replacement and disk paging
-are deferred to f0-48/49. Metadata and release walks service the scheduler in
+identity reserved in the object representation. M3 below adds replacement;
+disk paging remains deferred to f0-49. Metadata and release walks service the scheduler in
 bounded slices; no test-only production behavior is introduced.
 
-Each PFN descriptor is 24 bytes. The fixed array covers the entire existing
-768 MiB direct-map ceiling and consumes 4,718,592 bytes (4.5 MiB) on every
-profile: 36/18/9 KiB per MiB of physical RAM on 128/256/512 MiB machines.
-Its entry density is 6 KiB per represented MiB. Object slots use 64-entry
+Each PFN descriptor is 24 bytes. Since f0-48 the boot reservation covers
+E820's highest RAM endpoint rounded up to a 4 MiB direct-map granule,
+clamped to the existing 768 MiB ceiling, without a hotplug reserve. Holes
+retain indices but never become allocatable. The array occupies the first
+contiguous unreserved NORMAL run after the kernel image; it costs
+768/1536/3072 KiB at 128/256/512 MiB (4608 KiB at the ceiling), charged to
+`MM_PFN_DESCRIPTORS`. A three-table bootstrap window makes this NORMAL
+reservation accessible before `vmm_init` installs the complete direct map.
+The `[mm] PFN descriptors` boot record gives entries, bytes and location.
+An unavailable reservation leaves allocation disabled rather than exposing
+untracked RAM. Its entry density is 6 KiB per represented MiB. Object slots use 64-entry
 small-heap blocks, indexed by 32 buckets, with resident-set index links;
 large reservations never require an oversized small-heap allocation.
 Object ownership serializes synchronous fault preparation across aliases;
@@ -47,12 +54,87 @@ waiters revalidate area/object generations after every sleep. No filesystem
 page-in implementation is added by the file placeholder. Section COW credits
 now reserve commitment without preallocating private data frames.
 
+## Global replacement and resident activity (M3, f0-48)
+
+Research, 2026-10-19: P21's original King URL did not fetch. The indexed
+[original scan, p. 53](https://www.bitsavers.org/pdf/microsoft/windows_95/King_-_Inside_Windows_95_1994.pdf)
+explicitly describes A/D bits and access-history/LRU replacement; its example
+interval is not a Windows 98 policy value. [P25, Russinovich/Cogswell](https://jacobfilipp.com/DrDobbs/articles/DDJ/1996/9605/9605c/9605c.htm)
+describes hit/miss, available-memory and fault feedback for cache resizing.
+The locally supplied Microsoft Windows 98 Resource Kit (1998), P33/P36,
+chapter 26, sections Optimizing File System Performance and Tracking
+Performance with System Monitor, confirms cache shrink under paging, idle
+modified-page prewrite and oldest-first cache borrowing. It supplies no
+replacement cadence. The primary media excerpts read are `wrkc26_3.htm`,
+`wrkc26_4.htm`, `wrkc26_9.htm` (table 26.7) and `wrkc28_4.htm`; their provenance
+and public source register are in the [audit](../validation/f0-42-resource-management-audit.md).
+[Intel SDM volume 3A, paging-structure invalidation](https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf)
+requires invalidation after clearing A/D; otherwise later references need
+not set those bits again. These findings support the mechanism below,
+without importing NT working-set guarantees or undocumented 98 constants.
+
+`core/reclaim.c` is a NORMAL-priority bounded worker woken by M1's pressure
+transition. It preserves the low/high hysteresis and stops strictly above
+high. Each slice dispatches at most 64 preflights, including absent PDEs,
+PTE holes, free PFNs and cursor advances. A task-CPU clock stops dispatch
+at 500 us, reserving 500 us for the final bounded step and accounting.
+An uncalibrated clock permits only one preflight per slice.
+Each pressure slice is separated by a 10 ms sleep; idle workers wait on the
+pressure condition with a one-second safety timeout. These are **CiukiOS
+policy constants**, requiring physical CPU/latency qualification.
+
+Order is a full unused/speculative-cache pass, then a clean unpinned cache
+pass through the C4 one-frame hook, then an incremental global alias sample,
+PFN activity decay and private resident-set selection. The cache hook does
+no transport I/O, retains dirty/busy/pinned/error pages and the C4 floor,
+reuses C4's stable descriptor cursor, and reclaims empty metadata in separate
+constant-time unlink steps. Hash removal continues after at most 32 link
+comparisons per preflight, including adverse collision chains; an intervening
+writer forces the whole-frame eligibility check to run again. Stable pins
+use the PFN pin count directly; cache preflights defer during pin-descriptor
+publication/retirement, and exclude a new transition through final free.
+This keeps scattered pin-vector walks out of a reclaim preflight.
+It counts each data frame once irrespective of block hits. Unregister drains
+an already-issued preflight before cache destruction. C4's ordinary growth
+and stream cancellation remain with its existing controller; pressure shrink
+is delegated to the global worker when linked.
+
+Address spaces form an intrusive registry; teardown repairs its sampling
+cursor before releasing tables. One sample clears PTE A/D and invalidates
+the active UP translation with INVLPG. Inactive user spaces have no global
+PTEs and reload CR3 before execution. All aliases contribute to one PFN's
+activity. A touch earns two global decay passes; a private resident node
+then receives two selection second chances before becoming eligible.
+Software faults also mark access; dirty epochs remain sticky. Ledger hot
+and cold counts partition each physical owner's resident count. Process
+allocation identities limit queue admission to eight pages per owner per
+slice; recently sampled hot pages are always spared. DOS pools remain with
+their existing owner/pins and are not made pageable by this change.
+
+The 32-entry modified-page interface carries non-reused tickets, PFN and
+object generation. Only a registered valid backing provider can enter it;
+**there is no production private backing provider until f0-49**, hence no
+anonymous page-out is attempted now. The provider freezes mutable aliases,
+holds a frame/object reference and completes bounded alias revocation before
+the queue pin/reference is released. Partial completion keeps ownership;
+failed or redirtied versions preserve dirty state; stale/duplicate completion
+cannot free a reused frame. File reload and backing I/O belong to f0-49.
+A cleared A bit alone never permits page reuse.
+
+Pressure episodes retain scanned/reclaimed and dirty/in-flight/pinned counts,
+faults/stalls, and per-owner resident deltas. One protected summary per
+second covers ongoing pressure and coalesces rapid completed episodes; exact
+owner deltas and physical resident/hot/cold counters accompany the 30-second ledger. Reporting runs
+in cpustat context, never in the allocator or IRQ. Host traces and slice
+CPU measurements are in `build/codex/f0-48-report.md`; no physical or QEMU
+qualification is claimed here.
+
 ## Resource ledger (M1, f0-43)
 
 `core/ledger.c` keeps page counters under the same `irq_save` exclusion as
 the PMM bitmap. Physical owner categories form a partition: firmware/LOW
-reservations, kernel image, general kernel allocations, heap, stacks, page
-tables, DMA/device buffers, cache data/metadata/workspace, native private or
+reservations, kernel image, PFN descriptors, general kernel allocations,
+heap, stacks, page tables, DMA/device buffers, cache data/metadata/workspace, native private or
 shared backing, and VM low/pool backing. `reserved` is a subset of physical
 ownership, not another term in the physical sum. Overlapping RAM descriptors
 count once; a restrictive descriptor removes the page from usable totals.
@@ -75,8 +157,8 @@ pages. Native committed object slots contribute a promise until final release,
 including backing retained across PROT_NONE protection; shared surface backing contributes once for the
 object, with each present alias counted separately. The VM admission promise
 is charged before construction and rolled back through ordinary teardown.
-Pagefile commitments and swap capacity/use remain zero. No admission value,
-memory cap, cache growth limit, reclamation or paging policy changes here.
+Pagefile commitments and swap capacity/use remain zero. M1 does not change admission values, memory caps or cache growth limits;
+M3 above adds pressure reclamation without page-out I/O.
 
 NORMAL low is `max(1024, usable_NORMAL/32)` pages, with integer division;
 high is twice low. Pressure enters strictly below low and clears strictly

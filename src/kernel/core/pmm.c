@@ -9,10 +9,13 @@
 
 extern char __kernel_start[], __kernel_end[];
 
-static struct mm_page_descriptor descriptors[PMM_MAX_PAGES];
+static struct mm_page_descriptor *descriptors;
+static uint32_t descriptor_count, descriptor_start, descriptor_bytes;
+extern void vmm_bootstrap_ram(uint32_t phys, uint32_t bytes) __attribute__((weak));
 _Static_assert(sizeof(struct mm_page_descriptor) == 24, "PFN descriptor budget");
 struct mm_page_descriptor *pmm_descriptor(uint32_t phys)
-{ return phys / PAGE_SIZE < PMM_MAX_PAGES ? &descriptors[phys / PAGE_SIZE] : 0; }
+{ return descriptors && phys / PAGE_SIZE < descriptor_count ? &descriptors[phys / PAGE_SIZE] : 0; }
+uint32_t pmm_descriptor_count(void) { return descriptor_count; }
 
 static uint32_t bitmap[PMM_MAX_PAGES / 32];     /* 1 = not free */
 static uint32_t zone_total[3], zone_free[3];
@@ -33,10 +36,10 @@ static int zone_of(uint32_t pfn)
 
 static bool used(uint32_t pfn) { return bitmap[pfn >> 5] & (1u << (pfn & 31)); }
 static void set_used(uint32_t pfn) { bitmap[pfn >> 5] |= 1u << (pfn & 31);
-    descriptors[pfn] = (struct mm_page_descriptor){ .refs=1 };
+    if (pfn<descriptor_count) descriptors[pfn] = (struct mm_page_descriptor){ .refs=1 };
 }
 static void set_free(uint32_t pfn) { bitmap[pfn >> 5] &= ~(1u << (pfn & 31));
-    descriptors[pfn] = (struct mm_page_descriptor){0};
+    if (pfn<descriptor_count) descriptors[pfn] = (struct mm_page_descriptor){0};
 }
 
 static void add_res(uint32_t start, uint32_t end, const char *why)
@@ -80,7 +83,7 @@ unsigned pmm_reservations(const struct pmm_reservation **out)
 
 void pmm_init(void)
 {
-    memset(descriptors, 0, sizeof(descriptors));
+    descriptors=0; descriptor_count=descriptor_start=descriptor_bytes=0;
     memset(bitmap, 0xFF, sizeof(bitmap));
     memset(zone_total, 0, sizeof(zone_total));
     ledger_init();
@@ -92,6 +95,28 @@ void pmm_init(void)
     if (g_boot.fb_phys && !(g_boot.flags & CBI_F_TEXT_MODE))
         add_res(g_boot.fb_phys, g_boot.fb_phys + g_boot.fb_pitch * g_boot.fb_height, "boot_framebuffer");
 
+    /* E820's highest RAM endpoint, rounded to the 4 MiB direct-map granule;
+     * holes still need PFN indices. No reserve for hotplug. */
+    uint64_t top=0;
+    for (uint32_t i=0;i<g_boot.e820_count;i++) {
+        const struct ciuki_e820 *e=&g_boot.e820[i];
+        if (e->type==CBI_E820_RAM && e->base+e->length>top) top=e->base+e->length;
+    }
+    if (top>(uint64_t)PMM_MAX_PAGES*PAGE_SIZE) top=(uint64_t)PMM_MAX_PAGES*PAGE_SIZE;
+    uint32_t count=(uint32_t)((top+0x3fffffu)&~(uint64_t)0x3fffffu)/PAGE_SIZE;
+    uint32_t bytes=PAGE_ALIGN_UP(count*sizeof(*descriptors)), run=0;
+    uint32_t begin=res[1].end>0x1000000u ? res[1].end : 0x1000000u;
+    for (uint32_t p=begin; bytes && (uint64_t)p+PAGE_SIZE<=top; p+=PAGE_SIZE) {
+        if (pmm_is_reserved(p)) run=0; else run+=PAGE_SIZE;
+        if (run==bytes) { descriptor_start=p+PAGE_SIZE-bytes; break; }
+    }
+    if (descriptor_start) {
+        descriptor_count=count; descriptor_bytes=bytes;
+        add_res(descriptor_start,descriptor_start+bytes,"pfn_descriptors");
+        if (vmm_bootstrap_ram) vmm_bootstrap_ram(descriptor_start,bytes);
+        descriptors=P2V(descriptor_start); memset(descriptors,0,bytes);
+    }
+
     for (uint32_t i = 0; i < g_boot.e820_count; i++) {
         const struct ciuki_e820 *e = &g_boot.e820[i];
         if (e->type != CBI_E820_RAM)
@@ -101,7 +126,7 @@ void pmm_init(void)
         if (t > PMM_MAX_PAGES)
             t = PMM_MAX_PAGES;
         for (uint64_t pfn = s < 256 ? 256 : s; pfn < t; pfn++)
-            set_free((uint32_t)pfn);
+            if (descriptors) set_free((uint32_t)pfn);
     }
     /* Non-RAM descriptors win over overlapping RAM (loader already
      * normalized; this keeps the allocator safe regardless). */
@@ -126,6 +151,8 @@ void pmm_init(void)
             enum mm_owner owner = MM_RESERVED;
             if ((pfn << 12) < res[1].end && (pfn << 12) + PAGE_SIZE > res[1].start)
                 owner = MM_KERNEL_IMAGE;
+            if ((pfn<<12)>=descriptor_start && (pfn<<12)-descriptor_start<descriptor_bytes)
+                owner=MM_PFN_DESCRIPTORS;
             ledger_boot_page(pfn, owner, !used(pfn));
         }
     hint[ZONE_LOW] = 0;
@@ -133,6 +160,8 @@ void pmm_init(void)
     hint[ZONE_NORMAL] = 4096;
     ledger_boot_done();
     ledger_reconcile();
+    klog("[mm] PFN descriptors entries=%u bytes=%u phys=%08x ready=%u",
+         descriptor_count,descriptor_bytes,descriptor_start,descriptors!=0);
 }
 
 static uint32_t alloc_zone(int zone)
@@ -200,7 +229,7 @@ static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
         for (uint32_t i = 0; i < have;) {
             uint32_t f = irq_save();
             uint32_t end = have - i > 32 ? i + 32 : have;
-            for (; i < end; i++) { set_free(start + i); zone_free[zone]++; ledger_free_page(start + i); }
+            for (; i < end; i++) { ledger_free_page(start+i); set_free(start + i); zone_free[zone]++; }
             irq_restore(f);
         }
         start = next;
@@ -237,8 +266,8 @@ void pmm_free(uint32_t phys)
         irq_restore(f);
         panic("pmm_free: double free %08x", phys);
     }
-    set_free(pfn);
     ledger_free_page(pfn);
+    set_free(pfn);
     zone_free[zone_of(pfn)]++;
     if (pfn < hint[zone_of(pfn)])
         hint[zone_of(pfn)] = pfn;
