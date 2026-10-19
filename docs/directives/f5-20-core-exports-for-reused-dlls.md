@@ -15,3 +15,12 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No Wine `ntdll`/`kernel32`/`user32`/`gdi32` code into the CiukiOS core (the `kernelbase` compile-in goes into the reused DLLs only); no `wineserver`, no unixlib; LGPL notices and source offer kept current. No new `panic()` paths; English.
+
+## Amendment 1 (lead review of A, 2026-10-20 01:40): acceptance and decisions for B and C
+
+Part A (worktree commit `426595da`, Claude Opus session, report `build/codex/f5-20a-report.md`) is accepted: 184 unique names implemented (kernel32 91, ntdll 23, advapi32 32, version 3) with ordinal and LZ forwarders, typed W21 failures where the decision table says so, five limited entries (`GetThreadId` current thread only, `GetFinalPathNameByHandleW`, `NtDeleteKey`, `CreatePipe`, `SystemFunction036` without a kernel entropy source); the f5-07A `advapi32`/`version`/`lz32` facades now live in the builtin store at 0x71000000 (store still 32 DLLs), which removes the false "missing" entries of the f5-14B audit; kernel32 census stubs 51 → 28. Decisions:
+
+1. **Unicode functions refused under the Windows 9x model.** The reused Wine DLLs call `CreateFileW`, `LoadLibraryW/ExW`, `GetModuleHandleW`, `GetModuleFileNameW`, `CreateEventW`, `CreateMutexW`, `GetVersionExW`, `GetEnvironmentVariableW`, `GetCommandLineW`, `CreateProcessW`, `CompareStringW`, `GetLocaleInfoW`, `GetStringTypeW`, `LCMapStringW`, which f5-06 refuses as Windows 98 did. They become working functions layered over the ANSI paths through the active code page, the model of Microsoft's Layer for Unicode on Windows 95/98/ME: an application that probes a W function and falls back to A keeps working, an application that calls W works instead of failing, and `GetVersion`/`GetVersionEx` still report Windows 98. The f5-06 refusal list is amended accordingly; the contract's Unicode paragraph gets the same sentence. Implemented in part B.
+2. **`GetFileSecurityA/W`** behave identically: `FALSE` with `ERROR_CALL_NOT_IMPLEMENTED`, as on Windows 98 (no file security on FAT). Part B aligns the A form.
+3. **`NtDeleteKey`**: the one-condition `w32srv` change (deletion by an open handle with `KEY_WRITE`/`DELETE` rights) goes into part B.
+4. **Audit record hashes** of the core DLLs are refreshed in part C together with the Wine rebuild.
