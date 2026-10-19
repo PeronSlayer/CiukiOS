@@ -1,0 +1,28 @@
+{
+  "archive": "https://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont_3.1.orig.tar.gz",
+  "archive_sha256": "2621acaa1c78e4abdb24bdd163230cc577e61276936d6aa6e3180582142f0343",
+  "banks": [
+    {
+      "bytes": 148398306,
+      "drum_bank": 128,
+      "file": "FluidR3_GM.sf2",
+      "gm_programs": 128,
+      "license": "MIT",
+      "presets": 189,
+      "samples": 74098056,
+      "sha256": "74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0"
+    },
+    {
+      "bytes": 18726708,
+      "drum_bank": 128,
+      "file": "FluidR3_Ciuki.sf2",
+      "gm_programs": 128,
+      "license": "MIT",
+      "presets": 189,
+      "samples": 9262257,
+      "sha256": "36459ae827ac5b6af2991f6c23c315dc2c8dbbd1fd3f8338ba51a49f002f3bf8"
+    }
+  ],
+  "recipe": "box-decimate-s16-factor-8-v1",
+  "schema": 1
+}
