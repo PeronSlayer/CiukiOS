@@ -36,6 +36,9 @@ static char lines[32][256];
 static unsigned line_count;
 static bool complete, tone_checked;
 static unsigned timer_calls;
+bool ledger_reconcile(void) { return true; }
+void ledger_snapshot(struct mm_ledger *out) { memset(out,0,sizeof(*out)); }
+void ledger_record(const char *profile) { assert(!strcmp(profile,"hardware-check")); }
 
 /* Unchanged page items use ready/absent boundaries; their device protocols
  * have separate tests. The page must still reach audio and its final list. */

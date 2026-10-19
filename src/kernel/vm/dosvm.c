@@ -21,6 +21,36 @@ static struct dosvm slots[DOSVM_LIMIT];
 /* Admission remains visible while an unpublished slot is cleared a page
  * at a time. Other creators cannot reuse it or spend its commitment. */
 static uint32_t initializing[DOSVM_LIMIT];
+#define POOL_PINS 7u
+static struct mm_pin pool_pins[DOSVM_LIMIT][POOL_PINS];
+static void pool_unpin(struct dosvm *v)
+{
+    unsigned slot=v->info.key.id-1;
+    if (slot>=DOSVM_LIMIT) return;
+    if (mm_unpin) for (unsigned i=0;i<POOL_PINS;i++) if (pool_pins[slot][i].ticket)
+        (void)mm_unpin(&pool_pins[slot][i],v->info.key.generation);
+    memset(pool_pins[slot],0,sizeof(pool_pins[slot]));
+}
+static int pool_pin(struct dosvm *v)
+{
+    if (!mm_pin || !v->memory.quota) return 0;
+    unsigned slot=v->info.key.id-1, index=0;
+    const uint32_t *pd=P2V(v->as.pd_phys);
+    uint32_t end=VM_POOL_BASE+v->memory.quota;
+    for (uint32_t va=VM_POOL_BASE;va<end;) {
+        if (index>=POOL_PINS) return -ENOMEM;
+        uint32_t entries=1024u-((va/PAGE_SIZE)&1023u), pages=(end-va)/PAGE_SIZE;
+        if (entries>pages) entries=pages;
+        struct mm_pin *pin=&pool_pins[slot][index++];
+        *pin=(struct mm_pin){.generation=v->info.key.generation,
+            .first_pfn=as_lookup(&v->as,va,0)/PAGE_SIZE,.pages=entries,
+            .address_mask=UINT32_MAX,.alignment=PAGE_SIZE,.direction=MM_PIN_CPU,
+            .pfn_table=pd[va>>22]&~4095u,.first_entry=(va/PAGE_SIZE)&1023u};
+        int e=mm_pin(pin); if (e) return e;
+        va+=entries*PAGE_SIZE;
+    }
+    return 0;
+}
 static struct dosvm_key input_focus;
 
 /* A 200-byte polled UART record at 38400 baud costs about one BIOS tick.
@@ -1114,12 +1144,15 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
          * restore the VM's own frames before the address space frees them. */
         dosvm_vga_sync(v, true);
         dpmi_close(v);
+        pool_unpin(v);
         dosvm_memory_close(v);
         as_destroy(&v->as);
     }
     memset(v->frames, 0, sizeof(v->frames));
     memset(v->ports, 0, sizeof(v->ports));
     v->key_count = v->line_length = 0;
+    if (v->info.commitment && ledger_promise) ledger_promise(MM_VM_PRIVATE,
+        -(int32_t)(v->info.commitment/PAGE_SIZE),-(int32_t)(v->info.commitment/PAGE_SIZE));
     v->info.commitment = v->info.resident = 0;
     v->info.cleanup_error = e;
     /* A failed unlink retains the generation/table for retry, never reuses
@@ -1129,6 +1162,7 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
          key.id,key.generation,e,v->info.data_loss,v->overlay_created);
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
              key.id, key.generation, v->info.data_loss, e);
+    if (ledger_record) ledger_record("vm-teardown");
     return e;
 }
 
@@ -1155,6 +1189,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     if (!v) return -ENOSPC;
     uint32_t generation = gen_alloc();
     if (!generation) return -ENOSPC;
+    if (ledger_promise) ledger_promise(MM_VM_PRIVATE,commitment/PAGE_SIZE,commitment/PAGE_SIZE);
     initializing[slot] = commitment;
     for (size_t at = 0; at < sizeof(*v); at += PAGE_SIZE) {
         size_t bytes = sizeof(*v) - at;
@@ -1177,12 +1212,14 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
     if (e) goto fail;
+    v->as.owner=MM_VM_PRIVATE; v->as.pool_base=VM_POOL_BASE;
     for (unsigned i = 0; i < DOSVM_PAGES; i++) {
         uint32_t phys = pmm_alloc_zone(ZONE_NORMAL);
         if (!phys) { e = -ENOMEM; goto fail; }
+        mm_claim(phys,1,MM_VM_PRIVATE);
         memset(P2V(phys), 0, PAGE_SIZE);
         e = as_map(&v->as, i * PAGE_SIZE, phys, dosvm_low_flags(i));
-        if (e) { pmm_free(phys); goto fail; }
+        if (e) { mm_free(phys,MM_VM_PRIVATE); goto fail; }
         v->frames[i] = phys;
         v->info.resident += PAGE_SIZE;
         kpreempt_point(); /* page initialized and mapping/accounting published */
@@ -1210,6 +1247,8 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     e = dosvm_memory_init(v, config);
     if (e) goto fail;
     kpreempt_point();
+    e = pool_pin(v);
+    if (e) goto fail;
     e = dosvm_vga_init(v);
     if (e) goto fail;
     if ((e = dpmi_rom_init(v))) goto fail;
@@ -1228,6 +1267,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_start vm=%u gen=%u tracker=%s",
                          v->info.key.id, v->info.key.generation, v->return_tracker_tf ? "tf" : "breakpoint");
     *out = v;
+    if (ledger_record) ledger_record("maximum-vm-created");
     return 0;
 fail:
     dosvm_destroy(v->info.key, true);

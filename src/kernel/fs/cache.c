@@ -1,5 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "cache.h"
+#ifndef FS_HOST
+#include <ciuki/ledger.h>
+static void cache_claim(void *p, enum mm_owner owner) { if (p) mm_claim(V2P(p),1,owner); }
+static void cache_unclaim(void *p, enum mm_owner owner) { if (p) mm_release(V2P(p),1,owner); }
+#else
+#include <ciuki/ledger.h>
+static void cache_claim(void *p, enum mm_owner owner) { (void)p; (void)owner; }
+static void cache_unclaim(void *p, enum mm_owner owner) { (void)p; (void)owner; }
+#endif
 /* Optional in the standalone F1 host model; attributes a successful physical
  * read to the native caller (or the child it is preparing), never a global delta. */
 void proc_launch_disk_read(uint32_t bytes);
@@ -322,10 +331,11 @@ int cache_init(struct block_cache *c, size_t bytes) {
         c->writeback_pages=8;
         c->writeback_buffer=fs_contig_alloc(c->writeback_pages*4096u);
         if (!c->writeback_buffer) goto fail;
+        for (unsigned i=0;i<c->writeback_pages;i++) cache_claim(c->writeback_buffer+i*4096u,MM_CACHE_WORK);
     }
     c->workspace_pages=(uint32_t)(pages/16); if (!c->workspace_pages) c->workspace_pages=1;
     if (c->workspace_pages>256) c->workspace_pages=256;
-    for (unsigned i=0;i<c->workspace_pages;i++) if (!(c->workspace[i]=fs_page_alloc())) goto fail;
+    for (unsigned i=0;i<c->workspace_pages;i++) { if (!(c->workspace[i]=fs_page_alloc())) goto fail; cache_claim(c->workspace[i],MM_CACHE_WORK); }
     /* Budget: workspace + writeback + data + descriptors == bytes/4096. */
     unsigned room=(unsigned)(pages-c->workspace_pages-c->writeback_pages), data=room;
     while (data && data+meta_needed(data)>room) data--;
@@ -337,11 +347,12 @@ int cache_init(struct block_cache *c, size_t bytes) {
         else {
             if (!m || m->count==PAGES_PER_META) {
                 struct cache_meta *n=fs_page_alloc(); if (!n) goto fail;
+                cache_claim(n,MM_CACHE_META);
                 n->next=c->meta; c->meta=n; c->meta_pages++; m=n;
             }
             pg=&m->pages[m->count];
         }
-        pg->data=fs_page_alloc(); if (!pg->data) goto fail;
+        pg->data=fs_page_alloc(); if (!pg->data) goto fail; cache_claim(pg->data,MM_CACHE_DATA);
         if (i) m->count++;
         c->data_pages++;
         half_activate(c,pg,0,0,false); half_activate(c,pg,1,0,false);
@@ -350,14 +361,15 @@ int cache_init(struct block_cache *c, size_t bytes) {
 fail: cache_destroy(c); return -FS_ENOMEM;
 }
 void cache_destroy(struct block_cache *c) {
+    if (c->writeback_buffer) for (unsigned i=0;i<c->writeback_pages;i++) cache_unclaim(c->writeback_buffer+i*4096u,MM_CACHE_WORK);
     fs_contig_free(c->writeback_buffer,c->writeback_pages*4096u);
-    if (c->inline_page.data) fs_page_free(c->inline_page.data);
+    if (c->inline_page.data) { cache_unclaim(c->inline_page.data,MM_CACHE_DATA); fs_page_free(c->inline_page.data); }
     while (c->meta) {
         struct cache_meta *m=c->meta; c->meta=m->next;
-        for (unsigned i=0;i<m->count;i++) fs_page_free(m->pages[i].data);
-        fs_page_free(m);
+        for (unsigned i=0;i<m->count;i++) { cache_unclaim(m->pages[i].data,MM_CACHE_DATA); fs_page_free(m->pages[i].data); }
+        cache_unclaim(m,MM_CACHE_META); fs_page_free(m);
     }
-    for (unsigned i=0;i<c->workspace_pages;i++) fs_page_free(c->workspace[i]);
+    for (unsigned i=0;i<c->workspace_pages;i++) { cache_unclaim(c->workspace[i],MM_CACHE_WORK); fs_page_free(c->workspace[i]); }
     fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed);
     memset(c,0,sizeof(*c));
 }

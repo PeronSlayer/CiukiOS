@@ -9,6 +9,7 @@
 #include <ciuki/audio_backend.h>
 #include <ciuki/timing.h>
 
+static struct mm_pin ac97_pins[9];
 struct ac97_device ac97;
 #define AC97_ANALOG_WAIT_MS 5000u
 #define AC97_ACTIVATION_MS 7000u
@@ -726,9 +727,12 @@ void ac97_shutdown(void)
         }
     }
     if (!unsafe) {
-        if (d->bdl_phys) { pmm_free(d->bdl_phys); audio.commitment_pages--; d->bdl_phys = 0; }
+        if (mm_unpin) for (unsigned i=0;i<9;i++) if (ac97_pins[i].ticket) {
+            (void)mm_unpin(&ac97_pins[i],ac97_pins[i].generation); ac97_pins[i].ticket=0;
+        }
+        if (d->bdl_phys) { mm_free(d->bdl_phys,MM_DMA); audio.commitment_pages--; d->bdl_phys = 0; }
         for (unsigned i = 0; i < 8; i++) if (d->payload_pages[i]) {
-            pmm_free(d->payload_pages[i]); audio.commitment_pages--; d->payload_pages[i] = 0;
+            mm_free(d->payload_pages[i],MM_DMA); audio.commitment_pages--; d->payload_pages[i] = 0;
         }
         if (codec_stopped) klog("[audio] cleanup reason=%s access=%s controller=disabled leases=released",
             d->failure.stage, d->codec_error ? d->codec_error : "ok");
@@ -772,19 +776,31 @@ int ac97_init(void)
             if ((rd(d, off + 0xb, 1) & 1) || !(rd(d, off + 6, 2) & AC97_DCH)) err = -EBUSY;
         if (d->nvidia && ((rd(d,0x7b,1)&1) || !(rd(d,0x76,2)&AC97_DCH))) err=-EBUSY;
     }
+    if (!err) { d->generation=gen_alloc(); if (!d->generation) err=-ENOMEM; }
     if (!err) {
         d->bdl_phys = pmm_alloc_zone(ZONE_DMA);
         if (!d->bdl_phys) err = -ENOMEM;
-        else { d->bdl = P2V(d->bdl_phys); memset(d->bdl, 0, PAGE_SIZE); audio.commitment_pages++; }
+        else { mm_claim(d->bdl_phys,1,MM_DMA); d->bdl = P2V(d->bdl_phys); memset(d->bdl, 0, PAGE_SIZE); audio.commitment_pages++; }
     }
     for (unsigned i = 0; !err && i < 8; i++) {
         d->payload_pages[i] = pmm_alloc_zone(ZONE_DMA);
         if (!d->payload_pages[i]) { err = -ENOMEM; break; }
+        mm_claim(d->payload_pages[i],1,MM_DMA);
         memset(P2V(d->payload_pages[i]), 0, PAGE_SIZE); audio.commitment_pages++;
         for (unsigned j = 0; j < 4; j++) {
             unsigned slot = i * 4 + j;
             d->pcm[slot] = (struct audio_frame *)((uint8_t *)P2V(d->payload_pages[i]) + j * 1024);
             d->bdl[slot].address = d->payload_pages[i] + j * 1024;
+        }
+    }
+    if (!err && mm_pin) {
+        memset(ac97_pins,0,sizeof(ac97_pins));
+        for (unsigned i=0;i<9 && !err;i++) {
+            uint32_t phys=i ? d->payload_pages[i-1] : d->bdl_phys;
+            ac97_pins[i]=(struct mm_pin){.generation=d->generation,
+                .first_pfn=phys/PAGE_SIZE,.pages=1,.address_mask=UINT32_MAX,
+                .alignment=i ? 4 : 8,.direction=MM_PIN_TO_DEVICE};
+            err=mm_pin(&ac97_pins[i]);
         }
     }
     if (!err) {
@@ -812,8 +828,6 @@ int ac97_init(void)
         d->activation_deadline = 0; /* cleanup has its own bounded stop budget */
         ac97_shutdown(); return err;
     }
-    d->generation = gen_alloc();
-    if (!d->generation) { audio.reason = "generation_exhausted"; ac97_shutdown(); return -ENOMEM; }
     d->activation_deadline = 0;
     audio.caps = (struct ciuki_audio_caps){ .version=1, .size=80, .formats=3,
         .min_rate=8000, .max_rate=48000, .output_rate=48000, .max_streams=8,

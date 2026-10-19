@@ -140,7 +140,7 @@ void surface_release(struct surface *s)
     if (!s || --s->references)
         return;
     for (unsigned i = 0; i < s->info.allocation_bytes / PAGE_SIZE; i++)
-        if (surface_page(s, i)) { pmm_free(surface_page(s, i)); desktop_objects.pages--; }
+        if (surface_page(s, i)) { mm_free(surface_page(s, i),MM_USER_SHARED); if (ledger_promise) ledger_promise(MM_USER_SHARED,0,-1); desktop_objects.pages--; }
     for (unsigned i = 0; i < ARRAY_SIZE(s->page_lists); i++)
         if (s->page_lists[i]) pmm_free(s->page_lists[i]);
     desktop_objects.surfaces--;
@@ -174,6 +174,8 @@ int surface_create(struct process *p, uint32_t width, uint32_t height, uint32_t 
         }
         uint32_t phys = pmm_alloc();
         if (!phys) { surface_release(s); return -ENOMEM; }
+        mm_claim(phys,1,MM_USER_SHARED);
+        if (ledger_promise) ledger_promise(MM_USER_SHARED,0,1);
         ((uint32_t *)P2V(s->page_lists[table]))[slot] = phys;
         desktop_objects.pages++;
         memset(P2V(phys), 0, PAGE_SIZE);

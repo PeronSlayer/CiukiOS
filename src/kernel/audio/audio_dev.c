@@ -475,7 +475,10 @@ static void audio_service_locked(void)
 void audio_service(void)
 {
     kmutex_lock(&service_lock);
+    if (ledger_critical) ledger_critical(true);
     audio_service_locked();
+    if (ledger_critical) ledger_critical(false);
+    if (ledger_audio_active) ledger_audio_active(audio.running);
     kmutex_unlock(&service_lock);
 }
 static void audio_write_service(void)

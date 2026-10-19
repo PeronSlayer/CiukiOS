@@ -65,12 +65,14 @@ void vmm_init(void)
     kpd_phys = pmm_alloc_zone(ZONE_DMA);
     if (!kpd_phys)
         panic("vmm: no page for the kernel directory");
+    mm_claim(kpd_phys, 1, MM_TABLE);
     kpd = table_va(kpd_phys);
     memset(kpd, 0, PAGE_SIZE);
     for (unsigned i = 768; i < 1023; i++) {
         uint32_t pt = pmm_alloc_zone(ZONE_DMA);
         if (!pt)
             panic("vmm: no page for kernel table %u", i);
+        mm_claim(pt, 1, MM_TABLE);
         memset(table_va(pt), 0, PAGE_SIZE);
         kpd[i] = pt | PTE_P | PTE_W;
     }
@@ -195,8 +197,9 @@ void *kstack_alloc(void)
         uint32_t pages[KSTACK_SIZE / PAGE_SIZE];
         for (unsigned i = 0; i < ARRAY_SIZE(pages); i++) {
             pages[i] = pmm_alloc();
+            mm_claim(pages[i], 1, MM_STACK);
             if (!pages[i]) {
-                while (i) pmm_free(pages[--i]);
+                while (i) mm_free(pages[--i], MM_STACK);
                 return 0;
             }
         }
@@ -223,7 +226,7 @@ void kstack_free(void *base)
     for (unsigned i = 1; i <= KSTACK_SIZE / PAGE_SIZE; i++) {
         uint32_t pte = vmm_kernel_pte(b + i * PAGE_SIZE);
         kunmap(b + i * PAGE_SIZE);
-        pmm_free(pte & ~0xFFFu);
+        mm_free(pte & ~0xFFFu, MM_STACK);
     }
     stack_slot_used[s] = 0;
 }
@@ -235,12 +238,14 @@ int as_create(struct aspace *as)
     uint32_t pd = pmm_alloc();
     if (!pd)
         return -ENOMEM;
+    mm_claim(pd, 1, MM_TABLE);
     uint32_t *v = table_va(pd);
     memset(v, 0, PAGE_SIZE);
     for (unsigned i = 768; i < 1023; i++)
         v[i] = kpd[i];
     v[1023] = pd | PTE_P | PTE_W;
     as->pd_phys = pd;
+    as->owner = MM_KERNEL; as->pool_base = 0;
     as->pages = 0;
     as->tables = 0;
     return 0;
@@ -256,6 +261,7 @@ int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
         uint32_t pt = pmm_alloc();
         if (!pt)
             return -ENOMEM;
+        mm_claim(pt, 1, MM_TABLE);
         memset(table_va(pt), 0, PAGE_SIZE);
         *pde = pt | PTE_P | PTE_W | PTE_U;
         as->tables++;
@@ -264,6 +270,7 @@ int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags)
     if (!(*pte & PTE_P)) {
         as->pages++;
         g_user_mappings++;
+        if (ledger_mapping) ledger_mapping(1, 0);
     }
     *pte = (phys & ~0xFFFu) | (flags & (PTE_W | PTE_U)) | PTE_P;
     if (read_cr3() == as->pd_phys)
@@ -325,12 +332,14 @@ void as_destroy(struct aspace *as)
         uint32_t *pt = table_va(pd[i] & ~0xFFFu);
         for (unsigned j = 0; j < 1024; j++)
             if (pt[j] & PTE_P) {
-                pmm_free(pt[j] & ~0xFFFu);
+                mm_free(pt[j] & ~0xFFFu, as->pool_base && (i * 1024u + j) * PAGE_SIZE >= as->pool_base ? MM_VM_POOL : as->owner);
+                if (as->owner==MM_USER_PRIVATE && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
                 g_user_mappings--;
+                if (ledger_mapping) ledger_mapping(-1, 0);
             }
-        pmm_free(pd[i] & ~0xFFFu);
+        mm_free(pd[i] & ~0xFFFu, MM_TABLE);
     }
-    pmm_free(as->pd_phys);
+    mm_free(as->pd_phys, MM_TABLE);
     as->pd_phys = 0;
     as->pages = as->tables = 0;
 }

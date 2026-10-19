@@ -3,7 +3,7 @@
 #include <ciuki/hardware_check.h>
 static const char *const items[HW_CHECK_ITEMS] = {
     "ATA scratch", "Mount repair", "USB storage", "USB mouse", "Keyboard / EC",
-    "Timer 10 s", "SMI bit 10 s", "Serial burst", "Savage sweep", "Audio 10 s"
+    "Timer 10 s", "SMI bit 10 s", "Serial burst", "Savage sweep", "Audio 10 s", "Memory ledger"
 };
 void hardware_check_model(const struct hw_check_ops *ops, struct hw_check_result results[HW_CHECK_ITEMS])
 {

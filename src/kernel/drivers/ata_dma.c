@@ -6,6 +6,8 @@
 #include <ciuki/mm.h>
 #include <ciuki/ata.h>
 
+static struct mm_pin ata_pins[ATA_CHANNELS][2];
+
 _Static_assert(sizeof(struct ata_prd) == 8, "SFF PRD layout");
 
 int ata_dma_prd(struct ata_prd *prd, unsigned capacity, uint32_t phys, uint32_t bytes)
@@ -94,6 +96,7 @@ static const struct ata_dma_ops bm_ops = { bm_read, bm_write, bm_write32, bm_phy
 
 void ata_dma_attach(struct ata_channel *c, unsigned index)
 {
+    if (index >= ATA_CHANNELS) return;
     const struct pci_func *p = 0;
     uint16_t base = 0;
     for (unsigned i = 0; i < pci_count(); i++) {
@@ -130,6 +133,19 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
         if (table) pmm_free(table);
         registry_quarantine(claim, generation); return;
     }
+    struct mm_pin *pins = ata_pins[index];
+    pins[0] = (struct mm_pin){.generation=generation,.first_pfn=table/PAGE_SIZE,.pages=1,
+        .address_mask=UINT32_MAX,.alignment=4,.boundary=65536,.direction=MM_PIN_TO_DEVICE};
+    pins[1] = (struct mm_pin){.generation=generation,.first_pfn=bounce/PAGE_SIZE,.pages=ATA_DMA_BYTES/PAGE_SIZE,
+        .address_mask=UINT32_MAX,.alignment=2,.direction=MM_PIN_BIDIRECTIONAL};
+    int pin_error = mm_pin ? mm_pin(&pins[0]) : 0;
+    if (!pin_error && mm_pin) pin_error = mm_pin(&pins[1]);
+    if (pin_error) {
+        if (pins[0].ticket && mm_unpin) (void)mm_unpin(&pins[0],generation);
+        pmm_free(table);
+        for (unsigned i=0;i<ATA_DMA_BYTES/PAGE_SIZE;i++) pmm_free(bounce+i*PAGE_SIZE);
+        registry_quarantine(claim,generation); return;
+    }
     uint32_t f = irq_save();
     uint32_t address = 0x80000004u | (uint32_t)p->bus << 16 | (uint32_t)p->dev << 11 | (uint32_t)p->fn << 8;
     outl(0xcf8, address);
@@ -141,10 +157,12 @@ void ata_dma_attach(struct ata_channel *c, unsigned index)
     }
     irq_restore(f);
     if (!enabled || ata_dma_setup(c, base, &bm_ops, 0, P2V(table), table, P2V(bounce), bounce)) {
+        if (mm_unpin) for (unsigned i=0;i<2;i++) if (pins[i].ticket) (void)mm_unpin(&pins[i],generation);
         pmm_free(table);
         for (unsigned i = 0; i < ATA_DMA_BYTES / PAGE_SIZE; i++) pmm_free(bounce + i * PAGE_SIZE);
         registry_quarantine(claim, generation); return;
     }
+    mm_claim(table,1,MM_DMA); mm_claim(bounce,ATA_DMA_BYTES/PAGE_SIZE,MM_DMA);
     c->dma.claim = claim; c->dma.generation = generation;
     c->dma.pci_config = address;
 }

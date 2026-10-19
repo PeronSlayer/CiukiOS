@@ -154,6 +154,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
     "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
 
+# M1: production PMM/VMM/user mappings, ledger and generation-safe pins.
+# Context violations are diagnostic in production; strictness is opt-in here.
+for ledger_mode in normal strict; do
+    ledger_flags=()
+    if [[ "$ledger_mode" == strict ]]; then ledger_flags+=(-DCIUKI_LEDGER_STRICT); fi
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
+        -Wl,--gc-sections -fsanitize=address,undefined "${ledger_flags[@]}" -I "$root/src/kernel/include" \
+        "$root/tests/host/ledger_test.c" -o "$out/ledger_test_$ledger_mode"
+    "$out/ledger_test_$ledger_mode"
+done
+
 # f4-04: the physical allocator's contiguous run behind the NTFS mount workspace.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pmm_contig_test.c" -o "$out/pmm_contig_test"

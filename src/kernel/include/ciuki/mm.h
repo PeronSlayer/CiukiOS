@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <ciuki/ledger.h>
 
 #define PMM_MAX_PAGES   (768u * 256u)      /* direct map limit: 768 MiB */
 #define ZONE_LOW        0
@@ -21,6 +22,13 @@ uint32_t pmm_alloc_contig(uint32_t pages); /* contiguous run, NORMAL then DMA; p
  * Never spills above the ISA 24-bit address limit. */
 uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment);
 void pmm_free(uint32_t phys);
+/* Paired with mm_claim: return known object ownership before PMM release. */
+void pmm_free_owned(uint32_t phys, enum mm_owner owner) __attribute__((weak));
+static inline void mm_free(uint32_t phys, enum mm_owner owner)
+{
+    if (pmm_free_owned) pmm_free_owned(phys, owner);
+    else pmm_free(phys); /* fake-PMM host fixtures */
+}
 uint32_t pmm_free_count(void);
 uint32_t pmm_zone_free(int zone);
 uint32_t pmm_zone_total(int zone);
@@ -70,6 +78,8 @@ struct aspace {
     uint32_t pd_phys;
     uint32_t pages;                        /* user pages mapped */
     uint32_t tables;                       /* user page tables allocated */
+    enum mm_owner owner;                  /* data frames; tables are MM_TABLE */
+    uint32_t pool_base;                    /* VM pool boundary, zero otherwise */
 };
 int as_create(struct aspace *as);
 int as_map(struct aspace *as, uint32_t va, uint32_t phys, uint32_t flags);

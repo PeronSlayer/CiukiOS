@@ -48,16 +48,19 @@ static void handle_irq(struct trap_frame *tf)
         "irq8", "irq9", "irq10", "irq11", "irq12", "irq13", "irq14", "irq15"
     };
     unsigned irq = tf->vector - 0x20;
+    if (ledger_irq_context) ledger_irq_context(true);
     if (crit_label) crit_label(sections[irq]);
     if (irq == 7 && !(pic_isr(0x20) & 0x80)) {
         g_spurious_irq7++;              /* spurious: no handler, no EOI */
         irq_chain_spurious(7);
+        if (ledger_irq_context) ledger_irq_context(false);
         return;
     }
     if (irq == 15 && !(pic_isr(0xA0) & 0x80)) {
         g_spurious_irq15++;
         irq_chain_spurious(15);
         outb(0x20, 0x62);               /* acknowledge the master cascade only */
+        if (ledger_irq_context) ledger_irq_context(false);
         return;
     }
     biosvm_account_irq(irq, false, irq_handlers[irq] != 0);
@@ -65,6 +68,7 @@ static void handle_irq(struct trap_frame *tf)
         irq_handlers[irq](tf);
     pic_eoi(irq);
     biosvm_account_irq(irq, true, irq_handlers[irq] != 0);
+    if (ledger_irq_context) ledger_irq_context(false);
 }
 
 static bool try_expected(struct trap_frame *tf)
@@ -92,6 +96,7 @@ static bool try_expected(struct trap_frame *tf)
 
 void trap_dispatch(struct trap_frame *tf)
 {
+    if (tf->vector==14 && ledger_assert_pinned_context) ledger_assert_pinned_context(true,tf->eip);
     cpu_trap_enter(tf);
     /* F1: VM has CPL3 regardless of the low bits in real-mode CS.
      * Dispatch/EOI physical IRQs exactly once before firmware reflection.

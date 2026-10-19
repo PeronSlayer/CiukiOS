@@ -21,12 +21,17 @@ static void test_irq_restore(uint32_t f) { (void)f; }
 struct ciuki_boot_info g_boot;
 char __kernel_start[1], __kernel_end[1];
 void panic(const char *fmt, ...) { (void)fmt; printf("FAIL panic\n"); abort(); }
+struct task *g_current;
+volatile uint64_t g_ticks;
+void klog(const char *fmt, ...) { (void)fmt; }
 #include "../../src/kernel/core/pmm.c"
+#include "../../src/kernel/core/ledger.c"
 
 static uint32_t zone_normal(void) { return pmm_zone_free(ZONE_NORMAL); }
 static uint32_t zone_dma(void) { return pmm_zone_free(ZONE_DMA); }
 static void fresh(void)
 {
+    if (pmm_total_usable()) CHECK(ledger_reconcile());
     memset(&g_boot, 0, sizeof(g_boot));
     g_boot.e820_count = 2;
     g_boot.e820[0] = (struct ciuki_e820){ .base = 0, .length = 0xa0000, .type = CBI_E820_RAM };
@@ -49,7 +54,7 @@ int main(void)
     for (unsigned i=0;i<8;i++) CHECK(!pmm_page_free(isa/PAGE_SIZE+i));
     release(isa,8); CHECK(zone_dma()==dma);
     /* There is no NORMAL fallback, even with all of it free. */
-    for (unsigned pfn=256;pfn<4096;pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; }
+    for (unsigned pfn=256;pfn<4096;pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; ledger_alloc_page(pfn); }
     CHECK(!pmm_alloc_dma_run(8,8) && zone_normal()==normal);
     fresh();
 
@@ -80,27 +85,28 @@ int main(void)
     fresh(); normal = zone_normal(); dma = zone_dma();
     uint32_t held[6144]; unsigned count = 0;
     for (unsigned i = 0; i < 12288; i += 2) held[count++] = (4096u + i) * PAGE_SIZE;
-    for (unsigned i = 0; i < count; i++) { bitmap[(held[i] >> 12) >> 5] |= 1u << ((held[i] >> 12) & 31); zone_free[ZONE_NORMAL]--; }
+    for (unsigned i = 0; i < count; i++) { bitmap[(held[i] >> 12) >> 5] |= 1u << ((held[i] >> 12) & 31); zone_free[ZONE_NORMAL]--; ledger_alloc_page(held[i] >> 12); }
     uint32_t pair = pmm_alloc_contig(2);
     CHECK(pair && pair < (16u << 20) && zone_normal() == normal - count);
     release(pair, 2);
     uint32_t one = pmm_alloc_contig(1); CHECK(one >= (16u << 20));              /* a single page is a run of one */
     release(one, 1);
     /* Fragment DMA as well: nothing contiguous remains. */
-    for (unsigned pfn = 256; pfn < 4096; pfn += 2) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; }
+    for (unsigned pfn = 256; pfn < 4096; pfn += 2) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; ledger_alloc_page(pfn); }
     CHECK(!pmm_alloc_contig(2) && pmm_alloc_contig(1));
 
     /* A run never straddles the DMA/NORMAL boundary (pfn 4096). */
     fresh();
-    for (unsigned pfn = 256; pfn < 4096 - 3; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; }
-    for (unsigned pfn = 4096; pfn < 4096 + 3; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_NORMAL]--; }
+    for (unsigned pfn = 256; pfn < 4096 - 3; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_DMA]--; ledger_alloc_page(pfn); }
+    for (unsigned pfn = 4096; pfn < 4096 + 3; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_NORMAL]--; ledger_alloc_page(pfn); }
     /* Free: DMA pfns 4093..4095 and NORMAL from 4099. NORMAL is searched first. */
     uint32_t edge = pmm_alloc_contig(3); CHECK(edge == 4099u * PAGE_SIZE);
     release(edge, 3);
-    for (unsigned pfn = 4096 + 3; pfn < 4096 + 12288; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_NORMAL]--; }
+    for (unsigned pfn = 4096 + 3; pfn < 4096 + 12288; pfn++) if (!used(pfn)) { set_used(pfn); zone_free[ZONE_NORMAL]--; ledger_alloc_page(pfn); }
     uint32_t over = pmm_alloc_contig(4); CHECK(!over);                               /* 3 pages left below the boundary */
     uint32_t last = pmm_alloc_contig(3); CHECK(last == 4093u * PAGE_SIZE);
 
+    CHECK(ledger_reconcile());
     printf("%s pmm_alloc_contig: zones, accounting, fragmentation, edges checks=%u failures=%u\n",
            failures ? "FAIL" : "PASS", checks, failures);
     return failures ? 1 : 0;

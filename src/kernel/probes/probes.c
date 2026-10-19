@@ -83,6 +83,7 @@ static bool spawn(struct upayload *u, const char *name, uint32_t id, uint32_t eb
     memset(P2V(s), 0, PAGE_SIZE);
     /* Ownership moves to the address space only when a mapping succeeds;
      * pages still owned here are freed on failure. */
+    u->t->as.owner=MM_USER_PRIVATE;
     uint32_t owned[3] = { d, c, s };
     const uint32_t vas[3] = { USER_DATA, USER_CODE, USER_STACK };
     const uint32_t fl[3] = { PTE_U | PTE_W, PTE_U, PTE_U | PTE_W };
@@ -95,6 +96,8 @@ static bool spawn(struct upayload *u, const char *name, uint32_t id, uint32_t eb
             u->t = 0;
             return false;
         }
+        mm_claim(owned[i],1,MM_USER_PRIVATE);
+        if (ledger_promise) ledger_promise(MM_USER_PRIVATE,0,1);
     }
     u->data_phys = d;
     return true;
@@ -406,7 +409,9 @@ static int probe_allocator(void)
     int32_t resource_delta = (int32_t)(kheap_in_use() - base_heap) + (int32_t)(g_user_mappings - base_maps);
     rec_emit("allocator", "DATA", "group=allocator cycles=100 final_free=%u partial_allocations=%u duplicates=%u reserved_violations=%u pattern_errors=%u resource_delta=%d bad_cycles=%u",
              final_free, st.partial, st.dup, st.viol, st.perr, resource_delta, bad_cycles);
-    bool ok = first_ok && alloc_error && exhausted_free == 0 && final_free == base_free &&
+    bool ledger_ok=ledger_reconcile(); ledger_record("allocator-probe");
+    rec_emit("allocator","DATA","group=ledger reconciled=%u",ledger_ok);
+    bool ok = ledger_ok && first_ok && alloc_error && exhausted_free == 0 && final_free == base_free &&
               !st.partial && !st.dup && !st.viol && !st.perr && resource_delta == 0 && !bad_cycles;
     return verdict("allocator", ok, "accounting");
 }
@@ -1059,6 +1064,7 @@ static void quiet_watchdog(void *arg)
         task_sleep_ms(60000);
 }
 
+
 void probes_main(void *arg)
 {
     (void)arg;
@@ -1076,6 +1082,7 @@ void probes_main(void *arg)
         }
         drivers_init();
         supervisor_bootstrap();
+        ledger_reconcile(); ledger_record("boot-end");
         power_discover();                /* logs the ACPI soft-off facts once */
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
         for (;;)
@@ -1117,6 +1124,7 @@ void probes_main(void *arg)
         }
     }
     drivers_init();
+    ledger_reconcile(); ledger_record("boot-end");
     klog("[selector] probe=%s platform=%s tsc_khz=%u", probe,
          (g_boot.flags & CBI_F_INPUT_FORCED) ? "e500" : "native", (uint32_t)g_tsc_per_ms);
     if (sweep) sweep_main(cursor, &tables, &hooks);

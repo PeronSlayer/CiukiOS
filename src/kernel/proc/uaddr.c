@@ -44,6 +44,7 @@ static uint32_t *pte(struct uaddr *u, uint32_t va, bool create)
         uint32_t phys = pmm_alloc();
         if (!phys)
             return 0;
+        mm_claim(phys,1,MM_TABLE);
         memset(P2V(phys), 0, PAGE_SIZE);
         *de = phys | PTE_P | PTE_W | PTE_U;
         u->as.tables++;
@@ -65,6 +66,8 @@ static void set_pte(struct uaddr *u, uint32_t va, uint32_t *p, uint32_t value)
         if (now) { u->as.pages++; g_user_mappings++; }
         else { u->as.pages--; g_user_mappings--; }
     }
+    if (ledger_mapping) ledger_mapping((int)now-(int)was,
+        (int)(now && (value & PTE_SHARED))-(int)(was && (*p & PTE_SHARED)));
     *p = value;
     flush(u, va);
 }
@@ -77,7 +80,8 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
             continue;
         if (*p & PTE_OWN) {
             if (!(*p & PTE_SHARED))
-                pmm_free(*p & ~(PAGE_SIZE - 1));
+                mm_free(*p & ~(PAGE_SIZE - 1), MM_USER_PRIVATE);
+            if (!(*p & PTE_SHARED) && ledger_promise) ledger_promise(MM_USER_PRIVATE,0,-1);
             u->backing--;
         }
         set_pte(u, va, p, 0);
@@ -93,7 +97,7 @@ static void free_pages(struct uaddr *u, uint32_t base, uint32_t end, bool only_n
         while (j < 1024 && !pt[j])
             j++;
         if (j == 1024) {
-            pmm_free(pd[i] & ~(PAGE_SIZE - 1));
+            mm_free(pd[i] & ~(PAGE_SIZE - 1), MM_TABLE);
             pd[i] = 0;
             u->as.tables--;
         }
@@ -111,6 +115,8 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         uint32_t phys = pmm_alloc();
         if (!phys)
             goto fail;
+        mm_claim(phys,1,MM_USER_PRIVATE);
+        if (ledger_promise) ledger_promise(MM_USER_PRIVATE,0,1);
         memset(P2V(phys), 0, PAGE_SIZE);
         *p = phys | PTE_OWN | PTE_NEW;
         u->backing++;
@@ -197,6 +203,7 @@ int ua_map_at(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
         return err;
     }
     protect_pages(u, base, end, prot);
+    if (ledger_promise) ledger_promise(kind==UA_SHARED ? MM_USER_SHARED : MM_USER_PRIVATE,(end-base)/PAGE_SIZE,0);
     e->prot = prot; e->preparing = false;
     if (cpu_path_add && cpu_path_clock) cpu_path_add(CPU_ZERO, cpu_path_clock() - start);
     return 0;
@@ -300,6 +307,7 @@ static void remove_range(struct uaddr *u, uint32_t base, uint32_t end)
     while (*at) {
         struct ua_extent *e = *at;
         if (e->base >= base && e->end <= end) {
+            if (ledger_promise) ledger_promise(e->kind==UA_SHARED ? MM_USER_SHARED : MM_USER_PRIVATE,-(int32_t)((e->end-e->base)/PAGE_SIZE),0);
             ww_cancel(u->identity, e->generation, e->base, e->end);
             free_pages(u, e->base, e->end, false);
             if (e->shared.object) e->shared.release(e->shared.object);

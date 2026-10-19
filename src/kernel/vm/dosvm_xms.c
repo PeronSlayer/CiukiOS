@@ -12,6 +12,7 @@ void dosvm_page_remove(struct dosvm *v, uint32_t va)
     uint32_t *pt=P2V(pde&~0xFFFu), *pte=&pt[(va>>12)&1023];
     if (!(*pte&PTE_P)) return;
     *pte=0; v->as.pages--; g_user_mappings--;
+    if (ledger_mapping) ledger_mapping(-1,0);
     if (read_cr3()==v->as.pd_phys) invlpg(va);
 }
 
@@ -128,10 +129,11 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
     unsigned tables=v->as.tables;
     for (uint32_t off=0;off<v->memory.quota;off+=PAGE_SIZE) {
         uint32_t phys=pmm_alloc_zone(ZONE_NORMAL);
+        mm_claim(phys,1,MM_VM_POOL);
         if (!phys) { v->info.resident+=(v->as.tables-tables)*PAGE_SIZE; return -ENOMEM; }
         memset(P2V(phys),0,PAGE_SIZE);
         if (as_map(&v->as,VM_POOL_BASE+off,phys,PTE_U|PTE_W)) {
-            pmm_free(phys); v->info.resident+=(v->as.tables-tables)*PAGE_SIZE; return -ENOMEM;
+            mm_free(phys,MM_VM_POOL); v->info.resident+=(v->as.tables-tables)*PAGE_SIZE; return -ENOMEM;
         }
         v->info.resident+=PAGE_SIZE;
         /* F0-41: 110 ms / 6144 pages ~= 18 us/page on the T23.
