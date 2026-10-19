@@ -1,0 +1,140 @@
+/* SPDX-License-Identifier: MIT
+ * Drive the production pump, publication policy and renderer with an independent
+ * DAC clock. CPU contention withholds service for 10 ms in every 20 ms.
+ * Include the private runtime to exercise its publisher without wall-clock waits. */
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+#include "../../../apps/music/view.h"
+static uint64_t test_now;
+static int model_clock(clockid_t id, struct timespec *t)
+{ (void)id; t->tv_sec=(time_t)(test_now/1000000000); t->tv_nsec=(long)(test_now%1000000000); return 0; }
+#define clock_gettime model_clock
+#include "../../../apps/music/runtime.c"
+#undef clock_gettime
+struct device { uint64_t accepted, consumed, last, credit; unsigned queued, writes, max_request, gaps; int partial, blocked; };
+static uint64_t cpu(void)
+{ struct timespec t; assert(!clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&t)); return (uint64_t)t.tv_sec*1000000000+t.tv_nsec; }
+static int device_open(void *ctx,unsigned *rate) { (void)ctx; *rate=48000; return 0; }
+static int device_write(void *ctx,const int16_t *pcm,unsigned n)
+{
+    struct device *d=ctx; assert(pcm && n && n<=2048 && n<=2048-d->queued);
+    if (!d->accepted) assert(n<=256);
+    if (n>d->max_request) d->max_request=n;
+    if (d->blocked) return -EAGAIN;
+    if (d->partial && n>7) n=7;
+    d->queued+=n; d->accepted+=n; d->writes++; return (int)n;
+}
+static int device_status(void *ctx,uint64_t *consumed,unsigned *queued,uint64_t *tail)
+{
+    struct device *d=ctx;
+    uint64_t credit=(test_now-d->last)*48000+d->credit, want=credit/1000000000;
+    d->credit=credit%1000000000; d->last=test_now;
+    if (d->accepted && want>d->queued) d->gaps++;
+    unsigned used=want<d->queued ? (unsigned)want : d->queued;
+    d->queued-=used; d->consumed+=used;
+    *consumed=d->consumed; *queued=d->queued; *tail=0; return 0;
+}
+static void device_close(void *ctx) { (void)ctx; }
+static uint64_t device_now(void *ctx) { (void)ctx; return test_now; }
+static int send_command(void *ctx,const struct music_command *c) { (void)ctx; (void)c; return 0; }
+static int volume_get(void *ctx,unsigned *v) { (void)ctx; *v=65; return 0; }
+static void repaint(struct du_ui *u,void *ctx)
+{ (void)u; struct music_app *a=ctx; music_runtime_repaint(a->backend->ctx); }
+static void prepare(struct music_player *p)
+{
+    p->device=p->started=p->first_pcm=1; p->view.rate=48000; p->view.state=MUSIC_PLAYING;
+    p->reader_length=p->view.duration=48000*180; p->count=MUSIC_RING;
+}
+static void contention(struct music_runtime *r,struct device *d)
+{
+    struct music_player *p=&r->player; prepare(p);
+    struct music_app *app=calloc(1,sizeof(*app)); struct du_ui *ui=calloc(1,sizeof(*ui));
+    uint32_t *pixels=calloc(560*420,4); assert(app && ui && pixels);
+    struct music_ui_backend backend={send_command,volume_get,NULL,NULL,r};
+    du_init(ui,pixels,560,420); music_attach(app,ui,&backend); ui->paint=repaint; du_render(ui);
+    uint64_t pump_cpu=0; unsigned turns=0, full_repaints=0;
+    for (test_now=0;test_now<60000000000ull;test_now+=2000000) {
+        if (test_now%20000000<10000000) continue;
+        uint64_t begin=cpu(); assert(!music_player_pump(p)); pump_cpu+=cpu()-begin; turns++;
+        // Synthetic producer keeps PCM available; the separate calibrated
+        // scheduling model exercises reader CPU budgets and batch/yield cost.
+        if (p->count<65536) p->count=MUSIC_RING-p->history;
+        publish(r,&p->view);
+        if (r->snapshot.publication!=app->snapshot.publication) {
+            music_update(app,&r->snapshot);
+            if (ui->dirty==1) full_repaints++;
+            if (ui->dirty) du_render(ui);
+        }
+    }
+    assert(!d->gaps && !p->view.starvations && d->max_request>256);
+    assert(p->view.position>48000*59.4 && p->view.position<=48000*60);
+    assert(atomic_load(&p->ui_publishes)<=120 && atomic_load(&p->ui_repaints)<=121);
+    assert(!full_repaints);
+    printf("production pump: wall=60s position=%.6fs gaps=%u starvations=%u writes=%u publishes=%u repaints=%u full_repaints=%u turns=%u pump_cpu_us=%.3f cpu_pct=%.4f\n",
+        p->view.position/48000.,d->gaps,p->view.starvations,d->writes,atomic_load(&p->ui_publishes),
+        atomic_load(&p->ui_repaints),full_repaints,turns,pump_cpu/1000.,pump_cpu/600000000.);
+    du_release(ui); free(pixels); free(ui); free(app);
+}
+static void backpressure(struct music_runtime *r,struct device *d)
+{
+    struct music_player *p=&r->player;
+    uint64_t before=p->written; unsigned count=p->count;
+    test_now+=12000000; d->blocked=1; assert(!music_player_pump(p));
+    assert(p->written==before && p->count==count);
+    d->blocked=0; d->partial=1; assert(!music_player_pump(p));
+    assert(p->written==before+7 && p->count==count-7);
+    d->partial=0;
+    puts("PASS pump EAGAIN and partial writes retain exact pending frames");
+}
+static void debounce(struct music_runtime *r,struct device *d)
+{
+    struct music_player *p=&r->player;
+    p->head=p->count=p->history=0; p->written=p->audible=d->consumed;
+    d->queued=0; d->last=test_now;
+    uint64_t start=test_now;
+    assert(!music_player_pump(p) && !p->view.buffering);
+    test_now=start+299000000; assert(!music_player_pump(p) && !p->view.buffering);
+    // A short recovery resets continuous-starvation detection.
+    p->count=256; assert(!music_player_pump(p));
+    test_now+=20000000; assert(!music_player_pump(p) && !p->view.buffering);
+    test_now+=299000000; assert(!music_player_pump(p) && !p->view.buffering);
+    test_now+=1000000; assert(!music_player_pump(p) && p->view.buffering);
+    uint64_t last=test_now;
+    p->count=MUSIC_RING-p->history; assert(!music_player_pump(p) && p->view.buffering);
+    for (unsigned i=0;i<1000;i++) {
+        test_now+=2000000; p->count=MUSIC_RING-p->history;
+        assert(!music_player_pump(p));
+        if (test_now-last<2000000000) assert(p->view.buffering);
+    }
+    assert(!p->view.buffering);
+    puts("PASS continuous 300ms entry, interrupted starvation, 2s stable recovery");
+}
+static void publication(struct music_runtime *r)
+{
+    struct music_snapshot *s=&r->player.view;
+    unsigned before=r->snapshot.publication, starvations=s->starvations;
+    s->state=MUSIC_ERROR; s->error=-EIO; test_now+=100000000; publish(r,s);
+    assert(r->snapshot.publication==before+1);
+    for (unsigned i=0;i<20;i++) { test_now+=100000000; s->reservoir_frames++; s->starvations++; publish(r,s); }
+    assert(r->snapshot.publication==before+1); // Diagnostics are not displayed.
+    s->starvations=starvations;
+    s->state=MUSIC_PLAYING; s->error=0; test_now+=500000000; publish(r,s);
+    before=r->snapshot.publication;
+    for (unsigned i=0;i<100;i++) {
+        s->buffering=!s->buffering; test_now+=2000000; publish(r,s);
+    }
+    assert(r->snapshot.publication<=before+4);
+    puts("PASS unchanged fields suppressed and state/buffering publications capped at 10Hz");
+}
+int main(void)
+{
+    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d};
+    struct music_runtime *r=calloc(1,sizeof(*r)); assert(r);
+    assert(!pthread_mutex_init(&r->lock,NULL)); music_player_init(&r->player,&out,NULL,NULL);
+    contention(r,&d); backpressure(r,&d); debounce(r,&d); publication(r);
+    music_player_destroy(&r->player); pthread_mutex_destroy(&r->lock); free(r); return 0;
+}

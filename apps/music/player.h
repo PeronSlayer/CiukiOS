@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #define MUSIC_RING 131072
+#define MUSIC_BATCH 4096
+#define MUSIC_DEVICE_FRAMES 2048
 #define MUSIC_COMMANDS 8
 /* A backend owns one nonblocking native stream; counters reset at open. */
 struct music_output {
@@ -12,14 +14,14 @@ struct music_output {
     int (*write)(void *, const int16_t *, unsigned frames);
     int (*status)(void *, uint64_t *consumed, unsigned *queued, uint64_t *tail_ns);
     void (*close)(void *);
-    uint64_t (*now)(void *);
+    uint64_t (*now)(void *); /* Monotonic; called by reader and pump concurrently. */
     void *ctx;
 };
 enum music_state { MUSIC_STOPPED, MUSIC_LOADING, MUSIC_PLAYING, MUSIC_PAUSED, MUSIC_ERROR, MUSIC_CLOSING };
 enum music_action { MUSIC_OPEN, MUSIC_ADD, MUSIC_SAVE, MUSIC_PLAY, MUSIC_PAUSE, MUSIC_STOP, MUSIC_PREV, MUSIC_NEXT, MUSIC_SEEK, MUSIC_SELECT, MUSIC_CLEAR };
 struct music_command { enum music_action action; uint64_t value; char path[MUSIC_PATH]; };
 struct music_snapshot {
-    enum music_state state; int error; unsigned current, rate, revision;
+    enum music_state state; int error; unsigned current, rate, revision, publication;
     unsigned reservoir_frames, starvations; int buffering;
     char error_path[MUSIC_PATH];
     uint64_t position, duration; struct music_playlist playlist;
@@ -33,8 +35,16 @@ struct music_player {
     pthread_t reader; pthread_mutex_t reservoir_lock; pthread_cond_t space;
     atomic_int reader_stop; int reader_live, sync_error, reader_error;
     unsigned history, reader_rate, source_rate, source_channels; uint64_t written, audible, reader_length;
-    int device, eof, started; uint64_t base, tail_deadline;
-    uint64_t starve_started, starve_logged; int starve_log_valid;
+    int device, eof, started, submitted; uint64_t base, tail_deadline;
+    uint64_t starve_started, starve_logged, last_starve; int starve_log_valid;
+    /* Reader and pump statistics share reservoir_lock; UI counters are atomic.
+     * Decode time is kernel-clock elapsed time, including scheduling/I/O. */
+    struct {
+        uint64_t start, sum, samples, frames, decode_ns, writes, bytes;
+        unsigned low, high, queued_low, queued_high, starvations;
+        unsigned publishes, repaints;
+    } level;
+    atomic_uint ui_publishes, ui_repaints;
     uint64_t load_started; int first_pcm;
     const char *stage;
     void (*changed)(void *, const struct music_snapshot *);
@@ -49,6 +59,7 @@ struct music_runtime;
 struct music_runtime *music_runtime_start(const struct music_output *);
 int music_runtime_send(struct music_runtime *, const struct music_command *);
 void music_runtime_snapshot(struct music_runtime *, struct music_snapshot *);
+void music_runtime_repaint(struct music_runtime *);
 void music_runtime_close(struct music_runtime *);
 int music_runtime_done(struct music_runtime *);
 void music_runtime_destroy(struct music_runtime *);

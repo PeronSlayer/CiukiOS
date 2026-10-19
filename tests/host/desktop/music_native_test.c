@@ -22,8 +22,11 @@ static int fake_close(int);
 #undef close
 #undef write
 #undef open
+static unsigned view_updates;
+void music_update(struct music_app *a, const struct music_snapshot *s)
+{ assert(a && s==&a->snapshot); view_updates++; }
 static int audio_closed, mixer_closed, blocked, malformed, fail_control, queue_failed;
-static unsigned fake_rate=48000;
+static unsigned fake_rate=48000, fake_queued=64;
 static unsigned idle_transport;
 static struct ciuki_message sent;
 static int fake_open(const char *path, int flags, ...)
@@ -46,7 +49,7 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t bytes)
         assert(f->channels==2 && f->format==CIUKI_AUDIO_S16LE && f->rate==fake_rate); f->output_rate=fake_rate;
     } else if (op==AUDIO_GET_STATUS) {
         assert(fd==40); struct ciuki_audio_status *s=record;
-        s->consumed_frames=5000; s->queued_frames=64; s->output_rate=fake_rate; s->transport_frames=480+idle_transport; s->latency_frames=64+480+fake_rate/50;
+        s->consumed_frames=5000; s->queued_frames=fake_queued; s->output_rate=fake_rate; s->transport_frames=480+idle_transport; s->latency_frames=fake_queued+480+fake_rate/50;
     } else {
         assert(fd==41 && op==MIXER_GET_MASTER); struct ciuki_mixer_master *m=record;
         m->left=40; m->right=80; m->mute=1;
@@ -64,6 +67,9 @@ int main(void)
     malformed=1; assert(audio_write(m,pcm,4)==-EIO); malformed=0;
     uint64_t consumed,tail; unsigned queued;
     assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && queued==64 && tail==30000000);
+    fake_queued=2048;
+    assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && queued==2048 && tail==30000000);
+    fake_queued=64;
     idle_transport=6400;
     assert(!audio_status(m,&consumed,&queued,&tail) && consumed==3560 && tail==30000000);
     audio_close(m); assert(m->audio==-1 && audio_closed==1);
@@ -72,7 +78,7 @@ int main(void)
     assert(!master_set(m,50) && m->app.waiting);
     assert(sent.data[1]==DESK_MIXER_SET && desk_get32(sent.data+8)==25 && desk_get32(sent.data+12)==50 && desk_get32(sent.data+16)==1);
     struct desk_packet result={.opcode=DESK_TASK_RESULT,.request=DESK_MIXER_SET,.serial=m->sent,.result=-EPERM};
-    message(&m->window,&result,m); assert(!m->app.waiting && m->app.local_error==-EPERM);
+    message(&m->window,&result,m); assert(!m->app.waiting && m->app.local_error==-EPERM && view_updates==1);
     queue_failed=1; assert(master_set(m,50)==-EAGAIN);
     fake_close(m->mixer); assert(mixer_closed==1); free(m);
     puts("PASS native adapters: nonblocking S16 stereo, queried device rate, partial/error writes, transport tail, mixer IPC balance/mute/errors"); return 0;

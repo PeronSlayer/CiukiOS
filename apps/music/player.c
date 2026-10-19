@@ -66,15 +66,17 @@ static void *reader(void *ctx)
     pthread_mutex_lock(&p->reservoir_lock);
     while (!atomic_load(&p->reader_stop)) {
         unsigned free_frames=MUSIC_RING-p->count-p->history;
-        if (!free_frames) { pthread_cond_wait(&p->space,&p->reservoir_lock); continue; }
+        if (free_frames<MUSIC_BATCH) { pthread_cond_wait(&p->space,&p->reservoir_lock); continue; }
         unsigned end=(p->head+p->count)%MUSIC_RING, n=MUSIC_RING-end;
         if (n>free_frames) n=free_frames;
-        if (n>1024) n=1024;
+        if (n>MUSIC_BATCH) n=MUSIC_BATCH;
         /* Publish the startup threshold exactly, independently of batch size. */
         unsigned threshold=p->reader_rate/10;
         if (p->count<threshold && n>threshold-p->count) n=threshold-p->count;
         pthread_mutex_unlock(&p->reservoir_lock);
+        uint64_t begin=p->output->now(p->output->ctx);
         int got=music_decoder_read(p->decoder,p->ring+2*end,n);
+        uint64_t elapsed=p->output->now(p->output->ctx)-begin;
         uint64_t length=music_decoder_length(p->decoder);
         pthread_mutex_lock(&p->reservoir_lock);
         if (atomic_load(&p->reader_stop)) break;
@@ -82,8 +84,10 @@ static void *reader(void *ctx)
         if (got<0) { p->reader_error=got; break; }
         if (!got) { p->eof=1; break; }
         p->count+=(unsigned)got;
+        p->level.frames+=(unsigned)got; p->level.decode_ns+=elapsed;
+        int yield=p->count>MUSIC_RING/2;
         pthread_mutex_unlock(&p->reservoir_lock);
-        reader_yield();
+        if (yield) reader_yield();
         pthread_mutex_lock(&p->reservoir_lock);
     }
     pthread_mutex_unlock(&p->reservoir_lock); return NULL;
@@ -107,9 +111,10 @@ static int start_reader(struct music_player *p)
 static void flush(struct music_player *p)
 {
     /* Only after joining: a cancelled read may still own unpublished slots. */
-    p->head=p->count=p->history=0; p->eof=p->reader_error=p->started=0;
-    p->written=p->audible=0; p->tail_deadline=p->starve_started=0;
+    p->head=p->count=p->history=0; p->eof=p->reader_error=p->started=p->submitted=0;
+    p->written=p->audible=0; p->tail_deadline=p->starve_started=p->last_starve=0;
     p->view.buffering=0; p->view.reservoir_frames=0;
+    memset(&p->level,0,sizeof(p->level));
 }
 static void close_device(struct music_player *p)
 {
@@ -130,8 +135,13 @@ static int position(struct music_player *p, uint64_t *tail)
     if (consumed>p->written) consumed=p->written;
     if (consumed<p->audible) consumed=p->audible;
     pthread_mutex_lock(&p->reservoir_lock);
+    unsigned free_before=MUSIC_RING-p->count-p->history;
     p->history-=(unsigned)(consumed-p->audible); p->audible=consumed;
-    pthread_cond_signal(&p->space); pthread_mutex_unlock(&p->reservoir_lock);
+    /* Submitted history is still owned until audible, including DMA latency.
+     * Only its retirement makes decode slots free. Avoid a wake per 2 ms turn. */
+    if (free_before<MUSIC_BATCH && MUSIC_RING-p->count-p->history>=MUSIC_BATCH)
+        pthread_cond_signal(&p->space);
+    pthread_mutex_unlock(&p->reservoir_lock);
     p->view.position=p->base+consumed;
     if (p->view.duration && p->view.position>p->view.duration) p->view.position=p->view.duration;
     return (int)queued;
@@ -166,6 +176,7 @@ static int load(struct music_player *p)
 void music_player_init(struct music_player *p, const struct music_output *output, music_cancel cancel, void *ctx)
 {
     memset(p,0,sizeof(*p)); atomic_init(&p->reader_stop,0);
+    atomic_init(&p->ui_publishes,0); atomic_init(&p->ui_repaints,0);
     p->output=output; p->cancel=cancel; p->ctx=ctx;
     p->sync_error=pthread_mutex_init(&p->reservoir_lock,NULL);
     if (!p->sync_error) {
@@ -215,6 +226,9 @@ int music_player_command(struct music_player *p, const struct music_command *c)
         p->stage="audio-open";
         r=open_device(p); if (r) return fail(p,r);
         if (!p->reader_live && (r=start_reader(p))) return fail(p,r);
+        pthread_mutex_lock(&p->reservoir_lock);
+        memset(&p->level,0,sizeof(p->level));
+        pthread_mutex_unlock(&p->reservoir_lock);
         p->view.state=p->started ? MUSIC_PLAYING : MUSIC_LOADING; p->view.error=0; return 0;
     case MUSIC_PAUSE:
         if (p->view.state!=MUSIC_PLAYING && p->view.state!=MUSIC_LOADING) return 0;
@@ -228,7 +242,7 @@ int music_player_command(struct music_player *p, const struct music_command *c)
         p->count+=p->history; p->history=0; p->written=p->audible=0;
         p->view.reservoir_frames=p->count;
         pthread_mutex_unlock(&p->reservoir_lock);
-        p->view.buffering=0; p->starve_started=0; p->view.state=MUSIC_PAUSED; return 0;
+        p->view.buffering=0; p->starve_started=p->last_starve=0; p->view.state=MUSIC_PAUSED; return 0;
     case MUSIC_STOP:
         stop_reader(p); close_device(p); flush(p); p->view.position=0; p->view.error=0;
         p->stage="seek"; atomic_store(&p->reader_stop,0);
@@ -253,6 +267,39 @@ int music_player_command(struct music_player *p, const struct music_command *c)
     }
     return -EINVAL;
 }
+/* Called with reservoir_lock held. Diagnostics use the protected raw debug
+ * sink on CiukiOS, independently of stdio and decoder/VFS locks. */
+static void level(struct music_player *p, uint64_t now, unsigned queued)
+{
+    if (!p->level.start) {
+        p->level.start=now+1;
+        p->level.low=p->level.high=p->count;
+        p->level.queued_low=p->level.queued_high=queued;
+        p->level.publishes=atomic_load(&p->ui_publishes);
+        p->level.repaints=atomic_load(&p->ui_repaints);
+    }
+    if (p->count<p->level.low) p->level.low=p->count;
+    if (p->count>p->level.high) p->level.high=p->count;
+    if (queued<p->level.queued_low) p->level.queued_low=queued;
+    if (queued>p->level.queued_high) p->level.queued_high=queued;
+    p->level.sum+=p->count; p->level.samples++;
+    uint64_t elapsed=now-(p->level.start-1);
+    if (elapsed<5000000000ull) return;
+    uint64_t ms=elapsed/1000000;
+    uint64_t decode=p->level.frames ? p->level.decode_ns/p->level.frames : 0;
+    unsigned publishes=atomic_load(&p->ui_publishes), repaints=atomic_load(&p->ui_repaints);
+    diagnostic("[music] level ms=%llu reservoir=%u/%u/%u reader_fps=%u decode_us_frame=%u.%03u writes_ps=%u bytes=%llu queued=%u/%u starvations=%u ui_mps=%u repaint_mps=%u",
+        (unsigned long long)ms,p->level.low,(unsigned)(p->level.sum/p->level.samples),p->level.high,
+        (unsigned)(p->level.frames*1000/ms),(unsigned)(decode/1000),(unsigned)(decode%1000),
+        (unsigned)(p->level.writes*1000/ms),(unsigned long long)p->level.bytes,
+        p->level.queued_low,p->level.queued_high,p->level.starvations,
+        (unsigned)((uint64_t)(publishes-p->level.publishes)*1000000/ms),
+        (unsigned)((uint64_t)(repaints-p->level.repaints)*1000000/ms));
+    memset(&p->level,0,sizeof(p->level));
+    p->level.start=now+1; p->level.low=MUSIC_RING;
+    p->level.queued_low=MUSIC_DEVICE_FRAMES;
+    p->level.publishes=publishes; p->level.repaints=repaints;
+}
 int music_player_pump(struct music_player *p)
 {
     if (p->view.state!=MUSIC_PLAYING && p->view.state!=MUSIC_LOADING) return 0;
@@ -266,6 +313,7 @@ int music_player_pump(struct music_player *p)
     if (!p->started) {
         if (p->count<p->view.rate/10 && !p->eof) { pthread_mutex_unlock(&p->reservoir_lock); return 0; }
         p->started=1; p->view.state=MUSIC_PLAYING;
+        memset(&p->level,0,sizeof(p->level));
     }
     if (p->count && !p->first_pcm) {
         const char *path=p->view.playlist.path[p->view.current], *ext=strrchr(path,'.');
@@ -274,11 +322,12 @@ int music_player_pump(struct music_player *p)
             (unsigned long long)((p->output->now(p->output->ctx)-p->load_started)/1000000));
         p->first_pcm=1;
     }
+    uint64_t now=p->output->now(p->output->ctx);
     int eof=p->eof && !p->count;
     if (!p->count && !p->eof && !queued) {
-        uint64_t now=p->output->now(p->output->ctx);
-        if (!p->starve_started) { p->starve_started=now+1; p->view.starvations++; }
-        p->view.buffering=1;
+        if (!p->starve_started) { p->starve_started=now+1; p->view.starvations++; p->level.starvations++; }
+        p->last_starve=now+1;
+        if (now-(p->starve_started-1)>=300000000) p->view.buffering=1;
         if (!p->starve_log_valid || now-p->starve_logged>=1000000000) {
             uint64_t ms=(now-(p->starve_started-1))/1000000;
             if (ms>UINT32_MAX) ms=UINT32_MAX;
@@ -287,10 +336,17 @@ int music_player_pump(struct music_player *p)
         }
         /* The existing kernel stream renders silence when empty. Do not
          * submit synthetic source frames or repeat an already written slot. */
-    } else { p->view.buffering=0; p->starve_started=0; }
-    if (p->count && queued<256) {
+    } else {
+        p->starve_started=0;
+        if (p->last_starve && now-(p->last_starve-1)>=2000000000) {
+            p->view.buffering=0; p->last_starve=0;
+        }
+    }
+    level(p,now,(unsigned)queued);
+    unsigned limit=p->submitted ? MUSIC_DEVICE_FRAMES : 256;
+    if (p->count && (unsigned)queued<(p->submitted ? MUSIC_DEVICE_FRAMES-256 : 256)) {
         unsigned n=MUSIC_RING-p->head; if (n>p->count) n=p->count;
-        if (n>256u-(unsigned)queued) n=256u-(unsigned)queued;
+        if (n>limit-(unsigned)queued) n=limit-(unsigned)queued;
         p->stage="audio-write";
         int r=p->output->write(p->output->ctx,p->ring+2*p->head,n);
         if ((r<0 && r!=-EAGAIN && r!=-EINTR) || r>(int)n) {
@@ -299,8 +355,11 @@ int music_player_pump(struct music_player *p)
         if (r>0) {
             p->head=(p->head+(unsigned)r)%MUSIC_RING; p->count-=(unsigned)r;
             p->history+=(unsigned)r; p->written+=(unsigned)r;
+            p->submitted=1; p->level.writes++; p->level.bytes+=(unsigned)r*4;
+            if ((unsigned)queued+(unsigned)r>p->level.queued_high) p->level.queued_high=(unsigned)queued+(unsigned)r;
         }
     }
+    p->view.reservoir_frames=p->count;
     pthread_mutex_unlock(&p->reservoir_lock);
     if (eof && !queued) {
         uint64_t now=p->output->now(p->output->ctx);

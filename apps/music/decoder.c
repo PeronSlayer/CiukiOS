@@ -3,23 +3,12 @@
 #include "decoder.h"
 #include <errno.h>
 #include <limits.h>
-#ifdef __i386__
-#include <ciuki/raw.h>
-#else
-#include <sched.h>
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-static void read_yield(void)
-{
-#ifdef __i386__
-    (void)ciuki_raw_yield(0,0,0,0,0,0);
-#else
-    sched_yield();
-#endif
-}
+/* The reader yields according to occupancy. Cached adapter reads must not
+ * unconditionally surrender its quantum while the reservoir is empty. */
 #define MINIMP3_NO_SIMD
 #define MINIMP3_ONLY_MP3
 #define MINIMP3_IMPLEMENTATION
@@ -120,7 +109,7 @@ static int mp3_block(struct music_decoder *d)
             while (d->input_count<MP3_INPUT && !feof(d->file)) {
                 if (cancelled(d)) return -ECANCELED;
                 size_t n=fread(d->input+d->input_count,1,MP3_INPUT-d->input_count,d->file);
-                d->input_count+=(unsigned)n; read_yield();
+                d->input_count+=(unsigned)n;
                 if (ferror(d->file)) return -(errno ? errno : EIO);
                 if (!d->mp3_decoded && (d->sync_bytes+=(unsigned)n)>256*1024) return -EINVAL;
                 if (!n && !feof(d->file)) return -EIO;
@@ -160,7 +149,6 @@ static int source(struct music_decoder *d, int16_t out[2])
             unsigned frame_bytes=d->channels*d->bits/8;
             unsigned n=(unsigned)((d->bytes-used)/frame_bytes); if (n>1024) n=1024;
             if (fread(d->raw,frame_bytes,n,d->file)!=n) return -EIO;
-            read_yield();
             for (unsigned i=0;i<n*d->channels;i++) {
                 unsigned v=d->bits==8 ? d->raw[i] : u16(d->raw+2*i);
                 d->pcm[i]=(int16_t)(d->bits==8 ? ((int)v-128)*256 : v<32768 ? (int)v : (int)v-65536);
@@ -170,7 +158,6 @@ static int source(struct music_decoder *d, int16_t out[2])
             int n=mp3_block(d); if (n<=0) return n;
         } else {
             int n=stb_vorbis_get_samples_short_interleaved(d->ogg,(int)d->channels,d->pcm,2048);
-            read_yield();
             if (!n) return ferror(d->file) ? -(errno ? errno : EIO) : stb_vorbis_get_error(d->ogg) ? -EIO : 0;
             d->count=(unsigned)n;
         }

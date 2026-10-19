@@ -50,7 +50,7 @@ static int output_open(void *ctx,unsigned *rate)
 { struct device *d=ctx; d->written=d->audible=d->last=d->credit=d->started=0; *rate=48000; return 0; }
 static int output_write(void *ctx,const int16_t *pcm,unsigned n)
 {
-    struct device *d=ctx; assert(n<=256);
+    struct device *d=ctx; assert(n<=2048); if (!d->written) assert(n<=256);
     if (!d->started) { d->started=ns(); d->last=d->started+43000000; }
     for (unsigned i=0;i<n*2;i++) { d->hash^=(uint16_t)pcm[i]; d->hash*=1099511628211ull; }
     d->written+=n; return (int)n;
@@ -70,7 +70,7 @@ static int output_status(void *ctx,uint64_t *consumed,unsigned *queued,uint64_t 
     }
     uint64_t pending=d->written-d->audible;
     *consumed=d->audible; *queued=pending>2048 ? (unsigned)(pending-2048) : 0;
-    assert(*queued<=256); if (*queued>d->max_queue) d->max_queue=*queued;
+    assert(*queued<=2048); if (*queued>d->max_queue) d->max_queue=*queued;
     *tail=43000000; return 0;
 }
 static void output_close(void *ctx) { (void)ctx; }

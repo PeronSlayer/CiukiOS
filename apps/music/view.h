@@ -15,6 +15,7 @@ struct music_app {
     struct music_snapshot snapshot; struct du_item rows[MUSIC_TRACKS];
     struct du_menu menus[3]; struct du_menu_item file_items[6], play_items[5], help_items[1];
     int volume, volume_error, waiting, local_error, seek_waiting;
+    unsigned list_revision, list_current;
     uint64_t seek_target;
 };
 enum { M_OPEN=1, M_ADD, M_FOLDER, M_SAVE, M_CLEAR, M_EXIT, M_PLAY, M_PAUSE, M_STOP, M_PREV, M_NEXT, M_ABOUT,

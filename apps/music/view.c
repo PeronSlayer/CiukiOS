@@ -24,31 +24,53 @@ static void send(struct music_app *a, enum music_action action, const char *path
         if (strlen(path)>=sizeof(c.path)) { a->local_error=-ENAMETOOLONG; return; }
         strcpy(c.path,path);
     }
-    a->local_error=a->backend->send(a->backend->ctx,&c); a->ui->dirty=1;
+    a->local_error=a->backend->send(a->backend->ctx,&c);
     if (!a->local_error && (action==MUSIC_OPEN || action==MUSIC_SELECT || action==MUSIC_NEXT || action==MUSIC_PREV)) {
         a->snapshot.state=MUSIC_LOADING; a->snapshot.error=0;
         music_update(a,&a->snapshot);
     }
 }
+static void text_changed(struct du_ui *u, int id, const char *text)
+{
+    struct du_widget *w=du_get(u,id);
+    if (strcmp(w->text,text)) { du_set_text(w,text); du_invalidate(u,w->box); }
+}
+static int seek_pixel(const struct du_widget *w, int value)
+{
+    /* Match the horizontal scrollbar's track and minimum thumb geometry. */
+    int arrow=w->box.h; if (2*arrow>w->box.w) arrow=w->box.w/2;
+    int track=w->box.w-2*arrow, thumb=track*w->page/w->total;
+    if (thumb<8) thumb=track<8 ? track : 8;
+    return (track-thumb)*value/(w->total-w->page);
+}
 void music_update(struct music_app *a, const struct music_snapshot *s)
 {
     a->snapshot=*s; struct du_ui *u=a->ui;
     char text[DU_TEXT_MAX]; const char *name=s->playlist.count ? acc_basename(s->playlist.path[s->current]) : "Music Player";
-    du_set_text(du_get(u,M_TITLE),name);
+    text_changed(u,M_TITLE,name);
     uint64_t seconds=s->rate ? s->position/s->rate : 0, total=s->rate ? s->duration/s->rate : 0;
     snprintf(text,sizeof(text),"%llu:%02llu / %llu:%02llu",(unsigned long long)(seconds/60),(unsigned long long)(seconds%60),
              (unsigned long long)(total/60),(unsigned long long)(total%60));
     if (!s->duration && s->state==MUSIC_PLAYING) snprintf(text,sizeof(text),"%llu:%02llu / --:--",
         (unsigned long long)(seconds/60),(unsigned long long)(seconds%60));
-    du_set_text(du_get(u,M_TIME),text);
+    text_changed(u,M_TIME,text);
     struct du_widget *seek=du_get(u,M_SEEK);
-    seek->disabled=!s->duration;
-    if (u->capture<0 && !a->seek_waiting) seek->value=s->duration ? (int)(s->position*1000/s->duration) : 0;
-    for (unsigned i=0;i<s->playlist.count;i++) {
-        a->rows[i].text[0]=acc_basename(a->snapshot.playlist.path[i]);
-        a->rows[i].selected=(uint8_t)(i==s->current);
+    if (seek->disabled!=!s->duration) { seek->disabled=!s->duration; du_invalidate(u,seek->box); }
+    if (u->capture<0 && !a->seek_waiting) {
+        int value=s->duration ? (int)(s->position*1000/s->duration) : 0;
+        if (seek_pixel(seek,seek->value)!=seek_pixel(seek,value)) du_invalidate(u,seek->box);
+        seek->value=value;
     }
-    struct du_widget *list=du_get(u,M_LIST); list->items=a->rows; list->count=s->playlist.count;
+    struct du_widget *list=du_get(u,M_LIST);
+    if (list->count!=s->playlist.count || a->list_revision!=s->revision || a->list_current!=s->current) {
+        for (unsigned i=0;i<s->playlist.count;i++) {
+            a->rows[i].text[0]=acc_basename(a->snapshot.playlist.path[i]);
+            a->rows[i].selected=(uint8_t)(i==s->current);
+        }
+        list->items=a->rows; list->count=s->playlist.count;
+        a->list_revision=s->revision; a->list_current=s->current;
+        du_invalidate(u,list->box);
+    }
     if (list->active>=list->count) list->active=0;
     int error=a->local_error ? a->local_error : s->error;
     if (error) {
@@ -62,18 +84,22 @@ void music_update(struct music_app *a, const struct music_snapshot *s)
     else snprintf(text,sizeof(text),"%s   %u tracks   Space: play/pause, S: stop, PgUp/PgDn: previous/next",
                   s->buffering ? "Buffering..." : s->state==MUSIC_PLAYING ? "Playing" : s->state==MUSIC_PAUSED ? "Paused" : s->state==MUSIC_LOADING ? "Loading..." :
                   s->state==MUSIC_CLOSING ? "Closing" : "Stopped",s->playlist.count);
-    du_set_text(du_get(u,M_STATUS),text);
+    text_changed(u,M_STATUS,text);
     snprintf(text,sizeof(text),a->volume_error ? "No mixer" : "Master: %d%%",a->volume);
-    du_set_text(du_get(u,M_LEVEL),text); u->dirty=1;
+    text_changed(u,M_LEVEL,text);
 }
 static void volume(struct music_app *a)
 {
     unsigned value=0; int r=a->backend->master_get ? a->backend->master_get(a->backend->ctx,&value) : -ENODEV;
     a->volume_error=r;
-    if (!r && !a->waiting && a->ui->capture<0) { a->volume=(int)value; du_get(a->ui,M_VOLUME)->value=a->volume; }
-    du_get(a->ui,M_VOLUME)->disabled=r!=0;
+    struct du_widget *w=du_get(a->ui,M_VOLUME);
+    if (!r && !a->waiting && a->ui->capture<0) {
+        a->volume=(int)value;
+        if (w->value!=a->volume) { w->value=a->volume; du_invalidate(a->ui,w->box); }
+    }
+    if (w->disabled!=(r!=0)) { w->disabled=r!=0; du_invalidate(a->ui,w->box); }
     char text[64]; snprintf(text,sizeof(text),r ? "No mixer" : "Master: %d%%",a->volume);
-    du_set_text(du_get(a->ui,M_LEVEL),text); a->ui->dirty=1;
+    text_changed(a->ui,M_LEVEL,text);
 }
 void music_attach(struct music_app *a, struct du_ui *u, const struct music_ui_backend *backend)
 {
