@@ -251,6 +251,13 @@ Follow `docs/design/test-architecture.md`:
 - Cheapest tier first: host unit tests, then static image checks, then the
   `make qemu-test-full` boot smoke, then focused QEMU suites, then hardware.
 - A result is evidence only for the image SHA-256 it ran on.
+- Owner decision 2026-10-19 (dev diary 2026-10-19-03): the QEMU tiers
+  (smoke and suites) are suspended for the trial cycle; an image goes to the
+  hardware after the host suites and the canonical build, with its SHA-256,
+  the serial capture and the disk logs as evidence. QEMU evidence resumes on
+  the owner's request. The same entry records the owner's requirement that
+  disk, memory, cache and real-time management follow the Windows 98/ME
+  model completely (`docs/directives/f0-42`).
 
 ## Code Search Policy
 
