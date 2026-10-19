@@ -15,3 +15,11 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No Wine `dinput` source copied (inventory only); no wire change to protocol v3; English. No new `panic()` paths.
+
+## Amendment 1 (lead review, 2026-10-19 21:40): decisions on the two specification disagreements
+
+The delivery (worktree commit `7f555327`) is accepted and merged: shared USER layout module for `0x04090409`/`0x04100410`, MapVirtualKey/VkKeyScan/ToAscii/OemKeyScan/key names, modifier sides and lock transitions, Pause/Ctrl+Break/Snapshot/wheel, `dinput.dll` engine with `dinput8.dll` forwarding, all interface generations and DX3/DX5/DX8 sizes, standard and custom data formats, buffered data with sequence/timestamps/peek/overflow/events, cooperative levels with acquire/loss/resync; 130 Win32 tests. Decisions:
+
+1. **Italian dead keys.** The desktop keymap (`apps/desktop/keymap.c`) emits spacing accents and has no dead-key composition; `ToAscii` must agree with the desktop's TEXT events, so the directive's dead-key premise is withdrawn. No composition state is invented.
+2. **DirectInput absolute mouse axes.** Microsoft's documentation defines absolute-mode mouse axes as accumulated raw counts, not the cursor position; the directive's requirement was wrong. The implemented cursor-position reading is replaced by accumulated raw counts (no clamping) in the f5-10a2 continuation (item 7 of the f5-10A amendment), with the test updated.
+3. **Boundaries kept as recorded:** no LED/toggle snapshot in v3 (initial lock state unknown until the first edge), background non-exclusive delivery and cross-process exclusive arbitration need desktop-owner work (recorded for f5-09's owner at the acceptance phase), v3 buttons 1–3 only (no X-button census requirement), no new layout-switch command.
