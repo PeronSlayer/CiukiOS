@@ -192,6 +192,9 @@ int file_io_locked(struct file_description *d, void *buffer, size_t bytes, bool 
     }
     uint64_t position = positioned ? offset : write && (d->flags & O_APPEND) ? n->entry.size : d->position;
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
+    /* DOS record locks are mandatory for native clients as well. Namespace
+     * and this volume's reservation already protect the common node list. */
+    int locked=px_range_locked(n,position,bytes); if (locked) return locked;
     struct fat_entry before = n->entry;
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) : write ? VFS_IO(d->node->space->vfs,fat_write(n->volume, &n->entry, position, buffer, bytes, done)) :
                       VFS_IO(d->node->space->vfs,fat_read(n->volume, &n->entry, position, buffer, bytes, done));
@@ -216,6 +219,9 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     if (length > INT64_MAX) return -EINVAL;
     if (length > UINT32_MAX) return -EFBIG;
     struct fat_entry before = d->node->entry;
+    uint64_t start=length<before.size ? length : before.size;
+    int locked=px_range_locked(d->node,start,length<before.size ? before.size-length : length-before.size);
+    if (locked) return locked;
     int err = VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
     if (memcmp(&before, &d->node->entry, sizeof(before))) px_changed_locked(d->node);
     return err == -FS_EACCES ? -EROFS : px_error(err);
@@ -300,6 +306,7 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
     if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
+    if (!err) err = px_range_locked(r.node,0,r.node->ro ? r.node->ro_size : r.node->entry.size);
     if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);
     uint32_t buffer_bytes=image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
     void *buffer=!err && buffer_bytes ? fs_contig_alloc(buffer_bytes) : 0;

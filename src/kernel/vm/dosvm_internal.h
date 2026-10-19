@@ -110,6 +110,9 @@ struct dosvm_vector_cost {
     uint16_t ax;
 };
 #define DOSVM_READ_SECTORS 128u
+struct dos_file;
+struct dos_file_ops;
+struct dos_file_volume;
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -117,6 +120,9 @@ struct dosvm {
     struct task *task;
     struct v86 monitor;
     struct v86_frame frame;  /* working copy of the trapped frame (f3-04) */
+    struct dos_file *files; /* published only after f3-50's checked BIND */
+    struct dos_file_volume *file_volume;
+    struct v86_frame file_saved;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */
@@ -309,6 +315,19 @@ struct dosvm {
         uint32_t boundary_eip, injected_eip;
     } trace;
 };
+/* Weak only for existing standalone monitor fixtures, which deliberately do
+ * not link storage. The kernel links the production adapter unconditionally. */
+int dosvm_file_interrupt(struct dosvm *,struct v86_frame *,uint8_t,unsigned) __attribute__((weak));
+int dosvm_file_reflect(struct dosvm *,struct v86_frame *,uint8_t,unsigned,uint16_t) __attribute__((weak));
+void dosvm_file_return(struct dosvm *,const struct v86_frame *) __attribute__((weak));
+void dosvm_file_reflected_return(struct dosvm *,const struct v86_frame *,bool) __attribute__((weak));
+int dosvm_file_destroy(struct dosvm *) __attribute__((weak));
+void dosvm_file_dump(struct dosvm *) __attribute__((weak));
+void dosvm_file_deadline(struct dosvm *) __attribute__((weak));
+int dosvm_file_disk(struct dosvm *,uint32_t,void *,bool) __attribute__((weak));
+void dosvm_disk_provider_init(struct dosvm *,struct blkdev *);
+void dosvm_file_ops_init(struct dosvm *,struct dos_file_ops *);
+uint64_t dosvm_file_monitor_us(void *);
 static inline void dosvm_boundary(struct dosvm *v, const struct v86_frame *f, const char *event)
 {
     if (!(g_boot.flags & CBI_F_VERBOSE)) return;

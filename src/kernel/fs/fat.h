@@ -63,6 +63,7 @@ int fat_unmount(struct fat_volume *);
 int fat_commit(struct fat_volume *);
 int fat_scan(struct fat_volume *); /* bounded read-only ownership scan */
 int fat_next(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
+int fat_next_dos(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_lookup(struct fat_volume *, uint32_t directory, const char *, struct fat_entry *);
 int fat_create(struct fat_volume *, uint32_t directory, const char *, uint8_t attr, struct fat_entry *);
 int fat_read(struct fat_volume *, const struct fat_entry *, uint64_t position, void *, size_t, size_t *done);

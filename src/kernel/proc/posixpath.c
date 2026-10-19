@@ -450,6 +450,18 @@ int px_share_locked(struct px_node *n, uint32_t access, uint32_t deny)
     }
     return 0;
 }
+int px_range_locked(struct px_node *n,uint64_t start,uint64_t length)
+{
+    struct vfs *v=n->space->vfs;
+    for (unsigned i=0;i<VFS_NODES;i++) {
+        struct vfs_node *old=&v->nodes[i];
+        bool same=old->refs && old->generation==n->generation &&
+            (n->ro ? old->ro==n->ro && old->ro_id==n->ro_id :
+             old->volume==n->volume && (n->linked ? entry_same(&old->entry,&n->entry) : old==n->legacy));
+        if (same && vfs_range_check(v,old,0,0,start,length)) return -EACCES;
+    }
+    return 0;
+}
 
 int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
 {
@@ -524,6 +536,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         px_changed_locked(n); px_changed_locked(r.parent);
     }
     if (flags & O_TRUNC) {
+        if ((err=px_range_locked(r.node,0,r.node->entry.size))) return err;
         err = VFS_IO(s->vfs,fat_truncate(r.node->volume, &r.node->entry, 0));
         px_changed_locked(r.node);
         if (err) return px_error(err);
@@ -735,12 +748,30 @@ int px_getdents_locked(struct file_description *d, struct ciuki_dirent *out)
     return sizeof(*out);
 }
 
-int px_legacy_share(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e, unsigned access, unsigned deny)
+static int native_share(struct px_node *n,unsigned access,unsigned deny,unsigned mode,uint64_t owner)
 {
-    struct px_namespace *s = space_find(v); if (!s) return 0;
-    struct px_node *n = node_find(s, vol, e);
-    return n ? px_share_locked(n, access, deny) : 0;
+    /* The VFS caller checks its own descriptions, including DOS compatibility
+     * ownership. This observer contributes native descriptions only. */
+    for (struct file_description *d=n->space->descriptions;d;d=d->next) {
+        unsigned a=(d->flags&O_ACCMODE)==O_RDONLY ? VFS_READ :
+                   (d->flags&O_ACCMODE)==O_WRONLY ? VFS_WRITE : VFS_READ|VFS_WRITE;
+        if (!d->references || d->node!=n) continue;
+        if (mode==255) { if ((d->deny&access) || (deny&a)) return -EACCES; }
+        else {
+            unsigned old=d->deny==3 ? 1 : d->deny==2 ? 2 : d->deny==1 ? 3 : 4;
+            int e=vfs_dos_share(old,a,0,mode,access,owner,n->ro || (n->entry.attr&FAT_ATTR_RO));
+            if (e) return e;
+        }
+    }
+    return 0;
 }
+int px_legacy_share(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e, unsigned access, unsigned deny,unsigned mode,uint64_t owner)
+{
+    struct px_namespace *s=space_find(v); if (!s) return 0;
+    struct px_node *n=node_find(s,vol,e);
+    return n ? native_share(n,access,deny,mode,owner) : 0;
+}
+
 bool px_legacy_busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e)
 {
     struct px_namespace *s = space_find(v); if (!s) return false;
@@ -814,10 +845,10 @@ bool px_ro_busy(struct vfs *v, struct fs_ro_volume *ro)
         if (d->node->ro==ro && d->node->linked && d->node->generation==v->generation[d->node->drive]) return true;
     return false;
 }
-int px_ro_share(struct vfs *v, unsigned drive, uint64_t id, unsigned access, unsigned deny)
+int px_ro_share(struct vfs *v, unsigned drive, uint64_t id, unsigned access, unsigned deny,unsigned mode,uint64_t owner)
 {
     struct px_namespace *s=space_find(v); if (!s) return 0;
     for (struct px_node *n=s->nodes; n; n=n->next)
-        if (n->linked && n->ro==v->ro_volumes[drive] && n->ro_id==id && n->generation==v->generation[drive]) return px_share_locked(n,access,deny);
+        if (n->linked && n->ro==v->ro_volumes[drive] && n->ro_id==id && n->generation==v->generation[drive]) return native_share(n,access,deny,mode,owner);
     return 0;
 }

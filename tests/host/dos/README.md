@@ -9,6 +9,17 @@ conformance from assembly checks. The contract is
 
 ## Host checks available now
 
+The production C file bridge, native FAT and VFS have a focused ASan/UBSan
+harness (fake guest memory, time and media; no guest boot required):
+
+```sh
+nice -n 19 bash tests/host/dos/run_file_api.sh
+```
+
+It is also run by `scripts/test/host_kernel_tests.sh`. The printed H49 labels
+describe the cases actually exercised; the f3-49 report distinguishes these
+from the full acceptance matrix and personality/controller integration.
+
 Run one command at a time:
 
 ```sh

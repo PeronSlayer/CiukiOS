@@ -49,47 +49,103 @@ static void volume_mutexes(struct vfs *v,uint32_t mask,bool take) {
         if (mask & (1u<<d)) { if (take) fs_lock_take(&v->volume_lock[d]); else fs_lock_drop(&v->volume_lock[d]); }
     }
 }
-void vfs_reserve_locked(struct vfs *v,uint32_t mask) {
+struct vfs_waiter { struct vfs_waiter *next; uint32_t mask, ticket[26]; };
+static void request_wait(const struct vfs_request *r,uint64_t begin,uint32_t mask,enum vfs_wait_reason reason,int outcome) {
+    if (!r || !r->wait) return;
+    uint64_t elapsed=r->now(r->arg)-begin;
+    if (elapsed || outcome) *r->wait=(struct vfs_wait_info){r->owner,elapsed,mask,reason,outcome,true};
+}
+/* Every queued ticket, including native untimed callers, is represented while
+ * sleeping. Cancellation advances over holes without stealing a live ticket. */
+static void advance_cancelled(struct vfs *v) {
+    for (unsigned d=0;d<26;d++) {
+        if (v->reserved & (1u<<d)) continue;
+        uint32_t next=v->next[d];
+        for (struct vfs_waiter *w=v->waiters;w;w=w->next)
+            if ((w->mask&(1u<<d)) && (uint32_t)(w->ticket[d]-v->serving[d]) < (uint32_t)(next-v->serving[d])) next=w->ticket[d];
+        v->serving[d]=next;
+    }
+}
+static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
-    if (!mask) return;
-    uint32_t ticket[26]={0};
+    if (!mask) return vfs_request_check(request);
+    struct vfs_waiter waiter={.next=v->waiters,.mask=mask};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
-        if (v->active && v->next[d]!=v->serving[d]) fs_panic("late volume reservation");
-        ticket[d]=v->next[d]++;
+        if (v->active && v->next[d]!=v->serving[d]) {
+            if (request) return -FS_EBUSY;
+            fs_panic("late volume reservation");
+        }
     }
+    for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) waiter.ticket[d]=v->next[d]++;
+    v->waiters=&waiter;
     uint32_t start=fs_now_ms(); char holder=first_drive(v->reserved & mask);
+    uint64_t request_start=request ? request->now(request->arg) : 0;
+    int error=0;
     for (;;) {
+        error=vfs_request_check(request);
         bool ready=true;
-        for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) && ticket[d]!=v->serving[d]) ready=false;
-        if (ready) break;
-        fs_event_wait(&v->volume_changed,&v->lock);
+        for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) && waiter.ticket[d]!=v->serving[d]) ready=false;
+        if (error || ready) break;
+        if (request) {
+            fs_lock_drop(&v->lock); request->pause(request->arg); fs_lock_take(&v->lock);
+        } else fs_event_wait(&v->volume_changed,&v->lock);
     }
-    wait_report(start,first_drive(mask),holder,"volume");
+    struct vfs_waiter **link=&v->waiters;
+    while (*link!=&waiter) link=&(*link)->next;
+    *link=waiter.next;
+    request_wait(request,request_start,mask,VFS_WAIT_VOLUME,error);
+    wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume");
+    if (error) { advance_cancelled(v); fs_event_wake(&v->volume_changed); return error; }
     v->reserved |= mask;
-    /* A free additional letter can precede an existing one. Reacquire the
-     * complete set in order, retaining all reservations under namespace. */
     volume_mutexes(v,v->active,false); v->active |= mask;
     volume_mutexes(v,v->active,true);
     __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
+    return 0;
 }
+void vfs_reserve_locked(struct vfs *v,uint32_t mask) { (void)reserve_request(v,mask,0); }
+int vfs_admit(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    if (!request) { vfs_lock(v,mask); return 0; }
+    int error; uint32_t start=fs_now_ms(); uint64_t begin=request->now(request->arg);
+    while (!fs_lock_try_take(&v->lock)) {
+        if ((error=vfs_request_check(request))) {
+            request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,error);
+            wait_report(start,first_drive(mask),v->holder,error==-VFS_ETIMEOUT ? "namespace:timeout" : "namespace:cancelled");
+            return error;
+        }
+        request->pause(request->arg);
+    }
+    request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,0);
+    error=reserve_request(v,mask,request);
+    if (error) { fs_lock_drop(&v->lock); return error; }
+    v->default_drive=26; return 0;
+}
+
 void vfs_lock(struct vfs *v,uint32_t mask) {
     namespace_take(v,mask); vfs_reserve_locked(v,mask); v->default_drive=26;
 }
 void vfs_unlock(struct vfs *v) {
     uint32_t mask=v->active; v->active=0; v->reserved &= ~mask;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->serving[d]++;
+    advance_cancelled(v);
     __atomic_store_n(&v->holder,'-',__ATOMIC_RELAXED);
     volume_mutexes(v,mask,false); fs_lock_drop(&v->lock);
     if (mask) fs_event_wake(&v->volume_changed);
 }
 struct vfs_io_state vfs_io_begin_locked(struct vfs *v) {
-    struct vfs_io_state state={v->active,v->default_drive}; v->active=0;
+    struct vfs_io_state state={v->active,v->default_drive,true};
+    for (unsigned d=0;d<26;d++) if ((v->active&(1u<<d)) &&
+        (!v->volumes[d] || !v->volumes[d]->dev || !v->volumes[d]->dev->logical)) state.logical=false;
+    /* A logical provider can enter the outer physical VFS. Retain its
+     * reservation, but no inner mutex across the outer namespace entry. */
+    if (state.logical) volume_mutexes(v,v->active,false);
+    v->active=0;
     __atomic_store_n(&v->holder,'-',__ATOMIC_RELAXED);
     fs_lock_drop(&v->lock); return state;
 }
 void vfs_io_end_locked(struct vfs *v,struct vfs_io_state state) {
     uint32_t mask=state.drives;
-    volume_mutexes(v,mask,false); namespace_take(v,mask);
+    if (!state.logical) volume_mutexes(v,mask,false);
+    namespace_take(v,mask);
     volume_mutexes(v,mask,true); v->active=mask;
     v->default_drive=state.default_drive;
     __atomic_store_n(&v->holder,first_drive(mask),__ATOMIC_RELAXED);
@@ -99,13 +155,14 @@ static uint32_t vfs_path_mask(struct vfs_table *t,const char *path) {
     if (path && path[0] && path[1]==':') d=(unsigned)(path_upper((uint8_t)path[0])-'A');
     return vfs_drive_mask(d);
 }
-static void path_lock(struct vfs_table *t,const char *a,const char *b,const char *c) {
+static int path_lock(struct vfs_table *t,const char *a,const char *b,const char *c) {
     for (;;) {
-        vfs_lock(t->vfs,0);
+        int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
         uint32_t mask=vfs_path_mask(t,a) | (b ? vfs_path_mask(t,b) : 0) | (c ? vfs_path_mask(t,c) : 0);
-        vfs_reserve_locked(t->vfs,mask);
+        error=reserve_request(t->vfs,mask,t->request);
+        if (error) { vfs_unlock(t->vfs); return error; }
         uint32_t now=vfs_path_mask(t,a) | (b ? vfs_path_mask(t,b) : 0) | (c ? vfs_path_mask(t,c) : 0);
-        if (!(now & ~t->vfs->active)) { t->vfs->default_drive=t->drive; return; }
+        if (!(now & ~t->vfs->active)) { t->vfs->default_drive=t->drive; return 0; }
         vfs_unlock(t->vfs); /* default drive changed during admission */
     }
 }
@@ -168,12 +225,12 @@ void vfs_ro_expire_locked(struct vfs *v, unsigned d)
         memcpy(v->tables[i]->cwd[d], "/", 2); v->tables[i]->cwd_cluster[d] = 0;
     }
 }
-static bool ro_target(struct vfs_table *t, const char *path)
+static int ro_target(struct vfs_table *t, const char *path)
 {
     unsigned d = t->drive;
     if (path && path[0] && path[1] == ':') d = (unsigned)(path_upper((uint8_t)path[0]) - 'A');
-    vfs_lock(t->vfs,0);
-    bool result=d<26 && t->vfs->ro_volumes[d];
+    int admission=vfs_admit(t->vfs,0,t->request); if (admission) return admission;
+    int result=d<26 && t->vfs->ro_volumes[d];
     vfs_unlock(t->vfs); return result;
 }
 static int ro_path(struct vfs_table *t, const char *path, unsigned *drive, struct fs_ro_node *node,
@@ -212,14 +269,15 @@ static void ro_entry(const struct fs_ro_node *n, struct fat_entry *out)
     memset(out, 0, sizeof(*out)); memcpy(out->name, n->name, sizeof(out->name));
     memcpy(out->alias, n->alias, sizeof(out->alias)); out->size = (uint32_t)n->size; out->attr = n->attr;
 }
-static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsigned deny)
+static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsigned deny, unsigned mode, unsigned *status)
 {
-    struct vfs *v = t->vfs; path_lock(t,path,0,0);
+    struct vfs *v = t->vfs; int admission=path_lock(t,path,0,0); if (admission) return admission;
     struct fs_ro_node ent; unsigned drive; int e;
     if (flags & (VFS_WRITE | VFS_CREATE | VFS_TRUNCATE)) { e = -FS_EROFS; goto out; }
     e = ro_path(t, path, &drive, &ent, 0); if (e) goto out;
+    if (flags&VFS_FAIL_EXISTING) { e=-FS_EEXIST; goto out; }
     if (ent.attr & FS_RO_DIRECTORY) { e = -FS_EISDIR; goto out; }
-    if (px_ro_share && (e=px_ro_share(v,drive,ent.id,VFS_READ,deny))) goto out;
+    if (px_ro_share && (e=px_ro_share(v,drive,ent.id,VFS_READ,deny,mode,t->owner))) goto out;
     if (ent.size > UINT32_MAX) { e = -FS_EFBIG; goto out; }
     struct vfs_node *node = 0, *free_node = 0;
     for (unsigned i = 0; i < VFS_NODES; i++) {
@@ -229,7 +287,12 @@ static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsign
     }
     if (node) for (unsigned i = 0; i < VFS_DESCRIPTIONS; i++) {
         struct vfs_description *d = &v->descriptions[i];
-        if (d->refs && d->node == node && ((d->deny & VFS_READ) || (deny & d->access))) { e = -FS_EACCES; goto out; }
+        if (d->refs && d->node == node) {
+            unsigned old_mode=d->dos_mode==255 ? d->deny==3 ? 1 : d->deny==2 ? 2 : d->deny==1 ? 3 : 4 : d->dos_mode;
+            unsigned new_mode=mode==255 ? deny==3 ? 1 : deny==2 ? 2 : deny==1 ? 3 : 4 : mode;
+            e=vfs_dos_share(old_mode,d->access,d->owner,new_mode,VFS_READ,t->owner,true);
+            if (e) goto out;
+        }
     }
     if (!node) node = free_node;
     struct vfs_description *desc = 0; int h = -1;
@@ -240,8 +303,8 @@ static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsign
         node->ro = v->ro_volumes[drive]; node->ro_id = ent.id; node->ro_size = ent.size;
         node->drive = drive; node->generation = v->generation[drive]; ro_entry(&ent, &node->entry);
     }
-    node->refs++; *desc = (struct vfs_description){ .node = node, .refs = 1, .access = VFS_READ, .deny = deny };
-    t->handles[h] = desc; e = h;
+    node->refs++; *desc = (struct vfs_description){ .node = node, .refs = 1, .access = VFS_READ, .deny = mode==0 ? VFS_DENY_WRITE : deny, .owner=t->owner, .dos_mode=mode };
+    t->handles[h] = desc; if (status) *status=1; e = h;
 out: vfs_unlock(v); return e;
 }
 static int ro_handle(struct vfs *v, struct vfs_node *n)
@@ -293,6 +356,8 @@ static int release_description(struct vfs *v,struct vfs_description *d) {
     if (!d) return 0;
     int e=0;
     if (d->refs==1) {
+        for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) if (v->range_locks[i].description==d)
+            memset(&v->range_locks[i],0,sizeof(v->range_locks[i]));
         /* Retain the slots until final-close callbacks finish their I/O. */
         if (d->node->refs==1) {
             if (px_legacy_closed) e=px_legacy_closed(v,d->node);
@@ -304,6 +369,9 @@ static int release_description(struct vfs *v,struct vfs_description *d) {
 }
 static int close_handle(struct vfs_table *t, unsigned h) {
     struct vfs_description *d=t->handles[h]; t->handles[h]=0;
+    if (d) for (unsigned i=0;i<VFS_RANGE_LOCKS;i++)
+        if (t->vfs->range_locks[i].description==d && (!t->owner || t->vfs->range_locks[i].owner==t->owner))
+            memset(&t->vfs->range_locks[i],0,sizeof(t->vfs->range_locks[i]));
     return release_description(t->vfs,d);
 }
 void vfs_table_destroy(struct vfs_table *t) {
@@ -343,24 +411,28 @@ static int lookup(struct vfs_table *t, const char *path, struct resolved *r, str
     return VFS_IO(t->vfs,fat_lookup(v,r->parent,r->name,ent));
 }
 static struct vfs_node *node_find(struct vfs *v, struct fat_volume *vol, const struct fat_entry *ent) {
-    for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol && v->nodes[i].entry.parent==ent->parent && v->nodes[i].entry.index==ent->index) return &v->nodes[i];
+    for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs && v->nodes[i].volume==vol && v->nodes[i].generation==v->generation[v->nodes[i].drive] && v->nodes[i].entry.parent==ent->parent && v->nodes[i].entry.index==ent->index) return &v->nodes[i];
     return 0;
 }
 static int handle_free(struct vfs_table *t) { for (unsigned i=0;i<VFS_HANDLES;i++) if (!t->handles[i]) return (int)i; return -FS_EMFILE; }
-int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_share deny, uint8_t attr) {
-    if (!(flags&3) || flags&~31u || deny>VFS_DENY_ALL || (flags&VFS_TRUNCATE && !(flags&VFS_WRITE)) || (flags&VFS_EXCLUSIVE && !(flags&VFS_CREATE))) return -FS_EINVAL;
-    if (ro_target(t,path)) return ro_open(t,path,flags,(unsigned)deny);
-    struct vfs *v=t->vfs; path_lock(t,path,0,0);
+int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum vfs_share deny, uint8_t attr, unsigned mode, unsigned *status) {
+    if (!(flags&3) || flags&~63u || deny>VFS_DENY_ALL || (flags&VFS_TRUNCATE && !(flags&VFS_WRITE)) || (flags&VFS_EXCLUSIVE && !(flags&VFS_CREATE))) return -FS_EINVAL;
+    if (mode>4 && mode!=255) return -FS_EINVAL;
+    int ro=ro_target(t,path); if (ro<0) return ro;
+    if (ro) return ro_open(t,path,flags,(unsigned)deny,mode,status);
+    struct vfs *v=t->vfs; int admission=path_lock(t,path,0,0); if (admission) return admission;
     struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     bool create=e==-FS_ENOENT && (flags&VFS_CREATE);
     /* A missing ancestor is distinguished by resolving again before create. */
     if (create) e=resolve(t,path,&r);
     if (e) goto out;
+    if (flags&VFS_FAIL_EXISTING) { e=-FS_EEXIST; goto out; }
     if (!create && (flags&(VFS_CREATE|VFS_EXCLUSIVE))==(VFS_CREATE|VFS_EXCLUSIVE)) { e=-FS_EEXIST; goto out; }
     struct fat_volume *vol=v->volumes[r.drive];
     if (!create && (ent.attr&FAT_ATTR_DIR)) { e=-FS_EISDIR; goto out; }
     if ((flags&VFS_WRITE) && (vol->readonly || (!create && (ent.attr&FAT_ATTR_RO)))) { e=vol->readonly ? -FS_EROFS : -FS_EACCES; goto out; }
-    if (!create && px_legacy_share && (e=px_legacy_share(v,vol,&ent,flags&3,(unsigned)deny))) goto out;
+    if (mode==0) deny=!create && (ent.attr&FAT_ATTR_RO) && (flags&3)==VFS_READ ? VFS_DENY_WRITE : VFS_DENY_ALL;
+    if (!create && px_legacy_share && (e=px_legacy_share(v,vol,&ent,flags&3,(unsigned)deny,mode,t->owner))) goto out;
     int h=handle_free(t); if (h<0) { e=h; goto out; }
     struct vfs_description *d=0; for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) if (!v->descriptions[i].refs) { d=&v->descriptions[i]; break; }
     if (!d) { e=-FS_EMFILE; goto out; }
@@ -368,7 +440,14 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
     if (node) {
         for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) {
             struct vfs_description *other=&v->descriptions[i];
-            if (other->refs && other->node==node && ((other->deny&(flags&3)) || ((unsigned)deny&other->access))) { e=-FS_EACCES; goto out; }
+            if (other->refs && other->node==node) {
+                unsigned old_mode=other->dos_mode==255 ? other->deny==3 ? 1 : other->deny==2 ? 2 : other->deny==1 ? 3 : 4 : other->dos_mode;
+                unsigned new_mode=mode==255 ? deny==3 ? 1 : deny==2 ? 2 : deny==1 ? 3 : 4 : mode;
+                e=vfs_dos_share(old_mode,other->access,other->owner,new_mode,flags&3,t->owner,(ent.attr&FAT_ATTR_RO)!=0);
+                if (mode==255 && other->dos_mode==255)
+                    e=((other->deny&(flags&3)) || ((unsigned)deny&other->access)) ? -FS_EACCES : 0;
+                if (e) goto out;
+            }
         }
     } else {
         for (unsigned i=0;i<VFS_NODES;i++) if (!v->nodes[i].refs) { node=&v->nodes[i]; break; }
@@ -381,30 +460,112 @@ int vfs_open(struct vfs_table *t, const char *path, unsigned flags, enum vfs_sha
     if (node->refs==1) { node->volume=vol; node->drive=r.drive; node->generation=v->generation[r.drive]; node->entry=ent; node->log_capacity=0; }
     if (flags&VFS_TRUNCATE) {
         struct fat_entry before=node->entry;
+        e=vfs_range_check(v,node,d,t->owner,0,before.size); if (e) goto undo;
         e=VFS_IO(v,fat_truncate(vol,&node->entry,0));
         if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry,false);
         if (e) goto undo;
     }
-    d->node=node; d->position=0; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; e=h;
+    d->node=node; d->position=0; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; d->dos_mode=mode; d->owner=t->owner;
+    if (status) *status=create ? 2 : flags&VFS_TRUNCATE ? 3 : 1; e=h;
     goto out;
 undo: t->handles[h]=0; if (!--node->refs) memset(node,0,sizeof(*node)); memset(d,0,sizeof(*d));
 out: vfs_unlock(v); return e;
 }
+int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share deny,uint8_t attr) {
+    if (flags&VFS_FAIL_EXISTING) return -FS_EINVAL;
+    int e=vfs_open_claim(t,path,flags,deny,attr,255,0);
+    return e==-VFS_ESHARE || e==-VFS_ECRITICAL_SHARE ? -FS_EACCES : e;
+}
+
 static uint32_t handle_mask(struct vfs_table *t,int h) {
     struct vfs_description *d=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
     return d ? vfs_drive_mask(d->node->drive) : 0;
 }
-static void handle_lock(struct vfs_table *t,int h) {
+static int handle_lock(struct vfs_table *t,int h) {
     for (;;) {
-        vfs_lock(t->vfs,0);
-        uint32_t mask=handle_mask(t,h); vfs_reserve_locked(t->vfs,mask);
-        if (handle_mask(t,h)==mask) return;
+        int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
+        uint32_t mask=handle_mask(t,h); error=reserve_request(t->vfs,mask,t->request);
+        if (error) { vfs_unlock(t->vfs); return error; }
+        if (handle_mask(t,h)==mask) return 0;
         vfs_unlock(t->vfs); /* slot was replaced while admission slept */
     }
 }
 static struct vfs_description *get(struct vfs_table *t, int h) { return h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0; }
+int vfs_handle_stat(struct vfs_table *t,int h,struct fat_entry *entry,uint64_t *position) {
+    int e=handle_lock(t,h); if (e) return e;
+    struct vfs_description *d=get(t,h);
+    e=!d ? -FS_EBADF : d->node->generation!=t->vfs->generation[d->node->drive] ? -FS_EIO : 0;
+    if (!e) { if (entry) *entry=d->node->entry; if (position) *position=d->position; }
+    vfs_unlock(t->vfs); return e;
+}
+int vfs_handle_times(struct vfs_table *t,int h,uint16_t date,uint16_t time) {
+    int e=handle_lock(t,h); if (e) return e;
+    struct vfs_description *d=get(t,h);
+    e=!d ? -FS_EBADF : d->node->ro ? -FS_EROFS : 0;
+    if (!e) {
+        struct fat_entry before=d->node->entry;
+        struct fat_times times=before.times; times.write_date=date; times.write_time=time;
+        e=VFS_IO(t->vfs,fat_set_metadata(d->node->volume,&d->node->entry,before.attr,&times));
+        if (!e && px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,false);
+    }
+    vfs_unlock(t->vfs); return e;
+}
+int vfs_request_check(const struct vfs_request *r) {
+    if (!r) return 0;
+    if (r->cancelled && r->cancelled(r->arg)) return -VFS_ECANCELLED;
+    return r->now(r->arg)>=r->deadline ? -VFS_ETIMEOUT : 0;
+}
+static unsigned dos_deny(unsigned mode) {
+    static const unsigned deny[]={0,VFS_DENY_ALL,VFS_DENY_WRITE,VFS_DENY_READ,VFS_DENY_NONE};
+    return mode<=4 ? deny[mode] : 0;
+}
+int vfs_dos_share(unsigned old_mode,unsigned old_access,uint64_t old_owner,
+                  unsigned mode,unsigned access,uint64_t owner,bool readonly) {
+    if (old_mode && mode) return ((dos_deny(old_mode)&access) || (dos_deny(mode)&old_access)) ? -VFS_ESHARE : 0;
+    if (!old_mode && !mode)
+        return old_owner==owner || (readonly && old_access==VFS_READ && access==VFS_READ) ? 0 : -VFS_ECRITICAL_SHARE;
+    if (!old_mode) return old_access==VFS_READ && access==VFS_READ && readonly && (mode==2 || mode==4) ? 0 : -VFS_ESHARE;
+    return old_access==VFS_READ && access==VFS_READ && readonly && (old_mode==2 || old_mode==4) ? 0 : -VFS_ECRITICAL_SHARE;
+}
+int vfs_range_check(struct vfs *v,struct vfs_node *node,struct vfs_description *description,
+                    uint64_t owner,uint64_t start,uint64_t length) {
+    if (!length) return 0;
+    if (length>UINT64_MAX-start) return -FS_EINVAL;
+    for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) {
+        struct vfs_range_lock *l=&v->range_locks[i];
+        if (l->description && l->node==node && (l->owner!=owner || l->description!=description) &&
+            start<l->end && l->start<start+length) return -VFS_ELOCK;
+    }
+    return 0;
+}
+int vfs_lock_range(struct vfs_table *t,int h,uint32_t start,uint32_t length,bool unlock) {
+    int e=handle_lock(t,h); if (e) return e;
+    struct vfs_description *d=get(t,h);
+    uint64_t end=(uint64_t)start+length;
+    e=!d ? -FS_EBADF : end>UINT32_MAX ? -FS_EINVAL : 0;
+    struct vfs_range_lock *free_slot=0,*match=0;
+    for (unsigned i=0;!e && i<VFS_RANGE_LOCKS;i++) {
+        struct vfs_range_lock *l=&t->vfs->range_locks[i];
+        if (!l->description) { if (!free_slot) free_slot=l; continue; }
+        if (l->node!=d->node) continue;
+        if (l->description==d && l->owner==t->owner && l->start==start && l->length==length) match=l;
+        if (!unlock && length && l->length && start<l->end && l->start<end) e=-VFS_ELOCK;
+    }
+    if (!e && unlock) { if (!match) e=-VFS_ELOCK; else memset(match,0,sizeof(*match)); }
+    else if (!e) {
+        if (!free_slot) e=-VFS_ELOCKFULL;
+        else *free_slot=(struct vfs_range_lock){d,d->node,t->owner,start,end,length};
+    }
+    vfs_unlock(t->vfs); return e;
+}
+void vfs_release_owner(struct vfs *v,uint64_t owner) {
+    vfs_lock(v,0);
+    for (unsigned i=0;i<VFS_RANGE_LOCKS;i++) if (v->range_locks[i].description && v->range_locks[i].owner==owner)
+        memset(&v->range_locks[i],0,sizeof(v->range_locks[i]));
+    vfs_unlock(v);
+}
 int vfs_close(struct vfs_table *t, int h) {
-    handle_lock(t,h); int e=get(t,h) ? 0 : -FS_EBADF; if (!e) e=close_handle(t,(unsigned)h); vfs_unlock(t->vfs); return e;
+    int admission=handle_lock(t,h); if (admission) return admission; int e=get(t,h) ? 0 : -FS_EBADF; if (!e) e=close_handle(t,(unsigned)h); vfs_unlock(t->vfs); return e;
 }
 int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
     if (src->vfs!=dst->vfs || target< -1 || target>=(int)VFS_HANDLES) return -FS_EINVAL;
@@ -429,17 +590,23 @@ int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
 }
 int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
-    handle_lock(t,h); struct vfs_description *d=get(t,h); int e;
-    if (!d) e=-FS_EBADF; else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=VFS_IO(t->vfs,fs_ro_read(d->node->ro,d->node->ro_id,d->position,buf,n,done)); if (e) ro_handle(t->vfs,d->node); d->position+=*done; }
+    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h); int e;
+    if (!d) e=-FS_EBADF;
+    else if (d->node->generation!=t->vfs->generation[d->node->drive]) e=-FS_EIO;
     else if (!(d->access&VFS_READ)) e=-FS_EACCES;
+    else if ((e=vfs_range_check(t->vfs,d->node,d,t->owner,d->position,n))) { }
+    else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=VFS_IO(t->vfs,fs_ro_read(d->node->ro,d->node->ro_id,d->position,buf,n,done)); if (e) ro_handle(t->vfs,d->node); d->position+=*done; }
     else { e=VFS_IO(t->vfs,fat_read(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done; }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
-    handle_lock(t,h); struct vfs_description *d=get(t,h); int e;
-    if (!d) e=-FS_EBADF; else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
+    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h); int e;
+    if (!d) e=-FS_EBADF;
+    else if (d->node->generation!=t->vfs->generation[d->node->drive]) e=-FS_EIO;
+    else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
     else if (!(d->access&VFS_WRITE)) e=-FS_EACCES;
+    else if ((e=vfs_range_check(t->vfs,d->node,d,t->owner,d->position,n))) { }
     else if (d->node->log_capacity) e=-FS_EBUSY;
     else {
         struct fat_entry before=d->node->entry;
@@ -450,7 +617,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
 }
 int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, uint64_t *position) {
     if (!position || whence>VFS_SEEK_END) return -FS_EINVAL;
-    handle_lock(t,h); struct vfs_description *d=get(t,h); int e=0;
+    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h); int e=0;
     if (!d) e=-FS_EBADF;
     else if (d->node->ro && (e=ro_handle(t->vfs,d->node))) { }
     else {
@@ -463,10 +630,14 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
     vfs_unlock(t->vfs); return e;
 }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
-    handle_lock(t,h); struct vfs_description *d=get(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : d->node->ro ? ro_handle(t->vfs,d->node) : !(d->access&VFS_WRITE) ? -FS_EACCES : 0;
     if (d && d->node->ro && !e) e=-FS_EROFS;
     if (d && d->node->log_capacity && !e) e=-FS_EBUSY;
+    if (!e) {
+        uint64_t old=d->node->entry.size,start=size<old ? size : old;
+        e=vfs_range_check(t->vfs,d->node,d,t->owner,start,size<old ? old-size : size-old);
+    }
     if (!e) {
         struct fat_entry before=d->node->entry;
         e=VFS_IO(t->vfs,fat_truncate(d->node->volume,&d->node->entry,size));
@@ -475,8 +646,16 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_commit(struct vfs_table *t, int h) {
-    handle_lock(t,h); struct vfs_description *d=get(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission; struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : d->node->ro ? ro_handle(t->vfs,d->node) : VFS_IO(t->vfs,fat_commit(d->node->volume)); vfs_unlock(t->vfs); return e;
+}
+int vfs_flush_drive(struct vfs_table *t,unsigned drive) {
+    if (drive>=26) return -FS_EINVAL;
+    int e=vfs_admit(t->vfs,vfs_drive_mask(drive),t->request); if (e) return e;
+    struct fat_volume *v=t->vfs->volumes[drive];
+    if (v && !v->readonly) e=VFS_IO(t->vfs,fat_commit(v));
+    else if (!v && !t->vfs->ro_volumes[drive]) e=-FS_ENOENT;
+    vfs_unlock(t->vfs); return e;
 }
 static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) {
     struct vfs_description *d=get(t,h); *out=d;
@@ -486,7 +665,7 @@ static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) 
     return 0;
 }
 int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
-    handle_lock(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission;
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && (!capacity || (capacity&511) || d->node->log_capacity)) e=-FS_EINVAL;
     if (!e) {
@@ -503,7 +682,7 @@ int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
 }
 int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_t size, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
-    handle_lock(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission;
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && (!d->node->log_capacity || size>d->node->log_capacity)) e=-FS_EINVAL;
     if (!e) {
@@ -516,7 +695,7 @@ int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_
     vfs_unlock(t->vfs); return e;
 }
 int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
-    handle_lock(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission;
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && !d->node->log_capacity) e=-FS_EINVAL;
     if (!e) {
@@ -528,18 +707,20 @@ int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
-    if (ro_target(t,path)) {
-        path_lock(t,path,0,0); struct fs_ro_node n; unsigned d;
+    int ro=ro_target(t,path); if (ro<0) return ro;
+    if (ro) {
+        int admission=path_lock(t,path,0,0); if (admission) return admission; struct fs_ro_node n; unsigned d;
         int e=ro_path(t,path,&d,&n,0); if (!e && n.size>UINT32_MAX) e=-FS_EFBIG;
         if (!e) ro_entry(&n,out); vfs_unlock(t->vfs); return e;
     }
-    path_lock(t,path,0,0); struct resolved r; int e=lookup(t,path,&r,out);
+    int admission=path_lock(t,path,0,0); if (admission) return admission; struct resolved r; int e=lookup(t,path,&r,out);
     if (!e) { struct vfs_node *n=node_find(t->vfs,t->vfs->volumes[r.drive],out); if (n) *out=n->entry; }
     vfs_unlock(t->vfs); return e;
 }
 static int metadata(struct vfs_table *t, const char *path, int attr, const struct fat_times *times) {
-    if (ro_target(t,path)) return -FS_EROFS;
-    path_lock(t,path,0,0); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    int ro=ro_target(t,path); if (ro<0) return ro;
+    if (ro) return -FS_EROFS;
+    int admission=path_lock(t,path,0,0); if (admission) return admission; struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     if (!e && ent.index==UINT32_MAX) e=-FS_EACCES;
     if (!e) {
         struct fat_volume *vol=t->vfs->volumes[r.drive]; struct vfs_node *n=node_find(t->vfs,vol,&ent);
@@ -553,6 +734,30 @@ static int metadata(struct vfs_table *t, const char *path, int attr, const struc
 }
 int vfs_attrib(struct vfs_table *t, const char *p, uint8_t attr) { return metadata(t,p,attr,0); }
 int vfs_times(struct vfs_table *t, const char *p, const struct fat_times *times) { return times ? metadata(t,p,-1,times) : -FS_EINVAL; }
+static bool dos_match(const char *pattern,const char *name) {
+    uint16_t mask[11],text[11];
+    for (unsigned i=0;i<11;i++) mask[i]=text[i]=' ';
+    unsigned at=0; bool extension=false,star=false;
+    while (*pattern) {
+        uint16_t ch; if (path_decode(&pattern,&ch)) return false;
+        if (ch=='.') { at=8; extension=true; continue; }
+        unsigned end=extension ? 11 : 8;
+        if (ch=='*') {
+            while (at<end) mask[at++]='?'; star=true;
+            while (*pattern && *pattern!='.') { uint16_t skip; if (path_decode(&pattern,&skip)) return false; }
+        } else { if (at>=end) return false; mask[at++]=path_upper(ch); }
+    }
+    if (star && !extension) for (unsigned i=8;i<11;i++) mask[i]='?';
+    at=0; extension=false;
+    while (*name) {
+        uint16_t ch; if (path_decode(&name,&ch)) return false;
+        if (ch=='.') { at=8; extension=true; continue; }
+        if (at>=(extension ? 11u : 8u)) return false;
+        text[at++]=path_upper(ch);
+    }
+    for (unsigned i=0;i<11;i++) if (mask[i]!='?' && mask[i]!=text[i]) return false;
+    return true;
+}
 static int find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *ent) {
     if (f->ro) {
         if (f->drive>=26 || f->generation!=t->vfs->generation[f->drive]) return -FS_EIO;
@@ -560,7 +765,8 @@ static int find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *
         struct fs_ro_node n;
         while (!(e=VFS_IO(t->vfs,fs_ro_next(t->vfs->ro_volumes[f->drive],f->ro_directory,&f->cursor,&n)))) {
             if (n.attr & (2|4|16) & ~f->attr_mask) continue;
-            if (path_wildcard(f->pattern,n.name) || path_wildcard(f->pattern,n.alias)) {
+            if ((f->attr_mask&0x3f)==FAT_ATTR_VOLUME) continue;
+            if ((f->attr_mask&VFS_FIND_DOS) ? dos_match(f->pattern,n.alias) : (path_wildcard(f->pattern,n.name) || path_wildcard(f->pattern,n.alias))) {
                 if (n.size>UINT32_MAX) return -FS_EFBIG; ro_entry(&n,ent); return 0;
             }
         }
@@ -569,15 +775,19 @@ static int find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *
 
     if (f->drive>=26 || !t->vfs->volumes[f->drive] || f->generation!=t->vfs->generation[f->drive]) return -FS_EIO;
     int e;
-    while (!(e=VFS_IO(t->vfs,fat_next(t->vfs->volumes[f->drive],f->directory,&f->cursor,ent)))) {
+    while (!(e=VFS_IO(t->vfs,(f->attr_mask&VFS_FIND_DOS) ? fat_next_dos(t->vfs->volumes[f->drive],f->directory,&f->cursor,ent) : fat_next(t->vfs->volumes[f->drive],f->directory,&f->cursor,ent)))) {
+        if ((f->attr_mask&VFS_FIND_DOS) && ((f->attr_mask&0x3f)==FAT_ATTR_VOLUME ? !(ent->attr&FAT_ATTR_VOLUME) : (ent->attr&FAT_ATTR_VOLUME)!=0)) continue;
         if (ent->attr & (FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM|FAT_ATTR_DIR) & ~f->attr_mask) continue;
-        if (path_wildcard(f->pattern,ent->name) || path_wildcard(f->pattern,ent->alias)) return 0;
+        if ((f->attr_mask&VFS_FIND_DOS) && !(ent->attr&FAT_ATTR_VOLUME)) {
+            if (dos_match(f->pattern,ent->alias)) return 0;
+        } else if (path_wildcard(f->pattern,ent->name) || path_wildcard(f->pattern,ent->alias)) return 0;
     }
     return e;
 }
 int vfs_find_first(struct vfs_table *t, const char *p, uint8_t mask, struct vfs_find *f, struct fat_entry *ent) {
-    if (ro_target(t,p)) {
-        path_lock(t,p,0,0); char parent[FS_PATH_BYTES];
+    int ro=ro_target(t,p); if (ro<0) return ro;
+    if (ro) {
+        int admission=path_lock(t,p,0,0); if (admission) return admission; char parent[FS_PATH_BYTES];
         size_t n=strlen(p); int e=0; if (n>=sizeof(parent)) e=-FS_ENAMETOOLONG;
         if (!e) {
             memcpy(parent,p,n+1); char *leaf=parent;
@@ -591,13 +801,14 @@ int vfs_find_first(struct vfs_table *t, const char *p, uint8_t mask, struct vfs_
         vfs_unlock(t->vfs); return e;
     }
 
-    path_lock(t,p,0,0); struct resolved r; int e=resolve(t,p,&r);
+    int admission=path_lock(t,p,0,0); if (admission) return admission; struct resolved r; int e=resolve(t,p,&r);
     if (!e && !r.name[0]) e=-FS_EINVAL;
     if (!e) { memset(f,0,sizeof(*f)); f->drive=r.drive; f->directory=r.parent; f->generation=t->vfs->generation[r.drive]; f->attr_mask=mask; memcpy(f->pattern,r.name,strlen(r.name)+1); e=find_next(t,f,ent); }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *ent) {
-    vfs_lock(t->vfs,vfs_drive_mask(f->drive)); int e=find_next(t,f,ent); vfs_unlock(t->vfs); return e;
+    int admission=vfs_admit(t->vfs,vfs_drive_mask(f->drive),t->request); if (admission) return admission;
+    int e=find_next(t,f,ent); vfs_unlock(t->vfs); return e;
 }
 /* Does ancestor contain directory? Resolve on-disk parents, so aliases cannot
  * evade cycle/cwd checks. Root . . references are normalized to root(). */
@@ -636,8 +847,9 @@ static int busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e
     return 0;
 }
 static int remove_path(struct vfs_table *t, const char *path, bool dir) {
-    if (ro_target(t,path)) return -FS_EROFS;
-    path_lock(t,path,0,0); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    int ro=ro_target(t,path); if (ro<0) return ro;
+    if (ro) return -FS_EROFS;
+    int admission=path_lock(t,path,0,0); if (admission) return admission; struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     if (!e && !r.name[0]) e=-FS_EACCES;
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[r.drive];
@@ -654,7 +866,7 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
     bool present[3]={false};
     unsigned drive=26; uint32_t parent=0;
     struct vfs *v=t->vfs;
-    path_lock(t,current,previous,oldest);
+    int admission=path_lock(t,current,previous,oldest); if (admission) return admission;
     int e=capacity ? 0 : -FS_EINVAL;
     /* Preflight every entry before changing any name or reservation. */
     for (unsigned i=0;!e && i<3;i++) {
@@ -692,15 +904,17 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
 int vfs_delete(struct vfs_table *t, const char *p) { return remove_path(t,p,false); }
 int vfs_rmdir(struct vfs_table *t, const char *p) { return remove_path(t,p,true); }
 int vfs_mkdir(struct vfs_table *t, const char *p, uint8_t attr) {
-    if (ro_target(t,p)) return -FS_EROFS;
-    path_lock(t,p,0,0); struct resolved r; int e=resolve(t,p,&r); struct fat_entry ent;
+    int ro=ro_target(t,p); if (ro<0) return ro;
+    if (ro) return -FS_EROFS;
+    int admission=path_lock(t,p,0,0); if (admission) return admission; struct resolved r; int e=resolve(t,p,&r); struct fat_entry ent;
     if (!e && !r.name[0]) e=-FS_EEXIST;
     if (!e) e=VFS_IO(t->vfs,fat_create(t->vfs->volumes[r.drive],r.parent,r.name,attr|FAT_ATTR_DIR,&ent));
     vfs_unlock(t->vfs); return e;
 }
 int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
-    if (ro_target(t,from) || ro_target(t,to)) return -FS_EROFS;
-    path_lock(t,from,to,0); struct resolved a,b; struct fat_entry ent; int e=lookup(t,from,&a,&ent);
+    int ro=ro_target(t,from); if (ro<0) return ro; if (ro) return -FS_EROFS;
+    ro=ro_target(t,to); if (ro<0) return ro; if (ro) return -FS_EROFS;
+    int admission=path_lock(t,from,to,0); if (admission) return admission; struct resolved a,b; struct fat_entry ent; int e=lookup(t,from,&a,&ent);
     if (!e) e=resolve(t,to,&b);
     if (!e && (!a.name[0] || !b.name[0])) e=-FS_EACCES;
     if (!e && a.drive!=b.drive) e=-FS_EXDEV;
@@ -716,14 +930,15 @@ int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_chdir(struct vfs_table *t, const char *p) {
-    if (ro_target(t,p)) {
-        path_lock(t,p,0,0); char canonical[FS_PATH_BYTES]; struct fs_ro_node n; unsigned d;
+    int ro=ro_target(t,p); if (ro<0) return ro;
+    if (ro) {
+        int admission=path_lock(t,p,0,0); if (admission) return admission; char canonical[FS_PATH_BYTES]; struct fs_ro_node n; unsigned d;
         int e=ro_path(t,p,&d,&n,canonical); if (!e && !(n.attr&FS_RO_DIRECTORY)) e=-FS_ENOTDIR;
         if (!e) memcpy(t->cwd[d],canonical,strlen(canonical)+1);
         vfs_unlock(t->vfs); return e;
     }
 
-    path_lock(t,p,0,0); struct resolved r; struct fat_entry ent; int e=lookup(t,p,&r,&ent);
+    int admission=path_lock(t,p,0,0); if (admission) return admission; struct resolved r; struct fat_entry ent; int e=lookup(t,p,&r,&ent);
     if (!e && !(ent.attr&FAT_ATTR_DIR)) e=-FS_ENOTDIR;
     if (!e) {
         char full[FS_PATH_BYTES], canonical[FS_PATH_BYTES]; unsigned d; e=normalize(t,p,&d,full);
@@ -732,9 +947,10 @@ int vfs_chdir(struct vfs_table *t, const char *p) {
             while (*s && !e) {
                 unsigned n=0; while (*s && *s!='/') r.name[n++]=*s++; r.name[n]=0;
                 e=VFS_IO(t->vfs,fat_lookup(t->vfs->volumes[d],dir,r.name,&ent)); if (e) break;
-                n=(unsigned)strlen(ent.name); if (used>1) canonical[used++]='/';
+                const char *component=t->owner && ent.alias[0] ? ent.alias : ent.name;
+                n=(unsigned)strlen(component); if (used>1) canonical[used++]='/';
                 if (used+n>=sizeof(canonical)) { e=-FS_ENAMETOOLONG; break; }
-                memcpy(canonical+used,ent.name,n+1); used+=n; dir=ent.first; if (*s) s++;
+                memcpy(canonical+used,component,n+1); used+=n; dir=ent.first; if (*s) s++;
             }
             if (!e) { memcpy(t->cwd[d],canonical,used+1); t->cwd_cluster[d]=dir; }
         }
@@ -746,7 +962,8 @@ int vfs_set_drive(struct vfs_table *t, unsigned d) {
     int e=t->vfs->ro_volumes[d] ? vfs_ro_check_locked(t->vfs,d) : t->vfs->volumes[d] ? 0 : -FS_ENOENT; if (!e) t->drive=d; vfs_unlock(t->vfs); return e;
 }
 int vfs_getcwd(struct vfs_table *t, unsigned d, char out[FS_PATH_BYTES]) {
-    if (d>=26 || !out) return -FS_EINVAL; vfs_lock(t->vfs,vfs_drive_mask(d));
+    if (d>=26 || !out) return -FS_EINVAL;
+    int admission=vfs_admit(t->vfs,vfs_drive_mask(d),t->request); if (admission) return admission;
     int e=t->vfs->ro_volumes[d] ? vfs_ro_check_locked(t->vfs,d) : t->vfs->volumes[d] ? 0 : -FS_ENOENT; if (!e) memcpy(out,t->cwd[d],strlen(t->cwd[d])+1); vfs_unlock(t->vfs); return e;
 }
 int vfs_free_space(struct vfs_table *t, unsigned d, uint64_t *bytes, uint32_t *cb) {
