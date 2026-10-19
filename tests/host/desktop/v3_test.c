@@ -35,7 +35,7 @@ static void protocol(void)
     const unsigned ops[]={DESK_CREATE_WINDOW,DESK_DAMAGE,DESK_V3_RESIZE,DESK_V3_PLACE,DESK_SET_TITLE,
         DESK_SET_CURSOR,DESK_V3_CURSOR_BITMAP,DESK_V3_POINTER,DESK_V3_WARP,DESK_V3_LEASE,
         DESK_V3_CRASH,DESK_V3_RESTART,DESK_CLOSE,DESK_CLOSED,DESK_CLOSE_REQUEST,DESK_PING,DESK_PONG,
-        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK};
+        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK,DESK_V3_WINDOW_ORDER};
     for (unsigned k=0;k<sizeof(ops)/sizeof(*ops);k++) {
         unsigned op=ops[k], n=0; int direction=1;
         msg(&m,op,0,1,1); uint8_t *b=m.data+16;
@@ -52,6 +52,7 @@ static void protocol(void)
         case DESK_V3_LEASE: n=16; break;
         case DESK_V3_CRASH: n=13; desk_put32(b,0xc0000005); desk_put32(b+8,1); b[12]='M'; break;
         case DESK_V3_RESTART: case DESK_CLOSE_ACK: n=4; break;
+        case DESK_V3_WINDOW_ORDER: n=20; desk_put32(b,DESK_V3_ORDER_Z|DESK_V3_ORDER_OWNER); desk_put32(b+4,2); desk_put32(b+8,1); desk_put32(b+12,3); desk_put32(b+16,1); break;
         case DESK_V3_POINTER_STATE: n=4; direction=0; break;
         case DESK_CONFIGURE: n=32; direction=0; desk_put32(b,32); desk_put32(b+4,32); desk_put32(b+8,1); desk_put32(b+12,1); break;
         case DESK_V3_RESULT: n=8; direction=0; desk_put32(b,DESK_DAMAGE); break;
@@ -229,6 +230,69 @@ static void ownership(void)
     for (unsigned k=0;k<DESK_TX_MAX+1;k++) { msg(&m,DESK_PING,4,1,1); desk_put32(m.data+16,k); (void)desk_v3_receive(&d,root,&m); }
     assert(d.clients[root].v3_failed); desk_flush(&d,root); fake_block=0; assert(!d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
+}
+static void order_msg(struct ciuki_message *m, unsigned id, unsigned flags, unsigned after,
+                      unsigned after_gen, unsigned owner, unsigned owner_gen)
+{
+    msg(m,DESK_V3_WINDOW_ORDER,20,id,1); uint8_t *b=m->data+16;
+    desk_put32(b,flags); desk_put32(b+4,after); desk_put32(b+8,after_gen);
+    desk_put32(b+12,owner); desk_put32(b+16,owner_gen);
+}
+static int order(int root, unsigned id, unsigned flags, unsigned after, unsigned owner)
+{
+    struct ciuki_message m;
+    order_msg(&m,id,flags,after,after && after<DESK_V3_ORDER_NOTOPMOST ? 1 : 0,owner,owner ? 1 : 0);
+    return desk_v3_receive(&d,root,&m);
+}
+#define BELOW(x,y) (d.clients[x].order<d.clients[y].order)
+#define TOPMOST(x) (d.clients[x].v3_style&DESK_V3_TOPMOST)
+static void window_order(void)
+{
+    /* Malformed payloads: protocol violations, never interpreted. */
+    struct ciuki_surface_info s={24,32,32,128,1,4096}; struct desk_packet p; struct ciuki_message m;
+    const unsigned Z=DESK_V3_ORDER_Z, O=DESK_V3_ORDER_OWNER;
+    const unsigned bad[][5]={{0,0,0,0,0},{4,0,0,0,0},{Z|4,0,0,0,0},{O,5,1,0,0},{Z,0,0,3,1},
+        {O,0,0,3,0},{O,0,0,0,1},{Z,3,0,0,0},{Z,DESK_V3_ORDER_BOTTOM,1,0,0},{Z,DESK_V3_ORDER_TOPMOST,1,0,0},
+        {Z,DESK_V3_ORDER_NOTOPMOST,7,0,0},{Z,0,1,0,0}};
+    for (unsigned k=0;k<sizeof(bad)/sizeof(*bad);k++) {
+        order_msg(&m,1,bad[k][0],bad[k][1],bad[k][2],bad[k][3],bad[k][4]); assert(!desk_parse(&m,1,&s,&p));
+    }
+    order_msg(&m,1,Z,DESK_V3_ORDER_BOTTOM,0,0,0); assert(desk_parse(&m,1,&s,&p) && p.index==DESK_V3_ORDER_BOTTOM);
+    m.length=16+16; assert(!desk_parse(&m,1,&s,&p));
+    order_msg(&m,1,Z,0,0,0,0); assert(!desk_parse(&m,0,&s,&p));
+    order_msg(&m,1,Z,0,0,0,0); m.fd_count=1; m.fds[0]=9; assert(!desk_parse(&m,1,&s,&p));
+
+    setup(); int root=peer(10,42), a=create(root,20,1,1,0,0), b=create(root,21,2,1,0,0), c=create(root,22,3,1,0,0);
+    assert(BELOW(a,b) && BELOW(b,c));
+    /* hWndInsertAfter: the positioned window goes directly below the sibling. */
+    assert(!order(root,3,Z,1,0)); assert(BELOW(c,a) && BELOW(a,b));
+    assert(!order(root,1,Z,DESK_V3_ORDER_BOTTOM,0)); assert(BELOW(a,c) && BELOW(c,b));
+    assert(!order(root,2,Z,DESK_V3_ORDER_TOPMOST,0)); assert(TOPMOST(b) && BELOW(c,b));
+    assert(!order(root,1,Z,DESK_V3_ORDER_TOP,0)); assert(!TOPMOST(a) && BELOW(c,a) && BELOW(a,b));
+    /* Inserted behind a topmost window: it joins the topmost band. */
+    assert(!order(root,3,Z,2,0)); assert(TOPMOST(c) && BELOW(a,c) && BELOW(c,b));
+    assert(!order(root,2,Z,DESK_V3_ORDER_NOTOPMOST,0)); assert(!TOPMOST(b) && TOPMOST(c) && BELOW(b,c));
+    /* Owner change: owned windows stay above their owner; cycles refused. */
+    assert(!order(root,1,O,0,2)); assert(d.clients[a].owner_id==d.clients[b].window_id && BELOW(b,a));
+    assert(order(root,2,O,0,1)==-EINVAL && !d.clients[b].owner_id);
+    assert(order(root,1,Z,1,0)==-EINVAL);
+    order_msg(&m,1,Z,9,1,0,0); assert(desk_v3_receive(&d,root,&m)==-ENOENT);
+    order_msg(&m,1,Z,2,2,0,0); assert(desk_v3_receive(&d,root,&m)==-ENOENT);
+    order_msg(&m,1,O,0,0,9,1); assert(desk_v3_receive(&d,root,&m)==-ENOENT);
+    /* A topmost owner lifts its owned windows; leaving the band takes them along. */
+    assert(!order(root,2,Z,DESK_V3_ORDER_TOPMOST,0)); assert(TOPMOST(b) && TOPMOST(a) && BELOW(b,a));
+    assert(!order(root,2,Z,DESK_V3_ORDER_NOTOPMOST,0)); assert(!TOPMOST(b) && !TOPMOST(a));
+    assert(!order(root,1,Z|O,DESK_V3_ORDER_BOTTOM,0)); assert(!d.clients[a].owner_id && BELOW(a,b));
+    int e=create(root,23,4,1,DESK_V3_TOOL|DESK_V3_MODAL,1);
+    assert(order(root,4,O,0,0)==-EINVAL && d.clients[e].owner_id==d.clients[a].window_id);
+    /* Authority: ids name only the sender's own windows. */
+    int other=peer(11,84), f=create(other,24,5,1,0,0);
+    order_msg(&m,5,Z,2,1,0,0); m.sender_pid=84; assert(desk_v3_receive(&d,other,&m)==-ENOENT);
+    order_msg(&m,1,Z,DESK_V3_ORDER_BOTTOM,0,0,0); m.sender_pid=84; assert(desk_v3_receive(&d,other,&m)==-ENOENT);
+    order_msg(&m,5,O,0,0,1,1); m.sender_pid=84; assert(desk_v3_receive(&d,other,&m)==-ENOENT && !d.clients[f].owner_id);
+    assert(!order(root,1,Z,DESK_V3_ORDER_TOP,0) && d.clients[root].channel==10 && d.clients[other].channel==11);
+    flush(); cleanup();
+    puts("PASS v3 WINDOW_ORDER: insert-after, bottom, topmost bands, owner change, cycles, malformed payloads, authority");
 }
 static void input_and_lease(void)
 {
@@ -425,6 +489,6 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); frames(argv[2]);
+    protocol(); ownership(); window_order(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }

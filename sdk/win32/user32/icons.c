@@ -13,6 +13,12 @@ static DWORD serial = 0x10000;
 static HCURSOR current;
 static int cursor_count;
 static DWORD cached[16][4], cached_generation[16];
+void u32_icons_cleanup(void) {
+  w32_fill(icons, 0, sizeof(icons));
+  w32_fill(cached, 0, sizeof(cached));
+  w32_fill(cached_generation, 0, sizeof(cached_generation));
+  current = 0; cursor_count = 0;
+}
 extern HANDLE W32API FindResourceA(HANDLE, const void *, const void *);
 extern HANDLE W32API LoadResource(HANDLE, HANDLE);
 extern DWORD W32API SizeofResource(HANDLE, HANDLE);
@@ -87,8 +93,12 @@ static BOOL publish(void) {
       struct u32_surface s = {.fd = -1};
       if (!u32_backend.surface(32, 32, &s))
         return 0;
+      /* The XOR image keeps its colour under AND=1 for DrawIconEx; the
+       * desktop cursor has no screen-inversion mode, so those are clear. */
       for (UINT y = 0; y < 32; y++)
-        w32_copy((uint8_t *)s.pixels + y * s.pitch, i->pixels + y * 32, 128);
+        for (UINT x = 0; x < 32; x++)
+          w32_put32((uint8_t *)s.pixels + y * s.pitch + x * 4,
+                    i->mask[y * 32 + x] ? 0 : i->pixels[y * 32 + x]);
       uint8_t b[12];
       desk_put32(b, id);
       desk_put32(b + 4, i->hotx);
@@ -368,8 +378,6 @@ HICON W32API CreateIconIndirect(const ICONINFO *info) {
         BOOL and = (w32_u32((uint8_t *)mask.pixels + y * mask.pitch + x * 4) &
                     0xffffff) != 0;
         i->mask[p] = and;
-        if (and)
-          i->pixels[p] = 0;
       }
     }
   u32_gdi->bitmap(info->hbmColor, &color, 1);
@@ -379,12 +387,15 @@ HICON W32API CreateIconIndirect(const ICONINFO *info) {
 BOOL W32API DrawIconEx(HDC dc, int x, int y, HICON handle, int w, int h,
                        UINT frame, HBRUSH brush, UINT flags) {
   U32_GUARD;
-  (void)brush;
+  u32_gdi_ensure();
   if (frame)
     return u32_fail(87);
   struct icon *i = find(handle);
   if (!i || !u32_gdi || !u32_gdi->icon)
     return u32_fail(120);
+  if (w < 0 || h < 0 || !(flags & 3) || (flags & ~0xf)) return u32_fail(87);
+  RECT area = {x, y, x + (w ? w : 32), y + (h ? h : 32)};
+  if (brush && (!u32_gdi->fill || !u32_gdi->fill(dc, &area, brush))) return 0;
   return u32_gdi->icon(dc, x, y, w ? w : 32, h ? h : 32, i->pixels, i->mask, 32,
                        flags);
 }

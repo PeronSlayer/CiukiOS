@@ -10,6 +10,7 @@ BOOL u32_message(struct ciuki_w32_message_args *a) {
 }
 BOOL u32_pointer_message(UINT m) {
   switch (m) {
+  case U32_DESTROY:
   case WM_CREATE:
   case WM_NCCREATE:
   case WM_GETMINMAXINFO:
@@ -75,6 +76,13 @@ LRESULT u32_invoke(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return 0;
+  if (m == U32_DESTROY) {
+    /* Private, system-range message: an application cannot forge it. */
+    if (!w->destroy_request)
+      return 0;
+    w->destroy_request = 0;
+    return u32_destroy(w, U32_NORMAL);
+  }
   WNDPROC proc = w->proc;
   struct {
     LPARAM lParam;

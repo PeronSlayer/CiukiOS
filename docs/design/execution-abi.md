@@ -2116,7 +2116,10 @@ fields are converted to FILETIME in user mode. Existing VM/section/wait records
 are reused without renumbering. `SYSTEM/TERMINATE_THREAD` with a handle queues
 termination at a user-return boundary. Its private cancellation form uses
 handle=0 and extra=TID within the caller's process, allowing CreateThread to
-cancel a suspended initializer after handle admission fails. Other extra/input
+cancel a suspended initializer after handle admission fails. On admission of a
+target in the caller's own process `result` returns the target TID (zero for
+another process), so kernel32 can release the victim's in-process USER state;
+the target never executes user code again. Other extra/input
 output words remain zero. Native F2 processes cannot submit these records.
 
 `W32_SNAPSHOT` (`0x10c`, 48 bytes) creates an immutable process/thread/module

@@ -24,6 +24,13 @@
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
 #define DESK_V3_HIDDEN 8u
+/* WINDOW_ORDER flags; order targets occupy a separate namespace from ids. */
+#define DESK_V3_ORDER_Z 1u
+#define DESK_V3_ORDER_OWNER 2u
+#define DESK_V3_ORDER_TOP 0u
+#define DESK_V3_ORDER_BOTTOM 0xffffffffu
+#define DESK_V3_ORDER_TOPMOST 0xfffffffeu
+#define DESK_V3_ORDER_NOTOPMOST 0xfffffffdu
 /* V3 payloads after the 16-byte envelope, all u32 unless noted:
  * HELLO: empty; CREATE: style,owner,owner-generation,x,y,w,h,scale,title-bytes,title;
  * DAMAGE: x,y,w,h; RESIZE: w,h,configure-serial + one surface fd;
@@ -41,6 +48,8 @@
  * CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
  * POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
  * CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+ * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
+ * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
  * CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
  */
@@ -48,7 +57,8 @@ enum desk_v3_opcode {
     DESK_V3_RESIZE = 64, DESK_V3_PLACE, DESK_V3_CURSOR_BITMAP,
     DESK_V3_POINTER, DESK_V3_WARP, DESK_V3_LEASE, DESK_V3_RESULT,
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
-    DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE
+    DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
+    DESK_V3_WINDOW_ORDER
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u

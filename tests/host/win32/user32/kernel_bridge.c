@@ -3,17 +3,6 @@
 #define W32_KERNEL_BRIDGE
 #define w32_pe_validate w32_kernel_pe_validate
 #include "../kernel_core_test.c"
-/* f5-16 added [win32] exit/crash/stub records through klog in the Win32
- * kernel sources this fixture links; the core fixture omits klog under
- * W32_KERNEL_BRIDGE, so the bridge forwards the record to the trace log. */
-#include <stdarg.h>
-void klog(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vprintf(fmt, ap);
-  va_end(ap);
-  putchar('\n');
-}
 #undef main
 #include <stdarg.h>
 /* The shared kernel harness leaves bridge logging to each adapter. Preserve

@@ -555,16 +555,36 @@ static void W32API thread_entry(void *argument) {
   DWORD result = start.entry(start.argument);
   ExitThread(result);
 }
+/* TerminateThread runs no DLL detach (Microsoft TerminateThread remarks), but
+ * the window manager still owns the victim's windows, timers, hooks and
+ * clipboard lock. In-process USER releases them without calling the victim's
+ * procedures; user32 is never loaded for this. */
+HANDLE W32API GetModuleHandleA(const char *);
+void *W32API GetProcAddress(HANDLE, const char *);
+static void user_thread_cleanup(DWORD tid) {
+  HANDLE user = GetModuleHandleA("user32.dll");
+  void(W32API * cleanup)(DWORD) =
+      user ? GetProcAddress(user, "w32_user_thread_cleanup") : 0;
+  if (cleanup)
+    cleanup(tid);
+}
 BOOL W32API TerminateThread(HANDLE h, DWORD code) {
   struct ciuki_w32_system_args a = {
       .action = W32_S_TERMINATE_THREAD, .handle = K32_PTR(h), .value = code};
   a.header = K32_HEADER(W32_SYSTEM, a);
+  DWORD saved = GetLastError();
+  /* A self-termination never returns to user mode: release first. */
+  if (h == GetCurrentThread())
+    user_thread_cleanup(GetCurrentThreadId());
   if (!k32_status(w32_ciuki_call(&a, sizeof(a))))
     return 0;
   if (a.error) {
     SetLastError(a.error);
     return 0;
   }
+  if (a.result && a.result != GetCurrentThreadId())
+    user_thread_cleanup(a.result);
+  SetLastError(saved);
   return 1;
 }
 HANDLE W32API CreateThread(SECURITY_ATTRIBUTES *sa, DWORD stack,

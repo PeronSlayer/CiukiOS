@@ -28,7 +28,8 @@ enum w32r_op {
      * OPEN/CLOSE are authenticated PID+TID locks, never persisted. */
     W32R_CLIP_OPEN=0x100, W32R_CLIP_CLOSE, W32R_CLIP_EMPTY, W32R_CLIP_SET,
     W32R_CLIP_GET, W32R_CLIP_QUERY, W32R_CLIP_OWNER, W32R_CLIP_VIEWER,
-    W32R_CLIP_CHAIN, W32R_WINDOW_CLASS
+    W32R_CLIP_CHAIN, W32R_WINDOW_CLASS,
+    W32R_USER_CLEANUP /* index=TID, or zero for all USER identities of the PID */
 };
 /* No pointers on the wire. Request tail = path NUL, name NUL, data bytes.
  * Strings are UTF-8; value bytes are canonical UTF-16LE for string types.
@@ -73,6 +74,7 @@ struct w32r_service {
     uint32_t action, service, pid, endpoint, result, error;
 };
 _Static_assert(sizeof(struct w32r_service) == 40, "service record");
-/* Process-wide serialized transport shared by kernel32 and advapi32. */
+/* Process-wide serialized transport shared by USER, kernel32 and advapi32.
+ * ntdll holds FastPebLock across every fragment, including response reads. */
 uint32_t w32_server_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *);
 #endif

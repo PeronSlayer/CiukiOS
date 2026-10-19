@@ -245,6 +245,26 @@ static void bitmaps(void) {
   assert(SetDIBits(dc, bitmap, 2, 1, band, (BITMAPINFO *)&info,
                    DIB_RGB_COLORS) == 1);
   assert(((uint8_t *)bits)[16] == 4);
+  {
+    /* Mixed orientations: scan lines follow the caller's DIB (a bottom-up
+     * DIB counts from the bottom row), whatever the bitmap's own storage. */
+    BITMAPINFOHEADER top = {40, 2, -2, 1, 32, BI_RGB, 0, 0, 0, 0, 0},
+                     bottom = {40, 2, 2, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    void *pixels = 0;
+    HBITMAP section =
+        CreateDIBSection(dc, (BITMAPINFO *)&top, DIB_RGB_COLORS, &pixels, 0, 0);
+    assert(section && pixels);
+    const uint32_t upright[4] = {0x111111, 0x222222, 0x333333, 0x444444},
+                   stored[4] = {0x333333, 0x444444, 0x111111, 0x222222};
+    assert(SetDIBits(dc, section, 0, 2, stored, (BITMAPINFO *)&bottom,
+                     DIB_RGB_COLORS) == 2);
+    assert(!memcmp(pixels, upright, sizeof(upright)));
+    uint32_t back[4] = {0};
+    assert(GetDIBits(dc, section, 0, 2, back, (BITMAPINFO *)&bottom,
+                     DIB_RGB_COLORS) == 2);
+    assert(!memcmp(back, stored, sizeof(stored)));
+    assert(DeleteObject(section));
+  }
   assert(CreateBitmap(0, 0, 1, 32, 0));
   assert(CreateBitmap(4, 3, 1, 1, 0));
   uint32_t masks[3] = {0xf800, 0x7e0, 0x1f};

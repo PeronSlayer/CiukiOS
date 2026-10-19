@@ -17,6 +17,10 @@ struct hook_frame {
 static struct hook hooks[32];
 
 static DWORD serial;
+void u32_hooks_cleanup(DWORD tid) {
+  for (UINT i = 0; i < 32; i++)
+    if (!tid || hooks[i].tid == tid) w32_fill(&hooks[i], 0, sizeof(hooks[i]));
+}
 HANDLE W32API SetWindowsHookExA(int kind, HOOKPROC proc, HINSTANCE module,
                                 DWORD tid) {
   U32_GUARD;

@@ -2,6 +2,7 @@
 #ifndef CIUKI_W32_DDRAW_H
 #define CIUKI_W32_DDRAW_H
 #include <w32/gdi32.h>
+#include <w32/display_lease.h>
 typedef int32_t DDRESULT;
 typedef struct {
   DWORD a;
@@ -192,9 +193,6 @@ struct dd_mode {
 struct dd_display {
   DWORD width, height, bpp, vram, count;
   struct dd_mode modes[96];
-};
-struct dd_lease {
-  DWORD active, token, generation, width, height, bpp, pitch;
 };
 struct dd_backend {
   BOOL (*display)(struct dd_display *);

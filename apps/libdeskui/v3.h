@@ -23,4 +23,7 @@ uint32_t du3_request(struct du3_connection *, unsigned opcode, uint32_t window,
 /* 1 event, 0 clean EOF, -1 errno (including EAGAIN); no implicit PONG. */
 int du3_next(struct du3_connection *, struct desk_packet *);
 int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generation, uint32_t ping);
+uint32_t du3_window_order(struct du3_connection *, uint32_t window,
+    uint32_t generation, uint32_t flags, uint32_t after, uint32_t after_generation,
+    uint32_t owner, uint32_t owner_generation);
 #endif

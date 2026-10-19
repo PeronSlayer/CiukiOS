@@ -96,6 +96,15 @@ static uint32_t integer_atom(const char *s)
 uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_request *r,const char *name,const void *data,struct w32r_reply *out,uint8_t *bytes)
 {
     struct directory *d=s->directory;
+    if(r->op==W32R_USER_CLEANUP){
+        if(r->key||r->type||r->flags||r->access||r->data_bytes)return 87;
+        if(!r->index)return wr_directory_exit(s,pid);
+        if(d->clip_pid==pid&&d->clip_tid==r->index)d->clip_pid=d->clip_tid=d->clip_window=0;
+        for(;;){struct window *w=d->windows;while(w&&(w->value.pid!=pid||w->value.tid!=r->index))w=w->next;if(!w)break;
+            struct w32r_request free_request={.op=W32R_WINDOW_FREE,.key=w->value.hwnd};
+            uint32_t e=wr_directory_call(s,pid,&free_request,"",NULL,out,bytes);if(e)return e;}
+        return 0;
+    }
     if(r->op>=W32R_CLIP_OPEN&&r->op<=W32R_CLIP_CHAIN){
         out->key=d->clip_owner;out->type=d->clip_viewer;
         if(r->op==W32R_CLIP_OPEN){

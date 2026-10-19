@@ -74,17 +74,30 @@ class InputTests(unittest.TestCase):
             '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include')]
         def compile(source,name):
             obj=out/name;subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True);return obj
+        # The f5-06b loader maps non-builtin images only below the builtin region
+        # (0x70000000..); the adapter run loads these copies as plain files, so
+        # rebuild dinput/dinput8 at a low base with the same sources and flags.
+        from scripts.win32 import input as inputmod
+        inputmod.build(store,0x60100000,flags)  # rebuilds in the store directory, which holds the builder's inputs
+        for dll in ('dinput','dinput8'):
+            shutil.copyfile(store/(dll+'.dll'),out/(dll+'.dll'))
         adapter=compile(HERE/'pe_adapter.c','adapter.obj')
         exports={'GetProcessHeap':0,'HeapAlloc':12,'HeapFree':12,'SetEvent':4,'GetCurrentProcessId':0,'SetLastError':4,
             'CiukiUserInputLock':0,'CiukiUserInputUnlock':0,'CiukiUserInputPump':0,'CiukiUserInputSubscribe':12,
             'CiukiUserInputSnapshot':4,'CiukiUserInputPointer':8,'IsWindow':4,'GetWindowLongA':8,'GetWindowThreadProcessId':8,'GetKeyNameTextA':12,'AdapterInput':16}
         definition=out/'adapter.def';definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n'+''.join(f' {n}=_{n}@{a}\n' for n,a in exports.items()))
-        subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/safeseh:no','/fixed',
+        subprocess.run(['lld-link','/machine:x86','/dll','/subsystem:windows,4.0','/osversion:4.0','/noentry','/nodefaultlib','/safeseh:no','/fixed',
             '/base:0x70800000','/timestamp:0','/def:'+str(definition),'/out:'+str(out/'kernel32.dll'),str(adapter),
             str(out/'core/i686-pc-windows-msvc/ntdll.lib'),str(store/'input-objects/bytes.obj')],check=True)
         definition=out/'user-adapter.def';definition.write_text('LIBRARY user32.dll\nEXPORTS\n'+''.join(f' {n}=kernel32.{n}\n' for n in exports if n.startswith('Ciuki') or n in ('IsWindow','GetWindowLongA','GetWindowThreadProcessId','GetKeyNameTextA')))
-        subprocess.run(['lld-link','/machine:x86','/dll','/noentry','/nodefaultlib','/fixed','/base:0x70900000',
-            '/def:'+str(definition),'/out:'+str(out/'user32.dll')],check=True)
+        # lld-link emits only the import library when no object is given: give the
+        # forwarder-only USER shim one empty object so user32.dll really exists and
+        # the adapter can register it as a builtin (core names resolve from builtins).
+        (out/'user-shim.c').write_text('int ciuki_input_user_shim;\n')
+        shim=compile(out/'user-shim.c','user-shim.obj')
+        subprocess.run(['lld-link','/machine:x86','/dll','/subsystem:windows,4.0','/osversion:4.0','/noentry','/nodefaultlib','/fixed','/base:0x70900000',
+            '/def:'+str(definition),'/out:'+str(out/'user32.dll'),str(shim)],check=True)
+        self.assertTrue((out/'user32.dll').is_file())
         objects=[compile(HERE/'fixture.c','fixture.obj'),compile(ROOT/'sdk/win32/input/formats.c','formats.obj')]
         libraries=[]
         for dll,names in [('dinput',{'DirectInputCreateA':16}),('dinput8',{'DirectInput8Create':20}),('kernel32',{'AdapterInput':16})]:

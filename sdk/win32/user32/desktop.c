@@ -4,11 +4,23 @@ static BOOL connected;
 static DWORD generation;
 struct request {
   struct request *next;
-  DWORD token, window, generation;
+  DWORD token, window, generation, tid;
   BOOL done;
   int error;
 };
 static struct request *requests;
+void u32_desktop_cleanup(DWORD tid) {
+  struct request **at = &requests;
+  while (*at) {
+    if (!tid || (*at)->tid == tid) *at = (*at)->next;
+    else at = &(*at)->next;
+  }
+  if (!tid && connected) {
+    u32_desktop.transport.close(u32_desktop.channel);
+    connected = 0;
+    w32_fill(&u32_desktop, 0, sizeof(u32_desktop));
+  }
+}
 static int tx(int fd, const struct ciuki_message *m, uint32_t flags) {
   return (int)u32_backend.gate(CIUKI_SYS_CHANNEL_SEND, fd, U32_PTR(m), flags);
 }
@@ -45,7 +57,7 @@ BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
     return u32_fail(1062);
   if (op == DESK_DAMAGE)
     return 1;
-  struct request request = {requests, token, w->wire, w->generation, 0, 0};
+  struct request request = {requests, token, w->wire, w->generation, u32_tid(), 0, 0};
   requests = &request;
   DWORD start = u32_ticks();
   while (!request.done && !u32_desktop.disconnected &&
@@ -174,6 +186,26 @@ BOOL u32_place(struct u32_window *w) {
   desk_put32(b + 24, u32_style(w));
   return u32_wire(w, DESK_V3_PLACE, b, 28, -1);
 }
+BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
+  if (!w->wire) return 1;
+  uint8_t b[20] = {0};
+  desk_put32(b, flags);
+  if (flags & DESK_V3_ORDER_Z) {
+    struct u32_window *a = U32_ORDER_SENTINEL(after) ? 0 : u32_window(after);
+    DWORD target = after == HWND_BOTTOM ? DESK_V3_ORDER_BOTTOM
+                   : after == HWND_TOPMOST ? DESK_V3_ORDER_TOPMOST
+                   : after == HWND_NOTOPMOST ? DESK_V3_ORDER_NOTOPMOST
+                   : a ? a->wire : DESK_V3_ORDER_TOP;
+    desk_put32(b + 4, target);
+    desk_put32(b + 8, a ? a->generation : 0);
+  }
+  if (flags & DESK_V3_ORDER_OWNER) {
+    struct u32_window *o = u32_window(owner);
+    desk_put32(b + 12, o ? o->wire : 0);
+    desk_put32(b + 16, o ? o->generation : 0);
+  }
+  return u32_wire(w, DESK_V3_WINDOW_ORDER, b, sizeof(b), -1);
+}
 void u32_event(const struct desk_packet *p) {
   if (p->opcode == DESK_V3_RESULT) {
     for (struct request *r = requests; r; r = r->next)
@@ -227,7 +259,13 @@ void u32_event(const struct desk_packet *p) {
               u32_pointer);
     break;
   case DESK_V3_ACTIVATE:
+    /* Owner thread only (foreign events were queued above): a deactivation
+     * clears the cached lease before any WndProc observes WM_ACTIVATEAPP. */
+    u32_display_event(w, p);
     u32_activate(w, p->focused, p->flags);
+    break;
+  case DESK_V3_LEASE_EVENT:
+    u32_display_event(w, p);
     break;
   case DESK_V3_POINTER_STATE:
     if (!u32_pointer_changing && !(p->flags & DESK_V3_CAPTURE) && u32_capture &&
@@ -282,12 +320,15 @@ void u32_event(const struct desk_packet *p) {
     break;
   case DESK_CLOSED:
     w->wire = 0;
+    w->lease_wanted = 0;
+    u32_display_event(w, p);
     break;
   default:
     break;
   }
 }
 void u32_pump(void) {
+  u32_palette_deliver();
   if (!connected)
     return;
   struct desk_packet p;

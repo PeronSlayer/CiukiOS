@@ -87,6 +87,10 @@ uint32_t w32_system_call(struct proc_thread *t,
       target->w32->terminate_code = a->value;
       target->w32->terminate_requested = true;
       target->w32->suspend = 0;
+      /* Same-process admission reports the victim TID so the caller's
+       * in-process USER can release that thread's state; the victim exits at
+       * its next user return and never executes user code again. */
+      a->result = target->process == t->process ? target->tid : 0;
       proc_interrupt(target);
       w32_changed_wake();
     }

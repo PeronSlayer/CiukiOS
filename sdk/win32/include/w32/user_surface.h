@@ -3,6 +3,7 @@
 #ifndef CIUKI_USER_SURFACE_H
 #define CIUKI_USER_SURFACE_H
 #include <w32/user32.h>
+#include <w32/display_lease.h>
 struct u32_surface {
   void *pixels;
   DWORD width, height, pitch, format;
@@ -36,4 +37,13 @@ struct u32_gdi {
 /* Install before USER use; the table and callbacks outlive the process. Host
  * adapters replace transport only; public USER APIs execute the same code. */
 void u32_set_gdi(const struct u32_gdi *);
+/* f5-11 USER-owned display seam. Poll/clip only copy cached process state;
+ * workers never consume GUI events or send desktop transactions. */
+int32_t W32API w32_user_display_lease(uintptr_t, DWORD, DWORD, DWORD, struct dd_lease *);
+void W32API w32_user_display_release(uintptr_t);
+void W32API w32_user_display_poll(uintptr_t, struct dd_lease *);
+int32_t W32API w32_user_display_clip(uintptr_t, RECT *, DWORD *);
+/* Forced teardown only: target has been admitted for termination by kernel32.
+ * Ordinary ExitThread/ExitProcess use UserDllMain's detach path. */
+void W32API w32_user_thread_cleanup(DWORD);
 #endif
