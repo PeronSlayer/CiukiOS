@@ -306,7 +306,7 @@ static void unsafe_and_bad_media(void) {
     CHECK(storage_enable_write(s,2)==-FS_EROFS);
     int h=vfs_open(&table,"C:/SHORT.BIN",VFS_READ,0,0);CHECK(h>=0);uint8_t bytes[512];size_t done;
     OK(vfs_read(&table,h,bytes,sizeof(bytes),&done));CHECK(done==sizeof(bytes));OK(vfs_close(&table,h));
-    memset(&vm,0,sizeof(vm));vm.info.key.generation=3;
+    memset(&vm,0,sizeof(vm));vm.info.commitment=DOSVM_LOW_CAP;vm.info.key.generation=3;
     OK(dosvm_disk_open(&vm,DOSVM_BUNDLED_BASE));OK(dosvm_disk_read(&vm,128,bytes));CHECK(!memcmp(bytes,program,sizeof(program)));
     OK(dosvm_disk_close(&vm,false));stop(s,true);bootlog_reset();fake_reset(&media[0]);
     s=start();geometry=s->volumes[2].fat;stop(s,true);bootlog_reset();
@@ -336,7 +336,7 @@ static void raw_integration(void) {
     fat_revoke_write(v,"crosslink_fixture",17);
     CHECK(v->readonly && s->volumes[2].writes==writes);
     /* DOS reads remain available even when its COW file cannot be created. */
-    memset(&vm,0,sizeof(vm));vm.info.key.generation=2;
+    memset(&vm,0,sizeof(vm));vm.info.commitment=DOSVM_LOW_CAP;vm.info.key.generation=2;
     OK(dosvm_disk_open(&vm,DOSVM_BUNDLED_BASE));uint8_t sector[512];
     OK(dosvm_disk_read(&vm,128,sector));CHECK(!memcmp(sector,program,sizeof(program)));
     CHECK(dosvm_disk_write(&vm,128,sector)==-FS_EROFS);OK(dosvm_disk_close(&vm,false));

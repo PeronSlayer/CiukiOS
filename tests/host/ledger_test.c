@@ -6,6 +6,7 @@
 #include <setjmp.h>
 #include <stdarg.h>
 #include <ciuki/process.h>
+#include <ciuki/dosvm.h>
 #define CIUKI_CPU_H
 #define KERNEL_VBASE 0xC0000000u
 static uint8_t *ram;
@@ -27,12 +28,14 @@ static bool expected_panic;
 static jmp_buf panic_return;
 static unsigned mismatch_records, pressure_records, profile_records;
 static unsigned context_records;
+static bool emit_profiles;
 static char context_record[256];
 void panic(const char *fmt, ...) { (void)fmt; if (expected_panic) longjmp(panic_return,1); abort(); }
 void klog(const char *fmt, ...)
 {
     char line[256]; va_list ap; va_start(ap,fmt);
     int n=vsnprintf(line,sizeof(line),fmt,ap); va_end(ap); CHECK(n>=0 && n<255);
+    if (emit_profiles && strstr(fmt,"[mem] ledger")) puts(line);
     if (strstr(fmt,"[mem] ledger mismatch")) mismatch_records++;
     else if (strstr(fmt,"[mem] pressure")) pressure_records++;
     else if (strstr(fmt,"[mem] ledger profile")) profile_records++;
@@ -55,17 +58,18 @@ void ww_cancel(void *identity,uint64_t generation,uint32_t base,uint32_t end)
 #include "../../src/kernel/proc/uaddr.c"
 
 static uint32_t host_pd[1024];
-static void fresh(unsigned mib)
+static void fresh_kernel(unsigned mib, unsigned kernel_mib)
 {
     if (pmm_total_usable()) CHECK(ledger_reconcile());
     memset(&g_boot,0,sizeof(g_boot));
     g_boot.e820_count=2;
     g_boot.e820[0]=(struct ciuki_e820){.base=0,.length=0xa0000,.type=CBI_E820_RAM};
     g_boot.e820[1]=(struct ciuki_e820){.base=0x100000,.length=(mib-1u)<<20,.type=CBI_E820_RAM};
-    g_boot.kernel_start=0x100000; g_boot.kernel_end=0x300000;
+    g_boot.kernel_start=0x100000; g_boot.kernel_end=(1u+kernel_mib)<<20;
     pmm_init(); kpd=host_pd; cr3=0;
     CHECK(ledger_reconcile());
 }
+static void fresh(unsigned mib) { fresh_kernel(mib,2); }
 static struct mm_ledger snapshot(void) { struct mm_ledger v; ledger_snapshot(&v); return v; }
 static uint32_t resident(enum mm_owner owner)
 { struct mm_ledger v=snapshot(); return v.zone[0].resident[owner]+v.zone[1].resident[owner]+v.zone[2].resident[owner]; }
@@ -264,9 +268,75 @@ static void scattered_pool(void)
     as_destroy(&as); pmm_free(gap);
     CHECK(pmm_free_count()==baseline && !snapshot().mappings && ledger_reconcile());
 }
-int main(void)
+/* Declared budget model, not measured boot/desktop or physical hardware.
+ * Reserve the entire 1..16 MiB kernel load window, then the existing boot
+ * targets: heap 4 MiB, tables 1.5 MiB, system cache 8 MiB, desktop 3 MiB.
+ * VM PFNs come from production dosvm_create in the other host harness. */
+static void dosvm_profiles(int argc, char **argv)
 {
-    ram=calloc(1,64u<<20); CHECK(ram);
+    CHECK(argc == MM_OWNERS + 6);
+    unsigned charges[MM_OWNERS + 4];
+    for (unsigned i=0;i<ARRAY_SIZE(charges);i++) {
+        char *end; unsigned long value=strtoul(argv[i+2],&end,10);
+        CHECK(*argv[i+2] && !*end && value<=UINT32_MAX);
+        charges[i]=(unsigned)value;
+    }
+    unsigned cache=charges[MM_OWNERS], worker_stack=charges[MM_OWNERS+1];
+    unsigned worker_heap=charges[MM_OWNERS+2], vm_resident=charges[MM_OWNERS+3];
+    CHECK(cache==4096 && charges[MM_VM_PRIVATE]>=cache);
+    const unsigned sizes[]={128,256,512};
+    for (unsigned i=0;i<ARRAY_SIZE(sizes);i++) {
+        fresh_kernel(sizes[i],15);
+        uint32_t heap=pmm_alloc_contig(1024), tables=pmm_alloc_contig(384), syscache=pmm_alloc_contig(2048);
+        CHECK(heap && tables && syscache);
+        mm_claim(heap,1024,MM_HEAP); mm_claim(tables,384,MM_TABLE); mm_claim(syscache,2048,MM_CACHE_DATA);
+        CHECK(ledger_reconcile()); ledger_record("boot-end");
+        uint32_t boot=pmm_free_count();
+        uint32_t desktop=pmm_alloc_contig(768); CHECK(desktop);
+        mm_claim(desktop,768,MM_USER_SHARED); ledger_promise(MM_USER_SHARED,768,768);
+        CHECK(ledger_reconcile()); ledger_record("settled-desktop");
+        uint32_t settled=pmm_free_count();
+        CHECK((uint64_t)settled*PAGE_SIZE >= (uint64_t)DOSVM_RESIDENT_CAP+DOSVM_HEADROOM);
+        uint32_t backing[MM_OWNERS]={0};
+        ledger_promise(MM_VM_PRIVATE,DOSVM_RESIDENT_CAP/PAGE_SIZE,DOSVM_RESIDENT_CAP/PAGE_SIZE);
+        for (unsigned o=0;o<MM_OWNERS;o++) if (charges[o]) {
+            backing[o]=pmm_alloc_contig(charges[o]); CHECK(backing[o]);
+            mm_claim(backing[o],charges[o],o);
+        }
+        uint32_t stack=pmm_alloc_contig(worker_stack), task=pmm_alloc_contig(worker_heap);
+        CHECK(stack && task); mm_claim(stack,worker_stack,MM_STACK); mm_claim(task,worker_heap,MM_HEAP);
+        CHECK(ledger_reconcile()); ledger_record("maximum-vm-created");
+        struct mm_ledger v=snapshot();
+        CHECK(resident(MM_VM_PRIVATE)==charges[MM_VM_PRIVATE]);
+        CHECK(resident(MM_VM_POOL)==charges[MM_VM_POOL]);
+        CHECK(v.commit_ram[MM_VM_PRIVATE]==DOSVM_RESIDENT_CAP/PAGE_SIZE && !v.pressure);
+        uint32_t free=pmm_free_count(), outstanding=DOSVM_RESIDENT_CAP-vm_resident;
+        CHECK((uint64_t)free*PAGE_SIZE >= (uint64_t)DOSVM_HEADROOM+outstanding);
+        printf("f3-47 ledger model=%u boot_free=%u settled_free=%u maximum_vm_free=%u resident=%u promise=%u outstanding=%u vm_private_pages=%u cache_private_pages=%u pool_pages=%u pressure=%u reconciled=1\n",
+            sizes[i],boot*PAGE_SIZE,settled*PAGE_SIZE,free*PAGE_SIZE,vm_resident,
+            DOSVM_RESIDENT_CAP,outstanding,charges[MM_VM_PRIVATE],cache,charges[MM_VM_POOL],v.pressure);
+        for (unsigned o=0;o<MM_OWNERS;o++) if (backing[o]) {
+            mm_release(backing[o],charges[o],o); release_run(backing[o],charges[o]);
+        }
+        mm_release(stack,worker_stack,MM_STACK); release_run(stack,worker_stack);
+        mm_release(task,worker_heap,MM_HEAP); release_run(task,worker_heap);
+        ledger_promise(MM_VM_PRIVATE,-(int32_t)(DOSVM_RESIDENT_CAP/PAGE_SIZE),-(int32_t)(DOSVM_RESIDENT_CAP/PAGE_SIZE));
+        CHECK(pmm_free_count()==settled && !resident(MM_VM_PRIVATE) && !resident(MM_VM_POOL));
+        ledger_record("vm-teardown");
+        mm_release(desktop,768,MM_USER_SHARED); release_run(desktop,768);
+        ledger_promise(MM_USER_SHARED,-768,-768);
+        mm_release(heap,1024,MM_HEAP); release_run(heap,1024);
+        mm_release(tables,384,MM_TABLE); release_run(tables,384);
+        mm_release(syscache,2048,MM_CACHE_DATA); release_run(syscache,2048);
+    }
+}
+int main(int argc, char **argv)
+{
+    ram=calloc(1,(argc>1 ? 512u : 64u)<<20); CHECK(ram);
+    if (argc>1) {
+        CHECK(!strcmp(argv[1],"--dosvm-profile")); emit_profiles=true;
+        dosvm_profiles(argc,argv); free(ram); return 0;
+    }
     profiles(); aliases_and_rollback(); pins(); scattered_pool(); reporting_and_context(); pinned_context();
     struct mm_ledger maximum=snapshot();
     maximum.mappings=maximum.shared_mappings=maximum.pin_tokens=maximum.pinned_pages=UINT32_MAX;

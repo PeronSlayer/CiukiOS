@@ -325,6 +325,12 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
     "${guest_cpu[@]}" -o "$out/dosvm_test"
 "$out/dosvm_test"
+CIUKI_VM_DISK_TRACE=1 "$out/dosvm_test"
+# Replay the actual default maximum-cache VM's charges through production
+# PMM/ledger profiles at 128/256/512 MiB; no VM/image or parallel test run.
+vm_profile="$(CIUKI_VM_MEMORY_CHARGE=1 "$out/dosvm_test")"
+read -r -a vm_profile_args <<< "$vm_profile"
+"$out/ledger_test_normal" --dosvm-profile "${vm_profile_args[@]}"
 
 # F4-28: optimized VM-source callback cost (the sanitized full suite above
 # also runs it). Host-only, sequential, with the production audio units.

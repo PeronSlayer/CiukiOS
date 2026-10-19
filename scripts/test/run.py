@@ -443,8 +443,28 @@ def git_identity(root):
         return {'revision':'unknown','dirty':'unknown'}
 
 
+def dosvm_constants():
+    """Read the public MiB budget macros without evaluating source code."""
+    source = (ROOT / 'src/kernel/include/ciuki/dosvm.h').read_text()
+    values = {}
+    for name in ('DOSVM_LOW_CAP', 'DOSVM_RESIDENT_CAP', 'DOSVM_HEADROOM'):
+        match = re.search(r'^#define ' + name + r' \((\d+)u \* 1024u \* 1024u\)$', source, re.M)
+        if not match:
+            raise res.Refusal('unrecognized DOS VM budget macro: ' + name)
+        values[name] = int(match[1]) * 1024 * 1024
+    return values
+
+
 def load(path):
-    with Path(path).open() as stream: data=json.load(stream)
+    def constant(value):
+        if set(value) != {'dosvm_constant'}:
+            return value
+        name = value['dosvm_constant']
+        values = dosvm_constants()
+        if not isinstance(name, str) or name not in values:
+            raise res.Refusal('unknown DOS VM budget constant: ' + str(name))
+        return values[name]
+    with Path(path).open() as stream: data=json.load(stream, object_hook=constant)
     if data.get('schema_version')!=1: raise res.Refusal('unsupported JSON schema: '+str(path))
     input_devices({},data)
     for case in data.get('cases',[]):

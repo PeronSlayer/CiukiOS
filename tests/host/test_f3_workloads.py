@@ -26,6 +26,7 @@ from loader_model import F3_PROBES  # noqa: E402
 TOOLS = all(shutil.which(t) for t in ('mkfs.fat', 'fsck.fat', 'mcopy', 'mdir', 'nasm'))
 SUITE = runner.load(ROOT / 'tests/suites/f3-workloads.json')
 HEX = 'ab' * 32
+DOSVM = runner.dosvm_constants()
 
 
 def builder():
@@ -50,9 +51,9 @@ def parse(probe, rows, status='PASS'):
     return p
 
 
-def tail(vms, request=33554432):
+def tail(vms, request=DOSVM['DOSVM_RESIDENT_CAP']):
     rows = [('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0, request=request,
-                          headroom=33554432, admitted=1)) for _ in range(vms)]
+                          headroom=DOSVM['DOSVM_HEADROOM'], admitted=1)) for _ in range(vms)]
     rows += [('DATA', dict(group='vm_cleanup', vm=1, generation=i + 1, data_loss=0, error=0)) for i in range(vms)]
     rows.append(('DATA', dict(case='cleanup', vms=0, tasks=0, pages=0, handles=0, devices=0, restored=1)))
     return rows
@@ -114,11 +115,11 @@ def wolf_rows():
 def starve_rows():
     return [('DATA', dict(case='identity', build='0123abcd')),
             ('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0, request=16777216,
-                          headroom=33554432, admitted=1)),
+                          headroom=DOSVM['DOSVM_HEADROOM'], admitted=1)),
             ('DATA', dict(case='phase', phase='reference', **{'pass': 1}, ms=1200, irq0=22, irq0_per_s=18, heartbeat=900000,
                           keys=16, key_ms=170)),
             ('DATA', dict(group='admission', free=70000000, reserved=16777216, resident=9000000, outstanding=7777216,
-                          request=8388608, headroom=33554432, admitted=1)),
+                          request=8388608, headroom=DOSVM['DOSVM_HEADROOM'], admitted=1)),
             ('DATA', dict(case='phase', phase='loaded', **{'pass': 1}, ms=2000, irq0=36, irq0_per_s=18, heartbeat=700000,
                           keys=16, key_ms=180)),
             ('DATA', dict(case='rates', timer_pct=98, heartbeat_pct=46, keys_ref=16, keys_loaded=16, key_ms_loaded=180,

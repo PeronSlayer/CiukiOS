@@ -175,7 +175,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -364,7 +366,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -553,7 +557,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -603,7 +609,9 @@
                 "eq": 1
               },
               "commitment": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "pool_quota": {
                 "ge": 1
@@ -656,7 +664,9 @@
                 "eq": 1
               },
               "commitment": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               }
             },
             "exact_count": 1
@@ -668,10 +678,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -728,7 +742,9 @@
                 "eq": 1
               },
               "commitment": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "pool_quota": {
                 "ge": 1
@@ -781,7 +797,9 @@
                 "eq": 1
               },
               "commitment": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               }
             },
             "exact_count": 1
@@ -793,10 +811,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -853,7 +875,9 @@
                 "eq": 1
               },
               "commitment": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "pool_quota": {
                 "ge": 1
@@ -887,11 +911,11 @@
             },
             "fields": {
               "admitted": {
-                "eq": 1
+                "eq": 0
               },
               "error": {
                 "encoding": "signed",
-                "eq": 0
+                "eq": -12
               }
             },
             "exact_count": 1
@@ -901,12 +925,28 @@
               "event": "DATA",
               "case": "second_boot"
             },
+            "count": 0,
+            "exact_count": 0
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "group": "admission",
+              "admitted": 1
+            },
             "fields": {
-              "ready": {
-                "eq": 1
+              "request": {
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
-              "commitment": {
-                "eq": 33554432
+              "headroom": {
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
+              },
+              "admitted": {
+                "eq": 1
               }
             },
             "exact_count": 1
@@ -914,20 +954,25 @@
           {
             "where": {
               "event": "DATA",
-              "group": "admission"
+              "group": "admission",
+              "admitted": 0
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
-                "eq": 1
+                "eq": 0
               }
             },
-            "exact_count": 2
+            "exact_count": 1
           },
           {
             "where": {
@@ -1431,7 +1476,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -1726,7 +1773,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -2021,7 +2070,9 @@
                 "eq": 8388608
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -2806,10 +2857,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -3480,10 +3535,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -5247,10 +5306,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -5647,10 +5710,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1
@@ -6047,10 +6114,14 @@
             },
             "fields": {
               "request": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_RESIDENT_CAP"
+                }
               },
               "headroom": {
-                "eq": 33554432
+                "eq": {
+                  "dosvm_constant": "DOSVM_HEADROOM"
+                }
               },
               "admitted": {
                 "eq": 1

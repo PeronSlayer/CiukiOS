@@ -18,8 +18,59 @@ sys.path.insert(0, str(ROOT / 'scripts/test'))
 import run as runner
 from evidence import EvidenceError
 
+DOSVM = runner.dosvm_constants()
+
 
 class DosVMTests(unittest.TestCase):
+    def test_budget_constants_in_probe_expectations(self):
+        for name in ('f3-vm', 'f3-workloads', 'f4-media'):
+            suite = runner.load(ROOT / 'tests/suites' / (name + '.json'))
+            source = json.loads((ROOT / 'tests/suites' / (name + '.json')).read_text())
+            count = 0
+            for raw, resolved in zip(source['cases'], suite['cases']):
+                for before, after in zip(raw.get('expected', {}).get('predicates', []),
+                                         resolved.get('expected', {}).get('predicates', [])):
+                    for field, rule in before.get('fields', {}).items():
+                        bound = rule.get('eq') if isinstance(rule, dict) else None
+                        if isinstance(bound, dict) and 'dosvm_constant' in bound:
+                            self.assertEqual(after['fields'][field]['eq'], DOSVM[bound['dosvm_constant']])
+                            count += 1
+            self.assertGreater(count, 0)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'bad-constant.json'
+            path.write_text(json.dumps({'schema_version': 1,
+                                       'value': {'dosvm_constant': 'DOSVM_TYPO'}}))
+            with self.assertRaises(runner.res.Refusal):
+                runner.load(path)
+
+    def test_min128_second_default_vm_is_an_admission_refusal(self):
+        suite = runner.load(ROOT / 'tests/suites/f3-vm.json')
+        case = next(c for c in suite['cases'] if c['id'] == 'vm-memory-qemu-min128')
+        cap, headroom = DOSVM['DOSVM_RESIDENT_CAP'], DOSVM['DOSVM_HEADROOM']
+        rows = [dict(group='admission', request=cap, headroom=headroom, admitted=1),
+                dict(case='boot', ready=1, commitment=cap, pool_quota=25165824),
+                dict(case='conformance', done=1, **{'pass': 1}, error=0),
+                dict(group='admission', request=cap, headroom=headroom, admitted=0),
+                dict(case='second', admitted=0, error=-12),
+                dict(case='cleanup', vms=0, tasks=0, pages=0, handles=0, devices=0, restored=1)]
+        def parse(data):
+            p = runner.Parser('12345678', 'vm-memory')
+            records = [('BEGIN', {'version': 1})] + [('DATA', r) for r in data]
+            records.append(('END', {'status': 'PASS', 'error': 0}))
+            for seq, (event, fields) in enumerate(records, 1):
+                row = ' '.join(f'{k}={v}' for k, v in fields.items())
+                p.feed(f'CIUKI_TEST v=1 run=12345678 seq={seq:06d} probe=vm-memory event={event} {row}\n'.encode())
+            return p
+        self.assertTrue(parse(rows).check(case['expected']))
+        with self.assertRaises(EvidenceError):
+            parse(rows + [dict(case='second_boot', ready=1, commitment=cap)]).check(case['expected'])
+        for index, field, value in ((0, 'admitted', 0), (3, 'admitted', 1),
+                                    (4, 'error', 0), (5, 'restored', 0),
+                                    (0, 'request', DOSVM['DOSVM_LOW_CAP'])):
+            broken = copy.deepcopy(rows); broken[index][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(EvidenceError):
+                parse(broken).check(case['expected'])
+
     @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
     def test_generated_dos_idle_calls(self):
         """Assemble the canonical DOS personality, never the floppy profile.
@@ -81,7 +132,7 @@ class DosVMTests(unittest.TestCase):
         expected = runner.load(ROOT / 'tests/suites/f3-vm.json')['cases'][0]['expected']
         records = [('BEGIN',{})]
         records += [('DATA',dict(group='admission',free=90000000,reserved=8388608,resident=1200000,
-                        outstanding=7188608,request=8388608,headroom=33554432,admitted=1)) for _ in range(202)]
+                        outstanding=7188608,request=8388608,headroom=DOSVM['DOSVM_HEADROOM'],admitted=1)) for _ in range(202)]
         records += [('DATA',dict(group='vm_cleanup',vm=1,generation=n,data_loss=0,error=0)) for n in range(1,203)]
         records += [('DATA',dict(case='boot',ready=1,prompt=1,major=5,minor=0,free_paras=20000,drive=2)),
                     ('DATA',dict(case='cycles',clean=100,faults=100,privileged=50,ports=50)),
@@ -105,7 +156,7 @@ class DosVMTests(unittest.TestCase):
     def video_records(self, golden):
         records = [('BEGIN', {})]
         records.append(('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0,
-                                     request=8388608, headroom=33554432, admitted=1)))
+                                     request=8388608, headroom=DOSVM['DOSVM_HEADROOM'], admitted=1)))
         records.append(('DATA', dict(case='boot', ready=1, prompt=1, free_paras=30000)))
         records.append(('DATA', dict(case='prompt', mode=3, width=640, height=400, digest='ab' * 32)))
         geometry = [(3, 640, 400, 1, 1, 3), (3, 640, 400, 1, 1, 0), (19, 320, 200, 2, 0, 1),
@@ -158,7 +209,7 @@ class DosVMTests(unittest.TestCase):
     def window_records(self, digest):
         return [('BEGIN', {}),
                 ('DATA', dict(group='admission', free=90000000, reserved=0, resident=0, outstanding=0,
-                              request=33554432, headroom=33554432, admitted=1)),
+                              request=DOSVM['DOSVM_RESIDENT_CAP'], headroom=DOSVM['DOSVM_HEADROOM'], admitted=1)),
                 ('DATA', dict(case='window', vm=1, generation=3, client=21, desktop=20, ready=1, prompt=1)),
                 ('ARM', dict(action='window_input', vm=1)),
                 ('DATA', dict(case='frame', stage=1, typed='window', mode=3, width=640, height=400, scale=1, text=1, flags=3, digest=digest)),

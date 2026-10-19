@@ -75,8 +75,54 @@ static int base_lookup(char path[24], bool bundled)
 }
 int dosvm_workload_base(char path[24]) { return base_lookup(path, false); }
 int dosvm_window_base(char path[24]) { return base_lookup(path, true); }
+static void read_cache_close(struct dosvm *v)
+{
+    for (unsigned i = 0; i < v->read_capacity; i++) {
+        if (v->read_cache[i].phys) {
+            for (unsigned p = 0; p < DOSVM_READ_PAGES; p++)
+                mm_free(v->read_cache[i].phys + p * PAGE_SIZE, MM_VM_PRIVATE);
+            v->read_pages -= DOSVM_READ_PAGES;
+            v->info.resident -= DOSVM_READ_PAGES * PAGE_SIZE;
+        }
+        memset(&v->read_cache[i], 0, sizeof(v->read_cache[i]));
+    }
+    v->read_capacity = v->read_recent = v->read_oldest = 0;
+}
+static int read_cache_open(struct dosvm *v)
+{
+    /* Keep the image resident when the admitted commitment permits it.
+     * Creation has not allocated the worker yet: reserve its full charge
+     * before spending any headroom. Reopen already includes that charge.
+     * Never reduce the guest pool or silently enlarge its admission. */
+    const unsigned block_bytes = DOSVM_READ_SECTORS * 512u;
+    uint32_t worker = v->task ? 0 : KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
+    uint64_t used = (uint64_t)v->info.resident + worker;
+    uint32_t headroom = used <= v->info.commitment ? v->info.commitment - used : 0;
+    unsigned blocks = (v->base_sectors + DOSVM_READ_SECTORS - 1) / DOSVM_READ_SECTORS;
+    if (blocks > DOSVM_READ_BLOCKS) blocks = DOSVM_READ_BLOCKS;
+    if (blocks * block_bytes > headroom && blocks > DOSVM_READ_FALLBACK_BLOCKS)
+        blocks = DOSVM_READ_FALLBACK_BLOCKS;
+    if (blocks * block_bytes > headroom) return -ENOMEM;
+    v->read_capacity = blocks;
+    for (unsigned i = 0; i < blocks; i++) {
+        uint32_t phys = pmm_alloc_contig(DOSVM_READ_PAGES);
+        if (!phys) { read_cache_close(v); return -ENOMEM; }
+        mm_claim(phys, DOSVM_READ_PAGES, MM_VM_PRIVATE);
+        v->read_cache[i].phys = phys;
+        v->read_cache[i].count = 0;
+        v->read_cache[i].previous = i ? i - 1 : blocks;
+        v->read_cache[i].next = i + 1;
+        v->read_pages += DOSVM_READ_PAGES;
+        v->info.resident += DOSVM_READ_PAGES * PAGE_SIZE;
+        /* F0-41: allocation published; no disk gate or partial I/O held. */
+        kpreempt_point();
+    }
+    v->read_recent = 0; v->read_oldest = blocks ? blocks - 1 : 0;
+    return 0;
+}
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
+    if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
     if (!base) base = DOSVM_DEFAULT_BASE;
     unsigned length = 0;
     while (length < 64 && base[length]) length++;
@@ -95,6 +141,8 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
+    e = read_cache_open(v);
+    if (e) return e; /* lifecycle failure unwinds the base/table as before */
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
     v->overlay = vfs_open(&v->disk_table, v->overlay_path,
@@ -121,6 +169,22 @@ static void disk_gate_take(struct dosvm *v)
     }
 }
 static void disk_gate_drop(struct dosvm *v) { v->disk_busy = false; kwait_wake_all(&v->disk_wait); }
+static void disk_access(struct dosvm *v, uint32_t lba)
+{
+    uint32_t flags = irq_save();
+    struct dosvm_disk_cost *d = &v->perf.interval[v->perf.active_interval].disk;
+    unsigned region = lba / DOSVM_READ_SECTORS, byte = region / 8, bit = 1u << (region % 8);
+    if (!(d->touched[byte] & bit)) { d->touched[byte] |= bit; d->regions++; }
+    irq_restore(flags);
+}
+static void disk_cache_result(struct dosvm *v, bool hit)
+{
+    uint32_t flags = irq_save();
+    struct dosvm_disk_cost *d = &v->perf.interval[v->perf.active_interval].disk;
+    if (hit) { d->hits++; v->perf.disk_hits++; }
+    else { d->misses++; v->perf.disk_misses++; }
+    irq_restore(flags);
+}
 static int backing_io(struct dosvm *v, int handle, uint32_t offset, void *data, unsigned bytes, bool write)
 {
     uint64_t position;
@@ -128,45 +192,83 @@ static int backing_io(struct dosvm *v, int handle, uint32_t offset, void *data, 
     int e = vfs_seek(&v->disk_table, handle, offset, VFS_SEEK_SET, &position);
     if (e) return e;
     if (position != offset) return -V86_EIO;
-    if (!write) {
-        v->perf.disk_reads++; v->perf.disk_bytes += bytes;
-        if (bytes > v->perf.disk_max) v->perf.disk_max = bytes;
-    }
+    uint32_t flags = irq_save();
+    struct dosvm_disk_cost *d = &v->perf.interval[v->perf.active_interval].disk;
+    if (write) d->writes++;
+    else { d->reads++; v->perf.disk_reads++; }
+    irq_restore(flags);
     e = write ? vfs_write(&v->disk_table, handle, data, bytes, &done) :
                 vfs_read(&v->disk_table, handle, data, bytes, &done);
+    if (!write) {
+        flags = irq_save();
+        d = &v->perf.interval[v->perf.active_interval].disk;
+        d->bytes += done; v->perf.disk_bytes += done;
+        if (done > v->perf.disk_max) v->perf.disk_max = done;
+        irq_restore(flags);
+    }
     return e ? e : done == bytes ? 0 : -V86_EIO;
 }
 
-static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
+static void read_promote(struct dosvm *v, unsigned slot)
 {
-    if (!v->base_open || lba >= DOSVM_SECTORS) return -EINVAL;
+    if (slot == v->read_recent) return;
+    unsigned prev = v->read_cache[slot].previous, next = v->read_cache[slot].next;
+    v->read_cache[prev].next = next;
+    if (next < v->read_capacity) v->read_cache[next].previous = prev;
+    else v->read_oldest = prev;
+    v->read_cache[slot].previous = v->read_capacity;
+    v->read_cache[slot].next = v->read_recent;
+    v->read_cache[v->read_recent].previous = slot;
+    v->read_recent = slot;
+}
+static unsigned read_find(struct dosvm *v, uint32_t lba)
+{
+    for (unsigned i = 0; i < v->read_capacity; i++)
+        if (lba >= v->read_cache[i].lba && lba - v->read_cache[i].lba < v->read_cache[i].count)
+            return i;
+    return v->read_capacity;
+}
+static int read_sector_uncached(struct dosvm *v, uint32_t lba, void *sector)
+{
     for (unsigned i = 0; i < v->sector_count; i++)
         if (v->sectors[i].lba == lba)
             return backing_io(v, v->overlay, v->sectors[i].offset, sector, 512, false);
     /* Past the end of a cut base image: the free FAT16 area, all zeros. */
     if (lba >= v->base_sectors) { memset(sector, 0, 512); return 0; }
-    /* Each fat_read restarts the outer image's chain walk. Retain adjacent
-     * sectors and a separate metadata window; validation: f3-24-quake-start. */
-    for (unsigned i = 0; i < ARRAY_SIZE(v->read_cache); i++) {
-        if (lba >= v->read_cache[i].lba && lba - v->read_cache[i].lba < v->read_cache[i].count) {
-            memcpy(sector, v->read_cache[i].bytes + (lba - v->read_cache[i].lba) * 512u, 512);
-            v->read_recent = i; v->perf.disk_hits++;
-            return 0;
-        }
+    return backing_io(v, v->base, lba * 512u, sector, 512, false);
+}
+static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
+{
+    if (!v->base_open || lba >= DOSVM_SECTORS) return -EINVAL;
+    disk_access(v, lba);
+    unsigned slot = read_find(v, lba);
+    if (slot < v->read_capacity) {
+        memcpy(sector, (uint8_t *)P2V(v->read_cache[slot].phys) + (lba - v->read_cache[slot].lba) * 512u, 512);
+        read_promote(v, slot); disk_cache_result(v, true);
+        return 0;
     }
-    unsigned slot = v->read_recent ^ 1u;
+    disk_cache_result(v, false);
+    if (!v->read_capacity) return read_sector_uncached(v, lba, sector);
+    slot = v->read_oldest;
+    for (unsigned i = 0; i < v->read_capacity; i++) if (!v->read_cache[i].count) { slot = i; break; }
     uint32_t start = lba & ~(DOSVM_READ_SECTORS - 1u);
-    unsigned count = v->base_sectors - start;
+    unsigned count = start < v->base_sectors ? v->base_sectors - start : 0;
     if (count > DOSVM_READ_SECTORS) count = DOSVM_READ_SECTORS;
-    v->read_cache[slot].count = 0; /* a partial/failed read never becomes valid */
-    int e = backing_io(v, v->base, start * 512u, v->read_cache[slot].bytes, count * 512u, false);
-    if (e) {
-        /* Read-ahead may encounter an error outside the requested sector. */
-        return backing_io(v, v->base, lba * 512u, sector, 512, false);
+    v->read_cache[slot].count = 0;
+    uint8_t *bytes = P2V(v->read_cache[slot].phys);
+    int e = count ? backing_io(v, v->base, start * 512u, bytes, count * 512u, false) : 0;
+    if (count < DOSVM_READ_SECTORS) memset(bytes + count * 512u, 0, (DOSVM_READ_SECTORS - count) * 512u);
+    for (unsigned i = 0; !e && i < v->sector_count; i++) {
+        uint32_t offset = v->sectors[i].lba - start;
+        if (offset < DOSVM_READ_SECTORS)
+            e = backing_io(v, v->overlay, v->sectors[i].offset, bytes + offset * 512u, 512, false);
     }
-    v->read_cache[slot].lba = start; v->read_cache[slot].count = count;
-    v->read_recent = slot;
-    memcpy(sector, v->read_cache[slot].bytes + (lba - start) * 512u, 512);
+    /* Read-ahead errors outside the requested sector need not fail it.
+     * Never publish either an incomplete base or an incomplete overlay merge. */
+    if (e) return read_sector_uncached(v, lba, sector);
+    v->read_cache[slot].lba = start; v->read_cache[slot].count = DOSVM_READ_SECTORS;
+    read_promote(v, slot);
+    memcpy(sector, bytes + (lba - start) * 512u, 512);
     return 0;
 }
 
@@ -177,16 +279,26 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
     unsigned i;
     for (i = 0; i < v->sector_count; i++) if (v->sectors[i].lba == lba) break;
     if (i == DOSVM_OVERLAY_SECTORS) return -ENOSPC;
+    disk_access(v, lba);
     uint32_t offset = i == v->sector_count ? i * 512u : v->sectors[i].offset;
     /* A failed issued write may have changed private data; report its loss
      * even when no new sector can be published into the index. */
     v->info.dirty = true;
     int e = backing_io(v, v->overlay, offset, (void *)sector, 512, true);
-    if (e) return e;
+    unsigned slot = read_find(v, lba);
+    if (e) {
+        /* Even a failed write may have changed an existing overlay sector. */
+        if (slot < v->read_capacity) v->read_cache[slot].count = 0;
+        return e;
+    }
     if (i == v->sector_count) {
         v->sectors[i].lba = lba;
         v->sectors[i].offset = offset;
         v->sector_count++;
+    }
+    if (slot < v->read_capacity) {
+        memcpy((uint8_t *)P2V(v->read_cache[slot].phys) + (lba - v->read_cache[slot].lba) * 512u, sector, 512);
+        read_promote(v, slot);
     }
     return 0;
 }
@@ -235,7 +347,7 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
         v->table_ready = false;
     }
     v->sector_count = 0;
-    for (unsigned i = 0; i < ARRAY_SIZE(v->read_cache); i++) v->read_cache[i].count = 0;
+    read_cache_close(v);
     disk_gate_drop(v);
     return error;
 }

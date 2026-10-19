@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/probe.h>
+#include <ciuki/timing.h>
 #include "dosvm_internal.h"
 
 static void low(uint32_t *reg, uint16_t value) { *reg = (*reg & 0xFFFF0000u) | value; }
@@ -217,7 +218,17 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
     case 0x10: return dosvm_vga_bios(v, f);
     case 0x11: low(&f->tf.eax, 0x22); return 0;
     case 0x12: low(&f->tf.eax, 640); return 0;
-    case 0x13: return disk_bios(v, f);
+    case 0x13: {
+        uint64_t begin = dosvm_perf_clock(), tick = g_ticks;
+        int e = disk_bios(v, f);
+        uint64_t us = g_tsc_per_ms ? (dosvm_perf_clock() - begin) * 1000 / g_tsc_per_ms :
+                                   (g_ticks - tick) * 1000;
+        unsigned bin = us < 100 ? 0 : us < 1000 ? 1 : us < 10000 ? 2 : us <= 50000 ? 3 : 4;
+        uint32_t flags = irq_save();
+        v->perf.interval[v->perf.active_interval].disk.latency[bin]++;
+        irq_restore(flags);
+        return e;
+    }
     case 0x15:
         carry(f, false);
         if (fn == 0x86) {

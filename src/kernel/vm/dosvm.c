@@ -395,6 +395,7 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         /* Count owned backing once, including unmapped EMS-window backing. */
         if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
         out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
+        out->pages += v->read_pages;
         out->handles += v->base_open + v->overlay_open;
         out->devices += 4; /* authoritative PIC, PIT, text/input service and VGA adapter */
         out->reserved += v->info.commitment;
@@ -1267,7 +1268,10 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }
     v->info.resident += KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
-    if (v->info.resident - v->memory.quota > DOSVM_LOW_CAP ||
+    /* The image cache has its own charged backing inside the commitment;
+     * retain the low/device/table bound independently of that cache. */
+    if ((uint64_t)v->info.resident > (uint64_t)v->memory.quota +
+            v->read_pages * PAGE_SIZE + DOSVM_LOW_CAP ||
         v->info.resident > commitment) { e = -ENOMEM; goto fail; }
     /* f4-05: the VM's SB16/OPL output joins the mixer when a backend is
      * ready; without one f3-05 keeps discarding with its counter. */

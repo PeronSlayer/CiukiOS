@@ -105,6 +105,13 @@ static void next_interval_producer(void)
     /* Run real producers immediately on IF restore, before ranking/clearing.
      * Raw scalar updates and hot entries belong solely to the next interval. */
     vm.video_frames+=3; vm.perf.timer_cycles+=7; vm.perf.audio_cycles+=5;
+    vm.perf.interval[1].disk.reads=7;
+    vm.perf.interval[1].disk.bytes=8192;
+    vm.perf.interval[1].disk.hits=11;
+    vm.perf.interval[1].disk.misses=3;
+    vm.perf.interval[1].disk.regions=1;
+    vm.perf.interval[1].disk.touched[8]=1;
+    vm.perf.interval[1].disk.latency[4]=2;
     vm.perf.io_valid=true; vm.perf.io_port=0x1234; vm.perf.cause=DOSVM_COST_IO;
     vm.perf.trap_active=true; vm.perf.trap_cycles=19;
     perf_exit_end(&vm);
@@ -132,7 +139,7 @@ int main(void)
             CHECK(vm.perf.sample[0].top_port[0].count==dense);
             CHECK(vm.perf.sample[0].top_vector[0].count==dense);
             if (dense) {
-                CHECK(rows==42 && vm.perf.sample[0].top_port[0].id==255 && /* 41 rows + the f3-44 vm_perf_if row */
+                CHECK(rows==44 && vm.perf.sample[0].top_port[0].id==255 && /* baseline rows, IF row and two F3-47 disk rows */
                       vm.perf.sample[0].top_vector[0].id==767);
                 CHECK(blocks==sparse_blocks && access_bytes==sparse_access && copy_bytes==sparse_copy);
                 printf("f3-31 IRQ work phase=%u sparse=dense: blocks=%u scalar_bytes=%u copied_bytes=%u cleared_bytes=%u divisions=%u PASS\n",
@@ -144,10 +151,16 @@ int main(void)
     CHECK(vm.perf.sample[0].frames==17 && vm.perf.sample[0].timer_us==30 && vm.perf.sample[0].audio_us==20);
     CHECK(vm.perf.interval[1].ports[0x1234 % DOSVM_PERF_PORTS].count==1);
     CHECK(vm.perf.interval[1].vectors[2][0x80].count==1);
+    CHECK(vm.perf.interval[1].disk.reads==7 && vm.perf.interval[1].disk.bytes==8192);
+    CHECK(vm.perf.interval[1].disk.hits==11 && vm.perf.interval[1].disk.misses==3);
+    CHECK(vm.perf.interval[1].disk.regions==1 && vm.perf.interval[1].disk.touched[8]==1);
+    CHECK(vm.perf.interval[1].disk.latency[4]==2 && !vm.perf.interval[0].disk.latency[4]);
     for (unsigned i=0;i<DOSVM_PERF_PORTS;i++) CHECK(!vm.perf.interval[0].ports[i].count);
     for (unsigned p=0;p<3;p++) for (unsigned i=0;i<256;i++) CHECK(!vm.perf.interval[0].vectors[p][i].count);
     g_ticks+=DOSVM_PERF_INTERVAL; dosvm_perf_report(&vm);
     CHECK(vm.perf.sample_count==2 && vm.perf.active_interval==0);
+    CHECK(!vm.perf.interval[1].disk.reads && !vm.perf.interval[1].disk.bytes);
+    CHECK(!vm.perf.interval[1].disk.regions && !vm.perf.interval[1].disk.touched[8]);
     CHECK(vm.perf.sample[1].frames==3 && vm.perf.sample[1].timer_us==7 && vm.perf.sample[1].audio_us==5);
     CHECK(vm.perf.sample[1].top_port[0].id==0x1234 && vm.perf.sample[1].top_port[0].cycles==19);
     CHECK(vm.perf.sample[1].top_vector[0].id==0x280 && vm.perf.sample[1].top_vector[0].count==1);

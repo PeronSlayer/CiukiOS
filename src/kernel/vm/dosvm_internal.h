@@ -100,8 +100,19 @@ struct dosvm_perf_raw {
     uint64_t cost_cycles[DOSVM_COST_COUNT];
     uint64_t port_cycles[DOSVM_VGA_REGS], port_exit_cycles[DOSVM_VGA_REGS];
 };
+/* Interval-local disk counters; regions are exact over the private geometry. */
+struct dosvm_disk_cost {
+    uint64_t bytes;
+    uint32_t reads, writes, hits, misses, regions, latency[5];
+    uint8_t touched[256]; /* 128 MiB / 64 KiB / 8 */
+};
+struct dosvm_memory_cost {
+    uint32_t queries, first_largest, first_total, largest, total;
+    uint32_t allocations, requested, after_largest, after_total;
+};
 struct dosvm_perf_interval {
     struct dosvm_perf_raw raw;
+    struct dosvm_disk_cost disk;
     struct dosvm_hot_cost ports[DOSVM_PERF_PORTS], vectors[3][256];
 };
 struct dosvm_vector_cost {
@@ -110,6 +121,9 @@ struct dosvm_vector_cost {
     uint16_t ax;
 };
 #define DOSVM_READ_SECTORS 128u
+#define DOSVM_READ_BLOCKS 256u /* at most 16 MiB, sized to the base image */
+#define DOSVM_READ_FALLBACK_BLOCKS 32u
+#define DOSVM_READ_PAGES (DOSVM_READ_SECTORS * 512u / PAGE_SIZE)
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -157,12 +171,13 @@ struct dosvm {
     struct vfs_table disk_table;
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
-    /* Immutable base only. Two windows retain metadata alongside file data. */
+    /* Private 64 KiB LRU blocks, merging base and authoritative overlay.
+     * Buffers are PMM-owned MM_VM_PRIVATE pages inside the VM commitment. */
     struct {
-        uint32_t lba, count;
-        uint8_t bytes[DOSVM_READ_SECTORS * 512u];
-    } read_cache[2];
-    unsigned read_recent;
+        uint32_t lba, count, phys;
+        unsigned previous, next;
+    } read_cache[DOSVM_READ_BLOCKS];
+    unsigned read_recent, read_oldest, read_capacity, read_pages;
     char overlay_path[48];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
@@ -239,7 +254,8 @@ struct dosvm {
         struct dosvm_perf_sample sample[16]; /* first four + latest twelve intervals */
         struct dosvm_vector_cost vector[3][256]; /* RM dispatch, synthetic BIOS, PM INT */
         uint64_t disk_bytes;
-        uint32_t disk_reads, disk_max, disk_hits;
+        uint32_t disk_reads, disk_max, disk_hits, disk_misses;
+        struct dosvm_memory_cost memory;
         struct dosvm_isr_cost isr[16];
         uint64_t if_samples_ms, if_clear_ms, if_outside_ms;
         uint32_t if_enable[DOSVM_IF_PATHS], isr_max_depth;

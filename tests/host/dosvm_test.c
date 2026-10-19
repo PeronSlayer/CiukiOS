@@ -30,9 +30,13 @@
 #define KERNEL_VBASE 0xC0000000u
 #define P2V(p) ((void *)(ram + (p)))
 #define V2P(p) ((uint32_t)((uint8_t *)(p) - ram))
-#define HOST_PAGES 32768u
+/* T23-sized host: window isolation tests keep multiple default VMs live. */
+#define HOST_PAGES (256u * 1024u * 1024u / PAGE_SIZE)
 static unsigned checks, used_pages, heap_blocks, allocation_calls, fail_at;
+static unsigned withheld_pages; /* model other host consumers for admission */
 static bool allocated[HOST_PAGES];
+static unsigned page_owner[HOST_PAGES];
+static unsigned contiguous_calls, fail_contiguous_at;
 static uint8_t *ram;
 static unsigned cr3_reloads;
 static uint32_t cpu_cr3, cpu_flags = V86_IF, next_pfn = 4096;
@@ -86,13 +90,33 @@ uint32_t pmm_alloc(void)
     for (unsigned n = 0; n < HOST_PAGES; n++) {
         unsigned p = next_pfn; next_pfn += 2;
         if (next_pfn >= HOST_PAGES) next_pfn = 4096 + ((next_pfn & 1) ^ 1);
-        if (!allocated[p]) { allocated[p] = true; used_pages++; memset(P2V(p * PAGE_SIZE),0xA5,PAGE_SIZE); return p * PAGE_SIZE; }
+        if (!allocated[p]) { allocated[p] = true; page_owner[p] = MM_KERNEL; used_pages++; memset(P2V(p * PAGE_SIZE),0xA5,PAGE_SIZE); return p * PAGE_SIZE; }
     }
     return 0;
 }
+uint32_t pmm_alloc_contig(uint32_t pages)
+{
+    creation_cost_charge(4000 * pages);
+    if (allocation_fails() || ++contiguous_calls == fail_contiguous_at) return 0;
+    for (unsigned first = 4096; first + pages <= HOST_PAGES; first++) {
+        unsigned n = 0;
+        while (n < pages && !allocated[first + n]) n++;
+        if (n != pages) { first += n; continue; }
+        for (n = 0; n < pages; n++) { allocated[first + n] = true; page_owner[first + n] = MM_KERNEL; used_pages++; }
+        return first * PAGE_SIZE;
+    }
+    return 0;
+}
+void ledger_move(uint32_t phys, uint32_t pages, enum mm_owner from, enum mm_owner to)
+{
+    (void)from;
+    for (unsigned p = phys / PAGE_SIZE; p < phys / PAGE_SIZE + pages; p++) {
+        CHECK(p < HOST_PAGES && allocated[p]); page_owner[p] = to;
+    }
+}
 uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_NORMAL); return pmm_alloc(); }
 void pmm_free(uint32_t p) { creation_cost_charge(6000); CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; used_pages--; }
-uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
+uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages - withheld_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
 static unsigned dosvm_logs;
@@ -451,10 +475,16 @@ static void line(struct dosvm *v, const char *text)
 static void test_admission(void)
 {
     struct dosvm_admission a;
-    CHECK(dosvm_admit(40ull<<20,0,0,DOSVM_LOW_CAP,&a) && a.outstanding_bytes==0 && a.headroom_bytes==(32u<<20));
-    CHECK(!dosvm_admit((40ull<<20)-1,0,0,DOSVM_LOW_CAP,&a));
-    CHECK(dosvm_admit(47ull<<20,8ull<<20,1ull<<20,DOSVM_LOW_CAP,&a) && a.outstanding_bytes==(7ull<<20));
-    CHECK(!dosvm_admit(46ull<<20,8ull<<20,1ull<<20,DOSVM_LOW_CAP,0));
+    const uint64_t minimum = (uint64_t)DOSVM_LOW_CAP + DOSVM_HEADROOM;
+    CHECK(dosvm_admit(minimum,0,0,DOSVM_LOW_CAP,&a) && a.outstanding_bytes==0 && a.headroom_bytes==DOSVM_HEADROOM);
+    CHECK(!dosvm_admit(minimum-1,0,0,DOSVM_LOW_CAP,&a));
+    CHECK(dosvm_admit(minimum+(7ull<<20),8ull<<20,1ull<<20,DOSVM_LOW_CAP,&a) && a.outstanding_bytes==(7ull<<20));
+    CHECK(!dosvm_admit(minimum+(7ull<<20)-1,8ull<<20,1ull<<20,DOSVM_LOW_CAP,0));
+    const uint64_t maximum = (uint64_t)DOSVM_RESIDENT_CAP + DOSVM_HEADROOM;
+    CHECK(dosvm_admit(maximum,0,0,DOSVM_RESIDENT_CAP,&a));
+    CHECK(!dosvm_admit(maximum-1,0,0,DOSVM_RESIDENT_CAP,&a));
+    CHECK(dosvm_admit(maximum+(7ull<<20),8ull<<20,1ull<<20,DOSVM_RESIDENT_CAP,&a));
+    CHECK(!dosvm_admit(maximum+(7ull<<20)-1,8ull<<20,1ull<<20,DOSVM_RESIDENT_CAP,&a));
     CHECK(!dosvm_admit(UINT64_MAX,1,2,DOSVM_LOW_CAP,0));
     CHECK(!dosvm_admit(UINT64_MAX,0,0,DOSVM_LOW_CAP-1,0));
     CHECK(!dosvm_admit(UINT64_MAX,0,0,DOSVM_RESIDENT_CAP+4096,0));
@@ -738,13 +768,19 @@ static void test_memory_services(void)
 #include "dosvm_quake_start_test.inc"
 #include "dosvm_startup_test.inc"
 #include "dosvm_creation_test.inc"
+#include "dosvm_disk_trace_test.inc"
+#include "dosvm_disk_cache_test.inc"
+#include "dosvm_zone_memory_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_MEMORY_CHARGE")) { disk_memory_charge(); free(ram); return 0; }
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
+    test_disk_cache(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
