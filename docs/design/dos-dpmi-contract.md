@@ -468,6 +468,277 @@ injection, virtual IRQ, PIO-only model with no guest bus-master DMA, MAC
 policy for several VMs on one card) is written with the F6 network
 contract; a guest never sees or programs the physical NIC.
 
+## DOS file API in the VMM
+
+**[F3-48, proposed contract; cross-review required before f3-49 code]**
+This section anticipates the former F4 file bridge. It supersedes that phase
+label for file services only. It specifies acceptance, not an implemented API.
+The owner's binding decision is [2026-10-19-06](../../dev_diary/2026-10-19-06-decisione-ciukidos-resta-int21-file-nel-vmm-freedos-riferimento.md):
+“CiukiDOS resta il kernel DOS del progetto e continua a crescere” and
+“FreeDOS serve come riferimento di conformità”. FreeDOS remains an explicit
+per-game fallback. Neither an NTVDM design nor replacement of CiukiDOS follows.
+
+Research and the source/line inventory are recorded in
+[f3-48 validation](../validation/f3-48-dos-api-inventory.md). Historical facts
+and Ciuki policy below are distinguished; numeric deadlines are Ciuki targets.
+
+### DF1: interception and the return boundary
+
+One `dos_file_dispatch(vm, frame, origin)` owns file-service selection. Its
+internal result is `CHAIN`, `DONE`, or `PENDING(token)`, never a DOS error
+overloaded as a chain signal. `origin` distinguishes V86 INT, DPMI 0300h and
+extender reflection, host-issued real-mode calls, and the CiukiDOS hook.
+No new native syscall is specified. f3-49 supplies the host-testable module.
+
+| INT 21h service | Owner after f3-49/f3-50 |
+| --- | --- |
+| 0Dh, 0Eh/19h, 1Bh/1Ch, 36h | VMM flush, drive view and allocation answers; no fabricated geometry for host volumes |
+| 39h–43h, 45h–47h, 4Eh/4Fh, 56h, 5700h/01h, 5Ah/5Bh, 5C00h/01h, 6C00h, 68h | VMM, through VFS; 40h/CX=0 means truncate/extend at current position |
+| 1Ah/2Fh, 59h/BX=0, 60h, 67h | VMM-owned DTA/error/path/JFT bookkeeping, synchronized with the kernel |
+| 4400h/06h/07h/0Ah on regular-file handles, 4408h/09h/0Eh on mapped drives; 440Bh retry policy | VMM; distinguish file/device by SFT type, not handle number |
+| Device control channels and generic device IOCTL | CiukiDOS/device driver; unsupported subfunctions fail, never silently report success |
+| 0Fh–17h, 21h–24h, 27h/28h, 29h | f3-50 FCB adapter over the same VMM handle/search service; parse 29h remains local |
+| 00h–0Ch console; 25h/35h; 26h/31h; 48h–4Dh; 30h–34h; 38h; 50h–52h/55h/62h; 58h; 65h/66h | CiukiDOS process, vectors, memory, NLS and console services; lifecycle/bookkeeping notifications still go to VMM |
+
+26h is Create PSP, **not FCB I/O**. Unassigned gaps (18h/1Dh–1Fh etc.) are not
+new file calls. Private F1h memory services and existing DPMI protocols remain.
+3Fh/40h on character descriptions chain through the registered device route.
+An open of `CON`, `NUL`, `AUX`, `PRN`, `COMn`, `LPTn` resolves devices before
+disk lookup, including extensions and directory prefixes according to DOS
+device-name rules. Disk-backed standard handles use VFS after redirection.
+
+DF1 acceptance: intercept before DOS pushes a second frame. For `CHAIN`, leave
+all registers, guest stack bytes, CS:IP, virtual IF and saved FLAGS untouched,
+and invoke the existing monitor chain once in that frame. Use the saved next
+vector, never execute another INT 21h. Account for AH=25h updates without
+self-chaining. For `DONE`, advance/return exactly as the monitor requires and
+publish function-specific registers and saved CF; preserve other registers and
+non-result flag bits. A DPMI host's 48h/49h/4Ah/62h calls chain unchanged.
+Every translated DOS/4GW and DJGPP call reaches the same service once.
+Checked guest reads/writes include segment limit, A20, wrap, DTA and JFT extent;
+preflight every output range before changing handles or file data.
+
+### DF2: SFT, JFT, SDA and lifetime
+
+The VMM owns one SFT namespace per VM. Each SFT entry owns one VFS description,
+mode/inheritance, effective PSP owner, identity `(volume, mount generation,
+node)`, file position and reference count. Separate opens have independent
+positions; dup/force-dup and EXEC inheritance share position. No native fd
+number or host pointer is exposed to a guest. Admission fails with DOS 4 before
+mutating a file if JFT/SFT/VFS capacity is exhausted.
+
+PSP:18h is the initial 20-byte JFT, FFh means free; PSP:32h holds its count and
+PSP:34h its far pointer. Read the current pointer/count, never assume 18h after
+67h. Support up to the existing 232-handle personality limit, bounded by actual
+admitted descriptions; EXEC copies at most the DOS-defined first 20 entries.
+Bit 7 of open mode suppresses inheritance. A guest JFT edit cannot invent
+authority: validate its SFT index against live VM state. Dup increments shared
+refs; force-dup closes the target atomically; final close releases its claim.
+
+Publish a DOS 4+ SFT mirror at the existing List-of-Lists SFT pointer
+(ES:BX+4 from AH=52h). Chain header: next far pointer, word entry count, entries
+at +6, each 3Bh bytes. Relevant entry offsets: refs +00h, open mode +02h,
+attribute +04h, device flags +05h, DOS time/date +0Dh/+0Fh, size +11h,
+position +15h, 11-byte short name +20h, owner PSP +31h. Populate device/DPB
+fields with guest addresses only. The complete DOS4+ layout, including reserved
+bytes, is the [RBIL SFT table](https://fd.lod.bz/rbil/interrup/dos_kernel/2152.html#table-01642).
+Sync after transfer, metadata change, duplicate, inheritance and close, before
+returning to guest code; the native registry stays authoritative. Guest writes
+to its mirror cannot forge VFS identity or a live description.
+
+CiukiDOS retains PSP creation/selection and its memory allocator. The negotiated
+f3-50 hook reports `PSP_CREATE`, `PSP_SELECT`, `EXEC_BEGIN`, `EXEC_COMMIT`,
+`EXEC_ROLLBACK`, `PROCESS_EXIT`, `TSR` and `VM_DESTROY`. Select must not change
+immutable EXEC ancestry. An exit releases exactly that PSP's inherited/JFT
+references, search cursors and locks; VM teardown invalidates pending tokens
+and drains completions before freeing descriptions. Failed EXEC restores the
+parent and returns every acquired reference. TSR retains only resident owners.
+
+SDA synchronization includes InDOS/critical-error state, last error, DTA far
+pointer, selected/owning PSP and default drive; expose consistent 34h and 5D06h
+pointers. [RBIL SDA](https://fd.lod.bz/rbil/interrup/dos_kernel/215d06.html)
+defines versioned offsets; do not transplant a DOS3 layout into the DOS4 view.
+Per-PSP context records own DTA/JFT/extended-error associations. They refer to
+the VM's shared per-drive CDS/default-drive object: ordinary DOS cwd is not
+rolled back on child exit. This corrects f3-48's phrase “per PSP as in DOS”:
+private cwd snapshots would be a different observable policy. AH=50h selects
+the context but does not copy independent volume state. Lead review must
+explicitly acknowledge this wording correction.
+
+### DF3: namespace and the private image
+
+Guest C: is the VM's private FAT16 base plus write overlay. Mount that logical
+volume **once**, in a private VFS instance, through a virtual block provider
+that uses `dosvm_disk_read/write`'s f3-47 cache/overlay primitives without
+executing INT 13h. Both BIOS sector requests and FAT file access use that same
+provider/generation. Native exposed volumes use the existing global VFS and
+its existing node/share registry, not copies in the private instance. A guest
+drive-view entry selects private or global VFS table plus backing letter and
+mount generation. Guest letters never become global mount identities.
+
+Keep E: for the exposed removable stick when present; expose the native system
+volume as D: read-only by default. Additional approved native letters preserve
+their names except collisions, resolved in ascending free-letter order and
+logged when the VM is created. A:/B: are absent unless assigned virtual media;
+no physical disk, raw native volume or host path escapes the view. Existing
+mount write protection and launcher policy always win. Absence, media generation
+change and denied access are distinct results. An alias cannot bypass a claim.
+
+This is a new **mount adapter**, not another cache. The FAT adapter must accept
+the f3-47 block-provider interface (including overlay updates, generation and
+short compact-image zero tail); do not allocate a second private FAT data
+cache. The f3-47 cache remains charged to its VM and reclaim policy; outer VFS
+uses the common physical cache. Map cluster chains with native FAT code, not
+new FAT parsing in `dos_file_dispatch`. Mapped-chain metadata is invalidated
+on every overlapping raw sector write, allocation or mount generation change.
+Serialize sector/file writes under one private-volume gate. Host native
+volumes reject raw writes while mounted. No incoherent dual mount is allowed.
+This choice avoids a separate VMM path walker, while preserving f3-47's work.
+The existing indefinitely retried disk gate is not a valid deadline interface.
+
+Paths are DOS case-insensitive CP437 8.3 views; preserve trailing-dot, drive
+relative (`C:FILE`), absolute, `.`/`..`, wildcard and device behavior. Use actual
+FAT short aliases where present. For a non-FAT/read-only source without aliases,
+create a stable directory-generation alias map: uppercase CP437, remove spaces
+and extra dots in the stem, replace invalid/unmappable characters by `_`, use
+the final dot for a three-character extension; preserve a legal unique 8.3
+name, otherwise truncate stem to `8-1-digits(N)` and append `~N`, N=1..999999.
+Reserve every real short name first, then allocate remaining aliases in byte
+order of original UTF-8 names with a stable node-id tiebreaker. No reuse within
+a live directory generation. Fail explicitly if the alias space is exhausted.
+This is deterministic MS-DOS-style naming, not a claim to reproduce every
+undocumented VFAT collision heuristic. Writable FAT aliases use its persistent
+short entries and existing generator. A 300-entry scan must not rebuild an
+alias map on every FindNext.
+
+Find DTA is exactly 43 bytes: 00h–14h reserved, attribute 15h, time 16h, date
+18h, size dword 1Ah, NUL-terminated short name 1Eh (13 bytes).
+[FindFirst format](https://fd.lod.bz/rbil/interrup/dos_kernel/214e.html).
+Reserved bytes hold a versioned opaque cursor token, VM/PSP search id and mount
+generation, never a host pointer. Copying the DTA preserves the cursor;
+independent DTAs interleave. Validate tokens against bounded VM state, reclaim
+on termination/exhaustion, never scribble past byte 42. Preserve DTA on failure
+unless the documented call explicitly defines changes. Honor directory,
+hidden/system and volume-label search rules, `*.*`, `?`, empty directories,
+missing leaf and missing parent separately. Report real packed FAT dates.
+
+### DF4: sharing and record locks
+
+Normal deny modes are bidirectional: reject if `(new access & old deny)` or
+`(old access & new deny)`. Encode READ=1, WRITE=2; DOS deny 1/2/3/4 maps to
+ALL/WRITE/READ/NONE, not enum ordinal. Compatibility mode is a separate mode,
+not deny-none: same owner may reopen compatibility; different PSPs may share
+read-only files for reading, otherwise conflicting compatibility opens invoke
+the documented critical-error path. Mixed compatibility/explicit opens use the
+DOS 2–6.22 matrix [RBIL #01403](https://fd.lod.bz/rbil/interrup/dos_kernel/213d.html#table-01403),
+including the read-only exception and asymmetric INT24/error-5 outcomes.
+Do not silently use DOS7's differing access-time mode matrix. Native opens
+participate in the same node claims with distinct owner identities; compatible
+reopens cannot waive native explicit denial. SHARE behavior is always enabled
+for the Ciuki bridge; the reference boots FreeDOS 1.3 with SHARE loaded.
+
+5Ch uses BX handle, CX:DX offset, SI:DI length, AL=0 lock/1 unlock; arithmetic
+uses a widened end to detect 32-bit overflow. Lock identity is node plus owning
+PSP and open description; inherited/duplicated descriptions preserve identity,
+but a child has a different effective PSP. A conflicting read/write/lock fails
+with extended 33; exhausted lock storage is 36. Unlock requires the owner's
+exact range; do not silently split/unlock another owner. Close/exit rules and
+overlaps, zero length and EOF-spanning ranges are differential cases, not a
+POSIX advisory-lock substitution. Release all locks on process termination and
+the DOS-defined close of an owning handle even when duplicate refs remain.
+See [5Ch reference](https://fd.lod.bz/rbil/interrup/dos_kernel/215c.html).
+
+### DF5: errors, critical continuations and bounded waits
+
+Return CF/AX per function; FCBs use AL and transfer-count/status conventions,
+not CF errors. EOF read succeeds with AX=0; partial transfers return their
+actual count. Failed seeks/open/dup do not publish partial table state. 6C00h
+is atomic under a node claim; DL's exists actions 0/1/2 and absent actions 0/1
+return CX=1 opened/2 created/3 replaced; honor BH's no-critical-error and
+auto-commit bits. Invalid reserved combinations fail with 87. See
+[6C00h](https://fd.lod.bz/rbil/interrup/dos_kernel/216c00.html).
+
+59h/BX=0 returns the saved extended AX, BH class, BL recommended action, CH
+locus. Publish before INT24, preserve through it and through 59h itself; never
+replace it with a logger's/VFS-cleanup error. The following is the bridge's
+explicit initial mapping; legacy 00h–12h calls additionally use their documented
+DOS2-visible error mapping. Reference discrepancies require a recorded review,
+not changing tests to accept any nonzero code.
+
+| Failure | Extended AX (decimal) | BH / BL / CH |
+| --- | --- | --- |
+| Unsupported function / invalid access / invalid parameter | 1 / 12 / 87 | 7 / 4 / 1 |
+| Missing leaf / parent | 2 / 3 | 8 / 3 / 2 |
+| JFT/SFT full | 4 | 1 / 4 / 1 |
+| Permissions or forbidden mutation | 5 | 3 / 3 / 2 |
+| Invalid handle | 6 | 7 / 4 / 1 |
+| Allocation failure | 8 | 1 / 4 / 5 |
+| Invalid drive / current-dir removal / cross-volume rename | 15 / 16 / 17 | 8/3/2 ; 3/3/2 ; 9/3/2 |
+| Find exhausted | 18 | 8 / 3 / 2 |
+| Write protected / not ready / read fault / write fault | 19 / 21 / 30 / 29 | 11/7/2 ; 11/7/2 ; 5/1/2 ; 5/1/2 |
+| Sharing / lock conflict | 32 / 33 | 10 / 2 / 2 |
+| Lock table full / disk full | 36 / 39 | 1 / 4 / 2 |
+| Create-new collision | 80 | 8 / 3 / 2 |
+| INT24 Fail | 83 visible when specified; preserve underlying extended cause | class/action/locus of cause |
+
+The [extended-error register](https://fd.lod.bz/rbil/interrup/dos_kernel/2159_bx0000.html)
+defines these code domains; values above are Ciuki's reviewable mapping policy.
+EROFS from media is write-protect, policy denial is access-denied; EBUSY from
+sharing is not an undifferentiated hardware error. ENOENT resolution identifies
+parent/leaf before mapping. Timed-out storage retains its media/read/write
+cause; cancellation on VM destruction does not invent a guest completion.
+
+INT24 removable-media failures use the existing media generation/error records.
+Suspend the original call at a safe continuation, release all VFS/VM gate
+locks, publish InDOS/critical state, construct the guest handler's documented
+register/stack frame and invoke its current vector. AL=1 Retry resubmits only
+after revalidation and within the original deadline; AL=2 Abort uses the normal
+DOS process termination path (parent survives); AL=3 Fail returns the mapped
+error. AL=0 Ignore is honored only when allowed by the INT24 input flags;
+otherwise Fail. A handler may query 59h or use allowed console calls without
+recursive filesystem entry. A silent guest handler is bounded by the call
+deadline; expiry fails the call or stops that VM cleanly, not the desktop.
+[Critical-error frame](https://fd.lod.bz/rbil/interrup/dos_kernel/24.html).
+
+Every request carries VM generation, PSP, sequence, mount generation, absolute
+monotonic deadline and cancellation token. Default total wall-time budget is
+2000 ms for local file calls, including VFS admission, device wait, retries and
+critical callbacks; 440Bh cannot extend it. Cache-only monitor work yields at
+bounded preemption points; no file operation holds interrupts disabled across
+I/O. Use a genuinely cancellable/timed VFS reservation/transport interface:
+checking elapsed time after synchronous `vfs_read()` is insufficient. Preserve
+FIFO ordering when cancelling a ticket; do not leave holes or leaked locks.
+Reuse the storage asynchronous/deadline work if integrated, otherwise f3-49
+implements the needed internal subset. `vfs_wait` records include original
+reason, drive, owner, elapsed time and timeout/cancellation attribution.
+
+### DF6: measurements and compatibility closure
+
+On a T23-class CPU, warmed 4 KiB reads take at most 60 microseconds of monitor
+CPU time; a 300-entry FindFirst takes at most 2 ms. Measure min/p50/p95/max over
+10,000 reads and 100 scans, cold versus warm separately, copying to guest
+memory included. Report wall time, host-ready wait, monitor CPU and guest IF
+time separately with executable/image hashes and clock calibration. A host
+Python or x86emu duration is never T23 evidence. Native/VM copies and audio
+load must not bypass the bounded wait policy.
+
+File reads after mount/cluster mapping issue zero guest INT13 calls. Cold
+mapping and deliberate raw-sector tests have separate counters. Cite physical
+device cache misses separately from f3-47 hits. A per-call trace records entry
+function and AL/BX/CX/DX/DS/ES/SI/DI, PSP/origin; return CF/AX and result
+registers, byte count, elapsed wall/monitor time, VM generation/sequence and
+dropped count. Pair returns at the actual guest return boundary, not at initial
+vector dispatch. Trace in a bounded RAM ring and drain after the workload;
+no per-read synchronous UART logging. f3-49 owns this production addition.
+
+Acceptance requires every [inventory](../validation/f3-48-dos-api-inventory.md)
+row's tests, the identical COM battery against pinned FreeDOS 1.3, SHELL.COM
+built-ins, COM/MZ EXEC and rollback, 16/32-bit DPMI clients, DOS/4GW translation,
+DJGPP Quake and the three original library games. No source rewrite or patched
+game/extender. f3-49 covers handles/state/errors, f3-50 FCB/NLS/handoff and dead
+paths, f3-51 reference/game/performance closure and opt-in fallback. The owner
+permits QEMU for this battery only; ordinary QEMU gates remain suspended.
+
 ## Virtual devices and reuse
 
 **[F3]** VGA text, planar modes, mode 13h/Mode X, keyboard focus, INT 33h
