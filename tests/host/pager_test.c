@@ -622,11 +622,32 @@ static void order_control(void)
     finish_process(&u);
 }
 
+/* LeakSanitizer window for state abandoned by the simulated power cut. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define PAGER_TEST_LSAN 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#define PAGER_TEST_LSAN 1
+#endif
+#ifdef PAGER_TEST_LSAN
+#include <sanitizer/lsan_interface.h>
+static void lsan_disable(void) { __lsan_disable(); }
+static void lsan_enable(void) { __lsan_enable(); }
+#else
+static void lsan_disable(void) {}
+static void lsan_enable(void) {}
+#endif
+
 /* ---- G: swap is untrusted across reboot ---- */
 static void reboot(void)
 {
     start(128, 4096, 2048, false);
     disk.fragment = true; /* 4 runs per extent, 96 slots failed capacity */
+    /* The process built before the power cut is abandoned with the RAM it
+     * lived in; its host allocations are expected to stay unreferenced. */
+    lsan_disable();
     struct uaddr u; CHECK(!ua_init(&u, &u));
     hold_until(snapshot().high + 1024);
     uint32_t ws = (uint32_t)ledger_commit_headroom() + 2 * PAGER_EXTENT_SLOTS;
@@ -641,6 +662,7 @@ static void reboot(void)
     resident_head = resident_cursor = prewrite_cursor = 0; /* RAM contents are gone */
     zero_frame = 0; sample_spaces = sample_space = 0; sample_va = 0;
     (void)u;
+    lsan_enable();
     start(128, 4096, 2048, true);
     CHECK(pager.extents == extents && !pager.counts[ST_USED] && !pager.counts[ST_RESERVED]);
     CHECK(pager.counts[ST_BAD] == extents * 96 && pager.capacity == extents * (PAGER_EXTENT_SLOTS - 96));
