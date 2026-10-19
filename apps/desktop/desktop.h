@@ -103,7 +103,7 @@ struct desk_ops {
     int (*present)(int, int, const struct ciuki_rect *);
 };
 struct desk_program { char name[64], path[DESK_ARG_MAX + 1]; };
-struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent; };
+struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferred; };
 #define DESK_POWER_CLOSE_NS 3000000000ull
 #define DESK_POWER_RETRY_NS 250000000ull
 #define DESK_POWER_BUSY_NS 5000000000ull

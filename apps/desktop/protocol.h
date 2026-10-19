@@ -54,7 +54,10 @@ enum desk_opcode {
     DESK_GFX_QUERY, DESK_GFX_INFO, DESK_GFX_BENCH, DESK_GFX_RESULT,
     DESK_GFX_FRAME, DESK_GFX_PRESENTED, /* f2-59: bounded scene region and completion */
     DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */,
-    DESK_SET_CURSOR /* v2 client to desktop: uint32 shape, own client area only */
+    DESK_SET_CURSOR, /* v2 client to desktop: uint32 shape, own client area only */
+    /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
+     * 1 closing later). One later reply within 2 s grants 30 s total. */
+    DESK_CLOSE_ACK
 };
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
 #define DESK_SETTINGS_DISPLAY 3u /* VBE mode id in value[0]; value[1..2]=0; desktop persists after frame */

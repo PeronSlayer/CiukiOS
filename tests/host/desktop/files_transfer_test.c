@@ -109,7 +109,7 @@ static struct fm_vfs fs={.list=list,.stat_path=stat_path,.open=open_file,.read=r
     .sync=sync_file,.close=close_file,.unlink=remove_file,.rename=rename_file};
 static unsigned serial;
 static uint64_t ui_cpu, desktop_cpu, latency, frame_max;
-static unsigned damages, turns;
+static unsigned damages, turns, later_replies, declined_replies;
 static int measuring;
 static void turn(void)
 {
@@ -121,6 +121,7 @@ static void turn(void)
     if(measuring)ui_cpu+=cpu()-before;
     struct ciuki_message m;int pong=0;
     while(rt_pop(&m)) {
+        if(m.data[1]==DESK_CLOSE_ACK) { if (desk_get32(m.data+4)) later_replies++; else declined_replies++; }
         if(m.data[1]==DESK_PONG) {assert(desk_get32(m.data+4)==serial);pong=1;}
         if(m.data[1]==DESK_DAMAGE) {
             struct desk_box content=desk_content(&desktop.clients[0]);
@@ -151,11 +152,15 @@ static void wait_job(void)
 }
 static void begin(enum fm_job_kind kind)
 { char *paths[]={"/mnt/e/large.mp3"};assert(!start_job(&app,kind,paths,1,kind==FM_COPY || kind==FM_MOVE ? "/" : NULL)); }
+static int request_close(struct du_window *w, void *arg)
+{ (void)w; (void)arg; return files_close_request(&app); }
+static void decline_close(struct files_app *a)
+{ (void)a; du_window_close_reply(&window,0); }
 static void setup(void)
 {
     assert(!du_window_open_resizable(&window,&ui,3,760,520,"Files",600,360));
     struct ciuki_message m;while(rt_pop(&m))for(unsigned k=0;k<m.fd_count;k++)rt_close(m.fds[k]);
-    assert(!files_setup(&app,&ui,&fs,"/"));window.configured=1;
+    assert(!files_setup(&app,&ui,&fs,"/"));window.configured=1; window.close_request=request_close; app.close_declined=decline_close;
     desktop=(struct desktop){.width=1024,.height=768,.focus=0,.drag=-1,.mouse_x=900,.mouse_y=650,.ops=rt_ops,.time_ns=mono};
     desktop.pixels=calloc(1024u*768u,4);assert(desktop.pixels);
     desktop.clients[0]=(struct desk_client){.window=1,.hello=1,.order=1,.pixels=window.pixels,.info=window.info,.frame=desk_frame(760,520,16,48)};
@@ -255,9 +260,11 @@ int main(int argc,char **argv)
     started=mono();while(mono()-started<5200000000ull){turn();delay(10000000);}
     const char *elapsed_text=strstr(ui.dialog.text,"Elapsed: "); unsigned held_seconds=0;
     assert(elapsed_text && sscanf(elapsed_text,"Elapsed: %u s",&held_seconds)==1 && held_seconds>=5);
-    turn();assert(!files_close_request(&app) && !app.close_pending && du_dialog_id(&ui)==D_CANCEL_JOB);
+    struct ciuki_message close_request; desk_message(&close_request,DESK_CLOSE_REQUEST,4);
+    close_request.data[0]=2; close_request.data[2]=1; close_request.sender_pid=1; rt_push(&close_request);
+    turn(); assert(later_replies==1 && !app.close_pending && du_dialog_id(&ui)==D_CANCEL_JOB);
     struct du_event no={.type=DU_EV_DIALOG,.id=D_CANCEL_JOB,.index=1};du_dialog_close(&ui);files_event(&ui,&no,&app);
-    assert(!app.close_pending);transfer_command(&app,1,-1);
+    turn(); assert(!app.close_pending && declined_replies==1);transfer_command(&app,1,-1);
     pthread_mutex_lock(&disk.lock);disk.release=1;pthread_cond_signal(&disk.changed);pthread_mutex_unlock(&disk.lock);
     wait_job();assert(app.job.state==FM_CANCELLED && !disk.temporary && !disk.target && disk.source && !disk.output);
     reset(50000);disk.fail_write=1;begin(FM_COPY);wait_job();assert(app.job.state==FM_FAILED && app.job.error==ENOSPC && !disk.temporary);du_dialog_close(&ui);

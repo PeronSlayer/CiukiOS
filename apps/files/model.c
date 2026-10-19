@@ -592,9 +592,7 @@ static int push(struct fm_job *j, const char *source, const char *target)
 int fm_job_start(struct fm_job *j, const struct fm_vfs *fs, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
     memset(j, 0, sizeof(*j)); j->input = j->output = -1; j->fs = *fs; j->kind = kind;
-    /* The desktop folder still advances jobs on its UI thread. Preserve its
-     * former step bound; Files explicitly selects the worker-sized chunk. */
-    j->chunk = 16384;
+    j->chunk = FM_CHUNK;
     if (!n || n > FM_ENTRIES) return -EINVAL;
     if ((kind == FM_COPY || kind == FM_MOVE) && (!destination || strlen(destination) >= FM_PATH)) return -EINVAL;
     if (destination) strcpy(j->destination, destination);
@@ -720,7 +718,7 @@ int fm_job_step(struct fm_job *j)
         const char *source = j->sources[j->next++];
         char target[FM_PATH] = ""; int r = 0;
         if (j->kind == FM_COPY || j->kind == FM_MOVE) {
-            r = fm_join(target, j->destination, fm_basename(source));
+            r = fm_join(target, j->destination, j->trash ? j->trash_name : fm_basename(source));
             if (!r && fm_same_path(target, source)) {
                 if (j->kind == FM_MOVE) { j->completed++; j->bytes += j->totals[j->next-1].bytes; j->items_done += j->totals[j->next-1].items; return 1; }
                 r = copy_name(j, source, target);

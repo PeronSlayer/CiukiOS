@@ -310,6 +310,7 @@ struct du_ui {
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
+    struct du_rect invalid; /* dirty=3: union of clipped client invalidations */
     unsigned cursor;                       /* application default, used outside text/splitter controls */
     void (*event)(struct du_ui *, const struct du_event *, void *);
     void *user;
@@ -332,6 +333,8 @@ void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
+/* Union clipped repaint regions; a full dirty=1 invalidation takes precedence. */
+void du_invalidate(struct du_ui *, struct du_rect);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
@@ -342,6 +345,8 @@ void du_post(struct du_ui *, enum du_event_type, int id, int index);
 int du_list_hit(const struct du_widget *, int x, int y);
 struct du_rect du_list_label(const struct du_widget *, unsigned index);
 struct du_rect du_list_body(const struct du_widget *);
+/* Full item cell clipped to the visible viewport; empty for an offscreen item. */
+struct du_rect du_list_row(const struct du_widget *, unsigned index);
 void du_list_ensure(struct du_widget *, unsigned index);
 int du_list_page(const struct du_widget *);
 int du_list_target(const struct du_widget *, unsigned code);
@@ -384,6 +389,7 @@ int du_clipboard_path(const char *); /* optional host/provider path, NULL restor
 /* Desktop window glue: handshake, surface, back buffer, damage, events. */
 struct du_window {
     int channel, surface, configured, closing, closed, error;
+    int close_reply_pending; /* disposition+1, retried if the client queue is full */
     int present_pending; /* optional completion-paced client freezes surface writes */
     int manual_damage; /* application combines ordinary damage with its frame request */
     uint32_t server_pid, ping_serial;
@@ -414,6 +420,9 @@ int du_window_queue(struct du_window *, struct ciuki_message *);  /* f2-33: any 
 int du_window_move(struct du_window *, int x, int y);
 int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
+/* Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
+ * A close_request callback returning zero automatically queues later=1. */
+void du_window_close_reply(struct du_window *, int later);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);
 uint64_t du_now(void);

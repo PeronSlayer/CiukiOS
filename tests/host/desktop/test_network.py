@@ -27,7 +27,7 @@ class NetworkTrayTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / name for name in
                        ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c",
                         "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("draw.c", "icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")]
             sources += [ROOT / "tests/host/desktop/fake.c",
                         ROOT / "tests/host/desktop" / ("tray_layout_test.c" if kind == "layout" else f"{kind}_tray_test.c")]
             spec = importlib.util.spec_from_file_location("tray_assets", ROOT / "tests/host/desktop/icon_assets.py")
@@ -35,7 +35,7 @@ class NetworkTrayTests(unittest.TestCase):
             spec.loader.exec_module(assets)
             binary = Path(temp) / "network-tray"
             env = {**os.environ, "TMPDIR": temp, "ASAN_OPTIONS": "detect_leaks=0"}
-            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             *assets.defines(),
                             "-fsanitize=address,undefined", "-Wl,--wrap=du_text",
                             *(["-Wl,--wrap=du_text_wrap"] if kind=="network" else ["-Wl,--wrap=du_text_fit"] if kind=="media" else []),

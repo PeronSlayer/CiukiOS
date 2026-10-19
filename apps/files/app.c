@@ -2,6 +2,8 @@
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
+#include "transfer.h"
+#include "transfer_ui.h"
 #include "../desktop/catalog.h"
 #include <errno.h>
 #include <stdio.h>
@@ -9,10 +11,6 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
-#include <stdarg.h>
-#ifdef __i386__
-#include <ciuki/raw.h>
-#endif
 
 enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
@@ -36,7 +34,11 @@ struct files_scan {
     unsigned revision;
     enum scan_kind kind;
     char target[FM_PATH];
-    int delta, error, changed, labels_changed;
+    int delta, error, changed, labels_changed, metadata_only, clipboard_valid;
+    uint64_t clipboard_key;
+    uint16_t index[FM_ENTRIES*2];
+    uint8_t seen[FM_ENTRIES], dirty[FM_ENTRIES];
+    unsigned listed;
 };
 struct files_worker {
     pthread_mutex_t lock;
@@ -81,7 +83,6 @@ static const struct du_menu_item help_template[] = {
     {"&Help Topics", C_HELP, DU_KEY_F1, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&About Files", C_ABOUT, 0, 0, 0}};
 
 static const char *const yes_no[] = {"&Yes", "&No"};
-static const char *const replace_buttons[] = {"&Yes", "Yes to &All", "&No", "Cancel"};
 
 /* ---- formatting ---- */
 static void group(char *out, size_t n, uint64_t v)
@@ -653,6 +654,106 @@ static int scan_sniff(struct files_scan *s)
     s->changed = used == sizeof(h) && !memcmp(h, "\177ELF\1\1\1", 7) && h[16] == 2 && h[18] == 3;
     return 0;
 }
+static unsigned scan_bucket(const char *name)
+{
+    uint32_t hash=2166136261u;
+    for (const unsigned char *p=(const unsigned char *)name;*p;p++) hash=(hash^*p)*16777619u;
+    return hash%(FM_ENTRIES*2);
+}
+static int scan_entry(const char *name, const struct fm_meta *meta, void *arg)
+{
+    struct files_scan *s=arg; struct fm_model *m=&s->state.model;
+    if (!strcmp(name,".") || !strcmp(name,"..") || fm_hidden(m->path,name)) return 0;
+    if (!*name || strlen(name)>=FM_NAME || strchr(name,'/')) return -EIO;
+    if (s->listed++>=FM_ENTRIES) return -E2BIG;
+    unsigned slot=scan_bucket(name);
+    while (s->index[slot] && strcmp(m->entries[s->index[slot]-1].name,name)) slot=(slot+1)%(FM_ENTRIES*2);
+    if (s->index[slot]) {
+        unsigned i=s->index[slot]-1; struct fm_entry *e=&m->entries[i];
+        if (s->seen[i]) return -EIO;
+        s->seen[i]=1;
+        if (e->meta.type!=meta->type) s->metadata_only=0;
+        if (e->meta.type!=meta->type || e->meta.size!=meta->size || e->meta.modified!=meta->modified || e->meta.ino!=meta->ino || e->meta.dev!=meta->dev) {
+            uint32_t exec=e->meta.exec; e->meta=*meta; e->meta.exec=exec; s->dirty[i]=1; s->changed=1;
+        }
+    } else {
+        s->metadata_only=0; s->changed=1;
+        if (m->count>=FM_ENTRIES) return -E2BIG;
+        if (m->count==m->capacity) {
+            unsigned cap=m->capacity+32; if (cap>FM_ENTRIES) cap=FM_ENTRIES;
+            struct fm_entry *p=realloc(m->entries,cap*sizeof(*p)); if (!p) return -ENOMEM;
+            m->entries=p; m->capacity=cap;
+        }
+        unsigned i=m->count++; m->entries[i]=(struct fm_entry){.meta=*meta};
+        snprintf(m->entries[i].name,sizeof(m->entries[i].name),"%s",name); s->seen[i]=1;
+        s->index[slot]=(uint16_t)(i+1);
+    }
+    return 0;
+}
+static int scan_listing(struct files_scan *s)
+{
+    struct fm_model *m=&s->state.model;
+    s->metadata_only=1;
+    for (unsigned i=0;i<m->count;i++) {
+        unsigned slot=scan_bucket(m->entries[i].name);
+        while (s->index[slot]) slot=(slot+1)%(FM_ENTRIES*2);
+        s->index[slot]=(uint16_t)(i+1);
+    }
+    int r=scan_list(s,m->path,FM_LIST_NAMES_ONLY,scan_entry,s); if (r) return r;
+    unsigned count=0;
+    for (unsigned i=0;i<m->count;i++) if (s->seen[i]) m->entries[count++]=m->entries[i];
+    if (count!=m->count) { s->metadata_only=0; s->changed=1; m->count=count; }
+    if (!s->metadata_only) fm_sort(m,m->sort,m->descending);
+    return 0;
+}
+static int metadata_apply(struct files_app *a, struct files_scan *s)
+{
+    struct fm_model *m=&a->model, *n=&s->state.model;
+    if (!s->metadata_only || s->labels_changed || memcmp(&a->media,&s->state.media,sizeof(a->media)) || m->count!=n->count || !m->path[0]) return 0;
+    for (unsigned i=0;i<m->count;i++) if (strcmp(m->entries[i].name,n->entries[i].name)) return 0;
+    int reorder=0, status=0;
+    for (unsigned i=0;i<m->count;i++) if (s->dirty[i]) {
+        struct fm_entry *e=&m->entries[i];
+        reorder|=(m->sort==1 && e->meta.size!=n->entries[i].meta.size) || (m->sort==3 && e->meta.modified!=n->entries[i].meta.modified);
+        status|=e->selected && e->meta.size!=n->entries[i].meta.size;
+        e->meta=n->entries[i].meta;
+        if (i<a->capacity) {
+            if (e->meta.type==FM_DIR) a->texts[i].size[0]=0; else kb_text(a->texts[i].size,sizeof(a->texts[i].size),e->meta.size);
+            time_text(a->texts[i].modified,sizeof(a->texts[i].modified),e->meta.modified);
+            if (W(a,W_LIST)->view==DU_DETAILS) du_invalidate(a->ui,du_list_row(W(a,W_LIST),i));
+        }
+    }
+    if (reorder) {
+        char active[FM_NAME]="", anchor[FM_NAME]="";
+        if (m->active<m->count) strcpy(active,m->entries[m->active].name);
+        if (m->anchor<m->count) strcpy(anchor,m->entries[m->anchor].name);
+        fm_sort(m,m->sort,m->descending);
+        for (unsigned i=0;i<m->count;i++) { if (!strcmp(active,m->entries[i].name)) m->active=i; if (!strcmp(anchor,m->entries[i].name)) m->anchor=i; }
+        int dirty=a->ui->dirty; files_update(a); a->ui->dirty=dirty;
+        du_invalidate(a->ui,W(a,W_LIST)->box);
+    }
+    if (status && !reorder) {
+        struct du_widget *bar=W(a,W_STATUS);
+        const char *tab=strchr(bar->text,'\t'), *tail=tab ? strchr(tab+1,'\t') : NULL;
+        if (tab && tail) {
+            uint64_t bytes=0; fm_selected(m,&bytes); char size[48], text[DU_TEXT_MAX];
+            files_size_text(size,sizeof(size),bytes);
+            snprintf(text,sizeof(text),"%.*s\t%s%s",(int)(tab-bar->text),bar->text,size,tail);
+            du_set_text(bar,text); du_invalidate(a->ui,bar->box);
+        }
+    }
+    return 1;
+}
+static uint64_t clipboard_key(const struct fm_model *m)
+{
+    uint64_t key=1469598103934665603ull;
+    key=(key^(unsigned)m->cut)*1099511628211ull;
+    for (unsigned i=0;i<m->clipboard_count;i++) {
+        for (const unsigned char *p=(const unsigned char *)m->clipboard[i];*p;p++) key=(key^*p)*1099511628211ull;
+        key=(key^255u)*1099511628211ull;
+    }
+    return key;
+}
 static void *scan_run(void *arg)
 {
     struct files_worker *w = arg;
@@ -663,6 +764,10 @@ static void *scan_run(void *arg)
         struct files_scan *s = w->pending; w->pending = NULL; w->busy = 1;
         pthread_mutex_unlock(&w->lock);
         struct files_app *a = &s->state;
+        if (s->kind==SCAN_MEDIA && a->poll_clipboard && !scan_cancelled(s)) {
+            struct fm_vfs adapter=a->model.fs; a->model.fs=s->source;
+            s->clipboard_valid=!fm_clipboard_load(&a->model); a->model.fs=adapter;
+        }
         if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
         else {
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
@@ -682,8 +787,13 @@ static void *scan_run(void *arg)
             }
             if (s->kind == SCAN_NAVIGATE) s->error = fm_navigate(&a->model, s->target);
             else if (s->kind == SCAN_HISTORY) s->error = fm_history(&a->model, s->delta);
+            else if (s->kind==SCAN_MEDIA && a->model.path[0]) {
+                int topology=s->changed || s->labels_changed;
+                s->error=scan_listing(s);
+                if (topology) s->metadata_only=0;
+            }
             else if (s->kind == SCAN_REFRESH || (s->kind == SCAN_MEDIA && s->changed)) s->error = fm_refresh(&a->model);
-            if (!s->error && !scan_cancelled(s) && (s->kind != SCAN_MEDIA || s->changed)) {
+            if (!s->error && !scan_cancelled(s) && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
                 a->reading = s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY || s->kind == SCAN_REFRESH || (s->kind == SCAN_MEDIA && s->changed);
                 struct fm_meta meta;
                 a->games_available = !scan_stat(s, "/Games", &meta) && meta.type == FM_DIR;
@@ -714,6 +824,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
 {
     struct files_worker *w = a->worker;
     if (!w) return -EIO;
+    if (kind==SCAN_MEDIA) {
+        if (a->media_polled && a->ui->now-a->media_poll_ns<1000000000ull) return 0;
+        a->media_polled=1; a->media_poll_ns=a->ui->now;
+    }
     struct files_scan *s = calloc(1, sizeof(*s));
     if (!s) return -ENOMEM;
     s->state.tree = calloc(FILES_TREE, sizeof(*s->state.tree));
@@ -731,6 +845,13 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    if (kind==SCAN_MEDIA && a->model.count) {
+        b->model.entries=malloc(a->model.count*sizeof(*b->model.entries));
+        if (!b->model.entries) { scan_free(s); return -ENOMEM; }
+        memcpy(b->model.entries,a->model.entries,a->model.count*sizeof(*b->model.entries));
+        b->model.count=b->model.capacity=a->model.count;
+    }
+    b->poll_clipboard=a->poll_clipboard; s->clipboard_key=clipboard_key(&a->model);
     s->kind = kind; s->delta = delta; s->worker = w; s->source = a->model.fs;
     /* Only read callbacks are used through this cancellation adapter. */
     b->model.fs = (struct fm_vfs){.ctx=s, .list=scan_list, .stat_path=scan_stat};
@@ -764,9 +885,16 @@ static void scan_poll(struct files_app *a)
     if (scan_cancelled(s)) { scan_free(s); return; }
     struct files_app *b = &s->state;
     a->reading = 0;
+    if (s->clipboard_valid && s->clipboard_key==clipboard_key(&a->model) && clipboard_key(&a->model)!=clipboard_key(&b->model)) {
+        fm_clipboard_clear(&a->model);
+        a->model.clipboard=b->model.clipboard; a->model.clipboard_count=b->model.clipboard_count; a->model.cut=b->model.cut;
+        b->model.clipboard=NULL; b->model.clipboard_count=0;
+        files_update(a);
+    }
     if (s->kind == SCAN_MEDIA && !s->error && !s->changed && !s->labels_changed) {
         scan_free(s); return; /* An unchanged poll must not repaint the window. */
     }
+    if (s->kind==SCAN_MEDIA && !s->error && metadata_apply(a,s)) { scan_free(s); return; }
     int tree_changed = a->tree_dirty;
     if (s->kind == SCAN_OPEN) {
         unsigned index = a->model.count;
@@ -786,7 +914,7 @@ static void scan_poll(struct files_app *a)
     if (s->error) {
         if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
     } else {
-        if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || s->changed)) {
+        if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
             struct fm_model *m = &a->model, *n = &b->model;
             int refresh = s->kind == SCAN_REFRESH || s->kind == SCAN_MEDIA;
             char active[FM_NAME] = "";
@@ -915,176 +1043,18 @@ static void open_item(struct files_app *a, unsigned index, int with_note)
 static const char *verb(enum fm_job_kind kind)
 { return kind == FM_COPY ? "copy" : kind == FM_MOVE ? "move" : kind == FM_DELETE ? "delete" : "read"; }
 
-/* Only the worker touches fm_job while running. The mailbox lock protects
- * snapshots/commands only; it is never held across VFS calls or cleanup. */
-struct transfer_view {
-    enum fm_job_state state;
-    uint64_t bytes, total, file_bytes, file_total, elapsed, rate, files, folders;
-    unsigned items, count;
-    int counting, prompt_dir;
-    struct fm_meta meta, existing;
-    char target[FM_PATH], source[FM_PATH];
-};
-struct files_transfer {
-    pthread_mutex_t lock;
-    pthread_cond_t changed;
-    pthread_t thread;
-    struct files_app *app;
-    struct transfer_view view;
-    uint64_t samples_started; /* worker-owned, after preflight */
-    uint64_t started_at, progress_logged; /* UI-owned; advance during blocked I/O */
-    int pending, stopping, cancel, answer, finished;
-};
-static uint64_t job_now(void)
-{
-    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
-    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
-}
-static void job_record(const char *fmt, ...)
-{
-    int saved = errno; char line[241]; va_list ap;
-    va_start(ap, fmt); int n = vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
-    if (n > 0) {
-        if ((unsigned)n >= sizeof(line)) n = sizeof(line)-1;
-#ifdef __i386__
-        (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line, (uint32_t)n, 0, 0, 0, 0);
-#else
-        fprintf(stderr, "%s\n", line);
-#endif
-    }
-    errno = saved;
-}
-static void transfer_publish(struct files_transfer *w, uint64_t started, int finished)
-{
-    struct fm_job *j = &w->app->job;
-    struct transfer_view v = {.state=j->state, .bytes=j->bytes, .total=j->total_bytes,
-        .elapsed=job_now()-started, .items=j->items_done,
-        .count=j->total_items, .counting=j->counting, .files=j->files, .folders=j->folders};
-    uint64_t sampled=w->samples_started ? job_now()-w->samples_started : 0;
-    if (sampled >= 2000000000ull && !v.counting) v.rate = v.bytes * 1000ull / (sampled / 1000000ull);
-    const char *source = j->sources[0];
-    if (j->depth) {
-        struct fm_frame *f=&j->frames[j->depth-1]; source=f->source;
-        v.file_total=f->meta.size;
-        if (!j->counting && f->meta.type==FM_FILE && (f->phase==1 || f->phase==3)) v.file_bytes=j->file_bytes;
-        v.meta=f->meta; v.existing=f->existing; v.prompt_dir=j->prompt_dir;
-        snprintf(v.target,sizeof(v.target),"%s",f->target);
-    }
-    else if (j->next) source=j->sources[j->next-1];
-    snprintf(v.source, sizeof(v.source), "%s", source);
-    pthread_mutex_lock(&w->lock);
-    w->view = v;
-    w->finished = finished;
-    pthread_mutex_unlock(&w->lock);
-}
-static void *transfer_run(void *arg)
-{
-    struct files_transfer *w = arg;
-    for (;;) {
-        pthread_mutex_lock(&w->lock);
-        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed, &w->lock);
-        if (w->stopping && !w->pending) { pthread_mutex_unlock(&w->lock); break; }
-        w->pending = 0; pthread_mutex_unlock(&w->lock);
-        struct fm_job *j = &w->app->job;
-        uint64_t started=job_now();
-        w->samples_started=0;
-        int announced=0;
-        for (;;) {
-            pthread_mutex_lock(&w->lock);
-            int cancel=w->cancel || w->stopping, answer=w->answer;
-            w->answer=-1;
-            pthread_mutex_unlock(&w->lock);
-            if (cancel) fm_job_cancel(j);
-            else if (answer >= 0) fm_job_answer(j, (enum fm_replace)answer);
-            if (j->state == FM_RUNNING) fm_job_step(j);
-            uint64_t now=job_now();
-            if (!j->counting && !w->samples_started) w->samples_started=now;
-            if (!announced && (!j->counting || j->state != FM_RUNNING)) {
-                if (j->kind != FM_PROPERTIES) job_record("[files] job=%s start items=%u bytes=%llu", verb(j->kind), j->total_items, (unsigned long long)j->total_bytes);
-                announced=1;
-            }
-            transfer_publish(w, started, 0);
-            if (j->state == FM_REPLACE) {
-                pthread_mutex_lock(&w->lock);
-                if (!w->stopping && !w->cancel && w->answer < 0) {
-                    uint64_t paused=job_now();
-                    pthread_cond_wait(&w->changed, &w->lock);
-                    if (w->samples_started) w->samples_started += job_now()-paused;
-                }
-                pthread_mutex_unlock(&w->lock);
-                continue;
-            }
-            if (j->state != FM_RUNNING) break;
-        }
-        if (j->kind != FM_PROPERTIES) {
-            uint64_t ms=(job_now()-started)/1000000ull;
-            if (j->state == FM_CANCELLED) job_record("[files] job=%s cancel", verb(j->kind));
-            job_record("[files] job=%s done ms=%u bytes=%llu rate_kbs=%u errors=%u", verb(j->kind),
-                (unsigned)ms, (unsigned long long)j->bytes, (unsigned)(ms ? j->bytes*1000/(ms*1024) : 0), j->error ? 1u : 0u);
-        }
-        /* Publish terminal ownership only after the last job access. */
-        transfer_publish(w, started, 1);
-    }
-    return NULL;
-}
 static int transfer_start(struct files_app *a)
-{
-    if (a->transfer) return 0;
-    struct files_transfer *w=calloc(1,sizeof(*w));
-    if (!w) return -ENOMEM;
-    w->app=a; w->answer=-1;
-    int e=pthread_mutex_init(&w->lock,NULL);
-    if (e) { free(w); return -e; }
-    e=pthread_cond_init(&w->changed,NULL);
-    if (e) { pthread_mutex_destroy(&w->lock); free(w); return -e; }
-    e=pthread_create(&w->thread,NULL,transfer_run,w);
-    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return -e; }
-    a->transfer=w; return 0;
-}
+{ return fm_transfer_create(&a->transfer,&a->job); }
 static void transfer_command(struct files_app *a, int cancel, int answer)
-{
-    struct files_transfer *w=a->transfer;
-    if (!w || !a->job_active) return;
-    pthread_mutex_lock(&w->lock);
-    if (cancel) w->cancel=1;
-    if (answer >= 0) w->answer=answer;
-    if (cancel || answer >= 0) w->view.state=FM_RUNNING;
-    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
-}
+{ if (a->job_active) fm_transfer_command(a->transfer,cancel,answer); }
 static void transfer_stop(struct files_app *a)
-{
-    struct files_transfer *w=a->transfer;
-    if (!w) return;
-    pthread_mutex_lock(&w->lock); w->stopping=1;
-    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
-    pthread_join(w->thread,NULL);
-    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
-    free(w); a->transfer=NULL;
-}
+{ fm_transfer_destroy(a->transfer); a->transfer=NULL; }
 static void progress(struct files_app *a)
 {
     struct files_transfer *w=a->transfer; struct transfer_view v;
     if (!w || pthread_mutex_trylock(&w->lock)) return;
     v=w->view; pthread_mutex_unlock(&w->lock);
-    v.elapsed=job_now()-w->started_at;
-    enum fm_job_kind kind=a->job.kind; /* immutable until the job is retired */
-    char name[201], text[DU_DIALOG_TEXT];
-    snprintf(name,sizeof(name),"%.200s",fm_basename(v.source));
-    fm_parent(v.source,v.source); fm_display_path(v.source,v.source);
-    snprintf(v.target,sizeof(v.target),"%s",a->job.destination);
-    fm_display_path(v.target,v.target);
-    const char *title=kind==FM_COPY ? "Copying..." : kind==FM_MOVE ? "Moving..." : kind==FM_DELETE ? "Deleting..." : "Properties";
-    unsigned percent=v.total ? (unsigned)((v.bytes > v.total ? v.total : v.bytes)*100/v.total) : 0;
-    if (percent==100 && v.state!=FM_DONE) percent=99;
-    if (kind==FM_PROPERTIES) snprintf(text,sizeof(text),"Counting: %.200s\n%llu files, %llu folders",name,(unsigned long long)v.files,(unsigned long long)v.folders);
-    else if (kind==FM_DELETE) snprintf(text,sizeof(text),"%s: %.70s\nFrom: %.70s\nItems: %u of %u\nElapsed: %llu s",v.counting ? "Counting" : "Deleting",name,v.source,v.items,v.count,(unsigned long long)(v.elapsed/1000000000ull));
-    else {
-        char rate[100]="Rate: calculating...   Remaining: calculating...";
-        if (v.rate) snprintf(rate,sizeof(rate),"Rate: %llu KB/s   Remaining: %llu s",(unsigned long long)(v.rate/1024),(unsigned long long)((v.total>v.bytes ? v.total-v.bytes : 0)/v.rate));
-        snprintf(text,sizeof(text),"%s: %.65s\nFrom: %.65s\nTo: %.65s\nBytes: %llu of %llu (%u%%)\nFile: %llu of %llu bytes\nItems: %u of %u   Elapsed: %llu s\n%s",v.counting ? "Counting" : kind==FM_COPY ? "Copying" : "Moving",name,v.source,v.target,(unsigned long long)v.bytes,(unsigned long long)v.total,percent,(unsigned long long)v.file_bytes,(unsigned long long)v.file_total,v.items,v.count,(unsigned long long)(v.elapsed/1000000000ull),rate);
-    }
-    unsigned value=kind==FM_DELETE ? v.items : percent, total=kind==FM_DELETE ? v.count : 100;
-    du_progress(a->ui,D_PROGRESS,title,text,value,total);
+    fm_progress_dialog(a->ui,D_PROGRESS,a->job.kind,a->job.destination,v,w->started_at);
 }
 static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *paths, unsigned n, const char *destination)
 {
@@ -1095,17 +1065,11 @@ static int start_job(struct files_app *a, enum fm_job_kind kind, char *const *pa
     r=fm_job_start(&a->job,&a->model.fs,kind,paths,n,destination);
     if (r) { error_box(a,"Files","Cannot start the selected operation:",r); return r; }
     a->job.chunk=FM_CHUNK;
-    struct files_transfer *w=a->transfer;
-    pthread_mutex_lock(&w->lock);
-    w->view=(struct transfer_view){.state=FM_RUNNING,.counting=a->job.counting};
-    snprintf(w->view.source,sizeof(w->view.source),"%s",paths[0]);
-    w->finished=w->cancel=0; w->answer=-1; w->started_at=w->progress_logged=job_now();
     a->job_active=1;
-    pthread_mutex_unlock(&w->lock);
+    fm_transfer_reset(a->transfer);
     du_timer_start(a->ui,T_JOB,100000000u,1);
     progress(a);
-    pthread_mutex_lock(&w->lock); w->pending=1;
-    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+    fm_transfer_submit(a->transfer);
     return 0;
 }
 
@@ -1179,22 +1143,7 @@ static void replace_prompt(struct files_app *a)
 {
     struct transfer_view v;
     pthread_mutex_lock(&a->transfer->lock); v=a->transfer->view; pthread_mutex_unlock(&a->transfer->lock);
-    char text[DU_DIALOG_TEXT], a1[48], a2[48], t1[24], t2[24];
-    const char *name = fm_basename(v.target);
-    if (v.prompt_dir)
-        snprintf(text, sizeof(text), "This folder already contains a folder named '%.120s'.\n\n"
-                 "If files in the existing folder have the same names as files in\n"
-                 "the folder you are copying, you will be asked before each one\n"
-                 "is replaced. Do you still want to copy or move the folder?", name);
-    else {
-        files_size_text(a1, sizeof(a1), v.existing.size); files_size_text(a2, sizeof(a2), v.meta.size);
-        time_text(t1, sizeof(t1), v.existing.modified); time_text(t2, sizeof(t2), v.meta.modified);
-        snprintf(text, sizeof(text), "This folder already contains a file named '%.120s'.\n\n"
-                 "Would you like to replace the existing file\n\t%s, modified %s\n\nwith this one?\n\t%s, modified %s",
-                 name, a1, t1[0] ? t1 : "-", a2, t2[0] ? t2 : "-");
-    }
-    du_message(a->ui, D_REPLACE, v.prompt_dir ? "Confirm Folder Replace" : "Confirm File Replace", text,
-               DU_DLG_ICON_QUESTION, replace_buttons, 4, 0, 3);
+    fm_replace_dialog(a->ui,D_REPLACE,v);
 }
 
 static void job_tick(struct files_app *a)
@@ -1489,14 +1438,14 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
     case D_PROGRESS: transfer_command(a, 1, -1); if (a->job_active) progress(a); break;
     case D_CANCEL_JOB:
         if (e->index==0) { a->close_pending=1; transfer_command(a,1,-1); }
+        else if (a->close_declined) a->close_declined(a);
         if (a->job_active) job_tick(a);
         break;
     default: break;
     }
 }
 
-/* Defers Files' own close until confirmation and worker cleanup. The shell's
- * independent forced-close deadline still requires a protocol extension. */
+/* The toolkit acknowledges the shell request while confirmation/cleanup waits. */
 int files_close_request(struct files_app *a)
 {
     if (!a->job_active) return 1;
@@ -1688,7 +1637,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
         du_dialog_close(u);
         if (files_navigate(a, FM_COMPUTER)) return -EIO;
     }
-    if (a->media_read && !a->test) du_timer_start(u,T_MEDIA,500000000u,1);
+    if (a->media_read && !a->test) du_timer_start(u,T_MEDIA,1000000000u,1);
     return 0;
 }
 

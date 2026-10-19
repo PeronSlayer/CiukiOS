@@ -175,6 +175,8 @@ int du_window_move(struct du_window *w, int x, int y)
     return queue(w, &m);
 }
 
+void du_window_close_reply(struct du_window *w, int later)
+{ w->close_reply_pending=later ? 2 : 1; }
 void du_window_close(struct du_window *w) { if (!w->closing) w->closing = 1; du_release(w->ui); }
 
 int du_window_set_title(struct du_window *w, const char *title)
@@ -225,6 +227,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         case DESK_CLOSED: w->closed = 1; du_release(w->ui); return 0;
         case DESK_CLOSE_REQUEST:
             if (!w->close_request || w->close_request(w, w->user)) du_window_close(w);
+            else du_window_close_reply(w,1);
             break;
         case DESK_FOCUS: du_window_focus(w->ui, p.focused != 0); break;
         case DESK_KEY: case DESK_MOTION: case DESK_BUTTON:
@@ -232,6 +235,11 @@ int du_window_turn(struct du_window *w, uint64_t now)
             du_input(w->ui, &p.event); break;
         default: if (w->message) w->message(w, &p, w->user); break;
         }
+    }
+    if (w->close_reply_pending && w->count<16) {
+        struct ciuki_message m; desk_message(&m,DESK_CLOSE_ACK,8);
+        desk_put32(m.data+4,(uint32_t)(w->close_reply_pending-1));
+        if (!queue(w,&m)) w->close_reply_pending=0;
     }
     if (!w->closing && !w->present_pending && replacement(w)) { w->error = errno; w->closed = 1; return -1; }
     if (w->closing) {
