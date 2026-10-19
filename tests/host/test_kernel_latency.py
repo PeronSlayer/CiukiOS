@@ -104,7 +104,7 @@ static void test_irq_restore(uint32_t f) {
             (temp / 'latency_timing.inc').write_text(source[:begin] + source[end:])
             source = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
             begin = source.index('void pic_unmask(')
-            end = source.index('static void timer_irq(', begin)
+            end = source.index('static void shared_tick_work(', begin)
             (temp / 'latency_pic.inc').write_text('static uint8_t mask_master=0xff, mask_slave=0xff;\n' + source[begin:end])
             binary = temp / 'audit'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
@@ -198,7 +198,7 @@ static void test_irq_restore(uint32_t f) {
             temp = Path(directory)
             source = (ROOT / 'src/kernel/core/task.c').read_text()
             block = source[source.index('static struct task *rq_head'):source.index('void task_stack_init')]
-            for name in ('schedule', 'sched_tick',
+            for name in ('schedule', 'sched_vm_tick_work', 'sched_tick',
                          'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
                 match = re.search(r'^(?:static )?[^\n]+\b' + name + r'\([^\n]*\)\s*\{', source, re.M)
                 self.assertIsNotNone(match, name)
@@ -208,10 +208,15 @@ static void test_irq_restore(uint32_t f) {
                     end += 1
                 block += source[match.start():end] + '\n'
             (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + block)
+            timers = (ROOT / 'src/kernel/core/sync.c').read_text()
+            (temp / 'deadline_timers.inc').write_text(timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')])
+            pit = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
+            (temp / 'pit_timer.inc').write_text(pit[pit.index('static void shared_tick_work('):pit.index('void pit_init(')])
             write_model(temp / 'vm_creation_model.inc')
             for unit, extra in (
                 ('kernel_latency_test.c', []),
                 ('scheduler_priorities_test.c', []),
+                ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),
                 ('vga_transport_latency_test.c', ['src/kernel/vm/vga_hardware.c']),
             ):

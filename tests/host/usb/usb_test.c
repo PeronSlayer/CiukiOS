@@ -58,6 +58,7 @@ int irq_chain_remove(unsigned irq,irq_chain_handler_t handler,const char *owner)
 static void (*wake_hook)(struct kwait *);
 void kwait_wake_all(struct kwait *q) { assert(q);irq_wakes++;if(wake_hook)wake_hook(q); }
 void kwait_wake_io(struct kwait *q) { irq_io_wakes++;kwait_wake_all(q); }
+void kwait_wake_irq(struct kwait *q, bool io) { if(io) kwait_wake_io(q); else kwait_wake_all(q); }
 static unsigned port_actions,recovery_records,descriptor_records;
 #ifndef USB_LATENCY_QUEUE
 void input_devices_snapshot(struct input_devices *out) { *out=(struct input_devices){.usb=usb_devices}; }

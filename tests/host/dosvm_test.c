@@ -25,6 +25,7 @@
 #include <ciuki/task.h>
 #include <ciuki/input.h>
 #include <ciuki/dosvm.h>
+static void host_clock_tick(void);
 
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr,"FAIL %d: %s\n",__LINE__,#c); exit(1); } } while (0)
 #define KERNEL_VBASE 0xC0000000u
@@ -199,7 +200,7 @@ void crit_begin(void) { }
 void crit_end(void) { }
 void task_sleep_ms(uint32_t ms)
 {
-    CHECK(cpu_flags & V86_IF); g_ticks += ms; dosvm_tick(); native_progress++;
+    CHECK(cpu_flags & V86_IF); g_ticks += ms; host_clock_tick(); native_progress++;
     if (sleep_hook) sleep_hook();
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) if (tasks[i].t) {
         struct dosvm *v = tasks[i].arg;
@@ -393,6 +394,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
+#include "dosvm_work.inc"
 static void *creation_cost_clear(void *p, int value, size_t n)
 { creation_cost_charge(n * 8000 / PAGE_SIZE); return memset(p, value, n); }
 static void *creation_cost_copy(void *to, const void *from, size_t n)

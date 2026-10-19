@@ -134,8 +134,8 @@ void ata_channel_irq(struct ata_channel *c)
     c->irq_status = status;
     c->irq_generation = c->request_generation;
     c->irq_sequence++;
-    if (status && status != 0xff && !(status & ATA_BSY)) kwait_wake_io(&c->wait);
-    else kwait_wake_all(&c->wait);
+    if (status && status != 0xff && !(status & ATA_BSY)) kwait_wake_irq(&c->wait, true);
+    else kwait_wake_irq(&c->wait, false);
 }
 
 static void primary_irq(struct trap_frame *tf) { (void)tf; ata_channel_irq(&channels[0]); }

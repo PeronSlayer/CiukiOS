@@ -1,6 +1,7 @@
 /* Production kwait, FIFO locks, admission, scheduler and cpustat. Only the
  * stack-switch/device/clock boundaries are modeled. No FS_HOST pthread locks.
  * SPDX-License-Identifier: GPL-2.0-only */
+#define HOST_SYNC_TIMERS
 #define main latency_fixture_main
 #include "../kernel_latency_test.c"
 #undef main
@@ -11,6 +12,7 @@
 #define ktime_cycles sync_unused_cycles
 #include "../../../src/kernel/core/sync.c"
 #undef ktime_cycles
+static void timer_fixture_reset(void) { timer_root=timer_first=timer_due_head=timer_due_tail=0; memset(&timer_stats,0,sizeof(timer_stats)); deferred_fn=0; }
 #include "../../../src/kernel/fs/vfs.c"
 bool g_cpu_tsc;
 uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
@@ -74,7 +76,7 @@ static void wait_case(unsigned which)
     cpu_switch(&idle,&hog);
     if (which==0) fs_lock_take(&mutex);
     else if (which==2) { vfs_lock(&space,vfs_drive_mask(3));holder_io=vfs_io_begin_locked(&space); }
-    hog.state=T_BLOCKED;hog.wake_tick=25;
+    hog.state=T_BLOCKED;ktimer_wait_task(&hog,25);
     cpu_switch(&hog,&ui);ui.state=T_RUNNING;g_current=&ui;
     waiter=&ui;waiter_cpu=ui.run_cycles;
     rq_push(&normal);

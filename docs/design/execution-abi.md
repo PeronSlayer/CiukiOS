@@ -308,6 +308,85 @@ allowance, while retaining public priority encodings and R3 audio policy.
   except to mark a thread runnable.
 - Interrupt-disabled sections are bounded; the budget is set in
   `device-firmware-ownership.md` and measured by an F0 probe.
+
+### F0-46 interrupt and timer implementation
+
+Research checked 2026-10-19 before implementation: Microsoft DDK
+[Virtual Devices (P08)](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S22EB.HTM)
+places hardware interrupt callbacks behind VPICD;
+[VxD thread events (P11)](https://techshelps.github.io/MSDN/TECHART/html/msdn_chicvxd.htm)
+ties events to thread lifecycle;
+[Q169592 (P15)](https://helparchive.huntertur.net/document/37467)
+explicitly identifies timeout creation and cancellation as asynchronous;
+[timeGetTime (P16)](https://techshelps.github.io/MSDN/MULTIMED/devdoc/live/pdref/mmfunc_2q3p.htm)
+requires difference arithmetic across wrap and describes 1 ms precision on
+Windows 95. None specifies CiukiOS's 100 us/1 ms/2 ms limits or proves a
+callback latency. Those limits follow R1/R3, not historical timer precision.
+
+Repository comparison: the old PIT callback scanned every task, the work
+ring admitted duplicate notifications, and critical-section violations used
+raw elapsed time with a 250 us threshold. The implementation uses intrusive
+ordered deadline entries, bounded expiry transfer and thread dispatch, and
+separate raw/software/firmware/unclassified evidence. Owner destruction must
+cancel both armed and pending entries before freeing storage; callbacks must
+validate the captured generation. PIT divisor 1193, calibration, scheduler
+priority policy and audio period/lead policy remain the existing contracts.
+
+`ktimer` is embedded in its owner and linked into an AVL-ordered deadline
+queue and an intrusive due FIFO. Arm/cancel cost O(log timers); a PIT turn
+transfers at most two due entries and executes no owner callback. An idle
+tick only tests the earliest deadline, independently of the task population.
+Thread work completes one timer per turn, then requeues. Cancellation removes
+both armed and due entries; cancellation during execution returns false and
+requires retaining storage until completion. Callbacks cannot block/yield.
+The generation address stays live through that fence; validation precedes
+the callback, and a revision protects callback rearm from old completion.
+Task generations are allocated without reuse, and exit/reap cancel embedded
+wake/input/ready timers. Timed native sleep and wait-word publication use the
+same explicit queue state, including deadline zero. Ready-queue back links
+keep timer-driven promotion/reinsert independent of queue length without
+changing priority values or dispatch policy.
+
+The 64-entry device work ring coalesces identical callback/argument pairs,
+retains a saturating notification count, and reserves a later turn for a
+notification received during execution. Every callback return yields. Turn
+and total callback CPU costs are recorded separately (1 ms/2 ms limits),
+using the existing task runtime clock to exclude other tasks and IRQ CPU
+time. Device IRQ notifications capture only queue state; the worker checks
+one waiter per continuation, with unlink cancellation of its cursor. These
+notification queues have permanent driver storage. Ring exhaustion remains
+counted; timer and wait notifications retain a retry, and input polling
+retries captured raw bytes. Native i8042 decoding and the virtual DOS audio
+clock/shared Win32 clock publication execute in thread context. Hardware
+audio cursor/inhibit operations retain their existing immediate safety role.
+
+Critical-section violations charge all elapsed work except the existing
+adjacent-TSC 2000–2300 us no-work SMI heuristic. Raw maxima, charged maxima,
+firmware maxima/counts, unattributed overruns, owner and site remain separate;
+unknown gaps remain fully charged. The software limit is 100 us, with the
+existing 50 us NIC limit retained. The PIT still counts delivered edges and
+does not synthesize lost PIC ticks. Queue pause tests advance the supplied
+absolute deadline clock; they do not establish wall-clock accuracy through
+lost hardware ticks or qualify firmware service latency.
+
+F0-46 Amendment 1 research (2026-10-19): Creative's
+[Sound Blaster Hardware Programming Guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf),
+chapter 3, describes continuous auto-init DMA and block-size interrupts;
+the upstream [DOSBox Staging SB implementation](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/audio/soundblaster.cpp)
+also separates DMA service from interrupt acknowledgement. Comparison with
+`sb_advance`, `sb_boundary` and `sb_ack` confirms that the existing nominal
+unit timestamps, DMA phase and asserted-line merging must survive a worker
+return. The failing 18,425 us tiny-block catch-up is therefore split into
+preallocated continuations, each advancing at most 24 DSP timeline frames
+(0.5 ms virtual time). Absolute audio time still receives the entire elapsed
+interval; the existing 64 ms DSP catch-up allowance and one-second backlog
+drop remain. PIT advancement retains its 64-tick cap. A work-ring argument
+holds the immutable, nonreused VM generation, checked before accessing the
+slot; stopped or reused slots reject stale work. Notifications coalesce with
+the ring's saturating count, each continuation requeues and returns,
+and failed enqueue is retried by the next tick without losing elapsed time.
+The generic worker measures each returned callback's CPU service separately
+and yields between continuations. Physical qualification remains separate.
 - Starvation guard: at 100 ms READY age, an ordinary thread receives one
   bounded dispatch at 15, without changing class. Actual device deadlines
   retain precedence; overdue dispatches precede nonurgent device work.

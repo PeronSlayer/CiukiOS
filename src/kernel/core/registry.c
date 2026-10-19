@@ -444,7 +444,8 @@ static struct irq_chain {
     bool servicing, claimed, report, masked, detach_queued, budget_smi;
     char budget_owner[32];
     char detached[IRQ_CHAIN_MAX][32];
-    uint64_t budget_us;
+    uint64_t budget_us, budget_work_us;
+    uint32_t budget_site;
 } chains[16];
 
 static bool irq_line_accepts_peer(unsigned irq)
@@ -510,7 +511,10 @@ static void chain_detach(unsigned irq, unsigned slot)
     for (; k < sizeof(c->detached[slot]) - 1 && m->owner[k]; k++)
         c->detached[slot][k] = m->owner[k];
     c->detached[slot][k] = 0;
-    memset(m, 0, sizeof(*m));
+    /* IRQ removal only unpublishes. A later thread-context add initializes
+     * the complete slot, including its strike history. */
+    m->handler = 0;
+    m->owner = 0;
     c->stats.participants--;
     /* Reporting never changes the PIC transaction. On a full work ring the
      * retained names are retried by the next pass/continuation. */
@@ -571,6 +575,7 @@ static void chain_service(unsigned irq, bool hard_irq)
         /* A callback may quarantine its own lease and clear this slot. */
         struct irq_member member = *m;
         struct irq_stamp member_start = irq_budget_stamp();
+        if (crit_owner) crit_owner(member.owner, (uint32_t)(uintptr_t)member.handler);
         uint32_t before = read_eflags();
         if (member.handler(irq, member.owner))
             c->claimed = true;
@@ -585,7 +590,8 @@ static void chain_service(unsigned irq, bool hard_irq)
             uint64_t us = elapsed.us;
             if (us > c->stats.max_service_us)
                 c->stats.max_service_us = us;
-            c->budget_us = us;
+            c->budget_us = us; c->budget_work_us = elapsed.work_us;
+            c->budget_site = (uint32_t)(uintptr_t)member.handler;
             c->budget_smi = elapsed.smi_attributed;
             if (c->budget_smi) c->stats.smi_attributed++;
             unsigned k = 0;
@@ -622,8 +628,10 @@ static void chain_resume(void *arg)
         chain_finish(irq);
     }
     if (c->budget_owner[0]) {
-        klog("[irq] budget exceeded irq=%u owner=%s us=%llu pending=%u smi_attributed=%u", irq,
-             c->budget_owner, c->budget_us, IRQ_CHAIN_MAX - c->next, c->budget_smi);
+        klog("[irq] budget exceeded irq=%u owner=%s us=%llu pending=%u smi_attributed=%u work_us=%llu firmware_us=%llu unclassified=%u site=%08x", irq,
+             c->budget_owner, c->budget_us, IRQ_CHAIN_MAX - c->next, c->budget_smi,
+             c->budget_work_us, c->budget_us - c->budget_work_us,
+             !c->budget_smi && c->budget_us > CRIT_BUDGET_US, c->budget_site);
         c->budget_owner[0] = 0;
     }
     chain_detached_report(arg);

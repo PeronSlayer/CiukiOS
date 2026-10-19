@@ -58,6 +58,22 @@ int main(void)
     CHECK(timing_stall_get(0,&event) && !strcmp(event.section,"smi_attributed"));
     CHECK(event.end_tsc-event.start_tsc==2100);
     puts("kernel timing F0-39: no-work SMI retained in F0-35 trace, enclosing section not double counted PASS");
+    timing_reset();
+    f=irq_save();crit_label("irq11");crit_owner("ac97",0xc0123456);
+    cycles+=20;start=cycles;cycles+=2100;
+    timing_stall_observe(start,cycles,"smi_attributed");irq_restore(f);
+    timing_snapshot(&s);
+    CHECK(s.critical_us==2120 && s.critical_work_us==20 && s.firmware_us==2100);
+    CHECK(s.firmware_gaps==1 && !s.budget_violations && !s.unclassified_irqoff);
+    CHECK(!strcmp(s.interrupt_owner,"ac97") && s.critical_site==0xc0123456);
+    f=irq_save();cycles+=101;irq_restore(f);timing_snapshot(&s);
+    CHECK(s.budget_violations==1 && s.critical_work_us==101 && s.unclassified_irqoff==1);
+    CHECK(s.raw_work_us==20 && s.raw_firmware_us==2100); /* same raw owner/site, separate maxima */
+    CHECK(s.work_site && s.work_site!=s.critical_site && !s.work_owner[0]);
+    CHECK(s.critical_us==2120); /* raw firmware latency remains visible */
+    f=irq_save();cycles+=2200;irq_restore(f);timing_snapshot(&s);
+    CHECK(s.critical_work_us==2200 && s.budget_violations==2 && s.unclassified_irqoff==2);
+    puts("f0-46 attribution: IRQ11 raw=2120us work=20us firmware=2100us; 101us work fails; unknown 2200us fully charged PASS");
     g_cpu_tsc=false;g_tsc_per_ms=0;timing_snapshot(&s);CHECK(!s.critical_us);
     puts("kernel timing: longest section/address, 4230us reproduction, software/external gaps, reset and <=500us sections with zero gaps PASS");
     return 0;

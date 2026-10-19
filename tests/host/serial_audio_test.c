@@ -169,6 +169,12 @@ void schedule(void)
     /* The caller reacquires its queue lock after schedule returns. */
     CHECK(flags==0x200 && waiter->state==T_READY);waiter->state=T_RUNNING;
 }
+#include <ciuki/work.h>
+static kwork_fn serial_deferred;
+static void *serial_deferred_arg;
+static bool device_work_context;
+bool kwork_current(void) { return device_work_context; }
+bool kwork_queue(kwork_fn fn,void *arg) { serial_deferred=fn;serial_deferred_arg=arg;return true; }
 #include "scheduler_stubs.h"
 #include "../../src/kernel/core/sync.c"
 #include "../../src/kernel/core/serial.c"
@@ -213,7 +219,8 @@ static void tick(void)
     uint32_t f=irq_save();in_irq=true;
     unsigned before=tx_writes,reads=lsr_reads;
     serial_tick();CHECK(tx_writes==before && lsr_reads==reads);
-    advance_us(1000);g_ticks++;in_irq=false;irq_restore(f);
+    advance_us(1000);g_ticks++;ktimer_tick(g_ticks);in_irq=false;irq_restore(f);
+    if(serial_deferred) { kwork_fn fn=serial_deferred;serial_deferred=0;fn(serial_deferred_arg); }
     /* Chardev THRE edges run immediately, with no synthetic PIT pacing. */
     for (unsigned n=0;n<UART_LOG_BYTES+1;n++) {
         f=irq_save();
@@ -404,6 +411,12 @@ static void evidence_test(void)
     g_current=&task;f=irq_save();CHECK(!protected_write("irq\n",4));irq_restore(f);
     task.preempt_holds=1;CHECK(!protected_write("held\n",5));task.preempt_holds=0;
     CHECK(!evidence_sleeps && uart_evidence_dropped==2);g_current=NULL;drain_uart();
+    reset_uart(true);
+    for (unsigned i=0;i<UART_LOG_BYTES/sizeof(fill);i++) CHECK(protected_write(fill,sizeof(fill)));
+    g_current=&task;device_work_context=true;
+    CHECK(!protected_write("device-work\n",12));device_work_context=false;
+    CHECK(!evidence_sleeps && uart_evidence_dropped==1 && !uart_space.head);
+    g_current=NULL;drain_uart();
     puts("serial evidence: production kwait blocks/wakes from TX IRQ, check/register race has no lost wake, full IRQ/held producers drop without sleeping PASS");
 }
 static void ticket_tests(bool with_fifo)

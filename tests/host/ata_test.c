@@ -101,6 +101,10 @@ void schedule(void)
     schedules++;
     if (on_schedule)
         on_schedule();
+    irq_restore(saved);
+    ktimer_tick(g_ticks);
+    while (ktimer_run_one()) ktimer_tick(g_ticks);
+    saved = irq_save();
     if (g_current->state == T_BLOCKED) {
         g_ticks = g_current->wake_tick;
         g_current->state = T_READY;

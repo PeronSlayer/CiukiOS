@@ -8,6 +8,8 @@
 #define DOSVM_AUDIO_PER_MS (DOSVM_AUDIO_HZ / 1000u)
 /* DSP work per tick call; the remainder stays as backlog for later ticks. */
 #define DOSVM_AUDIO_SLICE (64u * DOSVM_AUDIO_PER_MS)
+/* F0-46: worker return every half millisecond of virtual DSP time. */
+#define DOSVM_AUDIO_TURN (DOSVM_AUDIO_PER_MS / 2u)
 /* Backlog beyond one second is dropped from device time and counted. */
 #define DOSVM_AUDIO_BACKLOG (1000u * DOSVM_AUDIO_PER_MS)
 #define DOSVM_PCM_PAGES 4u
@@ -110,6 +112,8 @@ struct dosvm_audio_queue {
 
 struct dosvm_audio {
     uint64_t clock, ms;
+    uint64_t advance_end; /* current tick's original 64 ms catch-up ceiling */
+    bool clock_descheduled; /* sampled producer context, before worker dispatch */
     struct dosvm_dma dma;
     struct dosvm_sb16 sb;
     struct dosvm_opl opl;
@@ -141,7 +145,9 @@ struct dosvm_audio {
 struct dosvm;
 int dosvm_audio_init(struct dosvm *);
 void dosvm_audio_close(struct dosvm *);
-void dosvm_audio_advance(struct dosvm *, uint64_t elapsed_ms);
+/* Publish elapsed time, service one bounded turn; true retains a continuation.
+ * elapsed_ms == 0 resumes the previous allowance, without granting more. */
+bool dosvm_audio_advance(struct dosvm *, uint64_t elapsed_ms);
 int dosvm_audio_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);
 void dosvm_audio_log(struct dosvm *);
 void dosvm_audio_record(struct dosvm *, unsigned kind, uint32_t, uint32_t, uint32_t);

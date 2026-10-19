@@ -497,7 +497,7 @@ static void test_work(void)
         flags = 0;                       /* enqueue from IRQ */
         for (unsigned i = 0; i < KWORK_CAPACITY; i++)
             CHECK(kwork_queue(count_work, (void *)(uintptr_t)(round * KWORK_CAPACITY + i)));
-        CHECK(!kwork_queue(count_work, 0) && !flags);
+        CHECK(!kwork_queue(count_work, (void *)(uintptr_t)UINT32_MAX) && !flags);
         flags = 0x200;
         kwork_snapshot(&s);
         CHECK(s.pending == KWORK_CAPACITY && s.lost == round + 2);
@@ -514,6 +514,132 @@ static void test_work(void)
     printf("kernel services work: PASS (IRQ enqueue, FIFO wrap, counted overflow, yield)\n");
 }
 
+
+extern void irq_model_phase(unsigned) __attribute__((weak));
+static struct ktimer timer_entries[1000];
+static uint32_t timer_generations[1000];
+static unsigned timer_seen, timer_last;
+static bool timer_rearm, timer_cancel_inflight;
+static void timer_callback(void *arg, uint32_t generation, unsigned kind)
+{
+    unsigned i=(unsigned)(uintptr_t)arg;
+    CHECK(flags & 0x200); CHECK(generation==timer_generations[i]);
+    CHECK(kind==7);timer_seen++;timer_last=i;
+    if(timer_cancel_inflight) { CHECK(!ktimer_cancel(&timer_entries[i])); timer_cancel_inflight=false; }
+    if(timer_rearm) { timer_rearm=false;ktimer_arm(&timer_entries[i],g_ticks+1,7,arg,&timer_generations[i],timer_callback); }
+}
+static unsigned timer_tree_check(struct ktimer *t, struct ktimer *parent)
+{
+    if(!t)return 0;
+    CHECK(t->parent==parent && t->state==KTIMER_ARMED);
+    unsigned a=timer_tree_check(t->left,t),b=timer_tree_check(t->right,t);
+    CHECK(a<=b+1 && b<=a+1 && t->height==1+(a>b?a:b));
+    return t->height;
+}
+static void timer_drain(void)
+{
+    for(unsigned n=0;n<2000;n++) {
+        ktimer_tick(g_ticks);drain_work();
+        if(!timer_stats.armed && !timer_stats.due)break;
+    }
+}
+static void test_timer_queue(void)
+{
+    current(0);g_ticks=0;timer_seen=0;
+    for(unsigned n=0;n<2;n++) {
+        unsigned count=n?1000:10;
+        if(irq_model_phase)irq_model_phase(count);
+        for(unsigned i=0;i<count;i++) {
+            timer_generations[i]=gen_alloc();
+            ktimer_arm(&timer_entries[i],100+(i*613)%count,7,(void *)(uintptr_t)i,&timer_generations[i],timer_callback);
+            timer_tree_check(timer_root,0);
+        }
+        struct ktimer_stats a,b;ktimer_snapshot(&a);
+        for(unsigned i=0;i<100;i++)ktimer_tick(0);
+        ktimer_snapshot(&b);
+        CHECK(b.comparisons==a.comparisons && b.armed==count && !b.due);
+        /* Shuffled cancellation exercises both-child AVL deletion. */
+        for(unsigned i=0;i<count;i+=3) {CHECK(ktimer_cancel(&timer_entries[i]));timer_tree_check(timer_root,0);}
+        g_ticks=3000;timer_drain();timer_tree_check(timer_root,0);
+        CHECK(!timer_root && !timer_first && !timer_stats.armed && !timer_stats.due);
+        printf("f0-46 timers count=%u idle_ticks=100 insertion_comparisons=%llu irq_batch<=%u task_walk=0 PASS\n",count,(unsigned long long)a.comparisons,KTIMER_IRQ_BATCH);
+        g_ticks=0;
+        if(irq_model_phase)irq_model_phase(0);
+    }
+    unsigned before=timer_seen;
+    timer_generations[0]=gen_alloc();g_ticks=UINT64_MAX-2;
+    ktimer_arm(&timer_entries[0],0,7,0,&timer_generations[0],timer_callback);
+    ktimer_tick(UINT64_MAX);drain_work();CHECK(timer_seen==before);
+    g_ticks=0;timer_drain();CHECK(timer_seen==before+1 && !timer_last);
+    /* Rearm a due entry: the queued old callback cannot consume new state. */
+    ktimer_arm(&timer_entries[0],0,7,0,&timer_generations[0],timer_callback);
+    ktimer_tick(0);CHECK(timer_entries[0].state==KTIMER_DUE);
+    ktimer_arm(&timer_entries[0],5,7,0,&timer_generations[0],timer_callback);
+    drain_work();CHECK(timer_seen==before+1);
+    g_ticks=5;timer_rearm=true;ktimer_tick(g_ticks);drain_work();
+    CHECK(timer_entries[0].state==KTIMER_ARMED && timer_seen==before+2);
+    g_ticks=6;timer_drain();CHECK(timer_seen==before+3);
+    /* Expiry/cancel interleaving, destruction/reuse, stale generation. */
+    ktimer_arm(&timer_entries[0],6,7,0,&timer_generations[0],timer_callback);
+    ktimer_tick(6);CHECK(ktimer_cancel(&timer_entries[0]));
+    timer_generations[0]=gen_alloc();drain_work();CHECK(timer_seen==before+3);
+    ktimer_arm(&timer_entries[0],7,7,0,&timer_generations[0],timer_callback);
+    ktimer_tick(7);timer_generations[0]=gen_alloc();drain_work();
+    CHECK(timer_seen==before+3 && timer_stats.stale);
+    ktimer_arm(&timer_entries[0],7,7,0,&timer_generations[0],timer_callback);
+    timer_cancel_inflight=true;g_ticks=7;ktimer_tick(7);drain_work();
+    CHECK(!timer_cancel_inflight && timer_entries[0].state==KTIMER_CANCELLED && !timer_entries[0].executing);
+    before++; /* cancellation in flight retains owner until callback completion */
+    struct ktimer *retired=calloc(1,sizeof(*retired));CHECK(retired);
+    ktimer_arm(retired,7,7,0,&timer_generations[0],timer_callback);
+    ktimer_tick(7);CHECK(ktimer_cancel(retired));free(retired);drain_work();
+    CHECK(timer_seen==before+3); /* ASan checks that no deferred pointer survives */
+    /* A lost-tick/firmware pause is one absolute-time advance, no tick loop. */
+    for(unsigned i=0;i<1000;i++) {
+        timer_generations[i]=gen_alloc();
+        ktimer_arm(&timer_entries[i],10+i,7,(void *)(uintptr_t)i,&timer_generations[i],timer_callback);
+    }
+    g_ticks=100000;ktimer_tick(g_ticks);CHECK(timer_stats.due==KTIMER_IRQ_BATCH);
+    timer_drain();CHECK(timer_seen==before+1003 && timer_stats.max_irq_batch==KTIMER_IRQ_BATCH);
+    CHECK(!timer_stats.armed && !timer_stats.due);
+    puts("f0-46 timers: exact zero/wrap, due rearm, callback rearm, cancel/expiry, generation reuse, lost ticks/firmware pause, 1000 simultaneous deadlines PASS");
+}
+static void test_irq_notification(void)
+{
+    static struct kwait q;
+    kwait_init(&q);
+    bool done=true;
+    struct kwaiter a={.task=&tasks[0],.queue=&q,.cond=ready,.arg=&done};
+    struct kwaiter b={.task=&tasks[1],.queue=&q,.cond=ready,.arg=&done};
+    a.next=a.all_next=&b;q.head=waiters=&a;
+    tasks[0].sync_waiter=&a;tasks[1].sync_waiter=&b;
+    tasks[0].state=tasks[1].state=T_BLOCKED;
+    unsigned before=starts;flags=0;
+    for(unsigned i=0;i<1000;i++)kwait_wake_irq(&q,true);
+    CHECK(starts==before && q.notifications==1000 && q.notify_active);
+    /* Cancel the first stack waiter before the deferred cursor reaches it. */
+    ksync_task_exit(&tasks[0]);tasks[0].state=T_ZOMBIE;
+    flags=0x200;drain_work();
+    CHECK(starts==before+1 && tasks[1].state==T_READY && !q.notify_active);
+    wait_unlink(&b);CHECK(!waiters && !q.head && !q.notify_cursor);
+    current(0);
+    puts("f0-46 IRQ notifications: 1000 captures do no predicate/donation/ready walk, one cancelled owner, one live completion, counted bounded continuations PASS");
+}
+static unsigned coalesced_seen, coalesced_count;
+static void coalesced_work(void *arg)
+{
+    (void)arg;coalesced_seen++;coalesced_count=kwork_notifications();
+    if(coalesced_seen==1)for(unsigned i=0;i<1000;i++)CHECK(kwork_queue(coalesced_work,0));
+}
+static void test_coalesced_work(void)
+{
+    current(0);
+    for(unsigned i=0;i<1000;i++)CHECK(kwork_queue(coalesced_work,0));
+    struct kwork_stats s;kwork_snapshot(&s);CHECK(s.pending==1);
+    drain_work();CHECK(coalesced_seen==2 && coalesced_count==1000);
+    kwork_snapshot(&s);CHECK(!s.pending && s.coalesced>=1998);
+    puts("f0-46 deferred: 2000 notifications, two counted turns, callback self-notifications requeue, no inline chain PASS");
+}
 static fs_lock contended_fs;
 static unsigned fs_schedules;
 static void release_fs_owner(void)
@@ -871,7 +997,7 @@ static void test_irq_chain(void)
     a = irq_claim(9, "irq-a");
     CHECK(irq_chain_add(9, irq_a, "irq-a") == 0);
     for (unsigned i = 0; i < KWORK_CAPACITY; i++)
-        CHECK(kwork_queue(tick_work, 0));
+        CHECK(kwork_queue(tick_work, (void *)(uintptr_t)i));
     mask_before = masks; unmask_before = unmasks;
     /* A complete claiming pass needs no continuation slot, even when full. */
     fake_irq(9);
@@ -983,6 +1109,9 @@ int main(void)
     test_deadlines();
     test_sync();
     test_work();
+    test_timer_queue();
+    test_coalesced_work();
+    test_irq_notification();
     test_irq_chain();
     test_three_shared_devices();
     test_claimed_fatal_quarantine();

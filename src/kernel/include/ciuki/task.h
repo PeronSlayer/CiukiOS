@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include "mm.h"
 #include "arch.h"
+#include "sync.h"
 
 enum task_state { T_READY, T_RUNNING, T_BLOCKED, T_ZOMBIE, T_DEAD };
 /* Stable class encodings; larger internal levels below run first. */
@@ -43,6 +44,7 @@ extern uint32_t g_starvation_boosts;
 struct task {
     uint32_t id;
     uint32_t generation;
+    struct ktimer wake_timer, input_timer, ready_timer;
     char name[16];
     enum task_state state;
     enum task_prio prio;
@@ -51,6 +53,7 @@ struct task {
     bool priority_valid, focused;
     uint64_t input_expiry, service_deadline;
     struct kwait *waiting_on;      /* mutex dependency only; never device waits */
+    struct kwaiter *sync_waiter;   /* one blocked wait, constant-time IRQ wake */
     bool user;
     bool measured;                 /* counted by the preemption measurement */
     bool boosted;                  /* starvation boost applied (once per episode) */
@@ -79,7 +82,7 @@ struct task {
     struct { uint32_t nr; int32_t result; uint32_t side_effects; } sys_log[16];
     uint32_t sys_log_n;
     uint64_t ready_since, max_wait_ticks;
-    struct task *next;             /* run queue / list link */
+    struct task *next, *rq_prev;    /* constant-time timer-driven reinsert */
     struct task *all_next;
 };
 

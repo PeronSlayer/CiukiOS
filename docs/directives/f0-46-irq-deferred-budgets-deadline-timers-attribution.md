@@ -16,3 +16,12 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No new `panic()` paths; no production-behaviour change under `#ifndef NDEBUG`. Register programming only from the sources already cited in the drivers' design notes; no PIC changes beyond the existing ones.
+
+## Amendment 1 (lead review, 2026-10-19 15:30): scope extension to the DOS VM clock catch-up
+
+The delivery is accepted except for the retained failure: `dosvm_tick` / `dosvm_audio_advance` services the existing 40 ms tiny auto-init catch-up in one callback (18,425 µs modeled, 18,420 µs in the per-VM audio clock), exceeding the 1 ms turn / 2 ms service limits of R1. Scope is extended to `src/kernel/vm/dosvm.c` (`dosvm_tick` and the clock advance), `src/kernel/vm/dosvm_pit.c`, `src/kernel/vm/dosvm_audio*.c`/`dosvm_sb16.c` (advance path only) and `src/kernel/audio/vm_source.c` only if the continuation needs a hook. Required:
+
+1. The catch-up runs as a preallocated, generation-safe continuation of the virtual DMA/PIT timeline: each work turn advances at most a bounded slice (for example 2 ms of virtual time, or the number of DMA units whose modeled cost fits 1 ms), requeues the remainder through the f0-46 work ring with the saturating count, and a stopped/restarted VM (generation change) discards stale continuations. Period, buffering, the f3-40 DMA cadence, the f4-35 timeline policy and DPMI dispatch are unchanged.
+2. The `vm-clock` budget replay and `tests/host/irq_work_replay.py` pass; the full `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh` and `bash tests/host/audio/run.sh` are green; `python3 scripts/build_kernel.py`.
+3. f3-49 edits `dosvm.c` in parallel (DOS file glue): keep your change confined to the tick/advance path and note it in the report; the lead resolves the merge.
+4. Append "Amendment 1" to the report with the before/after of the catch-up (turn maximum, total service) and the continuation design.

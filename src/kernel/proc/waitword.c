@@ -177,7 +177,8 @@ int proc_wait_word(uint32_t word, uint32_t expected, uint32_t deadline_va, uint3
         }
         /* Poll the absolute domain each timer quantum; no conversion can
          * overflow and no timeout can be reported before its deadline. */
-        g_current->wake_tick = deadline_va ? g_ticks + 1 : 0;
+        if (deadline_va) ktimer_wait_task(g_current, g_ticks + 1);
+        else g_current->wake_tick = 0;
         g_current->state = T_BLOCKED;
         irq_restore(flags);
         schedule();

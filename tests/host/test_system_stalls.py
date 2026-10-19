@@ -70,7 +70,7 @@ int main(void)
         source = (ROOT / 'src/kernel/core/task.c').read_text()
         declarations = source[source.index('static struct task *rq_head'):source.index('void task_stack_init')]
         functions = []
-        for name in ('schedule', 'sched_tick',
+        for name in ('schedule', 'sched_vm_tick_work', 'sched_tick',
                      'task_sleep_ms', 'task_start', 'sched_tasks', 'kpreempt_point'):
             match = re.search(r'^(?:static )?[^\n]+\b' + name + r'\([^\n]*\)\s*\{', source, re.M)
             self.assertIsNotNone(match, name)
@@ -84,6 +84,8 @@ int main(void)
         with tempfile.TemporaryDirectory(prefix='system-stalls-', dir=base) as scratch:
             scratch = Path(scratch)
             (scratch / 'latency_scheduler.inc').write_text(declarations + '\n'.join(functions))
+            timers = (ROOT / 'src/kernel/core/sync.c').read_text()
+            (scratch / 'deadline_timers.inc').write_text(timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')])
             write_model(scratch / 'vm_creation_model.inc')
             binary = scratch / 'system-stalls'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',

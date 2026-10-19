@@ -50,7 +50,8 @@ static unsigned payload_mode, signal_posts;
 static int post_error;
 static bool missing_thread, missing_task, preentry, release_done, ready_poll;
 struct task *g_current;
-static struct task *all_tasks, *idle_task;
+static struct task *idle_task;
+static bool device_cpu_refresh;
 static uint32_t slice_left;
 /* f3-14: the focused DOS window's tick budget lives in the scheduler block */
 static const struct task *focus_task;
@@ -71,11 +72,20 @@ static void rq_remove(struct task *t) { (void)t; CHECK(false); }
 /* This fixture verifies signal expiry states; full priority behavior uses
  * production helpers in scheduler_priorities_test.c. */
 static void priority_update(struct task *t) { (void)t; (void)rq_remove; }
-static void device_cpu_advance(void) { }
+static void device_cpu_advance(void) { (void)device_cpu_refresh; }
 static bool device_throttled(void) { return device_used>=DEVICE_BUDGET; }
 static bool device_urgent(const struct task *t) { (void)t;return false; }
-static bool tick_reached(uint64_t deadline) { return g_ticks-deadline < (1ull<<63); }
+
 void task_start(struct task *t) { t->state=T_READY;rq_push(t); }
+#include <ciuki/work.h>
+static kwork_fn signal_work;
+static void *signal_arg;
+bool kwork_queue(kwork_fn fn,void *arg) { signal_work=fn;signal_arg=arg;return true; }
+static uint32_t read_eflags(void) { return 0x200; }
+static uint32_t irq_save(void) { return 0x200; }
+static void irq_restore(uint32_t f) { (void)f; }
+uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
+TIMERS
 SCHED_TICK
 RELEASE_INJECTION
 
@@ -94,8 +104,9 @@ static void payload_step(void)
                 /* Replay the production timer's expiry before each poll.
                  * The receive operation is still outstanding at READY. */
                 subject_task.state = T_BLOCKED;
-                subject_task.wake_tick = g_ticks;
+                subject_task.generation=1; ktimer_wait_task(&subject_task,g_ticks);
                 sched_tick();
+                for(unsigned n=0;signal_work && n<1024;n++) { kwork_fn fn=signal_work;signal_work=0;fn(signal_arg); }
                 CHECK(subject_task.state == T_READY && !subject_task.wake_tick);
             }
             if (!signal_posts || post_error) return;
@@ -251,7 +262,7 @@ int main(int argc, char **argv)
             !strcmp(argv[1], "channel-dead") ? T_DEAD : T_BLOCKED;
         if (!strcmp(argv[1], "channel-errors")) result[0].errors = 1;
         if (strstr(argv[1], "failed-post")) post_error = -ESRCH;
-        g_current = &subject_task; all_tasks = &subject_task;
+        g_current = &subject_task;
         slow_ms = 100;                  /* records must not spend the wait deadline */
         rec_emit("signals-fault", "BEGIN", 0);
         const char *name = payload_mode == 15 ? "channel-eintr" : payload_mode == 16 ? "close-deferred" : "dup2-deferred";
@@ -279,12 +290,15 @@ def controller_source(source):
     controller = 'static bool signal_result_read' + source.split('static bool signal_result_read', 1)[1].split('#endif', 1)[0]
     release = 'static struct signal_release' + source.split('static struct signal_release', 1)[1].split('static int signal_image_read', 1)[0]
     scheduler = (ROOT / 'src/kernel/core/task.c').read_text()
+    vm_work = scheduler[scheduler.index('static void sched_vm_tick_work('):scheduler.index('void sched_tick(void)')]
+    timers = (ROOT / 'src/kernel/core/sync.c').read_text()
+    timers = timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')]
     tick = 'void sched_tick(void)' + scheduler.split('void sched_tick(void)', 1)[1].split('struct task *sched_tasks(void)', 1)[0]
     # f3-00 added optional DOS VM hooks to the production scheduler as weak symbols.
     tick = ('extern void dosvm_tick(void) __attribute__((weak));\n'
-            'extern void serial_tick(void) __attribute__((weak));\n' + tick)
+            'extern void serial_tick(void) __attribute__((weak));\n' + vm_work + tick)
     return (HARNESS.replace('RESULT_LAYOUT', layout).replace('CONTROLLER', controller)
-            .replace('RELEASE_INJECTION', release).replace('SCHED_TICK', tick))
+            .replace('RELEASE_INJECTION', release).replace('TIMERS', timers).replace('SCHED_TICK', tick))
 
 
 class SignalFaultRecordTests(unittest.TestCase):

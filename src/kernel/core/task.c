@@ -8,6 +8,7 @@
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
 #include <ciuki/sync.h>
+#include <ciuki/work.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/process.h>
 /* Optional in the standalone F0/F1 host scheduler harnesses. */
@@ -57,16 +58,13 @@ uint64_t g_idle_ticks;
 
 static void rq_remove(struct task *t)
 {
-    struct task **pp = &rq_head[t->effective_priority], *prev = 0;
-    while (*pp) {
-        if (*pp == t) {
-            *pp = t->next;
-            if (rq_tail[t->effective_priority] == t) rq_tail[t->effective_priority] = prev;
-            t->next = 0;
-            return;
-        }
-        prev = *pp; pp = &(*pp)->next;
-    }
+    unsigned p = t->effective_priority;
+    if (t->rq_prev) t->rq_prev->next = t->next;
+    else if (rq_head[p] == t) rq_head[p] = t->next;
+    else return;
+    if (t->next) t->next->rq_prev = t->rq_prev;
+    else rq_tail[p] = t->rq_prev;
+    t->next = t->rq_prev = 0;
 }
 
 static unsigned priority_base(struct task *t)
@@ -88,6 +86,7 @@ static void priority_init(struct task *t)
 static void rq_link(struct task *t)
 {
     t->next = 0;
+    t->rq_prev = rq_tail[t->effective_priority];
     if (rq_tail[t->effective_priority]) rq_tail[t->effective_priority]->next = t;
     else rq_head[t->effective_priority] = t;
     rq_tail[t->effective_priority] = t;
@@ -153,12 +152,19 @@ static void priority_update(struct task *t)
     if (ksync_priority_changed) ksync_priority_changed(t);
 }
 
+static void task_timer_event(void *, uint32_t, unsigned);
+static void task_ready_timer(struct task *t)
+{
+    if (t->state == T_READY && t->prio == P_NORMAL && !t->boosted)
+        ktimer_arm(&t->ready_timer, t->ready_since + 100, 2, t, &t->generation, task_timer_event);
+    else ktimer_cancel(&t->ready_timer);
+}
 void task_set_class(struct task *t, enum task_prio prio)
 {
     uint32_t f = irq_save();
     t->prio = prio;
     t->configured_priority = 0;
-    priority_update(t);
+    priority_update(t); task_ready_timer(t);
     irq_restore(f);
 }
 void task_set_base(struct task *t, enum task_prio prio, unsigned level)
@@ -166,7 +172,7 @@ void task_set_base(struct task *t, enum task_prio prio, unsigned level)
     uint32_t f = irq_save();
     t->prio = prio;
     t->configured_priority = level < SCHED_LEVELS ? level : SCHED_LEVELS - 1;
-    priority_update(t);
+    priority_update(t); task_ready_timer(t);
     irq_restore(f);
 }
 void task_set_inherited(struct task *t, unsigned p)
@@ -174,6 +180,20 @@ void task_set_inherited(struct task *t, unsigned p)
     uint32_t f = irq_save();
     t->inherited_priority = p < SCHED_LEVELS ? p : SCHED_LEVELS - 1;
     priority_update(t);
+    irq_restore(f);
+}
+static void task_timer_event(void *owner, uint32_t generation, unsigned kind)
+{
+    struct task *t = owner;
+    if (t->generation != generation || t->state == T_ZOMBIE || t->state == T_DEAD) return;
+    uint32_t f = irq_save();
+    if (kind == 1 && t->input_priority) {
+        t->input_priority = 0; t->input_expiry = 0;
+        scheduler_stats.input_expired++; priority_update(t);
+    } else if (kind == 2 && t->state == T_READY && t->prio == P_NORMAL && !t->boosted) {
+        t->boosted = true; priority_update(t);
+        g_starvation_boosts++; scheduler_stats.starvation_granted++; g_need_resched = true;
+    }
     irq_restore(f);
 }
 void task_focus(struct task *t)
@@ -186,6 +206,7 @@ void task_focus(struct task *t)
             old->focused = false;
             if (old->input_priority) scheduler_stats.input_expired++;
             old->input_priority = 0; old->input_expiry = 0;
+            ktimer_cancel(&old->input_timer);
             priority_update(old);
         }
         if (t) { t->focused = true; priority_update(t); }
@@ -203,6 +224,7 @@ void task_input_delivered(struct task *t)
         unsigned p = t->base_priority + 2;
         t->input_priority = p > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : p;
         t->input_expiry = g_ticks + 20;
+        ktimer_arm(&t->input_timer, t->input_expiry, 1, t, &t->generation, task_timer_event);
         scheduler_stats.input_granted++;
         priority_update(t);
     }
@@ -233,6 +255,8 @@ static void rq_push(struct task *t)
 {
     priority_init(t);
     t->ready_since = g_ticks;
+    if (t->prio == P_NORMAL && !t->boosted)
+        ktimer_arm(&t->ready_timer, g_ticks + 100, 2, t, &t->generation, task_timer_event);
     rq_link(t);
 }
 static bool tick_reached(uint64_t deadline)
@@ -244,9 +268,8 @@ static bool device_urgent(const struct task *t)
 static struct task *rq_take(unsigned p)
 {
     struct task *t = rq_head[p];
-    rq_head[p] = t->next;
-    if (!rq_head[p]) rq_tail[p] = 0;
-    t->next = 0;
+    ktimer_cancel(&t->ready_timer);
+    rq_remove(t);
     return t;
 }
 static struct task *rq_pop(void)
@@ -323,7 +346,10 @@ static struct task *task_alloc(const char *name, enum task_prio prio, bool user)
     t->fpu_area = (uint8_t *)(((uintptr_t)t->fpu_alloc + 15) & ~(uintptr_t)15);
     task_stack_init(t->kstack);
     t->id = next_id++;
-    t->generation = 1;
+    t->generation = gen_alloc();
+    if (!t->generation) {
+        kstack_free(t->kstack); kfree(t->fpu_alloc); kfree(t); return 0;
+    }
     t->prio = prio;
     priority_init(t);
     t->user = user;
@@ -402,6 +428,8 @@ void task_start(struct task *t)
 {
     uint32_t f = irq_save();
     if (t->state != T_BLOCKED) { irq_restore(f); return; }
+    ktimer_cancel(&t->wake_timer);
+    t->wake_tick = 0;
     if (ksync_task_ready) ksync_task_ready(t);
     priority_update(t);
     scheduler_stats.wakeups++;
@@ -548,8 +576,15 @@ void schedule(void)
     irq_restore(f);
 }
 
+static void sched_vm_tick_work(void *arg)
+{
+    (void)arg;
+    if (dosvm_tick) dosvm_tick(); /* computes elapsed from the current absolute tick */
+}
+
 void sched_tick(void)
 {
+    bool was_throttled = device_throttled();
     device_cpu_advance();
     bool charged = g_current && g_current->effective_priority >= SCHED_SERVICE_MIN;
     if (device_history & (1u << 9)) device_used--;
@@ -561,39 +596,28 @@ void sched_tick(void)
         if (ordinary_ticks == FOCUS_PERIOD) ordinary_ticks = focus_ticks = 0;
     }
     file_clock_tick();
-    if (dosvm_tick) dosvm_tick();
-    for (struct task *t = all_tasks; t; t = t->all_next) {
-        if (t->input_priority && tick_reached(t->input_expiry)) {
-            t->input_priority = 0; t->input_expiry = 0; scheduler_stats.input_expired++;
-            priority_update(t);
+    if (dosvm_tick) kwork_queue(sched_vm_tick_work, 0);
+    ktimer_tick(g_ticks);
+    /* Running-time decay concerns only the current task; deadline events
+     * and ready-age promotion are dispatched by the ordered timer queue. */
+    struct task *t = g_current;
+    if (t && t->io_ticks && !--t->io_ticks) {
+        t->io_priority = 0; scheduler_stats.io_expired++; priority_update(t);
+    }
+    if (t && t->boosted) {
+        t->boosted = false; scheduler_stats.starvation_expired++; priority_update(t);
+    }
+    /* The existing dispatch refresh owns device reclassification. No task
+     * population walk occurs in the timer top half. */
+    if (t && t->prio == P_DEVICE) {
+        bool demote = device_throttled() && !device_urgent(t);
+        if (demote != t->device_demoted) {
+            t->device_demoted = demote; priority_update(t);
+            if (demote) { scheduler_stats.budget_exhausted++; if (cpu_overrun) cpu_overrun(t); }
         }
-        if (t == g_current && t->io_ticks && !--t->io_ticks) {
-            t->io_priority = 0; scheduler_stats.io_expired++; priority_update(t);
-        }
-        if (t == g_current && t->boosted) {
-            t->boosted = false; scheduler_stats.starvation_expired++; priority_update(t);
-        }
-        if (t->prio == P_DEVICE) {
-            bool demote = device_throttled() && !device_urgent(t);
-            if (demote != t->device_demoted) {
-                t->device_demoted = demote; priority_update(t);
-                if (demote) {
-                    scheduler_stats.budget_exhausted++;
-                    if (cpu_overrun) cpu_overrun(t);
-                }
-            }
-        }
-        if (t->state == T_BLOCKED && t->wake_tick && g_ticks >= t->wake_tick) {
-            t->wake_tick = 0;
-            task_start(t);
-        }
-        /* One bounded dispatch at 15; preserve the original ready timestamp. */
-        if (t->state == T_READY && t->prio == P_NORMAL && !t->boosted &&
-            g_ticks - t->ready_since >= 100) {
-            t->boosted = true; priority_update(t);
-            g_starvation_boosts++; scheduler_stats.starvation_granted++;
-            g_need_resched = true;
-        }
+    }
+    if (was_throttled != device_throttled()) {
+        device_cpu_refresh = true; g_need_resched = true;
     }
     if (g_current == idle_task) {
         g_idle_ticks++;
@@ -629,7 +653,8 @@ void task_yield(void)
 void task_sleep_ms(uint32_t ms)
 {
     uint32_t f = irq_save();
-    g_current->wake_tick = g_ticks + (ms ? ms : 1);
+    ktimer_cancel(&g_current->ready_timer);
+    ktimer_wait_task(g_current, g_ticks + (ms ? ms : 1));
     g_current->state = T_BLOCKED;
     irq_restore(f);
     schedule();
@@ -707,6 +732,9 @@ void task_reap(struct task *t)
         pp = &(*pp)->all_next;
     if (*pp)
         *pp = t->all_next;
+    ktimer_cancel(&t->wake_timer);
+    ktimer_cancel(&t->input_timer);
+    ktimer_cancel(&t->ready_timer);
     g_task_count--;
     if (last_measured == t) last_measured = 0;
     if (cpu_reap) cpu_reap(t);

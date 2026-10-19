@@ -53,6 +53,7 @@
 #undef WTERMSIG
 #undef CLOCKS_PER_SEC
 #include <ciuki/abi.h>
+static void host_clock_tick(void);
 #define CIUKI_CPU_H
 uint64_t g_tsc_per_ms;
 static bool guest_perf;
@@ -111,7 +112,7 @@ static void uart_delay(unsigned bytes)
     uart_records++;
     uart_ms += ms;
     g_ticks += ms;
-    dosvm_tick();
+    host_clock_tick();
 }
 
 void arch_ldt_load(const void *base, unsigned entries) { (void)base; (void)entries; }
@@ -192,7 +193,7 @@ void crit_end(void) { }
 void task_sleep_ms(uint32_t ms)
 {
     g_ticks += ms;
-    dosvm_tick();
+    host_clock_tick();
     if (sleep_hook) sleep_hook();
 }
 void tss_set_kernel_stack(uint32_t sp) { (void)sp; }
@@ -292,6 +293,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
 }
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
+#include "dosvm_work.inc"
 #include "../../src/kernel/vm/dosvm.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
@@ -604,7 +606,7 @@ static int run(uint64_t budget, bool (*done)(void))
             slice_left = guest_slice;
             g_ticks++;
             if (guest_perf) perf_phase(gv, 2);
-            dosvm_tick();
+            host_clock_tick();
             deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
             if (guest_perf && !(g_ticks % 16)) {
                 dosvm_task_switch(&caller);

@@ -8,12 +8,47 @@
 
 struct task;
 struct kwaiter;
+/* Intrusive, preallocated timers. All deadlines are <2^63 ms away.
+ * Cancel removes armed AND due entries. A false cancel result means a
+ * callback is executing: retain owner/storage until it returns. Callbacks
+ * may rearm themselves but must not sleep/yield or destroy their entry.
+ * The owner generation address remains live until successful cancellation. */
+enum ktimer_state { KTIMER_IDLE, KTIMER_ARMED, KTIMER_DUE, KTIMER_IN_FLIGHT, KTIMER_CANCELLED };
+typedef void (*ktimer_fn)(void *owner, uint32_t generation, unsigned kind);
+struct ktimer {
+    struct ktimer *left, *right, *parent, *prev, *next;
+    uint64_t deadline, revision;
+    void *owner;
+    const uint32_t *owner_generation;
+    ktimer_fn callback;
+    uint32_t generation;
+    unsigned kind, height;
+    enum ktimer_state state;
+    bool executing;
+};
+struct ktimer_stats {
+    uint64_t comparisons, transferred, completed, cancelled, stale;
+    unsigned armed, due, max_irq_batch;
+};
+#define KTIMER_IRQ_BATCH 2u
+void ktimer_arm(struct ktimer *, uint64_t deadline, unsigned kind, void *owner,
+                const uint32_t *generation, ktimer_fn);
+bool ktimer_cancel(struct ktimer *);
+void ktimer_tick(uint64_t now);
+bool ktimer_run_one(void); /* IF=1, one bounded callback; no batch chaining */
+void ktimer_snapshot(struct ktimer_stats *);
+void ktimer_wait_task(struct task *, uint64_t deadline);
+
 struct kwait {
     struct kwaiter *head;
     struct task *owner;            /* only mutex/ticket-lock queues donate */
     struct kwait *owned_next;
     void (*owner_died)(struct kwait *);
     void (*ticket_cancelled)(struct kwait *);
+    struct ktimer notification;
+    struct kwaiter *notify_cursor;
+    uint32_t notify_generation, notifications;
+    bool notify_io, notify_again, notify_active;
 };
 struct kmutex {
     struct task *owner;
@@ -41,6 +76,11 @@ bool kwait_wait_ticket_until(struct kwait *q, kwait_cond_fn cond, void *arg,
 void kwait_wake_all(struct kwait *q);
 /* Completion-only wake; false predicates and already-ready tasks earn nothing. */
 void kwait_wake_io(struct kwait *q);
+/* Static device queues only: O(log timers) capture, no predicates/run-queue
+ * or donation walks in IRQ context. Repeated notifications coalesce with a
+ * saturating count; the worker visits one waiter per continuation. Cancel
+ * q->notification before retiring queue storage. */
+void kwait_wake_irq(struct kwait *q, bool io);
 void kwait_set_owner(struct kwait *q, struct task *owner);
 void ksync_task_ready(struct task *t) __attribute__((weak));
 void ksync_priority_changed(struct task *t) __attribute__((weak));
@@ -52,8 +92,7 @@ void ksync_task_exit(struct task *t);
 
 /* Deadlines are modulo 2^64, less than 2^63 ticks into the future; zero is
  * a real deadline. PIT ticks are nominal milliseconds, as in task_sleep_ms.
- * The F0 scheduler treats wake_tick==0 as untimed: a wait expiring exactly
- * at wrap may resume one tick late. Deadline arithmetic itself is exact. */
+ * The queue's explicit state also permits expiry exactly at tick zero. */
 uint64_t deadline_after_ms(uint32_t ms);
 bool deadline_passed(uint64_t deadline_ticks);
 uint64_t ktime_cycles(void);

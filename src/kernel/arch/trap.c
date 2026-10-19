@@ -50,6 +50,7 @@ static void handle_irq(struct trap_frame *tf)
     unsigned irq = tf->vector - 0x20;
     if (ledger_irq_context) ledger_irq_context(true);
     if (crit_label) crit_label(sections[irq]);
+    if (crit_owner) crit_owner(sections[irq], (uint32_t)(uintptr_t)irq_handlers[irq]);
     if (irq == 7 && !(pic_isr(0x20) & 0x80)) {
         g_spurious_irq7++;              /* spurious: no handler, no EOI */
         irq_chain_spurious(7);
