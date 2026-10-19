@@ -71,6 +71,7 @@ int px_getdents_locked(struct file_description *, struct ciuki_dirent *);
 void px_changed_locked(struct px_node *);
 int px_drop_locked(struct px_node *);
 int px_share_locked(struct px_node *, uint32_t access, uint32_t deny);
+int px_range_locked(struct px_node *, uint64_t start, uint64_t length);
 int px_open_locked(struct px_namespace *, struct px_node *, const char *, uint32_t,
                    struct file_description *);
 uint32_t file_description_count(void);
@@ -95,7 +96,7 @@ bool file_syscall(struct trap_frame *tf); /* true only for rows 29..51 */
 
 /* F1 integration notifications, under the SAME namespace lock. The legacy
  * VFS uses weak imports so its standalone harness retains no proc dependency. */
-int px_legacy_share(struct vfs *, struct fat_volume *, const struct fat_entry *, unsigned, unsigned);
+int px_legacy_share(struct vfs *, struct fat_volume *, const struct fat_entry *, unsigned, unsigned, unsigned, uint64_t);
 bool px_legacy_busy(struct vfs *, struct fat_volume *, const struct fat_entry *);
 /* Confirmed bytes require ctime notification even when FAT metadata is equal. */
 void px_legacy_changed(struct vfs *, struct fat_volume *, const struct fat_entry *, const struct fat_entry *, bool committed_write);

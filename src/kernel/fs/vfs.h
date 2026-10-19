@@ -14,13 +14,41 @@
 #define VFS_CREATE 4u
 #define VFS_EXCLUSIVE 8u
 #define VFS_TRUNCATE 16u
+#define VFS_FAIL_EXISTING 32u /* extended-open action 00, atomic existence error */
+#define VFS_FIND_DOS 128u
 /* Bitmask of access denied to other opens, checked in BOTH directions. */
 enum vfs_share { VFS_DENY_NONE=0, VFS_DENY_READ=1, VFS_DENY_WRITE=2, VFS_DENY_ALL=3 };
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
+/* Internal DOS bridge errors; never user syscall errno values. */
+#define VFS_ESHARE 201
+#define VFS_ECRITICAL_SHARE 202
+#define VFS_ELOCK 203
+#define VFS_ELOCKFULL 204
+#define VFS_ETIMEOUT 205
+#define VFS_ECANCELLED 206
+enum vfs_wait_reason { VFS_WAIT_NAMESPACE=1,VFS_WAIT_VOLUME,VFS_WAIT_PROVIDER,VFS_WAIT_TRANSPORT };
+struct vfs_wait_info { uint64_t owner,elapsed_us; uint32_t drives; enum vfs_wait_reason reason; int outcome; bool valid; };
+struct vfs_request {
+    void *arg;
+    uint64_t deadline;
+    uint64_t (*now)(void *);
+    bool (*cancelled)(void *);
+    void (*pause)(void *);
+    uint64_t owner;
+    struct vfs_wait_info *wait; /* microsecond clock, retained admission cause */
+};
+int vfs_request_check(const struct vfs_request *);
+int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
+                  unsigned new_mode, unsigned new_access, uint64_t new_owner, bool readonly);
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
     uint32_t log_capacity; };
-struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny; };
+struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
+    uint64_t owner; unsigned dos_mode; };
+struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
+    uint64_t owner, start, end; uint32_t length; };
+#define VFS_RANGE_LOCKS 128u
+struct vfs_waiter;
 struct vfs_table;
 struct vfs {
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
@@ -44,6 +72,8 @@ struct vfs {
     struct vfs_node nodes[VFS_NODES];
     struct vfs_description descriptions[VFS_DESCRIPTIONS];
     struct vfs_table *tables[VFS_TABLES];
+    struct vfs_range_lock range_locks[VFS_RANGE_LOCKS];
+    struct vfs_waiter *waiters;
 };
 struct vfs_table {
     struct vfs *vfs;
@@ -51,6 +81,8 @@ struct vfs_table {
     unsigned drive; /* 0=A, 2=C */
     uint32_t cwd_cluster[26]; /* zero denotes the volume root */
     char cwd[26][FS_PATH_BYTES];
+    const struct vfs_request *request; /* caller-owned, one operation at a time */
+    uint64_t owner; /* effective PSP identity, zero is a native client */
 };
 struct vfs_find {
     unsigned drive; uint32_t generation, directory, cursor;
@@ -72,7 +104,7 @@ static inline uint32_t vfs_drive_mask(unsigned d) { return d < 26 ? 1u << d : 0;
 void vfs_lock(struct vfs *, uint32_t drives);
 void vfs_reserve_locked(struct vfs *, uint32_t drives);
 void vfs_unlock(struct vfs *);
-struct vfs_io_state { uint32_t drives; unsigned default_drive; };
+struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);
 void vfs_io_end_locked(struct vfs *, struct vfs_io_state);
 /* Filesystem expressions must not call namespace/observer helpers. */
@@ -100,6 +132,20 @@ int vfs_detach(struct vfs *, unsigned drive); /* durable unmount, refuses opens 
 int vfs_table_init(struct vfs *, struct vfs_table *, unsigned default_drive);
 void vfs_table_destroy(struct vfs_table *);
 int vfs_open(struct vfs_table *, const char *path, unsigned flags, enum vfs_share, uint8_t create_attr);
+/* Same atomic namespace transaction as native open; mode 0..4 is DOS sharing,
+ * 255 denotes native explicit sharing. status receives 1/2/3 only on success. */
+int vfs_open_claim(struct vfs_table *, const char *, unsigned flags, enum vfs_share,
+                   uint8_t attr, unsigned mode, unsigned *status);
+int vfs_lock_range(struct vfs_table *, int, uint32_t start, uint32_t length, bool unlock);
+void vfs_release_owner(struct vfs *, uint64_t owner);
+int vfs_range_check(struct vfs *, struct vfs_node *, struct vfs_description *,
+                    uint64_t owner, uint64_t start, uint64_t length);
+int vfs_handle_stat(struct vfs_table *, int, struct fat_entry *, uint64_t *position);
+int vfs_handle_times(struct vfs_table *, int, uint16_t date, uint16_t time);
+/* Timed initial admission only. Reacquisition and synchronous transport still
+ * require the f3-49 storage cancellation integration; this is not an
+ * end-to-end deadline guarantee. */
+int vfs_admit(struct vfs *, uint32_t drives, const struct vfs_request *);
 int vfs_close(struct vfs_table *, int handle);
 /* dst=-1 selects first free handle. Duplicates/inherited handles share position.
  * Explicit dst replacement releases the previous reference atomically. */
@@ -109,6 +155,7 @@ int vfs_write(struct vfs_table *, int, const void *, size_t, size_t *done);
 int vfs_seek(struct vfs_table *, int, int64_t offset, enum vfs_whence, uint64_t *position);
 int vfs_truncate(struct vfs_table *, int, uint64_t size);
 int vfs_commit(struct vfs_table *, int);
+int vfs_flush_drive(struct vfs_table *,unsigned drive);
 /* Internal, exclusive boot-log sink. Reserve once; write aligned data in
  * place; publish logical EOF periodically; finish releases unused clusters. */
 int vfs_log_reserve(struct vfs_table *, int, uint32_t capacity);
@@ -129,5 +176,5 @@ int vfs_chdir(struct vfs_table *, const char *);
 int vfs_set_drive(struct vfs_table *, unsigned drive);
 int vfs_getcwd(struct vfs_table *, unsigned drive, char out[FS_PATH_BYTES]);
 int vfs_free_space(struct vfs_table *, unsigned drive, uint64_t *bytes, uint32_t *cluster_bytes);
-/* Byte locks/DOS compatibility mode are F3 bridge work, not silently emulated. */
+/* DOS compatibility and mandatory record claims share native node identities. */
 #endif

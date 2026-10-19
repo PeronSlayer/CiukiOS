@@ -78,7 +78,7 @@ static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
         p->count[slot]=0;
         if (hardware_check_io_cancelled && hardware_check_io_cancelled()) return -FS_EAGAIN;
         if (file_read_cancelled && file_read_cancelled()) return -4;
-        int e=v->preparing ? v->dev->read(v->dev,v->start+base,count,p->data[slot]) :
+        int e=(v->preparing || v->dev->logical) ? v->dev->read(v->dev,v->start+base,count,p->data[slot]) :
             cache_read_run(v->cache,v->dev,v->start+base,count,p->data[slot]);
         if (e) return e;
         p->start[slot]=base; p->count[slot]=count;
@@ -98,7 +98,7 @@ static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     if (v->prepare_cache) {
         const uint8_t *p;
         e=window_sector(v,s,&p); if (!e) memcpy(b,p,512);
-    } else if (v->preparing) e=v->dev->read(v->dev,v->start+s,1,b);
+    } else if (v->preparing || v->dev->logical) e=v->dev->read(v->dev,v->start+s,1,b);
     else {
         uint64_t end=s+1;
         if (v->type && v->fat_sectors && s>=v->reserved && s<v->reserved+(uint64_t)v->fats*v->fat_sectors)
@@ -122,7 +122,7 @@ static int write_error(struct fat_volume *v, int e) {
     return e;
 }
 static int writable(struct fat_volume *v) {
-    int e=cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    int e=v->dev->logical ? 0 : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (!v->mounted || v->readonly) return -FS_EROFS;
     if (!blkdev_durable(v->dev)) return write_error(v,-FS_EIO);
     return 0;
@@ -134,10 +134,10 @@ static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     if (v->prepare_cache) for (unsigned i=0;i<3;i++)
         if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
             v->prepare_cache->count[i]=0;
-    return write_error(v,v->preparing ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
+    return write_error(v,(v->preparing || v->dev->logical) ? v->dev->write(v->dev,v->start+s,1,b) : cache_write(v->cache,v->dev,v->start+s,b));
 }
 static int barrier(struct fat_volume *v) {
-    if (!v->preparing) return write_error(v,cache_barrier(v->cache,v->dev));
+    if (!v->preparing && !v->dev->logical) return write_error(v,cache_barrier(v->cache,v->dev));
     if (!blkdev_durable(v->dev)) return write_error(v,-FS_EROFS);
     return write_error(v,v->dev->write_cache_state==BLKDEV_CACHE_DISABLED ? 0 : v->dev->flush(v->dev));
 }
@@ -269,7 +269,7 @@ static void encode_entry(struct fat_volume *v, uint8_t b[32], const struct fat_e
     fs_wr16(b+22,e->times.write_time); fs_wr16(b+24,e->times.write_date);
     fs_wr16(b+26,(uint16_t)e->first); fs_wr32(b+28,e->size);
 }
-int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_entry *entry) {
+static int next_entry(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_entry *entry,bool labels) {
     uint16_t name[260]; unsigned expected=0,total=0; uint8_t sum=0; uint32_t start=0;
     uint64_t limit=dir || v->type==32 ? (uint64_t)v->clusters*v->spc*16 : v->root_entries;
     if (limit>UINT32_MAX) limit=UINT32_MAX;
@@ -284,7 +284,16 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
             for (unsigned k=0;k<13;k++) name[(ord-1)*13+k]=fs_rd16(b+lfn_offsets[k]);
             expected--; continue;
         }
-        if (b[11]&FAT_ATTR_VOLUME) { if (total) v->lfn_orphans++; expected=total=0; continue; }
+        if (b[11]&FAT_ATTR_VOLUME) {
+            if (total) v->lfn_orphans++; expected=total=0;
+            if (!labels) continue;
+            memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
+            uint16_t label[11]; unsigned length=11;
+            while (length && b[length-1]==' ') length--;
+            for (unsigned j=0;j<length;j++) label[j]=path_from_cp437(b[j]);
+            if (path_from_ucs2(label,length,entry->alias,sizeof(entry->alias))) return -FS_EILSEQ;
+            memcpy(entry->name,entry->alias,strlen(entry->alias)+1); decode_entry(v,b,entry); return 0;
+        }
         memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
         if ((e=alias_decode(b,entry->alias))) return corrupt(v,"directory_alias",dir);
         memcpy(entry->name,entry->alias,strlen(entry->alias)+1);
@@ -310,6 +319,12 @@ int fat_next(struct fat_volume *v, uint32_t dir, uint32_t *cursor, struct fat_en
     if (e) return e;
     if ((e=fat_get_cluster(v,c,&n))) return e;
     return eoc(v,n) ? -FS_ENOENT : corrupt(v,"directory_limit",c);
+}
+int fat_next(struct fat_volume *v,uint32_t dir,uint32_t *cursor,struct fat_entry *entry) {
+    return next_entry(v,dir,cursor,entry,false);
+}
+int fat_next_dos(struct fat_volume *v,uint32_t dir,uint32_t *cursor,struct fat_entry *entry) {
+    return next_entry(v,dir,cursor,entry,true);
 }
 int fat_lookup(struct fat_volume *v, uint32_t dir, const char *name, struct fat_entry *e) {
     context(v,name);
@@ -548,7 +563,8 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
             }
             if (file_read_cancelled && file_read_cancelled()) return -4;
             if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v,"read_bounds",c);
-            e=cache_read_run(v->cache,v->dev,v->start+sector,n,(uint8_t *)buf+*done);
+            e=v->dev->logical ? v->dev->read(v->dev,v->start+sector,n,(uint8_t *)buf+*done) :
+                cache_read_run(v->cache,v->dev,v->start+sector,n,(uint8_t *)buf+*done);
             if (e) {
                 if (e==-FS_EQUARANTINED || v->dev->quarantined) {
                     v->ro_reasons|=FAT_RO_WRITE_ERROR;
@@ -1339,7 +1355,7 @@ static int repair_volume(struct fat_volume *v) {
 static int enable_write(struct fat_volume *v) {
     if (!v || !v->mounted) return -FS_EINVAL;
     context(v,0);
-    int e=v->preparing ? (v->dev->quarantined ? -FS_EIO : 0) : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    int e=(v->preparing || v->dev->logical) ? (v->dev->quarantined ? -FS_EIO : 0) : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (!v->readonly && v->writable_session) return 0;
     if (!blkdev_durable(v->dev)) {
         v->ro_reasons|=FAT_RO_DURABILITY;fat_revoke_write(v,"durability",0);return -FS_EROFS;
@@ -1387,7 +1403,7 @@ int fat_enable_write(struct fat_volume *v) {
 }
 int fat_commit(struct fat_volume *v) {
     if (!v->mounted) return -FS_EINVAL;
-    int e=cache_error(v->cache,v->dev); if (e) return write_error(v,e);
+    int e=v->dev->logical ? 0 : cache_error(v->cache,v->dev); if (e) return write_error(v,e);
     if (v->readonly) return v->writable_session ? -FS_EROFS : 0;
     return barrier(v);
 }

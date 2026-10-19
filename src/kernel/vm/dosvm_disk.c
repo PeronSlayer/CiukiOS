@@ -308,6 +308,7 @@ static int disk_write_locked(struct dosvm *v, uint32_t lba, const void *sector)
 
 int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
 {
+    if (dosvm_file_disk && v->file_volume) return dosvm_file_disk(v,lba,sector,false);
     disk_gate_take(v);
     int e = disk_read_locked(v, lba, sector);
     disk_gate_drop(v);
@@ -318,10 +319,42 @@ int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
 }
 int dosvm_disk_write(struct dosvm *v, uint32_t lba, const void *sector)
 {
+    if (dosvm_file_disk && v->file_volume) return dosvm_file_disk(v,lba,(void *)sector,true);
     disk_gate_take(v);
     int e = disk_write_locked(v, lba, sector);
     disk_gate_drop(v);
     return e;
+}
+
+/* The native FAT mount reads the existing logical source directly. Its
+ * callbacks never invoke guest INT13 or recursively enter the raw/file gate.
+ * f3-47 can replace the cache behind these source routines without changing
+ * the mount adapter or introducing another resident cache. */
+static int provider_read(struct blkdev *dev,uint64_t lba,uint32_t count,void *buffer)
+{
+    int e=blkdev_range(dev,lba,count); if (e) return e;
+    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    for (uint32_t i=0;!e && i<count;i++) e=disk_read_locked(v,(uint32_t)lba+i,(uint8_t *)buffer+i*512u);
+    disk_gate_drop(v); return e;
+}
+static int provider_write(struct blkdev *dev,uint64_t lba,uint32_t count,const void *buffer)
+{
+    int e=blkdev_range(dev,lba,count); if (e) return e;
+    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    for (uint32_t i=0;!e && i<count;i++) e=disk_write_locked(v,(uint32_t)lba+i,(const uint8_t *)buffer+i*512u);
+    disk_gate_drop(v); return e;
+}
+static int provider_flush(struct blkdev *dev)
+{
+    struct dosvm *v=dev->ctx; disk_gate_take(v);
+    int e=v->overlay_open ? vfs_commit(&v->disk_table,v->overlay) : 0;
+    disk_gate_drop(v); return e;
+}
+void dosvm_disk_provider_init(struct dosvm *v,struct blkdev *provider)
+{
+    *provider=(struct blkdev){.read=provider_read,.write=provider_write,.flush=provider_flush,
+        .capacity=DOSVM_SECTORS,.sector_size=512,.media_generation=v->info.key.generation,
+        .write_cache_state=BLKDEV_CACHE_ENABLED,.logical=true,.ctx=v};
 }
 
 int dosvm_disk_close(struct dosvm *v, bool forced)

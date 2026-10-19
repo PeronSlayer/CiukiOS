@@ -800,6 +800,7 @@ bool dosvm_trap(struct trap_frame *tf)
     v->frame_pm = pm;
     crit_end();
     sti();
+    if (dosvm_file_deadline) dosvm_file_deadline(v);
     dpmi_irq_resync(v, f);
     dosvm_fullscreen_checkpoint(v);
     dosvm_fullscreen_progress(v,f->tf.cs,f->tf.eip);
@@ -863,6 +864,9 @@ bool dosvm_trap(struct trap_frame *tf)
                 else if (v->monitor.stats.insn[V86_POPF] != popf_count) v->perf.if_enable[DOSVM_IF_POPF]++;
                 else if (v->monitor.stats.insn[V86_STI] != sti_count) v->perf.if_enable[DOSVM_IF_STI]++;
             }
+            if (v->monitor.stats.insn[V86_IRET]!=iret_count && dosvm_file_return &&
+                !(v->dpmi.depth && f->tf.cs==0xf000 && f->tf.eip==DPMI_RM_RETURN))
+                dosvm_file_return(v,f);
             if (!e && !v->frame_pm && (v->perf.cause == DOSVM_COST_VGA_IO ||
                 (v->perf.cause == DOSVM_COST_PIT_PIC && v->perf.io_port >= 0x40 &&
                  v->perf.io_port <= 0x43))) e = dosvm_io_burst(v, f);
@@ -990,6 +994,10 @@ stop_return:
 static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    if (dosvm_file_interrupt && (vector==0x21 || vector==0x2f || vector==0xfe)) {
+        int file=dosvm_file_interrupt(v,f,vector,0); /* DOS_FILE_V86 */
+        if (file!=-ENOSYS) return file;
+    }
     if ((vector == 0x28 || vector == 0x2F || vector == 0x16) && idle_safe(v)) {
         if (vector == 0x28 || (vector == 0x2F && (uint16_t)f->tf.eax == 0x1680))
             idle_wait(v, vector == 0x28 ? DOSVM_IDLE_28 : DOSVM_IDLE_2F);
@@ -1141,6 +1149,13 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
              key.id,key.generation,video_error);
         destroying[slot]=false;
         return video_error;
+    }
+    if (dosvm_file_destroy) {
+        int file_error=dosvm_file_destroy(v);
+        if (file_error) {
+            v->info.cleanup_error=file_error; v->info.data_loss=v->info.dirty;
+            destroying[slot]=false; return file_error;
+        }
     }
     dosvm_perf_dump(v);
     v->info.data_loss = v->info.dirty && (forced || v->info.reason != DOSVM_EXIT);

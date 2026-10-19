@@ -54,22 +54,45 @@ static bool conflict(struct fs_ro_view *v, const char *name, unsigned self)
     }
     return false;
 }
-bool fs_ro_short_name(const char *s, char out[40])
-{
-    unsigned a = 0, b = 0, used = 0; bool dot = false;
-    while (*s) {
-        uint16_t ch; if (path_decode(&s, &ch) || ch > 127) return false;
-        if (ch == '.') { if (dot || !a) return false; dot = true; }
-        else {
-            ch = path_upper(ch);
-            if (!((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '$' || ch == '-' || ch == '~')) return false;
-            if (dot) { if (++b > 3) return false; } else if (++a > 8) return false;
-        }
-        out[used++] = (char)ch;
-    }
-    if (!a || (dot && !b)) return false;
-    out[used] = 0; return true;
+static uint16_t upper437(uint16_t ch) {
+    uint16_t upper=path_upper(ch);
+    return path_cp437(upper)>=0 ? upper : path_cp437(ch)>=0 ? ch : '_';
 }
+static bool short_character(uint16_t ch) {
+    if (ch<33 || ch==127 || path_cp437(ch)<0) return false;
+    const char *bad="\"*+,/:;<=>?[\\]|";
+    for (;*bad;bad++) if (ch==(uint8_t)*bad) return false;
+    return true;
+}
+bool fs_ro_short_name(const char *s,char out[40]) {
+    uint16_t units[12]; unsigned a=0,b=0,n=0; bool dot=false;
+    while (*s) {
+        uint16_t ch; if (path_decode(&s,&ch) || path_cp437(ch)<0) return false;
+        ch=upper437(ch);
+        if (ch=='.') { if (dot || !a) return false; dot=true; }
+        else {
+            if (!short_character(ch)) return false;
+            if (dot) { if (++b>3) return false; } else if (++a>8) return false;
+        }
+        if (n==12) return false; units[n++]=ch;
+    }
+    return a && (!dot || b) && !path_from_ucs2(units,n,out,40);
+}
+static int byte_order(const struct fs_ro_node *a,const struct fs_ro_node *b) {
+    const uint8_t *x=(const uint8_t *)a->name,*y=(const uint8_t *)b->name;
+    while (*x && *x==*y) { x++; y++; }
+    if (*x!=*y) return *x<*y ? -1 : 1;
+    return a->id<b->id ? -1 : a->id>b->id;
+}
+static void sort_view(struct fs_ro_view *v) {
+    /* Once per directory generation, before aliases are assigned. */
+    for (unsigned i=1;i<v->count;i++) {
+        struct fs_ro_node node=*at(v,i); unsigned j=i;
+        while (j && byte_order(&node,at(v,j-1))<0) { *at(v,j)=*at(v,j-1); j--; }
+        *at(v,j)=node;
+    }
+}
+
 static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
 {
     int e = fs_ro_check(vol); if (e) return e;
@@ -96,6 +119,7 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
         }
         (*tail)->nodes[(*tail)->count++] = n; v->count++;
     }
+    if (!e) sort_view(v);
     for (unsigned i = 0; !e && i < v->count; i++) {
         struct fs_ro_node *n = at(v, i); char alias[40];
         if (n->alias[0]) {
@@ -107,25 +131,30 @@ static int view(struct fs_ro_volume *vol, uint64_t dir, struct fs_ro_view **out)
         struct fs_ro_node *n = at(v, i); if (n->alias[0]) continue;
         if (fs_ro_short_name(n->name, n->alias) && !conflict(v, n->alias, i)) continue;
         n->alias[0] = 0;
-        /* Bounded numeric tails: four-digit maximum for this view quota. */
-        const char *s = n->name; char base[7] = {0}, ext[4] = {0}; unsigned nb = 0, ne = 0;
-        const char *dot = 0; for (const char *p = s; *p; p++) if (*p == '.') dot = p;
-        while (*s && s != dot) {
-            uint16_t ch; path_decode(&s, &ch); ch = path_upper(ch);
-            if (nb < 6 && ch != ' ' && ch != '.') base[nb++] = ch < 128 && ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') ? (char)ch : '_';
+        const char *text=n->name,*dot=0;
+        for (const char *p=text;*p;p++) if (*p=='.') dot=p;
+        uint16_t base[8],ext[3]; unsigned nb=0,ne=0;
+        while (*text && text!=dot) {
+            uint16_t ch; path_decode(&text,&ch); ch=upper437(ch);
+            if (ch==' ' || ch=='.') continue;
+            if (nb<8) base[nb++]=short_character(ch) ? ch : '_';
         }
-        if (!nb) base[nb++] = '_';
-        s = dot ? dot + 1 : "";
-        while (*s && ne < 3) { uint16_t ch; path_decode(&s, &ch); ch = path_upper(ch); ext[ne++] = ch < 128 && ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) ? (char)ch : '_'; }
-        for (unsigned serial = 1; serial <= FS_RO_ENTRIES * 2; serial++) {
-            char digits[4]; unsigned nd = 0, x = serial; do { digits[nd++] = (char)('0' + x % 10); x /= 10; } while (x);
-            unsigned keep = nb < 7 - nd ? nb : 7 - nd;
-            memcpy(n->alias, base, keep); n->alias[keep++] = '~';
-            while (nd) n->alias[keep++] = digits[--nd];
-            if (ne) { n->alias[keep++] = '.'; memcpy(n->alias + keep, ext, ne); keep += ne; }
-            n->alias[keep] = 0;
-            if (!conflict(v, n->alias, i)) break;
-            n->alias[0] = 0;
+        if (!nb) base[nb++]='_';
+        text=dot ? dot+1 : "";
+        while (*text && ne<3) {
+            uint16_t ch; path_decode(&text,&ch); ch=upper437(ch);
+            ext[ne++]=short_character(ch) ? ch : '_';
+        }
+        for (unsigned serial=1;serial<=999999;serial++) {
+            uint16_t result[12]; char digits[6]; unsigned nd=0,x=serial;
+            do { digits[nd++]=(char)('0'+x%10); x/=10; } while (x);
+            unsigned keep=nb<7-nd ? nb : 7-nd,used=0;
+            for (unsigned k=0;k<keep;k++) result[used++]=base[k];
+            result[used++]='~'; while (nd) result[used++]=(uint8_t)digits[--nd];
+            if (ne) { result[used++]='.'; for (unsigned k=0;k<ne;k++) result[used++]=ext[k]; }
+            if (path_from_ucs2(result,used,n->alias,sizeof(n->alias))) { e=-FS_EILSEQ; break; }
+            if (!conflict(v,n->alias,i)) break;
+            n->alias[0]=0;
         }
         if (!n->alias[0]) e = -FS_ENOSPC;
     }

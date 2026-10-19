@@ -6,6 +6,9 @@ out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
+# f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
+bash "$root/tests/host/dos/run_file_api.sh"
+
 python3 "$root/tests/host/record_scope_test.py"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
 python3 -B -m unittest discover -s "$root/tests/host" -p test_boot_modes.py

@@ -36,7 +36,7 @@
 #include "../../fs/path.h"
 #define FS_RO_DIRECTORY 16u
 #define FS_RO_READONLY 1u
-#define FS_RO_ENTRIES 256u
+#define FS_RO_ENTRIES 512u
 #define FS_RO_VIEWS 32u
 struct fs_ro_cursor { uint64_t opaque[4]; };
 struct fs_ro_node {
@@ -77,7 +77,7 @@ struct fs_ro_volume {
 };
 extern const struct fs_ro_ops iso9660_ops;
 extern const struct fs_ro_ops ntfs_ops;
-/* Valid VFS 8.3 alias syntax (uppercase ASCII, one dot); out receives the
+/* Valid VFS 8.3 alias syntax (uppercase CP437 in UTF-8, one dot); out receives the
  * canonical form. Drivers use it to drop on-media aliases the view refuses. */
 bool fs_ro_short_name(const char *name, char out[40]);
 int fs_ro_mount(struct fs_ro_volume *, const struct fs_ro_ops *, struct block_cache *,

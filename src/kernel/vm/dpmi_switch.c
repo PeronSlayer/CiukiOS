@@ -121,6 +121,12 @@ int dpmi_real_int(struct dosvm *v, struct v86_frame *n, uint8_t vector, uint16_t
     n->tf.eip = ivt[0];
     n->tf.eflags = (image & 0x0CD5u & ~V86_TF) | V86_VM | V86_IF | 2u;
     v->monitor.vif = false;
+    if (dosvm_file_reflect && (vector==0x21 || vector==0x2f)) {
+        unsigned origin=v->dpmi.depth && v->dpmi.rec[v->dpmi.depth-1].kind==DPMI_REC_HOSTCALL ? 3 : 2;
+        int file=dosvm_file_reflect(v,n,vector,origin,image);
+        if (file!=-ENOSYS) return file;
+    }
+    v->monitor.vif = false;
     return 0;
 }
 
@@ -259,6 +265,10 @@ int dpmi_translation(struct dosvm *v, struct v86_frame *f, unsigned ax)
      * 0301h: the structure's flags. */
     v->monitor.vif = ax == 0x0301 ? (image & V86_IF) != 0 : false;
     n.tf.eflags = (image & 0x0CD5u & ~V86_TF) | V86_VM | V86_IF | 2u;
+    if (ax==0x0300 && dosvm_file_reflect && (vector==0x21 || vector==0x2f)) {
+        int file=dosvm_file_reflect(v,&n,vector,1,image); /* DOS_FILE_DPMI_0300 */
+        if (file!=-ENOSYS && file) { pop_record(v); return file; }
+    }
     dpmi_set_pm(v, false);
     *f = n;
     d->stats.realcalls++;
@@ -438,12 +448,14 @@ int dpmi_v86_return(struct dosvm *v, struct v86_frame *f)
     *f = rec.saved;
     dosvm_vif_restore(v, rec.vif, DOSVM_IF_TRAMPOLINE);
     if (rec.kind == DPMI_REC_HOSTCALL) {
-        if (rec.op == DPMI_OP_ENTRY) return dpmi_entry_complete(v, f, (uint16_t)result.tf.ebx);
-        if (rec.op == DPMI_OP_TERMCHECK) {
+        int status;
+        if (rec.op == DPMI_OP_ENTRY) status=dpmi_entry_complete(v, f, (uint16_t)result.tf.ebx);
+        else if (rec.op == DPMI_OP_TERMCHECK) {
             if (d->clients && (uint16_t)result.tf.ebx == d->client[d->clients - 1].psp) dpmi_terminate(v, false);
-            return v86_reflect(&v->monitor, f, rec.vector) < 0 ? -EFAULT : 0;
-        }
-        return dpmi_dos_complete(v, f, &rec, &result);
+            status=v86_reflect(&v->monitor, f, rec.vector) < 0 ? -EFAULT : 0;
+        } else status=dpmi_dos_complete(v, f, &rec, &result);
+        if (dosvm_file_reflected_return) dosvm_file_reflected_return(v,&result,result_vif);
+        return status;
     }
     if (rec.kind == DPMI_REC_REALCALL) {
         uint32_t lin;
@@ -456,6 +468,7 @@ int dpmi_v86_return(struct dosvm *v, struct v86_frame *f)
         vm_w16(s + 0x20, (uint16_t)((result.tf.eflags & 0x0CD5u) | 2u | (result_vif ? V86_IF : 0)));
         if (dosvm_write(v, lin, s, sizeof(s))) return -EFAULT;
         dpmi_carry(f, false);
+        if (dosvm_file_reflected_return) dosvm_file_reflected_return(v,&result,result_vif);
         return 0;
     }
     /* REFLECT: registers and arithmetic flags come back (0.9 section 3.2),
@@ -473,5 +486,6 @@ int dpmi_v86_return(struct dosvm *v, struct v86_frame *f)
         d->decode_stack_linear = rec.decode_stack_linear;
         d->decode_ds_base = rec.decode_ds_base;
     }
+    if (dosvm_file_reflected_return) dosvm_file_reflected_return(v,&result,result_vif);
     return 0;
 }

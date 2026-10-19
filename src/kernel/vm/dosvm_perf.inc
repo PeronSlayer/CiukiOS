@@ -4,6 +4,9 @@
  * seconds; the verbose UART history is dumped after the worker stops.
  * TSC accounting pauses across task switches; it never includes a sleeping
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
+#include "dos_file.h"
+extern bool dos_file_trace_pop(struct dos_file *,struct dos_file_trace *) __attribute__((weak));
+extern bool dos_file_wait_pop(struct dos_file *,struct dos_file_wait *) __attribute__((weak));
 uint64_t dosvm_perf_clock(void)
 {
     /* Ordinary hardware boots need the same accounting as diagnostics. */
@@ -75,6 +78,7 @@ static uint64_t perf_monitor_stamp(struct dosvm *v)
     if (perf_current == v) perf_phase(v, v->perf.phase);
     return v->perf.monitor_cycles;
 }
+uint64_t dosvm_file_monitor_us(void *arg) { return perf_us(perf_monitor_stamp(arg)); }
 static void perf_vector_end(struct dosvm *v, unsigned path, uint8_t vector, uint16_t ax, uint64_t begin)
 {
     uint32_t flags = irq_save();
@@ -416,6 +420,7 @@ void dosvm_perf_report(struct dosvm *v)
 
 void dosvm_perf_dump(struct dosvm *v)
 {
+    if (dosvm_file_dump) dosvm_file_dump(v);
     if (!(g_boot.flags & CBI_F_DIAG_VERBOSE)) return;
     if (g_boot.flags & CBI_F_DIAG_VERBOSE) {
         static const char hex[] = "0123456789abcdef";
@@ -495,4 +500,23 @@ void dosvm_perf_dump(struct dosvm *v)
         if (g_need_resched) schedule(); /* slow polled UART must permit native work */
     }
     v->perf.sample_count = 0;
+}
+
+void dosvm_file_dump(struct dosvm *v) {
+    if (!v->files || !dos_file_trace_pop) return;
+    struct dos_file_trace r;
+    while (dos_file_trace_pop(v->files,&r))
+        rec_diag(dosvm_probe(v),"group=dos_api vm=%u gen=%u seq=%llu phase=%s psp=%04x origin=%u vector=%02x ax=%04x bx=%04x cx=%04x dx=%04x ds=%04x es=%04x si=%04x di=%04x cf=%u bytes=%u monitor_us=%llu wall_us=%llu dropped=%u",
+            v->info.key.id,r.generation,r.sequence,r.returning ? "return" : "enter",r.psp,r.origin,r.vector,
+            r.frame.ax,r.frame.bx,r.frame.cx,r.frame.dx,r.frame.ds,r.frame.es,r.frame.si,r.frame.di,r.frame.flags&1,
+            r.bytes,r.monitor_us,r.wall_us,v->files->dropped);
+    if (dos_file_wait_pop) {
+        struct dos_file_wait w;
+        static const char *const reason[]={"-","namespace","volume","provider","transport"};
+        while (dos_file_wait_pop(v->files,&w))
+            rec_diag(dosvm_probe(v),"group=vfs_wait vm=%u gen=%u seq=%llu drive=%c owner=%llu psp=%04x reason=%s elapsed_ms=%llu outcome=%s",
+                v->info.key.id,w.generation,w.sequence,'A'+w.drive,w.info.owner,w.psp,
+                w.info.reason<=VFS_WAIT_TRANSPORT ? reason[w.info.reason] : "-",w.info.elapsed_us/1000,
+                w.info.outcome==-VFS_ETIMEOUT ? "timeout" : w.info.outcome==-VFS_ECANCELLED ? "cancelled" : "done");
+    }
 }

@@ -23,6 +23,9 @@ struct blkdev {
     uint32_t media_generation;         /* zero for fixed disks; never recycled */
     enum blkdev_cache_state write_cache_state;
     bool quarantined;
+    /* A logical image provider already owns caching/coherence. FAT must not
+     * retain duplicate data blocks in the outer physical-device cache. */
+    bool logical;
     void *ctx;                        /* owned by the device implementation */
 };
 static inline int blkdev_range(struct blkdev *d, uint64_t lba, uint32_t n) {

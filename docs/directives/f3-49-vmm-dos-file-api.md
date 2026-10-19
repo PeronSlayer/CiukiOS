@@ -60,3 +60,15 @@ public interface update gets regenerated docs and apps as above.
 ## Lead approval (Claude, 2026-10-19 15:12)
 
 Approved before code, as the Dependencies line requires: DF1–DF6 of `docs/design/dos-dpmi-contract.md` as written by f3-48; the cwd/default-drive wording correction (VM-global DOS current directories and default drive, per-PSP contexts referencing the shared object; DTA/JFT/error association per process); the private FAT16 mount through the f3-47 logical block provider/cache/overlay (f3-47 amendment 2 is being integrated in parallel: if its provider is not yet on `main` when you start, implement the required internal subset behind the interface f3-48 specified and note it); the CHAIN/DONE/PENDING dispatch and the cancellable critical-error continuations with the 2000 ms total deadline. Numeric budgets stay labelled CiukiOS policy. No further approval gate exists in this directive: complete all six milestones.
+
+## Amendment 1 (lead review, 2026-10-19 17:10): continuation after f1-83
+
+The delivery (worktree commit `9c0c95f4`, merged 2026-10-19) is accepted as the passing host subset the report describes: served selectors 0D–6C, SFT lifecycle, FAT/VFS sharing and the 15×15 lock matrix, INT 24h, find first/next, tracing, 5,570,788 sanitizer assertions, kernel suite green. The bridge is inert until f3-50 binds CiukiDOS to it. The open H49 items remain this directive's and are implemented in a continuation session `wt/f3-49b` launched after the f1-83 merge, because the cancellable transport must sit on f1-83's bounded request pool (deadlines, cancellation, per-controller queues) rather than on driver rewrites:
+
+1. **H49-08 transport cancellation:** namespace reacquisition, provider, cache and controller transport cancellable through the f1-83 request interface; cancellation-safe cleanup of every partially completed INT 21h operation (close, delete, rename, write, truncate) with the `cleanup_status` surfaced by the controller; stop during read suppresses the guest-buffer copy (already) and stop during write leaves the FAT consistent (new tests).
+2. **Copied-search (DTA) lifetime:** independent lifetime of copied `findfirst` state across PSP exit, VM stop and volume change, with reclamation tests.
+3. **Mutation failure matrix:** every allocation/I/O fault point of create/write/truncate/rename/delete with partial-write and autocommit outcomes pinned, including the f1-82 writeback interaction.
+4. **Live adapter replay:** the H49-01 monitor adapter executed through the bound production DOS CPU once f3-50 is merged (if f3-50 is not yet merged when f3-49b runs, the replay stays recorded as pending and f3-51 closes it).
+5. Cache-only metadata/alias loops qualified against the f0-44 budgets (preemption points, 2 ms spans).
+
+No ATA/USB driver rewrite is authorised; the f1-83 request interface is the only transport seam. Report appended as "Continuation" to `build/codex/f3-49-report.md`.

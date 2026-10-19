@@ -14,14 +14,14 @@ struct fs_ro_volume;
  * from all-volume open-description preflight through durable detach. */
 int vfs_detach_locked(struct vfs *, unsigned);
 extern void files_detach(struct vfs *) __attribute__((weak));
-extern int px_legacy_share(struct vfs *, struct fat_volume *, const struct fat_entry *, unsigned, unsigned) __attribute__((weak));
+extern int px_legacy_share(struct vfs *, struct fat_volume *, const struct fat_entry *, unsigned, unsigned, unsigned, uint64_t) __attribute__((weak));
 extern bool px_legacy_busy(struct vfs *, struct fat_volume *, const struct fat_entry *) __attribute__((weak));
 extern void px_legacy_changed(struct vfs *, struct fat_volume *, const struct fat_entry *, const struct fat_entry *, bool committed_write) __attribute__((weak));
 extern int px_legacy_closed(struct vfs *, struct vfs_node *) __attribute__((weak));
 /* Only open descriptions on this volume block detach, never cwd pins or
  * synthetic device/namespace nodes. Mutation pin checks remain separate. */
 extern bool px_volume_busy(struct vfs *, struct fat_volume *) __attribute__((weak));
-extern int px_ro_share(struct vfs *, unsigned, uint64_t, unsigned, unsigned) __attribute__((weak));
+extern int px_ro_share(struct vfs *, unsigned, uint64_t, unsigned, unsigned, unsigned, uint64_t) __attribute__((weak));
 extern bool px_ro_busy(struct vfs *, struct fs_ro_volume *) __attribute__((weak));
 extern void px_volume_detached(struct vfs *, unsigned) __attribute__((weak));
 #endif
