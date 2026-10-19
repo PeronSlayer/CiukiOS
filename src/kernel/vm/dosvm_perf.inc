@@ -217,8 +217,22 @@ static void perf_if_live(struct dosvm *v, unsigned n)
                   v->info.key.id, v->info.key.generation, n, enable[0], enable[1], enable[2], enable[3], enable[4], enable[5],
                   samples, clear, outside, depth, retired, expired, c0, m0, c5, m5, c7, m7);
 }
-static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsigned n)
+static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsigned n,
+                      const struct dosvm_disk_cost *disk)
 {
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_disk vm=%u gen=%u n=%u reads=%u bytes=%llu writes=%u hm=%u/%u regions=%u",
+        v->info.key.id, v->info.key.generation, n, disk->reads, disk->bytes, disk->writes,
+        disk->hits, disk->misses, disk->regions);
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_disk vm=%u gen=%u n=%u part=lat bins=%u,%u,%u,%u,%u",
+        v->info.key.id, v->info.key.generation, n, disk->latency[0], disk->latency[1],
+        disk->latency[2], disk->latency[3], disk->latency[4]);
+    uint32_t memory_flags = irq_save();
+    struct dosvm_memory_cost m = v->perf.memory;
+    irq_restore(memory_flags);
+    if (m.queries) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_mem vm=%u gen=%u n=%u queries=%u first=%u/%u latest=%u/%u",
+        v->info.key.id, v->info.key.generation, n, m.queries, m.first_largest, m.first_total, m.largest, m.total);
+    if (m.allocations) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_mem vm=%u gen=%u n=%u allocs=%u request=%u after=%u/%u",
+        v->info.key.id, v->info.key.generation, n, m.allocations, m.requested, m.after_largest, m.after_total);
     unsigned id = v->info.key.id, gen = v->info.key.generation;
     uint64_t wall = (uint64_t)s->ms * 1000, cpu = s->guest_us + s->monitor_us;
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_cpu vm=%u gen=%u n=%u ms=%u guest_us=%llu monitor_us=%llu",
@@ -393,7 +407,8 @@ void dosvm_perf_report(struct dosvm *v)
     /* No UART, console, VFS, waits or allocation. reporting prevents a
      * preempting STATUS call from overwriting this sample during emission. */
     uint64_t begin = dosvm_perf_clock();
-    perf_live(v, s, n);
+    perf_live(v, s, n, &bank->disk);
+    memset(&bank->disk, 0, sizeof(bank->disk));
     v->perf.log_cycles += dosvm_perf_clock() - begin;
     v->perf.reporting = false;
 #undef DELTA

@@ -7,8 +7,8 @@
 #define DOSVM_LIMIT 4u
 #define DOSVM_LINEAR_END 0x0010FFF0u
 #define DOSVM_LOW_CAP (8u * 1024u * 1024u)
-#define DOSVM_RESIDENT_CAP (32u * 1024u * 1024u)
-#define DOSVM_HEADROOM DOSVM_RESIDENT_CAP
+#define DOSVM_RESIDENT_CAP (48u * 1024u * 1024u)
+#define DOSVM_HEADROOM (32u * 1024u * 1024u)
 #define DOSVM_RECORD_PORT 0xE9u
 #define DOSVM_CONTROL_PORT 0xEAu
 #define DOSVM_FAULT_PORT 0xFFFFu
@@ -19,7 +19,7 @@ struct dosvm;
 struct task;
 struct dosvm_key { uint32_t id, generation; };
 struct dosvm_config {
-    uint32_t commitment; /* zero selects 32 MiB */
+    uint32_t commitment; /* zero selects DOSVM_RESIDENT_CAP */
     uint16_t ems_frame; /* zero/E000h default, D000h alternative */
     bool disable_umb;
     const char *probe; /* record owner for admission/stop/guest rows; NULL = "vm-boot" */

@@ -124,6 +124,7 @@ static void test_startup_disk(void)
     /* Synthetic ROM INT FEh -> BIOS INT 13h. Scheduler suspension is not CPU. */
     g_boot.flags = CBI_F_VERBOSE; g_tsc_per_ms = 1000; fake_tsc = 100;
     dosvm_task_switch(v->task); perf_phase(v, 2);
+    for (unsigned i = 0; i < v->read_capacity; i++) v->read_cache[i].count = 0;
     disk_read_hook = startup_disk_time;
     struct v86_frame f = disk_frame(0x0201);
     f.tf.cs = 0xF000; f.tf.eip = 0x132; f.tf.user_ss = 0x2000; f.tf.user_esp = 0x100;

@@ -144,6 +144,17 @@ uint32_t pmm_alloc(void)
     }
     return 0;
 }
+uint32_t pmm_alloc_contig(uint32_t pages)
+{
+    for (unsigned first = 4096; first + pages <= HOST_PAGES; first++) {
+        unsigned n = 0;
+        while (n < pages && !allocated[first + n]) n++;
+        if (n != pages) { first += n; continue; }
+        for (n = 0; n < pages; n++) { allocated[first + n] = true; used_pages++; }
+        return first * PAGE_SIZE;
+    }
+    return 0;
+}
 uint32_t pmm_alloc_zone(int zone) { (void)zone; return pmm_alloc(); }
 void pmm_free(uint32_t p) { allocated[p / PAGE_SIZE] = false; used_pages--; }
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }

@@ -141,10 +141,10 @@ static void rm_iret_roundtrip(struct dosvm *v)
     step(v, 13, 0);
 }
 
-static struct dosvm *dpmi_vm(bool enabled)
+static struct dosvm *dpmi_vm_commitment(bool enabled, uint32_t commitment)
 {
     struct dosvm *v;
-    struct dosvm_config c = {.commitment = DOSVM_LOW_CAP + 4u * 1024 * 1024, .dpmi = enabled};
+    struct dosvm_config c = {.commitment = commitment, .dpmi = enabled};
     CHECK(dosvm_create(&c, &v) == 0 && v);
     v->info.dos_ready = true; v->info.state = DOSVM_RUNNABLE;
     v->monitor.state = V86_RUNNING; v->monitor.vif = true;
@@ -161,6 +161,8 @@ static struct dosvm *dpmi_vm(bool enabled)
     memset(dos_blocks, 0, sizeof(dos_blocks)); dos_next = 0x6000; dos_fail = false;
     return v;
 }
+static struct dosvm *dpmi_vm(bool enabled)
+{ return dpmi_vm_commitment(enabled, DOSVM_LOW_CAP + 4u * 1024 * 1024); }
 static void v86_start(void)
 {
     memset(&cur, 0, sizeof(cur));

@@ -438,7 +438,7 @@ No boot-info ABI bits or fields are added.
 | Kernel heap at boot | ≤ 4 MiB |
 | Block cache (F1, adjustable) | 8 MiB default |
 | Desktop back buffer at 1024×768×32 (F2) | 3 MiB |
-| One DOS VM (F3, `dos-dpmi-contract.md`) | resident cap 32 MiB: ≤ 24 MiB XMS/EMS/DPMI pool, ≤ 8 MiB low memory, tables and device state |
+| One DOS VM (F3, `dos-dpmi-contract.md`) | default resident cap 48 MiB (f3-47 Amendment 2): ≤ 24 MiB XMS/EMS/DPMI pool, ≤ 16 MiB private disk cache, ≤ 8 MiB low memory, tables and device state |
 | Uncommitted host headroom kept by VM admission | 32 MiB |
 | Available for processes and VMs, before VM reservations and headroom | ≥ 100 MiB |
 

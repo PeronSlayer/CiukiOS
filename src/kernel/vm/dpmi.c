@@ -458,7 +458,13 @@ static int memory_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
         info[5] = total / PAGE_SIZE;
         info[6] = v->memory.quota / PAGE_SIZE;
         info[7] = total / PAGE_SIZE;
-        return dosvm_write(v, lin, info, sizeof(info)) ? 1 : 0;
+        if (dosvm_write(v, lin, info, sizeof(info))) return 1;
+        uint32_t flags = irq_save();
+        struct dosvm_memory_cost *m = &v->perf.memory;
+        if (!m->queries++) { m->first_largest = largest; m->first_total = total; }
+        m->largest = largest; m->total = total;
+        irq_restore(flags);
+        return 0;
     }
     uint32_t size = get32(f->tf.ebx, f->tf.ecx), handle = get32(f->tf.esi, f->tf.edi);
     if (ax == 0x0501) {
@@ -467,6 +473,14 @@ static int memory_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
         if (!size || slot < 0 || !dosvm_pool_alloc(v, &d->block[slot].b, size)) return 1;
         d->block[slot].owner = dpmi_id(v);
         d->block[slot].handle = new_handle(v, (unsigned)slot);
+        /* Reporting only: keep the allocator, handles and returned registers
+         * unchanged. Emit at the regular perf cadence, never on this path. */
+        uint32_t largest, total;
+        dosvm_pool_query(v, &largest, &total);
+        uint32_t flags = irq_save();
+        v->perf.memory.allocations++; v->perf.memory.requested = size;
+        v->perf.memory.after_largest = largest; v->perf.memory.after_total = total;
+        irq_restore(flags);
         put32(&f->tf.ebx, &f->tf.ecx, d->block[slot].b.base);
         put32(&f->tf.esi, &f->tf.edi, d->block[slot].handle);
         return 0;

@@ -194,18 +194,19 @@ matrix to pass. Until then EMS discovery MUST report absent. EMS MUST NOT
 provide VCPI through INT 67h/DE00h.
 ([LIM specification](https://www.phatcode.net/res/218/files/limems40.txt).)
 
-**[F3] Budget proposal for boot-memory cross-review:** a VM MUST have a
-32 MiB total resident cap: at most 24 MiB shared by XMS, EMS and DPMI
-allocations, with the remaining 8 MiB covering low memory, page tables,
-stacks, LDT, devices and charged cache. EMS has an 8 MiB sub-cap inside that
-24 MiB pool. Disk capacity is not RAM; private overlays MUST be file-backed.
+**[F3] Budget (f3-47 Amendment 2, lead decision 2026-10-19):** a VM MUST have
+a 48 MiB default commitment and total resident cap: at most 24 MiB shared by
+XMS, EMS and DPMI allocations, up to 16 MiB of charged disk cache, and at most
+8 MiB covering low memory, page tables, stacks, LDT and devices. EMS has an
+8 MiB sub-cap inside that 24 MiB pool. Disk capacity is not RAM; private
+overlays MUST be file-backed.
 There is no swap or memory overcommit through F4.
 
 **[F3]** Admission MUST reserve the VM commitment only after subtracting
 measured firmware/kernel/driver/framebuffer/native commitments, and leave
 32 MiB uncommitted host headroom. Reports MUST distinguish reservation from
-actual resident use. Two admitted VMs consume at most 64 MiB; their admission
-therefore requires at least 96 MiB available after those deductions.
+actual resident use. Two default admitted VMs promise at most 96 MiB; their admission
+therefore requires at least 128 MiB available after those deductions.
 128 MiB installed RAM does not establish that condition. Allocation and
 resize failures MUST leave old objects intact; aliases MUST be charged once.
 The runner MAY select smaller commitments at runtime for isolation probes;
@@ -583,3 +584,71 @@ out of release images.
   f3-04 clients and `SYSTEM\DOS4GW.EXE` (Open Watcom 2.0 runtime, pinned
   hash, redistribution text not located). Details and sources:
   [f3-acceptance.md](f3-acceptance.md), section f3-04.
+
+### F3-47 private image read cache and disk measurements (2026-10-19)
+
+Each VM owns an LRU of 64 KiB blocks at the private disk boundary. Amendment 1
+sizes it to the base image rounded up to 64 KiB, capped at 16 MiB. If this
+does not fit the admitted commitment's remaining headroom, it falls back
+to 2 MiB (or the smaller image size). Creation reserves the future worker's
+stack/task charge before checking headroom; reopening includes its existing
+charge. Insufficient headroom even for the fallback returns `ENOMEM`.
+Buffers are physical 16-page runs,
+claimed as `MM_VM_PRIVATE`, included in `dosvm_snapshot.pages` and
+`info.resident`, and released on close or failed creation. They consume the
+admitted private allowance. Amendment 2 raises the default commitment to
+48 MiB while retaining the 24 MiB eager DPMI/XMS/EMS pool and independent
+32 MiB host headroom. The final creation check excludes separately charged
+cache pages from the 8 MiB low/device/table bound, while retaining the total
+commitment bound. Normal default creation can therefore hold a 12 MiB image
+or the full 16 MiB ceiling without a synthetic commitment override. Smaller
+explicit commitments retain the 2 MiB fallback. Admission remains
+`request + headroom <= free - (reserved - resident)`; low-memory hosts can
+refuse admission rather than partially start a VM. Host budget models and
+their limits are recorded in the f3-47 validation note.
+No free 64 KiB run returns ordinary `ENOMEM` with complete unwind.
+The base remains deny-write, and reopening releases every old cache entry.
+
+A fill reads the base through VFS, zeroes a cut image's tail, then merges
+all indexed overlay sectors in the region before publishing validity.
+Successful writes synchronously update the overlay and any resident block.
+Failed writes invalidate that block because a partial transfer may already
+have changed an indexed sector. Failed read-ahead publishes no cache entry;
+the requested sector is retried against its authoritative source. The disk
+kwait gate still covers seek/transfer/publication. No new yield is introduced
+inside it or the worker's INT 13h transaction. Cache allocation checkpoints
+run before the VM starts, after accounting is published.
+
+Every existing five-second perf interval now emits two `vm_perf_disk` rows:
+`reads`, `bytes` (actual VFS bytes returned), `writes`, `hm` (sector cache
+hits/misses), and `regions` (exact distinct 64 KiB regions requested); and
+`part=lat bins=a,b,c,d,e` for all INT 13h service calls, in microseconds:
+`<100`, `[100,1000)`, `[1000,10000)`, `[10000,50000]`, `>50000`.
+Latency is elapsed service time including scheduler suspension, unlike the
+existing vector CPU-time counters. Without TSC calibration it falls back to
+millisecond ticks. Detached interval banks keep reporting/resetting separate
+from the next producer interval. VFS transfers include filesystem-cache hits;
+these records are not physical ATA command counts.
+
+`vm_perf_mem` records retain the first/latest successful 0500h largest/total
+free-byte results and the latest successful 0501h request and remaining
+largest/total. They use the perf cadence, with no synchronous logging in the
+DPMI path. Allocation decisions and guest return values are unchanged.
+
+Reference: [Microsoft MS-DOS SMARTDRV help](https://www.infania.net/misc/dos622help/smartdrv.html)
+(read-ahead with write-behind disabled), and
+[id Software's zone allocator](https://github.com/id-Software/DOOM/blob/master/linuxdoom-1.10/z_zone.c).
+Host evidence and the DOS `-maxzone`/guest disk-icon discrepancies are recorded
+in [F3-47 validation](../validation/2026-10-19-f3-47-disk-cache.md).
+
+Lead review, Amendment 1: the bottom-right floppy icon belongs to DOS DOOM,
+whose `I_BeginRead`/`I_EndRead` draw and restore it around WAD reads; the
+desktop has no disk-activity tray icon. The original tray-indicator and
+100 ms hold-time requirement is withdrawn. Shorter service latency reduces
+the time the game's icon is visible, as with a DOS read cache; cache hits
+do not suppress the game's drawing and no frame-count guarantee follows.
+The [DOS platform reconstruction](https://github.com/gamesrc-ver-recreation/doom/blob/master/i_ibm.c#L1427-L1603)
+caps `I_ZoneBase` at `0x800000` (8 MiB); the bundled DOS DOOM 1.9 parses no
+`-maxzone` option. The launcher stays unchanged. A modeled 16 MiB zone is
+only a capacity experiment, not a supported configuration of this binary.
+The 0500h/0501h verification and `vm_perf_mem` records remain applicable.

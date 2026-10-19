@@ -98,7 +98,7 @@ static void test_quake_start(void)
     CHECK(!dosvm_disk_read(v, 48129, sector)); quake_sector_check(sector, 48129);
     /* The real cut-image end is 48 sectors into its final cache window. */
     CHECK(!dosvm_disk_read(v, QSTART_SECTORS - 1, sector)); quake_sector_check(sector, QSTART_SECTORS - 1);
-    CHECK(v->read_cache[v->read_recent].count == 48);
+    CHECK(v->read_cache[v->read_recent].count == DOSVM_READ_SECTORS);
     unsigned reads = disk_reads;
     memset(expected, 0, sizeof(expected));
     CHECK(!dosvm_disk_read(v, QSTART_SECTORS, sector) && !memcmp(sector, expected, 512) && disk_reads == reads);

@@ -22,3 +22,16 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No new `panic()` paths; no production-behaviour change under `#ifndef NDEBUG`. Do not change DPMI dispatch, the SB16/audio source, or the block cache policy (f1-82). Research: DOOM source for `-maxzone` and `Z_Init`; Microsoft SMARTDRV documentation for the reference behaviour of a DOS disk cache (read-ahead, write-behind off for our overlay), cited in the report.
+
+## Amendment 1 (lead review, 2026-10-19 15:10)
+
+The delivery is accepted with these corrections of the directive's own assumptions and two additions:
+
+1. **The floppy icon is DOOM's.** DOS DOOM draws its own disk icon in `I_BeginRead`/`I_EndRead` (reconstructed `i_ibm.c`) for the duration of every WAD read; the shell has no disk-activity tray icon. Item 4 of the directive is withdrawn; record this in `docs/design/dos-dpmi-contract.md`. What the player perceives is the read *latency*: a 41 ms miss shows the icon for several frames and stalls the game, a cached read shows it for one frame at most, as on real DOS with SMARTDRV.
+2. **`-maxzone` is dropped.** The bundled DOOM 1.9 executable caps its zone at 8 MiB in `I_ZoneBase` and parses no `-maxzone`; document the cap and keep the DPMI 0500h/0501h verification you added.
+3. **Cache size follows the image, not a fixed 2 MiB.** The per-VM read cache is sized `min(16 MiB, image size rounded up to 64 KiB)` for a game VM (ledger category as implemented; admission checks the VM's commitment headroom and falls back to 2 MiB when the headroom is smaller), so the whole 12 MiB WAD stays resident after warm-up: the zone6-model trace must reach ≥ 95 % wholly cached requests after warm-up and zero host reads in the measured window, with the hot-32 trace still at 100 %. Keep the eviction regression. Report the memory accounting for 16 MiB on a 256 MiB T23 (ledger profile "maximum VM").
+4. Keep everything else (histogram, region counters, 0500h/0501h records). Rerun the full host suite and the kernel build; append an "Amendment 1" section to the report with the new trace table.
+
+## Amendment 2 (lead decision, 2026-10-19 16:20)
+
+The 2 MiB fallback on the production path defeats the purpose: the default game VM must hold its whole image in cache on the 256 MiB T23. Decision: raise `DOSVM_RESIDENT_CAP` to 48 MiB for the default commitment (24 MiB eager pool + up to 16 MiB disk cache + low memory, devices, tables and task state), keep `DOSVM_HEADROOM` at 32 MiB and the admission arithmetic (`request + headroom ≤ free − outstanding`): on a 128 MiB machine admission or the cache fallback decides, never a failure to start the VM. Justify with the f0-43 ledger profiles (boot, settled desktop, maximum VM) on the 128/256/512 MiB host models and report the resulting free RAM after one game VM on each. Adjust every test that encodes 32 MiB (`DOSVM_RESIDENT_CAP`, `request=…`, probe records) by the constant, not by literal; the cache sizing on the *production* allocator path must then reach 100 % hits with zero host reads on the zone6 trace for a 12 MiB image, and the ledger must show the cache category. Append "Amendment 2" to the report; rerun the full host suite and the kernel build.

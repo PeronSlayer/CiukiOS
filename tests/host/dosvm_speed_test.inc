@@ -135,7 +135,7 @@ static void test_speed_accounting(void)
     v->perf.return_hits = 17; v->perf.return_segmented = 11; v->perf.return_fallbacks = 3;
     v->perf.return_armed = 23; v->perf.return_expired = 2; v->perf.return_reacquired = 19;
     g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
-    CHECK(disk_records==disk_before+11); /* f3-44: vm_perf_if row */
+    CHECK(disk_records==disk_before+13); /* IF row plus two F3-47 disk rows */
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
@@ -679,7 +679,7 @@ static void test_perf_ranking(void)
     CHECK(v->perf.port_overflow == 1);
     struct dosvm_perf_sample widest; memset(&widest, 0xff, sizeof(widest));
     uint32_t gen = v->info.key.generation; v->info.key.generation = UINT32_MAX;
-    perf_live(v, &widest, UINT32_MAX); CHECK(max_record <= 240);
+    perf_live(v, &widest, UINT32_MAX, &v->perf.interval[0].disk); CHECK(max_record <= 240);
     v->info.key.generation = gen;
     g_tsc_per_ms = 0; fake_tsc = 0;
     destroy(v, true); empty();

@@ -14,6 +14,25 @@ static uint32_t irq_save(void) { return 0x200; }
 static void irq_restore(uint32_t flags) { (void)flags; }
 #include <ciuki/task.h>
 #include <ciuki/sync.h>
+/* The image cache is private PMM backing even in this real-VFS fixture.
+ * Physical tokens are offsets, independent of the host pointer width. */
+static uint8_t disk_ram[33u * 65536u];
+static unsigned disk_run_pages[32];
+#define P2V(p) ((void *)(disk_ram + (p)))
+uint32_t pmm_alloc_contig(uint32_t pages)
+{
+    CHECK(pages == 16);
+    for (unsigned i = 0; i < 32; i++) if (!disk_run_pages[i]) {
+        disk_run_pages[i] = pages; return (i + 1) * 65536u;
+    }
+    return 0;
+}
+void pmm_free(uint32_t phys)
+{
+    CHECK(phys >= 65536u && phys < sizeof(disk_ram));
+    unsigned i = phys / 65536u - 1;
+    CHECK(disk_run_pages[i]); disk_run_pages[i]--;
+}
 static struct task disk_caller;
 struct task *g_current = &disk_caller;
 uint64_t deadline_after_ms(uint32_t ms) { return fs_now_ms()+ms; }
@@ -57,7 +76,7 @@ static void ordinary_operations(struct storage *s)
     int h=vfs_open(&table,"C:/SYSTEM/SETTINGS.CFG",VFS_WRITE|VFS_READ|VFS_CREATE,0,0);CHECK(h>=0);
     size_t done;OK(vfs_write(&table,h,"volume=17\n",10,&done));CHECK(done==10);OK(vfs_close(&table,h));
     char path[24];OK(dosvm_window_base(path));CHECK(!strcmp(path,DOSVM_BUNDLED_BASE));
-    memset(&vm,0,sizeof(vm));vm.info.key.generation=1;
+    memset(&vm,0,sizeof(vm));vm.info.key.generation=1;vm.info.commitment=DOSVM_LOW_CAP;
     OK(dosvm_disk_open(&vm,path));uint8_t sector[512];
     OK(dosvm_disk_read(&vm,128,sector));CHECK(!memcmp(sector,program,sizeof(program)));
     memset(sector,0x53,sizeof(sector));OK(dosvm_disk_write(&vm,300,sector));
