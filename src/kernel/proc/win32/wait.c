@@ -10,7 +10,7 @@ struct w32_wait {
     struct proc_thread *thread;
     struct w32_object *objects[W32_WAIT_MAX];
     uint32_t count, mask, result;
-    bool all, alertable;
+    bool all, alertable, new_input;
 };
 static struct w32_wait *waiters, **wait_tail = &waiters;
 static bool object_ready(struct w32_object *o, uint32_t tid)
@@ -47,7 +47,7 @@ static uint32_t acquire(struct w32_wait *w)
         return W32_WAIT_FAILED;
     if (w->alertable && w->thread->w32->head)
         return W32_WAIT_IO_COMPLETION;
-    bool queue = !!(w->mask & w32_queue_bits(w->thread));
+    bool queue = !!(w->mask & (w->new_input ? w32_queue_changed(w->thread) : w32_queue_bits(w->thread)));
     if (!w->count && !w->mask)
         return W32_WAIT_PENDING;
     if (w->all) {
@@ -122,7 +122,7 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
 {
     a->result = W32_WAIT_FAILED;
     if (a->count > 64 || (a->wake_mask && a->count == 64) || a->all > 1 || a->alertable > 1
-        || a->wake_mask & ~W32_QS_ALL) {
+        || a->wake_mask & ~W32_QS_ALL || a->reserved & ~W32_WAIT_NEW_INPUT) {
         a->error = 87;
         return 0;
     }
@@ -134,6 +134,7 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
     struct w32_wait w = { .thread = t,
         .count = a->count,
         .all = !!a->all,
+        .new_input = !!(a->reserved & W32_WAIT_NEW_INPUT),
         .alertable = !!a->alertable,
         .mask = a->wake_mask,
         .result = W32_WAIT_PENDING };

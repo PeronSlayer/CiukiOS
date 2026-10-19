@@ -125,6 +125,23 @@ struct ciuki_w32_message_args {
 #define W32_MSG_REPLY 4u
 #define W32_MSG_POLL_REPLY 5u
 #define W32_MSG_STATUS 6u
+/* SELECT: message.window=-1 means thread messages, otherwise exact HWND or
+ * zero=all. Optional buffer/bytes is an array of <=256 matching HWNDs.
+ * message.message/wparam are inclusive range bounds (0/0=all).
+ * token input: REMOVE=1, SENT_ONLY=2. Output token identifies a sent record.
+ * STATUS returns changed QS bits in message.wparam and clears requested bits.
+ * MARK sets synthetic wake bits for this or another same-process thread; the
+ * mask is in message.wparam. QUIT is coalesced and bypasses retrieval filters. */
+#define W32_MSG_SELECT 7u
+#define W32_MSG_MARK 8u
+#define W32_MSG_CANCEL 9u
+#define W32_MSG_NOTIFY 10u
+#define W32_MSG_QUIT 11u
+#define W32_MSG_START 12u /* start synchronous send, return token without blocking */
+#define W32_SELECT_REMOVE 1u
+#define W32_SELECT_SENT_ONLY 2u
+/* wait.reserved bit zero selects new arrivals; zero retains the f5-04 ABI. */
+#define W32_WAIT_NEW_INPUT 1u
 struct ciuki_w32_section_args {
     struct ciuki_w32_header header;
     uint32_t kind, file, bytes, protect, name, flags, result, error;
