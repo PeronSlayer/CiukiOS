@@ -739,6 +739,50 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-ddraw-qemu-t23",
+      "probe": "w32-ddraw",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-ddraw run={run_id}",
+      "timeout": 120,
+      "integration_pending": "f5-11 /System/Win32/Fixtures/ddraw-exercise.exe authored, unrun; USER lease/clip seam and kernel observer integration pending lead",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ddraw_surfaces"
+            },
+            "fields": {
+              "depths": {
+                "eq": 3
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "ddraw_loss_restore"
+            },
+            "fields": {
+              "cycles": {
+                "eq": 10
+              },
+              "retained_system": {
+                "eq": 1
+              },
+              "leaks": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

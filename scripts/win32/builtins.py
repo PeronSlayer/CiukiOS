@@ -9,7 +9,7 @@ import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
-from scripts.win32 import stubs, kernel32, gdi32, user32
+from scripts.win32 import stubs, kernel32, gdi32, user32, ddraw
 
 def build(out=None):
     out=Path(out or ROOT/'build/apps/win32');out.mkdir(parents=True,exist_ok=True)
@@ -52,6 +52,9 @@ def build(out=None):
     user_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='user32.dll':store['dlls'][i]=user32.build(out,user_base,flags)
+    ddraw_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    for i,dll in enumerate(store['dlls']):
+        if dll['name']=='ddraw.dll':store['dlls'][i]=ddraw.build(out,ddraw_base)
     from scripts.win32 import codecs
     codec_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     codec_dlls=codecs.build(out,codec_base,flags)
@@ -79,6 +82,8 @@ def build(out=None):
         '/base:0x00400000','/subsystem:windows,4.0','/osversion:4.0','/timestamp:0',
         '/incremental:no','/out:'+str(peer_exe),str(peer)],check=True)
     hashes[peer_exe.name]=hashlib.sha256(peer_exe.read_bytes()).hexdigest()
+    exercise=ddraw.build_exercise(fixture_source)
+    hashes[exercise.name]=hashlib.sha256(exercise.read_bytes()).hexdigest()
     # Same authored PE bytes under a separate, explicitly shimmed identity.
     shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
     hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()
