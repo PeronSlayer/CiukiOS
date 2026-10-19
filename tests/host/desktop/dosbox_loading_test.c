@@ -40,6 +40,8 @@ static int input_refused;
 static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
+static unsigned settings_phase,settings_seen,settings_blur,settings_restore;
+static uint32_t settings_marker;
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
@@ -60,7 +62,7 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
     if (p.opcode == DESK_DAMAGE) {
         damage_count++;
         if (fs_panel_seen && desk_get32(m->data+16)==480) assert(!desk_get32(m->data+8));
-        else if (presents) {
+        else if (presents && !(scenario>=11 && desk_get32(m->data+16)==480)) {
             unsigned y = desk_get32(m->data + 8), h = desk_get32(m->data + 16);
             assert(h == 8 && (y == 0 || y == 16 || y == 264));
         } else assert(screen[0] == replay_theme.face);
@@ -82,6 +84,16 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
         desk_message(m, DESK_FOCUS, 8); desk_put32(m->data + 4, 1); focus_loss++;
     } else if (scenario==8 && presents && !fs_command) {
         fs_command=1; desk_message(m,DESK_DOS_FULLSCREEN,4);
+    } else if (scenario>=11 && presents && settings_phase<(scenario==12 ? 2u : 6u)) {
+        unsigned step=settings_phase++;
+        if (step&1) { errno=EAGAIN; return -1; }
+        if (!step) settings_marker=screen[180*640+170];
+        desk_message(m,DESK_KEY,44);
+        desk_put32(m->data+16,CIUKI_INPUT_KEY);
+        desk_put32(m->data+28,step==0 ? CIUKI_KEY_F12 : step==2 ? CIUKI_KEY_2 : CIUKI_KEY_ESCAPE);
+        desk_put32(m->data+32,1);
+    } else if (scenario==12 && settings_phase==2) {
+        desk_message(m,DESK_CLOSE_REQUEST,4);
     } else if ((presents && clock_ms > enter_ms + 650) || (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++;
     } else { errno = EAGAIN; return -1; }
@@ -93,12 +105,16 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     assert(c->version == 1 && c->size == sizeof(*c));
     if (op == CIUKI_DOSVM_CREATE) {
         assert(c->surface_fd == 7);
-        if (scenario == 2) { errno = ENOMEM; return -1; }
+        assert(c->launch.game==(scenario==6 ? 0u : 2u));
+        assert(c->launch.kernel==((scenario==9 || scenario==10) ? 1u : 0u));
+        if (scenario == 2 || scenario==9) { errno = scenario==9 ? EIO : ENOMEM; return -1; }
         c->id = 1; c->generation = 9; return 0;
     }
     assert(c->id == 1 && c->generation == 9);
     switch (op) {
-    case CIUKI_DOSVM_FOCUS: return 0;
+    case CIUKI_DOSVM_FOCUS:
+        if (scenario>=11 && settings_phase) { if (c->focused) settings_restore++; else settings_blur++; }
+        return 0;
     case CIUKI_DOSVM_FULLSCREEN:
         assert(scenario==8 && c->focused); fs_active=1; fs_until=clock_ms+100; return 0;
     case CIUKI_DOSVM_STATUS:
@@ -139,6 +155,7 @@ void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e) { (void)c; (
 void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32_t colour)
 {
     (void)c; (void)x; (void)y; (void)w; (void)colour;
+    if (!strcmp(s,"DOS kernel")) settings_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
 }
@@ -151,7 +168,7 @@ void desk_paint_frame(struct desk_paint *p,int x,int y,int w,int h,const struct 
 { (void)p; (void)x; (void)y; (void)w; (void)h; (void)s; }
 struct du_rect du_intersection(struct du_rect a,struct du_rect b) { (void)b; return a; }
 void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_t ink)
-{ (void)font; du_text_fit(c,x,y,350,s,ink); }
+{ (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel")) c->pixels[y*640+x]=0x123456; }
 int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
 { du_text_fit(c,b.x,b.y,b.w,s,ink); return 1; }
 void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
@@ -161,9 +178,15 @@ int main(int argc, char **argv)
 {
     assert(argc == 2); scenario = atoi(argv[1]);
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
-    int result = dosbox_main(scenario == 6 ? 1 : 5, launch);
-    if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5)
-        assert(result == 1 && error_seen && !presents && closed == (scenario != 2));
+    char *reference[]={"dosbox","--name=DOOM","--dos-kernel=freedos-1.3","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    if (scenario>=11) assert(!dosbox_setting_save(2,0));
+    int selected=scenario==9 || scenario==10;
+    int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    if (selected || scenario==11) assert(dosbox_setting_load(2)==1);
+    if (scenario>=11) assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
+    if (scenario==11) assert(screen[180*640+170]==settings_marker);
+    if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9)
+        assert(result == 1 && error_seen && !presents && closed == (scenario != 2 && scenario!=9));
     else assert(!result && presents && !error_seen && closed == 1);
     if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 2);
     if (scenario == 6) assert(!armed && !entered);

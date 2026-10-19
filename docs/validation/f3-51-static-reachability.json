@@ -1,0 +1,1513 @@
+{
+  "schema_version": 1,
+  "runtime_trace": "not-collected",
+  "files": [
+    {
+      "path": "/WOLF3D/W3DHELP.EXE",
+      "sha256": "ea226934cbfa1d11060992c2201aabe6c5e2310a117225dd0388a068d5b23684",
+      "format": "LZEXE",
+      "load_bytes": 18538,
+      "load_sha256": "6fd9684e93ead153d87fdd9337b8afa52fc7f09967b952601d37aac4d8f50248",
+      "original_entry": 13216,
+      "static": {
+        "instructions": 61,
+        "interrupts": [
+          {
+            "offset": 13234,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 13243,
+            "vector": "21",
+            "ax": "34??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 13307,
+            "vector": "21",
+            "ax": "4A??",
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 8668,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 8666,
+            "reason": "target not in decoded instruction boundaries"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 23
+    },
+    {
+      "path": "/WOLF3D/WOLF3D.EXE",
+      "sha256": "75bd63f1db75be77a9dfd317144fec2a86d2a409dd3b6847a251a2565b646280",
+      "format": "LZEXE",
+      "load_bytes": 287040,
+      "load_sha256": "59fcff3a101b49e06f98190d266180abca344ff942d8caf3fbacc347a694f350",
+      "original_entry": 0,
+      "static": {
+        "instructions": 432,
+        "interrupts": [
+          {
+            "offset": 10,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 200,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 258,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 268,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 277,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 290,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 300,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 443,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 459,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 472,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 485,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 498,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 518,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 530,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 541,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 552,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 563,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 659,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 4682,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x4394]"
+          },
+          {
+            "offset": 4706,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x4398]"
+          },
+          {
+            "offset": 4710,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x439c]"
+          },
+          {
+            "offset": 639,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 646,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 4666,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bx+0x4854]"
+          },
+          {
+            "offset": 363,
+            "reason": "indirect/far transfer",
+            "instruction": "call word 0x44e:word 0x178c"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 28
+    },
+    {
+      "path": "/DOOM/DM.EXE",
+      "sha256": "2725df25c7536aa98a4e6282e61e17186777f54074e6fa56d9a38825dd1c7e09",
+      "format": "LZEXE",
+      "load_bytes": 76934,
+      "load_sha256": "7956a61d4b882d3d6bb843cbd776cc2d5c93956caa977ceb062fe1ddf34f6105",
+      "original_entry": 0,
+      "static": {
+        "instructions": 461,
+        "interrupts": [
+          {
+            "offset": 10,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 153,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 221,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 231,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 240,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 253,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 263,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 353,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 380,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 393,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 406,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 419,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 439,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 451,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 462,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 473,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 484,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17644,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 315,
+            "reason": "indirect/far transfer",
+            "instruction": "call word 0x94d:word 0xfd5"
+          },
+          {
+            "offset": 606,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 613,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 1396,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0xab8]"
+          },
+          {
+            "offset": 1422,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0xabc]"
+          },
+          {
+            "offset": 1426,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0xac0]"
+          },
+          {
+            "offset": 1380,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bx+0x20d4]"
+          },
+          {
+            "offset": 541,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 548,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 18
+    },
+    {
+      "path": "/DOOM/DOOM.EXE",
+      "sha256": "b8020523561a5ad9706e009a52d61c578f37faafd85ac471962308406292ce27",
+      "format": "DOS/4GW",
+      "status": "body-format-and-runtime-reachability-open"
+    },
+    {
+      "path": "/DOOM/DWANGO.EXE",
+      "sha256": "724486508cb23da93986c34336299972fbfaa2509a9ed18b0ec2832e07d600ca",
+      "format": "LZEXE",
+      "load_bytes": 129434,
+      "load_sha256": "6eb3f823cfd3ab7a017e17c9e3aa97b726412800f162330a77d58ade9622622f",
+      "original_entry": 0,
+      "static": {
+        "instructions": 475,
+        "interrupts": [
+          {
+            "offset": 10,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 183,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 241,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 251,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 260,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 273,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 283,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 405,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 430,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 443,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 456,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 469,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 489,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 501,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 512,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 523,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 534,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 23028,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 327,
+            "reason": "indirect/far transfer",
+            "instruction": "call word 0xaaa:word 0x73f"
+          },
+          {
+            "offset": 656,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 663,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 3404,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x2134]"
+          },
+          {
+            "offset": 3430,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x2138]"
+          },
+          {
+            "offset": 3434,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x213c]"
+          },
+          {
+            "offset": 3388,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bx-0x3636]"
+          },
+          {
+            "offset": 591,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 598,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 27
+    },
+    {
+      "path": "/DOOM/IPXSETUP.EXE",
+      "sha256": "1e5eeb2e3b6f526d603f19ed08c00668e04bd2b7e6439c109b84b1c61d283d51",
+      "format": "LZEXE",
+      "load_bytes": 36944,
+      "load_sha256": "3229531821d3950b8d1f129ec98d7048860d88d5174dda9573e8d89972acd52f",
+      "original_entry": 256,
+      "static": {
+        "instructions": 5854,
+        "interrupts": [
+          {
+            "offset": 265,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 436,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 494,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 504,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 513,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 526,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 536,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 605,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 626,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 639,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 652,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 665,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 685,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 697,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 708,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 719,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 730,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 1234,
+            "vector": "2f",
+            "ax": "7A00",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 5434,
+            "vector": "21",
+            "ax": "19??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 5692,
+            "vector": "21",
+            "ax": "2C??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 5716,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 5739,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 5872,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 6070,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 6308,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8178,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 9765,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11499,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11566,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11652,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11668,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11681,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 11696,
+            "vector": "21",
+            "ax": "4200",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14274,
+            "vector": "21",
+            "ax": "19??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14306,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14663,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14693,
+            "vector": "21",
+            "ax": "40??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 15106,
+            "vector": "21",
+            "ax": "3D??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17690,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 852,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 859,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 5546,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x6e8e]"
+          },
+          {
+            "offset": 5568,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x6e90]"
+          },
+          {
+            "offset": 5572,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x6e92]"
+          },
+          {
+            "offset": 5532,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bx-0x701a]"
+          },
+          {
+            "offset": 1161,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 8285,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0xa]"
+          },
+          {
+            "offset": 8418,
+            "reason": "indirect/far transfer",
+            "instruction": "jmp word near [cs:bx+0x249d]"
+          },
+          {
+            "offset": 20906,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x6e8e]"
+          },
+          {
+            "offset": 20931,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 1632,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 1657,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 1181,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 18296,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 1218,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 1126,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x8f4a]"
+          },
+          {
+            "offset": 6413,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 6451,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 7331,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 6466,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 6484,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 6533,
+            "reason": "indirect/far transfer",
+            "instruction": "jmp word near [cs:bx+0x1d43]"
+          },
+          {
+            "offset": 787,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 794,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 20
+    },
+    {
+      "path": "/DOOM/SERSETUP.EXE",
+      "sha256": "94cf23eac5fc43da942f9529e9ff4dd6dc5aab82fe348bd72eb7de971d9170f5",
+      "format": "LZEXE",
+      "load_bytes": 33816,
+      "load_sha256": "cc5702c69db85b39ff91e0f49f1d8393460f4f4592a9a331e341ebac667db8dd",
+      "original_entry": 256,
+      "static": {
+        "instructions": 6792,
+        "interrupts": [
+          {
+            "offset": 265,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 436,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 494,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 504,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 513,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 526,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 536,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 605,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 626,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 639,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 652,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 665,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 685,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 697,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 708,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 719,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 730,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 7791,
+            "vector": "21",
+            "ax": "19??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8049,
+            "vector": "21",
+            "ax": "2C??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8073,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8096,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8403,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8601,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 8811,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 10704,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 12489,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14223,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14290,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14376,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14392,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14405,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 14420,
+            "vector": "21",
+            "ax": "4200",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17024,
+            "vector": "21",
+            "ax": "19??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17056,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17372,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17402,
+            "vector": "21",
+            "ax": "40??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17815,
+            "vector": "21",
+            "ax": "3D??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 20545,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 852,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 859,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 7903,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x7d0a]"
+          },
+          {
+            "offset": 7925,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x7d0c]"
+          },
+          {
+            "offset": 7929,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x7d0e]"
+          },
+          {
+            "offset": 7889,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bx-0x5fce]"
+          },
+          {
+            "offset": 10811,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0xa]"
+          },
+          {
+            "offset": 10944,
+            "reason": "indirect/far transfer",
+            "instruction": "jmp word near [cs:bx+0x2e7b]"
+          },
+          {
+            "offset": 2596,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 3221,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 23761,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [0x7d0a]"
+          },
+          {
+            "offset": 23786,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 8916,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 8954,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x4]"
+          },
+          {
+            "offset": 9834,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 8969,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 8987,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [bp+0x6]"
+          },
+          {
+            "offset": 9036,
+            "reason": "indirect/far transfer",
+            "instruction": "jmp word near [cs:bx+0x270a]"
+          },
+          {
+            "offset": 2430,
+            "reason": "indirect/far transfer",
+            "instruction": "jmp word near [cs:bx+0xa16]"
+          },
+          {
+            "offset": 12406,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bp-0x4]"
+          },
+          {
+            "offset": 787,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 794,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 19
+    },
+    {
+      "path": "/DOOM/SETUP.EXE",
+      "sha256": "c9d328bff268854414feae5459870aac6f779e55a9cbf4568a83fef9b7be6e15",
+      "format": "LZEXE",
+      "load_bytes": 105602,
+      "load_sha256": "b415bae7109ad01bad4301edc8407e77ce43a8a9ac34dcebf76360498abe4883",
+      "original_entry": 0,
+      "static": {
+        "instructions": 455,
+        "interrupts": [
+          {
+            "offset": 10,
+            "vector": "21",
+            "ax": "30??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 183,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 241,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 251,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 260,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 273,
+            "vector": "21",
+            "ax": "49??",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 283,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 405,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 430,
+            "vector": "21",
+            "ax": "3500",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 443,
+            "vector": "21",
+            "ax": "3504",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 456,
+            "vector": "21",
+            "ax": "3505",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 469,
+            "vector": "21",
+            "ax": "3506",
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 489,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 501,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 512,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 523,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 534,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          },
+          {
+            "offset": 17604,
+            "vector": "21",
+            "ax": null,
+            "evidence": "static-direct-reachability"
+          }
+        ],
+        "unresolved": [
+          {
+            "offset": 327,
+            "reason": "indirect/far transfer",
+            "instruction": "call word 0xe0a:word 0x3e5"
+          },
+          {
+            "offset": 656,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 663,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 1574,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x227a]"
+          },
+          {
+            "offset": 1600,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x227e]"
+          },
+          {
+            "offset": 1604,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [0x2282]"
+          },
+          {
+            "offset": 1558,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [bx-0x23ea]"
+          },
+          {
+            "offset": 591,
+            "reason": "indirect/far transfer",
+            "instruction": "call word far [es:bx+0x2]"
+          },
+          {
+            "offset": 598,
+            "reason": "indirect/far transfer",
+            "instruction": "call word near [es:bx+0x2]"
+          },
+          {
+            "offset": 675,
+            "reason": "target not in decoded instruction boundaries"
+          },
+          {
+            "offset": 675,
+            "reason": "target not in decoded instruction boundaries"
+          }
+        ],
+        "complete": false
+      },
+      "candidate_count": 18
+    },
+    {
+      "path": "/QUAKE/CWSDPMI.EXE",
+      "sha256": "0a890815df6cbdc052915a856c16944cedec825267e7b6e453c351a0cdc695f2",
+      "format": "other",
+      "status": "body-format-and-runtime-reachability-open"
+    },
+    {
+      "path": "/QUAKE/PDIPX.COM",
+      "sha256": "868c16e2a561ebc955ab873013a8b2a5e6d2cdd95d185915da51a9294dea15e9",
+      "format": "other",
+      "status": "body-format-and-runtime-reachability-open"
+    },
+    {
+      "path": "/QUAKE/QLAUNCH.EXE",
+      "sha256": "83ce5209f15623fd0a00726e1e6cfee900829971e3294270b8efbca28ea1aac3",
+      "format": "other",
+      "status": "body-format-and-runtime-reachability-open"
+    },
+    {
+      "path": "/QUAKE/QUAKE.EXE",
+      "sha256": "7cdb244122cc607cc6f162524bfcac60f6d11d8ca2ff07473d6cd962311161fb",
+      "format": "go32",
+      "status": "body-format-and-runtime-reachability-open"
+    }
+  ]
+}

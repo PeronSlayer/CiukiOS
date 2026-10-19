@@ -80,6 +80,8 @@ def records(text):
             line = bytes.fromhex(fields["data"]).decode("ascii").strip()
         elif line.startswith("guest: "):
             line = line[7:]
+        if line == "D48 SHELL":
+            continue
         if not line.startswith("D48"):
             continue
         match = LINE.fullmatch(line)

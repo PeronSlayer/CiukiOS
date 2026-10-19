@@ -175,6 +175,11 @@ struct dosvm {
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
     const char *probe;
+    bool disable_file_bridge;
+    uint8_t game, kernel;
+    void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
+    void *record_arg;
+    char base_sha256[65];
     struct vfs_table disk_table;
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
@@ -185,7 +190,7 @@ struct dosvm {
         unsigned previous, next;
     } read_cache[DOSVM_READ_BLOCKS];
     unsigned read_recent, read_oldest, read_capacity, read_pages;
-    char overlay_path[48];
+    char overlay_path[128];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];
     unsigned sector_count;
     uint8_t sector[512];

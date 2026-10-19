@@ -443,6 +443,7 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
             v->info.video_stage = (uint32_t)(v->line[8] - '0');
         }
         verdict_line(v);
+        if (v->record_observer) v->record_observer(v,v->line,v->line_length,v->record_arg);
         unsigned parts = (v->line_length + 47) / 48;
         for (unsigned part = 0; part < parts; part++) {
             char encoded[97];

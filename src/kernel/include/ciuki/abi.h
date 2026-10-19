@@ -1197,6 +1197,11 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
+/* CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
+ * a FreeDOS override is permitted only for an explicit game, never the shell. */
+#define CIUKI_DOSVM_CIUKIDOS 0u
+#define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_GAME_COUNT 3u
 #define CIUKI_DOSVM_VIDEO_READY 1u /* STATUS.changed launch flags */
 #define CIUKI_DOSVM_LAUNCH_FAILED 2u
 #define CIUKI_DOSVM_FULL_SCREEN 4u /* STATUS.changed */
@@ -1219,6 +1224,7 @@ struct ciuki_dosvm_command {
     char name[32]; /* 40 */
     union {
         struct ciuki_input_event event; /* 72: INPUT */
+        struct { uint32_t kernel, game, reserved[8]; } launch; /* CREATE input */
         struct { uint32_t bands[2], reserved[8]; } presentation; /* PRESENT_BANDS output */
     };
     struct ciuki_rect damage; /* 112 */
@@ -1497,6 +1503,8 @@ _Static_assert(sizeof(struct ciuki_dosvm_command) == 136, "ciuki_dosvm_command s
 _Static_assert(_Alignof(struct ciuki_dosvm_command) == 4, "ciuki_dosvm_command alignment");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, surface_fd) == 16, "ciuki_dosvm_command.surface_fd offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, name) == 40, "ciuki_dosvm_command.name offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.kernel) == 72, "ciuki_dosvm_command.kernel offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.game) == 76, "ciuki_dosvm_command.game offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[0]) == 72, "ciuki_dosvm_command.bands low offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[1]) == 76, "ciuki_dosvm_command.bands high offset");

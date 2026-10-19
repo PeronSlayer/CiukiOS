@@ -21,6 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "loading.h"
+#include "settings.h"
 
 static void command(struct ciuki_dosvm_command *c, uint32_t id, uint32_t generation)
 {
@@ -92,6 +93,7 @@ int main(int argc, char **argv)
 {
     int channel = 3, result = 1, pause_background = 0;
     const char *name = "CiukiDOS";
+    const char *kernel_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
     for (int i = 1; i < argc; i++) {
@@ -100,6 +102,7 @@ int main(int argc, char **argv)
             if (!argv[i][13] || *end || n < 3 || n >= CIUKI_OPEN_MAX) return 2;
             channel = (int)n;
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
+        else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
         else {                                                    /* COMMAND words */
@@ -115,6 +118,16 @@ int main(int argc, char **argv)
         if (n <= 0) { fprintf(stderr, "dosbox: cannot type '%s' at the DOS prompt\n", typed); return 2; }
         autorun_count = (unsigned)n;
     }
+    unsigned game=dosbox_game(typed);
+    unsigned kernel=game ? dosbox_setting_load(game) : 0;
+    if (kernel_override) {
+        if (!game) return 2;
+        kernel=dosbox_kernel_value(kernel_override);
+        if (dosbox_setting_save(game,kernel)) { perror("dosbox: DOS kernel setting"); return 1; }
+    }
+    int settings_open=0, settings_repaint=0;
+    uint32_t *settings_backup=NULL;
+    char setting_detail[96]="Changes apply when you close and relaunch this game.";
     size_t len = strlen(name);
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 1;
     int surface = ciuki_surface_create(CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT, CIUKI_SURFACE_XRGB8888);
@@ -135,6 +148,7 @@ int main(int argc, char **argv)
     uint64_t fullscreen_notice_until=0;
     uint32_t fullscreen_error_seen=0;
     if (loading) dosbox_panel(&canvas, name, icon, NULL, detail, 0);
+    if (game) fprintf(stderr,"dosbox: DOS kernel: %s; F12 opens game settings\n",dosbox_kernel_label(kernel));
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4);
     if (send_packet(channel, &m)) goto done;
@@ -144,9 +158,11 @@ int main(int argc, char **argv)
     m.fd_count = 1; m.fds[0] = surface;
     if (send_packet(channel, &m)) goto done;
     command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
+    c.launch.kernel=kernel; c.launch.game=game;
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
-        snprintf(detail, sizeof(detail), "%s", strerror(errno));
+        snprintf(detail, sizeof(detail), "%s", kernel==CIUKI_DOSVM_FREEDOS13 ?
+                 "FreeDOS 1.3 is unavailable. Install or repair FreeDOS support, then relaunch." : strerror(errno));
         loading = 1; result = 1;
     } else { id = c.id; generation = c.generation; }
     if (id && pause_background) {
@@ -181,10 +197,39 @@ int main(int argc, char **argv)
             } else if (packet.opcode == DESK_FOCUS || packet.opcode == DESK_KEY ||
                        packet.opcode == DESK_MOTION || packet.opcode == DESK_BUTTON) {
                 if (packet.opcode == DESK_MOTION && packet.event.type == CIUKI_INPUT_WHEEL) continue;
+                if (game && packet.opcode==DESK_KEY && packet.event.code==CIUKI_KEY_F12) {
+                    if (packet.event.value==1) {
+                        if (settings_open) { dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1; }
+                        else if (dosbox_settings_capture(&canvas,&settings_backup)) continue;
+                        settings_open=!settings_open;
+                        if (id) {
+                            command(&c,id,generation); c.focused=focused && !settings_open;
+                            if (ciuki_dosvm(CIUKI_DOSVM_FOCUS,&c) && errno!=ESRCH) goto done;
+                        }
+                    }
+                    continue;
+                }
+                if (settings_open && packet.opcode==DESK_KEY) {
+                    if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_1 || packet.event.code==CIUKI_KEY_2)) {
+                        unsigned choice=packet.event.code==CIUKI_KEY_2 ? CIUKI_DOSVM_FREEDOS13 : 0;
+                        if (dosbox_setting_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
+                        else { kernel=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
+                    }
+                    if (packet.event.code==CIUKI_KEY_ESCAPE && packet.event.value==1) {
+                        settings_open=0;
+                        dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1;
+                        if (id) {
+                            command(&c,id,generation); c.focused=focused;
+                            if (ciuki_dosvm(CIUKI_DOSVM_FOCUS,&c) && errno!=ESRCH) goto done;
+                        }
+                    }
+                    continue;
+                }
+                if (settings_open && packet.opcode!=DESK_FOCUS) continue;
                 if (!id || failure) continue;
                 command(&c, id, generation);
                 unsigned op = packet.opcode == DESK_FOCUS ? CIUKI_DOSVM_FOCUS : CIUKI_DOSVM_INPUT;
-                if (op == CIUKI_DOSVM_FOCUS) c.focused = focused = packet.focused ? 1 : 0;
+                if (op == CIUKI_DOSVM_FOCUS) { focused=packet.focused ? 1 : 0; c.focused=focused && !settings_open; }
                 else c.event = packet.event;
                 /* A full guest key queue drops the key, as a full BIOS buffer does. */
                 if (ciuki_dosvm(op, &c) && errno != EAGAIN && errno != EACCES) {
@@ -194,6 +239,20 @@ int main(int argc, char **argv)
             }
         }
         if (!running) break;
+        if (settings_repaint && configured) {
+            desk_message(&m,DESK_DAMAGE,20);
+            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+            if (send_packet(channel,&m)) goto done;
+            settings_repaint=0;
+        }
+        if (settings_open && configured) {
+            dosbox_kernel_panel(&canvas,dosbox_kernel_label(kernel),setting_detail);
+            desk_message(&m,DESK_DAMAGE,20);
+            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+            if (send_packet(channel,&m)) goto done;
+            struct timespec pause={.tv_nsec=20000000}; nanosleep(&pause,NULL);
+            continue;
+        }
         if (failure) goto panel;
         int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
@@ -281,6 +340,7 @@ int main(int argc, char **argv)
 panel:
         if (configured && (failure ? !failure_painted : now_ms() - panel_at >= 80)) {
             dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
+            if (game) du_text_wrap(&canvas,(struct du_rect){120,300,400,18},"F12: DOS kernel settings",DU_INK);
             desk_message(&m, DESK_DAMAGE, 20);
             desk_put32(m.data + 4, 0); desk_put32(m.data + 8, 0);
             desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
@@ -292,6 +352,7 @@ panel:
     }
     if (!failure) result = 0;
 done:
+    free(settings_backup);
     command(&c, id, generation);
     if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);

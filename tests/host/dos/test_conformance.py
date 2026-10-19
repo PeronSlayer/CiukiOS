@@ -97,11 +97,22 @@ class EvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             image, probes = Path(folder) / "small-input", Path(folder) / "probes"
             image.write_bytes(b"not a disk image; hash fixture only")
-            probes.write_text("{}")
-            manifest = dict(dos_conformance_adapter=1, image_sha256=battery.digest(image),
+            probes.write_text(json.dumps(battery.build(Path(folder)/"coms")))
+            manifest = dict(schema_version=1, dos_conformance_adapter=1, image_sha256=battery.digest(image),
                             probes_sha256=battery.digest(probes), freedos_release="1.3",
-                            freedos_kernel_sha256="a" * 64)
-            reference.qualified(image, manifest, probes)
+                            freedos_kernel_sha256="a" * 64, freedos_shell_sha256="b" * 64,
+                            freedos_share_sha256="c" * 64, freedos_profile_sha256="d" * 64,
+                            freedos_kernel=dict(version="2043",sha256="a"*64),
+                            freedos_shell=dict(version="0.85a",sha256="b"*64),
+                            freedos_share=dict(version="release",sha256="c"*64),
+                            profile=dict(share=True, ansi=False, redirector=False,dpmi=True,xms=True,
+                                         freedos_bridge=False,ciukidos_bridge=True,hardware="qemu-t23"),
+                            read_back="canonical-image",payloads=[dict(path="fixture")])
+            import sys
+            sys.path.insert(0,str(battery.ROOT/"scripts"))
+            import dos_conformance
+            with patch.object(dos_conformance,"readback",return_value=manifest):
+                reference.qualified(image, manifest, probes)
             for key, value in (("dos_conformance_adapter", 0), ("image_sha256", "b" * 64),
                                ("probes_sha256", "c" * 64), ("freedos_release", "master"),
                                ("freedos_kernel_sha256", "unknown")):
@@ -134,6 +145,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_reference_capture_framing_and_reap(self):
         data = ("D48 BEGIN run=12345678 guest=freedos\n" + self.transcript() +
+                "\nD48 CLEAN run=12345678 guest=freedos handles=0 searches=0 locks=0 vms=0 dropped=0" +
                 f"\nD48 END run=12345678 guest=freedos count={len(CASES)}\n").encode()
         self.assertEqual(len(self.simulated_capture(data)), len(CASES))
         with self.assertRaises(ValueError):

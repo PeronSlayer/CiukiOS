@@ -260,9 +260,15 @@ def build(out=None):
         files["/RUNREC.COM"] = assemble("src/probes/dos/run_record.asm", work / "RUNREC.COM")
         files["/CLILOOP.COM"] = assemble("src/probes/dos/cli_loop.asm", work / "CLILOOP.COM")
         files["/DPMI4GW.EXE"], files["/SYSTEM/DOS4GW.EXE"] = watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", work)
+        import importlib.util
+        spec=importlib.util.spec_from_file_location("dos_conformance",ROOT/"scripts/dos_conformance.py")
+        integration=importlib.util.module_from_spec(spec); spec.loader.exec_module(integration)
+        probe_files,probe_manifest=integration.probes(out.parent/"conformance")
+        files.update(probe_files)
+        probe_directories=("D48","D48TEST",*("D48TEST/"+r["tag"] for r in probe_manifest["cases"]))
         refuse_local_payloads({name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
         candidate = work / "DOSBOOT.IMG"
-        write_fat16(candidate, boot, loader, files)
+        write_fat16(candidate, boot, loader, files, directories=probe_directories)
         subprocess.run(["fsck.fat", "-n", str(candidate)], check=True)
         for name, data in files.items():
             actual = subprocess.run(["mcopy", "-i", str(candidate), "::" + name, "-"],

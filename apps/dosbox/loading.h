@@ -5,6 +5,7 @@
 #include "../libdeskui/deskui.h"
 #include "../desktop/catalog.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static inline const char *dosbox_launch_icon(const char *command)
@@ -34,5 +35,42 @@ static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
     struct du_rect bar={120,272,400,18};
     if (!error) du_progress_paint(canvas,bar,0,0,elapsed);
     else du_well(canvas,bar,DU_FACE);
+}
+/* Save only the dialog rectangle and its border, allocated while it is open. */
+#define DOSBOX_SETTINGS_X 80u
+#define DOSBOX_SETTINGS_Y 120u
+#define DOSBOX_SETTINGS_W 480u
+#define DOSBOX_SETTINGS_H 280u
+static inline int dosbox_settings_capture(struct du_canvas *canvas,uint32_t **saved)
+{
+    *saved=malloc(DOSBOX_SETTINGS_W*DOSBOX_SETTINGS_H*sizeof(uint32_t));
+    if (!*saved) return -1;
+    for (unsigned y=0;y<DOSBOX_SETTINGS_H;y++)
+        memcpy(*saved+y*DOSBOX_SETTINGS_W,canvas->pixels+(y+DOSBOX_SETTINGS_Y)*canvas->width+DOSBOX_SETTINGS_X,
+               DOSBOX_SETTINGS_W*sizeof(uint32_t));
+    return 0;
+}
+static inline void dosbox_settings_restore(struct du_canvas *canvas,uint32_t **saved)
+{
+    if (!*saved) return;
+    for (unsigned y=0;y<DOSBOX_SETTINGS_H;y++)
+        memcpy(canvas->pixels+(y+DOSBOX_SETTINGS_Y)*canvas->width+DOSBOX_SETTINGS_X,*saved+y*DOSBOX_SETTINGS_W,
+               DOSBOX_SETTINGS_W*sizeof(uint32_t));
+    free(*saved); *saved=NULL;
+}
+/* Existing window paint primitives, same Ciuki portrait and Tango family. */
+static inline void dosbox_kernel_panel(struct du_canvas *canvas,const char *selection,const char *detail)
+{
+    du_fill(canvas,(struct du_rect){100,140,440,240},DU_FACE);
+    struct desk_paint paint={canvas->pixels,canvas->width,canvas->height,
+        canvas->clip.x,canvas->clip.y,canvas->clip.w,canvas->clip.h};
+    struct desk_frame_style style={.title="DOS kernel",.active=1};
+    desk_paint_frame(&paint,100,140,440,240,&style);
+    du_icon_draw(canvas,120,180,du_icon(DU_ICON_CIUKI,32),DU_ICON_NORMAL);
+    du_text_font(canvas,desk_theme->font_bold,170,180,"DOS kernel",DU_INK);
+    du_text_wrap(canvas,(struct du_rect){120,220,400,60},
+                 "1  CiukiDOS (default)\n2  FreeDOS 1.3\nF12 or Esc to return to the game.",DU_INK);
+    du_text_wrap(canvas,(struct du_rect){120,285,400,24},selection,DU_INK);
+    du_text_wrap(canvas,(struct du_rect){120,315,400,48},detail,DU_INK);
 }
 #endif

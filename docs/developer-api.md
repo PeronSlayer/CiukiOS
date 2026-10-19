@@ -2047,7 +2047,13 @@ focused=1 enter, 0 return to window
 
 focused=1 pause on Alt+Tab, 0 continue
 
+CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
+a FreeDOS override is permitted only for an explicit game, never the shell.
+
 ```c
+#define CIUKI_DOSVM_CIUKIDOS 0u
+#define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_GAME_COUNT 3u
 #define CIUKI_DOSVM_VIDEO_READY 1u
 ```
 
@@ -2143,6 +2149,12 @@ union {
 ```
 
 72: INPUT
+
+```c
+struct { uint32_t kernel, game, reserved[8]; } launch;
+```
+
+CREATE input
 
 ```c
 struct { uint32_t bands[2], reserved[8]; } presentation;

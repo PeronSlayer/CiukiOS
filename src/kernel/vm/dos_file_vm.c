@@ -59,6 +59,7 @@ struct file_runtime {
     bool native_ready;
 };
 static int file_bind(struct dosvm *v,struct dos_file_frame *f,uint16_t caller_cs) {
+    if (v->disable_file_bridge) return -FS_EACCES;
     if (v->files) return -FS_EINVAL;
     unsigned bytes=(sizeof(struct file_runtime)+PAGE_SIZE-1)&~(PAGE_SIZE-1);
     if (v->info.resident+bytes>v->info.commitment) return -FS_ENOMEM;
@@ -99,6 +100,7 @@ static int file_finish(struct dosvm *v,struct v86_frame *f,const struct dos_file
     pack(f,r); return 0;
 }
 int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsigned origin) {
+    if (v->disable_file_bridge) return -ENOSYS;
     if (vector==0x2f) {
         struct dos_file_frame r=unpack(f);
         uint8_t magic[8];

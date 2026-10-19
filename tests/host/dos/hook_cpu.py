@@ -72,7 +72,7 @@ def main():
         dos.write_fat16(fixture, boot, loader, files, directories=("APPS", "RELBASE", "D48", "D48TEST", *("D48TEST/"+row["tag"] for row in selected)))
         manifest = {name: hashlib.sha256(data).hexdigest() for name, data in files.items() if name.endswith((".COM", ".SYS", ".EXE"))}
         (ROOT / "build/codex/f3-50-cpu-hashes.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        for variant in (() if os.getenv("H50_CASE") else ("absent", "old", "short", "swap", "overlap", "occupied", "outside", "alloc")):
+        for variant in (() if os.getenv("H50_CASE") else ("disabled", "absent", "old", "short", "swap", "overlap", "occupied", "outside", "alloc")):
             subprocess.run([str(scratch / "dosvm_hook_cpu"), str(fixture)], cwd=ROOT,
                            env=dict(os.environ, GUEST_NO_FILE_HOOK=variant), timeout=120, check=True)
         if not os.getenv("H50_CASE"):
