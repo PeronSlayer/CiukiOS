@@ -9,7 +9,7 @@ import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
-from scripts.win32 import stubs, kernel32
+from scripts.win32 import stubs, kernel32, gdi32
 
 def build(out=None):
     out=Path(out or ROOT/'build/apps/win32');out.mkdir(parents=True,exist_ok=True)
@@ -46,6 +46,9 @@ def build(out=None):
     audio_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     audio_dlls=audio.build(out,audio_base,flags)
     store['dlls']=[d for d in store['dlls'] if d['name'] not in ('dsound.dll','winmm.dll')]+audio_dlls
+    gdi_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    for i,dll in enumerate(store['dlls']):
+        if dll['name']=='gdi32.dll':store['dlls'][i]=gdi32.build(out,gdi_base)
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='builtin placeholder pending f5-14B measured replacement'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

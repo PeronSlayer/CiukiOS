@@ -1,0 +1,124 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#ifndef W32_GDI_INTERNAL_H
+#define W32_GDI_INTERNAL_H
+#include <w32/gdi32.h>
+#include <w32/services.h>
+#define GDI_LIMIT 32767
+#define GDI_MAX_RECTS 32768u
+enum {
+  GDI_PEN = 1,
+  GDI_BRUSH = 2,
+  GDI_DC = 3,
+  GDI_PALETTE = 5,
+  GDI_FONT = 6,
+  GDI_BITMAP = 7,
+  GDI_REGION = 8,
+  GDI_MEMDC = 10
+};
+struct region {
+  RECT *rects;
+  unsigned count, capacity;
+};
+struct bitmap {
+  struct w32_dib dib;
+  void *allocation, *section;
+  DWORD alloc_size, offset;
+  HDC selected_dc;
+  int mono, dib_section;
+};
+struct brush {
+  LOGBRUSH log;
+  struct w32_dib pattern;
+  uint8_t pixels[256];
+};
+struct font {
+  struct w32_gdi_font_provider provider;
+  void *face;
+  unsigned em;
+};
+struct palette {
+  PALETTEENTRY entries[256];
+  unsigned count;
+  uint8_t mapping[256];
+  DWORD realized_epoch;
+  unsigned dirty;
+};
+struct dc_state {
+  HGDIOBJ pen, brush, font, bitmap, palette;
+  COLORREF bk, text, dcbrush, dcpen;
+  int bk_mode, rop2, stretch, fill, map, extra, palette_background;
+  unsigned align;
+  POINT window_org, viewport_org, brush_org, current;
+  SIZE window_ext, viewport_ext;
+  struct region clip;
+  int has_clip;
+};
+struct saved {
+  struct saved *next;
+  struct dc_state state;
+  int level;
+};
+struct dc {
+  struct dc_state s;
+  struct saved *saved;
+  int level, memory;
+  struct w32_dib surface;
+  struct region visible, shape;
+  int has_visible, has_shape;
+  POINT origin, screen_origin;
+  void (*damage)(void *, const RECT *);
+  void *opaque;
+};
+struct object {
+  unsigned type, refs, stock;
+  union {
+    struct bitmap bitmap;
+    struct brush brush;
+    LOGPEN pen;
+    struct font font;
+    struct palette palette;
+    struct region region;
+    struct dc dc;
+  } u;
+};
+void *gdi_alloc(DWORD);
+void gdi_free(void *, DWORD);
+void gdi_lock(void);
+void gdi_unlock(int *);
+#define GDI_GUARD                                                              \
+  int gdi_guard __attribute__((cleanup(gdi_unlock))) = (gdi_lock(), 0)
+struct object *gdi_object(HGDIOBJ, unsigned);
+struct object *gdi_new(unsigned, HGDIOBJ *);
+struct dc *gdi_dc(HDC);
+struct w32_dib *gdi_target(struct dc *);
+void gdi_ref(HGDIOBJ, int);
+int gdi_region_copy(struct region *, const struct region *);
+void gdi_region_free(struct region *);
+int gdi_region_add(struct region *, RECT);
+int gdi_region_combine(struct region *, const struct region *,
+                       const struct region *, int);
+int gdi_region_point(const struct region *, int, int);
+RECT gdi_region_box(const struct region *);
+int gdi_region_type(const struct region *);
+int gdi_region_shift(struct region *, int, int);
+int gdi_visible(void *, int, int);
+int gdi_transform(struct dc *, POINT *, int, int);
+RECT gdi_rect(struct dc *, RECT);
+void gdi_damage(struct dc *, RECT);
+DWORD gdi_color(COLORREF);
+DWORD gdi_resolve_color(struct dc *, COLORREF);
+DWORD gdi_encode_color(struct dc *, COLORREF);
+DWORD gdi_device_bpp(struct dc *);
+void gdi_brush_pattern(struct dc *, struct w32_dib *, void *);
+COLORREF gdi_colorref(DWORD);
+int gdi_fill(struct dc *, RECT, HBRUSH, int);
+int gdi_brush_pixel(struct dc *, HBRUSH, int, int, DWORD *);
+BOOL gdi_blt(struct dc *, int, int, int, int, const struct w32_dib *, int, int,
+             int, int, DWORD, int64_t);
+int gdi_info(HDC, const BITMAPINFO *, unsigned, void *, struct w32_dib *);
+void gdi_system_palette(DWORD *);
+void gdi_palette_targets(void);
+void gdi_palette_reset(void);
+int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
+             const int *, int);
+#endif

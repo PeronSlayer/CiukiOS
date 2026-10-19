@@ -96,11 +96,17 @@ class KernelCoreTests(unittest.TestCase):
         self.assertEqual([c['id'] for c in suite['cases']],
                          ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
                           'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23','w32-registry-qemu-t23',
-                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23'])
+                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23'])
         for case in suite['cases']:
             if case['probe']=='w32-audio':
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['expected']['predicates'][0]['fields']['lead'],{'le':512})
+                continue
+            if case['probe']=='w32-gdi32':
+                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertEqual(case['selector'],'f5:w32-gdi32 run={run_id}')
+                self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
+                                 ['gdi_dib','gdi_regions_palettes_text','gdi_teardown'])
                 continue
             if case['probe']=='w32-registry':
                 self.assertIn('authored, unrun',case['integration_pending'])
