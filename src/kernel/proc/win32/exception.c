@@ -63,10 +63,12 @@ void w32_deliver(struct proc_thread *t, struct trap_frame *tf, const struct ciuk
 bool w32_continue(struct proc_thread *t, struct trap_frame *tf, struct ciuki_w32_context *c)
 {
     struct w32_delivery *d = t->w32_delivery;
-    if (!d || !w32_context_validate(c, t->process->memory, g_cpu_fxsr, fpu_mxcsr_mask()))
+    if (!w32_context_validate(c, t->process->memory, g_cpu_fxsr, fpu_mxcsr_mask()))
         crash(t, tf, W32_STATUS_INVALID_PARAMETER);
-    if (d->flags & 1) crash(t, tf, W32_EXCEPTION_NONCONTINUABLE);
-    t->w32_delivery = d->next; kfree(d);
+    /* RtlUnwind/NtContinue may restore a context outside a CPU exception.
+     * User ntdll enforces SEH dispositions/noncontinuability; the kernel owns
+     * selector/EFLAGS/address/FPU validation, including on a plain unwind. */
+    if(d){t->w32_delivery = d->next; kfree(d);}
     fpu_w32_import(t->task, c);
     w32_context_restore(tf, c);
     return true;

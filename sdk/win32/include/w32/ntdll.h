@@ -91,7 +91,8 @@ struct w32_teb {
     uint8_t reserved[0xe10 - 0x3c];
     void *TlsSlots[64];
     /* Private core extension, outside the frozen Windows-compatible prefix. */
-    ULONG CoreFilterDepth;
+    ULONG CoreFilterDepth, CoreDebugIndex;
+    char CoreDebug[4][256];
 };
 #ifndef W32_HOST_MODEL
 _Static_assert(sizeof(void *) == 4 && sizeof(UNICODE_STRING) == 8, "i386 ABI");
@@ -101,7 +102,7 @@ _Static_assert(offsetof(struct w32_peb, ProcessParameters) == 0x10, "PEB paramet
 _Static_assert(offsetof(struct w32_peb, ProcessHeap) == 0x18, "PEB heap");
 _Static_assert(offsetof(struct w32_process_parameters, StandardOutput) == 0x1c, "process stdout");
 _Static_assert(offsetof(struct w32_process_parameters, Environment) == 0x48, "process environment");
-_Static_assert(sizeof(struct w32_teb) <= 4096, "TEB descriptor limit");
+_Static_assert(sizeof(struct w32_teb) <= 8192, "TEB descriptor limit");
 _Static_assert(offsetof(struct w32_teb, Tib.Self) == 0x18, "TEB.Self");
 _Static_assert(offsetof(struct w32_teb, ClientId) == 0x20, "TEB.ClientId");
 _Static_assert(offsetof(struct w32_teb, ThreadLocalStoragePointer) == 0x2c, "TEB.Tls");

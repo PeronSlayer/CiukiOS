@@ -184,7 +184,7 @@ struct w32_process {
     struct w32_object *identity;
     struct w32_view *views;
     uint32_t handles, private_bytes, apc_dispatcher;
-    uint32_t endpoint[2], service;
+    uint32_t endpoint[2], service, diagnostic_count;
     bool closing;
 };
 struct w32_apc_node {

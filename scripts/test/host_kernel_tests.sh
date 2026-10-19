@@ -575,3 +575,6 @@ python3 "$root/tests/host/test_opl3_tables.py"
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py
+
+# f5-05B real CIUKI_SYS_W32 backend over production VM/sections, H0 only.
+python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loader.py

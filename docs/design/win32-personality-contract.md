@@ -2593,3 +2593,66 @@ names exceeded the fixed 24576-byte loader image by 28 bytes; the 65-byte
 `selector_buffer` moves to loader BSS (beyond the fixed image, inside
 `loader_end`), the same hunk f3-20 carries, since both input paths write
 every byte before validation.
+
+## f5-05B — Kernel loader integration research (2026-10-19)
+
+Primary references rechecked before implementation:
+
+- [Microsoft PE/COFF](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format):
+  retain part A's bounded walkers and refusal names; section backing is supplied
+  by f5-04, with private writes for relocations, IAT and TLS indices. A raw
+  snapshot is distinct from an image view; short raw tails are zero filled.
+- [DLL search order](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order)
+  and [DLL entry points](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-entry-point-function):
+  preserve the contract's era-specific order and recursive process loader lock;
+  dependency notifications and rollback stay in user mode.
+- [Exception dispatch](https://learn.microsoft.com/en-us/windows/win32/debug/exception-dispatching)
+  and [TEB](https://learn.microsoft.com/en-us/windows/win32/api/winternl/ns-winternl-teb):
+  register the user dispatcher through the frozen syscall, keep the kernel's
+  TEB/stack ownership, and convert bootstrap parameters to the public RTL layout.
+- Wine 10.0 [loader](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/ntdll/loader.c)
+  and [NTDLL build boundary](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/Makefile.in):
+  inspected as references only. No Wine Unix companion, server protocol or new
+  third-party code is introduced. The audit pin remains unchanged.
+
+Repository comparison: the existing kernel maps an EXE and a test bootstrap;
+part A's production ntdll has `/noentry` and a fail-closed CiukiOS backend.
+Integration adds a production bootstrap and additive loader/wait-word records.
+The native ELF ABI and the existing frozen record layouts remain unchanged.
+The host kernel model must exercise the production record validation, VM and
+section implementation; observer callbacks are structural evidence, never proof
+of executing PE instructions or of hardware qualification.
+
+The Wine helper ABI was also checked against the pinned
+[debug header](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/include/wine/debug.h):
+`__wine_dbg_header/output/strdup/get_channel_flags` use cdecl;
+`__wine_dbg_write` uses stdcall. Their implementation here is original,
+uses bounded diagnostics/per-thread buffers and does not copy Wine code.
+
+The kernel-backed corpus and startup checks are documented in
+[the f5-05B validation record](../validation/f5-05b-loader.md). The five-fixture
+QEMU case is registered but deliberately unrun. Synchronous spawn preparation
+and asynchronous user-mode loader failure remain distinct: a DllMain refusal
+is logged and becomes process NTSTATUS, rather than pretending user code ran
+before the initial thread started.
+
+The startup error boundary is corroborated by Microsoft's
+[CreateProcessA return-value documentation](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessa#return-value):
+creation can return before initialization completes; missing/failing DLLs then
+terminate the child, with the status available through its process object.
+Accordingly, kernel preparation refusals roll back atomic spawn, while all
+user-loader refusals converge on the protected load diagnostic and child exit
+status. No native F2 spawn synchronization protocol is introduced.
+
+Continuation correction for the kernel integration: Microsoft's
+[RtlUnwind](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlunwind)
+accepts an optional exception record; the pinned Wine 10.0
+[i386 implementation](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/signal_i386.c)
+constructs STATUS_UNWIND when it is absent and ends in NtContinue. Therefore a
+validated W32_CONTINUE cannot require an outstanding CPU delivery. The core
+user dispatcher enforces noncontinuable/invalid-disposition rules; the kernel
+validates privilege-sensitive context state and restores it, dropping a
+pending delivery record when present. This also permits unwinding a handled
+noncontinuable exception rather than falsely treating unwind as continuation
+of its faulting instruction. Invalid selectors/context still kill only the
+calling process. No record size or native ABI changes are needed.

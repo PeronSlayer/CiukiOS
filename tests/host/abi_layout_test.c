@@ -7,6 +7,31 @@
 
 struct expectation { const char *key; uint32_t native, expected; };
 static const struct expectation expectations[] = {
+    /* f5-05B additive wire schema, literal offsets/values. */
+    {"constant.W32_LOADER", W32_LOADER, 263u},
+    {"constant.W32_WORD", W32_WORD, 264u},
+    {"constant.W32_LDR_OPEN", W32_LDR_OPEN, 1u},
+    {"constant.W32_LDR_IMAGE", W32_LDR_IMAGE, 2u},
+    {"constant.W32_LDR_UNMAP", W32_LDR_UNMAP, 3u},
+    {"constant.W32_LDR_EXACT", W32_LDR_EXACT, 1u},
+    {"constant.W32_LDR_BUILTIN", W32_LDR_BUILTIN, 2u},
+    {"constant.W32_LDR_DATAFILE", W32_LDR_DATAFILE, 4u},
+    {"sizeof.ciuki_w32_loader_args", sizeof(struct ciuki_w32_loader_args), 40u},
+    {"alignof.ciuki_w32_loader_args", _Alignof(struct ciuki_w32_loader_args), 4u},
+    {"offsetof.ciuki_w32_loader_args.header", __builtin_offsetof(struct ciuki_w32_loader_args, header), 0u},
+    {"offsetof.ciuki_w32_loader_args.action", __builtin_offsetof(struct ciuki_w32_loader_args, action), 16u},
+    {"offsetof.ciuki_w32_loader_args.path", __builtin_offsetof(struct ciuki_w32_loader_args, path), 20u},
+    {"offsetof.ciuki_w32_loader_args.source", __builtin_offsetof(struct ciuki_w32_loader_args, source), 24u},
+    {"offsetof.ciuki_w32_loader_args.bytes", __builtin_offsetof(struct ciuki_w32_loader_args, bytes), 28u},
+    {"offsetof.ciuki_w32_loader_args.address", __builtin_offsetof(struct ciuki_w32_loader_args, address), 32u},
+    {"offsetof.ciuki_w32_loader_args.flags", __builtin_offsetof(struct ciuki_w32_loader_args, flags), 36u},
+    {"sizeof.ciuki_w32_word_args", sizeof(struct ciuki_w32_word_args), 32u},
+    {"alignof.ciuki_w32_word_args", _Alignof(struct ciuki_w32_word_args), 4u},
+    {"offsetof.ciuki_w32_word_args.header", __builtin_offsetof(struct ciuki_w32_word_args, header), 0u},
+    {"offsetof.ciuki_w32_word_args.address", __builtin_offsetof(struct ciuki_w32_word_args, address), 16u},
+    {"offsetof.ciuki_w32_word_args.expected", __builtin_offsetof(struct ciuki_w32_word_args, expected), 20u},
+    {"offsetof.ciuki_w32_word_args.wake", __builtin_offsetof(struct ciuki_w32_word_args, wake), 24u},
+    {"offsetof.ciuki_w32_word_args.reserved", __builtin_offsetof(struct ciuki_w32_word_args, reserved), 28u},
     /* f5-03a literal wire schema. */
     {"constant.CIUKI_CHANNEL_FOCUS", CIUKI_CHANNEL_FOCUS, 2u},
     {"constant.CIUKI_CHANNEL_UNFOCUS", CIUKI_CHANNEL_UNFOCUS, 4u},

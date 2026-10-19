@@ -11,13 +11,13 @@ struct w32_file {
     void *cookie;
 };
 enum { W32_PROT_READ = 1, W32_PROT_WRITE = 2, W32_PROT_EXEC = 4 };
-/* This private service boundary is NOT CIUKI_SYS_W32. Replace the CiukiOS
- * stub only after the lead freezes and reviews the f5-03a record header.
- * map() reserves zeroed private pages; exact mappings must never replace an
- * existing reservation. Nonexact mappings are 64 KiB aligned below 0x70000000.
- * alloc/free manage private core metadata, not application HeapAlloc blocks.
- * wait/wake permit spurious wakes. continue_context and terminate never return.
- * open returns an immutable snapshot until close. All callbacks use cdecl. */
+/* Private core boundary. The CiukiOS implementation transports versioned
+ * CIUKI_SYS_W32 records; the Linux adapter remains a separate host oracle.
+ * map() returns zeroed private pages. image() returns a populated section
+ * view without copying over a live image. Binding requests write access only
+ * to pages containing relocation, IAT or TLS-index targets.
+ * alloc/free manage metadata, not application HeapAlloc blocks.
+ * wait/wake permit spurious wakes. open owns an immutable raw snapshot. */
 struct w32_services {
     void *opaque;
     void *(*alloc)(void *, uint32_t);
@@ -36,8 +36,14 @@ struct w32_services {
     /* NULL executes actual i386 stdcall callbacks. Tests may install an
      * observer for structural-only synthetic fixture entry points. */
     int (*invoke)(void *, void *, void *, uint32_t, int);
+    void *(*image)(void *, const struct w32_file *, uint32_t, int, int);
+    int (*raise)(void *, struct w32_exception *, struct w32_context *);
+
 };
-extern const struct w32_services w32_ciuki_services_stub;
+extern const struct w32_services w32_ciuki_services;
+extern const struct w32_services w32_ciuki_services_stub; /* part A compatibility */
+int32_t w32_ciuki_call(void *, uint32_t);
+
 void w32_set_services(const struct w32_services *);
 const struct w32_services *w32_get_services(void);
 void w32_diag(const char *, const char *, const char *);

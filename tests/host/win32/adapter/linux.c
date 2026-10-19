@@ -175,7 +175,7 @@ void host_fs(struct w32_teb *teb) {
     static ULONG entry = 0xffffffffu;
     struct {
         ULONG entry, base, limit, flags;
-    } descriptor = {entry, PTR(teb), 4095, 0x41};
+    } descriptor = {entry, PTR(teb), 8191, 0x41};
     if (host_syscall(243, PTR(&descriptor), 0, 0, 0, 0, 0))
         host_exit(124);
     entry = descriptor.entry;
@@ -189,7 +189,7 @@ void host_init(void) {
     host.next_allocation = 0x20000000;
     host.services = (struct w32_services){
         &host, allocate,  release,   map,        protect,          unmap,     open_file, close_file,
-        tid,   wait_word, wake_word, diagnostic, continue_context, terminate, invoke};
+        tid,   wait_word, wake_word, diagnostic, continue_context, terminate, invoke, 0, 0};
     host.teb.Tib.ExceptionList = (void *)~(uintptr_t)0;
     ULONG esp;
     __asm__ volatile("movl %%esp,%0" : "=r"(esp));

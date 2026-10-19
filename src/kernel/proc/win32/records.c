@@ -46,6 +46,8 @@ uint32_t w32_record_size(uint32_t operation)
     case W32_RAISE: return sizeof(struct ciuki_w32_raise);
     case W32_THREAD: return sizeof(struct ciuki_w32_thread);
     case W32_DIAGNOSTIC: return sizeof(struct ciuki_w32_diagnostic);
+    case W32_LOADER: return sizeof(struct ciuki_w32_loader_args);
+    case W32_WORD: return sizeof(struct ciuki_w32_word_args);
     case W32_OBJECT: return sizeof(struct ciuki_w32_object_args);
     case W32_WAIT: return sizeof(struct ciuki_w32_wait_args);
     case W32_APC: return sizeof(struct ciuki_w32_apc_args);
@@ -103,6 +105,17 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
             else if (terminated || c < 32 || c > 126) return -EINVAL;
         }
         return terminated ? 0 : -EINVAL;
+    }
+    case W32_LOADER: {
+        const struct ciuki_w32_loader_args *a=record;
+        if(a->action==W32_LDR_OPEN)return !a->path||a->source||a->bytes||a->address||a->flags?-EINVAL:0;
+        if(a->action==W32_LDR_IMAGE)return a->path||!a->source||!a->bytes||a->flags&~7u?-EINVAL:0;
+        if(a->action==W32_LDR_UNMAP)return a->path||a->source||a->bytes||!a->address||a->flags?-EINVAL:0;
+        return -EINVAL;
+    }
+    case W32_WORD: {
+        const struct ciuki_w32_word_args *a=record;
+        return a->reserved||a->wake>1||(a->address&3)||!a->address?-EINVAL:0;
     }
     case W32_OBJECT: {const struct ciuki_w32_object_args *a=record;return a->reserved||a->result||a->error||a->action<1||a->action>W32_OBJ_TIMER_CANCEL?-EINVAL:0;}
     case W32_WAIT: {const struct ciuki_w32_wait_args *a=record;return a->reserved||a->result||a->error||a->count>64||a->all>1||a->alertable>1||a->wake_mask&~W32_QS_ALL?-EINVAL:0;}

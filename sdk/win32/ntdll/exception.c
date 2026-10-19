@@ -185,6 +185,11 @@ void W32API w32_raise_c(struct w32_exception *r, struct w32_context *c) {
     if (r->NumberParameters > 15)
         r->NumberParameters = 15;
     r->ExceptionAddress = (void *)(uintptr_t)c->Eip;
+    const struct w32_services *s=w32_get_services();
+    /* Linked nested records are already inside the user dispatcher; the
+     * frozen RAISE wire record deliberately accepts an unlinked first raise. */
+    if(!r->ExceptionRecord && s && s->raise && s->raise(s->opaque,r,c))
+        w32_terminate(STATUS_INVALID_PARAMETER); /* successful delivery replaces EIP */
     finish(r, c, w32_dispatch_user_exception(r, c));
 }
 struct w32_teb *W32API w32_current_teb(void) {

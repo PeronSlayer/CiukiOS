@@ -20,7 +20,7 @@ def build(out, main=None, windows=True):
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
     sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[CORE/'ntdll/context.S',CORE/'services/ciuki_stub.c']
     common=['-march=pentiumpro','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-omit-frame-pointer',
-            '-mno-sse','-mno-sse2','-mno-mmx','-fno-ident','-O1','-Wall','-Wextra','-Werror','-I'+str(CORE/'include')]
+            '-mno-sse','-mno-sse2','-mno-mmx','-fno-ident','-O1','-Wall','-Wextra','-Werror','-I'+str(CORE/'include'),'-I'+str(ROOT/'src/kernel/include')]
     targets=['i386-unknown-linux-gnu']
     if windows: targets+=['i686-pc-windows-msvc','i686-w64-mingw32']
     for target in targets:

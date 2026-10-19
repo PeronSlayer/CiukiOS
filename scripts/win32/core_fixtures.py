@@ -34,7 +34,7 @@ def build():
     subprocess.run(['lld-link', '/machine:x86', '/nodefaultlib', '/entry:entry',
                     '/dll', '/base:0x70010000', '/subsystem:console,4.0', '/osversion:4.0',
                     '/timestamp:0', '/incremental:no', '/safeseh:no',
-                    '/export:CoreResult,DATA', '/export:CoreRelease,DATA',
+                    '/export:CiukiProcessStart=entry', '/export:CoreResult,DATA', '/export:CoreRelease,DATA',
                     '/out:'+str(loader),
                     '/implib:'+str(out/'core-loader.lib'), *objects], check=True)
     pe = census.PE(loader.read_bytes())

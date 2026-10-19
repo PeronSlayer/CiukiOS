@@ -33,6 +33,7 @@ int w32_pe_validate(struct w32_pe *);
 int w32_pe_relocate(struct w32_pe *, ULONG);
 void *w32_pe_span(struct w32_pe *, ULONG, ULONG);
 const char *w32_pe_string(struct w32_pe *, ULONG);
+int w32_pe_write(struct w32_pe *, ULONG, ULONG);
 int w32_pe_protect(struct w32_pe *, const struct w32_services *);
 struct w32_resource_key {
     ULONG id;

@@ -42,6 +42,13 @@ int32_t w32_syscall(struct trap_frame *tf)
     if (!err) {
         struct ciuki_w32_header *h = (void *)record;
         switch (h->operation) {
+        case W32_LOADER: status=w32_loader_call(self,(void *)record);break;
+        case W32_WORD: {
+            struct ciuki_w32_word_args *a=(void *)record;
+            int result=a->wake?proc_wake_word(a->address,UINT32_MAX):proc_wait_word(a->address,a->expected,0,CLOCK_MONOTONIC);
+            status=result<0 && result!=-EAGAIN && result!=-EINTR ? w32_status(result):0;
+            break;
+        }
         case W32_OBJECT: status=w32_object_call(self,(void *)record);break;
         case W32_WAIT: status=w32_wait_call(self,(void *)record);break;
         case W32_APC: status=w32_apc_call(self,(void *)record,tf,&replaced);break;
@@ -93,9 +100,14 @@ int32_t w32_syscall(struct trap_frame *tf)
         case W32_DIAGNOSTIC: {
             struct ciuki_w32_diagnostic *a = (void *)record;
             a->pid = self->process->pid; a->tid = self->tid;
-            /* Separate payload keeps the existing 256-byte klog sink bounded. */
-            klog("[win32] diagnostic kind=%u pid=%u tid=%u status=%08x", a->kind, a->pid, a->tid, a->status);
-            klog("[win32] %s", (const char *)a->payload); break;
+            /* One protected record; process-wide W21 stub budget supplements
+             * each generated export's once flag. Fatal load/crash records
+             * remain available after the warning budget is exhausted. */
+            if(a->kind==3 && self->process->w32){
+                if(self->process->w32->diagnostic_count>=64)break;
+                self->process->w32->diagnostic_count++;
+            }
+            klog("[win32] %s pid=%u tid=%u", (const char *)a->payload,a->pid,a->tid); break;
         }
         default: err = -ENOSYS; break;
         }

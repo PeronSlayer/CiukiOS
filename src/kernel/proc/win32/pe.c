@@ -13,11 +13,10 @@ static int read_file(const struct ciuki_file *f, uint32_t off, void *dst, uint32
 }
 bool w32_is_pe(const struct ciuki_file *f)
 {
-    uint8_t dos[64], pe[26];
-    if (read_file(f, 0, dos, sizeof(dos)) || pe16(dos) != 0x5a4d) return false;
-    uint32_t off = pe32(dos + 60);
-    if ((off & 3) || off < 64 || read_file(f, off, pe, sizeof(pe))) return false;
-    return pe32(pe) == 0x4550 && pe16(pe + 4) == 0x14c && pe16(pe + 24) == 0x10b;
+    /* MZ candidates go through the named Win32 refusal path, including DOS
+     * executables and malformed PE headers. Native ELF recognition is unchanged. */
+    uint8_t magic[2];
+    return !read_file(f,0,magic,2) && pe16(magic)==0x5a4d;
 }
 #define PE_CHECK(test, reason) do { if (!(test)) { im->failure = reason; return -ENOEXEC; } } while (0)
 int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
@@ -88,4 +87,26 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
 int w32_image_map(struct process *p,const struct ciuki_file *f,const struct w32_image *im,bool builtin)
 {
     return w32_image_section_map(p,f,im,builtin);
+}
+
+/* Bootstrap export lookup on the already validated seed view. Full export
+ * binding/forwarders remain in ntdll. Never execute the DLL's DllMain as the
+ * process bootstrap. */
+int w32_bootstrap_entry(struct process *p,const struct w32_image *im,uint32_t *entry)
+{
+    uint32_t r=im->directories[0],n=im->directories[1],head[10];
+    if(n<40 || r>im->bytes-40 || ua_read(p->memory,head,im->base+r,40))return -ENOEXEC;
+    if(head[5]>65536 || head[6]>65536 || head[7]>im->bytes || head[8]>im->bytes || head[9]>im->bytes ||
+       head[5]>(im->bytes-head[7])/4 || head[6]>(im->bytes-head[8])/4 || head[6]>(im->bytes-head[9])/2)return -ENOEXEC;
+    for(uint32_t i=0;i<head[6];i++){
+        uint32_t name;uint16_t ordinal;char text[18];
+        if(ua_read(p->memory,&name,im->base+head[8]+i*4,4)||name>im->bytes-sizeof(text)||
+           ua_read(p->memory,text,im->base+name,sizeof(text)))return -ENOEXEC;
+        if(memcmp(text,"CiukiProcessStart",18))continue;
+        if(ua_read(p->memory,&ordinal,im->base+head[9]+i*2,2)||ordinal>=head[5]||
+           ua_read(p->memory,&name,im->base+head[7]+ordinal*4,4)||name>=im->bytes||
+           (name>=r&&name-r<n)||!ua_range(p->memory,im->base+name,1,PROT_EXEC))return -ENOEXEC;
+        *entry=im->base+name;return 0;
+    }
+    return -ENOEXEC;
 }

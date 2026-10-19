@@ -200,6 +200,43 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-fixtures-qemu-t23",
+      "probe": "w32-fixtures",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-fixtures run={run_id}",
+      "timeout": 90,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixtures"
+            },
+            "fields": {
+              "completed": {
+                "eq": 5
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "teardown"
+            },
+            "fields": {
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

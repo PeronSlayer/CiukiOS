@@ -7,14 +7,19 @@ heaps, critical sections and the initial Rtl/Ldr helper surface. The same core
 is compiled into a Linux i386 ELF, an MSVC-target PE DLL and a MinGW-target PE
 DLL. It has no CRT imports and is built without SSE/SSE2/MMX.
 
-`include/w32/services.h` is a private, replaceable backend boundary. It is not
-the missing f5-03a syscall record ABI. `services/ciuki_stub.c` is a fail-closed
-CiukiOS backend (every allocation, mapping and open fails with a named loader
-refusal; the noreturn paths trap); the real VM, image section, file, wait,
-diagnostic and validated continuation services are bound after the kernel
-header freezes. The Linux
-adapter maps private pages and therefore does not prove kernel shared-image/COW
-or commitment accounting. The builtin manifest is checked by T1 before use.
+`include/w32/services.h` is the private core backend boundary. Production
+`services/ciuki.c` transports the frozen CIUKI_SYS_W32 records and f5-05B's
+loader/wait-word extensions. `services/start.c` is the personality bootstrap;
+it uses the kernel TEB/PEB and the original executable snapshot. The part A
+fail-closed `ciuki_stub.c` remains an adapter regression fixture and is not
+linked into the production builtin.
+
+The Linux adapter remains a separate execution oracle. The kernel-backed H0
+harness runs the shared loader through production syscall validation, VM,
+image sections and COW, with explicit observer callbacks. It cannot execute
+PE instructions or qualify a guest. `scripts/win32/builtins.py` builds the
+production ntdll, census placeholders and JSON/binary store for `make apps`;
+T1 validates hashes, version resources, ranges and payload readback.
 
 ```sh
 nice -n 19 python3 tests/host/win32/adapter/build.py

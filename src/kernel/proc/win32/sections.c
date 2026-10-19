@@ -690,9 +690,11 @@ static int image_seed(
         uint32_t page = section_page(s, i);
         if (!page)
             return -ENOMEM;
-        int err = f->read(f->cookie, off, (uint8_t *)P2V(page) + within, n);
-        if (err)
-            return err;
+        uint32_t present=off<f->bytes?f->bytes-off:0;
+        if(present>n)present=n;
+        int err = present ? f->read(f->cookie, off, (uint8_t *)P2V(page) + within, present) : 0;
+        if (err) return err;
+        if(present<n)memset((uint8_t *)P2V(page)+within+present,0,n-present);
         va += n;
         off += n;
         bytes -= n;
@@ -701,10 +703,10 @@ static int image_seed(
     return 0;
 }
 static int image_section_map_inner(
-    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin)
+    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped)
 {
     uint32_t limit = builtin ? CIUKI_W32_BUILTIN_LIMIT : CIUKI_W32_APP_LIMIT;
-    if (im->base < (builtin ? CIUKI_W32_APP_LIMIT : CIUKI_W32_LOW) || im->base >= limit || (im->base & 65535)
+    if ((!im->base && (!mapped || builtin)) || (im->base && im->base < (builtin ? CIUKI_W32_APP_LIMIT : CIUKI_W32_LOW)) || im->base >= limit || (im->base & 65535)
         || im->bytes > limit - im->base)
         return -ENOEXEC;
     if (w32_process_init(p))
@@ -781,10 +783,7 @@ static int image_section_map_inner(
     uint32_t base = im->base;
     if (!err)
         err = map_view(p, o, &base, im->bytes, 0, W32_FILE_MAP_COPY, true);
-    if (!err && !ua_range(p->memory, base + im->entry, 1, PROT_EXEC)) {
-        unmap_view(p, base, true);
-        err = -ENOEXEC;
-    }
+    if(!err && mapped)*mapped=base;
     w32_release(o);
     return err;
 }
@@ -798,16 +797,20 @@ static bool image_section_available(void *unused)
     (void)unused;
     return !image_section_building;
 }
-int w32_image_section_map(
-    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin)
+static int image_map_serialized(
+    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped)
 {
     while (image_section_building)
         kwait_wait_until(&image_section_changed, image_section_available, 0, w32_now() + 1);
     image_section_building = true;
-    int err = image_section_map_inner(p, f, im, builtin);
+    int err = image_section_map_inner(p, f, im, builtin, mapped);
     image_section_building = false;
     kwait_wake_all(&image_section_changed);
     return err;
+}
+int w32_image_section_map(struct process *p,const struct ciuki_file *f,const struct w32_image *im,bool builtin)
+{
+    return image_map_serialized(p,f,im,builtin,0);
 }
 static void shared_section_retain(void *o) { w32_retain(o); }
 static void shared_section_release(void *o) { w32_release(o); }
@@ -857,4 +860,52 @@ int w32_shared_map(struct process *p)
     }
     w32_release(o);
     return err;
+}
+
+/* Reuse the seed views at startup; all subsequent DLLs use the same immutable
+ * section cache. A relocated view retains unrelocated shared backing. */
+int w32_loader_image(struct process *p,const struct ciuki_file *f,struct w32_image *im,
+                     uint32_t *address,uint32_t flags)
+{
+    uint32_t preferred=im->base;
+    bool datafile=!!(flags&W32_LDR_DATAFILE);
+    if(*address!=preferred && *address)return -EINVAL;
+    if(datafile)preferred=im->base=0;
+    uint32_t scratch=pmm_alloc();if(!scratch)return -ENOMEM;
+    struct sha256_ctx hash;sha256_init(&hash);int err=0;
+    for(uint32_t off=0;off<f->bytes;){uint32_t n=f->bytes-off;if(n>PAGE_SIZE)n=PAGE_SIZE;
+        err=f->read(f->cookie,off,P2V(scratch),n);if(err)break;
+        sha256_update(&hash,P2V(scratch),n);off+=n;kpreempt_point();}
+    uint8_t digest[32];sha256_final(&hash,digest);pmm_free(scratch);if(err)return err;
+    bool reused=false;
+    for(struct w32_view *v=p->w32?p->w32->views:0;v;v=v->next){
+        struct section_data *data=v->section->u.section;
+        if(v->image && v->base==preferred && data->bytes==im->bytes && !memcmp(data->digest,digest,32)){
+            reused=true;break;
+        }
+    }
+    if(!reused){
+        bool builtin=!!(flags&W32_LDR_BUILTIN)&&!datafile;
+        uint32_t mapped=im->base;
+        err=image_map_serialized(p,f,im,builtin,&mapped);
+        if(err && !(flags&W32_LDR_EXACT) && !builtin && (im->directories[11]) && !(im->flags&1)){
+            im->base=0;
+            err=image_map_serialized(p,f,im,false,&mapped);
+        }
+        if(err)return err;
+        im->base=mapped;
+    }
+    *address=im->base;
+    /* Structural walkers may read a section lacking IMAGE_SCN_MEM_READ.
+     * Restore the original characteristics after binding. No private copy is
+     * allocated until an actual relocation/IAT/TLS write. */
+    for(uint32_t off=0;off<PAGE_ALIGN_UP(im->bytes);off+=PAGE_SIZE){
+        struct ua_extent *e=ua_find(p->memory,*address+off);
+        if(e && !(e->prot&PROT_READ)){
+            struct ciuki_w32_vm a={.address=*address+off,.bytes=PAGE_SIZE,.protect=W32_PAGE_READONLY};
+            uint32_t status=w32_vm_protect(p->memory,&a);
+            if(status){if(!reused)unmap_view(p,*address,true);return -ENOMEM;}
+        }
+    }
+    return 0;
 }
