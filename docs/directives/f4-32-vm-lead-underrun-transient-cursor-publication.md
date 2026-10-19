@@ -38,3 +38,18 @@ f4-31 (merged `3ca75c23`) introduced `AUDIO_VM_LEAD 4` (21.3 ms at 48 kHz) for a
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. Register programming only from the Intel ICH3-M datasheet / ICH AC'97 programmer's reference already cited in `docs/validation/f4-31-audio-audit.md` and from Linux `intel8x0.c`; no PIC changes. Do not weaken predicates or probes to pass. Report what you measured; a host result is not hardware qualification.
+
+## Amendment 1 (lead decision, 2026-10-19 02:40)
+
+The first delivery (report `build/codex/f4-32-report.md`) refutes the `-EAGAIN` hypothesis as the QEMU cause, fixes the publication/retry defects and the source loss, and reproduces the exact `published=4 retired=3` halt with one capacity-sized backend callback (QEMU's audio backends request the frames elapsed since the previous callback, so host-side jitter of ≥ 21 ms drains a four-period frontier in one call). The lead decision is the lead's, by evidence:
+
+- Image `2fc3c429` (lead 8 with a VM attached): pcm8 intact on three QEMU profiles; image `1fa1e62e` (lead 4): startup halt on all three (`zz-vmaudio`, `zz-vmaudio-e500`, `zz-vmaudio-min128` runs of 2026-10-19 02:23–02:24, same `start published=4` → `underrun published=4 retired=3`).
+- On the T23 the nominal lead does not decide anything: the measured 113 ms worker gap is covered only by the f4-31 adaptive growth, which stays.
+- A DOS game's SB path tolerates ≈ 50 ms of output latency; the owner's complaint is dropouts and a stalled transport, not 21 ms versus 49 ms.
+
+Required in addition:
+
+1. `AUDIO_VM_LEAD 8u`. `AUDIO_VM_LATENCY` follows (`8 × 256 + 304 = 2352` frames, 49.0 ms at 48 kHz); the ≤ 30 ms VM target of f4-31 is replaced by ≤ 50 ms nominal, written in `audio.h`, `docs/design/f4-audio-media-contract.md` and the F4-32 audit section with the arithmetic above and the capacity-callback evidence.
+2. Every expectation that encodes the old value follows the new one: `tests/suites/f4-audio.json` vm-audio cases (`published_periods eq 8`, `latency_frames eq 2352`, `lead_min`/`lead_max` bounds and the `le 1440` nominal maximum recomputed from the same rule that produced them), `tests/host/audio/transient_test.inc:126–127` budget checks (`≥ 480 + 256 + 256` stays true; the latency check becomes ≤ 50 ms), `pipeline_test.inc`, `vm_recovery_test.c`, `audio_test.c` cases that assume `AUDIO_VM_LEAD` by name keep working; recheck any literal `4`/`1328`/`1440` in tests and docs.
+3. Add to the host burst fixture a capacity-sized callback of 1024 frames at 21 ms after start with lead 8: no halt, no underrun, `deadlines=0`; and one of 2048 frames (the whole lead): the underrun recovers losslessly (the F4-32 recovery path).
+4. `bash tests/host/audio/run.sh`, `python3 scripts/build_kernel.py`, `python3 scripts/gen_api_reference.py` (if headers changed), `make CAP= apps`; append an "Amendment 1" section to the report with the before/after table. The `dosvm_speed_test.inc:138` `disk_records` failure is the lead's (it counts the f3-44 `vm_perf_if` row); leave it.
