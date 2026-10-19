@@ -1,0 +1,28 @@
+# f1-82 — block cache: a large copy turns every write into synchronous device I/O under the volume lock and blocks readers for 100–740 ms; writeback by dirty budget, flush without holding the cache lock, readers never evict dirty blocks synchronously
+
+- **Phase:** F1 (storage). **Model:** gpt-6.1-sol / xhigh. **Worktree:** `wt/f1-82` from main (after `3357582f`).
+- **Authority:** `src/kernel/fs/cache.c`, `cache.h`, `src/kernel/fs/mount.c` (writer service, `storage_writeback`, cache budget), `src/kernel/fs/vfs.c` (`vfs_wait` record only), `src/kernel/fs/fat.c` only for the allocation audit of item 4, `tests/host/fs/`, `docs/design/vfs-storage-contract.md` (new section F1-82).
+- **Not yours:** applications, the audio subsystem, USB/ATA drivers.
+
+## Evidence (T23, image 82fadce3, `legacy/local/physical/82fadce3/serial.log`, read-only)
+
+- While a file was being copied from the USB stick (E:) to the internal disk (C:), every other access to C: waited behind the volume lock: `[storage] vfs_wait drive=C ms=740 holder=C reason=volume`, and 100–467 ms waits repeated through the copy (28 `vfs_wait` records in the boot, all `reason=volume`, mostly C). The music player reading an MP3 from C: during that copy starved (its decoder's `fread` blocks behind those waits) and the owner heard the playback stutter badly; the audio transport itself had `halts=0 underruns=0` throughout (`[audio] transport running … lead_periods=8`), so the problem is storage, not DMA.
+- `vfs_wait` measures the FIFO ticket wait for a volume (`vfs.c:50–66`). A 64 KiB write to C: can hold the volume for hundreds of milliseconds because of the cache policy, not because the disk is slow (a 2.5" IDE drive writes 64 KiB in a few ms):
+  - `cache.c:244` (`cache_get`): when the LRU victim is dirty, the caller writes it to the device synchronously (`write_block`) and retries, holding the cache lock and its caller's volume lock. A copy fills the cache with dirty blocks faster than the writer flushes them, so each new block the copy (or any reader) needs costs one or more synchronous device writes.
+  - `cache.c:474–497` (`cache_writeback_tick`): dirty blocks are flushed only once they are 5 s old, as a whole-device `barrier` under the cache lock, so readers of unrelated blocks wait for the entire flush.
+  - The writer service (`mount.c:481`) holds no volume lock during the tick, but the barrier holds the cache lock across device I/O.
+- Budget: `CACHE_DEFAULT_BYTES` 8 MiB; the copy's source is a 1 MiB/s device, so the dirty set grows by about 1 MiB/s and the 5 s rule lets up to 5 MiB of dirty data accumulate before any flush starts.
+- The owner's words: "sembra che più letture e scritture contemporanee non si possano fare e non va bene."
+
+## Required
+
+1. **Writeback by dirty budget and age.** The writer service starts flushing when the dirty set of a device exceeds a budget (decide it from the numbers: for example 1 MiB or 12.5 % of the cache, whichever is smaller) or when the oldest dirty block is 1 s old, not 5 s. Flush in LBA-sorted batches of bounded size (for example 64 blocks) and release the cache lock between device writes (take a per-block `busy` reservation, write, re-take): readers of other blocks and hits on clean blocks must proceed during a flush. The existing failure semantics (sticky per-device error, FAT_RO_WRITE_ERROR revocation, barrier before metadata commits, shutdown ordering) stay exactly as they are.
+2. **Readers never pay for the writer's debt.** `cache_get` prefers clean victims; when only dirty victims exist it wakes the writer and waits for a clean block (bounded wait, then the existing synchronous path as the last resort, counted in a new `cache_sync_evictions` statistic). A read hit never waits for an unrelated flush.
+3. **Writer throttling instead of lock convoys.** When the dirty budget is exceeded by more than a second budget (for example 2×), the *writing* caller (the copy) blocks in `cache_write` until the writer has flushed below the budget: the copy slows down to the device speed, nobody else does. Expose the budgets and the wait in `[storage] writeback …` protected records (dirty bytes, flushed per tick, max flush ms, sync evictions, writer waits) every 5 s while dirty data exists, and one record per `vfs_wait` ≥ 100 ms stays.
+4. **Allocation audit.** Measure on the host FAT model the cost of a 64 KiB append on a 512 MiB FAT32 volume with the `next_free` hint (`fat.c:337–349`, `660–701`): cluster scan, FAT writes, directory entry update; report the numbers and fix anything above 1 ms of CPU per 64 KiB.
+5. **Host evidence.** A host test that replays the trial: a 10 MiB copy from a 1 MiB/s device to a 20 MB/s device while a second task reads 16 KiB every 20 ms from another file on the destination volume: before the fix the reader sees waits ≥ 100 ms; after the fix its maximum wait is ≤ 20 ms and the copy still completes at device speed (±10 %). Run `bash scripts/test/host_fs_tests.sh` (all groups, the three fsck and mtools comparisons) and `ASAN_OPTIONS=detect_leaks=0 bash scripts/test/host_kernel_tests.sh`; `python3 scripts/build_kernel.py`.
+6. **Report** `build/codex/f1-82-report.md`: the policy with its numbers, the before/after table, primary sources (Linux `balance_dirty_pages`/`dirty_background_ratio` semantics as the reference design, FAT32 spec for the allocation audit), remaining.
+
+## Constraints
+
+Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. Keep the f1-79 FIFO volume locks and the f1-78 "cache transport outside the lock" rules; no change to the on-disk format or to the crash-recovery guarantees (mount-crash-reboot and bootlog cases must stay green).
