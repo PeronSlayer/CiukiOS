@@ -68,50 +68,53 @@ through ACPI S5 when the firmware tables allow it, or a query of what is
 available. Both actions first stop storage cleanly; when power off is not
 possible the desktop shows "It is now safe to turn off your computer".
 
-## Disk boot log (F4-16)
+## Disk boot log
 
-`C:\SYSTEM\LOGS\BOOT.LOG` is capped at 1 MiB. Storage qualification
-starts a fresh log for the current boot. Until that gate succeeds, including
-in safe/read-only boots and the cold-reopen probe, the previous file is left
-unchanged and capture stays in RAM. Loader output and panic/raw output do
-not enter the disk sink.
+Current layout (f0-22, f0-23, f0-25, f0-34, f0-36; constants in
+`src/kernel/include/ciuki/bootlog.h`, publication contract in
+[boot-log-publication](design/boot-log-publication.md)). The F4-16 layout
+of 2026-10-14 (one 1 MiB file, 8 KiB staging queue, 4 KiB batches) is
+superseded.
+
+`C:\SYSTEM\LOGS` keeps the last three boots within the original 1 MiB
+budget: when storage qualification succeeds, `BOOT1.LOG` becomes
+`BOOT2.LOG`, `BOOT.LOG` becomes `BOOT1.LOG`, and a fresh `BOOT.LOG` gets a
+reserved 320 KiB chain. Until that gate succeeds, including in safe or
+read-only boots, the previous files are left unchanged and capture stays in
+RAM. Loader output and panic/raw output do not enter the disk sink.
 
 | Byte offsets (inclusive) | Contents |
 | --- | --- |
-| 0–131071 | Protected prefix: the first 128 KiB of ordinary kernel records, never overwritten during that boot |
-| 131072–1048575 | 896 KiB runtime ring: periodic summaries and ordinary output after the prefix fills |
+| 0–131071 | Protected prefix: the black-box replay (at most 64 KiB), then the first ordinary kernel records of this boot, never overwritten during that boot |
+| 131072–327679 | 192 KiB runtime ring: periodic summaries and ordinary output after the prefix fills |
 
-The prefix is protected in RAM before mount too (128 KiB). The runtime
-staging queue remains 8 KiB; only its oldest bytes can be dropped under
-pressure. Producers do no disk I/O or allocation. Formatted records (at
-most 255 bytes) are copied under one bounded IRQ lock. The storage worker
-copies in 128-byte slices and writes at most one 4 KiB batch per turn,
-flushing pending prefix bytes before runtime bytes.
+Producers do no disk I/O or allocation. The prefix is kept in RAM
+(128 KiB) until it is written; other records go to a 64 KiB RAM queue of 256
+fixed 256-byte slots and are classed as protected (boot and event records,
+recurring evidence such as the five-second `vm_perf` rows) or droppable
+(verbose diagnostics); under pressure the oldest droppable record is
+evicted first, whole, and losses are counted per class. The storage task drains aligned 32 KiB blocks about once a second,
+and under pressure up to four blocks or 10 ms per turn; the file length is
+published every 5 s and at shutdown. The ring wraps by durably truncating
+**only** to offset 131072 and appending a new cycle; it never truncates or
+overwrites the protected prefix. After an unclean shutdown the next mount
+recovers the unpublished tail of the `BOOT*.LOG` files from their reserved
+chains instead of trimming it.
 
-The file grows as records arrive. Runtime output starts at offset 131072
-even if the prefix is shorter; FAT zero-fills the gap. Subsequent ordinary
-records backfill that gap without touching runtime output. The ring wraps
-by durably truncating **only** to offset 131072 and appending a new cycle;
-it never truncates or overwrites the protected prefix. The previous runtime
-cycle is discarded at that boundary. A record crossing the prefix byte
-boundary can continue at the start of the ring. The ordinary FAT/VFS COW
-and flush/error behavior applies; a storage error disables the sink without
-recursing into logging. Clean shutdown drains both queues and commits.
+The black box (f0-25) is separate from FAT: a CRC32 descriptor in sector 8
+of the partition and a 64 KiB raw ring in sectors 32–159 (reserved by
+`scripts/build_image.py`), written directly to the block device. It is
+replayed on the serial line before the mount and becomes the immutable
+`[blackbox]` head of the new `BOOT.LOG`.
 
-USB worker scan-rate and HID latency-window summaries use `klog_periodic`
-and bypass the prefix even before mount. Recurring framebuffer performance
-summaries (after the first sample) and verbose VM heartbeat diagnostics
-also use the runtime ring. Serial and console copies keep their existing
-format and ordering. Evidence emitted by `rec_emit` remains ordinary output.
-
-For recovery, read the file from the SSD **before another qualified boot**.
+For recovery, read the files from the disk **before another qualified
+boot** (for example `mcopy -n -o -i <partition> '::/system/logs/*.LOG' .`).
 The protected records start at byte zero; runtime records start at byte
 131072. Ignore NUL padding between them when reading as text. The physical
-evidence importer remains unchanged: it imports bounded `f0.log`
-transcriptions and records the qualified disk-log identity, rather than
-parsing or reordering this raw file. Its 128 KiB acquisition allowlist is
-independent of the 1 MiB BOOT.LOG cap. A raw 1 MiB file is not an `f0.log`
-transcription.
+evidence importer imports bounded `f0.log` transcriptions and records the
+qualified disk-log identity, rather than parsing or reordering these raw
+files; its 128 KiB acquisition allowlist is independent of the log size. A
+raw log file is not an `f0.log` transcription.
 
 ### Research and serial decision (2026-10-14)
 

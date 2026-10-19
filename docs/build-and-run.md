@@ -40,6 +40,15 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
 
+QEMU gates are suspended for the current hardware trial cycle (owner
+decisions 2026-10-19, dev diary 2026-10-19-03 and 2026-10-19-07): a merge
+needs green host suites and a canonical `make build-full` of the merged
+tree; an image goes to
+the hardware with its SHA-256, the serial capture and the disk logs as
+evidence. The only QEMU use allowed meanwhile is the DOS conformance battery
+of f3-48 (`f3:dos-conformance`, dev diary 2026-10-19-06). The commands above
+stay valid and QEMU evidence resumes on the owner's request.
+
 ### Normal boot cases in f0-smoke
 
 What a user boot shows on screen (quiet console until the desktop) and which
@@ -54,8 +63,8 @@ takes the production path up to `/Programs/desktop`. A case passes when
 `[supervisor] bootstrap: spawning /Programs/desktop` and
 `[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
 CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
-screendump taken 8 s after the desktop line shows the taskbar, the Ciuki
-button and the top bar, and a work area free of the kernel console colours
+screendump taken 8 s after the desktop line shows the bottom bar, the Ciuki
+orb and the top bar, and a work area free of the kernel console colours
 (the default wallpaper is a photograph, so no background colour is required).
 The run directory keeps `screen.ppm` also on a pass; `result.json` has
 `evidence_kind: "normal-boot"`, `normal_boot` (milestones, desktop PID,
@@ -68,9 +77,9 @@ boot stops the campaign there. The case kind and its rules are in
 ## Version
 
 `config/version.json` is the single source of the CiukiOS version
-(`0.9.0`, stage `pre-alpha`). `scripts/ciuki_version.py` validates it and:
+(`0.9.2`, stage `pre-alpha`). `scripts/ciuki_version.py` validates it and:
 
-- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="0.9.0 pre-alpha"` to every
+- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="0.9.2 pre-alpha"` to every
   kernel object and records `version` in `build/f0/build-clock.json`. The kernel
   logs `CiukiOS <version>` on the line after the `Ciuki VMM F0 build <id> - CiukiOS`
   banner (that banner is parsed by `scripts/test/physical.py` and is unchanged)

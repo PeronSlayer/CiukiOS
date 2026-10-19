@@ -7,6 +7,176 @@ dev diary 2026-10-20-01). It covers everything merged on `main` since 0.9.0
 began: the 0.9.0 section below stays the detailed record. Nothing of 0.9.2
 is published; hardware qualification is open.
 
+Evidence status. Everything below was merged after the 0.9.0 record (from
+the evening of 2026-10-12, dev diary 2026-10-13-01 onwards). Until
+2026-10-19 the delivered images were also run on QEMU (`f0-smoke`, and from
+2026-10-14 broader gate campaigns, recorded per image in the diary); the
+last campaign ran on image `f56fcbf5…` (2026-10-19): the F0–F4 gate cases
+green, with `f4-audio` 7/7 for the first time, and `f5-core` 2/2, except
+four known red cases (`vm-fullscreen` on QEMU standard VGA, `quake` probe
+deadline under TCG, `rtl8139` `firmware_active`, `volume-resolution-cd-usb`
+with two ATAPI units; diary 2026-10-19-02). The owner then suspended the QEMU gates (diary
+2026-10-19-03): what was merged after the T23 image `4bcd1d43…` has host
+evidence only. Hardware: the owner tried more than twenty images on the
+ThinkPad T23 between 13 and 19 October (diary 2026-10-13-02 to
+2026-10-19-05; the last image tried is `4bcd1d43…`, findings in directives
+f4-36 and f3-47); no image of the current `main` has run on hardware; the
+Armada E500 and generic PCs have no recorded run.
+
+### Owner decisions
+
+- 2026-10-13: F5 becomes Windows games through a compatible Win32 API, F8
+  optional native ports (diary 2026-10-13-01). Win32 contract drafted,
+  decided and cross-reviewed (2026-10-13-03, 2026-10-14-07, 2026-10-14-08):
+  core written by CiukiOS with the installer-facing DLLs reused from one
+  pinned Wine release, Win16
+  inside F5, General MIDI banks chosen by installed RAM, FreeType on every
+  text path, DOS full screen on the VGA hardware as in Windows 98, one final
+  image.
+- 2026-10-14 and 2026-10-18: Ciuki Blue is the default theme; new shell with
+  a top bar carrying the Ciuki orb and a bottom bar of open windows; Classic
+  98 removed (2026-10-14-06, 2026-10-18-02).
+- 2026-10-19: disk, memory, cache and real-time management on the Windows
+  98/ME model, complete; QEMU gates suspended, images straight to the
+  hardware (2026-10-19-03); resource-management contract accepted with a
+  12-directive sequence (2026-10-19-04); CiukiDOS stays, its INT 21h file
+  calls go to the VMM, FreeDOS is the conformance reference
+  (2026-10-19-06); autonomous programme to completion, F5 extended to
+  original installers and Windows applications, no intermediate image
+  (2026-10-19-07).
+
+### Hardware trials on the ThinkPad T23 (owner, 13–19 October)
+
+- Method from 2026-10-15 (diary 2026-10-15-06, at the owner's request for a
+  definitive solution): no hardware image without a hardware-check page,
+  a system volume that repairs itself after an unclean shutdown, and serial
+  output in whole records.
+- Working on the hardware: native AC'97 audio heard from image `e86305de…`
+  (f4-09, f4-10); UDMA2 disk, Terminal (2.5 MB) loaded in 236 ms against
+  1.6–1.9 s for 1.3–1.5 MB before (f1-39, f1-44); USB keyboard and mouse
+  (f1-42 and follow-ups); USB stick mounted in 58 ms on image `9af46936…`
+  (f1-74, f1-81); DOS full screen on the SuperSavage (f3-32, f3-36, f3-39,
+  f3-43); the hardware-check page with the Savage engine sweep that chose
+  the production configuration (f0-26, f1-69); the serial capture back on
+  image `c2d2a237…` once the port was enabled again in the T23 BIOS (f0-38
+  named the cause).
+- Defects found in the T23 trials, with their fixes merged (the later ones
+  not yet tried on hardware): DOOM interrupt stalls and a DOOM VM killed at
+  the DPMI IRQ return stub (f3-12, f3-23, f3-45); Quake refused by the DOS
+  loader, also seen on QEMU (f3-25); the volume locked after forced
+  power-offs and a lost log tail (f0-23, f0-25, f0-36); runtime PIC mask
+  writes costing 2.1 ms each (f0-33); firmware input chosen on a normal boot
+  (f0-37); shared IRQ 11 quarantined by one member (f0-39); the desktop
+  stalled behind USB stick I/O (f1-78, f1-79, f2-78..f2-80); system-wide
+  slowdown during copies and stuttering playback (f1-82, f2-84, f2-85, f4-34,
+  f4-36); 110 ms stall at every DOS VM creation (f0-41).
+- Still open: a periodic pause of about 2.1 ms with interrupts disabled,
+  attributed to the firmware (f0-35, f0-46).
+
+### Kernel, drivers and storage
+
+- Latency and logging: serial records through a queue and an
+  interrupt-driven transmitter (f0-21, f0-24, f0-29), bounded sections
+  (f0-30, f0-44), boot log in three rotated files with protected records
+  and a black box in reserved sectors (f0-22, f0-23, f0-25, f0-34),
+  hardware-check page (f0-26, f0-28, f0-35), reliability audit with loader
+  deadlines (f0-40).
+- Storage: 64 KiB reads with READ/WRITE MULTIPLE (f1-39), ATA bus-master
+  DMA (f1-44), FAT writes in place (f0-32), FIFO and per-volume locks
+  (f1-78, f1-79), ATAPI and ISO 9660 robustness (f1-48, f1-54, f1-58,
+  f1-76, f1-77).
+- USB 1.1: UHCI/OHCI, hubs, HID with wheel, mass storage, safe removal
+  (f1-42, f1-43 and their follow-ups up to f1-81, f2-74); shared PCI
+  interrupts (f1-71, f1-72).
+- Display: MTRR write combining, display modes, row presents (f1-23, f1-24,
+  f1-40), S3 Savage 2D (f1-26 and follow-ups up to f1-69), native
+  SuperSavage provider for DOS full screen (f3-32, f3-36, f3-37, f3-39,
+  f3-43).
+- Audio: seven more audio families (f4-11), AC'97 on the T23's ICH3 and
+  CS4297A codec (f4-09, f4-10, f4-15), audio pipeline audit with adaptive
+  lead (f4-31, f4-32), ThinkPad EC volume keys (f4-18, f4-21, f4-25, f4-27,
+  f4-29), system sounds (f4-06, f4-12).
+- Network, ahead of F6: drivers for Intel 8255x, RTL8139, NE2000 PCI,
+  e1000, PCnet, Tulip, 3c90x and Rhine (f6-01, f6-08, f6-09), `/dev/net` and
+  the tray icon (f6-02), NDIS miniport census (f6-03), contract draft
+  (f6-00).
+
+### Windows 98/ME-class resource management (host evidence)
+
+Contract `docs/design/win98-class-resource-management.md` (f0-42, research
+closed with the Windows 98 Resource Kit in f0-42b); diary 2026-10-19-04,
+-08, -09 and the directive index.
+
+- Cache and I/O: writeback by dirty budget, C1 (f1-82, on image
+  `4bcd1d43…`); asynchronous request pool and per-controller queues with
+  reader fairness, C3 (f1-83); staged FAT publication with byte-range and
+  share locks, C2/C5 (f1-84); adaptive cache with stream read-ahead, C4
+  (f1-85).
+- Memory: one ledger with pressure watermarks and pin tokens, M1 (f0-43);
+  memory objects with demand-zero and copy-on-write pages, M2 (f0-47);
+  global second-chance replacement, M3 (f0-48); dynamic swap file
+  `C:\SYSTEM\PAGEFILE.SWP` with idle prewrite, M4 (f0-49, merged
+  2026-10-20).
+- Real time: bounded loops, R1 (f0-44); 32 priority levels with boosts and
+  priority donation, R2 (f0-45); capture-only interrupt top halves, deferred
+  work ring and AVL timer queue, R3 (f0-46).
+- Not yet: pageable DOS VM memory, D1 (f3-46, in progress).
+
+### DOS virtual machines
+
+- Full screen on the VGA hardware with Alt+Enter (f3-20 and follow-ups);
+  Windows 9x-style idle detection (f3-17); cheaper port and interrupt exits
+  and planar presentation (f3-14, f3-19, f3-33, f3-38, f3-41); DPMI return
+  tracker with breakpoints on hardware (f3-34, f3-35); virtual IF and ISR
+  bookkeeping (f3-15, f3-42, f3-44, f3-45); Sound Blaster DMA timing and late
+  frames (f3-40, f4-35); per-VM disk cache and 48 MiB default game VM
+  (f3-47).
+- Quake 1.06 shareware pre-installed next to DOOM and Wolfenstein 3D
+  (f3-18).
+- DOS file API in the VMM (diary 2026-10-19-06, -09): contract and
+  inventory (f3-48), INT 21h file and directory calls served by the VMM
+  (f3-49, f3-49b), CiukiDOS binding with FCB and NLS services (f3-50),
+  FreeDOS-referenced conformance battery (f3-51, f3-51b). Host evidence;
+  the battery's QEMU and T23 runs are pending.
+
+### Desktop and applications
+
+- Shell: desktop as a folder (f2-42), redraw and compositor work (f1-25,
+  f2-45, f2-48, f2-50), FreeType text (f2-63), message boxes, notifications
+  and tooltips (f2-64), resizing from every edge, cursors and window rules
+  (f2-67, f2-72), text selection (f2-68), theme and wallpaper workers
+  (f2-70, f2-73), Control Panel catalog with Display Properties (f2-37,
+  f2-75), AutoPlay and safe removal (f2-51, f2-74, f2-76, f2-78, f2-79),
+  two-bar shell with the Ciuki orb (f2-81, f2-82, f2-83).
+- Programs: Terminal (f2-46), Registry and Registry Editor (f2-47), Music
+  (f4-07, f4-30, f4-34, f4-36), CiukPaint (f2-40), Graphics Demo on a
+  software OpenGL subset (f2-52, f2-59, f7-01), CiukIDE with the Tiny C
+  Compiler (f5-01), Device Manager with a hardware ID database built from
+  the owner's INF collection (f2-41, f2-43), Files on worker threads with
+  progress dialogs (f2-80, f2-84, f2-85).
+
+### F5 — Win32 personality (diary 2026-10-19-10)
+
+- Merged, host evidence except f5-03: tooling and census (f5-02A, f5-14A,
+  f5-17A), kernel personality core (f5-03; QEMU `f5-core` 2/2 with the TCG
+  #XM fallback, diary 2026-10-15-02), kernel objects and sections (f5-04),
+  PE loader and ntdll (f5-05A/B), kernel32 (f5-06, f5-06b), w32srv and
+  registry (f5-07A), presenter (f5-08), desktop protocol v3 (f5-09,
+  f5-09B), user32 (f5-10A), gdi32 (f5-10B), DirectDraw (f5-11),
+  DirectSound, waveOut and MIDI (f5-12A, partial), DirectInput (f5-13), Wine
+  10.0 upper DLL and codec builds (f5-14B, f5-14C), shims and crash reports
+  (f5-16), Win16 contract and NE parser (f5-19, f5-19a).
+- In progress: f5-07B, f5-10C, f5-12B, f5-15A/B, f5-17B, f5-19 (Win16),
+  f5-20. No original Windows game, installer or application has run yet.
+
+### Tests and tools
+
+- Runner with two QEMU slots (runner-01), USB devices and input pacing
+  (runner-02..runner-04); QEMU deviations recorded: no #XM under TCG
+  (2026-10-15-02), QEMU 11.1.1 TCG crashing on guest execute breakpoints
+  (2026-10-16-02).
+- 3D: contract draft for native Savage 3D (f7-00), review pending.
+
 ## 0.9.0 pre-alpha (not released, `main`, 2026-10-09 to 2026-10-19)
 
 First version of the Ciuki VMM line. The 0.8 line is frozen on branch
