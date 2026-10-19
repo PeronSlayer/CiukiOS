@@ -1017,6 +1017,34 @@ static void test_native_reports(void)
     puts("native summaries: emitting PID, stage, monotonic turns, overflow, unauthorized/missing fields, barrier generation PASS");
 }
 
+static void test_native_v3_reports(void)
+{
+    struct process *server,*child,*other;make_process(proc_supervisor(),&server);make_process(server,&child);make_process(proc_supervisor(),&other);
+    child->personality=PROC_WIN32;
+    uint32_t flags=g_boot.flags,length=g_boot.test_request_len;char request[64];memcpy(request,g_boot.test_request,sizeof(request));
+    const char *selected="f2:crash-isolation run=12345678 server=desktop-v3";
+    memcpy(g_boot.test_request,selected,strlen(selected)+1);g_boot.test_request_len=(uint32_t)strlen(selected);g_boot.flags=CBI_F_SMBIOS_QEMU;
+    memset(&native_reports,0,sizeof(native_reports));native_reports.active=true;native_reports.server=server->pid;
+    memset(&v3_observation,0,sizeof(v3_observation));
+    char line[192];unsigned n=(unsigned)snprintf(line,sizeof(line),"case=desktop-v3 phase=1 generation=1 windows=4 errors=0 child=%u",child->pid);
+    CHECK(!native_report(other,line,n) && !v3_observation.phase);
+    CHECK(native_report(server,line,n) && !native_reports.invalid && v3_observation.phase==1);
+    native_report(server,line,n);CHECK(native_reports.invalid); /* duplicate */
+    native_reports.invalid=false;child->ppid=other->pid;
+    n=(unsigned)snprintf(line,sizeof(line),"case=desktop-v3 phase=2 generation=1 windows=4 errors=0 child=%u",child->pid);
+    native_report(server,line,n);CHECK(native_reports.invalid && v3_observation.phase==1);
+    child->ppid=server->pid;child->personality=PROC_NATIVE;native_reports.invalid=false;
+    native_report(server,line,n);CHECK(native_reports.invalid);
+    child->personality=PROC_WIN32;native_reports.invalid=false;
+    native_report(server,line,n);CHECK(!native_reports.invalid && v3_observation.phase==2);
+    native_reports.invalid=false;g_boot.test_request_len=0;
+    native_report(server,line,n);CHECK(native_reports.invalid); /* fixture not selected */
+    native_reports.active=false;g_boot.flags=flags;g_boot.test_request_len=length;memcpy(g_boot.test_request,request,sizeof(request));
+    desktop_remove(server,child);desktop_remove(proc_supervisor(),other);desktop_remove(proc_supervisor(),server);
+    memset(&v3_observation,0,sizeof(v3_observation));
+    puts("v3 observer: selected desktop only, exact live Win32 child, ordered nonduplicate phases; stdout not evidence PASS");
+}
+
 /* f2-31/f2-32: the optional app-case fields of the server's report (files=1 or note=1). */
 static void app_report(struct process *server, struct process *child, uint32_t control, const char *suffix)
 {
@@ -1445,12 +1473,21 @@ int main(int argc, char **argv)
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING; g_current = &controller;
     proc_init();
+    if (argc==2 && !strcmp(argv[1],"--isolation-records")) {
+        test_native_v3_reports();
+        uint8_t pixels[4]={0};device.present=true;device.mapped=pixels;device.size=sizeof(pixels);
+        gate_simulation=true;on_schedule=gate_schedule;routing_records=true;
+        rec_emit("crash-isolation","BEGIN","server=desktop");
+        CHECK(!native_crash_isolation());
+        on_schedule=0;gate_simulation=routing_records=false;
+        CHECK(!pages_used && !g_user_mappings && heap_blocks==1);free(ram);return 0;
+    }
     if ((argc==3 || argc==4) && !strcmp(argv[1],"--native-handshake")) {
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
     test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
-    test_native_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
+    test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();
 #endif

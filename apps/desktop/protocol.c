@@ -202,11 +202,26 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (p->focused>1 || p->flags>1 || (client && p->focused!=p->flags)) return 0;
         expected=8; break;
     case DESK_V3_LEASE_EVENT:
-        if (client || n!=20) return 0;
+        if (client || (n!=20 && n!=72)) return 0;
         p->flags=desk_get32(b); p->serial=desk_get32(b+4); p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->bpp=desk_get32(b+16);
         if (p->flags>3 || !p->serial || !p->width || !p->height || p->width>2048 || p->height>2048 ||
             (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)) return 0;
-        expected=20; break;
+        if (n==72) {
+            p->lease=(struct desk_lease_tuple){.token=desk_get32(b+20),.generation=desk_get32(b+24),
+                .mode=desk_get32(b+28),.scale=desk_get32(b+32),
+                .surface={desk_get32(b+36),desk_get32(b+40),desk_get32(b+44),desk_get32(b+48),desk_get32(b+52)},
+                .native_width=desk_get32(b+56),.native_height=desk_get32(b+60),.native_bpp=desk_get32(b+64)};
+            p->result=(int32_t)desk_get32(b+68);
+            if (p->result>0 || p->result < -4095) return 0;
+            if (p->flags==1 && (!p->lease.token || !p->lease.generation ||
+                !p->lease.scale || p->lease.scale>3 || p->lease.mode>65535 ||
+                p->lease.surface.width!=p->width || p->lease.surface.height!=p->height ||
+                p->lease.surface.format<1 || p->lease.surface.format>4 ||
+                p->lease.native_width<p->width*p->lease.scale ||
+                p->lease.native_height<p->height*p->lease.scale ||
+                (p->lease.native_bpp!=16 && p->lease.native_bpp!=32) || p->result)) return 0;
+        }
+        expected=n; break;
     case DESK_KEY: case DESK_MOTION: case DESK_BUTTON: case DESK_V3_RELATIVE_EVENT: {
         if (client || n!=40) return 0;
         struct ciuki_input_event *e=&p->event;

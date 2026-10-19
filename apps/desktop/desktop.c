@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include <ciuki/present_abi.h>
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "sound_storage.h"
@@ -423,6 +424,14 @@ static void *desktop_watchdog_run(void *unused)
     while (!__atomic_load_n(&desktop_watchdog.stop,__ATOMIC_ACQUIRE)) {
         uint32_t now=(uint32_t)(monotonic()/1000000ull);
         char line[320]; int n;
+        if((n=desk_v3_restore_watchdog((struct desktop *)desktop_watchdog.desktop,now,line,sizeof(line)))>0) {
+#ifdef __i386__
+            if(line[n-1]=='\n')--n;
+            (void)ciuki_raw_debug_write(CU_PTR(line),(uint32_t)n,0,0,0,0);
+#else
+            (void)write(STDERR_FILENO,line,(size_t)n);
+#endif
+        }
         if (now-reported>=500 && (n=desktop_stall_record(now,line,sizeof(line)))>0) {
             /* Native diagnostic call 2 bypasses both FILE and VFS locks and
              * feeds the kernel console/serial/disk bootlog directly. */
@@ -1161,6 +1170,11 @@ static int launch_pending(struct desktop *d)
 }
 /* Strong native bindings are linked by build_desktop.py; host shell replays
  * keep their existing isolated platform. */
+__attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
+__attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) void desk_v3_fixture_tick(struct desktop *d) { (void)d; }
+void desk_v3_fixture_report(const char *line)
+{ (void)ciuki_raw_probe_report(CU_PTR(line),(uint32_t)strlen(line),0,0,0,0); }
 __attribute__((weak)) void desk_w32_start(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
@@ -1350,21 +1364,39 @@ __attribute__((weak)) int ciuki_win32_shell_restart(uint32_t pid, uint32_t flags
 { (void)pid; (void)flags; return -ENOSYS; }
 /* f5-08 supplies this transaction: switch/delegate, or synchronously revoke
  * and restore the desktop. The default cannot change the physical display. */
-__attribute__((weak)) int ciuki_win32_presenter_lease(uint32_t pid, int acquire, int mode,
+__attribute__((weak)) int ciuki_win32_presenter_lease(struct desktop *d, uint32_t pid, int acquire, int mode,
     uint32_t w, uint32_t h, uint32_t bpp, uint32_t generation)
-{ (void)pid; (void)acquire; (void)mode; (void)w; (void)h; (void)bpp; (void)generation; return -ENOSYS; }
+{ (void)d; (void)pid; (void)acquire; (void)mode; (void)w; (void)h; (void)bpp; (void)generation; return -ENOSYS; }
+__attribute__((weak)) void desk_w32_presenter_poll(struct desktop *d) { (void)d; }
 static int win32_lease(struct desktop *d, uint32_t pid, int acquire,
                        uint32_t w, uint32_t h, uint32_t bpp, uint32_t generation)
 {
-    (void)d;
     int mode=0;
     if (acquire) {
         struct ciuki_display_info info={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(info)};
         int error=ciuki_display_query(&info);
-        if (error) return error; /* display calls return negative errno directly */
-        mode=desk_v3_mode(&info,w,h,bpp); if (mode<0) return mode;
+        if (error) {
+            fprintf(stderr,"[win32] display lease=query pid=%u serial=%u result=%d\n",pid,generation,error);
+            return error; /* display calls return negative errno directly */
+        }
+        struct ciuki_present_surface source={.width=w,.height=h,
+            .format=bpp==8 ? CIUKI_PRESENT_INDEX8 : bpp==16 ? CIUKI_PRESENT_RGB565 : CIUKI_PRESENT_XRGB8888};
+        int index=ciuki_present_choose_mode(&info,&source);
+        if(d->v3_lease_preferred_mode) {
+            index=-ENODEV;
+            for(unsigned k=0;k<info.mode_count && k<32;k++)
+                if(info.modes[k].id==d->v3_lease_preferred_mode){index=(int)k;break;}
+        }
+        if (index<0) {
+            fprintf(stderr,"[win32] display lease=mode pid=%u serial=%u result=%d\n",pid,generation,index);
+            return index;
+        }
+        mode=info.modes[index].id;
+        d->v3_lease_tuple.native_width=info.modes[index].width;
+        d->v3_lease_tuple.native_height=info.modes[index].height;
+        d->v3_lease_tuple.native_bpp=info.modes[index].bpp;
     }
-    return ciuki_win32_presenter_lease(pid,acquire,mode,w,h,bpp,generation);
+    return ciuki_win32_presenter_lease(d,pid,acquire,mode,w,h,bpp,generation);
 }
 static int win32_restart(struct desktop *d, uint32_t pid, uint32_t flags)
 { (void)d; return ciuki_win32_shell_restart(pid,flags); }
@@ -1494,7 +1526,7 @@ static void links_service(struct desktop *d)
 static void shell_setup(struct desktop *d, int gate)
 {
     if (!gate) {
-        desk_w32_start(d); links_start(d); d->v3_lease=win32_lease;
+        desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
@@ -1636,7 +1668,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_SHELL);
         desktop_wait("mixer-poll");
         mixer_poll(d,now,&mixer_poll_next);
-        if (!gate) { desk_w32_poll(d); desktop_wait("storage-poll"); storage_poll(d,now); }
+        if (!gate || desk_v3_fixture_active()) { desk_w32_poll(d); desktop_wait("storage-poll"); storage_poll(d,now); }
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desktop_wait("heartbeat"); desk_heartbeat(d,now);
@@ -1674,6 +1706,11 @@ int main(int argc, char **argv)
             }
             case GATE_RUN: report_send=GATE_RUN; report=1; break;
             case GATE_SNAPSHOT: report_send=GATE_SNAPSHOT; report=1; break;
+            case GATE_V3:
+                d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
+                desk_w32_start(d);
+                if(desk_v3_fixture_begin(d)<0)return gate_error("v3_fixture",errno,generation);
+                report=1;break;
             case GATE_INTERACT: interaction=1; report=1; break;
             default: return gate_error("command",EINVAL,generation);
             }
@@ -1804,6 +1841,7 @@ int main(int argc, char **argv)
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
+        desk_v3_fixture_tick(d);
         int mode_frame=desk_display_frame_commit(d,redraw);
         if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);

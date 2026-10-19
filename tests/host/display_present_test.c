@@ -28,12 +28,12 @@ static unsigned allocations,pins,writes,returns,mode_calls,revoked_writes;
 static uint32_t fresh;
 static void (*on_pin)(void),(*on_read)(void),(*on_yield)(void),(*on_sleep)(void),(*on_write)(void);
 const struct fb_device *fbdev_get(void){return &device;}
-struct process *proc_find(uint32_t pid){return pid==2?&desktop:pid==3?&game:NULL;}
+struct process *proc_find(uint32_t pid){return pid==desktop.pid?&desktop:pid==game.pid?&game:NULL;}
 uint32_t supervisor_desktop_pid(void){return 2;}
 uint64_t deadline_after_ms(uint32_t n){return g_ticks+n;}
 bool deadline_passed(uint64_t d){return g_ticks-d<(UINT64_C(1)<<63);}
 bool grants_display_owner(const struct process *p){return p==&desktop&&grant_available;}
-bool w32_service_desktop_client(struct process *p,uint32_t pid){return p==&desktop&&pid==3&&connected;}
+bool w32_service_desktop_client(struct process *p,uint32_t pid){return p==&desktop&&pid==game.pid&&connected;}
 bool display_fullscreen_active(void){return false;}
 int display_worker_start(void){return 0;}
 void fbdev_cursor_hide(void){assert(suspended);}
@@ -205,3 +205,23 @@ int main(void)
     native_formats();race();printf("PASS production lease: revoke at pin/read/copy/pacing, death, stale tokens, authority, mode failure/rollback, cleanup; writes=%u returns=%u\n",writes,returns);
     return 0;
 }
+#ifdef DESKTOP_ADAPTER_FIXTURE
+/* Export the very same f5-08 fixture to the desktop translation units. */
+uint32_t desk_w32_record(void *record,uint32_t bytes)
+{
+    assert(bytes==sizeof(struct ciuki_w32_display_args));struct ciuki_w32_display_args *a=record;
+    if(a->action==W32_DISPLAY_FRAME){
+        assert(a->address && a->address>sizeof(user));memcpy(user,(const void *)(uintptr_t)a->address,64000);a->address=0;
+        return w32_display_call(&gt,a);
+    }
+    return w32_display_call(&dt,a);
+}
+int presenter_desktop_info(int fd,struct ciuki_framebuffer_info *out)
+{(void)fd;if(suspended)return -EBUSY;*out=(struct ciuki_framebuffer_info){.generation=device.generation,.width=800,.height=600};return 0;}
+void presenter_adapter_init(void)
+{assert(!active);game.pid=42;game.state=PROC_LIVE;connected=grant_available=true;revoked_writes=0;}
+void presenter_adapter_failure(int kind)
+{if(kind==1)mode_fail=true;else if(kind==2)connected=false;}
+int presenter_adapter_suspended(void){return suspended;}
+void presenter_adapter_timeout(void){g_ticks+=10000;display_present_poll();}
+#endif

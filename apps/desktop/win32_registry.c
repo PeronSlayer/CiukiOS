@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 static pthread_mutex_t registry_lock=PTHREAD_MUTEX_INITIALIZER;
 static const char uninstall[]="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 struct response { struct w32r_reply header; uint8_t bytes[W32R_MAX-sizeof(struct w32r_reply)]; };
@@ -37,13 +38,43 @@ static int native_error(uint32_t e)
 }
 /* Canonical UTF-16LE -> bounded UTF-8. Reject malformed strings and truncation,
  * including embedded NULs, rather than launching a changed command line. */
+/* Match Win32 single-pass expansion, including unknown names and unmatched
+ * percent signs. The shell environment overrides the standard Windows paths. */
+extern char **environ;
+static uint32_t expand(const char *in,char *out,unsigned cap)
+{
+    unsigned at=0;
+    while (*in) {
+        const char *end=*in=='%' ? strchr(in+1,'%') : NULL;
+        const char *value=NULL; size_t n=0;
+        if (end && end>in+1) {
+            n=(size_t)(end-in-1);
+            for (char **e=environ;e && *e;e++) {
+                const char *eq=strchr(*e,'=');
+                if (eq && (size_t)(eq-*e)==n && !strncasecmp(*e,in+1,n)) {value=eq+1;break;}
+            }
+            static const char *const names[]={"SystemRoot","windir","SystemDrive","ProgramFiles","CommonProgramFiles","TEMP","TMP"};
+            static const char *const defaults[]={"C:\\WINDOWS","C:\\WINDOWS","C:","C:\\Program Files","C:\\Program Files\\Common Files","C:\\WINDOWS\\TEMP","C:\\WINDOWS\\TEMP"};
+            for (unsigned k=0;!value && k<sizeof(names)/sizeof(*names);k++)
+                if (strlen(names[k])==n && !strncasecmp(names[k],in+1,n)) value=defaults[k];
+        }
+        if (end) {
+            const char *bytes=value ? value : in;
+            n=value ? strlen(value) : (size_t)(end-in+1);
+            if(n>=cap-at)return 234;
+            memcpy(out+at,bytes,n);at+=(unsigned)n;in=end+1;
+        } else {if(at+1>=cap)return 234;out[at++]=*in++;}
+    }
+    out[at]=0;return 0;
+}
 static uint32_t string(struct response *r, uint32_t key, const char *name, char *out, unsigned cap)
 {
     out[0]=0;
     uint32_t e=call(r,W32R_QUERY,key,NULL,name,0);
     if (e) return e;
     unsigned count=r->header.data_bytes;
-    if (r->header.type!=1 || r->header.name_bytes || count<2 || count%2 ||
+    unsigned expanded=r->header.type==2 && !strcmp(name,"UninstallString");
+    if ((r->header.type!=1 && !expanded) || r->header.name_bytes || count<2 || count%2 ||
         r->bytes[count-1] || r->bytes[count-2]) return 13;
     unsigned at=0;
     for (unsigned i=0;i+2<count;i+=2) {
@@ -63,7 +94,12 @@ static uint32_t string(struct response *r, uint32_t key, const char *name, char 
             for (unsigned j=bytes-1;j;j--) out[at++]=(char)(0x80|((c>>(6*(j-1)))&63));
         }
     }
-    out[at]=0; return 0;
+    out[at]=0;
+    if (expanded) {
+        char *copy=malloc(at+1);if(!copy)return 8;
+        memcpy(copy,out,at+1);uint32_t e=expand(copy,out,cap);free(copy);return e;
+    }
+    return 0;
 }
 int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 {

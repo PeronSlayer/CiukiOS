@@ -57,6 +57,7 @@ def inputs():
                  "assets/sounds/kenney-interface/upstream.zip"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "sdk/win32/include/w32/server.h")
+    files.append(ROOT / "src/probes/desktop_v3/controller.h")
     files.extend(ROOT / "assets/cursors" / name for name in ("cursors.h", "README.md", "paint.h", "paint.md"))
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -148,7 +149,7 @@ def build():
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
-               "desktop": ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
+               "desktop": ["v3_fixture.c", "win32_presenter.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}

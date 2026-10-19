@@ -1891,6 +1891,17 @@ retried after registration. Only the exact `/Programs/desktop` started by PID 1
 and `/System/Win32/w32srv` started by that supervisor desktop gain service
 roles. A basename, arbitrary PID or inherited channel conveys no service role.
 Native callers have no authority for core/object/context/memory operations.
+F5-09B native CONNECT amendment (2026-10-19): endpoint slot 1 is the
+registry (`W32_SERVICE_W32SRV`, wire service id 2; slot 0/id 1 is desktop).
+The current supervisor desktop must retain its writable display grant to
+CONNECT to that registry. Its exact `/Programs/control` native child gains a
+private, nonregistrable launch role at spawn; CONNECT rechecks its parent is
+that same live display-owning desktop. Basenames, user copies, descendants,
+and other native programs receive error 5 and a `[win32] service` refusal
+record. The private role conveys no core Win32 operations or desktop endpoint
+access. Win32 CONNECT policy is unchanged; service channel inheritance and
+re-registration/reconnect rules remain unchanged.
+
 Both ends of a service channel are noninheritable. Channels keep existing
 queue limits, description charges, donation and delivery hints. Win32 endpoint
 links also consume one of the 8192 object credits; loss of either service drops

@@ -8,6 +8,7 @@
 static bool is_hex(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 #define SELECT_SERVER_STANDIN (1u << 30)
 #define SELECT_SERVER_DESKTOP (1u << 31)
+#define SELECT_DESKTOP_V3 (1u << 29)
 
 /* Set before the sweep controller replaces the cfg-only sweep request with
  * its ordinary per-probe selector. No boot-info or process ABI extension. */
@@ -105,6 +106,11 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
             return false;
         parsed.flags |= CBI_F_SAFE_MODE;
         i += 7;
+    }
+    if (len-i==18 && parsed.phase==2 && !strncmp(parsed.probe,"crash-isolation",sizeof(parsed.probe)) &&
+        !strncmp(s+i," server=desktop-v3",18)) {
+        if (!(boot_flags & CBI_F_SMBIOS_QEMU)) return false;
+        parsed.flags |= SELECT_SERVER_DESKTOP | SELECT_DESKTOP_V3;i+=18;
     }
     if (len - i == 15 && parsed.phase == 2 && !strncmp(parsed.probe, "crash-isolation", sizeof(parsed.probe))) {
         if (!(boot_flags & CBI_F_SMBIOS_QEMU)) return false;
@@ -236,6 +242,11 @@ int probes_crash_server(const char *s, unsigned len, uint32_t flags,
     return !!((selection.flags & SELECT_SERVER_DESKTOP) || payload);
 }
 
+bool probes_desktop_v3_selected(const char *request,unsigned length,uint32_t flags)
+{
+    struct probe_selection s;
+    return probes_parse_selector(request,length,flags,&s) && (s.flags & SELECT_DESKTOP_V3);
+}
 void probes_dispatch(const struct probe_selection *selection,
                      const struct probe_tables *tables, const struct probe_hooks *hooks)
 {

@@ -134,6 +134,28 @@ static void test_services(struct proc_thread *client)
         && service.pid == client->process->pid);
     struct proc_object *peer_end = server->fds[service.endpoint].object;
     CHECK(peer_end && !peer_end->inheritable);
+    /* Native CONNECT is restricted to the current display owner and its
+     * exact Control Panel child; a basename and an inherited role cannot do it. */
+    struct process *control,*random;
+    struct proc_thread *ct=make_process(desktop,&control),*rt=make_process(desktop,&random);
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=2};
+    CHECK(!w32_service_call(dt,&service) && !service.error && service.result);
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=1};
+    CHECK(!w32_service_call(dt,&service) && service.error==5);
+    w32_service_delegate(desktop,random,"/User/control");
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=2};
+    CHECK(!w32_service_call(rt,&service) && service.error==5);
+    w32_service_delegate(desktop,control,"/Programs/control");
+    CHECK(control->w32 && !random->w32);
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=2};
+    CHECK(!w32_service_call(ct,&service) && !service.error && service.result);
+    registry_grant=false;
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=2};
+    CHECK(!w32_service_call(ct,&service) && service.error==5);
+    registry_grant=true;
+    service=(struct ciuki_w32_service_args){.action=W32_SVC_CONNECT,.service=1};
+    CHECK(!w32_service_call(ct,&service) && service.error==5);
+    proc_stop(control,0,0);proc_stop(random,0,0);proc_collect();
     /* Native service operations are admitted without granting core authority. */
     struct task *saved = g_current;
     g_current = st->task;

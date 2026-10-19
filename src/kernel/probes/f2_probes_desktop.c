@@ -109,8 +109,10 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
  * controller-selected desktop and its registered children can update state.
  * The desktop explicitly publishes a dedicated anonymous control page. */
 #include "../../../apps/desktop/gate.h"
+#include "../../probes/desktop_v3/controller.h"
 #include <ciuki/shell_probe.h>
 extern int supervisor_spawn_desktop_probe(struct process **out);
+extern bool probes_desktop_v3_selected(const char *,unsigned,uint32_t);
 extern int probes_crash_server(const char *, unsigned, uint32_t, bool, bool);
 static bool report_unsigned(const char *, const char *, uint32_t *);
 static struct {
@@ -126,6 +128,7 @@ static struct {
     uint32_t shell_stage;
     bool shell;
 } native_reports;
+static struct desktop_v3_observation v3_observation;
 static uint32_t native_digest(void);
 /* Case-name prefix and checkpoint count of the reporting app scenario (Files: 5, CiukNote: 3). */
 static const char *native_app_case(void) { return native_reports.app==2 ? "note" : "files"; }
@@ -211,6 +214,19 @@ static bool native_report(struct process *p, const char *line, unsigned length)
                 keys,motion,buttons);
             native_reports.input_recorded=true;
         }
+    } else if (server && !strncmp(line,"case=desktop-v3 ",16)) {
+        uint32_t phase,generation,windows,errors,child;
+        if (!probes_desktop_v3_selected(g_boot.test_request,g_boot.test_request_len,g_boot.flags) ||
+            !report_unsigned(line,"phase",&phase) || !report_unsigned(line,"generation",&generation) ||
+            !report_unsigned(line,"windows",&windows) || !report_unsigned(line,"errors",&errors) ||
+            !report_unsigned(line,"child",&child)) {native_invalid("v3_fields");return true;}
+        struct process *peer=proc_find(child);
+        struct desktop_v3_observation next={phase,generation,windows,errors,child};
+        if (!peer || peer->ppid!=p->pid || peer->personality!=PROC_WIN32 || peer->state!=PROC_LIVE ||
+            !desktop_v3_observe(&v3_observation,&next,v3_observation.pid ? v3_observation.pid : child)) {
+            native_invalid("v3_observation");return true;
+        }
+        desktop_v3_publish(&v3_observation,rec_emit);
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -388,6 +404,7 @@ static int native_crash_isolation(void)
     bool operator_absent=false;
     uint64_t launch_start=g_ticks;
     memset(&native_reports,0,sizeof(native_reports));
+    memset(&v3_observation,0,sizeof(v3_observation));
     bool pass=!proc_prepare(proc_supervisor(),&owner);
     if (!pass) { native_launch_record(launch_start,"controller_setup"); goto finished; }
     proc_publish(owner,0);
@@ -473,6 +490,18 @@ static int native_crash_isolation(void)
         if (!pass) native_step_record(GATE_SNAPSHOT,generation,"restored_contract");
     }
     rec_emit(name,"DATA","case=cycles server=desktop cycles=%u desktop_restarts=%u",cycles,supervisor_desktop_deaths()-deaths);
+    if (pass && probes_desktop_v3_selected(g_boot.test_request,g_boot.test_request_len,g_boot.flags)) {
+        pass=native_command(server,GATE_V3,&generation);
+        deadline=g_ticks+20000;
+        while(pass && native_live(server) && v3_observation.phase<2 && g_ticks<deadline)task_sleep_ms(1);
+        pass=pass && native_live(server) && v3_observation.phase==2;
+        if(pass)rec_emit(name,"ARM","server=desktop action=desktop_v3");
+        deadline=g_ticks+60000;
+        while(pass && native_live(server) && v3_observation.phase<8 && g_ticks<deadline)task_sleep_ms(1);
+        pass=pass && native_live(server) && v3_observation.phase==8;
+        task_sleep_ms(3000);
+        goto cleanup;
+    }
     if (pass) {
         pass=native_command(server,GATE_INTERACT,&generation);
         if (!pass) { native_step_record(GATE_INTERACT,generation,native_command_failure); goto cleanup; }

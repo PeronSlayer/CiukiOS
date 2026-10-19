@@ -11249,13 +11249,13 @@
       "id": "desktop-v3-integration-qemu-t23",
       "probe": "crash-isolation",
       "profile": "qemu-t23",
-      "selector": "f2:crash-isolation run={run_id} server=desktop",
+      "selector": "f2:crash-isolation run={run_id} server=desktop-v3",
       "parameters": {},
       "timeout": 300,
       "desktop_screen": true,
       "qualification_status": "not_run",
       "qualification_notes": {
-        "scope": "Unrun f5-09 integration case. Requires f5-10 guest fixture, f5-07A registry RPC and f5-08 presenter adapters. Existing shell markers cannot satisfy its v3 predicates. No guest or hardware evidence claimed."
+        "scope": "Unrun f5-09 integration case. Authored f5-09B raw-ABI PE peer and trusted controller; selects server=desktop-v3 through fw_cfg. Requires canonical payload build; no runtime qualification. Crash/restart phases exercise confirmation/cancel only; restart execution belongs to f5-07B. No guest or hardware evidence claimed."
       },
       "expected": {
         "terminal": "END",
@@ -11656,7 +11656,7 @@
                     "down": true,
                     "key": {
                       "type": "qcode",
-                      "data": "ret"
+                      "data": "tab"
                     }
                   }
                 },
@@ -11666,7 +11666,7 @@
                     "down": false,
                     "key": {
                       "type": "qcode",
-                      "data": "ret"
+                      "data": "tab"
                     }
                   }
                 },

@@ -73,11 +73,17 @@ void klog(const char *f,...) {(void)f;}
         self.assertEqual(choose(base),1)
         self.assertEqual(choose(base,payload=False),0)
         self.assertEqual(choose(base+' server=standin'),0)
+        self.assertEqual(choose(base+' server=desktop-v3'),1)
+        self.assertTrue(runner.selector(base+' server=desktop-v3','fw_cfg',True)['desktop_v3'])
         self.assertEqual(choose(base+' server=desktop',flags=0),-22)
         self.assertEqual(choose(base+' server=desktop',payload=False),1)
         self.assertEqual(choose(base+' server=desktop',lfb=False),0)
         self.assertEqual(choose(base+' safe=1 server=desktop',flags=33),0)
         self.assertEqual(choose(base+' platform=e500 server=desktop',flags=160),1)
+        profile=runner.load(ROOT/'tests/profiles/qemu-t23.json')
+        _,request=runner.qemu_args('fake',profile,dict(probe='crash-isolation',selector=base+' server=desktop-v3'),
+                                  '12345678',self.folder/'overlay',self.folder/'bios')
+        self.assertTrue(request.endswith(' server=desktop-v3'))
         for suffix in (' server=bogus',' server=desktop server=standin',' server=desktop safe=1',
                        ' safe=1 server=standin platform=e500',' server=desktop\n'):
             self.assertEqual(choose(base+suffix,flags=161),-22)

@@ -69,7 +69,7 @@ struct desk_client {
     struct desk_box v3_clip;
     int32_t v3_visibility;
     unsigned v3_cursor, v3_cursor_valid;
-    uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp, v3_lease_wanted;
+    uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp, v3_lease_wanted, v3_lease_mode;
     uint32_t v3_cursor_pixels[4][1024];
     uint8_t v3_hot_x[4], v3_hot_y[4];
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
@@ -144,6 +144,13 @@ struct desktop {
     unsigned v3_cursor_id, v3_cursor_slot, v3_cursor_hidden;
     uint32_t v3_lease_window, v3_lease_generation, v3_lease_state, v3_lease_pid;
     uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp;
+    struct desk_lease_tuple v3_lease_tuple;
+    uint32_t v3_lease_preferred_mode;
+    int v3_lease_error, v3_reactivate_pending;
+    uint64_t v3_lease_started, v3_restore_started, v3_restore_presents;
+    unsigned v3_restoring, v3_restore_reported;
+    uint32_t v3_restore_watchdog_ms, v3_restore_watchdog_pending, v3_restore_watchdog_reported;
+    void (*v3_lease_poll)(struct desktop *);
     /* f5-08 adapter: choose/set mode + delegate atomically; revoke synchronously
      * and restore/repaint desktop before returning. No grant/fb mapping to peer. */
     int (*v3_lease)(struct desktop *, uint32_t pid, int acquire,
@@ -328,6 +335,8 @@ void desk_v3_revoke(struct desktop *);
 void desk_v3_pointer_release(struct desktop *);
 void desk_v3_restack(struct desktop *);
 void desk_v3_reactivate(struct desktop *, int);
+void desk_v3_lease_failed(struct desktop *, int error);
+int desk_v3_restore_watchdog(struct desktop *,uint32_t now_ms,char *,size_t);
 int desk_v3_mode(const struct ciuki_display_info *, unsigned w, unsigned h, unsigned bpp);
 int desk_v3_dialog_accept(struct desktop *);
 void desk_links_refresh(struct desktop *);

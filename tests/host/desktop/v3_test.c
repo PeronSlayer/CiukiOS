@@ -115,7 +115,8 @@ static void key(int code, int value)
 static unsigned leases, revokes, restart_count, terminated;
 static int lease_error;
 static int lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
-{ assert(p==&d && pid==42 && w==320 && h==200 && bpp==8 && gen); if (lease_error) return lease_error; if (acquire) leases++; else revokes++; return 0; }
+{ assert(p==&d && pid==42 && w==320 && h==200 && bpp==8 && gen); if (lease_error) return lease_error; if (acquire) {leases++;p->v3_lease_tuple=(struct desk_lease_tuple){.token=leases,.generation=gen,.mode=0x112,.scale=2,
+    .surface={320,200,320,64000,CIUKI_PRESENT_INDEX8},.native_width=640,.native_height=400,.native_bpp=32};} else revokes++; return 0; }
 static int restart(struct desktop *p,uint32_t pid,uint32_t flags)
 { assert(p==&d && pid==42 && flags==2); restart_count++; return 0; }
 static int terminate(uint32_t pid,int signal)
@@ -126,6 +127,84 @@ static void request_lease(int root,unsigned id)
     desk_put32(m.data+16,1); desk_put32(m.data+20,320); desk_put32(m.data+24,200); desk_put32(m.data+28,8);
     assert(!desk_v3_receive(&d,root,&m));
 }
+#ifdef DESKTOP_ADAPTER_FIXTURE
+int ciuki_win32_presenter_lease(struct desktop *,uint32_t,int,int,uint32_t,uint32_t,uint32_t,uint32_t);
+void desk_w32_presenter_poll(struct desktop *);
+void presenter_adapter_init(void),presenter_adapter_failure(int),presenter_adapter_timeout(void);
+int presenter_desktop_info(int,struct ciuki_framebuffer_info *),presenter_adapter_suspended(void);
+static int real_lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
+{
+    p->v3_lease_tuple.native_width=640;p->v3_lease_tuple.native_height=480;p->v3_lease_tuple.native_bpp=32;
+    return ciuki_win32_presenter_lease(p,pid,acquire,0x111,w,h,bpp,gen);
+}
+static int ordered_present(int display,int surface,const struct ciuki_rect *r)
+{assert(!presenter_adapter_suspended());return fake_ops.present(display,surface,r);}
+static void production_lease_replay(void)
+{
+    for(unsigned path=0;path<11;path++) {
+        setup();presenter_adapter_init();int root=peer(10,42),a=create(root,20,1,1,0,0);
+        create(root,21,2,1,0,0);desk_focus(&d,a);flush();
+        d.ops.present=ordered_present;d.display_info=presenter_desktop_info;d.v3_lease=real_lease;
+        d.v3_lease_poll=desk_w32_presenter_poll;d.now_ns=1000000000ull;
+        request_lease(root,1);assert(d.v3_lease_state==1 && presenter_adapter_suspended());flush();
+        struct desk_packet p;int tuple=0;
+        for(unsigned k=0;k<fake_sent;k++)if(fake_messages[k].data[1]==DESK_V3_LEASE_EVENT) {
+            assert(desk_parse(&fake_messages[k],0,NULL,&p));
+            if(p.flags==1){assert(p.lease.token && p.lease.generation && p.lease.scale==2 && p.lease.surface.size==64000);tuple++;}
+        }assert(tuple==1);
+        assert(!desk_redraw(&d));
+        switch(path) {
+        case 0:key(0x38,1);key(0x0f,1);break; /* Alt+Tab */
+        case 1:key(0x1d,1);key(1,1);break; /* Ctrl+Esc */
+        case 2:key(0x15b,1);key(0x15b,0);break; /* Windows */
+        case 3:key(0x1d,1);key(0x38,1);key(0x153,1);break;
+        case 4: {struct desk_box start=desk_start_button(&d);d.mouse_x=start.x+start.w/2;d.mouse_y=start.y+start.h/2;
+            desk_shell_button(&d,CIUKI_BUTTON_LEFT,1);desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);break;}
+        case 5:desk_shell_message(&d,"Fixture","System modal",0);break;
+        case 6: {struct ciuki_message m;msg(&m,DESK_V3_LEASE,16,1,1);assert(!desk_v3_receive(&d,root,&m));break;}
+        case 7:desk_drop_client(&d,root);break;
+        case 8:presenter_adapter_timeout();d.now_ns+=10000000000ull;desk_w32_presenter_poll(&d);assert(d.v3_lease_error==-ETIMEDOUT);break;
+        case 9: {
+            fake_channel(12);int dos=desk_add_client(&d,12);assert(dos>=0);
+            struct desk_client *c=&d.clients[dos];c->pid=84;c->hello=c->window=c->dosbox=1;
+            c->version=DESK_SHELL_VERSION;c->window_id=99;c->surface=22;
+            fake_surface(22,200,100,0);assert(!fake_ops.info(22,&c->info));c->pixels=fake_ops.map(22,PROT_READ);
+            c->frame=desk_frame(200,100,20,80);d.sh.levels=1;
+            d.sh.menus[0]=(struct sh_menu){.count=1,.hot=0,.items={{.action=SH_ACT_DOS_FULLSCREEN,.arg=dos}}};
+            key(DU_KEY_ENTER,1);key(DU_KEY_ENTER,0);break;
+        }
+        case 10:key(0x38,1);key(0x1c,1);break;
+        }
+        assert(!d.v3_lease_state && !presenter_adapter_suspended());
+        if(path==0) {
+            key(0x0f,0);key(0x38,0);flush();
+            uint32_t old=d.v3_lease_tuple.token;fake_fail_present=1;desk_focus(&d,a);
+            assert(!d.v3_lease_state && d.v3_reactivate_pending==a+1);
+            fake_fail_present=0;assert(!desk_redraw(&d));desk_heartbeat(&d,d.now_ns);
+            assert(d.v3_lease_state==1 && d.v3_lease_tuple.token>old);
+            desk_v3_revoke(&d);d.clients[a].v3_lease_wanted=0;
+        }
+        assert(!desk_redraw(&d));d.now_ns+=1000000;desk_heartbeat(&d,d.now_ns);
+        assert(!d.v3_restoring && d.v3_restore_reported && !d.v3_lease_state);cleanup();
+    }
+    setup();presenter_adapter_init();int root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
+    struct ciuki_message failure;msg(&failure,DESK_V3_LEASE,16,1,1);
+    desk_put32(failure.data+16,1);desk_put32(failure.data+20,320);desk_put32(failure.data+24,200);desk_put32(failure.data+28,8);
+    presenter_adapter_failure(1);assert(desk_v3_receive(&d,root,&failure)==-EIO);assert(!d.v3_lease_state && !presenter_adapter_suspended());
+    assert(!desk_redraw(&d));presenter_adapter_failure(2);failure.data[4]++;
+    assert(desk_v3_receive(&d,root,&failure)==-EPERM);
+    assert(!d.v3_lease_state && !presenter_adapter_suspended());cleanup();
+    char watchdog[160];
+    __atomic_store_n(&d.v3_restore_watchdog_ms,0xfffffff0u,__ATOMIC_RELEASE);
+    __atomic_store_n(&d.v3_restore_watchdog_pending,1,__ATOMIC_RELEASE);
+    __atomic_store_n(&d.v3_restore_watchdog_reported,0,__ATOMIC_RELEASE);
+    assert(!desk_v3_restore_watchdog(&d,0xffffffefu,watchdog,sizeof(watchdog)));
+    assert(!desk_v3_restore_watchdog(&d,0xfffffff0u+1999u,watchdog,sizeof(watchdog)));
+    assert(desk_v3_restore_watchdog(&d,0xfffffff0u+2000u,watchdog,sizeof(watchdog))>0 && strstr(watchdog,"result=-110"));
+    assert(!desk_v3_restore_watchdog(&d,0xfffffff0u+2100u,watchdog,sizeof(watchdog)));
+    puts("PASS production desktop/presenter replay: tuple, synchronous hotkey/modal/release/death/DOS hook, regrant, first-frame timeout, refusal/rollback, repaint after revoke, restore <= 2 s");
+}
+#endif
 static void ownership(void)
 {
     setup(); int root=peer(10,42), a=create(root,20,1,1,0,0), b=create(root,21,2,1,DESK_V3_POPUP,0);
@@ -324,9 +403,18 @@ static void frames(const char *folder)
         key(0x1c,1); key(0x1c,0); assert(restart_count==t+1); flush(); cleanup();
     }
 }
+#ifdef DESKTOP_GUEST_FIXTURE
+#include "v3_guest_test.inc"
+#endif
 int main(int argc,char **argv)
 {
+#ifdef DESKTOP_GUEST_FIXTURE
+    assert(argc==2);guest_fixture_run(argv[1]);return 0;
+#endif
     assert(argc==3); FILE *f=fopen(argv[1],"rb"); assert(f && fread(portrait,4,256*256,f)==256*256); fclose(f);
+#ifdef DESKTOP_ADAPTER_FIXTURE
+    production_lease_replay();
+#endif
     protocol(); ownership(); input_and_lease(); resize_and_cursor(); bridge(); links(); shell_links(); close_and_native_tasks(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }

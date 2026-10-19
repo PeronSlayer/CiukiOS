@@ -45,6 +45,7 @@ void desk_drop_client(struct desktop *d, int i)
         for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].v3_peer==(unsigned)i+1) desk_drop_client(d,j);
     }
     if (d->v3_lease_window==c->window_id && c->window_id) desk_v3_revoke(d);
+    if (d->v3_reactivate_pending==i+1)d->v3_reactivate_pending=0;
     if (d->v3_pointer_window==i+1) desk_v3_pointer_release(d);
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
@@ -816,10 +817,29 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     default: break;
     }
 }
+static void v3_restore_poll(struct desktop *d,uint64_t now)
+{
+    if (d->v3_restoring) {
+        uint64_t elapsed=now-d->v3_restore_started;
+        int complete=!d->v3_lease_state && d->presents>d->v3_restore_presents && !d->damage.count && !d->present_damage.count;
+        if (complete || (!d->v3_restore_reported && elapsed>=2000000000ull)) {
+            fprintf(stderr,"[win32] display restore elapsed_ms=%llu result=%d\n",
+                (unsigned long long)(elapsed/1000000),complete && elapsed<=2000000000ull ? 0 : -ETIMEDOUT);
+            d->v3_restore_reported=1;
+        }
+        if (complete) {d->v3_restoring=0;__atomic_store_n(&d->v3_restore_watchdog_pending,0,__ATOMIC_RELEASE);}
+    }
+}
 void desk_heartbeat(struct desktop *d, uint64_t now)
 {
     d->now_ns = now;
+    if (d->v3_lease_poll) d->v3_lease_poll(d);
     if (d->v3_lease_state==2) desk_v3_revoke(d);
+    v3_restore_poll(d,now);
+    if(d->v3_reactivate_pending && !d->v3_restoring) {
+        int i=d->v3_reactivate_pending-1;
+        if(d->focus==i)desk_v3_reactivate(d,i);else d->v3_reactivate_pending=0;
+    }
     if (now / 1000000000ull != d->clock_second) {
         d->clock_second = now / 1000000000ull;
         if (!d->shell) desk_damage_add(&d->damage, (struct desk_box){(int32_t)d->width - 120,
@@ -1301,9 +1321,14 @@ void desk_v3_pointer_release(struct desktop *d)
 static void v3_lease_event(struct desktop *d, int i, unsigned state)
 {
     struct ciuki_message m; struct desk_client *c=&d->clients[i];
-    desk_v3_message(&m,DESK_V3_LEASE_EVENT,20,0,c->v3_id,c->v3_generation);
+    desk_v3_message(&m,DESK_V3_LEASE_EVENT,72,0,c->v3_id,c->v3_generation);
     desk_put32(m.data+16,state); desk_put32(m.data+20,d->v3_lease_generation);
     desk_put32(m.data+24,d->v3_lease_w); desk_put32(m.data+28,d->v3_lease_h); desk_put32(m.data+32,d->v3_lease_bpp);
+    const struct desk_lease_tuple *t=&d->v3_lease_tuple;
+    const uint32_t words[]={t->token,t->generation,t->mode,t->scale,t->surface.width,t->surface.height,
+        t->surface.pitch,t->surface.size,t->surface.format,t->native_width,t->native_height,t->native_bpp,
+        (uint32_t)d->v3_lease_error};
+    for (unsigned k=0;k<sizeof(words)/sizeof(*words);k++) desk_put32(m.data+36+4*k,words[k]);
     desk_queue(d,i,&m);
 }
 void desk_v3_revoke(struct desktop *d)
@@ -1311,13 +1336,40 @@ void desk_v3_revoke(struct desktop *d)
     if (!d->v3_lease_state) return;
     int i=-1;
     for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==d->v3_lease_window) i=k;
+    if (!d->v3_restoring) {
+        d->v3_restoring=1; d->v3_restore_reported=0;
+        d->v3_restore_started=d->now_ns; d->v3_restore_presents=d->presents;
+        __atomic_store_n(&d->v3_restore_watchdog_ms,(uint32_t)(d->now_ns/1000000ull),__ATOMIC_RELEASE);
+        __atomic_store_n(&d->v3_restore_watchdog_reported,0,__ATOMIC_RELEASE);
+        __atomic_store_n(&d->v3_restore_watchdog_pending,1,__ATOMIC_RELEASE);
+    }
     d->v3_lease_state=2;
     if (d->v3_lease && d->v3_lease(d,d->v3_lease_pid,0,
         d->v3_lease_w,d->v3_lease_h,d->v3_lease_bpp,d->v3_lease_generation)) return;
     if (i>=0) v3_lease_event(d,i,3);
     d->v3_lease_state=0; d->v3_lease_window=0;
     desk_v3_pointer_release(d); d->cursor_dirty=1; d->scanout_valid=0;
+    desk_accel_reset(d,0); d->cursor_loaded=DESK_CURSOR_COUNT; d->hw_cursor=0;
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+}
+/* The desktop's independent 100 ms watchdog can observe a blocked revoke or
+ * repaint without touching the lease state from another thread. It reports
+ * the 2 s contract violation; it never enables composition over a live lease. */
+int desk_v3_restore_watchdog(struct desktop *d,uint32_t now,char *out,size_t cap)
+{
+    if(!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE))return 0;
+    uint32_t start=__atomic_load_n(&d->v3_restore_watchdog_ms,__ATOMIC_ACQUIRE),expected=0;
+    uint32_t elapsed=now-start;
+    if((int32_t)elapsed<2000 || !__atomic_compare_exchange_n(&d->v3_restore_watchdog_reported,&expected,1,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))return 0;
+    int n=snprintf(out,cap,"[win32] display restore watchdog_ms=%u result=%d\n",elapsed,-ETIMEDOUT);
+    return n>0 && (size_t)n<cap ? n : 0;
+}
+void desk_v3_lease_failed(struct desktop *d, int error)
+{
+    d->v3_lease_error=error;
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (d->clients[k].window_id==d->v3_lease_window) d->clients[k].v3_lease_wanted=0;
+    desk_v3_revoke(d);
 }
 static void v3_configure(struct desktop *d, int i)
 {
@@ -1493,6 +1545,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     case DESK_V3_LEASE:
         if (!p.flags) {
             c->v3_lease_wanted=0;
+            if(d->v3_reactivate_pending==i+1)d->v3_reactivate_pending=0;
             if (d->v3_lease_state && d->v3_lease_window!=c->window_id) error=-EPERM;
             else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
         }
@@ -1500,10 +1553,11 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else if (!d->v3_lease) error=-ENOSYS;
         else {
             if (!++d->v3_lease_generation) ++d->v3_lease_generation;
+            d->v3_lease_error=0;
             error=d->v3_lease(d,c->pid,1,p.width,p.height,p.bpp,d->v3_lease_generation);
             if (!error) { c->v3_lease_wanted=1; c->v3_lease_w=p.width; c->v3_lease_h=p.height; c->v3_lease_bpp=p.bpp;
-                d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
-                d->v3_lease_w=p.width; d->v3_lease_h=p.height; d->v3_lease_bpp=p.bpp; v3_lease_event(d,i,1); }
+                d->v3_lease_started=d->now_ns; d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+                d->v3_lease_w=p.width; d->v3_lease_h=p.height; d->v3_lease_bpp=p.bpp; c->v3_lease_mode=d->v3_lease_tuple.mode; v3_lease_event(d,i,1); }
         }
         break;
     case DESK_V3_CRASH: case DESK_V3_RESTART: {
@@ -1565,9 +1619,25 @@ void desk_v3_reactivate(struct desktop *d, int i)
 {
     if (i<0 || d->v3_lease_state || d->power.state || d->sh.levels || d->sh.switcher || !d->v3_lease) return;
     struct desk_client *c=&d->clients[i];
-    if (!c->v3_lease_wanted) return;
+    if (!c->v3_lease_wanted) {d->v3_reactivate_pending=0;return;}
+    /* Finish the restored desktop frame before suspending it again. Otherwise
+     * a rapid activation can strand the restoration watchdog behind a healthy
+     * new exclusive lease. Failed repaint defers regrant to heartbeat recovery. */
+    if(d->v3_restoring) {
+        d->v3_reactivate_pending=i+1;
+        if(desk_redraw(d))return;
+        v3_restore_poll(d,d->time_ns ? d->time_ns() : d->now_ns);
+        if(d->v3_restoring)return;
+    }
+    d->v3_reactivate_pending=0;
+    d->v3_lease_w=c->v3_lease_w;d->v3_lease_h=c->v3_lease_h;d->v3_lease_bpp=c->v3_lease_bpp;
     if (!++d->v3_lease_generation) ++d->v3_lease_generation;
-    if (d->v3_lease(d,c->pid,1,c->v3_lease_w,c->v3_lease_h,c->v3_lease_bpp,d->v3_lease_generation)) return;
+    d->v3_lease_error=0;
+    d->v3_lease_preferred_mode=c->v3_lease_mode;
+    int error=d->v3_lease(d,c->pid,1,c->v3_lease_w,c->v3_lease_h,c->v3_lease_bpp,d->v3_lease_generation);
+    d->v3_lease_preferred_mode=0;
+    if (error) {d->v3_lease_error=error;v3_lease_event(d,i,0);return;}
+    d->v3_lease_started=d->now_ns;
     d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
     d->v3_lease_w=c->v3_lease_w; d->v3_lease_h=c->v3_lease_h; d->v3_lease_bpp=c->v3_lease_bpp;
     v3_lease_event(d,i,1);

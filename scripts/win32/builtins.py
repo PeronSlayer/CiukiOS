@@ -53,6 +53,14 @@ def build(out=None):
     from scripts.win32 import fixtures
     fixture_source=ROOT/'build/host/win32/image-fixtures'
     hashes=fixtures.build(fixture_source)
+    # Runtime-selected desktop v3 probe peer; raw production ABI, no imports.
+    peer=out/'desktop-v3-peer.obj'
+    subprocess.run(['clang',*flags,'-c',str(ROOT/'src/probes/desktop_v3/peer.c'),'-o',str(peer)],check=True)
+    peer_exe=fixture_source/'desktop-v3.exe'
+    subprocess.run(['lld-link','/machine:x86','/entry:entry@0','/nodefaultlib','/safeseh:no',
+        '/base:0x00400000','/subsystem:windows,4.0','/osversion:4.0','/timestamp:0',
+        '/incremental:no','/out:'+str(peer_exe),str(peer)],check=True)
+    hashes[peer_exe.name]=hashlib.sha256(peer_exe.read_bytes()).hexdigest()
     (out/'fixtures').mkdir(exist_ok=True)
     for name in hashes:shutil.copyfile(fixture_source/name,out/'fixtures'/name)
     (out/'fixtures.json').write_text(json.dumps({'schema':1,'files':hashes},sort_keys=True,indent=2)+'\n')

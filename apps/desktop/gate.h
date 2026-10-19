@@ -4,7 +4,7 @@
 #define CIUKI_DESKTOP_GATE_H
 #include <stdint.h>
 #define GATE_MAGIC 0x32475443u
-enum { GATE_SPAWN = 1, GATE_RELEASE, GATE_REAP, GATE_RUN, GATE_SNAPSHOT, GATE_INTERACT };
+enum { GATE_SPAWN = 1, GATE_RELEASE, GATE_REAP, GATE_RUN, GATE_SNAPSHOT, GATE_INTERACT, GATE_V3 };
 /* f2-33 tasks scenario: Tasks pings with this serial once the PID it ended
  * has left the kernel process list (runtime test mode only). */
 #define DESK_TASKS_CHECKPOINT 0xf2330007u

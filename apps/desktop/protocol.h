@@ -8,6 +8,7 @@
 #define CIUKI_APP_DESKTOP_PROTOCOL_H
 #include <ciuki/abi.h>
 #include <stdint.h>
+#include <ciuki/present.h>
 #define DESK_VERSION 1u
 #define DESK_SHELL_VERSION 2u
 #define DESK_RESIZE_MINOR 1u       /* v2.1: header byte 2; v1/v2.0 remain unchanged */
@@ -33,6 +34,9 @@
  * LEASE: action (0 release,1 request),w,h,bpp;
  * RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
  * ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
+ * additive 72-byte LEASE_EVENT: above + token,fb-generation,mode,scale,
+ * source-w,source-h,pitch,size,format,native-w,native-h,native-bpp,signed-error.
+ * Legacy 20-byte events remain readable; v1/v2.1 are unchanged.
  * KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
  * CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
  * POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
@@ -106,7 +110,13 @@ enum desk_opcode {
 #define DESK_WINDOW_INTERNAL 8u
 #define DESK_WINDOW_CLOSING 16u
 #define DESK_WINDOW_FLAGS 31u
+struct desk_lease_tuple {
+    uint32_t token, generation, mode, scale;
+    struct ciuki_present_surface surface;
+    uint32_t native_width, native_height, native_bpp;
+};
 struct desk_packet {
+    struct desk_lease_tuple lease;
     unsigned opcode;
     uint32_t generation, owner, owner_generation, style, scale;
     int32_t x, y;
