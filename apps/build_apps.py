@@ -33,6 +33,8 @@ def validate_payloads():
         files["/Programs/" + name] = {"source": source, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                                "elf": checker.inspect(path)}
     files["/Programs/tcc"] = {"source": "build/apps/tcc/tcc", "sha256": tcc["files"]["tcc"], "elf": tcc["elf"]}
+    server = load("apps_w32srv", ROOT / "apps/w32srv/build_w32srv.py").validate_payloads()
+    files["/System/Win32/w32srv"] = {"source": "build/apps/w32srv/w32srv", "sha256": server["files"]["w32srv"], "elf": server["elf"]}
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}
     return result
@@ -48,6 +50,7 @@ def main():
     load("apps_desktop_build", ROOT / "apps/desktop/build_desktop.py").build()
     load("apps_tcc_build", ROOT / "apps/tcc/build_tcc.py").build()
     load("win32_builtins", ROOT / "scripts/win32/builtins.py").build()
+    load("apps_w32srv_build", ROOT / "apps/w32srv/build_w32srv.py").build()
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

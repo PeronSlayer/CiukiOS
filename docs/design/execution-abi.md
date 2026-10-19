@@ -1896,6 +1896,37 @@ queue limits, description charges, donation and delivery hints. Win32 endpoint
 links also consume one of the 8192 object credits; loss of either service drops
 its links, without stopping clients. Restart permits fresh endpoints.
 
+The f5-07A native `w32srv` payload protocol is version 1 in
+`sdk/win32/include/w32/server.h`. It adds **no kernel operation** and does not
+change these service records. The native owner registers service 2 and accepts
+each authenticated PID/descriptor pair. Peers exchange exactly 256 payload bytes
+per native message, with no descriptor attachments. `BEGIN`/`WRITE` carry
+contiguous, acknowledged fragments of one copied request; `READ` pulls the
+copied response. Each fragment carries version, transaction ID, kind, total,
+offset and error (six u32 words), followed by at most 232 bytes. Totals are
+bounded by `W32R_MAX`; malformed offsets, versions and lengths have no registry
+effect. Server-side session PID comes from ACCEPT, never the request bytes.
+
+Registry request/reply prefixes are 40 bytes with no pointers. UTF-8 key/value
+names and canonical UTF-16LE string value bytes are converted in the A/W facade;
+binary/NONE/DWORD bytes are unchanged. Paths are bounded to 4096 bytes, names to
+255 Unicode scalars and 1020 UTF-8 bytes, values to 65536 canonical bytes. The
+server serializes operations from all accepted channels. Disconnect flushes dirty
+hives and closes the PID's registry handles/local atoms/windows. A reconnect
+does not replay mutations with ambiguous completion. Deleted key handles return
+1018 until close; registry handles belong to one PID and never alias a stale
+handle after restart. The directory checkpoints atoms and HWND metadata before
+publication; a persisted high-water reservation prevents handle reuse across
+server lifetimes. Integer atoms remain 1..0xbfff, string atoms 0xc000..0xffff;
+exhaustion fails rather than wrapping. Global atoms survive a client's exit;
+local atoms are scoped to the accepted PID.
+
+The server exposes `wr_flush` for orderly restart/shutdown integration. Native
+SIGTERM/SIGINT flush before exit. Desktop startup, restart supervision and the
+authorized virtual-restart sequence remain f5-09/f5-07B integration points; the
+native executable cannot restart itself after SIGKILL. This checkout's f5-07A
+host evidence does not qualify that desktop flow or FAT power-loss durability.
+
 Handles encode an 18-bit generation and 12-bit slot, shifted left by two.
 Generation zero and exhausted slots are unavailable; a closed generation never
 wraps. A table has 4096 slots in 64 lazily allocated chunks. Names are UTF-16,
