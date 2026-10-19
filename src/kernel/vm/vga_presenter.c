@@ -584,3 +584,125 @@ int CVGA_CALL cvp_retained_blit(cvp_retained_state *s, const cvp_format *f,
     st->frames_completed = s->captured_images;
     return st->status = CVP_OK;
 }
+
+unsigned cvp_surface_bytes(unsigned format)
+{
+    switch (format) {
+    case CIUKI_PRESENT_XRGB8888: return 4;
+    case CIUKI_PRESENT_RGB565: case CIUKI_PRESENT_XRGB1555: return 2;
+    case CIUKI_PRESENT_INDEX8: return 1;
+    default: return 0;
+    }
+}
+int cvp_surface_valid(const struct ciuki_present_surface *s)
+{
+    unsigned b = s ? cvp_surface_bytes(s->format) : 0;
+    return b && s->width && s->height && s->width <= CVP_MAX_WIDTH &&
+        s->height <= CVP_MAX_HEIGHT && s->pitch >= s->width * b &&
+        (uint64_t)(s->height - 1) * s->pitch + s->width * b <= s->size;
+}
+int cvp_surface_scale(const struct ciuki_present_surface *s, unsigned w, unsigned h, unsigned wanted)
+{
+    if (!cvp_surface_valid(s) || wanted > 3) return 0;
+    unsigned n = w / s->width, m = h / s->height;
+    if (n > m) n = m;
+    if (n > 3) n = 3;
+    return wanted ? (wanted <= n ? (int)wanted : 0) : (int)n;
+}
+static int surface_target_valid(const cvp_format *f)
+{
+    if (!f || !f->width || !f->height || f->width > CVP_MAX_WIDTH ||
+        f->height > CVP_MAX_HEIGHT || (f->bytes != 2 && f->bytes != 4) ||
+        f->pitch < (uint32_t)f->width * f->bytes ||
+        !valid_channel(f->red_size,f->red_pos,f->bytes) ||
+        !valid_channel(f->green_size,f->green_pos,f->bytes) ||
+        !valid_channel(f->blue_size,f->blue_pos,f->bytes)) return 0;
+    uint32_t r = ((1u << f->red_size)-1) << f->red_pos;
+    uint32_t g = ((1u << f->green_size)-1) << f->green_pos;
+    uint32_t b = ((1u << f->blue_size)-1) << f->blue_pos;
+    return !(r & g) && !(r & b) && !(g & b);
+}
+static uint32_t surface_pixel(const struct ciuki_present_surface *s, const uint8_t *p,
+                              const uint32_t *palette, const struct ciuki_present_gamma *gamma,
+                              const cvp_format *f)
+{
+    unsigned r,g,b;
+    if (s->format == CIUKI_PRESENT_RGB565 || s->format == CIUKI_PRESENT_XRGB1555) {
+        unsigned v = p[0] | (unsigned)p[1] << 8;
+        b = v & 31; r = (v >> (s->format == CIUKI_PRESENT_RGB565 ? 11 : 10)) & 31;
+        r = (r << 3) | (r >> 2); b = (b << 3) | (b >> 2);
+        if (s->format == CIUKI_PRESENT_RGB565) { g = (v >> 5) & 63; g = (g << 2) | (g >> 4); }
+        else { g = (v >> 5) & 31; g = (g << 3) | (g >> 2); }
+    } else if (s->format == CIUKI_PRESENT_INDEX8) {
+        uint32_t v = palette[*p]; r = (v >> 16) & 255; g = (v >> 8) & 255; b = v & 255;
+    } else { b = p[0]; g = p[1]; r = p[2]; }
+    if (gamma) { r = gamma->red[r] >> 8; g = gamma->green[g] >> 8; b = gamma->blue[b] >> 8; }
+    return ((uint32_t)(r >> (8-f->red_size)) << f->red_pos) |
+           ((uint32_t)(g >> (8-f->green_size)) << f->green_pos) |
+           ((uint32_t)(b >> (8-f->blue_size)) << f->blue_pos);
+}
+int cvp_surface_row(const struct ciuki_present_surface *s, const uint8_t *src,
+                    const uint32_t *palette, const struct ciuki_present_gamma *gamma,
+                    const cvp_format *f, unsigned scale, unsigned first, unsigned count,
+                    uint8_t *dest, size_t cap)
+{
+    if (!cvp_surface_valid(s) || !surface_target_valid(f) || !scale || scale > 3 ||
+        first > s->width * scale || count > s->width * scale - first || !src || !dest ||
+        (s->format == CIUKI_PRESENT_INDEX8 && !palette)) return CVP_BAD_FORMAT;
+    if ((size_t)count * f->bytes > cap) return CVP_BAD_STORAGE;
+    unsigned bytes = cvp_surface_bytes(s->format);
+    for (unsigned x = 0; x < count;) {
+        unsigned sx = (first+x)/scale, n = scale - (first+x)%scale;
+        if (n > count-x) n = count-x;
+        uint32_t c = surface_pixel(s,src+sx*bytes,palette,gamma,f);
+        for (unsigned j = 0; j < n; ++j, ++x)
+            for (unsigned i = 0; i < f->bytes; ++i) *dest++ = (uint8_t)(c >> (i*8));
+    }
+    return CVP_OK;
+}
+int cvp_surface_blit(const struct ciuki_present_surface *s, const void *src,
+                     const uint32_t *palette, const struct ciuki_present_gamma *gamma,
+                     const cvp_format *f, unsigned scale, const cvp_rect *clip,
+                     void *target, size_t cap)
+{
+    if (!surface_target_valid(f) || !cvp_surface_scale(s,f->width,f->height,scale) || !scale ||
+        !src || !target || (s->format == CIUKI_PRESENT_INDEX8 && !palette)) return CVP_BAD_FORMAT;
+    if ((uint64_t)f->pitch * f->height > cap) return CVP_BAD_STORAGE;
+    if (clip && (clip->right < clip->left || clip->bottom < clip->top)) return CVP_BAD_RECT;
+    int left = clip ? clip->left : 0, top = clip ? clip->top : 0;
+    int right = clip ? clip->right : f->width, bottom = clip ? clip->bottom : f->height;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > f->width) right = f->width;
+    if (bottom > f->height) bottom = f->height;
+    unsigned w = s->width * scale, h = s->height * scale;
+    int ox = (f->width-w)/2, oy = (f->height-h)/2;
+    for (int y = top; y < bottom; ++y) {
+        uint8_t *d = (uint8_t *)target+(uint32_t)y*f->pitch;
+        int a = left > ox ? left : ox, b = right < ox+(int)w ? right : ox+(int)w;
+        if (y < oy || y >= oy+(int)h || b <= a) {
+            for (int x = left; x < right; ++x) zero(d+x*f->bytes,f->bytes);
+        } else {
+            for (int x = left; x < a; ++x) zero(d+x*f->bytes,f->bytes);
+            for (int x = b; x < right; ++x) zero(d+x*f->bytes,f->bytes);
+            const uint8_t *row = (const uint8_t *)src+(uint32_t)(y-oy)/scale*s->pitch;
+            cvp_surface_row(s,row,palette,gamma,f,scale,(unsigned)(a-ox),(unsigned)(b-a),
+                            d+a*f->bytes,(size_t)(b-a)*f->bytes);
+        }
+    }
+    return CVP_OK;
+}
+int cvp_palette_update(uint32_t *palette, unsigned first, unsigned count, const uint32_t *entries)
+{
+    if (!palette || !entries || first >= 256 || !count || count > 256-first) return CVP_BAD_RECT;
+    for (unsigned i = 0; i < count; ++i) palette[first+i] = entries[i] & 0xffffff;
+    return CVP_OK;
+}
+uint64_t cvp_present_deadline(uint64_t now)
+{
+    /* Split seconds to avoid multiplying a long-running nanosecond clock. */
+    uint64_t sec = now / 1000000000u;
+    uint32_t ns = (uint32_t)(now % 1000000000u);
+    unsigned slot = (unsigned)((uint64_t)ns * 60 / 1000000000u) + 1;
+    return sec * 1000000000u + ((uint64_t)slot * 1000000000u + 59) / 60;
+}

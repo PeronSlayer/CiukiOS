@@ -549,3 +549,29 @@ previous saved id and leaves watchdog recovery armed. Boot selection is unchange
 
 Implementer evidence is host-only. No QEMU, image build, hardware qualification,
 commit or diary is implied by this amendment.
+
+## F5-08 Win32 presenter and display amendment (2026-10-19)
+
+The additive delegated presenter follows [the shared F5 interface and primary
+source decisions](f5-presenter-display.md). Only the existing desktop authority
+switches listed native modes. RGB565, XRGB1555 and INDEX8 surfaces use software
+conversion, centring, 1x/2x/3x scaling, palette updates and gamma; no new 8-bit
+physical mode or register sequence is introduced. Native framebuffer uploads
+validate generation and registry ownership, synchronize acceleration and drain
+WC stores within the revocation exclusion interval. The native desktop grant
+is suspended while delegated and remains nontransferable.
+
+Host acceptance uses `tests/host/test_presenter_display.py`: independent pixel
+expectations plus pinned digests for all formats, scales and 16/32-bit targets;
+invalid extents/masks and clipping; partial palette updates and gamma; production
+lease revocation schedules at pin/read/copy/pacing/death; authority, stale-token,
+mode failure and rollback coverage. The full kernel host suite retains native
+mode-switch, restore watchdog, DOS full-screen and desktop regression checks.
+The -O2 timing table and kernel i686 instruction audit are recorded in the
+F5-08 report, without treating host timings as physical qualification.
+
+`w32-fullscreen-qemu-t23` is authored in f5-core.json and **unrun**. Its live
+F5-09 desktop/Win32 exercise is pending integration. Lead-owned T23 checks of
+640x480x8 and 320x200x8 at 2x, revocation, restored desktop input/frame and
+within-2-second recovery remain **pending**. No QEMU, hardware or image evidence
+is claimed by this implementation.

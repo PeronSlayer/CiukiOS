@@ -54,6 +54,7 @@ uint32_t w32_record_size(uint32_t operation)
     case W32_SECTION: return sizeof(struct ciuki_w32_section_args);
     case W32_VIEW: return sizeof(struct ciuki_w32_view_args);
     case W32_SERVICE: return sizeof(struct ciuki_w32_service_args);
+    case W32_DISPLAY: return sizeof(struct ciuki_w32_display_args);
     default: return 0;
     }
 }
@@ -69,7 +70,7 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     if (bytes < sizeof(struct ciuki_w32_header)) return -EINVAL;
     const struct ciuki_w32_header *h = record;
     if (h->version != 1 || h->size != bytes || h->reserved) return -EINVAL;
-    if(!win32 && h->operation!=W32_SERVICE)return -EPERM;
+    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY)return -EPERM;
     uint32_t size = w32_record_size(h->operation);
     if (!size) return -ENOSYS;
     if (size != bytes) return -EINVAL;
@@ -112,6 +113,14 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     case W32_SECTION: {const struct ciuki_w32_section_args *a=record;return a->result||a->error||a->flags&~1u?-EINVAL:0;}
     case W32_VIEW: {const struct ciuki_w32_view_args *a=record;return a->reserved||a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_SERVICE: {const struct ciuki_w32_service_args *a=record;return a->result||a->error||a->action<1||a->action>6?-EINVAL:0;}
+    case W32_DISPLAY: {
+        const struct ciuki_w32_display_args *a=record;
+        if (a->result || a->error || a->action<1 || a->action>5) return -EINVAL;
+        if (a->action==W32_DISPLAY_GRANT) return a->token || a->generation || a->address || a->first || a->count ? -EINVAL : 0;
+        if (a->mode || a->scale || !zero_bytes(&a->surface,sizeof(a->surface))) return -EINVAL;
+        if (a->action!=W32_DISPLAY_PALETTE && (a->first || a->count)) return -EINVAL;
+        return a->action==W32_DISPLAY_REVOKE && a->address ? -EINVAL : 0;
+    }
     default: return 0;
     }
 }

@@ -200,6 +200,91 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-fullscreen-qemu-t23",
+      "probe": "w32-fullscreen",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-fullscreen run={run_id}",
+      "timeout": 90,
+      "integration_pending": "f5-09 desktop v3 exercise driver and runtime probe; authored, unrun",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "indexed_640480"
+            },
+            "fields": {
+              "width": {
+                "eq": 640
+              },
+              "height": {
+                "eq": 480
+              },
+              "source_bpp": {
+                "eq": 8
+              },
+              "scale": {
+                "eq": 1
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "indexed_320200"
+            },
+            "fields": {
+              "width": {
+                "eq": 320
+              },
+              "height": {
+                "eq": 200
+              },
+              "source_bpp": {
+                "eq": 8
+              },
+              "scale": {
+                "eq": 2
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "lease"
+            },
+            "fields": {
+              "former_writes": {
+                "eq": 0
+              },
+              "stale_refused": {
+                "eq": 1
+              },
+              "rollback": {
+                "eq": 1
+              },
+              "restored": {
+                "eq": 1
+              },
+              "input": {
+                "eq": 1
+              },
+              "return_ms": {
+                "le": 2000
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

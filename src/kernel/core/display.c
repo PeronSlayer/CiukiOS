@@ -25,6 +25,9 @@ static uint64_t fullscreen_return_tick;
 #define NATIVE_RETURN_MS 2000u
 static unsigned fullscreen_return_budget;
 extern void dosvm_fullscreen_poll(void) __attribute__((weak));
+extern bool display_present_active(void) __attribute__((weak));
+extern int display_present_revoke_kernel(void) __attribute__((weak));
+extern void display_present_poll(void) __attribute__((weak));
 static uint32_t changes;
 static uint64_t frame_deadline;
 static struct fb_device previous;
@@ -69,6 +72,13 @@ int display_fullscreen_checkpoint(const char *step, int result)
 
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
+void display_present_returned(void)
+{
+    changed();
+    previous=*fbdev_get();
+    awaiting_frame=true; awaiting_restored_frame=true; awaiting_native_frame=false;
+    frame_deadline=deadline_after_ms(10000);
+}
 
 int display_query(struct ciuki_display_info *out)
 {
@@ -260,7 +270,9 @@ void display_fullscreen_return_request(void)
 
 void display_watchdog_poll(void)
 {
+    if (display_present_poll) display_present_poll();
     if (dosvm_fullscreen_poll) dosvm_fullscreen_poll();
+    if (display_present_active && display_present_active()) return;
     if (fullscreen_display) return;
     if (check_display) {
         if (deadline_passed(check_deadline)) {
@@ -285,7 +297,8 @@ static void watchdog_main(void *arg)
 {
     (void)arg;
     for (;;) {
-        task_sleep_ms(fullscreen_display || awaiting_native_frame ? 10 : 100);
+        task_sleep_ms(fullscreen_display || awaiting_native_frame ||
+            (display_present_active && display_present_active()) ? 10 : 100);
         display_watchdog_poll();
     }
 }
@@ -301,7 +314,7 @@ int display_worker_start(void)
     return 0;
 }
 
-int display_set(struct process *p, uint16_t id)
+int display_set_for_present(struct process *p, uint16_t id, bool delegated)
 {
     if (!p || p->pid != supervisor_desktop_pid() || !grants_display_owner(p)) return refuse(id, -EPERM);
     const struct ciuki_boot_display_mode *m = listed(id);
@@ -325,7 +338,7 @@ int display_set(struct process *p, uint16_t id)
         if (e) restore();
         else {
             changed();
-            awaiting_frame = true;
+            awaiting_frame = !delegated;
             awaiting_restored_frame = false;
             awaiting_native_frame = false;
             frame_deadline = deadline_after_ms(10000);
@@ -335,6 +348,22 @@ int display_set(struct process *p, uint16_t id)
     switching = false;
     if (e) e = -EIO;
     log_mode(id, e);
+    return e;
+}
+
+int display_set(struct process *p, uint16_t id)
+{
+    if (!p || p->pid != supervisor_desktop_pid() || !grants_display_owner(p)) return refuse(id,-EPERM);
+    bool reclaimed=false;
+    if (display_present_revoke_kernel) {
+        int e=display_present_revoke_kernel();
+        if (e<0) return refuse(id,e);
+        reclaimed=e>0;
+        if (reclaimed && id==fbdev_get()->mode_id) return refuse(id,0);
+        if (reclaimed && listed(id)) awaiting_frame=false; /* new set supersedes the return repaint */
+    }
+    int e=display_set_for_present(p,id,false);
+    if (e && reclaimed && fbdev_get()->present) display_present_returned();
     return e;
 }
 
@@ -369,6 +398,12 @@ static int fullscreen_windowed(int error)
 }
 int display_fullscreen_begin(uint16_t mode)
 {
+    bool reclaimed=false;
+    if (display_present_revoke_kernel) {
+        int e=display_present_revoke_kernel();
+        if (e<0) return fullscreen_windowed(e);
+        reclaimed=e>0;
+    }
     int logged=display_fullscreen_checkpoint("request",0);
     if (logged) return fullscreen_windowed(logged);
     struct process *desktop=proc_find(grants_display_pid());
@@ -380,7 +415,7 @@ int display_fullscreen_begin(uint16_t mode)
         klog("[display] fullscreen_refused reason=%s owner_pid=%u mode=%u",why,grants_display_pid(),mode);
         return fullscreen_windowed(-EPERM);
     }
-    if (switching || fullscreen_display || awaiting_frame || grants_display_busy()) {
+    if (switching || fullscreen_display || (awaiting_frame && !reclaimed) || grants_display_busy()) {
         klog("[display] fullscreen_refused reason=busy switching=%u active=%u awaiting_frame=%u presenting=%u",
             (unsigned)switching,(unsigned)fullscreen_display,(unsigned)awaiting_frame,(unsigned)grants_display_busy());
         return fullscreen_windowed(-EBUSY);
@@ -417,6 +452,7 @@ int display_fullscreen_begin(uint16_t mode)
     if (e) { grants_display_suspend(false); switching=false; return fullscreen_windowed(e); }
     e=fbdev_change_begin();
     if (e) { grants_display_suspend(false); switching=false; return fullscreen_windowed(e); }
+    awaiting_frame=false; /* the DOS transfer now supersedes the returned lease's repaint */
     fullscreen_native=native;
     fullscreen_return_budget=NATIVE_RETURN_MS;
     fullscreen_return_timed=false;

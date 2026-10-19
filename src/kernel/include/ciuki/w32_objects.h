@@ -3,6 +3,7 @@
 #ifndef CIUKI_W32_OBJECTS_H
 #define CIUKI_W32_OBJECTS_H
 #include <ciuki/abi.h>
+#include <ciuki/present_abi.h>
 #define W32_OBJECT 0x100u
 #define W32_WAIT 0x101u
 #define W32_APC 0x102u
@@ -285,6 +286,7 @@ int ua_w32_bind(struct uaddr *u, uint32_t va, uint32_t phys, uint32_t prot, bool
 int w32_file_sync(struct px_node *node);
 void w32_file_changed(struct px_node *node, uint64_t off, const void *buffer, uint32_t bytes);
 uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *a);
+bool w32_service_desktop_client(struct process *, uint32_t pid);
 void w32_service_delegate(struct process *parent, struct process *child, const char *path);
 int w32_services_attach(struct process *p, uint32_t endpoints[2]);
 void w32_services_cleanup(struct process *p);

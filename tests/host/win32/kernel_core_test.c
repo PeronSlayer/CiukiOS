@@ -91,6 +91,10 @@ int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool wri
 #include "../../../src/kernel/proc/win32/exception.c"
 #include "../../../src/kernel/proc/win32/pe.c"
 #include "../../../src/kernel/proc/win32/personality.c"
+/* Display is a device endpoint here; its production implementation is
+ * exercised by display_present_test.c. */
+uint32_t w32_display_call(struct proc_thread *t,struct ciuki_w32_display_args *a)
+{ (void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED; }
 #include "../../../src/kernel/proc/win32/syscall.c"
 int px_getcwd_locked(struct px_node *n, char path[CIUKI_PATH_MAX]) { (void)n; strcpy(path, "/"); return 0; }
 /* This fixture mocks the cwd endpoint; no volume admission or I/O occurs. */
@@ -184,7 +188,17 @@ static void test_records(void)
     CHECK(w32_counter_sample(9,1190,true,1189)==10*1193+4);
     CHECK(w32_counter_sample(9,3,false,1191)==10*1193+2);
     CHECK(w32_counter_sample(UINT32_MAX,1193,false,1193)==(uint64_t)UINT32_MAX*1193);
-    puts("w32 records: all sizes, versions, reserved fields, personality, protections, errors, identity, FS encoding, PIT rollover PASS");
+    struct ciuki_w32_display_args display={.header={1,sizeof(display),W32_DISPLAY,0},.action=W32_DISPLAY_GRANT};
+    CHECK(w32_record_size(W32_DISPLAY)==80);
+    CHECK(!w32_record_validate(&display,sizeof(display),false));
+    display.token=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    display.token=0;display.action=W32_DISPLAY_FRAME;
+    CHECK(!w32_record_validate(&display,sizeof(display),true));
+    display.surface.width=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    display.surface.width=0;display.count=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    display.action=W32_DISPLAY_PALETTE;CHECK(!w32_record_validate(&display,sizeof(display),true));
+    display.error=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    puts("w32 records: all sizes, versions, reserved fields, personality, protections, errors, identity, FS encoding, PIT rollover, display transport PASS");
 }
 static void test_fpu(void)
 {

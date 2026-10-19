@@ -17,6 +17,20 @@ struct service_link {
 };
 static struct service_link *links;
 static uint32_t service_pid[2];
+extern void display_present_process_exit(struct process *) __attribute__((weak));
+bool w32_service_desktop_client(struct process *desktop, uint32_t pid)
+{
+    if (!desktop || desktop->pid!=supervisor_desktop_pid() ||
+        desktop->state!=PROC_LIVE || !desktop->w32 ||
+        desktop->w32->service!=W32_SERVICE_DESKTOP || service_pid[0]!=desktop->pid) return false;
+    for (struct service_link *l=links;l;l=l->next)
+        if (l->server==desktop && l->client->pid==pid && l->accepted &&
+            l->client->state==PROC_LIVE && l->service==W32_SERVICE_DESKTOP &&
+            desktop->fds && l->client->fds &&
+            desktop->fds[l->server_fd].object==l->server_end &&
+            l->client->fds[l->client_fd].object==l->client_end) return true;
+    return false;
+}
 void w32_service_delegate(struct process *parent, struct process *child, const char *path)
 {
     if (child->personality != PROC_NATIVE)
@@ -84,6 +98,7 @@ static uint32_t connect_service(struct process *client, uint32_t service, uint32
 }
 void w32_services_cleanup(struct process *p)
 {
+    if (display_present_process_exit) display_present_process_exit(p);
     for (unsigned i = 0; i < 2; i++)
         if (service_pid[i] == p->pid)
             service_pid[i] = 0;

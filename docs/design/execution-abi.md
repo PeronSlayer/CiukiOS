@@ -1947,3 +1947,21 @@ continues to belong to the VFS and is not invented by the view layer.
 
 Research and host budget evidence: [f5-04 validation](../validation/f5-04-objects-sections.md).
 The `w32-objects-qemu-t23` case is registered and deliberately unrun.
+
+## F5-08 delegated presentation amendment (2026-10-19)
+
+Call 101 adds copied operation `W32_DISPLAY=0x201`, the 80-byte record in
+`ciuki/present_abi.h`. The desktop's accepted F5-04 endpoint authenticates its
+Win32 client. Only the authorized desktop can grant/revoke an exact
+PID/token/framebuffer-generation lease; the holder can present a pinned RAM
+surface or update its palette/gamma. Games receive neither a display grant,
+a framebuffer mapping nor call-74 authority. Revocation serializes with every
+bounded native upload and drains WC writes before returning. Mode switches
+retain the confirmed VBE transaction and rollback; no mutex crosses firmware.
+
+The shared surface schema, conversion precision, palette/gamma damage rules,
+mode-selection helper, lifecycle and f5-09 handoff are specified in
+[f5-presenter-display.md](f5-presenter-display.md), including the inspected
+primary references. Present pacing uses absolute 60 Hz software deadlines
+rounded up to PIT milliseconds. Hardware vsync is not advertised. Existing
+native XRGB surface calls and desktop protocol v1/v2 retain their layouts.

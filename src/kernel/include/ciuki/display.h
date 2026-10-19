@@ -5,6 +5,16 @@
 int32_t display_syscall(struct trap_frame *);
 int display_query(struct ciuki_display_info *);
 int display_set(struct process *, uint16_t mode);
+/* Same desktop authority and rollback as call 74; a delegated mode does
+ * not wait for a desktop frame until its lease is returned. */
+int display_set_for_present(struct process *, uint16_t mode, bool delegated);
+struct ciuki_w32_display_args;
+uint32_t w32_display_call(struct proc_thread *, struct ciuki_w32_display_args *);
+bool display_present_active(void);
+int display_present_revoke_kernel(void);
+void display_present_poll(void);
+void display_present_process_exit(struct process *);
+void display_present_returned(void);
 uint32_t display_change_counter(void);
 /* Successful desktop upload. Mode changes require a full frame; verified
  * full-screen restoration accepts the first upload in the new generation. */

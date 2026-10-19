@@ -74,6 +74,10 @@ bool fbdev_console_begin(void);
 void fbdev_console_end(void);
 /* Live damage operations: */
 int fbdev_present(const struct fb_surface *src, const struct fb_rect *dst);
+/* Internal bounded native row upload, <=256 pixels. Generation checked
+ * under the presenter lock, acceleration drained, WC writes drained. */
+int fbdev_present_native(uint32_t generation, unsigned x, unsigned y,
+                          const void *pixels, unsigned count);
 int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 struct ciuki_accel_request;
 int fbdev_accel_request(const struct ciuki_accel_request *);

@@ -93,8 +93,16 @@ class KernelCoreTests(unittest.TestCase):
         from loader_model import selector
         suite=json.loads((ROOT/'tests/suites/f5-core.json').read_text())
         self.assertEqual([c['id'] for c in suite['cases']],
-                         ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23'])
+                         ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
+                          'w32-fullscreen-qemu-t23'])
         for case in suite['cases']:
+            if case['probe']=='w32-fullscreen':
+                # f5-08 authors the unrun case; f5-09 owns its desktop driver.
+                self.assertIn('f5-09',case['integration_pending'])
+                self.assertEqual(case['selector'],'f5:w32-fullscreen run={run_id}')
+                self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
+                                 ['indexed_640480','indexed_320200','lease'])
+                continue
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])

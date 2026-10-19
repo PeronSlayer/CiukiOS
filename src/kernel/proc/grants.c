@@ -192,6 +192,14 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
     op.grant->object.retain(&op.grant->object);
     if (t) { t->cleanup = present_cleanup; t->operation = &op; }
     uint32_t generation = fbdev_get()->generation;
+    /* Allocation may have yielded after the initial authority check. A
+     * delegated/DOS handoff must not admit that parked desktop submission. */
+    err = grant_check(p, display, DESKTOP_DISPLAY, PROT_WRITE);
+    if (err) {
+        if (t) { t->cleanup = 0; t->operation = 0; }
+        present_cleanup(&op);
+        return err;
+    }
     presenting++; op.presenting = true;
     for (unsigned y = 0; y < clipped.height && !err; y++) {
         for (unsigned x = 0; x < clipped.width; x += PAGE_SIZE / 4) {
