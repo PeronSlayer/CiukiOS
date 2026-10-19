@@ -358,6 +358,7 @@ static int relocations(struct w32_pe *p, ULONG delta, int apply) {
                 CHECK(i + 1 < (n - 8) / 2, "relocation-highadj-pair");
                 add = (int16_t)w32_u16(entries + (++i) * 2);
             }
+            if (apply && !w32_pe_write(p,page+at,kind==3?4:2)) return 0;
             if (apply)
                 switch (kind) {
                 case 1:
@@ -592,4 +593,14 @@ int w32_pe_protect(struct w32_pe *p, const struct w32_services *s) {
             return fail(p, "image-protect-failed");
     }
     return 1;
+}
+
+/* The kernel backend supplies shared COW sections. Permit only the pages
+ * actually patched; final section protection is restored by pe_protect. */
+int w32_pe_write(struct w32_pe *p, ULONG rva, ULONG bytes) {
+    const struct w32_services *s=w32_get_services();
+    if(!w32_pe_span(p,rva,bytes))return 0;
+    if(!s || !s->image)return 1;
+    ULONG start=rva&~4095u, end=(rva+bytes+4095)&~4095u;
+    return s->protect(s->opaque,p->image+start,end-start,7) ? 1 : fail(p,"image-protect-failed");
 }

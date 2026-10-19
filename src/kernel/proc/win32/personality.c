@@ -68,19 +68,21 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     _Static_assert(sizeof(*im) <= PAGE_SIZE, "PE metadata scratch");
     int err = w32_pe_validate(file, im);
     if (err) { klog("[win32] load check=%s error=193", im->failure ? im->failure : "read"); goto done; }
-    if (im->flags & 0x2000) { err = -ENOEXEC; goto done; }
+    if (im->flags & 0x2000) { klog("[win32] load check=expected-executable error=193");err = -ENOEXEC; goto done; }
     p->personality = PROC_WIN32; p->memory->win32 = true;
     p->w32_image = im->base; p->w32_stack_reserve = im->stack_reserve; p->w32_stack_commit = im->stack_commit;
     err = w32_image_map(p, file, im, false);
-    if (err) goto done;
+    if (err) {klog("[win32] load check=image-address-range error=193");goto done;}
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     struct ciuki_file loader = {0};
-    err = ops ? ops->open(p->cwd, "/System/Win32/ntdll.dll", &loader) : -ENOENT;
-    if (err) goto done;
+    err = ops ? ops->open(p->cwd, "/WINDOWS/SYSTEM/ntdll.dll", &loader) : -ENOENT;
+    if (err) { klog("[win32] load pid=%u check=missing-dll error=126",p->pid); goto done; }
     err = w32_pe_validate(&loader, im);
     if (!err && !(im->flags & 0x2000)) err = -ENOEXEC;
     if (!err) err = w32_image_map(p, &loader, im, true);
-    uint32_t entry = im->base + im->entry;
+    uint32_t entry = 0;
+    if(!err)err=w32_bootstrap_entry(p,im,&entry);
+    if(err)klog("[win32] load pid=%u check=builtin-entry error=193",p->pid);
     if (loader.close) loader.close(loader.cookie);
     if (err) goto done;
     err = w32_map_system(p->memory, PAGE_SIZE, 0, &p->w32_peb);
@@ -115,6 +117,14 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     uint32_t endpoints[2];
     if(!err)err=w32_services_attach(p,endpoints);
     if(!err){extended.desktop_endpoint=endpoints[0];extended.w32srv_endpoint=endpoints[1];}
+    if(!err)err=w32_loader_snapshot(p,file,&p->w32_source);
+    if(!err)p->w32_source_bytes=file->bytes;
+    if(!err){
+        unsigned n=0;
+        do{err=ua_read(p->memory,p->w32_source_name+n,params->image_path+n,1);if(err)break;}
+        while(p->w32_source_name[n++] && n<sizeof(p->w32_source_name));
+        if(!err && p->w32_source_name[n-1])err=-ENAMETOOLONG;
+    }
     if (!err) err = ua_write(p->memory, parameters, &extended, sizeof(extended));
     if (!err) err = ua_write(p->memory, p->w32_peb + 8, &p->w32_image, 4);
     if (!err) err = ua_write(p->memory, p->w32_peb + 0x10, &parameters, 4);

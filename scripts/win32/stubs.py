@@ -154,7 +154,9 @@ def image_version(raw):
 def verify_store(path):
     path=Path(path);data=json.loads(path.read_text());ranges=[];names=set()
     for dll in data['dlls']:
-        name=dll['name'].lower();base=dll['base'];size=dll['size'];image=path.parent/dll['path']
+        name=dll['name'].lower();base=dll['base'];size=dll['size']
+        if dll['path']!=dll['name']: raise ValueError('builtin path')
+        image=path.parent/dll['path']
         if name in names or not DLL.fullmatch(name): raise ValueError('builtin names')
         if base&65535 or not 0x70000000<=base<base+size<=0x7ffe0000: raise ValueError('builtin range')
         if any(base<b+n and b<base+size for b,n in ranges): raise ValueError('builtin overlap')

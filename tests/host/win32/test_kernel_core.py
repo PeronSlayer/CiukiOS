@@ -25,6 +25,7 @@ class KernelCoreTests(unittest.TestCase):
                         '-fsanitize=address,undefined','-fno-sanitize-recover=all',
                         '-I',str(ROOT/'src/kernel/include'),
                         str(ROOT/'tests/host/win32/kernel_core_test.c'),
+                        str(ROOT/'src/kernel/fs/path.c'),
                         str(ROOT/'tests/host/proc/signal_legacy.c'),
                         str(ROOT/'tests/host/proc/desktop_legacy.c'),'-o',str(cls.program)],
                        check=True, env=cls.env)
@@ -94,7 +95,7 @@ class KernelCoreTests(unittest.TestCase):
         suite=json.loads((ROOT/'tests/suites/f5-core.json').read_text())
         self.assertEqual([c['id'] for c in suite['cases']],
                          ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
-                          'w32-fullscreen-qemu-t23'])
+                          'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23'])
         for case in suite['cases']:
             if case['probe']=='w32-fullscreen':
                 # f5-08 authors the unrun case; f5-09 owns its desktop driver.
@@ -106,7 +107,7 @@ class KernelCoreTests(unittest.TestCase):
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])
-            if case['probe']=='w32-objects':
+            if case['probe'] in ('w32-objects','w32-fixtures'):
                 continue
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})

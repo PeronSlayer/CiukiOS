@@ -1965,3 +1965,89 @@ mode-selection helper, lifecycle and f5-09 handoff are specified in
 primary references. Present pacing uses absolute 60 Hz software deadlines
 rounded up to PIT milliseconds. Hardware vsync is not advertised. Existing
 native XRGB surface calls and desktop protocol v1/v2 retain their layouts.
+
+## f5-05B — PE startup and loader service amendment (2026-10-19)
+
+The F2 syscall numbers and existing Win32 record layouts are unchanged. Call
+96 (`CIUKI_SYS_W32`) gains these version-1 records in `ciuki/abi.h`:
+
+| Operation | Bytes | Fields after the common 16-byte header |
+| --- | ---: | --- |
+| `W32_LOADER` (`0x107`) | 40 | action, path, source, bytes, address, flags |
+| `W32_WORD` (`0x108`) | 32 | address, expected, wake, reserved |
+
+`LOADER/OPEN` (1) takes a NUL-terminated path of at most 259 bytes, with all
+other fields zero. It returns a read-only private raw-file snapshot in
+`address/bytes`. The source is the existing immutable executable-snapshot
+service through the VFS drive view; UNC/device namespaces are refused. Native
+ELF file lookup is unchanged. The original EXE snapshot is retained during
+spawn and handed to the loader on its first request for that exact image path,
+so later writes to the disk file cannot change the process being started.
+An empty file can be opened and receives the parser's named malformed-header
+refusal. Snapshot buffers are released with VM_FREE/MEM_RELEASE.
+
+`LOADER/IMAGE` (2) takes a readable, nonwritable snapshot in `source/bytes` and
+returns a populated image-section view in `address`. Input address is zero or
+the preferred base. Flags are EXACT (1), BUILTIN (2), DATAFILE (4). The kernel
+pins the snapshot against protection/release changes while hashing/seeding.
+EXACT prevents fallback placement; BUILTIN selects the existing builtin arena;
+DATAFILE selects an independent application-arena view without user callbacks.
+All image views use f5-04 section ownership and COW credits. Relocations, IAT
+and TLS-index patches request write access only for the affected pages; ntdll
+restores PE characteristics after binding. The kernel returns an existing seed
+view only when its file digest, base and size match. No copy overwrites the
+currently executing ntdll. `LOADER/UNMAP` (3) takes address only. Production
+ntdll retains builtin views through user shutdown; kernel teardown frees them
+after user execution has stopped.
+
+`WORD` takes an aligned private user word and an expected value. With wake=0
+it uses the native generation-keyed compare/enqueue wait; with wake=1 it wakes
+all current waiters. Reserved is zero. Mismatch/interruption may return as a
+spurious wake; the critical-section owner CAS is retried by user code. It adds
+no successful credits and preserves unmap/reuse cancellation. Native callers
+cannot use either new operation. Record copies, pinning, field validation and
+NTSTATUS transport are the same as other Win32 calls.
+
+An MZ candidate enters Win32 validation (including a DOS executable, refused
+with 193); ELF retains its native path. Spawn maps the EXE first and the
+`/WINDOWS/SYSTEM/ntdll.dll` seed, requires the executable
+`CiukiProcessStart` export, constructs the kernel-owned TEB/PEB, v2 bootstrap
+parameters/endpoints and stack, and publishes only after that preparation
+succeeds. The bootstrap registers `KiUserExceptionDispatcher`, reads the
+builtin manifest, constructs RTL parameters without parsing the command line,
+installs static TLS, registers the running ntdll module, and starts the EXE
+through the shared loader. The v2 block remains at PEB.SubSystemData for its
+endpoint handoff. Loader failures after entry emit protected `[win32] load`
+records and exit with the corresponding NTSTATUS; pre-entry failures return
+through atomic native spawn rollback. This does not claim that user-mode
+DllMain failures can be returned synchronously before the loader has run.
+
+The builtin producer is `scripts/win32/builtins.py`, invoked by `make apps`.
+`build_image.py` checks JSON metadata, SHA-256, PE bases/sizes, fixed version
+resources, nonoverlap, and its byte-exact `BUILTIN.BIN` companion before image
+mutation. Both manifests and all DLLs are included in the ordinary T1 payload
+readback. The system view is `C:\WINDOWS\SYSTEM`. Placeholders retain version
+0.0.0.0 and diagnose once per export/process with a noncontinuable not-implemented
+exception. The Wine 10.0 audit's debug helper ABI is implemented independently;
+no Wine Unix backend is introduced.
+
+The added `w32-fixtures-qemu-t23` case selects five original executable
+fixtures (SEH, nested SEH, TLS, imports/DllMain, packed code). It is written
+and unrun. Synthetic fixtures use observer callbacks only in the host model.
+
+This startup error boundary matches Microsoft's documented
+[CreateProcess return behavior](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessa#return-value):
+a missing or failing DLL can terminate a successfully created child during its
+initialization. The loader's status is observable through the existing process
+exit/object path; adding a synchronous native spawn handshake would change that
+boundary and is not required here.
+
+W32_CONTINUE also supports plain RtlUnwind without a pending CPU delivery, and
+unwind out of a handled noncontinuable exception. Ntdll owns SEH disposition
+checks; the kernel always validates selectors, EFLAGS, addresses and floating
+state and drops a pending delivery record when present. The pinned i386
+[RtlUnwind implementation](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/signal_i386.c)
+uses the same NtContinue endpoint. Invalid privilege state remains fatal only
+to the calling process. Stub diagnostics additionally have a process-wide
+64-record kernel budget, preserving fatal load/crash diagnostics after that
+budget is exhausted. Raw Wine debug text is not emitted into W21 records.

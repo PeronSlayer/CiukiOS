@@ -37,6 +37,8 @@ struct process {
     enum proc_personality personality;
     struct w32_process *w32;
     uint32_t w32_image, w32_peb, w32_dispatcher, w32_stack_reserve, w32_stack_commit;
+    uint32_t w32_source, w32_source_bytes;
+    char w32_source_name[260];
     enum proc_state state;
     int32_t status, raw_exit;
     uint32_t fault_vector, fault_error, fault_eip, fault_address;

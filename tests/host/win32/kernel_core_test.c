@@ -39,7 +39,9 @@ void fpu_fxrstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS) && (fake_cr4 & CR4_
 void fpu_fnsave(void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(p, hardware, 108); memset(hardware, 0, 108); }
 void fpu_frstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(hardware, p, 108); }
 void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware, 0, 512); }
+#ifndef W32_KERNEL_BRIDGE
 void klog(const char *fmt, ...) { (void)fmt; }
+#endif
 void arch_w32_fs_switch(uint32_t base) { (void)base; }
 uint64_t arch_w32_counter(void) { return w32_counter_sample(g_ticks, 1193, false, 1190); }
 #include "../../../src/kernel/lib/sha256.c"
@@ -90,6 +92,7 @@ int file_io_locked(struct file_description *d,void *buffer,size_t bytes,bool wri
 #include "../../../src/kernel/proc/win32/context.c"
 #include "../../../src/kernel/proc/win32/exception.c"
 #include "../../../src/kernel/proc/win32/pe.c"
+#include "../../../src/kernel/proc/win32/loader.c"
 #include "../../../src/kernel/proc/win32/personality.c"
 /* Display is a device endpoint here; its production implementation is
  * exercised by display_present_test.c. */
@@ -252,15 +255,23 @@ static void test_context(void)
 static uint8_t pe_data[0x2400],loader_data[0x2400];
 static int pe_read(void *cookie,uint32_t off,void *dst,uint32_t n){CHECK(off<=sizeof(pe_data)&&n<=sizeof(pe_data)-off);memcpy(dst,(uint8_t*)cookie+off,n);return 0;}
 static void put16(uint8_t *p,uint16_t x){memcpy(p,&x,2);}static void put32(uint8_t *p,uint32_t x){memcpy(p,&x,4);}
-static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put32(b+60,0x80);put32(b+0x80,0x4550);put16(b+0x84,0x14c);put16(b+0x86,1);put16(b+0x94,224);put16(b+0x96,dll?0x2102:0x102);uint8_t *o=b+0x98;put16(o,0x10b);put32(o+16,0x1000);put32(o+28,dll?0x70010000:0x400000);put32(o+32,4096);put32(o+36,512);put32(o+56,0x3000);put32(o+60,512);put16(o+68,3);put32(o+72,0x100000);put32(o+76,4096);put32(o+92,16);uint8_t *s=o+224;put32(s+8,0x1000);put32(s+12,0x1000);put32(s+16,512);put32(s+20,512);put32(s+36,0xe0000020);b[512]=0xc3;}
+static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put32(b+60,0x80);put32(b+0x80,0x4550);put16(b+0x84,0x14c);put16(b+0x86,1);put16(b+0x94,224);put16(b+0x96,dll?0x2102:0x102);uint8_t *o=b+0x98;put16(o,0x10b);put32(o+16,0x1000);put32(o+28,dll?0x70010000:0x400000);put32(o+32,4096);put32(o+36,512);put32(o+56,0x3000);put32(o+60,512);put16(o+68,3);put32(o+72,0x100000);put32(o+76,4096);put32(o+92,16);uint8_t *s=o+224;put32(s+8,0x1000);put32(s+12,0x1000);put32(s+16,512);put32(s+20,512);put32(s+36,0xe0000020);b[512]=0xc3;
+    if(dll){
+        put32(b+0x98+96,0x1100);put32(b+0x98+100,0x100);
+        put32(b+0x300+20,1);put32(b+0x300+24,1);
+        put32(b+0x300+28,0x1140);put32(b+0x300+32,0x1144);put32(b+0x300+36,0x1148);
+        put32(b+0x340,0x1000);put32(b+0x344,0x1150);
+        memcpy(b+0x350,"CiukiProcessStart",18);
+    }
+}
 static bool loader_missing;
-static int loader_open(void *cwd,const char *path,struct ciuki_file *out){(void)cwd;CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;*out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;}
+static int loader_open(void *cwd,const char *path,struct ciuki_file *out){(void)cwd;CHECK(!strcmp(path,"/WINDOWS/SYSTEM/ntdll.dll"));if(loader_missing)return -ENOENT;*out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;}
 static void test_spawn_exceptions(void)
 {
     proc_init();make_pe(pe_data,false);make_pe(loader_data,true);
     struct ciuki_file f={pe_data,sizeof(pe_data),pe_read,0};struct w32_image *im=malloc(sizeof(*im));CHECK(im);
     CHECK(w32_is_pe(&f)&&!w32_pe_validate(&f,im));
-    put32(pe_data+60,UINT32_MAX);CHECK(!w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
+    put32(pe_data+60,UINT32_MAX);CHECK(w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
     const struct ciuki_file_ops ops={loader_open};proc_set_file_ops(&ops);
     struct proc_strings *s=proc_strings_new();CHECK(s);CHECK(!proc_strings_add(s,"/fixture.exe",13,false));CHECK(!proc_strings_add(s,"\"quoted  argument\"",19,false));
@@ -280,6 +291,10 @@ static void test_spawn_exceptions(void)
     w32_deliver(t,&tf,&exc,&ctx);CHECK(t->w32_delivery&&!t->in_handler&&tf.eip==p->w32_dispatcher);
     w32_deliver(t,&tf,&exc,&ctx);CHECK(t->w32_delivery->next);
     CHECK(w32_continue(t,&tf,&ctx)&&t->w32_delivery);CHECK(w32_continue(t,&tf,&ctx)&&!t->w32_delivery&&tf.eip==0x401000);
+    CHECK(w32_continue(t,&tf,&ctx)&&!t->w32_delivery); /* RtlUnwind outside delivery */
+    exc.flags=1;w32_deliver(t,&tf,&exc,&ctx);
+    CHECK(w32_continue(t,&tf,&ctx)&&!t->w32_delivery); /* noncontinuable handled by unwind */
+    exc.flags=0;
     tf.user_esp=1;w32_deliver(t,&tf,&exc,&ctx);CHECK(t->w32_delivery->emergency&&tf.user_esp>=t->emergency);CHECK(w32_continue(t,&tf,&ctx));
     exc.code=W32_EXCEPTION_STACK;w32_context_restore(&tf,&ctx);
     w32_deliver(t,&tf,&exc,&ctx);CHECK(t->w32_delivery->emergency);CHECK(w32_continue(t,&tf,&ctx));exc.code=W32_EXCEPTION_ILLEGAL;
@@ -306,6 +321,9 @@ static int blob_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
 }
 
 #include "kernel_objects_test.inc"
+#ifdef W32_KERNEL_BRIDGE
+#define main kernel_mechanism_main
+#endif
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--pe")) {

@@ -47,6 +47,7 @@ def main():
                     "--source-archive", str(args.source_archive), "--tests-archive", str(args.tests_archive)], check=True)
     load("apps_desktop_build", ROOT / "apps/desktop/build_desktop.py").build()
     load("apps_tcc_build", ROOT / "apps/tcc/build_tcc.py").build()
+    load("win32_builtins", ROOT / "scripts/win32/builtins.py").build()
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

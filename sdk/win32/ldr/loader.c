@@ -331,6 +331,7 @@ static int bind_imports(struct w32_loader *l, struct w32_module *m, ULONG depth)
             void *address = resolve(l, dep, name, v & 65535, hint, 0);
             if (!address)
                 return 0;
+            if(!w32_pe_write(p,iat+i*4,4))return 0;
             w32_put32(p->image + iat + i * 4, (ULONG)(uintptr_t)address);
         }
     }
@@ -356,6 +357,7 @@ static int prepare_tls(struct w32_loader *l, struct w32_module *m) {
     m->tls_index = index;
     l->tls_used[index] = 1;
     m->entry.TlsIndex = index;
+    if(!w32_pe_write(&m->pe,w32_u32(d+8)-m->pe.base,4))return 0;
     w32_put32(m->pe.image + w32_u32(d + 8) - m->pe.base, index);
     return 1;
 }
@@ -487,11 +489,16 @@ static struct w32_module *load_one(struct w32_loader *l, const char *name, ULONG
              (!builtin && (preferred >= 0x70000000 || m->pe.size > 0x70000000 - preferred))))
             ok = error(l, 193, "image-address-range", name, 0);
         else {
-            void *image = l->services->map(l->services->opaque, preferred, m->pe.size, exact);
+            void *image = l->services->image
+                ? l->services->image(l->services->opaque, &f, preferred, exact, (builtin?1:0)|((flags&W32_LOAD_DATAFILE)?2:0))
+                : l->services->map(l->services->opaque, preferred, m->pe.size, exact);
             if (!image)
                 ok = error(l, 193, "relocation-base-collision", name, 0);
-            else
-                ok = w32_pe_copy_image(&m->pe, image) && w32_pe_validate(&m->pe);
+            else {
+                m->pe.image = image;
+                ok = (l->services->image || w32_pe_copy_image(&m->pe, image)) &&
+                     w32_pe_validate(&m->pe);
+            }
         }
     }
     l->services->close(l->services->opaque, &f);
@@ -629,6 +636,12 @@ int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32
     }
     l->transaction_depth++;
     struct w32_module *m = load_one(l, name, flags, 0);
+    /* The main module is visible to GetModuleHandle(NULL) inside TLS and
+     * DllMain callbacks, before its initialization transaction commits. */
+    if(m && (flags&W32_LOAD_EXECUTABLE)){
+        l->main=m;
+        if(l->peb)l->peb->ImageBaseAddress=m->pe.image;
+    }
     int ok = m && initialize(l, m);
     if (ok) {
         m->references++;

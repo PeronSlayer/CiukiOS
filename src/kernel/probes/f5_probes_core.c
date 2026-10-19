@@ -26,7 +26,7 @@ static struct probe_image exe_image, loader_image, native_image;
 static int core_open(void *cwd, const char *path, struct ciuki_file *out)
 {
     (void)cwd;
-    if (strncmp(path,"/System/Win32/ntdll.dll",sizeof("/System/Win32/ntdll.dll"))) return -ENOENT;
+    if (strncmp(path,"/WINDOWS/SYSTEM/ntdll.dll",sizeof("/WINDOWS/SYSTEM/ntdll.dll"))) return -ENOENT;
     *out = (struct ciuki_file){ .cookie=&loader_image, .bytes=loader_image.bytes, .read=core_read };
     return 0;
 }
@@ -140,3 +140,36 @@ CIUKI_F5_PROBE("w32-exceptions",exception_probe);
 CIUKI_F5_PROBE("w32-memory",memory_probe);
 
 CIUKI_F5_PROBE("w32-objects",objects_probe);
+
+/* Production loader vertical slice. The complete 137-image structural corpus
+ * is a host-model gate; synthetic callback bytes are never executed here. */
+static int fixtures_probe(void)
+{
+    const char *name="w32-fixtures";
+    rec_emit(name,"BEGIN",0);
+    struct proc_ledger before,after;proc_snapshot(&before);
+    const struct ciuki_file_ops *ops=proc_get_file_ops();
+    const char *files[]={"seh-chain.exe","seh-nested.exe","compiled-tls.exe","consumer.exe","packed-code.exe"};
+    const uint32_t expected[]={0,0,0,18,42};unsigned errors=0,completed=0;
+    struct process *parent=proc_current();if(!parent)parent=proc_supervisor();
+    for(unsigned i=0;i<ARRAY_SIZE(files);i++){
+        char path[128];ksnprintf(path,sizeof(path),"/System/Win32/Fixtures/%s",files[i]);
+        struct ciuki_file file={0};struct proc_strings *strings=proc_strings_new();struct process *child=0;
+        int err=(!ops||!strings)?-ENOENT:ops->open(parent->cwd,path,&file);
+        if(!err)err=proc_strings_add(strings,path,(uint32_t)strlen(path)+1,false);
+        if(!err)err=proc_spawn_file(parent,&file,strings,0,0,0,0,&child);
+        if(file.close)file.close(file.cookie);proc_strings_free(strings);
+        uint64_t deadline=g_ticks+10000;
+        if(err<0){errors++;continue;}
+        while(child->state!=PROC_ZOMBIE&&g_ticks<deadline)task_sleep_ms(1);
+        if(child->state!=PROC_ZOMBIE){errors++;proc_stop(child,99,0);task_sleep_ms(2);}
+        if(child->state==PROC_ZOMBIE){if((uint32_t)child->raw_exit!=expected[i])errors++;completed++;proc_reap(parent,child);}
+    }
+    proc_snapshot(&after);
+    bool clean=before.processes==after.processes&&before.threads==after.threads&&before.backing==after.backing&&before.extents==after.extents&&before.tables==after.tables;
+    rec_emit(name,"DATA","case=fixtures completed=%u errors=%u",completed,errors);
+    rec_emit(name,"DATA","case=teardown clean=%u",clean);
+    bool pass=completed==5&&!errors&&clean;
+    rec_emit(name,"END",pass?"status=PASS":"status=FAIL reason=win32_fixtures");return pass?0:1;
+}
+CIUKI_F5_PROBE("w32-fixtures",fixtures_probe);

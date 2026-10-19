@@ -417,6 +417,38 @@ def check_image(image, volume):
     print("T1 PASS: MBR, FAT32 geometry, fsck, loader size and CRC32")
 
 
+def win32_payloads(folder=None):
+    """T1: inspect every builtin before image mutation; payload readback hashes
+    cover both manifests and every DLL. Never build or fetch from this path."""
+    import struct
+    from scripts.win32 import stubs
+    folder=Path(folder or ROOT / "build/apps/win32")
+    manifest=folder / "builtin-store.json"
+    stubs.verify_store(manifest)
+    store=json.loads(manifest.read_text())
+    require(any(d["name"] == "ntdll.dll" for d in store["dlls"]), "missing builtin ntdll")
+    binary=struct.pack("<II", 1, len(store["dlls"]))
+    sources={"/WINDOWS/SYSTEM/builtin-store.json": manifest,
+             "/WINDOWS/SYSTEM/BUILTIN.BIN": folder / "BUILTIN.BIN",
+             "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
+             "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md"}
+    for dll in store["dlls"]:
+        require(dll["path"] == dll["name"] and len(dll["name"]) < 64, "builtin path")
+        sources["/WINDOWS/SYSTEM/" + dll["name"]]=folder / dll["path"]
+        binary+=struct.pack("<64s65s3xII4H", dll["name"].encode("ascii"), dll["sha256"].encode("ascii"),
+                            dll["base"], dll["size"], *dll["version"])
+    require((folder / "BUILTIN.BIN").read_bytes() == binary, "builtin binary manifest")
+    fixtures=json.loads((folder / "fixtures.json").read_text())
+    sources["/System/Win32/Fixtures/fixtures.json"]=folder / "fixtures.json"
+    for name,digest in fixtures["files"].items():
+        require(Path(name).name == name, "fixture path")
+        require(sha256(folder / "fixtures" / name) == digest, "fixture hash")
+        sources["/System/Win32/Fixtures/" + name]=folder / "fixtures" / name
+    return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
+        "manifest_sha256": sha256(manifest), "builtins": store["dlls"],
+        "msvcrt_policy": store.get("msvcrt_policy")}
+
+
 def registry_payloads(directory):
     """Seed the persistent identity root using libreg's UTF-8 text dialect."""
     revision, _ = git_identity()
@@ -453,6 +485,9 @@ def build(kernel, out, boot_cfg):
     if len(options) > 127 or b"\0" in options or any(c > 127 for c in options):
         raise SystemExit("BOOT.CFG must be <=127 ASCII bytes without NUL")
     sources, directories, metadata = application_payloads()
+    builtin_sources, builtin_directories, metadata["win32"] = win32_payloads()
+    sources.update(builtin_sources)
+    directories.update(builtin_directories)
     registry_sources, registry_directories = registry_payloads(out.parent / "registry")
     sources.update(registry_sources)
     directories.update(registry_directories)

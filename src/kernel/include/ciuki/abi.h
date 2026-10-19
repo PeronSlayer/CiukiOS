@@ -1652,6 +1652,39 @@ struct ciuki_w32_header {
 };
 _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen size");
 
+/* f5-05B additive loader services. OPEN returns a private read-only raw
+ * snapshot; IMAGE maps that snapshot through the image-section service.
+ * flags: bit 0 exact placement, bit 1 builtin region, bit 2 DATAFILE. address is in/out;
+ * bytes is raw snapshot length. UNMAP releases an image view. No native fd
+ * or kernel pointer crosses this boundary. WORD uses private generation-keyed
+ * compare/enqueue/wake; spurious returns are allowed. */
+#define W32_LOADER 0x107u
+#define W32_WORD 0x108u
+#define W32_LDR_OPEN 1u
+#define W32_LDR_IMAGE 2u
+#define W32_LDR_UNMAP 3u
+#define W32_LDR_EXACT 1u
+#define W32_LDR_BUILTIN 2u
+#define W32_LDR_DATAFILE 4u
+struct ciuki_w32_loader_args {
+    struct ciuki_w32_header header;
+    uint32_t action;
+    uint32_t path;
+    uint32_t source;
+    uint32_t bytes;
+    uint32_t address;
+    uint32_t flags;
+};
+struct ciuki_w32_word_args {
+    struct ciuki_w32_header header;
+    uint32_t address;
+    uint32_t expected;
+    uint32_t wake;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_w32_loader_args) == 40, "loader wire");
+_Static_assert(sizeof(struct ciuki_w32_word_args) == 32, "word wire");
+
 struct ciuki_w32_memory_info {
     uint32_t base;
     uint32_t allocation_base;
