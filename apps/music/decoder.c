@@ -3,10 +3,23 @@
 #include "decoder.h"
 #include <errno.h>
 #include <limits.h>
+#ifdef __i386__
+#include <ciuki/raw.h>
+#else
+#include <sched.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+static void read_yield(void)
+{
+#ifdef __i386__
+    (void)ciuki_raw_yield(0,0,0,0,0,0);
+#else
+    sched_yield();
+#endif
+}
 #define MINIMP3_NO_SIMD
 #define MINIMP3_ONLY_MP3
 #define MINIMP3_IMPLEMENTATION
@@ -22,12 +35,14 @@
 #define STB_VORBIS_HEADER_ONLY
 #include "../../third_party/stb/stb_vorbis.c"
 #define MP3_INPUT 16384
+#define READ_AHEAD (256u*1024u)
 struct music_decoder {
     FILE *file; stb_vorbis *ogg; char *vorbis_memory; mp3dec_t mp3;
     unsigned kind, rate, channels, bits, output_rate;
     uint64_t frames, position, source_index, mp3_decoded; unsigned phase;
     long data; uint32_t bytes;
     uint8_t raw[4096];
+    char read_ahead[READ_AHEAD];
     uint8_t input[MP3_INPUT]; unsigned input_count;
     unsigned sync_bytes;
     int16_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]; unsigned count, offset;
@@ -105,7 +120,7 @@ static int mp3_block(struct music_decoder *d)
             while (d->input_count<MP3_INPUT && !feof(d->file)) {
                 if (cancelled(d)) return -ECANCELED;
                 size_t n=fread(d->input+d->input_count,1,MP3_INPUT-d->input_count,d->file);
-                d->input_count+=(unsigned)n;
+                d->input_count+=(unsigned)n; read_yield();
                 if (ferror(d->file)) return -(errno ? errno : EIO);
                 if (!d->mp3_decoded && (d->sync_bytes+=(unsigned)n)>256*1024) return -EINVAL;
                 if (!n && !feof(d->file)) return -EIO;
@@ -145,6 +160,7 @@ static int source(struct music_decoder *d, int16_t out[2])
             unsigned frame_bytes=d->channels*d->bits/8;
             unsigned n=(unsigned)((d->bytes-used)/frame_bytes); if (n>1024) n=1024;
             if (fread(d->raw,frame_bytes,n,d->file)!=n) return -EIO;
+            read_yield();
             for (unsigned i=0;i<n*d->channels;i++) {
                 unsigned v=d->bits==8 ? d->raw[i] : u16(d->raw+2*i);
                 d->pcm[i]=(int16_t)(d->bits==8 ? ((int)v-128)*256 : v<32768 ? (int)v : (int)v-65536);
@@ -154,6 +170,7 @@ static int source(struct music_decoder *d, int16_t out[2])
             int n=mp3_block(d); if (n<=0) return n;
         } else {
             int n=stb_vorbis_get_samples_short_interleaved(d->ogg,(int)d->channels,d->pcm,2048);
+            read_yield();
             if (!n) return ferror(d->file) ? -(errno ? errno : EIO) : stb_vorbis_get_error(d->ogg) ? -EIO : 0;
             d->count=(unsigned)n;
         }
@@ -180,6 +197,7 @@ int music_decoder_open(struct music_decoder **out, const char *path, unsigned ra
     const char *ext=strrchr(path,'.'); int err=-EINVAL;
     if (!ext) goto done;
     d->file=fopen(path,"rb"); if (!d->file) { err=-errno; goto done; }
+    if (setvbuf(d->file,d->read_ahead,_IOFBF,sizeof(d->read_ahead))) { err=-EIO; goto done; }
     if (!strcasecmp(ext,".wav")) { d->kind=1; err=wav_open(d); }
     else if (!strcasecmp(ext,".mp3")) {
         d->kind=2; d->frames=UINT64_MAX; mp3dec_init(&d->mp3);

@@ -177,6 +177,35 @@ latency budget. A slower negotiated backend needs a recorded period/lead
 decision and equivalent measurements before qualification; never change a
 guest's programmed rate to conceal lateness.
 
+### Music decoded reservoir (F4-34, 2026-10-19)
+
+Research checked the pinned [minimp3 API and synchronization guidance](https://raw.githubusercontent.com/lieff/minimp3/ea99364f61c14656440e8d77e9c233ccf3124633/README.md),
+[stb_vorbis handle ownership and stdio input](https://github.com/nothings/stb/blob/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_vorbis.c),
+and upstream newlib [setvbuf](https://raw.githubusercontent.com/mirror/newlib-cygwin/master/newlib/libc/stdio/setvbuf.c).
+The existing player decodes inside its writer pump and limits decoded plus
+queued PCM to 256 frames. This couples playback to synchronous file waits.
+
+**[F4-34]** A normal-priority reader owns decoding while active. Commands join
+it before seek/close/replacement; no decoder handle has concurrent callers.
+The writer never holds a reservoir mutex across file I/O. The bounded stereo
+S16 ring holds 131072 frames (512 KiB, 2.731 s at 48 kHz); supported output
+rates must permit at least two seconds within that cap. Start after 100 ms
+of decoded PCM or EOF. Keep only 256 source frames queued in the device.
+Retain submitted but not yet audible PCM in the same ring for exact pause
+replay; pause preserves decoded PCM. Seek/stop/track changes flush it.
+
+Use a separate 256 KiB stdio read-ahead buffer, installed before any stream
+operation and retained through fclose, for MP3, WAV and Ogg. Keep minimp3's
+small synchronization window so a bulk storage refill does not cause a
+256 KiB memmove on every MPEG frame. Yield between reader batches and after
+adapter reads. Decoder code and resampling arithmetic remain scalar.
+
+Position remains the device's audible source cursor (written minus
+latency), never the decoder cursor. A starved stream contributes the existing
+kernel silence; the writer submits no stale PCM or artificial source frames.
+Expose Buffering... and a bounded diagnostic (at most one per second), with
+an episode count in the close record. No kernel or stream ABI change.
+
 ### Volume and persistence
 
 **[F4]** `/dev/mixer` MUST expose read-only master left/right volume and mute

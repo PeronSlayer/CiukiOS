@@ -60,6 +60,37 @@ class MusicTests(unittest.TestCase):
             self.assertIn('[music] error stage=playlist-open errno=', result.stderr)
             self.assertRegex(result.stderr, r'\[music\] open path=.*denied.mp3 result=-\d+ ms=\d+')
 
+    @unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg needed for ten-second encoded VFS fixtures')
+    def test_decoded_reservoir_storage_stalls(self):
+        parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='music-reservoir-', dir=parent) as temp:
+            folder = Path(temp)
+            # Independent deterministic stereo noise keeps the 10 s compressed
+            # fixtures larger than read-ahead, exercising mid-song VFS reads.
+            wav = folder/'stall.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                'anoisesrc=d=10:r=48000:a=0.2:seed=34', '-f', 'lavfi', '-i',
+                'anoisesrc=d=10:r=48000:a=0.2:seed=35', '-filter_complex',
+                '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-c:a', 'pcm_s16le', str(wav)], check=True)
+            for ext, options in [('mp3', ['-c:a', 'libmp3lame', '-b:a', '320k']),
+                                 ('ogg', ['-c:a', 'libvorbis', '-q:a', '10'])]:
+                subprocess.run(['ffmpeg', '-v', 'error', '-i', str(wav), *options, str(folder/f'stall.{ext}')], check=True)
+            binary = folder/'reservoir'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
+                '-fno-omit-frame-pointer', '-pthread', '-Wl,--wrap=fopen', '-I', str(ROOT/'apps/music'),
+                *(str(ROOT/'apps/music'/s) for s in ['decoder.c', 'vorbis.c', 'playlist.c', 'player.c', 'runtime.c']),
+                str(ROOT/'tests/host/desktop/music_reservoir_test.c'), '-lm', '-o', str(binary)], check=True)
+            result = subprocess.run([str(binary), *(str(folder/f'stall.{ext}') for ext in ['wav', 'mp3', 'ogg']), 'starve'],
+                text=True, capture_output=True, timeout=75, env=dict(os.environ, ASAN_OPTIONS='detect_leaks=0'))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            print(result.stdout.strip())
+            records = [line for line in result.stderr.splitlines() if line.startswith('[music] starve ')]
+            self.assertGreaterEqual(len(records), 2)
+            self.assertLessEqual(len(records), 3)
+            self.assertIn('[music] close starvations=1', result.stderr)
+            self.assertTrue(all(len(line) <= 240 for line in result.stderr.splitlines()))
+
     def harness(self, name, sources, *args):
         parent = ROOT/'build/host'; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='music-', dir=parent) as temp:

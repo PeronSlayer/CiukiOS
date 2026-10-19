@@ -5,7 +5,7 @@
 #include <stdint.h>
 struct music_decoder;
 typedef int (*music_cancel)(void *);
-/* All calls belong to the worker. Streaming storage does not grow with song length. */
+/* One caller owns the handle at a time; join the reader before seek/close. Streaming storage does not grow with song length. */
 int music_decoder_open(struct music_decoder **, const char *path, unsigned output_rate, music_cancel, void *);
 int music_decoder_read(struct music_decoder *, int16_t *stereo, unsigned frames);
 int music_decoder_seek(struct music_decoder *, uint64_t output_frame);

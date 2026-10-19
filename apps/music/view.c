@@ -60,7 +60,7 @@ void music_update(struct music_app *a, const struct music_snapshot *s)
         snprintf(text,sizeof(text),"Cannot open %.*s%s: %s",(int)fit,file,file[fit] ? "..." : "",reason);
     }
     else snprintf(text,sizeof(text),"%s   %u tracks   Space: play/pause, S: stop, PgUp/PgDn: previous/next",
-                  s->state==MUSIC_PLAYING ? "Playing" : s->state==MUSIC_PAUSED ? "Paused" : s->state==MUSIC_LOADING ? "Loading..." :
+                  s->buffering ? "Buffering..." : s->state==MUSIC_PLAYING ? "Playing" : s->state==MUSIC_PAUSED ? "Paused" : s->state==MUSIC_LOADING ? "Loading..." :
                   s->state==MUSIC_CLOSING ? "Closing" : "Stopped",s->playlist.count);
     du_set_text(du_get(u,M_STATUS),text);
     snprintf(text,sizeof(text),a->volume_error ? "No mixer" : "Master: %d%%",a->volume);
