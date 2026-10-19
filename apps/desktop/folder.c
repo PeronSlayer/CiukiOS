@@ -1,7 +1,9 @@
+#define _POSIX_C_SOURCE 200809L
 /* SPDX-License-Identifier: MIT
  * Explicit Files operations and incremental jobs; idle polls run on a worker. */
 #include "desktop.h"
 #include "folder.h"
+#include "../files/transfer_ui.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +38,7 @@ void desk_folder_changed(struct desktop *d)
 int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
 {
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
-    fm_init(&f->model, fs); f->editing = -1; f->index = -1;
+    fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->editing = -1; f->index = -1;
     int r = fm_navigate(&f->model, DESK_FOLDER);
     if (!r) r=poll_start(f);
     if (r) { fm_destroy(&f->model); free(f); return r; }
@@ -46,6 +48,10 @@ void desk_folder_destroy(struct desktop *d)
 {
     if (!d->sh.folder) return;
     poll_stop(d->sh.folder);
+    fm_transfer_destroy(d->sh.folder->transfer);
+    if (d->sh.folder->dialog) du_dialog_close(d->sh.folder->dialog);
+    free(d->sh.folder->dialog); free(d->sh.folder->dialog_pixels);
+    fm_destroy(&d->sh.folder->result);
     fm_job_destroy(&d->sh.folder->job); fm_destroy(&d->sh.folder->model);
     free(d->sh.folder); d->sh.folder = NULL;
 }
@@ -73,11 +79,119 @@ static int bitmap(struct fm_model *m, const char *name)
     if (r) m->fs.unlink(m->fs.ctx,path); else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
     return r;
 }
-static int job(struct desk_folder *f, enum fm_job_kind kind, char **paths, unsigned n, const char *to)
+enum { F_PROGRESS=850, F_REPLACE };
+static int transfer_prepare(void *arg)
 {
+    struct desk_folder *f=arg;
+    if (f->clipboard_job) {
+        int r=fm_clipboard_load(&f->model); if (r) return r;
+        enum fm_job_kind kind=f->clipboard_job==2 ? (f->model.cut ? FM_MOVE : FM_COPY) : f->job.kind;
+        char destination[FM_PATH]; snprintf(destination,sizeof(destination),"%s",f->job.destination);
+        fm_job_destroy(&f->job);
+        if (!f->model.clipboard_count) { f->job.state=FM_DONE; return 0; }
+        return fm_job_start(&f->job,&f->model.fs,kind,f->model.clipboard,f->model.clipboard_count,destination);
+    }
+    if (f->trash_job) {
+        struct fm_model *trash=calloc(1,sizeof(*trash)); if (!trash) return -ENOMEM;
+        fm_init(trash,&f->model.fs);
+        int r=trash->fs.mkdir(trash->fs.ctx,DESK_TRASH); if (r==-EEXIST) r=0;
+        if (!r) r=fm_navigate(trash,DESK_TRASH);
+        char name[FM_NAME], source[FM_PATH];
+        snprintf(source,sizeof(source),"%s",f->job.sources[0]);
+        if (!r) r=fm_unique(trash,fm_basename(source),"",name);
+        fm_destroy(trash); free(trash); if (r) return r;
+        /* Preserve the desktop's move-to-Trash behavior with a unique target. */
+        fm_job_destroy(&f->job);
+        char *paths[]={source};
+        r=fm_job_start(&f->job,&f->model.fs,FM_MOVE,paths,1,DESK_TRASH);
+        if (!r) { f->job.trash=1; snprintf(f->job.trash_name,sizeof(f->job.trash_name),"%s",name); }
+        return r;
+    }
+    return 0;
+}
+static void transfer_complete(void *arg)
+{
+    struct desk_folder *f=arg;
+    if (f->job.state==FM_DONE && f->job.kind==FM_MOVE && !f->job.skipped && f->clipboard_job && f->model.cut)
+        fm_clipboard_consume(&f->model);
+    snprintf(f->result.path,sizeof(f->result.path),"%s",DESK_FOLDER);
+    f->result.sort=f->model.sort; f->result.descending=f->model.descending;
+    f->result_error=fm_refresh(&f->result);
+}
+static void dialog_event(struct du_ui *ui, const struct du_event *e, void *arg)
+{
+    (void)ui; struct desktop *d=arg; struct desk_folder *f=d->sh.folder;
+    if (e->type!=DU_EV_DIALOG || !f->busy) return;
+    if (e->id==F_REPLACE) fm_transfer_command(f->transfer,0,e->index==0 ? FM_YES : e->index==1 ? FM_YES_ALL : e->index==2 ? FM_NO : FM_CANCEL);
+    else if (e->id==F_PROGRESS) fm_transfer_command(f->transfer,1,-1);
+    f->progress_ns=0;
+}
+static void dialog_update(struct desktop *d, struct transfer_view v)
+{
+    struct desk_folder *f=d->sh.folder; struct du_ui *u=f->dialog;
+    if (!u) return;
+    if (v.state==FM_REPLACE) { if (du_dialog_id(u)!=F_REPLACE) fm_replace_dialog(u,F_REPLACE,v); }
+    else fm_progress_dialog(u,F_PROGRESS,f->display_kind,f->destination,v,f->transfer->started_at);
+    int i=f->dialog_window;
+    if (i<0 || !d->clients[i].window) i=f->dialog_window=desk_internal_open(d,DESK_INTERNAL_TRANSFER);
+    if (i<0) { fm_transfer_command(f->transfer,1,-1); return; }
+    struct desk_client *c=&d->clients[i]; struct desk_box old=desk_outer(c);
+    unsigned w=(unsigned)u->dialog.box.w-2*DESK_BORDER, h=(unsigned)u->dialog.box.h-DESK_TITLE-DESK_BORDER;
+    if (c->info.width!=w || c->info.height!=h) {
+        c->info.width=w; c->info.height=h;
+        c->frame.w=(int)w+2*DESK_BORDER; c->frame.h=(int)h+DESK_TITLE+DESK_BORDER;
+        desk_damage_add(&d->damage,old,d->width,d->height);
+    }
+    snprintf(c->title,sizeof(c->title),"%.63s",u->dialog.title);
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+}
+void desk_folder_dialog_paint(struct desktop *d, struct desk_box content, struct desk_box clip)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->dialog) return;
+    struct du_ui *u=f->dialog; if (u->dirty) du_render(u);
+    struct desk_box b; if (!desk_intersect(content,clip,&b)) return;
+    int sx=u->dialog.box.x+DESK_BORDER, sy=u->dialog.box.y+DESK_TITLE;
+    for (int y=b.y;y<b.y+b.h;y++)
+        memcpy(d->pixels+(size_t)y*d->width+b.x,u->canvas.pixels+(size_t)(sy+y-content.y)*u->canvas.width+sx+b.x-content.x,(size_t)b.w*4);
+}
+void desk_folder_dialog_click(struct desktop *d, int x, int y)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->dialog || f->dialog_window<0) return;
+    struct desk_box c=desk_content(&d->clients[f->dialog_window]); struct du_ui *u=f->dialog;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=x-c.x+u->dialog.box.x+DESK_BORDER,.value2=y-c.y+u->dialog.box.y+DESK_TITLE};
+    du_input(u,&e); e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1}; du_input(u,&e);
+    e.value=0; du_input(u,&e); f->progress_ns=0;
+}
+void desk_folder_dialog_key(struct desktop *d, int code, int value)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->dialog) return;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=value}; du_input(f->dialog,&e); f->progress_ns=0;
+}
+void desk_folder_cancel(struct desktop *d)
+{ if (d->sh.folder && d->sh.folder->busy) fm_transfer_command(d->sh.folder->transfer,1,-1); }
+static int job(struct desktop *d, enum fm_job_kind kind, char **paths, unsigned n, const char *to, int clipboard, int trash)
+{
+    struct desk_folder *f=d->sh.folder;
+    if (!f->dialog) {
+        f->dialog=calloc(1,sizeof(*f->dialog)); f->dialog_pixels=calloc(600*400,4);
+        if (!f->dialog || !f->dialog_pixels) { free(f->dialog); free(f->dialog_pixels); f->dialog=NULL; f->dialog_pixels=NULL; return -ENOMEM; }
+        du_init(f->dialog,f->dialog_pixels,600,400); f->dialog->event=dialog_event; f->dialog->user=d;
+    }
+    int r=fm_transfer_create(&f->transfer,&f->job); if (r) return r;
+    f->transfer->prepare=transfer_prepare; f->transfer->complete=transfer_complete; f->transfer->ctx=f;
+    f->clipboard_job=clipboard; f->trash_job=trash; f->display_kind=trash ? FM_DELETE : kind;
     fm_job_destroy(&f->job);
-    int r=fm_job_start(&f->job,&f->model.fs,kind,paths,n,to);
-    f->busy = !r; return r;
+    snprintf(f->destination,sizeof(f->destination),"%s",to ? to : "");
+    char *placeholder[]={"/system/settings/files.clip"};
+    r=fm_job_start(&f->job,&f->model.fs,kind,clipboard ? placeholder : paths,clipboard ? 1 : n,to);
+    if (r) return r;
+    f->busy=1; f->revision++; f->progress_ns=d->now_ns;
+    /* Initialize the visible dialog before handing ownership to the worker. */
+    struct transfer_view view={.state=FM_RUNNING,.counting=1,.preparing=1};
+    snprintf(view.source,sizeof(view.source),"%s",f->job.sources[0]);
+    fm_transfer_reset(f->transfer); dialog_update(d,view);
+    if (f->dialog_window<0) { f->busy=0; fm_job_destroy(&f->job); return -ENOMEM; }
+    fm_transfer_submit(f->transfer); return 0;
 }
 void desk_folder_drop(struct desktop *d, int source, int copy)
 {
@@ -106,8 +220,7 @@ void desk_folder_drop(struct desktop *d, int source, int copy)
         desk_put32(msg.data+4,copy ? 1u : 0u); desk_put32(msg.data+8,(uint32_t)(d->mouse_x-b.x)); desk_put32(msg.data+12,(uint32_t)(d->mouse_y-b.y));
         desk_queue(d,target,&msg);
     } else if (!r && target < 0 && (source >= 0 || folder_target) && d->mouse_y >= DESK_BAR && d->mouse_y < (int)d->height-DESK_BAR) {
-        r=fm_clipboard_load(&f->model);
-        if (!r && f->model.clipboard_count) r=job(f,copy ? FM_COPY : FM_MOVE,f->model.clipboard,f->model.clipboard_count,destination);
+        r=job(d,copy ? FM_COPY : FM_MOVE,NULL,0,destination,1,0);
     }
     if (r) error(d,r);
 }
@@ -245,13 +358,26 @@ void desk_folder_service(struct desktop *d)
     struct desk_folder *f=d->sh.folder; if (!f || d->power.state) return;
     struct fm_model *m=&f->model;
     if (f->busy) {
-        if (d->sh.want_power) fm_job_cancel(&f->job);
-        for (unsigned n=0;n<24 && f->job.state==FM_RUNNING;n++) fm_job_step(&f->job);
-        if (f->job.state==FM_REPLACE) { fm_job_answer(&f->job,FM_CANCEL); error(d,-EEXIST); }
-        if (f->job.state!=FM_RUNNING) {
-            if (f->job.state==FM_FAILED) error(d,-f->job.error);
-            if (f->job.state==FM_DONE && f->job.kind==FM_MOVE && m->cut) fm_clipboard_consume(m);
-            f->busy=0; fm_refresh(m); desk_folder_changed(d);
+        if (d->sh.want_power) desk_folder_cancel(d);
+        struct transfer_view v; int finished;
+        if (pthread_mutex_trylock(&f->transfer->lock)) return;
+        v=f->transfer->view; finished=f->transfer->finished;
+        pthread_mutex_unlock(&f->transfer->lock);
+        if (!f->trash_job) f->display_kind=v.kind;
+        if (finished) {
+            f->busy=0;
+            if (f->dialog_window>=0) { desk_drop_client(d,f->dialog_window); f->dialog_window=-1; }
+            du_dialog_close(f->dialog);
+            if (f->trash_job && f->job.state==FM_DONE) { cfg_icon_forget(&d->sh.cfg,fm_basename(f->job.sources[0])); d->sh.want_save=1; }
+            if (!f->result_error) {
+                free(m->entries); m->entries=f->result.entries; m->count=f->result.count; m->capacity=f->result.capacity;
+                m->active=m->anchor=0; f->result.entries=NULL; f->result.count=f->result.capacity=0;
+                desk_folder_changed(d);
+            }
+            if (v.state==FM_FAILED) error(d,-f->job.error);
+            else if (f->result_error) error(d,f->result_error);
+        } else if (!f->progress_ns || d->now_ns-f->progress_ns>=100000000ull || (v.state==FM_REPLACE && du_dialog_id(f->dialog)!=F_REPLACE)) {
+            dialog_update(d,v); f->progress_ns=d->now_ns;
         }
     }
     int command=f->command, index=f->index; f->command=DF_NONE;
@@ -266,7 +392,7 @@ void desk_folder_service(struct desktop *d)
         if (!r) r=command==DF_BITMAP ? bitmap(m,name) : fm_create(m,name,command==DF_FOLDER);
         if (!r) { desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; desk_folder_rename(d,d->sh.icon_selected); }
     } else if (command==DF_REFRESH) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
-    else if (command==DF_PASTE) { r=fm_clipboard_load(m); if (!r && m->clipboard_count) r=job(f,m->cut ? FM_MOVE : FM_COPY,m->clipboard,m->clipboard_count,m->path); }
+    else if (command==DF_PASTE) r=job(d,FM_COPY,NULL,0,m->path,2,0);
     else if (index>=0 && (unsigned)index<m->count) {
         if (command==DF_RENAME) {
             int x,y,placed=cfg_icon_position(&d->sh.cfg,m->entries[index].name,&x,&y);
@@ -274,17 +400,9 @@ void desk_folder_service(struct desktop *d)
             r=fm_rename(m,(unsigned)index,f->edit);
             if (!r) { cfg_icon_forget(&d->sh.cfg,name); d->sh.want_save=1; if (placed) { cfg_icon_move(&d->sh.cfg,f->edit,x,y); d->sh.want_save=1; } f->editing=-1; desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; }
         } else if (command==DF_DELETE) {
-            struct fm_model *trash=calloc(1,sizeof(*trash)); if (!trash) r=-ENOMEM;
-            else {
-                fm_init(trash,&m->fs); r=m->fs.mkdir(m->fs.ctx,DESK_TRASH); if (r==-EEXIST) r=0;
-                if (!r) r=fm_navigate(trash,DESK_TRASH);
-                if (!r) r=fm_unique(trash,m->entries[index].name,"",name);
-                if (!r) r=fm_entry_path(m,(unsigned)index,path);
-                char target[FM_PATH]; if (!r) r=fm_join(target,DESK_TRASH,name);
-                if (!r) r=m->fs.rename(m->fs.ctx,path,target);
-                fm_destroy(trash); free(trash);
-                if (!r) { cfg_icon_forget(&d->sh.cfg,m->entries[index].name); d->sh.want_save=1; r=fm_refresh(m); desk_folder_changed(d); }
-            }
+            r=fm_entry_path(m,(unsigned)index,path);
+            char *paths[]={path};
+            if (!r) r=job(d,FM_MOVE,paths,1,DESK_TRASH,0,1);
         } else if (command==DF_CUT || command==DF_COPY) { fm_select(m,(unsigned)index,0); r=fm_clipboard(m,command==DF_CUT); if (!r) r=fm_clipboard_save(m); }
         else if (command==DF_PROPERTIES) {
             char text[360], type[48]; const struct fm_entry *e=&m->entries[index];

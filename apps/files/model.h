@@ -56,6 +56,7 @@ struct fm_job {
     struct fm_vfs fs; enum fm_job_kind kind; enum fm_job_state state;
     char **sources; unsigned count, next, depth, completed, skipped, metadata_warnings;
     char destination[FM_PATH], temporary[FM_PATH]; unsigned serial;
+    int trash; char trash_name[FM_NAME];
     struct fm_frame frames[FM_DEPTH];
     int input, output, error, cleanup_error, yes_all, cancel, skip_seen, prompt_dir;
     unsigned used, written, chunk; unsigned char buffer[FM_CHUNK];

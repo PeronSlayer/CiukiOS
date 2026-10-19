@@ -835,6 +835,22 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
     }
 }
 
+void du_invalidate(struct du_ui *u, struct du_rect r)
+{
+    r=du_intersection(r,(struct du_rect){0,0,u->canvas.width,u->canvas.height});
+    if (r.w<=0 || r.h<=0 || u->dirty==1) return;
+    if (u->dirty==2) { u->dirty=1; return; }
+    if (u->dirty==3) {
+        int right=u->invalid.x+u->invalid.w, bottom=u->invalid.y+u->invalid.h;
+        if (right<r.x+r.w) right=r.x+r.w;
+        if (bottom<r.y+r.h) bottom=r.y+r.h;
+        if (r.x>u->invalid.x) r.x=u->invalid.x;
+        if (r.y>u->invalid.y) r.y=u->invalid.y;
+        r.w=right-r.x; r.h=bottom-r.y;
+    }
+    u->invalid=r; u->dirty=3;
+}
+
 void du_render(struct du_ui *u)
 {
     struct du_canvas *c = &u->canvas;
@@ -845,15 +861,17 @@ void du_render(struct du_ui *u)
         u->dirty = 0;
         return;
     }
-    c->clip = (struct du_rect){0, 0, c->width, c->height};
+    struct du_rect repaint=u->dirty==3 ? u->invalid : (struct du_rect){0,0,c->width,c->height};
+    c->clip = repaint;
     du_fill(c, c->clip, DU_FACE);
     for (unsigned i = 0; i < u->count; i++) {
         struct du_widget *w = &u->widgets[i];
         if (w->hidden) continue;
-        c->clip = du_intersection((struct du_rect){0, 0, c->width, c->height}, w->box);
+        c->clip = du_intersection(repaint, w->box);
+        if (c->clip.w<=0 || c->clip.h<=0) continue;
         du_draw_widget(u, w, u->focus == (int)i && !u->dialog.kind);
     }
-    c->clip = (struct du_rect){0, 0, c->width, c->height};
+    c->clip = repaint;
     if (u->paint) { u->paint(u, u->user); c->clip = (struct du_rect){0, 0, c->width, c->height}; }
     du_draw_menus(u);
     c->clip = (struct du_rect){0, 0, c->width, c->height};

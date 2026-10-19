@@ -628,6 +628,20 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         }
         break;
     case DESK_MOVE: desk_move(d, i, p.x, p.y); break;
+    case DESK_CLOSE_ACK:
+        if (c->window && c->closing && !d->power.state) {
+            for (int j=0;j<DESK_CLIENTS;j++) {
+                struct desk_child *child=&d->children[j];
+                if (!c->pid || child->pid!=c->pid || !child->close_ns || child->term_sent || d->now_ns>=child->close_ns) continue;
+                if (!p.flags) {
+                    child->close_ns=0; child->close_deferred=0;
+                    for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].pid==c->pid) d->clients[k].closing=0;
+                } else if (!child->close_deferred) {
+                    child->close_ns+=28000000000ull; child->close_deferred=1;
+                }
+            }
+        }
+        break;
     case DESK_CLOSE:
         desk_message(&reply, DESK_CLOSED, 4);
         if (c->version==DESK_SHELL_VERSION) reply.data[0]=DESK_SHELL_VERSION;
@@ -851,14 +865,16 @@ void desk_request_close(struct desktop *d, int i)
     if (i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
     i=desk_modal_target(d,i);
     struct desk_client *c=&d->clients[i];
+    if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_cancel(d); return; }
     if (c->internal) { desk_drop_client(d,i); return; }
     if (c->closing) return;
     c->closing=1;
     struct ciuki_message m;
     desk_message(&m,c->version==DESK_SHELL_VERSION ? DESK_CLOSE_REQUEST : DESK_CLOSED,4);
     desk_queue(d,i,&m);
-    for (int j=0; j<DESK_CLIENTS; j++) if (d->children[j].pid==c->pid && c->pid)
-        d->children[j].close_ns=d->now_ns+DESK_CLOSE_NS;
+    for (int j=0; j<DESK_CLIENTS; j++) if (d->children[j].pid==c->pid && c->pid && !d->children[j].close_ns) {
+        d->children[j].close_ns=d->now_ns+DESK_CLOSE_NS; d->children[j].close_deferred=0;
+    }
     if (d->shell_test && d->shell_stage==4 && c->pid==d->shell_pid) d->shell_stage=5;
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
 }

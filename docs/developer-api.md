@@ -2634,12 +2634,16 @@ desktop to DOS client, no payload
 
 ```c
 ,
-    DESK_SET_CURSOR
+    DESK_SET_CURSOR,
 ```
 
 v2 client to desktop: uint32 shape, own client area only
 
+v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
+1 closing later). One later reply within 2 s grants 30 s total.
+
 ```c
+DESK_CLOSE_ACK
 };
 #define DESK_SETTINGS_RELOAD 1u
 ```
@@ -3752,7 +3756,13 @@ struct du_ui {
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
-    unsigned cursor;
+    struct du_rect invalid;
+```
+
+dirty=3: union of clipped client invalidations
+
+```c
+unsigned cursor;
 ```
 
 application default, used outside text/splitter controls
@@ -3790,6 +3800,12 @@ void du_focus(struct du_ui *, int id);
 int du_focused(const struct du_ui *);
 void du_set_text(struct du_widget *, const char *);
 void du_render(struct du_ui *);
+```
+
+Union clipped repaint regions; a full dirty=1 invalidation takes precedence.
+
+```c
+void du_invalidate(struct du_ui *, struct du_rect);
 void du_input(struct du_ui *, const struct ciuki_input_event *);
 void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
@@ -3803,6 +3819,12 @@ Lists and trees
 int du_list_hit(const struct du_widget *, int x, int y);
 struct du_rect du_list_label(const struct du_widget *, unsigned index);
 struct du_rect du_list_body(const struct du_widget *);
+```
+
+Full item cell clipped to the visible viewport; empty for an offscreen item.
+
+```c
+struct du_rect du_list_row(const struct du_widget *, unsigned index);
 void du_list_ensure(struct du_widget *, unsigned index);
 int du_list_page(const struct du_widget *);
 int du_list_target(const struct du_widget *, unsigned code);
@@ -3866,7 +3888,13 @@ Desktop window glue: handshake, surface, back buffer, damage, events.
 ```c
 struct du_window {
     int channel, surface, configured, closing, closed, error;
-    int present_pending;
+    int close_reply_pending;
+```
+
+disposition+1, retried if the client queue is full
+
+```c
+int present_pending;
 ```
 
 optional completion-paced client freezes surface writes
@@ -3919,6 +3947,13 @@ f2-33: any v2 request
 int du_window_move(struct du_window *, int x, int y);
 int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
+```
+
+Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
+A close_request callback returning zero automatically queues later=1.
+
+```c
+void du_window_close_reply(struct du_window *, int later);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);
 uint64_t du_now(void);

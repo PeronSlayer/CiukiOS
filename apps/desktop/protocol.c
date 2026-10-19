@@ -86,6 +86,10 @@ int desk_parse(const struct ciuki_message *m, int client,
     if (p->opcode==DESK_DOS_FULLSCREEN)
         return !client && m->data[0]==DESK_SHELL_VERSION && m->length==4 && !m->fd_count && !resize;
     switch (p->opcode) {
+    case DESK_CLOSE_ACK:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
+        p->flags=desk_get32(m->data+4); if (p->flags>1) return 0;
+        n=8; break;
     case DESK_GFX_FRAME:
         if (!client || !resize || (m->length!=64 && m->length!=68 && m->length!=84) || !desk_surface_valid(s)) return 0;
         if (m->length>=68) { p->resize_serial=desk_get32(m->data+64);if (m->length==68 && !p->resize_serial) return 0; }

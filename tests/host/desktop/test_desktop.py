@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[3]
 # The desktop shell's units (apps/desktop/build_desktop.py SHELL, without the stb decoder) and the toolkit
 # primitives it draws with: every host build of the production desktop links them.
 SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "settings_io.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")] + \
-                [ROOT / "apps/libdeskui/draw.c"]
+                [ROOT / "apps/libdeskui" / n for n in ("draw.c","widgets.c","list.c","menu.c","dialog.c","textarea.c")]
 
 # F2-62: production shell, menus and modal frames; lead reviews the paired PNGs.
 # F2-63: re-recorded for the pinned FreeType UI atlases (build/host/f2-63 before/after).
@@ -155,7 +155,8 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
-            subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror",
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             *(str(p) for p in sources), "-o", str(binary)], check=True, env=env)
@@ -334,7 +335,7 @@ class DesktopTests(unittest.TestCase):
             sources += SHELL_SOURCES + [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
             sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c","icon_map.c")]
             icons=load("wall_icons",ROOT / "tests/host/desktop/icon_assets.py")
-            subprocess.run(["clang", "-std=c17", "-O1", "-Wall", "-Wextra", "-Werror", "-DCAPTURE_DECODE",
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror", "-DCAPTURE_DECODE",
                             "-DCAPTURE_ICONS",*icons.defines(),
                             "-fsanitize=address,undefined", "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             *map(str, sources), "-o", str(binary)], check=True, env=env)
@@ -465,6 +466,7 @@ class DesktopTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
             bridge = folder / "kernel-poll.o"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections",
@@ -472,7 +474,7 @@ class DesktopTests(unittest.TestCase):
                             "-c", str(ROOT / "tests/host/proc/desktop_test.c"), "-o", str(bridge)], check=True, env=env)
             sources += [bridge, ROOT / "tests/host/proc/signal_legacy.c", ROOT / "src/kernel/lib/fmt.c"]
             sources += [ROOT / "src/kernel/probes/selector.c", ROOT / "src/kernel/lib/sha256.c"]
-            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-DDESK_POLL_LEDGER_TEST",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
@@ -539,7 +541,8 @@ class DesktopTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / n for n in
                        ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "desktop_test.c")]
-            subprocess.run(["cc", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            subprocess.run(["cc", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
                             *(str(s) for s in sources), "-o", str(out)], check=True, env=env)
@@ -706,7 +709,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
-                 ("files_transfer", posix, ROOT / "apps/files/transfer.c"),
+                 ("files_transfer", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/transfer.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
                  ("tasks_main", os_calls + ["-Dmain=tasks_main"], ROOT / "apps/tasks/tasks.c"),

@@ -31,6 +31,8 @@ struct files_drive_label {
 struct files_app {
     struct files_worker *worker;
     struct files_transfer *transfer;
+    uint64_t media_poll_ns;
+    int media_polled, poll_clipboard;
     int loading, reading, games_available, select_created, refresh_checkpoint, pending_command;
     char loading_path[FM_PATH];
     struct du_ui *ui;
@@ -50,6 +52,7 @@ struct files_app {
     struct du_menu_item popup[18]; unsigned popup_count;
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);
+    void (*close_declined)(struct files_app *);
     void (*checkpoint)(struct files_app *, int stage);
     int (*portrait)(uint32_t *pixels256);
     void (*drop)(struct files_app *, int x, int y, int copy);

@@ -5,6 +5,7 @@
 #include "fake_vfs.h"
 #undef fake_reset
 #include "../../../apps/libdeskui/deskui.h"
+#include "../../../apps/files/transfer_ui.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,21 @@ static pthread_mutex_t poll_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t poll_changed=PTHREAD_COND_INITIALIZER;
 static int poll_hold, poll_entered, poll_release, poll_error;
 static pthread_t poll_frame;
+static int copy_hold, copy_entered, copy_release;
+static int folder_read(void *ctx,int fd,void *out,unsigned n)
+{
+    if (n>256) {
+        assert(!pthread_equal(pthread_self(),poll_frame));
+        pthread_mutex_lock(&poll_lock);
+        if (copy_hold) {
+            copy_entered=1; pthread_cond_broadcast(&poll_changed);
+            while (!copy_release) pthread_cond_wait(&poll_changed,&poll_lock);
+            copy_hold=0;
+        }
+        pthread_mutex_unlock(&poll_lock);
+    }
+    return fake_vfs.read(ctx,fd,out,n);
+}
 static int folder_list(void *ctx,const char *path,unsigned flags,fm_emit emit,void *arg)
 {
     int e=fake_vfs.list(ctx,path,flags,emit,arg);
@@ -47,7 +63,8 @@ static int launch(struct desktop *desktop, const struct desk_program *p)
 static void key(int code) { desk_shell_key(&d,code,1); desk_shell_key(&d,code,0); }
 static void capture(const char *name)
 {
-    desk_shell_background(&d,(struct desk_box){0,0,1024,768});
+    if (!strncmp(name,"desktop-",8)) desk_composite(&d,(struct desk_box){0,0,1024,768});
+    else desk_shell_background(&d,(struct desk_box){0,0,1024,768});
     desk_shell_topbar(&d,(struct desk_box){0,0,1024,768});
     desk_shell_overlay(&d,(struct desk_box){0,0,1024,768});
     char path[1024]; snprintf(path,sizeof(path),"%s/%s.xrgb",out,name);
@@ -69,7 +86,13 @@ static void command(int command, int index)
 static int named(const char *name)
 { for (int i=3;i<d.sh.icon_count;i++) if (!strcmp(d.sh.icons[i].label,name)) return i; return -1; }
 static void settle(void)
-{ for (unsigned i=0;i<1000 && d.sh.folder->busy;i++) desk_folder_service(&d); assert(!d.sh.folder->busy); }
+{
+    for (unsigned i=0;d.sh.folder->busy;i++) {
+        assert(i<5000); d.now_ns+=1000000; desk_folder_service(&d);
+        struct timespec t={0,1000000}; nanosleep(&t,NULL);
+    }
+}
+#include "folder_transfer_test.h"
 static void close_message(void)
 { for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i); }
 int main(int argc,char **argv)
@@ -86,7 +109,7 @@ int main(int argc,char **argv)
     d.pixels=calloc(1024*768,4); assert(d.pixels);
     d.portrait=malloc(256*256*4); assert(d.portrait);
     FILE *p=fopen(argv[2],"rb"); assert(p && fread((void *)d.portrait,4,256*256,p)==256*256 && !fclose(p));
-    struct fm_vfs fs=fake_vfs; fs.list=folder_list;
+    struct fm_vfs fs=fake_vfs; fs.list=folder_list; fs.read=folder_read;
     desk_shell_enable(&d); assert(!desk_folder_init(&d,&fs));
     assert(d.sh.icon_count==6 && !strcmp(d.sh.icons[0].label,"Computer") && !strcmp(d.sh.icons[1].label,"Documents") && !strcmp(d.sh.icons[2].label,"Trash"));
     assert(named("Pictures")<0);
@@ -136,10 +159,10 @@ int main(int argc,char **argv)
     for (int i=0;i<=paint_item;i++) key(DU_KEY_DOWN);
     key(DU_KEY_ENTER); assert(!strcmp(program,"paint") && !strcmp(launched,DESK_FOLDER "/Scene.BMP"));
     d.sh.icon_selected=named("readme.txt"); key(DU_KEY_ENTER); assert(!strcmp(program,"ciuknote"));
-    d.sh.icon_selected=named("Moved name"); key(DU_KEY_DELETE); desk_folder_service(&d);
+    d.sh.icon_selected=named("Moved name"); key(DU_KEY_DELETE); desk_folder_service(&d); settle();
     assert(fake_lookup(DESK_FOLDER "/Moved name")<0 && fake_lookup(DESK_TRASH "/Moved name")>=0);
-    command(DF_FOLDER,-1); key(DU_KEY_ESC); n=named("New Folder"); command(DF_DELETE,n-3);
-    fake_create(DESK_FOLDER "/Moved name",FM_DIR); command(DF_REFRESH,-1); command(DF_DELETE,named("Moved name")-3); assert(fake_lookup(DESK_TRASH "/Moved name (2)")>=0); capture("trash");
+    command(DF_FOLDER,-1); key(DU_KEY_ESC); n=named("New Folder"); command(DF_DELETE,n-3); settle();
+    fake_create(DESK_FOLDER "/Moved name",FM_DIR); command(DF_REFRESH,-1); command(DF_DELETE,named("Moved name")-3); settle(); assert(fake_lookup(DESK_TRASH "/Moved name (2)")>=0); capture("trash");
     /* Shared clipboard and incremental copy/move with short I/O. */
     struct fm_model *other=calloc(1,sizeof(*other)); assert(other); fm_init(other,&fake_vfs); assert(!fm_navigate(other,"/Documents"));
     assert(!fm_create(other,"Incoming.txt",0)); assert(!fm_clipboard(other,0) && !fm_clipboard_save(other));
@@ -183,9 +206,10 @@ int main(int argc,char **argv)
     /* Shutdown cancels the job before the shell stops serving filesystem work. */
     fake_file("/Documents/Cancel.txt",30000,10); assert(!fm_refresh(other));
     assert(fm_select_name(other,"Cancel.txt",0)>=0 && !fm_clipboard(other,0) && !fm_clipboard_save(other));
-    command(DF_PASTE,-1); assert(d.sh.folder->busy); fm_job_step(&d.sh.folder->job); fm_job_step(&d.sh.folder->job);
-    d.sh.want_power=2; desk_folder_service(&d); d.sh.want_power=0;
+    command(DF_PASTE,-1); assert(d.sh.folder->busy);
+    d.sh.want_power=2; desk_folder_service(&d); settle(); d.sh.want_power=0;
     assert(!d.sh.folder->busy && d.sh.folder->job.state==FM_CANCELLED && fake_lookup("/Documents/Cancel.txt")>=0);
+    folder_transfer_cases(other);
     fm_destroy(snapshot); free(snapshot);
     fm_destroy(other); free(other);
     /* Line up snaps without placing two icons in the same grid cell. */
@@ -211,7 +235,7 @@ int main(int argc,char **argv)
     assert(d.sh.menus[0].count==3); key(DU_KEY_ESC);
     d.sh.menu_owner=file_pictures; desk_menu_open(&d,SH_MENU_ICON,500,200);
     assert(d.sh.menus[0].count>3); key(DU_KEY_ESC);
-    command(DF_DELETE,file_pictures-3);
+    command(DF_DELETE,file_pictures-3); settle();
     assert(fake_lookup(DESK_FOLDER "/Pictures")<0 && fake_lookup(DESK_TRASH "/Pictures")>=0);
     d.pictures_exists=0; desk_folder_changed(&d); assert(named("Pictures")<0);
     d.sh.wall=malloc((size_t)d.width*d.height*4); assert(d.sh.wall);

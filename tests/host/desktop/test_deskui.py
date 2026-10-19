@@ -183,6 +183,14 @@ class DeskuiTests(unittest.TestCase):
         expected = json.loads((ROOT / "tests/host/desktop/transfers-goldens.json").read_text())
         self.check_frames(digests, expected, "TRANSFERS")
 
+    def test_files_external_writer_idle(self):
+        def directory(folder):
+            path=folder / "writer"; path.mkdir(); return path
+        stdout, _ = self.run_harness("files-idle", ["tests/host/desktop/files_idle_test.c",
+            "apps/files/model.c", "apps/files/transfer.c", "apps/files/vfs.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"], directory)
+        self.assertIn("PASS Files idle", stdout)
+
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",
                                                      "apps/files/model.c"])

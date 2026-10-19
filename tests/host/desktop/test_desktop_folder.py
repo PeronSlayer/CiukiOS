@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 import importlib.util
 import os
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -29,7 +31,7 @@ class DesktopFolderTests(unittest.TestCase):
                     *icon_assets.defines(),'-I',str(ROOT / 'apps/desktop'),'-I',str(ROOT / 'src/kernel/include')]
             sources=['tests/host/desktop/desktop_folder_test.c','tests/host/desktop/fake.c','tests/host/desktop/fake_vfs.c',
                      *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings','wallpaper','keymap','folder')),
-                     'apps/files/model.c','apps/files/transfer.c','apps/libdeskui/draw.c','apps/libdeskui/icons.c','apps/libdeskui/icon_map.c']
+                     'apps/files/model.c','apps/files/transfer.c','apps/libdeskui/draw.c','apps/libdeskui/widgets.c','apps/libdeskui/list.c','apps/libdeskui/menu.c','apps/libdeskui/dialog.c','apps/libdeskui/textarea.c','apps/libdeskui/icons.c','apps/libdeskui/icon_map.c']
             objects=[]
             for i,source in enumerate(sources):
                 target=folder / f'{i}.o'
@@ -45,7 +47,15 @@ class DesktopFolderTests(unittest.TestCase):
             result=subprocess.run([str(binary),str(frames),str(portrait)],capture_output=True,text=True,env=env,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
             print(result.stdout.strip())
+            transfer_pins={}
+            transfer_review=ROOT / 'build/codex/f2-85-frames'
+            transfer_review.mkdir(parents=True,exist_ok=True)
             for raw in frames.glob('*.xrgb'):
                 capture(raw.stem, raw.read_bytes(), 1024, 768)
                 (review / (raw.stem+'.png')).write_bytes(png(raw.read_bytes(),1024,768))
-            self.assertEqual(len(list(frames.glob('*.xrgb'))),7)
+                if raw.stem.startswith('desktop-'):
+                    (transfer_review / (raw.stem+'.png')).write_bytes(png(raw.read_bytes(),1024,768))
+                    transfer_pins[raw.name]=hashlib.sha256(raw.read_bytes()).hexdigest()
+            (ROOT / 'build/codex/f2-85-frame-hashes.json').write_text(json.dumps(transfer_pins,indent=2,sort_keys=True)+'\n')
+            self.assertEqual(len(list(frames.glob('*.xrgb'))),15)
+            self.assertEqual(transfer_pins,json.loads((ROOT/'tests/host/desktop/desktop-transfers-goldens.json').read_text()))

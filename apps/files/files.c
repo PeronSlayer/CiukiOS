@@ -15,7 +15,7 @@
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
-struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; uint64_t file_poll; char title[DESK_TITLE_MAX + 1]; };
+struct files_main { struct files_app app; struct du_ui ui; struct du_window window; int checkpoint, sent; uint32_t launch_serial; char title[DESK_TITLE_MAX + 1]; };
 
 /* CiukNote is a window: only the desktop can give it a channel and the display grants, so Files
  * asks it (protocol v2 LAUNCH with the path as the single argument; the desktop honours this for
@@ -77,16 +77,13 @@ static int portrait(uint32_t *pixels)
     return n == 256 * 256 ? 0 : -1;
 }
 
+static void close_declined(struct files_app *a)
+{ du_window_close_reply(&((struct files_main *)a->user)->window,0); }
 static int close_request(struct du_window *w, void *user) { (void)w; return files_close_request(user); }
 
 static void idle(void *arg)
 {
     struct files_main *m = ((struct files_app *)arg)->user;
-    if (!m->app.job_active && m->app.rename_index<0 && !du_dialog_id(&m->ui) && m->ui.now-m->file_poll>=1000000000ull) {
-        m->file_poll=m->ui.now;
-        fm_clipboard_load(&m->app.model);
-        fm_refresh(&m->app.model); m->app.tree_dirty=1; files_update(&m->app);
-    }
     int status;
     while (waitpid(-1, &status, WNOHANG) > 0) { }
     char display[FM_PATH], title[DESK_TITLE_MAX + 1];
@@ -187,8 +184,8 @@ int main(int argc, char **argv)
         return 1;
     }
     struct files_app *a = &m->app;
-    a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->portrait = portrait;
-    a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
+    a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
+    a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }

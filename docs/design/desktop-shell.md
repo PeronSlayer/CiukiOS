@@ -1,5 +1,53 @@
 # Desktop shell bars and protruding Start orb (f2-82)
 
+## Desktop transfers, close acknowledgement and Files refresh (f2-85)
+
+Primary sources rechecked on 2026-10-19 before code changes:
+[POSIX read](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html),
+[write](https://pubs.opengroup.org/onlinepubs/9799919799/functions/write.html),
+[condition waits](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cond_clockwait.html),
+[Microsoft progress guidance](https://learn.microsoft.com/en-us/windows/win32/uxguide/progress-bars),
+[EWMH close requests](https://specifications.freedesktop.org/wm/latest-single/),
+and [QEMU throttling](https://www.qemu.org/docs/master/system/invocation.html).
+The Open Group direct URLs returned HTTP 403; its indexed specification text
+was available. Preserve short-I/O positions, 1 ms EINTR back-off, predicate
+waits, real byte progress and cancellation. QEMU evidence remains with the lead.
+
+Repository comparison found a second, unconditional full refresh in
+`apps/files/files.c:idle`, in addition to the media timer. It synchronously
+re-listed, rebuilt the tree and invalidated the full client every second,
+even without a media change. Remove that path; one worker listing per second
+covers external writes. Apply metadata-only updates in place, preserving
+selection, anchor, scrolling, entries and tree allocations; invalidate only
+visible changed rows and the selected-size status when needed. Structural
+changes still replace the listing. Idle browser polling must not paint.
+
+The desktop uses the same transfer mailbox and dialog formatter as Files.
+Clipboard reads, trash preparation, 64 KiB copy steps, cancellation cleanup,
+clipboard consumption and the final folder refresh all run on the worker.
+Desktop Delete keeps the existing move-to-Trash semantics and collision-safe
+names, displaying the shared Deleting dialog. The shell hosts the toolkit
+body in an internal window with its ordinary title frame and input routing.
+
+Protocol: v2 client-to-shell `DESK_CLOSE_ACK` has exactly eight bytes, no
+attachments, with a uint32 disposition: 1 = closing later, 0 = close declined.
+Only the authenticated sender's closing window can acknowledge. Its first
+later acknowledgement must arrive before the original two-second deadline and
+grants a total of 30 seconds from the original request; duplicates never extend it. A declined
+request received before the effective deadline clears it and permits a fresh
+close request. Shutdown retains its own deadline. Files acknowledges while its transfer/confirmation
+is pending and declines when the user keeps the operation open. Unacknowledged
+and expired requests retain the existing forced termination behavior.
+
+Host acceptance (2026-10-19): a separate process grows one file every 100 ms
+among 1,024 entries. Four worker listings in four seconds, zero UI listings,
+2.870% UI CPU and 1.297 ms maximum input turn; the former idle path measured
+5.390% and re-listed twice per second. The harness checks stable entries/rows,
+selection/anchor, clipped/full render equivalence, no paint for unchanged
+polls, external clipboard updates and structural add/remove. These are host
+measurements, not physical T23 qualification. Eight shell dialog frames are
+pinned in `tests/host/desktop/desktop-transfers-goldens.json`.
+
 ## Files worker transfers (f2-84)
 
 Research checked before implementation on 2026-10-19:
@@ -27,14 +75,12 @@ progress update. Use a dedicated persistent pthread, 64 KiB chunks (128
 512-byte sectors, matching the directive's f1-81 bulk-command number), a
 cheap metadata listing pass without ELF sniffing, and clipped dialog-only
 repaints. Preserve the temporary-file/fsync/atomic-rename publication path.
-The desktop folder also uses this shared model on its UI thread; keep its
-16 KiB default and select 64 KiB explicitly in the Files worker.
+The f2-85 amendment above supersedes the former desktop-only 16 KiB
+default: both hosts now use the extracted worker and 64 KiB steps.
 
-The existing shell starts an unconditional two-second termination deadline
-when it sends a window close request (`apps/desktop/client.c`). Files can
-confirm and defer its own close, but cannot suspend that shell deadline from
-within its authorized scope. Shell-close confirmation therefore still needs
-lead integration of a close-veto/defer protocol; do not claim it is qualified.
+The f2-84 implementation could not suspend the shell's two-second close
+deadline. The f2-85 acknowledgement above addresses that limitation; runtime
+qualification remains the lead's responsibility.
 
 ## Bar surface quality (f2-83)
 

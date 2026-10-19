@@ -272,6 +272,7 @@ static const char *client_icon(const struct desktop *d, int i)
     const struct desk_client *c = &d->clients[i];
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
+    if (c->internal == DESK_INTERNAL_TRANSFER) return "folder";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return du_message_icon_name(d->sh.message_kind) ? du_message_icon_name(d->sh.message_kind) : "dialog-information";
     if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
@@ -1703,6 +1704,7 @@ static const char *const about_tabs[] = {"General", "System", "Credits"};
 static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32_t *h)
 {
     switch (kind) {
+    case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_ABOUT: *w = 440; *h = 300; break;
     case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
@@ -1946,6 +1948,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
     struct du_canvas c = canvas(d, b);
     du_fill(&c, R(content), SH_FACE);
     switch (cl->internal) {
+    case DESK_INTERNAL_TRANSFER:
+        desk_folder_dialog_paint(d,content,clip); return;
     case DESK_INTERNAL_AUTOPLAY: {
         struct desk_autoplay *a=&d->sh.autoplay;
         char title[96];
@@ -2041,6 +2045,7 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
     struct desk_client *cl = &d->clients[index];
     struct desk_box content = desk_content(cl);
     switch (cl->internal) {
+    case DESK_INTERNAL_TRANSFER: desk_folder_dialog_click(d,x,y); return 1;
     case DESK_INTERNAL_AUTOPLAY: {
         struct desk_autoplay *a=&d->sh.autoplay;
         int row=(y-content.y-58)/24;
@@ -2435,6 +2440,7 @@ static unsigned keymap_mods(const struct desktop *d)
 static int internal_key(struct desktop *d, int index, int code, int value)
 {
     struct desk_client *c = &d->clients[index];
+    if (c->internal==DESK_INTERNAL_TRANSFER) { desk_folder_dialog_key(d,code,value); return 1; }
     if (value == 0) return 1;
     switch (c->internal) {
     case DESK_INTERNAL_AUTOPLAY: {

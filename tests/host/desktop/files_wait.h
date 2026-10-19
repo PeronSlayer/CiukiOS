@@ -16,7 +16,12 @@ static int files_test_setup(struct files_app *a,struct du_ui *u,const struct fm_
 static int files_test_navigate(struct files_app *a,const char *path)
 { int r=files_navigate(a,path); if (!r) files_test_wait(a); return r; }
 static void files_test_event(struct du_ui *u,const struct du_event *e,void *arg)
-{ files_event(u,e,arg); files_test_wait(arg); }
+{
+    /* An explicit media tick in a script represents the next one-second poll.
+     * Real-time responsiveness/rate-limit tests do not use this wrapper. */
+    if (e->type==DU_EV_TICK && e->id==2) u->now+=1000000000ull;
+    files_event(u,e,arg); files_test_wait(arg);
+}
 #define files_setup files_test_setup
 #define files_navigate files_test_navigate
 #define files_event files_test_event

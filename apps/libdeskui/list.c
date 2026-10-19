@@ -97,6 +97,13 @@ static struct du_rect cell(const struct du_widget *w, const struct layout *l, un
         return (struct du_rect){l->area.x + (int)i % l->cols * CELL_W, l->area.y + ((int)i / l->cols - w->scroll) * CELL_H, CELL_W, CELL_H};
     return (struct du_rect){l->area.x + ((int)i / l->rows - w->hscroll) * l->colw, l->area.y + (int)i % l->rows * DU_ROW, l->colw, DU_ROW};
 }
+struct du_rect du_list_row(const struct du_widget *w, unsigned index)
+{
+    struct layout l=compute(w);
+    if (index>=w->count) return (struct du_rect){0,0,0,0};
+    return du_intersection(cell(w,&l,index),l.area);
+}
+
 
 static int tree_x(const struct du_widget *w, const struct layout *l, unsigned depth)
 { (void)w; return l->area.x + 9 + (int)depth * 16; }
@@ -302,6 +309,8 @@ void du_draw_list(struct du_canvas *c, struct du_widget *w, int focused, int win
     for (unsigned i = 0; i < w->count; i++) {
         struct du_rect r = cell(w, &l, i);
         if (r.y + r.h <= l.area.y || r.y >= l.area.y + l.area.h || r.x + r.w <= l.area.x || r.x >= l.area.x + l.area.w) continue;
+        struct du_rect visible=du_intersection(r,c->clip);
+        if (visible.w<=0 || visible.h<=0) continue;
         const struct du_item *it = &w->items[i];
         int act = i == w->active;
         int sel = it->selected || (!w->selection_external && w->selection_active && act);
@@ -365,6 +374,8 @@ void du_draw_tree(struct du_canvas *c, struct du_widget *w, int focused, int win
     for (unsigned i = 0; i < w->count; i++) {
         struct du_rect r = cell(w, &l, i);
         if (r.y + r.h <= l.area.y || r.y >= l.area.y + l.area.h) continue;
+        struct du_rect visible=du_intersection(r,c->clip);
+        if (visible.w<=0 || visible.h<=0) continue;
         const struct du_item *it = &w->items[i];
         int d = it->depth, cy = r.y + DU_ROW / 2, cx = tree_x(w, &l, (unsigned)d);
         if (desk_theme->control_style != DESK_CONTROLS_PLATINUM) {   /* Platinum trees have no connector lines */

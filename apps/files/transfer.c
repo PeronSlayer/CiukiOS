@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* SPDX-License-Identifier: MIT
  * Shared file clipboard over the same VFS as Files. Text remains independent. */
 #include "model.h"
@@ -77,4 +78,156 @@ int fm_clipboard_consume(struct fm_model *m)
     for (unsigned i=0;same && i<m->clipboard_count;i++) same=fm_same_path(now->clipboard[i],m->clipboard[i]);
     if (same) { fm_clipboard_clear(now); r=fm_clipboard_save(now); }
     fm_destroy(now); free(now); fm_clipboard_clear(m); return r;
+}
+
+#include "transfer.h"
+#include <time.h>
+#include <stdarg.h>
+#ifdef __i386__
+#include <ciuki/raw.h>
+#endif
+const char *fm_job_verb(enum fm_job_kind kind)
+{ return kind==FM_COPY ? "copy" : kind==FM_MOVE ? "move" : kind==FM_DELETE ? "delete" : "read"; }
+uint64_t job_now(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
+void job_record(const char *fmt, ...)
+{
+    int saved = errno; char line[241]; va_list ap;
+    va_start(ap, fmt); int n = vsnprintf(line, sizeof(line), fmt, ap); va_end(ap);
+    if (n > 0) {
+        if ((unsigned)n >= sizeof(line)) n = sizeof(line)-1;
+#ifdef __i386__
+        (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line, (uint32_t)n, 0, 0, 0, 0);
+#else
+        fprintf(stderr, "%s\n", line);
+#endif
+    }
+    errno = saved;
+}
+static void transfer_publish(struct files_transfer *w, uint64_t started, int finished)
+{
+    struct fm_job *j = w->job;
+    struct transfer_view v = {.state=j->state, .kind=j->kind, .bytes=j->bytes, .total=j->total_bytes,
+        .elapsed=job_now()-started, .items=j->items_done,
+        .count=j->total_items, .counting=j->counting, .files=j->files, .folders=j->folders};
+    uint64_t sampled=w->samples_started ? job_now()-w->samples_started : 0;
+    if (sampled >= 2000000000ull && !v.counting) v.rate = v.bytes * 1000ull / (sampled / 1000000ull);
+    const char *source = j->count ? j->sources[0] : "";
+    if (j->depth) {
+        struct fm_frame *f=&j->frames[j->depth-1]; source=f->source;
+        v.file_total=f->meta.size;
+        if (!j->counting && f->meta.type==FM_FILE && (f->phase==1 || f->phase==3)) v.file_bytes=j->file_bytes;
+        v.meta=f->meta; v.existing=f->existing; v.prompt_dir=j->prompt_dir;
+        snprintf(v.target,sizeof(v.target),"%s",f->target);
+    }
+    else if (j->next) source=j->sources[j->next-1];
+    snprintf(v.source, sizeof(v.source), "%s", source);
+    pthread_mutex_lock(&w->lock);
+    w->view = v;
+    w->finished = finished;
+    pthread_mutex_unlock(&w->lock);
+}
+static void *transfer_run(void *arg)
+{
+    struct files_transfer *w = arg;
+    for (;;) {
+        pthread_mutex_lock(&w->lock);
+        while (!w->pending && !w->stopping) pthread_cond_wait(&w->changed, &w->lock);
+        if (w->stopping && !w->pending) { pthread_mutex_unlock(&w->lock); break; }
+        w->pending = 0; pthread_mutex_unlock(&w->lock);
+        struct fm_job *j = w->job;
+        uint64_t started=job_now();
+        w->samples_started=0;
+        int announced=0;
+        if (w->prepare) {
+            int r=w->prepare(w->ctx);
+            if (r) { j->error=-r; j->state=FM_FAILED; }
+        }
+        for (;;) {
+            pthread_mutex_lock(&w->lock);
+            int cancel=w->cancel || w->stopping, answer=w->answer;
+            w->answer=-1;
+            pthread_mutex_unlock(&w->lock);
+            if (cancel) fm_job_cancel(j);
+            else if (answer >= 0) fm_job_answer(j, (enum fm_replace)answer);
+            if (j->state == FM_RUNNING) fm_job_step(j);
+            uint64_t now=job_now();
+            if (!j->counting && !w->samples_started) w->samples_started=now;
+            if (!announced && (!j->counting || j->state != FM_RUNNING)) {
+                if (j->kind != FM_PROPERTIES) job_record("[files] job=%s start items=%u bytes=%llu", fm_job_verb(j->kind), j->total_items, (unsigned long long)j->total_bytes);
+                announced=1;
+            }
+            transfer_publish(w, started, 0);
+            if (j->state == FM_REPLACE) {
+                pthread_mutex_lock(&w->lock);
+                while (!w->stopping && !w->cancel && w->answer < 0) {
+                    uint64_t paused=job_now();
+                    pthread_cond_wait(&w->changed, &w->lock);
+                    if (w->samples_started) w->samples_started += job_now()-paused;
+                }
+                pthread_mutex_unlock(&w->lock);
+                continue;
+            }
+            if (j->state != FM_RUNNING) break;
+        }
+        if (j->kind != FM_PROPERTIES) {
+            uint64_t ms=(job_now()-started)/1000000ull;
+            if (j->state == FM_CANCELLED) job_record("[files] job=%s cancel", fm_job_verb(j->kind));
+            job_record("[files] job=%s done ms=%u bytes=%llu rate_kbs=%u errors=%u", fm_job_verb(j->kind),
+                (unsigned)ms, (unsigned long long)j->bytes, (unsigned)(ms ? j->bytes*1000/(ms*1024) : 0), j->error ? 1u : 0u);
+        }
+        if (w->complete) w->complete(w->ctx);
+        /* Publish terminal ownership only after the last job access. */
+        transfer_publish(w, started, 1);
+    }
+    return NULL;
+}
+int fm_transfer_create(struct files_transfer **out, struct fm_job *job)
+{
+    if (*out) return 0;
+    struct files_transfer *w=calloc(1,sizeof(*w));
+    if (!w) return -ENOMEM;
+    w->job=job; w->answer=-1;
+    int e=pthread_mutex_init(&w->lock,NULL);
+    if (e) { free(w); return -e; }
+    e=pthread_cond_init(&w->changed,NULL);
+    if (e) { pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    e=pthread_create(&w->thread,NULL,transfer_run,w);
+    if (e) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock); free(w); return -e; }
+    *out=w; return 0;
+}
+void fm_transfer_command(struct files_transfer *w, int cancel, int answer)
+{
+    if (!w) return;
+    pthread_mutex_lock(&w->lock);
+    if (cancel) w->cancel=1;
+    if (answer >= 0) w->answer=answer;
+    if (cancel || answer >= 0) w->view.state=FM_RUNNING;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+}
+void fm_transfer_destroy(struct files_transfer *w)
+{
+    if (!w) return;
+    pthread_mutex_lock(&w->lock); w->stopping=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread,NULL);
+    pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
+    free(w);
+}
+
+void fm_transfer_reset(struct files_transfer *w)
+{
+    pthread_mutex_lock(&w->lock);
+    w->view=(struct transfer_view){.state=FM_RUNNING,.kind=w->job->kind,.counting=w->job->counting,.preparing=w->prepare!=NULL};
+    if (w->job->count) snprintf(w->view.source,sizeof(w->view.source),"%s",w->job->sources[0]);
+    w->finished=w->cancel=0; w->answer=-1; w->started_at=w->progress_logged=job_now();
+    pthread_mutex_unlock(&w->lock);
+}
+void fm_transfer_submit(struct files_transfer *w)
+{
+    pthread_mutex_lock(&w->lock); w->pending=1;
+    pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock);
 }
