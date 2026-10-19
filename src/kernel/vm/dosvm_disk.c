@@ -85,6 +85,9 @@ static void read_cache_close(struct dosvm *v)
             v->info.resident -= DOSVM_READ_PAGES * PAGE_SIZE;
         }
         memset(&v->read_cache[i], 0, sizeof(v->read_cache[i]));
+        /* F0-44: one block (16 pages) released and published per span;
+         * the caller holds no disk gate here (close/open failure paths). */
+        kpreempt_point();
     }
     v->read_capacity = v->read_recent = v->read_oldest = 0;
 }
@@ -347,7 +350,10 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
         v->table_ready = false;
     }
     v->sector_count = 0;
-    read_cache_close(v);
     disk_gate_drop(v);
+    /* The image and overlay are closed and the sector count is zero: no
+     * reader can use the cache now, so release its blocks with the gate
+     * dropped (one preemption point per block, F0-44). */
+    read_cache_close(v);
     return error;
 }
