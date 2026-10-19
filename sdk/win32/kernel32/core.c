@@ -172,19 +172,14 @@ HANDLE W32API CreateEventA(SECURITY_ATTRIBUTES *s, BOOL manual, BOOL initial,
   return named_a(W32_OBJ_EVENT, 1, n, s && s->inherit, !!initial, !!manual,
                  ~0u);
 }
-HANDLE W32API CreateEventW(SECURITY_ATTRIBUTES *s, BOOL m, BOOL i,
-                           const WCHAR *n) {
-  return named(W32_OBJ_EVENT, 1, n, s && s->inherit, !!i, !!m, ~0u);
-}
+
 HANDLE W32API OpenEventA(DWORD access, BOOL inherit, const char *n) {
   return named_a(W32_OBJ_EVENT, 2, n, inherit, 0, 0, access);
 }
 HANDLE W32API CreateMutexA(SECURITY_ATTRIBUTES *s, BOOL owner, const char *n) {
   return named_a(W32_OBJ_MUTEX, 1, n, s && s->inherit, !!owner, 0, ~0u);
 }
-HANDLE W32API CreateMutexW(SECURITY_ATTRIBUTES *s, BOOL owner, const WCHAR *n) {
-  return named(W32_OBJ_MUTEX, 1, n, s && s->inherit, !!owner, 0, ~0u);
-}
+
 HANDLE W32API CreateSemaphoreA(SECURITY_ATTRIBUTES *s, LONG initial, LONG max,
                                const char *n) {
   return named_a(W32_OBJ_SEMAPHORE, 1, n, s && s->inherit, (DWORD)initial,
@@ -729,4 +724,21 @@ BOOL W32API TryEnterCriticalSection(RTL_CRITICAL_SECTION *section) {
 BOOL W32API InitializeCriticalSectionAndSpinCount(RTL_CRITICAL_SECTION *section,
                                                   DWORD spin) {
   return k32_status(RtlInitializeCriticalSectionAndSpinCount(section, spin));
+}
+
+static BOOL process_memory(HANDLE h, const void *src, void *dst, DWORD n,
+                            DWORD *done, DWORD op) {
+  struct ciuki_w32_system_args a={.header={1,sizeof(a),W32_SYSTEM,0},
+      .action=op,.handle=K32_PTR(h),.low=K32_PTR(src),.high=K32_PTR(dst),.extra=n};
+  if (done) *done=0;
+  if (!k32_status(w32_ciuki_call(&a,sizeof(a)))) return 0;
+  if (a.error) { SetLastError(a.error); return 0; }
+  if (done) *done=a.result;
+  return 1;
+}
+BOOL W32API ReadProcessMemory(HANDLE h, const void *src, void *dst, DWORD n, DWORD *done) {
+  return process_memory(h,src,dst,n,done,W32_S_READ_MEMORY);
+}
+BOOL W32API WriteProcessMemory(HANDLE h, void *dst, const void *src, DWORD n, DWORD *done) {
+  return process_memory(h,src,dst,n,done,W32_S_WRITE_MEMORY);
 }

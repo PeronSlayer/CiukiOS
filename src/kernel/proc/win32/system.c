@@ -16,7 +16,31 @@ static void priority_apply(struct proc_thread *t) {
 }
 uint32_t w32_system_call(struct proc_thread *t,
                          struct ciuki_w32_system_args *a) {
-  if (a->action == W32_S_TIME) {
+  if (a->action == W32_S_READ_MEMORY || a->action == W32_S_WRITE_MEMORY) {
+    struct w32_object *o=w32_lookup(t,a->handle,W32_OBJ_PROCESS);
+    if (!o || o->signalled) { a->error=6; return 0; }
+    if (o->id!=t->process->pid) { a->error=5; return 0; }
+    /* low = source, high = destination, extra = byte count, for both APIs.
+     * Pin both complete spans before copying; failures publish no bytes. */
+    struct ua_pin src,dst;
+    int e=a->extra ? ua_pin(t->process->memory,&src,a->low,a->extra,false) : 0;
+    if (e) { a->error=299; return 0; }
+    e=a->extra ? ua_pin(t->process->memory,&dst,a->high,a->extra,true) : 0;
+    if (e) { if (a->extra) ua_unpin(t->process->memory,&src); a->error=299; return 0; }
+    uint32_t n=a->extra<PAGE_SIZE ? a->extra : PAGE_SIZE;
+    void *buffer=n ? w32_alloc(n) : 0;
+    if (n && !buffer) a->error=8;
+    bool backwards=a->high>a->low && a->high-a->low<a->extra;
+    for (uint32_t at=0;!a->error && at<a->extra;) {
+      uint32_t take=a->extra-at; if (take>n) take=n;
+      uint32_t offset=backwards ? a->extra-at-take : at;
+      if (copy_from_user(buffer,a->low+offset,take) || copy_to_user(a->high+offset,buffer,take)) a->error=299;
+      at+=take;
+    }
+    if (!a->error) a->result=a->extra;
+    w32_free(buffer,n);
+    if (a->extra) { ua_unpin(t->process->memory,&dst); ua_unpin(t->process->memory,&src); }
+  } else if (a->action == W32_S_TIME) {
     uint64_t n = w32_system_time();
     a->low = (uint32_t)n;
     a->high = (uint32_t)(n >> 32);
@@ -24,9 +48,11 @@ uint32_t w32_system_call(struct proc_thread *t,
     a->low = pmm_total_usable();
     a->high = pmm_free_count();
     uint32_t reserved = 0;
-    for (const struct ua_extent *e = t->process->memory->head; e; e = e->next)
-      if (e->base < CIUKI_W32_LIMIT)
-        reserved += (e->end - e->base) / PAGE_SIZE;
+    for (const struct ua_extent *e = t->process->memory->head; e; e = e->next) {
+      uint32_t first=e->base<0x10000u ? 0x10000u : e->base;
+      uint32_t end=e->end>0x7fff0000u ? 0x7fff0000u : e->end;
+      if (end>first) reserved+=(end-first)/PAGE_SIZE;
+    }
     a->extra = reserved;
   } else if (a->action == W32_S_YIELD)
     task_yield();
@@ -94,12 +120,11 @@ uint32_t w32_system_call(struct proc_thread *t,
       a->error = 6;
     else if (a->action == W32_S_QUERY_PRIORITY)
       a->result = p->w32->priority_class;
-    else if (a->value == 0x100)
-      a->error = 5; /* preserve the qualified F0-45 realtime policy */
-    else if (proc_priority_win32(a->value, 0, false) < 0)
+    else if (a->value!=0x100 && proc_priority_win32(a->value, 0, false) < 0)
       a->error = 87;
     else {
-      p->w32->priority_class = a->value;
+      p->w32->priority_class = a->value==0x100 ? 0x80 : a->value;
+      if (a->value==0x100) klog("[win32] start pid=%u prio=realtime→high",p->pid);
       for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
         struct proc_thread *v = proc_thread_slot(i);
         if (v && v->process == p)

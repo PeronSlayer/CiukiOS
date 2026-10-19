@@ -162,6 +162,7 @@ uint32_t wr_tick(struct wr_server *s, uint64_t now)
 static void collect_deleted(struct wr_server *);
 uint32_t wr_exit(struct wr_server *s, uint32_t pid)
 {
+    if (s->profile_owner==pid) s->profile_owner=0;
     uint32_t e = wr_flush(s);
     struct wr_handle **at = &s->handles;
     while (*at) { struct wr_handle *h = *at; if (h->pid == pid) { *at = h->next; free(h); } else at = &h->next; }
@@ -264,6 +265,17 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         if(!v)r.error=2;
         else if(v->type!=3||v->bytes>65536||cap<sizeof(r)+v->bytes)r.error=13;
         else {r.type=3;r.data_bytes=v->bytes;memcpy(bytes,v->data,v->bytes);}goto done;
+    }
+    if (a.op==W32R_PROFILE_ACQUIRE || a.op==W32R_PROFILE_RELEASE) {
+        /* One global INI writer transaction. The service loop serializes all
+         * authenticated clients; disconnect/death releases the lease. */
+        if (*path || *name || a.key || a.index || a.type || a.access || a.flags || a.data_bytes) r.error=87;
+        else if (a.op==W32R_PROFILE_ACQUIRE) {
+            if (s->profile_owner) r.error=170;
+            else s->profile_owner=pid;
+        } else if (s->profile_owner!=pid) r.error=5;
+        else s->profile_owner=0;
+        goto done;
     }
     if (a.op >= W32R_ATOM_ADD) {
         if (cap < sizeof(r) + W32R_DATA + W32R_NAME) { r.error = 87; goto done; }

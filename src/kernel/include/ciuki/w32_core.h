@@ -26,7 +26,9 @@ enum w32_file_action {
   W32_F_FULLPATH,
   W32_F_FIRST,
   W32_F_NEXT,
-  W32_F_DISK
+  W32_F_DISK,
+  W32_F_LOCK,
+  W32_F_UNLOCK
 };
 struct ciuki_w32_file_args {
   struct ciuki_w32_header header;
@@ -55,7 +57,9 @@ enum w32_system_action {
   W32_S_YIELD,
   W32_S_THREAD_PRIORITY,
   W32_S_PROCESS_PRIORITY,
-  W32_S_QUERY_PRIORITY
+  W32_S_QUERY_PRIORITY,
+  W32_S_READ_MEMORY,
+  W32_S_WRITE_MEMORY
 };
 struct ciuki_w32_system_args {
   struct ciuki_w32_header header;

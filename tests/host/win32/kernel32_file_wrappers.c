@@ -23,6 +23,8 @@ static DWORD last_error, calls, signals, io_flags, io_bytes, io_low, io_high;
 static DWORD injected_error, opened, closes, copied;
 static unsigned spawn_calls, spawn_failure;
 static const char *expected_command;
+static const char *expected_environment="A=B\0\0";
+static DWORD expected_environment_bytes=5;
 struct startup_a {
   DWORD size;
   char *reserved, *desktop, *title;
@@ -65,10 +67,7 @@ int k32_status(int32_t s) {
   }
   return 1;
 }
-int k32_path(const char *from, char out[778]) {
-  strcpy(out, from);
-  return 1;
-}
+void w32_diag(const char *a,const char *b,const char *c){(void)a;(void)b;(void)c;}
 void *k32_alloc(DWORD bytes) {
   void *p = mmap(0, bytes, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
@@ -95,6 +94,8 @@ int32_t w32_ciuki_call(void *record, uint32_t bytes) {
     CHECK(!a->error &&
           !strcmp((char *)(uintptr_t)a->command, expected_command));
     CHECK(a->inherit == 1 && a->handle_flags == 3);
+    CHECK(!(a->flags&0x400)&&a->environment_bytes==expected_environment_bytes);
+    CHECK(!memcmp((void *)(uintptr_t)a->environment,expected_environment,expected_environment_bytes));
     const char *candidate = (char *)(uintptr_t)a->image;
     CHECK(!strcmp(candidate,
                   spawn_calls ? "C:\\Program Files\\Tool.exe" : "C:\\Program"));
@@ -123,6 +124,10 @@ int32_t w32_ciuki_call(void *record, uint32_t bytes) {
   struct ciuki_w32_file_args *a = record;
   calls++;
   switch (a->action) {
+  case W32_F_LOCK:
+  case W32_F_UNLOCK:
+    io_flags=a->flags;io_bytes=a->bytes;io_low=a->low;io_high=a->high;
+    CHECK(a->share==1);a->error=injected_error;break;
   case W32_F_OPEN:
     a->result = opened++ ? 8 : 4;
     break;
@@ -223,6 +228,22 @@ static void *run(void *unused) {
   CHECK(!CreateProcessA(0, command, &security, &security, 1, 0, env, 0,
                         &startup, &process));
   CHECK(spawn_calls == 1 && GetLastError() == 5 && process.pid == 0xfeed);
+  spawn_calls=0;spawn_failure=0;
+  WCHAR wide_env[]={'A','=',0x20ac,0,0};
+  expected_environment="A=\x80\0\0";expected_environment_bytes=5;
+  CHECK(CreateProcessA(0,command,&security,&security,1,0x400,wide_env,0,&startup,&process));
+  CHECK(spawn_calls==2&&wide_env[2]==0x20ac);
+  wide_env[2]=0x2603;spawn_calls=0;process.pid=0xfeed;
+  CHECK(!CreateProcessA(0,command,&security,&security,1,0x400,wide_env,0,&startup,&process));
+  CHECK(GetLastError()==1113&&!spawn_calls&&process.pid==0xfeed);
+  injected_error=0;
+  CHECK(LockFile((HANDLE)4,0x1234,2,8,1)&&io_low==0x1234&&io_high==2&&io_bytes==8&&io_flags==3);
+  OVERLAPPED lock={.internal=0xfeed,.offset=0x1234,.offset_high=2};
+  CHECK(!LockFileEx((HANDLE)4,3,1,8,1,&lock)&&GetLastError()==87&&lock.internal==0xfeed);
+  injected_error=33;
+  CHECK(!LockFileEx((HANDLE)4,3,0,8,1,&lock)&&GetLastError()==33&&lock.internal==0xfeed);
+  injected_error=0;
+  CHECK(UnlockFileEx((HANDLE)4,0,8,1,&lock)&&!lock.internal);
   return 0;
 }
 int main(void) {

@@ -2265,3 +2265,21 @@ classes; zero keeps existing unread-input behavior. USER selects zero for
 MWMO_INPUTAVAILABLE, bit one otherwise. Handle and queue readiness are still
 acquired atomically by the production kernel wait path. No native syscall was
 added, renumbered or widened.
+
+### F5-06 Amendment 1 additive operations
+
+CIUKI_SYS_W32 (96) keeps its number and record sizes. W32_FILE adds actions
+20/21 (LOCK/UNLOCK): low/high are the 64-bit offset, bytes/share the 64-bit
+length, flags bit 0 fails immediately and bit 1 requests exclusive access.
+Synchronous file completion applies to locks as to OVERLAPPED I/O.
+W32_SYSTEM adds actions 10/11 (READ_MEMORY/WRITE_MEMORY): handle must name
+the caller, low/high are source/destination VAs, extra is byte count;
+result is the copied count. Both complete spans are pinned before mutation.
+There is no native F2 syscall or record change.
+The private w32srv v1 protocol keeps COMPAT (23), adds
+PROFILE_ACQUIRE/PROFILE_RELEASE (24/25), and preserves the clipboard block at
+0x100 and WINDOW_CLASS (0x109). Profile requests use empty path/name and no
+payload. Authenticated PID owns the global INI
+update lease; contention is ERROR_BUSY, foreign release ERROR_ACCESS_DENIED,
+and disconnect/death releases ownership. All kernel32 and advapi32 fragments
+share ntdll's recursive per-process transport lock and request sequence.

@@ -19,7 +19,7 @@ static int process_string(uint32_t va, char *out, unsigned cap) {
 }
 static int joined(struct process *p, const char *dir, unsigned n,
                   const char *name, char *resolved, struct ciuki_file *file) {
-  if (n + strlen(name) + 2 >= 260)
+  if (n + strlen(name) + 2 >= FS_PATH_BYTES)
     return -ENAMETOOLONG;
   memcpy(resolved, dir, n);
   if (n && resolved[n - 1] != '/' && resolved[n - 1] != '\\')
@@ -27,9 +27,28 @@ static int joined(struct process *p, const char *dir, unsigned n,
   memcpy(resolved + n, name, strlen(name) + 1);
   return w32_loader_open(p, resolved, file);
 }
+/* PATH is part of the ACP environment; image/loader path records are UTF-8.
+ * Mapping: Microsoft CP1252 table, Unicode vendor mapping dated 1998-04-15. */
+static int environment_directory(const char *text,unsigned n,char out[FS_PATH_BYTES]) {
+  static const uint16_t specials[32]={
+    0x20ac,0x81,0x201a,0x192,0x201e,0x2026,0x2020,0x2021,
+    0x2c6,0x2030,0x160,0x2039,0x152,0x8d,0x17d,0x8f,
+    0x90,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,
+    0x2dc,0x2122,0x161,0x203a,0x153,0x9d,0x17e,0x178};
+  unsigned at=0;
+  for (unsigned i=0;i<n;i++) {
+    unsigned c=(uint8_t)text[i];if(c>=128&&c<160)c=specials[c-128];
+    unsigned take=c<128 ? 1 : c<2048 ? 2 : 3;
+    if(at+take>=FS_PATH_BYTES)return -ENAMETOOLONG;
+    if(take==3)out[at++]=(char)(0xe0|(c>>12));
+    if(take>=2)out[at++]=(char)((take==2 ? 0xc0 : 0x80)|((c>>6)&(take==2 ? 31 : 63)));
+    out[at++]=(char)(take==1 ? c : 0x80|(c&63));
+  }
+  out[at]=0;return 0;
+}
 static int executable(struct process *p, const char *image, const char *env,
                       char *resolved, struct ciuki_file *file) {
-  char name[260];
+  char name[FS_PATH_BYTES];
   unsigned n = (unsigned)strlen(image);
   if (!n || n >= sizeof(name))
     return -ENOENT;
@@ -60,14 +79,14 @@ static int executable(struct process *p, const char *image, const char *env,
   int e = -ENOENT;
   if (last)
     e = joined(p, exe, last, name, resolved, file);
-  if (!e)
-    return 0;
-  if ((e = joined(p, "", 0, name, resolved, file)) != -ENOENT)
+  if (e != -ENOENT && e != -ENOTDIR)
+    return e;
+  if ((e = joined(p, "", 0, name, resolved, file)) != -ENOENT && e != -ENOTDIR)
     return e;
   const char *dirs[] = {"C:\\WINDOWS\\SYSTEM", "C:\\WINDOWS"};
   for (unsigned i = 0; i < 2; i++) {
     e = joined(p, dirs[i], (unsigned)strlen(dirs[i]), name, resolved, file);
-    if (e != -ENOENT)
+    if (e != -ENOENT && e != -ENOTDIR)
       return e;
   }
   for (const char *v = env; *v; v += strlen(v) + 1)
@@ -79,8 +98,10 @@ static int executable(struct process *p, const char *image, const char *env,
         const char *start = q;
         while (*q && *q != ';')
           q++;
-        e = joined(p, start, (unsigned)(q - start), name, resolved, file);
-        if (e != -ENOENT)
+        char directory[FS_PATH_BYTES];
+        e=environment_directory(start,(unsigned)(q-start),directory);
+        if (!e) e=joined(p,directory,(unsigned)strlen(directory),name,resolved,file);
+        if (e != -ENOENT && e != -ENOTDIR)
           return e;
         if (*q)
           q++;
@@ -97,10 +118,8 @@ uint32_t w32_process_call(struct proc_thread *t,
     a->error = 87;
     return 0;
   }
-  if (priority == 0x100) {
-    a->error = 5; /* same qualified F0-45 policy as SetPriorityClass */
-    return 0;
-  }
+  bool realtime=priority==0x100;
+  if (realtime) priority=0x80;
   if (!priority)
     priority = t->process->w32 && t->process->w32->priority_class == 0x40
                    ? 0x40
@@ -123,7 +142,7 @@ uint32_t w32_process_call(struct proc_thread *t,
   struct ciuki_file file = {0};
   uint32_t ph = 0, th = 0;
   int err =
-      startup_error ? startup_error : process_string(a->image, image, 260);
+      startup_error ? startup_error : process_string(a->image, image, FS_PATH_BYTES);
   if (!err)
     err = process_string(a->command, command, 32768);
   if (!err)
@@ -161,6 +180,7 @@ uint32_t w32_process_call(struct proc_thread *t,
   /* Native user-return does not yet have the Win32 suspension hook. */
   if (!err && !pe && (a->flags & 4)) {
     a->error = 120;
+    klog("[win32] start check=elf-create-suspended error=120");
     err = -EINVAL;
   }
   if (!err && pe)
@@ -247,6 +267,7 @@ uint32_t w32_process_call(struct proc_thread *t,
     if (a->error)
       err = -ENOMEM;
   }
+  if (!err && (t->process->state!=PROC_LIVE || !t->process->w32 || t->process->w32->closing)) err=-EINTR;
   if (!err) {
     child->w32->priority_class = priority;
     task_set_base(main->task, priority == 0x40 ? P_IDLE : P_NORMAL,
@@ -254,6 +275,7 @@ uint32_t w32_process_call(struct proc_thread *t,
     if (pe && (a->flags & 4))
       main->w32->suspend = 1;
     proc_publish(child, 0);
+    if (realtime) klog("[win32] start pid=%u prio=realtime→high",child->pid);
     a->pid = child->pid;
     a->tid = main->tid;
     a->process_handle = ph;

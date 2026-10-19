@@ -6,7 +6,7 @@
 #include <ciuki/w32_core.h>
 int w32_ciuki_store(struct w32_loader *l, struct w32_file *snapshot) {
     const struct w32_services *s = l->services;
-    if (!s->open(s->opaque, "C:\\WINDOWS\\SYSTEM\\BUILTIN.BIN", snapshot))
+    if (!s->open(s->opaque, "C:\\System\\Win32\\BUILTIN.BIN", snapshot))
         return 0;
     if (snapshot->size < 8 || w32_u32(snapshot->bytes) != 1)
         return 0;
@@ -26,8 +26,8 @@ int w32_ciuki_store(struct w32_loader *l, struct w32_file *snapshot) {
         for (unsigned j = 0; row[i].name[j]; j++)
             if (row[i].name[j] == '/' || row[i].name[j] == '\\' || row[i].name[j] == ':')
                 return 0;
-        w32_copy_string(paths + i * 96, 96, "C:\\WINDOWS\\SYSTEM\\");
-        w32_copy_string(paths + i * 96 + 18, 78, row[i].name);
+        w32_copy_string(paths + i * 96, 96, "C:\\System\\Win32\\");
+        w32_copy_string(paths + i * 96 + 16, 80, row[i].name);
         b[i] = (struct w32_builtin){row[i].name, paths + i * 96, row[i].sha256,
                                     row[i].base, row[i].size,    {0}};
         w32_copy(b[i].version, row[i].version, 8);
@@ -36,15 +36,17 @@ int w32_ciuki_store(struct w32_loader *l, struct w32_file *snapshot) {
     l->builtin_count = count;
     return w32_builtin_validate(b, count, &l->error);
 }
-static WCHAR *unicode(const struct w32_services *s, const char *text, UNICODE_STRING *out) {
+static WCHAR *unicode(const struct w32_services *s, const char *text, UNICODE_STRING *out, int utf8) {
     ULONG n = w32_strlen(text);
     if (n > 32766)
         return 0;
     WCHAR *p = s->alloc(s->opaque, (n + 1) * 2);
     if (!p)
         return 0;
-    for (ULONG i = 0; i <= n; i++)
-        p[i] = (uint8_t)text[i];
+    if (utf8) {
+        if (!w32_utf8_path(text,p,n+1)) { s->free(s->opaque,p,(n+1)*2); return 0; }
+        n=0;while (p[n]) n++;
+    } else for (ULONG i = 0; i <= n; i++) p[i]=w32_acp_character((uint8_t)text[i]);
     if (out) {
         out->Length = n * 2;
         out->MaximumLength = (n + 1) * 2;
@@ -73,12 +75,12 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
         p->StartingX=v->x;p->StartingY=v->y;p->CountX=v->width;p->CountY=v->height;
         p->CountCharsX=v->chars_x;p->CountCharsY=v->chars_y;p->FillAttribute=v->fill;p->WindowFlags=v->flags;p->ShowWindowFlags=v->show;
         if(v->flags&0x100){p->StandardInput=(void *)(uintptr_t)v->input;p->StandardOutput=(void *)(uintptr_t)v->output;p->StandardError=(void *)(uintptr_t)v->error;}
-        if(v->title&&!unicode(l->services,(const char *)(uintptr_t)v->title,&p->WindowTitle))return STATUS_NO_MEMORY;
+        if(v->title&&!unicode(l->services,(const char *)(uintptr_t)v->title,&p->WindowTitle,0))return STATUS_NO_MEMORY;
     }
 
-    if (!unicode(l->services, exe, &p->ImagePathName) ||
-        !unicode(l->services, command, &p->CommandLine) ||
-        !unicode(l->services, directory, &p->CurrentDirectory.DosPath))
+    if (!unicode(l->services, exe, &p->ImagePathName,1) ||
+        !unicode(l->services, command, &p->CommandLine,0) ||
+        !unicode(l->services, directory, &p->CurrentDirectory.DosPath,1))
         return STATUS_NO_MEMORY;
     ULONG size = 0;
     do {
@@ -90,11 +92,19 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
     if (!p->Environment)
         return STATUS_NO_MEMORY;
     for (ULONG i = 0; i < size; i++)
-        p->Environment[i] = (uint8_t)environment[i];
+        p->Environment[i] = w32_acp_character((uint8_t)environment[i]);
     for (const char *q = environment; *q; q += w32_strlen(q) + 1)
         if ((q[0] == 'P' || q[0] == 'p') && (q[1] == 'A' || q[1] == 'a') &&
             (q[2] == 'T' || q[2] == 't') && (q[3] == 'H' || q[3] == 'h') && q[4] == '=')
-            l->path = q + 5;
+        {
+            UNICODE_STRING path;
+            WCHAR *wide=unicode(l->services,q+5,&path,0);
+            ULONG cap=w32_strlen(q+5)*3+1;
+            char *narrow=l->services->alloc(0,cap);
+            if (!wide || !narrow || !w32_utf16_path(wide,path.Length/2,narrow,cap)) return STATUS_NO_MEMORY;
+            l->services->free(0,wide,path.MaximumLength);
+            l->path=narrow;
+        }
     peb->SubSystemData = peb->ProcessParameters; /* retain v2 endpoints/startup handoff */
     peb->ProcessParameters = p;
     w32_copy_string(l->current_directory, sizeof(l->current_directory), directory);

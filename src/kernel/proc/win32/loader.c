@@ -114,7 +114,7 @@ uint32_t w32_loader_call(struct proc_thread *t, struct ciuki_w32_loader_args *a)
         ua_unpin(p->memory, &pin);
         return w32_status(err);
     }
-    char path[260];
+    char path[FS_PATH_BYTES];
     unsigned n = 0;
     int err = 0;
     do {

@@ -78,7 +78,7 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     if (err) {klog("[win32] load check=image-address-range error=193");goto done;}
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     struct ciuki_file loader = {0};
-    err = ops ? ops->open(p->cwd, "/WINDOWS/SYSTEM/ntdll.dll", &loader) : -ENOENT;
+    err = ops ? ops->open(p->cwd, "/System/Win32/ntdll.dll", &loader) : -ENOENT;
     if (err) { klog("[win32] load pid=%u check=missing-dll error=126",p->pid);w32_refusal_queue(p,W32_REFUSE_MISSING_DLL,"ntdll.dll",126); goto done; }
     err = w32_pe_validate(&loader, im);
     if (!err && !(im->flags & 0x2000)) err = -ENOEXEC;

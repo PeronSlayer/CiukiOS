@@ -38,13 +38,17 @@ static int fullpath(const char *p) {
     return 0;
 }
 static int dllname(char *out, const char *name) {
-    if (!w32_copy_string(out, 256, basename(name)))
+    if (!w32_copy_string(out, W32_PATH_MAX, basename(name)))
         return 0;
-    for (const char *p = out; *p; p++)
-        if (*p == '.')
-            return 1;
+    ULONG characters=0;int extension=0;
+    for (const char *p=out;*p;p++) {
+        if (((uint8_t)*p&0xc0)!=0x80) characters++;
+        if (*p=='.') extension=1;
+    }
+    if (characters>255) return 0;
+    if (extension) return 1;
     ULONG n = w32_strlen(out);
-    if (n > 251)
+    if (characters>251 || n>W32_PATH_MAX-5)
         return 0;
     w32_copy(out + n, ".dll", 5);
     return 1;
@@ -66,12 +70,9 @@ static void list_remove(LIST_ENTRY *e) {
     }
 }
 static void wide(UNICODE_STRING *s, WCHAR *buf, const char *name) {
-    ULONG n = w32_strlen(name);
-    for (ULONG i = 0; i <= n; i++)
-        buf[i] = (uint8_t)name[i];
-    s->Buffer = buf;
-    s->Length = n * 2;
-    s->MaximumLength = (n + 1) * 2;
+    if (!w32_utf8_path(name,buf,W32_PATH_MAX)) buf[0]=0;
+    ULONG n=0;while (buf[n]) n++;
+    s->Buffer=buf;s->Length=n*2;s->MaximumLength=(n+1)*2;
 }
 int w32_builtin_validate(const struct w32_builtin *b, ULONG count, struct w32_error *e) {
     if (count && !b) {
@@ -124,7 +125,7 @@ void w32_ldr_init(struct w32_loader *l, const struct w32_services *s, struct w32
 struct w32_module *w32_ldr_module(struct w32_loader *l, const char *name) {
     if (!name)
         return l->main;
-    char base[256];
+    char base[W32_PATH_MAX];
     if (!dllname(base, name))
         return 0;
     for (struct w32_module *m = l->modules; m; m = m->next)
@@ -145,7 +146,7 @@ static int open_join(struct w32_loader *l, const char *dir, const char *name, ch
 }
 static int locate(struct w32_loader *l, const char *name, char *path, struct w32_file *file,
                   const struct w32_builtin **builtin) {
-    char base[256];
+    char base[W32_PATH_MAX];
     if (!dllname(base, name))
         return error(l, 193, "module-name-limit", name, 0);
     *builtin = 0;

@@ -80,7 +80,8 @@ static int open_file(void *o, const char *path, struct w32_file *f) {
     (void)o;
     /* A low-address copy also gives the H0 kernel model the real wire path. */
     uint32_t n = w32_strlen(path) + 1;
-    if (n > 260)
+    /* MAX_PATH counts ACP characters, not their expanded UTF-8 bytes. */
+    if (n > 3 * 259 + 1)
         return 0;
     char *copy = alloc(0, n);
     if (!copy)

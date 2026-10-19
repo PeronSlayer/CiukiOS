@@ -84,3 +84,4 @@ EXPORTS
     CiukiThreadAttach
     CiukiThreadDetach
     CiukiProcessDetach
+    w32_server_exchange

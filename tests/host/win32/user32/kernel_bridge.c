@@ -4,6 +4,16 @@
 #define w32_pe_validate w32_kernel_pe_validate
 #include "../kernel_core_test.c"
 #undef main
+#include <stdarg.h>
+/* The shared kernel harness leaves bridge logging to each adapter. Preserve
+ * f5-16 exit diagnostics when the USER fixture tears down its processes. */
+void klog(const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  vprintf(fmt, args);
+  va_end(args);
+  putchar('\n');
+}
 static struct process *ui_processes[2];
 static struct proc_thread *ui_threads[3];
 static uint32_t buffers[3];

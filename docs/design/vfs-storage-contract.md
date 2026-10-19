@@ -964,3 +964,21 @@ completion publication. An already issued physical command retains its
 existing bounded transport/stop protocol; it cannot be physically preempted.
 Host random-read evidence establishes absence of queued speculative delay,
 not an unmeasured hardware latency bound.
+
+### F5-06 Amendment 1 consumers of common locks
+
+Win32 native descriptions now retain the F1-84 common identity and register
+claims as `(VFS_OWNER_WIN32, PID, description)`. The common table admits 64-bit
+half-open ranges and shared locks. Shared claims permit all reads and prohibit
+all overlapping writes; exclusive claims exempt only the owning PID and
+open description. A shared claim may overlap its own exclusive claim; exact
+unlock releases the exclusive claim first. Ordinary native/DOS I/O checks the
+same table. Native syscall numbers, records and errno conventions are unchanged.
+The original 32-bit DOS lock entry point keeps its overflow check.
+
+The native share observer also checks Win32 read/write/delete access and deny
+masks. Delete sharing lasts through inherited description references. Win32
+pending deletion retains the live file/identity for existing opens, rejects new
+opens and removes the name/chain on final close. A native rename changes the
+ancestry used by subsequent Win32 handle writes, truncate, section writeback
+and delete-on-close; System protection cannot be bypassed by retaining a handle.
