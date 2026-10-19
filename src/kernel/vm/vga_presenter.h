@@ -16,6 +16,7 @@
 #define CIUKIOS_VGA_PRESENTER_H
 
 #include <stddef.h>
+#include <ciuki/present.h>
 #include "virtual_vga.h"
 
 #define CVP_MAX_WIDTH 2048u
@@ -133,4 +134,25 @@ int CVGA_CALL cvp_retained_blit(cvp_retained_state *s,
                                 int32_t band_left, int32_t band_top,
                                 uint8_t *band_memory, cvp_stats *stats);
 
+/* F5 RAM surface helpers, also used by the v3 compositor. All extents are
+ * checked before writes. Rectangles are half-open destination coordinates;
+ * clipping is intersected with the target. Palette/gamma changes require
+ * whole-surface damage on the next compositor commit. */
+unsigned cvp_surface_bytes(unsigned format);
+int cvp_surface_valid(const struct ciuki_present_surface *);
+int cvp_surface_scale(const struct ciuki_present_surface *, unsigned width,
+                      unsigned height, unsigned requested);
+int cvp_surface_row(const struct ciuki_present_surface *, const uint8_t *source_row,
+                    const uint32_t palette[256], const struct ciuki_present_gamma *,
+                    const cvp_format *, unsigned scale, unsigned first,
+                    unsigned count, uint8_t *dest, size_t capacity);
+int cvp_surface_blit(const struct ciuki_present_surface *, const void *source,
+                     const uint32_t palette[256], const struct ciuki_present_gamma *,
+                     const cvp_format *, unsigned scale, const cvp_rect *clip,
+                     void *target, size_t capacity);
+int cvp_palette_update(uint32_t palette[256], unsigned first, unsigned count,
+                        const uint32_t *entries);
+/* First frame may run immediately; subsequent deadlines use an absolute
+ * rational 60 Hz clock. Missed slots are skipped, never caught up. */
+uint64_t cvp_present_deadline(uint64_t now_ns);
 #endif

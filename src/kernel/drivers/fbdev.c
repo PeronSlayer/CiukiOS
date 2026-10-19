@@ -551,6 +551,30 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour)
     return rc;
 }
 
+int fbdev_present_native(uint32_t generation, unsigned x, unsigned y,
+                          const void *pixels, unsigned count)
+{
+    if (!pixels || !count || count > 256) return -EINVAL;
+    kmutex_lock(&presenter);
+    int e = 0;
+    struct fb_rect r = {(int32_t)x,(int32_t)y,(int32_t)count,1};
+    if (!live() || generation != device.generation) e = -EIO;
+    else if (x >= device.width || count > device.width-x || y >= device.height) e = -EINVAL;
+    else if (!present_begin(&device,&r)) e = -EBUSY;
+    else {
+        if (acceleration && acceleration->sync(acceleration->ctx)) e = -EIO;
+        if (!e) {
+            unsigned bytes = device.bpp/8;
+            uint8_t *dst = device.mapped+y*device.pitch+x*bytes;
+            const uint8_t *src = pixels;
+            for (unsigned i=0;i<count*bytes;++i) *(volatile uint8_t *)(dst+i)=src[i];
+        }
+        (void)present_end(&device,&r,false);
+    }
+    kmutex_unlock(&presenter);
+    return e;
+}
+
 /* Source and destination already clipped together by the grant service. */
 int fbdev_copy_to(const struct fb_device *d, const struct fb_rect *r, int32_t x, int32_t y)
 {

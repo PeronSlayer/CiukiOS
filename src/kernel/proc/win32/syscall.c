@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/display.h>
 static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread *a)
 {
     struct process *p = self->process;
@@ -50,6 +51,7 @@ int32_t w32_syscall(struct trap_frame *tf)
         case W32_SECTION: status=w32_section_call(self,(void *)record);break;
         case W32_VIEW: status=w32_view_call(self,(void *)record);break;
         case W32_SERVICE: status=w32_service_call(self,(void *)record);break;
+        case W32_DISPLAY: status=w32_display_call(self,(void *)record);break;
         case W32_IDENTITY: w32_identity((void *)record); break;
         case W32_COUNTER: {
             struct ciuki_w32_counter *a = (void *)record;

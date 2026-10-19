@@ -47,6 +47,21 @@ void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->activ
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
 int bootlog_try_sync(void) { log_requests++; return log_sync_error; }
+extern bool display_present_active(void) __attribute__((weak));
+extern void display_present_poll(void) __attribute__((weak));
+extern int display_present_revoke_kernel(void) __attribute__((weak));
+extern void dosvm_fullscreen_poll(void) __attribute__((weak));
+static bool delegated_test, delegated_dos_request;
+static unsigned delegated_revokes;
+bool display_present_active(void){return delegated_test;}
+void display_present_poll(void){}
+int display_present_revoke_kernel(void){
+    if(!delegated_test)return 0;
+    delegated_test=false;delegated_revokes++;display_present_returned();return 1;
+}
+void dosvm_fullscreen_poll(void){
+    if(delegated_dos_request){delegated_dos_request=false;assert(!display_fullscreen_begin(0x13));}
+}
 static bool owner = true, busy, fail_firmware, fail_restore, bad_info, fail_window, check_boot;
 static bool fail_framebuffer_claim;
 static uint8_t *aperture, *window;
@@ -125,7 +140,8 @@ int registry_claim(enum res_type type, uint32_t start, uint32_t end, const char 
 void *vmm_map_mmio(uint32_t phys, uint32_t bytes, bool uncached) { (void)phys; assert(uncached); aperture = calloc(1, bytes); assert(aperture); return aperture; }
 bool g_cpu_tsc;
 uint64_t g_tsc_per_ms;
-void framebuffer_write_drain(void) {}
+static unsigned drain_calls;
+void framebuffer_write_drain(void) { drain_calls++; }
 uint64_t framebuffer_cycles(void) { return 0; }
 void *vmm_map_framebuffer(uint32_t phys, uint32_t bytes) { return vmm_map_mmio(phys, bytes, true); }
 void *vmm_reserve_mmio(uint32_t cap) { if (fail_window) return 0; window_size = cap; window = calloc(1, cap); assert(window); return window; }
@@ -194,6 +210,7 @@ static void fixture(void)
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
+    delegated_test=delegated_dos_request=false;delegated_revokes=0;
     change_window = 0; change_capacity = changes = drawing = 0; watchdog = 0;
     resource_count = generation = 1; sequence_count = switches = copies = frames = 0;
     g_ticks = 100; current = &desktop; owner = true;
@@ -447,8 +464,46 @@ static void return_logging_tests(void)
         assert(log_syncs==syncs+1 && blackbox_syncs==raws+1);
     }
 }
+static int native_sync(void *p) { return *(bool *)p ? -EIO : 0; }
+static void delegated_takeover_tests(void)
+{
+    fixture();delegated_test=delegated_dos_request=true;
+    display_watchdog_poll();
+    assert(!delegated_test&&delegated_revokes==1&&fullscreen_display&&suspended);
+    assert(!display_fullscreen_end());
+    display_frame_complete(device.generation,false);
+    delegated_test=true;
+    assert(!display_set(&desktop,device.mode_id));
+    assert(!delegated_test&&delegated_revokes==2&&awaiting_frame&&awaiting_restored_frame);
+    display_frame_complete(device.generation,false);
+    delegated_test=true;owner=false;
+    assert(display_set(&other,device.mode_id)==-EPERM&&delegated_test);
+    puts("PASS delegated takeover: DOS requests serviced while leased; synchronous revoke, restored repaint watchdog, native authority");
+}
+static void native_upload_tests(void)
+{
+    fixture();
+    uint8_t pixels[8]={1,2,3,0,4,5,6,0};unsigned drains=drain_calls;
+    assert(fbdev_present_native(device.generation+1,0,0,pixels,2)==-EIO);
+    assert(fbdev_present_native(device.generation,1023,0,pixels,2)==-EINVAL);
+    assert(fbdev_present_native(device.generation,0,768,pixels,2)==-EINVAL);
+    assert(fbdev_present_native(device.generation,0,0,pixels,257)==-EINVAL);
+    assert(!drain_calls||drain_calls==drains);
+    assert(!fbdev_present_native(device.generation,0,0,pixels,2));
+    assert(!memcmp(device.mapped,pixels,8)&&device.mapped[8]==0&&drain_calls==drains+1);
+    bool fail=true;const struct accel_ops ops={.ctx=&fail,.sync=native_sync};acceleration=&ops;
+    memset(device.mapped,0,8);
+    assert(fbdev_present_native(device.generation,0,0,pixels,2)==-EIO&&!device.mapped[0]);
+    fail=false;assert(!fbdev_present_native(device.generation,0,0,pixels,2));
+    assert(!memcmp(device.mapped,pixels,8));acceleration=NULL;
+    resources[device.handle].state=RS_QUARANTINED;
+    assert(fbdev_present_native(device.generation,0,0,pixels,2)==-EIO);
+    puts("PASS bounded native upload: generation/registry/extent validation, acceleration sync and write drain");
+}
 int main(void)
 {
+    delegated_takeover_tests();
+    native_upload_tests();
     refused_retry_tests();
     return_logging_tests();
     fixture(); assert(display_check_begin(0x111)==-EPERM && !switches);
