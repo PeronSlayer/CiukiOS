@@ -19,7 +19,7 @@ struct desk_link_entry {
     char source[260]; /* re-read at activation; never launch stale cached bytes */
     unsigned desktop;
 };
-struct desk_uninstall_entry { char key[260], name[64], command[1284]; };
+struct desk_uninstall_entry { char key[260], name[64], command[1284], version[64], publisher[128]; };
 static inline int desk_launch_valid(const struct desk_launch_record *r)
 {
     const char *fields[]={r->label,r->target,r->arguments,r->directory,r->icon};

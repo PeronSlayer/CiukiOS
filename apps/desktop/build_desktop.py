@@ -29,7 +29,7 @@ ACCESSORIES = {
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
 }
-PROGRAMS = ("desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES)
+PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
 SHELL = ["sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c"]
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
@@ -56,6 +56,7 @@ def inputs():
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
                  "assets/sounds/kenney-interface/upstream.zip"))
     files.append(ROOT / "assets/brand/ciuki-logo.png")
+    files.append(ROOT / "sdk/win32/include/w32/server.h")
     files.extend(ROOT / "assets/cursors" / name for name in ("cursors.h", "README.md", "paint.h", "paint.md"))
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -146,7 +147,8 @@ def build():
     env = os.environ.copy()
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
-    sources = {"desktop": ["desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
+    sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
+               "desktop": ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
@@ -171,13 +173,13 @@ def build():
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
-    sources["control"] = ["autoplay_registry.c", "../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
     for name, files in sources.items():
-        commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"),
+        commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", *ACCESSORIES) else []),
                           *(["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),

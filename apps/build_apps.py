@@ -23,7 +23,8 @@ def validate_payloads():
     lua = load("apps_lua", ROOT / "apps/lua/build_lua.py")
     sdk = lua.validate_sdk()
     checker = lua.checker()
-    files = {}
+    files = {"/System/Win32/shell-launch": {"source": "build/apps/desktop/shell-launch",
+             "sha256": desktop["files"]["shell-launch"], "elf": desktop["elf"]["shell-launch"]}}
     for name in ("desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint", "terminal"):
         files["/Programs/" + name] = {"source": "build/apps/desktop/" + name,
                                "sha256": desktop["files"][name], "elf": desktop["elf"][name]}
