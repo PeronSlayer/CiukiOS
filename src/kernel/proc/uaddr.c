@@ -145,6 +145,7 @@ static int reserve_pages(struct uaddr *u, uint32_t base, uint32_t end)
         memset(P2V(phys), 0, PAGE_SIZE);
         *p = phys | PTE_OWN | PTE_NEW;
         u->backing++;
+        if(u->backing>u->peak_backing)u->peak_backing=u->backing;
         if (((va - base) / PAGE_SIZE + 1) % 16 == 0) kpreempt_point();
     }
     return 0;
@@ -672,6 +673,7 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
         if (!p) { remove_range(u, base, base + bytes); return -ENOMEM; }
         *p = shared->page(shared->object, off / PAGE_SIZE) | PTE_OWN | PTE_SHARED;
         u->backing++;
+        if(u->backing>u->peak_backing)u->peak_backing=u->backing;
         /* One mapping/table allocation per page, <=18 us; batch <=288 us. */
         if (!((off / PAGE_SIZE + 1) & 15u)) kpreempt_point();
     }
@@ -773,6 +775,7 @@ int ua_w32_bind(struct uaddr *u,uint32_t va,uint32_t phys,uint32_t prot,bool sha
     uint32_t *p=pte(u,va,true);if(!p)return -ENOMEM;
     if((*p&PTE_OWN)&&!(*p&PTE_SHARED))return 0;
     if(!(*p&PTE_OWN))u->backing++;
+    if(u->backing>u->peak_backing)u->peak_backing=u->backing;
     bool cow=shared&&!!(prot&0x80000000u);prot&=7;
     uint32_t value=phys|PTE_OWN|(shared?PTE_SHARED:0)|(cow?PTE_NEW:0);
     if(prot)value|=PTE_P|PTE_U|((prot&PROT_WRITE)&&!cow?PTE_W:0);

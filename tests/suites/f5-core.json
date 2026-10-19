@@ -445,6 +445,39 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-crash-qemu-t23",
+      "probe": "w32-crash",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-crash run={run_id}",
+      "timeout": 90,
+      "integration_pending": "authored, unrun: lead supplies the desktop fault fixture driver and guest evidence; host Details and rotation harnesses are implemented",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "crash"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "classes": {
+                "ge": 7
+              },
+              "files": {
+                "eq": 8
+              },
+              "stack_words": {
+                "eq": 8
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

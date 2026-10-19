@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 #include <ciuki/signal.h>
 #include <ciuki/win32.h>
+extern uint32_t w32_task_cw(const struct task *) __attribute__((weak));
 
 void fpu_fxsave(void *p);
 void fpu_fxrstor(const void *p);
@@ -103,6 +104,12 @@ void fpu_handle_nm(void)
     if (!cur->fpu_area)
         panic("#NM in a task without an FPU area (%s)", cur->name);
     restore_from(cur->fpu_valid ? cur->fpu_area : initial(cur));
+    if(!cur->fpu_valid&&cur->win32&&w32_task_cw){
+        /* Populate the lazy image using integer stores; no kernel FLDCW. */
+        save_to(cur->fpu_area);
+        *(uint16_t *)cur->fpu_area=(uint16_t)w32_task_cw(cur);
+        restore_from(cur->fpu_area);cur->fpu_valid=true;
+    }
     owner = cur;
 }
 

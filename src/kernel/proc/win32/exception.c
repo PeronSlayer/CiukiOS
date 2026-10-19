@@ -15,7 +15,8 @@ static __attribute__((noreturn)) void crash(struct proc_thread *t, struct trap_f
     t->task->fault_eip = tf->eip;
     t->process->fault_vector = tf->vector; t->process->fault_error = tf->err;
     t->process->fault_eip = tf->eip; t->process->fault_address = t->task->fault_cr2;
-    klog("[win32] crash pid=%u tid=%u status=%08x vector=%u eip=%08x", t->process->pid, t->tid, status, tf->vector, tf->eip);
+    struct ciuki_w32_context context;w32_context_capture(&context,tf);
+    w32_crash_capture(t,&context,status,t->process->name,t->process->w32_image);
     proc_stop(t->process, (int)status, 0);
     task_exit((int)status);
 }
@@ -92,6 +93,7 @@ bool w32_fault(struct trap_frame *tf, uint32_t address)
         while (n < sizeof(code) && tf->eip + n >= tf->eip &&
             ua_range(t->process->memory, tf->eip + n, 1, PROT_READ) &&
             !ua_read(t->process->memory, &code[n], tf->eip + n, 1)) n++;
+        if(w32_io_emulate(t,tf,code,n))return true;
         privileged = w32_privileged(code, n);
         sysenter = w32_sysenter(code, n);
     }

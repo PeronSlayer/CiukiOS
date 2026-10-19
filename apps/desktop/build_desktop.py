@@ -148,7 +148,7 @@ def build():
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
-               "desktop": ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
+               "desktop": ["win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}

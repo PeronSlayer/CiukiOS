@@ -55,6 +55,7 @@ class RegistryTests(unittest.TestCase):
         print(p.stdout,end='')
 
     def test_registry_public_api_errors_and_aliases(self):self.execute('basics')
+    def test_compatibility_reader_and_authorized_writer(self):self.execute('compat')
     def test_all_types_names_and_hive_limits(self):self.execute('limits')
     def test_every_torn_write_byte_and_fsync_stage(self):self.execute('faults')
     def test_restart_timer_writer_exit_and_identity_lifetime(self):self.execute('lifecycle')

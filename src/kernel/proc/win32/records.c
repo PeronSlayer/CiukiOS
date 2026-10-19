@@ -38,6 +38,8 @@ uint32_t w32_last_error(uint32_t status)
 uint32_t w32_record_size(uint32_t operation)
 {
     switch (operation) {
+    case W32_COMPAT: return sizeof(struct ciuki_w32_compat_args);
+    case W32_REPORT: return sizeof(struct ciuki_w32_report_args);
     case W32_IDENTITY: return sizeof(struct ciuki_w32_identity);
     case W32_COUNTER: return sizeof(struct ciuki_w32_counter);
     case W32_VM_ALLOC: case W32_VM_FREE: case W32_VM_PROTECT: return sizeof(struct ciuki_w32_vm);
@@ -77,11 +79,20 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     if (bytes < sizeof(struct ciuki_w32_header)) return -EINVAL;
     const struct ciuki_w32_header *h = record;
     if (h->version != 1 || h->size != bytes || h->reserved) return -EINVAL;
-    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY)return -EPERM;
+    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT)return -EPERM;
     uint32_t size = w32_record_size(h->operation);
     if (!size) return -ENOSYS;
     if (size != bytes) return -EINVAL;
     switch (h->operation) {
+    case W32_COMPAT:{const struct ciuki_w32_compat_args *a=record;
+        return !a->settings||a->timestamp||a->image_size||a->file_size||
+            (a->action!=1&&a->action!=2)||a->bytes!=(a->action==1?65u:sizeof(struct ciuki_w32_compat))||
+            (a->action==2&&(a->source||a->source_bytes))?-EINVAL:0;}
+    case W32_REPORT:{const struct ciuki_w32_report_args *a=record;
+        if(a->result||a->action<1||a->action>5)return -EINVAL;
+        if(a->action==W32_REPORT_NEXT)return a->code||a->context||a->module||a->base||!a->buffer||a->bytes!=sizeof(struct ciuki_w32_fault)?-EINVAL:0;
+        if(a->action==W32_REPORT_CLOSE||a->action==W32_REPORT_REASON)return a->context||a->module||a->base||a->buffer||a->bytes?-EINVAL:0;
+        return a->buffer||a->bytes||(a->action==W32_REPORT_CRASH&&!a->context)?-EINVAL:0;}
     case W32_IDENTITY: case W32_COUNTER:
         return zero_bytes((const uint8_t *)record + sizeof(*h), bytes - sizeof(*h)) ? 0 : -EINVAL;
     case W32_VM_ALLOC: case W32_VM_FREE: case W32_VM_PROTECT: {

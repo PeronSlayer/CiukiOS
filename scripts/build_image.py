@@ -437,6 +437,7 @@ def win32_payloads(folder=None):
     require(any(d["name"] == "ntdll.dll" for d in store["dlls"]), "missing builtin ntdll")
     binary=struct.pack("<II", 1, len(store["dlls"]))
     sources={"/WINDOWS/SYSTEM/builtin-store.json": manifest,
+             "/System/Win32/SHIMS.INI": ROOT / "assets/win32/SHIMS.INI",
              "/WINDOWS/SYSTEM/BUILTIN.BIN": folder / "BUILTIN.BIN",
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",
              "/system/licenses/WIN32-NOTICE.txt": ROOT / "sdk/win32/NOTICE.md"}
@@ -452,7 +453,7 @@ def win32_payloads(folder=None):
         require(Path(name).name == name, "fixture path")
         require(sha256(folder / "fixtures" / name) == digest, "fixture hash")
         sources["/System/Win32/Fixtures/" + name]=folder / "fixtures" / name
-    return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
+    return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/WINDOWS/CRASH", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
         "manifest_sha256": sha256(manifest), "builtins": store["dlls"],
         "msvcrt_policy": store.get("msvcrt_policy")}
 

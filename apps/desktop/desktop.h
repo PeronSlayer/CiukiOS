@@ -151,6 +151,9 @@ struct desktop {
     int (*v3_restart)(struct desktop *, uint32_t pid, uint32_t flags);
     uint32_t v3_dialog_pid, v3_restart_flags;
     int v3_dialog_kind; /* 1 crash, 2 restart confirmation */
+    int v3_details_open;
+    char v3_details[640];
+    int (*v3_fault_close)(uint32_t);
     uint32_t width, height, *pixels;
     const uint32_t *portrait;
     /* Shell icons (desktop.c: libdeskui's Tango store, icon_map.c keys such as
@@ -330,6 +333,8 @@ void desk_v3_restack(struct desktop *);
 void desk_v3_reactivate(struct desktop *, int);
 int desk_v3_mode(const struct ciuki_display_info *, unsigned w, unsigned h, unsigned bpp);
 int desk_v3_dialog_accept(struct desktop *);
+struct ciuki_w32_fault;
+void desk_w32_fault_dialog(struct desktop *, const struct ciuki_w32_fault *);
 void desk_links_refresh(struct desktop *);
 int desk_link_launch(struct desktop *, unsigned);
 int desk_ignore_sigpipe(void);

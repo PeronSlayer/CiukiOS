@@ -61,6 +61,23 @@ void klog(const char *fmt, ...)
     va_start(ap, fmt); log_line(fmt, ap, false, false); va_end(ap);
 }
 
+/* Complete F5 records exceed the ordinary log's 256-byte buffer. */
+void w32_log(const char *fmt, ...)
+{
+    char buf[1536];
+    va_list ap;va_start(ap,fmt);
+    int n=kvsnprintf(buf,sizeof(buf)-1,fmt,ap);va_end(ap);
+    if(n<0)return;
+    if(n>(int)sizeof(buf)-2)n=sizeof(buf)-2;
+    buf[n++]='\n';buf[n]=0;
+    /* Keep all bounded boot-log slices adjacent even if an IRQ logs between
+     * them. This is at most 1535 bytes, only for process start/crash. */
+    uint32_t capture_flags=irq_save();bootlog_capture(buf,(size_t)n);irq_restore(capture_flags);
+    if(blackbox_capture)blackbox_capture(buf,(size_t)n);
+    uint32_t f=serial_evidence_begin?serial_evidence_begin((size_t)n+1):irq_save();
+    serial_write(buf,(size_t)n);irq_restore(f);console_write(buf,(size_t)n);
+}
+
 void klog_periodic(const char *fmt, ...)
 {
     va_list ap;

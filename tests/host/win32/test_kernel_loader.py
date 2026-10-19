@@ -67,7 +67,7 @@ class KernelLoaderTests(unittest.TestCase):
 
     def test_stub_records_have_process_budget_and_keep_fatal_load_diagnostics(self):
         out=self.command('diagnostics',self.images/'console.exe')
-        self.assertEqual(out.count('[win32] stub fixture.dll!FixtureMissing'),64)
+        self.assertEqual(out.count('[win32] stub fixture.dll!FixtureMissing'),1)
         self.assertIn('[win32] load check=missing-export',out)
         self.assertIn('pid=2 tid=1',out)
 

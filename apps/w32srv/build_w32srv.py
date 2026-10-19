@@ -18,7 +18,7 @@ def module(name,path):
 
 def inputs():
     paths=[p for d in (ROOT/'apps/w32srv',ROOT/'sdk/win32') for p in d.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
-    paths += [ROOT/'scripts/win32/facades.py',ROOT/'scripts/win32/stubs.py',ROOT/'scripts/win32/census.py',
+    paths += [ROOT/'scripts/win32/facades.py',ROOT/'scripts/win32/stubs.py',ROOT/'scripts/win32/stub_signatures.py',ROOT/'scripts/win32/census.py',
               ROOT/'docs/design/research/win32-layer-2026-10-14.md', ROOT/'sdk/libreg/casefold.h',ROOT/'build/tools/ciuki-sdk/manifest.json',
               ROOT/'src/kernel/include/ciuki/abi.h']
     return {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}

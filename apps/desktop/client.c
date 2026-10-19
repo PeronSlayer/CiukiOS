@@ -1347,10 +1347,39 @@ static void v3_place(struct desktop *d, int i, const struct desk_packet *p)
 int desk_v3_dialog_accept(struct desktop *d)
 {
     int result=0;
-    if (d->v3_dialog_kind==1) result=d->terminate ? d->terminate(d->v3_dialog_pid,SIGKILL) : -ENOSYS;
+    if (d->v3_dialog_kind==1) result=d->v3_fault_close ? d->v3_fault_close(d->v3_dialog_pid) : d->terminate ? d->terminate(d->v3_dialog_pid,SIGKILL) : -ENOSYS;
     else if (d->v3_dialog_kind==2) result=d->v3_restart ? d->v3_restart(d,d->v3_dialog_pid,d->v3_restart_flags) : -ENOSYS;
     d->v3_dialog_kind=0; d->v3_dialog_pid=0;
     return result;
+}
+#include <ciuki/w32_diagnostics.h>
+void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
+{
+    char text[320];
+    d->v3_details_open=0;d->v3_details[0]=0;d->v3_dialog_pid=f->pid;
+    if(f->kind==W32_REPORT_CRASH){
+        d->v3_dialog_kind=1;
+        snprintf(text,sizeof(text),"%.63s has performed an illegal operation and will be shut down.",f->exe);
+        int n=snprintf(d->v3_details,sizeof(d->v3_details),
+            "Exception: %08x\nModule: %.63s + %08x\nEIP: %08x\nEAX: %08x  EBX: %08x  ECX: %08x\nEDX: %08x  ESI: %08x  EDI: %08x\nEBP: %08x  ESP: %08x  EFLAGS: %08x\nStack:",
+            f->code,f->module,f->offset,f->eip,f->registers[0],f->registers[1],f->registers[2],f->registers[3],f->registers[4],f->registers[5],f->registers[6],f->registers[7],f->registers[8]);
+        for(unsigned i=0;i<8&&n>0&&(unsigned)n<sizeof(d->v3_details);i++){
+            int k=f->valid&(1u<<i)?snprintf(d->v3_details+n,sizeof(d->v3_details)-(unsigned)n,"%s%08x",i%4?" ":"\n",f->stack[i]):
+                snprintf(d->v3_details+n,sizeof(d->v3_details)-(unsigned)n,"%s????????",i%4?" ":"\n");n+=k;
+        }
+        desk_shell_message(d,"Windows program error",text,1);return;
+    }
+    d->v3_dialog_kind=3;
+    switch(f->code){
+    case W32_REFUSE_MSI:snprintf(text,sizeof(text),"This program uses Windows Installer, which CiukiOS does not support");break;
+    case W32_REFUSE_DRIVER:snprintf(text,sizeof(text),"This program requires a Windows device driver, which CiukiOS does not support.");break;
+    case W32_REFUSE_RUNTIME:snprintf(text,sizeof(text),"This program requires a runtime which CiukiOS does not support.");break;
+    case W32_REFUSE_MISSING_DLL:snprintf(text,sizeof(text),"The dynamic link library %.63s could not be found in the specified path.",f->module);break;
+    case W32_REFUSE_EXPORT:snprintf(text,sizeof(text),"The %.63s file is linked to missing export %.63s.",f->exe,f->module);break;
+    case W32_REFUSE_SERVER:snprintf(text,sizeof(text),"The Windows program server is not available. Please try again.");break;
+    default:snprintf(text,sizeof(text),"%.63s is not a valid Win32 application.",f->exe);break;
+    }
+    desk_shell_message(d,"Error Starting Program",text,1);
 }
 int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
 {
@@ -1513,10 +1542,9 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         d->v3_dialog_kind=p.opcode==DESK_V3_CRASH ? 1 : 2; d->v3_dialog_pid=c->pid; d->v3_restart_flags=p.flags;
         char text[320];
         if (p.opcode==DESK_V3_CRASH) {
-            const char *type=p.flags==0xc0000005u ? "Access violation" : p.flags==0xc0000094u ? "Integer divide by zero" :
-                p.flags==0xc000001du ? "Illegal instruction" : p.flags==0xc0000096u ? "Privileged instruction" :
-                p.flags==0xc00000fdu ? "Stack overflow" : "Unhandled exception";
-            snprintf(text,sizeof(text),"The program has stopped.\n%s (0x%08x)\nModule: %.63s\nAddress: 0x%08x",type,p.flags,p.title,p.values[0]);
+            struct ciuki_w32_fault fault={.kind=W32_REPORT_CRASH,.pid=c->pid,.code=p.flags,.eip=p.values[0]};
+            snprintf(fault.exe,sizeof(fault.exe),"%s",p.title);snprintf(fault.module,sizeof(fault.module),"%s",p.title);
+            desk_w32_fault_dialog(d,&fault);break;
         }
         else snprintf(text,sizeof(text),"Setup wants to restart Windows. CiukiOS will close all Windows programs and finish the installation.");
         desk_shell_message(d,p.opcode==DESK_V3_CRASH ? "Windows program error" : "Restart Windows",text,p.opcode==DESK_V3_CRASH);

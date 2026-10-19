@@ -34,7 +34,7 @@ class DesktopV3Tests(unittest.TestCase):
         (ROOT / 'build/codex/f5-09-v3.log').write_text(result.stdout + result.stderr)
         record = {}
         for theme in ('ciuki-blue', 'platinum'):
-            for case in ('overlapped', 'popup', 'tool', 'topmost', 'alt-tab', 'alt-tab-committed', 'alt-enter', 'ctrl-alt-del', 'programs-folder', 'crash', 'restart'):
+            for case in ('overlapped', 'popup', 'tool', 'topmost', 'alt-tab', 'alt-tab-committed', 'alt-enter', 'ctrl-alt-del', 'programs-folder', 'crash', 'crash-details', 'restart',*[f'refuse-{i}' for i in range(1,8)]):
                 name = f'{theme}-{case}'
                 data = (out / (name + '.xrgb')).read_bytes()
                 self.assertEqual(len(data), 800 * 600 * 4)

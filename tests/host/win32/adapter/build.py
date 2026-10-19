@@ -69,6 +69,7 @@ def build_model(out,main=None):
     binary=out/'w32model'
     run(['clang','-DW32_HOST_MODEL','-ffreestanding','-fno-builtin','-fno-omit-frame-pointer',
          '-O1','-Wall','-Wextra','-Werror','-pthread','-I'+str(CORE/'include'),'-I'+str(ADAPTER),
+         '-I'+str(ROOT/'src/kernel/include'),
          *sources,ADAPTER/'model.c',main or ADAPTER/'main.c','-o',binary])
     return binary
 

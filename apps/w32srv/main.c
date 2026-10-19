@@ -41,6 +41,7 @@ int main(int argc,char **argv)
     struct wr_io io;wr_posix_io(&io,dir);struct wr_server s;
     if(!wr_init(&s,&io,now())){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
     if(seed){uint32_t e=wr_flush(&s);wr_destroy(&s);return e?1:0;}
+    s.compat_writer_pid=(uint32_t)getppid();
 #ifdef __CIUKIOS__
     struct ciuki_display_info display={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(display)};
     if(!ciuki_display_query(&display)&&!wr_defaults(&s,display.width,display.height,display.bpp)){wr_destroy(&s);return 1;}

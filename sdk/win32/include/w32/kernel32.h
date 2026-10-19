@@ -20,10 +20,17 @@ typedef struct {
   DWORD size, major, minor, build, platform;
   WCHAR csd[128];
 } OSVERSIONINFOW;
+typedef struct {OSVERSIONINFOA base;uint16_t service_major,service_minor,suite;uint8_t product,reserved;} OSVERSIONINFOEXA;
+typedef struct {OSVERSIONINFOW base;uint16_t service_major,service_minor,suite;uint8_t product,reserved;} OSVERSIONINFOEXW;
 typedef struct {
   DWORD length, load, total_phys, avail_phys, total_pagefile, avail_pagefile,
       total_virtual, avail_virtual;
 } MEMORYSTATUS;
+typedef struct {
+  DWORD length, load;
+  uint64_t total_phys, avail_phys, total_pagefile, avail_pagefile,
+      total_virtual, avail_virtual, avail_extended;
+} MEMORYSTATUSEX;
 typedef struct {
   uint16_t architecture, reserved;
   DWORD page_size;

@@ -21,7 +21,8 @@ int desk_w32_identify(const char *path)
 {
     FILE *f=fopen(path,"rb");if(!f)return -errno;
     uint8_t h[64];size_t n=fread(h,1,sizeof(h),f);
-    int result=-ENOEXEC;
+    size_t suffix=strlen(path);
+    int result=suffix>=4&&!strcasecmp(path+suffix-4,".msi")?DESK_W32_PE:-ENOEXEC;
     if(n>=4 && !memcmp(h,"\177ELF",4)) result=DESK_W32_ELF;
     else if(n>=2 && h[0]=='M' && h[1]=='Z') {
         result=DESK_W32_DOS;

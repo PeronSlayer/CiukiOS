@@ -226,6 +226,22 @@ static void collect_deleted(struct wr_server *s)
         else { *at = k->next; free_values(k->values); free(k->name); free(k); }
     }
 }
+static int compat_protected(struct wr_server *s,struct wr_key *k,const char *path,int ancestor)
+{
+    if(k->hive)return 0;
+    const struct wr_key *chain[128];unsigned count=0;
+    for(struct wr_key *p=k;p&&p->parent;p=p->parent){if(count==128)return 1;chain[count++]=p;}
+    const char *parts[]={"Software","CiukiOS","Win32","AppCompat"};unsigned depth=0;
+    while(count){if(!wr_equal(chain[--count]->name,parts[depth++]))return 0;if(depth==4)return 1;}
+    while(*path=='\\')path++;
+    while(*path){
+        const char *end=strchr(path,'\\');size_t n=end?(size_t)(end-path):strlen(path);
+        char component[W32R_NAME];if(!n||n>=sizeof(component))return 0;
+        memcpy(component,path,n);component[n]=0;if(!wr_equal(component,parts[depth++]))return 0;
+        if(depth==4)return 1;if(!end)break;path=end+1;
+    }
+    (void)s;return ancestor&&depth<4;
+}
 uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_t n, void *output, size_t cap, size_t *used)
 {
     struct w32r_request a; struct w32r_reply r = {.version = W32R_VERSION};
@@ -240,6 +256,15 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
     const void *data = name + a.name_bytes;
     if (path[a.path_bytes - 1] || name[a.name_bytes - 1] ||
         memchr(path, 0, a.path_bytes - 1) || memchr(name, 0, a.name_bytes - 1) || !wr_name(name)) { r.error = 87; goto done; }
+    if(a.op==W32R_COMPAT){
+        struct wr_key *k=s->roots[0];
+        const char *parts[]={"Software","CiukiOS","Win32","AppCompat"};
+        for(unsigned i=0;k&&i<4;i++)k=wr_child(s,k,parts[i]);
+        struct wr_value *v=k?value(k,"Database"):NULL;
+        if(!v)r.error=2;
+        else if(v->type!=3||v->bytes>65536||cap<sizeof(r)+v->bytes)r.error=13;
+        else {r.type=3;r.data_bytes=v->bytes;memcpy(bytes,v->data,v->bytes);}goto done;
+    }
     if (a.op >= W32R_ATOM_ADD) {
         if (cap < sizeof(r) + W32R_DATA + W32R_NAME) { r.error = 87; goto done; }
         r.error = wr_directory_call(s, pid, &a, name, data, &r, bytes); goto done;
@@ -261,6 +286,11 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         goto done;
     }
     r.error = resolve(s, pid, a.key, required, &k); if (r.error) goto done;
+    if(pid!=s->compat_writer_pid &&
+       (a.op==W32R_CREATE||a.op==W32R_SET||a.op==W32R_DELETE_VALUE||a.op==W32R_DELETE_KEY)&&
+       compat_protected(s,k,(a.op==W32R_CREATE||a.op==W32R_DELETE_KEY)?path:"",a.op==W32R_DELETE_KEY)){
+        r.error=5;goto done;
+    }
     if (a.op == W32R_OPEN || a.op == W32R_CREATE) {
         if (a.flags || a.type || (a.access & ~0x000f003fu)) { r.error = 87; goto done; }
         if (a.op == W32R_OPEN && !*path && (a.key & 0x80000000u)) { r.key = a.key; goto done; }

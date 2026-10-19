@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright 2026 CiukiOS contributors. */
 #include <w32/ldr.h>
+#include <w32/shims.h>
 enum { M_MAPPING = 1, M_BOUND, M_ATTACHING, M_READY };
 static int error(struct w32_loader *l, ULONG code, const char *reason, const char *module,
                  const char *symbol) {
@@ -148,6 +149,14 @@ static int locate(struct w32_loader *l, const char *name, char *path, struct w32
     if (!dllname(base, name))
         return error(l, 193, "module-name-limit", name, 0);
     *builtin = 0;
+    if(!w32_stricmp(base,"mscoree.dll")){
+        w32_report_refusal(W32_REFUSE_RUNTIME,base,193);return error(l,193,"unsupported-runtime",base,0);
+    }
+    if(!w32_stricmp(base,"msi.dll")||!w32_stricmp(base,"msiexec.exe")){
+        w32_report_refusal(W32_REFUSE_MSI,base,120);
+        return error(l,120,"msi",base,0);
+    }
+    if(!fullpath(name)&&w32_shim_native(base)&&open_join(l,l->exe_directory,base,path,file))return 1;
     for (ULONG i = 0; i < l->builtin_count; i++)
         if (!w32_stricmp(l->builtins[i].name, base)) {
             *builtin = &l->builtins[i];
@@ -864,9 +873,20 @@ NTSTATUS w32_ldr_start_process(struct w32_loader *l, const char *exe, struct w32
     if (loaded)
         return STATUS_SUCCESS;
     char message[W32_PATH_MAX * 2];
-    if (w32_ldr_start_message(l, exe, message, sizeof(message)))
-        w32_diag("dialog", name, message);
+    (void)message;
+    uint32_t refusal=l->error.code==126?W32_REFUSE_MISSING_DLL:l->error.code==127?W32_REFUSE_EXPORT:
+        l->error.code==120?W32_REFUSE_MSI:W32_REFUSE_IMAGE;
+    if(l->error.reason&&(!w32_strcmp(l->error.reason,"unsupported-runtime")||!w32_strcmp(l->error.reason,"machine-not-i386")||!w32_strcmp(l->error.reason,"optional-magic-not-pe32")||!w32_strcmp(l->error.reason,"unsupported-subsystem")))refusal=W32_REFUSE_RUNTIME;
+    char failure_module[64]={0};const char *failed=basename(l->error.module);unsigned count=0;
+    while(failed[count]&&count+1<sizeof(failure_module)){failure_module[count]=failed[count];count++;}
+    if(refusal==W32_REFUSE_EXPORT){
+        unsigned used=w32_strlen(failure_module);
+        if(used+1<sizeof(failure_module)){failure_module[used++]=':';unsigned i=0;while(l->error.symbol[i]&&used+1<sizeof(failure_module))failure_module[used++]=l->error.symbol[i++];failure_module[used]=0;}
+    }
+    w32_report_refusal(refusal,failure_module,l->error.code);
     switch (l->error.code) {
+    case 120:
+        return STATUS_NOT_IMPLEMENTED;
     case 126:
         return STATUS_DLL_NOT_FOUND;
     case 127:

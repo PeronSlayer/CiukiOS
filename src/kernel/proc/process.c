@@ -10,6 +10,7 @@
 extern void w32_process_cleanup(struct process *) __attribute__((weak));
 extern void w32_process_died(struct process *) __attribute__((weak));
 extern void w32_thread_died(struct proc_thread *) __attribute__((weak));
+extern void w32_process_stopping(struct process *, uint32_t) __attribute__((weak));
 
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
@@ -154,7 +155,7 @@ void proc_set_name(struct process *p, const char *path)
     unsigned n = 0;
     memset(p->name, 0, sizeof(p->name));
     for (const char *c = path; c && *c; c++) {
-        if (*c == '/') { n = 0; memset(p->name, 0, sizeof(p->name)); continue; }
+        if (*c == '/' || *c == '\\') { n = 0; memset(p->name, 0, sizeof(p->name)); continue; }
         if (n < sizeof(p->name) - 1)
             p->name[n++] = *c >= 32 && *c <= 126 ? *c : '?';
     }
@@ -249,6 +250,7 @@ void proc_stop(struct process *p, int raw_code, uint32_t signal)
 {
     if (p == &supervisor || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE)
         return;
+    if(w32_process_stopping)w32_process_stopping(p,signal);
     p->state = PROC_STOPPING;            /* no new syscall/creation can publish */
     p->raw_exit = raw_code;
     p->status = signal ? (int32_t)(signal & 0x7f) : (raw_code & 0xff) << 8;

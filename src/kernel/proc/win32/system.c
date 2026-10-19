@@ -37,8 +37,10 @@ uint32_t w32_system_call(struct proc_thread *t,
     struct process *p = o ? proc_find(o->id) : 0;
     if (!p || o->signalled)
       a->error = 6;
-    else
+    else {
+      if(p->w32)p->w32->exit_reason=W32_EXIT_KILLED;
       proc_stop(p, (int)a->value, 0);
+    }
   } else if (a->action == W32_S_TERMINATE_THREAD) {
     struct w32_object *o = w32_lookup(t, a->handle, W32_OBJ_THREAD);
     struct proc_thread *target = 0;

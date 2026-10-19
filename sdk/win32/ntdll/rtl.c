@@ -88,6 +88,7 @@ W32_NORETURN void w32_terminate(uint32_t code) {
 void w32_stub_hit(volatile ULONG *once, const char *dll, const char *name) {
     if (!__atomic_exchange_n(once, 1, __ATOMIC_RELAXED))
         w32_diag("stub", dll, name);
+    NtCurrentTeb()->LastErrorValue=120;
     RtlRaiseStatus(STATUS_NOT_IMPLEMENTED);
 }
 /* Compiler-emitted freestanding aggregate copies have these cdecl names. */

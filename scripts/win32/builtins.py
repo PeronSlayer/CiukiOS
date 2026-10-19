@@ -53,6 +53,9 @@ def build(out=None):
     from scripts.win32 import fixtures
     fixture_source=ROOT/'build/host/win32/image-fixtures'
     hashes=fixtures.build(fixture_source)
+    # Same authored PE bytes under a separate, explicitly shimmed identity.
+    shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
+    hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()
     (out/'fixtures').mkdir(exist_ok=True)
     for name in hashes:shutil.copyfile(fixture_source/name,out/'fixtures'/name)
     (out/'fixtures.json').write_text(json.dumps({'schema':1,'files':hashes},sort_keys=True,indent=2)+'\n')
