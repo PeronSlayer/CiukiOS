@@ -237,7 +237,7 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
                  uint32_t a, uint32_t b, uint32_t c)
 {
     static const uint8_t limits[DOSVM_TRACE_COUNT] = {32, 24, 10, 32, 8, 64, 10, 1};
-    if (!(g_boot.flags & CBI_F_VERBOSE)) return;
+    if (kind != DOSVM_TRACE_FAULT && !(g_boot.flags & CBI_F_VERBOSE)) return;
     if (kind == DOSVM_TRACE_FLAGS) dosvm_boundary(v, f, a ? "if_restore" : b ? "if_arm" : "cli");
     if (kind == DOSVM_TRACE_FLAGS && !v->trace.timer_programmed && !a && !v->dpmi.if_armed) {
         struct dpmi_seg cs;
@@ -313,11 +313,14 @@ void dosvm_trace(struct dosvm *v, enum dosvm_trace_kind kind, const struct v86_f
                  v->monitor.shadow || v->dpmi.shadow, pic.irr, pic.isr, pic.imr);
         break;
     }
-    case DOSVM_TRACE_FAULT:
-        dosvm_diag(v, "group=vm_fault_pc vm=%u gen=%u pm=%u vec=%u cs=%04x eip=%08x linear=%08x address=%08x error=%x",
+    case DOSVM_TRACE_FAULT: {
+        const struct dpmi_record *r = v->dpmi.depth ? &v->dpmi.rec[v->dpmi.depth - 1] : 0;
+        rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_fault_pc vm=%u gen=%u pm=%u vec=%u cs=%04x eip=%08x linear=%08x address=%08x error=%x depth=%u kind=%u flags=%x",
                  v->info.key.id, v->info.key.generation, pm, v->info.fault_vector,
-                 f->tf.cs & 0xFFFF, f->tf.eip, v->info.fault_eip, v->info.fault_address, v->info.fault_error);
+                 f->tf.cs & 0xFFFF, f->tf.eip, v->info.fault_eip, v->info.fault_address, v->info.fault_error,
+                 v->dpmi.depth, r ? r->kind : 0, r ? r->flags : 0);
         break;
+    }
     default: break;
     }
 }
@@ -1027,7 +1030,11 @@ static void worker(void *arg)
     klog("[dosvm] lifecycle stage=stop vm=%u generation=%u reason=%u vector=%u eip=%08x",
          v->info.key.id,v->info.key.generation,v->info.reason,v->info.fault_vector,v->info.fault_eip);
     uint8_t code[8] = {0};
-    if (v->info.reason == DOSVM_FAULT) dosvm_read(v, v->info.fault_eip, code, sizeof(code));
+    if (v->info.reason == DOSVM_FAULT) {
+        /* Also cover worker-side delivery failures without a trap trace. */
+        dosvm_trace(v, DOSVM_TRACE_FAULT, &v->frame, 0, 0, 0);
+        dosvm_read(v, v->info.fault_eip, code, sizeof(code));
+    }
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_stop vm=%u generation=%u reason=%u vector=%u eip=%08x address=%08x error=%x code=%02x%02x%02x%02x%02x%02x%02x%02x",
              v->info.key.id, v->info.key.generation, v->info.reason,
              v->info.fault_vector, v->info.fault_eip, v->info.fault_address, v->info.fault_error,
@@ -1036,12 +1043,15 @@ static void worker(void *arg)
         /* Guest registers and stack top of the last frame: the INT frame
          * and return addresses name the DOS path without a build-time trace. */
         const struct v86_frame *s = &v->frame;
+        char row[240];
         /* A DPMI frame shows selectors and the protected-mode CS:EIP. */
-        if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_fault pm=%u ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x cs=%04x ip=%08x",
+        ksnprintf(row, sizeof(row), "group=vm_fault pm=%u ax=%04x bx=%04x cx=%04x dx=%04x si=%04x di=%04x bp=%04x ds=%04x es=%04x ss=%04x sp=%04x cs=%04x ip=%08x",
                  v->frame_pm, s->tf.eax & 0xFFFF, s->tf.ebx & 0xFFFF, s->tf.ecx & 0xFFFF, s->tf.edx & 0xFFFF,
                  s->tf.esi & 0xFFFF, s->tf.edi & 0xFFFF, s->tf.ebp & 0xFFFF,
                  (v->frame_pm ? s->tf.ds : s->ds) & 0xFFFF, (v->frame_pm ? s->tf.es : s->es) & 0xFFFF,
                  s->tf.user_ss & 0xFFFF, s->tf.user_esp & 0xFFFF, s->tf.cs & 0xFFFF, s->tf.eip);
+        if (v->info.reason == DOSVM_FAULT) rec_diag_disk_bootlog(dosvm_probe(v), "%s", row);
+        else if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "%s", row);
         uint32_t top = ((s->tf.user_ss & 0xFFFF) << 4) + (s->tf.user_esp & 0xFFFF);
         struct dpmi_seg stack;
         if (v->frame_pm && dpmi_seg(v, (uint16_t)s->tf.user_ss, &stack))
@@ -1049,8 +1059,10 @@ static void worker(void *arg)
         for (unsigned part = 0; part < 3; part++) {
             uint16_t w[16] = {0};
             dosvm_read(v, top + part * sizeof(w), w, sizeof(w));
-            if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_stack part=%u words=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x",
+            ksnprintf(row, sizeof(row), "group=vm_stack part=%u words=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x",
                      part, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15]);
+            if (!part && v->info.reason == DOSVM_FAULT) rec_diag_disk_bootlog(dosvm_probe(v), "%s", row);
+            else if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "%s", row);
         }
     }
     task_exit(v->info.reason);

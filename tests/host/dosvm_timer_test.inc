@@ -132,7 +132,8 @@ static void test_timer_diagnostics(void)
     v->info.key.generation = UINT32_MAX;
     v->info.fault_vector = 14; v->info.fault_eip = v->info.fault_address = v->info.fault_error = UINT32_MAX;
     dosvm_trace(v, DOSVM_TRACE_FAULT, &cur, 0, 0, 0);
-    CHECK(strstr(last_record, "group=vm_fault_pc") && strstr(last_record, "eip=") && strstr(last_record, "linear=ffffffff"));
+    CHECK(strstr(fault_pc_record, "group=vm_fault_pc") && strstr(fault_pc_record, "eip=") &&
+          strstr(fault_pc_record, "linear=ffffffff") && strstr(fault_pc_record, "depth=0 kind=0 flags=0"));
     v->info.key.generation = gen;
     before = records; g_boot.flags = 0;
     dosvm_trace(v, DOSVM_TRACE_FLAGS, &cur, 1, 1, 0);

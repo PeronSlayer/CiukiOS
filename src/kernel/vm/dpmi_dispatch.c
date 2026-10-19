@@ -260,16 +260,36 @@ int dpmi_enter_pm_handler(struct dosvm *v, struct v86_frame *f, uint8_t vector, 
 
 /* The interrupted context comes from the kernel record, never from the
  * guest stack, so the handler may IRET from any stack (handlers that copy
- * their frame to a private stack). A return without the matching record
- * is forged or stale and ends the VM. */
+ * their frame to a private stack). IRQRET can skip abandoned nested records,
+ * but only to this client's newest host-owned hardware continuation. With
+ * no such continuation the return is forged or stale and ends the VM. */
 static int pmint_return(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
     struct dpmi_record *r = d->depth ? &d->rec[d->depth - 1] : 0;
-    if (!r || r->kind != DPMI_REC_PMINT ||
+    if (!r || r->client != d->clients || r->kind != DPMI_REC_PMINT ||
         (r->flags & DPMI_RF_HWINT ? f->tf.eip != DPMI_PM_IRQRET : f->tf.eip != DPMI_PM_SOFTRET)) {
-        d->stats.stale++;
-        return -EFAULT;
+        unsigned depth = d->depth;
+        r = 0;
+        if (f->tf.eip == DPMI_PM_IRQRET) {
+            for (unsigned n = depth; n; n--) {
+                struct dpmi_record *candidate = &d->rec[n - 1];
+                if (candidate->client != d->clients || !(candidate->flags & DPMI_RF_HWINT)) continue;
+                r = candidate;
+                for (unsigned i = n; i < depth; i++) dosvm_isr_end(v, &d->rec[i]);
+                dpmi_unwind(v, n);
+                v->perf.isr_late_return++;
+                uint64_t tick = g_ticks;
+                if (!v->perf.isr_late_logged || tick - v->perf.isr_late_tick >= 1000) {
+                    v->perf.isr_late_logged = true; v->perf.isr_late_tick = tick;
+                    klog("[dosvm] isr late_return vm=%u gen=%u depth=%u skipped=%u cs=%04x eip=%08x",
+                         v->info.key.id, v->info.key.generation, depth, depth - n,
+                         f->tf.cs & 0xFFFF, f->tf.eip);
+                }
+                break;
+            }
+        }
+        if (!r) { d->stats.stale++; return -EFAULT; }
     }
     struct dpmi_record rec = *r;
     struct v86_frame result = *f;
@@ -933,9 +953,9 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     f->tf.eflags |= V86_TF;
 }
 
-/* F3-44: reconcile monitor obligations, never replay an interrupted CPU
- * frame on inferred return. The client may have edited its IRET target.
- * A mere move to a private stack is not proof. Keep timed-out records as
+/* F3-45: only an exact interrupted context proves return outside the host
+ * stubs. A flat selector can cover multiple private stacks, so even a move
+ * above the original frame is not proof. Keep timed-out records as
  * continuations so a late host-owned trampoline still has its exact state.
  * Research/limits: execution-abi.md and f3-42-guest-isr-latency.md. */
 void dpmi_irq_resync(struct dosvm *v, struct v86_frame *f)
@@ -947,9 +967,6 @@ void dpmi_irq_resync(struct dosvm *v, struct v86_frame *f)
     if ((v->frame_pm && (uint16_t)f->tf.cs == DPMI_HOST_CS) ||
         (!v->frame_pm && f->tf.cs == 0xF000 &&
          (f->tf.eip == DPMI_RM_RETURN || f->tf.eip == DPMI_RM_RETURN + 2))) return;
-    struct dpmi_seg ss = {0};
-    bool stack_ok = !v->frame_pm || dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss);
-    uint32_t sp = v->frame_pm && ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
     for (unsigned n = d->depth; n; n--) {
         struct dpmi_record *r = &d->rec[n - 1];
         if (!(r->flags & DPMI_RF_HWINT) || (!r->isr_measured && !r->isr_expired) ||
@@ -957,18 +974,14 @@ void dpmi_irq_resync(struct dosvm *v, struct v86_frame *f)
         bool returned = r->saved_pm == v->frame_pm && f->tf.cs == r->saved.tf.cs &&
             f->tf.eip == r->saved.tf.eip && f->tf.user_ss == r->saved.tf.user_ss &&
             f->tf.user_esp == r->saved.tf.user_esp;
-        bool consumed = stack_ok && r->isr_pm == v->frame_pm &&
-            (uint16_t)f->tf.user_ss == r->isr_ss &&
-            (v->frame_pm ? ss.base == r->isr_stack_base && ss.big == r->isr_stack_big : true) &&
-            sp >= r->isr_stack_end;
-        if (returned || consumed) {
+        if (returned) {
             bool vif = r->vif;
             if_recovery_end(v, f);
             dpmi_return_cancel(v);
             for (unsigned i = n - 1; i < d->depth; i++) dosvm_isr_end(v, &d->rec[i]);
             dpmi_unwind(v, n - 1);
-            /* An edited IRET can leave ordinary code on the host stack.
-             * Preserve its live bytes when the next IRQ allocates a frame. */
+            /* Preserve the exact returned context's live host-stack bytes
+             * when the next IRQ allocates a frame. */
             dpmi_lock_below(v, f);
             d->decode_valid = d->decode_stack_valid = d->decode_ds_valid = false;
             v->perf.isr_retired++;
@@ -1352,13 +1365,6 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     else e = dpmi_enter_pm_handler(v, f, vector, DPMI_RF_HWINT);
     if (!e) {
         struct dpmi_record *r = &d->rec[d->depth - 1];
-        r->isr_pm = v->frame_pm;
-        r->isr_ss = (uint16_t)f->tf.user_ss;
-        struct dpmi_seg ss = {0};
-        r->isr_stack_big = v->frame_pm && dpmi_seg(v, r->isr_ss, &ss) && ss.big;
-        r->isr_stack_base = v->frame_pm ? ss.base : (uint32_t)r->isr_ss << 4;
-        uint32_t sp = r->isr_stack_big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
-        r->isr_stack_end = sp + (v->frame_pm ? 3 * dpmi_width(v) : 6);
         dosvm_isr_begin(v, r, (unsigned)irq);
         dosvm_pic_ack(&v->monitor);
         v->monitor.stats.reflected_irqs++;

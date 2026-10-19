@@ -72,11 +72,9 @@ struct dpmi_vec { uint32_t off; uint16_t sel; };
 struct dpmi_record {
     uint8_t kind, client, vector, flags, op;
     bool saved_pm, vif;
-    bool isr_measured, isr_expired, isr_pm, isr_stack_big;
+    bool isr_measured, isr_expired;
     uint8_t isr_irq;
     uint64_t isr_tsc, isr_tick;
-    uint16_t isr_ss;
-    uint32_t isr_stack_base, isr_stack_end;
     bool decode_valid;
     uint16_t decode_cs;
     uint32_t decode_eip;             /* interrupted boundary proof, HWINT only */

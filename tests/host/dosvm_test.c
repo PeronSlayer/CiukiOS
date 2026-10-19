@@ -341,6 +341,8 @@ static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
 static char tracker_record[256], vm_start_record[256];
+static char fault_pc_record[256], fault_regs_record[256], fault_stack_record[256];
+static unsigned fault_pc_records, fault_regs_records, fault_stack_records;
 void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
 {
     char extra[240],wire[256]; va_list ap; va_start(ap,fmt);
@@ -350,6 +352,9 @@ void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
     CHECK(n>0 && n<=240); disk_records++;
     if (strstr(extra, "group=vm_perf_tracker ")) strcpy(tracker_record, wire);
     if (strstr(extra, "group=vm_start ")) strcpy(vm_start_record, wire);
+    if (strstr(extra, "group=vm_fault_pc ")) { strcpy(fault_pc_record, wire); fault_pc_records++; }
+    if (strstr(extra, "group=vm_fault ")) { strcpy(fault_regs_record, wire); fault_regs_records++; }
+    if (strstr(extra, "group=vm_stack part=0 ")) { strcpy(fault_stack_record, wire); fault_stack_records++; }
     if ((unsigned)n > max_record) max_record = n;
 }
 void rec_emit(const char *probe, const char *event, const char *fmt, ...)
@@ -509,7 +514,22 @@ static void test_lifecycle_records(void)
     CHECK(!dosvm_bios(v,&f,0x16) && f.tf.eax==0x1E61 && native_progress>progress && v->info.state==DOSVM_RUNNABLE);
     CHECK(dosvm_keyboard(expired,0x3062)); f.tf.eax=0x100; CHECK(!dosvm_bios(v,&f,0x16) && f.tf.eax==0x3062 && v->key_count==1);
     lifecycle_stop[0]=lifecycle_cleanup[0]=0;
+    unsigned pc_before=fault_pc_records, regs_before=fault_regs_records, stack_before=fault_stack_records;
+    /* Hardware boots have no active probe, and a full verbose queue must
+     * not consume the fault's protected register/first-stack publications. */
+    bool was_active=evidence_active; uint32_t boot_flags=g_boot.flags;
+    evidence_active=false; g_boot.flags=0;
+    v->deferred_trace.count=ARRAY_SIZE(v->deferred_trace.line);
+    v->frame.tf.eax=0x1234;
+    v->frame.tf.user_ss=0x1000; v->frame.tf.user_esp=0x8000;
+    const uint16_t stack_words[2]={0xCAFE,0xBEEF};
+    CHECK(!dosvm_write(v,0x18000,stack_words,sizeof(stack_words)));
     run_worker(v); CHECK(v->info.state==DOSVM_STOPPING && v->info.reason==DOSVM_FAULT && v->info.fault_vector==13);
+    CHECK(fault_pc_records==pc_before+1 && fault_regs_records==regs_before+1 && fault_stack_records==stack_before+1);
+    CHECK(strstr(fault_pc_record,"depth=0 kind=0 flags=0") &&
+          strstr(fault_regs_record,"group=vm_fault pm=0 ax=1234") &&
+          strstr(fault_stack_record,"words=cafe,beef,"));
+    evidence_active=was_active; g_boot.flags=boot_flags;
     CHECK(strstr(lifecycle_stop,"stage=stop vm=") && strstr(lifecycle_stop,"vector=13 eip="));
     destroy(v,true); empty();
     CHECK(strstr(lifecycle_cleanup,"stage=cleanup vm=") && strstr(lifecycle_cleanup,"result=0") && strstr(lifecycle_cleanup,"retained=0"));
@@ -697,6 +717,7 @@ int main(void)
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();
+    test_isr_flat_private_stack();
     test_isr_return_evidence(); test_isr_expiry(); test_if_cli_epoch(); test_if_handler_scope();
     test_speed();
     test_cost_bursts();
