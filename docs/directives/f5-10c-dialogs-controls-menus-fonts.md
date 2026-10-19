@@ -17,3 +17,13 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No Microsoft font files, no Wine source copied (inventory only); Liberation 2.1.5 and FreeType 2.13.3 as pinned; the OFL and FTL notices stay with the assets. Classic Windows 98 look drawn from primitives (no bitmap theme assets). Owner's identity assets untouched; English UI copy. No new `panic()` paths.
+
+## Amendment 1 (lead review, 2026-10-20 00:50): acceptance, decisions, merge worktree
+
+The delivery (worktree commit `b1ba49c4`, Claude Opus session, report `build/codex/f5-10c-report.md`, frames `build/codex/f5-10c-frames/`) is accepted: dialog manager (DIALOG/DIALOGEX, dialog units from the dialog font, modal loop with owner disabling and `WM_ENTERIDLE`, `IsDialogMessage`), classic BUTTON/STATIC/EDIT/LISTBOX/COMBOBOX/SCROLLBAR and window scroll bars, menus/accelerators/system menu, MessageBox, TrueType font selection with the Liberation aliases and the 2 MiB glyph/face caches (peak 1,837,350 bytes), 22 pinned frames, 10 dialog tests. Decisions:
+
+1. **comdlg32 and common controls.** CiukiOS builds no comdlg32 of its own: the common dialogs, progress and status bars come from the reused Wine 10.0 `comdlg32`/`comctl32` (f5-14B, made loadable by f5-20). Item "comdlg32 subset" of this directive is withdrawn.
+2. **NSIS.** The authored NSIS-style page sequence is accepted as the dialog-manager fixture; real NSIS installers are covered by f5-15B.
+3. **f5-10B glyph baseline defect.** `w32_gdi_native_font_open` (the f5-10B provider path) reads libfont's glyph top as height above the baseline; it is fixed in the merge worktree with the affected f5-10B text frames re-pinned after a visual check (old/new PNGs in `build/codex/f5-10c-merge-frames/`).
+4. **Merge.** `sdk/win32/user32/windows.c` and `internal.h` conflict semantically with the f5-10A continuation (WINDOW_ORDER, cross-thread destruction, USER cleanup at thread/process exit, server exchange serialization). A merge worktree `wt/f5-10c-merge` keeps both semantics: the menu bar and scroll bars in the surface, `GetWindowText` through `WM_GETTEXT`, child invalidation without `WS_CLIPCHILDREN`, per-object stock fonts, together with every f5-10a2 behaviour; the full Win32 suite, desktop suite and gate stay green.
+5. **Remaining, assigned:** the PE-to-native font bridge (glyphs drawn in the guest) and the `w32-dialogs-qemu-t23` guest probe → continuation f5-10C2; the W variants needed by the Wine DLLs → f5-20B; rotated text, `lfWidth` scaling, symbol faces and NE `.FON`/`.FOT` stay W21 refusals; the 35 remaining user32 W21 stubs (DDE, `Char*`, `wsprintf`, `DeferWindowPos` …) → f5-20B.
