@@ -510,6 +510,10 @@ int storage_writeback(struct storage *s, uint32_t now)
     /* Cache writeback has its own block reservations and may span devices;
      * it never manipulates FAT metadata. Its refresh callback runs under cache. */
     struct vfs_io_state io_mask=vfs_io_begin_locked(&s->vfs);
+#ifndef FS_HOST
+    struct mm_ledger memory; ledger_snapshot(&memory);
+    cache_adaptive_tick(&s->cache,now,memory.zone[ZONE_NORMAL].free,memory.high,ledger_pressure());
+#endif
     int e = cache_writeback_tick(&s->cache, now);
     struct cache_stats stats;
     if (cache_writeback_report(&s->cache,now,&stats))
@@ -517,6 +521,9 @@ int storage_writeback(struct storage *s, uint32_t now)
             stats.dirty_bytes,stats.dirty_budget,stats.throttle_bytes,stats.tick_flushed,stats.max_flush_ms,
             (unsigned long long)stats.cache_sync_evictions,(unsigned long long)stats.writer_waits,
             (unsigned long long)stats.writer_wait_ms);
+#ifndef FS_HOST
+    if (!ledger_pressure()) cache_prefetch_tick(&s->cache);
+#endif
     vfs_io_end_locked(&s->vfs,io_mask);
     s->writer_ticks++;
     /* cache_error is sticky per device. Do not turn one removable-media
@@ -740,8 +747,10 @@ static void storage_timer(void *arg)
             if (blackbox_flush) blackbox_flush();
             last_raw=(uint32_t)now;
             if (log_due) bootlog_drain();
-            storage_writeback(s, fs_now_ms());
         }
+        /* The writer_running reservation covers resize/prefetch too, so
+         * shutdown quiesces every cache user before destroying its pages. */
+        if (!s->stopped) storage_writeback(s,fs_now_ms());
     }
     task_exit(0);
 }
@@ -751,7 +760,11 @@ void storage_init(void)
     initialized = true;
     fs_calendar_init();
     struct storage *s = &system_storage;
-    int e = storage_setup(s, CACHE_DEFAULT_BYTES);
+    struct mm_ledger memory; ledger_snapshot(&memory);
+    uint32_t cache_bytes=cache_initial_bytes(memory.zone[ZONE_NORMAL].usable,
+        memory.zone[ZONE_NORMAL].free,memory.high);
+    int e=cache_bytes ? storage_setup(s,cache_bytes) : -FS_ENOMEM;
+    if (!e) e=cache_adaptive_enable(&s->cache,memory.zone[ZONE_NORMAL].usable);
     if (e) { klog("[storage] unavailable error=%d", e); return; }
     bool probe = (g_boot.flags & CBI_F_TEST_REQUEST) && storage_probe_readonly(g_boot.test_request, g_boot.test_request_len);
     struct task *timer = 0;

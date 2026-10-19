@@ -638,6 +638,39 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
     }
     return 0;
 }
+/* Plan only one contiguous run, bounded by file EOF, FAT links, volume and
+ * generation. Metadata lookups retain readsec's bounded existing read-ahead;
+ * data is queued, never read speculatively in the demand caller. */
+int fat_read_stream(struct fat_volume *v, const struct fat_entry *file, uint64_t pos,
+                    void *buf, size_t size, size_t *done, struct cache_stream *stream) {
+    if (!v->cache->adaptive || v->dev->logical) return fat_read(v,file,pos,buf,size,done);
+    cache_stream_begin(v->cache,stream,v->dev,pos);
+    int e=fat_read(v,file,pos,buf,size,done);
+    uint32_t window=cache_stream_end(stream,pos,*done,!e);
+    uint64_t end=pos+*done;
+    if (e || !window || end>=file->size || fs_request_check()) return e;
+    /* A partially read sector was already demanded. Prefetch only complete
+     * sectors, including no bytes beyond the logical EOF. */
+    uint64_t first=(end+511)&~(uint64_t)511;
+    if (first>=file->size || file->size-first<512) return e;
+    uint32_t cb=(uint32_t)v->spc*512, c;
+    if (chain_at(v,file->first,(uint32_t)(first/cb),&c)) return e;
+    uint32_t off=(uint32_t)(first%cb), count=0, walked=0;
+    uint32_t limit=(uint32_t)((file->size-first)/512);
+    if (limit>window/512) limit=window/512;
+    uint64_t sector=cluster_sector(v,c)+off/512;
+    while (count<limit) {
+        uint32_t n=(cb-off)/512; if (n>limit-count) n=limit-count;
+        count+=n; off+=n*512;
+        if (count==limit) break;
+        uint32_t next;
+        if (fat_get_cluster(v,c,&next) || !valid(v,next) || ++walked>=v->clusters || next!=c+1) break;
+        c=next; off=0;
+    }
+    if (sector<v->sectors && count<=v->sectors-sector)
+        cache_stream_queue(stream,v->start+sector,count);
+    return e;
+}
 /* Full-file COW gives one atomic owning-entry switch, including FAT12 packed
  * entries and shrinking. No private data cache, buffers or heap allocation. */
 static int replace(struct fat_volume *v, struct fat_entry *file, uint32_t size, uint64_t pos, const void *data, size_t amount) {

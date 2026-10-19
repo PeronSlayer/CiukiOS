@@ -19,6 +19,7 @@
 /* Host/older configurations may omit the recorder; the kernel links f0-25's
  * RAM producer. Only its validated descriptor admits raw disk writes. */
 #pragma weak blackbox_capture
+void hardware_check_cache(struct storage *, struct hw_check_result *);
 int hardware_check_ata(struct storage *, struct hw_check_result *);
 int hardware_check_repair(struct storage *, struct hw_check_result *);
 static struct task *check_task;
@@ -280,6 +281,7 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     case 7: serial_check(until,out); break;
     case 8: savage_check(until,out); break;
     case 9: audio_check(out); break;
+    case 11: hardware_check_cache(storage_get(),out); break;
     case 10: {
         bool ok=ledger_reconcile(); struct mm_ledger v; ledger_snapshot(&v);
         ledger_record("hardware-check"); out->status=ok ? HW_PASS : HW_FAIL;

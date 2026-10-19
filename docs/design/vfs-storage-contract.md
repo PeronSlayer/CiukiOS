@@ -880,3 +880,87 @@ reject short-chain/data truncation, malformed/missing diagnostic context,
 unexpected names and any corrupt/cross-linked owner. Both independent FAT-copy
 ownership scans and production reboot validation remain mandatory; fsck runs
 with `-n` and never repairs these test inputs.
+
+## Cache sizing and read-ahead
+
+F1-85 research (2026-10-19), before implementation: Microsoft's
+[Q108079](https://jeffpar.github.io/kbarchive/kb/108/Q108079/) documents
+KiB-valued MinFileCache/MaxFileCache for WfW/95, without establishing Windows
+98 defaults. Russinovich and Cogswell's original
+[VCMon investigation](https://jacobfilipp.com/DrDobbs/articles/DDJ/1996/9605/9605c/9605c.htm)
+connects resizing to hits, misses, free memory and page faults. Mitchell's
+[Inside the Windows 95 File System, chapters 10–11](https://pdfcoffee.com/inside-the-windows95-file-system-3-pdf-free.html)
+describes page commitment and relinquishing free, then unheld clean LRU
+pages. Its reverse-engineered Windows 95 constants are not Windows 98 policy.
+The P01 [original TechNet endpoint](https://technet.microsoft.com/en-us/library/cc768196.aspx)
+and [archived excerpt](https://www.oocities.org/~budallen/98performance.html)
+could not be retrieved in this worktree's research session. The reviewed
+f0-42b closure (P28/P31/P36, Windows 98 Resource Kit ch. 26/28/10) supplies
+the established dynamic growth/shrink and read-ahead roles; the licensed
+media/extracted book are absent from this checkout.
+
+Decision: implement C4's 2/8/32 MiB bounds, 100 ms/two-window feedback,
+256 KiB steps and 16–64 KiB stream windows as **CiukiOS policy**. No
+ReadAheadThreshold compatibility setting is exposed: the closure did not
+establish its units, default, range or generation rule. Retain C1's formula
+and durability protocol and M1's reserve/hysteresis. F1-84 page identities
+retain references, not extra data frames; cache residency is counted once.
+
+Canonical boot chooses `min(8 MiB, ceiling, free_NORMAL - high)` rounded to
+pages, refusing storage admission if the 2 MiB floor cannot fit above M1's
+reserve. The ceiling is `min(32 MiB, usable_NORMAL/8)`. `cache_init` retains
+its 8 KiB–32 MiB standalone contract; adaptive mode is explicit and only
+canonical storage enables it. Data, descriptor, scan-workspace and writeback
+pages all count. Growth uses NORMAL pages and transfers their ledger owners;
+shrink returns DATA/META pages. Fixed caller-owned cache/open-description
+structures remain in their existing kernel ownership. File/page identity
+references add no data allocation and are never counted as additional frames.
+
+The storage worker samples every 10 ms, under its existing shutdown
+reservation. A completed 100 ms window with demand misses **and demand reuse**
+qualifies as useful. Two consecutive qualifying windows permit at most 64
+additional physical pages (data plus descriptors); late samples do not invent
+missing windows. Growth requires free NORMAL greater than high plus the
+maximum step, rechecks the live ledger before allocations, and stops on
+pressure, dirty debt above C1's budget, or resolved speculative waste of at
+least 16 KiB exceeding useful speculative bytes. C1's existing
+`min(1 MiB,C/8)` formula is preserved as C changes. A partial allocation or
+one-page descriptor remainder need not use the entire permitted step.
+
+Pressure cancels plans and visits at most 64 data-page headers per call,
+rotating past blocked pages. Reclaim checks pins, fills/waiters, dirty data
+and errors; it queues healthy dirty debt and never issues transport. It
+releases at most 64 total pages, including now-empty descriptors, and stops
+starting page preflights after 500 us, leaving margin to the 1 ms CPU target.
+It retains the inline data page and fixed workspaces, reuses descriptor holes
+on growth, and never moves a surviving descriptor. Snapshot counters expose
+the unique unreclaimable-data/data-page fraction and overlapping pin, dirty
+and error reasons, plus per-slice visits, pages and maximum measured CPU.
+The 1 ms physical target still needs hardware timing qualification.
+
+Each physical FAT open description owns a shared-cache stream record;
+duplicated/inherited handles share it. Two adjacent completed reads start a
+16 KiB byte-valued window; consumption doubles it to at most 64 KiB. FAT
+plans a contiguous range through validated cluster links, volume bounds and
+whole sectors before EOF. Existing logical image and read-only providers keep
+their provider paths. Demand callers queue plans without issuing speculative
+data I/O. The worker uses C3's `BLK_SPECULATIVE` read class, below demand and
+above background writes as required by the existing C3 scheduler. The
+preallocated, budgeted 32 KiB writeback bounce buffer serializes each command;
+a 64 KiB window can use two commands. No second data cache or new arena exists.
+
+Resident and in-flight speculative bytes share the `C/8` cap. Dirty/clean
+shared hits split speculative runs; only clean, unpinned victims are used.
+Seek, final close, same-file publication, raw identity expiry, competing
+streams and pressure cancel generations and reset sequential evidence.
+Cancelled tags remain budgeted until demand, eviction or close retires them;
+consuming cancelled data or overwriting unused prefetch counts as waste.
+Sequential reads on the same description can join an issued prefetch.
+Close drops unused speculative hash identities and waits for issued transport
+retirement with namespace released, retaining its publication guard, before
+removing the stream;
+queued cancellation issues no command. Generation/epoch checks prevent stale
+completion publication. An already issued physical command retains its
+existing bounded transport/stop protocol; it cannot be physically preempted.
+Host random-read evidence establishes absence of queued speculative delay,
+not an unmeasured hardware latency bound.

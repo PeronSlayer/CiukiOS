@@ -34,8 +34,13 @@ static struct storage disk;
 static const struct pci_func gpu={.vendor=0x5333,.device=0x8c2e,.class_code=3};
 static char lines[32][256];
 static unsigned line_count;
-static bool complete, tone_checked;
+static bool complete, tone_checked, cache_over_cap;
 static unsigned timer_calls;
+void cache_stats(struct block_cache *cache,struct cache_stats *out) {
+    assert(cache==&disk.cache);
+    *out=(struct cache_stats){.pages=2048,.hits=3,.misses=1,.growths=2,.reclaims=3,
+        .prefetch_useful=32768,.prefetch_wasted=1024,.speculative_bytes=cache_over_cap ? 1049088 : 65536};
+}
 bool ledger_reconcile(void) { return true; }
 void ledger_snapshot(struct mm_ledger *out) { memset(out,0,sizeof(*out)); }
 void ledger_record(const char *profile) { assert(!strcmp(profile,"hardware-check")); }
@@ -189,5 +194,11 @@ int main(void)
     fixture(); scenario=4; hardware_check_run();
     assert(tone_checked && complete && sweep_calls==2 && !restores && !clears && timer_calls==2);
     puts("PASS f1-69 complete H page: audio and pinned final results after a passing sweep and an unsafe-writer failure");
+    fixture(); disk.ready=true; cache_over_cap=false;
+    check_step(0,11,15000,&out);
+    assert(out.status==HW_PASS && strstr(out.detail,"KiB=8192 hit=75% grow=2 reclaim=3") && strstr(out.detail,"32/1 KiB"));
+    cache_over_cap=true; check_step(0,11,15000,&out); assert(out.status==HW_FAIL);
+    disk.ready=false; check_step(0,11,15000,&out); assert(out.status==HW_SKIP);
+    puts("PASS C4 real H Cache item: size/hit/growth/reclaim/usefulness snapshot, cap failure, absent storage");
     return 0;
 }

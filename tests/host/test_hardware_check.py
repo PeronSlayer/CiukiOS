@@ -50,6 +50,7 @@ class HardwareCheckTests(unittest.TestCase):
                 '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-fsanitize=address,undefined',
                 '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/hardware_check_runtime_test.c'),
                 str(ROOT/'src/kernel/core/hardware_check_model.c'),
+                str(ROOT/'src/kernel/probes/cache_status.c'),
                 str(ROOT/'src/kernel/core/hardware_check_usb.c'),
                 str(ROOT/'src/kernel/lib/fmt.c'),'-o',str(binary)],check=True)
             subprocess.run([str(binary)],check=True,env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'})

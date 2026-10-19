@@ -48,7 +48,7 @@ struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned re
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
     uint32_t log_capacity; struct vfs_file_identity *identity; };
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
-    uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; };
+    uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream; };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
     uint64_t owner, start, end; uint32_t length; enum vfs_owner_type owner_type; };
 #define VFS_RANGE_LOCKS 128u

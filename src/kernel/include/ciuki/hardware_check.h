@@ -3,7 +3,7 @@
 #define CIUKI_HARDWARE_CHECK_H
 #include <stdint.h>
 #include <stdbool.h>
-#define HW_CHECK_ITEMS 11u
+#define HW_CHECK_ITEMS 12u
 #define HW_CHECK_LIMIT_MS 15000u
 enum hw_check_status { HW_PASS, HW_FAIL, HW_SKIP };
 struct hw_check_result { enum hw_check_status status; char detail[144]; };
