@@ -926,6 +926,19 @@ ciukidos_read_key:
 
 int21_handler:
 %ifdef CIUKIDOS_KERNEL_BUILD
+    pushf
+    cmp byte [cs:dos_hook_active], 1
+    jne .legacy
+    popf
+    call far [cs:dos_hook_dispatch]
+    pushf
+    cmp byte [cs:dos_hook_result], 1
+    jne .legacy
+    popf
+    iret
+.legacy:
+    popf
+dos_hook_legacy_int21:
     jmp kernel_int21_enter
 int21_dispatch:
 %endif
@@ -1024,6 +1037,8 @@ int21_dispatch:
     je .fn_2e
     cmp ah, 0x29
     je .fn_29
+    cmp ah, 0x26
+    je .fn_26
     cmp ah, 0x25
     je .fn_25
     cmp ah, 0x2F
@@ -1569,6 +1584,23 @@ int21_dispatch:
     call int21_free
 .fn_49_result:
     jc .fn_49_error
+%ifdef CIUKIDOS_KERNEL_BUILD
+    pushf
+    push ax
+    push bx
+    push cx
+    mov ax, 6
+    mov bx, es
+    cmp bx, [cs:dos_sda_owning_psp]
+    je .free_notify_done
+    xor cx, cx
+    call dos_hook_notify
+.free_notify_done:
+    pop cx
+    pop bx
+    pop ax
+    popf
+%endif
     mov bp, sp
     mov bx, [ss:bp + 14]
     mov cx, [ss:bp + 12]
@@ -1662,6 +1694,19 @@ int21_dispatch:
 
 .fn_50:
 %ifdef CIUKIDOS_KERNEL_BUILD
+    push ax
+    push cx
+    mov ax, 2
+    xor cx, cx
+    call dos_hook_notify
+    pop cx
+    pop ax
+    jnc .psp_selected
+    mov ax, [cs:dos_hook_event_error]
+    jmp .error
+.psp_selected:
+%endif
+%ifdef CIUKIDOS_KERNEL_BUILD
     mov ax, [cs:kernel_runtime_state_current_psp]
     mov [cs:kernel_runtime_state_previous_psp], ax
     mov [cs:kernel_runtime_state_current_psp], bx
@@ -1730,6 +1775,14 @@ int21_dispatch:
     xor ax, ax
     jmp .success
 
+.fn_26:
+%ifdef CIUKIDOS_KERNEL_BUILD
+    call dos_hook_create_psp26
+    jc .error
+    jmp .success
+%else
+    jmp .unsupported
+%endif
 .fn_55:
     call int21_create_child_psp
     jc .error
@@ -1749,7 +1802,12 @@ int21_dispatch:
     mov [cs:dos_sda_dta_seg], ax
     mov ax, [cs:current_psp_seg]
     mov [cs:dos_sda_current_psp], ax
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je .sda_owner_ready
+%endif
     mov [cs:dos_sda_owning_psp], ax
+.sda_owner_ready:
     mov al, [cs:dos_default_drive]
     mov [cs:dos_sda_default_drive], al
     mov ax, [cs:windows_machine_id]
@@ -2351,6 +2409,7 @@ int21_exec:
 
 .subfn_ready:
     call int21_exec_capture_path
+    jc .done
 %if TRACE_WIN_MEMORY != 0
     push ds
     push si
@@ -2376,6 +2435,13 @@ int21_exec:
 
     push si
     mov si, dx
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    jne .legacy_lookup
+    call dos_hook_exec_lookup
+    jmp .path_resolved
+.legacy_lookup:
+%endif
     call int21_resolve_and_find_path
 
 .path_resolved:
@@ -2583,6 +2649,9 @@ int21_exec:
     ; alter CF.  The trace helper reads this explicit copy.
     pushf
     pop word [cs:tmp_exec_return_flags]
+%ifdef CIUKIDOS_KERNEL_BUILD
+    call dos_hook_unwind
+%endif
 %if TRACE_WIN_MEMORY != 0
     push ax
     push ds
@@ -2710,6 +2779,10 @@ int21_exec_log_mz_failure:
     ret
 
 int21_exec_capture_path:
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je dos_hook_exec_capture_path
+%endif
     push ax
     push bx
     push cx
@@ -2979,6 +3052,14 @@ int21_exec_init_program_psp:
     pop bx
     pop ax
     call int21_init_psp_handles
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    jne .legacy
+    call dos_hook_begin
+    ret
+.legacy:
+%endif
+    clc
     ret
 
 int21_create_child_psp:
@@ -3011,11 +3092,26 @@ int21_create_child_psp:
     mov word [es:0x0038], 0x0000
     mov [es:0x003A], ax
 
+%ifdef CIUKIDOS_KERNEL_BUILD
+    mov bx, dx
+    mov cx, [cs:current_psp_seg]
+    mov word [cs:dos_hook_arguments+4], 0x55
+    mov ax, 1
+    call dos_hook_notify
+    mov word [cs:dos_hook_arguments+4], 0
+    jc .done
+%endif
     mov ax, dx
     call int21_set_current_psp
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je .allocation_unchanged
+%endif
     call int21_mem_adopt_child_psp
+.allocation_unchanged:
     xor ax, ax
     clc
+.done:
     pop es
     pop ds
     pop di
@@ -3270,6 +3366,10 @@ int21_exec_prepare_mz_free_mcb:
     ret
 
 int21_exec_load_to_es:
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je dos_hook_exec_load
+%endif
     push bx
     push cx
     push dx
@@ -3446,6 +3546,7 @@ int21_exec_load_com:
     mov ax, [cs:current_com_load_seg]
     mov es, ax
     call int21_exec_init_program_psp
+    jc .fail
     call int21_exec_com_required_paras
     jc .fail
     mov cx, [cs:current_com_load_seg]
@@ -4018,6 +4119,10 @@ int21_exec_run_com:
 %if TRACE_CHILD_INT21 != 0
     call child_trace_begin_com
 %endif
+%ifdef CIUKIDOS_KERNEL_BUILD
+    call dos_hook_commit
+    jc .arena_prepare_fail
+%endif
     mov ds, ax
     mov es, ax
     mov ss, ax
@@ -4449,6 +4554,12 @@ int21_exec_load_overlay:
     mov es, ax
     xor di, di
     xor cx, cx
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    jne .copy_limit_ready
+    mov word [cs:tmp_exec_mz_copy_limit], MZ3_LOAD_SEG + 0x1000
+.copy_limit_ready:
+%endif
     call int21_exec_load_to_es
     jc .done
 
@@ -4746,6 +4857,7 @@ int21_exec_run_mz:
     pop ax
     mov es, ax
     call int21_exec_init_program_psp
+    jc .arena_prepare_fail
     call int21_set_current_psp
     mov ax, [cs:dos_mem_psp_mcb_end]
     mov [es:0x0002], ax
@@ -4780,6 +4892,10 @@ int21_exec_run_mz:
     ; tranche.  Keep its validated service cache across child execution so the
     ; AH=4Ch path can restore the parent DTA/PSP through services 7/8.
 
+%ifdef CIUKIDOS_KERNEL_BUILD
+    call dos_hook_commit
+    jc .arena_prepare_fail
+%endif
     cli
     mov ax, [cs:mz_psp_seg]
     mov ds, ax
@@ -5652,6 +5768,10 @@ int21_apply_open_handle_mask:
 ; Windows 3.x and DOS extenders inspect these records while their INT 21h
 ; calls are reflected through DOSX, so size/position alone are insufficient.
 int21_sync_sft_table:
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je .done
+%endif
     cmp byte [cs:dos_sysvars_initialized], 1
     jne .done
 
@@ -6598,7 +6718,12 @@ int21_get_psp:
 int21_set_current_psp:
     mov [cs:current_psp_seg], ax
     mov [cs:dos_sda_current_psp], ax
+%ifdef CIUKIDOS_KERNEL_BUILD
+    cmp byte [cs:dos_hook_active], 1
+    je .done
+%endif
     mov [cs:dos_sda_owning_psp], ax
+.done:
     ret
 
 int21_chdir:
@@ -24678,8 +24803,8 @@ search_found_root_lba_hi dw 0
 search_found_root_off dw 0
 search_found_attr db 0
 search_found_name times 11 db 0
-dta_seg dw 0
 dta_off dw 0
+dta_seg dw 0
 find_attr db 0
 find_active db 0
 find_dir_cluster dw 0
@@ -25235,6 +25360,7 @@ child_trace_bios_marker:
 %include "src/runtime/kernel_memory_services.inc"
 %include "src/runtime/ciukidos_lfn_services.inc"
 %include "src/runtime/kernel_interrupt_stack.inc"
+%include "src/runtime/ciukidos_vmm_hook.inc"
 %ifdef CIUKIDOS_LAYOUT_GROWTH_TEST_BYTES
     ; Non-shipping fixture proves scratch ownership beyond the former bound.
     times CIUKIDOS_LAYOUT_GROWTH_TEST_BYTES db 0

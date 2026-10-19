@@ -23,3 +23,16 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     tests/host/fs/test_vfs_admission.c -o build/host/dos/vfs_admission_test
 ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
     build/host/dos/vfs_admission_test
+# Compile the changed production units with the real i686 kernel flags. This
+# is a compile-only host check: no kernel link, DOS disk or OS image build.
+python3 -B - <<'PY'
+import importlib.util
+from pathlib import Path
+import subprocess
+spec=importlib.util.spec_from_file_location('kernel_flags','scripts/build_kernel.py')
+k=importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+for unit in ('dos_file','dos_file_vm','dosvm_bios'):
+    subprocess.run(['clang',*k.CFLAGS,'-I','src/kernel/include','-c',f'src/kernel/vm/{unit}.c',
+                    '-o',f'build/host/dos/{unit}.i686.o'],check=True)
+print('H50 i686: changed production units compile with kernel frame/integer flags')
+PY

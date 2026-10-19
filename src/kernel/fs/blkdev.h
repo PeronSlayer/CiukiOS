@@ -110,6 +110,11 @@ int blk_request_submit(struct blk_request *);
 int blk_request_wait(struct blk_request *);
 bool blk_request_cancel(struct blk_request *); /* issued writes may complete */
 int blk_request_release(struct blk_request *);
+#ifdef FS_HOST
+/* Quiescent fixture boundary, no callers/workers; refuses unretired records.
+ * Frees the host's resident pool and permits a later fixture to initialize it. */
+int blk_request_pool_host_cleanup(void);
+#endif
 bool blk_queue_run_one(struct blk_queue *); /* task context, one command */
 void blk_queue_cancel_device(struct blk_queue *, struct blkdev *);
 void blk_queue_snapshot(struct blk_queue *, struct blk_queue_stats *);

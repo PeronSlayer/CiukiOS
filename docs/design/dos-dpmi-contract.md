@@ -498,11 +498,19 @@ No new native syscall is specified. f3-49 supplies the host-testable module.
 | 1Ah/2Fh, 59h/BX=0, 60h, 67h | VMM-owned DTA/error/path/JFT bookkeeping, synchronized with the kernel |
 | 4400h/06h/07h/0Ah on regular-file handles, 4408h/09h/0Eh on mapped drives; 440Bh retry policy | VMM; distinguish file/device by SFT type, not handle number |
 | Device control channels and generic device IOCTL | CiukiDOS/device driver; unsupported subfunctions fail, never silently report success |
-| 0Fh–17h, 21h–24h, 27h/28h, 29h | f3-50 FCB adapter over the same VMM handle/search service; parse 29h remains local |
-| 00h–0Ch console; 25h/35h; 26h/31h; 48h–4Dh; 30h–34h; 38h; 50h–52h/55h/62h; 58h; 65h/66h | CiukiDOS process, vectors, memory, NLS and console services; lifecycle/bookkeeping notifications still go to VMM |
+| 0Fh–17h, 21h–24h, 27h/28h, 29h | f3-50 FCB adapter over the same VMM handle/search service; 29h uses the same CP437 mapping as NLS and aliases |
+| 38h, 6501h–6507h, 6520h–6523h, 6601h/02h | VMM country 1/CP437; stable guest tables; unsupported country/page requests fail |
+| 00h–0Ch console; 25h/35h; 26h/31h; 48h–4Dh; 30h–34h; 50h–52h/55h/62h; 58h | CiukiDOS process, vectors, memory and console services; lifecycle/bookkeeping notifications go to VMM |
 
 26h is Create PSP, **not FCB I/O**. Unassigned gaps (18h/1Dh–1Fh etc.) are not
 new file calls. Private F1h memory services and existing DPMI protocols remain.
+The version-1 private handoff's packed records, ROM reservations and exact
+far-CALL/interrupt stack layout are specified in the
+[f3-50 binding note](../validation/f3-50-ciukidos-vmm-hook.md#dfvm-version-1-wire-layout).
+Its CLFN sector-extension exclusion and bound AH55 allocation-owner correction
+are implementation refinements for lead cross-review. The unchanged legacy
+fallback is retained; no public native syscall ABI changes.
+
 3Fh/40h on character descriptions chain through the registered device route.
 An open of `CON`, `NUL`, `AUX`, `PRN`, `COMn`, `LPTn` resolves devices before
 disk lookup, including extensions and directory prefixes according to DOS

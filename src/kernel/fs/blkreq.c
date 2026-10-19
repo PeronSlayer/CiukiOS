@@ -8,12 +8,12 @@
 #endif
 
 #ifdef FS_HOST
-static pthread_once_t pool_once=PTHREAD_ONCE_INIT;
+static pthread_mutex_t pool_init_lock=PTHREAD_MUTEX_INITIALIZER;
 static fs_lock pool_lock=PTHREAD_MUTEX_INITIALIZER;
 #else
 static fs_lock pool_lock;
-static bool pool_initialized;
 #endif
+static bool pool_initialized;
 static struct blk_request *pool;
 void blk_queue_record(const char *,const struct blk_queue_stats *) __attribute__((weak));
 static void pool_init(void) {
@@ -28,13 +28,34 @@ static void pool_init(void) {
 }
 static void initialize(void) {
 #ifdef FS_HOST
-    pthread_once(&pool_once,pool_init);
+    pthread_mutex_lock(&pool_init_lock);
+    if (!pool_initialized) { pool_initialized=true; pool_init(); }
+    pthread_mutex_unlock(&pool_init_lock);
 #else
     /* Boot and all allocation-capable callers run on this single CPU. Mark
      * before allocation; an interrupt never enters request preparation. */
     if (!pool_initialized) { pool_initialized=true; pool_init(); }
 #endif
 }
+#ifdef FS_HOST
+int blk_request_pool_host_cleanup(void) {
+    /* Fixture boundary only: no concurrent callers or live queue workers.
+     * A terminal but unreleased record still owns its completion event. */
+    pthread_mutex_lock(&pool_init_lock);
+    fs_lock_take(&pool_lock);
+    if (pool) {
+        for (unsigned i=0;i<BLKREQ_CAPACITY;i++) if (pool[i].state!=BLK_FREE) {
+            fs_lock_drop(&pool_lock); pthread_mutex_unlock(&pool_init_lock);
+            return -FS_EBUSY;
+        }
+        for (unsigned i=0;i<BLKREQ_CAPACITY;i++) fs_event_destroy(&pool[i].event);
+        free(pool); pool=0;
+    }
+    pool_initialized=false;
+    fs_lock_drop(&pool_lock); pthread_mutex_unlock(&pool_init_lock);
+    return 0;
+}
+#endif
 static bool terminal(const struct blk_request *r) {
     return r->state==BLK_COMPLETED || r->state==BLK_CANCELLED;
 }
