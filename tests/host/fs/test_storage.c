@@ -37,11 +37,13 @@ static unsigned readonly_reports;
 static char readonly_record[256];
 static char log_repair_record[256];
 static char writeback_record[256];
+static char writeback_progress_record[512];
 void klog(const char *fmt, ...) {
-    char line[256]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
-    if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(line)); }
-    if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(line));
-    if (strstr(line,"failure stage=writeback")) memcpy(writeback_record,line,sizeof(line));
+    char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
+    if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(readonly_record)); }
+    if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(log_repair_record));
+    if (strstr(line,"failure stage=writeback")) memcpy(writeback_record,line,sizeof(writeback_record));
+    if (!strncmp(line,"[storage] writeback ",20)) memcpy(writeback_progress_record,line,sizeof(line));
     if (blackbox_capture) { blackbox_capture(line,strlen(line));blackbox_capture("\n",1); }
     bootlog_capture(line,strlen(line)); bootlog_capture("\n",1);
 }
@@ -213,8 +215,8 @@ static void mount_tests(void) {
     s=start(); v=storage_volume(s,2); OK(storage_enable_write(s,2));
     uint32_t age=fs_now_ms(); memset(sector,0x71,512); OK(cache_write(&s->cache,&v->io,2,sector));
     unsigned writes=media[0].writes;
-    OK(storage_writeback(s,age+4999)); CHECK(media[0].writes==writes);
-    OK(storage_writeback(s,age+5001)); CHECK(media[0].writes==writes+1);
+    OK(storage_writeback(s,age+999)); CHECK(media[0].writes==writes);
+    OK(storage_writeback(s,age+1001)); CHECK(media[0].writes==writes+1);
     stop(s,true); reset();
     /* Dirty-only opens the gate; divergence and bad BPB preserve zero writes. */
     for(unsigned fault=0;fault<3;fault++) {
@@ -658,7 +660,7 @@ static void unsupported_flush_views(void) {
             CHECK(v->fat.mounted && v->fat.readonly==!writable);
             CHECK(v->writes==writes && v->flushes==flushes);
             CHECK(media[drive-2].writes==physical_writes && media[drive-2].flushes==physical_flushes);
-            CHECK(!s->cache.workspace_in_use && !fs_host_contig_live);
+            CHECK(!s->cache.workspace_in_use && fs_host_contig_live==(s->cache.writeback_buffer ? 1u : 0u));
             printf("PASS F1-73 copied FAT%u view: live=%s mount=0 upgrade=-30 mode=ro writes=0 flushes=0 passes=%u\n",
                    view.type,writable ? "rw" : "ro",view.scan_passes);
             OK(fat_unmount(&view)); cache_invalidate(&s->cache,&noflush,true);

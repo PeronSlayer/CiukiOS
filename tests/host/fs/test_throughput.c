@@ -41,11 +41,11 @@ static int read_blocks(struct blkdev *dev, uint64_t lba, uint32_t n, void *buf) 
 }
 static int write_blocks(struct blkdev *dev, uint64_t lba, uint32_t n, const void *buf) {
     struct media *m=dev->ctx; int e=blkdev_range(dev,lba,n); if (e) return e;
-    CHECK(n==1); m->writes++;
+    CHECK(n<=CACHE_WRITEBACK_BLOCKS); m->writes+=n;
 #ifdef ATA_DMA_THROUGHPUT
     CHECK(!ata_host_dma_io(m->bytes, (uint32_t)dev->capacity, lba, n, (void *)buf, true));
 #else
-    memcpy(m->bytes+lba*512,buf,512);
+    memcpy(m->bytes+lba*512,buf,n*512);
 #endif
     return 0;
 }

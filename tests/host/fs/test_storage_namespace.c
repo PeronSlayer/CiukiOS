@@ -465,12 +465,39 @@ static int blocked_writer_error(struct blkdev *d,uint64_t lba,uint32_t n,const v
     while (!writer_release) pthread_cond_wait(&writer_changed,&writer_mutex);
     pthread_mutex_unlock(&writer_mutex); return -FS_EIO;
 }
-struct writer_call { struct storage *s; int result; bool shutdown; };
+struct writer_call { struct storage *s; int result; bool shutdown,done; };
 static void *writer_call_run(void *arg)
 {
     struct writer_call *c=arg;
     c->result=c->shutdown ? storage_shutdown(c->s) : storage_writeback(c->s,fs_now_ms()+6000);
+    __atomic_store_n(&c->done,true,__ATOMIC_RELEASE);
     return 0;
+}
+
+static void healthy_writer_reservation_test(void)
+{
+    struct px_namespace *space; struct storage *s=namespace_start(&space); OK(storage_enable_write(s,2));
+    /* Keep the real C: reservation while the service drains a batch. This
+     * is also the reservation a cache_write throttler must retain. */
+    vfs_lock(&s->vfs,vfs_drive_mask(2)); struct vfs_io_state io=vfs_io_begin_locked(&s->vfs);
+    uint8_t b[512];
+    for (unsigned i=0;i<100;i++) {
+        OK(cache_read(&s->cache,&s->volumes[2].io,i,b));
+        OK(cache_write(&s->cache,&s->volumes[2].io,i,b));
+    }
+    writeback_progress_record[0]=0;
+    struct writer_call c={.s=s}; pthread_t w; CHECK(!pthread_create(&w,0,writer_call_run,&c));
+    uint32_t start=fs_now_ms();
+    while (!__atomic_load_n(&c.done,__ATOMIC_ACQUIRE)) {
+        CHECK(fs_now_ms()-start<2000); struct timespec t={0,1000000}; nanosleep(&t,0);
+    }
+    CHECK(!pthread_join(w,0) && !c.result && !s->writer_running);
+    CHECK(strstr(writeback_progress_record,"dirty_bytes=18432 budget_bytes=1048576 throttle_bytes=2097152"));
+    CHECK(strstr(writeback_progress_record,"flushed_bytes=32768") && strstr(writeback_progress_record,"cache_sync_evictions=0"));
+    CHECK(strstr(writeback_progress_record,"writer_waits=0 writer_wait_ms=0"));
+    vfs_io_end_locked(&s->vfs,io); vfs_unlock(&s->vfs);
+    namespace_stop(s,true);
+    puts("PASS F1-82 service: healthy C reservation retained across writeback, protected progress record includes budgets/flush/fallback/wait counters");
 }
 static void writer_shutdown_test(void)
 {
@@ -556,7 +583,7 @@ int main(int argc, char **argv)
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
-    latency_tests(); writer_shutdown_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests();
+    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;

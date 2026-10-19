@@ -285,8 +285,8 @@ static void fault_tests(struct fake *f) {
 static void cache_tests(struct fake *f) {
     f->undo_enabled=true; fake_reset(f); OK(cache_init(&cache,8192)); uint8_t b[512],a[512]; memset(b,0xa7,sizeof(b));
     uint32_t before=fs_now_ms(); OK(cache_write(&cache,&f->dev,200,b)); CHECK(!f->writes);
-    OK(cache_writeback_tick(&cache,before+4999)); CHECK(!f->writes);
-    OK(cache_writeback_tick(&cache,fs_now_ms()+5000)); CHECK(f->writes==1 && f->flushes==1); OK(fake_raw_read(f,200,a)); CHECK(!memcmp(a,b,512));
+    OK(cache_writeback_tick(&cache,before+999)); CHECK(!f->writes);
+    OK(cache_writeback_tick(&cache,fs_now_ms()+1000)); CHECK(f->writes==1 && f->flushes==1); OK(fake_raw_read(f,200,a)); CHECK(!memcmp(a,b,512));
     f->reorder=true; for (unsigned i=201;i<220;i++) { b[0]=(uint8_t)i; OK(cache_write(&cache,&f->dev,i,b)); }
     CHECK(f->writes>1); OK(cache_barrier(&cache,&f->dev));
     for (unsigned i=201;i<220;i++) { OK(fake_raw_read(f,i,a)); CHECK(a[0]==i); }
@@ -296,7 +296,7 @@ static void cache_tests(struct fake *f) {
     for (unsigned i=230;i<250;i++) { b[0]=(uint8_t)i; OK(cache_write(&cache,&second,i,b)); }
     OK(cache_barrier(&cache,&second));
     CHECK(cache_barrier(&cache,&f->dev)==-FS_EIO);
-    cache_destroy(&cache); fake_reset(f); f->reorder=false; f->undo_enabled=false; groups++; printf("PASS cache: LRU/5-second/barriers/reorder/sticky-errors/multiple-devices\n");
+    cache_destroy(&cache); fake_reset(f); f->reorder=false; f->undo_enabled=false; groups++; printf("PASS cache: clean-first LRU/1-second/barriers/reorder/sticky-errors/multiple-devices\n");
 }
 static void part_entry(uint8_t *b, unsigned i, uint8_t type, uint32_t start, uint32_t n) {
     uint8_t *p=b+446+i*16; p[4]=type; fs_wr32(p+8,start); fs_wr32(p+12,n); fs_wr16(b+510,0xaa55);

@@ -490,6 +490,12 @@ int storage_writeback(struct storage *s, uint32_t now)
      * it never manipulates FAT metadata. Its refresh callback runs under cache. */
     struct vfs_io_state io_mask=vfs_io_begin_locked(&s->vfs);
     int e = cache_writeback_tick(&s->cache, now);
+    struct cache_stats stats;
+    if (cache_writeback_report(&s->cache,now,&stats))
+        klog("[storage] writeback dirty_bytes=%u budget_bytes=%u throttle_bytes=%u flushed_bytes=%u max_flush_ms=%u cache_sync_evictions=%llu writer_waits=%llu writer_wait_ms=%llu",
+            stats.dirty_bytes,stats.dirty_budget,stats.throttle_bytes,stats.tick_flushed,stats.max_flush_ms,
+            (unsigned long long)stats.cache_sync_evictions,(unsigned long long)stats.writer_waits,
+            (unsigned long long)stats.writer_wait_ms);
     vfs_io_end_locked(&s->vfs,io_mask);
     s->writer_ticks++;
     /* cache_error is sticky per device. Do not turn one removable-media
@@ -497,10 +503,16 @@ int storage_writeback(struct storage *s, uint32_t now)
     vfs_unlock(&s->vfs);
     /* Delayed failures revoke the mount immediately, not just next commit. */
     for (unsigned d = 2; d < 26; d++) {
-        vfs_lock(&s->vfs,vfs_drive_mask(d));
+        vfs_lock(&s->vfs,0);
         struct storage_volume *v = &s->volumes[d];
-        if (!v->present || !v->fat.mounted) { vfs_unlock(&s->vfs); continue; }
+        if (!v->present) { vfs_unlock(&s->vfs); continue; }
         int error = cache_error(&s->cache, &v->io);
+        /* Healthy volume reservations may be held by a throttled writer
+         * waiting for this service. Reserve only to publish an actual error. */
+        if (!error) { vfs_unlock(&s->vfs); continue; }
+        vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
+        if (!v->present || !v->fat.mounted) { vfs_unlock(&s->vfs); continue; }
+        error=cache_error(&s->cache,&v->io);
         if (error) {
             if (!(v->fat.ro_reasons & FAT_RO_WRITE_ERROR))
                 klog("[storage] failure stage=writeback drive=%c disk=%u result=%d scope=volume fallback=readonly",
@@ -671,7 +683,7 @@ static void storage_timer(void *arg)
     struct storage *s = arg;
     uint32_t last_raw=0;
     while (!s->stopped) {
-        task_sleep_ms(10);
+        cache_writer_wait(&s->cache,10);
         uint64_t now=fs_now_ms();
         bool log_due=bootlog_due((uint32_t)now);
         bool due = cache_writeback_due(&s->cache, now) || log_due || (uint32_t)(now-last_raw)>=1000;
@@ -699,6 +711,7 @@ void storage_init(void)
     if (!probe) {
         timer = task_create_kernel("storage-writer", storage_timer, s, P_DEVICE);
         if (!timer) s->writer_error = -FS_ENOMEM;
+        else s->cache.writer_online=true;
     }
     struct ata_device *devices[STORAGE_DISKS];
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {

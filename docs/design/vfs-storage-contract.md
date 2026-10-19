@@ -117,7 +117,7 @@ Media queries take namespace alone and copy the published mount identity,
 immutable volume label/identifier and current blocker list. They never reserve
 a volume or call filesystem/transport callbacks. Optical preparation occurs
 before publication; detach removes the published pointer before reuse. Waits
-over 100 ms emit the verbose `storage/vfs_wait` record.
+of at least 100 ms emit the verbose `storage/vfs_wait` record.
 
 Research checked against the former `vfs.c`, native `_locked` helpers,
 `mount.c` and `media_dev.c` before implementation: Linux's
@@ -154,8 +154,8 @@ sticky write/flush errors remain errors and MUST NOT be converted into a
 successful clean shutdown.
 
 - Default size 8 MiB (`boot-memory.md` budget), adjustable at boot.
-- Dirty blocks are written by a `device`-priority writer thread no later than
-  5 seconds after they become dirty, on explicit `flush`, before unmount, and
+- Dirty blocks become eligible for the `device`-priority writer after
+  1 second or at the dirty budget (F1-82 below), on explicit `flush`, before unmount, and
   before shutdown or reboot.
 - A **durability barrier** waits for all earlier writes to complete and
   then for a qualified device flush (`FLUSH CACHE`), or for verified
@@ -276,6 +276,78 @@ refusals. Its export after durable unmount MUST have no dirty diagnostic;
 the declared orphan-LFN diagnostic remains allowed and MUST NOT be repaired
 by the kernel. Both checker reports MUST agree on the workload state, with
 only the expected removal of the dirty diagnostic between boots.
+
+### F1-82 budgeted writeback and reader/writer concurrency (2026-10-19)
+
+Research before implementation: Linux documents separate
+[background dirty thresholds and writer thresholds](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-background-bytes).
+Its upstream [`balance_dirty_pages`](https://github.com/torvalds/linux/blob/v6.12/mm/page-writeback.c)
+wakes background writeback and sleeps the task generating dirty data. Ciuki
+uses that separation, with a fixed per-device background budget of
+`min(cache_bytes / 8, 1 MiB)`, a high watermark of twice that budget, and a
+one-second oldest-dirty deadline. This is a Ciuki policy, not Linux's adaptive
+bandwidth algorithm. The cache size and volume FIFO reservations do not change.
+
+The original implementation already released the cache mutex for transport
+(F1-78), but selected dirty LRU victims ahead of available clean ones and
+used whole-device barriers for periodic writeback. FAT append also calls
+durability barriers, so background policy alone cannot remove its synchronous
+single-sector command overhead. Bounded LBA-sorted write batches serve both
+explicit barriers and background work; adjacent sectors share one command.
+Each batch reserves at most 64 blocks (at most 32 KiB), using a preallocated
+buffer charged to the cache budget. Tiny caches retain their single-sector
+fallback and eight-slot minimum. Busy reservations exclude writes/eviction
+of participating blocks while cache bookkeeping is unlocked for transport.
+Clean hits and unrelated misses remain available during writes and flushes.
+
+An online writer sleeps on cache changes with a 10 ms safety poll and drains
+immediately while work remains due. Reader allocation prefers any eligible
+clean slot; if only healthy dirty victims remain it requests writeback and
+waits up to 20 ms, then counts a synchronous eviction as a last resort.
+The writing caller above the high watermark sleeps until its device falls
+below the background budget. This sleep releases cache bookkeeping, but
+retains the caller's FIFO volume reservation: F1-79 does not permit another
+operation to observe partially published FAT metadata. Slow/failing devices
+can therefore still delay same-volume readers; the replay is evidence for
+its stated device model, not a universal latency bound. Standalone caches
+without an installed writer retain synchronous eviction rather than waiting
+for a service that does not exist.
+
+After 20 ms without a reduction in its device's dirty bytes, a throttled
+caller assists by writing/flushing bounded batches of its own debt until it
+falls below budget. This is necessary because the shared storage task also
+drains the boot log: its namespace try-lock does not prevent it from waiting
+for a volume reservation in `vfs_seek`/`vfs_log_write`. Waiting indefinitely
+for that same task from `cache_write` would deadlock. The caller uses the same
+busy/epoch reservations and sticky-error path as background writeback, and
+its full wait/assistance time is included in writer-wait statistics. This
+follows the generating-task writeback semantics of Linux's `dirty_bytes`
+reference while retaining Ciuki's existing FAT publication locks.
+
+The writer must inspect sticky errors before reserving a volume for error
+publication. Reserving healthy volumes after every batch would deadlock a
+writer throttled under that volume's reservation. Failure publication still
+reserves/revalidates the affected volume, revokes `FAT_RO_WRITE_ERROR`, and
+is included in the existing shutdown writer drain. Explicit barriers retain
+all previous metadata ordering and qualified device flushes. Delayed flush
+failures remain sticky even after sectors have become clean in RAM.
+
+Protected `[storage] writeback` records every five seconds while dirty data
+exists include current dirty bytes, both budgets, bytes in the last tick,
+maximum tick/flush milliseconds, `cache_sync_evictions`, writer waits and
+wait duration. Each completed `vfs_wait` of at least 100 ms remains recorded.
+Record dirty bytes and counters are cache-wide totals; both budgets apply
+individually to each device.
+
+Allocation audit reference: [Microsoft FAT specification, sections 4–6](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf).
+Zero FAT entries identify free clusters; FSInfo's free count and next-free
+cluster are advisory and must be validated. The host model uses a 512 MiB
+FAT32 volume, two FATs and 4 KiB clusters. A 64 KiB append selects 16 clusters
+in three bounded passes from validated `next_free` (48 allocation probes),
+updates both FAT copies, publishes one directory sector, then FSInfo.
+No scan from cluster 2, change to disk format, or removal of a durability
+barrier is justified. Timing, physical counts and replay results are recorded
+in `build/codex/f1-82-report.md`; the host suite exercises production FAT/VFS.
 
 ## Mount, errors and corruption
 
