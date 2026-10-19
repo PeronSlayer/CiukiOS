@@ -473,6 +473,9 @@ int storage_enable_write(struct storage *s, unsigned d)
     if (!e && !v->write_sequence) v->write_sequence = ++s->sequence;
     if (!e && d == 2) e = VFS_IO(&s->vfs,log_directory(&v->fat));
     vfs_unlock(&s->vfs);
+    /* FAT census/repair already services every 128 entries. This outer
+     * checkpoint must follow release of namespace and volume locks. */
+    fs_service();
     return e;
 }
 int storage_writeback(struct storage *s, uint32_t now)

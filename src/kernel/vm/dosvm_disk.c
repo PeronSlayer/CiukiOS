@@ -196,6 +196,9 @@ int dosvm_disk_read(struct dosvm *v, uint32_t lba, void *sector)
     disk_gate_take(v);
     int e = disk_read_locked(v, lba, sector);
     disk_gate_drop(v);
+    /* Never yield inside seek/read or while publishing a read-cache window,
+     * nor from the VM worker's INT 13h emulation transaction. */
+    if (g_current && g_current != v->task) kpreempt_point();
     return e;
 }
 int dosvm_disk_write(struct dosvm *v, uint32_t lba, const void *sector)
