@@ -397,3 +397,10 @@ void u32_settings(void) {
   u32_free(data);
   SetLastError(saved_error);
 }
+
+void u32_clear_thread_input(void) {
+  for (UINT i=0;i<U32_THREADS;i++) if (threads[i].id) {
+    w32_fill(threads[i].keys,0,256);threads[i].text_count=0;
+    threads[i].key_window=threads[i].translate_window=0;threads[i].key_lparam=0;
+  }
+}

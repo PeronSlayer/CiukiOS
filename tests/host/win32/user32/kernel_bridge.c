@@ -4,6 +4,8 @@
 #define w32_pe_validate w32_kernel_pe_validate
 #include "../kernel_core_test.c"
 #undef main
+/* Kernel diagnostics use the host logging endpoint during process teardown. */
+void klog(const char *format, ...) { (void)format; }
 static struct process *ui_processes[2];
 static struct proc_thread *ui_threads[3];
 static uint32_t buffers[3];

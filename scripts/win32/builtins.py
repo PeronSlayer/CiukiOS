@@ -52,6 +52,10 @@ def build(out=None):
     user_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     for i,dll in enumerate(store['dlls']):
         if dll['name']=='user32.dll':store['dlls'][i]=user32.build(out,user_base,flags)
+    from scripts.win32 import input as directinput
+    input_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    input_dlls=directinput.build(out,input_base,flags)
+    store['dlls']=[d for d in store['dlls'] if d['name'] not in ('dinput.dll','dinput8.dll')]+input_dlls
     from scripts.win32 import codecs
     codec_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     codec_dlls=codecs.build(out,codec_base,flags)

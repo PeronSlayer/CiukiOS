@@ -114,7 +114,7 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertIn('/WINDOWS/SYSTEM',directories)
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            self.assertEqual(len(meta['builtins']),28)
+            self.assertEqual(len(meta['builtins']),30)
             self.assertIn('/WINDOWS/SYSTEM/imaadp32.acm',sources)
             self.assertIn('/system/licenses/WINE-SOURCE-OFFER.txt',sources)
             self.assertIn('/WINDOWS/SYSTEM/codecs-inventory.json',sources)

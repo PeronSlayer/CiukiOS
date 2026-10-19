@@ -369,15 +369,10 @@ found:
        out->message == WM_KEYUP || out->message == WM_SYSKEYUP)) {
     UINT vk = out->wParam & 255;
     BOOL down = out->message == WM_KEYDOWN || out->message == WM_SYSKEYDOWN;
-    if (down && !(t->keys[vk] & 128) && (vk == 20 || vk == 144 || vk == 145))
-      t->keys[vk] ^= 1;
-    t->keys[vk] = (t->keys[vk] & 1) | (down ? 128 : 0);
-    if (vk == 16 || vk == 17 || vk == 18) {
-      UINT side = vk == 16   ? (((out->lParam >> 16) & 255) == 0x36 ? 161 : 160)
-                  : vk == 17 ? (out->lParam & (1u << 24) ? 163 : 162)
-                             : (out->lParam & (1u << 24) ? 165 : 164);
-      t->keys[side] = (t->keys[side] & 1) | (down ? 128 : 0);
-    }
+    UINT code=((DWORD)out->lParam>>16)&255;
+    if ((DWORD)out->lParam&(1u<<24)) code|=0x100;
+    u32_key_state(t->keys,vk,code,down,!!((DWORD)out->lParam&(1u<<30)));
+
   }
   u32_hooks(3, 0, flags & 1, (LPARAM)out);
   u32_mark();

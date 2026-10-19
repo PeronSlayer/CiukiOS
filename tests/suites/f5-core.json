@@ -686,6 +686,103 @@
         ]
       },
       "integration_pending": "authored, unrun: lead supplies guest codec probe and T23 execution; host models do not qualify the guest"
+    },
+    {
+      "id": "w32-input-qemu-t23",
+      "probe": "w32-input",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-input run={run_id}",
+      "timeout": 90,
+      "integration_pending": "authored, unrun; lead integrates the input PE fixture, selector and raw v3 motion session before guest qualification",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_layouts"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_formats"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_buffering"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_cooperative"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_relative_warp"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input_teardown"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "done": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

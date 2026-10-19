@@ -1,0 +1,50 @@
+{
+  "provenance": "Authored v3 records, replayed through the production parser; not a physical capture.",
+  "relative": [
+    [
+      73,
+      3,
+      40,
+      0,
+      17,
+      -9,
+      1001
+    ],
+    [
+      73,
+      3,
+      40,
+      0,
+      -4,
+      3,
+      1002
+    ]
+  ],
+  "expected_counts": [
+    13,
+    -6,
+    0
+  ],
+  "focus_trace": [
+    "unacquired",
+    "foreground acquire",
+    "raw",
+    "warp",
+    "raw",
+    "focus lost",
+    "inputlost",
+    "activate",
+    "reacquire",
+    "resync",
+    "inputlost",
+    "unacquire",
+    "notacquired"
+  ],
+  "background_trace": [
+    "acquire",
+    "focus lost",
+    "acquired with cleared state",
+    "resync",
+    "acquired with cleared state"
+  ]
+}
