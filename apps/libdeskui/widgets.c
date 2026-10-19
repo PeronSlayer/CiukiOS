@@ -838,6 +838,13 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
 void du_render(struct du_ui *u)
 {
     struct du_canvas *c = &u->canvas;
+    if (u->dirty == 2 && u->dialog.kind == DU_DLG_PROGRESS) {
+        c->clip = u->dialog.box;
+        du_draw_dialog(u);
+        c->clip = (struct du_rect){0, 0, c->width, c->height};
+        u->dirty = 0;
+        return;
+    }
     c->clip = (struct du_rect){0, 0, c->width, c->height};
     du_fill(c, c->clip, DU_FACE);
     for (unsigned i = 0; i < u->count; i++) {

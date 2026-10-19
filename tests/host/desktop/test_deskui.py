@@ -52,7 +52,7 @@ FILES_FRAMES = {
     'files-confirm-delete.xrgb': '234df65cb79ae751a7549bfc9cc3ab99204b51290c506f84296448b01ff505da',
     'files-context-background.xrgb': '36025408efb1545e3d5e9b4349f821430f5a1f999d8c39458f6bc1456bd7bdac',
     'files-context-item.xrgb': '80ccd71c58c45eeea0471a01335970bc2ffc05f9b43ca2dfb971f5654572307f',
-    'files-copy-progress.xrgb': '039c9702a6fd7e2a4b7fcd1d1681413282251fb0481e7c701b9ce793185bff1f',
+    'files-copy-progress.xrgb': '2542fade6958be2ef613a5567c27b6b21358541a6c98c741bdbb8d0e738ffa3e',
     'files-cp1-system.xrgb': '6bf866276d2d492a36c76dd37952f7cdf8eafc69a9daba60f6ee749c15fdf379',
     'files-cp2-new-folder.xrgb': 'a0206dad2edeaf99be51337eb51186e3ce8b20fcf6c22ec8fbc59996b92ed6d6',
     'files-cp3-renamed.xrgb': 'db328fb767d988aab0783feb17115dd24b45c82fb230d4a68b88321b96d77f9c',
@@ -106,7 +106,7 @@ class DeskuiTests(unittest.TestCase):
         cls.parent = ROOT / "build/host"
         cls.parent.mkdir(parents=True, exist_ok=True)
 
-    def run_harness(self, name, sources, *args, frames=False):
+    def run_harness(self, name, sources, *args, frames=False, cflags=()):
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=self.parent) as temp:
             folder = Path(temp)
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
@@ -116,7 +116,7 @@ class DeskuiTests(unittest.TestCase):
             for header in ("channel.h", "surface.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / header, include / header)
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
-                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            *cflags, "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                             "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/files"), "-I", str(ROOT / "src/kernel/include"),
                             "-I", str(folder / "include"),
                             *ICONS.defines(), *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
@@ -126,7 +126,8 @@ class DeskuiTests(unittest.TestCase):
             result = subprocess.run([str(binary), *([str(output)] if frames else []), *extra],
                                     env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            print(result.stdout.strip())
+            stdout = result.stdout + (result.stderr if name == "files-transfer" else "")
+            print(stdout.strip())
             if name == "files-ui":
                 from PIL import Image
                 review = ROOT / "build/f2-36"
@@ -136,11 +137,11 @@ class DeskuiTests(unittest.TestCase):
                     Image.frombytes("RGB", (760, 520), raw, "raw", "BGRX").save(review / f"files-{stem}.png")
             digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.glob("*.xrgb"))}
             for p in output.glob("*.xrgb"):
-                width, height = (760, 520) if name == "files-ui" else (400, 300)
+                width, height = (760, 520) if name in ("files-ui", "files-transfer") else (400, 300)
                 if p.with_suffix('.size').exists():
                     width, height = map(int, p.with_suffix('.size').read_text().split())
                 capture(p.stem, p.read_bytes(), width, height)
-            return result.stdout, digests
+            return stdout, digests
 
     def check_frames(self, actual, pinned, label):
         if not pinned:
@@ -167,6 +168,20 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"])
         self.assertIn("PASS Files worker", stdout)
+
+    def test_files_transfer_worker(self):
+        stdout, digests = self.run_harness("files-transfer", ["tests/host/desktop/files_transfer_test.c",
+            "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c",
+            *(f"apps/desktop/{n}.c" for n in ("client", "input", "shell", "autoplay", "autoplay_content",
+                "settings", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
+            cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h")))
+        self.assertIn("PASS Files transfer worker", stdout)
+        self.assertIn("[files] job=copy progress items=0 bytes=0", stdout)
+        self.assertIn("[files] job=copy cancel", stdout)
+        self.assertRegex(stdout, r"\[files\] job=copy done ms=\d+ bytes=0 rate_kbs=0 errors=1")
+        expected = json.loads((ROOT / "tests/host/desktop/transfers-goldens.json").read_text())
+        self.check_frames(digests, expected, "TRANSFERS")
 
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",

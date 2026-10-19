@@ -248,7 +248,8 @@ void du_input_box(struct du_ui *u, int id, const char *title, const char *prompt
 void du_progress(struct du_ui *u, int id, const char *title, const char *text, unsigned value, unsigned total)
 {
     struct du_dialog *d = &u->dialog;
-    if (d->kind != DU_DLG_PROGRESS || d->id != id) {
+    int fresh = d->kind != DU_DLG_PROGRESS || d->id != id;
+    if (fresh) {
         begin(u, DU_DLG_PROGRESS, id, title, text);
         d->buttons = 1; d->cancel = 0; d->focus = 0;
         item(d, 0, DU_BUTTON, ID_BUTTON, "Cancel");
@@ -259,10 +260,21 @@ void du_progress(struct du_ui *u, int id, const char *title, const char *text, u
     }
     if (title) snprintf(d->title, sizeof(d->title), "%s", title);
     if (text) snprintf(d->text, sizeof(d->text), "%s", text);
+    int tw, lines; measure(d->text, &tw, &lines);
+    if (lines < 3) lines = 3;
+    int height = 3 + TITLE_H + 12 + lines * LINE_H + 8 + 16 + 14 + BTN_H + 10 + 3;
+    if (height > u->canvas.height - 8) height = u->canvas.height - 8;
+    if (fresh || d->box.h != height) {
+        place(u, lines > 3 ? 460 : 360, height);
+        d->items[1].box = (struct du_rect){d->box.x + 14, d->box.y + d->box.h - 3 - 10 - BTN_H - 14 - 16, d->box.w - 28, 16};
+        d->items[0].box = (struct du_rect){d->box.x + d->box.w - 3 - 14 - BTN_W, d->box.y + d->box.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
+        u->dirty = 1;
+    }
     d->progress = value; d->progress_total = total;
     d->items[1].value = (int)(value > 0x7fffffffu ? 0x7fffffffu : value);
     d->items[1].total = (int)(total > 0x7fffffffu ? 0x7fffffffu : total);
-    u->dirty = 1;
+    /* Ordinary UI invalidations (1) take precedence over dialog-only (2). */
+    if (!u->dirty) u->dirty = 2;
 }
 
 /* ---- file dialogs ---- */

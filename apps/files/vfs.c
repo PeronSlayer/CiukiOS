@@ -54,6 +54,12 @@ static int list(void *ctx, const char *path, unsigned flags, fm_emit emit, void 
             r = fm_join(full, path, entry->d_name);
             if (!r) r = metadata_stat(ctx, full, &meta);
         }
+#if !defined(CIUKI_DIRENT_METADATA)
+        else if (flags & FM_LIST_METADATA) {
+            r = fm_join(full, path, entry->d_name);
+            if (!r) r = metadata_stat(ctx, full, &meta);
+        }
+#endif
         if (r == -ENOENT) { r = 0; continue; }   /* removed during enumeration */
         if (!r && (flags & FM_LIST_SNIFF) && meta.type == FM_FILE && meta.size >= 52 && !strchr(entry->d_name, '.') && sniffed < 128) {
             sniffed++; meta.exec = (uint32_t)sniff(full);
