@@ -1,0 +1,300 @@
+CiukiOS Wine 10.0: disable-rpcss-activation
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-19. LGPL-2.1-or-later.
+
+--- a/dlls/combase/rpc.c
++++ b/dlls/combase/rpc.c
+@@ -184,53 +184,7 @@
+ 
+ static BOOL start_rpcss(void)
+ {
+-    SERVICE_STATUS_PROCESS status;
+-    SC_HANDLE scm, service;
+-    BOOL ret = FALSE;
+-
+-    TRACE("\n");
+-
+-    if (!(scm = OpenSCManagerW(NULL, NULL, 0)))
+-    {
+-        ERR("Failed to open service manager\n");
+-        return FALSE;
+-    }
+-
+-    if (!(service = OpenServiceW(scm, L"RpcSs", SERVICE_START | SERVICE_QUERY_STATUS)))
+-    {
+-        ERR("Failed to open RpcSs service\n");
+-        CloseServiceHandle( scm );
+-        return FALSE;
+-    }
+-
+-    if (StartServiceW(service, 0, NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING)
+-    {
+-        ULONGLONG start_time = GetTickCount64();
+-        do
+-        {
+-            DWORD dummy;
+-
+-            if (!QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (BYTE *)&status, sizeof(status), &dummy))
+-                break;
+-            if (status.dwCurrentState == SERVICE_RUNNING)
+-            {
+-                ret = TRUE;
+-                break;
+-            }
+-            if (GetTickCount64() - start_time > 30000) break;
+-            Sleep( 100 );
+-
+-        } while (status.dwCurrentState == SERVICE_START_PENDING);
+-
+-        if (status.dwCurrentState != SERVICE_RUNNING)
+-            WARN("RpcSs failed to start %lu\n", status.dwCurrentState);
+-    }
+-    else
+-        ERR("Failed to start RpcSs service\n");
+-
+-    CloseServiceHandle(service);
+-    CloseServiceHandle(scm);
+-    return ret;
++    return FALSE;
+ }
+ 
+ static RPC_BINDING_HANDLE get_rpc_handle(unsigned short *protseq, unsigned short *endpoint)
+@@ -303,83 +257,72 @@
+ 
+ HRESULT rpcss_get_next_seqid(DWORD *id)
+ {
+-    RPCSS_CALL_START
+-    hr = irpcss_get_thread_seq_id(get_irpcss_handle(), id);
+-    RPCSS_CALL_END
++    if (id) *id = 0;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotRegister(const MonikerComparisonData *moniker_data,
+         const InterfaceData *object, const InterfaceData *moniker,
+         const FILETIME *time, DWORD flags, IrotCookie *cookie, IrotContextHandle *ctxt_handle)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotRegister(get_irot_handle(), moniker_data, object, moniker, time, flags, cookie, ctxt_handle);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotIsRunning(const MonikerComparisonData *moniker_data)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotIsRunning(get_irot_handle(), moniker_data);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotGetObject(const MonikerComparisonData *moniker_data, PInterfaceData *obj,
+         IrotCookie *cookie)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotGetObject(get_irot_handle(), moniker_data, obj, cookie);
+-    RPCSS_CALL_END
++    if (obj) *obj = NULL;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotNoteChangeTime(IrotCookie cookie, const FILETIME *time)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotNoteChangeTime(get_irot_handle(), cookie, time);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotGetTimeOfLastChange(const MonikerComparisonData *moniker_data, FILETIME *time)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotGetTimeOfLastChange(get_irot_handle(), moniker_data, time);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotEnumRunning(PInterfaceList *list)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotEnumRunning(get_irot_handle(), list);
+-    RPCSS_CALL_END
++    if (list) *list = NULL;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT WINAPI InternalIrotRevoke(IrotCookie cookie, IrotContextHandle *ctxt_handle, PInterfaceData *object,
+         PInterfaceData *moniker)
+ {
+-    RPCSS_CALL_START
+-    hr = IrotRevoke(get_irot_handle(), cookie, ctxt_handle, object, moniker);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ static HRESULT rpcss_server_register(REFCLSID clsid, DWORD flags, MInterfacePointer *obj, unsigned int *cookie)
+ {
+-    RPCSS_CALL_START
+-    hr = irpcss_server_register(get_irpcss_handle(), clsid, flags, obj, cookie);
+-    RPCSS_CALL_END
++    if (cookie) *cookie = 0;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT rpc_revoke_local_server(unsigned int cookie)
+ {
+-    RPCSS_CALL_START
+-    hr = irpcss_server_revoke(get_irpcss_handle(), cookie);
+-    RPCSS_CALL_END
++
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ static HRESULT rpcss_get_class_object(REFCLSID rclsid, PMInterfacePointer *objref)
+ {
+-    RPCSS_CALL_START
+-    hr = irpcss_get_class_object(get_irpcss_handle(), rclsid, objref);
+-    RPCSS_CALL_END
++    if (objref) *objref = NULL;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ static DWORD start_local_service(const WCHAR *name, DWORD num, LPCWSTR *params)
+@@ -624,102 +567,14 @@
+ 
+ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+ {
+-    PMInterfacePointer objref = NULL;
+-    IServiceProvider *local_server;
+-    IStream *stream = NULL;
+-    ULARGE_INTEGER newpos;
+-    LARGE_INTEGER seekto;
+-    int tries = 0;
+-    ULONG length;
+-    HRESULT hr;
+-    static const int MAXTRIES = 30; /* 30 seconds */
+-
+-    TRACE("clsid %s, riid %s\n", debugstr_guid(rclsid), debugstr_guid(riid));
+-
+-    while (tries++ < MAXTRIES)
+-    {
+-        DWORD index, start_ticks;
+-        HANDLE process = 0;
+-
+-        if (SUCCEEDED(hr = rpcss_get_class_object(rclsid, &objref)))
+-            break;
+-
+-        if (tries == 1)
+-        {
+-            if ((hr = create_local_service(rclsid)) && (hr = create_server(rclsid, &process)) &&
+-                (hr = create_surrogate_server(rclsid, &process)) )
+-                return hr;
+-        }
+-
+-        /* Wait for one second, even if messages arrive. */
+-        start_ticks = GetTickCount();
+-        do
+-        {
+-            if (SUCCEEDED(CoWaitForMultipleHandles(0, 1000, (process != 0), &process, &index)) && process && !index)
+-            {
+-                WARN("Server for %s failed to start.\n", debugstr_guid(rclsid));
+-                CloseHandle(process);
+-                return E_NOINTERFACE;
+-            }
+-        } while (GetTickCount() - start_ticks < 1000);
+-
+-        if (process) CloseHandle(process);
+-    }
+-
+-    if (!objref || tries >= MAXTRIES)
+-        return E_NOINTERFACE;
+-
+-    if (SUCCEEDED(hr = CreateStreamOnHGlobal(0, TRUE, &stream)))
+-        hr = IStream_Write(stream, objref->abData, objref->ulCntData, &length);
+-
+-    MIDL_user_free(objref);
+-
+-    if (SUCCEEDED(hr))
+-    {
+-        seekto.QuadPart = 0;
+-        IStream_Seek(stream, seekto, STREAM_SEEK_SET, &newpos);
+-
+-        TRACE("Unmarshalling local server.\n");
+-        hr = CoUnmarshalInterface(stream, &IID_IServiceProvider, (void **)&local_server);
+-        if (SUCCEEDED(hr))
+-        {
+-            hr = IServiceProvider_QueryService(local_server, rclsid, riid, obj);
+-            IServiceProvider_Release(local_server);
+-        }
+-    }
+-
+-    if (stream)
+-        IStream_Release(stream);
+-
+-    return hr;
++    if (obj) *obj = NULL;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ HRESULT rpc_register_local_server(REFCLSID clsid, IStream *stream, DWORD flags, unsigned int *cookie)
+ {
+-    MInterfacePointer *obj;
+-    const void *ptr;
+-    HGLOBAL hmem;
+-    SIZE_T size;
+-    HRESULT hr;
+-
+-    TRACE("%s, %#lx\n", debugstr_guid(clsid), flags);
+-
+-    hr = GetHGlobalFromStream(stream, &hmem);
+-    if (FAILED(hr)) return hr;
+-
+-    size = GlobalSize(hmem);
+-    if (!(obj = malloc(FIELD_OFFSET(MInterfacePointer, abData[size]))))
+-        return E_OUTOFMEMORY;
+-    obj->ulCntData = size;
+-    ptr = GlobalLock(hmem);
+-    memcpy(obj->abData, ptr, size);
+-    GlobalUnlock(hmem);
+-
+-    hr = rpcss_server_register(clsid, flags, obj, cookie);
+-
+-    free(obj);
+-
+-    return hr;
++    if (cookie) *cookie = 0;
++    return HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE);
+ }
+ 
+ static HRESULT unmarshal_ORPCTHAT(RPC_MESSAGE *msg, ORPCTHAT *orpcthat, ORPC_EXTENT_ARRAY *orpc_ext_array,
+@@ -2181,24 +2036,7 @@
+  * IRemUnknown object */
+ void rpc_start_remoting(struct apartment *apt)
+ {
+-    if (!InterlockedExchange(&apt->remoting_started, TRUE))
+-    {
+-        WCHAR endpoint[200];
+-        RPC_STATUS status;
+-
+-        get_rpc_endpoint(endpoint, &apt->oxid);
+-
+-        status = RpcServerUseProtseqEpW(
+-            rpctransportW,
+-            RPC_C_PROTSEQ_MAX_REQS_DEFAULT,
+-            endpoint,
+-            NULL);
+-        if (status != RPC_S_OK)
+-            ERR("Couldn't register endpoint %s\n", debugstr_w(endpoint));
+-
+-        /* FIXME: move remote unknown exporting into this function */
+-    }
+-    start_apartment_remote_unknown(apt);
++    /* Cross-apartment/process remoting is unavailable in this subset. */
+ }
+ 
+ /******************************************************************************

@@ -83,6 +83,281 @@ manifest policy now says so explicitly rather than implying a placeholder
 exists. Exact artifacts, missing candidate names and remaining gates are
 recorded in `build/codex/f5-14b-report.md`.
 
+## Milestone B continuation: verified archive and PE recipe (2026-10-19)
+
+The statements above describe the first delivery. Amendment 1 staged the full
+release archive; its SHA-256 is now verified locally against the unchanged
+release pin. The census is regenerated from that full tree, preserving the A
+version experiment and installed-Wine proxy as historical, separate evidence.
+The graph has 662 nodes. Its additional Makefile/spec snapshots are pinned
+from the verified archive, without replacing any previous source-file hashes.
+`config/wine-audit.json` remains the canonical machine-readable audit.
+
+Primary sources rechecked before continuation implementation:
+
+- The fifteen pinned module Makefiles (COMCTL32, COMDLG32, SHELL32, SHLWAPI,
+  OLE32, COMBASE, OLEAUT32, RPCRT4, RICHED20/32, CABINET, ADVPACK, SETUPAPI,
+  IMM32, MSVCRT), their local `.spec` files and Unix usage. The
+  [pinned configure](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/configure.ac#L774)
+  supports `--enable-archs=i386` with clang targeting i686-windows and lld.
+  Decision: use upstream dependency generation, WIDL, WRC, winebuild and
+  winegcc, rather than manually guessing generated headers or IDL sources.
+  Only explicit DLL targets are built, sequentially; no Wine runtime/server.
+- [RPC transport source](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/rpcrt4/rpc_transport.c#L3220):
+  protocol registration, tower parsing and enumeration all consult transport
+  tables. Decision: remove the concrete pipe/LRPC/TCP/HTTP implementations,
+  reject protocol lookup and tower parsing, and return no protocols. Preserve
+  NDR, UUID, memory and in-process interface code in other translation units.
+  Removing only WS2_32 from IMPORTS would leave transport paths enabled.
+- [COMBASE activation](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/combase/rpc.c#L185)
+  starts RPCSS and retries local-server activation for thirty seconds.
+  Decision: fail RPCSS/ROT and local-server entry points immediately with
+  RPC_S_SERVER_UNAVAILABLE mapped to HRESULT; keep the in-process factory,
+  allocator and marshaling implementations. Cross-apartment remoting is also
+  unavailable in this subset. This needs behavioral qualification, not just
+  successful compilation.
+- SETUPAPI's pinned devinst.c supplies hardware discovery/installation.
+  Decision: the 90 implemented SetupDi entry points fail with
+  ERROR_CALL_NOT_IMPLEMENTED and type-appropriate failure returns, leaving
+  the INF/cabinet/file/registry/INI translation units intact.
+- Wine's pinned LICENSE, AUTHORS and
+  [COPYING.LIB sections 4–6](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/COPYING.LIB#L231)
+  were read online and compared locally. Decision: keep these experimental
+  PEs outside the builtin store until qualified. A future distribution must
+  supply the verified archive, applied patches and recipe together, beside
+  the binaries. URLs alone remain insufficient.
+
+### Continuation results: builds, CRT, bases, decisions (2026-10-19)
+
+Additional primary sources read before the second recipe revision, and the
+resulting decisions:
+
+- [makedep `get_default_crt`/`get_crt_define`](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/tools/makedep.c#L2229):
+  modules without an explicit CRT import link `ucrtbase`, and a CRT module in
+  `IMPORTS` selects that CRT and `-D_MSVCR_VER`. Windows 98 has no UCRT.
+  Decision: patch `0004-single-msvcrt-crt` adds `msvcrt` to the `IMPORTS` of
+  every reused module, so they share the one system `msvcrt.dll`. The three
+  UCRT-only calls are kept locally with their documented semantics:
+  `_recalloc` ([Wine keeps it MSVCR80+](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/msvcrt/heap.c#L477)),
+  `round()` (exact half-away-from-zero) and `_swprintf_l`, mapped to the
+  `_snwprintf_l` export with the same arguments.
+- [winegcc link arguments](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/tools/winegcc/winegcc.c#L470): outside macOS,
+  `-s` is not honoured and `-Wl,-debug:dwarf` is always appended, which keeps
+  a COFF symbol table past SizeOfImage. Decision: `llvm-objcopy --strip-all`
+  after linking (pinned in `config/wine-pin.json`); no mapped byte changes.
+- The production loader maps a builtin only at its manifest base
+  (`sdk/win32/ldr/loader.c`, `builtin-image-manifest`). Decision: each reused
+  DLL is linked at a fixed base packed from `0x74000000` in recipe order with
+  64 KiB granularity (the authored builtins end below `0x70550000`); patch
+  `0005-builtin-region-base` removes RICHED20's upstream fixed base.
+- [COML2](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/coml2/Makefile.in) and [SHCORE](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/shcore/Makefile.in)
+  are eager imports of OLE32 (structured storage) and SHLWAPI (streams,
+  registry, thread helpers) in Wine 10.0; Windows 98 had these inside OLE32
+  and SHLWAPI. Decision: both are built as in-process pieces of the reused set.
+- [Delay-load failure handling](https://learn.microsoft.com/en-us/cpp/build/reference/error-handling-and-notification):
+  an unhandled delay-load failure raises `VcppException(ERROR_SEVERITY_ERROR,
+  ERROR_MOD_NOT_FOUND/ERROR_PROC_NOT_FOUND)`, and Wine's
+  [`DelayLoadFailureHook`](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/kernelbase/loader.c#L202) raises a
+  non-continuable exception. Decision: a delay-imported DLL that CiukiOS lacks
+  (UXTHEME, GDIPLUS, SECUR32, URLMON, ...) becomes a generated CiukiOS W21 stub
+  DLL returning the documented failure, so a call fails instead of faulting.
+- [GetSystemWow64DirectoryW](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-getsystemwow64directoryw):
+  "On 32-bit Windows, the function always fails, and the extended error is set
+  to ERROR_CALL_NOT_IMPLEMENTED." Decision: the WOW64 entries are W21 stubs
+  with that failure; the same failure is used for the Windows 9x-absent
+  service, NT security-token and activation-context entries.
+- Wine 10.0 links KERNELBASE, which Windows 98 lacks. Decision: a Wine-side
+  patch takes each KERNELBASE import from its Windows 98 home DLL found in the
+  pinned specs (KERNEL32, ADVAPI32, USER32, GDI32, VERSION, SHLWAPI); SHLWAPI
+  functions that Wine moved into KERNELBASE are compiled from the upstream
+  kernelbase units into the reused SHLWAPI, as Windows 98 SHLWAPI contained
+  them. These retarget/compile-in patches are decided, not yet written.
+- IMM32: the Wine build (102,400 SizeOfImage, twelve WIN32U system-call
+  imports) is measured but not reused; the CiukiOS W21 placeholder (20,480)
+  keeps the same no-IME behaviour and gains three W21 exports.
+- MSVCRT: Wine's PE exports all 85 functions the reused DLLs import and the
+  MSVCRT ABI (1,290 names, `_iob`/FILE layout, `_errno`, locale, SEH and C++
+  EH, startup). The CiukiOS newlib port covers 72 of the 85 with 93,374 text
+  bytes over an empty program (24 pages) but lacks 13 functions and every
+  MSVCRT ABI element that Windows 98-era programs and installer-placed
+  `msvcrt.dll` imports bind. Decision: the Wine 10.0 `msvcrt.dll` PE becomes
+  the single builtin MSVCRT once qualified (614,400 SizeOfImage, 153 startup
+  pages in the store model); the libc port would be a new CRT, not a port.
+- 128 MiB: the sixteen reused DLLs total 15,486,976 SizeOfImage bytes, above
+  the contract's 14 MiB installer budget (P2+P4) before any P2 DLL; SHELL32
+  alone is 9,363,456, of which 8,667,136 are resources and 7,543,454 icons
+  (PNG 256x256 2,748,974; 32-bpp 48x48 1,715,920; 32-bpp 32x32 758,992).
+  Windows 98 uses at most 8-bpp 16/32/48 icons. This exceeds a contract
+  target and returns to the lead; an icon-format subset of the SHELL32
+  resources would remove about 6 MB but is not applied.
+
+The tables below are generated from `config/wine-upper.json` by
+`python3 scripts/win32/wine_upper.py render` and checked by
+`python3 scripts/win32/wine_upper.py check` and
+`tests/host/win32/wine/test_wine_upper.py`.
+
+<!-- BEGIN GENERATED WINE UPPER -->
+
+### Reused upper DLL builds (generated from `config/wine-upper.json`)
+
+Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efafb30e9cd4d9c624b85c583171d33549d933cd3402f341ac3601`, 2 consecutive runs with identical hashes. CFLAGS `-O2 -g0 -march=pentiumpro -mno-sse -mno-sse2 -mno-mmx -fno-ident`, LDFLAGS `--no-default-config -Wl,-timestamp:0`, `llvm-objcopy --strip-all`.
+
+| DLL | Base | File bytes | SizeOfImage | Seed pages | COW pages | Resource entries | SHA-256 (prefix) | Use |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| comctl32.dll | `0x74000000` | 1,175,552 | 1,179,648 | 287 | 3 | 440 | `83236d3e95953db8` | reused (unqualified) |
+| comdlg32.dll | `0x74120000` | 970,752 | 970,752 | 237 | 2 | 1,213 | `88dc12a9b05acf40` | reused (unqualified) |
+| shell32.dll | `0x74210000` | 9,363,456 | 9,363,456 | 2286 | 3 | 5,132 | `013a4cfebaac42ce` | reused (unqualified) |
+| shlwapi.dll | `0x74b00000` | 266,240 | 266,240 | 65 | 3 | 83 | `cbcecd8df01d12f8` | reused (unqualified) |
+| ole32.dll | `0x74b50000` | 630,784 | 630,784 | 154 | 2 | 70 | `7bbaa0d0b7b1e5e6` | reused (unqualified) |
+| combase.dll | `0x74bf0000` | 258,048 | 258,048 | 63 | 3 | 0 | `f487fb45c020bbfb` | reused (unqualified) |
+| oleaut32.dll | `0x74c30000` | 540,672 | 659,456 | 132 | 31 | 53 | `619a4bfe70968574` | reused (unqualified) |
+| rpcrt4.dll | `0x74ce0000` | 425,984 | 425,984 | 104 | 3 | 3 | `ac5ec0acf19dda06` | reused (unqualified) |
+| riched20.dll | `0x74d50000` | 405,504 | 417,792 | 99 | 7 | 25 | `f9e4213c32c5a8aa` | reused (unqualified) |
+| riched32.dll | `0x74dc0000` | 32,768 | 32,768 | 8 | 2 | 3 | `d45d796292b33550` | reused (unqualified) |
+| cabinet.dll | `0x74dd0000` | 106,496 | 106,496 | 26 | 2 | 3 | `db1623f03ee9aed5` | reused (unqualified) |
+| advpack.dll | `0x74df0000` | 65,536 | 65,536 | 16 | 2 | 0 | `c52ce5810c438d5a` | reused (unqualified) |
+| setupapi.dll | `0x74e00000` | 331,776 | 331,776 | 81 | 4 | 127 | `90829d510da79442` | reused (unqualified) |
+| imm32.dll | `0x74e60000` | 102,400 | 102,400 | 25 | 2 | 3 | `d26f65cb02afb31e` | measured, not reused |
+| msvcrt.dll | `0x74e80000` | 606,208 | 614,400 | 148 | 5 | 3 | `5eca3fda5700b784` | reused (unqualified) |
+| coml2.dll | `0x74f20000` | 86,016 | 86,016 | 21 | 2 | 0 | `beb6b65a449a091b` | reused (unqualified) |
+| shcore.dll | `0x74f40000` | 77,824 | 77,824 | 19 | 3 | 0 | `ffdc462cf8a12e64` | reused (unqualified) |
+
+| Patch (applied in order) | SHA-256 (prefix) |
+| --- | --- |
+| `0001-in-process-rpc-only.patch` | `579a606cb07ec8f9` |
+| `0002-disable-rpcss-activation.patch` | `93a93e66fb2434bf` |
+| `0003-setupdi-unsupported.patch` | `1c92e3ce44705942` |
+| `0004-single-msvcrt-crt.patch` | `dbb16d028322a51c` |
+| `0005-builtin-region-base.patch` | `f35d63a7a96108f6` |
+
+### Import decisions (generated)
+
+Every missing eager import, delayed import and unresolved export forwarder of every build has exactly one decision (`decisions` in the record; the final forwarder hop is classified).
+
+| DLL | Eager missing | Delayed missing | Unresolved forwarders |
+| --- | ---: | ---: | ---: |
+| advpack.dll | 27 | 0 | 0 |
+| cabinet.dll | 1 | 0 | 0 |
+| combase.dll | 25 | 0 | 0 |
+| comctl32.dll | 141 | 20 | 27 |
+| comdlg32.dll | 67 | 0 | 0 |
+| coml2.dll | 2 | 0 | 0 |
+| imm32.dll | 50 | 0 | 0 |
+| msvcrt.dll | 50 | 2 | 0 |
+| ole32.dll | 100 | 0 | 0 |
+| oleaut32.dll | 43 | 3 | 0 |
+| riched20.dll | 31 | 0 | 0 |
+| riched32.dll | 0 | 0 | 0 |
+| rpcrt4.dll | 23 | 19 | 0 |
+| setupapi.dll | 109 | 6 | 0 |
+| shcore.dll | 21 | 3 | 2 |
+| shell32.dll | 117 | 11 | 2 |
+| shlwapi.dll | 310 | 5 | 125 |
+
+| Action | Entries |
+| --- | ---: |
+| `core-implement` | 759 |
+| `core-w21-stub` | 61 |
+| `not-reused` | 50 |
+| `w21-stub-dll` | 57 |
+| `w21-unresolved-forwarder` | 3 |
+| `wine-compile-in` | 212 |
+| `wine-patch-remove` | 3 |
+| `wine-retarget` | 197 |
+
+| Rule | Action | Decision |
+| --- | --- | --- |
+| `absent-delayed-dll` | `w21-stub-dll` | Delay-imported DLL absent from CiukiOS; a generated CiukiOS W21 stub DLL returns the documented failure per function (stub signatures), so delay binding succeeds and the caller sees failure (no theme, codec, trust provider or network). |
+| `absent-forwarder-dll` | `w21-unresolved-forwarder` | Export forwarder into a DLL absent from CiukiOS; forwarders bind lazily, so the DLL loads and a binder of this export gets the W21 missing-export diagnostic. |
+| `ciukios-stub-dll` | `core-w21-stub` | Provided by an existing CiukiOS census/W21 DLL that lacks the export; add a W21 stub with the documented failure (no printer, no IME, no network provider). |
+| `ciukios-version` | `core-implement` | CiukiOS VERSION implements the ANSI functions; the Unicode functions are added (core amendment). |
+| `core-api` | `core-implement` | Documented Win32 API reached by the reused DLL; the owning CiukiOS core DLL implements it (amendment of the owning core directive). |
+| `core-security-structures` | `core-implement` | Security descriptors and ACLs are plain data structures: the CiukiOS ADVAPI32 builds them in NT layout and object creation ignores them (no ACL enforcement on FAT); core amendment. |
+| `core-uniscribe` | `core-implement` | Wine 10.0 moved Uniscribe (USP10) into GDI32 and RICHED20/COMCTL32 shape text through it; the CiukiOS GDI32 implements a left-to-right single-script subset (core amendment). |
+| `kernelbase-internal` | `wine-compile-in` | KERNELBASE-only API without a Windows 98 home; Wine-side patch compiles the upstream kernelbase unit into the importing DLL. |
+| `kernelbase-retarget` | `wine-retarget` | Wine 10.0 links KERNELBASE, which Windows 98 lacks; a Wine-side Makefile/spec patch takes the function from its Windows 98 home DLL (pinned Wine spec), where the CiukiOS core already exports it. |
+| `kernelbase-shlwapi-compile-in` | `wine-compile-in` | SHLWAPI function that Wine 10.0 moved to KERNELBASE; Windows 98 SHLWAPI implemented it. Wine-side patch: compile the upstream kernelbase unit into the reused SHLWAPI. |
+| `kernelbase-to-shlwapi` | `wine-retarget` | SHLWAPI function taken from KERNELBASE by another reused DLL; Wine-side patch retargets it to the reused SHLWAPI (after its compile-in). |
+| `not-reused` | `not-reused` | The importing Wine build is measured but not reused; the entry disappears with it (see not_reused). |
+| `ntdll-native` | `core-implement` | NT native API (Nt*/Rtl*/Ldr*) reached by the reused DLL; the CiukiOS NTDLL implements it over its own services (core amendment). |
+| `ntdll-runtime` | `core-implement` | Compiler/CRT helper that NT NTDLL exports (64-bit arithmetic, stack probe, _vsnprintf); the CiukiOS NTDLL implements it (core amendment). |
+| `w21-actctx` | `core-w21-stub` | Activation contexts are Windows XP+; W21 stub failing with ERROR_CALL_NOT_IMPLEMENTED, which the callers treat as no context. |
+| `w21-dpi` | `core-w21-stub` | Per-monitor DPI internals (Windows 8.1+) reached only through SHCORE forwarders; W21 stub failing, callers fall back to 96 DPI. |
+| `w21-msi` | `core-w21-stub` | Windows Installer descriptors (advertised shortcuts) need MSI, which CiukiOS refuses (W32_REFUSE_MSI); W21 stub returning ERROR_CALL_NOT_IMPLEMENTED. |
+| `w21-nt-security` | `core-w21-stub` | NT token/ACL services (file ACLs, privileges, user tokens, SID strings) are absent from Windows 9x and FAT; Windows 9x fails with ERROR_CALL_NOT_IMPLEMENTED; W21 stub with that failure. |
+| `w21-services` | `core-w21-stub` | Service Control Manager: Windows 9x has none and fails with ERROR_CALL_NOT_IMPLEMENTED; W21 diagnostic stub with that failure. |
+| `w21-thread-description` | `core-w21-stub` | Thread descriptions are Windows 10 diagnostics; W21 stub returning E_NOTIMPL. |
+| `w21-wow64` | `core-w21-stub` | WOW64 redirection exists only on 64-bit Windows; documented to fail on 32-bit Windows; W21 stub with ERROR_CALL_NOT_IMPLEMENTED. |
+| `wine-private` | `wine-patch-remove` | Wine-private helper with no Windows 98 meaning; a Wine-side source patch removes the call path. No Wine-private export enters the core. |
+
+Unique names per rule and owning DLL:
+
+- `absent-delayed-dll` → gdiplus.dll (7): GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectRectI, GdipGetImageDimension, GdipGetImageThumbnail, GdipLoadImageFromFile
+- `absent-delayed-dll` → iphlpapi.dll (1): GetAdaptersInfo
+- `absent-delayed-dll` → mlang.dll (1): ConvertINetUnicodeToMultiByte
+- `absent-delayed-dll` → secur32.dll (18): AcceptSecurityContext, AcquireCredentialsHandleA, AcquireCredentialsHandleW, CompleteAuthToken, DecryptMessage, DeleteSecurityContext, EncryptMessage, EnumerateSecurityPackagesA, EnumerateSecurityPackagesW, FreeContextBuffer, FreeCredentialsHandle, GetUserNameExW, ImpersonateSecurityContext, InitializeSecurityContextW, MakeSignature, QueryContextAttributesA, RevertSecurityContext, VerifySignature
+- `absent-delayed-dll` → shdocvw.dll (1): #218
+- `absent-delayed-dll` → urlmon.dll (4): CoInternetParseUrl, CreateFormatEnumerator, CreateURLMoniker, RegisterFormatEnumerator
+- `absent-delayed-dll` → uxtheme.dll (20): CloseThemeData, DrawThemeBackground, DrawThemeEdge, DrawThemeParentBackground, DrawThemeText, DrawThemeTextEx, EnableThemeDialogTexture, GetThemeBackgroundContentRect, GetThemeBackgroundExtent, GetThemeColor, GetThemeFont, GetThemeInt, GetThemeMargins, GetThemePartSize, GetThemeTextExtent, GetWindowTheme, IsThemeBackgroundPartiallyTransparent, IsThemePartDefined, OpenThemeData, OpenThemeDataForDpi
+- `absent-delayed-dll` → windowscodecs.dll (1): WICConvertBitmapSource
+- `absent-delayed-dll` → wintrust.dll (4): CryptCATAdminAcquireContext, CryptCATAdminAddCatalog, CryptCATAdminReleaseCatalogContext, CryptCATAdminReleaseContext
+- `absent-forwarder-dll` → userenv.dll (2): ExpandEnvironmentStringsForUserA, ExpandEnvironmentStringsForUserW
+- `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
+- `ciukios-stub-dll` → imm32.dll (3): ImmGetCompositionStringW, ImmSetCompositionFontW, ImmSetCompositionWindow
+- `ciukios-stub-dll` → mpr.dll (2): WNetGetLastErrorW, WNetRestoreConnectionW
+- `ciukios-stub-dll` → winspool.drv (12): DeviceCapabilitiesA, DeviceCapabilitiesW, DocumentPropertiesW, EnumPrintersA, EnumPrintersW, GetDefaultPrinterA, GetDefaultPrinterW, GetPrinterA, GetPrinterDriverA, GetPrinterDriverW, GetPrinterW, OpenPrinterW
+- `ciukios-version` → version.dll (3): GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW
+- `core-api` → advapi32.dll (24): GetCurrentHwProfileA, GetUserNameW, RegCreateKeyExW, RegCreateKeyW, RegDeleteKeyExW, RegDeleteKeyW, RegDeleteTreeA, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegEnumKeyW, RegEnumValueW, RegGetValueA, RegGetValueW, RegLoadMUIStringA, RegLoadMUIStringW, RegOpenKeyExW, RegOpenKeyW, RegQueryInfoKeyW, RegQueryValueExW, RegQueryValueW, RegSetValueExW, RegSetValueW, SystemFunction036
+- `core-api` → gdi32.dll (38): CloseMetaFile, CopyEnhMetaFileW, CopyMetaFileW, CreateColorSpaceW, CreateFontIndirectW, CreateFontW, CreateHalftonePalette, CreateMetaFileW, CreateRoundRectRgn, DeleteEnhMetaFile, EnumFontFamiliesExW, EnumFontFamiliesW, ExtCreatePen, ExtEscape, GdiAlphaBlend, GdiConvertToDevmodeW, GdiGetCharDimensions, GdiGetCodePage, GetBitmapBits, GetCharABCWidthsW, GetCharWidth32W, GetCharWidthInfo, GetCharWidthW, GetCharacterPlacementW, GetEnhMetaFileBits, GetEnhMetaFileHeader, GetLayout, GetMetaFileBitsEx, GetTextCharsetInfo, GetTextFaceW, GetTextMetricsW, GetWinMetaFileBits, PlayEnhMetaFile, PolyPolyline, SetEnhMetaFileBits, SetWinMetaFileBits, StartDocW, TranslateCharsetInfo
+- `core-api` → kernel32.dll (99): Beep, CompareStringOrdinal, ConvertDefaultLocale, CopyFileW, CreateDirectoryW, CreateFileMappingW, CreatePipe, CreateSemaphoreW, CreateTimerQueueTimer, DelayLoadFailureHook, DeleteFileW, DeviceIoControl, EnumResourceNamesW, EnumSystemLocalesEx, ExpandEnvironmentStringsA, ExpandEnvironmentStringsW, FindFirstFileW, FindNextFileW, FindResourceExW, FindResourceW, FormatMessageW, GetBinaryTypeW, GetCPInfoExW, GetConsoleMode, GetCurrencyFormatW, GetCurrentDirectoryW, GetDateFormatW, GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileAttributesExW, GetFileAttributesW, GetFileInformationByHandle, GetFileSizeEx, GetFinalPathNameByHandleW, GetFullPathNameW, GetLocaleInfoEx, GetLogicalDriveStringsW, GetLongPathNameW, GetNumberFormatW, GetPrivateProfileIntW, GetPrivateProfileStringW, GetPrivateProfileStructW, GetProfileStringW, GetShortPathNameW, GetStringTypeExW, GetSystemDefaultUILanguage, GetSystemDirectoryW, GetSystemWindowsDirectoryA, GetSystemWindowsDirectoryW, GetTempFileNameW, GetTempPathW, GetThreadId, GetTickCount64, GetTimeFormatW, GetUserDefaultLocaleName, GetUserDefaultUILanguage, GetVolumeInformationW, GetWindowsDirectoryW, GlobalAddAtomW, GlobalFindAtomW, HeapCompact, InitOnceExecuteOnce, InitializeCriticalSectionEx, IsBadStringPtrA, IsBadStringPtrW, IsValidLocaleName, IsWow64Process, LCIDToLocaleName, LZClose, LZCopy, LZOpenFileW, LZRead, LZSeek, LocaleNameToLCID, MoveFileExW, MoveFileW, OpenEventW, OpenSemaphoreW, OutputDebugStringW, PeekConsoleInputA, PostQueuedCompletionStatus, ProcessIdToSessionId, QueueUserWorkItem, ReadConsoleA, ReadConsoleInputW, RemoveDirectoryW, ResolveDelayLoadedAPI, SearchPathW, SetConsoleMode, SetCurrentDirectoryW, SetFileAttributesW, SetFilePointerEx, SystemTimeToTzSpecificLocalTime, VerifyConsoleIoHandle, WritePrivateProfileStringW, WritePrivateProfileStructW, lstrcmpW, lstrcmpiW
+- `core-api` → user32.dll (105): AppendMenuW, CharLowerBuffW, CharLowerW, CharNextW, CharPrevW, CharToOemW, CharUpperBuffW, CharUpperW, CheckMenuRadioItem, ChildWindowFromPoint, CopyAcceleratorTableW, CopyIcon, CopyImage, CreateAcceleratorTableW, CreateCaret, CreateDialogIndirectParamW, CreateDialogParamW, CreateIconFromResourceEx, CreatePopupMenu, DdeCreateStringHandleW, DdeGetLastError, DdeInitializeW, DdeQueryStringW, DialogBoxIndirectParamW, DialogBoxParamW, DlgDirListComboBoxW, DlgDirListW, DragDetect, DrawFrameControl, DrawStateW, DrawTextExW, DrawTextW, EnableScrollBar, EnumClipboardFormats, GetAncestor, GetCaretPos, GetClipboardFormatNameA, GetClipboardFormatNameW, GetClipboardSequenceNumber, GetDlgItemInt, GetDlgItemTextW, GetDpiForWindow, GetIconInfo, GetMenuDefaultItem, GetMenuInfo, GetMenuItemInfoW, GetMenuItemRect, GetMenuStringW, GetMonitorInfoW, GetNextDlgGroupItem, GetScrollInfo, GetScrollPos, GetWindowInfo, GetWindowRgn, InsertMenuItemW, InsertMenuW, InternalGetWindowText, InvertRect, IsCharAlphaNumericW, IsCharAlphaW, IsCharLowerW, IsCharUpperW, IsDialogMessageW, IsDlgButtonChecked, IsProcessDPIAware, KillSystemTimer, LoadAcceleratorsW, LoadBitmapW, LoadImageW, LoadMenuW, LoadStringW, MapDialogRect, MessageBoxIndirectW, MessageBoxW, ModifyMenuW, MonitorFromRect, MonitorFromWindow, NotifyWinEvent, OemToCharW, PrivateExtractIconExW, PrivateExtractIconsW, RegisterClipboardFormatA, RegisterClipboardFormatW, RemoveMenu, SendDlgItemMessageW, SetCaretPos, SetDlgItemInt, SetDlgItemTextW, SetMenuDefaultItem, SetMenuInfo, SetMenuItemInfoW, SetScrollInfo, SetScrollRange, SetSystemTimer, SetWindowRgn, ShowScrollBar, SubtractRect, TabbedTextOutW, TrackMouseEvent, TrackPopupMenu, TrackPopupMenuEx, TranslateAcceleratorW, WinHelpW, wsprintfW, wvsprintfW
+- `core-security-structures` → advapi32.dll (9): AddAccessAllowedAce, AddAccessAllowedAceEx, AddAccessDeniedAce, AddAccessDeniedAceEx, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner
+- `core-uniscribe` → gdi32.dll (17): ScriptBreak, ScriptCPtoX, ScriptFreeCache, ScriptItemize, ScriptLayout, ScriptPlace, ScriptShape, ScriptStringAnalyse, ScriptStringCPtoX, ScriptStringFree, ScriptStringGetLogicalWidths, ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, ScriptString_pcOutChars, ScriptTextOut, ScriptXtoCP
+- `kernelbase-internal` → ole32.dll (1): PathCchFindExtension
+- `kernelbase-retarget` → kernel32.dll (85): CloseHandle, CompareFileTime, CompareStringA, CompareStringW, CreateEventW, CreateFileA, CreateFileW, CreateProcessW, CreateThread, DeleteCriticalSection, DisableThreadLibraryCalls, DuplicateHandle, EnterCriticalSection, FileTimeToSystemTime, FindClose, FreeLibrary, FreeResource, GetACP, GetEnvironmentVariableW, GetFileAttributesA, GetFileSize, GetFullPathNameA, GetLocalTime, GetLocaleInfoW, GetModuleFileNameA, GetModuleFileNameW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetStringTypeW, GetSystemInfo, GetThreadLocale, GetTickCount, GetUserDefaultLCID, GetVersion, GetVersionExW, GlobalAlloc, GlobalFree, HeapAlloc, HeapFree, HeapReAlloc, HeapSize, IsDBCSLeadByte, IsValidLocale, LeaveCriticalSection, LoadLibraryA, LoadLibraryExA, LoadLibraryExW, LoadLibraryW, LoadResource, LocalAlloc, LocalFree, LocalLock, LocalReAlloc, LocalUnlock, LockFileEx, LockResource, MapViewOfFile, MulDiv, MultiByteToWideChar, OpenProcess, QueryPerformanceCounter, QueryPerformanceFrequency, RaiseException, ReadFile, ReleaseSemaphore, ResetEvent, SetEndOfFile, SetErrorMode, SetEvent, SetFileAttributesA, SetFilePointer, SizeofResource, Sleep, SystemTimeToFileTime, TerminateProcess, UnlockFileEx, UnmapViewOfFile, VirtualFree, VirtualQuery, WaitForSingleObject, WideCharToMultiByte, WriteFile, lstrcmpA, lstrcmpiA
+- `kernelbase-shlwapi-compile-in` → shlwapi.dll (211): ChrCmpIA, ChrCmpIW, GetAcceptLanguagesA, GetAcceptLanguagesW, HashData, IsCharBlankW, IsCharCntrlW, IsCharDigitW, IsCharPunctW, IsCharSpaceA, IsCharSpaceW, IsCharXDigitW, IsInternetESCEnabled, ParseURLA, ParseURLW, PathAddBackslashA, PathAddBackslashW, PathAddExtensionA, PathAddExtensionW, PathAppendA, PathAppendW, PathCanonicalizeA, PathCanonicalizeW, PathCombineA, PathCombineW, PathCommonPrefixA, PathCommonPrefixW, PathCreateFromUrlA, PathCreateFromUrlAlloc, PathCreateFromUrlW, PathFileExistsA, PathFileExistsW, PathFindExtensionA, PathFindExtensionW, PathFindFileNameA, PathFindFileNameW, PathFindNextComponentA, PathFindNextComponentW, PathGetArgsA, PathGetArgsW, PathGetCharTypeA, PathGetCharTypeW, PathGetDriveNumberA, PathGetDriveNumberW, PathIsFileSpecA, PathIsFileSpecW, PathIsLFNFileSpecA, PathIsLFNFileSpecW, PathIsPrefixA, PathIsPrefixW, PathIsRelativeA, PathIsRelativeW, PathIsRootA, PathIsRootW, PathIsSameRootA, PathIsSameRootW, PathIsUNCA, PathIsUNCServerA, PathIsUNCServerShareA, PathIsUNCServerShareW, PathIsUNCServerW, PathIsUNCW, PathIsURLA, PathIsURLW, PathIsValidCharA, PathIsValidCharW, PathMatchSpecA, PathMatchSpecExA, PathMatchSpecExW, PathMatchSpecW, PathParseIconLocationA, PathParseIconLocationW, PathQuoteSpacesA, PathQuoteSpacesW, PathRelativePathToA, PathRelativePathToW, PathRemoveBackslashA, PathRemoveBackslashW, PathRemoveBlanksA, PathRemoveBlanksW, PathRemoveExtensionA, PathRemoveExtensionW, PathRemoveFileSpecA, PathRemoveFileSpecW, PathRenameExtensionA, PathRenameExtensionW, PathSearchAndQualifyA, PathSearchAndQualifyW, PathSkipRootA, PathSkipRootW, PathStripPathA, PathStripPathW, PathStripToRootA, PathStripToRootW, PathUnExpandEnvStringsA, PathUnExpandEnvStringsW, PathUnquoteSpacesA, PathUnquoteSpacesW, QISearch, SHLoadIndirectString, SHRegCloseUSKey, SHRegCreateUSKeyA, SHRegCreateUSKeyW, SHRegDeleteEmptyUSKeyA, SHRegDeleteEmptyUSKeyW, SHRegDeleteUSValueA, SHRegDeleteUSValueW, SHRegEnumUSKeyA, SHRegEnumUSKeyW, SHRegEnumUSValueA, SHRegEnumUSValueW, SHRegGetBoolUSValueA, SHRegGetBoolUSValueW, SHRegGetUSValueA, SHRegGetUSValueW, SHRegOpenUSKeyA, SHRegOpenUSKeyW, SHRegQueryInfoUSKeyA, SHRegQueryInfoUSKeyW, SHRegQueryUSValueA, SHRegQueryUSValueW, SHRegSetUSValueA, SHRegSetUSValueW, SHRegWriteUSValueA, SHRegWriteUSValueW, SHTruncateString, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrCatBuffA, StrCatBuffW, StrCatChainW, StrChrA, StrChrIA, StrChrIW, StrChrNW, StrChrW, StrCmpCA, StrCmpCW, StrCmpICA, StrCmpICW, StrCmpIW, StrCmpLogicalW, StrCmpNA, StrCmpNCA, StrCmpNCW, StrCmpNIA, StrCmpNICA, StrCmpNICW, StrCmpNIW, StrCmpNW, StrCmpW, StrCpyNW, StrCpyNXA, StrCpyNXW, StrDupA, StrDupW, StrIsIntlEqualA, StrIsIntlEqualW, StrPBrkA, StrPBrkW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrSpnA, StrSpnW, StrStrA, StrStrIA, StrStrIW, StrStrNIW, StrStrNW, StrStrW, StrToInt64ExA, StrToInt64ExW, StrToIntA, StrToIntExA, StrToIntExW, StrToIntW, StrTrimA, StrTrimW, UrlApplySchemeA, UrlApplySchemeW, UrlCanonicalizeA, UrlCanonicalizeW, UrlCombineA, UrlCombineW, UrlCompareA, UrlCompareW, UrlCreateFromPathA, UrlCreateFromPathW, UrlEscapeA, UrlEscapeW, UrlFixupW, UrlGetLocationA, UrlGetLocationW, UrlGetPartA, UrlGetPartW, UrlHashA, UrlHashW, UrlIsA, UrlIsNoHistoryA, UrlIsNoHistoryW, UrlIsOpaqueA, UrlIsOpaqueW, UrlIsW, UrlUnescapeA, UrlUnescapeW
+- `kernelbase-to-shlwapi` → shlwapi.dll (27): PathAddExtensionW, PathRemoveExtensionW, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrChrA, StrChrIA, StrChrIW, StrChrW, StrCmpIW, StrCmpNA, StrCmpNIA, StrCmpNIW, StrCmpNW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrStrA, StrStrIA, StrStrIW, StrStrW, StrToIntA, StrToIntW
+- `not-reused` → imm32.dll (50): CreateFontIndirectW, DelayLoadFailureHook, DrawTextW, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetMonitorInfoW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsBadStringPtrA, IsBadStringPtrW, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MonitorFromPoint, MonitorFromWindow, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, RegCreateKeyExW, RegDeleteKeyW, RegGetValueW, RegOpenKeyW, RegSetValueExW, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
+- `ntdll-native` → ntdll.dll (20): LdrAddRefDll, NtAllocateVirtualMemory, NtClose, NtCreateKey, NtDeleteKey, NtOpenKey, NtQueryInformationFile, NtQuerySystemTime, RtlAreBitsClear, RtlAreBitsSet, RtlCreateUnicodeStringFromAsciiz, RtlGUIDFromString, RtlImageRvaToVa, RtlInitializeBitMap, RtlIsTextUnicode, RtlRandom, RtlSetBits, RtlTimeToSecondsSince1970, RtlUnicodeToMultiByteN, RtlUnicodeToMultiByteSize
+- `ntdll-runtime` → ntdll.dll (4): _alldiv, _allrem, _aulldiv, _chkstk
+- `w21-actctx` → kernel32.dll (7): ActivateActCtx, CreateActCtxW, DeactivateActCtx, FindActCtxSectionGuid, FindActCtxSectionStringW, GetCurrentActCtx, ReleaseActCtx
+- `w21-dpi` → user32.dll (3): GetDpiForMonitorInternal, GetProcessDpiAwarenessInternal, SetProcessDpiAwarenessInternal
+- `w21-msi` → advapi32.dll (1): CommandLineFromMsiDescriptor
+- `w21-nt-security` → advapi32.dll (5): ConvertSidToStringSidW, CreateProcessAsUserW, GetFileSecurityW, LookupPrivilegeValueW, SetFileSecurityW
+- `w21-services` → advapi32.dll (8): ChangeServiceConfig2W, ChangeServiceConfigW, CreateServiceW, OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatusEx, StartServiceW
+- `w21-thread-description` → kernel32.dll (1): SetThreadDescription
+- `w21-wow64` → kernel32.dll (3): GetSystemWow64DirectoryW, Wow64DisableWow64FsRedirection, Wow64RevertWow64FsRedirection
+- `wine-private` → shell32.dll (3): wine_get_dos_file_name, wine_get_host_version, wine_get_unix_file_name
+
+### MSVCRT measurement (generated)
+
+Surface: the 85 MSVCRT functions the reused DLLs import.
+
+| Candidate | Bytes | Pages (model) | Surface covered | Notes |
+| --- | ---: | ---: | ---: | --- |
+| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 85/85 | 1290 exported names, MSVCRT ABI |
+| CiukiOS newlib port (SDK `libc.a` `cd8d9c82981bc3dd`) | 93,374 text + 420 data | 24 | 72/85 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
+
+Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.
+
+### 128 MiB fit figures (generated)
+
+| Figure | Value |
+| --- | ---: |
+| Reused DLLs | 16 |
+| File bytes | 15,343,616 |
+| SizeOfImage | 15,486,976 |
+| Shared seed pages | 3746 (15,343,616 bytes) |
+| Private COW commitment pages | 77 |
+| Startup committed pages (model) | 3823 |
+| Contract installer budget (P2+P4) | 14,680,064 |
+| SizeOfImage within budget | no |
+| SHELL32 SizeOfImage | 9,363,456 |
+
+Cold section-store header/raw seed page union; writable COW commitment promises counted separately, not resident pages. Excludes DllMain heaps, page tables, metadata and other modules; not guest RSS or a whole-system 128 MiB fit result.
+
+<!-- END GENERATED WINE UPPER -->
+
 ## Milestone C research and implementation boundary (2026-10-19)
 
 All Wine references below refer to commit
@@ -566,80 +841,668 @@ This is the build graph, including cycles; it is not a runtime working set.
 
 | Module | Direct | Delay | Defaults | Unix companion | Configure variables |
 | --- | --- | --- | --- | --- | --- |
+| acledit | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| aclui | comctl32 user32 advapi32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| activeds | advapi32 ole32 oleaut32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| activeds.tlb | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| actxprxy | uuid oleaut32 ole32 rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| adsldp | ole32 oleaut32 secur32 activeds uuid | netapi32 wldap32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| adsldpc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | advapi32 | kernelbase sechost msvcrt | rpcrt4 user32 | winecrt0 msvcrt kernel32 ntdll | — | — |
 | advpack | ole32 setupapi version advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| amsi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| amstream | strmiids strmbase uuid ole32 advapi32 ddraw msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| apisetschema | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| apphelp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| appwiz.cpl | uuid urlmon advpack comctl32 advapi32 shell32 ole32 user32 comdlg32 bcrypt kernelbase | msi | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| appxdeploymentclient | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atl | uuid oleaut32 ole32 user32 gdi32 advapi32 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atl100 | uuid ole32 oleaut32 user32 gdi32 advapi32 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atl110 | oleaut32 ole32 user32 gdi32 advapi32 uuid shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atl80 | oleaut32 user32 ole32 gdi32 advapi32 uuid shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atl90 | oleaut32 user32 ole32 gdi32 advapi32 uuid shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atlthunk | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| atmlib | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| authz | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| avicap32 | user32 | — | winecrt0 ucrtbase kernel32 ntdll | avicap32.so | — |
+| avifil32 | uuid msacm32 msvfw32 winmm ole32 user32 advapi32 rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| avrt | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| bcp47langs | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | bcrypt | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | bcrypt.so | — |
+| bcryptprimitives | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| bluetoothapis | setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| browseui | uuid ole32 comctl32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| bthprops.cpl | bluetoothapis | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | cabinet | — | — | winecrt0 ucrtbase kernel32 ntdll | — | ZLIB_PE_LIBS |
+| capi2032 | — | — | winecrt0 ucrtbase kernel32 ntdll | capi2032.so | — |
+| cards | user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cdosys | uuid ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cfgmgr32 | setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| clusapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cng.sys | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| colorcnv | combase mfplat msdmo mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | combase | advapi32 ole32 user32 gdi32 uuid rpcrt4 | oleaut32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| comcat | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | comctl32 | uuid user32 gdi32 advapi32 imm32 kernelbase | winmm uxtheme | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | comdlg32 | uuid shell32 shlwapi comctl32 winspool user32 gdi32 advapi32 | ole32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | coml2 | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | compstui | comctl32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| comsvcs | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| concrt140 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| connect | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| coremessaging | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| credui | comctl32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| crtdll | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
 | crypt32 | user32 advapi32 bcrypt | cryptnet | winecrt0 ucrtbase kernel32 ntdll | crypt32.so | — |
+| cryptdlg | cryptui crypt32 wintrust user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cryptdll | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cryptext | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | cryptnet | crypt32 shell32 ole32 advapi32 | wininet | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cryptowinrt | combase bcrypt uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| cryptsp | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | cryptui | uuid crypt32 ole32 comctl32 comdlg32 user32 gdi32 advapi32 | wintrust urlmon | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ctapi32 | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | ctapi32.so | — |
+| ctl3d32 | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d2d1 | d3d10_1 dxguid uuid gdi32 user32 advapi32 d3dcompiler | dwrite xmllite ole32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d10 | uuid d3d10core d3dcompiler_39 dxgi wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d10_1 | dxguid d3d10core dxgi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d10core | d3d11 dxgi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d11 | dxguid uuid dxgi wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d12 | dxgi dxguid wined3d gdi32 user32 uuid win32u | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d12core | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d8 | dxguid uuid wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d8thk | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3d9 | dxguid uuid wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_33 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_34 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_35 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_36 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_37 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_38 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_39 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_40 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_41 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_42 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_43 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_46 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dcompiler_47 | wined3d | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dim | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dim700 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3drm | d3dxof ddraw | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_33 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_34 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_35 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_36 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_37 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_38 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_39 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_40 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_41 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_42 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx10_43 | d3d10_1 d3dcompiler dxguid uuid gdi32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx11_42 | d3dcompiler | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx11_43 | d3dcompiler | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_24 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_25 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_26 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_27 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_28 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_29 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_30 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_31 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_32 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_33 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_34 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_35 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_36 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_37 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_38 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_39 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_40 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_41 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_42 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dx9_43 | d3d9 d3dcompiler dxguid d3dxof ole32 gdi32 user32 | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| d3dxof | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dataexchange | combase user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| davclnt | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dbgeng | — | version | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dbghelp | kernelbase | — | winecrt0 ucrtbase kernel32 ntdll | — | ZLIB_PE_LIBS |
+| dciman32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dcomp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | ddraw | dxguid uuid wined3d user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ddrawex | dxguid uuid ddraw ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| desk.cpl | advapi32 ole32 comctl32 user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| devenum | dmoguids strmiids uuid ole32 oleaut32 avicap32 winmm user32 advapi32 dsound msdmo | msvfw32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dhcpcsvc | — | iphlpapi | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dhcpcsvc6 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dhtmled.ocx | uuid ole32 oleaut32 user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| diasymreader | uuid rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| difxapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dinput | dinput dxguid uuid comctl32 ole32 user32 advapi32 hid setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dinput8 | dinput8 dxguid uuid comctl32 ole32 user32 advapi32 hid setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| directmanipulation | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dispex | uuid oleaut32 ole32 rpcrt4 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmband | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmcompos | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmime | dxguid uuid dsound ole32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmloader | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmscript | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmstyle | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmsynth | dxguid uuid ole32 advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FLUIDSYNTH_PE_LIBS |
+| dmusic | dxguid uuid ole32 advapi32 dsound user32 winmm | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dmusic32 | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dnsapi | — | netapi32 | winecrt0 ucrtbase kernel32 ntdll | dnsapi.so | — |
+| dplay | dplayx | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dplayx | dxguid uuid winmm ole32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpnaddr | dpnet | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpnet | dxguid uuid ole32 advapi32 ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpnhpast | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpnhupnp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpnlobby | dpnet | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpvoice | dxguid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dpwsockx | dxguid ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| drmclien | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dsdmo | dmoguids strmiids uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | dsound | dxguid uuid winmm ole32 advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dsquery | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dssenh | bcrypt crypt32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dsuiext | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dswave | dxguid uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dwmapi | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dwrite | user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | dwrite.so | — |
+| dx8vb | uuid ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dxcore | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dxdiagn | strmiids dxguid d3d9 ddraw dsound version ole32 oleaut32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dxgi | gdi32 dxguid uuid wined3d user32 win32u | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dxtrans | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| dxva2 | uuid ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| esent | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| evr | mfuuid strmiids strmbase uuid dxguid ole32 oleaut32 user32 d3d9 dxva2 msvcrt | mfplat | winecrt0 msvcrt kernel32 ntdll | — | — |
+| explorerframe | uuid ole32 comctl32 shell32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| faultrep | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| feclient | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fltlib | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fltmgr.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fntcache | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fontsub | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fusion | bcrypt dbghelp shlwapi version user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| fwpuclnt | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| gameux | uuid shell32 oleaut32 ole32 user32 advapi32 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| gamingtcui | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | gdi32 | user32 advapi32 win32u | winspool | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | gdiplus | uuid shlwapi ole32 oleaut32 user32 gdi32 mlang | windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| geolocation | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | glu32 | opengl32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| gphoto2.ds | comctl32 user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | gphoto2.so | JPEG_PE_LIBS |
+| gpkcsp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| graphicscapture | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hal | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hhctrl.ocx | uuid advapi32 comctl32 shlwapi ole32 oleaut32 user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | hid | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hidclass.sys | hal ntoskrnl user32 hidparse win32u | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hidparse.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hlink | uuid shell32 ole32 advapi32 | urlmon | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hnetcfg | oleaut32 ole32 advapi32 mpr uuid | ws2_32 winhttp shcore xmllite | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hrtfapo | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| http.sys | ntoskrnl ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| httpapi | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| hvsimanagementapi | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ia2comproxy | uuid oleacc oleaut32 ole32 rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| iccvid | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| icmp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| icmui | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | ieframe | uuid urlmon shell32 comctl32 shlwapi oleaut32 ole32 user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ieproxy | uuid ole32 rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| iertutil | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ifsmgr.vxd | kernel | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | imaadp32.acm | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | imagehlp | dbghelp | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | imm32 | user32 gdi32 advapi32 kernelbase win32u | ole32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| inetcomm | uuid urlmon propsys oleaut32 ole32 ws2_32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| inetcpl.cpl | comctl32 shlwapi user32 advapi32 | cryptui wininet ole32 urlmon shell32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| inetmib1 | snmpapi ws2_32 | iphlpapi | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| infosoft | uuid advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| initpki | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| inkobj | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| inseng | uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | iphlpapi | advapi32 dnsapi nsi uuid ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| iprop | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ir50_32 | user32 mfplat mfuuid | winegstreamer | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| irprops.cpl | bluetoothapis | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| itircl | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| itss | uuid urlmon shlwapi ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| joy.cpl | dxguid dinput dinput8 ole32 comctl32 user32 gdi32 advapi32 xinput | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| jscript | oleaut32 ole32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| jsproxy | uuid oleaut32 ole32 ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| kerberos | — | — | winecrt0 ucrtbase kernel32 ntdll | kerberos.so | — |
 | kernel32 | kernelbase ntdll winecrt0 | — | — | — | — |
 | kernelbase | uuid ntdll winecrt0 | — | — | — | — |
+| ksecdd.sys | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ksproxy.ax | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ksuser | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ktmw32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| l3codeca.acm | winmm user32 kernelbase | — | winecrt0 ucrtbase kernel32 ntdll | — | MPG123_PE_LIBS |
+| l3codecx.ax | combase msdmo dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| light.msstyles | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| loadperf | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| localspl | spoolss user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | localspl.so | — |
+| localui | winspool user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | lz32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| magnification | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mapi32 | uuid shlwapi shell32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mapistub | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mciavi32 | msvfw32 winmm user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mcicda | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mciqtz32 | strmiids oleaut32 ole32 winmm user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mciseq | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mciwave | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mf | advapi32 mfplat ole32 uuid mfuuid strmiids | evr urlmon user32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mf3216 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfasfsrcsnk | advapi32 ole32 mfplat mfuuid uuid winedmo | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mferror | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfh264enc | combase mfplat mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfmediaengine | oleaut32 ole32 mfplat mf mfuuid dxguid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfmp4srcsnk | advapi32 ole32 mfplat mfuuid uuid winedmo | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfplat | advapi32 ole32 dmoguids mfuuid propsys rtworkq kernelbase | bcrypt | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfplay | mfplat mf ole32 user32 uuid mfuuid strmiids | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfreadwrite | mfuuid uuid mfplat ole32 kernelbase | mf | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mfsrcsnk | advapi32 ole32 mfplat mfuuid uuid winedmo | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mgmtapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| midimap | winmm user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | mlang | uuid ole32 gdi32 advapi32 | oleaut32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mmcndmgr | uuid oleaut32 ole32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mmdevapi | ole32 oleaut32 user32 advapi32 version | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mmdevldr.vxd | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| monodebg.vxd | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mouhid.sys | ntoskrnl hidparse win32u | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mountmgr.sys | uuid advapi32 ntoskrnl | user32 | winecrt0 ucrtbase kernel32 ntdll | mountmgr.so | — |
+| mp3dmod | dmoguids msdmo ole32 uuid wmcodecdspuuid kernelbase | — | winecrt0 ucrtbase kernel32 ntdll | — | MPG123_PE_LIBS |
 | mpr | user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mprapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msacm32 | winmm user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msacm32.drv | msacm32 winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msado15 | oleaut32 ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msadp32.acm | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msasn1 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msauddecmft | combase mfplat mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mscat32 | wintrust | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mscms | shlwapi advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | LCMS2_PE_LIBS |
+| mscoree | dbghelp uuid shell32 advapi32 ole32 oleaut32 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mscorwks | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msctf | uuid ole32 oleaut32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msctfmonitor | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msctfp | rpcrt4 ole32 oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msdaps | uuid oleaut32 ole32 rpcrt4 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msdasql | uuid ole32 oleaut32 odbc32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msdelta | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msdmo | dmoguids uuid ole32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msdrm | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msftedit | uuid riched20 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msg711.acm | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msgsm32.acm | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | GSM_PE_LIBS |
+| mshtml | strmiids uuid urlmon shlwapi shell32 ole32 oleaut32 user32 gdi32 advapi32 | wininet inetcomm | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mshtml.tlb | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msi | uuid urlmon wininet comctl32 shell32 shlwapi cabinet oleaut32 ole32 version user32 gdi32 advapi32 rpcrt4 sxs imagehlp mspatcha odbccp32 wintrust crypt32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msident | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msimg32 | gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msimsg | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msimtf | uuid imm32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msisip | crypt32 ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msisys.ocx | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msls31 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msmpeg2vdec | combase mfplat mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msnet32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mspatcha | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msports | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msrle32 | winmm user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msscript.ocx | gdi32 user32 ole32 oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mssign32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mssip32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mstask | rpcrt4 ole32 oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msttsengine | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msv1_0 | netapi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | msv1_0.so | — |
+| msvcirt | msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| msvcm80 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcm90 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp100 | msvcr100 | — | winecrt0 msvcr100 kernel32 ntdll | — | — |
+| msvcp110 | msvcr110 | — | winecrt0 msvcr110 kernel32 ntdll | — | — |
+| msvcp120 | msvcr120 | — | winecrt0 msvcr120 kernel32 ntdll | — | — |
+| msvcp120_app | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp140 | vcruntime140 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp140_1 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp140_2 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp140_atomic_wait | kernelbase msvcp140 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp140_codecvt_ids | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcp60 | msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| msvcp70 | msvcr70 | — | winecrt0 msvcr70 kernel32 ntdll | — | — |
+| msvcp71 | msvcr71 | — | winecrt0 msvcr71 kernel32 ntdll | — | — |
+| msvcp80 | msvcr80 | — | winecrt0 msvcr80 kernel32 ntdll | — | — |
+| msvcp90 | msvcr90 | — | winecrt0 msvcr90 kernel32 ntdll | — | — |
+| msvcp_win | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvcr100 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr110 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr120 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr120_app | — | — | winecrt0 kernel32 ntdll | — | — |
+| msvcr70 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr71 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr80 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcr90 | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
 | msvcrt | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| msvcrt20 | msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| msvcrt40 | — | — | winecrt0 kernel32 ntdll | — | — |
+| msvcrtd | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
 | msvfw32 | winmm version comctl32 user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | msvidc32 | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msvproc | combase mfplat mfuuid dmoguids dxguid strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mswsock | ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msxml | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msxml2 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msxml3 | uuid urlmon shlwapi oleaut32 ole32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | XML2_PE_LIBS, XSLT_PE_LIBS |
+| msxml4 | ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| msxml6 | oleaut32 ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| mtxdm | uuid ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ncrypt | bcrypt | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| nddeapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ndis.sys | advapi32 ntoskrnl iphlpapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | netapi32 | rpcrt4 iphlpapi ws2_32 advapi32 dnsapi netutils | — | winecrt0 ucrtbase kernel32 ntdll | netapi32.so | — |
+| netcfgx | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| netio.sys | ntoskrnl ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| netprofm | iphlpapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | netutils | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| newdev | setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ninput | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| normaliz | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| npmshtml | mshtml | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| npptools | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | nsi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| nsiproxy.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | nsiproxy.so | — |
 | ntdll | winecrt0 | — | — | ntdll.so | MUSL_PE_LIBS |
+| ntdsapi | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| ntoskrnl.exe | advapi32 hal msvcrt | rpcrt4 setupapi | winecrt0 msvcrt kernel32 ntdll | — | — |
+| ntprint | winspool | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| objsel | strmiids uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| odbc32 | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | odbc32.so | — |
+| odbcbcp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| odbccp32 | uuid advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| odbccu32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | ole32 | uuid advapi32 user32 gdi32 combase rpcrt4 kernelbase coml2 | oleaut32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| oleacc | uuid oleaut32 ole32 user32 rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | oleaut32 | uuid ole32 rpcrt4 user32 gdi32 advapi32 | comctl32 urlmon windowscodecs | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| olecli32 | ole32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| oledb32 | uuid oleaut32 ole32 comctl32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| oledlg | ole32 comdlg32 user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| olepro32 | oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| olesvr32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| olethk32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| opcservices | uuid ole32 advapi32 urlmon xmllite oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | ZLIB_PE_LIBS |
+| opencl | — | — | winecrt0 ucrtbase kernel32 ntdll | opencl.so | — |
 | opengl32 | user32 gdi32 advapi32 win32u | glu32 | winecrt0 ucrtbase kernel32 ntdll | opengl32.so | — |
+| packager | uuid shell32 shlwapi user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| pdh | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| photometadatahandler | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| pidgen | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| powrprof | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| printui | shell32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| prntvpt | winspool ole32 oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| profapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | propsys | ole32 oleaut32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| psapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| pstorec | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| pwrshplugin | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| qasf | strmbase dmoguids strmiids uuid ole32 oleaut32 wmvcore msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| qcap | strmbase strmiids uuid ole32 oleaut32 winmm msvcrt | msvfw32 | winecrt0 msvcrt kernel32 ntdll | qcap.so | — |
+| qdvd | strmbase strmiids uuid ole32 msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| qedit | strmiids strmbase uuid oleaut32 ole32 advapi32 msvcrt | — | winecrt0 msvcrt kernel32 ntdll | — | — |
+| qmgr | uuid winhttp ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| qmgrprxy | rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| quartz | strmiids dxguid strmbase uuid dsound msacm32 msvfw32 ole32 oleaut32 rpcrt4 user32 gdi32 advapi32 winmm msvcrt | ddraw | winecrt0 msvcrt kernel32 ntdll | — | — |
+| query | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| qwave | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rasapi32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rasdlg | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| regapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| resampledmo | combase mfplat msdmo mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| resutils | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | riched20 | uuid ole32 oleaut32 imm32 user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | riched32 | riched20 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rometadata | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | rpcrt4 | uuid advapi32 | iphlpapi wininet secur32 user32 ws2_32 ole32 oleaut32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rsabase | rsaenh | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rsaenh | bcrypt crypt32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rstrtmgr | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rtutils | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| rtworkq | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| samlib | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sane.ds | comctl32 user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | sane.so | — |
+| sapi | uuid ole32 oleaut32 user32 advapi32 | winmm | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sas | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| scarddlg | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| scardsvr | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sccbase | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| schannel | secur32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| schedsvc | rpcrt4 advapi32 ole32 xmllite | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| scrobj | uuid urlmon ole32 oleaut32 xmllite advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| scrrun | uuid oleaut32 version advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| scsiport.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | sechost | kernelbase | rpcrt4 | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | secur32 | advapi32 | crypt32 | winecrt0 ucrtbase kernel32 ntdll | secur32.so | — |
+| security | secur32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sensapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| serialui | user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | setupapi | uuid advapi32 rpcrt4 kernelbase | cabinet shell32 wintrust ole32 comdlg32 user32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sfc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sfc_os | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | shcore | advapi32 | user32 ole32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| shdoclc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | shdocvw | uuid shlwapi advapi32 | version ole32 oleaut32 ieframe | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | shell32 | uuid shlwapi user32 gdi32 advapi32 | ole32 oleaut32 shdocvw version comctl32 comdlg32 gdiplus | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| shfolder | shell32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | shlwapi | uuid shcore user32 gdi32 advapi32 kernelbase | userenv oleaut32 ole32 comctl32 comdlg32 mpr mlang urlmon shell32 winmm | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| slbcsp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| slc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| snmpapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| softpub | wintrust | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| spoolss | winspool | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sppc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| srclient | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| srvcli | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| srvsvc | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sspicli | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| stdole2.tlb | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| stdole32.tlb | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sti | uuid ole32 oleaut32 rpcrt4 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| strmdll | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| svrapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| sxs | oleaut32 ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| t2embed | gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| tapi32 | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| taskschd | oleaut32 ole32 advapi32 xmllite rpcrt4 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| tbs | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| tdh | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| tdi.sys | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| threadpoolwinrt | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| traffic | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| twain_32 | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| twinapi.appcore | combase advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| tzres | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | ucrtbase | ntdll | advapi32 user32 | winecrt0 kernel32 ntdll | — | MUSL_PE_LIBS |
+| uianimation | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| uiautomationcore | uuid ole32 oleaut32 user32 oleacc | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| uiribbon | uuid ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| unicows | avicap32 msvfw32 oledlg comdlg32 shell32 winmm winspool rasapi32 secur32 sensapi version oleacc user32 mpr gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| updspapi | setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| url | shell32 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | urlmon | uuid ole32 oleaut32 shell32 rpcrt4 shlwapi wininet user32 advapi32 | advpack | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| usbd.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | user32 | gdi32 sechost advapi32 kernelbase win32u uuid | imm32 combase | winecrt0 ucrtbase kernel32 ntdll | — | PNG_PE_LIBS |
 | userenv | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| usp10 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| utildll | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | uxtheme | user32 gdi32 advapi32 | msimg32 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vbscript | oleaut32 ole32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp100 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp110 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp120 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp140 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcomp90 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcruntime140 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vcruntime140_1 | vcruntime140 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vdhcp.vxd | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vdmdbg | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | version | kernelbase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vga | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| virtdisk | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vmm.vxd | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vnbt.vxd | iphlpapi ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vnetbios.vxd | netapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vssapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vtdapi.vxd | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vulkan-1 | user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| vwin32.vxd | kernel | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| w32skrnl | kernel | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wbemdisp | oleaut32 ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wbemprox | winspool version iphlpapi dxgi oleaut32 ole32 advapi32 user32 gdi32 ws2_32 rpcrt4 setupapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wdscore | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| webservices | winhttp rpcrt4 user32 ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| websocket | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wer | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wevtapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wevtsvc | rpcrt4 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wiaservc | uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wimgapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | win32u | ntdll winecrt0 | — | — | win32u.so | — |
+| windows.applicationmodel | combase kernelbase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.devices.bluetooth | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.devices.enumeration | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.devices.usb | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.gaming.input | combase uuid user32 dinput8 setupapi hid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.gaming.ui.gamebar | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.globalization | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.media | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.media.devices | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.media.mediacontrol | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.media.speech | combase uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.networking | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.networking.connectivity | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.networking.hostname | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.perception.stub | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.security.authentication.onlineid | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.security.credentials.ui.userconsentverifier | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.storage.applicationdata | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.system.profile.systemmanufacturers | combase oleaut32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.ui | combase advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| windows.web | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | windowscodecs | windowscodecs uuid ole32 oleaut32 propsys rpcrt4 shlwapi user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | JPEG_PE_LIBS, PNG_PE_LIBS, TIFF_PE_LIBS |
+| windowscodecsext | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winealsa | uuid ole32 advapi32 | winmm | winecrt0 ucrtbase kernel32 ntdll | winealsa.so | — |
+| wineandroid | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | wineandroid.so | — |
+| winebth.sys | ntoskrnl uuid | — | winecrt0 ucrtbase kernel32 ntdll | winebth.so | — |
+| winebus.sys | ntoskrnl hidparse | — | winecrt0 ucrtbase kernel32 ntdll | winebus.so | — |
+| winecoreaudio | uuid ole32 user32 advapi32 | winmm | winecrt0 ucrtbase kernel32 ntdll | winecoreaudio.so | — |
 | winecrt0 | — | — | — | — | — |
 | wined3d | dxguid opengl32 user32 gdi32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | VKD3D_PE_LIBS |
+| winedmo | mfuuid | — | winecrt0 ucrtbase kernel32 ntdll | winedmo.so | — |
+| winegstreamer | strmbase ole32 oleaut32 msdmo msvcrt user32 | mfplat mf | winecrt0 msvcrt kernel32 ntdll | winegstreamer.so | — |
+| winehid.sys | hidclass ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winemac | uuid rpcrt4 user32 gdi32 win32u | ole32 shell32 imm32 | winecrt0 ucrtbase kernel32 ntdll | winemac.so | — |
+| winemapi | shlwapi shell32 mapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wineoss | uuid ole32 user32 advapi32 | winmm | winecrt0 ucrtbase kernel32 ntdll | wineoss.so | — |
+| wineps | user32 gdi32 winspool advapi32 win32u | — | winecrt0 ucrtbase kernel32 ntdll | wineps.so | — |
+| winepulse | dxguid uuid winmm user32 advapi32 ole32 | — | winecrt0 ucrtbase kernel32 ntdll | winepulse.so | — |
+| wineusb.sys | ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | wineusb.so | — |
+| winevulkan | user32 gdi32 advapi32 setupapi win32u | — | winecrt0 ucrtbase kernel32 ntdll | winevulkan.so | — |
+| winewayland | — | — | winecrt0 ucrtbase kernel32 ntdll | winewayland.so | — |
+| winex11 | uuid user32 gdi32 win32u | — | winecrt0 ucrtbase kernel32 ntdll | winex11.so | — |
+| winexinput.sys | ntoskrnl hidparse | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wing32 | user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winhttp | uuid jsproxy user32 advapi32 ws2_32 | oleaut32 crypt32 secur32 iphlpapi dhcpcsvc | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | wininet | mpr shlwapi shell32 user32 ws2_32 advapi32 | secur32 crypt32 cryptui dhcpcsvc iphlpapi | winecrt0 ucrtbase kernel32 ntdll | — | ZLIB_PE_LIBS |
 | winmm | uuid user32 advapi32 ole32 msacm32 | dinput8 | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winnls32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winprint | winspool | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winscard | — | — | winecrt0 ucrtbase kernel32 ntdll | winscard.so | — |
 | winspool | user32 gdi32 advapi32 compstui | — | winecrt0 ucrtbase kernel32 ntdll | winspool.so | — |
+| winsta | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wintab32 | user32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
 | wintrust | crypt32 user32 advapi32 | cryptui imagehlp | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wintypes | combase | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| winusb | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wlanapi | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wlanui | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wldap32 | crypt32 secur32 ws2_32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | LDAP_PE_LIBS |
+| wldp | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmadmod | combase mfplat msdmo mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmasf | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmi | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmilib.sys | hal ntoskrnl | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmiutils | oleaut32 ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmp | oleaut32 ole32 urlmon shlwapi user32 gdi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmphoto | windowscodecs uuid ole32 oleaut32 propsys rpcrt4 shlwapi | — | winecrt0 ucrtbase kernel32 ntdll | — | JXR_PE_LIBS |
+| wmvcore | kernel32 | winegstreamer | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wmvdecod | combase mfplat msdmo mfuuid dmoguids strmiids wmcodecdspuuid uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wnaspi32 | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wofutil | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wow32 | kernel | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wow64 | ntdll winecrt0 | — | — | — | — |
+| wow64cpu | wow64 ntdll winecrt0 | — | — | — | — |
+| wow64win | wow64 win32u ntdll winecrt0 | — | — | — | — |
+| wpc | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wpcap | iphlpapi | ws2_32 | winecrt0 ucrtbase kernel32 ntdll | wpcap.so | — |
 | ws2_32 | — | dnsapi advapi32 iphlpapi user32 | winecrt0 ucrtbase kernel32 ntdll | ws2_32.so | — |
+| wsdapi | bcrypt iphlpapi rpcrt4 user32 webservices ws2_32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wshom.ocx | uuid oleaut32 ole32 shell32 user32 advapi32 scrrun | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wsnmp32 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wsock32 | mswsock ws2_32 iphlpapi | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wtsapi32 | advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wuapi | uuid ole32 advapi32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| wuaueng | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| x3daudio1_0 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_1 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_2 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_3 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_4 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_5 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_6 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| x3daudio1_7 | — | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine2_0 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine2_4 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine2_7 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine2_9 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_0 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_1 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_2 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_3 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_4 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_5 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_6 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xactengine3_7 | ole32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xapofx1_1 | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xapofx1_2 | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xapofx1_3 | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xapofx1_4 | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xapofx1_5 | ole32 | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_0 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_1 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_2 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_3 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_4 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_5 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_6 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_7 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_8 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xaudio2_9 | advapi32 ole32 user32 uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | FAUDIO_PE_LIBS |
+| xinput1_1 | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xinput1_2 | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xinput1_3 | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xinput1_4 | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xinput9_1_0 | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xinputuap | hid setupapi advapi32 user32 | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xmllite | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xolehlp | uuid | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xpsprint | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xpssvcs | — | — | winecrt0 ucrtbase kernel32 ntdll | — | — |
+| xtajit64 | ntdll winecrt0 | — | — | — | — |
 
 <!-- END GENERATED WINE AUDIT -->
 

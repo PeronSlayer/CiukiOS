@@ -37,3 +37,18 @@ a qualified binary. T1 rejects a reused-PE manifest entry until a subsequent
 delivery implements complete source/patch/build/load qualification. A complete
 corresponding-source distribution must accompany any future reused P4 DLLs;
 the upstream URLs above alone do not meet that requirement.
+
+### F5-14B continuation
+
+The full release archive is now locally SHA-256 verified (`archive-verified`
+in `config/wine-pin.json`), superseding the pending-download statements above.
+`scripts/win32/build-wine-dlls.sh --upper-build` builds seventeen upper DLLs
+from that archive (sixteen to be reused, IMM32 measured only), using upstream
+configure/makedep/IDL/resource rules and clang/lld. It applies the five
+patches listed in PATCHES.md to a private extraction. It does not build
+Wine's core DLLs, server or Unix runtime. `config/wine-upper.json` records
+the exact PE hashes (identical on two consecutive runs), bases, sizes,
+section-store page models, the licence entry and one decision per missing
+core export. The production builtin store continues to reject reused Wine
+records (unlisted, mismatched or unqualified). No binary is distributed in an
+OS image by this continuation.

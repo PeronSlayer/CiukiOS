@@ -24,6 +24,8 @@ WINE_MODULES = ('comctl32', 'comdlg32', 'shell32', 'shlwapi', 'ole32',
 BUILTINS = ('dsetup.dll', 'dsetup32.dll')
 ORIGIN = 'CiukiOS DirectSetup installation identity'
 INVENTORY = 'upper-builtins-inventory.json'
+# Reused Wine PE build record (f5-14B continuation): hashes, bases, licence.
+UPPER_RECORD = ROOT / 'config/wine-upper.json'
 MEMORY_MODEL = ('Cold section-store header/raw seed page union; writable COW '
                 'commitment promises counted separately, not resident pages. '
                 'Excludes DllMain heaps, page tables, metadata and other modules; '
@@ -78,7 +80,11 @@ def read_images(folder):
         if name in result:
             raise ValueError('duplicate PE provider: ' + name)
         pe = census.PE(path.read_bytes())
-        metadata = pe.census()
+        # Import qualification needs headers/exports, not a resource walk.
+        # Large Wine translation tables can exceed the title census budget;
+        # this is deliberately not a replacement for the image validator.
+        metadata = {'dll': bool(pe.flags & 0x2000), 'warnings': pe.warnings,
+                    'exports': pe.exports()}
         if not metadata['dll'] or set(metadata['warnings']) - {'newer-subsystem-version'}:
             raise ValueError('invalid DLL provider: ' + name)
         result[name] = (pe, metadata)
@@ -278,8 +284,21 @@ def reject_unqualified_wine(folder, store):
         if path.is_file() and path.suffix.lower() in ('.dll', '.drv', '.acm'):
             if path.name.lower() not in expected:
                 raise ValueError('unlisted builtin PE: ' + path.name)
-    for record in store['dlls']:
-        if record.get('wine_reused') is True:
+    reused = [record for record in store['dlls'] if record.get('wine_reused') is True]
+    if not reused:
+        return
+    built = json.loads(UPPER_RECORD.read_text())['dlls'] if UPPER_RECORD.is_file() else {}
+    for record in reused:
+        name = record['name'].lower()
+        entry = built.get(name)
+        if entry is None:
+            raise ValueError('unlisted reused Wine PE: ' + record['name'])
+        image = Path(folder) / record['path']
+        actual = sha(image) if image.is_file() else None
+        if (record.get('sha256') != entry['sha256'] or actual != entry['sha256']
+                or record.get('base') != entry['base'] or record.get('license') != entry['license']):
+            raise ValueError('mismatched reused Wine PE: ' + record['name'])
+        if entry['qualified'] is not True:
             raise ValueError('unqualified reused Wine PE: ' + record['name'])
 
 
