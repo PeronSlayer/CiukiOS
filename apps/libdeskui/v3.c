@@ -36,6 +36,9 @@ int du3_next(struct du3_connection *c, struct desk_packet *p)
     int valid=m.data[0]==DESK_V3_VERSION && desk_parse(&m,0,NULL,p);
     for (unsigned k=0;k<m.fd_count && k<4;k++) if (m.fds[k]>=0) c->transport.close(m.fds[k]);
     if (!valid) { c->disconnected=1; errno=EINVAL; return -1; }
+    /* The additive lease tuple stays with its window event in desk_packet;
+     * callers must replace cached FRAME tokens on every grant. */
+    if (p->opcode==DESK_V3_LEASE_EVENT && p->flags!=1) memset(&p->lease,0,sizeof(p->lease));
     return 1;
 }
 int du3_ui_progress(struct du3_connection *c, uint32_t id, uint32_t generation, uint32_t ping)

@@ -114,3 +114,32 @@ behind an in-progress native write. Driver tests cover stale generations,
 quarantine, extent rejection, accelerator synchronization and write draining;
 display-service tests cover queued DOS takeover and the restored-frame wait.
 Host evidence remains separate from the pending T23 tests above.
+
+## F5-09B continuation: atomic desktop transaction (2026-10-19)
+
+The lead amendment selects GRANT as the single mode transaction: it executes
+under the desktop's call-74 authority, suspends composition, hides the cursor,
+confirms VBE state and rolls back before returning an error. The desktop must
+not issue a separate call 74 first. The existing kernel transaction and
+`ciuki_present_choose_mode` are reused without changing presenter authority.
+The v3 lease event adds the returned token/framebuffer generation, retained
+source layout, scale and native mode; v1/v2.1 records are unchanged.
+
+Primary sources reviewed for this continuation: Microsoft
+[SetCooperativeLevel](https://learn.microsoft.com/en-us/windows/win32/api/ddraw/nf-ddraw-idirectdraw7-setcooperativelevel)
+and [RestoreDisplayMode](https://learn.microsoft.com/en-us/windows/win32/api/ddraw/nf-ddraw-idirectdraw7-restoredisplaymode)
+require exclusive ownership and restoration of the original display. This
+is implemented by the existing f5-08 transaction, not by giving clients a
+display descriptor. Microsoft
+[ExpandEnvironmentStringsA](https://learn.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-expandenvironmentstringsa)
+specifies case-insensitive, single-pass percent-variable expansion with
+unknown variables preserved; uninstall REG_EXPAND_SZ uses these semantics
+with bounded output before the existing command-line parser.
+[QEMU fw_cfg](https://www.qemu.org/docs/master/specs/fw_cfg.html) supplies
+the explicit probe selector; only the kernel controller emits evidence,
+never fixture stdout. Host replay remains host evidence.
+
+The actual copied-record transport is the public `CIUKI_SYS_W32 = 96`;
+older call-101 prose above does not renumber that frozen enum.
+
+A follow-up comparison with [Wine 10.0 environment expansion](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/ntdll/env.c) confirms that unknown percent-delimited spans are copied and consumed as a whole. The adapter retains empty pairs and unmatched percent signs, handles adjacent references, and never rescans substituted values.

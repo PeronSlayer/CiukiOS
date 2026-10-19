@@ -51,6 +51,8 @@ uint64_t arch_w32_counter(void) { return w32_counter_sample(g_ticks, 1193, false
 void task_set_base(struct task *t,enum task_prio p,unsigned level){t->prio=p;t->base_priority=(uint8_t)level;}
 uint32_t supervisor_desktop_pid(void){return fake_desktop_pid;}
 void grant_release(struct desktop_description *d){(void)d;}
+static bool registry_grant=true;
+bool grants_display_owner(const struct process *p){return registry_grant && p && p->pid==fake_desktop_pid;}
 void proc_signal_pipe(struct proc_thread *t){(void)t;}
 void kmutex_init(struct kmutex *m){memset(m,0,sizeof(*m));}
 void kmutex_lock(struct kmutex *m){CHECK(!m->owner);m->owner=g_current;}

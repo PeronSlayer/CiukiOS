@@ -275,14 +275,14 @@ def selector(request, source='menu', validated_fw_cfg=False):
     if source == 'cfg' or isinstance(request, str) and ':sweep' in request:
         from physical import cfg_selector
         return cfg_selector(request, source)
-    server = re.search(r' server=(desktop|standin)$',request) if isinstance(request,str) else None
+    server = re.search(r' server=(desktop-v3|desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
     if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
     if not request.isascii() or len(request)>64:raise ValueError('selector must be at most 64 ASCII bytes')
     selected = base_selector(request[:server.start()],source,validated_fw_cfg)
     if selected['phase'] != 2 or selected['probe'] != 'crash-isolation':
         raise ValueError('server selection requires f2:crash-isolation')
-    return {**selected,'server':server[1]}
+    return {**selected,'server':'desktop' if server[1]=='desktop-v3' else server[1], 'desktop_v3':server[1]=='desktop-v3'}
 
 
 def load_suite(name):
@@ -1635,7 +1635,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
         if platform:request+=' platform='+platform
         if requested['safe']:request+=' safe=1'
-        if requested.get('server'):request+=' server='+requested['server']
+        if requested.get('server'):request+=' server='+('desktop-v3' if requested.get('desktop_v3') else requested['server'])
     require_input_counter_source(inputs,profile,case,requested)
     machine=profile['machine']
     if not inputs['i8042']:

@@ -68,6 +68,45 @@ static void registry(const char *dir)
     assert(ciuki_win32_uninstall_run("..\\fixture")==-EINVAL);
     assert(ciuki_win32_uninstall_run("fixture")==123);
     assert(kind==DESK_W32_PE && !strcmp(launched.target,fixture_path) && !strcmp(launched.arguments,"/remove \"keep spaces\""));
+    value(fixture_key,"UninstallString","\"C:\\literal.exe\" %SystemRoot%");
+    count=ciuki_win32_uninstall_list(list,32);assert(count==32);
+    int literal=0;for(int i=0;i<count;i++)if(!strcmp(list[i].key,"fixture")) {
+        assert(!strcmp(list[i].command,"\"C:\\literal.exe\" %SystemRoot%"));literal=1;
+    }assert(literal); /* REG_SZ never expands. */
+    const uint8_t surrogate[]={0,0xd8,0,0};
+    assert(!wr_put(&server,fixture_key,"UninstallString",2,surrogate,sizeof(surrogate)));
+    assert(ciuki_win32_uninstall_run("fixture")==-EINVAL);
+    assert(!setenv("CIUKI_UNINSTALL_DIR",dir,1));
+    const char *expanded="\"%ciuki_uninstall_dir%/fixture.exe\" /remove \"keep spaces\"";
+    uint8_t wide[512];size_t wn=strlen(expanded);
+    for(size_t i=0;i<=wn;i++){wide[2*i]=(uint8_t)expanded[i];wide[2*i+1]=0;}
+    assert(!wr_put(&server,fixture_key,"UninstallString",2,wide,(uint32_t)(wn+1)*2));
+    assert(ciuki_win32_uninstall_run("fixture")==123);
+    assert(!strcmp(launched.target,fixture_path) && !strcmp(launched.arguments,"/remove \"keep spaces\""));
+    expanded="\"%SystemRoot%\\remove.exe\" %UNKNOWN_CIUKI_VARIABLE% tail%";wn=strlen(expanded);
+    for(size_t i=0;i<=wn;i++){wide[2*i]=(uint8_t)expanded[i];wide[2*i+1]=0;}
+    assert(!wr_put(&server,fixture_key,"UninstallString",2,wide,(uint32_t)(wn+1)*2));
+    count=ciuki_win32_uninstall_list(list,32);assert(count==32);
+    int found=0;for(int i=0;i<count;i++)if(!strcmp(list[i].key,"fixture")) {
+        assert(!strcmp(list[i].command,"\"C:\\WINDOWS\\remove.exe\" %UNKNOWN_CIUKI_VARIABLE% tail%"));found=1;
+    }assert(found);
+    const char *patterns[]={"%UNKNOWN_CIUKI_VARIABLE%SystemRoot%","%%SystemRoot%%","%UNKNOWN_CIUKI_VARIABLE%%SystemRoot%"};
+    const char *results[]={"%UNKNOWN_CIUKI_VARIABLE%SystemRoot%","%%SystemRoot%%","%UNKNOWN_CIUKI_VARIABLE%C:\\WINDOWS"};
+    for(unsigned k=0;k<3;k++) {
+        char expected[512];snprintf(command,sizeof(command),"\"C:\\fixture.exe\" %s",patterns[k]);wn=strlen(command);
+        snprintf(expected,sizeof(expected),"\"C:\\fixture.exe\" %s",results[k]);
+        for(size_t i=0;i<=wn;i++){wide[2*i]=(uint8_t)command[i];wide[2*i+1]=0;}
+        assert(!wr_put(&server,fixture_key,"UninstallString",2,wide,(uint32_t)(wn+1)*2));
+        count=ciuki_win32_uninstall_list(list,32);assert(count==32);found=0;
+        for(int i=0;i<count;i++)if(!strcmp(list[i].key,"fixture")) {assert(!strcmp(list[i].command,expected));found=1;}
+        assert(found);
+    }
+    char overflow[2048];memset(overflow,'x',sizeof(overflow)-1);overflow[sizeof(overflow)-1]=0;
+    assert(!setenv("CIUKI_UNINSTALL_DIR",overflow,1));
+    expanded="%CIUKI_UNINSTALL_DIR%";wn=strlen(expanded);
+    for(size_t i=0;i<=wn;i++){wide[2*i]=(uint8_t)expanded[i];wide[2*i+1]=0;}
+    assert(!wr_put(&server,fixture_key,"UninstallString",2,wide,(uint32_t)(wn+1)*2));
+    assert(ciuki_win32_uninstall_run("fixture")==-EOVERFLOW);
     value(fixture_key,"UninstallString","C:\\Program Files\\unsafe.exe /x");
     assert(ciuki_win32_uninstall_run("fixture")==-EINVAL); /* reread, reject ambiguous path */
     malformed=1;assert(ciuki_win32_uninstall_list(list,32)==-EINVAL);malformed=0;
@@ -106,6 +145,6 @@ int main(int argc,char **argv)
     r.target[0]=0;assert(ciuki_win32_shell_launch(&r)==-EINVAL);
     char native[260];assert(desk_w32_native_path("",native,sizeof(native))==-EINVAL);assert(!desk_w32_native_path("C:\\Program Files\\a.exe",native,sizeof(native)));
     assert(!strcmp(native,"/Program Files/a.exe"));assert(desk_w32_native_path("D:\\a.exe",native,sizeof(native))==-ENODEV);
-    assert(launches==4 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; exact bounded record and path translation");
+    assert(launches==5 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; exact bounded record and path translation");
     return 0;
 }

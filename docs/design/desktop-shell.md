@@ -223,6 +223,39 @@ no-allocation-after-first-frame and DOS transition checks.
 
 ## F5-09 desktop protocol v3 (2026-10-19)
 
+F5-09B lead amendment (2026-10-19): GRANT is the atomic mode transaction
+under the desktop's call-74 authority, including composition suspension,
+cursor hide, mode confirmation and rollback. A separate call 74 before GRANT
+would leave `awaiting_frame` and is not issued. REVOKE uses the exact returned
+PID/token/framebuffer-generation tuple synchronously before repaint; the same
+mode is selected again on reactivation. A pending restored desktop frame is
+completed before regrant; a failed repaint defers regrant to heartbeat recovery.
+The independent desktop watchdog
+observes restoration through the first complete desktop repaint, reports a
+2 s deadline violation, and never enables composition over a live lease.
+Kernel timeout/death revocation is reconciled only after a successful display
+grant query proves desktop ownership has resumed; the client receives a loss
+event (ETIMEDOUT after the 10 s first-frame deadline, EIO for earlier external
+loss). Failed requests retain the ordinary signed v3 RESULT.
+
+LEASE_EVENT now sends a 72-byte payload: the original state, serial, source
+width/height/depth; then token, framebuffer generation, native mode id, scale,
+source width/height/pitch/size/format, native width/height/depth, signed errno.
+The bridge reads legacy 20-byte events as well; v1/v2.1 messages are unchanged.
+The tuple grants only FRAME/PALETTE/GAMMA, never a display descriptor or mapping.
+
+The explicit fw_cfg selector `f2:crash-isolation run=<8hex> server=desktop-v3`
+runs the existing isolation battery and then GATE_V3. The authored raw-ABI PE
+peer is `/System/Win32/Fixtures/desktop-v3.exe`; the native desktop monitor
+reports eight ordered observations through call 3. Only the controller-selected
+desktop with a live Win32 child may update the kernel observer, which emits
+the trusted CIUKI_TEST records. The two Alt+Tab batches revoke and regrant;
+crash/restart phases inspect and cancel their dialogs (f5-07B owns restart
+execution). The shortcut launches the native Control Panel Add/Remove page;
+the monitor seeds/lists/removes its Uninstall key via w32srv. The case remains
+not_run until lead validation. Host raw-ABI replay is host evidence only.
+
+
 Research before implementation: Microsoft's [Shell Links](https://learn.microsoft.com/en-us/windows/win32/shell/links)
 requires retaining target, arguments, working directory, icon/index and show
 state; [Uninstall registry key](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)

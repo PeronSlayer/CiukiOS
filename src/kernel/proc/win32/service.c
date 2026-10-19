@@ -6,6 +6,15 @@
 #include <ciuki/w32_objects.h>
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/display.h>
+/* Private launch permission, not a registrable server role. Never inherited. */
+enum { NATIVE_CONTROL_REGISTRY = 3 };
+static bool registry_desktop(struct process *p)
+{
+    return p && p->state==PROC_LIVE && p->personality==PROC_NATIVE &&
+        p->pid==supervisor_desktop_pid() && p->w32 &&
+        p->w32->service==W32_SERVICE_DESKTOP && grants_display_owner(p);
+}
 struct service_link {
     struct service_link *next;
     struct process *client, *server;
@@ -42,6 +51,8 @@ void w32_service_delegate(struct process *parent, struct process *child, const c
         && parent->pid == supervisor_desktop_pid()
         && !strncmp(path, "/System/Win32/w32srv", sizeof("/System/Win32/w32srv")))
         role = W32_SERVICE_W32SRV;
+    else if (registry_desktop(parent) && !strncmp(path, "/Programs/control", sizeof("/Programs/control")))
+        role = NATIVE_CONTROL_REGISTRY;
     if (role && !w32_process_init(child))
         child->w32->service = role;
 }
@@ -127,6 +138,8 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
 {
     struct process *p = t->process;
     if (!p->w32) {
+        if (a->action==W32_SVC_CONNECT)
+            klog("[win32] service pid=%u action=connect service=%u error=5",p->pid,a->service);
         a->error = 5;
         return 0;
     }
@@ -147,7 +160,15 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
         service_pid[a->service - 1] = p->pid;
         a->result = 1;
     } else if (a->action == W32_SVC_CONNECT) {
-        if (p->personality != PROC_WIN32) {
+        /* Endpoint slot 1 is the registry (wire service id 2). Native callers
+         * gain no desktop endpoint or general personality authority. */
+        if (p->personality != PROC_WIN32 &&
+            !(a->service==W32_SERVICE_W32SRV &&
+              (registry_desktop(p) ||
+               (p->personality==PROC_NATIVE && p->state==PROC_LIVE &&
+                p->w32->service==NATIVE_CONTROL_REGISTRY &&
+                registry_desktop(proc_find(p->ppid)))))) {
+            klog("[win32] service pid=%u action=connect service=%u error=5",p->pid,a->service);
             a->error = 5;
             return 0;
         }

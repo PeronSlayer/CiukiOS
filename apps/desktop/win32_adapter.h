@@ -34,6 +34,7 @@ int desk_w32_service_exited(struct desk_w32_supervisor *, const struct desk_w32_
 struct desktop;
 int desk_w32_native_shortcut(struct desktop *, const struct desk_launch_record *);
 void desk_w32_start(struct desktop *);
+void desk_w32_presenter_poll(struct desktop *);
 void desk_w32_poll(struct desktop *);
 void desk_w32_child_exited(struct desktop *, uint32_t, int);
 int desk_w32_shutdown(void); /* flush barrier: 1 ready, 0 pending, negative errno */
