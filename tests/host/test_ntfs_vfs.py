@@ -21,7 +21,7 @@ WORK = ROOT / "build/host/ntfs-vfs"
 SPEC = importlib.util.spec_from_file_location("ntfs_fixtures", ROOT / "scripts/test/ntfs_fixtures.py")
 FIX = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(FIX)
 
-SOURCES = ["tests/host/fs/test_ntfs.c", "src/kernel/fs/fs_port.c", "src/kernel/fs/cache.c",
+SOURCES = ["tests/host/fs/test_ntfs.c", "src/kernel/fs/fs_port.c", "src/kernel/fs/blkreq.c", "src/kernel/fs/cache.c",
            "src/kernel/fs/partition.c", "src/kernel/fs/path.c", "src/kernel/fs/fat.c",
            "src/kernel/fs/vfs.c", "src/kernel/fs/fs_ro.c", "src/kernel/fs/iso9660.c",
            "src/kernel/fs/ntfs_fs.c", "src/kernel/fs/ntfs_ro.c", "src/kernel/fs/mount.c",

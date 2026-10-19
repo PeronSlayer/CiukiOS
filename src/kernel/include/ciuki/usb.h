@@ -117,6 +117,7 @@ struct usb_storage_trace {
  * retained until reboot; an uncertain command never becomes a new medium. */
 struct usb_storage {
     struct blkdev block;
+    struct blk_queue requests;
     uint32_t tag;
     uint64_t next_check;
     uint64_t bulk_deadline; /* only live while usb_bulk calls the packet engine */
@@ -181,6 +182,7 @@ struct usb_host {
     void *mmio;
     gen_t generation;
     int claims[3];
+    struct mm_pin storage_pin; /* shared HCD bounce/descriptor arena, host lifetime */
     gen_t claim_gen[3];
     char owner[24];
     const char *reason;

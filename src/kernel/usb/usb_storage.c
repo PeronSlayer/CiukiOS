@@ -344,6 +344,12 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
     if (e || !buf || count>BLKDEV_READ_SECTORS || lba>UINT32_MAX || count>UINT32_MAX-lba+1ull)
         return e ? e : -FS_EINVAL;
     struct usb_device *d=b->ctx; struct usb_storage *s=&d->storage;
+    struct blk_request *request=s->requests.active;
+    if (request) {
+        request->pages[0]=(struct blk_page){.physical=d->host->dma_phys,.bytes=USB_DMA_BYTES,
+            .pin=&d->host->storage_pin};
+        request->page_count=1; request->pin_owner=&d->host->storage_pin;
+    }
     if (!block_take(d)) return fault(d,"bind_deadline",false);
     e=blkdev_range(b,lba,count);
     if (!e && (!s->online || s->ejected)) e=-FS_EIO;
@@ -368,6 +374,12 @@ static int block_read(struct blkdev *b,uint64_t lba,uint32_t n,void *buf)
 { return block_io(b,lba,n,buf,false); }
 static int block_write(struct blkdev *b,uint64_t lba,uint32_t n,const void *buf)
 { return block_io(b,lba,n,(void *)buf,true); }
+/* Preserve the f1-81 public BOT facade's 128-sector admission limit. Larger
+ * common requests are split by the queue before reaching block_io. */
+static int queued_block_read(struct blkdev *b,uint64_t lba,uint32_t n,void *buf)
+{ return n>128 ? -FS_EINVAL : blkdev_read(b,lba,n,buf); }
+static int queued_block_write(struct blkdev *b,uint64_t lba,uint32_t n,const void *buf)
+{ return n>128 ? -FS_EINVAL : blkdev_write(b,lba,n,buf); }
 static bool bind_cancel(void *ctx)
 {
     struct usb_device *d=ctx;
@@ -409,7 +421,9 @@ static int probe_storage(struct usb_device *d)
 {
     struct usb_storage *s=&d->storage;
     if (!s->bound || !s->in || !s->out || d->low_speed) return -FS_EINVAL;
-    s->block=(struct blkdev){.read=block_read,.write=block_write,.media_check=block_media,
+    blk_queue_init(&s->requests,"usb-storage",128u*512u);
+    s->block=(struct blkdev){.read=queued_block_read,.write=queued_block_write,
+        .request_read=block_read,.request_write=block_write,.queue=&s->requests,.media_check=block_media,
         .sector_size=512,.ctx=d,.media_generation=gen_alloc()};
     if (bind_stage(d,"max_lun")) return -FS_EIO;
     uint8_t lun=0;
@@ -464,7 +478,7 @@ static int probe_storage(struct usb_device *d)
      * Unknown/unsupported flush keeps the FAT mount read-only. */
     if (bind_stage(d,"flush")) return -FS_EIO;
     e=flush_locked(d);
-    if (!e) { s->block.write_cache_state=BLKDEV_CACHE_ENABLED; s->block.flush=block_flush; }
+    if (!e) { s->block.write_cache_state=BLKDEV_CACHE_ENABLED; s->block.request_flush=block_flush; s->block.flush=blkdev_flush; }
     else if (s->block.quarantined) return e;
     bind_stage_finish(d,e);
     /* MODE SENSE(6) header reports write protection for transparent SCSI.
@@ -489,9 +503,20 @@ int usb_storage_attach(struct usb_device *d)
 {
     if (!d || !d->host) return -FS_EINVAL;
     struct usb_storage *s=&d->storage;
+    /* The engines copy each packet through this resident arena. Their
+     * descriptors may remain visible for HID/other devices after media
+     * removal, so its token follows the host, never a BOT request's CSW. */
+    if (mm_pin && !d->host->storage_pin.ticket) {
+        struct mm_pin *pin=&d->host->storage_pin;
+        *pin=(struct mm_pin){.generation=d->host->generation,
+            .first_pfn=d->host->dma_phys/4096,.pages=USB_DMA_BYTES/4096,
+            .address_mask=UINT32_MAX,.alignment=4096,.direction=MM_PIN_BIDIRECTIONAL};
+        if (mm_pin(pin)) return -FS_ENOMEM;
+    }
     s->binding=true; s->bind_started_ms=d->host->io.now(d->host->io.cookie);
     s->bind_deadline=s->bind_started_ms+USB_BIND_TIMEOUT_MS; s->bind_stage_active=false;
     int e=probe_storage(d);
+    if (!e) e=blk_queue_start(&s->requests);
     bind_stage_finish(d,e);
     if (s->bind_reserved) { usb_host_drop(d->host); s->bind_reserved=false; }
     /* Keep the same deadline until usb_storage_service publishes the mount. */
@@ -505,6 +530,11 @@ void usb_storage_detach(struct usb_device *d)
 {
     if (!d->storage.bound) return;
     d->storage.block.quarantined=true; d->storage.online=false;
+    blk_queue_cancel_device(d->storage.block.queue,&d->storage.block);
+    if (d->storage.block.queue) {
+        struct blk_queue *q=d->storage.block.queue;
+        fs_lock_take(&q->lock); q->stopped=true; fs_event_wake(&q->changed); fs_lock_drop(&q->lock);
+    }
 }
 void usb_storage_service(struct usb_host *h)
 {

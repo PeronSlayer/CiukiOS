@@ -32,7 +32,7 @@ _Static_assert(sizeof(ledger) <= 16384, "M1 kernel data budget");
 static unsigned zone(uint32_t pfn) { return pfn < 256 ? ZONE_LOW : pfn < 4096 ? ZONE_DMA : ZONE_NORMAL; }
 static const char *const owners[MM_OWNERS] = {
     "reserved", "image", "kernel", "heap", "stack", "tables", "dma", "device",
-    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool"
+    "cache_data", "cache_meta", "cache_work", "user_private", "user_shared", "vm_private", "vm_pool", "io_request"
 };
 static void pressure_update(void)
 {

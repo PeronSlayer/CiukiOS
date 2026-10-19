@@ -66,7 +66,8 @@ int blkpart_init(struct blkpart *v, struct blkdev *p, const struct partition *pa
     v->parent = p;
     v->start = part->start;
     v->block = (struct blkdev){ .read = part_read, .write = p->write ? part_write : 0,
-        .capacity = part->count, .sector_size = p->sector_size, .ctx = v };
+        .capacity = part->count, .sector_size = p->sector_size, .ctx = v,
+        .request_parent=p, .request_offset=part->start };
     blkpart_device(v);
     return 0;
 }

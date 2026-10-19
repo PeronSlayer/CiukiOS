@@ -75,7 +75,7 @@ class HardwareCheckTests(unittest.TestCase):
             binary = Path(temp) / 'check'
             sources = ['tests/host/hardware_check_test.c', 'src/kernel/core/hardware_check_model.c',
                        'src/kernel/core/hardware_check_storage.c', 'src/kernel/lib/fmt.c',
-                       *(f'src/kernel/fs/{s}.c' for s in ('fs_port', 'cache', 'fat', 'vfs', 'path', 'fs_ro', 'iso9660'))]
+                       *(f'src/kernel/fs/{s}.c' for s in ('fs_port', 'blkreq', 'cache', 'fat', 'vfs', 'path', 'fs_ro', 'iso9660'))]
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread',
                             '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',

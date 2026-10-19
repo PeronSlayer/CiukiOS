@@ -20,7 +20,7 @@ enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
     uint32_t log_capacity; };
-struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny; };
+struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny; bool io_active; };
 struct vfs_table;
 struct vfs {
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
@@ -28,13 +28,20 @@ struct vfs {
      * Bookkeeping/identity phases hold namespace and the operation's volumes.
      * VFS_IO drops namespace during filesystem work. Before resuming it drops
      * the volume mutexes, then reacquires namespace -> volumes. Reservations
-     * stay published throughout, excluding same-volume operations/removal
-     * until bookkeeping and observers finish. Media snapshots need only
+     * retire before transport. A separate mutation guard excludes other
+     * metadata operations/removal until bookkeeping and observers finish;
+     * per-file readers can pass an identified unrelated writer. Snapshots need only
      * namespace and never join reservations. No IRQ/interrupts-off I/O. */
     fs_lock lock, volume_lock[26];
     struct fs_event volume_changed;
     uint32_t reserved, active; /* namespace protected; active belongs to its owner */
+    uint32_t mutating, active_tickets; /* publication guard versus short tickets */
     uint32_t next[26], serving[26]; /* FIFO reservation tickets per letter */
+    /* Data readers pin their open description, not the volume ticket. An
+     * identified writer may coexist only with readers of other nodes. Other
+     * metadata operations wait for these short per-file I/O phases. */
+    uint32_t readers[26];
+    struct vfs_node *io_file[26];
     char holder; /* atomic diagnostic snapshot of namespace owner's drive */
     unsigned default_drive; /* operation's legacy path-resolution snapshot */
     struct fat_volume *volumes[26];

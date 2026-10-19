@@ -632,3 +632,117 @@ write/flush injection are in the [F0-40 audit](../validation/f0-40-reliability-a
   DMA rules, BIOS policy for disks.
 - `dos-dpmi-contract.md`: bridge semantics for PSP/JFT/SFT, FCBs and DOS
   compatibility share mode.
+
+
+## Asynchronous requests (f1-83)
+
+Research checked before implementation, 2026-10-19:
+[Microsoft IOS services (P06)](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F60.HTM),
+[load layers (P07)](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F5A.HTM),
+[DRP](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S302E.HTM),
+[port registration](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F87.HTM),
+[Microsoft Q196550 (P12)](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/196550),
+[Intel BM IDE 1.0 §§1–3 (P22)](https://pdos.csail.mit.edu/6.1810/2004/readings/hardware/IDE-BusMaster.pdf),
+[T13 ATA/ATAPI-6](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf),
+[USB BOT 1.0 §§3.4, 5.3, 6.3](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf),
+and [T10 SBC-3](https://www.t10.org/ftp/t10/document.05/05-344r0.pdf).
+Q196550 was accessible through indexed article text after direct retrieval
+failed. It requires locked request/register/buffer storage and explicit
+completion ownership. IOS supplies packet/device lifetime and calldown
+services; it does not specify our queue constants. BOT forbids another CBW
+before CSW/reset. PRDs permit scattered physical regions, each confined to
+64 KiB, with even addresses/counts and zero count encoding 64 KiB.
+
+Repository comparison: blkdev callbacks and ATA channel/USB host mutexes
+serialize whole synchronous transfers; cache drops its mutex for transport,
+but VFS retains its volume reservation through FAT work. The implementation
+adds bounded requests and controller arbitration above the existing register
+engines. Transport completion/stop proof remains authoritative: an issued
+error is never retried, and no pin retires in a top half. FAT barriers and
+f1-82 dirty policy remain synchronous and unchanged. Queue completion runs
+in task context; IRQs only acknowledge, capture status and wake the existing
+transport waiter. CiukiOS numerical policies are documented separately from
+historical Windows behavior.
+
+The common pool contains 32 resident request records, allocated once and
+charged (including page rounding and completion events) to ledger owner
+`io_request`. Preparation pins the queue lifetime; only terminal requests
+can be released. Destroy refuses prepared, queued, issued and unretired
+completed requests. Resident controller queues have a sleeping kernel
+executor; host and synthetic-controller fixtures drive the identical
+one-command executor from waiters. Submission is separate from waiting.
+A generation fence is checked before and after transport. Queued cancellation
+issues no command; cancellation after issue waits for the existing stop proof
+and cannot turn a completed write into an assertion that nothing was written.
+
+Scheduling policy is CiukiOS policy: demand reads carry a 20 ms service
+objective, speculative reads precede background writes, and FIFO order breaks
+class ties. Work aged 100 ms earns promotion for one command; a split bulk
+request must earn promotion again after its last service, so an aged large
+write cannot consume all remaining commands ahead of new demand reads.
+Overlapping writes and per-device flush/dependency frontiers retain ordering;
+dependency work inherits demand rank. A flush never jumps its predecessors.
+The initial command cap is 65536 bytes; a measured command exceeding 10 ms
+reduces subsequent commands proportionally, rounded down to whole sectors.
+The lower transports retain their existing command/flush/packet deadlines.
+Queue admission expires after 30 s (data) or 60 s (flush); exceeding a service
+objective never authorizes replay of an issued command. USB's synchronous
+facade retains its 128-sector admission limit. A common larger request can
+still be split into commands within that cap.
+
+Merging requires adjacent LBAs and contiguous virtual bytes, identical
+operation/device/generation/class/frontier, and the same explicitly supplied
+live pin owner. Independently owned buffers never merge. A command records
+the DMA regions and their pin tokens: IDE first tries a pinned contiguous
+translation, then individual pinned page fragments, finally its permanently
+pinned bounce run on mapping/pin refusal. PRDs retain even addresses/counts,
+64 KiB boundaries and a final EOT flag. Direct tokens retire only after
+completion or existing hardware-stop/revocation proof, in thread context.
+The USB storage adapter pins its shared three-page HCD arena for the host
+lifetime; packet engines copy through that arena, which can remain referenced
+by HID after a disk detaches. Media removal cancels its queued work and stops
+its executor without waiting under the USB host reservation.
+
+Mount adapters keep their write gates, tracing and counters. Executing task
+context carries priority/dependency frontier through their synchronous
+calldowns; offset-only partition views can resolve directly to their parent
+before admission. The 5 s `[storage] queue` record includes class depths,
+oldest queued/issued age, command/merge/split/cancellation counts, timeouts,
+backpressure and current command cap. Record publication stays outside request execution/waiting, avoiding UART
+backpressure on the data path. A generation-safe deferred timer reports submit-only
+requests while an executor is stuck in a lower command: its callback tries
+the queue lock without blocking and retries after 1 ms on contention. It
+allocates nothing and uses the f0-46 nonblocking work-consumer record path.
+Worker exit cancels the timer and retains queue lifetime until any in-flight
+callback finishes.
+
+VFS metadata tickets now retire before `VFS_IO` drops namespace for transport.
+A separate mutation guard retains the existing FAT serialization and lifetime
+boundaries through publication/observers; it does not share or remove a FAT
+barrier. An already-open unrelated legacy file reader can pass an identified
+writer: it pins its description/position, takes an immutable geometry/entry
+snapshot and performs its data I/O without a volume ticket. Same-file access,
+close/dup/table teardown, other mutations and removal remain excluded as
+required. Read diagnostic workspaces are private; revocation is published
+under reservation only if both mount and media generations still match.
+Cold opens and metadata operations retain their existing admission rules.
+
+`tests/host/fs/test_fairness.c` runs the 10 MiB / 1 MiB/s source versus
+20 MB/s destination, with zero modeled seek/read-setup cost, 1 ms write-command setup and 2 ms flushes, a
+16 KiB reader every 20 ms, and the unchanged 8 MiB cache. Arrival latency
+includes scheduler lateness against the scheduled arrival. The former
+volume-ticket reader is an explicit fixture-only negative control. Variants
+cover cold/hot data, fragmented reader and copy chains (a valid filler file occupies alternating
+clusters), every cache slot initially dirty,
+concurrent fsync, an independent read error, and queued cancellation. The
+mixed-device variant creates and reads an actual FAT16 source file through
+production VFS/cache/BOT/UHCI over the existing peripheral model, with a
+separate paced producer. All positive variants assert zero missed reads,
+maximum arrival latency <=20 ms, source throughput within 10%, final file
+bytes/length/chain termination and equal FAT copies after commit. The normal
+host suite separately retains full FAT12/16/32 crash/fsck/mtools qualification;
+each variant also runs the former ticket policy as its negative control.
+After commit, a temporary sparse FAT32 host fixture with specification BPBs
+is checked by fsck.fat and COPY.BIN is independently extracted/compared with
+mtools, then both temporary files are removed. This host timing model is not
+physical timing evidence.

@@ -12,7 +12,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCIUKI_USB_HOST -DFS_HOST -D_POSIX_
     -I "$root/src/kernel/include" "$root/tests/host/usb/$1.c" \
     "$root/src/kernel/usb/usb_core.c" "$root/src/kernel/usb/usb_storage.c" \
     "$root/src/kernel/usb/uhci.c" "$root/src/kernel/usb/usb_interrupt.c" "$root/src/kernel/lib/fmt.c" \
-    "$root/src/kernel/core/bootlog.c" "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/cache.c" \
+    "$root/src/kernel/core/bootlog.c" "$root/src/kernel/fs/fs_port.c" "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" \
     "$root/src/kernel/fs/partition.c" "$root/src/kernel/fs/path.c" \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/vfs.c" \
     "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" \
