@@ -884,6 +884,18 @@ void dosvm_audio_log(struct dosvm *v)
              c.irq_latency_max_us, (unsigned long long)underruns,
              (unsigned long long)(c.irq_entries ? c.irq_latency_sum_us / c.irq_entries : 0),
              c.descheduled, c.parked, c.if_clear);
+        /* The protected cadence exists even without an F4 consumer. Source
+         * supplements only describe an attached renderer, in bounded lines. */
+        if (d.attached) {
+            klog("[vm-audio] vm=%u cadence_late hist_lt1=%llu hist_1_5=%llu hist_5_20=%llu hist_gt20=%llu",
+                 v->info.key.id, d.late_hist[0], d.late_hist[1], d.late_hist[2], d.late_hist[3]);
+            klog("[vm-audio] vm=%u cadence_source late=%llu delay=%u lag=%d lag_min=%d lead=%d lead_min=%d lead_max=%d",
+                 v->info.key.id, d.late_frames, d.delay_frames, d.lag, d.lag_min, d.lead, d.lead_min, d.lead_max);
+        }
+        if (d.attached && d.drop_runs)
+            klog("[vm-audio] vm=%u cadence_drop runs=%u last=%u max=%u lag=%d lag_min=%d lead=%d lead_min=%d lead_max=%d",
+                 v->info.key.id, d.drop_runs, d.drop_last, d.drop_max, d.drop_lag, d.drop_lag_min,
+                 d.drop_lead, d.drop_lead_min, d.drop_lead_max);
         return;
     }
     if (!(g_boot.flags & CBI_F_VERBOSE)) { irq_restore(f); return; }

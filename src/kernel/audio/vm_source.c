@@ -38,6 +38,12 @@ struct vm_slot {
     uint32_t token, epoch;
     uint8_t state, gain[2];
     bool muted;
+    /* Runtime probe only: withhold new queue reads for a schedule of up to
+     * 20 ms. Never enabled by normal attach or transport policy. */
+    bool probe_jitter, probe_allow;
+    unsigned probe_step;
+    uint64_t probe_next, probe_last;
+    uint32_t probe_gap_max;
     /* Render state, owned by the refill worker, valid for live_epoch. */
     uint32_t live_epoch;
     bool anchored, busy;
@@ -45,6 +51,7 @@ struct vm_slot {
     uint64_t recovery_latency; /* silence inserted by transport recovery, VM frames */
     uint64_t next_t;      /* next VM timeline frame to render */
     uint64_t rendered_to; /* output frame after the last rendered quantum */
+    uint64_t quantum_t;   /* timeline position of this quantum's lead/lag snapshot */
     uint32_t hold;        /* output frames of silence before the timeline resumes */
     /* PCM stream: frame k at origin + k * 48000 / rate. */
     bool stream, starving, gap_ahead; /* gap_ahead: the next queued segment does not continue it */
@@ -57,6 +64,7 @@ struct vm_slot {
     uint32_t seg_sequence, seq_last;
     bool block_open, block_first_set;
     uint32_t block_sequence, block_frames;
+    uint32_t block_dropped;
     uint16_t block_flags;
     int16_t block_first[2];
     int16_t win[VM_WINDOW][2];
@@ -202,6 +210,7 @@ int audio_vm_attach(struct dosvm_key key)
     if (!++s->epoch) s->epoch = 1;
     s->state = AUDIO_VM_PENDING; s->gain[0] = s->gain[1] = 100; s->muted = false;
     s->recover_anchor = false;
+    s->probe_jitter = false; s->probe_allow = true;
     s->published = 0;
     memset(&s->level, 0, sizeof(s->level)); s->level.start = g_ticks;
     if (first) { memset(&ring_level, 0, sizeof(ring_level)); ring_level.start = g_ticks; }
@@ -300,6 +309,7 @@ static void slot_reset(struct vm_slot *s, uint32_t epoch)
  * another consumer attached): the source then ends. */
 static int peek(struct vm_slot *s, uint32_t token, struct dosvm_audio_block *b)
 {
+    if (!s->probe_allow) return -EAGAIN;
     return dosvm_audio_fetch(s->key, token, b, 0, 0);
 }
 static void block_begin(struct vm_slot *s, const struct dosvm_audio_block *b)
@@ -308,6 +318,7 @@ static void block_begin(struct vm_slot *s, const struct dosvm_audio_block *b)
     if (s->seq_last && b->sequence != s->seq_last + 1) s->stats.seq_gaps++;
     s->block_open = true; s->block_sequence = b->sequence;
     s->block_frames = 0; s->block_flags = 0; s->block_first_set = false;
+    s->block_dropped = 0;
 }
 static void adopt(struct vm_slot *s, const struct dosvm_audio_block *b)
 {
@@ -333,6 +344,7 @@ static void segment_done(struct vm_slot *s, const struct dosvm_audio_block *b)
     if (!(b->flags & DOSVM_BLOCK_COMPLETE) || !s->block_open) return;
     struct audio_vm_block_log *log = &s->stats.log[s->stats.log_count % AUDIO_VM_LOG];
     *log = (struct audio_vm_block_log){ .sequence = s->block_sequence, .frames = s->block_frames,
+        .dropped = s->block_dropped,
         .first = { s->block_first[0], s->block_first[1] }, .flags = s->block_flags };
     s->stats.log_count++;
     s->stats.blocks++;
@@ -349,7 +361,8 @@ static bool contiguous(const struct vm_slot *s, const struct dosvm_audio_block *
 {
     if (b->rate != s->rate || b->offset) return false;
     uint64_t total = s->win_first + s->win_count;
-    uint64_t expect = s->origin * s->rate + total * VM_HZ, actual = b->start * s->rate;
+    uint64_t expect = s->origin * s->rate + total * VM_HZ;
+    uint64_t actual = (b->start + s->stats.delay_frames) * s->rate;
     uint64_t diff = expect > actual ? expect - actual : actual - expect;
     return diff <= 2ull * s->rate;
 }
@@ -363,6 +376,7 @@ static void fill(struct vm_slot *s, uint32_t token)
         memmove(s->win, s->win + drop, (s->win_count - (unsigned)drop) * sizeof(s->win[0]));
         s->win_count -= (unsigned)drop; s->win_first += drop;
     }
+    if (!s->probe_allow) return;
     for (unsigned guard = 0; guard < 16 && s->win_count < VM_WINDOW; guard++) {
         struct dosvm_audio_block b;
         if (!s->seg_known) {
@@ -386,8 +400,36 @@ static void fill(struct vm_slot *s, uint32_t token)
     }
 }
 enum { START_NONE, START_FUTURE, START_DATA };
-/* Starts a stream at timeline frame t from the queue head; frames whose
- * position has passed are fetched and dropped (late). */
+/* Count source frames by their individual lateness, not by the oldest
+ * frame's age for the entire run. No wide division in the refill path. */
+static void late_histogram(struct vm_slot *s, uint64_t age, uint32_t rate, unsigned n)
+{
+    const unsigned thresholds[3] = {48, 240, 960};
+    unsigned previous = n;
+    for (unsigned i = 0; i < 3; i++) {
+        uint64_t limit = (uint64_t)thresholds[i] * rate;
+        if (i == 2) limit++; /* >20 ms, including fractional timeline frames */
+        uint64_t count = age >= limit ? timeline_div(age - limit, VM_HZ, 0) + 1 : 0;
+        if (count > n) count = n;
+        s->stats.late_hist[i] += previous - (unsigned)count;
+        previous = (unsigned)count;
+    }
+    s->stats.late_hist[3] += previous;
+}
+static void late_drop(struct vm_slot *s, unsigned n)
+{
+    if (!n) return;
+    s->stats.late_frames += n; s->block_dropped += n;
+    s->stats.drop_runs++; s->stats.drop_last = n;
+    if (n > s->stats.drop_max) s->stats.drop_max = n;
+    int32_t elapsed = (int32_t)(s->next_t - s->quantum_t);
+    s->stats.drop_lag = s->stats.lag - elapsed; s->stats.drop_lag_min = s->stats.lag_min;
+    s->stats.drop_lead = s->stats.lead - elapsed; s->stats.drop_lead_min = s->stats.lead_min;
+    s->stats.drop_lead_max = s->stats.lead_max;
+}
+/* A common timestamp shift delays PCM and pending OPL/DAC events together.
+ * Never rewind next_t, replay synthesized events, or accumulate more than
+ * 20 ms over this source's lifetime. Producer timestamps remain authoritative. */
 static int stream_start(struct vm_slot *s, uint32_t token, uint64_t t, uint64_t *future)
 {
     for (unsigned guard = 0; guard < 64; guard++) { /* late or empty segments are retired on the way */
@@ -402,16 +444,31 @@ static int stream_start(struct vm_slot *s, uint32_t token, uint64_t t, uint64_t 
             continue;
         }
         uint32_t rate = b.rate ? b.rate : 1;
-        if (b.start * rate + (uint64_t)b.offset * VM_HZ > t * rate) {
-            *future = b.start + timeline_div((uint64_t)b.offset * VM_HZ, rate, 0);
+        uint64_t start = b.start + s->stats.delay_frames;
+        if (start * rate + (uint64_t)b.offset * VM_HZ > t * rate) {
+            *future = start + timeline_div((uint64_t)b.offset * VM_HZ + rate - 1, rate, 0);
             return START_FUTURE; /* the head's next frame is still ahead: a gap */
         }
-        uint64_t num = (t - b.start) * rate;
+        uint64_t num = (t - start) * rate;
         uint32_t frac;
         uint64_t p = timeline_div(num, VM_HZ, &frac);
         if (p < b.offset) { p = b.offset; frac = 0; }
         if (!same_segment(s, &b)) adopt(s, &b);
-        s->origin = b.start; pcm_step(s, rate);
+        if (p > b.offset && b.frames > b.offset) {
+            uint64_t age = num - (uint64_t)b.offset * VM_HZ;
+            uint64_t shift = timeline_div(age + rate - 1, rate, 0);
+            if (shift <= AUDIO_VM_LATE_BUDGET - s->stats.delay_frames) {
+                uint64_t n = p - b.offset;
+                if (n > b.frames - b.offset) n = b.frames - b.offset;
+                late_histogram(s, age, rate, (unsigned)n);
+                s->stats.delay_frames += (uint32_t)shift; s->stats.reanchors++;
+                s->stats.lead += (int32_t)shift; s->stats.lag += (int32_t)shift;
+                if (s->stats.lead > s->stats.lead_max) s->stats.lead_max = s->stats.lead;
+                if (s->dac_until > t) s->dac_until += shift;
+                start += shift; p = b.offset; frac = 0;
+            }
+        }
+        s->origin = start; pcm_step(s, rate);
         s->win_first = b.offset; s->win_count = 0;
         /* Drop the late frames b.offset .. p-1. */
         bool closed = false;
@@ -421,8 +478,10 @@ static int stream_start(struct vm_slot *s, uint32_t token, uint64_t t, uint64_t 
             int n = dosvm_audio_fetch(s->key, token, &d, &s->win[0][0], want);
             if (n < 0 || !same_segment(s, &d)) { if (n < 0 && n != -EAGAIN) revoke(s, s->live_epoch); return START_NONE; }
             note_frames(s, &s->win[0][0], (unsigned)n);
-            s->block_flags |= AUDIO_VM_BLOCK_DROPPED;
-            s->win_first += (unsigned)n; s->stats.late_frames += (unsigned)n;
+            if (n) s->block_flags |= AUDIO_VM_BLOCK_DROPPED;
+            late_histogram(s, num - s->win_first * VM_HZ, rate, (unsigned)n);
+            late_drop(s, (unsigned)n);
+            s->win_first += (unsigned)n;
             if (d.closed) { segment_done(s, &d); closed = true; break; }
             if (!n) break;
         }
@@ -437,18 +496,12 @@ static int stream_start(struct vm_slot *s, uint32_t token, uint64_t t, uint64_t 
     }
     return START_NONE;
 }
-static void pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_audio_info *info, int32_t *out, unsigned n)
+static unsigned pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_audio_info *info, int32_t *out, unsigned n)
 {
-    uint64_t wait = 0; /* no stream can start before this timeline frame in this call */
     bool dsp = info->active && !info->paused;
     for (unsigned k = 0; k < n; k++) {
         uint64_t t = s->next_t + k;
         int32_t left = 0, right = 0;
-        if (!s->stream && t >= wait) {
-            uint64_t future = t + n;
-            int r = stream_start(s, token, t, &future);
-            if (r != START_DATA) wait = r == START_FUTURE ? future : s->next_t + n;
-        }
         if (s->stream) {
             if (s->idx + 1 >= s->win_first + s->win_count) fill(s, token);
             if (s->idx >= s->win_first + s->win_count) {
@@ -457,7 +510,9 @@ static void pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_aud
                  * guest is late and the source starves. */
                 s->stream = false;
                 s->starving = s->seg_known || (dsp && !s->gap_ahead);
-                wait = 0;
+                /* Let the outer loop check a new segment's lateness before
+                 * dispatching events or synthesizing OPL for this position. */
+                return k;
             } else {
                 const int16_t *a = s->win[s->idx - s->win_first];
                 const int16_t *b = s->idx + 1 < s->win_first + s->win_count ? s->win[s->idx + 1 - s->win_first] : a;
@@ -473,6 +528,7 @@ static void pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm_aud
         if (t < s->dac_until) { left += s->dac; right += s->dac; }
         out[k * 2] = (int32_t)left; out[k * 2 + 1] = (int32_t)right;
     }
+    return n;
 }
 static void opl_resync(struct vm_slot *s)
 {
@@ -500,13 +556,14 @@ static void apply_event(struct vm_slot *s, const struct dosvm_audio_event *e)
     if (e->generation != s->key.generation) { s->stats.foreign_events++; return; }
     if (e->kind == DOSVM_EVENT_GAP) { opl_resync(s); return; }
     if (s->resync && e->clock <= s->resync_clock) return; /* already in the register snapshot */
-    if (e->clock < s->next_t) s->stats.late_events++;
+    uint64_t clock = e->clock + s->stats.delay_frames;
+    if (clock < s->next_t) s->stats.late_events++;
     if (e->kind == DOSVM_EVENT_OPL) {
         opl3_write(&s->chip, e->reg, e->value);
         s->opl_used = true; s->stats.opl_events++;
     } else if (e->kind == DOSVM_EVENT_DAC) {
         s->dac = ((int32_t)e->value - 128) * 256;
-        s->dac_until = (e->clock > s->next_t ? e->clock : s->next_t) + VM_DAC_HOLD;
+        s->dac_until = (clock > s->next_t ? clock : s->next_t) + VM_DAC_HOLD;
         s->stats.dac_events++;
     }
 }
@@ -516,13 +573,15 @@ static uint64_t events_due(struct vm_slot *s, uint32_t token)
 {
     for (unsigned guard = 0; guard < 4096; guard++) {
         if (!s->ev_count) {
+            if (!s->probe_allow) return UINT64_MAX;
             int n = dosvm_audio_events(s->key, token, s->ev, VM_EVENTS);
             if (n < 0) { revoke(s, s->live_epoch); return UINT64_MAX; }
             if (!n) return UINT64_MAX;
             s->ev_head = 0; s->ev_count = (unsigned)n;
         }
         const struct dosvm_audio_event *e = &s->ev[s->ev_head];
-        if (e->clock > s->next_t) return e->clock;
+        uint64_t clock = e->clock + s->stats.delay_frames;
+        if (clock > s->next_t) return clock;
         s->ev_head++; s->ev_count--;
         apply_event(s, e);
     }
@@ -579,6 +638,16 @@ static bool mix_samples(struct vm_slot *s, const struct dosvm_audio_info *info, 
 }
 static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*sums)[2], unsigned frames, uint64_t output, uint64_t played)
 {
+    s->probe_allow = !s->probe_jitter || g_ticks >= s->probe_next;
+    if (s->probe_jitter && s->probe_allow) {
+        /* A callback observes a deadline up to one quantum (6 ms rounded)
+         * later. Reserve that margin inside the declared 20 ms schedule. */
+        static const unsigned gaps[] = {14, 1, 7, 13};
+        uint64_t gap = g_ticks - s->probe_last;
+        if (gap > s->probe_gap_max) s->probe_gap_max = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
+        s->probe_last = g_ticks;
+        s->probe_next = g_ticks + gaps[s->probe_step++ % ARRAY_SIZE(gaps)];
+    }
     struct dosvm_audio_info info;
     if (!dosvm_audio_info(s->key, &info)) { revoke(s, epoch); return; }
     uint64_t now = info.clock;
@@ -642,6 +711,9 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
         if (floor > need) need = floor;
         if (need > 0) { s->hold = (uint32_t)need; s->stats.holds++; }
     }
+    /* Report effective source latency, including its bounded common shift. */
+    lead += s->stats.delay_frames; lag += s->stats.delay_frames;
+    s->quantum_t = s->next_t;
     if (!s->stats.rendered || lead < s->stats.lead_min) s->stats.lead_min = (int32_t)lead;
     if (!s->stats.rendered || lead > s->stats.lead_max) s->stats.lead_max = (int32_t)lead;
     if (!s->stats.rendered || lag < s->stats.lag_min) s->stats.lag_min = (int32_t)lag;
@@ -658,11 +730,25 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
             s->hold -= n; s->stats.hold_frames += n; i += n;
             continue;
         }
+        /* A PCM window can end at this cursor. Discover its late successor
+         * before applying an OPL write due at the same position; otherwise
+         * a zero-length PCM chunk would commit that write before the shift. */
+        if (s->stream && s->idx >= s->win_first + s->win_count) {
+            fill(s, token);
+            if (s->idx >= s->win_first + s->win_count) {
+                s->stream = false;
+                s->starving = s->seg_known || (info.active && !info.paused && !s->gap_ahead);
+            }
+        }
+        if (s->state == AUDIO_VM_FREE) break;
+        uint64_t future = UINT64_MAX;
+        int started = s->stream ? START_DATA : stream_start(s, token, s->next_t, &future);
         uint64_t next = events_due(s, token);
         unsigned n = frames - i;
         if (next - s->next_t < n) n = (unsigned)(next - s->next_t);
+        if (started == START_FUTURE && future - s->next_t < n) n = (unsigned)(future - s->next_t);
+        n = pcm_render(s, token, &info, &pcm_buf[i * 2], n);
         if (s->opl_used) opl3_generate(&s->chip, &opl_buf[i * 2], n);
-        pcm_render(s, token, &info, &pcm_buf[i * 2], n);
         s->next_t += n; i += n;
     }
     if (s->state == AUDIO_VM_FREE) return;
@@ -714,6 +800,23 @@ void audio_vm_reanchor(void)
             s->recover_anchor = true;
     }
     vm_rate_recover = true;
+}
+/* Private probe seam, intentionally absent from the native API/ABI. The
+ * worker owns queue reads; the controller changes only this per-VM gate. */
+unsigned audio_vm_probe_jitter(struct dosvm_key key, bool enabled)
+{
+    if (!key.id || key.id > DOSVM_LIMIT) return 0;
+    unsigned max = 0;
+    uint32_t f = irq_save();
+    struct vm_slot *s = &vm_slots[key.id - 1];
+    if (s->key.generation == key.generation && s->state != AUDIO_VM_FREE) {
+        max = s->probe_gap_max;
+        s->probe_jitter = enabled; s->probe_allow = !enabled;
+        s->probe_next = g_ticks + 14; s->probe_step = 1;
+        if (enabled) { s->probe_last = g_ticks; s->probe_gap_max = 0; }
+    }
+    irq_restore(f);
+    return max;
 }
 void audio_vm_mix(int64_t (*sums)[2], unsigned frames)
 {
@@ -801,6 +904,15 @@ void audio_vm_diagnostic(struct dosvm_key key, struct audio_vm_diagnostic *out)
         if (s->key.generation == key.generation && s->state != AUDIO_VM_FREE) {
             out->attached = true; out->published = s->published;
             out->pcm = s->stats.pcm.frames; out->opl = s->stats.opl.frames; out->starved = s->stats.starved;
+            memcpy(out->late_hist, s->stats.late_hist, sizeof(out->late_hist));
+            out->late_frames = s->stats.late_frames;
+            out->drop_runs = s->stats.drop_runs; out->drop_last = s->stats.drop_last;
+            out->drop_max = s->stats.drop_max; out->delay_frames = s->stats.delay_frames;
+            out->lag = s->stats.lag; out->lag_min = s->stats.lag_min;
+            out->lead = s->stats.lead; out->lead_min = s->stats.lead_min; out->lead_max = s->stats.lead_max;
+            out->drop_lag = s->stats.drop_lag; out->drop_lag_min = s->stats.drop_lag_min;
+            out->drop_lead = s->stats.drop_lead; out->drop_lead_min = s->stats.drop_lead_min;
+            out->drop_lead_max = s->stats.drop_lead_max;
             out->muted = s->muted; out->gain[0] = s->gain[0]; out->gain[1] = s->gain[1];
             out->level_at = s->level.at;
             out->pcm_peak = s->level.last[0]; out->opl_peak = s->level.last[1]; out->mix_peak = s->level.last[2];

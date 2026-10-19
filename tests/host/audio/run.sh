@@ -24,6 +24,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
  -I "$root/src/kernel/include" "$root/tests/host/audio/vm_recovery_test.c" \
  "$root/src/kernel/audio/opl3.c" -o "$out/vm_recovery_test"
 "$out/vm_recovery_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+ -ffunction-sections -fdata-sections -Wl,--gc-sections -DCIUKI_HOST_OPL3 \
+ -I "$root/src/kernel/include" "$root/tests/host/audio/vm_late_unit_test.c" \
+ "$root/src/kernel/audio/opl3.c" -o "$out/vm_late_unit_test"
+"$out/vm_late_unit_test"
 build_test "$out/audio_cost_test" -O2
 CIUKI_AUDIO_COST=1 "$out/audio_cost_test" "$out/fs/fat32.img" "$out/fs/fat16.img"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

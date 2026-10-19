@@ -309,3 +309,117 @@ host script again passes the 2501 DMA cases and unchanged timed digests,
 then stops at the same lead-owned `disk_records` assertion; that assertion
 is untouched. Logs and the before/after table are in the report's
 "Amendment 1" section. All jobs ran sequentially at `nice -n 19`.
+
+## F4-35 — bounded delay for late VM PCM (2026-10-19)
+
+Research checked before code changes:
+
+- Creative [Sound Blaster Series Hardware Programming Guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf), §§3-5–3-6 and 3-28–3-29: auto-init block interrupts follow programmed sample units; refill the completed half while DMA continues. DSP block size and DMA ring size are separate.
+- Intel [8237A datasheet 231466-005](https://read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/8237A.pdf), EOP/TC and autoinitialization: terminal count reloads base address/count independently of software IRQ acknowledgement.
+- id Software [README.sound](https://raw.githubusercontent.com/id-Software/DOOM/master/linuxdoom-1.10/README.sound) establishes that DOS DOOM used proprietary DMX, omitted from the released source. [s_sound.c](https://raw.githubusercontent.com/id-Software/DOOM/master/linuxdoom-1.10/s_sound.c), `S_StartSoundAtVolume`, hands a new effect to the platform mixer. The Linux mixer is not proof of DMX's internal block size. Use measured T23 C6 programming and production SB16 protocol fixtures for block behavior; do not claim execution of DMX in a synthetic fixture.
+
+Repository check: `dosvm_tick` advances PIT and audio by the same elapsed
+`g_ticks`, irrespective of task scheduling; `sb_unit_time` timestamps actual
+DMA unit completion with retained rational phase. Measure these clocks and
+the output cursor before changing source policy. Preserve those producer
+semantics and the transport lead. Measurement and implementation results
+are recorded below and in `build/codex/f4-35-report.md`.
+
+### Measurement and bounded policy
+
+The production SB16/DMA host fixture first ran with histogram instrumentation
+and the original discard policy. Buckets count individual source frames,
+not the age of a whole block; exactly 5 and 20 ms belong to [5,20].
+
+| Schedule | Before histogram: <1 / 1–5 / 5–20 / >20 ms | Before dropped | After histogram | After dropped | Common shift |
+| --- | --- | ---: | --- | ---: | ---: |
+| One 64-unit mono block, 11025 Hz, 5 ms late | 10 / 44 / 1 / 0 | 55 | 10 / 44 / 1 / 0 | 0 | 240 frames, 5 ms |
+| Same block, 100 ms late | 0 / 0 / 0 / 64 | 64 | 0 / 0 / 0 / 64 | 64 | 0 |
+| 2000 ms, 64-unit mono auto-init, callbacks 20/1/7/13 ms | 10 / 44 / 36 / 0 | 90 | 0 / 28 / 36 / 0 | 0 | 395 frames, 8.23 ms |
+
+After recovery the next frame is no longer late, so the histogram need not
+match the baseline: 64 rescued frames prevent the later 26-frame loss.
+All 64 source frames of the 5 ms case match an independent rational ramp
+oracle, including the first sample and the held tail (279 output frames).
+The 100 ms case logs exactly 64 discarded source frames and the dropped flag.
+A 19 ms shift followed by another 5 ms request retains the 912-frame shift
+and drops 55 frames: the cumulative budget is enforced across transfers.
+
+A companion runs the runtime probe's queue gate on the same producer and
+renderer: the maximum observed read interval is 18 ms, shift 507 frames,
+histogram 0 / 2 / 62 / 0, zero source drops. The gate reserves a rounded
+6 ms quantum inside its 20 ms ceiling; the QEMU predicate checks the observed
+interval, not just the requested deadline. `vm-audio-jitter-qemu-t23` uses
+the existing 8000 Hz VMPLAY fixture and checks 32 fresh blocks, 12288 audible
+VM frames, bounded lead and zero late drops. It is written, **unrun**.
+The separate production host replay above covers 11025 Hz.
+
+The source applies one common timestamp shift, never a backward render
+cursor. PCM restarts are considered before pending event dispatch and OPL
+synthesis. Continuous PCM retains its rational phase. Sustained OPL voices
+continue while pending register events and DAC deadlines move together.
+The source's added lead is bounded by 960 frames over its lifetime; the
+transport lead policy and DSP/8237 semantics are unchanged. Cadence
+supplements distinguish `cadence_late` (cumulative frame histogram),
+`cadence_source` (actual source drops, delay and current/extreme lead/lag)
+and `cadence_drop` (last discard fetch's size, maximum size, and lead/lag
+snapshot). Each completed block also logs its exact total dropped frames.
+
+### Clock comparison and evidence correction
+
+The read-only T23 transcript for image prefix `82fadce3`, VM generation
+28204, has heartbeat n=1/2 at tick 182554/184554: DMA units 74661/118761,
+SB edges 223/395, PIT edges 698/978, PIT reload 8522 and lost=0. Thus in
+2000 VM ms DMA advances 44100 **byte units**, i.e. 22050 stereo frames,
+172 DSP boundaries (86/s) and 280 PIT edges (140/s). At n=29/30,
+tick 238554/240554, units 1309461/1353561, SB edges 5047/5219 and PIT
+edges 8538/8818 give the same rates. C6 with `fmt=04` is stereo;
+256 DSP byte units are 128 audio frames, not a 256-frame mono block.
+
+The host fixture independently advances a 48 kHz fake output while
+`dosvm_tick` drives the production PIT/DSP. In 2000 ms it produces 22050
+mono DMA units, 344 complete 64-unit blocks plus a partial block, 279 PIT
+edges (8522 reload, integer 1193 PIT clocks/ms), and 96000 VM frames.
+Output advances 96000 physical frames in the measurement interval; the
+95232/96256 rendered-frame counts reflect startup/callback queue fill,
+not a rate change. Task descheduling does not stop either virtual clock.
+
+The T23 transport records commonly advance by 945 periods of 256 frames
+between summaries scheduled at `g_ticks + 5000` (944 at some intervals).
+945 periods / exactly 5000 ticks would be 48384 frames per VM second,
+about 0.8% above the declared 48000 Hz. The summaries have no exact tick
+stamp, and callbacks can arrive late: this is evidence of a possible
+output/timebase mismatch, **not a calibrated oscillator measurement**.
+The transcript also reports physical timer gaps and an IRQ-off maximum over
+2 ms. Lost physical PIT interrupts are a plausible explanation even though
+the virtual PIT's `lost` counter is zero; that counter measures the guest
+PIT backlog cap. No independent wall-clock measurement separates lost
+physical ticks from codec-rate error in this record.
+
+Crucially, the directive's quoted `native_refill ... late=70` is **not**
+`audio_vm_stats.late_frames` in this checkout. The logger prints
+`dosvm_audio_info.late`, assigned from `sb.late`, incremented for merged
+IRQ boundaries. The same T23 session has `cadence ... merged=70` during
+an 809 ms parked episode. Later summaries can have merged=0 while the
+cumulative `late` stays 70 (and later rises to 86). This old counter does
+not prove physical renderer drops. New source diagnostics remove that
+ambiguity; the host fixture does independently reproduce prefix loss.
+
+Decision: keep the actual rational DMA completion timestamps and the
+shared PIT/DSP timebase. Anchor late data from its actual next unconsumed
+DMA frame, using a bounded common shift instead of advancing past it.
+DMA boundaries in this implementation are derived from the same elapsed
+ticks as PIT; substituting their IRQ edge counter as an independent clock
+would not recover physical lost ticks. Continuous output/VM frequency drift
+is not hidden by an unbounded delay. Independent T23 clock evidence and
+listening with the new histogram remain lead-owned validation.
+
+Final host checks also cover an OPL write due at an exhausted PCM-window
+boundary: the successor is examined before dispatch, so a late restart
+cannot commit that write ahead of its shared shift. The original full host
+command reaches a legacy assertion expecting one lifetime re-anchor; F4-35
+adds valid late-recovery re-anchors. A relative-increment correction is
+prepared in `build/codex/f4-35-pacing-test.patch`, pending authorization for
+that test file outside the directive Authority list. The audio suite, final
+focused VM/game replays, API/app rebuild and kernel compilation pass; full
+host preview coverage uses a scratch copy with that proposed correction.

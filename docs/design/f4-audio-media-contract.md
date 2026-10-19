@@ -321,6 +321,32 @@ on the declared VM sample timeline, report its lead over physical output,
 and keep its fractional clock across host timer/refill calls. Device-worker
 catch-up or a backend rate change must not speed up that timeline.
 
+**[F4, F4-35]** A source restart that would discard a PCM prefix SHOULD
+instead delay the unconsumed stream when the required shift fits the
+source's remaining **960-frame (20 ms) lifetime budget** at 48 kHz. Add
+that shift to the PCM timestamps and pending OPL/direct-DAC event timestamps
+together, count a re-anchor, retain the guest sample rate and continuous
+stream phase, and preserve order without replaying rendered frames or events.
+Already sounding OPL voices continue; future register writes retain their relative spacing.
+The budget is cumulative, including across transfers: repeated jitter cannot
+create unbounded source lead. Larger lateness or an exhausted budget retains
+the discard policy, with exact per-block dropped-frame counts, individual
+frame lateness buckets (<1, [1,5), [5,20], >20 ms), and lead/lag snapshots at
+the drop. Source lead/lag includes the common shift. The healthy nominal
+latency target is unchanged; late recovery can add at most 20 ms to it,
+separately from an adaptive transport lead or proven-stop recovery silence.
+
+The 20 ms budget follows the measured host prefix losses under a 20 ms
+service schedule, rather than changing the DSP rate or predicting guest
+DMA. T23 C6/20 observations use 256 byte units per interrupt: 128 stereo
+frames at 11025 Hz (11.61 ms); 20 ms covers less than two such blocks.
+The 64-unit mono fixture is 5.80 ms per block and covers shorter attacks.
+PIT and DSP both advance by elapsed VM ticks, independent of guest task
+scheduling. The available T23 records show nominal DMA/PIT cadence; they do
+not establish drift against independently timed physical audio. Preserve
+producer timestamps and use actual DMA frame availability to correct the
+source/output mapping. See [F4-35 measurements and clock limits](../validation/f4-31-audio-audit.md#f4-35--bounded-delay-for-late-vm-pcm-2026-10-19).
+
 **[F4]** While virtual IF is clear, or the virtual PIC masks/in-service state
 blocks delivery, DSP DMA consumption and block deadlines MUST continue on
 the VM audio timeline. Causes latch/pending bits follow the advertised SB/PIC
