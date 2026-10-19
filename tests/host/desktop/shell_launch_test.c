@@ -1165,6 +1165,13 @@ int main(int argc,char **argv)
     char command[]="/Programs/hello";
     assert(run_command(&d,command)>0);
     drop_all(&d); fake_reset();
+    {
+        int saved_errno=errno;
+        errno=0;assert(win32_lease(&d,42,1,320,200,8,1)==-ENOSYS);
+        errno=EACCES;assert(win32_lease(&d,42,1,320,200,8,1)==-ENOSYS);
+        errno=saved_errno;
+        puts("PASS presenter query: initialized version/size, negative status preserved independently of errno");
+    }
     test_task_protocol();
     test_display_settings();
     test_tasks_scenario();
@@ -1178,5 +1185,5 @@ int main(int argc,char **argv)
     return 0;
 }
 
-int ciuki_display_query(struct ciuki_display_info *i) { (void)i; return -ENOSYS; }
+int ciuki_display_query(struct ciuki_display_info *i) { assert(i->version==CIUKI_DISPLAY_VERSION && i->size==sizeof(*i)); return -ENOSYS; }
 int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }

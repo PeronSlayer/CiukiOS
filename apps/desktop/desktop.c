@@ -1159,8 +1159,19 @@ static int launch_pending(struct desktop *d)
     }
     return pid;
 }
+/* Strong native bindings are linked by build_desktop.py; host shell replays
+ * keep their existing isolated platform. */
+__attribute__((weak)) void desk_w32_start(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
+{ (void)d; (void)pid; (void)status; }
+__attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
 static int power_request(int action)
-{ return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF); }
+{
+    int ready=desk_w32_shutdown();
+    if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
+    return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
+}
 static int power_alive(struct desktop *d, uint32_t pid)
 {
     /* One syscall snapshot per loop, shared by all targets. Disconnecting
@@ -1348,8 +1359,9 @@ static int win32_lease(struct desktop *d, uint32_t pid, int acquire,
     (void)d;
     int mode=0;
     if (acquire) {
-        struct ciuki_display_info info;
-        if (ciuki_display_query(&info)) return -errno;
+        struct ciuki_display_info info={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(info)};
+        int error=ciuki_display_query(&info);
+        if (error) return error; /* display calls return negative errno directly */
         mode=desk_v3_mode(&info,w,h,bpp); if (mode<0) return mode;
     }
     return ciuki_win32_presenter_lease(pid,acquire,mode,w,h,bpp,generation);
@@ -1482,7 +1494,7 @@ static void links_service(struct desktop *d)
 static void shell_setup(struct desktop *d, int gate)
 {
     if (!gate) {
-        links_start(d); d->v3_lease=win32_lease;
+        desk_w32_start(d); links_start(d); d->v3_lease=win32_lease;
         d->v3_restart=win32_restart;
     }
     d->launch=launch_program; d->terminate=terminate_child; d->icon=store_icon; d->mixer_set=mixer_apply;
@@ -1624,7 +1636,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_SHELL);
         desktop_wait("mixer-poll");
         mixer_poll(d,now,&mixer_poll_next);
-        if (!gate) { desktop_wait("storage-poll"); storage_poll(d,now); }
+        if (!gate) { desk_w32_poll(d); desktop_wait("storage-poll"); storage_poll(d,now); }
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desktop_wait("heartbeat"); desk_heartbeat(d,now);
@@ -1849,7 +1861,7 @@ int main(int argc, char **argv)
          * owns evidence/ticks/ledgers; these lines are application output only. */
         if (!gate && victim_pid<0) {
             int status, pid;
-            while ((pid=waitpid(-1,&status,WNOHANG))>0) desk_child_exited(d,(uint32_t)pid,status);
+            while ((pid=waitpid(-1,&status,WNOHANG))>0) { desk_w32_child_exited(d,(uint32_t)pid,status); desk_child_exited(d,(uint32_t)pid,status); }
         }
         if (gate && d->shell) for (int i=0; i<DESK_CLIENTS; i++) if (d->children[i].pid) {
             int status, pid=(int)d->children[i].pid;

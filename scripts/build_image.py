@@ -110,7 +110,8 @@ def desktop_payloads():
     desktop_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(desktop_build)
     desktop = desktop_build.validate_payloads()
-    sources = {"/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
+    sources = {"/System/Win32/shell-launch": DESKTOP / "shell-launch",
+               "/Programs/desktop": DESKTOP / "desktop", "/Programs/demo": DESKTOP / "demo", "/Programs/dosbox": DESKTOP / "dosbox",
                "/Programs/gfxdemo": DESKTOP / "gfxdemo",
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
                "/Programs/regedit": DESKTOP / "regedit",
@@ -151,7 +152,7 @@ def desktop_payloads():
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def font_payloads():

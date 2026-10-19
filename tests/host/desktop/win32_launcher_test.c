@@ -1,0 +1,40 @@
+/* Isolated cwd and the actual native/PE/DOS spawn arguments. */
+#include "win32_adapter.h"
+#include <ciuki/spawn.h>
+#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+int desk_w32_launcher_main(int,char **);
+static char path[260],words[34][1600],cwd[512];
+static unsigned maps,launched,sent;
+ciuki_pid_t ciuki_spawn(const char *p,char *const argv[],char *const env[],const struct ciuki_spawn_fd *fds,uint32_t count,uint32_t flags)
+{
+    assert(!flags && env && !strcmp(env[0],"LC_ALL=C"));
+    launched++;snprintf(path,sizeof(path),"%s",p);assert(getcwd(cwd,sizeof(cwd)));
+    maps=count;if(count)assert(count==1 && fds[0].source==3 && fds[0].target==3);
+    memset(words,0,sizeof(words));
+    for(unsigned i=0;argv[i];i++){assert(i<34);snprintf(words[i],sizeof(words[i]),"%s",argv[i]);}
+    return 123;
+}
+int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
+{assert(fd==4 && !flags && m->length==8);sent++;return 0;}
+int fixture_close(int fd){assert(fd==3 || fd==4);return 0;}
+int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *record)
+{(void)kind;(void)record;assert(0);return 0;}
+int main(int argc,char **argv)
+{
+    assert(argc==2);char *args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove \"keep spaces\"",argv[1],NULL};
+    assert(!desk_w32_launcher_main(5,args));
+    assert(!strcmp(path,"/Program Files/fixture.exe") && !maps && launched==1);
+    assert(!strcmp(words[1],"\"C:\\Program Files\\fixture.exe\" /remove \"keep spaces\""));assert(!strcmp(cwd,argv[1]));
+    char text[]="one \"two words\" empty\\\"quote \"\"";char *native[6]={0};
+    assert(desk_w32_arguments(text,native,6)==4);
+    assert(!strcmp(native[0],"one") && !strcmp(native[1],"two words") && !strcmp(native[2],"empty\"quote") && !native[3][0]);
+    args[1]="2";args[2]="C:\\GAMES\\TEST.COM";args[3]="-fast";
+    assert(!desk_w32_launcher_main(5,args));assert(!strcmp(path,"/Programs/dosbox") && maps==1);
+    assert(!strcmp(words[1],"--channel-fd=3") && !strcmp(words[2],"C:\\GAMES\\TEST.COM -fast"));
+    args[4]="D:\\bad";assert(desk_w32_launcher_main(5,args)==1 && launched==2);
+    assert(sent==3);puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;
+}

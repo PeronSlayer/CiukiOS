@@ -572,7 +572,7 @@ class DesktopTests(unittest.TestCase):
         if not (build.OUT / "manifest.json").is_file():
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
-        self.assertEqual(set(m["files"]), {"desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
+        self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
                                            "calc", "charmap", "clock", "help", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories
@@ -584,7 +584,7 @@ class DesktopTests(unittest.TestCase):
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
-        self.assertEqual(set(sources), {"/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
+        self.assertEqual(set(sources), {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt",
@@ -598,11 +598,11 @@ class DesktopTests(unittest.TestCase):
                                         "/system/sounds/scheme.cfg",
                                         *(f"/System/cache/wallpaper/{n}" for n in metadata["wallpaper_cache"]["files"]),
                                         *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "scheme.cfg")})
-        self.assertTrue({"/Programs", "/System", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
+        self.assertTrue({"/Programs", "/System", "/System/Win32", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 91)  # Includes TinyGL licence and product acknowledgment.
+        self.assertEqual(len(records), 92)  # Includes the private Win32 shell launcher.
         for r in records:
             if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
