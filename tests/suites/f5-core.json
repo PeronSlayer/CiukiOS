@@ -445,6 +445,76 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-gdi32-qemu-t23",
+      "probe": "w32-gdi32",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-gdi32 run={run_id}",
+      "timeout": 90,
+      "integration_pending": "f5-10A/C USER32/native-font bridge and guest GDI exercise probe; authored, unrun",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gdi_dib"
+            },
+            "fields": {
+              "formats": {
+                "eq": 6
+              },
+              "rop3": {
+                "eq": 256
+              },
+              "stretch_modes": {
+                "eq": 4
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gdi_regions_palettes_text"
+            },
+            "fields": {
+              "region_modes": {
+                "eq": 5
+              },
+              "static_colors": {
+                "eq": 20
+              },
+              "text_alignments": {
+                "ge": 10
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "gdi_teardown"
+            },
+            "fields": {
+              "live_objects": {
+                "eq": 0
+              },
+              "surface_bytes": {
+                "eq": 0
+              },
+              "clean": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }
