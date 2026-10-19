@@ -134,7 +134,7 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertFalse(any(p.startswith('/WINDOWS/SYSTEM/') for p in sources))
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            self.assertEqual(len(meta['builtins']),30)
+            self.assertEqual(len(meta['builtins']),32)
             self.assertIn('/System/Win32/dsetup.dll',sources)
             self.assertIn('/System/Win32/dsetup32.dll',sources)
             self.assertIn('/System/Win32/upper-builtins-inventory.json',sources)

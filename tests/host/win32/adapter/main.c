@@ -5,8 +5,8 @@ static struct w32_loader loader;
 static struct w32_pe pe;
 static struct w32_error err;
 #ifndef W32_HOST_MODEL
-static struct w32_builtin core_builtins[2];
-static char core_paths[2][W32_PATH_MAX];
+static struct w32_builtin core_builtins[3];
+static char core_paths[3][W32_PATH_MAX];
 static const char zero_hash[] = "0000000000000000000000000000000000000000000000000000000000000000";
 /* Register DIRECTORY/NAME as a builtin at its linked base, if present. */
 static int add_builtin(const char *directory, const char *name, ULONG i) {
@@ -78,6 +78,10 @@ int host_main(int argc, char **argv) {
         loader.builtins = core_builtins;
         /* Optional H1 test shim (tests/host/win32/adapter/kernel32_shim.c). */
         loader.builtin_count = add_builtin(argv[3], "kernel32.dll", 1) ? 2 : 1;
+        /* Optional H1 USER shim (tests/host/win32/input): core names resolve only
+         * from the builtin table since f5-06B, so a staged user32.dll joins it. */
+        if (loader.builtin_count == 2 && add_builtin(argv[3], "user32.dll", 2))
+            loader.builtin_count = 3;
         struct w32_module *core;
         if (!w32_ldr_load(&loader, "ntdll.dll", 0, &core))
             return 3;
