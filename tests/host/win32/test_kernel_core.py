@@ -96,7 +96,7 @@ class KernelCoreTests(unittest.TestCase):
         self.assertEqual([c['id'] for c in suite['cases']],
                          ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
                           'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23','w32-registry-qemu-t23',
-                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23','w32-crash-qemu-t23','w32-user32-qemu-t23','w32-codecs-qemu-t23','w32-upper-dlls-qemu-t23','w32-ddraw-qemu-t23'])
+                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23','w32-crash-qemu-t23','w32-user32-qemu-t23','w32-codecs-qemu-t23','w32-upper-dlls-qemu-t23','w32-ddraw-qemu-t23','w32-input-qemu-t23'])
         for case in suite['cases']:
             if case['probe']=='w32-upper-dlls':
                 self.assertIn('authored, unrun',case['integration_pending'])
@@ -108,6 +108,13 @@ class KernelCoreTests(unittest.TestCase):
             if case['probe']=='w32-ddraw':
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-ddraw run={run_id}')
+                continue
+            if case['probe']=='w32-input':
+                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertEqual(case['selector'],'f5:w32-input run={run_id}')
+                self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
+                                 ['input_layouts','input_formats','input_buffering','input_cooperative','input_relative_warp','input_teardown'])
+                self.assertTrue(all(p['fields']['errors']=={'eq':0} for p in case['expected']['predicates']))
                 continue
             if case['probe']=='w32-codecs':
                 self.assertIn('authored, unrun',case['integration_pending'])

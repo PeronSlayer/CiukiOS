@@ -256,6 +256,7 @@ void u32_event(const struct desk_packet *p) {
     w->serial = p->serial;
     u32_resize(w);
     u32_sync_window(w);
+    if(u32_input_exclusive==h)u32_input_focus();
     if (old.left != w->rect.left || old.top != w->rect.top)
       SendMessageA(h, WM_MOVE, 0,
                    (uint16_t)w->rect.left |
@@ -271,6 +272,9 @@ void u32_event(const struct desk_packet *p) {
       InvalidateRect(h, 0, 1);
     break;
   }
+  case DESK_V3_RELATIVE_EVENT:
+    u32_input_notify(w->handle, &p->event, 1);
+    break;
   case DESK_KEY:
   case DESK_MOTION:
   case DESK_BUTTON:

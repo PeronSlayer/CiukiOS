@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # These APIs use zero as success (or as a valid menu result). Their W21
 # failure must retain the published return convention as well as error 120.
 MINUS_ONE_FAILURES = {
-    'GetMessageW', 'VkKeyScanW', 'DialogBoxParamA', 'DialogBoxIndirectParamA',
+    'GetMessageW', 'VkKeyScanW', 'VkKeyScanExW', 'DialogBoxParamA', 'DialogBoxIndirectParamA',
     'ChangeDisplaySettingsA', 'WaitForInputIdle', 'GetMenuState',
     'GetMenuItemCount', 'GetMenuItemID', 'CheckMenuItem', 'EnableMenuItem',
 }
@@ -82,7 +82,7 @@ def build(out, base, flags):
     names=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('user32.dll',set())
     names |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('user32.dll',set())
     specs=inventory()
-    unicode={n for n in specs if n.endswith('W') and n[:-1]+'A' in exports}
+    unicode={n for n in specs if n.endswith('W') and n[:-1]+'A' in exports and n not in exports}
     missing=sorted((names|unicode)-exports.keys())
     lines=['/* SPDX-License-Identifier: LGPL-2.1-or-later */','#include <w32/kernel32.h>']
     definitions=['LIBRARY user32.dll','EXPORTS']+[f' {n}={v}' for n,v in sorted(exports.items())]
