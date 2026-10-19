@@ -162,7 +162,7 @@ void *W32API GetProcAddress(HANDLE h, const char *s) {
   return 0;
 }
 #endif
-void *W32API CreateThread(void *security, DWORD stack,
+HANDLE W32API CreateThread(SECURITY_ATTRIBUTES *security, DWORD stack,
                           DWORD(W32API *entry)(void *), void *argument,
                           DWORD flags, DWORD *id) {
   (void)security;

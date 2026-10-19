@@ -34,6 +34,24 @@ static void walk_step(void)
 static void walk_drop(const struct uaddr *u, struct ua_pin *pin)
 { ua_unpin((struct uaddr *)u,pin); }
 
+/* Metadata pins (walks and protection transactions) are short and yield only
+ * at service points. Another task's pin is waited out, as the fault path
+ * does; a task never waits for its own pin, which stays a refusal. */
+static int wait_metadata(const struct uaddr *u, uint32_t base, uint32_t end)
+{
+    for (;;) {
+        bool other=false;
+        for (const struct ua_pin *p=u->pins; p; p=p->next)
+            if (p->mutation && base<p->end && end>p->base) {
+                if (p->task==g_current) return -EBUSY;
+                other=true;
+            }
+        if (!other) return 0;
+        if (!g_current || g_current->preempt_holds || u->closing) return -EBUSY;
+        task_sleep_ms(1);
+    }
+}
+
 /* Object metadata is resident; a PTE is only a revocable translation. Slots
  * exist at reservation, frames only at touch. Index links form the resident set. */
 #define SLOT_COMMIT 1u
@@ -611,8 +629,8 @@ static int map_area(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t pro
     /* Metadata service pins serialize insertion too: otherwise a peer could
      * invalidate a prepared split's extent-count debit while its walker
      * yielded. Ordinary range pins retain disjoint mapping concurrency. */
-    for (const struct ua_pin *pin=u->pins; pin; pin=pin->next)
-        if (pin->mutation && base<pin->end && end>pin->base) return -EBUSY;
+    err = wait_metadata(u, base, end);
+    if (err) return err;
     if (!vacant(u,base,end)) return -EINVAL;
     bool in_arena = kind != UA_W32 && base >= CIUKI_MMAP_BASE && end <= CIUKI_MMAP_LIMIT;
     if ((in_arena && u->arena_extents == CIUKI_MAPPING_MAX) || next_generation == UINT64_MAX)
@@ -705,6 +723,7 @@ int32_t ua_mmap(struct uaddr *u, const struct ciuki_mmap_args *a)
 
 static bool pinned(const struct uaddr *u, uint32_t base, uint32_t end)
 {
+    if (wait_metadata(u, base, end)) return true;
     struct ua_pin walk; walk_hold(u,&walk); bool busy=false;
     for (const struct ua_extent *e = u->head; e; e = e->next) {
         walk_step();
@@ -848,7 +867,7 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
      * Whole-space mutation pins keep predecessor nodes and split debits
      * stable while page and extent walks service unrelated tasks. */
     struct ua_extent *first = ua_find(u, base), *last = ua_find(u, end - 1);
-    struct ua_pin transaction = { .base = 0, .end = CIUKI_MAIN_STACK_LIMIT, .mutation = true, .next = u->pins };
+    struct ua_pin transaction = { .base = 0, .end = CIUKI_MAIN_STACK_LIMIT, .mutation = true, .task = g_current, .next = u->pins };
     u->pins = &transaction;
     unsigned debit = (l && arena(first)) + (r && arena(last));
     u->arena_extents += debit;
@@ -1142,8 +1161,8 @@ int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, b
 {
     if (!ua_range(u, base, bytes, PROT_READ | (write ? PROT_WRITE : 0)))
         return -EFAULT;
-    for (struct ua_pin *p = u->pins; p; p = p->next)
-        if (p->mutation && base < p->end && base + bytes > p->base) return -EBUSY;
+    int wait = wait_metadata(u, base, base + bytes);
+    if (wait) return wait;
     *pin = (struct ua_pin){ .base = base, .end = base + bytes, .prepared_end=PAGE_ALIGN_DOWN(base),
         .task = g_current, .next = u->pins };
     u->pins = pin;
@@ -1211,7 +1230,7 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
         bytes > CIUKI_MAIN_STACK_LIMIT - va)
         return -EFAULT;
     struct uaddr *owner=(struct uaddr *)u;
-    struct ua_pin transaction={.base=va,.end=va+bytes,.mutation=true,.next=owner->pins};
+    struct ua_pin transaction={.base=va,.end=va+bytes,.mutation=true,.task=g_current,.next=owner->pins};
     owner->pins=&transaction;
     unsigned pages=0; int result=0;
     uint8_t *b = buffer;
