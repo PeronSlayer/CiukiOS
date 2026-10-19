@@ -20,7 +20,10 @@
 #include <ciuki/v86.h>
 #include <ciuki/task.h>
 
-#define VP "vm-audio"
+static bool jitter_probe;
+#define VP (jitter_probe ? "vm-audio-jitter" : "vm-audio")
+/* Private, runtime-only source queue gate; no transport or native stream hook. */
+extern unsigned audio_vm_probe_jitter(struct dosvm_key, bool);
 /* Attribute long controller stretches without printing in the measured
  * path. Values are wall time (including a callee's sleeps), not CPU time. */
 enum { SP_WRITE, SP_CREATE, SP_BOOT, SP_TYPE, SP_TEXT, SP_STATS, SP_INFO, SP_CHECK, SP_COUNT };
@@ -213,8 +216,22 @@ static int probe_vm_audio(void)
 
     /* 2. The f4-05 regression: 32 fresh 64-unit blocks at 8000 Hz, rendered in sequence. */
     audio_vm_tap_reset(key); probe_audio_stats(key, &before); probe_audio_info(key, &b);
+    if (jitter_probe) audio_vm_probe_jitter(key, true);
     if ((error = play_command(v, 2)) || (error = play_stage(v, 2, &m, 10000))) goto cleanup;
     play_rendered(key, 32, &stats); probe_audio_info(key, &a); audio_vm_ring(&ring_tap);
+    if (jitter_probe) {
+        unsigned gap = audio_vm_probe_jitter(key, false);
+        bool bounded = stats.delay_frames > 0 && stats.delay_frames <= AUDIO_VM_LATE_BUDGET &&
+            gap <= 20 &&
+            stats.lead_max <= (int32_t)(AUDIO_VM_LATENCY + AUDIO_VM_LATE_BUDGET + AUDIO_QUANTUM) &&
+            stats.late_frames == before.late_frames;
+        rec_emit(VP, "DATA", "case=jitter ok=%u max_gap_ms=%u rate=8000 units=64 delay=%u budget=%u lead_max=%d late=%llu reanchors=%u",
+                 bounded, gap, stats.delay_frames, AUDIO_VM_LATE_BUDGET, stats.lead_max,
+                 stats.late_frames - before.late_frames, stats.reanchors - before.reanchors);
+        rec_emit(VP, "DATA", "case=jitter_hist lt1=%llu ms1_5=%llu ms5_20=%llu gt20=%llu",
+                 stats.late_hist[0], stats.late_hist[1], stats.late_hist[2], stats.late_hist[3]);
+        if (!bounded) { error = -EFAULT; goto cleanup; }
+    }
     block_check(&stats, false, 32, 64, &fresh, &repeats, &gaps);
     ok = m.irqs == 32 && !m.isrbad && stats.log_count == 32 && fresh == 32 && !repeats && !gaps &&
          a.services - b.services == 32 && a.boundaries - b.boundaries == 32 && stats.pcm.frames == 12288 &&
@@ -304,3 +321,11 @@ cleanup:
     return error ? 1 : 0;
 }
 CIUKI_F4_PROBE("vm-audio", probe_vm_audio);
+static int probe_vm_audio_jitter(void)
+{
+    jitter_probe = true;
+    int result = probe_vm_audio();
+    jitter_probe = false;
+    return result;
+}
+CIUKI_F4_PROBE("vm-audio-jitter", probe_vm_audio_jitter);

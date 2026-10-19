@@ -16,6 +16,9 @@
 #define AUDIO_VM_FLOOR (AUDIO_QUANTUM + 48u)
 #define AUDIO_VM_HOLD_BAND (4u * AUDIO_QUANTUM)
 #define AUDIO_VM_SKIP_BAND (6u * AUDIO_QUANTUM)
+/* F4-35: one source's cumulative late-arrival shift, 20 ms at 48 kHz.
+ * Separate from the physical transport lead and stop/recovery latency. */
+#define AUDIO_VM_LATE_BUDGET (AUDIO_RATE / 50u)
 #define AUDIO_VM_LOG 64u
 #define AUDIO_VM_HEAD 4096u /* OPL frames digested from the first audible one */
 
@@ -35,6 +38,7 @@ struct audio_vm_tap {
 #define AUDIO_VM_BLOCK_DROPPED 0x8000u
 struct audio_vm_block_log {
     uint32_t sequence, frames;
+    uint32_t dropped; /* source frames actually discarded in this block */
     int16_t first[2];
     uint16_t flags, reserved;
 };
@@ -44,6 +48,12 @@ struct audio_vm_stats {
     uint64_t rendered;       /* output frames rendered for this source */
     uint64_t pcm_frames;     /* source frames consumed into the stream */
     uint64_t late_frames;    /* source frames dropped: their timeline position had passed */
+    /* Source-frame histogram before late recovery: <1, [1,5), [5,20], >20 ms.
+     * Snapshots describe the most recent actual drop, in 48 kHz frames. */
+    uint64_t late_hist[4];
+    uint32_t drop_runs, drop_last, drop_max;
+    int32_t drop_lag, drop_lag_min, drop_lead, drop_lead_min, drop_lead_max;
+    uint32_t delay_frames; /* common PCM/OPL timeline shift, bounded per source */
     uint64_t starved;        /* output frames silent while the DSP was active without data */
     uint64_t hold_frames, skipped_frames;
     uint32_t blocks, segments, streams, holds, skips, reanchors, seq_gaps;
@@ -89,6 +99,10 @@ struct audio_vm_diagnostic {
     uint32_t pcm_peak, opl_peak, mix_peak, ring_peak;
     uint32_t rate;
     uint32_t refill_us, refill_gap_us;
+    uint64_t late_hist[4], late_frames;
+    uint32_t drop_runs, drop_last, drop_max, delay_frames;
+    int32_t lag, lag_min, lead, lead_min, lead_max;
+    int32_t drop_lag, drop_lag_min, drop_lead, drop_lead_min, drop_lead_max;
     int error;
     uint8_t gain[2], master[2];
     bool ready, attached, running, muted, master_muted, master_in_codec;

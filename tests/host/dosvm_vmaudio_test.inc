@@ -321,9 +321,10 @@ static void test_vm_pacing(void)
     st = vstats(v);
     CHECK(st.skips == 1 && st.skipped_frames >= 120 * 48 - 2 * AUDIO_VM_SKIP_BAND && st.late_frames > 0);
     vq_run(6);
+    unsigned reanchors = vstats(v).reanchors;
     audio.output += 4 * AUDIO_QUANTUM; /* quanta published without this source */
     vq_run(4);
-    st = vstats(v); CHECK(st.reanchors == 1);
+    st = vstats(v); CHECK(st.reanchors == reanchors + 1);
     int32_t last = INT32_MIN; unsigned sounds = 0;
     for (unsigned i = 0; i < vq_n; i++) {
         if (!vq_cap[i][0]) continue;

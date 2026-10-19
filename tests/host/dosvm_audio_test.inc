@@ -567,8 +567,11 @@ static void test_audio_tiny_auto_init(void)
     puts("f3-40 tiny auto-init: 45 blocks/tick and 1800-block timer catch-up, one edge while asserted, acknowledgements never clock DMA PASS");
 }
 
+#include "audio/vm_late_test.inc"
+
 static void test_audio(void)
 {
+    test_vm_late();
     test_audio_tiny_auto_init();
     test_audio_detect(); test_audio_dma8_single(); test_audio_modes(); test_audio_double_buffer();
     test_audio_if_clear(); test_audio_pause_exit(); test_audio_dma_controller(); test_audio_opl(); test_audio_queue_limits();
