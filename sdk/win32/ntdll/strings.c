@@ -274,3 +274,115 @@ BOOLEAN W32API RtlDosPathNameToNtPathName_U(const WCHAR *name, UNICODE_STRING *o
         *part = file ? out->Buffer + extra + (file - full) - skip : 0;
     return 1;
 }
+/* f5-20A: string services reached by the reused Wine 10.0 DLLs. The ANSI
+ * code page is CP1252 (single byte), so sizes are one byte per character. */
+BOOLEAN W32API RtlCreateUnicodeStringFromAsciiz(UNICODE_STRING *d, const char *s) {
+    if (!d || !s)
+        return 0;
+    ANSI_STRING a;
+    RtlInitAnsiString(&a, s);
+    if (w32_strlen(s) != a.Length)
+        return 0;
+    return !RtlAnsiStringToUnicodeString(d, &a, 1);
+}
+NTSTATUS W32API RtlUnicodeToMultiByteN(char *d, ULONG cap, ULONG *done, const WCHAR *s,
+                                       ULONG bytes) {
+    ULONG n = bytes / 2;
+    if (n > cap)
+        n = cap;
+    if (n && (!d || !s))
+        return STATUS_INVALID_PARAMETER;
+    for (ULONG i = 0; i < n; i++)
+        d[i] = (char)encode(s[i]);
+    if (done)
+        *done = n;
+    return 0;
+}
+NTSTATUS W32API RtlUnicodeToMultiByteSize(ULONG *size, const WCHAR *s, ULONG bytes) {
+    (void)s;
+    if (!size)
+        return STATUS_INVALID_PARAMETER;
+    *size = bytes / 2;
+    return 0;
+}
+static int hex(WCHAR c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                                          : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+/* Exactly "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}", hex digits of either
+ * case; the GUID is published only after the whole string parsed. */
+NTSTATUS W32API RtlGUIDFromString(const UNICODE_STRING *s, void *guid) {
+    if (!s || !guid || s->Length != 76 || !s->Buffer)
+        return STATUS_INVALID_PARAMETER;
+    const WCHAR *p = s->Buffer;
+    if (p[0] != '{' || p[37] != '}' || p[9] != '-' || p[14] != '-' || p[19] != '-' || p[24] != '-')
+        return STATUS_INVALID_PARAMETER;
+    static const uint8_t at[16] = {1, 3, 5, 7, 10, 12, 15, 17, 20, 22, 25, 27, 29, 31, 33, 35};
+    uint8_t raw[16], out[16];
+    for (unsigned i = 0; i < 16; i++) {
+        int h = hex(p[at[i]]), l = hex(p[at[i] + 1]);
+        if (h < 0 || l < 0)
+            return STATUS_INVALID_PARAMETER;
+        raw[i] = (uint8_t)(h << 4 | l);
+    }
+    /* Data1, Data2 and Data3 are little-endian integers; Data4 is bytes. */
+    static const uint8_t order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+    for (unsigned i = 0; i < 16; i++)
+        out[i] = raw[order[i]];
+    w32_copy(guid, out, 16);
+    return 0;
+}
+/* IS_TEXT_UNICODE_* tests as documented for RtlIsTextUnicode: each passed
+ * test sets its flag; reverse or not-Unicode evidence wins, then not-ASCII
+ * evidence, then Unicode evidence. */
+BOOLEAN W32API RtlIsTextUnicode(const void *buffer, int length, int *flags) {
+    const uint8_t *b = buffer;
+    if (!buffer || length < 2) {
+        if (flags)
+            *flags = 0;
+        return 0;
+    }
+    ULONG tests = flags ? (ULONG)*flags : ~0u, out = 0, n = (ULONG)length / 2;
+    ULONG zero_high = 0, zero_low = 0, ascii = 1, reversed = 1;
+    if (length & 1)
+        out |= 0x200;
+    for (ULONG i = 0; i < n; i++) {
+        WCHAR c = (WCHAR)(b[i * 2] | b[i * 2 + 1] << 8);
+        uint8_t low = (uint8_t)c, high = (uint8_t)(c >> 8);
+        if (!i && c == 0xfeff)
+            out |= 0x8;
+        if (!i && c == 0xfffe)
+            out |= 0x80;
+        if (c == 0xffff || (i && (c == 0xfffe || c == 0xfeff)) || c == 0x0a0d)
+            out |= 0x100;
+        if (c == 0x0d || c == 0x0a || c == 0x09 || c == 0x20 || c == 0x3000)
+            out |= 0x4;
+        if (c == 0x0d00 || c == 0x0a00 || c == 0x0900 || c == 0x2000 || c == 0x0030)
+            out |= 0x40;
+        zero_high += !high && low;
+        zero_low += !low && high;
+        if (high || !low)
+            ascii = 0;
+        if (low || !high)
+            reversed = 0;
+    }
+    for (int i = 0; i < length; i++)
+        if (!b[i]) {
+            out |= 0x1000;
+            break;
+        }
+    if (ascii && !(out & 0x8))
+        out |= 0x1;
+    if (reversed && !(out & 0x80))
+        out |= 0x10;
+    if (zero_high * 2 > n && zero_low * 4 < n)
+        out |= 0x2;
+    if (zero_low * 2 > n && zero_high * 4 < n)
+        out |= 0x20;
+    out &= tests;
+    if (flags)
+        *flags = (int)out;
+    if (out & 0x0ff0)
+        return 0;
+    return (out & 0xf00f) != 0;
+}

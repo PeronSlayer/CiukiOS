@@ -18,7 +18,7 @@ def run(args):
 
 def build(out, main=None, windows=True):
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
-    sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[CORE/'ntdll/context.S',CORE/'services/ciuki_stub.c']
+    sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[CORE/'ntdll/context.S',CORE/'ntdll/runtime.S',CORE/'services/ciuki_stub.c']
     common=['-march=pentiumpro','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-omit-frame-pointer',
             '-mno-sse','-mno-sse2','-mno-mmx','-fno-ident','-O1','-Wall','-Wextra','-Werror','-I'+str(CORE/'include'),'-I'+str(ROOT/'src/kernel/include')]
     targets=['i386-unknown-linux-gnu']
@@ -65,7 +65,9 @@ def build_shim(directory):
 
 def build_model(out,main=None):
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
-    sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))
+    # The fail-closed transport stub: ntdll's NT native services (f5-20A)
+    # reach CIUKI_SYS_W32, which the H0 model answers with ENOSYS.
+    sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[CORE/'services/ciuki_stub.c']
     binary=out/'w32model'
     run(['clang','-DW32_HOST_MODEL','-ffreestanding','-fno-builtin','-fno-omit-frame-pointer',
          '-O1','-Wall','-Wextra','-Werror','-pthread','-I'+str(CORE/'include'),'-I'+str(ADAPTER),
@@ -92,7 +94,7 @@ def build_kernel32_runtime(out):
            '-ffunction-sections','-fdata-sections','-I'+str(CORE/'include'),
            '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ADAPTER)]
     sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[
-        CORE/'ntdll/context.S',CORE/'kernel32/core.c',CORE/'kernel32/fiber.c',CORE/'kernel32/fiber.S',
+        CORE/'ntdll/context.S',CORE/'ntdll/runtime.S',CORE/'kernel32/core.c',CORE/'kernel32/fiber.c',CORE/'kernel32/fiber.S',
         CORE/'kernel32/apc.c',ADAPTER/'linux.c',ADAPTER/'start.S',ADAPTER/'kernel32_runtime.c']
     objects=[]
     for i,source in enumerate(sources):

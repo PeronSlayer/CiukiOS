@@ -187,5 +187,41 @@ int w32_kernel32_runtime(void) {
   CHECK(!GetEnvironmentVariableA("A", buffer, sizeof(buffer)) &&
         GetLastError() == 203);
   puts("PASS kernel32 VM heap objects waits TLS codepages time environment");
+  /* f5-20A: process/thread queries and heap compaction on the production
+   * object and heap services (named objects: kernel32_core_upper.c). */
+  extern HANDLE W32API OpenSemaphoreA(DWORD, BOOL, const char *);
+  extern BOOL W32API IsWow64Process(HANDLE, BOOL *);
+  extern BOOL W32API ProcessIdToSessionId(DWORD, DWORD *);
+  extern DWORD W32API GetThreadId(HANDLE);
+  extern DWORD W32API HeapCompact(HANDLE, DWORD);
+  extern HANDLE W32API GetCurrentProcess(void);
+  extern HANDLE W32API GetCurrentThread(void);
+  extern DWORD W32API GetCurrentProcessId(void);
+  extern DWORD W32API GetCurrentThreadId(void);
+  CHECK(!OpenSemaphoreA(0x1f0003, 0, 0) && GetLastError() == 87);
+  HANDLE unnamed = CreateEventA(0, 0, 0, 0);
+  CHECK(unnamed);
+  BOOL wow64 = 7;
+  CHECK(IsWow64Process(GetCurrentProcess(), &wow64) && !wow64);
+  wow64 = 7;
+  CHECK(!IsWow64Process(unnamed, &wow64) && GetLastError() == 6 && wow64 == 7);
+  CHECK(!IsWow64Process(GetCurrentProcess(), 0) && GetLastError() == 87);
+  DWORD session = 9;
+  CHECK(ProcessIdToSessionId(GetCurrentProcessId(), &session) && !session);
+  CHECK(!ProcessIdToSessionId(0x7ffffff0u, &session) && GetLastError() == 87);
+  CHECK(!ProcessIdToSessionId(GetCurrentProcessId(), 0) && GetLastError() == 87);
+  CHECK(GetThreadId(GetCurrentThread()) == GetCurrentThreadId());
+  CHECK(!GetThreadId(unnamed) && GetLastError() == 6);
+  CHECK(!GetThreadId((HANDLE)(uintptr_t)0x7ffc) && GetLastError() == 6);
+  CHECK(CloseHandle(unnamed));
+  HANDLE compact = HeapCreate(0, 65536, 0);
+  void *block = HeapAlloc(compact, 0, 1000);
+  CHECK(block && HeapFree(compact, 0, block));
+  SetLastError(77);
+  DWORD largest = HeapCompact(compact, 0);
+  CHECK((largest >= 1000 || (!largest && !GetLastError())) && HeapDestroy(compact));
+  static ULONG not_a_heap[64];
+  CHECK(!HeapCompact(not_a_heap, 0) && GetLastError() == 6);
+  puts("PASS kernel32 f5-20A process queries heap compaction");
   return 0;
 }

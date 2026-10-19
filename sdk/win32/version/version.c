@@ -4,6 +4,21 @@
 extern uint8_t w32r_scalar_ansi(uint32_t);
 extern uint32_t w32r_ansi_scalar(uint8_t);
 static uint32_t align4(uint32_t n){return (n+3)&~3u;}
+/* f5-20A: Unicode file names go through ACP 1252 to the ANSI CreateFileA
+ * path of KERNEL32 (whose CreateFileW is a Windows 9x refusal); a name
+ * outside the code page fails with ERROR_INVALID_NAME. */
+static int open_name(const void *name,int wide,struct w32v_file *f)
+{
+    if(!wide)return w32v_open(name,0,f);
+    char a[1040];uint32_t i=0;
+    for(const WCHAR *w=name;w[i];i++){
+        uint8_t c=w32r_scalar_ansi(w[i]);
+        if(i+1>=sizeof(a)){w32r_last_error(206);return 0;}
+        if(c=='?'&&w[i]!='?'){w32r_last_error(123);return 0;}
+        a[i]=(char)c;
+    }
+    a[i]=0;return w32v_open(a,0,f);
+}
 struct resources {struct w32v_file *file;uint32_t pe,sections,count,rva,bytes,offset;};
 static int rva_file(struct resources *r,uint32_t rva,uint32_t n,uint32_t *out)
 {
@@ -55,7 +70,7 @@ static void unlock_buffers(void){__atomic_store_n(&buffer_lock,0,__ATOMIC_RELEAS
 static uint32_t version_size(const void *name,int wide,uint32_t *handle)
 {
     if(handle)*handle=0;if(!name){w32r_last_error(87);return 0;}
-    struct w32v_file f;if(!w32v_open(name,wide,&f))return 0;
+    struct w32v_file f;if(!open_name(name,wide,&f))return 0;
     uint32_t off,n;int ok=locate(&f,&off,&n);w32v_close(&f);
     if(!ok){w32r_last_error(1813);return 0;}return align4(n)+n+8;
 }
@@ -64,7 +79,7 @@ uint32_t W32API GetFileVersionInfoSizeW(const WCHAR *n,uint32_t *h){return versi
 static int version_get(const void *name,int wide,uint32_t ignored,uint32_t cap,void *out)
 {
     (void)ignored;if(!name||!out){w32r_last_error(87);return 0;}
-    struct w32v_file f;if(!w32v_open(name,wide,&f))return 0;uint32_t off,n;int ok=locate(&f,&off,&n);
+    struct w32v_file f;if(!open_name(name,wide,&f))return 0;uint32_t off,n;int ok=locate(&f,&off,&n);
     if(!ok){w32v_close(&f);w32r_last_error(1813);return 0;}
     if(cap<n){w32v_close(&f);w32r_last_error(122);return 0;}
     ok=w32v_read(&f,off,out,n);w32v_close(&f);if(!ok){w32r_last_error(13);return 0;}
@@ -140,7 +155,7 @@ static uint32_t find_file(uint32_t flags,const void *file,const void *windows,co
     int found=-1;const unsigned order[]={1,2,0};
     for(unsigned i=0;i<3;i++){
         unsigned d=order[i];uint32_t len=lengths[d];w32_copy(full,directories[d],len*2);full[len++]='\\';w32_copy(full+len,name,(name_length+1)*2);
-        struct w32v_file f;if(w32v_open(full,1,&f)){w32v_close(&f);found=(int)d;break;}
+        struct w32v_file f;if(open_name(full,1,&f)){w32v_close(&f);found=(int)d;break;}
     }
     unsigned destination=flags&1?2:1;uint32_t nc=found<0?0:lengths[found],nd=lengths[destination],result=found>=0&&(unsigned)found!=destination?1:0;
     if(!current||*cl<=nc)result|=4;

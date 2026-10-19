@@ -12,6 +12,9 @@ extern int GetFileVersionInfoA(const char *,uint32_t,uint32_t,void *);
 extern int VerQueryValueA(const void *,const char *,void **,uint32_t *);
 extern int VerQueryValueW(const void *,const WCHAR *,void **,uint32_t *);
 extern uint32_t VerFindFileA(uint32_t,const char *,const char *,const char *,char *,uint32_t *,char *,uint32_t *);
+extern uint32_t GetFileVersionInfoSizeW(const WCHAR *,uint32_t *);
+extern int GetFileVersionInfoW(const WCHAR *,uint32_t,uint32_t,void *);
+extern uint32_t last_error_value(void);
 extern int w32lz_decode(const uint8_t *,uint32_t,uint8_t **,uint32_t *,char *);
 extern int32_t LZOpenFileA(char *,void *,uint32_t);
 extern int32_t LZRead(int32_t,char *,int32_t);
@@ -33,6 +36,18 @@ void version_tests(const char *image)
     char cur[260],dest[260];uint32_t cl=sizeof(cur),dl=sizeof(dest);
     assert(!VerFindFileA(0,"absent.dll","C:\\WINDOWS","C:\\Game",cur,&cl,dest,&dl));assert(!cur[0]&&cl==1);assert(!strcmp(dest,"C:\\Game"));
     cl=dl=1;assert(VerFindFileA(1,"absent.dll","C:\\WINDOWS","C:\\Game",cur,&cl,dest,&dl)&4);
+    /* f5-20A: the Unicode entry points the reused Wine DLLs import open the
+     * file through the ANSI path (ACP 1252) and answer like the ANSI ones. */
+    WCHAR wide[1024];unsigned i=0;for(;image[i];i++)wide[i]=(uint8_t)image[i];wide[i]=0;
+    assert(GetFileVersionInfoSizeW(wide,&ignored)==size);
+    uint8_t *again=malloc(size),*fresh=malloc(size);
+    assert(again&&fresh&&GetFileVersionInfoA(image,0,size,fresh)&&GetFileVersionInfoW(wide,0,size,again)&&!memcmp(again,fresh,size));free(fresh);
+    assert(!GetFileVersionInfoW(wide,0,4,again)&&last_error_value()==122);
+    WCHAR beyond[]={'C',':','\\',0x4e00,'.','d','l','l',0};
+    assert(!GetFileVersionInfoSizeW(beyond,&ignored)&&last_error_value()==123);
+    WCHAR euro[]={'C',':','\\',0x20ac,'.','d','l','l',0};
+    w32r_last_error(0);assert(!GetFileVersionInfoSizeW(euro,&ignored)&&last_error_value()!=123);
+    free(again);
     free(bytes);
 }
 static uint8_t *load(const char *path,uint32_t *n)

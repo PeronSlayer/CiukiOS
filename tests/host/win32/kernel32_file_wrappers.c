@@ -20,7 +20,20 @@
     }                                                                          \
   } while (0)
 static DWORD last_error, calls, signals, io_flags, io_bytes, io_low, io_high;
-static DWORD injected_error, opened, closes, copied;
+static DWORD injected_error, opened, closes, copied, stat_path, seek_method;
+/* f5-20A: deterministic FAT-to-FILETIME stand-in (time.c is not linked). */
+BOOL W32API DosDateTimeToFileTime(uint16_t date, uint16_t time, FILETIME *out) {
+  out->low = date;
+  out->high = time;
+  return 1;
+}
+extern BOOL W32API GetFileAttributesExA(const char *, DWORD, void *);
+extern BOOL W32API GetFileInformationByHandle(HANDLE, BY_HANDLE_FILE_INFORMATION *);
+extern BOOL W32API GetFileSizeEx(HANDLE, int64_t *);
+extern BOOL W32API SetFilePointerEx(HANDLE, int64_t, int64_t *, DWORD);
+extern BOOL W32API DeviceIoControl(HANDLE, DWORD, void *, DWORD, void *, DWORD, DWORD *,
+                                   OVERLAPPED *);
+extern DWORD W32API GetFinalPathNameByHandleW(HANDLE, WCHAR *, DWORD, DWORD);
 static unsigned spawn_calls, spawn_failure;
 static const char *expected_command;
 static const char *expected_environment="A=B\0\0";
@@ -132,7 +145,18 @@ int32_t w32_ciuki_call(void *record, uint32_t bytes) {
     a->result = opened++ ? 8 : 4;
     break;
   case W32_F_STAT:
+    if (injected_error) {
+      a->error = injected_error;
+      break;
+    }
+    stat_path = a->path;
     memcpy((void *)(uintptr_t)a->buffer, &source, sizeof(source));
+    break;
+  case W32_F_SEEK:
+    seek_method = a->flags;
+    io_low = a->low;
+    io_high = a->high;
+    a->low += 10;
     break;
   case W32_F_READ:
   case W32_F_WRITE:
@@ -172,6 +196,50 @@ int32_t w32_ciuki_call(void *record, uint32_t bytes) {
     CHECK(0);
   }
   return 0;
+}
+static void upper_files(void) {
+  WIN32_FILE_ATTRIBUTE_DATA fa;
+  memset(&fa, 0xa5, sizeof(fa));
+  WIN32_FILE_ATTRIBUTE_DATA before = fa;
+  DWORD n = calls;
+  CHECK(!GetFileAttributesExA("C:\\x", 1, &fa) && GetLastError() == 87 && calls == n &&
+        !memcmp(&fa, &before, sizeof(fa)));
+  source.size_low = 5;
+  source.size_high = 1;
+  CHECK(GetFileAttributesExA("C:\\x", 0, &fa) && stat_path && fa.attributes == 0x27 &&
+        fa.size_low == 5 && fa.size_high == 1 && fa.write.low == 0x5822 &&
+        fa.write.high == 0x3344 && fa.access.low == 0x5823 && !fa.access.high &&
+        fa.creation.low == 0x5821 + 12300000u && fa.creation.high == 0x1122);
+  injected_error = 2;
+  CHECK(!GetFileAttributesExA("C:\\missing", 0, &fa) && GetLastError() == 2);
+  BY_HANDLE_FILE_INFORMATION bh;
+  CHECK(!GetFileInformationByHandle((HANDLE)4, &bh) && GetLastError() == 2);
+  int64_t size = 0;
+  CHECK(!GetFileSizeEx((HANDLE)4, &size) && !size && GetLastError() == 2);
+  injected_error = 0;
+  CHECK(GetFileInformationByHandle((HANDLE)4, &bh) && !stat_path && bh.links == 1 &&
+        bh.attributes == 0x27 && bh.size_low == 5 && bh.size_high == 1 && !bh.serial);
+  CHECK(!GetFileInformationByHandle((HANDLE)4, 0) && GetLastError() == 87);
+  CHECK(GetFileSizeEx((HANDLE)4, &size) && size == 0x100000005ll);
+  CHECK(!GetFileSizeEx((HANDLE)4, 0) && GetLastError() == 87);
+  int64_t position = 0;
+  CHECK(SetFilePointerEx((HANDLE)4, 0x200000003ll, &position, 1) && seek_method == 1 &&
+        io_low == 3 && io_high == 2 && position == 0x20000000dll);
+  CHECK(SetFilePointerEx((HANDLE)4, -2, 0, 2) && io_low == 0xfffffffeu && io_high == ~0u);
+  CHECK(!SetFilePointerEx((HANDLE)4, 0, &position, 3) && GetLastError() == 87);
+  DWORD done = 9;
+  CHECK(!DeviceIoControl((HANDLE)4, 0x90018, 0, 0, 0, 0, &done, 0) && GetLastError() == 50 &&
+        !done);
+  injected_error = 6;
+  CHECK(!DeviceIoControl((HANDLE)99, 0x90018, 0, 0, 0, 0, &done, 0) && GetLastError() == 6);
+  WCHAR path[8] = {0xaaaa};
+  CHECK(!GetFinalPathNameByHandleW((HANDLE)99, path, 8, 0) && GetLastError() == 6);
+  injected_error = 0;
+  CHECK(!GetFinalPathNameByHandleW((HANDLE)4, path, 8, 0) && GetLastError() == 50 &&
+        path[0] == 0xaaaa);
+  CHECK(!GetFinalPathNameByHandleW((HANDLE)4, path, 8, 3) && GetLastError() == 87);
+  CHECK(!GetFinalPathNameByHandleW((HANDLE)4, path, 8, 0x10) && GetLastError() == 87);
+  CHECK(GetFinalPathNameByHandleW((HANDLE)4, path, 8, 8 | 4) == 0 && GetLastError() == 50);
 }
 static void *run(void *unused) {
   (void)unused;
@@ -244,6 +312,7 @@ static void *run(void *unused) {
   CHECK(!LockFileEx((HANDLE)4,3,0,8,1,&lock)&&GetLastError()==33&&lock.internal==0xfeed);
   injected_error=0;
   CHECK(UnlockFileEx((HANDLE)4,0,8,1,&lock)&&!lock.internal);
+  upper_files();
   return 0;
 }
 int main(void) {
@@ -259,5 +328,6 @@ int main(void) {
   CHECK(!pthread_attr_destroy(&attr) && !munmap(stack, bytes));
   puts("PASS file wrappers offsets counts completion errors copy metadata "
        "process ambiguity");
+  puts("PASS file wrappers f5-20A attributes handle information size pointer device final path");
   return 0;
 }

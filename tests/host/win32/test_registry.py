@@ -21,7 +21,7 @@ class RegistryTests(unittest.TestCase):
         cls.env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',TMPDIR=str(cls.out))
         cls.program=cls.out/'registry-tests'
         sources=[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','defaults.c','directory.c','protocol.c','posix_io.c')]
-        sources += [ROOT/'sdk/win32/advapi32'/n for n in ('registry.c','text.c')]
+        sources += [ROOT/'sdk/win32/advapi32'/n for n in ('registry.c','registry_ex.c','security.c','text.c')]
         sources += [ROOT/'sdk/win32/services/bytes.c',ROOT/'sdk/win32/version/version.c']
         sources += [ROOT/'sdk/win32/lz32'/n for n in ('lz32.c','decode.c')]
         sources += [ROOT/'sdk/win32/lz32/mspack'/n for n in ('kwajd.c','szddd.c','lzssd.c','mszipd.c')]
@@ -63,6 +63,20 @@ class RegistryTests(unittest.TestCase):
     def test_malformed_records_and_fragments(self):self.execute('malformed')
     def test_version_resources(self):self.execute('version',self.image)
     def test_szdd_and_all_kwaj_methods(self):self.execute('lz',self.out)
+    def test_f5_20a_upper_registry_and_security(self):self.execute('upper')
+
+    def test_f5_20a_decided_exports_in_facades(self):
+        coverage=json.loads((self.out/'builtin/upper-coverage.json').read_text())
+        decisions=json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+        for dll in ('advapi32.dll','version.dll'):
+            expected={d['name']:d['action'] for d in decisions if d['owner']==dll and d['action'] in ('core-implement','core-w21-stub')}
+            rows={r['name']:r for r in coverage[dll]}
+            self.assertEqual(set(rows),set(expected))
+            exports={n for e in census.inspect((self.out/'builtin'/dll).read_bytes())['exports'] for n in e['names']}
+            self.assertTrue(set(rows)<=exports)
+            for name,row in rows.items():
+                self.assertEqual(row['status'],'W21 typed failure' if expected[name]=='core-w21-stub' else 'implemented')
+        self.assertEqual(len(coverage['advapi32.dll']),47)
 
     def test_census_exports_and_builtin_store(self):
         self.assertEqual(stubs.verify_store(self.out/'builtin/builtin-store.json'),3)

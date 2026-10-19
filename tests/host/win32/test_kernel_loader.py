@@ -72,7 +72,9 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn('pid=2 tid=1',out)
 
     def test_kernel32_wrappers_on_kernel_model(self):
-        self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",self.command("kernel32",self.images/"console.exe"))
+        out=self.command("kernel32",self.images/"console.exe")
+        self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",out)
+        self.assertIn("PASS kernel32 f5-20A process queries heap compaction",out)
 
     def test_kernel32_non_ascii_module_paths(self):
         import shutil
@@ -120,6 +122,26 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertTrue(set(coverage['required_vfs'])<=exports)
         self.assertIn('provisional',coverage['scope'])
         self.assertIn('PASS kernel builtin store imports helpers pinning',self.command('store',self.images/'builtin-import.exe'))
+        # f5-20A: every core-implement/core-w21-stub decision of the reused Wine
+        # DLLs owned by kernel32/ntdll/advapi32/version resolves through the
+        # production loader and store (forwarders into LZ32 included).
+        decisions=json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+        owners=('kernel32.dll','ntdll.dll','advapi32.dll','version.dll')
+        pairs=sorted({(d['owner'],d['name']) for d in decisions
+                      if d['owner'] in owners and d['action'] in ('core-implement','core-w21-stub')})
+        self.assertEqual(len({n for o,n in pairs}),len(pairs))
+        self.assertEqual(len(pairs),110+24+47+3)
+        (self.images/'System/Win32/upper-symbols.txt').write_text(''.join(f'{o} {n}\n' for o,n in pairs))
+        out=self.command('upper-core',self.images/'builtin-import.exe')
+        self.assertIn(f'PASS kernel f5-20A upper core exports={len(pairs)} loader references resources NT services',out)
+        upper={row['name']:row for row in coverage['upper']}
+        self.assertEqual(set(upper),{n for o,n in pairs if o=='kernel32.dll'})
+        self.assertTrue({n for n,r in upper.items() if r['action']=='core-w21-stub'}==
+                        {n for n,r in upper.items() if r['status']=='W21 typed failure'})
+        self.assertEqual({n for n,r in upper.items() if r['status'].startswith('forwarder')},
+                         {'LZClose','LZCopy','LZOpenFileW','LZRead','LZSeek'})
+        facades=json.loads((self.images/'System/Win32/facades-upper-coverage.json').read_text())
+        self.assertEqual({k:len(v) for k,v in facades.items()},{'advapi32.dll':47,'version.dll':3})
 
     def test_builtin_image_payload_rules_without_image_build(self):
         import importlib.util

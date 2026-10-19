@@ -77,6 +77,7 @@ uint32_t w32r_exchange(const void *input,uint32_t n,void *output,uint32_t cap,ui
 }
 void w32r_pause(void){}
 void w32r_last_error(uint32_t e){last_error=e;}
+uint32_t last_error_value(void){return last_error;}
 void *w32lz_alloc(uint32_t n){return malloc(n?n:1);}
 void w32lz_free(void *p){free(p);}
 int w32v_open(const void *p,int wide,struct w32v_file *f)
@@ -315,11 +316,191 @@ static void compatibility(void)
     CHECK(!rpc(&s,10,W32R_COMPAT,0,"","",0,NULL,0,0)&&r.data_bytes==sizeof(database)-1);
     wr_destroy(&s);clear(&d);puts("PASS AppCompat desktop-only writer, protected ancestor deletion, read-only startup snapshot and persistence");
 }
+/* f5-20A ADVAPI32 entry points for the reused Wine DLLs, over the same
+ * production server. Kernel32/ntdll imports of the facade are modelled. */
+static unsigned forgotten,stub_diagnostics,refusals;
+void w32_registry_forget(uint32_t key){(void)key;forgotten++;}
+uint32_t w32_shim_stub(volatile uint32_t *once,const char *dll,const char *name,uint32_t convention)
+{(void)dll;(void)name;if(!*once){*once=1;stub_diagnostics++;}last_error=convention==5?5:120;return convention==3?120:convention==4?UINT32_MAX:convention==1?0x80004001u:0;}
+void w32_report_refusal(uint32_t kind,const char *dll,uint32_t error){CHECK(kind==2&&!strcmp(dll,"advapi32.dll")&&error==5);refusals++;}
+void *w32r_alloc(uint32_t n){return malloc(n?n:1);}
+void w32r_free(void *p){free(p);}
+static uint32_t expand_ansi(const char *s,char *out,uint32_t cap)
+{char t[512];const char *w=strstr(s,"%WINDIR%");if(w)snprintf(t,sizeof(t),"%.*sC:\\WINDOWS%s",(int)(w-s),s,w+8);else snprintf(t,sizeof(t),"%s",s);
+ uint32_t n=(uint32_t)strlen(t)+1;if(out&&cap>=n)memcpy(out,t,n);return n;}
+uint32_t ExpandEnvironmentStringsA(const char *s,char *out,uint32_t cap){return expand_ansi(s,out,cap);}
+uint32_t ExpandEnvironmentStringsW(const WCHAR *s,WCHAR *out,uint32_t cap)
+{char a[512],b[512];unsigned i=0;for(;s[i];i++)a[i]=(char)s[i];a[i]=0;uint32_t n=expand_ansi(a,b,sizeof(b));if(out&&cap>=n)for(i=0;i<n;i++)out[i]=(uint8_t)b[i];return n;}
+static char loaded_path[300];static unsigned frees;
+/* RT_STRING block 2 (ids 16..31): id 21 = "Recycle", id 16 = "" . */
+static uint8_t strings_block[64];
+void *LoadLibraryExA(const char *p,void *f,uint32_t flags){CHECK(!f&&flags==2);snprintf(loaded_path,sizeof(loaded_path),"%s",p);return strstr(p,"missing")?NULL:(void *)0x1000;}
+int FreeLibrary(void *h){CHECK(h==(void *)0x1000);frees++;return 1;}
+void *FindResourceA(void *h,const char *name,const char *type){CHECK(h==(void *)0x1000&&(uintptr_t)type==6);return (uintptr_t)name==2?strings_block:NULL;}
+void *LoadResource(void *h,void *r){(void)h;return r;}
+uint32_t SizeofResource(void *h,void *r){(void)h;(void)r;return sizeof(strings_block);}
+DECL(LONG,RegCreateKeyExW,(uint32_t,const WCHAR *,uint32_t,WCHAR *,uint32_t,uint32_t,void *,uint32_t *,uint32_t *));
+DECL(LONG,RegGetValueW,(uint32_t,const WCHAR *,const WCHAR *,uint32_t,uint32_t *,void *,uint32_t *));
+DECL(LONG,RegGetValueA,(uint32_t,const char *,const char *,uint32_t,uint32_t *,void *,uint32_t *));
+DECL(LONG,RegDeleteTreeW,(uint32_t,const WCHAR *));DECL(LONG,RegDeleteTreeA,(uint32_t,const char *));
+DECL(LONG,RegDeleteKeyExW,(uint32_t,const WCHAR *,uint32_t,uint32_t));
+DECL(LONG,RegLoadMUIStringW,(uint32_t,const WCHAR *,WCHAR *,uint32_t,uint32_t *,uint32_t,const WCHAR *));
+DECL(LONG,RegLoadMUIStringA,(uint32_t,const char *,char *,uint32_t,uint32_t *,uint32_t,const char *));
+DECL(LONG,RegEnumKeyExW,(uint32_t,uint32_t,WCHAR *,uint32_t *,void *,WCHAR *,uint32_t *,void *));
+DECL(LONG,RegCreateKeyW,(uint32_t,const WCHAR *,uint32_t *));DECL(LONG,RegEnumKeyW,(uint32_t,uint32_t,WCHAR *,uint32_t));
+DECL(LONG,RegSetValueW,(uint32_t,const WCHAR *,uint32_t,const WCHAR *,uint32_t));DECL(LONG,RegQueryValueW,(uint32_t,const WCHAR *,WCHAR *,int32_t *));
+DECL(LONG,RegQueryInfoKeyW,(uint32_t,WCHAR *,uint32_t *,void *,uint32_t *,uint32_t *,uint32_t *,uint32_t *,uint32_t *,uint32_t *,uint32_t *,void *));
+DECL(LONG,RegEnumValueW,(uint32_t,uint32_t,WCHAR *,uint32_t *,void *,uint32_t *,uint8_t *,uint32_t *));DECL(LONG,RegDeleteValueW,(uint32_t,const WCHAR *));
+DECL(int,GetUserNameW,(WCHAR *,uint32_t *));
+DECL(int,InitializeAcl,(void *,uint32_t,uint32_t));DECL(uint32_t,GetLengthSid,(const void *));
+DECL(int,AddAccessAllowedAce,(void *,uint32_t,uint32_t,const void *));DECL(int,AddAccessAllowedAceEx,(void *,uint32_t,uint32_t,uint32_t,const void *));
+DECL(int,AddAccessDeniedAce,(void *,uint32_t,uint32_t,const void *));DECL(int,AddAccessDeniedAceEx,(void *,uint32_t,uint32_t,uint32_t,const void *));
+DECL(int,InitializeSecurityDescriptor,(void *,uint32_t));DECL(int,SetSecurityDescriptorDacl,(void *,int,void *,int));
+DECL(int,SetSecurityDescriptorOwner,(void *,void *,int));DECL(int,GetCurrentHwProfileA,(void *));DECL(uint8_t,SystemFunction036,(void *,uint32_t));
+DECL(void *,OpenSCManagerW,(const WCHAR *,const WCHAR *,uint32_t));DECL(void *,OpenServiceW,(void *,const WCHAR *,uint32_t));
+DECL(void *,CreateServiceW,(void *,const WCHAR *,const WCHAR *,uint32_t,uint32_t,uint32_t,uint32_t,const WCHAR *,const WCHAR *,uint32_t *,const WCHAR *,const WCHAR *,const WCHAR *));
+DECL(int,ChangeServiceConfigW,(void *,uint32_t,uint32_t,uint32_t,const WCHAR *,const WCHAR *,uint32_t *,const WCHAR *,const WCHAR *,const WCHAR *,const WCHAR *));
+DECL(int,ChangeServiceConfig2W,(void *,uint32_t,void *));DECL(int,QueryServiceConfigW,(void *,void *,uint32_t,uint32_t *));
+DECL(int,QueryServiceStatusEx,(void *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,StartServiceW,(void *,uint32_t,const WCHAR **));
+DECL(int,ConvertSidToStringSidW,(const void *,WCHAR **));
+DECL(int,CreateProcessAsUserW,(void *,const WCHAR *,WCHAR *,void *,void *,int,uint32_t,void *,const WCHAR *,void *,void *));
+DECL(int,GetFileSecurityW,(const WCHAR *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,GetFileSecurityA,(const char *,uint32_t,void *,uint32_t,uint32_t *));
+DECL(int,SetFileSecurityW,(const WCHAR *,uint32_t,void *));DECL(int,LookupPrivilegeValueW,(const WCHAR *,const WCHAR *,void *));
+DECL(uint32_t,CommandLineFromMsiDescriptor,(const WCHAR *,WCHAR *,uint32_t *));
+static const WCHAR *L16(const char *a){static WCHAR b[8][128];static unsigned n;WCHAR *w=b[n++%8];unsigned i=0;for(;a[i];i++)w[i]=(uint8_t)a[i];w[i]=0;return w;}
+static int weq(const WCHAR *w,const char *a){for(;*a;a++,w++)if(*w!=(uint8_t)*a)return 0;return !*w;}
+static void upper_registry(void)
+{
+    struct disk d={0};struct wr_server s;start(&s,&d);uint32_t k=0,disp=0;
+    CHECK(!RegCreateKeyExW(W32R_HKLM,L16("Software\\Upper"),0,NULL,0,0x02000100u,NULL,&k,&disp)&&disp==1);
+    CHECK(!RegSetValueExA(k,"Name",0,1,(const uint8_t *)"value",6));
+    CHECK(!RegSetValueExA(k,"Path",0,2,(const uint8_t *)"%WINDIR%\\x",11));
+    uint32_t five=5;CHECK(!RegSetValueExA(k,"Num",0,4,(const uint8_t *)&five,4));
+    CHECK(!RegSetValueExA(k,"Bin",0,3,(const uint8_t *)"abcd",4));CHECK(!RegSetValueExA(k,"Odd",0,3,(const uint8_t *)"abc",3));
+    WCHAR raw[3]={'r','a','w'};CHECK(!RegSetValueExW(k,L16("Raw"),0,1,(const uint8_t *)raw,6));
+    WCHAR buffer[64];uint32_t type=0,size=sizeof(buffer);
+    CHECK(!RegGetValueW(k,NULL,L16("Name"),2,&type,buffer,&size)&&type==1&&size==12&&weq(buffer,"value"));
+    size=0;CHECK(!RegGetValueW(k,NULL,L16("Name"),2,&type,NULL,&size)&&size==12);
+    size=4;CHECK(RegGetValueW(k,NULL,L16("Name"),2,&type,buffer,&size)==234&&size==12);
+    size=sizeof(buffer);memset(buffer,0x5a,sizeof(buffer));
+    CHECK(RegGetValueW(k,NULL,L16("Name"),0x20000010u,&type,buffer,&size)==1630&&buffer[0]==0&&buffer[63]==0);
+    size=sizeof(buffer);CHECK(!RegGetValueW(k,NULL,L16("Path"),2,&type,buffer,&size)&&type==1&&weq(buffer,"C:\\WINDOWS\\x")&&size==26);
+    size=sizeof(buffer);CHECK(!RegGetValueW(k,NULL,L16("Path"),0x10000004u,&type,buffer,&size)&&type==2&&weq(buffer,"%WINDIR%\\x"));
+    CHECK(RegGetValueW(k,NULL,L16("Path"),4,&type,buffer,&size)==87);
+    size=sizeof(buffer);CHECK(!RegGetValueW(k,NULL,L16("Bin"),0x18,&type,buffer,&size)&&type==3&&size==4);
+    size=sizeof(buffer);CHECK(RegGetValueW(k,NULL,L16("Odd"),0x18,&type,buffer,&size)==1629);
+    size=sizeof(buffer);uint32_t number=0;size=4;CHECK(!RegGetValueW(k,NULL,L16("Num"),0xffff,&type,&number,&size)&&type==4&&number==5);
+    size=sizeof(buffer);CHECK(!RegGetValueW(W32R_HKLM,L16("Software\\Upper"),L16("Name"),0xffff,&type,buffer,&size)&&weq(buffer,"value"));
+    size=sizeof(buffer);CHECK(RegGetValueW(k,NULL,L16("Missing"),0xffff,&type,buffer,&size)==2);
+    CHECK(RegGetValueW(W32R_HKLM,L16("Software\\None"),L16("x"),0xffff,&type,NULL,&size)==2);
+    CHECK(RegGetValueW(k,NULL,L16("Name"),0,&type,NULL,&size)==87&&RegGetValueW(k,NULL,L16("Name"),2,&type,buffer,NULL)==87);
+    size=sizeof(buffer);CHECK(!RegGetValueW(k,NULL,L16("Raw"),2,&type,buffer,&size)&&size==8&&weq(buffer,"raw"));
+    char ansi[32];size=sizeof(ansi);CHECK(!RegGetValueA(k,NULL,"Name",2,&type,ansi,&size)&&size==6&&!strcmp(ansi,"value"));
+    size=sizeof(ansi);CHECK(!RegGetValueA(W32R_HKLM,"Software\\Upper","Path",2,&type,ansi,&size)&&!strcmp(ansi,"C:\\WINDOWS\\x")&&size==13);
+    /* Trees. */
+    uint32_t t=0;CHECK(!RegCreateKeyExA(k,"Tree\\A\\B",0,NULL,0,0xf003f,NULL,&t,NULL));CHECK(!RegSetValueExA(t,"v",0,1,(const uint8_t *)"x",2));CHECK(!RegCloseKey(t));
+    CHECK(!RegCreateKeyExA(k,"Tree\\C",0,NULL,0,0xf003f,NULL,&t,NULL));CHECK(!RegCloseKey(t));
+    CHECK(!RegDeleteTreeW(k,L16("Tree"))&&RegOpenKeyExA(k,"Tree",0,1,&t)==2);
+    CHECK(!RegCreateKeyExA(k,"Keep\\Sub",0,NULL,0,0xf003f,NULL,&t,NULL));CHECK(!RegCloseKey(t));
+    CHECK(!RegOpenKeyExA(k,"Keep",0,0xf003f,&t));CHECK(!RegSetValueExA(t,"a",0,1,(const uint8_t *)"1",2));CHECK(!RegSetValueExA(t,"b",0,1,(const uint8_t *)"2",2));
+    CHECK(!RegDeleteTreeW(t,NULL));uint32_t subkeys=9,values=9;
+    CHECK(!RegQueryInfoKeyA(t,NULL,NULL,NULL,&subkeys,NULL,NULL,&values,NULL,NULL,NULL,NULL)&&!subkeys&&!values);CHECK(!RegCloseKey(t));
+    CHECK(!RegOpenKeyExA(k,"Keep",0,1,&t));CHECK(!RegCloseKey(t));
+    CHECK(!RegDeleteTreeA(k,"Keep")&&RegOpenKeyExA(k,"Keep",0,1,&t)==2);
+    CHECK(RegDeleteTreeA(k,"Absent")==2);
+    CHECK(!RegCreateKeyExA(k,"Ex",0,NULL,0,0xf003f,NULL,&t,NULL));CHECK(!RegCloseKey(t));
+    CHECK(RegDeleteKeyExW(k,L16("Ex"),0x100,1)==87&&!RegDeleteKeyExW(k,L16("Ex"),0x100,0)&&RegDeleteKeyExW(k,L16("Ex"),0,0)==2);
+    /* MUI strings. */
+    memset(strings_block,0,sizeof(strings_block));
+    unsigned at=0;for(unsigned id=16;id<=21;id++){if(id==21){strings_block[at]=7;const char *r="Recycle";for(unsigned c=0;c<7;c++)strings_block[at+2+c*2]=(uint8_t)r[c];at+=16;}else at+=2;}
+    CHECK(!RegSetValueExA(k,"Mui",0,1,(const uint8_t *)"@shell32.dll,-21",17));
+    CHECK(!RegSetValueExA(k,"MuiEnv",0,1,(const uint8_t *)"@%WINDIR%\\x.dll,-21",20));
+    CHECK(!RegSetValueExA(k,"Plain",0,1,(const uint8_t *)"Plain text",11));
+    CHECK(!RegSetValueExA(k,"Empty",0,1,(const uint8_t *)"@shell32.dll,-16",17));
+    CHECK(!RegSetValueExA(k,"Bad",0,1,(const uint8_t *)"@shell32.dll,21",16));
+    CHECK(!RegSetValueExA(k,"Gone",0,1,(const uint8_t *)"@missing.dll,-21",17));
+    uint32_t copied=0;frees=0;
+    CHECK(!RegLoadMUIStringW(k,L16("Mui"),buffer,sizeof(buffer),&copied,0,L16("C:\\WINDOWS\\SYSTEM"))&&weq(buffer,"Recycle")&&copied==16);
+    CHECK(!strcmp(loaded_path,"C:\\WINDOWS\\SYSTEM\\shell32.dll")&&frees==1);
+    CHECK(!RegLoadMUIStringW(k,L16("MuiEnv"),buffer,sizeof(buffer),NULL,0,NULL)&&!strcmp(loaded_path,"C:\\WINDOWS\\x.dll"));
+    CHECK(!RegLoadMUIStringW(k,L16("Plain"),buffer,sizeof(buffer),&copied,0,NULL)&&weq(buffer,"Plain text")&&copied==22);
+    CHECK(RegLoadMUIStringW(k,L16("Plain"),buffer,8,&copied,0,NULL)==234&&copied==22);
+    CHECK(!RegLoadMUIStringW(k,L16("Plain"),buffer,8,NULL,1,NULL)&&weq(buffer,"Pla"));
+    CHECK(RegLoadMUIStringW(k,L16("Plain"),buffer,8,&copied,1,NULL)==87&&RegLoadMUIStringW(k,L16("Plain"),buffer,7,NULL,0,NULL)==87);
+    CHECK(RegLoadMUIStringW(k,L16("Plain"),buffer,8,NULL,2,NULL)==87);
+    CHECK(RegLoadMUIStringW(k,L16("Empty"),buffer,sizeof(buffer),NULL,0,NULL)==1814);
+    CHECK(RegLoadMUIStringW(k,L16("Bad"),buffer,sizeof(buffer),NULL,0,NULL)==13);
+    CHECK(RegLoadMUIStringW(k,L16("Gone"),buffer,sizeof(buffer),NULL,0,NULL)==2);
+    CHECK(RegLoadMUIStringW(k,L16("Num"),buffer,sizeof(buffer),NULL,0,NULL)==13);
+    CHECK(RegLoadMUIStringW(k,L16("Nothing"),buffer,sizeof(buffer),NULL,0,NULL)==2);
+    CHECK(RegLoadMUIStringA(k,"Mui",ansi,sizeof(ansi),NULL,0,NULL)==120);
+    /* The f5-07A Unicode registry entry points the reused DLLs bind. */
+    uint32_t w=0;CHECK(!RegCreateKeyW(k,L16("Wide\\One"),&w));CHECK(!RegCloseKey(w));
+    CHECK(!RegOpenKeyW(k,L16("Wide"),&w));WCHAR name[32];
+    CHECK(!RegEnumKeyW(w,0,name,32)&&weq(name,"One")&&RegEnumKeyW(w,1,name,32)==259);
+    uint32_t count=32;CHECK(!RegEnumKeyExW(w,0,name,&count,NULL,NULL,NULL,NULL)&&count==3);
+    CHECK(!RegSetValueW(w,L16("One"),1,L16("text\xe9"),0));int32_t legacy=sizeof(buffer);
+    CHECK(!RegQueryValueW(w,L16("One"),buffer,&legacy)&&weq(buffer,"text\xe9")&&legacy==12);
+    CHECK(RegSetValueW(w,NULL,4,L16("x"),0)==87);
+    CHECK(!RegSetValueExW(w,L16("v"),0,1,(const uint8_t *)L16("1"),4));
+    uint32_t subs=0,vals=0;CHECK(!RegQueryInfoKeyW(w,NULL,NULL,NULL,&subs,NULL,NULL,&vals,NULL,NULL,NULL,NULL)&&subs==1&&vals==1);
+    count=32;uint32_t vtype=0;CHECK(!RegEnumValueW(w,0,name,&count,NULL,&vtype,NULL,NULL)&&weq(name,"v")&&vtype==1);
+    CHECK(!RegDeleteValueW(w,L16("v"))&&RegDeleteValueW(w,L16("v"))==2);CHECK(!RegCloseKey(w));
+    WCHAR user[16];uint32_t user_size=16;CHECK(GetUserNameW(user,&user_size)&&user_size==6);user_size=1;
+    CHECK(!GetUserNameW(user,&user_size)&&user_size==6&&last_error==122);
+    forgotten=0;CHECK(!RegCloseKey(k)&&forgotten==1);CHECK(RegCloseKey(k)==6&&forgotten==1);
+    wr_destroy(&s);clear(&d);
+    puts("PASS f5-20A registry access normalization RegGetValue trees RegDeleteKeyEx MUI strings close notification");
+}
+static void upper_security(void)
+{
+    uint8_t sid[16]={1,2,0,0,0,0,0,5,32,0,0,0,32,2,0,0},bad_sid[8]={2,0};
+    CHECK(GetLengthSid(sid)==16&&!GetLengthSid(NULL));
+    uint8_t acl[64];last_error=0;
+    CHECK(!InitializeAcl(acl,4,2)&&last_error==122);CHECK(!InitializeAcl(acl,64,3)&&last_error==87);CHECK(!InitializeAcl(acl,0x10000,2)&&last_error==87);
+    CHECK(InitializeAcl(acl,63,2)&&acl[0]==2&&w32_u16(acl+2)==60&&!w32_u16(acl+4));
+    CHECK(AddAccessAllowedAce(acl,2,0x1f01ff,sid)&&w32_u16(acl+4)==1&&acl[8]==0&&w32_u16(acl+10)==24&&w32_u32(acl+12)==0x1f01ff&&!memcmp(acl+16,sid,16));
+    CHECK(AddAccessDeniedAceEx(acl,4,3,1,sid)&&w32_u16(acl+4)==2&&acl[32]==1&&acl[33]==3&&acl[0]==4);
+    CHECK(!AddAccessAllowedAce(acl,2,1,sid)&&last_error==1344);
+    CHECK(InitializeAcl(acl,64,2)&&!AddAccessAllowedAceEx(acl,2,0x20,1,sid)&&last_error==87);
+    CHECK(!AddAccessDeniedAce(acl,2,1,bad_sid)&&last_error==1337);CHECK(!AddAccessDeniedAce(acl,9,1,sid)&&last_error==1336);
+    uint8_t broken[8]={7};CHECK(!AddAccessAllowedAce(broken,2,1,sid)&&last_error==1336);
+    CHECK(AddAccessDeniedAce(acl,2,1,sid)&&acl[8]==1);
+    uint8_t sd[64];memset(sd,0xa5,sizeof(sd));
+    CHECK(!InitializeSecurityDescriptor(sd,2)&&last_error==1305&&sd[0]==0xa5);
+    CHECK(InitializeSecurityDescriptor(sd,1)&&sd[0]==1&&!w32_u16(sd+2));
+    CHECK(SetSecurityDescriptorDacl(sd,1,acl,1)&&w32_u16(sd+2)==0xc);
+    CHECK(SetSecurityDescriptorDacl(sd,0,acl,1)&&w32_u16(sd+2)==0);
+    CHECK(SetSecurityDescriptorOwner(sd,sid,1)&&w32_u16(sd+2)==1);
+    sd[3]=0x80;CHECK(!SetSecurityDescriptorDacl(sd,1,acl,0)&&last_error==1338);
+    sd[0]=2;CHECK(!SetSecurityDescriptorOwner(sd,sid,0)&&last_error==1305);CHECK(!SetSecurityDescriptorDacl(NULL,1,acl,0)&&last_error==87);
+    uint8_t profile[124];memset(profile,0xa5,sizeof(profile));
+    CHECK(GetCurrentHwProfileA(profile)&&w32_u32(profile)==6&&profile[4]=='{'&&strlen((char *)profile+4)==38&&!strcmp((char *)profile+43,"Original Configuration"));
+    CHECK(!GetCurrentHwProfileA(NULL)&&last_error==87);
+    uint8_t a[37]={0},b[37]={0};CHECK(SystemFunction036(a,37)&&SystemFunction036(b,37)&&memcmp(a,b,37));
+    unsigned nonzero=0;for(unsigned i=0;i<37;i++)nonzero+=a[i]!=0;CHECK(nonzero>20);
+    CHECK(SystemFunction036(NULL,0)&&!SystemFunction036(NULL,1));
+    stub_diagnostics=0;refusals=0;WCHAR *text=(WCHAR *)1;uint32_t length=5,needed=7;
+    CHECK(!OpenSCManagerW(NULL,NULL,1)&&last_error==120);CHECK(!OpenServiceW((void *)1,L16("x"),1)&&last_error==120);
+    CHECK(!CreateServiceW((void *)1,L16("x"),NULL,1,0x10,3,1,L16("x.exe"),NULL,NULL,NULL,NULL,NULL)&&last_error==120&&!refusals);
+    CHECK(!CreateServiceW((void *)1,L16("x"),NULL,1,1,3,1,L16("x.sys"),NULL,NULL,NULL,NULL,NULL)&&last_error==5&&refusals==1);
+    CHECK(!ChangeServiceConfigW((void *)1,0,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL)&&last_error==120);
+    CHECK(!ChangeServiceConfig2W((void *)1,1,NULL)&&!QueryServiceConfigW((void *)1,NULL,0,&needed)&&needed==7);
+    CHECK(!QueryServiceStatusEx((void *)1,0,NULL,0,&needed)&&!StartServiceW((void *)1,0,NULL)&&last_error==120);
+    CHECK(!ConvertSidToStringSidW(sid,&text)&&text==(WCHAR *)1&&last_error==120);
+    CHECK(!CreateProcessAsUserW(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL)&&last_error==120);
+    uint8_t descriptor[20];CHECK(!GetFileSecurityW(L16("C:\\x"),4,descriptor,20,&needed)&&last_error==120&&needed==7);
+    CHECK(GetFileSecurityA("C:\\x",4,descriptor,20,&needed)&&needed==20);
+    CHECK(!SetFileSecurityW(L16("C:\\x"),4,descriptor)&&!LookupPrivilegeValueW(NULL,L16("SeBackupPrivilege"),descriptor)&&last_error==120);
+    CHECK(CommandLineFromMsiDescriptor(L16("x"),NULL,&length)==120&&length==5);
+    CHECK(stub_diagnostics==14);
+    puts("PASS f5-20A security structures hardware profile random bytes and W21 service NT-security MSI failures");
+}
 int main(int argc,char **argv)
 {
     CHECK(argc>=2);
     if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
     else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
-    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else CHECK(0);
+    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;
 }

@@ -9,3 +9,10 @@ void w32r_last_error(uint32_t e){NtCurrentTeb()->LastErrorValue=e;}
 uint32_t w32r_exchange(const void *in,uint32_t n,void *out,uint32_t cap,uint32_t *used) {
     return w32_server_exchange(in,n,out,cap,used);
 }
+void *w32r_alloc(uint32_t n) {
+    void *heap=NtCurrentTeb()->ProcessEnvironmentBlock->ProcessHeap;
+    return heap?RtlAllocateHeap(heap,0,n?n:1):0;
+}
+void w32r_free(void *p) {
+    if(p)RtlFreeHeap(NtCurrentTeb()->ProcessEnvironmentBlock->ProcessHeap,0,p);
+}

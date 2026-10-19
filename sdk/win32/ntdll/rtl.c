@@ -106,7 +106,17 @@ ULONG W32API RtlNtStatusToDosError(NTSTATUS s) {
     case STATUS_SUCCESS:
         return 0;
     case (NTSTATUS)0xc0000001: return 31;
+    case (NTSTATUS)0xc0000003: return 87;
+    case (NTSTATUS)0xc0000004: return 24;
     case (NTSTATUS)0xc0000005: return 998;
+    case (NTSTATUS)0xc0000008: return 6;
+    case (NTSTATUS)0xc0000033: return 123;
+    case (NTSTATUS)0xc000003a: return 3;
+    case (NTSTATUS)0xc000003b: return 161;
+    case (NTSTATUS)0xc00000bb: return 50;
+    case (NTSTATUS)0xc00000f1: return 87;
+    case (NTSTATUS)0xc00000f2: return 87;
+    case (NTSTATUS)0xc000017c: return 1018;
     case (NTSTATUS)0xc0000018: return 487;
     case (NTSTATUS)0xc0000022: return 5;
     case (NTSTATUS)0xc0000034: return 2;

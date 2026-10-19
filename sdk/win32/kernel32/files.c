@@ -603,3 +603,111 @@ DWORD W32API GetShortPathNameA(const char *path, char *out, DWORD n) {
 DWORD W32API GetLongPathNameA(const char *path, char *out, DWORD n) {
   return fullpath(path, out, n, W32_F_FULLPATH, 2);
 }
+/* f5-20A: handle and attribute queries the reused Wine DLLs import. */
+static void info_times(const struct ciuki_w32_file_info *f, FILETIME *c,
+                       FILETIME *a, FILETIME *w) {
+  *c = fattime(f->create_date, f->create_time);
+  uint64_t n = (((uint64_t)c->high << 32) | c->low) +
+               (f->create_date ? (uint64_t)f->create_tenths * 100000 : 0);
+  *c = (FILETIME){(DWORD)n, (DWORD)(n >> 32)};
+  *a = fattime(f->access_date, 0);
+  *w = fattime(f->write_date, f->write_time);
+}
+/* GetFileExInfoStandard (0) is the only information level. */
+BOOL W32API GetFileAttributesExA(const char *name, DWORD level, void *out) {
+  if (level || !out) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_w32_file_info f;
+  if (!stat_file(0, name, &f))
+    return 0;
+  WIN32_FILE_ATTRIBUTE_DATA d = {.attributes = f.attributes,
+                                 .size_high = f.size_high,
+                                 .size_low = f.size_low};
+  info_times(&f, &d.creation, &d.access, &d.write);
+  w32_copy(out, &d, sizeof(d));
+  return 1;
+}
+/* FAT has no file index and the open description does not name its volume:
+ * serial and index are zero, one link. */
+BOOL W32API GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *out) {
+  if (!out) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_w32_file_info f;
+  if (!stat_file(h, 0, &f))
+    return 0;
+  BY_HANDLE_FILE_INFORMATION d = {.attributes = f.attributes,
+                                  .size_high = f.size_high,
+                                  .size_low = f.size_low,
+                                  .links = 1};
+  info_times(&f, &d.creation, &d.access, &d.write);
+  *out = d;
+  return 1;
+}
+BOOL W32API GetFileSizeEx(HANDLE h, int64_t *out) {
+  if (!out) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_w32_file_info f;
+  if (!stat_file(h, 0, &f))
+    return 0;
+  *out = (int64_t)(((uint64_t)f.size_high << 32) | f.size_low);
+  return 1;
+}
+BOOL W32API SetFilePointerEx(HANDLE h, int64_t distance, int64_t *out,
+                             DWORD method) {
+  if (method > 2) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_w32_file_args a = {.action = W32_F_SEEK,
+                                  .handle = K32_PTR(h),
+                                  .low = (DWORD)(uint64_t)distance,
+                                  .high = (DWORD)((uint64_t)distance >> 32),
+                                  .flags = method};
+  if (!k32_file(&a))
+    return 0;
+  if (out)
+    *out = (int64_t)(((uint64_t)a.high << 32) | a.low);
+  return 1;
+}
+/* Windows 98 answers device I/O only on VxD handles (\\.\name), which the
+ * CiukiOS facade refuses to open; a file handle gets ERROR_NOT_SUPPORTED. */
+BOOL W32API DeviceIoControl(HANDLE h, DWORD code, void *in, DWORD in_size,
+                            void *out, DWORD out_size, DWORD *done,
+                            OVERLAPPED *ov) {
+  (void)code;
+  (void)in;
+  (void)in_size;
+  (void)out;
+  (void)out_size;
+  (void)ov;
+  if (done)
+    *done = 0;
+  struct ciuki_w32_file_info f;
+  if (!stat_file(h, 0, &f))
+    return 0;
+  SetLastError(50);
+  return 0;
+}
+/* Vista API: flags are validated, the handle must be an open file; the VFS
+ * keeps no path for an open description, so the query itself answers
+ * ERROR_NOT_SUPPORTED (callers keep the name they opened). */
+DWORD W32API GetFinalPathNameByHandleW(HANDLE h, WCHAR *out, DWORD cap,
+                                       DWORD flags) {
+  (void)out;
+  (void)cap;
+  if (flags & ~0xfu || (flags & 7) > 4 || (flags & 7) == 3) {
+    SetLastError(87);
+    return 0;
+  }
+  struct ciuki_w32_file_info f;
+  if (!stat_file(h, 0, &f))
+    return 0;
+  SetLastError(50);
+  return 0;
+}

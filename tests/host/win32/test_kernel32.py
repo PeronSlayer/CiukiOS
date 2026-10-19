@@ -94,4 +94,80 @@ class Kernel32Files(unittest.TestCase):
         result=subprocess.run([program,ROOT/'build/host/fs/fat32.img',ROOT/'build/host/fs/fat16.img'],env=env,capture_output=True,text=True,timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS kernel32 production VFS',result.stdout)
+    def _host(self,name,sources,marker,extra=(),env=None):
+        out=ROOT/'build/host/win32/f5-20a';out.mkdir(parents=True,exist_ok=True)
+        program=out/name
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
+            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            *[str(ROOT/s) for s in sources],*extra,'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,timeout=60,
+            env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0:detect_stack_use_after_return=0',**(env or {})))
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn(marker,result.stdout)
+        return result.stdout
+
+    def test_f5_20a_kernel32_upper_entry_points(self):
+        k32='sdk/win32/kernel32/'
+        out=self._host('kernel32-upper',['tests/host/win32/kernel32_upper_test.c',
+            *[k32+n+'.c' for n in ('wide','paths','locale','message','upper','unsupported','console','text','time')]],
+            'PASS kernel32 upper checks=')
+        for part in ('Unicode files paths profiles strings objects','SearchPath GetBinaryType ExpandEnvironmentStrings Win16 file API',
+                     'NLS LCID names locale info code pages types dates times numbers','FormatMessage strings tables system inserts va_list allocation',
+                     'Beep pipes completion ticks work items timers once delay-load atoms time zones',
+                     'console log handle queries W21 activation context WOW64 description'):
+            self.assertIn('PASS kernel32 upper '+part,out)
+        self._host('kernel32-core-upper',['tests/host/win32/kernel32_core_upper.c',k32+'core.c',k32+'wide.c',k32+'text.c'],
+            'PASS kernel32 core f5-20A named semaphore event mapping records',extra=('-pthread',))
+
+    def test_f5_20a_ntdll_native_registry_strings(self):
+        nt='sdk/win32/ntdll/'
+        out=self._host('ntdll-upper',['tests/host/win32/ntdll_upper_test.c',
+            *[nt+n+'.c' for n in ('native','registry','strings','path','divide')]],'PASS ntdll upper checks=',extra=('-pthread',))
+        self.assertIn('PASS ntdll upper NT registry paths access rights dispositions close routing',out)
+
+    def test_f5_20a_ntdll_compiler_helpers_i386(self):
+        """_alldiv/_allrem/_aulldiv/_chkstk exactly as exported, in a static
+        ELF32 that makes no system call (UD2 success, INT3 failure)."""
+        out=ROOT/'build/host/win32/f5-20a';out.mkdir(parents=True,exist_ok=True)
+        cases=[(-7,2),(7,-2),(-7,-2),(1<<62,3),(-(1<<63),-1),(123456789012345,-1000),(0,5),(-1,(1<<40)+1)]
+        def trunc(a,b):
+            q=abs(a)//abs(b);q=-q if (a<0)!=(b<0) else q
+            return q,a-q*b
+        def wrap(v):return v&((1<<64)-1)
+        lines=['#include <stdint.h>',
+               'extern int64_t __attribute__((stdcall)) _alldiv(int64_t,int64_t);',
+               'extern int64_t __attribute__((stdcall)) _allrem(int64_t,int64_t);',
+               'extern uint64_t __attribute__((stdcall)) _aulldiv(uint64_t,uint64_t);',
+               'int check(void){volatile int64_t a,b;volatile uint64_t u,v;']
+        for a,b in cases:
+            q,r=trunc(a,b)
+            if a==-(1<<63) and b==-1:q,r=a,0
+            lines.append(f'a=(int64_t)0x{wrap(a):x}ull;b=(int64_t)0x{wrap(b):x}ull;'
+                         f'if((uint64_t)_alldiv(a,b)!=0x{wrap(q):x}ull)return 1;'
+                         f'if((uint64_t)_allrem(a,b)!=0x{wrap(r):x}ull)return 2;'
+                         f'u=0x{wrap(a):x}ull;v=0x{wrap(b):x}ull;'
+                         f'if(_aulldiv(u,v)!=0x{wrap(a)//wrap(b):x}ull)return 3;')
+        lines.append('return 0;}')
+        driver=out/'helpers.c';driver.write_text('\n'.join(lines)+'\n')
+        start=out/'helpers-start.S'
+        start.write_text('.text\n.globl _start\n_start:\n movl %esp,%esi\n call check\n cmpl %esp,%esi\n jne 1f\n'
+                         ' testl %eax,%eax\n jnz 1f\n movl $8199,%eax\n call __chkstk\n ud2\n1:\n int3\n'
+                         '.section .note.GNU-stack,"",@progbits\n')
+        objects=[]
+        for i,source in enumerate((start,driver,ROOT/'sdk/win32/ntdll/runtime.S',ROOT/'sdk/win32/ntdll/divide.c')):
+            obj=out/f'helpers-{i}.o'
+            subprocess.run(['clang','--target=i386-unknown-linux-gnu','-march=pentiumpro','-ffreestanding','-fno-builtin',
+                '-fno-pic','-O1','-c',str(source),'-o',str(obj)],check=True)
+            objects.append(str(obj))
+        binary=out/'helpers'
+        subprocess.run(['ld.lld','-m','elf_i386','-static','--entry=_start','-o',str(binary),*objects],check=True)
+        import resource
+        try:
+            result=subprocess.run([str(binary)],capture_output=True,timeout=5,
+                preexec_fn=lambda:resource.setrlimit(resource.RLIMIT_CORE,(0,0)))
+        except OSError as error:
+            self.skipTest('host cannot execute ELF32: '+str(error))
+        self.assertEqual(result.returncode,-signal.SIGILL,result.stderr)
 if __name__=='__main__':unittest.main()

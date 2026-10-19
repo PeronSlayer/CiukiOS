@@ -30,8 +30,18 @@ static uint32_t call(unsigned op,uint32_t key,const void *path,const void *name,
        bytes!=sizeof(*reply)+(uint64_t)names+reply->data_bytes||(names&&(tail[names-1]||w32_strlen((const char *)tail)!=names-1)))return 13;
     return reply->error;
 }
+/* Windows 9x ignores samDesired: generic and MAXIMUM_ALLOWED rights map to
+ * KEY_* rights and the KEY_WOW64_* view bits are dropped (f5-20A). */
+uint32_t w32r_registry_access(uint32_t a)
+{
+    static const uint32_t map[5][2]={{0x02000000u,0xf003fu},{0x80000000u,0x20019u},{0x40000000u,0x20006u},
+                                     {0x20000000u,0x20019u},{0x10000000u,0xf003fu}};
+    for(unsigned i=0;i<5;i++)if(a&map[i][0])a=(a&~map[i][0])|map[i][1];
+    return a&~0x300u;
+}
 static LONG open_key(uint32_t key,const void *path,uint32_t options,uint32_t access,uint32_t *out,int create,int wide,uint32_t *disp)
 {
+    access=w32r_registry_access(access);
     if(!out||options)return 87;*out=0;
     uint32_t e=call(create?W32R_CREATE:W32R_OPEN,key,path,NULL,wide,0,0,access,options,NULL,0);
     if(!e){*out=reply->key;if(disp)*disp=reply->disposition;}return end(e);
@@ -46,7 +56,9 @@ LONG W32API RegCreateKeyExW(uint32_t k,const WCHAR *p,uint32_t reserved,WCHAR *c
 {(void)cls;(void)security;if(reserved)return 87;return open_key(k,p,options,access,h,1,1,disp);}
 LONG W32API RegCreateKeyA(uint32_t k,const char *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,1,0,NULL);}
 LONG W32API RegCreateKeyW(uint32_t k,const WCHAR *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,1,1,NULL);}
-LONG W32API RegCloseKey(uint32_t key){return end(call(W32R_CLOSE,key,NULL,NULL,0,0,0,0,0,NULL,0));}
+void w32_registry_forget(uint32_t);
+/* Keys from NtOpenKey/NtCreateKey may be closed here; ntdll forgets them. */
+LONG W32API RegCloseKey(uint32_t key){LONG e=end(call(W32R_CLOSE,key,NULL,NULL,0,0,0,0,0,NULL,0));if(!e)w32_registry_forget(key);return e;}
 LONG W32API RegFlushKey(uint32_t key){return end(call(W32R_FLUSH,key,NULL,NULL,0,0,0,0,0,NULL,0));}
 static LONG set(uint32_t key,const void *name,uint32_t reserved,uint32_t type,const void *data,uint32_t n,int wide)
 {
@@ -141,4 +153,5 @@ int W32API AccessCheck(void *sd,uint32_t token,uint32_t desired,void *mapping,vo
 {(void)sd;(void)token;(void)mapping;(void)privileges;if(!length||!granted||!status){w32r_last_error(87);return 0;}if(*length<8){*length=8;w32r_last_error(122);return 0;}*length=8;if(privileges)w32_fill(privileges,0,8);*granted=desired;*status=1;return 1;}
 int W32API GetFileSecurityA(const char *file,uint32_t information,void *sd,uint32_t cap,uint32_t *needed)
 {(void)information;if(!file||!needed){w32r_last_error(87);return 0;}*needed=20;if(!sd||cap<20){w32r_last_error(122);return 0;}w32_fill(sd,0,20);((uint8_t *)sd)[0]=1;w32_put16((uint8_t *)sd+2,0x8004);return 1;}
-int W32API GetFileSecurityW(const WCHAR *file,uint32_t i,void *s,uint32_t c,uint32_t *n){return GetFileSecurityA(file?"":NULL,i,s,c,n);}
+/* GetFileSecurityW is the typed W21 failure of security.c (f5-20A decision
+ * w21-nt-security); the census ANSI answer above is unchanged. */

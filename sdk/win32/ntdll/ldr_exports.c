@@ -117,6 +117,23 @@ NTSTATUS W32API LdrDisableThreadCalloutsForDll(void *base) {
     m->disable_threads = 1;
     return 0;
 }
+/* LDR_ADDREF_DLL_PIN (1) keeps the module loaded for the life of the process
+ * (load count reported as 0xffff); otherwise one more load reference. */
+NTSTATUS W32API LdrAddRefDll(ULONG flags, void *base) {
+    if (!loader || flags & ~1u)
+        return STATUS_INVALID_PARAMETER;
+    RtlEnterCriticalSection(&loader->lock);
+    struct w32_module *m = handle(base);
+    if (m) {
+        if (flags & 1)
+            m->references = 0x7fffffffu;
+        else if (m->references < 0x7fffffffu)
+            m->references++;
+        m->entry.LoadCount = (flags & 1) || m->references > 65535 ? 65535 : m->references;
+    }
+    RtlLeaveCriticalSection(&loader->lock);
+    return m ? 0 : STATUS_DLL_NOT_FOUND;
+}
 NTSTATUS W32API LdrLockLoaderLock(ULONG flags, ULONG *disposition, ULONG *cookie) {
     if (!loader || !cookie || flags & ~3u)
         return STATUS_INVALID_PARAMETER;
