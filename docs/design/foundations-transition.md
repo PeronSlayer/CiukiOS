@@ -39,6 +39,15 @@ during the transition, and how the build switches over without leaving
 
 ## Scope per phase
 
+The owner's 2026-10-19 requirement for complete Windows 98/ME-class disk,
+memory, cache and real-time management is specified in the proposed
+[resource-management contract](win98-class-resource-management.md), with
+[primary-source research and gap audit](../validation/f0-42-resource-management-audit.md).
+It requires lead cross-review and subsystem directives before implementation;
+it does not reorder F0–F8 or change the canonical-image/hardware scope. The
+same owner decision suspends QEMU gates for the trial cycle, retaining host
+checks, the canonical build and image-specific physical evidence.
+
 | Phase | Delivers | Gate (all on QEMU, T23 and E500) |
 | --- | --- | --- |
 | F0 | Loader handoff, kernel core (paging, IDT/GDT/TSS, PIC, PIT, physical allocator, kernel heap), resource reservation registry and read-only platform inventory, safe console selection, early serial and crash screen, probe syscalls, embedded ring-3 probes with preemption and fault containment, runner integration | F0 criteria in the decision entry and [`f0-acceptance.md`](f0-acceptance.md) |
