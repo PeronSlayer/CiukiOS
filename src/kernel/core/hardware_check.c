@@ -15,6 +15,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
 #include <ciuki/abi.h>
+#include <ciuki/mm.h>
 /* Host/older configurations may omit the recorder; the kernel links f0-25's
  * RAM producer. Only its validated descriptor admits raw disk writes. */
 #pragma weak blackbox_capture
@@ -279,6 +280,13 @@ static void check_step(void *ctx,unsigned item,uint64_t until,struct hw_check_re
     case 7: serial_check(until,out); break;
     case 8: savage_check(until,out); break;
     case 9: audio_check(out); break;
+    case 10: {
+        bool ok=ledger_reconcile(); struct mm_ledger v; ledger_snapshot(&v);
+        ledger_record("hardware-check"); out->status=ok ? HW_PASS : HW_FAIL;
+        ksnprintf(out->detail,sizeof(out->detail),"NORMAL free=%u low=%u high=%u DMA free=%u errors=%u",
+            v.zone[ZONE_NORMAL].free,v.low,v.high,v.zone[ZONE_DMA].free,v.mismatches);
+        break;
+    }
     }
     io_until=0;
 }

@@ -7,6 +7,7 @@
 #include <ciuki/arch.h>
 #include <ciuki/timing.h>
 #include <ciuki/audio_backend.h>
+static struct mm_pin backend_pins[2];
 struct audio_dma_device audio_dma;
 static bool dma_selected;
 /* One selected cyclic engine; IRQ and worker serialize these with irq_save. */
@@ -282,11 +283,14 @@ void audio_backend_shutdown(void)
              d->name,d->state.irq);
         audio.quarantined = true; audio.reason = "stop_unproved"; return;
     }
+    if (mm_unpin) for (unsigned i=0;i<2;i++) if (backend_pins[i].ticket) {
+        (void)mm_unpin(&backend_pins[i],backend_pins[i].generation); backend_pins[i].ticket=0;
+    }
     if (d->phys) {
-        for (unsigned i = 0; i < AUDIO_HW_BYTES / PAGE_SIZE; i++) { pmm_free(d->phys + i * PAGE_SIZE); audio.commitment_pages--; }
+        for (unsigned i = 0; i < AUDIO_HW_BYTES / PAGE_SIZE; i++) { mm_free(d->phys + i * PAGE_SIZE, MM_DMA); audio.commitment_pages--; }
         d->phys = 0; d->pcm = 0;
     }
-    if (d->desc_phys) { pmm_free(d->desc_phys); audio.commitment_pages--; d->desc_phys = 0; d->desc = 0; }
+    if (d->desc_phys) { mm_free(d->desc_phys, MM_DMA); audio.commitment_pages--; d->desc_phys = 0; d->desc = 0; }
 }
 static int backend_dma_init(struct audio_dma_device *d)
 {
@@ -306,14 +310,28 @@ static int backend_dma_init(struct audio_dma_device *d)
     if (!e) {
         d->phys = d->kind == AUDIO_SB16 ? pmm_alloc_dma_run(AUDIO_HW_BYTES / PAGE_SIZE, AUDIO_HW_BYTES / PAGE_SIZE) : pmm_alloc_contig(AUDIO_HW_BYTES / PAGE_SIZE);
         if (!d->phys) e = -ENOMEM;
-        else { d->pcm = P2V(d->phys); memset(d->pcm, 0, AUDIO_HW_BYTES); audio.commitment_pages += AUDIO_HW_BYTES / PAGE_SIZE; }
+        else { mm_claim(d->phys,AUDIO_HW_BYTES/PAGE_SIZE,MM_DMA); d->pcm = P2V(d->phys); memset(d->pcm, 0, AUDIO_HW_BYTES); audio.commitment_pages += AUDIO_HW_BYTES / PAGE_SIZE; }
     }
     if (!e) e = backend_claim(d, 4, RES_MMIO, d->phys, d->phys + AUDIO_HW_BYTES, false);
     if (!e && (d->kind == AUDIO_VIA686 || d->kind == AUDIO_VIA8233)) {
         d->desc_phys = pmm_alloc();
         if (!d->desc_phys) e = -ENOMEM;
-        else { d->desc = P2V(d->desc_phys); memset(d->desc, 0, PAGE_SIZE); audio.commitment_pages++;
+        else { mm_claim(d->desc_phys,1,MM_DMA); d->desc = P2V(d->desc_phys); memset(d->desc, 0, PAGE_SIZE); audio.commitment_pages++;
                e = backend_claim(d, 5, RES_MMIO, d->desc_phys, d->desc_phys + PAGE_SIZE, false); }
+    }
+    if (!e && mm_pin) {
+        memset(backend_pins,0,sizeof(backend_pins));
+        uint32_t generation=d->generations[1];
+        backend_pins[0]=(struct mm_pin){.generation=generation,.first_pfn=d->phys/PAGE_SIZE,
+            .pages=AUDIO_HW_BYTES/PAGE_SIZE,.address_mask=d->kind==AUDIO_SB16 ? 0xffffffu : UINT32_MAX,
+            .alignment=d->kind==AUDIO_SB16 ? AUDIO_HW_BYTES : 4,
+            .boundary=d->kind==AUDIO_SB16 ? 131072u : 0,.direction=MM_PIN_TO_DEVICE};
+        e=mm_pin(&backend_pins[0]);
+        if (!e && d->desc_phys) {
+            backend_pins[1]=(struct mm_pin){.generation=generation,.first_pfn=d->desc_phys/PAGE_SIZE,
+                .pages=1,.address_mask=UINT32_MAX,.alignment=8,.direction=MM_PIN_TO_DEVICE};
+            e=mm_pin(&backend_pins[1]);
+        }
     }
     if (!e) {
         d->activation_deadline=audio_hw_deadline(d,7000);

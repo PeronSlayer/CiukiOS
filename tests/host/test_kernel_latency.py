@@ -81,6 +81,7 @@ static void test_irq_restore(uint32_t f) {
     irq_depth--;
 }''')
             harness = harness.replace('#include "../../src/kernel/core/pmm.c"', '#include "pmm_audit.inc"')
+            harness = harness.replace('../../src/kernel/core/ledger.c', str(ROOT / 'src/kernel/core/ledger.c'))
             harness = harness.replace('return failures ? 1 : 0;', '''
     CHECK(maximum==64 && !irq_depth);
     printf("PMM IRQ audit: max=%uus model (64 bitmap accesses), fragmentation/reserve/rollback PASS\\n",maximum);

@@ -3,6 +3,90 @@
 Contract 2 of 7 required by decision D11. Author: Claude (lead). Reviewer:
 Codex. Status: approved after the Claude–Codex cross-review, 2026-10-09.
 
+## Resource ledger (M1, f0-43)
+
+`core/ledger.c` keeps page counters under the same `irq_save` exclusion as
+the PMM bitmap. Physical owner categories form a partition: firmware/LOW
+reservations, kernel image, general kernel allocations, heap, stacks, page
+tables, DMA/device buffers, cache data/metadata/workspace, native private or
+shared backing, and VM low/pool backing. `reserved` is a subset of physical
+ownership, not another term in the physical sum. Overlapping RAM descriptors
+count once; a restrictive descriptor removes the page from usable totals.
+Allocation begins as general kernel ownership; the allocating object claims
+its category once and returns it through `mm_free` with that category. A
+mapping never claims a second copy of its backing. Unclassified permanent
+kernel buffers remain in the explicit general-kernel category.
+
+Snapshots copy only ledger counters with interrupts excluded. Reconciliation
+reads the static PMM bitmap in 32-PFN sections and restarts if its accounting
+sequence changes; it never walks process/cache/VM objects. Each zone must
+satisfy `usable = free + sum(resident owners)`, and ledger and PMM free/total
+counts must agree. Boot, the H-page Memory ledger item and the existing
+`f0:allocator` probe run the check. A mismatch logs a protected `[mem] ledger
+mismatch` record and increments a persistent counter, without panicking.
+The allocator probe includes the result in its verdict.
+
+Virtual reservation and RAM commitment counters are separate from resident
+pages. Native eager private backing contributes a promise until release,
+including PROT_NONE backing; shared surface backing contributes once for the
+object, with each present alias counted separately. The VM admission promise
+is charged before construction and rolled back through ordinary teardown.
+Pagefile commitments and swap capacity/use remain zero. No admission value,
+memory cap, cache growth limit, reclamation or paging policy changes here.
+
+NORMAL low is `max(1024, usable_NORMAL/32)` pages, with integer division;
+high is twice low. Pressure enters strictly below low and clears strictly
+above high. DMA free headroom remains independent. The reporting task emits
+at most one protected crossing summary per second, retaining crossing and
+coalescing counts, plus a protected snapshot every 30 seconds. Snapshot IDs
+associate all lines of a snapshot even if another producer interleaves.
+Lifecycle profiles cover boot end, five seconds after the first desktop
+frame, audio start, the Files copy-start record, maximum-size VM creation and
+VM teardown. Audio/refill and log hooks copy the counters and capture tick into three
+fixed pending snapshots; the reporter prints them in ordinary task context.
+A short copy therefore retains its copy-start snapshot even if it ends
+before printing. Repeated events preserve the first unprinted snapshot.
+These are observation points, not a claim of physical qualification.
+
+Pin tokens copy the object generation, PFN extent, address mask, byte
+alignment, segment boundary, direction and a non-reused completion ticket
+into a fixed registry. ATA PRD/bounce buffers and audio descriptor/ring pages
+hold tokens for their existing lifetimes; uncertain hardware stop retains
+the tokens and pages. The eager DOS pool uses immutable, resident PTE vectors
+(at most seven tables per VM) to describe scattered PFNs without adding a
+per-PFN array. These vectors must contain distinct, exclusively owned pool
+PFNs and remain unchanged until unpin; the table itself is held too. VM
+worker termination is proved before the pool tokens are released and the
+address space destroyed. Counters never traverse these vectors on snapshot.
+The 64 registry entries accommodate the first clients (at most 28 VM-vector
+tokens, four ATA tokens and nine AC'97 tokens). Pool-vector retirement is
+synchronous after the existing worker-stop proof; DMA extent retirement may
+outlive its owner. `mm_pin_retire` transfers the entire extent to the token,
+and only completion or proven stop calls `mm_unpin` and releases its pages.
+An old generation/ticket cannot complete a replacement token; repeat unpins
+are refused and counted. Directly freeing a pinned PFN is an invariant error.
+
+The existing IRQ exclusion protects accounting; explicit IRQ and refill
+context depths drive `ledger_assert_pinned_context`. Reclaimable allocation
+and page faults in those contexts increment `bad_context` and emit a protected
+`[mem] pinned_context violation task=%s irq=%u site=%08x` record at most once
+per second (including an initial violation at tick zero). `irq` is the nested
+IRQ context depth; `task` is the current task name, or `boot` before a task
+exists. The allocation proceeds and the existing fault dispatcher continues.
+Only the explicit build option `CIUKI_LEDGER_STRICT` makes the guard fatal;
+the production build does not define it. Host tests run both modes.
+Refill marking belongs to its task, so preemption does not mark an unrelated
+task critical. Allocation entry points pass their caller's return address;
+vector 14 passes the faulting EIP. Following the compiler's
+[return-address documentation](https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html),
+use `__builtin_return_address(0)` at the allocation entry point, rather than
+walking an older stack frame in the guard. The task name, tick, IRQ depth and
+rate limiter are captured under IRQ exclusion; logging follows its release.
+PMM scans reserve/roll back at most 32 PFNs per interrupt-disabled section,
+never sleep and never call filesystem reclaim, including when entered with
+IF clear. Physical timing and all lifecycle profiles still require the lead's
+canonical-image/hardware evidence; no QEMU evidence was collected for M1.
+
 ## Decision
 
 The canonical CiukiOS disk is an MBR-partitioned disk with one FAT32 system
@@ -15,6 +99,20 @@ owner of physical memory. Only E820 type-1 RAM is ever allocated; the first
 MiB is never handed to the general allocator.
 
 ## Sources
+
+M1 research (2026-10-19): the Microsoft DDK [BASE samples](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S3188.HTM)
+distinguish physical page allocation and demand-page information. Microsoft
+[Q180579](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/180579)
+specifies constrained allocation in PFNs, not byte addresses. The DDK's
+[deadlock rules](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S31A7.HTM)
+forbid blocking in critical/event contexts. Intel's [IDE bus-master specification](https://pdos.csail.mit.edu/6.1810/2004/readings/hardware/IDE-BusMaster.pdf),
+sections 1.1–1.2 and 3, requires stable PRDs, boundary constraints and
+completion/stop ownership. Creative's [Sound Blaster programming guide](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/SoundBlaster.pdf),
+chapter 3, describes a stationary cyclic DMA buffer and explicit termination.
+These support separate ownership, mapping and pin accounting; they do not
+establish Windows 98 numerical watermarks. M1 adopts the contract's CiukiOS
+low/high arithmetic and preserves existing allocation/admission policies.
+The full Windows 98 DDK/pager research gaps in f0-42 remain open.
 
 - Microsoft, [FAT: General Overview of On-Disk Format (fatgen103)](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf):
   the FAT type is decided only by the cluster count (FAT32 needs at least

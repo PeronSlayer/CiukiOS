@@ -30,6 +30,7 @@ static bool refill(unsigned c)
     uint32_t p = pmm_alloc();
     if (!p)
         return false;
+    mm_claim(p,1,MM_HEAP);
     uint8_t *page = P2V(p);
     unsigned sz = class_size(c);
     void *first = 0, *last = 0;
@@ -48,6 +49,7 @@ static bool refill(unsigned c)
 
 void *kmalloc(size_t size)
 {
+    if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     size_t need = size + sizeof(struct hdr);
     unsigned c = 0;
     while (c < NCLASS && class_size(c) < need)

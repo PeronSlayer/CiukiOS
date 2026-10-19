@@ -10,6 +10,7 @@
 #include <ciuki/bootlog.h>
 #include <ciuki/timing.h>
 #include <ciuki/blackbox.h>
+#include <ciuki/ledger.h>
 #pragma weak blackbox_capture
 #pragma weak blackbox_panic
 
@@ -41,6 +42,7 @@ static void log_line(const char *fmt, va_list ap, bool periodic, bool verbose)
         n = sizeof(buf) - 2;
     buf[n] = '\n';
     buf[n + 1] = 0;
+    if (ledger_lifecycle) ledger_lifecycle(buf,(size_t)n);
     if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (verbose) bootlog_capture_verbose(buf, (size_t)n + 1);
     else if (periodic) bootlog_capture_ring(buf, (size_t)n + 1);

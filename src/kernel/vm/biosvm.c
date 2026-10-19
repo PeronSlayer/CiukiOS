@@ -274,8 +274,9 @@ static int map_firmware(void)
     if (rc)
         return init_error("address_space", rc);
     low_pt = pmm_alloc();
+    mm_claim(low_pt,1,MM_TABLE);
     if (!low_pt) {
-        pmm_free(vm_as.pd_phys);
+        mm_free(vm_as.pd_phys,MM_TABLE);
         vm_as.pd_phys = 0;
         return init_error("page_table", -ENOMEM);
     }
@@ -569,9 +570,9 @@ failed:
         vm_thread = 0;
     }
     if (low_pt)
-        pmm_free(low_pt);
+        mm_free(low_pt,MM_TABLE);
     if (vm_as.pd_phys)
-        pmm_free(vm_as.pd_phys);
+        mm_free(vm_as.pd_phys,MM_TABLE);
     low_pt = vm_as.pd_phys = 0;
     return rc;
 }

@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
+#include <ciuki/ledger.h>
 
 extern char __kernel_start[], __kernel_end[];
 
@@ -37,16 +38,19 @@ static void add_res(uint32_t start, uint32_t end, const char *why)
 
 static bool in_ram(uint32_t phys)
 {
+    bool ram=false;
     for (uint32_t i = 0; i < g_boot.e820_count; i++) {
         const struct ciuki_e820 *e = &g_boot.e820[i];
-        if (e->type != CBI_E820_RAM)
+        if (e->type != CBI_E820_RAM) {
+            if ((uint64_t)phys < e->base+e->length && (uint64_t)phys+PAGE_SIZE > e->base) return false;
             continue;
+        }
         uint64_t s = (e->base + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
         uint64_t t = (e->base + e->length) & ~(uint64_t)(PAGE_SIZE - 1);
         if (phys >= s && (uint64_t)phys + PAGE_SIZE <= t)
-            return true;
+            ram=true;
     }
-    return false;
+    return ram;
 }
 
 bool pmm_is_reserved(uint32_t phys)
@@ -68,6 +72,8 @@ unsigned pmm_reservations(const struct pmm_reservation **out)
 void pmm_init(void)
 {
     memset(bitmap, 0xFF, sizeof(bitmap));
+    memset(zone_total, 0, sizeof(zone_total));
+    ledger_init();
     nres = 0;
     add_res(0, 0x100000u, "first_mib_ivt_bda_ebda_rom");
     uint32_t ks = g_boot.kernel_start, ke = g_boot.kernel_end;
@@ -84,8 +90,6 @@ void pmm_init(void)
         uint64_t t = (e->base + e->length) >> 12;
         if (t > PMM_MAX_PAGES)
             t = PMM_MAX_PAGES;
-        for (uint64_t pfn = s; pfn < t; pfn++)
-            zone_total[zone_of((uint32_t)pfn)]++;
         for (uint64_t pfn = s < 256 ? 256 : s; pfn < t; pfn++)
             set_free((uint32_t)pfn);
     }
@@ -106,14 +110,22 @@ void pmm_init(void)
     for (int z = 0; z < 3; z++)
         zone_free[z] = 0;
     for (uint32_t pfn = 0; pfn < PMM_MAX_PAGES; pfn++)
-        if (!used(pfn))
-            zone_free[zone_of(pfn)]++;
+        if (in_ram(pfn << 12)) {
+            zone_total[zone_of(pfn)]++;
+            if (!used(pfn)) zone_free[zone_of(pfn)]++;
+            enum mm_owner owner = MM_RESERVED;
+            if ((pfn << 12) < res[1].end && (pfn << 12) + PAGE_SIZE > res[1].start)
+                owner = MM_KERNEL_IMAGE;
+            ledger_boot_page(pfn, owner, !used(pfn));
+        }
     hint[ZONE_LOW] = 0;
     hint[ZONE_DMA] = 256;
     hint[ZONE_NORMAL] = 4096;
+    ledger_boot_done();
+    ledger_reconcile();
 }
 
-uint32_t pmm_alloc_zone(int zone)
+static uint32_t alloc_zone(int zone)
 {
     static const uint32_t lo[3] = { 0, 256, 4096 }, hi[3] = { 256, 4096, PMM_MAX_PAGES };
     if (zone < ZONE_DMA || zone > ZONE_NORMAL || !zone_free[zone]) return 0;
@@ -125,6 +137,7 @@ uint32_t pmm_alloc_zone(int zone)
             if (end > hi[zone]) end = hi[zone];
             for (; pfn < end; pfn++) if (!used(pfn)) {
                 set_used(pfn); zone_free[zone]--; hint[zone] = pfn + 1;
+                ledger_alloc_page(pfn);
                 irq_restore(f); return pfn << 12;
             }
             irq_restore(f);
@@ -133,10 +146,17 @@ uint32_t pmm_alloc_zone(int zone)
     return 0;
 }
 
+uint32_t pmm_alloc_zone(int zone)
+{
+    if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
+    return alloc_zone(zone);
+}
+
 uint32_t pmm_alloc(void)
 {
-    uint32_t p = pmm_alloc_zone(ZONE_NORMAL);
-    return p ? p : pmm_alloc_zone(ZONE_DMA);
+    if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
+    uint32_t p = alloc_zone(ZONE_NORMAL);
+    return p ? p : alloc_zone(ZONE_DMA);
 }
 
 /* Physically contiguous run for mount-time parser workspaces (f4-04). NORMAL
@@ -161,6 +181,7 @@ static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
             for (; have < end; have++) {
                 if (used(start + have)) { blocked = true; break; }
                 set_used(start + have); zone_free[zone]--;
+                ledger_alloc_page(start + have);
             }
             irq_restore(f);
         }
@@ -169,7 +190,7 @@ static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
         for (uint32_t i = 0; i < have;) {
             uint32_t f = irq_save();
             uint32_t end = have - i > 32 ? i + 32 : have;
-            for (; i < end; i++) { set_free(start + i); zone_free[zone]++; }
+            for (; i < end; i++) { set_free(start + i); zone_free[zone]++; ledger_free_page(start + i); }
             irq_restore(f);
         }
         start = next;
@@ -179,6 +200,7 @@ static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
 
 uint32_t pmm_alloc_contig(uint32_t pages)
 {
+    if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     if (!pages) return 0;
     uint32_t p = alloc_run(ZONE_NORMAL, pages, 1);
     return p ? p : alloc_run(ZONE_DMA, pages, 1);
@@ -186,6 +208,7 @@ uint32_t pmm_alloc_contig(uint32_t pages)
 
 uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment)
 {
+    if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     if (!pages || pages > 3840 || !alignment || alignment > 4096 || (alignment & (alignment - 1))) return 0;
     return alloc_run(ZONE_DMA, pages, alignment);
 }
@@ -196,11 +219,16 @@ void pmm_free(uint32_t phys)
     if (pfn >= PMM_MAX_PAGES || pfn < 256 || pmm_is_reserved(phys))
         panic("pmm_free: invalid page %08x", phys);
     uint32_t f = irq_save();
+    if (ledger_page_pinned(pfn)) {
+        irq_restore(f);
+        panic("pmm_free: pinned page %08x", phys);
+    }
     if (!used(pfn)) {
         irq_restore(f);
         panic("pmm_free: double free %08x", phys);
     }
     set_free(pfn);
+    ledger_free_page(pfn);
     zone_free[zone_of(pfn)]++;
     if (pfn < hint[zone_of(pfn)])
         hint[zone_of(pfn)] = pfn;
@@ -208,6 +236,14 @@ void pmm_free(uint32_t phys)
 }
 
 bool pmm_page_free(uint32_t pfn) { return pfn < PMM_MAX_PAGES && !used(pfn); }
+
+void pmm_free_owned(uint32_t phys, enum mm_owner owner)
+{
+    uint32_t f = irq_save();
+    mm_release(phys, 1, owner);
+    pmm_free(phys);
+    irq_restore(f);
+}
 
 uint32_t pmm_free_count(void) { return zone_free[ZONE_DMA] + zone_free[ZONE_NORMAL]; }
 uint32_t pmm_zone_free(int z) { return zone_free[z]; }
