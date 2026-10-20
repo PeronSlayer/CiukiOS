@@ -92,7 +92,7 @@ static void guest_fixture_run(const char *dir)
     d.ops.present=ordered_present;guest_surface=19;
     struct wr_io io;wr_posix_io(&io,dir);assert(wr_init(&guest_registry,&io,0));
     guest_emit("crash-isolation","BEGIN","server=desktop");
-    assert(desk_v3_fixture_begin(&d)==42);
+    assert(!desk_v3_fixture_begin(&d));desk_v3_fixture_tick(&d);
     if(!setjmp(guest_exit))desktop_v3_peer_entry();
     assert(guest_observation.phase==8 && guest_frames==2 && !d.v3_lease_state);
     struct desktop_v3_observation bad=guest_observation;bad.phase=8;

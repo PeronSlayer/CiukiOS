@@ -1075,6 +1075,103 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-restart-qemu-t23",
+      "probe": "w32-restart",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-restart run={run_id}",
+      "timeout": 420,
+      "integration_pending": "authored, unrun (f5-07B): lead supplies guest probe and T23 evidence; host shell and desktop fixtures are not guest qualification",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progman_dde"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "end_session"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "wininit_restart"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "runonce_restart"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "restart_recovery"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "desktop_resumed"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "checked": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

@@ -437,6 +437,7 @@ static void cleanup_thread(DWORD tid, UINT mode) {
       w32_fill(t, 0, sizeof(*t));
     }
   }
+  u32_progman_cleanup(tid);
   /* Safety net for the server-side identity (a window free or clipboard close
    * refused above); threads that never used USER cost no transaction. */
   if (identity) {

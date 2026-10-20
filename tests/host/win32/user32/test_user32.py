@@ -33,7 +33,7 @@ def build_fixture(out):
     sources=sorted((ROOT/'sdk/win32/user32').glob('*.c'))+[
         ROOT/'apps/libdeskui/v3.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',
         ROOT/'sdk/win32/services/bytes.c',HERE/'user32_test.c',
-        *[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c')]]
+        *[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','progman.c','restart.c','shell_fs.c')]]
     for i,source in enumerate(sources):
         obj=out/f'{i}.o';objects.append(obj)
         subprocess.run([*flags,'-DW32_HOST_MODEL','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(out),
@@ -134,7 +134,7 @@ class User32Tests(unittest.TestCase):
         # Menu APIs are implemented by f5-10C; WaitForInputIdle, GetMessageW
         # and the DDEML by f5-20B. The remaining typed refusals.
         targets={'ChangeDisplaySettingsA':-1,'RegisterHotKey':0,
-                 'UnpackDDElParam':0,'ExcludeUpdateRgn':0}
+                 'ExcludeUpdateRgn':0}
         definition=(out/'user32.def').read_text()
         declarations=[];calls=[]
         for i,(name,value) in enumerate(targets.items()):

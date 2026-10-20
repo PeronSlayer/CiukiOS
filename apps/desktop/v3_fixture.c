@@ -25,12 +25,8 @@ static void report(struct desktop *d,int error)
 int desk_v3_fixture_begin(struct desktop *d)
 {
     memset(&fixture,0,sizeof(fixture));
-    char *argv[]={"/System/Win32/Fixtures/desktop-v3.exe",NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
-    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
-    if(pid<0)return -errno;
-    fixture.pid=(unsigned)pid;fixture.active=1;fixture.deadline=d->now_ns+15000000000ull;
-    return pid;
+    fixture.active=1;fixture.deadline=d->now_ns+15000000000ull;
+    return 0; /* tick waits for the registered service before spawning PE */
 }
 /* Registry fixture goes through precisely the copied w32srv endpoint. */
 static int registry(unsigned op,unsigned key,const char *path,const char *name,const char *text,unsigned *handle)
@@ -74,6 +70,17 @@ void desk_v3_fixture_tick(struct desktop *d)
 {
     if(!fixture.active)return;
     if(d->now_ns>=fixture.deadline){fixture.phase++;report(d,-ETIMEDOUT);return;}
+    if(!fixture.pid){
+        unsigned handle=0;
+        if(registry(W32R_OPEN,W32R_HKLM,"Software","",NULL,&handle))return;
+        if(handle)registry(W32R_CLOSE,handle,"","",NULL,NULL);
+        char *argv[]={"/System/Win32/Fixtures/desktop-v3.exe",NULL};
+        char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+        int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
+        if(pid<0){report(d,-errno);return;}
+        fixture.pid=(unsigned)pid;
+    }
+
     int holder=-1;unsigned windows=0;
     for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].pid==fixture.pid && d->clients[i].window && d->clients[i].version==3){
         windows++;if(d->clients[i].v3_id==4)holder=(int)i;

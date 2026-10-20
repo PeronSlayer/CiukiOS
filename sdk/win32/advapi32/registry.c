@@ -154,3 +154,18 @@ int W32API AccessCheck(void *sd,uint32_t token,uint32_t desired,void *mapping,vo
 /* GetFileSecurityA and GetFileSecurityW are the typed W21 failures of
  * security.c (decision w21-nt-security; directive f5-20 amendment 1, item
  * 2: no file security on FAT, as on Windows 98). */
+
+/* f5-07B: local requests use the same virtual session coordinator. */
+static int shutdown_request(const void *machine,const void *message,uint32_t seconds,int force,int reboot,int wide,int aborting)
+{
+    if(machine && (wide?*(const WCHAR *)machine:*(const char *)machine)){w32r_last_error(53);return 0;}
+    uint32_t e=call(W32R_SHUTDOWN,0,message,NULL,wide,aborting?W32R_SHUTDOWN_ABORT:W32R_SHUTDOWN_REQUEST,
+        seconds,0,aborting?0u:((force?4u:0u)|(reboot?2u:1u)),NULL,0);
+    end(e);if(e)w32r_last_error(e);return !e;
+}
+int W32API InitiateSystemShutdownA(const char *m,const char *text,uint32_t seconds,int force,int reboot)
+{return shutdown_request(m,text,seconds,force,reboot,0,0);}
+int W32API InitiateSystemShutdownW(const WCHAR *m,const WCHAR *text,uint32_t seconds,int force,int reboot)
+{return shutdown_request(m,text,seconds,force,reboot,1,0);}
+int W32API AbortSystemShutdownA(const char *m){return shutdown_request(m,NULL,0,0,0,0,1);}
+int W32API AbortSystemShutdownW(const WCHAR *m){return shutdown_request(m,NULL,0,0,0,1,1);}

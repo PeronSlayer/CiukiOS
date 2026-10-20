@@ -137,7 +137,6 @@ uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_re
         }
         return 120;
     }
-    if(r->op==W32R_SHUTDOWN)return 5; /* f5-07B supplies a supervisor authority. */
     if(r->op>=W32R_ATOM_ADD&&r->op<=W32R_ATOM_NAME){
         if(r->index>1)return 87;uint32_t scope=r->index?pid:0;
         uint32_t integer=(r->op==W32R_ATOM_ADD||r->op==W32R_ATOM_FIND)?integer_atom(name):r->key;
@@ -208,6 +207,19 @@ uint32_t wr_directory_exit(struct wr_server *s,uint32_t pid)
         uint32_t e=wr_directory_call(s,pid,&r,"",NULL,&out,b);if(e)return e;}
     return 0;
 }
+/* The first server of a new desktop lifetime must discard old process
+ * identities before accepting clients: a cold boot can reuse native PIDs.
+ * Supervised restarts within that desktop preserve/reconcile them instead. */
+uint32_t wr_clients_reset(struct wr_server *s)
+{
+    struct directory *d=s->directory;
+    for(;;){
+        uint32_t pid=d->windows?d->windows->value.pid:0;
+        if(!pid)for(struct atom *a=d->atoms;a;a=a->next)if(a->pid){pid=a->pid;break;}
+        if(!pid){s->live_count=0;return 0;}
+        uint32_t e=wr_exit(s,pid);if(e)return e;
+    }
+}
 uint32_t wr_reconcile(struct wr_server *s,int (*alive)(void *,uint32_t),void *opaque)
 {
     /* A client can exit while the server is down. Preserve surviving owners'
@@ -217,6 +229,12 @@ uint32_t wr_reconcile(struct wr_server *s,int (*alive)(void *,uint32_t),void *op
         uint32_t dead=0;
         for(struct atom *a=d->atoms;a&&!dead;a=a->next)if(a->pid){int state=alive(opaque,a->pid);if(state<0)return 1016;if(!state)dead=a->pid;}
         for(struct window *w=d->windows;w&&!dead;w=w->next){int state=alive(opaque,w->value.pid);if(state<0)return 1016;if(!state)dead=w->value.pid;}
-        if(!dead)return 0;uint32_t e=wr_exit(s,dead);if(e)return e;
+        if(!dead){
+            for(struct atom *a=d->atoms;a;a=a->next)if(a->pid && wr_equal(a->name,WR_CLIENT_MARKER)){
+                uint32_t e=wr_client_join(s,a->pid);if(e)return e;
+            }
+            return 0;
+        }
+        uint32_t e=wr_exit(s,dead);if(e)return e;
     }
 }

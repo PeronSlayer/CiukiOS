@@ -44,6 +44,8 @@ BOOL W32API PostThreadMessageA(DWORD tid, UINT m, WPARAM wp, LPARAM lp) {
 }
 BOOL W32API PostMessageA(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   U32_GUARD;
+  LRESULT dde;
+  if (u32_progman_message(h,m,wp,lp,&dde)) return 1;
   if (u32_pointer_message(m))
     return u32_fail(87);
   if (h == (HWND)(uintptr_t)0xffff) {
@@ -94,6 +96,7 @@ LRESULT u32_invoke(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   return u32_call_proc(proc, w->unicode, 0, h, m, wp, lp);
 }
 static BOOL sent(void) {
+  u32_session_pump();
   struct u32_thread *t = u32_thread();
   if (!t)
     return 0;
@@ -258,13 +261,17 @@ static LRESULT send(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT flags,
 LRESULT W32API SendMessageTimeoutA(HWND h, UINT m, WPARAM wp, LPARAM lp,
                                    UINT flags, UINT ms, uintptr_t *r) {
   U32_GUARD;
+  LRESULT dde;
+  if(u32_progman_message(h,m,wp,lp,&dde)){if(r)*r=dde;return 1;}
   if (flags & ~0x2bu)
     return u32_fail(87);
   return send(h, m, wp, lp, flags, ms, r, 0);
 }
 LRESULT W32API SendMessageA(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   U32_GUARD;
-  if (h == (HWND)(uintptr_t)0xffff) {
+  LRESULT dde;
+  if (u32_progman_message(h,m,wp,lp,&dde)) return dde;
+  if (h == (HWND)(uintptr_t)0xffff || h == (HWND)(intptr_t)-1) {
     for (UINT i = 0; i < U32_WINDOWS; i++)
       if (u32_windows[i].handle && !u32_windows[i].parent)
         SendMessageA(u32_windows[i].handle, m, wp, lp);

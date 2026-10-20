@@ -33,7 +33,7 @@ class InputTests(unittest.TestCase):
         subprocess.run([*flags,'-c',str(ROOT/'tests/host/win32/user32/kernel_bridge.c'),'-o',str(bridge)],check=True);objects.append(bridge)
         sources=sorted((ROOT/'sdk/win32/user32').glob('*.c'))+sorted((ROOT/'sdk/win32/input').glob('*.c'))+[
             ROOT/'apps/libdeskui/v3.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',ROOT/'sdk/win32/services/bytes.c',HERE/'session_test.c',
-            *[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c')]]
+            *[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','progman.c','restart.c','shell_fs.c')]]
         for i,source in enumerate(sources):
             obj=out/f'{i}.o';objects.append(obj)
             subprocess.run([*flags,'-DW32_HOST_MODEL','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(out),'-c',str(source),'-o',str(obj)],check=True)

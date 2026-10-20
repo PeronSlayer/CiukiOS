@@ -1423,6 +1423,9 @@ static void test_production_gdi(void) {
   host_modules = 0;
   host_gdi_exit();
 }
+#ifndef U32_TEST_EXTERNAL_MODULES
+#include "../shell/clients.inc"
+#endif
 static void run(void) {
   puts("STEP init");
   ui_kernel_init();
@@ -1500,6 +1503,9 @@ static void run(void) {
   ui_kernel_switch(0);
   test_lifecycle();
   CHECK(UnregisterClassA("USER fixture", 0));
+  #ifndef U32_TEST_EXTERNAL_MODULES
+  shell_clients(dir);
+  #endif
   wr_destroy(&server);
   for (unsigned i = 0; i < 2; i++) {
     char path[256];

@@ -40,14 +40,14 @@ class Win32AdapterTests(unittest.TestCase):
         subprocess.run([*common,'-Dwr_posix_io=host_posix_io','-c',str(ROOT/'apps/w32srv/posix_io.c'),
                         '-Wno-unused-command-line-argument','-o',str(io_object)],check=True,env=env)
         server=work/'real-w32srv'
-        server_sources=['apps/w32srv/'+n+'.c' for n in ('registry','storage','directory','defaults','protocol','main')]
-        server_sources+=['tests/host/desktop/w32_platform.c']
+        server_sources=['apps/w32srv/'+n+'.c' for n in ('registry','storage','directory','defaults','protocol','progman','restart','shell_fs','main')]
+        server_sources+=['tests/host/desktop/w32_platform.c','apps/desktop/protocol.c']
         base=['-include',str(ROOT/'tests/host/desktop/replay_base.h'),'-I'+str(ROOT/'src/kernel/include'),
               '-idirafter',str(ROOT/'sdk/sysroot-overlay/include')]
         subprocess.run([*common,*base,'-I'+str(ROOT/'tests/host/desktop/w32-platform'),
                         *(str(ROOT/s) for s in server_sources),str(io_object),'-o',str(server)],check=True,env=env)
         binary=work/'supervision-test'
-        sources=['apps/desktop/win32_registry.c','apps/desktop/win32_native.c','apps/desktop/win32_service.c','apps/desktop/protocol.c','apps/desktop/win32_launch.c',
+        sources=['apps/desktop/win32_registry.c','apps/desktop/win32_native.c','apps/desktop/win32_restart.c','apps/desktop/win32_service.c','apps/desktop/protocol.c','apps/desktop/win32_launch.c',
                  'tests/host/desktop/win32_supervision_test.c']
         subprocess.run([*common,*base,*(str(ROOT/s) for s in sources),'-pthread','-o',str(binary)],check=True,env=env)
         with tempfile.TemporaryDirectory(dir=work) as directory:
@@ -79,7 +79,7 @@ class Win32AdapterTests(unittest.TestCase):
         work=ROOT/'build/host/desktop-win32';work.mkdir(parents=True,exist_ok=True)
         env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',TMPDIR=str(work))
         binary=work/'native-lifecycle-test'
-        sources=['apps/desktop/win32_native.c','apps/desktop/win32_service.c','apps/desktop/win32_launch.c','apps/desktop/protocol.c',
+        sources=['apps/desktop/win32_native.c','apps/desktop/win32_restart.c','apps/desktop/win32_service.c','apps/desktop/win32_launch.c','apps/desktop/protocol.c',
                  'tests/host/desktop/win32_native_lifecycle_test.c']
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
                         '-include',str(ROOT/'tests/host/desktop/replay_base.h'),'-fsanitize=address,undefined',

@@ -1,6 +1,7 @@
 /* Native f5-04 service/channel transport. SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "win32_adapter.h"
+#include "win32_restart.h"
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
@@ -17,6 +18,10 @@
 uint32_t desk_w32_record(void *,uint32_t);
 extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
 extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
+extern void desk_v3_revoke(struct desktop *) __attribute__((weak));
+extern void desk_v3_pointer_release(struct desktop *) __attribute__((weak));
+extern void desk_links_refresh(struct desktop *) __attribute__((weak));
+extern void desk_request_close(struct desktop *,int) __attribute__((weak));
 static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
 static void *crash_disk_worker(void *p)
 {
@@ -85,6 +90,7 @@ static uint32_t packet(int fd,uint32_t pid,const struct w32r_packet *in,struct w
 }
 static pthread_mutex_t rpc_lock=PTHREAD_MUTEX_INITIALIZER;
 static uint32_t serial;
+static int service_registered_once;
 uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t cap,uint32_t *used)
 {
     if(!input || !output || !used || n>W32R_MAX || n<sizeof(struct w32r_request)+2)return 87;
@@ -108,7 +114,7 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
         if(out.total!=total || out.offset!=at+bytes){error=13;break;}
         memcpy((uint8_t *)output+at,out.bytes,bytes);at+=bytes;
     }
-    if(!error)*used=total;
+    if(!error){*used=total;service_registered_once=1;}
     pthread_mutex_unlock(&rpc_lock);return error;
 }
 static struct desktop *owner;
@@ -116,7 +122,7 @@ static int authorized;
 static struct desk_w32_supervisor supervisor;
 static int spawn_service(void *ctx)
 {
-    (void)ctx;char *argv[]={"/System/Win32/w32srv",NULL};
+    (void)ctx;char *argv[]={"/System/Win32/w32srv",service_registered_once?NULL:"--fresh-clients",NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
 }
@@ -129,6 +135,13 @@ static struct {int ready,fd,pid,kind;uint32_t show;char title[64];struct desk_la
 int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
 {
     int pair[2]={-1,-1},report[2]={-1,-1};
+    if(kind==DESK_W32_PE){
+        struct {struct w32r_request r;char empty[2];} ping={.r={.version=1,.op=W32R_OPEN,.key=W32R_HKLM,.access=0x20019,.path_bytes=1,.name_bytes=1}};
+        struct w32r_reply reply;uint32_t used=0;
+        if(desk_w32_exchange(&ping,sizeof(ping.r)+2,&reply,sizeof(reply),&used) || used!=sizeof(reply) || reply.error)return -EAGAIN;
+        ping.r.op=W32R_CLOSE;ping.r.key=reply.key;ping.r.access=0;
+        desk_w32_exchange(&ping,sizeof(ping.r)+2,&reply,sizeof(reply),&used);
+    }
     if(kind!=DESK_W32_PE && !owner)return -EPIPE;
     pthread_mutex_lock(&launch_lock);
     if(pending.ready){pthread_mutex_unlock(&launch_lock);return -EBUSY;}
@@ -218,6 +231,116 @@ int desk_w32_shutdown(void)
     }
     return shutdown_error ? shutdown_error : shutdown_done ? 1 : 0;
 }
+/* f5-07B native binding. The state machine never waits for a process or a
+ * launch worker on the input thread. A registry round trip gates all PE use. */
+static struct desk_restart restart;
+static unsigned restart_closing_pending;
+static uint32_t restart_progress_window;
+static uint32_t restart_call(void *ctx,unsigned op,unsigned action,uint32_t flags,
+                             struct w32r_reply *reply,void *data,size_t cap)
+{
+    (void)ctx;
+    struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=op,
+        .index=action,.flags=flags,.path_bytes=1,.name_bytes=1}};
+    /* The compositor's authoritative order is copied, with authenticated
+     * PID+HWND pairs. w32srv validates each pair against its window directory. */
+    uint8_t order[DESK_CLIENTS*8];unsigned count=0;
+    if(op==W32R_ENDSESSION && action==W32R_SESSION_BEGIN && owner){
+        int indices[DESK_CLIENTS];
+        for(unsigned i=0;i<DESK_CLIENTS;i++)if(owner->clients[i].window && owner->clients[i].v3_win32_hwnd){
+            unsigned at=count++;while(at && owner->clients[indices[at-1]].order<owner->clients[i].order){indices[at]=indices[at-1];at--;}indices[at]=(int)i;
+        }
+        for(unsigned i=0;i<count;i++){const struct desk_client *c=&owner->clients[indices[i]];desk_put32(order+i*8,c->v3_win32_hwnd);desk_put32(order+i*8+4,c->pid);}
+    }
+    a.r.data_bytes=count*8;
+    uint32_t size=(uint32_t)sizeof(a.r)+2+a.r.data_bytes;
+    uint8_t *input=malloc(size),*out=malloc(sizeof(*reply)+cap);
+    if(!input || !out){free(input);free(out);return 8;}
+    memcpy(input,&a,sizeof(a.r)+2);if(count)memcpy(input+sizeof(a.r)+2,order,count*8);
+    uint32_t used=0,e=desk_w32_exchange(input,size,out,(uint32_t)(sizeof(*reply)+cap),&used);
+    free(input);
+    if(!e){
+        if(used<sizeof(*reply))e=13;
+        else{memcpy(reply,out,sizeof(*reply));e=reply->error;
+            if(!e && (reply->version!=1 || reply->name_bytes || reply->data_bytes>cap || used!=sizeof(*reply)+reply->data_bytes))e=13;
+            if(!e && reply->data_bytes)memcpy(data,out+sizeof(*reply),reply->data_bytes);
+        }
+    }
+    free(out);return e;
+}
+static int restart_alive(void *ctx,uint32_t pid)
+{(void)ctx;return kill((int)pid,0)==0 || errno==EPERM;}
+static int restart_kill(void *ctx,uint32_t pid)
+{
+    (void)ctx;return owner && owner->terminate?owner->terminate(pid,SIGKILL):-ENOSYS;
+}
+static void restart_record(void *ctx,const char *event,uint32_t n)
+{(void)ctx;fprintf(stderr,"%s value=%u\n",event,n);}
+static void restart_notice(void *ctx,unsigned kind,uint32_t pid,uint32_t flags)
+{
+    (void)ctx;if(!owner)return;
+    if(kind==1){
+        if(desk_v3_revoke)desk_v3_revoke(owner);if(desk_v3_pointer_release)desk_v3_pointer_release(owner);
+        owner->v3_dialog_kind=2;owner->v3_dialog_pid=pid;owner->v3_restart_flags=flags;
+        desk_shell_message(owner,"Restart Windows","Setup wants to restart Windows. CiukiOS will close all Windows programs and finish the installation.",0);
+    }else if(kind==2){
+        if(desk_v3_revoke)desk_v3_revoke(owner);if(desk_v3_pointer_release)desk_v3_pointer_release(owner);
+        restart_closing_pending=1;
+    }else if(kind==3){
+        restart_closing_pending=0;
+        if(desk_request_close)for(unsigned i=0;i<DESK_CLIENTS;i++)if(restart_progress_window && owner->clients[i].window_id==restart_progress_window && owner->clients[i].internal==DESK_INTERNAL_MESSAGE)desk_request_close(owner,(int)i);
+        restart_progress_window=0;
+        owner->v3_links_next=0;if(desk_links_refresh)desk_links_refresh(owner);
+        fprintf(stderr,"[win32] restart desktop-input-restored\n");
+    }else fprintf(stderr,"[win32] end-session desktop-power-decision flags=%u\n",flags);
+}
+static pthread_mutex_t restart_launch_lock=PTHREAD_MUTEX_INITIALIZER;
+static int restart_launch_busy,restart_launch_ready,restart_launch_result;
+static char restart_command[2048];
+static void *restart_launch_worker(void *unused)
+{
+    (void)unused;
+    int report[2]={-1,-1},result=-EIO;
+    if(ciuki_channel_pair(report)<0)result=-errno;
+    else if(fcntl(report[1],F_SETFD,0)<0)result=-errno;
+    else{
+        struct ciuki_spawn_fd map={report[1],4};
+        char *argv[]={"/System/Win32/runonce.exe",restart_command,NULL};
+        char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+        int helper=ciuki_spawn(argv[0],argv,env,&map,1,0);
+        if(helper<0)result=-errno;
+        else{
+            uint64_t deadline=clock_ns()+UINT64_C(300000000000);struct ciuki_message m;
+            for(;;){
+                int n=ciuki_channel_recv(report[0],&m,DONTWAIT);
+                if(n==1){
+                    if(m.sender_pid==(uint32_t)helper && m.length==8 && !m.fd_count){result=(int32_t)desk_get32(m.data);if(result==-EAGAIN)result=-EIO;}
+                    break;
+                }
+                if(n==0 || (n<0 && errno!=EAGAIN && errno!=EINTR))break;
+                if(clock_ns()>=deadline){result=-ETIMEDOUT;restart_kill(NULL,(uint32_t)helper);break;}pause_io();
+            }
+        }
+    }
+    for(unsigned i=0;i<2;i++)if(report[i]>=0)close(report[i]);
+    pthread_mutex_lock(&restart_launch_lock);restart_launch_result=result;restart_launch_ready=1;pthread_mutex_unlock(&restart_launch_lock);return NULL;
+}
+static int restart_launch(void *ctx,const char *command)
+{
+    (void)ctx;pthread_mutex_lock(&restart_launch_lock);
+    if(restart_launch_ready){int result=restart_launch_result;restart_launch_ready=restart_launch_busy=0;pthread_mutex_unlock(&restart_launch_lock);return result;}
+    if(!restart_launch_busy){
+        if(strlen(command)>=sizeof(restart_command)){pthread_mutex_unlock(&restart_launch_lock);return -E2BIG;}
+        strcpy(restart_command,command);restart_launch_busy=1;
+        pthread_t thread;
+        if(pthread_create(&thread,NULL,restart_launch_worker,NULL)){restart_launch_busy=0;pthread_mutex_unlock(&restart_launch_lock);return -EIO;}
+        pthread_detach(thread);
+    }
+    pthread_mutex_unlock(&restart_launch_lock);return -EAGAIN;
+}
+static const struct desk_restart_ops restart_ops={NULL,restart_call,restart_alive,restart_kill,restart_launch,restart_notice,restart_record};
+int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
+{return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
 void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
@@ -228,6 +351,12 @@ void desk_w32_poll(struct desktop *d)
 {
     if(!authorized)return;
     fault_poll(d);
+    if(restart_closing_pending && !d->v3_dialog_kind){
+        desk_shell_message(d,"Restart Windows","Closing Windows programs...",0);
+        for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_MESSAGE)restart_progress_window=d->clients[i].window_id;
+        restart_closing_pending=0;
+    }
+    if(restart.stage || !d->v3_dialog_kind)desk_restart_tick(&restart,&restart_ops,clock_ns()/1000000);
     uint64_t now=clock_ns();
     if(!d->power.state){
         shutdown_pending=shutdown_done=shutdown_error=0;
@@ -263,6 +392,7 @@ void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 {
     (void)d;
     if(desk_w32_service_exited(&supervisor,&supervision,pid,status,clock_ns())){
+        restart.boot_checked=0;
         if(supervisor.stopping){
             shutdown_done=1;
             shutdown_error=WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -EIO;

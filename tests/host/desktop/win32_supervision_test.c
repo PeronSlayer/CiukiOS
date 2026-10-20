@@ -15,6 +15,11 @@
 #include <unistd.h>
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,uint32_t count,uint32_t flags)
 {(void)path;(void)argv;(void)env;(void)maps;(void)count;(void)flags;assert(0);return -1;}
+/* This fixture exercises the real registry transport/supervision, never UI
+ * or process launching. ASan retains the restart callback table as a root. */
+int ciuki_channel_pair(int *fds){(void)fds;assert(0);return -1;}
+void desk_shell_message(struct desktop *d,const char *title,const char *text,int error)
+{(void)d;(void)title;(void)text;(void)error;assert(0);}
 static const char *binary,*directory;
 static int endpoint=-1;
 static unsigned registrations,reconnects,records;

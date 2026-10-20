@@ -1,17 +1,5 @@
-/* f5-20B: DDEML client/server bookkeeping (instances, string handles, data
- * handles, name registration) with the Windows 98 error model. CiukiOS has
- * no inter-process DDE transport: DDE conversations exchange global memory
- * handles between processes, and Win32 global memory is private to each
- * process here, so DdeConnect never finds a partner and reports
- * DMLERR_NO_CONV_ESTABLISHED, the result Windows returns when no server
- * answers WM_DDE_INITIATE. Callers (SHELL32 ShellExecute "ddeexec") then
- * fall back to starting the program, as on Windows when the server is not
- * running.
- * References: Microsoft "DdeInitializeA", "DdeUninitialize",
- * "DdeCreateStringHandleA", "DdeQueryStringA", "DdeFreeStringHandle",
- * "DdeGetLastError", "DdeConnect", "DdeDisconnect", "DdeClientTransaction",
- * "DdeCreateDataHandle", "DdeGetData", "DdeFreeDataHandle",
- * "DdeNameService" and "DDEML error codes".
+/* DDEML bookkeeping and the authenticated PROGMAN service transport.
+ * Synchronous XTYP_EXECUTE/REQUEST; private memory handles stay in USER.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "unicode.h"
 #define DMLERR_NO_ERROR 0u
@@ -46,6 +34,15 @@ static struct {
   uint8_t *data;
 } data_handles[DATA];
 static DWORD serial;
+static struct {DWORD instance,id;uintptr_t handle;} conversations[32];
+static DWORD conv_serial;
+static UINT conv_index(uintptr_t h) {
+  for(UINT i=0;i<32;i++)if(h && conversations[i].handle==h)return i;
+  return 32;
+}
+uintptr_t W32API DdeCreateDataHandle(DWORD,const void *,DWORD,DWORD,uintptr_t,UINT,UINT);
+BOOL W32API DdeDisconnect(uintptr_t);
+
 static UINT instance_of(DWORD id) {
   for (UINT i = 0; id && i < INSTANCES; i++)
     if (instances[i].id == id)
@@ -103,6 +100,7 @@ BOOL W32API DdeUninitialize(DWORD id) {
   UINT i = instance_of(id);
   if (i == INSTANCES)
     return 0;
+  for(UINT k=0;k<32;k++)if(conversations[k].instance==id)DdeDisconnect(conversations[k].handle);
   for (UINT k = 0; k < DATA; k++)
     if (data_handles[k].instance == id) {
       u32_free(data_handles[k].data);
@@ -234,22 +232,73 @@ uintptr_t W32API DdeConnect(DWORD id, uintptr_t service, uintptr_t topic,
     return 0;
   if ((service && !valid_string(service)) || (topic && !valid_string(topic)))
     return fail(i, DMLERR_INVALIDPARAMETER);
-  return fail(i, DMLERR_NO_CONV_ESTABLISHED);
+  const char *app=service?strings[service-0xc000u].text:"PROGMAN";
+  const char *subject=topic?strings[topic-0xc000u].text:"PROGMAN";
+  struct w32r_reply r;
+  if(u32_progman_rpc(W32R_PROGMAN_OPEN,0,app,subject,&r,0,0))
+    return fail(i,DMLERR_NO_CONV_ESTABLISHED);
+  for(UINT k=0;k<32;k++)if(!conversations[k].handle){
+    if(conv_serial==0x0ffffffeu)break;
+    conversations[k].handle=0x50000000u+(++conv_serial);
+    conversations[k].instance=id;conversations[k].id=r.key;
+    return conversations[k].handle;
+  }
+  u32_progman_rpc(W32R_PROGMAN_CLOSE,r.key,"","",&r,0,0);
+  return fail(i,DMLERR_MEMORY_ERROR);
 }
-/* No conversation handle is ever issued, so every one is invalid. */
 BOOL W32API DdeDisconnect(uintptr_t conversation) {
-  (void)conversation;
-  return 0;
+  U32_GUARD;
+  UINT k=conv_index(conversation);if(k==32)return 0;
+  struct w32r_reply r;
+  u32_progman_rpc(W32R_PROGMAN_CLOSE,conversations[k].id,"","",&r,0,0);
+  w32_fill(&conversations[k],0,sizeof(conversations[k]));return 1;
 }
-uintptr_t W32API DdeClientTransaction(void *data, DWORD bytes,
-                                      uintptr_t conversation, uintptr_t item,
-                                      UINT format, UINT type, DWORD timeout,
-                                      DWORD *result) {
-  (void)data, (void)bytes, (void)conversation, (void)item, (void)format,
-      (void)type, (void)timeout;
-  if (result)
-    *result = 0;
-  return 0;
+uintptr_t W32API DdeClientTransaction(void *data,DWORD bytes,uintptr_t conversation,
+                                      uintptr_t item,UINT format,UINT type,DWORD timeout,DWORD *result) {
+  U32_GUARD;
+  if(result)*result=0;
+  UINT k=conv_index(conversation);if(k==32)return 0;
+  UINT i=instance_of(conversations[k].instance);
+  if(i==INSTANCES)return 0;
+  if(instances[i].tid!=u32_tid() || timeout==0xffffffffu || !timeout ||
+     (type!=0x4050u && type!=0x20b0u))return fail(i,DMLERR_INVALIDPARAMETER);
+  struct w32r_reply r;DWORD e;
+  if(type==0x4050u){
+    if(item || !data)return fail(i,DMLERR_INVALIDPARAMETER);
+    uint8_t *p=data;DWORD size=bytes;
+    if(bytes==0xffffffffu){
+      UINT d=(UINT)((uintptr_t)data-0x40000001u);
+      if(d>=DATA || data_handles[d].instance!=instances[i].id)return fail(i,DMLERR_INVALIDPARAMETER);
+      p=data_handles[d].data;size=data_handles[d].size;
+    }
+    if(!size || size>W32R_PATH)return fail(i,DMLERR_INVALIDPARAMETER);
+    char *text=u32_alloc(W32R_PATH);if(!text)return fail(i,DMLERR_MEMORY_ERROR);
+    if(instances[i].unicode){
+      if(size%2 || size<2 || p[size-1] || p[size-2]){u32_free(text);return fail(i,DMLERR_INVALIDPARAMETER);}
+      u32_to_ansi(text,W32R_PATH,(WCHAR *)p,(int)(size/2));
+    }else{
+      if(p[size-1]){u32_free(text);return fail(i,DMLERR_INVALIDPARAMETER);}
+      w32_copy(text,p,size);
+    }
+    char *utf8=u32_alloc(W32R_PATH);if(!utf8){u32_free(text);return fail(i,DMLERR_MEMORY_ERROR);}
+    if(!u32_utf8(utf8,W32R_PATH,text)){u32_free(text);u32_free(utf8);return fail(i,DMLERR_INVALIDPARAMETER);}
+    e=u32_progman_rpc(W32R_PROGMAN_EXECUTE,conversations[k].id,utf8,"",&r,0,0);
+    u32_free(text);u32_free(utf8);
+    if(e)return fail(i,0x400fu);
+    if(result)*result=r.key;
+    if(!(r.key&0x8000u))return fail(i,r.key&0x4000u?0x4001u:0x4009u);
+    return 1;
+  }
+  if(!valid_string(item) || format!=1)return fail(i,DMLERR_INVALIDPARAMETER);
+  char *out=u32_alloc(W32R_DATA);if(!out)return fail(i,DMLERR_MEMORY_ERROR);
+  char name[1021];u32_utf8(name,sizeof(name),strings[item-0xc000u].text);
+  e=u32_progman_rpc(W32R_PROGMAN_REQUEST,conversations[k].id,"",name,&r,out,W32R_DATA);
+  uintptr_t h=0;
+  if(!e && r.data_bytes && !out[r.data_bytes-1]){
+    u32_progman_ansi(out);h=DdeCreateDataHandle(instances[i].id,out,w32_strlen(out)+1,0,item,1,0);
+    if(result)*result=0x8000;
+  }else fail(i,e==2?0x4009u:0x400fu);
+  u32_free(out);return h;
 }
 static UINT data_index(uintptr_t h) {
   UINT k = (UINT)(h - 0x40000001u);
@@ -304,3 +353,10 @@ BOOL W32API DdeFreeDataHandle(uintptr_t h) {
   w32_fill(&data_handles[k], 0, sizeof(data_handles[k]));
   return 1;
 }
+
+void *W32API DdeAccessData(uintptr_t h,DWORD *size) {
+  U32_GUARD;UINT k=data_index(h);if(k==DATA)return 0;
+  if(size)*size=data_handles[k].size;
+  return data_handles[k].data;
+}
+BOOL W32API DdeUnaccessData(uintptr_t h) { U32_GUARD;return data_index(h)!=DATA; }

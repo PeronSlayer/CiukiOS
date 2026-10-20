@@ -53,6 +53,10 @@ static uint32_t exchange(const void *input,uint32_t n,void *output,uint32_t cap,
 uint32_t w32_server_exchange(const void *in,uint32_t n,void *out,uint32_t cap,uint32_t *used) {
     RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
     RtlEnterCriticalSection(lock);
-    uint32_t e=exchange(in,n,out,cap,used);
+    struct {struct w32r_request r;char empty[2];} hello={.r={.version=1,.op=W32R_CLIENT,.path_bytes=1,.name_bytes=1}};
+    struct w32r_reply reply;uint32_t count=0;
+    uint32_t e=exchange(&hello,sizeof(hello.r)+2,&reply,sizeof(reply),&count);
+    if(!e)e=count==sizeof(reply)?reply.error:13;
+    if(!e)e=exchange(in,n,out,cap,used);
     RtlLeaveCriticalSection(lock);return e;
 }

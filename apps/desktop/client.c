@@ -1563,6 +1563,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if (!c->minimized) desk_damage_add(&d->damage,b,d->width,d->height);
         break;
     }
+    case DESK_V3_WIN32_HWND:
+        if(c->v3_win32_hwnd && c->v3_win32_hwnd!=p.flags)error=-EINVAL;
+        else c->v3_win32_hwnd=p.flags;
+        break;
     case DESK_V3_WINDOW_ORDER:
         error=v3_order(d,peer,i,&p); break;
     case DESK_V3_PLACE:
