@@ -290,6 +290,17 @@ int W32API GetFileSecurityW(const WCHAR *file, uint32_t information, void *sd, u
   (void)needed;
   W21("GetFileSecurityW", 0);
 }
+/* f5-20B (amendment 1, item 2): the ANSI form fails like the Unicode one;
+ * Windows 98 keeps no file security on FAT. */
+int W32API GetFileSecurityA(const char *file, uint32_t information, void *sd, uint32_t bytes,
+                            uint32_t *needed) {
+  (void)file;
+  (void)information;
+  (void)sd;
+  (void)bytes;
+  (void)needed;
+  W21("GetFileSecurityA", 0);
+}
 int W32API SetFileSecurityW(const WCHAR *file, uint32_t information, void *sd) {
   (void)file;
   (void)information;

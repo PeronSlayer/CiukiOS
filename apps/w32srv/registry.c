@@ -227,6 +227,14 @@ static void collect_deleted(struct wr_server *s)
         else { *at = k->next; free_values(k->values); free(k->name); free(k); }
     }
 }
+/* The keys the predefined handles name (HKLM, HKU, HKCU, HKCR, HKCC, HKDD). */
+static int predefined(struct wr_server *s, struct wr_key *k)
+{
+    struct wr_key *software = wr_child(s, s->roots[0], "Software");
+    return !k->parent || k == s->roots[2] || k == s->roots[3] ||
+           k == wr_child(s, s->roots[1], ".DEFAULT") ||
+           (software && k == wr_child(s, software, "Classes"));
+}
 static int compat_protected(struct wr_server *s,struct wr_key *k,const char *path,int ancestor)
 {
     if(k->hive)return 0;
@@ -324,7 +332,11 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         if (!*at) r.error = 2;
         else { struct wr_value *v = *at; *at = v->next; s->hive[k->hive].text -= value_cost(v); v->next = NULL; free_values(v); dirty(s, k->hive); }
     } else if (a.op == W32R_DELETE_KEY) {
-        if (!*path || k->hive > 1) { r.error = 5; goto done; }
+        /* f5-20B (directive f5-20 amendment 1, item 3): an empty name
+         * deletes the key of an open handle (NtDeleteKey), which `resolve`
+         * checked for DELETE access. A predefined key (a root constant, or a
+         * handle opened on the key a root names) is never deleted. */
+        if ((!*path && ((a.key & 0x80000000u) || predefined(s, k))) || k->hive > 1) { r.error = 5; goto done; }
         uint32_t d; r.error = walk(s, k, path, 0, &k, &d); if (r.error) goto done;
         for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && descendant(x, k)) {
             s->hive[x->hive].text -= key_path_size(x) + 3;

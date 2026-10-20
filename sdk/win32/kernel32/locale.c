@@ -144,6 +144,11 @@ static int locale_info(DWORD lcid, DWORD type, void *out, int cap, int wide) {
 int W32API GetLocaleInfoA(DWORD lcid, DWORD type, char *out, int cap) {
   return locale_info(lcid, type, out, cap, 0);
 }
+/* f5-20B (amendment 1): the ANSI table widened through code page 1252
+ * (Windows 98 refused the W form; Microsoft Layer for Unicode model). */
+int W32API GetLocaleInfoW(DWORD lcid, DWORD type, WCHAR *out, int cap) {
+  return locale_info(lcid, type, out, cap, 1);
+}
 /* Locale names: "en-US" (any case), "en" with LOCALE_ALLOW_NEUTRAL_NAMES,
  * "" for the invariant locale, NULL or "!x-sys-default-locale" for the
  * default. */
@@ -351,6 +356,11 @@ BOOL W32API GetStringTypeExA(DWORD lcid, DWORD type, const char *s, int n, uint1
 /* The Windows 9x signature: (Locale, InfoType, Source, Count, CharType). */
 BOOL W32API GetStringTypeA(DWORD lcid, DWORD type, const char *s, int n, uint16_t *out) {
   return GetStringTypeExA(lcid, type, s, n, out);
+}
+/* f5-20B (amendment 1): (InfoType, Source, Count, CharType), the tables of
+ * the ANSI form for the user default locale. */
+BOOL W32API GetStringTypeW(DWORD type, const WCHAR *s, int n, uint16_t *out) {
+  return GetStringTypeExW(0x400u, type, s, n, out);
 }
 /* CSTR_LESS_THAN 1, CSTR_EQUAL 2, CSTR_GREATER_THAN 3 over code units. */
 int W32API CompareStringOrdinal(const WCHAR *a, int n, const WCHAR *b, int m, BOOL fold) {

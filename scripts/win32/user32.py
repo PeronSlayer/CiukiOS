@@ -18,6 +18,23 @@ MINUS_ONE_FAILURES = {
     'GetMenuItemCount', 'GetMenuItemID', 'CheckMenuItem', 'EnableMenuItem',
 }
 
+# f5-20B: wsprintfA/W are cdecl (WINAPIV) varargs exports.
+CDECL_EXPORTS = ('wsprintfA', 'wsprintfW')
+UPPER = ROOT/'config/wine-upper.json'
+
+def upper_decisions(dll='user32.dll'):
+    """core-implement/core-w21-stub decisions of the reused Wine DLLs owned by `dll`."""
+    rows = {}
+    for e in json.loads(UPPER.read_text())['decisions']:
+        if e['owner'] == dll and e['action'] in ('core-implement', 'core-w21-stub'):
+            row = rows.setdefault(e['name'], {'name': e['name'], 'action': e['action'], 'rule': e['rule'],
+                                              'importers': set(), 'symbols': set(), 'status': set()})
+            row['importers'].add(e['importer'])
+            row['symbols'].add(e['symbol'])
+            row['status'].add(e.get('f5_20b', 'undecided'))
+    return [dict(r, importers=sorted(r['importers']), symbols=sorted(r['symbols']),
+                 status=sorted(r['status'])[0]) for _, r in sorted(rows.items())]
+
 def failure_return(name):
     if name in MINUS_ONE_FAILURES:
         return '(uintptr_t)-1'
@@ -79,6 +96,9 @@ def build(out, base, flags):
         nm=subprocess.run(['llvm-nm','--defined-only',str(obj)],capture_output=True,text=True,check=True).stdout
         for name,arity in re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M):
             exports[name]=f'_{name}@{arity}'
+        for name in CDECL_EXPORTS:
+            if re.search(r'\bT _'+name+r'\s*$',nm,re.M):
+                exports[name]=name
     names=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('user32.dll',set())
     names |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('user32.dll',set())
     specs=inventory()
@@ -115,9 +135,16 @@ def build(out, base, flags):
         '/incremental:no','/fixed','/base:'+hex(base),'/def:'+str(definition),'/out:'+str(image),
         *objects,str(res),str(lib),str(out/'ntdll.lib')],check=True)
     coverage=[{'name':name,'status':'implemented' if name in exports else 'W21 stub'} for name in sorted(names)]
+    upper=[]
+    for row in upper_decisions():
+        if row['name'] not in exports:
+            raise ValueError('user32 lacks the decided reused-DLL export '+row['name'])
+        upper.append(row)
     (out/'user32-coverage.json').write_text(json.dumps({'schema':1,
         'scope':'provisional research union plus authored fixtures; original acceptance media absent',
-        'exports':coverage,'unicode_stubs':sorted(unicode)},indent=2)+'\n')
+        'exports':coverage,'unicode_stubs':sorted(unicode),
+        'upper_scope':'f5-20B: core-implement and core-w21-stub decisions of config/wine-upper.json owned by user32.dll',
+        'upper':upper},indent=2)+'\n')
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0]
     return {'name':'user32.dll','path':'user32.dll','base':base,'size':struct.unpack_from('<I',raw,pe+80)[0],
         'sha256':hashlib.sha256(raw).hexdigest(),'version':stubs.image_version(raw)}

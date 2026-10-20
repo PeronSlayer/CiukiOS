@@ -2,13 +2,14 @@
  * units from the dialog font, DefDlgProc, IsDialogMessage keyboard rules,
  * modal loop and the dialog item helpers.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "classic.h"
+#include "unicode.h"
 extern HANDLE W32API FindResourceA(HANDLE, const void *, const void *);
 extern HANDLE W32API LoadResource(HANDLE, HANDLE);
 extern DWORD W32API SizeofResource(HANDLE, HANDLE);
 #define TEMPLATE_MAX (1u << 20)
 struct dialog {
   DLGPROC proc;
+  BOOL unicode; /* f5-20B: the dialog procedure takes Unicode messages */
   LRESULT msgresult;
   LONG user;
   HFONT font;
@@ -552,6 +553,11 @@ static HFONT dialog_font(const struct u32_template *t) {
 }
 HWND u32_dialog_create(HINSTANCE instance, const struct u32_template *t,
                        HWND owner, DLGPROC proc, LPARAM param, BOOL modal) {
+  return u32_dialog_create_ex(instance, t, owner, proc, param, modal, 0);
+}
+HWND u32_dialog_create_ex(HINSTANCE instance, const struct u32_template *t,
+                          HWND owner, DLGPROC proc, LPARAM param, BOOL modal,
+                          BOOL wide) {
   u32_controls_register();
   HFONT font = dialog_font(t);
   BOOL owns_font = font && t->has_font;
@@ -616,6 +622,13 @@ HWND u32_dialog_create(HINSTANCE instance, const struct u32_template *t,
   }
   w32_fill(d, 0, sizeof(*d));
   d->proc = proc;
+  d->unicode = !!wide;
+  /* f5-20B: a dialog created by a W function is a Unicode window whose
+   * procedure is DefDlgProcW (IsWindowUnicode, GetWindowLongW). */
+  if (wide && w->proc == u32_dialog_proc) {
+    w->proc = DefDlgProcW;
+    w->unicode = 1;
+  }
   d->font = font;
   d->owns_font = owns_font;
   d->base_x = bx;
@@ -693,8 +706,9 @@ HWND u32_dialog_create(HINSTANCE instance, const struct u32_template *t,
     u32_dialog_focus(h, d->focus);
   return h;
 }
-static HWND create_from(HINSTANCE instance, const void *data, DWORD size,
-                        HWND owner, DLGPROC proc, LPARAM param, BOOL modal) {
+HWND u32_dialog_from(HINSTANCE instance, const void *data, DWORD size,
+                     HWND owner, DLGPROC proc, LPARAM param, BOOL modal,
+                     BOOL wide) {
   struct u32_template *t = u32_alloc(sizeof(*t));
   if (!t)
     return (HWND)(uintptr_t)u32_fail(8);
@@ -704,7 +718,7 @@ static HWND create_from(HINSTANCE instance, const void *data, DWORD size,
   else {
     if (modal)
       t->style |= WS_VISIBLE;
-    h = u32_dialog_create(instance, t, owner, proc, param, modal);
+    h = u32_dialog_create_ex(instance, t, owner, proc, param, modal, wide);
   }
   u32_free(t);
   return h;
@@ -713,13 +727,13 @@ HWND W32API w32_create_dialog(HINSTANCE instance, const void *data,
                               DWORD size, HWND owner, DLGPROC proc,
                               LPARAM param) {
   U32_GUARD;
-  return create_from(instance, data, size, owner, proc, param, 0);
+  return u32_dialog_from(instance, data, size, owner, proc, param, 0, 0);
 }
 HWND W32API CreateDialogIndirectParamA(HINSTANCE instance,
                                        const DLGTEMPLATE *t, HWND owner,
                                        DLGPROC proc, LPARAM param) {
   U32_GUARD;
-  return create_from(instance, t, TEMPLATE_MAX, owner, proc, param, 0);
+  return u32_dialog_from(instance, t, TEMPLATE_MAX, owner, proc, param, 0, 0);
 }
 HWND W32API CreateDialogIndirectA(HINSTANCE i, const DLGTEMPLATE *t, HWND o,
                                   DLGPROC p) {
@@ -732,7 +746,7 @@ HWND W32API CreateDialogParamA(HINSTANCE instance, const char *name,
   const void *data = u32_resource(instance, name, 5, &size);
   if (!data)
     return (HWND)(uintptr_t)u32_fail(1812);
-  return create_from(instance, data, size, owner, proc, param, 0);
+  return u32_dialog_from(instance, data, size, owner, proc, param, 0, 0);
 }
 HWND W32API CreateDialogA(HINSTANCE i, const char *n, HWND o, DLGPROC p) {
   return CreateDialogParamA(i, n, o, p, 0);
@@ -797,10 +811,10 @@ intptr_t u32_dialog_run(HWND h, HWND owner) {
     PostQuitMessage((int)quit_code);
   return result;
 }
-static intptr_t box(HINSTANCE instance, const void *data, DWORD size,
-                    HWND parent, DLGPROC proc, LPARAM param) {
+intptr_t u32_dialog_box(HINSTANCE instance, const void *data, DWORD size,
+                        HWND parent, DLGPROC proc, LPARAM param, BOOL wide) {
   HWND owner = top_owner(parent);
-  HWND h = create_from(instance, data, size, owner, proc, param, 1);
+  HWND h = u32_dialog_from(instance, data, size, owner, proc, param, 1, wide);
   if (!h)
     return -1;
   return u32_dialog_run(h, owner);
@@ -809,7 +823,7 @@ intptr_t W32API DialogBoxIndirectParamA(HINSTANCE instance,
                                         const DLGTEMPLATE *t, HWND parent,
                                         DLGPROC proc, LPARAM param) {
   U32_GUARD;
-  return box(instance, t, TEMPLATE_MAX, parent, proc, param);
+  return u32_dialog_box(instance, t, TEMPLATE_MAX, parent, proc, param, 0);
 }
 intptr_t W32API DialogBoxIndirectA(HINSTANCE i, const DLGTEMPLATE *t, HWND o,
                                    DLGPROC p) {
@@ -824,7 +838,7 @@ intptr_t W32API DialogBoxParamA(HINSTANCE instance, const char *name,
     u32_fail(1812);
     return -1;
   }
-  return box(instance, data, size, parent, proc, param);
+  return u32_dialog_box(instance, data, size, parent, proc, param, 0);
 }
 intptr_t W32API DialogBoxA(HINSTANCE i, const char *n, HWND o, DLGPROC p) {
   return DialogBoxParamA(i, n, o, p, 0);
@@ -942,10 +956,7 @@ LRESULT W32API DefDlgProcA(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     return DefWindowProcA(h, m, wp, lp);
   if (d->proc) {
     d->msgresult = 0;
-    DLGPROC proc = d->proc;
-    UINT saved = u32_suspend();
-    intptr_t r = proc(h, m, wp, lp);
-    u32_resume(saved);
+    intptr_t r = u32_call_proc((WNDPROC)d->proc, d->unicode, 0, h, m, wp, lp);
     d = dialog(h);
     if (r || !d) {
       if (returns_directly(m))
@@ -958,6 +969,32 @@ LRESULT W32API DefDlgProcA(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     return DefWindowProcA(h, m, wp, lp);
   }
   return dialog_default(h, m, wp, lp);
+}
+static LRESULT dialog_default_ansi(void *unused, HWND h, UINT m, WPARAM wp,
+                                   LPARAM lp) {
+  (void)unused;
+  return dialog_default(h, m, wp, lp);
+}
+LRESULT W32API DefDlgProcW(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  U32_GUARD;
+  struct dialog *d = dialog(h);
+  if (!d)
+    return DefWindowProcW(h, m, wp, lp);
+  if (d->proc) {
+    d->msgresult = 0;
+    intptr_t r = u32_call_proc((WNDPROC)d->proc, d->unicode, 1, h, m, wp, lp);
+    d = dialog(h);
+    if (r || !d) {
+      if (returns_directly(m))
+        return r;
+      return d ? d->msgresult : r;
+    }
+  }
+  if (m == WM_NCDESTROY) {
+    u32_dialog_destroyed(h);
+    return DefWindowProcW(h, m, wp, lp);
+  }
+  return u32_convert(0, dialog_default_ansi, 0, h, m, wp, lp);
 }
 LRESULT W32API u32_dialog_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   return DefDlgProcA(h, m, wp, lp);
@@ -974,19 +1011,26 @@ void u32_dialog_destroyed(HWND h) {
   u32_free(d);
 }
 int u32_dialog_long(HWND h, int index, LONG *value, BOOL set) {
+  return u32_dialog_long_ex(h, index, value, set, 0);
+}
+int u32_dialog_long_ex(HWND h, int index, LONG *value, BOOL set, BOOL wide) {
   struct dialog *d = dialog(h);
   if (!d || (index != DWL_MSGRESULT && index != DWL_DLGPROC &&
              index != DWL_USER))
     return 0;
   LONG old = index == DWL_MSGRESULT ? (LONG)d->msgresult
-             : index == DWL_DLGPROC ? (LONG)(intptr_t)d->proc
-                                    : d->user;
+             : index == DWL_DLGPROC
+                 ? (LONG)u32_proc_handle((WNDPROC)d->proc, d->unicode, wide)
+                 : d->user;
   if (set) {
     if (index == DWL_MSGRESULT)
       d->msgresult = *value;
-    else if (index == DWL_DLGPROC)
-      d->proc = (DLGPROC)(intptr_t)*value;
-    else
+    else if (index == DWL_DLGPROC) {
+      BOOL proc_wide;
+      d->proc = (DLGPROC)u32_proc_decode((uintptr_t)(DWORD)*value, wide,
+                                         &proc_wide);
+      d->unicode = proc_wide;
+    } else
       d->user = *value;
   }
   *value = old;

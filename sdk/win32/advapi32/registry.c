@@ -151,7 +151,6 @@ int W32API RevertToSelf(void){return 1;}
 int W32API ImpersonateSelf(uint32_t level){if(level>3){w32r_last_error(87);return 0;}return 1;}
 int W32API AccessCheck(void *sd,uint32_t token,uint32_t desired,void *mapping,void *privileges,uint32_t *length,uint32_t *granted,int *status)
 {(void)sd;(void)token;(void)mapping;(void)privileges;if(!length||!granted||!status){w32r_last_error(87);return 0;}if(*length<8){*length=8;w32r_last_error(122);return 0;}*length=8;if(privileges)w32_fill(privileges,0,8);*granted=desired;*status=1;return 1;}
-int W32API GetFileSecurityA(const char *file,uint32_t information,void *sd,uint32_t cap,uint32_t *needed)
-{(void)information;if(!file||!needed){w32r_last_error(87);return 0;}*needed=20;if(!sd||cap<20){w32r_last_error(122);return 0;}w32_fill(sd,0,20);((uint8_t *)sd)[0]=1;w32_put16((uint8_t *)sd+2,0x8004);return 1;}
-/* GetFileSecurityW is the typed W21 failure of security.c (f5-20A decision
- * w21-nt-security); the census ANSI answer above is unchanged. */
+/* GetFileSecurityA and GetFileSecurityW are the typed W21 failures of
+ * security.c (decision w21-nt-security; directive f5-20 amendment 1, item
+ * 2: no file security on FAT, as on Windows 98). */

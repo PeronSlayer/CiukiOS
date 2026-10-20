@@ -285,6 +285,7 @@ BOOL W32API DeleteDC(HDC h) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  gdi_record_free(d);
   state_refs(&d->s, -1);
   gdi_region_free(&d->s.clip);
   gdi_region_free(&d->visible);
@@ -306,6 +307,7 @@ int W32API SaveDC(HDC h) {
   struct dc *d = gdi_dc(h);
   if (!d || d->level >= 1024)
     return 0;
+  gdi_record(d, 0x001eu, 0, 0);
   struct saved *s = gdi_alloc(sizeof(*s));
   if (!s)
     return 0;
@@ -326,6 +328,10 @@ BOOL W32API RestoreDC(HDC h, int index) {
   struct dc *d = gdi_dc(h);
   if (!d || !index)
     return 0;
+  if (d->record) {
+    int16_t v[1] = {(int16_t)index};
+    gdi_record(d, 0x0127u, v, 1);
+  }
   int target = index < 0 ? d->level + 1 + index : index;
   if (target <= 0 || target > d->level)
     return 0;
@@ -354,6 +360,8 @@ HGDIOBJ W32API SelectObject(HDC h, HGDIOBJ obj) {
     return 0;
   if (o->type == GDI_REGION)
     return (HGDIOBJ)SelectClipRgn(h, obj);
+  if (d->record) /* f5-20B metafile DC */
+    gdi_record_select(h, d, obj);
   HGDIOBJ *p = o->type == GDI_PEN                   ? &d->s.pen
                : o->type == GDI_BRUSH               ? &d->s.brush
                : o->type == GDI_FONT                ? &d->s.font
@@ -385,7 +393,8 @@ HGDIOBJ W32API GetCurrentObject(HDC h, unsigned type) {
 DWORD W32API GetObjectType(HGDIOBJ h) {
   GDI_GUARD;
   struct object *o = gdi_object(h, 0);
-  return o ? o->type : 0;
+  /* f5-20B: a metafile DC reports OBJ_METADC. */
+  return o ? (o->type == GDI_MEMDC && o->u.dc.record ? 4u : o->type) : 0;
 }
 #ifndef W32_HOST_MODEL
 __declspec(dllimport) BOOL W32API UnmapViewOfFile(const void *);
@@ -407,6 +416,8 @@ BOOL W32API DeleteObject(HGDIOBJ h) {
   }
   if (o->type == GDI_REGION)
     gdi_region_free(&o->u.region);
+  if (o->type == GDI_METAFILE || o->type == GDI_ENHMETAFILE)
+    gdi_free(o->u.meta.bits, o->u.meta.size);
   if (o->type == GDI_PALETTE)
     UnrealizeObject(h);
   if (o->type == GDI_FONT && o->u.font.provider.release)
@@ -639,12 +650,16 @@ void gdi_damage(struct dc *d, RECT r) {
   if (r.left < r.right && r.top < r.bottom)
     d->damage(d->opaque, &r);
 }
-#define COLOR_ACCESS(Name, field)                                              \
+#define COLOR_ACCESS(Name, field, meta)                                      \
   COLORREF W32API Set##Name(HDC h, COLORREF c) {                               \
     GDI_GUARD;                                                                 \
     struct dc *d = gdi_dc(h);                                                  \
     if (!d)                                                                    \
       return CLR_INVALID;                                                      \
+    if (meta && d->record) { /* f5-20B metafile DC */                        \
+      int16_t v[2] = {(int16_t)(c & 0xffff), (int16_t)(c >> 16)};              \
+      gdi_record(d, meta, v, 2);                                             \
+    }                                                                          \
     COLORREF old = d->s.field;                                                 \
     d->s.field = c;                                                            \
     return old;                                                                \
@@ -654,16 +669,20 @@ void gdi_damage(struct dc *d, RECT r) {
     struct dc *d = gdi_dc(h);                                                  \
     return d ? d->s.field : CLR_INVALID;                                       \
   }
-COLOR_ACCESS(BkColor, bk)
-COLOR_ACCESS(TextColor, text)
-COLOR_ACCESS(DCBrushColor, dcbrush)
-COLOR_ACCESS(DCPenColor, dcpen)
-#define INT_ACCESS(Name, field, lo, hi)                                        \
+COLOR_ACCESS(BkColor, bk, 0x0201u)
+COLOR_ACCESS(TextColor, text, 0x0209u)
+COLOR_ACCESS(DCBrushColor, dcbrush, 0)
+COLOR_ACCESS(DCPenColor, dcpen, 0)
+#define INT_ACCESS(Name, field, lo, hi, meta)                                \
   int W32API Set##Name(HDC h, int value) {                                     \
     GDI_GUARD;                                                                 \
     struct dc *d = gdi_dc(h);                                                  \
     if (!d || value < lo || value > hi)                                        \
       return 0;                                                                \
+    if (d->record) {                                                           \
+      int16_t v[1] = {(int16_t)value};                                         \
+      gdi_record(d, meta, v, 1);                                             \
+    }                                                                          \
     int old = d->s.field;                                                      \
     d->s.field = value;                                                        \
     return old;                                                                \
@@ -673,10 +692,10 @@ COLOR_ACCESS(DCPenColor, dcpen)
     struct dc *d = gdi_dc(h);                                                  \
     return d ? d->s.field : 0;                                                 \
   }
-INT_ACCESS(BkMode, bk_mode, 1, 2)
-INT_ACCESS(ROP2, rop2, 1, 16)
-INT_ACCESS(StretchBltMode, stretch, 1, 4)
-INT_ACCESS(PolyFillMode, fill, 1, 2)
+INT_ACCESS(BkMode, bk_mode, 1, 2, 0x0102u)
+INT_ACCESS(ROP2, rop2, 1, 16, 0x0104u)
+INT_ACCESS(StretchBltMode, stretch, 1, 4, 0x0107u)
+INT_ACCESS(PolyFillMode, fill, 1, 2, 0x0106u)
 int W32API GetMapMode(HDC h) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
@@ -687,6 +706,10 @@ int W32API SetMapMode(HDC h, int mode) {
   struct dc *d = gdi_dc(h);
   if (!d || mode < 1 || mode > 8)
     return 0;
+  if (d->record) {
+    int16_t v[1] = {(int16_t)mode};
+    gdi_record(d, 0x0103u, v, 1);
+  }
   int old = d->s.map;
   d->s.map = mode;
   if (mode <= MM_TWIPS) {
@@ -721,13 +744,17 @@ static void isotropic(struct dc *d) {
   if (!d->s.viewport_ext.cy)
     d->s.viewport_ext.cy = sy;
 }
-#define POINT_ACCESS(Name, field)                                              \
+#define POINT_ACCESS(Name, field, meta)                                      \
   BOOL W32API Set##Name##Ex(HDC h, int x, int y, POINT *old) {                 \
     GDI_GUARD;                                                                 \
     struct dc *d = gdi_dc(h);                                                  \
     if (!d || x < -GDI_LIMIT || x > GDI_LIMIT || y < -GDI_LIMIT ||             \
         y > GDI_LIMIT)                                                         \
       return 0;                                                                \
+    if (meta && d->record) {                                                 \
+      int16_t v[2] = {(int16_t)y, (int16_t)x};                                 \
+      gdi_record(d, meta, v, 2);                                             \
+    }                                                                          \
     if (old)                                                                   \
       *old = d->s.field;                                                       \
     d->s.field = (POINT){x, y};                                                \
@@ -741,16 +768,20 @@ static void isotropic(struct dc *d) {
     *p = d->s.field;                                                           \
     return 1;                                                                  \
   }
-POINT_ACCESS(ViewportOrg, viewport_org)
-POINT_ACCESS(WindowOrg, window_org)
-POINT_ACCESS(BrushOrg, brush_org)
-#define SIZE_ACCESS(Name, field)                                               \
+POINT_ACCESS(ViewportOrg, viewport_org, 0x020du)
+POINT_ACCESS(WindowOrg, window_org, 0x020bu)
+POINT_ACCESS(BrushOrg, brush_org, 0)
+#define SIZE_ACCESS(Name, field, meta)                                       \
   BOOL W32API Set##Name##Ex(HDC h, int x, int y, SIZE *old) {                  \
     GDI_GUARD;                                                                 \
     struct dc *d = gdi_dc(h);                                                  \
     if (!d || !x || !y || x < -GDI_LIMIT || x > GDI_LIMIT || y < -GDI_LIMIT || \
         y > GDI_LIMIT)                                                         \
       return 0;                                                                \
+    if (d->record) {                                                           \
+      int16_t v[2] = {(int16_t)y, (int16_t)x};                                 \
+      gdi_record(d, meta, v, 2);                                             \
+    }                                                                          \
     if (old)                                                                   \
       *old = d->s.field;                                                       \
     if (d->s.map >= MM_ISOTROPIC) {                                            \
@@ -767,8 +798,8 @@ POINT_ACCESS(BrushOrg, brush_org)
     *p = d->s.field;                                                           \
     return 1;                                                                  \
   }
-SIZE_ACCESS(ViewportExt, viewport_ext)
-SIZE_ACCESS(WindowExt, window_ext)
+SIZE_ACCESS(ViewportExt, viewport_ext, 0x020eu)
+SIZE_ACCESS(WindowExt, window_ext, 0x020cu)
 static int transform_one(struct dc *d, POINT p, int reverse, POINT *out,
                          int buffer) {
   POINT a = reverse ? d->s.viewport_org : d->s.window_org,

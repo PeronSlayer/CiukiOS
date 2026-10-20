@@ -8,6 +8,10 @@ extern DWORD W32API GlobalSize(HANDLE);
 static HANDLE owned[5], returned[5];
 static BOOL opened;
 static DWORD open_tid;
+/* f5-20B: GetClipboardSequenceNumber counts this process's clipboard
+ * changes (EmptyClipboard, SetClipboardData); the clipboard service keeps
+ * no global change counter, so changes by other processes are not seen. */
+static DWORD sequence;
 void u32_clipboard_owned_clear(void) {
   for (UINT i = 0; i < 5; i++)
     if (owned[i]) {
@@ -63,6 +67,7 @@ BOOL W32API EmptyClipboard(void) {
   struct w32r_reply r;
   if (!call(W32R_CLIP_EMPTY, 0, 0, 0, 0, 0, &r, 0, 0))
     return 0;
+  sequence++;
   if (r.disposition)
     SendMessageA((HWND)(uintptr_t)r.disposition, WM_DESTROYCLIPBOARD, 0, 0);
   u32_clipboard_owned_clear();
@@ -176,6 +181,7 @@ HANDLE W32API SetClipboardData(UINT f, HANDLE block) {
     GlobalUnlock(block);
   if (!ok)
     return 0;
+  sequence++;
   owned[slot(original_format)] = block;
   if (r.type)
     SendMessageA((HWND)(uintptr_t)r.type, WM_DRAWCLIPBOARD, 0, 0);
@@ -287,4 +293,31 @@ void u32_clipboard_cleanup(DWORD tid) {
     }
   }
   if (!tid) u32_clipboard_owned_clear();
+}
+/* f5-20B: the formats the clipboard holds, in ascending order, with the
+ * ones GetClipboardData synthesises (text forms from each other, CF_BITMAP
+ * from CF_DIB). The clipboard must be open on this thread. */
+UINT W32API EnumClipboardFormats(UINT format) {
+  U32_GUARD;
+  static const UINT order[] = {CF_TEXT, CF_BITMAP, CF_OEMTEXT, CF_DIB,
+                               CF_UNICODETEXT};
+  if (!opened || open_tid != u32_tid())
+    return u32_fail(1418);
+  UINT i = 0;
+  if (format)
+    for (; i < 5 && order[i] != format; i++) {
+    }
+  if (format && i == 5) {
+    SetLastError(0);
+    return 0;
+  }
+  for (i = format ? i + 1 : 0; i < 5; i++)
+    if (IsClipboardFormatAvailable(order[i]))
+      return order[i];
+  SetLastError(0);
+  return 0;
+}
+DWORD W32API GetClipboardSequenceNumber(void) {
+  U32_GUARD;
+  return sequence;
 }

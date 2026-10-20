@@ -112,7 +112,7 @@ int32_t w32_ciuki_call(void *record, uint32_t n) {
 }
 /* w32srv registry model: UTF-8 paths under HKLM, ids from 1. */
 static char keys[16][128];
-static DWORD key_root[16], last_access, closes;
+static DWORD key_root[16], last_access, closes, deletes;
 static uint32_t lookup_key(DWORD id, char *out) {
   if (id == W32R_HKLM) {
     out[0] = 0;
@@ -150,7 +150,10 @@ uint32_t w32_server_exchange(const void *in, uint32_t n, void *out, uint32_t cap
     else
       keys[r.key - 1][0] = 0;
   } else if (r.op == W32R_DELETE_KEY) {
-    reply.error = !*path ? 5 : 0;
+    /* f5-20B: as w32srv, an empty name deletes an open handle's key;
+     * a predefined root is refused. */
+    reply.error = !*path && (r.key & 0x80000000u) ? 5 : 0;
+    deletes++;
   } else {
     CHECK(r.op == W32R_OPEN || r.op == W32R_CREATE);
     last_access = r.access;
@@ -266,7 +269,9 @@ static void registry(void) {
   struct object_attributes top = {sizeof(top), 0, &machine, 0, 0, 0};
   void *hklm = 0;
   CHECK(!NtOpenKey(&hklm, 1, &top) && hklm == (void *)(uintptr_t)W32R_HKLM);
-  CHECK(NtDeleteKey(key) == (NTSTATUS)0xc0000022);
+  DWORD deleted = deletes;
+  CHECK(NtDeleteKey(key) == 0 && deletes == deleted + 1);
+  CHECK(NtDeleteKey(hklm) == (NTSTATUS)0xc0000022);
   CHECK(NtDeleteKey(0) == (NTSTATUS)0xc0000008);
   DWORD before = closes;
   CHECK(!NtClose(key) && closes == before + 1);

@@ -142,6 +142,25 @@ class KernelLoaderTests(unittest.TestCase):
                          {'LZClose','LZCopy','LZOpenFileW','LZRead','LZSeek'})
         facades=json.loads((self.images/'System/Win32/facades-upper-coverage.json').read_text())
         self.assertEqual({k:len(v) for k,v in facades.items()},{'advapi32.dll':47,'version.dll':3})
+        # f5-20B: every user32/gdi32 decision and the amendment's kernel32
+        # Unicode functions (with their new ANSI cores) resolve too.
+        names=sorted({(d['owner'],d['name']) for d in decisions
+                      if d['owner'] in ('user32.dll','gdi32.dll') and d['action'] in ('core-implement','core-w21-stub')})
+        self.assertEqual(len(names),108+55)
+        names+=[('kernel32.dll',n) for n in ('CreateFileW','LoadLibraryW','LoadLibraryExW','GetModuleHandleW',
+            'GetModuleFileNameW','CreateEventW','CreateMutexW','GetVersionExW','GetEnvironmentVariableW',
+            'GetCommandLineW','CreateProcessW','CompareStringW','CompareStringA','GetLocaleInfoW',
+            'GetStringTypeW','LCMapStringW','LCMapStringA')]
+        (self.images/'System/Win32/upper-names.txt').write_text(''.join(f'{o} {n}\n' for o,n in names))
+        out=self.command('upper-names',self.images/'builtin-import.exe')
+        self.assertIn(f'PASS kernel f5-20B upper user32 gdi32 kernel32 exports={len(names)}',out)
+        for name in ('user32','gdi32'):
+            rows=json.loads((self.images/f'System/Win32/{name}-coverage.json').read_text())['upper']
+            self.assertEqual({r['name'] for r in rows},{n for o,n in names if o==name+'.dll'})
+            self.assertTrue(all(r['status']!='undecided' for r in rows))
+        kernel={row['name']:row for row in coverage['exports']}
+        self.assertFalse({'CompareStringW','GetLocaleInfoW','GetStringTypeW','LCMapStringW'}&
+                         {n for n,r in kernel.items() if r['status']!='implemented'})
 
     def test_builtin_image_payload_rules_without_image_build(self):
         import importlib.util

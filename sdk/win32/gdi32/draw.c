@@ -215,6 +215,12 @@ COLORREF W32API GetPixel(HDC h, int x, int y) {
 COLORREF W32API SetPixel(HDC h, int x, int y, COLORREF c) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
+  if (d && d->record) { /* f5-20B metafile DC */
+    int16_t v[4] = {(int16_t)(c & 0xffff), (int16_t)(c >> 16), (int16_t)y,
+                    (int16_t)x};
+    gdi_record(d, 0x041fu, v, 4);
+    return c;
+  }
   POINT p = {x, y};
   if (!d || !gdi_transform(d, &p, 1, 0) || !gdi_visible(d, p.x, p.y))
     return CLR_INVALID;
@@ -230,6 +236,10 @@ BOOL W32API MoveToEx(HDC h, int x, int y, POINT *old) {
   struct dc *d = gdi_dc(h);
   if (!d || x < -GDI_LIMIT || x > GDI_LIMIT || y < -GDI_LIMIT || y > GDI_LIMIT)
     return 0;
+  if (d->record) {
+    int16_t v[2] = {(int16_t)y, (int16_t)x};
+    gdi_record(d, 0x0214u, v, 2);
+  }
   if (old)
     *old = d->s.current;
   d->s.current = (POINT){x, y};
@@ -343,6 +353,11 @@ BOOL W32API LineTo(HDC h, int x, int y) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->record) { /* f5-20B metafile DC */
+    int16_t v[2] = {(int16_t)y, (int16_t)x};
+    d->s.current = (POINT){x, y};
+    return gdi_record(d, 0x0213u, v, 2);
+  }
   POINT p[2] = {d->s.current, {x, y}};
   if (!gdi_transform(d, p, 2, 0) || !stroke(d, p, 2, 0))
     return 0;
@@ -354,6 +369,8 @@ BOOL W32API Polyline(HDC h, const POINT *p, int count) {
   struct dc *d = gdi_dc(h);
   if (!d || !p || count < 2 || count > 8192)
     return 0;
+  if (d->record)
+    return gdi_record_poly(d, 0x0325u, p, 0, (unsigned)count);
   POINT *copy = gdi_alloc((DWORD)count * sizeof(POINT));
   if (!copy)
     return 0;
@@ -399,6 +416,10 @@ BOOL W32API PolyPolygon(HDC h, const POINT *p, const int *counts,
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->record && p && counts && polygons > 0) /* f5-20B metafile DC */
+    return polygons == 1
+               ? gdi_record_poly(d, 0x0324u, p, 0, (unsigned)counts[0])
+               : gdi_record_poly(d, 0x0538u, p, counts, (unsigned)polygons);
   HRGN region = CreatePolyPolygonRgn(p, counts, polygons, d->s.fill);
   if (!region)
     return 0;
@@ -427,6 +448,10 @@ BOOL W32API Rectangle(HDC h, int l, int t, int r, int b) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->record) {
+    int16_t v[4] = {(int16_t)b, (int16_t)r, (int16_t)t, (int16_t)l};
+    return gdi_record(d, 0x041bu, v, 4);
+  }
   RECT q = gdi_rect(d, (RECT){l, t, r, b});
   if (q.left >= q.right || q.top >= q.bottom)
     return 1;
@@ -532,6 +557,10 @@ BOOL W32API Ellipse(HDC h, int l, int t, int r, int b) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->record) {
+    int16_t v[4] = {(int16_t)b, (int16_t)r, (int16_t)t, (int16_t)l};
+    return gdi_record(d, 0x0418u, v, 4);
+  }
   RECT q = gdi_rect(d, (RECT){l, t, r, b});
   return shape(h, l, t, r, b, q.right - q.left, q.bottom - q.top);
 }
@@ -540,6 +569,12 @@ BOOL W32API RoundRect(HDC h, int l, int t, int r, int b, int w, int height) {
   if (w < -GDI_LIMIT || w > GDI_LIMIT || height < -GDI_LIMIT ||
       height > GDI_LIMIT)
     return 0;
+  struct dc *d = gdi_dc(h);
+  if (d && d->record) {
+    int16_t v[6] = {(int16_t)height, (int16_t)w, (int16_t)b,
+                    (int16_t)r,      (int16_t)t, (int16_t)l};
+    return gdi_record(d, 0x061cu, v, 6);
+  }
   return shape(h, l, t, r, b, w < 0 ? -w : w, height < 0 ? -height : height);
 }
 static int angle_half(int64_t x, int64_t y) {
@@ -678,6 +713,19 @@ BOOL W32API w32_gdi_draw_icon(HDC h, int x, int y, int w, int height,
       (int64_t)x + w > GDI_LIMIT || (int64_t)y + height < -GDI_LIMIT ||
       (int64_t)y + height > GDI_LIMIT)
     return 0;
+  if (d->record) { /* f5-20B: AND mask, then the colour image (SRCINVERT) */
+    if (m)
+      gdi_record_bitmap(d, x, y, w, height, &m->u.bitmap.dib, 0, 0,
+                        (int)m->u.bitmap.dib.width,
+                        (int)(c ? m->u.bitmap.dib.height
+                                : m->u.bitmap.dib.height / 2),
+                        0x008800c6u);
+    if (c)
+      gdi_record_bitmap(d, x, y, w, height, &c->u.bitmap.dib, 0, 0,
+                        (int)c->u.bitmap.dib.width,
+                        (int)c->u.bitmap.dib.height, 0x00660046u);
+    return 1;
+  }
   struct w32_dib *src = c ? &c->u.bitmap.dib : &m->u.bitmap.dib,
                  *dst = gdi_target(d);
   RECT r = gdi_rect(d, (RECT){x, y, x + w, y + height});

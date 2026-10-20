@@ -21,6 +21,9 @@ struct u32_class {
   char name[256];
   uint8_t *extra;
   UINT refs;
+  BOOL unicode;   /* f5-20B: class procedure registered with RegisterClass(Ex)W */
+  WCHAR *wmenu;   /* f5-20B: lpszMenuName as given to RegisterClass(Ex)W */
+  char *amenu;    /* f5-20B: its code-page copy, owned by the class */
 };
 struct u32_prop {
   struct u32_prop *next;
@@ -52,6 +55,8 @@ struct u32_window {
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;
   HANDLE menu, system_menu;
+  BOOL unicode; /* f5-20B: the window procedure takes Unicode messages */
+  HANDLE rgn;   /* f5-20B: SetWindowRgn region, owned by USER (window coordinates) */
   struct u32_scroll_state {
     int minimum, maximum, position, track;
     UINT page, disabled;
@@ -88,6 +93,7 @@ struct u32_timer {
   uintptr_t id;
   DWORD period, due;
   TIMERPROC proc;
+  BOOL system; /* f5-20B: SetSystemTimer, delivered as WM_SYSTIMER */
 };
 struct u32_dc {
   HDC dc;
@@ -204,6 +210,31 @@ void u32_caret_paint(HWND, HDC);
 UINT u32_hit_test(HWND, POINT);
 void u32_invalidate_children(struct u32_window *, RECT, BOOL);
 HANDLE W32API LoadMenuA(HINSTANCE, const char *);
+/* f5-20B Unicode layer (unicode.c), Microsoft Layer for Unicode model: the
+ * ANSI core stays authoritative and Unicode callers are converted through
+ * the active code page (1252). u32_convert translates one message between
+ * its ANSI and Unicode forms around `call`; to_wide means the message is in
+ * ANSI form and `call` expects Unicode. */
+typedef LRESULT (*u32_caller)(void *, HWND, UINT, WPARAM, LPARAM);
+LRESULT u32_convert(BOOL to_wide, u32_caller call, void *context, HWND h,
+                    UINT m, WPARAM wp, LPARAM lp);
+LRESULT u32_call_proc(WNDPROC proc, BOOL proc_wide, BOOL msg_wide, HWND h,
+                      UINT m, WPARAM wp, LPARAM lp);
+LRESULT u32_invoke_w(HWND, UINT, WPARAM, LPARAM);
+uintptr_t u32_proc_handle(WNDPROC proc, BOOL proc_wide, BOOL caller_wide);
+WNDPROC u32_proc_decode(uintptr_t value, BOOL caller_wide, BOOL *wide);
+UINT u32_wlen(const WCHAR *);
+char *u32_narrow(const WCHAR *);         /* NULL and atoms pass through */
+WCHAR *u32_widen(const char *);          /* NULL and atoms pass through */
+void u32_text_free(const void *);        /* frees u32_narrow/u32_widen results */
+UINT u32_to_ansi(char *out, UINT cap, const WCHAR *in, int n);
+UINT u32_to_wide(WCHAR *out, UINT cap, const char *in, int n);
+#define U32_ATOM(p) ((uintptr_t)(p) < 0x10000u)
+/* f5-20B: GetDesktopWindow. The desktop is drawn by the native desktop, so
+ * this handle names the screen: its rectangle is the screen, its DC is a
+ * measurement DC and windows created with it as parent are top-level. */
+#define U32_DESKTOP ((HWND)(uintptr_t)0x00010010u)
+void u32_window_region_free(struct u32_window *);
 BOOL W32API IsMenu(HANDLE);
 UINT u32_utf8(char *, UINT, const char *);
 #endif

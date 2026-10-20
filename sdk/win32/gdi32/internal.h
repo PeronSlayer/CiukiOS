@@ -13,7 +13,9 @@ enum {
   GDI_FONT = 6,
   GDI_BITMAP = 7,
   GDI_REGION = 8,
-  GDI_MEMDC = 10
+  GDI_METAFILE = 9, /* f5-20B: OBJ_METAFILE */
+  GDI_MEMDC = 10,
+  GDI_ENHMETAFILE = 13 /* f5-20B: OBJ_ENHMETAFILE */
 };
 struct region {
   RECT *rects;
@@ -68,6 +70,7 @@ struct dc {
   POINT origin, screen_origin;
   void (*damage)(void *, const RECT *);
   void *opaque;
+  struct gdi_recorder *record; /* f5-20B: a metafile DC records its calls */
 };
 struct object {
   unsigned type, refs, stock;
@@ -79,6 +82,10 @@ struct object {
     struct palette palette;
     struct region region;
     struct dc dc;
+    struct { /* f5-20B: Windows (16-bit) and enhanced metafile bits */
+      uint8_t *bits;
+      DWORD size;
+    } meta;
   } u;
 };
 void *gdi_alloc(DWORD);
@@ -125,4 +132,27 @@ int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
 void gdi_font_stock(unsigned, struct font *);
 void gdi_font_exit(void);
 int gdi_font_validate(const void *, DWORD);
+/* f5-20B. */
+#ifndef W32_HOST_MODEL
+__declspec(dllimport) void W32API SetLastError(DWORD);
+#else
+void W32API SetLastError(DWORD);
+#endif
+DWORD gdi_cp1252_unicode(unsigned);
+int gdi_cp1252_ansi(DWORD);
+/* Metafile recording (metafile.c): each hook returns nonzero when the DC
+ * is a metafile DC and the call was recorded (its result in *result). */
+struct gdi_recorder;
+int gdi_record(struct dc *, unsigned function, const int16_t *params,
+               unsigned count);
+int gdi_record_select(HDC, struct dc *, HGDIOBJ);
+int gdi_record_text(struct dc *, int, int, unsigned, const RECT *,
+                    const void *, unsigned, const int *, int);
+int gdi_record_poly(struct dc *, unsigned function, const POINT *,
+                    const int *, unsigned);
+int gdi_record_dib(struct dc *, int, int, int, int, int, int, int, int,
+                   const void *, const BITMAPINFO *, unsigned, DWORD);
+int gdi_record_bitmap(struct dc *, int, int, int, int, const struct w32_dib *,
+                      int, int, int, int, DWORD);
+void gdi_record_free(struct dc *);
 #endif

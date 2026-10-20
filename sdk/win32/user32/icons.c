@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "ciuki-icon32.h"
-#include "internal.h"
+#include "unicode.h"
 struct icon {
   DWORD id, resource;
   BOOL cursor, shared;
@@ -22,6 +22,8 @@ void u32_icons_cleanup(void) {
 extern HANDLE W32API FindResourceA(HANDLE, const void *, const void *);
 extern HANDLE W32API LoadResource(HANDLE, HANDLE);
 extern DWORD W32API SizeofResource(HANDLE, HANDLE);
+extern HANDLE W32API GetModuleHandleA(const char *);
+extern void *W32API GetProcAddress(HANDLE, const char *);
 static struct icon *find(HANDLE h) {
   for (UINT i = 0; i < 64; i++)
     if (icons[i].id == U32_PTR(h))
@@ -197,6 +199,73 @@ BOOL W32API DestroyIcon(HICON h) {
     w32_fill(i, 0, sizeof(*i));
   return 1;
 }
+/* f5-20B: one RT_ICON/RT_CURSOR image (BITMAPINFOHEADER, XOR image, AND
+ * mask; cursors start with the hotspot) of any square size up to 256
+ * pixels and 1/4/8/24/32 bits, resampled to USER's 32x32 icon by nearest
+ * neighbour. PNG images (Windows Vista) are refused as on Windows 98. */
+static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
+  UINT hotx = 0, hoty = 0;
+  if (!b)
+    return (struct icon *)(uintptr_t)u32_fail(87);
+  if (cursor) {
+    if (n < 4)
+      return (struct icon *)(uintptr_t)u32_fail(13);
+    hotx = w32_u16(b);
+    hoty = w32_u16(b + 2);
+    b += 4;
+    n -= 4;
+  }
+  if (n < 40 || w32_u32(b) != 40 || w32_u16(b + 12) != 1 || w32_u32(b + 16))
+    return (struct icon *)(uintptr_t)u32_fail(13);
+  LONG width = (LONG)w32_u32(b + 4), height2 = (LONG)w32_u32(b + 8);
+  UINT depth = w32_u16(b + 14);
+  if (width <= 0 || width > 256 || height2 != 2 * width ||
+      (depth != 1 && depth != 4 && depth != 8 && depth != 24 && depth != 32))
+    return (struct icon *)(uintptr_t)u32_fail(13);
+  UINT size = (UINT)width;
+  UINT colors =
+      depth <= 8 ? (w32_u32(b + 32) ? w32_u32(b + 32) : 1u << depth) : 0;
+  if (colors > 256)
+    return (struct icon *)(uintptr_t)u32_fail(13);
+  UINT pitch = ((size * depth + 31) / 32) * 4, offset = 40 + colors * 4,
+       mask_pitch = ((size + 31) / 32) * 4;
+  if ((uint64_t)offset + (uint64_t)pitch * size + (uint64_t)mask_pitch * size >
+      n)
+    return (struct icon *)(uintptr_t)u32_fail(13);
+  struct icon *i = allocate(cursor);
+  if (!i)
+    return 0;
+  i->hotx = size == 32 ? hotx : hotx * 32 / size;
+  i->hoty = size == 32 ? hoty : hoty * 32 / size;
+  for (UINT y = 0; y < 32; y++)
+    for (UINT x = 0; x < 32; x++) {
+      UINT sx = x * size / 32, sy = y * size / 32;
+      const uint8_t *row = b + offset + (size - 1 - sy) * pitch;
+      UINT p = y * 32 + x;
+      DWORD c = 0;
+      if (depth == 32)
+        c = w32_u32(row + sx * 4);
+      else if (depth == 24)
+        c = row[sx * 3] | (DWORD)row[sx * 3 + 1] << 8 |
+            (DWORD)row[sx * 3 + 2] << 16;
+      else {
+        UINT idx = depth == 8   ? row[sx]
+                   : depth == 4 ? (row[sx / 2] >> (sx & 1 ? 0 : 4)) & 15
+                                : (row[sx / 8] >> (7 - (sx & 7))) & 1;
+        if (idx >= colors) {
+          i->id = 0;
+          return (struct icon *)(uintptr_t)u32_fail(13);
+        }
+        c = w32_u32(b + 40 + idx * 4);
+      }
+      BOOL mask = !!(b[offset + pitch * size + (size - 1 - sy) * mask_pitch +
+                       sx / 8] &
+                     (128 >> (sx & 7)));
+      i->mask[p] = mask;
+      i->pixels[p] = mask ? 0 : (c & 0xffffff) | 0xff000000;
+    }
+  return i;
+}
 static HANDLE load(HINSTANCE instance, const char *name, BOOL cursor) {
   if (!instance) {
     if (cursor) {
@@ -272,62 +341,9 @@ static HANDLE load(HINSTANCE instance, const char *name, BOOL cursor) {
     return 0;
   const uint8_t *b = LoadResource(instance, resource);
   DWORD n = SizeofResource(instance, resource);
-  UINT hotx = 0, hoty = 0;
-  if (cursor) {
-    if (n < 4)
-      return 0;
-    hotx = w32_u16(b);
-    hoty = w32_u16(b + 2);
-    b += 4;
-    n -= 4;
-  }
-  if (n < 40 || w32_u32(b) != 40 || w32_u32(b + 4) != 32 ||
-      w32_u32(b + 8) != 64 || w32_u16(b + 12) != 1 || w32_u32(b + 16)) {
-    u32_fail(120);
-    return 0;
-  }
-  UINT depth = w32_u16(b + 14);
-  if (depth != 1 && depth != 4 && depth != 8 && depth != 24 && depth != 32) {
-    u32_fail(120);
-    return 0;
-  }
-  UINT colors =
-      depth <= 8 ? (w32_u32(b + 32) ? w32_u32(b + 32) : 1u << depth) : 0;
-  if (colors > 256)
-    return 0;
-  UINT pitch = ((32 * depth + 31) / 32) * 4, offset = 40 + colors * 4;
-  if ((uint64_t)offset + pitch * 32 + 128 > n)
-    return (HANDLE)(uintptr_t)u32_fail(13);
-  struct icon *i = allocate(cursor);
+  struct icon *i = from_bits(b, n, cursor);
   if (!i)
     return 0;
-  i->hotx = hotx;
-  i->hoty = hoty;
-  for (UINT y = 0; y < 32; y++)
-    for (UINT x = 0; x < 32; x++) {
-      const uint8_t *row = b + offset + (31 - y) * pitch;
-      UINT p = y * 32 + x;
-      DWORD c = 0;
-      if (depth == 32)
-        c = w32_u32(row + x * 4);
-      else if (depth == 24)
-        c = row[x * 3] | (DWORD)row[x * 3 + 1] << 8 |
-            (DWORD)row[x * 3 + 2] << 16;
-      else {
-        UINT idx = depth == 8   ? row[x]
-                   : depth == 4 ? (row[x / 2] >> (x & 1 ? 0 : 4)) & 15
-                                : (row[x / 8] >> (7 - (x & 7))) & 1;
-        if (idx >= colors) {
-          i->id = 0;
-          return (HANDLE)(uintptr_t)u32_fail(13);
-        }
-        c = w32_u32(b + 40 + idx * 4);
-      }
-      BOOL mask =
-          !!(b[offset + pitch * 32 + (31 - y) * 4 + x / 8] & (128 >> (x & 7)));
-      i->mask[p] = mask;
-      i->pixels[p] = mask ? 0 : c | 0xff000000;
-    }
   i->shared = 1;
   return (HANDLE)(uintptr_t)i->id;
 }
@@ -402,4 +418,319 @@ BOOL W32API DrawIconEx(HDC dc, int x, int y, HICON handle, int w, int h,
 BOOL W32API DrawIcon(HDC dc, int x, int y, HICON h) {
   U32_GUARD;
   return DrawIconEx(dc, x, y, h, 32, 32, 0, 0, 3);
+}
+
+/* ---- f5-20B: icon copies, ICONINFO, resource images, extraction ------- */
+HICON u32_icon_copy(HICON h) {
+  struct icon *src = find(h);
+  if (!src)
+    return (HICON)(uintptr_t)u32_fail(1402);
+  struct icon copy = *src;
+  struct icon *i = allocate(copy.cursor);
+  if (!i)
+    return 0;
+  DWORD id = i->id;
+  *i = copy;
+  i->id = id;
+  i->shared = 0;
+  return (HICON)(uintptr_t)i->id;
+}
+HICON W32API CopyIcon(HICON h) {
+  U32_GUARD;
+  return u32_icon_copy(h);
+}
+BOOL u32_is_icon(HANDLE h, BOOL *cursor) {
+  struct icon *i = find(h);
+  if (i && cursor)
+    *cursor = i->cursor;
+  return i != 0;
+}
+/* GetIconInfo: new bitmaps the caller deletes, a 1-bpp AND mask and a
+ * 32-bpp colour image (black where the mask is set); the icon hotspot is
+ * its centre. */
+BOOL u32_icon_info(HICON h, ICONINFO *out) {
+  struct icon *i = find(h);
+  const struct u32_graphics *g = u32_graphics();
+  if (!i)
+    return u32_fail(1402);
+  if (!out)
+    return u32_fail(87);
+  if (!g || !g->create_bitmap)
+    return u32_fail(120);
+  uint8_t mask[32 * 4];
+  w32_fill(mask, 0, sizeof(mask));
+  for (UINT p = 0; p < 1024; p++)
+    if (i->mask[p])
+      mask[(p / 32) * 4 + (p % 32) / 8] |= (uint8_t)(128 >> (p & 7));
+  DWORD m = g->create_bitmap(32, 32, 1, 1, mask);
+  DWORD c = m ? g->create_bitmap(32, 32, 1, 32, i->pixels) : 0;
+  if (!c) {
+    if (m)
+      g->delete_object(m);
+    return u32_fail(8);
+  }
+  out->fIcon = !i->cursor;
+  out->xHotspot = i->cursor ? i->hotx : 16;
+  out->yHotspot = i->cursor ? i->hoty : 16;
+  out->hbmMask = (HANDLE)(uintptr_t)m;
+  out->hbmColor = (HANDLE)(uintptr_t)c;
+  return 1;
+}
+BOOL W32API GetIconInfo(HICON h, ICONINFO *out) {
+  U32_GUARD;
+  return u32_icon_info(h, out);
+}
+HICON u32_icon_from_resource(const uint8_t *bits, DWORD size, BOOL icon,
+                             BOOL shared) {
+  struct icon *i = from_bits(bits, size, !icon);
+  if (!i)
+    return 0;
+  i->shared = shared;
+  return (HICON)(uintptr_t)i->id;
+}
+/* Version 0x00030000 (Win32) images; LR_SHARED (0x8000) makes the handle
+ * survive DestroyIcon. Requested sizes are met by resampling to the 32x32
+ * USER icon. */
+HICON W32API CreateIconFromResourceEx(const uint8_t *bits, DWORD size,
+                                      BOOL icon, DWORD version, int cx, int cy,
+                                      UINT flags) {
+  U32_GUARD;
+  (void)cx, (void)cy;
+  if (version != 0x00030000u && version != 0x00020000u)
+    return (HICON)(uintptr_t)u32_fail(87);
+  return u32_icon_from_resource(bits, size, icon, !!(flags & 0x8000u));
+}
+HICON W32API CreateIconFromResource(const uint8_t *bits, DWORD size, BOOL icon,
+                                    DWORD version) {
+  return CreateIconFromResourceEx(bits, size, icon, version, 0, 0, 0);
+}
+/* CopyImage: bitmaps are copied through two memory DCs (stretched to cx/cy
+ * when given); icons and cursors are duplicated (USER icons are 32x32).
+ * LR_COPYDELETEORG (8) deletes the original. */
+HANDLE W32API CopyImage(HANDLE h, UINT type, int cx, int cy, UINT flags) {
+  U32_GUARD;
+  const struct u32_graphics *g = u32_graphics();
+  if (type == 1 || type == 2) {
+    HICON copy = u32_icon_copy(h);
+    if (copy && (flags & 8)) {
+      struct icon *i = find(h);
+      if (i && !i->shared)
+        w32_fill(i, 0, sizeof(*i));
+    }
+    return copy;
+  }
+  if (type != 0)
+    return (HANDLE)(uintptr_t)u32_fail(87);
+  struct {
+    LONG type, width, height, pitch;
+    uint16_t planes, bpp;
+    void *bits;
+  } bm;
+  if (!g || !g->object || !g->memory_dc || !g->create_bitmap || !g->bitblt ||
+      g->object(U32_PTR(h), sizeof(bm), &bm) <= 0)
+    return (HANDLE)(uintptr_t)u32_fail(6);
+  int w = cx > 0 ? cx : bm.width, height = cy > 0 ? cy : bm.height;
+  DWORD from = g->memory_dc(0), to = g->memory_dc(0);
+  DWORD copy = from && to ? g->create_bitmap(w, height, 1, bm.bpp, 0) : 0;
+  BOOL ok = 0;
+  if (copy) {
+    DWORD old_from = g->select(from, U32_PTR(h)), old_to = g->select(to, copy);
+    BOOL(W32API * stretch)(DWORD, int, int, int, int, DWORD, int, int, int,
+                            int, DWORD) =
+        (BOOL(W32API *)(DWORD, int, int, int, int, DWORD, int, int, int, int,
+                        DWORD))GetProcAddress(GetModuleHandleA("gdi32.dll"),
+                                              "StretchBlt");
+    ok = w == bm.width && height == bm.height
+             ? g->bitblt(to, 0, 0, w, height, from, 0, 0, 0xcc0020u)
+             : stretch && stretch(to, 0, 0, w, height, from, 0, 0, bm.width,
+                                  bm.height, 0xcc0020u);
+    g->select(from, old_from);
+    g->select(to, old_to);
+  }
+  if (from)
+    g->delete_dc(from);
+  if (to)
+    g->delete_dc(to);
+  if (!ok) {
+    if (copy)
+      g->delete_object(copy);
+    return (HANDLE)(uintptr_t)u32_fail(8);
+  }
+  if (flags & 8)
+    g->delete_object(U32_PTR(h));
+  return (HANDLE)(uintptr_t)copy;
+}
+
+/* PrivateExtractIcons: icon groups of a PE image (loaded as a data file)
+ * or the image of a .ICO file. index >= 0 counts groups in resource order;
+ * a negative index names the group's resource identifier. */
+struct extract {
+  UINT wanted, seen, count;
+  int index;
+  HICON *icons;
+  UINT *ids;
+  HANDLE module;
+};
+static HICON group_icon(HANDLE module, const void *name) {
+  HANDLE group = FindResourceA(module, name, (void *)(uintptr_t)14);
+  const uint8_t *g = group ? LoadResource(module, group) : 0;
+  DWORD gn = group ? SizeofResource(module, group) : 0;
+  if (!g || gn < 6 || w32_u16(g + 2) != 1 || !w32_u16(g + 4) ||
+      gn < 6u + 14u * w32_u16(g + 4))
+    return 0;
+  UINT best = 0, best_score = 0xffffffffu;
+  for (UINT k = 0; k < w32_u16(g + 4); k++) {
+    const uint8_t *e = g + 6 + k * 14;
+    UINT size = e[0] ? e[0] : 256, score = size > 32 ? size - 32 : 32 - size;
+    if (score < best_score) {
+      best = k;
+      best_score = score;
+    }
+  }
+  UINT rid = w32_u16(g + 6 + best * 14 + 12);
+  HANDLE r = FindResourceA(module, (void *)(uintptr_t)rid, (void *)(uintptr_t)3);
+  const uint8_t *b = r ? LoadResource(module, r) : 0;
+  return b ? u32_icon_from_resource(b, SizeofResource(module, r), 1, 0) : 0;
+}
+static BOOL W32API group_found(HANDLE module, const char *type, char *name,
+                               intptr_t context) {
+  (void)type;
+  struct extract *x = (struct extract *)context;
+  UINT at = x->seen++;
+  BOOL take = x->index >= 0 ? at >= (UINT)x->index
+                            : (uintptr_t)name == (uintptr_t)(UINT)-x->index;
+  if (!take)
+    return 1;
+  if (x->icons) {
+    HICON icon = group_icon(module, name);
+    if (icon) {
+      x->icons[x->count] = icon;
+      if (x->ids)
+        x->ids[x->count] = U32_ATOM(name) ? (UINT)(uintptr_t)name : 0;
+      x->count++;
+    }
+  } else
+    x->count++;
+  return x->count < x->wanted;
+}
+static HICON ico_file(const char *path, UINT *found) {
+  HANDLE f = CreateFileA(path, 0x80000000u, 1, 0, 3, 0, 0);
+  *found = 0;
+  if (!f || f == (HANDLE)(intptr_t)-1)
+    return 0;
+  uint8_t *data = u32_alloc(1u << 18);
+  DWORD n = 0;
+  BOOL ok = data && ReadFile(f, data, 1u << 18, &n, 0);
+  CloseHandle(f);
+  *found = 1;
+  HICON icon = 0;
+  if (ok && n >= 6 + 16 && w32_u16(data) == 0 && w32_u16(data + 2) == 1 &&
+      w32_u16(data + 4) && n >= 6u + 16u * w32_u16(data + 4)) {
+    UINT best = 0, best_score = 0xffffffffu;
+    for (UINT k = 0; k < w32_u16(data + 4); k++) {
+      const uint8_t *e = data + 6 + k * 16;
+      UINT size = e[0] ? e[0] : 256, score = size > 32 ? size - 32 : 32 - size;
+      if (score < best_score) {
+        best = k;
+        best_score = score;
+      }
+    }
+    const uint8_t *e = data + 6 + best * 16;
+    DWORD bytes = w32_u32(e + 8), offset = w32_u32(e + 12);
+    if (offset <= n && bytes <= n - offset)
+      icon = u32_icon_from_resource(data + offset, bytes, 1, 0);
+  }
+  u32_free(data);
+  return icon;
+}
+static UINT extract(const char *path, int index, HICON *icons, UINT *ids,
+                    UINT wanted) {
+  UINT n = path ? w32_strlen(path) : 0;
+  if (!path)
+    return (UINT)u32_fail(87);
+  if (n > 4 && !u32_stricmp(path + n - 4, ".ico")) {
+    UINT found;
+    if (!icons)
+      return ico_file(path, &found) ? 1u : 0u;
+    if (index > 0 || !wanted)
+      return 0;
+    HICON icon = ico_file(path, &found);
+    if (!found)
+      return 0xffffffffu;
+    if (!icon)
+      return 0;
+    icons[0] = icon;
+    if (ids)
+      ids[0] = 0;
+    return 1;
+  }
+  HANDLE(W32API * load)(const char *, HANDLE, DWORD) =
+      (HANDLE(W32API *)(const char *, HANDLE, DWORD))u32_kernel("LoadLibraryExA");
+  BOOL(W32API * unload)(HANDLE) = (BOOL(W32API *)(HANDLE))u32_kernel("FreeLibrary");
+  BOOL(W32API * names)(HANDLE, const char *,
+                       BOOL(W32API *)(HANDLE, const char *, char *, intptr_t),
+                       intptr_t) =
+      (BOOL(W32API *)(HANDLE, const char *,
+                      BOOL(W32API *)(HANDLE, const char *, char *, intptr_t),
+                      intptr_t))u32_kernel("EnumResourceNamesA");
+  if (!load || !names)
+    return (UINT)u32_fail(120);
+  HANDLE module = load(path, 0, 2); /* LOAD_LIBRARY_AS_DATAFILE */
+  if (!module)
+    return icons ? 0xffffffffu : 0u;
+  struct extract x = {icons ? wanted : 0xffffffffu, 0, 0, index, icons, ids,
+                      module};
+  if (!icons)
+    x.index = 0;
+  if (!icons || wanted)
+    names(module, (const char *)(uintptr_t)14, group_found, (intptr_t)&x);
+  if (unload)
+    unload(module);
+  return x.count;
+}
+UINT W32API PrivateExtractIconsA(const char *path, int index, int cx, int cy,
+                                 HICON *icons, UINT *ids, UINT n,
+                                 UINT flags) {
+  U32_GUARD;
+  (void)cx, (void)cy, (void)flags;
+  return extract(path, index, icons, ids, icons ? n : 0);
+}
+UINT W32API PrivateExtractIconsW(const WCHAR *path, int index, int cx, int cy,
+                                 HICON *icons, UINT *ids, UINT n,
+                                 UINT flags) {
+  U32_GUARD;
+  (void)cx, (void)cy, (void)flags;
+  char *a = path ? u32_narrow(path) : 0;
+  if (!a)
+    return 0;
+  UINT r = extract(a, index, icons, ids, icons ? n : 0);
+  u32_text_free(a);
+  return r;
+}
+/* PrivateExtractIconEx: large and small icons (both the 32x32 USER icon);
+ * index -1 with no outputs counts the icons. */
+UINT W32API PrivateExtractIconExA(const char *path, int index, HICON *large,
+                                  HICON *small, UINT n) {
+  U32_GUARD;
+  if (index == -1 && !large && !small)
+    return extract(path, 0, 0, 0, 0);
+  UINT got = 0;
+  if (large)
+    got = extract(path, index, large, 0, n);
+  if (small) {
+    UINT s = extract(path, index, small, 0, n);
+    if (!large)
+      got = s;
+  }
+  return got == 0xffffffffu ? 0 : got;
+}
+UINT W32API PrivateExtractIconExW(const WCHAR *path, int index, HICON *large,
+                                  HICON *small, UINT n) {
+  U32_GUARD;
+  char *a = path ? u32_narrow(path) : 0;
+  if (!a)
+    return 0;
+  UINT r = PrivateExtractIconExA(a, index, large, small, n);
+  u32_text_free(a);
+  return r;
 }

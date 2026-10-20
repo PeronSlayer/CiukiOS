@@ -67,10 +67,10 @@ void W32API PostQuitMessage(int code) {
 LRESULT W32API CallWindowProcA(WNDPROC proc, HWND h, UINT m, WPARAM wp,
                                LPARAM lp) {
   U32_GUARD;
-  UINT saved = u32_suspend();
-  LRESULT result = proc ? proc(h, m, wp, lp) : DefWindowProcA(h, m, wp, lp);
-  u32_resume(saved);
-  return result;
+  /* f5-20B: a 0xFFFFxxxx procedure handle names a Unicode procedure. */
+  BOOL wide;
+  WNDPROC p = u32_proc_decode((uintptr_t)proc, 0, &wide);
+  return u32_call_proc(p, wide, 0, h, m, wp, lp);
 }
 LRESULT u32_invoke(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   struct u32_window *w = u32_window(h);
@@ -91,7 +91,7 @@ LRESULT u32_invoke(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     HWND hwnd;
   } call = {lp, wp, m, h};
   u32_hooks(4, 0, 0, (LPARAM)&call);
-  return CallWindowProcA(proc, h, m, wp, lp);
+  return u32_call_proc(proc, w->unicode, 0, h, m, wp, lp);
 }
 static BOOL sent(void) {
   struct u32_thread *t = u32_thread();
@@ -367,9 +367,13 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
     struct u32_timer *timer = &u32_timers[i];
     if ((mask & QS_TIMER) && timer->tid == t->id &&
         (int32_t)(u32_ticks() - timer->due) >= 0 &&
-        filter(timer->hwnd, WM_TIMER, h, lo, hi)) {
-      *out = (MSG){timer->hwnd,         WM_TIMER,    timer->id,
-                   (LPARAM)timer->proc, u32_ticks(), u32_pointer};
+        filter(timer->hwnd, timer->system ? 0x118u : WM_TIMER, h, lo, hi)) {
+      *out = (MSG){timer->hwnd,
+                   timer->system ? 0x118u : WM_TIMER, /* WM_SYSTIMER */
+                   timer->id,
+                   (LPARAM)timer->proc,
+                   u32_ticks(),
+                   u32_pointer};
       if (flags & PM_REMOVE)
         timer->due = u32_ticks() + timer->period;
       goto found;
@@ -439,9 +443,9 @@ LRESULT W32API DispatchMessageA(const MSG *m) {
   U32_GUARD;
   if (!m)
     return 0;
-  if (m->message == WM_TIMER && m->lParam) {
+  if ((m->message == WM_TIMER || m->message == 0x118u) && m->lParam) {
     UINT saved = u32_suspend();
-    ((TIMERPROC)m->lParam)(m->hwnd, WM_TIMER, m->wParam, u32_ticks());
+    ((TIMERPROC)m->lParam)(m->hwnd, m->message, m->wParam, u32_ticks());
     u32_resume(saved);
     return 0;
   }
@@ -528,8 +532,10 @@ DWORD W32API GetMessagePos(void) {
   return t ? (uint16_t)t->last.pt.x | ((uint32_t)(uint16_t)t->last.pt.y << 16)
            : 0;
 }
-uintptr_t W32API SetTimer(HWND h, uintptr_t id, UINT ms, TIMERPROC proc) {
-  U32_GUARD;
+/* f5-20B: application timers and system timers (SetSystemTimer, delivered
+ * as WM_SYSTIMER) live in one table with separate identifier spaces. */
+uintptr_t u32_set_timer(HWND h, uintptr_t id, UINT ms, TIMERPROC proc,
+                        BOOL system) {
   if (h && GetWindowThreadProcessId(h, 0) != u32_tid())
     return u32_fail(5);
   static uintptr_t next = 1;
@@ -538,7 +544,8 @@ uintptr_t W32API SetTimer(HWND h, uintptr_t id, UINT ms, TIMERPROC proc) {
     struct u32_timer *t = &u32_timers[i];
     if (!t->tid && !free_timer)
       free_timer = t;
-    if (t->tid == u32_tid() && t->hwnd == h && id && t->id == id) {
+    if (t->tid == u32_tid() && t->hwnd == h && id && t->id == id &&
+        !t->system == !system) {
       free_timer = t;
       break;
     }
@@ -553,22 +560,30 @@ uintptr_t W32API SetTimer(HWND h, uintptr_t id, UINT ms, TIMERPROC proc) {
     ms = 10;
   if (ms > 0x7fffffff)
     ms = 0x7fffffff;
-  *free_timer =
-      (struct u32_timer){u32_tid(), h, id, ms, u32_ticks() + ms, proc};
+  *free_timer = (struct u32_timer){u32_tid(), h,    id, ms, u32_ticks() + ms,
+                                   proc,      !!system};
   u32_mark();
   return id;
 }
-BOOL W32API KillTimer(HWND h, uintptr_t id) {
-  U32_GUARD;
+BOOL u32_kill_timer(HWND h, uintptr_t id, BOOL system) {
   for (UINT i = 0; i < U32_TIMERS; i++) {
     struct u32_timer *t = &u32_timers[i];
-    if (t->tid == u32_tid() && t->hwnd == h && t->id == id) {
+    if (t->tid == u32_tid() && t->hwnd == h && t->id == id &&
+        !t->system == !system) {
       w32_fill(t, 0, sizeof(*t));
       u32_mark();
       return 1;
     }
   }
   return 0;
+}
+uintptr_t W32API SetTimer(HWND h, uintptr_t id, UINT ms, TIMERPROC proc) {
+  U32_GUARD;
+  return u32_set_timer(h, id, ms, proc, 0);
+}
+BOOL W32API KillTimer(HWND h, uintptr_t id) {
+  U32_GUARD;
+  return u32_kill_timer(h, id, 0);
 }
 UINT W32API RegisterWindowMessageA(const char *name) {
   U32_GUARD;

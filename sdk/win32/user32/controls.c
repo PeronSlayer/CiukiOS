@@ -3,7 +3,7 @@
  * comctl32 classes come from the reused Wine comctl32 (f5-14B). Text is
  * CP1252, indexed by byte; layout uses the selected font's metrics.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "classic.h"
+#include "unicode.h"
 #define TEXT_MAX 30000u
 #define ITEMS_MAX 8192u
 #define DC32(dc) U32_PTR(dc)
@@ -1433,6 +1433,75 @@ static int list_add(HWND h, struct control *c, int at, LPARAM value,
   measure_item(h, c, (UINT)at);
   return at;
 }
+/* f5-20B: LB_DIR, LB_ADDFILE and CB_DIR (DlgDirList) over the KERNEL32
+ * file search. Directories are listed as "[name]", drives as "[-x-]".
+ * Without DDL_EXCLUSIVE, files with no read-only, hidden or system
+ * attribute are listed plus those whose attributes were requested; with it,
+ * only files having a requested attribute. Returns the index of the last
+ * item added. */
+#define DDL_DIRECTORY 0x10u
+#define DDL_DRIVES 0x4000u
+#define DDL_EXCLUSIVE 0x8000u
+static int dir_fill(HWND h, UINT add, UINT attrib, const char *spec) {
+  HANDLE(W32API * first)(const char *, void *) =
+      (HANDLE(W32API *)(const char *, void *))u32_kernel("FindFirstFileA");
+  BOOL(W32API * next)(HANDLE, void *) =
+      (BOOL(W32API *)(HANDLE, void *))u32_kernel("FindNextFileA");
+  BOOL(W32API * close)(HANDLE) = (BOOL(W32API *)(HANDLE))u32_kernel("FindClose");
+  DWORD(W32API * drives)(void) = (DWORD(W32API *)(void))u32_kernel("GetLogicalDrives");
+  int last = LB_ERR;
+  if (!spec || !*spec)
+    spec = "*.*";
+  if (first && next && close) {
+    /* WIN32_FIND_DATAA: attributes at 0, file name at 44 (260 bytes). */
+    uint8_t data[320];
+    HANDLE f = first(spec, data);
+    if (f && f != (HANDLE)(intptr_t)-1) {
+      do {
+        DWORD fa = w32_u32(data);
+        char *name = (char *)data + 44, text[264];
+        name[259] = 0;
+        if (fa & 0x10u) {
+          if (!(attrib & DDL_DIRECTORY) || !u32_stricmp(name, "."))
+            continue;
+          text[0] = '[';
+          u32_strcpy(text + 1, 261, name);
+          UINT n = w32_strlen(text);
+          text[n] = ']';
+          text[n + 1] = 0;
+        } else {
+          UINT special = fa & 0x27u; /* read-only, hidden, system, archive */
+          BOOL take = attrib & DDL_EXCLUSIVE
+                          ? (special & attrib) != 0 ||
+                                (!(attrib & 0x27u) && !(fa & 0x7u))
+                          : !((fa & 0x7u) & ~attrib);
+          if (!take)
+            continue;
+          u32_strcpy(text, sizeof(text), name);
+        }
+        int at = (int)SendMessageA(h, add, 0, (LPARAM)text);
+        if (at < 0) {
+          close(f);
+          return at;
+        }
+        last = at;
+      } while (next(f, data));
+      close(f);
+    }
+  }
+  if ((attrib & DDL_DRIVES) && drives) {
+    DWORD mask = drives();
+    for (UINT d = 0; d < 26; d++)
+      if (mask & (1u << d)) {
+        char text[6] = {'[', '-', (char)('a' + d), '-', ']', 0};
+        int at = (int)SendMessageA(h, add, 0, (LPARAM)text);
+        if (at < 0)
+          return at;
+        last = at;
+      }
+  }
+  return last;
+}
 static int list_find(struct control *c, int after, const char *s,
                      BOOL exact) {
   if (!s || !c->count)
@@ -1443,11 +1512,10 @@ static int list_find(struct control *c, int after, const char *s,
     const char *t = c->items[i].text ? c->items[i].text : "";
     UINT j = 0;
     while (j < n && t[j]) {
-      int a = (uint8_t)t[j], b = (uint8_t)s[j];
-      if (a >= 'A' && a <= 'Z')
-        a += 32;
-      if (b >= 'A' && b <= 'Z')
-        b += 32;
+      /* f5-20B: case-insensitive over code page 1252 (lstrcmpi), not only
+       * ASCII. */
+      UINT a = u32_lower(u32_scalar((uint8_t)t[j])),
+           b = u32_lower(u32_scalar((uint8_t)s[j]));
       if (a != b)
         break;
       j++;
@@ -1807,8 +1875,9 @@ static LRESULT list_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
     return i;
   }
   case LB_DIR:
-  case LB_ADDFILE:
-    return LB_ERR;
+    return dir_fill(h, LB_ADDSTRING, (UINT)wp, (const char *)lp);
+  case LB_ADDFILE: /* add one file name as is */
+    return lp ? (int)SendMessageA(h, LB_ADDSTRING, 0, lp) : LB_ERR;
   case WM_GETDLGCODE:
     return DLGC_WANTARROWS | DLGC_WANTCHARS;
   case WM_SETFOCUS:
@@ -2314,7 +2383,7 @@ static LRESULT combo_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
     c->extent = (int)wp;
     return 0;
   case CB_DIR:
-    return CB_ERR;
+    return dir_fill(h, CB_ADDSTRING, (UINT)wp, (const char *)lp);
   case WM_SETTEXT:
     if (c->edit)
       return SendMessageA(c->edit, WM_SETTEXT, wp, lp);
