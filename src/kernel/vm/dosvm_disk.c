@@ -126,6 +126,39 @@ static int read_cache_open(struct dosvm *v)
 }
 static void disk_gate_take(struct dosvm *v);
 static void disk_gate_drop(struct dosvm *v);
+/* f3-51 launch identity: SHA-256 of the whole read-only base, before any
+ * guest read. One seek, then sequential reads of one read-cache block
+ * (64 KiB) each: every FAT read walks the file's cluster chain from its first
+ * cluster (fat.c chain_at) and a seek cancels the VFS read-ahead stream, so
+ * the former 512-byte seek+read loop cost O(sectors x clusters) FAT lookups,
+ * about 1.8e8 for the 27 MB games disk: the window CREATE never returned.
+ * Block 0 is the buffer; its count stays 0, so it publishes no cached data. */
+static int base_hash(struct dosvm *v, uint32_t size)
+{
+    const unsigned block_bytes = DOSVM_READ_SECTORS * 512u;
+    if (!v->read_capacity || v->read_cache[0].count) return -EINVAL;
+    uint8_t *buffer = P2V(v->read_cache[0].phys);
+    uint64_t position = 0;
+    disk_gate_take(v);
+    int e = vfs_seek(&v->disk_table, v->base, 0, VFS_SEEK_SET, &position);
+    disk_gate_drop(v);
+    if (e) return e;
+    if (position) return -FS_EIO;
+    struct sha256_ctx hash; uint8_t binary[32];
+    sha256_init(&hash);
+    for (uint32_t at = 0; at < size;) {
+        unsigned amount = size - at < block_bytes ? size - at : block_bytes;
+        size_t got = 0;
+        disk_gate_take(v);
+        e = vfs_read(&v->disk_table, v->base, buffer, amount, &got);
+        disk_gate_drop(v);
+        if (e || got != amount) return e ? e : -FS_EIO;
+        sha256_update(&hash, buffer, amount); at += amount;
+        kpreempt_point();
+    }
+    sha256_final(&hash, binary); sha256_hex(binary, v->base_sha256);
+    return 0;
+}
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
@@ -147,21 +180,11 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     v->base = vfs_open(&v->disk_table, base, VFS_READ, VFS_DENY_WRITE, 0);
     if (v->base < 0) return base_error(base, v->base, reason);
     v->base_open = true;
+    e = read_cache_open(v);
+    if (e) return e; /* lifecycle failure unwinds the base/table as before */
     if (v->game || v->kernel) {
-        struct sha256_ctx hash; uint8_t binary[32];
-        sha256_init(&hash);
-        for (uint32_t at=0;at<entry.size;) {
-            unsigned amount=entry.size-at; if (amount>sizeof(v->sector)) amount=sizeof(v->sector);
-            size_t got=0; uint64_t position=0;
-            disk_gate_take(v);
-            int read_error=vfs_seek(&v->disk_table,v->base,at,VFS_SEEK_SET,&position);
-            if (!read_error) read_error=vfs_read(&v->disk_table,v->base,v->sector,amount,&got);
-            disk_gate_drop(v);
-            if (read_error || got!=amount) return read_error ? read_error : -FS_EIO;
-            sha256_update(&hash,v->sector,amount); at+=amount;
-            kpreempt_point();
-        }
-        sha256_final(&hash,binary); sha256_hex(binary,v->base_sha256);
+        e = base_hash(v, entry.size);
+        if (e) return e;
         if (v->kernel==1) {
             char expected[66];
             int identity=vfs_open(&v->disk_table,"C:\\SYSTEM\\DOS\\FREEDOS.SHA",VFS_READ,VFS_DENY_WRITE,0);
@@ -174,8 +197,6 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
             if (read_error || got!=65 || expected[64]!='\n' || memcmp(expected,v->base_sha256,64) || closed) return -FS_EIO;
         }
     }
-    e = read_cache_open(v);
-    if (e) return e; /* lifecycle failure unwinds the base/table as before */
     ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
               v->info.key.generation);
     if (v->game || v->kernel)

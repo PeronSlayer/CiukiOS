@@ -287,7 +287,7 @@ static void run_worker(struct dosvm *v)
 /* File-backed fake VFS transport. Production overlay indexing remains real. */
 static struct storage store = {.ready=true};
 static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open, identity_open; uint64_t pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
-static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes;
+static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes, base_seeks;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
 static bool fail_read_ahead;
@@ -359,7 +359,7 @@ int vfs_close(struct vfs_table *table, int handle)
 int vfs_delete(struct vfs_table *table, const char *path)
 { unsigned i=file_slot(table); CHECK(strstr(path,".COW") && !files[i].cow_open); if (fail_delete) return -V86_EIO; CHECK(files[i].cow); CHECK(fclose(files[i].cow)==0 && unlink(files[i].path)==0); files[i].cow=0; scratch--; deletes++; return 0; }
 int vfs_seek(struct vfs_table *table, int handle, int64_t offset, enum vfs_whence whence, uint64_t *position)
-{ unsigned i=file_slot(table); disk_owned(table); CHECK(handle>=0 && handle<=1 && whence==VFS_SEEK_SET && offset>=0); if (io_fails()) return -V86_EIO; files[i].pos[handle]=offset; *position=offset; return 0; }
+{ unsigned i=file_slot(table); disk_owned(table); CHECK(handle>=0 && handle<=1 && whence==VFS_SEEK_SET && offset>=0); if (!handle) base_seeks++; if (io_fails()) return -V86_EIO; files[i].pos[handle]=offset; *position=offset; return 0; }
 int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size_t *done)
 {
     unsigned i=file_slot(table); disk_owned(table);
@@ -381,6 +381,7 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
         if (!files[i].base_sector && !files[i].pos[0]) { ((uint8_t *)data)[0]=0xEE; ((uint8_t *)data)[510]=bad_signature ? 0 : 0x55; ((uint8_t *)data)[511]=0xAA; }
     }
     else { CHECK(fseek(files[i].cow,(long)files[i].pos[1],SEEK_SET)==0); CHECK(fread(data,1,*done,files[i].cow)==*done); }
+    files[i].pos[handle]+=*done; /* as vfs_read: sequential reads continue */
     return 0;
 }
 int vfs_write(struct vfs_table *table, int handle, const void *data, size_t bytes, size_t *done)
@@ -396,7 +397,7 @@ static void (*evidence_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
-static char tracker_record[256], vm_start_record[256];
+static char tracker_record[256], vm_start_record[256], game_launch_record[256];
 static char fault_pc_record[256], fault_regs_record[256], fault_stack_record[256];
 static unsigned fault_pc_records, fault_regs_records, fault_stack_records;
 void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
@@ -408,6 +409,7 @@ void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
     CHECK(n>0 && n<=240); disk_records++;
     if (strstr(extra, "group=vm_perf_tracker ")) strcpy(tracker_record, wire);
     if (strstr(extra, "group=vm_start ")) strcpy(vm_start_record, wire);
+    if (strstr(extra, "group=game_launch ")) strcpy(game_launch_record, wire);
     if (strstr(extra, "group=vm_fault_pc ")) { strcpy(fault_pc_record, wire); fault_pc_records++; }
     if (strstr(extra, "group=vm_fault ")) { strcpy(fault_regs_record, wire); fault_regs_records++; }
     if (strstr(extra, "group=vm_stack part=0 ")) { strcpy(fault_stack_record, wire); fault_stack_records++; }
@@ -816,6 +818,7 @@ int main(void)
     test_game_audio();
     test_workloads();
     test_kernel_choice();
+    test_game_window_base_hash();
     test_timer();
     test_menu();
     test_irq_stall();
