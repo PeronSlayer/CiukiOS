@@ -1,0 +1,36 @@
+# Prova T23 dell'immagine 3d18f2db: coda ATA bloccata a 512 byte; integrazione di f5-20D, f5-17B, f5-12B2, f5-15A, f5-07B, f5-07C e f5-22
+
+- **Data:** 2026-10-20
+- **Tipo:** analisi hardware e integrazione
+- **Versione/commit:** 0.9.2 pre-alpha / main `928b893b`; immagine T23 provata `3d18f2db…`; immagine canonica `b3f31c5e…`
+- **Stato:** integrato; nuova immagine T23 trattenuta (blocco del desktop nell'avvio normale con icount, in bisezione)
+
+## Fatti
+
+1. **Prova sul T23 dell'immagine `3d18f2db…`.** Il proprietario ha segnalato che l'apertura di Files è molto lenta (anche senza chiavetta USB) e che i giochi DOS non finiscono di caricare. Nel `BOOT.LOG` copiato dal disco la coda `ata0` parte con `limit=65536`, scende a `8704` e poi a `512` (18 record su 24 a `limit=512`), con `split` che cresce da 0 a 3.676: un solo comando lento nelle prime fasi del boot riduceva il limite adattivo del comando, che non risaliva più, e ogni richiesta diventava una serie di comandi da un settore.
+2. **Correzione `7c5b9878`** (`src/kernel/fs/blkreq.c`, `blkdev.h`): il limite non scende sotto `BLKREQ_MIN_COMMAND_BYTES` (4.096 byte, o la dimensione del settore se maggiore) e raddoppia di nuovo, fino al massimo della coda, dopo comandi completati entro un quarto della finestra del lettore; test host `test_blkreq` (un comando da 200 ms lascia 4.096 byte, le letture veloci riportano a 65.536).
+3. **Integrazioni su main:** f5-20D (build delle DLL superiori in cache, staging di msvcrt, sonda `w32-upper-dlls`); f5-17B (livelli del runner di accettazione, disco delle fixture, riproduttore di input, modello delle evidenze, censimento, controllo incrociato dei selettori); f5-12B2 (trasporto dell'audio CD, casi `w32-media` e `w32-cdaudio` separati); f5-15A parziale (staging del lettore CD, vista `C:\WINDOWS\FONTS`, scheletro della directory di Windows, `ciukishell.dll` nello store di base; `w32-installer-nsis` resta a f5-15A2; emendamento 1: `MoveFileEx` con ritardo al riavvio risponde 120 e i rinomini passano da `WININIT.INI [rename]` come in Windows 98); f3-46b (test del caricamento del DOS Box allineato al pannello di f3-46: il test era rotto dalla fusione di f3-46 perché la suite desktop non era stata eseguita); f5-07B (servizio DDE PROGMAN, `ExitWindowsEx` e fine sessione con `WM_QUERYENDSESSION`/`WM_ENDSESSION`, riavvio virtuale con `WININIT.INI` e `RunServicesOnce`/`RunOnce`, `runonce.exe`, record dell'ordine delle HWND dal compositore; caso `w32-restart-qemu-t23` scritto e non eseguito).
+4. **Polling di fine sessione (correzione del lead `29070119`).** Nella revisione di f5-07B: il desktop interrogava w32srv ogni 20 ms con uno scambio sincrono sul proprio thread, ogni interrogazione faceva uno `stat` di `C:\WINDOWS\WININIT.INI`, e ogni thread UI Win32 interrogava w32srv ogni 20 ms dalla pompa dei messaggi. In guest w32srv resta nel ciclo attivo con yield per 20 ms dopo ogni pacchetto, quindi non sarebbe mai tornato a riposo. Ora il desktop interroga ogni 500 ms (20 ms solo durante un riavvio), lo `stat` avviene solo per il controllo al boot (`flags=1`), e USER interroga ogni 250 ms per thread.
+
+5. **f5-07C (traffico del servizio Win32 a riposo).** Una revisione in sola lettura di Codex su f5-07B ha trovato altri costi: ntdll annunciava il client (W32R_CLIENT) prima di ogni richiesta al servizio, raddoppiando le transazioni di registro, font e GDI; il desktop eseguiva ancora lo scambio sincrono sul proprio thread ogni 500 ms; il limite di 250 ms per thread portava la fine sessione a circa 500 ms per finestra; la pulizia degli oggetti di processo rimasti dal boot precedente riscriveva l'intero archivio con due fsync per ogni oggetto. Ora ntdll annuncia una volta per connessione (12 richieste di registro: 1 CLIENT e 26 scambi di pacchetti invece di 12 e 48); USER risponde subito durante una sessione (8 finestre completate in 63–266 tick, limite 570) senza allocazioni a riposo; il controllo del desktop gira su un thread di lavoro (ogni 500 ms se esistono finestre Win32, altrimenti ogni 5 s); la pulizia di 100 oggetti avviene con una sola scrittura e due sync.
+6. **f5-22 (fallimenti d'integrazione).** La serie completa di suite su `29070119` ha trovato otto fallimenti lasciati dalle fusioni a lotti: tabelle dei selettori (`w32-restart` non registrata, `w32-fixtures` e `w32-kernel32` presenti solo nel modello del loader), caso media e caso audio CD separati senza aggiornare il test, lettore CD messo in `/Programs/CDPLAYER.EXE` (prima voce grezza del sottomenu Programmi, che spostava tutte le righe), nove record CD dell'ABI senza controllo del layout, stub di `ciuki_devctl` senza `MEDIA_CD_STATE` (interrogazione dell'AutoPlay audio), fixture del desktop con l'attesa del registro. Il lettore CD ora è in `C:\WINDOWS\CDPLAYER.EXE`, come in Windows 98, con la voce "CD Player" in Accessori e l'icona Tango `media-optical`.
+
+## Decisioni
+
+1. Il limite adattivo della coda di storage ha un minimo di una pagina e risale dopo comandi veloci.
+2. Prima di consegnare un'immagine per l'hardware si controllano i record `[storage] queue … limit=` della prova QEMU; dopo ogni consegna che tocca `apps/` si eseguono la suite desktop e il gate.
+3. La notifica di fine sessione ai client Win32 resta a polling limitato fino a una direttiva che la renda guidata da eventi; timeout DDE e passi limitati delle operazioni PROGMAN su file restano a una direttiva successiva.
+4. Dopo ogni lotto di fusioni si esegue l'intera serie di suite sull'albero fuso (con `make upper` prima della suite Win32) prima del lotto successivo.
+
+## Verifica
+
+- Suite host su `928b893b` (albero pulito): app, DLL superiori (`make upper`), Win32 248 test, desktop 123, gate 36, kernel 11 (layout ABI compreso), fs, DOS 49, API file DOS, hook CPU, audio: tutte verdi; controlli dei payload dell'immagine 9/9. Due test del desktop (`test_music`, `test_terminal`) confrontavano le righe del catalogo come testo e sono stati allineati al campo aggiunto da f5-22 (correzione del lead); `config/wine-upper.json` aggiornato da `make upper` con gli hash delle DLL di base.
+- Build canonica `b3f31c5e87e32a77…` (0.9.2, `928b893b`, `dirty=False`).
+- QEMU interattivo (TCG pentium3, 512 MiB): desktop, Files e DOOM dal menu Giochi corretti; i record `[storage] queue name=ata0` restano a `limit=65536`.
+- f0-smoke: `boot` e il secondo caso passano; `normal-boot-qemu-t23` (profilo con `icount shift=1`) **fallisce**: il desktop viene avviato (pid 2) ma non presenta alcun fotogramma e non scrive alcuna riga nel log su disco entro il termine, mentre `pagerman` domina la CPU. L'ultimo avvio QEMU corretto era l'immagine `3d18f2db…` (main `588609e7`); bisezione sui commit successivi in corso.
+- Sonda `f5:w32-dialogs`: la fixture Win32 ora parte e gira (pid 6) ma esce con codice 1 (`dialog_teardown first_error=274`, tutte le misure a zero); sonda `f5:w32-upper-dlls`: la sonda non apre il write gate di C: (3.706 righe `directory-commit-failed`), la fixture non parte (`upper_identity`).
+- La nuova immagine T23 (`5b74e640…`) è costruita ma non consegnata.
+
+## Riferimenti
+
+- `docs/directives/f5-07b-*.md`, `f5-07c-*.md`, `f5-22-*.md`, `f5-15a-*.md` (emendamento 1), `f5-12b2-*.md`, `f5-20d-*.md`, `f5-17b-*.md`; report in `build/codex/`; log T23 in `legacy/local/physical/3d18f2db/` (non pubblicati).

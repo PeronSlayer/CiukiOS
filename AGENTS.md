@@ -268,6 +268,14 @@ Follow `docs/design/test-architecture.md`:
   (ignored, never committed or redistributed; the book is extracted to
   `build/rskt/` for research). QEMU is allowed only for the DOS conformance
   battery of `f3-48` (dev diary 2026-10-19-06).
+- Owner decisions 2026-10-20 (dev diary 2026-10-20-08): F6 (network) runs
+  now in parallel with F5; QEMU is allowed again for F6 network and F7 3D
+  API development and tests (the T23 stays the final confirmation), and for
+  the short boot smoke before a hardware image; the 3D of the 1.0 Beta is
+  OpenGL (Direct3D through wined3d after the beta); the Win16 subsystem
+  (f5-19b–e) moves after the 1.0 Beta; the browser to port is NetSurf. The
+  owner's 1.0 Beta title and site lists are private (`legacy/local/`) and
+  never enter tracked files.
 
 ## Code Search Policy
 
