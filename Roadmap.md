@@ -83,7 +83,7 @@ kernel core.
 | f5-07A/B | w32srv, registry hives, advapi32 / PROGMAN DDE, end session, virtual restart | A merged 2026-10-19, host; **B in progress** |
 | f5-08 | Presenter formats and the delegated display lease | Merged 2026-10-19, host |
 | f5-09 (+09B) | Desktop protocol v3, shortcuts, Add/Remove Programs, w32srv supervision | Merged 2026-10-19, host |
-| f5-10A/B/C | user32 / gdi32 / dialogs, controls, menus and fonts | A and B merged 2026-10-19, host; **C in progress** |
+| f5-10A/B/C | user32 / gdi32 / dialogs, controls, menus and fonts | A and B merged 2026-10-19, C merged 2026-10-20 (C2 continuation: guest font bridge), host only |
 | f5-11 | DirectDraw 1–7 | Merged 2026-10-19, host |
 | f5-12A/B | DirectSound, waveOut, MIDI / MCI, codecs, AVI, CD audio | A merged 2026-10-19 (partial), host; **B in progress** |
 | f5-13 | Input messages and DirectInput | Merged 2026-10-19, host |
@@ -93,7 +93,7 @@ kernel core.
 | f5-17A/B | Acceptance tooling / runner and titles | A merged 2026-10-14; **B in progress** |
 | f5-18 | Winsock and DirectPlay | After F6 |
 | f5-19 | Win16 subsystem | Contract merged 2026-10-14, f5-19a (NE parser, fixtures) merged 2026-10-15; **in progress** (P0 dispositions, then f5-19b–d) |
-| f5-20 | Core exports the reused Wine DLLs import | **In progress** |
+| f5-20 | Core exports the reused Wine DLLs import | A (kernel32, ntdll, advapi32, version) merged 2026-10-20, host; **B and C to do** |
 
 Honest notes on the hard parts: F3 (V86 monitor and DPMI) is where the
 0.8 line had most trouble, and the T23 trials of 13–19 October found
@@ -119,7 +119,7 @@ each merge needs green host suites and a canonical build.
    memory (contract item D1).
 2. **Run the DOS conformance battery** against FreeDOS (QEMU is allowed for
    it) and close the differences (f3-51 runtime gates).
-3. **Complete F5:** f5-20, f5-10C, f5-07B, f5-12B, f5-15A/B (original
+3. **Complete F5:** f5-20B/C, f5-10C2, f5-07B, f5-12B, f5-15A/B (original
    installers and applications), f5-17B (acceptance runner and titles) and
    the Win16 subsystem (f5-19).
 4. **One image for the hardware** when the programme is complete or the

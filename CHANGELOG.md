@@ -7,6 +7,25 @@ dev diary 2026-10-20-01). It covers everything merged on `main` since 0.9.0
 began: the 0.9.0 section below stays the detailed record. Nothing of 0.9.2
 is published; hardware qualification is open.
 
+Regressions found on 2026-10-20 by the first QEMU boot of an integrated
+image since the gates were suspended (dev diary 2026-10-20-02):
+
+- Fixed (`dbb0d714`, `cc81cbb6`): since f0-44 every walk of a process's
+  memory map held a whole-space pin across its service points, so another
+  thread of the same process got EBUSY from mmap, buffer pins and copies to
+  user memory. Native applications could not open their windows ("desktop
+  connection failed: Broken pipe") and the desktop could not load its
+  wallpaper. Found by bisection on QEMU (good at the f0-45 merge, bad at the
+  f0-44 merge); a task now waits out another task's metadata pin, and a copy
+  covered by the caller's own pin needs no second pin. Regression test
+  `test_peer_walk_copy`.
+- Fixed (`8f3bcda9`, `8f86c3ad`): the canonical image build failed since the
+  FreeDOS reference was provisioned: games-disk directories of the DOS
+  payloads, an 8.3 name, the reference trim.
+- Open: a DOS game started from Programs > Games never leaves
+  "Loading DOOM... Preparing..." (the DOS VM creation does not complete);
+  bisection in progress.
+
 Evidence status. Everything below was merged after the 0.9.0 record (from
 the evening of 2026-10-12, dev diary 2026-10-13-01 onwards). Until
 2026-10-19 the delivered images were also run on QEMU (`f0-smoke`, and from
@@ -166,8 +185,12 @@ closed with the Windows 98 Resource Kit in f0-42b); diary 2026-10-19-04,
   DirectSound, waveOut and MIDI (f5-12A, partial), DirectInput (f5-13), Wine
   10.0 upper DLL and codec builds (f5-14B, f5-14C), shims and crash reports
   (f5-16), Win16 contract and NE parser (f5-19, f5-19a).
-- In progress: f5-07B, f5-10C, f5-12B, f5-15A/B, f5-17B, f5-19 (Win16),
-  f5-20. No original Windows game, installer or application has run yet.
+- Merged 2026-10-20 (host tests only): f5-10C (dialog manager, classic
+  controls, menus and accelerators, MessageBox, TrueType font selection) and
+  f5-20A (184 kernel32/ntdll/advapi32/version exports the reused Wine DLLs
+  import). In progress: f5-07B, f5-10C2, f5-12B, f5-15A/B, f5-17B, f5-19
+  (Win16), f5-20B/C. No original Windows game, installer or application has
+  run yet.
 
 ### Tests and tools
 
