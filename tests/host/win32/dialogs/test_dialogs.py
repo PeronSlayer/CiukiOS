@@ -290,7 +290,8 @@ class DialogTests(unittest.TestCase):
         case = next(c for c in json.loads((ROOT/'tests/suites/f5-core.json').read_text())['cases']
                     if c['id'] == 'w32-dialogs-qemu-t23')
         run = '12345678'
-        body = [('BEGIN', ''), ('DATA', 'case=fixture path=/System/Win32/Fixtures/dialogs-exercise.exe pid=7 host_dry_run=1')]
+        body = [('BEGIN', ''), ('DATA', 'case=write-gate expected=0 observed=0'),
+                ('DATA', 'case=fixture path=/System/Win32/Fixtures/dialogs-exercise.exe pid=7 host_dry_run=1')]
         body += [(event, fields) for probe, event, fields in records if probe == 'w32-dialogs']
         body.append(('END', 'status=PASS'))
         parser = evidence.Parser(run, 'w32-dialogs')
@@ -301,9 +302,11 @@ class DialogTests(unittest.TestCase):
             lines.append(line)
             parser.feed(line.encode())
         parser.check(case['expected'])
-        # The predicates discriminate: one failed keyboard step, a leaked
+        # The predicates discriminate: a closed C: write gate (w32srv cannot
+        # commit its registry directory), one failed keyboard step, a leaked
         # window or a service peak above its budget each fail the case.
-        for marker, good, bad in (('case=dialog_keyboard', 'errors=0', 'errors=1'),
+        for marker, good, bad in (('case=write-gate', 'observed=0', 'observed=-30'),
+                                  ('case=dialog_keyboard', 'errors=0', 'errors=1'),
                                   ('case=dialog_teardown', 'live_windows=0', 'live_windows=1'),
                                   ('case=font_budget', 'service_budget=1572864', 'service_budget=1024')):
             self.assertTrue(any(marker in line and good in line for line in lines), marker)

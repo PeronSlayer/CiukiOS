@@ -624,6 +624,14 @@ static int probe_w32_dialogs(void)
         rec_emit(name,"END","status=FAIL reason=desktop_unavailable");
         return 1;
     }
+    /* Test selectors start with C: read-only (mount.c storage_probe_readonly).
+     * w32srv commits its registry directory (C:\WINDOWS\SERVICE.CRS.<slot>)
+     * before it issues the first handle; without the F1 write gate every
+     * commit fails with EROFS, no registry round trip completes and the
+     * desktop never starts the fixture (first QEMU run, image ec9f5854). */
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
     struct desktop_ledger initial,final;
     struct proc_ledger before,after;
     desktop_snapshot(&initial); proc_snapshot(&before);
