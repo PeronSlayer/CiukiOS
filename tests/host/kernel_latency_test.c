@@ -20,6 +20,8 @@ uint64_t g_tsc_per_ms = 1000, g_task_switches, g_task_switches_other, g_switch_t
 uint32_t g_quantum_ticks = 10, g_starvation_boosts;
 volatile bool g_need_resched, g_measure_stop;
 static uint64_t cycles = 1;
+static uint64_t read_tsc_unserialized(void) { return cycles; }
+static uint32_t fpu_cost;
 static uint32_t flags = 0x200;
 static uint32_t irq_save(void) { uint32_t f=flags; flags=0; return f; }
 static void irq_restore(uint32_t f) { flags=f; }
@@ -32,7 +34,7 @@ void file_clock_tick(void) { }
 #define vmm_kernel_pd() 0u
 #define tss_set_kernel_stack(s) ((void)(s))
 #define proc_task_switch(t) ((void)(t))
-#define fpu_task_switch(t) ((void)(t))
+#define fpu_task_switch(t) ((void)(t),cycles+=fpu_cost)
 #define crit_end() ((void)0)
 #define crit_begin() ((void)0)
 static void (*latency_switch_hook)(void);
@@ -110,6 +112,7 @@ static void reset(void)
     overrun_used=overrun_lost=0;
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
     memset(&timing_fixture,0,sizeof(timing_fixture));
+    memset(&irqoff,0,sizeof(irqoff)); memset(&irqoff_window,0,sizeof(irqoff_window)); fpu_cost=0;
     cpu_switch(0,&idle);
 }
 static void run_tick(uint32_t eip)
@@ -307,8 +310,37 @@ static void maximum_tasks_test(void)
     printf("F0-44 maximum tasks: 1360 stack slots / 256 native cap, IRQ batch<=%u (f0-46 timer queue, %u tick(s)), wake and next-point dispatch PASS\n",
            (unsigned)KTIMER_IRQ_BATCH, ticks);
 }
+static void irqoff_phase_test(void)
+{
+    reset(); rq_push(&normal); fpu_cost=1600;
+    cpu_irqoff_begin(cycles,0xc0123456); schedule(); cpu_irqoff_end(cycles);
+    CHECK(irqoff_window.cycles==1600 && irqoff_window.phase==CPU_IRQOFF_FPU && !irqoff_window.gap);
+    CHECK(!strcmp(irqoff_window.from,"idle") && !strcmp(irqoff_window.to,"worker"));
+    cpu_emit();
+    CHECK(strstr(records,"[kernel] irqoff_long site=c0123456 us=1600 phase=fpu phase_us=1600 from=idle to=worker\n"));
+    record_bytes=0; records[0]=0; cycles+=2000; cpu_emit();
+    CHECK(!strstr(records,"irqoff_long"));
+    /* Sub-millisecond sections are ignored; only the maximum is retained. */
+    cpu_irqoff_begin(cycles,1); cpu_irqoff_mark(CPU_IRQOFF_PICK); cycles+=999;
+    cpu_irqoff_end(cycles); CHECK(!irqoff_window.cycles);
+    cpu_irqoff_begin(cycles,1); cycles+=500; cpu_irqoff_mark(CPU_IRQOFF_PICK); cycles+=500;
+    cpu_irqoff_end(cycles); CHECK(irqoff_window.cycles==1000 && !irqoff_window.gap);
+    irqoff_window.cycles=0;
+    for (unsigned i=0;i<3;i++) {
+        cpu_irqoff_begin(cycles,2+i); cycles+=1200+i*100;
+        cpu_irqoff_mark(CPU_IRQOFF_ADDRESS); cycles+=100;
+        cpu_irqoff_mark(CPU_IRQOFF_NONE); cpu_irqoff_end(cycles);
+    }
+    CHECK(irqoff_window.cycles==1500 && irqoff_window.gap && irqoff_window.phase_cycles==1400);
+    record_bytes=0; records[0]=0; cpu_emit();
+    CHECK(strstr(records,"[kernel] irqoff_long site=00000004 us=1500 phase=gap phase_us=1400"));
+    g_tsc_per_ms=0; cpu_irqoff_begin(cycles,5); cycles+=3000; cpu_irqoff_end(cycles);
+    CHECK(!irqoff_window.cycles); g_tsc_per_ms=1000;
+    puts("f1-86 IRQ-off: production schedule/FPU, exact 1ms boundary, gap, longest once per window, uncalibrated clock PASS");
+}
 int main(void)
 {
+    irqoff_phase_test();
     wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");
     return 0;

@@ -510,6 +510,7 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
 int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                    uint32_t flags, struct file_description *d)
 {
+    vfs_tag_locked(s->vfs,flags&O_TRUNC ? "truncate" : flags&O_CREAT ? "create" : "other");
     struct px_path r;
     int err = px_resolve_locked(s, cwd, path, !!(flags & O_CREAT), &r);
     if (err) return err;
@@ -538,6 +539,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         struct px_node *n = node_new(s, r.parent, PX_FILE);
         if (!n) return -ENOMEM;
         n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+        vfs_tag_locked(s->vfs,"create");
         err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, 0, &n->entry));
         if (err) { node_forget(n); return px_error(err); }
         n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
@@ -546,6 +548,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
     }
     if (flags & O_TRUNC) {
         if ((err=px_range_locked(r.node,0,r.node->entry.size))) return err;
+        vfs_tag_locked(s->vfs,"truncate");
         err = VFS_IO(s->vfs,fat_truncate(r.node->volume, &r.node->entry, 0));
         px_changed_locked(r.node);
         if (err) return px_error(err);
@@ -562,6 +565,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
 
 int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode)
 {
+    vfs_tag_locked(s->vfs,"mkdir");
     if (mode & ~0777u) return -EINVAL;
     struct px_path r; int err = px_resolve_locked(s, cwd, path, true, &r);
     if (err) return err;
@@ -570,6 +574,7 @@ int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *pat
     struct px_node *n = node_new(s, r.parent, PX_DIRECTORY);
     if (!n) return -ENOMEM;
     n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+    vfs_tag_locked(s->vfs,"mkdir");
     err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, FAT_ATTR_DIR, &n->entry));
     if (err) { node_forget(n); return px_error(err); }
     n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
@@ -588,6 +593,7 @@ static int remove_node(struct px_node *n)
     if (retain && (!fat_native_ready || !fat_native_ready())) return -EIO;
     struct fat_entry entry = n->entry;
     if (retain) entry.first = 0; /* durable name removal, no chain release */
+    vfs_tag_locked(n->space->vfs,"unlink");
     int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &entry, directory(n)));
     if (err) return px_error(err);
     n->linked = false;
@@ -614,6 +620,7 @@ int px_drop_locked(struct px_node *n)
          * Closing an expired description must never release its old chain. */
         if (n->drive>=26 || n->space->vfs->generation[n->drive]!=n->generation ||
             n->space->vfs->volumes[n->drive]!=n->volume) { node_forget(n); return 0; }
+        vfs_tag_locked(n->space->vfs,"unlink");
         int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &n->entry, false));
         n->entry.first = 0; n->entry.size = 0;
         node_forget(n);
@@ -624,6 +631,7 @@ int px_drop_locked(struct px_node *n)
 }
 int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
 {
+    vfs_tag_locked(s->vfs,"unlink");
     struct px_path r; int err = px_resolve_locked(s, cwd, path, false, &r);
     if (err) return err;
     if (r.node->ro) return -EROFS;
@@ -648,6 +656,7 @@ static int empty_directory(struct px_node *n)
 }
 int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
 {
+    vfs_tag_locked(s->vfs,"rename");
     int valid=px_validate(from); if (!valid) valid=px_validate(to); if (valid) return valid;
     reserve_paths(s,cwd,from,to);
     struct px_path a, b;
@@ -689,14 +698,17 @@ int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *fr
         if (!fat_rename_replace || !fat_native_ready || !fat_native_ready()) return -EIO;
         bool legacy = b.node->kind == PX_FILE && legacy_open(b.node);
         bool retain = b.node->kind == PX_FILE && (b.node->refs || legacy);
+        vfs_tag_locked(s->vfs,"rename");
         err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, &b.node->entry,
                                  b.parent->entry.first, b.name, retain));
         if (b.node->entry.index == UINT32_MAX) {
             b.node->linked = false; px_changed_locked(b.node); node_forget(b.node);
         }
     } else if (fat_rename_replace) {
+        vfs_tag_locked(s->vfs,"rename");
         err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, 0, b.parent->entry.first, b.name, false));
     } else {
+        vfs_tag_locked(s->vfs,"rename");
         err = VFS_IO(s->vfs,fat_rename(a.node->volume, &a.node->entry, b.parent->entry.first, b.name));
     }
     if (!err) {

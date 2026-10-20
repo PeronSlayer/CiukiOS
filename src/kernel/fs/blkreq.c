@@ -363,6 +363,12 @@ bool blk_queue_run_one(struct blk_queue *q) {
     int e=execute(r,bytes); /* sleeps with IF=1; lower IRQ only wakes this continuation */
     fs_lock_take(&q->lock);
     uint32_t elapsed=fs_now_ms()-now;
+    struct blkdev_stats *stats=&r->device->stats;
+    unsigned bin=elapsed<2 ? 0 : elapsed<8 ? 1 : elapsed<32 ? 2 : 3;
+    stats->service[bin]++;
+    if (elapsed>stats->service_max_ms) stats->service_max_ms=elapsed;
+    unsigned unit=r->device->stats_unit;
+    if (unit<2) { q->stats.device[unit]=*stats; q->stats.device_seen[unit]=true; }
     r->serviced=fs_now_ms();
     if (r->generation!=r->device->media_generation && !e) e=-FS_EIO;
     /* Adaptive command size for reader fairness (C3): shrink after a slow
@@ -500,6 +506,11 @@ static void record_queue(struct blk_queue *q,const struct blk_queue_stats *snaps
 #ifndef FS_HOST
     klog("[storage] queue name=%s depth=%u/%u/%u age_ms=%u issued=%llu merged=%llu split=%llu cancelled=%llu timeout=%llu backpressure=%llu limit=%u",
         q->name,s.depth[0],s.depth[1],s.depth[2],s.oldest_ms,s.issued,s.merged,s.split,s.cancelled,s.timeouts,s.backpressure,s.limit_bytes);
+    for (unsigned unit=0;unit<2;unit++) if (s.device_seen[unit]) {
+        const struct blkdev_stats *d=&s.device[unit];
+        klog_periodic("[storage] queue name=%s unit=%u dma=%llu pio=%llu svc=%u/%u/%u/%u svc_max_ms=%u",
+            q->name,unit,d->dma,d->pio,d->service[0],d->service[1],d->service[2],d->service[3],d->service_max_ms);
+    }
 #endif
 }
 void blk_queue_poll(struct blk_queue *q) {

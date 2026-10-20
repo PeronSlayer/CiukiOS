@@ -72,6 +72,13 @@ struct vfs_range_lock { struct vfs_description *description; struct vfs_node *no
 #define VFS_RANGE_LOCKS 128u
 struct vfs_waiter;
 struct vfs_table;
+struct vfs_hold_info {
+    struct fs_task_identity task;
+    char op[12];
+    uint32_t started;
+};
+void vfs_wait_observer(char,uint32_t,char,const char *,const struct fs_task_identity *,const struct vfs_hold_info *) __attribute__((weak));
+void vfs_hold_observer(char,uint32_t,const struct vfs_hold_info *,uint32_t) __attribute__((weak));
 struct vfs {
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
      * -> device (4). Never wait for a reserved volume with namespace held.
@@ -93,6 +100,8 @@ struct vfs {
     uint32_t readers[26];
     struct vfs_node *io_file[26];
     char holder; /* atomic diagnostic snapshot of namespace owner's drive */
+    struct vfs_hold_info holds[26], namespace_owner;
+    uint32_t diagnostic_waiters[26]; /* existing namespace lock, no new lock */
     unsigned default_drive; /* operation's legacy path-resolution snapshot */
     struct fat_volume *volumes[26];
     uint32_t drive_flags[26];
@@ -142,6 +151,8 @@ static inline uint32_t vfs_drive_mask(unsigned d) { return d < 26 ? 1u << d : 0;
 void vfs_lock(struct vfs *, uint32_t drives);
 void vfs_reserve_locked(struct vfs *, uint32_t drives);
 void vfs_unlock(struct vfs *);
+/* Diagnostic tag only: call under namespace before starting a mutation. */
+void vfs_tag_locked(struct vfs *,const char *tag);
 struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);
 void vfs_io_end_locked(struct vfs *, struct vfs_io_state);

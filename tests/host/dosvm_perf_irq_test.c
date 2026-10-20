@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/timing.h>
@@ -22,6 +23,17 @@ static bool measuring;
 static unsigned blocks, access_bytes, copy_bytes, clear_bytes, divisions, labels, rows;
 static void (*restore_hook)(void);
 static uint64_t fake_tsc;
+static char periodic[4096];
+static unsigned periodic_bytes, periodic_rows;
+void klog_periodic(const char *fmt,...)
+{
+    CHECK(cpu_flags & 0x200);
+    va_list ap; va_start(ap,fmt);
+    int n=vsnprintf(periodic+periodic_bytes,sizeof(periodic)-periodic_bytes,fmt,ap); va_end(ap);
+    CHECK(n>0 && n<=254 && periodic_bytes+(unsigned)n+2<sizeof(periodic));
+    periodic_bytes+=(unsigned)n; periodic[periodic_bytes++]='\n'; periodic[periodic_bytes]=0;
+    periodic_rows++;
+}
 uint64_t g_tsc_per_ms;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
@@ -87,6 +99,7 @@ static void reset(void)
     memset(&vm,0,sizeof(vm)); perf_current=&vm;
     cpu_flags=0x200; g_tsc_per_ms=1000; g_ticks=DOSVM_PERF_INTERVAL; fake_tsc=100;
     blocks=access_bytes=copy_bytes=clear_bytes=divisions=labels=rows=0;
+    periodic_bytes=periodic_rows=0; periodic[0]=0;
 }
 static void seed(bool dense, unsigned phase)
 {
@@ -129,6 +142,32 @@ static void next_interval_producer(void)
 }
 int main(void)
 {
+    reset(); vm.info.key.id=35; vm.info.key.generation=7;
+    for (unsigned i=0;i<6;i++) vm.perf.exits[i]=11+i;
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) vm.idle.count[i]=1+i;
+    vm.perf.cost_count[DOSVM_COST_IO]=4; vm.perf.cost_cycles[DOSVM_COST_IO]=500;
+    for (unsigned i=0;i<5;i++) vm.perf.interval[0].ports[i]=
+        (struct dosvm_hot_cost){.id=0x330+i,.count=2+i,.cycles=100*(i+1)};
+    g_ticks=1999; dosvm_perf_report(&vm); CHECK(!periodic_rows && !rows);
+    g_ticks=2000; dosvm_perf_report(&vm);
+    CHECK(periodic_rows==5 && vm.perf.sample_count==1);
+    CHECK(strstr(periodic,"[dosvm] perf vm=35 gen=7 exits=65 gp=11 pf=12 db=13 timer=14 other=15 pm=16 busy_pm=0 idle_2f=1 idle_28=2 idle_16=3 idle_hlt=4\n"));
+    CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0334 exits=6 us=500\n"));
+    CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0333 exits=5 us=400\n"));
+    CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0332 exits=4 us=300\n"));
+    CHECK(!strstr(periodic,"port=0331") && strstr(periodic,"[dosvm] perf_cost vm=35 cause=io exits=4 us=500\n"));
+    periodic_bytes=periodic_rows=0; periodic[0]=0;
+    vm.perf.exits[0]+=7; vm.perf.exits[5]+=3; vm.idle.count[DOSVM_IDLE_HLT]+=2;
+    g_ticks=4000; dosvm_perf_report(&vm);
+    CHECK(periodic_rows==2 && vm.perf.sample_count==2 && vm.perf.sample[1].exits[0]==7);
+    CHECK(strstr(periodic,"[dosvm] perf vm=35 gen=7 exits=7 gp=7 pf=0 db=0 timer=0 other=0 pm=3 busy_pm=0 idle_2f=0 idle_28=0 idle_16=0 idle_hlt=2\n"));
+    CHECK(!strstr(periodic,"perf_port") && strstr(periodic,"exits=0 us=0\n"));
+    reset(); vm.info.key.id=vm.info.key.generation=UINT32_MAX;
+    struct dosvm_perf_sample maximum={.busy_permille=1000};
+    for (unsigned i=0;i<6;i++) maximum.exits[i]=UINT32_MAX;
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) maximum.idle_count[i]=UINT32_MAX;
+    perf_periodic(&vm,&maximum); CHECK(periodic_rows==2 && strstr(periodic,"exits=21474836475"));
+    puts("f1-86 VM periodic: no probe, 2s cadence, exact deltas, top three ports/cause, empty next window PASS");
     for (unsigned phase=0;phase<=2;phase++) {
         unsigned sparse_blocks=0,sparse_access=0,sparse_copy=0;
         for (unsigned dense=0;dense<=1;dense++) {

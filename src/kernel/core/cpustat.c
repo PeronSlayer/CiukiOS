@@ -23,6 +23,19 @@ static struct overrun_event overrun_events[16];
 static unsigned overrun_used, overrun_lost;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
+static struct {
+    uint64_t start, last, measured, largest;
+    uint32_t site;
+    enum cpu_irqoff_phase phase, largest_phase;
+    const struct task *from, *to;
+} irqoff;
+static struct irqoff_long {
+    uint64_t cycles, phase_cycles;
+    uint32_t site;
+    enum cpu_irqoff_phase phase;
+    bool gap;
+    char from[16], to[16];
+} irqoff_window;
 
 static uint64_t stamp(void) { return g_tsc_per_ms ? ktime_cycles() : g_ticks; }
 static uint64_t per_ms(void) { return g_tsc_per_ms ? g_tsc_per_ms : 1; }
@@ -38,6 +51,45 @@ static void name_copy(char *dst, const char *src)
                     (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') ? (char)c : '_';
     }
     while (i < 16) dst[i++] = 0;
+}
+void cpu_irqoff_begin(uint64_t start,uint32_t site)
+{
+    irqoff.start=start; irqoff.last=0; irqoff.measured=irqoff.largest=0;
+    irqoff.site=site; irqoff.phase=irqoff.largest_phase=CPU_IRQOFF_NONE;
+    irqoff.from=irqoff.to=g_current;
+}
+static void irqoff_mark_at(enum cpu_irqoff_phase phase,uint64_t now)
+{
+    if (!irqoff.start) return;
+    if (irqoff.phase!=CPU_IRQOFF_NONE && now>=irqoff.last) {
+        uint64_t d=now-irqoff.last;
+        irqoff.measured+=d;
+        if (d>irqoff.largest) { irqoff.largest=d; irqoff.largest_phase=irqoff.phase; }
+    }
+    irqoff.last=now; irqoff.phase=phase;
+}
+void cpu_irqoff_mark(enum cpu_irqoff_phase phase)
+{
+    if (irqoff.start) irqoff_mark_at(phase,read_tsc_unserialized());
+}
+void cpu_irqoff_tasks(const struct task *from,const struct task *to)
+{
+    if (irqoff.start) { irqoff.from=from; irqoff.to=to; }
+}
+void cpu_irqoff_end(uint64_t end)
+{
+    if (!irqoff.start) return;
+    irqoff_mark_at(CPU_IRQOFF_NONE,end);
+    uint64_t d=end-irqoff.start;
+    if (g_tsc_per_ms && d>=g_tsc_per_ms && d>irqoff_window.cycles) {
+        irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
+        irqoff_window.gap=irqoff.measured<(d+1)/2;
+        irqoff_window.phase=irqoff.largest_phase;
+        irqoff_window.phase_cycles=irqoff_window.gap ? d-irqoff.measured : irqoff.largest;
+        name_copy(irqoff_window.from,irqoff.from ? irqoff.from->name : "none");
+        name_copy(irqoff_window.to,irqoff.to ? irqoff.to->name : "none");
+    }
+    irqoff.start=0;
 }
 
 static void stretch_end(struct task *t, uint64_t now, uint32_t eip)
@@ -198,6 +250,8 @@ static void cpu_emit(void)
     uint32_t f = irq_save();
     uint64_t now = stamp(), total = now - window_start;
     if (!total) { irq_restore(f); return; }
+    struct irqoff_long long_section=irqoff_window;
+    irqoff_window.cycles=0;
     bool emit = forced || threshold || (g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE | CBI_F_TEST_REQUEST));
     if (g_current) {
         charge(g_current, now);
@@ -270,6 +324,13 @@ static void cpu_emit(void)
             top[i] = sample;
             break;
         }
+    }
+    if (long_section.cycles && g_tsc_per_ms) {
+        static const char *const phases[]={"other","pick","fpu","address_space","ldt/debug","vm-enter","other"};
+        klog_periodic("[kernel] irqoff_long site=%08x us=%llu phase=%s phase_us=%llu from=%s to=%s",
+            long_section.site,long_section.cycles*1000/g_tsc_per_ms,
+            long_section.gap ? "gap" : phases[long_section.phase],
+            long_section.phase_cycles*1000/g_tsc_per_ms,long_section.from,long_section.to);
     }
     if (!emit) return;
     struct timing_stats timing; timing_snapshot(&timing);

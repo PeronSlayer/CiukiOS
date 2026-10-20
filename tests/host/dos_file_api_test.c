@@ -435,7 +435,8 @@ static void error_tests(bool continuation) {
 static bool request_cancel(void *arg) { (void)arg; return cancel_request; }
 static void wait_tests(void) {
     struct vfs_wait_info evidence={0};
-    struct vfs_request r={0,wall_time+2000000,wall,request_cancel,pause_time,0x49,&evidence,0};
+    struct vfs_request r={.deadline=wall_time+2000000,.now=wall,.cancelled=request_cancel,
+        .pause=pause_time,.owner=0x49,.wait=&evidence};
     fs_lock_take(&space.lock); uint64_t begin=wall_time;
     CHECK(vfs_admit(&space,1u<<2,&r)==-VFS_ETIMEOUT); CHECK(wall_time-begin==2000000);
     CHECK(evidence.valid && evidence.owner==0x49 && evidence.elapsed_us==2000000 && evidence.reason==VFS_WAIT_NAMESPACE && evidence.outcome==-VFS_ETIMEOUT);

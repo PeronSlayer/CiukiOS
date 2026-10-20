@@ -1,6 +1,6 @@
 /* f0-34: live disk summaries are protected; rec_diag stop-time history is
  * droppable regardless of a shared group=vm_perf_* name.
- * f3-31 counters: one memory snapshot and disk-only RAM summary per five
+ * f1-86 counters: one memory snapshot and bounded UART summary per two
  * seconds; the verbose UART history is dumped after the worker stops.
  * TSC accounting pauses across task switches; it never includes a sleeping
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
@@ -289,6 +289,28 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
     }
 }
 
+static void perf_periodic(struct dosvm *v, const struct dosvm_perf_sample *s)
+{
+    uint32_t id = v->info.key.id, gen = v->info.key.generation;
+    uint64_t exits = 0;
+    for (unsigned i = 0; i < 5; i++) exits += s->exits[i]; /* pm overlaps */
+    klog_periodic("[dosvm] perf vm=%u gen=%u exits=%llu gp=%u pf=%u db=%u timer=%u other=%u pm=%u busy_pm=%u idle_2f=%u idle_28=%u idle_16=%u idle_hlt=%u",
+        id, gen, exits, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5],
+        s->busy_permille, s->idle_count[DOSVM_IDLE_2F], s->idle_count[DOSVM_IDLE_28],
+        s->idle_count[DOSVM_IDLE_16], s->idle_count[DOSVM_IDLE_HLT]);
+    for (unsigned i = 0; i < 3 && i < DOSVM_PERF_TOP; i++) {
+        const struct dosvm_hot_cost *p = &s->top_port[i];
+        if (p->count) klog_periodic("[dosvm] perf_port vm=%u port=%04x exits=%u us=%llu",
+            id, p->id, p->count, perf_us(p->cycles));
+    }
+    unsigned top = 0;
+    for (unsigned i = 1; i < DOSVM_COST_COUNT; i++)
+        if (s->cost_us[i] > s->cost_us[top] ||
+            (s->cost_us[i] == s->cost_us[top] && s->cost_count[i] > s->cost_count[top])) top = i;
+    klog_periodic("[dosvm] perf_cost vm=%u cause=%s exits=%u us=%llu",
+        id, perf_names[top], s->cost_count[top], s->cost_us[top]);
+}
+
 void dosvm_perf_report(struct dosvm *v)
 {
     if (!g_tsc_per_ms || g_ticks - v->perf.report_tick < DOSVM_PERF_INTERVAL) return;
@@ -424,10 +446,11 @@ void dosvm_perf_report(struct dosvm *v)
     memset(bank->ports, 0, sizeof(bank->ports));
     memset(bank->vectors, 0, sizeof(bank->vectors));
     unsigned n = ++v->perf.sample_count;
-    /* No UART, console, VFS, waits or allocation. reporting prevents a
+    /* IF is restored before ranking, formatting and publication. reporting prevents a
      * preempting STATUS call from overwriting this sample during emission. */
     uint64_t begin = dosvm_perf_clock();
     perf_live(v, s, n, &bank->disk);
+    perf_periodic(v, s);
     memset(&bank->disk, 0, sizeof(bank->disk));
     v->perf.log_cycles += dosvm_perf_clock() - begin;
     v->perf.reporting = false;

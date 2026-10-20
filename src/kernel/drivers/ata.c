@@ -14,6 +14,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/work.h>
 #include <ciuki/ata.h>
+#include <ciuki/timing.h>
 
 #define ATA_ERR 0x01u
 #define ATA_DRQ 0x08u
@@ -118,6 +119,7 @@ int ata_channel_setup(struct ata_channel *c, unsigned index, const struct ata_po
         c->devices[i].unit = i;
         c->devices[i].firmware_udma = -1;
         c->devices[i].block.ctx = &c->devices[i];
+        c->devices[i].block.stats_unit = i;
         c->devices[i].block.sector_size = BLKDEV_SECTOR_SIZE;
         c->devices[i].block.queue = &c->requests;
     }
@@ -161,6 +163,8 @@ static int dma_failure(struct ata_device *d, uint64_t start, uint8_t status)
     klog("[ata%u] dma quarantine unit=%u mode=udma%u generation=%u command=%02x issued=%u bm=%02x status=%02x error=%02x elapsed_ms=%llu fallback=%s",
          c->irq - 14, d->unit, d->udma_mode, d->generation, d->command, d->issued, bm,
          status, d->error, d->elapsed_ms, fallback ? "pio" : "blocked");
+    if (fallback) klog("[ata%u] dma fallback unit=%u generation=%u command=%02x bm=%02x status=%02x mode=pio",
+         c->irq - 14, d->unit, d->generation, d->command, bm, ending);
     /* A failed command is never replayed. Only a later independent request
      * may use PIO, after proving both engines idle. Busy/DRQ/DF or missing
      * devices retain the old whole-channel quarantine and pinned memory. */
@@ -476,6 +480,7 @@ static int packet_raw(struct ata_device *d, const uint8_t *packet, unsigned leng
     disarm(c);
     d->elapsed_ms = now(c) - start;
     if (d->elapsed_ms > d->max_packet_ms) d->max_packet_ms = d->elapsed_ms;
+    if (!e && *done) d->block.stats.pio++;
     return e;
 }
 static int packet_checked(struct ata_device *d, const uint8_t *p, unsigned length,
@@ -1027,6 +1032,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     if (c->stopped || c->quiescing)
         return -FS_EQUARANTINED;
     uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
+    uint64_t first_start = !c->dma_completion_logged && g_tsc_per_ms ? ktime_cycles() : 0;
     uint32_t sequence;
     d->issued = false;
     uint8_t head = (uint8_t)(0x40 | (d->lba48 ? 0 : (lba >> 24) & 15));
@@ -1073,6 +1079,13 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         disarm(c);
         d->elapsed_ms = now(c) - start;
         if (!e) {
+            d->block.stats.dma++;
+            if (!c->dma_completion_logged) {
+                c->dma_completion_logged = true;
+                uint64_t us = first_start ? (ktime_cycles()-first_start)*1000/g_tsc_per_ms : d->elapsed_ms*1000;
+                klog("[ata%u] dma first-completion unit=%u elapsed_us=%u",
+                    c->irq - 14, d->unit, us>UINT32_MAX ? UINT32_MAX : (uint32_t)us);
+            }
             d->dma_requests++; d->dma_bytes += n * 512;
             if (c->dma.bounced) d->dma_bounces++;
             if (!write && proc_launch_dma_read) proc_launch_dma_read(n * 512, d->elapsed_ms, c->dma.bounced);
@@ -1100,6 +1113,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
         e = poll_status(d, start, deadline, 0, ATA_DRQ);
     disarm(c);
     d->elapsed_ms = now(c) - start;
+    if (!e) d->block.stats.pio++;
     return e;
 }
 

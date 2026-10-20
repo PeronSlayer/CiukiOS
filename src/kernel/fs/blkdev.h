@@ -9,6 +9,10 @@
 #define BLKDEV_READ_SECTORS (BLKDEV_READ_BYTES / BLKDEV_SECTOR_SIZE)
 enum blkdev_cache_state { BLKDEV_CACHE_UNKNOWN, BLKDEV_CACHE_DISABLED, BLKDEV_CACHE_ENABLED };
 struct blk_queue;
+struct blkdev_stats {
+    uint64_t dma, pio;
+    uint32_t service[4], service_max_ms;
+};
 struct blkdev {
     /* One sector, bounded polling, no locks/allocation/scheduler. Optional
      * emergency crash recorder only; failure is never retried. */
@@ -40,6 +44,10 @@ struct blkdev {
      * caller's priority/frontier and the parent controller's generation. */
     struct blkdev *request_parent;
     uint64_t request_offset;
+    /* Diagnostic only. Controller executor serializes updates; queue reports
+     * retain value snapshots, never pointers to removable devices. */
+    struct blkdev_stats stats;
+    unsigned stats_unit; /* ATA master/slave; other single-device queues use 0 */
 };
 static inline int blkdev_range(struct blkdev *d, uint64_t lba, uint32_t n) {
     if (!d || (d->sector_size != 512 && d->sector_size != 2048) || !n || lba >= d->capacity || n > d->capacity-lba) return -FS_EINVAL;
@@ -91,6 +99,8 @@ struct blk_request {
 struct blk_queue_stats {
     uint32_t depth[BLK_PRIORITIES], oldest_ms, limit_bytes;
     uint64_t issued, merged, split, cancelled, timeouts, backpressure;
+    struct blkdev_stats device[2];
+    bool device_seen[2];
 };
 struct blk_queue {
     fs_lock lock;
