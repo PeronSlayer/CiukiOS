@@ -647,7 +647,10 @@ static int probe_w32_dialogs(void)
     if (!pass) { failure="survivor_timeout"; goto cleanup; }
     pass=native_command(server,GATE_SNAPSHOT,&generation) && native_command(server,GATE_DIALOGS,&generation);
     if (!pass) { failure=native_command_failure; goto cleanup; }
-    deadline=g_ticks+5000;
+    /* The desktop spawns the fixture only once w32srv has registered its
+     * endpoint (first QEMU run: the fixture's startup met no server, 1062,
+     * and exited c0000142); w32srv takes 1-2 s to start under TCG. */
+    deadline=g_ticks+20000;
     while (native_live(server) && !native_reports.dialogs_child && g_ticks<deadline) task_sleep_ms(1);
     child_pid=native_reports.dialogs_child;
     child=child_pid ? proc_find(child_pid) : 0;

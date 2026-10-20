@@ -1173,6 +1173,7 @@ static int launch_pending(struct desktop *d)
 __attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 __attribute__((weak)) void desk_v3_fixture_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_dialogs_fixture_tick(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_dialogs_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_dialogs_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 void desk_v3_fixture_report(const char *line)
@@ -1849,6 +1850,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         desk_v3_fixture_tick(d);
+        desk_dialogs_fixture_tick(d);
         int mode_frame=desk_display_frame_commit(d,redraw);
         if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
