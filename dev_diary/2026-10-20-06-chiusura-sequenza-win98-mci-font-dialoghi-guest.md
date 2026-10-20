@@ -1,0 +1,26 @@
+# Chiusura della sequenza Windows 98/ME (f3-46), MCI e AVI (f5-12B), ponte dei font (f5-10C2) e primo caso guest dei dialoghi Win32
+
+- **Data:** 2026-10-20
+- **Tipo:** integrazione (VM DOS, Win32, QEMU)
+- **Versione/commit:** 0.9.2 pre-alpha / main `e7e543dd`; immagini QEMU `750e9937…` (f3-46) e `49a88fbc…` (dialoghi)
+- **Stato:** integrato con suite host verdi; verifiche QEMU riportate sotto
+
+## Fatti
+
+1. **f3-46 (contratto D1).** Il pool XMS/EMS/DPMI da 24 MiB di ogni VM DOS è un oggetto paginabile sugli oggetti f0-47, la sostituzione f0-48 e il file di scambio f0-49: record degli slot, pagine a zero su richiesta, finestre EMS come alias, fornitore di reclaim, page-in verificato; pin per lo stack dell'host DPMI, i conteggi di lock 0600h/0601h, il buffer VBE e la finestra DMA virtuale; impegno di memoria nel ledger con crescita del file di scambio; I/O protetto (risoluzione all'ingresso delle trap, risoluzione per pagina dei trasferimenti, letture DMA solo residenti, prefault dello stack prima di ogni commit IRQ, che ha corretto un fault reale nella costruzione del frame a IF spento); blocchi della cache f3-47 recuperabili; opzione `launch.memory` (paginato predefinito, bloccato per gioco). Creazione paginata 23,6 ms contro 134,3 ms bloccata; replay combinato `late-grow=0 lead=8 max_gap_us=1772`; orologio audio DOS 248/250 µs. Con D1 si chiude la sequenza del contratto (M1–M4, R1–R3, C1–C5, D1). Conflitto con f3-51c in `dosvm_disk.c` risolto dal lead.
+2. **f5-12B.** Nucleo MCI (interfacce stringa e comando, alias, apertura automatica, notifiche, codici di errore di Windows 98), `waveaudio` (PCM e ADPCM via msacm32 nel mixer f5-12A), `sequencer` (SMF 0/1 e RMID via `midiStream`), `avivideo` come `mciavi32.dll` con DrawDib e il sottoinsieme MCIWnd; 203 test Win32. Audio CD fermato all'emendamento: deciso il percorso digitale (READ CD) come primario con ripiego analogico esplicito, devctl versionati su `/dev/media`, dischi solo audio "pronti"; continuazione f5-12B2.
+3. **f5-10C2.** w32srv rasterizza i glifi con libfont/FreeType per tutti i processi Win32 e gdi32 li riceve sul canale esistente (tre richieste nuove, nessuna syscall); linea di base dei glifi corretta con dieci fotogrammi f5-10B rifissati; fixture `dialogs-exercise.exe` e sonda kernel `f5:w32-dialogs` con otto predicati.
+4. **Primo caso guest dei dialoghi.** Due difetti d'integrazione trovati e corretti: la tabella dei nomi f5 del loader non conosceva `w32-objects` e `w32-dialogs` (la richiesta fw_cfg veniva rifiutata con `L:SELECT_ERROR`, `f99558ea`); il comando `GATE_DIALOGS` avviava la fixture nello stesso passo in cui avviava w32srv, e l'avvio della fixture non trovava alcun servizio di registro (`refuse no-server … error=1062`, uscita `c0000142`): il desktop rinvia l'avvio finché un giro di registro non riesce (`81884109`). Due casi della suite (`w32-fixtures`, `w32-kernel32`) nominano sonde che né il kernel né il loader registrano: annotato per f5-17B.
+5. **Verifica QEMU** (TCG pentium3, 512 MiB). Immagine `750e9937…` (main `7bc48b7e`, dopo f3-46): sonda `f3:vm-memory` `END status=PASS`; DOOM da Programmi > Giochi con la memoria paginata predefinita mostra la schermata di avvio entro 15 s e la demo in gioco a 30, 60 e 120 s, con il pool della VM impegnato per 6.144 pagine e al più 884 residenti. Immagine `49a88fbc…` (main `bf311463`): la sonda `f5:w32-dialogs` apre il write gate di C: (`case=write-gate expected=0 observed=0`), w32srv non registra più errori di commit e la fixture Win32 parte (pid 6), ma esce subito con codice 2 perché `VirtualAlloc` all'indirizzo fisso 0x6fff0000 restituisce NULL; diagnosi affidata alla direttiva f5-10C3.
+6. **Terzo difetto del primo caso guest.** La sonda non apriva il write gate di C:: con una richiesta di test il kernel monta C: in sola lettura, w32srv non poteva salvare la directory degli identificativi e ogni `RegOpen` falliva con 1016 (4.646 righe `directory-commit-failed`). Corretto nella sonda con un predicato `write-gate`; test host del commit di w32srv attraverso VFS, fat.c e chiamate di sistema; f3-51c escluso rieseguendo lo stesso commit sui sorgenti precedenti (diagnosi di un agente Claude Opus).
+
+## Decisioni
+
+1. f3-46: ammissione basata sulla RAM; paginato come predefinito fino all'accettazione sul T23; cache nel proprietario `MM_VM_PRIVATE`; memoria bassa residente (divergenza registrata da Windows 98); emendamento ABI `launch.memory` accettato; DPMI 0703h non azzera più le pagine bloccate.
+2. f5-12B: audio CD digitale primario e analogico di ripiego; dischi solo audio pronti per il nodo media, non per il montaggio.
+3. f5-10C2: font di sistema da `C:\System\fonts` fino alla vista `C:\WINDOWS\FONTS` di f5-15A.
+4. Codex è di nuovo disponibile (2026-10-20, circa 10:05): le direttive tornano a `gpt-6.1-sol` (effort high, xhigh per il codice kernel e di driver; Astra solo dopo due fallimenti di Sol); agli agenti Claude restano le diagnosi urgenti, su Sonnet per impostazione predefinita e su Opus solo per il debug profondo.
+
+## Riferimenti
+
+- `docs/directives/f3-46-*.md` (revisione), `f5-12b-*.md` (emendamento 1), `f5-10c2-*.md` (revisione e nota del primo avvio guest), `f5-17b-*.md` (nota); report in `build/codex/`; voci 2026-10-20-02 … -05.

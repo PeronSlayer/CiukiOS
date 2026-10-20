@@ -155,3 +155,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisione del proprietario: i programmi Win16 con segmenti a 32 bit entrano nel perimetro di F5](2026-10-20-03-decisione-segmenti-32-bit-win16.md) | 20 ottobre 2026 | decisione |
 | [Giochi DOS di nuovo avviabili dal menu: regressione di f3-51 trovata per bisezione e corretta](2026-10-20-04-regressione-giochi-dos-f3-51-corretta.md) | 20 ottobre 2026 | regressione |
 | [Avvio rapido dei giochi DOS (f3-51c) e cursore del file di scambio (f0-49b)](2026-10-20-05-avvio-rapido-giochi-dos-cursore-fat.md) | 20 ottobre 2026 | modifiche |
+| [Chiusura della sequenza Windows 98/ME (f3-46), MCI e AVI (f5-12B), ponte dei font (f5-10C2) e primo caso guest dei dialoghi Win32](2026-10-20-06-chiusura-sequenza-win98-mci-font-dialoghi-guest.md) | 20 ottobre 2026 | integrazione |
