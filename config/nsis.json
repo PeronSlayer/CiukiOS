@@ -1,0 +1,6 @@
+{
+  "comment": "NSIS 2.51 (the last 2.x release, December 2015) pinned by the lead for the f5-15A2 installer fixtures. Source archive for the host makensis build; binary zip for the Windows stubs and plugins the compiled fixture embeds. Downloaded from SourceForge (project nsis, NSIS 2/2.51); no download by the build, no fallback.",
+  "source": {"file": "build/downloads/nsis/nsis-2.51-src.tar.bz2", "size": 1540555, "sha256": "43d4c9209847e35eb6e2c7cd5a7586e1445374c056c2c7899e40a080e17a1be7", "url": "https://downloads.sourceforge.net/project/nsis/NSIS%202/2.51/nsis-2.51-src.tar.bz2"},
+  "binary": {"file": "build/downloads/nsis/nsis-2.51.zip", "size": 2337616, "sha256": "43065a52a586166174c87294ae322baef898af8b782019e8a7ffd625f64f8e35", "url": "https://downloads.sourceforge.net/project/nsis/NSIS%202/2.51/nsis-2.51.zip"},
+  "license": "zlib/libpng (nsis-2.51/COPYING in both archives)"
+}
