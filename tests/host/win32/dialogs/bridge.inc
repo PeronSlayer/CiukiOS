@@ -387,6 +387,10 @@ static void bridge_refusals(void) {
    * client retries a face only every 256 glyph requests. */
   server.font_call = 0;
   CHECK(raw(W32R_FONT_CMAP, sans, 0, 0, 0, 0, 0, &r, reply, sizeof(reply)) == 120);
+  SetLastError(0);
+  CHECK(!w32_gdi_bridge_statistics(&b) && GetLastError() == 120 &&
+        b.last_error == 120);
+  puts("BRIDGE unavailable typed_failure=120 GetLastError=120");
   CHECK(gdi_host_bridge(bridge_exchange)); /* resets faces and caches */
   UINT transactions = bridge_transactions;
   uint32_t px[320 * 128];
@@ -446,6 +450,41 @@ static void test_exercise(void) {
   w32_dialogs_publish(&r, r.errors ? 1u : 0u, emit_record);
   printf("EXERCISE errors=%u first_error=%u steps=%u\n", r.errors,
          r.first_error, r.steps);
+  bridge_detach();
+}
+
+static void test_exercise_pe(void) {
+  const char *path = getenv("CIUKI_PE_RESOURCES");
+  CHECK(path);
+  FILE *f = fopen(path, "rb");
+  CHECK(f);
+  uint8_t sizes[8];
+  CHECK(fread(sizes, 1, sizeof(sizes), f) == sizeof(sizes));
+  for (unsigned i = 0; i < 2; i++) {
+    pe_resources[i].id = 600 + i;
+    pe_resources[i].size = w32_u32(sizes + 4 * i);
+    CHECK(pe_resources[i].size && pe_resources[i].size < 65536);
+    pe_resources[i].data = malloc(pe_resources[i].size);
+    CHECK(pe_resources[i].data);
+    CHECK(fread(pe_resources[i].data, 1, pe_resources[i].size, f) == pe_resources[i].size);
+  }
+  CHECK(fgetc(f) == EOF && !fclose(f));
+  test_exercise();
+  for (unsigned i = 0; i < 2; i++) {
+    free(pe_resources[i].data);
+    pe_resources[i].data = 0;
+  }
+}
+static void test_exercise_missing_resource(void) {
+  bridge_attach(0);
+  refuse_dialog_resource = 1;
+  struct w32_dialogs_result r = {.magic = W32_DIALOGS_MAGIC,
+                                 .version = W32_DIALOGS_VERSION};
+  const struct w32_dialogs_env env = {FIXTURE, exercise_pump};
+  w32_dialogs_run(&env, &r);
+  CHECK(r.errors && r.first_error && !r.live_windows && !r.live_menus);
+  printf("DIAGNOSTIC first_error=%u\n", r.first_error);
+  refuse_dialog_resource = 0;
   bridge_detach();
 }
 

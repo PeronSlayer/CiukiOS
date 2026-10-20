@@ -97,6 +97,39 @@ static int startup(void) {
     return 0;
 }
 extern HANDLE W32API GetModuleHandleA(const char *);
+extern HANDLE W32API FindResourceA(HANDLE, const char *, const char *);
+extern HANDLE W32API LoadResource(HANDLE, HANDLE);
+extern DWORD W32API SizeofResource(HANDLE, HANDLE);
+extern void *W32API LockResource(HANDLE);
+extern NTSTATUS W32API LdrAccessResource(void *, const void *, void **, ULONG *);
+static void dialogs_resources(HANDLE module) {
+    const unsigned types[] = {5, 4}, ids[] = {600, 601};
+    for (unsigned i = 0; i < 2; i++) {
+        HANDLE r = FindResourceA(module, (void *)(uintptr_t)ids[i], (void *)(uintptr_t)types[i]);
+        CHECK(r);
+        HANDLE loaded = LoadResource(module, r);
+        CHECK(loaded);
+        const unsigned char *data = LockResource(loaded);
+        CHECK(data);
+        SetLastError(0);
+        DWORD size = SizeofResource(module, r);
+        printf("DIALOGS_RESOURCE id=%u size=%u error=%u\n", ids[i], size, GetLastError());
+        CHECK(size && size < 65536);
+        if (!i) CHECK(size >= 26 && w32_u16(data) == 1 && w32_u16(data + 2) == 0xffff);
+        /* Marshal only bytes returned by the real kernel-backed loader to
+         * the USER/GDI harness. Neither harness executes PE instructions. */
+        printf("PE_RESOURCE %u ", ids[i]);
+        for (DWORD j = 0; j < size; j++) printf("%02x", data[j]);
+        puts("");
+        ULONG n = 0;
+        CHECK(!LdrAccessResource(module, r, 0, &n) && n == size);
+        CHECK(!LdrAccessResource(module, r, 0, 0));
+        CHECK(LdrAccessResource(module, (void *)(uintptr_t)1, 0, &n) == STATUS_INVALID_PARAMETER);
+        SetLastError(0);
+        CHECK(!SizeofResource(module, (void *)(uintptr_t)1) && GetLastError() == 1812);
+    }
+    puts("PASS dialogs compiled PE FindResource LoadResource LockResource SizeofResource");
+}
 static int dialogs_startup(void) {
     /* Actual fixture imports, production loader, kernel32 and VM services.
      * PE callbacks are observed, never executed by this native H0 model. */
@@ -107,6 +140,7 @@ static int dialogs_startup(void) {
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader, &host.peb, W32_DIALOGS_PATH, "", "C:\\", "\0\0", &main));
     CHECK(GetModuleHandleA(0) == main->pe.image);
+    dialogs_resources(main->pe.image);
     struct ciuki_w32_memory_info q;
     CHECK(VirtualQuery((void *)0x6fff0000, &q, sizeof(q)) == sizeof(q));
     printf("DIALOGS_LAYOUT old_result=6fff0000 allocation=%08x state=%08x bytes=%u parameters=%08x builtins=%08x main=%08x+%08x\n",

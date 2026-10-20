@@ -54,6 +54,31 @@ real acceptance media and integrated font/UI qualification open.
 
 ## Decisions
 
+- **f5-10C4 resource size queries (2026-10-20).** Microsoft documents
+  [SizeofResource](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-sizeofresource)
+  as returning the compiled resource's byte count, independently of loading
+  its data. The current kernel32 requests only a size from LdrAccessResource,
+  but ntdll incorrectly requires an address output. Accept each output
+  independently while retaining module, entry and payload bounds checks;
+  [upstream Wine's resource accessor](https://github.com/wine-mirror/wine/blob/master/dlls/ntdll/resource.c)
+  also treats both outputs as optional. This is an API implementation detail,
+  not adoption of NT process architecture for DOS compatibility.
+  The regression must load the compiled dialogs PE through the production
+  kernel-backed loader, then pass its actual returned resource bytes to the
+  USER/GDI harness. Microsoft describes the
+  [LoadResource / LockResource sequence](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadresource)
+  and [DIALOGEX layout](https://learn.microsoft.com/en-us/windows/win32/dlgbox/dlgtemplateex);
+  retain the compiled template and its existing parser. Font bridge statistics
+  must return their typed transport/service error in GetLastError when the
+  service is unavailable, without treating readiness retries as glyph failures.
+  [CreateFontIndirectA](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-createfontindirecta)
+  creates a logical font; physical realization is separate, so an unavailable
+  bridge does not by itself invalidate logical font creation.
+  The GUI fixture is spawned directly by the desktop with inherited native
+  stderr (fd 2), without Win32 STARTF_USESTDHANDLES. Diagnostic lines use the
+  existing CIUKI_SYS_WRITE ABI to that fd, without allocating a console or
+  adding a system call. The host harness adapts only this write operation.
+
 - **Non-client bands.** The desktop draws only the frame and caption of a
   top-level window (3-pixel border, 24-pixel caption band). The personality
   owns the menu bar and window scroll bars: a top-level surface is the client
