@@ -1515,3 +1515,665 @@ EntryAddrProc and SetOwner in the header (F10).
   OSFIXUP layout before 16:32/offset32 or x87 patching is frozen.
 - No original acceptance media was inspected; D's records stay absent.
 - E1–E6 are inputs, not dispositions; f5-03/04/05/10 and F3 owners decide.
+
+## P0 handoff dispositions — proposal (f5-19P)
+
+Date: 2026-10-20. Directive: [f5-19P](../directives/f5-19p-win16-p0-dispositions.md).
+Status: **proposed**. Each disposition, interim rule and plan below waits
+for the lead's acceptance or amendment. Nothing here freezes an ABI,
+starts f5-19b/c or changes a kernel, DOS or Win32 limit. Code was checked
+on `main` at `dcf2e575`; `file:line` references are to that revision.
+
+Evidence rule. Microsoft documents (Appendix K, KB articles, SDK excerpts)
+are the period authority. Wine 10.0 and Open Watcom are reference
+implementations: where this proposal adopts their behaviour it says so,
+and a readable 3.1 text or an authored fixture can overturn it. No code was
+copied. The f5-19a appendix (E1–E6) is an input; where this section
+differs it says so, and this section prevails once accepted. The f5-19a
+report is not present on this workstation; its appendix and `sdk/win16/`
+were used instead.
+
+Sources added for this section (fetched 2026-10-20), besides those of §2,
+f5-19r and the f5-19a appendix:
+
+| Source | Used for |
+| --- | --- |
+| Wine 10.0 `krnl386.exe16`: [task.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/task.c), [ne_module.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_module.c), [ne_segment.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/ne_segment.c), [selector.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/selector.c), [global.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/global.c), [local.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/local.c), [dosmem.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/dosmem.c), [int21.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/int21.c), [int31.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/int31.c), [fpu.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/fpu.c), [kernel.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/kernel.c), [thunk.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/thunk.c), [krnl386.exe16.spec](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/krnl386.exe16/krnl386.exe16.spec) | InitTask/WaitEvent/MakeProcInstance, task start and DLL init registers, SELFLOADHEADER, export prolog patching, huge-selector limits, handle/selector relation, GlobalDOSAlloc, identity-mapped DOS memory, Win16 INT 21h/31h behaviour, x87 emulator patching, GetWinFlags and equates, Catch/Throw, ordinals |
+| Wine 10.0 [user.exe16/message.c](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/user.exe16/message.c), [include/wine/winuser16.h](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/include/wine/winuser16.h) | Message conversion rules, control-message renumbering, byte-packed 16-bit structures |
+| Open Watcom [cstrtw16.asm](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/clib/startup/a/cstrtw16.asm), [fppatche.h](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/watcom/h/fppatche.h), [exeos2.h](https://raw.githubusercontent.com/open-watcom/open-watcom-v2/master/bld/watcom/h/exeos2.h) (upstream `master`, cross-check only; the fixture pin is §C) | Win16 CRT startup sequence and DGROUP header, Windows OSFIXUP types, segment flag bits |
+| Microsoft [KB Q65128](https://jeffpar.github.io/kbarchive/kb/065/Q65128/) (Windows 3.0/3.1 SDK) | INT 31h rows for Windows applications, GlobalDOSAlloc guidance, protected-mode INT 21h restrictions |
+| Microsoft, Raymond Chen, [Bad version number checks](https://devblogs.microsoft.com/oldnewthing/20040213-00/?p=40633) | Windows 95 reports version 3.95 to 16-bit programs |
+| Microsoft Press, [MS-DOS Encyclopedia, Appendix K](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/appendix-k/) | Entry flag bits (Figure K-4), relocation record types; it contains no OSFIXUP or FIxRQQ definition |
+
+### P0. Summary
+
+| Item | Proposed disposition | Owner changes | Unblocks |
+| --- | --- | --- | --- |
+| C01 | Kernel-owned per-host LDT (`W32_LDT`, 10Fh) and a blocking run-until-event call (`W32_WIN16`, 110h) in the style of Linux vm86(2): 16-bit code runs only inside the call, and every 16-bit trap, `INT n` and INT 80h returns to the flat caller as an event. No kernel upcall stack, return token or per-callback state. The scheduler loads the host LDT. | f5-03 amendment; one branch of `dosvm_task_switch`; probe | 19b execution |
+| C02 | Option B: one Win32 thread per Win16 task in the host, serialized by a group-local user-mode token over `W32_WORD`, released only at Win16 yield points. user32 gains a blocking-wait hook at two call sites; kernel queues unchanged. | f5-10 hook | 19b tasks, 19c queues |
+| G01 | G01-2 revised: no companion; a host DOS arena at linear 10000h–9FFFFh, reserved by the kernel at host creation, identity-mapped to paragraphs; GlobalDOSAlloc, INT 21h 48h and INT 31h 0100h on it; DOS3Call/INT 21h served in the host over f5-06; a row-by-row INT 31h matrix. | f5-05B/f5-06 reservation | 19b DOS paths |
+| G02 | Startup and callback tables frozen from Appendix K, Wine and Watcom evidence: entry, InitTask, LibEntry and WEP registers; DGROUP and INSTANCEDATA layout; prolog patching; MakeProcInstance; typed trap stubs in both directions; Catch/Throw layout and escape rule; self-loader header. | none outside 19b | 19b assembly glue |
+| G04 | Conversion entirely in the host, by ten message classes with corrected structure sizes; procedure identity through flat ANSI thunks; WM_USER+n control renumbering decided by the target procedure; a coverage test over the SDK message list. | f5-10C invariant only | 19c |
+| G07 | NE classification in `w32_spawn`; the kernel creates the host; a kernel group ledger with membership fixed at spawn and an attach flag honoured only for the host's own children; C01 events and frame checks; policy bounds; a Win16 crash record. | f5-05B/f5-06, f5-03, f5-16 | 19b, 19d |
+
+Corrections to the f5-19a inputs made here: E1's continuation kinds are
+replaced by the run call, and descriptor limits above 64 KiB are allowed
+(P1); E2's kernel stack is 32 KiB, not 16 KiB (P2); E3's refusal of INT 31h
+0000h–000Ch and 0100h–0102h is replaced by service on the host LDT and
+arena (P3); E4's INSTANCEDATA offsets 02h–05h and the DLL instance register
+are refined (P4); E5 misclassified WM_GETDLGCODE and WM_ACTIVATEAPP (P5);
+E6's descriptor invalidation on unmap is replaced by mutation-time
+validation plus frame re-checks (P1, P6).
+
+### P1. C01 — kernel 16-bit execution context (f5-03 → f5-19b)
+
+**Checked on main.**
+
+- GDT slot 8, selector 40h, is the only LDT slot (`src/kernel/include/ciuki/arch.h:32-37`).
+  `arch_ldt_load(const void *, unsigned)` writes a type-82h descriptor and
+  executes LLDT, or loads a null LDTR (`src/kernel/arch/desc.c:83-99`).
+  `dosvm_task_switch` loads a VM's 1,024-entry LDT
+  (`src/kernel/vm/dpmi_internal.h:9`) only for a worker with an active DPMI
+  client and nulls LDTR for every other task (`src/kernel/vm/dosvm.c:506-525`).
+  It runs at `src/kernel/core/task.c:570`, before `proc_task_switch`
+  switches GS/TLS and FS/TEB (`src/kernel/proc/process.c:493-498`). The
+  F3-04 amendment states the same rule (`docs/design/execution-abi.md:1580-1585`)
+  and the F0 probe inspects slot 8 (`src/kernel/probes/probes.c:439`).
+- Vectors 0–47 are DPL0 gates except #BP (3), which is DPL3; vector 80h is
+  a DPL3 gate; every other vector is not present (`desc.c:192-201`). A 16-bit
+  `INT n` at CPL3 therefore raises #GP with error code n·8+2, except
+  `INT 3` (#BP) and `INT 80h`, which enter their DPL3 gates directly.
+- `trap_dispatch` takes DOS VM frames first (`src/kernel/arch/trap.c:124`),
+  then sends INT 80h to `syscall_dispatch` (`trap.c:150`), #NM to the lazy
+  FPU (`trap.c:155`), and other ring-3 traps of a process thread to
+  `ua_fault`, then `w32_fault` (`trap.c:169-172`). `w32_fault` reads
+  instruction bytes at linear `tf->eip` (`src/kernel/proc/win32/exception.c:95`)
+  and `w32_deliver` writes an 808-byte frame at the flat `tf->user_esp` or
+  on the two-page emergency stack (`exception.c:23-62`). Both are wrong for
+  a 16-bit CS or SS.
+- `w32_context_validate` accepts only the flat selectors, the EIP/ESP
+  ranges and the `W32_FLAGS` mask 40DD5h (`src/kernel/proc/win32/context.c:7,25-35`).
+- Transport records are version 1, 16–240 bytes (`src/kernel/proc/win32/syscall.c:35`).
+  The highest Win32 operation in use is `W32_REPORT` 10Eh
+  (`src/kernel/include/ciuki/w32_diagnostics.h:6`); 10Fh and 110h are free
+  on `main` and in the open worktrees checked.
+- `dpmi_frame_check` validates CS and SS and zeroes unloadable data
+  selectors before IRET (`src/kernel/vm/dpmi_desc.c:144-162`). It is
+  DOS-owned and cannot serve a Win32 process (§3), but its rules are the
+  model below.
+
+**Proposed interface.** Two additive `CIUKI_SYS_W32` operations. The kernel
+owns the LDT and executes 16-bit code only inside a blocking run call, as
+in the [vm86(2)](https://man7.org/linux/man-pages/man2/vm86.2.html) model:
+every 16-bit event returns to the flat caller.
+
+```c
+#define W32_LDT   0x10Fu
+#define W32_WIN16 0x110u
+enum w32_ldt_action { W32_LDT_CREATE = 1, W32_LDT_ALLOC, W32_LDT_FREE,
+                      W32_LDT_SET, W32_LDT_GET };
+struct ciuki_w32_ldt_args {             /* version 1, 40 bytes */
+    struct ciuki_w32_header header;     /* operation W32_LDT */
+    uint32_t action;
+    uint32_t selector;   /* in/out: (index << 3) | 7 of the first entry */
+    uint32_t count;      /* CREATE: capacity; ALLOC/FREE: run 1..256 */
+    uint32_t low, high;  /* SET in, GET out: raw i386 descriptor words */
+    uint32_t error;      /* out: Win32 error code, 0 on success */
+};
+enum w32_win16_event { W32_W16_EXCEPTION = 1, W32_W16_SYSCALL_GATE,
+                       W32_W16_STALE_FRAME };
+struct ciuki_w32_win16_args {           /* version 1, 92 bytes */
+    struct ciuki_w32_header header;     /* operation W32_WIN16 */
+    uint32_t action;                    /* 1 = RUN */
+    uint32_t eax, ebx, ecx, edx, esi, edi, ebp, esp;  /* in/out */
+    uint32_t eip, eflags;                             /* in/out */
+    uint16_t cs, ss, ds, es, fs, gs;                  /* in/out */
+    uint32_t event, vector, error_code, address;      /* out */
+    uint32_t error;                                   /* out */
+};
+```
+
+| Area | Rule |
+| --- | --- |
+| Authority | Both operations are accepted only from a process whose kernel record marks it the Win16 host of a group (P6). Any other caller gets `W32_STATUS_ACCESS_DENIED` and error 5. Transport faults stay −errno (f5-03a). `CREATE` happens once per host (a second one: error 183); capacity 16–8,192 entries, host default 1,024 like F3's per-VM LDT, kernel memory charged to the host. A larger default needs the G08 measurement. |
+| Descriptor states | `ALLOC` returns the lowest free contiguous run, every entry not present. `FREE` needs a run of allocated entries. `SET` with P=0 stores a placeholder (S=1, DPL3, P kept 0). `SET` with P=1 requires S=1, DPL=3, a data type (expand-up or expand-down, read-only or writable) or a non-conforming code type (readable or execute-only), D/B=0 and bit 21 (L) = 0; G may be 0 or 1. The covered linear range, with granularity and expand direction applied, must be non-empty, inside [`CIUKI_W32_LOW`, `CIUKI_W32_APP_LIMIT`) and mapped in the host with read access, plus write access for writable data, at the time of `SET` (`ua_range`). Limits above 64 KiB are legal: Windows gives each selector of a huge block the remaining size of the block, so the first selector covers all of it (Wine `selector.c:202-211`, "yep, Windows sets limit like that"). D/B=1 gets error 50 in this phase. Other rule violations: 87; no free run or no kernel memory: 8; an unallocated selector: 6. |
+| Later mapping changes | Validation happens at mutation only; `uaddr.c` gets no Win16 hook. Paging still applies after an unmap, and the host process is the isolation boundary (§4). The host's selector manager frees or re-sets descriptors before it releases their backing (P6). Invalidating descriptors from `remove_range`/`ua_mprotect` was considered and rejected: it would add a Win16 hook to every Win32 unmap. |
+| RUN entry | The kernel validates the supplied frame against the live LDT as `dpmi_frame_check` does. CS: present, non-conforming 16-bit code, DPL and RPL 3, TI=1, EIP within the limit. SS: present, writable 16-bit data, DPL and RPL 3, SP inside the segment. DS/ES/FS/GS: null or loadable LDT selectors with RPL 3; an invalid one is refused with error 87, not zeroed, because the host supplied it. EFLAGS becomes (in & 40DD5h) \| 202h: IF=1, IOPL 0, NT, VM and RF clear. The kernel saves the caller's flat frame in the thread (one slot), marks the thread as running 16-bit code and returns to user mode in the 16-bit frame. The record must stay mapped and writable until RUN returns; a failed copy-out terminates the host. RUN is not an alertable wait. |
+| While running | Interrupts, #NM and page faults that `ua_fault` or the Win32 view code resolve are handled as today, and the 16-bit code resumes. After the thread was switched out, or after any LDT change, the kernel repeats the frame check before returning to the 16-bit frame; a selector made invalid in the meantime ends RUN with `W32_W16_STALE_FRAME`, never with a kernel-mode #GP or #NP on IRET. Every other trap ends RUN: CPU exceptions (including #GP from `INT n`, #BP, #DB and an unresolved #PF with `address` = CR2) as `W32_W16_EXCEPTION` with `vector` and `error_code`; `INT 80h` as `W32_W16_SYSCALL_GATE`, which never reaches `syscall_dispatch`. The kernel decodes no instruction: the host reads CS:IP itself. |
+| RUN exit | The kernel writes the 16-bit state and the event into the record, restores the saved flat frame with EAX = STATUS_SUCCESS and returns from the call. A 32→16 callback is a nested RUN made by flat code on its own C stack. A thread is in at most one RUN at a time, so the kernel holds one saved frame per thread. The flat frame restored at exit is always the one the kernel saved at entry, so §4's return token and context generation are not needed: user mode never chooses a flat continuation, and a 16-bit frame is validated whenever it is entered or resumed. |
+| Forbidden states | A trap with an LDT CS from a thread that is not in RUN, or a trap with a GDT CS while in RUN (a same-CPL far transfer between 16-bit and flat code), terminates the host with a named fault record (`win16-outside-run`, `win16-flat-transfer`). The 19b runtime MUST NOT use same-CPL far transfers. A faster path needs a later ABI amendment backed by measurements. |
+| Scheduler | One switch rule at the scheduler hook (`task.c:570`) replaces the unconditional null branch of `dosvm_task_switch` (`dosvm.c:521-523`): a DOS VM worker with an active DPMI client gets its VM LDT and watchpoints (unchanged); a thread of a Win16 host gets the host LDT; everything else gets a null LDTR. F3 debug-register handling does not change. The F3-04 sentence "LDTR is null for every other task" and the probe expectation (`probes.c:439`) are amended accordingly. |
+| Processor state | x87/SSE stay per thread and lazy (W6). A 16-bit task shares its thread's FPU state with the flat code that runs it, and each task has its own thread (P2). FS and GS in the 16-bit frame are whatever the host supplies; the flat frame restored at RUN exit keeps FS=4Bh. `GetThreadContext` on a thread in RUN reports the saved flat frame; `SetThreadContext` on it is refused (5). No debug registers for Win16 (`context.c:34` already refuses them). IRET to a 16-bit stack segment does not restore ESP[31:16] (the reason for Linux's espfix); as for F3 DPMI clients today, CiukiOS adds no espfix, and 16-bit code must not rely on those bits. |
+| Teardown | The LDT belongs to the host process and is freed after its last thread exits; nothing walks guest lists. A thread killed while in RUN exits like any thread. |
+
+Cost: two kernel transitions per 16→32 call (one trap, one new RUN). 19b
+measures it; a few microseconds per call is the expected order on the T23.
+
+**Alternatives considered.**
+
+1. Upcall model: register a flat dispatcher and stack, redirect 16-bit
+   traps there, resume with tokens and a bridge depth.
+   Rejected: when a 16-bit callback that runs inside a dispatcher frame
+   traps again, a fixed dispatcher stack is overwritten unless the kernel
+   tracks per-level stacks and tokens, and it duplicates `w32_deliver`'s
+   stack logic for a second frame format.
+2. Same-CPL far transfers, with the kernel involved only for faults (Wine's
+   model over Linux `modify_ldt` and signals). Fastest, but every
+   `INT 21h` would still need an alternate-stack upcall, so the kernel work
+   of option 1 remains. It stays a possible measured optimization.
+3. Relaxing `W32_CONTINUE`/`w32_context_validate`: rejected by C01; PE
+   continuations stay strict.
+4. Running NE code in an F3 VM: rejected by §3, §4 and f5-19r §3.
+
+**Consequences.** f5-03 (Win16 amendment): the records in `abi.h` and
+`sdk/win32/include/w32`, sizes in `records.c`, dispatch in `syscall.c`; a new
+kernel unit (LDT object, validator, RUN, trap path, frame re-check); a
+`trap.c` branch after the DOS VM branch and before the IRQ and INT 80h
+branches; the scheduler rule; the probe; and an `execution-abi.md`
+amendment superseding the F3-04 sentence. F3 changes only the null branch
+of `dosvm_task_switch`, and F3 tests must pass unchanged. f5-19b: the
+selector manager and RUN event loop over these records, with a host mock
+that applies the same validator tables. f5-19c/d: nothing beyond using
+19b.
+
+**Evidence required.** Host: table-driven validator tests covering every
+type, DPL, S, D/B, G, L, expand-down, extent and page-permission case with
+independently written expectations; record layout checks in the i686
+freestanding build; RUN state-machine tests on the mock (each event, stale
+frame, outside-run, flat transfer). Lead, on the canonical image when QEMU
+evidence resumes or on the T23: entry of a 16-bit fixture through RUN;
+`INT 21h`, #GP, #NP, #SS, #PF and #BP events; `INT 80h` from 16-bit code is
+an event with no syscall side effect; a timer preemption inside a 16-bit
+loop while another thread frees the running data selector gives
+`STALE_FRAME` and no kernel fault; a DOS VM with a DPMI client running at
+the same time; the F0 probe.
+
+### P2. C02 — USER queue model per Win16 task (f5-04, f5-10 → f5-19b/c)
+
+**Checked on main.**
+
+- Kernel queues, sent-message records and waits belong to threads:
+  `queue_for(struct proc_thread *)` (`src/kernel/proc/win32/message.c:62-71`),
+  `struct w32_send` records sender and receiver TIDs (`message.c:6-12`),
+  and `acquire` tests the waiting thread's queue bits
+  (`src/kernel/proc/win32/wait.c:44-69`).
+- user32 keeps per-thread records (`sdk/win32/user32/internal.h:7-10`: 64
+  threads, 128 windows). A send to the caller's own thread is a direct
+  call; a send to another thread uses `W32_MSG_START` and a loop that
+  sleeps 1 ms between `W32_MSG_POLL_REPLY` calls
+  (`sdk/win32/user32/messages.c:165-251`, pause at `:246`). `GetMessageA`
+  loops on `MsgWaitForMultipleObjectsEx`, which waits in the kernel in
+  slices of at most 10 ms (`messages.c:399-410, 458-503`, kernel call at
+  `:491`).
+- user32 serializes itself with one process-wide recursive lock
+  (`sdk/win32/user32/runtime.c:59-89`) that it drops around kernel waits
+  and around every application procedure (`sdk/win32/user32/unicode.c:288-295`).
+- The desktop's PING is answered only by the pump of the thread that owns
+  the window (`sdk/win32/user32/desktop.c:251-252, 358-360`).
+- A process has at most 16 threads (`src/kernel/include/ciuki/abi.h:217`,
+  `src/kernel/proc/thread.c:106`); the Win32 contract's 32 for win32
+  processes (`win32-personality-contract.md:144`) is not implemented.
+
+**Proposed disposition: option B of E2.** One Win32 thread per Win16 task,
+serialized by a group-local token. Wine uses the same shape: one thread per
+task under a process-wide Win16 lock that `WaitEvent16` releases around
+its wait (`task.c`, "ReleaseThunkLock").
+
+| Element | Proposed rule |
+| --- | --- |
+| Task | Each NE task runs on its own thread of the host, created by the host; it owns a kernel queue and a user32 thread record like any Win32 thread. `HTASK16` is the selector of a host-allocated task database block, mapped inside the host to (TID, generation); it is never a PID. At most 8 tasks per host (policy), leaving 8 of the 16 thread slots to host threads; a ninth launch fails as out of memory (WinExec and LoadModule return 0). |
+| Token | A user-mode word protocol over `W32_WORD` (`abi.h:1663-1690`: generation-keyed compare, wait and wake; spurious wake-ups allowed, so acquisition loops). Fields: owner TID, recursion depth, directed target (DirectedYield), locked task (LockCurrentTask), waiter count, epoch. Only the owner enters RUN or touches Win16 runtime state (heaps, module table, selector manager, task list). |
+| Lock order | The token comes before the user32 lock. A thread never takes the token while it holds the user32 lock. user32 already drops its lock around application procedures and kernel waits, so a task that yields inside a window procedure holds no user32 lock. |
+| Yield points | The token is released only where Windows 3.1 yields: the blocking wait of GetMessage and WaitMessage, the reply wait of an inter-task SendMessage, Yield, OldYield, DirectedYield, WaitEvent, and PeekMessage without PM_NOYIELD when no message is waiting (the 16-bit wrapper calls Yield). Modal loops yield because they are built on GetMessage. The token is not released around window procedures, timer procedures or KERNEL services that wait in the kernel, because Win16 tasks do not yield there. |
+| user32 hook (f5-10) | `u32_set_wait_hooks(const struct u32_wait_hooks *)` with `before_block()` and `after_block()`, called at exactly two sites: around the `W32_WAIT` call of `MsgWaitForMultipleObjectsEx` (after `u32_suspend`, before `u32_resume`) and around the 1 ms pause of the inter-thread send loop. A hook acts only when the calling thread owns the token. With no hooks registered user32 behaves as today. No hook around procedure invocation is needed (P5). |
+| Sends | A same-task SendMessage stays a direct call with the token held. An inter-task SendMessage uses the existing kernel path: the sender releases the token in the reply wait; the receiver, blocked in GetMessage with the token released, wakes on QS_SENDMESSAGE, takes the token, runs the procedure, replies and yields later. The sender's processing of incoming sends while it waits (`sent()`) runs with the token held, which keeps Win16 send ordering. |
+| Events | WaitEvent and PostEvent use a per-task event count in the task database. WaitEvent returns at once, decrementing, when the count is positive; otherwise it releases the token and waits on the count word. The launcher posts one event to each new task so that the CRT's `WaitEvent(0)` after InitTask returns (Wine `ne_module.c:1075-1076`; Open Watcom `cstrtw16.asm` calls WaitEvent after InitTask). |
+| Queue size | `SetMessageQueue`: default 8 per task (Windows 3.1); the maximum comes from the 3.1 SDK entry, reconciled in 19c (Wine 10 ignores the size). The 16-bit PostMessage wrapper enforces it, within the Win32 10,000-message cap. |
+| Scope | The token is group-local. It never serializes kernel I/O, other processes or the desktop, in line with the lead's decision of 2026-10-19 not to adopt Windows 98's system-wide cooperative Win16 scheduling (`win98-class-resource-management.md:807,838`). |
+
+Memory per additional task: a 32 KiB kernel stack
+(`src/kernel/include/ciuki/mm.h:91`), an 8 KiB TEB (`abi.h:1587`), two
+emergency-stack pages (`exception.c:43`) and the committed part of its
+flat stack, about 50–60 KiB, charged to the host and measured under G08.
+E2's 16 KiB kernel stack figure is superseded. No Win16 memory budget
+exists yet; none is proposed before the G08 measurement.
+
+**Alternatives considered.** Option A, one worker multiplexing logical
+queues, needs a new queue identity in f5-04's per-thread kernel queues and
+send records, and hand-written reply routing to suspended continuations.
+Using user32's own lock as the token is rejected: user32 drops it around
+every procedure call, so two tasks would interleave inside window
+procedures.
+
+**Consequences.** f5-04: none. f5-03: none; if a group needs more than 8
+tasks, the 32-thread limit already written in the Win32 contract is
+implemented with its measurement. f5-10: the hook (two call sites) and a
+host test. f5-19b: task threads, task database, token, Yield family,
+WaitEvent/PostEvent, LockCurrentTask and the per-task DOS state switch
+(P3). f5-19c: USER queue and message exports over user32, and the
+PeekMessage/GetMessage yield rules recorded against the 3.1 SDK.
+
+**Evidence required.** Host: a deterministic token model with scripted
+interleavings (two and three tasks, nested inter-task sends, DirectedYield,
+LockCurrentTask, WaitEvent counts, a task killed while it owns the token
+ends the group); a user32 hook test on a fake backend that proves the lock
+order. Lead: a two-task fixture with inter-task SendMessage; a nonyielding
+task whose windows stop answering PING while another group, a native
+client, a PE process and a DOS VM stay responsive, and End Task ends the
+group.
+
+### P3. G01 — DOS/DPMI address model (F3, f5-04/05/06 → f5-19b)
+
+**Checked on main.** F3's DPMI and DOS services are bound to a
+`struct dosvm` (`src/kernel/vm/dpmi_desc.c:66-77`), and the VMM DOS file
+API is per VM (`src/kernel/vm/dos_file.h`); neither can serve a Win32
+process. f5-06's `W32_FILE` provides drive-letter paths with per-process
+current directories, open/create/read/write/seek/truncate/flush,
+attributes and FAT times, find with 8.3 aliases, disk space and byte-range
+locks (`src/kernel/include/ciuki/w32_core.h:10-50`;
+`src/kernel/include/ciuki/w32_objects.h:32`). F3's INT 31h 0400h reports
+0.90, BX=1, CL = CPU family and the VM's PIC bases (`src/kernel/vm/dpmi.c:699-704`),
+and unknown or 1.0-only rows fail with CF set and AX unchanged
+(`dpmi.c:724`).
+
+**Proposed disposition: G01-2, revised.** No companion VM in this phase.
+DOS-addressable memory is a host arena with stable real-mode identities;
+the host serves DOS services over f5-06; INT 31h follows the matrix below.
+A companion (G01-1) comes back to the lead only with a census-proven need
+to execute real-mode code, measured at 128 MiB.
+
+| Element | Proposed rule |
+| --- | --- |
+| Arena | The kernel reserves linear 10000h–9FFFFh (576 KiB of address space, nothing committed) in each Win16 host at creation, before the host's stacks and heaps exist (P6). The host commits pages on demand, charged to its commitment. Paragraph P (1000h ≤ P < A000h) is linear P·16, an identity mapping, as Wine maps its DOS memory at linear 0 when it can (`dosmem.c`, `DOSMEM_Init`). `GetSelectorBase` of a DOS block divided by 16 then gives its segment, as on Windows 3.x. The null guard below 10000h is untouched, and paragraphs below 1000h are never allocated. An arena at an arbitrary host address was rejected because it breaks that identity. |
+| GlobalDOSAlloc, GlobalDOSFree (KERNEL.184/185) | First-fit paragraph allocation in the arena through the global-heap path of a fixed block, so a block above 64 KiB gets the tiled selector run of P1. GlobalDOSAlloc returns DX:AX = paragraph:selector, 0 on failure; GlobalDOSFree returns 0, or the selector on failure (Wine `global.c`, GlobalDOSAlloc16/GlobalDOSFree16). |
+| Real-memory equates | `__0040H` (193): read-only 256-byte synthetic BIOS data area (equipment word, 640 KiB memory size, video mode and columns, and a tick count at 6Ch that the host refreshes at every RUN entry and yield; a loop that polls it without API calls sees a stale value, a recorded limitation). `__0000H` (183): read-only, limit 4FFh, on a host page (linear 0 stays the null guard): the group's virtual interrupt vector table followed by the same BIOS data. `__F000H` (194) and `__ROMBIOS` (173): read-only 64 KiB with a synthetic ROM date at FFF5h and model byte at FFFEh. `__A000H` (174), `__B000H` (181), `__B800H` (182), `__C000H` (195), `__D000H` (179), `__E000H` (190): one shared read-only zero region; a write is an event and the named refusal `real-memory-write`. No physical mapping, ever. Wine sets these entries when KERNEL initializes (`kernel.c:115-141`); INT 31h 0002h returns the same selectors for those segments and fails for any other, as Wine's `int31.c:192-221`. |
+| Per-task DOS state | A 256-byte PSP from GlobalDOSAlloc (its selector is `GetCurrentPDB`), with the environment selector at 2Ch, a 20-entry JFT at 18h (count at 32h, pointer at 34h, extended by `SetHandleCount`) and the command tail at 80h; the DTA (default PSP:80h); the current drive and directories, kept in the task database and installed in the host's f5-06 drive table (`W32_F_CHDIR`) whenever the token passes to the task, as KERNEL switches the DOS current directory per task; the extended-error record for 59h. Handles from `_lopen`/`OpenFile` and from INT 21h are the same per-task DOS handles, mapped to Win32 file handles. Handles 0–4 are NUL devices: reads return end of file, writes are discarded. |
+| INT 21h and DOS3Call | One adapter serves DOS3Call (KERNEL.102), direct INT 21h events and INT 21h requests translated from INT 31h 0300h, over kernel32 and `W32_FILE`. Pointers are selector:offset (protected mode) or arena paragraphs (0300h) and are checked against selector limits and committed pages. DOS error codes are the Win32 error values 1–89, which keep the DOS extended-error numbering. **Served:** 0Eh, 19h, 1Ah, 2Ah, 2Ch, 2Fh; 25h/35h on the group's protected-mode vectors (Q65128); 29h, 30h, 33h; 36h, clamped per W16-6; 38h/65h country data, whose case-map entry is an arena address served by a translated 0301h row; 39h–3Bh; 3Ch–43h; 44h subfunctions 00h, 01h, 06h, 07h, 08h, 09h, 0Ah and 0Eh; 45h/46h with a shared position (kernel32 DuplicateHandle); 47h; 48h/49h through GlobalDOSAlloc/GlobalDOSFree, returning a selector as Wine's `int21.c` does; 4Bh through the §10 launch classification, with the EXEC block's command tail; 4Ch (task exit); 4Dh; 4Eh/4Fh with f3-48's exact 43-byte DTA; 50h, 51h, 62h; 56h; 5700h/5701h; 59h; 5Ah; 5Bh; 5Ch; 60h; 68h; 6Ch; 71xxh only if the version decision (P8, D-VER) reports Windows 95/98. **Fail as Windows does in protected mode** (Q65128): INT 20h, 25h, 26h and 27h; AH 00h, 0Fh, 10h, 14h, 15h, 16h, 21h–24h, 27h, 28h and 67h (programs use `SetHandleCount`). **Named refusals:** 2Bh/2Dh (setting the date or time, AL=FFh: no clock authority); 4Ah (Wine does not support it under Win16 either); the FCB directory functions 11h–13h and 17h, which Q65128 does not cover (census-driven); every other function (CF=1, AX=1, one diagnostic per function and task). INT 24h is never raised: failures return as under `SetErrorMode(SEM_FAILCRITICALERRORS)`, a recorded departure from the Windows 3.1 system-modal box. |
+| Other software interrupts | INT 2Fh 1600h and 160Ah answer per D-VER; 1680h (idle) yields. A software interrupt with a handler registered through 25h or 0205h invokes it. Any other software interrupt is a named refusal `unsupported-interrupt`. Port I/O and CLI/STI arrive as #GP events: CLI/STI update the task's virtual IF; port I/O is refused unless a census row adopts one of the Win32 compatibility emulations (`exception.c:96`, `w32_io_emulate`). |
+| No companion | INT 31h 0300h–0302h execute no real-mode code: only the translated rows run, and any other target fails with CF=1 and the diagnostic `dpmi-rm-exec`. Real-mode callbacks can be allocated but never fire. |
+
+INT 31h matrix. Column (a) of G01 (Windows exports) is §6.3 and the rows
+above; column (c) (mechanism) is the C01 validator and the arena. Column
+(b), direct INT 31h from 16-bit code:
+
+| Rows | Proposed result | Justification |
+| --- | --- | --- |
+| 0000h–0003h, 0006h–000Ch | Served on the host LDT through the C01 validator; 32-bit descriptors fail with CF=1 | Q65128 says Windows 3.x enhanced mode supports DPMI 0.9 and that Windows applications should use KERNEL's selector functions instead; it does not say these rows fail. Wine serves them for Win16 (`int31.c:156-307`). |
+| 0004h/0005h | Success, no effect | 0.9 selector lock and unlock; nothing pages. |
+| 000Dh | Served for the first 16 entries, which the host's selector manager keeps free | 0.9 specific-descriptor rule, as F3 (`dpmi_internal.h:10`). |
+| 0100h–0102h | GlobalDOSAlloc, GlobalDOSFree and in-place resize on the arena; failure CF=1, AX = 7, 8 or 9, BX = largest block | Q65128 says Windows applications should not use them, not that they fail; Wine maps them to GlobalDOSAlloc16 (`int31.c:322-352`). |
+| 0200h/0201h | Served on the group's virtual real-mode vector table | Q65128 lists them for Windows applications; no real-mode code runs without a companion. |
+| 0202h/0203h | CF=1 until the census or an authored fixture needs them | Not in Q65128's list; ToolHelp `InterruptRegister` is the Win16 route (19c's TOOLHELP audit). |
+| 0204h/0205h | Served on the group's protected-mode vector table, shared with INT 21h 25h/35h; a registered handler runs for software `INT n` events before KERNEL's default; hardware vectors are recorded and never called | Q65128 partial row for 25h/35h. |
+| 0300h–0302h | Translated rows only: INT 21h (adapter above), INT 2Fh 1600h, 160Ah and 1680h, and 0301h to the country case-map entry; any other target CF=1 and `dpmi-rm-exec` | No real-mode execution in G01-2. |
+| 0303h/0304h | Allocation served, at most 16 per host (F3's per-client 0.9 minimum); callbacks never invoked | Q65128 lists them. |
+| 0305h/0306h | CF=1 | No raw mode switch without real mode. |
+| 0400h | AX=005Ah, BX=0001h, CL = CPU family, DH/DL = 08h/70h | F3's values (`dpmi.c:701-703`), with the conventional PIC bases because the host has no virtual PIC. |
+| 0500h | Served: largest block and free pages from the host's remaining commitment; unknown fields FFFFFFFFh | 0.9 allows −1 in unknown fields. |
+| 0501h–0503h | Served as private reservations, committed and charged to the host, below 70000000h | Used by 386-aware Win16 code; the same service as VirtualAlloc. |
+| 0600h–0604h, 0700h–0703h | Success without effect; 0604h returns 4096 | No pager; hints only. |
+| 0800h | CF=1 | No physical mapping (§4). |
+| 0900h–0902h | The task's virtual IF (per thread); CLI/STI events update the same flag | E1, E3. |
+| 0A00h and every 1.0-only row | CF=1, AX unchanged, as F3 | §4. |
+
+**Alternatives considered.** G01-1, a companion now, costs a DOS VM
+admission (32 MiB host headroom, `DOSVM_LIMIT` 4) for every group with no
+census-proven need. G01-3, per-call copies, breaks programs that keep DOS
+memory across calls. Serving INT 21h through the kernel's VMM DOS file API
+(f3-49) bound to the host would give one implementation of DOS semantics,
+the shape of Windows 98's IFSMgr, but needs a new kernel binding of a
+per-VM service to a Win32 process, a drive view built from f5-06's table
+and protected-mode pointer translation, ties 19b to f3-49b/f3-50, and
+contradicts §8.1's reviewed wording ("the same f5-06 drive-path
+services"). It is the lead's alternative (P8, D-G01); the adapter
+interface above is the same with either backend.
+
+**Consequences.** F3: none. f5-04: none. f5-05B/f5-06: reserve
+10000h–9FFFFh in a Win16 host at creation (P6); confirm that
+DuplicateHandle on a file handle shares its position, which 45h/46h
+need, or report the gap. f5-19b: arena, GlobalDOSAlloc/GlobalDOSFree,
+equates, per-task DOS state and its switch, the INT 21h/DOS3Call adapter
+and the INT 31h adapter. E3's row "0100h–0102h refused" is superseded.
+
+**Evidence required.** Host: the adapter checked against the expected
+results of f3-48's DOS conformance cases (`tests/host/dos/`) for every
+served function (the same expected
+lines, not the adapter's own output); refusal rows; PSP, JFT and DTA byte
+layouts; arena allocator boundaries; the INT 31h rows on the mock LDT.
+Lead: an authored Open Watcom NE that uses CRT file I/O, GlobalDOSAlloc,
+INT 31h 0000h/0007h/0008h/0100h and FindFirst, and two tasks with
+different current directories.
+
+### P4. G02 — startup and callback ABI (f5-19b, frozen before assembly glue)
+
+**Checked on main.** The parser records the startup fields;
+`autodata_bytes` is the DGROUP allocation plus the heap, plus the stack when
+SS is DGROUP and SP is 0; the self-load header words are read
+(`sdk/win16/ne/ne.h:122-139`, `sdk/win16/ne/ne.c:362-386`). `ne_load_policy`
+refuses self-loading modules (`ne.c:388-399`). The relocator resolves
+imports through a callback that returns selector:offset (`ne.h:145-147`),
+so constant entries such as equates need no code.
+
+**DGROUP layout and INSTANCEDATA.** The automatic data segment holds the
+static data, then the stack, then the local heap at the end of the
+segment. When the header SP is 0, SP is the segment's minimum allocation
+plus the stack size, rounded down to even (Wine `ne_module.c:1210-1213`; segment size
+`ne_segment.c:1003-1004`; `LocalInit16` with start 0 places the heap at the
+segment end, `local.c:407-440`).
+
+| Offset | Field | Rule |
+| --- | --- | --- |
+| 00h | null word | 0 |
+| 02h–05h | old SS:SP | Written by the runtime when it switches the task's stack. The linker image holds 0 and 5 there (Watcom's `__nullarea` in `cstrtw16.asm`: a count of five reserved pointers). |
+| 06h | pLocalHeap | Set by LocalInit. |
+| 08h | pAtomTable | Set by InitAtomTable. |
+| 0Ah | pStackTop | Lowest valid stack offset. Set by InitTask; the CRT may overwrite it (Watcom `_STACKLOW`). |
+| 0Ch | pStackMin | Lowest SP seen so far. Set by InitTask. |
+| 0Eh | pStackBottom | Highest stack offset. Set by InitTask. |
+
+InitTask sets pStackBottom and pStackMin to its entry SP, adjusted for its
+own frame, and pStackTop to pStackBottom minus BX (the stack size). Wine
+adds 150 bytes to pStackTop (`task.c:620-623`); CiukiOS does not, unless a
+3.1 source or a fixture shows it.
+
+**Registers.**
+
+| Register | Program entry (Wine `ne_module.c:1216-1227`) | After InitTask (KERNEL.91, register convention; Wine `task.c:605-660`) | DLL entry (Wine `ne_segment.c:649-690`) | WEP (Pascal `WEP(int)`) |
+| --- | --- | --- | --- | --- |
+| AX | 0 | 1 on success, 0 on failure | Returned: nonzero for success | Returned: 1 |
+| BX | Stack size | Offset in the PSP of the first non-blank of the command tail (81h or more), 80h when empty | 0 (unspecified) | — |
+| CX | Heap size | Stack limit (pStackTop) | Heap size, 0 without DGROUP | — |
+| DX | 0 (unspecified) | nCmdShow | 0 (unspecified) | — |
+| SI | hPrevInstance | hPrevInstance | ES:SI = 0 (command line, always null) | — |
+| DI | hInstance (a handle) | hInstance | Instance handle: the DGROUP handle, or the module handle without DGROUP (`ne_segment.c:639`) | — |
+| BP | 0 | Unchanged; a zero word is pushed (SP − 2) | Frame | — |
+| DS | DGROUP selector | Unchanged | DGROUP selector, or 0 | Through the prolog |
+| ES | PSP selector | PSP selector | 0 | — |
+| SS:SP | DGROUP:SP as above | SP − 2 | Caller's stack | Argument WEP_FREE_DLL (0) or WEP_SYSTEM_EXIT (1); RETF 2 |
+
+**Sequence.** The normal Watcom CRT (`cstrtw16.asm` lines 216–318) calls
+InitTask, WaitEvent(0) (it returns at once because the launcher posted one
+event, P2), InitApp(hInstance)
+(USER.5, which creates the task's queue), INT 21h 30h, GetVersion, `smsw`
+(unprivileged), GetModuleFileName and WinMain, and exits with INT 21h 4Ch.
+InitTask also runs LocalInit(DS, 0, CX) when CX is not 0 and initializes
+the implicitly linked DLLs, dependencies first in load order (Wine does
+this in InitTask: `ne_module.c:1045-1047`, `task.c:629-631`). Explicitly
+loaded DLLs initialize inside LoadLibrary. A failing LibEntry fails the
+load and unloads the module transactionally (§5). Task exit (the 4Ch event
+or a return from the entry point) destroys the task's windows and queue,
+releases its MakeProcInstance thunks, decrements DLL usage and calls
+WEP(WEP_FREE_DLL) for each DLL whose usage reaches 0. A clean group
+shutdown passes WEP_SYSTEM_EXIT; a forced teardown calls no WEP (E4). Wine
+always passes WEP_FREE_DLL (`ne_module.c:1263`): recorded departure.
+
+**Exported prologs** (Wine `ne_segment.c:510-570`). When a code segment is
+loaded or reloaded, after its relocations and before any execution, each
+entry point of that segment whose code starts with `1E 58 90`
+(push ds; pop ax; nop) or `8C D8 90` (mov ax, ds; nop) is patched: if the
+entry's flag bit 1 (single data, Appendix K Figure K-4) is set, the bytes
+become `B8 lo hi` (mov ax, DGROUP selector); otherwise, if the module is
+MULTIPLEDATA and the entry is exported (bit 0), the first two bytes become
+`90 90`, so that the AX loaded by a MakeProcInstance thunk survives. Other
+prologs are not patched, including smart-callback prologs that take DS
+from SS (valid because DS equals SS in applications); their exact 3.1
+forms are reconciled with the SDK volume 1 excerpt in 19b.
+`PatchCodeHandle` (KERNEL.110) applies the same patch to self-loaded
+segments.
+
+**MakeProcInstance and FreeProcInstance** (KERNEL.51/52; Wine
+`task.c:835` onward). The instance selector is the caller's DS. A library
+module gets lpProc back unchanged. Otherwise an 8-byte thunk
+`B8 sel EA off seg` (mov ax, sel; jmp far) is allocated in a per-task code
+segment owned by the host (Wine keeps it in the task database's thunk
+segment) and is freed by FreeProcInstance or at task exit. CiukiOS fills a
+freed thunk with `CC`, so a stale call becomes an event with a named
+diagnostic (a departure for diagnostics only). Thunks per task: policy cap
+512, measured under G08.
+
+**Transitions.** These make §8's "registered trampolines and checked
+kernel continuations" concrete on top of P1's RUN.
+
+- 16→32. Every KERNEL, USER, GDI or other builtin export resolves, through
+  the relocator callback, to a 16-bit stub in a host-owned code segment.
+  The stub executes `INT F0h`; that vector has no gate, so it is a #GP
+  event. The host identifies the export by CS:IP in its stub table, reads
+  the arguments at SS:SP as the typed table says (W16-4: Pascal arguments
+  pushed left to right and popped by the callee; C convention for varargs;
+  register-convention entries such as InitTask, DOS3Call, NetBIOSCall,
+  Catch and Throw receive the whole register image), runs the 32-bit
+  implementation, sets AX or DX:AX and the flags, pops the far return
+  address and the argument bytes, and resumes the caller with RUN. Equates
+  (`__AHSHIFT` 3, `__AHINCR` 8, `__WINFLAGS`, the real-memory selectors)
+  resolve to constants, never to stubs.
+- 32→16. A callback (WNDPROC and DLGPROC are Pascal
+  `(HWND, UINT, WPARAM, LPARAM)` returning DX:AX; timer, enumeration and
+  hook procedures follow the typed table) pushes its arguments on the
+  task's current 16-bit stack and a far return address to the host's
+  return stub (also `INT F0h`, at a distinct offset), records a callback
+  level (the 16-bit SS:SP boundary and the flat frame) and calls RUN. The
+  level ends when the return-stub event arrives with SS:SP at the
+  boundary; any other SS:SP is a stack-imbalance fault.
+- Nonlocal exits. A CATCHBUF is nine words in Windows' layout: IP, CS, SP,
+  BP, SI, DI, DS, unused, SS (Wine `thunk.c`, Catch16 comment). Catch
+  returns 0; Throw(lpbuf, n) resumes after the Catch with AX = n, without
+  the C longjmp rule that turns 0 into 1. A Throw, or a CRT longjmp, whose
+  target SS:SP lies above the innermost callback boundary escapes that
+  level. At the next event the host sees SS:SP beyond
+  the boundary, stores the 16-bit state, ends the 32-bit operation in
+  progress through its documented API (EndDialog for a dialog loop,
+  EndMenu, a reply of 0 to a pending inter-task send), lets the 32-bit
+  frames return normally and resumes the stored state at the level that
+  encloses the target. The host never longjmps through user32 or any other
+  32-bit DLL frame. Fixtures: 19b and 19c.
+- GetWinFlags (KERNEL.132) and `__WINFLAGS` (178) return WF_PMODE \|
+  WF_CPU486 \| WF_ENHANCED \| WF_80x87 \| WF_PAGING = 0C29h. Windows has no
+  Pentium flag: Wine reports 486 for later CPUs and adds WF_PAGING
+  (`kernel.c:307-324`); 0425h (WF_CPU386 without WF_PAGING) would be
+  wrong on the i686 baseline. WF_HASCPUID (2000h), which Wine also sets, is
+  reported only if a source shows that Windows 9x sets it.
+
+**Self-loading modules** (Wine `ne_segment.c:70-84, 361-498`). The header
+in segment 1 is 40 bytes: 00h version "A0" (3041h), 02h reserved, 04h
+BootApp, 08h LoadAppSeg, 0Ch reserved, 10h MyAlloc, 14h EntryAddrProc, 18h
+ExitProc, 1Ch four reserved words, 24h SetOwner. The loader writes far
+pointers to its stubs for MyAlloc (KERNEL.668), EntryAddrProc (KERNEL.667)
+and FarSetOwner (KERNEL.403) at 10h, 14h and 24h, then calls
+BootApp(hModule, hFile) and
+LoadAppSeg(hModule, hFile, segment), Pascal, LoadAppSeg returning the
+segment handle in AX, on a dedicated stack segment of FF00h bytes (Wine's
+size). hFile is a read-only DOS handle on the immutable NE snapshot.
+ExitProc is called when the module unloads. `ne_load_policy` keeps its
+refusal until 19b adds an explicit policy flag; every segment the loader
+returns passes P1's validation before it can run (§5.2).
+
+**Alternatives considered.** Callback registers carried in a kernel
+continuation record: not needed with RUN. Patching only DGROUP prologs:
+misses MULTIPLEDATA exports. C-style Throw(0) → 1: not Windows behaviour.
+
+**Consequences.** f5-19b: a runtime ABI header in `sdk/win16/rt/` with
+these tables, the stub segments, the typed-table format, prolog patching
+after relocation and the self-load policy flag in `sdk/win16/ne/`. No
+directive outside 19b changes. f5-19c uses the callback level for USER
+callbacks and the escape rule for modal loops.
+
+**Evidence required.** Host: tables checked against independent manifests
+(ordinals and conventions from the pinned import libraries and the `.spec`);
+prolog patch fixtures for each byte pattern and flag combination; the
+Catch/Throw escape model; self-loader header fixtures. Disassembly of the
+authored Open Watcom fixtures confirms the CRT's use of the InitTask
+outputs. Lead: a normal-CRT EXE with a DLL (LibEntry and WEP), a
+MakeProcInstance callback from a dialog, a Throw out of a dialog procedure
+and an authored self-loading module.
+
+### P5. G04 — message conversion (f5-10 → f5-19c)
+
+**Checked on main.** user32 stores one 32-bit procedure per class and per
+window, plus the ANSI/Unicode flag added by f5-20B
+(`sdk/win32/user32/internal.h:24,58`). It encodes a procedure of the other
+character flavour as an `FFFFxxxx` handle in a 256-entry table and converts
+between ANSI and Unicode when it calls it (`sdk/win32/user32/unicode.c:67-97,296-304`).
+The predefined control classes (BUTTON, EDIT, STATIC, LISTBOX, SCROLLBAR,
+COMBOBOX, ComboLBox) register lazily, so `GetClassInfoA` returns their
+procedures before any window exists (`sdk/win32/user32/windows.c:117-146`,
+`sdk/win32/user32/controls.c:12-14`). user32 refuses to post its pointer
+messages (`messages.c:11-29`) and copies only WM_SETTEXT, WM_GETTEXT and
+WM_COPYDATA across processes (`messages.c:176-208`).
+
+**Proposed disposition.** All Win16 conversion lives in the host (19c);
+user32 learns nothing about Win16.
+
+| Element | Rule |
+| --- | --- |
+| Procedure identity | Every 16-bit procedure handed to USER (class registration, SetWindowLong GWL_WNDPROC, dialog procedures) is wrapped in a host-owned flat ANSI thunk. user32 stores and calls it like any ANSI procedure, including the ANSI/Unicode conversion it already performs for Unicode windows. The host keeps the map between thunk and 16-bit far procedure, so GetWindowLong from 16-bit code returns the original far procedure and a subclass round trip keeps its identity (§9). A 32-bit procedure returned to 16-bit code, including an f5-20B `FFFFxxxx` handle, is wrapped in a 16-bit stub that calls `CallWindowProcA`. Wine allocates both directions the same way (`WINPROC_AllocProc16`, `alloc_win16_thunk`). |
+| Control renumbering | Win16 control messages are numbered from WM_USER (16-bit BM_, STM_, EM_, LB_ and CB_ messages). The 16→32 renumbering happens only when the procedure about to be called is a predefined control procedure, recognised by comparison with the procedures `GetClassInfoA(NULL, class)` returns when the host starts; this covers subclassing and superclassing. The 32→16 renumbering goes by message number. Offsets per family (Wine `message.c`): BM 0400h–0404h ↔ 00F0h–00F4h; STM 0400h–0401h ↔ 0170h–0171h; EM 0400h–0422h ↔ 00B0h–00D2h; LB 0401h–0423h ↔ 0180h–01A2h; CB 0400h–0418h ↔ 0140h–0158h; scroll-bar messages as Wine's `scrollbar_proc16`. This is Wine's behaviour: per-control 16-bit procedures for 16→32 and `WINPROC_CallProc32ATo16` for 32→16. A query of the window's control kind was rejected: the target procedure decides, not the window's class. |
+| Posting | PostMessage from 16-bit code converts the scalar, handle-mapped and repacked classes. Synchronous-pointer and retained-buffer messages are refused (FALSE, error 1159, ERROR_MESSAGE_SYNC_ONLY), as Win32 does. Win16 allowed posting them; the refusal is a recorded departure, revisited by census. |
+| Coverage | 19c's machine-readable table classifies every message number defined by the Windows 3.1 SDK `windows.h`, plus the Windows 9x messages that USER32 can send to a 16-bit procedure. A host test fails on any unclassified number. At run time an unclassified message is dropped with a diagnostic (32→16) or refused (16→32). |
+
+Classes (the structure sizes are byte-packed, as Wine's `winuser16.h`
+declares them under `pshpack1.h`):
+
+| Class | Messages | Rule |
+| --- | --- | --- |
+| 1. Scalar | WM_NULL, WM_DESTROY, WM_MOVE, WM_SIZE, WM_ENABLE, WM_SETREDRAW, WM_PAINT, WM_CLOSE, WM_QUERYENDSESSION, WM_QUIT, WM_SYSCOLORCHANGE, WM_ENDSESSION, WM_SHOWWINDOW, WM_FONTCHANGE, WM_CANCELMODE, WM_GETTEXTLENGTH, WM_NCHITTEST, keyboard 0100h–0108h, WM_SYSCOMMAND, mouse 0200h–0209h and the non-client mouse messages | Widen or narrow; coordinates stay signed 16-bit halves. |
+| 2. Handle-mapped | WM_SETFOCUS, WM_KILLFOCUS, WM_SETCURSOR, WM_MOUSEACTIVATE, WM_INITDIALOG (wParam HWND), WM_ERASEBKGND, WM_ICONERASEBKGND (HDC), WM_NCPAINT (HRGN), WM_SETFONT, WM_GETFONT (HFONT, also the result), WM_INITMENU, WM_INITMENUPOPUP (HMENU), WM_PALETTECHANGED, WM_PALETTEISCHANGING, WM_CHANGECBCHAIN, WM_NEXTDLGCTL when LOWORD(lParam) is set, WM_QUERYDRAGICON (HICON result), WM_ACTIVATEAPP (lParam HTASK16 ↔ thread ID; E5 listed it as scalar) | Typed handle maps; layouts otherwise unchanged. |
+| 3. Repacked | WM_ACTIVATE, WM_COMMAND, WM_HSCROLL, WM_VSCROLL, WM_MENUSELECT, WM_MENUCHAR, WM_PARENTNOTIFY (create/destroy events), WM_VKEYTOITEM, WM_CHARTOITEM, WM_MDIACTIVATE, WM_MDISETMENU, WM_MDIGETACTIVE (result), WM_CTLCOLOR ↔ WM_CTLCOLORMSGBOX…WM_CTLCOLORSTATIC (0132h–0138h; a type above 6 is not converted, as Wine) | Per-message packing as in E5, checked against Wine `message.c`. |
+| 4. Control messages | The renumbered families above. Pointer arguments are converted: RECT16 (8 bytes) for EM_GETRECT, EM_SETRECT, EM_SETRECTNP, LB_GETITEMRECT and CB_GETDROPPEDCONTROLRECT; strings for EM_GETLINE, EM_REPLACESEL and the LB_/CB_ string messages (unless owner-draw without HASSTRINGS, the test user32 already applies in `list_strings`, `unicode.c:102`); word arrays for LB_SETTABSTOPS and LB_GETSELITEMS; EM_SETSEL (16: wParam 0, lParam MAKELONG(start, end) ↔ 32: wParam start, lParam end); EM_GETSEL (DWORD result). | Copy for the call only. |
+| 5. Synchronous pointer | WM_CREATE, WM_NCCREATE (CREATESTRUCT16, 34 bytes ↔ CREATESTRUCTA, 48); WM_SETTEXT, WM_WININICHANGE, WM_DEVMODECHANGE (string); WM_GETTEXT (buffer of wParam bytes; copy back min(result, wParam − 1) bytes and a NUL); WM_GETMINMAXINFO (MINMAXINFO16, 20 ↔ 40); WM_NCCALCSIZE (RECT16 when wParam is 0; otherwise NCCALCSIZE_PARAMS16, 28 bytes: three RECT16 and a far pointer to a WINDOWPOS16); WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED (WINDOWPOS16, 14 ↔ WINDOWPOS, 28); WM_DRAWITEM (DRAWITEMSTRUCT16, 26); WM_MEASUREITEM (MEASUREITEMSTRUCT16, 14, copied back); WM_DELETEITEM (DELETEITEMSTRUCT16, 12); WM_COMPAREITEM (COMPAREITEMSTRUCT16, 18); WM_GETDLGCODE (lParam an MSG16 of 18 bytes, or 0; E5 listed it in the callback class); WM_MDICREATE (MDICREATESTRUCT16, 26); WM_COPYDATA (COPYDATASTRUCT16, 12; data copied up to 65,528 bytes as user32 does) | Copy in, convert, copy back after the call; never retained. Sizes are those of the packed declarations (`winuser16.h`), checked byte by byte in 19c. |
+| 6. Retained buffer | EM_GETHANDLE, EM_SETHANDLE (a local handle in the owning instance's DGROUP) | EM_GETHANDLE returns a local block holding a snapshot of the text; EM_SETHANDLE copies the block's text into the control and keeps the handle. Writes to the block after the call are not seen by the control: recorded departure. |
+| 7. Callback | WM_TIMER with a TIMERPROC in lParam, EM_SETWORDBREAKPROC, subclass chains | Callback ledger entries; identity rule above. |
+| 8. Ownership transfer | DDE: INITIATE, TERMINATE, UNADVISE and REQUEST map the window handle only; ADVISE, DATA and POKE copy the 16-bit global block into a Win32 DDESHARE block and repack with PackDDElParam; EXECUTE: Win16 lParam high word = command block ↔ Win32 lParam = block; ACK tells an atom from a handle (Wine `message.c`). Clipboard data and WM_DROPFILES: copied global blocks with handle maps; bitmap, palette and metafile handles through GDI maps | Ownership, ACK and free rules and the PROGMAN path belong to f5-07B. |
+| 9. Not delivered | WM_SIZING, WM_MOVING, WM_CAPTURECHANGED, WM_STYLECHANGING, WM_STYLECHANGED are not sent to 16-bit procedures (Wine drops them). WM_PAINTCLIPBOARD and WM_SIZECLIPBOARD are refused by name until translated (Wine leaves them unimplemented). | Diagnostic once per window. |
+| 10. Private and registered | WM_USER–7FFFh sent to procedures other than predefined controls; C000h–FFFFh | Within one host: verbatim, so a far pointer stays valid for the sender's lifetime. Across processes: values pass unchanged; a far pointer from another group means nothing there (D01: no cross-group selector sharing), and the user32 cross-process path never copies them. |
+
+**Alternatives considered.** Win16 fields in user32's class and window
+records, plus a control-kind query by window, would couple user32 to
+Win16 and decide by window class, which is wrong for superclasses and
+subclass chains. Wine-style per-control 16-bit wrappers
+inside user32 would duplicate control dispatch in user32; the host can
+recognise the control procedures without them.
+
+**Consequences.** f5-10A/f5-10C: no code change for G04. One invariant is
+added to f5-10C's text: each predefined control class keeps a single
+procedure for the life of the process, and `GetClassInfoA(NULL, name)`
+returns it (already true on main). An independent Win32 conformance fix,
+optional: add WM_DELETEITEM (2Dh) and WM_COMPAREITEM (39h) to
+`u32_pointer_message`. f5-19c: the tables, thunks and tests. f5-07B: DDE
+ownership.
+
+**Evidence required.** Host: round trips for each row, with byte arrays
+written from the SDK structure definitions rather than produced by the
+converter; control renumbering in both directions, including a superclass
+and a subclass chain; posting refusals; the coverage test over the SDK
+message list. Lead: a dialog fixture with every standard control, an
+owner-draw list box, a subclassed edit control, an inter-task WM_GETTEXT
+and DDE to PROGMAN (with f5-07B).
+
+### P6. G07 — containment enforcement (f5-03, f5-05B/f5-06, f5-16 → f5-19b/d)
+
+**Checked on main.** Both launch paths reach `w32_spawn` for any MZ file:
+the native path (`src/kernel/proc/spawn.c:175-183`) and Win32 CreateProcess
+(`src/kernel/proc/win32/process.c:179,200`). `w32_pe_validate` refuses an
+NE header as `pe-signature` (`src/kernel/proc/win32/pe.c:22-31`), which
+surfaces as error 193 (`process.c:295`). The kernel keeps the initial
+image snapshot for the first loader open of its name
+(`src/kernel/proc/win32/loader.c:127-132`). There is no group concept
+besides the POSIX `pgid` (`src/kernel/include/ciuki/process.h:36`), and
+`struct w32_process` has no Win16 field
+(`src/kernel/include/ciuki/w32_objects.h:26-38`). The crash record carries
+EIP and nine 32-bit registers but no selectors
+(`src/kernel/include/ciuki/w32_diagnostics.h:36-40`). `supervisor.c` keeps
+no process-group ledger either.
+
+**Proposed enforcement points.**
+
+| Point | Owner | Rule |
+| --- | --- | --- |
+| Classification | f5-05B, f5-06 | `w32_spawn` reads the signature at `e_lfanew`: PE is unchanged; NE with a Windows target (f5-19a F4) is a Win16 launch; anything else keeps the current refusal. One choke point covers desktop and Win32 launches. |
+| Host creation | f5-05B, f5-06 | A Win16 launch by a process that is not a group member creates a new group and a new host process from the builtin host image (path in f5-05's builtin manifest). The kernel marks the process as the group's host, keeps the NE file as its initial snapshot (the runtime opens it through `W32_LOADER`), reserves 10000h–9FFFFh (P3) and passes the command line, working directory, environment and show state. Starting the host image directly creates an ordinary Win32 process without authority: P1's operations are refused and the host exits with a named error. |
+| Group ledger | f5-03, f5-04 | Kernel-private: group id and generation, host process, member and attached counts, a dying flag. `struct w32_process` gains the group reference, the host record (LDT, capacity, generation) and an attached flag. Membership is set only at spawn: a process spawned by a member is a member. No call joins, leaves, re-parents or attaches later, and guest values (PIDs, tokens, selectors) confer nothing. Group id and generation appear in snapshots and diagnostics. |
+| Attachment | f5-05B, f5-06 | A PE child that the host creates with a kernel32-private spawn flag, honoured only for the host, is attached. When the host ends abnormally (crash, End Task, kill), the kernel terminates the attached members still running; a normal host exit detaches them. Other members are never killed with the group: a successful engine or game outlives its launcher (§10). |
+| NE launch by a PE member | f5-05B, f5-06 (later) | Target: delivered to the group's host as a new task, through a kernel task object that the PE caller can wait on and read an exit code from (W16-1). Until 19d's census needs it: the named refusal `win16-member-launch`, error 50. A launch from a non-member always creates a new group, even for an application already running in another group (`hPrevInstance` 0; single-instance programs find each other through USER or DDE). This disposes the open freeze item of D01. |
+| Execution boundary | f5-03 | P1: 16-bit traps and INT 80h are RUN events; no syscall from 16-bit code; a frame check before every return to 16-bit code; descriptor validation at mutation. |
+| Selector discipline | f5-19b | The selector manager frees or invalidates every descriptor and alias of a block before releasing its pages, and does not reuse a selector index while a saved task frame or a callback level refers to it. The kernel's stale-frame event catches the rest. |
+| Bounds (policy, measured under G08) | f5-19a/b/c | Parser limits F12; LDT capacity 1,024 by default; 8 tasks; 32 nested callback levels per task (as `DPMI_DEPTH`); 512 MakeProcInstance thunks per task; at most 64 KiB in one synchronous message copy (user32's limit); 16 real-mode callbacks per host; every pin and copy released when its level ends or at task exit. No memory quota is frozen before measurement. |
+| Faults and hangs | f5-03, f5-09, f5-16, f5-19b | A fault event in 16-bit code ends the group by default (§11.1). A fault in the host's flat code takes the existing Win32 crash path. Teardown frees kernel records only. A task that never yields stops answering PING, because only owner threads answer it, so the desktop's End Task ends the host. f5-16 adds a Win16 crash record: CS:IP, SS:SP, DS, ES, the NE module name and segment number, the module and ordinal or name of the last thunk, group id and generation. |
+| Service boundary | f5-04, f5-09 | w32srv and the desktop know the host by its kernel channel identity, like any Win32 process; every field it sends is untrusted. |
+
+**Alternatives considered.** Rewriting CreateProcess in kernel32 to start
+the host misses the native launch path and makes authority forgeable.
+Killing every member with the group contradicts §10.
+
+**Consequences.** f5-05B/f5-06: classification, host creation, snapshot,
+reservation, group fields, attach flag. f5-03: the authority check of P1's
+operations and the termination of attached members when the host dies.
+f5-16: the Win16 crash record. f5-09: none. f5-19b: selector discipline
+and the fault policy. f5-19d: decides with the census whether the
+member-launch task object is needed.
+
+**Evidence required.** Host: classification fixtures (PE, Windows NE, OS/2
+NE, LE, DOS MZ, truncated headers); the ledger state machine (spawn trees,
+normal and abnormal host end, attached and detached members, generation
+reuse); forged PIDs and late attach attempts refused. Lead: §11.2's
+malicious-record and fault-injection fixtures; End Task on a nonyielding
+group, where a detached PE child survives and an attached one ends; 100
+normal and 100 forced cycles returning to the baseline ledger.
+
+### P7. §F open points — sources and interim rules
+
+| Open point | Primary sources to consult | What each settles | Interim rule for f5-19b |
+| --- | --- | --- | --- |
+| Segment flag 2000h (F2) and zero lengths | Windows 3.1 SDK *Programmer's Reference* vol. 4, executable-format chapter (bitsavers scans cited by f5-19r; not yet readable here); Appendix K Figure K-2 (read); Open Watcom `exeos2.h`, where SEG_32_BIT = 2000h overlaps its own discard-priority mask; a period NE with the bit set | Whether 3.1 defines bit 13 as a 32-bit segment or as discard priority | Keep `segment-32bit-unsupported`; P1 refuses 32-bit descriptors anyway. A census hit on a 16-bit image goes to the lead with the image metadata; no per-title exception. F11's zero-length rules stay. |
+| Relocation sources 6/7 versus 11/13 (F6) | The pinned Open Watcom 1.9 (§C, SHA-256 `f7484be2…`) linking an authored 386 fixture with 32-bit offset fixups; Watcom `loados2.c` and `exeflat.h`; Wine `ne_segment.c` NE_RADDR values; the SDK vol. 4 relocation table | Which codes `wlink system windows` writes and 3.1 accepts | Keep F6 as implemented: 0, 2, 3, 5, 11 and 13 applied on the mock store, 6 and 7 refused. No runtime claim for 11 and 13 before a fixture. |
+| OSFIXUP and x87 (F9) | Open Watcom `fppatche.h`: Windows OSFIXUP types 1 FIARQQ/FJARQQ (DS), 2 FISRQQ/FJSRQQ (SS), 3 FICRQQ/FJCRQQ (CS), 4 FIERQQ (ES), 5 FIDRQQ (INT 34h–3Bh), 6 FIWRQQ (INT 3Dh); Wine `ne_segment.c` (ignores OSFIXUP) and `fpu.c` (rewrites INT 34h–3Bh to `9B D8`–`9B DF` and INT 3Dh to `9B 90` at first execution; 3Ch and 3Eh unimplemented); Microsoft's emulator documentation for the FIxRQQ constants (not obtained) | The load-time patch Windows applies when a coprocessor is present | Proposed change to F9 (D-F9): OSFIXUP records are recorded and leave the bytes unchanged; INT 34h–3Bh and 3Dh events are patched in place to the native forms through the host's writable alias and resumed; INT 3Ch and 3Eh are refused by name (`x87-emulator-form-unsupported`). GetWinFlags reports WF_80x87, since every supported CPU has an x87 (`hardware-baseline.md`). Load-time patching by OSFIXUP type replaces this only after a pinned fixture fixes the record layout. Appendix K defines no OSFIXUP record and no FIxRQQ constant. |
+| 3.1 prolog forms (P4) | The SDK vol. 1 callback-prolog excerpt and Microsoft's compiler and prolog article (both cited by f5-19r); Open Watcom code generator output | The exact smart-callback and exported prolog bytes | Patch only the two patterns Wine recognises (P4). |
+| Original media (§D) | The owner's Worms archive and IS3 engine, inspected with `scripts/win16/census.py` | Real import, OSFIXUP, self-load and flag usage | §D's rows stay absent. 19b implements §6.3's surface plus census additions over f5-19a's 118 fixtures and new authored ones; no record is fabricated. |
+
+### P8. Decisions for the lead and the owner
+
+| ID | Decision | Proposal |
+| --- | --- | --- |
+| D-C01 | Run-until-event model, operations 10Fh and 110h, 16-bit descriptors only | Accept. 32-bit segments (Watcom's Win386 extender, Win32s-style code) stay outside this phase; the owner decides whether they ever enter scope. |
+| D-C02 | Thread per task, at most 8 tasks per host | Accept; raise only with a measurement. |
+| D-G01 | INT 21h backend: the host over f5-06, as §8.1 says, or the kernel's VMM DOS file API bound to the host (Windows 98 IFSMgr shape, one DOS implementation) | Proposed: f5-06. The lead decides; the adapter interface does not change. |
+| D-VER | Version identity reported to Win16 code | GetVersion 3.95 (Windows 95 reports 3.95 to 16-bit programs, Raymond Chen's article above; the Windows 98 value is confirmed from the Resource Kit or SDK before the freeze), DOS 7.10 (Windows 98's DOS), INT 2Fh 1600h 4.10, GetWinFlags 0C29h, INT 21h 71xxh served; consistent with the Win32 personality's 98 SE identity (`win32-personality-contract.md:2131`). A 16-bit setup launcher that picks its engine by Windows version (f5-19r G06) then picks as on Windows 98. |
+| D-F9 | OSFIXUP interim: record only, plus lazy native patching | Accept, or keep the refusal. |
+| D-DEP | Departures: posting pointer messages refused; INT 24h never raised; EM_GETHANDLE snapshot; WEP_SYSTEM_EXIT on a clean shutdown; no espfix; no INT 31h 0202h/0203h | Record them as accepted departures. |
+| D01 | A launch from outside a group always creates a new group | Accept; this closes f5-19r's D01 freeze item. |
+
+### P9. f5-19b plan
+
+Wave 0, one short session (the lead or a single worker): commit
+`sdk/win16/rt/abi16.h` with the runtime types — selector-manager and RUN
+backend interfaces (real and mock), task and token, arena, callback level,
+stub-table and typed-thunk record formats, P4's tables — and the P1 kernel
+record header as proposed. The kernel and runtime lanes then build against
+the same headers; no lane waits for the kernel implementation.
+
+Wave 1, in parallel worktrees:
+
+| Worktree | Scope | Host gates |
+| --- | --- | --- |
+| `wt/f5-19b-sel`, selectors and accounting | Selector manager: allocation, huge runs with `__AHINCR` 8 and remaining-size limits, aliases, AllocDStoCSAlias, PrestoChangoSelector, Get/SetSelectorBase and Limit, SelectorAccessRights; the validator mirror for the mock; per-host accounting | P1's validator table with independent expectations; huge runs from 1 byte to 1 MiB and above (G=1) with exact limits; aliases invalidated before their backing is released; no index reuse while referenced; exhaustion rolls back with no entry left allocated. |
+| `wt/f5-19b-ldr`, NE instantiation | Module table and use counts; segment allocation and loading over the selector manager; relocation binding; prolog patching (P4); entry lookup including constant entries; resources (Find/Load/Lock/Free/Sizeof/AccessResource); the self-load policy flag | f5-19a's 21 tests stay green; relocation against independently assigned selector layouts and hand-computed bytes; prolog patterns × flags; DGROUP layout and INSTANCEDATA bytes; missing-import and failed-init rollback with no leaked selector. |
+| `wt/f5-19b-heap-thunk`, heaps and tables | Global heap (fixed and movable handles, a movable handle being its selector − 1 as in Wine `global.c:128`; lock and discard semantics per C03); local heap with notifications; atoms; the typed thunk-table generator and checker; stub segments; MakeProcInstance thunks | Heap state machines including compaction with locks and callback reentry (C03, no constant results); ordinals, conventions, widths and argument bytes against independent manifests; thunk bytes. |
+| f5-03 Win16 amendment (kernel lane) | P1 | Kernel host suites; the i686 build; validator tests shared with the mock. |
+| f5-05B/f5-06 Win16 launch | P6 classification, host creation, ledger, reservation | Classification fixtures; the ledger state machine. |
+| f5-10 hook (small) | P2's user32 hook | The lock-order test. |
+
+Wave 2, `wt/f5-19b-int`, the integration owner, after the three runtime
+worktrees are merged: tasks and token; the RUN event loop with stub
+dispatch; InitTask, InitApp and WaitEvent startup; LibEntry and WEP order;
+Catch/Throw and escape propagation; the self-loader; P3's adapters (arena,
+per-task DOS state, INT 21h/DOS3Call, INT 31h); WinExec, LoadModule and
+INT 21h 4Bh routing (NE inside the host, PE through f5-05/f5-06); the x87
+patch if D-F9 is accepted. Host gates: the full life of the authored
+fixtures on the mock RUN backend (entry registers, InitTask, LibEntry, API
+calls, WEP, 4Ch); a Catch/Throw escape through a nested callback; the
+self-loader fixture and malformed headers; the INT 21h rows against
+f3-48's expectations; the INT 31h matrix; INT 80h events refused. The
+lead's first execution milestone stays f5-19r's: a normal-CRT EXE and DLL
+and a 16→32→16 callback on the canonical image.
+
+Every lane: `nice -n 19`, host suites one at a time, `rg` rather than
+semble, no QEMU, no commits by workers.
