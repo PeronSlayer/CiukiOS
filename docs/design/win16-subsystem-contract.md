@@ -2133,7 +2133,7 @@ normal and 100 forced cycles returning to the baseline ledger.
 
 | ID | Decision | Proposal |
 | --- | --- | --- |
-| D-C01 | Run-until-event model, operations 10Fh and 110h, 16-bit descriptors only | Accept. 32-bit segments (Watcom's Win386 extender, Win32s-style code) stay outside this phase; the owner decides whether they ever enter scope. |
+| D-C01 | Run-until-event model, operations 10Fh and 110h, 16-bit descriptors only | Accept. 32-bit segments (Watcom's Win386 extender, Win32s-style code) stay outside this phase. Owner decision 2026-10-20 (dev diary 2026-10-20-03): they enter F5's scope in step f5-19e (USE32 segments, Win386, `WINMEM32.DLL`, Universal Thunks, flat thunks), which extends this model to 32-bit descriptors. |
 | D-C02 | Thread per task, at most 8 tasks per host | Accept; raise only with a measurement. |
 | D-G01 | INT 21h backend: the host over f5-06, as §8.1 says, or the kernel's VMM DOS file API bound to the host (Windows 98 IFSMgr shape, one DOS implementation) | Proposed: f5-06. The lead decides; the adapter interface does not change. |
 | D-VER | Version identity reported to Win16 code | GetVersion 3.95 (Windows 95 reports 3.95 to 16-bit programs, Raymond Chen's article above; the Windows 98 value is confirmed from the Resource Kit or SDK before the freeze), DOS 7.10 (Windows 98's DOS), INT 2Fh 1600h 4.10, GetWinFlags 0C29h, INT 21h 71xxh served; consistent with the Win32 personality's 98 SE identity (`win32-personality-contract.md:2131`). A 16-bit setup launcher that picks its engine by Windows version (f5-19r G06) then picks as on Windows 98. |

@@ -21,7 +21,7 @@ The delivery (Claude Opus session after an Antigravity session stopped by quota;
 1. **INT 21h backend of the Win16 host:** the kernel's VMM DOS file API (f3-48…f3-51, merged), not a second implementation over the Win32 file services — one DOS file implementation, the IFS Manager model of the owner's decision 2026-10-19-06. The contract's §8.1 wording is amended accordingly in f5-19b; Q65128's protected-mode failure rows stay.
 2. **Versions seen by 16-bit programs:** `GetVersion` 3.95, DOS 7.10, INT 2Fh 1600h 4.10, proposed; f5-19b confirms the Windows 98 values from the Resource Kit media (`build/rskt/`) or the Windows 98 SDK before freezing them, and records the source.
 3. **x87 emulator fixups:** recorded and patched to native x87 on first execution (the Wine behaviour); f5-19a's refusal is lifted in f5-19b.
-4. **32-bit segments (Win386 extender, Win32s-style code):** refused in this phase; the scope question goes to the owner at the next status, no work depends on it now.
+4. **32-bit segments (Win386 extender, Win32s-style code):** refused in this phase. **Owner decision 2026-10-20 (dev diary 2026-10-20-03): they enter F5's scope** — USE32 segments in NE modules, Watcom Win386 programs, `WINMEM32.DLL`, Win32s Universal Thunks and Windows 95/98 flat thunks — in a dedicated step f5-19e after f5-19b–d, extending C01 to 32-bit descriptors.
 5. Departures accepted as recorded (no espfix, as in F3; posted pointer messages refused). A launch from outside a group always creates a new group.
 6. The 32-threads-per-process limit stated by the Win32 contract is enforced; it joins f5-19b's kernel part.
 7. Operation numbers 10Fh and 110h are reserved for Win16 in the f5-03 table.

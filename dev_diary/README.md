@@ -152,3 +152,4 @@ Documenti di design, validazione, fonti esterne.
 | [F5, nucleo della personalità Win32 integrato: loader e ntdll sul kernel, kernel32 parziale, servizio w32srv con registro, presenter e lease di presentazione, protocollo desktop v3 con i seam Win32](2026-10-19-10-f5-nucleo-personalita-win32-fusioni-f5-05b-f5-06-f5-07a-f5-08-f5-09.md) | 19 ottobre 2026 | integrazione |
 | [Versione 0.9.2 pre-alpha: identità della versione aggiornata](2026-10-20-01-versione-0-9-2.md) | 20 ottobre 2026 | decisione |
 | [Prima immagine integrata dopo la sospensione dei gate: regressioni di f0-44 trovate per bisezione e corrette, build canonico riparato, documentazione e catture della 0.9.2](2026-10-20-02-regressioni-f0-44-documentazione-e-catture-0-9-2.md) | 20 ottobre 2026 | integrazione |
+| [Decisione del proprietario: i programmi Win16 con segmenti a 32 bit entrano nel perimetro di F5](2026-10-20-03-decisione-segmenti-32-bit-win16.md) | 20 ottobre 2026 | decisione |
