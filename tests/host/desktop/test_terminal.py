@@ -63,7 +63,7 @@ class TerminalTests(unittest.TestCase):
         for path in ('apps/build_apps.py', 'scripts/build_image.py'):
             self.assertIn('terminal', (ROOT / path).read_text())
         shell = (ROOT / 'apps/desktop/shell.c').read_text()
-        self.assertIn('{"terminal", "Terminal", "utilities-terminal", "programs"}', shell)
+        self.assertIn('{"terminal", "Terminal", "utilities-terminal", "programs", NULL}', shell)
         self.assertIn('"terminal"', (ROOT / 'tests/host/desktop/shell_menu.py').read_text())
         self.assertIn('{"program:terminal", "utilities-terminal"}', (ROOT / 'apps/libdeskui/icon_map.c').read_text())
         self.assertIn('liblua.a', (ROOT / 'apps/desktop/build_desktop.py').read_text())

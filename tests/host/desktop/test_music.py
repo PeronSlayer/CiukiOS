@@ -171,9 +171,9 @@ class MusicTests(unittest.TestCase):
                     'third_party/stb/stb_vorbis.c': '4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636'}
         for path, digest in expected.items(): self.assertEqual(hashlib.sha256((ROOT/path).read_bytes()).hexdigest(),digest)
         shell = (ROOT/'apps/desktop/shell.c').read_text()
-        self.assertIn('{"music", "Music Player", "audio-x-generic", "programs"}',shell)
-        self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "programs"}',shell)
-        self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "accessories"}',shell)
+        self.assertIn('{"music", "Music Player", "audio-x-generic", "programs", NULL}',shell)
+        self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "programs", NULL}',shell)
+        self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "accessories", NULL}',shell)
         self.assertIn('if (d->pictures_exists) icon_add(d, "Pictures"',shell)
         image = (ROOT/'scripts/build_image.py').read_text()
         for token in ('"/Documents/Pictures"', '"/Documents/Music"', '"/Programs/music"', '"/system/licenses/minimp3.txt"', '"/system/licenses/stb_vorbis.txt"'):
