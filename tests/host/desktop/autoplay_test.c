@@ -19,6 +19,13 @@ static struct ciuki_media_volume volumes[26];
 static const char *registry_dir;
 static unsigned launches, connected, disconnected;
 static int fail_launch;
+static unsigned cd_launches;
+static int cd_launch(struct desktop *desk,const struct desk_launch_record *r)
+{
+    (void)desk;
+    assert(!strcmp(r->target,"C:\\Programs\\CDPLAYER.EXE") && !strcmp(r->arguments,"--slot=1"));
+    cd_launches++; return 101;
+}
 static char program[64], argument[FM_PATH];
 static int launch(struct desktop *desk,const struct desk_program *p)
 {
@@ -222,6 +229,22 @@ int main(int argc,char **argv)
     assert(ap_preference_set(registry_dir,"bad\\id","Bad",0)<0);
     assert(connected>5 && disconnected>5);
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal) desk_drop_client(&d,i);
+    memset(&d.sh.autoplay.content,0,sizeof(d.sh.autoplay.content));
+    d.sh.autoplay.open=0; d.sh.autoplay.phase=AP_IDLE; d.sh.autoplay.waiting=0;
+    d.focus=-1; d.sh.levels=0; d.sh.want_run[0]=0; d.action=-1;
+    d.v3_launch=cd_launch;
+    struct ciuki_media_cd_state cd[4]={0};
+    cd[1]=(struct ciuki_media_cd_state){.version=1,.size=sizeof(cd[1]),.slot=1,.present=1,.state=CIUKI_CD_READY,.audio_ready=1,.generation=42,.drive=26};
+    desk_autoplay_cd_update(&d,cd); autoplay_drain(&d); autoplay_drain(&d);
+    assert(d.sh.autoplay.open && d.sh.autoplay.content.cd_audio);
+    assert(desk_autoplay_enabled(&d,AP_MUSIC) && !desk_autoplay_enabled(&d,AP_FOLDER));
+    char cd_label[100]; assert(!strcmp(desk_autoplay_label(&d,AP_MUSIC,cd_label,sizeof(cd_label)),"Play audio CD"));
+    render(); select_action(AP_MUSIC); key(DU_KEY_ENTER); autoplay_drain(&d);
+    assert(cd_launches==1);
+    desk_autoplay_cd_update(&d,cd); autoplay_drain(&d); assert(!d.sh.autoplay.open);
+    cd[1].generation=43; desk_autoplay_cd_update(&d,cd); autoplay_drain(&d); autoplay_drain(&d); assert(d.sh.autoplay.open);
+    cd[1].state=CIUKI_CD_NO_MEDIUM; desk_autoplay_cd_update(&d,cd); autoplay_drain(&d);
+    assert(!d.sh.autoplay.open && cd_launches==1);
     desk_autoplay_stop(&d); free(d.sh.autoplay.workspace);
     free(d.pixels); d.pixels=NULL; desk_render_release(&d); assert(!fake_live()); fake_assert_clean();
     test_probe_budgets();

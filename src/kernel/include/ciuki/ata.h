@@ -15,6 +15,22 @@
 #define ATAPI_START_MS 10000u
 #define ATAPI_MAX_BYTES 65536u
 enum atapi_media { ATAPI_UNKNOWN, ATAPI_READY, ATAPI_NO_MEDIUM, ATAPI_NOT_READY, ATAPI_CHANGED };
+/* f5-12B2: READ TOC format 0 (LBA) cached per media_generation. CONTROL
+ * bit 2 marks a data track (MMC-3 Table 222); audio_only means no data
+ * track at all; first track audio means "ready for CD audio, not
+ * mountable" (F4 keeps mounting the first data session only). */
+#define ATAPI_TOC_TRACKS 99u
+#define ATAPI_TOC_BYTES (4u + 8u * (ATAPI_TOC_TRACKS + 1u))
+#define ATAPI_CD_SECTOR 2352u
+#define ATAPI_CD_READ_MAX 27u
+struct atapi_toc {
+    uint32_t generation;
+    uint8_t first, last, count;
+    bool valid, audio_only, first_audio;
+    uint8_t control[ATAPI_TOC_TRACKS], adr[ATAPI_TOC_TRACKS], number[ATAPI_TOC_TRACKS];
+    uint32_t start[ATAPI_TOC_TRACKS];
+    uint32_t leadout;
+};
 
 struct ata_port_ops {
     uint8_t (*in8)(void *ctx, uint16_t port);
@@ -54,6 +70,12 @@ struct ata_device {
     uint32_t session_lba;
     uint32_t spinup_generation;
     uint64_t packet_commands, read_blocks, media_writes, max_packet_ms;
+    /* f5-12B2 CD audio: TOC cache, page 2Ah capability bits (fetched once
+     * per drive, cd_caps_valid) and the audio-disc readiness flag. */
+    struct atapi_toc toc;
+    uint8_t cd_caps[12];
+    bool cd_caps_valid, audio_only, cd_playing;
+    uint64_t cd_audio_sectors, cd_audio_packets, cd_play_commands;
 };
 
 /* Pinned until reboot/quiescence; no allocation or work in the IRQ handler.
@@ -100,6 +122,26 @@ int atapi_packet(struct ata_device *, const uint8_t *packet, unsigned packet_len
 int atapi_ready(struct ata_device *); /* new transaction, never retry a read */
 int atapi_eject(struct ata_device *);
 int atapi_start(struct ata_device *);
+/* f5-12B2 CD-audio packet paths (src/kernel/drivers/optical_cd.c), MMC-3
+ * r10g / SFF-8020i r2.6; each takes the channel mutex through atapi_packet
+ * and is refused before any packet when the request is malformed. */
+int atapi_cd_toc(struct ata_device *, bool refresh);        /* READ TOC 43h format 0, LBA */
+/* Recheck generation under the F4 channel mutex, after waiting for a peer. */
+int atapi_packet_generation(struct ata_device *, const uint8_t *, unsigned,
+                            void *, uint32_t, uint32_t *, uint32_t generation);
+int atapi_cd_caps(struct ata_device *);                     /* MODE SENSE(10) 5Ah page 2Ah */
+int atapi_cd_read_check(struct ata_device *, uint32_t generation, uint32_t lba, uint32_t sectors);
+int atapi_cd_read_audio(struct ata_device *, uint32_t generation, uint32_t lba,
+                        uint32_t sectors, void *buffer);    /* READ CD BEh, CD-DA, user data */
+int atapi_cd_play(struct ata_device *, uint32_t generation, uint32_t start_lba, uint32_t end_lba); /* 47h */
+int atapi_cd_pause(struct ata_device *, uint32_t generation, bool resume);                        /* 4Bh */
+int atapi_cd_stop(struct ata_device *, uint32_t generation);                                      /* 4Eh */
+int atapi_cd_position(struct ata_device *, uint32_t generation, uint8_t *audio_status,
+                      uint8_t *track, uint8_t *index, uint32_t *absolute, uint32_t *relative);     /* 42h */
+int atapi_cd_load(struct ata_device *);                     /* START STOP UNIT LoEj=1 Start=1 */
+int atapi_cd_range_check(const struct atapi_toc *, uint32_t lba, uint32_t sectors); /* audio only */
+void atapi_lba_to_msf(uint32_t lba, uint8_t msf[3]);
+uint32_t atapi_msf_to_lba(const uint8_t msf[3]);
 
 int probe_ata(void);
 int probe_ata_fault(void);

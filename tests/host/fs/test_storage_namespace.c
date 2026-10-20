@@ -287,6 +287,9 @@ static struct process *latency_owners[2];
 struct process *proc_at_slot(unsigned slot) { return !slot ? &supervisor : slot<3 ? latency_owners[slot-1] : 0; }
 int optical_eject(struct storage *s,unsigned d,uint32_t g) { (void)s;(void)d;(void)g; return -FS_ENOENT; }
 int usb_storage_eject(struct storage *s,unsigned d,uint32_t g) { (void)s;(void)d;(void)g; return -FS_ENOENT; }
+/* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
+int media_cd_devctl(struct process *p,struct storage *s,uint32_t op,uint32_t a,uint32_t b)
+{ (void)p;(void)s;(void)a;(void)b;(void)op; return -ENOTTY; }
 #include "../../../src/kernel/drivers/media_dev.c"
 
 #define LAT_ASSERT(x) do { if (!(x)) { fprintf(stderr,"latency line %d: %s\n",__LINE__,#x); abort(); } } while (0)
@@ -389,6 +392,7 @@ static void *latency_media(void *arg)
         LAT_ASSERT(!media_devctl(&supervisor,r->media_fd,MEDIA_GET_VOLUME,1,sizeof(v)));
         latency_record(start,&r->c_calls,&r->c_max);
         LAT_ASSERT(v.flags==CIUKI_MEDIA_REMOVABLE && v.generation);
+        media_user=&v; LAT_ASSERT(media_devctl(&supervisor,r->media_fd,MEDIA_CD_TOC,1,sizeof(v))==-ENOTTY); /* f5-12B2 dispatch edge */
         v=(struct ciuki_media_volume){.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=3};
         start=fs_now_ms(); LAT_ASSERT(!media_devctl(&supervisor,r->media_fd,MEDIA_GET_VOLUME,1,sizeof(v)));
         latency_record(start,&r->c_calls,&r->c_max); LAT_ASSERT(v.flags==CIUKI_MEDIA_OPTICAL);

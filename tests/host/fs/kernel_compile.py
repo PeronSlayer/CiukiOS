@@ -35,9 +35,10 @@ sources += [root/'src/kernel/core/bootlog.c', root/'src/kernel/core/blackbox.c',
 sources += [root/'src/kernel/drivers/ata.c', root/'src/kernel/drivers/ata_dma.c', root/'src/kernel/drivers/ata_probe.c',
             root/'src/kernel/proc/fdtable.c', root/'src/kernel/proc/syscalls_file.c', root/'src/kernel/proc/syscalls_proc.c']
 sources += [root/'src/kernel/probes/f2_probes_files.c']
+sources += [root/'src/kernel/probes/f2_probes_desktop.c', root/'src/kernel/probes/selector.c']
 sources += sorted((root/'src/kernel/usb').glob('*.c'))
 sources += [root/'src/kernel/drivers/blkpart.c', root/'src/kernel/drivers/media_dev.c', root/'src/kernel/proc/posixpath.c', root/'src/kernel/proc/devnodes.c']
-sources += [root/'src/kernel/drivers/optical.c']
+sources += [root/'src/kernel/drivers/optical.c', root/'src/kernel/drivers/optical_cd.c', root/'src/kernel/drivers/media_cd.c']
 # F0-23: boot-only calibration, UART bounds, port pacing and live RO inventory.
 sources += [root/'src/kernel/core'/name for name in ('serial.c', 'output.c', 'timing.c', 'main.c', 'devices.c')]
 sources += [root/'src/kernel/drivers/i8042.c']

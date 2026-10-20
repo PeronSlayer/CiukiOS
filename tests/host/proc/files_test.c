@@ -826,6 +826,10 @@ static int media_result;
 struct storage *storage_get(void) { return &media_observation; }
 int usb_storage_eject(struct storage *s,unsigned drive,uint32_t gen)
 { CHECK(s==&media_observation && drive==4 && gen==123); media_removals++; return media_result; }
+/* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
+static unsigned media_cd_calls;
+int media_cd_devctl(struct process *p,struct storage *s,uint32_t op,uint32_t a,uint32_t b)
+{ (void)p;(void)s;(void)a;(void)b; media_cd_calls++; return op==MEDIA_CD_STATE ? 0 : -ENOTTY; }
 static unsigned optical_removals;
 int optical_eject(struct storage *s,unsigned drive,uint32_t gen)
 {
@@ -865,6 +869,10 @@ static void test_media_node(void)
     media_observation.volumes[5]=(struct storage_volume){.present=true,.removable=true,.part={.parent=&b}};
     struct ciuki_media_blockers blockers={.version=CIUKI_MEDIA_VERSION,.size=sizeof(blockers),.drive=4,.generation=123};
     CHECK(!ua_write(client->memory,USER,&blockers,sizeof(blockers)));
+    /* f5-12B2: every MEDIA_CD_* op reaches media_cd.c through the same fd, nothing else does. */
+    CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_STATE,USER,48,0) && media_cd_calls==1);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_POSITION,USER,48,0)==-ENOTTY && media_cd_calls==2);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_POSITION+1,USER,48,0)==-ENOTTY && media_cd_calls==2);
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers),0));
     CHECK(!ua_read(client->memory,&blockers,USER,sizeof(blockers)));
     CHECK(blockers.count==1 && blockers.programs[0].pid==client->pid && !strcmp(blockers.programs[0].name,client->name));

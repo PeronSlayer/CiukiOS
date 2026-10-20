@@ -1994,11 +1994,13 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         char title[96];
         snprintf(title,sizeof(title),"%.32s (%c:)",a->content.inf.label[0] ? a->content.inf.label :
                  a->active.label[0] ? a->active.label : "Removable media",'A'+a->active.drive);
+        if (a->content.cd_audio) snprintf(title,sizeof(title),"Audio CD");
         du_icon_blit(&c,content.x+12,content.y+12,desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
         bold(&c,content.x+56,content.y+12,title,SH_INK);
         du_text(&c,content.x+56,content.y+32,"What do you want CiukiOS to do?",SH_INK);
         for (int k=0;k<AP_CHOICES;k++) {
-            if ((k==AP_MUSIC && !a->content.music[0]) || (k==AP_PICTURES && !a->content.picture[0]) || (k==AP_RUN && !a->content.inf.open[0])) continue;
+            if (a->content.cd_audio ? (k!=AP_MUSIC && k!=AP_NOTHING) :
+                ((k==AP_MUSIC && !a->content.music[0]) || (k==AP_PICTURES && !a->content.picture[0]) || (k==AP_RUN && !a->content.inf.open[0]))) continue;
             struct du_rect row={content.x+12,content.y+58+k*24,content.w-24,23};
             if (a->selected==k) du_fill(&c,row,SH_HOT);
             char label[100];

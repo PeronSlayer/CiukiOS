@@ -3,12 +3,16 @@
 #include <ciuki/files.h>
 #include <ciuki/storage.h>
 #include <ciuki/usb.h>
+
+/* f5-12B2: CD audio devctls (MEDIA_CD_*) live in media_cd.c. */
+int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
 int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
 {
     if (!file_fd_object(p,fd)) return -EBADF;
     struct file_description *f=file_fd(p,fd);
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
     struct storage *s=storage_get();
+    if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
     /* Namespace publication selects immutable mount identity/label fields.
      * Queries never invoke filesystem/transport callbacks or reserve a drive. */
     if (op==MEDIA_GET_BLOCKERS) {
