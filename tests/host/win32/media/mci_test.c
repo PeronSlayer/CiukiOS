@@ -306,12 +306,13 @@ static void shortcuts_and_commands(void) {
   assert(mciGetDeviceIDA("tone.wav"));
   wait_ms(120);
   assert(!mciGetDeviceIDA("tone.wav"));
-  expect("sysinfo all quantity", 0, "3");
+  expect("sysinfo all quantity", 0, "4");
   expect("sysinfo all name 1", 0, "waveaudio");
   expect("sysinfo all name 3", 0, "avivideo");
-  expect("sysinfo all name 4", MCIERR_OUTOFRANGE, 0);
+  expect("sysinfo all name 4", 0, "cdaudio");
+  expect("sysinfo all name 5", MCIERR_OUTOFRANGE, 0);
   expect("sysinfo waveaudio quantity", 0, "1");
-  expect("sysinfo cdaudio quantity", 0, "0");
+  expect("sysinfo cdaudio quantity", 0, "1");
   expect("sysinfo waveaudio installname", 0, "waveaudio");
   expect("open tone.wav alias x1", 0, "1");
   expect("open song.mid alias x2", 0, "2");

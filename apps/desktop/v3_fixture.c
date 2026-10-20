@@ -5,6 +5,7 @@
 #include "win32_adapter.h"
 #include "../../src/probes/desktop_v3/controller.h"
 #include "../../src/probes/win32_dialogs/controller.h"
+#include "../../src/probes/win32_media/controller.h"
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
@@ -126,21 +127,27 @@ void desk_v3_fixture_tick(struct desktop *d)
  * (first QEMU run). The spawn is therefore deferred to the tick until one
  * registry round trip succeeds, bounded by the kernel probe's wait. */
 static int dialogs_active,dialogs_pending;
+static int media_fixture;
 static uint64_t dialogs_deadline;
 int desk_dialogs_fixture_active(void){return dialogs_active;}
 static int dialogs_spawn(void)
 {
-    char *argv[]={W32_DIALOGS_PATH,NULL};
+    char *argv[]={media_fixture ? W32_MEDIA_PATH : W32_DIALOGS_PATH,NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
-    char line[64];snprintf(line,sizeof(line),"case=w32-dialogs child=%d",pid<0 ? 0 : pid);
+    char line[64];snprintf(line,sizeof(line),"case=%s child=%d",media_fixture ? "w32-media" : "w32-dialogs",pid<0 ? 0 : pid);
     desk_v3_fixture_report(line);
     return pid<0 ? -errno : pid;
 }
 int desk_dialogs_fixture_begin(struct desktop *d)
 {
+    media_fixture=0;
     dialogs_active=1;dialogs_pending=1;dialogs_deadline=d->now_ns+15000000000ull;
     return 0;
+}
+int desk_media_fixture_begin(struct desktop *d)
+{
+    desk_dialogs_fixture_begin(d); media_fixture=1; return 0;
 }
 void desk_dialogs_fixture_tick(struct desktop *d)
 {
@@ -149,6 +156,6 @@ void desk_dialogs_fixture_tick(struct desktop *d)
     if(!e && h)registry(W32R_CLOSE,h,"","",NULL,NULL);
     if(e && d->now_ns<dialogs_deadline)return;
     dialogs_pending=0;
-    if(e){desk_v3_fixture_report("case=w32-dialogs child=0");return;}
+    if(e){desk_v3_fixture_report(media_fixture ? "case=w32-media child=0" : "case=w32-dialogs child=0");return;}
     dialogs_spawn();
 }

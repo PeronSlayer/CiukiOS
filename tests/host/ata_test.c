@@ -34,6 +34,12 @@ static uint32_t native_dma_config_address;
 static unsigned native_dma_allocs, native_dma_frees, native_dma_alloc_fail, native_dma_config_writes;
 static unsigned page_count;
 static unsigned dma_pin_live, dma_pin_sequence, dma_pin_fail;
+/* f5-12B2: the CD-audio devctl bounce run (media_cd.c), 16 pages at 0x600000. */
+#define CD_BOUNCE_PHYS 0x600000u
+#define CD_BOUNCE_PAGES 16u
+static _Alignas(4096) uint8_t cd_bounce_memory[CD_BOUNCE_PAGES * 4096];
+static bool cd_bounce_mode, cd_bounce_fail;
+static unsigned cd_bounce_allocs, cd_bounce_frees, cd_bounce_pages_out;
 int mm_pin(struct mm_pin *pin) {
     CHECK(flags&0x200);
     if (dma_pin_fail && !--dma_pin_fail) return -ENOMEM;
@@ -49,6 +55,7 @@ static unsigned probe_ends, probe_passes, probe_errors;
 static void *host_page(uint32_t phys) {
     if (phys == 0x400000) return native_dma_table;
     if (phys == 0x500000) return native_dma_bounce;
+    if (phys >= CD_BOUNCE_PHYS && phys < CD_BOUNCE_PHYS + sizeof(cd_bounce_memory)) return cd_bounce_memory + (phys - CD_BOUNCE_PHYS);
     CHECK(phys >= 1 && phys <= 3); return user_pages[phys - 1];
 }
 #define P2V(p) host_page(p)
@@ -152,6 +159,12 @@ struct task *task_create_user(const char *name, enum task_prio prio, uint32_t ip
 }
 uint32_t pmm_alloc(void) { CHECK(page_count < 3); return ++page_count; }
 uint32_t pmm_alloc_contig(uint32_t pages) {
+    if (cd_bounce_mode) {
+        CHECK(pages >= 1 && pages <= CD_BOUNCE_PAGES && !cd_bounce_pages_out);
+        if (cd_bounce_fail) return 0;
+        cd_bounce_allocs++; cd_bounce_pages_out = pages;
+        return CD_BOUNCE_PHYS;
+    }
     if (!native_dma_ports || ++native_dma_allocs == native_dma_alloc_fail) return 0;
     CHECK(pages == 1 || pages == ATA_DMA_BYTES / 4096);
     return pages == 1 ? 0x400000 : 0x500000;
@@ -167,6 +180,11 @@ uint32_t vmm_kernel_pte(uint32_t va)
            1u | (dma_mapping_readonly ? 0 : 2u) | (dma_mapping_uncached ? 0x10u : 0);
 }
 void pmm_free(uint32_t p) {
+    if (p >= CD_BOUNCE_PHYS && p < CD_BOUNCE_PHYS + sizeof(cd_bounce_memory)) {
+        CHECK(cd_bounce_pages_out && !((p - CD_BOUNCE_PHYS) % 4096));
+        if (!--cd_bounce_pages_out) cd_bounce_frees++;
+        return;
+    }
     if (p == 0x400000 || (p >= 0x500000 && p < 0x500000 + ATA_DMA_BYTES)) { native_dma_frees++; return; }
     CHECK(p >= 1 && p <= 3);
 }
@@ -211,6 +229,37 @@ static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
 #include "../../src/kernel/drivers/optical.c"
+#include "../../src/kernel/drivers/optical_cd.c"
+/* f5-12B2 CD-audio devctls (media_cd.c) against a flat fake user space. */
+/* abi.h redefines these libc names (-D_POSIX_C_SOURCE exposes them); the
+ * harness uses none of them. */
+#undef CLOCKS_PER_SEC
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
+#include <ciuki/files.h>
+#include <ciuki/uaddr.h>
+#define CD_USER_BASE 0x10000u
+static uint8_t cd_user[160 * 1024];
+static unsigned cd_user_calls, cd_user_fail_at; /* fail the Nth user copy of a call (1-based) */
+int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
+{
+    if (++cd_user_calls == cd_user_fail_at || src < CD_USER_BASE || bytes > sizeof(cd_user) || src - CD_USER_BASE > sizeof(cd_user) - bytes) return -EFAULT;
+    memcpy(dst, cd_user + (src - CD_USER_BASE), bytes); return 0;
+}
+int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
+{
+    if (++cd_user_calls == cd_user_fail_at || dst < CD_USER_BASE || bytes > sizeof(cd_user) || dst - CD_USER_BASE > sizeof(cd_user) - bytes) return -EFAULT;
+    memcpy(cd_user + (dst - CD_USER_BASE), src, bytes); return 0;
+}
+bool ua_range(const struct uaddr *u, uint32_t address, uint32_t bytes, uint32_t prot)
+{
+    (void)u; (void)prot;
+    return address >= CD_USER_BASE && bytes <= sizeof(cd_user) && address - CD_USER_BASE <= sizeof(cd_user) - bytes;
+}
+int px_error(int e) { if (e == -FS_EQUARANTINED || e == -FS_EUCLEAN || e == -FS_ELOOP) return -EIO; return e; }
+#include "../../src/kernel/drivers/media_cd.c"
 
 enum fault { GOOD, ERR, DF, BUSY, NO_DRQ, EXTRA_DRQ, NO_IRQ, BAD_IDENTIFY, BAD_FLUSH, SLOW_FLUSH, BAD_MULTIPLE,
              DMA_ERROR, DMA_ACTIVE, DMA_NO_BM_IRQ, DMA_MODE_ERROR, DMA_STUCK_MASTER, DMA_ERROR_NO_IRQ };
@@ -1282,7 +1331,7 @@ static void test_emergency_recorder(void)
 int main(void)
 {
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
-    test_storage_cache_faults(); test_packets(); test_optical_lifecycle();
+    test_storage_cache_faults(); test_packets(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
     test_dma(); test_constant_pic_masks(); test_emergency_recorder();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);

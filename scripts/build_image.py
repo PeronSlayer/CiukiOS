@@ -502,6 +502,8 @@ def win32_payloads(folder=None):
         require(Path(name).name == name, "fixture path")
         require(sha256(folder / "fixtures" / name) == digest, "fixture hash")
         sources["/System/Win32/Fixtures/" + name]=folder / "fixtures" / name
+        if name == "cdplayer.exe":
+            sources["/Programs/CDPLAYER.EXE"]=folder / "fixtures" / name
     return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/WINDOWS/CRASH", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
         "manifest_sha256": sha256(manifest), "builtins": store["dlls"],
         "msvcrt_policy": store.get("msvcrt_policy")}

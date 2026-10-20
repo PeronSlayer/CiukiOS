@@ -724,7 +724,69 @@
           }
         ]
       },
-      "integration_pending": "authored, unrun (f5-12B): lead supplies the guest MCI probe (waveaudio/sequencer/avivideo with the authored fixtures, MM_MCINOTIFY order, final AVI frame digest), the installed FluidR3 bank for the sequencer and T23 listening; cdaudio waits for the reviewed CD-audio transport amendment; host models do not qualify the guest"
+      "integration_pending": "authored, unrun (f5-12B2): CD data-only guest fixture and predicate are wired; QEMU ide-cd cannot present CD-DA. Lead must integrate the earlier waveaudio/sequencer/avivideo fixture (the inherited case=media predicate), run the permitted guest qualification when authorized, and listen to an authored Red Book disc on T23. Host evidence does not qualify the guest.",
+      "fixtures": [
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "joliet": true,
+          "seed": 1
+        }
+      ]
+    },
+    {
+      "id": "w32-cdaudio-qemu-t23",
+      "probe": "w32-media",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-media run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "cdaudio"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "installed": {
+                "eq": 1
+              },
+              "present": {
+                "eq": 1
+              },
+              "tracks": {
+                "eq": 1
+              },
+              "data_only": {
+                "eq": 1
+              },
+              "range_refused": {
+                "eq": 1
+              },
+              "tray": {
+                "eq": 1
+              },
+              "exit_code": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          }
+        ]
+      },
+      "integration_pending": "authored, unrun (f5-12B2): CD data-only guest fixture and predicate are wired; QEMU ide-cd cannot present CD-DA. Lead must integrate the earlier waveaudio/sequencer/avivideo fixture (the inherited case=media predicate), run the permitted guest qualification when authorized, and listen to an authored Red Book disc on T23. Host evidence does not qualify the guest.",
+      "fixtures": [
+        {
+          "generator": "xorriso",
+          "level": 3,
+          "joliet": true,
+          "seed": 1
+        }
+      ]
     },
     {
       "id": "w32-upper-dlls-qemu-t23",

@@ -400,6 +400,7 @@ static void media_changed(struct ata_device *d, enum atapi_media state)
     ++d->block.media_generation;
     d->block.capacity = 0;
     d->media = state;
+    d->toc.valid = false; d->audio_only = false; d->cd_playing = false;
 }
 /* Returns CHECK CONDITION separately so REQUEST SENSE remains under the
  * same owner mutex. No unrelated command may intervene and clear sense. */
@@ -505,22 +506,50 @@ static int packet_checked(struct ata_device *d, const uint8_t *p, unsigned lengt
     if (d->elapsed_ms>d->max_packet_ms) d->max_packet_ms=d->elapsed_ms;
     return -FS_EIO; /* a failed data request is never retried */
 }
-int atapi_packet(struct ata_device *d, const uint8_t *p, unsigned length,
-                 void *buf, uint32_t cap, uint32_t *done)
+static int packet_admit(struct ata_device *d, const uint8_t *p, unsigned length,
+                 void *buf, uint32_t cap, uint32_t *done, bool check_generation, uint32_t generation)
 {
     if (!d || !d->identified || !d->atapi || !p || !length || length > d->packet_bytes ||
         !done || cap > ATAPI_MAX_BYTES || (cap && !buf)) return -FS_EINVAL;
     switch (p[0]) {
     case 0: case 3: case 0x12: case 0x25: case 0x28: case 0x43: case 0x1b: case 0x1e: break;
+    /* f5-12B2 CD audio (optical_cd.c): MODE SENSE(10), READ CD, READ
+     * SUB-CHANNEL, PLAY AUDIO MSF, PAUSE/RESUME, STOP PLAY/SCAN. Still
+     * device-to-host only; the audio play commands carry no data. */
+    case 0x5a: case 0xbe: case 0x42: case 0x47: case 0x4b: case 0x4e: break;
     default: return -FS_EOPNOTSUPP;
     }
     kmutex_lock(&d->channel->mutex);
+    if (p[0] == 0x1b && length > 4 && (p[4] & 3) == 2 && d->cd_playing) {
+        *done = 0;
+        kmutex_unlock(&d->channel->mutex);
+        return -FS_EBUSY;
+    }
+    if (check_generation && (generation != d->block.media_generation || d->media != ATAPI_READY)) {
+        *done = 0;
+        kmutex_unlock(&d->channel->mutex);
+        return -FS_EAGAIN;
+    }
     int e = packet_checked(d, p, length, buf, cap, done,
                           p[0] == 0x1b && (length < 2 || !(p[1] & 1)) ? ATAPI_START_MS : ATAPI_COMMAND_MS);
-    if (!e) d->sense_key = d->asc = d->ascq = d->error = 0;
+    if (!e) {
+        d->sense_key = d->asc = d->ascq = d->error = 0;
+        if (p[0] == 0x47) d->cd_playing = true;
+        else if (p[0] == 0x4e) d->cd_playing = false;
+        else if (p[0] == 0x42 && *done >= 2) {
+            uint8_t status = ((const uint8_t *)buf)[1];
+            d->cd_playing = status == 0x11 || status == 0x12;
+        }
+    }
     kmutex_unlock(&d->channel->mutex);
     return e;
 }
+int atapi_packet(struct ata_device *d, const uint8_t *p, unsigned length,
+                 void *buf, uint32_t cap, uint32_t *done)
+{ return packet_admit(d, p, length, buf, cap, done, false, 0); }
+int atapi_packet_generation(struct ata_device *d, const uint8_t *p, unsigned length,
+                 void *buf, uint32_t cap, uint32_t *done, uint32_t generation)
+{ return packet_admit(d, p, length, buf, cap, done, true, generation); }
 static uint32_t packet_be32(const uint8_t *p)
 { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 static int ready_result(struct ata_device *d, const char *stage, int e, uint32_t bytes)
@@ -588,16 +617,41 @@ int atapi_ready(struct ata_device *d)
     memset(p,0,sizeof(p)); p[0] = 0x25; uint8_t capacity[8];
     e = atapi_packet(d, p, sizeof(p), capacity, sizeof(capacity), &n);
     if (!e && (n != 8 || packet_be32(capacity + 4) != 2048 || packet_be32(capacity) == UINT32_MAX)) e = -FS_EOPNOTSUPP;
-    ready_result(d, "capacity", e, n); if (e) return e;
-    d->block.capacity = (uint64_t)packet_be32(capacity) + 1;
-    /* First data track, then last-session information. QEMU/SFF encode
-     * format 1 in byte 9, unlike later MMC's additional byte-2 field. */
-    memset(p, 0, sizeof(p)); p[0] = 0x43; p[8] = 20;
-    uint8_t toc[20]; e = atapi_packet(d, p, sizeof(p), toc, sizeof(toc), &n);
-    if (!e && (n < 12 || !(toc[5] & 4))) e = -FS_EOPNOTSUPP;
-    ready_result(d, "toc", e, n); if (e) return e;
-    d->session_lba = packet_be32(toc + 8);
-    p[8] = 12; p[9] = 0x40;
+    /* f5-12B2: some drives refuse READ CAPACITY on a CD-DA disc (ILLEGAL
+     * REQUEST / MEDIUM ERROR) or report a block length other than 2048.
+     * Only those answers allow the TOC to decide; a missing medium, a
+     * transport failure or quarantine still ends the readiness attempt
+     * here, exactly as in F4. */
+    bool capacity_unknown = e && !d->block.quarantined && d->media != ATAPI_NO_MEDIUM &&
+        (e == -FS_EOPNOTSUPP || (e == -FS_EIO && (d->sense_key == 3 || d->sense_key == 5)));
+    uint32_t capacity_bytes = n;
+    if (!capacity_unknown) { ready_result(d, "capacity", e, n); if (e) return e; }
+    int capacity_error = e;
+    if (!e) d->block.capacity = (uint64_t)packet_be32(capacity) + 1;
+    /* The whole TOC (format 0, LBA; cached for CD audio), then last-session
+     * information. QEMU/SFF encode format 1 in byte 9, unlike later MMC's
+     * additional byte-2 field. */
+    e = atapi_cd_toc(d, true);
+    if (e || !capacity_error)
+        ready_result(d, "toc", e, d->toc.valid ? 4u + 8u * (d->toc.count + 1u) : 0);
+    if (e) return capacity_error ? ready_result(d, "capacity", capacity_error, capacity_bytes) : e;
+    d->audio_only = d->toc.audio_only;
+    if (d->toc.first_audio) {
+        /* f5-12B2 (lead decision 4): an audio first track is ready for the
+         * CD-audio interface and never mounted; no file system is probed.
+         * F4 keeps mounting only a disc whose first track is data. The
+         * "capacity" of a disc whose READ CAPACITY failed is its lead-out
+         * LBA, so the repeat-poll fast path above still applies. */
+        if (capacity_error) d->block.capacity = d->toc.leadout ? d->toc.leadout : 1;
+        d->session_lba = 0; d->media = ATAPI_READY;
+        ready_result(d, "audio", 0, d->toc.count);
+        return 0;
+    }
+    /* A data disc whose capacity is unusable keeps the F4 refusal. */
+    if (capacity_error) return ready_result(d, "capacity", capacity_error, capacity_bytes);
+    d->session_lba = d->toc.start[0];
+    uint8_t toc[12];
+    memset(p, 0, sizeof(p)); p[0] = 0x43; p[8] = 12; p[9] = 0x40;
     e = atapi_packet(d, p, sizeof(p), toc, 12, &n);
     if (!e && (n != 12 || packet_be32(toc + 8) >= d->block.capacity)) e = -FS_EIO;
     ready_result(d, "session", e, n); if (e) return e;

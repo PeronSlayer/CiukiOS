@@ -19,6 +19,7 @@ struct ap_content {
     int run_kind; /* 1 DOS, 2 Windows, 3 unsupported command */
     const char *budget; /* NULL or root/music/pictures/sniff/time */
     unsigned entries, sniffed, ms;
+    unsigned cd_audio, cd_slot;
 };
 struct ap_preference { char id[40], label[64]; int action; };
 struct ap_workspace;
@@ -27,6 +28,7 @@ enum { AP_IDLE, AP_PROBING, AP_READY, AP_LAUNCH_PENDING, AP_SAVE_PENDING, AP_SAV
 struct desk_autoplay {
     struct ciuki_media_volume pending[26], active;
     uint32_t seen[26], waiting;
+    uint32_t cd_seen[4], cd_waiting;
     struct ap_content content;
     struct ap_workspace *workspace;
     struct ap_worker *worker;
@@ -47,6 +49,7 @@ int ap_preference_list(const char *directory, struct ap_preference *, unsigned c
 int ap_preference_forget(const char *directory, const char *id);
 struct desktop;
 void desk_autoplay_update(struct desktop *, const struct ciuki_media_volume volumes[26]);
+void desk_autoplay_cd_update(struct desktop *, const struct ciuki_media_cd_state states[4]);
 void desk_autoplay_service(struct desktop *);
 /* Dispatch selected applications in the desktop's ordinary launch stage. */
 int desk_autoplay_launch(struct desktop *);

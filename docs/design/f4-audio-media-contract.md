@@ -765,3 +765,89 @@ as the F4 contract. Decisions on its open questions:
    ATAPI/ISO 9660 mount and the NTFS read-only mount do not depend on F3
    and may be implemented in parallel with it; the DOS VM audio path and the
    DOS-to-VFS bridge follow f3-05 and f3-00.
+
+## CD audio transport (F5-12B2, lead amendment 2026-10-20)
+
+The binding decision in `docs/directives/f5-12b-mci-codecs-avi-cdaudio.md`,
+amendment 1, selects READ CD as primary and PLAY AUDIO MSF as explicit fallback.
+The packet references and repository comparison are in
+[the CD audio validation record](../validation/f5-12b2-cd-audio.md).
+
+`/dev/media` retains its fixed node identity. Version-1 `MEDIA_CD_STATE`,
+`INFO`, `TOC`, `READ_AUDIO`, `TRAY`, `PLAY`, `PAUSE` and `POSITION` records
+carry size, optical slot and (where applicable) media generation. STATE
+finds a drive without a mounted letter; INFO reports Audio Play, CD-DA read,
+stream accuracy and volume-level capabilities from MODE SENSE page 2Ah.
+TOC reports up to 99 track descriptors with Q CONTROL data bits and lead-out.
+Zero generation is permitted for discovery (INFO/TOC/TRAY); streaming and
+analog commands require the exact generation. A stale generation returns
+EAGAIN; no medium returns ENXIO (the native ABI has no ENOMEDIUM). The CD read
+checks the generation again under the shared F4 channel mutex after waiting
+for its ATA peer. No failed drive read is retried in the kernel.
+
+Audio-first media are ready for CD audio; their `audio_only` flag distinguishes
+an entirely audio disc from audio-first mixed media. They are never mounted
+or sent to a filesystem probe. Data-first mixed media keep the ordinary F4
+mount, with data/audio packets serialized on the same channel. A read or
+play range touching any data track is EINVAL before issuing the read/play.
+READ CD requests use CD-DA expected sector type and only the 2352-byte user
+data field, at most 27 sectors (63504 bytes). The devctl uses a transient,
+per-call bounce allocation, frees it on every path and copies to user space
+after releasing the transport mutex. Allocation refusal occurs before IO.
+
+Each playing MCI CD device owns a reader thread and four 27-sector owned
+waveOut buffers: 108 sectors, 254016 bytes, 1.44 seconds at 1x. The source is
+44100 Hz S16LE stereo through the F5-12A process mixer. Packets stay within
+one track. The reader never holds the MCI guard over blocking extraction;
+stop/seek/new play invalidate its epoch and discard late completions. Close
+detaches the device; the in-flight reader retains its buffers and descriptor
+until it returns. Allocation pressure shrinks future read requests. An
+underrun emits mixer silence and holds the stream position; it never skips
+or duplicates audio samples. Digital position follows consumed source frames
+(588 stereo frames/sector), not READ SUB-CHANNEL or submitted packets.
+
+The digital state machine is stopped -> playing -> paused -> playing ->
+stopped. End-of-range completes successfully after the mixer consumes every
+header; stop/seek/close abort pending notification; medium change or loss
+completes with failure. A recoverable extraction failure can transition to
+analog at the consumed sector only if Audio Play is supported. No-medium,
+stale generation, invalid ranges and transport quarantine cannot trigger a
+successful analog continuation. Without stream accuracy there is no blind
+realignment/retry. The analog state machine uses PLAY AUDIO MSF, PAUSE/RESUME,
+STOP PLAY/SCAN and READ SUB-CHANNEL; completion and position come from the
+drive. Audio routed through a physical CD/codec connection remains a hardware
+qualification requirement for this fallback.
+
+`system.ini` section `[CiukiCDAudio]`, keys `CD0` through `CD3`, selects the
+path per optical slot: 0 automatic, 1 forced digital, 2 forced analog. Each
+play/fallback writes the selected path and reason to the native diagnostic
+log. The internal shell element `cdaudio!@N` selects an audio-only slot
+without inventing a drive letter; ordinary MCI clients use `cdaudio` or a
+mounted drive such as `d:`. AutoPlay offers one CD player action for audio-first
+media and launches the authored `CDPLAYER.EXE` through the existing Win32
+launcher. The player and the guest fixture use the public MCI APIs.
+
+MCI supports open/close, play/stop/pause/resume/seek, status, set time format
+(MSF, TMSF, milliseconds), door, info, capabilities and notification. TMSF
+track lengths are MSF values, preserving Quake's length-to-TMSF end conversion.
+Opening the tray is refused while playing or paused. Mounted media also pass
+the existing open-handle/eject preflight.
+
+| Native condition | MCI result |
+| --- | --- |
+| EINVAL / data track / invalid time range | MCIERR_OUTOFRANGE (282) |
+| ENODEV / absent slot | MCIERR_DEVICE_NOT_INSTALLED (306) |
+| ENXIO / medium absent; EAGAIN / changed generation | MCIERR_DEVICE_NOT_READY (276) |
+| ENOMEM | MCIERR_OUT_OF_MEMORY (264) |
+| EBUSY / door blocked | MCIERR_DEVICE_LOCKED (288) |
+| EOPNOTSUPP / unsupported command | MCIERR_UNSUPPORTED_FUNCTION (274) |
+| EIO / other packet or transport failure | MCIERR_HARDWARE (262) |
+
+Sense 2/3A expires the TOC and maps to ENXIO; 6/28 invalidates the generation;
+5/64 and 5/21 map to EINVAL at the CD devctl boundary; media/read/loss-of-stream
+errors remain EIO for the request. The F4 quarantine rules remain in force.
+CUE/BIN fixtures are authored synthetic PCM, never commercial media. The
+host adapter understands AUDIO, MODE1/2048, MODE1/2352, stored INDEX 00/01
+pregaps and unstored PREGAP. The kernel does not parse CUE files. QEMU ide-cd
+only qualifies data-only refusal/tray behavior; audio listening requires the
+lead's Red Book test disc and T23 evidence.

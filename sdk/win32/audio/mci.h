@@ -459,6 +459,7 @@ struct mci_device {
 };
 const struct mci_driver *mci_wave_driver(void);
 const struct mci_driver *mci_seq_driver(void);
+const struct mci_driver *mci_cd_driver(void);
 /* mciavi32.dll export: returns its driver table or 0 on version mismatch. */
 typedef const struct mci_driver *(W32API *mci_driver_entry)(
     const struct mci_host *);

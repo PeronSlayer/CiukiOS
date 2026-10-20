@@ -758,6 +758,259 @@ struct ciuki_media_remove {
 };
 ```
 
+f5-12B2: CD audio on /dev/media, addressed by optical slot (an audio-only
+disc has no drive letter). Every request carries version 1 and its own
+size; a request that names a generation is refused with EAGAIN when the
+drive's media_generation differs (re-read MEDIA_CD_STATE/TOC first).
+Errors: ENODEV no optical drive in the slot; ENXIO no medium (sense 2/3A);
+EINVAL range or data track (never sent to the drive); EIO one failed
+packet (never retried by the kernel); EBUSY door open refused while the
+disc is playing or has open mounted handles; EOPNOTSUPP missing capability.
+
+```c
+#define CIUKI_MEDIA_CD_VERSION 1u
+#define MEDIA_CD_STATE 0x4d10u
+#define MEDIA_CD_INFO 0x4d11u
+#define MEDIA_CD_TOC 0x4d12u
+#define MEDIA_CD_READ_AUDIO 0x4d13u
+#define MEDIA_CD_TRAY 0x4d14u
+#define MEDIA_CD_PLAY 0x4d15u
+#define MEDIA_CD_PAUSE 0x4d16u
+#define MEDIA_CD_POSITION 0x4d17u
+#define CIUKI_CD_SECTOR_BYTES 2352u
+```
+
+IEC 60908 CD-DA sector: 588 stereo S16LE frames
+
+```c
+#define CIUKI_CD_FRAMES_PER_SECOND 75u
+#define CIUKI_CD_READ_MAX_SECTORS 27u
+```
+
+63,504 bytes, inside the 64 KiB ATAPI packet limit
+
+```c
+#define CIUKI_CD_TRACKS_MAX 99u
+```
+
+MEDIA_CD_STATE.state
+
+```c
+#define CIUKI_CD_NO_MEDIUM 0u
+#define CIUKI_CD_NOT_READY 1u
+#define CIUKI_CD_READY 2u
+```
+
+MEDIA_CD_INFO.capabilities (MODE SENSE(10) page 2Ah, MMC-3 6.3.11 / SFF-8020i 10.8.6.4)
+
+```c
+#define CIUKI_CD_CAP_AUDIO_PLAY 1u
+```
+
+byte 4 bit 0: analog Audio Play
+
+```c
+#define CIUKI_CD_CAP_CDDA_READ 2u
+```
+
+byte 5 bit 0: CD-DA Commands Supported (READ CD)
+
+```c
+#define CIUKI_CD_CAP_CDDA_ACCURATE 4u
+```
+
+byte 5 bit 1: CD-DA Stream is Accurate
+
+```c
+#define CIUKI_CD_CAP_EJECT 8u
+```
+
+byte 6 bit 3: eject through START STOP UNIT LoEj
+
+```c
+#define CIUKI_CD_CAP_SEPARATE_VOLUME 16u
+```
+
+byte 7 bit 0
+
+```c
+#define CIUKI_CD_CAP_REPORTED 32u
+```
+
+page 2Ah was read; without it the bits are unknown
+
+MEDIA_CD_POSITION.audio_status (READ SUB-CHANNEL header, MMC-3 Table 219)
+
+```c
+#define CIUKI_CD_AUDIO_INVALID 0x00u
+#define CIUKI_CD_AUDIO_PLAYING 0x11u
+#define CIUKI_CD_AUDIO_PAUSED 0x12u
+#define CIUKI_CD_AUDIO_COMPLETED 0x13u
+#define CIUKI_CD_AUDIO_ERROR 0x14u
+#define CIUKI_CD_AUDIO_NONE 0x15u
+```
+
+MEDIA_CD_TRAY.action
+
+```c
+#define CIUKI_CD_TRAY_OPEN 1u
+#define CIUKI_CD_TRAY_CLOSE 2u
+```
+
+MEDIA_CD_PAUSE.action (analog path): PAUSE/RESUME 4Bh with Resume = 0 or 1,
+and STOP PLAY/SCAN 4Eh (MMC-3 5.10, 5.37).
+
+```c
+#define CIUKI_CD_ACTION_PAUSE 0u
+#define CIUKI_CD_ACTION_RESUME 1u
+#define CIUKI_CD_ACTION_STOP 2u
+struct ciuki_media_cd_state {
+    uint32_t version, size, slot;
+    uint32_t present;
+```
+
+1: an ATAPI drive is bound to this slot
+
+```c
+uint32_t state;
+```
+
+CIUKI_CD_* readiness of the medium
+
+```c
+uint32_t generation;
+```
+
+drive media_generation
+
+```c
+uint32_t audio_ready;
+```
+
+1: first track audio: ready for CD audio, never mounted
+
+```c
+uint32_t mounted;
+```
+
+1: a data session is mounted as a drive letter
+
+```c
+uint32_t drive;
+```
+
+letter index when mounted, else 26
+
+```c
+uint32_t reserved[3];
+};
+struct ciuki_media_cd_info {
+    uint32_t version, size, slot, generation;
+    uint32_t capabilities;
+```
+
+CIUKI_CD_CAP_*
+
+```c
+uint32_t volume_levels;
+```
+
+page 2Ah bytes 10-11
+
+```c
+uint32_t packet_bytes;
+```
+
+12 or 16
+
+```c
+uint32_t max_read_sectors;
+```
+
+CIUKI_CD_READ_MAX_SECTORS
+
+```c
+char model[41];
+    uint8_t reserved[3];
+};
+struct ciuki_media_cd_track {
+    uint8_t number, control, adr, reserved;
+    uint32_t start_lba;
+};
+struct ciuki_media_cd_toc {
+    uint32_t version, size, slot, generation;
+    uint32_t first, last;
+```
+
+track numbers, 1..99
+
+```c
+uint32_t count;
+```
+
+descriptors filled, excluding the lead-out
+
+```c
+uint32_t leadout_lba;
+    struct ciuki_media_cd_track tracks[CIUKI_CD_TRACKS_MAX];
+};
+struct ciuki_media_cd_read {
+    uint32_t version, size, slot, generation;
+    uint32_t lba, sectors;
+```
+
+1..CIUKI_CD_READ_MAX_SECTORS, inside one audio track
+
+```c
+uint32_t buffer;
+```
+
+user address of sectors * 2352 bytes
+
+```c
+uint32_t done;
+```
+
+bytes copied out
+
+```c
+};
+struct ciuki_media_cd_tray {
+    uint32_t version, size, slot, generation, action;
+};
+struct ciuki_media_cd_play {
+    uint32_t version, size, slot, generation;
+    uint32_t start_lba, end_lba;
+```
+
+analog PLAY AUDIO MSF 47h; [start, end) inside audio tracks
+
+```c
+};
+struct ciuki_media_cd_pause {
+    uint32_t version, size, slot, generation;
+    uint32_t action;
+```
+
+CIUKI_CD_ACTION_*
+
+```c
+uint32_t reserved;
+};
+struct ciuki_media_cd_position {
+    uint32_t version, size, slot, generation;
+    uint32_t audio_status;
+```
+
+CIUKI_CD_AUDIO_*
+
+```c
+uint32_t track, index;
+    uint32_t absolute_lba, relative_lba;
+    uint32_t reserved[3];
+};
+```
+
 F4-01: fixed copied device-control extension.
 
 ```c
