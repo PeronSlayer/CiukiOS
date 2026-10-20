@@ -26,14 +26,14 @@ void desk_shell_message(struct desktop *d,const char *title,const char *text,int
 uint32_t desk_w32_record(void *record,uint32_t bytes)
 {
     if(((struct ciuki_w32_header *)record)->operation==W32_REPORT){assert(bytes==sizeof(struct ciuki_w32_report_args));return 0;}
-    struct w32r_service *a=record;assert(bytes==sizeof(*a) && a->service==1);
+    struct w32r_service *a=record;assert(bytes==sizeof(*a));if(a->service==2){a->error=1062;return 0;}assert(a->service==1);
     if(a->action==1){if(authorized)a->result=1;else a->error=5;}
     else assert(a->action==3);
     return 0;
 }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path) && !argv[1]);
+    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path) && argv[1] && !strcmp(argv[1],"--fresh-clients") && !argv[2]);
     assert(env && !maps && !count && !flags);return (int)(100+ ++starts);
 }
 int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && signo==SIGTERM);signals++;return 0;}

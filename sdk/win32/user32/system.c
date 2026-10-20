@@ -428,18 +428,10 @@ BOOL W32API ExitWindowsEx(UINT flags, DWORD reserved) {
   (void)reserved;
   if (flags & ~0x1fu)
     return u32_fail(87);
-  w32_diag("end-session", "user32.dll", "ExitWindowsEx");
-  struct u32_window *w = u32_root(u32_window(u32_foreground));
-  if (!w)
-    for (UINT i = 0; i < U32_WINDOWS; i++)
-      if (u32_windows[i].handle && !u32_windows[i].parent) {
-        w = &u32_windows[i];
-        break;
-      }
-  if (w) {
-    uint8_t b[4];
-    desk_put32(b, flags);
-    u32_wire(w, DESK_V3_RESTART, b, 4, -1);
-  }
-  return 1;
+  struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=W32R_SHUTDOWN,
+    .index=W32R_SHUTDOWN_REQUEST,.flags=flags,.path_bytes=1,.name_bytes=1}};
+  struct w32r_reply reply;DWORD used=0;
+  DWORD e=u32_backend.rpc(&a,sizeof(a.r)+2,&reply,sizeof(reply),&used);
+  if(!e)e=used==sizeof(reply)?reply.error:13;
+  return e?u32_fail(e):1;
 }

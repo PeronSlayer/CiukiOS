@@ -25,6 +25,8 @@ uint32_t host_w32_call(void *record)
     }
     return 0;
 }
+uint32_t host_w32_W32(void *record,uint32_t bytes){(void)bytes;return host_w32_call(record);}
+uint32_t host_w32_DEBUG_WRITE(const void *text,uint32_t bytes){return fwrite(text,1,bytes,stderr)==bytes?0:1;}
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
     (void)flags;memset(m,0,sizeof(*m));ssize_t n=read(fd,m->data,256);

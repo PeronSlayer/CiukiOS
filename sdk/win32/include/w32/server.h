@@ -30,6 +30,18 @@ enum w32r_op {
     W32R_CLIP_GET, W32R_CLIP_QUERY, W32R_CLIP_OWNER, W32R_CLIP_VIEWER,
     W32R_CLIP_CHAIN, W32R_WINDOW_CLASS,
     W32R_USER_CLEANUP, /* index=TID, or zero for all USER identities of the PID */
+    /* f5-07B PROGMAN DDE server side (apps/w32srv/progman.c). The client
+     * process's USER answers the DDE messages in-process and forwards the
+     * conversation's effects here. OPEN: path=service, name=topic, reply key
+     * is a durable non-reused conversation ID. EXECUTE/REQUEST/CLOSE use that
+     * ID in index, authenticated to the caller PID. EXECUTE: path = the UTF-8 command string
+     * ("[CreateGroup(x)][AddItem(...)]"), name = "", reply key = DDEACK bits
+     * (0x8000 fAck) and type = commands executed. REQUEST: name = item
+     * ("Groups", "PROGMAN" or a group name), reply data = CF_TEXT bytes with
+     * a NUL. CLOSE ends that conversation; the focused group is shared. Typed
+     * refusals: 87 malformed, 120 service absent, 8 bounds. */
+    W32R_PROGMAN_EXECUTE = 0x140, W32R_PROGMAN_REQUEST, W32R_PROGMAN_CLOSE, W32R_PROGMAN_OPEN,
+    W32R_ENDSESSION, W32R_CLIENT,
     /* f5-10C2 PE-to-native font bridge (docs/design/fonts-contract.md,
      * "PE-to-native font bridge"): w32srv rasterises with libfont (FreeType
      * 2.13.3, v35, grey). path = native face path in the system or install
@@ -45,7 +57,56 @@ enum w32r_op {
      * larger than the shared budget, 5 path outside the stores, 2 missing. */
     W32R_FONT_GLYPHS = 0x180, W32R_FONT_CMAP, W32R_FONT_STATS
 };
+/* ENDSESSION: desktop BEGIN(index=1,flags=EWX), STATUS(4), RESET(5).
+ * BEGIN may include <=128 little-endian HWND/PID pairs in compositor order;
+ * the broker validates ownership and appends unranked hidden windows.
+ * USER POLL(2,index is action, type=TID), REPLY(3,key=HWND,type=TID,
+ * flags=query answer). reply POLL: key=HWND,type=message,count=wParam,
+ * disposition=lParam. STATUS: key=0 pending,1 accepted,2 vetoed.
+ * Notifications are serialized, delivered on the owning UI thread. */
+#define W32R_SESSION_BEGIN 1u
+#define W32R_SESSION_POLL 2u
+#define W32R_SESSION_REPLY 3u
+#define W32R_SESSION_STATUS 4u
+#define W32R_SESSION_RESET 5u
 #define W32R_FONT_BATCH 64u
+/* f5-07B end-session and virtual restart (W32R_SHUTDOWN; index selects the
+ * action; key and data_bytes are zero, access is ignored).
+ * REQUEST (any client): flags = EWX_* bits (0..0x1f), type = delay in seconds
+ * (InitiateSystemShutdown; zero for ExitWindowsEx without a window), path =
+ * message text or ""; one pending request per service (1115 when one is
+ * pending). ABORT (any client): clears a pending request that is not yet due
+ * (1116 if none). The remaining actions need the authenticated desktop
+ * (compat_writer_pid, else 5):
+ * POLL consumes a due request: reply key = requesting PID, type = flags,
+ * data = message with NUL (data_bytes != 0: consumed), count = milliseconds
+ * until due when nothing was consumed, disposition = 1 when restart work is
+ * pending (see STATUS). LIST: reply count = number of authenticated clients,
+ * data = that many little-endian PIDs, for the processes the desktop must
+ * close. STATUS: key = restart phase (W32R_RESTART_*), disposition = 1 when
+ * work is pending: a journalled restart interrupted earlier, a
+ * C:\WINDOWS\WININIT.INI, or RunServicesOnce/RunOnce entries. BEGIN (flags =
+ * EWX bits, zero at boot): commits the hives, journals the restart in
+ * C:\WINDOWS\CIUKIRST.LOG and starts the incremental WININIT.INI [rename]
+ * pass (one line per service tick, then WININIT.BAK); repeating BEGIN while a
+ * restart is running or resumed is accepted. NEXT: 170 (busy) while the
+ * WININIT pass runs; then deletes and returns (data = UTF-8 command with NUL,
+ * type = queue 0 RunServicesOnce / 1 HKLM RunOnce / 2 HKCU RunOnce, key =
+ * entries handed out) the next entry in registry order, 259 when none remain.
+ * END: 170 until NEXT has returned 259; commits the hives and removes the
+ * journal. */
+#define W32R_SHUTDOWN_STATUS 1u
+#define W32R_SHUTDOWN_BEGIN 2u
+#define W32R_SHUTDOWN_NEXT 3u
+#define W32R_SHUTDOWN_END 4u
+#define W32R_SHUTDOWN_REQUEST 5u
+#define W32R_SHUTDOWN_POLL 6u
+#define W32R_SHUTDOWN_ABORT 7u
+#define W32R_SHUTDOWN_LIST 8u
+#define W32R_RESTART_IDLE 0u
+#define W32R_RESTART_WININIT 1u
+#define W32R_RESTART_RUNONCE 2u
+#define W32R_SESSION_MESSAGE 256u /* InitiateSystemShutdown message bytes, with NUL */
 /* Win32 orientation: top is the distance from the baseline up to the first
  * coverage row (GLYPHMETRICS.gmptGlyphOrigin.y, FreeType bitmap_top). */
 struct w32r_glyph { uint32_t glyph; uint16_t width, height; int16_t left, top; int32_t advance; };

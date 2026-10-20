@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _POSIX_C_SOURCE 200809L
 #include "registry.h"
+#include "shell.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,9 @@ int main(int argc,char **argv)
     if(!wr_init(&s,&io,now())){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
     if(seed){uint32_t e=wr_flush(&s);wr_destroy(&s);return e?1:0;}
     s.compat_writer_pid=(uint32_t)getppid();
+    if(argc==2 && !strcmp(argv[1],"--fresh-clients") && wr_clients_reset(&s)){
+        fprintf(stderr,"[win32] client identity reset-failed\n");wr_destroy(&s);return 1;
+    }
 #ifdef __CIUKIOS__
     struct ciuki_display_info display={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(display)};
     if(!ciuki_display_query(&display)&&!wr_defaults(&s,display.width,display.height,display.bpp)){wr_destroy(&s);return 1;}
@@ -63,11 +67,19 @@ int main(int argc,char **argv)
     if(fonts){s.font_call=wf_call;s.fonts=fonts;}
     else fprintf(stderr,"[win32] fonts unavailable\n");
 #endif
+    /* f5-07B shell services: PROGMAN DDE effects and the virtual restart,
+     * over the Start-menu folder and C:\WINDOWS. A failure leaves them off
+     * (typed refusal 120) without stopping the registry. */
+    struct ws_fs shell_fs;ws_posix_fs(&shell_fs);
+    const struct ws_config shell_config={.programs="/WINDOWS/Start Menu/Programs",.windows="/WINDOWS"};
+    struct ws_shell *shell=ws_create(&shell_fs,&shell_config,&s);
+    if(shell){s.shell_call=ws_call;s.shell_exit=ws_exit;s.shell=shell;}
+    else fprintf(stderr,"[win32] shell services unavailable\n");
     if(wr_flush(&s)||service(1,&a)<0){
 #ifdef W32SRV_GUEST
         wf_destroy(fonts);
 #endif
-        wr_destroy(&s);return 1;
+        ws_destroy(shell);wr_destroy(&s);return 1;
     }
     uint64_t display_deadline=now()+2000;
     static struct {int fd;struct wr_session session;} clients[64];
@@ -97,6 +109,7 @@ int main(int argc,char **argv)
             if(ciuki_channel_send(clients[i].fd,&m,1)<0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;}
         }
         uint64_t time=now();
+        if(shell&&ws_restart_tick(shell))busy=1; /* one WININIT.INI line per iteration */
         if(wr_tick(&s,time))fprintf(stderr,"[win32] registry periodic-commit-failed\n");
         if(time>=display_deadline){
             struct ciuki_display_info active={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(active)};
@@ -117,6 +130,7 @@ int main(int argc,char **argv)
 #ifdef W32SRV_GUEST
     wf_destroy(fonts);
 #endif
+    ws_destroy(shell);
 #else
     (void)stopping;(void)stop;
     fprintf(stderr,"w32srv: host binary supports --seed only\n");

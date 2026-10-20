@@ -137,6 +137,8 @@ BOOL u32_create_wire(struct u32_window *w) {
     w->wire = 0;
     return 0;
   }
+  uint8_t identity[4];desk_put32(identity,U32_PTR(w->handle));
+  if(!u32_wire(w,DESK_V3_WIN32_HWND,identity,4,-1))return 0;
   if (!(w->style & WS_VISIBLE) || IsIconic(w->handle))
     return u32_place(w);
   return 1;
@@ -325,6 +327,7 @@ void u32_event(const struct desk_packet *p) {
   }
 }
 void u32_pump(void) {
+  u32_session_pump();
   u32_palette_deliver();
   if (!connected)
     return;

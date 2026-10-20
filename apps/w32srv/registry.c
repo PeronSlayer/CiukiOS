@@ -134,8 +134,42 @@ static void free_values(struct wr_value *v)
 {
     while (v) { struct wr_value *next = v->next; free(v->name); free(v->data); free(v); v = next; }
 }
+uint32_t wr_remove_value(struct wr_server *s, struct wr_key *k, const char *name)
+{
+    if (k->hive > 1) return 5;
+    struct wr_value **at = &k->values; while (*at && !wr_equal((*at)->name, name)) at = &(*at)->next;
+    if (!*at) return 2;
+    struct wr_value *v = *at; *at = v->next; s->hive[k->hive].text -= value_cost(v); v->next = NULL; free_values(v); dirty(s, k->hive);
+    return 0;
+}
+struct wr_key *wr_walk(struct wr_server *s, unsigned hive, const char *path)
+{
+    struct wr_key *k = hive < 4 ? s->roots[hive] : NULL; char part[W32R_NAME];
+    while (k && path && *path) {
+        const char *e = strchr(path, '\\'); size_t n = e ? (size_t)(e - path) : strlen(path);
+        if (!n || n >= sizeof(part)) return NULL;
+        memcpy(part, path, n); part[n] = 0; k = wr_child(s, k, part);
+        if (!e) break; path = e + 1;
+    }
+    return k;
+}
+uint32_t wr_client_join(struct wr_server *s,uint32_t pid)
+{
+    if(!pid)return 87;
+    for(unsigned i=0;i<s->live_count;i++)if(s->live[i]==pid)return 0;
+    if(s->live_count>=WR_LIVE)return 8;
+    /* A process-local identity in the existing durable SERVICE.CRS store
+     * survives a service crash even for a program with no USER windows.
+     * Reconcile checks the OS process snapshot before restoring it. */
+    struct w32r_request a={.op=W32R_ATOM_FIND,.index=1};struct w32r_reply r={0};uint8_t bytes[W32R_NAME];
+    uint32_t e=wr_directory_call(s,pid,&a,WR_CLIENT_MARKER,NULL,&r,bytes);
+    if(e==6){a.op=W32R_ATOM_ADD;e=wr_directory_call(s,pid,&a,WR_CLIENT_MARKER,NULL,&r,bytes);}
+    if(e)return e;
+    s->live[s->live_count++]=pid;return 0;
+}
 void wr_destroy(struct wr_server *s)
 {
+    free(s->ending);
     while (s->handles) { struct wr_handle *h = s->handles; s->handles = h->next; free(h); }
     while (s->keys) { struct wr_key *k = s->keys; s->keys = k->next; free_values(k->values); free(k->name); free(k); }
     wr_directory_free(s); memset(s, 0, sizeof(*s));
@@ -163,6 +197,11 @@ static void collect_deleted(struct wr_server *);
 uint32_t wr_exit(struct wr_server *s, uint32_t pid)
 {
     if (s->profile_owner==pid) s->profile_owner=0;
+    if (s->shell_exit) s->shell_exit(s->shell, pid);
+    /* A requester that dies before the desktop consumes its request still
+     * ends the session: Windows proceeds once ExitWindowsEx has returned,
+     * so s->session is deliberately not tied to the requester's lifetime. */
+    for (unsigned i = 0; i < s->live_count; i++) if (s->live[i] == pid) { s->live[i] = s->live[--s->live_count]; break; }
     uint32_t e = wr_flush(s);
     struct wr_handle **at = &s->handles;
     while (*at) { struct wr_handle *h = *at; if (h->pid == pid) { *at = h->next; free(h); } else at = &h->next; }
@@ -251,6 +290,54 @@ static int compat_protected(struct wr_server *s,struct wr_key *k,const char *pat
     }
     (void)s;return ancestor&&depth<4;
 }
+#include "session_impl.h"
+/* f5-07B end-session requests and the desktop-driven virtual restart.
+ * The requester is any authenticated Win32 process; the restart actions
+ * belong to the supervising desktop, the only authority that can close the
+ * personality's processes (compat_writer_pid, f5-09B). */
+static uint32_t shutdown_call(struct wr_server *s, uint32_t pid, const struct w32r_request *a, const char *path,
+                              struct w32r_reply *r, uint8_t *bytes, size_t cap)
+{
+    if (a->key || a->data_bytes) return 87;
+    if (a->index == W32R_SHUTDOWN_REQUEST) {
+        if (a->flags & ~0x1fu || a->type > 315360000u || strlen(path) >= sizeof(s->session.message)) return 87;
+        if (s->session.pid) return 1115; /* ERROR_SHUTDOWN_IN_PROGRESS */
+        s->session.pid = pid; s->session.flags = a->flags;
+        s->session.due = s->now + (uint64_t)a->type * 1000;
+        memcpy(s->session.message, path, strlen(path) + 1);
+        return 0;
+    }
+    if (a->index == W32R_SHUTDOWN_ABORT) {
+        if (a->flags || a->type || *path) return 87;
+        if (!s->session.pid || s->session.due <= s->now) return 1116; /* ERROR_NO_SHUTDOWN_IN_PROGRESS */
+        memset(&s->session, 0, sizeof(s->session)); return 0;
+    }
+    if (pid != s->compat_writer_pid || !pid) return 5;
+    if (a->index == W32R_SHUTDOWN_POLL) {
+        if (a->flags || a->type || *path) return 87;
+        if (s->shell_call) {
+            struct w32r_request status = {.version = W32R_VERSION, .op = W32R_SHUTDOWN, .index = W32R_SHUTDOWN_STATUS, .path_bytes = 1, .name_bytes = 1};
+            struct w32r_reply probe = {.version = W32R_VERSION};
+            if (!s->shell_call(s->shell, pid, &status, "", "", &probe, bytes, cap)) r->disposition = probe.disposition;
+        }
+        if (!s->session.pid) return 0;
+        if (s->session.due > s->now) { r->count = (uint32_t)(s->session.due - s->now); r->key = s->session.pid; r->type = s->session.flags; return 0; }
+        size_t n = strlen(s->session.message) + 1;
+        if (cap < n) return 87;
+        r->key = s->session.pid; r->type = s->session.flags; r->data_bytes = (uint32_t)n; memcpy(bytes, s->session.message, n);
+        memset(&s->session, 0, sizeof(s->session)); return 0;
+    }
+    if (a->index == W32R_SHUTDOWN_LIST) {
+        if (a->flags || a->type || *path) return 87;
+        if (cap < 4u * WR_LIVE) return 87;
+        for (unsigned i = 0; i < s->live_count; i++)
+            for (unsigned b = 0; b < 4; b++) bytes[i * 4 + b] = (uint8_t)(s->live[i] >> (8 * b));
+        r->count = s->live_count; r->data_bytes = s->live_count * 4;
+        return 0;
+    }
+    if (a->index < W32R_SHUTDOWN_STATUS || a->index > W32R_SHUTDOWN_END) return 87;
+    return s->shell_call ? s->shell_call(s->shell, pid, a, path, "", r, bytes, cap) : 120;
+}
 uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_t n, void *output, size_t cap, size_t *used)
 {
     struct w32r_request a; struct w32r_reply r = {.version = W32R_VERSION};
@@ -289,6 +376,19 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         r.error = s->font_call ? s->font_call(s->fonts, pid, &a, path, data, &r, bytes, cap - sizeof(r)) : 120;
         goto done;
     }
+    if (a.op == W32R_CLIENT) {
+        if (a.key || a.index || a.type || a.flags || a.data_bytes || *path || *name) r.error=87;
+        else if(s->ending && !wr_end_live(s,pid))r.error=1115;
+        else if(s->live_count==WR_LIVE && !wr_end_live(s,pid)) r.error=8;
+        else r.error=wr_client_join(s,pid);
+        goto done;
+    }
+    if (a.op == W32R_ENDSESSION) {r.error=wr_end_call(s,pid,&a,path,name,data,&r);goto done;}
+    if (a.op >= W32R_PROGMAN_EXECUTE && a.op <= W32R_PROGMAN_OPEN) {
+        r.error = s->shell_call ? s->shell_call(s->shell, pid, &a, path, name, &r, bytes, cap - sizeof(r)) : 120;
+        goto done;
+    }
+    if (a.op == W32R_SHUTDOWN) { r.error = shutdown_call(s, pid, &a, path, &r, bytes, cap - sizeof(r)); goto done; }
     if (a.op >= W32R_ATOM_ADD) {
         if (cap < sizeof(r) + W32R_DATA + W32R_NAME) { r.error = 87; goto done; }
         r.error = wr_directory_call(s, pid, &a, name, data, &r, bytes); goto done;
@@ -330,12 +430,8 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         if (!v) r.error = 2;
         else if (cap < sizeof(r) + v->bytes) r.error = 87;
         else { r.type = v->type; r.data_bytes = v->bytes; if (v->bytes) memcpy(bytes, v->data, v->bytes); }
-    } else if (a.op == W32R_DELETE_VALUE) {
-        if (k->hive > 1) { r.error = 5; goto done; }
-        struct wr_value **at = &k->values; while (*at && !wr_equal((*at)->name, name)) at = &(*at)->next;
-        if (!*at) r.error = 2;
-        else { struct wr_value *v = *at; *at = v->next; s->hive[k->hive].text -= value_cost(v); v->next = NULL; free_values(v); dirty(s, k->hive); }
-    } else if (a.op == W32R_DELETE_KEY) {
+    } else if (a.op == W32R_DELETE_VALUE) r.error = wr_remove_value(s, k, name);
+    else if (a.op == W32R_DELETE_KEY) {
         /* f5-20B (directive f5-20 amendment 1, item 3): an empty name
          * deletes the key of an open handle (NtDeleteKey), which `resolve`
          * checked for DELETE access. A predefined key (a root constant, or a

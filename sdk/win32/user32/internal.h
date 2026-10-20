@@ -74,6 +74,8 @@ struct u32_pending_event {
   struct desk_packet packet;
 };
 struct u32_thread {
+  DWORD session_poll;
+  BOOL session_active;
   DWORD id;
   HWND focus, active;
   MSG last;
@@ -236,5 +238,10 @@ UINT u32_to_wide(WCHAR *out, UINT cap, const char *in, int n);
 #define U32_DESKTOP ((HWND)(uintptr_t)0x00010010u)
 void u32_window_region_free(struct u32_window *);
 BOOL W32API IsMenu(HANDLE);
+DWORD u32_progman_rpc(UINT,DWORD,const char *,const char *,struct w32r_reply *,void *,DWORD);
+void u32_progman_ansi(char *);
+BOOL u32_progman_message(HWND,UINT,WPARAM,LPARAM,LRESULT *);
+void u32_progman_cleanup(DWORD);
+void u32_session_pump(void);
 UINT u32_utf8(char *, UINT, const char *);
 #endif

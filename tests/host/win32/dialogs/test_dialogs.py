@@ -115,7 +115,7 @@ class DialogTests(unittest.TestCase):
         user_sources = sorted((ROOT/'sdk/win32/user32').glob('*.c')) + [
             ROOT/'apps/libdeskui/v3.c', ROOT/'apps/desktop/protocol.c', ROOT/'apps/desktop/keymap.c',
             ROOT/'sdk/win32/services/bytes.c', HERE/'harness.c', EXERCISE/'exercise.c',
-            *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c')]]
+            *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c', 'progman.c', 'restart.c', 'shell_fs.c')]]
         for i, source in enumerate(user_sources):
             obj = OUT/f'u{i}.o'
             # Execute the guest entry's C body too, including its readiness

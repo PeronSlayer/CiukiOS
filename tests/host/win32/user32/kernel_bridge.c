@@ -102,6 +102,10 @@ int32_t ui_kernel_call(void *record, uint32_t bytes) {
     *r = a;
     return 0;
   }
+  if(header->operation==W32_REPORT){
+    CHECK(bytes==sizeof(struct ciuki_w32_report_args));
+    return (int32_t)w32_report_call(thread,record);
+  }
   if (header->operation == W32_SERVICE) {
     struct ciuki_w32_service_args *r = record;
     r->endpoint = 7;

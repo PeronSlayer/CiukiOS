@@ -117,6 +117,9 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->flags=desk_get32(b+20); p->style=desk_get32(b+24);
         if (p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
         expected=28; break;
+    case DESK_V3_WIN32_HWND:
+        if(!client || n!=4 || !(p->flags=desk_get32(b)))return 0;
+        expected=4;break;
     case DESK_V3_WINDOW_ORDER:
         if (!client || n!=20) return 0;
         p->flags=desk_get32(b); p->index=desk_get32(b+4); p->serial=desk_get32(b+8);
