@@ -23,7 +23,7 @@ static unsigned cd_launches;
 static int cd_launch(struct desktop *desk,const struct desk_launch_record *r)
 {
     (void)desk;
-    assert(!strcmp(r->target,"C:\\Programs\\CDPLAYER.EXE") && !strcmp(r->arguments,"--slot=1"));
+    assert(!strcmp(r->target,"C:\\WINDOWS\\CDPLAYER.EXE") && !strcmp(r->arguments,"--slot=1"));
     cd_launches++; return 101;
 }
 static char program[64], argument[FM_PATH];

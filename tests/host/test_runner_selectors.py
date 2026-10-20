@@ -24,17 +24,11 @@ import probe_tables  # noqa: E402
 import run as runner  # noqa: E402
 
 ALL = ('kernel', 'menu', 'loader_model')
-KERNEL_MENU = ('kernel', 'menu')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
 KNOWN_UNREGISTERED = {
-    # Named in the lead note of 2026-10-20 10:10.
-    (5, 'w32-fixtures'): {
-        'owner': 'f5-05B', 'missing': KERNEL_MENU,
-        'note': 'registered with CIUKI_F5_PROBE (src/kernel/probes/f5_probes_core.c) and listed in '
-                'loader_model.F5_PROBES, but absent from selector.c f5_names and menu.inc f5_probe_names'},
-    (5, 'w32-kernel32'): {
-        'owner': 'f5-06', 'missing': KERNEL_MENU,
-        'note': 'no probe registration in src/kernel; listed in loader_model.F5_PROBES only'},
+    (5, 'w32-fixtures'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
+    (5, 'w32-kernel32'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
+    (5, 'w32-restart'): {'owner': 'f5-21', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
     # Found by this check: authored cases whose probe none of the tables knows.
     (5, 'w32-fullscreen'): {'owner': 'f5-09', 'missing': ALL, 'note': 'case integration_pending: desktop v3 exercise driver and runtime probe'},
     (5, 'w32-registry'): {'owner': 'f5-06 and f5-09', 'missing': ALL, 'note': 'case integration_pending: production PE backend and w32srv supervision'},
@@ -87,7 +81,7 @@ class SelectorTableTests(unittest.TestCase):
         self.assertLessEqual({'sweep', 'boot', 'runner', 'all', 'core'}, menu[0])
         self.assertLessEqual({'f5-core', 'w32-objects', 'w32-dialogs'}, kernel[5] & menu[5])
         self.assertEqual(kernel[6], {'net-arp'})
-        self.assertTrue(probe_tables.loader_model_accepts(5, 'w32-fixtures'))
+        self.assertTrue(probe_tables.loader_model_accepts(5, 'w32-objects'))
         self.assertFalse(probe_tables.loader_model_accepts(5, 'no-such-probe'))
 
     def test_selector_splitting(self):
@@ -128,13 +122,11 @@ class SelectorTableTests(unittest.TestCase):
                 self.assertRegex(parts[1], r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
 
     def test_lead_note_probes_are_reported_for_the_lead(self):
-        # w32-fixtures (f5-05B) and w32-kernel32 (f5-06) are unregistered in
-        # the kernel selector and the loader menu, and only the host model
-        # knows them. Registering them is the owners' task, not this suite's.
-        for name in ('w32-fixtures', 'w32-kernel32'):
+        # f5-22: the model must match production; f5-21 owns the observers.
+        for name in ('w32-fixtures', 'w32-kernel32', 'w32-restart'):
             with self.subTest(probe=name):
                 self.assertEqual(probe_tables.registration(5, name),
-                                 {'kernel': False, 'menu': False, 'loader_model': True})
+                                 {'kernel': False, 'menu': False, 'loader_model': False})
 
     def test_win32_title_probe_names_against_the_kernel_buffer(self):
         # struct probe_selection.probe[24]: at most 23 bytes of probe name.

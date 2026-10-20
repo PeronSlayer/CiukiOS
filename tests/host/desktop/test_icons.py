@@ -32,6 +32,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined"]
 # Objects the desktop, its programs and the directive name; identity objects use the portrait.
 REQUIRED = {
+    "program:cdplayer": "media-optical",
     "program:files": "system-file-manager", "program:ciuknote": "accessories-text-editor",
     "program:tasks": "utilities-system-monitor", "program:dosbox": "utilities-terminal", "program:terminal": "utilities-terminal",
     "program:demo": None, "program:hello": None, "program:lua": None, "program:libc_smoke": None,
@@ -202,9 +203,9 @@ class IconStoreTests(unittest.TestCase):
         table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
         shell = (ROOT / "apps/desktop/shell.c").read_text()
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
-        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)"\}', shell)
+        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 23)  # f2-52 Graphics Demo
+        self.assertEqual(len(programs), 24)  # f5-22 system CD Player joins Accessories
         self.assertEqual(len(accessories), 10)  # f2-52 Graphics Demo
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)

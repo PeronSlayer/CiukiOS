@@ -224,7 +224,7 @@ int desk_autoplay_launch(struct desktop *d)
         struct desk_launch_record *r=calloc(1,sizeof(*r));
         if (!r) return -ENOMEM;
         snprintf(r->label,sizeof(r->label),"CD Player");
-        snprintf(r->target,sizeof(r->target),"C:\\Programs\\CDPLAYER.EXE");
+        snprintf(r->target,sizeof(r->target),"C:\\WINDOWS\\CDPLAYER.EXE");
         snprintf(r->arguments,sizeof(r->arguments),"--slot=%u",a->content.cd_slot);
         r->show=1;
         pid=d->v3_launch ? d->v3_launch(d,r) : -ENOSYS;

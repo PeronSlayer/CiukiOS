@@ -15,9 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# Named by the f5-17B lead note: their owners (f5-05B and f5-06) must supply
-# guest drivers or retire the cases. Neither production table registers them.
-UNREGISTERED = {'w32-fixtures', 'w32-kernel32'}
+# f5-22: f5-21 owns these pending guest observers; all tables reject them.
+UNREGISTERED = {'w32-fixtures': 'f5-21', 'w32-kernel32': 'f5-21', 'w32-restart': 'f5-21'}
 
 
 def selector_names():
@@ -59,12 +58,14 @@ class ProbeRegistryTests(unittest.TestCase):
                 pending.add(name)
                 self.assertNotIn(name, loader_names()[0])
                 self.assertTrue(case.get('integration_pending'), case['id'])
+                if name in UNREGISTERED:
+                    self.assertIn(UNREGISTERED[name], case['integration_pending'])
                 with self.assertRaises(ValueError):
                     loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
             else:
                 self.assertIn(name, loader_names()[0])
                 loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
-        self.assertLessEqual(UNREGISTERED, pending)
+        self.assertLessEqual(set(UNREGISTERED), pending)
 
     def test_every_registered_probe_has_its_registration_and_a_suite_case(self):
         suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
