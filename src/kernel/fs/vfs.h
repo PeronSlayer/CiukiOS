@@ -243,7 +243,11 @@ int vfs_log_rotate(struct vfs_table *, const char *current, const char *previous
  * below count with success: call again with the updated cursor). */
 #define PAGEFILE_MAP_WORK 512u
 struct vfs_pagefile_run { uint64_t lba; uint32_t sectors; };
-struct vfs_pagefile_cursor { uint32_t first, cluster, index; };
+/* f0-49b: the cursor is a hint under the f3-51c chain generation, followed
+ * only while the entry still names the same first cluster and chain stamp
+ * (an extension link, trim, relocation or release retires it); emptied on
+ * any error. A zero cursor is empty. */
+struct vfs_pagefile_cursor { uint64_t generation; uint32_t first, cluster, index; };
 int vfs_pagefile_extend(struct vfs_table *, int, uint32_t size);
 int vfs_pagefile_trim(struct vfs_table *, int, uint32_t size);
 int vfs_pagefile_map(struct vfs_table *, int, struct vfs_pagefile_cursor *, uint32_t index,

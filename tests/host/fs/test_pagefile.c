@@ -2,7 +2,8 @@
  * cache and f1-83 request pool over the file-backed fake device. Covers the
  * slot map oracle (mtools), in-place growth/shrink without relocation,
  * exclusivity and volume dependency, reserved records, page I/O failures,
- * and power cuts during page-out, growth and shrink (scan + fsck.fat).
+ * and power cuts during page-out, growth and shrink (scan + fsck.fat);
+ * f0-49b: trailing trim then regrowth over a cluster another file reused.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "pagefile.h"
 #include "fat.h"
@@ -283,6 +284,93 @@ static void power_cuts(void)
     fake_close(&f);
 }
 
+/* ---- 2b (f0-49b): trailing trim -> regrowth over a reused cluster ----
+ * Remapping an extent while the chain continues (the tail of an interrupted
+ * growth) leaves the mapper cursor on the next cluster; the trailing shrink
+ * releases it, another file takes it, and the regrowth must not map it. */
+#define REUSED_BYTES PAGER_EXTENT_BYTES
+static uint32_t reused_chain[REUSED_BYTES / 4096 + 1];
+static uint8_t chunk[16 * PAGER_PAGE];
+static void reused_fill(uint32_t at)
+{ for (uint32_t k = 0; k < sizeof(chunk) / PAGER_PAGE; k++) { fill(at + k, 0x0e1d); memcpy(chunk + k * PAGER_PAGE, page, PAGER_PAGE); } }
+static bool overlaps(const struct pager_map *m, const uint32_t *clusters, uint32_t count)
+{
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t lba = vol.start + vol.data_sector + (uint64_t)(clusters[i] - 2) * vol.spc;
+        for (uint32_t r = 0; r < m->runs; r++) {
+            uint64_t end = m->run[r].lba + (uint64_t)m->run[r].count * (PAGER_PAGE / 512);
+            if (lba < end && m->run[r].lba < lba + vol.spc) return true;
+        }
+    }
+    return false;
+}
+static void trim_regrow_reuse(void)
+{
+    CHECK(!fake_open(&f, image)); mount();
+    uint32_t existing; open_pagefile(&existing); CHECK(existing >= 1);
+    CHECK(!pagefile_backend.shrink(&pf, 1));
+    struct pager_map m0, again; CHECK(!pagefile_backend.grow(&pf, 0, &m0));
+    /* Interrupted growth of extent 1: the first bounded step published,
+     * the next one failed (pf_grow returns before mapping). */
+    CHECK(!vfs_pagefile_extend(&pf.table, pf.handle, PAGER_EXTENT_BYTES + PAGER_GROW_STEP));
+    /* Open/resume order remaps the existing extent: the chain continues
+     * past it, so the cursor names the first cluster of the growth tail. */
+    CHECK(!pagefile_backend.grow(&pf, 0, &again) && !memcmp(&again, &m0, sizeof(m0)));
+    uint32_t per = PAGER_EXTENT_BYTES / pf.cluster_bytes, released = pf.cursor.cluster;
+    CHECK(pf.cursor.index == per && released >= 2 && released < vol.clusters + 2);
+    /* Trailing shrink back to one extent releases that tail. */
+    uint64_t free_before, capacity; CHECK(!pagefile_backend.space(&pf, &free_before, &capacity));
+    CHECK(!pagefile_backend.shrink(&pf, 1));
+    uint64_t free_after; CHECK(!pagefile_backend.space(&pf, &free_after, &capacity) && free_after == free_before + PAGER_GROW_STEP);
+    /* Another file takes the released cluster and a full extent of chain
+     * from it (durable before any page-out). */
+    struct vfs_table other; CHECK(!vfs_table_init(&space, &other, 2));
+    int h = vfs_open(&other, "C:/REUSED.BIN", VFS_READ | VFS_WRITE | VFS_CREATE, VFS_DENY_NONE, 0); CHECK(h >= 0);
+    for (uint32_t at = 0; at < REUSED_BYTES / PAGER_PAGE; at += sizeof(chunk) / PAGER_PAGE) {
+        size_t done; reused_fill(at); CHECK(!vfs_write(&other, h, chunk, sizeof(chunk), &done) && done == sizeof(chunk));
+    }
+    CHECK(!vfs_commit(&other, h));
+    struct fat_entry o; CHECK(!vfs_handle_stat(&other, h, &o, 0) && o.size == REUSED_BYTES && o.first == released);
+    CHECK(!vfs_close(&other, h));
+    uint32_t n = 0, c = o.first;
+    for (;;) {
+        CHECK(c >= 2 && c < vol.clusters + 2 && n < sizeof(reused_chain) / 4);
+        reused_chain[n++] = c;
+        uint32_t next; CHECK(!fat_get_cluster(&vol, c, &next));
+        if ((next & 0x0fffffffu) >= 0x0ffffff8u) break;
+        c = next;
+    }
+    CHECK(n == REUSED_BYTES / pf.cluster_bytes && n >= per);
+    /* Regrowth: fresh clusters only, the same map as a walk from the first
+     * cluster, and page-out never reaches the other file. */
+    struct pager_map m1, fresh;
+    CHECK(!pagefile_backend.grow(&pf, 1, &m1) && mapped(&m1) == PAGER_EXTENT_SLOTS);
+    CHECK(!overlaps(&m1, reused_chain, n));
+    memset(&pf.cursor, 0, sizeof(pf.cursor));
+    CHECK(!pagefile_backend.grow(&pf, 1, &fresh) && !memcmp(&fresh, &m1, sizeof(m1)));
+    uint32_t probe[] = { PAGER_EXTENT_SLOTS, 2 * PAGER_EXTENT_SLOTS - 1 };
+    for (unsigned i = 0; i < 2; i++) { fill(probe[i], 0x49b); CHECK(!page_io(true, &m1, probe[i] - PAGER_EXTENT_SLOTS, page, PAGER_MANDATORY)); }
+    pagefile_close(&pf); vfs_table_destroy(&other); unmount();
+    clean_scan(false); CHECK(!fsck_status());
+    oracle(probe, 2, &m1, 0x49b);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "MTOOLSRC=build/host/fs/mtoolsrc mcopy -n -i %s ::REUSED.BIN build/host/fs/pagefile-reused.bin", image);
+    fflush(stdout); CHECK(!system(cmd));
+    FILE *in = fopen("build/host/fs/pagefile-reused.bin", "rb"); CHECK(in);
+    for (uint32_t at = 0; at < REUSED_BYTES / PAGER_PAGE; at += sizeof(chunk) / PAGER_PAGE) {
+        static uint8_t got[sizeof(chunk)];
+        CHECK(fread(got, 1, sizeof(got), in) == sizeof(got)); reused_fill(at); CHECK(!memcmp(got, chunk, sizeof(got)));
+    }
+    fclose(in); unlink("build/host/fs/pagefile-reused.bin");
+    /* Leave the image as found: one extent, no extra file. */
+    mount(); open_pagefile(&existing); CHECK(existing == 2 && !pagefile_backend.shrink(&pf, 1)); pagefile_close(&pf);
+    CHECK(!vfs_table_init(&space, &other, 2) && !vfs_delete(&other, "C:/REUSED.BIN")); vfs_table_destroy(&other);
+    unmount(); clean_scan(false); CHECK(!fsck_status());
+    fake_close(&f);
+    printf("TRACE M4-FS f0-49b trim_regrow released_cluster=%u reused_by=REUSED.BIN(%u clusters) regrow_overlap=0 fresh_walk=same_map pageout_oracle=ok reused_file=intact\n",
+           released, n);
+}
+
 /* ---- 3: small clusters and a full volume ---- */
 static void small_and_full(const char *small, const char *full)
 {
@@ -323,6 +411,7 @@ int main(int argc, char **argv)
     image = argv[1];
     lifecycle();
     power_cuts();
+    trim_regrow_reuse();
     small_and_full(argv[2], argv[3]);
     CHECK(!blk_request_pool_host_cleanup());
     printf("PASS M4-FS pagefile adapter checks=%u\n", checks);

@@ -1128,8 +1128,11 @@ static bool pagefile_end(const struct fat_volume *v, uint32_t n) {
 static int pagefile_walk(struct fat_volume *v, const struct fat_entry *entry, struct vfs_pagefile_cursor *c,
                          uint32_t index, uint32_t count, struct vfs_pagefile_run *runs, unsigned max,
                          unsigned *used, uint32_t *mapped) {
-    if (c->first!=entry->first || c->index>index || !c->cluster) {
-        c->first=entry->first; c->cluster=entry->first; c->index=0;
+    /* f0-49b: same rules as the f3-51c file cursors. A pair taken under an
+     * older chain generation may name a cluster a trim released (and another
+     * file then took): restart from the first cluster instead. */
+    if (c->first!=entry->first || c->generation!=entry->chain_generation || c->index>index || !c->cluster) {
+        c->generation=entry->chain_generation; c->first=entry->first; c->cluster=entry->first; c->index=0;
     }
     uint32_t work=0;
     while (c->index<index) {
@@ -1168,6 +1171,7 @@ int vfs_pagefile_map(struct vfs_table *t, int h, struct vfs_pagefile_cursor *c, 
         if (!d->node->entry.first || index>clusters || count>clusters-index) e=-FS_EINVAL;
         else e=VFS_IO(t->vfs,pagefile_walk(v,&d->node->entry,c,index,count,runs,max,used,mapped));
     }
+    if (e) *c=(struct vfs_pagefile_cursor){0}; /* I/O, corruption or a lost handle */
     vfs_unlock(t->vfs); return e;
 }
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
