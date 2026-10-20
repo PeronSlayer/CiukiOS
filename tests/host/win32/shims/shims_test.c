@@ -26,6 +26,8 @@ extern BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *);
 extern unsigned W32API RegOpenKeyExW(unsigned,unsigned,unsigned,unsigned,unsigned);
 extern unsigned W32API VerQueryValueW(unsigned,unsigned,unsigned,unsigned);
 extern unsigned W32API LZOpenFileW(unsigned,unsigned,unsigned);
+extern unsigned W32API GetMessageW(unsigned,unsigned,unsigned,unsigned);
+extern unsigned W32API TextOutW(unsigned,unsigned,unsigned,unsigned,unsigned);
 extern unsigned wide_real_calls;
 static void *allocate(void *o,uint32_t n){(void)o;return calloc(1,n);}
 static void release(void *o,void *p,uint32_t n){(void)o;(void)n;free(p);}
@@ -98,7 +100,14 @@ int main(void){
         CHECK(LZOpenFileW(UINT32_MAX,UINT32_MAX,0)==UINT32_MAX&&GetLastError()==120);
     }
     CHECK(stub_records==10&&!wide_real_calls);
-    CHECK(w32_shim_list("",&w32_shims));
+    CHECK(w32_shim_list("w-stubs@1(GetMessageW|TextOutW)",&w32_shims));
+    for(unsigned i=0;i<2;i++){
+        CHECK(GetMessageW(UINT32_MAX,0,0,0)==UINT32_MAX&&GetLastError()==120);
+        CHECK(!TextOutW(UINT32_MAX,0,0,UINT32_MAX,5)&&GetLastError()==120);
+    }
+    CHECK(stub_records==12&&!wide_real_calls&&RegOpenKeyExW(0,0,0,0,0)==17&&wide_real_calls==1);
+    CHECK(w32_shim_list("",&w32_shims));wide_real_calls=0;
     CHECK(RegOpenKeyExW(0,0,0,0,0)==17&&VerQueryValueW(0,0,0,0)==17&&LZOpenFileW(0,0,0)==17&&wide_real_calls==3);
+    CHECK(GetMessageW(0,0,0,0)==17&&TextOutW(0,0,0,0,0)==17&&wide_real_calls==5);
     puts("PASS all 12 shim versions, bounds, matching, precedence, conflict, hash, heap behavior and typed failures");return 0;
 }

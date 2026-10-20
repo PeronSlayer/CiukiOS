@@ -693,7 +693,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-upper-dlls run={run_id}",
       "timeout": 120,
-      "integration_pending": "authored, unrun: complete Wine upper PE builds, source patches, core amendments and lead guest exercise driver required; current DirectSetup host evidence does not close this gate",
+      "integration_pending": "authored, unrun: the Wine upper PE builds, patches 0001-0010 and core amendments exist and the host H0/H1 load, DllMain and conformance evidence is recorded (config/wine-upper.json, f5-20C); the lead guest exercise driver is still required and host evidence does not close this gate",
       "expected": {
         "terminal": "END",
         "predicates": [

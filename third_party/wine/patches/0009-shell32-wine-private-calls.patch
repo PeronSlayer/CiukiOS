@@ -1,0 +1,64 @@
+CiukiOS Wine 10.0: shell32-wine-private-calls
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-20. LGPL-2.1-or-later.
+Remove the three Wine-private calls of SHELL32: there is no Unix file
+namespace (wine_get_dos_file_name, wine_get_unix_file_name report no
+mapping) and no host operating system (wine_get_host_version; the XDG
+trash path is never macOS). The recycle bin needs WINEHOMEDIR, never set.
+
+--- a/dlls/shell32/recyclebin.c
++++ b/dlls/shell32/recyclebin.c
+@@ -78,14 +78,11 @@ static WCHAR *trash_dir;
+ static WCHAR *trash_info_dir;
+ static ULONG random_seed;
+ 
+-extern void CDECL wine_get_host_version( const char **sysname, const char **release );
+-
++/* CiukiOS: no host operating system behind the Win32 layer and no
++ * Wine-private wine_get_host_version. */
+ static BOOL is_macos(void)
+ {
+-    const char *sysname;
+-
+-    wine_get_host_version( &sysname, NULL );
+-    return !strcmp( sysname, "Darwin" );
++    return FALSE;
+ }
+ 
+ static BOOL WINAPI init_trash_dirs( INIT_ONCE *once, void *param, void **context )
+@@ -198,7 +195,9 @@ static BOOL write_trashinfo_file( HANDLE handle, const WCHAR *orig_path )
+     char *path, *buffer;
+     SYSTEMTIME now;
+ 
+-    if (!(path = wine_get_unix_file_name( orig_path ))) return FALSE;
++    /* CiukiOS: no Unix file namespace (Wine-private wine_get_unix_file_name). */
++    path = NULL;
++    if (!path) return FALSE;
+     GetLocalTime( &now );
+ 
+     buffer = malloc( strlen(path) * 3 + 128 );
+@@ -237,7 +236,9 @@ static void read_trashinfo_file( HANDLE handle, WIN32_FIND_DATAW *data )
+         if (header && !strncmp( p, "Path=", 5 ))
+         {
+             p += 5;
+-            if ((path = wine_get_dos_file_name( decode( p ))))
++            /* CiukiOS: no Unix file namespace (Wine-private wine_get_dos_file_name). */
++            path = NULL;
++            if (path)
+             {
+                 lstrcpynW( data->cFileName, path, MAX_PATH );
+                 heap_free( path );
+--- a/dlls/shell32/shfldr_fs.c
++++ b/dlls/shell32/shfldr_fs.c
+@@ -810,7 +810,10 @@ static void get_display_name( WCHAR dest[MAX_PATH], const WCHAR *path, LPCITEMID
+             buffer = malloc( len );
+             len = WideCharToMultiByte( CP_UNIXCP, 0, path + 8, -1, buffer, len, NULL, NULL );
+             for (i = 0; i < len; i++) if (buffer[i] == '\\') buffer[i] = '/';
+-            if ((res = wine_get_dos_file_name( buffer )))
++            /* CiukiOS: no Unix namespace behind \\?\unix\ and no Wine-private
++             * wine_get_dos_file_name; keep the path as given. */
++            res = NULL;
++            if (res)
+             {
+                 lstrcpynW( dest, res, MAX_PATH );
+                 heap_free( res );

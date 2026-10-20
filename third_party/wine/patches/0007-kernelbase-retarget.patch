@@ -1,0 +1,87 @@
+CiukiOS Wine 10.0: kernelbase-retarget
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-20. LGPL-2.1-or-later.
+Windows 98 has no KERNELBASE. COMCTL32 and SETUPAPI import its functions
+from their Windows 98 homes instead: KERNEL32 (default import), SHLWAPI
+(added) and VERSION (added; SETUPAPI). COMCTL32 forwards its Str* ordinals
+350-375 to SHLWAPI. SHLWAPI and OLE32 are retargeted by 0008.
+
+--- a/dlls/comctl32/Makefile.in
++++ b/dlls/comctl32/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_COMCTL32_
+ MODULE    = comctl32.dll
+ IMPORTLIB = comctl32
+-IMPORTS   = uuid user32 gdi32 advapi32 imm32 kernelbase msvcrt
++IMPORTS   = uuid user32 gdi32 advapi32 imm32 shlwapi msvcrt
+ DELAYIMPORTS = winmm uxtheme
+ 
+ SOURCES = \
+--- a/dlls/comctl32/comctl32.spec
++++ b/dlls/comctl32/comctl32.spec
+@@ -63,30 +63,30 @@
+ 342 stdcall -noname SendNotifyEx(long long long ptr long)
+ 344 stdcall -ordinal TaskDialog(long long wstr wstr wstr long wstr ptr)
+ 345 stdcall -ordinal TaskDialogIndirect(ptr ptr ptr ptr)
+-350 stdcall -noname -private StrChrA(str long) kernelbase.StrChrA
+-351 stdcall -noname -private StrRChrA(str str long) kernelbase.StrRChrA
+-352 stdcall -noname -private StrCmpNA(str str long) kernelbase.StrCmpNA
+-353 stdcall -noname -private StrCmpNIA(str str long) kernelbase.StrCmpNIA
+-354 stdcall -noname -private StrStrA(str str) kernelbase.StrStrA
+-355 stdcall -noname -private StrStrIA(str str) kernelbase.StrStrIA
+-356 stdcall -noname -private StrCSpnA(str str) kernelbase.StrCSpnA
+-357 stdcall -noname -private StrToIntA(str) kernelbase.StrToIntA
+-358 stdcall -noname -private StrChrW(wstr long) kernelbase.StrChrW
+-359 stdcall -noname -private StrRChrW(wstr wstr long) kernelbase.StrRChrW
+-360 stdcall -noname -private StrCmpNW(wstr wstr long) kernelbase.StrCmpNW
+-361 stdcall -noname -private StrCmpNIW(wstr wstr long) kernelbase.StrCmpNIW
+-362 stdcall -noname -private StrStrW(wstr wstr) kernelbase.StrStrW
+-363 stdcall -noname -private StrStrIW(wstr wstr) kernelbase.StrStrIW
+-364 stdcall -noname -private StrCSpnW(wstr wstr) kernelbase.StrCSpnW
+-365 stdcall -noname -private StrToIntW(wstr) kernelbase.StrToIntW
+-366 stdcall -noname -private StrChrIA(str long) kernelbase.StrChrIA
+-367 stdcall -noname -private StrChrIW(wstr long) kernelbase.StrChrIW
+-368 stdcall -noname -private StrRChrIA(str str long) kernelbase.StrRChrIA
+-369 stdcall -noname -private StrRChrIW(wstr wstr long) kernelbase.StrRChrIW
+-372 stdcall -noname -private StrRStrIA(str str str) kernelbase.StrRStrIA
+-373 stdcall -noname -private StrRStrIW(wstr wstr wstr) kernelbase.StrRStrIW
+-374 stdcall -noname -private StrCSpnIA(str str) kernelbase.StrCSpnIA
+-375 stdcall -noname -private StrCSpnIW(wstr wstr) kernelbase.StrCSpnIW
++350 stdcall -noname -private StrChrA(str long) shlwapi.StrChrA
++351 stdcall -noname -private StrRChrA(str str long) shlwapi.StrRChrA
++352 stdcall -noname -private StrCmpNA(str str long) shlwapi.StrCmpNA
++353 stdcall -noname -private StrCmpNIA(str str long) shlwapi.StrCmpNIA
++354 stdcall -noname -private StrStrA(str str) shlwapi.StrStrA
++355 stdcall -noname -private StrStrIA(str str) shlwapi.StrStrIA
++356 stdcall -noname -private StrCSpnA(str str) shlwapi.StrCSpnA
++357 stdcall -noname -private StrToIntA(str) shlwapi.StrToIntA
++358 stdcall -noname -private StrChrW(wstr long) shlwapi.StrChrW
++359 stdcall -noname -private StrRChrW(wstr wstr long) shlwapi.StrRChrW
++360 stdcall -noname -private StrCmpNW(wstr wstr long) shlwapi.StrCmpNW
++361 stdcall -noname -private StrCmpNIW(wstr wstr long) shlwapi.StrCmpNIW
++362 stdcall -noname -private StrStrW(wstr wstr) shlwapi.StrStrW
++363 stdcall -noname -private StrStrIW(wstr wstr) shlwapi.StrStrIW
++364 stdcall -noname -private StrCSpnW(wstr wstr) shlwapi.StrCSpnW
++365 stdcall -noname -private StrToIntW(wstr) shlwapi.StrToIntW
++366 stdcall -noname -private StrChrIA(str long) shlwapi.StrChrIA
++367 stdcall -noname -private StrChrIW(wstr long) shlwapi.StrChrIW
++368 stdcall -noname -private StrRChrIA(str str long) shlwapi.StrRChrIA
++369 stdcall -noname -private StrRChrIW(wstr wstr long) shlwapi.StrRChrIW
++372 stdcall -noname -private StrRStrIA(str str str) shlwapi.StrRStrIA
++373 stdcall -noname -private StrRStrIW(wstr wstr wstr) shlwapi.StrRStrIW
++374 stdcall -noname -private StrCSpnIA(str str) shlwapi.StrCSpnIA
++375 stdcall -noname -private StrCSpnIW(wstr wstr) shlwapi.StrCSpnIW
+ 376 stdcall -noname -private IntlStrEqWorkerA(long str str long)
+ 377 stdcall -noname -private IntlStrEqWorkerW(long wstr wstr long)
+ 380 stdcall -ordinal LoadIconMetric(ptr wstr long ptr)
+--- a/dlls/setupapi/Makefile.in
++++ b/dlls/setupapi/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_SETUPAPI_
+ MODULE    = setupapi.dll
+ IMPORTLIB = setupapi
+-IMPORTS   = uuid advapi32 rpcrt4 kernelbase msvcrt
++IMPORTS   = uuid advapi32 rpcrt4 shlwapi version msvcrt
+ DELAYIMPORTS = cabinet shell32 wintrust ole32 comdlg32 user32
+ 
+ SOURCES = \

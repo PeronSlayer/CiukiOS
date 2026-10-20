@@ -1,0 +1,369 @@
+{
+  "directory": "dlls/shell32/resources",
+  "files": {
+    "audio.ico": {
+      "after": "b5fc5df3bd3ce99234642f745ef12040c1bcc666876671b7b8e3db3edc95779d",
+      "before": "673d36ecfe5a1491795003bac109a44f53b314029dc33c8fbeb3439ad58a37bd",
+      "images": [
+        10,
+        5
+      ]
+    },
+    "blank.ico": {
+      "after": "d8aefe10f03873f4a8fe6a683a64eeca40a3a1ca3d44eff0ad3bafee9ddcb437",
+      "before": "1665259d917dd06bff7e5b9e93b897be2f3e0ad8d13c9833cb46e6d22232969b",
+      "images": [
+        10,
+        9
+      ]
+    },
+    "control.ico": {
+      "after": "ecc24aacd9532bdc6dfb19d38cd40373b942d06b2b9379494abee78722023f55",
+      "before": "43eeba8c0295324a2a2b87b6ab620b632bd3c8c417d6891db9bf139e3c4dd7c4",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "copy.ico": {
+      "after": "b09e0ce517473ed4df6646dbe984ee23f28f4ad67ed9fee3a2d025f74ec7d1b7",
+      "before": "4346b046cf34f55a4c7c84fd808bb96911121760e3ffa1597ce0bac404c7f8a6",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "delete.ico": {
+      "after": "07db84b473810a10419191b07ce92b4a6216568c6818b045547a2288d99f71f7",
+      "before": "3b77feae89ccc8d07a744cc5142e051152d758f4f995fe61f6c9a67b60f26e8d",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "desktop.ico": {
+      "after": "3f075245ebcece338258251135477a39f99ce10e479033015675bdf68b74437c",
+      "before": "673ad97eefaf5073e1014364e86465b9ca727cd5becdd1cda0dc0846cdc5dd7e",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "disk_drive.ico": {
+      "after": "79a46350d8a516cd378b3328b3fc9628b75650753db909a39f52687e8ec87fb9",
+      "before": "002f5cf86133b1fe6713dc9eab6159aaa073363ebab8ebcff75740f322fcf78e",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "document.ico": {
+      "after": "8795f6f4022dfd84b4d747e48e7f1fcf7221d8da076ebbc649d969b717425a2f",
+      "before": "c25905f5440ac0b69f281384d4981815f9465e0091fbfd242ea90879731f0aba",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "drive.ico": {
+      "after": "e1a20f2865c78b632237af52680a6bae344343731929261ab49143f5153e3786",
+      "before": "01786ccc7e2a3726aab71b21f667d532b4101f25fe320cdc503989562c088606",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "eject.ico": {
+      "after": "05cc61bccb4663bbee355ffc86c0d8d8a5901316cdb17d398661c78e935e65cf",
+      "before": "801f5465e3b7aaa6c87b6770c685f4621a1196ecdbb5a6b4b0de97e8b995af64",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "favorites.ico": {
+      "after": "a090c18c96c1e1ec935650090dca8e140fb02522fac49f9d23747d3b4d877a34",
+      "before": "fb37fa3ea60cd560a7b827ebe30a90595f8659c0a773f1ea0837701e62c91cb5",
+      "images": [
+        10,
+        5
+      ]
+    },
+    "folder.ico": {
+      "after": "6616cf7182d8407a04a2c29de1f9e98cc8a214026fbbd04ac3c21409e000ad8f",
+      "before": "7ed5713b0fe491f84f1b599e4dde0fb55a787e0a7d753ff8f86a5051894cc1b9",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "folder_open.ico": {
+      "after": "c3f86e921cc3c0652df06abd3a0fb8d0ba11ef3fbf19440150e90cfd2513f6ae",
+      "before": "3e5d137fb21e31176ee0f274f7be83a940ec2316bbcc85f8df9aea1c5caf95f3",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "help.ico": {
+      "after": "58dcaf93ecd54ec7d02746a0e688b04366a4d10d89ec5e505fffc773e89b46de",
+      "before": "d61ee2e7670aa55ec278cb78a5268d082058d450d8ee8400e9600b3e483ac28e",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "image.ico": {
+      "after": "7cdd0f945f648f3f5d996dab719eced60fe87cebcf61de8a688a0d918cc5f142",
+      "before": "3013b1fe4b92814043f9f6778fd890c33927dce3bb461a20f0f1e313bb200064",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "internet.ico": {
+      "after": "a5701238d5229bb7a8017c003b75525a3296b79da7e8557fc58b0254bd828570",
+      "before": "7212c5d85c30373b01967042e7ce6009317b485275d5c04bd1d9a21836414360",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "log_off.ico": {
+      "after": "551bacbada71d648addccf695960283de7241b8cdf8b9d0709340ca29be26b1c",
+      "before": "daa2a195ccda6ec7ae1c9e0ec429c5d6805cdb7079c0e9d17d045b3cb6305e31",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "menu.ico": {
+      "after": "37d3fda895cbebb038e8d205b953798343005ed7e579b7962c754e6410d264cc",
+      "before": "28b8d4106c0612d3192028d5f4535e3c054cb4a28d1a53126249ba14a64d9fcd",
+      "images": [
+        10,
+        7
+      ]
+    },
+    "move.ico": {
+      "after": "ea9cf65f1cdfc9c208d1f48ae480bde4234cab0cb09a72878db614dd6333b3dc",
+      "before": "55c6839e65f5097d89c0fce442af4768c6548b31dd8979e9ad40231be14035d4",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "mycomputer.ico": {
+      "after": "600d3236b778a4640b8a515e03956c87b158be591927c6563095f3cdc49f456f",
+      "before": "551b1659b4e6cb05b3f494c2022c2cb6880b0955fd1dbe898cd135cab235172e",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "mydocs.ico": {
+      "after": "14a030f7f1874631569dbce9cfa968bff450907064ee38f9d0efac6c75697e84",
+      "before": "e2140c714141471203f39b83ca35ef4ae7bb17a8e3de7a2fa105261afbe85c76",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "netdrive.ico": {
+      "after": "2d5e9a27405b1264004a54823bcbc5e99ae95f353730e9eddd8d20a299f03cfe",
+      "before": "cec49424f13aed7499f1c537ac0f8b496e471595ba976566a3fb91eac9f626a0",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "netdrive2.ico": {
+      "after": "347a91a3fb8f9a31ad3de961e52b51f528af3d92b7593229c5d494ae17789006",
+      "before": "fea2d53075c2a98c9f5a40edd2ba553ccefa351b16ae6e4047fae1fd4cffc943",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "network.ico": {
+      "after": "193e7f2125cece417436c1cc06af48f83fd418d8be34ade90d22c4a786d83dde",
+      "before": "84fcdccfe833d2844c2283afc39376fba33999c32e53e2611c133ce54d767abe",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "optical_disc.ico": {
+      "after": "860a364d254e11c1e80c9d93cb0232a96bd06ea0923d0822fffd295615678336",
+      "before": "d88642c422a3fd0e1594665748863bc169c68fefc697f17d5a01e97313d22cbc",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "optical_drive.ico": {
+      "after": "1a1bbdd49be397904083e1b28dd5b81f71f51c95b6571f0cc555a7b53c6adbd4",
+      "before": "c78536abb8b2791235db47c41b9eeea6673f29984030c8f3129437f82aa3593a",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "play.ico": {
+      "after": "32652ed25c5e93933284da369b0b01fc33de71faa150640a3579dd9e52721bd6",
+      "before": "ffbfca7af462b91ea04e2030f439951c75b5d42bb6f57f39c78b0828cdf76f98",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "printer.ico": {
+      "after": "1c008dbcab810db20395154a8a6281341976a26aaa782514ad48f3d7e88ca69a",
+      "before": "8a727e54a5df29c844f380706bcd28bf412a955694f9e57824b99dbc4d6cdbc6",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "ramdisk.ico": {
+      "after": "c3522ff45cee90d58c3fe9d0a2f1eca29578d7fa18c55762d6076f5ae22fb141",
+      "before": "199201c2a34aa1eade06ecc41c49b2a0d7bcfc9ac86226ca8ba34298502a55e1",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "recent.ico": {
+      "after": "81ea6295d63d60c30069fce421a25bd34f227d2ff5bae0ae0871553d96714063",
+      "before": "26845335eecb970cd1f82cf74eaa1bfa24dcf92f09d6abb614f3eea6d8a58370",
+      "images": [
+        10,
+        2
+      ]
+    },
+    "rename.ico": {
+      "after": "fefae75365b8beaca11d781b89e12fcd4d1b77da797365ae66f35fbe66ccd1c5",
+      "before": "73d54dce2ff7c79860bc0277d644eeaddb5478a47a9bfbe6abaee5daab77905d",
+      "images": [
+        10,
+        7
+      ]
+    },
+    "restricted.ico": {
+      "after": "35c647013d1a54c77c80bdf8bdff57a7fb277d051edd2889e308bc860bba9e88",
+      "before": "530e2d02a8db46a7b56368cc88ec3b41a72596aac8e763e966a49413c7a333da",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "search.ico": {
+      "after": "450a760b8d0ec746d248ee010a74ac1dde7636d2de5a7d4f016376a34366dad4",
+      "before": "6c854ddbc0faa93f79b6f6ab8dfb1eab67ba394f89bfa9bca614749b6551efd8",
+      "images": [
+        10,
+        5
+      ]
+    },
+    "security.ico": {
+      "after": "f081dcf23561fc3ff97669ab3bfcb3d55883a7bf4c1f929fb4e97ca1e18bc5a0",
+      "before": "f8d9ee3d6218c873b74e29f749b256b78756abe4463ac6154ecbb63ae603df8d",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "shortcut.ico": {
+      "after": "34d17226fc8754b7e4a7377915a4f69a70e3fb1e802b523d7ec7f19321434b3c",
+      "before": "7796cc6caed40568847020d609cb38f6a9d522b87dd826b24c9b8237a04a3533",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "shut_down.ico": {
+      "after": "47ffd229a816a6a64b528fb65c123f449cbd7b6a45af7f866aef3fa76146924d",
+      "before": "5b765f685e25c9a77c31fdeff62032678475cfa102e4cc380351683621d20b61",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "sleep.ico": {
+      "after": "6cdbe26e68548c3ae5f4ce4952c6b0c4074117027c00473eda1813ecdea19656",
+      "before": "26c0baea0c0e20a6ca2cb48ef57564866c3d8d1bba402bfb6023e7582e9766e6",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "trash_file.ico": {
+      "after": "7b0b6bfe2f16a40b55b5b76d90e3924c7a6c7f90c0cb92162d4067368d53e435",
+      "before": "b311f9fa870a3eddfacc5190d516f5dbc7974e7579a016333265e7013d9b7e41",
+      "images": [
+        10,
+        6
+      ]
+    },
+    "trash_full.ico": {
+      "after": "0116d62600fb2004285ec0a4d765041736bea98e3c8385bab5d5df89cc5aedad",
+      "before": "3a3c9b96f9577416795f10eb57c823a82efdeccdef27ee7d9f9d5677b0f9bc13",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "update.ico": {
+      "after": "13d9bfa201203703e934ab381e9b68b62b01e5915a3f378aae557ec2e804d476",
+      "before": "21d59e5e0793e9344a17b33c5b6ebe61e723947a74ad2540e6e26d652ee1b366",
+      "images": [
+        10,
+        5
+      ]
+    },
+    "users.ico": {
+      "after": "be809e6a6eaed62de6b61ace1e26c8ad946f6a232ee9f08b3b405a5749f8e14f",
+      "before": "da1c791835cf2539defb295691efcfe1ef1c65f4ffcebd80232d21e280ef7aad",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "video.ico": {
+      "after": "70abdb03ba5f67b3abc6a40a8de0e140350a0827b54fcea89f7e9c2a7577127c",
+      "before": "10b7a10e14878f1eb262124a2b436aed1eab4ac394faa37e778fe9151f4304ca",
+      "images": [
+        10,
+        4
+      ]
+    },
+    "window.ico": {
+      "after": "1c16427ef28d9642a716796bbc75e9b0f1d602a4ef8a1413180c59aca6ad6603",
+      "before": "81f3d5aa5b1d411f0ca1436160b1363f316c2d2b92aed49554a78b6339205959",
+      "images": [
+        10,
+        6
+      ]
+    }
+  },
+  "filter": "icon-trim",
+  "keep": {
+    "max_bit_count": 8,
+    "png": false,
+    "sizes": [
+      16,
+      32,
+      48
+    ]
+  },
+  "modified": "CiukiOS, 2026-10-20. LGPL-2.1-or-later.",
+  "name": "0006-shell32-icon-trim",
+  "pinned_base": "b073859675060c9211fcbccfd90e4e87520dc2c2",
+  "reason": "f5-14B amendment 2: keep the icon formats Windows 98 uses (1/4/8 bpp at 16, 32 and 48 px); drop PNG-compressed and 24/32 bpp images from the SHELL32 icon files so the reused set fits the 128 MiB installer budget. Every icon keeps at least one image. Applied by scripts/win32/wine_upper.py (icon_trim) after patch 0005; inputs and outputs are verified against the SHA-256 values below.",
+  "totals": {
+    "bytes_after": 357298,
+    "bytes_before": 1776519,
+    "images_after": 235,
+    "images_before": 430
+  }
+}

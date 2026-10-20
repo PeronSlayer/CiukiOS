@@ -33,8 +33,10 @@ class ShimTests(unittest.TestCase):
         from scripts.win32.stub_signatures import wide_gate
         gates=out/'wide.c'
         text=['#include <w32/shims.h>','unsigned wide_real_calls;']
+        # f5-20C: USER32/GDI32 W exports use the same generated gate.
         for i,(dll,name,bytes_) in enumerate([('advapi32.dll','RegOpenKeyExW',20),
-                  ('version.dll','VerQueryValueW',16),('lz32.dll','LZOpenFileW',12)]):
+                  ('version.dll','VerQueryValueW',16),('lz32.dll','LZOpenFileW',12),
+                  ('user32.dll','GetMessageW',16),('gdi32.dll','TextOutW',20)]):
             params=','.join(f'unsigned a{j}' for j in range(bytes_//4))
             unused=''.join(f'(void)a{j};' for j in range(bytes_//4))
             text.append(f'unsigned __attribute__((stdcall)) w32_real_{name}({params}){{{unused}wide_real_calls++;return 17;}}')

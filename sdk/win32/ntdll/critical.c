@@ -15,6 +15,14 @@ NTSTATUS W32API RtlInitializeCriticalSection(RTL_CRITICAL_SECTION *c) {
 NTSTATUS W32API RtlDeleteCriticalSection(RTL_CRITICAL_SECTION *c) {
     if (!c || c->OwningThread)
         return STATUS_INVALID_PARAMETER;
+    /* Free only a debug block InitializeCriticalSectionEx allocated; static
+     * blocks (Wine's named sections) and (void *)-1 are not owned here. */
+    RTL_CRITICAL_SECTION_DEBUG *debug = c->DebugInfo;
+    struct w32_teb *teb = NtCurrentTeb();
+    if (debug && debug != (void *)~(uintptr_t)0 && debug->CreatorBackTraceIndex == W32_CS_DEBUG_OWNED &&
+        debug->CriticalSection == c && teb && teb->ProcessEnvironmentBlock &&
+        teb->ProcessEnvironmentBlock->ProcessHeap)
+        RtlFreeHeap(teb->ProcessEnvironmentBlock->ProcessHeap, 0, debug);
     return RtlInitializeCriticalSection(c);
 }
 BOOLEAN W32API RtlTryEnterCriticalSection(RTL_CRITICAL_SECTION *c) {

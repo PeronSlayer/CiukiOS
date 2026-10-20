@@ -42,6 +42,8 @@ def build(out, base=0x72000000, flags=None):
             for name in C_EXPORTS:
                 if re.search(r'\bT _'+name+r'\s*$',nm,re.M):
                     exports[name]=name
+    from scripts.win32 import user32 as user_generator
+    wide = user_generator.wide_gate(objects, exports, out, 'gdi32.dll', (), FLAGS)
     imports = stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('gdi32.dll', set())
     imports |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('gdi32.dll', set())
     missing = sorted(imports-exports.keys())
@@ -52,7 +54,8 @@ def build(out, base=0x72000000, flags=None):
     obj = out/'gdi32-remainder.obj'
     subprocess.run(['clang', *FLAGS, '-c', str(source), '-o', str(obj)], check=True)
     objects.append(str(obj))
-    for dll, declarations in [('ntdll', ' w32_stub_hit\n w32_get_services\n w32_stricmp\n memcpy\n memset\n'),
+    for dll, declarations in [('ntdll', ' w32_stub_hit\n w32_get_services\n w32_stricmp\n memcpy\n memset\n'
+                                        ' w32_shim_stub\n w32_shim_w_stub\n'),
                               ('kernel32', ' MapViewOfFile@20\n UnmapViewOfFile@4\n CreateFileA@28\n ReadFile@20\n GetFileSize@8\n'
                                            ' SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
                                            ' LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
@@ -89,7 +92,7 @@ def build(out, base=0x72000000, flags=None):
         'exports':[{'name':n, 'status':'implemented' if n in exports else 'W21 nonreturning stub',
                     'owner':'f5-10C' if re.match(r'(?:CreateFont|CreateScalableFont|EnumFont|GetTextMetrics|AddFont|RemoveFont|GetChar|GetOutline)', n) else 'f5-10B'} for n in sorted(imports)],
         'upper_scope':'f5-20B: core-implement and core-w21-stub decisions of config/wine-upper.json owned by gdi32.dll',
-        'upper':upper}, indent=2)+'\n')
+        'upper':upper, 'wide_gate':wide}, indent=2)+'\n')
     raw=image.read_bytes()
     pe=int.from_bytes(raw[60:64], 'little')
     return {'name':'gdi32.dll','path':'gdi32.dll','base':base,'size':int.from_bytes(raw[pe+80:pe+84], 'little'),

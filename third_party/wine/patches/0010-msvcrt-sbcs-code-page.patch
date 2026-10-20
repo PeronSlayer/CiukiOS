@@ -1,0 +1,22 @@
+CiukiOS Wine 10.0: msvcrt-sbcs-code-page
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-20. LGPL-2.1-or-later.
+The C locale and _setmbcp(_MB_CP_SBCS) use code page 0, as the Microsoft
+CRT documents for a single-byte code page (_getmbcp returns 0), instead of
+US-ASCII 20127, which the CiukiOS KERNEL32 does not provide (437, 850 and
+1252): GetCPInfo(20127) failed and msvcrt.dll refused DLL_PROCESS_ATTACH.
+
+--- a/dlls/msvcrt/mbcs.c
++++ b/dlls/msvcrt/mbcs.c
+@@ -254,7 +254,10 @@ threadmbcinfo* create_mbcinfo(int cp, LCID lcid, threadmbcinfo *old_mbcinfo)
+           break;
+       /* fall through (C locale) */
+     case _MB_CP_SBCS:
+-      newcp = 20127;   /* ASCII */
++      /* CiukiOS: KERNEL32 has the code pages 437, 850 and 1252, not 20127.
++       * The Microsoft CRT documents 0 as the code page of the single-byte
++       * case (_getmbcp) and builds its tables from the ANSI code page. */
++      newcp = 0;
+       break;
+     default:
+       newcp = cp;

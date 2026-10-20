@@ -83,6 +83,23 @@ NTSTATUS W32API RtlInitializeCriticalSectionAndSpinCount(RTL_CRITICAL_SECTION *c
   cs->SpinCount = n;
   return 0;
 }
+/* Model process heap for the f5-20C debug blocks of InitializeCriticalSectionEx. */
+static int debug_blocks, fail_heap;
+HANDLE W32API GetProcessHeap(void) { return &peb; }
+void *W32API RtlAllocateHeap(void *heap, ULONG flags, uint32_t n) {
+  if (heap != &peb || flags != 8 || fail_heap)
+    return 0;
+  debug_blocks++;
+  return calloc(1, n);
+}
+BOOLEAN W32API RtlFreeHeap(void *heap, ULONG flags, void *p) {
+  (void)flags;
+  if (heap != &peb || !p)
+    return 0;
+  debug_blocks--;
+  free(p);
+  return 1;
+}
 /* Counter at 1 MHz (QueryPerformance*, GetTickCount64) and a fixed clock:
  * 2026-10-19 12:34:56.789 UTC. */
 static uint64_t counter = 3723004000ull;
@@ -539,6 +556,7 @@ HANDLE W32API CreateFileMappingA(HANDLE f, SECURITY_ATTRIBUTES *sa, DWORD p, DWO
 /* Memory map for IsBadStringPtr: [0x10000, 0x12000) readable, then a
  * no-access page. */
 static uint8_t *readable;
+static DWORD memory_protect = 4;
 DWORD W32API VirtualQuery(const void *p, struct ciuki_w32_memory_info *m, DWORD n) {
   uintptr_t a = (uintptr_t)p, base = (uintptr_t)readable;
   memset(m, 0, sizeof(*m));
@@ -546,7 +564,7 @@ DWORD W32API VirtualQuery(const void *p, struct ciuki_w32_memory_info *m, DWORD 
     m->base = 0;
     m->region_size = 8192;
     m->state = 0x1000;
-    m->protect = 4;
+    m->protect = memory_protect;
   } else {
     m->region_size = 4096;
     m->state = 0x1000;
@@ -727,6 +745,9 @@ DECL(int, lstrcmpW, (const WCHAR *, const WCHAR *));
 DECL(int, lstrcmpiW, (const WCHAR *, const WCHAR *));
 DECL(BOOL, IsBadStringPtrA, (const char *, DWORD));
 DECL(BOOL, IsBadStringPtrW, (const WCHAR *, DWORD));
+DECL(BOOL, IsBadReadPtr, (const void *, uintptr_t));
+DECL(BOOL, IsBadWritePtr, (void *, uintptr_t));
+DECL(BOOL, IsBadCodePtr, (void *));
 DECL(HANDLE, CreateSemaphoreW, (SECURITY_ATTRIBUTES *, LONG, LONG, const WCHAR *));
 DECL(HANDLE, OpenSemaphoreW, (DWORD, BOOL, const WCHAR *));
 DECL(HANDLE, OpenEventW, (DWORD, BOOL, const WCHAR *));
@@ -946,6 +967,19 @@ static void unicode_layer(void) {
   CHECK(IsBadStringPtrA(0, 1) && IsBadStringPtrA((const char *)readable + 8180, 100));
   CHECK(!IsBadStringPtrA((const char *)readable + 8180, 12));
   CHECK(!IsBadStringPtrW((const WCHAR *)readable, 3) && IsBadStringPtrW((const WCHAR *)(readable + 8188), 8));
+  /* f5-20C: IsBad*Ptr over the same map; the no-access page is never read. */
+  CHECK(!IsBadReadPtr(readable, 8192) && !IsBadReadPtr(readable + 8191, 1) && !IsBadReadPtr(0, 0));
+  CHECK(IsBadReadPtr(readable + 8191, 2) && IsBadReadPtr(0, 1) && IsBadReadPtr(readable + 9000, 4));
+  CHECK(IsBadReadPtr((void *)~(uintptr_t)0, 2) && !IsBadReadPtr((void *)~(uintptr_t)0, 0));
+  CHECK(!IsBadWritePtr(readable, 4096) && IsBadWritePtr(readable + 4096, 8192) && IsBadWritePtr(0, 4));
+  CHECK(!IsBadCodePtr(readable) && IsBadCodePtr(readable + 8192) && IsBadCodePtr(0));
+  memory_protect = 2; /* PAGE_READONLY: readable, not writable */
+  CHECK(!IsBadReadPtr(readable, 16) && IsBadWritePtr(readable, 16) && !IsBadCodePtr(readable));
+  memory_protect = 0x40; /* PAGE_EXECUTE_READWRITE */
+  CHECK(!IsBadReadPtr(readable, 16) && !IsBadWritePtr(readable, 16));
+  memory_protect = 0x104; /* PAGE_READWRITE | PAGE_GUARD */
+  CHECK(IsBadReadPtr(readable, 16) && IsBadWritePtr(readable, 16) && IsBadCodePtr(readable));
+  memory_protect = 4;
   munmap(readable, 16384);
   CHECK(CreateSemaphoreW(0, 1, 5, W("sem\xe9")) == (HANDLE)(uintptr_t)0x500 && !strcmp(seen[0], "sem\xe9") &&
         seen_flags == 105);
@@ -1336,6 +1370,20 @@ static void runtime_tests(void) {
   RTL_CRITICAL_SECTION cs;
   CHECK(InitializeCriticalSectionEx(&cs, 4000, 0x01000000) && cs.SpinCount == 4000);
   CHECK(!InitializeCriticalSectionEx(&cs, 0, 1) && last_error == 87);
+  /* f5-20C: RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO allocates an owned
+   * debug block (Wine names sections in Spare[0]); NO_DEBUG_INFO wins. */
+  memset(&cs, 0, sizeof(cs));
+  CHECK(InitializeCriticalSectionEx(&cs, 0, 0x10000000) && cs.DebugInfo && debug_blocks == 1);
+  RTL_CRITICAL_SECTION_DEBUG *debug = cs.DebugInfo;
+  CHECK(debug->CreatorBackTraceIndex == W32_CS_DEBUG_OWNED && debug->CriticalSection == &cs &&
+        !debug->Spare[0] && debug->ProcessLocksList.Flink == &debug->ProcessLocksList);
+  CHECK(RtlFreeHeap(&peb, 0, debug) && !debug_blocks);
+  memset(&cs, 0, sizeof(cs));
+  CHECK(InitializeCriticalSectionEx(&cs, 0, 0x11000000) && !cs.DebugInfo && !debug_blocks);
+  CHECK(InitializeCriticalSectionEx(&cs, 0, 0) && !cs.DebugInfo && !debug_blocks);
+  fail_heap = 1;
+  CHECK(!InitializeCriticalSectionEx(&cs, 0, 0x10000000) && last_error == 8 && !debug_blocks);
+  fail_heap = 0;
   /* Delay-load descriptor in a synthetic image: RVA-based attributes. */
   struct {
     uint32_t attributes, dll, module, iat, names, bound, unload, stamp;

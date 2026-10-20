@@ -1,0 +1,486 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * H1: one reused Wine upper DLL loaded by the production loader on the i386
+ * Linux adapter, its whole import closure bound to the CiukiOS core PEs, and
+ * every DllMain executed (attach, then detach on free). The PE ntdll is the
+ * adapter build (fail-closed CIUKI_SYS_W32 transport): this is not the
+ * CiukiOS kernel, so kernel and w32srv requests fail with ENOSYS.
+ *
+ * Safety: PE code never reaches a Linux system call. A seccomp filter allows
+ * system calls only from the adapter ELF's own text; any int 0x80 from PE
+ * code (the CiukiOS gate) returns -ENOSYS. The CiukiOS user gate page
+ * (0x7ffe0100, used by USER/ADVAPI32) is a host stub counting calls and
+ * returning -ENOSYS.
+ *
+ * Adapter answers (h1_transport.c in the PE ntdll): the kernel's W32_IDENTITY
+ * record as src/kernel/proc/win32/records.c answers it (Windows 98, 4.10.2222
+ * " A "), and the w32srv atom directory (ATOM_ADD/FIND/DELETE/NAME, the
+ * apps/w32srv/directory.c rules: integer atoms #1..#0xbfff, string atoms from
+ * 0xc000, case-insensitive names, global or per-process scope, reference
+ * counts). Every other kernel record is ENOSYS and every other w32srv
+ * operation fails with 120; both are counted and reported. */
+#include "linux.h"
+#include <ciuki/abi.h>
+#include <ciuki/w32_core.h>
+#include <w32/server.h>
+#include "upper_h1_store.h"
+
+static struct w32_loader loader;
+static int (*base_invoke)(void *, void *, void *, uint32_t, int);
+static volatile ULONG gate_calls;
+static ULONG attach_true, attach_false, detach_calls;
+extern char __ehdr_start[], etext[];
+
+static void print_hex(ULONG v) {
+    char t[11] = "0x00000000";
+    for (int i = 9; i >= 2; i--, v >>= 4)
+        t[i] = "0123456789abcdef"[v & 15];
+    host_print(t);
+}
+
+static const char *module_name(void *base) {
+    for (unsigned i = 0; i < sizeof(h1_store) / sizeof(h1_store[0]); i++)
+        if (h1_store[i].base == (ULONG)(uintptr_t)base)
+            return h1_store[i].name;
+    return "?";
+}
+
+static int logged_invoke(void *opaque, void *proc, void *module, uint32_t reason, int dll) {
+    ULONG before = gate_calls;
+    host_print(dll ? "DLLMAIN " : "TLS ");
+    host_print(module_name(module));
+    host_print(" reason=");
+    host_number(reason);
+    host_print(" enter\n");
+    int r = base_invoke(opaque, proc, module, reason, dll);
+    host_print(dll ? "DLLMAIN " : "TLS ");
+    host_print(module_name(module));
+    host_print(" reason=");
+    host_number(reason);
+    host_print(" return=");
+    host_number((ULONG)r);
+    host_print(" gate=");
+    host_number(gate_calls - before);
+    host_print("\n");
+    if (dll && reason == 1)
+        r ? attach_true++ : attach_false++;
+    if (dll && reason == 0)
+        detach_calls++;
+    return r;
+}
+
+/* Allow system calls only from the adapter ELF text (host_syscall, the
+ * signal restorer). Everything else gets -ENOSYS without a signal. */
+static int sandbox(void) {
+    struct {
+        uint16_t code;
+        uint8_t jt, jf;
+        uint32_t k;
+    } filter[] = {
+        {0x20, 0, 0, 4},                                   /* A = arch */
+        {0x15, 0, 4, 0x40000003u},                         /* i386 */
+        {0x20, 0, 0, 8},                                   /* A = IP */
+        {0x35, 0, 2, (uint32_t)(uintptr_t)__ehdr_start},   /* IP >= ELF start */
+        {0x35, 1, 0, (uint32_t)(uintptr_t)etext},          /* IP < etext */
+        {0x06, 0, 0, 0x7fff0000u},                         /* allow */
+        {0x06, 0, 0, 0x00050000u | 38u},                   /* ERRNO ENOSYS */
+    };
+    struct {
+        uint16_t len;
+        void *filter;
+    } program = {sizeof(filter) / sizeof(filter[0]), filter};
+    if (host_syscall(172, 38, 1, 0, 0, 0, 0))          /* PR_SET_NO_NEW_PRIVS */
+        return 0;
+    return !host_syscall(172, 22, 2, (ULONG)(uintptr_t)&program, 0, 0, 0); /* SECCOMP_MODE_FILTER */
+}
+
+static ULONG kernel_records, kernel_enosys, server_requests, server_unsupported, console_writes;
+/* Exec mode (Wine conformance programs): the process's standard handles are
+ * a console the adapter answers itself (write to stdout, empty input). */
+#define H1_STDIN 0x40000010u
+#define H1_STDOUT 0x40000014u
+#define H1_STDERR 0x40000018u
+static ULONG enosys_ops[16][2];
+
+static void count_enosys(ULONG op) {
+    for (unsigned i = 0; i < 16; i++)
+        if (enosys_ops[i][0] == op || !enosys_ops[i][1]) {
+            enosys_ops[i][0] = op;
+            enosys_ops[i][1]++;
+            return;
+        }
+}
+
+static int32_t h1_console(struct ciuki_w32_file_args *a) {
+    if (a->handle != H1_STDIN && a->handle != H1_STDOUT && a->handle != H1_STDERR)
+        return 0;
+    a->error = 0;
+    a->result = 0;
+    if (a->action == W32_F_WRITE && a->handle != H1_STDIN) {
+        console_writes++;
+        host_syscall(4, 1, a->buffer, a->bytes, 0, 0, 0);
+        a->result = a->bytes;
+    } else if (a->action == W32_F_STAT && a->buffer && a->bytes)
+        w32_fill((void *)(uintptr_t)a->buffer, 0, a->bytes);
+    else if (a->action != W32_F_READ)
+        a->error = 1; /* ERROR_INVALID_FUNCTION on the console */
+    return 1;
+}
+
+static int32_t h1_kernel(void *record, uint32_t size) {
+    struct ciuki_w32_header *h = record;
+    kernel_records++;
+    if (h->operation == W32_IDENTITY && size >= sizeof(struct ciuki_w32_identity)) {
+        struct ciuki_w32_identity *a = record;
+        w32_fill((uint8_t *)a + 16, 0, sizeof(*a) - 16);
+        a->major = 4;
+        a->minor = 10;
+        a->build = 2222;
+        a->platform = 1;
+        a->get_version = 0x80000000u | (2222u << 16) | (10u << 8) | 4;
+        a->directx = 0x0007000a;
+        w32_copy(a->csd, " A ", 4);
+        return 0;
+    }
+    if (h->operation == W32_FILE && size >= sizeof(struct ciuki_w32_file_args) && h1_console(record))
+        return 0;
+    kernel_enosys++;
+    count_enosys(h->operation);
+    return -38;
+}
+
+static struct {
+    ULONG id, scope, refs;
+    char name[256];
+} atoms[256];
+static ULONG next_atom = 0xc000;
+
+static int same_name(const char *a, const char *b) {
+    for (;; a++, b++) {
+        char x = *a >= 'a' && *a <= 'z' ? *a - 32 : *a, y = *b >= 'a' && *b <= 'z' ? *b - 32 : *b;
+        if (x != y)
+            return 0;
+        if (!x)
+            return 1;
+    }
+}
+
+static ULONG integer_atom(const char *s) {
+    ULONG n = 0;
+    if (*s++ != '#' || !*s)
+        return 0;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9' || n >= 0xc000)
+            return 0;
+        n = n * 10 + (ULONG)(*s - '0');
+    }
+    return n < 0xc000 ? n : 0;
+}
+
+static ULONG atom_call(const struct w32r_request *r, const char *name, struct w32r_reply *out, uint8_t *bytes,
+                       uint32_t room) {
+    if (r->index > 1)
+        return 87;
+    ULONG scope = r->index ? 1 : 0;
+    int by_name = r->op == W32R_ATOM_ADD || r->op == W32R_ATOM_FIND;
+    ULONG integer = by_name ? integer_atom(name) : r->key;
+    if (integer && integer < 0xc000) {
+        out->key = integer;
+        return 0;
+    }
+    int slot = -1;
+    for (unsigned i = 0; i < sizeof(atoms) / sizeof(atoms[0]); i++)
+        if (atoms[i].refs && atoms[i].scope == scope &&
+            (by_name ? same_name(atoms[i].name, name) : atoms[i].id == r->key))
+            slot = (int)i;
+    if (r->op == W32R_ATOM_ADD) {
+        if (!*name || w32_strlen(name) >= sizeof(atoms[0].name))
+            return 87;
+        if (slot < 0) {
+            for (unsigned i = 0; i < sizeof(atoms) / sizeof(atoms[0]) && slot < 0; i++)
+                if (!atoms[i].refs)
+                    slot = (int)i;
+            if (slot < 0 || next_atom > 0xffff)
+                return 8;
+            atoms[slot].id = next_atom++;
+            atoms[slot].scope = scope;
+            w32_copy(atoms[slot].name, name, w32_strlen(name) + 1);
+        }
+        atoms[slot].refs++;
+        out->key = atoms[slot].id;
+        return 0;
+    }
+    if (slot < 0)
+        return 6;
+    out->key = atoms[slot].id;
+    if (r->op == W32R_ATOM_DELETE)
+        atoms[slot].refs--;
+    else if (r->op == W32R_ATOM_NAME) {
+        ULONG n = w32_strlen(atoms[slot].name) + 1;
+        if (n > room)
+            return 122;
+        w32_copy(bytes, atoms[slot].name, n);
+        out->data_bytes = n;
+    }
+    return 0;
+}
+
+static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, uint32_t *used) {
+    const struct w32r_request *r = in;
+    struct w32r_reply *reply = out;
+    server_requests++;
+    if (n < sizeof(*r) || cap < sizeof(*reply) || r->version != 1 ||
+        sizeof(*r) + r->path_bytes + r->name_bytes + r->data_bytes != n || !r->name_bytes)
+        return 87;
+    const char *name = (const char *)(r + 1) + r->path_bytes;
+    if (name[r->name_bytes - 1])
+        return 87;
+    w32_fill(reply, 0, sizeof(*reply));
+    reply->version = 1;
+    if (r->op >= W32R_ATOM_ADD && r->op <= W32R_ATOM_NAME)
+        reply->error = atom_call(r, name, reply, (uint8_t *)(reply + 1), cap - sizeof(*reply));
+    else {
+        server_unsupported++;
+        reply->error = 120;
+    }
+    if (reply->error)
+        reply->data_bytes = 0;
+    *used = sizeof(*reply) + reply->data_bytes;
+    return 0;
+}
+
+static int gate_page(void) {
+    LONG page = host_syscall(192, 0x7ffe0000u, 4096, 3, 0x32, -1, 0);
+    if (page != (LONG)0x7ffe0000u)
+        return 0;
+    uint8_t *gate = (uint8_t *)(uintptr_t)0x7ffe0100u;
+    ULONG counter = (ULONG)(uintptr_t)&gate_calls;
+    /* incl counter; movl $-38,%eax; ret */
+    const uint8_t code[] = {0xff, 0x05, counter, counter >> 8, counter >> 16, counter >> 24,
+                            0xb8, 0xda, 0xff, 0xff, 0xff, 0xc3};
+    for (unsigned i = 0; i < sizeof(code); i++)
+        gate[i] = code[i];
+    void **hooks = (void **)(uintptr_t)0x7ffe0200u;
+    hooks[0] = (void *)h1_kernel;
+    hooks[1] = (void *)h1_server;
+    return !host_syscall(125, 0x7ffe0000u, 4096, 5, 0, 0, 0);
+}
+
+static void print_stats(void) {
+    host_print("STATS kernel_records=");
+    host_number(kernel_records);
+    host_print(" kernel_enosys=");
+    host_number(kernel_enosys);
+    host_print(" server_requests=");
+    host_number(server_requests);
+    host_print(" server_unsupported=");
+    host_number(server_unsupported);
+    host_print(" console_writes=");
+    host_number(console_writes);
+    host_print(" gate=");
+    host_number(gate_calls);
+    for (unsigned i = 0; i < 16 && enosys_ops[i][1]; i++) {
+        host_print(" enosys:");
+        print_hex(enosys_ops[i][0]);
+        host_print("=");
+        host_number(enosys_ops[i][1]);
+    }
+    host_print("\n");
+}
+
+static void (*base_terminate)(void *, uint32_t);
+static void stats_terminate(void *opaque, uint32_t code) {
+    print_stats();
+    base_terminate(opaque, code);
+}
+
+/* Exactly as the production services (services/ciuki.c unmap): builtin
+ * views are not released by the loader, since ExitProcess still runs in
+ * KERNEL32 and NTDLL while it detaches every DLL; the kernel releases them
+ * after the thread has left user mode. */
+static void (*base_unmap)(void *, void *, uint32_t);
+static void exit_unmap(void *opaque, void *p, uint32_t n) {
+    uintptr_t address = (uintptr_t)p;
+    if (address >= CIUKI_W32_APP_LIMIT && address < CIUKI_W32_BUILTIN_LIMIT)
+        return;
+    base_unmap(opaque, p, n);
+}
+
+static WCHAR command_line[512];
+
+static int run_exe(const char *exe, const char *test) {
+    ULONG n = 0;
+    for (const char *s = exe; *s && n < 400; s++)
+        command_line[n++] = (uint8_t)*s;
+    command_line[n++] = ' ';
+    for (const char *s = test; *s && n < 510; s++)
+        command_line[n++] = (uint8_t)*s;
+    command_line[n] = 0;
+    RtlInitUnicodeString(&host.parameters.CommandLine, command_line);
+    host.parameters.StandardInput = (void *)(uintptr_t)H1_STDIN;
+    host.parameters.StandardOutput = (void *)(uintptr_t)H1_STDOUT;
+    host.parameters.StandardError = (void *)(uintptr_t)H1_STDERR;
+    base_terminate = host.services.terminate;
+    host.services.terminate = stats_terminate;
+    base_unmap = host.services.unmap;
+    host.services.unmap = exit_unmap;
+    struct w32_module *m;
+    NTSTATUS start = w32_ldr_start_process(&loader, exe, &m);
+    if (start) {
+        host_print("REFUSE ");
+        host_print(loader.error.reason ? loader.error.reason : "-");
+        host_print(" ");
+        host_print(loader.error.module[0] ? loader.error.module : "-");
+        host_print(" ");
+        host_print(loader.error.symbol[0] ? loader.error.symbol : "-");
+        host_print("\n");
+        return 1;
+    }
+    ULONG bytes = 8u << 20;
+    void *stack = host.services.alloc(&host, bytes);
+    if (!stack)
+        return 8;
+    host.teb.Tib.StackLimit = stack;
+    host.teb.Tib.StackBase = (uint8_t *)stack + bytes;
+    int value = host_entry(m->pe.image + m->pe.entry, host.teb.Tib.StackBase);
+    host_print("RESULT entry-returned ");
+    host_number((ULONG)value);
+    host_print("\n");
+    print_stats();
+    return value ? 1 : 0;
+}
+
+/* DebugBreak through the CiukiOS KERNEL32 PE: int 3 becomes
+ * EXCEPTION_BREAKPOINT on the normal dispatch (host signal path standing in
+ * for the kernel's vector 3); the SEH frame skips the int 3 and continues. */
+static ULONG break_code, break_address, break_calls;
+static LONG break_handler(struct w32_exception *r, struct w32_seh *f, struct w32_context *c,
+                          struct w32_seh **dispatch) {
+    (void)f;
+    (void)dispatch;
+    break_calls++;
+    break_code = r->ExceptionCode;
+    break_address = (ULONG)(uintptr_t)r->ExceptionAddress;
+    if (r->ExceptionCode != 0x80000003u)
+        return ExceptionContinueSearch;
+    c->Eip += 1;
+    return ExceptionContinueExecution;
+}
+
+static int run_debugbreak(void) {
+    struct w32_module *k32;
+    if (!w32_ldr_load(&loader, "kernel32.dll", 0, &k32))
+        return 10;
+    void(W32API * debug_break)(void) = w32_ldr_proc(&loader, k32, "DebugBreak", 0, 0xffffffffu);
+    if (!debug_break)
+        return 11;
+    struct w32_seh frame = {(struct w32_seh *)host.teb.Tib.ExceptionList, break_handler};
+    host.teb.Tib.ExceptionList = &frame;
+    debug_break();
+    debug_break();
+    host.teb.Tib.ExceptionList = frame.Prev;
+    ULONG base = (ULONG)(uintptr_t)k32->pe.image;
+    int ok = break_calls == 2 && break_code == 0x80000003u && break_address >= base &&
+             break_address < base + k32->pe.size && *(const uint8_t *)(uintptr_t)break_address == 0xcc;
+    host_print(ok ? "PASS DebugBreak EXCEPTION_BREAKPOINT at " : "FAIL DebugBreak code ");
+    print_hex(ok ? break_address : break_code);
+    host_print("\n");
+    w32_ldr_shutdown(&loader);
+    return ok ? 0 : 12;
+}
+
+int host_main(int argc, char **argv) {
+    int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
+    if (argc != 2 && !exec)
+        return 2;
+    if (!sandbox()) {
+        host_print("SANDBOX-UNAVAILABLE seccomp filter refused\n");
+        return 77;
+    }
+    if (!gate_page())
+        return 3;
+    base_invoke = host.services.invoke;
+    host.services.invoke = logged_invoke;
+    host.observer = 0;
+    w32_ldr_init(&loader, &host.services, &host.peb);
+    w32_ldr_bind(&loader);
+    loader.builtins = h1_store;
+    loader.builtin_count = sizeof(h1_store) / sizeof(h1_store[0]);
+    if (!w32_ldr_thread_attach(&loader, &host.teb))
+        return 4;
+    struct w32_module *core, *module;
+    if (!w32_ldr_load(&loader, "ntdll.dll", 0, &core))
+        return 5;
+    void (*bind_services)(const struct w32_services *) =
+        w32_ldr_proc(&loader, core, "w32_set_services", 0, 0xffffffffu);
+    void (*bind_loader)(struct w32_loader *) = w32_ldr_proc(&loader, core, "w32_ldr_bind", 0, 0xffffffffu);
+    void *dispatcher = w32_ldr_proc(&loader, core, "KiUserExceptionDispatcher", 0, 0xffffffffu);
+    if (!bind_services || !bind_loader || !dispatcher)
+        return 6;
+    host.dispatcher = dispatcher;
+    bind_services(&host.services);
+    bind_loader(&loader);
+    if (exec)
+        return run_exe(argv[2], argv[3]);
+    if (!w32_strcmp(argv[1], "debugbreak"))
+        return run_debugbreak();
+    /* The process heap, as w32_ldr_start_process creates it: by the adapter's
+     * own ntdll code (the PE ntdll is unmapped at loader shutdown). */
+    host.peb.ProcessHeap = RtlCreateHeap(2 /* HEAP_GROWABLE */, 0, 0, 0, 0, 0);
+    if (!host.peb.ProcessHeap)
+        return 7;
+    int loaded = w32_ldr_load(&loader, argv[1], 0, &module);
+    host_print("RESULT ");
+    host_print(argv[1]);
+    if (loaded) {
+        host_print(" LOADED base=");
+        print_hex((ULONG)(uintptr_t)module->pe.image);
+        host_print(" attach_true=");
+        host_number(attach_true);
+        host_print(" attach_false=");
+        host_number(attach_false);
+        host_print("\n");
+        if (!w32_ldr_free(&loader, module))
+            return 8;
+    } else {
+        host_print(" FAIL ");
+        host_number(loader.error.code);
+        host_print(" ");
+        host_print(loader.error.reason ? loader.error.reason : "-");
+        host_print(" ");
+        host_print(loader.error.module[0] ? loader.error.module : "-");
+        host_print(" ");
+        host_print(loader.error.symbol[0] ? loader.error.symbol : "-");
+        host_print(" attach_false=");
+        host_number(attach_false);
+        host_print("\n");
+    }
+    w32_ldr_shutdown(&loader);
+    RtlDestroyHeap(host.peb.ProcessHeap);
+    host.peb.ProcessHeap = 0;
+    host_print("DONE detach=");
+    host_number(detach_calls);
+    host_print(" gate_total=");
+    host_number(gate_calls);
+    host_print(" kernel_records=");
+    host_number(kernel_records);
+    host_print(" kernel_enosys=");
+    host_number(kernel_enosys);
+    host_print(" server_requests=");
+    host_number(server_requests);
+    host_print(" server_unsupported=");
+    host_number(server_unsupported);
+    host_print(" console_writes=");
+    host_number(console_writes);
+    for (unsigned i = 0; i < 16 && enosys_ops[i][1]; i++) {
+        host_print(" enosys:");
+        print_hex(enosys_ops[i][0]);
+        host_print("=");
+        host_number(enosys_ops[i][1]);
+    }
+    host_print(" allocations=");
+    host_number(host.allocations);
+    host_print(" mappings=");
+    host_number(host.mappings);
+    host_print("\n");
+    return loaded ? 0 : 1;
+}

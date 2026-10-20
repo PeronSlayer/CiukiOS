@@ -73,7 +73,8 @@ class RegistryTests(unittest.TestCase):
 
     def test_f5_20a_decided_exports_in_facades(self):
         coverage=json.loads((self.out/'builtin/upper-coverage.json').read_text())
-        decisions=json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+        decisions=[d for d in json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+                   if d.get('audit','f5-14b')=='f5-14b']
         for dll in ('advapi32.dll','version.dll'):
             expected={d['name']:d['action'] for d in decisions if d['owner']==dll and d['action'] in ('core-implement','core-w21-stub')}
             rows={r['name']:r for r in coverage[dll]}

@@ -54,11 +54,15 @@ def imports(text):
             for dll,symbol in re.findall(r'([\w.-]+)!([\w?$@]+|#\d+)',line): add(dll,symbol)
     return result
 
-def generate(inputs,out,implemented=None):
+def generate(inputs,out,implemented=None,extra=None):
     from scripts.win32 import stub_signatures
     all_imports={}
     for path in inputs:
         for dll,names in imports(Path(path).read_text()).items(): all_imports.setdefault(dll,set()).update(names)
+    # f5-20C: decided W21 exports of existing census DLLs (DLL -> names).
+    for dll,names in (extra or {}).items():
+        if dll not in all_imports: raise ValueError('extra census stubs for an absent census DLL: '+dll)
+        all_imports[dll].update(names)
     implemented=implemented or {}
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
     manifest={'schema':1,'license':'LGPL-2.1-or-later','stub_behavior':'diagnose-once; typed failure; no-defined-failure or unknown ABI raises STATUS_NOT_IMPLEMENTED','dlls':[]}
@@ -190,6 +194,7 @@ def verify_store(path):
         audit=codecs.audit_imports(path.parent,list(records.values()))
         if any(e['missing'] for entries in audit.values() for e in entries): raise ValueError('P5 unresolved imports')
     upper_dlls.verify_builtins(path.parent,data)
+    upper_dlls.verify_absent_stubs(path.parent,data)
     return len(names)
 
 def main():

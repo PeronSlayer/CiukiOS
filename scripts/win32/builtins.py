@@ -34,7 +34,9 @@ def build(out=None):
         'version':stubs.image_version(raw)}
     # Keep core implementations authoritative if the census later adds ntdll.
     generated=out/'generated'
-    stubs.generate([ROOT/'docs/design/research/win32-layer-2026-10-14.md'],generated)
+    from scripts.win32 import upper_dlls
+    stubs.generate([ROOT/'docs/design/research/win32-layer-2026-10-14.md'],generated,
+                   extra=upper_dlls.census_stub_amendments())
     store=stubs.build(generated,out/'ntdll.lib')
     import shutil
     for dll in store['dlls']:shutil.copyfile(generated/dll['path'],out/dll['path'])
@@ -64,9 +66,11 @@ def build(out=None):
     codec_dlls=codecs.build(out,codec_base,flags)
     names={d['name'] for d in codec_dlls}
     store['dlls']=[d for d in store['dlls'] if d['name'] not in names]+codec_dlls
-    from scripts.win32 import upper_dlls
     upper_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     store['dlls']+=upper_dlls.build(out,upper_base,flags)
+    # f5-20C: W21 stubs for the delay-loaded DLLs Windows 98 lacks (uxtheme, secur32, ...).
+    stub_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls']+=upper_dlls.build_absent_stubs(out,stub_base,flags)
     # f5-20A: the f5-07A ADVAPI32/VERSION/LZ32 facades replace their census
     # placeholders, at the facade bases (0x71000000 up, below the reused
     # Wine region), so the loader and the reused-DLL audit see one core.
