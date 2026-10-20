@@ -14,3 +14,12 @@
 ## Constraints
 
 rg and sed, never semble; no QEMU, no systemd-run, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`; never disable sanitizer leak detection where the repository script does not; no Microsoft font files; no new `panic()` paths; English.
+
+## Lead review (2026-10-20 09:00): accepted, decisions
+
+The delivery (worktree commit on `wt/f5-10c2`, Claude Opus session, report `build/codex/f5-10c2-report.md`) is accepted: w32srv rasterises glyphs with libfont/FreeType for every Win32 process and gdi32's bridge backend fetches them over the existing w32srv channel (three new w32srv requests, no syscall, no font file mapped into a Win32 process); `w32_gdi_native_font_open` uses the Win32 baseline convention, ten f5-10B frames re-pinned after a visual check, the 22 f5-10C frames byte-identical through the bridge; `dialogs-exercise.exe` and the `f5:w32-dialogs` kernel probe with eight predicates, dry-run passed. Decisions:
+
+1. **System fonts directory.** Interim: gdi32 reads system faces from `C:\System\fonts`. The Windows-compatible `C:\WINDOWS\FONTS` view (installed and system faces together, the target of `AddFontResource` copies and of installers) is implemented with the installer flows in f5-15A.
+2. Edits outside the listed authority are accepted (drop-down combo sort fix, w32srv loop yield, probe list, fixture build, `w32/font_stats.h`).
+3. Font budget split accepted: 1,572,864 bytes for open faces, 512 KiB for the engine and FreeType's working memory.
+4. Stale core hashes in `config/wine-upper.json` are refreshed automatically once the cached upper build joins `make build-full` (follow-up f5-20D, with msvcrt staging).
