@@ -17,7 +17,12 @@ static struct block *find(HANDLE h) {
   return 0;
 }
 HANDLE W32API GlobalAlloc(DWORD flags, DWORD n) {
-  if (flags & ~(0x2000u | 0x100u | 0x40u | 0x10u | 2u)) {
+  /* GMEM_MOVEABLE 2, NOCOMPACT 0x10, NODISCARD 0x20, ZEROINIT 0x40,
+   * DISCARDABLE 0x100, LOWER/NOT_BANKED 0x1000, DDESHARE 0x2000 and NOTIFY
+   * 0x4000 are valid on Windows 98; NODISCARD, LOWER and NOTIFY have no
+   * effect in Win32. Reused DLLs pass NODISCARD (coml2 and ole32 lock bytes on
+   * HGLOBAL: GlobalAlloc(GMEM_MOVEABLE | GMEM_NODISCARD, 0)). */
+  if (flags & ~(0x4000u | 0x2000u | 0x1000u | 0x100u | 0x40u | 0x20u | 0x10u | 2u)) {
     SetLastError(87);
     return 0;
   }

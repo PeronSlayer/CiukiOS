@@ -191,6 +191,61 @@ resulting decisions:
   target and returns to the lead; an icon-format subset of the SHELL32
   resources would remove about 6 MB but is not applied.
 
+### F5-20D cache, staging and probe review (2026-10-20)
+
+The cached build separates PE compilation from core import qualification.
+Wine 10.0's [MSVCRT Makefile](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/msvcrt/Makefile.in)
+and [COMBASE Makefile](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/combase/Makefile.in)
+name upstream import libraries; the recipe does not link CiukiOS core PE
+bytes. Consequently an unchanged archive/patch/recipe reuses the exact
+recorded PEs when the core changes, then rechecks the actual exports,
+forwarders and W21 decisions. Byte-only core changes refresh the record's
+hashes automatically. The audit cache also checks actual core PE hashes and
+coverage statuses, even if `builtin-store.json` has not been regenerated.
+Changed decisions or missing exports fail before the record is written.
+
+Qualification uses the existing H0 binding and H1 attach/detach evidence
+for each exact PE hash; all sixteen reused DLLs meet that rule. IMM32 stays
+unqualified. Only byte-identical generated census placeholders may be
+replaced during image staging; another same-named builtin is refused.
+
+[Microsoft's DllMain documentation](https://learn.microsoft.com/en-us/windows/win32/dlls/dllmain)
+defines attach on load and detach on unloading or process exit. CiukiOS
+builtins remain resident after `FreeLibrary`; `ExitProcess` calls
+`CiukiProcessDetach` and the production loader's shutdown. The fixture
+therefore balances its loads, then exits normally so detach actually runs.
+The host dry-run observes the attach/detach calls; the guest controller
+waits for a clean process exit before publishing its result. Guest evidence
+remains pending. Launch waits for the desktop's registry round trip, as in
+the corrected f5-10C2 dialogs fixture.
+The H1 adapter has a separate `sandbox-check` mode that returns before any
+PE mapping. Only a refusal or SIGSYS in that preflight is an execution
+blocker skip; SIGSYS during the actual DLL exercise remains a failure.
+[Linux documents](https://docs.kernel.org/userspace-api/seccomp_filter.html)
+that a seccomp kill action terminates with SIGSYS and that filters stack;
+the adapter never retries PE execution without its own confinement filter.
+
+The partial implementation's `GlobalAlloc` flag fix is retained:
+[Microsoft documents](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-globalalloc)
+the obsolete NODISCARD/LOWER/NOTIFY flags as accepted and ignored, and a
+zero-byte movable allocation as a valid discarded handle. Pinned Wine
+[COML2 memlockbytes.c](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/dlls/coml2/memlockbytes.c)
+requests `GMEM_MOVEABLE | GMEM_NODISCARD`; refusing that valid flag prevented
+the fixture's in-memory OLE storage exercise. Host tests cover allocation,
+growth, locking, freeing and an invalid flag.
+
+Wine's [LICENSE](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/LICENSE)
+and [COPYING.LIB sections 4 and 6](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/COPYING.LIB)
+require the notices and corresponding source arrangement for distribution.
+Keep the exact source archive, patches and complete recipe helpers available
+with the release; upstream URLs and the local ignored archive alone do not
+constitute that distribution. Publication remains suspended.
+The bundled [musl copyright notice](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/libs/musl/COPYRIGHT)
+and [zlib header notice](https://github.com/wine-mirror/wine/blob/b073859675060c9211fcbccfd90e4e87520dc2c2/libs/zlib/zlib.h)
+are copied from the verified local upstream sources after comparison with
+`config/wine-pin.json` and staged separately as `WINE-musl-COPYRIGHT.txt`
+and `WINE-zlib-NOTICE.txt` with MSVCRT and CABINET.
+
 The tables below are generated from `config/wine-upper.json` by
 `python3 scripts/win32/wine_upper.py render` and checked by
 `python3 scripts/win32/wine_upper.py check` and
@@ -204,23 +259,23 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 
 | DLL | Base | File bytes | SizeOfImage | Seed pages | COW pages | Resource entries | SHA-256 (prefix) | Use |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| comctl32.dll | `0x74000000` | 1,175,552 | 1,179,648 | 287 | 3 | 440 | `2a53a09283331828` | reused (unqualified) |
-| comdlg32.dll | `0x74120000` | 970,752 | 970,752 | 237 | 2 | 1,213 | `88dc12a9b05acf40` | reused (unqualified) |
-| shell32.dll | `0x74210000` | 3,293,184 | 3,293,184 | 804 | 3 | 3,490 | `0b371c8d0ca931e5` | reused (unqualified) |
-| shlwapi.dll | `0x74540000` | 352,256 | 352,256 | 86 | 3 | 83 | `f0519aad6c7fca0a` | reused (unqualified) |
-| ole32.dll | `0x745a0000` | 630,784 | 630,784 | 154 | 2 | 70 | `af5a3bd5db02edd9` | reused (unqualified) |
-| combase.dll | `0x74640000` | 258,048 | 258,048 | 63 | 3 | 0 | `3dc27ea3f48ede46` | reused (unqualified) |
-| oleaut32.dll | `0x74680000` | 540,672 | 659,456 | 132 | 31 | 53 | `83d80452bdb4c017` | reused (unqualified) |
-| rpcrt4.dll | `0x74730000` | 425,984 | 425,984 | 104 | 3 | 3 | `49ef1848edb7a8b6` | reused (unqualified) |
-| riched20.dll | `0x747a0000` | 405,504 | 417,792 | 99 | 7 | 25 | `c29478a4fa6a9dbd` | reused (unqualified) |
-| riched32.dll | `0x74810000` | 32,768 | 32,768 | 8 | 2 | 3 | `f90eb4347ef58b55` | reused (unqualified) |
-| cabinet.dll | `0x74820000` | 106,496 | 106,496 | 26 | 2 | 3 | `64b049e00ddfeb18` | reused (unqualified) |
-| advpack.dll | `0x74840000` | 65,536 | 65,536 | 16 | 2 | 0 | `bcd9c814631ba327` | reused (unqualified) |
-| setupapi.dll | `0x74850000` | 331,776 | 331,776 | 81 | 4 | 127 | `7ca99e8f76aef0f9` | reused (unqualified) |
+| comctl32.dll | `0x74000000` | 1,175,552 | 1,179,648 | 287 | 3 | 440 | `2a53a09283331828` | reused, qualified (staged builtin) |
+| comdlg32.dll | `0x74120000` | 970,752 | 970,752 | 237 | 2 | 1,213 | `88dc12a9b05acf40` | reused, qualified (staged builtin) |
+| shell32.dll | `0x74210000` | 3,293,184 | 3,293,184 | 804 | 3 | 3,490 | `0b371c8d0ca931e5` | reused, qualified (staged builtin) |
+| shlwapi.dll | `0x74540000` | 352,256 | 352,256 | 86 | 3 | 83 | `f0519aad6c7fca0a` | reused, qualified (staged builtin) |
+| ole32.dll | `0x745a0000` | 630,784 | 630,784 | 154 | 2 | 70 | `af5a3bd5db02edd9` | reused, qualified (staged builtin) |
+| combase.dll | `0x74640000` | 258,048 | 258,048 | 63 | 3 | 0 | `3dc27ea3f48ede46` | reused, qualified (staged builtin) |
+| oleaut32.dll | `0x74680000` | 540,672 | 659,456 | 132 | 31 | 53 | `83d80452bdb4c017` | reused, qualified (staged builtin) |
+| rpcrt4.dll | `0x74730000` | 425,984 | 425,984 | 104 | 3 | 3 | `49ef1848edb7a8b6` | reused, qualified (staged builtin) |
+| riched20.dll | `0x747a0000` | 405,504 | 417,792 | 99 | 7 | 25 | `c29478a4fa6a9dbd` | reused, qualified (staged builtin) |
+| riched32.dll | `0x74810000` | 32,768 | 32,768 | 8 | 2 | 3 | `f90eb4347ef58b55` | reused, qualified (staged builtin) |
+| cabinet.dll | `0x74820000` | 106,496 | 106,496 | 26 | 2 | 3 | `64b049e00ddfeb18` | reused, qualified (staged builtin) |
+| advpack.dll | `0x74840000` | 65,536 | 65,536 | 16 | 2 | 0 | `bcd9c814631ba327` | reused, qualified (staged builtin) |
+| setupapi.dll | `0x74850000` | 331,776 | 331,776 | 81 | 4 | 127 | `7ca99e8f76aef0f9` | reused, qualified (staged builtin) |
 | imm32.dll | `0x748b0000` | 102,400 | 102,400 | 25 | 2 | 3 | `a324dd082d0accc6` | measured, not reused |
-| msvcrt.dll | `0x748d0000` | 606,208 | 614,400 | 148 | 5 | 3 | `8161d40c05af35d2` | reused (unqualified) |
-| coml2.dll | `0x74970000` | 86,016 | 86,016 | 21 | 2 | 0 | `a503cc5b92f4bd1e` | reused (unqualified) |
-| shcore.dll | `0x74990000` | 77,824 | 77,824 | 19 | 3 | 0 | `c0a9ea8c303f6f6e` | reused (unqualified) |
+| msvcrt.dll | `0x748d0000` | 606,208 | 614,400 | 148 | 5 | 3 | `8161d40c05af35d2` | reused, qualified (staged builtin) |
+| coml2.dll | `0x74970000` | 86,016 | 86,016 | 21 | 2 | 0 | `a503cc5b92f4bd1e` | reused, qualified (staged builtin) |
+| shcore.dll | `0x74990000` | 77,824 | 77,824 | 19 | 3 | 0 | `c0a9ea8c303f6f6e` | reused, qualified (staged builtin) |
 
 | Patch (applied in order) | SHA-256 (prefix) |
 | --- | --- |

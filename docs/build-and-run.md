@@ -19,7 +19,8 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 ## Commands
 
 ```bash
-make build-full        # kernel (build/f0/VMM.ELF) + image, with T1 checks and build-manifest.json
+make build-full        # kernel (build/f0/VMM.ELF), apps, the cached upper Wine DLLs, then the image, with T1 checks and build-manifest.json
+make upper             # only the reused Wine DLLs (cached; needs make apps first)
 make test-host         # T0: kernel library, loader statics, runner, fixtures, loader model
 make qemu-test-full    # T2: f0-smoke through scripts/test/run.py
 python3 scripts/test/run.py f0-core    # T3: ten-boot matrix and the nine non-fatal probes
@@ -48,6 +49,41 @@ the hardware with its SHA-256, the serial capture and the disk logs as
 evidence. The only QEMU use allowed meanwhile is the DOS conformance battery
 of f3-48 (`f3:dos-conformance`, dev diary 2026-10-19-06). The commands above
 stay valid and QEMU evidence resumes on the owner's request.
+
+### Reused Wine DLLs (f5-20D)
+
+`make build-full` runs `make upper` between the apps and the image
+(`kernel -> apps -> upper -> image`). The step is
+`python3 scripts/win32/wine_upper.py cached-build`; `make apps` does not
+depend on it. It keeps the sixteen reused Wine 10.0 PEs (the qualified entries
+of `config/wine-upper.json`) in `build/win32/upper/pe`, which `make clean`
+leaves alone, and `scripts/build_image.py` stages them in the builtin store
+(they replace the census placeholders of comctl32, comdlg32, ole32 and
+shell32).
+
+- The PEs are rebuilt (allow about 1–6 minutes, `scripts/win32/build-wine-dlls.sh
+  --upper-build`) only when the cache key changes: the SHA-256 of the pinned
+  archive `build/downloads/wine-10.0.tar.xz`, or the patch set and recipe
+  (`third_party/wine/patches`, the module list, the compiler flags). The
+  reason is logged as `[upper] <reason>: rebuilding ...`. The build never
+  downloads: with no cache and no archive it stops and says so. A rebuilt PE
+  that differs from the SHA-256 in the record is refused.
+- The import audit against the core DLLs reruns only when the core's export
+  surface (names, ordinals, forwarders, W21 stub status) changes. A core
+  rebuild that only moves PE bytes refreshes `core_pe_sha256` in
+  `config/wine-upper.json` by itself; commit that file with the change that
+  caused it. A semantic difference (an export gone or new, a decision row
+  that changed) fails the build with the list of differences; after review,
+  `python3 scripts/win32/wine_upper.py refresh-audit` rewrites the
+  audit-derived parts of the record and its generated tables.
+- `python3 scripts/win32/wine_upper.py check` validates the record and, when
+  the built core and the cache are present, does the same audit and refresh.
+- A warm `make upper` costs about 0.2 s.
+
+The guest case `w32-upper-dlls-qemu-t23` (`f5:w32-upper-dlls`) loads the staged
+set in one Win32 process (`/System/Win32/Fixtures/upper-exercise.exe`, source
+`src/probes/win32_upper`); its host dry-run on the H1 adapter is in
+`tests/host/win32/wine/test_wine_upper.py` (`FixtureTests`).
 
 ### Normal boot cases in f0-smoke
 

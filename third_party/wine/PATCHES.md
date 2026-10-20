@@ -87,10 +87,15 @@ the recipe applies them after 0005, in this order:
     DLL_PROCESS_ATTACH failed on GetCPInfo(20127).
 
 Two consecutive runs give identical PE hashes. MSVCRT has the H0 binding and
-H1 DllMain evidence for qualification, and `scripts/build_image.py` can stage
-qualified reused PEs (`scripts/win32/upper_dlls.py stage_reused`), but by lead
-decision no PE is qualified yet: staging waits until a cached upper build is
-part of `make build-full`. No reused PE is distributed in an image.
+H1 DllMain evidence for qualification, and `scripts/build_image.py` stages
+qualified reused PEs (`scripts/win32/upper_dlls.py stage_reused`).
+
+## F5-20D (2026-10-20)
+
+No patch changes. The recipe is a cached step of `make build-full` (`make
+upper`): the sixteen reused PEs (every qualified entry of
+`config/wine-upper.json`) are now distributed in the image, so this patch list
+and SOURCE-OFFER.txt travel with them as `/system/licenses/WINE-*`.
 
 Each patch identifies its pinned base and modification date. Patch and PE
 SHA-256 values are recorded in `config/wine-upper.json` (and per run in the

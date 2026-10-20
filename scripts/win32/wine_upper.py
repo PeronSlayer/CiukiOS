@@ -2,8 +2,13 @@
 """Offline deterministic Wine 10.0 P4 PE builds, import decisions, measurements.
 
 Only the SHA-256-verified release archive is compiled, with the recorded
-patches, clang and lld. The reused binaries stay unqualified (T1 rejects
-them) until the decided core amendments exist and their loads pass.
+patches, clang and lld. `cached-build` is the step of `make build-full`
+(`make upper`): the PEs are rebuilt only when the archive, the patch set or
+the recipe changes, re-audited only when the core's export surface changes,
+a build that does not reproduce config/wine-upper.json or an audit that
+differs from its decisions is refused, and the record's core-DLL hashes are
+refreshed. A reused PE is staged in the image only when its recorded H0/H1
+load evidence qualifies it (QUALIFIED, qualified_by_evidence).
 """
 # SPDX-License-Identifier: LGPL-2.1-or-later
 import argparse
@@ -16,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -47,6 +53,10 @@ LDFLAGS = '--no-default-config -Wl,-timestamp:0'
 # production loader maps a builtin only at its manifest base.
 UPPER_BASE = 0x74000000
 UPPER_LIMIT = 0x76000000
+# The cached step of make build-full (make upper): PEs, audit and cache key.
+CACHE = ROOT / 'build/win32/upper'
+CORE_DIR = ROOT / 'build/apps/win32'
+ARCHIVE = ROOT / 'build/downloads/wine-10.0.tar.xz'
 
 
 def sha(path):
@@ -162,7 +172,7 @@ def run(args, cwd, log):
 
 def build(output, archive=None):
     output = Path(output).resolve()
-    archive = Path(archive or ROOT / 'build/downloads/wine-10.0.tar.xz').resolve()
+    archive = Path(archive or ARCHIVE).resolve()
     source = ROOT / 'build/external/wine-10.0'
     if output == source or source in output.parents or output in source.parents:
         raise ValueError('upper build must be separate from staged sources')
@@ -241,16 +251,16 @@ NOT_REUSED = {'imm32.dll': 'The CiukiOS IMM32 W21 placeholder is smaller (3,072 
               '20,480 SizeOfImage versus 102,400) with the same no-IME behaviour; the Wine '
               'build also needs twelve WIN32U system-call exports that only Wine and '
               'Windows 10 provide.'}
-# Reused PEs staged in the builtin store once their host evidence passes
-# (record 'load': H0 binding and H1 DllMain attach/detach on the same PE).
-# Directive f5-20 part C stages MSVCRT, the f5-14B decision; the others stay
-# unqualified until the lead accepts their guest (QEMU/T23) evidence.
-# Lead decision (f5-20C review, 2026-10-20): MSVCRT stays out of the image
-# for now so that the canonical build does not depend on the six-minute upper
-# build; the qualification machinery and the evidence stay. Staging returns
-# ({'msvcrt.dll': ...}) when a follow-up wires a cached upper build into
-# `make build-full`.
-QUALIFIED = {}
+# Reused PEs that join the image's builtin store once their recorded host
+# evidence passes (record 'load': H0 binding and H1 DllMain attach/detach on
+# the PE with this exact hash; qualified_by_evidence). f5-20D (the cached
+# upper build is a step of make build-full): MSVCRT, the f5-14B decision, and
+# every other reused PE as its load/DllMain evidence qualifies it; the guest
+# case w32-upper-dlls-qemu-t23 loads the staged set through the production
+# loader and is the gate for its use. Removing a name keeps its PE out of the
+# image. IMM32 is measured only (NOT_REUSED).
+QUALIFIED = {m + '.dll': 'f5-20D: staged on the recorded H0 binding and H1 DllMain evidence'
+             for m in MODULES if m + '.dll' not in NOT_REUSED}
 CORE = ('ntdll.dll', 'kernel32.dll', 'user32.dll', 'gdi32.dll', 'advapi32.dll')
 # Windows 98 home DLLs searched in the pinned Wine specs for a KERNELBASE name.
 HOMES = ('kernel32', 'advapi32', 'user32', 'gdi32', 'version', 'shlwapi')
@@ -574,6 +584,12 @@ def w21_bound(rows, status):
     return result
 
 
+def core_pe_hashes(core):
+    """SHA-256 of every core PE of the built SDK output (the record's core_pe_sha256)."""
+    return {p.name.lower(): sha(p) for p in sorted(Path(core).iterdir())
+            if p.suffix.lower() in ('.dll', '.drv', '.acm') and p.is_file()}
+
+
 def audit(output, core):
     """Actual eager/delayed imports and recursive forwarders, one decision each."""
     output, core = Path(output).resolve(), Path(core).resolve()
@@ -593,9 +609,7 @@ def audit(output, core):
     pin = json.loads(wine_audit.PIN.read_text())
     specs = wine_audit.validate(json.loads(wine_audit.AUDIT.read_text()), pin)
     decisions = decide(rows, providers, specs)
-    core_hashes = {p.name.lower(): sha(p) for p in sorted(core.iterdir())
-                   if p.suffix.lower() in ('.dll', '.drv', '.acm') and p.is_file()}
-    result = {'imports': summarize(rows), 'decisions': decisions, 'core_pe_sha256': core_hashes,
+    result = {'imports': summarize(rows), 'decisions': decisions, 'core_pe_sha256': core_pe_hashes(core),
               'w21_bound': w21_bound(rows, core_stub_status(core))}
     dump(output / 'import-audit.json', rows)
     dump(output / 'decisions.json', result)
@@ -812,6 +826,21 @@ def baseline_of(old):
             'dlls': {n: r['sha256'] for n, r in sorted(old['dlls'].items())}}
 
 
+def assemble_decisions(old_decisions, rows, current):
+    """The record's decision rows: the frozen f5-14B rows with their closure
+    in this build, the f5-20B outside-table rows, the re-audit's residual and
+    W21-bound rows and the f5-20C implementation rows."""
+    history = [dict(e, audit='f5-14b', f5_20c=closure(e, rows))
+               for e in old_decisions if e.get('audit', 'f5-14b') == 'f5-14b']
+    decided = {(e['importer'], e['owner'], e['name']) for e in history}
+    residual = [dict(e, audit='f5-20c') for e in current['decisions']]
+    bound = [{**{k: e[k] for k in ('importer', 'kind', 'linked', 'symbol', 'provider', 'name')},
+              'owner': e['provider'], 'retarget': None, 'rule': 'core-census-w21',
+              'action': ACTIONS['core-census-w21'], 'audit': 'f5-20c', 'f5_20c': e['status']}
+             for e in current['w21_bound'] if (e['importer'], e['provider'], e['name']) not in decided]
+    return history + outside_rows(rows) + residual + bound + implemented_rows(rows)
+
+
 def record(output, sdk, runs):
     """Write config/wine-upper.json from a build, its identical reruns and the audit.
 
@@ -826,14 +855,6 @@ def record(output, sdk, runs):
     current = json.loads((output / 'decisions.json').read_text())
     rows = json.loads((output / 'import-audit.json').read_text())
     old = json.loads(RECORD.read_text())
-    history = [dict(e, audit='f5-14b', f5_20c=closure(e, rows))
-               for e in old['decisions'] if e.get('audit', 'f5-14b') == 'f5-14b']
-    decided = {(e['importer'], e['owner'], e['name']) for e in history}
-    residual = [dict(e, audit='f5-20c') for e in current['decisions']]
-    bound = [{**{k: e[k] for k in ('importer', 'kind', 'linked', 'symbol', 'provider', 'name')},
-              'owner': e['provider'], 'retarget': None, 'rule': 'core-census-w21',
-              'action': ACTIONS['core-census-w21'], 'audit': 'f5-20c', 'f5_20c': e['status']}
-             for e in current['w21_bound'] if (e['importer'], e['provider'], e['name']) not in decided]
     surface = libc_surface(rows)
     result = {'schema': 2, 'wine_commit': build_record['wine_commit'],
               'archive_sha256': build_record['archive_sha256'],
@@ -847,13 +868,13 @@ def record(output, sdk, runs):
               'not_reused': NOT_REUSED, 'rules': RULES,
               'baseline': baseline_of(old),
               'imports': current['imports'], 'w21_bound': current['w21_bound'],
-              'decisions': history + outside_rows(rows) + residual + bound + implemented_rows(rows),
+              'decisions': assemble_decisions(old['decisions'], rows, current),
               'core_pe_sha256': current['core_pe_sha256'],
               'msvcrt': msvcrt_measure(output, sdk, surface),
               'fit': fit(build_record['dlls'], NOT_REUSED),
-              'status': 'built twice identically with patches 0001-0009; re-audited against the '
-                        'f5-20A/B core; unqualified until the lead accepts the load, DllMain and '
-                        'conformance evidence (T1 rejects the PEs)'}
+              'status': 'built twice identically with patches 0001-0010; re-audited against the '
+                        'core; unqualified until record-evidence qualifies the PEs whose H0 binding '
+                        'and H1 DllMain evidence passes (T1 rejects the others)'}
     # Evidence of earlier PEs is not carried over: rerun the load and
     # conformance tests, then record-evidence.
     validate(result)
@@ -872,6 +893,7 @@ def qualified_by_evidence(data, name):
             and load.get('h1', {}).get('pe_sha256', {}).get(name) == sha256
             and h0.get('bound') is True and h1.get('outcome') == 'loaded'
             and bool(h1.get('attach')) and all(r == 1 for _, r in h1['attach'])
+            and name in {n for n, _ in h1['attach']}
             and sorted(n for n, _ in h1['attach']) == sorted(n for n, _ in h1['detach']))
 
 
@@ -901,8 +923,274 @@ def record_evidence(output):
             data['dlls'][name]['qualified'] = True
             if not qualified_by_evidence(data, name):
                 data['dlls'][name]['qualified'] = False
+    staged = sorted(n for n, r in data['dlls'].items() if r['qualified'])
+    data['status'] = (f'built twice identically with patches 0001-0010; re-audited against the core; '
+                      f'{len(staged)} reused PEs qualified by the recorded H0 binding and H1 DllMain '
+                      'evidence and staged in the image builtin store (f5-20D); the guest case '
+                      'w32-upper-dlls-qemu-t23 is the gate for their use; the others are rejected by T1')
     validate(data)
     dump(RECORD, data)
+    return data
+
+
+def archive_key(archive=ARCHIVE):
+    """The pinned archive SHA-256 (config/wine-pin.json) and whether the file
+    is present. A present archive must match the pin; nothing is downloaded."""
+    pin = json.loads((ROOT / 'config/wine-pin.json').read_text())
+    archive = Path(archive)
+    present = archive.is_file()
+    if present and sha(archive) != pin['archive_sha256']:
+        raise ValueError('Wine release archive SHA-256 mismatch: ' + str(archive))
+    return pin['archive_sha256'], present
+
+
+def recipe_key():
+    """SHA-256 of the patch set (names in order, file hashes) and of the
+    recipe parameters that shape the PE bytes."""
+    parts = {'patches': [[name, sha(ROOT / 'third_party/wine/patches' / name)] for name in PATCHES],
+             'modules': list(MODULES), 'cflags': CFLAGS, 'ldflags': LDFLAGS,
+             'base_region': [UPPER_BASE, UPPER_LIMIT], 'strip': 'llvm-objcopy --strip-all'}
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest(), parts
+
+
+def core_export_key(core=CORE_DIR):
+    """SHA-256 of the core's export surface (every PE's ordinals, names and
+    forwarders) and of its W21 stub status map: the inputs of the audit. It
+    moves when an export or a stub decision changes, not when PE bytes do."""
+    core = Path(core)
+    surface = {name: sorted([e['ordinal'], sorted(e['names']), e['forwarder'] or '']
+                            for e in meta['exports'])
+               for name, (_, meta) in upper_dlls.read_images(core).items()}
+    status = {dll + '!' + name: text for (dll, name), text in core_stub_status(core).items()}
+    return hashlib.sha256(json.dumps({'exports': surface, 'w21': status}, sort_keys=True).encode()).hexdigest()
+
+
+def pes_match(output, data=None):
+    """Every PE of the cache equals the record's hash."""
+    data = data or json.loads(RECORD.read_text())
+    pe = Path(output) / 'pe'
+    return all((pe / n).is_file() and sha(pe / n) == r['sha256'] for n, r in data['dlls'].items())
+
+
+def record_differences(output, data=None):
+    """Semantic differences between the cached audit and the record: an
+    export now missing or present, a decision row added, removed or changed
+    (including an f5-14B closure), an import whose W21 binding changed.
+    Core PE hashes that merely moved are not differences."""
+    data = data or json.loads(RECORD.read_text())
+    output = Path(output)
+    current = json.loads((output / 'decisions.json').read_text())
+    rows = json.loads((output / 'import-audit.json').read_text())
+    diffs = []
+    for dll in sorted(set(current['imports']) | set(data['imports'])):
+        now, was = current['imports'].get(dll) or {}, data['imports'].get(dll) or {}
+        if now == was:
+            continue
+        detail = []
+        for provider in sorted(set(now.get('imports', {})) | set(was.get('imports', {}))):
+            a = set((now.get('imports', {}).get(provider) or {}).get('missing', []))
+            b = set((was.get('imports', {}).get(provider) or {}).get('missing', []))
+            if a - b:
+                detail.append(provider + ' now missing ' + ', '.join(sorted(a - b)))
+            if b - a:
+                detail.append(provider + ' now present ' + ', '.join(sorted(b - a)))
+        if now.get('forwarders_unresolved') != was.get('forwarders_unresolved'):
+            detail.append('unresolved forwarders changed')
+        diffs.append(dll + ': ' + ('; '.join(detail) or 'import table changed'))
+    key = lambda e: (e['audit'], e['importer'] or '', e['kind'], e['linked'], e['symbol'])
+    expected = {key(e): e for e in assemble_decisions(data['decisions'], rows, current)}
+    recorded = {key(e): e for e in data['decisions']}
+    for k in sorted(set(expected) | set(recorded)):
+        if expected.get(k) != recorded.get(k):
+            what = ('decision removed' if k not in expected else 'decision added' if k not in recorded
+                    else 'decision changed')
+            e = expected.get(k) or recorded.get(k)
+            closure_text = e.get('f5_20c')
+            diffs.append(f'{what}: {k[1] or k[3]} {k[2]} {k[3]}!{k[4]} ({e["rule"]}' +
+                         (f', {closure_text}' if closure_text else '') + ')')
+    if current['w21_bound'] != data['w21_bound']:
+        now = {(e['importer'], e['linked'], e['symbol']) for e in current['w21_bound']}
+        was = {(e['importer'], e['linked'], e['symbol']) for e in data['w21_bound']}
+        for importer, linked, symbol in sorted(now - was):
+            diffs.append(f'{importer}: {linked}!{symbol} now bound to a core W21 stub')
+        for importer, linked, symbol in sorted(was - now):
+            diffs.append(f'{importer}: {linked}!{symbol} no longer bound to a core W21 stub')
+        if now == was:
+            diffs.append('W21-bound import statuses changed')
+    return diffs
+
+
+def refresh_core_hashes(core, log=print):
+    """The record's core-DLL hashes follow the built core (the audit found
+    no semantic difference); returns how many moved. Read from the core
+    itself: a cached audit may predate a rebuild that moved only PE bytes."""
+    data = json.loads(RECORD.read_text())
+    current = core_pe_hashes(core)
+    moved = sorted(n for n in set(data['core_pe_sha256']) | set(current)
+                   if data['core_pe_sha256'].get(n) != current.get(n))
+    if moved:
+        data['core_pe_sha256'] = current
+        validate(data)
+        dump(RECORD, data)
+        log('[upper] core-DLL hashes refreshed in config/wine-upper.json: ' + ', '.join(moved))
+    return len(moved)
+
+
+def ensure_audit(output, core, cache, actions):
+    """The cached audit is current for this core, or a new one runs; returns
+    (builtin store hash, core export key)."""
+    output, core = Path(output), Path(core)
+    # The manifest alone is insufficient for `check`: a rebuilt PE or a
+    # changed coverage decision may precede regeneration of that manifest.
+    # Hash the actual inputs before deciding that the cached audit is current.
+    statuses = {dll + '!' + name: status for (dll, name), status in core_stub_status(core).items()}
+    store_sha = hashlib.sha256(json.dumps({
+        'manifest': sha(core / 'builtin-store.json'), 'pes': core_pe_hashes(core),
+        'w21': statuses}, sort_keys=True).encode()).hexdigest()
+    files = all((output / n).is_file() for n in ('decisions.json', 'import-audit.json'))
+    if files and cache.get('core_store_sha256') == store_sha:
+        return store_sha, cache['core_export_sha256']
+    export_sha = core_export_key(core)
+    if files and cache.get('core_export_sha256') == export_sha:
+        actions.append('core PE hashes moved without an export change: cached audit kept')
+    else:
+        actions.append(('core exports changed: re-auditing' if cache.get('core_export_sha256') else 'auditing')
+                       + ' the reused DLLs against the core')
+        audit(output, core)
+    return store_sha, export_sha
+
+
+def write_cache(output, archive_sha, recipe_sha, recipe, store_sha, export_sha, actions):
+    pe = {n + '.dll': sha(Path(output) / 'pe' / (n + '.dll')) for n in MODULES}
+    dump(Path(output) / 'cache.json',
+         {'schema': 1, 'archive_sha256': archive_sha, 'recipe_sha256': recipe_sha, 'recipe': recipe,
+          'core_store_sha256': store_sha, 'core_export_sha256': export_sha, 'dlls': pe,
+          'last_run': {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'actions': actions}})
+
+
+def cached_build(output=CACHE, core=CORE_DIR, archive=ARCHIVE, keep=False, log=print):
+    """The make build-full step (make upper): PEs built once per (archive,
+    patch set and recipe), audited once per core export surface, the record's
+    core-DLL hashes refreshed; a build that does not reproduce the record or
+    an audit that differs from its decisions is refused. Never downloads.
+    Returns the actions taken (each logged with its reason)."""
+    output, core, archive = Path(output), Path(core), Path(archive)
+    data = json.loads(RECORD.read_text())
+    store = core / 'builtin-store.json'
+    if not store.is_file():
+        raise ValueError('core builtins not built (run make apps first): ' + str(store))
+    cache_path = output / 'cache.json'
+    cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
+    archive_sha, present = archive_key(archive)
+    recipe_sha, recipe = recipe_key()
+    actions = []
+    current = (cache.get('archive_sha256') == archive_sha and cache.get('recipe_sha256') == recipe_sha
+               and pes_match(output, data))
+    if not current:
+        reason = ('no cached upper build' if not cache else
+                  'Wine archive hash changed' if cache.get('archive_sha256') != archive_sha else
+                  'patch set or recipe changed' if cache.get('recipe_sha256') != recipe_sha else
+                  'cached PEs missing or changed')
+        build_json = output / 'build.json'
+        built = json.loads(build_json.read_text()) if build_json.is_file() else {}
+        if (built.get('archive_sha256') == archive_sha and built.get('patches') == dict(recipe['patches'])
+                and built.get('cflags') == CFLAGS and built.get('ldflags') == LDFLAGS
+                and built.get('base_region') == recipe['base_region'] and built.get('strip') == recipe['strip']
+                and pes_match(output, data)):
+            actions.append(reason + ': the recipe output already present is adopted')
+        else:
+            if not present:
+                raise ValueError(reason + ', and the pinned Wine archive is absent (' + str(archive) +
+                                 '); the build never downloads')
+            log('[upper] ' + reason + ': rebuilding the reused Wine DLLs')
+            started = time.monotonic()
+            build(output, archive)
+            actions.append(f'{reason}: rebuilt {len(MODULES)} PEs in {time.monotonic() - started:.0f} s')
+        if not keep:
+            for name in ('source', 'objects'):
+                shutil.rmtree(output / name, ignore_errors=True)
+        wrong = sorted(n for n, r in data['dlls'].items() if sha(output / 'pe' / n) != r['sha256'])
+        if wrong:
+            raise ValueError('the upper build does not reproduce config/wine-upper.json: ' + ', '.join(wrong) +
+                             ' (pinned toolchain changed, or the record needs wine_upper.py record '
+                             'after two identical builds)')
+        cache = {}
+    store_sha, export_sha = ensure_audit(output, core, cache, actions)
+    diffs = record_differences(output, data)
+    if diffs:
+        raise ValueError('the reused Wine DLL audit differs from config/wine-upper.json:\n  ' +
+                         '\n  '.join(diffs) +
+                         '\nreview the core change, then run scripts/win32/wine_upper.py refresh-audit')
+    moved = refresh_core_hashes(core, log)
+    if moved:
+        actions.append(f'core-DLL hashes refreshed in config/wine-upper.json ({moved} moved)')
+    if not actions:
+        actions.append('cached upper build reused (archive, patch set and core exports unchanged)')
+    write_cache(output, archive_sha, recipe_sha, recipe, store_sha, export_sha, actions)
+    for action in actions:
+        log('[upper] ' + action)
+    return actions
+
+
+def check(output=CACHE, core=CORE_DIR, log=print):
+    """The record is self-consistent and rendered; with the built core and the
+    cached PEs present, the audit is compared with the record (fails only on
+    a semantic difference) and the core-DLL hashes are refreshed."""
+    data = json.loads(RECORD.read_text())
+    validate(data)
+    if render(data) not in DOCUMENT.read_text():
+        raise ValueError('generated upper DLL tables differ from the record')
+    output, core = Path(output), Path(core)
+    if (output / 'pe').is_dir() and not pes_match(output, data):
+        raise ValueError('cached upper PEs missing or changed: run make upper')
+    if not (core / 'builtin-store.json').is_file() or not (output / 'pe').is_dir():
+        log('PASS reused Wine upper DLL record (offline: built core or cached PEs absent; make upper audits them)')
+        return 0
+    cache_path = output / 'cache.json'
+    cache = json.loads(cache_path.read_text()) if cache_path.is_file() else {}
+    actions = []
+    store_sha, export_sha = ensure_audit(output, core, cache, actions)
+    diffs = record_differences(output, data)
+    if diffs:
+        raise ValueError('the reused Wine DLL audit differs from config/wine-upper.json:\n  ' +
+                         '\n  '.join(diffs) +
+                         '\nreview the core change, then run scripts/win32/wine_upper.py refresh-audit')
+    moved = refresh_core_hashes(core, log)
+    if cache:
+        write_cache(output, cache['archive_sha256'], cache['recipe_sha256'], cache['recipe'], store_sha, export_sha,
+                    actions + [f'check: {moved} core-DLL hashes refreshed'])
+    log(f'PASS reused Wine upper DLL record (audited against the built core; {moved} core-DLL hashes refreshed)')
+    return moved
+
+
+def refresh_audit(output=CACHE, core=CORE_DIR, log=print):
+    """After a reviewed core change: the audit-derived parts of the record
+    (imports, W21 bindings, decision rows and closures, core hashes) from the
+    cached PEs and the built core; the PE build, the evidence and the
+    measurements stay. A changed MSVCRT import surface needs `record`."""
+    output, core = Path(output), Path(core)
+    data = json.loads(RECORD.read_text())
+    if not pes_match(output, data):
+        raise ValueError('cached PEs absent or different from the record: run make upper')
+    current = audit(output, core)
+    rows = json.loads((output / 'import-audit.json').read_text())
+    if libc_surface(rows) != data['msvcrt']['surface']:
+        raise ValueError('the MSVCRT import surface changed: rerun wine_upper.py record (SDK measurement)')
+    before = len(data['decisions'])
+    data['decisions'] = assemble_decisions(data['decisions'], rows, current)
+    data['imports'], data['w21_bound'] = current['imports'], current['w21_bound']
+    data['core_pe_sha256'] = current['core_pe_sha256']
+    validate(data)
+    dump(RECORD, data)
+    write_document(data)
+    cache_path = output / 'cache.json'
+    if cache_path.is_file():
+        cache = json.loads(cache_path.read_text())
+        write_cache(output, cache['archive_sha256'], cache['recipe_sha256'], cache['recipe'],
+                    sha(core / 'builtin-store.json'), core_export_key(core),
+                    ['audit-derived record parts refreshed (refresh-audit)'])
+    log(f'[upper] record refreshed from the cached audit: {before} -> {len(data["decisions"])} decision rows, '
+        f'{len(data["w21_bound"])} W21-bound imports')
     return data
 
 
@@ -1230,8 +1518,18 @@ def main():
     p.add_argument('output', type=Path)
     p.add_argument('sdk', type=Path)
     p.add_argument('runs', type=Path, nargs='+', help='build.json of the other identical runs')
-    sub.add_parser('check')
+    p = sub.add_parser('check', help='validate the record; with a built core and cached PEs, audit and refresh hashes')
+    p.add_argument('--output', type=Path, default=CACHE)
+    p.add_argument('--core', type=Path, default=CORE_DIR)
     sub.add_parser('render')
+    p = sub.add_parser('cached-build', help='the make build-full step: build once per key, audit, refresh hashes')
+    p.add_argument('--output', type=Path, default=CACHE)
+    p.add_argument('--core', type=Path, default=CORE_DIR)
+    p.add_argument('--archive', type=Path, default=ARCHIVE)
+    p.add_argument('--keep-intermediates', action='store_true', help='keep source/ and objects/ (conformance-build)')
+    p = sub.add_parser('refresh-audit', help='regenerate the audit-derived record parts from the cached PEs')
+    p.add_argument('--output', type=Path, default=CACHE)
+    p.add_argument('--core', type=Path, default=CORE_DIR)
     p = sub.add_parser('conformance-build', help='upstream test programs for the H1 adapter')
     p.add_argument('output', type=Path)
     p = sub.add_parser('record-evidence', help='load/DllMain/conformance evidence into the record')
@@ -1253,12 +1551,12 @@ def main():
         data = json.loads(RECORD.read_text())
         validate(data)
         write_document(data)
+    elif args.command == 'cached-build':
+        cached_build(args.output, args.core, args.archive, args.keep_intermediates)
+    elif args.command == 'refresh-audit':
+        refresh_audit(args.output, args.core)
     else:
-        data = json.loads(RECORD.read_text())
-        validate(data)
-        if render(data) not in DOCUMENT.read_text():
-            raise ValueError('generated upper DLL tables differ from the record')
-        print('PASS reused Wine upper DLL record')
+        check(args.output, args.core)
 
 
 if __name__ == '__main__':
