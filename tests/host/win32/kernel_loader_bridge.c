@@ -151,7 +151,9 @@ void w32_kernel_model_init(const char *root, uint32_t *pid, uint32_t *tid) {
     model_process->published = true;
     g_current = model_thread->task;
     g_current->state = T_RUNNING;
-    struct ciuki_w32_vm a = {.address = 0x6fff0000,
+    /* Keep transport storage away from both ends of the app arena: loader
+     * allocations use top-down placement; dialogs tests exercise that edge. */
+    struct ciuki_w32_vm a = {.address = 0x60000000,
                              .bytes = 4096,
                              .flags = W32_MEM_RESERVE | W32_MEM_COMMIT,
                              .protect = W32_PAGE_READWRITE};

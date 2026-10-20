@@ -118,8 +118,16 @@ class DialogTests(unittest.TestCase):
             *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c')]]
         for i, source in enumerate(user_sources):
             obj = OUT/f'u{i}.o'
+            # Execute the guest entry's C body too, including its readiness
+            # loop and pump. Only the four platform calls use host adapters;
+            # kernel32/loader/VM have their production-kernel model test.
+            entry_flags = (['-UW32_DIALOGS_HOST', '-Dentry=dialogs_guest_entry',
+                            '-DVirtualAlloc=dialogs_entry_alloc', '-DSleep=dialogs_entry_sleep',
+                            '-DExitProcess=dialogs_entry_exit', '-DGetModuleHandleA=dialogs_entry_module']
+                           if source == EXERCISE/'exercise.c' else [])
             subprocess.run([*flags, '-DW32_HOST_MODEL', '-DW32_DIALOGS_HOST', '-I'+str(ROOT/'sdk/win32/include'), '-I'+str(OUT),
-                            '-I'+str(ROOT/'tests/host/win32/user32'), '-c', str(source), '-o', str(obj)], check=True)
+                            '-I'+str(ROOT/'tests/host/win32/user32'), *entry_flags,
+                            '-c', str(source), '-o', str(obj)], check=True)
             objects.append(obj)
         # gdi32 shares the process; its FillRect/FrameRect helpers are renamed
         # so USER's exports keep their names, as in two separate PE images.
@@ -277,6 +285,11 @@ class DialogTests(unittest.TestCase):
             seen += 1
         self.assertEqual(seen, len(pinned))
         print(re.search(r'^BRIDGE frames .*$', text, re.M).group(0))
+
+    def test_w32_dialogs_guest_entry_readiness_and_dialog_run(self):
+        text = self.execute('exercise-entry')
+        self.assertIn('ENTRY readiness_failures=3 modules=1 done=1 release=1 errors=0', text)
+        self.assertIn('case=dialog_teardown live_windows=0 live_menus=0 exit=0 errors=0', text)
 
     def test_w32_dialogs_fixture_dry_run_against_suite_predicates(self):
         """The guest fixture's logic on the host harness, published with the

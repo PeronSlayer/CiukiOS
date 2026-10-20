@@ -811,6 +811,8 @@ static void harness_run(void) {
     frames_bridge();
   else if (!strcmp(mode, "exercise"))
     test_exercise();
+  else if (!strcmp(mode, "exercise-entry"))
+    test_exercise_entry();
   else
     CHECK(!"unknown mode");
   wr_destroy(&server);

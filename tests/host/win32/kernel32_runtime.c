@@ -43,6 +43,39 @@ struct thread_entry {
 };
 extern BOOL W32API Thread32First(HANDLE, struct thread_entry *);
 extern BOOL W32API Thread32Next(HANDLE, struct thread_entry *);
+int w32_kernel32_fixed_alloc(void) {
+  struct ciuki_w32_memory_info q;
+  void *at = (void *)0x6fff0000;
+  /* Exact guest arguments before the loader owns the page. */
+  CHECK(VirtualAlloc(at, 4096, 0x3000, 4) == at);
+  CHECK(VirtualQuery(at, &q, sizeof(q)) == sizeof(q) &&
+        q.allocation_base == 0x6fff0000 && q.region_size == 4096 &&
+        q.state == 0x1000 && q.protect == 4 && q.type == 0x20000);
+  CHECK(!*(volatile uint32_t *)at);
+  *(volatile uint32_t *)at = 0xfeed;
+  CHECK(!VirtualAlloc(at, 4096, 0x3000, 4) && GetLastError() == 487);
+  CHECK(*(volatile uint32_t *)at == 0xfeed);
+  CHECK(VirtualFree(at, 0, 0x8000));
+  /* Reserve rounds down to 64 KiB, end up to 4 KiB, including both
+   * requested bytes that straddle a page. Commit rounds down to a page. */
+  CHECK(VirtualAlloc((void *)0x6fff1fff, 2, 0x2000, 4) == at);
+  CHECK(VirtualQuery(at, &q, sizeof(q)) == sizeof(q) &&
+        q.region_size == 0x3000 && q.state == 0x2000);
+  CHECK(!VirtualAlloc((void *)0x6fff2000, 4096, 0x2000, 4) && GetLastError() == 487);
+  CHECK(VirtualAlloc((void *)0x6fff1fff, 2, 0x1000, 4) == (void *)0x6fff1000);
+  CHECK(VirtualQuery((void *)0x6fff1000, &q, sizeof(q)) == sizeof(q) &&
+        q.region_size == 0x2000 && q.state == 0x1000 && q.protect == 4);
+  CHECK(!*(volatile uint32_t *)0x6fff1000 && !*(volatile uint32_t *)0x6fff2000);
+  CHECK(VirtualFree(at, 0, 0x8000));
+  CHECK(!VirtualAlloc(at, 4096, 0x1000, 4) && GetLastError() == 487);
+  CHECK(!VirtualAlloc((void *)1, 4096, 0x3000, 4) && GetLastError() == 487);
+  CHECK(!VirtualAlloc(at, 0, 0x3000, 4) && GetLastError() == 87);
+  CHECK(!VirtualAlloc(at, 4096, 0x3000, 0) && GetLastError() == 87);
+  CHECK(!VirtualAlloc((void *)0xfffff000, 8192, 0x3000, 4) && GetLastError() == 87);
+  CHECK(!VirtualAlloc((void *)0x70000000, 4096, 0x3000, 4) && GetLastError() == 87);
+  puts("PASS kernel32 fixed VirtualAlloc exact rounding collision=487 invalid=87 zero RW release");
+  return 0;
+}
 int w32_kernel32_runtime(void) {
   static RTL_CRITICAL_SECTION cs;
   RtlInitializeCriticalSection(&cs);
