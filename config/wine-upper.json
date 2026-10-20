@@ -440,6 +440,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "combase.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -452,6 +453,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "combase.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -464,6 +466,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "combase.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -476,6 +479,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "combase.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -722,6 +726,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -734,6 +739,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -746,6 +752,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -758,6 +765,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -770,6 +778,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -782,6 +791,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -794,6 +804,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -806,6 +817,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: bitmaps copied (stretched to cx/cy); icons and cursors duplicated at 32x32; LR_CREATEDIBSECTION/LR_MONOCHROME not applied",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -818,6 +830,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -830,6 +843,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -842,6 +856,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -854,6 +869,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -866,6 +882,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -878,6 +895,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -890,6 +908,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -902,6 +921,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -914,6 +934,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -926,6 +947,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -938,6 +960,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -950,6 +973,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -962,6 +986,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -974,6 +999,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -986,6 +1012,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -998,6 +1025,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1010,6 +1038,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1022,6 +1051,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: returns the region SetWindowRgn kept; see SetWindowRgn",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1034,6 +1064,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1046,6 +1077,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1058,6 +1090,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1070,6 +1103,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1082,6 +1116,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1094,6 +1129,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1106,6 +1142,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1118,6 +1155,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1130,6 +1168,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1142,6 +1181,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1154,6 +1194,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1166,6 +1207,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1178,6 +1220,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1190,6 +1233,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1202,6 +1246,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1214,6 +1259,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1226,6 +1272,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: the region is kept (GetWindowRgn) but the desktop composes rectangular surfaces; painting and hit testing ignore the shape",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1238,6 +1285,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1250,6 +1298,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1262,6 +1311,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1274,6 +1324,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1286,6 +1337,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1298,6 +1350,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -1310,6 +1363,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1322,6 +1376,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1334,6 +1389,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: cosmetic/geometric solid pens; end caps and joins not drawn, PS_ALTERNATE/PS_USERSTYLE drawn as PS_DOT, hatched brushes by colour",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1346,6 +1402,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1358,6 +1415,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1370,6 +1428,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1382,6 +1441,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1394,6 +1454,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1406,6 +1467,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1418,6 +1480,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1430,6 +1493,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1442,6 +1506,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1454,6 +1519,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: plays state, mapping, objects, lines, shapes, polygons (16/32-bit), text and DIB blits scaled to the rectangle; paths, arcs, regions, palettes and world transforms skipped",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1466,6 +1532,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1478,6 +1545,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1490,6 +1558,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1502,6 +1571,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1514,6 +1584,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1526,6 +1597,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1538,6 +1610,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1550,6 +1623,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1562,6 +1636,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1574,6 +1649,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -1723,6 +1799,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -1735,6 +1812,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -1921,6 +1999,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -1933,6 +2012,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -1957,6 +2037,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -2126,6 +2207,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -2961,6 +3043,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "forwarder",
       "linked": "comctl32.dll",
@@ -2973,6 +3056,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "forwarder",
       "linked": "comctl32.dll",
@@ -2985,6 +3069,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comctl32.dll",
       "kind": "forwarder",
       "linked": "comctl32.dll",
@@ -3154,6 +3239,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3166,6 +3252,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3178,6 +3265,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3190,6 +3278,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3202,6 +3291,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3214,6 +3304,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3226,6 +3317,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3238,6 +3330,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3250,6 +3343,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3262,6 +3356,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3274,6 +3369,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3286,6 +3382,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3298,6 +3395,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3310,6 +3408,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3322,6 +3421,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3334,6 +3434,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3346,6 +3447,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3358,6 +3460,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3370,6 +3473,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3382,6 +3486,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3394,6 +3499,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3406,6 +3512,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3418,6 +3525,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MENUINFO kept (MIM_APPLYTOSUBMENUS honoured); background brush, maximum height and MNS_ styles do not change rendering",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3430,6 +3538,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3442,6 +3551,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -3454,6 +3564,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -3466,6 +3577,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -3478,6 +3590,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -3490,6 +3603,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "comdlg32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5116,6 +5230,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MB_USERICON custom icon not shown and the help callback not invoked (no WinHelp); otherwise MessageBoxEx",
       "importer": "msvcrt.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -5232,6 +5347,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5244,6 +5360,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5256,6 +5373,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5268,6 +5386,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5280,6 +5399,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: counts this process's clipboard changes; the clipboard service keeps no global counter",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5292,6 +5412,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5304,6 +5425,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5316,6 +5438,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -5328,6 +5451,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: see CreateMetaFileW (recorded subset)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5340,6 +5464,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5352,6 +5477,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5364,6 +5490,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5376,6 +5503,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: records state, objects (pens, solid/hatched brushes, fonts), lines, shapes, polygons, text, DIB blits, icons and comments; paths, arcs, regions and palettes are not recorded",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5388,6 +5516,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5400,6 +5529,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: QUERYESCSUPPORT and MFCOMMENT (metafile DCs); other escapes not implemented by the display driver (0)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5412,6 +5542,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5424,6 +5555,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5436,6 +5568,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5448,6 +5581,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: the EMF travels embedded (MFCOMMENT WMFC records) and a converted subset of drawing records follows for WMF players",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5460,6 +5594,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5472,6 +5607,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: an embedded EMF is restored exactly; otherwise state, mapping, lines, shapes and polylines are converted (objects, text and bitmaps not)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -5496,6 +5632,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5521,6 +5658,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5683,6 +5821,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5746,6 +5885,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5758,6 +5898,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5942,6 +6083,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -5954,6 +6096,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -6361,6 +6504,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6373,6 +6517,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: any size up to 256 resampled to the 32x32 USER icon; PNG images refused as on Windows 98",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6385,6 +6530,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6397,6 +6543,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6409,6 +6556,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6421,6 +6569,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6433,6 +6582,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6445,6 +6595,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6457,6 +6608,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6469,6 +6621,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6481,6 +6634,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: plays state, mapping, objects, lines, shapes, polygons (16/32-bit), text and DIB blits scaled to the rectangle; paths, arcs, regions, palettes and world transforms skipped",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6493,6 +6647,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "oleaut32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -6956,6 +7111,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6968,6 +7124,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6980,6 +7137,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -6992,6 +7150,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7004,6 +7163,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7016,6 +7176,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7028,6 +7189,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7040,6 +7202,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7052,6 +7215,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -7064,6 +7228,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7076,6 +7241,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: cosmetic/geometric solid pens; end caps and joins not drawn, PS_ALTERNATE/PS_USERSTYLE drawn as PS_DOT, hatched brushes by colour",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7088,6 +7254,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7100,6 +7267,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7112,6 +7280,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7124,6 +7293,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: plays state, mapping, objects, lines, shapes, polygons (16/32-bit), text and DIB blits scaled to the rectangle; paths, arcs, regions, palettes and world transforms skipped",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7136,6 +7306,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7148,6 +7319,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7160,6 +7332,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7172,6 +7345,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7184,6 +7358,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7196,6 +7371,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7208,6 +7384,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7220,6 +7397,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right single-script subset (rule core-uniscribe): one item, characters as glyphs (fNoGlyphIndex), font advances, no complex shaping",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7232,6 +7410,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7244,6 +7423,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: an embedded EMF is restored exactly; otherwise state, mapping, lines, shapes and polylines are converted (objects, text and bitmaps not)",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -7256,6 +7436,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -8157,6 +8338,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8169,6 +8351,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8346,6 +8529,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8460,6 +8644,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8571,6 +8756,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8669,6 +8855,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8681,6 +8868,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -8705,6 +8893,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -9130,6 +9319,7 @@
     {
       "action": "core-implement",
       "f5_20a": "limited: the f5-07A service refuses deletion by handle (empty name) with ERROR_ACCESS_DENIED, returned as STATUS_ACCESS_DENIED",
+      "f5_20b": "implemented: w32srv deletes the key of an open handle with DELETE access (amendment 1, item 3)",
       "importer": "setupapi.dll",
       "kind": "import",
       "linked": "ntdll.dll",
@@ -9268,6 +9458,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "setupapi.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -9280,6 +9471,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "setupapi.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -9565,6 +9757,7 @@
     },
     {
       "action": "core-w21-stub",
+      "f5_20b": "w21-typed-failure",
       "importer": "shcore.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -9577,6 +9770,7 @@
     },
     {
       "action": "core-w21-stub",
+      "f5_20b": "w21-typed-failure",
       "importer": "shcore.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -9589,6 +9783,7 @@
     },
     {
       "action": "core-w21-stub",
+      "f5_20b": "w21-typed-failure",
       "importer": "shcore.dll",
       "kind": "delay-import",
       "linked": "user32.dll",
@@ -9640,6 +9835,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9652,6 +9848,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9664,6 +9861,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9676,6 +9874,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9688,6 +9887,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9700,6 +9900,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9712,6 +9913,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9724,6 +9926,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9736,6 +9939,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9748,6 +9952,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9760,6 +9965,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9772,6 +9978,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9784,6 +9991,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9796,6 +10004,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9808,6 +10017,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MENUINFO kept and returned; menus draw with COLOR_MENU and without scrolling",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9820,6 +10030,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9832,6 +10043,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9844,6 +10056,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9856,6 +10069,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9868,6 +10082,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9880,6 +10095,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9892,6 +10108,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9904,6 +10121,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9916,6 +10134,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9928,6 +10147,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9940,6 +10160,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MB_USERICON custom icon not shown and the help callback not invoked (no WinHelp); otherwise MessageBoxEx",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9952,6 +10173,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9964,6 +10186,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: large and small icons are both the 32x32 USER icon",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9976,6 +10199,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: icons resampled to the 32x32 USER icon; PNG (Vista) images refused as on Windows 98",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -9988,6 +10212,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10000,6 +10225,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10012,6 +10238,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10024,6 +10251,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10036,6 +10264,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10048,6 +10277,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10060,6 +10290,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MENUINFO kept (MIM_APPLYTOSUBMENUS honoured); background brush, maximum height and MNS_ styles do not change rendering",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10072,6 +10303,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10084,6 +10316,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -10096,6 +10329,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -10108,6 +10342,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -10120,6 +10355,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -11239,6 +11475,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: icons resampled to the 32x32 USER icon; PNG (Vista) images refused as on Windows 98",
       "importer": "shell32.dll",
       "kind": "forwarder",
       "linked": "shell32.dll",
@@ -11264,6 +11501,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11276,6 +11514,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11288,6 +11527,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11300,6 +11540,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11312,6 +11553,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11324,6 +11566,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11336,6 +11579,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11348,6 +11592,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11360,6 +11605,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11372,6 +11618,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -11384,6 +11631,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "gdi32.dll",
@@ -11854,6 +12102,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -11917,6 +12166,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -11941,6 +12191,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -11953,6 +12204,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -11990,6 +12242,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -12272,6 +12525,7 @@
     },
     {
       "action": "wine-retarget",
+      "f5_20b": "implemented: over the ANSI path through code page 1252 (amendment 1, item 1)",
       "importer": "shlwapi.dll",
       "kind": "import",
       "linked": "kernelbase.dll",
@@ -15094,6 +15348,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15106,6 +15361,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15118,6 +15374,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15130,6 +15387,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15142,6 +15400,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15154,6 +15413,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15166,6 +15426,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15178,6 +15439,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15190,6 +15452,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15202,6 +15465,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15214,6 +15478,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15226,6 +15491,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15238,6 +15504,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15250,6 +15517,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15262,6 +15530,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15287,6 +15556,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15312,6 +15582,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15324,6 +15595,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15336,6 +15608,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15348,6 +15621,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15360,6 +15634,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15424,6 +15699,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15449,6 +15725,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15487,6 +15764,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15590,6 +15868,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15602,6 +15881,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15627,6 +15907,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15639,6 +15920,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15651,6 +15933,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15663,6 +15946,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15675,6 +15959,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15687,6 +15972,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15699,6 +15985,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15711,6 +15998,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: MB_USERICON custom icon not shown and the help callback not invoked (no WinHelp); otherwise MessageBoxEx",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15723,6 +16011,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15735,6 +16024,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15747,6 +16037,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: left-to-right logical order, glyphs are the characters (no ligatures or reordering)",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15785,6 +16076,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15966,6 +16258,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -15978,6 +16271,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16003,6 +16297,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16015,6 +16310,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16027,6 +16323,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: no printer driver or printer DC exists; fails with SP_ERROR as for a non-printer DC",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16039,6 +16336,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16051,6 +16349,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: no WinHelp viewer (WINHLP32.EXE); HELP_QUIT succeeds, other commands fail with ERROR_FILE_NOT_FOUND",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16063,6 +16362,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16088,6 +16388,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16100,6 +16401,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16112,6 +16414,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16124,6 +16427,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16136,6 +16440,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: records state, objects (pens, solid/hatched brushes, fonts), lines, shapes, polygons, text, DIB blits, icons and comments; paths, arcs, regions and palettes are not recorded",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16226,6 +16531,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: large and small icons are both the 32x32 USER icon",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16264,6 +16570,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16393,6 +16700,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16405,6 +16713,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16417,6 +16726,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16442,6 +16752,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16454,6 +16765,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16466,6 +16778,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "implemented",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -16605,6 +16918,7 @@
     },
     {
       "action": "core-implement",
+      "f5_20b": "limited: LOGCOLORSPACEW validated and kept; no ICM colour matching",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",

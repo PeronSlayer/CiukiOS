@@ -84,12 +84,24 @@ static int clip_rect(HDC h, int l, int t, int r, int b, int mode) {
   struct region region = {&q, 1, 0};
   return select_device_region(d, &region, mode);
 }
+/* f5-20B: on a metafile DC the clipping rectangle is recorded. */
+static int record_clip(HDC h, int l, int t, int r, int b, unsigned function) {
+  struct dc *d = gdi_dc(h);
+  if (!d || !d->record)
+    return 0;
+  int16_t v[4] = {(int16_t)b, (int16_t)r, (int16_t)t, (int16_t)l};
+  return gdi_record(d, function, v, 4);
+}
 int W32API IntersectClipRect(HDC h, int l, int t, int r, int b) {
   GDI_GUARD;
+  if (record_clip(h, l, t, r, b, 0x0416u))
+    return SIMPLEREGION;
   return clip_rect(h, l, t, r, b, RGN_AND);
 }
 int W32API ExcludeClipRect(HDC h, int l, int t, int r, int b) {
   GDI_GUARD;
+  if (record_clip(h, l, t, r, b, 0x0415u))
+    return SIMPLEREGION;
   return clip_rect(h, l, t, r, b, RGN_DIFF);
 }
 int W32API OffsetClipRgn(HDC h, int x, int y) {

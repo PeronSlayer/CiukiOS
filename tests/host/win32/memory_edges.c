@@ -1,4 +1,6 @@
-/* Microsoft memory-status and Windows 9x Unicode refusal edges.
+/* Microsoft memory-status and code-page conversion edges. The former
+ * Windows 9x Unicode refusals are functional since f5-20B (directive f5-20
+ * amendment 1): kernel32_unicode_test.c.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,9 +25,6 @@ int32_t w32_ciuki_call(void *record,uint32_t n) {
   CHECK(a->action==W32_S_MEMORY);a->low=physical;a->high=available;a->extra=reserved;a->error=error;return 0;
 }
 extern void W32API GlobalMemoryStatus(MEMORYSTATUS *);
-extern BOOL W32API GetVersionExW(OSVERSIONINFOW *);
-extern DWORD W32API GetModuleFileNameW(HANDLE,WCHAR *,DWORD);
-extern HANDLE W32API CreateFileW(const WCHAR *,DWORD,DWORD,SECURITY_ATTRIBUTES *,DWORD,DWORD,HANDLE);
 int main(void) {
   MEMORYSTATUSEX x,saved;memset(&x,0xa5,sizeof(x));saved=x;
   CHECK(!GlobalMemoryStatusEx(&x)&&GetLastError()==87&&!memcmp(&x,&saved,sizeof(x)));
@@ -48,9 +47,5 @@ int main(void) {
   CHECK(!MultiByteToWideChar(1252,2,"a",1,w,4)&&GetLastError()==1004&&w[0]==0xaaaa);
   CHECK(!MultiByteToWideChar(1252,4,"a",1,w,4)&&GetLastError()==1004&&w[0]==0xaaaa);
   CHECK(records==1);
-  CHECK(CreateFileW(w,0,0,0,0,0,0)==K32_INVALID&&GetLastError()==120);
-  CHECK(!GetModuleFileNameW(0,w,4)&&w[0]==0xaaaa&&GetLastError()==120);
-  OSVERSIONINFOW v;memset(&v,0xa5,sizeof(v));OSVERSIONINFOW before=v;
-  CHECK(!GetVersionExW(&v)&&GetLastError()==120&&!memcmp(&v,&before,sizeof(v)));
-  puts("PASS memory status edge matrix Unicode refusals conversion records");return 0;
+  puts("PASS memory status edge matrix conversion records");return 0;
 }

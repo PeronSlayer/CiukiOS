@@ -167,6 +167,28 @@ static BOOL W32API count_names(HANDLE h, const void *type, void *name, intptr_t 
     (*(unsigned *)p)++;
     return 1;
 }
+/* f5-20B: the user32/gdi32 decisions of the reused Wine DLLs and the
+ * amendment's kernel32 Unicode functions resolve through the production
+ * loader and builtin store. */
+static int upper_names(const char *images) {
+    struct w32_loader loader;
+    w32_ldr_init(&loader,&host.services,&host.peb);w32_ldr_bind(&loader);
+    struct w32_file manifest;
+    CHECK(w32_ciuki_store(&loader,&manifest));
+    CHECK(w32_ldr_thread_attach(&loader,&host.teb));
+    char path[600];snprintf(path,sizeof(path),"%s/System/Win32/upper-names.txt",images);
+    FILE *list=fopen(path,"r");CHECK(list);
+    char dll[64],name[128];unsigned count=0;
+    while(fscanf(list,"%63s %127s",dll,name)==2){
+        struct w32_module *m;
+        CHECK(w32_ldr_load(&loader,dll,0,&m)&&m->builtin);
+        if(!w32_ldr_proc(&loader,m,name,0,0xffffffffu)){fprintf(stderr,"unresolved %s!%s\n",dll,name);exit(1);}
+        count++;
+    }
+    fclose(list);
+    printf("PASS kernel f5-20B upper user32 gdi32 kernel32 exports=%u\n",count);
+    return 0;
+}
 static int upper_core(const char *images) {
     struct w32_loader loader;
     w32_ldr_init(&loader,&host.services,&host.peb);w32_ldr_bind(&loader);
@@ -268,6 +290,7 @@ int main(int argc, char **argv) {
                  : !w32_strcmp(argv[2], "startup") ? startup()
                  : !w32_strcmp(argv[2], "store") ? store_test()
                  : !w32_strcmp(argv[2], "upper-core") ? upper_core(argv[1])
+                 : !w32_strcmp(argv[2], "upper-names") ? upper_names(argv[1])
                  : !w32_strcmp(argv[2], "attach-fail") ? attach_failure()
                                                    : host_main(argc - 1, argv + 1);
     w32_kernel_model_finish();

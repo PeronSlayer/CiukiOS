@@ -490,17 +490,67 @@ static void upper_security(void)
     CHECK(!ConvertSidToStringSidW(sid,&text)&&text==(WCHAR *)1&&last_error==120);
     CHECK(!CreateProcessAsUserW(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL)&&last_error==120);
     uint8_t descriptor[20];CHECK(!GetFileSecurityW(L16("C:\\x"),4,descriptor,20,&needed)&&last_error==120&&needed==7);
-    CHECK(GetFileSecurityA("C:\\x",4,descriptor,20,&needed)&&needed==20);
+    /* Amendment 1 item 2: the ANSI form fails identically (outputs untouched). */
+    CHECK(!GetFileSecurityA("C:\\x",4,descriptor,20,&needed)&&last_error==120&&needed==7);
     CHECK(!SetFileSecurityW(L16("C:\\x"),4,descriptor)&&!LookupPrivilegeValueW(NULL,L16("SeBackupPrivilege"),descriptor)&&last_error==120);
     CHECK(CommandLineFromMsiDescriptor(L16("x"),NULL,&length)==120&&length==5);
-    CHECK(stub_diagnostics==14);
+    CHECK(stub_diagnostics==15);
     puts("PASS f5-20A security structures hardware profile random bytes and W21 service NT-security MSI failures");
+}
+/* f5-20B (directive f5-20 amendment 1, item 3): NtDeleteKey deletes the
+ * key of an open handle (empty name) when the handle has DELETE access; a
+ * root constant, or a handle on a key a predefined root names, is refused. */
+static uint32_t rpc_access(struct wr_server *s,unsigned op,uint32_t key,const char *path,uint32_t access)
+{
+    uint8_t input[W32R_MAX];struct w32r_request a={1,op,key,0,0,access,0,(uint32_t)strlen(path)+1,1,0};
+    memcpy(input,&a,40);memcpy(input+40,path,a.path_bytes);input[40+a.path_bytes]=0;
+    size_t used;CHECK(!wr_dispatch(s,10,input,40+a.path_bytes+1,result,sizeof(result),&used));memcpy(&r,result,40);return r.error;
+}
+static void handle_deletion(void)
+{
+    struct disk d={0};struct wr_server s;start(&s,&d);
+    create(&s,"Software\\Classes");CHECK(!rpc(&s,10,W32R_CREATE,W32R_HKU,".DEFAULT","",0,NULL,0,0));
+    uint32_t parent=create(&s,"Software\\Doomed");create(&s,"Software\\Doomed\\Child\\Leaf");
+    uint32_t leaf=r.key;CHECK(!rpc(&s,10,W32R_SET,leaf,"","v",1,"x",2,0));
+    /* KEY_READ and KEY_WRITE lack DELETE: refused, nothing deleted. */
+    CHECK(!rpc_access(&s,W32R_OPEN,W32R_HKLM,"Software\\Doomed",0x20019));uint32_t reader=r.key;
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,reader,"",0)==5);
+    CHECK(!rpc_access(&s,W32R_OPEN,W32R_HKLM,"Software\\Doomed",0x20006));uint32_t writer=r.key;
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,writer,"",0)==5);
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,"Software\\Doomed\\Child","",0,NULL,0,0));
+    /* Roots: the constants and handles on the keys they name. */
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,W32R_HKLM,"",0)==5);
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,W32R_HKU,"",0)==5);
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,W32R_HKCU,"",0)==5);
+    CHECK(!rpc_access(&s,W32R_CREATE,W32R_HKU,"",0xf003f));uint32_t users=r.key;
+    CHECK(users!=W32R_HKU&&rpc_access(&s,W32R_DELETE_KEY,users,"",0)==5);
+    CHECK(!rpc_access(&s,W32R_CREATE,W32R_HKCU,"",0xf003f));
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,r.key,"",0)==5);
+    CHECK(!rpc_access(&s,W32R_CREATE,W32R_HKCR,"",0xf003f));
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,r.key,"",0)==5);
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKU,".DEFAULT","",0,NULL,0,0));
+    /* DELETE access (KEY_ALL_ACCESS): the key and its subtree go; the
+     * handle stays open and reports ERROR_KEY_DELETED; the parent lives. */
+    CHECK(!rpc_access(&s,W32R_OPEN,W32R_HKLM,"Software\\Doomed",0xf003f));uint32_t doomed=r.key;
+    CHECK(!rpc_access(&s,W32R_DELETE_KEY,doomed,"",0));
+    CHECK(rpc(&s,10,W32R_OPEN,W32R_HKLM,"Software\\Doomed","",0,NULL,0,0)==2);
+    CHECK(rpc(&s,10,W32R_OPEN,W32R_HKLM,"Software\\Doomed\\Child\\Leaf","",0,NULL,0,0)==2);
+    CHECK(get(&s,doomed,"v")==1018&&get(&s,leaf,"v")==1018&&get(&s,parent,"v")==1018);
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,doomed,"",0)==1018);
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,"Software","",0,NULL,0,0));
+    /* A DELETE handle on the protected compatibility tree stays refused. */
+    CHECK(!rpc_access(&s,W32R_CREATE,W32R_HKLM,"Software\\CiukiOS\\Win32",0xf003f));
+    CHECK(rpc_access(&s,W32R_DELETE_KEY,r.key,"",0)==5);
+    CHECK(!wr_flush(&s));wr_destroy(&s);start(&s,&d);
+    CHECK(rpc(&s,10,W32R_OPEN,W32R_HKLM,"Software\\Doomed","",0,NULL,0,0)==2);
+    wr_destroy(&s);clear(&d);
+    puts("PASS f5-20B NtDeleteKey by handle: DELETE access, subtree, ERROR_KEY_DELETED, roots and compatibility tree refused");
 }
 int main(int argc,char **argv)
 {
     CHECK(argc>=2);
     if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
     else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
-    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else CHECK(0);
+    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else if(!strcmp(argv[1],"handle-delete"))handle_deletion();else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;
 }

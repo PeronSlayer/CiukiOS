@@ -216,6 +216,8 @@ static int ansi_of(DWORD u) {
       return (int)(128 + i);
   return -1;
 }
+DWORD gdi_cp1252_unicode(unsigned c) { return unicode_of(c & 0xff); }
+int gdi_cp1252_ansi(DWORD u) { return ansi_of(u); }
 /* Rounded and outward-rounded scaling of design units to whole pixels. */
 static int scale(int value, unsigned em26, unsigned upem) {
   int64_t v = (int64_t)value * em26, d = (int64_t)upem * 64;
@@ -1599,6 +1601,24 @@ int W32API GetTextCharset(HDC h) {
   GDI_GUARD;
   struct realized *r = realized_of(h);
   return r ? r->charset : DEFAULT_CHARSET;
+}
+/* f5-20B: the selected font's character set and its OS/2 Unicode and code
+ * page ranges (the FONTSIGNATURE font enumeration reports). */
+int W32API GetTextCharsetInfo(HDC h, FONTSIGNATURE *sig, DWORD flags) {
+  GDI_GUARD;
+  (void)flags;
+  struct realized *r = realized_of(h);
+  if (sig)
+    w32_fill(sig, 0, sizeof(*sig));
+  if (!r)
+    return DEFAULT_CHARSET;
+  if (sig && r->face) {
+    for (unsigned i = 0; i < 4; i++)
+      sig->fsUsb[i] = r->face->ranges[i];
+    sig->fsCsb[0] = r->face->ranges[4];
+    sig->fsCsb[1] = r->face->ranges[5];
+  }
+  return r->charset;
 }
 DWORD W32API SetMapperFlags(HDC h, DWORD flags) {
   GDI_GUARD;

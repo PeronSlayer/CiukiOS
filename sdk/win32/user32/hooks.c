@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "internal.h"
+#include "unicode.h"
 struct hook {
   DWORD id, tid;
   int kind;
   HOOKPROC proc;
+  BOOL unicode; /* f5-20B: installed by SetWindowsHookExW */
 };
 struct hook_frame {
   struct hook_frame *prev;
@@ -32,11 +33,16 @@ HANDLE W32API SetWindowsHookExA(int kind, HOOKPROC proc, HINSTANCE module,
   }
   for (UINT i = 0; i < 32; i++)
     if (!hooks[i].id) {
-      hooks[i] = (struct hook){++serial, tid, kind, proc};
+      hooks[i] = (struct hook){++serial, tid, kind, proc, 0};
       return (HANDLE)(uintptr_t)serial;
     }
   u32_fail(8);
   return 0;
+}
+void u32_hook_unicode(HANDLE h) {
+  for (UINT i = 0; i < 32; i++)
+    if (hooks[i].id == U32_PTR(h))
+      hooks[i].unicode = 1;
 }
 BOOL W32API UnhookWindowsHookEx(HANDLE h) {
   U32_GUARD;
@@ -58,9 +64,43 @@ static LRESULT next(struct hook_frame *f, int code, WPARAM wp, LPARAM lp) {
   DWORD before = f->limit;
   f->limit = hooks[best].id;
   HOOKPROC proc = hooks[best].proc;
+  /* f5-20B: a Unicode hook sees the character of a WH_GETMESSAGE or message
+   * filter MSG (WH_CALLWNDPROC: CWPSTRUCT) in Unicode form; changes made by
+   * a WH_GETMESSAGE hook are carried back in ANSI form. */
+  MSG *msg = 0, copy;
+  struct cwp {
+    LPARAM lParam;
+    WPARAM wParam;
+    UINT message;
+    HWND hwnd;
+  } *cwp = 0, cwp_copy;
+  if (hooks[best].unicode && lp && (f->kind == 3 || f->kind == -1)) {
+    msg = (MSG *)lp;
+    copy = *msg;
+    if (copy.message == WM_CHAR || copy.message == WM_SYSCHAR ||
+        copy.message == 0x103u || copy.message == 0x107u)
+      copy.wParam = copy.wParam < 256 ? u32_scalar((uint8_t)copy.wParam)
+                                      : copy.wParam;
+    lp = (LPARAM)&copy;
+  } else if (hooks[best].unicode && lp && f->kind == 4) {
+    cwp = (struct cwp *)lp;
+    cwp_copy = *cwp;
+    if (cwp_copy.message == WM_CHAR || cwp_copy.message == WM_SYSCHAR)
+      cwp_copy.wParam = cwp_copy.wParam < 256
+                            ? u32_scalar((uint8_t)cwp_copy.wParam)
+                            : cwp_copy.wParam;
+    lp = (LPARAM)&cwp_copy;
+  }
   UINT saved = u32_suspend();
   LRESULT r = proc(code, wp, lp);
   u32_resume(saved);
+  if (msg) {
+    if (copy.message == WM_CHAR || copy.message == WM_SYSCHAR ||
+        copy.message == 0x103u || copy.message == 0x107u)
+      copy.wParam = (uint8_t)u32_ansi((unsigned)(copy.wParam & 0xffff));
+    if (f->kind == 3)
+      *msg = copy;
+  }
   f->limit = before;
   return r;
 }

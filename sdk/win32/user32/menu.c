@@ -2,7 +2,7 @@
  * surface, popup windows (#32768), keyboard/mouse tracking, the system
  * menu subset and accelerator tables.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "classic.h"
+#include "unicode.h"
 #define MENUS 256u
 #define ITEMS_MAX 512u
 #define ACCELS 64u
@@ -23,6 +23,11 @@ struct menu {
   UINT count, capacity;
   HWND owner;
   int width, height;
+  /* f5-20B MENUINFO record (Get/SetMenuInfo). */
+  DWORD info_style, help_id;
+  UINT max_height;
+  HBRUSH background;
+  uintptr_t menu_data;
 };
 static struct menu menus[MENUS];
 static HMENU handle_of(UINT i) {
@@ -1706,4 +1711,87 @@ int W32API TranslateAcceleratorA(HWND h, HACCEL table, MSG *msg) {
     return 1;
   }
   return 0;
+}
+
+/* ---- f5-20B: MENUINFO and item rectangles ------------------------------ */
+/* The MENUINFO fields are kept and returned; menus keep drawing with the
+ * classic COLOR_MENU look and no scrolling (MIM_BACKGROUND, MIM_MAXHEIGHT
+ * and the MNS_ styles do not change rendering: limited). */
+static void menu_info_set(struct menu *m, const MENUINFO *i, UINT depth) {
+  if (i->fMask & MIM_STYLE)
+    m->info_style = i->dwStyle;
+  if (i->fMask & MIM_MAXHEIGHT)
+    m->max_height = i->cyMax;
+  if (i->fMask & MIM_BACKGROUND)
+    m->background = i->hbrBack;
+  if (i->fMask & MIM_HELPID)
+    m->help_id = i->dwContextHelpID;
+  if (i->fMask & MIM_MENUDATA)
+    m->menu_data = i->dwMenuData;
+  if ((i->fMask & MIM_APPLYTOSUBMENUS) && depth < DEPTH)
+    for (UINT k = 0; k < m->count; k++) {
+      struct menu *s = menu(m->items[k].sub);
+      if (s && s != m)
+        menu_info_set(s, i, depth + 1);
+    }
+}
+BOOL u32_menu_info(HMENU h, MENUINFO *i, BOOL set) {
+  struct menu *m = menu(h);
+  if (!m)
+    return u32_fail(1401);
+  if (!i || i->cbSize != sizeof(*i) || (i->fMask & ~(0x1fu | MIM_APPLYTOSUBMENUS)))
+    return u32_fail(87);
+  if (set) {
+    menu_info_set(m, i, 0);
+    return 1;
+  }
+  if (i->fMask & MIM_STYLE)
+    i->dwStyle = m->info_style;
+  if (i->fMask & MIM_MAXHEIGHT)
+    i->cyMax = m->max_height;
+  if (i->fMask & MIM_BACKGROUND)
+    i->hbrBack = m->background;
+  if (i->fMask & MIM_HELPID)
+    i->dwContextHelpID = m->help_id;
+  if (i->fMask & MIM_MENUDATA)
+    i->dwMenuData = m->menu_data;
+  return 1;
+}
+BOOL W32API GetMenuInfo(HMENU h, MENUINFO *i) {
+  U32_GUARD;
+  return u32_menu_info(h, i, 0);
+}
+BOOL W32API SetMenuInfo(HMENU h, const MENUINFO *i) {
+  U32_GUARD;
+  return u32_menu_info(h, (MENUINFO *)i, 1);
+}
+/* The screen rectangle of a displayed item: the menu bar of hwnd, or an
+ * open popup level. A menu that is not displayed has no rectangle. */
+BOOL u32_menu_item_rect(HWND h, HMENU hm, UINT item, RECT *out) {
+  struct menu *m = menu(hm);
+  if (!m || !out)
+    return u32_fail(m ? 87 : 1401);
+  if (item >= m->count)
+    return u32_fail(1456);
+  struct u32_window *w = u32_window(h);
+  if (w && w->menu == hm && !(w->style & WS_CHILD) && u32_menu_height(w)) {
+    POINT o = u32_surface_origin(w);
+    *out = m->items[item].rect;
+    OffsetRect(out, o.x, o.y);
+    return 1;
+  }
+  for (UINT i = 0; T.active && i < T.depth; i++)
+    if (T.levels[i].menu == hm && T.levels[i].window) {
+      RECT r;
+      if (!GetWindowRect(T.levels[i].window, &r))
+        break;
+      *out = m->items[item].rect;
+      OffsetRect(out, r.left, r.top);
+      return 1;
+    }
+  return u32_fail(1401);
+}
+BOOL W32API GetMenuItemRect(HWND h, HMENU hm, UINT item, RECT *out) {
+  U32_GUARD;
+  return u32_menu_item_rect(h, hm, item, out);
 }

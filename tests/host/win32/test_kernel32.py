@@ -23,7 +23,7 @@ class Kernel32Files(unittest.TestCase):
             '-fsanitize=address,undefined','-fno-sanitize-recover=all',
             '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
             str(ROOT/'tests/host/win32/memory_edges.c'),
-            *[str(ROOT/'sdk/win32/kernel32'/n) for n in ('time.c','text.c','unicode.c')],'-o',str(program)],check=True)
+            *[str(ROOT/'sdk/win32/kernel32'/n) for n in ('time.c','text.c')],'-o',str(program)],check=True)
         result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS memory status edge matrix',result.stdout)
@@ -120,6 +120,17 @@ class Kernel32Files(unittest.TestCase):
             self.assertIn('PASS kernel32 upper '+part,out)
         self._host('kernel32-core-upper',['tests/host/win32/kernel32_core_upper.c',k32+'core.c',k32+'wide.c',k32+'text.c'],
             'PASS kernel32 core f5-20A named semaphore event mapping records',extra=('-pthread',))
+
+    def test_f5_20b_unicode_layer_and_collation(self):
+        """Directive f5-20 amendment 1 item 1: the former Windows 9x Unicode
+        refusals over the ANSI paths, and CompareString/LCMapString A/W."""
+        k32='sdk/win32/kernel32/'
+        out=self._host('kernel32-unicode',['tests/host/win32/kernel32_unicode_test.c',
+            *[k32+n+'.c' for n in ('unicode','collate','locale','wide','text')]],'PASS kernel32 unicode checks=')
+        for part in ('files modules objects version environment command line process',
+                     'locale info string types','CompareString levels word sort flags A/W',
+                     'LCMapString case byte reversal sort keys'):
+            self.assertIn('PASS kernel32 unicode '+part,out)
 
     def test_f5_20a_ntdll_native_registry_strings(self):
         nt='sdk/win32/ntdll/'

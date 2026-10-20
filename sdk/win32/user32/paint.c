@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "internal.h"
+#include "classic.h"
 static struct u32_dc dcs[64];
 static DWORD next_frame;
 HWND u32_dc_window(HDC dc) {
@@ -178,6 +178,26 @@ int W32API GetUpdateRgn(HWND h, HRGN region, BOOL erase) {
 }
 static HDC acquire(HWND h, BOOL frame, const struct u32_region *paint) {
   u32_gdi_ensure();
+  if (!h || h == U32_DESKTOP) {
+    /* f5-20B: an application has no access to the composed screen; its
+     * screen DC (GetDC(NULL), the desktop window) is a memory DC with the
+     * display's device capabilities, for measuring and compatible bitmaps.
+     * Drawing on it is discarded. */
+    const struct u32_graphics *g = u32_graphics();
+    struct u32_dc *slot = 0;
+    for (UINT i = 0; i < 64 && !slot; i++)
+      if (!dcs[i].dc)
+        slot = &dcs[i];
+    if (!g || !g->memory_dc || !slot) {
+      u32_fail(slot ? 120 : 8);
+      return 0;
+    }
+    HDC dc = (HDC)(uintptr_t)g->memory_dc(0);
+    if (!dc)
+      return 0;
+    *slot = (struct u32_dc){dc, h, 0, 0, {0}};
+    return dc;
+  }
   struct u32_window *w = u32_window(h), *root = u32_root(w);
   if (!w || !root || !root->surface.pixels) {
     u32_fail(1400);
@@ -283,6 +303,15 @@ HDC W32API GetDCEx(HWND h, HRGN region, DWORD flags) {
 }
 int W32API ReleaseDC(HWND h, HDC dc) {
   U32_GUARD;
+  for (UINT i = 0; i < 64; i++)
+    if (dcs[i].dc == dc && !dcs[i].root &&
+        (dcs[i].hwnd == h || !h || h == U32_DESKTOP)) {
+      const struct u32_graphics *g = u32_graphics();
+      if (g && g->delete_dc)
+        g->delete_dc(U32_PTR(dc));
+      w32_fill(&dcs[i], 0, sizeof(dcs[i]));
+      return 1;
+    }
   for (UINT i = 0; i < 64; i++)
     if (dcs[i].dc == dc && dcs[i].hwnd == h) {
       struct u32_window *root = u32_window(dcs[i].root);

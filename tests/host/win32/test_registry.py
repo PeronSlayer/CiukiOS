@@ -69,6 +69,7 @@ class RegistryTests(unittest.TestCase):
     def test_version_resources(self):self.execute('version',self.image)
     def test_szdd_and_all_kwaj_methods(self):self.execute('lz',self.out)
     def test_f5_20a_upper_registry_and_security(self):self.execute('upper')
+    def test_f5_20b_nt_delete_key_by_handle(self):self.execute('handle-delete')
 
     def test_f5_20a_decided_exports_in_facades(self):
         coverage=json.loads((self.out/'builtin/upper-coverage.json').read_text())

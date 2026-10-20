@@ -32,7 +32,9 @@ def upper_decisions(dll):
     return [dict(r,importers=sorted(r['importers']),symbols=sorted(r['symbols'])) for _,r in sorted(rows.items())]
 # Required lock entry points are implemented on F1-84, including names outside the census.
 REQUIRED_VFS={'LockFile','LockFileEx','UnlockFile','UnlockFileEx'}
-UNICODE_STUBS={'CompareStringW','GetLocaleInfoW','GetStringTypeW','LCMapStringW'}
+# f5-20B (directive f5-20 amendment 1): the former Windows 9x Unicode
+# refusals are functional over the ANSI core; none is a returning stub.
+UNICODE_STUBS=set()
 # BOOL-returning critical-section APIs are wrappers, including the BOOLEAN
 # to BOOL widening; VOID APIs can forward to the ntdll operations.
 def build(out,base,flags):

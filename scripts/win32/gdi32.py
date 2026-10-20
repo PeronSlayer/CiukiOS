@@ -13,7 +13,8 @@ from scripts.win32 import stubs
 from scripts import build_kernel
 
 SOURCES = ('dib.c', 'region.c', 'objects.c', 'clip.c', 'bitmap.c', 'palette.c',
-           'draw.c', 'text.c', 'font.c', 'compat.c', 'compiler.c', 'compiler.S')
+           'draw.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
+           'uniscribe.c', 'compiler.c', 'compiler.S')
 C_EXPORTS = ('w32_dib_validate','w32_dib_raw','w32_dib_rgb','w32_dib_encode',
              'w32_dib_put','w32_gdi_rop3','w32_dib_blt')
 FLAGS = ['--target=i686-pc-windows-msvc', '-march=pentiumpro', '-O2',
@@ -78,9 +79,17 @@ def build(out, base=0x72000000, flags=None):
     if bad:
         raise ValueError('GDI i686 FPU/SIMD audit failed: '+str(bad[:20]))
     (out/'gdi32-audit.json').write_text(json.dumps({'flags':FLAGS, 'fpu_simd_instructions':bad, 'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}, indent=2)+'\n')
+    from scripts.win32 import user32 as user_generator
+    upper = []
+    for row in user_generator.upper_decisions('gdi32.dll'):
+        if row['name'] not in exports:
+            raise ValueError('gdi32 lacks the decided reused-DLL export '+row['name'])
+        upper.append(row)
     (out/'gdi32-coverage.json').write_text(json.dumps({'schema':1, 'scope':'provisional research union plus authored fixtures',
         'exports':[{'name':n, 'status':'implemented' if n in exports else 'W21 nonreturning stub',
-                    'owner':'f5-10C' if re.match(r'(?:CreateFont|CreateScalableFont|EnumFont|GetTextMetrics|AddFont|RemoveFont|GetChar|GetOutline)', n) else 'f5-10B'} for n in sorted(imports)]}, indent=2)+'\n')
+                    'owner':'f5-10C' if re.match(r'(?:CreateFont|CreateScalableFont|EnumFont|GetTextMetrics|AddFont|RemoveFont|GetChar|GetOutline)', n) else 'f5-10B'} for n in sorted(imports)],
+        'upper_scope':'f5-20B: core-implement and core-w21-stub decisions of config/wine-upper.json owned by gdi32.dll',
+        'upper':upper}, indent=2)+'\n')
     raw=image.read_bytes()
     pe=int.from_bytes(raw[60:64], 'little')
     return {'name':'gdi32.dll','path':'gdi32.dll','base':base,'size':int.from_bytes(raw[pe+80:pe+84], 'little'),

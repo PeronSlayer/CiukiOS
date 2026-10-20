@@ -114,20 +114,33 @@ ATOM W32API RegisterClassA(const WNDCLASSA *c) {
                    c->lpszMenuName, c->lpszClassName, 0};
   return RegisterClassExA(&x);
 }
+/* f5-20B: the predefined control classes register lazily on lookup too,
+ * so superclassing (GetClassInfo("EDIT")) works before any CreateWindow. */
+static struct u32_class *known_class(const char *n, HINSTANCE i) {
+  struct u32_class *c = u32_class(n, i);
+  if (!c) {
+    u32_controls_register();
+    c = u32_class(n, i);
+  }
+  return c;
+}
 BOOL W32API GetClassInfoExA(HINSTANCE i, const char *n, WNDCLASSEXA *out) {
   U32_GUARD;
-  struct u32_class *c = u32_class(n, i);
+  struct u32_class *c = known_class(n, i);
   if (!c || !out || out->cbSize != sizeof(*out))
     return u32_fail(c ? 87 : 1411);
   *out = c->c;
+  out->lpfnWndProc = (WNDPROC)u32_proc_handle(c->c.lpfnWndProc, c->unicode, 0);
   return 1;
 }
 BOOL W32API GetClassInfoA(HINSTANCE i, const char *n, WNDCLASSA *out) {
   U32_GUARD;
-  struct u32_class *c = u32_class(n, i);
+  struct u32_class *c = known_class(n, i);
   if (!c || !out)
     return u32_fail(c ? 87 : 1411);
-  *out = (WNDCLASSA){c->c.style,      c->c.lpfnWndProc,   c->c.cbClsExtra,
+  *out = (WNDCLASSA){c->c.style,
+                     (WNDPROC)u32_proc_handle(c->c.lpfnWndProc, c->unicode, 0),
+                     c->c.cbClsExtra,
                      c->c.cbWndExtra, c->c.hInstance,     c->c.hIcon,
                      c->c.hCursor,    c->c.hbrBackground, c->c.lpszMenuName,
                      c->name};
@@ -145,6 +158,8 @@ BOOL W32API UnregisterClassA(const char *n, HINSTANCE i) {
                      0, &r, 0, 0))
     return 0;
   u32_free(c->extra);
+  u32_free(c->wmenu);
+  u32_free(c->amenu);
   w32_fill(c, 0, sizeof(*c));
   return 1;
 }
@@ -160,6 +175,11 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
     klass = predefined[(uintptr_t)klass - 0x80];
   if ((uintptr_t)klass == 32770)
     klass = "#32770";
+  /* f5-20B: the desktop as parent or owner makes a top-level window. */
+  if (parent == U32_DESKTOP) {
+    parent = 0;
+    style &= ~WS_CHILD;
+  }
   struct u32_class *c = u32_class(klass, instance);
   if (!c) {
     u32_controls_register();
@@ -212,6 +232,7 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
   w->style = style;
   w->exstyle = ex;
   w->proc = c->c.lpfnWndProc;
+  w->unicode = c->unicode;
   w->cls = c;
   w->instance = instance;
   w->id = style & WS_CHILD ? U32_PTR(menu) : 0;
@@ -269,7 +290,7 @@ fail:
 }
 BOOL W32API IsWindow(HWND h) {
   U32_GUARD;
-  if (u32_window(h))
+  if (u32_window(h) || h == U32_DESKTOP)
     return 1;
   struct w32r_window v;
   return h && u32_directory_window(h, &v, 0);
@@ -295,6 +316,8 @@ BOOL W32API IsChild(HWND p, HWND h) {
 }
 BOOL W32API IsWindowVisible(HWND h) {
   U32_GUARD;
+  if (h == U32_DESKTOP)
+    return 1;
   struct u32_window *w = u32_window(h);
   for (UINT i = 0; w && i < U32_WINDOWS; i++) {
     if (!(w->style & WS_VISIBLE))
@@ -309,11 +332,6 @@ BOOL W32API IsWindowEnabled(HWND h) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);
   return w && !(w->style & WS_DISABLED);
-}
-BOOL W32API IsWindowUnicode(HWND h) {
-  U32_GUARD;
-  (void)h;
-  return 0;
 }
 BOOL W32API IsIconic(HWND h) {
   U32_GUARD;
@@ -399,6 +417,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
       w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
   if (callbacks) u32_invoke(h, WM_NCDESTROY, 0, 0);
   u32_classic_destroy(h); /* USER-owned control/dialog/menu/caret records, also at thread exit */
+  u32_window_region_free(w);
   u32_destroy_paint(w);
   while (w->props) {
     struct u32_prop *p = w->props;
@@ -438,6 +457,8 @@ void u32_frame(DWORD style, DWORD ex, int *bx, int *by) {
 }
 BOOL W32API GetClientRect(HWND h, RECT *r) {
   U32_GUARD;
+  if (h == U32_DESKTOP && r)
+    return SetRect(r, 0, 0, GetSystemMetrics(0), GetSystemMetrics(1));
   struct u32_window *w = u32_window(h);
   if (!w || !r)
     return u32_fail(1400);
@@ -462,6 +483,8 @@ POINT u32_origin(struct u32_window *w) {
 }
 BOOL W32API GetWindowRect(HWND h, RECT *r) {
   U32_GUARD;
+  if (h == U32_DESKTOP && r)
+    return SetRect(r, 0, 0, GetSystemMetrics(0), GetSystemMetrics(1));
   struct u32_window *w = u32_window(h);
   if (!w || !r)
     return u32_fail(1400);
@@ -474,6 +497,8 @@ BOOL W32API GetWindowRect(HWND h, RECT *r) {
 }
 BOOL W32API ClientToScreen(HWND h, POINT *p) {
   U32_GUARD;
+  if (h == U32_DESKTOP && p)
+    return 1;
   struct u32_window *w = u32_window(h);
   if (!w || !p)
     return u32_fail(1400);
@@ -484,6 +509,8 @@ BOOL W32API ClientToScreen(HWND h, POINT *p) {
 }
 BOOL W32API ScreenToClient(HWND h, POINT *p) {
   U32_GUARD;
+  if (h == U32_DESKTOP && p)
+    return 1;
   struct u32_window *w = u32_window(h);
   if (!w || !p)
     return u32_fail(1400);
@@ -648,6 +675,8 @@ HWND W32API GetParent(HWND h) {
 }
 HWND W32API SetParent(HWND h, HWND parent) {
   U32_GUARD;
+  if (parent == U32_DESKTOP)
+    parent = 0;
   struct u32_window *w = u32_window(h);
   if (!w || (parent && !u32_window(parent)) || h == parent ||
       IsChild(h, parent)) {
@@ -680,7 +709,7 @@ LONG W32API GetWindowLongA(HWND h, int index) {
   }
   switch (index) {
   case GWL_WNDPROC:
-    return (LONG)(intptr_t)w->proc;
+    return (LONG)u32_proc_handle(w->proc, w->unicode, 0);
   case GWL_HINSTANCE:
     return (LONG)(intptr_t)w->instance;
   case GWL_HWNDPARENT:
@@ -713,9 +742,12 @@ LONG W32API SetWindowLongA(HWND h, int index, LONG value) {
   }
   LONG old = GetWindowLongA(h, index);
   switch (index) {
-  case GWL_WNDPROC:
-    w->proc = (WNDPROC)(intptr_t)value;
+  case GWL_WNDPROC: {
+    BOOL wide;
+    w->proc = u32_proc_decode((uintptr_t)(DWORD)value, 0, &wide);
+    w->unicode = wide;
     break;
+  }
   case GWL_HINSTANCE:
     w->instance = (HINSTANCE)(intptr_t)value;
     break;
@@ -777,7 +809,7 @@ uintptr_t W32API GetClassLongA(HWND h, int index) {
   case -26:
     return c->c.style;
   case -24:
-    return (uintptr_t)c->c.lpfnWndProc;
+    return u32_proc_handle(c->c.lpfnWndProc, c->unicode, 0);
   case -20:
     return c->c.cbClsExtra;
   case -18:
@@ -810,9 +842,12 @@ uintptr_t W32API SetClassLongA(HWND h, int index, intptr_t value) {
   case -26:
     c->c.style = value;
     break;
-  case -24:
-    c->c.lpfnWndProc = (WNDPROC)value;
+  case -24: {
+    BOOL wide;
+    c->c.lpfnWndProc = u32_proc_decode((uintptr_t)value, 0, &wide);
+    c->unicode = wide;
     break;
+  }
   case -14:
     c->c.hIcon = (HICON)value;
     break;
@@ -899,6 +934,14 @@ int W32API GetClassNameA(HWND h, char *out, int n) {
   U32_GUARD;
   if (!out || n <= 0)
     return 0;
+  if (h == U32_DESKTOP) {
+    static const char desktop[] = "#32769";
+    int k = 0;
+    for (; desktop[k] && k + 1 < n; k++)
+      out[k] = desktop[k];
+    out[k] = 0;
+    return k;
+  }
   struct u32_window *w = u32_window(h);
   if (w) {
     UINT len = w32_strlen(w->cls->name);
@@ -1007,6 +1050,8 @@ BOOL W32API EnumChildWindows(HWND parent, WNDENUMPROC proc, LPARAM l) {
   U32_GUARD;
   if (!proc)
     return u32_fail(87);
+  if (parent == U32_DESKTOP)
+    return EnumWindows(proc, l);
   HWND *hs = u32_alloc(4096 * sizeof(*hs));
   if (!hs)
     return 0;
@@ -1071,11 +1116,15 @@ HWND W32API FindWindowA(const char *c, const char *t) {
 }
 HWND W32API GetTopWindow(HWND p) {
   U32_GUARD;
+  if (p == U32_DESKTOP)
+    p = 0;
   HWND hs[U32_WINDOWS];
   return list(p, hs, 0) ? hs[0] : 0;
 }
 HWND W32API GetWindow(HWND h, UINT cmd) {
   U32_GUARD;
+  if (h == U32_DESKTOP)
+    return cmd == 5 ? GetTopWindow(0) : 0; /* GW_CHILD: the top window */
   struct u32_window *w = u32_window(h);
   if (!w)
     return 0;

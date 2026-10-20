@@ -184,6 +184,8 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
 int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
              const void *text, unsigned count, const int *dx, int wide) {
   struct dc *d = gdi_dc(h);
+  if (d && d->record && (text || !count)) /* f5-20B metafile DC */
+    return gdi_record_text(d, x, y, flags, rect, text, count, dx, wide);
   struct font *f = font_of(d);
   struct w32_gdi_font_metrics m;
   if (!d || (!text && count) || count > 8192 ||
@@ -353,6 +355,10 @@ unsigned W32API SetTextAlign(HDC h, unsigned align) {
   struct dc *d = gdi_dc(h);
   if (!d || (align & ~31u) || (align & 6) == 4 || (align & 24) == 16)
     return CLR_INVALID;
+  if (d->record) {
+    int16_t v[1] = {(int16_t)align};
+    gdi_record(d, 0x012eu, v, 1);
+  }
   unsigned old = d->s.align;
   d->s.align = align;
   return old;
@@ -367,6 +373,10 @@ int W32API SetTextCharacterExtra(HDC h, int extra) {
   struct dc *d = gdi_dc(h);
   if (!d || extra < -GDI_LIMIT || extra > GDI_LIMIT)
     return (-2147483647 - 1);
+  if (d->record) {
+    int16_t v[1] = {(int16_t)extra};
+    gdi_record(d, 0x0108u, v, 1);
+  }
   int old = d->s.extra;
   d->s.extra = extra;
   return old;

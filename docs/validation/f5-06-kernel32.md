@@ -179,6 +179,20 @@ CompareStringW/GetLocaleInfoW/GetStringTypeW/LCMapStringW entries remain W21
 Unicode refusals, now returning 120 instead of raising a nonreturning stub.
 They are explicitly classified in the coverage table. The original-media
 census remains absent; no additional Unicode requirement is inferred from it.
+
+Amendment (f5-20B, 2026-10-20; directive f5-20 amendment 1, item 1): the
+refusal list above no longer applies to `CreateFileW`, `LoadLibraryW`,
+`LoadLibraryExW`, `GetModuleHandleW`, `GetModuleFileNameW`, `CreateEventW`,
+`CreateMutexW`, `GetVersionExW`, `GetEnvironmentVariableW`,
+`GetCommandLineW`, `CreateProcessW`, `CompareStringW`, `GetLocaleInfoW`,
+`GetStringTypeW` and `LCMapStringW`, which the reused Wine DLLs call: they
+are working functions over the ANSI paths through code page 1252 (Microsoft
+Layer for Unicode model; `GetVersion`/`GetVersionEx` still report Windows 98),
+with `CompareStringA` and `LCMapStringA` added as their ANSI cores
+(`unicode.c`, `collate.c`, `locale.c`). The `w-stubs` shim still refuses any
+of them per application. Evidence: `kernel32_unicode_test.c`
+(`test_kernel32.test_f5_20b_unicode_layer_and_collation`) and
+`build/codex/f5-20b-report.md`.
 CREATE_UNICODE_ENVIRONMENT converts a bounded double-NUL block to CP1252 and
 rejects unrepresentable text before publication. Loader paths use UTF-8
 internally and UTF-16 in the module list; ANSI module APIs round-trip CP1252,

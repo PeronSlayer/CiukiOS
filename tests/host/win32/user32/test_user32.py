@@ -127,9 +127,10 @@ class User32Tests(unittest.TestCase):
         # Execute the generated production stub bodies through their actual
         # native model prototypes. PE32 layout/stack arities are checked above.
         import re
-        # Menu APIs are implemented by f5-10C; the remaining typed refusals.
-        targets={'WaitForInputIdle':-1,'ChangeDisplaySettingsA':-1,
-                 'GetMessageW':-1,'DdeInitializeA':0x400f}
+        # Menu APIs are implemented by f5-10C; WaitForInputIdle, GetMessageW
+        # and the DDEML by f5-20B. The remaining typed refusals.
+        targets={'ChangeDisplaySettingsA':-1,'RegisterHotKey':0,
+                 'UnpackDDElParam':0,'ExcludeUpdateRgn':0}
         definition=(out/'user32.def').read_text()
         declarations=[];calls=[]
         for i,(name,value) in enumerate(targets.items()):

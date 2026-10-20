@@ -349,6 +349,11 @@ int W32API StretchDIBits(HDC h, int x, int y, int w, int height, int sx, int sy,
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   struct w32_dib src;
+  if (d && d->record) /* f5-20B metafile DC */
+    return gdi_record_dib(d, x, y, w, height, sx, sy, sw, sh, bits, info,
+                          usage, rop)
+               ? (sh < 0 ? -sh : sh)
+               : 0;
   if (!d || !bits || !gdi_info(h, info, usage, (void *)bits, &src) ||
       sy < -GDI_LIMIT || sy > GDI_LIMIT || sh < -GDI_LIMIT || sh > GDI_LIMIT)
     return 0;
@@ -398,6 +403,17 @@ BOOL W32API StretchBlt(HDC dst, int x, int y, int w, int height, HDC source,
   unsigned r = (rop >> 16) & 255;
   if (!d)
     return 0;
+  if (d->record) { /* f5-20B metafile DC */
+    if (!((r ^ (r >> 2)) & 0x33)) {
+      int16_t v[6] = {(int16_t)(rop & 0xffff), (int16_t)(rop >> 16),
+                      (int16_t)height,         (int16_t)w,
+                      (int16_t)y,              (int16_t)x};
+      return gdi_record(d, 0x061du, v, 6);
+    }
+    return s && gdi_target(s) &&
+           gdi_record_bitmap(d, x, y, w, height, gdi_target(s), sx, sy, sw, sh,
+                             rop);
+  }
   if (!((r ^ (r >> 2)) & 0x33))
     return gdi_blt(d, x, y, w, height, 0, 0, 0, 0, 0, rop, -1);
   if (!s || (int64_t)sx + sw < -GDI_LIMIT || (int64_t)sx + sw > GDI_LIMIT ||
@@ -451,6 +467,12 @@ BOOL W32API PatBlt(HDC h, int x, int y, int w, int height, DWORD rop) {
   unsigned r = (rop >> 16) & 255;
   if (!d || ((r ^ (r >> 2)) & 0x33))
     return 0;
+  if (d->record) { /* f5-20B metafile DC */
+    int16_t v[6] = {(int16_t)(rop & 0xffff), (int16_t)(rop >> 16),
+                    (int16_t)height,         (int16_t)w,
+                    (int16_t)y,              (int16_t)x};
+    return gdi_record(d, 0x061du, v, 6);
+  }
   return gdi_blt(d, x, y, w, height, 0, 0, 0, 0, 0, rop, -1);
 }
 BOOL W32API TransparentBlt(HDC h, int x, int y, int w, int height, HDC source,

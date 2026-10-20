@@ -119,7 +119,8 @@ class DialogTests(unittest.TestCase):
         # gdi32 shares the process; its FillRect/FrameRect helpers are renamed
         # so USER's exports keep their names, as in two separate PE images.
         gdi_flags = [*flags, '-D_GNU_SOURCE', '-DW32_HOST_MODEL', '-DFillRect=gdi32_FillRect',
-                     '-DFrameRect=gdi32_FrameRect', '-I'+str(ROOT/'sdk/win32/include'),
+                     '-DFrameRect=gdi32_FrameRect', '-DInvertRect=gdi32_InvertRect',
+                     '-I'+str(ROOT/'sdk/win32/include'),
                      '-idirafter', str(ROOT/'sdk/sysroot-overlay/include'), *freetype.includes()]
         gdi_sources = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
         gdi_sources += [ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c']
@@ -195,6 +196,26 @@ class DialogTests(unittest.TestCase):
 
     def test_installer_style_pages(self):
         self.execute('installer')
+
+    def test_f5_20b_upper_user(self):
+        """f5-20B: the Unicode USER layer and the remaining USER entry points
+        the reused Wine DLLs import (directive f5-20, part B)."""
+        text = self.execute('upper-user')
+        for part in ('unicode classes windows messages subclassing controls SPI',
+                     'unicode dialogs DefDlgProcW DWL_DLGPROC items modal',
+                     'unicode menus MENUINFO item rectangles accelerators resources',
+                     'text Char* IsChar* OEM wsprintf',
+                     'DDEML instances string handles data handles no-partner connect',
+                     'desktop ancestors hit testing window info deferred positions',
+                     'clipboard formats icons extraction DlgDirList'):
+            self.assertIn('PASS f5-20B ' + part, text)
+
+    def test_f5_20b_upper_gdi(self):
+        """f5-20B: the GDI entry points, Uniscribe subset and metafiles."""
+        text = self.execute('upper-gdi')
+        for part in ('GDI regions pens polylines alpha', 'Uniscribe items shaping',
+                     'metafiles recording playback'):
+            self.assertIn('PASS f5-20B ' + part, text)
 
     def test_pinned_frames(self):
         text = self.execute('frames')

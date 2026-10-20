@@ -10,6 +10,7 @@
 #include "resources.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <sys/stat.h>
 extern void *gdi_symbol(const char *);
 extern int gdi_host_fonts(const char *, const char *);
@@ -289,6 +290,116 @@ static const char *reg_string(const char *key, const char *name) {
   return 0;
 }
 
+/* ---- f5-20B: current directory, file search, icon module ------------------ */
+static char host_cwd[260] = "C:\\";
+static BOOL W32API fake_set_dir(const char *p) {
+  char win[600], native[1024];
+  struct stat st;
+  if (!p)
+    return 0;
+  if (!strncasecmp(p, "C:\\", 3))
+    snprintf(win, sizeof(win), "%s", p);
+  else
+    snprintf(win, sizeof(win), "%s%s%s", host_cwd,
+             host_cwd[strlen(host_cwd) - 1] == '\\' ? "" : "\\", p);
+  size_t n = strlen(win);
+  while (n > 3 && win[n - 1] == '\\')
+    win[--n] = 0;
+  if (!host_path(win, native, sizeof(native), 0) || stat(native, &st) ||
+      !S_ISDIR(st.st_mode)) {
+    SetLastError(3);
+    return 0;
+  }
+  snprintf(host_cwd, sizeof(host_cwd), "%s", win);
+  return 1;
+}
+static DWORD W32API fake_get_dir(DWORD n, char *out) {
+  DWORD k = (DWORD)strlen(host_cwd);
+  if (n <= k)
+    return k + 1;
+  memcpy(out, host_cwd, k + 1);
+  return k;
+}
+static struct {
+  char names[64][260];
+  DWORD attrs[64], count, at;
+} found;
+static void fill_find(uint8_t *data) {
+  memset(data, 0, 320);
+  w32_put32(data, found.attrs[found.at]);
+  snprintf((char *)data + 44, 260, "%s", found.names[found.at]);
+}
+static HANDLE W32API fake_find_first(const char *pattern, uint8_t *data) {
+  char dir[600], native[1024];
+  const char *slash = strrchr(pattern, '\\'), *mask = slash ? slash + 1 : pattern;
+  if (slash)
+    snprintf(dir, sizeof(dir), "%.*s", (int)(slash - pattern), pattern);
+  else
+    snprintf(dir, sizeof(dir), "%s", host_cwd);
+  if (!strncasecmp(dir, "C:", 2) && !dir[2])
+    strcat(dir, "\\");
+  if (!host_path(dir, native, sizeof(native), 0))
+    return K32_INVALID;
+  /* The fixture names are upper case; glob matches them as Windows does. */
+  char spec[1400];
+  snprintf(spec, sizeof(spec), "%s/%s", native, strcmp(mask, "*.*") ? mask : "*");
+  glob_t g;
+  found.count = found.at = 0;
+  if (glob(spec, 0, 0, &g)) {
+    SetLastError(2);
+    return K32_INVALID;
+  }
+  for (size_t i = 0; i < g.gl_pathc && found.count < 64; i++) {
+    struct stat st;
+    const char *name = strrchr(g.gl_pathv[i], '/') + 1;
+    if (stat(g.gl_pathv[i], &st))
+      continue;
+    snprintf(found.names[found.count], 260, "%s", name);
+    found.attrs[found.count++] = S_ISDIR(st.st_mode) ? 0x10 : 0x20;
+  }
+  globfree(&g);
+  if (!found.count) {
+    SetLastError(2);
+    return K32_INVALID;
+  }
+  fill_find(data);
+  return (HANDLE)(uintptr_t)0x9900;
+}
+static BOOL W32API fake_find_next(HANDLE h, uint8_t *data) {
+  if (h != (HANDLE)(uintptr_t)0x9900 || found.at + 1 >= found.count) {
+    SetLastError(18);
+    return 0;
+  }
+  found.at++;
+  fill_find(data);
+  return 1;
+}
+static BOOL W32API fake_find_close(HANDLE h) {
+  return h == (HANDLE)(uintptr_t)0x9900;
+}
+static DWORD W32API fake_drives(void) { return 1u << 2; }
+#define ICON_MODULE ((HANDLE)(uintptr_t)0x6100)
+static const uint8_t *icon_module_image;
+static DWORD icon_module_bytes;
+static uint8_t icon_group[20] = {0, 0, 1, 0, 1, 0, 32, 32, 0, 0, 1, 0, 32, 0};
+static HANDLE W32API fake_load_ex(const char *path, HANDLE file, DWORD flags) {
+  (void)file, (void)flags;
+  if (path && !strcasecmp(path, "C:\\ICONS.EXE") && icon_module_image)
+    return ICON_MODULE;
+  SetLastError(2);
+  return 0;
+}
+static BOOL W32API fake_free(HANDLE h) { return h == ICON_MODULE; }
+typedef BOOL(W32API *name_proc)(HANDLE, const char *, char *, intptr_t);
+static BOOL W32API fake_names(HANDLE m, const char *type, name_proc proc,
+                              intptr_t param) {
+  if (m != ICON_MODULE || (uintptr_t)type != 14)
+    return 0;
+  if (proc(m, type, (char *)(uintptr_t)5, param))
+    proc(m, type, (char *)(uintptr_t)7, param);
+  return 1;
+}
+
 /* ---- modules and resources ------------------------------------------------ */
 HANDLE W32API LoadLibraryA(const char *s) {
   if (!s)
@@ -323,10 +434,42 @@ void *W32API GetProcAddress(HANDLE h, const char *s) {
   }
   if (m == 0x6003 && !strcmp(s, "GetProfileStringA"))
     return (void *)profile_string;
+  if (m == 0x6003) {
+    static const struct {
+      const char *name;
+      void *fn;
+    } kernel[] = {{"WaitForSingleObject", (void *)WaitForSingleObject},
+                  {"GetProcessHeap", (void *)GetProcessHeap},
+                  {"HeapAlloc", (void *)HeapAlloc},
+                  {"LoadLibraryExA", (void *)fake_load_ex},
+                  {"FreeLibrary", (void *)fake_free},
+                  {"EnumResourceNamesA", (void *)fake_names},
+                  {"FindFirstFileA", (void *)fake_find_first},
+                  {"FindNextFileA", (void *)fake_find_next},
+                  {"FindClose", (void *)fake_find_close},
+                  {"SetCurrentDirectoryA", (void *)fake_set_dir},
+                  {"GetCurrentDirectoryA", (void *)fake_get_dir},
+                  {"GetLogicalDrives", (void *)fake_drives}};
+    for (UINT i = 0; i < sizeof(kernel) / sizeof(*kernel); i++)
+      if (!strcmp(kernel[i].name, s))
+        return kernel[i].fn;
+  }
   return 0;
 }
 HANDLE W32API FindResourceA(HANDLE module, const void *name,
                             const void *type) {
+  if (module == ICON_MODULE) {
+    uintptr_t t = (uintptr_t)type, n = (uintptr_t)name;
+    if (t == 14 && (n == 5 || n == 7)) {
+      w32_put32(icon_group + 14, icon_module_bytes);
+      w32_put16(icon_group + 18, 1);
+      return (HANDLE)(uintptr_t)0x8001;
+    }
+    if (t == 3 && n == 1)
+      return (HANDLE)(uintptr_t)0x8002;
+    SetLastError(1813);
+    return 0;
+  }
   if (module != FIXTURE)
     return 0;
   uintptr_t t = (uintptr_t)type, n = (uintptr_t)name;
@@ -348,11 +491,19 @@ HANDLE W32API FindResourceA(HANDLE module, const void *name,
 HANDLE W32API LoadResource(HANDLE module, HANDLE r) {
   (void)module;
   uintptr_t i = (uintptr_t)r;
+  if (i == 0x8001)
+    return (HANDLE)icon_group;
+  if (i == 0x8002)
+    return (HANDLE)icon_module_image;
   return i ? (HANDLE)fixture_resources[i - 1].data : 0;
 }
 DWORD W32API SizeofResource(HANDLE module, HANDLE r) {
   (void)module;
   uintptr_t i = (uintptr_t)r;
+  if (i == 0x8001)
+    return sizeof(icon_group);
+  if (i == 0x8002)
+    return icon_module_bytes;
   return i ? fixture_resources[i - 1].size : 0;
 }
 static const uint8_t *resource(unsigned type, unsigned id, DWORD *size) {
@@ -609,6 +760,7 @@ static void menus_frames(HWND, const char *);
 #include "fonts.inc"
 #include "dialogs.inc"
 #include "menus.inc"
+#include "upper.inc"
 
 static const char *mode;
 static void harness_run(void) {
@@ -648,6 +800,10 @@ static void harness_run(void) {
     test_installer();
   else if (!strcmp(mode, "frames"))
     test_frames();
+  else if (!strcmp(mode, "upper-user"))
+    test_upper_user();
+  else if (!strcmp(mode, "upper-gdi"))
+    test_upper_gdi();
   else
     CHECK(!"unknown mode");
   wr_destroy(&server);

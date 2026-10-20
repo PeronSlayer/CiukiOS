@@ -721,7 +721,13 @@ Wildcards MUST follow Windows matching, including `*.*` matching names
 without a dot and patterns matching either the long name or the alias.
 ANSI file APIs MUST use code page 1252; conversion to the VFS's UTF-8 MUST
 be lossless for 1252, and a character outside the volume's alias code page
-MUST still be valid in a long name.
+MUST still be valid in a long name. Unicode (W) functions that Windows 98
+refused are working functions layered over the ANSI paths through the active
+code page, in the model of Microsoft's Layer for Unicode on Windows 95/98/ME:
+an application that probes a W function and falls back to A keeps working, an
+application that calls W works instead of failing, `GetVersion`/`GetVersionEx`
+still report Windows 98, and the `w-stubs` shim restores the Windows 98
+refusal for a named application (directive f5-20, amendment 1).
 
 **[F5]** The canonical image builder MUST create the following, with these
 exact spellings (8.3 names upper-case, so no long-name entry exists for
