@@ -16,11 +16,12 @@ static void *W32API shell_callback(UINT a,UINT b,void *c,uintptr_t d,uintptr_t e
 static HWND dde_server;
 static unsigned dde_ack,dde_terminated;
 static int dde_initiating,session_answer=1,session_ended=-1;
+static unsigned session_queries,session_ends;
 static char dde_text[4096];
 static LRESULT W32API shell_client(HWND h,UINT m,WPARAM wp,LPARAM lp)
 {
-    if(m==0x11)return session_answer;
-    if(m==0x16){session_ended=(int)wp;return 0;}
+    if(m==0x11){session_queries++;return session_answer || session_queries!=8;}
+    if(m==0x16){session_ends++;session_ended=(int)wp;return 0;}
     if(m==0x3e4){
         if(dde_initiating){dde_server=(HWND)wp;return 0;}
         uintptr_t lo,hi;CHECK(UnpackDDElParam(m,lp,&lo,&hi));dde_ack=(unsigned)lo;
@@ -81,14 +82,36 @@ static void shell_clients(const char *directory)
     CHECK(DdeDisconnect(conv)&&DdeFreeStringHandle(id,item)&&DdeFreeStringHandle(id,service)&&DdeFreeStringHandle(id,subject)&&DdeUninitialize(id));
     CHECK(PostMessageA(dde_server,0x3e1,(WPARAM)client,0));shell_dispatch();CHECK(dde_terminated==1);
     server.compat_writer_pid=99;wr_client_join(&server,u32_pid());
+    HWND more[7];
+    for(unsigned i=0;i<7;i++){
+        more[i]=CreateWindowExA(0,cls.lpszClassName,"session",WS_POPUP,0,0,32,32,0,0,0,0);CHECK(more[i]);
+    }
+    /* Real pump pacing, including cold idle detection, on one USER thread. */
     for(unsigned force=0;force<3;force++){
         struct w32r_reply status;session_answer=force==2;session_ended=-1;
+        session_queries=session_ends=0;
+        u32_session_pump();ui_kernel_pause(U32_SESSION_FAST_MS);u32_session_pump();
+        DWORD begin=u32_ticks();
         session_action(W32R_SESSION_BEGIN,force==1?4:0,&status);
-        ui_kernel_pause(U32_SESSION_POLL_MS+1);u32_session_pump();ui_kernel_pause(U32_SESSION_POLL_MS+1);u32_session_pump();
+        for(unsigned i=0;i<570 && session_ends<8;i++){
+            u32_session_pump();ui_kernel_pause(1);
+        }
         session_action(W32R_SESSION_STATUS,0,&status);
-        CHECK(status.key==(force==0?2u:1u) && session_ended==(force!=0));
+        CHECK(status.key==(force==0?2u:1u) && session_ended==(force!=0) && session_queries==8 && session_ends==8);
+        CHECK(u32_ticks()-begin<=8*2*U32_SESSION_FAST_MS+U32_SESSION_POLL_MS);
+        printf("TRACE USER 8 windows query/end case=%u ticks=%u\n",force,u32_ticks()-begin);
         session_action(W32R_SESSION_RESET,0,&status);
     }
+    /* Empty polls remain fast for a full interval after the last notification,
+     * then thousands of same-tick pumps and 1 ms pumps stay at idle cadence. */
+    u32_session_pump();ui_kernel_pause(U32_SESSION_FAST_MS);u32_session_pump();
+    unsigned polls=session_polls,allocs=allocation_calls;
+    for(unsigned i=0;i<1000;i++)u32_session_pump();
+    CHECK(session_polls==polls && allocation_calls==allocs);
+    for(unsigned i=0;i<1000;i++){ui_kernel_pause(1);u32_session_pump();}
+    CHECK(session_polls==polls+4 && allocation_calls==allocs);
+    puts("PASS USER idle 250 ms and zero allocations per poll, fast session drain");
+    for(unsigned i=0;i<7;i++)CHECK(DestroyWindow(more[i]));
     puts("PASS USER owning-thread WM_QUERYENDSESSION WM_ENDSESSION accept veto force");
     CHECK(DestroyWindow(client)&&UnregisterClassA(cls.lpszClassName,0));
     struct w32r_reply r;u32_directory(W32R_ATOM_DELETE,(HWND)(uintptr_t)raw_item,0,0,0,"",0,0,&r,0,0);

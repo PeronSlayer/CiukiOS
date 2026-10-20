@@ -114,7 +114,7 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
         if(out.total!=total || out.offset!=at+bytes){error=13;break;}
         memcpy((uint8_t *)output+at,out.bytes,bytes);at+=bytes;
     }
-    if(!error){*used=total;service_registered_once=1;}
+    if(!error){*used=total;__atomic_store_n(&service_registered_once,1,__ATOMIC_RELEASE);}
     pthread_mutex_unlock(&rpc_lock);return error;
 }
 static struct desktop *owner;
@@ -122,7 +122,7 @@ static int authorized;
 static struct desk_w32_supervisor supervisor;
 static int spawn_service(void *ctx)
 {
-    (void)ctx;char *argv[]={"/System/Win32/w32srv",service_registered_once?NULL:"--fresh-clients",NULL};
+    (void)ctx;char *argv[]={"/System/Win32/w32srv",__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)?NULL:"--fresh-clients",NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
 }
@@ -131,8 +131,9 @@ static void record_service(void *ctx,const char *event,int pid,uint64_t elapsed)
 static const struct desk_w32_supervisor_ops supervision={spawn_service,record_service,NULL};
 /* One bounded transfer from the sleeping shortcut worker to the shell thread. */
 static pthread_mutex_t launch_lock=PTHREAD_MUTEX_INITIALIZER;
+static unsigned launch_inflight;
 static struct {int ready,fd,pid,kind;uint32_t show;char title[64];struct desk_launch_record record;} pending;
-int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
+static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_record *r)
 {
     int pair[2]={-1,-1},report[2]={-1,-1};
     if(kind==DESK_W32_PE){
@@ -189,6 +190,13 @@ int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
 done:
     for(unsigned i=0;i<2;i++){if(pair[i]>=0)close(pair[i]);if(report[i]>=0)close(report[i]);}
     pthread_mutex_unlock(&launch_lock);return result;
+}
+int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
+{
+    __atomic_add_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
+    int result=launch_execute(kind,r);
+    __atomic_sub_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
+    return result;
 }
 /* Preserve the existing launcher's program identity, task authority, child
  * ledger and native-client permissions. Its six-argument bound remains. */
@@ -349,6 +357,69 @@ static int restart_launch(void *ctx,const char *command)
     pthread_mutex_unlock(&restart_launch_lock);return -EAGAIN;
 }
 static const struct desk_restart_ops restart_ops={NULL,restart_call,restart_alive,restart_kill,restart_launch,restart_notice,restart_record};
+/* One sleeping worker for the entire desktop lifetime. The mailbox is never
+ * held during RPC, nor while the desktop applies a result or draws a frame.
+ * Scheduling is driven by desktop ticks; missed frames never queue RPCs. */
+static pthread_mutex_t idle_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t idle_wake=PTHREAD_COND_INITIALIZER;
+static struct {
+    int started,request,ready,busy;
+    unsigned flags,epoch,result_epoch;
+    uint32_t error;
+    struct w32r_reply reply;
+} idle;
+static unsigned idle_epoch;
+static uint64_t idle_last;
+static int idle_polled;
+static void *restart_idle_worker(void *unused)
+{
+    (void)unused;
+    pthread_mutex_lock(&idle_lock);
+    for(;;){
+        while(!idle.request)pthread_cond_wait(&idle_wake,&idle_lock);
+        unsigned flags=idle.flags,epoch=idle.epoch;idle.request=0;
+        pthread_mutex_unlock(&idle_lock);
+        struct w32r_reply reply={0};char message[W32R_SESSION_MESSAGE];
+        uint32_t error=restart_call(NULL,W32R_SHUTDOWN,W32R_SHUTDOWN_POLL,flags,&reply,message,sizeof(message));
+        pthread_mutex_lock(&idle_lock);
+        idle.reply=reply;idle.error=error;idle.result_epoch=epoch;idle.ready=1;
+    }
+    return NULL;
+}
+static void restart_idle_poll(struct desktop *d,uint64_t now)
+{
+    int active=!!__atomic_load_n(&launch_inflight,__ATOMIC_ACQUIRE);
+    for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].v3_win32_hwnd){active=1;break;}
+    if(!pthread_mutex_trylock(&launch_lock)){
+        active|=pending.ready;pthread_mutex_unlock(&launch_lock);
+    }else active=1;
+    if(pthread_mutex_trylock(&idle_lock))return;
+    if(!idle.started){
+        pthread_t thread;
+        if(pthread_create(&thread,NULL,restart_idle_worker,NULL)){
+            pthread_mutex_unlock(&idle_lock);return;
+        }
+        pthread_detach(thread);idle.started=1;
+    }
+    struct w32r_reply reply;int take=0;
+    if(idle.ready && (idle.result_epoch!=idle_epoch || (!restart.stage && !d->v3_dialog_kind))){
+        take=!idle.error && idle.result_epoch==idle_epoch;
+        reply=idle.reply;idle.ready=idle.busy=0;
+    }
+    /* A direct restart supersedes a completed idle poll. */
+    if(idle.ready && restart.stage){idle.ready=idle.busy=0;}
+    pthread_mutex_unlock(&idle_lock);
+    if(take)desk_restart_idle_result(&restart,&restart_ops,&reply,now);
+    if(restart.stage || d->v3_dialog_kind)return;
+    unsigned interval=active?DESK_RESTART_IDLE_MS:DESK_RESTART_QUIET_MS;
+    if(idle_polled && now-idle_last<interval)return;
+    if(pthread_mutex_trylock(&idle_lock))return;
+    if(!idle.busy){
+        idle.busy=idle.request=1;idle.flags=restart.boot_checked?0:1;idle.epoch=idle_epoch;
+        idle_last=now;idle_polled=1;pthread_cond_signal(&idle_wake);
+    }
+    pthread_mutex_unlock(&idle_lock);
+}
 int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
 {return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
 void desk_w32_start(struct desktop *d)
@@ -366,7 +437,9 @@ void desk_w32_poll(struct desktop *d)
         for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_MESSAGE)restart_progress_window=d->clients[i].window_id;
         restart_closing_pending=0;
     }
-    if(restart.stage || !d->v3_dialog_kind)desk_restart_tick(&restart,&restart_ops,clock_ns()/1000000);
+    uint64_t ms=clock_ns()/1000000;
+    restart_idle_poll(d,ms);
+    if(restart.stage)desk_restart_tick(&restart,&restart_ops,ms);
     uint64_t now=clock_ns();
     if(!d->power.state){
         shutdown_pending=shutdown_done=shutdown_error=0;
@@ -403,6 +476,7 @@ void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
     (void)d;
     if(desk_w32_service_exited(&supervisor,&supervision,pid,status,clock_ns())){
         restart.boot_checked=0;
+        idle_epoch++;idle_polled=0;
         if(supervisor.stopping){
             shutdown_done=1;
             shutdown_error=WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -EIO;

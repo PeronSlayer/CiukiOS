@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 import zlib
 ROOT=Path(__file__).resolve().parents[3]
@@ -59,6 +60,21 @@ class RegistryTests(unittest.TestCase):
         # the same ntdll w32_server_exchange (FastPebLock over the transaction).
         imports=census.inspect((self.out/'builtin/advapi32.dll').read_bytes())['imports']
         self.assertTrue(any(i['dll'].lower()=='ntdll.dll' and 'w32_server_exchange' in i['symbols'] for i in imports))
+    def test_connection_lifetime_client_announcement(self):
+        binary=self.out/'service-transport'
+        sources=['sdk/win32/ntdll/server.c','sdk/win32/services/bytes.c',
+                 'tests/host/win32/service_transport_test.c']
+        sources+=['apps/w32srv/'+n+'.c' for n in ('registry','storage','defaults','directory','protocol','posix_io')]
+        subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-DW32_HOST_MODEL',
+                        '-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                        '-fno-sanitize-recover=all','-I'+str(ROOT/'sdk/win32/include'),
+                        '-I'+str(ROOT/'src/kernel/include'),*[str(ROOT/s) for s in sources],
+                        '-o',str(binary)],check=True)
+        with tempfile.TemporaryDirectory(dir=self.out) as path:
+            p=subprocess.run([binary,path],capture_output=True,text=True,timeout=20,
+                             env=dict(os.environ,ASAN_OPTIONS='detect_leaks=1'))
+        self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+        print(p.stdout,end='')
     def test_registry_public_api_errors_and_aliases(self):self.execute('basics')
     def test_compatibility_reader_and_authorized_writer(self):self.execute('compat')
     def test_all_types_names_and_hive_limits(self):self.execute('limits')

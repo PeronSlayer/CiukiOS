@@ -252,6 +252,47 @@ static void reconciliation(void)
     CHECK(!rpc(&s,20,W32R_ATOM_FIND,0,"","Global survives",0,NULL,0,0)&&r.key==global);
     wr_destroy(&s);clear(&d);
 }
+static int nobody(void *o,uint32_t pid){(void)o;(void)pid;return 0;}
+static int unknown(void *o,uint32_t pid){(void)o;(void)pid;return -1;}
+static void batch_reconciliation(void)
+{
+    for(unsigned fresh=0;fresh<2;fresh++){
+        struct disk d={0};struct wr_server s;start(&s,&d);
+        CHECK(!rpc(&s,10,W32R_ATOM_ADD,0,"","Global batch",0,NULL,0,0));uint32_t global=r.key;
+        for(unsigned i=0;i<50;i++){
+            CHECK(!rpc(&s,100+i,W32R_CLIENT,0,"","",0,NULL,0,0));
+            CHECK(!rpc(&s,100+i,W32R_WINDOW_ALLOC,0,"","Old window",0,NULL,0,1));
+        }
+        /* PROGMAN conversations and HWNDs share this reserved ID allocator. */
+        uint32_t conversation=wr_new_id(&s);CHECK(conversation);
+        uint32_t reserved=s.reserved_id,old_id=s.next_id;
+        wr_destroy(&s);start(&s,&d);CHECK(s.next_id==reserved);
+        d.event=0;CHECK(wr_reconcile(&s,unknown,NULL)==1016 && !d.event);
+        /* One save = inactive-slot write, sync, marker patch, sync. */
+        CHECK(!(fresh?wr_clients_reset(&s):wr_reconcile(&s,nobody,NULL)));
+        CHECK(d.event==4 && !s.live_count && s.reserved_id==reserved && s.next_id==reserved);
+        CHECK(!wr_reconcile(&s,nobody,NULL) && d.event==4);
+        CHECK(rpc(&s,10,W32R_WINDOW_ENUM,0,"","",0,NULL,0,0)==259);
+        CHECK(!rpc(&s,10,W32R_ATOM_FIND,0,"","Global batch",0,NULL,0,0) && r.key==global);
+        wr_destroy(&s);start(&s,&d);
+        CHECK(!rpc(&s,10,W32R_WINDOW_ALLOC,0,"","New window",0,NULL,0,1) && r.key>=reserved && r.key>old_id && r.key>conversation);
+        CHECK(!rpc(&s,10,W32R_ATOM_ADD,0,"","New local",0,NULL,0,1) && r.key>global+50);
+        wr_destroy(&s);clear(&d);
+    }
+    /* Failed batch commit must not publish a partially scrubbed directory. */
+    for(unsigned phase=1;phase<=4;phase++){
+        struct disk d={0};struct wr_server s;start(&s,&d);
+        CHECK(!rpc(&s,10,W32R_WINDOW_ALLOC,0,"","Keep on failure",0,NULL,0,1));uint32_t hwnd=r.key;
+        d.event=0;d.fail=(int)phase;d.cut=0;
+        CHECK(wr_clients_reset(&s)==1016);
+        CHECK(!rpc(&s,10,W32R_WINDOW_GET,hwnd,"","",0,NULL,0,0));
+        d.fail=0;CHECK(!wr_clients_reset(&s));
+        wr_destroy(&s);start(&s,&d);
+        CHECK(rpc(&s,10,W32R_WINDOW_GET,hwnd,"","",0,NULL,0,0)==1400);
+        wr_destroy(&s);clear(&d);
+    }
+    puts("PASS stale batch: 50 owners/100 objects, one write + patch + two syncs, globals/counters preserved, four commit failures");
+}
 static void concurrent(void)
 {
     struct disk d={0};struct wr_server s;start(&s,&d);int fd[2][2];pid_t pids[2];
@@ -550,7 +591,7 @@ int main(int argc,char **argv)
 {
     CHECK(argc>=2);
     if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
-    else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
+    else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();batch_reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
     else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else if(!strcmp(argv[1],"handle-delete"))handle_deletion();else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;
 }

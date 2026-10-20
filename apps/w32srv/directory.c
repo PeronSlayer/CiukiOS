@@ -212,29 +212,55 @@ uint32_t wr_directory_exit(struct wr_server *s,uint32_t pid)
  * Supervised restarts within that desktop preserve/reconcile them instead. */
 uint32_t wr_clients_reset(struct wr_server *s)
 {
-    struct directory *d=s->directory;
-    for(;;){
-        uint32_t pid=d->windows?d->windows->value.pid:0;
-        if(!pid)for(struct atom *a=d->atoms;a;a=a->next)if(a->pid){pid=a->pid;break;}
-        if(!pid){s->live_count=0;return 0;}
-        uint32_t e=wr_exit(s,pid);if(e)return e;
-    }
+    return wr_reconcile(s,NULL,NULL);
 }
 uint32_t wr_reconcile(struct wr_server *s,int (*alive)(void *,uint32_t),void *opaque)
 {
-    /* A client can exit while the server is down. Preserve surviving owners'
-     * identities and remove only positively identified dead process state. */
+    /* Startup only, before the endpoint is registered. Partition in memory,
+     * then commit once regardless of the number of stale owners/objects.
+     * NULL means a fresh desktop: all process identities are from an old boot.
+     * The reservation and atom counters never move backwards. */
     struct directory *d=s->directory;
-    for(;;){
-        uint32_t dead=0;
-        for(struct atom *a=d->atoms;a&&!dead;a=a->next)if(a->pid){int state=alive(opaque,a->pid);if(state<0)return 1016;if(!state)dead=a->pid;}
-        for(struct window *w=d->windows;w&&!dead;w=w->next){int state=alive(opaque,w->value.pid);if(state<0)return 1016;if(!state)dead=w->value.pid;}
-        if(!dead){
-            for(struct atom *a=d->atoms;a;a=a->next)if(a->pid && wr_equal(a->name,WR_CLIENT_MARKER)){
-                uint32_t e=wr_client_join(s,a->pid);if(e)return e;
+    struct atom *removed_atoms=NULL,**a=&d->atoms;
+    struct window *removed_windows=NULL,**w=&d->windows;
+    uint32_t error=0;
+    uint32_t live[WR_LIVE];unsigned count=0;
+    while(*a){
+        int state=!(*a)->pid?1:alive?alive(opaque,(*a)->pid):0;
+        if(state<0){error=1016;goto rollback;}
+        if(!state){struct atom *old=*a;*a=old->next;old->next=removed_atoms;removed_atoms=old;}
+        else{
+            if((*a)->pid && wr_equal((*a)->name,WR_CLIENT_MARKER)){
+                unsigned i=0;while(i<count && live[i]!=(*a)->pid)i++;
+                if(i==count){if(count==WR_LIVE){error=8;goto rollback;}live[count++]=(*a)->pid;}
             }
-            return 0;
+            a=&(*a)->next;
         }
-        uint32_t e=wr_exit(s,dead);if(e)return e;
     }
+    while(*w){
+        int state=alive?alive(opaque,(*w)->value.pid):0;
+        if(state<0){error=1016;goto rollback;}
+        if(!state){struct window *old=*w;*w=old->next;old->next=removed_windows;removed_windows=old;}
+        else w=&(*w)->next;
+    }
+    if(removed_atoms || removed_windows){error=save(s);if(error)goto rollback;}
+    while(removed_atoms){struct atom *old=removed_atoms;removed_atoms=old->next;free(old->name);free(old);}
+    while(removed_windows){
+        struct window *old=removed_windows;removed_windows=old->next;
+        if(d->clip_viewer==old->value.hwnd)d->clip_viewer=0;
+        if(d->clip_owner==old->value.hwnd)d->clip_owner=d->clip_owner_pid=0;
+        if(d->clip_window==old->value.hwnd)d->clip_pid=d->clip_tid=d->clip_window=0;
+        free(old->title);free(old);
+    }
+    if(!alive){
+        d->clip_pid=d->clip_tid=d->clip_window=d->clip_owner=d->clip_owner_pid=d->clip_viewer=0;
+        while(d->clip){struct clip_data *old=d->clip;d->clip=old->next;free(old);}
+    }
+    memcpy(s->live,live,count*sizeof(*live));s->live_count=count;
+    return 0;
+rollback:
+    /* Startup aborts on failure; retain ownership so destroy frees everything. */
+    while(removed_atoms){struct atom *old=removed_atoms;removed_atoms=old->next;old->next=d->atoms;d->atoms=old;}
+    while(removed_windows){struct window *old=removed_windows;removed_windows=old->next;old->next=d->windows;d->windows=old;}
+    return error;
 }
