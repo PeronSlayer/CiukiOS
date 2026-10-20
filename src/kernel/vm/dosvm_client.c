@@ -148,8 +148,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (op == CIUKI_DOSVM_CREATE) {
         allowed.surface_fd = c.surface_fd;
         if (c.launch.kernel>CIUKI_DOSVM_FREEDOS13 || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
-            (c.launch.kernel && !c.launch.game)) return -EINVAL;
+            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED) return -EINVAL;
         allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
+        allowed.launch.memory=c.launch.memory;
         unsigned n = 0;
         while (n < sizeof(c.name) && c.name[n]) {
             if (c.name[n] < 32 || c.name[n] > 126) return -EINVAL;
@@ -218,6 +219,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         surface_retain(surface);
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
+            .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
             .disable_file_bridge=c.launch.kernel==CIUKI_DOSVM_FREEDOS13};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;

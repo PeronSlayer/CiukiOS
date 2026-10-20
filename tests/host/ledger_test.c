@@ -291,19 +291,34 @@ static void scattered_pool(void)
 /* Declared budget model, not measured boot/desktop or physical hardware.
  * Reserve the entire 1..16 MiB kernel load window, then the existing boot
  * targets: heap 4 MiB, tables 1.5 MiB, system cache 8 MiB, desktop 3 MiB.
- * VM PFNs come from production dosvm_create in the other host harness. */
+ * VM PFNs come from production dosvm_create in the other host harness.
+ * f3-46 (contract D1): the VM commitment is split as dosvm_pool.c does:
+ * the fixed part is a VM_PRIVATE promise, the 24 MiB pool a VM_POOL
+ * commitment admitted by ledger_commit (RAM or published pagefile). Two
+ * residency states are replayed: created (paged pool not resident) and
+ * touched (whole pool resident, also the locked mode's creation state). */
+static uint64_t vm_admit_margin(uint32_t free_pages, uint64_t reserved, uint64_t resident)
+{
+    /* dosvm_admit: request + headroom <= free - (reserved - resident). */
+    uint64_t free = (uint64_t)free_pages * PAGE_SIZE, outstanding = reserved - resident;
+    uint64_t need = (uint64_t)DOSVM_RESIDENT_CAP + DOSVM_HEADROOM + outstanding;
+    return free >= need ? free - need : 0;
+}
 static void dosvm_profiles(int argc, char **argv)
 {
-    CHECK(argc == MM_OWNERS + 6);
-    unsigned charges[MM_OWNERS + 4];
+    CHECK(argc == 2 * MM_OWNERS + 7);
+    unsigned charges[2 * MM_OWNERS + 5];
     for (unsigned i=0;i<ARRAY_SIZE(charges);i++) {
         char *end; unsigned long value=strtoul(argv[i+2],&end,10);
         CHECK(*argv[i+2] && !*end && value<=UINT32_MAX);
         charges[i]=(unsigned)value;
     }
-    unsigned cache=charges[MM_OWNERS], worker_stack=charges[MM_OWNERS+1];
-    unsigned worker_heap=charges[MM_OWNERS+2], vm_resident=charges[MM_OWNERS+3];
-    CHECK(cache==4096 && charges[MM_VM_PRIVATE]>=cache);
+    const unsigned *created=charges, *touched=charges+MM_OWNERS;
+    unsigned cache=charges[2*MM_OWNERS], worker_stack=charges[2*MM_OWNERS+1];
+    unsigned worker_heap=charges[2*MM_OWNERS+2], created_resident=charges[2*MM_OWNERS+3];
+    unsigned touched_resident=charges[2*MM_OWNERS+4];
+    const uint32_t quota=touched[MM_VM_POOL], fixed=DOSVM_RESIDENT_CAP/PAGE_SIZE-quota; /* 24 MiB pool */
+    CHECK(cache==4096 && created[MM_VM_PRIVATE]>=cache && !created[MM_VM_POOL] && quota==6144);
     const unsigned sizes[]={128,256,512};
     for (unsigned i=0;i<ARRAY_SIZE(sizes);i++) {
         fresh_kernel(sizes[i],15);
@@ -316,32 +331,55 @@ static void dosvm_profiles(int argc, char **argv)
         mm_claim(desktop,768,MM_USER_SHARED); ledger_promise(MM_USER_SHARED,768,768);
         CHECK(ledger_reconcile()); ledger_record("settled-desktop");
         uint32_t settled=pmm_free_count();
-        CHECK((uint64_t)settled*PAGE_SIZE >= (uint64_t)DOSVM_RESIDENT_CAP+DOSVM_HEADROOM);
-        uint32_t backing[MM_OWNERS]={0};
-        ledger_promise(MM_VM_PRIVATE,DOSVM_RESIDENT_CAP/PAGE_SIZE,DOSVM_RESIDENT_CAP/PAGE_SIZE);
-        for (unsigned o=0;o<MM_OWNERS;o++) if (charges[o]) {
-            backing[o]=pmm_alloc_contig(charges[o]); CHECK(backing[o]);
-            mm_claim(backing[o],charges[o],o);
+        CHECK(vm_admit_margin(settled,0,0)); /* the first default VM is admitted */
+        /* Created: fixed promise, pool commitment, creation charges. */
+        ledger_promise(MM_VM_PRIVATE,(int32_t)fixed,(int32_t)fixed);
+        ledger_promise(MM_VM_POOL,(int32_t)quota,0);
+        CHECK(ledger_commit(MM_VM_POOL,quota));
+        uint32_t backing[MM_OWNERS]={0}, pool=0;
+        for (unsigned o=0;o<MM_OWNERS;o++) if (created[o]) {
+            backing[o]=pmm_alloc_contig(created[o]); CHECK(backing[o]);
+            mm_claim(backing[o],created[o],o);
         }
         uint32_t stack=pmm_alloc_contig(worker_stack), task=pmm_alloc_contig(worker_heap);
         CHECK(stack && task); mm_claim(stack,worker_stack,MM_STACK); mm_claim(task,worker_heap,MM_HEAP);
         CHECK(ledger_reconcile()); ledger_record("maximum-vm-created");
         struct mm_ledger v=snapshot();
-        CHECK(resident(MM_VM_PRIVATE)==charges[MM_VM_PRIVATE]);
-        CHECK(resident(MM_VM_POOL)==charges[MM_VM_POOL]);
-        CHECK(v.commit_ram[MM_VM_PRIVATE]==DOSVM_RESIDENT_CAP/PAGE_SIZE && !v.pressure);
-        uint32_t free=pmm_free_count(), outstanding=DOSVM_RESIDENT_CAP-vm_resident;
-        CHECK((uint64_t)free*PAGE_SIZE >= (uint64_t)DOSVM_HEADROOM+outstanding);
-        printf("f3-47 ledger model=%u boot_free=%u settled_free=%u maximum_vm_free=%u resident=%u promise=%u outstanding=%u vm_private_pages=%u cache_private_pages=%u pool_pages=%u pressure=%u reconciled=1\n",
-            sizes[i],boot*PAGE_SIZE,settled*PAGE_SIZE,free*PAGE_SIZE,vm_resident,
-            DOSVM_RESIDENT_CAP,outstanding,charges[MM_VM_PRIVATE],cache,charges[MM_VM_POOL],v.pressure);
+        CHECK(resident(MM_VM_PRIVATE)==created[MM_VM_PRIVATE] && !resident(MM_VM_POOL) && !v.pressure);
+        CHECK(v.commit_ram[MM_VM_POOL]==quota && v.commit_ram[MM_VM_PRIVATE]==fixed);
+        uint32_t created_free=pmm_free_count();
+        int64_t created_headroom=ledger_commit_headroom();
+        uint64_t created_margin=vm_admit_margin(created_free,DOSVM_RESIDENT_CAP,created_resident);
+        /* Touched: every pool page resident. */
+        pool=pmm_alloc_contig(touched[MM_VM_POOL]); CHECK(pool);
+        mm_claim(pool,touched[MM_VM_POOL],MM_VM_POOL);
+        CHECK(ledger_reconcile()); ledger_record("maximum-vm-touched");
+        v=snapshot();
+        CHECK(resident(MM_VM_POOL)==quota && !v.pressure && !v.commit_pagefile);
+        uint32_t touched_free=pmm_free_count();
+        int64_t touched_headroom=ledger_commit_headroom();
+        uint64_t touched_margin=vm_admit_margin(touched_free,DOSVM_RESIDENT_CAP,touched_resident);
+        /* Same RAM formula at both states: unmaterialized pool commitment is
+         * outstanding, so demand-zero never admits more VMs on RAM alone. */
+        CHECK(created_margin==touched_margin);
+        printf("f3-46 admission model=%u boot_free=%u settled_free=%u created_free=%u touched_free=%u "
+               "created_resident=%u touched_resident=%u commit_headroom=%lld/%lld second_vm_margin=%llu/%llu "
+               "second_vm=%u/%u fixed_promise=%u pool_commit=%u cache_pages=%u reconciled=1\n",
+            sizes[i],boot*PAGE_SIZE,settled*PAGE_SIZE,created_free*PAGE_SIZE,touched_free*PAGE_SIZE,
+            created_resident,touched_resident,(long long)created_headroom,(long long)touched_headroom,
+            (unsigned long long)created_margin,(unsigned long long)touched_margin,
+            created_margin>0,touched_margin>0,fixed,quota,cache);
+        mm_release(pool,touched[MM_VM_POOL],MM_VM_POOL); release_run(pool,touched[MM_VM_POOL]);
         for (unsigned o=0;o<MM_OWNERS;o++) if (backing[o]) {
-            mm_release(backing[o],charges[o],o); release_run(backing[o],charges[o]);
+            mm_release(backing[o],created[o],o); release_run(backing[o],created[o]);
         }
         mm_release(stack,worker_stack,MM_STACK); release_run(stack,worker_stack);
         mm_release(task,worker_heap,MM_HEAP); release_run(task,worker_heap);
-        ledger_promise(MM_VM_PRIVATE,-(int32_t)(DOSVM_RESIDENT_CAP/PAGE_SIZE),-(int32_t)(DOSVM_RESIDENT_CAP/PAGE_SIZE));
+        ledger_promise(MM_VM_POOL,-(int32_t)quota,-(int32_t)quota);
+        ledger_promise(MM_VM_PRIVATE,-(int32_t)fixed,-(int32_t)fixed);
+        v=snapshot();
         CHECK(pmm_free_count()==settled && !resident(MM_VM_PRIVATE) && !resident(MM_VM_POOL));
+        CHECK(!v.commit_ram[MM_VM_POOL] && !v.commit_ram[MM_VM_PRIVATE] && !v.reserved_va[MM_VM_POOL]);
         ledger_record("vm-teardown");
         mm_release(desktop,768,MM_USER_SHARED); release_run(desktop,768);
         ledger_promise(MM_USER_SHARED,-768,-768);

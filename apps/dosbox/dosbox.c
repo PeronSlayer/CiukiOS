@@ -93,7 +93,7 @@ int main(int argc, char **argv)
 {
     int channel = 3, result = 1, pause_background = 0;
     const char *name = "CiukiDOS";
-    const char *kernel_override=NULL;
+    const char *kernel_override=NULL, *memory_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
     for (int i = 1; i < argc; i++) {
@@ -103,6 +103,7 @@ int main(int argc, char **argv)
             channel = (int)n;
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
         else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
+        else if (!strncmp(argv[i],"--dos-memory=",13)) memory_override=argv[i]+13;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
         else {                                                    /* COMMAND words */
@@ -120,10 +121,16 @@ int main(int argc, char **argv)
     }
     unsigned game=dosbox_game(typed);
     unsigned kernel=game ? dosbox_setting_load(game) : 0;
+    unsigned memory=game ? dosbox_memory_load(game) : 0;
     if (kernel_override) {
         if (!game) return 2;
         kernel=dosbox_kernel_value(kernel_override);
         if (dosbox_setting_save(game,kernel)) { perror("dosbox: DOS kernel setting"); return 1; }
+    }
+    if (memory_override) {
+        if (!game || (strcmp(memory_override,"locked") && strcmp(memory_override,"paged"))) return 2;
+        memory=dosbox_memory_value(memory_override);
+        if (dosbox_memory_save(game,memory)) { perror("dosbox: DOS memory setting"); return 1; }
     }
     int settings_open=0, settings_repaint=0;
     uint32_t *settings_backup=NULL;
@@ -148,7 +155,8 @@ int main(int argc, char **argv)
     uint64_t fullscreen_notice_until=0;
     uint32_t fullscreen_error_seen=0;
     if (loading) dosbox_panel(&canvas, name, icon, NULL, detail, 0);
-    if (game) fprintf(stderr,"dosbox: DOS kernel: %s; F12 opens game settings\n",dosbox_kernel_label(kernel));
+    if (game) fprintf(stderr,"dosbox: DOS kernel: %s; memory: %s; F12 opens game settings\n",
+                      dosbox_kernel_label(kernel),dosbox_memory_label(memory));
     struct ciuki_message m;
     desk_message(&m, DESK_HELLO, 4);
     if (send_packet(channel, &m)) goto done;
@@ -158,7 +166,7 @@ int main(int argc, char **argv)
     m.fd_count = 1; m.fds[0] = surface;
     if (send_packet(channel, &m)) goto done;
     command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
-    c.launch.kernel=kernel; c.launch.game=game;
+    c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
         snprintf(detail, sizeof(detail), "%s", kernel==CIUKI_DOSVM_FREEDOS13 ?
@@ -215,6 +223,11 @@ int main(int argc, char **argv)
                         if (dosbox_setting_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
                         else { kernel=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
                     }
+                    if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_3 || packet.event.code==CIUKI_KEY_4)) {
+                        unsigned choice=packet.event.code==CIUKI_KEY_4 ? CIUKI_DOSVM_MEMORY_LOCKED : CIUKI_DOSVM_MEMORY_PAGED;
+                        if (dosbox_memory_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
+                        else { memory=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
+                    }
                     if (packet.event.code==CIUKI_KEY_ESCAPE && packet.event.value==1) {
                         settings_open=0;
                         dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1;
@@ -246,7 +259,9 @@ int main(int argc, char **argv)
             settings_repaint=0;
         }
         if (settings_open && configured) {
-            dosbox_kernel_panel(&canvas,dosbox_kernel_label(kernel),setting_detail);
+            char selection[96];
+            snprintf(selection,sizeof(selection),"Kernel: %s. Memory: %s.",dosbox_kernel_label(kernel),dosbox_memory_label(memory));
+            dosbox_kernel_panel(&canvas,selection,setting_detail);
             desk_message(&m,DESK_DAMAGE,20);
             desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
             if (send_packet(channel,&m)) goto done;

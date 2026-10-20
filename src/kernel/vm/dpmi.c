@@ -112,14 +112,26 @@ void dpmi_return_cancel(struct dosvm *v)
     dpmi_reload_debug(v);
 }
 
+/* f3-46 (DPMI 0.9 section 15): a lock count above zero keeps a pool page
+ * pinned resident; low pages are always resident. Clearing returns the pin. */
+static void lock_clear(struct dosvm *v, uint32_t page)
+{
+    if (page >= DPMI_LOCK_PAGES || !v->dpmi.lock[page]) return;
+    if (page >= DOSVM_PAGES) dosvm_pool_unpin(v, page << 12, 1);
+    v->dpmi.lock[page] = 0;
+}
 /* Free every host resource without guest help; stats survive. */
 static void reset(struct dosvm *v)
 {
     struct dpmi *d = &v->dpmi;
     struct dpmi_stats stats = d->stats;
+    for (uint32_t p = DOSVM_PAGES; p < DPMI_LOCK_PAGES; p++) lock_clear(v, p);
     for (unsigned i = 0; i < DPMI_BLOCKS; i++)
         if (d->block[i].b.used) dosvm_pool_free(v, &d->block[i].b);
-    if (d->hstack.used) dosvm_pool_free(v, &d->hstack);
+    if (d->hstack.used) {
+        dosvm_pool_unpin(v, d->hstack.base, d->hstack.pages);
+        dosvm_pool_free(v, &d->hstack);
+    }
     memset(d, 0, sizeof(*d));
     d->stats = stats;
     if (g_current == v->task) {
@@ -140,6 +152,11 @@ static int activate(struct dosvm *v, bool bits32)
     d->stats = stats;
     d->bits32 = bits32;
     if (!dosvm_pool_alloc(v, &d->hstack, DPMI_HSTACK_BYTES)) { d->stats.entry_failures++; return -ENOMEM; }
+    /* f3-46: the locked host stack takes interrupt/exception frames from
+     * the monitor; it stays resident for the host's lifetime. */
+    if (dosvm_pool_pin(v, d->hstack.base, d->hstack.pages)) {
+        dosvm_pool_free(v, &d->hstack); d->stats.entry_failures++; return -ENOMEM;
+    }
     d->active = true;
     d->kind[DPMI_IDX_CODE] = d->kind[DPMI_IDX_STACK] = DPMI_HOST;
     dpmi_desc_set(d->ldt[DPMI_IDX_CODE], DPMI_PM_BASE, DPMI_PM_LIMIT, 0xFA, 0);
@@ -268,7 +285,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     for (unsigned i = 0; i < DPMI_BLOCKS; i++)
         if (d->block[i].b.used && d->block[i].owner == id) {
             uint32_t first = d->block[i].b.base >> 12;
-            for (uint32_t p = 0; p < d->block[i].b.pages && first + p < DPMI_LOCK_PAGES; p++) d->lock[first + p] = 0;
+            for (uint32_t p = 0; p < d->block[i].b.pages && first + p < DPMI_LOCK_PAGES; p++) lock_clear(v, first + p);
             dosvm_pool_free(v, &d->block[i].b);
             memset(&d->block[i], 0, sizeof(d->block[i]));
         }
@@ -489,7 +506,7 @@ static int memory_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
     if (!b) return 1;
     uint32_t first = b->b.base >> 12, pages = b->b.pages;
     if (ax == 0x0502) {
-        for (uint32_t p = 0; p < pages; p++) d->lock[first + p] = 0;
+        for (uint32_t p = 0; p < pages; p++) lock_clear(v, first + p);
         dosvm_pool_free(v, &b->b);
         memset(b, 0, sizeof(*b));
         return 0;
@@ -498,10 +515,16 @@ static int memory_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
         if (!size || !dosvm_pool_resize(v, &b->b, size)) return 1;
         uint32_t now = b->b.base >> 12;
         if (now != first) {
-            for (uint32_t p = 0; p < pages && p < b->b.pages; p++) d->lock[now + p] = d->lock[first + p];
-            for (uint32_t p = 0; p < pages; p++) d->lock[first + p] = 0;
+            /* Locks follow the relocated pages: pin the new page before
+             * the old one's pin returns (a failed pin drops that lock). */
+            for (uint32_t p = 0; p < pages && p < b->b.pages; p++) {
+                uint8_t n = d->lock[first + p];
+                if (n && !dosvm_pool_pin(v, (now + p) << 12, 1)) d->lock[now + p] = n;
+                lock_clear(v, first + p);
+            }
+            for (uint32_t p = 0; p < pages; p++) lock_clear(v, first + p);
             b->handle = new_handle(v, (unsigned)(b - d->block));
-        } else for (uint32_t p = b->b.pages; p < pages; p++) d->lock[first + p] = 0;
+        } else for (uint32_t p = b->b.pages; p < pages; p++) lock_clear(v, first + p);
         put32(&f->tf.ebx, &f->tf.ecx, b->b.base);
         put32(&f->tf.esi, &f->tf.edi, b->handle);
         return 0;
@@ -509,8 +532,8 @@ static int memory_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
     return 1;
 }
 
-/* ---- 0600h-0604h, 0702h/0703h: validated page ranges. The host is
- * nonpageable, but lock counts and ranges are kept exactly (0.9 14). ---- */
+/* ---- 0600h-0604h, 0702h/0703h: validated page ranges. f3-46: the pool
+ * is pageable; lock counts pin pool pages resident (0.9 sections 14-15). ---- */
 static bool page_valid(struct dosvm *v, uint32_t page)
 {
     if (page < DOSVM_PAGES) return true;
@@ -555,23 +578,36 @@ static int paging_service(struct dosvm *v, struct v86_frame *f, unsigned ax)
     switch (ax) {
     case 0x0600:
         for (uint32_t p = first; p <= last; p++) if (d->lock[p] == 255) return 1;
+        /* f3-46: a first lock pins (resolving) the pool page; on any
+         * failure none of the region is locked (DPMI 0.9, 0600h). */
+        for (uint32_t p = first; p <= last; p++)
+            if (!d->lock[p] && p >= DOSVM_PAGES && dosvm_pool_pin(v, p << 12, 1)) {
+                for (uint32_t q = first; q < p; q++)
+                    if (!d->lock[q] && q >= DOSVM_PAGES) dosvm_pool_unpin(v, q << 12, 1);
+                return 1;
+            }
         for (uint32_t p = first; p <= last; p++) d->lock[p]++;
         return 0;
     case 0x0601:
         for (uint32_t p = first; p <= last; p++) if (!d->lock[p]) return 1;
-        for (uint32_t p = first; p <= last; p++) d->lock[p]--;
+        for (uint32_t p = first; p <= last; p++)
+            if (!--d->lock[p] && p >= DOSVM_PAGES) dosvm_pool_unpin(v, p << 12, 1);
         return 0;
-    case 0x0702:
+    case 0x0702: {
+        /* Advisory: whole pages become early replacement candidates;
+         * contents are preserved (DPMI 0.9, 0702h). */
+        uint32_t lo = (lin + PAGE_SIZE - 1) >> 12, hi = (lin + size) >> 12;
+        if (hi > lo) dosvm_pool_advise(v, lo << 12, hi - lo);
         return 0;
+    }
     case 0x0703: {
         /* Discard whole pages of the client's own memory blocks only;
          * partial edge pages keep their contents (0.9 15.3). */
         if (!block_of(v, lin, size)) return 1;
         uint32_t lo = (lin + PAGE_SIZE - 1) >> 12, hi = (lin + size) >> 12;
-        uint8_t zero[256] = {0};
-        for (uint32_t p = lo; p < hi; p++)
-            for (uint32_t o = 0; o < PAGE_SIZE; o += sizeof(zero))
-                if (dosvm_write(v, (p << 12) + o, zero, sizeof(zero))) return 1;
+        /* f3-46: locked pages are not discarded (0.9, 0703h); others
+         * return to demand-zero, releasing frame and pager slot. */
+        for (uint32_t p = lo; p < hi; p++) if (!d->lock[p]) dosvm_pool_zero(v, p << 12, 1);
         return 0;
     }
     default: return 1;

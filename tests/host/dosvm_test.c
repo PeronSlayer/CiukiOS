@@ -85,6 +85,13 @@ static void creation_cost_boundary(void)
     if (creation_cost_span > creation_cost_max) creation_cost_max = creation_cost_span;
     creation_cost_span = 0;
 }
+/* f3-46: production-shaped PFN descriptors, reset at allocation and free
+ * as core/pmm.c does; freeing a pinned page fails like pmm_free's panic. */
+static struct mm_page_descriptor host_descriptors[HOST_PAGES];
+struct mm_page_descriptor *pmm_descriptor(uint32_t phys)
+{ return phys / PAGE_SIZE < HOST_PAGES ? &host_descriptors[phys / PAGE_SIZE] : 0; }
+uint32_t pmm_descriptor_count(void) { return HOST_PAGES; }
+bool pmm_page_free(uint32_t pfn) { return pfn >= HOST_PAGES || !allocated[pfn]; }
 uint32_t pmm_alloc(void)
 {
     creation_cost_charge(4000);
@@ -93,7 +100,11 @@ uint32_t pmm_alloc(void)
     for (unsigned n = 0; n < HOST_PAGES; n++) {
         unsigned p = next_pfn; next_pfn += 2;
         if (next_pfn >= HOST_PAGES) next_pfn = 4096 + ((next_pfn & 1) ^ 1);
-        if (!allocated[p]) { allocated[p] = true; page_owner[p] = MM_KERNEL; used_pages++; memset(P2V(p * PAGE_SIZE),0xA5,PAGE_SIZE); return p * PAGE_SIZE; }
+        if (!allocated[p]) {
+            allocated[p] = true; page_owner[p] = MM_KERNEL; used_pages++; memset(P2V(p * PAGE_SIZE),0xA5,PAGE_SIZE);
+            host_descriptors[p] = (struct mm_page_descriptor){.refs = 1, .reserved = MM_KERNEL};
+            return p * PAGE_SIZE;
+        }
     }
     return 0;
 }
@@ -105,7 +116,10 @@ uint32_t pmm_alloc_contig(uint32_t pages)
         unsigned n = 0;
         while (n < pages && !allocated[first + n]) n++;
         if (n != pages) { first += n; continue; }
-        for (n = 0; n < pages; n++) { allocated[first + n] = true; page_owner[first + n] = MM_KERNEL; used_pages++; }
+        for (n = 0; n < pages; n++) {
+            allocated[first + n] = true; page_owner[first + n] = MM_KERNEL; used_pages++;
+            host_descriptors[first + n] = (struct mm_page_descriptor){.refs = 1, .reserved = MM_KERNEL};
+        }
         return first * PAGE_SIZE;
     }
     return 0;
@@ -115,10 +129,18 @@ void ledger_move(uint32_t phys, uint32_t pages, enum mm_owner from, enum mm_owne
     (void)from;
     for (unsigned p = phys / PAGE_SIZE; p < phys / PAGE_SIZE + pages; p++) {
         CHECK(p < HOST_PAGES && allocated[p]); page_owner[p] = to;
+        host_descriptors[p].reserved = (uint16_t)((host_descriptors[p].reserved & ~MM_PAGE_OWNER_MASK) | to);
     }
 }
 uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_NORMAL); return pmm_alloc(); }
-void pmm_free(uint32_t p) { creation_cost_charge(6000); CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; used_pages--; }
+void pmm_free(uint32_t p)
+{
+    creation_cost_charge(6000);
+    CHECK(p >= 0x1000000 && !(p & 4095) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]);
+    CHECK(!host_descriptors[p / PAGE_SIZE].pins && !host_descriptors[p / PAGE_SIZE].io_in_flight);
+    host_descriptors[p / PAGE_SIZE] = (struct mm_page_descriptor){0};
+    allocated[p / PAGE_SIZE] = false; used_pages--;
+}
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages - withheld_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
@@ -421,7 +443,7 @@ static void (*evidence_hook)(void);
 static bool evidence_active = true;
 bool rec_active(void) { return evidence_active; }
 static unsigned disk_records;
-static char tracker_record[256], vm_start_record[256], game_launch_record[256];
+static char tracker_record[256], vm_start_record[256], game_launch_record[256], page_records[3][256];
 static char fault_pc_record[256], fault_regs_record[256], fault_stack_record[256];
 static unsigned fault_pc_records, fault_regs_records, fault_stack_records;
 void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
@@ -433,6 +455,7 @@ void rec_diag_disk_bootlog(const char *probe,const char *fmt,...)
     CHECK(n>0 && n<=240); disk_records++;
     if (strstr(extra, "group=vm_perf_tracker ")) strcpy(tracker_record, wire);
     if (strstr(extra, "group=vm_start ")) strcpy(vm_start_record, wire);
+    if (strstr(extra, "group=vm_perf_page ")) strcpy(page_records[strstr(extra, "part=wait") ? 1 : strstr(extra, "part=cache") ? 2 : 0], wire);
     if (strstr(extra, "group=game_launch ")) strcpy(game_launch_record, wire);
     if (strstr(extra, "group=vm_fault_pc ")) { strcpy(fault_pc_record, wire); fault_pc_records++; }
     if (strstr(extra, "group=vm_fault ")) { strcpy(fault_regs_record, wire); fault_regs_records++; }
@@ -485,6 +508,7 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
+#include "../../src/kernel/vm/dosvm_pool.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
 /* f3-02 production VGA adapter and native window boundary; fakes and cases
@@ -508,7 +532,14 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"
 #include "../../src/kernel/vm/dpmi.c"
+#include "dosvm_paging_model.inc"
 
+/* f3-46: physical pages a VM owns now (the pool only while resident). */
+static unsigned vm_owned_pages(const struct dosvm *v)
+{
+    return DOSVM_PAGES + v->memory.pool.resident + v->memory.pool.dir_pages + v->as.tables + 1 +
+           v->audio.q.page_count + v->read_pages;
+}
 static struct dosvm *create(void)
 { struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP}; CHECK(dosvm_create(&c,&v)==0 && v); CHECK(v->info.state==DOSVM_CREATING && v->info.resident<=DOSVM_LOW_CAP); return v; }
 static void empty(void)
@@ -680,11 +711,14 @@ static struct v86_frame ef(unsigned ax, unsigned dx, unsigned bx)
 #define EMSERR(f) (((f).tf.eax>>8)&255u)
 /* f3-03 memory services (lead, 2026-10-11): XMS/EMS/UMB state machines and the
  * move/resize validators against the fake VM memory; windows are page aliases. */
-static void test_memory_services(void)
+/* f3-46: the same state machines over the locked (eager, resident) and the
+ * default paged pool; only residency differs (aliases resolve on access). */
+static void test_memory_services(bool locked)
 {
-    struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP+4u*1024*1024};
+    struct dosvm *v; struct dosvm_config c={.commitment=DOSVM_LOW_CAP+4u*1024*1024,.memory_locked=locked};
     CHECK(dosvm_create(&c,&v)==0 && v && v->memory.quota==4u*1024*1024 && v->info.pool_quota==v->memory.quota && !v->info.pool_used);
-    for (uint32_t off=0;off<v->memory.quota;off+=PAGE_SIZE) CHECK(as_lookup(&v->as,VM_POOL_BASE+off,0));
+    for (uint32_t off=0;off<v->memory.quota;off+=PAGE_SIZE) CHECK(!!as_lookup(&v->as,VM_POOL_BASE+off,0)==locked);
+    CHECK(v->memory.pool.resident==(locked ? v->memory.quota/PAGE_SIZE : 0) && v->info.pool_locked==locked);
     for (unsigned i=0;i<16;i++) CHECK(!as_lookup(&v->as,0xE0000+i*PAGE_SIZE,0));
     CHECK(as_lookup(&v->as,0xC8000,0)==v->frames[0xC8] && v->memory.frame_segment==0xE000 && v->memory.umb_enabled);
     struct v86_frame f;
@@ -790,13 +824,13 @@ static void test_memory_services(void)
     /* Aliases still mapped at destruction: every page freed exactly once. */
     CHECK(dosvm_create(&c,&v)==0 && v);
     f=ef(0x4300,0,2); CHECK(EMS(v,f) && !EMSERR(f) && DX(f)==1);
-    f=ef(0x4400,1,1); CHECK(EMS(v,f) && !EMSERR(f) && as_lookup(&v->as,0xE0000,0));
+    f=ef(0x4400,1,1); CHECK(EMS(v,f) && !EMSERR(f) && !dosvm_write(v,0xE0000,pattern,1) && as_lookup(&v->as,0xE0000,0));
     f=xf(9,32); CHECK(XMS(v,f) && AX(f)==1);
     destroy(v,true); empty();
     /* Pool backing failure during creation unwinds the whole VM. */
     allocation_calls=0; struct dosvm *t=create(); unsigned n=allocation_calls; destroy(t,true); empty();
     allocation_calls=0; fail_at=n+50; v=(void *)1; CHECK(dosvm_create(0,&v)==-ENOMEM && !v); fail_at=0; empty();
-    printf("DOS memory services: XMS/EMS/UMB state machines and move/resize validators PASS\n");
+    printf("DOS memory services (%s pool): XMS/EMS/UMB state machines and move/resize validators PASS\n",locked ? "locked" : "paged");
 }
 #include "dosvm_devices_test.inc"
 #include "dosvm_video_test.inc"
@@ -822,6 +856,7 @@ static void test_memory_services(void)
 #include "dosvm_disk_cache_test.inc"
 #include "dosvm_zone_memory_test.inc"
 #include "dosvm_conformance_test.inc"
+#include "dosvm_paging_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -836,7 +871,7 @@ int main(void)
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(); test_devices(); test_audio(); test_dpmi();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
     test_video();
     test_vm_audio();
     test_game_audio();
@@ -862,6 +897,7 @@ int main(void)
     test_quake_start();
     CHECK(guest_enters==4 && deletes>1); /* includes f3-40 worker IRQ reentry */
     test_startup_boot();
+    test_pool_paging(); /* f3-46: last, it attaches the production pager */
     free(ram);
     printf("dosvm host tests: PASS (%u checks, max record %u bytes)\n",checks,max_record); return 0;
 }

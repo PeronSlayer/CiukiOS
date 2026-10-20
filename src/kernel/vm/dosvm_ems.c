@@ -33,17 +33,19 @@ static uint8_t ems_map_valid(struct dosvm *v,const struct vm_map map[4])
     }
     return 0;
 }
+/* f3-46: a window page is an alias of a pool page, never a copy. The pool
+ * object publishes it while the page is resident, folds the old alias's
+ * access/dirty history before replacing it, and resolves a fault through
+ * it like one on the pool linear address (dosvm_pool.c). */
 static void ems_map_apply(struct dosvm *v,const struct vm_map map[4])
 {
     for (unsigned i=0;i<4;i++) for (unsigned j=0;j<4;j++) {
-        uint32_t window=(uint32_t)v->memory.frame_segment*16+i*VM_EMS_PAGE+j*PAGE_SIZE;
-        if (!map[i].handle) dosvm_page_remove(v,window);
-        else {
+        uint32_t pool=0;
+        if (map[i].handle) {
             struct vm_ems_handle *h=ems_handle(v,map[i].handle);
-            uint32_t phys=as_lookup(&v->as,h->block.base+map[i].page*VM_EMS_PAGE+j*PAGE_SIZE,0);
-            /* The low page table and all pool backing already exist. */
-            as_map(&v->as,window,phys,PTE_U|PTE_W);
+            pool=h->block.base+map[i].page*VM_EMS_PAGE+j*PAGE_SIZE;
         }
+        dosvm_pool_window(v,i*4+j,pool);
     }
     memcpy(v->memory.map,map,sizeof(v->memory.map));
 }

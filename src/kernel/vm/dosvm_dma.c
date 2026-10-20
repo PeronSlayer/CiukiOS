@@ -6,6 +6,7 @@
  * an address outside it fails locally. No physical DMA is ever programmed.
  * Research: docs/design/f3-acceptance.md, f3-05. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/abi.h>
 #include "dosvm_internal.h"
 
 /* Page register (offset from 80h) of each channel; channel 4 is the cascade. */
@@ -49,6 +50,9 @@ static uint8_t dma_control(struct dosvm_dma *d, unsigned c, unsigned reg, bool w
 uint8_t dosvm_dma_io(struct dosvm *v, uint16_t port, bool write, uint8_t value)
 {
     struct dosvm_dma *d = &v->audio.dma;
+    /* f3-46: any programming may change what a channel addresses; the
+     * worker re-pins at the trap's settle point, after this OUT completes. */
+    if (write) v->memory.pool.dma_dirty = true;
     if (port >= 0x80 && port <= 0x8F) {
         if (write) d->page[port - 0x80] = value;
         return write ? 0xFF : d->page[port - 0x80];
@@ -117,11 +121,37 @@ int dosvm_dma_read(struct dosvm *v, unsigned channel, uint8_t *buffer, unsigned 
         uint32_t phys = c ? ((uint32_t)(d->page[dma_page_of[channel]] & 0xFE) << 16) | ((uint32_t)ch->address << 1)
                           : ((uint32_t)d->page[dma_page_of[channel]] << 16) | ch->address;
         if (type == 0) memset(buffer + done * size, 0xFF, run * size); /* verify: no memory cycle */
-        else if (dosvm_read(v, phys, buffer + done * size, run * size)) { d->faults++; return done ? (int)done : -EFAULT; }
+        else {
+            /* f3-46: the clock work never pages in. A pool page whose pin
+             * is still pending is an unanswered DREQ, not a fault. */
+            int e = dosvm_read_resident(v, phys, buffer + done * size, run * size);
+            if (e) {
+                if (e == -EAGAIN) { v->memory.pool.stats.dma_waits++; v->memory.pool.dma_dirty = true; return (int)done; }
+                d->faults++; return done ? (int)done : -EFAULT;
+            }
+        }
         ch->address = (uint16_t)(down ? ch->address - run : ch->address + run);
         done += run;
-        if (run == left) { ch->count = 0xFFFF; dma_terminal(d, channel); *tc = true; break; }
+        if (run == left) {
+            ch->count = 0xFFFF; dma_terminal(d, channel); *tc = true;
+            v->memory.pool.dma_dirty = true; /* masked at TC: release at the next settle */
+            break;
+        }
         ch->count = (uint16_t)(ch->count - run);
     }
     return (int)done;
+}
+
+bool dosvm_dma_window(struct dosvm *v, unsigned channel, uint32_t *linear, uint32_t *bytes)
+{
+    const struct dosvm_dma *d = &v->audio.dma;
+    if (channel >= 8 || channel == 4) return false;
+    const struct dosvm_dma_channel *ch = &d->ch[channel];
+    unsigned c = channel >> 2;
+    if (ch->masked || (d->command[c] & 4) || (ch->mode >> 6) == 3) return false;
+    /* The 8237 wraps inside its page: the whole window covers any base,
+     * count, direction or autoinitialized restart without recomputation. */
+    *linear = c ? (uint32_t)(d->page[dma_page_of[channel]] & 0xFE) << 16 : (uint32_t)d->page[dma_page_of[channel]] << 16;
+    *bytes = c ? 0x20000u : 0x10000u;
+    return true;
 }

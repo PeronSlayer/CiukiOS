@@ -13,15 +13,21 @@ static void test_maximum_creation(void)
 {
     empty();
     struct dosvm *v;
-    struct dosvm_config c = {.commitment = DOSVM_RESIDENT_CAP};
-    uint64_t total[2], longest[2];
+    /* The f0-41 eager evidence is the per-game locked pool (f3-46). */
+    struct dosvm_config c = {.commitment = DOSVM_RESIDENT_CAP, .memory_locked = true};
+    struct dosvm_config paged = {.commitment = DOSVM_RESIDENT_CAP};
+    uint64_t total[2], longest[2], demand_total[2], demand_longest[2];
+    for (unsigned mode = 0; mode < 2; mode++)
     for (unsigned points = 0; points < 2; points++) {
         creation_cost_ns = creation_cost_span = creation_cost_max = 0;
         creation_cost_enabled = true; creation_cost_points = points != 0;
-        CHECK(!dosvm_create(&c, &v));
-        creation_cost_boundary(); total[points] = creation_cost_ns; longest[points] = creation_cost_max;
+        CHECK(!dosvm_create(mode ? &paged : &c, &v));
+        creation_cost_boundary();
+        (mode ? demand_total : total)[points] = creation_cost_ns;
+        (mode ? demand_longest : longest)[points] = creation_cost_max;
         creation_cost_enabled = false;
-        CHECK(v->memory.quota == VM_POOL_CAP);
+        CHECK(v->memory.quota == VM_POOL_CAP && v->memory.pool.locked == !mode);
+        CHECK(v->memory.pool.resident == (mode ? 0 : VM_POOL_PAGES));
         destroy(v, true); empty();
     }
     CHECK(longest[0] >= 110000000 && longest[1] <= 2000000);
@@ -29,6 +35,13 @@ static void test_maximum_creation(void)
     printf("F0-41 full creation work model: total=%llu->%lluns longest=%llu->%lluns PASS\n",
            (unsigned long long)total[0], (unsigned long long)total[1],
            (unsigned long long)longest[0], (unsigned long long)longest[1]);
+    /* f3-46: demand-zero commitment removes the 6144 allocate/zero/map
+     * operations (~110 ms on the T23 model) from every default creation. */
+    CHECK(demand_longest[1] <= 2000000 && demand_total[1] + 100000000 <= total[1]);
+    printf("f3-46 creation work model (f0-41 costs): locked=%lluns paged=%lluns longest locked=%llu paged=%llu->%lluns PASS\n",
+           (unsigned long long)total[1], (unsigned long long)demand_total[1],
+           (unsigned long long)longest[1], (unsigned long long)demand_longest[0],
+           (unsigned long long)demand_longest[1]);
     creation_alloc_last = allocation_calls; creation_alloc_max = 0;
     preempt_hook = creation_allocation_point;
     CHECK(!dosvm_create(&c, &v));
@@ -105,16 +118,25 @@ static void repeat_teardown_point(void)
 }
 static void test_maximum_teardown(void)
 {
-    for (unsigned failure=0; failure<2; failure++) {
+    /* f3-46: cases 0/1 are the locked (eager) pool; case 2 is the default
+     * paged pool after the guest touched every page: the pool object's own
+     * release loop must keep the same bound as as_destroy's. */
+    const struct dosvm_config locked={.memory_locked=true};
+    for (unsigned failure=0; failure<3; failure++) {
         uint64_t total[2], maximum[2];
         for (unsigned points=0; points<2; points++) {
             empty(); struct dosvm *v=0;
-            if (!failure) CHECK(!dosvm_create(0,&v));
+            if (failure!=1) CHECK(!dosvm_create(failure==2 ? 0 : &locked,&v));
+            if (failure==2) {
+                uint8_t one=1;
+                for (uint32_t i=0;i<VM_POOL_PAGES;i++) CHECK(!dosvm_write(v,VM_POOL_BASE+i*PAGE_SIZE,&one,1));
+                CHECK(v->memory.pool.resident==VM_POOL_PAGES);
+            }
             creation_cost_ns=creation_cost_span=creation_cost_max=0;
             creation_cost_enabled=true; creation_cost_points=points!=0;
-            if (failure) {
+            if (failure==1) {
                 io_fail_at=io_calls+1;
-                CHECK(dosvm_create(0,&v)<0 && !v); io_fail_at=0;
+                CHECK(dosvm_create(&locked,&v)<0 && !v); io_fail_at=0;
             } else {
                 if (points) { teardown_key=dosvm_key(v); preempt_hook=repeat_teardown_point; }
                 destroy(v,false); CHECK(!preempt_hook);
@@ -123,10 +145,10 @@ static void test_maximum_teardown(void)
             total[points]=creation_cost_ns; maximum[points]=creation_cost_max;
             empty();
         }
-        CHECK(maximum[0]>=40000000 && maximum[1]<=2000000);
+        CHECK(maximum[0]>=(failure==2 ? 30000000u : 40000000u) && maximum[1]<=2000000);
         CHECK(total[1]>=total[0] && total[1]<=total[0]*110/100);
         printf("F0-44 %s cleanup: total=%llu->%lluns max=%llu->%lluns no ownership leaks PASS\n",
-               failure ? "late-failed-creation" : "normal-stop",
+               failure==1 ? "late-failed-creation" : failure ? "paged-full-pool" : "normal-stop",
                (unsigned long long)total[0],(unsigned long long)total[1],
                (unsigned long long)maximum[0],(unsigned long long)maximum[1]);
     }

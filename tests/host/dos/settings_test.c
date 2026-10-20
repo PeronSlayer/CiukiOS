@@ -35,7 +35,23 @@ int main(void) {
     assert(!mkdir(path,0755));
     assert(dosbox_setting_save(3,0)==-1);
     assert(!rmdir(path));
+    /* f3-46: the memory mode is a second, optional line; a kernel change
+     * keeps it and a memory change keeps the kernel. */
+    for(unsigned game=1;game<=3;game++) assert(dosbox_memory_load(game)==CIUKI_DOSVM_MEMORY_PAGED);
+    assert(!dosbox_memory_save(2,CIUKI_DOSVM_MEMORY_LOCKED));
+    assert(dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_LOCKED && !dosbox_setting_load(2));
+    assert(!dosbox_setting_save(2,1) && dosbox_setting_load(2)==1 && dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_LOCKED);
+    assert(!dosbox_setting_path(2,path,sizeof(path)));
+    file=fopen(path,"rb"); assert(file); char text[96]={0}; assert(fread(text,1,sizeof(text)-1,file)>0); fclose(file);
+    assert(!strcmp(text,"DOS kernel=freedos-1.3\nDOS memory=locked\n"));
+    assert(!dosbox_memory_save(2,CIUKI_DOSVM_MEMORY_PAGED) && dosbox_setting_load(2)==1 && !dosbox_memory_load(2));
+    file=fopen(path,"wb"); assert(file); fputs("DOS kernel=ciukidos\nDOS memory=locked\nextra\n",file); fclose(file);
+    assert(!dosbox_setting_load(2) && !dosbox_memory_load(2));
+    file=fopen(path,"wb"); assert(file); fputs("DOS kernel=ciukidos\nDOS memory=fixed\n",file); fclose(file);
+    assert(!dosbox_setting_load(2) && !dosbox_memory_load(2));
+    assert(dosbox_settings_save(2,0,2)==-1 && dosbox_memory_save(0,1)==-1 && dosbox_memory_save(4,1)==-1);
+    assert(dosbox_memory_value("locked")==CIUKI_DOSVM_MEMORY_LOCKED && !dosbox_memory_value("paged") && !dosbox_memory_value(NULL));
     assert(!dosbox_setting_path(1,path,sizeof(path))); assert(!unlink(path));
     assert(!dosbox_setting_path(2,path,sizeof(path))); assert(!unlink(path));
-    puts("H51-06 preferences PASS missing/invalid/independent/override/failed-save");
+    puts("H51-06 preferences PASS missing/invalid/independent/override/failed-save; f3-46 memory mode");
 }

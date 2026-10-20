@@ -563,6 +563,12 @@ static int video_string_run(void *arg, uint32_t source, uint32_t dest, unsigned 
         (v->vga.gc[6] & 0x0e) != 4 || (v->vga.gc[5] & 0x18) || mode > 1 ||
         (!mode && (v->vga.gc[1] || v->vga.gc[3] || v->vga.gc[8] != 255)) ||
         (mode && (!move || !vram(source) || size != 1))) return 0;
+    /* f3-46: a RAM source is made resident before any plane changes. A
+     * burst preflight never blocks: a source not resident ends the burst,
+     * and the CPU repeats the instruction natively (its fault resolves). */
+    if (move && !vram(source) &&
+        (preflight ? dosvm_pool_resident(v, src_low, bytes) : dosvm_pool_prefault(v, src_low, bytes, false)))
+        return 0;
     if (preflight) return 1;
     if (!move || vram(source)) {
         if (!cvga_planar_run(&v->vga, dest - 0xA0000, 0, source - 0xA0000,
@@ -575,10 +581,16 @@ static int video_string_run(void *arg, uint32_t source, uint32_t dest, unsigned 
             if (run > remaining) run = remaining;
             uint8_t element[4];
             const uint8_t *p;
-            if (off + size > PAGE_SIZE) {
+            uint32_t phys = 0;
+            int frame = off + size > PAGE_SIZE ? -EFAULT : dosvm_pool_frame(v, source, false, false, &phys);
+            if (frame == -ENOENT) phys = as_lookup(&v->as, source, 0);
+            else if (frame) phys = 0;
+            if (!phys) {
+                /* Crossing a page, or (never, after the prefault above and
+                 * under the transaction hold) a pool page not resident. */
                 if (dosvm_read(v, source, element, size)) panic("dosvm: validated REP source");
                 p = element; run = 1;
-            } else p = P2V(as_lookup(&v->as, source, 0));
+            } else p = P2V(phys);
             if (!cvga_planar_run(&v->vga, dest - 0xA0000, p, 0, size, run, back, true, value))
                 panic("dosvm: validated planar REP");
             remaining -= run;
@@ -598,7 +610,9 @@ static int burst_read(void *arg, uint32_t address, uint8_t *value)
     struct video_burst_bus *b = arg;
     if (b->preflight) {
         if (vram(address)) { *value = cvga_peek_vram(&b->v->vga, address); return 0; }
-        return dosvm_read(b->v, address, value, 1);
+        /* f3-46: never page in between burst instructions; a pool page that
+         * is not resident ends the burst before this instruction commits. */
+        return dosvm_read_resident(b->v, address, value, 1);
     }
     if (vram(address)) b->vram = true;
     return video_read(b->v, address, value);

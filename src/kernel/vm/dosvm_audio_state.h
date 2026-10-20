@@ -158,6 +158,9 @@ void dosvm_audio_irq_enter(struct dosvm *, unsigned irq);
 void dosvm_dma_init(struct dosvm *);
 uint8_t dosvm_dma_io(struct dosvm *, uint16_t port, bool write, uint8_t value);
 int dosvm_dma_read(struct dosvm *, unsigned channel, uint8_t *buffer, unsigned transfers, bool *terminal);
+/* f3-46: the guest window an unmasked, serviceable channel may address
+ * (64 KiB page, or 128 KiB for a word channel); false when it cannot run. */
+bool dosvm_dma_window(struct dosvm *, unsigned channel, uint32_t *linear, uint32_t *bytes);
 /* OPL3 */
 void dosvm_opl_init(struct dosvm *);
 uint8_t dosvm_opl_io(struct dosvm *, unsigned port, bool write, uint8_t value);

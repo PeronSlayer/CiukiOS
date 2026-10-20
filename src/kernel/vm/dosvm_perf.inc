@@ -238,6 +238,22 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
     if (m.allocations) rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_mem vm=%u gen=%u n=%u allocs=%u request=%u after=%u/%u",
         v->info.key.id, v->info.key.generation, n, m.allocations, m.requested, m.after_largest, m.after_total);
     unsigned id = v->info.key.id, gen = v->info.key.generation;
+    /* f3-46 (contract D1): pool quota/commitment/residency/pins, page-in
+     * waits and the guest IRQ delay split; cache and overlay index rows. */
+    if (v->memory.pool.pages) {
+        uint32_t page_flags = irq_save();
+        struct vm_pool_stats ps = v->memory.pool.stats;
+        uint32_t resident = v->memory.pool.resident, swapped = v->memory.pool.swapped, pinned = v->memory.pool.pinned;
+        irq_restore(page_flags);
+        rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_page vm=%u gen=%u n=%u mode=%s quota=%u resident=%u swapped=%u pinned=%u zero=%u in=%u in_err=%u out=%u clean=%u",
+            id, gen, n, v->memory.pool.locked ? "locked" : "paged", v->memory.pool.pages, resident, swapped, pinned,
+            ps.zero_fills, ps.page_ins, ps.page_in_errors, ps.pageouts, ps.clean_discards);
+        rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_page vm=%u gen=%u n=%u part=wait waits=%u wait_us=%llu max_us=%u late=%u frame=%u dma=%u irq_ms=%llu/%llu/%llu",
+            id, gen, n, ps.waits, ps.wait_us, ps.max_wait_us, ps.late_waits, ps.frame_waits, ps.dma_waits,
+            ps.irq_page_ms, ps.irq_guest_if_ms, ps.irq_host_ms);
+        rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_page vm=%u gen=%u n=%u part=cache pages=%u reclaimed=%u regrown=%u overlay_rows=%u",
+            id, gen, n, v->read_pages, v->read_reclaimed, v->read_regrown, v->sector_count);
+    }
     uint64_t wall = (uint64_t)s->ms * 1000, cpu = s->guest_us + s->monitor_us;
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_cpu vm=%u gen=%u n=%u ms=%u guest_us=%llu monitor_us=%llu",
                   id, gen, n, s->ms, s->guest_us, s->monitor_us);

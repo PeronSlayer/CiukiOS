@@ -1182,6 +1182,9 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
         uint32_t off = a32 ? *index : (uint16_t)*index, lin, value = 0;
         if (!dpmi_ptr(v, sel, off, bytes, !write, &lin)) return dpmi_exception(v, f, 13, 0);
         if (write && dosvm_read(v, lin, &value, bytes)) return dpmi_exception(v, f, 13, 0);
+        /* f3-46: INS resolves its destination before the port read (the
+         * device effect); a contained backing failure stops the VM. */
+        if (!write && dosvm_pool_prefault(v, lin, bytes, true)) return -EFAULT;
         int e = v86_io(&v->monitor, (uint16_t)f->tf.edx, bytes, write, &value);
         if (e) return e < 0 ? e : -EFAULT;
         if (!write && dosvm_write(v, lin, &value, bytes)) return dpmi_exception(v, f, 13, 0);

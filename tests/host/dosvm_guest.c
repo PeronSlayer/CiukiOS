@@ -360,6 +360,7 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
 #include "../../src/kernel/vm/dosvm_xms.c"
+#include "../../src/kernel/vm/dosvm_pool.c"
 #include "../../src/kernel/vm/dosvm_umb.c"
 #include "../../src/kernel/vm/dosvm_ems.c"
 /* f3-02 VGA adapter and f3-05 audio devices, created with every VM since

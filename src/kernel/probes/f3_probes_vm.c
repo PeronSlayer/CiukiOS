@@ -101,9 +101,13 @@ fail:
 }
 static bool ledger_equal(const struct dosvm_ledger *a, const struct dosvm_ledger *b)
 {
+    /* f3-46: pool commitment, paged-out and pinned pages, reclaimable
+     * cache and overlay rows return to baseline with everything else. */
     return a->vms == b->vms && a->tasks == b->tasks && a->pages == b->pages &&
            a->handles == b->handles && a->devices == b->devices &&
-           a->reserved == b->reserved && a->resident == b->resident;
+           a->reserved == b->reserved && a->resident == b->resident &&
+           a->committed == b->committed && a->swapped == b->swapped && a->pinned == b->pinned &&
+           a->cache == b->cache && a->overlay_rows == b->overlay_rows;
 }
 
 static int probe_f3_vm_boot(void)

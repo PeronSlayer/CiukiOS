@@ -130,6 +130,7 @@ struct dosvm_vector_cost {
 #define DOSVM_READ_PAGES (DOSVM_READ_SECTORS * 512u / PAGE_SIZE)
 struct dos_file;
 struct dos_file_ops;
+struct vm_cache_block;
 struct dos_file_volume;
 struct dosvm {
     struct dosvm_info info;
@@ -192,11 +193,16 @@ struct dosvm {
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */
     /* Private 64 KiB LRU blocks, merging base and authoritative overlay.
-     * Buffers are PMM-owned MM_VM_PRIVATE pages inside the VM commitment. */
+     * Buffers are PMM-owned MM_VM_PRIVATE pages inside the VM commitment.
+     * f3-46: each block is a clean, reclaimable page of the f0-48 global
+     * replacement (track); a reclaimed block has phys 0 and regrows on a
+     * miss without pressure. Never guest-visible. */
     struct {
         uint32_t lba, count, phys;
         unsigned previous, next;
+        struct vm_cache_block *track;
     } read_cache[DOSVM_READ_BLOCKS];
+    uint32_t read_reclaimed, read_regrown;
     unsigned read_recent, read_oldest, read_capacity, read_pages;
     char overlay_path[128];
     struct { uint32_t lba, offset; } sectors[DOSVM_OVERLAY_SECTORS];

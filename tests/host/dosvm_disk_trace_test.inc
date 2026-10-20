@@ -40,7 +40,7 @@ static void disk_trace(const char *name, unsigned zone_mb, bool hot, bool fallba
     CHECK(cache_pages == v->read_pages);
     printf("f3-47 accounting trace=%s commitment=%u resident=%u pool=%u cache=%u private=%u struct=%zu\n",
         name, v->info.commitment, v->info.resident, v->memory.quota, v->read_pages * PAGE_SIZE,
-        v->info.resident - v->memory.quota, sizeof(*v));
+        v->info.resident - v->memory.pool.resident * PAGE_SIZE, sizeof(*v));
     g_current = v->task; /* no controller copy checkpoints in INT 13h */
     g_tsc_per_ms = 1000000; tsc_clock_hook = disk_trace_clock;
     uint32_t seed = 47, zone_used = 0;

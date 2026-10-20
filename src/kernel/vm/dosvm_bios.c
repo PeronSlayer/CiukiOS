@@ -476,6 +476,9 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
 {
     struct dosvm *v = arg;
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
+    /* f3-46: a device effect inside the transaction; a page wait after it
+     * is counted as late (the prefault rules should keep it at zero). */
+    if (v->memory.pool.hold) v->memory.pool.effects++;
     /* Attribute a batched exit to its first port. No extra clock per OUT. */
     if (v->perf.trap_active && !v->perf.io_valid) {
         v->perf.io_port = port; v->perf.io_valid = true;

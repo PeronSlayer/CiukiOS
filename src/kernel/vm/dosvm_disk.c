@@ -76,15 +76,60 @@ static int base_lookup(char path[24], bool bundled)
 }
 int dosvm_workload_base(char path[24]) { return base_lookup(path, false); }
 int dosvm_window_base(char path[24]) { return base_lookup(path, true); }
+/* f3-46 (contract D1): a cache block is clean (the overlay is written
+ * synchronously before the cache is updated), so the global replacement
+ * discards it without I/O. One tracker per 64 KiB run; it can outlive the
+ * VM while the reclaim queue holds it (close orphans it, release frees). */
+struct vm_cache_block {
+    struct reclaim_page reclaim; /* phys: the run's first page */
+    struct dosvm *vm;
+    unsigned slot;
+    uint16_t holds;
+    bool evict, busy;
+};
+static const struct reclaim_backing cache_provider;
+static void run_free(uint32_t phys)
+{
+    for (unsigned p = 0; p < DOSVM_READ_PAGES; p++) mm_free(phys + p * PAGE_SIZE, MM_VM_PRIVATE);
+}
+/* A new 64 KiB run and its tracker, or 0. Never waits for reclaim. */
+static uint32_t cache_block_new(struct dosvm *v, unsigned slot)
+{
+    struct vm_cache_block *t = kmalloc(sizeof(*t));
+    if (!t) return 0;
+    uint32_t phys = pmm_alloc_contig(DOSVM_READ_PAGES);
+    if (!phys) { kfree(t); return 0; }
+    mm_claim(phys, DOSVM_READ_PAGES, MM_VM_PRIVATE);
+    *t = (struct vm_cache_block){.reclaim = {.phys = phys, .generation = v->info.key.generation,
+        .owner = MM_VM_PRIVATE, .owner_id = v->as.pd_phys, .backing = &cache_provider}, .vm = v, .slot = slot};
+    v->read_cache[slot].phys = phys; v->read_cache[slot].count = 0; v->read_cache[slot].track = t;
+    v->read_pages += DOSVM_READ_PAGES;
+    v->info.resident += DOSVM_READ_PAGES * PAGE_SIZE;
+    if (reclaim_track) reclaim_track(&t->reclaim);
+    return phys;
+}
+/* Leave the VM: free now, or orphan to a queued page-out (release frees). */
+static void cache_block_drop(struct dosvm *v, unsigned slot)
+{
+    struct vm_cache_block *t = v->read_cache[slot].track;
+    uint32_t phys = v->read_cache[slot].phys;
+    v->read_cache[slot].phys = v->read_cache[slot].count = 0; v->read_cache[slot].track = 0;
+    if (!phys) return;
+    v->read_pages -= DOSVM_READ_PAGES;
+    v->info.resident -= DOSVM_READ_PAGES * PAGE_SIZE;
+    if (t) {
+        uint32_t flags = irq_save();
+        if (t->holds) { t->vm = 0; irq_restore(flags); return; }
+        if (reclaim_untrack) reclaim_untrack(&t->reclaim);
+        irq_restore(flags);
+        kfree(t);
+    }
+    run_free(phys);
+}
 static void read_cache_close(struct dosvm *v)
 {
     for (unsigned i = 0; i < v->read_capacity; i++) {
-        if (v->read_cache[i].phys) {
-            for (unsigned p = 0; p < DOSVM_READ_PAGES; p++)
-                mm_free(v->read_cache[i].phys + p * PAGE_SIZE, MM_VM_PRIVATE);
-            v->read_pages -= DOSVM_READ_PAGES;
-            v->info.resident -= DOSVM_READ_PAGES * PAGE_SIZE;
-        }
+        cache_block_drop(v, i);
         memset(&v->read_cache[i], 0, sizeof(v->read_cache[i]));
         /* F0-44: one block (16 pages) released and published per span;
          * the caller holds no disk gate here (close/open failure paths). */
@@ -100,7 +145,9 @@ static int read_cache_open(struct dosvm *v)
      * Never reduce the guest pool or silently enlarge its admission. */
     const unsigned block_bytes = DOSVM_READ_SECTORS * 512u;
     uint32_t worker = v->task ? 0 : KSTACK_SIZE + PAGE_SIZE + sizeof(struct task);
-    uint64_t used = (uint64_t)v->info.resident + worker;
+    /* f3-46: the pool's whole quota is committed whether or not resident. */
+    uint64_t used = (uint64_t)v->info.resident + worker +
+        (uint64_t)(v->memory.pool.pages - v->memory.pool.resident) * PAGE_SIZE;
     uint32_t headroom = used <= v->info.commitment ? v->info.commitment - used : 0;
     unsigned blocks = (v->base_sectors + DOSVM_READ_SECTORS - 1) / DOSVM_READ_SECTORS;
     if (blocks > DOSVM_READ_BLOCKS) blocks = DOSVM_READ_BLOCKS;
@@ -109,15 +156,9 @@ static int read_cache_open(struct dosvm *v)
     if (blocks * block_bytes > headroom) return -ENOMEM;
     v->read_capacity = blocks;
     for (unsigned i = 0; i < blocks; i++) {
-        uint32_t phys = pmm_alloc_contig(DOSVM_READ_PAGES);
-        if (!phys) { read_cache_close(v); return -ENOMEM; }
-        mm_claim(phys, DOSVM_READ_PAGES, MM_VM_PRIVATE);
-        v->read_cache[i].phys = phys;
-        v->read_cache[i].count = 0;
         v->read_cache[i].previous = i ? i - 1 : blocks;
         v->read_cache[i].next = i + 1;
-        v->read_pages += DOSVM_READ_PAGES;
-        v->info.resident += DOSVM_READ_PAGES * PAGE_SIZE;
+        if (!cache_block_new(v, i)) { read_cache_close(v); return -ENOMEM; }
         /* F0-41: allocation published; no disk gate or partial I/O held. */
         kpreempt_point();
     }
@@ -135,11 +176,9 @@ static void disk_gate_drop(struct dosvm *v);
  * The open file's FAT cluster cursor (f3-51c) now continues each read from
  * the previous one's last cluster, so this loop is linear in the chain.
  * Block 0 is the buffer; its count stays 0, so it publishes no cached data. */
-static int base_hash(struct dosvm *v, uint32_t size)
+static int base_hash_read(struct dosvm *v, uint8_t *buffer, uint32_t size)
 {
     const unsigned block_bytes = DOSVM_READ_SECTORS * 512u;
-    if (!v->read_capacity || v->read_cache[0].count) return -EINVAL;
-    uint8_t *buffer = P2V(v->read_cache[0].phys);
     uint64_t position = 0;
     disk_gate_take(v);
     int e = vfs_seek(&v->disk_table, v->base, 0, VFS_SEEK_SET, &position);
@@ -160,6 +199,17 @@ static int base_hash(struct dosvm *v, uint32_t size)
     }
     sha256_final(&hash, binary); sha256_hex(binary, v->base_sha256);
     return 0;
+}
+static int base_hash(struct dosvm *v, uint32_t size)
+{
+    if (!v->read_capacity || v->read_cache[0].count || !v->read_cache[0].phys) return -EINVAL;
+    /* f3-46: block 0 is the hash buffer; the reclaimer must not take it
+     * while the gate is dropped between reads. */
+    struct vm_cache_block *track = v->read_cache[0].track;
+    if (track) track->busy = true;
+    int e = base_hash_read(v, P2V(v->read_cache[0].phys), size);
+    if (track) track->busy = false;
+    return e;
 }
 /* f3-51c: SHA-256 of game/kernel bases per content version for the session,
  * bounded LRU. vfs_handle_version names the volume attachment and media
@@ -355,6 +405,34 @@ static void read_promote(struct dosvm *v, unsigned slot)
     v->read_cache[v->read_recent].previous = slot;
     v->read_recent = slot;
 }
+bool ledger_pressure(void) __attribute__((weak));
+static void cache_touch(struct dosvm *v, unsigned slot)
+{
+    /* Access history for the global second chance (no translation maps it). */
+    struct mm_page_descriptor *d = pmm_descriptor ? pmm_descriptor(v->read_cache[slot].phys) : 0;
+    if (d) d->reserved |= MM_PAGE_TOUCHED;
+}
+static bool cache_slot_busy(const struct dosvm *v, unsigned slot)
+{ return v->read_cache[slot].track && v->read_cache[slot].track->busy; }
+/* f3-46: an empty resident block; else regrow a reclaimed block while the
+ * system is out of pressure (never waiting for reclaim); else the least
+ * recently used resident block; read_capacity when none is usable. */
+static unsigned cache_victim(struct dosvm *v)
+{
+    unsigned reclaimed = v->read_capacity;
+    for (unsigned i = 0; i < v->read_capacity; i++) if (!v->read_cache[i].count) {
+        if (v->read_cache[i].phys && !cache_slot_busy(v, i)) return i;
+        if (!v->read_cache[i].phys && reclaimed == v->read_capacity) reclaimed = i;
+    }
+    if (reclaimed < v->read_capacity && !(ledger_pressure && ledger_pressure()) && cache_block_new(v, reclaimed)) {
+        v->read_regrown++;
+        return reclaimed;
+    }
+    for (unsigned i = v->read_oldest, n = 0; i < v->read_capacity && n < v->read_capacity;
+         i = v->read_cache[i].previous, n++)
+        if (v->read_cache[i].phys && !cache_slot_busy(v, i)) return i;
+    return v->read_capacity;
+}
 static unsigned read_find(struct dosvm *v, uint32_t lba)
 {
     for (unsigned i = 0; i < v->read_capacity; i++)
@@ -378,13 +456,14 @@ static int disk_read_locked(struct dosvm *v, uint32_t lba, void *sector)
     unsigned slot = read_find(v, lba);
     if (slot < v->read_capacity) {
         memcpy(sector, (uint8_t *)P2V(v->read_cache[slot].phys) + (lba - v->read_cache[slot].lba) * 512u, 512);
-        read_promote(v, slot); disk_cache_result(v, true);
+        read_promote(v, slot); disk_cache_result(v, true); cache_touch(v, slot);
         return 0;
     }
     disk_cache_result(v, false);
     if (!v->read_capacity) return read_sector_uncached(v, lba, sector);
-    slot = v->read_oldest;
-    for (unsigned i = 0; i < v->read_capacity; i++) if (!v->read_cache[i].count) { slot = i; break; }
+    slot = cache_victim(v);
+    if (slot == v->read_capacity) return read_sector_uncached(v, lba, sector);
+    cache_touch(v, slot);
     uint32_t start = lba & ~(DOSVM_READ_SECTORS - 1u);
     unsigned count = start < v->base_sectors ? v->base_sectors - start : 0;
     if (count > DOSVM_READ_SECTORS) count = DOSVM_READ_SECTORS;
@@ -521,3 +600,48 @@ int dosvm_disk_close(struct dosvm *v, bool forced)
     read_cache_close(v);
     return error;
 }
+
+/* ---- f3-46 provider: VM read-cache blocks in the f0-48 replacement.
+ * valid/retain/release run under IRQ exclusion; prepare/finish in pager
+ * task context. A block in use (disk gate, hash buffer) is never taken. ---- */
+static struct vm_cache_block *cache_block_of(struct reclaim_page *p)
+{ return (struct vm_cache_block *)(void *)((char *)p - offsetof(struct vm_cache_block, reclaim)); }
+static bool cache_block_live(const struct vm_cache_block *t)
+{
+    const struct dosvm *v = t->vm;
+    return v && !t->busy && !v->disk_busy && t->slot < v->read_capacity && v->read_cache[t->slot].track == t;
+}
+static bool cache_block_valid(struct reclaim_page *p) { return cache_block_live(cache_block_of(p)); }
+static void cache_block_retain(struct reclaim_page *p) { cache_block_of(p)->holds++; }
+static bool cache_block_release(struct reclaim_page *p)
+{
+    struct vm_cache_block *t = cache_block_of(p);
+    if (t->holds) t->holds--;
+    if (t->holds || (t->vm && !t->evict)) return false;
+    if (reclaim_untrack) reclaim_untrack(p);
+    run_free(p->phys);
+    kfree(t);
+    return true;
+}
+static void cache_block_prepare(struct reclaim_page *p, struct reclaim_io *io, void *buffer)
+{
+    (void)buffer;
+    struct vm_cache_block *t = cache_block_of(p);
+    io->slot = 0; /* clean: the base image and overlay hold every byte */
+    io->outcome = !t->vm ? RECLAIM_GONE : cache_block_live(t) ? RECLAIM_CLEAN : RECLAIM_DEFER;
+}
+static bool cache_block_finish(struct reclaim_page *p, const struct reclaim_io *io, bool clean)
+{
+    struct vm_cache_block *t = cache_block_of(p);
+    struct dosvm *v = t->vm;
+    if (!v || io->outcome != RECLAIM_CLEAN || !clean || !cache_block_live(t)) return true;
+    unsigned slot = t->slot;
+    v->read_cache[slot].phys = v->read_cache[slot].count = 0; v->read_cache[slot].track = 0;
+    v->read_pages -= DOSVM_READ_PAGES;
+    v->info.resident -= DOSVM_READ_PAGES * PAGE_SIZE;
+    v->read_reclaimed++;
+    t->evict = true; /* release frees the run after the queue drops its pin */
+    return true;
+}
+static const struct reclaim_backing cache_provider = {cache_block_valid, cache_block_retain, cache_block_release,
+    cache_block_finish, cache_block_prepare, 0};

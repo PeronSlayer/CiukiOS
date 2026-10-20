@@ -1202,6 +1202,11 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
 #define CIUKI_DOSVM_GAME_COUNT 3u
+/* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
+ * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS
+ * memory locked"). Any other value returns EINVAL. */
+#define CIUKI_DOSVM_MEMORY_PAGED 0u
+#define CIUKI_DOSVM_MEMORY_LOCKED 1u
 #define CIUKI_DOSVM_VIDEO_READY 1u /* STATUS.changed launch flags */
 #define CIUKI_DOSVM_LAUNCH_FAILED 2u
 #define CIUKI_DOSVM_FULL_SCREEN 4u /* STATUS.changed */
@@ -1224,7 +1229,7 @@ struct ciuki_dosvm_command {
     char name[32]; /* 40 */
     union {
         struct ciuki_input_event event; /* 72: INPUT */
-        struct { uint32_t kernel, game, reserved[8]; } launch; /* CREATE input */
+        struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
         struct { uint32_t bands[2], reserved[8]; } presentation; /* PRESENT_BANDS output */
     };
     struct ciuki_rect damage; /* 112 */
@@ -1505,6 +1510,7 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, surface_fd) == 16,
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, name) == 40, "ciuki_dosvm_command.name offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.kernel) == 72, "ciuki_dosvm_command.kernel offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.game) == 76, "ciuki_dosvm_command.game offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.memory) == 80, "ciuki_dosvm_command.memory offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[0]) == 72, "ciuki_dosvm_command.bands low offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[1]) == 76, "ciuki_dosvm_command.bands high offset");

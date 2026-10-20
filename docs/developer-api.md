@@ -2054,6 +2054,15 @@ a FreeDOS override is permitted only for an explicit game, never the shell.
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
 #define CIUKI_DOSVM_GAME_COUNT 3u
+```
+
+f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
+per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS
+memory locked"). Any other value returns EINVAL.
+
+```c
+#define CIUKI_DOSVM_MEMORY_PAGED 0u
+#define CIUKI_DOSVM_MEMORY_LOCKED 1u
 #define CIUKI_DOSVM_VIDEO_READY 1u
 ```
 
@@ -2151,7 +2160,7 @@ union {
 72: INPUT
 
 ```c
-struct { uint32_t kernel, game, reserved[8]; } launch;
+struct { uint32_t kernel, game, memory, reserved[7]; } launch;
 ```
 
 CREATE input

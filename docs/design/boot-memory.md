@@ -110,6 +110,12 @@ and cold counts partition each physical owner's resident count. Process
 allocation identities limit queue admission to eight pages per owner per
 slice; recently sampled hot pages are always spared. DOS pools remain with
 their existing owner/pins and are not made pageable by this change.
+f3-46 (2026-10-20) makes the default DOS pool pageable through its own
+provider (`vm/dosvm_pool.c`, see the DOS/DPMI contract's "F3-46 pageable
+pool"), and restricts sampling: A/D bits are cleared and folded only for
+unpinned frames of `MM_USER_PRIVATE`, `MM_USER_SHARED` and `MM_VM_POOL`.
+Device, kernel and VM-private translations (the DOS VGA window) and pinned
+frames (the DOS VBE buffer) keep their bits for their owners' dirty harvest.
 
 The 32-entry modified-page interface carries non-reused tickets, PFN and
 object generation. Only a registered valid backing provider can enter it;
