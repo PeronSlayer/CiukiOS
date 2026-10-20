@@ -16,3 +16,16 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. Do not change DPMI dispatch, PIC programming or the approved DOS compatibility matrix; no CD audio. No new `panic()` paths; no production-behaviour change under `#ifndef NDEBUG`.
+
+## Lead review (2026-10-20 10:20): delivery accepted, decisions
+
+The delivery (worktree commit `52001f36`, Claude Opus session, report `build/codex/f3-46-report.md`, validation note `docs/validation/2026-10-20-f3-46-pageable-pool.md`) is accepted: the 24 MiB XMS/EMS/DPMI pool as one pageable object per VM on f0-47/f0-48/f0-49 (slot records, demand-zero, EMS aliases, reclaim provider, verified page-in), pins for the DPMI host stack, lock counts, VBE buffer and virtual DMA window, commitment through the ledger with pagefile growth, protected I/O (trap-entry resolution, per-page transfer resolve, resident-only DMA reads, stack prefault before IRQ commit — which fixed a real IF-off frame-build fault), f3-47 cache blocks reclaimable, `launch.memory` option. Paged creation 23.6 ms vs 134.3 ms locked; combined replay `late-grow=0 lead=8 max_gap_us=1772`; DOS audio clock 248/250 µs. This closes item D1 and the resource-management contract sequence (M1–M4, R1–R3, C1–C5, D1). Decisions:
+
+1. **Admission stays RAM-based.** A second VM is refused on 128 MiB as before; pagefile-backed admission would put a game VM's working set on the swap device, which Windows 98 avoided for V86 VMs too.
+2. **Paged is the default**, locked per game through `launch.memory` and the F12 key, until the T23 acceptance says otherwise; the per-game setting is recorded in the launcher settings line.
+3. The VM disk cache stays in `MM_VM_PRIVATE` (no new owner); C5 shared page identities stay recorded as not implemented.
+4. Low memory (conventional, UMB, VGA) stays resident: accepted as a recorded departure from Windows 98 (device access and V86 trap latency).
+5. The `launch.memory` ABI amendment and the `core/vmm.c` sampler and `probes/f3_probes_vm.c` edits outside the file list are accepted (the sampler change fixed VGA/VBE dirty harvest under pressure).
+6. DPMI 0703h no longer zeroes locked pages, per the DPMI 0.9 text: accepted.
+
+The merge into main (`wt/f3-46-merge`) resolves one conflict with f3-51c in `src/kernel/vm/dosvm_disk.c` (f3-46's reclaim-safe `base_hash` wrapper above the f3-51c digest cache, which calls it). Remaining for the lead: the ten-minute DOOM/Wolf3D/Quake acceptance with C3 on the T23; DMA windows inside the EMS page frame wait as DREQ; the 2 µs IRQ-model margin is watched.
