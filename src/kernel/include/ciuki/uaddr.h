@@ -34,6 +34,7 @@ struct ua_extent {
 struct ua_pin {
     uint32_t base, end, prepared_end;
     bool mutation; /* blocks new pins while a protection transaction yields */
+    bool write; /* ua_pin prepared private writable pages */
     struct task *task;
     struct ua_pin *next;
 };

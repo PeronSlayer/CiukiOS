@@ -1164,7 +1164,7 @@ int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, b
     int wait = wait_metadata(u, base, base + bytes);
     if (wait) return wait;
     *pin = (struct ua_pin){ .base = base, .end = base + bytes, .prepared_end=PAGE_ALIGN_DOWN(base),
-        .task = g_current, .next = u->pins };
+        .write = write, .task = g_current, .next = u->pins };
     u->pins = pin;
     for (uint32_t va=PAGE_ALIGN_DOWN(base); bytes && va<(uint64_t)base+bytes; va+=PAGE_SIZE) {
         int err=resolve_page(u,va,write,false);
@@ -1358,12 +1358,32 @@ void ua_destroy(struct uaddr *u)
     as_destroy(&u->as);
 }
 
+/* Syscalls pin their output before a filesystem/mutex lock and copy under
+ * it (byte_io, stat, getdents, channel and input receive). The caller's own
+ * prepared pin already excludes unmap, protection and alias changes and keeps
+ * its pages resident (private when pinned for write), so the copy needs no
+ * second pin. A second pin would wait for a peer thread's metadata walk, and
+ * under a preemption hold that wait is refused with EBUSY: since f0-44 every
+ * walk (even ua_find) holds a whole-space mutation pin across its service
+ * points, so a peer preempted there made read()/stat() fail with EBUSY. */
+static bool own_pin_covers(const struct uaddr *u, uint32_t base, uint32_t bytes, bool write)
+{
+    uint32_t end = base + bytes; /* ua_range bounded it below the stack limit */
+    for (const struct ua_pin *p = u->pins; p; p = p->next)
+        if (p->task == g_current && !p->mutation && (p->write || !write) &&
+            base >= p->base && end <= p->end && end <= p->prepared_end)
+            return true;
+    return false;
+}
+
 extern int copy_user(void *dst, const void *src, uint32_t bytes);
 int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
 {
     struct process *p = proc_current();
     if (!p || !ua_range(p->memory, src, bytes, PROT_READ))
         return -EFAULT;
+    if (own_pin_covers(p->memory, src, bytes, false))
+        return copy_user(dst, (const void *)(uintptr_t)src, bytes);
     struct ua_pin pin;
     int err=ua_pin(p->memory,&pin,src,bytes,false);
     if (err) return err;
@@ -1376,6 +1396,8 @@ int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
     struct process *p = proc_current();
     if (!p || !ua_range(p->memory, dst, bytes, PROT_READ | PROT_WRITE))
         return -EFAULT;
+    if (own_pin_covers(p->memory, dst, bytes, true))
+        return copy_user((void *)(uintptr_t)dst, src, bytes);
     struct ua_pin pin;
     int err=ua_pin(p->memory,&pin,dst,bytes,true);
     if (err) return err;

@@ -335,6 +335,86 @@ static void test_read_interruption(void)
     puts("files interrupted directory read: drained record discarded, buffer/cookie unchanged, retry succeeds PASS");
 }
 
+/* f0-44 regression (desktop wallpaper "Device or resource busy"): every
+ * uaddr walk, even ua_find, holds a whole-space mutation pin across its
+ * service points, so a peer thread of the same process can be preempted
+ * while holding one. read/stat/getdents pin their output before the
+ * filesystem lock and copy under it; the kernel lock holds preemption
+ * (fs_lock_take -> kpreempt_hold, which FS_HOST does not model), and a
+ * second pin there refused with EBUSY instead of waiting. The disk read
+ * below runs under that lock: it publishes the peer walk and the hold. */
+static struct task peer_walker;
+static struct ua_pin peer_walk;
+static bool peer_walk_armed;
+static unsigned peer_walk_reads;
+static void peer_walk_begin(void)
+{
+    struct uaddr *u = client->memory;
+    peer_walk = (struct ua_pin){ .base = 0, .end = CIUKI_MAIN_STACK_LIMIT, .mutation = true,
+                                 .task = &peer_walker, .next = u->pins };
+    u->pins = &peer_walk; g_current->preempt_holds++;
+}
+static void peer_walk_end(void)
+{
+    CHECK(peer_walk.task == &peer_walker && g_current->preempt_holds);
+    ua_unpin(client->memory, &peer_walk); g_current->preempt_holds--;
+    CHECK(!peer_walk.task);
+}
+static int peer_walk_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buffer)
+{
+    int err = saved_read(dev, lba, count, buffer);
+    if (peer_walk_armed) { peer_walk_armed = false; peer_walk_reads++; peer_walk_begin(); }
+    return err;
+}
+static void test_peer_walk_copy(void)
+{
+    struct uaddr *u = client->memory;
+    struct ciuki_mmap_args a = map_args(4 * PAGE_SIZE, PROT_READ | PROT_WRITE);
+    int32_t mapped = ua_mmap(u, &a); CHECK(mapped > 0);
+    uint32_t buffer = (uint32_t)mapped, bytes = 3 * PAGE_SIZE - 77; /* Nested.bin holds 12345 */
+    /* Uncovered user copies under a hold still refuse rather than sleep
+     * with the lock held; the caller's own prepared pin is the contract. */
+    uint8_t probe[64]; memset(probe, 0x3c, sizeof(probe));
+    peer_walk_begin();
+    CHECK(copy_to_user(buffer, probe, sizeof(probe)) == -EBUSY);
+    CHECK(copy_from_user(probe, buffer, sizeof(probe)) == -EBUSY);
+    peer_walk_end();
+    struct ua_pin own;
+    CHECK(!ua_pin(u, &own, buffer, PAGE_SIZE, false));
+    peer_walk_begin();
+    CHECK(!copy_from_user(probe, buffer + 8, sizeof(probe)));
+    CHECK(copy_to_user(buffer + 8, probe, sizeof(probe)) == -EBUSY); /* read pin */
+    peer_walk_end(); ua_unpin(u, &own);
+    CHECK(!ua_pin(u, &own, buffer, PAGE_SIZE, true));
+    peer_walk_begin();
+    CHECK(!copy_to_user(buffer + 8, probe, sizeof(probe)));
+    CHECK(copy_to_user(buffer + PAGE_SIZE - 8, probe, 16) == -EBUSY); /* beyond the pin */
+    peer_walk_end(); ua_unpin(u, &own);
+    uint8_t check[64]; CHECK(!ua_read(u, check, buffer + 8, sizeof(check)) && !memcmp(check, probe, sizeof(check)));
+    /* read(): file data reaches the pinned buffer under the lock. */
+    int fd = file_open(client, "/Fixture dir/Nested.bin", O_RDONLY, 0); CHECK(fd >= 0);
+    uint8_t *expected = malloc(bytes), *actual = malloc(bytes); CHECK(expected && actual);
+    CHECK(io(fd, expected, bytes, false, true, 0) == (int)bytes);
+    saved_read = disk[0].dev.read; disk[0].dev.read = peer_walk_read; peer_walk_reads = 0;
+    cache_invalidate(&cache, &disk[0].dev, false); peer_walk_armed = true;
+    CHECK(call(CIUKI_SYS_READ, fd, buffer, bytes, 0, 0) == (int)bytes);
+    CHECK(peer_walk_reads == 1); peer_walk_end();
+    CHECK(!ua_read(u, actual, buffer, bytes) && !memcmp(actual, expected, bytes));
+    CHECK(file_fd(client, fd)->position == bytes);
+    /* fstat and stat copy their record under the lock as well. */
+    cache_invalidate(&cache, &disk[0].dev, false); peer_walk_armed = true;
+    put_path(buffer + 2 * PAGE_SIZE, "/Fixture dir/Nested.bin");
+    CHECK(call(CIUKI_SYS_STAT, buffer + 2 * PAGE_SIZE, buffer, 0, 0, 0) == 0);
+    CHECK(peer_walk_reads == 2); peer_walk_end();
+    struct ciuki_stat st; CHECK(!ua_read(u, &st, buffer, sizeof(st)) && st.st_size == 12345);
+    disk[0].dev.read = saved_read; peer_walk_armed = false;
+    for (const struct ua_pin *p = u->pins; p; p = p->next) CHECK(p->task != &peer_walker && p != &own);
+    CHECK(!g_current->preempt_holds);
+    free(expected); free(actual); CHECK(!file_close(client, fd));
+    CHECK(!ua_munmap(u, buffer, 4 * PAGE_SIZE));
+    puts("files peer walk: read/stat copy through the caller's own output pin under the filesystem lock, uncovered copies still refused PASS");
+}
+
 static void test_lifetime_and_legacy(void)
 {
     struct vfs_table table; CHECK(!vfs_table_init(&vfs, &table, 2));
@@ -879,7 +959,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
-    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
+    test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
