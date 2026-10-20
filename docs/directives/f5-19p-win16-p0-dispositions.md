@@ -13,3 +13,15 @@
 ## Constraints
 
 Document only; use `rg` and `sed`, never `semble`; no builds or tests needed; no commits, no diary edits. Mark every disposition "proposed" — the lead accepts or changes it before f5-19b launches. English.
+
+## Lead review (2026-10-20 05:45): dispositions accepted, decisions
+
+The delivery (Claude Opus session after an Antigravity session stopped by quota; report `build/codex/f5-19p-report.md`; new section of `docs/design/win16-subsystem-contract.md` from line 1518) is accepted: C01 (per-host kernel LDT, op 10Fh, blocking run call 110h returning every fault/INT to the flat caller), C02 (one Win32 thread per Win16 task, group token released only at Windows 3.1 yield points), G01 (no companion DOS VM; per-host DOS arena at 10000h–9FFFFh), G02 (startup, callback, Catch/Throw, self-loader tables), G04 (message conversion in the Win16 host, procedure-based renumbering), G07 (kernel NE recognition at process creation, group ledger). The previous draft's errors listed in the report are superseded. Decisions:
+
+1. **INT 21h backend of the Win16 host:** the kernel's VMM DOS file API (f3-48…f3-51, merged), not a second implementation over the Win32 file services — one DOS file implementation, the IFS Manager model of the owner's decision 2026-10-19-06. The contract's §8.1 wording is amended accordingly in f5-19b; Q65128's protected-mode failure rows stay.
+2. **Versions seen by 16-bit programs:** `GetVersion` 3.95, DOS 7.10, INT 2Fh 1600h 4.10, proposed; f5-19b confirms the Windows 98 values from the Resource Kit media (`build/rskt/`) or the Windows 98 SDK before freezing them, and records the source.
+3. **x87 emulator fixups:** recorded and patched to native x87 on first execution (the Wine behaviour); f5-19a's refusal is lifted in f5-19b.
+4. **32-bit segments (Win386 extender, Win32s-style code):** refused in this phase; the scope question goes to the owner at the next status, no work depends on it now.
+5. Departures accepted as recorded (no espfix, as in F3; posted pointer messages refused). A launch from outside a group always creates a new group.
+6. The 32-threads-per-process limit stated by the Win32 contract is enforced; it joins f5-19b's kernel part.
+7. Operation numbers 10Fh and 110h are reserved for Win16 in the f5-03 table.
