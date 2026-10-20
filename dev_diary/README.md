@@ -158,3 +158,4 @@ Documenti di design, validazione, fonti esterne.
 | [Chiusura della sequenza Windows 98/ME (f3-46), MCI e AVI (f5-12B), ponte dei font (f5-10C2) e primo caso guest dei dialoghi Win32](2026-10-20-06-chiusura-sequenza-win98-mci-font-dialoghi-guest.md) | 20 ottobre 2026 | integrazione |
 | [Prova T23 dell'immagine 3d18f2db (coda ATA bloccata a 512 byte), integrazione di f5-20D, f5-17B, f5-12B2, f5-15A, f5-07B, f5-07C e f5-22](2026-10-20-07-prova-t23-coda-ata-integrazione-f5-07-f5-22.md) | 20 ottobre 2026 | analisi hardware e integrazione |
 | [Decisioni del proprietario verso la 1.0 Beta: rete in parallelo, QEMU per rete e 3D, OpenGL, Win16 dopo la beta](2026-10-20-08-decisioni-verso-1-0-beta.md) | 20 ottobre 2026 | decisione |
+| [Analisi delle due prove T23 fallite: finestra DOS che affama la VM, ridisegno continuo di Files, contesa su C:](2026-10-20-09-analisi-prove-t23-cause-lag-e-giochi-dos.md) | 20 ottobre 2026 | analisi hardware |
