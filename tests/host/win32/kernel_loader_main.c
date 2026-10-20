@@ -110,7 +110,7 @@ static int store_test(void) {
     w32_ldr_init(&loader,&host.services,&host.peb);
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader,&manifest));
-    CHECK(loader.builtin_count==42); /* f5-20C: 32 + nine absent-DLL W21 stubs; f5-12B: mciavi32 */
+    CHECK(loader.builtin_count==43); /* + f5-15A ciukishell platform exports */
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader,&host.peb,"/builtin-import.exe","","C:\\","\0\0",&main));
     struct w32_module *core=w32_ldr_module(&loader,"ntdll.dll");
@@ -122,6 +122,20 @@ static int store_test(void) {
     CHECK(w32_ldr_proc(&loader,core,"__wine_dbg_header",0,0xffffffffu));
     CHECK(w32_ldr_proc(&loader,core,"__wine_dbg_output",0,0xffffffffu));
     CHECK(w32_ldr_proc(&loader,core,"__wine_dbg_strdup",0,0xffffffffu));
+    struct w32_module *shell,*platform;
+    CHECK(w32_ldr_load(&loader,"shell32.dll",0,&shell));
+    void *folder=w32_ldr_proc(&loader,shell,"SHGetSpecialFolderPathA",0,0xffffffffu);
+    platform=w32_ldr_module(&loader,"ciukishell.dll");
+    CHECK(folder && platform && platform->builtin);
+    CHECK(folder==w32_ldr_proc(&loader,platform,"SHGetSpecialFolderPathA",0,0xffffffffu));
+    CHECK(w32_ldr_proc(&loader,shell,"DllGetClassObject",0,0xffffffffu)==
+          w32_ldr_proc(&loader,platform,"DllGetClassObject",0,0xffffffffu));
+    extern int w32_builtin_version(const char *,uint16_t *);
+    uint16_t version[4];CHECK(w32_builtin_version("C:\\WINDOWS\\SYSTEM\\gdi32.dll",version));
+    int matched=0;for(unsigned i=0;i<loader.builtin_count;i++)if(!w32_strcmp(loader.builtins[i].name,"gdi32.dll")){
+        for(unsigned j=0;j<4;j++)CHECK(version[j]==loader.builtins[i].version[j]);matched=1;
+    }CHECK(matched && !w32_builtin_version("unknown-title.dll",version));
+    CHECK(w32_ldr_free(&loader,shell));
     w32_ldr_shutdown(&loader);RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
     puts("PASS kernel builtin store imports helpers pinning");return 0;
 }

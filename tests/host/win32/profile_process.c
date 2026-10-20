@@ -28,6 +28,9 @@ static DWORD error;
 static int endpoint=-1;
 DWORD W32API GetLastError(void){return error;}
 void W32API SetLastError(DWORD e){error=e;}
+DWORD W32API GetFullPathNameA(const char *s,DWORD n,char *out,char **part){(void)part;if(strlen(s)>=n)return (DWORD)strlen(s)+1;strcpy(out,s);return (DWORD)strlen(s);}
+DWORD W32API GetFileAttributesA(const char *s){(void)s;return 128;}
+void w32_diag(const char *a,const char *b,const char *c){(void)a;(void)b;(void)c;}
 void *k32_alloc(DWORD n){return malloc(n);}
 void k32_free(void *p,DWORD n){(void)n;free(p);}
 void *w32_copy(void *a,const void *b,ULONG n){return memmove(a,b,n);}

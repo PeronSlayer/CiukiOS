@@ -1,0 +1,20 @@
+{
+  "files": {
+    "Source Tree/Child Folder/data.txt": "a356127ad054c5f31dfcf1d2c0dfa0ebc432fd33a17c90090e805a6a6774a407",
+    "other.txt": "f957b19529906961933c5c30f8713c500a9bb5d9d0695c40d48c97a26a3594ec",
+    "Destination/other.txt": "f957b19529906961933c5c30f8713c500a9bb5d9d0695c40d48c97a26a3594ec",
+    "Source DLLs/gdi32.dll": "fd1d081e8655d5011bc6b0a9566b09d295796f658149c7db36e86cab0a69068b",
+    "Program Files/Ciuki Fixture/gdi32.dll": "fd1d081e8655d5011bc6b0a9566b09d295796f658149c7db36e86cab0a69068b"
+  },
+  "spawns": [
+    "spawn exe=C:\\Program Files\\Ciuki Fixture\\fixture.exe command=\"C:\\Program Files\\Ciuki Fixture\\fixture.exe\" \"C:\\Document.ciuki\" /extra cwd=",
+    "spawn exe=C:\\Program Files\\Ciuki Fixture\\fixture.exe command=\"C:\\Program Files\\Ciuki Fixture\\fixture.exe\" /print \"C:\\Document.ciuki\" cwd="
+  ],
+  "link": [
+    "Fixture \u20ac",
+    "C:\\Program Files\\Ciuki Fixture\\fixture.exe",
+    "--title \"two words\"",
+    "C:\\Program Files\\Ciuki Fixture",
+    "C:\\Program Files\\Ciuki Fixture\\fixture.exe"
+  ]
+}

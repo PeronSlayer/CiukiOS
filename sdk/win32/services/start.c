@@ -154,6 +154,12 @@ W32_NORETURN void W32API CiukiProcessStart(struct w32_peb *peb) {
         w32_diag("load", "builtin-store", "builtin-manifest");
         w32_terminate(0xc000007b);
     }
+    /* A real child already exists, so the parent's process handle remains
+     * waitable. Do not bind or execute the redistributable's original code. */
+    if(w32_installer_intercept(&process_loader,(const char *)(uintptr_t)bootstrap.image_path)){
+        w32_ldr_shutdown(&process_loader);
+        w32_terminate(0);
+    }
     const struct w32_builtin *builtins = process_loader.builtins;
     ULONG count = process_loader.builtin_count;
     /* Build public parameters first, then load with the manifest installed. */

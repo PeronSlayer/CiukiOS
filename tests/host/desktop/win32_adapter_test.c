@@ -111,7 +111,8 @@ static void registry(const char *dir)
     assert(ciuki_win32_uninstall_run("fixture")==-EINVAL); /* reread, reject ambiguous path */
     malformed=1;assert(ciuki_win32_uninstall_list(list,32)==-EINVAL);malformed=0;
     unavailable=1;assert(ciuki_win32_uninstall_list(list,32)==-EPIPE);assert(desk_w32_flush()==-EPIPE);unavailable=0;
-    assert(!desk_w32_flush());wr_destroy(&server);
+    assert(!desk_w32_flush());assert(!desk_w32_ready());
+    unavailable=1;assert(desk_w32_ready()==-EPIPE);unavailable=0;wr_destroy(&server);
     puts("PASS uninstall RPC: four fields, 32 record bound, malformed/unavailable endpoint, path validation, flush");
 }
 static unsigned spawned,records,fail_spawn;

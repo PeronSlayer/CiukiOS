@@ -78,6 +78,7 @@ EXPORTS
     w32_put16
     w32_put32
     w32_diag
+    w32_builtin_version
     w32_terminate
     memcpy
     memset

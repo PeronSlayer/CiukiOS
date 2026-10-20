@@ -1,9 +1,21 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright 2026 CiukiOS contributors. */
 #include <w32/ldr.h>
+#include <w32/shims.h>
 static struct w32_loader *loader;
 void w32_ldr_bind(struct w32_loader *l) {
     loader = l;
+}
+/* Version comparisons must describe the protected provider actually selected
+ * by the loader, including when no physical WINDOWS/SYSTEM copy exists. */
+int w32_builtin_version(const char *path,uint16_t out[4]) {
+    if(!loader || !path || !out)return 0;
+    const char *base=path;for(const char *p=path;*p;p++)if(*p=='/' || *p=='\\')base=p+1;
+    if(w32_shim_native(base))return 0;
+    for(ULONG i=0;i<loader->builtin_count;i++)if(!w32_stricmp(base,loader->builtins[i].name)){
+        w32_copy(out,loader->builtins[i].version,8);return 1;
+    }
+    return 0;
 }
 static struct w32_module *handle(void *base) {
     /* NT tags LOAD_LIBRARY_AS_DATAFILE handles with bit 0; accept both. */

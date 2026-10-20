@@ -85,6 +85,9 @@ def build(out=None):
         replacement=dict(facade,version=stubs.image_version((out/facade['path']).read_bytes()))
         store['dlls']=[replacement if d['name']==facade['name'] else d for d in store['dlls']]
     shutil.copyfile(out/'facades'/'upper-coverage.json',out/'facades-upper-coverage.json')
+    from scripts.win32 import shell
+    shell_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls'].append(shell.build(out,shell_base,flags))
     store['dlls'].insert(0,record)
     store['msvcrt_policy']='msvcrt.dll: Wine 10.0 PE selected by measurement (config/wine-upper.json, f5-14B); not staged until qualified'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')

@@ -164,3 +164,10 @@ int desk_w32_flush(void)
     uint32_t e=call(r,W32R_FLUSH,W32R_HKLM,NULL,NULL,0);
     pthread_mutex_unlock(&registry_lock);free(r);return native_error(e);
 }
+int desk_w32_ready(void)
+{
+    struct response *r=malloc(sizeof(*r));if(!r)return -ENOMEM;
+    pthread_mutex_lock(&registry_lock);
+    uint32_t e=call(r,W32R_INFO,W32R_HKLM,NULL,NULL,0);
+    pthread_mutex_unlock(&registry_lock);free(r);return native_error(e);
+}

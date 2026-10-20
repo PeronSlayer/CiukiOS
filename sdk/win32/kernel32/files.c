@@ -198,8 +198,8 @@ BOOL W32API RemoveDirectoryA(const char *p) {
 }
 BOOL W32API MoveFileExA(const char *from, const char *to, DWORD flags) {
   if (flags & 4) {
-    SetLastError(120);
-    return 0;
+    extern BOOL k32_delay_move(const char *,const char *,DWORD);
+    return k32_delay_move(from,to,flags);
   }
   if (flags) {
     SetLastError(120);

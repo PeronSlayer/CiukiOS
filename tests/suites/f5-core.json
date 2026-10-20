@@ -1075,6 +1075,75 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-installer-nsis-qemu-t23",
+      "probe": "w32-installer-nsis",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-installer-nsis run={run_id}",
+      "timeout": 180,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installer_install"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "manifest": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installer_cancel"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "manifest": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installer_restart_request"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "manifest": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installer_uninstall"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "manifest": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      },
+      "integration_pending": "authored, unrun: approved pinned NSIS compiler/fixture, guest controller and selector registration required before execution"
     }
   ]
 }

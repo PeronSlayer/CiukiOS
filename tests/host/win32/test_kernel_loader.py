@@ -180,7 +180,7 @@ class KernelLoaderTests(unittest.TestCase):
             # reused Wine PEs staged for the image (MSVCRT).
             upper=json.loads((ROOT/'config/wine-upper.json').read_text())
             staged={n for n,r in upper['dlls'].items() if r['qualified']}
-            self.assertEqual(len(meta['builtins']),42+len(staged))  # f5-12B: + mciavi32.dll
+            self.assertEqual(len(meta['builtins']),43+len(staged))  # + f5-15A ciukishell.dll
             for name in staged:
                 self.assertIn('/System/Win32/'+name,sources)
                 self.assertIn('/system/licenses/WINE-PATCHES.md',sources)

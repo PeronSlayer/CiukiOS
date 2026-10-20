@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static struct {unsigned pid,phase,windows,token,mode,control;uint64_t deadline;int active;} fixture;
+static struct {unsigned pid,phase,windows,token,mode,control;uint64_t deadline;int active,pending;} fixture;
 void desk_v3_fixture_report(const char *);
 int desk_v3_fixture_active(void){return fixture.active;}
 static void report(struct desktop *d,int error)
@@ -25,12 +25,8 @@ static void report(struct desktop *d,int error)
 int desk_v3_fixture_begin(struct desktop *d)
 {
     memset(&fixture,0,sizeof(fixture));
-    char *argv[]={"/System/Win32/Fixtures/desktop-v3.exe",NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
-    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
-    if(pid<0)return -errno;
-    fixture.pid=(unsigned)pid;fixture.active=1;fixture.deadline=d->now_ns+15000000000ull;
-    return pid;
+    fixture.active=fixture.pending=1;fixture.deadline=d->now_ns+15000000000ull;
+    return 0;
 }
 /* Registry fixture goes through precisely the copied w32srv endpoint. */
 static int registry(unsigned op,unsigned key,const char *path,const char *name,const char *text,unsigned *handle)
@@ -74,6 +70,16 @@ void desk_v3_fixture_tick(struct desktop *d)
 {
     if(!fixture.active)return;
     if(d->now_ns>=fixture.deadline){fixture.phase++;report(d,-ETIMEDOUT);return;}
+    if(fixture.pending){
+        unsigned key=0;int e=registry(W32R_OPEN,W32R_HKLM,"Software","",NULL,&key);
+        if(!e && key)e=registry(W32R_CLOSE,key,"","",NULL,NULL);
+        if(e)return;
+        char *argv[]={"/System/Win32/Fixtures/desktop-v3.exe",NULL};
+        char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+        int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
+        if(pid<0){report(d,-errno);return;}
+        fixture.pid=(unsigned)pid;fixture.pending=0;
+    }
     int holder=-1;unsigned windows=0;
     for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].pid==fixture.pid && d->clients[i].window && d->clients[i].version==3){
         windows++;if(d->clients[i].v3_id==4)holder=(int)i;

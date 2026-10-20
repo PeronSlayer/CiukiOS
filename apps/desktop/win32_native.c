@@ -130,6 +130,16 @@ int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
 {
     int pair[2]={-1,-1},report[2]={-1,-1};
     if(kind!=DESK_W32_PE && !owner)return -EPIPE;
+    /* The sleeping launch worker may run before w32srv's spawned process
+     * registers. Prove readiness on every PE launch, including supervision
+     * restarts; a retained PID is not endpoint-registration evidence. */
+    if(kind==DESK_W32_PE){
+        uint64_t deadline=clock_ns()+UINT64_C(5000000000);int e;
+        while((e=desk_w32_ready())!=0){
+            if(e!=-EPIPE || clock_ns()>=deadline)return e;
+            pause_io();
+        }
+    }
     pthread_mutex_lock(&launch_lock);
     if(pending.ready){pthread_mutex_unlock(&launch_lock);return -EBUSY;}
     int result=-EIO;

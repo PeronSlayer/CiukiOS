@@ -1,0 +1,35 @@
+; Authored setupapi/advpack chain. No system drivers or native binaries.
+[Version]
+Signature="$CHICAGO$"
+AdvancedINF=2.0
+
+[DefaultInstall]
+CopyFiles=Fixture.Copy
+AddReg=Fixture.AddReg
+DelReg=Fixture.DelReg
+UpdateInis=Fixture.Inis
+RunPostSetupCommands=Fixture.Commands
+
+[DestinationDirs]
+Fixture.Copy=24,"Program Files\Ciuki INF Fixture"
+
+[SourceDisksNames]
+1="Ciuki authored fixture",fixture.cab
+
+[SourceDisksFiles]
+payload.txt=1
+
+[Fixture.Copy]
+payload.txt
+
+[Fixture.AddReg]
+HKLM,"Software\CiukiOS\InstallerFixture","Installed",0x00010001,1
+
+[Fixture.DelReg]
+HKLM,"Software\CiukiOS\InstallerFixture","Obsolete"
+
+[Fixture.Inis]
+"fixture.ini","Fixture",,"Installed=1"
+
+[Fixture.Commands]
+"C:\Program Files\Ciuki INF Fixture\child.exe" /from-inf
