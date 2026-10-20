@@ -794,6 +794,20 @@
           {
             "where": {
               "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "expected": {
+                "eq": 0
+              },
+              "observed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "fixture"
             },
             "fields": {

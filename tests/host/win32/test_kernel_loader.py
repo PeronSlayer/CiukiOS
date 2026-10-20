@@ -84,6 +84,17 @@ class KernelLoaderTests(unittest.TestCase):
         out=self.command('dialogs-startup',target/'dialogs-exercise.exe')
         self.assertIn('PASS dialogs startup old result collision=487 new result free commit RW zero GetModuleHandleA',out)
 
+    def test_upper_and_kernel32_result_pages_are_free_after_actual_imports(self):
+        import shutil
+        builtins.build(self.images/'System/Win32')
+        target = self.images/'System/Win32/Fixtures'
+        target.mkdir(exist_ok=True)
+        for name in ('upper', 'kernel32'):
+            image = name+'-exercise.exe'
+            shutil.copyfile(self.images/'System/Win32/fixtures'/image, target/image)
+            out = self.command(name+'-startup', target/image)
+            self.assertIn('new result free commit RW zero GetModuleHandleA', out)
+
     def test_fixed_address_virtualalloc_on_kernel_model(self):
         self.assertIn('PASS kernel32 fixed VirtualAlloc exact rounding collision=487 invalid=87 zero RW release',
                       self.command('fixed-alloc',self.images/'console.exe'))

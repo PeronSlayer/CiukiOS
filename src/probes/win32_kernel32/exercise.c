@@ -16,12 +16,12 @@ static void check(unsigned group,int ok,unsigned line)
     if (!ok) { r->errors[group]++; if (!r->first_error) r->first_error=line; }
 }
 #define CHECK(g,c) check(g,!!(c),__LINE__)
-static DWORD tls_slot;
+static DWORD tls_slot, worker_flags;
 static DWORD W32API thread(void *arg)
 {
-    CHECK(W32_K32_THREADS,TlsGetValue(tls_slot)==0);
-    CHECK(W32_K32_THREADS,TlsSetValue(tls_slot,arg));
-    CHECK(W32_K32_THREADS,TlsGetValue(tls_slot)==arg);
+    if (TlsGetValue(tls_slot)==0) worker_flags|=1;
+    if (TlsSetValue(tls_slot,arg)) worker_flags|=2;
+    if (TlsGetValue(tls_slot)==arg) worker_flags|=4;
     return 37;
 }
 extern BOOL W32API GetExitCodeThread(HANDLE,DWORD *);
@@ -62,6 +62,7 @@ void W32API entry(void)
             DWORD code=0;
             CHECK(W32_K32_THREADS,WaitForSingleObject(t,10000)==0);
             CHECK(W32_K32_THREADS,GetExitCodeThread(t,&code)&&code==37);
+            CHECK(W32_K32_THREADS,worker_flags==7);
             CHECK(W32_K32_TEARDOWN,CloseHandle(t));
         }
         CHECK(W32_K32_THREADS,TlsGetValue(tls_slot)==(void *)17);

@@ -17,7 +17,10 @@ def probe_name(workload, root=Path(__file__).resolve().parents[2]):
     Unlisted self-authored host fixtures retain their descriptive name.
     Production case validation separately requires a manifest workload.
     """
-    manifest = json.loads((root / 'tests/win32/workloads.json').read_text())
+    path = root / 'tests/win32/workloads.json'
+    if not path.is_file():
+        path = Path(__file__).resolve().parents[2] / 'tests/win32/workloads.json'
+    manifest = json.loads(path.read_text())
     return next((row['probe'] for row in manifest['workloads'] if row['id'] == workload),
                 'win32-' + workload)
 
