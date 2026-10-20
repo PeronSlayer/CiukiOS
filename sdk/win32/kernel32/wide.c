@@ -484,6 +484,36 @@ static BOOL bad_string(const void *p, DWORD max, DWORD unit) {
 }
 BOOL W32API IsBadStringPtrA(const char *p, DWORD max) { return bad_string(p, max, 1); }
 BOOL W32API IsBadStringPtrW(const WCHAR *p, DWORD max) { return bad_string(p, max, 2); }
+/* IsBadReadPtr/IsBadWritePtr/IsBadCodePtr (f5-20C, lead decision): every page
+ * of [p, p + n) must be committed and readable (or writable) according to
+ * the virtual-memory query path; the range is never touched, so the call
+ * never faults. A zero size is never bad; NULL with a size, a range that
+ * wraps the address space or any guard/no-access page is (Windows 98 answers
+ * TRUE for an inaccessible range). Readable: PAGE_READONLY, READWRITE,
+ * WRITECOPY and the EXECUTE_ forms (0xee); writable: READWRITE, WRITECOPY,
+ * EXECUTE_READWRITE, EXECUTE_WRITECOPY (0xcc). */
+static BOOL bad_range(const void *p, uintptr_t n, DWORD access) {
+  if (!n)
+    return 0;
+  uintptr_t at = (uintptr_t)p, last = at + n - 1;
+  if (!p || last < at)
+    return 1;
+  for (;;) {
+    struct ciuki_w32_memory_info m;
+    if (VirtualQuery((const void *)at, &m, sizeof(m)) != sizeof(m) || m.state != 0x1000 ||
+        (m.protect & 0x101) || !(m.protect & access) || !m.region_size)
+      return 1;
+    uintptr_t next = (uintptr_t)m.base + m.region_size;
+    if (next <= at)
+      return 1;
+    if (last < next)
+      return 0;
+    at = next;
+  }
+}
+BOOL W32API IsBadReadPtr(const void *p, uintptr_t n) { return bad_range(p, n, 0xee); }
+BOOL W32API IsBadWritePtr(void *p, uintptr_t n) { return bad_range(p, n, 0xcc); }
+BOOL W32API IsBadCodePtr(void *f) { return bad_range(f, 1, 0xee); }
 /* Named kernel objects: the names round-trip through ACP 1252, the form in
  * which the ANSI entry points already hand them to the kernel. */
 #define OBJECT_NAME(w, a)                                                      \

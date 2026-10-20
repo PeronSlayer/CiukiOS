@@ -204,23 +204,23 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 
 | DLL | Base | File bytes | SizeOfImage | Seed pages | COW pages | Resource entries | SHA-256 (prefix) | Use |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| comctl32.dll | `0x74000000` | 1,175,552 | 1,179,648 | 287 | 3 | 440 | `83236d3e95953db8` | reused (unqualified) |
+| comctl32.dll | `0x74000000` | 1,175,552 | 1,179,648 | 287 | 3 | 440 | `2a53a09283331828` | reused (unqualified) |
 | comdlg32.dll | `0x74120000` | 970,752 | 970,752 | 237 | 2 | 1,213 | `88dc12a9b05acf40` | reused (unqualified) |
-| shell32.dll | `0x74210000` | 9,363,456 | 9,363,456 | 2286 | 3 | 5,132 | `013a4cfebaac42ce` | reused (unqualified) |
-| shlwapi.dll | `0x74b00000` | 266,240 | 266,240 | 65 | 3 | 83 | `cbcecd8df01d12f8` | reused (unqualified) |
-| ole32.dll | `0x74b50000` | 630,784 | 630,784 | 154 | 2 | 70 | `7bbaa0d0b7b1e5e6` | reused (unqualified) |
-| combase.dll | `0x74bf0000` | 258,048 | 258,048 | 63 | 3 | 0 | `f487fb45c020bbfb` | reused (unqualified) |
-| oleaut32.dll | `0x74c30000` | 540,672 | 659,456 | 132 | 31 | 53 | `619a4bfe70968574` | reused (unqualified) |
-| rpcrt4.dll | `0x74ce0000` | 425,984 | 425,984 | 104 | 3 | 3 | `ac5ec0acf19dda06` | reused (unqualified) |
-| riched20.dll | `0x74d50000` | 405,504 | 417,792 | 99 | 7 | 25 | `f9e4213c32c5a8aa` | reused (unqualified) |
-| riched32.dll | `0x74dc0000` | 32,768 | 32,768 | 8 | 2 | 3 | `d45d796292b33550` | reused (unqualified) |
-| cabinet.dll | `0x74dd0000` | 106,496 | 106,496 | 26 | 2 | 3 | `db1623f03ee9aed5` | reused (unqualified) |
-| advpack.dll | `0x74df0000` | 65,536 | 65,536 | 16 | 2 | 0 | `c52ce5810c438d5a` | reused (unqualified) |
-| setupapi.dll | `0x74e00000` | 331,776 | 331,776 | 81 | 4 | 127 | `90829d510da79442` | reused (unqualified) |
-| imm32.dll | `0x74e60000` | 102,400 | 102,400 | 25 | 2 | 3 | `d26f65cb02afb31e` | measured, not reused |
-| msvcrt.dll | `0x74e80000` | 606,208 | 614,400 | 148 | 5 | 3 | `5eca3fda5700b784` | reused (unqualified) |
-| coml2.dll | `0x74f20000` | 86,016 | 86,016 | 21 | 2 | 0 | `beb6b65a449a091b` | reused (unqualified) |
-| shcore.dll | `0x74f40000` | 77,824 | 77,824 | 19 | 3 | 0 | `ffdc462cf8a12e64` | reused (unqualified) |
+| shell32.dll | `0x74210000` | 3,293,184 | 3,293,184 | 804 | 3 | 3,490 | `0b371c8d0ca931e5` | reused (unqualified) |
+| shlwapi.dll | `0x74540000` | 352,256 | 352,256 | 86 | 3 | 83 | `f0519aad6c7fca0a` | reused (unqualified) |
+| ole32.dll | `0x745a0000` | 630,784 | 630,784 | 154 | 2 | 70 | `af5a3bd5db02edd9` | reused (unqualified) |
+| combase.dll | `0x74640000` | 258,048 | 258,048 | 63 | 3 | 0 | `3dc27ea3f48ede46` | reused (unqualified) |
+| oleaut32.dll | `0x74680000` | 540,672 | 659,456 | 132 | 31 | 53 | `83d80452bdb4c017` | reused (unqualified) |
+| rpcrt4.dll | `0x74730000` | 425,984 | 425,984 | 104 | 3 | 3 | `49ef1848edb7a8b6` | reused (unqualified) |
+| riched20.dll | `0x747a0000` | 405,504 | 417,792 | 99 | 7 | 25 | `c29478a4fa6a9dbd` | reused (unqualified) |
+| riched32.dll | `0x74810000` | 32,768 | 32,768 | 8 | 2 | 3 | `f90eb4347ef58b55` | reused (unqualified) |
+| cabinet.dll | `0x74820000` | 106,496 | 106,496 | 26 | 2 | 3 | `64b049e00ddfeb18` | reused (unqualified) |
+| advpack.dll | `0x74840000` | 65,536 | 65,536 | 16 | 2 | 0 | `bcd9c814631ba327` | reused (unqualified) |
+| setupapi.dll | `0x74850000` | 331,776 | 331,776 | 81 | 4 | 127 | `7ca99e8f76aef0f9` | reused (unqualified) |
+| imm32.dll | `0x748b0000` | 102,400 | 102,400 | 25 | 2 | 3 | `a324dd082d0accc6` | measured, not reused |
+| msvcrt.dll | `0x748d0000` | 606,208 | 614,400 | 148 | 5 | 3 | `8161d40c05af35d2` | reused (unqualified) |
+| coml2.dll | `0x74970000` | 86,016 | 86,016 | 21 | 2 | 0 | `a503cc5b92f4bd1e` | reused (unqualified) |
+| shcore.dll | `0x74990000` | 77,824 | 77,824 | 19 | 3 | 0 | `c0a9ea8c303f6f6e` | reused (unqualified) |
 
 | Patch (applied in order) | SHA-256 (prefix) |
 | --- | --- |
@@ -229,41 +229,67 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | `0003-setupdi-unsupported.patch` | `1c92e3ce44705942` |
 | `0004-single-msvcrt-crt.patch` | `dbb16d028322a51c` |
 | `0005-builtin-region-base.patch` | `f35d63a7a96108f6` |
+| `0006-shell32-icon-trim.json` | `48157747e1c418e9` |
+| `0007-kernelbase-retarget.patch` | `4de38f4475f23eea` |
+| `0008-kernelbase-compile-in.patch` | `3cc7558345be2bdc` |
+| `0009-shell32-wine-private-calls.patch` | `7ad67fb7f42f39af` |
+| `0010-msvcrt-sbcs-code-page.patch` | `f8a8a9fd32068f11` |
 
-### Import decisions (generated)
+`0006-shell32-icon-trim.json` (resource filter): 430 icon images (1,776,519 bytes) in, 235 (357,298 bytes) out.
 
-Every missing eager import, delayed import and unresolved export forwarder of every build has exactly one decision (`decisions` in the record; the final forwarder hop is classified).
+### Import re-audit against the f5-20A/B core (generated)
 
-| DLL | Eager missing | Delayed missing | Unresolved forwarders |
-| --- | ---: | ---: | ---: |
-| advpack.dll | 27 | 0 | 0 |
-| cabinet.dll | 1 | 0 | 0 |
-| combase.dll | 25 | 0 | 0 |
-| comctl32.dll | 141 | 20 | 27 |
-| comdlg32.dll | 67 | 0 | 0 |
-| coml2.dll | 2 | 0 | 0 |
-| imm32.dll | 50 | 0 | 0 |
-| msvcrt.dll | 50 | 2 | 0 |
-| ole32.dll | 100 | 0 | 0 |
-| oleaut32.dll | 43 | 3 | 0 |
-| riched20.dll | 31 | 0 | 0 |
-| riched32.dll | 0 | 0 | 0 |
-| rpcrt4.dll | 23 | 19 | 0 |
-| setupapi.dll | 109 | 6 | 0 |
-| shcore.dll | 21 | 3 | 2 |
-| shell32.dll | 117 | 11 | 2 |
-| shlwapi.dll | 310 | 5 | 125 |
+Missing eager imports, delayed imports and unresolved export forwarders of the current build, and imports whose final hop is a core W21 stub (typed failure); each has a decision (`audit` = `f5-20c`, or its f5-14B row).
 
-| Action | Entries |
+| DLL | Eager missing | Delayed missing | Unresolved forwarders | Bound to W21 stubs |
+| --- | ---: | ---: | ---: | ---: |
+| advpack.dll | 0 | 0 | 0 | 0 |
+| cabinet.dll | 0 | 0 | 0 | 0 |
+| combase.dll | 0 | 0 | 0 | 5 |
+| comctl32.dll | 0 | 0 | 0 | 5 |
+| comdlg32.dll | 0 | 0 | 0 | 20 |
+| coml2.dll | 0 | 0 | 0 | 0 |
+| imm32.dll | 38 | 0 | 0 | 0 |
+| msvcrt.dll | 0 | 0 | 0 | 3 |
+| ole32.dll | 0 | 0 | 0 | 1 |
+| oleaut32.dll | 0 | 0 | 0 | 1 |
+| riched20.dll | 0 | 0 | 0 | 3 |
+| riched32.dll | 0 | 0 | 0 | 0 |
+| rpcrt4.dll | 0 | 0 | 0 | 5 |
+| setupapi.dll | 0 | 0 | 0 | 10 |
+| shcore.dll | 0 | 0 | 0 | 0 |
+| shell32.dll | 0 | 0 | 0 | 13 |
+| shlwapi.dll | 0 | 0 | 3 | 2 |
+
+| Audit | Action | Entries |
+| --- | --- | ---: |
+| f5-14b | `core-implement` | 759 |
+| f5-14b | `core-w21-stub` | 61 |
+| f5-14b | `not-reused` | 50 |
+| f5-14b | `w21-stub-dll` | 57 |
+| f5-14b | `w21-unresolved-forwarder` | 3 |
+| f5-14b | `wine-compile-in` | 212 |
+| f5-14b | `wine-patch-remove` | 3 |
+| f5-14b | `wine-retarget` | 197 |
+| f5-20b | `core-implement` | 218 |
+| f5-20c | `core-implement` | 7 |
+| f5-20c | `core-w21-stub` | 10 |
+| f5-20c | `not-reused` | 38 |
+| f5-20c | `w21-unresolved-forwarder` | 3 |
+
+Closure of the f5-14B decisions in this build:
+
+| Closure | Entries |
 | --- | ---: |
-| `core-implement` | 759 |
-| `core-w21-stub` | 61 |
-| `not-reused` | 50 |
-| `w21-stub-dll` | 57 |
-| `w21-unresolved-forwarder` | 3 |
-| `wine-compile-in` | 212 |
-| `wine-patch-remove` | 3 |
-| `wine-retarget` | 197 |
+| closed: CiukiOS W21 stub DLL (scripts/win32/upper_dlls.py ABSENT_DELAYED) | 57 |
+| closed: core export (f5-20A/f5-20B) | 757 |
+| closed: core typed W21 failure | 61 |
+| closed: importer not reused | 50 |
+| closed: lazy forwarder to an absent DLL (decided) | 3 |
+| closed: no longer imported | 2 |
+| closed: patch 0008: compiled into the importing DLL | 212 |
+| closed: patch 0009: call removed | 3 |
+| closed: patches 0007/0008: imported from the Windows 98 home DLL | 197 |
 
 | Rule | Action | Decision |
 | --- | --- | --- |
@@ -272,6 +298,9 @@ Every missing eager import, delayed import and unresolved export forwarder of ev
 | `ciukios-stub-dll` | `core-w21-stub` | Provided by an existing CiukiOS census/W21 DLL that lacks the export; add a W21 stub with the documented failure (no printer, no IME, no network provider). |
 | `ciukios-version` | `core-implement` | CiukiOS VERSION implements the ANSI functions; the Unicode functions are added (core amendment). |
 | `core-api` | `core-implement` | Documented Win32 API reached by the reused DLL; the owning CiukiOS core DLL implements it (amendment of the owning core directive). |
+| `core-api-f5-20b` | `core-implement` | Win32 export outside the f5-14B table: imported by a reused DLL but then exported by the core only as a census or Unicode W21 stub (so the audit did not report it missing), or the ANSI/Unicode partner of a decided name; implemented by f5-20B (MSLU model for the W forms; amendment 2 item 1). |
+| `core-api-f5-20c` | `core-implement` | Import bound to a nonreturning KERNEL32 census stub when the f5-20C re-audit ran; implemented in f5-20C (lead decision): IsBadReadPtr/IsBadWritePtr/IsBadCodePtr probe the range through the virtual-memory query and never fault, DebugBreak raises EXCEPTION_BREAKPOINT (int 3) as Windows does. |
+| `core-census-w21` | `core-w21-stub` | Import bound to an existing CiukiOS census or typed W21 stub (documented failure plus one W21 diagnostic); the reused DLL handles the failure. Recorded by the f5-20C re-audit (no Wine or core change). |
 | `core-security-structures` | `core-implement` | Security descriptors and ACLs are plain data structures: the CiukiOS ADVAPI32 builds them in NT layout and object creation ignores them (no ACL enforcement on FAT); core amendment. |
 | `core-uniscribe` | `core-implement` | Wine 10.0 moved Uniscribe (USP10) into GDI32 and RICHED20/COMCTL32 shape text through it; the CiukiOS GDI32 implements a left-to-right single-script subset (core amendment). |
 | `kernelbase-internal` | `wine-compile-in` | KERNELBASE-only API without a Windows 98 home; Wine-side patch compiles the upstream kernelbase unit into the importing DLL. |
@@ -290,69 +319,125 @@ Every missing eager import, delayed import and unresolved export forwarder of ev
 | `w21-wow64` | `core-w21-stub` | WOW64 redirection exists only on 64-bit Windows; documented to fail on 32-bit Windows; W21 stub with ERROR_CALL_NOT_IMPLEMENTED. |
 | `wine-private` | `wine-patch-remove` | Wine-private helper with no Windows 98 meaning; a Wine-side source patch removes the call path. No Wine-private export enters the core. |
 
-Unique names per rule and owning DLL:
+Unique names per audit, rule and owning DLL:
 
-- `absent-delayed-dll` → gdiplus.dll (7): GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectRectI, GdipGetImageDimension, GdipGetImageThumbnail, GdipLoadImageFromFile
-- `absent-delayed-dll` → iphlpapi.dll (1): GetAdaptersInfo
-- `absent-delayed-dll` → mlang.dll (1): ConvertINetUnicodeToMultiByte
-- `absent-delayed-dll` → secur32.dll (18): AcceptSecurityContext, AcquireCredentialsHandleA, AcquireCredentialsHandleW, CompleteAuthToken, DecryptMessage, DeleteSecurityContext, EncryptMessage, EnumerateSecurityPackagesA, EnumerateSecurityPackagesW, FreeContextBuffer, FreeCredentialsHandle, GetUserNameExW, ImpersonateSecurityContext, InitializeSecurityContextW, MakeSignature, QueryContextAttributesA, RevertSecurityContext, VerifySignature
-- `absent-delayed-dll` → shdocvw.dll (1): #218
-- `absent-delayed-dll` → urlmon.dll (4): CoInternetParseUrl, CreateFormatEnumerator, CreateURLMoniker, RegisterFormatEnumerator
-- `absent-delayed-dll` → uxtheme.dll (20): CloseThemeData, DrawThemeBackground, DrawThemeEdge, DrawThemeParentBackground, DrawThemeText, DrawThemeTextEx, EnableThemeDialogTexture, GetThemeBackgroundContentRect, GetThemeBackgroundExtent, GetThemeColor, GetThemeFont, GetThemeInt, GetThemeMargins, GetThemePartSize, GetThemeTextExtent, GetWindowTheme, IsThemeBackgroundPartiallyTransparent, IsThemePartDefined, OpenThemeData, OpenThemeDataForDpi
-- `absent-delayed-dll` → windowscodecs.dll (1): WICConvertBitmapSource
-- `absent-delayed-dll` → wintrust.dll (4): CryptCATAdminAcquireContext, CryptCATAdminAddCatalog, CryptCATAdminReleaseCatalogContext, CryptCATAdminReleaseContext
-- `absent-forwarder-dll` → userenv.dll (2): ExpandEnvironmentStringsForUserA, ExpandEnvironmentStringsForUserW
-- `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
-- `ciukios-stub-dll` → imm32.dll (3): ImmGetCompositionStringW, ImmSetCompositionFontW, ImmSetCompositionWindow
-- `ciukios-stub-dll` → mpr.dll (2): WNetGetLastErrorW, WNetRestoreConnectionW
-- `ciukios-stub-dll` → winspool.drv (12): DeviceCapabilitiesA, DeviceCapabilitiesW, DocumentPropertiesW, EnumPrintersA, EnumPrintersW, GetDefaultPrinterA, GetDefaultPrinterW, GetPrinterA, GetPrinterDriverA, GetPrinterDriverW, GetPrinterW, OpenPrinterW
-- `ciukios-version` → version.dll (3): GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW
-- `core-api` → advapi32.dll (24): GetCurrentHwProfileA, GetUserNameW, RegCreateKeyExW, RegCreateKeyW, RegDeleteKeyExW, RegDeleteKeyW, RegDeleteTreeA, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegEnumKeyW, RegEnumValueW, RegGetValueA, RegGetValueW, RegLoadMUIStringA, RegLoadMUIStringW, RegOpenKeyExW, RegOpenKeyW, RegQueryInfoKeyW, RegQueryValueExW, RegQueryValueW, RegSetValueExW, RegSetValueW, SystemFunction036
-- `core-api` → gdi32.dll (38): CloseMetaFile, CopyEnhMetaFileW, CopyMetaFileW, CreateColorSpaceW, CreateFontIndirectW, CreateFontW, CreateHalftonePalette, CreateMetaFileW, CreateRoundRectRgn, DeleteEnhMetaFile, EnumFontFamiliesExW, EnumFontFamiliesW, ExtCreatePen, ExtEscape, GdiAlphaBlend, GdiConvertToDevmodeW, GdiGetCharDimensions, GdiGetCodePage, GetBitmapBits, GetCharABCWidthsW, GetCharWidth32W, GetCharWidthInfo, GetCharWidthW, GetCharacterPlacementW, GetEnhMetaFileBits, GetEnhMetaFileHeader, GetLayout, GetMetaFileBitsEx, GetTextCharsetInfo, GetTextFaceW, GetTextMetricsW, GetWinMetaFileBits, PlayEnhMetaFile, PolyPolyline, SetEnhMetaFileBits, SetWinMetaFileBits, StartDocW, TranslateCharsetInfo
-- `core-api` → kernel32.dll (99): Beep, CompareStringOrdinal, ConvertDefaultLocale, CopyFileW, CreateDirectoryW, CreateFileMappingW, CreatePipe, CreateSemaphoreW, CreateTimerQueueTimer, DelayLoadFailureHook, DeleteFileW, DeviceIoControl, EnumResourceNamesW, EnumSystemLocalesEx, ExpandEnvironmentStringsA, ExpandEnvironmentStringsW, FindFirstFileW, FindNextFileW, FindResourceExW, FindResourceW, FormatMessageW, GetBinaryTypeW, GetCPInfoExW, GetConsoleMode, GetCurrencyFormatW, GetCurrentDirectoryW, GetDateFormatW, GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileAttributesExW, GetFileAttributesW, GetFileInformationByHandle, GetFileSizeEx, GetFinalPathNameByHandleW, GetFullPathNameW, GetLocaleInfoEx, GetLogicalDriveStringsW, GetLongPathNameW, GetNumberFormatW, GetPrivateProfileIntW, GetPrivateProfileStringW, GetPrivateProfileStructW, GetProfileStringW, GetShortPathNameW, GetStringTypeExW, GetSystemDefaultUILanguage, GetSystemDirectoryW, GetSystemWindowsDirectoryA, GetSystemWindowsDirectoryW, GetTempFileNameW, GetTempPathW, GetThreadId, GetTickCount64, GetTimeFormatW, GetUserDefaultLocaleName, GetUserDefaultUILanguage, GetVolumeInformationW, GetWindowsDirectoryW, GlobalAddAtomW, GlobalFindAtomW, HeapCompact, InitOnceExecuteOnce, InitializeCriticalSectionEx, IsBadStringPtrA, IsBadStringPtrW, IsValidLocaleName, IsWow64Process, LCIDToLocaleName, LZClose, LZCopy, LZOpenFileW, LZRead, LZSeek, LocaleNameToLCID, MoveFileExW, MoveFileW, OpenEventW, OpenSemaphoreW, OutputDebugStringW, PeekConsoleInputA, PostQueuedCompletionStatus, ProcessIdToSessionId, QueueUserWorkItem, ReadConsoleA, ReadConsoleInputW, RemoveDirectoryW, ResolveDelayLoadedAPI, SearchPathW, SetConsoleMode, SetCurrentDirectoryW, SetFileAttributesW, SetFilePointerEx, SystemTimeToTzSpecificLocalTime, VerifyConsoleIoHandle, WritePrivateProfileStringW, WritePrivateProfileStructW, lstrcmpW, lstrcmpiW
-- `core-api` → user32.dll (105): AppendMenuW, CharLowerBuffW, CharLowerW, CharNextW, CharPrevW, CharToOemW, CharUpperBuffW, CharUpperW, CheckMenuRadioItem, ChildWindowFromPoint, CopyAcceleratorTableW, CopyIcon, CopyImage, CreateAcceleratorTableW, CreateCaret, CreateDialogIndirectParamW, CreateDialogParamW, CreateIconFromResourceEx, CreatePopupMenu, DdeCreateStringHandleW, DdeGetLastError, DdeInitializeW, DdeQueryStringW, DialogBoxIndirectParamW, DialogBoxParamW, DlgDirListComboBoxW, DlgDirListW, DragDetect, DrawFrameControl, DrawStateW, DrawTextExW, DrawTextW, EnableScrollBar, EnumClipboardFormats, GetAncestor, GetCaretPos, GetClipboardFormatNameA, GetClipboardFormatNameW, GetClipboardSequenceNumber, GetDlgItemInt, GetDlgItemTextW, GetDpiForWindow, GetIconInfo, GetMenuDefaultItem, GetMenuInfo, GetMenuItemInfoW, GetMenuItemRect, GetMenuStringW, GetMonitorInfoW, GetNextDlgGroupItem, GetScrollInfo, GetScrollPos, GetWindowInfo, GetWindowRgn, InsertMenuItemW, InsertMenuW, InternalGetWindowText, InvertRect, IsCharAlphaNumericW, IsCharAlphaW, IsCharLowerW, IsCharUpperW, IsDialogMessageW, IsDlgButtonChecked, IsProcessDPIAware, KillSystemTimer, LoadAcceleratorsW, LoadBitmapW, LoadImageW, LoadMenuW, LoadStringW, MapDialogRect, MessageBoxIndirectW, MessageBoxW, ModifyMenuW, MonitorFromRect, MonitorFromWindow, NotifyWinEvent, OemToCharW, PrivateExtractIconExW, PrivateExtractIconsW, RegisterClipboardFormatA, RegisterClipboardFormatW, RemoveMenu, SendDlgItemMessageW, SetCaretPos, SetDlgItemInt, SetDlgItemTextW, SetMenuDefaultItem, SetMenuInfo, SetMenuItemInfoW, SetScrollInfo, SetScrollRange, SetSystemTimer, SetWindowRgn, ShowScrollBar, SubtractRect, TabbedTextOutW, TrackMouseEvent, TrackPopupMenu, TrackPopupMenuEx, TranslateAcceleratorW, WinHelpW, wsprintfW, wvsprintfW
-- `core-security-structures` → advapi32.dll (9): AddAccessAllowedAce, AddAccessAllowedAceEx, AddAccessDeniedAce, AddAccessDeniedAceEx, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner
-- `core-uniscribe` → gdi32.dll (17): ScriptBreak, ScriptCPtoX, ScriptFreeCache, ScriptItemize, ScriptLayout, ScriptPlace, ScriptShape, ScriptStringAnalyse, ScriptStringCPtoX, ScriptStringFree, ScriptStringGetLogicalWidths, ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, ScriptString_pcOutChars, ScriptTextOut, ScriptXtoCP
-- `kernelbase-internal` → ole32.dll (1): PathCchFindExtension
-- `kernelbase-retarget` → kernel32.dll (85): CloseHandle, CompareFileTime, CompareStringA, CompareStringW, CreateEventW, CreateFileA, CreateFileW, CreateProcessW, CreateThread, DeleteCriticalSection, DisableThreadLibraryCalls, DuplicateHandle, EnterCriticalSection, FileTimeToSystemTime, FindClose, FreeLibrary, FreeResource, GetACP, GetEnvironmentVariableW, GetFileAttributesA, GetFileSize, GetFullPathNameA, GetLocalTime, GetLocaleInfoW, GetModuleFileNameA, GetModuleFileNameW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetStringTypeW, GetSystemInfo, GetThreadLocale, GetTickCount, GetUserDefaultLCID, GetVersion, GetVersionExW, GlobalAlloc, GlobalFree, HeapAlloc, HeapFree, HeapReAlloc, HeapSize, IsDBCSLeadByte, IsValidLocale, LeaveCriticalSection, LoadLibraryA, LoadLibraryExA, LoadLibraryExW, LoadLibraryW, LoadResource, LocalAlloc, LocalFree, LocalLock, LocalReAlloc, LocalUnlock, LockFileEx, LockResource, MapViewOfFile, MulDiv, MultiByteToWideChar, OpenProcess, QueryPerformanceCounter, QueryPerformanceFrequency, RaiseException, ReadFile, ReleaseSemaphore, ResetEvent, SetEndOfFile, SetErrorMode, SetEvent, SetFileAttributesA, SetFilePointer, SizeofResource, Sleep, SystemTimeToFileTime, TerminateProcess, UnlockFileEx, UnmapViewOfFile, VirtualFree, VirtualQuery, WaitForSingleObject, WideCharToMultiByte, WriteFile, lstrcmpA, lstrcmpiA
-- `kernelbase-shlwapi-compile-in` → shlwapi.dll (211): ChrCmpIA, ChrCmpIW, GetAcceptLanguagesA, GetAcceptLanguagesW, HashData, IsCharBlankW, IsCharCntrlW, IsCharDigitW, IsCharPunctW, IsCharSpaceA, IsCharSpaceW, IsCharXDigitW, IsInternetESCEnabled, ParseURLA, ParseURLW, PathAddBackslashA, PathAddBackslashW, PathAddExtensionA, PathAddExtensionW, PathAppendA, PathAppendW, PathCanonicalizeA, PathCanonicalizeW, PathCombineA, PathCombineW, PathCommonPrefixA, PathCommonPrefixW, PathCreateFromUrlA, PathCreateFromUrlAlloc, PathCreateFromUrlW, PathFileExistsA, PathFileExistsW, PathFindExtensionA, PathFindExtensionW, PathFindFileNameA, PathFindFileNameW, PathFindNextComponentA, PathFindNextComponentW, PathGetArgsA, PathGetArgsW, PathGetCharTypeA, PathGetCharTypeW, PathGetDriveNumberA, PathGetDriveNumberW, PathIsFileSpecA, PathIsFileSpecW, PathIsLFNFileSpecA, PathIsLFNFileSpecW, PathIsPrefixA, PathIsPrefixW, PathIsRelativeA, PathIsRelativeW, PathIsRootA, PathIsRootW, PathIsSameRootA, PathIsSameRootW, PathIsUNCA, PathIsUNCServerA, PathIsUNCServerShareA, PathIsUNCServerShareW, PathIsUNCServerW, PathIsUNCW, PathIsURLA, PathIsURLW, PathIsValidCharA, PathIsValidCharW, PathMatchSpecA, PathMatchSpecExA, PathMatchSpecExW, PathMatchSpecW, PathParseIconLocationA, PathParseIconLocationW, PathQuoteSpacesA, PathQuoteSpacesW, PathRelativePathToA, PathRelativePathToW, PathRemoveBackslashA, PathRemoveBackslashW, PathRemoveBlanksA, PathRemoveBlanksW, PathRemoveExtensionA, PathRemoveExtensionW, PathRemoveFileSpecA, PathRemoveFileSpecW, PathRenameExtensionA, PathRenameExtensionW, PathSearchAndQualifyA, PathSearchAndQualifyW, PathSkipRootA, PathSkipRootW, PathStripPathA, PathStripPathW, PathStripToRootA, PathStripToRootW, PathUnExpandEnvStringsA, PathUnExpandEnvStringsW, PathUnquoteSpacesA, PathUnquoteSpacesW, QISearch, SHLoadIndirectString, SHRegCloseUSKey, SHRegCreateUSKeyA, SHRegCreateUSKeyW, SHRegDeleteEmptyUSKeyA, SHRegDeleteEmptyUSKeyW, SHRegDeleteUSValueA, SHRegDeleteUSValueW, SHRegEnumUSKeyA, SHRegEnumUSKeyW, SHRegEnumUSValueA, SHRegEnumUSValueW, SHRegGetBoolUSValueA, SHRegGetBoolUSValueW, SHRegGetUSValueA, SHRegGetUSValueW, SHRegOpenUSKeyA, SHRegOpenUSKeyW, SHRegQueryInfoUSKeyA, SHRegQueryInfoUSKeyW, SHRegQueryUSValueA, SHRegQueryUSValueW, SHRegSetUSValueA, SHRegSetUSValueW, SHRegWriteUSValueA, SHRegWriteUSValueW, SHTruncateString, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrCatBuffA, StrCatBuffW, StrCatChainW, StrChrA, StrChrIA, StrChrIW, StrChrNW, StrChrW, StrCmpCA, StrCmpCW, StrCmpICA, StrCmpICW, StrCmpIW, StrCmpLogicalW, StrCmpNA, StrCmpNCA, StrCmpNCW, StrCmpNIA, StrCmpNICA, StrCmpNICW, StrCmpNIW, StrCmpNW, StrCmpW, StrCpyNW, StrCpyNXA, StrCpyNXW, StrDupA, StrDupW, StrIsIntlEqualA, StrIsIntlEqualW, StrPBrkA, StrPBrkW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrSpnA, StrSpnW, StrStrA, StrStrIA, StrStrIW, StrStrNIW, StrStrNW, StrStrW, StrToInt64ExA, StrToInt64ExW, StrToIntA, StrToIntExA, StrToIntExW, StrToIntW, StrTrimA, StrTrimW, UrlApplySchemeA, UrlApplySchemeW, UrlCanonicalizeA, UrlCanonicalizeW, UrlCombineA, UrlCombineW, UrlCompareA, UrlCompareW, UrlCreateFromPathA, UrlCreateFromPathW, UrlEscapeA, UrlEscapeW, UrlFixupW, UrlGetLocationA, UrlGetLocationW, UrlGetPartA, UrlGetPartW, UrlHashA, UrlHashW, UrlIsA, UrlIsNoHistoryA, UrlIsNoHistoryW, UrlIsOpaqueA, UrlIsOpaqueW, UrlIsW, UrlUnescapeA, UrlUnescapeW
-- `kernelbase-to-shlwapi` → shlwapi.dll (27): PathAddExtensionW, PathRemoveExtensionW, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrChrA, StrChrIA, StrChrIW, StrChrW, StrCmpIW, StrCmpNA, StrCmpNIA, StrCmpNIW, StrCmpNW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrStrA, StrStrIA, StrStrIW, StrStrW, StrToIntA, StrToIntW
-- `not-reused` → imm32.dll (50): CreateFontIndirectW, DelayLoadFailureHook, DrawTextW, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetMonitorInfoW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsBadStringPtrA, IsBadStringPtrW, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MonitorFromPoint, MonitorFromWindow, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, RegCreateKeyExW, RegDeleteKeyW, RegGetValueW, RegOpenKeyW, RegSetValueExW, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
-- `ntdll-native` → ntdll.dll (20): LdrAddRefDll, NtAllocateVirtualMemory, NtClose, NtCreateKey, NtDeleteKey, NtOpenKey, NtQueryInformationFile, NtQuerySystemTime, RtlAreBitsClear, RtlAreBitsSet, RtlCreateUnicodeStringFromAsciiz, RtlGUIDFromString, RtlImageRvaToVa, RtlInitializeBitMap, RtlIsTextUnicode, RtlRandom, RtlSetBits, RtlTimeToSecondsSince1970, RtlUnicodeToMultiByteN, RtlUnicodeToMultiByteSize
-- `ntdll-runtime` → ntdll.dll (4): _alldiv, _allrem, _aulldiv, _chkstk
-- `w21-actctx` → kernel32.dll (7): ActivateActCtx, CreateActCtxW, DeactivateActCtx, FindActCtxSectionGuid, FindActCtxSectionStringW, GetCurrentActCtx, ReleaseActCtx
-- `w21-dpi` → user32.dll (3): GetDpiForMonitorInternal, GetProcessDpiAwarenessInternal, SetProcessDpiAwarenessInternal
-- `w21-msi` → advapi32.dll (1): CommandLineFromMsiDescriptor
-- `w21-nt-security` → advapi32.dll (5): ConvertSidToStringSidW, CreateProcessAsUserW, GetFileSecurityW, LookupPrivilegeValueW, SetFileSecurityW
-- `w21-services` → advapi32.dll (8): ChangeServiceConfig2W, ChangeServiceConfigW, CreateServiceW, OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatusEx, StartServiceW
-- `w21-thread-description` → kernel32.dll (1): SetThreadDescription
-- `w21-wow64` → kernel32.dll (3): GetSystemWow64DirectoryW, Wow64DisableWow64FsRedirection, Wow64RevertWow64FsRedirection
-- `wine-private` → shell32.dll (3): wine_get_dos_file_name, wine_get_host_version, wine_get_unix_file_name
+- f5-14b `absent-delayed-dll` → gdiplus.dll (7): GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectRectI, GdipGetImageDimension, GdipGetImageThumbnail, GdipLoadImageFromFile
+- f5-14b `absent-delayed-dll` → iphlpapi.dll (1): GetAdaptersInfo
+- f5-14b `absent-delayed-dll` → mlang.dll (1): ConvertINetUnicodeToMultiByte
+- f5-14b `absent-delayed-dll` → secur32.dll (18): AcceptSecurityContext, AcquireCredentialsHandleA, AcquireCredentialsHandleW, CompleteAuthToken, DecryptMessage, DeleteSecurityContext, EncryptMessage, EnumerateSecurityPackagesA, EnumerateSecurityPackagesW, FreeContextBuffer, FreeCredentialsHandle, GetUserNameExW, ImpersonateSecurityContext, InitializeSecurityContextW, MakeSignature, QueryContextAttributesA, RevertSecurityContext, VerifySignature
+- f5-14b `absent-delayed-dll` → shdocvw.dll (1): #218
+- f5-14b `absent-delayed-dll` → urlmon.dll (4): CoInternetParseUrl, CreateFormatEnumerator, CreateURLMoniker, RegisterFormatEnumerator
+- f5-14b `absent-delayed-dll` → uxtheme.dll (20): CloseThemeData, DrawThemeBackground, DrawThemeEdge, DrawThemeParentBackground, DrawThemeText, DrawThemeTextEx, EnableThemeDialogTexture, GetThemeBackgroundContentRect, GetThemeBackgroundExtent, GetThemeColor, GetThemeFont, GetThemeInt, GetThemeMargins, GetThemePartSize, GetThemeTextExtent, GetWindowTheme, IsThemeBackgroundPartiallyTransparent, IsThemePartDefined, OpenThemeData, OpenThemeDataForDpi
+- f5-14b `absent-delayed-dll` → windowscodecs.dll (1): WICConvertBitmapSource
+- f5-14b `absent-delayed-dll` → wintrust.dll (4): CryptCATAdminAcquireContext, CryptCATAdminAddCatalog, CryptCATAdminReleaseCatalogContext, CryptCATAdminReleaseContext
+- f5-14b `absent-forwarder-dll` → userenv.dll (2): ExpandEnvironmentStringsForUserA, ExpandEnvironmentStringsForUserW
+- f5-14b `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
+- f5-14b `ciukios-stub-dll` → imm32.dll (3): ImmGetCompositionStringW, ImmSetCompositionFontW, ImmSetCompositionWindow
+- f5-14b `ciukios-stub-dll` → mpr.dll (2): WNetGetLastErrorW, WNetRestoreConnectionW
+- f5-14b `ciukios-stub-dll` → winspool.drv (12): DeviceCapabilitiesA, DeviceCapabilitiesW, DocumentPropertiesW, EnumPrintersA, EnumPrintersW, GetDefaultPrinterA, GetDefaultPrinterW, GetPrinterA, GetPrinterDriverA, GetPrinterDriverW, GetPrinterW, OpenPrinterW
+- f5-14b `ciukios-version` → version.dll (3): GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW
+- f5-14b `core-api` → advapi32.dll (24): GetCurrentHwProfileA, GetUserNameW, RegCreateKeyExW, RegCreateKeyW, RegDeleteKeyExW, RegDeleteKeyW, RegDeleteTreeA, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegEnumKeyW, RegEnumValueW, RegGetValueA, RegGetValueW, RegLoadMUIStringA, RegLoadMUIStringW, RegOpenKeyExW, RegOpenKeyW, RegQueryInfoKeyW, RegQueryValueExW, RegQueryValueW, RegSetValueExW, RegSetValueW, SystemFunction036
+- f5-14b `core-api` → gdi32.dll (38): CloseMetaFile, CopyEnhMetaFileW, CopyMetaFileW, CreateColorSpaceW, CreateFontIndirectW, CreateFontW, CreateHalftonePalette, CreateMetaFileW, CreateRoundRectRgn, DeleteEnhMetaFile, EnumFontFamiliesExW, EnumFontFamiliesW, ExtCreatePen, ExtEscape, GdiAlphaBlend, GdiConvertToDevmodeW, GdiGetCharDimensions, GdiGetCodePage, GetBitmapBits, GetCharABCWidthsW, GetCharWidth32W, GetCharWidthInfo, GetCharWidthW, GetCharacterPlacementW, GetEnhMetaFileBits, GetEnhMetaFileHeader, GetLayout, GetMetaFileBitsEx, GetTextCharsetInfo, GetTextFaceW, GetTextMetricsW, GetWinMetaFileBits, PlayEnhMetaFile, PolyPolyline, SetEnhMetaFileBits, SetWinMetaFileBits, StartDocW, TranslateCharsetInfo
+- f5-14b `core-api` → kernel32.dll (99): Beep, CompareStringOrdinal, ConvertDefaultLocale, CopyFileW, CreateDirectoryW, CreateFileMappingW, CreatePipe, CreateSemaphoreW, CreateTimerQueueTimer, DelayLoadFailureHook, DeleteFileW, DeviceIoControl, EnumResourceNamesW, EnumSystemLocalesEx, ExpandEnvironmentStringsA, ExpandEnvironmentStringsW, FindFirstFileW, FindNextFileW, FindResourceExW, FindResourceW, FormatMessageW, GetBinaryTypeW, GetCPInfoExW, GetConsoleMode, GetCurrencyFormatW, GetCurrentDirectoryW, GetDateFormatW, GetDiskFreeSpaceExW, GetDiskFreeSpaceW, GetDriveTypeW, GetFileAttributesExW, GetFileAttributesW, GetFileInformationByHandle, GetFileSizeEx, GetFinalPathNameByHandleW, GetFullPathNameW, GetLocaleInfoEx, GetLogicalDriveStringsW, GetLongPathNameW, GetNumberFormatW, GetPrivateProfileIntW, GetPrivateProfileStringW, GetPrivateProfileStructW, GetProfileStringW, GetShortPathNameW, GetStringTypeExW, GetSystemDefaultUILanguage, GetSystemDirectoryW, GetSystemWindowsDirectoryA, GetSystemWindowsDirectoryW, GetTempFileNameW, GetTempPathW, GetThreadId, GetTickCount64, GetTimeFormatW, GetUserDefaultLocaleName, GetUserDefaultUILanguage, GetVolumeInformationW, GetWindowsDirectoryW, GlobalAddAtomW, GlobalFindAtomW, HeapCompact, InitOnceExecuteOnce, InitializeCriticalSectionEx, IsBadStringPtrA, IsBadStringPtrW, IsValidLocaleName, IsWow64Process, LCIDToLocaleName, LZClose, LZCopy, LZOpenFileW, LZRead, LZSeek, LocaleNameToLCID, MoveFileExW, MoveFileW, OpenEventW, OpenSemaphoreW, OutputDebugStringW, PeekConsoleInputA, PostQueuedCompletionStatus, ProcessIdToSessionId, QueueUserWorkItem, ReadConsoleA, ReadConsoleInputW, RemoveDirectoryW, ResolveDelayLoadedAPI, SearchPathW, SetConsoleMode, SetCurrentDirectoryW, SetFileAttributesW, SetFilePointerEx, SystemTimeToTzSpecificLocalTime, VerifyConsoleIoHandle, WritePrivateProfileStringW, WritePrivateProfileStructW, lstrcmpW, lstrcmpiW
+- f5-14b `core-api` → user32.dll (105): AppendMenuW, CharLowerBuffW, CharLowerW, CharNextW, CharPrevW, CharToOemW, CharUpperBuffW, CharUpperW, CheckMenuRadioItem, ChildWindowFromPoint, CopyAcceleratorTableW, CopyIcon, CopyImage, CreateAcceleratorTableW, CreateCaret, CreateDialogIndirectParamW, CreateDialogParamW, CreateIconFromResourceEx, CreatePopupMenu, DdeCreateStringHandleW, DdeGetLastError, DdeInitializeW, DdeQueryStringW, DialogBoxIndirectParamW, DialogBoxParamW, DlgDirListComboBoxW, DlgDirListW, DragDetect, DrawFrameControl, DrawStateW, DrawTextExW, DrawTextW, EnableScrollBar, EnumClipboardFormats, GetAncestor, GetCaretPos, GetClipboardFormatNameA, GetClipboardFormatNameW, GetClipboardSequenceNumber, GetDlgItemInt, GetDlgItemTextW, GetDpiForWindow, GetIconInfo, GetMenuDefaultItem, GetMenuInfo, GetMenuItemInfoW, GetMenuItemRect, GetMenuStringW, GetMonitorInfoW, GetNextDlgGroupItem, GetScrollInfo, GetScrollPos, GetWindowInfo, GetWindowRgn, InsertMenuItemW, InsertMenuW, InternalGetWindowText, InvertRect, IsCharAlphaNumericW, IsCharAlphaW, IsCharLowerW, IsCharUpperW, IsDialogMessageW, IsDlgButtonChecked, IsProcessDPIAware, KillSystemTimer, LoadAcceleratorsW, LoadBitmapW, LoadImageW, LoadMenuW, LoadStringW, MapDialogRect, MessageBoxIndirectW, MessageBoxW, ModifyMenuW, MonitorFromRect, MonitorFromWindow, NotifyWinEvent, OemToCharW, PrivateExtractIconExW, PrivateExtractIconsW, RegisterClipboardFormatA, RegisterClipboardFormatW, RemoveMenu, SendDlgItemMessageW, SetCaretPos, SetDlgItemInt, SetDlgItemTextW, SetMenuDefaultItem, SetMenuInfo, SetMenuItemInfoW, SetScrollInfo, SetScrollRange, SetSystemTimer, SetWindowRgn, ShowScrollBar, SubtractRect, TabbedTextOutW, TrackMouseEvent, TrackPopupMenu, TrackPopupMenuEx, TranslateAcceleratorW, WinHelpW, wsprintfW, wvsprintfW
+- f5-14b `core-security-structures` → advapi32.dll (9): AddAccessAllowedAce, AddAccessAllowedAceEx, AddAccessDeniedAce, AddAccessDeniedAceEx, GetLengthSid, InitializeAcl, InitializeSecurityDescriptor, SetSecurityDescriptorDacl, SetSecurityDescriptorOwner
+- f5-14b `core-uniscribe` → gdi32.dll (17): ScriptBreak, ScriptCPtoX, ScriptFreeCache, ScriptItemize, ScriptLayout, ScriptPlace, ScriptShape, ScriptStringAnalyse, ScriptStringCPtoX, ScriptStringFree, ScriptStringGetLogicalWidths, ScriptStringOut, ScriptStringXtoCP, ScriptString_pSize, ScriptString_pcOutChars, ScriptTextOut, ScriptXtoCP
+- f5-14b `kernelbase-internal` → ole32.dll (1): PathCchFindExtension
+- f5-14b `kernelbase-retarget` → kernel32.dll (85): CloseHandle, CompareFileTime, CompareStringA, CompareStringW, CreateEventW, CreateFileA, CreateFileW, CreateProcessW, CreateThread, DeleteCriticalSection, DisableThreadLibraryCalls, DuplicateHandle, EnterCriticalSection, FileTimeToSystemTime, FindClose, FreeLibrary, FreeResource, GetACP, GetEnvironmentVariableW, GetFileAttributesA, GetFileSize, GetFullPathNameA, GetLocalTime, GetLocaleInfoW, GetModuleFileNameA, GetModuleFileNameW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetStringTypeW, GetSystemInfo, GetThreadLocale, GetTickCount, GetUserDefaultLCID, GetVersion, GetVersionExW, GlobalAlloc, GlobalFree, HeapAlloc, HeapFree, HeapReAlloc, HeapSize, IsDBCSLeadByte, IsValidLocale, LeaveCriticalSection, LoadLibraryA, LoadLibraryExA, LoadLibraryExW, LoadLibraryW, LoadResource, LocalAlloc, LocalFree, LocalLock, LocalReAlloc, LocalUnlock, LockFileEx, LockResource, MapViewOfFile, MulDiv, MultiByteToWideChar, OpenProcess, QueryPerformanceCounter, QueryPerformanceFrequency, RaiseException, ReadFile, ReleaseSemaphore, ResetEvent, SetEndOfFile, SetErrorMode, SetEvent, SetFileAttributesA, SetFilePointer, SizeofResource, Sleep, SystemTimeToFileTime, TerminateProcess, UnlockFileEx, UnmapViewOfFile, VirtualFree, VirtualQuery, WaitForSingleObject, WideCharToMultiByte, WriteFile, lstrcmpA, lstrcmpiA
+- f5-14b `kernelbase-shlwapi-compile-in` → shlwapi.dll (211): ChrCmpIA, ChrCmpIW, GetAcceptLanguagesA, GetAcceptLanguagesW, HashData, IsCharBlankW, IsCharCntrlW, IsCharDigitW, IsCharPunctW, IsCharSpaceA, IsCharSpaceW, IsCharXDigitW, IsInternetESCEnabled, ParseURLA, ParseURLW, PathAddBackslashA, PathAddBackslashW, PathAddExtensionA, PathAddExtensionW, PathAppendA, PathAppendW, PathCanonicalizeA, PathCanonicalizeW, PathCombineA, PathCombineW, PathCommonPrefixA, PathCommonPrefixW, PathCreateFromUrlA, PathCreateFromUrlAlloc, PathCreateFromUrlW, PathFileExistsA, PathFileExistsW, PathFindExtensionA, PathFindExtensionW, PathFindFileNameA, PathFindFileNameW, PathFindNextComponentA, PathFindNextComponentW, PathGetArgsA, PathGetArgsW, PathGetCharTypeA, PathGetCharTypeW, PathGetDriveNumberA, PathGetDriveNumberW, PathIsFileSpecA, PathIsFileSpecW, PathIsLFNFileSpecA, PathIsLFNFileSpecW, PathIsPrefixA, PathIsPrefixW, PathIsRelativeA, PathIsRelativeW, PathIsRootA, PathIsRootW, PathIsSameRootA, PathIsSameRootW, PathIsUNCA, PathIsUNCServerA, PathIsUNCServerShareA, PathIsUNCServerShareW, PathIsUNCServerW, PathIsUNCW, PathIsURLA, PathIsURLW, PathIsValidCharA, PathIsValidCharW, PathMatchSpecA, PathMatchSpecExA, PathMatchSpecExW, PathMatchSpecW, PathParseIconLocationA, PathParseIconLocationW, PathQuoteSpacesA, PathQuoteSpacesW, PathRelativePathToA, PathRelativePathToW, PathRemoveBackslashA, PathRemoveBackslashW, PathRemoveBlanksA, PathRemoveBlanksW, PathRemoveExtensionA, PathRemoveExtensionW, PathRemoveFileSpecA, PathRemoveFileSpecW, PathRenameExtensionA, PathRenameExtensionW, PathSearchAndQualifyA, PathSearchAndQualifyW, PathSkipRootA, PathSkipRootW, PathStripPathA, PathStripPathW, PathStripToRootA, PathStripToRootW, PathUnExpandEnvStringsA, PathUnExpandEnvStringsW, PathUnquoteSpacesA, PathUnquoteSpacesW, QISearch, SHLoadIndirectString, SHRegCloseUSKey, SHRegCreateUSKeyA, SHRegCreateUSKeyW, SHRegDeleteEmptyUSKeyA, SHRegDeleteEmptyUSKeyW, SHRegDeleteUSValueA, SHRegDeleteUSValueW, SHRegEnumUSKeyA, SHRegEnumUSKeyW, SHRegEnumUSValueA, SHRegEnumUSValueW, SHRegGetBoolUSValueA, SHRegGetBoolUSValueW, SHRegGetUSValueA, SHRegGetUSValueW, SHRegOpenUSKeyA, SHRegOpenUSKeyW, SHRegQueryInfoUSKeyA, SHRegQueryInfoUSKeyW, SHRegQueryUSValueA, SHRegQueryUSValueW, SHRegSetUSValueA, SHRegSetUSValueW, SHRegWriteUSValueA, SHRegWriteUSValueW, SHTruncateString, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrCatBuffA, StrCatBuffW, StrCatChainW, StrChrA, StrChrIA, StrChrIW, StrChrNW, StrChrW, StrCmpCA, StrCmpCW, StrCmpICA, StrCmpICW, StrCmpIW, StrCmpLogicalW, StrCmpNA, StrCmpNCA, StrCmpNCW, StrCmpNIA, StrCmpNICA, StrCmpNICW, StrCmpNIW, StrCmpNW, StrCmpW, StrCpyNW, StrCpyNXA, StrCpyNXW, StrDupA, StrDupW, StrIsIntlEqualA, StrIsIntlEqualW, StrPBrkA, StrPBrkW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrSpnA, StrSpnW, StrStrA, StrStrIA, StrStrIW, StrStrNIW, StrStrNW, StrStrW, StrToInt64ExA, StrToInt64ExW, StrToIntA, StrToIntExA, StrToIntExW, StrToIntW, StrTrimA, StrTrimW, UrlApplySchemeA, UrlApplySchemeW, UrlCanonicalizeA, UrlCanonicalizeW, UrlCombineA, UrlCombineW, UrlCompareA, UrlCompareW, UrlCreateFromPathA, UrlCreateFromPathW, UrlEscapeA, UrlEscapeW, UrlFixupW, UrlGetLocationA, UrlGetLocationW, UrlGetPartA, UrlGetPartW, UrlHashA, UrlHashW, UrlIsA, UrlIsNoHistoryA, UrlIsNoHistoryW, UrlIsOpaqueA, UrlIsOpaqueW, UrlIsW, UrlUnescapeA, UrlUnescapeW
+- f5-14b `kernelbase-to-shlwapi` → shlwapi.dll (27): PathAddExtensionW, PathRemoveExtensionW, StrCSpnA, StrCSpnIA, StrCSpnIW, StrCSpnW, StrChrA, StrChrIA, StrChrIW, StrChrW, StrCmpIW, StrCmpNA, StrCmpNIA, StrCmpNIW, StrCmpNW, StrRChrA, StrRChrIA, StrRChrIW, StrRChrW, StrRStrIA, StrRStrIW, StrStrA, StrStrIA, StrStrIW, StrStrW, StrToIntA, StrToIntW
+- f5-14b `not-reused` → imm32.dll (50): CreateFontIndirectW, DelayLoadFailureHook, DrawTextW, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetMonitorInfoW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsBadStringPtrA, IsBadStringPtrW, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MonitorFromPoint, MonitorFromWindow, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, RegCreateKeyExW, RegDeleteKeyW, RegGetValueW, RegOpenKeyW, RegSetValueExW, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
+- f5-14b `ntdll-native` → ntdll.dll (20): LdrAddRefDll, NtAllocateVirtualMemory, NtClose, NtCreateKey, NtDeleteKey, NtOpenKey, NtQueryInformationFile, NtQuerySystemTime, RtlAreBitsClear, RtlAreBitsSet, RtlCreateUnicodeStringFromAsciiz, RtlGUIDFromString, RtlImageRvaToVa, RtlInitializeBitMap, RtlIsTextUnicode, RtlRandom, RtlSetBits, RtlTimeToSecondsSince1970, RtlUnicodeToMultiByteN, RtlUnicodeToMultiByteSize
+- f5-14b `ntdll-runtime` → ntdll.dll (4): _alldiv, _allrem, _aulldiv, _chkstk
+- f5-14b `w21-actctx` → kernel32.dll (7): ActivateActCtx, CreateActCtxW, DeactivateActCtx, FindActCtxSectionGuid, FindActCtxSectionStringW, GetCurrentActCtx, ReleaseActCtx
+- f5-14b `w21-dpi` → user32.dll (3): GetDpiForMonitorInternal, GetProcessDpiAwarenessInternal, SetProcessDpiAwarenessInternal
+- f5-14b `w21-msi` → advapi32.dll (1): CommandLineFromMsiDescriptor
+- f5-14b `w21-nt-security` → advapi32.dll (5): ConvertSidToStringSidW, CreateProcessAsUserW, GetFileSecurityW, LookupPrivilegeValueW, SetFileSecurityW
+- f5-14b `w21-services` → advapi32.dll (8): ChangeServiceConfig2W, ChangeServiceConfigW, CreateServiceW, OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatusEx, StartServiceW
+- f5-14b `w21-thread-description` → kernel32.dll (1): SetThreadDescription
+- f5-14b `w21-wow64` → kernel32.dll (3): GetSystemWow64DirectoryW, Wow64DisableWow64FsRedirection, Wow64RevertWow64FsRedirection
+- f5-14b `wine-private` → shell32.dll (3): wine_get_dos_file_name, wine_get_host_version, wine_get_unix_file_name
+- f5-20b `core-api-f5-20b` → gdi32.dll (4): CopyEnhMetaFileA, CopyMetaFileA, CreateMetaFileA, DeleteColorSpace
+- f5-20b `core-api-f5-20b` → user32.dll (87): BeginDeferWindowPos, CallMsgFilterW, CallWindowProcW, CharLowerA, CharLowerBuffA, CharNextA, CharPrevA, CharToOemA, CharToOemBuffA, CharToOemBuffW, CharUpperA, CharUpperBuffA, ChildWindowFromPointEx, CreateIconFromResource, CreateWindowExW, DdeClientTransaction, DdeConnect, DdeCreateDataHandle, DdeCreateStringHandleA, DdeDisconnect, DdeFreeDataHandle, DdeFreeStringHandle, DdeGetData, DdeInitializeA, DdeNameService, DdeQueryStringA, DdeUninitialize, DefDlgProcW, DefWindowProcW, DeferWindowPos, DispatchMessageW, DlgDirListA, DlgDirListComboBoxA, EndDeferWindowPos, FindWindowExW, FindWindowW, GetClassInfoExW, GetClassInfoW, GetClassLongW, GetClassNameW, GetDesktopWindow, GetMessageW, GetMonitorInfoA, GetPropW, GetTabbedTextExtentW, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW, GrayStringW, IsCharAlphaA, IsCharAlphaNumericA, IsCharLowerA, IsCharUpperA, LoadCursorW, LoadIconW, LoadMenuIndirectW, MessageBoxExW, MessageBoxIndirectA, MonitorFromPoint, OemToCharA, OemToCharBuffA, OemToCharBuffW, PeekMessageW, PostMessageW, PostThreadMessageW, PrivateExtractIconExA, PrivateExtractIconsA, RegisterClassExW, RegisterClassW, RegisterWindowMessageW, RemovePropW, SendMessageTimeoutW, SendMessageW, SendNotifyMessageW, SetClassLongW, SetPropW, SetWindowLongW, SetWindowTextW, SetWindowsHookExW, SystemParametersInfoW, UnregisterClassW, VkKeyScanExW, VkKeyScanW, WaitForInputIdle, WinHelpA, wsprintfA, wvsprintfA
+- f5-20c `absent-forwarder-dll` → userenv.dll (2): ExpandEnvironmentStringsForUserA, ExpandEnvironmentStringsForUserW
+- f5-20c `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
+- f5-20c `core-api-f5-20c` → kernel32.dll (4): DebugBreak, IsBadCodePtr, IsBadReadPtr, IsBadWritePtr
+- f5-20c `core-census-w21` → imm32.dll (2): ImmGetContext, ImmReleaseContext
+- f5-20c `core-census-w21` → kernel32.dll (3): GetNumberOfConsoleInputEvents, ReadConsoleInputA, SetConsoleCtrlHandler
+- f5-20c `core-census-w21` → winspool.drv (3): ClosePrinter, DocumentPropertiesA, OpenPrinterA
+- f5-20c `not-reused` → imm32.dll (38): DelayLoadFailureHook, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
+
+### Load and DllMain evidence (generated)
+
+H0: native production-loader model, DllMain observed. H1: i386 Linux adapter, production loader and core PEs, every DllMain executed; PE ntdll with the H1 transport (identity, w32srv atoms, console), seccomp-confined.
+
+| DLL | H0 binding | H0 DllMain attach/detach (observed) | H1 outcome | H1 DllMain attach TRUE | H1 detach | Kernel records ENOSYS | w32srv requests |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| advpack.dll | bound | 12/12 | loaded | 11/11 | 11 | 10 | 0 |
+| cabinet.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
+| combase.dll | bound | 8/8 | loaded | 7/7 | 7 | 8 | 0 |
+| comctl32.dll | bound | 7/7 | loaded | 6/6 | 6 | 8 | 44 |
+| comdlg32.dll | bound | 9/9 | loaded | 8/8 | 8 | 8 | 44 |
+| coml2.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
+| msvcrt.dll | bound | 2/2 | loaded | 1/1 | 1 | 8 | 0 |
+| ole32.dll | bound | 8/8 | loaded | 7/7 | 7 | 8 | 0 |
+| oleaut32.dll | bound | 9/9 | loaded | 8/8 | 8 | 8 | 0 |
+| riched20.dll | bound | 10/10 | loaded | 9/9 | 9 | 8 | 8 |
+| riched32.dll | bound | 11/11 | loaded | 10/10 | 10 | 8 | 10 |
+| rpcrt4.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
+| setupapi.dll | bound | 7/7 | loaded | 6/6 | 6 | 10 | 0 |
+| shcore.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
+| shell32.dll | bound | 7/7 | loaded | 6/6 | 6 | 8 | 0 |
+| shlwapi.dll | bound | 6/6 | loaded | 5/5 | 5 | 8 | 0 |
+
+### Upstream conformance units on the H1 adapter (generated)
+
+Wine 10.0 `dlls/*/tests` programs (test-runtime imports missing from the core are stubbed inside the program, listed below); the adapter has no CiukiOS kernel, so kernel record operations it does not model fail with ENOSYS.
+
+| Unit | Outcome | Executed | Failures | Skipped | Failed checks reported | ENOSYS kernel operations |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| comctl32:imagelist | crashed c0000005 | - | - | - | 119 | 0x00000002×1, 0x00000006×2, 0x00000100×1, 0x0000010a×1 |
+| comdlg32:filedlg | crashed c0000005 | - | - | - | 0 | 0x00000002×1, 0x00000006×2, 0x00000100×1, 0x00000109×18, 0x0000010a×1 |
+| comdlg32:finddlg | completed | 43 | 18 | 0 | 18 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x0000010a×1 |
+| comdlg32:printdlg | completed | 15 | 0 | 4 | 0 | 0x00000002×2, 0x00000006×2, 0x00000100×3, 0x00000109×1, 0x0000010a×1 |
+| ole32:compobj | crashed c0000005 | - | - | - | 25 | 0x00000002×1, 0x00000006×15, 0x0000000a×2, 0x00000100×4, 0x00000101×2, 0x00000109×9, 0x0000010a×1 |
+| ole32:ole2 | crashed c0000005 | - | - | - | 1 | 0x00000002×2, 0x00000006×2, 0x00000100×1, 0x00000109×1, 0x0000010a×1 |
+| riched20:txtsrv | completed | 213 | 13 | 0 | 13 | 0x00000002×1, 0x00000006×5, 0x00000100×3, 0x00000109×27, 0x0000010a×1 |
+| shell32:brsfolder | completed | 1 | 1 | 4 | 1 | 0x00000002×1, 0x00000006×3, 0x00000100×3, 0x00000109×4, 0x0000010a×1 |
+| shell32:shelllink | crashed c0000005 | - | - | - | 22 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x00000109×15, 0x0000010a×1 |
+| shell32:shellole | crashed c0000005 | - | - | - | 20 | 0x00000002×1, 0x00000006×3, 0x0000000a×2, 0x00000100×7, 0x00000101×4, 0x0000010a×1 |
+| shell32:shellpath | completed | 0 | 0 | 0 | 0 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x00000109×1, 0x0000010a×1 |
+| shell32:shlexec | exited | - | - | - | 2 | 0x00000002×1, 0x00000006×4, 0x00000100×4, 0x00000109×6, 0x0000010a×1 |
+| shell32:shlfileop | crashed c0000005 | - | - | - | 325 | 0x00000002×1, 0x00000006×4, 0x00000100×201, 0x00000109×1864, 0x0000010a×1 |
+| shell32:shlfolder | crashed c0000005 | - | - | - | 0 | 0x00000002×1, 0x00000006×3, 0x00000100×1, 0x0000010a×1 |
+| shell32:systray | timeout | - | - | - | 7 | - |
+
+Test-runtime stubs per program: comctl32: gdi32.dll!CloseEnhMetaFile, gdi32.dll!CreateEnhMetaFileW, imm32.dll!ImmSetCompositionStringA, kernel32.dll!CreateActCtxA, kernel32.dll!FindActCtxSectionStringA, kernel32.dll!GetProcessId, user32.dll!CreateIcon, user32.dll!DlgDirSelectExA, user32.dll!GetComboBoxInfo, user32.dll!GetListBoxInfo, user32.dll!GetMenuBarInfo, user32.dll!GetOpenClipboardWindow, user32.dll!RealGetWindowClassA, user32.dll!SendInput, user32.dll!SetProcessDefaultLayout, user32.dll!SetWinEventHook, user32.dll!SetWindowsHookA, user32.dll!UnhookWinEvent, user32.dll!UnhookWindowsHook, uxtheme.dll!SetWindowTheme; comdlg32: kernel32.dll!GetProcessId; ole32: gdi32.dll!CloseEnhMetaFile, gdi32.dll!CreateEnhMetaFileA, gdi32.dll!CreateEnhMetaFileW, kernel32.dll!GetProcessId, user32.dll!CreateIcon; riched20: kernel32.dll!GetProcessId, user32.dll!GetOpenClipboardWindow; shell32: kernel32.dll!GetProcessId, kernel32.dll!OpenFileMappingA, user32.dll!DdeCmpStringHandles, user32.dll!keybd_event
 
 ### MSVCRT measurement (generated)
 
-Surface: the 85 MSVCRT functions the reused DLLs import.
+Surface: the 87 MSVCRT functions the reused DLLs import.
 
 | Candidate | Bytes | Pages (model) | Surface covered | Notes |
 | --- | ---: | ---: | ---: | --- |
-| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 85/85 | 1290 exported names, MSVCRT ABI |
-| CiukiOS newlib port (SDK `libc.a` `cd8d9c82981bc3dd`) | 93,374 text + 420 data | 24 | 72/85 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
+| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 87/87 | 1290 exported names, MSVCRT ABI |
+| CiukiOS newlib port (SDK `libc.a` `cd8d9c82981bc3dd`) | 93,542 text + 420 data | 24 | 74/87 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
 
 Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.
 
 ### 128 MiB fit figures (generated)
 
-| Figure | Value |
-| --- | ---: |
-| Reused DLLs | 16 |
-| File bytes | 15,343,616 |
-| SizeOfImage | 15,486,976 |
-| Shared seed pages | 3746 (15,343,616 bytes) |
-| Private COW commitment pages | 77 |
-| Startup committed pages (model) | 3823 |
-| Contract installer budget (P2+P4) | 14,680,064 |
-| SizeOfImage within budget | no |
-| SHELL32 SizeOfImage | 9,363,456 |
+| Figure | f5-20C build | f5-14B build |
+| --- | ---: | ---: |
+| Reused DLLs | 16 | 16 |
+| File bytes | 9,359,360 | 15,343,616 |
+| SizeOfImage | 9,502,720 | 15,486,976 |
+| Shared seed pages | 2285 (9,359,360 bytes) | 3746 |
+| Private COW commitment pages | 77 | 77 |
+| Startup committed pages (model) | 2362 | 3823 |
+| Contract installer budget (P2+P4) | 14,680,064 | 14,680,064 |
+| SizeOfImage within budget | yes | no |
+| SHELL32 SizeOfImage | 3,293,184 | 9,363,456 |
 
 Cold section-store header/raw seed page union; writable COW commitment promises counted separately, not resident pages. Excludes DllMain heaps, page tables, metadata and other modules; not guest RSS or a whole-system 128 MiB fit result.
 

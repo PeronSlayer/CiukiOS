@@ -51,6 +51,19 @@ typedef struct {
     void *LockSemaphore;
     ULONG SpinCount;
 } RTL_CRITICAL_SECTION;
+/* NT RTL_CRITICAL_SECTION_DEBUG, 32-bit layout (Spare = Flags and the high
+ * back-trace words; Wine stores a section name in Spare[0]). CiukiOS creates
+ * one only for InitializeCriticalSectionEx with
+ * RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO and marks it W32_CS_DEBUG_OWNED,
+ * so RtlDeleteCriticalSection frees exactly the blocks it allocated. */
+typedef struct {
+    uint16_t Type, CreatorBackTraceIndex;
+    RTL_CRITICAL_SECTION *CriticalSection;
+    LIST_ENTRY ProcessLocksList;
+    ULONG EntryCount, ContentionCount;
+    uintptr_t Spare[2];
+} RTL_CRITICAL_SECTION_DEBUG;
+#define W32_CS_DEBUG_OWNED 0xc105u
 void *w32_copy(void *, const void *, uint32_t);
 void *w32_fill(void *, uint8_t, uint32_t);
 uint32_t w32_strlen(const char *);

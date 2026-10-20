@@ -25,6 +25,8 @@ def upper_decisions(dll):
     """core-implement/core-w21-stub decisions of the reused Wine DLLs owned by `dll`."""
     rows={}
     for e in json.loads(UPPER.read_text())['decisions']:
+        # The f5-14B decision table (f5-20C added audit 'f5-20b'/'f5-20c' rows).
+        if e.get('audit','f5-14b')!='f5-14b':continue
         if e['owner']==dll and e['action'] in ('core-implement','core-w21-stub'):
             row=rows.setdefault(e['name'],{'name':e['name'],'action':e['action'],'rule':e['rule'],
                                            'importers':set(),'symbols':set()})

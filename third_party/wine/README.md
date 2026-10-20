@@ -52,3 +52,15 @@ section-store page models, the licence entry and one decision per missing
 core export. The production builtin store continues to reject reused Wine
 records (unlisted, mismatched or unqualified). No binary is distributed in an
 OS image by this continuation.
+
+### F5-20C
+
+The recipe applies ten recorded changes (PATCHES.md: the five above, the
+SHELL32 icon-format filter 0006, the KERNELBASE retarget and compile-in
+0007/0008, the SHELL32 Wine-private call removal 0009 and the MSVCRT C-locale
+code page 0010). `scripts/build_image.py` stages qualified reused PEs in the
+image's builtin store, with this directory's LICENSE, COPYING.LIB, AUTHORS,
+SOURCE-OFFER.txt, PATCHES.md and README.md as `/system/licenses/WINE-*`. No PE
+is qualified yet (lead decision: MSVCRT, whose H0/H1 evidence is recorded in
+`config/wine-upper.json`, is staged once a cached upper build is part of
+`make build-full`), so no reused PE is distributed.

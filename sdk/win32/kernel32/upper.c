@@ -13,6 +13,11 @@ extern BOOL W32API FreeLibrary(HANDLE);
 extern void *W32API GetProcAddress(HANDLE, const char *);
 extern HANDLE W32API GetModuleHandleA(const char *);
 extern DWORD W32API GetTimeZoneInformation(TIME_ZONE_INFORMATION *);
+/* DebugBreak (f5-20C, lead decision): an int 3 in the calling thread, as on
+ * Windows; the kernel delivers vector 3 as EXCEPTION_BREAKPOINT through the
+ * normal SEH dispatch (src/kernel/proc/win32/context.c), and an unhandled
+ * breakpoint ends the process like any unhandled exception. */
+void W32API DebugBreak(void) { __asm__ volatile("int3"); }
 /* Windows 95/98 Beep ignores frequency and duration (default sound). */
 BOOL W32API Beep(DWORD frequency, DWORD duration) {
   (void)frequency;
@@ -142,12 +147,37 @@ BOOL W32API InitOnceExecuteOnce(uintptr_t *once, k32_once_callback callback, voi
   }
 }
 /* Only the documented RTL_CRITICAL_SECTION_FLAG_* bits are accepted. */
+/* RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO (0x10000000, winnt.h) makes NT
+ * allocate the RTL_CRITICAL_SECTION_DEBUG block; the reused Wine DLLs ask for
+ * it and then name the section through DebugInfo->Spare[0] (msvcrt lock
+ * table, combase apartments, rpcrt4, comctl32 animation, ole32 property
+ * storage). CRITICAL_SECTION_NO_DEBUG_INFO (0x01000000) wins; without the
+ * force flag DebugInfo stays NULL. RtlDeleteCriticalSection frees it. */
 BOOL W32API InitializeCriticalSectionEx(RTL_CRITICAL_SECTION *section, DWORD spin, DWORD flags) {
   if (!section || (flags & 0x00ffffffu)) {
     SetLastError(87);
     return 0;
   }
-  return k32_status(RtlInitializeCriticalSectionAndSpinCount(section, spin & 0x00ffffffu));
+  RTL_CRITICAL_SECTION_DEBUG *debug = 0;
+  if ((flags & 0x10000000u) && !(flags & 0x01000000u)) {
+    debug = RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*debug));
+    if (!debug) {
+      SetLastError(8);
+      return 0;
+    }
+  }
+  if (!k32_status(RtlInitializeCriticalSectionAndSpinCount(section, spin & 0x00ffffffu))) {
+    if (debug)
+      RtlFreeHeap(GetProcessHeap(), 0, debug);
+    return 0;
+  }
+  if (debug) {
+    debug->CreatorBackTraceIndex = W32_CS_DEBUG_OWNED;
+    debug->CriticalSection = section;
+    debug->ProcessLocksList.Flink = debug->ProcessLocksList.Blink = &debug->ProcessLocksList;
+    section->DebugInfo = debug;
+  }
+  return 1;
 }
 /* Delay-load resolution (IMAGE_DELAYLOAD_DESCRIPTOR, RVA or VA form): load
  * the DLL once per descriptor, bind the thunk, call the DLL failure hook,

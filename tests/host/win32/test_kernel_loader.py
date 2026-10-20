@@ -125,7 +125,8 @@ class KernelLoaderTests(unittest.TestCase):
         # f5-20A: every core-implement/core-w21-stub decision of the reused Wine
         # DLLs owned by kernel32/ntdll/advapi32/version resolves through the
         # production loader and store (forwarders into LZ32 included).
-        decisions=json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+        decisions=[d for d in json.loads((ROOT/'config/wine-upper.json').read_text())['decisions']
+                   if d.get('audit','f5-14b')=='f5-14b']
         owners=('kernel32.dll','ntdll.dll','advapi32.dll','version.dll')
         pairs=sorted({(d['owner'],d['name']) for d in decisions
                       if d['owner'] in owners and d['action'] in ('core-implement','core-w21-stub')})
@@ -175,7 +176,14 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertFalse(any(p.startswith('/WINDOWS/SYSTEM/') for p in sources))
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            self.assertEqual(len(meta['builtins']),32)
+            # f5-20C: 32 + nine absent-DLL W21 stubs, plus the qualified
+            # reused Wine PEs staged for the image (MSVCRT).
+            upper=json.loads((ROOT/'config/wine-upper.json').read_text())
+            staged={n for n,r in upper['dlls'].items() if r['qualified']}
+            self.assertEqual(len(meta['builtins']),41+len(staged))
+            for name in staged:
+                self.assertIn('/System/Win32/'+name,sources)
+                self.assertIn('/system/licenses/WINE-PATCHES.md',sources)
             self.assertIn('/System/Win32/dsetup.dll',sources)
             self.assertIn('/System/Win32/dsetup32.dll',sources)
             self.assertIn('/System/Win32/upper-builtins-inventory.json',sources)

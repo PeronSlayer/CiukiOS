@@ -26,6 +26,9 @@ def upper_decisions(dll='user32.dll'):
     """core-implement/core-w21-stub decisions of the reused Wine DLLs owned by `dll`."""
     rows = {}
     for e in json.loads(UPPER.read_text())['decisions']:
+        # The f5-14B decision table (f5-20C added audit 'f5-20b'/'f5-20c' rows).
+        if e.get('audit', 'f5-14b') != 'f5-14b':
+            continue
         if e['owner'] == dll and e['action'] in ('core-implement', 'core-w21-stub'):
             row = rows.setdefault(e['name'], {'name': e['name'], 'action': e['action'], 'rule': e['rule'],
                                               'importers': set(), 'symbols': set(), 'status': set()})
@@ -34,6 +37,25 @@ def upper_decisions(dll='user32.dll'):
             row['status'].add(e.get('f5_20b', 'undecided'))
     return [dict(r, importers=sorted(r['importers']), symbols=sorted(r['symbols']),
                  status=sorted(r['status'])[0]) for _, r in sorted(rows.items())]
+
+def wide_gate(objects,exports,objdir,dll,minus_one,flags):
+    """f5-20C (directive f5-20 amendment 2 item 7): the per-application w-stubs
+    shim gates every exported stdcall Unicode function, as in KERNEL32/ADVAPI32.
+    The implementation is renamed to w32_real_* in every object, so calls inside
+    the DLL stay ungated, and the exported name becomes the shim gate."""
+    from scripts.win32 import stub_signatures
+    wide=sorted((n,int(v.rsplit('@',1)[1])) for n,v in exports.items() if n.endswith('W') and '@' in v)
+    renames=[f'--redefine-sym=_{n}@{b}=_w32_real_{n}@{b}' for n,b in wide]
+    for obj in objects:
+        subprocess.run(['llvm-objcopy',*renames,str(obj)],check=True)
+    stem=dll.removesuffix('.dll')
+    source=Path(objdir)/(stem+'-wide.c')
+    source.write_text(stub_signatures.DECLARATIONS+'\n__declspec(dllimport) int w32_shim_w_stub(const char *);\n'+
+        '\n'.join(stub_signatures.wide_gate(dll,n,b,i,4 if n in minus_one else None) for i,(n,b) in enumerate(wide))+'\n')
+    obj=Path(objdir)/(stem+'-wide.obj')
+    subprocess.run(['clang',*flags,'-c',str(source),'-o',str(obj)],check=True)
+    objects.append(str(obj))
+    return [n for n,_ in wide]
 
 def failure_return(name):
     if name in MINUS_ONE_FAILURES:
@@ -99,6 +121,7 @@ def build(out, base, flags):
         for name in CDECL_EXPORTS:
             if re.search(r'\bT _'+name+r'\s*$',nm,re.M):
                 exports[name]=name
+    wide=wide_gate(objects,exports,objdir,'user32.dll',MINUS_ONE_FAILURES,flags)
     names=stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('user32.dll',set())
     names |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('user32.dll',set())
     specs=inventory()
@@ -142,7 +165,7 @@ def build(out, base, flags):
         upper.append(row)
     (out/'user32-coverage.json').write_text(json.dumps({'schema':1,
         'scope':'provisional research union plus authored fixtures; original acceptance media absent',
-        'exports':coverage,'unicode_stubs':sorted(unicode),
+        'exports':coverage,'unicode_stubs':sorted(unicode),'wide_gate':wide,
         'upper_scope':'f5-20B: core-implement and core-w21-stub decisions of config/wine-upper.json owned by user32.dll',
         'upper':upper},indent=2)+'\n')
     raw=image.read_bytes();pe=struct.unpack_from('<I',raw,60)[0]

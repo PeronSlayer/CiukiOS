@@ -31,7 +31,15 @@ MODULES = ('comctl32', 'comdlg32', 'shell32', 'shlwapi', 'ole32', 'combase',
            'coml2', 'shcore')
 PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patch',
            '0003-setupdi-unsupported.patch', '0004-single-msvcrt-crt.patch',
-           '0005-builtin-region-base.patch')
+           '0005-builtin-region-base.patch',
+           # f5-14B amendment 2: deterministic resource filter, not a text
+           # patch (the .ico inputs are binary); spec and result hashes in the file.
+           '0006-shell32-icon-trim.json',
+           # f5-20C: KERNELBASE retarget, kernelbase compile-in, Wine-private calls.
+           '0007-kernelbase-retarget.patch', '0008-kernelbase-compile-in.patch',
+           '0009-shell32-wine-private-calls.patch',
+           # f5-20C, found by the H1 DllMain run: MSVCRT's C locale code page.
+           '0010-msvcrt-sbcs-code-page.patch')
 CFLAGS = '-O2 -g0 -march=pentiumpro -mno-sse -mno-sse2 -mno-mmx -fno-ident'
 LDFLAGS = '--no-default-config -Wl,-timestamp:0'
 # Fixed CiukiOS builtin-region bases, packed in MODULES order with 64 KiB
@@ -80,6 +88,71 @@ def unpack(archive, destination):
                 target.chmod(member.mode & 0o777)
 
 
+PNG = b'\x89PNG\r\n\x1a\n'
+
+
+def trim_icon(data, keep):
+    """One .ico reduced to the kept images (order kept, offsets recomputed)."""
+    import struct
+    reserved, kind, count = struct.unpack_from('<HHH', data, 0)
+    if reserved or kind != 1 or not count or 6 + 16 * count > len(data):
+        raise ValueError('not an icon directory')
+    kept = []
+    for i in range(count):
+        entry = struct.unpack_from('<BBBBHHII', data, 6 + 16 * i)
+        size, offset = entry[6], entry[7]
+        image = data[offset:offset + size]
+        if len(image) != size or size < 40:
+            raise ValueError('icon image outside the file')
+        if image[:8] == PNG:
+            continue
+        header, width, height, _, bits = struct.unpack_from('<IiiHH', image, 0)
+        if header < 40:
+            raise ValueError('icon image without BITMAPINFOHEADER')
+        if bits <= keep['max_bit_count'] and width in keep['sizes'] and height == 2 * width:
+            kept.append((entry, image))
+    if not kept:
+        raise ValueError('icon without a kept image')
+    out, offset = struct.pack('<HHH', 0, 1, len(kept)), 6 + 16 * len(kept)
+    for entry, image in kept:
+        out += struct.pack('<BBBBHHII', *entry[:6], len(image), offset)
+        offset += len(image)
+    return out + b''.join(image for _, image in kept), [count, len(kept)]
+
+
+def icon_trim(spec, source, verify=True):
+    """Patch 0006: keep only Windows 98 icon formats in the listed directory.
+
+    With verify, every input and output must match the recorded SHA-256 and
+    image counts, so the filter is as reproducible as a text patch."""
+    directory = Path(source) / spec['directory']
+    names = sorted(p.name for p in directory.glob('*.ico'))
+    if verify and names != sorted(spec['files']):
+        raise ValueError('icon set differs from the 0006 record')
+    files, totals = {}, {'images_before': 0, 'images_after': 0, 'bytes_before': 0, 'bytes_after': 0}
+    for name in names:
+        path = directory / name
+        data = path.read_bytes()
+        out, counts = trim_icon(data, spec['keep'])
+        files[name] = {'before': hashlib.sha256(data).hexdigest(),
+                       'after': hashlib.sha256(out).hexdigest(), 'images': counts}
+        if verify and files[name] != spec['files'][name]:
+            raise ValueError('0006 icon trim result differs: ' + name)
+        path.write_bytes(out)
+        totals['images_before'] += counts[0]
+        totals['images_after'] += counts[1]
+        totals['bytes_before'] += len(data)
+        totals['bytes_after'] += len(out)
+    return files, totals
+
+
+def apply_filter(path, source):
+    spec = json.loads(Path(path).read_text())
+    if spec.get('filter') != 'icon-trim':
+        raise ValueError('unknown recipe filter: ' + Path(path).name)
+    return icon_trim(spec, source)[1]
+
+
 def run(args, cwd, log):
     env = dict(os.environ, LC_ALL='C', TZ='UTC', SOURCE_DATE_EPOCH='1737417600')
     # All tools and target compilation are sequential and low priority.
@@ -115,12 +188,15 @@ def build(output, archive=None):
     pe_dir.mkdir(exist_ok=True)
     for name in MODULES:
         (pe_dir / (name + '.dll')).unlink(missing_ok=True)
-    patch_hashes = {}
+    patch_hashes, filters = {}, {}
     with (output / 'build.log').open('w') as log:
         for name in PATCHES:
             path = ROOT / 'third_party/wine/patches' / name
             patch_hashes[name] = sha(path)
-            run(['patch', '--batch', '--fuzz=0', '-p1', '-i', path], patched, log)
+            if name.endswith('.patch'):
+                run(['patch', '--batch', '--fuzz=0', '-p1', '-i', path], patched, log)
+            else:
+                filters[name] = apply_filter(path, patched)
         run(['../source/configure', '--enable-archs=i386', '--disable-win16',
              '--disable-tests', '--disable-build-id', '--with-mingw=clang',
              '--without-x', '--without-wayland', '--without-freetype',
@@ -151,7 +227,7 @@ def build(output, archive=None):
                               'wine_reused': True, 'license': 'LGPL-2.1-or-later',
                               'qualified': False}
     result = {'wine_commit': pin['commit'], 'archive_sha256': pin['archive_sha256'],
-              'patches': patch_hashes, 'cflags': CFLAGS, 'ldflags': LDFLAGS,
+              'patches': patch_hashes, 'filters': filters, 'cflags': CFLAGS, 'ldflags': LDFLAGS,
               'base_region': [UPPER_BASE, UPPER_LIMIT], 'strip': 'llvm-objcopy --strip-all',
               'dlls': records, 'memory_model': upper_dlls.MEMORY_MODEL,
               'status': 'PE build evidence only; import/load gates required'}
@@ -165,6 +241,16 @@ NOT_REUSED = {'imm32.dll': 'The CiukiOS IMM32 W21 placeholder is smaller (3,072 
               '20,480 SizeOfImage versus 102,400) with the same no-IME behaviour; the Wine '
               'build also needs twelve WIN32U system-call exports that only Wine and '
               'Windows 10 provide.'}
+# Reused PEs staged in the builtin store once their host evidence passes
+# (record 'load': H0 binding and H1 DllMain attach/detach on the same PE).
+# Directive f5-20 part C stages MSVCRT, the f5-14B decision; the others stay
+# unqualified until the lead accepts their guest (QEMU/T23) evidence.
+# Lead decision (f5-20C review, 2026-10-20): MSVCRT stays out of the image
+# for now so that the canonical build does not depend on the six-minute upper
+# build; the qualification machinery and the evidence stay. Staging returns
+# ({'msvcrt.dll': ...}) when a follow-up wires a cached upper build into
+# `make build-full`.
+QUALIFIED = {}
 CORE = ('ntdll.dll', 'kernel32.dll', 'user32.dll', 'gdi32.dll', 'advapi32.dll')
 # Windows 98 home DLLs searched in the pinned Wine specs for a KERNELBASE name.
 HOMES = ('kernel32', 'advapi32', 'user32', 'gdi32', 'version', 'shlwapi')
@@ -243,6 +329,17 @@ RULES = {
     'absent-forwarder-dll': 'Export forwarder into a DLL absent from CiukiOS; forwarders bind '
                             'lazily, so the DLL loads and a binder of this export gets the W21 '
                             'missing-export diagnostic.',
+    'core-api-f5-20b': 'Win32 export outside the f5-14B table: imported by a reused DLL but then '
+                       'exported by the core only as a census or Unicode W21 stub (so the audit did '
+                       'not report it missing), or the ANSI/Unicode partner of a decided name; '
+                       'implemented by f5-20B (MSLU model for the W forms; amendment 2 item 1).',
+    'core-census-w21': 'Import bound to an existing CiukiOS census or typed W21 stub (documented '
+                       'failure plus one W21 diagnostic); the reused DLL handles the failure. '
+                       'Recorded by the f5-20C re-audit (no Wine or core change).',
+    'core-api-f5-20c': 'Import bound to a nonreturning KERNEL32 census stub when the f5-20C re-audit '
+                       'ran; implemented in f5-20C (lead decision): IsBadReadPtr/IsBadWritePtr/'
+                       'IsBadCodePtr probe the range through the virtual-memory query and never '
+                       'fault, DebugBreak raises EXCEPTION_BREAKPOINT (int 3) as Windows does.',
 }
 ACTIONS = {'not-reused': 'not-reused', 'wine-private': 'wine-patch-remove',
            'ntdll-runtime': 'core-implement', 'ntdll-native': 'core-implement',
@@ -256,7 +353,46 @@ ACTIONS = {'not-reused': 'not-reused', 'wine-private': 'wine-patch-remove',
            'kernelbase-retarget': 'wine-retarget', 'kernelbase-to-shlwapi': 'wine-retarget',
            'kernelbase-shlwapi-compile-in': 'wine-compile-in',
            'kernelbase-internal': 'wine-compile-in',
-           'absent-forwarder-dll': 'w21-unresolved-forwarder'}
+           'absent-forwarder-dll': 'w21-unresolved-forwarder',
+           'core-api-f5-20b': 'core-implement', 'core-census-w21': 'core-w21-stub',
+           'core-api-f5-20c': 'core-implement'}
+# Census stubs the reused DLLs bound, implemented in f5-20C (lead decision).
+F5_20C_IMPLEMENTED = {'kernel32.dll': ('DebugBreak', 'IsBadCodePtr', 'IsBadReadPtr', 'IsBadWritePtr')}
+# f5-20B exports outside the f5-14B decision table (amendment 2 item 1): the
+# exports f5-20B implemented which neither the f5-14B table nor the pre-f5-20B
+# core (main 4ed78860, compiled exports) had. user32 87, gdi32 4 (gdi32 also
+# turned four census stubs into implementations, DeleteMetaFile, PlayMetaFile,
+# SetMetaFileBitsEx and StartDocA, which keep their census rows).
+F5_20B_OUTSIDE = {
+    'user32.dll': (
+        'BeginDeferWindowPos', 'CallMsgFilterW', 'CallWindowProcW', 'CharLowerA', 'CharLowerBuffA',
+        'CharNextA', 'CharPrevA', 'CharToOemA', 'CharToOemBuffA', 'CharToOemBuffW', 'CharUpperA',
+        'CharUpperBuffA', 'ChildWindowFromPointEx', 'CreateIconFromResource', 'CreateWindowExW',
+        'DdeClientTransaction', 'DdeConnect', 'DdeCreateDataHandle', 'DdeCreateStringHandleA',
+        'DdeDisconnect', 'DdeFreeDataHandle', 'DdeFreeStringHandle', 'DdeGetData', 'DdeInitializeA',
+        'DdeNameService', 'DdeQueryStringA', 'DdeUninitialize', 'DefDlgProcW', 'DefWindowProcW',
+        'DeferWindowPos', 'DispatchMessageW', 'DlgDirListA', 'DlgDirListComboBoxA',
+        'EndDeferWindowPos', 'FindWindowExW', 'FindWindowW', 'GetClassInfoExW', 'GetClassInfoW',
+        'GetClassLongW', 'GetClassNameW', 'GetDesktopWindow', 'GetMessageW', 'GetMonitorInfoA',
+        'GetPropW', 'GetTabbedTextExtentW', 'GetWindowLongW', 'GetWindowTextLengthW',
+        'GetWindowTextW', 'GrayStringW', 'IsCharAlphaA', 'IsCharAlphaNumericA', 'IsCharLowerA',
+        'IsCharUpperA', 'LoadCursorW', 'LoadIconW', 'LoadMenuIndirectW', 'MessageBoxExW',
+        'MessageBoxIndirectA', 'MonitorFromPoint', 'OemToCharA', 'OemToCharBuffA', 'OemToCharBuffW',
+        'PeekMessageW', 'PostMessageW', 'PostThreadMessageW', 'PrivateExtractIconExA',
+        'PrivateExtractIconsA', 'RegisterClassExW', 'RegisterClassW', 'RegisterWindowMessageW',
+        'RemovePropW', 'SendMessageTimeoutW', 'SendMessageW', 'SendNotifyMessageW', 'SetClassLongW',
+        'SetPropW', 'SetWindowLongW', 'SetWindowTextW', 'SetWindowsHookExW', 'SystemParametersInfoW',
+        'UnregisterClassW', 'VkKeyScanExW', 'VkKeyScanW', 'WaitForInputIdle', 'WinHelpA',
+        'wsprintfA', 'wvsprintfA'),
+    'gdi32.dll': ('CopyEnhMetaFileA', 'CopyMetaFileA', 'CreateMetaFileA', 'DeleteColorSpace')}
+# How each f5-14B decision closed in the f5-20C build (validate requires one).
+CLOSURE = {'wine-retarget': 'patches 0007/0008: imported from the Windows 98 home DLL',
+           'wine-compile-in': 'patch 0008: compiled into the importing DLL',
+           'wine-patch-remove': 'patch 0009: call removed',
+           'w21-stub-dll': 'CiukiOS W21 stub DLL (scripts/win32/upper_dlls.py ABSENT_DELAYED)',
+           'core-implement': 'core export (f5-20A/f5-20B)', 'core-w21-stub': 'core typed W21 failure',
+           'w21-unresolved-forwarder': 'lazy forwarder to an absent DLL (decided)',
+           'not-reused': 'importer not reused'}
 
 
 def providers_dir(output, core):
@@ -375,6 +511,69 @@ def summarize(rows):
     return result
 
 
+def core_stub_status(core):
+    """(dll, export) -> W21 status of core exports that are W21 stubs.
+
+    Read from the generators' own records: census placeholders still in the
+    store (generated/stubs.json), the kernel32/user32/gdi32 coverage files and
+    the ADVAPI32/VERSION facade coverage."""
+    core = Path(core)
+    status = {}
+    store = json.loads((core / 'builtin-store.json').read_text())
+    hashes = {d['name'].lower(): d['sha256'] for d in store['dlls']}
+    census_manifest = core / 'generated/stubs.json'
+    if census_manifest.is_file():
+        reused = {m + '.dll' for m in MODULES} - set(NOT_REUSED)
+        for dll in json.loads(census_manifest.read_text())['dlls']:
+            image = core / 'generated' / dll['name']
+            # A census placeholder that a reused Wine DLL replaces is not bound.
+            if dll['name'].lower() in reused:
+                continue
+            if image.is_file() and hashes.get(dll['name'].lower()) == sha(image):
+                for e in dll['exports']:
+                    if not e['implementation']:
+                        key = e['name'] or '#' + str(e['ordinal'])
+                        status[(dll['name'].lower(), key)] = ('census W21 stub (' +
+                                                             (e['audit'] or {}).get('failure', 'nonreturning') + ')')
+    for stem in ('kernel32', 'user32', 'gdi32'):
+        coverage = core / (stem + '-coverage.json')
+        if coverage.is_file():
+            data = json.loads(coverage.read_text())
+            for row in data.get('exports', []) + data.get('upper', []):
+                if 'W21' in str(row['status']):
+                    status[(stem + '.dll', row['name'])] = str(row['status'])
+    facades = core / 'facades-upper-coverage.json'
+    if facades.is_file():
+        for dll, entries in json.loads(facades.read_text()).items():
+            for row in entries:
+                if 'W21' in str(row['status']):
+                    status[(dll, row['name'])] = str(row['status'])
+    return status
+
+
+def w21_bound(rows, status):
+    """Reused-DLL imports and forwarders whose final hop is a core W21 stub."""
+    result = []
+    for importer, row in sorted(rows.items()):
+        if importer in NOT_REUSED:
+            continue
+        for item in row['imports']:
+            for symbol in item['present']:
+                provider, _, name = item['resolutions'][symbol]['chain'][-1].partition('!')
+                if (provider, name) in status:
+                    result.append({'importer': importer, 'kind': 'delay-import' if item['delayed'] else 'import',
+                                   'linked': item['dll'], 'symbol': symbol, 'provider': provider,
+                                   'name': name, 'status': status[(provider, name)]})
+        for forward in row['forwarders']:
+            if not forward['error']:
+                provider, _, name = forward['chain'][-1].partition('!')
+                if (provider, name) in status:
+                    result.append({'importer': importer, 'kind': 'forwarder', 'linked': importer,
+                                   'symbol': '#' + str(forward['ordinal']), 'provider': provider,
+                                   'name': name, 'status': status[(provider, name)]})
+    return result
+
+
 def audit(output, core):
     """Actual eager/delayed imports and recursive forwarders, one decision each."""
     output, core = Path(output).resolve(), Path(core).resolve()
@@ -396,9 +595,75 @@ def audit(output, core):
     decisions = decide(rows, providers, specs)
     core_hashes = {p.name.lower(): sha(p) for p in sorted(core.iterdir())
                    if p.suffix.lower() in ('.dll', '.drv', '.acm') and p.is_file()}
-    result = {'imports': summarize(rows), 'decisions': decisions, 'core_pe_sha256': core_hashes}
+    result = {'imports': summarize(rows), 'decisions': decisions, 'core_pe_sha256': core_hashes,
+              'w21_bound': w21_bound(rows, core_stub_status(core))}
     dump(output / 'import-audit.json', rows)
     dump(output / 'decisions.json', result)
+    return result
+
+
+def closure(entry, rows):
+    """How one f5-14B decision closed in the current build (or 'open: ...')."""
+    action = entry['action']
+    if action == 'not-reused':
+        return 'closed: ' + CLOSURE[action]
+    row = rows[entry['importer']]
+    if entry['kind'] == 'forwarder':
+        match = [f for f in row['forwarders'] if '#' + str(f['ordinal']) == entry['symbol']]
+        if not match:
+            return 'closed: forwarder removed'
+        if not match[0]['error']:
+            return 'closed: ' + CLOSURE[action] + ' -> ' + match[0]['chain'][-1]
+        if action == 'w21-unresolved-forwarder':
+            return 'closed: ' + CLOSURE[action]
+        return 'open: forwarder ' + match[0]['error'] + ' ' + match[0]['chain'][-1]
+    homes = {entry['linked'], entry['provider'], entry['owner'], entry['retarget']} - {None}
+    found = [item['resolutions'][s] for item in row['imports'] for s in item['required']
+             if s == entry['symbol'] and item['dll'] in homes]
+    if not found:
+        if action in ('wine-compile-in', 'wine-patch-remove'):
+            return 'closed: ' + CLOSURE[action]
+        return 'closed: no longer imported'
+    if found[0]['error']:
+        return 'open: ' + found[0]['error'] + ' ' + found[0]['chain'][-1]
+    return 'closed: ' + CLOSURE[action] + ' -> ' + found[0]['chain'][-1]
+
+
+def implemented_rows(rows):
+    """Decision rows of the census stubs implemented in f5-20C."""
+    result = []
+    for row in outside_rows(rows, F5_20C_IMPLEMENTED):
+        if row['importer']:
+            result.append(dict(row, rule='core-api-f5-20c', audit='f5-20c', f5_20b=None,
+                               f5_20c='implemented by f5-20C (lead decision 2026-10-20)'))
+    for row in result:
+        row.pop('f5_20b')
+    return result
+
+
+def outside_rows(rows, table=None):
+    """Decision rows of the f5-20B exports outside the f5-14B table."""
+    result = []
+    for owner, names in sorted((table or F5_20B_OUTSIDE).items()):
+        for name in names:
+            hits = []
+            for importer, row in sorted(rows.items()):
+                if importer in NOT_REUSED:
+                    continue
+                for item in row['imports']:
+                    for symbol in item['required']:
+                        if item['resolutions'][symbol]['chain'][-1] == owner + '!' + name:
+                            hits.append({'importer': importer, 'linked': item['dll'], 'symbol': symbol,
+                                         'kind': 'delay-import' if item['delayed'] else 'import'})
+                for forward in row['forwarders']:
+                    if forward['chain'][-1] == owner + '!' + name:
+                        hits.append({'importer': importer, 'kind': 'forwarder', 'linked': importer,
+                                     'symbol': '#' + str(forward['ordinal'])})
+            # Not imported by any reused DLL: the ANSI/Unicode partner row.
+            for hit in hits or [{'importer': None, 'kind': 'partner', 'linked': owner, 'symbol': name}]:
+                result.append({**hit, 'provider': owner, 'name': name, 'owner': owner,
+                               'retarget': None, 'rule': 'core-api-f5-20b', 'action': 'core-implement',
+                               'audit': 'f5-20b', 'f5_20b': 'implemented outside the decision table'})
     return result
 
 
@@ -538,44 +803,130 @@ def resource_entries(data):
     return count
 
 
+def baseline_of(old):
+    """The f5-14B audit, frozen: its imports, hashes and recipe (schema 1 record)."""
+    if 'baseline' in old:
+        return old['baseline']
+    return {'audit': 'f5-14B continuation (wt/f5-14b2, 2026-10-19)', 'imports': old['imports'],
+            'core_pe_sha256': old['core_pe_sha256'], 'recipe': old['recipe'], 'fit': old['fit'],
+            'dlls': {n: r['sha256'] for n, r in sorted(old['dlls'].items())}}
+
+
 def record(output, sdk, runs):
-    """Write config/wine-upper.json from a build, a second identical run and the audit."""
+    """Write config/wine-upper.json from a build, its identical reruns and the audit.
+
+    The f5-14B decisions stay (audit 'f5-14b', each with its f5-20C closure);
+    the f5-20B outside-table exports get rows ('f5-20b'); every import still
+    missing or bound to a core W21 stub in this build gets one ('f5-20c')."""
     output = Path(output)
     build_record = json.loads((output / 'build.json').read_text())
     for other in runs:
         if json.loads(Path(other).read_text())['dlls'] != build_record['dlls']:
             raise ValueError('upper builds differ between runs: ' + str(other))
-    decisions = json.loads((output / 'decisions.json').read_text())
+    current = json.loads((output / 'decisions.json').read_text())
     rows = json.loads((output / 'import-audit.json').read_text())
+    old = json.loads(RECORD.read_text())
+    history = [dict(e, audit='f5-14b', f5_20c=closure(e, rows))
+               for e in old['decisions'] if e.get('audit', 'f5-14b') == 'f5-14b']
+    decided = {(e['importer'], e['owner'], e['name']) for e in history}
+    residual = [dict(e, audit='f5-20c') for e in current['decisions']]
+    bound = [{**{k: e[k] for k in ('importer', 'kind', 'linked', 'symbol', 'provider', 'name')},
+              'owner': e['provider'], 'retarget': None, 'rule': 'core-census-w21',
+              'action': ACTIONS['core-census-w21'], 'audit': 'f5-20c', 'f5_20c': e['status']}
+             for e in current['w21_bound'] if (e['importer'], e['provider'], e['name']) not in decided]
     surface = libc_surface(rows)
-    result = {'schema': 1, 'wine_commit': build_record['wine_commit'],
+    result = {'schema': 2, 'wine_commit': build_record['wine_commit'],
               'archive_sha256': build_record['archive_sha256'],
               'recipe': {k: build_record[k] for k in ('cflags', 'ldflags', 'strip', 'base_region',
-                                                      'patches')},
+                                                      'patches', 'filters')},
               'modules': list(MODULES), 'identical_runs': 1 + len(runs),
               'dlls': {n: {**{k: r[k] for k in ('sha256', 'file_bytes', 'base', 'size_of_image',
                                                  'memory', 'license', 'qualified')},
                            'resource_entries': resource_entries((output / 'pe' / n).read_bytes())}
                        for n, r in sorted(build_record['dlls'].items())},
               'not_reused': NOT_REUSED, 'rules': RULES,
-              'imports': decisions['imports'], 'decisions': decisions['decisions'],
-              'core_pe_sha256': decisions['core_pe_sha256'],
+              'baseline': baseline_of(old),
+              'imports': current['imports'], 'w21_bound': current['w21_bound'],
+              'decisions': history + outside_rows(rows) + residual + bound + implemented_rows(rows),
+              'core_pe_sha256': current['core_pe_sha256'],
               'msvcrt': msvcrt_measure(output, sdk, surface),
               'fit': fit(build_record['dlls'], NOT_REUSED),
-              'status': 'built twice identically; unqualified: decided core amendments and '
-                        'Wine-side retarget/compile-in patches pending; T1 rejects the PEs'}
+              'status': 'built twice identically with patches 0001-0009; re-audited against the '
+                        'f5-20A/B core; unqualified until the lead accepts the load, DllMain and '
+                        'conformance evidence (T1 rejects the PEs)'}
+    # Evidence of earlier PEs is not carried over: rerun the load and
+    # conformance tests, then record-evidence.
     validate(result)
     dump(RECORD, result)
     return result
 
 
+def qualified_by_evidence(data, name):
+    """QUALIFIED names only, with H0 binding and clean H1 DllMains on this PE."""
+    load = data.get('load', {})
+    sha256 = data['dlls'][name]['sha256']
+    h0 = load.get('h0', {}).get('dlls', {}).get(name, {})
+    h1 = load.get('h1', {}).get('dlls', {}).get(name, {})
+    return (data['dlls'][name]['qualified'] is True and name in QUALIFIED
+            and load.get('h0', {}).get('pe_sha256', {}).get(name) == sha256
+            and load.get('h1', {}).get('pe_sha256', {}).get(name) == sha256
+            and h0.get('bound') is True and h1.get('outcome') == 'loaded'
+            and bool(h1.get('attach')) and all(r == 1 for _, r in h1['attach'])
+            and sorted(n for n, _ in h1['attach']) == sorted(n for n, _ in h1['detach']))
+
+
+def record_evidence(output):
+    """Copy the H0/H1 load and the conformance evidence of this build into the
+    record, and qualify the QUALIFIED PEs whose evidence passes."""
+    output = Path(output)
+    data = json.loads(RECORD.read_text())
+    evidence = {}
+    for key, name in (('h0', 'h0-load.json'), ('h1', 'h1-load.json')):
+        path = output / name
+        if not path.is_file():
+            raise ValueError('missing load evidence: ' + str(path))
+        evidence[key] = json.loads(path.read_text())
+        for dll, digest in evidence[key]['pe_sha256'].items():
+            if data['dlls'][dll]['sha256'] != digest:
+                raise ValueError(f'{name} ran on another {dll}')
+    data['load'] = {**evidence, 'adapter': 'H0: native production-loader model, DllMain observed. '
+                    'H1: i386 Linux adapter, production loader and core PEs, every DllMain executed; '
+                    'PE ntdll with the H1 transport (identity, w32srv atoms, console), seccomp-confined.'}
+    conformance = output / 'conformance.json'
+    if conformance.is_file():
+        data['conformance'] = json.loads(conformance.read_text())
+    for name in data['dlls']:
+        data['dlls'][name]['qualified'] = False
+        if name in QUALIFIED:
+            data['dlls'][name]['qualified'] = True
+            if not qualified_by_evidence(data, name):
+                data['dlls'][name]['qualified'] = False
+    validate(data)
+    dump(RECORD, data)
+    return data
+
+
+def _missing_keys(imports):
+    keys = set()
+    for dll, row in imports.items():
+        for provider, item in row['imports'].items():
+            kind = 'delay-import' if provider.endswith(' (delayed)') else 'import'
+            for symbol in item['missing']:
+                keys.add((dll, kind, provider.removesuffix(' (delayed)'), symbol))
+    return keys
+
+
 def validate(data, patches=ROOT / 'third_party/wine/patches'):
     """Self-consistency of the committed record (offline; no build needed)."""
+    if data.get('schema') != 2:
+        raise ValueError('record schema 2 expected')
     if list(data['recipe']['patches']) != list(PATCHES):
         raise ValueError('patch order differs from the recipe')
     for name, digest in data['recipe']['patches'].items():
         if sha(Path(patches) / name) != digest:
             raise ValueError('patch hash mismatch: ' + name)
+    if set(data['recipe']['filters']) != {p for p in PATCHES if not p.endswith('.patch')}:
+        raise ValueError('recipe filters differ from the patch list')
     if set(data['dlls']) != {m + '.dll' for m in MODULES}:
         raise ValueError('built module set differs from the recipe')
     low, high = data['recipe']['base_region']
@@ -583,30 +934,156 @@ def validate(data, patches=ROOT / 'third_party/wine/patches'):
     for (start, end, name), following in zip(spans, spans[1:] + [(high, high, '')]):
         if start < low or start & 0xffff or end > following[0]:
             raise ValueError('reused DLL base outside region or overlapping: ' + name)
-        if data['dlls'][name]['qualified'] is not False:
+        if data['dlls'][name]['qualified'] is not False and not qualified_by_evidence(data, name):
             raise ValueError('reused DLL marked qualified: ' + name)
         if data['dlls'][name]['license'] != 'LGPL-2.1-or-later':
             raise ValueError('reused DLL licence: ' + name)
     seen = set()
     for entry in data['decisions']:
-        key = (entry['importer'], entry['kind'], entry['linked'], entry['symbol'])
+        key = (entry['audit'], entry['importer'], entry['kind'], entry['linked'], entry['symbol'])
         if key in seen:
             raise ValueError('duplicate decision: ' + repr(key))
         seen.add(key)
         if entry['rule'] not in RULES or ACTIONS[entry['rule']] != entry['action']:
             raise ValueError('unknown decision rule/action: ' + repr(key))
-    expected = set()
-    for dll, row in data['imports'].items():
-        for provider, item in row['imports'].items():
-            kind = 'delay-import' if provider.endswith(' (delayed)') else 'import'
-            for symbol in item['missing']:
-                expected.add((dll, kind, provider.removesuffix(' (delayed)'), symbol))
+        if entry['audit'] not in ('f5-14b', 'f5-20b', 'f5-20c'):
+            raise ValueError('decision without a known audit: ' + repr(key))
+    by_audit = lambda name: [e for e in data['decisions'] if e['audit'] == name]
+    # f5-14B: one decision per missing entry of the frozen baseline audit.
+    baseline = data['baseline']['imports']
+    for dll, row in baseline.items():
         if len(row['forwarders_unresolved']) != sum(
-                1 for e in data['decisions'] if e['importer'] == dll and e['kind'] == 'forwarder'):
+                1 for e in by_audit('f5-14b') if e['importer'] == dll and e['kind'] == 'forwarder'):
             raise ValueError('forwarder decisions differ from the audit: ' + dll)
-    if expected != {k for k in seen if k[1] != 'forwarder'}:
+    if _missing_keys(baseline) != {k[1:] for k in seen if k[0] == 'f5-14b' and k[2] != 'forwarder'}:
         raise ValueError('missing exports without exactly one decision')
+    for entry in by_audit('f5-14b'):
+        if not str(entry.get('f5_20c', '')).startswith('closed: '):
+            raise ValueError('f5-14B decision not closed: ' + repr((entry['importer'], entry['symbol'])))
+    # f5-20B outside-table exports: every listed name has a row, nothing else.
+    outside = {(e['owner'], e['name']) for e in by_audit('f5-20b')}
+    if outside != {(o, n) for o, names in F5_20B_OUTSIDE.items() for n in names}:
+        raise ValueError('f5-20B outside-table rows differ from the list')
+    # f5-20C re-audit: one decision per missing entry and per W21-bound import.
+    current = data['imports']
+    for dll, row in current.items():
+        if len(row['forwarders_unresolved']) != sum(
+                1 for e in by_audit('f5-20c') if e['importer'] == dll and e['kind'] == 'forwarder'
+                and e['rule'] not in ('core-census-w21', 'core-api-f5-20c')):
+            raise ValueError('re-audit forwarder decisions differ: ' + dll)
+    residual = {k[1:] for k in seen if k[0] == 'f5-20c' and k[2] != 'forwarder'} - {
+        (e['importer'], e['kind'], e['linked'], e['symbol']) for e in by_audit('f5-20c')
+        if e['rule'] in ('core-census-w21', 'core-api-f5-20c')}
+    for entry in by_audit('f5-20c'):
+        if entry['rule'] == 'core-api-f5-20c' and entry['name'] not in F5_20C_IMPLEMENTED.get(entry['owner'], ()):
+            raise ValueError('f5-20C implementation row outside the list: ' + entry['name'])
+    if _missing_keys(current) != residual:
+        raise ValueError('re-audit missing exports without exactly one decision')
+    decided = {(e['importer'], e['owner'], e['name']) for e in by_audit('f5-14b')}
+    bound = {(e['importer'], e['kind'], e['linked'], e['symbol']) for e in by_audit('f5-20c')
+             if e['rule'] == 'core-census-w21'}
+    for entry in data['w21_bound']:
+        if ((entry['importer'], entry['provider'], entry['name']) not in decided and
+                (entry['importer'], entry['kind'], entry['linked'], entry['symbol']) not in bound):
+            raise ValueError('W21-bound import without a decision: ' + repr(entry))
     return True
+
+
+# Upstream Wine 10.0 conformance units run on the i386 adapter (f5-20C):
+# the units that exercise the f5-02 census functions of each DLL (provisional
+# research union: comctl32 ImageList_*, comdlg32 Find/Replace/Print/Open/Save,
+# shell32 Drag*/SH*/ShellExecute*/Shell_NotifyIcon, ole32 Co*/Ole* init);
+# riched20 has no census function: its windowless text services unit.
+CONFORMANCE = {
+    'comctl32': ('imagelist',),
+    'comdlg32': ('finddlg', 'printdlg', 'filedlg'),
+    'shell32': ('shellole', 'shlfolder', 'shellpath', 'shlfileop', 'shelllink', 'shlexec',
+                'brsfolder', 'systray'),
+    'ole32': ('compobj', 'ole2'),
+    'riched20': ('txtsrv',),
+}
+
+
+def conformance_build(output):
+    """Build the upstream test programs of CONFORMANCE from the patched
+    source of an upper build, with test-runtime stubs.
+
+    The programs import a few functions the CiukiOS core lacks (the test
+    framework's GetProcessId, test-only USER/GDI calls). Per the contract,
+    test-runtime imports do not define F5 scope: each one is satisfied inside
+    the program by a stub failing with ERROR_CALL_NOT_IMPLEMENTED, recorded
+    per program, so the program binds; the DLL under test is unchanged."""
+    output = Path(output).resolve()
+    source, work = output / 'source', output / 'tests-objects'
+    if not (source / 'configure').is_file():
+        raise ValueError('no patched source; run the upper build first')
+    providers = output / 'providers'
+    if not providers.is_dir():
+        raise ValueError('no providers; run the upper audit first')
+    out = output / 'tests-pe'
+    out.mkdir(exist_ok=True)
+    with (output / 'tests-build.log').open('w') as log:
+        if not (work / 'Makefile').is_file():
+            work.mkdir(exist_ok=True)
+            run(['../source/configure', '--enable-archs=i386', '--disable-win16', '--disable-build-id',
+                 '--with-mingw=clang', '--without-x', '--without-wayland', '--without-freetype',
+                 '--without-fontconfig', '--without-vulkan', '--without-opengl', '--without-gnutls',
+                 'CC=clang', 'CXX=clang++', 'i386_CFLAGS=' + CFLAGS, 'i386_LDFLAGS=' + LDFLAGS], work, log)
+    images = upper_dlls.read_images(providers)
+    index = {n: upper_dlls.export_index(meta) for n, (_, meta) in images.items()}
+    result = {}
+    for module in CONFORMANCE:
+        target = f'dlls/{module}/tests/i386-windows/{module}_test.exe'
+        logfile = output / f'tests-{module}.log'
+        # Relinked every time so that the log carries the link command.
+        (work / target).unlink(missing_ok=True)
+        with logfile.open('w') as log:
+            run(['make', '-j1', target], work, log)
+        exe = work / target
+        pe = census.PE(exe.read_bytes())
+        missing = sorted({(item['dll'].lower(), s) for delayed in (False, True) for item in pe.imports(delayed)
+                          for s in set(item['symbols'])
+                          if upper_dlls.resolve(index, item['dll'].lower(), s)['error']})
+        # Decorated import symbols from the import libraries the program links.
+        stubs_c = ['/* Generated by scripts/win32/wine_upper.py: test-runtime stubs. */',
+                   '__declspec(dllimport) void __stdcall SetLastError(unsigned);']
+        names = []
+        for i, (dll, name) in enumerate(missing):
+            lib = work / f'dlls/{dll.rsplit(".", 1)[0]}/i386-windows/lib{dll.rsplit(".", 1)[0]}.a'
+            nm = subprocess.run(['llvm-nm', lib], capture_output=True, text=True, check=True).stdout
+            found = re.search(r'__imp__' + re.escape(name) + r'@(\d+)\b', nm)
+            if not found:
+                raise ValueError(f'no stdcall import symbol for {dll}!{name}')
+            words = int(found[1]) // 4
+            args = ', '.join(f'unsigned a{j}' for j in range(words)) or 'void'
+            unused = ''.join(f'(void)a{j}; ' for j in range(words))
+            # Both the import pointer and the direct-call thunk name, so that
+            # the import library member is never fetched.
+            stubs_c.append(f'unsigned __stdcall stub{i}({args}) __asm__("_{name}@{found[1]}");')
+            stubs_c.append(f'unsigned __stdcall stub{i}({args}) {{ {unused}SetLastError(120); return 0; }}')
+            stubs_c.append(f'void *imp{i} __asm__("__imp__{name}@{found[1]}") = (void *)stub{i};')
+            names.append(f'{dll}!{name}')
+        stub_source = out / f'{module}_runtime.c'
+        stub_source.write_text('\n'.join(stubs_c) + '\n')
+        stub_object = out / f'{module}_runtime.o'
+        with logfile.open('a') as log:
+            run(['clang', '--target=i686-windows', '-O1', '-c', stub_source, '-o', stub_object], work, log)
+        # The program's own link command (makefile log), plus the stubs.
+        text = logfile.read_text().replace('\\\n', ' ')
+        line = next(l for l in text.splitlines() if l.startswith('tools/winegcc/winegcc -o ' + target))
+        args = line.split()
+        args[args.index('-o') + 1] = str(out / (module + '_test-linked.exe'))
+        first_library = next(i for i, a in enumerate(args) if a.endswith('.a'))
+        args.insert(first_library, str(stub_object))
+        with logfile.open('a') as log:
+            run(args, work, log)
+            run(['llvm-objcopy', '--strip-all', out / (module + '_test-linked.exe'),
+                 out / (module + '_test.exe')], work, log)
+        (out / (module + '_test-linked.exe')).unlink()
+        result[module] = {'program': module + '_test.exe', 'sha256': sha(out / (module + '_test.exe')),
+                          'units': list(CONFORMANCE[module]), 'runtime_stubs': names}
+    dump(out / 'programs.json', result)
+    return result
 
 
 DOCUMENT = ROOT / 'docs/design/win32-wine-dependency-audit.md'
@@ -626,33 +1103,70 @@ def render(data):
            '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |']
     for name in [m + '.dll' for m in data['modules']]:
         r = data['dlls'][name]
-        use = 'measured, not reused' if name in data['not_reused'] else 'reused (unqualified)'
+        use = ('measured, not reused' if name in data['not_reused'] else
+               'reused, qualified (staged builtin)' if r['qualified'] else 'reused (unqualified)')
         out.append(f"| {name} | `{r['base']:#010x}` | {r['file_bytes']:,} | {r['size_of_image']:,} | "
                    f"{r['memory']['shared_seed_pages']} | {r['memory']['private_cow_commitment_pages']} | "
                    f"{r['resource_entries']:,} | `{r['sha256'][:16]}` | {use} |")
     out += ['', '| Patch (applied in order) | SHA-256 (prefix) |', '| --- | --- |']
     out += [f'| `{name}` | `{digest[:16]}` |' for name, digest in data['recipe']['patches'].items()]
-    out += ['', '### Import decisions (generated)', '',
-            'Every missing eager import, delayed import and unresolved export forwarder of every '
-            'build has exactly one decision (`decisions` in the record; the final forwarder hop '
-            'is classified).', '',
-            '| DLL | Eager missing | Delayed missing | Unresolved forwarders |',
-            '| --- | ---: | ---: | ---: |']
+    for name, f in sorted(data['recipe']['filters'].items()):
+        out += ['', f"`{name}` (resource filter): {f['images_before']} icon images "
+                    f"({f['bytes_before']:,} bytes) in, {f['images_after']} ({f['bytes_after']:,} bytes) out."]
+    out += ['', '### Import re-audit against the f5-20A/B core (generated)', '',
+            'Missing eager imports, delayed imports and unresolved export forwarders of the current '
+            'build, and imports whose final hop is a core W21 stub (typed failure); each has a '
+            'decision (`audit` = `f5-20c`, or its f5-14B row).', '',
+            '| DLL | Eager missing | Delayed missing | Unresolved forwarders | Bound to W21 stubs |',
+            '| --- | ---: | ---: | ---: | ---: |']
+    bound = Counter(e['importer'] for e in data['w21_bound'])
     for name, row in data['imports'].items():
         delayed = sum(len(i['missing']) for k, i in row['imports'].items() if k.endswith(' (delayed)'))
-        out.append(f"| {name} | {row['eager_missing']} | {delayed} | {len(row['forwarders_unresolved'])} |")
-    actions = Counter(e['action'] for e in data['decisions'])
-    out += ['', '| Action | Entries |', '| --- | ---: |']
-    out += [f'| `{a}` | {n} |' for a, n in sorted(actions.items())]
+        out.append(f"| {name} | {row['eager_missing']} | {delayed} | "
+                   f"{len(row['forwarders_unresolved'])} | {bound.get(name, 0)} |")
+    out += ['', '| Audit | Action | Entries |', '| --- | --- | ---: |']
+    counts = Counter((e['audit'], e['action']) for e in data['decisions'])
+    out += [f'| {a} | `{c}` | {n} |' for (a, c), n in sorted(counts.items())]
+    closed = Counter(e['f5_20c'].split(' -> ')[0] for e in data['decisions'] if e['audit'] == 'f5-14b')
+    out += ['', 'Closure of the f5-14B decisions in this build:', '', '| Closure | Entries |', '| --- | ---: |']
+    out += [f'| {c} | {n} |' for c, n in sorted(closed.items())]
     groups = defaultdict(set)
     for e in data['decisions']:
-        groups[(e['rule'], e['owner'])].add(e['name'])
+        groups[(e['audit'], e['rule'], e['owner'])].add(e['name'])
     out += ['', '| Rule | Action | Decision |', '| --- | --- | --- |']
     rules = sorted({e['rule'] for e in data['decisions']})
     out += [f"| `{r}` | `{ACTIONS[r]}` | {data['rules'][r]} |" for r in rules]
-    out += ['', 'Unique names per rule and owning DLL:', '']
-    for (rule, owner), names in sorted(groups.items()):
-        out.append(f"- `{rule}` → {owner} ({len(names)}): " + ', '.join(sorted(names)))
+    out += ['', 'Unique names per audit, rule and owning DLL:', '']
+    for (audit_name, rule, owner), names in sorted(groups.items()):
+        out.append(f"- {audit_name} `{rule}` → {owner} ({len(names)}): " + ', '.join(sorted(names)))
+    load = data.get('load')
+    if load:
+        out += ['', '### Load and DllMain evidence (generated)', '', load['adapter'], '',
+                '| DLL | H0 binding | H0 DllMain attach/detach (observed) | H1 outcome | '
+                'H1 DllMain attach TRUE | H1 detach | Kernel records ENOSYS | w32srv requests |',
+                '| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |']
+        for name in sorted(load['h1']['dlls']):
+            h0, h1 = load['h0']['dlls'][name], load['h1']['dlls'][name]
+            res = dict(re.findall(r'(\w+)=(\d+)', h1.get('resources', '')))
+            out.append(f"| {name} | {'bound' if h0['bound'] else 'refused'} | "
+                       f"{h0['dllmain_attach_observed']}/{h0['dllmain_detach_observed']} | {h1['outcome']} | "
+                       f"{sum(1 for _, v in h1['attach'] if v == 1)}/{len(h1['attach'])} | "
+                       f"{len(h1['detach'])} | {res.get('kernel_enosys', '-')} | {res.get('server_requests', '-')} |")
+    conformance = data.get('conformance')
+    if conformance:
+        out += ['', '### Upstream conformance units on the H1 adapter (generated)', '',
+                'Wine 10.0 `dlls/*/tests` programs (test-runtime imports missing from the core are '
+                'stubbed inside the program, listed below); the adapter has no CiukiOS kernel, so '
+                'kernel record operations it does not model fail with ENOSYS.', '',
+                '| Unit | Outcome | Executed | Failures | Skipped | Failed checks reported | ENOSYS kernel operations |',
+                '| --- | --- | ---: | ---: | ---: | ---: | --- |']
+        for unit, r in sorted(conformance['units'].items()):
+            ops = ', '.join(f'{k}×{v}' for k, v in sorted(r['kernel_enosys'].items())) or '-'
+            out.append(f"| {unit} | {r['outcome']}{' ' + r['exception'] if r.get('exception') else ''} | "
+                       f"{r.get('executed', '-')} | {r.get('failures', '-')} | {r.get('skipped', '-')} | "
+                       f"{r['failed_checks_reported']} | {ops} |")
+        out += ['', 'Test-runtime stubs per program: ' + '; '.join(
+            f"{m}: {', '.join(p['runtime_stubs']) or 'none'}" for m, p in sorted(conformance['programs'].items()))]
     m = data['msvcrt']
     out += ['', '### MSVCRT measurement (generated)', '',
             f"Surface: the {m['surface_count']} MSVCRT functions the reused DLLs import.", '',
@@ -671,18 +1185,23 @@ def render(data):
             f"{m['newlib']['startup_pages_estimate']} | {m['newlib']['covered']}/{m['surface_count']} | "
             f"missing: {', '.join(m['newlib']['missing'])}; no MSVCRT ABI |", '',
             m['method']]
-    f = data['fit']
+    f, b = data['fit'], data['baseline']['fit']
+    yes = lambda v: 'yes' if v else 'no'
     out += ['', '### 128 MiB fit figures (generated)', '',
-            '| Figure | Value |', '| --- | ---: |',
-            f"| Reused DLLs | {len(f['reused_dlls'])} |",
-            f"| File bytes | {f['file_bytes']:,} |",
-            f"| SizeOfImage | {f['size_of_image']:,} |",
-            f"| Shared seed pages | {f['shared_seed_pages']} ({f['shared_seed_pages'] * 4096:,} bytes) |",
-            f"| Private COW commitment pages | {f['private_cow_commitment_pages']} |",
-            f"| Startup committed pages (model) | {f['startup_committed_pages_model']} |",
-            f"| Contract installer budget (P2+P4) | {f['installer_budget_bytes']:,} |",
-            f"| SizeOfImage within budget | {'yes' if f['size_of_image_within_budget'] else 'no'} |",
-            f"| SHELL32 SizeOfImage | {f['shell32_size_of_image']:,} |", '',
+            '| Figure | f5-20C build | f5-14B build |', '| --- | ---: | ---: |',
+            f"| Reused DLLs | {len(f['reused_dlls'])} | {len(b['reused_dlls'])} |",
+            f"| File bytes | {f['file_bytes']:,} | {b['file_bytes']:,} |",
+            f"| SizeOfImage | {f['size_of_image']:,} | {b['size_of_image']:,} |",
+            f"| Shared seed pages | {f['shared_seed_pages']} ({f['shared_seed_pages'] * 4096:,} bytes) | "
+            f"{b['shared_seed_pages']} |",
+            f"| Private COW commitment pages | {f['private_cow_commitment_pages']} | "
+            f"{b['private_cow_commitment_pages']} |",
+            f"| Startup committed pages (model) | {f['startup_committed_pages_model']} | "
+            f"{b['startup_committed_pages_model']} |",
+            f"| Contract installer budget (P2+P4) | {f['installer_budget_bytes']:,} | {b['installer_budget_bytes']:,} |",
+            f"| SizeOfImage within budget | {yes(f['size_of_image_within_budget'])} | "
+            f"{yes(b['size_of_image_within_budget'])} |",
+            f"| SHELL32 SizeOfImage | {f['shell32_size_of_image']:,} | {b['shell32_size_of_image']:,} |", '',
             f['model'], '', END]
     return '\n'.join(out)
 
@@ -713,6 +1232,10 @@ def main():
     p.add_argument('runs', type=Path, nargs='+', help='build.json of the other identical runs')
     sub.add_parser('check')
     sub.add_parser('render')
+    p = sub.add_parser('conformance-build', help='upstream test programs for the H1 adapter')
+    p.add_argument('output', type=Path)
+    p = sub.add_parser('record-evidence', help='load/DllMain/conformance evidence into the record')
+    p.add_argument('output', type=Path)
     args = parser.parse_args()
     if args.command == 'build':
         build(args.output, args.archive)
@@ -720,6 +1243,12 @@ def main():
         audit(args.output, args.core)
     elif args.command == 'record':
         record(args.output, args.sdk, args.runs)
+    elif args.command == 'conformance-build':
+        print(json.dumps(conformance_build(args.output), indent=2))
+    elif args.command == 'record-evidence':
+        data = record_evidence(args.output)
+        write_document(data)
+        print('qualified:', sorted(n for n, r in data['dlls'].items() if r['qualified']))
     elif args.command == 'render':
         data = json.loads(RECORD.read_text())
         validate(data)

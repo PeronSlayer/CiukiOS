@@ -109,6 +109,15 @@ UnlockFileEx UnlockServiceDatabase UnpackDDElParam UnregisterClassA UnregisterHo
 ValidateRect VerLanguageNameA VerQueryValueA VirtualLock VirtualUnlock WaitMessage WinHelpA
 WindowFromPoint WriteConsoleInputA mciGetDeviceIDA mciGetErrorStringA mmioOpenA sndPlaySoundA
 timeSetEvent wvsprintfA'''.split())
+# f5-20C: census W21 stubs the reused Wine DLLs bind (config/wine-upper.json
+# rule ciukios-stub-dll), with the failure their Microsoft reference gives:
+# no printer (BOOL FALSE; DeviceCapabilities and DocumentProperties -1) and
+# no IME (BOOL FALSE; ImmGetCompositionString negative IMM_ERROR_NODATA, -1).
+ZERO_FAILURE.update(('EnumPrintersA','EnumPrintersW','GetDefaultPrinterA','GetDefaultPrinterW',
+                     'GetPrinterA','GetPrinterW','GetPrinterDriverA','GetPrinterDriverW','OpenPrinterW',
+                     'ImmSetCompositionFontW','ImmSetCompositionWindow'))
+MINUS_ONE.update(('DeviceCapabilitiesA','DeviceCapabilitiesW','DocumentPropertiesW',
+                  'ImmGetCompositionStringW'))
 def signature(dll,name):
     if name.startswith('#'):return None
     stem=dll if dll.endswith('.drv') else dll[:-4]
@@ -168,11 +177,11 @@ def body(dll,name,symbol,index):
     if dll=='user32.dll' and name=='DdeInitializeA':failure='DMLERR_SYS_ERROR 0x400f + 120'
     return (f'static volatile unsigned once_{index}; unsigned {call}{symbol}({args}){{{unused}{special}return {value};}}',target,dict(sig,failure=failure))
 
-def wide_gate(dll,name,bytes_,index):
+def wide_gate(dll,name,bytes_,index,convention=None):
     """Gate actual public Unicode implementations before reading any arguments."""
     params=','.join(f'unsigned a{j}' for j in range(bytes_//4)) or 'void'
     args=','.join(f'a{j}' for j in range(bytes_//4))
-    convention=3 if name.startswith('Reg') else 4 if name in MINUS_ONE else 0
+    if convention is None:convention=3 if name.startswith('Reg') else 4 if name in MINUS_ONE else 0
     if name=='VerFindFileW':
         fail=f'w32_stub_hit(&wide_once_{index},"{dll}","{name}");__builtin_trap();'
     else:fail=f'return w32_shim_stub(&wide_once_{index},"{dll}","{name}",{convention});'
