@@ -4,6 +4,7 @@
 #include <w32/kernel32.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../../../src/probes/win32_dialogs/controller.h"
 extern void w32_kernel_model_init(const char *, uint32_t *, uint32_t *);
 extern void w32_kernel_model_finish(void);
 
@@ -27,6 +28,7 @@ static LONG filter(struct w32_exception_pointers *p) {
     return p->ExceptionRecord->ExceptionCode == 0xdead ? -1 : 0;
 }
 extern int w32_kernel32_runtime(void);
+extern int w32_kernel32_fixed_alloc(void);
 extern void w32_kernel_model_spawn_test(void);
 extern void w32_kernel_model_spawn_edges(void);
 static int runtime(void) {
@@ -92,6 +94,43 @@ static int startup(void) {
     RtlDestroyHeap(host.peb.ProcessHeap);
     host.peb.ProcessHeap = 0;
     puts("PASS kernel startup parameters TLS DATAFILE");
+    return 0;
+}
+extern HANDLE W32API GetModuleHandleA(const char *);
+static int dialogs_startup(void) {
+    /* Actual fixture imports, production loader, kernel32 and VM services.
+     * PE callbacks are observed, never executed by this native H0 model. */
+    struct w32_loader loader;
+    w32_ldr_init(&loader, &host.services, &host.peb);
+    struct w32_file manifest;
+    CHECK(w32_ciuki_store(&loader, &manifest));
+    struct w32_module *main;
+    CHECK(!w32_ciuki_start(&loader, &host.peb, W32_DIALOGS_PATH, "", "C:\\", "\0\0", &main));
+    CHECK(GetModuleHandleA(0) == main->pe.image);
+    struct ciuki_w32_memory_info q;
+    CHECK(VirtualQuery((void *)0x6fff0000, &q, sizeof(q)) == sizeof(q));
+    printf("DIALOGS_LAYOUT old_result=6fff0000 allocation=%08x state=%08x bytes=%u parameters=%08x builtins=%08x main=%08x+%08x\n",
+           q.allocation_base, q.state, q.region_size, K32_PTR(host.peb.ProcessParameters),
+           K32_PTR(loader.builtins), main->pe.base, main->pe.size);
+    CHECK(q.allocation_base == K32_PTR(loader.builtins));
+    SetLastError(0);
+    void *p = VirtualAlloc((void *)0x6fff0000, 4096, 0x3000, 4);
+    printf("DIALOGS_ALLOC old_result=%p error=%u\n", p, GetLastError());
+    CHECK(!p && GetLastError() == 487);
+    p = (void *)(uintptr_t)W32_DIALOGS_RESULT_VA;
+    CHECK(VirtualQuery(p, &q, sizeof(q)) == sizeof(q) && q.state == 0x10000);
+    CHECK(VirtualAlloc(p, 4096, 0x3000, 4) == p);
+    struct w32_dialogs_result *r = p;
+    CHECK(!r->magic && !r->done && !r->release);
+    r->magic = W32_DIALOGS_MAGIC;
+    r->version = W32_DIALOGS_VERSION;
+    CHECK(VirtualQuery(p, &q, sizeof(q)) == sizeof(q) && q.state == 0x1000 &&
+          q.allocation_base == W32_DIALOGS_RESULT_VA && q.region_size == 4096 && q.protect == 4);
+    CHECK(VirtualFree(p, 0, 0x8000));
+    w32_ldr_shutdown(&loader);
+    if (host.peb.ProcessHeap) RtlDestroyHeap(host.peb.ProcessHeap);
+    host.peb.ProcessHeap = 0;
+    puts("PASS dialogs startup old result collision=487 new result free commit RW zero GetModuleHandleA");
     return 0;
 }
 static int attach_failure(void) {
@@ -285,6 +324,8 @@ int main(int argc, char **argv) {
         int result=upper_store_test(name);w32_kernel_model_finish();return result;
     }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
+                 : !w32_strcmp(argv[2], "fixed-alloc") ? w32_kernel32_fixed_alloc()
+                 : !w32_strcmp(argv[2], "dialogs-startup") ? dialogs_startup()
                  : !w32_strcmp(argv[2], "unicode-paths") ? unicode_paths()
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()

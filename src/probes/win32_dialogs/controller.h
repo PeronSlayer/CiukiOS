@@ -6,9 +6,13 @@
 #ifndef CIUKI_W32_DIALOGS_CONTROLLER_H
 #define CIUKI_W32_DIALOGS_CONTROLLER_H
 #include <stdint.h>
-/* Fixed, 64 KiB-aligned and below the builtin region (CIUKI_W32_APP_LIMIT):
- * the fixture reserves and commits this page before anything else. */
-#define W32_DIALOGS_RESULT_VA 0x6fff0000u
+/* Private fixture/controller address agreement: one 4 KiB page at a 64 KiB
+ * boundary in the application region. The authored EXE is at 0x00400000,
+ * kernel stacks/TEB/PEB use bottom-up placement, and loader metadata/heaps
+ * use the top of the arena. 0x6fff0000 belongs to that loader metadata by
+ * entry time. The production-loader host regression checks this page is
+ * free after startup; keep that check when the fixture's layout changes. */
+#define W32_DIALOGS_RESULT_VA 0x10000000u
 #define W32_DIALOGS_MAGIC 0x474c4457u /* "WDLG" */
 #define W32_DIALOGS_VERSION 1u
 #define W32_DIALOGS_PATH "/System/Win32/Fixtures/dialogs-exercise.exe"

@@ -614,7 +614,9 @@ finished:
  * kernel validates the fixture's identity (child of this desktop, Win32
  * personality), reads its result block from the fixture's own address space
  * (src/probes/win32_dialogs/controller.h), releases it, and publishes the
- * records; application output is never evidence. Authored, unrun (f5-10C2). */
+ * records; application output is never evidence. The result page at
+ * W32_DIALOGS_RESULT_VA (0x10000000) avoids the loader's top-down metadata
+ * at 0x6fff0000; controller.h owns the fixture's address agreement. */
 static int probe_w32_dialogs(void)
 {
     const char *name="w32-dialogs";

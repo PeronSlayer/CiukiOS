@@ -8,6 +8,7 @@
 #include "../../../../src/probes/win32_dialogs/exercise.h"
 #include <stdarg.h>
 #include <time.h>
+#include <setjmp.h>
 #include <w32/font_stats.h>
 extern int gdi_host_bridge(uint32_t (*)(const void *, uint32_t, void *,
                                         uint32_t, uint32_t *));
@@ -17,9 +18,15 @@ extern int gdi_host_render(const char *, int, int, int, const char *,
 static struct wr_session bridge_session;
 static UINT bridge_packets, bridge_transactions;
 static struct wf_service *font_service;
+static UINT bridge_unready;
 
 static uint32_t bridge_exchange(const void *input, uint32_t n, void *output,
                                 uint32_t cap, uint32_t *used) {
+  if (bridge_unready) {
+    bridge_unready--;
+    *used = 0;
+    return 1062;
+  }
   static uint32_t serial;
   uint32_t id = ++serial;
   if (!id)
@@ -439,5 +446,54 @@ static void test_exercise(void) {
   w32_dialogs_publish(&r, r.errors ? 1u : 0u, emit_record);
   printf("EXERCISE errors=%u first_error=%u steps=%u\n", r.errors,
          r.first_error, r.steps);
+  bridge_detach();
+}
+
+/* Platform adapters for the unchanged guest entry. Full VirtualAlloc and
+ * GetModuleHandleA implementations are covered in kernel_loader_main.c. */
+extern void W32API dialogs_guest_entry(void);
+static jmp_buf entry_return;
+static struct w32_dialogs_result *entry_result;
+static UINT entry_sleeps, entry_modules;
+void *W32API dialogs_entry_alloc(void *at, DWORD bytes, DWORD flags, DWORD prot) {
+  CHECK(at == (void *)(uintptr_t)W32_DIALOGS_RESULT_VA && bytes == 4096 &&
+        flags == 0x3000 && prot == 4);
+  void *p = mmap(at, bytes, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+  CHECK(p == at);
+  entry_result = p;
+  return p;
+}
+void *W32API dialogs_entry_module(const char *name) {
+  CHECK(!name && !bridge_unready && entry_sleeps == 3);
+  entry_modules++;
+  return FIXTURE;
+}
+void W32API dialogs_entry_sleep(DWORD ms) {
+  CHECK(entry_result && entry_result->magic == W32_DIALOGS_MAGIC &&
+        entry_result->version == W32_DIALOGS_VERSION);
+  entry_sleeps++;
+  if (entry_result->done) {
+    CHECK(w32_dialogs_valid(entry_result) && !entry_result->errors &&
+          !entry_result->teardown_errors && !entry_result->live_windows &&
+          !entry_result->live_menus);
+    __atomic_store_n(&entry_result->release, 1u, __ATOMIC_RELEASE);
+  }
+  ui_kernel_pause(ms);
+}
+W32_NORETURN void W32API dialogs_entry_exit(DWORD code) {
+  CHECK(!code && entry_modules == 1 && w32_dialogs_valid(entry_result) &&
+        entry_result->release);
+  longjmp(entry_return, 1);
+}
+static void test_exercise_entry(void) {
+  bridge_attach(0);
+  bridge_unready = 3;
+  if (!setjmp(entry_return)) dialogs_guest_entry();
+  w32_dialogs_publish(entry_result, 0, emit_record);
+  printf("ENTRY readiness_failures=3 modules=%u done=%u release=%u errors=%u\n",
+         entry_modules, entry_result->done, entry_result->release, entry_result->errors);
+  CHECK(!munmap(entry_result, 4096));
+  entry_result = 0;
   bridge_detach();
 }

@@ -76,6 +76,18 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",out)
         self.assertIn("PASS kernel32 f5-20A process queries heap compaction",out)
 
+    def test_dialogs_fixture_startup_on_kernel_model(self):
+        import shutil
+        builtins.build(self.images/'System/Win32')
+        target=self.images/'System/Win32/Fixtures';target.mkdir(exist_ok=True)
+        shutil.copyfile(self.images/'System/Win32/fixtures/dialogs-exercise.exe',target/'dialogs-exercise.exe')
+        out=self.command('dialogs-startup',target/'dialogs-exercise.exe')
+        self.assertIn('PASS dialogs startup old result collision=487 new result free commit RW zero GetModuleHandleA',out)
+
+    def test_fixed_address_virtualalloc_on_kernel_model(self):
+        self.assertIn('PASS kernel32 fixed VirtualAlloc exact rounding collision=487 invalid=87 zero RW release',
+                      self.command('fixed-alloc',self.images/'console.exe'))
+
     def test_kernel32_non_ascii_module_paths(self):
         import shutil
         directory=self.images/'café';directory.mkdir(exist_ok=True)
