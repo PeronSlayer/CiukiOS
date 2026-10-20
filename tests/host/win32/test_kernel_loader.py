@@ -16,6 +16,10 @@ from tests.host.win32 import test_loader
 class KernelLoaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # The dialogs integration test uses this same kernel-backed loader
+        # before handing its returned bytes to the separate USER/GDI model.
+        if getattr(cls, '_prepared', False):
+            return
         cls.out=ROOT/'build/host/win32/kernel-loader';cls.out.mkdir(parents=True,exist_ok=True)
         cls.env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0')
         cls.images=cls.out/'images';cls.hashes=fixtures.build(cls.images)
@@ -38,6 +42,7 @@ class KernelLoaderTests(unittest.TestCase):
         subprocess.run([*flags,'-Wl,--gc-sections',*map(str,objects),str(ROOT/'src/kernel/fs/path.c'),
             str(ROOT/'tests/host/proc/signal_legacy.c'),str(ROOT/'tests/host/proc/desktop_legacy.c'),
             '-pthread','-o',str(cls.program)],check=True)
+        cls._prepared = True
 
     def command(self,mode,image,expected=0):
         result=subprocess.run([self.program,self.images,mode,'/'+image.name,'/','observe'],
@@ -76,13 +81,17 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn("PASS kernel32 VM heap objects waits TLS codepages time environment",out)
         self.assertIn("PASS kernel32 f5-20A process queries heap compaction",out)
 
-    def test_dialogs_fixture_startup_on_kernel_model(self):
+    def dialogs_fixture_output(self):
         import shutil
         builtins.build(self.images/'System/Win32')
         target=self.images/'System/Win32/Fixtures';target.mkdir(exist_ok=True)
         shutil.copyfile(self.images/'System/Win32/fixtures/dialogs-exercise.exe',target/'dialogs-exercise.exe')
-        out=self.command('dialogs-startup',target/'dialogs-exercise.exe')
+        return self.command('dialogs-startup',target/'dialogs-exercise.exe')
+
+    def test_dialogs_fixture_startup_on_kernel_model(self):
+        out=self.dialogs_fixture_output()
         self.assertIn('PASS dialogs startup old result collision=487 new result free commit RW zero GetModuleHandleA',out)
+        self.assertIn('PASS dialogs compiled PE FindResource LoadResource LockResource SizeofResource',out)
 
     def test_fixed_address_virtualalloc_on_kernel_model(self):
         self.assertIn('PASS kernel32 fixed VirtualAlloc exact rounding collision=487 invalid=87 zero RW release',

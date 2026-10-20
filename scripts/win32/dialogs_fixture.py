@@ -14,7 +14,10 @@ if str(ROOT) not in sys.path:
 from scripts.win32 import gdi32
 
 SOURCE = ROOT/'src/probes/win32_dialogs'
-KERNEL32 = {'ExitProcess', 'GetModuleHandleA', 'Sleep', 'VirtualAlloc'}
+KERNEL32 = {'ExitProcess', 'GetModuleHandleA', 'Sleep', 'VirtualAlloc',
+            'GetLastError', 'SetLastError',
+            'FindResourceA', 'LoadResource', 'LockResource', 'SizeofResource'}
+GDI32 = {'CreateFontIndirectA', 'DeleteObject'}
 NAME = 'dialogs-exercise.exe'
 
 
@@ -23,7 +26,7 @@ def imports(obj):
     names = subprocess.run(['llvm-nm', '-u', str(obj)], check=True, capture_output=True, text=True).stdout
     table = {'kernel32': [], 'gdi32': [], 'user32': []}
     for name, arity in re.findall(r'\bU _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$', names, re.M):
-        dll = 'kernel32' if name in KERNEL32 else 'gdi32' if name.startswith('w32_gdi_') else 'user32'
+        dll = 'kernel32' if name in KERNEL32 else 'gdi32' if name in GDI32 or name.startswith('w32_gdi_') else 'user32'
         table[dll].append(f'{name}@{arity}')
     leftover = [l for l in names.split() if l not in ('U',) and not re.fullmatch(r'_[A-Za-z][A-Za-z0-9_]*@\d+', l)]
     if leftover:

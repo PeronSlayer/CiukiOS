@@ -196,6 +196,35 @@ class DialogTests(unittest.TestCase):
     def test_dialog_units_templates_and_hostile_input(self):
         self.execute('templates')
 
+    def test_fixture_failure_diagnostic_preserves_error_and_source_line(self):
+        text = self.execute('exercise-missing-resource')
+        line = re.search(r'dialogs-exercise: step=FindResourceA line=(\d+) last_error=1814', text)
+        self.assertIsNotNone(line, text)
+        self.assertIn('DIAGNOSTIC first_error='+line[1], text)
+
+    def test_dialog_from_compiled_pe_through_kernel_loader(self):
+        # Real kernel-backed loader and resource APIs, then marshal their
+        # actual bytes to USER/GDI. Neither native harness executes i386 PE
+        # instructions. No .res/Python PE parsing substitutes for the loader.
+        from tests.host.win32.test_kernel_loader import KernelLoaderTests
+        KernelLoaderTests.setUpClass()
+        output = KernelLoaderTests().dialogs_fixture_output()
+        (OUT/'compiled-pe-loader.log').write_text(output)
+        entries = {int(ident): bytes.fromhex(data) for ident, data in
+                   re.findall(r'^PE_RESOURCE (\d+) ([0-9a-f]+)$', output, re.M)}
+        self.assertEqual(set(entries), {600, 601})
+        self.assertEqual(struct.unpack_from('<HH', entries[600]), (1, 0xffff))
+        payload = OUT/'pe-resources.bin'
+        payload.write_bytes(struct.pack('<II', len(entries[600]), len(entries[601])) +
+                            entries[600] + entries[601])
+        self.env['CIUKI_PE_RESOURCES'] = str(payload)
+        try:
+            text = self.execute('exercise-pe')
+        finally:
+            self.env.pop('CIUKI_PE_RESOURCES', None)
+        self.assertIn('EXERCISE errors=0 first_error=0', text)
+        self.assertIn('case=dialog_controls classes=6 controls=13', text)
+
     def test_modal_loop_keyboard_navigation_and_default_buttons(self):
         self.execute('keyboard')
 
