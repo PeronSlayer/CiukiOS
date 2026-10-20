@@ -29,6 +29,8 @@ import fat_fixtures
 import iso_fixtures
 import ntfs_fixtures
 import dos_fixtures
+import win32_fixtures
+import win32_runner
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -275,6 +277,10 @@ def selector(request, source='menu', validated_fw_cfg=False):
     if source == 'cfg' or isinstance(request, str) and ':sweep' in request:
         from physical import cfg_selector
         return cfg_selector(request, source)
+    # f5-17B Win32 title tiers: f5:win32-<workload> run=<id>, fw_cfg only
+    # (win32_session.selector); the kernel does not register these probes yet.
+    if isinstance(request, str) and request.startswith('f5:win32-'):
+        return win32_runner.selector(request, source, validated_fw_cfg)
     server = re.search(r' server=(desktop-v3|desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
     if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
@@ -510,12 +516,17 @@ def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
     usb=fixture_usb_disks(case)
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if index not in usb and fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local')]
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if index not in usb and (fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local') or win32_fixtures.is_disk(fixture))]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
     if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
-    optical=[f for f in case.get('fixtures',[]) if f.get('generator')=='xorriso']
+    optical=[f for f in case.get('fixtures',[]) if optical_fixture(f)]
     if len(optical)>1 or optical and len(indices)>2: raise res.Refusal('optical IDE index 3 collides with FAT fixture disks')
     return list(zip(indices,range(1,len(indices)+1)))
+
+
+def optical_fixture(fixture):
+    """A generated CD image attached as the secondary-slave ide-cd (index 3)."""
+    return fixture.get('generator')=='xorriso' or win32_fixtures.is_optical(fixture)
 
 
 def dos_image_identity(image):
@@ -556,6 +567,13 @@ def prepare_fixtures(host,case,directory,image=None):
             except dos_fixtures.FixturesAbsent:raise
             except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('DOS workload fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index]
+        elif fixture.get('generator')==win32_fixtures.GENERATOR:
+            # f5-17B: the lead's local extraction of a verified title download,
+            # on this run's own FAT disk or CD image only (win32_fixtures.py).
+            try:item.update(win32_fixtures.generate(fixture,directory,index,ROOT))
+            except EvidenceNotRun:raise
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('Win32 workload fixture generation failed: '+str(e)) from e
+            item['ide_index']=disks[index] if win32_fixtures.is_disk(fixture) else 3
         elif 'path' in fixture:
             path=(ROOT/fixture['path']).resolve()
             if not path.is_relative_to(ROOT) or not path.is_file():raise res.Refusal('fixture missing/outside worktree')
@@ -1076,6 +1094,10 @@ def case_kind(case):
     """
     kind = case.get('kind')
     if kind is None and case.get('probe') != NORMAL_BOOT_KIND:return 'probe'
+    if kind in win32_runner.KINDS:
+        # f5-17B installers/titles tiers: structural validation here, the
+        # screen pins and probe registration at boot time (not_run, never pass).
+        win32_runner.validate_case(case,ROOT);return kind
     if kind != NORMAL_BOOT_KIND or case.get('probe') != NORMAL_BOOT_KIND:
         raise res.Refusal('normal-boot case needs kind and probe "normal-boot"; unknown case kind: '+str(kind))
     extra = sorted(set(case)-NORMAL_BOOT_CASE_KEYS)
@@ -1723,7 +1745,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
                '-drive',f'file=fixture-{index}.img,format=raw,if=none,id=ciuki-usb,cache='+cache+throttle,
                '-device','usb-storage,id=ciuki-usb-storage,bus=ciuki-storage-usb.0,drive=ciuki-usb']
     for index,fixture in enumerate(case.get('fixtures',[])):
-        if fixture.get('generator')=='xorriso':
+        if optical_fixture(fixture):
             # Secondary slave (IDE index 3) as an explicit ide-cd frontend. A
             # legacy if=ide CD-ROM let QEMU add its default empty CD-ROM at
             # index 2 whenever no fixture disk held it (system/vl.c
@@ -1820,9 +1842,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     result['operator_confirmation'] = False
     result['operator_confirmation_required'] = case.get('operator_confirmation',False)
     normal=case_kind(case)==NORMAL_BOOT_KIND
+    win32=case_kind(case) in win32_runner.KINDS;session=None
     # Probe and sweep cases are judged on CIUKI_TEST records; a normal boot on
     # serial milestones and a screendump, with no test request at all.
     result['evidence_kind']=NORMAL_BOOT_KIND if normal else 'ciuki-test-records'
+    if win32:result['win32']={'tier':win32_runner.KINDS[case['kind']],'workload':case['win32']['workload'],'scene':case['win32']['scene'],'verdict':None}
     if normal:
         result['normal_boot']={'fw_cfg_request':None,'ciuki_test_records_required':False,
                                'settle_seconds':case['expected']['settle_seconds'],
@@ -1843,6 +1867,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     normal_shot = directory/'screen.ppm';desktop_at = failure_at = None
     restart_performed=False;expected_resets=0
     try:
+        # f5-17B: pins still pending or an unregistered probe end the case as
+        # not_run before an overlay or a fixture image is created.
+        if win32:win32_runner.precheck(case,ROOT)
         if shared_overlay is None:
             subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
         blkdebug_config(case,overlay.parent)
@@ -1855,9 +1882,17 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
         result['fixtures']=prepare_fixtures(host,case,directory,image)
+        if win32:
+            # The session binds the parser to the image hash, the fixture's
+            # payload identity and the scene; pins pending, a probe name the
+            # kernel cannot hold or has not registered end here as not_run,
+            # before any QEMU launch.
+            session=win32_runner.Session(case,run_id,result['image']['sha256'],result['fixtures'],directory,ROOT,read_frame=read_ppm)
+            parser=session.parser
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
         launched=time.monotonic();deadline=launched+case['timeout']
+        host_ms=lambda:int((time.monotonic()-launched)*1000)
         if normal:parser.clock=lambda:time.monotonic()-launched
         process=host.launch(scoped,directory)
         os.set_blocking(process.stdout.fileno(),False)
@@ -1892,6 +1927,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         serial.write(line[:max(0,res.LOG_CAP-serial.tell())]);serial.flush()
                         raise
                     actions.observe(line,record)
+                    if session:session.observe(line,record,host_ms())
                     # Application frames are hashed/scanned in full and
                     # retained as bounded head/tail in result.json. The
                     # serial log budget is reserved for controller evidence.
@@ -2030,6 +2066,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             serial_pending=write_gate and (pending or select.select([fd],[],[],0)[0])
             gate_ready=write_gate.step(parser,qmp,now) if write_gate and qmp and not serial_pending else not write_gate
             cut=None if not gate_ready or case.get('desktop_screen') and screen_armed_at is not None and not screen_before.exists() and 'desktop_screen' not in result else actions.step(parser,qmp,now)
+            # f5-17B: keep polling screen checks after the terminal record, so a
+            # check triggered by the last segment (the desktop after the
+            # installer or the title exits) is judged on a live screendump.
+            if session and qmp:session.tick(host_ms(),qmp)
             if cut:
                 parser.check(case['expected']);result['cut_point']=actions.observed[-1]
                 if write_gate:
@@ -2039,9 +2079,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['durability_observations'].append({'mode':'guest-termination','device_power_loss':False})
                 break
             if parser.terminal:
-                if parser.terminal['event']=='NOT_RUN':
-                    result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal['after'];break
-                if not actions.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
+                if parser.terminal['event']=='NOT_RUN' or session and parser.outcome=='not_run':
+                    result['outcome']='not_run';result['reason']='prerequisite failed: '+parser.terminal.get('after',parser.terminal.get('reason','unknown'));break
+                if not actions.complete or session and not session.player.complete:raise EvidenceError('terminal evidence before declared stimuli completed')
                 parser.check(case['expected'])
                 if qmp is None:raise EvidenceError('terminal evidence without QMP observation')
                 if case.get('desktop_screen') and 'desktop_screen' not in result:
@@ -2067,7 +2107,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                             raise EvidenceError('block writes/flushes changed after CPU start')
                         result['panic_observation_seconds']=now-panic_start
                         break
-                elif now-terminal_time>=.2:
+                elif now-terminal_time>=.2 and not (session and session.waits_open):
                     if case.get('boot_kind')=='restart' and not restart_performed:
                         result['restart_prerequisite']=parser.records
                         expected_resets+=1;qmp.command('system_reset')
@@ -2105,6 +2145,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['timeout']['source']=type(e).__name__
             pending_stimulus=actions.pending_stimulus(parser)
             result['stimulus']['pending']=pending_stimulus
+            if session:result['timeout']['pending_win32']=session.pending()
             if pending_stimulus:
                 if write_gate:pending_stimulus.update(write_gate.pending_stimulus(parser.records))
                 result['timeout']['pending_stimulus']=pending_stimulus
@@ -2113,6 +2154,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['outcome']='not_run';result['not_run_subcases']=parser.not_run_subcases
         if isinstance(e,dos_fixtures.FixturesAbsent):
             result['reason']='fixtures_absent';result['fixtures_absent']=str(e)
+        elif isinstance(e,win32_runner.Blocked):
+            result['reason']=e.kind;result['win32']['blockers']=e.blockers
     finally:
         # Capture before sending quit or terminating anything. A QMP reset/EOF
         # can precede reaping the wrapper by a few scheduler ticks. Never use
@@ -2195,6 +2238,14 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
+            if fixture.get('generator')==win32_fixtures.GENERATOR and fixture.get('path'):
+                try:
+                    fixture['sha256_after']=sha(fixture['path'])
+                    if fixture.get('media') in win32_fixtures.OPTICAL_MEDIA and fixture['sha256_after']!=fixture['sha256']:
+                        raise EvidenceError('Win32 CD fixture changed during read-only case')
+                    # A FAT fixture disk may legitimately receive installer writes; its hash after the run is recorded only.
+                except (OSError,ValueError) as e:
+                    result['outcome']='fail';result['reason']=str(e)
             if fixture.get('generator')=='dos-local' and fixture.get('path'):
                 try:
                     fixture['sha256_after']=sha(fixture['path'])
@@ -2247,6 +2298,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
             except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:
                 result['outcome']='fail'; result['reason']=str(e)
+        if session is not None:
+            try:session.finish(result)
+            except (OSError,ValueError,RuntimeError) as e:
+                result['outcome']='fail';result['reason']='win32 evidence summary failed: '+str(e)
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'
@@ -2264,7 +2319,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         passing=['serial.log','screen.ppm'] if normal else ['serial.log']
         if result['outcome']=='pass':
             for p in directory.iterdir():
-                if p.name not in passing and not (retain_overlay and p==overlay):p.unlink()
+                if p.name not in passing and not (retain_overlay and p==overlay):
+                    if p.is_dir():shutil.rmtree(p)
+                    else:p.unlink()
             result['artifacts']={k:v for k,v in result['artifacts'].items() if k in passing or (retain_overlay and k=='run.qcow2')}
         else:
             for name in ('q','serial.fifo','gate','file-limit'):
@@ -2516,17 +2573,30 @@ def run_sweep(root, suite, case, profile, image, executable, firmware, host=None
     return aggregate, directory
 
 
+def select_cases(suite, identities):
+    """Select explicit cases for one title without changing suite predicates."""
+    if not identities:
+        return suite
+    if any(c.get('kind') not in win32_runner.KINDS for c in suite['cases'] if not c.get('_smoke')):
+        raise res.Refusal('--case currently supports only Win32 acceptance tiers')
+    missing = set(identities) - {c.get('id') for c in suite['cases']}
+    if missing:
+        raise res.Refusal('unknown suite case: ' + ', '.join(sorted(missing)))
+    return {**suite, 'cases': [c for c in suite['cases'] if c.get('_smoke') or c.get('id') in identities]}
+
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--physical-capture',type=Path,action='append',default=[])
     ap.add_argument('--image-sha256',help='verified historical image hash (physical import only)')
     ap.add_argument('suite');ap.add_argument('--image',type=Path);ap.add_argument('--profile');ap.add_argument('--keep',action='store_true')
+    ap.add_argument('--case', action='append', default=[], help='run only these exact case IDs (repeatable)')
     options=ap.parse_args(argv)
     try:
         if options.image_sha256 and (not options.physical_capture or not re.fullmatch('[0-9a-f]{64}',options.image_sha256)):
             raise res.Refusal('--image-sha256 requires physical capture and 64 lowercase hex digits')
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
-        suite=load_suite(options.suite)
+        suite=select_cases(load_suite(options.suite), options.case)
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
         with res.SlotLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')

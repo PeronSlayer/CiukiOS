@@ -129,7 +129,13 @@ for raw in stream:
         Path('fake-stopped').touch()
         conn.sendall(json.dumps({'return':{},'id':request['id']}).encode()+b'\n');break
     elif cmd=='screendump':
-        screen=scenario.get('screen') or scenario.get('desktop_screens',{}).get('after' if scenario.get('received_input') else 'before')
+        if scenario.get('screens'):
+            # f5-17B win32 tiers: one canned frame per screendump, in order; the
+            # last frame repeats (a stalled scene) once the list is exhausted.
+            shots=scenario.setdefault('screendumps',0);scenario['screendumps']=shots+1
+            screen=scenario['screens'][min(shots,len(scenario['screens'])-1)]
+        else:
+            screen=scenario.get('screen') or scenario.get('desktop_screens',{}).get('after' if scenario.get('received_input') else 'before')
         Path(request['arguments']['filename']).write_bytes(Path(screen).read_bytes() if screen else b'P6\n1 1\n255\n\x00\x00\x00')
     conn.sendall(json.dumps({'return':reply,'id':request['id']}).encode()+b'\n')
     if cmd in ('cont','system_reset'):
@@ -183,6 +189,10 @@ for raw in stream:
                 def finish():
                     time.sleep(.5);emit(scenario['delayed_terminal'])
                 threading.Thread(target=finish,daemon=True).start()
+        # f5-17B: records the guest emits once the Nth input batch arrived
+        # (segment ends, next ARM, summaries), keyed by the decimal batch count.
+        if str(count) in scenario.get('after_inputs',{}):
+            emit(scenario['after_inputs'][str(count)])
     if cmd=='quit':Path('fake-stopped').touch()
     if scenario.get('reset') and cmd=='query-status':conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":0},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
 if scenario.get('child'):

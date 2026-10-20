@@ -1,0 +1,2974 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "cases": [
+    {
+      "id": "win32-title-diablo-shareware-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-diablo-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-diablo-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-diablo-shareware probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "diablo-shareware",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "diablo-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "diablo-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/diablo-shareware-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": true,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "focus-desktop": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "focus",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after Alt+Tab (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "focus-switched",
+            "after": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "screen": "focus-desktop",
+            "timeout_ms": 30000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "fields": {
+              "round_trips": {
+                "eq": 10
+              },
+              "corrupt": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-starcraft-shareware-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-starcraft-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-starcraft-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-starcraft-shareware probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "starcraft-shareware",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "starcraft-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "starcraft-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/starcraft-shareware-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": true,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "focus-desktop": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "focus",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after Alt+Tab (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "focus-switched",
+            "after": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "screen": "focus-desktop",
+            "timeout_ms": 30000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "fields": {
+              "round_trips": {
+                "eq": 10
+              },
+              "corrupt": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-aoe-trial-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-aoe-trial",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-aoe-trial run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-aoe-trial probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "aoe-trial",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "aoe-trial",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "aoe-trial",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/aoe-trial-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-half-life-uplink-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-half-life-uplink",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-half-life-uplink run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-half-life-uplink probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "half-life-uplink",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "half-life-uplink",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "half-life-uplink",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/half-life-uplink-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-ut-demo-348-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-ut-demo-348",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-ut-demo-348 run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-ut-demo-348 probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "ut-demo-348",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "ut-demo-348",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "ut-demo-348",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/ut-demo-348-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-worms-armageddon-demo-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-worms-armageddon-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-worms-armageddon-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-worms-armageddon-demo probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "worms-armageddon-demo",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "worms-armageddon-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "worms-armageddon-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/worms-armageddon-demo-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-heroes3-demo-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-heroes3-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-heroes3-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-heroes3-demo probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "heroes3-demo",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "heroes3-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "heroes3-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/heroes3-demo-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-rct-demo-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-rct-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-rct-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-rct-demo probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "rct-demo",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "rct-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "rct-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/rct-demo-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": true,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "focus-desktop": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "focus",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after Alt+Tab (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "focus-switched",
+            "after": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "screen": "focus-desktop",
+            "timeout_ms": 30000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "focus",
+              "segment": "focus"
+            },
+            "fields": {
+              "round_trips": {
+                "eq": 10
+              },
+              "corrupt": {
+                "eq": 0
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-jazz2-shareware-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-jazz2-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-jazz2-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-jazz2-shareware probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "jazz2-shareware",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "jazz2-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "jazz2-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/jazz2-shareware-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-title-ta-demo-qemu-t23",
+      "kind": "win32-title",
+      "probe": "win32-ta-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-ta-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-ta-demo probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "ta-demo",
+          "media": "fat32",
+          "source": "installed",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "ta-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "ta-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/ta-demo-title.json",
+        "launch": {
+          "kind": "fixture-tree",
+          "path": null,
+          "entry": null
+        },
+        "focus": false,
+        "exit_codes": [
+          0
+        ],
+        "screens": {
+          "title-menu": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "menu",
+            "timeout_ms": 60000,
+            "description": "title main menu (region and pin qualified by the reference run)"
+          },
+          "scene-start": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, first checkpoint (region and pin qualified by the reference run)"
+          },
+          "scene-later": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "play",
+            "timeout_ms": 120000,
+            "description": "first dungeon, after movement and input (region and pin qualified by the reference run)"
+          },
+          "desktop-after-exit": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the title exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "progress-start",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-start"
+            },
+            "screen": "scene-start",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "progress-later",
+            "after": {
+              "event": "DATA",
+              "case": "progress",
+              "checkpoint": "scene-end"
+            },
+            "screen": "scene-later",
+            "timeout_ms": 120000
+          },
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "exit",
+              "op": "end"
+            },
+            "screen": "desktop-after-exit",
+            "timeout_ms": 30000
+          }
+        ],
+        "progress": {
+          "checkpoints": [
+            "progress-start",
+            "progress-later"
+          ],
+          "must_differ": true
+        }
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "launch",
+              "segment": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "start",
+              "op": "start"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "loader",
+              "segment": "start"
+            },
+            "fields": {
+              "status": "PASS"
+            },
+            "exact_count": 4
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "mode",
+              "segment": "play"
+            },
+            "fields": {
+              "width": {
+                "ge": 1
+              },
+              "height": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "frames",
+              "segment": "play"
+            },
+            "fields": {
+              "game_frames": {
+                "ge": 1
+              },
+              "presents": {
+                "ge": 1
+              }
+            },
+            "relations": [
+              {
+                "left": "presents",
+                "op": "ge",
+                "right": "game_frames"
+              }
+            ],
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fps",
+              "segment": "play"
+            },
+            "fields": {
+              "samples": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio",
+              "segment": "play"
+            },
+            "fields": {
+              "qualified": {
+                "eq": 1
+              },
+              "non_silent_frames": {
+                "ge": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "progress",
+              "segment": "play"
+            },
+            "count": 2
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "input",
+              "segment": "play"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "commit",
+              "segment": "play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "exit",
+              "op": "exit"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "audio_open",
+              "segment": "play"
+            },
+            "count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

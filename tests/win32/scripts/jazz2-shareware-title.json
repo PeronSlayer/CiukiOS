@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "clock": "host-monotonic-ms",
+  "workload": "jazz2-shareware",
+  "scene": "default-play",
+  "timeout_ms": 580000,
+  "status": "reference-pending",
+  "segments": [
+    {
+      "name": "start",
+      "steps": [
+        {
+          "input_id": 1,
+          "at_ms": 500,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": true,
+                "key": {
+                  "type": "qcode",
+                  "data": "ret"
+                }
+              }
+            }
+          ],
+          "after_screen": "title-menu",
+          "note": "placeholder stimulus: the exact keys are qualified by the reference run (workloads.json unknown scene.reference_input_sequence)"
+        },
+        {
+          "input_id": 2,
+          "at_ms": 560,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": false,
+                "key": {
+                  "type": "qcode",
+                  "data": "ret"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "play",
+      "steps": [
+        {
+          "input_id": 3,
+          "at_ms": 1000,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": true,
+                "key": {
+                  "type": "qcode",
+                  "data": "right"
+                }
+              }
+            }
+          ],
+          "after_screen": "scene-start",
+          "measure_latency": true,
+          "note": "placeholder stimulus: the exact keys are qualified by the reference run (workloads.json unknown scene.reference_input_sequence)"
+        },
+        {
+          "input_id": 4,
+          "at_ms": 1060,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": false,
+                "key": {
+                  "type": "qcode",
+                  "data": "right"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exit",
+      "steps": [
+        {
+          "input_id": 7,
+          "at_ms": 500,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": true,
+                "key": {
+                  "type": "qcode",
+                  "data": "esc"
+                }
+              }
+            }
+          ],
+          "note": "placeholder stimulus: the exact keys are qualified by the reference run (workloads.json unknown scene.reference_input_sequence)"
+        },
+        {
+          "input_id": 8,
+          "at_ms": 560,
+          "events": [
+            {
+              "type": "key",
+              "data": {
+                "down": false,
+                "key": {
+                  "type": "qcode",
+                  "data": "esc"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
