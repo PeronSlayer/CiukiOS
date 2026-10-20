@@ -1,0 +1,15 @@
+# f5-10C3 — make the `w32-dialogs-qemu-t23` guest case pass: the fixture's fixed-address VirtualAlloc fails in the guest
+
+- **Phase:** F5 (USER/GDI guest evidence). **Model:** Codex `gpt-6.1-sol` / high. **Worktree:** `wt/f5-10c3` from main.
+- **Context:** f5-10C2 (font bridge, `dialogs-exercise.exe`, kernel probe `f5:w32-dialogs`) and its two lead notes; the probe now opens the C: write gate and w32srv serves the registry. Third guest run (image `49a88fbc…`, main `bf311463`): the fixture starts (`[win32] start pid=6 exe=/System/Win32/Fixtures/dialogs-exercise.exe pe=00000000:00007000`, loader warning `newer-subsystem-version major=6`) and exits at once with code 2 (`[win32] exit pid=6 code=00000002 reason=normal peak_commit=1798144`): `src/probes/win32_dialogs/exercise.c` `entry()` calls `VirtualAlloc((void *)0x6fff0000, 4096, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` and exits with 2 when it returns NULL. No builtin DLL occupies 0x6fff0000 (the store starts at 0x70000000). The probe then fails with `reason=fixture_result`.
+- **Authority:** the kernel32/ntdll virtual-memory path and the kernel's Win32 memory service that serve that call (`sdk/win32/kernel32/`, `sdk/win32/ntdll/`, `src/kernel/proc/win32/`, `src/kernel/proc/uaddr.c` only where the fixed-address reservation is refused), the fixture (`src/probes/win32_dialogs/`) only if the call itself is wrong, the PE build flags of the fixture (subsystem version) if the loader's warning matters, tests under `tests/host/win32/`.
+
+## Required
+
+1. Reproduce the failing call on the production code path (the kernel model tests in `tests/host/win32/` run kernel32 over the real kernel services: f5-05B/f5-06 harnesses) with the same arguments, find why a fixed-address `MEM_RESERVE|MEM_COMMIT` of one page at 0x6fff0000 fails (GetLastError value, the refusing check with file:line), and fix it to Windows 98 semantics (reservation base rounded down to the 64 KiB allocation granularity, size rounded up to the page size; refusal only for an occupied or invalid range, with the Windows error code). If the address collides with the process layout (stack, heaps, PEB/TEB, mapped image, w32srv shared regions), state the layout and move the fixture's result block to an address the contract guarantees free, recording the choice in `src/probes/win32_dialogs/controller.h` and the kernel probe.
+2. Check the rest of the fixture's start on the same path (GetModuleHandleA, the w32srv font bridge readiness loop, the dialog run) as far as the host harness allows, so the next guest run is not stopped by the following call.
+3. Evidence: a host regression test for the fixed-address reservation; `make CAP= apps`; `python3 -B -m unittest discover -s tests/host/win32 -t .`; `scripts/test/host_kernel_tests.sh` if the kernel changes. Report `build/codex/f5-10c3-report.md` with what the lead must check on QEMU.
+
+## Constraints
+
+rg and sed, never semble; no QEMU, no systemd-run, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`; never disable sanitizer leak detection where the repository script does not; no new `panic()` paths; English.
