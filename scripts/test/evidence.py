@@ -240,65 +240,76 @@ class Parser:
             raise EvidenceError('missing or unexpected terminal event')
         if expected['terminal'] == 'END' and self.terminal['status'] != 'PASS':
             raise EvidenceError('kernel reported FAIL')
-        self.not_run_subcases = []
-        for predicate in expected.get('predicates', []):
-            matches = [r for r in self.records if all(r.get(k)==str(v) for k,v in predicate.get('where',{}).items())]
-            minimum = predicate.get('count', 1)
-            if len(matches) < minimum or ('exact_count' in predicate and len(matches)!=predicate['exact_count']):
-                if not matches and predicate.get('missing') == 'not_run':
-                    self.not_run_subcases.append({'subcase':predicate['subcase'],'reason':'missing_required_record'})
-                    continue
-                raise EvidenceError('missing evidence: '+str(predicate))
-            unique=predicate.get('unique')
-            if unique and len({r.get(unique) for r in matches})!=len(matches):
-                raise EvidenceError('duplicate subcase identity: '+unique)
-            if predicate.get('combine',False):
-                summary={}
-                for record in matches:
-                    for key,value in record.items():
-                        if key in ('v','run','seq','probe','event'):continue
-                        if key in summary and summary[key]!=value:
-                            raise EvidenceError('conflicting grouped field: '+key)
-                        summary[key]=value
-                matches=[summary]
-            # Every matching record must meet its predicate: a later good value
-            # must not conceal an earlier violation.
-            for r in matches:
-                for field in predicate.get('required_fields',[]):
-                    if field not in r:raise EvidenceError('missing field: '+field)
-                for field, rule in predicate.get('fields',{}).items():
-                    if field not in r:
-                        raise EvidenceError('missing field: '+field)
-                    value = r[field]
-                    if not isinstance(rule,dict):
-                        if value != str(rule):
-                            raise EvidenceError('value mismatch: '+field)
-                        continue
-                    encoding = rule.get('encoding','decimal')
-                    pattern = ('-?[0-9]+' if encoding=='signed' else '[0-9]+') if encoding in ('decimal','signed') else '[0-9a-fA-F]{'+str(rule.get('width',8))+'}'
-                    if not re.fullmatch(pattern,value):
-                        raise EvidenceError('invalid numeric encoding: '+field)
-                    number = int(value,10 if encoding in ('decimal','signed') else 16)
-                    for op, bound in rule.items():
-                        if op in ('encoding','width'): continue
-                        if isinstance(bound,str) and bound.startswith('$'):
-                            if bound[1:] not in r: raise EvidenceError('missing comparison field')
-                            bound = int(r[bound[1:]],10 if encoding in ('decimal','signed') else 16)
-                        if op=='eq' and number!=bound or op=='ge' and number<bound or op=='le' and number>bound or op=='ne' and number==bound or op=='mask' and number & bound != bound or op=='clear' and number & bound:
-                            raise EvidenceError(f'predicate failed: {field} {op} {bound}')
-                        if op not in ('eq','ge','le','ne','mask','clear'):
-                            raise EvidenceError('unknown predicate operator')
-                for relation in predicate.get('relations',[]):
-                    try:
-                        left=int(r[relation['left']]);right=int(r[relation['right']])
-                        if 'subtract' in relation:right-=int(r[relation['subtract']])
-                        right+=relation.get('add',0)
-                        right*=relation.get('multiply',1)
-                    except (ValueError,KeyError) as e:raise EvidenceError('invalid relation fields') from e
-                    op=relation['op']
-                    if op=='eq' and left!=right or op=='ge' and left<right or op not in ('eq','ge'):
-                        raise EvidenceError('numeric relation failed')
+        self.not_run_subcases = evaluate_predicates(self.records, expected)
         self.not_run_subcases.extend(expected.get('not_run_subcases',[]))
         if self.not_run_subcases:
             raise EvidenceNotRun('required subcases not_run: '+str(self.not_run_subcases))
         return True
+
+
+def evaluate_predicates(records, expected):
+    """Shared declarative predicate engine (where/fields/relations/count).
+
+    Returns the not_run subcases of predicates declared missing='not_run';
+    every other violation raises EvidenceError. Behaviour is identical to the
+    former Parser.check loop; win32_evidence.Parser.check reuses it (f5-17B).
+    """
+    not_run_subcases = []
+    for predicate in expected.get('predicates', []):
+        matches = [r for r in records if all(r.get(k)==str(v) for k,v in predicate.get('where',{}).items())]
+        minimum = predicate.get('count', 1)
+        if len(matches) < minimum or ('exact_count' in predicate and len(matches)!=predicate['exact_count']):
+            if not matches and predicate.get('missing') == 'not_run':
+                not_run_subcases.append({'subcase':predicate['subcase'],'reason':'missing_required_record'})
+                continue
+            raise EvidenceError('missing evidence: '+str(predicate))
+        unique=predicate.get('unique')
+        if unique and len({r.get(unique) for r in matches})!=len(matches):
+            raise EvidenceError('duplicate subcase identity: '+unique)
+        if predicate.get('combine',False):
+            summary={}
+            for record in matches:
+                for key,value in record.items():
+                    if key in ('v','run','seq','probe','event'):continue
+                    if key in summary and summary[key]!=value:
+                        raise EvidenceError('conflicting grouped field: '+key)
+                    summary[key]=value
+            matches=[summary]
+        # Every matching record must meet its predicate: a later good value
+        # must not conceal an earlier violation.
+        for r in matches:
+            for field in predicate.get('required_fields',[]):
+                if field not in r:raise EvidenceError('missing field: '+field)
+            for field, rule in predicate.get('fields',{}).items():
+                if field not in r:
+                    raise EvidenceError('missing field: '+field)
+                value = r[field]
+                if not isinstance(rule,dict):
+                    if value != str(rule):
+                        raise EvidenceError('value mismatch: '+field)
+                    continue
+                encoding = rule.get('encoding','decimal')
+                pattern = ('-?[0-9]+' if encoding=='signed' else '[0-9]+') if encoding in ('decimal','signed') else '[0-9a-fA-F]{'+str(rule.get('width',8))+'}'
+                if not re.fullmatch(pattern,value):
+                    raise EvidenceError('invalid numeric encoding: '+field)
+                number = int(value,10 if encoding in ('decimal','signed') else 16)
+                for op, bound in rule.items():
+                    if op in ('encoding','width'): continue
+                    if isinstance(bound,str) and bound.startswith('$'):
+                        if bound[1:] not in r: raise EvidenceError('missing comparison field')
+                        bound = int(r[bound[1:]],10 if encoding in ('decimal','signed') else 16)
+                    if op=='eq' and number!=bound or op=='ge' and number<bound or op=='le' and number>bound or op=='ne' and number==bound or op=='mask' and number & bound != bound or op=='clear' and number & bound:
+                        raise EvidenceError(f'predicate failed: {field} {op} {bound}')
+                    if op not in ('eq','ge','le','ne','mask','clear'):
+                        raise EvidenceError('unknown predicate operator')
+            for relation in predicate.get('relations',[]):
+                try:
+                    left=int(r[relation['left']]);right=int(r[relation['right']])
+                    if 'subtract' in relation:right-=int(r[relation['subtract']])
+                    right+=relation.get('add',0)
+                    right*=relation.get('multiply',1)
+                except (ValueError,KeyError) as e:raise EvidenceError('invalid relation fields') from e
+                op=relation['op']
+                if op=='eq' and left!=right or op=='ge' and left<right or op not in ('eq','ge'):
+                    raise EvidenceError('numeric relation failed')
+    return not_run_subcases

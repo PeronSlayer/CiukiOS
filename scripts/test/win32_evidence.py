@@ -4,10 +4,9 @@ No guest currently emits this draft protocol. Canned host records validate
 framing/verdicts, not PE execution or original installer/game compatibility.
 """
 import re
-
-
-class EvidenceError(ValueError):
-    pass
+# One error class with run.py's collector: a malformed controller line keeps
+# its bytes in serial.log (run.py catches evidence.EvidenceError around feed()).
+from evidence import EvidenceError, EvidenceNotRun, evaluate_predicates
 
 
 ENVELOPE = {'v', 'run', 'seq', 'probe', 'event'}
@@ -22,6 +21,7 @@ SCHEMAS = {
     'frames': ({'segment', 'pid', 'duration_ms', 'game_frames', 'presents'}, set()),
     'fps': ({'segment', 'pid', 'avg_milli', 'median_milli', 'p05_milli', 'p95_us', 'samples'}, set()),
     'audio': ({'segment', 'pid', 'qualified', 'underruns', 'consumed_frames', 'non_silent_frames'}, set()),
+    'audio_open': ({'segment', 'pid', 'stream_id', 'rate', 'channels'}, set()),
     'input': ({'segment', 'pid', 'input_id', 'latency_us', 'latency_frames'}, set()),
     'progress': ({'segment', 'pid', 'checkpoint', 'counter'}, set()),
     'focus': ({'segment', 'pid', 'round_trips', 'corrupt'}, set()),
@@ -32,11 +32,40 @@ SCHEMAS = {
     'shim': ({'segment', 'pid', 'name'}, set()),
     'stub': ({'segment', 'pid', 'name', 'handled'}, set()),
     'crash': ({'segment', 'pid', 'code'}, set()),
+    # f5-17B installer/title inventory: one `installed` row per file, registry
+    # key or Start-menu link the guest probe lists after the installer exits,
+    # its path/key carried by ordered UTF-8 `name` chunks (run.py record_name
+    # grammar, at most 40 bytes each) so long paths fit the 240-byte line.
+    'installed': ({'segment', 'id', 'kind'}, {'size', 'sha256'}),
+    'name': ({'segment', 'id', 'field', 'offset', 'bytes', 'hex'}, set()),
+    # How the title was started in the `start` segment (its path in a name chunk).
+    'launch': ({'segment', 'pid', 'kind', 'id'}, set()),
 }
 NUMBERS = {'pid', 'guest_ms', 'icount', 'width', 'height', 'bpp', 'duration_ms', 'game_frames',
            'presents', 'avg_milli', 'median_milli', 'p05_milli', 'p95_us',
            'samples', 'underruns', 'consumed_frames', 'non_silent_frames', 'input_id', 'latency_us',
-           'latency_frames', 'counter', 'round_trips', 'count', 'system_writes', 'peak_bytes'}
+           'latency_frames', 'counter', 'round_trips', 'count', 'system_writes', 'peak_bytes',
+           'id', 'offset', 'bytes', 'size', 'stream_id', 'rate', 'channels'}
+INSTALLED_KINDS = ('file', 'directory', 'registry', 'link')
+LAUNCH_KINDS = ('start-menu', 'fixture-tree', 'command')
+KERNEL_KINDS = ('start', 'exit', 'crash', 'stub', 'refuse', 'load')
+KERNEL_LINE_CAP = 256
+# Which guest segments and independent host checks each runner tier needs.
+# `gate` is the f5-17A whole-title verdict; `installers` and `titles` are the
+# f5-17B runner tiers (docs/directives/f5-17b-acceptance-suite-runner-titles.md).
+TIERS = {
+    'gate': {'segments': ('install', 'start', 'play', 'exit'), 'install': 'required', 'play': True,
+             'host': ('installed_files', 'menu_screen', 'play_screen', 'game_progress',
+                      'audio_reference', 'desktop_screen', 'input_acknowledged'),
+             'kernel': False, 'launch': False},
+    'installers': {'segments': ('install',), 'install': 'required', 'play': False,
+                   'host': ('installed_files', 'install_screens', 'desktop_screen'),
+                   'kernel': True, 'launch': False},
+    'titles': {'segments': ('start', 'play', 'exit'), 'install': 'optional', 'play': True,
+               'host': ('menu_screen', 'play_screen', 'game_progress', 'audio_reference',
+                        'desktop_screen', 'input_acknowledged'),
+               'kernel': True, 'launch': True},
+}
 BOOLS = {'qualified', 'corrupt', 'default_choices', 'menu_entry', 'uninstall_registered',
          'key_removed', 'menu_removed', 'handled'}
 LEDGERS = {'process', 'handle', 'section', 'stream', 'channel', 'commit'}
@@ -67,6 +96,10 @@ class Parser:
         self.identity = False
         self.processes = set()
         self.loader_stages = {}
+        self.not_run_subcases = []
+        # Kernel `[win32]` serial lines (f5-16 diagnostics), kept per kind and bounded.
+        self.kernel = {kind: [] for kind in KERNEL_KINDS}
+        self.kernel_dropped = 0
 
     def feed(self, raw):
         line = raw.removesuffix(b'\n').removesuffix(b'\r')
@@ -165,12 +198,25 @@ class Parser:
             require(int(r['p05_milli']) <= int(r['median_milli']), 'invalid fps percentiles')
         elif case == 'audio':
             require(int(r['non_silent_frames']) <= int(r['consumed_frames']), 'invalid audio consumption')
+        elif case == 'audio_open':
+            require(int(r['stream_id']) > 0 and 0 < int(r['rate']) <= 192000 and int(r['channels']) in (1, 2), 'invalid audio stream open')
         elif case == 'focus':
             require(int(r['round_trips']) <= 10, 'too many focus round trips')
         elif case == 'ledger':
             require(r['when'] in ('pre','post') and r['kind'] in LEDGERS, 'invalid resource ledger')
         elif case in ('install','uninstall'):
             require(r['segment'] == case, 'installer record in wrong segment')
+        elif case == 'installed':
+            require(r['kind'] in INSTALLED_KINDS and r['segment'] in ('install', 'start'), 'installed inventory kind/segment')
+            if r['kind'] == 'file':
+                require({'size', 'sha256'} <= fields and re.fullmatch('[0-9a-f]{64}', r['sha256']), 'installed file needs size and SHA-256')
+            else:
+                require(not {'size', 'sha256'} & fields, 'only files carry size/SHA-256')
+        elif case == 'name':
+            require(re.fullmatch('(?:[0-9a-fA-F]{2}){1,40}', r['hex']) and int(r['bytes']) == len(r['hex'])//2, 'name chunk bytes')
+            require(r['field'] in ('path', 'target', 'key', 'value'), 'name chunk field')
+        elif case == 'launch':
+            require(r['kind'] in LAUNCH_KINDS and r['segment'] == 'start', 'launch kind/segment')
 
     def _segment(self, r):
         name, op = r['segment'], r['op']
@@ -190,32 +236,127 @@ class Parser:
             raise EvidenceError('segment operation')
         self.last_ms, self.last_icount = ms, icount
 
+    def observe_line(self, raw):
+        """Kernel `[win32] <kind> ...` serial lines (f5-16): bounded key=value
+        observations beside the CIUKI_TEST records; never a record themselves."""
+        line = raw.removesuffix(b'\n').removesuffix(b'\r')
+        if not line.startswith(b'[win32] ') or len(line) > 400:
+            return None
+        words = line[8:].decode('utf-8', errors='replace').split(' ')
+        kind = words[0]
+        if kind not in self.kernel:
+            return None
+        observation = {'kind': kind}
+        for token in words[1:]:
+            if '=' in token:
+                key, value = token.split('=', 1)
+                if re.fullmatch('[a-z_]+', key) and key not in observation:
+                    observation[key] = value
+            elif token and 'name' not in observation:
+                observation['name'] = token
+        if kind == 'start' and 'exe' not in observation:
+            return None  # priority/check notes, not a process start
+        if len(self.kernel[kind]) >= KERNEL_LINE_CAP:
+            self.kernel_dropped += 1
+            return None
+        self.kernel[kind].append(observation)
+        return observation
+
+    def name(self, identity, field):
+        """Decode the ordered UTF-8 chunks of one `name` field (run.py record_name)."""
+        chunks = [r for r in self.records if r.get('case') == 'name' and r['id'] == identity and r['field'] == field]
+        require(chunks, 'missing name chunks for id '+str(identity))
+        data = bytearray()
+        for chunk in chunks:
+            payload = bytes.fromhex(chunk['hex'])
+            require(int(chunk['offset']) == len(data), 'name chunk offsets must be contiguous')
+            data.extend(payload)
+        try:
+            return data.decode('utf-8')
+        except UnicodeError as error:
+            raise EvidenceError('name chunks are not UTF-8') from error
+
+    def installed_inventory(self):
+        """The guest-listed files/directories/registry keys/links, decoded and sorted."""
+        rows = []
+        seen = set()
+        for r in self.records:
+            if r.get('case') != 'installed':
+                continue
+            require(r['id'] not in seen, 'duplicate installed id '+r['id'])
+            seen.add(r['id'])
+            row = {'id': int(r['id']), 'kind': r['kind'], 'segment': r['segment'],
+                   'path': self.name(r['id'], 'key' if r['kind'] == 'registry' else 'path')}
+            if r['kind'] == 'file':
+                row.update(size=int(r['size']), sha256=r['sha256'])
+            if r['kind'] == 'link':
+                row['target'] = self.name(r['id'], 'target')
+            rows.append(row)
+        return sorted(rows, key=lambda row: (row['kind'], row['path'].casefold(), row['id']))
+
+    def kernel_exit_codes(self):
+        """Exit codes of `[win32] exit` lines as Windows DWORDs (and signed view)."""
+        codes = []
+        for line in self.kernel['exit']:
+            try:
+                value = int(line.get('code', ''), 16)
+            except ValueError:
+                continue
+            codes.append(value-2**32 if value >= 2**31 else value)
+        return codes
+
+    def check(self, expected):
+        """Suite predicates over the win32 records (shared evidence engine)."""
+        if self.outcome == 'not_run':
+            # A guest-reported NOT_RUN is a missing prerequisite, never a failure.
+            raise EvidenceNotRun('probe not_run: '+self.terminal.get('reason', 'unknown'))
+        if not self.terminal or self.terminal['event'] != expected['terminal']:
+            raise EvidenceError('missing or unexpected terminal event')
+        if expected['terminal'] == 'END' and self.terminal['status'] != 'PASS':
+            raise EvidenceError('guest reported FAIL')
+        self.not_run_subcases = evaluate_predicates(self.records, expected)
+        self.not_run_subcases.extend(expected.get('not_run_subcases', []))
+        if self.not_run_subcases:
+            raise EvidenceNotRun('required subcases not_run: '+str(self.not_run_subcases))
+        return True
+
     def verdict(self, host, *, focus=False, uninstall=False, timeout=False, hardware=False,
-                policy=None, exit_codes=(0,)):
+                policy=None, exit_codes=(0,), tier='gate', installer_exit_codes=(0,)):
         """Combine guest observations with independent host/operator evidence.
 
         Missing evidence never passes. Hardware policy must be a lead-disposed
         explicit duration/fps/input threshold; this module cannot resolve Q7.
+        `tier` selects the f5-17B runner tier (installers/titles) or the whole
+        title gate (default); see TIERS.
         """
+        require(tier in TIERS, 'unknown verdict tier')
+        profile = TIERS[tier]
         if timeout:
-            return {'outcome': 'fail', 'reason': 'host_timeout'}
+            return {'outcome': 'fail', 'reason': 'host_timeout', 'tier': tier}
         if self.outcome == 'not_run':
-            return {'outcome': 'not_run', 'reason': self.terminal['reason']}
+            return {'outcome': 'not_run', 'reason': self.terminal['reason'], 'tier': tier}
         if self.outcome == 'fail':
-            return {'outcome': 'fail', 'reason': 'guest_failure'}
+            return {'outcome': 'fail', 'reason': 'guest_failure', 'tier': tier}
         if any(r.get('case') == 'crash' or r.get('case') == 'stub' and r['handled'] == '0'
                or r.get('case') == 'loader' and r['status'] == 'FAIL' for r in self.records):
-            return {'outcome': 'fail', 'reason': 'crash_stub_or_loader_failure'}
+            return {'outcome': 'fail', 'reason': 'crash_stub_or_loader_failure', 'tier': tier}
+        if self.kernel['crash']:
+            return {'outcome': 'fail', 'reason': 'kernel_crash_record', 'tier': tier}
         missing, failures = [], []
         if self.outcome != 'pass':
             missing.append('terminal_PASS')
         if not self.identity:
             missing.append('identity')
-        needed = ['install','start','play','exit']+(['focus'] if focus else [])+(['uninstall'] if uninstall else [])
+        install_required = profile['install'] == 'required' or (profile['install'] == 'optional' and 'install' in self.segments)
+        needed = list(profile['segments'])+(['focus'] if focus else [])+(['uninstall'] if uninstall else [])
+        if install_required and 'install' not in needed:
+            needed.insert(0, 'install')
         for segment in needed:
             if 'end' not in self.segments.get(segment, {}):
                 missing.append('segment_'+segment)
-        host_needed = ['installed_files','menu_screen','play_screen','game_progress','audio_reference','desktop_screen','input_acknowledged']
+        host_needed = list(profile['host'])
+        if install_required and 'installed_files' not in host_needed:
+            host_needed.append('installed_files')
         if focus:
             host_needed.append('focus_screens')
         if uninstall:
@@ -233,12 +374,46 @@ class Parser:
                 return None
             return rows[0]
 
-        install = one('install','install')
-        if install:
-            if install['default_choices'] != '1' or install['system_writes'] != '0' or install['menu_entry'] != '1':
-                failures.append('installation')
-            if (install['uninstall_registered'] == '1') != uninstall:
-                missing.append('uninstall_registration_policy')
+        if install_required:
+            install = one('install','install')
+            if install:
+                if install['default_choices'] != '1' or install['system_writes'] != '0' or install['menu_entry'] != '1':
+                    failures.append('installation')
+                if (install['uninstall_registered'] == '1') != uninstall:
+                    missing.append('uninstall_registration_policy')
+            install_starts = [r for r in self.records if r.get('case') == 'process' and r['segment'] == 'install' and r['op'] == 'start']
+            install_exits = [r for r in self.records if r.get('case') == 'process' and r['segment'] == 'install' and r['op'] == 'exit']
+            if tier == 'installers' and (not install_starts or not install_exits):
+                missing.append('installer_process_start_exit')
+            if any(int(r['code']) not in installer_exit_codes for r in install_exits):
+                failures.append('installer_exit_code')
+        if profile['kernel']:
+            if not self.kernel['start'] or not self.kernel['exit']:
+                missing.append('kernel_start_exit_records')
+            elif len(self.kernel_exit_codes()) != len(self.kernel['exit']) or any(code not in (installer_exit_codes if tier == 'installers' else exit_codes) for code in self.kernel_exit_codes()):
+                failures.append('kernel_exit_code')
+            if self.kernel['refuse']:
+                failures.append('kernel_refusal')
+            if self.kernel_dropped:
+                failures.append('kernel_record_cap')
+        if profile['launch']:
+            launch = one('launch', 'start')
+            if launch:
+                try:
+                    self.name(launch['id'], 'path')
+                except EvidenceError:
+                    missing.append('launch_path')
+        if self.last_ms > 600000:
+            failures.append('case_guest_time_ceiling')
+        if uninstall:
+            observation = one('uninstall','uninstall')
+            if observation and (observation['key_removed'] != '1' or observation['menu_removed'] != '1'):
+                failures.append('uninstall')
+        if not profile['play']:
+            if self.processes:
+                failures.append('live_processes')
+            return {'outcome': 'fail' if failures else 'not_run' if missing else 'pass', 'tier': tier,
+                    'failures': sorted(set(failures)), 'missing': sorted(set(missing))}
         start = self.segments.get('start', {})
         if 'end' in start and start['end']-start['begin'] > 120000:
             failures.append('start_deadline')
@@ -246,9 +421,9 @@ class Parser:
         duration = play.get('end', 0)-play.get('begin', 0)
         if 'end' in play and duration < 180000:
             failures.append('short_play')
-        if self.last_ms > 600000:
-            failures.append('case_guest_time_ceiling')
         frames, fps, audio = one('frames','play'), one('fps','play'), one('audio','play')
+        if tier == 'titles' and not any(r.get('case') == 'audio_open' and r['segment'] == 'play' for r in self.records):
+            missing.append('audio_stream_open')
         if frames and (int(frames['duration_ms']) != duration or int(frames['game_frames']) == 0):
             failures.append('game_frames')
         if frames and fps:
@@ -288,10 +463,6 @@ class Parser:
             observation = one('focus','focus')
             if observation and (observation['round_trips'] != '10' or observation['corrupt'] != '0'):
                 failures.append('focus')
-        if uninstall:
-            observation = one('uninstall','uninstall')
-            if observation and (observation['key_removed'] != '1' or observation['menu_removed'] != '1'):
-                failures.append('uninstall')
         exits = [r for r in self.records if r.get('case') == 'process' and r['segment'] == 'exit' and r['op'] == 'exit']
         if len(exits) != 1:
             missing.append('process_exit')
@@ -318,5 +489,5 @@ class Parser:
                     failures.append('audio_underruns')
                 if any(int(r['latency_us']) > policy['max_latency_us'] or int(r['latency_frames']) > policy['max_latency_frames'] for r in inputs):
                     failures.append('input_latency')
-        return {'outcome': 'fail' if failures else 'not_run' if missing else 'pass',
+        return {'outcome': 'fail' if failures else 'not_run' if missing else 'pass', 'tier': tier,
                 'failures': sorted(set(failures)), 'missing': sorted(set(missing))}

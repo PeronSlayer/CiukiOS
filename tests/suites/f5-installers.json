@@ -1,0 +1,1637 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "host_tests": true,
+  "cases": [
+    {
+      "id": "win32-installer-diablo-shareware-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-diablo-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-diablo-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-diablo-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "diablo-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "diablo-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/diablo-shareware-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-starcraft-shareware-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-starcraft-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-starcraft-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-starcraft-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "starcraft-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "starcraft-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/starcraft-shareware-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-aoe-trial-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-aoe-trial",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-aoe-trial run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-aoe-trial probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "aoe-trial",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "aoe-trial",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/aoe-trial-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-half-life-uplink-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-half-life-uplink",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-half-life-uplink run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-half-life-uplink probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "half-life-uplink",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "half-life-uplink",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/half-life-uplink-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-ut-demo-348-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-ut-demo-348",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-ut-demo-348 run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-ut-demo-348 probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "ut-demo-348",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "ut-demo-348",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/ut-demo-348-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-worms-armageddon-demo-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-worms-armageddon-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-worms-armageddon-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-worms-armageddon-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "worms-armageddon-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "worms-armageddon-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/worms-armageddon-demo-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-heroes3-demo-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-heroes3-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-heroes3-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-heroes3-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "heroes3-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "heroes3-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/heroes3-demo-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-rct-demo-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-rct-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-rct-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-rct-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "rct-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "rct-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/rct-demo-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-jazz2-shareware-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-jazz2-shareware",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-jazz2-shareware run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-jazz2-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "jazz2-shareware",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "jazz2-shareware",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/jazz2-shareware-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "win32-installer-ta-demo-qemu-t23",
+      "kind": "win32-installer",
+      "probe": "win32-ta-demo",
+      "profile": "qemu-t23",
+      "selector": "f5:win32-ta-demo run={run_id}",
+      "timeout": 600,
+      "integration_pending": "f5-15B: kernel registration of the win32-ta-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "fixtures": [
+        {
+          "generator": "win32-workload",
+          "workload": "ta-demo",
+          "media": "iso",
+          "source": "extracted",
+          "redistribution": "local-only"
+        }
+      ],
+      "win32": {
+        "workload": "ta-demo",
+        "scene": "default-play",
+        "script": "tests/win32/scripts/ta-demo-installer.json",
+        "exit_codes": [
+          0
+        ],
+        "installer_exit_codes": [
+          0
+        ],
+        "uninstall": false,
+        "screens": {
+          "install-welcome": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup first page (region and pin qualified by the reference run)"
+          },
+          "install-complete": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "install",
+            "timeout_ms": 60000,
+            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+          },
+          "desktop-after-install": {
+            "region": [
+              0,
+              0,
+              640,
+              480
+            ],
+            "sha256": null,
+            "mode": "sha256",
+            "role": "desktop",
+            "timeout_ms": 30000,
+            "description": "CiukiOS desktop after the installer exited (region and pin qualified by the reference run)"
+          }
+        },
+        "checkpoints": [
+          {
+            "name": "desktop-returned",
+            "after": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "screen": "desktop-after-install",
+            "timeout_ms": 30000
+          }
+        ]
+      },
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "identity"
+            },
+            "fields": {
+              "scene": "default-play"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "begin"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "segment",
+              "segment": "install",
+              "op": "end"
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "start"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "process",
+              "segment": "install",
+              "op": "exit"
+            },
+            "count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "install",
+              "segment": "install"
+            },
+            "fields": {
+              "default_choices": {
+                "eq": 1
+              },
+              "system_writes": {
+                "eq": 0
+              },
+              "menu_entry": {
+                "eq": 1
+              }
+            },
+            "exact_count": 1
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "installed",
+              "segment": "install",
+              "kind": "file"
+            },
+            "count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

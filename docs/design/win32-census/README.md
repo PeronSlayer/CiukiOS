@@ -38,3 +38,33 @@ names cannot supply an API census. Packer names, RWX flags and high entropy are
 heuristics, never proof of a packer or a game dependency. Dynamic imports,
 opaque installer children, COM and codec selections need milestone B install/
 play traces. Keep Wine-conformance test imports separate from game scope.
+
+## F5-17B resolution tooling — 2026-10-20
+
+`acceptance-resolution.json` records the current acceptance input availability:
+ten original executable sets absent, zero observed imports, no provider store
+in this worktree, dynamic census pending and `complete=false`. Zero counts are
+not compatibility coverage. The earlier provisional census remains unchanged.
+
+The lead can regenerate after supplying verified extracted/reference-installed
+trees under the f5-17A manifest's `build/downloads/win32/<id>/` directories:
+
+```sh
+nice -n 19 python3 -B scripts/win32/acceptance_census.py \
+  --providers build/apps/win32 \
+  --coverage build/apps/win32/generated/stubs.json \
+  --coverage build/apps/win32/kernel32-coverage.json \
+  --coverage build/apps/win32/facades/coverage.json \
+  --output docs/design/win32-census/acceptance-resolution.json
+```
+
+Supply all relevant provider stores and authoritative coverage files, including
+reused DLL classifications, in replacement order. Missing stores are recorded
+as unavailable (no implied exports); supplied builtin manifests must match
+provider hashes. Every resolution needs an actual export or an explicit W24
+refusal with its directive; unclassified exports remain unresolved. Named and
+ordinal imports share export classification, and forwarders inherit their
+ultimate target's classification. W21 entries remain stubs and do not prove
+successful runtime handling. The tool never generates new stubs or runs inputs.
+Opaque children and dynamic imports still need original install/play traces.
+See [the runner design](../f5-17b-acceptance-runner.md) for the complete handoff.
