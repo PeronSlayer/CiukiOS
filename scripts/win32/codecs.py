@@ -19,7 +19,16 @@ FLAGS = ['--target=i686-pc-windows-msvc', '-march=pentiumpro', '-ffreestanding',
          '-O2', '-Wall', '-Wextra', '-Werror', '-I'+str(ROOT/'sdk/win32/include')]
 KERNEL = {'GetProcessHeap': 0, 'HeapAlloc': 12, 'HeapFree': 12,
           'CreateFileA': 28, 'WideCharToMultiByte': 32, 'GetFileSize': 8,
-          'SetFilePointer': 16, 'ReadFile': 20, 'CloseHandle': 4}
+          'SetFilePointer': 16, 'ReadFile': 20, 'CloseHandle': 4,
+          'GetModuleHandleA': 4, 'LoadLibraryA': 4, 'GetProcAddress': 8}
+# f5-12B: msvfw32 DrawDib and MCIWnd bind gdi32/user32/winmm at first use
+# (GetProcAddress); the codec images keep importing kernel32 (and msvfw32).
+BOUND = {'gdi32.dll': ('StretchDIBits', 'SetStretchBltMode'),
+         'user32.dll': ('RegisterClassA', 'CreateWindowExA', 'DestroyWindow',
+                        'DefWindowProcA', 'SendMessageA', 'GetParent', 'GetClientRect',
+                        'SetWindowPos', 'AdjustWindowRect', 'BeginPaint', 'EndPaint',
+                        'SetTimer', 'KillTimer', 'GetWindowLongA'),
+         'winmm.dll': ('mciSendCommandA', 'mciSendStringA', 'mciGetErrorStringA')}
 VCM = {'ICLocate': 20, 'ICSendMessage': 16, 'ICClose': 4, 'ICDecompress': None}
 
 
@@ -90,12 +99,14 @@ def build(out, base=0x72000000, flags=None):
         name = module if module.endswith('.acm') else module+'.dll'
         folder = ROOT/'sdk/win32/codecs'
         if module in ('msacm32', 'imaadp32.acm', 'msadp32.acm'):
-            units = ['adpcm.c', 'acm.c']
+            # f5-12B: PCM converter (all ACM images: acm.c uses it) and the
+            # msacm32 discovery entry points.
+            units = ['adpcm.c', 'acm.c', 'pcm.c'] + (['acmenum.c'] if module == 'msacm32' else [])
             defines = [] if module == 'msacm32' else ['-DCC_AUDIO_DRIVER='+('17' if module.startswith('ima') else '2')]
         elif module == 'avifil32':
             units = ['avi.c']; defines = []
         else:
-            units = ['video.c', 'vcm.c']; defines = [] if module == 'msvfw32' else ['-DCC_VIDEO_DRIVER='+str({'msrle32': 0x656c726d, 'msvidc32': 0x6376736d, 'iccvid': 0x64697663}[module])]
+            units = ['video.c', 'vcm.c'] + (['drawdib.c', 'mciwnd.c'] if module == 'msvfw32' else []); defines = [] if module == 'msvfw32' else ['-DCC_VIDEO_DRIVER='+str({'msrle32': 0x656c726d, 'msvidc32': 0x6376736d, 'iccvid': 0x64697663}[module])]
         objects = []; symbols = {}
         for unit in units:
             obj = out/(module+'-'+unit+'.obj')

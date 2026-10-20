@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Read-only bounded RIFF AVI access. Playback and MCI belong to f5-12B.
+ * f5-12B adds AVIStreamSampleToTime/TimeToSample (strh dwScale/dwRate).
  */
 #include "codec.h"
 #ifndef W32_HOST_MODEL
@@ -573,4 +574,51 @@ int32_t W32API AVIFileInfoA(void *h, void *out, int32_t n) {
 }
 int32_t W32API AVIFileInfoW(void *h, void *out, int32_t n) {
   return file_info(h, out, n, 1);
+}
+/* f5-12B: AVIStreamSampleToTime / AVIStreamTimeToSample. Samples are in
+ * stream units (dwRate/dwScale per second), clamped to [dwStart,
+ * dwStart+dwLength]; integer arithmetic rounding toward zero; -1 on an
+ * invalid stream or a zero rate/scale (Video for Windows reference). */
+static uint64_t div64(uint64_t n, uint64_t d) { /* no compiler runtime */
+  uint64_t q = 0, r = 0;
+  for (int bit = 63; bit >= 0; bit--) {
+    r = (r << 1) | ((n >> bit) & 1);
+    if (r >= d) {
+      r -= d;
+      q |= (uint64_t)1 << bit;
+    }
+  }
+  return q;
+}
+static int32_t clamp_sample(const uint8_t *header, int64_t sample) {
+  int64_t start = le32(header + 28), end = start + le32(header + 32);
+  if (sample < start)
+    sample = start;
+  if (sample > end)
+    sample = end;
+  return (int32_t)(sample > 0x7fffffff ? 0x7fffffff : sample);
+}
+int32_t W32API AVIStreamSampleToTime(void *h, int32_t sample) {
+  struct view *v = view_find(h);
+  if (!v)
+    return -1;
+  const uint8_t *header = v->file->stream[v->stream].header;
+  uint32_t scale = le32(header + 20), rate = le32(header + 24);
+  if (!scale || !rate)
+    return -1;
+  uint64_t ms = div64((uint64_t)(uint32_t)clamp_sample(header, sample) *
+                          scale * 1000,
+                      rate);
+  return ms > 0x7fffffff ? -1 : (int32_t)ms;
+}
+int32_t W32API AVIStreamTimeToSample(void *h, int32_t ms) {
+  struct view *v = view_find(h);
+  if (!v || ms < 0)
+    return -1;
+  const uint8_t *header = v->file->stream[v->stream].header;
+  uint32_t scale = le32(header + 20), rate = le32(header + 24);
+  if (!scale || !rate)
+    return -1;
+  return clamp_sample(
+      header, (int64_t)div64((uint64_t)ms * rate, (uint64_t)scale * 1000));
 }

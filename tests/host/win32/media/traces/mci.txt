@@ -1,0 +1,436 @@
+== errors
+> (empty)
+= 267 ''
+> bogus x
+= 261 ''
+> open
+= 292 ''
+> open missing.wav
+= 275 ''
+> open x.xyz
+= 281 ''
+> open broken.wav
+= 296 ''
+> open broken.mid
+= 296 ''
+> close nothing
+= 263 ''
+> open cdaudio
+= 306 ''
+> open clip-pcm.avi
+= 266 ''
+> open new type waveaudio alias r
+= 274 ''
+> open "tone.wav alias q
+= 294 ''
+> open "tone.wav"x
+= 305 ''
+> open tone.wav alias a
+= 0 '1'
+> open tone.wav alias a
+= 289 ''
+> open tone.wav alias all
+= 279 ''
+> status a
+= 273 ''
+> status a sideways
+= 259 ''
+> status a length length
+= 295 ''
+> status a tempo
+= 259 ''
+> set a time format tmsf
+= 293 ''
+> set a time format fortnights
+= 290 ''
+> play a from 9999
+= 282 ''
+> play a from 300 to 200
+= 282 ''
+> play a from x
+= 270 ''
+> play a from
+= 273 ''
+> seek a
+= 273 ''
+> seek a to start to end
+= 284 ''
+> set a bitspersample 8
+= 302 ''
+> record a
+= 274 ''
+> window a handle 5
+= 259 ''
+> close a
+= 0 ''
+ERRSTR 263 1 'The specified device is not open or is not recognized by MCI.'
+ERRSTR 12345 0 ''
+== waveaudio
+> open tone.wav type waveaudio alias w
+= 0 '1'
+> status w length
+= 0 '500'
+> status w mode
+= 0 'stopped'
+> status w ready
+= 0 'true'
+> status w number of tracks
+= 0 '1'
+> status w format tag
+= 0 'pcm'
+> status w samplespersec
+= 0 '22050'
+> status w bitspersample
+= 0 '16'
+> status w channels
+= 0 '1'
+> status w alignment
+= 0 '2'
+> status w bytespersec
+= 0 '44100'
+> capability w device type
+= 0 'waveaudio'
+> capability w can play
+= 0 'true'
+> capability w can record
+= 0 'false'
+> capability w outputs
+= 0 '1'
+> info w product
+= 0 'CiukiOS waveform audio'
+> info w file
+= 0 'tone.wav'
+> set w time format samples
+= 0 ''
+> status w time format
+= 0 'samples'
+> status w length
+= 0 '11025'
+> set w time format bytes
+= 0 ''
+> status w length
+= 0 '22050'
+> set w time format ms
+= 0 ''
+> status w time format
+= 0 'milliseconds'
+> play w from 100 to 300 notify
+TRANSPORT open rate=22050
+= 0 ''
+... 50 ms
+> status w mode
+= 0 'playing'
+> status w position
+= 0 '149'
+> pause w
+= 0 ''
+> status w mode
+= 0 'paused'
+... 40 ms
+> status w position
+= 0 '168'
+> resume w
+= 0 ''
+> status w mode notify
+NOTIFY t=90 hwnd=1234 superseded id=1
+NOTIFY t=90 hwnd=1234 successful id=1
+= 0 'playing'
+... 400 ms
+> status w mode
+= 0 'stopped'
+> status w position
+= 0 '300'
+PCM w 100-300 frames=11182 digest=7d091e67
+> play w from 0 to 200 notify
+= 0 ''
+... 30 ms
+> play w to 200 notify
+NOTIFY t=520 hwnd=1234 superseded id=1
+= 0 ''
+... 300 ms
+NOTIFY t=710 hwnd=1234 successful id=1
+> play w from 0 notify
+= 0 ''
+... 20 ms
+> stop w
+NOTIFY t=840 hwnd=1234 aborted id=1
+= 0 ''
+> play w from 0 notify
+= 0 ''
+... 20 ms
+> play w from 0 to 100 notify
+NOTIFY t=860 hwnd=1234 aborted id=1
+= 0 ''
+... 20 ms
+> seek w to 50
+NOTIFY t=880 hwnd=1234 aborted id=1
+= 0 ''
+> status w position
+= 0 '50'
+> seek w to end
+= 0 ''
+> status w position
+= 0 '500'
+> seek w to start notify
+NOTIFY t=880 hwnd=1234 successful id=1
+= 0 ''
+> status w position
+= 0 '0'
+PCM before wait frames=8580 digest=4ad5590d
+> play w from 0 to 100 wait notify
+NOTIFY t=1000 hwnd=1234 successful id=1
+= 0 ''
+> status w position
+= 0 '100'
+> status w mode
+= 0 'stopped'
+PCM w 0-100 wait frames=2640 digest=3aa569bf
+> play w from 0 wait
+= 0 ''
+> status w mode
+= 0 'playing'
+> break w off
+= 0 ''
+> stop w
+= 0 ''
+> play w from 0 wait
+YIELD id=1 data=77
+YIELD id=1 data=77
+YIELD id=1 data=77
+= 0 ''
+> status w mode
+= 0 'playing'
+> close w notify
+NOTIFY t=1010 hwnd=1234 successful id=1
+= 0 ''
+> open ima.wav alias i
+= 0 '1'
+> status i format tag
+= 0 '17'
+> status i bitspersample
+= 0 '4'
+> set i time format samples
+= 0 ''
+> status i length
+= 0 '6060'
+> play i wait
+= 0 ''
+ORACLE ima.pcm frames=0..6060 match=1
+PCM ima full frames=6710 digest=e8f9cfa9
+> play i from 1000 to 2000 wait
+= 0 ''
+ORACLE ima.pcm frames=1000..2000 match=1
+PCM ima 1000-2000 frames=1430 digest=ae20f245
+> close i
+= 0 ''
+> open msadpcm.wav alias m
+= 0 '1'
+> status m channels
+= 0 '2'
+> play m wait
+= 0 ''
+ORACLE msadpcm.pcm frames=0..3000 match=1
+PCM msadpcm full frames=3410 digest=80ad1419
+> close m
+= 0 ''
+> open tone8.wav alias e
+= 0 '1'
+> play e wait
+= 0 ''
+PCM pcm8 stereo 11025 frames=7040 digest=4aaf04c5
+> close e
+= 0 ''
+== sequencer
+> open song.mid alias s
+= 0 '1'
+> status s length
+= 0 '1500'
+> status s division type
+= 0 'PPQN'
+> status s tempo
+= 0 '120'
+> status s port
+= 0 'mapper'
+> capability s device type
+= 0 'sequencer'
+> set s time format song pointer
+= 0 ''
+> status s length
+= 0 '16'
+> status s time format
+= 0 'song pointer'
+> set s time format smpte 30
+= 0 ''
+> status s length
+= 0 '00:00:01:15'
+> set s time format ms
+= 0 ''
+> set s tempo 90
+= 274 ''
+> set s port 7
+= 338 ''
+-- play all
+> play s from 0 notify
+= 0 ''
+... 1700 ms
+MIDI frame=40992 sysex=6 first=f0 last=f7
+MIDI frame=40992 msg=0005c0
+MIDI frame=40992 msg=6407b0
+MIDI frame=40992 msg=300ab0
+MIDI frame=40992 msg=403c90
+MIDI frame=52017 msg=003c90
+MIDI frame=52017 msg=5000e0
+MIDI frame=63042 msg=504090
+MIDI frame=68554 msg=004080
+MIDI frame=68554 msg=7f40b0
+MIDI frame=71310 msg=604390
+MIDI frame=74067 msg=004390
+MIDI frame=74542 reset
+MIDI frame=74542 reset
+NOTIFY t=3370 hwnd=1234 successful id=1
+> status s mode
+= 0 'stopped'
+> status s position
+= 0 '1500'
+-- play from 1100 (chase), pause/resume (re-chase), stop
+> play s from 1100 notify
+= 0 ''
+... 100 ms
+MIDI frame=78392 msg=6407b0
+MIDI frame=78392 msg=300ab0
+MIDI frame=78392 msg=0005c0
+MIDI frame=78392 msg=5000e0
+> status s tempo
+= 0 '240'
+> pause s
+MIDI frame=80592 reset
+= 0 ''
+> status s mode
+= 0 'paused'
+> status s position
+= 0 '1181'
+... 100 ms
+MIDI frame=80702 reset
+> resume s
+= 0 ''
+... 100 ms
+MIDI frame=82792 msg=6407b0
+MIDI frame=82792 msg=300ab0
+MIDI frame=82792 msg=0005c0
+MIDI frame=82792 msg=5000e0
+MIDI frame=84301 msg=004080
+MIDI frame=84301 msg=7f40b0
+> stop s
+MIDI frame=84992 reset
+NOTIFY t=3845 hwnd=1234 aborted id=1
+= 0 ''
+... 20 ms
+MIDI frame=85102 reset
+> play s from 0 to 600 wait
+MIDI frame=85432 sysex=6 first=f0 last=f7
+MIDI frame=85432 msg=0005c0
+MIDI frame=85432 msg=6407b0
+MIDI frame=85432 msg=300ab0
+MIDI frame=85432 msg=403c90
+MIDI frame=96457 msg=003c90
+MIDI frame=96457 msg=5000e0
+MIDI frame=99072 reset
+MIDI frame=99072 reset
+= 0 ''
+> status s position
+= 0 '600'
+> close s
+= 0 ''
+> open song.rmi alias r
+= 0 '1'
+> status r length
+= 0 '1500'
+> close r
+= 0 ''
+> open smpte.mid alias t
+= 0 '1'
+> status t time format
+= 0 'smpte 25'
+> status t length
+= 0 '00:00:01:00'
+> status t division type
+= 0 'SMPTE 25 Frame'
+> status t tempo
+= 0 '25'
+> set t time format song pointer
+= 336 ''
+> play t wait
+MIDI frame=99072 msg=0010c1
+MIDI frame=99072 msg=403091
+MIDI frame=110097 msg=003081
+MIDI frame=121622 reset
+MIDI frame=121622 reset
+= 0 ''
+> close t
+= 0 ''
+== auto-open, all, sysinfo
+> status tone.wav length
+= 0 '500'
+> status tone.wav length notify
+= 300 ''
+> play tone.wav notify
+= 300 ''
+> play tone.wav from 0 to 50 wait
+= 0 ''
+> play tone.wav from 0 to 50
+= 0 ''
+... 120 ms
+> sysinfo all quantity
+= 0 '3'
+> sysinfo all name 1
+= 0 'waveaudio'
+> sysinfo all name 3
+= 0 'avivideo'
+> sysinfo all name 4
+= 282 ''
+> sysinfo waveaudio quantity
+= 0 '1'
+> sysinfo cdaudio quantity
+= 0 '0'
+> sysinfo waveaudio installname
+= 0 'waveaudio'
+> open tone.wav alias x1
+= 0 '1'
+> open song.mid alias x2
+= 0 '2'
+> sysinfo all quantity open
+= 0 '2'
+> sysinfo all name 2 open
+= 0 'x2'
+> play x1 notify
+= 0 ''
+> play x2 notify
+= 0 ''
+... 30 ms
+MIDI frame=125802 sysex=6 first=f0 last=f7
+MIDI frame=125802 msg=0005c0
+MIDI frame=125802 msg=6407b0
+MIDI frame=125802 msg=300ab0
+MIDI frame=125802 msg=403c90
+> stop all
+NOTIFY t=5730 hwnd=1234 aborted id=1
+MIDI frame=126462 reset
+NOTIFY t=5730 hwnd=1234 aborted id=2
+= 0 ''
+> play x1 from 0 notify
+= 0 ''
+> status all mode
+= 279 ''
+> close all
+NOTIFY t=5730 hwnd=1234 aborted id=1
+MIDI frame=126572 reset
+= 0 ''
+> sysinfo all quantity open
+= 0 '0'
+== command interface
+NOTIFY t=5735 hwnd=99 successful id=1
+CMD open r=0 id=1
+CMD status mode r=0 value=525
+... 150 ms
+NOTIFY t=5855 hwnd=55 successful id=1
+LIVE allocations=0
