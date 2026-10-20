@@ -221,12 +221,15 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
   the public read-only state, without `/dev/mixer` "No audio device".
-- **Desktop icons:** Computer (Files at Computer; the icon carries the Ciuki
-  portrait), Documents (Files at `C:\Documents`), DOS Box, CiukNote, Control Panel and
-  Trash (a placeholder: nothing in CiukiOS keeps deleted files yet). Click
-  selects, a double click (desktop.cfg `double_click_ms`) or Enter opens, right
-  click opens Open/Properties; the background menu has Arrange Icons, Refresh,
-  Display Settings... and Properties.
+- **Desktop icons** (desktop as a folder since f2-42,
+  [design](design/desktop-folder.md)): the fixed icons Computer (Files at
+  Computer; the icon carries the Ciuki portrait), Documents (Files at
+  `C:\Documents`) and Trash (Files at `C:\Documents\Trash`), then the
+  entries of `C:\Documents\Desktop`. Click selects, a double click
+  (desktop.cfg `double_click_ms`) or Enter opens; right click opens Open and
+  Properties, plus Open With, Cut, Copy, Rename and Delete for folder
+  entries; the background menu has Arrange icons, Line up, Refresh, New
+  (Folder, Text file), Paste and Properties.
 - **Built-in windows** (internal clients, framed by the compositor): About
   CiukiOS (tabs General, System from call 70's system record and `uname`,
   Credits), Run (a `/Programs` program and up to six arguments, double quotes
@@ -360,7 +363,16 @@ f1-23 owns the actual mode switch and compositor relayout.
 also confirms VIA CLE266 (`1106:3122`), KM400/KN400/P4M800 (`1106:7205`),
 and Intel 865G (`8086:2572`) and 915G (`8086:2582`) for the later baseline.
 
-A libdeskui program (560 x 420) with tabs Display (theme list with preview,
+Since f2-75 (2026-10-16) the Control Panel opens on a two-pane home view of
+seven categories and nine applets taken from one shared catalog
+(`apps/desktop/settings_catalog.h`, also used by the Start Settings menu and
+the tray); Display Properties has the Background, Appearance and Settings
+tabs, and System has General, Hardware check, Logs and Drivers
+([interaction audit](design/desktop-interaction-audit.md)). The tab layout
+below is the f2-37 record of 2026-10-12; `--panel=` keeps accepting its
+names as aliases.
+
+The f2-37 layout: a libdeskui program (560 x 420) with tabs Display (theme list with preview,
 wallpaper list with preview, Center/Tile/Stretch/Fit/Fill, six desktop colours,
 desktop icons on/off, Screen area and filtered Colours lists), Mouse (pointer speed and double-click speed, applied
 by the desktop), Keyboard (US or Italian), Sounds (event assignments and Preview,
@@ -376,9 +388,10 @@ first tab (the Settings menu uses it).
 System event sounds use the pinned Kenney CC0 pack. Startup and Desktop ready,
 shutdown, menu open/command, window open/close, minimise/restore, error,
 information/question dialogs, volume steps and removable device connect/disconnect
-have individual assignments. AutoPlay has an assignment and a client event hook;
-the current desktop has no AutoPlay action yet. Empty recycle remains the existing
-placeholder until recycling is implemented. The initial removable-media snapshot
+have individual assignments. AutoPlay has an assignment and a client event hook
+(the AutoPlay window itself is described under "AutoPlay for removable media and
+CDs" below). Empty recycle remains the existing placeholder until recycling is
+implemented. The initial removable-media snapshot
 is silent; later arrivals, removals and generation replacements produce events.
 
 `/System/sounds/scheme.cfg` supplies the default WAV basenames. Existing
@@ -1330,8 +1343,11 @@ this implementer's evidence.
 ## Graphics Demo (f2-52)
 
 Programs > Accessories > **Graphics Demo** launches `/Programs/gfxdemo`.
-Its three tabs show a 2D benchmark, a rotating textured software cube with
-Flat/Gouraud shading and a bouncing Ciuki sprite scene. Each page displays
+Its three tabs show a 2D benchmark, an OpenGL cube and OpenGL tiles, drawn
+by the software OpenGL subset of `sdk/libgl` (TinyGL) since f7-01
+([opengl-software](design/opengl-software.md)); the f2-52 scenes were a
+textured software cube with Flat/Gouraud shading and a bouncing Ciuki sprite
+scene. Each page displays
 client FPS and ms/frame. Pause freezes scene motion. The window resizes and
 scales its 320×240 scene with nearest-neighbour sampling. The texture is the
 same approved `/system/assets/ciuki-portrait.xrgb` conversion as the desktop.
