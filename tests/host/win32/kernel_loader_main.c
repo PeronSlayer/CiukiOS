@@ -110,7 +110,7 @@ static int store_test(void) {
     w32_ldr_init(&loader,&host.services,&host.peb);
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader,&manifest));
-    CHECK(loader.builtin_count==41); /* f5-20C: 32 + nine absent-DLL W21 stubs */
+    CHECK(loader.builtin_count==42); /* f5-20C: 32 + nine absent-DLL W21 stubs; f5-12B: mciavi32 */
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader,&host.peb,"/builtin-import.exe","","C:\\","\0\0",&main));
     struct w32_module *core=w32_ldr_module(&loader,"ntdll.dll");

@@ -688,6 +688,45 @@
       "integration_pending": "authored, unrun: lead supplies guest codec probe and T23 execution; host models do not qualify the guest"
     },
     {
+      "id": "w32-media-qemu-t23",
+      "probe": "w32-media",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-media run={run_id}",
+      "timeout": 120,
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "media"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "waveaudio": {
+                "eq": 1
+              },
+              "sequencer": {
+                "eq": 1
+              },
+              "avivideo": {
+                "eq": 1
+              },
+              "notify": {
+                "eq": 1
+              },
+              "frame": {
+                "eq": 1
+              }
+            }
+          }
+        ]
+      },
+      "integration_pending": "authored, unrun (f5-12B): lead supplies the guest MCI probe (waveaudio/sequencer/avivideo with the authored fixtures, MM_MCINOTIFY order, final AVI frame digest), the installed FluidR3 bank for the sequencer and T23 listening; cdaudio waits for the reviewed CD-audio transport amendment; host models do not qualify the guest"
+    },
+    {
       "id": "w32-upper-dlls-qemu-t23",
       "probe": "w32-upper-dlls",
       "profile": "qemu-t23",
