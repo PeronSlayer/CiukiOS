@@ -56,8 +56,8 @@ There are two lines of code:
 **Regressions of 20 October 2026, fixed.** The first QEMU boot of the
 integrated image found three regressions (application windows, wallpaper, DOS
 games stuck at "Preparing..."); all three were bisected and fixed the same
-day (see the [changelog](CHANGELOG.md)). A DOS game still takes 60–90 s to
-start under QEMU TCG while its disk is hashed; a follow-up is planned.
+day (see the [changelog](CHANGELOG.md)). Since f3-51c a DOS game reaches its
+start-up screen within 15 s under QEMU TCG, and a relaunch skips the disk hash.
 
 The 0.8 line ran a real-mode DOS kernel under a third-party V86 monitor and
 a 16-bit desktop. It worked on emulators but not reliably on the real

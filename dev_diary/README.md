@@ -154,3 +154,4 @@ Documenti di design, validazione, fonti esterne.
 | [Prima immagine integrata dopo la sospensione dei gate: regressioni di f0-44 trovate per bisezione e corrette, build canonico riparato, documentazione e catture della 0.9.2](2026-10-20-02-regressioni-f0-44-documentazione-e-catture-0-9-2.md) | 20 ottobre 2026 | integrazione |
 | [Decisione del proprietario: i programmi Win16 con segmenti a 32 bit entrano nel perimetro di F5](2026-10-20-03-decisione-segmenti-32-bit-win16.md) | 20 ottobre 2026 | decisione |
 | [Giochi DOS di nuovo avviabili dal menu: regressione di f3-51 trovata per bisezione e corretta](2026-10-20-04-regressione-giochi-dos-f3-51-corretta.md) | 20 ottobre 2026 | regressione |
+| [Avvio rapido dei giochi DOS (f3-51c) e cursore del file di scambio (f0-49b)](2026-10-20-05-avvio-rapido-giochi-dos-cursore-fat.md) | 20 ottobre 2026 | modifiche |

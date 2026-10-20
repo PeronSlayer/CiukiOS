@@ -26,9 +26,16 @@ image since the gates were suspended (dev diary 2026-10-20-02):
   "Loading DOOM... Preparing...". Bisected to the f3-51 merge: the full-disk
   SHA-256 of the game base at every launch read the 27 MB games disk 512
   bytes at a time with a seek per sector, quadratic in FAT chain walks. Now
-  one sequential pass in 64 KiB reads; DOOM starts in 60–90 s under QEMU TCG
-  (the hash is still computed at every launch; caching it per base is the
-  f3-51c follow-up). Regression test `test_game_window_base_hash`.
+  one sequential pass in 64 KiB reads. Regression test
+  `test_game_window_base_hash`.
+- f3-51c (`abd1c7c1`): a per-open-file FAT cluster cursor (a sequential read
+  of the 27 MB games disk: 2,801,342 → 13,295 FAT lookups) and a digest cache
+  per base version (`cached=1|0` in the launch record). On QEMU TCG DOOM shows
+  its start-up screen within 15 s of the click (60–90 s before) and a relaunch
+  within 10 s.
+- f0-49b: the pagefile mapper's cluster cursor is validated by the same chain
+  stamp; a trailing trim followed by regrowth could otherwise map a cluster
+  another file had taken (host test with a negative control).
 
 Evidence status. Everything below was merged after the 0.9.0 record (from
 the evening of 2026-10-12, dev diary 2026-10-13-01 onwards). Until
