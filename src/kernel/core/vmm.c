@@ -281,6 +281,17 @@ void vmm_sample_unregister(struct aspace *as)
     as->sample_prev=as->sample_next=0;
     irq_restore(f);
 }
+/* f3-46: replacement history is sampled (and A/D cleared) only for frames
+ * of the replaceable owners, and never for a pinned frame. Device, kernel
+ * and VM-private translations keep their bits for their owners: the DOS
+ * VM's VGA window and pinned VBE buffer harvest by PTE dirty bits. */
+static bool sample_owner(uint32_t pte)
+{
+    struct mm_page_descriptor *d=pmm_descriptor?pmm_descriptor(pte&~4095u):0;
+    if (!d || d->pins) return false;
+    unsigned owner=d->reserved&MM_PAGE_OWNER_MASK;
+    return owner==MM_USER_PRIVATE || owner==MM_USER_SHARED || owner==MM_VM_POOL;
+}
 uint32_t as_sample_page(struct aspace *as, uint32_t va)
 {
     uint32_t f=irq_save(), value=0;
@@ -289,7 +300,8 @@ uint32_t as_sample_page(struct aspace *as, uint32_t va)
         if (de&PTE_P) {
             uint32_t *p=&table_va(de&~4095u)[(va>>12)&1023];
             value=*p;
-            if (value&(PTE_A|PTE_D)) {
+            if ((value&(PTE_A|PTE_D)) && !sample_owner(value)) value&=~(PTE_A|PTE_D);
+            else if (value&(PTE_A|PTE_D)) {
                 *p=value&~(PTE_A|PTE_D);
                 if (read_cr3()==as->pd_phys) invlpg(va);
             }

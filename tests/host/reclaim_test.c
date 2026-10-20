@@ -210,6 +210,36 @@ static void aliases_and_budget(void)
     CHECK(!sample_spaces && !resident_head && ledger_reconcile());
     puts("TRACE M3 sampled_clear=translation_retained time_guard=stopped_before_64 pressure=low/high_hysteresis reporting<=1/s");
 }
+/* f3-46: the sampler clears and folds A/D only for replaceable, unpinned
+ * frames. A DOS VM's VGA window (VM_PRIVATE) and pinned VBE buffer keep
+ * their PTE dirty bits for the model's own harvest. */
+static void sampler_owner_policy(void)
+{
+    fresh(128); uint32_t baseline=pmm_free_count();
+    struct aspace as; CHECK(!as_create(&as));
+    uint32_t vga=pmm_alloc(), vbe=pmm_alloc(), pool=pmm_alloc(); CHECK(vga && vbe && pool);
+    mm_claim(vga,1,MM_VM_PRIVATE); mm_claim(vbe,1,MM_VM_POOL); mm_claim(pool,1,MM_VM_POOL);
+    CHECK(!as_map(&as,0xa0000,vga,PTE_U|PTE_W) && !as_map(&as,0x110000,vbe,PTE_U|PTE_W) &&
+          !as_map(&as,0x111000,pool,PTE_U|PTE_W));
+    pmm_descriptor(vbe)->pins=1;
+    uint32_t *pd=P2V(as.pd_phys), *pt=P2V(pd[0]&~4095u);
+    pt[0xa0]|=PTE_A|PTE_D; pt[0x110]|=PTE_A|PTE_D; pt[0x111]|=PTE_A|PTE_D;
+    uint32_t dirty=pmm_descriptor(pool)->dirty_epoch;
+    CHECK(!(as_sample_page(&as,0xa0000)&(PTE_A|PTE_D)) && (pt[0xa0]&(PTE_A|PTE_D))==(PTE_A|PTE_D));
+    CHECK(!(as_sample_page(&as,0x110000)&(PTE_A|PTE_D)) && (pt[0x110]&(PTE_A|PTE_D))==(PTE_A|PTE_D));
+    CHECK((as_sample_page(&as,0x111000)&(PTE_A|PTE_D))==(PTE_A|PTE_D) && !(pt[0x111]&(PTE_A|PTE_D)));
+    sample_space=&as; sample_va=0xa0000;
+    for (unsigned i=0;i<0x72;i++) vmm_sample_step(9); /* 0xa0000..0x111000 */
+    CHECK(pmm_descriptor(pool)->dirty_epoch==dirty && !(pmm_descriptor(vga)->reserved&MM_PAGE_TOUCHED));
+    pt[0x111]|=PTE_D; sample_space=&as; sample_va=0x111000; vmm_sample_step(9);
+    CHECK(pmm_descriptor(pool)->dirty_epoch==dirty+1 && !(pt[0x111]&PTE_D));
+    pmm_descriptor(vbe)->pins=0;
+    pt[0xa0]=pt[0x110]=pt[0x111]=0; as.pages-=3; g_user_mappings-=3; ledger_mapping(-3,0);
+    mm_free(vga,MM_VM_PRIVATE); mm_free(vbe,MM_VM_POOL); mm_free(pool,MM_VM_POOL);
+    as_destroy(&as);
+    CHECK(pmm_free_count()==baseline && ledger_reconcile());
+    puts("TRACE M3 sampler: VM_PRIVATE and pinned translations keep A/D, VM_POOL folded once PASS");
+}
 static struct uaddr *free_observer_space;
 static uint32_t free_observer_phys;
 static bool free_observed;
@@ -248,7 +278,7 @@ static void eager_alias_reuse(void)
 int main(void)
 {
     ram=calloc(1,64u<<20); CHECK(ram);
-    fit_after_cache(); owner_traces(); aliases_and_budget(); eager_alias_reuse(); CHECK(!wakes);
+    fit_after_cache(); owner_traces(); aliases_and_budget(); eager_alias_reuse(); sampler_owner_policy(); CHECK(!wakes);
     memory_objects(); CHECK(snapshot().reclaim_stalls>=2 && !resident_head && !sample_spaces);
     printf("PASS M3 max_scans=%u modeled_max_us=%u host_ASan_cpu_max_us=%llu\n",max_pages,max_model_us,(unsigned long long)max_cpu_us);
     free(ram); return 0;

@@ -482,6 +482,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_CIUKIDOS", CIUKI_DOSVM_CIUKIDOS, 0u},
     {"constant.CIUKI_DOSVM_FREEDOS13", CIUKI_DOSVM_FREEDOS13, 1u},
     {"constant.CIUKI_DOSVM_GAME_COUNT", CIUKI_DOSVM_GAME_COUNT, 3u},
+    {"constant.CIUKI_DOSVM_MEMORY_PAGED", CIUKI_DOSVM_MEMORY_PAGED, 0u},
+    {"constant.CIUKI_DOSVM_MEMORY_LOCKED", CIUKI_DOSVM_MEMORY_LOCKED, 1u},
     {"constant.CIUKI_DOSVM_WIDTH", (uint32_t)(CIUKI_DOSVM_WIDTH), 640u},
     {"constant.CIUKI_DOSVM_HEIGHT", (uint32_t)(CIUKI_DOSVM_HEIGHT), 480u},
     {"constant.CIUKI_DOSVM_NAME_MAX", (uint32_t)(CIUKI_DOSVM_NAME_MAX), 31u},

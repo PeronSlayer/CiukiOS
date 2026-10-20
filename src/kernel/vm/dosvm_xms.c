@@ -44,8 +44,10 @@ bool dosvm_pool_alloc(struct dosvm *v, struct vm_block *b, uint32_t bytes)
     if (!pool_find(v,pages,&first)) return false;
     struct vm_block next={.base=VM_POOL_BASE+first*PAGE_SIZE,.bytes=bytes,.used=true};
     for (unsigned i=0;i<pages;i++) {
-        uint32_t va=next.base+i*PAGE_SIZE;
-        memset(P2V(as_lookup(&v->as,va,0)),0,PAGE_SIZE);
+        /* f3-46: a paged pool returns the page to demand-zero (its frame
+         * and pager slot are released, commitment kept); a pinned or
+         * locked-mode page is cleared in place. Either way it reads zero. */
+        dosvm_pool_zero(v,next.base+i*PAGE_SIZE,1);
         v->memory.occupied[first+i]=1;
         v->memory.used_pages++;
         v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
@@ -108,7 +110,7 @@ bool dosvm_pool_resize(struct dosvm *v, struct vm_block *b, uint32_t bytes)
     for (unsigned i=b->pages;adjacent && i<pages;i++) adjacent=!v->memory.occupied[first+i];
     if (adjacent) {
         for (unsigned i=b->pages;i<pages;i++) {
-            memset(P2V(as_lookup(&v->as,b->base+i*PAGE_SIZE,0)),0,PAGE_SIZE);
+            dosvm_pool_zero(v,b->base+i*PAGE_SIZE,1);
             v->memory.occupied[first+i]=1;
             v->memory.used_pages++;
             v->info.pool_used=v->memory.used_pages*PAGE_SIZE;
@@ -134,6 +136,14 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
     if (frame && frame!=0xE000 && frame!=0xD000) return -EINVAL;
     v->memory.frame_segment=frame ? frame : 0xE000;
     v->memory.umb_enabled=!(config && config->disable_umb);
+    /* f3-46: the pool object (records, page tables, commitment). Paged by
+     * default: every quota page is committed, none is backed until touched.
+     * The per-game locked mode keeps the eager, resident pool below. */
+    bool locked=config && config->memory_locked;
+    int pool_error=dosvm_pool_init(v,locked);
+    if (pool_error) return pool_error;
+    v->info.pool_locked=locked;
+    if (locked) {
     /* Eager backing makes synthetic BIOS RAM usable even before a client
      * obtains handles. Admission has already reserved this entire pool. */
     unsigned tables=v->as.tables;
@@ -153,6 +163,8 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
             kpreempt_point();
     }
     v->info.resident+=(v->as.tables-tables)*PAGE_SIZE;
+    dosvm_pool_adopt(v);
+    }
     /* Far entry: short jump (patchable XMS convention), INT FE, RETF.
      * Return trampoline for EMS alter-map call is at C800:0010. */
     uint8_t *stub=P2V(v->frames[0xC8]);
@@ -177,6 +189,9 @@ int dosvm_memory_init(struct dosvm *v, const struct dosvm_config *config)
 void dosvm_memory_close(struct dosvm *v)
 {
     if (!v->as.pd_phys) return;
+    /* f3-46: revoke pool and EMS-window aliases, return frames, pins,
+     * pager slots and commitment before the low pages are restored. */
+    dosvm_pool_close(v);
     /* Restore every owned low page, even windows currently unmapped. This
      * removes all EMS aliases; as_destroy then sees each physical page once. */
     for (unsigned i=0;i<DOSVM_PAGES;i++) {

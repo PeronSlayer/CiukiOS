@@ -5,6 +5,18 @@ static void cache_changed_image(uint32_t lba, void *data)
 /* Feed real creation charges into the separate production PMM/ledger model.
  * The transport fake keeps worker backing on malloc; model that charge in
  * stacks/heap explicitly. Static VM metadata is already in the kernel image. */
+/* f3-46: two states of the default game VM for the per-profile admission
+ * arithmetic: created (paged pool committed, none resident) and fully
+ * touched (every pool page resident, as a client that uses its whole quota;
+ * the locked mode has this residency from creation). */
+static void owners_count(unsigned owners[MM_OWNERS], unsigned *pages)
+{
+    memset(owners, 0, MM_OWNERS * sizeof(owners[0])); *pages = 0;
+    for (unsigned i = 0; i < HOST_PAGES; i++) if (allocated[i]) {
+        CHECK(page_owner[i] < MM_OWNERS);
+        owners[page_owner[i]]++; (*pages)++;
+    }
+}
 static void disk_memory_charge(void)
 {
     struct dosvm *v;
@@ -12,17 +24,20 @@ static void disk_memory_charge(void)
     CHECK(!dosvm_create(&cfg, &v));
     CHECK(v->info.commitment == DOSVM_RESIDENT_CAP && v->memory.quota == VM_POOL_CAP);
     CHECK(v->read_pages == DOSVM_READ_BLOCKS * DOSVM_READ_PAGES);
-    unsigned owners[MM_OWNERS] = {0}, pages = 0;
-    for (unsigned i = 0; i < HOST_PAGES; i++) if (allocated[i]) {
-        CHECK(page_owner[i] < MM_OWNERS);
-        owners[page_owner[i]]++; pages++;
-    }
+    unsigned created[MM_OWNERS], touched[MM_OWNERS], pages;
+    owners_count(created, &pages);
     struct dosvm_ledger snapshot; dosvm_snapshot(&snapshot);
-    CHECK(pages == snapshot.pages && owners[MM_VM_PRIVATE] >= v->read_pages);
-    CHECK(owners[MM_VM_POOL] == VM_POOL_PAGES);
-    for (unsigned i = 0; i < MM_OWNERS; i++) printf("%u ", owners[i]);
-    printf("%u %u %zu %u\n", v->read_pages, KSTACK_SIZE / PAGE_SIZE,
-        1 + (sizeof(struct task) + PAGE_SIZE - 1) / PAGE_SIZE, v->info.resident);
+    CHECK(pages == snapshot.pages && created[MM_VM_PRIVATE] >= v->read_pages);
+    CHECK(!created[MM_VM_POOL] && snapshot.committed == VM_POOL_PAGES);
+    uint32_t created_resident = v->info.resident;
+    uint8_t one = 1;
+    for (uint32_t i = 0; i < VM_POOL_PAGES; i++) CHECK(!dosvm_write(v, VM_POOL_BASE + i * PAGE_SIZE, &one, 1));
+    owners_count(touched, &pages);
+    CHECK(touched[MM_VM_POOL] == VM_POOL_PAGES && v->memory.pool.resident == VM_POOL_PAGES);
+    for (unsigned i = 0; i < MM_OWNERS; i++) printf("%u ", created[i]);
+    for (unsigned i = 0; i < MM_OWNERS; i++) printf("%u ", touched[i]);
+    printf("%u %u %zu %u %u\n", v->read_pages, KSTACK_SIZE / PAGE_SIZE,
+        1 + (sizeof(struct task) + PAGE_SIZE - 1) / PAGE_SIZE, created_resident, v->info.resident);
     destroy(v, true); empty();
 }
 static void test_disk_cache(void)
@@ -35,7 +50,7 @@ static void test_disk_cache(void)
     for (unsigned i = 0; i < v->read_capacity; i++)
         for (unsigned p = 0; p < 16; p++) CHECK(page_owner[v->read_cache[i].phys / PAGE_SIZE + p] == MM_VM_PRIVATE);
     struct dosvm_ledger ledger; dosvm_snapshot(&ledger);
-    CHECK(ledger.pages == DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1 + v->audio.q.page_count + v->read_pages);
+    CHECK(ledger.pages == vm_owned_pages(v) && !v->memory.pool.resident && ledger.committed == v->memory.quota / PAGE_SIZE);
     uint8_t data[512], sector[512]; unsigned reads = disk_reads;
     for (unsigned i = 0; i < 32; i++) CHECK(!dosvm_disk_read(v, i * 128, sector));
     CHECK(disk_reads == reads + 32);
@@ -135,11 +150,10 @@ static void test_disk_cache_sizing(void)
     CHECK(full->read_capacity == 256 && full->read_pages == 4096);
     struct dosvm_ledger ledger; dosvm_snapshot(&ledger);
     CHECK(ledger.resident == full->info.resident);
-    CHECK(ledger.pages == DOSVM_PAGES + VM_POOL_PAGES + full->as.tables + 1 +
-          full->audio.q.page_count + 4096);
+    CHECK(ledger.pages == vm_owned_pages(full) && ledger.committed == VM_POOL_PAGES);
     printf("f3-47 accounting maximum-cache: commitment=%u resident=%u pool=%u cache=%u private=%u struct=%zu\n",
         full->info.commitment, full->info.resident, full->memory.quota,
-        full->read_pages * PAGE_SIZE, full->info.resident - full->memory.quota,
+        full->read_pages * PAGE_SIZE, full->info.resident - full->memory.pool.resident * PAGE_SIZE,
         sizeof(*full));
     uint8_t sector[512]; unsigned reads = disk_reads;
     for (unsigned i = 0; i < 256; i++) CHECK(!dosvm_disk_read(full, i * 128, sector));

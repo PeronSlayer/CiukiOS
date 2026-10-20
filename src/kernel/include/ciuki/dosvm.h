@@ -31,6 +31,10 @@ struct dosvm_config {
     const char *base;
     bool disable_file_bridge; /* FreeDOS reference/fallback must never bind */
     uint8_t game, kernel; /* game 1..3; kernel 0=CiukiDOS, 1=FreeDOS 1.3 */
+    /* f3-46 per-game compatibility (Windows 98 PIF "XMS/EMS memory locked",
+     * Resource Kit table 25.2 xml/eml): the pool is backed eagerly at
+     * creation and stays resident. Default: demand-zero, pageable pool. */
+    bool memory_locked;
     void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
     void *record_arg; /* selected controller only, lifetime through destroy */
 };
@@ -80,6 +84,10 @@ struct dosvm_info {
     bool dos_ready, dirty, data_loss;
     int cleanup_error;
     uint32_t pool_quota, pool_used;
+    /* f3-46 split: address quota above; residency, paged-out and pinned
+     * pool bytes here (commitment is the whole quota, RAM or pagefile). */
+    uint32_t pool_resident, pool_swapped, pool_pinned;
+    bool pool_locked;
     bool memory_done, memory_pass;
     uint32_t xms_calls, ems_calls;
     uint32_t video_stage, video_flags; /* f3-02 VMVIDEO.COM "VMVIDEO s f" latch */
@@ -88,7 +96,12 @@ struct dosvm_info {
     bool verdict_done, verdict_pass;
     char verdict_detail[20];
 };
-struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident; };
+/* pages: physical pages owned now. reserved/resident: the VM-level RAM
+ * admission promise and residency (bytes). f3-46: pool commitment, paged-out
+ * and pinned pool pages, reclaimable read-cache pages and overlay index rows
+ * (the copy-on-write index is disk semantics, never cache debt). */
+struct dosvm_ledger { uint32_t vms, tasks, pages, handles, devices; uint64_t reserved, resident;
+                      uint32_t committed, swapped, pinned, cache, overlay_rows; };
 /* Pure arithmetic uses free physical bytes AFTER firmware/kernel/driver,
  * framebuffer and eagerly backed native commitments. No overcommit. */
 bool dosvm_admit(uint64_t free_bytes, uint64_t reserved, uint64_t resident,
@@ -115,6 +128,9 @@ int dosvm_stop(struct dosvm_key, enum dosvm_reason);
 int dosvm_destroy(struct dosvm_key, bool forced);
 bool dosvm_range(const struct dosvm *, uint32_t linear, unsigned bytes, bool write);
 int dosvm_read(struct dosvm *, uint32_t linear, void *, unsigned bytes);
+/* f3-46: resident frames only (virtual DMA in the clock work): never pages
+ * in or allocates; -EAGAIN when a pool page is not resident. */
+int dosvm_read_resident(struct dosvm *, uint32_t linear, void *, unsigned bytes);
 int dosvm_write(struct dosvm *, uint32_t linear, const void *, unsigned bytes);
 int dosvm_set_a20(struct dosvm *, bool enabled);
 typedef int (*dosvm_port_handler)(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *);

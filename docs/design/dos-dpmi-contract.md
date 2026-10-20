@@ -200,7 +200,11 @@ XMS, EMS and DPMI allocations, up to 16 MiB of charged disk cache, and at most
 8 MiB covering low memory, page tables, stacks, LDT and devices. EMS has an
 8 MiB sub-cap inside that 24 MiB pool. Disk capacity is not RAM; private
 overlays MUST be file-backed.
-There is no swap or memory overcommit through F4.
+~~There is no swap or memory overcommit through F4.~~ Superseded by f3-46
+(2026-10-20, contract D1): the 24 MiB pool is a pageable memory object,
+committed against RAM or the published pagefile and backed on demand; the
+locked per-game mode keeps the former eager, resident pool. The admission
+formula below is unchanged; see "F3-46 pageable pool" at the end.
 
 **[F3]** Admission MUST reserve the VM commitment only after subtracting
 measured firmware/kernel/driver/framebuffer/native commitments, and leave
@@ -931,3 +935,84 @@ caps `I_ZoneBase` at `0x800000` (8 MiB); the bundled DOS DOOM 1.9 parses no
 `-maxzone` option. The launcher stays unchanged. A modeled 16 MiB zone is
 only a capacity experiment, not a supported configuration of this binary.
 The 0500h/0501h verification and `vm_perf_mem` records remain applicable.
+
+### F3-46 pageable pool, protected I/O and the combined gate (2026-10-20)
+
+Contract D1 of [Windows 98/ME-class resource management](win98-class-resource-management.md),
+on the f0-47 objects, f0-48 replacement and f0-49 pagefile. Research and
+host evidence: [F3-46 validation](../validation/2026-10-20-f3-46-pageable-pool.md).
+
+**Quota, commitment, residency, pins.** The guest-visible XMS/EMS/DPMI pool
+(address quota, 24 MiB by default) is one memory object per VM
+(`vm/dosvm_pool.c`): a committed slot per page, a frame only while resident,
+a pager slot while paged out. XMS EMBs, EMS handles and DPMI blocks are page
+ranges of it; the pool linear address and each EMS frame window are aliases
+of one page and fold their access/dirty bits into its PFN descriptor before
+any translation is revoked or replaced (window remap, page-out, discard). The
+pool's quota moves from the VM's admission promise (`MM_VM_PRIVATE`) to a
+`MM_VM_POOL` commitment admitted by `ledger_commit` (RAM or published
+pagefile; a refusal first asks the pager to grow, then refuses before any
+state is published). Allocation-time zeroing returns pages to demand-zero
+instead of clearing frames; freed blocks keep their bytes as before. Pins
+(per page, mirrored in the PFN descriptor) keep resident: the DPMI host stack,
+DPMI 0600h-locked pages (all or nothing; 0601h releases, 0703h discards only
+whole unlocked pages, 0702h drops access history), the pinned VBE linear
+buffer (the presenter and full-screen flush read it and its PTE dirty bits
+from other tasks), and each unmasked virtual DMA channel's 64/128 KiB window
+where it overlaps the pool. Low memory (conventional, UMB, HMA, ROM and the
+VGA window frames) stays resident: a deliberate difference from Windows 98,
+whose V86 memory is pageable, because the monitor, the VGA model and DPMI
+real-mode stacks use it directly.
+
+**Locked compatibility mode.** `dosvm_config.memory_locked`, set per game by
+the launcher (`/system/settings/dos-game-N.cfg` line `DOS memory=locked`,
+F12 key 4, `--dos-memory=`) and passed in CREATE `launch.memory = 1`, keeps
+the eager, zeroed and wholly pinned pool of f3-47 (the role of the Windows 98
+PIF "XMS memory locked"/"EMS memory locked" flags). Default is paged.
+
+**Blocking points.** A pool page is materialized (zero) or paged in only in
+task context with physical IF set: (1) a guest not-present #PF on a pool or
+EMS-window page, resolved at the trap entry before the transaction hold and
+before any emulation (the instruction restarts); (2) a kernel transfer,
+which resolves each page immediately before its bytes move (a page with a
+present translation is copied directly; a kernel store into a pool page
+always advances the object's dirty version, since it sets no PTE D bit); (3) the
+destination of string `IN` (V86 through the monitor pointer, DPMI by an
+explicit prefault) and the RAM source of a VGA `REP` run, before the device
+or plane effect; (4) DMA pins at the trap's settle point, after the `OUT`
+that programmed the channel completed; (5) the guest stack page before an IRQ
+is committed with physical IF clear. While the worker is inside a monitor
+transaction (`hold`), the provider refuses, defers or keeps this VM's pages,
+so a page resolved in that transaction stays resident to its end; idle and
+BIOS waits release the hold. The clock work's virtual DMA reads resident
+frames only: a page whose pin is pending is an unanswered DREQ, never a
+fault. A failed page-in is contained (transfer `EFAULT`, guest fault stops
+the VM); zeros are never fabricated.
+
+**Disk path.** Private image reads and writes keep the f3-47 VFS path (the
+VFS uses the f1-83 request framework below it) and the per-VM gate that keeps
+each seek+transfer pair atomic; no explicit-offset VFS read exists, so the
+gate is retained rather than replaced. The read cache's 64 KiB blocks are
+clean pages of the f0-48 replacement (discarded without I/O, never
+guest-visible); a reclaimed block regrows on a miss only while the system is
+out of pressure. The C5 page identities (256 entries, no data) cannot yet
+replace the windows with their batching benefit, so the cache participates in
+global reclaim instead. The 1024-row overlay index is accounted separately
+(`dosvm_ledger.overlay_rows`) and is never reclaimed. The private image is
+opened deny-write and its native mount reads through the same gate and cache,
+so no second, incoherent mount of the image exists.
+
+**Scheduling boundary.** PIT/SB advancement stays in the clock work, which
+never waits for a page. Per elapsed tick, a pending guest IRQ is attributed to
+the worker's page-in wait, the guest's own virtual IF clear, or host
+descheduling (`vm_perf_page part=wait irq_ms=page/guest/host`).
+
+**Reports.** Every perf interval of a VM with a pool emits three
+`vm_perf_page` rows: mode, quota, resident, swapped and pinned pages and
+fill/page-in/page-out/discard counts; waits and the IRQ split; cache pages,
+reclaimed/regrown blocks and overlay rows.
+
+**Accounting change outside the VM.** The f0-48 sampler no longer clears or
+folds A/D bits of frames that are pinned or not of a replaceable owner
+(`MM_USER_PRIVATE`, `MM_USER_SHARED`, `MM_VM_POOL`): the VGA window (VM
+private) and the pinned VBE buffer harvest by PTE dirty bits.

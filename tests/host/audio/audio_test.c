@@ -1235,6 +1235,7 @@ static void test_persistence(void)
 #include "second_set_test.inc"
 #include "late_refill_test.inc"
 #include "vm_creation_test.inc"
+#include "vm_paging_test.inc"
 #include "thinkpad_ec_test.inc"
 #include "deadline_test.inc"
 #include "pipeline_test.inc"
@@ -1286,6 +1287,7 @@ int main(int argc,char **argv)
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
     test_transient_transport();
     test_vm_creation_lead();
+    test_vm_paging_replay();
     test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}

@@ -2169,6 +2169,22 @@ Private COW names contain the game, kernel, complete base SHA-256 and fresh VM
 generation. CLOSE/owner death use the existing stop/destroy ownership path.
 The ordinary closed syscall error set is retained; reference storage or hash
 failures return EIO. Runtime dual-kernel game qualification remains open.
+
+### F3-46 CREATE memory mode (2026-10-20, pending lead review)
+
+The 136-byte version-1 record keeps its layout. On CREATE, `launch.memory` at
+offset 80 (formerly the first reserved word of the union) selects the DOS
+pool: `CIUKI_DOSVM_MEMORY_PAGED` (0, the default and the value of every
+existing zero-initialized client) commits the 24 MiB XMS/EMS/DPMI pool and
+backs it on demand, pageable under memory pressure; `CIUKI_DOSVM_MEMORY_LOCKED`
+(1) backs the whole pool at creation and keeps it resident, the former
+behaviour, for games that need it (the role of the Windows 98 PIF "XMS/EMS
+memory locked" flags). Any other value returns EINVAL. The remaining seven
+reserved words stay zero. The launcher stores the choice per game as an
+optional second line `DOS memory=locked` of `/system/settings/dos-game-N.cfg`
+(absent or invalid: paged), offers it through F12 (keys 3/4) and accepts
+`--dos-memory=paged|locked`; a kernel choice keeps the memory choice and vice
+versa. Changes apply on the next launch. Admission is unchanged.
 ## f5-16 — compatibility and diagnostics (2026-10-19)
 
 The additive wire layouts are in `ciuki/w32_diagnostics.h` (kernel and SDK

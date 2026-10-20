@@ -18,8 +18,18 @@ void dosvm_vbe_init(struct dosvm *v)
     memcpy(rom+0x20,"Native SuperSavage VBE",22);
     memcpy(rom+0x40,"F3-37",6);
 }
+/* f3-46: the linear frame buffer is harvested by the presenter and the
+ * full-screen flush from other tasks through its PTE dirty bits: its pool
+ * pages are pinned resident (and kept out of the global sampler) for the
+ * buffer's lifetime, which is the VM's. */
 static bool vbe_backing(struct dosvm *v)
-{ return v->vbe_buffer.used || dosvm_pool_alloc(v,&v->vbe_buffer,DOS_VBE_BYTES); }
+{
+    if (v->vbe_buffer.used) return true;
+    if (!dosvm_pool_alloc(v,&v->vbe_buffer,DOS_VBE_BYTES)) return false;
+    if (!dosvm_pool_pin(v,v->vbe_buffer.base,v->vbe_buffer.pages)) return true;
+    dosvm_pool_free(v,&v->vbe_buffer);
+    return false;
+}
 static bool vbe_available(struct dosvm *v,uint16_t mode)
 {
     (void)v;
@@ -96,10 +106,7 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
             dosvm_vga_sync(v,true);
             /* Capture the old VGA transport before changing its model. */
             if (v->fullscreen && !v->vbe_mode) dosvm_fullscreen_model_begin(v);
-            if (!(bx&0x8000)) {
-                for (unsigned i=0;i<v->vbe_buffer.pages;i++)
-                    memset(P2V(as_lookup(&v->as,v->vbe_buffer.base+i*PAGE_SIZE,0)),0,PAGE_SIZE);
-            }
+            if (!(bx&0x8000)) dosvm_pool_zero(v,v->vbe_buffer.base,v->vbe_buffer.pages);
             v->vbe_mode=bx&0x1FF; v->video_presented=false;
             v->video_blank=0;v->video_vblank_us=0;
             v->vga.display_changes++; dosvm_fullscreen_mode_changed(v);

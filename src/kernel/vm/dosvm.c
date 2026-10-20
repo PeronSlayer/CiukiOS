@@ -34,7 +34,9 @@ static void pool_unpin(struct dosvm *v)
 }
 static int pool_pin(struct dosvm *v)
 {
-    if (!mm_pin || !v->memory.quota) return 0;
+    /* f3-46: only the locked (eager, resident) pool is pinned as a whole;
+     * a paged pool pins exactly its device/model/DMA/DPMI-locked pages. */
+    if (!mm_pin || !v->memory.quota || !v->memory.pool.locked) return 0;
     unsigned slot=v->info.key.id-1, index=0;
     const uint32_t *pd=P2V(v->as.pd_phys);
     uint32_t end=VM_POOL_BASE+v->memory.quota;
@@ -380,7 +382,13 @@ bool dosvm_valid(struct dosvm_key key)
     struct dosvm *v = dosvm_lookup(key);
     return v && v->info.state < DOSVM_STOPPING;
 }
-void dosvm_info(const struct dosvm *v, struct dosvm_info *out) { *out = v->info; }
+void dosvm_info(const struct dosvm *v, struct dosvm_info *out)
+{
+    *out = v->info;
+    out->pool_resident = v->memory.pool.resident * PAGE_SIZE;
+    out->pool_swapped = v->memory.pool.swapped * PAGE_SIZE;
+    out->pool_pinned = v->memory.pool.pinned * PAGE_SIZE;
+}
 void dosvm_snapshot(struct dosvm_ledger *out)
 {
     memset(out, 0, sizeof(*out));
@@ -393,10 +401,15 @@ void dosvm_snapshot(struct dosvm_ledger *out)
         if (!v->info.key.generation || v->info.state == DOSVM_DEAD) continue;
         out->vms++;
         out->tasks += v->task != 0;
-        /* Count owned backing once, including unmapped EMS-window backing. */
-        if (v->as.pd_phys) out->pages += DOSVM_PAGES + v->memory.quota / PAGE_SIZE + v->as.tables + 1;
+        /* Count owned backing once, including unmapped EMS-window backing.
+         * f3-46: pool frames only while resident, plus the object records. */
+        const struct vm_pool *pool = &v->memory.pool;
+        if (v->as.pd_phys) out->pages += DOSVM_PAGES + pool->resident + pool->dir_pages + v->as.tables + 1;
         out->pages += v->audio.q.page_count; /* f3-05 PCM/event queues */
         out->pages += v->read_pages;
+        out->committed += pool->commit; out->swapped += pool->swapped;
+        out->pinned += pool->pinned; out->cache += v->read_pages;
+        out->overlay_rows += v->sector_count;
         out->handles += v->base_open + v->overlay_open;
         out->devices += 4; /* authoritative PIC, PIT, text/input service and VGA adapter */
         out->reserved += v->info.commitment;
@@ -421,14 +434,33 @@ bool dosvm_range(const struct dosvm *v, uint32_t linear, unsigned bytes, bool wr
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
-        if (!(linear >= 0xA0000 && linear < 0xC0000) &&
-            !as_range_ok(&v->as, linear, n, write)) return false;
+        /* f3-46: a committed pool page or a mapped EMS-window alias is
+         * valid whether or not it is resident now; a present translation
+         * keeps its own permission check. */
+        if (!(linear >= 0xA0000 && linear < 0xC0000) && !as_range_ok(&v->as, linear, n, write) &&
+            !(dosvm_pool_candidate(&v->memory.pool, linear) && dosvm_pool_range(v, linear, 0) &&
+              !as_lookup(&v->as, linear, 0))) return false;
         linear += n; bytes -= n;
         if (!(++pages & 15u) && copy_preemptible(v)) kpreempt_point();
     }
     return true;
 }
-static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned bytes, bool write)
+/* f3-46: a pool or EMS-window page without a present translation, and
+ * every pool page a kernel write stores into, resolves through the pool
+ * object, one page at a time, immediately before that page's bytes move (no
+ * yield in between). wait=false (virtual DMA in the clock work) never
+ * materializes: a page that is not resident returns -EAGAIN with nothing
+ * copied from it. */
+static int64_t guest_frame(struct dosvm *v, uint32_t linear, bool write, bool wait)
+{
+    /* Returns the frame address, or -EAGAIN / -EFAULT (no address-taken
+     * local on the callers' present-translation fast path). */
+    uint32_t phys = 0;
+    int e = dosvm_pool_candidate(&v->memory.pool, linear) ? dosvm_pool_frame(v, linear, write, wait, &phys) : -ENOENT;
+    if (e == -ENOENT) { phys = as_lookup(&v->as, linear, 0); return phys ? (int64_t)phys : -EFAULT; }
+    return e == -EAGAIN ? e : e ? -EFAULT : (int64_t)phys;
+}
+static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned bytes, bool write, bool wait)
 {
     if (!dosvm_range(v, linear, bytes, write)) return -EFAULT;
     uint8_t *b = buffer;
@@ -454,7 +486,17 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
             }
             b += n; linear += n; bytes -= n; continue;
         }
+        /* A present translation names the current frame (no yield before
+         * the copy). A pool write still goes through the object: the dirty
+         * version must advance (a kernel store sets no PTE D bit) before a
+         * clean copy could be reused. */
         uint32_t phys = as_lookup(&v->as, linear, 0);
+        if (write ? dosvm_pool_candidate(&v->memory.pool, linear)
+                  : !phys && dosvm_pool_candidate(&v->memory.pool, linear)) {
+            int64_t r = guest_frame(v, linear, write, wait);
+            if (r < 0) return (int)r;
+            phys = (uint32_t)r;
+        }
         if (!phys) return -EFAULT;
         if (write) memcpy(P2V(phys), b, n);
         else memcpy(b, P2V(phys), n);
@@ -463,16 +505,22 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
     }
     return 0;
 }
-int dosvm_read(struct dosvm *v, uint32_t linear, void *b, unsigned n) { return transfer(v, linear, b, n, false); }
-int dosvm_write(struct dosvm *v, uint32_t linear, const void *b, unsigned n) { return transfer(v, linear, (void *)b, n, true); }
+int dosvm_read(struct dosvm *v, uint32_t linear, void *b, unsigned n) { return transfer(v, linear, b, n, false, true); }
+int dosvm_write(struct dosvm *v, uint32_t linear, const void *b, unsigned n) { return transfer(v, linear, (void *)b, n, true, true); }
+int dosvm_read_resident(struct dosvm *v, uint32_t linear, void *b, unsigned n)
+{ return transfer(v, linear, b, n, false, false); }
 static int monitor_copy(void *arg, uint32_t linear, void *b, unsigned n, bool write)
-{ return transfer(arg, linear, b, n, write); }
+{ return transfer(arg, linear, b, n, write, true); }
 static void *monitor_memory(void *arg, uint32_t linear, unsigned n, bool write)
 {
     struct dosvm *v = arg;
     /* The monitor only dereferences one-byte fetches itself. Larger ranges
-     * use monitor_copy; this pointer is solely its validation token. */
-    return dosvm_range(v, linear, n, write) ? P2V(as_lookup(&v->as, linear, 0)) : 0;
+     * use monitor_copy; this pointer is solely its validation token. The
+     * fetch precedes the instruction's effects: a pool alias may resolve. */
+    if (!dosvm_range(v, linear, n, write)) return 0;
+    if (linear >= 0xA0000 && linear < 0xC0000) return P2V(as_lookup(&v->as, linear, 0));
+    int64_t phys = guest_frame(v, linear, write, true);
+    return phys < 0 ? 0 : P2V((uint32_t)phys);
 }
 static uint8_t absent_in(void *arg, uint16_t port) { (void)arg; (void)port; return 0xFF; }
 static void absent_out(void *arg, uint16_t port, uint8_t value) { (void)arg; (void)port; (void)value; }
@@ -663,8 +711,13 @@ static void idle_wait(struct dosvm *v, enum dosvm_idle_reason reason)
     irq_restore(flags);
     if (!block) return;
     /* kwait atomically rechecks both pending state and the event sequence
-     * while registering: no input/IRQ is lost between this test and sleep. */
+     * while registering: no input/IRQ is lost between this test and sleep.
+     * f3-46: a blocked guest is a published continuation; its pages are
+     * pageable while it sleeps (memory accessed later resolves again). */
+    uint32_t hold = v->memory.pool.hold;
+    v->memory.pool.hold = 0;
     kwait_wait_until(&v->wake, idle_event, &w, until);
+    v->memory.pool.hold = hold;
     flags = irq_save();
     v->idle.sleeping = false;
     v->idle.last_tick = g_ticks;
@@ -735,7 +788,10 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
         }
         /* INT 15h timed wait; keyboard waits use the event queue above. */
         dosvm_fullscreen_checkpoint(v);
+        uint32_t hold = v->memory.pool.hold;
+        v->memory.pool.hold = 0;
         task_sleep_ms(1);
+        v->memory.pool.hold = hold;
     }
     if (v->info.state == DOSVM_STOPPING) return -V86_EIO;
     v->info.state = v->info.dos_ready ? DOSVM_RUNNABLE : DOSVM_BOOTING;
@@ -755,10 +811,28 @@ void dosvm_perf_enter(void)
     if (v && v->continuation && v->perf.phase == 1) perf_phase(v, 2);
 }
 
+/* f3-46: IRQ arbitration and frame construction run with physical IF clear
+ * (one bounded transaction, dpmi_deliver/v86_irq_deliver) and may push on
+ * the guest's current stack: a nested DPMI handler's own stack (f3-23
+ * flat-stack ISRs) or a V86 stack inside an EMS window. Resolve that page
+ * first, while blocking is still allowed; no yield separates the two. */
+static void stack_prefault(struct dosvm *v, const struct v86_frame *f)
+{
+    if (!v->memory.pool.pages) return;
+    uint32_t top;
+    if (v->frame_pm) {
+        struct dpmi_seg seg;
+        if (!dpmi_seg(v, (uint16_t)f->tf.user_ss, &seg)) return;
+        top = seg.base + (seg.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp);
+    } else top = ((f->tf.user_ss & 0xFFFFu) << 4) + (uint16_t)f->tf.user_esp;
+    uint32_t low = top >= 64 ? top - 64 : 0;
+    if (top > low) (void)dosvm_pool_prefault(v, low, top - low, false);
+}
 /* Commit at eligible monitor boundaries, including the final IF-clear
  * return after scheduling/reporting. Physical PIC programming is unchanged. */
 static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
 {
+    stack_prefault(v, f);
     uint64_t delivered = v->monitor.stats.reflected_irqs;
     uint32_t sb_delivered = v->monitor.stats.delivered[v->audio.sb.irq & 15];
     int e = 0;
@@ -800,6 +874,13 @@ bool dosvm_trap(struct trap_frame *tf)
     v->frame_pm = pm;
     crit_end();
     sti();
+    /* f3-46: a not-present fault on a pool page or EMS-window alias is
+     * resolved here, at the published continuation (the faulting
+     * instruction restarts; nothing was emulated), before the transaction
+     * hold: the wait for a frame may reclaim this VM's own cold pages. */
+    int pool_fault = tf->vector == 14 && v->info.state != DOSVM_STOPPING ?
+        dosvm_pool_fault(v, cr2, tf->err) : -ENOENT;
+    dosvm_pool_hold(v, true);
     if (dosvm_file_deadline) dosvm_file_deadline(v);
     dpmi_irq_resync(v, f);
     dosvm_fullscreen_checkpoint(v);
@@ -808,8 +889,8 @@ bool dosvm_trap(struct trap_frame *tf)
     dosvm_heartbeat(v, f);
     if (tf->vector == 1)
         dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
-    int e = 0;
-    if (v->info.state != DOSVM_STOPPING) {
+    int e = pool_fault == -ENOENT ? 0 : pool_fault ? -EFAULT : 0;
+    if (pool_fault == -ENOENT && v->info.state != DOSVM_STOPPING) {
         if (pm) {
             bool eligible = idle_safe(v);
             unsigned depth = v->dpmi.depth;
@@ -903,6 +984,10 @@ bool dosvm_trap(struct trap_frame *tf)
     if (!e && v->info.state < DOSVM_STOPPING && v->monitor.state != V86_HALTED)
         e = dosvm_deliver_irq(v, f);
     if (e >= 0 && v->info.state < DOSVM_STOPPING) idle_poll_return(v, f);
+    /* f3-46: the instruction is complete. Virtual DMA pins follow the
+     * device state just programmed; then the VM's pages are pageable again. */
+    if (v->info.state < DOSVM_STOPPING) dosvm_pool_settle(v);
+    dosvm_pool_hold(v, false);
     kpreempt_point(); /* complete emulation transaction, before diagnostics */
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
@@ -964,6 +1049,7 @@ stop_return:
     if (g_need_resched) schedule();
     dosvm_startup_report(v, false);
     dosvm_perf_report(v);
+    if (v->monitor.vif) stack_prefault(v, f);
     cli();
     /* A tick may have arrived in a checkpoint, scheduler or report above.
      * With physical IF clear there is no new gap between this and IRET. */
@@ -1061,6 +1147,7 @@ static void worker(void *arg)
      * the new frame; only a stopping VM ends the loop. */
     for (;;) {
         perf_phase(v, 1);
+        stack_prefault(v, &v->frame);
         cli();
         /* v86_leave enables IF on a mode switch. A newly raised audio
          * request in that worker interval must also get this boundary. */
@@ -1393,6 +1480,7 @@ static void dosvm_clock_work(void *arg)
             v->perf.if_clear_ms += elapsed;
             if (!dosvm_in_irq(v)) v->perf.if_outside_ms += elapsed;
         }
+        dosvm_pool_irq_sample(v, elapsed);
         v->ticks = g_ticks;
         v->clock_ms += elapsed;
         uint64_t begin = dosvm_perf_clock();

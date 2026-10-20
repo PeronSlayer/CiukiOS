@@ -40,6 +40,10 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *ctx, uint64_t e
 { (void)q; (void)end; CHECK(cond(ctx)); return true; }
 void kwait_wake_all(struct kwait *q) { (void)q; }
 void task_sleep_ms(uint32_t ms) { (void)ms; CHECK(false); }
+/* f3-46: each read-cache block has a small reclaim tracker (kernel heap). */
+static unsigned disk_trackers;
+void *kmalloc(size_t bytes) { void *p = malloc(bytes); if (p) disk_trackers++; return p; }
+void kfree(void *p) { if (p) { CHECK(disk_trackers); disk_trackers--; free(p); } }
 #include "../../../src/kernel/vm/dosvm_disk.c"
 static struct dosvm vm;
 void kpreempt_point(void) { CHECK(!vm.disk_busy); }
@@ -81,7 +85,7 @@ static void ordinary_operations(struct storage *s)
     OK(dosvm_disk_read(&vm,128,sector));CHECK(!memcmp(sector,program,sizeof(program)));
     memset(sector,0x53,sizeof(sector));OK(dosvm_disk_write(&vm,300,sector));
     memset(sector,0,sizeof(sector));OK(dosvm_disk_read(&vm,300,sector));CHECK(sector[0]==0x53);
-    OK(dosvm_disk_close(&vm,false));CHECK(!s->volumes[2].fat.readonly);
+    OK(dosvm_disk_close(&vm,false));CHECK(!s->volumes[2].fat.readonly && !disk_trackers);
 }
 static void crash_close(struct storage *s)
 {
