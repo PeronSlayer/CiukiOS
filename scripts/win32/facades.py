@@ -38,12 +38,13 @@ def build(out):
                'ExpandEnvironmentStringsA': 12, 'ExpandEnvironmentStringsW': 12,
                'LoadLibraryExA': 12, 'FreeLibrary': 4, 'FindResourceA': 12,
                'LoadResource': 8, 'SizeofResource': 8}
+    imports.update(CopyFileA=12,GetModuleFileNameA=12,GetLastError=0,GetFileAttributesA=4)
     definition = out / 'kernel32-imports.def'
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n' + ''.join(f' {n}@{a}\n' for n, a in imports.items()))
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'kernel32.lib'])
     definition = out/'ntdll-imports.def'
     definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_stub_hit\n w32_shim_stub\n w32_report_refusal\n w32_shim_w_stub\n w32_server_exchange\n'
-                          ' w32_registry_forget\n RtlAllocateHeap@12\n RtlFreeHeap@12\n')
+                          ' w32_registry_forget\n w32_builtin_version\n w32_diag\n w32_stricmp\n w32_copy_string\n RtlAllocateHeap@12\n RtlFreeHeap@12\n')
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'ntdll.lib'])
     store = {'schema': 1, 'dlls': []}
     coverage = {}
@@ -54,7 +55,7 @@ def build(out):
         if stem == 'advapi32':
             sources += [CORE/'advapi32'/n for n in ('registry.c','registry_ex.c','security.c','text.c','rpc.c','gate.S')]
         elif stem == 'version':
-            sources += [CORE/'version/version.c', CORE/'services/files.c', CORE/'advapi32/text.c']
+            sources += [CORE/'version/version.c', CORE/'version/install.c', CORE/'services/files.c', CORE/'advapi32/text.c']
         else:
             sources += [CORE/'lz32/lz32.c', CORE/'lz32/decode.c', CORE/'services/files.c']
             sources += [CORE/'lz32/mspack'/n for n in ('kwajd.c','szddd.c','lzssd.c','mszipd.c')]
@@ -78,7 +79,7 @@ def build(out):
             nm = subprocess.run(['llvm-nm','--defined-only',str(obj)],check=True,capture_output=True,text=True).stdout
             # Public facade implementations have stdcall decoration; helper
             # functions and the cdecl libmspack API never become PE exports.
-            if source.name in ('registry.c','registry_ex.c','security.c','version.c','lz32.c'):
+            if source.name in ('registry.c','registry_ex.c','security.c','version.c','install.c','lz32.c'):
                 implemented.update(re.findall(r'\b_([A-Za-z][A-Za-z0-9_]*)@\d+\b', nm))
                 for name,bytes_ in re.findall(r'\bT _([A-Za-z][A-Za-z0-9_]*W)@(\d+)\b',nm):
                     run(['llvm-objcopy','--redefine-sym',f'_{name}@{bytes_}=_w32_real_{name}@{bytes_}',obj])

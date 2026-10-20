@@ -15,3 +15,11 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No commercial installer payloads in the repository or the image (authored fixtures only; the workload manifest downloads happen on the lead's machine under f5-17's rules); no Wine source copied outside the f5-14B builds; English UI copy; no new `panic()` paths.
+
+## Amendment 1 (lead review, 2026-10-20 12:10): partial delivery accepted, decisions, continuation f5-15A2
+
+The delivery (worktree commit `3532a875`, Codex `gpt-6.1-sol`, report `build/codex/f5-15a-report.md`, validation note `docs/validation/f5-15a-installer-shell.md`) is accepted as partial: shell support, the `C:\WINDOWS\FONTS` view with dual staging of the pinned faces, the shortcut writer, installer plumbing and the Windows directory skeleton (`SYSTEM`, `SYSTEM32`, `TEMP`, `FONTS`, `Desktop`, `Start Menu\Programs\StartUp`, `Application Data`, `Program Files\Common Files`), desktop launch guards before w32srv registration, `ciukishell.dll`. Decisions:
+
+1. **Delayed file operations follow Windows 98.** `MoveFileExA/W` return `FALSE` with `ERROR_CALL_NOT_IMPLEMENTED` (120), as on Windows 98 (the contract's requirement); installers for 9x write the `[rename]` section of `C:\WINDOWS\WININIT.INI` themselves, and CiukiOS processes it before the Win32 personality starts on the next boot and at the f5-07B virtual restart (rename, `NUL` deletion, then the file is renamed to `WININIT.BAK`, Windows 98's behaviour). The delayed `MoveFileEx` queue of this delivery is replaced in f5-15A2.
+2. The export-forwarding seam and the dual font staging are accepted; guest rasterisation keeps reading the native store.
+3. The NSIS compiler/script pins, the cabinet/advpack/setupapi qualification and the real NSIS, CAB/INF and self-extractor flows, with the `w32-installer-nsis` guest probe (pending in `tests/host/test_runner_selectors.py`), are the scope of the continuation **f5-15A2**.

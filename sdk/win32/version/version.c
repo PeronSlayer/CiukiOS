@@ -3,6 +3,27 @@
 #include "../services/files.h"
 extern uint8_t w32r_scalar_ansi(uint32_t);
 extern uint32_t w32r_ansi_scalar(uint8_t);
+#ifdef W32_HOST_MODEL
+extern int w32_builtin_version(const char *,uint16_t *) __attribute__((weak));
+#else
+extern int w32_builtin_version(const char *,uint16_t *);
+#endif
+static int builtin(const void *name,int wide,uint8_t out[92]) {
+    char path[1040];
+    if(!name)return 0;
+    if(wide){unsigned i=0;const WCHAR *w=name;for(;w[i] && i+1<sizeof(path);i++){if(w[i]>127)return 0;path[i]=(char)w[i];}if(w[i])return 0;path[i]=0;name=path;}
+    uint16_t v[4];
+#ifdef W32_HOST_MODEL
+    if(!w32_builtin_version)return 0;
+#endif
+    if(!w32_builtin_version(name,v))return 0;
+    w32_fill(out,0,92);w32_put16(out,92);w32_put16(out+2,52);
+    const char *key="VS_VERSION_INFO";for(unsigned i=0;i<16;i++)w32_put16(out+6+i*2,(uint16_t)key[i]);
+    w32_put32(out+40,0xfeef04bdu);w32_put32(out+44,0x10000);
+    uint32_t ms=(uint32_t)v[0]<<16|v[1],ls=(uint32_t)v[2]<<16|v[3];
+    w32_put32(out+48,ms);w32_put32(out+52,ls);w32_put32(out+56,ms);w32_put32(out+60,ls);
+    w32_put32(out+64,0x3f);w32_put32(out+72,0x40004);w32_put32(out+76,2);return 1;
+}
 static uint32_t align4(uint32_t n){return (n+3)&~3u;}
 /* f5-20A: Unicode file names go through ACP 1252 to the ANSI CreateFileA
  * path of KERNEL32 (whose CreateFileW is a Windows 9x refusal); a name
@@ -70,6 +91,7 @@ static void unlock_buffers(void){__atomic_store_n(&buffer_lock,0,__ATOMIC_RELEAS
 static uint32_t version_size(const void *name,int wide,uint32_t *handle)
 {
     if(handle)*handle=0;if(!name){w32r_last_error(87);return 0;}
+    uint8_t b[92];if(builtin(name,wide,b))return 192;
     struct w32v_file f;if(!open_name(name,wide,&f))return 0;
     uint32_t off,n;int ok=locate(&f,&off,&n);w32v_close(&f);
     if(!ok){w32r_last_error(1813);return 0;}return align4(n)+n+8;
@@ -79,6 +101,10 @@ uint32_t W32API GetFileVersionInfoSizeW(const WCHAR *n,uint32_t *h){return versi
 static int version_get(const void *name,int wide,uint32_t ignored,uint32_t cap,void *out)
 {
     (void)ignored;if(!name||!out){w32r_last_error(87);return 0;}
+    uint8_t b[92];if(builtin(name,wide,b)){
+        if(cap<sizeof(b)){w32r_last_error(122);return 0;}
+        w32_copy(out,b,sizeof(b));return 1;
+    }
     struct w32v_file f;if(!open_name(name,wide,&f))return 0;uint32_t off,n;int ok=locate(&f,&off,&n);
     if(!ok){w32v_close(&f);w32r_last_error(1813);return 0;}
     if(cap<n){w32v_close(&f);w32r_last_error(122);return 0;}

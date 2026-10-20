@@ -15,6 +15,10 @@ static int exists = 1;
 static DWORD position;
 static unsigned allocations;
 static unsigned lease;
+static const char *expected_path="C:\\WINDOWS\\test.ini";
+DWORD W32API GetFullPathNameA(const char *s,DWORD n,char *out,char **part){(void)part;if(strlen(s)>=n)return (DWORD)strlen(s)+1;strcpy(out,s);return (DWORD)strlen(s);}
+DWORD W32API GetFileAttributesA(const char *s){(void)s;return 128;}
+void w32_diag(const char *a,const char *b,const char *c){(void)a;(void)b;(void)c;}
 #define CHECK(c)                                                               \
   do {                                                                         \
     if (!(c)) {                                                                \
@@ -64,7 +68,7 @@ HANDLE W32API CreateFileA(const char *path, DWORD access, DWORD share,
   (void)sa;
   (void)flags;
   (void)template;
-  CHECK(!strcmp(path, "C:\\WINDOWS\\test.ini"));
+  CHECK(!strcmp(path, expected_path));
   position = 0;
   if (disposition == 3 && !exists) {
     SetLastError(2);
@@ -194,6 +198,19 @@ int main(void) {
   memset(decoded, 9, 4);
   CHECK(!GetPrivateProfileStructA("s", "binary", decoded, 4, "test.ini") &&
         decoded[0] == 9 && GetLastError() == 13);
+  expected_path="C:\\WINDOWS\\WININIT.INI";
+  extern BOOL k32_delay_move(const char *,const char *,DWORD);
+  seed("[other]\r\nx=kept\r\n[rename]\r\nNUL=C:\\old.exe\r\n[last]\r\ny=kept\r\n");
+  CHECK(k32_delay_move("C:\\Program Files\\Fixture\\uninstall.exe",0,4));
+  CHECK(k32_delay_move("C:\\WINDOWS\\TEMP\\copy.exe",0,4));
+  disk[disk_size]=0;
+  CHECK(strstr((char *)disk,"NUL=C:\\old.exe\r\nNUL=C:\\Program Files\\Fixture\\uninstall.exe\r\nNUL=C:\\WINDOWS\\TEMP\\copy.exe\r\n[last]"));
+  CHECK(strstr((char *)disk,"[other]\r\nx=kept\r\n"));
+  CHECK(!k32_delay_move("C:\\bad\r\nfile.exe",0,4) && GetLastError()==123);
+  seed("[other]\r\nx=kept\r\n");
+  CHECK(k32_delay_move("C:\\source.tmp","C:\\target.dll",5));
+  disk[disk_size]=0;
+  CHECK(strstr((char *)disk,"[rename]\r\nC:\\target.dll=C:\\source.tmp\r\n"));
   CHECK(!allocations);
   puts("PASS profile first-match quotes comments CR LF defaults enumeration "
        "deletion growth bounds");

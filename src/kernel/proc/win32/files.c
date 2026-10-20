@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/w32_fonts.h>
 static uint32_t dos_error(int e) {
   switch (e) {
   case 0:
@@ -148,7 +149,24 @@ uint32_t w32_native_path(struct process *p, const char *name,
   }
   return 0;
 }
+static bool windows_fonts(const struct px_node *n) {
+  return n && n->drive==2 && n->parent && n->parent->parent &&
+    n->parent->parent->mountpoint && path_equal(n->entry.name,"FONTS") &&
+    path_equal(n->parent->entry.name,"WINDOWS");
+}
+static bool windows_root(const struct px_node *n) {
+  return n && n->drive==2 && n->parent && n->parent->mountpoint &&
+    path_equal(n->entry.name,"WINDOWS");
+}
+static bool optical_path(struct vfs *v,const char *full) {
+  if(!full[0])return false;
+  unsigned drive=(unsigned)(full[0]-'A');
+  if(drive>=26 || !v->ro_volumes[drive])return false;
+  const char *name=v->ro_volumes[drive]->ops->name;
+  return path_equal(name,"CDFS") || path_equal(name,"ISO9660");
+}
 static bool system_node(const struct px_node *n) {
+  if(n && windows_fonts(n->parent) && w32_system_font_name(n->entry.name))return true;
   while (n && n->parent && n != n->parent) {
     if (n->drive == 2 && n->parent->mountpoint &&
         path_equal(n->entry.name, "System"))
@@ -163,6 +181,7 @@ static bool protected_path(struct px_namespace *s, struct px_node *cwd,
   int e = px_resolve_locked(s, cwd, path, true, &r);
   if (!e && system_node(r.node ? r.node : r.parent))
     return true;
+  if(!e && !r.node && windows_fonts(r.parent) && w32_system_font_name(r.name))return true;
   /* Guard missing children as well as aliases, including a missing System. */
   if (path[0] != '/' || strlen(path) < 7)
     return false;
@@ -578,6 +597,15 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   if (write && (protected_path(s, cwd, path) ||
                 (a->path2 && protected_path(s, cwd, path2))))
     error = 5;
+  if(write && (optical_path(s->vfs,full) ||
+      (a->path2 && optical_path(s->vfs,full2))))error=19;
+  /* A parent rename must not move the pinned files outside their protected
+   * namespace. New installed faces remain ordinary writable files. */
+  if(write && (a->action==W32_F_MOVE || a->action==W32_F_RMDIR)) {
+    struct px_path r;
+    if(!px_resolve_locked(s,cwd,path,false,&r) &&
+       (windows_fonts(r.node) || windows_root(r.node)))error=5;
+  }
   if(write&&(driver_destination(full)||(a->path2&&driver_destination(full2)))){
     error=5;w32_refusal_queue(p,W32_REFUSE_DRIVER,a->path2?full2:full,5);
   }

@@ -322,6 +322,8 @@ def populate_payloads(volume, sources, directories):
                            env=dict(os.environ, TZ="UTC"), check=True)
         else:
             run("mcopy", "-i", volume, source, "::" + name)
+        if name.startswith("/WINDOWS/FONTS/") and source.parent == ROOT / "assets/fonts/liberation":
+            run("mattrib", "-i", volume, "+r", "::" + name)
 
 
 def check_payloads(image, payloads, directories):
@@ -505,7 +507,11 @@ def win32_payloads(folder=None):
         sources["/System/Win32/Fixtures/" + name]=folder / "fixtures" / name
         if name == "cdplayer.exe":
             sources["/Programs/CDPLAYER.EXE"]=folder / "fixtures" / name
-    return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/WINDOWS/CRASH", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
+    # Same pinned source bytes as the native store, visible to file pickers,
+    # installers and GetFontData; installed faces share this writable folder.
+    native_fonts,_=font_payloads()
+    sources.update({"/WINDOWS/FONTS/"+Path(name).name:source for name,source in native_fonts.items() if name.endswith(".ttf")})
+    return sources, {"/WINDOWS", "/WINDOWS/SYSTEM", "/WINDOWS/SYSTEM32", "/WINDOWS/TEMP", "/WINDOWS/FONTS", "/WINDOWS/Desktop", "/WINDOWS/Start Menu", "/WINDOWS/Start Menu/Programs", "/WINDOWS/Start Menu/Programs/StartUp", "/WINDOWS/Application Data", "/Program Files", "/Program Files/Common Files", "/Documents", "/WINDOWS/CRASH", "/System", "/system/licenses", "/System/Win32", "/System/Win32/Fixtures"}, {
         "manifest_sha256": sha256(manifest), "builtins": store["dlls"],
         "msvcrt_policy": store.get("msvcrt_policy")}
 
@@ -531,7 +537,7 @@ def registry_payloads(directory):
 
 
 def build(kernel, out, boot_cfg):
-    for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "fsck.fat"):
+    for tool in ("nasm", "mkfs.fat", "mmd", "mdir", "mcopy", "mattrib", "fsck.fat"):
         if not shutil.which(tool):
             raise SystemExit(f"missing host tool: {tool}")
     if not kernel.is_file():

@@ -166,12 +166,10 @@ static struct {
        .install_win32 = "C:\\WINDOWS\\FONTS",
        .install_native = "/System/fonts"};
 #else
-/* f5-10C2: the guest personality draws glyphs through the PE-to-native
- * bridge (bridge.c). System faces are read through C:\System\fonts (the
- * native /System/fonts, read-only for Win32 processes) until the drive
- * service presents the union view at C:\WINDOWS\FONTS; AddFontResource
- * copies installed faces to C:\WINDOWS\FONTS (/WINDOWS/FONTS). */
-} S = {.system_win32 = "C:\\System\\fonts",
+/* f5-15A: the exact pinned faces are also staged read-only in WINDOWS/FONTS,
+ * beside writable installed faces. The native rasteriser retains the one
+ * system store, avoiding a second resident copy of the system faces. */
+} S = {.system_win32 = "C:\\WINDOWS\\FONTS",
        .system_native = "/System/fonts",
        .install_win32 = "C:\\WINDOWS\\FONTS",
        .install_native = "/WINDOWS/FONTS",

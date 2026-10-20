@@ -11,6 +11,7 @@ uint32_t desk_w32_record(void *,uint32_t);
 static struct desktop_v3_observation guest_observation;
 static struct wr_server guest_registry;
 static unsigned guest_ms,guest_read,guest_surface,guest_frames,guest_seq;
+static unsigned guest_registered,guest_spawns,guest_roundtrips;
 static jmp_buf guest_exit;
 static void guest_emit(const char *probe,const char *event,const char *fmt,...)
 {
@@ -28,10 +29,11 @@ void desk_v3_fixture_report(const char *line)
 int ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,unsigned count,unsigned flags)
 {
     (void)env;assert(!strcmp(path,"/System/Win32/Fixtures/desktop-v3.exe") && !strcmp(argv[0],path));
+    assert(guest_registered && guest_roundtrips>=2);guest_spawns++;
     assert(!maps && !count && !flags);return 42;
 }
 uint32_t desk_w32_exchange(const void *in,uint32_t n,void *out,uint32_t cap,uint32_t *used)
-{size_t bytes=0;uint32_t e=wr_dispatch(&guest_registry,2,in,n,out,cap,&bytes);*used=(uint32_t)bytes;return e;}
+{if(!guest_registered)return 1062;guest_roundtrips++;size_t bytes=0;uint32_t e=wr_dispatch(&guest_registry,2,in,n,out,cap,&bytes);*used=(uint32_t)bytes;return e;}
 int desk_w32_native_shortcut(struct desktop *p,const struct desk_launch_record *r)
 {
     assert(p==&d && !strcmp(r->target,"/Programs/control") && !strcmp(r->arguments,"--panel=programs"));
@@ -92,7 +94,9 @@ static void guest_fixture_run(const char *dir)
     d.ops.present=ordered_present;guest_surface=19;
     struct wr_io io;wr_posix_io(&io,dir);assert(wr_init(&guest_registry,&io,0));
     guest_emit("crash-isolation","BEGIN","server=desktop");
-    assert(desk_v3_fixture_begin(&d)==42);
+    assert(desk_v3_fixture_begin(&d)==0 && !guest_spawns);
+    desk_v3_fixture_tick(&d);assert(!guest_spawns);
+    guest_registered=1;desk_v3_fixture_tick(&d);assert(guest_spawns==1);
     if(!setjmp(guest_exit))desktop_v3_peer_entry();
     assert(guest_observation.phase==8 && guest_frames==2 && !d.v3_lease_state);
     struct desktop_v3_observation bad=guest_observation;bad.phase=8;

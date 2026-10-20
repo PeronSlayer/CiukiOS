@@ -195,8 +195,8 @@ class KernelLoaderTests(unittest.TestCase):
             staged={n for n,r in upper['dlls'].items() if r['qualified']}
             core=json.loads((folder/'builtin-store.json').read_text())['dlls']
             replaced={d['name'] for d in core if d['name'] in staged}
-            self.assertEqual(len(core),42)
-            self.assertEqual(len(meta['builtins']),42-len(replaced)+len(staged))
+            self.assertEqual(len(core),43)  # + f5-15A ciukishell.dll
+            self.assertEqual(len(meta['builtins']),43-len(replaced)+len(staged))
             self.assertEqual({d['name'] for d in meta['builtins'] if d.get('wine_reused') is True},staged)
             for name in staged:
                 self.assertIn('/System/Win32/'+name,sources)

@@ -96,8 +96,16 @@ class KernelCoreTests(unittest.TestCase):
         self.assertEqual([c['id'] for c in suite['cases']],
                          ['w32-exceptions-qemu-t23','w32-memory-qemu-t23','w32-objects-qemu-t23',
                           'w32-fullscreen-qemu-t23','w32-fixtures-qemu-t23','w32-registry-qemu-t23',
-                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23','w32-crash-qemu-t23','w32-user32-qemu-t23','w32-codecs-qemu-t23','w32-media-qemu-t23','w32-cdaudio-qemu-t23','w32-upper-dlls-qemu-t23','w32-ddraw-qemu-t23','w32-input-qemu-t23','w32-dialogs-qemu-t23'])
+                          'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23','w32-crash-qemu-t23','w32-user32-qemu-t23','w32-codecs-qemu-t23','w32-media-qemu-t23','w32-cdaudio-qemu-t23','w32-upper-dlls-qemu-t23','w32-ddraw-qemu-t23','w32-input-qemu-t23','w32-dialogs-qemu-t23','w32-installer-nsis-qemu-t23'])
         for case in suite['cases']:
+            if case['probe']=='w32-installer-nsis':
+                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertEqual(case['selector'],'f5:w32-installer-nsis run={run_id}')
+                self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
+                                 ['installer_install','installer_cancel','installer_restart_request','installer_uninstall'])
+                for predicate in case['expected']['predicates']:
+                    self.assertEqual(predicate['fields'],{'errors':{'eq':0},'manifest':{'eq':1}})
+                continue
             if case['probe']=='w32-upper-dlls':
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-upper-dlls run={run_id}')

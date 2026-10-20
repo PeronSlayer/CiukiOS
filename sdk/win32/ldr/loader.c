@@ -207,8 +207,31 @@ static int dependency(struct w32_loader *l, struct w32_module *m, struct w32_mod
     return 1;
 }
 static struct w32_module *load_one(struct w32_loader *, const char *, ULONG, ULONG);
+#include <w32/shell_exports.h>
+static int shell_override(struct w32_loader *l,struct w32_module *m,const char *name) {
+    if (!name || (m->load_flags & W32_LOAD_DATAFILE) || w32_stricmp(m->name,"shell32.dll"))return 0;
+    int present=0;
+    for(ULONG i=0;i<l->builtin_count;i++)if(!w32_stricmp(l->builtins[i].name,"ciukishell.dll"))present=1;
+    if(!present)return 0;
+#define SHELL_MATCH(n) if(!w32_strcmp(name,#n))return 1;
+    W32_SHELL_EXPORTS(SHELL_MATCH)
+#undef SHELL_MATCH
+    return 0;
+}
 static void *resolve(struct w32_loader *l, struct w32_module *m, const char *name, ULONG ordinal,
                      ULONG hint, ULONG depth) {
+    int reused=0;
+    static const char raw[]="__ciuki_reused_";
+    if(name && !w32_stricmp(m->name,"shell32.dll")){
+        unsigned i=0;while(raw[i] && name[i]==raw[i])i++;
+        if(!raw[i]){name+=i;reused=1;hint=0xffffffffu;}
+    }
+    if(!reused && shell_override(l,m,name)) {
+        if(depth>=16){error(l,127,"forwarder-depth",m->name,name);return 0;}
+        struct w32_module *target=load_one(l,"ciukishell.dll",0,depth+1);
+        if(!target || !dependency(l,m,target))return 0;
+        return resolve(l,target,name,0,0xffffffffu,depth+1);
+    }
     struct w32_pe *p = &m->pe;
     struct w32_directory d = p->dirs[0];
     if (!d.size || (m->load_flags & W32_LOAD_DATAFILE)) {

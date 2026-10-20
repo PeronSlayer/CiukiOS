@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/kernel32.h>
 #define INI_MAX 65535u
+/* f5-15A's installer amendment: queue delayed operations in the 9x file,
+ * rather than the NT Session Manager key. Processing belongs to f5-07B. */
 struct span {
   DWORD at, n;
 };
@@ -543,6 +545,39 @@ BOOL W32API WritePrivateProfileSectionA(const char *section, const char *values,
   k32_free(out, INI_MAX + 1);
   k32_profile_end();
   RtlLeaveCriticalSection(lock);
+  return ok;
+}
+BOOL k32_delay_move(const char *from,const char *to,DWORD flags) {
+  if(!from || flags&~5u){SetLastError(87);return 0;}
+  char source[260],destination[260];
+  DWORD n=GetFullPathNameA(from,sizeof(source),source,0);
+  if(!n || n>=sizeof(source)){SetLastError(206);return 0;}
+  if(to){n=GetFullPathNameA(to,sizeof(destination),destination,0);if(!n || n>=sizeof(destination)){SetLastError(206);return 0;}}
+  else w32_copy(destination,"NUL",4);
+  for(unsigned i=0;source[i];i++)if(source[i]=='\r' || source[i]=='\n'){SetLastError(123);return 0;}
+  for(unsigned i=0;destination[i];i++)if(destination[i]=='\r' || destination[i]=='\n' || destination[i]=='='){SetLastError(123);return 0;}
+  if(GetFileAttributesA(source)==~0u)return 0;
+  RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
+  RtlEnterCriticalSection(lock);
+  if(!k32_profile_begin()){RtlLeaveCriticalSection(lock);return 0;}
+  DWORD size=0,at=0,insert=0;int found=0;
+  char *text=read_ini("C:\\WINDOWS\\WININIT.INI",&size),*out=k32_alloc(INI_MAX+1);
+  BOOL ok=text && out;
+  if(ok) {
+    insert=size;
+    for(DWORD offset=0;offset<size;) {
+      struct line l=next(text,size,offset);offset=l.end;
+      if(l.kind==1){if(found){insert=l.start;break;}if(equal(text,l.section,"rename"))found=1;}
+    }
+    ok=append(out,&at,text,insert);
+    if(ok && at && out[at-1]!='\n')ok=append(out,&at,"\r\n",2);
+    if(ok && !found)ok=append(out,&at,"[rename]\r\n",10);
+    ok=ok && append(out,&at,destination,w32_strlen(destination)) && append(out,&at,"=",1) &&
+      append(out,&at,source,w32_strlen(source)) && append(out,&at,"\r\n",2) && append(out,&at,text+insert,size-insert);
+    if(ok)ok=save_ini("C:\\WINDOWS\\WININIT.INI",out,at);else SetLastError(112);
+  }else SetLastError(8);
+  k32_free(text,INI_MAX+1);k32_free(out,INI_MAX+1);k32_profile_end();RtlLeaveCriticalSection(lock);
+  if(ok)w32_diag("installer","wininit-queued",to?"rename":"delete");
   return ok;
 }
 BOOL W32API WriteProfileSectionA(const char *section, const char *values) {

@@ -93,7 +93,7 @@ class RegistryTests(unittest.TestCase):
             exports={n for e in census.inspect((self.out/'builtin'/dll).read_bytes())['exports'] for n in e['names']}
             self.assertTrue(set(rows)<=exports)
             self.assertTrue(set(rows.values()) <= {'implemented','W21 stub'})
-        self.assertEqual(coverage['version.dll']['VerInstallFileA'],'W21 stub')
+        self.assertEqual(coverage['version.dll']['VerInstallFileA'],'implemented')
         self.assertEqual(coverage['version.dll']['VerFindFileA'],'implemented')
         self.assertTrue(all(v=='implemented' for v in coverage['lz32.dll'].values()))
 

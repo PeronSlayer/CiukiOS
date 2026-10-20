@@ -11,6 +11,7 @@ int ciuki_win32_uninstall_list(struct desk_uninstall_entry *, unsigned);
 int ciuki_win32_uninstall_run(const char *);
 int ciuki_win32_shell_launch(const struct desk_launch_record *);
 int desk_w32_flush(void);
+int desk_w32_ready(void); /* successful read-only registry round trip */
 /* Native binding: PE/DOS prepare off the input thread; ELF hands off to
  * the existing desktop launcher and preserves its launch-owned authority. */
 enum desk_w32_kind { DESK_W32_PE, DESK_W32_ELF, DESK_W32_DOS };

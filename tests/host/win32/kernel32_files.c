@@ -177,6 +177,21 @@ int main(int argc, char **argv) {
   client->cwd_retain = px_retain;
   client->cwd_release = px_release;
   CHECK(path_request("C:\\WINDOWS", W32_F_MKDIR) == 0);
+  CHECK(!make_dir("/WINDOWS/FONTS"));
+  int font_fd=file_open(client,"/WINDOWS/FONTS/LiberationSans-Regular.ttf",O_CREAT|O_RDWR,0666);
+  CHECK(font_fd>=0 && !file_close(client,font_fd));
+  struct ciuki_w32_file_args font_read=open_request("C:\\WINDOWS\\FONTS\\LIBERA~1.TTF",0x80000000u,3,3);
+  CHECK(!font_read.error);close_handle(font_read.result);
+  CHECK(open_request("C:\\WINDOWS\\FONTS\\LIBERA~1.TTF",0x40000000u,3,3).error==5);
+  CHECK(path_request("C:\\WINDOWS\\FONTS\\LIBERA~1.TTF",W32_F_DELETE)==5);
+  CHECK(path_request("C:\\WINDOWS\\FONTS\\LIBERA~1.TTF",W32_F_ATTR)==5);
+  CHECK(open_request("C:\\WINDOWS\\FONTS\\LiberationMono-Italic.ttf",0x40000000u,3,2).error==5);
+  struct ciuki_w32_file_args installed=open_request("C:\\WINDOWS\\FONTS\\User Face.ttf",0x40000000u,3,1);
+  CHECK(!installed.error);close_handle(installed.result);
+  CHECK(!path_request("C:\\WINDOWS\\FONTS\\User Face.ttf",W32_F_DELETE));
+  put_path(USER,"C:\\WINDOWS\\FONTS");put_path(USER+512,"C:\\Moved Fonts");
+  struct ciuki_w32_file_args font_move={.action=W32_F_MOVE,.path=USER,.path2=USER+512};
+  CHECK(!w32_file_call(client_thread,&font_move) && font_move.error==5);
   for(unsigned i=0;i<3;i++){
     const char *drivers[]={"C:\\WINDOWS\\fixture.sys","C:\\windows\\fixture.VXD","C:\\WINDOWS\\fixture.drv"};
     struct ciuki_w32_file_args refused=open_request(drivers[i],0xc0000000u,3,2);

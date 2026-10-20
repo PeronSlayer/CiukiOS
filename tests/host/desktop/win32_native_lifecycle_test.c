@@ -12,6 +12,8 @@
 static unsigned starts,signals;
 static int authorized=1;
 static unsigned native_launches;
+static int readiness;
+int desk_w32_ready(void){return readiness;}
 int desk_program_kind(const char *name){return !strcmp(name,"control") ? DESK_APP_CONTROL : 0;}
 static int launch(struct desktop *d,const struct desk_program *p)
 {
@@ -57,6 +59,7 @@ int main(void)
     desk_w32_child_exited(&d,104,SIGKILL);assert(desk_w32_shutdown()==-EIO && starts==4);
     d.power.state=0;d.launch=launch;d.launch_arg="retained";d.launch_argv[0]="sentinel";
     struct desk_launch_record r={.label="Control",.target="C:\\Programs\\control",.arguments="--panel=display",.show=1};
+    readiness=-EACCES;assert(desk_w32_launch(DESK_W32_PE,&r)==-EACCES && starts==4);readiness=0;
     assert(!desk_w32_launch(DESK_W32_ELF,&r));desk_w32_poll(&d);
     assert(native_launches==1 && !strcmp(d.launch_arg,"retained") && !strcmp(d.launch_argv[0],"sentinel"));
     strcpy(r.directory,"C:\\unsupported-cwd");assert(desk_w32_native_shortcut(&d,&r)==-EOPNOTSUPP);
