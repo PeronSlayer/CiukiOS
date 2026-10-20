@@ -946,6 +946,108 @@ static void test_net_node(void)
     CHECK(n == 0 && seen); CHECK(!file_close(client, dir));
     puts("PASS /dev/net namespace: lookup/stat/getdents, readonly fd/close, seek/stream rejection, actual devctl dispatch and user copies");
 }
+/* w32srv registry directory commit (apps/w32srv/directory.c save() and
+ * storage.c wr_commit()) through the native syscall path exactly as
+ * apps/w32srv/posix_io.c and sdk/libciuki/posix.c issue it: write_file
+ * (open O_WRONLY|O_CREAT|O_TRUNC 0600, write loop, close), sync_file (open
+ * O_RDWR, fsync, close), patch_file (open O_WRONLY, lseek64 32, write 4,
+ * close), sync_file again; SERVICE.CRS.<slot> alternating, hive flushes
+ * interleaved. Every failing syscall is reported with its step and errno. */
+#define REG_PATH USER
+#define REG_OUT (USER + 128)
+#define REG_DATA (USER + 256)
+#define REG_DATA_MAX (2u * PAGE_SIZE - 512u)
+static void reg_put32(uint8_t *p, uint32_t n) { for (unsigned i = 0; i < 4; i++) p[i] = (uint8_t)(n >> (i * 8)); }
+static void reg_fail(unsigned commit, const char *name, const char *step, int32_t r)
+{
+    fprintf(stderr, "FAIL registry-commit syscall commit=%u file=%s step=%s result=%d readonly=%s\n",
+            commit, name, step, r, volumes[0].readonly ? "yes" : "no");
+    exit(1);
+}
+static int32_t reg_open(const char *path, uint32_t flags, uint32_t mode)
+{ put_path(REG_PATH, path); return call(CIUKI_SYS_OPEN, REG_PATH, flags, mode, 0, 0); }
+static int32_t reg_write_all(int32_t fd, uint32_t va, uint32_t n)
+{
+    while (n) {
+        int32_t w = call(CIUKI_SYS_WRITE, (uint32_t)fd, va, n, 0, 0);
+        if (w <= 0) return w ? w : -EIO;
+        va += (uint32_t)w; n -= (uint32_t)w;
+    }
+    return 0;
+}
+static void reg_commit(unsigned commit, const char *dir, const char *name, uint8_t *b, uint32_t n)
+{
+    char path[96]; snprintf(path, sizeof(path), "%s/%s", dir, name);
+    CHECK(n <= REG_DATA_MAX && !ua_write(client->memory, REG_DATA, b, n));
+    int32_t fd = reg_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600), r;
+    if (fd < 0) reg_fail(commit, name, "write_file:open(O_WRONLY|O_CREAT|O_TRUNC)", fd);
+    if ((r = reg_write_all(fd, REG_DATA, n))) reg_fail(commit, name, "write_file:write", r);
+    if ((r = call(CIUKI_SYS_CLOSE, (uint32_t)fd, 0, 0, 0, 0))) reg_fail(commit, name, "write_file:close", r);
+    for (unsigned pass = 0; pass < 2; pass++) {
+        if (pass) {
+            uint8_t marker[4]; reg_put32(marker, 0x43524731u); memcpy(b + 32, marker, 4);
+            CHECK(!ua_write(client->memory, REG_DATA, marker, 4));
+            if ((fd = reg_open(path, O_WRONLY, 0)) < 0) reg_fail(commit, name, "patch_file:open(O_WRONLY)", fd);
+            if ((r = call(CIUKI_SYS_LSEEK64, (uint32_t)fd, 32, 0, SEEK_SET, REG_OUT))) reg_fail(commit, name, "patch_file:lseek64(32)", r);
+            int64_t at = -1; CHECK(!ua_read(client->memory, &at, REG_OUT, sizeof(at)) && at == 32);
+            if ((r = reg_write_all(fd, REG_DATA, 4))) reg_fail(commit, name, "patch_file:write(4)", r);
+            if ((r = call(CIUKI_SYS_CLOSE, (uint32_t)fd, 0, 0, 0, 0))) reg_fail(commit, name, "patch_file:close", r);
+        }
+        if ((fd = reg_open(path, O_RDWR, 0)) < 0) reg_fail(commit, name, pass ? "sync_file_2:open(O_RDWR)" : "sync_file:open(O_RDWR)", fd);
+        if ((r = call(CIUKI_SYS_FSYNC, (uint32_t)fd, 0, 0, 0, 0))) reg_fail(commit, name, pass ? "sync_file_2:fsync" : "sync_file:fsync", r);
+        if ((r = call(CIUKI_SYS_CLOSE, (uint32_t)fd, 0, 0, 0, 0))) reg_fail(commit, name, pass ? "sync_file_2:close" : "sync_file:close", r);
+    }
+    /* read_file of the next w32srv start: open O_RDONLY, fstat, read all. */
+    if ((fd = reg_open(path, O_RDONLY, 0)) < 0) reg_fail(commit, name, "verify:open(O_RDONLY)", fd);
+    if ((r = call(CIUKI_SYS_FSTAT, (uint32_t)fd, REG_OUT, 0, 0, 0))) reg_fail(commit, name, "verify:fstat", r);
+    struct ciuki_stat st; CHECK(!ua_read(client->memory, &st, REG_OUT, sizeof(st)));
+    if (st.st_size != n) { fprintf(stderr, "size %lld expected %u\n", (long long)st.st_size, n); reg_fail(commit, name, "verify:size", -EIO); }
+    uint32_t got = 0;
+    while (got < n) {
+        r = call(CIUKI_SYS_READ, (uint32_t)fd, REG_DATA + got, n - got, 0, 0);
+        if (r <= 0) reg_fail(commit, name, "verify:read", r ? r : -EIO);
+        got += (uint32_t)r;
+    }
+    static uint8_t back[2 * PAGE_SIZE]; CHECK(!ua_read(client->memory, back, REG_DATA, n));
+    if (memcmp(back, b, n)) reg_fail(commit, name, "verify:bytes", -EIO);
+    if ((r = call(CIUKI_SYS_CLOSE, (uint32_t)fd, 0, 0, 0, 0))) reg_fail(commit, name, "verify:close", r);
+}
+static uint32_t reg_record(uint8_t *b, unsigned commit)
+{
+    uint32_t n = 56; unsigned atoms = commit, windows = commit / 3;
+    n += atoms * 25u + windows * 41u; CHECK(n <= REG_DATA_MAX);
+    memset(b, 0, n); memcpy(b, "CRS1", 4); reg_put32(b + 4, 1); reg_put32(b + 12, commit + 1); reg_put32(b + 20, n - 40);
+    reg_put32(b + 24, 0x5a5a0000u + commit); reg_put32(b + 28, 0xa5a50000u + commit);
+    reg_put32(b + 40, 1 + 1024u * (commit + 1)); reg_put32(b + 44, 0xc000 + atoms); reg_put32(b + 48, atoms); reg_put32(b + 52, windows);
+    uint8_t *p = b + 56;
+    for (unsigned i = 0; i < atoms; i++) { reg_put32(p, 0xc000 + i); reg_put32(p + 4, 5); reg_put32(p + 8, 1); reg_put32(p + 12, 9); snprintf((char *)p + 16, 9, "atom%04u", i); p += 25; }
+    for (unsigned i = 0; i < windows; i++) { for (unsigned j = 0; j < 24; j++) p[j] = (uint8_t)(j + i + commit); reg_put32(p + 24, 13); snprintf((char *)p + 28, 13, "window%05u", i); p += 41; }
+    CHECK((uint32_t)(p - b) == n); return n;
+}
+static uint32_t reg_hive(uint8_t *b, unsigned commit)
+{
+    uint32_t n = 3797 + commit * 97u; CHECK(n <= REG_DATA_MAX);
+    for (uint32_t i = 0; i < n; i++) b[i] = (uint8_t)(i * 7u + commit * 31u + (i >> 9));
+    memcpy(b, "CRG1", 4); reg_put32(b + 32, 0); return n;
+}
+static void test_registry_commit(void)
+{
+    const char *dir = "/WINDOWS";
+    put_path(REG_PATH, dir); CHECK(call(CIUKI_SYS_MKDIR, REG_PATH, 0755, 0, 0, 0) == 0);
+    static uint8_t b[2 * PAGE_SIZE]; char name[24]; unsigned slot = 0;
+    /* The image ships seeded hives; the service then writes the next slots. */
+    for (unsigned h = 0; h < 2; h++) { snprintf(name, sizeof(name), "%s.CRG.0", h ? "USER" : "SYSTEM"); reg_commit(0, dir, name, b, reg_hive(b, h)); }
+    for (unsigned c = 0; c < 24; c++) {
+        slot = c ? 1 - slot : 0; snprintf(name, sizeof(name), "SERVICE.CRS.%u", slot);
+        reg_commit(c, dir, name, b, reg_record(b, c));
+        if (c % 6 == 5) {
+            snprintf(name, sizeof(name), "%s.CRG.%u", c % 12 == 5 ? "SYSTEM" : "USER", 1 - (c / 6) % 2);
+            reg_commit(c, dir, name, b, reg_hive(b, c));
+        }
+    }
+    all_closed();
+    puts("PASS registry directory commit via syscalls: open O_CREAT|O_TRUNC/write/close, open/fsync/close, open/lseek64/write 4/close, open/fsync/close on SERVICE.CRS.0/1 x24 plus hive flushes, reread exact");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4);
@@ -962,6 +1064,7 @@ int main(int argc, char **argv)
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput();
+    test_registry_commit();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());
     CHECK(pages_used == prior_pages && heap_blocks == prior_heap);

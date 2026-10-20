@@ -99,6 +99,36 @@ rm -f build/host/fs/cursor-game.bin
 build/host/fs/test_cluster_cursor build/host/fs/cursor32.img "$cursor_sha"
 fsck.fat -n build/host/fs/cursor32.img > /dev/null
 rm -f build/host/fs/cursor32.img
+# w32srv registry directory commit (apps/w32srv/directory.c over posix_io.c)
+# replayed on the production FAT32/VFS with the guest's 4 KiB clusters and an
+# mtools-made C:\WINDOWS; first with the F1 write gate closed (negative
+# control: EROFS at open, the w32-dialogs symptom on image ec9f5854), then
+# open. The slots it leaves are read back independently with mtools.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    tests/host/fs/fake.c tests/host/fs/test_registry_commit.c -o build/host/fs/test_registry_commit
+rm -rf build/host/fs/registry32.img build/host/fs/registry-expect build/host/fs/registry-seed-*.bin build/host/fs/registry-mtools-*.bin
+truncate -s 288M build/host/fs/registry32.img
+mkfs.fat --invariant -F 32 -S 512 -s 8 -f 2 -i 00C1A0E9 build/host/fs/registry32.img > /dev/null
+python3 - build/host/fs/registry-seed-system.bin build/host/fs/registry-seed-user.bin <<'PY'
+import sys
+for path, size, salt in ((sys.argv[1], 6381, 0), (sys.argv[2], 3797, 1)):
+    open(path, 'wb').write(b'CRG1' + bytes((i * 13 + salt) & 255 for i in range(size - 4)))
+PY
+MTOOLSRC=build/host/fs/mtoolsrc mmd -i build/host/fs/registry32.img ::/WINDOWS ::/WINDOWS/SYSTEM ::/WINDOWS/CRASH
+MTOOLSRC=build/host/fs/mtoolsrc mcopy -i build/host/fs/registry32.img build/host/fs/registry-seed-system.bin ::/WINDOWS/SYSTEM.CRG.0
+MTOOLSRC=build/host/fs/mtoolsrc mcopy -i build/host/fs/registry32.img build/host/fs/registry-seed-user.bin ::/WINDOWS/USER.CRG.0
+mkdir -p build/host/fs/registry-expect
+build/host/fs/test_registry_commit build/host/fs/registry32.img build/host/fs/registry-expect
+fsck.fat -n build/host/fs/registry32.img > /dev/null
+for slot in 0 1; do
+    MTOOLSRC=build/host/fs/mtoolsrc mcopy -n -i build/host/fs/registry32.img "::/WINDOWS/SERVICE.CRS.$slot" "build/host/fs/registry-mtools-$slot.bin"
+    cmp "build/host/fs/registry-expect/SERVICE.CRS.$slot" "build/host/fs/registry-mtools-$slot.bin"
+done
+printf '%s\n' 'PASS registry-commit mtools readback: SERVICE.CRS.0/1 byte-exact, fsck clean'
+rm -rf build/host/fs/registry32.img build/host/fs/registry-expect build/host/fs/registry-seed-*.bin build/host/fs/registry-mtools-*.bin
 # F1-85: actual controller, ledger profiles, stream priority/cancellation, FAT EOF.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
