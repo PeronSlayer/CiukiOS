@@ -5,6 +5,7 @@
 #include "win32_adapter.h"
 #include "../../src/probes/desktop_v3/controller.h"
 #include "../../src/probes/win32_dialogs/controller.h"
+#include "../../src/probes/win32_upper/controller.h"
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
@@ -151,4 +152,35 @@ void desk_dialogs_fixture_tick(struct desktop *d)
     dialogs_pending=0;
     if(e){desk_v3_fixture_report("case=w32-dialogs child=0");return;}
     dialogs_spawn();
+}
+/* f5-20D w32-upper-dlls: the same deferral as the dialogs fixture. The reused
+ * Wine DLLs (comctl32, comdlg32, riched20, riched32) register window classes
+ * in DllMain, which needs the user service registered, so the spawn waits
+ * for one registry round trip to succeed (15 s bound). */
+static int upper_active,upper_pending;
+static uint64_t upper_deadline;
+int desk_upper_fixture_active(void){return upper_active;}
+static int upper_spawn(void)
+{
+    char *argv[]={W32_UPPER_PATH,NULL};
+    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
+    char line[64];snprintf(line,sizeof(line),"case=w32-upper-dlls child=%d",pid<0 ? 0 : pid);
+    desk_v3_fixture_report(line);
+    return pid<0 ? -errno : pid;
+}
+int desk_upper_fixture_begin(struct desktop *d)
+{
+    upper_active=1;upper_pending=1;upper_deadline=d->now_ns+15000000000ull;
+    return 0;
+}
+void desk_upper_fixture_tick(struct desktop *d)
+{
+    if(!upper_pending)return;
+    unsigned h=0;int e=registry(W32R_OPEN,W32R_HKLM,"Software","",NULL,&h);
+    if(!e && h)registry(W32R_CLOSE,h,"","",NULL,NULL);
+    if(e && d->now_ns<upper_deadline)return;
+    upper_pending=0;
+    if(e){desk_v3_fixture_report("case=w32-upper-dlls child=0");return;}
+    upper_spawn();
 }

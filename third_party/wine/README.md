@@ -60,7 +60,38 @@ SHELL32 icon-format filter 0006, the KERNELBASE retarget and compile-in
 0007/0008, the SHELL32 Wine-private call removal 0009 and the MSVCRT C-locale
 code page 0010). `scripts/build_image.py` stages qualified reused PEs in the
 image's builtin store, with this directory's LICENSE, COPYING.LIB, AUTHORS,
-SOURCE-OFFER.txt, PATCHES.md and README.md as `/system/licenses/WINE-*`. No PE
-is qualified yet (lead decision: MSVCRT, whose H0/H1 evidence is recorded in
-`config/wine-upper.json`, is staged once a cached upper build is part of
-`make build-full`), so no reused PE is distributed.
+SOURCE-OFFER.txt, PATCHES.md and README.md as `/system/licenses/WINE-*`.
+
+### F5-20D: the reused PEs ship in the image
+
+`make build-full` builds the reused DLLs as a cached step (`make upper`,
+`scripts/win32/wine_upper.py cached-build`, output `build/win32/upper`), so the
+canonical image now **distributes sixteen Wine 10.0 PEs under
+LGPL-2.1-or-later**: advpack, cabinet, combase, comctl32, comdlg32, coml2,
+msvcrt, ole32, oleaut32, riched20, riched32, rpcrt4, setupapi, shcore, shell32
+and shlwapi (`config/wine-upper.json`, `dlls.*.qualified`; IMM32 is built and
+measured but not reused and never staged). Each is qualified by its recorded
+H0 binding and H1 DllMain evidence on that exact SHA-256, and the guest case
+`w32-upper-dlls-qemu-t23` is the gate for their use.
+
+Patches applied to the unmodified Wine 10.0 archive, in this order (details in
+PATCHES.md, hashes in `config/wine-upper.json`):
+
+1. 0001 in-process RPC only; 2. 0002 no RPCSS activation; 3. 0003 SetupDi
+unsupported; 4. 0004 single MSVCRT; 5. 0005 builtin-region image bases;
+6. 0006 SHELL32 icon-format filter (Windows 98 formats only); 7. 0007
+KERNELBASE import retarget; 8. 0008 KERNELBASE path/string code compiled into
+SHLWAPI and OLE32; 9. 0009 SHELL32 Wine-private calls removed; 10. 0010 MSVCRT
+single-byte C locale.
+
+Obligations that come with distributing these PEs: the LGPL-2.1 text
+(COPYING.LIB), Wine's LICENSE and AUTHORS, this README, PATCHES.md and
+SOURCE-OFFER.txt are in the image as `/system/licenses/WINE-*`; the
+bundled musl and zlib notices (`musl-COPYRIGHT.txt`, `zlib-NOTICE.txt`, copied
+from the hash-pinned Wine archive) accompany the reused MSVCRT and CABINET
+under their upstream terms. The
+corresponding source (the exact archive named by `config/wine-pin.json`, the
+patches in `patches/`, the complete recipe and helpers in `scripts/win32/`,
+the pin and `config/wine-upper.json`) must accompany any published copy of the
+image, as described in SOURCE-OFFER.txt. The users may replace any of the PEs
+by rebuilding them with that source (`make upper`).

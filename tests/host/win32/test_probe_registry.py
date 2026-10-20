@@ -1,0 +1,89 @@
+"""F5 probe names: the kernel selector, the loader table and the runner model agree.
+
+A name missing from the loader table is refused with L:SELECT_ERROR before the
+kernel ever sees it, and a name missing from the selector never starts (the
+f5-17B lead note, 2026-10-20). The three sources are read as text.
+SPDX-License-Identifier: LGPL-2.1-or-later
+"""
+import json
+from pathlib import Path
+import re
+import sys
+import unittest
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / 'scripts/test'))
+import loader_model
+
+# Named by the f5-17B lead note: their owners (f5-05B and f5-06) must supply
+# guest drivers or retire the cases. Neither production table registers them.
+UNREGISTERED = {'w32-fixtures', 'w32-kernel32'}
+
+
+def selector_names():
+    text = (ROOT / 'src/kernel/probes/selector.c').read_text()
+    body = re.search(r'f5_names\[\]\s*=\s*\{([^}]*)\}', text).group(1)
+    return re.findall(r'"([^"]+)"', body)
+
+
+def loader_names():
+    text = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+    row = re.search(r'^f5_probe_names db (.*)$', text, re.M).group(1)
+    items = [part.strip() for part in row.split(',')]
+    names = []
+    for item in items:
+        if item.startswith("'"):
+            names.append(item.strip("'"))
+        else:
+            assert item == '0', item
+    return names, items
+
+
+class ProbeRegistryTests(unittest.TestCase):
+    def test_kernel_and_loader_tables_are_the_same_list(self):
+        loader, items = loader_names()
+        self.assertEqual(selector_names(), loader)
+        self.assertEqual(items[-2:], ['0', '0'], 'the table ends with an empty name')
+        self.assertEqual(len(set(loader)), len(loader))
+
+    def test_runner_model_matches_the_production_tables(self):
+        self.assertEqual(list(loader_model.F5_PROBES), selector_names())
+
+    def test_suite_selectors_are_registered_or_explicitly_pending_with_owners(self):
+        suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
+        pending = set()
+        for case in suite['cases']:
+            name = case['selector'].split()[0].removeprefix('f5:')
+            self.assertEqual(name, case['probe'], case['id'])
+            if name not in selector_names():
+                pending.add(name)
+                self.assertNotIn(name, loader_names()[0])
+                self.assertTrue(case.get('integration_pending'), case['id'])
+                with self.assertRaises(ValueError):
+                    loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
+            else:
+                self.assertIn(name, loader_names()[0])
+                loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
+        self.assertLessEqual(UNREGISTERED, pending)
+
+    def test_every_registered_probe_has_its_registration_and_a_suite_case(self):
+        suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
+        probes = {case['probe'] for case in suite['cases']}
+        sources = ''.join(p.read_text() for p in (ROOT / 'src/kernel/probes').glob('*.c'))
+        for name in selector_names():
+            if name == 'f5-core':
+                continue
+            self.assertIn(name, probes, name)
+            self.assertIn(f'CIUKI_F5_PROBE("{name}"', sources, name)
+
+    def test_upper_dlls_case_selector_is_accepted_by_the_model(self):
+        case = next(c for c in json.loads((ROOT / 'tests/suites/f5-core.json').read_text())['cases']
+                    if c['probe'] == 'w32-upper-dlls')
+        picked = loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
+        self.assertEqual((picked['phase'], picked['probe']), (5, 'w32-upper-dlls'))
+        self.assertIn('w32-upper-dlls', selector_names())
+        self.assertIn('w32-upper-dlls', loader_names()[0])
+
+
+if __name__ == '__main__':
+    unittest.main()

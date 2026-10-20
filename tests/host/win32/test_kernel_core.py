@@ -101,9 +101,14 @@ class KernelCoreTests(unittest.TestCase):
             if case['probe']=='w32-upper-dlls':
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-upper-dlls run={run_id}')
-                self.assertEqual(case['expected']['predicates'][0]['fields']['dlls'],{'eq':18})
+                # f5-20D: one record per staged DLL, then the totals and the teardown.
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
-                                 ['upper_dlls','upper_teardown'])
+                                 ['fixture','upper_dll','upper_dlls','upper_teardown'])
+                upper=json.loads((ROOT/'config/wine-upper.json').read_text())
+                staged=sum(1 for r in upper['dlls'].values() if r['qualified'])
+                self.assertEqual(case['expected']['predicates'][1]['exact_count'],staged)
+                self.assertEqual(case['expected']['predicates'][2]['fields']['dlls'],{'eq':staged})
+                self.assertIn('CIUKI_F5_PROBE("w32-upper-dlls"',(ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 continue
             if case['probe']=='w32-dialogs':
                 self.assertIn('authored, unrun',case['integration_pending'])
@@ -167,10 +172,16 @@ class KernelCoreTests(unittest.TestCase):
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['indexed_640480','indexed_320200','lease'])
                 continue
+            if case['probe'] in ('w32-fixtures','w32-kernel32'):
+                # f5-17B lead note: cases await their owners' guest drivers;
+                # the host model must reject them just like both real tables.
+                with self.assertRaises(ValueError):
+                    selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
+                continue
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])
-            if case['probe'] in ('w32-objects','w32-fixtures','w32-kernel32'):
+            if case['probe']=='w32-objects':
                 continue
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})

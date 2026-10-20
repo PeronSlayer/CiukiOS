@@ -1,6 +1,6 @@
 .PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
-        fetch-costa fetch-network-stack sdk lua desktop apps
+        fetch-costa fetch-network-stack sdk lua desktop apps upper
 
 # Heavy builds run in a capped scope (see AGENTS.md).
 CAP = systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=1G --
@@ -25,6 +25,7 @@ help:
 	@echo "  make lua             - build/check pinned Lua and luac (LUA_ARGS=...)"
 	@echo "  make desktop         - build/check ring-3 desktop, demo, libdeskui, Files, Tasks, CiukNote and approved Ciuki portrait"
 	@echo "  make apps            - build/check every SDK application (Lua, desktop programs) and build/apps/manifest.json"
+	@echo "  make upper           - cached reused Wine DLL build (build/win32/upper): rebuilt only when the archive, patches or core exports change"
 	@echo "  make kernel          - build only $(KERNEL)"
 	@echo "  make image           - build only the image from the existing kernel"
 	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
@@ -36,8 +37,11 @@ help:
 	@echo "Contracts: docs/design/foundations-transition.md, f0-acceptance.md, test-architecture.md"
 
 # The image needs the kernel: keep the order explicit even under make -j.
+# The reused Wine DLLs (f5-20D) are audited against the core PEs that apps
+# built and staged by image: apps -> upper -> image.
 build-full: kernel
 	@$(MAKE) --no-print-directory apps
+	@$(MAKE) --no-print-directory upper
 	@$(MAKE) --no-print-directory image
 
 sdk:
@@ -56,6 +60,14 @@ desktop: $(SDK_MANIFEST)
 
 apps: $(SDK_MANIFEST)
 	@$(CAP) python3 apps/build_apps.py $(LUA_ARGS)
+
+# Cached per (Wine archive hash, patch set and recipe hash, core export
+# surface); a rebuild or re-audit is logged with its reason; never downloads;
+# independent of `make apps`. config/wine-upper.json's core-DLL hashes are
+# refreshed here (a semantic difference fails the build: wine_upper.py
+# refresh-audit after review). Kept by `make clean`, like the SDK.
+upper:
+	@$(CAP) python3 scripts/win32/wine_upper.py cached-build
 
 kernel:
 	@python3 scripts/build_kernel.py
@@ -77,7 +89,7 @@ qemu-run-full:
 
 clean:
 	@rm -rf build/f0 build/apps build/test-runs build/host
-	@echo "F0 outputs removed; build/external, build/downloads, build/tools and build/releases kept"
+	@echo "F0 outputs removed; build/external, build/downloads, build/tools, build/win32/upper and build/releases kept"
 
 # ---- 0.8 line (kept buildable until its components are migrated or retired;
 # ---- the canonical 0.8 build is branch legacy-0.8) ------------------------

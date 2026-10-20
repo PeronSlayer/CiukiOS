@@ -1,5 +1,6 @@
 {
   "main": "suspended",
   "reason": "Foundations transition to the 32-bit kernel: no main prereleases until the new image passes the F1 gate. The 0.8 line lives on branch legacy-0.8; b849 is its preserved release.",
-  "decision": "dev_diary/2026-10-09-06-decisione-fondamenta-32bit.md"
+  "decision": "dev_diary/2026-10-09-06-decisione-fondamenta-32bit.md",
+  "licensing": "Since f5-20D the image distributes sixteen reused Wine 10.0 PEs (LGPL-2.1-or-later, config/wine-upper.json). Before any publication resumes, the release must carry their corresponding source and notices: the pinned Wine archive, third_party/wine/patches/, the complete scripts/win32/ recipe and helpers, config/wine-pin.json and config/wine-upper.json, with third_party/wine/SOURCE-OFFER.txt (LGPL-2.1 sections 4 and 6); a re-qualified Windows bundle for the new image is also required."
 }

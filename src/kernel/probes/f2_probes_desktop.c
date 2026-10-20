@@ -111,6 +111,7 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
 #include "../../../apps/desktop/gate.h"
 #include "../../probes/desktop_v3/controller.h"
 #include "../../probes/win32_dialogs/controller.h"
+#include "../../probes/win32_upper/controller.h"
 #include <ciuki/shell_probe.h>
 extern int supervisor_spawn_desktop_probe(struct process **out);
 extern bool probes_desktop_v3_selected(const char *,unsigned,uint32_t);
@@ -132,6 +133,9 @@ static struct {
      * fixture it spawned, the kernel validates and reads it. */
     bool dialogs;
     uint32_t dialogs_child;
+    /* f5-20D w32-upper-dlls: the same arrangement. */
+    bool upper;
+    uint32_t upper_child;
 } native_reports;
 static struct desktop_v3_observation v3_observation;
 static uint32_t native_digest(void);
@@ -239,6 +243,13 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         NATIVE_REQUIRE(!native_reports.dialogs_child,"dialogs_repeat");
         NATIVE_REQUIRE(fixture && fixture->ppid==p->pid && fixture->personality==PROC_WIN32,"dialogs_identity");
         native_reports.dialogs_child=child;
+    } else if (server && native_reports.upper && !strncmp(line,"case=w32-upper-dlls ",20)) {
+        uint32_t child;
+        NATIVE_REQUIRE(report_unsigned(line,"child",&child),"upper_fields");
+        struct process *fixture=proc_find(child);
+        NATIVE_REQUIRE(!native_reports.upper_child,"upper_repeat");
+        NATIVE_REQUIRE(fixture && fixture->ppid==p->pid && fixture->personality==PROC_WIN32,"upper_identity");
+        native_reports.upper_child=child;
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -709,6 +720,103 @@ finished:
     return pass ? 0 : 1;
 }
 CIUKI_F5_PROBE("w32-dialogs",probe_w32_dialogs);
+
+/* f5-20D w32-upper-dlls: the production desktop (gate mode) starts w32srv and
+ * the authored PE fixture /System/Win32/Fixtures/upper-exercise.exe, which
+ * loads every staged reused Wine DLL through the production loader (DllMain
+ * attach), exercises one census entry per DLL and frees them. The kernel
+ * validates the fixture's identity (child of this desktop, Win32 personality),
+ * reads its result block from the fixture's own address space
+ * (src/probes/win32_upper/controller.h), releases it, waits for its exit (the
+ * builtin DLLs' DllMain detach runs there: a fault or a nonzero status fails
+ * the case) and publishes the records. Application output is never evidence.
+ * Authored, unrun (f5-20D). */
+static struct w32_upper_result upper_result;
+static int probe_w32_upper_dlls(void)
+{
+    const char *name="w32-upper-dlls";
+    rec_emit(name,"BEGIN",0);
+    const struct fb_device *display=fbdev_get();
+    if (!display->present || (g_boot.flags & CBI_F_SAFE_MODE) || !native_payload_present()) {
+        rec_emit(name,"END","status=FAIL reason=desktop_unavailable");
+        return 1;
+    }
+    struct desktop_ledger initial,final;
+    struct proc_ledger before,after;
+    desktop_snapshot(&initial); proc_snapshot(&before);
+    struct process *owner=0,*server=0,*child=0;
+    uint32_t generation=0,child_pid=0,exit_code=0xffffffffu;
+    struct w32_upper_result *r=&upper_result;
+    memset(r,0,sizeof(*r));
+    memset(&native_reports,0,sizeof(native_reports));
+    bool valid=false,released=false;
+    const char *failure="controller_setup";
+    bool pass=!proc_prepare(proc_supervisor(),&owner);
+    if (!pass) goto finished;
+    proc_publish(owner,0);
+    int made=supervisor_spawn_desktop_probe(&server);
+    if (made<0) { failure="desktop_launch"; pass=false; goto cleanup; }
+    server->ppid=owner->pid;
+    native_reports.active=true; native_reports.server=server->pid; native_reports.upper=true;
+    uint64_t deadline=g_ticks+10000;
+    while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
+    pass=native_live(server) && native_reports.survivor_stage==2;
+    if (!pass) { failure="survivor_timeout"; goto cleanup; }
+    pass=native_command(server,GATE_SNAPSHOT,&generation) && native_command(server,GATE_UPPER,&generation);
+    if (!pass) { failure=native_command_failure; goto cleanup; }
+    /* The desktop spawns the fixture only once w32srv answers a registry
+     * round trip (as for w32-dialogs); w32srv takes 1-2 s under TCG. */
+    deadline=g_ticks+20000;
+    while (native_live(server) && !native_reports.upper_child && g_ticks<deadline) task_sleep_ms(1);
+    child_pid=native_reports.upper_child;
+    child=child_pid ? proc_find(child_pid) : 0;
+    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32;
+    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",W32_UPPER_PATH,child_pid,server->pid);
+    if (!pass) { failure=native_reports.invalid ? native_reports.invalid_check : "fixture_identity"; goto cleanup; }
+    /* Sixteen DLLs and their dependencies load under TCG: 120 s bound. */
+    deadline=g_ticks+120000;
+    while (g_ticks<deadline && (child=proc_find(child_pid)) && child->state==PROC_LIVE) {
+        if (!ua_read(child->memory,r,W32_UPPER_RESULT_VA,sizeof(*r)) && r->done) break;
+        task_sleep_ms(5);
+    }
+    child=proc_find(child_pid);
+    valid=child && child->state==PROC_LIVE && w32_upper_valid(r);
+    if (valid) {
+        uint32_t one=1;
+        released=!ua_write(child->memory,W32_UPPER_RESULT_VA+offsetof(struct w32_upper_result,release),&one,4);
+    }
+    /* In gate mode the desktop does not reap this child: its exit stays. The
+     * exit runs every builtin DLL's DllMain(DLL_PROCESS_DETACH). */
+    deadline=g_ticks+10000;
+    while ((child=proc_find(child_pid)) && child->state!=PROC_ZOMBIE && g_ticks<deadline) task_sleep_ms(1);
+    if (child && child->state==PROC_ZOMBIE) exit_code=(uint32_t)child->raw_exit;
+    if (valid) w32_upper_publish(r,exit_code,rec_emit);
+    pass=valid && released && !exit_code && !r->errors && r->loaded==r->dlls && r->entries==r->dlls &&
+        r->freed==r->loaded && !r->free_errors;
+    if (!pass) failure=!valid ? "fixture_result" : exit_code ? "fixture_exit" : "fixture_errors";
+cleanup:
+    native_reports.active=false;
+    native_reports.upper=false;
+    if (server) {
+        /* The fixture and w32srv are the desktop's children: collect them
+         * before the desktop so nothing is adopted past the ledger. */
+        static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
+        unsigned listed=proc_list_snapshot(children,CIUKI_PROCESS_MAX,0);
+        for (unsigned i=0;i<listed;i++)
+            if (children[i].ppid==server->pid) desktop_remove(server,proc_find(children[i].pid));
+        desktop_remove(owner,server);
+    }
+    if (owner) { proc_stop(owner,0,0); proc_collect(); }
+finished:
+    desktop_snapshot(&final); proc_snapshot(&after);
+    bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);
+    rec_emit(name,"DATA","case=ledger objects_equal=%u processes_equal=%u",objects,processes);
+    if (pass && (!objects || !processes)) { pass=false; failure="cleanup_ledger"; }
+    if (pass) rec_emit(name,"END","status=PASS");
+    else rec_emit(name,"END","status=FAIL reason=%s",failure ? failure : "unknown");
+    return pass ? 0 : 1;
+}
+CIUKI_F5_PROBE("w32-upper-dlls",probe_w32_upper_dlls);
 
 int supervisor_spawn_standin(struct process *parent, struct process **out)
 {

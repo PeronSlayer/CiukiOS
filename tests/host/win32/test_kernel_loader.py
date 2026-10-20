@@ -188,14 +188,22 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertFalse(any(p.startswith('/WINDOWS/SYSTEM/') for p in sources))
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))
-            # f5-20C: 32 + nine absent-DLL W21 stubs, plus the qualified
-            # reused Wine PEs staged for the image (MSVCRT).
+            # f5-20C: 32 + nine absent-DLL W21 stubs (+ mciavi32.dll, f5-12B);
+            # f5-20D: plus the qualified reused Wine PEs of the cached upper
+            # build, each replacing its census placeholder when one exists.
             upper=json.loads((ROOT/'config/wine-upper.json').read_text())
             staged={n for n,r in upper['dlls'].items() if r['qualified']}
-            self.assertEqual(len(meta['builtins']),42+len(staged))  # f5-12B: + mciavi32.dll
+            core=json.loads((folder/'builtin-store.json').read_text())['dlls']
+            replaced={d['name'] for d in core if d['name'] in staged}
+            self.assertEqual(len(core),42)
+            self.assertEqual(len(meta['builtins']),42-len(replaced)+len(staged))
+            self.assertEqual({d['name'] for d in meta['builtins'] if d.get('wine_reused') is True},staged)
             for name in staged:
                 self.assertIn('/System/Win32/'+name,sources)
                 self.assertIn('/system/licenses/WINE-PATCHES.md',sources)
+                self.assertIn('/system/licenses/WINE-musl-COPYRIGHT.txt',sources)
+                self.assertIn('/system/licenses/WINE-zlib-NOTICE.txt',sources)
+                self.assertEqual(sources['/System/Win32/'+name].parent.name,'staged')
             self.assertIn('/System/Win32/dsetup.dll',sources)
             self.assertIn('/System/Win32/dsetup32.dll',sources)
             self.assertIn('/System/Win32/upper-builtins-inventory.json',sources)

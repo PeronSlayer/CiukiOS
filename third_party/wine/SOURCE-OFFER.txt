@@ -13,9 +13,8 @@ The original CiukiOS DirectSetup identity DLLs (dsetup.dll and dsetup32.dll)
 are also LGPL-2.1-or-later. Their complete corresponding source is supplied
 in sdk/win32/upper/dsetup.c with scripts/win32/upper_dlls.py and the shell
 entry point scripts/win32/build-wine-dlls.sh --installer-builtins.
-They contain no Wine implementation. No reused P4 Wine binary is supplied
-by the current B delivery; there is no claim that a URL-only source offer
-would suffice for distributing one.
+They contain no Wine implementation. There is no claim that a URL-only
+source offer would suffice for distributing a Wine binary.
 
 The referenced Wine sources are Wine 10.0, commit
 b073859675060c9211fcbccfd90e4e87520dc2c2, available at:
@@ -24,12 +23,24 @@ https://dl.winehq.org/wine/source/10.0/wine-10.0.tar.xz
 These links supplement the supplied corresponding source; they do not
 replace an obligation to supply corresponding source with distribution.
 
-For the reused P4 PEs (none distributed yet; MSVCRT is the first to be staged), complete corresponding
-source consists of the exact Wine 10.0 archive (SHA-256 in wine-pin.json),
-third_party/wine/patches/ (applied in the order of PATCHES.md; 0006 is the
-recorded SHELL32 icon filter, applied by scripts/win32/wine_upper.py),
-scripts/win32/wine_upper.py, the shell entry point, that pin and the build
-record config/wine-upper.json. Archive verification and the patch order are enforced by the
-recipe. Any future binary distribution must make this source set available
-from the same distribution location, with these notices; the local ignored
-archive and the upstream links alone are not a published source distribution.
+The CiukiOS image (build/f0/ciukios.img, built by make build-full)
+distributes sixteen reused P4 PEs built from Wine 10.0: advpack.dll,
+cabinet.dll, combase.dll, comctl32.dll, comdlg32.dll, coml2.dll, msvcrt.dll,
+ole32.dll, oleaut32.dll, riched20.dll, riched32.dll, rpcrt4.dll, setupapi.dll,
+shcore.dll, shell32.dll and shlwapi.dll under /System/Win32. Their complete
+corresponding source consists of the exact Wine 10.0 archive (SHA-256 in
+config/wine-pin.json), third_party/wine/patches/ (applied in the order of
+PATCHES.md; 0006 is the recorded SHELL32 icon filter, applied by
+scripts/win32/wine_upper.py), the complete scripts/win32/ recipe and helper
+sources (including wine_upper.py, upper_dlls.py, census.py and wine_audit.py),
+that pin and the build record
+config/wine-upper.json (which holds the SHA-256 of every PE). Archive
+verification and the patch order are enforced by the recipe; "make upper"
+rebuilds the PEs from this source set and the build refuses any PE whose
+SHA-256 differs from the record. Any distribution of the image, or of a bundle
+that contains one of these PEs, must make this source set available from the
+same distribution location, with these notices (LGPL-2.1, sections 4 and 6); the
+local ignored archive and the upstream links alone are not a published source
+distribution. The bundled musl and zlib notices are retained separately as
+musl-COPYRIGHT.txt and zlib-NOTICE.txt, including in the image's WINE-*
+notices; their original source-file notices remain in the exact archive.

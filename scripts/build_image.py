@@ -481,9 +481,9 @@ def win32_payloads(folder=None):
         binary+=struct.pack("<64s65s3xII4H", dll["name"].encode("ascii"), dll["sha256"].encode("ascii"),
                             dll["base"], dll["size"], *dll["version"])
     require((folder / "BUILTIN.BIN").read_bytes() == binary, "builtin binary manifest")
-    # f5-20C: the qualified reused Wine PEs (config/wine-upper.json, MSVCRT
-    # first) join the image's builtin store, verified by hash, with the Wine
-    # licence, notices and source offer.
+    # f5-20D: the qualified reused Wine PEs from the cached upper build join
+    # the image's builtin store, replacing only generated census placeholders,
+    # verified by hash, with the Wine licence, notices and source offer.
     from scripts.win32 import upper_dlls
     staged, staged_dir = upper_dlls.stage_reused(folder, store)
     if staged_dir:
@@ -493,7 +493,8 @@ def win32_payloads(folder=None):
         for dll in staged["dlls"]:
             if dll.get("wine_reused") is True:
                 sources["/System/Win32/" + dll["name"]] = staged_dir / dll["path"]
-        for name in ("LICENSE", "COPYING.LIB", "AUTHORS", "SOURCE-OFFER.txt", "PATCHES.md", "README.md"):
+        for name in ("LICENSE", "COPYING.LIB", "AUTHORS", "SOURCE-OFFER.txt", "PATCHES.md", "README.md",
+                     "musl-COPYRIGHT.txt", "zlib-NOTICE.txt"):
             sources["/system/licenses/WINE-" + name] = ROOT / "third_party/wine" / name
         store = staged
     fixtures=json.loads((folder / "fixtures.json").read_text())

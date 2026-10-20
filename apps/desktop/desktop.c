@@ -1176,6 +1176,9 @@ __attribute__((weak)) void desk_v3_fixture_tick(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_dialogs_fixture_tick(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_dialogs_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_dialogs_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) void desk_upper_fixture_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_upper_fixture_active(void) { return 0; }
+__attribute__((weak)) int desk_upper_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 void desk_v3_fixture_report(const char *line)
 { (void)ciuki_raw_probe_report(CU_PTR(line),(uint32_t)strlen(line),0,0,0,0); }
 __attribute__((weak)) void desk_w32_start(struct desktop *d) { (void)d; }
@@ -1671,7 +1674,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_SHELL);
         desktop_wait("mixer-poll");
         mixer_poll(d,now,&mixer_poll_next);
-        if (!gate || desk_v3_fixture_active() || desk_dialogs_fixture_active()) { desk_w32_poll(d); desktop_wait("storage-poll"); storage_poll(d,now); }
+        if (!gate || desk_v3_fixture_active() || desk_dialogs_fixture_active() || desk_upper_fixture_active()) { desk_w32_poll(d); desktop_wait("storage-poll"); storage_poll(d,now); }
         /* Test pacing suppresses unsolicited heartbeat PINGs only. */
         if (gate) for (int i=0; i<DESK_CLIENTS; i++) d->clients[i].next_ping_ns=UINT64_MAX;
         desktop_wait("heartbeat"); desk_heartbeat(d,now);
@@ -1718,6 +1721,11 @@ int main(int argc, char **argv)
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
                 desk_w32_start(d);
                 if(desk_dialogs_fixture_begin(d)<0)return gate_error("dialogs_fixture",errno,generation);
+                report=1;break;
+            case GATE_UPPER:
+                d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
+                desk_w32_start(d);
+                if(desk_upper_fixture_begin(d)<0)return gate_error("upper_fixture",errno,generation);
                 report=1;break;
             case GATE_INTERACT: interaction=1; report=1; break;
             default: return gate_error("command",EINVAL,generation);
@@ -1851,6 +1859,7 @@ int main(int argc, char **argv)
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         desk_v3_fixture_tick(d);
         desk_dialogs_fixture_tick(d);
+        desk_upper_fixture_tick(d);
         int mode_frame=desk_display_frame_commit(d,redraw);
         if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);

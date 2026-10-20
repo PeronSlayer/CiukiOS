@@ -292,6 +292,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-fixtures run={run_id}",
       "timeout": 90,
+      "integration_pending": "f5-17B lead note: f5-05B must supply the guest driver or retire this authored case; w32-fixtures is absent from both production selector tables and is not selectable",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -731,11 +732,45 @@
       "probe": "w32-upper-dlls",
       "profile": "qemu-t23",
       "selector": "f5:w32-upper-dlls run={run_id}",
-      "timeout": 120,
-      "integration_pending": "authored, unrun: the Wine upper PE builds, patches 0001-0010 and core amendments exist and the host H0/H1 load, DllMain and conformance evidence is recorded (config/wine-upper.json, f5-20C); the lead guest exercise driver is still required and host evidence does not close this gate",
+      "timeout": 180,
+      "integration_pending": "f5-20D: fixture /System/Win32/Fixtures/upper-exercise.exe (src/probes/win32_upper, table generated from the qualified entries of config/wine-upper.json), desktop GATE_UPPER and kernel observer written; the H1 adapter dry-run is implemented in FixtureTests and still needs a host that permits its confinement setup; authored, unrun. DllMain detach of the resident builtins runs at the fixture's exit (exit=0)",
       "expected": {
         "terminal": "END",
         "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "path": "/System/Win32/Fixtures/upper-exercise.exe"
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "upper_dll"
+            },
+            "exact_count": 16,
+            "unique": "name",
+            "fields": {
+              "loaded": {
+                "eq": 1
+              },
+              "load_error": {
+                "eq": 0
+              },
+              "entry": {
+                "eq": 1
+              },
+              "entry_error": {
+                "eq": 0
+              },
+              "freed": {
+                "eq": 1
+              }
+            }
+          },
           {
             "where": {
               "event": "DATA",
@@ -743,21 +778,27 @@
             },
             "fields": {
               "dlls": {
-                "eq": 18
+                "eq": 16
               },
-              "unresolved_imports": {
+              "loaded": {
+                "eq": 16
+              },
+              "load_errors": {
                 "eq": 0
               },
-              "unresolved_forwards": {
+              "entries": {
+                "eq": 16
+              },
+              "entry_errors": {
                 "eq": 0
               },
-              "attach_errors": {
-                "eq": 0
-              },
-              "conformance_errors": {
+              "base_errors": {
                 "eq": 0
               },
               "errors": {
+                "eq": 0
+              },
+              "first_error": {
                 "eq": 0
               }
             }
@@ -768,7 +809,13 @@
               "case": "upper_teardown"
             },
             "fields": {
-              "detach_errors": {
+              "freed": {
+                "eq": 16
+              },
+              "free_errors": {
+                "eq": 0
+              },
+              "exit": {
                 "eq": 0
               },
               "clean": {

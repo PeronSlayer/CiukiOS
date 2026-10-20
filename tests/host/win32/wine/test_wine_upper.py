@@ -8,15 +8,17 @@ import copy
 import json
 from pathlib import Path
 import re
+import signal
 import subprocess
+import sys
 import tempfile
 import unittest
 
-from scripts.win32 import upper_dlls, wine_upper as wu
+from scripts.win32 import upper_dlls, upper_fixture, wine_upper as wu
 from tests.host.win32.adapter import build as adapter
 
 ROOT = Path(__file__).resolve().parents[4]
-BUILD = ROOT / 'build/host/win32/wine-upper'
+BUILD = wu.CACHE  # build/win32/upper: the cached step of make build-full (f5-20D)
 CORE = ROOT / 'build/apps/win32'
 RECORD = json.loads(wu.RECORD.read_text())
 
@@ -101,9 +103,26 @@ class RecordTests(unittest.TestCase):
         changed['dlls']['shlwapi.dll']['base'] = changed['dlls']['shell32.dll']['base']
         with self.assertRaisesRegex(ValueError, 'overlapping'):
             wu.validate(changed)
+        # Qualification follows the evidence: a measured-only build (IMM32,
+        # not in QUALIFIED) and a qualified PE whose H1 attach evidence lost a
+        # DllMain are both rejected.
         changed = copy.deepcopy(RECORD)
-        changed['dlls']['cabinet.dll']['qualified'] = True
+        changed['dlls']['imm32.dll']['qualified'] = True
         with self.assertRaisesRegex(ValueError, 'qualified'):
+            wu.validate(changed)
+        changed = copy.deepcopy(RECORD)
+        changed['load']['h1']['dlls']['cabinet.dll']['attach'][0][1] = 0
+        with self.assertRaisesRegex(ValueError, 'qualified: cabinet.dll'):
+            wu.validate(changed)
+        changed = copy.deepcopy(RECORD)
+        changed['load']['h0']['pe_sha256']['msvcrt.dll'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'qualified: msvcrt.dll'):
+            wu.validate(changed)
+        changed = copy.deepcopy(RECORD)
+        target = changed['load']['h1']['dlls']['msvcrt.dll']
+        for event in ('attach', 'detach'):
+            target[event] = [row for row in target[event] if row[0] != 'msvcrt.dll']
+        with self.assertRaisesRegex(ValueError, 'qualified: msvcrt.dll'):
             wu.validate(changed)
 
     def test_bases_lie_above_the_authored_builtins(self):
@@ -164,11 +183,18 @@ class RecordTests(unittest.TestCase):
                                'license': entry['license'], 'wine_reused': True}]}
             with self.assertRaisesRegex(ValueError, 'mismatched reused Wine PE'):
                 upper_dlls.reject_unqualified_wine(folder, store)
+            (folder / name).unlink()
+            # The measured-only IMM32 build is never qualified: T1 refuses it
+            # even when the bytes match the record.
+            name, entry = 'imm32.dll', RECORD['dlls']['imm32.dll']
+            self.assertFalse(entry['qualified'])
             if (BUILD / 'pe' / name).is_file() and wu.sha(BUILD / 'pe' / name) == entry['sha256']:
                 (folder / name).write_bytes((BUILD / 'pe' / name).read_bytes())
+                store = {'dlls': [{'name': name, 'path': name, 'sha256': entry['sha256'], 'base': entry['base'],
+                                   'license': entry['license'], 'wine_reused': True}]}
                 with self.assertRaisesRegex(ValueError, 'unqualified reused Wine PE'):
                     upper_dlls.reject_unqualified_wine(folder, store)
-            (folder / name).unlink()
+                (folder / name).unlink()
             store['dlls'][0]['name'] = store['dlls'][0]['path'] = 'invented.dll'
             (folder / 'invented.dll').write_bytes(b'x')
             with self.assertRaisesRegex(ValueError, 'unlisted reused Wine PE'):
@@ -233,24 +259,25 @@ class CoreAmendmentTests(unittest.TestCase):
 
 
 class StagingTests(unittest.TestCase):
-    """Qualified reused PEs (MSVCRT) join the image's builtin store, fail closed."""
+    """Qualified reused PEs join the image's builtin store, fail closed."""
 
     def test_qualified_reused_pe_staging(self):
         qualified = sorted(n for n, r in RECORD['dlls'].items() if r['qualified'])
         self.assertTrue(set(qualified) <= set(wu.QUALIFIED))
         for name in qualified:
             self.assertTrue(wu.qualified_by_evidence(RECORD, name), name)
+        # f5-20D: every reused PE with H0/H1 evidence is qualified; IMM32 never.
+        self.assertEqual(set(wu.QUALIFIED), {m + '.dll' for m in wu.MODULES} - set(wu.NOT_REUSED))
+        self.assertEqual(qualified, sorted(wu.QUALIFIED))
+        self.assertIn('msvcrt.dll', qualified)
         store = {'schema': 1, 'dlls': [], 'msvcrt_policy': 'base'}
         with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
             folder, pe = Path(directory), Path(directory) / 'pe'
             pe.mkdir()
-            if not qualified:
-                self.assertEqual(upper_dlls.stage_reused(folder, store, pe), (store, None))
-                return
-            with self.assertRaisesRegex(ValueError, 'missing or changed'):
+            with self.assertRaisesRegex(ValueError, 'missing or changed.*make upper'):
                 upper_dlls.stage_reused(folder, store, pe)
             if not local_build_matches():
-                self.skipTest('local PEs absent')
+                self.skipTest('cached PEs absent (make upper)')
             for name in qualified:
                 (pe / name).write_bytes((BUILD / 'pe' / name).read_bytes())
             staged, out = upper_dlls.stage_reused(folder, store, pe)
@@ -259,9 +286,22 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(json.loads((out / 'builtin-store.json').read_text()), staged)
             raw = (out / 'BUILTIN.BIN').read_bytes()
             self.assertEqual(int.from_bytes(raw[4:8], 'little'), len(qualified))
-            clash = {'schema': 1, 'dlls': [{'name': qualified[0], 'path': qualified[0]}]}
+            versions = {d['name']: d['version'] for d in staged['dlls']}
+            self.assertEqual(versions['msvcrt.dll'], [7, 0, 2600, 2180])
+            self.assertEqual(versions['combase.dll'], [0, 0, 0, 0])  # no resource directory
+            # A same-named builtin is replaced only when it is the generated census placeholder.
+            clash = {'schema': 1, 'dlls': [{'name': qualified[0], 'path': qualified[0], 'sha256': '0' * 64}]}
             with self.assertRaisesRegex(ValueError, 'shadows a builtin'):
                 upper_dlls.stage_reused(folder, clash, pe)
+            (folder / 'generated').mkdir()
+            (folder / 'generated' / 'comctl32.dll').write_bytes(b'census placeholder bytes')
+            placeholder = {'name': 'comctl32.dll', 'path': 'comctl32.dll', 'base': 0x70100000, 'size': 0x5000,
+                           'sha256': wu.hashlib.sha256(b'census placeholder bytes').hexdigest(), 'version': [0, 0, 0, 0]}
+            staged, _ = upper_dlls.stage_reused(folder, {'schema': 1, 'dlls': [placeholder]}, pe)
+            rows = [d for d in staged['dlls'] if d['name'] == 'comctl32.dll']
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['base'], RECORD['dlls']['comctl32.dll']['base'])
+            self.assertEqual(rows[0]['replaces_census_placeholder_sha256'], placeholder['sha256'])
 
 
 class LocalBuildTests(unittest.TestCase):
@@ -389,10 +429,31 @@ def build_h1(directory, reused):
     ntdll = build_h1_ntdll(directory / 'ntdll')
     rows = store_rows(json.loads((CORE / 'builtin-store.json').read_text()), reused, ntdll)
     (directory / 'upper_h1_store.h').write_text(store_header('h1_store', rows))
+    # f5-20D: the guest fixture's source and its generated table (qualified set).
+    (directory / 'upper_fixture_src.h').write_text(
+        '#include "' + str(ROOT / 'src/probes/win32_upper/exercise.c') + '"\n')
+    (directory / 'upper_table.h').write_text(upper_fixture.table_header(upper_fixture.staged_table()))
     return adapter.build(directory / 'core', main, windows=False), ntdll
 
 
 H1_PATTERN = re.compile(r'^DLLMAIN (\S+) reason=(\d+) return=(\d+) gate=(\d+)$')
+
+
+def require_h1_sandbox(test, program):
+    """Skip only a demonstrated confinement blocker before any PE is mapped.
+
+    A SIGSYS in a DLL or in the actual exercise remains a failure. Do not
+    run PE code with the confinement filter disabled.
+    """
+    result = subprocess.run([program, 'sandbox-check'], capture_output=True, text=True, timeout=60)
+    if result.returncode == -signal.SIGSYS and result.stdout in ('', 'H1-SANDBOX enter\n'):
+        # Empty output means host_init/host_signals was killed before main;
+        # this preflight mode cannot map or execute PE code on either path.
+        test.skipTest('host kills i386 adapter startup/confinement with SIGSYS before PE startup')
+    if result.returncode == 77 and 'SANDBOX-UNAVAILABLE' in result.stdout:
+        test.skipTest('seccomp filter refused before PE startup')
+    test.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    test.assertEqual(result.stdout, 'H1-SANDBOX enter\nH1-SANDBOX ready\n')
 
 
 def h1_run(program, name):
@@ -477,6 +538,7 @@ class LoadTests(unittest.TestCase):
         reused = [m + '.dll' for m in wu.MODULES if m + '.dll' not in wu.NOT_REUSED]
         with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
             program, ntdll = build_h1(directory, reused)
+            require_h1_sandbox(self, program)
             ntdll_sha = wu.sha(ntdll)
             results = {name: h1_run(program, name) for name in reused}
         if all(r['outcome'] == 'sandbox-unavailable' for r in results.values()):
@@ -505,6 +567,7 @@ class LoadTests(unittest.TestCase):
         reused = [m + '.dll' for m in wu.MODULES if m + '.dll' not in wu.NOT_REUSED]
         with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
             program, _ = build_h1(directory, reused)
+            require_h1_sandbox(self, program)
             result = subprocess.run([program, 'debugbreak'], capture_output=True, text=True, timeout=60)
         if result.returncode == 77:
             self.skipTest('seccomp filter refused')
@@ -526,6 +589,7 @@ class LoadTests(unittest.TestCase):
         reused = [m + '.dll' for m in wu.MODULES if m + '.dll' not in wu.NOT_REUSED]
         with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
             program, ntdll = build_h1(directory, reused)
+            require_h1_sandbox(self, program)
             ntdll_sha = wu.sha(ntdll)
             results = {}
             for module, info in sorted(programs.items()):
@@ -543,6 +607,145 @@ class LoadTests(unittest.TestCase):
         if recorded and RECORD['conformance'].get('core_pe_sha256') == core_hashes():
             self.assertEqual({k: v['outcome'] for k, v in results.items()},
                              {k: v['outcome'] for k, v in recorded.items()})
+
+
+SUITE = ROOT / 'tests/suites/f5-core.json'
+
+
+def upper_case():
+    return next(c for c in json.loads(SUITE.read_text())['cases'] if c['id'] == 'w32-upper-dlls-qemu-t23')
+
+
+def exercise_exports():
+    """{dll: [exports the exercise looks up]} from the PROC(...) lines of each
+    `same(name, "x.dll")` branch of src/probes/win32_upper/exercise.c."""
+    text = (ROOT / 'src/probes/win32_upper/exercise.c').read_text()
+    branches = re.split(r'if \(same\(name, "([a-z0-9]+\.dll)"\)\) \{', text)[1:]
+    return {dll: re.findall(r'\bPROC\((\w+),', body.split('\n    }\n')[0])
+            for dll, body in zip(branches[::2], branches[1::2])}
+
+
+class FixtureTests(unittest.TestCase):
+    """f5-20D: the w32-upper-dlls guest fixture and its suite case."""
+
+    def test_table_exercise_and_suite_follow_the_staged_set(self):
+        staged = upper_fixture.staged_table()
+        names = [n for n, _ in staged]
+        self.assertEqual(sorted(names), sorted(wu.QUALIFIED))
+        self.assertEqual([b for _, b in staged], sorted(b for _, b in staged))
+        self.assertEqual(len(names), len(set(names)))
+        self.assertLessEqual(len(names), 24)  # W32_UPPER_MAX
+        # Every staged DLL has its census entry, and no exercise is orphaned.
+        self.assertEqual(sorted(exercise_exports()), sorted(names))
+        for dll, entries in exercise_exports().items():
+            self.assertTrue(entries, dll)
+        # The suite case counts what the table holds.
+        case = upper_case()
+        predicates = {p['where']['case']: p for p in case['expected']['predicates']}
+        self.assertEqual(predicates['upper_dll']['exact_count'], len(names))
+        for field in ('dlls', 'loaded', 'entries'):
+            self.assertEqual(predicates['upper_dlls']['fields'][field], {'eq': len(names)})
+        self.assertEqual(predicates['upper_teardown']['fields']['freed'], {'eq': len(names)})
+        header = upper_fixture.table_header(staged)
+        for name, base in staged:
+            self.assertIn(f'{{"{name}", 0x{base:08x}u}}', header)
+
+    def test_census_entries_are_exports_of_the_built_pes(self):
+        if not local_build_matches():
+            self.skipTest('cached PEs absent (make upper)')
+        from scripts.win32 import census
+        for dll, entries in exercise_exports().items():
+            info = census.inspect((BUILD / 'pe' / dll).read_bytes())
+            exported = {n for row in info['exports'] for n in row['names']}
+            for entry in entries:
+                self.assertIn(entry, exported, f'{dll}!{entry}')
+
+    def test_fixture_pe_builds_and_imports_only_real_kernel32_exports(self):
+        if not (CORE / 'kernel32.dll').is_file():
+            self.skipTest('core output absent (make apps)')
+        with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
+            image = upper_fixture.build(directory, CORE)
+            self.assertTrue(image.is_file())
+            from scripts.win32 import census
+            info = census.inspect(image.read_bytes())
+            self.assertEqual({row['dll'].lower() for row in info['imports']}, {'kernel32.dll'})
+            # The image build carries the fixture under the controller's path.
+            fixtures = json.loads((CORE / 'fixtures.json').read_text())['files'] if (CORE / 'fixtures.json').is_file() else {}
+            if fixtures:
+                self.assertEqual(fixtures[upper_fixture.NAME], wu.sha(CORE / 'fixtures' / upper_fixture.NAME))
+        self.assertIn('"/System/Win32/Fixtures/' + upper_fixture.NAME + '"',
+                      (ROOT / 'src/probes/win32_upper/controller.h').read_text().replace('W32_UPPER_PATH ', ''))
+
+    def test_h1_fixture_dry_run_against_suite_predicates(self):
+        """The fixture's logic over the production loader on the i386 adapter,
+        published with the kernel probe's record grammar (controller.h) and
+        checked by the runner's evidence parser against the case."""
+        store_path = CORE / 'builtin-store.json'
+        if not local_build_matches() or not store_path.is_file():
+            self.skipTest('local PEs or core outputs absent')
+        sys.path.insert(0, str(ROOT / 'scripts/test'))
+        import evidence
+        reused = [m + '.dll' for m in wu.MODULES if m + '.dll' not in wu.NOT_REUSED]
+        with tempfile.TemporaryDirectory(dir=ROOT / 'build/host/win32') as directory:
+            program, _ = build_h1(directory, reused)
+            require_h1_sandbox(self, program)
+            result = subprocess.run([program, 'fixture'], capture_output=True, text=True, timeout=300)
+        if result.returncode == 77 and 'SANDBOX-UNAVAILABLE' in result.stdout:
+            self.skipTest('seccomp filter refused: PE code cannot be confined on this host')
+        out = result.stdout
+        self.assertEqual(result.returncode, 0, out[-3000:] + result.stderr[-1000:])
+        records = re.findall(r'^RECORD (\S+) (\S+) (.*)$', out, re.M)
+        staged = [n for n, _ in upper_fixture.staged_table()]
+        self.assertEqual(len(records), len(staged) + 2, out[-3000:])
+        # DllMain: every attach TRUE, and every attached DLL detached when the
+        # process ends (builtins stay resident until then).
+        calls = [m.groups() for m in map(H1_PATTERN.match, out.splitlines()) if m]
+        attach = [(n, int(r)) for n, reason, r, _ in calls if reason == '1']
+        detach = [n for n, reason, r, _ in calls if reason == '0']
+        self.assertTrue(all(v == 1 for _, v in attach), attach)
+        self.assertEqual(sorted(n for n, _ in attach), sorted(detach))
+        self.assertTrue(set(staged) <= {n for n, _ in attach}, out[-2000:])
+        self.assertRegex(out, r'DONE detach=\d+ .*allocations=[02] mappings=0')
+        case = upper_case()
+        run = '12345678'
+        body = [('BEGIN', ''), ('DATA', 'case=fixture path=/System/Win32/Fixtures/upper-exercise.exe pid=7 host_dry_run=1')]
+        body += [(event, fields) for probe, event, fields in records if probe == 'w32-upper-dlls']
+        body.append(('END', 'status=PASS'))
+        parser = evidence.Parser(run, 'w32-upper-dlls')
+        lines = []
+        for seq, (event, fields) in enumerate(body, 1):
+            line = f'CIUKI_TEST v=1 run={run} seq={seq:06d} probe=w32-upper-dlls event={event}' + (' ' + fields if fields else '')
+            self.assertLessEqual(len(line), 240, line)
+            lines.append(line)
+            parser.feed(line.encode())
+        parser.check(case['expected'])
+        self.assertEqual(sorted(re.findall(r'case=upper_dll name=(\S+)', '\n'.join(lines))), sorted(staged))
+        # The predicates discriminate: a DLL that failed to load, an entry that
+        # failed, a base that moved, a free that failed or a nonzero exit each
+        # fail the case.
+        for marker, good, bad in (('name=msvcrt.dll', 'loaded=1', 'loaded=0'),
+                                  ('name=shell32.dll', 'entry=1', 'entry=0'),
+                                  ('name=ole32.dll', 'freed=1', 'freed=0'),
+                                  ('case=upper_dlls', 'base_errors=0', 'base_errors=1'),
+                                  ('case=upper_teardown', 'exit=0', 'exit=3'),
+                                  ('case=upper_teardown', 'clean=1', 'clean=0')):
+            self.assertTrue(any(marker in line and good in line for line in lines), marker)
+            negative = evidence.Parser(run, 'w32-upper-dlls')
+            for line in lines:
+                negative.feed((line.replace(good, bad, 1) if marker in line else line).encode())
+            with self.assertRaises(evidence.EvidenceError):
+                negative.check(case['expected'])
+        # A missing DLL record fails the exact count.
+        short = evidence.Parser(run, 'w32-upper-dlls')
+        dropped = next(i for i, line in enumerate(lines) if 'name=riched20.dll' in line)
+        for i, line in enumerate(lines):
+            if i != dropped:
+                short.feed(line.encode())
+        with self.assertRaises(evidence.EvidenceError):
+            short.check(case['expected'])
+        dry = ROOT / 'build/codex/f5-20d-dry-run.log'
+        dry.parent.mkdir(parents=True, exist_ok=True)
+        dry.write_text('\n'.join(lines) + '\n')
 
 
 if __name__ == '__main__':

@@ -19,7 +19,10 @@ Usage: build-wine-dlls.sh [SOURCE_DIRECTORY [OUTPUT_DIRECTORY]]
 --upper-build extracts the SHA-256-checked Wine 10.0 archive afresh, applies
 third_party/wine/patches in order and builds the reused P4 DLLs (plus the
 measured IMM32 and MSVCRT) with clang/lld at fixed builtin-region bases;
-two consecutive runs give identical hashes (config/wine-upper.json).
+two consecutive runs give identical hashes (config/wine-upper.json). The
+default output is the cached build of `make upper` (build/win32/upper,
+scripts/win32/wine_upper.py cached-build), which `make build-full` reuses
+while the archive, the patch set and the core exports are unchanged.
 --upper-decisions audits those PEs against the CiukiOS core PEs
 (default build/apps/win32) and classifies every missing export.
 scripts/win32/wine_upper.py record/render/check update and verify the record.
@@ -41,12 +44,12 @@ case ${1:-} in
   --upper-build)
     [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }
     exec nice -n 19 python3 "$repo/scripts/win32/wine_upper.py" build \
-        "${2:-$repo/build/host/win32/wine-upper}"
+        "${2:-$repo/build/win32/upper}"
     ;;
   --upper-decisions)
     [[ $# -le 3 ]] || { echo 'Too many arguments' >&2; exit 2; }
     exec nice -n 19 python3 "$repo/scripts/win32/wine_upper.py" audit \
-        "${2:-$repo/build/host/win32/wine-upper}" "${3:-$repo/build/apps/win32}"
+        "${2:-$repo/build/win32/upper}" "${3:-$repo/build/apps/win32}"
     ;;
   --installer-builtins)
     [[ $# -le 2 ]] || { echo 'Too many arguments' >&2; exit 2; }

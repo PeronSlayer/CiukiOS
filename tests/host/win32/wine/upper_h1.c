@@ -23,6 +23,14 @@
 #include <ciuki/w32_core.h>
 #include <w32/server.h>
 #include "upper_h1_store.h"
+#include <stdarg.h>
+/* f5-20D: the guest fixture's logic (src/probes/win32_upper/exercise.c, the
+ * same source that is linked as upper-exercise.exe) on the adapter. The test
+ * writes upper_fixture_src.h (an include of that source) and upper_table.h
+ * (scripts/win32/upper_fixture.py table_header) next to this file. */
+#define W32_UPPER_HOST 1
+#include "upper_fixture_src.h"
+#include "upper_table.h"
 
 static struct w32_loader loader;
 static int (*base_invoke)(void *, void *, void *, uint32_t, int);
@@ -388,13 +396,123 @@ static int run_debugbreak(void) {
     return ok ? 0 : 12;
 }
 
+/* Minimal formatter for the controller.h record grammar: %s, %u, %x and
+ * %0Nx (N <= 8), one line per record: RECORD <probe> <event> <fields>. */
+static void emit_number(ULONG v, unsigned base, unsigned width) {
+    char t[12];
+    unsigned n = 0;
+    do {
+        t[n++] = "0123456789abcdef"[v % base];
+        v /= base;
+    } while (v && n < sizeof(t));
+    while (n < width && n < sizeof(t))
+        t[n++] = '0';
+    while (n)
+        host_print((char[]){t[--n], 0});
+}
+
+static void emit_record(const char *probe, const char *event, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    host_print("RECORD ");
+    host_print(probe);
+    host_print(" ");
+    host_print(event);
+    host_print(" ");
+    for (const char *f = format; *f; f++) {
+        if (*f != '%') {
+            host_print((char[]){*f, 0});
+            continue;
+        }
+        unsigned width = 0;
+        if (*++f == '0')
+            for (f++; *f >= '0' && *f <= '9'; f++)
+                width = width * 10 + (unsigned)(*f - '0');
+        if (*f == 's')
+            host_print(va_arg(ap, const char *));
+        else if (*f == 'u')
+            emit_number(va_arg(ap, ULONG), 10, width);
+        else if (*f == 'x')
+            emit_number(va_arg(ap, ULONG), 16, width);
+        else
+            host_print("?");
+    }
+    host_print("\n");
+    va_end(ap);
+}
+
+/* The fixture over the PE KERNEL32 loaded by the production loader: its
+ * LoadLibraryA / GetProcAddress / FreeLibrary / GetModuleHandleA /
+ * GetLastError / LocalFree are the functions the guest PE imports. */
+static struct w32_upper_result fixture_result;
+static int run_fixture(void) {
+    struct w32_module *k32;
+    host.peb.ProcessHeap = RtlCreateHeap(2 /* HEAP_GROWABLE */, 0, 0, 0, 0, 0);
+    if (!host.peb.ProcessHeap)
+        return 7;
+    if (!w32_ldr_load(&loader, "kernel32.dll", 0, &k32))
+        return 10;
+    struct w32_upper_env env;
+    env.load = w32_ldr_proc(&loader, k32, "LoadLibraryA", 0, 0xffffffffu);
+    env.proc = w32_ldr_proc(&loader, k32, "GetProcAddress", 0, 0xffffffffu);
+    env.free = w32_ldr_proc(&loader, k32, "FreeLibrary", 0, 0xffffffffu);
+    env.handle = w32_ldr_proc(&loader, k32, "GetModuleHandleA", 0, 0xffffffffu);
+    env.last_error = w32_ldr_proc(&loader, k32, "GetLastError", 0, 0xffffffffu);
+    env.local_free = w32_ldr_proc(&loader, k32, "LocalFree", 0, 0xffffffffu);
+    if (!env.load || !env.proc || !env.free || !env.handle || !env.last_error || !env.local_free)
+        return 11;
+    struct w32_upper_result *r = &fixture_result;
+    r->magic = W32_UPPER_MAGIC;
+    r->version = W32_UPPER_VERSION;
+    w32_upper_run(&env, W32_UPPER_TABLE, W32_UPPER_TABLE_COUNT, r);
+    r->done = 1;
+    if (w32_upper_valid(r))
+        w32_upper_publish(r, 0, emit_record);
+    else
+        host_print("FAIL fixture result block invalid\n");
+    host_print("RESULT fixture errors=");
+    host_number(r->errors);
+    host_print(" first_error=");
+    host_number(r->first_error);
+    host_print("\n");
+    w32_ldr_shutdown(&loader);
+    RtlDestroyHeap(host.peb.ProcessHeap);
+    host.peb.ProcessHeap = 0;
+    host_print("DONE detach=");
+    host_number(detach_calls);
+    host_print(" attach_true=");
+    host_number(attach_true);
+    host_print(" attach_false=");
+    host_number(attach_false);
+    host_print(" kernel_enosys=");
+    host_number(kernel_enosys);
+    host_print(" server_unsupported=");
+    host_number(server_unsupported);
+    host_print(" allocations=");
+    host_number(host.allocations);
+    host_print(" mappings=");
+    host_number(host.mappings);
+    host_print("\n");
+    return r->errors ? 1 : 0;
+}
+
 int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
+    int preflight = argc == 2 && !w32_strcmp(argv[1], "sandbox-check");
     if (argc != 2 && !exec)
         return 2;
+    /* No PE is mapped in this mode. An outer filter may kill the i386
+     * prctl rather than returning an error; the host test can distinguish
+     * that execution blocker from a SIGSYS after PE execution began. */
+    if (preflight)
+        host_print("H1-SANDBOX enter\n");
     if (!sandbox()) {
         host_print("SANDBOX-UNAVAILABLE seccomp filter refused\n");
         return 77;
+    }
+    if (preflight) {
+        host_print("H1-SANDBOX ready\n");
+        return 0;
     }
     if (!gate_page())
         return 3;
@@ -423,6 +541,8 @@ int host_main(int argc, char **argv) {
         return run_exe(argv[2], argv[3]);
     if (!w32_strcmp(argv[1], "debugbreak"))
         return run_debugbreak();
+    if (!w32_strcmp(argv[1], "fixture"))
+        return run_fixture();
     /* The process heap, as w32_ldr_start_process creates it: by the adapter's
      * own ntdll code (the PE ntdll is unmapped at loader shutdown). */
     host.peb.ProcessHeap = RtlCreateHeap(2 /* HEAP_GROWABLE */, 0, 0, 0, 0, 0);

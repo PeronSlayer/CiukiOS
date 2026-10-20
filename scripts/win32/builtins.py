@@ -111,6 +111,11 @@ def build(out=None):
     from scripts.win32 import dialogs_fixture
     dialogs=dialogs_fixture.build(fixture_source,out)
     hashes[dialogs.name]=hashlib.sha256(dialogs.read_bytes()).hexdigest()
+    # f5-20D: the w32-upper-dlls guest fixture; its table is the qualified
+    # set of config/wine-upper.json, so it does not depend on the upper build.
+    from scripts.win32 import upper_fixture
+    upper=upper_fixture.build(fixture_source,out)
+    hashes[upper.name]=hashlib.sha256(upper.read_bytes()).hexdigest()
     # Same authored PE bytes under a separate, explicitly shimmed identity.
     shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
     hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()

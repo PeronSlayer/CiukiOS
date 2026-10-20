@@ -124,6 +124,17 @@ int w32_kernel32_runtime(void) {
   CHECK(!GlobalUnlock(g) && GetLastError() == 0);
   g = GlobalReAlloc(g, 40, 0x42);
   CHECK(g && GlobalSize(g) == 40 && !GlobalFree(g));
+  /* f5-20D: GMEM_NODISCARD (0x20) with a zero-byte moveable block, as coml2
+   * and ole32 request it for their HGLOBAL lock bytes; GMEM_LOWER (0x1000)
+   * and GMEM_NOTIFY (0x4000) are accepted and ignored; unknown bits fail. */
+  g = GlobalAlloc(2 | 0x20, 0);
+  CHECK(g && GlobalSize(g) == 0 && GlobalLock(g) == 0);
+  g = GlobalReAlloc(g, 24, 0);
+  b = GlobalLock(g);
+  CHECK(g && b && GlobalSize(g) == 24 && !GlobalUnlock(g) && !GlobalFree(g));
+  g = GlobalAlloc(2 | 0x1000 | 0x4000, 8);
+  CHECK(g && !GlobalFree(g));
+  CHECK(!GlobalAlloc(0x8000, 8) && GetLastError() == 87);
   HANDLE event = CreateEventA(0, 0, 0, 0);
   CHECK(event);
   CHECK(WaitForSingleObject(event, 0) == 258);

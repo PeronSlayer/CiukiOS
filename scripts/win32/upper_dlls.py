@@ -375,15 +375,20 @@ def build_absent_stubs(out, base, flags=None):
     return records
 
 
-UPPER_PE = ROOT / 'build/host/win32/wine-upper/pe'
+# The cached upper build of make build-full (make upper; scripts/win32/wine_upper.py cached-build).
+UPPER_PE = ROOT / 'build/win32/upper/pe'
 STAGED_ORIGIN = 'Wine 10.0 reused upper DLL (LGPL-2.1-or-later)'
 
 
 def pe_version(raw):
     """FILEVERSION of VS_VERSION_INFO #1 in its first language (Wine
-    resources are language-neutral, unlike the CiukiOS builtins' 1033)."""
+    resources are language-neutral, unlike the CiukiOS builtins' 1033);
+    [0, 0, 0, 0] for a PE without resources or without a version resource
+    (ADVPACK, COMBASE, COML2, SHCORE, SETUPAPI), as for the core builtins."""
     pe = census.PE(raw)
     rva, size = pe.dirs[2]
+    if not rva or not size:
+        return [0, 0, 0, 0]
     def entry(offset, key=None):
         header = pe.read(rva + offset, 16)
         count = int.from_bytes(header[12:14], 'little') + int.from_bytes(header[14:16], 'little')
@@ -391,8 +396,12 @@ def pe_version(raw):
             e = pe.read(rva + offset + 16 + 8 * i, 8)
             if key is None or int.from_bytes(e[:4], 'little') == key:
                 return int.from_bytes(e[4:], 'little') & 0x7fffffff
-        raise ValueError('reused PE version resource missing')
-    leaf = entry(entry(entry(0, 16), 1))
+        return None
+    kind = entry(0, 16)
+    name = entry(kind, 1) if kind is not None else None
+    leaf = entry(name) if name is not None else None
+    if leaf is None:
+        return [0, 0, 0, 0]
     data = pe.read(rva + leaf, 16)
     blob = pe.read(int.from_bytes(data[:4], 'little'), int.from_bytes(data[4:8], 'little'))
     at = blob.find((0xfeef04bd).to_bytes(4, 'little'))
@@ -402,10 +411,20 @@ def pe_version(raw):
     return [ms >> 16, ms & 65535, ls >> 16, ls & 65535]
 
 
+def census_placeholder(folder, entry):
+    """True when a store entry is the generated census W21 placeholder of its
+    name (byte-identical to the generator's output), which a qualified reused
+    Wine PE of the same name replaces in the image."""
+    generated = Path(folder) / 'generated' / entry['name']
+    return generated.is_file() and sha(generated) == entry['sha256']
+
+
 def stage_reused(folder, store, pe_dir=None):
     """The qualified reused Wine PEs of config/wine-upper.json added to a
     builtin store for the image: verified copies, manifest and BUILTIN.BIN
-    under FOLDER/staged. Returns (store, None) when nothing is qualified."""
+    under FOLDER/staged. A census W21 placeholder of the same name (COMCTL32,
+    COMDLG32, OLE32, SHELL32) is replaced; any other same-named builtin is
+    refused. Returns (store, None) when nothing is qualified."""
     import shutil
     import struct
     record = json.loads(UPPER_RECORD.read_text())
@@ -417,27 +436,36 @@ def stage_reused(folder, store, pe_dir=None):
     if out.exists():
         shutil.rmtree(out)
     out.mkdir()
-    names = {d['name'].lower() for d in store['dlls']}
-    dlls = list(store['dlls'])
+    dlls, replaced = [], {}
+    for entry in store['dlls']:
+        name = entry['name'].lower()
+        if name in qualified:
+            if not census_placeholder(folder, entry):
+                raise ValueError('staged reused Wine PE shadows a builtin: ' + name)
+            replaced[name] = entry['sha256']
+            continue
+        dlls.append(entry)
     for name, entry in qualified.items():
-        if name in names:
-            raise ValueError('staged reused Wine PE shadows a builtin: ' + name)
         source = pe_dir / name
         if not source.is_file() or sha(source) != entry['sha256']:
             raise ValueError('qualified reused Wine PE missing or changed: ' + name +
-                             ' (run scripts/win32/build-wine-dlls.sh --upper-build)')
+                             ' (run make upper: scripts/win32/wine_upper.py cached-build)')
         shutil.copyfile(source, out / name)
         raw = (out / name).read_bytes()
-        dlls.append({'name': name, 'path': name, 'base': entry['base'], 'size': entry['size_of_image'],
-                     'sha256': entry['sha256'], 'version': pe_version(raw),
-                     'license': entry['license'], 'wine_reused': True, 'origin': STAGED_ORIGIN})
+        row = {'name': name, 'path': name, 'base': entry['base'], 'size': entry['size_of_image'],
+               'sha256': entry['sha256'], 'version': pe_version(raw),
+               'license': entry['license'], 'wine_reused': True, 'origin': STAGED_ORIGIN}
+        if name in replaced:
+            row['replaces_census_placeholder_sha256'] = replaced[name]
+        dlls.append(row)
     spans = sorted((d['base'], d['base'] + d['size'], d['name']) for d in dlls)
     for (start, end, name), following in zip(spans, spans[1:]):
         if end > following[0]:
             raise ValueError('staged builtin overlap: ' + name)
     staged = dict(store, dlls=dlls, msvcrt_policy=(
         'msvcrt.dll: Wine 10.0 PE staged as the builtin MSVCRT (config/wine-upper.json, qualified by '
-        'f5-20C H0 binding and H1 DllMain evidence)' if 'msvcrt.dll' in qualified else store.get('msvcrt_policy')))
+        'the recorded H0 binding and H1 DllMain evidence; f5-20D cached upper build)'
+        if 'msvcrt.dll' in qualified else store.get('msvcrt_policy')))
     reject_unqualified_wine(out, {'dlls': [d for d in dlls if d.get('wine_reused') is True]})
     dump(out / 'builtin-store.json', staged)
     binary = struct.pack('<II', 1, len(dlls))
