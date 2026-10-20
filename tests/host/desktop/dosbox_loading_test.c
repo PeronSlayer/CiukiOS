@@ -41,7 +41,21 @@ static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
 static unsigned settings_phase,settings_seen,settings_blur,settings_restore;
-static uint32_t settings_marker;
+static uint32_t settings_original[640 * 480];
+static const struct {
+    unsigned kernel, memory, key, saved_kernel, saved_memory;
+    const char *memory_arg;
+} settings_cases[] = {
+    /* Initial preferences, panel key, expected preferences after closing. */
+    {0, 0, CIUKI_KEY_2, 1, 0, NULL}, /* 11: legacy kernel-only setting */
+    {0, 0, 0,           0, 0, NULL}, /* 12: close with panel open */
+    {0, 1, CIUKI_KEY_2, 1, 1, NULL}, /* 13: kernel choice keeps locked memory */
+    {1, 1, CIUKI_KEY_1, 0, 1, NULL}, /* 14: return to CiukiDOS, keep locked */
+    {1, 1, CIUKI_KEY_3, 1, 0, NULL}, /* 15: paged memory keeps FreeDOS */
+    {1, 0, CIUKI_KEY_4, 1, 1, NULL}, /* 16: locked memory keeps FreeDOS */
+    {0, 0, CIUKI_KEY_2, 1, 1, "--dos-memory=locked"}, /* 17: CLI lock */
+    {0, 1, CIUKI_KEY_2, 1, 0, "--dos-memory=paged"},  /* 18: CLI unlock */
+};
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
 const struct desk_theme *desk_theme = &replay_theme;
@@ -87,10 +101,11 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
     } else if (scenario>=11 && presents && settings_phase<(scenario==12 ? 2u : 6u)) {
         unsigned step=settings_phase++;
         if (step&1) { errno=EAGAIN; return -1; }
-        if (!step) settings_marker=screen[180*640+170];
+        if (!step) memcpy(settings_original,screen,sizeof(screen));
         desk_message(m,DESK_KEY,44);
         desk_put32(m->data+16,CIUKI_INPUT_KEY);
-        desk_put32(m->data+28,step==0 ? CIUKI_KEY_F12 : step==2 ? CIUKI_KEY_2 : CIUKI_KEY_ESCAPE);
+        desk_put32(m->data+28,step==0 ? CIUKI_KEY_F12 : step==2 ? settings_cases[scenario-11].key :
+                   scenario==16 ? CIUKI_KEY_F12 : CIUKI_KEY_ESCAPE);
         desk_put32(m->data+32,1);
     } else if (scenario==12 && settings_phase==2) {
         desk_message(m,DESK_CLOSE_REQUEST,4);
@@ -106,7 +121,10 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     if (op == CIUKI_DOSVM_CREATE) {
         assert(c->surface_fd == 7);
         assert(c->launch.game==(scenario==6 ? 0u : 2u));
-        assert(c->launch.kernel==((scenario==9 || scenario==10) ? 1u : 0u));
+        assert(c->launch.kernel==(scenario>=11 ? settings_cases[scenario-11].kernel :
+                                 (scenario==9 || scenario==10) ? 1u : 0u));
+        assert(c->launch.memory==(scenario==17 ? 1u : scenario==18 ? 0u :
+                                 scenario>=11 ? settings_cases[scenario-11].memory : 0u));
         if (scenario == 2 || scenario==9) { errno = scenario==9 ? EIO : ENOMEM; return -1; }
         c->id = 1; c->generation = 9; return 0;
     }
@@ -155,7 +173,7 @@ void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e) { (void)c; (
 void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32_t colour)
 {
     (void)c; (void)x; (void)y; (void)w; (void)colour;
-    if (!strcmp(s,"DOS kernel")) settings_seen++;
+    if (!strcmp(s,"DOS kernel and memory")) settings_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
 }
@@ -168,7 +186,7 @@ void desk_paint_frame(struct desk_paint *p,int x,int y,int w,int h,const struct 
 { (void)p; (void)x; (void)y; (void)w; (void)h; (void)s; }
 struct du_rect du_intersection(struct du_rect a,struct du_rect b) { (void)b; return a; }
 void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_t ink)
-{ (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel")) c->pixels[y*640+x]=0x123456; }
+{ (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel and memory")) c->pixels[y*640+x]=0x123456; }
 int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
 { du_text_fit(c,b.x,b.y,b.w,s,ink); return 1; }
 void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
@@ -177,14 +195,24 @@ void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,in
 int main(int argc, char **argv)
 {
     assert(argc == 2); scenario = atoi(argv[1]);
-    char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
+    assert(scenario>=0 && scenario<11+(int)(sizeof(settings_cases)/sizeof(settings_cases[0])));
+    char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG",
+                      scenario>=17 ? (char *)settings_cases[scenario-11].memory_arg : NULL};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=freedos-1.3","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
-    if (scenario>=11) assert(!dosbox_setting_save(2,0));
+    if (scenario>=11) {
+        assert(!dosbox_settings_save(2,settings_cases[scenario-11].kernel,settings_cases[scenario-11].memory));
+        assert(dosbox_setting_load(2)==settings_cases[scenario-11].kernel);
+        assert(dosbox_memory_load(2)==settings_cases[scenario-11].memory);
+    }
     int selected=scenario==9 || scenario==10;
-    int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
-    if (selected || scenario==11) assert(dosbox_setting_load(2)==1);
-    if (scenario>=11) assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
-    if (scenario==11) assert(screen[180*640+170]==settings_marker);
+    int result = dosbox_main(selected || scenario>=17 ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    if (selected) assert(dosbox_setting_load(2)==1);
+    if (scenario>=11) {
+        assert(dosbox_setting_load(2)==settings_cases[scenario-11].saved_kernel);
+        assert(dosbox_memory_load(2)==settings_cases[scenario-11].saved_memory);
+        assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
+        if (scenario!=12) assert(!memcmp(screen,settings_original,sizeof(screen)));
+    }
     if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9)
         assert(result == 1 && error_seen && !presents && closed == (scenario != 2 && scenario!=9));
     else assert(!result && presents && !error_seen && closed == 1);
