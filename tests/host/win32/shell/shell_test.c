@@ -127,7 +127,7 @@ static void runonce(void)
     puts("PASS RunServicesOnce HKLM/HKCU insertion order deletion before handoff commit failure replay no Run");
 }
 static uint32_t desktop_call(void *o,unsigned op,unsigned action,uint32_t flags,struct w32r_reply *r,void *data,size_t cap)
-{(void)o;return rpc(99,op,action,0,0,flags,"","",NULL,0,r,data,cap);}
+{(void)o;assert(op!=W32R_SHUTDOWN || action!=W32R_SHUTDOWN_POLL);return rpc(99,op,action,0,0,flags,"","",NULL,0,r,data,cap);}
 static unsigned live=1,killed,launched,last_notice;
 static int living(void *o,uint32_t pid){(void)o;(void)pid;return live;}
 static int terminate(void *o,uint32_t pid){(void)o;(void)pid;live=0;killed++;return 0;}
@@ -143,6 +143,15 @@ static void session(void)
     struct w32r_reply r;
     assert(!rpc(10,W32R_WINDOW_ALLOC,100,0,1,0,"","test",NULL,0,&r,NULL,0));uint32_t hwnd=r.key;
     const struct desk_restart_ops ops={NULL,desktop_call,living,terminate,launch,notice,record};
+    struct desk_restart idle={0};struct w32r_reply idle_result={.version=1};
+    desk_restart_tick(&idle,&ops,server.now);assert(!idle.boot_checked);
+    desk_restart_idle_result(&idle,&ops,&idle_result,server.now);assert(idle.boot_checked && !idle.stage);
+    idle_result.data_bytes=1;idle_result.key=10;idle_result.type=2;
+    desk_restart_idle_result(&idle,&ops,&idle_result,server.now);assert(last_notice==1 && !idle.stage);
+    struct desk_restart boot={0};struct w32r_reply pending_boot={.version=1,.disposition=1};
+    desk_restart_idle_result(&boot,&ops,&pending_boot,server.now);
+    assert(boot.boot_checked && boot.stage==1 && boot.flags==2 && !boot.pid);
+    assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
     for(unsigned force=0;force<3;force++){
         struct desk_restart d={.boot_checked=1};live=1;killed=0;
         assert(!desk_restart_begin(&d,&ops,10,force==1?4:0,server.now));

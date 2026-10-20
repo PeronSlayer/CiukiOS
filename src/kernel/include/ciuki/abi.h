@@ -754,7 +754,9 @@ _Static_assert(sizeof(struct ciuki_media_remove) == 16, "media removal ABI");
 #define CIUKI_CD_ACTION_RESUME 1u
 #define CIUKI_CD_ACTION_STOP 2u
 struct ciuki_media_cd_state {
-    uint32_t version, size, slot;
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
     uint32_t present;        /* 1: an ATAPI drive is bound to this slot */
     uint32_t state;          /* CIUKI_CD_* readiness of the medium */
     uint32_t generation;     /* drive media_generation */
@@ -764,7 +766,10 @@ struct ciuki_media_cd_state {
     uint32_t reserved[3];
 };
 struct ciuki_media_cd_info {
-    uint32_t version, size, slot, generation;
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
     uint32_t capabilities;   /* CIUKI_CD_CAP_* */
     uint32_t volume_levels;  /* page 2Ah bytes 10-11 */
     uint32_t packet_bytes;   /* 12 or 16 */
@@ -773,39 +778,66 @@ struct ciuki_media_cd_info {
     uint8_t reserved[3];
 };
 struct ciuki_media_cd_track {
-    uint8_t number, control, adr, reserved;
+    uint8_t number;
+    uint8_t control;
+    uint8_t adr;
+    uint8_t reserved;
     uint32_t start_lba;
 };
 struct ciuki_media_cd_toc {
-    uint32_t version, size, slot, generation;
-    uint32_t first, last;    /* track numbers, 1..99 */
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
+    uint32_t first;
+    uint32_t last;    /* track numbers, 1..99 */
     uint32_t count;          /* descriptors filled, excluding the lead-out */
     uint32_t leadout_lba;
     struct ciuki_media_cd_track tracks[CIUKI_CD_TRACKS_MAX];
 };
 struct ciuki_media_cd_read {
-    uint32_t version, size, slot, generation;
-    uint32_t lba, sectors;   /* 1..CIUKI_CD_READ_MAX_SECTORS, inside one audio track */
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
+    uint32_t lba;
+    uint32_t sectors;   /* 1..CIUKI_CD_READ_MAX_SECTORS, inside one audio track */
     uint32_t buffer;         /* user address of sectors * 2352 bytes */
     uint32_t done;           /* bytes copied out */
 };
 struct ciuki_media_cd_tray {
-    uint32_t version, size, slot, generation, action;
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
+    uint32_t action;
 };
 struct ciuki_media_cd_play {
-    uint32_t version, size, slot, generation;
-    uint32_t start_lba, end_lba; /* analog PLAY AUDIO MSF 47h; [start, end) inside audio tracks */
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
+    uint32_t start_lba;
+    uint32_t end_lba; /* analog PLAY AUDIO MSF 47h; [start, end) inside audio tracks */
 };
 struct ciuki_media_cd_pause {
-    uint32_t version, size, slot, generation;
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
     uint32_t action;         /* CIUKI_CD_ACTION_* */
     uint32_t reserved;
 };
 struct ciuki_media_cd_position {
-    uint32_t version, size, slot, generation;
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t generation;
     uint32_t audio_status;   /* CIUKI_CD_AUDIO_* */
-    uint32_t track, index;
-    uint32_t absolute_lba, relative_lba;
+    uint32_t track;
+    uint32_t index;
+    uint32_t absolute_lba;
+    uint32_t relative_lba;
     uint32_t reserved[3];
 };
 _Static_assert(sizeof(struct ciuki_media_cd_state) == 48, "media cd state ABI");

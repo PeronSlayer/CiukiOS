@@ -333,6 +333,17 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
             assert(size==sizeof(*v) && v->drive<26);
             *v=media_volumes[v->drive]; return 0;
         }
+        if (op==MEDIA_CD_STATE) {
+            struct ciuki_media_cd_state *cd=record;
+            assert(size==sizeof(*cd) && cd->version==CIUKI_MEDIA_CD_VERSION &&
+                   cd->size==sizeof(*cd) && cd->slot<4);
+            assert(!cd->present && !cd->state && !cd->generation && !cd->audio_ready &&
+                   !cd->mounted && !cd->drive && !cd->reserved[0] && !cd->reserved[1] && !cd->reserved[2]);
+            /* This USB fixture has no ATAPI drive bound to any optical slot. */
+            cd->state=CIUKI_CD_NO_MEDIUM;
+            cd->drive=26;
+            return 0;
+        }
         if (op==MEDIA_GET_BLOCKERS) {
             struct ciuki_media_blockers *b=record;assert(size==sizeof(*b));
             b->count=1;b->programs[0].pid=42;strcpy(b->programs[0].name,"ciuknote");return 0;
@@ -718,6 +729,39 @@ static void key(struct desktop *d,int code) { desk_shell_key(d,code,1); desk_she
 #include "../../../apps/dosbox/autorun.h"
 #include "launch_input_test.h"
 #endif
+static unsigned cd_player_launches;
+static int cd_player_error;
+static int launch_cd_player(struct desktop *d,const struct desk_launch_record *r)
+{
+    (void)d;
+    assert(desk_launch_valid(r));
+    assert(!strcmp(r->label,"CD Player") && !strcmp(r->target,"C:\\WINDOWS\\CDPLAYER.EXE"));
+    assert(!r->arguments[0] && !r->directory[0] && r->show==1);
+    cd_player_launches++;
+    return cd_player_error ? -EIO : 123;
+}
+static void test_cd_player_menu(void)
+{
+    struct desktop d;
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.v3_launch=launch_cd_player;
+    desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+    assert(item_at(&d.sh.menus[0],"CD Player")<0);
+    assert(item_at(&d.sh.menus[0],"Accessories")>=0);
+    desk_menu_close(&d);
+    desk_menu_open(&d,SH_MENU_ACCESSORIES,0,0);
+    int row=item_at(&d.sh.menus[0],"CD Player");
+    assert(row>=0 && !strcmp(d.sh.menus[0].items[row].icon,"media-optical"));
+    assert(d.sh.menus[0].items[row].action==SH_ACT_WIN32_PROGRAM);
+    d.sh.menus[0].hot=row; key(&d,DU_KEY_ENTER);
+    assert(cd_player_launches==1 && !d.program_count && !d.sh.levels);
+    cd_player_error=1;
+    desk_menu_open(&d,SH_MENU_ACCESSORIES,0,0);
+    d.sh.menus[0].hot=item_at(&d.sh.menus[0],"CD Player"); key(&d,DU_KEY_ENTER);
+    assert(cd_player_launches==2 && strstr(d.sh.message_text,"could not be started"));
+    cd_player_error=0; desk_render_release(&d); fake_reset();
+    puts("PASS CD Player: Accessories catalogue, Tango icon, Windows target, Win32 launch and failure dialog; native inventory unchanged");
+}
 static void test_games_menu(void)
 {
     struct desktop d;
@@ -1177,6 +1221,7 @@ int main(int argc,char **argv)
     test_tasks_scenario();
     test_launch_protocol();
     test_note_scenario();
+    test_cd_player_menu();
     test_games_menu();
     test_menu_icons();
     test_launch_timing();

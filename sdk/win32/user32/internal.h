@@ -76,9 +76,10 @@ struct u32_pending_event {
 /* One synchronous w32srv end-session poll per UI thread per interval: a
  * PeekMessage loop must not pay a service round trip on every pass. */
 #define U32_SESSION_POLL_MS 250u
+#define U32_SESSION_FAST_MS 20u
 struct u32_thread {
-  DWORD session_poll;
-  BOOL session_active;
+  DWORD session_poll, session_fast_until;
+  BOOL session_active, session_poll_set, session_fast;
   DWORD id;
   HWND focus, active;
   MSG last;

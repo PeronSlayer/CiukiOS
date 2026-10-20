@@ -66,7 +66,7 @@ BOOL W32API CloseHandle(HANDLE h) {
 }
 #endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
-static unsigned allocations;
+static unsigned allocations,allocation_calls;
 void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
   (void)h;
   (void)flags;
@@ -78,6 +78,7 @@ void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
   p[0] = size;
   p[1] = n;
   allocations++;
+  allocation_calls++;
   return p + 8;
 }
 BOOL W32API HeapFree(HANDLE h, DWORD flags, void *v) {
@@ -215,8 +216,14 @@ int W32API WideCharToMultiByte(DWORD page, DWORD flags, const WCHAR *s, int n,
 }
 static struct wr_server server;
 static UINT exchanges;
+static UINT session_polls;
 DWORD w32r_exchange(const void *r, DWORD n, void *out, DWORD cap, DWORD *used) {
   exchanges++;
+  const struct w32r_request *request=r;
+  if(request->op==W32R_ENDSESSION){
+    CHECK(cap==sizeof(struct w32r_reply));
+    if(request->index==W32R_SESSION_POLL)session_polls++;
+  }
   size_t total = 0;
   DWORD error = wr_dispatch(&server, ui_kernel_pid(), r, n, out, cap, &total);
   *used = total;

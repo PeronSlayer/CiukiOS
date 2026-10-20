@@ -506,7 +506,7 @@ def win32_payloads(folder=None):
         require(sha256(folder / "fixtures" / name) == digest, "fixture hash")
         sources["/System/Win32/Fixtures/" + name]=folder / "fixtures" / name
         if name == "cdplayer.exe":
-            sources["/Programs/CDPLAYER.EXE"]=folder / "fixtures" / name
+            sources["/WINDOWS/CDPLAYER.EXE"]=folder / "fixtures" / name
     # Same pinned source bytes as the native store, visible to file pickers,
     # installers and GetFontData; installed faces share this writable folder.
     native_fonts,_=font_payloads()

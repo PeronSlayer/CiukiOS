@@ -224,34 +224,37 @@ const uint32_t *desk_shell_icon(const char *name, int size)
 }
 
 /* ---- programs ---------------------------------------------------------- */
-struct program_info { const char *name, *label, *icon, *category; };
+/* target is a system PE launched through the existing Win32 service; NULL
+ * uses the native /Programs inventory. Both share this menu catalogue. */
+struct program_info { const char *name, *label, *icon, *category, *target; };
 /* Menu order of the known programs; anything else in /Programs is "developer".
  * Icons: the Tango names of icon_map.c program:* (Files and Task Manager
  * show the same icon for the same program; test_icons.py compares them). */
 static const struct program_info programs[] = {
-    {"ciuknote", "CiukNote", "accessories-text-editor", "programs"},
-    {"files", "Files", "system-file-manager", "programs"},
-    {"tasks", "Task Manager", "utilities-system-monitor", "programs"},
-    {"dosbox", "DOS Box", "utilities-terminal", "programs"},
-    {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs"},   /* the keyboard/mouse input demo */
-    {"lua", "Lua", "text-x-script", "programs"},
-    {"control", "Control Panel", "preferences-desktop", "programs"},
-    {"music", "Music Player", "audio-x-generic", "programs"},
-    {"viewer", "Image Viewer", "image-x-generic", "programs"},
-    {"paint", "CiukPaint", "applications-graphics", "programs"},
-    {"terminal", "Terminal", "utilities-terminal", "programs"},
-    {"calc", "Calculator", "accessories-calculator", "accessories"},
-    {"gfxdemo", "Graphics Demo", "applications-graphics", "accessories"},
-    {"charmap", "Character Map", "accessories-character-map", "accessories"},
-    {"clock", "Clock", "appointment-new", "accessories"},
-    {"help", "CiukiOS Help", "help-browser", "accessories"},
-    {"mixer", "Volume Control", "audio-volume-high", "accessories"},
-    {"regedit", "Registry Editor", "preferences-system", "accessories"},
-    {"viewer", "Image Viewer", "image-x-generic", "accessories"},
-    {"hello", "Hello", "face-smile", "developer"},
-    {"ciukide", "CiukIDE", "applications-development", "developer"},
-    {"tcc", "Tiny C Compiler", "text-x-script", "developer"},
-    {"libc_smoke", "libc smoke test", "applications-system", "developer"},
+    {"ciuknote", "CiukNote", "accessories-text-editor", "programs", NULL},
+    {"files", "Files", "system-file-manager", "programs", NULL},
+    {"tasks", "Task Manager", "utilities-system-monitor", "programs", NULL},
+    {"dosbox", "DOS Box", "utilities-terminal", "programs", NULL},
+    {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs", NULL},   /* the keyboard/mouse input demo */
+    {"lua", "Lua", "text-x-script", "programs", NULL},
+    {"control", "Control Panel", "preferences-desktop", "programs", NULL},
+    {"music", "Music Player", "audio-x-generic", "programs", NULL},
+    {"viewer", "Image Viewer", "image-x-generic", "programs", NULL},
+    {"paint", "CiukPaint", "applications-graphics", "programs", NULL},
+    {"terminal", "Terminal", "utilities-terminal", "programs", NULL},
+    {"cdplayer", "CD Player", "media-optical", "accessories", "C:\\WINDOWS\\CDPLAYER.EXE"},
+    {"calc", "Calculator", "accessories-calculator", "accessories", NULL},
+    {"gfxdemo", "Graphics Demo", "applications-graphics", "accessories", NULL},
+    {"charmap", "Character Map", "accessories-character-map", "accessories", NULL},
+    {"clock", "Clock", "appointment-new", "accessories", NULL},
+    {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
+    {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
+    {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
+    {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
+    {"hello", "Hello", "face-smile", "developer", NULL},
+    {"ciukide", "CiukIDE", "applications-development", "developer", NULL},
+    {"tcc", "Tiny C Compiler", "text-x-script", "developer", NULL},
+    {"libc_smoke", "libc smoke test", "applications-system", "developer", NULL},
 };
 static const struct program_info *program_find(const char *name)
 {
@@ -340,7 +343,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         int developer = 0, accessories = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
-            if (at < 0) continue;
+            if (at < 0 && !(programs[k].target && d->v3_launch)) continue;
             if (!strcmp(programs[k].category, "accessories")) { accessories = 1; continue; }
             if (strcmp(programs[k].category, "programs")) { developer = 1; continue; }
             item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
@@ -356,7 +359,11 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_ACCESSORIES:
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
-            if (at >= 0 && !strcmp(programs[k].category, "accessories")) item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
+            if (strcmp(programs[k].category, "accessories")) continue;
+            if (programs[k].target && d->v3_launch)
+                item(m, programs[k].label, programs[k].icon, SH_ACT_WIN32_PROGRAM, (int)k, 0);
+            else if (at >= 0)
+                item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
         break;
     case SH_MENU_GAMES:
@@ -598,6 +605,22 @@ static void act(struct desktop *d, const struct sh_item *it)
             snprintf(argument,sizeof(argument),"--panel=%s",cp_applets[k].name); launch_named(d,"control",argument); break;
         }
         break;
+    case SH_ACT_WIN32_PROGRAM: {
+        int result=-ENOENT;
+        if (it->arg>=0 && (size_t)it->arg<sizeof(programs)/sizeof(programs[0]) &&
+            programs[it->arg].target && d->v3_launch) {
+            struct desk_launch_record *record=calloc(1,sizeof(*record));
+            if (record) {
+                snprintf(record->label,sizeof(record->label),"%s",programs[it->arg].label);
+                snprintf(record->target,sizeof(record->target),"%s",programs[it->arg].target);
+                record->show=1;
+                result=d->v3_launch(d,record);
+                free(record);
+            } else result=-ENOMEM;
+        }
+        if (result<0) desk_shell_message(d,"Accessories","The selected program could not be started.",1);
+        break;
+    }
     case SH_ACT_WIN32_LINK:
         if (desk_link_launch(d,(unsigned)it->arg)<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
         break;

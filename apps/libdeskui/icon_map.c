@@ -34,6 +34,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
+    {"program:cdplayer", "media-optical"},
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */

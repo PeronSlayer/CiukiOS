@@ -83,7 +83,7 @@ class Win32AdapterTests(unittest.TestCase):
                  'tests/host/desktop/win32_native_lifecycle_test.c']
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
                         '-include',str(ROOT/'tests/host/desktop/replay_base.h'),'-fsanitize=address,undefined',
-                        '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Wl,--wrap=kill',
+                        '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Wl,--wrap=kill','-Wl,--wrap=clock_gettime',
                         '-I'+str(ROOT/'apps/desktop'),'-I'+str(ROOT/'src/kernel/include'),
                         '-I'+str(ROOT/'sdk/win32/include'),'-idirafter',str(ROOT/'sdk/sysroot-overlay/include'),
                         *(str(ROOT/s) for s in sources),'-pthread','-o',str(binary)],check=True,env=env)

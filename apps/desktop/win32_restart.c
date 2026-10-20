@@ -32,27 +32,23 @@ int desk_restart_begin(struct desk_restart *s,const struct desk_restart_ops *o,u
     if(o->notice)o->notice(o->ctx,2,pid,flags);
     return 0;
 }
+void desk_restart_idle_result(struct desk_restart *s,const struct desk_restart_ops *o,const struct w32r_reply *r,uint64_t now)
+{
+    if(s->stage)return;
+    if(r->data_bytes){
+        if(r->type&9u)desk_restart_begin(s,o,r->key,r->type,now);
+        else if(o->notice)o->notice(o->ctx,1,r->key,r->type);
+    }else if(!s->boot_checked){
+        s->boot_checked=1;
+        if(r->disposition)desk_restart_begin(s,o,0,2,now);
+    }
+}
 void desk_restart_tick(struct desk_restart *s,const struct desk_restart_ops *o,uint64_t now)
 {
     struct w32r_reply r;uint32_t e;
-    /* Idle: one synchronous w32srv round trip per DESK_RESTART_IDLE_MS on the
-     * desktop thread (ExitWindowsEx latency stays well under a second); the
-     * pending-work check (a WININIT.INI stat) is asked for only until the boot
-     * check is done. A running restart polls every 20 ms. */
-    if(now<s->next_poll)return;s->next_poll=now+(s->stage?20:DESK_RESTART_IDLE_MS);
-    if(!s->stage){
-        char message[W32R_SESSION_MESSAGE];
-        e=call(o,W32R_SHUTDOWN,W32R_SHUTDOWN_POLL,s->boot_checked?0:1,&r,message,sizeof(message));
-        if(e)return;
-        if(r.data_bytes){
-            if(r.type&9u)desk_restart_begin(s,o,r.key,r.type,now);
-            else if(o->notice)o->notice(o->ctx,1,r.key,r.type);
-        }else if(!s->boot_checked){
-            s->boot_checked=1;
-            if(r.disposition)desk_restart_begin(s,o,0,2,now);
-        }
-        return;
-    }
+    /* Idle RPC belongs to the persistent native worker. Only an active
+     * restart may perform service work here, at the existing 20 ms cadence. */
+    if(!s->stage || now<s->next_poll)return;s->next_poll=now+20;
     if(s->stage==1){
         e=call(o,W32R_ENDSESSION,W32R_SESSION_STATUS,0,&r,NULL,0);
         if(e){finish(s,o,(int)e);return;}

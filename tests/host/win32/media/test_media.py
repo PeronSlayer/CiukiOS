@@ -108,7 +108,10 @@ class Media(unittest.TestCase):
             self.assertFalse(info.get('delay_imports'))
         import json
         suite = json.loads((ROOT/'tests/suites/f5-core.json').read_text())
-        case = next(c for c in suite['cases'] if c['id']=='w32-media-qemu-t23')
+        media = next(c for c in suite['cases'] if c['id']=='w32-media-qemu-t23')
+        self.assertNotIn('fixtures', media)
+        self.assertEqual([p['where']['case'] for p in media['expected']['predicates']], ['media'])
+        case = next(c for c in suite['cases'] if c['id']=='w32-cdaudio-qemu-t23')
         self.assertEqual(case['fixtures'], [{'generator':'xorriso','level':3,'joliet':True,'seed':1}])
         self.assertTrue(any(p['where'].get('case')=='cdaudio' for p in case['expected']['predicates']))
 

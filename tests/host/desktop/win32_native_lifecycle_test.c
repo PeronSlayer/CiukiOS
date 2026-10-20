@@ -8,11 +8,34 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <time.h>
 #include <ciuki/w32_diagnostics.h>
 static unsigned starts,signals;
 static int authorized=1;
 static unsigned native_launches;
 static int readiness;
+static unsigned idle_enabled,idle_calls,idle_finished,idle_boot_checks;
+static uint64_t fixture_ms;
+static pthread_t desktop_thread;
+static pthread_t idle_thread;
+static struct w32r_packet idle_packet;
+int __real_clock_gettime(clockid_t,struct timespec *);
+int __wrap_clock_gettime(clockid_t clock,struct timespec *t)
+{
+    if(clock==CLOCK_MONOTONIC){uint64_t ms=__atomic_load_n(&fixture_ms,__ATOMIC_ACQUIRE);t->tv_sec=(time_t)(ms/1000);t->tv_nsec=(long)(ms%1000)*1000000;return 0;}
+    return __real_clock_gettime(clock,t);
+}
+static uint64_t real_ms(void)
+{struct timespec t;assert(!__real_clock_gettime(CLOCK_MONOTONIC,&t));return (uint64_t)t.tv_sec*1000+(unsigned long)t.tv_nsec/1000000;}
+static void advance(uint64_t ms){__atomic_store_n(&fixture_ms,ms,__ATOMIC_RELEASE);}
+static void wait_for(unsigned *counter,unsigned value)
+{
+    uint64_t end=real_ms()+3000;
+    while(__atomic_load_n(counter,__ATOMIC_ACQUIRE)<value){
+        assert(real_ms()<end);struct timespec t={0,1000000};nanosleep(&t,NULL);
+    }
+}
 int desk_w32_ready(void){return readiness;}
 int desk_program_kind(const char *name){return !strcmp(name,"control") ? DESK_APP_CONTROL : 0;}
 static int launch(struct desktop *d,const struct desk_program *p)
@@ -26,7 +49,10 @@ void desk_shell_message(struct desktop *d,const char *title,const char *text,int
 uint32_t desk_w32_record(void *record,uint32_t bytes)
 {
     if(((struct ciuki_w32_header *)record)->operation==W32_REPORT){assert(bytes==sizeof(struct ciuki_w32_report_args));return 0;}
-    struct w32r_service *a=record;assert(bytes==sizeof(*a));if(a->service==2){a->error=1062;return 0;}assert(a->service==1);
+    struct w32r_service *a=record;assert(bytes==sizeof(*a));if(a->service==2){
+        if(__atomic_load_n(&idle_enabled,__ATOMIC_ACQUIRE)){a->result=1;a->endpoint=7;}else a->error=1062;
+        return 0;
+    }assert(a->service==1);
     if(a->action==1){if(authorized)a->result=1;else a->error=5;}
     else assert(a->action==3);
     return 0;
@@ -40,11 +66,65 @@ int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && signo==SIG
 int desk_add_client(struct desktop *d,int fd){(void)d;(void)fd;assert(0);return -1;}
 int ciuki_channel_pair(int *fds){(void)fds;assert(0);return -1;}
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
-{(void)fd;(void)m;(void)flags;assert(0);return -1;}
+{
+    assert(fd==7 && flags==DONTWAIT && !pthread_equal(pthread_self(),desktop_thread));
+    memcpy(&idle_packet,m->data,sizeof(idle_packet));
+    if(idle_packet.kind==W32R_BEGIN){
+        struct w32r_request r;memcpy(&r,idle_packet.bytes,sizeof(r));
+        assert(r.op==W32R_SHUTDOWN && r.index==W32R_SHUTDOWN_POLL);
+        if(r.flags)__atomic_add_fetch(&idle_boot_checks,1,__ATOMIC_RELEASE);
+        unsigned n=__atomic_add_fetch(&idle_calls,1,__ATOMIC_RELEASE);
+        if(n==1)idle_thread=pthread_self();else assert(pthread_equal(idle_thread,pthread_self()));
+        if(n==1){struct timespec t={2,0};nanosleep(&t,NULL);}
+    }
+    return 0;
+}
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
-{(void)fd;(void)m;(void)flags;assert(0);return -1;}
+{
+    assert(fd==7 && flags==DONTWAIT && !pthread_equal(pthread_self(),desktop_thread));
+    memset(m,0,sizeof(*m));m->length=256;
+    struct w32r_packet p={.version=1,.id=idle_packet.id,.kind=idle_packet.kind,.total=sizeof(struct w32r_reply)};
+    p.offset=p.kind==W32R_READ?sizeof(struct w32r_reply):idle_packet.total;
+    if(p.kind==W32R_READ){struct w32r_reply r={.version=1};memcpy(p.bytes,&r,sizeof(r));__atomic_add_fetch(&idle_finished,1,__ATOMIC_RELEASE);}
+    memcpy(m->data,&p,sizeof(p));return 1;
+}
+static void idle_traffic(struct desktop *d)
+{
+    /* Drain the earlier service-unavailable poll before exposing the fake
+     * endpoint; otherwise that old request would use the newly enabled gate. */
+    for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
+    advance(100000);__atomic_store_n(&idle_enabled,1,__ATOMIC_RELEASE);
+    /* An earlier failed poll can still be in the mailbox. Repeated same-time
+     * frames drain it, then publish exactly one new request. */
+    uint64_t end=real_ms()+1000;
+    while(!__atomic_load_n(&idle_calls,__ATOMIC_ACQUIRE)){
+        assert(real_ms()<end);desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);
+    }
+    uint64_t start=real_ms();desk_w32_poll(d);desk_w32_poll(d);
+    assert(real_ms()-start<50 && __atomic_load_n(&idle_calls,__ATOMIC_ACQUIRE)==1);
+    wait_for(&idle_finished,1);
+    /* Wait for result publication without advancing the fixture clock. */
+    for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
+    advance(104999);desk_w32_poll(d);assert(idle_calls==1);
+    advance(105000);desk_w32_poll(d);wait_for(&idle_finished,2);
+    for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
+    assert(idle_boot_checks==1);
+    d->clients[0].v3_win32_hwnd=123;
+    advance(105499);desk_w32_poll(d);assert(idle_calls==2);
+    advance(105500);desk_w32_poll(d);wait_for(&idle_finished,3);
+    for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
+    d->clients[0].v3_win32_hwnd=0;
+    advance(106000);
+    struct desk_launch_record r={.label="Control",.target="C:\\Programs\\control",.arguments="--panel=display",.show=1};
+    assert(!desk_w32_launch(DESK_W32_ELF,&r));desk_w32_poll(d);wait_for(&idle_finished,4);
+    for(unsigned i=0;i<20;i++){desk_w32_poll(d);struct timespec t={0,1000000};nanosleep(&t,NULL);}
+    advance(110999);desk_w32_poll(d);assert(idle_calls==4);
+    advance(111000);desk_w32_poll(d);wait_for(&idle_finished,5);
+    puts("PASS desktop idle: blocked 2 s RPC off frame thread, one persistent worker, boot once, 500 ms HWND/launch and 5 s quiet intervals");
+}
 int main(void)
 {
+    desktop_thread=pthread_self();
     static struct desktop d;
     authorized=0;desk_w32_start(&d);desk_w32_poll(&d);assert(!starts);
     authorized=1;desk_w32_start(&d);assert(starts==1);
@@ -59,7 +139,9 @@ int main(void)
     desk_w32_child_exited(&d,104,SIGKILL);assert(desk_w32_shutdown()==-EIO && starts==4);
     d.power.state=0;d.launch=launch;d.launch_arg="retained";d.launch_argv[0]="sentinel";
     struct desk_launch_record r={.label="Control",.target="C:\\Programs\\control",.arguments="--panel=display",.show=1};
-    readiness=-EACCES;assert(desk_w32_launch(DESK_W32_PE,&r)==-EACCES && starts==4);readiness=0;
+    /* The production registry ping precedes PE readiness; this fixture has
+     * no service yet, so it must reject the launch at that first barrier. */
+    readiness=-EACCES;assert(desk_w32_launch(DESK_W32_PE,&r)==-EAGAIN && starts==4);readiness=0;
     assert(!desk_w32_launch(DESK_W32_ELF,&r));desk_w32_poll(&d);
     assert(native_launches==1 && !strcmp(d.launch_arg,"retained") && !strcmp(d.launch_argv[0],"sentinel"));
     strcpy(r.directory,"C:\\unsupported-cwd");assert(desk_w32_native_shortcut(&d,&r)==-EOPNOTSUPP);
@@ -70,5 +152,6 @@ int main(void)
     puts("PASS reserved native identity cannot be forged by a similarly named user ELF");
     puts("PASS native shortcut uses existing launcher identity, six-argument bound, retained launch state and explicit unsupported cwd");
     puts("PASS native desktop wiring: exact authorized child, crash/kill restart, flush-exit barrier, no restart during power-off, Cancel resumes service, failed flush blocks power-off");
+    idle_traffic(&d);
     return 0;
 }
