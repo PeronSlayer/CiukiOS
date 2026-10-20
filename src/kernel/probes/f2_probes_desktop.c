@@ -420,6 +420,9 @@ static void native_handles_record(unsigned cycle)
 static int native_crash_isolation(void)
 {
     const char *name="crash-isolation";
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
     struct desktop_ledger initial,final;
     struct proc_ledger before,after;
     desktop_snapshot(&initial); proc_snapshot(&before);
@@ -749,6 +752,9 @@ static int probe_w32_upper_dlls(void)
         rec_emit(name,"END","status=FAIL reason=desktop_unavailable");
         return 1;
     }
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
     struct desktop_ledger initial,final;
     struct proc_ledger before,after;
     desktop_snapshot(&initial); proc_snapshot(&before);

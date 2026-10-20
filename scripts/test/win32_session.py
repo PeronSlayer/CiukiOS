@@ -4,9 +4,22 @@ Existing run.py suites are untouched. Caller supplies monotonic milliseconds,
 QMP, guest records and independent screenshot references; no VM is launched.
 """
 import hashlib
+import json
 import re
+from pathlib import Path
 
 FW_CFG_ITEM = 'opt/it.alcybercloud.ciukios/test'
+
+
+def probe_name(workload, root=Path(__file__).resolve().parents[2]):
+    """Manifest aliases bind a workload's full identity to its short selector.
+
+    Unlisted self-authored host fixtures retain their descriptive name.
+    Production case validation separately requires a manifest workload.
+    """
+    manifest = json.loads((root / 'tests/win32/workloads.json').read_text())
+    return next((row['probe'] for row in manifest['workloads'] if row['id'] == workload),
+                'win32-' + workload)
 
 
 def require(condition, message):
@@ -128,7 +141,7 @@ class InputPlayer:
     def __init__(self, script, request, *, started_at_ms, validated_fw_cfg=False, screen_time=None):
         validate_script(script)
         selected = selector(request, validated_fw_cfg=validated_fw_cfg)
-        require(selected['probe'] == 'win32-'+script['workload'], 'selector/script mismatch')
+        require(selected['probe'] == probe_name(script['workload']), 'selector/script mismatch')
         self.script, self.selected = script, selected
         require(type(started_at_ms) is int and started_at_ms >= 0, 'host launch time required')
         # f5-17B: host ms at which a named screen check matched, or None while
