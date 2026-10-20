@@ -849,6 +849,7 @@ static struct {
     pthread_t thread;
     struct ciuki_media_state state;
     struct ciuki_media_volume volumes[26];
+    struct ciuki_media_cd_state cd_states[4];
     unsigned requested, completed;
     int started, failed, pending, busy, ready, stopping, observed, ok;
     unsigned commit;
@@ -906,6 +907,7 @@ static void *media_run(void *arg)
         pthread_mutex_unlock(&media_worker.lock);
         struct ciuki_media_state state={.version=CIUKI_MEDIA_VERSION,.size=sizeof(state)};
         struct ciuki_media_volume volumes[26]={0};
+        struct ciuki_media_cd_state cd_states[4]={0};
         observer_open(&fd,"/dev/media");
         int observed=fd>=0 && !ciuki_devctl(fd,MEDIA_GET_STATE,&state,sizeof(state));
         int ok=observed;
@@ -913,9 +915,14 @@ static void *media_run(void *arg)
             volumes[i]=(struct ciuki_media_volume){.version=CIUKI_MEDIA_VERSION,.size=sizeof(volumes[i]),.drive=i};
             if (ciuki_devctl(fd,MEDIA_GET_VOLUME,&volumes[i],sizeof(volumes[i]))) ok=0;
         }
+        for (unsigned i=0;ok && i<4;i++) {
+            cd_states[i]=(struct ciuki_media_cd_state){.version=1,.size=sizeof(cd_states[i]),.slot=i};
+            if (ciuki_devctl(fd,MEDIA_CD_STATE,&cd_states[i],sizeof(cd_states[i]))) ok=0;
+        }
         if (!ok) observer_close(&fd);
         pthread_mutex_lock(&media_worker.lock);
         media_worker.state=state; memcpy(media_worker.volumes,volumes,sizeof(volumes));
+        memcpy(media_worker.cd_states,cd_states,sizeof(cd_states));
         media_worker.observed=observed; media_worker.ok=ok;
         media_worker.completed=serial; media_worker.ready=1; media_worker.busy=0;
         pthread_mutex_unlock(&media_worker.lock);
@@ -952,12 +959,13 @@ static void media_poll(struct desktop *d)
     if (serial < media_worker.requested) ready=0;
     struct ciuki_media_state state=media_worker.state;
     struct ciuki_media_volume volumes[26];
-    if (ready) { memcpy(volumes,media_worker.volumes,sizeof(volumes)); media_worker.ready=0; }
+    struct ciuki_media_cd_state cd_states[4];
+    if (ready) { memcpy(volumes,media_worker.volumes,sizeof(volumes)); memcpy(cd_states,media_worker.cd_states,sizeof(cd_states)); media_worker.ready=0; }
     pthread_mutex_unlock(&media_worker.lock);
     if (!ready) return;
     /* An unavailable observation never fabricates an eject. */
     if (observed) desk_shell_media_update(d,&state);
-    if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); }
+    if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); desk_autoplay_cd_update(d,cd_states); }
     if (media_worker.commit && serial>=media_worker.commit) {
         media_worker.commit=0; media_worker.confirm_pending=0;
         struct desk_autoplay *a=&d->sh.autoplay;
@@ -1179,6 +1187,7 @@ __attribute__((weak)) int desk_dialogs_fixture_begin(struct desktop *d) { (void)
 __attribute__((weak)) void desk_upper_fixture_tick(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_upper_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_upper_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) int desk_media_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 void desk_v3_fixture_report(const char *line)
 { (void)ciuki_raw_probe_report(CU_PTR(line),(uint32_t)strlen(line),0,0,0,0); }
 __attribute__((weak)) void desk_w32_start(struct desktop *d) { (void)d; }
@@ -1718,9 +1727,10 @@ int main(int argc, char **argv)
                 if(desk_v3_fixture_begin(d)<0)return gate_error("v3_fixture",errno,generation);
                 report=1;break;
             case GATE_DIALOGS:
+            case GATE_MEDIA:
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
                 desk_w32_start(d);
-                if(desk_dialogs_fixture_begin(d)<0)return gate_error("dialogs_fixture",errno,generation);
+                if ((command==GATE_MEDIA ? desk_media_fixture_begin(d) : desk_dialogs_fixture_begin(d))<0)return gate_error("media_fixture",errno,generation);
                 report=1;break;
             case GATE_UPPER:
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;

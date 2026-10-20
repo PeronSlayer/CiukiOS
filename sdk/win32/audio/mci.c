@@ -120,9 +120,7 @@ static const struct mci_host host = {MCI_BOUNDARY_VERSION,
                                      mci_unlock,
                                      host_wake};
 
-/* Installed device types (system.ini [mci32] of Windows 98: WaveAudio,
- * Sequencer, AVIVideo, CDAudio). CD audio waits for the reviewed transport
- * amendment and reports MCIERR_DEVICE_NOT_INSTALLED. */
+/* Installed device types (system.ini [mci32] of Windows 98). */
 struct mci_type {
   const char *name, *library;
   uint32_t devtype;
@@ -132,7 +130,7 @@ static const struct mci_type types[] = {
     {"waveaudio", 0, MCI_DEVTYPE_WAVEFORM_AUDIO, mci_wave_driver},
     {"sequencer", 0, MCI_DEVTYPE_SEQUENCER, mci_seq_driver},
     {"avivideo", "mciavi32.dll", MCI_DEVTYPE_DIGITAL_VIDEO, 0},
-    {"cdaudio", 0, MCI_DEVTYPE_CD_AUDIO, 0},
+    {"cdaudio", 0, MCI_DEVTYPE_CD_AUDIO, mci_cd_driver},
 };
 #define MCI_TYPES (sizeof(types) / sizeof(types[0]))
 static const struct {
@@ -142,9 +140,9 @@ static const struct {
                   {"rmi", "sequencer"},
                   {"midi", "sequencer"},
                   {"avi", "avivideo"}};
-uint32_t mci_installed_count(void) { return 3; }
+uint32_t mci_installed_count(void) { return MCI_TYPES; }
 const char *mci_installed_name(uint32_t index) {
-  return index && index <= 3 ? types[index - 1].name : 0;
+  return index && index <= MCI_TYPES ? types[index - 1].name : 0;
 }
 const char *mci_type_for_element(const char *element) {
   const char *dot = 0;

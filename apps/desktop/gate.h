@@ -6,7 +6,8 @@
 #define GATE_MAGIC 0x32475443u
 enum { GATE_SPAWN = 1, GATE_RELEASE, GATE_REAP, GATE_RUN, GATE_SNAPSHOT, GATE_INTERACT, GATE_V3,
        GATE_DIALOGS, /* f5-10C2: Win32 services plus the w32-dialogs fixture */
-       GATE_UPPER /* f5-20D: Win32 services plus the w32-upper-dlls fixture */ };
+       GATE_UPPER /* f5-20D: Win32 services plus the w32-upper-dlls fixture */,
+       GATE_MEDIA /* f5-12B2: Win32 services plus the w32-media fixture */ };
 /* f2-33 tasks scenario: Tasks pings with this serial once the PID it ended
  * has left the kernel process list (runtime test mode only). */
 #define DESK_TASKS_CHECKPOINT 0xf2330007u

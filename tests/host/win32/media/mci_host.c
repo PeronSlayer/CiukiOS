@@ -8,6 +8,10 @@ uint32_t now_ms;
 long live_allocations;
 int key_down;
 static int depth, in_sleep;
+#ifdef MCI_TEST_CD
+#include "cd_model.h"
+int mci_test_lock_depth(void) { return depth; }
+#endif
 
 void out(const char *format, ...) {
   va_list a;
@@ -89,6 +93,9 @@ void advance(uint32_t ms) {
   uint32_t rate = engine.opened ? engine.rate : 44100;
   uint64_t target = now_frames + (uint64_t)ms * rate / 1000;
   while (now_frames < target) {
+#ifdef MCI_TEST_CD
+    cd_tick();
+#endif
     uint64_t step = target - now_frames > 256 ? 256 : target - now_frames;
     if (engine.opened) {
       for (int i = 0; i < 3; i++)
@@ -236,6 +243,9 @@ HANDLE CreateThread(SECURITY_ATTRIBUTES *s, DWORD stack,
   (void)p;
   (void)f;
   (void)id;
+#ifdef MCI_TEST_CD
+  if (p) cd_reader_add(p);
+#endif
   return (HANDLE)0x4000;
 }
 BOOL SetThreadPriority(HANDLE h, int p) {
@@ -262,6 +272,9 @@ void harness_post(uintptr_t window, uint32_t message, uintptr_t wp,
                   intptr_t lp);
 #endif
 void mci_host_post(uintptr_t window, uint32_t status, uint32_t id) {
+#ifdef MCI_TEST_CD
+  cd_model.last_notify=status; cd_model.notifications++;
+#endif
   static const char *names[] = {"?", "successful", "superseded", "?",
                                 "aborted", "?", "?", "?", "failure"};
   out("NOTIFY t=%u hwnd=%lx %s id=%u\n", now_ms, (unsigned long)window,
@@ -292,4 +305,3 @@ const struct mci_driver *mci_host_avi(const struct mci_host *host) {
   return 0;
 }
 #endif
-

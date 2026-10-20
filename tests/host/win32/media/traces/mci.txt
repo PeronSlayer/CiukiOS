@@ -381,17 +381,19 @@ MIDI frame=121622 reset
 = 0 ''
 ... 120 ms
 > sysinfo all quantity
-= 0 '3'
+= 0 '4'
 > sysinfo all name 1
 = 0 'waveaudio'
 > sysinfo all name 3
 = 0 'avivideo'
 > sysinfo all name 4
+= 0 'cdaudio'
+> sysinfo all name 5
 = 282 ''
 > sysinfo waveaudio quantity
 = 0 '1'
 > sysinfo cdaudio quantity
-= 0 '0'
+= 0 '1'
 > sysinfo waveaudio installname
 = 0 'waveaudio'
 > open tone.wav alias x1

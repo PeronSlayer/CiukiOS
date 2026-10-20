@@ -10,6 +10,7 @@ import re
 import subprocess
 import unittest
 from . import fixtures as F
+from . import cd_fixtures as CD
 
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
@@ -21,9 +22,9 @@ FLAGS = ['-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DW32_HOST_MOD
          '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include'),
          '-I' + str(CODECS)]
 MCI_SOURCES = [AUDIO / n for n in ('mix.c', 'wave.c', 'midi.c', 'mci.c', 'mcistr.c', 'mcitime.c',
-                                   'mciwave.c', 'mciseq.c')] + \
+                                   'mciwave.c', 'mciseq.c', 'mcicd.c')] + \
     [ROOT / 'sdk/win32/services/bytes.c', CODECS / 'adpcm.c', CODECS / 'acm.c', CODECS / 'pcm.c', HERE / 'host_files.c',
-     HERE / 'mci_host.c']
+     HERE / 'mci_host.c', HERE / 'cd_model.c']
 UPDATE = os.environ.get('CIUKI_UPDATE_GOLDEN') == '1'
 
 
@@ -54,6 +55,62 @@ class Media(unittest.TestCase):
     def setUpClass(cls):
         OUT.mkdir(parents=True, exist_ok=True)
         cls.fixtures = F.write_all(OUT / 'fixtures')
+        CD.write_all(cls.fixtures)
+
+    def test_cd_audio_transport_and_mci(self):
+        exe = compile_program('cd-audio', [HERE / 'cd_test.c', *MCI_SOURCES], ['-DMCI_TEST_CD'])
+        stdout, trace = self.run_harness(exe, 'cd-audio')
+        self.assertIn('PASS CD audio', stdout)
+        self.assertIn('ORACLE CD-DA frames=21168 match=1', trace)
+        self.assertIn('path=analog reason=digital-read-failed', trace)
+        self.assertIn('path=analog reason=no-cdda-capability', trace)
+        for event in ('successful', 'superseded', 'aborted', 'failure'):
+            self.assertIn(event + ' id=', trace)
+        self.assertIn('LIVE allocations=0', trace)
+
+    def test_cue_bin_tracks_and_pregaps(self):
+        for name, starts, count in [('mixed', [0, 8, 44], 74), ('audio', [0, 40], 75),
+                                    ('pregap', [0, 40], 85), ('data', [0], 12)]:
+            tracks, raw = CD.parse(self.fixtures / (name + '.cue'))
+            self.assertEqual([t[4] for t in tracks], starts)
+            self.assertEqual(len(raw), count * 2352)
+        self.assertEqual(CD.parse(self.fixtures / 'pregap.cue')[1][30*2352:40*2352], bytes(10*2352))
+        for text in ['FILE "audio.bin" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:60:00',
+                     'FILE "audio.bin" BINARY\nTRACK 02 AUDIO\nINDEX 01 00:00:00',
+                     'FILE "audio.bin" BINARY\nTRACK 01 AUDIO\n',
+                     'FILE "../audio.bin" BINARY',
+                     'FILE "audio.bin" BINARY\nTRACK 01 AUDIO\nINDEX 01 00:01:00']:
+            path = self.fixtures / 'bad-cd.cue'
+            path.write_text(text)
+            with self.assertRaises(ValueError):
+                CD.parse(path)
+
+    def test_cd_cpu_cost_model(self):
+        exe = OUT / 'cd-bench'
+        subprocess.run(['clang', '-std=c17', '-O2', '-Wall', '-Wextra', '-Werror',
+                        '-DW32_HOST_MODEL', '-I'+str(ROOT/'sdk/win32/include'),
+                        '-I'+str(ROOT/'src/kernel/include'), str(HERE/'cd_bench.c'),
+                        str(AUDIO/'mix.c'), str(ROOT/'sdk/win32/services/bytes.c'),
+                        '-o', str(exe)], check=True)
+        cost = subprocess.check_output([str(exe)], text=True)
+        (OUT/'cd-cost.txt').write_text(cost)
+        self.assertIn('estimate_percent=0.18', cost)
+        self.assertRegex(cost, r'total_host_cpu_percent=\d+\.\d+')
+
+    def test_cd_guest_and_player_imports(self):
+        from scripts.win32 import cd_media, census
+        images = cd_media.build(OUT/'cd-pe')
+        for image in images:
+            info = census.inspect(image.read_bytes())
+            imports = {row['dll'].lower(): set(row['symbols']) for row in info['imports']}
+            self.assertIn('mciSendStringA', imports['winmm.dll'])
+            self.assertIn('ExitProcess', imports['kernel32.dll'])
+            self.assertFalse(info.get('delay_imports'))
+        import json
+        suite = json.loads((ROOT/'tests/suites/f5-core.json').read_text())
+        case = next(c for c in suite['cases'] if c['id']=='w32-media-qemu-t23')
+        self.assertEqual(case['fixtures'], [{'generator':'xorriso','level':3,'joliet':True,'seed':1}])
+        self.assertTrue(any(p['where'].get('case')=='cdaudio' for p in case['expected']['predicates']))
 
     def run_harness(self, exe, trace_name):
         trace = OUT / (trace_name + '.trace')

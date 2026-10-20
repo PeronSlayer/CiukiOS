@@ -43,8 +43,6 @@ KNOWN_UNREGISTERED = {
     (5, 'w32-crash'): {'owner': 'f5-16 (lead)', 'missing': ALL, 'note': 'case integration_pending: desktop fault fixture driver'},
     (5, 'w32-user32'): {'owner': 'f5-10 (lead)', 'missing': ALL, 'note': 'case integration_pending: USER PE fixture and selector'},
     (5, 'w32-codecs'): {'owner': 'f5-12 (lead)', 'missing': ALL, 'note': 'case integration_pending: guest codec probe'},
-    (5, 'w32-media'): {'owner': 'f5-12B', 'missing': ALL, 'note': 'case integration_pending: guest MCI probe'},
-    (5, 'w32-upper-dlls'): {'owner': 'f5-14/f5-20C', 'missing': ALL, 'note': 'case integration_pending: guest exercise driver'},
     (5, 'w32-ddraw'): {'owner': 'f5-11', 'missing': ALL, 'note': 'case integration_pending: ddraw-exercise.exe and kernel observer'},
     (5, 'w32-input'): {'owner': 'f5-13 (lead)', 'missing': ALL, 'note': 'case integration_pending: input PE fixture and selector'},
     (4, 'vm-audio-jitter'): {

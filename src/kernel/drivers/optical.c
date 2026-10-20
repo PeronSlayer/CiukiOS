@@ -45,7 +45,15 @@ void optical_service(struct storage *s, uint64_t now)
                 klog("[optical] bind slot=%u stage=detach drive=%c generation=%u result=%d",
                      slot, 'A' + drive, d->block.media_generation, e);
             }
-        if (!e && !s->optical[slot].mounted && b->attempted_generation != d->block.media_generation) {
+        if (!e && d->toc.valid && d->toc.first_audio) {
+            /* f5-12B2: an audio-first disc is ready for /dev/media CD audio
+             * only; nothing is mounted and no ISO descriptor is probed. */
+            if (b->attempted_generation != d->block.media_generation) {
+                b->attempted_generation = d->block.media_generation;
+                klog("[optical] bind slot=%u stage=audio generation=%u tracks=%u audio_only=%u result=0 reason=audio_cd",
+                     slot, d->block.media_generation, d->toc.count, d->toc.audio_only);
+            }
+        } else if (!e && !s->optical[slot].mounted && b->attempted_generation != d->block.media_generation) {
             b->attempted_generation = d->block.media_generation;
             /* Expiration and a new mount are separate operations. Do not
              * borrow another letter while holding the old reservation: a
@@ -64,6 +72,7 @@ void optical_service(struct storage *s, uint64_t now)
             klog("[storage] optical slot=%u drive=%c mode=ro generation=%u result=%d reason=%s",
                  slot, e >= 3 ? 'A' + e : '-', d->block.media_generation, e,
                  e >= 3 ? "mounted" : d->media == ATAPI_NO_MEDIUM ? "no_medium" :
+                 !e && d->toc.valid && d->toc.first_audio ? "audio_cd" :
                  d->ready_error ? d->ready_stage : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
             b->observed_generation = d->block.media_generation; b->result = e;
         }
