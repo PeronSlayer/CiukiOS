@@ -24,3 +24,16 @@ Part A (worktree commit `426595da`, Claude Opus session, report `build/codex/f5-
 2. **`GetFileSecurityA/W`** behave identically: `FALSE` with `ERROR_CALL_NOT_IMPLEMENTED`, as on Windows 98 (no file security on FAT). Part B aligns the A form.
 3. **`NtDeleteKey`**: the one-condition `w32srv` change (deletion by an open handle with `KEY_WRITE`/`DELETE` rights) goes into part B.
 4. **Audit record hashes** of the core DLLs are refreshed in part C together with the Wine rebuild.
+
+## Amendment 2 (lead review of B, 2026-10-20 04:20): acceptance and decisions
+
+Part B (worktree commit `973392dd`, Claude Opus session, report `build/codex/f5-20b-report.md`, validation note `docs/validation/f5-20b-user32-gdi32.md`) is accepted: the 163 decided user32/gdi32 names are real exports (user32 94 implemented, 25 of them already by f5-10C, 11 limited, 3 W21 DPI internals; gdi32 31 implemented, 24 limited), the 35 f5-10C W21 stubs the Wine DLLs import now work, the 15 kernel32 W functions run over the ANSI paths through code page 1252 with one shared collation for CompareString/LCMapString, GetFileSecurityA/W both fail with `ERROR_CALL_NOT_IMPLEMENTED`, `NtDeleteKey` deletes by handle; Win32 suite 188 OK. Decisions on the report's questions:
+
+1. The 87 user32 and 4 gdi32 exports outside the decision table (the Unicode window core and ANSI counterparts) are accepted; part C adds their decision rows when it regenerates the audit.
+2. The desktop window as a fixed placeholder handle and `GetDC(NULL)` as a measuring memory DC are accepted as limited entries; a screen DC belongs to the presenter work.
+3. `NtDeleteKey` requires `DELETE` (KEY_WRITE alone refused, as on NT), deletes the subtree as Windows 98's registry does, and never deletes a predefined root: accepted.
+4. `StartDocA/W` returning -1 (no printer) is accepted; the other print calls stay W21.
+5. Code page 1252 case folding in list-box searches is accepted.
+6. DDE limited to one process is accepted; cross-process DDE for PROGMAN stays with f5-07B.
+7. The `w-stubs` compatibility shim is extended to the user32/gdi32 W functions in part C.
+8. Window regions clip hit testing only; drawing clipped to regions is recorded for the f5-10 continuation.
