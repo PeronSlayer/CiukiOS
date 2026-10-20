@@ -881,6 +881,75 @@ unexpected names and any corrupt/cross-linked owner. Both independent FAT-copy
 ownership scans and production reboot validation remain mandatory; fsck runs
 with `-n` and never repairs these test inputs.
 
+## FAT cluster cursor and write generations (f3-51c)
+
+Research (2026-10-20). Microsoft's MIT-licensed [MS-DOS 4.0 source](https://github.com/microsoft/MS-DOS/tree/main/v4.0/src)
+keeps the position per open file in its SFT entry: `SF.INC` defines
+`sf_firclus` (first cluster), `sf_cluspos` ("position of last cluster
+accessed") and `sf_lstclus` ("last cluster accessed"); `ROM.ASM` `FNDCLUS`
+skips clusters from `sf_lstclus` when the target is not before `sf_cluspos`
+and restarts from `sf_firclus` otherwise; `DISK2.ASM` `SETCLUS` stores the pair
+after each transfer and `DISK3.ASM` `KILLFIL` (truncate to zero) clears both.
+The [HelpPC SFT table](https://www.cs.yale.edu/flint/feng/research/BIOS/Resources/assembly/sft.html)
+documents the same per-handle "relative/absolute cluster of the last read"
+fields for DOS 3.x. Windows 98's 32-bit VFAT source is not public and the
+Windows 98 Resource Kit (extracted to `build/rskt/` in the main checkout)
+does not describe its per-handle state; the DOS SFT model is the documented
+one. Before f3-51c,
+`fat_read` resolved every call from the first cluster, so sequential reads
+were quadratic in the chain (dev diary 2026-10-20-04).
+
+**Cursor.** `struct fat_cursor` is the last resolved (cluster index, cluster)
+pair of one open file, stamped with the entry's first cluster and chain
+generation. VFS descriptions (`vfs_description.cursor`), native descriptions
+(`file_description.fat_cursor`) and the ELF image loader keep one;
+`fat_read_cursor`, `fat_read_stream` and `fat_write_cursor` resolve a target
+from the nearest valid pair at or before it (the description's cursor, the
+entry's write cursor, else the first cluster) and leave the cursor on the
+cluster holding the last byte transferred. Plain `fat_read`/`fat_write` keep
+the former behaviour. A cursor is a hint: it is followed only while the entry
+names the same first cluster and chain generation, its cluster is valid and
+its index is within the volume; bounds and corruption checks are unchanged.
+Any error (f1-83 cancellation or deadline, I/O, corruption) empties it. Only
+the description's own serialized I/O touches it (`io_active` on the
+ticket-free reader path, the handle reservation otherwise); it adds no lock,
+wait or allocation.
+
+**Chain generation.** `fat_entry.chain_generation` is a volume-unique stamp
+(`fat_volume.chain_stamp`, issued under the volume reservation). A decoded or
+created entry receives a fresh stamp, so a copy refreshed from disk (for
+example after DOS raw writes, `dos_file_volume.c`) never adopts an older
+cursor. Every FAT mutation of a file's chain restamps the caller's entry
+before its publication group runs, so a failed group also retires cursors:
+the append `FAT_P_LINK` group (`write_span`), COW relocation and truncate
+(`replace`, published by the directory group), the reserved-tail cut
+(`fat_publish_reserved`, log and pagefile trim), and the `FAT_P_RECLAIM`
+release of `fat_remove` and a replaced rename target. An in-place overwrite
+does not mutate the chain and keeps cursors valid. A remount starts the stamp
+again, but every description and identity of the former mount already fails
+with EIO before it could follow a cursor.
+
+**Write generations.** The VFS identity hook records, under `identity_lock`,
+the latest change sequence of each changed file location `(volume, mount
+generation, directory cluster, entry index)`: write, truncate, rename source
+and destination, unlink. The ledger holds 64 locations; evicting one raises a
+floor, and an unlisted location reports the floor. Volume expiry (raw
+change, removal, detach) drops the volume's rows and raises the floor. Hence
+any change after a reading yields a different value; unrelated evictions may
+change it too (conservative). `vfs_handle_version` returns the open file's
+content version: mount and media generation, drive and drive generation,
+location, first cluster, size, modification date/time and that write
+generation; read-only providers return `-FS_EOPNOTSUPP`. The DOS game launch
+digest cache (`dos-dpmi-contract.md`) is its consumer.
+
+Evidence: `tests/host/fs/test_cluster_cursor.c` in `host_fs_tests.sh`.
+On a FAT32/4 KiB-cluster volume holding a 27,336,704-byte mtools-written file
+(6,674 clusters), 418 sequential 64 KiB reads cost 2,801,342 FAT lookups
+without a cursor and 13,295 with it (1.99 per cluster; half the file 698,413
+versus 6,619), with the same SHA-256. A negative control that ignores the
+generation reads another cluster's bytes after a truncate reallocates the same
+first cluster with a shifted chain.
+
 ## Cache sizing and read-ahead
 
 F1-85 research (2026-10-19), before implementation: Microsoft's

@@ -128,10 +128,12 @@ static void disk_gate_take(struct dosvm *v);
 static void disk_gate_drop(struct dosvm *v);
 /* f3-51 launch identity: SHA-256 of the whole read-only base, before any
  * guest read. One seek, then sequential reads of one read-cache block
- * (64 KiB) each: every FAT read walks the file's cluster chain from its first
- * cluster (fat.c chain_at) and a seek cancels the VFS read-ahead stream, so
- * the former 512-byte seek+read loop cost O(sectors x clusters) FAT lookups,
+ * (64 KiB) each: a seek cancels the VFS read-ahead stream, and before f3-51c
+ * every FAT read walked the cluster chain from the first cluster, so the
+ * former 512-byte seek+read loop cost O(sectors x clusters) FAT lookups,
  * about 1.8e8 for the 27 MB games disk: the window CREATE never returned.
+ * The open file's FAT cluster cursor (f3-51c) now continues each read from
+ * the previous one's last cluster, so this loop is linear in the chain.
  * Block 0 is the buffer; its count stays 0, so it publishes no cached data. */
 static int base_hash(struct dosvm *v, uint32_t size)
 {
@@ -159,6 +161,67 @@ static int base_hash(struct dosvm *v, uint32_t size)
     sha256_final(&hash, binary); sha256_hex(binary, v->base_sha256);
     return 0;
 }
+/* f3-51c: SHA-256 of game/kernel bases per content version for the session,
+ * bounded LRU. vfs_handle_version names the volume attachment and media
+ * generation, the owning directory slot, first cluster, size, modification
+ * time and the VFS write generation, which advances on every write,
+ * truncate, rename from/to and unlink of that slot and on volume expiry (raw
+ * writes, removal); a remount is a new attachment. A digest is stored only
+ * when the version is unchanged across the whole hash (the base is open
+ * deny-write throughout), so item 8's identity guarantee is unchanged: the
+ * digest still names exactly the bytes the VM boots. */
+#define DOSVM_DIGESTS 16u
+static struct {
+    struct vfs_file_version version;
+    char sha256[65];
+    bool valid;
+    uint32_t used;
+} digests[DOSVM_DIGESTS];
+static uint32_t digest_clock;
+static bool digest_lookup(const struct vfs_file_version *version, char out[65])
+{
+    bool hit = false;
+    uint32_t flags = irq_save();
+    for (unsigned i = 0; i < DOSVM_DIGESTS && !hit; i++)
+        if (digests[i].valid && vfs_file_version_equal(&digests[i].version, version)) {
+            memcpy(out, digests[i].sha256, sizeof(digests[i].sha256));
+            digests[i].used = ++digest_clock; hit = true;
+        }
+    irq_restore(flags);
+    return hit;
+}
+static void digest_store(const struct vfs_file_version *version, const char sha256[65])
+{
+    uint32_t flags = irq_save();
+    unsigned slot = DOSVM_DIGESTS;
+    for (unsigned i = 0; i < DOSVM_DIGESTS && slot == DOSVM_DIGESTS; i++)
+        if (digests[i].valid && vfs_file_version_equal(&digests[i].version, version)) slot = i;
+    for (unsigned i = 0; i < DOSVM_DIGESTS && slot == DOSVM_DIGESTS; i++)
+        if (!digests[i].valid) slot = i;
+    if (slot == DOSVM_DIGESTS) {
+        slot = 0; /* least recently used */
+        for (unsigned i = 1; i < DOSVM_DIGESTS; i++) if (digests[i].used < digests[slot].used) slot = i;
+    }
+    digests[slot].version = *version;
+    memcpy(digests[slot].sha256, sha256, sizeof(digests[slot].sha256));
+    digests[slot].sha256[64] = 0;
+    digests[slot].valid = true; digests[slot].used = ++digest_clock;
+    irq_restore(flags);
+}
+/* Hash once per base content version; the first launch after boot hashes. */
+static int base_identity(struct dosvm *v, uint32_t size)
+{
+    struct vfs_file_version version, after;
+    bool versioned = !vfs_handle_version(&v->disk_table, v->base, &version) && version.size == size;
+    v->base_cached = versioned && digest_lookup(&version, v->base_sha256);
+    if (v->base_cached) return 0;
+    int e = base_hash(v, size);
+    if (e) return e;
+    if (versioned && !vfs_handle_version(&v->disk_table, v->base, &after) &&
+        vfs_file_version_equal(&version, &after))
+        digest_store(&version, v->base_sha256);
+    return 0;
+}
 int dosvm_disk_open(struct dosvm *v, const char *base)
 {
     if (v->base_open || v->table_ready || v->read_capacity) return -EBUSY;
@@ -183,7 +246,7 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     e = read_cache_open(v);
     if (e) return e; /* lifecycle failure unwinds the base/table as before */
     if (v->game || v->kernel) {
-        e = base_hash(v, entry.size);
+        e = base_identity(v, entry.size);
         if (e) return e;
         if (v->kernel==1) {
             char expected[66];

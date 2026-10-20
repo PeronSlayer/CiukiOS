@@ -748,6 +748,17 @@ game/extender. f3-49 covers handles/state/errors, f3-50 FCB/NLS/handoff and dead
 paths, f3-51 reference/game/performance closure and opt-in fallback. The owner
 permits QEMU for this battery only; ordinary QEMU gates remain suspended.
 
+**[F3-51c]** Game launch digest cache. The f3-51 item 8 identity (SHA-256 of
+the whole base, `FREEDOS.SHA` check, overlay `G<g>K<k><sha>V<gen>.COW`,
+`game_launch` record) is unchanged; `dosvm_disk.c` only avoids re-hashing
+unchanged bytes. With the base open deny-write, `vfs_handle_version` gives its
+content version (`vfs-storage-contract.md`, write generations); a matching
+entry of a 16-entry session LRU supplies the digest, otherwise the base is
+hashed once and the digest stored only if the version is unchanged after the
+hash. Any write, truncate, rename over, delete/recreate, raw change, media
+change or remount yields another version; the first launch after boot always
+hashes. `game_launch` adds `cached=1|0`.
+
 ## Virtual devices and reuse
 
 **[F3]** VGA text, planar modes, mode 13h/Mode X, keyboard focus, INT 33h

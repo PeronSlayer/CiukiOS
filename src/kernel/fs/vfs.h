@@ -35,6 +35,20 @@ struct vfs_page_identity {
     uint32_t refs;
     bool valid;
 };
+/* f3-51c write generations: the latest change sequence of recently changed
+ * file locations (write, truncate, rename from/to, unlink), bounded; a
+ * location no longer listed reports the floor, the largest sequence ever
+ * evicted. Volume expiry raises the floor. Session-only, never on disk. */
+#define VFS_CHANGES 64u
+struct vfs_change { struct fat_volume *volume; uint64_t mount, sequence; uint32_t parent, index; };
+/* Content version of an open FAT file. Equal versions denote the same bytes
+ * for this session: write_generation advances on every change of the file's
+ * location, mount on every attachment or media change of its volume. */
+struct vfs_file_version {
+    uint64_t mount, write_generation;
+    uint32_t drive, drive_generation, parent, index, first, size;
+    uint16_t write_date, write_time;
+};
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 /* Internal DOS bridge errors; never user syscall errno values. */
 #define VFS_ESHARE 201
@@ -47,8 +61,12 @@ int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
     uint32_t log_capacity; struct vfs_file_identity *identity; };
+/* f3-51c: cursor is this open file's FAT cluster cursor. Only the
+ * description's own serialized I/O (io_active or the handle reservation)
+ * reads or writes it; fat.c validates it against the node entry. */
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
-    uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream; };
+    uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream;
+    struct fat_cursor cursor; };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
     uint64_t owner, start, end, length; enum vfs_owner_type owner_type; bool shared; };
 #define VFS_RANGE_LOCKS 128u
@@ -90,6 +108,8 @@ struct vfs {
     uint32_t next_identity_generation;
     struct vfs_file_identity identities[VFS_IDENTITIES];
     struct vfs_page_identity page_identities[VFS_PAGE_IDENTITIES];
+    uint64_t change_sequence, change_floor; /* identity_lock */
+    struct vfs_change changes[VFS_CHANGES];
 };
 struct vfs_table {
     struct vfs *vfs;
@@ -172,6 +192,15 @@ int vfs_range_check_owner(struct vfs *, struct vfs_node *, struct vfs_descriptio
 int vfs_range_check(struct vfs *, struct vfs_node *, struct vfs_description *,
                     uint64_t owner, uint64_t start, uint64_t length);
 int vfs_handle_stat(struct vfs_table *, int, struct fat_entry *, uint64_t *position);
+/* f3-51c: the open file's content version; read-only providers (no FAT
+ * write generation) return -FS_EOPNOTSUPP. Caches keyed by it must take it
+ * while a deny-write open pins the content and compare it field by field. */
+int vfs_handle_version(struct vfs_table *, int, struct vfs_file_version *);
+static inline bool vfs_file_version_equal(const struct vfs_file_version *a, const struct vfs_file_version *b) {
+    return a->mount==b->mount && a->write_generation==b->write_generation && a->drive==b->drive &&
+        a->drive_generation==b->drive_generation && a->parent==b->parent && a->index==b->index &&
+        a->first==b->first && a->size==b->size && a->write_date==b->write_date && a->write_time==b->write_time;
+}
 int vfs_handle_times(struct vfs_table *, int, uint16_t date, uint16_t time);
 /* Admission observes the explicit request or the task-scoped f1-83 calldown
  * context. Reacquisition retires published references under short bookkeeping

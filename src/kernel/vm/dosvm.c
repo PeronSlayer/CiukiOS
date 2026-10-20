@@ -1296,9 +1296,9 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     e = dosvm_disk_open(v, config ? config->base : 0);
     if (e) goto fail;
     if (v->game || v->kernel)
-        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u",
+        rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
                       v->game,v->kernel ? "freedos-1.3" : "ciukidos",v->base_sha256,
-                      v->info.key.generation,!v->disable_file_bridge);
+                      v->info.key.generation,!v->disable_file_bridge,v->base_cached);
     kpreempt_point();
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
     if (!v->task) { e = -ENOMEM; goto fail; }

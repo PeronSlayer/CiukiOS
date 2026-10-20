@@ -201,6 +201,30 @@ static uint64_t identity_generation(struct vfs *v, struct fat_volume *vol) {
     (void)v;
     return (uint64_t)vol->identity_mount_generation<<32 | (vol->dev ? vol->dev->media_generation : 0);
 }
+/* f3-51c write generations, identity_lock held. */
+static void change_record(struct vfs *v, struct fat_volume *vol, uint32_t parent, uint32_t index) {
+    uint64_t mount=identity_generation(v,vol);
+    struct vfs_change *slot=0;
+    for (unsigned i=0;i<VFS_CHANGES && !slot;i++) {
+        struct vfs_change *c=&v->changes[i];
+        if (c->sequence && c->volume==vol && c->mount==mount && c->parent==parent && c->index==index) slot=c;
+    }
+    if (!slot) {
+        slot=&v->changes[0];
+        for (unsigned i=0;i<VFS_CHANGES;i++) if (v->changes[i].sequence<slot->sequence) slot=&v->changes[i];
+        if (slot->sequence>v->change_floor) v->change_floor=slot->sequence; /* evicted: bound */
+        *slot=(struct vfs_change){.volume=vol,.mount=mount,.parent=parent,.index=index};
+    }
+    slot->sequence=++v->change_sequence;
+}
+static uint64_t change_generation(struct vfs *v, struct fat_volume *vol, uint32_t parent, uint32_t index) {
+    uint64_t mount=identity_generation(v,vol);
+    for (unsigned i=0;i<VFS_CHANGES;i++) {
+        struct vfs_change *c=&v->changes[i];
+        if (c->sequence && c->volume==vol && c->mount==mount && c->parent==parent && c->index==index) return c->sequence;
+    }
+    return v->change_floor;
+}
 static void invalidate_pages(struct vfs *v, struct vfs_file_identity *id) {
     for (unsigned i=0;i<VFS_PAGE_IDENTITIES;i++)
         if (v->page_identities[i].file==id) v->page_identities[i].valid=false;
@@ -290,6 +314,9 @@ void vfs_identity_expire(struct vfs *v, struct fat_volume *vol) {
     for (unsigned i=0;i<VFS_IDENTITIES;i++) if (v->identities[i].volume==vol) {
         v->identities[i].valid=false; invalidate_pages(v,&v->identities[i]);
     }
+    /* f3-51c: any file of this volume may have changed (raw write, removal). */
+    for (unsigned i=0;i<VFS_CHANGES;i++) if (v->changes[i].volume==vol) memset(&v->changes[i],0,sizeof(v->changes[i]));
+    v->change_floor=++v->change_sequence;
     fs_lock_drop(&v->identity_lock);
 }
 void vfs_raw_changed(struct vfs *v, struct fat_volume *vol) { vfs_identity_expire(v,vol); }
@@ -313,6 +340,8 @@ static void identity_change(void *ctx, struct fat_volume *vol, const struct fat_
             d->node->entry.index==old->index) cache_stream_cancel(&d->stream);
     }
     fs_lock_take(&v->identity_lock);
+    change_record(v,vol,old->parent,old->index);
+    if (why==FAT_ID_RENAME && entry) change_record(v,vol,entry->parent,entry->index);
     struct vfs_file_identity *id=identity_find(v,vol,old);
     if (id) {
         if (why==FAT_ID_RENAME) { id->parent=entry->parent; id->index=entry->index; id->linked=true; }
@@ -647,7 +676,7 @@ int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum v
         if (px_legacy_changed) px_legacy_changed(v,vol,&before,&node->entry,false);
         if (e) goto undo;
     }
-    d->node=node; d->position=0; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; d->dos_mode=mode; d->owner=t->owner; d->owner_type=t->owner_type;
+    d->node=node; d->position=0; d->cursor=(struct fat_cursor){0}; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; d->dos_mode=mode; d->owner=t->owner; d->owner_type=t->owner_type;
     if (status) *status=create ? 2 : flags&VFS_TRUNCATE ? 3 : 1; e=h;
     goto out;
 undo: t->handles[h]=0; if (!--node->refs) { vfs_identity_put(v,node->identity); memset(node,0,sizeof(*node)); } memset(d,0,sizeof(*d));
@@ -699,6 +728,25 @@ int vfs_handle_stat(struct vfs_table *t,int h,struct fat_entry *entry,uint64_t *
     e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : 0;
     if (!e) { if (entry) *entry=d->node->entry; if (position) *position=d->position; }
     vfs_unlock(t->vfs); return e;
+}
+int vfs_handle_version(struct vfs_table *t,int h,struct vfs_file_version *out) {
+    if (!out) return -FS_EINVAL;
+    int e=handle_lock(t,h); if (e) return e;
+    struct vfs *v=t->vfs; struct vfs_description *d=get(t,h);
+    e=!d ? -FS_EBADF : (d->node->generation!=v->generation[d->node->drive] || !vfs_identity_live(v,d->node->identity)) ? -FS_EIO :
+        d->node->ro || !d->node->volume ? -FS_EOPNOTSUPP : 0;
+    if (!e) {
+        const struct vfs_node *n=d->node;
+        memset(out,0,sizeof(*out));
+        fs_lock_take(&v->identity_lock);
+        out->mount=identity_generation(v,n->volume);
+        out->write_generation=change_generation(v,n->volume,n->entry.parent,n->entry.index);
+        fs_lock_drop(&v->identity_lock);
+        out->drive=n->drive; out->drive_generation=v->generation[n->drive];
+        out->parent=n->entry.parent; out->index=n->entry.index; out->first=n->entry.first; out->size=n->entry.size;
+        out->write_date=n->entry.times.write_date; out->write_time=n->entry.times.write_time;
+    }
+    vfs_unlock(v); return e;
 }
 int vfs_handle_times(struct vfs_table *t,int h,uint16_t date,uint16_t time) {
     int e=handle_lock(t,h); if (e) return e;
@@ -877,7 +925,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         d->io_active=true; d->refs++; v->readers[drive]++; uint64_t position=d->position;
         struct fat_entry entry=node->entry;
         vfs_unlock(v);
-        int e=fat_read_stream(&view,&entry,position,buf,n,done,&d->stream);
+        int e=fat_read_stream(&view,&entry,position,buf,n,done,&d->stream,&d->cursor);
         (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
         d->position+=*done; d->io_active=false; v->readers[drive]--;
         if (view.readonly_reason) {
@@ -899,7 +947,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     else if (!(d->access&VFS_READ)) e=-FS_EACCES;
     else if ((e=table_range_check(t,d->node,d,d->position,n,false))) { }
     else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=VFS_IO(t->vfs,fs_ro_read(d->node->ro,d->node->ro_id,d->position,buf,n,done)); if (e) ro_handle(t->vfs,d->node); d->position+=*done; }
-    else { e=VFS_IO(t->vfs,fat_read(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done; }
+    else { e=VFS_IO(t->vfs,fat_read_cursor(d->node->volume,&d->node->entry,&d->cursor,d->position,buf,n,done)); d->position+=*done; }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *done) {
@@ -915,7 +963,7 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
         cache_stream_cancel(&d->stream);
         struct fat_entry before=d->node->entry;
         t->vfs->io_file[d->node->drive]=d->node;
-        e=VFS_IO(t->vfs,fat_write(d->node->volume,&d->node->entry,d->position,buf,n,done)); d->position+=*done;
+        e=VFS_IO(t->vfs,fat_write_cursor(d->node->volume,&d->node->entry,&d->cursor,d->position,buf,n,done)); d->position+=*done;
         t->vfs->io_file[d->node->drive]=0;
         if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,*done != 0);
     }

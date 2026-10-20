@@ -187,6 +187,7 @@ struct dosvm {
     void (*record_observer)(struct dosvm *,const char *,unsigned,void *);
     void *record_arg;
     char base_sha256[65];
+    bool base_cached; /* f3-51c: base_sha256 reused from the session digest cache */
     struct vfs_table disk_table;
     int base, overlay;
     uint32_t base_sectors;   /* sectors the base image holds; zeros after them */

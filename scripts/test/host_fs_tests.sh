@@ -73,6 +73,32 @@ fsck.fat -n build/host/fs/pagefile32.img > /dev/null
 MTOOLSRC=build/host/fs/mtoolsrc mcopy -n -i build/host/fs/pagefile32.img ::/SEED.BIN build/host/fs/pagefile-seed.bin
 cmp build/host/fs/seed.bin build/host/fs/pagefile-seed.bin
 rm -f build/host/fs/pagefile32.img build/host/fs/pagefile-small.img build/host/fs/pagefile-full.img build/host/fs/pagefile-seed.bin
+# f3-51c: per-open-file FAT cluster cursor (linear sequential read of a
+# 27,336,704-byte games disk on FAT32 with 4 KiB clusters, as C:, plus the
+# invalidation rules) and the VFS write generations of the launch digest cache.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c \
+    src/kernel/lib/sha256.c tests/host/fs/fake.c tests/host/fs/test_cluster_cursor.c \
+    -Wl,--wrap=cache_read_ahead -o build/host/fs/test_cluster_cursor
+rm -f build/host/fs/cursor32.img build/host/fs/cursor-game.bin
+truncate -s 288M build/host/fs/cursor32.img
+mkfs.fat --invariant -F 32 -S 512 -s 8 -f 2 -i 00C1A51C build/host/fs/cursor32.img > /dev/null
+cursor_sha="$(python3 - build/host/fs/cursor-game.bin <<'PY'
+import hashlib, sys
+rows = [bytes((b + j * 7) & 255 for j in range(512)) for b in range(256)]
+data = b''.join(rows[(s * 131 + (s >> 8)) & 255] for s in range(27336704 // 512))
+open(sys.argv[1], 'wb').write(data)
+print(hashlib.sha256(data).hexdigest())
+PY
+)"
+MTOOLSRC=build/host/fs/mtoolsrc mmd -i build/host/fs/cursor32.img ::/GAMES
+MTOOLSRC=build/host/fs/mtoolsrc mcopy -i build/host/fs/cursor32.img build/host/fs/cursor-game.bin ::/GAMES/CIUKIGAM.IMG
+rm -f build/host/fs/cursor-game.bin
+build/host/fs/test_cluster_cursor build/host/fs/cursor32.img "$cursor_sha"
+fsck.fat -n build/host/fs/cursor32.img > /dev/null
+rm -f build/host/fs/cursor32.img
 # F1-85: actual controller, ledger profiles, stream priority/cancellation, FAT EOF.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \

@@ -74,3 +74,80 @@ static void test_game_window_base_hash(void)
     fake_current=saved; bundled_bytes=saved_bytes; disk_base_sector=saved_sector;
     puts("f3-51 game window base hash: PASS 27 MB games disk read once in 64 KiB blocks, digest, COW name, cache");
 }
+/* f3-51c: the launch digest is cached per base content version for the
+ * session. A cached launch keeps item 8's identity (digest, COW name,
+ * FREEDOS.SHA check, game_launch record) and reads no base block; every
+ * version change re-hashes; the cache is a bounded LRU. */
+static unsigned launch_seeks, launch_reads;
+static struct dosvm *digest_launch(unsigned game, unsigned kernel, const char *base, int expect, int cached)
+{
+    struct dosvm_config config={.base=base,.game=(uint8_t)game,.kernel=(uint8_t)kernel};
+    struct dosvm *v=0; unsigned seeks=base_seeks, reads=disk_reads;
+    game_launch_record[0]=0;
+    CHECK(dosvm_create(&config,&v)==expect);
+    launch_seeks=base_seeks-seeks; launch_reads=disk_reads-reads;
+    if (expect) { CHECK(!v); empty(); return 0; }
+    CHECK(v && v->base_cached==(cached!=0) && strstr(v->overlay_path,v->base_sha256));
+    CHECK(strstr(game_launch_record,cached ? " cached=1" : " cached=0") && strstr(game_launch_record,v->base_sha256));
+    return v;
+}
+static unsigned bump_at;
+static void bump_during_hash(void) { if (version_calls==bump_at) base_writes++; } /* the post-hash call */
+static void test_game_digest_cache(void)
+{
+    empty();
+    uint32_t saved_bytes=bundled_bytes; void (*saved_sector)(uint32_t,void *)=disk_base_sector;
+    bundled_bytes=(DOSVM_BASE_MIN_SECTORS+24u)*512u; disk_base_sector=0;
+    const char *base=DOSVM_BUNDLED_BASE;
+    const unsigned blocks=(bundled_bytes+DOSVM_READ_SECTORS*512u-1)/(DOSVM_READ_SECTORS*512u);
+    char digest[65];
+    /* First launch after boot hashes once; the relaunch reuses the digest. */
+    struct dosvm *v=digest_launch(2,0,base,0,0); strcpy(digest,v->base_sha256);
+    unsigned hashed_seeks=launch_seeks, hashed_reads=launch_reads; destroy(v,false); empty();
+    v=digest_launch(2,0,base,0,1);
+    CHECK(!strcmp(v->base_sha256,digest) && strstr(v->overlay_path,"G2K0"));
+    CHECK(hashed_seeks-launch_seeks==1 && hashed_reads-launch_reads==blocks); /* no base block read */
+    destroy(v,false); empty();
+    v=digest_launch(1,0,base,0,1); CHECK(!strcmp(v->base_sha256,digest) && strstr(v->overlay_path,"G1K0"));
+    destroy(v,false); empty();
+    /* Each version change re-hashes once, then hits: write generation,
+     * modification time, location (rename over / recreate), remount. */
+    uint64_t *u64[]={&base_writes,&base_mount}; uint32_t *u32[]={&base_mtime,&base_location};
+    for (unsigned i=0;i<4;i++) {
+        if (i<2) (*u64[i])++; else (*u32[i-2])++;
+        v=digest_launch(2,0,base,0,0); CHECK(!strcmp(v->base_sha256,digest) && launch_reads==hashed_reads);
+        destroy(v,false); empty();
+        v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
+    }
+    /* Truncate/extend: new size, new digest and COW name. */
+    bundled_bytes+=512;
+    v=digest_launch(2,0,base,0,0); CHECK(strcmp(v->base_sha256,digest)); destroy(v,false); empty();
+    v=digest_launch(2,0,base,0,1); CHECK(strcmp(v->base_sha256,digest)); destroy(v,false); empty();
+    bundled_bytes-=512; base_writes++; /* the write restoring the former bytes */
+    /* No version (read-only provider): hash at every launch, never cached. */
+    version_error=-FS_EOPNOTSUPP;
+    for (unsigned i=0;i<2;i++) { v=digest_launch(2,0,base,0,0); CHECK(!strcmp(v->base_sha256,digest)); destroy(v,false); empty(); }
+    version_error=0;
+    /* A version that changes across the hash is never stored. */
+    unsigned calls=version_calls; base_writes++;
+    bump_at=version_calls+2; version_hook=bump_during_hash;
+    v=digest_launch(2,0,base,0,0); destroy(v,false); empty(); version_hook=0;
+    CHECK(version_calls-calls==2);
+    v=digest_launch(2,0,base,0,0); destroy(v,false); empty(); /* bumped version: hashed */
+    v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
+    /* Bounded LRU of 16 versions: the 17th evicts the least recently used. */
+    uint64_t first=base_writes+1;
+    for (unsigned i=0;i<=DOSVM_DIGESTS;i++) { base_writes=first+i; v=digest_launch(2,0,base,0,0); destroy(v,false); empty(); }
+    base_writes=first+1; v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
+    base_writes=first; v=digest_launch(2,0,base,0,0); destroy(v,false); empty(); /* evicted */
+    base_writes=first+DOSVM_DIGESTS; v=digest_launch(2,0,base,0,1); destroy(v,false); empty();
+    /* FreeDOS: a cached digest still meets the FREEDOS.SHA reference check. */
+    reference_present=true; memcpy(reference_identity,digest,64); reference_identity[64]='\n';
+    const char *freedos="C:\\SYSTEM\\DOS\\FREEDOS.IMG";
+    v=digest_launch(1,1,freedos,0,0); CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K1")); destroy(v,false); empty();
+    v=digest_launch(1,1,freedos,0,1); CHECK(!strcmp(v->base_sha256,digest)); destroy(v,false); empty();
+    reference_identity[0]^=1; digest_launch(1,1,freedos,-FS_EIO,1); reference_identity[0]^=1;
+    reference_present=false;
+    bundled_bytes=saved_bytes; disk_base_sector=saved_sector;
+    puts("f3-51c game digest cache: PASS first launch hashes, relaunch reads no base block, write/mtime/location/mount/size invalidate, no version or unstable version never cached, LRU 16, FREEDOS.SHA still checked");
+}

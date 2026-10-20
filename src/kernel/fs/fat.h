@@ -17,14 +17,25 @@ struct fat_times { uint16_t create_date, create_time, access_date, write_date, w
 enum fat_publication_stage { FAT_P_DATA, FAT_P_CHAIN, FAT_P_LINK, FAT_P_DIRECTORY,
     FAT_P_FSINFO, FAT_P_DELETE, FAT_P_RENAME, FAT_P_RECLAIM, FAT_P_FLAGS, FAT_P_STAGES };
 enum fat_identity_change { FAT_ID_WRITE, FAT_ID_TRUNCATE, FAT_ID_RENAME, FAT_ID_UNLINK };
+/* f3-51c: an open file's last resolved (cluster index -> cluster) pair, the
+ * model of MS-DOS's SFT sf_cluspos/sf_lstclus (FNDCLUS continues from it when
+ * the target is at or after it, else from sf_firclus). It is a hint, valid
+ * only while the entry still names the same first cluster and chain
+ * generation; volatile, never encoded on disk. A zero cursor is empty. */
+struct fat_cursor { uint64_t generation; uint32_t first, index, cluster; };
 struct fat_entry {
     char name[FS_NAME_BYTES], alias[40];
     uint32_t parent, index, first, size, lfn_index;
     uint64_t identity; /* volatile VFS file identity; never encoded on disk */
     uint8_t lfn_count, attr;
     struct fat_times times;
+    /* f3-51c: volume-unique stamp of the cluster chain this copy names,
+     * assigned when the entry is decoded or created and on every FAT
+     * mutation of its chain (link, relocation, truncate, release). Cursors
+     * taken under another stamp are never followed. Not encoded on disk. */
+    uint64_t chain_generation;
     /* Caller-serialized write cursor; not encoded on disk. Reset on COW. */
-    uint32_t write_cluster, write_index;
+    struct fat_cursor write_cursor;
 };
 struct fat_volume {
     struct block_cache *cache; struct blkdev *dev;
@@ -50,6 +61,7 @@ struct fat_volume {
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
     uint64_t publication_group, publication_frontier, publication_count, publication_durable;
     uint32_t publication_generation, identity_mount_generation;
+    uint64_t chain_stamp; /* f3-51c: last chain generation issued (volume reservation) */
     enum fat_publication_stage publication_stage;
     bool publication_pending, write_through;
     struct cache_completion completion;
@@ -82,11 +94,21 @@ int fat_next(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct f
 int fat_next_dos(struct fat_volume *, uint32_t directory, uint32_t *cursor, struct fat_entry *);
 int fat_lookup(struct fat_volume *, uint32_t directory, const char *, struct fat_entry *);
 int fat_create(struct fat_volume *, uint32_t directory, const char *, uint8_t attr, struct fat_entry *);
+/* Without a cursor every call resolves its first cluster from the chain start. */
 int fat_read(struct fat_volume *, const struct fat_entry *, uint64_t position, void *, size_t, size_t *done);
+/* f3-51c: the same read continuing from the open file's cursor when the
+ * position is at or after it; on success the cursor names the cluster holding
+ * the last byte read, on any error it is emptied. cursor may be null. */
+int fat_read_cursor(struct fat_volume *, const struct fat_entry *, struct fat_cursor *,
+                    uint64_t position, void *, size_t, size_t *done);
 /* Same demand path; schedules shared-cache speculation after two adjacent reads. */
 int fat_read_stream(struct fat_volume *, const struct fat_entry *, uint64_t pos,
-                    void *, size_t, size_t *, struct cache_stream *);
+                    void *, size_t, size_t *, struct cache_stream *, struct fat_cursor *);
 int fat_write(struct fat_volume *, struct fat_entry *, uint64_t position, const void *, size_t, size_t *done);
+/* f3-51c: fat_write resolving from the open file's cursor (or the entry's
+ * write cursor); on success the cursor names the last cluster written. */
+int fat_write_cursor(struct fat_volume *, struct fat_entry *, struct fat_cursor *,
+                     uint64_t position, const void *, size_t, size_t *done);
 int fat_truncate(struct fat_volume *, struct fat_entry *, uint64_t size);
 /* f0-49 pagefile growth: zero-filled in-place extension to size bytes via the
  * append publication order; live clusters are never relocated. */
