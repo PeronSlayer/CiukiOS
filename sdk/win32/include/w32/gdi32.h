@@ -2,6 +2,7 @@
 #ifndef CIUKI_W32_GDI32_H
 #define CIUKI_W32_GDI32_H
 #include "base.h"
+#include "font_stats.h"
 typedef int32_t BOOL;
 typedef uint32_t DWORD, COLORREF, HGDIOBJ, HDC, HBITMAP, HBRUSH, HPEN, HRGN,
     HPALETTE, HFONT;
@@ -608,17 +609,21 @@ struct w32_gdi_face_backend {
   void (*free_glyph)(void *, struct w32_gdi_glyph *);
   DWORD (*resident)(void *);
 };
-struct w32_gdi_font_stats {
-  DWORD faces, open_faces, face_bytes, face_peak, glyphs, glyph_bytes,
-      glyph_peak, total_peak, budget, hits, misses, evictions, face_evictions,
-      store_bytes;
-};
+/* struct w32_gdi_font_stats: w32/font_stats.h (shared with USER callers). */
 BOOL W32API w32_gdi_set_face_backend(const struct w32_gdi_face_backend *);
 /* Win32 and native directories of the immutable system store and of the
  * writable directory that receives faces installed by AddFontResource. */
 BOOL W32API w32_gdi_font_store(const char *, const char *, const char *,
                                const char *);
-void W32API w32_gdi_font_statistics(struct w32_gdi_font_stats *);
+/* f5-10C2 PE-to-native font bridge: the backend gdi32 installs by default in
+ * the guest personality (statistics in w32/font_stats.h). */
+const struct w32_gdi_face_backend *W32API w32_gdi_bridge_backend(void);
+typedef uint32_t (*w32_gdi_bridge_exchange)(const void *, uint32_t, void *,
+                                            uint32_t, uint32_t *);
+#ifdef W32_HOST_MODEL
+/* Host harnesses supply the transport (the guest uses ntdll's). */
+void w32_gdi_bridge_transport(w32_gdi_bridge_exchange);
+#endif
 HFONT W32API CreateFontIndirectA(const LOGFONTA *);
 HFONT W32API CreateFontIndirectW(const LOGFONTW *);
 HFONT W32API CreateFontA(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD,

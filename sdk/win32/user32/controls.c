@@ -1637,8 +1637,12 @@ static LRESULT list_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
   switch (m) {
   case LB_ADDSTRING:
   case LB_INSERTSTRING: {
+    /* A combo box forwards here with its own style, where bit 1 is part of
+     * CBS_DROPDOWN/CBS_DROPDOWNLIST, not LBS_SORT; combos sort only with
+     * CBS_SORT (combo_message). f5-10C2 fixture finding. */
     int at = list_add(h, c, m == LB_ADDSTRING ? -1 : (int)wp, lp,
-                      m == LB_ADDSTRING && (w->style & LBS_SORT));
+                      m == LB_ADDSTRING && c->kind != COMBOBOX &&
+                          (w->style & LBS_SORT));
     if ((c = control(h))) {
       list_scrollbar(h, c);
       changed(h);

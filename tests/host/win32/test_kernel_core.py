@@ -109,7 +109,9 @@ class KernelCoreTests(unittest.TestCase):
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-dialogs run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
-                                 ['dialog_units','dialog_keyboard','font_budget','dialog_teardown'])
+                                 ['dialog_units','dialog_controls','dialog_keyboard','dialog_menu',
+                                  'dialog_msgbox','font_bridge','font_budget','dialog_teardown'])
+                self.assertIn('CIUKI_F5_PROBE("w32-dialogs"',(ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 continue
             if case['probe']=='w32-ddraw':
                 self.assertIn('authored, unrun',case['integration_pending'])

@@ -29,7 +29,29 @@ enum w32r_op {
     W32R_CLIP_OPEN=0x100, W32R_CLIP_CLOSE, W32R_CLIP_EMPTY, W32R_CLIP_SET,
     W32R_CLIP_GET, W32R_CLIP_QUERY, W32R_CLIP_OWNER, W32R_CLIP_VIEWER,
     W32R_CLIP_CHAIN, W32R_WINDOW_CLASS,
-    W32R_USER_CLEANUP /* index=TID, or zero for all USER identities of the PID */
+    W32R_USER_CLEANUP, /* index=TID, or zero for all USER identities of the PID */
+    /* f5-10C2 PE-to-native font bridge (docs/design/fonts-contract.md,
+     * "PE-to-native font bridge"): w32srv rasterises with libfont (FreeType
+     * 2.13.3, v35, grey). path = native face path in the system or install
+     * store, name = "", key/access/flags zero. GLYPHS: index = em size in
+     * 26.6 pixels (64..8192), type = glyph count (1..W32R_FONT_BATCH), data =
+     * uint32 glyph indices; reply data = count records (struct w32r_glyph
+     * then width*height coverage bytes), as many as fit W32R_DATA. CMAP:
+     * index = first code point (multiple of 256, below 0x110000), no data;
+     * reply data = 256 uint16 glyph indices (0 = missing). STATS: path "",
+     * reply data = struct w32r_font_stats. Face replies carry the face's
+     * resident bytes in key. Typed refusals: 13 not a store TrueType face
+     * (CFF, collection, damaged directory), 50 unsupported em size, 8 face
+     * larger than the shared budget, 5 path outside the stores, 2 missing. */
+    W32R_FONT_GLYPHS = 0x180, W32R_FONT_CMAP, W32R_FONT_STATS
+};
+#define W32R_FONT_BATCH 64u
+/* Win32 orientation: top is the distance from the baseline up to the first
+ * coverage row (GLYPHMETRICS.gmptGlyphOrigin.y, FreeType bitmap_top). */
+struct w32r_glyph { uint32_t glyph; uint16_t width, height; int16_t left, top; int32_t advance; };
+struct w32r_font_stats {
+    uint32_t version, faces, open_faces, face_bytes, face_peak, budget;
+    uint32_t requests, glyphs, cmap_pages, opens, evictions, refusals;
 };
 /* No pointers on the wire. Request tail = path NUL, name NUL, data bytes.
  * Strings are UTF-8; value bytes are canonical UTF-16LE for string types.
@@ -66,6 +88,8 @@ struct w32r_packet {
 _Static_assert(sizeof(struct w32r_request) == 40, "registry request");
 _Static_assert(sizeof(struct w32r_reply) == 40, "registry reply");
 _Static_assert(sizeof(struct w32r_packet) == 256, "registry packet");
+_Static_assert(sizeof(struct w32r_glyph) == 16, "font glyph record");
+_Static_assert(sizeof(struct w32r_font_stats) == 48, "font statistics");
 /* Frozen f5-04 service record, repeated without kernel-private declarations.
  * CIUKI_SYS_W32=96, operation=0x200. REGISTER=1 CONNECT=2 ACCEPT=3.
  * The production kernel layout is checked against this prefix by host tests. */

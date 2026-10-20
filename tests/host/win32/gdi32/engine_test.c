@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "../../../../sdk/win32/gdi32/native_font.h"
 #include "support.h"
+#include <ciuki/font.h>
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -753,6 +754,107 @@ static void text(const char *font_path) {
   test_reset();
   puts("PASS text");
 }
+/* f5-10C2 baseline: glyph rows against the outline box read independently
+ * from the font file (head.unitsPerEm, loca/glyf yMin/yMax), with the
+ * Win32 convention (GLYPHMETRICS.gmptGlyphOrigin.y above the baseline). */
+static unsigned be16(const uint8_t *p) { return (unsigned)p[0] << 8 | p[1]; }
+static uint32_t be32(const uint8_t *p) {
+  return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
+         p[3];
+}
+static const uint8_t *sfnt_table(const uint8_t *d, size_t n, const char *tag) {
+  unsigned count = be16(d + 4);
+  for (unsigned i = 0; i < count && 12 + 16 * (i + 1) <= n; i++)
+    if (!memcmp(d + 12 + 16 * i, tag, 4)) {
+      uint32_t at = be32(d + 12 + 16 * i + 8);
+      assert(at < n);
+      return d + at;
+    }
+  abort();
+}
+static void outline_box(const uint8_t *d, size_t n, unsigned glyph,
+                        int *ymin, int *ymax, unsigned *upem) {
+  const uint8_t *head = sfnt_table(d, n, "head"), *loca = sfnt_table(d, n, "loca"),
+                *glyf = sfnt_table(d, n, "glyf");
+  *upem = be16(head + 18);
+  uint32_t at = be16(head + 50) ? be32(loca + 4 * glyph)
+                                : 2u * be16(loca + 2 * glyph);
+  const uint8_t *g = glyf + at;
+  assert(g + 10 <= d + n);
+  *ymin = (int16_t)be16(g + 4);
+  *ymax = (int16_t)be16(g + 8);
+}
+static void ink_rows(const uint32_t *pixels, int w, int h, int *top,
+                     int *bottom) {
+  *top = h, *bottom = -1;
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++)
+      if (pixels[y * w + x] & 0xffffff) {
+        if (y < *top)
+          *top = y;
+        *bottom = y;
+      }
+}
+static void baseline(const char *font_path) {
+  FILE *file = fopen(font_path, "rb");
+  assert(file);
+  static uint8_t data[1 << 20];
+  size_t n = fread(data, 1, sizeof(data), file);
+  fclose(file);
+  assert(n > 64 && n < sizeof(data));
+  struct ciuki_font_face *face;
+  assert(!ciuki_font_open(font_path, &face));
+  static uint32_t pixels[64 * 80];
+  struct w32_dib s = test_dib(pixels, 64, 80, 32, 0, 1);
+  HDC dc = dc_for(&s);
+  HFONT font = w32_gdi_native_font_open(font_path, 12 * 64);
+  assert(font && SelectObject(dc, font));
+  SetTextColor(dc, RGB(255, 255, 255));
+  SetBkMode(dc, TRANSPARENT);
+  struct ciuki_font_size_metrics m;
+  assert(!ciuki_font_get_size_metrics(face, 12 * 64, &m));
+  int ascent = (m.ascent + 63) / 64;
+  const char probes[] = {'H', 'x', 'g', 'p'};
+  int pinned[4][2];
+  for (unsigned i = 0; i < 4; i++) {
+    unsigned glyph, upem;
+    int ymin, ymax, top, bottom, top2, bottom2;
+    assert(!ciuki_font_lookup(face, (unsigned char)probes[i], &glyph));
+    outline_box(data, n, glyph, &ymin, &ymax, &upem);
+    /* TA_BASELINE at y=40: rows above the baseline are 39, 38, ... */
+    memset(pixels, 0, sizeof(pixels));
+    SetTextAlign(dc, TA_BASELINE);
+    assert(TextOutA(dc, 4, 40, &probes[i], 1));
+    ink_rows(pixels, 64, 80, &top, &bottom);
+    int want_top = 40 - (ymax * 12 + (int)upem / 2) / (int)upem;
+    int want_bottom = 40 - (ymin * 12 + (int)upem / 2) / (int)upem - 1;
+    printf("GLYPH %c top=%d bottom=%d outline_top=%d outline_bottom=%d\n",
+           probes[i], top, bottom, want_top, want_bottom);
+    /* Grid fitting moves edges by at most one pixel (FreeType glyph
+     * conventions); a flat bottom on the baseline stays exactly on it. */
+    assert(top >= want_top - 1 && top <= want_top + 1);
+    assert(bottom >= want_bottom - 1 && bottom <= want_bottom + 1);
+    if (!ymin)
+      assert(bottom == 39);
+    if (ymin < 0)
+      assert(bottom >= 40);
+    /* TA_TOP at y=4 puts the baseline at 4 + ascent. */
+    memset(pixels, 0, sizeof(pixels));
+    SetTextAlign(dc, TA_TOP);
+    assert(TextOutA(dc, 4, 4, &probes[i], 1));
+    ink_rows(pixels, 64, 80, &top2, &bottom2);
+    assert(top2 - top == 4 + ascent - 40 && bottom2 - bottom == 4 + ascent - 40);
+    pinned[i][0] = top, pinned[i][1] = bottom;
+  }
+  /* Pinned rows: Liberation Sans Regular 2.1.5, 12 px em, FreeType 2.13.3
+   * v35, baseline y=40. */
+  static const int expected[4][2] = {{31, 39}, {33, 39}, {33, 41}, {33, 41}};
+  assert(!memcmp(pinned, expected, sizeof(expected)));
+  assert(!DeleteObject(font));
+  ciuki_font_close(face);
+  test_reset();
+  puts("PASS baseline");
+}
 static DWORD authored(unsigned x, unsigned y) {
   return (((x * 37 + y * 19) & 255) << 16) | (((x * 13 + y * 43) & 255) << 8) |
          ((x * 61 + y * 7) & 255);
@@ -957,6 +1059,9 @@ int main(int argc, char **argv) {
   else if (!strcmp(argv[1], "text")) {
     assert(argc == 3);
     text(argv[2]);
+  } else if (!strcmp(argv[1], "baseline")) {
+    assert(argc == 3);
+    baseline(argv[2]);
   } else if (!strcmp(argv[1], "frames")) {
     assert(argc == 4);
     frames(argv[2], argv[3]);

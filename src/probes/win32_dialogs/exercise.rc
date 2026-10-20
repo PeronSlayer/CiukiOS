@@ -1,0 +1,36 @@
+// f5-10C2 w32-dialogs fixture resources. SPDX-License-Identifier: LGPL-2.1-or-later
+// 600: every standard control class (Static, Edit, Button, ListBox,
+// ComboBox, ScrollBar) in MS Sans Serif 8 pt; 601: menu bar with a popup.
+600 DIALOGEX 8, 8, 260, 168
+STYLE 0x90C800C0
+CAPTION "Ciuki controls"
+FONT 8, "MS Sans Serif", 400, 0, 1
+BEGIN
+  LTEXT "&Name:", 709, 7, 9, 30, 8
+  EDITTEXT 701, 40, 7, 100, 14, 0x00810080
+  AUTOCHECKBOX "&Check", 702, 150, 9, 60, 10, 0x00010000
+  AUTORADIOBUTTON "Radio &1", 703, 14, 36, 60, 10, 0x00030000
+  AUTORADIOBUTTON "Radio &2", 704, 14, 50, 60, 10, NOT 0x00010000
+  GROUPBOX "Group", 710, 7, 26, 120, 40, 0x00020000
+  LISTBOX 705, 134, 26, 119, 40, 0x00A30001
+  COMBOBOX 706, 7, 72, 120, 60, 0x00210003
+  EDITTEXT 707, 134, 72, 119, 40, 0x00A01044 | NOT 0x00010000
+  SCROLLBAR 708, 7, 118, 246, 10, 0x00000000
+  CONTROL "", 711, "Static", 0x00000010, 7, 132, 246, 2
+  DEFPUSHBUTTON "OK", 1, 149, 146, 50, 14, 0x00030000
+  PUSHBUTTON "Cancel", 2, 203, 146, 50, 14, 0x00010000
+END
+601 MENU
+BEGIN
+  POPUP "&File"
+  BEGIN
+    MENUITEM "&Open...", 801
+    MENUITEM "&Save", 802, GRAYED
+    MENUITEM SEPARATOR
+    MENUITEM "E&xit", 803
+  END
+  POPUP "&View"
+  BEGIN
+    MENUITEM "&Toolbar", 804, CHECKED
+  END
+END

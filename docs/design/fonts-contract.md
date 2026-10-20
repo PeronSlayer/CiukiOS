@@ -233,10 +233,10 @@ requests on the store faces and hands the f5-10B text boundary a provider
 per logical font. A native face backend (`w32_gdi_set_face_backend`: open,
 lookup, raster, free, resident) supplies FreeType 2.13.3 coverage through the
 unchanged SDK `libfont` API (`w32_gdi_native_backend()` in
-`native_font.c`). Until the PE-to-native bridge installs that backend in the
-guest personality, the layer runs metric-only: metrics, extents and layout
-come from the validated tables (hmtx advances rounded to whole pixels) and no
-coverage is drawn. Host evidence: `tests/host/win32/dialogs` (`fonts`,
+`native_font.c`). Without a backend the layer runs metric-only: metrics,
+extents and layout come from the validated tables (hmtx advances rounded to
+whole pixels) and no coverage is drawn. In the guest personality the backend
+is the PE-to-native bridge (f5-10C2, section below). Host evidence: `tests/host/win32/dialogs` (`fonts`,
 `parser`, frames).
 
 **Store.** `C:\WINDOWS\FONTS` maps to `/System/fonts` (the twelve pinned
@@ -350,3 +350,86 @@ creation in `MM_TEXT` units; em sizes above 128 px clamp; no symbol faces
 1252 glyph mapping; `GetGlyphOutline` serves `GGO_METRICS`, `GGO_BITMAP` and
 `GGO_GRAY*_BITMAP` with the identity matrix only (`GGO_NATIVE`/`GGO_BEZIER`
 return `GDI_ERROR`); `GetFontData` reads the store file per call.
+
+## PE-to-native font bridge (f5-10C2, 2026-10-20)
+
+The guest gdi32 is a freestanding PE; libfont and FreeType are native ELF
+code. The bridge carries rasterised glyphs from the native engine to the
+selection layer above without mapping any font file into a Win32 process.
+
+**Where glyphs are rasterised.** `w32srv` (the existing Win32 service,
+`W32_SERVICE_W32SRV`) links libfont (`apps/w32srv/fonts.c`, `-lfont`) and
+opens each store face once for every Win32 process, with the same pinned
+FreeType 2.13.3 configuration (interpreter v35, grey coverage,
+`FT_LOAD_TARGET_NORMAL`). No new system call: requests use the existing
+serialized transport (`w32_server_exchange` in ntdll, 256-byte stop-and-wait
+fragments over the w32srv channel). gdi32 installs the client
+(`sdk/win32/gdi32/bridge.c`) as its default face backend in the guest build;
+host builds keep choosing their backend explicitly.
+
+**Protocol** (`w32/server.h`): `W32R_FONT_CMAP` returns the 256 glyph indices
+of one code-point page (`ciuki_font_lookup`, 0 = missing glyph, as the
+[cmap](https://learn.microsoft.com/en-us/typography/opentype/spec/cmap)
+defines glyph 0); `W32R_FONT_GLYPHS` returns up to 64 glyphs at one em size
+(26.6 pixels, 64..8192), each a 16-byte record (index, width, height, left,
+top, 26.6 hinted advance) followed by its 8-bit coverage rows, as many as fit
+`W32R_DATA` (64 KiB); `W32R_FONT_STATS` returns the service counters. A face
+is named by its native path, accepted only as a plain `.ttf` file name
+directly inside the system store (`/System/fonts`) or the install store
+(`/WINDOWS/FONTS`). The client asks for one glyph per miss (one BEGIN and one
+or two READ fragments for user-interface sizes, measured on the host), keeps
+four code-point pages per face, and retries a reply larger than its 4 KiB
+stack buffer once with a 64 KiB heap buffer (large sizes only).
+
+**Orientation.** `w32_gdi_glyph.top`, the wire `top` and GetGlyphOutline's
+`gmptGlyphOrigin.y` are the distance from the baseline up to the first
+coverage row: Microsoft
+[GLYPHMETRICS](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-glyphmetrics)
+(upper left corner of the black box, relative to the cell origin on the
+baseline, per [GetGlyphOutline](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-getglyphoutlinea)),
+FreeType `bitmap_top` ("the distance from the baseline to the top-most glyph
+scanline, upwards y coordinates being positive",
+[glyph retrieval](https://freetype.org/freetype2/docs/reference/ft2-glyph_retrieval.html)).
+libfont stores `-bitmap_top` (y down), so every reader negates it: the
+service, the f5-10C backend and, since f5-10C2, the f5-10B provider
+`w32_gdi_native_font_open` (its ten text frames are re-pinned; a pinned test
+checks glyph rows against the `glyf` yMin/yMax box). TEXTMETRIC ascent and
+descent stay "units above/below the base line"
+([TEXTMETRIC](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-textmetrica));
+ABC widths keep A + B + C = advance
+([ABC](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-abc)).
+
+**Validation and refusals (W21, typed).** Before FreeType sees a file the
+service checks the sfnt table directory
+([font file organization](https://learn.microsoft.com/en-us/typography/opentype/spec/otff)):
+version 0x00010000 or `true`, 1..64 table records inside the file, `head`
+(magic 0x5F0F3CF5, unitsPerEm 16..16384), `hhea`, `maxp`, `hmtx`, `cmap`,
+`glyf`, `loca`; files above 16 MiB are refused. Refusals: 13 for CFF
+(`OTTO`), collections (`ttcf`) and damaged directories (remembered per path),
+50 for em sizes outside 1..128 pixels, 8 for a face larger than the service
+budget, 5 for a path outside the stores, 2 for a missing file, 87 for a
+malformed request, 120 when the engine is absent. A refused face leaves its
+logical fonts metric-only; gdi32 asks again only after 256 further requests
+for that face.
+
+**Budget.** The faces open in the service are an LRU inside 1,572,864 bytes
+(`WF_BUDGET`): the shared 2 MiB minus 512 KiB for what the per-face accounting
+does not see, i.e. the linked engine text (w32srv `text` grows from 106,300 to
+290,488 bytes: 184,188 bytes) and FreeType's transient interpreter and
+snapshot peak above the accounted face (F2-63: 731,509-byte peak against at
+most 541,784 accounted bytes for Liberation Sans). A face accounts its file,
+a 64 KiB allowance and the libfont cache, trimmed to 64 KiB after every
+request. Per process, gdi32 keeps its 256 KiB glyph LRU and accounts only the
+client (2,364 bytes per open face); the f5-10C 2 MiB envelope therefore holds
+per process and the faces are counted once, system-wide.
+
+**Host evidence** (`tests/host/win32/dialogs`, modes `bridge`,
+`frames-bridge`, `exercise`): glyphs through the bridge are byte-identical to
+the direct backend for seven fonts (dialog, System, bold italic, 24 px serif,
+mono, 96 px); the 22 pinned f5-10C frames rendered through the bridge keep
+their SHA-256; cache hits cross no request; service LRU evictions inside a
+700 KiB budget; the typed refusals above; the w32-dialogs fixture's run
+passes the suite predicates through the runner's evidence parser. Host
+figures do not establish guest latency: a glyph miss costs one w32srv round
+trip of two or three fragments, and w32srv now yields instead of sleeping
+10 ms while a transaction is in flight (20 ms window).

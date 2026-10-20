@@ -153,6 +153,10 @@ class Gdi32Tests(unittest.TestCase):
     def test_user32_borrowed_surface_defaults_child_origin_and_device_clipping(self): self.execute('child')
     def test_font_provider_metadata_extents_and_saved_stock_lifetime(self): self.execute('font-boundary')
     def test_freetype_cp1252_extent_alignment_dx_and_drawtext_layout(self): self.execute('text', FONT)
+    def test_glyph_baseline_against_outline_box_and_pinned_rows(self):
+        # f5-10C2: glyph tops follow the Win32 convention (above the baseline).
+        out = self.execute('baseline', FONT)
+        self.assertIn('GLYPH H top=31 bottom=39', out)
 
     def test_pinned_frames_and_independent_pixel_oracles(self):
         folder = self.out/'frames'

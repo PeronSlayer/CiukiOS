@@ -14,6 +14,12 @@
 #include <ciuki/display.h>
 #include <ciuki/proc.h>
 #endif
+/* W32SRV_GUEST: the image's service, linked with libfont (build_w32srv.py);
+ * host replays of this loop build without the font engine. */
+#ifdef W32SRV_GUEST
+#include <ciuki/raw.h>
+#include "fonts.h"
+#endif
 static volatile sig_atomic_t stopping;
 static void stop(int signo){(void)signo;stopping=1;}
 static uint64_t now(void){struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000+(uint32_t)t.tv_nsec/1000000;}
@@ -49,12 +55,32 @@ int main(int argc,char **argv)
     int records=ciuki_proc_list(&snapshot,sizeof(snapshot));
     if(records<0||(uint32_t)records!=snapshot.system.records||snapshot.system.records>CIUKI_PROCESS_MAX||
        snapshot.system.version!=CIUKI_PROC_VERSION||wr_reconcile(&s,alive,NULL)){wr_destroy(&s);return 1;}
-    if(wr_flush(&s)||service(1,&a)<0){wr_destroy(&s);return 1;}
+#ifdef W32SRV_GUEST
+    /* f5-10C2 font bridge: system faces read-only, AddFontResource copies
+     * under C:\WINDOWS\FONTS. A missing engine refuses font requests (120). */
+    struct wf_config font_config={.system_dir="/System/fonts",.install_dir="/WINDOWS/FONTS"};
+    struct wf_service *fonts=wf_create(&font_config);
+    if(fonts){s.font_call=wf_call;s.fonts=fonts;}
+    else fprintf(stderr,"[win32] fonts unavailable\n");
+#endif
+    if(wr_flush(&s)||service(1,&a)<0){
+#ifdef W32SRV_GUEST
+        wf_destroy(fonts);
+#endif
+        wr_destroy(&s);return 1;
+    }
     uint64_t display_deadline=now()+2000;
     static struct {int fd;struct wr_session session;} clients[64];
     for(unsigned i=0;i<64;i++){clients[i].fd=-1;memset(&clients[i].session,0,sizeof(clients[i].session));}
     signal(SIGTERM,stop);signal(SIGINT,stop);
+    /* A transaction is a stop-and-wait sequence of 256-byte fragments. While
+     * one is in flight (20 ms after the last fragment) the loop yields
+     * instead of sleeping 10 ms per fragment (f5-10C2: glyph replies). */
+#ifdef W32SRV_GUEST
+    uint64_t active_until=0;
+#endif
     while(!stopping){
+        int busy=0;
         while(service(3,&a)>0){
             unsigned i=0;while(i<64&&clients[i].fd>=0)i++;
             if(i==64){close((int)a.endpoint);continue;}
@@ -66,7 +92,7 @@ int main(int argc,char **argv)
             if(r<=0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;continue;}
             if(m.fd_count){for(unsigned j=0;j<m.fd_count;j++)close(m.fds[j]);}
             if(m.length!=256||m.fd_count||m.sender_pid!=clients[i].session.pid)continue;
-            struct w32r_packet packet,reply;memcpy(&packet,m.data,256);wr_packet(&s,&clients[i].session,&packet,&reply);
+            struct w32r_packet packet,reply;memcpy(&packet,m.data,256);wr_packet(&s,&clients[i].session,&packet,&reply);busy=1;
             memset(&m,0,sizeof(m));m.length=256;memcpy(m.data,&reply,256);
             if(ciuki_channel_send(clients[i].fd,&m,1)<0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;}
         }
@@ -79,9 +105,18 @@ int main(int argc,char **argv)
             }
             display_deadline=time+2000;
         }
+#ifdef W32SRV_GUEST
+        if(busy)active_until=time+20;
+        if(time<active_until){(void)ciuki_raw_yield(0,0,0,0,0,0);continue;}
+#else
+        (void)busy;
+#endif
         struct timespec delay={.tv_sec=0,.tv_nsec=10000000};nanosleep(&delay,NULL);
     }
     for(unsigned i=0;i<64;i++)if(clients[i].fd>=0){wr_session_close(&clients[i].session);close(clients[i].fd);}
+#ifdef W32SRV_GUEST
+    wf_destroy(fonts);
+#endif
 #else
     (void)stopping;(void)stop;
     fprintf(stderr,"w32srv: host binary supports --seed only\n");

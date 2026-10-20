@@ -35,15 +35,19 @@ static int raster(void *opaque, unsigned em, DWORD cp, int index,
     return 0;
   if (ciuki_font_raster(f->face, glyph_index, em, &bitmap))
     return 0;
+  /* f5-10C2: libfont reports the top row as a y-down offset from the
+   * baseline (-FT_GlyphSlot.bitmap_top); w32_gdi_glyph.top is the Win32
+   * distance above the baseline (GLYPHMETRICS.gmptGlyphOrigin.y, FreeType
+   * bitmap_top), which text.c composes as baseline - top. */
   *out = (struct w32_gdi_glyph){bitmap.width,   bitmap.height, bitmap.stride,
-                                bitmap.left,    bitmap.top,    bitmap.advance,
+                                bitmap.left,    -bitmap.top,   bitmap.advance,
                                 bitmap.coverage};
   return 1;
 }
 static void free_glyph(void *opaque, struct w32_gdi_glyph *g) {
   (void)opaque;
   struct ciuki_font_bitmap bitmap = {g->width, g->height,  g->pitch,   g->left,
-                                     g->top,   g->advance, g->coverage};
+                                     -g->top,  g->advance, g->coverage};
   ciuki_font_bitmap_free(&bitmap);
   g->coverage = 0;
 }

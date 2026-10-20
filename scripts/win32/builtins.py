@@ -102,6 +102,11 @@ def build(out=None):
     hashes[peer_exe.name]=hashlib.sha256(peer_exe.read_bytes()).hexdigest()
     exercise=ddraw.build_exercise(fixture_source)
     hashes[exercise.name]=hashlib.sha256(exercise.read_bytes()).hexdigest()
+    # f5-10C2: the w32-dialogs guest fixture, its imports checked against the
+    # builtins just built.
+    from scripts.win32 import dialogs_fixture
+    dialogs=dialogs_fixture.build(fixture_source,out)
+    hashes[dialogs.name]=hashlib.sha256(dialogs.read_bytes()).hexdigest()
     # Same authored PE bytes under a separate, explicitly shimmed identity.
     shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
     hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()

@@ -11,6 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT/'build/apps/w32srv'
 SOURCES = ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','main.c')
+GUEST_SOURCES = ('fonts.c',)
 
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path)
@@ -36,8 +37,11 @@ def build():
     try:return validate_payloads()
     except (ValueError,OSError,KeyError):pass
     sdk=ROOT/'build/tools/ciuki-sdk'
-    subprocess.run([str(sdk/'bin/ciuki-cc'),'-O2','-Wall','-Wextra','-Werror',
-                    '-I'+str(ROOT/'sdk/win32/include'),*(str(ROOT/'apps/w32srv'/s) for s in SOURCES),'-o',str(OUT/'w32srv')],check=True)
+    # f5-10C2: the guest service also rasterises glyphs for gdi32 (fonts.c over
+    # the SDK libfont/FreeType); the host seed build stays registry-only.
+    subprocess.run([str(sdk/'bin/ciuki-cc'),'-O2','-Wall','-Wextra','-Werror','-DW32SRV_GUEST',
+                    '-I'+str(ROOT/'sdk/win32/include'),*(str(ROOT/'apps/w32srv'/s) for s in (*SOURCES,*GUEST_SOURCES)),
+                    '-lfont','-o',str(OUT/'w32srv')],check=True)
     checker=module('w32srv_elf',ROOT/'sdk/tests/check_sdk.py')
     evidence=checker.inspect(OUT/'w32srv')
     host=OUT/'seed-hives'

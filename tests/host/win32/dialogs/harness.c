@@ -761,6 +761,7 @@ static void menus_frames(HWND, const char *);
 #include "dialogs.inc"
 #include "menus.inc"
 #include "upper.inc"
+#include "bridge.inc"
 
 static const char *mode;
 static void harness_run(void) {
@@ -804,6 +805,12 @@ static void harness_run(void) {
     test_upper_user();
   else if (!strcmp(mode, "upper-gdi"))
     test_upper_gdi();
+  else if (!strcmp(mode, "bridge"))
+    test_bridge();
+  else if (!strcmp(mode, "frames-bridge"))
+    frames_bridge();
+  else if (!strcmp(mode, "exercise"))
+    test_exercise();
   else
     CHECK(!"unknown mode");
   wr_destroy(&server);
