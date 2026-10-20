@@ -353,6 +353,30 @@ int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vf
     int fd=mkstemp(files[i].path); CHECK(fd>=0); files[i].cow=fdopen(fd,"w+b"); CHECK(files[i].cow);
     files[i].cow_open=true; scratch++; handles++; return 1;
 }
+/* f3-51c content version of the open base. The fake models a VFS write
+ * (write generation) whenever a test changes the base bytes: content
+ * function and boot signature fold into the version, as do the fixture's
+ * location (path), attachment, modification time and write counter. */
+static uint64_t base_mount=1, base_writes;
+static uint32_t base_location, base_mtime;
+static int version_error;
+static unsigned version_calls;
+static void (*version_hook)(void);
+int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_version *out)
+{
+    unsigned i=file_slot(table); CHECK(handle==0 && files[i].base_open && out);
+    version_calls++;
+    if (version_hook) version_hook();
+    if (version_error) return version_error;
+    uint32_t path=0; for (const char *c=last_base;*c;c++) path=path*31u+(uint8_t)*c;
+    memset(out,0,sizeof(*out));
+    out->mount=base_mount; out->drive=(uint32_t)(last_base[0]-'A'); out->drive_generation=1;
+    out->parent=path; out->index=base_location;
+    out->first=(uint32_t)(uintptr_t)files[i].base_sector ^ (bad_signature ? 0x80000000u : 0);
+    out->size=(uint32_t)files[i].base_bytes; out->write_date=(uint16_t)(base_mtime>>16); out->write_time=(uint16_t)base_mtime;
+    out->write_generation=base_writes;
+    return 0;
+}
 int vfs_close(struct vfs_table *table, int handle)
 { unsigned i=file_slot(table); if (handle==0) { CHECK(files[i].base_open); files[i].base_open=false; } else if (handle==2) { CHECK(files[i].identity_open); files[i].identity_open=false; }
   else { CHECK(handle==1 && files[i].cow_open); files[i].cow_open=false; } handles--; return fail_close ? -V86_EIO : 0; }
@@ -819,6 +843,7 @@ int main(void)
     test_workloads();
     test_kernel_choice();
     test_game_window_base_hash();
+    test_game_digest_cache();
     test_timer();
     test_menu();
     test_irq_stall();

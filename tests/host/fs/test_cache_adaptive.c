@@ -182,7 +182,7 @@ static void fat_sequential(unsigned bytes) {
             .type=32,.spc=8,.fats=1,.mounted=true};
         struct fat_entry file={.first=2,.size=MIB}; uint8_t buf[16384]; size_t done;
         for (unsigned offset=0;offset<MIB;offset+=bytes) {
-            int e=ahead ? fat_read_stream(&vol,&file,offset,buf,bytes,&done,&stream) : fat_read(&vol,&file,offset,buf,bytes,&done);
+            int e=ahead ? fat_read_stream(&vol,&file,offset,buf,bytes,&done,&stream,0) : fat_read(&vol,&file,offset,buf,bytes,&done);
             CHECK(!e && done==bytes);
             for (unsigned i=0;i<bytes;i++) CHECK(buf[i]==pattern(33+offset/512+i/512));
             while (ahead && cache_prefetch_tick(&c)) { }

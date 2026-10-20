@@ -221,8 +221,9 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     int locked=section ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
     if(w32_file_sync){int sync=w32_file_sync(n);if(sync)return sync;}
     struct fat_entry before = n->entry;
-    int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) : write ? VFS_IO(d->node->space->vfs,fat_write(n->volume, &n->entry, position, buffer, bytes, done)) :
-                      VFS_IO(d->node->space->vfs,fat_read(n->volume, &n->entry, position, buffer, bytes, done));
+    int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) :
+        write ? VFS_IO(d->node->space->vfs,fat_write_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done)) :
+                VFS_IO(d->node->space->vfs,fat_read_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done));
     if(write && *done && w32_file_changed)w32_file_changed(n,position,buffer,(uint32_t)*done);
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* fat_write reports the committed count even if the later FSInfo hint
@@ -352,12 +353,13 @@ static int image_open(void *cwd_arg, const char *path, struct ciuki_file *out)
     uint32_t buffer_bytes=image->bytes<BLKDEV_READ_BYTES ? image->bytes : BLKDEV_READ_BYTES;
     void *buffer=!err && buffer_bytes ? fs_contig_alloc(buffer_bytes) : 0;
     if (!err && buffer_bytes && !buffer) err=-ENOMEM;
+    struct fat_cursor cursor = {0}; /* f3-51c: sequential image read, linear in the chain */
     for (uint32_t offset = 0; !err && offset < image->bytes; offset += BLKDEV_READ_BYTES) {
         uint32_t bytes = image->bytes - offset;
         if (bytes > BLKDEV_READ_BYTES) bytes = BLKDEV_READ_BYTES;
         size_t done = 0;
         err = px_error(r.node->ro ? VFS_IO(s->vfs,fs_ro_read(r.node->ro,r.node->ro_id,offset,buffer,bytes,&done)) :
-                       VFS_IO(s->vfs,fat_read(r.node->volume, &r.node->entry, offset, buffer, bytes, &done)));
+                       VFS_IO(s->vfs,fat_read_cursor(r.node->volume, &r.node->entry, &cursor, offset, buffer, bytes, &done)));
         proc_launch_volume_read(bytes, done);
         if (!err && done != bytes) err = -EIO;
         for (uint32_t off=0; !err && off<bytes; off+=PAGE_SIZE) {

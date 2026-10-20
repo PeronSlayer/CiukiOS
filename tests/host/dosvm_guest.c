@@ -247,6 +247,7 @@ struct storage *storage_get(void) { return &store; }
 #define vfs_read transport_vfs_read
 #define vfs_write transport_vfs_write
 #define vfs_commit transport_vfs_commit
+#define vfs_handle_version transport_vfs_handle_version
 #endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
@@ -282,6 +283,9 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 int vfs_write(struct vfs_table *table, int handle, const void *data, size_t bytes, size_t *done)
 { (void)table; CHECK(handle == 1 && fseek(cow, (long)pos[1], SEEK_SET) == 0); *done = fwrite(data, 1, bytes, cow); return 0; }
 int vfs_commit(struct vfs_table *table, int handle) { (void)table; (void)handle; return 0; }
+/* f3-51c: no content version; a game/kernel base would be hashed each launch. */
+int vfs_handle_version(struct vfs_table *table, int handle, struct vfs_file_version *out)
+{ (void)table; (void)handle; (void)out; return -FS_EOPNOTSUPP; }
 
 static struct dosvm *gv;
 static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; }

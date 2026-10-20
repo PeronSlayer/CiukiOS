@@ -272,6 +272,33 @@ static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32
     }
     *out=c; return 0;
 }
+/* f3-51c chain generations. Issued under the volume reservation that also
+ * serializes every lookup and FAT mutation of this volume; a remount starts
+ * again from zero, but every description and identity of the former mount
+ * already fails with EIO before it could follow a cursor. */
+static uint64_t chain_stamp(struct fat_volume *v) { return ++v->chain_stamp; }
+static bool cursor_valid(struct fat_volume *v, const struct fat_entry *file, const struct fat_cursor *c) {
+    return c && c->first && c->first==file->first && c->generation==file->chain_generation &&
+        c->index<v->clusters && valid(v,c->cluster) && (c->index || c->cluster==c->first);
+}
+/* Resolve cluster index of a file from the nearest valid pair at or before
+ * it: the open file's cursor, the entry's write cursor, else the first
+ * cluster (MS-DOS FNDCLUS: from sf_lstclus when the target is not before
+ * sf_cluspos, otherwise from sf_firclus). Same bounds/corruption rules. */
+static int file_cluster(struct fat_volume *v, const struct fat_entry *file,
+                        const struct fat_cursor *cursor, uint32_t index, uint32_t *out) {
+    if (index>=v->clusters || !valid(v,file->first)) return corrupt(v,"chain_bounds",file->first);
+    uint32_t from=file->first, at=0;
+    const struct fat_cursor *hints[2]={cursor,&file->write_cursor};
+    for (unsigned i=0;i<2;i++)
+        if (cursor_valid(v,file,hints[i]) && hints[i]->index<=index && hints[i]->index>=at) {
+            from=hints[i]->cluster; at=hints[i]->index;
+        }
+    return chain_at(v,from,index-at,out);
+}
+static void cursor_set(struct fat_cursor *cursor, const struct fat_entry *file, uint32_t index, uint32_t cluster) {
+    if (cursor) *cursor=(struct fat_cursor){.generation=file->chain_generation,.first=file->first,.index=index,.cluster=cluster};
+}
 static int dir_sector(struct fat_volume *v, uint32_t dir, uint32_t index, uint32_t *sec) {
     if (!dir && v->type!=32) {
         if (index>=v->root_entries) return -FS_ENOENT;
@@ -305,6 +332,7 @@ static int alias_decode(const uint8_t *b, char out[40]) {
     return path_from_ucs2(u,n,out,40);
 }
 static void decode_entry(struct fat_volume *v, const uint8_t b[32], struct fat_entry *e) {
+    e->chain_generation=chain_stamp(v); /* f3-51c: a fresh copy never adopts an older cursor */
     e->attr=b[11]; e->first=fs_rd16(b+26); if (v->type==32) e->first|=(uint32_t)fs_rd16(b+20)<<16;
     e->size=fs_rd32(b+28); e->times.create_tenths=b[13]; e->times.create_time=fs_rd16(b+14);
     e->times.create_date=fs_rd16(b+16); e->times.access_date=fs_rd16(b+18);
@@ -567,7 +595,7 @@ int fat_create(struct fat_volume *v, uint32_t dir, const char *name, uint8_t att
     uint16_t u[256]; unsigned n; if ((e=path_validate_name(name,u,&n))) return e;
     e=fat_lookup(v,dir,name,out); if (!e) return -FS_EEXIST; if (e!=-FS_ENOENT) return e;
     uint8_t alias[11]; if ((e=make_alias(v,dir,u,n,alias,0))) return e;
-    memset(out,0,sizeof(*out)); out->parent=dir; out->attr=attr;
+    memset(out,0,sizeof(*out)); out->parent=dir; out->attr=attr; out->chain_generation=chain_stamp(v);
     /* Always preserve exact case in LFN; even a short spelling may mix case. */
     out->lfn_count=(uint8_t)((n+12)/13);
     if ((e=slots(v,dir,out->lfn_count+1,&out->lfn_index))) return e;
@@ -586,14 +614,16 @@ int fat_create(struct fat_volume *v, uint32_t dir, const char *name, uint8_t att
     if ((e=publish(v,out,u,n,alias))) return e;
     return hints(v);
 }
-int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, void *buf, size_t size, size_t *done) {
+static int read_span(struct fat_volume *v, const struct fat_entry *file, struct fat_cursor *cursor,
+                     uint64_t pos, void *buf, size_t size, size_t *done) {
     context(v,file->name);
     *done=0; if (!buf && size) return -FS_EINVAL;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
     if (pos>=file->size || !size) return 0;
     if (size>file->size-pos) size=(size_t)(file->size-pos);
     uint32_t c; uint32_t cluster_bytes=(uint32_t)v->spc*512;
-    int e=chain_at(v,file->first,(uint32_t)pos/cluster_bytes,&c); if (e) return e;
+    uint32_t index=(uint32_t)pos/cluster_bytes;
+    int e=file_cluster(v,file,cursor,index,&c); if (e) return e;
     unsigned off=(uint32_t)pos%cluster_bytes; uint32_t walked=0;
     while (size) {
         if (off%512 || size<512) {
@@ -616,7 +646,7 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
                 if ((e=fat_get_cluster(v,c,&next))) return e;
                 if (!valid(v,next) || walked+1>=v->clusters) return corrupt(v,"read_chain",next);
                 if (next!=c+1) break;
-                walked++; c=next; off=0;
+                walked++; index++; c=next; off=0;
             }
             if (file_read_cancelled && file_read_cancelled()) return -4;
             if (sector>=v->sectors || n>v->sectors-sector) return corrupt(v,"read_bounds",c);
@@ -633,19 +663,31 @@ int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, v
         }
         if (off==cluster_bytes && size) {
             uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
-            if (!valid(v,next) || ++walked>=v->clusters) return corrupt(v,"read_chain",next); c=next; off=0;
+            if (!valid(v,next) || ++walked>=v->clusters) return corrupt(v,"read_chain",next);
+            index++; c=next; off=0;
         }
     }
+    cursor_set(cursor,file,index,c); /* the cluster holding the last byte read */
     return 0;
+}
+int fat_read_cursor(struct fat_volume *v, const struct fat_entry *file, struct fat_cursor *cursor,
+                    uint64_t pos, void *buf, size_t size, size_t *done) {
+    int e=read_span(v,file,cursor,pos,buf,size,done);
+    if (e && cursor) *cursor=(struct fat_cursor){0}; /* cancellation, I/O or corruption */
+    return e;
+}
+int fat_read(struct fat_volume *v, const struct fat_entry *file, uint64_t pos, void *buf, size_t size, size_t *done) {
+    return fat_read_cursor(v,file,0,pos,buf,size,done);
 }
 /* Plan only one contiguous run, bounded by file EOF, FAT links, volume and
  * generation. Metadata lookups retain readsec's bounded existing read-ahead;
  * data is queued, never read speculatively in the demand caller. */
 int fat_read_stream(struct fat_volume *v, const struct fat_entry *file, uint64_t pos,
-                    void *buf, size_t size, size_t *done, struct cache_stream *stream) {
-    if (!v->cache->adaptive || v->dev->logical) return fat_read(v,file,pos,buf,size,done);
+                    void *buf, size_t size, size_t *done, struct cache_stream *stream,
+                    struct fat_cursor *cursor) {
+    if (!v->cache->adaptive || v->dev->logical) return fat_read_cursor(v,file,cursor,pos,buf,size,done);
     cache_stream_begin(v->cache,stream,v->dev,pos);
-    int e=fat_read(v,file,pos,buf,size,done);
+    int e=fat_read_cursor(v,file,cursor,pos,buf,size,done);
     uint32_t window=cache_stream_end(stream,pos,*done,!e);
     uint64_t end=pos+*done;
     if (e || !window || end>=file->size || fs_request_check()) return e;
@@ -654,7 +696,8 @@ int fat_read_stream(struct fat_volume *v, const struct fat_entry *file, uint64_t
     uint64_t first=(end+511)&~(uint64_t)511;
     if (first>=file->size || file->size-first<512) return e;
     uint32_t cb=(uint32_t)v->spc*512, c;
-    if (chain_at(v,file->first,(uint32_t)(first/cb),&c)) return e;
+    /* The demand read left the cursor on its last cluster: zero or one link. */
+    if (file_cluster(v,file,cursor,(uint32_t)(first/cb),&c)) return e;
     uint32_t off=(uint32_t)(first%cb), count=0, walked=0;
     uint32_t limit=(uint32_t)((file->size-first)/512);
     if (limit>window/512) limit=window/512;
@@ -703,7 +746,8 @@ static int replace(struct fat_volume *v, struct fat_entry *file, uint32_t size, 
     }
     if ((e=barrier(v))) return e;
     struct fat_entry changed=*file; changed.first=first; changed.size=size; changed.attr|=FAT_ATTR_ARCHIVE;
-    changed.write_cluster=changed.write_index=0;
+    /* f3-51c: relocation; every cursor of the former chain is now foreign. */
+    changed.chain_generation=chain_stamp(v); changed.write_cursor=(struct fat_cursor){0};
     uint8_t tenths; fs_timestamp(&changed.times.write_date,&changed.times.write_time,&tenths);
     if ((e=update(v,&changed))) return e;
     uint32_t old=file->first; *file=changed;
@@ -726,11 +770,6 @@ static int write_free(struct fat_volume *v, uint32_t *cursor, uint32_t *scanned,
     }
     return -FS_ENOSPC;
 }
-static int write_at(struct fat_volume *v, const struct fat_entry *file, uint32_t index, uint32_t *out) {
-    if (file->write_cluster && file->write_index<=index)
-        return chain_at(v,file->write_cluster,index-file->write_index,out);
-    return chain_at(v,file->first,index,out);
-}
 static int write_data(struct fat_volume *v, uint32_t c, uint64_t base,
                       uint64_t begin, uint64_t end, uint64_t pos,
                       const void *data, size_t size, bool fresh) {
@@ -748,8 +787,9 @@ static int write_data(struct fat_volume *v, uint32_t c, uint64_t base,
     }
     return 0;
 }
-static int write_span(struct fat_volume *, struct fat_entry *, uint64_t, const void *, size_t, uint32_t, size_t *);
-int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, size_t *done) {
+static int write_span(struct fat_volume *, struct fat_entry *, struct fat_cursor *, uint64_t, const void *, size_t, uint32_t, size_t *);
+int fat_write_cursor(struct fat_volume *v, struct fat_entry *file, struct fat_cursor *cursor,
+                     uint64_t pos, const void *data, size_t size, size_t *done) {
     context(v,file->name);
     *done=0; int e=writable(v); if (e) return e;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
@@ -757,7 +797,12 @@ int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const 
     if (!data && size) return -FS_EINVAL;
     if (pos>UINT32_MAX || size>UINT32_MAX-pos) return -FS_EFBIG;
     if (!size) return 0;
-    return write_span(v,file,pos,data,size,(uint32_t)(pos+size),done);
+    e=write_span(v,file,cursor,pos,data,size,(uint32_t)(pos+size),done);
+    if (e && cursor) *cursor=(struct fat_cursor){0};
+    return e;
+}
+int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, size_t *done) {
+    return fat_write_cursor(v,file,0,pos,data,size,done);
 }
 /* f0-49: in-place zero-filled extension through the same publication path
  * as an append (data, detached chain, tail link, then length). Existing
@@ -769,9 +814,10 @@ int fat_extend(struct fat_volume *v, struct fat_entry *file, uint32_t size) {
     if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
     if (size<=file->size) return size==file->size ? 0 : -FS_EINVAL;
     size_t done;
-    return write_span(v,file,file->size,0,0,size,&done);
+    return write_span(v,file,0,file->size,0,0,size,&done);
 }
-static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, uint32_t end, size_t *done) {
+static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_cursor *cursor,
+                      uint64_t pos, const void *data, size_t size, uint32_t end, size_t *done) {
     int e;
     identity_changed(v,file,file,FAT_ID_WRITE);
     if ((e=publication_stage(v,FAT_P_DATA))) return e;
@@ -782,7 +828,7 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos
         /* Reuse an owned excess tail left by an interrupted size publish. */
         if (file->first) {
             if (!count) count=1;
-            if ((e=write_at(v,file,count-1,&tail))) return e;
+            if ((e=file_cluster(v,file,cursor,count-1,&tail))) return e;
             for (;;) {
                 uint32_t next; if ((e=fat_get_cluster(v,tail,&next))) return e;
                 if (eoc(v,next)) break;
@@ -794,13 +840,13 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos
     }
     if (extra>v->free_clusters) return -FS_ENOSPC;
     if (extra && tail && split12(v,tail)) return -FS_EOPNOTSUPP;
-    uint32_t cursor=v->next_free, scanned=0, c=0;
+    uint32_t free_cursor=v->next_free, scanned=0, c=0;
     /* Preflight ENOSPC, including excluded FAT12 split entries, before data. */
-    for (uint32_t i=0;i<extra;i++) if ((e=write_free(v,&cursor,&scanned,&c))) return e;
+    for (uint32_t i=0;i<extra;i++) if ((e=write_free(v,&free_cursor,&scanned,&c))) return e;
     uint64_t begin=pos<file->size ? pos : file->size;
     uint32_t index=(uint32_t)(begin/cb), last=0, last_index=0;
     if (index<count) {
-        if ((e=write_at(v,file,index,&c))) return e;
+        if ((e=file_cluster(v,file,cursor,index,&c))) return e;
         while (index<count && begin<end) {
             uint64_t base=(uint64_t)index*cb, stop=base+cb;
             if (stop>end) stop=end;
@@ -813,9 +859,9 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos
             }
         }
     }
-    cursor=v->next_free; scanned=0;
+    free_cursor=v->next_free; scanned=0;
     for (uint32_t i=0;i<extra;i++) {
-        if ((e=write_free(v,&cursor,&scanned,&c))) return write_error(v,e);
+        if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
         uint64_t base=(uint64_t)(count+i)*cb;
         uint64_t stop=base+cb; if (stop>end) stop=end;
         /* Slack beyond EOF is not visible. A later extension initializes it
@@ -826,9 +872,9 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos
     if ((e=barrier(v))) return e; /* data before any allocation links */
     if ((e=publication_stage(v,FAT_P_CHAIN))) return e;
     uint32_t first=0, previous=0;
-    cursor=v->next_free; scanned=0;
+    free_cursor=v->next_free; scanned=0;
     for (uint32_t i=0;i<extra;i++) {
-        if ((e=write_free(v,&cursor,&scanned,&c))) return write_error(v,e);
+        if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
         if ((e=set_cluster(v,c,mask(v)))) return e;
         if (previous && (e=set_cluster(v,previous,c))) return e;
         if (!first) first=c;
@@ -836,18 +882,23 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, uint64_t pos
         v->free_clusters--;
     }
     if (extra) {
-        v->next_free=valid(v,cursor) ? cursor : 2;
+        v->next_free=valid(v,free_cursor) ? free_cursor : 2;
         if ((e=barrier(v))) return e; /* complete detached chain */
+        /* f3-51c: the FAT_P_LINK group mutates this file's chain. Stamp the
+         * caller's entry first, so even a failed group retires its cursors. */
+        file->chain_generation=chain_stamp(v);
         if (tail && ((e=publication_stage(v,FAT_P_LINK)) || (e=set_cluster(v,tail,first)) || (e=barrier(v)))) return e;
     }
     struct fat_entry changed=*file;
     if (!changed.first) changed.first=first;
     if (end>changed.size) changed.size=end;
     changed.attr|=FAT_ATTR_ARCHIVE;
-    changed.write_cluster=last; changed.write_index=last_index;
+    changed.write_cursor=(struct fat_cursor){0};
+    if (last) cursor_set(&changed.write_cursor,&changed,last_index,last);
     uint8_t tenths; fs_timestamp(&changed.times.write_date,&changed.times.write_time,&tenths);
     if ((e=update(v,&changed))) return e; /* chain before directory length */
     *file=changed; *done=size;
+    if (cursor) *cursor=changed.write_cursor; /* the last cluster written */
     return extra ? hints(v) : 0;
 }
 int fat_truncate(struct fat_volume *v, struct fat_entry *file, uint64_t size) {
@@ -901,6 +952,8 @@ int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool fini
         if (eoc(v,tail)) tail=0;
         else if (!valid(v,tail)) return corrupt(v,"reserved_tail",tail);
     } else file->first=0;
+    /* f3-51c: cutting the reserved tail mutates this file's chain. */
+    if (tail) { file->chain_generation=chain_stamp(v); file->write_cursor=(struct fat_cursor){0}; }
     /* Publish the smaller length before unlinking the reserved tail. A
      * crash between these barriers leaves owned excess, never a short chain. */
     if ((e=update(v,file))) return e;
@@ -920,7 +973,9 @@ int fat_remove(struct fat_volume *v, struct fat_entry *file, bool directory) {
         while (!(e=fat_next(v,file->first,&i,&child))) if (!path_equal(child.alias,".") && !path_equal(child.alias,"..")) return -FS_ENOTEMPTY;
         if (e!=-FS_ENOENT) return e;
     }
-    if ((file->index!=UINT32_MAX && (e=unlink_entry(v,file))) || (e=release_chain(v,file->first))) return e;
+    if (file->index!=UINT32_MAX && (e=unlink_entry(v,file))) return e;
+    file->chain_generation=chain_stamp(v); /* f3-51c: the chain is being released */
+    if ((e=release_chain(v,file->first))) return e;
     return hints(v);
 }
 int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, const char *name) {
@@ -1002,6 +1057,7 @@ int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
         if (!retain_replacement) {
             uint32_t chain=replacement->first;
             replacement->first=0; replacement->size=0;
+            replacement->chain_generation=chain_stamp(v); replacement->write_cursor=(struct fat_cursor){0};
             if ((e=release_chain(v,chain))) return e;
         }
     }
