@@ -1,0 +1,182 @@
+USER RegisterClass Owner
+== avivideo
+> open clip-pcm.avi alias v
+USER RegisterClass CiukiAVIWindow
+USER CreateWindow CiukiAVIWindow hwnd=10001 style=00cf0000 32x16 parent=0
+= 0 '1'
+> status v length
+= 0 '6'
+> status v time format
+= 0 'frames'
+> status v frame rate
+= 0 '15000'
+> status v window handle
+= 0 '65537'
+> status v window visible
+= 0 'false'
+> capability v device type
+= 0 'digitalvideo'
+> capability v has audio
+= 0 'true'
+> capability v can stretch
+= 0 'true'
+> where v destination
+= 0 '0 0 32 16'
+> where v source
+= 0 '0 0 32 16'
+> info v product
+= 0 'CiukiOS AVI video'
+> status v audio
+= 0 'true'
+> play v wait
+USER ShowWindow hwnd=10001 5
+TRANSPORT open rate=22050
+= 0 ''
+ORACLE clip-pcm.pcm samples=8820 match=1
+> status v window visible
+= 0 'true'
+> status v position
+= 0 '5'
+FRAME pcm-last 32x16 fnv=49bd76f5
+> seek v to 2
+= 0 ''
+FRAME pcm-seek2 32x16 fnv=714dba05
+> step v by 2
+= 0 ''
+> status v position
+= 0 '4'
+FRAME pcm-step4 32x16 fnv=57f6c3d5
+> step v reverse
+= 0 ''
+> status v position
+= 0 '3'
+> set v time format ms
+= 0 ''
+> status v length
+= 0 '400'
+> status v position
+= 0 '200'
+> set v time format frames
+= 0 ''
+USER CreateWindow Owner hwnd=10002 style=10000000 64x32 parent=0
+> window v handle 65538
+USER ShowWindow hwnd=10001 0
+= 0 ''
+> status v window handle
+= 0 '65538'
+> put v destination at 0 0 64 32
+= 0 ''
+> where v destination
+= 0 '0 0 64 32'
+> seek v to 1
+= 0 ''
+FRAME app-2x-frame1 64x32 fnv=d69450c5
+> play v from 0 to 3 notify
+= 0 ''
+> status v mode
+= 0 'playing'
+> pause v
+= 0 ''
+> resume v
+= 0 ''
+NOTIFY t=875 hwnd=4321 successful id=1
+> status v mode
+= 0 'stopped'
+> status v position
+= 0 '3'
+FRAME app-2x-frame3 64x32 fnv=66fbda05
+> window v handle default
+= 0 ''
+> put v destination
+= 0 ''
+> play v from 4 fullscreen wait
+USER SetWindowPos hwnd=10001 640x480
+= 0 ''
+> where v destination
+= 0 '0 80 640 320'
+USER SetWindowPos hwnd=10001 32x16
+> where v destination
+= 0 '0 0 32 16'
+> where v window
+= 0 '0 0 32 16'
+> play v from 0 repeat notify
+= 0 ''
+> status v mode
+= 0 'playing'
+> stop v
+NOTIFY t=1860 hwnd=4321 aborted id=1
+= 0 ''
+> window v state hide
+USER ShowWindow hwnd=10001 0
+= 0 ''
+> status v window visible
+= 0 'false'
+> window v text "Intro"
+USER SetWindowText hwnd=10001 'Intro'
+= 0 ''
+> info v window text
+= 0 'Intro'
+> set v audio all off
+= 0 ''
+> status v audio
+= 0 'false'
+> set v speed 500
+= 274 ''
+> play v reverse
+= 274 ''
+> seek v to 6
+= 282 ''
+> update v hdc 0
+= 0 ''
+> close v
+USER DestroyWindow hwnd=10001
+= 0 ''
+USER DestroyWindow hwnd=10002
+-- IMA ADPCM sound track
+> open clip-ima.avi alias w
+USER CreateWindow CiukiAVIWindow hwnd=10003 style=00cf0000 32x16 parent=0
+= 0 '1'
+> play w wait
+USER ShowWindow hwnd=10003 5
+= 0 ''
+ORACLE clip-ima.pcm samples=6102 match=1
+FRAME ima-last 32x16 fnv=49bd76f5
+> close w
+USER DestroyWindow hwnd=10003
+= 0 ''
+> open missing.avi
+= 275 ''
+> open broken.wav type avivideo
+= 296 ''
+== DrawDib
+USER CreateWindow Owner hwnd=10004 style=10000000 32x16 parent=0
+FRAME drawdib-frame4 32x16 fnv=57f6c3d5
+DRAWDIB buffer bits=8 compression=0
+FRAME drawdib-update 32x16 fnv=57f6c3d5
+USER DestroyWindow hwnd=10004
+== MCIWnd
+USER RegisterClass MCIWndClass
+USER CreateWindow Owner hwnd=10005 style=10000000 200x100 parent=0
+USER CreateWindow MCIWndClass hwnd=10006 style=50000000 1x1 parent=10005
+USER CreateWindow CiukiAVIWindow hwnd=10007 style=40000000 32x16 parent=10006
+USER SetWindowPos hwnd=10006 32x16
+OWNER t=2260 msg=WM_USER+203 from=10006 media='clip-pcm.avi'
+OWNER t=2260 msg=WM_USER+200 from=10006 value=525
+MCIWND hwnd=10006 client=32x16
+MCIWND device=1 length=6
+MCIWND device type 'AVIVideo'
+OWNER t=2260 msg=WM_USER+200 from=10006 value=526
+NOTIFY t=2680 hwnd=10006 successful id=1
+OWNER t=2680 msg=WM_USER+200 from=10006 value=525
+MCIWND mode=525 'stopped' position=5
+FRAME mciwnd-last 32x16 fnv=49bd76f5
+MCIWND position '2'
+MCIWND length ms=400
+MCIWND sendstring returned 'stopped'
+MCIWND dest 0 0 32 16
+USER DestroyWindow hwnd=10007
+OWNER t=2860 msg=WM_USER+200 from=10006 value=524
+MCIWND open missing=275 error 'The specified file cannot be found.'
+USER DestroyWindow hwnd=10006
+USER DestroyWindow hwnd=10005
+LIVE heap=0 audio=0

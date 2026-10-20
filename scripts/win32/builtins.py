@@ -71,6 +71,10 @@ def build(out=None):
     # f5-20C: W21 stubs for the delay-loaded DLLs Windows 98 lacks (uxtheme, secur32, ...).
     stub_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
     store['dlls']+=upper_dlls.build_absent_stubs(out,stub_base,flags)
+    # f5-12B: the avivideo MCI driver, appended last so that no earlier
+    # builtin base moves.
+    mci_base=max(d['base']+((d['size']+65535)&~65535) for d in store['dlls'])
+    store['dlls'].append(audio.build_mci_avi(out,mci_base,flags))
     # f5-20A: the f5-07A ADVAPI32/VERSION/LZ32 facades replace their census
     # placeholders, at the facade bases (0x71000000 up, below the reused
     # Wine region), so the loader and the reused-DLL audit see one core.

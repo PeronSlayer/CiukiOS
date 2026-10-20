@@ -39,7 +39,7 @@ class Codecs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         OUT.mkdir(parents=True,exist_ok=True)
-        sources=[ROOT/'sdk/win32/codecs'/u for u in ('adpcm.c','video.c','acm.c','vcm.c','avi.c')]+[Path(__file__).with_name('host.c')]
+        sources=[ROOT/'sdk/win32/codecs'/u for u in ('adpcm.c','pcm.c','video.c','acm.c','vcm.c','avi.c')]+[Path(__file__).with_name('host.c')]
         flags=['-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/win32/codecs')]
         subprocess.run(['clang',*flags,'-shared','-fPIC',*map(str,sources),'-o',str(OUT/'native.so')],check=True)
         cls.lib=C.CDLL(str(OUT/'native.so'))

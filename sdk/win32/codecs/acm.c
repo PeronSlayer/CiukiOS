@@ -3,7 +3,22 @@
 struct stream {
   uint32_t token;
   uint8_t format[1046];
+  /* f5-12B PCM converter: destination format and frame phase. */
+  struct cc_wave dst;
+  uint64_t phase;
+  uint32_t convert;
 };
+int cc_pcm_supported(const struct cc_wave *, const struct cc_wave *);
+uint32_t cc_pcm_convert(const struct cc_wave *, const struct cc_wave *,
+                        uint64_t *, const uint8_t *, uint32_t, uint8_t *,
+                        uint32_t, uint32_t *, uint32_t *);
+uint32_t cc_pcm_size(const struct cc_wave *, const struct cc_wave *, uint32_t,
+                     uint32_t, uint32_t *);
+static int pcm_conversion(const struct cc_wave *src, const struct cc_wave *dst) {
+  return src->tag == 1 && dst->tag == 1 && cc_pcm_supported(src, dst) &&
+         (src->channels != dst->channels || src->bits != dst->bits ||
+          src->rate != dst->rate);
+}
 static struct stream streams[32];
 static uint32_t serial;
 static struct stream *lookup(uintptr_t h) {
@@ -19,6 +34,26 @@ uint32_t W32API acmFormatSuggest(uintptr_t driver, const struct cc_wave *src,
                                  uint32_t flags) {
   if (driver && driver != 1 && driver != 2 && driver != 17)
     return 5;
+  if (src && src->tag == 1 && dst && bytes >= 16 && !(flags & ~0xf0000u) &&
+      !cc_wave_validate(src, &(uint32_t){0})) {
+    /* PCM source: the PCM converter honours each requested field. */
+    struct cc_wave w = *src;
+    if ((flags & 0x10000) && dst->tag != 1)
+      return CC_NOTPOSSIBLE;
+    if (flags & 0x20000)
+      w.channels = dst->channels;
+    if (flags & 0x40000)
+      w.rate = dst->rate;
+    if (flags & 0x80000)
+      w.bits = dst->bits;
+    w.align = (uint16_t)(w.channels * (w.bits / 8));
+    w.average = w.rate * w.align;
+    w.extra = 0;
+    if (!cc_pcm_supported(src, &w))
+      return CC_NOTPOSSIBLE;
+    cc_copy(dst, &w, bytes >= 18 ? 18 : 16);
+    return 0;
+  }
   return cc_suggest_format(src, dst, bytes, flags);
 }
 uint32_t W32API acmStreamOpen(uintptr_t *out, uintptr_t driver,
@@ -35,20 +70,27 @@ uint32_t W32API acmStreamOpen(uintptr_t *out, uintptr_t driver,
     return CC_INVALID;
   if (driver && driver != src->tag)
     return 5;
-  if (cc_wave_validate(src, &samples) || dst->tag != 1 ||
+  int convert = pcm_conversion(src, dst);
+  if (!convert && (cc_wave_validate(src, &samples) || dst->tag != 1 ||
       dst->bits != (src->tag == 1 ? src->bits : 16) ||
       dst->channels != src->channels || dst->rate != src->rate ||
-      dst->align != dst->channels * (dst->bits / 8))
+      dst->align != dst->channels * (dst->bits / 8)))
     return CC_NOTPOSSIBLE;
   if (flags & 1)
     return 0;
   for (i = 0; i < 32; i++)
     if (!streams[i].token) {
       struct stream *s = &streams[i];
-      uint32_t bytes = 18 + src->extra;
+      /* A PCM source may be a 16-byte PCMWAVEFORMAT: never read cbSize. */
+      uint32_t bytes = src->tag == 1 ? 16 : 18u + src->extra;
       if (bytes > sizeof(s->format))
         return CC_NOTPOSSIBLE;
+      cc_zero(s->format, sizeof(s->format));
       cc_copy(s->format, src, bytes);
+      cc_copy(&s->dst, dst, 16);
+      s->dst.extra = 0;
+      s->phase = 0;
+      s->convert = (uint32_t)convert;
       serial = (serial + 1) & 0x3ffffffu;
       if (!serial)
         serial = 1;
@@ -72,12 +114,19 @@ uint32_t W32API acmStreamSize(uintptr_t h, uint32_t bytes, uint32_t *out,
   struct stream *s = lookup(h);
   if (!s)
     return 5;
+  if (s->convert)
+    return cc_pcm_size((const struct cc_wave *)s->format, &s->dst, bytes,
+                       flags, out);
   return cc_stream_size((const struct cc_wave *)s->format, bytes, flags, out);
 }
 uint32_t W32API acmStreamReset(uintptr_t h, uint32_t flags) {
-  if (!lookup(h))
+  struct stream *s = lookup(h);
+  if (!s)
     return 5;
-  return flags ? CC_INVALID : 0;
+  if (flags)
+    return CC_INVALID;
+  s->phase = 0;
+  return 0;
 }
 uint32_t W32API acmStreamPrepareHeader(uintptr_t h, struct cc_acm_header *b,
                                        uint32_t flags) {
@@ -123,8 +172,17 @@ uint32_t W32API acmStreamConvert(uintptr_t h, struct cc_acm_header *b,
       b->dst_len > b->reserved[2])
     return CC_INVALID;
   b->status &= ~0x10000u;
-  result = cc_audio((const struct cc_wave *)s->format, b->src, b->src_len,
-                    b->dst, b->dst_len, &b->src_used, &b->dst_used, flags);
+  if (s->convert) {
+    if (flags & ~0x34u)
+      return CC_INVALID;
+    if (flags & 0x10u) /* ACM_STREAMCONVERTF_START */
+      s->phase = 0;
+    result = cc_pcm_convert((const struct cc_wave *)s->format, &s->dst,
+                            &s->phase, b->src, b->src_len, b->dst, b->dst_len,
+                            &b->src_used, &b->dst_used);
+  } else
+    result = cc_audio((const struct cc_wave *)s->format, b->src, b->src_len,
+                      b->dst, b->dst_len, &b->src_used, &b->dst_used, flags);
   if (!result)
     b->status |= 0x10000;
   return result;

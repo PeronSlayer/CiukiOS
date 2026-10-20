@@ -15,3 +15,5 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. No payloads in the repository or the canonical image; downloads only through the verified manifest on the lead's machine; the runner's overlay and memory rules unchanged; no new `panic()` paths; English.
+
+**Lead note (2026-10-20 10:10).** `tests/suites/f5-core.json` names the probes `w32-fixtures` and `w32-kernel32`, which neither the kernel selector (`src/kernel/probes/selector.c`, `f5_names`) nor the loader table (`src/boot/ciukldr/menu.inc`, `f5_probe_names`) registers; the two cases cannot be selected. f5-17B's runner tiers must check every suite case's selector against both tables (a host test over the three sources) and the two cases get their probes or are retired with their owners (f5-05B, f5-06).
