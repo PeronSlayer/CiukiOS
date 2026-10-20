@@ -22,9 +22,13 @@ image since the gates were suspended (dev diary 2026-10-20-02):
 - Fixed (`8f3bcda9`, `8f86c3ad`): the canonical image build failed since the
   FreeDOS reference was provisioned: games-disk directories of the DOS
   payloads, an 8.3 name, the reference trim.
-- Open: a DOS game started from Programs > Games never leaves
-  "Loading DOOM... Preparing..." (the DOS VM creation does not complete);
-  bisection in progress.
+- Fixed (`85b9024a`): a DOS game started from Programs > Games never left
+  "Loading DOOM... Preparing...". Bisected to the f3-51 merge: the full-disk
+  SHA-256 of the game base at every launch read the 27 MB games disk 512
+  bytes at a time with a seek per sector, quadratic in FAT chain walks. Now
+  one sequential pass in 64 KiB reads; DOOM starts in 60–90 s under QEMU TCG
+  (the hash is still computed at every launch; caching it per base is the
+  f3-51c follow-up). Regression test `test_game_window_base_hash`.
 
 Evidence status. Everything below was merged after the 0.9.0 record (from
 the evening of 2026-10-12, dev diary 2026-10-13-01 onwards). Until

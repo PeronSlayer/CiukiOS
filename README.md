@@ -53,10 +53,11 @@ There are two lines of code:
 | **0.8** | [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8) | The DOS-based system in the screenshots below: CiukiDOS kernel, graphical desktop, DOS games in windows, CiukWeb browser. | Frozen. Last release: prerelease **0.8.3 build 849** with a [Windows portable bundle](docs/windows-portable-release.md). |
 | **Ciuki VMM** | `main` | **0.9.2 pre-alpha.** A 32-bit protected-mode kernel with paging, priority scheduling and fault containment, whose disk, memory, cache and real-time management follow the Windows 98/ME model (dynamic block cache, asynchronous I/O queues, memory objects, page replacement and a swap file); drivers for ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, ATAPI CD-ROM, NTFS read-only, the framebuffer with S3 Savage support, AC'97 and other audio chips and several network cards; native processes with a POSIX-subset libc, Lua and an on-board C compiler; a ring-3 desktop (top bar with the Ciuki orb, window bar, Files, CiukNote, Music, Terminal, Registry Editor, Control Panel, accessories); DOS virtual machines (V86, XMS/EMS/UMB, a kernel DPMI host, Sound Blaster 16 and OPL3, in a window or full screen) whose DOS file calls are handed to the kernel's file system (merged, host-tested); the first libraries of a Win32 personality. DOOM, Wolfenstein 3D and Quake shareware are pre-installed. | Unreleased. QEMU: the last campaign (image `f56fcbf5…`, 2026-10-19) passed the F0–F4 gate cases and the F5 kernel-core cases, except four known red cases; the owner then suspended the QEMU gates for the hardware trial cycle, so what was merged after it (resource management, DOS file API, Win32 libraries) has host-test evidence only. Hardware: only the ThinkPad T23 has run this line, in owner trials of more than twenty images between 13 and 19 October (the last one `4bcd1d43…`); no image of the current `main` has run on hardware; the E500 and generic PCs have not run it. Main prereleases are suspended. |
 
-**Known regression (20 October 2026).** On the current `main` a DOS game
-started from Programs > Games does not start (its virtual machine is never
-created); it worked on the images of 19 October and is being bisected. Two
-other regressions found the same day are fixed (see the [changelog](CHANGELOG.md)).
+**Regressions of 20 October 2026, fixed.** The first QEMU boot of the
+integrated image found three regressions (application windows, wallpaper, DOS
+games stuck at "Preparing..."); all three were bisected and fixed the same
+day (see the [changelog](CHANGELOG.md)). A DOS game still takes 60–90 s to
+start under QEMU TCG while its disk is hashed; a follow-up is planned.
 
 The 0.8 line ran a real-mode DOS kernel under a third-party V86 monitor and
 a 16-bit desktop. It worked on emulators but not reliably on the real
@@ -168,9 +169,8 @@ not yet run in the guest).
 ## 0.9.2 pre-alpha in pictures
 
 QEMU captures (Pentium III profile, TCG) of the canonical image `116ced5d…`
-built from `main` at `cc81cbb6` on 2026-10-20. A DOS game launched from the
-Games menu does not start on this image (an open regression, see the
-[changelog](CHANGELOG.md)), so the set has no game frames.
+built from `main` at `cc81cbb6` on 2026-10-20; the DOOM frame comes from the
+image `c3f7cadc…` (`b2bc10a7`), after the fix of the DOS game launch regression.
 
 | Desktop | Ciuki menu, Programs and Accessories |
 | --- | --- |
@@ -192,9 +192,9 @@ Games menu does not start on this image (an open regression, see the
 | --- | --- |
 | ![CiukPaint](docs/screenshots/0.9.2/09-ciukpaint.png) | ![Terminal](docs/screenshots/0.9.2/10-terminal.png) |
 
-| Games menu |
-| --- |
-| ![Games menu](docs/screenshots/0.9.2/11-games-menu.png) |
+| Games menu | DOOM (shareware) in a DOS window |
+| --- | --- |
+| ![Games menu](docs/screenshots/0.9.2/11-games-menu.png) | ![DOOM (shareware) in a DOS window](docs/screenshots/0.9.2/12-doom.png) |
 
 Capture details: [docs/screenshots/0.9.2](docs/screenshots/0.9.2/README.md).
 

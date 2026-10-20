@@ -15,10 +15,12 @@ These captures are illustrations, not evidence: QEMU gates are suspended for
 the hardware trial cycle (dev diary 2026-10-19-03). Making them exposed two
 regressions of the integrated `main`, both fixed before this set was taken
 (dev diary 2026-10-20-02): native applications could not open their windows
-and the desktop could not load its wallpaper. A third one is still open: on
-this image a DOS game launched from Programs > Games stays at
-"Loading DOOM... Preparing..." (the DOS virtual machine is never created), so
-this set has no game frames.
+and the desktop could not load its wallpaper. A third one kept DOS games from
+starting on that image ("Loading DOOM... Preparing..." forever); it was fixed
+the same morning (`85b9024a`, dev diary 2026-10-20-04) and `12-doom.png` comes
+from the canonical image `c3f7cadc…` (SHA-256
+`c3f7cadc65781850b2afb1ae384b0e3f238afc527b9d69b26691d917fd0a72ea`, `main` at
+`b2bc10a7`), taken 180 s after the launch under TCG.
 
 | File | Content |
 | --- | --- |
@@ -33,3 +35,4 @@ this set has no game frames.
 | `09-ciukpaint.png` | CiukPaint, the bitmap editor, with its tool box and palette |
 | `10-terminal.png` | Terminal: the CiukiOS command shell after `help` (DIR, COPY, MOVE, TYPE, START, NET, AUDIO, TASKS, LUA and the other commands) |
 | `11-games-menu.png` | Programs > Games: Wolfenstein 3D, DOOM and Quake, the shareware releases pre-installed on the games disk |
+| `12-doom.png` | DOOM 1.9 shareware in its DOS window, playing its attract-mode demo: a V86 DOS virtual machine with the kernel's DPMI host, started from Programs > Games |
