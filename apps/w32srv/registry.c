@@ -314,8 +314,8 @@ static uint32_t shutdown_call(struct wr_server *s, uint32_t pid, const struct w3
     }
     if (pid != s->compat_writer_pid || !pid) return 5;
     if (a->index == W32R_SHUTDOWN_POLL) {
-        if (a->flags || a->type || *path) return 87;
-        if (s->shell_call) {
+        if ((a->flags & ~1u) || a->type || *path) return 87;
+        if ((a->flags & 1u) && s->shell_call) { /* pending-work check: stats WININIT.INI */
             struct w32r_request status = {.version = W32R_VERSION, .op = W32R_SHUTDOWN, .index = W32R_SHUTDOWN_STATUS, .path_bytes = 1, .name_bytes = 1};
             struct w32r_reply probe = {.version = W32R_VERSION};
             if (!s->shell_call(s->shell, pid, &status, "", "", &probe, bytes, cap)) r->disposition = probe.disposition;

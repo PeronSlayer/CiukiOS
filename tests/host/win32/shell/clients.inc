@@ -84,7 +84,7 @@ static void shell_clients(const char *directory)
     for(unsigned force=0;force<3;force++){
         struct w32r_reply status;session_answer=force==2;session_ended=-1;
         session_action(W32R_SESSION_BEGIN,force==1?4:0,&status);
-        ui_kernel_pause(21);u32_session_pump();ui_kernel_pause(21);u32_session_pump();
+        ui_kernel_pause(U32_SESSION_POLL_MS+1);u32_session_pump();ui_kernel_pause(U32_SESSION_POLL_MS+1);u32_session_pump();
         session_action(W32R_SESSION_STATUS,0,&status);
         CHECK(status.key==(force==0?2u:1u) && session_ended==(force!=0));
         session_action(W32R_SESSION_RESET,0,&status);

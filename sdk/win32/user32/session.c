@@ -8,7 +8,7 @@ void u32_session_pump(void)
     U32_GUARD;
     DWORD tid=u32_tid();struct u32_thread *thread=u32_thread();
     if(!thread || thread->session_active || (thread->session_poll && (int32_t)(u32_ticks()-thread->session_poll)<0))return;
-    thread->session_poll=u32_ticks()+20;thread->session_active=1;
+    thread->session_poll=u32_ticks()+U32_SESSION_POLL_MS;thread->session_active=1;
     DWORD saved=GetLastError();struct w32r_reply r;
     if(u32_directory(W32R_ENDSESSION,0,W32R_SESSION_POLL,tid,0,"",0,0,&r,0,0) && r.key){
         HWND h=(HWND)(uintptr_t)r.key;struct u32_window *w=u32_window(h);

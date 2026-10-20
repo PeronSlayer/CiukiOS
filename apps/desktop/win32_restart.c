@@ -27,7 +27,7 @@ int desk_restart_begin(struct desk_restart *s,const struct desk_restart_ops *o,u
     for(unsigned i=0;i<r.count;i++)s->pids[i]=(uint32_t)bytes[i*4]|(uint32_t)bytes[i*4+1]<<8|(uint32_t)bytes[i*4+2]<<16|(uint32_t)bytes[i*4+3]<<24;
     e=call(o,W32R_ENDSESSION,W32R_SESSION_BEGIN,flags,&r,NULL,0);
     if(e)return -EIO;
-    s->pid=pid;s->flags=flags;s->stage=1;s->error=0;s->child=0;s->deadline=now+10000;
+    s->pid=pid;s->flags=flags;s->stage=1;s->error=0;s->child=0;s->deadline=now+10000;s->next_poll=0;
     record(o,"[win32] end-session begin",flags);
     if(o->notice)o->notice(o->ctx,2,pid,flags);
     return 0;
@@ -35,10 +35,14 @@ int desk_restart_begin(struct desk_restart *s,const struct desk_restart_ops *o,u
 void desk_restart_tick(struct desk_restart *s,const struct desk_restart_ops *o,uint64_t now)
 {
     struct w32r_reply r;uint32_t e;
-    if(now<s->next_poll)return;s->next_poll=now+20;
+    /* Idle: one synchronous w32srv round trip per DESK_RESTART_IDLE_MS on the
+     * desktop thread (ExitWindowsEx latency stays well under a second); the
+     * pending-work check (a WININIT.INI stat) is asked for only until the boot
+     * check is done. A running restart polls every 20 ms. */
+    if(now<s->next_poll)return;s->next_poll=now+(s->stage?20:DESK_RESTART_IDLE_MS);
     if(!s->stage){
         char message[W32R_SESSION_MESSAGE];
-        e=call(o,W32R_SHUTDOWN,W32R_SHUTDOWN_POLL,0,&r,message,sizeof(message));
+        e=call(o,W32R_SHUTDOWN,W32R_SHUTDOWN_POLL,s->boot_checked?0:1,&r,message,sizeof(message));
         if(e)return;
         if(r.data_bytes){
             if(r.type&9u)desk_restart_begin(s,o,r.key,r.type,now);

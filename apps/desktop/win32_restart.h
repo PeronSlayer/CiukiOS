@@ -4,6 +4,7 @@
 #include <w32/server.h>
 #include <stddef.h>
 #include <stdint.h>
+#define DESK_RESTART_IDLE_MS 500u /* idle POLL interval, see desk_restart_tick */
 struct desk_restart_ops {
     void *ctx;
     uint32_t (*call)(void *,unsigned op,unsigned action,uint32_t flags,struct w32r_reply *,void *,size_t);

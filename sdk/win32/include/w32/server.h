@@ -80,7 +80,8 @@ enum w32r_op {
  * (compat_writer_pid, else 5):
  * POLL consumes a due request: reply key = requesting PID, type = flags,
  * data = message with NUL (data_bytes != 0: consumed), count = milliseconds
- * until due when nothing was consumed, disposition = 1 when restart work is
+ * until due when nothing was consumed; with flags = 1 (the desktop's boot
+ * check only: it stats WININIT.INI) disposition = 1 when restart work is
  * pending (see STATUS). LIST: reply count = number of authenticated clients,
  * data = that many little-endian PIDs, for the processes the desktop must
  * close. STATUS: key = restart phase (W32R_RESTART_*), disposition = 1 when

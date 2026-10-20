@@ -73,6 +73,9 @@ struct u32_pending_event {
   struct u32_pending_event *next;
   struct desk_packet packet;
 };
+/* One synchronous w32srv end-session poll per UI thread per interval: a
+ * PeekMessage loop must not pay a service round trip on every pass. */
+#define U32_SESSION_POLL_MS 250u
 struct u32_thread {
   DWORD session_poll;
   BOOL session_active;
