@@ -62,6 +62,10 @@ def build_fixture(out):
     return binary
 
 def run_fixture(out,binary):
+    # The fixture's server state lives under build/host/win32/user32 (mkdtemp in
+    # user32_test.c run()); create it so callers outside this module do not
+    # depend on test discovery order.
+    (ROOT/'build/host/win32/user32').mkdir(parents=True,exist_ok=True)
     trace=out/'trace.log'
     with trace.open('w') as log:
         result=subprocess.run([binary],stdout=log,stderr=subprocess.STDOUT,text=True,timeout=60,
