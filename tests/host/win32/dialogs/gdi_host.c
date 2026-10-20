@@ -73,3 +73,37 @@ int gdi_host_fonts(const char *system_native, const char *install_native) {
 int gdi_host_backend(void) {
   return w32_gdi_set_face_backend(w32_gdi_native_backend());
 }
+/* f5-10C2: the production PE-to-native bridge client over the harness's
+ * packet transport, or the direct native backend for comparison. */
+int gdi_host_bridge(w32_gdi_bridge_exchange exchange) {
+  w32_gdi_bridge_transport(exchange);
+  return w32_gdi_set_face_backend(exchange ? w32_gdi_bridge_backend() : 0);
+}
+/* Draws text white on black into a 32-bpp buffer: each channel equals the
+ * glyph coverage (fg*a + bg*(255-a) + 127)/255 = a, so identical pixels mean
+ * identical coverage and placement. Returns the text extent width. */
+static void ignore_damage(void *o, const RECT *r) { (void)o, (void)r; }
+int gdi_host_render(const char *face, int height, int weight, int italic,
+                    const char *text, uint32_t *pixels, unsigned w,
+                    unsigned h) {
+  LOGFONTA lf = {.lfHeight = height, .lfWeight = weight,
+                 .lfItalic = (uint8_t)italic};
+  strncpy(lf.lfFaceName, face, sizeof(lf.lfFaceName) - 1);
+  struct w32_dib s = {(uint8_t *)pixels, w, h, w * 4, w * h * 4, 32, 1,
+                      {0, 0, 0}, {0}, 0};
+  memset(pixels, 0, (size_t)w * h * 4);
+  HFONT f = CreateFontIndirectA(&lf);
+  HDC dc = w32_gdi_surface_dc(&s, (POINT){0, 0}, ignore_damage, 0);
+  if (!f || !dc)
+    return -1;
+  HGDIOBJ old = SelectObject(dc, f);
+  SetTextColor(dc, RGB(255, 255, 255));
+  SetBkMode(dc, TRANSPARENT);
+  SIZE size = {0};
+  int ok = TextOutA(dc, 2, 2, text, (int)strlen(text)) &&
+           GetTextExtentPoint32A(dc, text, (int)strlen(text), &size);
+  SelectObject(dc, old);
+  DeleteDC(dc);
+  DeleteObject(f);
+  return ok ? size.cx : -1;
+}

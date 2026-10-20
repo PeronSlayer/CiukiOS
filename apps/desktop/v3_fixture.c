@@ -4,6 +4,7 @@
 #include "gate.h"
 #include "win32_adapter.h"
 #include "../../src/probes/desktop_v3/controller.h"
+#include "../../src/probes/win32_dialogs/controller.h"
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
@@ -116,4 +117,21 @@ void desk_v3_fixture_tick(struct desktop *d)
         int e=registry(W32R_DELETE_KEY,W32R_HKLM,"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiV3Fixture","",NULL,NULL);
         report(d,e);cancel_dialog(d);
     }
+}
+/* f5-10C2 w32-dialogs: the desktop (already supervising w32srv) starts the
+ * authored PE fixture and names it to the kernel observer, which validates
+ * the child and reads the fixture's result block itself. */
+static int dialogs_active;
+int desk_dialogs_fixture_active(void){return dialogs_active;}
+int desk_dialogs_fixture_begin(struct desktop *d)
+{
+    (void)d;
+    char *argv[]={W32_DIALOGS_PATH,NULL};
+    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
+    if(pid<0)return -errno;
+    dialogs_active=1;
+    char line[64];snprintf(line,sizeof(line),"case=w32-dialogs child=%d",pid);
+    desk_v3_fixture_report(line);
+    return pid;
 }

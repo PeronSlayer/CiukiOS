@@ -43,6 +43,11 @@ struct wr_server {
     uint32_t compat_writer_pid; /* authenticated desktop owner; zero denies writes */
     uint64_t now;
     void *directory;
+    /* f5-10C2 font bridge (fonts.c); NULL refuses W32R_FONT_* with 120.
+     * Set after wr_init, which clears the server. */
+    uint32_t (*font_call)(void *, uint32_t, const struct w32r_request *, const char *,
+                          const void *, struct w32r_reply *, uint8_t *, size_t);
+    void *fonts;
 };
 int wr_init(struct wr_server *, const struct wr_io *, uint64_t now);
 void wr_destroy(struct wr_server *);

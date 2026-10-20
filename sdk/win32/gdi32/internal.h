@@ -132,6 +132,8 @@ int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
 void gdi_font_stock(unsigned, struct font *);
 void gdi_font_exit(void);
 int gdi_font_validate(const void *, DWORD);
+/* f5-10C2 PE-to-native font bridge (bridge.c): the guest's default backend. */
+extern const struct w32_gdi_face_backend gdi_bridge_backend;
 /* f5-20B. */
 #ifndef W32_HOST_MODEL
 __declspec(dllimport) void W32API SetLastError(DWORD);

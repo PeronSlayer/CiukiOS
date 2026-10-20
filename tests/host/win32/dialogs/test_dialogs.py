@@ -23,6 +23,7 @@ from sdk.freetype import build as freetype
 from scripts.win32 import gdi32, user32
 
 HERE = Path(__file__).resolve().parent
+EXERCISE = ROOT/'src/probes/win32_dialogs'
 OUT = ROOT/'build/host/win32/dialogs'
 FRAMES = HERE/'frames'
 REVIEW = ROOT/'build/codex/f5-10c-frames'
@@ -87,7 +88,11 @@ class DialogTests(unittest.TestCase):
         cls.fontlib = freetype.build(OUT/'freetype', flags=['-O1', '-fPIC'], env=env)
         res = OUT/'resources.res'
         subprocess.run(['llvm-rc', '/fo', str(res), str(ROOT/'tests/host/win32/fixtures/resources.rc')], check=True)
-        (OUT/'resources.h').write_text(resources_header(parse_res(res.read_bytes())))
+        # f5-10C2: the w32-dialogs guest fixture's own resources (IDs 600/601).
+        exercise_res = OUT/'exercise.res'
+        subprocess.run(['llvm-rc', '/fo', str(exercise_res), str(EXERCISE/'exercise.rc')], check=True)
+        (OUT/'resources.h').write_text(resources_header(parse_res(res.read_bytes()) +
+                                                        parse_res(exercise_res.read_bytes())))
         session = json.loads((ROOT/'tests/host/win32/user32/session.json').read_text())
         vectors = []
         for layout in ('us', 'it'):
@@ -109,11 +114,11 @@ class DialogTests(unittest.TestCase):
         objects.append(bridge)
         user_sources = sorted((ROOT/'sdk/win32/user32').glob('*.c')) + [
             ROOT/'apps/libdeskui/v3.c', ROOT/'apps/desktop/protocol.c', ROOT/'apps/desktop/keymap.c',
-            ROOT/'sdk/win32/services/bytes.c', HERE/'harness.c',
+            ROOT/'sdk/win32/services/bytes.c', HERE/'harness.c', EXERCISE/'exercise.c',
             *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c')]]
         for i, source in enumerate(user_sources):
             obj = OUT/f'u{i}.o'
-            subprocess.run([*flags, '-DW32_HOST_MODEL', '-I'+str(ROOT/'sdk/win32/include'), '-I'+str(OUT),
+            subprocess.run([*flags, '-DW32_HOST_MODEL', '-DW32_DIALOGS_HOST', '-I'+str(ROOT/'sdk/win32/include'), '-I'+str(OUT),
                             '-I'+str(ROOT/'tests/host/win32/user32'), '-c', str(source), '-o', str(obj)], check=True)
             objects.append(obj)
         # gdi32 shares the process; its FillRect/FrameRect helpers are renamed
@@ -136,6 +141,10 @@ class DialogTests(unittest.TestCase):
         font_obj = OUT/'libfont.o'
         subprocess.run([*gdi_flags, '-c', str(ROOT/'sdk/libfont/font.c'), '-o', str(font_obj)], check=True)
         objects.append(font_obj)
+        # f5-10C2: the production w32srv font service behind the bridge.
+        service_obj = OUT/'w32srv_fonts.o'
+        subprocess.run([*gdi_flags, '-c', str(ROOT/'apps/w32srv/fonts.c'), '-o', str(service_obj)], check=True)
+        objects.append(service_obj)
         # Name table for GetProcAddress("gdi32.dll", ...), from the sources.
         names = sorted(names - {'GdiDllMain'})
         table = OUT/'gdi_symbols.c'
@@ -243,6 +252,69 @@ class DialogTests(unittest.TestCase):
         for name in manifest:
             self.assertEqual((FRAMES/(name+'.png')).read_bytes(), (REVIEW/(name+'.png')).read_bytes())
         self.assertGreaterEqual(len(manifest), 20)
+
+    def test_font_bridge_equality_cache_budget_eviction_and_refusals(self):
+        """f5-10C2: production gdi32 bridge client -> w32srv packet protocol ->
+        production font service; glyphs byte-identical to the direct backend."""
+        text = self.execute('bridge')
+        for line in re.findall(r'^BRIDGE .*$', text, re.M):
+            print(line)
+        self.assertRegex(text, r'BRIDGE miss packets=[23]\b')
+        self.assertRegex(text, r'BRIDGE cache hits=[1-9][0-9]* misses=0 transactions=0')
+
+    def test_pinned_dialog_frames_through_the_bridge(self):
+        """The f5-10C frames rendered with the glyphs crossing the bridge are
+        the pinned frames: the guest path draws what the host frames pin."""
+        text = self.execute('frames-bridge')
+        pinned = json.loads((FRAMES/'manifest.json').read_text())['frames']
+        review = ROOT/'build/codex/f5-10c2-frames/f5-10c-bridge'
+        review.mkdir(parents=True, exist_ok=True)
+        seen = 0
+        for name, width, height in re.findall(r'^FRAME (\S+) (\d+) (\d+)$', text, re.M):
+            raw = (OUT/'frames'/(name+'.bin')).read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), pinned[name]['sha256'], name)
+            (review/(name+'.png')).write_bytes(png(int(width), int(height), raw))
+            seen += 1
+        self.assertEqual(seen, len(pinned))
+        print(re.search(r'^BRIDGE frames .*$', text, re.M).group(0))
+
+    def test_w32_dialogs_fixture_dry_run_against_suite_predicates(self):
+        """The guest fixture's logic on the host harness, published with the
+        kernel probe's record grammar (controller.h) and checked by the runner's
+        evidence parser against the w32-dialogs-qemu-t23 predicates."""
+        sys.path.insert(0, str(ROOT/'scripts/test'))
+        import evidence
+        text = self.execute('exercise')
+        records = re.findall(r'^RECORD (\S+) (\S+) (.*)$', text, re.M)
+        self.assertEqual(len(records), 8, text[-3000:])
+        case = next(c for c in json.loads((ROOT/'tests/suites/f5-core.json').read_text())['cases']
+                    if c['id'] == 'w32-dialogs-qemu-t23')
+        run = '12345678'
+        body = [('BEGIN', ''), ('DATA', 'case=fixture path=/System/Win32/Fixtures/dialogs-exercise.exe pid=7 host_dry_run=1')]
+        body += [(event, fields) for probe, event, fields in records if probe == 'w32-dialogs']
+        body.append(('END', 'status=PASS'))
+        parser = evidence.Parser(run, 'w32-dialogs')
+        lines = []
+        for seq, (event, fields) in enumerate(body, 1):
+            line = f'CIUKI_TEST v=1 run={run} seq={seq:06d} probe=w32-dialogs event={event}' + (' '+fields if fields else '')
+            self.assertLessEqual(len(line), 240, line)
+            lines.append(line)
+            parser.feed(line.encode())
+        parser.check(case['expected'])
+        # The predicates discriminate: one failed keyboard step, a leaked
+        # window or a service peak above its budget each fail the case.
+        for marker, good, bad in (('case=dialog_keyboard', 'errors=0', 'errors=1'),
+                                  ('case=dialog_teardown', 'live_windows=0', 'live_windows=1'),
+                                  ('case=font_budget', 'service_budget=1572864', 'service_budget=1024')):
+            self.assertTrue(any(marker in line and good in line for line in lines), marker)
+            negative = evidence.Parser(run, 'w32-dialogs')
+            for line in lines:
+                negative.feed((line.replace(good, bad) if marker in line else line).encode())
+            with self.assertRaises(evidence.EvidenceError):
+                negative.check(case['expected'])
+        dry = ROOT/'build/codex/f5-10c2-dialogs-dry-run.log'
+        dry.write_text('\n'.join(lines)+'\n')
+        print('\n'.join(lines))
 
 
 if __name__ == '__main__':

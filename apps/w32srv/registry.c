@@ -285,6 +285,10 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         else s->profile_owner=0;
         goto done;
     }
+    if (a.op >= W32R_FONT_GLYPHS && a.op <= W32R_FONT_STATS) {
+        r.error = s->font_call ? s->font_call(s->fonts, pid, &a, path, data, &r, bytes, cap - sizeof(r)) : 120;
+        goto done;
+    }
     if (a.op >= W32R_ATOM_ADD) {
         if (cap < sizeof(r) + W32R_DATA + W32R_NAME) { r.error = 87; goto done; }
         r.error = wr_directory_call(s, pid, &a, name, data, &r, bytes); goto done;

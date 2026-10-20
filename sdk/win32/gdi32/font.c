@@ -72,7 +72,7 @@ struct face {
   unsigned kern_count;
   DWORD file_size;
   void *native_face;
-  DWORD resident, last_use;
+  DWORD resident, last_use, retry_wait;
 };
 
 /* Virtual families: the Windows 98 core names backed by Liberation faces. */
@@ -160,10 +160,23 @@ static struct {
   struct realized *live;
   struct w32_gdi_font_stats stats;
   DWORD mapper_flags;
+#ifdef W32_HOST_MODEL
 } S = {.system_win32 = "C:\\WINDOWS\\FONTS",
        .system_native = "/System/fonts",
        .install_win32 = "C:\\WINDOWS\\FONTS",
        .install_native = "/System/fonts"};
+#else
+/* f5-10C2: the guest personality draws glyphs through the PE-to-native
+ * bridge (bridge.c). System faces are read through C:\System\fonts (the
+ * native /System/fonts, read-only for Win32 processes) until the drive
+ * service presents the union view at C:\WINDOWS\FONTS; AddFontResource
+ * copies installed faces to C:\WINDOWS\FONTS (/WINDOWS/FONTS). */
+} S = {.system_win32 = "C:\\System\\fonts",
+       .system_native = "/System/fonts",
+       .install_win32 = "C:\\WINDOWS\\FONTS",
+       .install_native = "/WINDOWS/FONTS",
+       .backend = &gdi_bridge_backend};
+#endif
 static struct realized stock_fonts[7];
 static const unsigned stock_index[7] = {10, 11, 12, 13, 14, 16, 17};
 
@@ -825,14 +838,22 @@ static int face_open(struct face *f) {
   f->last_use = ++S.clock;
   if (f->native_face)
     return 1;
+  /* A refused or unreachable face (f5-10C2 bridge) is retried only after
+   * 256 further requests for it, not on every glyph. */
+  if (f->retry_wait) {
+    f->retry_wait--;
+    return 0;
+  }
   /* File bytes plus the backend's 64 KiB face allowance and trimmed cache. */
   DWORD need = f->file_size + (128u << 10);
   enforce_budget(f, need);
   if (S.stats.face_bytes + need > face_budget())
     return 0;
   f->native_face = S.backend->open(f->native);
-  if (!f->native_face)
+  if (!f->native_face) {
+    f->retry_wait = 256;
     return 0;
+  }
   S.stats.open_faces++;
   face_account(f);
   return 1;
@@ -1400,9 +1421,11 @@ BOOL W32API w32_gdi_set_face_backend(const struct w32_gdi_face_backend *b) {
   if (b && (!b->open || !b->close || !b->lookup || !b->raster ||
             !b->free_glyph))
     return 0;
-  for (unsigned i = 0; i < S.count; i++)
+  for (unsigned i = 0; i < S.count; i++) {
     if (S.faces[i]->native_face)
       face_close(S.faces[i]);
+    S.faces[i]->retry_wait = 0;
+  }
   while (S.cache && S.stats.glyphs && evict_one()) {
   }
   S.backend = b;

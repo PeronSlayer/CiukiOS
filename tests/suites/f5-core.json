@@ -886,8 +886,8 @@
       "probe": "w32-dialogs",
       "profile": "qemu-t23",
       "selector": "f5:w32-dialogs run={run_id}",
-      "timeout": 120,
-      "integration_pending": "f5-10C dialogs/controls/menus/fonts; needs the PE-to-native font bridge and a guest dialog probe; authored, unrun",
+      "timeout": 180,
+      "integration_pending": "f5-10C2: fixture /System/Win32/Fixtures/dialogs-exercise.exe (src/probes/win32_dialogs), PE-to-native font bridge, desktop GATE_DIALOGS and kernel observer written; host dry-run of these predicates passes; authored, unrun",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -917,6 +917,23 @@
           {
             "where": {
               "event": "DATA",
+              "case": "dialog_controls"
+            },
+            "fields": {
+              "classes": {
+                "eq": 6
+              },
+              "controls": {
+                "eq": 13
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "dialog_keyboard"
             },
             "fields": {
@@ -931,11 +948,66 @@
           {
             "where": {
               "event": "DATA",
+              "case": "dialog_menu"
+            },
+            "fields": {
+              "items": {
+                "eq": 4
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "dialog_msgbox"
+            },
+            "fields": {
+              "result": {
+                "eq": 1
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "font_bridge"
+            },
+            "fields": {
+              "glyphs": {
+                "ge": 1
+              },
+              "service_glyphs": {
+                "ge": 1
+              },
+              "refusals": {
+                "eq": 0
+              },
+              "errors": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "font_budget"
             },
             "fields": {
               "total_peak": {
                 "le": 2097152
+              },
+              "service_budget": {
+                "le": 1572864
+              },
+              "service_peak": {
+                "ge": 1,
+                "le": "$service_budget"
               },
               "errors": {
                 "eq": 0
@@ -952,6 +1024,9 @@
                 "eq": 0
               },
               "live_menus": {
+                "eq": 0
+              },
+              "exit": {
                 "eq": 0
               },
               "errors": {
