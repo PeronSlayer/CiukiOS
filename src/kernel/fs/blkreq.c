@@ -365,11 +365,23 @@ bool blk_queue_run_one(struct blk_queue *q) {
     uint32_t elapsed=fs_now_ms()-now;
     r->serviced=fs_now_ms();
     if (r->generation!=r->device->media_generation && !e) e=-FS_EIO;
-    if (elapsed>BLKREQ_READER_MS/2 && bytes>r->device->sector_size) {
+    /* Adaptive command size for reader fairness (C3): shrink after a slow
+     * command, grow back after fast ones. The floor is one page, never one
+     * sector: on the T23 (image 3d18f2db) one slow command early in the boot
+     * ratcheted the limit to 512 bytes for the whole session, every request
+     * was split into single-sector commands and the disk became unusable
+     * (Files, DOS game loading). Real IDE command overhead dominates small
+     * transfers; QEMU hides it. */
+    uint32_t floor=BLKREQ_MIN_COMMAND_BYTES<r->device->sector_size ? r->device->sector_size : BLKREQ_MIN_COMMAND_BYTES;
+    if (floor>q->max_bytes) floor=q->max_bytes;
+    if (elapsed>BLKREQ_READER_MS/2 && bytes>floor) {
         uint32_t limit=(uint32_t)((uint64_t)bytes*(BLKREQ_READER_MS/2)/elapsed);
         limit-=limit%r->device->sector_size;
-        if (limit<r->device->sector_size) limit=r->device->sector_size;
+        if (limit<floor) limit=floor;
         if (limit<q->limit_bytes) q->limit_bytes=limit;
+    } else if (!e && elapsed<=BLKREQ_READER_MS/4 && bytes>=q->limit_bytes && q->limit_bytes<q->max_bytes) {
+        uint32_t limit=q->limit_bytes*2;
+        q->limit_bytes=limit>q->max_bytes ? q->max_bytes : limit;
     }
     if (!e) r->bytes+=merged ? r->length : bytes;
     if (merged) {

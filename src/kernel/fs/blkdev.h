@@ -54,6 +54,7 @@ static inline bool blkdev_durable(struct blkdev *d) {
 #define BLKREQ_COMMAND_BYTES 65536u
 #define BLKREQ_PROMOTE_MS 100u
 #define BLKREQ_READER_MS 20u
+#define BLKREQ_MIN_COMMAND_BYTES 4096u /* adaptive split floor: one page (T23 regression, 2026-10-20) */
 #define BLKREQ_PAGES 17u
 enum blk_operation { BLK_READ, BLK_WRITE, BLK_FLUSH };
 enum blk_priority { BLK_DEMAND, BLK_SPECULATIVE, BLK_BACKGROUND, BLK_PRIORITIES };

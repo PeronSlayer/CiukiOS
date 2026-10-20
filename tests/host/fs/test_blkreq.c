@@ -125,7 +125,15 @@ static void faults(void) {
     m.cancel_issued=false; m.delay_ms=25;
     assert(!blkdev_read(&m.dev,0,128,b));
     struct blk_queue_stats stats; blk_queue_snapshot(&m.queue,&stats);
-    assert(stats.limit_bytes<65536 && stats.limit_bytes>=512 && stats.limit_bytes%512==0);
+    assert(stats.limit_bytes<65536 && stats.limit_bytes>=4096 && stats.limit_bytes%512==0);
+    /* T23 regression (image 3d18f2db): a slow phase must not leave single-
+     * sector commands for the rest of the session. Very slow commands keep
+     * the floor at one page; fast commands grow the limit back to 64 KiB. */
+    m.delay_ms=200; assert(!blkdev_read(&m.dev,0,128,b));
+    blk_queue_snapshot(&m.queue,&stats); assert(stats.limit_bytes==4096);
+    m.delay_ms=0;
+    for (unsigned i=0;i<8 && stats.limit_bytes<65536;i++) { m.calls=0; assert(!blkdev_read(&m.dev,0,128,b)); blk_queue_snapshot(&m.queue,&stats); }
+    assert(stats.limit_bytes==65536);
     printf("[storage] queue name=host depth=%u/%u/%u age_ms=%u issued=%llu merged=%llu split=%llu cancelled=%llu timeout=%llu backpressure=%llu limit=%u\n",
         stats.depth[0],stats.depth[1],stats.depth[2],stats.oldest_ms,
         (unsigned long long)stats.issued,(unsigned long long)stats.merged,(unsigned long long)stats.split,
