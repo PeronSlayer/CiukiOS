@@ -704,3 +704,10 @@ Before the CD is called distributable, on the recorded ISO SHA-256:
 - **O4 — directive owners.** Each directive names `gpt-6.1-sol` with a
   Claude agent alternative (Opus for kernel work, Sonnet for UI/glue, per
   the owner's model economy rule); the lead confirms per launch.
+
+## Lead decisions on the f9-00 open points (2026-10-22)
+
+- O1: variant A, the payload lives in the boot image's data clusters (ISO ≈ 546 MB); the ISO tree keeps `\LICENSES`, `\SOURCES`, `\SETUP.INF.sample`.
+- O2: the `setup=1` token is parsed by the loader with the ~24-byte addition inside f9-01, after f0-54 frees the budget (f9-01 may stage it last).
+- O3: the Wine 10.0 source archive ships on the ISO under `\SOURCES` with the other copyleft sources (`CIUKIOS.ZIP` plus `SOURCE-OFFER.txt` remain as the written offer for anything the ISO cannot carry).
+- O4: owners are Claude agents while Codex is unavailable; ioctl numbers `0x4401`–`0x440F` reserved for the disk lease group; the reserved CD signature `0x4B554943` and the 1 GiB minimum destination are accepted; Setup-mode drive letters as the plan states; the frozen `setup_txn.h` is reviewed by the lead at the f9-03/f9-04 launch.
