@@ -71,7 +71,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
         "threads-wait", "crash-isolation", "libc-smoke", "app-gate"
     };
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
-                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance" };
+                                            "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance", "title" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove", "vm-audio-jitter" };
     static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects", "w32-dialogs", "w32-upper-dlls", "w32-media", "w32-fixtures", "w32-kernel32", "w32-fullscreen", "w32-registry", "w32-audio", "w32-gdi32", "w32-crash", "w32-user32", "w32-codecs", "w32-ddraw", "w32-input", "w32-restart", "w32-gl" };
     static const char *const f6_names[] = { "net-arp" };
@@ -93,6 +93,18 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     }
     parsed.run[8] = 0;
     i += 12;
+    if (parsed.phase == 3 && !strncmp(parsed.probe, "title",24)) {
+        if (len-i < 8 || len-i > 30 || memcmp(s+i," title=",7)) return false;
+        i += 7;
+        if (s[i] < 'a' || s[i] > 'z') return false;
+        for (k=0; i<len; i++,k++) {
+            char c=s[i];
+            if (!((c>='a' && c<='z') || (c>='0' && c<='9') || c=='-')) return false;
+            parsed.title[k]=c;
+        }
+        *selection=parsed;
+        return true;
+    }
     if (parsed.phase == 3 && !strncmp(parsed.probe,"dos-conformance",sizeof(parsed.probe))) {
         if (len-i == 14 && !memcmp(s+i," guest=freedos",14)) parsed.flags |= PROBE_DOS_FREEDOS;
         else if (len-i != 15 || memcmp(s+i," guest=ciukidos",15)) return false;
@@ -181,7 +193,7 @@ unsigned sweep_count(unsigned phase, const struct probe_tables *t)
     if (phase == 3) {
         unsigned count=0;
         for (unsigned i=0;i<t->f3_count;i++)
-            if (strncmp(t->f3[i].name,"dos-conformance",16)) count++;
+            if (strncmp(t->f3[i].name,"dos-conformance",16) && strncmp(t->f3[i].name,"title",24)) count++;
         return count;
     }
     if (phase == 0) return t->f0_count + 1;
@@ -208,7 +220,7 @@ bool sweep_at(unsigned phase, unsigned step, const struct probe_tables *t, struc
     } else if (phase == 3) {
         bool found=false;
         for (unsigned i=0;i<t->f3_count;i++) {
-            if (!strncmp(t->f3[i].name,"dos-conformance",16)) continue;
+            if (!strncmp(t->f3[i].name,"dos-conformance",16) || !strncmp(t->f3[i].name,"title",24)) continue;
             if (!step--) { s.index=i; s.name=t->f3[i].name; found=true; break; }
         }
         if (!found) return false;
@@ -294,7 +306,7 @@ void probes_dispatch(const struct probe_selection *selection,
     unsigned count = selection->phase == 3 ? tables->f3_count : selection->phase == 1 ? tables->f1_count : tables->f0_count;
     unsigned ran = 0;
     for (unsigned i = 0; i < count; i++) {
-        if (selection->phase==3 && (all || core) && !strncmp(table[i].name,"dos-conformance",16)) continue;
+        if (selection->phase==3 && (all || core) && (!strncmp(table[i].name,"dos-conformance",16) || !strncmp(table[i].name,"title",24))) continue;
         if (all || core || !strncmp(probe, table[i].name, sizeof(selection->probe))) {
             int failed = table[i].fn();
             ran++;

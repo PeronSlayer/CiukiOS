@@ -115,7 +115,11 @@ selector_validate:
     jc .bad
     loop .hex
     cmp si, [selector_end]
-    je .good
+    jne .suffix
+    cmp bx, f3_title_name
+    je .bad
+    jmp .good
+.suffix:
     cmp byte [selector_sweep], 1
     je .cursor
     mov ax, [selector_start]
@@ -247,6 +251,8 @@ selector_validate:
     ret
 
 .f3_suffix:
+    cmp bx, f3_title_name
+    je .title_suffix
     ; F3 takes only the platform override, fw_cfg only (lead, 2026-10-11: the
     ; qemu-e500 profile appends it to every selector); safe mode stays refused.
     cmp byte [selector_fw], 1
@@ -260,6 +266,38 @@ selector_validate:
     repe cmpsb
     jne .bad
     mov byte [selector_force], 1
+    jmp .good
+.title_suffix:
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 8
+    jb .bad
+    cmp ax, 30
+    ja .bad
+    mov di, title_suffix
+    mov cx, 7
+    repe cmpsb
+    jne .bad
+    mov al, [si]
+    cmp al, 'a'
+    jb .bad
+    cmp al, 'z'
+    ja .bad
+.title_char:
+    lodsb
+    cmp al, '-'
+    je .title_next
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    jbe .title_next
+    cmp al, 'a'
+    jb .bad
+    cmp al, 'z'
+    ja .bad
+.title_next:
+    cmp si, [selector_end]
+    jb .title_char
     jmp .good
 hex_digit:
     cmp al, '0'
@@ -311,7 +349,9 @@ f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'si
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
 f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
-              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0,0
+              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+f3_title_name db 'title',0,0
+title_suffix db ' title='
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'
