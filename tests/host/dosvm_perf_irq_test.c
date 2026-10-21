@@ -25,6 +25,8 @@ static void (*restore_hook)(void);
 static uint64_t fake_tsc;
 static char periodic[4096];
 static unsigned periodic_bytes, periodic_rows;
+
+#ifndef F186_BUDGET
 void klog_periodic(const char *fmt,...)
 {
     CHECK(cpu_flags & 0x200);
@@ -34,6 +36,7 @@ void klog_periodic(const char *fmt,...)
     periodic_bytes+=(unsigned)n; periodic[periodic_bytes++]='\n'; periodic[periodic_bytes]=0;
     periodic_rows++;
 }
+#endif
 uint64_t g_tsc_per_ms;
 volatile uint64_t g_ticks;
 volatile bool g_need_resched;
@@ -70,9 +73,10 @@ static void irq_restore(uint32_t f)
     }
 }
 void crit_label(const char *name)
-{ CHECK(!(cpu_flags & 0x200) && !strcmp(name,"dosvm_perf_snapshot")); labels++; }
+{ CHECK(!(cpu_flags & 0x200) && (!strcmp(name,"dosvm_perf_snapshot") || !strcmp(name,"dosvm_serial_snapshot") || !strcmp(name,"record_publish"))); labels++; }
 static uint64_t read_tsc_serialized(void) { return fake_tsc; }
 static bool dosvm_in_irq(const struct dosvm *v) { (void)v; return false; }
+#ifndef F186_BUDGET
 void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
 { (void)probe; (void)fmt; CHECK(cpu_flags & 0x200); rows++; }
 /* Other public entry points in this production include are not exercised. */
@@ -83,8 +87,11 @@ void rec_diag(const char *probe, const char *fmt, ...)
 bool rec_active(void) { return false; }
 void rec_emit(const char *probe,const char *event,const char *fmt,...)
 { (void)probe;(void)event;(void)fmt;abort(); }
+#endif
+#ifndef F186_BUDGET
 int kvsnprintf(char *out,size_t size,const char *fmt,va_list args)
 { return vsnprintf(out,size,fmt,args); }
+#endif
 void schedule(void) { abort(); }
 
 #define memcpy work_memcpy
@@ -98,6 +105,7 @@ static void reset(void)
 {
     memset(&vm,0,sizeof(vm)); perf_current=&vm;
     cpu_flags=0x200; g_tsc_per_ms=1000; g_ticks=DOSVM_PERF_INTERVAL; fake_tsc=100;
+    vm.perf.serial.tick=g_ticks;
     blocks=access_bytes=copy_bytes=clear_bytes=divisions=labels=rows=0;
     periodic_bytes=periodic_rows=0; periodic[0]=0;
 }
@@ -140,17 +148,26 @@ static void next_interval_producer(void)
     g_ticks=tick;
     CHECK(vm.perf.active_interval==1 && !vm.perf.sample_count);
 }
+static void next_serial_producer(void) {
+    CHECK((cpu_flags&0x200) && vm.perf.serial.active==1 && vm.perf.serial.reporting);
+    vm.perf.io_valid=true; vm.perf.io_port=0x1234; vm.perf.cause=DOSVM_COST_IO;
+    vm.perf.trap_active=true; vm.perf.trap_cycles=19;
+    perf_exit_end(&vm);
+    dosvm_perf_report(&vm); /* no reentrant bank reuse */
+    CHECK(vm.perf.serial.active==1 && !vm.perf.sample_count);
+}
+#ifndef F186_BUDGET
 int main(void)
 {
-    reset(); vm.info.key.id=35; vm.info.key.generation=7;
+    reset(); vm.perf.serial.tick=0; vm.info.key.id=35; vm.info.key.generation=7;
     for (unsigned i=0;i<6;i++) vm.perf.exits[i]=11+i;
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) vm.idle.count[i]=1+i;
     vm.perf.cost_count[DOSVM_COST_IO]=4; vm.perf.cost_cycles[DOSVM_COST_IO]=500;
-    for (unsigned i=0;i<5;i++) vm.perf.interval[0].ports[i]=
+    for (unsigned i=0;i<5;i++) vm.perf.serial.ports[0][i]=vm.perf.interval[0].ports[i]=
         (struct dosvm_hot_cost){.id=0x330+i,.count=2+i,.cycles=100*(i+1)};
     g_ticks=1999; dosvm_perf_report(&vm); CHECK(!periodic_rows && !rows);
     g_ticks=2000; dosvm_perf_report(&vm);
-    CHECK(periodic_rows==5 && vm.perf.sample_count==1);
+    CHECK(periodic_rows==5 && !vm.perf.sample_count && !rows);
     CHECK(strstr(periodic,"[dosvm] perf vm=35 gen=7 exits=65 gp=11 pf=12 db=13 timer=14 other=15 pm=16 busy_pm=0 idle_2f=1 idle_28=2 idle_16=3 idle_hlt=4\n"));
     CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0334 exits=6 us=500\n"));
     CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0333 exits=5 us=400\n"));
@@ -159,15 +176,45 @@ int main(void)
     periodic_bytes=periodic_rows=0; periodic[0]=0;
     vm.perf.exits[0]+=7; vm.perf.exits[5]+=3; vm.idle.count[DOSVM_IDLE_HLT]+=2;
     g_ticks=4000; dosvm_perf_report(&vm);
-    CHECK(periodic_rows==2 && vm.perf.sample_count==2 && vm.perf.sample[1].exits[0]==7);
+    CHECK(periodic_rows==2 && !vm.perf.sample_count && !rows);
     CHECK(strstr(periodic,"[dosvm] perf vm=35 gen=7 exits=7 gp=7 pf=0 db=0 timer=0 other=0 pm=3 busy_pm=0 idle_2f=0 idle_28=0 idle_16=0 idle_hlt=2\n"));
     CHECK(!strstr(periodic,"perf_port") && strstr(periodic,"exits=0 us=0\n"));
+    g_ticks=5000; dosvm_perf_report(&vm);
+    CHECK(vm.perf.sample_count==1 && rows && periodic_rows==2);
+    CHECK(vm.perf.sample[0].ms==5000 && vm.perf.sample[0].exits[0]==18);
+    CHECK(vm.perf.sample[0].top_port[0].id==0x334);
     reset(); vm.info.key.id=vm.info.key.generation=UINT32_MAX;
     struct dosvm_perf_sample maximum={.busy_permille=1000};
     for (unsigned i=0;i<6;i++) maximum.exits[i]=UINT32_MAX;
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) maximum.idle_count[i]=UINT32_MAX;
     perf_periodic(&vm,&maximum); CHECK(periodic_rows==2 && strstr(periodic,"exits=21474836475"));
     puts("f1-86 VM periodic: no probe, 2s cadence, exact deltas, top three ports/cause, empty next window PASS");
+    for (unsigned phase=0;phase<=2;phase++) {
+        unsigned sparse_blocks=0,sparse_access=0,sparse_copy=0;
+        for (unsigned dense=0;dense<=1;dense++) {
+            seed(dense,phase); vm.perf.report_tick=g_ticks;
+            vm.perf.serial.tick=g_ticks-DOSVM_SERIAL_INTERVAL;
+            memcpy(vm.perf.serial.ports[0],vm.perf.interval[0].ports,sizeof(vm.perf.serial.ports[0]));
+            measuring=true; dosvm_perf_report(&vm); measuring=false;
+            CHECK(labels==1 && blocks>0 && blocks<=256 && !rows && !vm.perf.sample_count);
+            CHECK(!divisions && !clear_bytes && copy_bytes<=512 && access_bytes<=1024);
+            if (dense) {
+                CHECK(blocks==sparse_blocks && access_bytes==sparse_access && copy_bytes==sparse_copy);
+                printf("f1-86 serial IRQ work phase=%u sparse=dense: blocks=%u scalar_bytes=%u copied_bytes=%u cleared_bytes=%u divisions=%u PASS\n",
+                       phase,blocks,access_bytes,copy_bytes,clear_bytes,divisions);
+            } else { sparse_blocks=blocks; sparse_access=access_bytes; sparse_copy=copy_bytes; }
+        }
+    }
+    seed(true,0); vm.perf.report_tick=g_ticks; vm.perf.serial.tick=g_ticks-DOSVM_SERIAL_INTERVAL;
+    memcpy(vm.perf.serial.ports[0],vm.perf.interval[0].ports,sizeof(vm.perf.serial.ports[0]));
+    restore_hook=next_serial_producer; dosvm_perf_report(&vm);
+    CHECK(strstr(periodic,"port=00ff") && !strstr(periodic,"port=1234"));
+    CHECK(vm.perf.serial.ports[1][0x1234%DOSVM_PERF_PORTS].count==1);
+    periodic_rows=periodic_bytes=0; periodic[0]=0;
+    g_ticks+=DOSVM_SERIAL_INTERVAL; dosvm_perf_report(&vm);
+    CHECK(!rows && !vm.perf.sample_count && periodic_rows==3);
+    CHECK(strstr(periodic,"port=1234 exits=1 us=19\n") && strstr(periodic,"cause=io exits=1 us=19\n"));
+    puts("PASS f1-86 serial banks: concurrent producer/reentry, next-window port and cause, disk banks untouched");
     for (unsigned phase=0;phase<=2;phase++) {
         unsigned sparse_blocks=0,sparse_access=0,sparse_copy=0;
         for (unsigned dense=0;dense<=1;dense++) {
@@ -215,3 +262,5 @@ int main(void)
     puts("f3-31 IRQ snapshot: detached banks, concurrent producers, reentrant reporter guard, reuse and IF-off deferral PASS");
     return 0;
 }
+
+#endif /* !F186_BUDGET */

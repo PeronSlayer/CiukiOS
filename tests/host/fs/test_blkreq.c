@@ -5,6 +5,8 @@
 #include <assert.h>
 #include <stdatomic.h>
 static unsigned records;
+static bool idle_report;
+static struct blk_queue_stats reported;
 static bool fake_clock;
 static uint32_t clock_ms;
 uint32_t fs_host_clock_ms(void) {
@@ -13,7 +15,10 @@ uint32_t fs_host_clock_ms(void) {
     return (uint32_t)((uint64_t)t.tv_sec*1000+(uint32_t)t.tv_nsec/1000000);
 }
 void blk_queue_record(const char *name,const struct blk_queue_stats *s) {
-    assert(name && s->depth[BLK_DEMAND]==1 && s->oldest_ms>=5000); records++;
+    assert(name);
+    if (idle_report) assert(!s->depth[0] && !s->depth[1] && !s->depth[2] && !s->oldest_ms);
+    else assert(s->depth[BLK_DEMAND]==1 && s->oldest_ms>=5000);
+    reported=*s; records++;
 }
 struct disk {
     struct blkdev dev;
@@ -233,4 +238,19 @@ static void service_telemetry(void) {
     assert(!blk_queue_destroy(&m.queue)); fake_clock=false;
     puts("PASS f1-86 per-device DMA/PIO and service buckets: exact 2/8/32 boundaries, wrap, failure, sibling isolation");
 }
-int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); pool_cleanup(); return 0; }
+static void idle_telemetry(void) {
+    struct disk m; fake_clock=true; clock_ms=1000; init(&m); uint8_t b[512];
+    idle_report=true; unsigned before=records; m.dma=true; m.delay_ms=8;
+    for (unsigned i=0;i<3;i++) assert(!blkdev_read(&m.dev,i,1,b));
+    assert(!m.queue.head && !m.queue.busy && m.queue.record_dirty);
+    clock_ms=5999; blk_queue_poll(&m.queue); assert(records==before);
+    clock_ms=6000; blk_queue_poll(&m.queue); assert(records==before+1 && !m.queue.record_dirty);
+    assert(reported.issued==3 && reported.device[0].dma==3 && reported.device[0].service[2]==3);
+    clock_ms=11000; blk_queue_poll(&m.queue); assert(records==before+1);
+    m.dma=false; m.delay_ms=1; assert(!blkdev_read(&m.dev,0,1,b));
+    blk_queue_poll(&m.queue); assert(records==before+2 && reported.device[0].pio==1);
+    assert(reported.device[0].dma==3 && reported.device[0].service[0]==1);
+    assert(!blk_queue_destroy(&m.queue)); fake_clock=idle_report=false;
+    puts("PASS f1-86 idle queue telemetry: completed DMA burst published at next 5s boundary, no empty duplicates, later PIO completion retained");
+}
+int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }

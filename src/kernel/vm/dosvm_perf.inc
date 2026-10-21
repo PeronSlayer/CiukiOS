@@ -1,7 +1,8 @@
 /* f0-34: live disk summaries are protected; rec_diag stop-time history is
  * droppable regardless of a shared group=vm_perf_* name.
- * f1-86 counters: one memory snapshot and bounded UART summary per two
- * seconds; the verbose UART history is dumped after the worker stops.
+ * f1-86: independent bounded UART snapshots every two seconds; existing
+ * disk families retain their five-second banks and the verbose UART history
+ * is dumped after the worker stops.
  * TSC accounting pauses across task switches; it never includes a sleeping
  * monitor's wall time as VM CPU time. SPDX-License-Identifier: GPL-2.0-only */
 #include "dos_file.h"
@@ -172,6 +173,12 @@ static void perf_exit_end(struct dosvm *v)
             }
         }
         if (n == DOSVM_PERF_PORTS) v->perf.port_overflow++;
+        for (n=0,slot=v->perf.io_port%DOSVM_PERF_PORTS; n<DOSVM_PERF_PORTS; n++,slot=(slot+1)%DOSVM_PERF_PORTS) {
+            struct dosvm_hot_cost *h=&v->perf.serial.ports[v->perf.serial.active][slot];
+            if (!h->count || h->id==v->perf.io_port) {
+                h->id=v->perf.io_port; h->count++; h->cycles+=v->perf.trap_cycles; break;
+            }
+        }
     }
     v->perf.trap_active = false;
     irq_restore(flags);
@@ -311,7 +318,7 @@ static void perf_periodic(struct dosvm *v, const struct dosvm_perf_sample *s)
         id, perf_names[top], s->cost_count[top], s->cost_us[top]);
 }
 
-void dosvm_perf_report(struct dosvm *v)
+static void perf_disk_report(struct dosvm *v)
 {
     if (!g_tsc_per_ms || g_ticks - v->perf.report_tick < DOSVM_PERF_INTERVAL) return;
     uint32_t flags = irq_save();
@@ -450,11 +457,58 @@ void dosvm_perf_report(struct dosvm *v)
      * preempting STATUS call from overwriting this sample during emission. */
     uint64_t begin = dosvm_perf_clock();
     perf_live(v, s, n, &bank->disk);
-    perf_periodic(v, s);
     memset(&bank->disk, 0, sizeof(bank->disk));
     v->perf.log_cycles += dosvm_perf_clock() - begin;
     v->perf.reporting = false;
 #undef DELTA
+}
+
+/* The serial counter snapshot is independent of the five-second disk banks.
+ * Only fixed raw fields and a bank index are touched with IF clear. */
+static void perf_serial_report(struct dosvm *v) {
+    if (!g_tsc_per_ms || g_ticks-v->perf.serial.tick<DOSVM_SERIAL_INTERVAL) return;
+    struct {
+        uint32_t exits[6],idle[DOSVM_IDLE_REASONS],count[DOSVM_COST_COUNT];
+        uint64_t cost[DOSVM_COST_COUNT],guest,monitor,tick;
+    } raw;
+    uint32_t flags=irq_save();
+    if (!(flags&0x200) || !g_tsc_per_ms || v->perf.serial.reporting ||
+        g_ticks-v->perf.serial.tick<DOSVM_SERIAL_INTERVAL) { irq_restore(flags); return; }
+    if (crit_label) crit_label("dosvm_serial_snapshot");
+    v->perf.serial.reporting=true;
+    if (perf_current==v) perf_phase(v,v->perf.phase);
+    memcpy(raw.exits,v->perf.exits,sizeof(raw.exits));
+    memcpy(raw.idle,v->idle.count,sizeof(raw.idle));
+    memcpy(raw.count,v->perf.cost_count,sizeof(raw.count));
+    memcpy(raw.cost,v->perf.cost_cycles,sizeof(raw.cost));
+    raw.guest=v->perf.guest_cycles; raw.monitor=v->perf.monitor_cycles; raw.tick=g_ticks;
+    struct dosvm_hot_cost *ports=v->perf.serial.ports[v->perf.serial.active];
+    v->perf.serial.active^=1u;
+    irq_restore(flags);
+    struct dosvm_perf_sample s={0};
+    s.ms=(uint32_t)(raw.tick-v->perf.serial.tick);
+    for (unsigned i=0;i<6;i++) { s.exits[i]=raw.exits[i]-v->perf.serial.exits[i]; v->perf.serial.exits[i]=raw.exits[i]; }
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) { s.idle_count[i]=raw.idle[i]-v->perf.serial.idle[i]; v->perf.serial.idle[i]=raw.idle[i]; }
+    for (unsigned i=0;i<DOSVM_COST_COUNT;i++) {
+        s.cost_count[i]=raw.count[i]-v->perf.serial.cost_count[i];
+        s.cost_us[i]=perf_us(raw.cost[i]-v->perf.serial.cost_cycles[i]);
+        v->perf.serial.cost_count[i]=raw.count[i]; v->perf.serial.cost_cycles[i]=raw.cost[i];
+    }
+    uint64_t cpu=perf_us(raw.guest-v->perf.serial.guest)+perf_us(raw.monitor-v->perf.serial.monitor);
+    uint64_t busy=s.ms ? cpu/s.ms : 0;
+    s.busy_permille=busy<1000 ? (uint32_t)busy : 1000;
+    v->perf.serial.guest=raw.guest; v->perf.serial.monitor=raw.monitor; v->perf.serial.tick=raw.tick;
+    for (unsigned i=0;i<DOSVM_PERF_PORTS;i++) perf_top(s.top_port,ports[i]);
+    memset(ports,0,sizeof(v->perf.serial.ports[0]));
+    uint64_t begin=dosvm_perf_clock();
+    perf_periodic(v,&s);
+    v->perf.log_cycles+=dosvm_perf_clock()-begin;
+    v->perf.serial.reporting=false;
+}
+void dosvm_perf_report(struct dosvm *v) {
+    if (v->perf.reporting || v->perf.serial.reporting) return;
+    perf_disk_report(v);
+    perf_serial_report(v);
 }
 
 static void file_trace_record(struct dosvm *v,const char *format,...) {

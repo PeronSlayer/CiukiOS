@@ -110,7 +110,7 @@ struct blk_queue {
     uint64_t sequence;
     unsigned requests; /* prepared through waiter release; queue lifetime pin */
     uint32_t last_record, max_bytes, limit_bytes;
-    bool busy, stopped;
+    bool busy, stopped, record_dirty;
     struct task *worker;
     struct ktimer report_timer;
     uint32_t report_generation;

@@ -13,8 +13,22 @@ static atomic_bool stall, in_device, release_device;
 static unsigned hold_records, wait_records;
 static uint32_t held_ms, waited_ms;
 static unsigned threshold_holds;
-static bool fake_clock;
-static uint32_t clock_ms;
+static atomic_bool fake_clock;
+static atomic_uint clock_ms;
+static unsigned timeout_kind, timeout_records;
+static _Thread_local unsigned namespace_locks, volume_locks;
+void __real_fs_lock_acquired(fs_lock *);
+void __real_fs_lock_released(fs_lock *);
+void __wrap_fs_lock_acquired(fs_lock *l) {
+    __real_fs_lock_acquired(l);
+    namespace_locks+=l==&v.lock;
+    for (unsigned d=0;d<26;d++) volume_locks+=l==&v.volume_lock[d];
+}
+void __wrap_fs_lock_released(fs_lock *l) {
+    namespace_locks-=l==&v.lock;
+    for (unsigned d=0;d<26;d++) volume_locks-=l==&v.volume_lock[d];
+    __real_fs_lock_released(l);
+}
 uint32_t fs_host_clock_ms(void) {
     if (fake_clock) return clock_ms;
     struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
@@ -44,6 +58,7 @@ static struct vfs_request waiter_request={.now=now,.pause=pause_request,
 static struct vfs_table writer, waiter;
 static int handle;
 void vfs_hold_observer(char drive,uint32_t ms,const struct vfs_hold_info *h,uint32_t waiters) {
+    assert(!namespace_locks && !volume_locks);
     if (drive=='D') {
         assert(fake_clock && !waiters && h->task.id==43 && !strcmp(h->task.name,"abcdefghijklmno"));
         assert(!strcmp(h->op,"log_reserve") && ms==(threshold_holds ? 75u : 50u));
@@ -55,6 +70,14 @@ void vfs_hold_observer(char drive,uint32_t ms,const struct vfs_hold_info *h,uint
 }
 void vfs_wait_observer(char drive,uint32_t ms,char holder,const char *reason,
                        const struct fs_task_identity *task,const struct vfs_hold_info *h) {
+    assert(!namespace_locks && !volume_locks);
+    if (timeout_kind) {
+        assert(drive=='C' && ms==250 && task->id==29 && h->task.id==43);
+        assert(!strcmp(task->name,"files") && !strcmp(h->op,"log_reserve"));
+        assert(holder==(timeout_kind==1 ? '-' : 'C'));
+        assert(!strcmp(reason,timeout_kind==1 ? "namespace:timeout" : "volume:timeout"));
+        timeout_records++; return;
+    }
     assert(drive=='C' && holder=='C' && ms>=100 && !strcmp(reason,"volume"));
     assert(!strcmp(task->name,"files") && task->id==29);
     assert(!strcmp(h->task.name,"log_writer") && h->task.id==17 && !strcmp(h->op,"write"));
@@ -66,6 +89,13 @@ static void *write_thread(void *arg) {
 }
 static void *wait_thread(void *arg) {
     (void)arg; struct fat_entry e; assert(!vfs_stat(&waiter,"C:/TEST.BIN",&e) && e.size==512); return 0;
+}
+static void timeout_pause(void *arg) { (void)arg; clock_ms+=125; }
+static void *timeout_thread(void *arg) {
+    (void)arg; struct vfs_request r=waiter_request;
+    r.pause=timeout_pause; r.deadline=now(0)+150000;
+    assert(vfs_admit(&v,1u<<2,&r)==-VFS_ETIMEOUT);
+    assert(!namespace_locks && !volume_locks); return 0;
 }
 int main(void) {
     disk=calloc(2880,512); assert(disk);
@@ -104,15 +134,27 @@ int main(void) {
     diagnostic.operation="log_reserve";
     fake_clock=true; clock_ms=1000;
     struct fs_request_scope scope; fs_request_enter(&scope,&diagnostic);
-    vfs_lock(&v,1u<<3); clock_ms+=49; vfs_unlock(&v); assert(!threshold_holds);
+    vfs_lock(&v,1u<<3); assert(namespace_locks==1 && volume_locks==1);
+    clock_ms+=49; vfs_unlock(&v); assert(!threshold_holds && !namespace_locks && !volume_locks);
     vfs_lock(&v,1u<<3); clock_ms+=50; vfs_unlock(&v); assert(threshold_holds==1);
     vfs_lock(&v,1u<<3); struct vfs_io_state io=vfs_io_begin_locked(&v);
     clock_ms+=75; vfs_io_end_locked(&v,io); vfs_unlock(&v); assert(threshold_holds==2);
-    fs_request_leave(&scope); fake_clock=false;
+    fs_request_leave(&scope);
+    /* Failed namespace admission has no lock to release; a cancelled volume
+     * ticket must defer its captured wait until the namespace is dropped. */
+    clock_ms=2000; fs_request_enter(&scope,&diagnostic);
+    vfs_lock(&v,0); timeout_kind=1;
+    assert(!pthread_create(&a,0,timeout_thread,0) && !pthread_join(a,0));
+    vfs_unlock(&v); assert(timeout_records==1);
+    vfs_lock(&v,1u<<2); io=vfs_io_begin_locked(&v); timeout_kind=2;
+    assert(!pthread_create(&a,0,timeout_thread,0) && !pthread_join(a,0));
+    vfs_io_end_locked(&v,io); vfs_unlock(&v); assert(timeout_records==2);
+    timeout_kind=0; fs_request_leave(&scope); fake_clock=false;
     writer.request=waiter.request=0;
     assert(!vfs_close(&writer,handle)); vfs_table_destroy(&writer); vfs_table_destroy(&waiter);
     assert(!vfs_detach(&v,2)); vfs_destroy(&v); assert(!volume.mounted); cache_destroy(&cache); free(disk);
     assert(!blk_request_pool_host_cleanup());
-    puts("PASS f1-86 VFS real FAT/cache + slow device: C, write, log_writer#17, files#29, waiters=1; exact 49/50ms threshold, bounded names and calldown context");
+    puts("PASS f1-86 VFS real FAT/cache + slow device: exact holder/waiter fields, 49/50ms threshold, bounded names and calldown context; publication owns no namespace/volume locks");
+    puts("PASS f1-86 admission errors: exact namespace/volume timeout snapshots, no publication under caller locks");
     return 0;
 }

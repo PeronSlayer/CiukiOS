@@ -56,6 +56,14 @@ void crit_begin(void)
     }
 }
 void crit_label(const char *section) { if (crit_start) crit_section=section; }
+/* A scheduler entry can follow a raw CLI, without an irq_save owner.
+ * Preserve a caller's outer section and tell schedule which one it owns. */
+bool crit_begin_inactive(void)
+{
+    if (crit_start) return false;
+    crit_begin();
+    return crit_start!=0;
+}
 
 void crit_owner(const char *owner, uint32_t site)
 {

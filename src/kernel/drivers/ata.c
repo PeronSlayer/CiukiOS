@@ -1032,7 +1032,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     if (c->stopped || c->quiescing)
         return -FS_EQUARANTINED;
     uint64_t start = now(c), deadline = start + ATA_COMMAND_MS;
-    uint64_t first_start = !c->dma_completion_logged && g_tsc_per_ms ? ktime_cycles() : 0;
+    uint64_t first_start = d->dma_enabled && !c->dma_completion_logged && g_tsc_per_ms ? ktime_cycles() : 0;
     uint32_t sequence;
     d->issued = false;
     uint8_t head = (uint8_t)(0x40 | (d->lba48 ? 0 : (lba >> 24) & 15));

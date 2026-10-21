@@ -472,6 +472,8 @@ void task_native_frame(struct task *t, uint32_t esp)
 void schedule(void)
 {
     uint32_t f = irq_save();
+    bool own_irqoff=!(f&0x200) && crit_begin_inactive && crit_begin_inactive();
+    if (own_irqoff && crit_label) crit_label("schedule");
     if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_PICK);
     /* Capture short turns that ended between PIT ticks before choosing the
      * next task. This also covers repeated voluntary device yields. */
@@ -531,6 +533,7 @@ void schedule(void)
     if (next == prev) {
         prev->state = T_RUNNING;
         if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_NONE);
+        if (own_irqoff) crit_end();
         irq_restore(f);
         return;
     }
@@ -583,6 +586,7 @@ void schedule(void)
     crit_end();                 /* a switch suspends the caller's critical section */
     switch_context(&prev->saved_esp, next->saved_esp);
     crit_begin();               /* time only the remainder after resuming */
+    if (own_irqoff) crit_end();
     irq_restore(f);
 }
 

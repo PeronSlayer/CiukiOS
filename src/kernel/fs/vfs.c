@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "vfs.h"
 #include "../include/ciuki/vfs_hooks.h"
-#ifndef FS_HOST
 #include <ciuki/kernel.h>
+#ifdef FS_HOST
+#pragma weak klog_periodic
+#pragma weak klog_diag
+#define DIAG_LOG(fn,...) do { if (fn) fn(__VA_ARGS__); } while (0)
+#else
+#define DIAG_LOG(fn,...) fn(__VA_ARGS__)
 #endif
 /* The host can inspect waits without requiring kernel logging. */
 static void tag_copy(char out[12],const char *tag) {
@@ -40,15 +45,63 @@ static char first_drive(uint32_t mask) {
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) return (char)('A'+d);
     return '-';
 }
-static void wait_report(uint32_t start,char drive,char holder,const char *reason,
+static struct vfs_pending_waits waits_detach(struct vfs *v) {
+    struct vfs_pending_waits pending=v->diagnostic_pending;
+    v->diagnostic_pending.count=0; return pending;
+}
+static void wait_capture(struct vfs_pending_waits *pending,uint32_t start,char drive,char holder,const char *reason,
                         const struct fs_task_identity *task,const struct vfs_hold_info *owner) {
     uint32_t ms=fs_now_ms()-start;
     if (ms<100) return;
-#ifndef FS_HOST
-    klog_periodic("[storage] vfs_wait drive=%c ms=%u holder=%c reason=%s task=%s#%u holder_task=%s#%u op=%s",
-        drive,ms,holder,reason,task->name,task->id,owner->task.name[0] ? owner->task.name : "none",owner->task.id,owner->op[0] ? owner->op : "other");
-#endif
-    if (vfs_wait_observer) vfs_wait_observer(drive,ms,holder,reason,task,owner);
+    /* Admission has at most two waits in a turn; repeated file waits end
+     * their turn with vfs_unlock before retrying. */
+    if (pending->count<2) pending->records[pending->count++]=(struct vfs_wait_record){
+        .task=*task,.owner=*owner,.ms=ms,.drive=drive,.holder=holder,.reason=reason};
+}
+struct hold_record { struct vfs_hold_info owner; uint32_t ms,waiters; char drive; };
+static unsigned budget_drive(char drive) { return drive>='A' && drive<='Z' ? (unsigned)(drive-'A') : 26; }
+static bool budget_allow(struct vfs_contention_budget *b,uint32_t ms,bool hold) {
+    unsigned *count=hold ? &b->holds : &b->waits;
+    uint32_t *max=hold ? &b->hold_max_ms : &b->wait_max_ms;
+    uint32_t *suppressed=hold ? &b->hold_suppressed : &b->wait_suppressed;
+    if (ms>*max) *max=ms;
+    if (*count<8) { (*count)++; return true; }
+    if (*suppressed<UINT32_MAX) (*suppressed)++;
+    return false;
+}
+/* Called only at an unlocked boundary, after volume waiters are woken.
+ * The existing identity lock serializes counters; no sink runs under it.
+ * A sink may yield/reenter VFS without borrowing this turn's snapshots. */
+static void diagnostics_publish(struct vfs *v,const struct hold_record *holds,unsigned count,
+                                const struct vfs_pending_waits *pending) {
+    struct vfs_contention_budget summary[27];
+    bool hold_allowed[26],wait_allowed[2]; uint32_t now=fs_now_ms();
+    fs_lock_take(&v->identity_lock);
+    for (unsigned d=0;d<27;d++) {
+        struct vfs_contention_budget *b=&v->diagnostic_budget[d];
+        summary[d].valid=b->valid && now-b->start>=2000 && (b->hold_suppressed || b->wait_suppressed);
+        if (summary[d].valid) summary[d]=*b;
+        if (!b->valid || now-b->start>=2000) *b=(struct vfs_contention_budget){.start=now,.valid=true};
+    }
+    for (unsigned i=0;i<count;i++) hold_allowed[i]=budget_allow(&v->diagnostic_budget[budget_drive(holds[i].drive)],holds[i].ms,true);
+    for (unsigned i=0;i<pending->count;i++) wait_allowed[i]=budget_allow(&v->diagnostic_budget[budget_drive(pending->records[i].drive)],pending->records[i].ms,false);
+    fs_lock_drop(&v->identity_lock);
+    for (unsigned d=0;d<27;d++) if (summary[d].valid) {
+        DIAG_LOG(klog_periodic,"[storage] vfs_contention drive=%c hold_suppressed=%u wait_suppressed=%u hold_max_ms=%u wait_max_ms=%u",
+            d<26 ? 'A'+d : '-',summary[d].hold_suppressed,summary[d].wait_suppressed,summary[d].hold_max_ms,summary[d].wait_max_ms);
+    }
+    for (unsigned i=0;i<count;i++) if (hold_allowed[i]) {
+        DIAG_LOG(klog_periodic,"[storage] vfs_hold drive=%c ms=%u task=%s#%u op=%s waiters=%u",
+            holds[i].drive,holds[i].ms,holds[i].owner.task.name,holds[i].owner.task.id,holds[i].owner.op,holds[i].waiters);
+        if (vfs_hold_observer) vfs_hold_observer(holds[i].drive,holds[i].ms,&holds[i].owner,holds[i].waiters);
+    }
+    for (unsigned i=0;i<pending->count;i++) if (wait_allowed[i]) {
+        const struct vfs_wait_record *r=&pending->records[i];
+        DIAG_LOG(klog_diag,"[storage] vfs_wait drive=%c ms=%u holder=%c reason=%s task=%s#%u holder_task=%s#%u op=%s",
+            r->drive,r->ms,r->holder,r->reason,r->task.name,r->task.id,
+            r->owner.task.name[0] ? r->owner.task.name : "none",r->owner.task.id,r->owner.op[0] ? r->owner.op : "other");
+        if (vfs_wait_observer) vfs_wait_observer(r->drive,r->ms,r->holder,r->reason,&r->task,&r->owner);
+    }
 }
 static void namespace_take(struct vfs *v,uint32_t mask) {
     uint32_t start=fs_now_ms();
@@ -56,7 +109,7 @@ static void namespace_take(struct vfs *v,uint32_t mask) {
     struct vfs_hold_info owner=holder_snapshot(&v->namespace_owner);
     struct fs_task_identity task=fs_request_identity(fs_request_current());
     fs_lock_take(&v->lock);
-    wait_report(start,first_drive(mask),holder,"namespace",&task,&owner);
+    wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,"namespace",&task,&owner);
     namespace_owner(v,fs_request_current());
 }
 /* f2-03 integration notes: weak observers keep the F1 harness independent.
@@ -122,6 +175,7 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
     uint64_t request_start=request ? request->now(request->arg) : 0;
+    struct vfs_pending_waits pending=waits_detach(v);
     int error=0;
     for (;;) {
         error=vfs_request_check(request);
@@ -137,8 +191,9 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     while (*link!=&waiter) link=&(*link)->next;
     *link=waiter.next;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]--;
+    v->diagnostic_pending=pending;
     request_wait(request,request_start,mask,VFS_WAIT_VOLUME,error);
-    wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
+    wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
     if (error) { advance_cancelled(v); fs_event_wake(&v->volume_changed); return error; }
     v->reserved |= mask;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
@@ -171,16 +226,21 @@ static int admit_request(struct vfs *v,uint32_t mask,const struct vfs_request *r
     while (!fs_lock_try_take(&v->lock)) {
         if ((error=vfs_request_check(request))) {
             request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,error);
-            wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "namespace:timeout" : "namespace:cancelled",&task,&owner);
+            struct vfs_pending_waits pending={0};
+            wait_capture(&pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "namespace:timeout" : "namespace:cancelled",&task,&owner);
+            diagnostics_publish(v,0,0,&pending);
             return error;
         }
         request->pause(request->arg);
     }
     request_wait(request,begin,mask,VFS_WAIT_NAMESPACE,0);
-    wait_report(start,first_drive(mask),holder,"namespace",&task,&owner);
+    wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,"namespace",&task,&owner);
     namespace_owner(v,request);
     error=reserve_request(v,mask,request);
-    if (error) { fs_lock_drop(&v->lock); return error; }
+    if (error) {
+        struct vfs_pending_waits pending=waits_detach(v);
+        fs_lock_drop(&v->lock); diagnostics_publish(v,0,0,&pending); return error;
+    }
     v->default_drive=26; return 0;
 }
 
@@ -196,14 +256,15 @@ void vfs_lock(struct vfs *v,uint32_t mask) {
 }
 void vfs_unlock(struct vfs *v) {
     uint32_t mask=v->active,tickets=v->active_tickets;
+    struct hold_record holds[26];
+    unsigned count=0;
+    struct vfs_pending_waits pending=waits_detach(v);
+    uint32_t released=fs_now_ms();
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
-        struct vfs_hold_info h=v->holds[d]; uint32_t held=fs_now_ms()-h.started;
+        struct vfs_hold_info h=v->holds[d]; uint32_t held=released-h.started;
         if (held>=50) {
-#ifndef FS_HOST
-            klog_periodic("[storage] vfs_hold drive=%c ms=%u task=%s#%u op=%s waiters=%u",
-                'A'+d,held,h.task.name,h.task.id,h.op,v->diagnostic_waiters[d]);
-#endif
-            if (vfs_hold_observer) vfs_hold_observer('A'+d,held,&h,v->diagnostic_waiters[d]);
+            holds[count].owner=h; holds[count].ms=held;
+            holds[count].waiters=v->diagnostic_waiters[d]; holds[count++].drive='A'+d;
         }
         memset(&v->holds[d],0,sizeof(v->holds[d]));
     }
@@ -213,9 +274,11 @@ void vfs_unlock(struct vfs *v) {
     __atomic_store_n(&v->holder,'-',__ATOMIC_RELAXED);
     volume_mutexes(v,mask,false); fs_lock_drop(&v->lock);
     if (mask) fs_event_wake(&v->volume_changed);
+    diagnostics_publish(v,holds,count,&pending);
 }
 struct vfs_io_state vfs_io_begin_locked(struct vfs *v) {
-    struct vfs_io_state state={v->active,v->default_drive,true};
+    struct vfs_io_state state={.drives=v->active,.default_drive=v->default_drive,.logical=true,
+        .diagnostics=waits_detach(v)};
     for (unsigned d=0;d<26;d++) if ((v->active&(1u<<d)) &&
         (!v->volumes[d] || !v->volumes[d]->dev || !v->volumes[d]->dev->logical)) state.logical=false;
     /* A logical provider can enter the outer physical VFS. Retain its
@@ -239,6 +302,7 @@ void vfs_io_end_locked(struct vfs *v,struct vfs_io_state state) {
     if (!state.logical) volume_mutexes(v,mask,false);
     (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
     volume_mutexes(v,mask,true); v->active=mask;
+    v->diagnostic_pending=state.diagnostics;
     char drive=first_drive(mask);
     if (drive>='A' && drive<='Z') namespace_publish(v,&v->holds[drive-'A'].task,v->holds[drive-'A'].op);
     else namespace_owner(v,fs_request_current());
@@ -766,12 +830,14 @@ static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     struct fs_task_identity task=fs_request_identity(request);
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
+    struct vfs_pending_waits pending=waits_detach(v);
     if (!request) fs_event_wait(&v->volume_changed,&v->lock);
     else { fs_lock_drop(&v->lock); request->pause(request->arg); (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE); }
+    v->diagnostic_pending=pending;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]--;
     int error=vfs_request_check(request);
     request_wait(request,begin,mask,VFS_WAIT_VOLUME,error);
-    if (error || !request) wait_report(start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
+    if (error || !request) wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
     return error;
 }
 static int handle_lock(struct vfs_table *t,int h) {

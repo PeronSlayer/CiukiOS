@@ -23,8 +23,10 @@ static uint64_t cycles = 1;
 static uint64_t read_tsc_unserialized(void) { return cycles; }
 static uint32_t fpu_cost;
 static uint32_t flags = 0x200;
-static uint32_t irq_save(void) { uint32_t f=flags; flags=0; return f; }
-static void irq_restore(uint32_t f) { flags=f; }
+static void (*timing_begin_hook)(void),(*timing_end_hook)(void);
+bool crit_begin_inactive(void) __attribute__((weak));
+static uint32_t irq_save(void) { uint32_t f=flags; flags=0; if ((f&0x200) && timing_begin_hook) timing_begin_hook(); return f; }
+static void irq_restore(uint32_t f) { if ((f&0x200) && timing_end_hook) timing_end_hook(); flags=f; }
 static uint32_t read_eflags(void) { return flags; }
 uint64_t ktime_cycles(void) { return cycles; }
 void file_clock_tick(void) { }
@@ -35,8 +37,8 @@ void file_clock_tick(void) { }
 #define tss_set_kernel_stack(s) ((void)(s))
 #define proc_task_switch(t) ((void)(t))
 #define fpu_task_switch(t) ((void)(t),cycles+=fpu_cost)
-#define crit_end() ((void)0)
-#define crit_begin() ((void)0)
+#define crit_end() do { if (timing_end_hook) timing_end_hook(); } while (0)
+#define crit_begin() do { if (timing_begin_hook) timing_begin_hook(); } while (0)
 static void (*latency_switch_hook)(void);
 #define switch_context(a,b) ((void)(a),(void)(b),latency_switch_hook ? latency_switch_hook() : (void)0)
 extern uint32_t dosvm_task_cr3(const struct task *,uint32_t) __attribute__((weak));

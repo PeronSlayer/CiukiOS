@@ -24,9 +24,10 @@ static unsigned overrun_used, overrun_lost;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
 static struct {
-    uint64_t start, last, measured, largest;
+    uint64_t start;
     uint32_t site;
-    enum cpu_irqoff_phase phase, largest_phase;
+    unsigned count;
+    struct { uint64_t stamp; enum cpu_irqoff_phase phase; } marks[8];
     const struct task *from, *to;
 } irqoff;
 static struct irqoff_long {
@@ -54,23 +55,18 @@ static void name_copy(char *dst, const char *src)
 }
 void cpu_irqoff_begin(uint64_t start,uint32_t site)
 {
-    irqoff.start=start; irqoff.last=0; irqoff.measured=irqoff.largest=0;
-    irqoff.site=site; irqoff.phase=irqoff.largest_phase=CPU_IRQOFF_NONE;
-    irqoff.from=irqoff.to=g_current;
-}
-static void irqoff_mark_at(enum cpu_irqoff_phase phase,uint64_t now)
-{
-    if (!irqoff.start) return;
-    if (irqoff.phase!=CPU_IRQOFF_NONE && now>=irqoff.last) {
-        uint64_t d=now-irqoff.last;
-        irqoff.measured+=d;
-        if (d>irqoff.largest) { irqoff.largest=d; irqoff.largest_phase=irqoff.phase; }
-    }
-    irqoff.last=now; irqoff.phase=phase;
+    /* Most sections never schedule: do not clear the phase array or copy
+     * task identities on their entry/exit. count bounds all stale slots. */
+    irqoff.start=start; irqoff.site=site; irqoff.count=0; irqoff.from=0;
 }
 void cpu_irqoff_mark(enum cpu_irqoff_phase phase)
 {
-    if (irqoff.start) irqoff_mark_at(phase,read_tsc_unserialized());
+    if (!irqoff.start) return;
+    unsigned n=irqoff.count;
+    if (n<ARRAY_SIZE(irqoff.marks)) {
+        irqoff.marks[n].stamp=read_tsc_unserialized();
+        irqoff.marks[n].phase=phase; irqoff.count=n+1;
+    } else irqoff.count=ARRAY_SIZE(irqoff.marks)+1; /* unmeasured tail */
 }
 void cpu_irqoff_tasks(const struct task *from,const struct task *to)
 {
@@ -79,15 +75,32 @@ void cpu_irqoff_tasks(const struct task *from,const struct task *to)
 void cpu_irqoff_end(uint64_t end)
 {
     if (!irqoff.start) return;
-    irqoff_mark_at(CPU_IRQOFF_NONE,end);
     uint64_t d=end-irqoff.start;
-    if (g_tsc_per_ms && d>=g_tsc_per_ms && d>irqoff_window.cycles) {
+    if (g_tsc_per_ms && end>=irqoff.start && d>=g_tsc_per_ms && d>irqoff_window.cycles) {
+        uint64_t measured=0,largest=0;
+        enum cpu_irqoff_phase phase=CPU_IRQOFF_NONE;
+        unsigned count=irqoff.count;
+        if (count>ARRAY_SIZE(irqoff.marks)) count=ARRAY_SIZE(irqoff.marks);
+        /* Raw capture above has no phase subtraction, accumulation/ranking.
+         * Only a qualifying section evaluates the bounded marks here. */
+        for (unsigned i=0;i<count;i++) {
+            if (irqoff.marks[i].phase==CPU_IRQOFF_NONE) continue;
+            uint64_t a=irqoff.marks[i].stamp;
+            if (i+1==count && irqoff.count>count) break;
+            uint64_t b=i+1<count ? irqoff.marks[i+1].stamp : end;
+            if (a<irqoff.start || b<a || b>end) continue;
+            uint64_t elapsed=b-a; measured+=elapsed;
+            if (elapsed>largest) { largest=elapsed; phase=irqoff.marks[i].phase; }
+        }
+        if (measured>d) measured=d;
         irqoff_window.cycles=d; irqoff_window.site=irqoff.site;
-        irqoff_window.gap=irqoff.measured<(d+1)/2;
-        irqoff_window.phase=irqoff.largest_phase;
-        irqoff_window.phase_cycles=irqoff_window.gap ? d-irqoff.measured : irqoff.largest;
-        name_copy(irqoff_window.from,irqoff.from ? irqoff.from->name : "none");
-        name_copy(irqoff_window.to,irqoff.to ? irqoff.to->name : "none");
+        irqoff_window.gap=measured<d/2+d%2;
+        irqoff_window.phase=phase;
+        irqoff_window.phase_cycles=irqoff_window.gap ? d-measured : largest;
+        const struct task *from=irqoff.from ? irqoff.from : g_current;
+        const struct task *to=irqoff.from ? irqoff.to : g_current;
+        name_copy(irqoff_window.from,from ? from->name : "none");
+        name_copy(irqoff_window.to,to ? to->name : "none");
     }
     irqoff.start=0;
 }

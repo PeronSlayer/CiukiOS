@@ -199,28 +199,33 @@ static void test_dma(void)
     test_dma_prds_modes();
     test_dma_attachment();
     {
+        g_tsc_per_ms=1000; ata_stamp_reads=0;
         struct fake f; struct blkdev *b=dma_qualify(&f,false); uint8_t data[512];
+        f.channel.devices[0].dma_enabled=false;
+        CHECK(!b->read(b,0,1,data) && !ata_stamp_reads); /* calibrated PIO before any DMA */
+        f.channel.devices[0].dma_enabled=true;
         uint64_t initial_pio=b->stats.pio;
         capture_logs=true; captured_logs[0]=0;
         CHECK(!b->read(b,0,1,data) && b->stats.dma==1 && b->stats.pio==initial_pio);
         char expected[128];
         snprintf(expected,sizeof(expected),"[ata0] dma first-completion unit=0 elapsed_us=%u\n",
-            (unsigned)(f.channel.devices[0].elapsed_ms*1000));
-        CHECK(!strcmp(captured_logs,expected));
+            1000u);
+        CHECK(!strcmp(captured_logs,expected) && ata_stamp_reads==2);
         captured_logs[0]=0;
-        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && !captured_logs[0]);
+        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && !captured_logs[0] && ata_stamp_reads==2);
         f.fault=DMA_ERROR;
         CHECK(b->read(b,0,1,data)==-FS_EIO && b->stats.dma==2 && b->stats.pio==initial_pio);
         CHECK(strstr(captured_logs,"[ata0] dma quarantine unit=0"));
         CHECK(strstr(captured_logs,"[ata0] dma fallback unit=0") && strstr(captured_logs,"mode=pio\n"));
         captured_logs[0]=0; f.fault=GOOD;
-        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && b->stats.pio==initial_pio+1 && !captured_logs[0]);
+        CHECK(!b->read(b,0,1,data) && b->stats.dma==2 && b->stats.pio==initial_pio+1 && !captured_logs[0] && ata_stamp_reads==2);
         capture_logs=false;
+        g_tsc_per_ms=0;
         b=dma_qualify(&f,false); f.fault=DMA_ACTIVE;
         capture_logs=true; captured_logs[0]=0;
         CHECK(b->read(b,0,1,data)==-FS_EIO && !b->stats.dma);
         CHECK(!strstr(captured_logs,"first-completion")); capture_logs=false;
-        puts("PASS f1-86 ATA: first validated DMA completion once/channel, exact elapsed, failed DMA excluded, quarantine/fallback and later PIO");
+        puts("PASS f1-86 ATA: first validated DMA completion once/channel, exact TSC elapsed, no timestamp reads for calibrated PIO or later DMA, failed DMA excluded, quarantine/fallback and later PIO");
     }
     for (unsigned fail=0;fail<2;fail++) {
         struct fake f; struct blkdev *b=dma_qualify(&f,false);

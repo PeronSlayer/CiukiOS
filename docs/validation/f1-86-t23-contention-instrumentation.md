@@ -57,7 +57,9 @@ The implementer's exact commands and results are in
   db= timer= other= pm= busy_pm= idle_2f= idle_28= idle_16= idle_hlt=`, up to
   three `perf_port vm= port= exits= us=` lines ranked by cost, and one
   `perf_cost vm= cause= exits= us=` line for the costliest cause. All are deltas
-  from the same detached sample as disk records, without a probe/verbose flag.
+  from the same underlying counters as disk records, without a probe/verbose flag.
+  Serial windows are two seconds; the original disk sample/record families
+  retain their independent five-second windows and port banks.
   `exits` sums GP/PF/DB/timer/other; `pm` overlaps them. `busy_pm` is CPU/wall
   permille, capped at 1000; idle values count hints. Costs exclude descheduled
   time. Empty windows emit a zero-cost cause and no stale ports. Publication
@@ -87,3 +89,54 @@ The lead owns full suites, image builds and hardware evidence. LeakSanitizer
 cannot finish the ATA fixture in the ptrace-restricted implementer sandbox;
 its settings were not changed. Other fixtures retain their repository runners'
 explicit sanitizer settings. Host results do not qualify T23 throughput/firmware.
+
+## Amendment 1
+
+Hold and wait snapshots include the event's measured duration and bounded
+owner fields. Admission waits follow their caller across reservation sleeps
+and `VFS_IO` phases. Formatting, logging and observers run after namespace and
+volume unlock and waiter wakeup, including failed admission. The existing
+identity lock protects the diagnostic budget only; it is released before any
+publication. No diagnostic lock or allocation is added.
+
+Each drive admits at most eight holds and eight waits per two-second budget
+window. At the next unlocked VFS boundary after rollover, a window with
+suppression emits one protected summary:
+
+```text
+[storage] vfs_contention drive=C hold_suppressed=N wait_suppressed=N hold_max_ms=N wait_max_ms=N
+```
+
+Maxima include suppressed records. Counts saturate, rollover handles the
+32-bit clock wrap, and an unknown drive (`-`) has its own bounded budget.
+`vfs_wait` again uses `klog_diag`: it remains opt-in and verbose on disk,
+preserving the pre-f1-86 protected-slot policy. Holds and suppression summaries
+use `klog_periodic`. The real output/bootlog fixture, with the drain stalled
+for five seconds, records four VMs plus contention in 249/256 slots and
+29,079/65,536 bytes: 233 protected and 16 verbose slots, zero drops. This
+finite test is not a guarantee for an indefinitely stalled sink or all drives
+simultaneously contending. No slot/byte capacity was increased. Independent
+serial port banks add 8 KiB per VM plus fixed snapshot baselines; no allocation
+is performed by the reporter.
+
+`schedule()` starts timing when entered with IF clear and no active section,
+retains an existing outer section, and retires only its own section on a
+same-task return. The switch path retains the existing suspend/resume timing
+boundaries. Phase marks store only raw TSC values; sections below 1 ms do no
+phase subtraction or ranking. Sections without marks do not clear the phase
+array. Up to eight marks are retained; overflow leaves its tail unmeasured
+rather than assigning it to a stale phase. The ATA first-completion timestamp
+is read only for DMA-enabled devices before their channel's first completion.
+
+Both queue-report paths publish dirty completion counters at the next normal
+five-second report even if the queue has become idle. A clean idle queue does
+not repeat the snapshot. The target-object check retains the kernel's exact
+CFLAGS and 4 KiB frame guard (VFS unlock 1,440 bytes, diagnostic publication
+932 bytes, VM reporter 1,480 bytes); it does not link or build an image.
+
+Additional host evidence covers namespace/volume timeout publication, logger
+reentry, per-drive budget isolation and clock wrap, independent two/five-second
+VM cadence with concurrent producers, real scheduler/timing/cpustat hooks,
+raw phase overflow, calibrated PIO timestamp avoidance and idle queue reporting.
+Optional P3 namespace generation validation is deferred: namespace owner fields
+retain the documented atomic best-effort snapshot semantics.

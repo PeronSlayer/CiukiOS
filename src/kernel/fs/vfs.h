@@ -77,6 +77,22 @@ struct vfs_hold_info {
     char op[12];
     uint32_t started;
 };
+/* One namespace wait and one volume/file admission wait per locked turn.
+ * These values follow the owner across sleeps and VFS_IO, never pointers
+ * into another task's request or the shared holder table. */
+struct vfs_wait_record {
+    struct fs_task_identity task;
+    struct vfs_hold_info owner;
+    uint32_t ms;
+    char drive, holder;
+    const char *reason; /* static tag */
+};
+struct vfs_pending_waits { unsigned count; struct vfs_wait_record records[2]; };
+struct vfs_contention_budget {
+    uint32_t start, hold_max_ms, wait_max_ms, hold_suppressed, wait_suppressed;
+    unsigned holds, waits;
+    bool valid;
+};
 void vfs_wait_observer(char,uint32_t,char,const char *,const struct fs_task_identity *,const struct vfs_hold_info *) __attribute__((weak));
 void vfs_hold_observer(char,uint32_t,const struct vfs_hold_info *,uint32_t) __attribute__((weak));
 struct vfs {
@@ -86,7 +102,7 @@ struct vfs {
      * VFS_IO drops namespace during filesystem work. Before resuming it drops
      * the volume mutexes, then reacquires namespace -> volumes. Reservations
      * retire before transport. A separate mutation guard excludes other
-     * metadata operations/removal until bookkeeping and observers finish;
+     * metadata operations/removal until bookkeeping finishes;
      * per-file readers can pass an identified unrelated writer. Snapshots need only
      * namespace and never join reservations. No IRQ/interrupts-off I/O. */
     fs_lock lock, volume_lock[26];
@@ -102,6 +118,8 @@ struct vfs {
     char holder; /* atomic diagnostic snapshot of namespace owner's drive */
     struct vfs_hold_info holds[26], namespace_owner;
     uint32_t diagnostic_waiters[26]; /* existing namespace lock, no new lock */
+    struct vfs_pending_waits diagnostic_pending; /* namespace owner's values */
+    struct vfs_contention_budget diagnostic_budget[27]; /* identity_lock; '-' is 26 */
     unsigned default_drive; /* operation's legacy path-resolution snapshot */
     struct fat_volume *volumes[26];
     uint32_t drive_flags[26];
@@ -153,7 +171,8 @@ void vfs_reserve_locked(struct vfs *, uint32_t drives);
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */
 void vfs_tag_locked(struct vfs *,const char *tag);
-struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical; };
+struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical;
+    struct vfs_pending_waits diagnostics; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);
 void vfs_io_end_locked(struct vfs *, struct vfs_io_state);
 /* Filesystem expressions must not call namespace/observer helpers. */

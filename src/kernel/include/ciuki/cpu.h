@@ -4,6 +4,7 @@
 #define CIUKI_CPU_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define KERNEL_VBASE    0xC0000000u
 #define P2V(p)          ((void *)((uintptr_t)(p) + KERNEL_VBASE))
@@ -98,6 +99,7 @@ static inline uint64_t read_tsc_unserialized(void)
  * timed for the F0 latency evidence (core/timing.c). */
 void crit_begin(void);
 void crit_end(void);
+bool crit_begin_inactive(void) __attribute__((weak));
 void crit_label(const char *section) __attribute__((weak));
 static inline uint32_t irq_save_at(const char *section)
 {
