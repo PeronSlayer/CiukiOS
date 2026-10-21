@@ -16,6 +16,7 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+void dosvm_client_priority(struct dosvm *);
 /* A base image may stop before the geometry's end (owner decision
  * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
  * are cut by scripts/build_games_disk.py and read back as zeros. It must
@@ -275,6 +276,7 @@ struct dosvm {
         unsigned cause;
         uint64_t trap_cycles, cost_cycles[DOSVM_COST_COUNT], last_cost_cycles[DOSVM_COST_COUNT];
         bool io_valid, reporting;
+        uint32_t io_dispatches, io_fast_cycles;
         uint16_t io_port;
         struct dosvm_perf_interval interval[2]; /* preallocated producer/reporter banks */
         unsigned active_interval;
@@ -446,6 +448,7 @@ int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);
 int dosvm_bios_init(struct dosvm *);
 int dosvm_io(void *, uint16_t, unsigned, bool, uint32_t *);
+bool dosvm_io_hot(struct dosvm *,uint16_t,unsigned,bool,uint32_t *,int *);
 void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);

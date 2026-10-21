@@ -1,0 +1,26 @@
+# f1-90 — scheduler device budget: attribute demotion to the task that used the budget, exempt the audio refill (R3 of the resource contract)
+
+- **Owner:** a Claude agent (Opus) while Codex is unavailable; `gpt-6.1-sol` / xhigh otherwise
+- **Written:** 2026-10-21 by the lead from the f1-87 amendment-4 finding: the `device_overrun task=<name>` record names **every** device-class task demoted when the shared device CPU budget (4 ms per 10 ms window) is exhausted, not the task that consumed it. On the T23 trial the 2.1 ms unattributed IRQ-off sections (≈3.98 per second, suspected USB scan, directive f1-87 G) consume that shared budget, so `audio-refill`, `usb-host`, `usb-hid`, `thinkpad-volume`, `storage-writer`, `net-input`, `device-work`, `cpustat` and `optical-media` are all demoted together in 192 of 201 windows; the volume holds alone produce zero overruns in the corrected replay. The owner requires the Windows 98/ME model completely: the audio DMA refill must never be demoted by other devices' consumption.
+- **Worktree:** `../CiukiOS-wt-f1-90`, branch `wt/f1-90` (branched from `wt/f1-87` for the replay harness `tests/host/t23_audio_replay_test.c` and `test_kernel_latency`)
+- **Read first:** `docs/design/resource-management-win98.md` (R1–R3 real-time rules), `src/kernel/core/task.c` (device budget, `device_demoted`, the overrun record), `src/kernel/core/sync.c` (`timer_work`), the f0-44/f0-46 records and tests, `build/codex/f1-87-report.md` section "Amendment 4" (the table of overruns under both policies), the trial figures in `docs/directives/f1-87-*.md`.
+
+Required (research first: how Windows 98/ME VxD scheduling and the DMA refill (VMM time-slicing, device-driver "timeout"/"timer" callbacks) prioritise sound-card refills; cite the Resource Kit and the DDK text available in `build/rskt/`):
+1. **Per-task device budget accounting:** each device-class task carries its own budget consumption within the window; when the shared budget is exhausted, only the task(s) that consumed above their fair share are demoted, and the `device_overrun` record names the consumer with its consumed microseconds (`consumed_us=`), never the innocent tasks. Record the per-window top consumer (`[cpu] device_top task= us=`).
+2. **Audio refill class:** the audio refill task (and the SB16 cadence path of the VM) is exempt from demotion by others' consumption; it has its own small bounded budget (state the number from the trial's refill cost) whose exhaustion is recorded separately (`audio_refill_overrun`) and never demotes other tasks either.
+3. **Acceptance:** the corrected f1-87 replay with the trial's device work (2.1 ms sections at 3.98/s plus the hold distribution) yields **zero** `device_overrun task=audio-refill` under the new policy and still reproduces the trial under the old policy (`CIUKI_F187_REQUIRE_C=1` green); the f0-44/f0-46 real-time tests stay green; `test_kernel_latency` and the kernel suite green.
+4. The 2.1 ms sections themselves stay the subject of the T23 experiment (`usbscan=0`, f1-87 G); do not change the USB scan here.
+
+Report `build/codex/f1-90-report.md`. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; no new `panic()` paths; verify the date with `date` before any timestamp; English.
+
+## Amendment 1 (lead, 2026-10-21 20:51, decisions on the delivery)
+
+1. Device-class CPU may reach 6 ms per 10 ms: 4 ms shared budget plus the
+   refill's own 2 ms. R2/R3 of the real-time contract are amended by the lead
+   accordingly (the refill is exempt from the shared budget and has its own).
+2. VM sound cadence and the refill's 4 ms backup timer stay on `device-work`
+   for the 1.0 Alpha; moving the VM clock to its own audio-class task is the
+   follow-up directive f1-91, after the `usbscan=0` experiment on the T23.
+3. R1 states the direct interrupt wake of the refill explicitly.
+4. `device_attribution` stays in production as the replay's negative control
+   (one flag, never cleared outside tests).

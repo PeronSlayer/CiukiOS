@@ -639,6 +639,9 @@ void audio_init(struct vfs *v)
     if (!worker) {
         audio.reason = "worker_exhausted"; audio.error = -ENOMEM; audio_backend_shutdown(); return;
     }
+    /* f1-90: the DMA refill has its own bounded device budget; other device
+     * tasks' consumption never demotes it (R3). */
+    task_set_audio_class(worker);
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
@@ -647,9 +650,32 @@ void audio_init(struct vfs *v)
 }
 int audio_device_open(struct file_description *d, uint32_t flags)
 {
-    if (d->node->kind == PX_AUDIO) return audio_stream_open(&d->audio);
+    if (d->node->kind == PX_AUDIO) {
+        if ((flags&O_ACCMODE)==O_RDONLY) return -EACCES;
+        return audio_stream_open(&d->audio);
+    }
     (void)flags;
     return 0;
+}
+/* A decoder explicitly names its own thread, not every thread sharing the
+ * process fd table. One 64 KiB source-read budget expires after 20 ms and
+ * is valid only while the live writable stream has refill demand. Stream
+ * generations prevent close/reset/fd reuse from reviving a stale token. */
+bool audio_refill_reader(struct process *p,uint32_t bytes)
+{
+    struct task *t=g_current;
+    if (!t || !bytes || bytes>t->audio_refill_bytes ||
+        deadline_passed(t->audio_refill_expiry) || !audio.ready || audio.error) return false;
+    for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
+        struct file_description *d=file_fd(p,(int32_t)fd);
+        if (!d || d->node->kind!=PX_AUDIO || (d->flags&O_ACCMODE)==O_RDONLY) continue;
+        struct audio_stream *s=d->audio;
+        if (s && s->generation==t->audio_refill_generation && s->started && !s->draining &&
+            s->queued<=AUDIO_RING*3/4) {
+            t->audio_refill_bytes-=bytes; return true;
+        }
+    }
+    return false;
 }
 void audio_device_close(struct file_description *d) { if (d->audio) { audio_stream_close(d->audio); d->audio = 0; } }
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted)
@@ -757,7 +783,7 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_SET_FORMAT: return sizeof(struct ciuki_audio_format);
     case AUDIO_GET_STATUS: return sizeof(struct ciuki_audio_status);
     case AUDIO_SET_GAIN: return sizeof(struct ciuki_audio_gain);
-    case AUDIO_DRAIN: case AUDIO_RESET: return sizeof(struct ciuki_audio_command);
+    case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
     case MIXER_GET_MASTER: case MIXER_SET_MASTER: return sizeof(struct ciuki_mixer_master);
     case MIXER_GET_DIAGNOSTICS: return sizeof(struct ciuki_audio_diagnostics);
     default: return 0;
@@ -785,6 +811,16 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     if (!err && s && op != AUDIO_GET_STATUS && (audio.error || !audio.ready)) err = -EIO;
     if (!err) switch (op) {
     case AUDIO_GET_CAPS: memcpy(record, &audio.caps, size); break;
+    case AUDIO_REFILL_READ:
+        if ((d->flags&O_ACCMODE)==O_RDONLY) { err=-EACCES; break; }
+        if (!g_current) { err=-EINVAL; break; }
+        g_current->audio_refill_bytes=0;
+        if (s && s->started && !s->draining && s->queued<=AUDIO_RING*3/4) {
+            g_current->audio_refill_generation=s->generation;
+            g_current->audio_refill_expiry=deadline_after_ms(20);
+            g_current->audio_refill_bytes=65536;
+        }
+        break;
     case AUDIO_SET_FORMAT: err = audio_stream_format(s, (struct ciuki_audio_format *)record); break;
     case AUDIO_SET_GAIN:
         if (record[2] > 100 || record[3] > 100) err = -EINVAL;

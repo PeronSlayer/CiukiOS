@@ -54,3 +54,7 @@ Report section "Amendment 4".
 ## Amendment 5 (lead, 2026-10-21): the one finding of the final re-review (9d50e05b)
 
 **P2 — PSP removal can leave transient sockets and ESRs alive:** `src/kernel/vm/dos_file_vm.c:141` cancels the process's transient IPX sockets only when `!e`, but `release_process()` clears the process even when file closure fails (`dos_file.c:304`), lifecycle teardown can return a parent preflight/mirror error after removing the child (`dos_file.c:345`), and the guest unwind ignores that error (`src/runtime/ciukidos_vmm_hook.inc:190`); later packets or queued ESRs could then touch terminated-process memory. Cancel the sockets and queued ESRs as soon as the PSP removal is validated and irreversible, independently of the cleanup outcome; regression test with a failing file closure and with a parent preflight error. Apply this amendment only. Report section "Amendment 5".
+
+## Amendment 6 (lead, 2026-10-21): harness links after amendment 5
+
+`dos_file_vm.c:36` now calls `dosvm_network_process_exit` (amendment 5); the kernel host suite (`scripts/test/host_kernel_tests.sh`, link at log line 3302 of `build/lead/hkt.log`) and the add/remove harness (`tests.host.desktop.test_add_remove.AddRemoveTests.test_dosvm_harness_links_and_syscalls`: `[1, 1] != [0, 0]`, both links fail) do not link the network unit or a stub for it. Add the unit or a stub to every harness rule that links `dos_file_vm.c`, keep `host_kernel_tests.sh` reaching its end and the add/remove test green. Apply this amendment only; report section "Amendment 6".

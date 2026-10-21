@@ -1,5 +1,6 @@
 ; SI=selector, CX=exact ASCII byte count. CF=invalid. Source provenance is
 ; separate from request text; only fw_cfg may request platform=e500.
+; Every suffix is an exact NUL-terminated token matched by token_match.
 selector_validate:
     mov byte [selector_force], 0
     mov byte [selector_safe], 0
@@ -10,50 +11,25 @@ selector_validate:
     jb .bad
     mov [selector_len], cx
     mov [selector_start], si
-    mov di, si
-    add di, cx
-    mov [selector_end], di
+    mov ax, si
+    add ax, cx
+    mov [selector_end], ax
+    mov bx, chain_probe_names
     cmp dword [si], 'all:'
     jne .phase
     cmp byte [selector_fw], 2
     jne .bad
-    mov bx, chain_probe_names
     inc si
     jmp .prefix
 .phase:
     cmp byte [si], 'f'
     jne .bad
-    mov bx, probe_names
-    cmp byte [si+1], '0'
-    je .prefix
-    cmp byte [si+1], '1'
-    jne .try_f2
-    mov bx, f1_probe_names
-    jmp .prefix
-.try_f2:
-    cmp byte [si+1], '2'
-    jne .try_f3
-    mov bx, f2_probe_names
-    jmp .prefix
-.try_f3:
-    cmp byte [si+1], '3'
-    jne .try_f4
-    mov bx, f3_probe_names
-    jmp .prefix
-.try_f4:
-    cmp byte [si+1], '4'
-    jne .try_f5
-    mov bx, f4_probe_names
-    jmp .prefix
-.try_f5:
-    cmp byte [si+1], '5'
-    jne .try_f6
-    mov bx, f5_probe_names
-    jmp .prefix
-.try_f6:
-    cmp byte [si+1], '6'
-    jne .bad
-    mov bx, f6_probe_names
+    movzx bx, byte [si+1]
+    sub bx, '0'
+    cmp bx, 6
+    ja .bad
+    add bx, bx
+    mov bx, [probe_tables+bx]
 .prefix:
     cmp byte [si+2], ':'
     jne .bad
@@ -61,59 +37,38 @@ selector_validate:
 .probe:
     cmp byte [bx], 0
     je .bad
-    mov di, si
-    mov bp, bx
-.match:
-    mov al, [ds:bp]
-    test al, al
-    jz .probe_end
+    mov di, bx
+    call token_match
+    jc .next_probe
+    ; Only a whole name followed by a space selects a probe, so a shorter
+    ; name never swallows the prefix of a longer one (boot/bootinfo).
+    mov di, ax
     cmp di, [selector_end]
-    jae .bad
-    cmp [di], al
-    jne .next_probe
-    inc di
-    inc bp
-    jmp .match
+    jae .next_probe
+    cmp byte [di], ' '
+    je .probe_end
 .next_probe:
-    cmp byte [bx], 0
-    je .advance
     inc bx
-    jmp .next_probe
-.advance:
-    inc bx
+    cmp byte [bx-1], 0
+    jne .next_probe
     jmp .probe
 .probe_end:
-    cmp bx, chain_probe_names
-    je .sweep
-    cmp bx, f0_sweep_name
-    je .sweep
-    cmp bx, f1_sweep_name
-    je .sweep
-    cmp bx, f2_sweep_name
-    je .sweep
-    cmp bx, f3_sweep_name
+    ; BX names the exact table entry; 'sweep' is the cfg-only sweep entry.
+    mov si, di
+    cmp dword [bx], 'swee'
     jne .run
-.sweep:
+    cmp word [bx+4], 'p'
+    jne .run
     cmp byte [selector_fw], 2 ; sweeps enter only through BOOT.CFG
     jne .bad
     mov byte [selector_sweep], 1
 .run:
-    mov ax, di
-    add ax, 13 ; " run=" and exactly eight hex digits.
-    cmp ax, [selector_end]
-    ja .bad
-    cmp byte [di], ' '
-    jne .next_probe
-    mov si, di
-    cmp dword [si+1], 'run='
-    jne .bad
-    add si, 5
+    mov di, run_suffix ; " run=" and exactly eight hex digits.
     mov cx, 8
-.hex:
-    lodsb
-    call hex_digit
+    call token_hex
     jc .bad
-    loop .hex
+    cmp bx, dos_conformance_name
+    je .dos_suffix
     cmp si, [selector_end]
     jne .suffix
     cmp bx, f3_title_name
@@ -122,76 +77,54 @@ selector_validate:
 .suffix:
     cmp byte [selector_sweep], 1
     je .cursor
-    mov ax, [selector_start]
-    mov di, ax
-    cmp byte [di+1], '3'
-    je .f3_suffix
+    cmp bx, f3_title_name
+    je .title_suffix
     ; Optional fw_cfg-only suffixes: platform, safe, F2 crash server.
     cmp byte [selector_fw], 1
     jne .bad
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 14
-    jb .try_safe
-    push si
     mov di, platform_suffix
-    mov cx, 14
-    repe cmpsb
-    pop di
-    jne .try_safe_from_di
+    call token_match
+    jc .try_safe
+    mov si, ax
     mov byte [selector_force], 1
-    cmp si, [selector_end]
-    je .good
-    jmp .try_safe
-.try_safe_from_di:
-    mov si, di
 .try_safe:
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 7
-    jb .try_server
-    push si
-    mov di, safe_suffix
-    mov cx, 7
-    repe cmpsb
-    pop di
-    jne .try_server_from_di
-    mov byte [selector_safe], 1
     cmp si, [selector_end]
     je .good
-    jmp .try_server
-.try_server_from_di:
-    mov si, di
+    ; F3 takes only the platform override, fw_cfg only (lead, 2026-10-11: the
+    ; qemu-e500 profile appends it to every selector); safe mode stays refused.
+    mov di, [selector_start]
+    cmp byte [di+1], '3'
+    je .bad
+    mov di, safe_suffix
+    call token_match
+    jc .try_server
+    mov si, ax
+    mov byte [selector_safe], 1
 .try_server:
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 15
-    jne .bad
+    cmp si, [selector_end]
+    je .good
     ; BX still identifies the exact matched probe, not a text prefix.
     cmp bx, f2_crash_name
     jne .bad
-    push si
     mov di, desktop_suffix
-    mov cx, 15
-    repe cmpsb
-    pop di
-    je .good
-    mov si, di
+    call token_match
+    jnc .exact_end
     mov di, standin_suffix
-    mov cx, 15
-    repe cmpsb
+    call token_match
+    jc .bad
+.exact_end: ; AX=end of the last suffix, which must be the selector end
+    cmp ax, [selector_end]
     jne .bad
-    jmp .good
+.good:
+    mov si, [selector_start]
+    mov cx, [selector_len]
+    clc
+    ret
 .cursor:
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 7
-    jb .bad
-    cmp dword [si], ' ste'
-    jne .bad
-    cmp word [si+4], 'p='
-    jne .bad
-    add si, 6
+    mov di, step_suffix
+    call token_match
+    jc .bad
+    mov si, ax
     xor dx, dx
     xor cx, cx
 .decimal_step:
@@ -218,66 +151,44 @@ selector_validate:
     ja .bad
     cmp si, [selector_end]
     je .good
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 15 ; " state=" plus eight hex digits
-    jne .bad
-    cmp dword [si], ' sta'
-    jne .bad
-    cmp word [si+4], 'te'
-    jne .bad
-    cmp byte [si+6], '='
-    jne .bad
-    add si, 7
+    mov di, state_suffix ; " state=" plus eight hex digits
     mov cx, 8
-    xor edx, edx
-.state_hex:
-    lodsb
-    call hex_digit
+    call token_hex
     jc .bad
-    movzx eax, al
-    shl edx, 4
-    or edx, eax
-    loop .state_hex
     cmp edx, 0x7ffff
     ja .bad
-.good:
-    mov si, [selector_start]
-    mov cx, [selector_len]
-    clc
-    ret
+    cmp si, [selector_end]
+    je .good
 .bad:
     stc
     ret
-
-.f3_suffix:
-    cmp bx, f3_title_name
-    je .title_suffix
-    ; F3 takes only the platform override, fw_cfg only (lead, 2026-10-11: the
-    ; qemu-e500 profile appends it to every selector); safe mode stays refused.
-    cmp byte [selector_fw], 1
-    jne .bad
-    mov ax, [selector_end]
-    sub ax, si
-    cmp ax, 14
-    jne .bad
-    mov di, platform_suffix
-    mov cx, 14
-    repe cmpsb
-    jne .bad
-    mov byte [selector_force], 1
-    jmp .good
+.dos_suffix:
+    ; f3-55 grammar for every source: exactly ' guest=freedos',
+    ; ' guest=ciukidos' or ' guest=ciukidos kernel=unified'; no platform or
+    ; safe suffix and no unified FreeDOS kernel.
+    mov di, dos_freedos_suffix
+    call token_match
+    jnc .exact_end
+    mov di, dos_ciukidos_suffix
+    call token_match
+    jc .bad
+    cmp ax, [selector_end]
+    je .good
+    mov si, ax
+    mov di, dos_kernel_suffix
+    call token_match
+    jc .bad
+    jmp .exact_end
 .title_suffix:
+    mov di, title_suffix
+    call token_match
+    jc .bad
+    mov si, ax
     mov ax, [selector_end]
     sub ax, si
-    cmp ax, 8
-    jb .bad
-    cmp ax, 30
+    dec ax
+    cmp ax, 22 ; 1..23 title characters
     ja .bad
-    mov di, title_suffix
-    mov cx, 7
-    repe cmpsb
-    jne .bad
     mov al, [si]
     cmp al, 'a'
     jb .bad
@@ -299,22 +210,54 @@ selector_validate:
     cmp si, [selector_end]
     jb .title_char
     jmp .good
-hex_digit:
-    cmp al, '0'
-    jb .bad
-    cmp al, '9'
-    jbe .decimal
-    or al, 0x20
-    cmp al, 'a'
-    jb .bad
-    cmp al, 'f'
-    ja .bad
-    sub al, 'a'-10
-    clc
+
+; SI=input (preserved), DI=NUL-terminated token. AX=input end of the match,
+; CF=mismatch. [selector_end] bounds every input read; config_read sets it
+; to the end of BOOT.CFG before matching its options.
+token_match:
+    push si
+.next:
+    mov al, [di]
+    inc di
+    test al, al ; clears CF
+    jz .end
+    cmp si, [selector_end]
+    jae .miss
+    cmp [si], al
+    jne .miss
+    inc si
+    jmp .next
+.miss:
+    stc
+.end:
+    mov ax, si
+    pop si
     ret
-.decimal:
+
+; DI=NUL-terminated prefix, CX=exact hex digit count at SI. SI advances past
+; the digits, EDX=value; CF=invalid. Digits 0-9, a-f and A-F only.
+token_hex:
+    call token_match
+    jc .bad
+    mov si, ax
+    add ax, cx
+    cmp ax, [selector_end]
+    ja .bad
+    xor edx, edx
+.digit:
+    lodsb
     sub al, '0'
-    clc
+    cmp al, 9
+    jbe .value
+    or al, 0x20 ; 'A'-'F' and 'a'-'f' both become 0x31..0x36 here
+    sub al, 'a'-'0'
+    cmp al, 5
+    ja .bad
+    add al, 10
+.value:
+    shl edx, 4
+    or dl, al ; clears CF
+    loop .digit
     ret
 .bad:
     stc
@@ -335,27 +278,38 @@ selector_accept:
 .done:
     ret
 chain_probe_names db 'sweep',0,0
+; Phase digit -> NUL-separated probe list; an empty name ends each list.
+probe_tables dw probe_names, f1_probe_names, f2_probe_names, f3_probe_names
+    dw f4_probe_names, f5_probe_names, f6_probe_names
 probe_names:
-f0_sweep_name db 'sweep',0,'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
+    db 'sweep',0,'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
     db 'isolation',0,'preempt',0,'localfault',0,'syslife',0,'panic',0
     db 'fpu',0,'runner',0,0
 f1_probe_names:
-f1_sweep_name db 'sweep',0,'all',0,'core',0
+    db 'sweep',0,'all',0,'core',0
     db 'registry',0,'input',0,'input-fault',0,'framebuffer',0,'ata',0,'ata-fault',0
     db 'partition',0,'fat-read',0,'fat-write',0,'cache',0,'mount-crash',0,'safe',0,'bootlog',0,0
 f2_probe_names:
-f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
+    db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'signals-fault',0
     db 'threads-wait',0
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
-f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
+    db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
               db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+dos_conformance_name db 'dos-conformance',0
 f3_title_name db 'title',0,0
-title_suffix db ' title='
-platform_suffix db ' platform=e500'
-safe_suffix db ' safe=1'
-desktop_suffix db ' server=desktop'
-standin_suffix db ' server=standin'
+; NUL-terminated suffix tokens for token_match/token_hex.
+run_suffix db ' run=',0
+step_suffix db ' step=',0
+state_suffix db ' state=',0
+dos_freedos_suffix db ' guest=freedos',0
+dos_ciukidos_suffix db ' guest=ciukidos',0
+dos_kernel_suffix db ' kernel=unified',0
+title_suffix db ' title=',0
+platform_suffix db ' platform=e500',0
+safe_suffix db ' safe=1',0
+desktop_suffix db ' server=desktop',0
+standin_suffix db ' server=standin',0
 selector_fw db 0
 selector_force db 0
 selector_safe db 0
@@ -438,100 +392,79 @@ config_read:
     mov si, [cfg_next]
     jmp .token
 .ordinary:
-    mov al, [si]
-    cmp al, ' '
-    je .space
-    cmp al, 13
-    je .space
-    cmp al, 10
-    je .space
+    ; Each option is an exact token ended by space, CR, LF or the file end.
     mov di, si
-.scan:
-    cmp di, bp
-    jae .option
-    mov al, [di]
-    cmp al, ' '
-    je .option
-    cmp al, 13
-    je .option
-    cmp al, 10
-    je .option
-    cmp al, 33
-    jb .invalid
-    cmp al, 126
-    ja .invalid
-    inc di
-    jmp .scan
+    call .boundary
+    jnc .space
+    mov [selector_end], bp
+    mov bx, option_tokens
 .option:
-    mov dx, di
-    sub dx, si
-    cmp dx, 7
-    jne .safe_option
-    cmp dword [si], 'acce'
-    jne .invalid
-    cmp word [si+4], 'l='
-    jne .invalid
-    cmp byte [si+6], '0'
-    jne .invalid
-    ; Preserved in B(options); kernel declines acceleration before marker I/O.
-    jmp .next
-.safe_option:
-    cmp dx, 6
-    jne .serial
-    cmp dword [si], 'safe'
-    jne .invalid
-    cmp word [si+4], '=0'
-    je .next ; A normal option never clears a positive safe-mode source.
-    cmp word [si+4], '=1'
-    jne .invalid
-    or dword [B(flags)], CBI_F_SAFE_MODE
-    jmp .next
-.serial:
-    cmp dx, 8
-    jne .mode
-    cmp dword [si], 'seri'
-    jne .invalid
-    cmp dword [si+4], 'al=1'
-    je .next
-    cmp dword [si+4], 'al=0'
-    jne .invalid
-    and dword [B(flags)], ~CBI_F_SERIAL_LOG
-    jmp .next
-.mode:
-    cmp dx, 11
-    jne .invalid
-    cmp dword [si], 'mode'
-    jne .invalid
-    cmp word [si+4], '=0'
-    jne .invalid
-    cmp byte [si+6], 'x'
-    jne .invalid
-    add si, 7
-    xor bx, bx
+    mov di, bx
+    call token_match
+    jc .next_option
+    mov di, ax
+    call .boundary
+    jnc .apply
+.next_option:
+    inc bx
+    cmp byte [bx-1], 0
+    jne .next_option
+    cmp byte [bx], 0
+    jne .option
+    mov di, mode_prefix
     mov cx, 4
-.digit:
-    lodsb
-    call hex_digit
+    call token_hex
     jc .invalid
-    shl bx, 4
-    movzx ax, al
-    or bx, ax
-    loop .digit
-    cmp bx, 0x3fff
+    cmp edx, 0x3fff
     ja .invalid
-    mov [preferred_mode], bx
+    mov di, si
+    call .boundary
+    jc .invalid
+    mov [preferred_mode], dx
+    jmp .next
+.apply:
+    ; safe=0, serial=1, accel=0 and usbscan=0 change nothing here: a normal
+    ; option never clears a positive safe-mode source; B(options) keeps
+    ; accel=0 (the kernel declines acceleration before marker I/O) and
+    ; usbscan=0 (diagnostic policy the kernel reads from the copied options).
+    cmp bx, safe_option
+    jne .serial
+    or dword [B(flags)], CBI_F_SAFE_MODE
+.serial:
+    cmp bx, serial_option
+    jne .next
+    and dword [B(flags)], ~CBI_F_SERIAL_LOG
 .next:
     mov si, di
     jmp .token
 .space:
     inc si
     jmp .token
+; DI=token end (DI <= BP). CF clear at space, CR, LF or the end of the file.
+.boundary:
+    cmp di, bp
+    je .bounded
+    mov al, [di]
+    cmp al, ' '
+    je .bounded
+    cmp al, 13
+    je .bounded
+    cmp al, 10
+    je .bounded
+    stc
+.bounded:
+    ret
 .warning:
 .invalid:
     mov si, selection_error
     jmp fatal
 .done:
     ret
+; Exact BOOT.CFG options; an empty name ends the list.
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0
+safe_option db 'safe=1',0
+serial_option db 'serial=0',0,0
+mode_prefix db 'mode=0x',0
 preferred_mode dw 0xffff
 cfg_seen db 0
 cfg_next dw 0
@@ -598,6 +531,8 @@ boot_menu:
     call deadline_expired
     jnc .poll
 .done:
+    mov si, source_prefix
+    call print
     mov si, source_menu
     cmp byte [selector_source], 1
     jne .cfg_source
@@ -695,15 +630,17 @@ boot_menu:
     mov si, selection_error
     call print
     jmp .done
-source_menu db 'L:SELECT_SOURCE=menu',13,10,0
-source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
-source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
-safe_confirmation db 'Safe mode; P probe or wait',13,10,0
+source_prefix db 'L:SELECT_SOURCE=',0
+source_menu db 'menu',13,10,0
+source_fw db 'fw_' ; 'fw_cfg',13,10,0: source_cfg and newline share its tail
+source_cfg db 'cfg'
+newline db 13,10,0
+safe_confirmation db 'Safe mode; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
-probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
-menu_hint db 'Press S for safe mode, L for serial log, H for Hardware check'
+probe_prompt db 'fN:<probe> run=<8hex>: ',0
+menu_hint db 'S for safe mode, L for log, H for Hardware check'
 menu_hint_end:
 
 ; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).

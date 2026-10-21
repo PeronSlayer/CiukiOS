@@ -76,6 +76,21 @@ static void pool_bounds(void) {
     assert(!m.calls && !blk_queue_destroy(&m.queue));
     puts("PASS requests bounded=32 prepared cancellation, backpressure, no early/double release");
 }
+static uint64_t urgent_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000; }
+static void urgent_pause(void *arg) { (void)arg; }
+static void urgent_readers(void) {
+    struct disk m; init(&m); uint8_t b[2][512];
+    struct blk_request *normal=prepare(&m,BLK_READ,20,512,b[0],BLK_DEMAND,0);
+    struct vfs_request audio={.urgent_reader=true,.deadline=UINT64_MAX,.now=urgent_now,.pause=urgent_pause};
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,&audio);
+    struct blk_request *urgent=prepare(&m,BLK_READ,30,512,b[1],BLK_DEMAND,0);
+    fs_request_leave(&scope);
+    assert(!blk_request_submit(normal) && !blk_request_submit(urgent));
+    drop(normal,0); drop(urgent,0);
+    assert(m.order[0]==30 && m.order[1]==20 && !blk_queue_destroy(&m.queue));
+    puts("PASS F1-87 audio demand read precedes older normal desktop read; age promotion preserved");
+}
 static void priorities(void) {
     struct disk m; init(&m); uint8_t b[4][512];
     struct blk_request *w=prepare(&m,BLK_WRITE,100,512,b[0],BLK_BACKGROUND,4);
@@ -253,4 +268,5 @@ static void idle_telemetry(void) {
     assert(!blk_queue_destroy(&m.queue)); fake_clock=idle_report=false;
     puts("PASS f1-86 idle queue telemetry: completed DMA burst published at next 5s boundary, no empty duplicates, later PIO completion retained");
 }
-int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }
+int main(void) {
+    urgent_readers(); pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }

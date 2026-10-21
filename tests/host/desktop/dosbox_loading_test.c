@@ -42,6 +42,7 @@ static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
 static unsigned settings_phase,settings_seen,settings_blur,settings_restore;
+static unsigned network_rows,network_selections;
 static uint64_t settings_hold_until, last_bar_at;
 static unsigned bar_damage[256], bar_updates, full_damage, settings_damage, notice_seen, loading_seen;
 static uint32_t settings_original[640 * 480];
@@ -59,6 +60,9 @@ static const struct {
     {0, 0, CIUKI_KEY_2, 1, 1, "--dos-memory=locked"}, /* 17: CLI lock */
     {0, 1, CIUKI_KEY_2, 1, 0, "--dos-memory=paged"},  /* 18: CLI unlock */
     {0, 0, CIUKI_KEY_1, 0, 0, "--dos-memory=paged"},  /* 19: duplicate selection changes no pixels */
+    {0, 0, CIUKI_KEY_6, 0, 0, NULL}, /* 20: enable IPX without changing kernel/memory */
+    {1, 1, CIUKI_KEY_5, 1, 1, NULL}, /* 21: disable IPX, longest kernel/memory labels */
+    {0, 0, CIUKI_KEY_7, 2, 0, NULL}, /* 22: unified kernel on row 7, network untouched */
 };
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
@@ -195,7 +199,7 @@ void du_edge(struct du_canvas *c, struct du_rect r, enum du_edge e) { (void)c; (
 void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32_t colour)
 {
     (void)c; (void)x; (void)y; (void)w; (void)colour;
-    if (!strcmp(s,"DOS kernel and memory")) settings_seen++;
+    if (!strcmp(s,"DOS kernel, memory and network")) settings_seen++;
     if (!strcmp(s,"Full screen unavailable")) notice_seen++;
     if (!strncmp(s,"Loading ",8)) loading_seen++;
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
@@ -210,9 +214,19 @@ void desk_paint_frame(struct desk_paint *p,int x,int y,int w,int h,const struct 
 { (void)p; (void)x; (void)y; (void)w; (void)h; (void)s; }
 struct du_rect du_intersection(struct du_rect a,struct du_rect b) { (void)b; return a; }
 void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_t ink)
-{ (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel and memory")) c->pixels[y*640+x]=0x123456; }
+{ (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel, memory and network")) c->pixels[y*640+x]=0x123456; }
 int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
-{ du_text_fit(c,b.x,b.y,b.w,s,ink); return 1; }
+{
+    if (strstr(s,"5  Network: off (default)\n6  Network: IPX (LAN)\n7  CiukiDOS unified (preview)\n")) network_rows++;
+    if (!strncmp(s,"Kernel: ",8)) {
+        const char *network=strstr(s,". Network: ");
+        unsigned ipx=scenario==21;
+        if (settings_phase>=3 && (scenario==20 || scenario==21)) ipx=scenario==20;
+        assert(network && !strcmp(network,ipx ? ". Network: IPX (LAN)." : ". Network: off (default)."));
+        network_selections++;
+    }
+    du_text_fit(c,b.x,b.y,b.w,s,ink); return 1;
+}
 void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,uint64_t phase)
 { (void)c; assert(b.x==120 && b.y==272 && b.w==400 && b.h==18); assert(!value && !total); assert(!phase || phase==clock_ms); }
 void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,ink); }
@@ -228,16 +242,19 @@ int main(int argc, char **argv)
         assert(!dosbox_settings_save(2,settings_cases[scenario-11].kernel,settings_cases[scenario-11].memory));
         assert(dosbox_setting_load(2)==settings_cases[scenario-11].kernel);
         assert(dosbox_memory_load(2)==settings_cases[scenario-11].memory);
-    }
+    } else assert(!dosbox_settings_save(2,0,0));
     int selected=scenario==9 || scenario==10;
-    int result = dosbox_main(selected || scenario>=17 ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    assert(!dosbox_network_save(2,scenario==21 ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF));
+    int result = dosbox_main(selected || launch[5] ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
     if (selected) assert(dosbox_setting_load(2)==1);
     if (scenario>=11) {
         assert(dosbox_setting_load(2)==settings_cases[scenario-11].saved_kernel);
         assert(dosbox_memory_load(2)==settings_cases[scenario-11].saved_memory);
+        assert(dosbox_network_load(2)==(scenario==20 ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF));
         assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
         if (scenario!=12) assert(!memcmp(screen,settings_original,sizeof(screen)));
         assert(settings_seen==(scenario==12 ? 1u : 2u));
+        assert(network_rows==settings_seen && network_selections==settings_seen);
         assert(settings_damage==settings_seen+(scenario!=12)); /* Restore only the saved rectangle. */
     }
     if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9)

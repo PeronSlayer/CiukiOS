@@ -42,6 +42,9 @@ struct dos_file_ops {
     void (*abort_process)(void *,uint16_t);
     bool (*stopped)(void *);
     void *arg;
+    /* Optional notification after PSP removal is validated and irreversible,
+     * before releasing files or mirroring the parent can report an error. */
+    void (*process_exit)(void *,uint16_t);
 };
 struct dos_file_binding {
     struct dos_file_far sda, lists, sft, indos;

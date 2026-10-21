@@ -186,6 +186,10 @@ bool dpmi_rm_pop(struct dosvm *, struct v86_frame *, uint16_t *);
 int dpmi_v86_return(struct dosvm *, struct v86_frame *);
 int dpmi_translation(struct dosvm *, struct v86_frame *, unsigned ax);
 int dpmi_callback_enter(struct dosvm *, struct v86_frame *, unsigned slot);
+/* Host asynchronous far call; REFLECT/HWINT record preserves the complete
+ * interrupted continuation, including nested PM callbacks. */
+int dpmi_to_real_call(struct dosvm *, struct v86_frame *, uint16_t cs, uint16_t ip,
+                      uint16_t return_ip);
 int dpmi_callback_return(struct dosvm *, struct v86_frame *);
 int dpmi_raw_to_pm(struct dosvm *, struct v86_frame *);
 int dpmi_raw_to_real(struct dosvm *, struct v86_frame *);

@@ -217,8 +217,15 @@ static void upper_files(void) {
   int64_t size = 0;
   CHECK(!GetFileSizeEx((HANDLE)4, &size) && !size && GetLastError() == 2);
   injected_error = 0;
+  source.volume_serial = 0xc1a001;
+  source.file_id = UINT64_C(0xfedcba9876543210);
   CHECK(GetFileInformationByHandle((HANDLE)4, &bh) && !stat_path && bh.links == 1 &&
-        bh.attributes == 0x27 && bh.size_low == 5 && bh.size_high == 1 && !bh.serial);
+        bh.attributes == 0x27 && bh.size_low == 5 && bh.size_high == 1 &&
+        bh.serial == 0xc1a001 && bh.index_high == 0xfedcba98 && bh.index_low == 0x76543210);
+  source.volume_serial = 0;
+  source.file_id = 0;
+  CHECK(GetFileInformationByHandle((HANDLE)4, &bh) && !bh.serial &&
+        !bh.index_high && !bh.index_low);
   CHECK(!GetFileInformationByHandle((HANDLE)4, 0) && GetLastError() == 87);
   CHECK(GetFileSizeEx((HANDLE)4, &size) && size == 0x100000005ll);
   CHECK(!GetFileSizeEx((HANDLE)4, 0) && GetLastError() == 87);

@@ -1129,6 +1129,48 @@ static int ctl(int fd,unsigned op,void *record,unsigned bytes)
     int r=call(CIUKI_SYS_DEVCTL,fd,op,USER2,bytes,0);
     CHECK(!ua_read(client->memory,record,USER2,bytes));return r;
 }
+static bool watch_source_read, source_urgent;
+void __real_fs_lock_acquired(fs_lock *lock);
+void __wrap_fs_lock_acquired(fs_lock *lock)
+{
+    __real_fs_lock_acquired(lock);
+    const struct vfs_request *r=fs_request_current();
+    if (watch_source_read && r && r->operation && !strcmp(r->operation,"read")) source_urgent=r->urgent_reader;
+}
+static void test_refill_demand(void)
+{
+    audio.ready=true; audio.error=0;
+    int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0); CHECK(fd>=0);
+    struct file_description *d=file_fd(client,fd); struct audio_stream *s=d->audio;
+    struct ciuki_audio_command c={.version=1,.size=sizeof(c)};
+    CHECK(!audio_refill_reader(client,4096)); /* open but unused */
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)) && !audio_refill_reader(client,4096));
+    s->started=true; s->queued=AUDIO_RING;
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)) && !audio_refill_reader(client,4096));
+    s->queued=AUDIO_RING*3/4;
+    d->flags=O_RDONLY;
+    CHECK(ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))==-EACCES && !audio_refill_reader(client,4096));
+    struct file_description probe={.node=d->node};
+    CHECK(audio_device_open(&probe,O_RDONLY)==-EACCES && !probe.audio);
+    d->flags=O_WRONLY|O_NONBLOCK;
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
+    struct task *saved=g_current, other={.generation=1,.prio=P_NORMAL,.state=T_RUNNING};
+    g_current=&other; CHECK(!audio_refill_reader(client,4096)); g_current=saved;
+    CHECK(audio_refill_reader(client,65536) && !audio_refill_reader(client,1));
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))); g_ticks+=20;
+    CHECK(!audio_refill_reader(client,1));
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))); audio_stream_reset(s);
+    s->started=true; CHECK(!audio_refill_reader(client,1)); /* generation withdrawn */
+    int source=file_open(client,"/refill-demand.bin",O_CREAT|O_RDWR,0666); CHECK(source>=0);
+    CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
+    watch_source_read=true; source_urgent=false;
+    CHECK(call(CIUKI_SYS_READ,source,USER,4096,0,0)==0 && source_urgent);
+    g_ticks+=20; source_urgent=true;
+    CHECK(call(CIUKI_SYS_READ,source,USER,4096,0,0)==0 && !source_urgent);
+    watch_source_read=false;
+    CHECK(!file_close(client,source) && !file_close(client,fd));
+    puts("F1-87 C refill: writable started low-water stream, explicit reading thread, 64KiB/20ms bound, reset generation; native read urgency PASS");
+}
 static void test_stream_syscalls(void)
 {
     audio.ready=false;CHECK(file_open(client,"/dev/audio",O_WRONLY,0)==-ENODEV);
@@ -1289,6 +1331,7 @@ int main(int argc,char **argv)
     test_vm_creation_lead();
     test_vm_paging_replay();
     test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_pipeline();
+    test_refill_demand();
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

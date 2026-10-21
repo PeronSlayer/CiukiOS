@@ -69,6 +69,21 @@ static void input_and_io(void)
     CHECK(ui.focused && ui.input_priority==11); /* shell/internal window */
     puts("f0-45 input: focus base 9, +2 refresh/20ms expiry/focus loss; I/O +1/10 running ticks/no polling PASS");
 }
+static void input_forwarding(void)
+{
+    priority_reset(); task_focus(&ui);
+    task_input_forward(&middle,&normal); CHECK(!normal.input_priority);
+    task_input_forward(&ui,&normal);
+    CHECK(normal.base_priority==7 && normal.input_priority==9 && normal.input_expiry==20);
+    for (unsigned i=0;i<19;i++) run_tick(0);
+    CHECK(normal.input_forwarded); run_tick(0);
+    CHECK(!normal.input_priority && !normal.input_forwarded && !input_proxy);
+    task_input_forward(&ui,&normal); task_focus(&middle);
+    CHECK(!normal.input_priority && !normal.input_expiry && !input_proxy);
+    task_input_forward(&middle,&normal); task_input_withdraw(&normal);
+    CHECK(normal.base_priority==7 && !normal.input_priority && !input_proxy);
+    puts("F1-87 D forwarded input: focused source only, base7 unchanged, 20ms expiry and native/DOS focus withdrawal PASS");
+}
 static struct kwait completion;
 static bool completed;
 static bool completion_ready(void *arg) { (void)arg;return completed; }
@@ -322,6 +337,6 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--benchmark"))return benchmark();
     mappings();
     input_and_io();completion_test();inversion_test();withdrawal_tests();cycle_test();fifo_test();fifo_cancellation();combined_load();saturation_test();
-    dosvm_wait_dependency_test();dosvm_wait_combined_load();
+    input_forwarding();dosvm_wait_dependency_test();dosvm_wait_combined_load();
     return 0;
 }
