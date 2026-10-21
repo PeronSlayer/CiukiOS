@@ -38,3 +38,7 @@ Apply this amendment only.
 3. The browser-network test for navigation during a blocked lookup should also assert the browser's behaviour when the late result arrives (ignored, no navigation, no crash).
 
 Report section "Amendment 2".
+
+## Amendment 3 (lead, 2026-10-21): the one P1 of the final re-review (520b4d5a)
+
+`sdk/netsurf/port/tls.c:134` marks **every** successful TLS send as `transmitted`: a server `HelloRequest` after the cleanliness check makes BearSSL send a renegotiation `ClientHello` while `j->sent == 0`, both reuse checks are then disabled, and after renegotiation the pump can expose an unsolicited response that `transfer()` (`net.c:265`) consumes as B's. Fix both sides: (1) refuse renegotiation altogether (`br_ssl_engine_set_all_flags(cc, BR_OPT_NO_RENEGOTIATION)` per the BearSSL API; a `HelloRequest` then gets the no-renegotiation alert and the connection is not reused); (2) set `transmitted` only when application-data plaintext of the current request has actually left the socket (track the engine's record type or the plaintext byte count sent), never on handshake records; (3) reject any incoming traffic that arrives before the first request bytes are transmitted. Fixtures: HelloRequest after the clean check (connection closed, no misassociation), unsolicited response before the first send (rejected). Apply this amendment only; report section "Amendment 3".
