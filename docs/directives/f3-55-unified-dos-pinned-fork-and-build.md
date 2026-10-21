@@ -126,3 +126,5 @@ Apply after Amendment 1.
 3. **Tracked absolute symlink (Medium):** `third_party/freedos/freedos` was the lead's provisioning mistake and is removed by the lead; never re-add it; the FreeDOS reference resolves through `third_party/freedos/1.3` or skips with the reason.
 
 Report section "Amendment 2".
+
+Amendment 2, item 4 (lead decision on the packed vendor kernel): the pinned `KERNL386.SYS` is UPX-packed (`UPX!` at offset 85, 46,256 bytes) while the supported rebuild is uncompressed. Decision: the lead pins **UPX** (latest upstream Linux release from github.com/upx/upx, archive and SHA-256 in `build/downloads/upx/`, record it in `config/upx.json` with its licence (GPL-2.0 with the UPX exception) in the inventory); the harness produces the **unpacked vendor representation** with `upx -d` on a copy, records its SHA-256 as provenance beside the pin, and the masked comparison (date string region excluded) runs between that unpacked vendor kernel and the raw rebuild. Packing the rebuild is not required. The design note says explicitly which representation each hash refers to.
