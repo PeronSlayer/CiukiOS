@@ -7,10 +7,15 @@
 - **Authority:** pinned FreeCOM0.85a fork, guest shell/control/helper modules,
   narrow native launcher/record/idle integration, canonical installation and
   source/license glue, host tests and validation. No native desktop redesign.
-- **Dependencies:** approve FreeCOM choice and retained command semantics;
-  resolve actual linked-runtime/SUPPL license closure before shipping. Lead
-  reserves any necessary shell/VM-control capability or profile extension;
-  existing port/ABI numbers are reused only for their existing meanings.
+- **Dependencies:** source-built FreeCOM0.85a choice is confirmed. The owner
+  has been asked for the GPL-2.0-or-later grant for ported CiukiDOS code and
+  approval of GitHub plus a per-release corresponding-source archive/hash:
+  **f3-58 does not start until the lead records both answers**, as for f3-56;
+  f3-55 may proceed meanwhile. Audit actual linked-runtime/SUPPL rights before
+  accepting the shell; if OW runtime cannot be combined, the lead pins gcc-ia16
+  on request. Use `kernel=unified`/per-game choice 2 and DFV2's late binding.
+  Shell/VM power control reuses the existing scoped interface, with no new
+  capability or authority and no new port/ABI meanings.
 - **Size:** complete batch-capable shell port and regression, not a banner patch.
 
 ## Sources and read-first
@@ -32,16 +37,22 @@ Record primary-source links and source coordinates before implementation.
    COMMAND.COM entry alias deterministically, COMSPEC/PATH/environment coherent.
    Replace the old line-at-a-time wrapper with proper permanent/top shell and
    /C,/K and Ciuki /W semantics (resolve upstream switch collisions explicitly).
-   Freeze shell dates/times and include configuration/source pins.
+   Freeze shell dates/times (`F:shell/ver.c:58`, __DATE__/__TIME__) and include
+   configuration/source pins. Compare independent builds under different
+   compiler-observed calendar dates and times with a fixed source epoch and
+   an unfrozen control, as H55-02 specifies; mtimes alone are insufficient.
+   Shell/installer loading follows binding/activation after init_kernel()
+   returns and before DoInstall(), never at driver INIT.
 2. Port every required builtin/alias row of the Ciuki inventory: HELP/VER/ECHO,
    CLS/CLEAR, CD/CHDIR/CD.., DIR, MD/MKDIR/RD/RMDIR, TYPE/COPY/DEL/ERASE,
    REN/RENAME/MOVE, PWD, RUN, WHERE and known executable lookup. Initialize
    known PATH but allow real PATH/SET changes for installers. Preserve argument
    tails, errorlevel, COM/EXE/BAT search and cwd semantics. Do not advertise
    external network/editor utilities as implemented builtins.
-3. Preserve queued REBOOT/SHUTDOWN seconds,/T,STATUS,CANCEL through the scoped
-   existing host interface or a lead-reserved control capability. Requests
-   cannot execute host reset/APM instructions or escape the VM's authority.
+3. Preserve queued REBOOT/SHUTDOWN seconds,/T,STATUS,CANCEL through the existing
+   scoped shell/VM-control interface, as the lead decided. Reuse its request/
+   status/cancel semantics and authorization checks; request no new authority.
+   Requests cannot execute host reset/APM instructions or escape VM authority.
    Child EXIT/QUIT returns status; top interactive exit requests one clean
    VM-window close. Failures leave no suspended launch or leaked process.
 4. Use FreeCOM batch semantics: environment expansion/SET/PATH/PROMPT/COMSPEC,
@@ -74,10 +85,10 @@ Record primary-source links and source coordinates before implementation.
 
 | ID | Required evidence |
 | --- | --- |
-| H58-01 identity/build | Two clean shell builds match across roots/times; correct user identity and available upstream credits; COMSPEC/alias files and source/license read-back; link-map license closure. |
+| H58-01 identity/build | Two clean shell builds match across roots/mtimes and different compiler-observed wall-clock dates/times, with fixed epoch plus unfrozen __DATE__/__TIME__ control. Correct identity/credits, COMSPEC/alias files, source/license read-back and actual runtime/SUPPL link-map closure; lead-pinned gcc-ia16 fallback if OW runtime cannot be combined. |
 | H58-02 commands | Every retained command/alias/lookup path, absent target, invalid args, old known grammar and cwd/return status tested against source-built shell on production CPU+VFS. |
 | H58-03 batch | Synthetic installer scripts covering all batch features above, nested failure/control-C, spaces/quotes, pipes/redirection/handle inheritance and restore; no host filesystem emulator as oracle. |
-| H58-04 launch/records | Real DOSREADY values, RUNREC pass/fail details, D48 completion/teardown, malformed/injected/drop records, failed EXEC, early return/input and first video; stop/close/relaunch baseline ledger. |
+| H58-04 launch/records | Exact `kernel=unified`/choice2 profile and DFV2 active after init_kernel/before DoInstall; no INIT-time shell launch. Real DOSREADY/RUNREC/D48, malformed/injected/drop records, failed EXEC, early return/input/first video; existing scoped power request/status/cancel and unauthorized requests; stop/close/relaunch baseline ledger. |
 | H58-05 idle | No-key wait, lost-wakeup race, queued key, armed timer/IRQ and focus switches; IF/FLAGS preserved; idle counters progress and busy controls remain busy. |
 | H58-06 regression | Existing H50-05, DPMI16/32, DOS/4GW, DJGPP paths and launcher/hash-cache tests unchanged. Lead confirms window/input/video/audio on canonical image. |
 
