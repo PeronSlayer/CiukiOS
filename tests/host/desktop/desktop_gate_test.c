@@ -437,6 +437,10 @@ static void idle_policy_test(void)
     uint64_t now=1000000000ull, wait;
     for(unsigned i=0;i<100;i++) { wait=desktop_pause_ns(d,now,0,UINT64_MAX); assert(wait==10000000ull); now+=wait; }
     assert(now==2000000000ull);
+    /* A stationary held button/drag has no work or deadline of its own. */
+    d->buttons=1; d->drag=0; d->sh.volume_drag=1;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    d->buttons=0; d->drag=-1; d->sh.volume_drag=0;
     assert(desktop_pause_ns(d,now,1,UINT64_MAX)==1000000ull);
     assert(desktop_pause_ns(d,now,0,now+500000ull)==500000ull);
     d->damage.count=1; d->next_frame_ns=now+2000000ull;
@@ -453,6 +457,17 @@ static void idle_policy_test(void)
     assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull); d->sh.notification.active=0;
     d->sh.hover_target=1; d->sh.hover_since=now-599000000ull;
     assert(desktop_pause_ns(d,now,0,UINT64_MAX)==1000000ull); d->sh.hover_since=0;
+    d->children[0].pid=42; d->children[0].close_ns=now+7000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==7000000ull);
+    /* Suspended shell work cannot keep a static shutdown panel polling. */
+    d->power.state=DESK_POWER_BUSY; d->children[0].close_ns=now-1;
+    d->sh.notification.active=1; d->sh.notification.expires=now-1;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    d->power.state=DESK_POWER_CLOSING; d->power.close_deadline=now+3000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==3000000ull);
+    d->power.state=DESK_POWER_RETRY; d->power.next_try=now+2000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull);
+    d->sh.gate=1; assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
     /* Input arriving just after the last drain waits at most 10 ms. Its
      * presentation slot adds <=16.667 ms, within the existing 50 ms target. */
     d->shell=0; d->now_ns=now;

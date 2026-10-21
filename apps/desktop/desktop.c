@@ -147,7 +147,7 @@ static void loop_deadline(uint64_t now,uint64_t deadline,uint64_t *wait)
 }
 static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_pending,uint64_t timer)
 {
-    uint64_t wait=input_pending || d->buttons || d->drag>=0 || d->sh.volume_drag ? 1000000ull : 10000000ull;
+    uint64_t wait=input_pending ? 1000000ull : 10000000ull;
     if (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty)
         loop_deadline(now,d->next_frame_ns,&wait);
     if (d->animation.active)
@@ -159,7 +159,7 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         if (!c->ping_pending && c->tx_count<DESK_TX_MAX) loop_deadline(now,c->next_ping_ns,&wait);
         else if (c->ping_pending && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
     }
-    if (d->shell) {
+    if (d->shell && !d->power.state) {
         for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid && d->children[i].close_ns && !d->children[i].term_sent)
             loop_deadline(now,d->children[i].close_ns,&wait);
         const struct sh_notification *n=&d->sh.notification;
@@ -171,6 +171,14 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         if (!d->sh.tooltip && d->sh.hover_since && d->sh.hover_target && !n->active &&
             !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open)
             loop_deadline(now,d->sh.hover_since+600000000ull,&wait);
+    } else if (d->shell && !d->sh.gate) {
+        /* Shutdown suspends ordinary shell ticks and child close timeouts.
+         * Stale shell deadlines must not turn its static Busy panel into a
+         * 1 ms poll; only the active shutdown phase supplies a deadline. */
+        if (d->power.state==DESK_POWER_CLOSING)
+            loop_deadline(now,d->power.close_deadline,&wait);
+        else if (d->power.state==DESK_POWER_RETRY || d->power.state==DESK_POWER_FORCE)
+            loop_deadline(now,d->power.next_try,&wait);
     }
     return wait;
 }
@@ -1716,7 +1724,6 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
-        uint64_t inputs_before=d->inputs;
         desktop_stage(STALL_SHELL);
         desktop_wait("mixer-poll");
         mixer_poll(d,now,&mixer_poll_next);
@@ -1983,7 +1990,7 @@ int main(int argc, char **argv)
         uint64_t sleep_now=monotonic();
         __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
         uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
-        uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count || d->inputs!=inputs_before,timer);
+        uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0,timer);
         struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait}; nanosleep(&pause,NULL);
     }
 }
