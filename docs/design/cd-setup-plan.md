@@ -1,8 +1,9 @@
 # CiukiOS Setup from CD — plan for the 1.0 Beta distribution
 
-Status: plan and mockup, 2026-10-21 (owner request of the same day: prepare the
-CD-based Setup now, in parallel with the programme, so that the 1.0 Beta can be
-distributed as an installable CD). The visual mockup of every screen is the
+Status: plan approved by the owner on 2026-10-21 (dev diary 2026-10-21-06); directives
+f9-01 and f9-02 launched the same day, Codex plan review in progress. The owner asked
+for the CD-based Setup now, in parallel with the programme, so that the 1.0 Beta can be
+distributed as an installable CD. The visual mockup of every screen is the
 private canvas "CiukiOS Setup from CD" (12 artboards, 640×480); this document is
 the contract-level plan the directives f9-01…f9-06 will be written from after
 the owner's review and the Codex plan review. Nothing here is implemented yet.
@@ -38,9 +39,14 @@ the owner's review and the Codex plan review. Nothing here is implemented yet.
 
 ## 3. Boot path
 
-1. BIOS boots the CD (El Torito, no-emulation, 2048-byte boot file): a small
-   stage loads `ciukldr` from the ISO (the loader keeps its fixed extent; a new
-   CD stage reads the ISO 9660 path table, not FAT).
+1. BIOS boots the CD by **El Torito hard-disk emulation** of a small FAT image that
+   holds the MBR, `ciukldr`, `BOOT.CFG` and the kernel (the method the legacy 0.8 CD
+   proved on the T23): the loader runs unchanged and needs no ISO 9660 reader, which
+   matters because its fixed extent is full (f0-54). The kernel then mounts the real
+   CD through the ATAPI optical driver to read the Setup payload. A no-emulation
+   entry with an ISO-reading stage stays a later option for BIOSes that refuse
+   emulation; isolinux and grub4dos fallbacks are not carried over unless the
+   qualification shows a need.
 2. `ciukldr` shows the boot menu (screen 1 of the mockup): Start Setup (default
    after 10 s), boot from the first hard disk, rescue console, hardware report;
    `S` safe video, `L`, `P`, `H` keep their meanings. `BOOT.CFG` on the CD
