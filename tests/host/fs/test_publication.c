@@ -110,16 +110,34 @@ static void identities(void) {
     assert(!fat_rename(&vol,&file,vol.root,"Renamed identity.bin") && id->serial==serial && id->linked);
     struct fat_entry alias; assert(!fat_lookup(&vol,vol.root,file.alias,&alias));
     struct vfs_file_identity *renamed; assert(!vfs_identity_get(&space,&vol,&alias,&renamed) && renamed==id);
+    uint32_t volume_serial;
+    uint64_t location=vfs_identity_file_id(&space,id,&volume_serial);
+    assert(location && volume_serial==vol.volume_serial);
     assert(!fat_remove(&vol,&file,false) && !id->linked);
+    uint64_t unlinked=vfs_identity_file_id(&space,id,&volume_serial);
+    assert(unlinked && unlinked!=location && volume_serial==vol.volume_serial);
     assert(!fat_create(&vol,vol.root,"Replacement.bin",0,&file));
     struct vfs_file_identity *replacement; assert(!vfs_identity_get(&space,&vol,&file,&replacement));
     assert(replacement->serial!=serial); /* recycled directory slot cannot alias */
+    assert(vfs_identity_file_id(&space,replacement,&volume_serial)==location);
+    assert(location!=unlinked); /* same owning slot, different retained lifetime */
+    assert(vfs_identity_file_id(&space,id,&volume_serial)==unlinked);
+    assert(!fat_remove(&vol,&file,false));
+    uint64_t unlinked_again=vfs_identity_file_id(&space,replacement,&volume_serial);
+    assert(unlinked_again && unlinked_again!=unlinked && unlinked_again!=location);
+    assert(!fat_create(&vol,vol.root,"Replacement.bin",0,&file));
+    struct vfs_file_identity *latest;
+    assert(!vfs_identity_get(&space,&vol,&file,&latest));
+    assert(vfs_identity_file_id(&space,latest,&volume_serial)==location);
+    assert(vfs_identity_file_id(&space,replacement,&volume_serial)==unlinked_again);
+    vfs_identity_put(&space,replacement); replacement=latest;
     vfs_identity_put(&space,renamed); vfs_identity_put(&space,same);
     vfs_page_put(&space,p); vfs_page_put(&space,q); vfs_page_put(&space,new_page);
     assert(!id->pages);
     assert(!vfs_page_get(&space,replacement,UINT32_MAX,&p));
     h=vfs_open(&a,"C:/Replacement.bin",3,0,0); assert(h>=0);
     vfs_raw_changed(&space,&vol); assert(!p->valid && !replacement->valid);
+    assert(!vfs_identity_file_id(&space,replacement,&volume_serial) && !volume_serial);
     uint64_t position;
     assert(vfs_seek(&a,h,0,VFS_SEEK_SET,&position)==-FS_EIO);
     assert(vfs_handle_times(&a,h,0,0)==-FS_EIO && vfs_commit(&a,h)==-FS_EIO);

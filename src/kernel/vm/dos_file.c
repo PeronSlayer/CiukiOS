@@ -284,6 +284,8 @@ static int release_slot(struct dos_file *d,struct dos_file_process *p,unsigned h
 static int fcb_release(struct dos_file *,struct dos_file_fcb *);
 static void trace_terminal(struct dos_file *,const struct dos_file_frame *,uint64_t,unsigned,unsigned,uint16_t);
 static int release_process(struct dos_file *d,struct dos_file_process *p) {
+    /* This validated process will be cleared even if file cleanup fails. */
+    if (d->ops.process_exit) d->ops.process_exit(d->ops.arg,p->psp);
     int error=0;
     for (unsigned i=0;i<DOS_FILE_FCBS;i++) if (d->fcb[i].used && d->fcb[i].psp==p->psp) {
         int e=fcb_release(d,&d->fcb[i]); if (e && !error) error=e; d->fcb[i].used=false;
@@ -893,6 +895,7 @@ complete:
     d->ops.release(d->ops.arg); return DOS_FILE_DONE;
 }
 static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,bool retry) {
+    d->request.site="dos";
     struct fs_request_scope scope; fs_request_enter(&scope,&d->request);
     enum dos_file_result result=execute_request(d,f,retry);
     fs_request_leave(&scope); return result;

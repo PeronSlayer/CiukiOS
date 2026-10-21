@@ -671,7 +671,13 @@ class Session:
             if action in (2, 3):
                 if action == 2:
                     data = os.pread(h.value, count, a[14] | a[15] << 32) if a[13] & 0x10000 else os.read(h.value, count)
-                    output(data); a[16] = len(data)
+                    # ReadFile with nNumberOfBytesToRead == 0 succeeds with 0
+                    # bytes (Windows; the kernel's W32_F_READ does the same).
+                    # The adapter copies no buffer for it, so there is no
+                    # output region to validate. NSIS 2.51's MoveFileOnReboot
+                    # reads the whole freshly created, empty WININIT.INI.
+                    if count: output(data)
+                    a[16] = len(data)
                 else:
                     if self.service.disk_full:
                         raise OSError(errno.ENOSPC, 'injected full fixture volume')

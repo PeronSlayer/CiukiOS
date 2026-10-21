@@ -4,10 +4,17 @@
 #define CIUKI_SELECTOR_H
 #include <ciuki/probe.h>
 #define PROBE_DOS_FREEDOS (1u << 29)
+#define PROBE_DOS_UNIFIED (1u << 28)
+/* f6:browser: launch the browser before the entropy pool is ready (f6-18). */
+#define PROBE_BROWSER_NOW (1u << 27)
+/* f6:browser url=<...>: 8..40 bytes, http:// or https:// scheme, host of
+ * [A-Za-z0-9.-], optional :port, path of [A-Za-z0-9_./-]; no query. */
+#define PROBE_URL_MAX 40
 struct probe_selection {
     unsigned phase;
     char probe[24], run[9];
     char title[24]; /* selector-only f3:title, never included in a sweep */
+    char url[PROBE_URL_MAX + 1]; /* selector-only f6:browser, fw_cfg/menu */
     uint32_t flags;
 };
 

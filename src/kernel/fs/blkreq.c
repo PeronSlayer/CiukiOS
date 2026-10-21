@@ -303,17 +303,18 @@ static unsigned rank(struct blk_queue *q,struct blk_request *r,uint32_t now) {
             if (p->priority==BLK_DEMAND) {
                 uint64_t a=r->lba+r->bytes/r->device->sector_size,b=p->lba+p->bytes/p->device->sector_size;
                 uint32_t an=(r->length-r->bytes)/r->device->sector_size,bn=(p->length-p->bytes)/p->device->sector_size;
-                if (barrier || (a<b+bn && b<a+an)) return BLK_DEMAND+1;
+                if (barrier || (a<b+bn && b<a+an)) return BLK_DEMAND+2;
             }
         }
     }
-    return (unsigned)r->priority+1;
+    if (r->operation==BLK_READ && r->priority==BLK_DEMAND && r->context && r->context->urgent_reader) return 1;
+    return (unsigned)r->priority+2;
 }
 static bool better(struct blk_queue *q,struct blk_request *a,struct blk_request *b,uint32_t now) {
     if (!b) return true;
     unsigned ar=rank(q,a,now),br=rank(q,b,now);
     if (ar!=br) return ar<br;
-    if (ar==BLK_DEMAND+1 && a->deadline && b->deadline && a->deadline!=b->deadline)
+    if ((ar==1 || ar==BLK_DEMAND+2) && a->deadline && b->deadline && a->deadline!=b->deadline)
         return (int32_t)(a->deadline-b->deadline)<0;
     return a->order<b->order;
 }

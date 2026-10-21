@@ -118,6 +118,8 @@ int fat_extend(struct fat_volume *, struct fat_entry *, uint32_t size);
 int fat_reserve(struct fat_volume *, struct fat_entry *, uint32_t size);
 /* Reserved boot-log chain only: data writes do not allocate or publish
  * metadata. Caller owns the chain and bounds writes by its reservation. */
+int fat_write_reserved_cursor(struct fat_volume *,const struct fat_entry *,struct fat_cursor *,uint32_t,
+    uint64_t,const void *,size_t,size_t *);
 int fat_write_reserved(struct fat_volume *, const struct fat_entry *, uint32_t capacity,
                        uint64_t position, const void *, size_t, size_t *done);
 int fat_publish_reserved(struct fat_volume *, struct fat_entry *, bool finish);

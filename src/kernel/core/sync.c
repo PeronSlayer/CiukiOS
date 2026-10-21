@@ -459,6 +459,17 @@ void kwait_wake_irq(struct kwait *q, bool io)
 {
     uint32_t f = irq_save();
     if (q->notifications != UINT32_MAX) q->notifications++;
+    struct kwaiter *only = q->head;
+    if (!io && only && !only->next && !q->notify_active && only->task->audio_class) {
+        /* f1-90 (R1/R3): the audio DMA refill is this interrupt's own
+         * deferred work. Its single waiter is woken here in O(1), as a
+         * Windows 9x wave driver refills at interrupt time, never behind the
+         * shared device worker that another device's consumption may have
+         * demoted. No predicate runs here; the waiter rechecks its own. */
+        if (only->task->state == T_BLOCKED) { task_start(only->task); g_need_resched = true; }
+        irq_restore(f);
+        return;
+    }
     if (q->notify_active) {
         q->notify_again = true;
         q->notify_io &= io;

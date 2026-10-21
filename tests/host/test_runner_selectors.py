@@ -32,11 +32,7 @@ TITLE_ALIASES = ('win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32
                  'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo',
                  'win32-jazz2-shareware', 'win32-ta-demo')
 MENU_OWNER = 'lead: merge main (f0-54) then apply build/codex/f5-15c-menu-inc.patch'
-KNOWN_UNREGISTERED = {
-    (5, alias): {'owner': MENU_OWNER, 'missing': ('menu',),
-                 'note': 'f5-15C installers-tier probe; the fixed loader extent has no room before f0-54'}
-    for alias in TITLE_ALIASES
-}
+KNOWN_UNREGISTERED = {}  # f5-15C title probes registered in the loader table on 2026-10-21 (after f0-54)
 
 
 def suite_cases():
@@ -61,9 +57,31 @@ class SelectorTableTests(unittest.TestCase):
         self.assertLessEqual({'boot', 'runner', 'all', 'core'}, kernel[0])
         self.assertLessEqual({'sweep', 'boot', 'runner', 'all', 'core'}, menu[0])
         self.assertLessEqual({'f5-core', 'w32-objects', 'w32-dialogs'}, kernel[5] & menu[5])
-        self.assertEqual(kernel[6], {'net-arp'})
+        self.assertEqual(kernel[6], {'net-arp', 'browser'})
         self.assertTrue(probe_tables.loader_model_accepts(5, 'w32-objects'))
         self.assertFalse(probe_tables.loader_model_accepts(5, 'no-such-probe'))
+
+    def test_menu_lists_keep_labelled_entries_until_their_terminator(self):
+        # f3-55 put `dos_conformance_name db` before `f3_title_name db` in the
+        # F3 list; a labelled entry must not end the list early.
+        menu = probe_tables.menu_names()
+        self.assertLessEqual({'sweep', 'vm-fullscreen', 'dos-conformance', 'title'}, menu[3])
+        self.assertLessEqual({'threads-wait', 'crash-isolation', 'app-gate'}, menu[2])
+        self.assertEqual(probe_tables.registration(3, 'dos-conformance'),
+                         {'kernel': True, 'menu': True, 'loader_model': True})
+        self.assertEqual(probe_tables.registration(3, 'title'),
+                         {'kernel': True, 'menu': True, 'loader_model': True})
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='probe-tables-', dir=ROOT/'build/host') as folder:
+            menu_inc = Path(folder)/probe_tables.MENU_INC
+            menu_inc.parent.mkdir(parents=True)
+            menu_inc.write_text('f3_probe_names:\n    db \'a\',0\n; note\n\n'
+                                'other_label db \'b\',0\nlast_name db \'c\',0,0\n'
+                                'after db \'not-a-probe\',0\n'
+                                'f4_probe_names db \'d\',0\ncode_label:\n    db \'e\',0,0\n')
+            tables = probe_tables.menu_names(folder)
+            self.assertEqual(tables[3], {'a', 'b', 'c'})
+            self.assertEqual(tables[4], {'d'})
 
     def test_selector_splitting(self):
         self.assertEqual(probe_tables.split_selector('f5:w32-memory run={run_id}'), (5, 'w32-memory'))

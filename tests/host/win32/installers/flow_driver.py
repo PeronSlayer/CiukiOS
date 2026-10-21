@@ -239,13 +239,21 @@ class FixtureDriver:
         # The unchanged engine owns the copy/start/exit operation but reuses
         # its shared directory. The authored section cannot claim ownership
         # of that parent: only the delegated executable may be retired.
+        # Engine order (NSIS 2.51 Main.c/util.c, MoveFileExA refused as on
+        # Windows 98): the original creates $WINDIR\wininit.ini (its own
+        # spelling, kept by the case-preserving disk) with "[Rename]" and
+        # "NUL=<copy>", starts the copy, then appends "NUL=<directory>"; the
+        # copy's WriteINIStr rewrites the first NUL key and, by the contract's
+        # first-match rule, keeps no later duplicate. Exact bytes checked.
         ini = ('[Rename]\r\nNUL=' + image + '\r\n').encode()
         path = lambda text: text[0] + '/' + text[3:].replace('\\', '/')
         state = {'files': {path(directory): 'directory', path(image): self.expected['identities']['uninstall.exe']['sha256'],
-                          'C/WINDOWS/WININIT.INI': hashlib.sha256(ini).hexdigest()}, 'registry': {}}
+                          'C/WINDOWS/wininit.ini': hashlib.sha256(ini).hexdigest()}, 'registry': {}}
         self.compare(state)
         self.service.assert_quiescent((directory.rsplit('\\', 1)[1], directory.rsplit('\\', 1)[1] + '/Au_.exe'))
         self.service.restart()
+        # The restart service resolves WININIT.INI case-insensitively (as FAT
+        # does) and retires it as WININIT.BAK, its own spelling.
         self.compare({'files': {path(directory): 'directory',
                                'C/WINDOWS/WININIT.BAK': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
         self.service.assert_quiescent((directory.rsplit('\\', 1)[1],))

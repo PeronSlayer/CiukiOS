@@ -468,6 +468,17 @@ static void dns_dhcp_tests(void)
     CHECK(!status && answer==PP_HTONL(0xcb007109) && dns_queries && arp_requests);
     CHECK(net_resolve(&client,"bad..name",&answer,&status)==-EINVAL);
     unsigned before=dns_queries;CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries==before);
+    /* f6-18 test-profile entries: consulted before any DNS query, two slots,
+     * grammar-checked names, cleared by address 0; nothing armed by default. */
+    CHECK(net_resolve_override("bad..name",PP_HTONL(0x0a000264))==-EINVAL);
+    CHECK(!net_resolve_override("fixture.test",PP_HTONL(0x0a000264)));
+    CHECK(!net_resolve_override("untrusted.test",PP_HTONL(0x0a000264)));
+    CHECK(net_resolve_override("third.test",PP_HTONL(0x0a000264))==-ENOSPC);
+    before=dns_queries;answer=0;status=-1;
+    CHECK(!net_resolve(&client,"fixture.test",&answer,&status) && !status && answer==PP_HTONL(0x0a000264) && dns_queries==before);
+    CHECK(!net_resolve(&client,"untrusted.test",&answer,&status) && !status && answer==PP_HTONL(0x0a000264) && dns_queries==before);
+    CHECK(!net_resolve_override("fixture.test",0));CHECK(!net_resolve_override("untrusted.test",0));
+    CHECK(!net_resolve_override("third.test",PP_HTONL(0x0a000264)));CHECK(!net_resolve_override("third.test",0));
     amendment_dns_renewal();before=dns_queries;
     CHECK(tcpip_callback_wait(dns_servers_reset,NULL)==ERR_OK);
     CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries>before);
@@ -520,6 +531,7 @@ static void cycles(void)
     puts("PASS 10000 create/close cycles; heap/netconn/UDP PCB baseline stable; no public objects retained");
 }
 #include "amendment.inc"
+#include "dos_bridge.inc"
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
@@ -528,7 +540,7 @@ int main(void)
     CHECK(entropy_before_transport);
     refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();
-    cycles();dns_dhcp_tests();CHECK(!live_pins);
+    cycles();dns_dhcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);
     printf("MEASURE host pbuf=%zu tcp_pcb=%zu udp_pcb=%zu netconn=%zu socket=%u mbox=%u arch=%u socket_metadata=%u request=%u\n",
         sizeof(struct pbuf),sizeof(struct tcp_pcb),sizeof(struct udp_pcb),sizeof(struct netconn),cu_socket_object_bytes(),cu_mbox_bytes(),cu_arch_bytes(),cu_socket_bytes(),cu_request_bytes());

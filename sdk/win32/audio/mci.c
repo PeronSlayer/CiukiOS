@@ -22,6 +22,39 @@ extern void wa_deliver(const struct wa_event *);
 
 #define MCI_DEVICES 32u
 static struct mci_device *devices[MCI_DEVICES];
+/* Core-only ownership state leaves the MCI driver boundary unchanged. Keep
+ * the file open for the device lifetime, including sequencers which cache
+ * their input and close the driver's read handle immediately after parsing. */
+struct owned_device {
+  struct mci_device device;
+  HANDLE file;
+  BY_HANDLE_FILE_INFORMATION identity;
+};
+static void free_device(struct mci_device *d) {
+  struct owned_device *owned = (struct owned_device *)d;
+  if (owned->file && owned->file != K32_INVALID)
+    CloseHandle(owned->file);
+  wa_free(d);
+}
+static uint64_t next_generation;
+/* Waiters own their result on the calling thread's stack. Completion
+ * survives auto-close and an immediate reuse of the numerical device ID. */
+struct wait_result {
+  struct wait_result *next;
+  uint32_t id, serial, error;
+  uint64_t generation;
+};
+static struct wait_result *waiters;
+static void finish_waiters(struct mci_device *d) {
+  for (struct wait_result *w = waiters; w; w = w->next)
+    if (w->id == d->id && w->generation == d->generation && w->serial == d->busy_serial)
+      w->error = d->completion_error;
+}
+static struct mci_cleanup *pending_cleanup;
+static void host_defer(struct mci_cleanup *c) {
+  c->next = pending_cleanup;
+  pending_cleanup = c;
+}
 static RTL_CRITICAL_SECTION mci_guard;
 static volatile uint32_t mci_initialized;
 static HANDLE worker;
@@ -85,11 +118,13 @@ static void post(uintptr_t window, uint32_t status, uint32_t id) {
 #endif
 }
 static void host_begin(struct mci_device *d) {
+  d->completion_error = 0;
   d->busy = 1;
   d->busy_serial++;
 }
 static void close_locked(struct mci_device *d);
 static void host_complete(struct mci_device *d, uint32_t status) {
+  finish_waiters(d);
   d->busy = 0;
   d->busy_serial++;
   if (d->notify_pending) {
@@ -118,7 +153,7 @@ static const struct mci_host host = {MCI_BOUNDARY_VERSION,
                                      wa_free,
                                      mci_lock,
                                      mci_unlock,
-                                     host_wake};
+                                     host_wake, host_defer};
 
 /* Installed device types (system.ini [mci32] of Windows 98). */
 struct mci_type {
@@ -246,6 +281,14 @@ void mci_service_pass(void) {
     if (d && d->auto_open == 2 && !d->busy)
       close_locked(d);
   }
+  struct mci_cleanup **link = &pending_cleanup;
+  while (*link) {
+    struct mci_cleanup *c = *link, *next = c->next;
+    if (c->run(c->context))
+      *link = next; /* run may free its embedded node */
+    else
+      link = &c->next;
+  }
   mci_unlock();
 }
 static DWORD W32API worker_main(void *p) {
@@ -266,7 +309,7 @@ static void close_locked(struct mci_device *d) {
   }
   d->driver->close(d);
   devices[d->id - 1] = 0;
-  wa_free(d);
+  free_device(d);
 }
 
 /* MCI_OPEN: element/type/alias resolution, then the driver's open. */
@@ -367,11 +410,40 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
     slot++;
   if (slot == MCI_DEVICES)
     return MCIERR_OUT_OF_MEMORY;
-  struct mci_device *d = wa_alloc(sizeof(*d));
-  if (!d)
+  struct owned_device *owned = wa_alloc(sizeof(*owned));
+  if (!owned)
     return MCIERR_OUT_OF_MEMORY;
-  w32_fill(d, 0, sizeof(*d));
+  w32_fill(owned, 0, sizeof(*owned));
+  struct mci_device *d = &owned->device;
+  if (element[0] && t->devtype != MCI_DEVTYPE_CD_AUDIO) {
+    owned->file = CreateFileA(element, 0x80000000u, 1, 0, 3, 0, 0);
+    if (owned->file == K32_INVALID) {
+      free_device(d);
+      return MCIERR_FILE_NOT_FOUND;
+    }
+    if (!GetFileInformationByHandle(owned->file, &owned->identity) ||
+        !(owned->identity.index_high | owned->identity.index_low)) {
+      free_device(d);
+      return MCIERR_FILE_READ;
+    }
+    for (unsigned i = 0; i < MCI_DEVICES; i++) {
+      struct mci_device *other = devices[i];
+      if (!other || other->devtype != t->devtype) continue;
+      struct owned_device *previous = (struct owned_device *)other;
+      if (!previous->file ||
+          owned->identity.serial != previous->identity.serial ||
+          owned->identity.index_high != previous->identity.index_high ||
+          owned->identity.index_low != previous->identity.index_low) continue;
+      if (t->devtype == MCI_DEVTYPE_WAVEFORM_AUDIO ||
+          t->devtype == MCI_DEVTYPE_SEQUENCER || !other->shareable ||
+          !(flags & MCI_OPEN_SHAREABLE)) {
+        free_device(d);
+        return MCIERR_DEVICE_OPEN;
+      }
+    }
+  }
   d->id = slot + 1;
+  d->generation = ++next_generation;
   d->devtype = t->devtype;
   d->creator = GetCurrentThreadId();
   d->shareable = !!(flags & MCI_OPEN_SHAREABLE);
@@ -386,7 +458,7 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
   error = driver->open(d, flags, p) & 0xffff;
   if (error) {
     devices[slot] = 0;
-    wa_free(d);
+    free_device(d);
     return error;
   }
   p->device = d->id;
@@ -456,17 +528,17 @@ static uint32_t sysinfo_locked(uint32_t id, uint32_t flags,
 }
 
 /* Default yield: Ctrl+Break (or the MCI_BREAK key) aborts a wait. */
-static uint32_t default_yield(struct mci_device *d) {
-  if (d->break_key < 0)
+static uint32_t default_yield(int32_t break_key) {
+  if (break_key < 0)
     return 0;
 #ifdef W32_HOST_MODEL
   extern int mci_host_key(int);
-  return mci_host_key(d->break_key) ? 1 : 0;
+  return mci_host_key(break_key) ? 1 : 0;
 #else
   HANDLE user = GetModuleHandleA("user32.dll");
   typedef int16_t(W32API * key_fn)(int);
   key_fn key = user ? (key_fn)GetProcAddress(user, "GetAsyncKeyState") : 0;
-  return key && (key(d->break_key) & 0x8000) ? 1 : 0;
+  return key && (key(break_key) & 0x8000) ? 1 : 0;
 #endif
 }
 
@@ -586,7 +658,12 @@ uint32_t mci_execute(uint32_t id, uint32_t msg, uint32_t flags, void *parms,
       /* A break (yield procedure or break key) returns control without
        * interrupting the command (Platform SDK "The Wait Flag"). */
       uint32_t waiting = d->busy_serial;
-      while (find_id(id) == d && d->busy && d->busy_serial == waiting) {
+      uint64_t generation = d->generation;
+      struct wait_result result = {waiters, id, waiting, 0, generation};
+      waiters = &result;
+      while ((d = find_id(id)) && d->generation == generation &&
+             d->busy && d->busy_serial == waiting) {
+        int32_t break_key = d->break_key;
         uintptr_t yield = d->yield;
         uint32_t data = d->yield_data, broken;
         mci_unlock();
@@ -594,13 +671,17 @@ uint32_t mci_execute(uint32_t id, uint32_t msg, uint32_t flags, void *parms,
           typedef uint32_t(W32API * yield_fn)(uint32_t, uint32_t);
           broken = ((yield_fn)yield)(id, data) != 0;
         } else
-          broken = default_yield(d);
+          broken = default_yield(break_key);
         if (!broken)
           Sleep(5);
         mci_lock();
         if (broken)
           break;
       }
+      error = result.error;
+      struct wait_result **link = &waiters;
+      while (*link != &result) link = &(*link)->next;
+      *link = result.next;
     }
   }
   mci_unlock();

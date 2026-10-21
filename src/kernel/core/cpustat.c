@@ -18,9 +18,10 @@ static uint64_t stretch_max, resched_start, resched_max, paths[CPU_PATHS];
 static uint32_t stretch_eip, switches, overruns, boost_base;
 static char stretch_name[16] = "none", resched_name[16] = "none";
 static uint32_t stretch_id;
-struct overrun_event { char name[16]; uint32_t id, count; };
-static struct overrun_event overrun_events[16];
-static unsigned overrun_used, overrun_lost;
+/* consumed_us: the largest own device-window consumption at a demotion. */
+struct overrun_event { char name[16]; uint32_t id, count, consumed_us; };
+static struct overrun_event overrun_events[16], audio_events[4];
+static unsigned overrun_used, overrun_lost, audio_used, audio_lost;
 static bool forced, threshold, resched_pending;
 static struct sched_stats sched_base;
 static struct {
@@ -173,20 +174,31 @@ void cpu_point(void)
     g_current->stretch_start = now; g_current->stretch_sampled = false; g_current->active_stretch_eip = 0;
     irq_restore(f);
 }
-void cpu_overrun(struct task *t)
+static void overrun_note(struct overrun_event *events, unsigned capacity, unsigned *used,
+                         unsigned *lost, struct task *t, uint64_t consumed)
 {
     t->account_prio = P_NORMAL; /* the IRQ entry already charged the device interval */
     overruns++; threshold = true;
     unsigned i = 0;
-    while (i < overrun_used && overrun_events[i].id != t->id) i++;
-    if (i == ARRAY_SIZE(overrun_events)) { overrun_lost++; return; }
-    if (i == overrun_used) {
-        overrun_used++;
-        name_copy(overrun_events[i].name, t->name);
-        overrun_events[i].id = t->id;
-        overrun_events[i].count = 0;
+    while (i < *used && events[i].id != t->id) i++;
+    if (i == capacity) { (*lost)++; return; }
+    if (i == *used) {
+        (*used)++;
+        name_copy(events[i].name, t->name);
+        events[i].id = t->id;
+        events[i].count = events[i].consumed_us = 0;
     }
-    overrun_events[i].count++;
+    events[i].count++;
+    uint64_t us = consumed * 1000 / per_ms();
+    if (us > events[i].consumed_us) events[i].consumed_us = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+}
+void cpu_overrun(struct task *t, uint64_t consumed)
+{
+    overrun_note(overrun_events, ARRAY_SIZE(overrun_events), &overrun_used, &overrun_lost, t, consumed);
+}
+void cpu_audio_overrun(struct task *t, uint64_t consumed)
+{
+    overrun_note(audio_events, ARRAY_SIZE(audio_events), &audio_used, &audio_lost, t, consumed);
 }
 void cpu_trap_enter(const struct trap_frame *tf)
 {
@@ -258,7 +270,8 @@ struct top { char name[16]; uint32_t id; uint64_t cycles, kernel_ticks, user_tic
 static void cpu_emit(void)
 {
     struct top top[5] = {0};
-    struct overrun_event events[16];
+    struct overrun_event events[16], audio_overruns[4];
+    struct { char name[16]; uint32_t id; uint64_t cycles; } device_top = { "none", 0, 0 };
     uint64_t counts[P_COUNT], path[CPU_PATHS];
     uint32_t f = irq_save();
     uint64_t now = stamp(), total = now - window_start;
@@ -295,6 +308,9 @@ static void cpu_emit(void)
     unsigned event_count = overrun_used, lost = overrun_lost;
     memcpy(events, overrun_events, event_count * sizeof(*events));
     overrun_used = overrun_lost = 0;
+    unsigned audio_count = audio_used, audio_dropped = audio_lost;
+    memcpy(audio_overruns, audio_events, audio_count * sizeof(*audio_overruns));
+    audio_used = audio_lost = 0;
     memcpy(path, paths, sizeof(path));
     window_start = now; irq_cycles = exited_cycles = 0;
     memset(classes, 0, sizeof(classes)); memset(paths, 0, sizeof(paths));
@@ -322,10 +338,16 @@ static void cpu_emit(void)
             t->io_priority, t->inherited_priority, t->boosted, t->io_ticks, t->input_expiry
         };
         t->window_base = t->run_cycles; t->kernel_base = t->kernel_ticks; t->user_base = t->user_ticks;
+        uint64_t device = t->device_cycles - t->device_base;
+        t->device_base = t->device_cycles;
         t->max_stretch = 0; t->stretch_eip = 0;
         if (t->stretch_start) t->stretch_start = now;
         t->stretch_sampled = false; t->active_stretch_eip = 0;
         irq_restore(f);
+        if (device > device_top.cycles) {
+            device_top.cycles = device; device_top.id = sample.id;
+            name_copy(device_top.name, t->name);
+        }
         if (emit && !is_idle)
             klog_periodic("[cpu] task=%s#%u class=%u base=%u effective=%u input=%u io=%u inherited=%u starvation=%u input_until=%llu io_ticks=%u",
                 sample.name, sample.id, priority.class, priority.base, priority.effective,
@@ -374,15 +396,20 @@ static void cpu_emit(void)
     }
     if (!at) line[0] = 0;
     klog_periodic("[cpu] top=%s", line);
+    /* f1-90: the largest consumer of the shared device budget this window. */
+    klog_periodic("[cpu] device_top task=%s#%u us=%llu", device_top.name, device_top.id,
+        (unsigned long long)(device_top.cycles * 1000 / per_ms()));
     klog_periodic("[kernel] stretch_max_ms=%u task=%s#%u eip=%08x resched_lat_max_ms=%u resched_task=%s irqoff_max_us=%u timer_gaps=%u/%u work_us=%u",
         stretch, name, sid, site, latency, late, timing.critical_us, timing.gaps_software, timing.gaps_unclassified, timing.critical_work_us);
     klog_periodic("[kernel] irqoff_section=%s site=%08x irqoff_max_us=%u violations=%u work_us=%u firmware_us=%u unclassified=%u owner=%s",
         timing.critical_section ? timing.critical_section : "none", timing.critical_site,
         timing.critical_us, timing.budget_violations, timing.raw_work_us,
         timing.raw_firmware_us, timing.unclassified_irqoff, timing.interrupt_owner[0] ? timing.interrupt_owner : "none");
-    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u",
+    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u task=%s#%u worker_site=%08x",
         timing.critical_us, timing.critical_work_us, timing.firmware_us,
-        timing.firmware_gaps, timing.unclassified_irqoff);
+        timing.firmware_gaps, timing.unclassified_irqoff,
+        timing.unclassified_task[0] ? timing.unclassified_task : "none",
+        timing.unclassified_task_id,timing.unclassified_worker_site);
     klog_periodic("[cpu] irqwork max_us=%u owner=%s site=%08x section=%s",
         timing.critical_work_us, timing.work_owner[0] ? timing.work_owner : "none", timing.work_site,
         timing.work_section ? timing.work_section : "none");
@@ -397,8 +424,13 @@ static void cpu_emit(void)
     klog_periodic("[kernel] bootlog dropped_protected=%u dropped_verbose=%u records_protected=%u records_verbose=%u",
         log.dropped_protected, log.dropped_verbose, log.records_dropped_protected, log.records_dropped_verbose);
     for (unsigned i = 0; i < event_count; i++)
-        klog_periodic("[sched] device_overrun task=%s#%u count=%u", events[i].name, events[i].id, events[i].count);
+        klog_periodic("[sched] device_overrun task=%s#%u count=%u consumed_us=%u",
+            events[i].name, events[i].id, events[i].count, events[i].consumed_us);
     if (lost) klog_periodic("[sched] device_overrun lost=%u", lost);
+    for (unsigned i = 0; i < audio_count; i++)
+        klog_periodic("[sched] audio_refill_overrun task=%s#%u count=%u consumed_us=%u",
+            audio_overruns[i].name, audio_overruns[i].id, audio_overruns[i].count, audio_overruns[i].consumed_us);
+    if (audio_dropped) klog_periodic("[sched] audio_refill_overrun lost=%u", audio_dropped);
 }
 static void cpu_worker(void *arg)
 {

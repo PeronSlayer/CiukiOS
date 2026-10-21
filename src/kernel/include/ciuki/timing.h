@@ -47,6 +47,8 @@ struct timing_stats {
     const char *work_section;
     char work_owner[16];
     uint32_t pic_mask_writes, pic_mask_out_max_us;
+    char unclassified_task[16];
+    uint32_t unclassified_task_id, unclassified_worker_site;
 };
 
 extern uint64_t g_tsc_per_ms;

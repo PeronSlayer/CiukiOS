@@ -18,7 +18,8 @@ import resources as res
 class NicRunnerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cases = json.loads((ROOT / 'tests/suites/f6-net.json').read_text())['cases']
+        # The ARP matrix only: the f6-18 browser cases have their own test (test_browser_runner).
+        cls.cases = [c for c in json.loads((ROOT / 'tests/suites/f6-net.json').read_text())['cases'] if c['probe'] == 'net-arp']
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)
         shim = out / 'nic-selector.c'

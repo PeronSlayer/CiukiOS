@@ -89,6 +89,7 @@ void audio_wake(void);
 int audio_device_open(struct file_description *, uint32_t flags);
 void audio_device_close(struct file_description *);
 int audio_write_user(struct file_description *, uint32_t address, uint32_t bytes);
+bool audio_refill_reader(struct process *, uint32_t bytes);
 int audio_devctl(struct process *, int32_t fd, uint32_t op, uint32_t address, uint32_t bytes);
 int audio_mixer_delegate(struct process *supervisor, struct process *trusted);
 int audio_master_set(struct ciuki_mixer_master *);

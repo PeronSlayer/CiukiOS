@@ -169,7 +169,16 @@ static int ne_poll(struct netif *d, uint8_t *out)
 }
 static enum net_link ne_link(struct netif *d) { (void)d; return NET_LINK_UNKNOWN; }
 static void ne_mac(struct netif *d, uint8_t mac[6]) { memcpy(mac, d->address, 6); }
+static int ne_promiscuous(struct netif *d, bool on)
+{
+    /* Page 0 under the device mutex; RCR is write-only on page 0. The
+     * existing policy is physical+broadcast, no runts/errors/multicast. */
+    unsigned cr = net_read(d, 0, 1);
+    if (cr == 0xff || (cr & 0xc0)) return -5;
+    net_write(d, 0x0c, on ? 0x14 : 0x04, 1);
+    return 0;
+}
 const struct netif_driver net_ne2000 = {
     "ne2000", ne_match, 32, 0, 0, ne_idle, ne_init, ne_start, ne_stop,
-    ne_transmit, ne_poll, ne_link, ne_mac, ne_interrupt, ne_irq_enable
+    ne_transmit, ne_poll, ne_link, ne_mac, ne_interrupt, ne_irq_enable, ne_promiscuous
 };

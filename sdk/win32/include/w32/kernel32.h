@@ -126,6 +126,7 @@ BOOL W32API ReadProcessMemory(HANDLE, const void *, void *, DWORD, DWORD *);
 BOOL W32API WriteProcessMemory(HANDLE, void *, const void *, DWORD, DWORD *);
 BOOL W32API DeleteFileA(const char *);
 DWORD W32API GetFileSize(HANDLE, DWORD *);
+BOOL W32API GetFileInformationByHandle(HANDLE, BY_HANDLE_FILE_INFORMATION *);
 DWORD W32API GetFileAttributesA(const char *);
 BOOL W32API SetFileAttributesA(const char *, DWORD);
 DWORD W32API GetTempPathA(DWORD, char *);
