@@ -9,6 +9,7 @@
 #define ua_user_write dosvm_model_user_write
 #define copy_from_user dosvm_model_copy_from_user
 #define copy_to_user dosvm_model_copy_to_user
+#define copy_user dosvm_model_copy_user
 /* Native pointer sizes inflate uaddr's metadata in this 64-bit host build. */
 #define kmalloc dosvm_host_alloc
 #include <ciuki/kernel.h>
@@ -28,3 +29,17 @@ void ww_cancel(void *process, uint64_t generation, uint32_t base, uint32_t end)
 /* The legacy VM boundary fixtures keep their small byte-array seams. Real
  * mappings are selected explicitly for the protection regression below. */
 #include "../../src/kernel/proc/uaddr.c"
+
+/* Instrumented replays retain the copy helpers too. As in proc_test.c,
+ * translate simulated user VAs through the model's physical backing;
+ * production copy_from/to_user above perform the permission/pin checks. */
+int copy_user(void *dst, const void *src, uint32_t bytes)
+{
+    struct process *p = proc_current();
+    if (!p || !p->memory) return -EFAULT;
+    if ((uintptr_t)src <= UINT32_MAX)
+        return ua_read(p->memory, dst, (uint32_t)(uintptr_t)src, bytes);
+    if ((uintptr_t)dst <= UINT32_MAX)
+        return ua_write(p->memory, (uint32_t)(uintptr_t)dst, src, bytes);
+    return -EFAULT;
+}
