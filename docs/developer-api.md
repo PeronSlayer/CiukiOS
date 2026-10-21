@@ -2421,7 +2421,7 @@ a reference/unified override is permitted only for an explicit game, never the s
 #define CIUKI_DOSVM_UNIFIED 2u
 ```
 
-opt-in unmodified source-built K2043, bridge off
+opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57)
 
 ```c
 #define CIUKI_DOSVM_GAME_COUNT 3u

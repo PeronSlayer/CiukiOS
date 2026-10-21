@@ -299,7 +299,8 @@ def build_reference(out, system_files, directories, games_files=None, folder=REL
     files.pop("/AUTOEXEC.BAT",None)
     if games_files: files.update(games_files)
     files.update(reference)
-    files["/FDCONFIG.SYS"]=CONFIG
+    # f3-57: the unified fork guest carries its own CONFIG (DEVICE=CIUKIDF.SYS).
+    files["/FDCONFIG.SYS"]=reference["/FDCONFIG.SYS"] if guest is not None and "/FDCONFIG.SYS" in reference else CONFIG
     files["/FDAUTO.BAT"]=AUTO
     mbr=reference_mbr()
     identity["mbr_sha256"]=sha(mbr)
