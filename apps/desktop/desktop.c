@@ -854,6 +854,22 @@ static void wallpaper_update(struct desktop *d)
         desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     } else if (!d->sh.wall_valid) desk_shell_wallpaper_update(d);
 }
+/* f2-90: the wallpaper is in memory before the first frame. The build-seeded
+ * native frame is read synchronously here; on any miss the solid colour stays
+ * (desk_shell_wallpaper_update ran in wallpaper_load) and the worker decodes
+ * after the first frame as before. */
+static void wallpaper_preload(struct desktop *d)
+{
+    if (!d->shell || d->sh.gate || !d->sh.wallpaper_pending || wallpaper_worker_failed) return;
+    uint32_t *pixels=NULL;
+    if (desk_wall_preload(&wallpaper_request,DESK_WALL_CACHE,&pixels,startup_stage) || !pixels) return;
+    if (d->scanout_valid) { free(pixels); return; }
+    free(d->sh.wall); free(d->sh.background); d->sh.background=NULL;
+    d->sh.wall=pixels; d->sh.wall_w=d->width; d->sh.wall_h=d->height;
+    d->sh.wall_valid=1; d->sh.background_valid=0; d->sh.image_failed=0; d->sh.wallpaper_pending=0;
+    startup_stage("wallpaper_applied");
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+}
 /* Create the idle wallpaper thread during initialisation: the kernel's crash-isolation
  * probe compares the desktop's thread count across its cycles, and a thread born after the
  * first frame made the ledgers differ (processes_equal=0, f1-usb 2026-10-13). The thread
@@ -1702,7 +1718,7 @@ static void shell_setup(struct desktop *d, int gate)
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
     }
-    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_worker_prepare(d); }
+    if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
     if (!gate) desktop_watchdog_start(d);
 }
