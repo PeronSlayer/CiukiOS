@@ -3,6 +3,43 @@
 Research date: 2026-10-21. Host evidence only. Exact commands, outputs and
 remaining execution limits are in `build/codex/f5-15a2-report.md`.
 
+## Amendment 11 research and decisions
+
+Microsoft's [PE format specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#optional-header-windows-specific-fields-image-only)
+places the subsystem version at optional-header offsets 48 and 50. Inspection
+of the verified NSIS 2.51 ZIP's `Stubs/zlib`, compiled installer, reconstructed
+`WriteUninstaller` output and all three authored C fixture EXEs finds **4.0**
+in every case. The authored producer already links with
+`/subsystem:windows,4.0 /osversion:4.0`; no producer correction is needed.
+
+The pinned [NSIS WriteUninstaller implementation](https://raw.githubusercontent.com/kichik/nsis/v251/Source/exehead/exec.c)
+copies the installer's stub and replaces icon data. The verified source's
+`Source/exehead/Main.c:304–318` then delegates the original uninstaller by
+`CopyFile(state_exe_path,buf2,TRUE)` and launches that copy with `_?=`. This is
+the same NSIS image, not a separately linked fixture executable. The
+[official command-line reference](https://nsis.sourceforge.io/Docs/Chapter3.html#uninstaller)
+documents the `_?=` direct-execution path. A host regression checks the PE32,
+i386, GUI and 4.0 fields of the release stub and every fixture output,
+including the reconstructed uninstaller, without requiring PE execution.
+
+The lead's failure log continues through DLL attachment and kernel calls
+after `newer-subsystem-version`. `sdk/win32/ldr/pe.c:69–70` emits this warning
+without rejecting the image, as required by
+`docs/design/win32-personality-contract.md:618–619`. Therefore the premise
+that this warning refuses the delegated executable is contradicted by the
+code, contract and measured headers. Leave the loader and upstream stub
+unchanged; the lead must diagnose exit 2 separately with a PE-capable run.
+
+Microsoft's [CopyFiles contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-copyfiles-directive)
+and [SetupInstallFromInfSection](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupinstallfrominfsectiona)
+agree with the authored `chain.inf`: `Fixture.Copy` installs `child.exe` into
+Program Files, and `Fixture.Commands` executes it there. The child's exact
+completion content is `child completed\r\n`. Add both installed files and
+their SHA-256 identities to the independent final INF manifest; retain the
+temporary-tree cleanup and exact filesystem/registry comparison. A host
+regression checks these two manifest identities against the compiled child
+and authored completion bytes. No fixture binary hashes change.
+
 ## Amendment 4 research and decisions
 
 The lead's stage-4 failure occurs at the first restart journal checkpoint,

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 import zlib
 
 from scripts.win32 import cabinet, census, installer_fixture as fixture
@@ -178,6 +179,36 @@ class FlowFixtureTests(unittest.TestCase):
             cls.record = fixture.build(cls.fixtures)
         except FileNotFoundError as error:
             raise unittest.SkipTest(str(error)) from error
+
+    def test_fixture_and_nsis_uninstaller_subsystem_versions(self):
+        # Amendment 11: inspect the producer output without the i386 preflight.
+        # NSIS 2.51 Main.c delegates with CopyFile, preserving this PE header.
+        _, archives = fixture.build_nsis.archives()
+        with zipfile.ZipFile(archives['binary']) as archive:
+            stub = archive.read('nsis-2.51/Stubs/zlib')
+        images = {name: (self.fixtures / name).read_bytes()
+                  for name in (fixture.NAME, 'child.exe', 'infchain.exe', 'selfextract.exe')}
+        images['NSIS 2.51 release zlib stub'] = stub
+        images['WriteUninstaller output (delegation source)'] = fixture.uninstaller_bytes(images[fixture.NAME])
+        for name, raw in images.items():
+            with self.subTest(image=name):
+                pe, = struct.unpack_from('<I', raw, 0x3c)
+                self.assertEqual(raw[pe:pe + 4], b'PE\0\0')
+                self.assertEqual(struct.unpack_from('<H', raw, pe + 4)[0], 0x14c)
+                optional = pe + 24
+                self.assertEqual(struct.unpack_from('<H', raw, optional)[0], 0x10b)
+                self.assertEqual(struct.unpack_from('<HH', raw, optional + 48), (4, 0))
+                self.assertEqual(struct.unpack_from('<H', raw, optional + 68)[0], 2)
+                print(f'PASS {name}: i386 PE32 GUI subsystem version 4.0')
+
+    def test_inf_manifest_retains_installed_child_and_completion(self):
+        # CopyFiles installs the executable; RunPostSetupCommands runs it in
+        # Program Files. Only the extracted temporary tree belongs to cleanup.
+        expected = json.loads((fixture.SOURCE / 'expected.json').read_text())
+        files = expected['states']['infchain.exe']['files']
+        directory = 'C/Program Files/Ciuki INF Fixture/'
+        self.assertEqual(files[directory + 'child.exe'], fixture.sha(self.fixtures / 'child.exe'))
+        self.assertEqual(files[directory + 'child.done'], hashlib.sha256(b'child completed\r\n').hexdigest())
 
     def test_compiled_fixture_and_cabinet_independent_hash_manifest(self):
         self.assertEqual(self.record['identical_runs'], 2)

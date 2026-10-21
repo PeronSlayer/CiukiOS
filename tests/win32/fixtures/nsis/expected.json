@@ -263,6 +263,8 @@
     "infchain.exe": {
       "files": {
         "C/Program Files/Ciuki INF Fixture": "directory",
+        "C/Program Files/Ciuki INF Fixture/child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+        "C/Program Files/Ciuki INF Fixture/child.done": "321a589676f7ab6c1f45bd3c2b3741e9f63183500cb9925762551503fe6ee9a4",
         "C/Program Files/Ciuki INF Fixture/payload.txt": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
         "C/WINDOWS/fixture.ini": "bc8600ac08c7a0c742362df32dca24acdd7d328d1d67d69cb0a57c6b4bd70b55"
       },
