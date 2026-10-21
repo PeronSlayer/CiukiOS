@@ -856,7 +856,12 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
             desk_message(&m, DESK_PING, 8); desk_put32(m.data + 4, ++c->serial);
             desk_queue(d, i, &m); c->ping_pending = 1; c->ping_sent_ns = now;
         }
-        if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive) {
+        /* One rule for every application: a PING unanswered for 5 s marks the window, but only when the desktop
+         * itself drained the channels after that deadline. A desktop-owned wait (a synchronous VFS lookup in a
+         * launch, a present, a worker mailbox) leaves the PONG unread in the channel and must not be charged
+         * to the application (f2-88). */
+        if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive &&
+            (!d->drain_ns || d->drain_ns >= c->ping_sent_ns + 5000000000ull)) {
             c->unresponsive = 1;
             if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
         }

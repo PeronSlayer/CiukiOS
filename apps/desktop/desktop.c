@@ -1970,6 +1970,7 @@ int main(int argc, char **argv)
             }
             desk_flush(d,i);
         }
+        d->drain_ns=monotonic();
         if (!gate && fifo_count==0) {
             (void)desk_drain_input(d,ciuki_input_read);
         }
