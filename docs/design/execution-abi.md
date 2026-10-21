@@ -2349,7 +2349,9 @@ share ntdll's recursive per-process transport lock and request sequence.
 
 Directive f6-10 assigns native calls 78–89; call 90 is reserved for the later
 configuration service and currently returns ENOSYS. Calls 75–77 and W32=96
-retain their assignments. The normative register table, layouts, constants,
+retain their assignments. f6-16 adds getentropy=91; Amendment 1 keeps 90
+reserved ENOSYS and uses the existing /dev/net status query. The normative
+register table, layouts, constants,
 validation order and closed error sets are in
 [network-contract.md](network-contract.md#approved-extension-syscalls-7890-2026-10-20).
 The `ciuki/abi.h` records are shared with the SDK and checked by the i686
@@ -2362,6 +2364,7 @@ must be zero. Syscall failures use the existing negative errno convention.
 | 83–87 | sendto/recvfrom records, shutdown, local/peer sockname, sockopt record |
 | 88–89 | mixed descriptor poll, bounded IPv4 resolver record |
 | 90 | netctl reserved (ENOSYS) |
+| 91 | getentropy(B=buffer, C=bytes), bytes <=256; 0 on success |
 
 The address is a 16-byte IPv4 sockaddr (u16 family, network-order u16 port,
 network-order u32 address, eight zero bytes). The 40-byte I/O and option
@@ -2373,6 +2376,29 @@ Close invalidates the fd immediately and defers bounded transport teardown.
 Interruptible user waits run outside the serialized netconn worker. Outputs
 are pinned before receive/accept commits; user pointers never reach lwIP.
 Kernel lwIP and SDK timeval types remain separate (SDK time stays 64 bit).
+
+### Kernel entropy (f6-16, 2026-10-21)
+
+Call 91 writes exactly C bytes and returns zero, or negative EINVAL (C>256
+or nonzero unused registers), EFAULT (invalid/nonwritable output), or EAGAIN
+(unseeded, health failure, or fresh reseed overdue). A zero-length request
+succeeds without a buffer. It never blocks waiting for entropy and leaves
+output unchanged on readiness refusal. Writable user access is rechecked
+transactionally at copyout. The SDK `ciuki_getentropy_wait` retries EAGAIN
+with interruptible 10 ms nanosleeps and may wait indefinitely. The entropy
+source, 256-bit estimated seeding threshold, health tests, boot guard safety,
+reseed limits and qualification boundary are specified in
+[kernel-entropy.md](kernel-entropy.md). No weak fallback is permitted for
+getentropy or arc4random.
+
+Per Amendment 1, call 90 remains reserved ENOSYS. The SDK helper
+`ciuki_net_status(struct ciuki_net_state *)` opens `/dev/net` read-only,
+initializes the existing 96-byte versioned record, issues NET_GET_STATE,
+and closes the descriptor on every completed open. `present`, `link`,
+`state`, `address_configured` and `ipv4` classify local availability without
+sending DNS traffic. The record and all earlier syscall assignments remain
+unchanged. DNS server details, configuration mutations and applet policy
+remain outside this delivery.
 
 ### F3-52 DOS window frame wait (2026-10-20, pending lead review)
 

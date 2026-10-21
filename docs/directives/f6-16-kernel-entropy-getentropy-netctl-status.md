@@ -14,3 +14,7 @@
 5. **Not yours:** the browser's use of `getentropy` (the lead amends f6-15 after both merge); the per-boot MAC/TSC mix remains for lwIP until item 2 replaces it at initialisation.
 
 Report `build/codex/f6-16-report.md` with the research citations, the entropy estimate method and its justification, verification table. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment 1 (lead, 2026-10-21): the network status query already exists
+
+The f6-15 cross-review found that the read-only `/dev/net` `NET_GET_STATE` interface already exposes `address_configured` (and the link state). Therefore: do **not** implement a `netctl` status sub-operation; syscall 90 stays reserved `ENOSYS` as before, and the SDK `ciuki_net_status()` wrapper (if you keep it) is a thin helper over the existing `/dev/net` interface, documented as such. Everything else of this directive (entropy pool, DRBG, `getentropy` syscall 91, tests) stands. If you already wrote `netctl` status code, remove it and say so in the report.
