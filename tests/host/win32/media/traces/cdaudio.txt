@@ -1,0 +1,271 @@
+> open cdaudio alias c
+< 0 '1'
+> open d: type cdaudio alias duplicate
+< 265 ''
+> open e: type cdaudio alias wrong
+< 306 ''
+> open cdaudio!@0 alias wrongslot
+< 306 ''
+> status c number of tracks
+< 0 '3'
+> status c media present
+< 0 'true'
+> status c ready
+< 0 'true'
+> status c mode
+< 0 'stopped'
+> status c type track 1
+< 0 'other'
+> status c type track 2
+< 0 'audio'
+> status c position start
+< 0 '00:02:00'
+> status c position track 2
+< 0 '00:02:08'
+> status c length track 2
+< 0 '00:00:36'
+> status c length
+< 0 '00:00:74'
+> status c time format
+< 0 'msf'
+> info c product
+< 0 'CiukiOS CD Audio'
+> set c time format bytes
+< 293 ''
+> set c time format tmsf
+< 0 ''
+> status c position track 2
+< 0 '02:00:00:00'
+> status c length track 2
+< 0 '00:00:36'
+> seek c to 2
+< 0 ''
+> status c position
+< 0 '02:00:00:00'
+> play c from 1 to 2
+< 282 ''
+> play c from 2:0:60:0
+< 282 ''
+> status c type track 99
+< 282 ''
+TRANSPORT open rate=44100
+CD slot=1 path=digital reason=primary
+> play c from 2 to 3 notify
+< 0 ''
+> pause c
+< 0 ''
+> status c mode
+< 0 'paused'
+> status c position
+< 0 '02:00:00:07'
+> set c door open
+< 288 ''
+> resume c
+< 0 ''
+NOTIFY t=100 hwnd=1234 successful id=1
+> status c mode
+< 0 'stopped'
+ORACLE CD-DA frames=21168 match=1
+CD slot=1 path=digital reason=primary
+NOTIFY t=1100 hwnd=1234 superseded id=1
+> play c to 3 notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> stop c
+< 0 ''
+> seek c to end
+< 0 ''
+> seek c to start
+< 0 ''
+> set c time format milliseconds
+< 0 ''
+> status c position start
+< 0 '2000'
+> seek c to 2107
+< 0 ''
+> set c time format msf
+< 0 ''
+> status c position
+< 0 '00:02:09'
+> set c door open
+< 0 ''
+> status c media present
+< 0 'false'
+> play c
+< 276 ''
+> set c door closed
+< 0 ''
+> status c media present
+< 0 'true'
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+> set c time format tmsf
+< 0 ''
+CD slot=1 path=analog reason=no-cdda-capability
+> play c from 1 to 2 notify
+< 0 ''
+> status c position
+< 0 '01:00:00:15'
+> pause c
+< 0 ''
+> resume c
+< 0 ''
+NOTIFY t=1130 hwnd=1234 successful id=1
+> status c mode
+< 0 'stopped'
+CD slot=1 path=analog reason=no-cdda-capability
+> play c from 1 to 2 notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> stop c
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+> set c time format tmsf
+< 0 ''
+CD slot=1 path=digital reason=primary
+> play c from 2 to 3 notify
+< 0 ''
+CD slot=1 path=analog reason=digital-read-failed
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=forced
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> status c mode
+< 0 'stopped'
+> close all
+< 0 ''
+> open cdaudio!@1 alias c
+< 0 '1'
+CD slot=1 path=analog reason=forced
+> play c
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> stop c
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> seek c to end
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+CD slot=1 path=digital reason=primary
+> play c from 00:02:10 to 00:02:30 notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 aborted id=1
+> close c
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+CD slot=1 path=digital reason=primary
+> play c notify
+< 0 ''
+NOTIFY t=1130 hwnd=1234 failure id=1
+> status c media present
+< 0 'false'
+> close all
+< 0 ''
+> open cdaudio
+< 0 '1'
+> set cdaudio time format tmsf
+< 0 ''
+CD slot=1 path=digital reason=primary
+> play cdaudio from 2 to 3
+< 0 ''
+> stop cdaudio
+< 0 ''
+> close all
+< 0 ''
+> open cdaudio alias c
+< 0 '1'
+> play c
+< 282 ''
+> close all
+< 0 ''
+LIVE allocations=0

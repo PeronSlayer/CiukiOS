@@ -114,6 +114,8 @@ selector_validate:
     call hex_digit
     jc .bad
     loop .hex
+    cmp bx, dos_conformance_name
+    je .dos_suffix
     cmp si, [selector_end]
     jne .suffix
     cmp bx, f3_title_name
@@ -267,6 +269,25 @@ selector_validate:
     jne .bad
     mov byte [selector_force], 1
     jmp .good
+.dos_suffix:
+    ; Match the native DOS controller grammar exactly, for every source.
+    ; No platform/safe suffix or guest=freedos kernel=unified combination.
+    ; ' guest=ciukidos' is the 15-byte prefix of dos_unified_suffix.
+    mov ax, [selector_end]
+    sub ax, si
+    mov di, dos_freedos_suffix
+    cmp ax, 14
+    je .dos_match
+    mov di, dos_unified_suffix
+    cmp ax, 15
+    je .dos_match
+    cmp ax, 30
+    jne .bad
+.dos_match:
+    mov cx, ax
+    repe cmpsb
+    jne .bad
+    jmp .good
 .title_suffix:
     mov ax, [selector_end]
     sub ax, si
@@ -350,7 +371,10 @@ f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
 f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
               db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+dos_conformance_name db 'dos-conformance',0
 f3_title_name db 'title',0,0
+dos_freedos_suffix db ' guest=freedos'
+dos_unified_suffix db ' guest=ciukidos kernel=unified'
 title_suffix db ' title='
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
@@ -598,6 +622,8 @@ boot_menu:
     call deadline_expired
     jnc .poll
 .done:
+    mov si, source_prefix
+    call print
     mov si, source_menu
     cmp byte [selector_source], 1
     jne .cfg_source
@@ -695,15 +721,17 @@ boot_menu:
     mov si, selection_error
     call print
     jmp .done
-source_menu db 'L:SELECT_SOURCE=menu',13,10,0
-source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
-source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
-safe_confirmation db 'Safe mode selected; P for a probe, or wait',13,10,0
+source_prefix db 'L:SELECT_SOURCE=',0
+source_menu db 'menu',13,10,0
+source_fw db 'fw_' ; 'fw_cfg',13,10,0: source_cfg and newline share its tail
+source_cfg db 'cfg'
+newline db 13,10,0
+safe_confirmation db 'Safe mode; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
-probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
-menu_hint db 'Press S for safe mode, L for serial log, H for Hardware check'
+probe_prompt db 'fN:<probe> run=<8hex>: ',0
+menu_hint db 'S for safe mode, L for log, H for Hardware check'
 menu_hint_end:
 
 ; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).

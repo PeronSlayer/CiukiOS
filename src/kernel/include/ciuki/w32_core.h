@@ -37,11 +37,13 @@ struct ciuki_w32_file_args {
 };
 /* FAT local timestamps remain packed here; kernel32 owns FILETIME conversion.
  */
-struct ciuki_w32_file_info {
+struct __attribute__((packed, aligned(4))) ciuki_w32_file_info {
   uint32_t attributes, size_low, size_high;
   uint16_t create_date, create_time, access_date, write_date, write_time;
   uint8_t create_tenths, reserved;
   char name[768], alias[40]; /* VFS UTF-8 names */
+  uint64_t file_id; /* FAT location or retained unlink generation; zero if unavailable. */
+  uint32_t volume_serial;
 };
 struct ciuki_w32_disk_info {
   uint32_t drives, type, serial, cluster_bytes, sector_bytes, max_component;
@@ -66,7 +68,7 @@ struct ciuki_w32_system_args {
   uint32_t action, handle, value, low, high, extra, result, error;
 };
 _Static_assert(sizeof(struct ciuki_w32_file_args) == 72, "file wire");
-_Static_assert(sizeof(struct ciuki_w32_file_info) == 832, "file info wire");
+_Static_assert(sizeof(struct ciuki_w32_file_info) == 844, "file info wire");
 _Static_assert(sizeof(struct ciuki_w32_disk_info) == 120, "disk wire");
 _Static_assert(sizeof(struct ciuki_w32_system_args) == 48, "system wire");
 struct ciuki_w32_startup {

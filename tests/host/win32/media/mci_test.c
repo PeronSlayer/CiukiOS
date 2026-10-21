@@ -392,6 +392,63 @@ static void shortcuts_and_commands(void) {
   assert(!mciSendCommandA(MCI_ALL_DEVICE_ID, MCI_CLOSE, 0, 0));
 }
 
+/* Regressions are silent so the original device trace stays pinned. */
+void hf_spawn(void *(*)(void *));
+void hf_join(void);
+void hf_gate_set(int);
+void hf_gate_wait(int);
+extern void (*mci_wait_hook)(void);
+extern _Thread_local void (*mci_unlock_hook)(void);
+static unsigned yield_calls;
+static void blocked_key(void) {
+  assert(++yield_calls == 1); /* a reused ID must not extend this wait */
+}
+static void unlocked_wait(void) {
+  if (!engine.source_count) return; /* ignore name lookup's earlier unlock */
+  mci_unlock_hook = 0;
+  hf_gate_set(1); hf_gate_wait(2);
+}
+static void *waiter(void *unused) {
+  (void)unused;
+  mci_unlock_hook = unlocked_wait;
+  assert(!mciSendStringA("play old wait", 0, 0, 0));
+  return 0;
+}
+static void amendment2(void) {
+  FILE *saved = trace; trace = tmpfile(); assert(trace);
+  assert(!mciSendStringA("open tone.wav alias old", 0, 0, 0));
+  mci_wait_hook = blocked_key;
+  hf_spawn(waiter); hf_gate_wait(1);
+  assert(!mciSendStringA("close old", 0, 0, 0));
+  assert(!mciSendStringA("open tone.wav alias replacement", 0, 0, 0));
+  assert(!mciSendStringA("play replacement", 0, 0, 0));
+  hf_gate_set(2); hf_join(); mci_wait_hook = 0;
+  assert(yield_calls == 1);
+  /* Exhaust callbacks with queued PCM. The owner must survive close and
+   * remain in the cleanup queue until callbacks and close can succeed. */
+  unsigned before = engine.source_count;
+  engine.callback_count = WA_CALLBACKS;
+  assert(!mciSendStringA("close replacement", 0, 0, 0));
+  assert(engine.source_count == before && live_allocations > 0);
+  mci_service_pass(); assert(engine.source_count == before);
+  engine.callback_count = 0;
+  for (unsigned i = 0; i < 8; i++) { wa_dispatch(&engine); mci_service_pass(); }
+  assert(engine.source_count == 0 && live_allocations == 0);
+  const char *types[] = {"waveaudio", "sequencer"};
+  const char *files[] = {"tone.wav", "song.mid"};
+  for (unsigned t = 0; t < 2; t++) for (unsigned order = 0; order < 2; order++) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "open %s type %s alias first%s", files[t], types[t], order ? " shareable" : "");
+    assert(!mciSendStringA(cmd, 0, 0, 0));
+    snprintf(cmd, sizeof(cmd), "open ./%s type %s alias second%s", files[t], types[t], order ? "" : " shareable");
+    assert(mciSendStringA(cmd, 0, 0, 0) == MCIERR_DEVICE_OPEN);
+    snprintf(cmd, sizeof(cmd), "open %s type %s alias third shareable", files[t], types[t]);
+    assert(mciSendStringA(cmd, 0, 0, 0) == MCIERR_DEVICE_OPEN);
+    assert(!mciSendStringA("close all", 0, 0, 0));
+  }
+  fclose(trace); trace = saved;
+}
+
 int main(int argc, char **argv) {
   if (argc != 3 || hf_chdir(argv[1])) {
     fprintf(stderr, "usage: mci_test fixture-dir trace\n");
@@ -406,6 +463,7 @@ int main(int argc, char **argv) {
   shortcuts_and_commands();
   for (int i = 0; i < 40; i++)
     Sleep(5);
+  amendment2();
   out("LIVE allocations=%ld\n", live_allocations);
   fclose(trace);
   if (live_allocations != (engine.opened ? 0 : 0)) {

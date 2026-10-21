@@ -127,7 +127,6 @@ gdt:
 gdt_end:
 gdtr dw gdt_end-gdt-1
     dd LOAD_BASE+gdt
-newline db 13,10,0
 
 bits 32
 protected_entry:
