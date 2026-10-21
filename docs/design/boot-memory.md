@@ -872,3 +872,20 @@ file size and the page-rounded reservation are preserved. The format,
 deadlines, assembled tests and limits (including nonreturning BIOS calls
 and pre-kernel disk persistence) are in the
 [F0-40 audit](../validation/f0-40-reliability-audit.md#loader-trail-and-limits).
+
+## f0-54: loader byte budget
+
+The ELF program-header scratch (`ph_table`, at most 32 × 32 bytes) shares
+the raw E820 buffer (`raw_map`, 128 × 24 bytes), which only `memory_collect`
+uses before A20, the FAT mount and the menu; later RAM checks read the
+normalized `boot_info.e820` array. `elf_load` fills every program-header
+byte it reads. Ordering invariant (accepted by the lead, 2026-10-21):
+`raw_map` is dead once `memory_collect` returns, and `elf_load` stays after
+it; code that reads or writes `raw_map` after `memory_collect`, or a
+program-header read before it, must first give `ph_table` its own buffer
+again. An assembly-time check keeps `MAX_PH * 32` within `raw_map`.
+The file stays 48 sectors; `loader_end` (`0x26841`) and the
+page-rounded reservation are unchanged. `scripts/loader_budget.py` reports
+the bytes per section and the free tail, and the size test requires at
+least 512 free bytes. See the
+[f0-54 record](../validation/f0-54-loader-budget.md).
