@@ -54,6 +54,59 @@ Registry recovery uses two distinct flushed values in alternating USER.CRG
 slots, corrupts the newest slot's signature, then requests a real w32srv crash
 through a bounded result-page request/acknowledgement. The observer identifies
 the desktop's one live native `w32srv` child and acknowledges only its exit;
-the production desktop supervises the replacement. The fixture reconnects and
-checks the older value, then flushes a third value and verifies a second clean
-service restart. Reopening a handle in the same server is never counted.
+the production desktop supervises the replacement. Gate mode reaps only its
+own exited `w32srv` child with a PID-specific nonblocking wait and calls the
+production supervisor's exit handler; it leaves the PE's exit status for the
+kernel observer. The fixture reconnects and checks the older value, then
+flushes a third value and verifies a second forced service restart. This is
+not a graceful-shutdown test. Reopening a handle in the same server is never
+counted. Both acknowledged restarts are required before the result can pass.
+
+[The upstream glibc waitpid declaration and contract](https://github.com/bminor/glibc/blob/master/posix/sys/wait.h)
+distinguish waiting for one PID from waiting for any child. The repository's
+`proc_wait_select`/`proc_waitpid` follow that distinction. Using `waitpid(-1)`
+in the gate would consume the fixture zombie before the kernel could verify
+its exit. Teardown instead snapshots the full descendant tree, stops the
+desktop before its children, then lets the production collector adopt and
+reap descendants. No supervisor can create a replacement during that drain.
+
+## Observations still unavailable
+
+- `w32-fullscreen`: the PE measures the two logical indexed dimensions and
+  formats. Its public DirectDraw lease omits presenter scale. There is no
+  kernel probe snapshot for scale, writes after revocation, stale-token
+  refusal, rollback, restored desktop/input or measured return latency. The
+  current fixture lacks synchronized transaction checkpoints for those
+  facts. It marks all three affected rows unsupported and fails; requested
+  dimensions never stand in for measured scale. Completing them needs a
+  presenter/lease observation seam and coordinated desktop/PE checkpoints.
+- `w32-input`: public calls cover layouts, copied data-format validation,
+  buffer configuration, cooperative-level API rejection and teardown. The
+  probe has no controlled raw motion source or foreground/exclusive
+  transition checkpoints to establish buffer ordering/overflow/peek,
+  cooperative loss/reacquisition and warp-free relative movement. Those
+  three rows remain unsupported and fail. Empty queue reads never count as
+  proof of raw input buffering.
+
+The suite expectations are unchanged. The host publisher uses synthetic
+results for grammar and negative predicate checks, not to claim those
+missing guest observations passed.
+
+## Verification boundary (2026-10-21)
+
+Selector and probe-registry checks and the assembled boot-mode checks pass.
+The three observer translation units compile with canonical kernel flags;
+the shared controller's frame is 396 bytes (publisher 328, tree cleanup 32).
+The nine PEs build reproducibly and resolve imports against the cached
+builtin DLL exports. Startup/result-page tests initially stopped at LLVM
+23.1.3 differing from the recorded 23.1.1 pins. After an external update of
+the toolchain pins in this worktree, all four focused loader tests passed,
+including the free/zero/RW/exact-address checks for all ten core fixtures.
+The single `make CAP= apps` attempt stopped at the old SDK manifest's pinned
+clang hash; SDK/apps qualification remains for the lead.
+The gate and ten predicate dry-runs reach their assertions but LeakSanitizer
+cannot complete under the sandbox's ptrace restrictions. Leak detection and
+tool pins were not disabled or changed by this session. The sanitizer and
+SDK/apps checks require a lead rerun;
+no guest qualification or canonical image evidence is claimed. Exact commands
+and results are in `build/codex/f5-21b-report.md`.

@@ -16,6 +16,8 @@ int main(int argc,char **argv)
     assert(argc==2);unsigned id=(unsigned)strtoul(argv[1],0,10);
     assert(id>0 && id<W32_FIXTURE_COUNT);
     struct w32_core_result r={.magic=W32_CORE_MAGIC,.version=1,.done=1,.fixture=id};
+    unsigned restarts=id==W32_FIXTURE_REGISTRY ? 2u : 0u;
+    r.request=r.acknowledged=restarts;
     const struct w32_core_schema *s=&w32_core_schemas[id];
     for(unsigned i=0;i<s->rows;i++) {
         r.row[i].checked=1;
@@ -24,7 +26,13 @@ int main(int argc,char **argv)
     assert(w32_core_valid(&r,id) && w32_core_pass(&r,id,0));
     assert(!w32_core_pass(&r,id,1));
     r.control_error=5;assert(!w32_core_pass(&r,id,0));r.control_error=0;
-    r.request=1;assert(!w32_core_pass(&r,id,0));r.request=0;
+    r.first_error=42;assert(!w32_core_pass(&r,id,0));r.first_error=0;
+    r.request=1;assert(!w32_core_pass(&r,id,0));r.request=restarts;
+    if(restarts) {
+        r.request=r.acknowledged=0;assert(!w32_core_pass(&r,id,0));
+        r.request=r.acknowledged=1;assert(!w32_core_pass(&r,id,0));
+        r.request=r.acknowledged=restarts;
+    }
     w32_core_publish(&r,id,emit);assert(records==s->rows);
     for(unsigned i=0;i<s->rows;i++) {
         r.row[i].checked=0;assert(!w32_core_pass(&r,id,0));r.row[i].checked=1;

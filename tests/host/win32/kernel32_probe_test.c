@@ -18,6 +18,7 @@ static void emit(const char *probe, const char *event, const char *format, ...)
 }
 int main(void)
 {
+    setbuf(stdout,NULL);
     struct w32_kernel32_result r = { .magic = W32_KERNEL32_MAGIC, .version = 1, .done = 1 };
     for (unsigned i=0; i<W32_K32_CASES; i++) r.checked[i] = 1;
     assert(w32_kernel32_valid(&r));
@@ -32,7 +33,12 @@ int main(void)
         r.checked[i] = 0;
         assert(!w32_kernel32_valid(&r));
         r.checked[i] = 1;
+        r.checked[i] = 2;
+        assert(w32_kernel32_valid(&r) && w32_kernel32_pass(&r,0));
+        r.checked[i] = 1;
     }
+    r.release = 1; assert(!w32_kernel32_valid(&r)); r.release = 0;
+    r.first_error = 42; assert(!w32_kernel32_pass(&r,0)); r.first_error = 0;
     r.done = 2; assert(!w32_kernel32_valid(&r)); r.done = 1;
     r.version = 2; assert(!w32_kernel32_valid(&r)); r.version = 1;
     r.magic = 0; assert(!w32_kernel32_valid(&r));

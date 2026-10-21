@@ -749,13 +749,13 @@ CIUKI_F5_PROBE("w32-media",probe_w32_media);
 
 /* f5-21b: one authenticated desktop gate and result reader for the core PEs.
  * The registered wrappers live in f5_probes_observers.c. */
-static void w32_fixture_remove_children(struct process *server)
+static void w32_fixture_remove_tree(struct process *owner,struct process *server)
 {
-    /* The crash coordinator owns fault children. On a timeout they must be
-     * collected before their parent, so none escape into PID 1's ledger. */
+    /* Capture the crash coordinator's descendants before parent exit adopts
+     * them to PID 1. Stop every captured process, including on a timeout. */
     static struct ciuki_proc_record records[CIUKI_PROCESS_MAX];
     static unsigned depth[CIUKI_PROCESS_MAX];
-    unsigned count=proc_list_snapshot(records,CIUKI_PROCESS_MAX,0),maximum=0;
+    unsigned count=proc_list_snapshot(records,CIUKI_PROCESS_MAX,0);
     memset(depth,0,sizeof(depth));
     for(unsigned round=0;round<count;round++) {
         bool changed=false;
@@ -763,15 +763,28 @@ static void w32_fixture_remove_children(struct process *server)
             if(records[i].ppid==server->pid)depth[i]=1;
             else for(unsigned j=0;j<count;j++)
                 if(depth[j] && records[i].ppid==records[j].pid){depth[i]=depth[j]+1;break;}
-            if(depth[i]){changed=true;if(depth[i]>maximum)maximum=depth[i];}
+            if(depth[i])changed=true;
         }
         if(!changed)break;
     }
-    for(unsigned level=maximum;level;level--)
-        for(unsigned i=0;i<count;i++)if(depth[i]==level) {
-            struct process *parent=proc_find(records[i].ppid);
-            if(parent)desktop_remove(parent,proc_find(records[i].pid));
-        }
+    /* Freeze the desktop first: it must not supervise a replacement w32srv
+     * while its old child is stopped or collected. */
+    proc_stop(server,0,0);
+    for(unsigned i=0;i<count;i++)if(depth[i]) {
+        struct process *p=proc_find(records[i].pid);
+        if(p)proc_stop(p,0,0);
+    }
+    desktop_remove(owner,server);
+    /* proc_collect adopts descendants to PID 1 and reaps them. Do not keep
+     * pointers to their old parents across a collection or scheduling point. */
+    uint64_t deadline=g_ticks+1000;
+    for(;;) {
+        proc_collect();
+        bool present=false;
+        for(unsigned i=0;i<count;i++)if(depth[i] && proc_find(records[i].pid)){present=true;break;}
+        if(!present || g_ticks>=deadline)break;
+        task_sleep_ms(1);
+    }
 }
 static int w32_fixture_restart_server(struct process *desktop)
 {
@@ -875,8 +888,7 @@ int probes_w32_core_fixture(unsigned id)
 cleanup:
     native_reports.active=false;native_reports.core_fixture=0;
     if(server) {
-        w32_fixture_remove_children(server);
-        desktop_remove(owner,server);
+        w32_fixture_remove_tree(owner,server);
     }
     if(owner){proc_stop(owner,0,0);proc_collect();}
 finished:

@@ -20,11 +20,10 @@ class Kernel32ProbeTests(unittest.TestCase):
                         '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                         str(ROOT/'tests/host/win32/kernel32_probe_test.c'), '-o', str(binary)], check=True)
         result = subprocess.run([binary], text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         cases = json.loads((ROOT/'tests/suites/f5-core.json').read_text())['cases']
         case = next(c for c in cases if c['probe'] == 'w32-kernel32')
-        # Check the publisher's DATA grammar directly. This deliberately
-        # does not add an unimplemented observer to the production registry.
+        # Check the publisher's DATA grammar directly; this is synthetic
+        # protocol evidence, separate from the registered guest observer.
         records = []
         for line in result.stdout.splitlines():
             probe, event, payload = line.split(' ', 2)
@@ -35,6 +34,9 @@ class Kernel32ProbeTests(unittest.TestCase):
             negative = [dict(r, errors='1') if r['case'] == failed else dict(r) for r in records]
             with self.assertRaises(EvidenceError):
                 evaluate_predicates(negative, case['expected'])
+            with self.assertRaises(EvidenceError):
+                evaluate_predicates([r for r in records if r['case'] != failed], case['expected'])
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_guest_fixture_is_pe32_stdcall_and_reproducible(self):
         out = ROOT/'build/host/win32/kernel32-probe/pe'

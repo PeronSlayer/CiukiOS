@@ -123,6 +123,7 @@ static int dialogs_startup(const char *path, uint32_t address) {
     p = (void *)(uintptr_t)address;
     CHECK(VirtualQuery(p, &q, sizeof(q)) == sizeof(q) && q.state == 0x10000);
     CHECK(VirtualAlloc(p, 4096, 0x3000, 4) == p);
+    for(unsigned i=0;i<4096;i++)CHECK(!((const uint8_t *)p)[i]);
     struct w32_dialogs_result *r = p;
     CHECK(!r->magic && !r->done && !r->release);
     r->magic = W32_DIALOGS_MAGIC;

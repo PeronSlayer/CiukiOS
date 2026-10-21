@@ -7,6 +7,8 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 void desk_v3_fixture_report(const char *);
 static struct { unsigned id; int pid, active, pending; uint64_t deadline; } fixture;
@@ -49,24 +51,54 @@ static int ready(void)
     memcpy(&reply,output,sizeof(reply));
     return reply.version==W32R_VERSION && !reply.error;
 }
+static uint8_t processes[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
+static int process_list(void)
+{
+    int count=ciuki_proc_list(processes,sizeof(processes));
+    struct ciuki_proc_system system;
+    if(count<=0 || (unsigned)count>CIUKI_PROCESS_MAX)return 0;
+    memcpy(&system,processes,sizeof(system));
+    if(system.version!=CIUKI_PROC_VERSION || system.size!=sizeof(system) || system.records!=(unsigned)count)return 0;
+    for(int i=0;i<count;i++) {
+        struct ciuki_proc_record record;
+        memcpy(&record,processes+sizeof(system)+(unsigned)i*sizeof(record),sizeof(record));
+        if(record.version!=CIUKI_PROC_VERSION || record.size!=sizeof(record))return 0;
+    }
+    return count;
+}
 static int fixture_child(uint32_t pid)
 {
     if(fixture.pid<=0)return 0;
-    static uint8_t bytes[CIUKI_PROC_LIST_MIN+CIUKI_PROCESS_MAX*sizeof(struct ciuki_proc_record)];
-    int count=ciuki_proc_list(bytes,sizeof(bytes));
-    struct ciuki_proc_system system;
-    if(count<=0 || (unsigned)count>CIUKI_PROCESS_MAX)return 0;
-    memcpy(&system,bytes,sizeof(system));
-    if(system.version!=CIUKI_PROC_VERSION || system.records!=(unsigned)count)return 0;
+    int count=process_list();
     for(int i=0;i<count;i++) {
         struct ciuki_proc_record record;
-        memcpy(&record,bytes+sizeof(system)+(unsigned)i*sizeof(record),sizeof(record));
+        memcpy(&record,processes+sizeof(struct ciuki_proc_system)+(unsigned)i*sizeof(record),sizeof(record));
         if(record.pid==pid)return record.ppid==(unsigned)fixture.pid;
     }
     return 0;
 }
+static void service_exits(struct desktop *d)
+{
+    /* Gate mode leaves the PE zombie for the kernel observer. Reap only the
+     * desktop's service child, then use production supervision to restart it.
+     * waitpid(-1) here could consume the fixture's required exit evidence. */
+    int count=process_list();
+    uint32_t parent=(uint32_t)getpid();
+    for(int i=0;i<count;i++) {
+        struct ciuki_proc_record record;
+        memcpy(&record,processes+sizeof(struct ciuki_proc_system)+(unsigned)i*sizeof(record),sizeof(record));
+        if(record.ppid==parent && record.state==CIUKI_PROC_ZOMBIE &&
+           !memcmp(record.name,"w32srv",7)) {
+            int status;
+            if(waitpid((int)record.pid,&status,WNOHANG)==(int)record.pid)
+                desk_w32_child_exited(d,record.pid,status);
+        }
+    }
+}
 void desk_w32_fixture_tick(struct desktop *d)
 {
+    if(!fixture.active)return;
+    service_exits(d);
     /* The authored crash coordinator waits for each child's real unhandled
      * fault and the production crash-file worker. Accept only its own fault
      * dialogs in this runtime gate; the normal desktop remains interactive. */

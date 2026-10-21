@@ -91,7 +91,8 @@ static inline int w32_core_valid(const struct w32_core_result *r,unsigned id)
 }
 static inline int w32_core_pass(const struct w32_core_result *r,unsigned id,uint32_t exit_code)
 {
-    if (!w32_core_valid(r,id) || r->unsupported || exit_code || r->control_error || r->request!=r->acknowledged) return 0;
+    if (!w32_core_valid(r,id) || r->unsupported || r->first_error || exit_code || r->control_error || r->request!=r->acknowledged) return 0;
+    if (id==W32_FIXTURE_REGISTRY && r->acknowledged!=2) return 0;
     const struct w32_core_schema *s=&w32_core_schemas[id];
     for (unsigned i=0;i<s->rows;i++) {
         if (r->row[i].checked!=1 || r->row[i].errors) return 0;
