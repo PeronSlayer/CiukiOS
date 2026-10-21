@@ -7,6 +7,10 @@
 #include "../../src/probes/win32_dialogs/controller.h"
 #include "../../src/probes/win32_upper/controller.h"
 #include "../../src/probes/win32_media/controller.h"
+#include "../../src/probes/win32_restart/controller.h"
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
@@ -196,4 +200,77 @@ void desk_upper_fixture_tick(struct desktop *d)
     upper_pending=0;
     if(e){desk_v3_fixture_report("case=w32-upper-dlls child=0");return;}
     upper_spawn();
+}
+
+/* f5-07D fallback gate, to be unified with f5-21b at integration. All
+ * restarts use the real desktop coordinator; only confirmation is automatic. */
+static struct {unsigned active,pid,phase,resumed;uint64_t deadline,next;} restart_fixture;
+extern uint32_t desk_restart_fixture_service(struct desktop *);
+extern int desk_restart_process_alive(uint32_t);
+int desk_restart_fixture_active(void){return restart_fixture.active;}
+int desk_restart_fixture_begin(struct desktop *d)
+{
+    memset(&restart_fixture,0,sizeof(restart_fixture));restart_fixture.active=1;
+    restart_fixture.deadline=d->now_ns+360000000000ull;return 0;
+}
+void desk_restart_fixture_notice(unsigned kind,uint32_t pid,uint32_t flags)
+{
+    if(!restart_fixture.active)return;
+    if(kind==2)restart_fixture.resumed=0;
+    if(kind==3)restart_fixture.resumed=1;
+    char line[128];snprintf(line,sizeof(line),"case=w32-restart notice=%u child=%u flags=%u",kind,pid,flags);
+    desk_v3_fixture_report(line);
+}
+static unsigned restart_registry_consumed(void)
+{
+    static const char *const names[]={"F507D-S","F507D-M","F507D-U","F507D-R","F507D-T"};
+    static const unsigned queues[]={0,1,2,0,1};
+    unsigned absent=0;
+    for(unsigned i=0;i<5;i++){
+        unsigned key=0;const char *path=queues[i]==0?"Software\\Microsoft\\Windows\\CurrentVersion\\RunServicesOnce":"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+        if(registry(W32R_OPEN,queues[i]==2?W32R_HKCU:W32R_HKLM,path,"",NULL,&key))return 0;
+        uint8_t input[128]={0},output[2048];uint32_t used=0;
+        struct w32r_request a={.version=1,.op=W32R_QUERY,.key=key,.path_bytes=1,.name_bytes=(uint32_t)strlen(names[i])+1};
+        memcpy(input,&a,sizeof(a));memcpy(input+sizeof(a)+1,names[i],a.name_bytes);
+        uint32_t e=desk_w32_exchange(input,sizeof(a)+1+a.name_bytes,output,sizeof(output),&used);
+        struct w32r_reply reply={0};if(!e&&used==sizeof(reply))memcpy(&reply,output,sizeof(reply));
+        int close=registry(W32R_CLOSE,key,"","",NULL,NULL);
+        if(e||close||reply.version!=1||reply.error!=2)return 0;
+        absent++;
+    }
+    return absent;
+}
+void desk_restart_fixture_tick(struct desktop *d)
+{
+    if(!restart_fixture.active || d->now_ns<restart_fixture.next)return;
+    restart_fixture.next=d->now_ns+20000000ull;
+    if(d->now_ns>=restart_fixture.deadline){desk_v3_fixture_report("case=w32-restart failed=1");restart_fixture.active=0;return;}
+    unsigned service_pid=desk_restart_fixture_service(d);
+    if(d->v3_dialog_kind==2){
+        unsigned pid=d->v3_dialog_pid,flags=d->v3_restart_flags;
+        cancel_dialog(d);
+        if(!d->v3_restart || d->v3_restart(d,pid,flags)<0){desk_v3_fixture_report("case=w32-restart failed=1");restart_fixture.active=0;return;}
+    }
+    /* Query the actual service directory on every new launch (including
+     * recovery). An alive native PID is not a registry readiness check. */
+    if(restart_fixture.pid){
+        if(!restart_fixture.resumed || desk_restart_process_alive(restart_fixture.pid))return;
+        char line[128];snprintf(line,sizeof(line),"case=w32-restart exited=%u phase=%u",restart_fixture.pid,restart_fixture.phase);
+        desk_v3_fixture_report(line); /* kernel observes the zombie before reap */
+        int status;if(waitpid((int)restart_fixture.pid,&status,WNOHANG)!=(int)restart_fixture.pid || !WIFEXITED(status)||WEXITSTATUS(status)){
+            desk_v3_fixture_report("case=w32-restart failed=1");restart_fixture.active=0;return;
+        }
+        restart_fixture.pid=0;restart_fixture.phase++;restart_fixture.resumed=0;
+    }
+    unsigned h=0;int e=registry(W32R_OPEN,W32R_HKLM,"Software","",NULL,&h);
+    if(!e&&h)e=registry(W32R_CLOSE,h,"","",NULL,NULL);
+    if(e)return;
+    if(restart_fixture.phase==3){
+        char line[64];snprintf(line,sizeof(line),"case=w32-restart registry=%u",restart_registry_consumed());desk_v3_fixture_report(line);
+    }
+    char *argv[]={W32_RESTART_PATH,NULL};char *env[]={"LC_ALL=C","TZ=UTC0",NULL};
+    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,CIUKI_SPAWN_NEW_GROUP);
+    char line[128];snprintf(line,sizeof(line),"case=w32-restart child=%u phase=%u service=%u",pid>0?(unsigned)pid:0,restart_fixture.phase,service_pid);
+    desk_v3_fixture_report(line);if(pid<=0){restart_fixture.active=0;return;}
+    restart_fixture.pid=(unsigned)pid;
 }

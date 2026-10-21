@@ -58,6 +58,7 @@ def inputs():
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "sdk/win32/include/w32/server.h")
     files.append(ROOT / "src/probes/desktop_v3/controller.h")
+    files.append(ROOT / "src/probes/win32_restart/controller.h")
     files.extend(ROOT / "assets/cursors" / name for name in ("cursors.h", "README.md", "paint.h", "paint.md"))
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")

@@ -1266,7 +1266,6 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-restart run={run_id}",
       "timeout": 420,
-      "integration_pending": "authored, unrun (f5-07B): lead supplies guest probe and T23 evidence; host shell and desktop fixtures are not guest qualification. Guest observer owner: f5-21.",
       "expected": {
         "terminal": "END",
         "predicates": [

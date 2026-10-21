@@ -3,6 +3,7 @@
 #include "win32_adapter.h"
 #include "win32_restart.h"
 #include <ciuki/channel.h>
+#include <ciuki/proc.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -286,17 +287,30 @@ static uint32_t restart_call(void *ctx,unsigned op,unsigned action,uint32_t flag
     }
     free(out);return e;
 }
+/* kill(pid,0) reports EPERM across groups, including zombies. Restart
+ * participants may have CIUKI_SPAWN_NEW_GROUP; use the process directory. */
+int desk_restart_process_alive(uint32_t pid)
+{
+    static struct {struct ciuki_proc_system system;struct ciuki_proc_record records[CIUKI_PROCESS_MAX];} list;
+    int count=ciuki_proc_list(&list,sizeof(list));
+    if(count<0 || (unsigned)count!=list.system.records || list.system.records>CIUKI_PROCESS_MAX)return 1;
+    for(unsigned i=0;i<list.system.records;i++)if(list.records[i].pid==pid)
+        return list.records[i].state==CIUKI_PROC_LIVE || list.records[i].state==CIUKI_PROC_STOPPING;
+    return 0;
+}
 static int restart_alive(void *ctx,uint32_t pid)
-{(void)ctx;return kill((int)pid,0)==0 || errno==EPERM;}
+{(void)ctx;return desk_restart_process_alive(pid);}
 static int restart_kill(void *ctx,uint32_t pid)
 {
     (void)ctx;return owner && owner->terminate?owner->terminate(pid,SIGKILL):-ENOSYS;
 }
 static void restart_record(void *ctx,const char *event,uint32_t n)
 {(void)ctx;fprintf(stderr,"%s value=%u\n",event,n);}
+extern void desk_restart_fixture_notice(unsigned,uint32_t,uint32_t) __attribute__((weak));
 static void restart_notice(void *ctx,unsigned kind,uint32_t pid,uint32_t flags)
 {
     (void)ctx;if(!owner)return;
+    if(desk_restart_fixture_notice)desk_restart_fixture_notice(kind,pid,flags);
     if(kind==1){
         if(desk_v3_revoke)desk_v3_revoke(owner);if(desk_v3_pointer_release)desk_v3_pointer_release(owner);
         owner->v3_dialog_kind=2;owner->v3_dialog_pid=pid;owner->v3_restart_flags=flags;
@@ -483,4 +497,14 @@ void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
             fprintf(stderr,"[win32] w32srv shutdown-flush result=%d\n",shutdown_error);
         }else desk_w32_supervise(&supervisor,&supervision,clock_ns());
     }
+}
+
+/* Gate-only selective reaping preserves other probes' child evidence. */
+uint32_t desk_restart_fixture_service(struct desktop *d)
+{
+    if(supervisor.pid){
+        int status;uint32_t pid=supervisor.pid;
+        if(waitpid((int)pid,&status,WNOHANG)==(int)pid)desk_w32_child_exited(d,pid,status);
+    }
+    return supervisor.pid;
 }

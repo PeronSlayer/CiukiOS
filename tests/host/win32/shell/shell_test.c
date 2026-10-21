@@ -4,6 +4,7 @@
 #include "../../../../apps/desktop/win32_restart.h"
 #include "../../../../apps/desktop/shell_link.h"
 #include <assert.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,7 @@ static uint32_t rpc(uint32_t pid,unsigned op,unsigned index,uint32_t key,uint32_
 {
     size_t p=strlen(path)+1,m=strlen(name)+1,total=sizeof(struct w32r_request)+p+m+n;
     uint8_t *wire=malloc(total),*response=malloc(W32R_MAX);assert(wire&&response);
-    struct w32r_request r={.version=1,.op=op,.index=index,.key=key,.type=type,.flags=flags,.path_bytes=p,.name_bytes=m,.data_bytes=n};
+    struct w32r_request r={.version=1,.op=op,.index=index,.key=key,.type=type,.access=(op==W32R_OPEN||op==W32R_CREATE)?0xf003f:0,.flags=flags,.path_bytes=p,.name_bytes=m,.data_bytes=n};
     memcpy(wire,&r,sizeof(r));memcpy(wire+sizeof(r),path,p);memcpy(wire+sizeof(r)+p,name,m);
     if(n)memcpy(wire+sizeof(r)+p+m,data,n);
     size_t used=0;assert(!wr_dispatch(&server,pid,wire,total,response,W32R_MAX,&used));
@@ -191,12 +192,14 @@ static void session(void)
     puts("PASS fresh desktop clears prior-boot identities even when a native PID is reused");
     puts("PASS session query accept veto force timeout plain end RunOnce watchdog deferred request abort authority");
 }
+
+#include "restart_fixture.inc"
 int main(int argc,char **argv)
 {
     setbuf(stdout,NULL);assert(argc==3);snprintf(root,sizeof(root),"%s",argv[2]);assert(strlen(root)+10<sizeof(programs));strcpy(programs,root);strcat(programs,"/Programs");assert(!mkdir(programs,0700));
     wr_posix_io(&io,root);real_sync=io.sync;io.sync=sync_fault;io.log=log_line;assert(wr_init(&server,&io,0));
     ws_posix_fs(&fs);real_write=fs.write;fs.write=write_fault;real_rename=fs.rename;fs.rename=rename_fault;fs.log=log_line;
     struct ws_config config={programs,root};shell=ws_create(&fs,&config,&server);assert(shell);server.shell=shell;server.shell_call=ws_call;server.shell_exit=ws_exit;
-    if(!strcmp(argv[1],"dde"))dde();else if(!strcmp(argv[1],"wininit"))wininit();else if(!strcmp(argv[1],"runonce"))runonce();else session();
+    if(!strcmp(argv[1],"fixture"))restart_fixture_test();else if(!strcmp(argv[1],"dde"))dde();else if(!strcmp(argv[1],"wininit"))wininit();else if(!strcmp(argv[1],"runonce"))runonce();else session();
     ws_destroy(shell);wr_destroy(&server);assert(logs);return 0;
 }

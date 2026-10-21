@@ -113,6 +113,7 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
 #include "../../probes/win32_dialogs/controller.h"
 #include "../../probes/win32_upper/controller.h"
 #include "../../probes/win32_media/controller.h"
+#include "../../probes/win32_restart/controller.h"
 #include <ciuki/shell_probe.h>
 extern int supervisor_spawn_desktop_probe(struct process **out);
 extern bool probes_desktop_v3_selected(const char *,unsigned,uint32_t);
@@ -138,6 +139,11 @@ static struct {
     bool upper;
     uint32_t upper_child;
 } native_reports;
+static struct {
+    bool active,failed;
+    uint32_t children[4],services[4],launches,exits,prompts,begins,resumes,registry;
+} restart_observation;
+static void restart_report(struct process *,const char *);
 static struct desktop_v3_observation v3_observation;
 static uint32_t native_digest(void);
 /* Case-name prefix and checkpoint count of the reporting app scenario (Files: 5, CiukNote: 3). */
@@ -237,6 +243,8 @@ static bool native_report(struct process *p, const char *line, unsigned length)
             native_invalid("v3_observation");return true;
         }
         desktop_v3_publish(&v3_observation,rec_emit);
+    } else if (server && restart_observation.active && !strncmp(line,"case=w32-restart ",17)) {
+        restart_report(p,line);
     } else if (server && native_reports.dialogs && (!strncmp(line,"case=w32-dialogs ",17) || !strncmp(line,"case=w32-media ",15))) {
         uint32_t child;
         NATIVE_REQUIRE(report_unsigned(line,"child",&child),"dialogs_fields");
@@ -724,6 +732,9 @@ finished:
     else rec_emit(name,"END","status=FAIL reason=%s",failure ? failure : "unknown");
     return pass ? 0 : 1;
 }
+#include "f5_restart_observer.inc"
+CIUKI_F5_PROBE("w32-restart",probe_w32_restart);
+
 static int probe_w32_dialogs(void) { return probe_w32_fixture(false); }
 static int probe_w32_media(void) { return probe_w32_fixture(true); }
 CIUKI_F5_PROBE("w32-dialogs",probe_w32_dialogs);

@@ -28,7 +28,6 @@ ALL = ('kernel', 'menu', 'loader_model')
 KNOWN_UNREGISTERED = {
     (5, 'w32-fixtures'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
     (5, 'w32-kernel32'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
-    (5, 'w32-restart'): {'owner': 'f5-21', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
     # Found by this check: authored cases whose probe none of the tables knows.
     (5, 'w32-fullscreen'): {'owner': 'f5-09', 'missing': ALL, 'note': 'case integration_pending: desktop v3 exercise driver and runtime probe'},
     (5, 'w32-registry'): {'owner': 'f5-06 and f5-09', 'missing': ALL, 'note': 'case integration_pending: production PE backend and w32srv supervision'},
@@ -123,7 +122,7 @@ class SelectorTableTests(unittest.TestCase):
 
     def test_lead_note_probes_are_reported_for_the_lead(self):
         # f5-22: the model must match production; f5-21 owns the observers.
-        for name in ('w32-fixtures', 'w32-kernel32', 'w32-restart'):
+        for name in ('w32-fixtures', 'w32-kernel32'):
             with self.subTest(probe=name):
                 self.assertEqual(probe_tables.registration(5, name),
                                  {'kernel': False, 'menu': False, 'loader_model': False})

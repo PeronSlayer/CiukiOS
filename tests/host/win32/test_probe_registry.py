@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
 # f5-22: f5-21 owns these pending guest observers; all tables reject them.
-UNREGISTERED = {'w32-fixtures': 'f5-21', 'w32-kernel32': 'f5-21', 'w32-restart': 'f5-21'}
+UNREGISTERED = {'w32-fixtures': 'f5-21', 'w32-kernel32': 'f5-21'}
 
 
 def selector_names():
