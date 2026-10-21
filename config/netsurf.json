@@ -1,0 +1,5 @@
+{
+  "comment": "NetSurf 3.11 full-source release (netsurf-all: netsurf with its libraries libcss, libhubbub, libdom, libnsfb, libnsgif, libnsbmp, libwapcaplet, libparserutils, libnsutils, libutf8proc, nsgenbin, libsvgtiny, librosprite, buildsystem) pinned by the lead for the browser port (owner decision 2026-10-20: NetSurf). Downloaded from download.netsurf-browser.org; no download by the build, no fallback.",
+  "archive": {"file": "build/downloads/netsurf/netsurf-all-3.11.tar.gz", "size": 9080781, "sha256": "4dea880ff3c2f698bfd62c982b259340f9abcd7f67e6c8eb2b32c61f71644b7b", "url": "https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz"},
+  "license": "GPL-2.0 (netsurf) with MIT libraries; see each component's COPYING"
+}
