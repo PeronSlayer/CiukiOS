@@ -20,12 +20,15 @@ static inline unsigned dosbox_game(const char *command)
         if (!strcmp(command,desk_games[i].command)) return i+1;
     return 0;
 }
+/* Owner decision 2026-10-21 (dev diary 2026-10-21-09): the unified CiukiDOS
+ * kernel (FreeDOS 2043 fork with the native IFS, f3-57) is the default for
+ * every game without a saved choice; "ciukidos" selects the classic kernel. */
 static inline unsigned dosbox_kernel_value(const char *value)
-{ return value && !strcmp(value,"unified") ? CIUKI_DOSVM_UNIFIED :
-         value && !strcmp(value,"freedos-1.3") ? CIUKI_DOSVM_FREEDOS13 : CIUKI_DOSVM_CIUKIDOS; }
+{ return value && !strcmp(value,"ciukidos") ? CIUKI_DOSVM_CIUKIDOS :
+         value && !strcmp(value,"freedos-1.3") ? CIUKI_DOSVM_FREEDOS13 : CIUKI_DOSVM_UNIFIED; }
 static inline const char *dosbox_kernel_label(unsigned value)
-{ return value==CIUKI_DOSVM_UNIFIED ? "CiukiDOS unified (preview)" :
-         value==CIUKI_DOSVM_FREEDOS13 ? "FreeDOS 1.3" : "CiukiDOS (default)"; }
+{ return value==CIUKI_DOSVM_UNIFIED ? "CiukiDOS unified (default)" :
+         value==CIUKI_DOSVM_FREEDOS13 ? "FreeDOS 1.3" : "CiukiDOS classic"; }
 static inline int dosbox_setting_path(unsigned game,char *out,size_t size)
 {
     if (!game || game>DESK_GAME_COUNT) { errno=EINVAL; return -1; }
@@ -39,10 +42,10 @@ static inline const char *dosbox_memory_label(unsigned value)
 { return value==CIUKI_DOSVM_MEMORY_LOCKED ? "locked (compatibility)" : "paged (default)"; }
 /* Exactly "DOS kernel=<k>\n", optionally followed by "DOS memory=locked\n"
  * (f3-46, the Windows 98 PIF "XMS/EMS memory locked" role); any other
- * content is the default: CiukiDOS with the paged pool. */
+ * content is the default: the unified CiukiDOS kernel with the paged pool. */
 static inline void dosbox_settings_load(unsigned game,unsigned *kernel,unsigned *memory)
 {
-    *kernel=CIUKI_DOSVM_CIUKIDOS; *memory=CIUKI_DOSVM_MEMORY_PAGED;
+    *kernel=CIUKI_DOSVM_UNIFIED; *memory=CIUKI_DOSVM_MEMORY_PAGED;
     char path[128],text[96];
     if (dosbox_setting_path(game,path,sizeof(path))) return;
     FILE *file=fopen(path,"rb"); if (!file) return;

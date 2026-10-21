@@ -23,6 +23,7 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### DOS and unified DOS
 
+- Owner decision 2026-10-21 (dev diary 2026-10-21-09): the unified kernel is the default for every DOS game without a saved choice; `DOS kernel=ciukidos` selects the classic kernel; the DOS Box shell stays classic until f3-58.
 - f3-56, f3-57 (`d0e05169`): unified DOS — native DFV2 binding adapter, `CIUKIDF.SYS`, FreeDOS 2043 fork patch 0002 (lifecycle hooks, redirector sites, FCB/NLS, critical-error GS fix), live VFS backend for C:/D:/E: at the seven redirector sites, INT 24h critical errors with the real frame, a refused activation stops the VM with a record, the fork kernel installed in the image under `kernel=unified` once `fork-qualified.json` exists.
 - f3-46 (`ed2f028a`): Converted the DOS VM 24 MiB memory pool into a pageable object (Contract D1) backed by demand paging and pagefile swap, reducing creation latency from 134.3 ms to 23.6 ms with protected I/O fault handling.
 - Fixed (`85b9024a`, `b2bc10a7`): Optimized DOS game launch base hashing from sector-by-sector seeks into a single sequential pass with 64 KiB reads, reducing host hashing elapsed time from 29.2 s to 0.25 s (`test_game_window_base_hash`).
