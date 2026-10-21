@@ -98,7 +98,8 @@ refusal and duplicate completion. Guest timing, revocation and mode-change
 qualification remain the lead's work.
 
 The authored fixture and observer share a 144-byte copied result block at
-`0x10040000`. The fixture reserves that page before creating a window. Seven
+`0x100e0000` (Amendment 2; `0x10040000` belongs to fullscreen). The fixture
+reserves that page before creating a window. Seven
 scene checksums, frame counts, format/extension counts and glyph-list status
 are collected by the kernel from its verified Win32 desktop child. The
 selector, loader table, runner model and `f5-core.json` case are registered;
@@ -143,3 +144,41 @@ original prefix and are never read past it. The production USER fixture
 checks an exact-size v1 table under ASan as well as the v2 window/DC path.
 The final host evidence has seven unchanged fixture goldens and eleven new
 amendment goldens, with separate pixel/region/reflection oracles.
+
+## Amendment 2 integration decisions (2026-10-21)
+
+Rechecked the primary GL 1.1 specification (especially §5.5), Microsoft's
+SetPixelFormat, PIXELFORMATDESCRIPTOR,
+[wglMakeCurrent](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglmakecurrent), wglGetProcAddress and
+SwapBuffers documentation linked above, and Wine's upstream opengl32.spec
+declarations before resolving the merge. The window-owned pixel-format and
+per-thread context rules, software format flags and ABI shapes remain as
+implemented in Amendment 1. The internal completed-present request is a
+CiukiOS transport decision; it does not claim that Microsoft requires display
+scanout completion on SwapBuffers. No renderer code is imported from Wine.
+
+Main's shared `GATE_W32_FIXTURE` now launches `gl-exercise` after a successful
+registry OPEN and CLOSE, with the same bounded readiness and child-report
+authentication as its existing fixtures. The ten core schema IDs and restart
+ID are preserved; GL has a separate launcher ID and keeps its own result
+protocol. The old GL-specific gate and dialogs launcher mode are removed.
+The observer reads `0x100e0000`, leaving main's pages through `0x100d0000`
+unchanged, and uses the shared descendant cleanup that stops desktop
+supervision before collecting children. All three selector tables retain
+main's probes and register `w32-gl` exactly once. The versioned v3
+completed-present helper remains linked alongside the shared fixture gate.
+
+The GL suite remains authored and unrun. Host verification commands, results
+and any sanitizer-environment failures are recorded under Amendment 2 in
+`build/codex/f7-07-report.md`; they do not replace guest evidence or the lead's
+integration review.
+
+Canonical-flags compilation of the merged desktop probe also exposed a
+4120-byte `restart_link` frame from main's 4096-byte local shortcut buffer.
+[Clang's frame-size diagnostic](https://clang.llvm.org/docs/DiagnosticsReference.html#wframe-larger-than)
+and [C11 draft N1570 §6.2.4](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+were checked. Keep the 4096-byte frame limit and buffer capacity; give this
+single-controller probe's scratch buffer static storage duration. The restart
+observer already has shared per-run state and does not run concurrently with
+another selected probe. This adds 4096 bytes of zero-initialized kernel
+storage, without allocation, new failure paths or changes to shortcut parsing.

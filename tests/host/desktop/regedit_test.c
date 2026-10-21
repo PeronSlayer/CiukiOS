@@ -33,6 +33,9 @@ int main(int argc, char **argv)
     du_init(u, pixels, RE_WIDTH, RE_HEIGHT); assert(!re_attach(a, u, argv[1]));
     assert(du_get(u, RE_TREE)->count == 9); /* five roots + Hardware children */
     du_render(u);
+    du_tick(u,2000000000ull); assert(!u->dirty);
+    du_message(u,RE_ERROR,"Question","Unchanged",0,NULL,0,0,0); du_render(u);
+    du_tick(u,4000000000ull); assert(!u->dirty); du_dialog_close(u);
     action(a, RE_NEW_KEY); input(a, RE_NAME, "Test"); approve(a, 0);
     assert(re_select(a, "System\\Test") && errno == ENOENT);
     action(a, RE_NEW_KEY); input(a, RE_NAME, "Test"); approve(a, 1); assert(!re_select(a, "System\\Test"));
@@ -66,7 +69,8 @@ int main(int argc, char **argv)
     /* Poll follows writes from an owning app, and preserves tree selection. */
     struct reg_root *other = reg_open_root_at("System", argv[1]); assert(other);
     assert(!reg_set_bool(other, "System\\Test", "external", 1)); reg_close_root(other);
-    event = (struct du_event){.type = DU_EV_TICK, .id = RE_POLL}; re_event(u, &event, a); assert(a->value_count == 5);
+    du_render(u);
+    event = (struct du_event){.type = DU_EV_TICK, .id = RE_POLL}; re_event(u, &event, a); assert(a->value_count == 5 && u->dirty);
     assert(!re_select(a, "Hardware\\PCI\\00:05.0")); assert(a->edit_menu[0].flags & DU_ITEM_DISABLED);
     action(a, RE_NEW_KEY); assert(du_dialog_id(u) == RE_ERROR); dismiss(a);
     action(a, RE_DELETE); assert(du_dialog_id(u) == RE_ERROR); dismiss(a);

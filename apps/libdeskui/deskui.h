@@ -376,6 +376,7 @@ int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
 
 /* Timers (monotonic nanoseconds) and the shared text clipboard. */
+/* DU_EV_TICK preserves dirty state; callbacks invalidate changed content. */
 int du_timer_start(struct du_ui *, int id, uint64_t interval_ns, int repeat);
 void du_timer_stop(struct du_ui *, int id);
 void du_tick(struct du_ui *, uint64_t now);

@@ -42,9 +42,10 @@ class GLTests(unittest.TestCase):
   selector=(ROOT/'src/kernel/probes/selector.c').read_text()
   loader=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
   model=(ROOT/'scripts/test/loader_model.py').read_text()
-  self.assertIn('"w32-gl"',selector);self.assertIn("'w32-gl'",loader);self.assertIn("'w32-gl'",model)
+  self.assertEqual(selector.count('"w32-gl"'),1);self.assertEqual(loader.count("'w32-gl'"),1);self.assertEqual(model.count("'w32-gl'"),1)
   case=next(c for c in json.loads((ROOT/'tests/suites/f5-core.json').read_text())['cases'] if c['id']=='w32-gl-qemu-t23')
   self.assertIn('unrun',case['integration_pending'])
+  self.assertIn('0x100e0000',case['integration_pending'])
   self.assertEqual(case['selector'],'f5:w32-gl run={run_id}')
  def test_present_completion(self):
   p=subprocess.run([str(self.present)],capture_output=True,text=True,timeout=60)

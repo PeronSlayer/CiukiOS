@@ -3,7 +3,7 @@
 #ifndef W32_GL_CONTROLLER_H
 #define W32_GL_CONTROLLER_H
 #include <stdint.h>
-#define W32_GL_RESULT_VA 0x10040000u
+#define W32_GL_RESULT_VA 0x100e0000u
 #define W32_GL_MAGIC 0x4c473357u
 #define W32_GL_PATH "/System/Win32/Fixtures/gl-exercise.exe"
 struct w32_gl_result {

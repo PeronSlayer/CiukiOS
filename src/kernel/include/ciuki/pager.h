@@ -101,6 +101,9 @@ struct pager_stats {
  * contents are never trusted across a reboot. */
 int pager_attach(const struct pager_backend *, void *ctx) __attribute__((weak));
 void pager_init(void) __attribute__((weak));
+/* Release boot metadata work after the desktop's first complete frame (or
+ * console fallback). Before this, admission is RAM-only and never waits. */
+void pager_bootstrap_complete(void) __attribute__((weak));
 void pager_poll(uint64_t now_ms) __attribute__((weak));
 void pager_snapshot(struct pager_stats *);
 

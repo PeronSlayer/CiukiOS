@@ -112,8 +112,6 @@ def build(out=None):
     hashes[peer_exe.name]=hashlib.sha256(peer_exe.read_bytes()).hexdigest()
     gl_exercise=opengl32.build_exercise(fixture_source,out)
     hashes[gl_exercise.name]=hashlib.sha256(gl_exercise.read_bytes()).hexdigest()
-    exercise=ddraw.build_exercise(fixture_source)
-    hashes[exercise.name]=hashlib.sha256(exercise.read_bytes()).hexdigest()
     # f5-10C2: the w32-dialogs guest fixture, its imports checked against the
     # builtins just built.
     from scripts.win32 import dialogs_fixture
@@ -124,9 +122,18 @@ def build(out=None):
     from scripts.win32 import upper_fixture
     upper=upper_fixture.build(fixture_source,out)
     hashes[upper.name]=hashlib.sha256(upper.read_bytes()).hexdigest()
+    from scripts.win32 import kernel32_fixture
+    kernel32_exercise=kernel32_fixture.build(fixture_source,out)
+    hashes[kernel32_exercise.name]=hashlib.sha256(kernel32_exercise.read_bytes()).hexdigest()
+    from scripts.win32 import core_observer_fixtures
+    for image in core_observer_fixtures.build(fixture_source,out):
+        hashes[image.name]=hashlib.sha256(image.read_bytes()).hexdigest()
     from scripts.win32 import cd_media
     for image in cd_media.build(fixture_source):
         hashes[image.name]=hashlib.sha256(image.read_bytes()).hexdigest()
+    from scripts.win32 import restart_fixture
+    restart=restart_fixture.build(fixture_source,out)
+    hashes[restart.name]=hashlib.sha256(restart.read_bytes()).hexdigest()
     # Same authored PE bytes under a separate, explicitly shimmed identity.
     shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
     hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()
