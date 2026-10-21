@@ -138,3 +138,28 @@ or retirement here. Codex runs no QEMU, scopes, OS image build, git mutation or
 diary edit. No new panic, game patch, memory-cap increase, global redirector
 advertisement or weakened original battery. Escalate a real contract conflict
 with evidence; never conceal it in profile-specific expected results.
+
+## Amendment 1 (lead, 2026-10-21 21:52, decisions on the delivery)
+
+1. The FreeDOS 2043 critical-error GS loss is fixed in patch 0002 (accepted);
+   record it in the validation document as an upstream defect to report after
+   the 1.0 Alpha, with the minimal reproduction.
+2. Status 2 (critical error) and the retry flag at offset 2Ah of the call
+   record are reserved (lead); the f3-56 monitor-only PENDING path stays for
+   the cases that have no INT 24h frame. Record both in the contract's ABI
+   table.
+3. Identities `CIUKIDF2 F3-57 1`, `CIUKIDOS K2043 3` and the version 3
+   control block with the `/LOCAL` setting are reserved (lead).
+4. A refused activation must not leave a halted guest: stop the VM through
+   the lifecycle gate with one record
+   `[dosvm] unified_activation_refused reason=<token>` so the desktop's DOS
+   Box shows the refusal; add the host case to the h57 suite.
+5. The FreeDOS behaviours kept (termination type 0 after Abort, sharing
+   violation 05h, E: read-only) are accepted and stay documented.
+
+Still open after this amendment, for f3-58/f3-59 after the 1.0 Alpha: the
+15×15 sharing matrix on the fork path, fake-time cancel tests, the remaining
+drive-classification cells (7302h–7305h, INT 25h/26h, handle IOCTLs, E:
+present/absent), raw-disk versus file coherence, an INSTALL= program test and
+per-request trace records. The lead runs `tests/host/dos/run_unified_file.sh`
+on `main` before the canonical build so that `fork-qualified.json` exists.
