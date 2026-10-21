@@ -39,7 +39,6 @@ KNOWN_UNREGISTERED = {
     (5, 'w32-codecs'): {'owner': 'f5-12 (lead)', 'missing': ALL, 'note': 'case integration_pending: guest codec probe'},
     (5, 'w32-ddraw'): {'owner': 'f5-11', 'missing': ALL, 'note': 'case integration_pending: ddraw-exercise.exe and kernel observer'},
     (5, 'w32-input'): {'owner': 'f5-13 (lead)', 'missing': ALL, 'note': 'case integration_pending: input PE fixture and selector'},
-    (5, 'w32-installer-nsis'): {'owner': 'f5-15A2', 'missing': ALL, 'note': 'case written by f5-15A; probe arrives with the NSIS flow (continuation f5-15A2)'},
     (4, 'vm-audio-jitter'): {
         'owner': 'f4 audio gate (f4-35)', 'missing': ALL,
         'note': 'registered with CIUKI_F4_PROBE (src/kernel/probes/f4_probes_vm_audio.c) but absent from all three tables'},

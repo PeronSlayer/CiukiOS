@@ -1,0 +1,240 @@
+"""Pinned engines and authored installer fixtures; never QEMU or image builds.
+
+H1 skips are limited to the existing adapter's demonstrated confinement
+preflight. A fault after PE startup is a failure. Parser unit vectors are
+explicitly labelled as such and are never installer runtime evidence.
+"""
+# SPDX-License-Identifier: MIT
+import hashlib
+import json
+from pathlib import Path
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zlib
+
+from scripts.win32 import cabinet, census, installer_fixture as fixture
+ROOT = Path(__file__).resolve().parents[4]
+HERE = Path(__file__).resolve().parent
+OUT = ROOT / 'build/host/win32/installers'
+
+
+def decode_cabinet(raw):
+    """Independent bounded MS-CAB reader, using stdlib DEFLATE, not the writer."""
+    if len(raw) < 44 or raw[:4] != b'MSCF':
+        raise ValueError('header')
+    length, table = struct.unpack_from('<I4xI', raw, 8)
+    minor, major, folders, files, flags = struct.unpack_from('<BBHHH', raw, 24)
+    if (length != len(raw) or (major, minor) != (1, 3) or folders != 1 or flags or table != 44):
+        raise ValueError('unsupported header')
+    offset, count, compression = struct.unpack_from('<IHH', raw, 36)
+    if compression != 1 or offset > len(raw):
+        raise ValueError('folder')
+    names = []
+    for _ in range(files):
+        if table + 16 > offset:
+            raise ValueError('file table')
+        size, at, folder = struct.unpack_from('<IIH', raw, table)
+        end = raw.index(0, table + 16, offset)
+        name = raw[table + 16:end].decode('ascii')
+        if folder or name in {n for n, _, _ in names}:
+            raise ValueError('file')
+        names.append((name, at, size)); table = end + 1
+    if table != offset:
+        raise ValueError('table trailing bytes')
+    data = bytearray()
+    for _ in range(count):
+        crc, packed, unpacked = struct.unpack_from('<IHH', raw, offset)
+        block = raw[offset + 8:offset + 8 + packed]
+        check = block + struct.pack('<HH', packed, unpacked)
+        # Compute the CAB XOR checksum independently (including tail order).
+        def xor_bytes(b):
+            result = 0
+            while len(b) >= 4:
+                result ^= int.from_bytes(b[:4], 'little'); b = b[4:]
+            return result ^ int.from_bytes(b, 'big')
+        if len(block) != packed or block[:2] != b'CK' or crc != (xor_bytes(block) ^ xor_bytes(check[-4:])):
+            raise ValueError('CFDATA checksum')
+        decoder = zlib.decompressobj(-15, zdict=bytes(data[-32768:])) if data else zlib.decompressobj(-15)
+        decoded = decoder.decompress(block[2:]) + decoder.flush()
+        if len(decoded) != unpacked or not decoder.eof or decoder.unused_data:
+            raise ValueError('MSZIP block')
+        data += decoded; offset += 8 + packed
+    if offset != len(raw):
+        raise ValueError('CFDATA trailing bytes')
+    result = {}
+    for name, at, size in names:
+        if at > len(data) or size > len(data) - at:
+            raise ValueError('file range')
+        result[name] = bytes(data[at:at + size])
+    return result
+
+
+class CabinetWriterTests(unittest.TestCase):
+    def test_native_registry_observer_on_production_directory(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        binary = OUT / 'registry-observer'
+        sources = [ROOT / 'apps/desktop/installer_registry.c', HERE / 'registry_observer_test.c', HERE / 'host.c',
+                   ROOT / 'sdk/win32/kernel32/text.c', ROOT / 'sdk/win32/services/bytes.c']
+        sources += [ROOT / 'sdk/win32/advapi32' / n for n in ('registry.c', 'text.c')]
+        sources += [ROOT / 'apps/w32srv' / n for n in ('registry.c', 'storage.c', 'defaults.c', 'directory.c', 'posix_io.c')]
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DW32_HOST_MODEL',
+            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', '-fsanitize=undefined',
+            '-fno-sanitize-recover=all', '-I' + str(ROOT / 'sdk/win32/include'),
+            '-I' + str(ROOT / 'src/kernel/include'), *sources, '-o', binary], check=True)
+        with tempfile.TemporaryDirectory(dir=OUT) as directory:
+            result = subprocess.run([binary, directory], capture_output=True, text=True, check=True)
+        print(result.stdout, end='')
+
+    def test_9x_profile_and_wide_delayed_move_refusal(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        for name, sources in (
+                ('profile-9x', [ROOT / 'tests/host/win32/profile_test.c', ROOT / 'sdk/win32/kernel32/profile.c']),
+                ('security-9x', [HERE / 'security_test.c', ROOT / 'sdk/win32/advapi32/security.c']),
+                ('wide-9x', [HERE / 'delay_move_test.c', ROOT / 'sdk/win32/kernel32/wide.c'])):
+            binary = OUT / name
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                '-DW32_HOST_MODEL', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                '-fsanitize=undefined', '-fno-sanitize-recover=all',
+                '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include'),
+                *sources, '-o', binary], check=True)
+            result = subprocess.run([binary], capture_output=True, text=True, check=True)
+            print(result.stdout, end='')
+
+    def test_multiblock_exact_bytes_checksums_and_corruption(self):
+        files = {'one.txt': b'Ciuki\r\n', 'two.bin': bytes(range(256)) * 300}
+        raw = cabinet.mszip(files)
+        self.assertEqual(raw, cabinet.mszip(dict(reversed(list(files.items())))))
+        self.assertEqual(decode_cabinet(raw), files)
+        for at in (len(raw) - 1, struct.unpack_from('<I', raw, 36)[0]):
+            changed = bytearray(raw); changed[at] ^= 1
+            with self.assertRaises(ValueError):
+                decode_cabinet(changed)
+        for name in ('../escape', 'C:\\escape', '/escape', 'folder//file', 'a\0b'):
+            with self.assertRaises(ValueError):
+                cabinet.mszip({name: b'authored'})
+
+
+class FlowFixtureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        OUT.mkdir(parents=True, exist_ok=True)
+        cls.fixtures = OUT / 'fixtures'
+        try:
+            cls.record = fixture.build(cls.fixtures)
+        except FileNotFoundError as error:
+            raise unittest.SkipTest(str(error)) from error
+
+    def test_compiled_fixture_and_cabinet_independent_hash_manifest(self):
+        self.assertEqual(self.record['identical_runs'], 2)
+        expected = json.loads((fixture.SOURCE / 'expected.json').read_text())
+        self.assertEqual(self.record['files'], expected['artifacts'])
+        store = ROOT / 'build/apps/win32'
+        if (store / 'fixtures.json').is_file():
+            staged = json.loads((store / 'fixtures.json').read_text())['files']
+            for name, digest in expected['artifacts'].items():
+                self.assertEqual(staged[name], digest)
+                self.assertEqual(fixture.sha(store / 'fixtures' / name), digest)
+        files = decode_cabinet((self.fixtures / 'fixture.cab').read_bytes())
+        self.assertEqual(set(files), {'child.exe', 'payload.txt', 'chain.inf'})
+        for name, data in files.items():
+            source = fixture.SOURCE / name if name == 'payload.txt' else self.fixtures / name
+            self.assertEqual(hashlib.sha256(data).hexdigest(), fixture.sha(source))
+        image = census.inspect((self.fixtures / fixture.NAME).read_bytes())
+        self.assertEqual(image['machine'], 'i386')
+
+    def test_authored_stubs_import_real_core_exports(self):
+        from scripts.win32 import upper_dlls
+        core = ROOT / 'build/apps/win32'
+        if not (core / 'builtin-store.json').is_file():
+            self.skipTest('core outputs absent: make CAP= apps')
+        providers = upper_dlls.read_images(core)
+        providers.update(upper_dlls.read_images(ROOT / 'build/win32/upper/pe'))
+        index = {name: upper_dlls.export_index(info) for name, (_, info) in providers.items()}
+        # The production loader forwards precisely this platform-owned set.
+        forwards = re.findall(r'X\((\w+)\)', (ROOT / 'sdk/win32/include/w32/shell_exports.h').read_text())
+        for name in forwards:
+            self.assertIn(name, index['ciukishell.dll'])
+            index['shell32.dll'][name] = index['ciukishell.dll'][name]
+        for name in (fixture.NAME, 'child.exe', 'selfextract.exe', 'infchain.exe'):
+            for row in census.inspect((self.fixtures / name).read_bytes())['imports']:
+                for symbol in row['symbols']:
+                    found = upper_dlls.resolve(index, row['dll'].lower(), symbol)
+                    self.assertFalse(found['error'], f'{name}: {row["dll"]}!{symbol}: {found}')
+
+    def test_observer_negatives_and_suite_parser_unit_vectors(self):
+        binary = OUT / 'observer'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                        '-fsanitize=undefined', '-fno-sanitize-recover=all', HERE / 'observer_test.c', '-o', binary], check=True)
+        result = subprocess.run([binary], capture_output=True, text=True, check=True)
+        print(result.stdout, end='')
+        # This exercises the production publisher and runner grammar with
+        # unit vectors; it makes no claim that an installer was executed.
+        sys.path.insert(0, str(ROOT / 'scripts/test'))
+        import evidence
+        case = next(c for c in json.loads((ROOT / 'tests/suites/f5-core.json').read_text())['cases']
+                    if c['probe'] == 'w32-installer-nsis')
+        rows = [dict(event='DATA', **dict(t.split('=', 1) for t in fields.split()))
+                for fields in re.findall(r'^RECORD w32-installer-nsis DATA (.*)$', result.stdout, re.M)]
+        self.assertEqual(len(rows), 4)
+        evidence.evaluate_predicates(rows, case['expected'])
+        for i in range(4):
+            changed = [dict(r) for r in rows]; changed[i]['manifest'] = '0'
+            with self.assertRaises(evidence.EvidenceError):
+                evidence.evaluate_predicates(changed, case['expected'])
+
+    def h1(self):
+        from tests.host.win32.wine import test_wine_upper as upper
+        if not (ROOT / 'build/apps/win32/builtin-store.json').is_file():
+            self.skipTest('core outputs absent: make CAP= apps')
+        if not upper.local_build_matches():
+            self.skipTest('reused PEs do not match the qualified f5-20D record; make CAP= upper')
+        directory = OUT / 'h1'; directory.mkdir(exist_ok=True)
+        if not getattr(self.__class__, 'h1_program', None):
+            reused = [n for n, r in upper.RECORD['dlls'].items() if r['qualified']]
+            program, _ = upper.build_h1(directory, reused)
+            (directory / 'upper_table.h').write_text(upper.upper_fixture.table_header(
+                [('cabinet.dll', upper.RECORD['dlls']['cabinet.dll']['base'])]))
+            arrays = {'cab_source': (self.fixtures / 'fixture.cab').read_bytes(),
+                      'cab_payload': (fixture.SOURCE / 'payload.txt').read_bytes(),
+                      'cab_child': (self.fixtures / 'child.exe').read_bytes(),
+                      'cab_inf': (self.fixtures / 'chain.inf').read_bytes()}
+            (directory / 'cab_bytes.h').write_text(''.join('static unsigned char ' + n + '[]={' +
+                ','.join(map(str, data)) + '};\n' for n, data in arrays.items()))
+            (directory / 'upper_fixture_src.h').write_text('#include "' + str(directory / 'cab_bytes.h') +
+                '"\n#include "' + str(HERE / 'fdi_memory.h') + '"\n')
+            program = upper.adapter.build(directory / 'core', directory / 'upper_h1.c', windows=False)
+            self.__class__.h1_program = program
+        program = self.__class__.h1_program
+        upper.require_h1_sandbox(self, program)
+        return program
+
+    def test_reused_fdi_exact_extraction_and_bad_checksum(self):
+        program = self.h1()
+        result = subprocess.run([program, 'fixture'], capture_output=True, text=True, timeout=120)
+        (OUT / 'fdi-h1.log').write_text(result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr)
+        self.assertIn('PASS FDI MSZIP exact extracted bytes', result.stdout)
+
+    def test_reused_inf_chain_and_selfextract_child_wait(self):
+        program = self.h1()
+        for name in ('infchain.exe', 'selfextract.exe'):
+            with self.subTest(image=name):
+                result = subprocess.run([program, 'exec', self.fixtures / name, ''],
+                                        capture_output=True, text=True, timeout=120)
+                (OUT / (name + '-h1.log')).write_text(result.stdout + result.stderr)
+                self.assertIn('TERMINATE 0', result.stdout, result.stdout[-4000:] + result.stderr)
+
+    def test_pinned_nsis_execution(self):
+        program = self.h1()
+        result = subprocess.run([program, 'exec', self.fixtures / fixture.NAME, '/S /CANCEL'],
+                                capture_output=True, text=True, timeout=120)
+        (OUT / 'nsis-h1.log').write_text(result.stdout + result.stderr)
+        self.assertIn('TERMINATE 1', result.stdout, result.stdout[-4000:] + result.stderr)
+
+
+if __name__ == '__main__':
+    unittest.main()

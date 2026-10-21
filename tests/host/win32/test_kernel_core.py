@@ -99,7 +99,8 @@ class KernelCoreTests(unittest.TestCase):
                           'w32-kernel32-qemu-t23','w32-audio-qemu-t23','w32-gdi32-qemu-t23','w32-crash-qemu-t23','w32-user32-qemu-t23','w32-codecs-qemu-t23','w32-media-qemu-t23','w32-cdaudio-qemu-t23','w32-upper-dlls-qemu-t23','w32-ddraw-qemu-t23','w32-input-qemu-t23','w32-dialogs-qemu-t23','w32-installer-nsis-qemu-t23','w32-restart-qemu-t23'])
         for case in suite['cases']:
             if case['probe']=='w32-installer-nsis':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertNotIn('integration_pending',case)
+                self.assertEqual(selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)['probe'],case['probe'])
                 self.assertEqual(case['selector'],'f5:w32-installer-nsis run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['installer_install','installer_cancel','installer_restart_request','installer_uninstall'])

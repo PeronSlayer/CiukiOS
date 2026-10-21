@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "artifacts": {
+    "NSIS-COPYING.TXT": "48fd9944176369233fa9bf923519829e20934a36df742bac4dedf49cf11226a3",
+    "chain.inf": "86746d500d35944c7c6f30b31ed250fafdf242dbc5aa210358a0a0b4a7a21678",
+    "child.exe": "a96b3d802c50201060e5ee9bdfe467d8484e51aa9237c3d5683ffdf15d5a75f7",
+    "ciuki-installer-fixture.exe": "95d4c74133aa421c788c64db19a538d70928d540d55de1f1016f4bdd94caf4c4",
+    "fixture.cab": "93056c05ec70de99566ccf6fbc48da393055dc93506a5734f9eba5bcdd413679",
+    "infchain.exe": "6a634f56e6adc2dc32039f2f3179fe9320e21be5771408ac7de1c742f6c45373",
+    "selfextract.exe": "0d0443d3a6a0f9e9a44fad0ec42e2719d15478ff915f52634ee1b95e88e16e92"
+  },
+  "payload_sha256": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+  "install": {
+    "files": [
+      "payload.txt",
+      "child.exe",
+      "uninstall.exe"
+    ],
+    "uninstall_key": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture",
+    "registry": {
+      "DisplayName": "Ciuki Installer Fixture",
+      "DisplayVersion": "1.0",
+      "Publisher": "CiukiOS",
+      "InstallLocation": "C:\\Program Files\\Ciuki Installer Fixture",
+      "UninstallString": "\"C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe\""
+    },
+    "links": {
+      "C:\\WINDOWS\\Desktop\\Ciuki Installer Fixture.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt",
+      "C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Installer Fixture\\Readme.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt"
+    }
+  },
+  "cancel": {
+    "exit": 1,
+    "files": [],
+    "registry_values": [],
+    "links": []
+  },
+  "restart": {
+    "RunOnce": "\"C:\\Program Files\\Ciuki Installer Fixture\\child.exe\" /restart-child",
+    "delete": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture.remove",
+    "journal": "C:\\WINDOWS\\CIUKIRST.LOG",
+    "completion": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture.restarted"
+  },
+  "uninstall": {
+    "files": [],
+    "links": [],
+    "registry_values": [],
+    "temporary_copy": "C:\\WINDOWS\\TEMP\\CiukiInstallerFixture-uninstall.exe",
+    "self_delete": "WININIT.INI NUL=temporary_copy -> WININIT.BAK; journal observed before completion"
+  },
+  "inf": {
+    "payload_sha256": "2586d092b4e52012ad383f7cacfbeca5e6e56f3bb8c6bcd0b6ce94d302416840",
+    "Installed": {
+      "type": "REG_DWORD",
+      "data": 1
+    },
+    "Obsolete": null,
+    "ini": {
+      "file": "C:\\WINDOWS\\fixture.ini",
+      "section": "Fixture",
+      "key": "Installed",
+      "value": "1"
+    }
+  }
+}

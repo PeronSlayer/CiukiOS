@@ -18,9 +18,11 @@ Fixture.Copy=24,"Program Files\Ciuki INF Fixture"
 
 [SourceDisksFiles]
 payload.txt=1
+child.exe=1
 
 [Fixture.Copy]
 payload.txt
+child.exe
 
 [Fixture.AddReg]
 HKLM,"Software\CiukiOS\InstallerFixture","Installed",0x00010001,1
