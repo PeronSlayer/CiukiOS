@@ -91,6 +91,23 @@ static void oracle(const uint32_t *slots, unsigned count, const struct pager_map
 
 /* ---- 1: activation, slot map, growth, exclusivity, reservations ---- */
 static uint32_t max_extend_us, max_trim_us, max_map_us;
+static int (*fast_read)(struct blkdev *, uint64_t, uint32_t, void *);
+static int (*fast_write)(struct blkdev *, uint64_t, uint32_t, const void *);
+static int (*fast_flush)(struct blkdev *);
+static uint64_t slow_ns;
+static void slow_transfer(uint64_t ns)
+{
+    CHECK(space.mutating & (1u << 2)); /* volume reservation covers metadata only */
+    slow_ns += ns;
+    struct timespec pause = { .tv_sec = (time_t)(ns / 1000000000), .tv_nsec = (long)(ns % 1000000000) };
+    CHECK(!nanosleep(&pause, 0));
+}
+static int slow_read(struct blkdev *d, uint64_t lba, uint32_t n, void *buf)
+{ slow_transfer((uint64_t)n * 512 * 1000000000 / 2800000); return fast_read(d, lba, n, buf); }
+static int slow_write(struct blkdev *d, uint64_t lba, uint32_t n, const void *buf)
+{ slow_transfer((uint64_t)n * 512 * 1000000000 / 2800000); return fast_write(d, lba, n, buf); }
+static int slow_flush(struct blkdev *d)
+{ slow_transfer(2000000); return fast_flush(d); } /* plus 2 ms per durability barrier */
 static void lifecycle(void)
 {
     CHECK(!fake_open(&f, image)); mount();
@@ -99,13 +116,29 @@ static void lifecycle(void)
     uint64_t free0, capacity; CHECK(!pagefile_backend.space(&pf, &free0, &capacity));
     uint64_t reserve = capacity / 100 * PAGER_RESERVE_PERCENT > PAGER_RESERVE_FLOOR ? capacity / 100 * PAGER_RESERVE_PERCENT : PAGER_RESERVE_FLOOR;
     CHECK(free0 >= reserve + PAGER_EXTENT_BYTES);
-    /* Bounded steps, measured: each call is one volume reservation. */
+    /* A 2.8 MB/s device including reads and 2 ms flush latency. Measure
+     * the whole VFS call, a conservative upper bound on reservation hold. */
+    fast_read = f.dev.read; fast_write = f.dev.write; fast_flush = f.dev.flush;
+    f.dev.read = slow_read; f.dev.write = slow_write; f.dev.flush = slow_flush;
+    unsigned before_events = f.events, before_writes = f.writes;
+    uint64_t max_device_ns = 0;
     uint32_t size = 0;
     while (size < PAGER_EXTENT_BYTES) {
+        slow_ns = 0;
         uint64_t t = now_us(); CHECK(!vfs_pagefile_extend(&pf.table, pf.handle, size + PAGER_GROW_STEP));
         uint32_t us = (uint32_t)(now_us() - t); if (us > max_extend_us) max_extend_us = us;
+        CHECK(slow_ns < 50000000 && us < 50000);
+        if (slow_ns > max_device_ns) max_device_ns = slow_ns;
         size += PAGER_GROW_STEP;
     }
+    f.dev.read = fast_read; f.dev.write = fast_write; f.dev.flush = fast_flush;
+    /* Every write is FAT/FSInfo or the directory entry, never page data. */
+    uint64_t root_lba = vol.start + vol.data_sector + (uint64_t)(vol.root - 2) * vol.spc;
+    for (unsigned i = before_events; i < f.events; i++) if (f.trace[i].kind == 'W')
+        CHECK(f.trace[i].lba < vol.start + vol.data_sector ||
+              (f.trace[i].lba >= root_lba && f.trace[i].lba < root_lba + vol.spc));
+    printf("TRACE f0-49c grow=16MiB data_writes=0 metadata_bytes=%u slow_device=2800000B/s flush=2ms max_device_us=%llu max_reservation_call_us=%u bound=50000us\n",
+           (f.writes - before_writes) * 512, (unsigned long long)(max_device_ns / 1000), max_extend_us);
     struct pager_map m0; CHECK(!pagefile_backend.grow(&pf, 0, &m0)); /* already allocated: maps only */
     CHECK(m0.runs >= 1 && mapped(&m0) == PAGER_EXTENT_SLOTS);
     uint64_t free1; CHECK(!pagefile_backend.space(&pf, &free1, &capacity) && free1 == free0 - PAGER_EXTENT_BYTES);
@@ -215,6 +248,39 @@ static void abandon(void)
     if (pf.out.live) CHECK(!blk_request_unreserve(&pf.out));
     memset(&pf, 0, sizeof(pf)); memset(&space, 0, sizeof(space));
     cache_destroy(&cache);
+}
+static void open_system_pagefile(uint32_t *existing)
+{
+    CHECK(!pagefile_init(&pf, &space, 2, "C:/SYSTEM/PAGEFILE.SWP", &f.dev));
+    CHECK(!pagefile_backend.open(&pf, existing));
+}
+static void persistent_reboots(void)
+{
+    CHECK(!fake_open(&f, image)); mount();
+    struct vfs_table t; CHECK(!vfs_table_init(&space, &t, 2));
+    CHECK(!vfs_mkdir(&t, "C:/SYSTEM", FAT_ATTR_SYSTEM)); vfs_table_destroy(&t);
+    uint32_t existing; open_system_pagefile(&existing); CHECK(!existing && pf.created);
+    struct pager_map first, second, again;
+    CHECK(!pagefile_backend.grow(&pf, 0, &first) && !pagefile_backend.grow(&pf, 1, &second));
+    struct fat_entry entry; CHECK(!vfs_handle_stat(&pf.table, pf.handle, &entry, 0));
+    CHECK(entry.size == 2 * PAGER_EXTENT_BYTES &&
+          (entry.attr & (FAT_ATTR_SYSTEM | FAT_ATTR_HIDDEN)) == (FAT_ATTR_SYSTEM | FAT_ATTR_HIDDEN));
+    /* Clean shutdown then unclean shutdown, each with fresh FAT/VFS/cache
+     * and backend state. The directory length and both maps survive. */
+    pagefile_close(&pf); unmount();
+    for (unsigned boot = 0; boot < 2; boot++) {
+        mount(); unsigned writes = f.writes;
+        open_system_pagefile(&existing); CHECK(existing == 2 && !pf.created);
+        CHECK(!pagefile_backend.grow(&pf, 0, &again) && !memcmp(&again, &first, sizeof(first)));
+        CHECK(!pagefile_backend.grow(&pf, 1, &again) && !memcmp(&again, &second, sizeof(second)));
+        CHECK(f.writes == writes); /* reuse maps only, no growth/zero fill */
+        if (!boot) { abandon(); fake_power_loss(&f); }
+    }
+    CHECK(!pagefile_backend.shrink(&pf, 0)); pagefile_close(&pf);
+    CHECK(!vfs_table_init(&space, &t, 2));
+    CHECK(!vfs_delete(&t, "C:/SYSTEM/PAGEFILE.SWP") && !vfs_rmdir(&t, "C:/SYSTEM"));
+    vfs_table_destroy(&t); unmount(); clean_scan(false); CHECK(!fsck_status()); fake_close(&f);
+    puts("TRACE f0-49c persistence path=C:/SYSTEM/PAGEFILE.SWP hidden+system=1 clean_reboot=2_extents unclean_reboot=2_extents maps=identical reopen_writes=0");
 }
 static void power_cuts(void)
 {
@@ -410,6 +476,7 @@ int main(int argc, char **argv)
     CHECK(argc == 4);
     image = argv[1];
     lifecycle();
+    persistent_reboots();
     power_cuts();
     trim_regrow_reuse();
     small_and_full(argv[2], argv[3]);

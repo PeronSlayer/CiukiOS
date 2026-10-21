@@ -9,6 +9,7 @@ extern uint32_t net_socket_count(void) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/registry.h>
 #include <ciuki/signal.h>
+#include <ciuki/pager.h>
 
 static uint32_t grant_owner, grant_descriptions, presenting;
 static bool display_suspended;
@@ -229,6 +230,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
     if (!err) {
         activity.presents++;
         if (display_frame_complete) display_frame_complete(generation, full_frame);
+        if (full_frame && pager_bootstrap_complete) pager_bootstrap_complete();
     }
     return err;
 }

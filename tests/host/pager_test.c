@@ -185,7 +185,38 @@ static void start(unsigned mib, uint64_t capacity_mib, uint64_t free_mib, bool k
     disk.fail_write_from = disk.fail_read_from = 0; disk.fail_write_count = disk.fail_read_count = 0;
     memory_sleep = drive; drive_prewrite = false; g_ticks += 1000;
     CHECK(!pager_attach(&fake, &disk));
+    pager_bootstrap_complete();
     manager();
+}
+static void stalled_manager(void) { g_ticks += 10; }
+static void boot_order(void)
+{
+    start(128, 1024, 768, false);
+    pager_reset();
+    disk.extents = 2; /* retained metadata, bytes and ownership are separate */
+    unsigned opens = disk.opens;
+    CHECK(!pager_attach(&fake, &disk));
+    uint64_t tick = g_ticks;
+    for (unsigned n = 0; n < 100; n++) manager();
+    CHECK(disk.opens == opens && !pager.extents && !pager_online());
+    CHECK(!pager_commit_wait(UINT32_MAX) && g_ticks == tick); /* desktop: RAM-only, no sleep */
+    pager_bootstrap_complete();
+    CHECK(!pager.opened);
+    /* Admission after the frame waits for open; existing extents map with
+     * empty ownership and without a growth allocation. */
+    CHECK(pager_commit_wait(1) && disk.opens == opens + 1 && pager.extents == 2);
+    CHECK(!pager.stats.grows && !pager.counts[ST_USED] && !pager.counts[ST_RESERVED]);
+    pager_reset(); CHECK(!pager_attach(&fake, &disk)); pager_bootstrap_complete();
+    memory_sleep = stalled_manager; tick = g_ticks;
+    CHECK(!pager_commit_wait(1) && g_ticks - tick == PAGER_COMMIT_WAIT_MS);
+    CHECK(!pager.opened && disk.opens == opens + 1);
+    memory_sleep = drive;
+    disk.open_error = -PAGER_EIO;
+    manager(); manager();
+    CHECK(pager.state == PAGER_FAILED && disk.opens == opens + 2);
+    CHECK(!pager_commit_wait(1));
+    disk.open_error = 0;
+    puts("TRACE M4 boot desktop=no manager I/O/no admission sleep until frame; retained_extents=2 empty; late_open=waited; stalled_open=10000ms; failed_open=one attempt");
 }
 static uint32_t pattern(uint32_t i, uint32_t salt) { return 0x5a000000u ^ (i * 2654435761u) ^ salt; }
 static void store_page(struct uaddr *u, uint32_t va, uint32_t value)
@@ -281,7 +312,7 @@ static void exhaustion(void)
     /* No pagefile (open refused): RAM-only commitment, usable system. */
     release_held(UINT32_MAX);
     fresh(128); pager_reset(); disk.open_error = -PAGER_EROFS;
-    CHECK(!pager_attach(&fake, &disk)); manager();
+    CHECK(!pager_attach(&fake, &disk)); pager_bootstrap_complete(); manager();
     CHECK(pager.state == PAGER_FAILED && !snapshot().swap_capacity && !pager_online());
     struct uaddr w; CHECK(!ua_init(&w, &w));
     CHECK(!ua_map_at(&w, CIUKI_MMAP_BASE, 256 * PAGE_SIZE, 3, 3, UA_ANON, 0));
@@ -709,9 +740,10 @@ static void bounds(void)
 
 int main(void)
 {
+    setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(1, 512u << 20); CHECK(ram);
     held = calloc(512u * 256u, sizeof(*held)); CHECK(held);
-    profile(128); profile(256); profile(512);
+    boot_order(); profile(128); profile(256); profile(512);
     exhaustion(); io_failures(); prewrite_demand(); races(); order_control(); reboot(); bounds();
     keep_maxima();
     CHECK(worst_out_us < 1000 && worst_in_us < 1000 && worst_slice_us < 1000);

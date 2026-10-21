@@ -82,6 +82,7 @@ struct ata_device {
  * Synthetic channels have native=false: no PIC, registry or physical I/O.
  * Setup/rearming is exclusively for a fresh synthetic device or boot. */
 struct ata_channel {
+    bool dma_completion_logged; /* first successful DMA on this channel/boot */
     const struct ata_port_ops *ops;
     void *port_ctx;
     uint16_t base, control;

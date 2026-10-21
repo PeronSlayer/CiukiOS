@@ -82,6 +82,10 @@ void ua_cancel_pins(struct uaddr *u, const struct task *task);
 /* Supervisor transfer via direct-map backing, including original RX loads. */
 int ua_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes);
 int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes);
+/* Permission-checked transfers. Reserve only for the copy, without a separate
+ * residency pin walk; no reservation survives the return to the caller. */
+int ua_user_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes);
+int ua_user_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes);
 int copy_from_user(void *dst, uint32_t src, uint32_t bytes);
 int copy_to_user(uint32_t dst, const void *src, uint32_t bytes);
 #endif

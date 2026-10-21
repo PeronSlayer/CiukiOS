@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# f5-22: f5-21 owns these pending guest observers; all tables reject them.
-UNREGISTERED = {'w32-fixtures': 'f5-21', 'w32-kernel32': 'f5-21', 'w32-restart': 'f5-21'}
+# Only the separately owned NSIS observer remains pending.
+UNREGISTERED = {'w32-installer-nsis': 'f5-15A2'}
 
 
 def selector_names():
@@ -65,7 +65,7 @@ class ProbeRegistryTests(unittest.TestCase):
             else:
                 self.assertIn(name, loader_names()[0])
                 loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
-        self.assertLessEqual(set(UNREGISTERED), pending)
+        self.assertEqual(set(UNREGISTERED), pending)
 
     def test_every_registered_probe_has_its_registration_and_a_suite_case(self):
         suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
@@ -84,6 +84,44 @@ class ProbeRegistryTests(unittest.TestCase):
         self.assertEqual((picked['phase'], picked['probe']), (5, 'w32-upper-dlls'))
         self.assertIn('w32-upper-dlls', selector_names())
         self.assertIn('w32-upper-dlls', loader_names()[0])
+
+class ProbeWriteGateTests(unittest.TestCase):
+    @staticmethod
+    def starters(text):
+        """Inspect function bodies, including nested error/cleanup blocks."""
+        starts = []
+        for match in re.finditer(r'\b(?:static\s+)?int\s+(\w+)\([^;{}]*\)\s*\{', text):
+            at, depth = match.end(), 1
+            while at < len(text) and depth:
+                depth += (text[at] == '{') - (text[at] == '}')
+                at += 1
+            body = text[match.end():at-1]
+            # Every desktop launcher can start w32srv through a gate command.
+            spawn = re.search(r'\bsupervisor_spawn_desktop_probe\s*\(', body)
+            if not spawn:
+                spawn = re.search(r'\bsupervisor_spawn\s*\(\s*"/(?:Programs/desktop|System/Win32/w32srv)"', body)
+            if spawn:
+                gate = re.search(r'storage_enable_write\s*\(\s*storage_get\s*\(\s*\)\s*,\s*2\s*\)', body)
+                starts.append((match[1], bool(gate and gate.start() < spawn.start())))
+        return starts
+
+    def test_all_desktop_probe_launchers_open_c_write_gate_before_spawn(self):
+        observed = []
+        for source in (ROOT/'src/kernel/probes').glob('*.c'):
+            observed.extend(self.starters(source.read_text()))
+        self.assertGreaterEqual(len(observed), 3)
+        self.assertEqual([name for name, gated in observed if not gated], [])
+
+    def test_missing_or_late_gate_is_rejected(self):
+        source = (ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text()
+        self.assertTrue(all(gated for _, gated in self.starters(source)))
+        removed = source.replace('storage_enable_write(storage_get(),2)', '0')
+        self.assertTrue(any(not gated for _, gated in self.starters(removed)))
+        launch = 'supervisor_spawn("/System/Win32/w32srv", argv, 0, false, &p);'
+        gate = 'storage_enable_write(storage_get(),2);'
+        self.assertEqual(self.starters('int probe(void) {'+launch+'}'), [('probe', False)])
+        self.assertEqual(self.starters('int probe(void) {'+launch+gate+'}'), [('probe', False)])
+        self.assertEqual(self.starters('int probe(void) {'+gate+launch+'}'), [('probe', True)])
 
 
 if __name__ == '__main__':

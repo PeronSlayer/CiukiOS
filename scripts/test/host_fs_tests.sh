@@ -29,6 +29,13 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/blkreq.c \
     tests/host/fs/test_blkreq.c -o build/host/fs/test_blkreq
 build/host/fs/test_blkreq
+# F1-86: exact reservation holder/waiter fields across a slow real FAT write.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_vfs_contention.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_vfs_contention
+build/host/fs/test_vfs_contention
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs tests/host/fs/test_blkreq_timer.c \

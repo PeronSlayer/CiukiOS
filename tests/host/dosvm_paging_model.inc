@@ -115,6 +115,11 @@ static void vmp_attach(void)
     vmp_writes = vmp_reads = vmp_fail_read = vmp_fail_write = 0;
     CHECK(!pager_attach(&vmp_backend, 0));
     struct task *saved = g_current; g_current = &vmp_manager_task;
+    /* f0-49c: store opening waits for the desktop's first frame (or
+     * console fallback). This VM fixture explicitly models that release. */
+    CHECK(!pager_manager_step(g_ticks));
+    CHECK(!pager.opened && !pager_online() && !pager.capacity);
+    pager_bootstrap_complete();
     CHECK(pager_manager_step(g_ticks));
     g_current = saved;
     CHECK(pager_online() && pager.capacity == PAGER_EXTENT_SLOTS && host_swap_capacity == PAGER_EXTENT_SLOTS);

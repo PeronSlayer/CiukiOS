@@ -7,6 +7,7 @@
 #include "proc_test.c"
 #undef main
 #undef fpu_task_release
+#include <ciuki/timing.h>
 
 /* Only architectural hardware operations are replaced. */
 #define SEL_UCODE 0x1b
@@ -67,6 +68,9 @@ extern void serial_tick(void) __attribute__((weak));
 #define tss_set_kernel_stack(value) ((void)(value))
 #define crit_begin() ((void)0)
 #define crit_end() ((void)0)
+/* This fixture replaces critical-section timing along with the CPU hooks. */
+bool crit_begin_inactive(void) { return false; }
+void crit_label(const char *section) { (void)section; }
 #define switch_context(old, next) ((void)(old), (void)(next))
 #define task_set_class timing_task_set_class
 #define task_focus timing_task_focus

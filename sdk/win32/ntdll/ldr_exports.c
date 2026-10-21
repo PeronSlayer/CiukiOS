@@ -230,7 +230,7 @@ NTSTATUS W32API LdrFindResourceDirectory_U(void *base, const struct w32_resource
     return find(base, info, level, directory);
 }
 NTSTATUS W32API LdrAccessResource(void *base, const void *entry, void **address, ULONG *size) {
-    if (!loader || !entry || !address)
+    if (!loader || !entry)
         return STATUS_INVALID_PARAMETER;
     RtlEnterCriticalSection(&loader->lock);
     struct w32_module *m = handle(base);
@@ -241,7 +241,8 @@ NTSTATUS W32API LdrAccessResource(void *base, const void *entry, void **address,
             ULONG rva = w32_u32(entry), n = w32_u32((const uint8_t *)entry + 4);
             void *data = w32_pe_span(&m->pe, rva, n);
             if (data) {
-                *address = data;
+                if (address)
+                    *address = data;
                 if (size)
                     *size = n;
                 status = 0;

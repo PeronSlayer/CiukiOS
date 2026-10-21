@@ -90,6 +90,9 @@ BOOL W32API WriteFile(HANDLE h, const void *data, DWORD bytes, DWORD *count,
     *count = n > 0 ? (DWORD)n : 0;
   return n >= 0;
 }
+void dialogs_fixture_stderr(const char *text, DWORD bytes) {
+  CHECK(write(2, text, bytes) == bytes);
+}
 DWORD W32API GetFileSize(HANDLE h, DWORD *high) {
   struct stat st;
   int fd = fd_of(h);
@@ -401,6 +404,13 @@ static BOOL W32API fake_names(HANDLE m, const char *type, name_proc proc,
 }
 
 /* ---- modules and resources ------------------------------------------------ */
+/* Bytes returned by the real loader/resource APIs in kernel_loader_main.c.
+ * This marshals between native harnesses with different platform ABIs. */
+static struct {
+  unsigned id, size;
+  uint8_t *data;
+} pe_resources[2];
+static BOOL refuse_dialog_resource;
 HANDLE W32API LoadLibraryA(const char *s) {
   if (!s)
     return 0;
@@ -473,6 +483,13 @@ HANDLE W32API FindResourceA(HANDLE module, const void *name,
   if (module != FIXTURE)
     return 0;
   uintptr_t t = (uintptr_t)type, n = (uintptr_t)name;
+  if (refuse_dialog_resource && t == 5 && n == 600) {
+    SetLastError(1814);
+    return 0;
+  }
+  for (unsigned i = 0; i < 2; i++)
+    if (pe_resources[i].data && pe_resources[i].id == n && t == (i ? 4u : 5u))
+      return (HANDLE)&pe_resources[i];
   if (t > 0xffff)
     return 0;
   for (UINT i = 0; i < sizeof(fixture_resources) / sizeof(*fixture_resources);
@@ -490,6 +507,9 @@ HANDLE W32API FindResourceA(HANDLE module, const void *name,
 }
 HANDLE W32API LoadResource(HANDLE module, HANDLE r) {
   (void)module;
+  for (unsigned i = 0; i < 2; i++)
+    if (r == (HANDLE)&pe_resources[i])
+      return pe_resources[i].data;
   uintptr_t i = (uintptr_t)r;
   if (i == 0x8001)
     return (HANDLE)icon_group;
@@ -497,8 +517,12 @@ HANDLE W32API LoadResource(HANDLE module, HANDLE r) {
     return (HANDLE)icon_module_image;
   return i ? (HANDLE)fixture_resources[i - 1].data : 0;
 }
+void *W32API LockResource(HANDLE h) { return h; }
 DWORD W32API SizeofResource(HANDLE module, HANDLE r) {
   (void)module;
+  for (unsigned i = 0; i < 2; i++)
+    if (r == (HANDLE)&pe_resources[i])
+      return pe_resources[i].size;
   uintptr_t i = (uintptr_t)r;
   if (i == 0x8001)
     return sizeof(icon_group);
@@ -811,6 +835,10 @@ static void harness_run(void) {
     frames_bridge();
   else if (!strcmp(mode, "exercise"))
     test_exercise();
+  else if (!strcmp(mode, "exercise-pe"))
+    test_exercise_pe();
+  else if (!strcmp(mode, "exercise-missing-resource"))
+    test_exercise_missing_resource();
   else if (!strcmp(mode, "exercise-entry"))
     test_exercise_entry();
   else

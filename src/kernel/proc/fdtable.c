@@ -227,6 +227,7 @@ extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __
 static int description_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
                     bool positioned, uint64_t offset, size_t *done, bool section)
 {
+    vfs_tag_locked(d->node->space->vfs,write ? "write" : "other");
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
     int live=px_ro_check_locked(d->node); if (live) return live;
@@ -283,6 +284,7 @@ int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,
 }
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
+    vfs_tag_locked(d->node->space->vfs,"truncate");
     if (win32_protected_file(d)) return -EACCES;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
@@ -301,6 +303,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
 }
 int file_sync_locked(struct file_description *d)
 {
+    vfs_tag_locked(d->node->space->vfs,"commit");
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return px_ro_check_locked(d->node);

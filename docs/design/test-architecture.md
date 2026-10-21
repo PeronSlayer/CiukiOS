@@ -3,6 +3,10 @@
 Decision, 2026-10-09 (owner request: stop creating a different build for each
 test and use the workstation's resources efficiently).
 
+For the normal-boot T23 contention records (`vfs_hold`, `vfs_wait`, ATA queue
+mode/service counters, DOS VM perf and `irqoff_long`), see
+[f1-86 record interpretation and host coverage](../validation/f1-86-t23-contention-instrumentation.md).
+
 ## Problem measured on 2026-10-09
 
 Before the cleanup the working tree held 121 GB, of which 114 GB were

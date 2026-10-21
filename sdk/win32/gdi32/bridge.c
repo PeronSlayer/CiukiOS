@@ -214,9 +214,15 @@ int32_t W32API w32_gdi_bridge_statistics(struct w32_gdi_bridge_stats *out) {
   struct w32r_font_stats s = {0};
   DWORD used, e = call(0, W32R_FONT_STATS, 0, 0, 0, reply, sizeof(reply), &r,
                        &used);
-  if (!e && r.data_bytes == sizeof(s))
+  if (!e && r.data_bytes != sizeof(s))
+    e = 13;
+  if (!e)
     w32_copy(&s, reply + sizeof(r), sizeof(s));
   *out = stats;
+  if (e) {
+    out->last_error = e;
+    SetLastError(e);
+  }
   out->service_open_faces = s.open_faces;
   out->service_face_bytes = s.face_bytes;
   out->service_face_peak = s.face_peak;
@@ -225,5 +231,5 @@ int32_t W32API w32_gdi_bridge_statistics(struct w32_gdi_bridge_stats *out) {
   out->service_opens = s.opens;
   out->service_evictions = s.evictions;
   out->service_refusals = s.refusals;
-  return !e && r.data_bytes == sizeof(s);
+  return !e;
 }

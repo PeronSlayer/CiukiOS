@@ -92,7 +92,7 @@ def validate_case(case, root=ROOT):
     workload, scene = win32.get('workload'), win32.get('scene')
     refuse(isinstance(workload, str) and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', workload), 'win32 workload id')
     refuse(isinstance(scene, str) and name_ok(scene), 'win32 scene id')
-    refuse(case.get('probe') == 'win32-' + workload, 'win32 probe must be win32-<workload>')
+    refuse(case.get('probe') == win32_session.probe_name(workload, root), 'win32 probe must match the workload manifest alias')
     refuse(case.get('selector') == 'f5:' + case['probe'] + ' run={run_id}', 'win32 selector must be f5:<probe> run={run_id}')
     refuse(type(case.get('timeout')) is int and 1 <= case['timeout'] <= 600, 'win32 case timeout must be 1..600 s')
     refuse(case.get('boot_kind', 'cold') == 'cold', 'win32 cases are cold boots')

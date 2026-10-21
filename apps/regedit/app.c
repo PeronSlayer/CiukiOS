@@ -278,11 +278,13 @@ void re_event(struct du_ui *u, const struct du_event *e, void *user)
     else if (e->type == DU_EV_FOCUS) menu_state(a);
     else if (e->type == DU_EV_ACTIVATE) command(a, e->id);
     else if (e->type == DU_EV_KEY && e->key == DU_KEY_DELETE) command(a, RE_DELETE);
-    else if (e->type == DU_EV_TICK && !du_dialog_id(u)) {
+    else if (e->type == DU_EV_TICK) {
+        if (du_dialog_id(u)) return;
         for (unsigned i = 0; i < 5; i++) if (a->roots[i]) {
             uint64_t g = reg_generation(a->roots[i]);
-            if (g != a->generations[i]) { if (re_refresh(a)) error(a, "Registry changed", errno); break; }
+            if (g != a->generations[i]) { if (re_refresh(a)) error(a, "Registry changed", errno); u->dirty=1; break; }
         }
+        return;
     }
     u->dirty = 1;
 }

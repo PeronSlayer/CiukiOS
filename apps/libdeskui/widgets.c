@@ -85,7 +85,9 @@ void du_emit(struct du_ui *u, struct du_event e)
 {
     if (!e.x && !e.y) { e.x = u->mouse_x; e.y = u->mouse_y; }
     if (!e.modifiers) e.modifiers = u->modifiers;
-    u->dirty = 1;
+    /* A timer notifies the application; only changed content needs paint.
+     * Preserve any pending full, dialog-only or bounded invalidation. */
+    if (e.type != DU_EV_TICK) u->dirty = 1;
     if (u->event) u->event(u, &e, u->user);
 }
 
@@ -854,14 +856,11 @@ void du_invalidate(struct du_ui *u, struct du_rect r)
 void du_render(struct du_ui *u)
 {
     struct du_canvas *c = &u->canvas;
-    if (u->dirty == 2 && u->dialog.kind == DU_DLG_PROGRESS) {
-        c->clip = u->dialog.box;
-        du_draw_dialog(u);
-        c->clip = (struct du_rect){0, 0, c->width, c->height};
-        u->dirty = 0;
-        return;
-    }
-    struct du_rect repaint=u->dirty==3 ? u->invalid : (struct du_rect){0,0,c->width,c->height};
+    /* Rebuild the underlay inside the dialog too: rounded frame coverage
+     * must blend against the original background, not its previous edge. */
+    struct du_rect repaint=u->dirty==3 ? u->invalid :
+        u->dirty==2 && u->dialog.kind==DU_DLG_PROGRESS ? u->dialog.box :
+        (struct du_rect){0,0,c->width,c->height};
     c->clip = repaint;
     du_fill(c, c->clip, DU_FACE);
     for (unsigned i = 0; i < u->count; i++) {
@@ -872,9 +871,9 @@ void du_render(struct du_ui *u)
         du_draw_widget(u, w, u->focus == (int)i && !u->dialog.kind);
     }
     c->clip = repaint;
-    if (u->paint) { u->paint(u, u->user); c->clip = (struct du_rect){0, 0, c->width, c->height}; }
+    if (u->paint) { u->paint(u, u->user); c->clip = repaint; }
     du_draw_menus(u);
-    c->clip = (struct du_rect){0, 0, c->width, c->height};
+    c->clip = repaint;
     du_draw_dialog(u);
     c->clip = (struct du_rect){0, 0, c->width, c->height};
     u->dirty = 0;
