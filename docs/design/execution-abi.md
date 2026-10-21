@@ -2315,13 +2315,16 @@ model/dirty stores, geometry, mode, VBE stores or text blink phase), STATE=2
 CONSOLE=4 (completed console line), TIMEOUT=8 (successful timeout with no
 other event). Events may be combined. The first observation reports the
 current state and video; later observations acknowledge only returned video
-events. VIDEO is frame paced even when an overlay suppresses presentation.
+events. A VIDEO observation remains pending until PRESENT actually samples it;
+a cadence-deferred PRESENT does not acknowledge it. VIDEO is frame paced even
+when an overlay suppresses presentation.
 WAIT_PRESENT never writes the surface, so it is also safe during loading.
 A timeout does not consume VGA dirt. The application passes the returned
 frame period to its next wait and services desktop messages between waits.
 
 The binding's busy gate permits one wait. A caught signal or process stop
-returns EINTR; stop/fault remains observable as STATE before CLOSE. Other
+returns EINTR; predicates retain the waiting thread rather than inspecting the
+notifying worker's signals. Stop/fault remains observable as STATE before CLOSE. Other
 validation/ownership errors retain the F3-02 closed set. The owned wait queue
 donates the sleeping client's effective priority to the VM worker (normally
 7 <- 9, with focused input up to 11 and ordinary starvation capped at 15).

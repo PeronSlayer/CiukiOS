@@ -18,7 +18,7 @@ struct binding {
     uint32_t pid;
     struct surface *surface;
     bool busy, focused;
-    bool observed;
+    bool observed, video_pending;
     uint32_t changes, display, starts, vbe_changes, console, state, flags, reason, phase;
     uint16_t mode;
 };
@@ -130,11 +130,16 @@ static uint32_t status_flags(const struct dosvm *v)
 }
 static uint32_t wait_phase(void)
 { return (uint32_t)((g_ticks / DOSVM_BLINK_TICKS) & 1) | (uint32_t)((g_ticks / DOSVM_CURSOR_TICKS) & 1) << 1; }
-struct present_request { struct binding *binding; struct dosvm *vm; struct process *process; };
-static bool present_interrupted(struct process *p)
+struct present_request {
+    struct binding *binding;
+    struct dosvm *vm;
+    struct process *process;
+    struct proc_thread *thread;
+};
+static bool present_interrupted(const struct present_request *r)
 {
-    struct proc_thread *t = proc_thread_for(g_current);
-    return p->state != PROC_LIVE || (t && proc_signal_caught(t));
+    /* Notifications run in the producer's context, not the waiter's. */
+    return r->process->state != PROC_LIVE || (r->thread && proc_signal_caught(r->thread));
 }
 static uint32_t present_events(struct present_request *r)
 {
@@ -146,7 +151,7 @@ static uint32_t present_events(struct present_request *r)
         events |= CIUKI_DOSVM_EVENT_STATE;
     if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
     if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due) &&
-        (!b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
+        (b->video_pending || !b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
          b->starts != v->video_starts || b->mode != v->vbe_mode || b->vbe_changes != v->present_vbe_changes ||
          (v->video_geometry.text && b->phase != wait_phase()))) events |= CIUKI_DOSVM_EVENT_VIDEO;
     return events;
@@ -154,21 +159,22 @@ static uint32_t present_events(struct present_request *r)
 static bool present_ready(void *arg)
 {
     struct present_request *r = arg;
-    return present_interrupted(r->process) || present_events(r);
+    return present_interrupted(r) || present_events(r);
 }
 static int wait_present(struct binding *b, struct dosvm *v, struct process *p, struct ciuki_dosvm_command *c)
 {
-    struct present_request r = {b, v, p};
+    struct present_request r = {b, v, p, proc_thread_for(g_current)};
     /* This is a producer dependency, not a physical device wait. Existing
      * sync machinery propagates boosts and withdraws them on every wake. */
     kwait_set_owner(&v->present_wait, v->task);
     kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(c->wait.timeout_ms));
     kwait_set_owner(&v->present_wait, 0);
-    if (present_interrupted(p)) return -EINTR;
+    if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
     if (!c->wait.events) c->wait.events = CIUKI_DOSVM_EVENT_TIMEOUT;
     c->wait.frame_ms = dosvm_vga_period_ms(v);
     if (c->wait.events & CIUKI_DOSVM_EVENT_VIDEO) {
+        b->video_pending = true;
         b->changes = v->vga.changes; b->display = v->vga.display_changes;
         b->starts = v->video_starts; b->mode = v->vbe_mode;
         b->vbe_changes = v->present_vbe_changes; b->phase = wait_phase();
@@ -360,9 +366,13 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 dosvm_startup_report(v, true);
             }
         } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
+            uint32_t samples = v->present_samples;
             if (op == CIUKI_DOSVM_PRESENT_BANDS && c.presentation.redraw) v->video_presented = false;
             e = dosvm_vga_present(v, put_row, b->surface, g_ticks, &c.damage);
             if (e >= 0) {
+                /* A cadence-deferred call must not acknowledge the pending
+                 * frame. The last store may otherwise never reach the window. */
+                if (v->present_samples != samples) b->video_pending = false;
                 c.changed = (uint32_t)e; e = 0; video_mode(v, &c);
                 if (op == CIUKI_DOSVM_PRESENT_BANDS) {
                     c.presentation.bands[0] = (uint32_t)v->video_bands;

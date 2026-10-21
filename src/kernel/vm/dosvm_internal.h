@@ -163,7 +163,7 @@ struct dosvm {
     struct kwait wake;
     struct kwait present_wait; /* request dependency on the VM worker */
     uint64_t present_due, present_sample_due;
-    uint32_t console_sequence, present_vbe_changes;
+    uint32_t console_sequence, present_vbe_changes, present_samples;
     struct {
         bool sleeping, seen;
         uint64_t last_tick, poll_tick;

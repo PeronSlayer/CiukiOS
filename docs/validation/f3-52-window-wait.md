@@ -1,6 +1,7 @@
 # F3-52 DOS window frame wait
 
-Research checked before implementation (2026-10-20):
+Research checked before the WIP implementation (2026-10-20), rechecked while
+completing it on 2026-10-21:
 
 - [Microsoft Windows 95 SDK: priority inversion](https://techshelps.github.io/Win32Api%20Documentation/html/o9bn.3.htm)
   documents dependency-owner boosting to the waiting thread's priority. This
@@ -35,8 +36,8 @@ Contrary to the initial evidence's surface-pin attribution, `surface_write`
 writes already resident, retained `MM_USER_SHARED` pages without a user pin.
 Their 300 pages (640 x 480 x 4 / 4096) already exist for the surface lifetime.
 The explicit `ua_pin` in `dosvm_client_syscall` pins the 136-byte command.
-Use bounded `ua_read`/`ua_write` for wait/present records: their transaction
-holds protect the copy and resolve only the record's one or two pages, with
+Use bounded `ua_read`/`ua_write` for wait/present records: their mutation
+reservations protect the copy and resolve only the record's one or two pages, with
 no `ua_pin` residency walk. Retain the surface as before, write only damaged
 rows, and add no surface commitment or lifetime pin. Other operations retain
 the existing record reservation. Host pin counts and test results are in
@@ -48,6 +49,35 @@ or settings panel. The next PRESENT_BANDS consumes damage only when the client
 is displaying guest video. Video observations are frame paced even when the
 client intentionally suppresses presentation. State and console events bypass
 that cadence. Timeout lets the client service desktop messages within 50 ms.
+Retain pending VIDEO until a presenter sample actually runs: an early present
+deferred by F3-41's cadence must not lose the guest's final store. A scalar
+sample counter distinguishes deferral from an unchanged completed sample,
+including VBE. No extra pixel conversion or per-row clock read is added.
+
+Wait predicates capture the caller's `proc_thread` before sleeping. A VM or
+deferred worker notification must evaluate signals for that thread, rather
+than for `g_current` at notification time. The host replay explicitly switches
+to the producer context for notification and covers record invalidation during
+the sleep, stop/fault, launch failure, suspension and linear VBE stores.
+
+Application replay covers 20 launch/overlay scenarios. Initial loading content
+is painted once; subsequent progress updates affect only the 400x18 bar at
+intervals of at least 250 ms. Settings paint only on selection/detail changes
+and restore only their saved 480x280 rectangle. Startup errors and fullscreen
+refusal notices paint once per change. The existing launch records and copy
+remain intact.
+
+Qualification on 2026-10-21: scheduler/sampler and application replays pass.
+The focused VM replay reaches all functional/pin PASS records, but its normal
+LeakSanitizer exit check fails because ptrace is prohibited in this sandbox;
+leak detection remains enabled. `make CAP= apps` rejects the changed pinned
+SDK tools; the kernel builder rejects the changed Win32 tools (23.1.3 installed,
+23.1.1 pinned at execution). This implementation did not change pins; external
+23.1.3 pin updates appeared after these checks and require lead confirmation.
+Direct compilation of nine affected or
+closely related kernel translation units with the production CFLAGS passes;
+this does not qualify replacement tools or provide a linked kernel. Exact
+commands, results and remaining lead validation are in the report.
 
 Final review also rechecked the F3-41 sources:
 [QEMU 10.1 VGA row rendering](https://raw.githubusercontent.com/qemu/qemu/v10.1.0/hw/display/vga.c)

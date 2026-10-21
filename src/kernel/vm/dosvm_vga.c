@@ -891,6 +891,7 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     /* Check before harvest/dirty consumption, including palette and CRTC
      * changes. A completion write cannot bypass the per-VM cap. */
     if (v->video_presented && !current.text && tick < v->video_due_us / 1000u) return 0;
+    v->present_samples++;
     /* Quantize the deadline to the host tick, retaining its fractional
      * phase: ceil(14.268 ms) on every frame would turn 70 Hz into 66 Hz.
      * Drop missed deadlines instead of accumulating a catch-up burst. */

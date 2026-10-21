@@ -19,7 +19,7 @@ static unsigned record_pin_walks, surface_rows;
 static bool caught_signal;
 static struct proc_thread window_thread;
 struct proc_thread *proc_thread_for(const struct task *t) { return t == &caller ? &window_thread : 0; }
-bool proc_signal_caught(struct proc_thread *t) { (void)t; return caught_signal; }
+bool proc_signal_caught(struct proc_thread *t) { CHECK(t == &window_thread); return caught_signal; }
 struct process *proc_current(void) { return fake_current; }
 struct process *proc_find(uint32_t pid)
 {

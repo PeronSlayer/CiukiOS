@@ -230,7 +230,8 @@ int main(int argc, char **argv)
         assert(dosbox_memory_load(2)==settings_cases[scenario-11].saved_memory);
         assert(settings_seen && settings_blur && (scenario==12 || settings_restore));
         if (scenario!=12) assert(!memcmp(screen,settings_original,sizeof(screen)));
-        assert(settings_seen==(scenario==12 ? 1u : 2u) && settings_damage==settings_seen);
+        assert(settings_seen==(scenario==12 ? 1u : 2u));
+        assert(settings_damage==settings_seen+(scenario!=12)); /* Restore only the saved rectangle. */
     }
     if (scenario == 1 || scenario == 2 || scenario == 3 || scenario == 5 || scenario==9)
         assert(result == 1 && error_seen && !presents && closed == (scenario != 2 && scenario!=9));

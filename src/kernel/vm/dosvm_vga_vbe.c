@@ -201,6 +201,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
     if (!m || !v->vbe_buffer.used) return -EIO;
     if (v->video_presented && (tick-v->video_tick)*1000u<dos_video_frame_us(m)) return 0;
+    v->present_samples++;
     bool dirty=dosvm_vbe_dirty(v,true);
     if (v->video_presented && !dirty && v->video_display==v->vga.display_changes) return 0;
     uint32_t display=v->vga.display_changes;

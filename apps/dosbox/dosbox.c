@@ -265,7 +265,8 @@ int main(int argc, char **argv)
         if (!running) break;
         if (settings_repaint && configured) {
             desk_message(&m,DESK_DAMAGE,20);
-            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+            desk_put32(m.data+4,DOSBOX_SETTINGS_X); desk_put32(m.data+8,DOSBOX_SETTINGS_Y);
+            desk_put32(m.data+12,DOSBOX_SETTINGS_W); desk_put32(m.data+16,DOSBOX_SETTINGS_H);
             if (send_packet(channel,&m)) goto done;
             settings_repaint=0;
         }
