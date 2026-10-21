@@ -6,14 +6,6 @@
 - **Authority:** GPL-compatible fork additions, Ciuki CONFIG.SYS control driver,
   private DFVM binding/ROM adapter in src/kernel/vm/, FCB/NLS adaptation,
   tests/host/dos/, binding/layout documentation and validation.
-<<<<<<< HEAD
-- **Dependencies:** lead reserves the new DFVM version, layout capability bits,
-  gate role and disjoint ROM range, any required lifecycle extension selectors
-  and personality identity. Reuse existing event meanings 0–8 where sufficient;
-  choose no new numbers. Lead resolves rights for any copied GPL-only Ciuki
-  source; new fork implementation is GPL-2.0-or-later. Confirm the local-IFS
-  callout seam so no new public redirector advertisement breaks the base battery.
-=======
 - **Dependencies:** f3-55 integrated; the lead reserves the DFV2 ROM/discovery/
   capability proposal below at launch. The fork-local IFS seam is confirmed;
   public 1100h stays AL=0 and its battery assertion is unchanged. Guest identity
@@ -21,7 +13,6 @@
   approval of the GitHub plus per-release source-archive/hash destination have
   been requested: **do not start f3-56 until the lead records both answers**.
   f3-55 may proceed before that answer. No new transaction selectors are picked.
->>>>>>> main
 - **Size:** substantial ABI/lifecycle port; source-built bindings tested against
   the real guest CPU and native owner, not a Python DOS replacement.
 
@@ -35,11 +26,6 @@ bounded ranges. Verify [RBIL SDA](https://fd.lod.bz/rbil/interrup/dos_kernel/215
 [Microsoft DOS reference](https://www.pcjs.org/documents/books/mspl13/msdos/dosref33/).
 Record behavior differences and decisions before changing code.
 
-<<<<<<< HEAD
-## Required implementation
-
-1. Retain v1 for the old guest byte-for-byte. Implement the reserved additional
-=======
 ## DFV2 ROM and discovery proposal
 
 The lead selected the negotiated identity **DFV2**; the following exact ROM
@@ -92,18 +78,10 @@ provide the exact gap before requesting any additional selector.
 ## Required implementation
 
 1. Retain v1 for the old guest byte-for-byte. Implement the reserved DFV2
->>>>>>> main
    layout with checked code/data/driver segments, explicit SDA field addresses,
    actual SFT chain, CDS base/count/stride, PSP/JFT allocations, device headers,
    result/stack and build identity. Never store owning PSP at FreeDOS SDA+1C
    or overwrite a guest SFT chain with FF. No generalized weakening of v1 checks.
-<<<<<<< HEAD
-2. Provide the GPL guest control driver loaded through CONFIG.SYS. It validates
-   exact discovery/version/length/features, immutable ROM role bytes/ranges,
-   registers owned memory and publishes binding transactionally. Bare/pristine
-   FreeDOS remains isolated without it. Unknown versions/signatures chain;
-   invalid required unified binding returns a contained initialization failure.
-=======
 2. Provide two-phase initialization. CONFIG.SYS driver INIT validates discovery/
    ROM and registers only its resident allocation and deferred callback with
    the fork (no native bind/event). It does not bind kernel/SFT/CDS pointers,
@@ -115,20 +93,16 @@ provide the exact gap before requesting any additional selector.
    relocated callback afresh. f3-57 filesystem activation joins this late BIND
    transaction before any INSTALL, shell or AUTOEXEC program. Bare/pristine
    stays isolated; malformed required unified binding fails before applications.
->>>>>>> main
 3. Implement distinct direct/file, local 11xx marshalled-request and lifecycle
    ROM entry validation. Document packed fields and separate complete stack
    diagrams. Original INT21 and redirector return frames are not interchangeable.
    Gate spoofing from ordinary guest code, overlap and stale generation fail
    without native side effects. PENDING is monitor-only and resumes once;
    CHAIN restores the complete unowned frame; no nested INT21 redispatch.
-<<<<<<< HEAD
-=======
    Implement interception immediately before **each** marshalled INT2F site,
    not just at call_int2f. Owned calls use the new callout gate without an extra
    interrupt frame; unowned calls execute the original site once. Preserve
    each wrapper's conversion and DS/SS expectations from the contract's table.
->>>>>>> main
 4. Port process boundary notifications to FreeDOS's actual fast paths, new_psp,
    child_psp, EXEC begin/commit/rollback, return_user, TSR/INT27 and VM destruction.
    AH50 selection cannot alter immutable ancestry. Preserve real MCB/JFT ownership,
@@ -141,8 +115,6 @@ provide the exact gap before requesting any additional selector.
    padding, DTA segment wrap, wildcard mutation and 59h errors. No alternate FAT
    parser or hidden native FCB pointer. f3-57 supplies the full live backend;
    until then host adapters are explicit fixtures and cannot claim runtime closure.
-<<<<<<< HEAD
-=======
    Explicitly harden `K:kernel/fcbfns.c:252–271`: a negative DosRWSft return
    exits before unsigned transfer/count arithmetic; zero record size is rejected
    before the modulus at :268. Exercise negative, zero, partial and oversized
@@ -157,7 +129,6 @@ provide the exact gap before requesting any additional selector.
    before mutation; failure leaves open state/metadata/refs intact, success closes
    once (AL=00, FCB slot FF). Error AL=FF/59h, repeated closed FCB no-op. f3-57
    supplies the live metadata backend and provider fault/stop/cancel evidence.
->>>>>>> main
 6. Use one CP437/country1 definition for 29/38/65/66, upper/collation/filename/
    DBCS tables and aliases. Support f3-50 65 01–07/20–23 with exact lengths and
    stable checked guest pointers; unsupported switching fails. Keep the real
@@ -170,17 +141,10 @@ provide the exact gap before requesting any additional selector.
 | ID | Required tests |
 | --- | --- |
 | H56-01 negotiation | Old/absent/unsupported/truncated/overlap/wrong-role/spoof/stale binding; same-segment and split-segment valid fixtures; allocation failure at every bind publication; old v1 remains unchanged. |
-<<<<<<< HEAD
-| H56-02 layout | Guarded genuine FreeDOS PSP/JFT/SFT chain/SDA/CDS direct reads after open/dup/inherit/close/select; no padding scribble, no forged authority or severed chain. |
-| H56-03 frame | Real guest CPU through all gate roles, complete register/FLAGS/stack sentinels, hook-on-hook chain once, 0300/reflection origins and pending INT24 completion once. |
-| H56-04 lifetime | Nested EXEC success/error/rollback, 26 vs55,50/51/62, child abort, TSR/INT27, VM stop and late completion; native/device references and MCB/JFT ledger return to baseline. |
-| H56-05 FCB | Every H50-03 case on upstream engine through the checked adapter, including boundary and injected failures; guarded AL/CX/FCB/DTA exact results. |
-=======
 | H56-02 layout | Execute INIT then final SFT allocation (FILES), CDS replacement (LASTDRIVE), final FsConfig and DOS=LOW relocation; poison old addresses and reject early BIND/stale callbacks. Only final PSP/JFT/SFT-chain/SDA/CDS/code ranges are admitted after init_kernel/before DoInstall. Fault every late registration; guarded direct reads after open/dup/inherit/close/select, no padding scribble or severed chain. |
 | H56-03 frame | Production guest CPU through every gate and all seven K int2f.asm sites: :355 getfattr and lseek (no argument WORD), :364 lock/unlock (no WORD, DS:DX/BL/CX block), :407 general (extra argument WORD), :432 printer (WORD plus changed DS), :443 getfree (WORD near output pointer), :454 read/write (no WORD, SDA DTA/CX, signed DX:AX result), :471 process-end and qualify (no WORD, changed DS). Publish exact stack diagrams; success/error/chain/pending where applicable, preserved BP/SI/DI/SS/DS/FLAGS and sentinels, unowned printer chain once, 0300/reflection and INT24 resume once. |
 | H56-04 lifetime | Nested EXEC success/error/rollback, 26 vs55,50/51/62, child abort, TSR/INT27, VM stop and late completion; native/device references and MCB/JFT ledger return to baseline. |
 | H56-05 FCB | H50-03 plus explicit negative-transfer/zero-modulus hardening at fcbfns.c:252–271 and authenticated close-metadata hook :609–613. Changed FCB size/date, concurrent writes/close order, read-only attribute/mount, publication failure/retry/reopen, repeated close and FcbCloseAll. Match frozen pristine-SHARE AL/59h/size/date/bytes/other-description results; reject forged SFT-only changes; no mutation or ref loss on precommit failure. |
->>>>>>> main
 | H56-06 NLS/internals | Every H50-02/04 layout/string/high-byte/length/precondition case; 38/66/29 and aliases agree; no unsupported-codepage success. |
 
 Extend production host harnesses and their CPU adapter; add a focused
