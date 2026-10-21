@@ -36,6 +36,7 @@ static int replay_sleep(const struct timespec *, struct timespec *);
 static uint32_t screen[640 * 480];
 static uint64_t clock_ms, enter_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
+static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
 static int input_refused;
 static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
@@ -144,7 +145,11 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     case CIUKI_DOSVM_WAIT_PRESENT:
         assert(c->wait.timeout_ms>0 && c->wait.timeout_ms<=50);
         clock_ms+=c->wait.timeout_ms; c->wait.frame_ms=15;
-        c->wait.events=CIUKI_DOSVM_EVENT_VIDEO; return 0;
+        c->wait.events=nonvideo==1 ? CIUKI_DOSVM_EVENT_TIMEOUT : nonvideo==2 ? CIUKI_DOSVM_EVENT_STATE : CIUKI_DOSVM_EVENT_VIDEO;
+        last_events=c->wait.events;
+        timeout_waits+=last_events==CIUKI_DOSVM_EVENT_TIMEOUT;
+        state_waits+=last_events==CIUKI_DOSVM_EVENT_STATE;
+        return 0;
     case CIUKI_DOSVM_FOCUS:
         if (scenario>=11 && settings_phase) { if (c->focused) settings_restore++; else settings_blur++; }
         return 0;
@@ -173,6 +178,7 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         }
         return 0;
     case CIUKI_DOSVM_PRESENT_BANDS:
+        if (!(last_events&CIUKI_DOSVM_EVENT_VIDEO)) { assert(c->presentation.redraw); nonvideo_presents++; }
         if (scenario != 6) assert(entered && clock_ms > enter_ms + 500 && !error_seen);
         presents++;
         c->changed = 1; c->presentation.bands[0] = 5; c->presentation.bands[1] = 2;
@@ -212,7 +218,8 @@ void du_progress_paint(struct du_canvas *c,struct du_rect b,int value,int total,
 void du_well(struct du_canvas *c,struct du_rect b,uint32_t ink) { du_fill(c,b,ink); }
 int main(int argc, char **argv)
 {
-    assert(argc == 2); scenario = atoi(argv[1]);
+    assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
+    if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
     assert(scenario>=0 && scenario<11+(int)(sizeof(settings_cases)/sizeof(settings_cases[0])));
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG",
                       scenario>=17 ? (char *)settings_cases[scenario-11].memory_arg : NULL};
@@ -242,6 +249,11 @@ int main(int argc, char **argv)
     if (error_seen) assert(error_seen==1);
     if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : 1u)); /* fullscreen's static page shares the title */
     assert(damage_count);
+    if (nonvideo) {
+        assert((nonvideo==1 ? timeout_waits : state_waits)>10);
+        assert(nonvideo_presents==(scenario==0 ? 1u : scenario==8 ? 2u : 0u));
+        printf("PASS no-VIDEO events: TIMEOUT=%u STATE=%u redraw_presents=%u scenario=%d\n",timeout_waits,state_waits,nonvideo_presents,scenario);
+    }
     printf("PASS dosbox loading replay scenario=%d full_damage=%u bar_updates=%u max_bar_per_second<=4 settings_paints=%u settings_damage=%u error_paints=%d notice_paints=%u loading_static=%u\n",
            scenario,full_damage,bar_updates,settings_seen,settings_damage,error_seen,notice_seen,loading_seen);
     return 0;

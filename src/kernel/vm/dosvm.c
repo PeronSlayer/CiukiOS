@@ -74,7 +74,10 @@ static bool dosvm_in_irq(const struct dosvm *v)
 
 void dosvm_launch_video(struct dosvm *v)
 {
-    if (v->launch_armed && v->launch_exec && !v->launch_failed) v->launch_ready = true;
+    if (v->launch_armed && v->launch_exec && !v->launch_failed && !v->launch_ready) {
+        v->launch_ready = true;
+        dosvm_present_notify(v);
+    }
 }
 void dosvm_console_byte(struct dosvm *v, uint8_t byte)
 {
@@ -1343,7 +1346,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     kwait_init(&v->wake);
     kwait_init(&v->present_wait);
     v->present_wait.owner_preemptible = true;
-    v->present_due = v->present_sample_due = g_ticks;
+    v->present_due_us = v->present_sample_due_us = g_ticks * 1000u;
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
     if (e) goto fail;

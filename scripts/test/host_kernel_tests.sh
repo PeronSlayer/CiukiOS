@@ -335,7 +335,9 @@ if [[ -f /usr/include/x86emu.h ]]; then
     guest_cpu=(-DCIUKI_DOSVM_GUEST_CPU "$root/tests/host/dosvm_guest_cpu.c" -lx86emu)
 fi
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
@@ -357,7 +359,9 @@ for unit in vm_source opl3 mixer; do
         -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_cost_$unit.o"
 done
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \

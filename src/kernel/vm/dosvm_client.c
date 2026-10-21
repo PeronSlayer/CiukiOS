@@ -150,7 +150,8 @@ static uint32_t present_events(struct present_request *r)
     if (!b->observed || b->state != public_state(v) || b->flags != status_flags(v) || b->reason != reason)
         events |= CIUKI_DOSVM_EVENT_STATE;
     if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
-    if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due) &&
+    if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
+        (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
         (b->video_pending || !b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
          b->starts != v->video_starts || b->mode != v->vbe_mode || b->vbe_changes != v->present_vbe_changes ||
          (v->video_geometry.text && b->phase != wait_phase()))) events |= CIUKI_DOSVM_EVENT_VIDEO;
@@ -178,7 +179,7 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
         b->changes = v->vga.changes; b->display = v->vga.display_changes;
         b->starts = v->video_starts; b->mode = v->vbe_mode;
         b->vbe_changes = v->present_vbe_changes; b->phase = wait_phase();
-        v->present_due = deadline_after_ms(c->wait.frame_ms);
+        v->present_due_us = dosvm_vga_next_due(v->present_due_us, dosvm_vga_period_us(v, g_ticks), g_ticks);
     }
     b->state = public_state(v); b->flags = status_flags(v);
     b->reason = v->fullscreen_error ? (uint32_t)v->fullscreen_error : (uint32_t)v->info.reason;
@@ -208,7 +209,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
     bool direct = op == CIUKI_DOSVM_WAIT_PRESENT || op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS;
-    int e = direct ? ua_read(p->memory, &c, tf->ecx, sizeof(c)) : copy_from_user(&c, tf->ecx, sizeof(c));
+    int e = direct ? ua_user_read(p->memory, &c, tf->ecx, sizeof(c)) : copy_from_user(&c, tf->ecx, sizeof(c));
     if (e) return e;
     if (c.version != CIUKI_DOSVM_VERSION) return -EOPNOTSUPP;
     if (c.size != sizeof(c)) return -EINVAL;
@@ -372,7 +373,13 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (e >= 0) {
                 /* A cadence-deferred call must not acknowledge the pending
                  * frame. The last store may otherwise never reach the window. */
-                if (v->present_samples != samples) b->video_pending = false;
+                if (v->present_samples != samples) {
+                    b->video_pending = false;
+                    /* WAIT and PRESENT share the sampled frame's phase,
+                     * including when rendering was delayed by other work. */
+                    v->present_due_us = v->video_due_us;
+                    v->present_sample_due_us = v->video_due_us;
+                }
                 c.changed = (uint32_t)e; e = 0; video_mode(v, &c);
                 if (op == CIUKI_DOSVM_PRESENT_BANDS) {
                     c.presentation.bands[0] = (uint32_t)v->video_bands;
@@ -387,7 +394,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             else e = window_input(b, &c.event);
         }
     }
-    if (!e) e = direct ? ua_write(p->memory, tf->ecx, &c, sizeof(c)) : copy_to_user(tf->ecx, &c, sizeof(c));
+    if (!e) e = direct ? ua_user_write(p->memory, tf->ecx, &c, sizeof(c)) : copy_to_user(tf->ecx, &c, sizeof(c));
 out:
     if (op == CIUKI_DOSVM_CREATE && e)
         klog("[launch] name=dosbox pid=%u error=%d stage=vm-create window=%s", p->pid, e, c.name);

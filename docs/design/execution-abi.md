@@ -2317,7 +2317,10 @@ other event). Events may be combined. The first observation reports the
 current state and video; later observations acknowledge only returned video
 events. A VIDEO observation remains pending until PRESENT actually samples it;
 a cadence-deferred PRESENT does not acknowledge it. VIDEO is frame paced even
-when an overlay suppresses presentation.
+when an overlay suppresses presentation. Internally, absolute microsecond
+deadlines retain fractional phase and are quantized once to the host tick;
+the rounded `frame_ms` is only a timeout bound. A completed PRESENT shares
+its next sample deadline with WAIT, including after a delayed sample.
 WAIT_PRESENT never writes the surface, so it is also safe during loading.
 A timeout does not consume VGA dirt. The application passes the returned
 frame period to its next wait and services desktop messages between waits.
@@ -2335,7 +2338,8 @@ Predicates compare only scalar observations; safe VM/deferred checkpoints
 sample direct VGA/VBE dirty pages at most once per frame and notify satisfied
 waiters without awarding an I/O boost. PRESENT never wakes an idle VM.
 
-Wait/present command copies use bounded `ua_read`/`ua_write` transactions;
+Wait/present command copies use bounded `ua_user_read`/`ua_user_write` transactions,
+checking readable input and writable output inside each range reservation;
 they do not retain/pin a pageable user command across the sleep. Copyout may
 return EFAULT if another thread unmapped/protected the record. The surface
 already owns resident MM_USER_SHARED backing, retained for the binding's

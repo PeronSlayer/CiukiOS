@@ -62,3 +62,66 @@ static void dosvm_wait_dependency_test(void)
     }
     puts("F3-52 VM wait donation: base7 <- focused9/input11; expiry ->9; false notifications stay asleep; wake/timeout/signal/waiter or producer death withdraw; producer retires no lock hold; no I/O boost PASS");
 }
+
+static unsigned frame_load_vm, frame_load_desktop, frame_load_device, frame_load_max_ready;
+static bool frame_load_boost;
+static void frame_load_hook(void)
+{
+    uint32_t saved=flags; flags=0x200;
+    latency_switch_hook=0; /* This hook drives real dispatches, without recursion. */
+    uint64_t start=g_ticks, desktop_ready=g_ticks;
+    CHECK(middle.state==T_BLOCKED && middle.waiting_on==&frame_wait);
+    CHECK(normal.inherited_priority==(frame_load_boost ? 11u : 9u));
+    bool notified=false;
+    for (unsigned turns=0;g_current!=&middle;turns++) {
+        CHECK(turns<100 && g_ticks-start<50);
+        struct task *ran=g_current;
+        if (ran==&normal) frame_load_vm++;
+        if (ran==&ui) {
+            unsigned latency=(unsigned)(g_ticks-desktop_ready);
+            if (latency>frame_load_max_ready) frame_load_max_ready=latency;
+            frame_load_desktop++;
+        }
+        if (ran==&hog) frame_load_device++;
+        run_tick(0);
+        CHECK(device_used<=4 && device_cpu_total<=4*g_tsc_per_ms);
+        if (!notified && g_ticks-start>=30 && ran==&normal) {
+            frame_ready=true; kwait_wake_ready(&frame_wait); notified=true;
+            CHECK(!normal.inherited_priority && middle.state==T_READY);
+        }
+        if (ran==&hog) { task_device_deadline(&hog,g_ticks+3); task_sleep_ms(2); }
+        else if (ran==&ui) { desktop_ready=g_ticks+1; task_sleep_ms(1); }
+        else kpreempt_point();
+    }
+    CHECK(notified); flags=saved;
+}
+static void dosvm_wait_combined_load(void)
+{
+    for (unsigned boost=0;boost<2;boost++) {
+        priority_reset(); frame_load_boost=boost!=0;
+        frame_load_vm=frame_load_desktop=frame_load_device=frame_load_max_ready=0;
+        normal.user=false; strcpy(normal.name,"dosvm"); strcpy(middle.name,"dosbox");
+        task_set_base(&ui,P_NORMAL,9); /* Desktop remains at priority 9. */
+        task_focus(&middle); audio_focus=&normal;
+        task_start(&normal); task_start(&ui); task_start(&hog);
+        running(&middle); kwait_init(&frame_wait); frame_wait.owner_preemptible=true;
+        for (unsigned frame=0;frame<30;frame++) {
+            frame_ready=false;
+            if (boost) task_input_delivered(&middle);
+            kwait_set_owner(&frame_wait,&normal); latency_switch_hook=frame_load_hook;
+            CHECK(kwait_wait_until(&frame_wait,frame_condition,0,g_ticks+50));
+            CHECK(g_current==&middle && !normal.inherited_priority && !middle.waiting_on);
+            kwait_set_owner(&frame_wait,0);
+        }
+        /* Eight ordinary focus ticks can straddle two admitted 4-ms device
+         * windows (16 ms total). A donated input boost adds its existing
+         * 20-ms expiry. This is a combined-load bound, not the device-free
+         * F3-41 fixture's 8-ms ready delay. No scheduler policy changes. */
+        CHECK(frame_load_max_ready<=(boost ? 36u : 16u));
+        CHECK(frame_load_vm && frame_load_desktop>=30 && frame_load_device>=30);
+        CHECK(!scheduler_stats.audio_urgent && !scheduler_stats.io_granted && ms(stretch_max)<=2);
+        printf("F3-52 combined donation=%u focused_vm=1 desktop_priority=9 frames=30 desktop_max_ready_ms=%u vm_ticks=%u desktop_turns=%u device_turns=%u device_max=4/10 urgent=0 stretch_ms=%u PASS\n",
+               boost ? 11u : 9u,frame_load_max_ready,frame_load_vm,frame_load_desktop,frame_load_device,ms(stretch_max));
+        CHECK(!waiters && !owned_queues);
+    }
+}

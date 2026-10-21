@@ -36,9 +36,11 @@ Contrary to the initial evidence's surface-pin attribution, `surface_write`
 writes already resident, retained `MM_USER_SHARED` pages without a user pin.
 Their 300 pages (640 x 480 x 4 / 4096) already exist for the surface lifetime.
 The explicit `ua_pin` in `dosvm_client_syscall` pins the 136-byte command.
-Use bounded `ua_read`/`ua_write` for wait/present records: their mutation
-reservations protect the copy and resolve only the record's one or two pages, with
-no `ua_pin` residency walk. Retain the surface as before, write only damaged
+Amendment 1 replaces the supervisor `ua_read`/`ua_write` copies with bounded
+`ua_user_read`/`ua_user_write` transfers. A mutation reservation precedes the
+complete range permission check; per-page resolution also enforces user
+permissions. It covers only the copy and resolves the record's one or two
+pages, with no separate `ua_pin` residency walk. Retain the surface as before, write only damaged
 rows, and add no surface commitment or lifetime pin. Other operations retain
 the existing record reservation. Host pin counts and test results are in
 `build/codex/f3-52-report.md`.
@@ -60,24 +62,48 @@ than for `g_current` at notification time. The host replay explicitly switches
 to the producer context for notification and covers record invalidation during
 the sleep, stop/fault, launch failure, suspension and linear VBE stores.
 
-Application replay covers 20 launch/overlay scenarios. Initial loading content
+Application replay covers 20 launch/overlay scenarios plus TIMEOUT-only and
+STATE-only variants of launch, stop/failure, timeout and fullscreen refusal.
+Initial loading content
 is painted once; subsequent progress updates affect only the 400x18 bar at
 intervals of at least 250 ms. Settings paint only on selection/detail changes
 and restore only their saved 480x280 rectangle. Startup errors and fullscreen
 refusal notices paint once per change. The existing launch records and copy
 remain intact.
 
-Qualification on 2026-10-21: scheduler/sampler and application replays pass.
-The focused VM replay reaches all functional/pin PASS records, but its normal
-LeakSanitizer exit check fails because ptrace is prohibited in this sandbox;
-leak detection remains enabled. `make CAP= apps` rejects the changed pinned
-SDK tools; the kernel builder rejects the changed Win32 tools (23.1.3 installed,
-23.1.1 pinned at execution). This implementation did not change pins; external
-23.1.3 pin updates appeared after these checks and require lead confirmation.
-Direct compilation of nine affected or
-closely related kernel translation units with the production CFLAGS passes;
-this does not qualify replacement tools or provide a linked kernel. Exact
-commands, results and remaining lead validation are in the report.
+Amendment 1 research (2026-10-21): Linux's
+[user-access helpers](https://raw.githubusercontent.com/torvalds/linux/v6.12/include/linux/uaccess.h)
+keep checked user transfers distinct from privileged backing access. The
+previous direct-map supervisor transfer could read PROT_NONE or write a
+read-only record; a separate permission check before reserving the range
+would race protection changes. Real production-uaddr tests now pass records
+across page/extent boundaries through the DOSVM syscall, including another
+thread protecting the output while WAIT sleeps. No record reservation remains
+during the wait, and a failed whole-range output check changes no bytes.
+
+WAIT, dirty sampling and VGA/VBE PRESENT retain absolute microsecond phases;
+each deadline is quantized once, using the F3-41 sample policy. A completed
+PRESENT updates WAIT and dirty sampling to the presenter's actual next deadline. This
+avoids both repeated ceiling drift and alternating deferred frames when the
+sample starts late. The host replay checks 140 successive WAIT-to-PRESENT
+samples each at 14268 us (70.09 Hz) and 28536 us (35 Hz presentation policy),
+with trapped and direct stores, a delayed first sample, 0..3 ms delayed
+samples and both adjacent host-tick intervals (560 samples total).
+
+The wait fake checks predicates only at enqueue, production notification, or
+the timeout; timer ticks dispatch the real deferred VM worker. Tests contain
+no explicit present checkpoint/notification. Negative controls that remove the
+console wake or the worker checkpoints both fail functional assertions.
+Console, ready, launch visibility,
+stop and fullscreen transitions exercise their production entry points;
+signal/exit delivery remains a scheduler transport seam. Real scheduler/sync
+replays combine the blocked window's donation, focused VM, priority-9 desktop
+and admitted device load. Eight ordinary focus ticks can overlap two admitted
+4-ms device windows: the combined replay allows 16 ms desktop ready latency;
+a donated input boost adds its existing 20 ms expiry (36 ms bound).
+No scheduling policy or device budget is changed. Exact measured results,
+toolchain qualification and remaining lead work are in
+`build/codex/f3-52-report.md`.
 
 Final review also rechecked the F3-41 sources:
 [QEMU 10.1 VGA row rendering](https://raw.githubusercontent.com/qemu/qemu/v10.1.0/hw/display/vga.c)

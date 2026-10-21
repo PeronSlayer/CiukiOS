@@ -162,7 +162,7 @@ struct dosvm {
     uint32_t continuation;
     struct kwait wake;
     struct kwait present_wait; /* request dependency on the VM worker */
-    uint64_t present_due, present_sample_due;
+    uint64_t present_due_us, present_sample_due_us;
     uint32_t console_sequence, present_vbe_changes, present_samples;
     struct {
         bool sleeping, seen;
@@ -438,6 +438,8 @@ void dosvm_idle_wake(struct dosvm *);
 void dosvm_present_notify(struct dosvm *);
 void dosvm_present_checkpoint(struct dosvm *);
 unsigned dosvm_vga_period_ms(struct dosvm *);
+uint64_t dosvm_vga_period_us(struct dosvm *, uint64_t tick);
+uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period_us, uint64_t tick);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
 { return v->probe ? v->probe : "vm-boot"; }

@@ -200,8 +200,14 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
 {
     const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
     if (!m || !v->vbe_buffer.used) return -EIO;
-    if (v->video_presented && (tick-v->video_tick)*1000u<dos_video_frame_us(m)) return 0;
+    uint64_t period=dos_video_frame_us(m);
+    if (!v->video_presented || v->video_period_us!=period) {
+        v->video_due_us=v->video_presented ? v->video_tick*1000u+period : tick*1000u;
+        v->video_period_us=period;
+    }
+    if (v->video_presented && tick<v->video_due_us/1000u) return 0;
     v->present_samples++;
+    v->video_due_us=dosvm_vga_next_due(v->video_due_us,period,tick);
     bool dirty=dosvm_vbe_dirty(v,true);
     if (v->video_presented && !dirty && v->video_display==v->vga.display_changes) return 0;
     uint32_t display=v->vga.display_changes;

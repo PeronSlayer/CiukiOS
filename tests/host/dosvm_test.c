@@ -39,6 +39,7 @@ static bool allocated[HOST_PAGES];
 static unsigned page_owner[HOST_PAGES];
 static unsigned contiguous_calls, fail_contiguous_at;
 static uint8_t *ram;
+void *dosvm_host_physical(uint32_t address) { return ram + address; }
 static unsigned cr3_reloads;
 static uint32_t cpu_cr3, cpu_flags = V86_IF, next_pfn = 4096;
 static uint32_t kpd[1024], kpd_phys;
@@ -197,6 +198,7 @@ void klog_diag(const char *fmt,...)
  * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake
  * scheduler's own task/stack storage uses harness_alloc instead. */
 static void *harness_alloc(size_t n) { if (allocation_fails()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
+void *dosvm_host_alloc(size_t n) { return harness_alloc(n); }
 void *kmalloc(size_t n) { return n > 2040 ? 0 : harness_alloc(n); }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 /* Generated from the unmodified production user-address-space section. */
@@ -263,14 +265,18 @@ bool gen_matches(gen_t a, gen_t b) { return a && a == b; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t t) { return g_ticks - t < (1ull << 63); }
 void kwait_init(struct kwait *q) { q->head=0; }
-void kwait_wake_all(struct kwait *q) { (void)q; }
-void kwait_wake_io(struct kwait *q) { (void)q; }
 static struct kwait *host_wait_queue;
 static kwait_cond_fn host_wait_condition;
 static void *host_wait_arg;
 static unsigned host_present_wakes;
+static bool host_wait_notified;
+void kwait_wake_all(struct kwait *q)
+{ if (q == host_wait_queue) host_wait_notified=true; }
+void kwait_wake_io(struct kwait *q) { kwait_wake_all(q); }
 void kwait_wake_ready(struct kwait *q)
-{ if (q == host_wait_queue && host_wait_condition && host_wait_condition(host_wait_arg)) host_present_wakes++; }
+{ if (q == host_wait_queue && host_wait_condition && host_wait_condition(host_wait_arg)) {
+    host_present_wakes++; host_wait_notified=true;
+} }
 void kwait_set_owner(struct kwait *q, struct task *t) { q->owner=t; }
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK((cpu_flags&V86_IF) && !m->owner); m->owner=g_current; }
@@ -284,12 +290,23 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn fn, void *arg, uint64_t unt
     struct kwait *previous=host_wait_queue;
     kwait_cond_fn previous_fn=host_wait_condition;
     void *previous_arg=host_wait_arg;
+    bool previous_notified=host_wait_notified;
     host_wait_queue=q; host_wait_condition=fn; host_wait_arg=arg;
+    host_wait_notified=false;
     q->head=(struct kwaiter *)&until;
     if (wait_register_hook) wait_register_hook();
-    while (!fn(arg) && !deadline_passed(until)) task_sleep_ms(1);
-    bool ready=fn(arg); q->head=0;
+    /* Recheck after enqueue, then evaluate only on a real notification or
+     * the deadline. Clock ticks run the production deferred VM worker; they
+     * must not silently poll the wait predicate on the caller's behalf. */
+    bool ready=fn(arg);
+    while (!ready && !deadline_passed(until)) {
+        while (!host_wait_notified && !deadline_passed(until)) task_sleep_ms(1);
+        host_wait_notified=false;
+        ready=fn(arg);
+    }
+    q->head=0;
     host_wait_queue=previous; host_wait_condition=previous_fn; host_wait_arg=previous_arg;
+    host_wait_notified=previous_notified;
     return ready;
 }
 static bool input_pending;
@@ -875,7 +892,10 @@ static void test_memory_services(bool locked)
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
-    if (getenv("CIUKI_VM_WAIT_PRESENT")) { test_wait_present(); test_client_boundary(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_WAIT_PRESENT")) {
+        test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
+        free(ram); fflush(stdout); return 0;
+    }
     if (getenv("CIUKI_VM_MEMORY_CHARGE")) { disk_memory_charge(); free(ram); return 0; }
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }

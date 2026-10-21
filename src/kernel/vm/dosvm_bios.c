@@ -377,6 +377,7 @@ static bool ready_record(struct dosvm *v)
     v->info.free_paragraphs = paragraphs; v->info.drive = v->line[25] - 'A';
     v->info.dos_ready = true;
     v->info.state = DOSVM_RUNNABLE;
+    dosvm_present_notify(v);
     return true;
 }
 void dosvm_expect(struct dosvm *v, const char *name)

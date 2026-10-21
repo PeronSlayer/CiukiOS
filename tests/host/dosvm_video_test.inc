@@ -18,6 +18,10 @@ static unsigned pins;
 static unsigned record_pin_walks, surface_rows;
 static bool caught_signal;
 static struct proc_thread window_thread;
+int dosvm_model_user_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_user_write(const struct uaddr *, uint32_t, const void *, uint32_t);
+int dosvm_model_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_write(const struct uaddr *, uint32_t, const void *, uint32_t);
 struct proc_thread *proc_thread_for(const struct task *t) { return t == &caller ? &window_thread : 0; }
 bool proc_signal_caught(struct proc_thread *t) { CHECK(t == &window_thread); return caught_signal; }
 struct process *proc_current(void) { return fake_current; }
@@ -73,6 +77,10 @@ int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t byte
     if (user_fault || dst > sizeof(user_mem) || bytes > sizeof(user_mem)-dst) return -EFAULT;
     memcpy(user_mem+dst,src,bytes); return 0;
 }
+int ua_user_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{ return u ? dosvm_model_user_read(u,dst,src,bytes) : ua_read(u,dst,src,bytes); }
+int ua_user_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{ return u ? dosvm_model_user_write(u,dst,src,bytes) : ua_write(u,dst,src,bytes); }
 
 /* ---- Helpers ---- */
 static struct v86_frame vf(unsigned ax, unsigned bx, unsigned cx, unsigned dx)
