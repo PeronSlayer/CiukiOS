@@ -2327,6 +2327,18 @@ PRESENT plus destination 8-line damage
 focused=1 enter, 0 return to window
 
 ```c
+#define CIUKI_DOSVM_GAME_QUERY 11u
+```
+
+launch.game input; state=present, changed=allocated bytes
+
+```c
+#define CIUKI_DOSVM_GAME_REMOVE 12u
+```
+
+exclusive backing-file removal; no VM handle
+
+```c
 #define CIUKI_DOSVM_BACKGROUND 10u
 ```
 

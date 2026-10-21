@@ -459,6 +459,9 @@ static int sound_settings(struct desktop *d, int client, unsigned request, unsig
     (void)d; assert(client == 0 && serial == 42);
     sound_calls++; sound_request = request; sound_event = event; return 0;
 }
+static unsigned install_requests;
+static int install_fixture(struct desktop *d,const char *path)
+{(void)d;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));install_requests++;return 0;}
 static void test_display_settings(void)
 {
     struct desktop d; struct ciuki_message m; struct desk_packet reply[DESK_TX_MAX];
@@ -492,6 +495,28 @@ static void test_display_settings(void)
     d.power.state = DESK_POWER_CLOSING; drain(&d, 0); v2(&d, 0, 500, &m);
     assert(queued(&d, 0, DESK_TASK_RESULT, reply) == 1 && reply[0].result == -EBUSY && sound_calls == 3);
     d.power.state = DESK_POWER_IDLE;
+    desk_message(&m,DESK_SETTINGS,24);desk_put32(m.data+4,42);desk_put32(m.data+8,DESK_SETTINGS_PROGRAMS);
+    d.sh.want_reload=0;d.v3_links_next=123;
+    d.clients[0].program=0;drain(&d,0);v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && !d.sh.want_reload);
+    d.clients[0].program=DESK_APP_CONTROL;drain(&d,0);v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && d.sh.want_reload==3 && !d.v3_links_next);
+    const char *installer="/mnt/d/SETUP.EXE";unsigned length=(unsigned)strlen(installer);
+    desk_message(&m,DESK_LAUNCH,23+length);desk_put32(m.data+4,43);desk_put32(m.data+8,7);
+    memcpy(m.data+12,"install",7);desk_put32(m.data+19,length);memcpy(m.data+23,installer,length);
+    d.install_program=install_fixture;install_requests=0;
+    d.clients[0].program=0;drain(&d,0);v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && !install_requests);
+    d.clients[0].program=DESK_APP_CONTROL;drain(&d,0);v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && install_requests==1);
+    d.power.state=DESK_POWER_CLOSING;drain(&d,0);v2(&d,0,500,&m);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && install_requests==1);
+    assert(install_program(&d,"/Programs/SETUP.EXE")==-EINVAL);
+    assert(install_program(&d,"/mnt/d/GAME.EXE")==-EINVAL);
+    assert(install_program(&d,"/mnt/d/../SETUP.EXE")==-EINVAL);
+    puts("PASS f2-87 shell: Control Panel-only Install, shutdown refusal, removable installer policy, inventory refresh");
+    d.power.state=DESK_POWER_IDLE;
+    desk_message(&m,DESK_SETTINGS,24);desk_put32(m.data+4,42);
     desk_put32(m.data + 8, DESK_SETTINGS_DISPLAY); desk_put32(m.data + 12, 0x118);
     desk_put32(m.data + 20, 1); drain(&d, 0); v2(&d, 0, 500, &m);
     assert(display_calls == 2 && !queued(&d, 0, DESK_TASK_RESULT, reply) && sound_calls == 3);
@@ -796,6 +821,12 @@ static void test_games_menu(void)
         assert(dosbox_spawns==before+1 && !d.sh.levels && !d.launch_argv[0] && !d.launch_argv[1]);
         expect_dosbox[0]=expect_dosbox[1]=NULL;
     }
+    d.games_removed=2;
+    desk_menu_open(&d,SH_MENU_GAMES,0,0);
+    assert(item_at(&d.sh.menus[0],"DOOM (shareware)")<0);
+    assert(item_at(&d.sh.menus[0],"Wolfenstein 3D (shareware)")>=0);
+    assert(item_at(&d.sh.menus[0],"Quake (shareware)")>=0);
+    desk_menu_close(&d);d.games_removed=0;
     assert(DESK_GAME_COUNT == 3 && !strcmp(desk_games[2].label,"Quake (shareware)") &&
            !strcmp(desk_games[2].title,"Quake") && !strcmp(desk_games[2].command,"\\QUAKE\\QUAKE.EXE"));
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));

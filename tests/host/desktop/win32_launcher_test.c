@@ -8,7 +8,10 @@
 #include <unistd.h>
 int desk_w32_launcher_main(int,char **);
 static char path[260],words[34][1600],cwd[512];
-static unsigned maps,launched,sent;
+static unsigned maps,launched,sent,waits;
+static int wait_status,reply_result;
+pid_t fixture_waitpid(pid_t pid,int *status,int options)
+{assert(pid==123 && !options);waits++;*status=wait_status;return pid;}
 ciuki_pid_t ciuki_spawn(const char *p,char *const argv[],char *const env[],const struct ciuki_spawn_fd *fds,uint32_t count,uint32_t flags)
 {
     assert(!flags && env && !strcmp(env[0],"LC_ALL=C"));
@@ -19,8 +22,10 @@ ciuki_pid_t ciuki_spawn(const char *p,char *const argv[],char *const env[],const
     return 123;
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
-{assert(fd==4 && !flags && m->length==8);sent++;return 0;}
+{assert(fd==4 && !flags && m->length==8);sent++;reply_result=(int32_t)desk_get32(m->data);return 0;}
 int fixture_close(int fd){assert(fd==3 || fd==4);return 0;}
+int desk_w32_launch_wait(enum desk_w32_kind k,const struct desk_launch_record *r)
+{return desk_w32_launch(k,r);}
 int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *record)
 {(void)kind;(void)record;assert(0);return 0;}
 int main(int argc,char **argv)
@@ -36,5 +41,9 @@ int main(int argc,char **argv)
     assert(!desk_w32_launcher_main(5,args));assert(!strcmp(path,"/Programs/dosbox") && maps==1);
     assert(!strcmp(words[1],"--channel-fd=3") && !strcmp(words[2],"C:\\GAMES\\TEST.COM -fast"));
     args[4]="D:\\bad";assert(desk_w32_launcher_main(5,args)==1 && launched==2);
-    assert(sent==3);puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;
+    assert(sent==3);
+    char *wait_args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove",argv[1],"--wait",NULL};
+    unsigned before=waits;assert(!desk_w32_launcher_main(6,wait_args) && reply_result==0 && waits==before+1);
+    wait_status=3<<8;assert(desk_w32_launcher_main(6,wait_args)==1 && reply_result==-EIO && waits==before+2);
+    puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;
 }

@@ -33,7 +33,7 @@ int desk_w32_identify(const char *path)
         }
     } else {
         size_t len=strlen(path);
-        if (len>=4 && !strcasecmp(path+len-4,".com") && n) result=DESK_W32_DOS;
+        if (len>=4 && (!strcasecmp(path+len-4,".com") || !strcasecmp(path+len-4,".bat")) && n) result=DESK_W32_DOS;
     }
     if(ferror(f))result=-EIO;
     if(fclose(f))result=-EIO;
@@ -46,6 +46,15 @@ int ciuki_win32_shell_launch(const struct desk_launch_record *record)
     if(error)return error;
     int kind=desk_w32_identify(path);
     return kind<0 ? kind : desk_w32_launch((enum desk_w32_kind)kind,record);
+}
+
+int ciuki_win32_shell_launch_wait(const struct desk_launch_record *record)
+{
+    if(!record || !desk_launch_valid(record))return -EINVAL;
+    char path[260];int e=desk_w32_native_path(record->target,path,sizeof(path));
+    if(e)return e;
+    int kind=desk_w32_identify(path);
+    return kind<0 ? kind : desk_w32_launch_wait((enum desk_w32_kind)kind,record);
 }
 
 /* Windows CRT quote/backslash rules; caller supplies its argv bound. */

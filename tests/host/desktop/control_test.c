@@ -110,6 +110,39 @@ static void check_preview(void)
  * 4:3 scene in the 1024x704 work area, Fill covers it. */
 static int preview_band(void) { return a.preview[72 * 192] == desk_theme_named(a.cfg.theme)->desktop; }
 
+static unsigned program_removes,program_changes,program_installs;
+static int installed_programs(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
+{
+    (void)ctx;assert(cap>=2);
+    out[0]=(struct desk_uninstall_entry){.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192};
+    out[1]=(struct desk_uninstall_entry){.name="Desktop",.no_remove=1,.system_component=1};return 2;
+}
+static int remove_program(void *ctx,const struct desk_uninstall_entry *r)
+{(void)ctx;assert(r->game==2);program_removes++;return 0;}
+static int install_program(void *ctx,const char *path)
+{(void)ctx;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));program_installs++;return 0;}
+static void programs_changed(void *ctx){(void)ctx;program_changes++;}
+static void programs_page(void)
+{
+    attach(CP_HOME);
+    a.host.uninstall_list=installed_programs;a.host.program_remove=remove_program;
+    a.host.program_install=install_program;a.host.programs_changed=programs_changed;
+    cp_open(&a,CP_UNINSTALL);assert(a.uninstall_count==2 && du_get(&u,982)->column_count==4);
+    assert(!strcmp(a.uninstall_items[0].text[1],"1.9") && !strcmp(a.uninstall_items[0].text[2],"id Software"));
+    at_click_widget(&u,983);
+    assert(!program_removes && du_dialog_id(&u)==987 && u.dialog.cancel==1);
+    assert(strstr(u.dialog.text,"DOOM") && strstr(u.dialog.text,"cannot be restored without reinstalling the system"));
+    at_tap(&u,DU_KEY_ESC);assert(!program_removes);
+    at_click_widget(&u,983);
+    struct du_rect b=du_dialog_button(&u,0);at_click(&u,b.x+b.w/2,b.y+b.h/2);
+    assert(program_removes==1 && program_changes==1 && strstr(du_get(&u,3)->text,"Program removed"));
+    struct du_event select={.type=DU_EV_SELECT,.id=982,.index=1};u.event(&u,&select,u.user);
+    assert(du_get(&u,983)->disabled);at_click_widget(&u,983);assert(!du_dialog_id(&u) && program_removes==1);
+    at_click_widget(&u,986);assert(du_dialog_id(&u)==988);
+    du_dialog_close(&u);struct du_event chosen={.type=DU_EV_DIALOG,.id=988,.index=0,.text="/mnt/d/SETUP.EXE"};u.event(&u,&chosen,u.user);
+    assert(program_installs==1);
+    cp_detach(&a);du_release(&u);
+}
 int main(int argc, char **argv)
 {
     assert(argc == 3 || argc == 4);
@@ -117,6 +150,7 @@ int main(int argc, char **argv)
     folder = argv[2];
     const char *renders = argc == 4 ? argv[3] : NULL;
 
+    programs_page();
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);
     assert(!strcmp(a.cfg.theme, "Ciuki Blue") && !strcmp(desk_theme->name, "Ciuki Blue"));

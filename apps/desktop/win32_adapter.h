@@ -10,12 +10,14 @@ uint32_t desk_w32_exchange(const void *, uint32_t, void *, uint32_t, uint32_t *)
 int ciuki_win32_uninstall_list(struct desk_uninstall_entry *, unsigned);
 int ciuki_win32_uninstall_run(const char *);
 int ciuki_win32_shell_launch(const struct desk_launch_record *);
+int ciuki_win32_shell_launch_wait(const struct desk_launch_record *);
 int desk_w32_flush(void);
 int desk_w32_ready(void); /* successful read-only registry round trip */
 /* Native binding: PE/DOS prepare off the input thread; ELF hands off to
  * the existing desktop launcher and preserves its launch-owned authority. */
 enum desk_w32_kind { DESK_W32_PE, DESK_W32_ELF, DESK_W32_DOS };
 int desk_w32_launch(enum desk_w32_kind, const struct desk_launch_record *);
+int desk_w32_launch_wait(enum desk_w32_kind, const struct desk_launch_record *);
 int desk_w32_identify(const char *native_path); /* kind or negative errno */
 int desk_w32_native_path(const char *, char *, size_t);
 int desk_w32_arguments(char *, char **, unsigned);

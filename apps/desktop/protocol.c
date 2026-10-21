@@ -558,7 +558,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         } else if (p->request == DESK_SETTINGS_SOUND_TEST) {
             if (p->values[0] >= SOUND_EVENTS || p->values[1] || p->values[2]) return 0;
         } else if ((p->request != DESK_SETTINGS_RELOAD && p->request != DESK_SETTINGS_SOUND_RELOAD &&
-                    p->request != DESK_SETTINGS_AUDIO_TEST && p->request != DESK_SETTINGS_OPEN_POWER) || p->values[0] || p->values[1] || p->values[2]) return 0;
+                    p->request != DESK_SETTINGS_AUDIO_TEST && p->request != DESK_SETTINGS_OPEN_POWER && p->request != DESK_SETTINGS_PROGRAMS) || p->values[0] || p->values[1] || p->values[2]) return 0;
         n = 24;
         break;
     case DESK_MIXER_SET:

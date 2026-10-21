@@ -203,6 +203,10 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (g->width != CIUKI_DOSVM_WIDTH || g->height != CIUKI_DOSVM_HEIGHT ||
             g->format != CIUKI_SURFACE_XRGB8888 || g->stride != CIUKI_DOSVM_WIDTH * 4) { e = -EINVAL; goto out; }
         if (owns_vm(p->pid)) { e = -EBUSY; goto out; }
+        if(c.launch.game){
+            uint32_t bytes=0;e=dosvm_game_program(c.launch.game,false,&bytes);
+            if(e)goto out;
+        }
         /* f3-21: Alt+Enter only queues a request; the display worker polls
          * it. Without a prior mode switch nothing else would (QEMU case
          * vm-fullscreen-qemu-t23 was refused only at cleanup, -EPERM). */

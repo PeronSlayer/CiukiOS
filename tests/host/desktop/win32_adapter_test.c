@@ -19,6 +19,8 @@ uint32_t desk_w32_exchange(const void *in,uint32_t n,void *out,uint32_t cap,uint
     if(malformed)((struct w32r_reply *)out)->data_bytes=W32R_DATA+1;
     return e;
 }
+int desk_w32_launch_wait(enum desk_w32_kind k,const struct desk_launch_record *r)
+{return desk_w32_launch(k,r);}
 int desk_w32_launch(enum desk_w32_kind k,const struct desk_launch_record *r)
 {kind=k;launched=*r;launches++;return 123;}
 static void value(struct wr_key *key,const char *name,const char *text)
@@ -62,6 +64,29 @@ static void registry(const char *dir)
     int count=ciuki_win32_uninstall_list(list,32);assert(count==1);
     assert(!strcmp(list[0].name,"Fixture") && !strcmp(list[0].version,"1.2") && !strcmp(list[0].publisher,"Ciuki fixture"));
     assert((unsigned char)list[32].key[0]==0xa5);
+    struct wr_key *machine=root;
+    root=wr_child(&server,server.roots[1],".DEFAULT");assert(root);
+    const char *parts[]={"Software","Microsoft","Windows","CurrentVersion","Uninstall"};
+    for(unsigned j=0;j<5;j++){struct wr_key *next=wr_child(&server,root,parts[j]);if(!next)next=wr_add_key(&server,root,parts[j],0);assert(next);root=next;}
+    struct wr_key *user=fixture("fixture","User fixture",command);root=machine;
+    const uint8_t one[]={1,0,0,0},zero[]={0,0,0,0};
+    assert(!wr_put(&server,user,"EstimatedSize",4,one,4));
+    assert(!wr_put(&server,user,"NoModify",4,one,4));
+    count=ciuki_win32_uninstall_list(list,32);assert(count==2);
+    int user_found=0;for(int j=0;j<count;j++)if(!strcmp(list[j].key,"HKCU/fixture")){
+        assert(list[j].no_modify && !list[j].no_remove && list[j].estimated_kb==1);user_found=1;
+    }assert(user_found && ciuki_win32_uninstall_run("HKCU/fixture")==123);
+    assert(!wr_put(&server,user,"NoRemove",4,one,4));
+    assert(ciuki_win32_uninstall_run("HKCU/fixture")==-EACCES);
+    assert(!wr_put(&server,user,"NoRemove",4,zero,4));
+    assert(!wr_put(&server,user,"SystemComponent",4,one,4));
+    assert(ciuki_win32_uninstall_run("HKCU/fixture")==-EACCES);
+    struct wr_key *protected=fixture("protected","Protected fixture","");
+    assert(!wr_put(&server,protected,"NoRemove",4,one,4));
+    count=ciuki_win32_uninstall_list(list,32);assert(count==3);
+    int protected_found=0;for(int j=0;j<count;j++)if(!strcmp(list[j].key,"protected")){
+        assert(list[j].no_remove && !list[j].command[0]);protected_found=1;
+    }assert(protected_found);
     for(unsigned i=0;i<40;i++){char name[32];snprintf(name,sizeof(name),"program-%u",i);fixture(name,name,"C:\\fixture.exe /x");}
     assert(ciuki_win32_uninstall_list(list,33)==32);
     assert((unsigned char)list[32].key[0]==0xa5);
@@ -146,6 +171,6 @@ int main(int argc,char **argv)
     r.target[0]=0;assert(ciuki_win32_shell_launch(&r)==-EINVAL);
     char native[260];assert(desk_w32_native_path("",native,sizeof(native))==-EINVAL);assert(!desk_w32_native_path("C:\\Program Files\\a.exe",native,sizeof(native)));
     assert(!strcmp(native,"/Program Files/a.exe"));assert(desk_w32_native_path("D:\\a.exe",native,sizeof(native))==-ENODEV);
-    assert(launches==5 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; exact bounded record and path translation");
+    assert(launches==6 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; exact bounded record and path translation");
     return 0;
 }

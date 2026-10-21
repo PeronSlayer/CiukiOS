@@ -11,6 +11,7 @@ int program_tree(struct fat_volume *v,unsigned game,bool remove,uint32_t *size)
     if(remove && v->readonly)return -FS_EROFS;
     size_t bytes=sizeof(struct frame)*PROGRAM_DEPTH;
     struct frame *stack=fs_contig_alloc(bytes);if(!stack)return -FS_ENOMEM;
+    memset(stack,0,bytes);
     int e=fat_lookup(v,v->root,names[game-1],&stack[0].entry);
     if(!e && !(stack[0].entry.attr&FAT_ATTR_DIR))e=-FS_ENOTDIR;
     unsigned depth=e ? 0 : 1,budget=PROGRAM_ENTRIES;

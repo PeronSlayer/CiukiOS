@@ -129,11 +129,11 @@ int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
             if(error)break;
             unsigned n=r->header.name_bytes;
             if(!n || n+5>=sizeof(out[count].key) || !desk_utf8_valid(r->bytes,n) ||
-               strchr((char *)r->bytes,'\') || strchr((char *)r->bytes,'/'))continue;
+               strchr((char *)r->bytes,'\\') || strchr((char *)r->bytes,'/'))continue;
             struct desk_uninstall_entry entry={0};
             /* Bare HKLM keys remain compatible; HKCU has a namespace prefix. */
             snprintf(entry.key,sizeof(entry.key),"%s%s",hive ? "HKCU/" : "",r->bytes);
-            error=call(r,W32R_OPEN,root,(char *)r->bytes,NULL,0);
+            error=call(r,W32R_OPEN,root,entry.key+(hive ? 5 : 0),NULL,0);
             if(error==2){error=0;continue;}
             if(error)break;
             uint32_t key=r->header.key;
@@ -162,7 +162,7 @@ int ciuki_win32_uninstall_run(const char *key)
     if(!key)return -EINVAL;
     uint32_t hive=W32R_HKLM;
     if(!strncmp(key,"HKCU/",5)){hive=W32R_HKCU;key+=5;}
-    if(!*key || strlen(key)>=255 || strchr(key,'\') || strchr(key,'/'))return -EINVAL;
+    if(!*key || strlen(key)>=255 || strchr(key,'\\') || strchr(key,'/'))return -EINVAL;
     char path[sizeof(uninstall)+260];snprintf(path,sizeof(path),"%s\\%s",uninstall,key);
     struct response *r=malloc(sizeof(*r));if(!r)return -ENOMEM;
     struct desk_launch_record *record=malloc(sizeof(*record));
@@ -181,7 +181,7 @@ int ciuki_win32_uninstall_run(const char *key)
     }
     pthread_mutex_unlock(&registry_lock);free(r);
     int result=error ? native_error(error) : !desk_uninstall_command(command,record) ? -EINVAL :
-        ciuki_win32_shell_launch(record);
+        ciuki_win32_shell_launch_wait(record);
     free(record);return result;
 }
 int desk_w32_flush(void)

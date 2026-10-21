@@ -12,6 +12,12 @@ ssize_t cp_test_pread(int,void *,size_t,off_t);
 #undef pread
 #include <assert.h>
 
+/* These callbacks are retained by ASan's global store instrumentation, but
+ * this focused reader fixture must never invoke program management. */
+int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
+{(void)op;(void)c;assert(0);return -1;}
+void cfg_icon_forget(struct ciuki_settings *s,const char *name)
+{(void)s;(void)name;assert(0);}
 static const char *fixture;
 static unsigned reads, interruptions;
 static int fail_open;

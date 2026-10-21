@@ -139,6 +139,8 @@ struct desk_power_sequence {
 };
 struct desk_render_cache;
 struct desktop {
+    unsigned games_removed;
+    int (*install_program)(struct desktop *,const char *);
     struct desk_ops ops;
     int display, input, output, focus, drag;
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */
