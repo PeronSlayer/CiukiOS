@@ -270,6 +270,7 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         }
         const unsigned char *in=ciuki_tls_read(c->tls,&bytes);
         if(in && bytes){
+            if(!j->transmitted){io_error(j,ECONNRESET);return;}
             if(bytes>CIUKI_HTTP_SLICE)bytes=CIUKI_HTTP_SLICE;
             ciuki_http_feed(j->http,in,bytes);ciuki_tls_read_ack(c->tls,bytes);
         }
@@ -282,7 +283,7 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         }
         if(budget){
             ssize_t r=recv(c->fd,buffer,budget,0);
-            if(r>0)ciuki_http_feed(j->http,buffer,(size_t)r);
+            if(r>0){if(!j->transmitted){io_error(j,ECONNRESET);return;}ciuki_http_feed(j->http,buffer,(size_t)r);}
             else if(!r)ciuki_http_eof(j->http);
             else if(errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR){io_error(j,errno);return;}
         }

@@ -29,6 +29,9 @@ struct ciuki_tls {
     bool cert_overflow;
     unsigned input_header;
     size_t input_left;
+    size_t output_left;
+    unsigned char output_type;
+    bool handshake_done;
 };
 static struct ciuki_tls *owner(const br_x509_class **v) { return ((struct cert_proxy *)v)->owner; }
 static void chain_start(const br_x509_class **v,const char *host)
@@ -88,6 +91,7 @@ struct ciuki_tls *ciuki_tls_create(const char *host,const br_x509_trust_anchor *
         static const uint16_t suites[]={BR_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,BR_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
             BR_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,BR_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
         br_ssl_client_init_full(&t->client,&t->x509,anchors?anchors:ciuki_anchors,anchors?count:CIUKI_ANCHOR_COUNT);
+        br_ssl_engine_set_all_flags(&t->client.eng,BR_OPT_NO_RENEGOTIATION);
         br_ssl_engine_set_versions(&t->client.eng,BR_TLS12,BR_TLS12);
         br_ssl_engine_set_suites(&t->client.eng,suites,sizeof(suites)/sizeof(*suites));
         br_ssl_engine_set_buffer(&t->client.eng,t->io,sizeof(t->io),1);
@@ -125,23 +129,42 @@ bool ciuki_tls_pending_input(struct ciuki_tls *t)
 { return t->input_header!=0 || (ciuki_tls_state(t)&BR_SSL_RECVAPP)!=0; }
 enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget,bool *transmitted)
 {
+    bool unexpected=false;
     for(unsigned steps=0;steps<16 && *budget;steps++){
         unsigned state=ciuki_tls_state(t);size_t n;ssize_t r;unsigned char *buffer;
+        /* BearSSL's first SENDAPP marks the end of the initial handshake.
+         * Subsequent input before this request is sent cannot be its response.
+         * Finish at most the current record, allowing a no-renegotiation alert
+         * to leave, then fail closed even if BearSSL has no plaintext pending. */
+        if(state&BR_SSL_SENDAPP)t->handshake_done=true;
+        if(unexpected && !(state&BR_SSL_SENDREC) && !t->input_header)return CIUKI_TLS_PROTOCOL;
         if(state&BR_SSL_CLOSED){int e=br_ssl_engine_last_error(&t->client.eng);return e?tls_error(e):CIUKI_TLS_EOF;}
         if(state&BR_SSL_SENDREC){
-            buffer=br_ssl_engine_sendrec_buf(&t->client.eng,&n);if(n>*budget)n=*budget;
+            buffer=br_ssl_engine_sendrec_buf(&t->client.eng,&n);
+            /* The pinned engine exposes one record at a time. Remember its
+             * wire ContentType across partial sends, before ack can advance
+             * the engine. Handshake/alert output never sends a request. */
+            if(!t->output_left){t->output_left=n;t->output_type=buffer[0];}
+            if(unexpected && t->output_type!=21)return CIUKI_TLS_PROTOCOL;
+            if(n>*budget)n=*budget;
             r=send(fd,buffer,n,MSG_NOSIGNAL);
-            if(r>0){if(transmitted)*transmitted=true;br_ssl_engine_sendrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
+            if(r>0){
+                if(transmitted && t->output_type==23)*transmitted=true;
+                t->output_left-=(size_t)r;br_ssl_engine_sendrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;
+            }
         } else if(state&BR_SSL_RECVREC){
             buffer=br_ssl_engine_recvrec_buf(&t->client.eng,&n);if(n>*budget)n=*budget;
             r=recv(fd,buffer,n,0);
-            if(r>0){record_input(t,buffer,(size_t)r);br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
+            if(r>0){
+                if(transmitted && !*transmitted && t->handshake_done)unexpected=true;
+                record_input(t,buffer,(size_t)r);br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;
+            }
             if(!r)return CIUKI_TLS_IO;
-        } else return CIUKI_TLS_OK;
-        if(r<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return CIUKI_TLS_OK;
+        } else return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
+        if(r<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
         return CIUKI_TLS_IO;
     }
-    return CIUKI_TLS_OK;
+    return unexpected?CIUKI_TLS_PROTOCOL:CIUKI_TLS_OK;
 }
 const unsigned char *ciuki_tls_read(struct ciuki_tls *t,size_t *n) { return br_ssl_engine_recvapp_buf(&t->client.eng,n); }
 void ciuki_tls_read_ack(struct ciuki_tls *t,size_t n) { br_ssl_engine_recvapp_ack(&t->client.eng,n); }

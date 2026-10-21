@@ -23,7 +23,7 @@ struct ciuki_job {
     char host[254];unsigned port;bool secure,post,started,finished,cancelled,retried,pooled;
     uint64_t dns_token,started_ms;
     char *request;size_t request_bytes,sent;
-    /* TLS plaintext submission can precede the first socket transmission. */
+    /* True only after this request's application data reaches the socket. */
     bool transmitted;
     const char *error;
     enum ciuki_tls_error tls_error;

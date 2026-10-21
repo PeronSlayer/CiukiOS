@@ -29,6 +29,12 @@ static _Atomic unsigned http_requests,connections_seen,loop_requests;
 static bool fixture_offline;
 static bool send_blocked;
 static unsigned blocked_sends;
+static unsigned incoming_injection,injected_alerts,injected_handshakes;
+static int injected_fd=-1;
+static bool injected_closed,injected_output;
+static const bool *injected_transmitted;
+void fixture_unsolicited(void);
+static void inject_hello_request(void *);
 struct peer {
     unsigned port;
     uint32_t next,ack;
@@ -197,14 +203,45 @@ int __wrap_connect(int fd,const struct sockaddr *a,socklen_t n)
     CHECK(n==16);struct ciuki_sockaddr_in address;memcpy(&address,a,16);return result(net_socket_connect(&client,fd,&address,NULL));
 }
 ssize_t __wrap_send(int fd,const void *s,size_t n,int flags)
-{ if(send_blocked){blocked_sends++;errno=EAGAIN;return -1;}if(n>317)n=317;return result(net_socket_io(&client,fd,(void *)s,(unsigned)n,(unsigned)flags,NULL,true,NULL)); }
+{
+    if(send_blocked){blocked_sends++;errno=EAGAIN;return -1;}if(n>317)n=317;
+    /* Split the refusal alert as well: every subsequent send must still see
+     * an untransmitted request, including slices past the record header. */
+    if(fd==injected_fd){CHECK(injected_transmitted && !*injected_transmitted);if(n>7)n=7;}
+    ssize_t r=result(net_socket_io(&client,fd,(void *)s,(unsigned)n,(unsigned)flags,NULL,true,NULL));
+    if(r>0 && fd==injected_fd && !injected_output){
+        injected_output=true;
+        if(*(const unsigned char *)s==21)injected_alerts++;
+        if(*(const unsigned char *)s==22)injected_handshakes++;
+    }
+    return r;
+}
 void fixture_block_send(bool blocked) { send_blocked=blocked; }
 unsigned fixture_blocked_sends(void) { return blocked_sends; }
 ssize_t __wrap_recv(int fd,void *s,size_t n,int flags)
-{ if(n>311)n=311;return result(net_socket_io(&client,fd,s,(unsigned)n,(unsigned)flags,NULL,false,NULL)); }
+{
+    /* Inject after clean_socket's poll/MSG_PEEK, inside the pump's first read.
+     * The fixture waits on the synthetic transport, never on wall-clock races. */
+    if(incoming_injection && !(flags&MSG_PEEK)){
+        unsigned injection=incoming_injection;incoming_injection=0;injected_fd=fd;
+        if(injection==1)CHECK(tcpip_callback_wait(inject_hello_request,NULL)==ERR_OK);
+        else fixture_unsolicited();
+        struct ciuki_pollfd ready={fd,POLLIN,0};
+        CHECK(net_poll(&client,&ready,1,1000,NULL)==1 && ready.revents==POLLIN);
+    }
+    if(n>311)n=311;return result(net_socket_io(&client,fd,s,(unsigned)n,(unsigned)flags,NULL,false,NULL));
+}
+void fixture_incoming_after_check(bool hello,const bool *transmitted)
+{ CHECK(!incoming_injection);incoming_injection=hello?1:2;injected_transmitted=transmitted; }
+unsigned fixture_injected_alerts(void) { return injected_alerts; }
+unsigned fixture_injected_handshakes(void) { return injected_handshakes; }
+bool fixture_injected_closed(void) { return injected_closed; }
 int __real_close(int);
 int __wrap_close(int fd)
-{ if(fd==10000)return 0;if(fd>=32 && fd<CIUKI_OPEN_MAX && client.fds[fd].object)return result(file_close(&client,fd));return __real_close(fd); }
+{
+    if(fd==injected_fd){CHECK(injected_transmitted && !*injected_transmitted);injected_transmitted=NULL;injected_closed=true;injected_fd=-1;}
+    if(fd==10000)return 0;if(fd>=32 && fd<CIUKI_OPEN_MAX && client.fds[fd].object)return result(file_close(&client,fd));return __real_close(fd);
+}
 int __wrap_fcntl(int fd,int cmd,...)
 {
     uint32_t *flags=net_socket_flags(file_fd_object(&client,fd));CHECK(flags);
@@ -299,6 +336,15 @@ static void inject_unsolicited(void *unused)
     for(unsigned i=0;i<16;i++)if(peers[i].port){peers[i].unsolicited=true;peer_output(&peers[i]);}
 }
 void fixture_unsolicited(void) { CHECK(tcpip_callback_wait(inject_unsolicited,NULL)==ERR_OK); }
+static void inject_hello_request(void *unused)
+{
+    (void)unused;unsigned count=0;
+    for(unsigned i=0;i<16;i++)if(peers[i].port){
+        struct peer *p=&peers[i];CHECK(p->tls && br_ssl_engine_renegotiate(&p->server->eng));
+        p->unsolicited=true;peer_output(p);count++;
+    }
+    CHECK(count==1);
+}
 static void inject_partial(void *bytes)
 {
     for(unsigned i=0;i<16;i++)if(peers[i].port){

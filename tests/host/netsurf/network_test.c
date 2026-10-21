@@ -45,7 +45,11 @@ static void drive(struct ciuki_net *net,struct ciuki_job *job)
     assert(ciuki_net_start(net,job));
     struct timespec start,now;__real_clock_gettime(CLOCK_MONOTONIC,&start);
     while(!job->finished){
+        size_t sent=job->sent;
         last_tls=ciuki_net_tls(job);ciuki_net_poll(net);
+        /* Initial handshake records must not qualify as request transmission;
+         * this poll only submits the first plaintext, for a later pump. */
+        if(job->secure && !sent && job->sent)assert(!job->transmitted);
         if(!strcmp(mode,"timeout") && headers && !job->finished)job->started_ms-=31000;
         if(!strcmp(mode,"cancel") && headers)ciuki_net_cancel(job);
         struct pollfd fds[8];unsigned n=ciuki_net_fds(net,fds);poll(fds,n,1);
@@ -137,13 +141,30 @@ int main(int argc,char **argv)
     if(!strcmp(mode,"post"))request.post="dog=Ciuki&step=M2";
     cancel=!strcmp(mode,"callback-cancel");
     struct ciuki_job *job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")||!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")||!strncmp(mode,"tls-partial-",12)||!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
+    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")||!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")||!strcmp(mode,"tls-hello-request")||!strcmp(mode,"tls-before-first-send")||!strncmp(mode,"tls-partial-",12)||!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
         if(job->error)fprintf(stderr,"unexpected: %s\n",job->error);
         assert(!job->error && job->http->done && received==5 && !memcmp(payload,"Ciuki",5));
         if(!strcmp(mode,"reuse")||!strcmp(mode,"tls-reuse")){
             ciuki_net_job_free(job);received=0;
             job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
             assert(job->pooled && job->transmitted && !job->error && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==1);
+        }
+        if(!strcmp(mode,"tls-hello-request")||!strcmp(mode,"tls-before-first-send")){
+            extern void fixture_incoming_after_check(bool,const bool *);
+            extern unsigned fixture_injected_alerts(void),fixture_injected_handshakes(void);
+            extern bool fixture_injected_closed(void);
+            bool hello=!strcmp(mode,"tls-hello-request");unsigned previous_headers=headers;
+            ciuki_net_job_free(job);received=0;
+            job=ciuki_net_job(&request,callback,NULL);assert(job && ciuki_net_start(net,job) && job->pooled && !job->sent && !job->transmitted);
+            fixture_incoming_after_check(hello,&job->transmitted);ciuki_net_poll(net);
+            assert(fixture_injected_closed() && !fixture_injected_handshakes());
+            assert(fixture_injected_alerts()==(hello?1u:0u));
+            assert(job->retried && !job->transmitted && !job->sent && !job->http->header_bytes && !received && headers==previous_headers);
+            assert(fixture_connections()==1 && fixture_requests()==1);
+            drive(net,job);
+            assert(!job->error && job->transmitted && received==5 && !memcmp(payload,"Ciuki",5));
+            assert(fixture_connections()==2 && fixture_requests()==2);
+            printf("PASS after-check %s: closed, no ClientHello, alerts=%u, no response misassociation\n",hello?"HelloRequest":"unsolicited response",fixture_injected_alerts());
         }
         if(!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")){
             extern void fixture_unsolicited(void);

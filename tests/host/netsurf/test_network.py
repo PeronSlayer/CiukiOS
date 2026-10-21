@@ -214,6 +214,10 @@ class NetworkTests(unittest.TestCase):
         for mode in ("tls-submit-recheck","tls-send-recheck","tls-partial-header","tls-partial-body"):
             with self.subTest(mode=mode):self.engine(mode)
 
+    def test_tls_renegotiation_and_pre_request_input(self):
+        for mode in ("tls-hello-request","tls-before-first-send"):
+            with self.subTest(mode=mode):self.engine(mode)
+
     def test_admitted_transport_retry_and_no_replay(self):
         for mode in ("stale-retry","post-no-replay","tls-stale-retry","tls-post-no-replay"):
             with self.subTest(mode=mode):self.engine(mode)

@@ -12,7 +12,8 @@ bool ciuki_tls_clock(uint32_t *,uint32_t *);
 struct ciuki_tls *ciuki_tls_create(const char *,const br_x509_trust_anchor *,size_t,enum ciuki_tls_error *);
 void ciuki_tls_free(struct ciuki_tls *);
 /* Nonblocking record movement: at most *budget bytes, no waits. Set the
- * optional flag only after a positive transport send, never on sendapp_ack. */
+ * optional flag only on an application-data record's positive socket send;
+ * reject post-handshake input while this request's flag is still false. */
 enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *,int,size_t *,bool *);
 unsigned ciuki_tls_state(struct ciuki_tls *);
 /* Includes partial ciphertext headers/bodies, even with no readable plaintext. */
