@@ -12,6 +12,7 @@ import errno
 import fnmatch
 import os
 from pathlib import Path
+import select
 import socket
 import shutil
 import stat
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 LIMIT = 1024 * 1024
 MAGIC = 0x32494643
+REQUEST_TIMEOUT = 30
 FILE, SYSTEM, PROCESS = 0x109, 0x10a, 0x10b
 OBJECT, WAIT = 0x100, 0x101
 
@@ -132,10 +134,30 @@ def winerror(error):
             errno.EINVAL: 87}.get(error.errno, 31)
 
 
-def receive(sock, count):
-    result = bytearray()
+def ready(sock, event, deadline):
+    poll = select.poll()
+    poll.register(sock.fileno(), event)
+    while True:
+        milliseconds = None
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('H1 transport deadline')
+            milliseconds = max(1, int(remaining * 1000))
+        if poll.poll(milliseconds):
+            return
+
+
+def receive(sock, count, deadline=None, partial=None):
+    if deadline is None and sock.gettimeout() is not None:
+        deadline = time.monotonic() + sock.gettimeout()
+    result = bytearray() if partial is None else partial
     while len(result) < count:
-        part = os.read(sock.fileno(), count - len(result))
+        ready(sock, select.POLLIN, deadline)
+        try:
+            part = os.read(sock.fileno(), count - len(result))
+        except BlockingIOError:
+            continue
         if not part:
             if not result:
                 return None
@@ -145,9 +167,14 @@ def receive(sock, count):
 
 
 def send(sock, raw):
+    deadline = time.monotonic() + (sock.gettimeout() or REQUEST_TIMEOUT)
     remaining = memoryview(raw)
     while remaining:
-        count = os.write(sock.fileno(), remaining)
+        ready(sock, select.POLLOUT, deadline)
+        try:
+            count = os.write(sock.fileno(), remaining)
+        except BlockingIOError:
+            continue
         if count <= 0:
             raise EOFError('closed H1 service transport')
         remaining = remaining[count:]
@@ -169,6 +196,7 @@ class Services:
         self.next_pid = 100
         self.disk_full = False
         self.wait_timeout_once = False
+        self.request_timeout = REQUEST_TIMEOUT
 
     def session(self, cwd='C:\\WINDOWS\\TEMP'):
         with self.lock:
@@ -313,9 +341,10 @@ class Child:
     def finish(self, timeout):
         try:
             self.process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as error:
             self.session.terminating = True
             self.process.kill(); self.process.wait()
+            error.add_note('H1 timeout: ' + self.session.diagnostic())
             raise
         self.worker.join(timeout=10)
         if self.worker.is_alive():
@@ -332,6 +361,10 @@ class Session:
         self.service, self.pid, self.cwd = service, pid, cwd
         self.handles, self.next_handle = {}, 0x100
         self.terminating = False
+        self.last_operation = 'none'
+        self.last_reply = 'none'
+        self.pending_header, self.pending_payload = bytearray(), bytearray()
+        self.expected_payload = None
 
     def add(self, handle):
         self.next_handle += 4
@@ -433,23 +466,61 @@ class Session:
             raise ValueError('unterminated copied string')
         return bytes(raw[offset:end]).decode('utf-8')
 
+    def diagnostic(self):
+        return (f'last served operation={self.last_operation}; last reply={self.last_reply}; '
+                f'partial header={len(self.pending_header)}/16:{self.pending_header[:128].hex()}; '
+                f'partial payload={len(self.pending_payload)}/{self.expected_payload}:'
+                f'{self.pending_payload[:128].hex()}')
+
     def serve(self, sock):
         try:
             with sock:
+                sock.setblocking(False)
                 while True:
-                    header = receive(sock, 16)
-                    if header is None:
-                        break
-                    magic, kind, size, cap = struct.unpack('<4I', header)
-                    if magic != MAGIC or size > LIMIT or cap > LIMIT:
-                        raise ValueError('invalid H1 frame')
-                    raw = receive(sock, size)
-                    if raw is None:
-                        raise EOFError('missing H1 payload')
-                    status, out = self.dispatch(kind, raw, cap)
-                    if len(out) > cap:
-                        raise ValueError('oversized H1 reply')
+                    self.pending_header, self.pending_payload = bytearray(), bytearray()
+                    self.expected_payload = None
+                    complete = False
+                    try:
+                        # One deadline covers the header and the entire body;
+                        # a peer dribbling bytes cannot reset it indefinitely.
+                        deadline = time.monotonic() + self.service.request_timeout
+                        header = receive(sock, 16, deadline, self.pending_header)
+                        if header is None:
+                            break
+                        magic, kind, size, cap = struct.unpack('<4I', header)
+                        self.expected_payload = size
+                        if magic != MAGIC or size > LIMIT or cap > LIMIT:
+                            raise ValueError('invalid H1 frame')
+                        raw = receive(sock, size, deadline, self.pending_payload)
+                        if raw is None:
+                            raise EOFError('missing H1 payload')
+                        complete = True
+                        operation = f'kind={kind} size={size} cap={cap}'
+                        if kind == 1 and len(raw) >= 20:
+                            op, action = struct.unpack_from('<I', raw, 8)[0], struct.unpack_from('<I', raw, 16)[0]
+                            operation += f' op=0x{op:x} action={action}'
+                        elif kind == 2 and len(raw) >= 8:
+                            operation += f' registry_op={struct.unpack_from("<I", raw, 4)[0]}'
+                        self.last_operation = operation
+                        status, out = self.dispatch(kind, raw, cap)
+                        if len(out) > cap:
+                            raise ValueError('oversized H1 reply')
+                    except Exception as error:
+                        status, out = (-errno.ETIMEDOUT if isinstance(error, TimeoutError)
+                                       else -errno.EINVAL if isinstance(error, (ValueError, struct.error))
+                                       else -errno.EIO), b''
+                        with self.service.lock:
+                            self.service.failures.append((self.pid, repr(error), self.diagnostic()))
+                    # Even a malformed/truncated/timed-out request receives one
+                    # error reply. After incomplete framing close the stream:
+                    # late bytes cannot safely become another request header.
+                    sock.settimeout(self.service.request_timeout)
                     send(sock, struct.pack('<iI', status, len(out)) + out)
+                    self.last_reply = f'status={status} bytes={len(out)}'
+                    with self.service.lock:
+                        self.service.trace.append(('reply', self.pid, self.last_operation, status, len(out)))
+                    if not complete:
+                        break
         except BaseException as error:
             if not (self.terminating and isinstance(error, (BrokenPipeError, ConnectionResetError, EOFError))):
                 with self.service.lock:

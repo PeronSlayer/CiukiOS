@@ -229,6 +229,8 @@ Section "Fixture"
     ClearErrors
     EnumRegKey $4 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall" $3
     IfErrors key_missing
+    ; NSIS 2.51 EnumRegKey ends with an empty string, without an error.
+    StrCmp $4 "" key_missing
     StrCmp $4 "CiukiInstallerFixture" key_exists
     IntOp $3 $3 + 1
     Goto key_loop
@@ -246,6 +248,7 @@ Section "Fixture"
       ClearErrors
       EnumRegKey $4 HKLM "Software\Microsoft\Windows\CurrentVersion" $3
       IfErrors runkey_missing
+      StrCmp $4 "" runkey_missing
       StrCmp $4 "RunOnce" runkey_exists
       IntOp $3 $3 + 1
       Goto runkey_loop

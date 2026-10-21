@@ -328,3 +328,65 @@ were rechecked; their file/registry/INI expectations were preserved. Web reads
 of Wine's `cabinet/fdi.c` and `advpack/install.c` failed with cache misses;
 their pinned local sources were used for comparison. Current commands,
 results and the required lead rerun are in `build/codex/f5-15a2-report.md`.
+## Amendment 8: H1 protocol diagnostics and native conformance
+
+The lead's `build/lead/nsis-hang-faulthandler.log` shows the Python worker
+waiting for a frame header while `Child.finish()` waits for the guest. It
+contains neither a request trace nor the guest's read buffer/count. That dump
+alone does not identify an opcode or establish which side lost framing.
+
+The C/Python audit checks the 16-byte `<4I` request header (magic, kind,
+payload size, reply capacity), the 8-byte `<iI` reply header (status, payload
+size), and the complete copied payload. Kind 1 records use FILE/PROCESS/OBJECT
+72-byte headers, WAIT 56 and SYSTEM 48. FILE strings occupy fields 6/7 and
+the buffer fields 8/9; PROCESS strings occupy 4/5/6 and environment 7/8;
+OBJECT names occupy 11; WAIT handles/count occupy 4/5. Kind 2 retains the
+existing w32srv ABI and kind 3 has an empty request body. A zero-length
+payload is a valid message, distinct from EOF. Normal and Win32-error
+responses preserve the entire copied record; transport errors have no body.
+
+Native `h1_protocol_test.c` links the actual `h1_services.c` encoder, runs
+on a low-address native stack with UBSan, and exchanges records with the
+actual Python decoder. It covers FILE actions 1–21, OBJECT 1–13, WAIT,
+PROCESS (including a native child and wait), SYSTEM 1–11, registry 1–12 and
+startup. Partial transfers and EINTR are injected at the syscall adapter.
+The changed protected-store checks and descriptor metadata after rename and
+share-delete unlink are exercised through the C encoder. This is protocol
+evidence, not NSIS/PE execution evidence. No encoder/decoder disagreement
+has been reproduced by these cases. Both registry enumeration operations
+return their terminal `259` inside a complete normal reply; no outer frame
+or body is lost.
+
+The actual fixture defect is the new `EnumRegKey` loops in `fixture.nsi`.
+They test `IfErrors` for termination, but NSIS 2.51's
+[`EW_REGENUM` implementation](https://raw.githubusercontent.com/kichik/nsis/v251/Source/exehead/exec.c)
+initializes the output to empty and ignores the `RegEnumKey` return code.
+In contrast, its `EnumRegValue` branch sets the error flag on enumeration end.
+The official [EnumRegKey and EnumRegValue contracts](https://nsis.sourceforge.io/Docs/Chapter4.html#4.9.2.5)
+document this distinction. Both fixture key-search loops now branch on empty
+output as well as errors. No change is made to the API's enumeration errors
+or to the H1 encoder. The stale authored fixture trees from the lead's run
+contain payload, child, uninstaller and both shortcuts but no fixture Uninstall
+key, consistent with the first key-search loop immediately after shortcut
+creation. This is a source-backed explanation of the observed timeout, not
+new PE execution evidence; the lead must rerun the flows outside the sandbox.
+
+The service now applies one absolute 30-second receive deadline to header
+and body together, records partial bytes/counts plus the last served operation
+and reply, and attempts one error reply for malformed, truncated or timed-out
+frames. It closes incomplete streams rather than treating late body bytes as
+a new header. A complete request whose handler raises receives one error
+response; the next complete frame remains aligned. `finish()` attaches the
+same diagnostics to a process timeout. Reply writes also have a deadline.
+
+These choices follow Python's official [poll documentation](https://docs.python.org/3.14/library/select.html#polling-objects)
+and [socket timeout/nonblocking documentation](https://docs.python.org/3.14/library/socket.html#notes-on-socket-timeouts).
+Descriptor `os.read`/`os.write` remain the transport, with readiness polling
+and nonblocking descriptors; direct socket send operations are refused by this
+sandbox. The absolute deadline is checked on every fragment, so partial
+progress cannot extend it. Microsoft's [GetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
+and Python's [fstat](https://docs.python.org/3.14/library/os.html#os.fstat)
+support keeping descriptor metadata separate from pathname authority checks.
+The [NSIS command-line reference](https://nsis.sourceforge.io/Docs/Chapter3.html)
+and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html)
+were rechecked: `/S`, `_?=` and the installer manifests retain their contracts.
