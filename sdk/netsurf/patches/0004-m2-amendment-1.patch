@@ -1,0 +1,37 @@
+CiukiOS M2 Amendment 1: count domain and internal-path cookies as well as
+leaf-path cookies. NetSurf 3.11 urldb_iterate_entries_path skips cookies on
+nodes with URL children, bypassing the approved 200-cookie retention limit.
+Keep URL iteration behavior; cookie callbacks visit every node exactly once
+and preserve their early-stop contract. Source: pinned NetSurf 3.11 urldb.c.
+
+--- a/netsurf/content/urldb.c
++++ b/netsurf/content/urldb.c
+@@ -594,6 +594,15 @@
+ 	const struct cookie_data *c;
+ 
+ 	do {
++		/* Cookies may live on the host root or an internal path even when
++		 * URL children exist. Visit every node, once, before descending. */
++		if (cookie_callback) {
++			c = (const struct cookie_data *)p->cookies;
++			for (; c != NULL; c = c->next) {
++				if (!cookie_callback(c))
++					return false;
++			}
++		}
+ 		if (p->children != NULL) {
+ 			/* Drill down into children */
+ 			p = p->children;
+@@ -613,12 +622,6 @@
+ 				if (!url_callback(p->url,
+ 						  (const struct url_data *) u))
+ 					return false;
+-			} else {
+-				c = (const struct cookie_data *)p->cookies;
+-				for (; c != NULL; c = c->next) {
+-					if (!cookie_callback(c))
+-						return false;
+-				}
+ 			}
+ 
+ 			/* Now, find next node to process. */
