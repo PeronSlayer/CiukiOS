@@ -20,3 +20,7 @@
 ## Constraints
 
 No commercial installers, no downloads (report what is missing); `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`. Report `build/codex/f5-15a2-report.md`.
+
+## Amendment 1 (lead, 2026-10-21, after two sessions; WIP commit 68a7a7fc)
+
+Decisions: (1) the native `makensis` adaptation is approved as delivered (exact input pins and Windows stubs, explicit host adaptations). (2) Implement the H1 host-adapter services the four flows need — Win32 file services on a fixture tree, registry through the w32srv model (`tests/host/win32/user32/kernel_bridge.c` pattern), child process creation with a waitable handle, temp folder — so the compiled NSIS, CAB/INF and self-extractor flows run end to end on the host adapter with their manifests checked; fail-closed entry attempts are not acceptance. (3) The i386 PE preflight that the sandbox blocks with SIGSYS stays in the suite; the lead runs it. (4) The four-predicate probe dry-run must pass against the authored fixtures. Report in the "Amendment 1" section.
