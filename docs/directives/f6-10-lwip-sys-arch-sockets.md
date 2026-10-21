@@ -68,3 +68,7 @@ Ranked findings:
 
 **Merge verdict: hold.** Fix the P1/P2 findings, add focused regressions, then obtain green sanitizer/host suites and the lead-owned canonical build and 128 MiB admission evidence.
 Lead decision on finding 8 (2026-10-21): the contract's one-second limit binds the caller — `close`/`shutdown` return and the fd is released within one second; a raw `TF_CLOSEPEND` PCB that lwIP retries internally for up to 1.5 s under persistent FIN-allocation failure is accepted upstream behaviour, recorded in the validation note with the measured bound; no upstream patch for it.
+
+## Amendment 2 (lead, 2026-10-21, from the lead's host kernel suite on the amendment-1 delivery; log `build/lead/kernel.log` in this worktree)
+
+`scripts/test/host_kernel_tests.sh` stops with a sanitizer error: `tests/host/devices_test.c:134:9: runtime error: index 2 out of bounds for type 'struct netif[2]'`. Determine whether the production netif table (two adapters) or the devices harness indexes past the second netif, fix the cause (never the sanitizer), add the bounds test, and run the script to its end as far as the sandbox allows. Report in "Amendment 2".
