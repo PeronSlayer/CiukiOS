@@ -26,31 +26,21 @@ import run as runner  # noqa: E402
 ALL = ('kernel', 'menu', 'loader_model')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
 KNOWN_UNREGISTERED = {
-    (5, 'w32-kernel32'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
-    (5, 'w32-restart'): {'owner': 'f5-21', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
+    (5, 'w32-restart'): {'owner': 'f5-07 continuation', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
     # Found by this check: authored cases whose probe none of the tables knows.
-    (5, 'w32-fullscreen'): {'owner': 'f5-09', 'missing': ALL, 'note': 'case integration_pending: desktop v3 exercise driver and runtime probe'},
-    (5, 'w32-registry'): {'owner': 'f5-06 and f5-09', 'missing': ALL, 'note': 'case integration_pending: production PE backend and w32srv supervision'},
-    (5, 'w32-audio'): {'owner': 'f5-12 (lead)', 'missing': ALL, 'note': 'case integration_pending: guest audio probe, WAV capture, T23 listening'},
-    (5, 'w32-gdi32'): {'owner': 'f5-10A/C', 'missing': ALL, 'note': 'case integration_pending: USER32/native-font bridge and GDI exercise probe'},
-    (5, 'w32-crash'): {'owner': 'f5-16 (lead)', 'missing': ALL, 'note': 'case integration_pending: desktop fault fixture driver'},
-    (5, 'w32-user32'): {'owner': 'f5-10 (lead)', 'missing': ALL, 'note': 'case integration_pending: USER PE fixture and selector'},
-    (5, 'w32-codecs'): {'owner': 'f5-12 (lead)', 'missing': ALL, 'note': 'case integration_pending: guest codec probe'},
-    (5, 'w32-ddraw'): {'owner': 'f5-11', 'missing': ALL, 'note': 'case integration_pending: ddraw-exercise.exe and kernel observer'},
-    (5, 'w32-input'): {'owner': 'f5-13 (lead)', 'missing': ALL, 'note': 'case integration_pending: input PE fixture and selector'},
     (5, 'w32-installer-nsis'): {'owner': 'f5-15A2', 'missing': ALL, 'note': 'case written by f5-15A; probe arrives with the NSIS flow (continuation f5-15A2)'},
     # f5-17B title probes: win32-<workload id>, selected by fw_cfg only. The
     # kernel registers none yet; win32_runner reports not_run before any boot.
-    (5, 'win32-diablo-shareware'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-sc'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-aoe-trial'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-half-life-uplink'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-ut-demo-348'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-wa'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-heroes3-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-rct-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-jazz2-shareware'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-ta-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-diablo-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-sc'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-aoe-trial'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-half-life-uplink'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-ut-demo-348'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-wa'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-heroes3-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-rct-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-jazz2-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-ta-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
 }
 
 
@@ -111,6 +101,8 @@ class SelectorTableTests(unittest.TestCase):
         self.assertEqual(problems, [], '\n' + '\n'.join(problems))
 
     def test_known_unregistered_entries_name_an_owner_and_a_reason(self):
+        self.assertEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()},
+                         {'f5-15A2', 'f5-07 continuation', 'f5-17 continuation'})
         for parts, entry in KNOWN_UNREGISTERED.items():
             with self.subTest(probe=parts):
                 self.assertTrue(entry['owner'] and entry['note'])
@@ -118,8 +110,8 @@ class SelectorTableTests(unittest.TestCase):
                 self.assertRegex(parts[1], r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
 
     def test_lead_note_probes_are_reported_for_the_lead(self):
-        # f5-22: the model must match production; f5-21 owns the observers.
-        for name in ('w32-kernel32', 'w32-restart'):
+        # Restart remains owned by the f5-07 continuation; the model matches production.
+        for name in ('w32-restart',):
             with self.subTest(probe=name):
                 self.assertEqual(probe_tables.registration(5, name),
                                  {'kernel': False, 'menu': False, 'loader_model': False})
