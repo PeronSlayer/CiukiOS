@@ -316,10 +316,12 @@ static int benchmark(void)
         (double)schedule_cost/iterations,(double)tick_cost/iterations,iterations);
     return 0;
 }
+#include "proc/dosvm_wait_test.inc"
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--benchmark"))return benchmark();
     mappings();
     input_and_io();completion_test();inversion_test();withdrawal_tests();cycle_test();fifo_test();fifo_cancellation();combined_load();saturation_test();
+    dosvm_wait_dependency_test();dosvm_wait_combined_load();
     return 0;
 }

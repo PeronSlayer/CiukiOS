@@ -10,6 +10,7 @@ static unsigned service_ready,close_error,malformed,spawns,closes,accepted;
 static int spawn_error;
 static unsigned service_exited,list_bad,waits;
 static int wait_error;
+static unsigned restart_mode,restart_live,restart_calls,restart_reaps,queries;
 static struct ciuki_proc_record listed[4];
 static unsigned listed_count;
 static char record[128],spawn_path[128];
@@ -19,13 +20,15 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
     assert(n>=sizeof(*a)+2 && cap>=sizeof(struct w32r_reply));
     if(!service_ready)return 1062;
     struct w32r_reply reply={.version=malformed ? 99 : 1};
-    if(a->op==W32R_OPEN){assert(a->key==W32R_HKLM);reply.key=7;}
+    if(a->op==W32R_OPEN){assert(a->key==W32R_HKLM || (restart_mode && a->key==W32R_HKCU));reply.key=7;}
+    else if(a->op==W32R_QUERY){assert(restart_mode && a->key==7);queries++;reply.error=2;}
     else {assert(a->op==W32R_CLOSE && a->key==7);closes++;reply.error=close_error;}
     memcpy(output,&reply,sizeof(reply));*used=sizeof(reply);return 0;
 }
 int ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *fds,uint32_t n,uint32_t flags)
 {
-    assert(service_ready && !close_error && !malformed && closes && argv && env && !fds && !n && !flags);
+    assert(service_ready && !close_error && !malformed && closes && argv && env && !fds && !n);
+    assert(flags==(restart_mode ? CIUKI_SPAWN_NEW_GROUP : 0));
     assert(!strcmp(argv[0],path) && !argv[1]);strcpy(spawn_path,path);spawns++;return spawn_error ? -1 : 71;
 }
 void desk_v3_fixture_report(const char *line){assert(strlen(line)<sizeof(record));strcpy(record,line);}
@@ -43,12 +46,16 @@ int ciuki_proc_list(void *out,uint32_t size)
 static int fixture_getpid(void){return 70;}
 static int fixture_waitpid(int pid,int *status,int flags)
 {
+    if(restart_mode && pid==71){assert(flags==WNOHANG && strstr(record,"exited=71"));restart_reaps++;*status=0;return pid;}
     assert(pid==74 && flags==WNOHANG);waits++;
     if(wait_error)return wait_error;
     *status=137;listed[1].state=CIUKI_PROC_LIVE;return pid;
 }
 void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 {(void)d;assert(pid==74 && status==137);service_exited++;}
+int desk_restart_process_alive(uint32_t pid){assert(pid==71);return restart_live;}
+static int restart_call(struct desktop *d,uint32_t pid,uint32_t flags)
+{(void)d;assert(pid==71 && flags==2);restart_calls++;return 0;}
 #include "../../../apps/desktop/w32_fixture_gate.c"
 #undef getpid
 #undef waitpid
@@ -56,6 +63,8 @@ static void reset(void)
 {
     memset(&fixture,0,sizeof(fixture));service_ready=close_error=malformed=spawns=closes=accepted=0;spawn_error=0;record[0]=0;
     service_exited=list_bad=waits=0;wait_error=0;listed_count=4;
+    memset(&restart_fixture,0,sizeof(restart_fixture));
+    restart_mode=restart_live=restart_calls=restart_reaps=queries=0;
     listed[0]=(struct ciuki_proc_record){.pid=72,.ppid=71}; /* crash child */
     listed[1]=(struct ciuki_proc_record){.pid=74,.ppid=70,.state=CIUKI_PROC_LIVE,.name="w32srv"};
     listed[2]=(struct ciuki_proc_record){.pid=71,.ppid=70,.state=CIUKI_PROC_ZOMBIE,.name="registry-exercise.exe"};
@@ -100,5 +109,30 @@ int main(void)
     desk_w32_fixture_tick(&d);assert(waits==2 && service_exited==1);
     listed[1].state=CIUKI_PROC_ZOMBIE;desk_w32_fixture_tick(&d);assert(waits==3 && service_exited==2);
     assert(listed[2].state==CIUKI_PROC_ZOMBIE); /* PE exit remains kernel-owned. */
-    puts("PASS shared gate: ten names, OPEN+CLOSE, timeout, spawn failure, child-bound crash close, service-only reaping/restarts");return 0;
+    reset();restart_mode=1;d.now_ns=0;d.v3_restart=restart_call;
+    assert(desk_w32_fixture_begin(&d,"restart-exercise.exe")==-EINVAL);
+    assert(!desk_w32_fixture_begin(&d,"restart-exercise"));
+    assert(desk_w32_fixture_active() && desk_w32_fixture_begin(&d,"kernel32-exercise")==-EBUSY);
+    desk_w32_fixture_tick(&d);assert(!spawns);
+    service_ready=1;close_error=5;d.now_ns+=20000000ull;
+    desk_w32_fixture_tick(&d);assert(!spawns);
+    close_error=0;d.now_ns+=20000000ull;desk_w32_fixture_tick(&d);
+    assert(spawns==1 && !strcmp(spawn_path,W32_RESTART_PATH) && strstr(record,"phase=0 service=74"));
+    for(unsigned phase=0;phase<3;phase++){
+        restart_live=1;d.v3_dialog_kind=2;d.v3_dialog_pid=99;d.v3_restart_flags=2;
+        d.now_ns+=20000000ull;desk_w32_fixture_tick(&d);assert(restart_calls==phase);
+        d.v3_dialog_pid=71;d.now_ns+=20000000ull;desk_w32_fixture_tick(&d);
+        assert(restart_calls==phase+1 && !d.v3_dialog_kind);
+        desk_restart_fixture_notice(2,71,2);desk_restart_fixture_notice(3,71,2);
+        d.now_ns+=20000000ull;desk_w32_fixture_tick(&d);assert(spawns==phase+1 && restart_reaps==phase);
+        restart_live=0;d.now_ns+=20000000ull;desk_w32_fixture_tick(&d);
+        assert(spawns==phase+2 && restart_reaps==phase+1 && restart_fixture.phase==phase+1);
+    }
+    assert(queries==5 && strstr(record,"phase=3 service=74"));
+    assert(W32_RESTART_RESULT_VA==0x100d0000u);
+    for(unsigned i=0;i<W32_FIXTURE_COUNT;i++)assert(W32_RESTART_RESULT_VA!=w32_fixtures[i].address);
+    reset();restart_mode=service_ready=1;d.now_ns=0;
+    assert(!desk_w32_fixture_begin(&d,"restart-exercise"));
+    d.now_ns=360000000000ull;desk_w32_fixture_tick(&d);assert(!spawns && strstr(record,"failed=1"));
+    puts("PASS shared gate: ten core names plus restart, OPEN+CLOSE, timeout, spawn failure, child-bound dialogs, service-only reaping, phased restart and registry consumption");return 0;
 }

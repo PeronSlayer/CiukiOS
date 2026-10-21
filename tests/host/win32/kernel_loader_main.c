@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../../../src/probes/win32_dialogs/controller.h"
+#include "../../../src/probes/win32_restart/controller.h"
 #include "../../../src/probes/win32_upper/controller.h"
 #include "../../../src/probes/win32_kernel32/controller.h"
 #include "../../../src/probes/win32_core/controller.h"
@@ -132,6 +133,22 @@ static void dialogs_resources(HANDLE module) {
         CHECK(!SizeofResource(module, (void *)(uintptr_t)1) && GetLastError() == 1812);
     }
     puts("PASS dialogs compiled PE FindResource LoadResource LockResource SizeofResource");
+}
+static int restart_startup(void) {
+    struct w32_loader loader;w32_ldr_init(&loader,&host.services,&host.peb);
+    struct w32_file manifest;CHECK(w32_ciuki_store(&loader,&manifest));
+    struct w32_module *main;
+    CHECK(!w32_ciuki_start(&loader,&host.peb,W32_RESTART_PATH,"","C:\\","\0\0",&main));
+    CHECK(GetModuleHandleA(0)==main->pe.image);
+    struct ciuki_w32_memory_info q;
+    void *p=(void *)(uintptr_t)W32_RESTART_RESULT_VA;
+    CHECK(VirtualQuery(p,&q,sizeof(q))==sizeof(q)&&q.state==0x10000);
+    CHECK(VirtualAlloc(p,4096,0x3000,4)==p);
+    struct w32_restart_result *r=p;CHECK(!r->magic&&!r->done&&!r->release);
+    CHECK(VirtualQuery(p,&q,sizeof(q))==sizeof(q)&&q.allocation_base==W32_RESTART_RESULT_VA&&q.protect==4);
+    CHECK(VirtualFree(p,0,0x8000));w32_ldr_shutdown(&loader);
+    if(host.peb.ProcessHeap)RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
+    puts("PASS restart compiled PE imports startup result=100d0000 free commit RW zero release");return 0;
 }
 static int dialogs_startup(const char *path, uint32_t address) {
     /* Actual fixture imports, production loader, kernel32 and VM services.
@@ -384,6 +401,7 @@ int main(int argc, char **argv) {
     }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
                  : !w32_strcmp(argv[2], "fixed-alloc") ? w32_kernel32_fixed_alloc()
+                 : !w32_strcmp(argv[2], "restart-startup") ? restart_startup()
                  : !w32_strcmp(argv[2], "dialogs-startup") ? dialogs_startup(W32_DIALOGS_PATH, W32_DIALOGS_RESULT_VA)
                  : !w32_strcmp(argv[2], "upper-startup") ? dialogs_startup(W32_UPPER_PATH, W32_UPPER_RESULT_VA)
                  : !w32_strcmp(argv[2], "kernel32-startup") ? dialogs_startup(W32_KERNEL32_PATH, W32_KERNEL32_RESULT_VA)

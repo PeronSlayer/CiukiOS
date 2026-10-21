@@ -49,7 +49,7 @@ static struct {
     int sticky;
     const struct pager_backend *backend;
     void *ctx;
-    bool opened, grow_blocked, out_busy, workers, cancel_requested;
+    bool opened, boot_ready, grow_blocked, out_busy, workers, cancel_requested;
     uint64_t idle_since, last_demand, last_prewrite, last_record, last_violation, grow_retry;
     struct pager_io *speculative;
     uint8_t *bounce;
@@ -498,6 +498,7 @@ static bool open_store(void)
     uint32_t existing = 0;
     int e = pager.backend->open ? pager.backend->open(pager.ctx, &existing) : 0;
     if (e) {
+        pager.opened = true; /* completed failure must not spin the manager */
         pager.state = PAGER_FAILED; publish();
         klog("[pager] attach result=%d swap=none commit=ram", e);
         return false;
@@ -549,7 +550,7 @@ static bool shrink_one(uint64_t now)
 }
 bool pager_manager_step(uint64_t now)
 {
-    if (!pager.backend) return false;
+    if (!pager.backend || !pager.boot_ready) return false;
     if (!pager_order_enter(PAGER_ORDER_MANAGER, SITE)) return false;
     bool progress = false;
     if (!pager.opened) { progress = open_store(); goto out; }
@@ -571,20 +572,26 @@ out:
 }
 bool pager_commit_wait(uint32_t pages)
 {
-    if (!pager_online() || pager.sticky || (g_current && g_current->preempt_holds)) return false;
+    if (!pager.backend || !pager.boot_ready || pager.sticky || (g_current && g_current->preempt_holds)) return false;
     if (!pager_order_check(PAGER_ORDER_MANAGER, SITE)) return false;
+    uint64_t start = now_ms(), deadline = start + PAGER_COMMIT_WAIT_MS;
+    /* The desktop never waits for this open. Later admission may need a
+     * store whose manager has not run yet; opening shares the growth bound. */
+    while (!pager.opened && pager.state == PAGER_OFF && now_ms() < deadline) {
+        if (pager.workers) kwait_wake_all(&pager.manager);
+        task_sleep_ms(10);
+    }
+    if (!pager_online() || now_ms() >= deadline) return false;
     int64_t headroom = ledger_commit_headroom ? ledger_commit_headroom() : 0;
     if (headroom >= (int64_t)pages) return true;
     uint64_t deficit = (uint64_t)((int64_t)pages - headroom);
     uint64_t want = pager.extents + (deficit + PAGER_EXTENT_SLOTS - 1) / PAGER_EXTENT_SLOTS;
     if (want > PAGER_MAX_EXTENTS) want = PAGER_MAX_EXTENTS;
-    uint64_t start = now_ms();
     /* A refused growth is retried only after GROW_RETRY_MS (no hammering). */
     if (want <= pager.extents || (pager.grow_blocked && start - pager.grow_retry < GROW_RETRY_MS)) return false;
     if (want > pager.want) pager.want = (uint32_t)want;
     pager.stats.commit_waits++;
     uint32_t before = pager.extents;
-    uint64_t deadline = start + PAGER_COMMIT_WAIT_MS;
     while (pager.extents < want && pager_online() && now_ms() < deadline) {
         if (pager.grow_blocked && pager.grow_retry >= start) break; /* failed since we asked */
         if (pager.workers) kwait_wake_all(&pager.manager);
@@ -593,6 +600,13 @@ bool pager_commit_wait(uint32_t pages)
     if (pager.want <= pager.extents || pager.grow_blocked) pager.want = 0;
     if (pager.extents > before) pager.stats.commit_growths++;
     return pager.extents > before;
+}
+
+void pager_bootstrap_complete(void)
+{
+    if (pager.boot_ready) return;
+    pager.boot_ready = true;
+    if (pager.workers) kwait_wake_all(&pager.manager);
 }
 
 /* ---- lifecycle ---- */
@@ -712,7 +726,7 @@ static void pageout_worker(void *arg)
     }
 }
 static bool manager_ready(void *arg)
-{ (void)arg; return pager.backend && (!pager.opened || pager.want > pager.extents); }
+{ (void)arg; return pager.boot_ready && pager.backend && (!pager.opened || pager.want > pager.extents); }
 static void manager_worker(void *arg)
 {
     (void)arg;
@@ -736,6 +750,8 @@ void pager_init(void)
 {
     static struct mm_pin stack_pins[2];
     kwait_init(&pager.work); kwait_init(&pager.manager);
+    /* Runtime diagnostic boots do not launch the normal desktop. */
+    if (g_boot.flags & (CBI_F_TEST_REQUEST | CBI_F_HW_CHECK)) pager_bootstrap_complete();
     if (!resources()) { klog("[pager] resources unavailable"); return; }
     struct task *out = task_create_kernel("pager", pageout_worker, 0, P_NORMAL);
     struct task *man = out ? task_create_kernel("pagerman", manager_worker, 0, P_NORMAL) : 0;

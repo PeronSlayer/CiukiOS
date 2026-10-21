@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# f5-21b: only the separately owned NSIS/restart continuations remain.
-UNREGISTERED = {'w32-restart': 'f5-07 continuation', 'w32-installer-nsis': 'f5-15A2'}
+# Only the separately owned NSIS observer remains pending.
+UNREGISTERED = {'w32-installer-nsis': 'f5-15A2'}
 
 
 def selector_names():

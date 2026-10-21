@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
+#include <ciuki/cpustat.h>
 #include <ciuki/sync.h>
 #include <ciuki/work.h>
 #include <ciuki/biosvm.h>
@@ -471,6 +472,9 @@ void task_native_frame(struct task *t, uint32_t esp)
 void schedule(void)
 {
     uint32_t f = irq_save();
+    bool own_irqoff=!(f&0x200) && crit_begin_inactive && crit_begin_inactive();
+    if (own_irqoff && crit_label) crit_label("schedule");
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_PICK);
     /* Capture short turns that ended between PIT ticks before choosing the
      * next task. This also covers repeated voluntary device yields. */
     if (cpu_account) cpu_account();
@@ -524,8 +528,12 @@ void schedule(void)
     }
     next->service_deadline = 0; /* a dispatch serves the annotated wake deadline */
     if (cpu_switch) cpu_switch(prev, next);
+    if (cpu_irqoff_tasks) cpu_irqoff_tasks(prev,next);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_OTHER);
     if (next == prev) {
         prev->state = T_RUNNING;
+        if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_NONE);
+        if (own_irqoff) crit_end();
         irq_restore(f);
         return;
     }
@@ -561,18 +569,24 @@ void schedule(void)
     }
     next->state = T_RUNNING;
     g_current = next;
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_ADDRESS);
     /* F1 V86 worker: preserve its private directory and live C continuation.
      * Both hooks return the unmodified F0 values for all other tasks. */
     uint32_t cr3 = biosvm_task_cr3(next, next->user ? next->as.pd_phys : vmm_kernel_pd());
     uint32_t esp0 = biosvm_task_esp0(next, (uint32_t)next->kstack + KSTACK_SIZE);
     write_cr3(dosvm_task_cr3 ? dosvm_task_cr3(next, cr3) : cr3);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_VM_ENTER);
     tss_set_kernel_stack(dosvm_task_esp0 ? dosvm_task_esp0(next, esp0) : esp0);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_LDT_DEBUG);
     if (dosvm_task_switch) dosvm_task_switch(next);
     proc_task_switch(next);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_FPU);
     fpu_task_switch(next);
+    if (cpu_irqoff_mark) cpu_irqoff_mark(CPU_IRQOFF_NONE);
     crit_end();                 /* a switch suspends the caller's critical section */
     switch_context(&prev->saved_esp, next->saved_esp);
     crit_begin();               /* time only the remainder after resuming */
+    if (own_irqoff) crit_end();
     irq_restore(f);
 }
 

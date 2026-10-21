@@ -64,7 +64,8 @@ static void wait_pause(void *arg) {
 }
 static void renew_request(struct vfs_request *r,struct vfs_wait_info *info) {
     memset(info,0,sizeof(*info)); cancel_request=false;
-    *r=(struct vfs_request){0,wall_time+DOS_FILE_BUDGET_US,wall,request_cancel,wait_pause,0x49,info,0};
+    *r=(struct vfs_request){.deadline=wall_time+DOS_FILE_BUDGET_US,.now=wall,
+        .cancelled=request_cancel,.pause=wait_pause,.owner=0x49,.wait=info};
     info->drives=1u<<2;
 }
 static void held_waits(void) {

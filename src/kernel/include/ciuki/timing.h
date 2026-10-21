@@ -52,6 +52,7 @@ struct timing_stats {
 extern uint64_t g_tsc_per_ms;
 void crit_begin(void);
 void crit_end(void);
+bool crit_begin_inactive(void) __attribute__((weak));
 void crit_label(const char *section) __attribute__((weak));
 void crit_owner(const char *owner, uint32_t site) __attribute__((weak));
 void timing_timer_irq(void);

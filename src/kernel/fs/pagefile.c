@@ -1,7 +1,7 @@
 /* f0-49 pagefile adapter (M4). The pager's backing file lives on the
  * writable fixed FAT system volume. open/grow/shrink/map run on the pager
  * manager through the VFS, one bounded volume reservation per step: growth
- * uses the append publication order (zero data, detached chain, tail link,
+ * uses the append metadata publication order (detached chain, tail link,
  * length), shrink publishes the shorter length before releasing the tail,
  * and live clusters never move. Page I/O bypasses FAT and the block cache:
  * prevalidated slot runs, reserved f1-83 request records, the physical
@@ -37,8 +37,13 @@ static int reopen(struct pagefile *pf, bool create)
     if (e) return e;
     pf->table_live = true;
     /* Exclusive: no other description can read swap bytes or move the file. */
-    int h = vfs_open(&pf->table, pf->path, VFS_READ | VFS_WRITE | (create ? VFS_CREATE : 0),
-                     VFS_DENY_ALL, FAT_ATTR_HIDDEN | FAT_ATTR_SYSTEM);
+    /* CREATE means open-or-create, never TRUNCATE. Capture its action under
+     * the same reservation so a fresh image is distinguishable from reuse. */
+    unsigned action = 0;
+    int h = vfs_open_claim(&pf->table, pf->path, VFS_READ | VFS_WRITE | (create ? VFS_CREATE : 0),
+                           VFS_DENY_ALL, FAT_ATTR_HIDDEN | FAT_ATTR_SYSTEM, 255, &action);
+    if (h == -VFS_ESHARE || h == -VFS_ECRITICAL_SHARE) h = -FS_EACCES;
+    pf->created = h >= 0 && action == 2;
     if (h < 0) { release(pf, false); return h; }
     pf->handle = h; pf->open = true;
     memset(&pf->cursor, 0, sizeof(pf->cursor));
@@ -64,12 +69,18 @@ static int pf_open(void *ctx, uint32_t *existing)
     if (!e) e = file_size(pf, &size);
     /* A partial tail (cut growth or foreign size) is released in place;
      * owned excess past the length is reused by the next extension. */
-    if (!e && size % PAGER_EXTENT_BYTES)
-        e = vfs_pagefile_trim(&pf->table, pf->handle, size - size % PAGER_EXTENT_BYTES);
+    if (!e && size % PAGER_EXTENT_BYTES) {
+        uint32_t whole = size - size % PAGER_EXTENT_BYTES;
+        e = vfs_pagefile_trim(&pf->table, pf->handle, whole);
+        if (!e) size = whole;
+    }
     if (!e) e = blk_request_reserve(&pf->in, PAGER_IN_REQUESTS);
     if (!e) e = blk_request_reserve(&pf->out, PAGER_OUT_REQUESTS);
     if (e) { release(pf, true); return e; }
     *existing = size / PAGER_EXTENT_BYTES;
+#ifndef FS_HOST
+    klog("[pager] open created=%u bytes=%u existing=%u cluster_bytes=%u", pf->created, size, *existing, pf->cluster_bytes);
+#endif
     return 0;
 }
 /* Sector runs of one extent -> page slots fully inside a contiguous run.

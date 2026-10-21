@@ -10,6 +10,7 @@
 #define VFS_ECANCELLED 206
 enum vfs_wait_reason { VFS_WAIT_NAMESPACE=1,VFS_WAIT_VOLUME,VFS_WAIT_PROVIDER,VFS_WAIT_TRANSPORT,VFS_WAIT_CACHE };
 struct vfs_wait_info { uint64_t owner,elapsed_us; uint32_t drives; enum vfs_wait_reason reason; int outcome; bool valid; };
+struct fs_task_identity { char name[16]; uint32_t id; };
 struct vfs_request {
     void *arg; uint64_t deadline;
     uint64_t (*now)(void *);
@@ -17,6 +18,8 @@ struct vfs_request {
     void (*pause)(void *);
     uint64_t owner; struct vfs_wait_info *wait;
     int *cleanup_status; /* first failed mutation cleanup, not ordinary DOS errors */
+    struct fs_task_identity task; /* diagnostic caller across worker calldowns */
+    const char *operation; /* optional short diagnostic tag, copied on admission */
 };
 struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const struct vfs_request *request; };
 void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);
@@ -91,7 +94,9 @@ static inline void *fs_contig_alloc(size_t n) {
     return p;
 }
 static inline void fs_contig_free(void *p, size_t n) { (void)n; if (p) { __atomic_sub_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED); free(p); } }
+uint32_t fs_host_clock_ms(void) __attribute__((weak)); /* deterministic fixture boundary */
 static inline uint32_t fs_now_ms(void) {
+    if (fs_host_clock_ms) return fs_host_clock_ms();
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return (uint32_t)((uint64_t)t.tv_sec * 1000 + (uint32_t)t.tv_nsec / 1000000);
 }
@@ -184,6 +189,20 @@ static inline void fs_contig_free(void *v, size_t n) {
 }
 static inline uint32_t fs_now_ms(void) { return ticks_lo(); }
 #endif
+static inline struct fs_task_identity fs_request_identity(const struct vfs_request *r) {
+    struct fs_task_identity out={0}; const char *name="host";
+    if (r && r->task.name[0]) { name=r->task.name; out.id=r->task.id; }
+#ifndef FS_HOST
+    else if (g_current) { name=g_current->name; out.id=g_current->id; }
+    else name="boot";
+#endif
+    for (unsigned i=0;i<sizeof(out.name)-1 && name[i];i++) {
+        unsigned char c=(unsigned char)name[i];
+        out.name[i]=(c>='a' && c<='z') || (c>='A' && c<='Z') ||
+            (c>='0' && c<='9') || c=='-' || c=='_' || c=='.' ? (char)c : '_';
+    }
+    return out;
+}
 static inline int fs_lock_take_request(fs_lock *lock,enum vfs_wait_reason reason) {
     const struct vfs_request *r=fs_request_current();
     if (!r) { fs_lock_take(lock); return 0; }

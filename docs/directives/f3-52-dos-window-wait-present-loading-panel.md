@@ -29,4 +29,11 @@ Research first (the f3 contract documents for the DOS window and the cpustat/f3-
 2. **Fractional frame cadence preserved.** The wait deadlines keep the fractional phase (quantize each absolute deadline once, as `video_due_us` does): sustained 70.09 Hz and 35 Hz through WAIT → PRESENT with delayed samples, tested.
 3. **Integration tests that depend on the production notifications.** The VM wait tests must fail when a production wake source is missing (no 1 ms predicate polling in the fake; no explicit checkpoint/notify calls from the test); a combined scheduler replay with donation enabled, the focused VM, the desktop at priority 9 and device load, checking desktop latency and device budgets; app scenarios where the wait returns TIMEOUT and STATE without VIDEO.
 4. Rebase on current `main` (toolchain pins requalified) and refresh the report's verification table with green apps/kernel/VM gates.
-5. (lead, after the host kernel suite on the delivery) `scripts/test/host_kernel_tests.sh` ABI layout check: `constant.CIUKI_DOSVM_EVENT_CONSOLE: unexpected target entry` — every new public ABI constant/record of the WAIT_PRESENT operation must be registered in `tests/host/abi_layout_test.c` and the dump (`scripts/test/abi_layout_dump.py`) with its exact value, as f5-22 did for the CD records.
+
+## Amendment 2 (lead, 2026-10-21, from the lead's host kernel suite on the amendment-1 delivery; log `build/lead/kernel.log` in this worktree)
+
+The dosvm host harness no longer links: `tests/host/dosvm_wait_present_test.inc` references `ua_mprotect`, `ua_destroy` and `dosvm_model_read`, which `scripts/test/host_kernel_tests.sh`'s `dosvm_test` rule does not link. Make the real-uaddr cases build in that rule (link `src/kernel/proc/uaddr.c` with the stubs it needs, as the proc harnesses do, or provide the model the include expects) without weakening the tests; `bash scripts/test/host_kernel_tests.sh` must reach its end. Report in "Amendment 2".
+
+## Amendment 3 (lead, 2026-10-21, from the lead's rerun of `scripts/test/host_kernel_tests.sh` after amendment 2; log `build/lead/kernel.log` lines 3100–3132 in this worktree)
+
+A further harness of the script still fails to link (see the log): `tests/host/dosvm_video_test.inc:81/83` references `dosvm_model_user_read`/`dosvm_model_user_write` which that rule does not provide. Every rule in the script that compiles the dosvm test includes must link; run the script to its end in the sandbox as far as it goes and list the rules you fixed. Report in "Amendment 3".

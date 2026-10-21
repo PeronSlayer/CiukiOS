@@ -41,7 +41,8 @@ void ktimer_wait_task(struct task *, uint64_t deadline);
 
 struct kwait {
     struct kwaiter *head;
-    struct task *owner;            /* only mutex/ticket-lock queues donate */
+    struct task *owner;            /* mutex/ticket-lock or producer request dependency */
+    bool owner_preemptible;        /* producer owns no lock/preemption hold */
     struct kwait *owned_next;
     void (*owner_died)(struct kwait *);
     void (*ticket_cancelled)(struct kwait *);
@@ -74,6 +75,8 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
 bool kwait_wait_ticket_until(struct kwait *q, kwait_cond_fn cond, void *arg,
                              uint64_t deadline_ticks, uint32_t *ticket);
 void kwait_wake_all(struct kwait *q);
+/* Producer notification: wake satisfied predicates without an I/O boost. */
+void kwait_wake_ready(struct kwait *q);
 /* Completion-only wake; false predicates and already-ready tasks earn nothing. */
 void kwait_wake_io(struct kwait *q);
 /* Static device queues only: O(log timers) capture, no predicates/run-queue
