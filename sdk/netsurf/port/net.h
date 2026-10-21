@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef CIUKI_NET_H
+#define CIUKI_NET_H
+#include "http.h"
+#include "tls.h"
+#include <poll.h>
+struct ciuki_net;
+struct ciuki_connection;
+struct ciuki_request {
+    const char *host,*target,*post,*cookie;
+    const char **headers;
+    unsigned port;
+    bool tls,head;
+};
+struct ciuki_job {
+    struct ciuki_http http;
+    struct ciuki_net *owner;
+    struct ciuki_connection *connection;
+    char host[254];unsigned port;bool secure,post,started,finished,cancelled,retried,pooled;
+    uint64_t dns_token,started_ms;
+    char *request;size_t request_bytes,sent;
+    const char *error;
+    enum ciuki_tls_error tls_error;
+};
+struct ciuki_net *ciuki_net_create(const br_x509_trust_anchor *,size_t);
+void ciuki_net_destroy(struct ciuki_net *);
+struct ciuki_job *ciuki_net_job(const struct ciuki_request *,ciuki_http_callback,void *);
+void ciuki_net_job_free(struct ciuki_job *);
+bool ciuki_net_start(struct ciuki_net *,struct ciuki_job *);
+void ciuki_net_cancel(struct ciuki_job *);
+void ciuki_net_poll(struct ciuki_net *);
+/* Port-local fd_set callers translate these to their own representation. */
+unsigned ciuki_net_fds(struct ciuki_net *,struct pollfd [8]);
+struct ciuki_tls *ciuki_net_tls(struct ciuki_job *);
+#endif
