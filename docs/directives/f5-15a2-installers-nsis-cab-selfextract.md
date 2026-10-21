@@ -64,3 +64,14 @@ Apply this amendment only; everything else stays. Lead decisions on the review's
 9. **Dry-run deltas and interruption (P2).** `flow_driver.py`: each stage compares the exact filesystem and registry deltas against an independent manifest (every path and key written, nothing else), asserts child cleanup before teardown, and adds interruption and recovery cases around WININIT retirement, journal persistence and the RunOnce handoff (service recreated after the interruption, outcome asserted). The timing test executes the RunOnce command it consumes, or is renamed to say it only measures consumption.
 
 Verification as before: the installer suite and the win32 host suite green inside the sandbox where the sandbox allows, the exact commands in the report; the lead reruns everything outside the sandbox. Report `build/codex/f5-15a2-report.md`, section "Amendment 6".
+
+## Amendment 7 (lead, 2026-10-21): re-review of the amendment-6 delivery (c510e822): one finding still open, three regressions introduced
+
+Apply this amendment only.
+
+1. **Finding 4 still open (P1):** `src/kernel/probes/installer_probe.inc:58` ignores every `WININIT.INI` section except `[rename]`, so an unexpected `[DIRNUL]` deletion passes the content check although `apps/w32srv/restart.c:164` executes it; `installer_probe.inc:23` reads only the first 4096 bytes without checking EOF. Validate the entire stage-specific instruction set (every section and key the stage may contain, nothing else) and reject unobserved trailing content (read to EOF or fail the predicate if the file exceeds the buffer).
+2. **New destructive path (P2):** `tests/win32/fixtures/nsis/fixture.nsi:305` queues `DIRNUL=$EXEDIR` for every execution directory except `$WINDIR\TEMP`; an explicit `_?=` copy run from an unrelated existing directory would retire that directory. Restrict directory retirement to the delegated temporary directory whose ownership this invocation established.
+3. **New destructive race (P2):** `selfextract.c:15/26` and `infchain.c:21/92` delete the reserved temporary file before creating the replacement directory; if another actor creates it first, `CreateDirectoryA` fails and cleanup deletes recognised files from the other actor's directory. Track reserved-file ownership separately from successful directory creation and clean only what this invocation created.
+4. **New H1 regression (P2):** `tests/host/win32/installers/host_services.py:569` turns handle metadata operations into pathname operations, so after a share-delete unlink `/proc/self/fd` yields a ` (deleted)` name and `stat` fails although the handle is valid. Keep descriptor-based metadata operations (`os.fstat`) and perform the authority check separately.
+
+Verification as before; report section "Amendment 7".

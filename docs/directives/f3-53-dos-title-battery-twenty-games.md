@@ -14,3 +14,14 @@
 5. **Acceptance definition** per title: boots to the menu within 60 s of VM start, gameplay runs 30 s with `underruns=0` and `irq_latency_max_us<=20000` on the SB16 cadence, no VM fault, clean exit. LAN acceptance (IPX between two VMs on QEMU, two peers) is defined now and marked "pending f6-11".
 
 Report `build/codex/f3-53-report.md` with the proposed tracked list and licence citations, the schema, the selector needs, verification table. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no downloads, no commits, no diary edits; nothing from `legacy/local/` is read or referenced by content; English.
+
+## Amendment 1 (lead, 2026-10-21): pins supplied, decisions taken, calibration mode
+
+Apply this amendment only.
+
+1. **Pins.** The lead downloaded the three missing archives from the publisher mirror named in `config/dos-titles.json` into `build/downloads/dos-titles/` (symlinked into this worktree under `build/downloads/`): `1rott13.zip` 3,668,139 bytes SHA-256 `eea67a85845d52fa0ee7272e3ae24b79769ed1e8bdff7b1360904078bc51ad1e`; `4keen.zip` 729,683 bytes `f7c63feb8bbec817646d95aa26313df1654c01eda8f7ccc5cfd0c0bc0b5e305e`; `3dduke13.zip` 5,924,374 bytes `c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e`. Record them, extract the nested archives under `build/` of the worktree, locate each title's `VENDOR.DOC`/`LICENSE.TXT`, quote the redistribution clause in the design note with the file's own hash, and set `verified=true` only where the clause permits unchanged redistribution of the complete package (otherwise keep the title listed as `owner-copy` and say why).
+2. **Decisions.** Sound Blaster IRQ: **5** (the VM's SB16 model: 220h, IRQ 5, DMA 1 and 5); the titles' setup scripts select it. Nested original installers (DEICE/INSTALL/SETUP) **are** automated through scripted keys in the harness, with a per-title timeout and the extracted tree hashed as the install checkpoint; no manual step.
+3. **Calibration mode.** Checkpoint hashes cannot be computed in your sandbox: implement `dos_titles.py --calibrate <title>` which runs the title on the lead's runtime path, records the screen hashes and timings at the scripted checkpoints into a per-title `calibration.json` beside the manifest, and `--verify` which asserts against them; the acceptance definition stays. The lead runs calibration on QEMU and the T23 and commits the results.
+4. The three regression tests that need the pinned FreeDOS reference: the reference lives in `third_party/freedos/1.3` of the main tree (symlinked into this worktree now); make the tests find it there or skip with the exact reason, never fail for its absence.
+
+Report section "Amendment 1" with the verified list and the licence quotations.
