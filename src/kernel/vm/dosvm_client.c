@@ -133,8 +133,27 @@ static void video_mode(struct dosvm *v, struct ciuki_dosvm_command *c)
 int32_t dosvm_client_syscall(struct trap_frame *tf)
 {
     struct process *p = proc_current();
-    if (!p || !p->dosvm_capability) return -EPERM;
+    if (!p) return -EPERM;
     unsigned op = tf->ebx;
+    /* File-management operations expose only fixed game directories. They
+     * confer no VM, device, input, or physical-display capability. Native
+     * callers have ordinary C: file access; VFS remains the write authority. */
+    if(op==CIUKI_DOSVM_GAME_QUERY || op==CIUKI_DOSVM_GAME_REMOVE) {
+        if(tf->edx!=sizeof(struct ciuki_dosvm_command))return -EINVAL;
+        struct ciuki_dosvm_command c,valid={0};
+        int error=copy_from_user(&c,tf->ecx,sizeof(c));if(error)return error;
+        valid.version=CIUKI_DOSVM_VERSION;valid.size=sizeof(valid);valid.launch.game=c.launch.game;
+        if(!c.launch.game || c.launch.game>CIUKI_DOSVM_GAME_COUNT || memcmp(&c,&valid,sizeof(c)))return -EINVAL;
+        struct ua_pin pin;error=ua_pin(p->memory,&pin,tf->ecx,sizeof(c),true);if(error)return error;
+        uint32_t size=0;
+        error=dosvm_game_program(c.launch.game,op==CIUKI_DOSVM_GAME_REMOVE,&size);
+        if(error==-FS_ENOENT && op==CIUKI_DOSVM_GAME_QUERY)error=0;
+        else if(!error)c.state=1;
+        c.changed=size;
+        if(!error)error=copy_to_user(tf->ecx,&c,sizeof(c));
+        ua_unpin(p->memory,&pin);return error;
+    }
+    if (!p->dosvm_capability) return -EPERM;
     if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_BACKGROUND) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;

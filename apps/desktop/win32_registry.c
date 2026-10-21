@@ -101,6 +101,14 @@ static uint32_t string(struct response *r, uint32_t key, const char *name, char 
     }
     return 0;
 }
+static uint32_t number(struct response *r,uint32_t key,const char *name,uint32_t *out)
+{
+    *out=0; uint32_t e=call(r,W32R_QUERY,key,NULL,name,0);
+    if(e==2)return 0;
+    if(e)return e;
+    if(r->header.type!=4 || r->header.data_bytes!=4 || r->header.name_bytes)return 13;
+    *out=desk_get32(r->bytes);return 0;
+}
 int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 {
     if (!out && cap) return -EINVAL;
@@ -108,48 +116,67 @@ int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
     if (!cap) return 0;
     struct response *r=malloc(sizeof(*r)); if (!r) return -ENOMEM;
     pthread_mutex_lock(&registry_lock);
-    uint32_t error=call(r,W32R_OPEN,W32R_HKLM,uninstall,NULL,0),root=0;
-    unsigned count=0;
-    if (!error) root=r->header.key;
-    else if (error==2) error=0; /* missing uninstall root is an empty list */
-    /* Limit both returned records and scanned keys. The hive can be untrusted. */
-    for (unsigned index=0;root && !error && index<1024 && count<cap;index++) {
-        error=call(r,W32R_ENUM_KEY,root,NULL,NULL,index);
-        if (error==259) {error=0;break;}
-        if (error) break;
-        unsigned n=r->header.name_bytes;
-        if (!n || n>=sizeof(out[count].key) || !desk_utf8_valid(r->bytes,n) || strchr((char *)r->bytes,'\\') || strchr((char *)r->bytes,'/')) continue;
-        struct desk_uninstall_entry entry={0}; memcpy(entry.key,r->bytes,n+1);
-        error=call(r,W32R_OPEN,root,entry.key,NULL,0);
-        if (error==2) {error=0;continue;}
-        if (error) break;
-        uint32_t key=r->header.key;
-        uint32_t e=string(r,key,"DisplayName",entry.name,sizeof(entry.name));
-        if (!e) e=string(r,key,"UninstallString",entry.command,sizeof(entry.command));
-        if (!e) {uint32_t q=string(r,key,"DisplayVersion",entry.version,sizeof(entry.version));if(q && q!=2)e=q;}
-        if (!e) {uint32_t q=string(r,key,"Publisher",entry.publisher,sizeof(entry.publisher));if(q && q!=2)e=q;}
-        uint32_t closed=call(r,W32R_CLOSE,key,NULL,NULL,0);
-        if (closed) {error=closed;break;}
-        if (e==1062) {error=e;break;}
-        if (!e && entry.name[0] && entry.command[0]) out[count++]=entry;
+    uint32_t error=0; unsigned count=0;
+    const uint32_t hives[]={W32R_HKLM,W32R_HKCU};
+    for(unsigned hive=0;hive<2 && !error && count<cap;hive++) {
+        uint32_t root=0;
+        error=call(r,W32R_OPEN,hives[hive],uninstall,NULL,0);
+        if(!error)root=r->header.key;
+        else if(error==2)error=0;
+        for(unsigned index=0;root && !error && index<1024 && count<cap;index++) {
+            error=call(r,W32R_ENUM_KEY,root,NULL,NULL,index);
+            if(error==259){error=0;break;}
+            if(error)break;
+            unsigned n=r->header.name_bytes;
+            if(!n || n+5>=sizeof(out[count].key) || !desk_utf8_valid(r->bytes,n) ||
+               strchr((char *)r->bytes,'\') || strchr((char *)r->bytes,'/'))continue;
+            struct desk_uninstall_entry entry={0};
+            /* Bare HKLM keys remain compatible; HKCU has a namespace prefix. */
+            snprintf(entry.key,sizeof(entry.key),"%s%s",hive ? "HKCU/" : "",r->bytes);
+            error=call(r,W32R_OPEN,root,(char *)r->bytes,NULL,0);
+            if(error==2){error=0;continue;}
+            if(error)break;
+            uint32_t key=r->header.key;
+            uint32_t e=string(r,key,"DisplayName",entry.name,sizeof(entry.name));
+            const char *names[]={"UninstallString","DisplayVersion","Publisher","InstallLocation"};
+            char *values[]={entry.command,entry.version,entry.publisher,entry.location};
+            unsigned sizes[]={sizeof(entry.command),sizeof(entry.version),sizeof(entry.publisher),sizeof(entry.location)};
+            for(unsigned k=0;!e && k<4;k++) {
+                uint32_t q=string(r,key,names[k],values[k],sizes[k]);if(q && q!=2)e=q;
+            }
+            const char *nums[]={"EstimatedSize","NoRemove","NoModify","SystemComponent"};
+            uint32_t *dest[]={&entry.estimated_kb,&entry.no_remove,&entry.no_modify,&entry.system_component};
+            for(unsigned k=0;!e && k<4;k++)e=number(r,key,nums[k],dest[k]);
+            uint32_t closed=call(r,W32R_CLOSE,key,NULL,NULL,0);
+            if(closed){error=closed;break;}
+            if(e==1062){error=e;break;}
+            if(!e && entry.name[0])out[count++]=entry;
+        }
+        if(root){uint32_t e=call(r,W32R_CLOSE,root,NULL,NULL,0);if(!error)error=e;}
     }
-    if (root) {uint32_t e=call(r,W32R_CLOSE,root,NULL,NULL,0);if(!error)error=e;}
     pthread_mutex_unlock(&registry_lock);free(r);
     return error ? native_error(error) : (int)count;
 }
 int ciuki_win32_uninstall_run(const char *key)
 {
-    if (!key || !*key || strlen(key)>=260 || strchr(key,'\\') || strchr(key,'/')) return -EINVAL;
+    if(!key)return -EINVAL;
+    uint32_t hive=W32R_HKLM;
+    if(!strncmp(key,"HKCU/",5)){hive=W32R_HKCU;key+=5;}
+    if(!*key || strlen(key)>=255 || strchr(key,'\') || strchr(key,'/'))return -EINVAL;
     char path[sizeof(uninstall)+260];snprintf(path,sizeof(path),"%s\\%s",uninstall,key);
     struct response *r=malloc(sizeof(*r));if(!r)return -ENOMEM;
     struct desk_launch_record *record=malloc(sizeof(*record));
-    if (!record) {free(r);return -ENOMEM;}
+    if(!record){free(r);return -ENOMEM;}
     pthread_mutex_lock(&registry_lock);
-    uint32_t error=call(r,W32R_OPEN,W32R_HKLM,path,NULL,0);
+    uint32_t error=call(r,W32R_OPEN,hive,path,NULL,0);
     char command[1284];
-    if (!error) {
-        uint32_t h=r->header.key;
-        error=string(r,h,"UninstallString",command,sizeof(command));
+    if(!error){
+        uint32_t h=r->header.key,protected=0;
+        error=number(r,h,"NoRemove",&protected);
+        if(!error && protected)error=5;
+        if(!error)error=number(r,h,"SystemComponent",&protected);
+        if(!error && protected)error=5;
+        if(!error)error=string(r,h,"UninstallString",command,sizeof(command));
         uint32_t e=call(r,W32R_CLOSE,h,NULL,NULL,0);if(!error)error=e;
     }
     pthread_mutex_unlock(&registry_lock);free(r);
