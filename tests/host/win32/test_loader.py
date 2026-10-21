@@ -75,6 +75,23 @@ class LoaderTests(unittest.TestCase):
                 out=self.command(self.h0,'load',self.image(spec),self.images,'observe',expected=1 if expected else 0)
                 self.assertIn(f'REFUSE {expected[0]} {expected[1]}' if expected else 'PASS load',out)
 
+    def test_f5_15c_subsystem_version_record_names_application_image(self):
+        """f5-15C: MajorSubsystemVersion is the 16-bit field at optional-header
+        offset 48 (Microsoft PE format). Real lld-link headers declare 4.0 and
+        load without the record; the corpus image patched to 6.0 is accepted
+        with one record naming that image (contract "Accepted images")."""
+        for name,major in (('console.exe',4),('gui.exe',4),('new-subsystem-version.exe',6)):
+            with self.subTest(image=name):
+                raw=(self.images/name).read_bytes()
+                optional=struct.unpack_from('<I',raw,60)[0]+24
+                self.assertEqual(struct.unpack_from('<H',raw,optional)[0],0x10b)
+                self.assertEqual(struct.unpack_from('<HH',raw,optional+48),(major,0))
+                out=self.command(self.h0,'load',self.images/name,self.images,'observe')
+                self.assertIn('PASS load',out)
+                records=[l for l in out.splitlines() if 'newer-subsystem-version' in l]
+                self.assertEqual(records,['[win32] load '+name+' newer-subsystem-version'] if major>5 else [])
+                self.assertNotIn('[win32] load image newer-subsystem-version',out)
+
     def test_runtime_models(self):
         for mode in ('heap','critical','strings','seh','loader','relocations','resources','stubs','heap-exceptions'):
             with self.subTest(mode=mode): self.assertIn('PASS ',self.command(self.units,mode,self.images))

@@ -2423,3 +2423,33 @@ The forced redraw still uses the existing row yields and reports exact bands.
 
 Research, policy comparison and qualification limits:
 [window wait validation](../validation/f3-52-window-wait.md).
+
+### f5-15C installers-tier probe tokens (2026-10-21, pending lead review)
+
+The QEMU `installers` tier selects one probe per acceptance title with the
+existing F5 selector grammar, `f5:<alias> run=<8 hex>`, where `<alias>` is the
+title's `probe` field of `tests/win32/workloads.json` (at most 23 bytes,
+`struct probe_selection.probe[24]`): `win32-diablo-shareware`, `win32-sc`,
+`win32-aoe-trial`, `win32-half-life-uplink`, `win32-ut-demo-348`, `win32-wa`,
+`win32-heroes3-demo`, `win32-rct-demo`, `win32-jazz2-shareware`,
+`win32-ta-demo`. No suffix and no new grammar: the same tokens serve the
+f5-17B `titles` tier, and the probe tells the tiers apart by the `tier=` line
+of the run's parameter disk (`CIUKI-ID.TXT`); a `titles` request ends
+`END status=NOT_RUN reason=title_driver_pending` until its guest driver
+exists. The tokens are in `src/kernel/probes/selector.c` (`f5_names`) and
+`scripts/test/loader_model.py` (`F5_PROBES`); the loader table line
+(`src/boot/ciukldr/menu.inc` `f5_probe_names`, 168 bytes) is applied with the
+f0-54 byte budget (`build/codex/f5-15c-menu-inc.patch`).
+
+Each probe opens the C: write gate (`storage_enable_write(storage_get(),2)`)
+before it starts the desktop, maps the private checkpoint range
+`0x10100000`–`0x10103fff` (four pages, `TITLE_RESULT_VA`,
+`src/probes/win32_installers/title_controller.h`) into the desktop before
+the shared gate command `GATE_W32_FIXTURE "title-installer:<run><cd>"` (the
+parameter-disk and CD drive letters), and publishes records only in its own
+scope (`probe=<alias>`, the f5-17A/B serial schema of
+`scripts/test/win32_evidence.py` with the f5-15C DATA cases `ui`,
+`inventory`, `residue`, `ledger_summary`, `snapshot` and the `title`/`class`
+name fields). The desktop reports `case=w32-title phase=<n> serial=<n>`
+through the existing probe-report hook; the kernel reads the checkpoint page
+in that call. No system call, record buffer or boot-info field changes.

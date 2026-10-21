@@ -144,10 +144,13 @@ static struct {
     uint32_t upper_child;
     bool installer;
     uint32_t installer_child;
+    /* f5-15C installers tier: armed by probe_title only (installer_title_probe.inc). */
+    bool title;
     unsigned core_fixture; /* shared fixture ID + 1; zero leaves the gate unarmed */
     uint32_t core_child;
 } native_reports;
 static bool installer_report_stage(unsigned,unsigned,unsigned);
+static bool title_report(struct process *,const char *);
 static struct {
     bool active,failed;
     uint32_t children[4],services[4],launches,exits,prompts,begins,resumes,registry;
@@ -287,6 +290,8 @@ static bool native_report(struct process *p, const char *line, unsigned length)
             checkpoint.ui_keys==ui_keys,"installer_checkpoint");
         NATIVE_REQUIRE(stage!=2 || ui_keys>=2,"installer_pages");
         NATIVE_REQUIRE(installer_report_stage(stage,code,errors),"installer_order");
+    } else if (server && native_reports.title && !strncmp(line,"case=w32-title ",15)) {
+        NATIVE_REQUIRE(title_report(p,line),"title_report");
     } else if (server && native_reports.core_fixture && !strncmp(line,"case=w32-fixture ",17)) {
         uint32_t child,fixture;
         NATIVE_REQUIRE(report_unsigned(line,"fixture",&fixture) && fixture+1==native_reports.core_fixture,"fixture_name");
@@ -1048,6 +1053,17 @@ finished:
 CIUKI_F5_PROBE("w32-upper-dlls",probe_w32_upper_dlls);
 #include "installer_probe.inc"
 CIUKI_F5_PROBE("w32-installer-nsis",probe_w32_installer_nsis);
+#include "installer_title_probe.inc"
+CIUKI_F5_PROBE("win32-diablo-shareware",probe_title_diablo);
+CIUKI_F5_PROBE("win32-sc",probe_title_starcraft);
+CIUKI_F5_PROBE("win32-aoe-trial",probe_title_aoe);
+CIUKI_F5_PROBE("win32-half-life-uplink",probe_title_half_life);
+CIUKI_F5_PROBE("win32-ut-demo-348",probe_title_ut);
+CIUKI_F5_PROBE("win32-wa",probe_title_worms);
+CIUKI_F5_PROBE("win32-heroes3-demo",probe_title_heroes3);
+CIUKI_F5_PROBE("win32-rct-demo",probe_title_rct);
+CIUKI_F5_PROBE("win32-jazz2-shareware",probe_title_jazz2);
+CIUKI_F5_PROBE("win32-ta-demo",probe_title_ta);
 
 int supervisor_spawn_standin(struct process *parent, struct process **out)
 {

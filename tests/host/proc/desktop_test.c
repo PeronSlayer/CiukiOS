@@ -187,6 +187,13 @@ int vfs_read(struct vfs_table *t,int fd,void *p,size_t n,size_t *done)
 {(void)t;(void)fd;(void)p;(void)n;(void)done;CHECK(!"installer read in desktop replay");return -EIO;}
 int vfs_close(struct vfs_table *t,int fd)
 {(void)t;(void)fd;CHECK(!"installer close in desktop replay");return -EIO;}
+/* f5-15C installers-tier observer: its C: walk is never entered by these replays. */
+int vfs_find_first(struct vfs_table *t,const char *p,uint8_t mask,struct vfs_find *f,struct fat_entry *e)
+{(void)t;(void)p;(void)mask;(void)f;(void)e;CHECK(!"installers-tier walk in desktop replay");return -EIO;}
+int vfs_find_next(struct vfs_table *t,struct vfs_find *f,struct fat_entry *e)
+{(void)t;(void)f;(void)e;CHECK(!"installers-tier walk in desktop replay");return -EIO;}
+int vfs_flush_drive(struct vfs_table *t,unsigned drive)
+{(void)t;(void)drive;CHECK(!"installers-tier flush in desktop replay");return -EIO;}
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
