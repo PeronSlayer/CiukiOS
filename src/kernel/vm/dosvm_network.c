@@ -199,8 +199,10 @@ int dosvm_network_detach(struct dosvm *v)
     dosvm_ipx_destroy(&n->ipx);
     dosvm_ne2000_reset(&n->ne);
     net_bridge_disable(&n->port->bridge, (struct bridge_key){n->key.id,n->key.generation});
+    bool pending = !n->port->bridge.count && n->port->bridge.promiscuous;
     net_bridge_port_release(n->port);
     v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+    if (pending) return -16; /* Retain owner until receive-mode cleanup succeeds. */
     memset(n, 0, sizeof(*n)); return 0;
 }
 void dosvm_network_service(struct dosvm *v, uint64_t host_ms)

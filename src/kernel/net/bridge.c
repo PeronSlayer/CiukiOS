@@ -122,8 +122,9 @@ int net_bridge_enable(struct net_bridge *b, struct bridge_key k, uint64_t now, u
 void net_bridge_disable(struct net_bridge *b, struct bridge_key k)
 {
     if (!b) return;
-    struct bridge_vm *v = lookup(b, k); if (!v) return;
-    drain(b, v); v->enabled = false; b->count--;
+    struct bridge_vm *v = lookup(b, k);
+    if (v) { drain(b, v); v->enabled = false; b->count--; }
+    /* Retrying a last-owner detach must retry receive-mode revocation too. */
     if (!b->count && b->promiscuous && !b->ops.promiscuous(b->ops.arg, false)) b->promiscuous = false;
 }
 void net_bridge_link(struct net_bridge *b, bool up)

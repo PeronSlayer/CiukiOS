@@ -528,6 +528,7 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #undef as_map
 #undef memcpy
 #undef memset
+#include "dosvm_network_seams.inc"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"

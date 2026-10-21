@@ -1,6 +1,6 @@
-/* f6-11 proposed CREATE launch.network word at offset 84. Frozen command
- * size/old offsets remain unchanged; zero means off. The existing kernel
- * validator must explicitly allow this word before the UI enables it.
+/* f6-11 Amendment 2: CREATE launch.network word at offset 84, carried in
+ * the first formerly reserved word. Command size/old offsets are unchanged;
+ * zero means off. The CREATE validator rejects other reserved words.
  * SPDX-License-Identifier: MIT */
 #ifndef CIUKI_DOSVM_NETWORK_ABI_H
 #define CIUKI_DOSVM_NETWORK_ABI_H

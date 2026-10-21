@@ -180,5 +180,5 @@ static enum net_link tu_link(struct netif *d)
 }
 const struct netif_driver net_tulip = {
     "tulip", tu_match, 128, 0, NIC_DMA_PAGES, tu_idle, tu_init, tu_start, tu_stop,
-    tu_transmit, tu_poll, tu_link, nic_mac, tu_interrupt, tu_irq_enable
+    tu_transmit, tu_poll, tu_link, nic_mac, tu_interrupt, tu_irq_enable, 0
 };

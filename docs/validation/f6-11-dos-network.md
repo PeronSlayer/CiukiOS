@@ -40,8 +40,10 @@ FF hardware error. No incoming packet allocates memory or asserts a host panic.
 
 Exact commands, outcomes, limitations and outstanding integration are recorded
 in `build/codex/f6-11-report.md`. No image SHA or guest qualification is claimed
-from host checks. The existing-files conflict rule must be resolved before
-wiring the models into VM lifecycle, the command validator and DOS Box UI.
+from host checks. Amendment 2 authorizes the VM lifecycle, command validator
+and DOS Box wiring, which is now applied. The primary physical-port binding,
+shared f6-10 packet pool/ledger and installation store remain pending the
+lead's f6-10 merge into this worktree.
 
 ## Application API source matrix
 
@@ -69,3 +71,37 @@ restricted to stable conventional guest memory. Pageable EMS/DPMI/VGA mappings
 are refused before publication; no physical IF-clear callback can fault them
 in. This matches the reviewed games' real-mode buffers. Tables, guest generations
 and copy bounds are tested independently from integration into the VM lifecycle.
+
+## Amendment 2 research and integration decisions
+
+The amendment grants production wiring after the lead merges f6-10. The checkout
+initially remained at `40f39986`, without that merge or any UU entries. No merge
+or index mutation is performed by the implementer.
+
+Receive-mode operations use the physical device mutex and retain normal error,
+runt and broadcast policy. Sources checked before implementation:
+
+- [Intel 8255x developer manual](https://www.intel.com/content/dam/doc/manual/8255x-10-100-mbps-ethernet-controller-software-dev-manual.pdf), Configure command, byte 15 bit 0: change destination acceptance with a bounded CU command, without resetting the RU or overwriting an outstanding TX command. A busy CU returns EBUSY.
+- [Linux RTL8139 driver](https://raw.githubusercontent.com/torvalds/linux/master/drivers/net/ethernet/realtek/8139too.c), `rx_mode_bits`/`__set_rx_mode`: RxConfig bit 0 accepts other physical destinations. Preserve FIFO/DMA configuration and reject bad/runt frames.
+- DP8390 datasheet section 10, RCR bit 4: accept physical destinations without enabling multicast, runts or errored packets. The selected IPX format uses unicast/broadcast only.
+- [Intel 8254x developer manual](https://www.intel.com/content/dam/doc/manual/pci-pci-x-family-gbe-controllers-software-dev-manual.pdf), RCTL.UPE: accept other unicast destinations without changing CRC stripping, ring geometry or multicast policy.
+- [Novell's NWSIPX API summary](https://support.novell.com/techcenter/articles/dnd19960702.html) describes the legacy ESR and timer roles, and the need to lock ECBs, data buffers and ESRs. This later 32-bit API does not specify the legacy INT7A register ABI. The per-call matrix above explicitly identifies the released DOS game source used for discovery, open/close, send/listen, address and relinquish semantics; timer/interval details are directive requirements rather than DOOM observations. No complete legacy Programmer's Reference was retrieved and none is claimed.
+
+Unsupported physical receive-mode operations fail closed. Native ingress must
+retain destination filtering when promiscuous reception is active: only host
+unicast, broadcast and existing multicast traffic can reach the native stack;
+the IPX EtherType tap consumes guest traffic independently.
+
+The receive-mode operation is implemented for e100, RTL8139, NE2000 PCI and
+e1000. PCnet, Tulip, 3c90x and Rhine explicitly return ENOSYS for this operation.
+The bridge retains the last VM's network owner when revocation returns busy;
+retrying destruction retries revocation before releasing guest memory.
+
+The new host lifecycle fixture uses the production CREATE validator, VM
+creation/boot, INT2F dispatch and CLOSE teardown, including failed admission
+rollback and deferred receive-mode cleanup. The established guest CPU harness
+has no LAN admission and keeps explicit absent-device seams; it is not evidence
+of guest LAN operation. All nine focused fixtures, this lifecycle fixture and
+the eight physical NIC register models pass supplementary UBSan checks.
+The normal ASan/UBSan runners compile, but LeakSanitizer cannot perform its
+ptrace check in this sandbox. Leak detection remains enabled.

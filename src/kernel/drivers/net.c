@@ -58,6 +58,11 @@ static bool bridge_tap_frame(struct netif *d, const struct net_packet *p)
     return true;
 }
 /* f6-11 END: bridge tap. */
+static bool native_destination(const struct netif *d, const struct net_packet *p)
+{
+    return !d->promiscuous || (p->length >= 14 &&
+        ((p->data[0] & 1) || !memcmp(p->data, d->address, 6)));
+}
 static struct netif *proof_device;
 static const struct netif_driver *const net_drivers[] = {
     &net_e100, &net_rtl8139, &net_ne2000, &net_e1000, &net_pcnet,
@@ -363,6 +368,20 @@ int netif_transmit(struct netif *d, gen_t generation, const void *frame, unsigne
     else if (!err) d->stats.tx_submitted++;
     kmutex_unlock(&d->mutex); return err;
 }
+int netif_promiscuous(struct netif *d, gen_t generation, bool on)
+{
+    if (!d || !d->driver) return -EINVAL;
+    kmutex_lock(&d->mutex);
+    int err = generation != d->generation || !d->ready || !d->running ||
+        d->stopping || d->quarantined ? -NET_ENODEV : 0;
+    if (!err && d->promiscuous != on) {
+        err = d->driver->promiscuous ? d->driver->promiscuous(d, on) : -ENOSYS;
+        if (!err && d->fault_pending) err = -NET_EIO;
+        if (!err) d->promiscuous = on;
+        else if (err != -NET_EBUSY && err != -ENOSYS) quarantine_locked(d, "receive_mode_fault");
+    }
+    kmutex_unlock(&d->mutex); return err;
+}
 void netif_poll(struct netif *d)
 {
     if (!d || !d->driver) return;
@@ -459,7 +478,7 @@ void net_worker_step(void)
         if ((input || bridge_tap.fn) && netif_pop(&devices[i], &packet) &&
             !bridge_tap_frame(&devices[i], &packet)) { /* f6-11 type tap before native ingress */
             net_input_fn fn = input; void *cookie = input_cookie;
-            if (fn) {
+            if (fn && native_destination(&devices[i], &packet)) {
                 input_active = true; fn(&devices[i], packet.data, packet.length, cookie); input_active = false;
             }
         }

@@ -132,7 +132,15 @@ static enum net_link e1_link(struct netif *d)
     if (status == 0xffffffff) { d->fault_pending = true; return NET_LINK_UNKNOWN; }
     return status & 2 ? NET_LINK_UP : NET_LINK_DOWN;
 }
+static int e1_promiscuous(struct netif *d, bool on)
+{
+    uint32_t config = e1_read(d, 0x100);
+    if (config == UINT32_MAX) return -5;
+    config = on ? config | (1u << 3) : config & ~(1u << 3);
+    e1_write(d, 0x100, config);
+    return e1_read(d, 0x100) == config ? 0 : -5;
+}
 const struct netif_driver net_e1000 = {
     "e1000", e1_match, 0x20000, 0, NIC_DMA_PAGES, e1_idle, e1_init, e1_start, e1_stop,
-    e1_transmit, e1_poll, e1_link, nic_mac, e1_interrupt, e1_irq_enable
+    e1_transmit, e1_poll, e1_link, nic_mac, e1_interrupt, e1_irq_enable, e1_promiscuous
 };

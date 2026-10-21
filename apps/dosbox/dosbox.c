@@ -22,6 +22,8 @@
 #include <unistd.h>
 #include "loading.h"
 #include "settings.h"
+#include "network_settings.h"
+#include "network_panel.h"
 
 static void command(struct ciuki_dosvm_command *c, uint32_t id, uint32_t generation)
 {
@@ -93,7 +95,7 @@ int main(int argc, char **argv)
 {
     int channel = 3, result = 1, pause_background = 0;
     const char *name = "CiukiDOS";
-    const char *kernel_override=NULL, *memory_override=NULL;
+    const char *kernel_override=NULL, *memory_override=NULL, *network_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
     for (int i = 1; i < argc; i++) {
@@ -104,6 +106,7 @@ int main(int argc, char **argv)
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
         else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
         else if (!strncmp(argv[i],"--dos-memory=",13)) memory_override=argv[i]+13;
+        else if (!strncmp(argv[i],"--dos-network=",14)) network_override=argv[i]+14;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
         else {                                                    /* COMMAND words */
@@ -122,6 +125,7 @@ int main(int argc, char **argv)
     unsigned game=dosbox_game(typed);
     unsigned kernel=game ? dosbox_setting_load(game) : 0;
     unsigned memory=game ? dosbox_memory_load(game) : 0;
+    unsigned network=game ? dosbox_network_load(game) : CIUKI_DOSVM_NETWORK_OFF;
     if (kernel_override) {
         if (!game) return 2;
         kernel=dosbox_kernel_value(kernel_override);
@@ -131,6 +135,11 @@ int main(int argc, char **argv)
         if (!game || (strcmp(memory_override,"locked") && strcmp(memory_override,"paged"))) return 2;
         memory=dosbox_memory_value(memory_override);
         if (dosbox_memory_save(game,memory)) { perror("dosbox: DOS memory setting"); return 1; }
+    }
+    if (network_override) {
+        if (!game || (strcmp(network_override,"off") && strcmp(network_override,"ipx"))) return 2;
+        network=!strcmp(network_override,"ipx") ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF;
+        if (dosbox_network_save(game,network)) { perror("dosbox: network setting"); return 1; }
     }
     int settings_open=0, settings_repaint=0;
     uint32_t *settings_backup=NULL;
@@ -167,6 +176,7 @@ int main(int argc, char **argv)
     if (send_packet(channel, &m)) goto done;
     command(&c, 0, 0); c.surface_fd = surface; memcpy(c.name, name, len);
     c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
+    dosvm_launch_network_set(&c,network);
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
         snprintf(detail, sizeof(detail), "%s", kernel==CIUKI_DOSVM_FREEDOS13 ?
@@ -228,6 +238,11 @@ int main(int argc, char **argv)
                         if (dosbox_memory_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
                         else { memory=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
                     }
+                    if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_5 || packet.event.code==CIUKI_KEY_6)) {
+                        unsigned choice=packet.event.code==CIUKI_KEY_6 ? CIUKI_DOSVM_NETWORK_IPX : CIUKI_DOSVM_NETWORK_OFF;
+                        if (dosbox_network_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
+                        else { network=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
+                    }
                     if (packet.event.code==CIUKI_KEY_ESCAPE && packet.event.value==1) {
                         settings_open=0;
                         dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1;
@@ -259,9 +274,9 @@ int main(int argc, char **argv)
             settings_repaint=0;
         }
         if (settings_open && configured) {
-            char selection[96];
-            snprintf(selection,sizeof(selection),"Kernel: %s. Memory: %s.",dosbox_kernel_label(kernel),dosbox_memory_label(memory));
-            dosbox_kernel_panel(&canvas,selection,setting_detail);
+            char selection[128];
+            snprintf(selection,sizeof(selection),"Kernel: %s. Memory: %s. Network: %s.",dosbox_kernel_label(kernel),dosbox_memory_label(memory),dosbox_network_label(network));
+            dosbox_network_panel(&canvas,selection,setting_detail);
             desk_message(&m,DESK_DAMAGE,20);
             desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
             if (send_packet(channel,&m)) goto done;

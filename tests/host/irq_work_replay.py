@@ -92,6 +92,7 @@ def main():
                ['src/kernel/lib/fmt.c', 'src/kernel/lib/sha256.c',
                 'src/kernel/vm/virtual_vga.c', 'src/kernel/vm/virtual_vga_bios.c',
                 'src/kernel/vm/vga_x86.c', 'src/kernel/vm/vga_presenter.c',
+                'src/kernel/net/bridge.c', 'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',
                 *(OUT / f'dosvm_audio_{n}.o' for n in ('vm_source', 'opl3', 'mixer'))],
                ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast'], text=vm_source)
         replay(folder, 'firmware-input', 'v86_test.c', [('irq_input', 'BIOS-input-capture', 100)], [])

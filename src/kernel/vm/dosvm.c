@@ -10,6 +10,7 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/work.h>
 #include "dosvm_internal.h"
+#include "dosvm_network.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
 extern void v86_leave(uint32_t) __attribute__((noreturn));
@@ -832,12 +833,14 @@ static void stack_prefault(struct dosvm *v, const struct v86_frame *f)
  * return after scheduling/reporting. Physical PIC programming is unchanged. */
 static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
 {
+    if (read_eflags() & 0x200) dosvm_network_service(v, g_ticks);
     stack_prefault(v, f);
     uint64_t delivered = v->monitor.stats.reflected_irqs;
     uint32_t sb_delivered = v->monitor.stats.delivered[v->audio.sb.irq & 15];
     int e = 0;
     uint32_t flags = irq_save();
-    if (!v->frame_pm) e = dosvm_mouse_dispatch(v, f);
+    if (!v->frame_pm) e = dosvm_network_dispatch(v, f);
+    if (!v->frame_pm && !e) e = dosvm_mouse_dispatch(v, f);
     if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
     irq_restore(flags);
     if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
@@ -1080,6 +1083,10 @@ stop_return:
 static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    if (vector == 0x2f || vector == 0x7a || vector == 0xfc) {
+        int network = dosvm_network_interrupt(v, f, vector);
+        if (network != -ENOSYS) return network;
+    }
     if (dosvm_file_interrupt && (vector==0x21 || vector==0x2f || vector==0xfe)) {
         int file=dosvm_file_interrupt(v,f,vector,0); /* DOS_FILE_V86 */
         if (file!=-ENOSYS) return file;
@@ -1237,6 +1244,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
+    int network_error = dosvm_network_detach(v);
+    if (network_error) { destroying[slot] = false; return network_error; }
     int video_error=dosvm_fullscreen_leave(key,false);
     if (video_error) {
         klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",

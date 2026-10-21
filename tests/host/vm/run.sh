@@ -15,6 +15,8 @@ clang "${flags[@]}" "${gc[@]}" "$root/tests/host/vm/network_test.c" "$root/src/k
     "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c" "$root/src/kernel/lib/fmt.c" -o "$out/network_test"
 clang "${flags[@]}" "$root/tests/host/vm/irq_test.c" "$root/src/kernel/vm/dosvm_ne2000.c" \
     "$root/src/kernel/vm/v86.c" "$root/src/kernel/vm/dosvm_pic.c" -o "$out/irq_test"
-for test in bridge ne2000 ipx tap port settings network irq; do
+clang "${flags[@]}" "${gc[@]}" "$root/tests/host/vm/receive_mode_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/receive_mode_test"
+for test in bridge ne2000 ipx tap port settings network irq receive_mode; do
     (cd "$root" && "$out/${test}_test")
 done
+bash "$root/tests/host/vm/run_lifecycle.sh"

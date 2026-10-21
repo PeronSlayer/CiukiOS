@@ -117,7 +117,11 @@ int main(void)
     CHECK(!e[8] && e[9]==0xfe && n->ipx.ticks==interval_ticks(3000) && !pool.used);
     CHECK(net_bridge_port_acquire(&port)); CHECK(dosvm_network_detach(v)==-16); net_bridge_port_release(&port);
     CHECK(!dosvm_network_detach(v) && !network(v) && !registered_ports[0]);
-    CHECK(dosvm_network_dispatch(v,&f)==0); CHECK(!dosvm_network_detach(&guest[1]));
+    CHECK(dosvm_network_dispatch(v,&f)==0);
+    mode_error=-16; CHECK(dosvm_network_detach(&guest[1])==-16);
+    CHECK(network(&guest[1]) && !port.bridge.count && port.bridge.promiscuous);
+    CHECK(dosvm_network_bind_port(0)==-16);
+    mode_error=0; CHECK(!dosvm_network_detach(&guest[1]) && !network(&guest[1]) && !port.bridge.promiscuous);
     CHECK(!dosvm_network_bind_port(0)); CHECK(!net_bridge_port_close(&port) && !pool.used);
     printf("network adapter: %u checks passed, %u safe points\n",checks,preemptions); return 0;
 }

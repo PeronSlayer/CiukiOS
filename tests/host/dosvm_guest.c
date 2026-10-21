@@ -338,6 +338,13 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/v86.c"
 #include "dosvm_work.inc"
 #include "../../src/kernel/vm/dosvm.c"
+/* This CPU/storage harness admits no LAN port or network-enabled launch.
+ * The real network adapters run in tests/host/vm/lifecycle_test.c instead. */
+void dosvm_network_service(struct dosvm *v, uint64_t now) { (void)v; (void)now; }
+int dosvm_network_dispatch(struct dosvm *v, struct v86_frame *f) { (void)v; (void)f; return 0; }
+int dosvm_network_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t vector)
+{ (void)v; (void)f; (void)vector; return -ENOSYS; }
+int dosvm_network_detach(struct dosvm *v) { (void)v; return 0; }
 #ifndef CIUKI_DOSVM_FILE_CPU
 #include "dosvm_request_context.inc"
 #endif

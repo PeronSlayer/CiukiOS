@@ -536,7 +536,9 @@ static void test_client_boundary(void)
     c.launch.kernel=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.kernel=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); /* shell */
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
-    c.launch.game=1; c.launch.reserved[0]=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.reserved[0]=0; c.launch.reserved[1]=1;
+    CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); c.launch.reserved[1]=0;
     c.launch.reserved[0]=0; workload_disk=true;
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EIO && fake_surface[0].references==1);
     workload_disk=false; c.launch.kernel=c.launch.game=0;
