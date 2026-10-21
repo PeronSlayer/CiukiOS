@@ -226,11 +226,18 @@ static int unified_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector)
     if (!v->unified && (ip!=DFV2_EVENT+2 || unified_create(v))) return 0;
     enum dfv2_outcome outcome=dos_unified_gate(v->unified,&r);
     if (v->unified->bind_refusal && !v->unified_logged) {
-        /* One line per VM: the final bind is one-shot (DOS=LOW is required). */
+        /* One line per VM: the final bind is one-shot (DOS=LOW is required).
+         * f3-57 Amendment 1: a refused activation stops the VM here, at the
+         * lifecycle gate, unless CIUKIDF.SYS was loaded with /LOCAL. */
         struct unified_runtime *r=(struct unified_runtime *)v->unified;
+        char token[64];
+        v->unified_logged=true;
+        if (dos_unified_activation_stop(v->unified,r->ifs.why,token,sizeof(token))) {
+            klog("[dosvm] unified_activation_refused reason=%s",token);
+            dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+        }
         klog("[dosvm] DFV2 bind refused vm=%u generation=%u reason=%s ifs=%s",
              v->info.key.id,v->info.key.generation,v->unified->bind_refusal,r->ifs.why ? r->ifs.why : "-");
-        v->unified_logged=true;
     }
     {
         struct unified_runtime *r=(struct unified_runtime *)v->unified;

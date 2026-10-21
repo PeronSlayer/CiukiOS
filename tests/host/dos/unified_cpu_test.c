@@ -30,7 +30,8 @@ static uint8_t *image; static size_t image_bytes;
 static uint8_t *overlay[TOTAL_SECTORS];
 static struct dos_unified U;
 static char e9[1<<20],con[1<<20]; static size_t e9n,conn;
-static int stopped=-1; static const char *failure;
+static int stopped=-1; static const char *failure; static bool vm_stopped,refusal_logged;
+static char vm_record[96];
 static unsigned long long ticks_base;
 static unsigned bios_unhandled,ports_unknown,faults,gate_calls[5],refusals_seen;
 struct saved_regs { uint32_t eax,ebx,ecx,edx,esi,edi,ebp,eflags; uint16_t ds,es,ss,sp; };
@@ -304,6 +305,20 @@ static int gate(void) {
         return 1;
     }
     enum dfv2_outcome r=dos_unified_gate(&U,&f);
+    if (U.bind_refusal && !refusal_logged) {
+        /* As dos_file_vm.c: a refused activation without /LOCAL stops the VM
+         * at this lifecycle gate call with one record (f3-57 Amendment 1). */
+        char token[64]; refusal_logged=true;
+#ifdef H57_IFS
+        const char *detail=IFS.why;
+#else
+        const char *detail=0;
+#endif
+        if (dos_unified_activation_stop(&U,detail,token,sizeof(token))) {
+            snprintf(vm_record,sizeof(vm_record),"[dosvm] unified_activation_refused reason=%s",token);
+            vm_stopped=true; x86emu_stop(E); return 1;
+        }
+    }
     if (getenv("H56_TRACE"))       /* diagnostics: every gate call and its outcome */
     {
         uint32_t rec=((uint32_t)U.layout.driver_seg<<4)+U.layout.call_off;
@@ -454,17 +469,18 @@ int main(int argc,char **argv) {
     for (unsigned i=0;i<512;i++) x86emu_write_byte(E,0x7c00+i,image[i]);
     x86emu_set_seg_register(E,E->x86.seg+R_CS_INDEX,0);
     E->x86.R_IP=0x7c00; E->x86.R_SP=0x7c00; E->x86.R_DL=0x80; E->x86.R_EFLG=0x202;
-    for (unsigned long long done=0;stopped<0 && !failure && done<budget;) {
+    for (unsigned long long done=0;stopped<0 && !failure && !vm_stopped && done<budget;) {
         E->max_instr=E->x86.R_TSC+100000;
         x86emu_run(E,X86EMU_RUN_MAX_INSTR);
         x86emu_write_dword(E,0x46c,(uint32_t)(E->x86.R_TSC/20000));
-        if (stopped<0 && !failure && E->x86.R_TSC<E->max_instr) {
+        if (stopped<0 && !failure && !vm_stopped && E->x86.R_TSC<E->max_instr) {
             uint32_t pc=((uint32_t)E->x86.R_CS<<4)+E->x86.R_IP;
             if (x86emu_read_byte(E,pc-1)==0xf4) { fail("guest HLT"); break; }
         }
         done=E->x86.R_TSC;
     }
-    if (stopped<0 && !failure) failure="instruction budget exhausted";
+    if (stopped<0 && !failure && !vm_stopped) failure="instruction budget exhausted";
+    printf("H56 VMSTOP stopped=%u record=%s\n",vm_stopped,vm_stopped ? vm_record : "none");
     dump_text("E9",e9,e9n); dump_text("CON",con,conn);
     printf("H56 CPU instructions=%llu stop=%d failure=%s faults=%u bios_unhandled=%u ports_unknown=%u\n",
            (unsigned long long)E->x86.R_TSC,stopped,failure ? failure : "none",faults,bios_unhandled,ports_unknown);

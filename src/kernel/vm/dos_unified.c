@@ -424,6 +424,23 @@ enum dfv2_outcome dos_unified_gate(struct dos_unified *d,const struct dos_file_f
     d->memory.release(d->memory.arg); return DFV2_RESUME;
 }
 const struct dfv2_layout *dos_unified_layout(const struct dos_unified *d) { return d->staged ? d->staged : &d->layout; }
+bool dos_unified_activation_stop(struct dos_unified *d,const char *detail,char *token,size_t bytes) {
+    if (!bytes) return false;
+    const char *why=detail ? detail : d->bind_refusal ? d->bind_refusal : "refused";
+    size_t n=0; bool gap=false;
+    for (const char *c=why;*c && n+1<bytes;c++) {
+        char x=*c>='A' && *c<='Z' ? (char)(*c+32) : *c;
+        if ((x>='a' && x<='z') || (x>='0' && x<='9')) { if (gap && n && n+2<bytes) token[n++]='_'; token[n++]=x; gap=false; }
+        else gap=true;
+    }
+    token[n]=0;
+    if (!d->bind_refusal || d->bound || !d->registered) return false;
+    uint8_t off[2],policy=0; bool local=false;
+    if (rd(d,at(d->layout.driver_seg,0x12+0x16),off,2) && u16(off)<d->layout.driver_bytes &&
+        rd(d,at(d->layout.driver_seg,u16(off)),&policy,1)) local=policy==1;
+    d->memory.release(d->memory.arg);
+    return !local;
+}
 bool dos_unified_callback_stack(const struct dos_unified *d,uint16_t *ss,uint16_t *spp) {
     if (!d->pending || d->dead) return false;
     *ss=d->layout.driver_seg; *spp=(uint16_t)(stack_top(&d->layout)-4); return true;

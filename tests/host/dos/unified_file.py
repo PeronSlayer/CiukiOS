@@ -160,28 +160,33 @@ def main():
     check(field(run, "IO")["int13_after"] == "0", "ifs-h56: guest INT 13h after activation")
     released(run, "ifs-h56")
 
-    # Activation barrier: refused mount stops before INSTALL/shell; /LOCAL
-    # keeps the local FAT; a view beyond LASTDRIVE unwinds the mount.
-    run = boot(cpu, "strict-mount", kernel, "H57.COM F", files, args=("--ifs-fail=mount",), expect_exit=1)
+    # Activation barrier (f3-57 Amendment 1): a refused activation stops the
+    # VM at the lifecycle gate with one record, before INSTALL/shell and
+    # without a halted guest; /LOCAL keeps the local FAT; a view beyond
+    # LASTDRIVE is refused after the mount and unwound.
+    run = boot(cpu, "strict-mount", kernel, "H57.COM F", files, args=("--ifs-fail=mount",))
     boots += 1
-    check("CiukiDOS: native file activation refused (error 31); system stopped" in run.con and
-          "failure=guest HLT" in run.text and not run.e9.strip(), "strict-mount: contained stop")
+    check("H56 VMSTOP stopped=1 record=[dosvm] unified_activation_refused reason=native_mount_failed" in run.text and
+          "failure=none" in run.text and "system stopped" not in run.con and not run.e9.strip(),
+          "strict-mount: VM stopped at the gate with one record")
     ifs, io = field(run, "IFS"), field(run, "IO")
     check(ifs["active"] == "0" and ifs["refusals"] == "1" and io["mounts"] == "0" and
           run.field("GATES")["local"] == "0", f"strict-mount: nothing published {ifs} {io}")
     run = boot(cpu, "local-mount", kernel, "H57.COM U", files, args=("--ifs-fail=mount",),
                device=b"DEVICE=C:\\CIUKIDF.SYS /LOCAL\r\n")
     boots += 1
+    check("H56 VMSTOP stopped=0" in run.text, "local-mount: /LOCAL does not stop the VM")
     check(passed(run, "local") and "H57 END fails=0000" in run.e9 and
           "CiukiDOS: DFV2 binding refused (error 31); continuing unbound" in run.con, "local-mount: local FAT")
     check(run.field("GATES")["local"] == "0" and field(run, "IFS")["active"] == "0", "local-mount: unbound")
     run = boot(cpu, "lastdrive", kernel, "H57.COM F", files, args=("--d=" + str(dvol), "--ifs-fail=lastdrive"),
-               lastdrive=b"Y", expect_exit=1)
+               lastdrive=b"Y")
     boots += 1
     ifs, io = field(run, "IFS"), field(run, "IO")
-    check("why=owned drive beyond LASTDRIVE" in run.text and io["mounts"] == "1" and io["unmounts"] == "1" and
-          ifs["active"] == "0" and "error 5); system stopped" in run.con and not run.e9.strip(),
-          f"lastdrive: refused after the mount and unwound {ifs} {io}")
+    check("record=[dosvm] unified_activation_refused reason=owned_drive_beyond_lastdrive" in run.text and
+          io["mounts"] == "1" and io["unmounts"] == "1" and ifs["active"] == "0" and
+          "system stopped" not in run.con and not run.e9.strip(),
+          f"lastdrive: refused after the mount, unwound, VM stopped {ifs} {io}")
 
     # The unchanged f3-48 basic-fixture battery: pristine kernel (local FAT,
     # no driver) against the fork with the live IFS.

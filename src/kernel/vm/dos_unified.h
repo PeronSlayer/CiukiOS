@@ -123,4 +123,11 @@ enum dfv2_outcome dos_unified_critical(struct dos_unified *,const struct dos_fil
 void dos_unified_destroy(struct dos_unified *);
 /* The final layout: staged during the bind transaction, then published. */
 const struct dfv2_layout *dos_unified_layout(const struct dos_unified *);
+/* f3-57 Amendment 1: after a refused final bind (activation), true when the
+ * monitor must stop the VM at this lifecycle gate call, i.e. unless
+ * CIUKIDF.SYS was loaded with /LOCAL (control block v3: +16h is the offset of
+ * its policy byte). token receives a [a-z0-9_] reason, preferring detail
+ * (the backend's refusal) over the adapter's. Refusals at other gates and
+ * the phase-0 registration (driver not installed) are not activations. */
+bool dos_unified_activation_stop(struct dos_unified *,const char *detail,char *token,size_t bytes);
 #endif

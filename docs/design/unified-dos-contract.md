@@ -334,8 +334,10 @@ proposal order above; wire layout and diagrams are in
 
 No other number is reserved by f3-56.
 
-f3-57 additions, pending the lead's review (private wire only; no lifecycle
-selector, no public ABI; rationale in `docs/validation/f3-57-unified-file-channel.md`):
+f3-57 additions, reserved by the lead in f3-57 Amendment 1 (2026-10-21 21:52;
+private wire only, no lifecycle selector, no public ABI; rationale in
+`docs/validation/f3-57-unified-file-channel.md`). The f3-56 monitor-only
+PENDING continuation (1C0C) stays for requests that have no INT 24h frame:
 
 | Item | Value | Source |
 | --- | --- | --- |
@@ -345,6 +347,7 @@ selector, no public ABI; rationale in `docs/validation/f3-57-unified-file-channe
 | Control block | `CIUKIDFC` v3, 24 bytes; +16h = offset of the policy byte (1 = `/LOCAL`) | `ciukidf.asm`, `hdr/ciuki.h` |
 | Identities | driver `CIUKIDF2 F3-57 1`, kernel `CIUKIDOS K2043 3` (supersede the f3-56 rows above) | `ciukidf.asm`, `ciukinit.c`, `dos_unified.c` |
 | CDS publication | owned drives `C000h` (IFS) at event 0 phase 1 commit | `dos_unified_ifs.c` |
+| Refused activation | the monitor stops the VM at the event 0 phase 1 gate call (`DOSVM_FAULT`) with one record `[dosvm] unified_activation_refused reason=<token>` ([a-z0-9_]), unless CIUKIDF.SYS has the `/LOCAL` policy; no event number added | `dos_unified.c` `dos_unified_activation_stop`, `dos_file_vm.c` |
 
 Reuse event selector **0** for the late BIND and **1–8** for existing meanings:
 1 PSP_CREATE, 2 PSP_SELECT, 3 EXEC_BEGIN, 4 EXEC_COMMIT, 5 EXEC_ROLLBACK,

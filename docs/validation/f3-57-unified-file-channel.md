@@ -63,6 +63,19 @@ DF6 measurements (H57-07).
    observed) and wrote the reply through the user's GS. `entry.asm` now saves
    and restores the caller's FS/GS around the call (patch 0002, WATCOM/386
    only). Without it no redirector Retry can work on this kernel.
+   Accepted by the lead (f3-57 Amendment 1); to be reported upstream after
+   the 1.0 Alpha with this minimal reproduction: on a K2043 built with Open
+   Watcom for 386 (`Kernel compatibility 7.10 - WATCOMC - 80386`), inside any
+   INT 21h file call (kernel stack, SS = DGROUP) execute
+   `push 1802h / mov ax,1206h / int 2Fh / add sp,2` with an INT 24h handler
+   that returns AL=01h and a user GS other than DGROUP. Expected AL=01h;
+   observed AL=06h (AX unchanged), and the reply byte goes to
+   user-GS:[SI+10h] (SI = kernel-stack offset of the 2F/12xx frame).
+   `wdis kernel/inthndlr.obj` shows `call _CriticalError` followed by
+   `mov byte ptr gs:0x10[si],al`; `entry.asm` `_CriticalError` runs
+   `Restore386Registers` (pops the user's GS/FS) before `int 24h` and never
+   restores the caller's. Host reproduction: `H57.COM F` step
+   `critical-retry` on the fork without the `entry.asm` hunk.
 6. **4Dh after Abort.** K2043 clears ErrorMode at the 4Ch dispatch
    (`inthndlr.c:470`) before case 4Ch reads it (`:1110`), so 4Dh returns type
    0 after an INT 24h Abort (MS-DOS: 2). Kept: the pristine kernel is the
@@ -74,10 +87,14 @@ DF6 measurements (H57-07).
    file open on an owned drive; any refusal unmounts and leaves nothing. The
    commit only writes the CDS entries; the VMM then routes BIOS INT 13h for
    C: through `dos_file_volume_raw` (same provider/generation, raw-write
-   invalidation). A refused activation stops the kernel before INSTALL/shell
-   (`cli; hlt`, contained in the VM, no panic path) unless the driver was
-   loaded with `/LOCAL`, the explicit isolated-fixture policy that keeps the
-   local FAT (`unified_binding.py` fixtures use it).
+   invalidation). A refused activation stops before INSTALL/shell unless the
+   driver was loaded with `/LOCAL`, the explicit isolated-fixture policy that
+   keeps the local FAT (`unified_binding.py` fixtures use it). f3-57
+   Amendment 1: the monitor stops the VM at that same lifecycle gate call
+   (`DOSVM_FAULT`), before control returns to the guest, with one record
+   `[dosvm] unified_activation_refused reason=<token>`, so the DOS Box shows
+   the refusal and no guest is left halted; `ciukinit.c`'s `cli; hlt` is now
+   only a guest-side fallback for a monitor that did not stop the VM.
 8. **Private wire additions** (no new lifecycle selector, no public ABI):
    status 2 CRITICAL; call word +2Ah Retry (0/1; +2Ch–2Fh stay zero); control
    block v3, 24 bytes, +16h offset of the policy byte; identities
@@ -112,6 +129,20 @@ DF6 measurements (H57-07).
 - Unchanged f3-48 basic battery (27 probes): identical results on the
   pristine kernel (local FAT, 12.9 M instructions) and the fork with the live
   IFS (2.6 M instructions); D48020 fails on both in this BIOS-only harness.
+
+## Lead decisions (f3-57 Amendment 1, 2026-10-21 21:52)
+
+- Decision 5 (GS fix) accepted; upstream report after the 1.0 Alpha (above).
+- Status 2 and the +2Ah Retry flag reserved; the f3-56 monitor-only PENDING
+  path stays for cases without an INT 24h frame (contract ABI table).
+- Identities `CIUKIDF2 F3-57 1`, `CIUKIDOS K2043 3` and control block v3 with
+  `/LOCAL` reserved.
+- Refused activation stops the VM through the lifecycle gate with the
+  `unified_activation_refused` record (implemented 21:54; host cases
+  `strict-mount` and `lastdrive` in `unified_file.py`; `local-mount` shows
+  that `/LOCAL` does not stop the VM).
+- Kept FreeDOS behaviours accepted: 4Dh type 0 after Abort, sharing
+  violation 05h, E: read-only.
 
 ## Open (not closed here)
 
