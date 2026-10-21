@@ -6,6 +6,9 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### Kernel and resource management
 
+- f1-87 (`c19230eb`): T23 trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
+- f1-90 (`3c50bb79`): device CPU budget accounted per task with a max-min fair share; the audio refill worker has its own 2 ms per 10 ms budget and a direct interrupt wake; `device_top` and `audio_refill_overrun` records; contract R1/R2 amended.
+- f1-89 (`551bd15a`): reserved cache publication and FAT transactions — bounded logical holds, writer turn with a wait metric, in-flight readers block publication, single-page transactions, no barrier per 8 KiB overflow chunk, guarded lookups never read the disk under the guard (strict FS gate exit 0, 10 MiB copy replay 1,278 commands, 4,678 crash cuts clean).
 - Fixed (`dbb0d714`, `cc81cbb6`): Addressed peer thread metadata pin contention where concurrent walks of a process memory map yielded `EBUSY`, allowing task walks to wait out metadata pins and avoiding duplicate pins on pre-pinned caller copies (`test_peer_walk_copy`).
 - f0-49b (`a7f933be`): Pagefile mapper cluster cursor is now validated by the chain stamp and reset on error, ensuring trailing trims followed by regrowth cannot map reused clusters belonging to other files (`trim_regrow_reuse`).
 - f0-49c (`66d0ae55`): Pagefile extents in `C:\SYSTEM\PAGEFILE.SWP` are preserved across boots and extent growth is restricted to metadata allocation without synchronous 16 MiB zeroing, decoupling desktop startup from the pager manager and resolving boot stalls under `icount`.
@@ -20,6 +23,7 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### DOS and unified DOS
 
+- f3-56, f3-57 (`d0e05169`): unified DOS — native DFV2 binding adapter, `CIUKIDF.SYS`, FreeDOS 2043 fork patch 0002 (lifecycle hooks, redirector sites, FCB/NLS, critical-error GS fix), live VFS backend for C:/D:/E: at the seven redirector sites, INT 24h critical errors with the real frame, a refused activation stops the VM with a record, the fork kernel installed in the image under `kernel=unified` once `fork-qualified.json` exists.
 - f3-46 (`ed2f028a`): Converted the DOS VM 24 MiB memory pool into a pageable object (Contract D1) backed by demand paging and pagefile swap, reducing creation latency from 134.3 ms to 23.6 ms with protected I/O fault handling.
 - Fixed (`85b9024a`, `b2bc10a7`): Optimized DOS game launch base hashing from sector-by-sector seeks into a single sequential pass with 64 KiB reads, reducing host hashing elapsed time from 29.2 s to 0.25 s (`test_game_window_base_hash`).
 - f3-52 (`84f01cd2`): Replaced 2 ms DOS window rendering polling with event-driven blocking frame waits (`WAIT_PRESENT`), donating priority to the VM thread while waiting and throttling loading panel repaints to <=4 Hz.
@@ -31,6 +35,10 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### Win32 and installers
 
+- f5-15a2 (`a72352fd`): NSIS, CAB and self-extracting installers — advpack/setupapi/cabinet qualification, zero-length `ReadFile`, case-insensitive paths, `w32-installer-nsis` probe.
+- f5-15b (`01fa33ec`): original installer acceptance — ten installers load, workloads imported with SHA-1 receipts, installer title tests and census.
+- f5-15c (`90c9e903`): QEMU installers tier — ten `f5:win32-<alias>` probes in the kernel, loader table and runner model, guest UI driver, manifests and calibration commands, installer CD images in the runner, `_vsnprintf`/`_vsnwprintf`, named newer-subsystem records (per-title QEMU calibration still to run).
+- kernel32 profile (`a17e29f8`): `WritePrivateProfileStringA` rewrites keep one entry in place, duplicates dropped, NULL value/key deletion, line endings preserved.
 - f5-10c (`d772a901`, `74718423`): Win32 dialog manager, standard controls, menus, accelerators, `MessageBox`, and TrueType font selection implemented.
 - f5-10c2 (`e246bda5`): TrueType font bridge routing glyph rasterization through `w32srv` via FreeType, baseline alignment corrections across golden frames, and `dialogs-exercise.exe` guest probe fixture.
 - f5-10c3 (`588609e7`): Dialogs fixture results page relocated to `0x10000000` to avoid conflicts with loader metadata structures.
@@ -45,6 +53,7 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### Network and browser
 
+- f6-18 (`311d33bc`): runner HTTPS cases for NetSurf — `f6:browser run= url= [now=1]` selector with the full URL grammar in the loader, kernel browser probe with a resolver override, test profile with fixture CA anchors, `https_fixture.py`, six `f6-net` cases (QEMU runs pending).
 - f6-10 (`ece0ae07`): lwIP 2.2.1 TCP/IP stack imported with native `sys_arch` integration, supporting native socket system calls 78–89, DHCP client, DNS resolver, and C SDK socket headers.
 - f6-13 (`24267b26`): NetSurf 3.11 browser port plan established, defining native socket fetching, BearSSL TLS, and framebuffer rendering (`libnsfb`) on the desktop v3 windowing protocol.
 - f6-14 (`84f01cd2`): NetSurf Milestone 1 (M1) frontend delivered, enabling native window rendering and offline HTML/data navigation.
