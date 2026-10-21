@@ -14,7 +14,7 @@ static uint32_t clock_ms,max_mutex,max_guard;
 static _Thread_local unsigned namespace_depth,volume_depth;
 static _Thread_local uint32_t acquired[27];
 static bool replay;
-static unsigned transfers,read_transfers,holds;
+static unsigned transfers,read_transfers,holds,missing_tags;
 static bool logical_held;
 static uint32_t logical_started;
 static char logical_op[12];
@@ -67,6 +67,7 @@ void vfs_hold_observer(char drive,uint32_t ms,const struct vfs_hold_info *owner,
     (void)drive; (void)waiters;
     assert(!namespace_depth && !volume_depth && owner->op[0] && owner->site[0]);
     assert(strcmp(owner->op,"other")); holds++; if (ms>max_guard) max_guard=ms;
+    if (owner->attribution!=VFS_ATTR_COMPLETE) missing_tags++;
     int i=operation(owner->op);
     if (i>=0 && ms>operations[i].max_hold) operations[i].max_hold=ms;
 }
@@ -92,7 +93,14 @@ static int wr(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
 }
 static int flush(struct blkdev *d) { (void)d; service(); return 0; }
 int main(int argc,char **argv) {
-    assert(argc==1 || (argc==2 && !strcmp(argv[1],"--require-bounded")));
+    bool missing=argc==2 && !strcmp(argv[1],"--missing-tag");
+    assert(argc==1 || missing || (argc==2 && !strcmp(argv[1],"--require-bounded")));
+    if (missing) {
+        vfs_init(&space); vfs_lock(&space,1u<<2); clock_ms+=50; vfs_unlock(&space);
+        vfs_destroy(&space);
+        fprintf(stderr,"F1-87 missing-tag negative control: rejected=%u\n",missing_tags);
+        return missing_tags ? 1 : 0;
+    }
     disk[0]=0xeb;disk[1]=0x3c;disk[2]=0x90;fs_wr16(disk+11,512);disk[13]=1;
     fs_wr16(disk+14,1);disk[16]=2;fs_wr16(disk+17,224);fs_wr16(disk+19,2880);
     disk[21]=0xf0;fs_wr16(disk+22,9);fs_wr16(disk+510,0xaa55);
@@ -125,7 +133,7 @@ int main(int argc,char **argv) {
         if (!(i%100)) assert(!vfs_commit(&writer,log));
     }
     assert(!vfs_mkdir(&audio,"C:/DOSDIR",0));
-    assert(read_transfers>=T23_DESKTOP_HOLDS && holds && max_mutex<=20);
+    assert(read_transfers>=T23_DESKTOP_HOLDS && holds && max_mutex<=20 && !missing_tags);
     printf("F1-87 T23 replay desktop=513 log_write=35 commits=6 mkdir=1 service_ms=111 transfers=%u reads=%u physical_mutex_max_ms=%u logical_guard_max_ms=%u\n",transfers,read_transfers,max_mutex,max_guard);
     for (unsigned i=0;i<sizeof(operations)/sizeof(*operations);i++) {
         printf("F1-87 B operation=%s logical_hold_max_ms=%u preflight_or_transfer_commands=%u guarded_stage_commands=",

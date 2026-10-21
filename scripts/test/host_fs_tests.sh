@@ -36,6 +36,13 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
     tests/host/fs/test_vfs_contention.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_vfs_contention
 build/host/fs/test_vfs_contention
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_vfs_urgent_admission.c -o build/host/fs/test_vfs_urgent_admission
+build/host/fs/test_vfs_urgent_admission
+rm build/host/fs/test_vfs_urgent_admission
 # f1-87: T23 request mix and 111 ms device commands. The strict amendment-1
 # gate also requires bounded logical holds; diagnostics alone cannot pass B.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -43,6 +50,11 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
     tests/host/fs/test_t23_holds.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_t23_holds
+tag_status=0
+build/host/fs/test_t23_holds --missing-tag || tag_status=$?
+if [[ $tag_status != 1 ]]; then
+    echo 'FAIL: untagged volume hold was accepted' >&2; exit 1
+fi
 if [[ ${CIUKI_F187_REQUIRE_BOUNDED:-0} == 1 ]]; then
     build/host/fs/test_t23_holds --require-bounded
 else

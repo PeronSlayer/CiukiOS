@@ -104,7 +104,7 @@ static void reset(void)
     idle.all_next=&normal; normal.all_next=&hog; hog.all_next=&ui; all_tasks=&idle;
     idle.generation=normal.generation=hog.generation=ui.generation=1;
     g_current=idle_task=&idle;g_ticks=0;cycles=1;slice_left=10;flags=0x200;
-    focus_task=audio_focus=irq_focus=0;ui_focus=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
+    focus_task=audio_focus=irq_focus=0;ui_focus=input_proxy=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
     memset(device_cpu,0,sizeof(device_cpu));device_cpu_total=device_cpu_tick=0;
     device_cpu_slot=0;device_cpu_scale=1;device_cpu_refresh=false;
     last_measured=0;last_preempted=false;

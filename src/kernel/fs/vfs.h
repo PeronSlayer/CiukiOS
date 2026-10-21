@@ -77,7 +77,12 @@ struct vfs_hold_info {
     char op[12];
     char site[12];
     uint32_t started;
+    uint8_t attribution; /* explicit operation/site; fallback text is not a tag */
 };
+#define VFS_ATTR_OPERATION 1u
+#define VFS_ATTR_SITE 2u
+#define VFS_ATTR_COMPLETE (VFS_ATTR_OPERATION | VFS_ATTR_SITE)
+#define VFS_URGENT_OVERTAKE_MS 100u /* C3: close admission for an aged ticket */
 /* One namespace wait and one volume/file admission wait per locked turn.
  * These values follow the owner across sleeps and VFS_IO, never pointers
  * into another task's request or the shared holder table. */

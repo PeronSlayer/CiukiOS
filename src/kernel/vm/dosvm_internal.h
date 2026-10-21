@@ -16,6 +16,7 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+void dosvm_client_priority(struct dosvm *);
 /* A base image may stop before the geometry's end (owner decision
  * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
  * are cut by scripts/build_games_disk.py and read back as zeros. It must

@@ -140,7 +140,7 @@ static void t23_holds(void)
     for (unsigned kind=0;kind<sizeof(holds)/sizeof(*holds);kind++)
         for (unsigned h=0;h<holds[kind].count;h++) {
             struct device d={0};
-            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d};
+            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
             struct music_player *p=calloc(1,sizeof(*p)); assert(p);
             test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
             p->count=p->view.rate*MUSIC_START_SECONDS;
@@ -156,7 +156,7 @@ static void t23_holds(void)
 int main(void)
 {
     t23_holds();
-    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d};
+    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
     struct music_runtime *r=calloc(1,sizeof(*r)); assert(r);
     assert(!pthread_mutex_init(&r->lock,NULL)); music_player_init(&r->player,&out,NULL,NULL);
     contention(r,&d); backpressure(r,&d); debounce(r,&d); publication(r);

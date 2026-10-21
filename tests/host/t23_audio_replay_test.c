@@ -34,6 +34,15 @@ static unsigned audio_overruns, other_overruns, priority_checks;
 static uint64_t class_total[P_COUNT];
 static uint64_t next_refill, next_pump;
 static struct vfs_request audio_read;
+static bool vfs_replay, old_admission;
+static unsigned admission_overruns;
+static struct vfs admission_space;
+static struct fat_volume admission_volume;
+static struct vfs_node admission_writer;
+static struct vfs_file_identity unrelated_identity;
+static struct vfs_io_state admission_hold;
+static int admission_current=-1;
+static uint64_t admission_end;
 static void step(void);
 
 /* The scheduler fixture supplies only architectural/time boundaries. Refill
@@ -98,7 +107,11 @@ static void block_until(struct task *t,uint64_t due)
     task_sleep_ms((uint32_t)(due-g_ticks));
 }
 static uint64_t request_now(void *arg) { (void)arg; return g_ticks*1000u; }
-static void request_pause(void *arg) { (void)arg; CHECK(false); }
+static void request_pause(void *arg) {
+    (void)arg; CHECK(vfs_replay && g_current==&decoder);
+    block_until(&decoder,g_ticks+1);
+    while (g_current!=&decoder) { step(); if (g_need_resched) schedule(); }
+}
 static struct blk_request *request(enum blk_operation op,uint64_t lba,unsigned bytes,
                                    void *buffer,bool urgent)
 {
@@ -152,10 +165,52 @@ static void add_operation(unsigned due,unsigned ms,unsigned kind)
     CHECK(operation_count<OPERATIONS);
     operations[operation_count++]=(struct operation){.due=due,.remaining=ms,.kind=kind};
 }
+static void admission_arrivals(void)
+{
+    if (admission_current>=0 && g_ticks>=admission_end) {
+        struct operation *op=&operations[admission_current];
+        vfs_io_end_locked(&admission_space,admission_hold);
+        admission_space.io_file[2]=0; vfs_unlock(&admission_space);
+        op->remaining=0; finished[op->kind]++; admission_current=-1;
+    }
+    if (admission_current>=0) return;
+    unsigned next=operation_count;
+    for (unsigned i=0;i<operation_count;i++) if (operations[i].remaining && operations[i].due<=g_ticks &&
+        (next==operation_count || operations[i].due<operations[next].due)) next=i;
+    if (next==operation_count) return;
+    static const char *const tags[]={"read","log_write","commit","mkdir"};
+    struct operation *op=&operations[next];
+    struct vfs_request holder={.deadline=UINT64_MAX,.now=request_now,.pause=request_pause,
+        .operation=tags[op->kind],.site=op->kind ? "writer" : "native"};
+    struct fs_request_scope scope; fs_request_enter(&scope,&holder);
+    CHECK(!vfs_admit(&admission_space,1u<<2,&holder));
+    /* A synthetic transfer holds the real production mutation guard for the
+     * complete measured interval, not a series of 111ms commands. Writers
+     * identify a different file. The old coarse-volume policy is represented
+     * by making every identity conflict; the admission code is unchanged. */
+    admission_writer.identity=old_admission ? 0 : &unrelated_identity;
+    admission_space.io_file[2]=&admission_writer;
+    admission_hold=vfs_io_begin_locked(&admission_space); fs_request_leave(&scope);
+    admission_current=(int)next; admission_end=g_ticks+op->remaining;
+}
+static void admission_read(void)
+{
+    struct fs_request_scope scope; fs_request_enter(&scope,&audio_read);
+    vfs_lock(&admission_space,0);
+    struct fat_entry entry={0}; struct fat_cursor cursor={0};
+    uint64_t pos=0, arrived=g_ticks; bool busy=false; size_t done=99;
+    /* Zero data here isolates namespace admission; the following production
+     * block request supplies the actual compressed-data completion/PCM credit. */
+    CHECK(!vfs_read_identity_locked(&admission_space,0,&admission_volume,&entry,&cursor,&busy,
+        &pos,&pos,false,0,0,0,0,&done) && !done);
+    vfs_unlock(&admission_space); fs_request_leave(&scope);
+    if (g_ticks-arrived>250) admission_overruns++;
+}
 static void arrivals(void)
 {
+    if (vfs_replay) admission_arrivals();
     bool actor_busy[3]={false};
-    for (unsigned i=0;i<operation_count;i++) {
+    for (unsigned i=0;!vfs_replay && i<operation_count;i++) {
         struct operation *op=&operations[i];
         unsigned actor=op->kind==0 ? 0 : op->kind==3 ? 2 : 1;
         if (op->request && op->request->state==BLK_COMPLETED) {
@@ -205,6 +260,7 @@ static void step(void)
          * limiting catch-up to real-time rate after a delayed read. */
         if (!decode_request && decoded<=2*AUDIO_RATE-AUDIO_RATE/4) {
             decode_arrived=g_ticks;
+            if (vfs_replay) admission_read();
             decode_request=request(BLK_READ,4096,sizeof(compressed),compressed,true);
         }
         advance(50);
@@ -237,8 +293,10 @@ static void collect_overruns(void)
     record_bytes=0; records[0]=0; cpu_emit();
     CHECK(!overrun_used);
 }
-int main(void)
+int main(int argc,char **argv)
 {
+    CHECK(argc==1 || (argc==2 && (!strcmp(argv[1],"--vfs") || !strcmp(argv[1],"--old-vfs"))));
+    vfs_replay=argc==2; old_admission=vfs_replay && !strcmp(argv[1],"--old-vfs");
     reset();
     strcpy(hog.name,"audio-refill"); strcpy(normal.name,"music-pump");
     reporter=(struct task){.id=5,.generation=1,.prio=P_DEVICE,.state=T_BLOCKED};
@@ -255,6 +313,10 @@ int main(void)
     disk=(struct blkdev){.read=blkdev_read,.write=blkdev_write,.flush=blkdev_flush,
         .request_read=transfer,.request_write=write_transfer,.request_flush=flush_transfer,
         .queue=&queue,.capacity=8192,.sector_size=512,.write_cache_state=BLKDEV_CACHE_DISABLED};
+    if (vfs_replay) {
+        vfs_init(&admission_space); admission_space.volumes[2]=&admission_volume;
+        admission_volume.dev=&disk;
+    }
     audio_read=(struct vfs_request){.deadline=UINT64_MAX,.now=request_now,.pause=request_pause,
         .urgent_reader=true,.operation="read",.site="native"};
     for (unsigned i=0;i<T23_DESKTOP_HOLDS;i++) {
@@ -290,8 +352,13 @@ int main(void)
         (unsigned long long)(class_total[P_IDLE]*1000/cycles),
         (unsigned long long)(class_total[P_DEVICE]*1000/cycles),
         (unsigned long long)(class_total[P_NORMAL]*1000/cycles));
-    CHECK(!audio_overruns && !audio.error && !audio.deadlines && !audio.underruns && !pcm.starvation);
-    CHECK(decoded_min && decode_reads>1500 && refills>50000 && commands>2000 && priority_checks);
+    CHECK(!audio_overruns && !audio.error && !audio.deadlines && !audio.underruns && (old_admission || !pcm.starvation));
+    if (!vfs_replay) CHECK(decoded_min && decode_reads>1500 && refills>50000 && commands>2000 && priority_checks);
+    else {
+        printf("F1-87 C VFS continuous old_policy=%u holds=555 complete_intervals=125..1837ms admission_deadline_overruns=%u decoder_latency_max_ms=%llu sampler_audio_overruns=%u PCM_starvations=%llu\n",
+            old_admission,admission_overruns,(unsigned long long)read_latency_max,audio_overruns,(unsigned long long)pcm.starvation);
+        CHECK(old_admission ? admission_overruns>0 : admission_overruns==0 && decoded_min>0);
+    }
     CHECK(decoded+pcm.accepted==2*AUDIO_RATE+(uint64_t)decode_reads*(AUDIO_RATE/4));
     CHECK(pcm.queued+pcm.consumed==pcm.accepted); /* no invented/discarded PCM */
     puts("F1-87 C continuous replay: all 555 operations, finite PCM and zero refill overruns PASS");
@@ -304,5 +371,6 @@ int main(void)
     for (unsigned i=0;i<operation_count;i++) CHECK(!operations[i].request);
     if (decode_request) { CHECK(blk_request_cancel(decode_request)); CHECK(!blk_request_release(decode_request)); }
     CHECK(!blk_queue_destroy(&queue) && !blk_request_pool_host_cleanup());
+    if (vfs_replay) { CHECK(admission_current<0); admission_space.volumes[2]=0; vfs_destroy(&admission_space); }
     return 0;
 }

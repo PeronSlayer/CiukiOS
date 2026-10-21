@@ -50,9 +50,11 @@ struct task {
     enum task_prio prio;
     uint8_t base_priority, effective_priority, inherited_priority, configured_priority;
     uint8_t input_priority, io_priority, io_ticks;
-    bool priority_valid, focused;
+    bool priority_valid, focused, input_forwarded;
     uint32_t device_worker_site; /* active deferred callback; zero outside it */
     uint64_t input_expiry, service_deadline;
+    uint64_t audio_refill_expiry;
+    uint32_t audio_refill_generation, audio_refill_bytes;
     struct kwait *waiting_on;      /* owner dependency; never physical device waits */
     struct kwaiter *sync_waiter;   /* one blocked wait, constant-time IRQ wake */
     bool user;
@@ -108,6 +110,9 @@ void task_set_base(struct task *t, enum task_prio prio, unsigned level);
 void task_set_inherited(struct task *t, unsigned priority);
 void task_focus(struct task *t);  /* NULL withdraws foreground promotion */
 void task_input_delivered(struct task *t);
+/* Native focused endpoint -> its bound VM; no permanent focus/base change. */
+void task_input_forward(struct task *source, struct task *target);
+void task_input_withdraw(struct task *target);
 void task_io_completed(struct task *t);
 void task_device_deadline(struct task *t, uint64_t deadline);
 void sched_snapshot(struct sched_stats *out);

@@ -73,6 +73,9 @@ static void *reader(void *ctx)
         /* Publish the startup threshold exactly, independently of batch size. */
         unsigned threshold=p->reader_rate*MUSIC_START_SECONDS;
         if (p->count<threshold && n>threshold-p->count) n=threshold-p->count;
+        /* Serialize the short demand command with pause/close and reopen;
+         * decoding itself still runs without the reservoir lock. */
+        if (p->device && p->output->refill) p->output->refill(p->output->ctx);
         pthread_mutex_unlock(&p->reservoir_lock);
         uint64_t begin=p->output->now(p->output->ctx);
         int got=music_decoder_read(p->decoder,p->ring+2*end,n);
@@ -118,8 +121,11 @@ static void flush(struct music_player *p)
 }
 static void close_device(struct music_player *p)
 {
-    if (p->device) p->output->close(p->output->ctx);
+    if (!p->device) { p->tail_deadline=0; return; }
+    pthread_mutex_lock(&p->reservoir_lock);
+    p->output->close(p->output->ctx);
     p->device=0; p->tail_deadline=0;
+    pthread_mutex_unlock(&p->reservoir_lock);
 }
 static int fail(struct music_player *p, int error)
 {
@@ -149,9 +155,11 @@ static int position(struct music_player *p, uint64_t *tail)
 static int open_device(struct music_player *p)
 {
     if (p->device) return 0;
+    pthread_mutex_lock(&p->reservoir_lock);
     unsigned rate=0; int r=p->output->open(p->output->ctx,&rate);
+    if (!r) p->device=1;
+    pthread_mutex_unlock(&p->reservoir_lock);
     if (r) return r;
-    p->device=1;
     if (!rate || rate>MUSIC_RING/2 || (p->view.rate && p->view.rate!=rate)) { close_device(p); return -EIO; }
     p->view.rate=rate; p->base=p->view.position; p->written=p->audible=0; return 0;
 }

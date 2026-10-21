@@ -25,6 +25,7 @@ static struct vfs_hold_info holder_snapshot(const struct vfs_hold_info *h) {
     for (unsigned i=0;i<12;i++) out.op[i]=__atomic_load_n(&h->op[i],__ATOMIC_RELAXED);
     for (unsigned i=0;i<12;i++) out.site[i]=__atomic_load_n(&h->site[i],__ATOMIC_RELAXED);
     out.started=__atomic_load_n(&h->started,__ATOMIC_RELAXED);
+    out.attribution=__atomic_load_n(&h->attribution,__ATOMIC_RELAXED);
     return out;
 }
 static void namespace_publish(struct vfs *v,const struct fs_task_identity *task,const char *tag) {
@@ -37,16 +38,38 @@ static void namespace_owner(struct vfs *v,const struct vfs_request *r) {
     struct fs_task_identity task=fs_request_identity(r);
     namespace_publish(v,&task,r ? r->operation : "metadata");
     vfs_site_locked(v,r && r->site ? r->site : "vfs");
+    __atomic_store_n(&v->namespace_owner.attribution,
+        (r && r->operation && *r->operation ? VFS_ATTR_OPERATION : 0) |
+        (r && r->site && *r->site ? VFS_ATTR_SITE : 0),__ATOMIC_RELAXED);
 }
 void vfs_tag_locked(struct vfs *v,const char *tag) {
     char op[12]; tag_copy(op,tag);
-    for (unsigned d=0;d<26;d++) if (v->active&(1u<<d)) memcpy(v->holds[d].op,op,sizeof(op));
+    uint8_t bit=tag && *tag ? VFS_ATTR_OPERATION : 0;
+    for (unsigned d=0;d<26;d++) if (v->active&(1u<<d)) {
+        memcpy(v->holds[d].op,op,sizeof(op));
+        v->holds[d].attribution=(v->holds[d].attribution & ~VFS_ATTR_OPERATION) | bit;
+    }
     for (unsigned i=0;i<12;i++) __atomic_store_n(&v->namespace_owner.op[i],op[i],__ATOMIC_RELAXED);
+    uint8_t attribution=(__atomic_load_n(&v->namespace_owner.attribution,__ATOMIC_RELAXED) & ~VFS_ATTR_OPERATION) | bit;
+    __atomic_store_n(&v->namespace_owner.attribution,attribution,__ATOMIC_RELAXED);
 }
 void vfs_site_locked(struct vfs *v,const char *site) {
     char name[12]; tag_copy(name,site);
-    for (unsigned d=0;d<26;d++) if (v->active&(1u<<d)) memcpy(v->holds[d].site,name,sizeof(name));
+    uint8_t bit=site && *site ? VFS_ATTR_SITE : 0;
+    for (unsigned d=0;d<26;d++) if (v->active&(1u<<d)) {
+        memcpy(v->holds[d].site,name,sizeof(name));
+        v->holds[d].attribution=(v->holds[d].attribution & ~VFS_ATTR_SITE) | bit;
+    }
     for (unsigned i=0;i<12;i++) __atomic_store_n(&v->namespace_owner.site[i],name[i],__ATOMIC_RELAXED);
+    __atomic_store_n(&v->namespace_owner.attribution,
+        (__atomic_load_n(&v->namespace_owner.attribution,__ATOMIC_RELAXED) & ~VFS_ATTR_SITE) | bit,__ATOMIC_RELAXED);
+}
+/* Public legacy VFS operations are an explicit caller family. The raw tag
+ * API never turns a missing site into explicit attribution. */
+static void operation_tag(struct vfs *v,const char *tag) {
+    vfs_tag_locked(v,tag);
+    if (!(__atomic_load_n(&v->namespace_owner.attribution,__ATOMIC_RELAXED)&VFS_ATTR_SITE))
+        vfs_site_locked(v,"vfs");
 }
 static char first_drive(uint32_t mask) {
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) return (char)('A'+d);
@@ -98,8 +121,8 @@ static void diagnostics_publish(struct vfs *v,const struct hold_record *holds,un
             d<26 ? 'A'+d : '-',summary[d].hold_suppressed,summary[d].wait_suppressed,summary[d].hold_max_ms,summary[d].wait_max_ms);
     }
     for (unsigned i=0;i<count;i++) if (hold_allowed[i]) {
-        DIAG_LOG(klog_periodic,"[storage] vfs_hold drive=%c ms=%u task=%s#%u op=%s site=%s waiters=%u",
-            holds[i].drive,holds[i].ms,holds[i].owner.task.name,holds[i].owner.task.id,holds[i].owner.op,holds[i].owner.site,holds[i].waiters);
+        DIAG_LOG(klog_periodic,"[storage] vfs_hold drive=%c ms=%u task=%s#%u op=%s site=%s waiters=%u tagged=%u",
+            holds[i].drive,holds[i].ms,holds[i].owner.task.name,holds[i].owner.task.id,holds[i].owner.op,holds[i].owner.site,holds[i].waiters,holds[i].owner.attribution);
         if (vfs_hold_observer) vfs_hold_observer(holds[i].drive,holds[i].ms,&holds[i].owner,holds[i].waiters);
     }
     for (unsigned i=0;i<pending->count;i++) if (wait_allowed[i]) {
@@ -145,7 +168,7 @@ static void volume_mutexes(struct vfs *v,uint32_t mask,bool take) {
         if (mask & (1u<<d)) { if (take) fs_lock_take(&v->volume_lock[d]); else fs_lock_drop(&v->volume_lock[d]); }
     }
 }
-struct vfs_waiter { struct vfs_waiter *next; uint32_t mask, ticket[26]; };
+struct vfs_waiter { struct vfs_waiter *next; uint32_t mask, ticket[26], started; };
 static void request_wait(const struct vfs_request *r,uint64_t begin,uint32_t mask,enum vfs_wait_reason reason,int outcome) {
     if (!r || !r->wait) return;
     uint64_t elapsed=r->now(r->arg)-begin;
@@ -167,7 +190,7 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
     if (mask && request && request->wait && !request->wait->outcome) request->wait->drives=mask;
     if (!mask) return vfs_request_check(request);
-    struct vfs_waiter waiter={.next=v->waiters,.mask=mask};
+    struct vfs_waiter waiter={.next=v->waiters,.mask=mask,.started=fs_now_ms()};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
         if (v->active && (v->next[d]!=v->serving[d] || v->readers[d] || (v->mutating&(1u<<d)))) {
             if (request) return -FS_EBUSY;
@@ -180,6 +203,9 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     struct fs_task_identity task=request ? fs_request_identity(request) : holder_snapshot(&v->namespace_owner).task;
     char site[12]; tag_copy(site,request && request->site ? request->site : v->namespace_owner.site);
     char operation[12]; tag_copy(operation,request && request->operation ? request->operation : v->namespace_owner.op);
+    uint8_t attribution=__atomic_load_n(&v->namespace_owner.attribution,__ATOMIC_RELAXED);
+    if (request && request->operation) attribution=(attribution & ~VFS_ATTR_OPERATION) | (*request->operation ? VFS_ATTR_OPERATION : 0);
+    if (request && request->site) attribution=(attribution & ~VFS_ATTR_SITE) | (*request->site ? VFS_ATTR_SITE : 0);
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
     uint64_t request_start=request ? request->now(request->arg) : 0;
@@ -205,7 +231,7 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     if (error) { advance_cancelled(v); fs_event_wake(&v->volume_changed); return error; }
     v->reserved |= mask;
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
-        v->holds[d]=(struct vfs_hold_info){.task=task,.started=fs_now_ms()};
+        v->holds[d]=(struct vfs_hold_info){.task=task,.started=fs_now_ms(),.attribution=attribution};
         memcpy(v->holds[d].op,operation,sizeof(operation));
         memcpy(v->holds[d].site,site,sizeof(site));
     }
@@ -214,7 +240,9 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
      * complete set in order, retaining all reservations under namespace. */
     volume_mutexes(v,v->active,false); v->active |= mask;
     volume_mutexes(v,v->active,true);
-    namespace_publish(v,&task,operation); vfs_site_locked(v,site);
+    namespace_publish(v,&task,operation);
+    for (unsigned i=0;i<12;i++) __atomic_store_n(&v->namespace_owner.site[i],site[i],__ATOMIC_RELAXED);
+    __atomic_store_n(&v->namespace_owner.attribution,attribution,__ATOMIC_RELAXED);
     __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
     return 0;
 }
@@ -317,7 +345,9 @@ void vfs_io_end_locked(struct vfs *v,struct vfs_io_state state) {
     char drive=first_drive(mask);
     if (drive>='A' && drive<='Z') {
         namespace_publish(v,&v->holds[drive-'A'].task,v->holds[drive-'A'].op);
-        vfs_site_locked(v,v->holds[drive-'A'].site);
+        const struct vfs_hold_info *h=&v->holds[drive-'A'];
+        for (unsigned i=0;i<12;i++) __atomic_store_n(&v->namespace_owner.site[i],h->site[i],__ATOMIC_RELAXED);
+        __atomic_store_n(&v->namespace_owner.attribution,h->attribution,__ATOMIC_RELAXED);
     }
     else namespace_owner(v,fs_request_current());
     v->default_drive=state.default_drive;
@@ -837,12 +867,23 @@ static uint32_t handle_mask(struct vfs_table *t,int h) {
 /* Per-file readers and seeks can wait without taking a metadata ticket.
  * Keep their admission cancellable, with the same evidence as ticket waits.
  * Cleanup after issued I/O still reacquires namespace unconditionally. */
+struct file_wait_evidence { bool valid; char holder; struct vfs_hold_info owner; };
+static void file_wait_complete(struct vfs *v,uint32_t mask,const struct vfs_request *request,
+    uint32_t start,struct file_wait_evidence *e,int error) {
+    if (!e || !e->valid) return;
+    if (!request) request=fs_request_current();
+    struct fs_task_identity task=fs_request_identity(request);
+    wait_capture(&v->diagnostic_pending,start,first_drive(mask),e->holder,
+        error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&e->owner);
+    e->valid=false;
+}
 static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request *request,
-                            uint32_t start,uint64_t begin) {
+                            uint32_t start,uint64_t begin,struct file_wait_evidence *evidence) {
     if (!request) request=fs_request_current();
     char holder=first_drive((v->reserved|v->mutating)&mask);
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     struct fs_task_identity task=fs_request_identity(request);
+    if (evidence && !evidence->valid) *evidence=(struct file_wait_evidence){true,holder,owner};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
     struct vfs_pending_waits pending=waits_detach(v);
     if (!request) fs_event_wait(&v->volume_changed,&v->lock);
@@ -851,7 +892,8 @@ static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]--;
     int error=vfs_request_check(request);
     request_wait(request,begin,mask,VFS_WAIT_VOLUME,error);
-    if (error || !request) wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
+    if (error && evidence) file_wait_complete(v,mask,request,start,evidence,error);
+    else if (!evidence && (error || !request)) wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
     return error;
 }
 static int handle_lock(struct vfs_table *t,int h) {
@@ -860,7 +902,7 @@ static int handle_lock(struct vfs_table *t,int h) {
         int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
         struct vfs_description *desc=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
         if (desc && desc->io_active) {
-            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin);
+            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin,0);
             vfs_unlock(t->vfs); if (error) return error; continue;
         }
         uint32_t mask=handle_mask(t,h); error=reserve_request(t->vfs,mask,t->request);
@@ -875,6 +917,12 @@ static struct vfs_description *get(struct vfs_table *t, int h) { return h>=0 && 
  * rather than personality-specific node addresses. */
 static bool reader_admitted(struct vfs *v,unsigned drive,struct vfs_file_identity *id) {
     uint32_t mask=vfs_drive_mask(drive);
+    /* Closing the gate lets overlapping readers drain without a new urgent
+     * arrival perpetually keeping readers[] nonzero. Cancellation removes
+     * its waiter, so a cancelled ticket cannot leave the gate closed. */
+    uint32_t now=fs_now_ms();
+    for (struct vfs_waiter *w=v->waiters;w;w=w->next)
+        if ((w->mask&mask) && now-w->started>=VFS_URGENT_OVERTAKE_MS) return false;
     if (!((v->reserved|v->mutating)&mask)) {
         const struct vfs_request *r=fs_request_current();
         /* A decoder deadline may pass a queued normal metadata ticket while
@@ -903,6 +951,7 @@ int vfs_read_identity_locked(struct vfs *v,struct vfs_file_identity *id,struct f
     for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) { drive=d; mask=1u<<d; break; }
     if (!mask || !vfs_identity_live(v,id)) return -FS_EIO;
     uint32_t start=fs_now_ms(); const struct vfs_request *r=fs_request_current();
+    struct file_wait_evidence evidence={0};
     uint64_t begin=r ? r->now(r->arg) : 0;
     /* Existing multi-path kernel consumers may have borrowed other names
      * under their complete reservation set. Preserve that contract. Native
@@ -914,9 +963,10 @@ int vfs_read_identity_locked(struct vfs *v,struct vfs_file_identity *id,struct f
         *busy=false; fs_event_wake(&v->volume_changed); return e;
     }
     while (*busy || !reader_admitted(v,drive,id)) {
-        int e=file_wait_locked(v,mask,r,start,begin);
+        int e=file_wait_locked(v,mask,r,start,begin,&evidence);
         if (e) { if (saved) vfs_reserve_locked(v,saved); return e; }
     }
+    file_wait_complete(v,mask,r,start,&evidence,0);
     if (!vfs_identity_live(v,id) || v->volumes[drive]!=vol) {
         if (saved) vfs_reserve_locked(v,saved); return -FS_EIO;
     }
@@ -939,7 +989,7 @@ int vfs_read_identity_locked(struct vfs *v,struct vfs_file_identity *id,struct f
     return e;
 }
 int vfs_handle_stat(struct vfs_table *t,int h,struct fat_entry *entry,uint64_t *position) {
-    int e=handle_lock(t,h); if (e) return e; vfs_tag_locked(t->vfs,"stat");
+    int e=handle_lock(t,h); if (e) return e; operation_tag(t->vfs,"stat");
     struct vfs_description *d=get(t,h);
     e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : 0;
     if (!e) { if (entry) *entry=d->node->entry; if (position) *position=d->position; }
@@ -947,7 +997,7 @@ int vfs_handle_stat(struct vfs_table *t,int h,struct fat_entry *entry,uint64_t *
 }
 int vfs_handle_version(struct vfs_table *t,int h,struct vfs_file_version *out) {
     if (!out) return -FS_EINVAL;
-    int e=handle_lock(t,h); if (e) return e; vfs_tag_locked(t->vfs,"stat");
+    int e=handle_lock(t,h); if (e) return e; operation_tag(t->vfs,"stat");
     struct vfs *v=t->vfs; struct vfs_description *d=get(t,h);
     e=!d ? -FS_EBADF : (d->node->generation!=v->generation[d->node->drive] || !vfs_identity_live(v,d->node->identity)) ? -FS_EIO :
         d->node->ro || !d->node->volume ? -FS_EOPNOTSUPP : 0;
@@ -1111,11 +1161,12 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
     struct vfs *v=t->vfs;
     uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
+    struct file_wait_evidence evidence={0};
     /* Open identities pin the chain against namespace removal. A published
      * writer names its node before dropping namespace. Never borrow a mutable
      * entry or volume diagnostic workspace across a different file's I/O. */
     for (;;) {
-        int admission=vfs_admit(v,0,t->request); if (admission) return admission; vfs_tag_locked(t->vfs,"read");
+        int admission=vfs_admit(v,0,t->request); if (admission) return admission; operation_tag(t->vfs,"read");
         struct vfs_description *d=get(t,h);
         if (!d || d->node->ro || !(d->access&VFS_READ)) { vfs_unlock(v); break; }
         struct vfs_node *node=d->node; unsigned drive=node->drive;
@@ -1125,9 +1176,10 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         uint32_t mask=vfs_drive_mask(drive);
         bool admitted=reader_admitted(v,drive,node->identity);
         if (d->io_active || !admitted) {
-            int error=file_wait_locked(v,mask,t->request,start,begin);
+            int error=file_wait_locked(v,mask,t->request,start,begin,&evidence);
             vfs_unlock(v); if (error) return error; continue;
         }
+        file_wait_complete(v,mask,t->request,start,&evidence,0);
         int locked=table_range_check(t,node,d,d->position,n,false);
         if (locked) { vfs_unlock(v); return locked; }
         struct fat_volume *vol=node->volume;
@@ -1152,7 +1204,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         (void)release_description(v,d);
         fs_event_wake(&v->volume_changed); vfs_unlock(v); return e;
     }
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"read"); struct vfs_description *d=get(t,h); int e;
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"read"); struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF;
     else if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) e=-FS_EIO;
     else if (!(d->access&VFS_READ)) e=-FS_EACCES;
@@ -1163,7 +1215,7 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
 }
 int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"write"); struct vfs_description *d=get(t,h); int e;
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"write"); struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF;
     else if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) e=-FS_EIO;
     else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
@@ -1187,7 +1239,7 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
         int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
         struct vfs_description *desc=get(t,h);
         if (desc && (desc->io_active || t->vfs->io_file[desc->node->drive]==desc->node)) {
-            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin);
+            error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin,0);
             vfs_unlock(t->vfs); if (error) return error; continue;
         }
         if (desc && desc->node->ro) { vfs_unlock(t->vfs); error=handle_lock(t,h); if (error) return error; }
@@ -1208,7 +1260,7 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
     vfs_unlock(t->vfs); return e;
 }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"truncate"); struct vfs_description *d=get(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"truncate"); struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? ro_handle(t->vfs,d->node) : !(d->access&VFS_WRITE) ? -FS_EACCES : 0;
     if (d && d->node->ro && !e) e=-FS_EROFS;
     if (d && d->node->log_capacity && !e) e=-FS_EBUSY;
@@ -1224,7 +1276,7 @@ int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_commit(struct vfs_table *t, int h) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"commit"); struct vfs_description *d=get(t,h);
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"commit"); struct vfs_description *d=get(t,h);
     int e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? ro_handle(t->vfs,d->node) : VFS_IO(t->vfs,fat_commit(d->node->volume)); vfs_unlock(t->vfs); return e;
 }
 int vfs_completion(struct vfs_table *t, int h, struct cache_completion *out) {
@@ -1239,7 +1291,7 @@ int vfs_completion(struct vfs_table *t, int h, struct cache_completion *out) {
 }
 int vfs_flush_drive(struct vfs_table *t,unsigned drive) {
     if (drive>=26) return -FS_EINVAL;
-    int e=vfs_admit(t->vfs,vfs_drive_mask(drive),t->request); if (e) return e; vfs_tag_locked(t->vfs,"commit");
+    int e=vfs_admit(t->vfs,vfs_drive_mask(drive),t->request); if (e) return e; operation_tag(t->vfs,"commit");
     struct fat_volume *v=t->vfs->volumes[drive];
     if (v && !v->readonly) e=VFS_IO(t->vfs,fat_commit(v));
     else if (!v && !t->vfs->ro_volumes[drive]) e=-FS_ENOENT;
@@ -1253,7 +1305,7 @@ static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) 
     return 0;
 }
 int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"log_reserve"); vfs_site_locked(t->vfs,"writer");
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"log_reserve"); vfs_site_locked(t->vfs,"writer");
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && (!capacity || (capacity&511) || d->node->log_capacity)) e=-FS_EINVAL;
     if (!e) {
@@ -1270,7 +1322,7 @@ int vfs_log_reserve(struct vfs_table *t, int h, uint32_t capacity) {
 }
 int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_t size, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"log_write"); vfs_site_locked(t->vfs,"writer");
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"log_write"); vfs_site_locked(t->vfs,"writer");
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && (!d->node->log_capacity || size>d->node->log_capacity)) e=-FS_EINVAL;
     if (!e) {
@@ -1285,7 +1337,7 @@ int vfs_log_write(struct vfs_table *t, int h, const void *buf, size_t n, uint32_
     vfs_unlock(t->vfs); return e;
 }
 int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"commit");
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"commit");
     vfs_site_locked(t->vfs,"writer");
     struct vfs_description *d; int e=log_handle(t,h,&d);
     if (!e && !d->node->log_capacity) e=-FS_EINVAL;
@@ -1310,7 +1362,7 @@ static int pagefile_handle(struct vfs_table *t, int h, struct vfs_description **
     return 0;
 }
 int vfs_pagefile_extend(struct vfs_table *t, int h, uint32_t size) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"truncate");
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"truncate");
     struct vfs_description *d; int e=pagefile_handle(t,h,&d);
     if (!e) {
         struct fat_entry before=d->node->entry;
@@ -1322,7 +1374,7 @@ int vfs_pagefile_extend(struct vfs_table *t, int h, uint32_t size) {
     vfs_unlock(t->vfs); return e;
 }
 int vfs_pagefile_trim(struct vfs_table *t, int h, uint32_t size) {
-    int admission=handle_lock(t,h); if (admission) return admission; vfs_tag_locked(t->vfs,"truncate");
+    int admission=handle_lock(t,h); if (admission) return admission; operation_tag(t->vfs,"truncate");
     struct vfs_description *d; int e=pagefile_handle(t,h,&d);
     if (!e && size>d->node->entry.size) e=-FS_EINVAL;
     if (!e && size<d->node->entry.size) {
@@ -1391,18 +1443,18 @@ int vfs_pagefile_map(struct vfs_table *t, int h, struct vfs_pagefile_cursor *c, 
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) {
-        int admission=path_lock(t,path,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"stat"); struct fs_ro_node n; unsigned d;
+        int admission=path_lock(t,path,0,0); if (admission) return admission; operation_tag(t->vfs,"stat"); struct fs_ro_node n; unsigned d;
         int e=ro_path(t,path,&d,&n,0); if (!e && n.size>UINT32_MAX) e=-FS_EFBIG;
         if (!e) ro_entry(&n,out); vfs_unlock(t->vfs); return e;
     }
-    int admission=path_lock(t,path,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"stat"); struct resolved r; int e=lookup(t,path,&r,out);
+    int admission=path_lock(t,path,0,0); if (admission) return admission; operation_tag(t->vfs,"stat"); struct resolved r; int e=lookup(t,path,&r,out);
     if (!e) { struct vfs_node *n=node_find(t->vfs,t->vfs->volumes[r.drive],out); if (n) *out=n->entry; }
     vfs_unlock(t->vfs); return e;
 }
 static int metadata(struct vfs_table *t, const char *path, int attr, const struct fat_times *times) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    int admission=path_lock(t,path,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"stat"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    int admission=path_lock(t,path,0,0); if (admission) return admission; operation_tag(t->vfs,"stat"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     if (!e && ent.index==UINT32_MAX) e=-FS_EACCES;
     if (!e) {
         struct fat_volume *vol=t->vfs->volumes[r.drive]; struct vfs_node *n=node_find(t->vfs,vol,&ent);
@@ -1469,7 +1521,7 @@ static int find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *
 int vfs_find_first(struct vfs_table *t, const char *p, uint8_t mask, struct vfs_find *f, struct fat_entry *ent) {
     int ro=ro_target(t,p); if (ro<0) return ro;
     if (ro) {
-        int admission=path_lock(t,p,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"find"); char parent[FS_PATH_BYTES];
+        int admission=path_lock(t,p,0,0); if (admission) return admission; operation_tag(t->vfs,"find"); char parent[FS_PATH_BYTES];
         size_t n=strlen(p); int e=0; if (n>=sizeof(parent)) e=-FS_ENAMETOOLONG;
         if (!e) {
             memcpy(parent,p,n+1); char *leaf=parent;
@@ -1483,13 +1535,13 @@ int vfs_find_first(struct vfs_table *t, const char *p, uint8_t mask, struct vfs_
         vfs_unlock(t->vfs); return e;
     }
 
-    int admission=path_lock(t,p,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"find"); struct resolved r; int e=resolve(t,p,&r);
+    int admission=path_lock(t,p,0,0); if (admission) return admission; operation_tag(t->vfs,"find"); struct resolved r; int e=resolve(t,p,&r);
     if (!e && !r.name[0]) e=-FS_EINVAL;
     if (!e) { memset(f,0,sizeof(*f)); f->drive=r.drive; f->directory=r.parent; f->generation=t->vfs->generation[r.drive]; f->attr_mask=mask; memcpy(f->pattern,r.name,strlen(r.name)+1); e=find_next(t,f,ent); }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *ent) {
-    int admission=vfs_admit(t->vfs,vfs_drive_mask(f->drive),t->request); if (admission) return admission; vfs_tag_locked(t->vfs,"find");
+    int admission=vfs_admit(t->vfs,vfs_drive_mask(f->drive),t->request); if (admission) return admission; operation_tag(t->vfs,"find");
     int e=find_next(t,f,ent); vfs_unlock(t->vfs); return e;
 }
 /* Does ancestor contain directory? Resolve on-disk parents, so aliases cannot
@@ -1531,7 +1583,7 @@ static int busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e
 static int remove_path(struct vfs_table *t, const char *path, bool dir) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    int admission=path_lock(t,path,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"unlink"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    int admission=path_lock(t,path,0,0); if (admission) return admission; operation_tag(t->vfs,"unlink"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
     if (!e && !r.name[0]) e=-FS_EACCES;
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[r.drive];
@@ -1548,7 +1600,7 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
     bool present[3]={false};
     unsigned drive=26; uint32_t parent=0;
     struct vfs *v=t->vfs;
-    int admission=path_lock(t,current,previous,oldest); if (admission) return admission; vfs_tag_locked(t->vfs,"rename");
+    int admission=path_lock(t,current,previous,oldest); if (admission) return admission; operation_tag(t->vfs,"rename");
     int e=capacity ? 0 : -FS_EINVAL;
     /* Preflight every entry before changing any name or reservation. */
     for (unsigned i=0;!e && i<3;i++) {
@@ -1588,7 +1640,7 @@ int vfs_rmdir(struct vfs_table *t, const char *p) { return remove_path(t,p,true)
 int vfs_mkdir(struct vfs_table *t, const char *p, uint8_t attr) {
     int ro=ro_target(t,p); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    int admission=path_lock(t,p,0,0); if (admission) return admission; vfs_tag_locked(t->vfs,"mkdir"); struct resolved r; int e=resolve(t,p,&r); struct fat_entry ent;
+    int admission=path_lock(t,p,0,0); if (admission) return admission; operation_tag(t->vfs,"mkdir"); struct resolved r; int e=resolve(t,p,&r); struct fat_entry ent;
     if (!e && !r.name[0]) e=-FS_EEXIST;
     if (!e) e=VFS_IO(t->vfs,fat_create(t->vfs->volumes[r.drive],r.parent,r.name,attr|FAT_ATTR_DIR,&ent));
     vfs_unlock(t->vfs); return e;
@@ -1596,7 +1648,7 @@ int vfs_mkdir(struct vfs_table *t, const char *p, uint8_t attr) {
 int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
     int ro=ro_target(t,from); if (ro<0) return ro; if (ro) return -FS_EROFS;
     ro=ro_target(t,to); if (ro<0) return ro; if (ro) return -FS_EROFS;
-    int admission=path_lock(t,from,to,0); if (admission) return admission; vfs_tag_locked(t->vfs,"rename"); struct resolved a,b; struct fat_entry ent; int e=lookup(t,from,&a,&ent);
+    int admission=path_lock(t,from,to,0); if (admission) return admission; operation_tag(t->vfs,"rename"); struct resolved a,b; struct fat_entry ent; int e=lookup(t,from,&a,&ent);
     if (!e) e=resolve(t,to,&b);
     if (!e && (!a.name[0] || !b.name[0])) e=-FS_EACCES;
     if (!e && a.drive!=b.drive) e=-FS_EXDEV;
