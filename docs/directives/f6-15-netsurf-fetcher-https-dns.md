@@ -28,3 +28,13 @@ Apply this amendment only. Sources: RFC 9112 §9.2 (connection reuse), the zlib 
 6. **P2 — idle expiry and offline classification** (`net.c:222,230`): service pool expiry independently of active fetches and check age before reuse; classify failed external lookups as offline using the existing read-only `/dev/net` `NET_GET_STATE` (`address_configured`), preserving loopback; hostname-offline fixture. The error page shown to the user is asserted by `tests/host/netsurf/test_network.py`, not only the exit code.
 
 Also add the missing cases the review lists: RSA/EC root equivalence against the production anchors, malformed and intermediate chains, certificate-buffer overflow, TLS truncation and reuse, DNS TTL/server change, navigation during a blocked lookup. Verification as before (`cd tests/host/netsurf && python3 -B -m unittest discover`); report section "Amendment 1".
+
+## Amendment 2 (lead, 2026-10-21): re-review of the amendment-1 delivery (a292f2b6): one P1 left, one coverage regression
+
+Apply this amendment only.
+
+1. **P1 — TLS reuse window** (`sdk/netsurf/port/net.c:267`, `tls.c:111`): `j->sent` advances when plaintext enters BearSSL, while the socket send happens in a later pump; an unsolicited response arriving before the first socket send is accepted as B's response because the cleanliness checks are skipped once `sent != 0`; and `clean_socket()` does not reject incomplete incoming ciphertext already buffered inside BearSSL. Track the first transport transmission separately from plaintext submission (checks run until the first ciphertext byte has actually been sent), and treat any buffered or partial incoming record in the BearSSL engine as "not clean" for reuse. Deterministic fixtures for both timings (unsolicited bytes after plaintext submission but before the first send; a partial record consumed by the pump before reuse).
+2. **P2 — coverage regression** (`tests/host/netsurf/network_test.c:161`): the stale cases now expect a fresh connection and no longer exercise the stale-GET retry and the POST-no-replay behaviour. Restore those as separate cases that fail an already admitted transport; keep the new disposal cases.
+3. The browser-network test for navigation during a blocked lookup should also assert the browser's behaviour when the late result arrives (ignored, no navigation, no crash).
+
+Report section "Amendment 2".
