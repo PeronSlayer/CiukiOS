@@ -35,3 +35,4 @@ Apply before integration, in this order, each with a host test:
 6. (P3, optional) Bounded generation validation of the namespace snapshot with `unknown` on overlap.
 
 Report the changes in `build/codex/f1-86-report.md` (section "Amendment 1").
+7. (lead, after the host kernel suite on the delivery) The existing DOS VM idle-accounting expectation at `tests/host/dosvm_speed_test.inc:151` fails on the delivery (`idle_blocks == 5 && idle_reasons == 6 && idle_count[DOSVM_IDLE_28] == 3 …`): the periodic report must not consume or reset the cumulative snapshot counters the existing API exposes (keep cumulative counters, compute the window deltas from the previous report's copy); fix production, keep the test unchanged.
