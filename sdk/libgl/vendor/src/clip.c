@@ -224,6 +224,14 @@ static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
 		q->tex_coord.Y = p0->tex_coord.Y + (p1->tex_coord.Y - p0->tex_coord.Y) * t;
 	}
 
+	if (c->software_triangle) {
+		for (int k=0;k<4;k++) {
+			q->color.v[k]=p0->color.v[k]+(p1->color.v[k]-p0->color.v[k])*t;
+			q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;
+			q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;
+		}
+		q->ec.Z=p0->ec.Z+(p1->ec.Z-p0->ec.Z)*t;
+	}
 	q->clip_code = gl_clipcode(q->pc.X, q->pc.Y, q->pc.Z, q->pc.W);
 	if (q->clip_code == 0)
 		gl_transform_to_viewport_clip_c(q);
@@ -398,6 +406,7 @@ int count_triangles, count_triangles_textured, count_pixels;
 /* see vertex.c to see how the draw functions are assigned.*/
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) { 
 	GLContext* c = gl_get_context();
+	if (c->software_triangle) { c->software_triangle(c,p0,p1,p2); return; }
 	if (c->texture_2d_enabled) {
 		/* if(c->current_texture)*/
 #if TGL_FEATURE_LIT_TEXTURES == 1

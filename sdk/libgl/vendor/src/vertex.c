@@ -251,6 +251,7 @@ void glopVertex(GLParam* p) {
 			v->tex_coord = c->current_tex_coord;
 		}
 	}
+	v->tex_coord1 = c->current_tex_coord1;
 	/* precompute the mapping to the viewport */
 #if TGL_OPTIMIZATION_HINT_BRANCH_COST < 2
 	if (v->clip_code == 0)

@@ -78,6 +78,9 @@ static void free_texture(GLContext* c, GLint h) {
 	if (t->next != NULL)
 		t->next->prev = t->prev;
 
+	/* CiukiOS: image storage is owned by the texture. */
+	for (int level = 0; level < MAX_TEXTURE_LEVELS; level++)
+		gl_free(t->images[level].pixmap);
 	gl_free(t);
 }
 

@@ -2,6 +2,7 @@
 #include "msghandling.h"
 #include "zgl.h"
 GLContext gl_ctx;
+GLContext *gl_selected_context; /* CiukiOS: serialized caller-owned contexts. */
 static const GLContext empty_gl_ctx = {0};
 
 static void initSharedState(GLContext* c) {
@@ -51,6 +52,8 @@ static void endSharedState(GLContext* c) {
 			n = t->next;
 			if (t->next != NULL)
 				t->next->prev = t->prev;
+			for (int level = 0; level < MAX_TEXTURE_LEVELS; level++)
+				gl_free(t->images[level].pixmap);
 			gl_free(t);
 			t = n;
 		}
@@ -158,8 +161,8 @@ void glInit(void* zbuffer1) {
 	if (TinyGLRuntimeCompatibilityTest())
 		gl_fatal_error("TINYGL_FAILED_RUNTIME_COMPAT_TEST");
 #endif
-	gl_ctx = empty_gl_ctx;
-	c = &gl_ctx;
+	c = gl_get_context();
+	*c = empty_gl_ctx;
 	if (!c)
 		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
 
@@ -374,5 +377,5 @@ void glClose(void) {
 	}
 #endif
 	endSharedState(c);
-	gl_ctx = empty_gl_ctx;
+	*c = empty_gl_ctx;
 }
