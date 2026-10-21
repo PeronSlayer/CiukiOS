@@ -22,7 +22,7 @@ in worktree separati, con revisione incrociata e fusione da parte del lead.
 | f5-15b | `01fa33ec` | accettazione degli installer originali: dieci installer caricati, workload importati con ricevute SHA-1, censimento |
 | f3-56 (em. 1) + f3-57 (em. 1) | `d0e05169` | DOS unificato: binding DFV2 nativo, driver `CIUKIDF.SYS`, patch 0002 del fork FreeDOS 2043 (ciclo di vita, siti redirector, FCB/NLS, correzione GS), backend VFS reale per C:/D:/E:, errori critici con frame INT 24h, attivazione rifiutata → VM fermata con record, installazione nell'immagine sotto `kernel=unified` subordinata a `fork-qualified.json` |
 | f5-15c | `90c9e903` | tier installer QEMU: dieci sonde `f5:win32-<alias>` registrate (kernel, tabella loader, modello runner), driver UI guest, manifesti e calibrazione, CD installer nel runner, `_vsnprintf`/`_vsnwprintf` |
-| f1-89 (em. 1–2) | (in corso) | pubblicazione cache riservata e transazioni FAT: nessuna barriera per blocco da 8 KiB, turno scrittore prima della risoluzione del percorso, transazioni a pagine singole, lettori in volo bloccano la pubblicazione con metrica di attesa, lookup guardati senza letture disco |
+| f1-89 (em. 1–2) | `551bd15a` | pubblicazione cache riservata e transazioni FAT: nessuna barriera per blocco da 8 KiB, turno scrittore prima della risoluzione del percorso, transazioni a pagine singole, lettori in volo bloccano la pubblicazione con metrica di attesa, lookup guardati senza letture disco |
 
 Correzioni del lead su `main`: marcatori di conflitto committati per errore
 nella fusione di f5-15a2, risolti in `a72352fd` (51 test loader/runner);
@@ -39,10 +39,36 @@ intestazione `CHANGELOG.md`, `docs/release-notes-1.0-alpha.md`).
 
 ## Evidenza e immagine
 
-Catena finale `build/lead-scratch/final-alpha.sh`: suite host (kernel, fs,
-piatte, win32, dos), qualificazione del fork (`run_unified_file.sh`), build
-canonica sotto scope da 3 GiB, immagine hardware con `BOOT.CFG`
-`safe=0 serial=1` e SHA-256. Risultati e SHA-256: da aggiungere al termine.
+Per richiesta del proprietario (23:27, «dammi direttamente l'immagine») la
+build è stata eseguita prima delle suite host, con la catena
+`build/lead-scratch/image-alpha.sh`: qualificazione del fork
+(`run_unified_file.sh`, rc 0), `make build-full` sotto scope da 3 GiB,
+immagine hardware con `BOOT.CFG` `safe=0 serial=1`. La prima esecuzione
+della catena completa (23:24) aveva dato `host_kernel_tests.sh` rc 0 e la
+suite FS con tutti i gruppi funzionali superati (4.678 tagli di crash) ma
+rc 1 sul solo controllo di dimensione di `build/host/fs`; le suite host
+complete sullo stato finale vengono eseguite dopo la consegna dell'immagine
+e il loro esito è registrato in una voce successiva.
+
+Tre difetti emersi solo nella build canonica (gli agenti non costruiscono
+immagini), corretti sul posto: riferimento API sviluppatore non rigenerato
+dopo il nuovo ioctl `AUDIO_REFILL_READ` (`cf5625ee`); registro dei DLL Wine
+riusati da aggiornare perché `kernel32!SetConsoleCtrlHandler` è diventato
+un export reale (`3b31382f`); etichetta di volume dell'immagine del DOS
+unificato diversa da quella del settore di boot pinnato, rifiutata da
+`fsck.fat` (`be138eb1`).
+
+Immagine 1.0.0 alpha (commit `be138eb1`, 23:35):
+
+- `build/f0/ciukios.img` SHA-256
+  `b91f34536c411a7a7cee481c03bbe8207c5fd9caa328756ad79b961b4ab5cb41`
+- `build/hw/ciukios-hw.img` SHA-256
+  `8f59e2217bca5306b2b31d5e4a53b63d002b0b77c7d19880098e482f2f44afed`
+  (T1: MBR, geometria FAT32, fsck, loader; 2.098 payload riletti; DOS
+  67 payload, giochi 45 file da 3 pacchetti shareware)
+
+Comando di scrittura (proprietario):
+`sudo scripts/test/write_physical.sh /dev/disk/by-id/ata-TS64GMSA230S_H551120730 build/hw/ciukios-hw.img`.
 
 ## Rinviato dopo la 1.0.0 alpha
 

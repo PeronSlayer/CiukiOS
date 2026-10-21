@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 alpha (unreleased, `main`, image pending)
+## 1.0.0 alpha (unreleased, `main`; hardware image `8f59e2217bca…` of 2026-10-21, T23 trial pending)
 
 Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
 
