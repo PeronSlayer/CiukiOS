@@ -25,7 +25,7 @@ static int allocate(struct ciuki_browser_surface *s,struct ciuki_browser_storage
     b->map=s->ops.map(b->fd,PROT_READ|PROT_WRITE);
     if(b->map==MAP_FAILED) b->map=NULL;
     if(!b->map) goto fail;
-    b->back=calloc((size_t)w*h,4);
+    b->back=calloc(1,b->info.allocation_bytes);
     if(!b->back) goto fail;
     return 0;
 fail:
@@ -71,7 +71,7 @@ void ciuki_browser_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
 }
 int ciuki_browser_present(struct ciuki_browser_surface *s)
 {
-    if(!s->ready || !s->dirty || s->swap_request || s->damaged)return 0;
+    if(!s->ready || !s->dirty || s->swap_request)return 0;
     nsfb_bbox_t b=s->damage;
     unsigned stride=s->current.info.stride/4;
     for(int y=b.y0;y<b.y1;y++)
@@ -80,8 +80,10 @@ int ciuki_browser_present(struct ciuki_browser_surface *s)
     desk_put32(wire+8,b.x1-b.x0); desk_put32(wire+12,b.y1-b.y0);
     uint32_t request=du3_request(&s->connection,DESK_DAMAGE,s->window,s->generation,wire,16,-1);
     if(!request)return -1;
-    /* The server copies/consumes the shared region before returning RESULT. */
-    s->damage_request=request;s->damaged=true; s->dirty=false; return 0;
+    /* RESULT acknowledges queuing only. As in libdeskui, drawing stays in
+     * back; copy damaged rows just before DAMAGE, without a consumption wait.
+     * The compositor may read during this copy (accepted intra-frame tearing). */
+    s->dirty=false; return 0;
 }
 static void resize_request(struct ciuki_browser_surface *s)
 {
@@ -152,7 +154,11 @@ void ciuki_browser_input(struct ciuki_browser_surface *s,const struct ciuki_inpu
     case CIUKI_INPUT_WHEEL:
         if(s->mouse_y<CIUKI_BROWSER_TOP || s->mouse_y>=(int)s->current.info.height-CIUKI_BROWSER_STATUS)return;
         e.type=NSFB_EVENT_KEY_DOWN; e.value.keycode=in->value>0?NSFB_KEY_MOUSE_4:NSFB_KEY_MOUSE_5;
-        if(in->value) { push(s,e); e.type=NSFB_EVENT_KEY_UP; push(s,e); } return;
+        /* Preserve detents, with a bounded queue even for hostile values. */
+        int64_t detents=in->value;
+        if(detents<0)detents=-detents;
+        if(detents>(CIUKI_BROWSER_EVENTS-s->count)/2)detents=(CIUKI_BROWSER_EVENTS-s->count)/2;
+        while(detents--) { e.type=NSFB_EVENT_KEY_DOWN;push(s,e);e.type=NSFB_EVENT_KEY_UP;push(s,e); } return;
     default:return;
     }
 }
@@ -161,10 +167,8 @@ void ciuki_browser_release(struct ciuki_browser_surface *s)
     for(unsigned k=0;k<0x201;k++)if(s->keys[k]) {
         push(s,(nsfb_event_t){.type=NSFB_EVENT_KEY_UP,.value.keycode=s->keys[k]}); s->keys[k]=0;
     }
-    for(unsigned k=1;k<=3;k++)if(s->buttons&(1u<<k)) {
-        unsigned code=k==1?NSFB_KEY_MOUSE_1:k==2?NSFB_KEY_MOUSE_3:NSFB_KEY_MOUSE_2;
-        push(s,(nsfb_event_t){.type=NSFB_EVENT_KEY_UP,.value.keycode=code});
-    }
+    /* Mouse-up means click to fbtk. Loss of focus/capture cancels instead. */
+    push(s,(nsfb_event_t){.type=NSFB_EVENT_CONTROL,.value.controlcode=NSFB_CONTROL_CANCEL});
     s->buttons=0;
 }
 int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packet *p)
@@ -179,9 +183,9 @@ int ciuki_browser_packet(struct ciuki_browser_surface *s,const struct desk_packe
             s->swap_request=0;
             if(!p->result) {
                 drop(s,&s->current); s->current=s->pending; memset(&s->pending,0,sizeof(s->pending));s->pending.fd=-1;
-                s->resized=true; s->dirty=false; s->damaged=false;
+                s->resized=true; s->dirty=false;
             } else drop(s,&s->pending);
-        } else if(p->index==DESK_DAMAGE && p->request==s->damage_request) { s->damaged=false;s->damage_request=0; }
+        }
     } else if(p->opcode==DESK_CONFIGURE) {
         if(!s->last_configure || (int32_t)(p->serial-s->last_configure)>0) {
             s->last_configure=s->configure=p->serial; s->want_width=p->width; s->want_height=p->height;

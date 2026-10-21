@@ -202,7 +202,9 @@ def build(host=False, clean=False, directory=None):
         if (stage / "Programs/netsurf").is_file() and cached.get("inputs") == expected and cached.get("files") == hashes(stage):
             print("[netsurf] verified cached inputs and installed output hashes")
             return cached
-    if folder.exists() and (clean or not stamp.exists() or json.loads(stamp.read_text()).get("inputs") != expected):
+    # A cache miss invalidates the working tree too: it is disposable, and
+    # generated/edited source must never be stamped as the pinned inputs.
+    if folder.exists():
         shutil.rmtree(folder)
     folder.mkdir(parents=True, exist_ok=True)
     tree = prepare(folder, src["archive"])

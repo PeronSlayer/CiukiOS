@@ -29,13 +29,13 @@ class LocalTests(unittest.TestCase):
     def test_charset_and_font(self):
         source=self.base / "source/netsurf"
         prefix=self.base / "prefix"
-        flags=["clang","-std=c17","-O1","-g","-Wall","-Wextra","-Wno-unused-parameter",
+        flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-O1","-g","-Wall","-Wextra","-Wno-unused-parameter",
                "-fsanitize=address,undefined","-fno-sanitize-recover=undefined","-ffunction-sections","-fdata-sections",
                "-DCIUKI_NETSURF","-DCIUKI_HOST",'-DCIUKI_ROOT="'+str(ROOT)+'"',"-Dnsframebuffer",
                "-I"+str(ROOT),"-I"+str(source),"-I"+str(source / "include"),"-I"+str(source / "frontends"),
                "-I"+str(self.base / "native-headers"),"-I"+str(prefix / "include")]
-        sources=[HERE / "charset_font_test.c",ROOT / "sdk/netsurf/port/charset.c",ROOT / "sdk/netsurf/port/font.c",source / "utils/utf8.c"]
-        subprocess.run([*flags,*map(str,sources),"-Wl,--gc-sections","-L"+str(prefix / "lib"),"-lparserutils","-lfont","-lfreetype",
+        sources=[HERE / "charset_font_test.c",ROOT / "sdk/netsurf/port/charset.c",ROOT / "sdk/netsurf/port/font.c",ROOT / "sdk/netsurf/port/budget.c",source / "utils/utf8.c"]
+        subprocess.run([*flags,*map(str,sources),"-Wl,--gc-sections,--wrap=ciuki_font_measure","-L"+str(prefix / "lib"),"-lparserutils","-lfont","-lfreetype",
                         "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-ldeskui","-lm","-lpthread","-o",str(self.out / "charset-font")],check=True)
         subprocess.run([str(self.out / "charset-font")],check=True,env=dict(os.environ,ASAN_OPTIONS="detect_leaks=1",UBSAN_OPTIONS="halt_on_error=1"),timeout=30)
 
@@ -102,7 +102,51 @@ class LocalTests(unittest.TestCase):
                 capture_output=True,text=True,timeout=15)
             self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
             self.assertEqual(out.stat().st_size,640*480*4)
-            self.assertIn("NetSurf layout rejected:",completed.stderr)
+            self.assertIn("NetSurf structure rejected:",completed.stderr)
+
+    def test_structural_and_plain_text_rejections(self):
+        cases={"deep.html":"<div>"*20000+"x"+"</div>"*20000,
+               "wide.html":"<p>x</p>"*10000,
+               "columns.html":"<table><tr><td colspan=5000>x</td></tr></table>",
+               "large.txt":"x"*150000}
+        for name,body in cases.items():
+            with self.subTest(page=name),tempfile.TemporaryDirectory(dir=self.out) as directory:
+                page=Path(directory) / name;page.write_text(body)
+                out=Path(directory) / "rejected.xrgb"
+                completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","640","-h","480",
+                    "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-profile="+str(Path(directory) / "profile"),
+                    "--ciuki-capture="+str(out),page.as_uri()],
+                    capture_output=True,text=True,timeout=15)
+                self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+                self.assertEqual(out.stat().st_size,640*480*4)
+                self.assertNotIn(page.as_uri(),(Path(directory) / "profile/History.html").read_text())
+                if name=="large.txt":
+                    self.assertIn("NetSurf layout rejected: plain text",completed.stderr)
+                    self.assertGreater(int(re.search(r"layout_max_ns=(\d+)",completed.stderr)[1]),0)
+                elif name=="columns.html":
+                    self.assertIn("Error occurred fetching page",completed.stderr)
+                else:
+                    self.assertIn("rejected:",completed.stderr)
+
+    def test_completed_history_restart_and_page(self):
+        with tempfile.TemporaryDirectory(dir=self.out) as directory:
+            folder=Path(directory)
+            page=folder / "local.html";page.write_text("<!doctype html><title>Visit</title><h1>Local history</h1>")
+            urls=[page.as_uri(),page.as_uri(),"data:text/html,<title>Second</title>second"]
+            def visit(url):
+                out=folder / "history.xrgb"
+                completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","640","-h","480",
+                    "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-profile="+directory,
+                    "--ciuki-capture="+str(out),url],capture_output=True,text=True,timeout=15)
+                self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+                self.assertEqual(out.stat().st_size,640*480*4)
+                return completed
+            for url in urls:visit(url)
+            saved=(folder / "History.html").read_text()
+            self.assertEqual(saved.count('<p><a href="'),2)
+            self.assertIn(page.as_uri(),saved)
+            result=visit((folder / "History.html").as_uri())
+            self.assertIn("NetSurf History",result.stderr)
 
 class ProfileTests(unittest.TestCase):
     def test_profile(self):

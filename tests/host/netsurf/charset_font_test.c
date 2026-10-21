@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ciuki/font.h>
 #include <parserutils/charset/codec.h>
 #include <libnsfb.h>
 #include <libnsfb_plot.h>
@@ -15,6 +16,10 @@
 #include "framebuffer/font.h"
 #include "sdk/netsurf/port/charset.h"
 #include "sdk/netsurf/port/font.h"
+static size_t measure_calls,processed_bytes;
+int __real_ciuki_font_measure(struct ciuki_font_face *,unsigned,const char *,size_t,int32_t *);
+int __wrap_ciuki_font_measure(struct ciuki_font_face *f,unsigned size,const char *s,size_t n,int32_t *out)
+{ measure_calls++;processed_bytes+=n;return __real_ciuki_font_measure(f,size,s,n,out); }
 static void conversion(const char *from,const char *bytes,size_t n,const char *expected)
 {
     char *out=NULL;size_t size=999;
@@ -68,6 +73,20 @@ int main(void)
     assert(painted>50);
     style.size*=2;int wide;assert(fb_font_width(&style,text,length,&wide)==NSERROR_OK && wide>width*3/2);
     assert(fb_font_width(&style,"\xf0\x9f\x90\x95",4,&wide)==NSERROR_OK && wide>0); /* missing-glyph fallback */
+    char long_run[8193];memset(long_run,'x',8192);long_run[8192]=0;
+    measure_calls=processed_bytes=0;
+    assert(framebuffer_layout_table->split(&style,long_run,8192,5,&offset,&actual)==NSERROR_OK && offset==8192);
+    assert(measure_calls==1 && processed_bytes==8192);
+    measure_calls=processed_bytes=0;
+    assert(fb_font_position(&style,long_run,8192,32768,&offset,&actual)==NSERROR_OK);
+    assert(measure_calls<=16 && processed_bytes<=16*8192);
+    assert(fb_font_width(&style,long_run,offset,&measured)==NSERROR_OK && measured==actual);
+    for(unsigned i=1;i<8192;i+=2)long_run[i]=' ';
+    measure_calls=processed_bytes=0;
+    assert(framebuffer_layout_table->split(&style,long_run,8192,32768,&offset,&actual)==NSERROR_OK);
+    assert(measure_calls<=16 && processed_bytes<=16*8192);
+    assert(fb_font_width(&style,long_run,offset,&measured)==NSERROR_OK && measured==actual);
+    assert(fb_font_width(&style,long_run,8193,&measured)==NSERROR_BAD_SIZE);
     nsfb_free(fb);assert(fb_font_finalise());
     puts("NetSurf charset/font: four encodings, errors, split codec, metrics, positions, scale and clipped paint passed");
     fflush(stdout);

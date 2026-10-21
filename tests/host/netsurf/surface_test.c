@@ -9,18 +9,19 @@ static struct { struct ciuki_surface_info info;void *map;int live; } fds[64];
 static int nextfd=4, fail_create, fail_send, closed, unmapped;
 static struct ciuki_message sent[256], incoming;
 static unsigned sends;
+static unsigned padding;
 static int create(uint32_t w,uint32_t h,uint32_t format)
 {
     if(fail_create) { errno=ENOMEM;return -1; }
     int fd=nextfd++;assert(fd<64);
-    fds[fd].info=(struct ciuki_surface_info){.size=sizeof(struct ciuki_surface_info),.width=w,.height=h,.stride=w*4,
-        .format=format,.allocation_bytes=(w*h*4+4095)&~4095u};
+    fds[fd].info=(struct ciuki_surface_info){.size=sizeof(struct ciuki_surface_info),.width=w,.height=h,.stride=w*4+padding,
+        .format=format,.allocation_bytes=((w*4+padding)*h+4095)&~4095u};
     fds[fd].live=1;fds[fd].map=calloc(1,fds[fd].info.allocation_bytes);assert(fds[fd].map);return fd;
 }
 static int info(int fd,struct ciuki_surface_info *out) { *out=fds[fd].info;return 0; }
 static void *map(int fd,int prot) { (void)prot;return fds[fd].map; }
-static int unmap(void *p,size_t n) { assert(n && p);free(p);unmapped++;return 0; }
-static int closefd(int fd) { assert(fd>=3 && fd<64);if(fd!=3) { assert(fds[fd].live);fds[fd].live=0; }closed++;return 0; }
+static int unmap(void *p,size_t n) { assert(n && p);for(int i=4;i<nextfd;i++)if(fds[i].map==p)fds[i].map=NULL;free(p);unmapped++;return 0; }
+static int closefd(int fd) { assert(fd>=3 && fd<64);if(fd!=3) { assert(fds[fd].live);free(fds[fd].map);fds[fd].map=NULL;fds[fd].live=0; }closed++;return 0; }
 static int sendmsg(int fd,const struct ciuki_message *message,uint32_t flags)
 {
     assert(fd==3 && flags==DONTWAIT);
@@ -65,8 +66,21 @@ int main(void)
     assert(desk_get32(sent[sends-1].data+16)==1 && desk_get32(sent[sends-1].data+24)==2);
     ciuki_browser_damage(s,(nsfb_bbox_t){-3,4,10,6});ciuki_browser_damage(s,(nsfb_bbox_t){8,1,650,8});
     assert(s->damage.x0==0 && s->damage.x1==640 && s->damage.y0==1 && s->damage.y1==8);
-    unsigned before=sends;assert(!ciuki_browser_present(s) && sends==before); /* mapped region still owned by server */
-    p=result(DESK_DAMAGE,s->damage_request,0);ciuki_browser_packet(s,&p);
+    /* Deferred compositor: RESULT can arrive before any pixel consumption.
+     * Private rendering remains invisible until the next explicit present. */
+    unsigned before=sends;
+    uint32_t saved=s->current.map[2*640+1];s->current.back[2*640+1]=0xabcdef;
+    assert(s->current.map[2*640+1]==saved);
+    p=result(DESK_DAMAGE,desk_get32(sent[sends-1].data+4),0);ciuki_browser_packet(s,&p);
+    assert(s->current.map[2*640+1]==saved);
+    assert(!ciuki_browser_present(s) && sends==before+1);
+    assert(s->current.map[2*640+1]==0xabcdef);
+    s->current.back[2*640+1]=0x654321;
+    assert(s->current.map[2*640+1]==0xabcdef);
+    ciuki_browser_damage(s,(nsfb_bbox_t){1,2,2,3});
+    assert(!ciuki_browser_present(s) && sends==before+2); /* no RESULT wait */
+    assert(s->current.map[2*640+1]==0x654321);
+    ciuki_browser_damage(s,(nsfb_bbox_t){1,2,2,3});
     fail_send=1;assert(ciuki_browser_present(s)==-1 && s->dirty);fail_send=0;
     assert(!ciuki_browser_present(s));
     int old=s->current.fd;
@@ -90,13 +104,16 @@ int main(void)
     assert(ciuki_browser_event(s,&out) && out.type==NSFB_EVENT_TEXT && (unsigned)out.value.keycode==0x20ac);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=2,.value=1};ciuki_browser_input(s,&e);
     assert(ciuki_browser_event(s,&out) && out.value.keycode==NSFB_KEY_MOUSE_3);
-    ciuki_browser_release(s);unsigned releases=0;while(ciuki_browser_event(s,&out)) { assert(out.type==NSFB_EVENT_KEY_UP);releases++; }assert(releases==3);
+    ciuki_browser_release(s);unsigned releases=0;while(ciuki_browser_event(s,&out)) { assert(out.type==NSFB_EVENT_KEY_UP || (out.type==NSFB_EVENT_CONTROL && out.value.controlcode==NSFB_CONTROL_CANCEL));releases++; }assert(releases==3);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=10,.value2=10};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};ciuki_browser_input(s,&e);assert(!ciuki_browser_event(s,&out));
     p=packet(DESK_PING,0,4);p.serial=123;ciuki_browser_packet(s,&p);assert(s->ping==123);
     assert(!du3_ui_progress(&s->connection,1,1,s->ping));assert(sent[sends-1].data[1]==DESK_PONG);
     ciuki_browser_close(s);assert(s->current.fd==-1 && s->pending.fd==-1 && s->connection.channel==-1);
     assert(unmapped==3 && closed==4);
+    /* The v3 protocol requires packed rows and rejects padded strides. */
+    padding=64;
+    assert(ciuki_browser_open(s,&ops,3,640,480)==-1 && s->closed);
     free(s);puts("NetSurf v3 surface: damage, colour, ownership, resize, stale/OOM, input and cleanup passed");fflush(stdout);
     return 0;
 }

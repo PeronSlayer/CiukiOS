@@ -17,6 +17,7 @@
 #include "netsurf/download.h"
 #include "netsurf/content.h"
 #include "content/hlcache.h"
+#include "content/content.h"
 #include "desktop/browser_history.h"
 #include "desktop/hotlist.h"
 #include "framebuffer/gui.h"
@@ -34,6 +35,7 @@ static struct du_ui ui;
 static struct ciuki_browser_surface *surface;
 static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
+static bool profile_requested;
 static unsigned bookmarks;
 static struct form_control *file_gadget;
 static struct gui_window *file_window;
@@ -139,7 +141,7 @@ void ciuki_chrome_render(void)
     du_get(&ui,FORWARD)->disabled=!bw || !browser_window_forward_available(bw);
     du_get(&ui,RELOAD)->disabled=!bw || loading;du_get(&ui,STOP)->disabled=!bw || !loading;
     if(ui.dialog.kind) {
-        du_render(&ui);ciuki_browser_damage(surface,(nsfb_bbox_t){0,0,ui.canvas.width,ui.canvas.height});return;
+        du_render(&ui);ciuki_browser_damage(surface,(nsfb_bbox_t){0,0,ui.canvas.width,ui.canvas.height});status_dirty=false;return;
     }
     /* Render only chrome strips, preserving the framebuffer's owned content. */
     if(ui.dirty) {
@@ -156,9 +158,19 @@ void ciuki_chrome_status(const char *text)
 void ciuki_chrome_url(nsurl *url)
 {
     if(active && url) { du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1; }
-    if(profile_ready && url && !loading)ciuki_profile_visit(nsurl_access(url));
+}
+void ciuki_chrome_complete(struct gui_window *window)
+{
+    if(!profile_ready || !window || window!=window_list)return;
+    struct hlcache_handle *content=browser_window_get_content(window->bw);
+    /* READY may have scheduled a layout error that has not broadcast yet. */
+    if(!content || content_is_layout_rejected(content))return;
+    nsurl *url=browser_window_access_url(window->bw);
+    if(url && ciuki_profile_visit(nsurl_access(url)))
+        ciuki_chrome_status("Unable to record this page in history.");
 }
 void ciuki_chrome_loading(bool value) { loading=value;if(active)ui.dirty=1; }
+bool ciuki_chrome_busy(void) { return loading; }
 void ciuki_chrome_title(struct gui_window *window,const char *title)
 {
     (void)window;
@@ -174,7 +186,9 @@ bool ciuki_chrome_modal(void) { return active && ui.dialog.kind; }
 static void open_profile_page(const char *name)
 {
     const char *path=ciuki_profile_path(name);nsurl *url=NULL;
-    if(!strcmp(name,"History.html"))ciuki_profile_history_save();
+    if(!strcmp(name,"History.html") && ciuki_profile_history_save()) {
+        ciuki_chrome_status("Unable to save history; the previous file was kept.");return;
+    }
     if(path && netsurf_path_to_nsurl(path,&url)==NSERROR_OK) { navigate(nsurl_access(url));nsurl_unref(url); }
 }
 bool ciuki_chrome_input(const struct ciuki_input_event *input)
@@ -209,12 +223,23 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         if(e.value) { toolbar_keys=false;ui.focus=-1; }return false;
     }
     if(e.type==CIUKI_INPUT_TEXT && !toolbar_keys && !ui.dialog.kind)return false;
-    if(e.type==CIUKI_INPUT_TEXT && !ui.dialog.kind && du_focused(&ui)==URL) {
-        char utf8[5];if(du_utf8_encode(e.code,utf8))du_edit_insert(du_get(&ui,URL),utf8);
+    struct du_widget *edit=NULL;
+    if(ui.dialog.kind && ui.dialog.focus>=0 && (unsigned)ui.dialog.focus<ui.dialog.count) {
+        struct du_widget *focused=&ui.dialog.items[ui.dialog.focus];
+        if(focused->kind==DU_EDIT)edit=focused;
+    } else if(!ui.dialog.kind && du_focused(&ui)==URL)edit=du_get(&ui,URL);
+    if(e.type==CIUKI_INPUT_TEXT && edit) {
+        char utf8[5];
+        if(e.code>=32 && e.code!=127 && du_utf8_encode(e.code,utf8))du_edit_insert(edit,utf8);
         ui.dirty=1;return true;
     }
-    if(e.type==CIUKI_INPUT_KEY && e.value && !(ui.modifiers&(DU_CTRL|DU_ALT)) &&
-       du_keymap(DU_LAYOUT_US,e.code,0) && !ui.dialog.kind && du_focused(&ui)==URL)return true;
+    /* Desktop TEXT owns printable input, including AltGr (right Alt or
+     * Ctrl+right Alt). KEY still owns editing, navigation and shortcuts. */
+    bool altgr=ui.keys[DU_KEY_RALT];
+    if(e.type==CIUKI_INPUT_KEY && e.value && edit &&
+       (!(ui.modifiers&(DU_CTRL|DU_ALT)) || altgr) && du_keymap(DU_LAYOUT_US,e.code,0))return true;
+    if(e.type==CIUKI_INPUT_WHEEL && !ui.dialog.kind && ui.capture<0 &&
+       ui.mouse_y>=CIUKI_BROWSER_TOP && ui.mouse_y<(int)surface->current.info.height-CIUKI_BROWSER_STATUS)return false;
     if(e.type==CIUKI_INPUT_KEY && e.value && e.code==DU_KEY_TAB && du_focused(&ui)==URL && !(ui.modifiers&DU_SHIFT)) {
         toolbar_keys=false;ui.focus=-1;return false;
     }
@@ -257,7 +282,7 @@ int ciuki_chrome_arguments(int *argc,char **argv)
         }
 #ifdef CIUKI_HOST
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
-        else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;consumed=true; }
+        else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
@@ -266,7 +291,7 @@ int ciuki_chrome_arguments(int *argc,char **argv)
 }
 int ciuki_chrome_start(void)
 {
-    if(ciuki_capture_path)return 0;
+    if(ciuki_capture_path && !profile_requested)return 0;
     profile_ready=ciuki_profile_init(profile_path)==0;
     if(!profile_ready)return -1;
     const char *bookmarks_path=ciuki_profile_path("Bookmarks.html");

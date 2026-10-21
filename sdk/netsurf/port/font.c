@@ -15,6 +15,7 @@
 #include "netsurf/utf8.h"
 #include "framebuffer/font.h"
 #include "font.h"
+#include "budget.h"
 
 /* Four live faces cap caches at 1 MiB. Reopen on style changes; no web fonts. */
 static struct { struct ciuki_font_face *face; unsigned key; } faces[4];
@@ -51,36 +52,61 @@ bool fb_font_finalise(void)
 }
 nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int *width)
 {
+    *width=0;
+    if(n>8192 || ciuki_layout_expired())return NSERROR_BAD_SIZE;
     struct ciuki_font_face *face=face_for(style); int32_t advance;
     if (!face || ciuki_font_measure(face,em(style),s,n,&advance)) return NSERROR_NOMEM;
+    if(ciuki_layout_expired())return NSERROR_STOPPED;
     *width=(advance+32)/64; return NSERROR_OK;
 }
+/* At most ceil(log2(8193))+2 complete measurements, rather than one
+ * measurement per growing prefix. Boundaries are UTF-8 byte offsets. */
 nserror fb_font_position(const plot_font_style_t *style,const char *s,size_t n,int x,size_t *offset,int *actual)
 {
-    int prior=0, width; size_t prev=0;
-    *offset=0; *actual=0;
-    for(size_t at=0;at<n;) {
-        at=utf8_next(s,n,at);
-        nserror err=fb_font_width(style,s,at,&width); if(err) return err;
-        if(width>=x) {
-            if ((int64_t)x-prior < (int64_t)width-x) { *offset=prev; *actual=prior; }
-            else { *offset=at; *actual=width; }
-            return NSERROR_OK;
-        }
-        prev=at; prior=width;
+    if(n>8192)return NSERROR_BAD_SIZE;
+    *offset=0;*actual=0;
+    if(x<=0 || !n)return NSERROR_OK;
+    uint16_t *ends=malloc((n+1)*sizeof(*ends));
+    if(!ends)return NSERROR_NOMEM;
+    size_t count=0;
+    ends[count++]=0;
+    for(size_t at=0;at<n;) { at=utf8_next(s,n,at);ends[count++]=at; }
+    size_t lo=1,hi=count;int width=0;
+    nserror err=NSERROR_OK;
+    while(lo<hi) {
+        size_t mid=lo+(hi-lo)/2;
+        err=fb_font_width(style,s,ends[mid],&width);if(err)goto done;
+        if(width<x)lo=mid+1;else hi=mid;
     }
-    *offset=n; *actual=prior; return NSERROR_OK;
+    if(lo==count)lo=count-1;
+    err=fb_font_width(style,s,ends[lo],&width);if(err)goto done;
+    int prior=0;
+    if(lo) { err=fb_font_width(style,s,ends[lo-1],&prior);if(err)goto done; }
+    if((int64_t)x-prior < (int64_t)width-x) { *offset=ends[lo-1];*actual=prior; }
+    else { *offset=ends[lo];*actual=width; }
+done:
+    free(ends);return err;
 }
 static nserror split(const plot_font_style_t *style,const char *s,size_t n,int x,size_t *offset,int *actual)
 {
-    size_t last=0; int last_width=0, width=0;
-    for(size_t at=0;at<n;) {
-        if(s[at]==' ' && at) { last=at; last_width=width; }
-        at=utf8_next(s,n,at);
-        nserror err=fb_font_width(style,s,at,&width); if(err) return err;
-        if(width>x && last) { *offset=last; *actual=last_width; return NSERROR_OK; }
+    int width;
+    nserror err=fb_font_width(style,s,n,&width);if(err)return err;
+    *offset=n;*actual=width;
+    if(width<=x || !n)return NSERROR_OK;
+    uint16_t *spaces=malloc(n*sizeof(*spaces));if(!spaces)return NSERROR_NOMEM;
+    size_t count=0;
+    for(size_t at=1;at<n;at++)if(s[at]==' ')spaces[count++]=at;
+    if(!count) { free(spaces);return NSERROR_OK; }
+    size_t lo=0,hi=count;
+    while(lo<hi) {
+        size_t mid=lo+(hi-lo)/2;
+        err=fb_font_width(style,s,spaces[mid],&width);if(err)goto done;
+        if(width<=x)lo=mid+1;else hi=mid;
     }
-    *offset=n; *actual=width; return NSERROR_OK;
+    *offset=spaces[lo?lo-1:0];
+    err=fb_font_width(style,s,*offset,actual);
+done:
+    free(spaces);return err;
 }
 struct paint_context { nsfb_t *surface; nsfb_colour_t colour; };
 static int paint(void *context,int x,int y,const struct ciuki_font_bitmap *bitmap)

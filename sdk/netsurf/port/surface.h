@@ -23,9 +23,9 @@ struct ciuki_browser_surface {
     struct du3_connection connection;
     struct ciuki_browser_ops ops;
     struct ciuki_browser_storage current, pending;
-    uint32_t window, generation, create_request, swap_request, damage_request, ping;
+    uint32_t window, generation, create_request, swap_request, ping;
     uint32_t configure, last_configure, want_width, want_height;
-    bool ready, closed, dirty, resized, damaged;
+    bool ready, closed, dirty, resized;
     nsfb_bbox_t damage;
     int mouse_x, mouse_y;
     unsigned buttons;

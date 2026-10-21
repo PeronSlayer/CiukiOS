@@ -28,7 +28,7 @@ class SurfaceTests(unittest.TestCase):
         flags=["clang","-std=c17","-D_POSIX_C_SOURCE=200809L","-O1","-g","-Wall","-Wextra","-Werror",
                "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-fsanitize=address,undefined","-fno-sanitize-recover=undefined","-I"+str(ROOT),
                "-I"+str(ROOT / "src/kernel/include"),
-               "-I"+str(ROOT / "build/external/netsurf-target/prefix/include")]
+               "-I"+str(ROOT / "build/external/netsurf-host/prefix/include")]
         sources=["sdk/netsurf/port/surface.c","apps/libdeskui/v3.c","apps/desktop/protocol.c",
                  "apps/libdeskui/keymap.c","tests/host/netsurf/surface_test.c"]
         subprocess.run([*flags,*[str(ROOT / s) for s in sources],"-o",str(out / "surface")],check=True)
