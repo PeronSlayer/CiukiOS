@@ -74,13 +74,24 @@ static void response(struct peer *p)
     else if(!strcmp(path,"/slow"))wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n";
     else if(!strcmp(path,"/loop"))wire="HTTP/1.1 302 Loop\r\nLocation: /loop\r\nContent-Length: 0\r\n\r\n";
     else if(!strncmp(path,"/redirect",9))wire="HTTP/1.1 302 Redirect\r\nLocation: /cookie\r\nSet-Cookie: hop=one; Path=/; HttpOnly\r\nSet-Cookie: secure=hidden; Path=/; Secure\r\nSet-Cookie: path=hidden; Path=/other\r\nSet-Cookie: domain=hidden; Domain=other.example; Path=/\r\nSet-Cookie: expired=hidden; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/\r\nContent-Length: 0\r\n\r\n";
+    else if(!strcmp(path,"/upgrade")){
+        CHECK(!p->tls);
+        wire="HTTP/1.1 302 Redirect\r\nLocation: https://fixture.example:8443/tls-cookie-start\r\nContent-Length: 0\r\n\r\n";
+    } else if(!strcmp(path,"/tls-cookie-start")){
+        CHECK(p->tls);
+        wire="HTTP/1.1 302 Redirect\r\nLocation: /tls-cookie-end\r\nSet-Cookie: tls_session=Ciuki; Path=/; Secure; HttpOnly\r\nContent-Length: 0\r\n\r\n";
+    }
     if(!strncmp(path,"/cookie-cap/",12)){
         unsigned hop=(unsigned)strtoul(path+12,NULL,10);CHECK(hop<3);
         size_t used=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 302 Redirect\r\nLocation: /%s\r\n",hop==0?"cookie-cap/1":hop==1?"cookie-cap/2":"cookie-count");
         for(unsigned i=0;i<100;i++)used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"Set-Cookie: cookie%u=x; Domain=fixture.example; Path=/\r\n",hop*100+i);
         used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"Content-Length: 0\r\n\r\n");p->response_bytes=used;
-    } else if(!strcmp(path,"/cookie")||!strcmp(path,"/page")||!strcmp(path,"/cookie-count")){
+    } else if(!strcmp(path,"/cookie")||!strcmp(path,"/page")||!strcmp(path,"/cookie-count")||!strcmp(path,"/tls-cookie-end")){
         const char *page="<!doctype html><title>HTTP</title><h1>Ciuki</h1>";
+        if(!strcmp(path,"/tls-cookie-end")){
+            CHECK(p->tls && strstr(p->request,"Cookie: tls_session=Ciuki\r\n"));
+            puts("fixture_tls_cookie_roundtrip=1");
+        }
         if(!strcmp(path,"/cookie")){
             CHECK(strstr(p->request,"Cookie: hop=one"));
             CHECK(!strstr(p->request,"secure=hidden") && !strstr(p->request,"path=hidden") &&
@@ -95,6 +106,17 @@ static void response(struct peer *p)
     } else if(!strcmp(path,"/large-header")){
         strcpy((char *)p->response,"HTTP/1.1 200 OK\r\nX: ");size_t n=strlen((char *)p->response);
         memset(p->response+n,'x',8193);memcpy(p->response+n+8193,"\r\n\r\n",4);p->response_bytes=n+8197;
+    } else if(!strcmp(path,"/gzip64")){
+        CHECK(p->tls);
+        unsigned char plain[65536],encoded[1024];memset(plain,' ',sizeof(plain));
+        const char *page="<!doctype html><title>TLS gzip</title><h1>Ciuki</h1>";
+        size_t used=strlen(page);memcpy(plain,page,used);
+        for(;used+16<=sizeof(plain);used+=16)memcpy(plain+used,"<!-- padding -->",16);
+        z_stream z={0};CHECK(deflateInit2(&z,9,Z_DEFLATED,31,8,Z_DEFAULT_STRATEGY)==Z_OK);
+        z.next_in=plain;z.avail_in=sizeof(plain);z.next_out=encoded;z.avail_out=sizeof(encoded);
+        CHECK(deflate(&z,Z_FINISH)==Z_STREAM_END);size_t n=z.total_out;deflateEnd(&z);
+        size_t header=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nContent-Length: %zu\r\n\r\n",n);
+        memcpy(p->response+header,encoded,n);p->response_bytes=header+n;
     } else if(!strcmp(path,"/gzip")||!strcmp(path,"/deflate")){
         unsigned char encoded[128];z_stream z={0};
         CHECK(deflateInit2(&z,9,Z_DEFLATED,!strcmp(path,"/gzip")?31:15,8,Z_DEFAULT_STRATEGY)==Z_OK);
