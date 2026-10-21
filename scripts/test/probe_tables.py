@@ -56,6 +56,10 @@ def menu_names(root=ROOT):
 
     The F0 list is `probe_names:`; F1..F6 are `f<n>_probe_names`. A list ends
     at the first `db` line that finishes with the double NUL terminator.
+    A labelled `db` line inside a list (`f2_crash_name db`, f3-55's
+    `dos_conformance_name db`, `f3_title_name db`) is still part of it, as
+    are comments and blank lines; any other unindented line (a code label or
+    directive) ends a list that lacks its terminator.
     """
     tables, current = {}, None
     for line in (Path(root) / MENU_INC).read_text().splitlines():
@@ -65,8 +69,8 @@ def menu_names(root=ROOT):
             tables[current] = set()
         elif current is None:
             continue
-        elif line[:1] not in (' ', '\t') and not re.match(r'f\d_(sweep|crash|title)_name\b', line):
-            current = None  # an unrelated label ends the list
+        elif line[:1] not in (' ', '\t', ';', '') and not re.match(r'[A-Za-z_]\w*:?\s+db\b', line):
+            current = None  # a code label or other directive ends the list
             continue
         if current is None:
             continue
@@ -83,6 +87,7 @@ def loader_model_accepts(phase, name):
     try:
         request = 'f%d:%s run=00000000' % (phase, name)
         if phase == 3 and name == 'title': request += ' title=fixture'
+        if phase == 3 and name == 'dos-conformance': request += ' guest=freedos'
         loader_model.selector(request)
     except ValueError:
         return False

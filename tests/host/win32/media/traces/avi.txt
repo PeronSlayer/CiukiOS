@@ -79,7 +79,7 @@ FRAME app-2x-frame1 64x32 fnv=d69450c5
 = 0 ''
 > resume v
 = 0 ''
-NOTIFY t=875 hwnd=4321 successful id=1
+NOTIFY t=745 hwnd=4321 successful id=1
 > status v mode
 = 0 'stopped'
 > status v position

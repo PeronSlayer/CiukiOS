@@ -25,6 +25,7 @@ struct vfs_lock_owner { enum vfs_owner_type type; uint64_t id; };
 struct vfs_file_identity {
     struct fat_volume *volume;
     uint64_t serial, generation;
+    uint64_t unlinked_id; /* exported tombstone generation, not cache serial */
     uint32_t parent, index, refs, pages;
     bool valid, linked;
 };
@@ -142,7 +143,7 @@ struct vfs {
     struct vfs_range_lock range_locks[VFS_RANGE_LOCKS];
     struct vfs_waiter *waiters;
     fs_lock identity_lock; /* short table updates; no I/O or namespace acquisition */
-    uint64_t next_identity;
+    uint64_t next_identity, next_unlinked_id;
     uint32_t next_identity_generation;
     struct vfs_file_identity identities[VFS_IDENTITIES];
     struct vfs_page_identity page_identities[VFS_PAGE_IDENTITIES];
@@ -270,6 +271,8 @@ int vfs_completion(struct vfs_table *, int, struct cache_completion *);
 int vfs_identity_get(struct vfs *, struct fat_volume *, struct fat_entry *, struct vfs_file_identity **);
 void vfs_identity_put(struct vfs *, struct vfs_file_identity *);
 bool vfs_identity_live(struct vfs *, struct vfs_file_identity *);
+/* Atomic live FAT location/volume snapshot; zero when identity is unavailable. */
+uint64_t vfs_identity_file_id(struct vfs *, struct vfs_file_identity *, uint32_t *volume_serial);
 int vfs_page_get(struct vfs *, struct vfs_file_identity *, uint64_t index, struct vfs_page_identity **);
 void vfs_page_put(struct vfs *, struct vfs_page_identity *);
 void vfs_identity_expire(struct vfs *, struct fat_volume *);

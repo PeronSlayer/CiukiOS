@@ -141,5 +141,5 @@ static enum net_link xl_link(struct netif *d)
 { xl_window(d, 4); return nic_mii_link(d, &xl_mii); }
 const struct netif_driver net_3c90x = {
     "3c905", xl_match, 128, 0, NIC_DMA_PAGES, xl_idle, xl_init, xl_start, xl_stop,
-    xl_transmit, xl_poll, xl_link, nic_mac, xl_interrupt, xl_irq_enable
+    xl_transmit, xl_poll, xl_link, nic_mac, xl_interrupt, xl_irq_enable, 0
 };

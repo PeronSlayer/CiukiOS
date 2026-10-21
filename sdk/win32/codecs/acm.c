@@ -37,7 +37,9 @@ uint32_t W32API acmFormatSuggest(uintptr_t driver, const struct cc_wave *src,
   if (src && src->tag == 1 && dst && bytes >= 16 && !(flags & ~0xf0000u) &&
       !cc_wave_validate(src, &(uint32_t){0})) {
     /* PCM source: the PCM converter honours each requested field. */
-    struct cc_wave w = *src;
+    struct cc_wave w = {0};
+    /* PCMWAVEFORMAT is only 16 bytes; cbSize need not exist. */
+    cc_copy(&w, src, 16);
     if ((flags & 0x10000) && dst->tag != 1)
       return CC_NOTPOSSIBLE;
     if (flags & 0x20000)
