@@ -8,6 +8,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
+import struct
+import zlib
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -22,6 +25,50 @@ NAME = 'ciuki-installer-fixture.exe'
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def uninstaller_bytes(raw):
+    """Reconstruct 2.51's WriteUninstaller output for independent identity.
+
+    Source/exehead/exec.c EW_WRITEUNINSTALLER copies the stub, applies the
+    icon records, then appends the uninstaller block. This is not execution.
+    Only our five-block, non-solid zlib fixture format is accepted.
+    """
+    signature = struct.pack('<4I', 0xdeadbeef, 0x6c6c754e, 0x74666f73, 0x74736e49)
+    header = raw.index(signature) - 4
+    if header % 512 or struct.unpack_from('<I', raw, header + 24)[0] != len(raw) - header:
+        raise ValueError('NSIS fixture header bounds')
+    at, blocks = header + 28, []
+    while at < len(raw) - 4:
+        n, = struct.unpack_from('<I', raw, at)
+        length = n & 0x7fffffff
+        if length > len(raw) - 4 - at - 4:
+            raise ValueError('NSIS fixture block bounds')
+        data = raw[at + 4:at + 4 + length]
+        blocks.append(zlib.decompress(data, -15) if n >> 31 else data)
+        at += 4 + length
+    if at != len(raw) - 4 or len(blocks) != 5 or blocks[-1][4:20] != signature:
+        raise ValueError('NSIS fixture uninstaller layout')
+    stub, icons, offset = bytearray(raw[:header]), blocks[-2], 0
+    while offset + 4 <= len(icons):
+        n, = struct.unpack_from('<I', icons, offset)
+        if not n: break
+        target, = struct.unpack_from('<I', icons, offset + 4)
+        if n > len(icons) - offset - 8 or target + n > len(stub):
+            raise ValueError('NSIS fixture icon bounds')
+        stub[target:target + n] = icons[offset + 8:offset + 8 + n]
+        offset += 8 + n
+    result = bytes(stub) + blocks[-1]
+    if zlib.crc32(result[512:-4]) != struct.unpack_from('<I', result, len(result) - 4)[0]:
+        raise ValueError('NSIS fixture uninstaller CRC')
+    return result
+
+
+def identity(raw):
+    digest = 2166136261
+    for byte in raw:
+        digest = ((digest ^ byte) * 16777619) & 0xffffffff
+    return {'size': len(raw), 'fnv1a32': digest, 'sha256': hashlib.sha256(raw).hexdigest()}
 
 
 def authored_pe(out, name, source, dlls):
@@ -55,6 +102,12 @@ def authored_pe(out, name, source, dlls):
 def build(out, compiler=None):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    _, archives = build_nsis.archives()
+    notice = ROOT / 'third_party/nsis/COPYING'
+    with tarfile.open(archives['source']) as archive:
+        original = archive.extractfile('nsis-2.51-src/COPYING').read()
+    if not notice.is_file() or notice.read_bytes() != original:
+        raise ValueError('third_party/nsis/COPYING must be byte-identical to pinned NSIS 2.51 source COPYING')
     compiler = compiler or build_nsis.build()
     record = json.loads((Path(compiler).parent / 'build.json').read_text())
     child = authored_pe(out, 'child.exe', CHAIN / 'child.c', {})
@@ -79,12 +132,14 @@ def build(out, compiler=None):
                                                  'child.exe': child.read_bytes()}))
     stub = authored_pe(out, 'selfextract.exe', CHAIN / 'selfextract.c', {})
     inf = authored_pe(out, 'infchain.exe', CHAIN / 'infchain.c', {})
-    shutil.copyfile(ROOT / 'third_party/nsis/COPYING', out / 'NSIS-COPYING.TXT')
+    shutil.copyfile(notice, out / 'NSIS-COPYING.TXT')
     result = {'schema': 1, 'engine': 'NSIS 2.51', 'pin': json.loads(build_nsis.PIN.read_text()),
               'compiler_sha256': sha(compiler), 'identical_runs': 2,
               'files': {n: sha(out / n) for n in (NAME, 'child.exe', 'fixture.cab', 'chain.inf', stub.name, inf.name, 'NSIS-COPYING.TXT')},
               'sources': {p.name: sha(p) for p in (*sorted(SOURCE.iterdir()), *sorted(CHAIN.iterdir()))
                           if p.is_file()}, 'execution': 'not_run'}
+    result['identities'] = {'child.exe': identity(child.read_bytes()),
+                            'uninstall.exe': identity(uninstaller_bytes((out / NAME).read_bytes()))}
     (out / 'installer-fixtures.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
 

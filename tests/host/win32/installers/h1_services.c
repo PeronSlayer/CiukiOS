@@ -219,8 +219,35 @@ int h1_installer_kernel(void *r,uint32_t size,int32_t *status){
 static int (*original_open)(void *,const char *,struct w32_file *);
 static void (*original_close)(void *,struct w32_file *);
 static struct {void *data;uint32_t size;} snapshots[128];
+static const struct w32_builtin *providers;
+static uint32_t provider_count;
+void h1_installer_providers(const struct w32_builtin *table,uint32_t count){providers=table;provider_count=count;}
+static int normalized_provider(const char *name,char out[1024]){
+    /* Only fully qualified host paths from the trusted builtin table. Do
+     * not turn a guest drive-less name into a host working-directory path. */
+    if(name[0]!='/')return 0;
+    unsigned n=0;out[n++]='/';
+    for(unsigned i=1;name[i];){
+        while(name[i]=='/' || name[i]=='\\')i++;
+        unsigned start=i;while(name[i] && name[i]!='/' && name[i]!='\\')i++;
+        unsigned len=i-start;if(!len)break;
+        if(len==1 && name[start]=='.')continue;
+        if(len==2 && name[start]=='.' && name[start+1]=='.')return 0;
+        if(n+len+1>=1024)return 0;
+        if(n>1)out[n++]='/';
+        for(unsigned j=0;j<len;j++)out[n++]=name[start+j];
+    }
+    out[n]=0;return 1;
+}
+static int same_provider(const char *a,const char *b){
+    unsigned i=0;while(a[i] && a[i]==b[i])i++;return a[i]==b[i];
+}
 static int fixture_open(void *o,const char *name,struct w32_file *file){
-    if(!name[0] || name[1]!=':')return original_open(o,name,file);
+    char candidate[1024],allowed[1024];
+    if(normalized_provider(name,candidate))for(unsigned i=0;i<provider_count;i++){
+        if(normalized_provider(providers[i].path,allowed) && same_provider(candidate,allowed))
+            return original_open(o,allowed,file);
+    }
     struct ciuki_w32_file_args a={.header={1,sizeof(a),W32_FILE,0},.action=W32_F_OPEN,.path=PTR(name),.access=0x80000000u,.share=7,.disposition=3};
     if(record(&a,sizeof(a)) || a.error)return 0;uint32_t handle=a.result;
     struct ciuki_w32_file_info info;
@@ -241,7 +268,7 @@ static int fixture_open(void *o,const char *name,struct w32_file *file){
     if(data)host.services.free(&host,data,info.size_low);return 0;
 }
 static void fixture_close(void *o,struct w32_file *file){
-    for(unsigned i=0;i<128;i++)if(snapshots[i].data==file->cookie){
+    for(unsigned i=0;i<128;i++)if(snapshots[i].data && snapshots[i].data==file->cookie){
         host.services.free(&host,snapshots[i].data,snapshots[i].size);snapshots[i].data=0;return;}
     original_close(o,file);
 }

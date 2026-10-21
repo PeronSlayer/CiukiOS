@@ -169,6 +169,11 @@ class FlowFixtureTests(unittest.TestCase):
         self.assertEqual(self.record['identical_runs'], 2)
         expected = json.loads((fixture.SOURCE / 'expected.json').read_text())
         self.assertEqual(self.record['files'], expected['artifacts'])
+        self.assertEqual(self.record['identities'], expected['identities'])
+        header = (ROOT / 'src/probes/win32_installers/identities.h').read_text()
+        for name, prefix in (('child.exe', 'CHILD'), ('uninstall.exe', 'UNINSTALL')):
+            self.assertIn(f'INSTALLER_{prefix}_SIZE {expected["identities"][name]["size"]}u', header)
+            self.assertIn(f'INSTALLER_{prefix}_FNV 0x{expected["identities"][name]["fnv1a32"]:08x}u', header)
         store = ROOT / 'build/apps/win32'
         if (store / 'fixtures.json').is_file():
             staged = json.loads((store / 'fixtures.json').read_text())['files']
@@ -262,6 +267,7 @@ class FlowFixtureTests(unittest.TestCase):
                 self.assertEqual(code, 0, output[-12000:])
                 self.assertIn('PASS FDI MSZIP exact extracted bytes', output)
                 self.assertIn('kernel_enosys=0', output)
+                service.assert_quiescent()
             finally:
                 service.close()
 
@@ -299,6 +305,45 @@ class FlowFixtureTests(unittest.TestCase):
         rows = [dict(event='DATA', **dict(t.split('=', 1) for t in fields.split()))
                 for fields in re.findall(r'^RECORD w32-installer-nsis DATA (.*)$', records, re.M)]
         evidence.evaluate_predicates(rows, case['expected'])
+
+    def test_nsis_cancellation_preserves_existing_and_late_rollback(self):
+        self.run_driver_case(lambda driver: driver.cancellation_cases())
+
+    def test_original_uninstaller_copies_launches_and_exits(self):
+        self.run_driver_case(lambda driver: driver.original_uninstall())
+
+    def test_actual_runonce_interruption_and_recovery(self):
+        for boundary in ('journal_persisted', 'wininit_tick', 'wininit_retired', 'runonce_consumed', 'runonce_executed'):
+            with self.subTest(boundary=boundary):
+                self.run_driver_case(lambda driver: driver.interrupted_restart(self.service_library, boundary))
+
+    def run_driver_case(self, action):
+        program = self.h1()
+        from .flow_driver import FixtureDriver
+        self.service_library, _, _ = host_services.build_bridge(OUT / 'services')
+        with tempfile.TemporaryDirectory(dir=OUT) as root:
+            driver = FixtureDriver(root, self.service_library, program, self.fixtures)
+            try: action(driver)
+            finally:
+                (OUT / (self._testMethodName + '.log')).write_text(''.join(driver.outputs))
+                driver.close()
+
+    def test_corrupt_cabinet_cleans_inf_and_selfextract_temporary_trees(self):
+        def check(driver, name, code):
+            raw = bytearray((self.fixtures / 'fixture.cab').read_bytes()); raw[-1] ^= 1
+            driver.paths.path(driver.base + 'fixture.cab').write_bytes(raw)
+            driver.execute(name, expected=code)
+            driver.service.assert_quiescent()
+        for name, code in (('infchain.exe', 4), ('selfextract.exe', 1)):
+            with self.subTest(image=name): self.run_driver_case(lambda driver: check(driver, name, code))
+
+    def test_selfextract_timeout_reaps_child_before_removing_tree(self):
+        def check(driver):
+            driver.service.wait_timeout_once = True
+            driver.execute('selfextract.exe', expected=1)
+            driver.service.assert_quiescent()
+            if len(driver.service.children) < 2: raise AssertionError('no real child to terminate')
+        self.run_driver_case(check)
 
 
 if __name__ == '__main__':

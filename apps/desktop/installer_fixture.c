@@ -63,7 +63,8 @@ static int copy_uninstaller(void)
     int out=open("/WINDOWS/TEMP/CiukiInstallerFixture-uninstall.exe",O_WRONLY|O_CREAT|O_EXCL,0600);if(out<0){close(in);return -1;}
     char data[1024];ssize_t n;int e=0;
     while((n=read(in,data,sizeof(data)))>0){ssize_t at=0;while(at<n){ssize_t w=write(out,data+at,(size_t)(n-at));if(w<=0){e=1;break;}at+=w;}if(e)break;}
-    if(n<0 || fsync(out))e=1;close(in);if(close(out))e=1;return e?-1:0;
+    if(n<0 || fsync(out))e=1;close(in);if(close(out))e=1;
+    if(e)unlink("/WINDOWS/TEMP/CiukiInstallerFixture-uninstall.exe");return e?-1:0;
 }
 void desk_installer_fixture_tick(struct desktop *d)
 {

@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 import struct
 from . import host_services as h, registry_wire as reg
-from scripts.win32 import census, installer_fixture as fixture
+from scripts.win32 import installer_fixture as fixture
 
 
 class FixtureDriver:
@@ -28,6 +28,7 @@ class FixtureDriver:
             shutil.copyfile(self.fixtures / name, target / name)
         self.base = 'C:\\System\\Win32\\Fixtures\\'
         self.installed = self.service.root / 'C/Program Files/Ciuki Installer Fixture'
+        self.baseline = self.snapshot()
 
     def close(self):
         self.service.close()
@@ -40,7 +41,35 @@ class FixtureDriver:
             raise AssertionError(f'{image}: expected {expected}, got {code}\n{output[-12000:]}')
         return output
 
+    def snapshot(self):
+        files = {}
+        for drive in ('C', 'D'):
+            for path in (self.service.root / drive).rglob('*'):
+                key = path.relative_to(self.service.root).as_posix()
+                if path.is_symlink(): raise AssertionError('unexpected fixture symlink')
+                files[key] = 'directory' if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+        return {'files': files, 'registry': self.registry.snapshot()}
+
+    def compare(self, state, baseline=None):
+        baseline = baseline or self.baseline
+        expected = {kind: baseline[kind] | {key.casefold() if kind == 'registry' else key: value
+                    for key, value in state[kind].items()} for kind in ('files', 'registry')}
+        actual = self.snapshot()
+        for kind in expected:
+            if actual[kind] != expected[kind]:
+                changed = {key: (expected[kind].get(key), actual[kind].get(key))
+                           for key in expected[kind].keys() | actual[kind].keys()
+                           if expected[kind].get(key) != actual[kind].get(key)}
+                raise AssertionError(f'exact {kind} delta: {changed}')
+
+    def state(self, stage):
+        self.compare(self.expected['states'][str(stage)])
+        temporary = [p[len('C/WINDOWS/TEMP/'):] for p in self.expected['states'][str(stage)]['files']
+                     if p.startswith('C/WINDOWS/TEMP/')]
+        self.service.assert_quiescent(temporary)
+
     def checkpoint(self, stage, code=0):
+        self.state(stage)
         out = C.create_string_buffer(4096)
         with self.registry.lock:
             accepted = self.registry._probe_checkpoint(self.registry.ctx, stage, code, out, len(out))
@@ -69,8 +98,10 @@ class FixtureDriver:
             actual = hashlib.sha256((self.installed / name).read_bytes()).hexdigest()
             expected = self.expected['payload_sha256'] if name == 'payload.txt' else self.expected['artifacts'][name]
             if actual != expected: raise AssertionError(f'installed checksum: {name}')
-        image = census.inspect((self.installed / 'uninstall.exe').read_bytes())
-        if image['machine'] != 'i386': raise AssertionError('uninstaller PE')
+        for name, identity in self.expected['identities'].items():
+            raw = (self.installed / name).read_bytes()
+            if len(raw) != identity['size'] or hashlib.sha256(raw).hexdigest() != identity['sha256']:
+                raise AssertionError(f'executable identity: {name}')
         for name, target in self.expected['install']['links'].items():
             raw = self.paths.path(name).read_bytes()
             if len(raw) < 40 or raw[:8] != b'CIUKLNK3': raise AssertionError('link header')
@@ -103,6 +134,7 @@ class FixtureDriver:
             raise AssertionError('no actual child wait')
         if not any(row[0] == 'write' and row[1].endswith('child.done') for row in self.service.trace):
             raise AssertionError('child marker was not written')
+        self.state(name)
         return output
 
     def nsis(self):
@@ -133,3 +165,85 @@ class FixtureDriver:
         self.records.append(text)
         if text.count('errors=0 manifest=1') != 4: raise AssertionError(text)
         return ''.join(self.records)
+
+    def cancellation_cases(self):
+        self.execute(fixture.NAME, '/S /CANCEL /LATE /RESTART', expected=1)
+        self.state(1)
+        if not any(row[0] == 'write' and row[1].endswith('uninstall.exe') for row in self.service.trace):
+            raise AssertionError('late cancel never created the uninstaller')
+        written = set()
+        for raw in self.registry.trace:
+            fields = struct.unpack_from('<10I', raw)
+            if fields[1] == reg.SET:
+                written.add(raw[40 + fields[7]:40 + fields[7] + fields[8] - 1].decode())
+        if not set(self.expected['install']['registry']).union({'CiukiInstallerFixture'}) <= written:
+            raise AssertionError(f'late cancel missed registry writes: {written}')
+        self.execute(fixture.NAME, '/S')
+        self.state(2)
+        (self.installed / 'payload.txt').write_bytes(b'earlier installation, preserve these bytes')
+        key, _ = self.rpc(reg.OPEN, reg.HKLM, self.expected['install']['uninstall_key'].split('\\', 1)[1])
+        self.rpc(reg.SET, key[2], name='DisplayName', data=b'previous binary value', type_=3)
+        self.rpc(reg.SET, key[2], name='EarlierValue', data=b'\x07\0\0\0', type_=4)
+        self.rpc(reg.CLOSE, key[2])
+        before = self.snapshot()
+        for args in ('/S /CANCEL', '/S /CANCEL /LATE /RESTART'):
+            self.execute(fixture.NAME, args, expected=1)
+            self.compare({'files': {}, 'registry': {}}, before)
+            self.service.assert_quiescent()
+
+    def interrupted_restart(self, library, boundary):
+        self.execute(fixture.NAME, '/S /RESTART')
+        self.state(3)
+        class Interrupted(Exception): pass
+        def interrupt(event):
+            if event == boundary: raise Interrupted()
+        try:
+            self.service.restart(interrupt=interrupt)
+        except Interrupted:
+            pass
+        else: raise AssertionError('restart interruption was not reached')
+        previous = self.service
+        previous.finish_descendants()
+        for session in previous.sessions: session.close()
+        previous.registry.close()
+        self.service = h.Services(previous.root, library, previous.program)
+        self.paths = self.service.session()
+        self.registry = self.service.registry
+        self.service.restart()
+        state = {kind: dict(values) for kind, values in self.expected['states']['5'].items()}
+        if boundary == 'runonce_consumed':
+            # Deletion is durable before handoff: interruption loses this
+            # command and must not replay it on the reconstructed service.
+            del state['files']['C/WINDOWS/TEMP/CiukiInstallerFixture.restarted']
+        self.compare(state)
+        temporary = [] if boundary == 'runonce_consumed' else ['CiukiInstallerFixture.restarted']
+        self.service.assert_quiescent(temporary)
+        expected = 0 if boundary == 'runonce_consumed' else 1
+        executions = sum(row[0] == 'spawn' and row[1].endswith('child.exe')
+                         for row in previous.trace + self.service.trace)
+        if executions != expected: raise AssertionError(f'RunOnce executions: {executions}, expected {expected}')
+
+    def original_uninstall(self):
+        self.execute(fixture.NAME, '/S')
+        self.state(2)
+        start = len(self.service.trace)
+        self.execute('C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe', '/S')
+        self.service.finish_descendants()
+        spawned = [row[1] for row in self.service.trace[start:] if row[0] == 'spawn']
+        delegated = [p for p in spawned if p != 'C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe']
+        if len(delegated) != 1 or delegated[0] not in (
+                'C:\\WINDOWS\\TEMP\\~nsu.tmp\\Au_.exe', 'C:\\WINDOWS\\TEMP\\~nsuA.tmp\\Au_.exe'):
+            raise AssertionError(f'original uninstaller did not copy/start/exit: {spawned}')
+        image = delegated[0]
+        directory = image.rsplit('\\', 1)[0]
+        # The unchanged engine writes [Rename]; our authored section adds
+        # the Win9x DIRNUL retirement after deleting the running copy.
+        ini = ('[Rename]\r\nNUL=' + image + '\r\n[DIRNUL]\r\n' + directory + '=0\r\n').encode()
+        path = lambda text: text[0] + '/' + text[3:].replace('\\', '/')
+        state = {'files': {path(directory): 'directory', path(image): self.expected['identities']['uninstall.exe']['sha256'],
+                          'C/WINDOWS/WININIT.INI': hashlib.sha256(ini).hexdigest()}, 'registry': {}}
+        self.compare(state)
+        self.service.assert_quiescent((directory.rsplit('\\', 1)[1], directory.rsplit('\\', 1)[1] + '/Au_.exe'))
+        self.service.restart()
+        self.compare({'files': {'C/WINDOWS/WININIT.BAK': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
+        self.service.assert_quiescent()

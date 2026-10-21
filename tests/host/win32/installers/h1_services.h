@@ -6,4 +6,5 @@ int h1_installer_init(const char *);
 int h1_installer_kernel(void *,uint32_t,int32_t *);
 uint32_t h1_installer_server(const void *,uint32_t,void *,uint32_t,uint32_t *);
 void h1_installer_parameters(const char *);
+void h1_installer_providers(const struct w32_builtin *,uint32_t);
 #endif

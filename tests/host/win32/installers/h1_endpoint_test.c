@@ -35,8 +35,13 @@ static void *map(void *o,uint32_t at,uint32_t n,int exact){
 static void unmap(void *o,void *p,uint32_t n){(void)o;assert(!munmap(p,n));host.mappings--;}
 static void *alloc(void *o,uint32_t n){return map(o,0,n,0);}
 static int protect(void *o,void *p,uint32_t n,uint32_t mode){(void)o;return !mprotect(p,n,(int)mode);}
-static int open_unused(void *o,const char *n,struct w32_file *f){(void)o;(void)n;(void)f;return 0;}
-static void close_unused(void *o,struct w32_file *f){(void)o;(void)f;assert(0);}
+static unsigned provider_opens,provider_closes;
+static uint8_t provider[]="trusted builtin";
+static int open_unused(void *o,const char *n,struct w32_file *f){
+    (void)o;assert(!strcmp(n,"/trusted/provider.dll"));provider_opens++;
+    *f=(struct w32_file){provider,sizeof(provider),provider};return 1;
+}
+static void close_unused(void *o,struct w32_file *f){(void)o;assert(f->cookie==provider);provider_closes++;}
 static void call(void *p,uint32_t n){int32_t status=-999;assert(h1_installer_kernel(p,n,&status) && !status);}
 static void close_handle(uint32_t handle){
     struct ciuki_w32_object_args a={.action=W32_OBJ_CLOSE,.handle=handle};a.header=HEADER(W32_OBJECT,a);
@@ -46,6 +51,14 @@ static void *exercise(void *fd){
     host.services.alloc=alloc;host.services.free=unmap;host.services.map=map;host.services.unmap=unmap;
     host.services.protect=protect;host.services.open=open_unused;host.services.close=close_unused;
     assert(h1_installer_init(fd));
+    const struct w32_builtin allowed[]={ {.path="/trusted/provider.dll"} };
+    h1_installer_providers(allowed,1);
+    struct w32_file snapshot;
+    const char *refused[]={"/etc/passwd","../../../../etc/passwd","/trusted/other.dll","provider.dll"};
+    for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);i++)assert(!host.services.open(&host,refused[i],&snapshot));
+    assert(!provider_opens);
+    assert(host.services.open(&host,"/trusted/./provider.dll",&snapshot));
+    host.services.close(&host,&snapshot);assert(provider_opens==1 && provider_closes==1);
     /* The VirtualAlloc/Free/Protect/Query path needed by reused cabinet.dll. */
     struct ciuki_w32_vm a={.bytes=8192,.flags=W32_MEM_RESERVE|W32_MEM_COMMIT,.protect=W32_PAGE_READWRITE};
     a.header=HEADER(W32_VM_ALLOC,a);call(&a,sizeof(a));assert(a.address);

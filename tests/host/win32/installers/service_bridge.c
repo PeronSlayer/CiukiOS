@@ -12,6 +12,7 @@ struct fixture_service {
     struct ws_shell *shell;
     struct ws_fs native, mapped;
     char root[1024], hives[1100];
+    unsigned fault;
 };
 static int mapped(struct fixture_service *s,const char *path,char out[2048]) {
     if(!path || path[0]!='/' || strstr(path,"/../") || strstr(path,"/./"))return EINVAL;
@@ -21,9 +22,14 @@ static int mapped(struct fixture_service *s,const char *path,char out[2048]) {
 static int fs_stat(void *o,const char *p,int *d,uint64_t *n){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.stat(0,q,d,n);}
 #define ONE(name) static int fs_##name(void *o,const char *p){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.name(0,q);}
 ONE(mkdir) ONE(rmdir) ONE(unlink)
-static int fs_rename(void *o,const char *p,const char *r){struct fixture_service *s=o;char q[2048],t[2048];int e=mapped(s,p,q);if(!e)e=mapped(s,r,t);return e?e:s->native.rename(0,q,t);}
+static int fs_rename(void *o,const char *p,const char *r){struct fixture_service *s=o;char q[2048],t[2048];
+    if(s->fault==2 && strstr(r,"CIUKIRST.LOG")){s->fault=0;return EIO;}
+    if(s->fault==3 && strstr(r,"WININIT.BAK")){s->fault=0;return EIO;}
+    int e=mapped(s,p,q);if(!e)e=mapped(s,r,t);return e?e:s->native.rename(0,q,t);}
 static int fs_read(void *o,const char *p,uint8_t **b,size_t *n,size_t cap){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.read(0,q,b,n,cap);}
-static int fs_write(void *o,const char *p,const void *b,size_t n){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.write(0,q,b,n);}
+static int fs_write(void *o,const char *p,const void *b,size_t n){struct fixture_service *s=o;char q[2048];
+    if(s->fault==1 && strstr(p,"CIUKIRST.TMP")){s->fault=0;return EIO;}
+    int e=mapped(s,p,q);return e?e:s->native.write(0,q,b,n);}
 static int fs_list(void *o,const char *p,int (*cb)(void *,const char *,int),void *ctx){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.list(0,q,cb,ctx);}
 static void fs_log(void *o,const char *p){(void)o;fprintf(stderr,"%s\n",p);}
 void *installer_service_create(const char *root){
@@ -51,6 +57,31 @@ uint32_t installer_service_restart_phase(void *ctx){return ws_restart_phase(((st
 int installer_service_restart_tick(void *ctx){return ws_restart_tick(((struct fixture_service *)ctx)->shell);}
 uint32_t installer_service_restart_next(void *ctx,char *command,uint32_t cap){uint32_t type,handed;return ws_restart_next(((struct fixture_service *)ctx)->shell,command,cap,&type,&handed);}
 uint32_t installer_service_restart_end(void *ctx){return ws_restart_end(((struct fixture_service *)ctx)->shell);}
+void installer_service_fault(void *ctx,unsigned fault){((struct fixture_service *)ctx)->fault=fault;}
+/* Complete logical store, independent of the selected Uninstall observer.
+ * Counted records avoid escaping ambiguities; the Python side sorts them. */
+unsigned installer_service_snapshot(void *ctx,uint8_t *out,unsigned cap){
+    struct wr_server *s=&((struct fixture_service *)ctx)->registry;unsigned used=0;
+    for(struct wr_key *k=s->keys;k;k=k->next){
+        if(k->deleted)continue;
+        char path[4096]="";unsigned n=0;
+        for(struct wr_key *p=k;p && p->parent;p=p->parent){
+            unsigned len=(unsigned)strlen(p->name);if(len+n+1>=sizeof(path))return 0;
+            memmove(path+len+1,path,n+1);memcpy(path,p->name,len);path[len]='\\';n+=len+1;
+        }
+        if(n)path[--n]=0;
+        struct wr_value *v=NULL;
+        do{
+            uint32_t head[]={v?1u:0u,k->hive,n,v?(uint32_t)strlen(v->name):0u,v?v->type:0u,v?v->bytes:0u};
+            unsigned bytes=sizeof(head)+head[2]+head[3]+head[5];if(bytes>cap-used)return 0;
+            memcpy(out+used,head,sizeof(head));used+=sizeof(head);
+            memcpy(out+used,path,n);used+=n;
+            if(v){memcpy(out+used,v->name,head[3]);used+=head[3];memcpy(out+used,v->data,v->bytes);used+=v->bytes;v=v->next;}
+            else v=k->values;
+        }while(v);
+    }
+    return used;
+}
 /* Same independent, read-only observer as the authenticated desktop. */
 static struct fixture_service *observed;
 uint32_t desk_w32_exchange(const void *in,uint32_t n,void *out,uint32_t cap,uint32_t *used){return installer_service_exchange(observed,0x7ffffffe,in,n,out,cap,used);}

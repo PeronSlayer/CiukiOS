@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import zipfile
@@ -64,6 +65,33 @@ def configuration(source):
     return values
 
 
+def data_manifest(data):
+    """Close NSISDIR over every release file, including unused resources."""
+    result = {}
+    if data.is_symlink():
+        raise ValueError('symlink NSISDIR')
+    for path in sorted(data.rglob('*')):
+        if path.is_symlink():
+            raise ValueError('symlink in NSISDIR')
+        if path.is_file():
+            result[path.relative_to(data).as_posix()] = sha(path)
+    return result
+
+
+def extract_data(archive_path, folder):
+    if folder.is_symlink():
+        folder.unlink()
+    elif folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir()
+    with zipfile.ZipFile(archive_path) as archive:
+        for entry in archive.infolist():
+            if entry.filename.startswith('/') or '..' in Path(entry.filename).parts:
+                raise ValueError('unsafe NSIS ZIP member')
+        archive.extractall(folder)
+    return folder / 'nsis-2.51'
+
+
 def build(out=OUT):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -74,9 +102,20 @@ def build(out=OUT):
     key['compiler'] = compiler
     record = out / 'build.json'
     program = out / 'makensis'
+    data = out / 'data/nsis-2.51'
     if record.is_file() and program.is_file():
         old = json.loads(record.read_text())
         if old['inputs'] == key and old['makensis_sha256'] == sha(program):
+            try:
+                valid = (old.get('data') == str(data) and bool(old.get('data_manifest')) and
+                         data_manifest(data) == old['data_manifest'])
+            except (OSError, ValueError):
+                valid = False
+            if not valid:
+                data = extract_data(files['binary'], out / 'data')
+                old['data_manifest'] = data_manifest(data)
+                old['data'] = str(data)
+                record.write_text(json.dumps(old, indent=2) + '\n')
             return program
     source, data, objects = out / 'source', out / 'data', out / 'objects'
     for folder in (source, data, objects):
@@ -84,12 +123,7 @@ def build(out=OUT):
     with tarfile.open(files['source']) as archive:
         archive.extractall(source, filter='data')
     source /= 'nsis-2.51-src'
-    with zipfile.ZipFile(files['binary']) as archive:
-        for entry in archive.infolist():
-            if entry.filename.startswith('/') or '..' in Path(entry.filename).parts:
-                raise ValueError('unsafe NSIS ZIP member')
-        archive.extractall(data)
-    data /= 'nsis-2.51'
+    data = extract_data(files['binary'], data)
     # The 2015 host recipe requests -m32. The sandbox refuses i386 ELF
     # startup, so use native pointers for host-only pointer arithmetic while
     # retaining 32-bit on-disk Windows types. These exact replacements are
@@ -149,7 +183,8 @@ def build(out=OUT):
         raise ValueError(f'wrong compiler version: {version}')
     record.write_text(json.dumps({'inputs': key, 'defaults': values, 'version': version,
                                  'host_adaptations': replacements,
-                                 'makensis_sha256': sha(program), 'data': str(data)}, indent=2) + '\n')
+                                 'makensis_sha256': sha(program), 'data': str(data),
+                                 'data_manifest': data_manifest(data)}, indent=2) + '\n')
     return program
 
 

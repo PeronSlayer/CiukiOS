@@ -6,9 +6,12 @@
 #include <stdarg.h>
 static struct installer_observation facts[]={
     {0,0,0,1}, {IF_BASE|IF_DIRECTORY,IF_CONTENT,0,0},
-    {IF_BASE|IF_DIRECTORY|IF_REMOVE|IF_INI,IF_CONTENT|IF_INI,0,0},
-    {IF_JOURNAL,0,0,0}, {IF_BASE|IF_DIRECTORY|IF_RESTARTED|IF_BACKUP,IF_CONTENT,0,0},
-    {IF_COPY|IF_INI|IF_BACKUP,IF_INI,0,0}, {IF_JOURNAL,0,0,0}, {IF_BACKUP,0,0,0}
+    {IF_BASE|IF_DIRECTORY|IF_REMOVE|IF_INI,IF_CONTENT|IF_REMOVE|IF_INI,0,0},
+    {IF_BASE|IF_DIRECTORY|IF_REMOVE|IF_INI|IF_JOURNAL,IF_CONTENT|IF_REMOVE|IF_INI|IF_JOURNAL,0,0},
+    {IF_BASE|IF_DIRECTORY|IF_RESTARTED|IF_BACKUP,IF_CONTENT|IF_RESTARTED|IF_BACKUP,0,0},
+    {IF_COPY|IF_INI|IF_BACKUP|IF_RESTARTED,IF_COPY|IF_INI|IF_BACKUP|IF_RESTARTED,0,0},
+    {IF_COPY|IF_INI|IF_BACKUP|IF_RESTARTED|IF_JOURNAL,IF_COPY|IF_INI|IF_BACKUP|IF_RESTARTED|IF_JOURNAL,0,0},
+    {IF_BACKUP|IF_RESTARTED,IF_BACKUP|IF_RESTARTED,0,0}
 };
 static void emit(const char *probe,const char *event,const char *format,...){
     printf("RECORD %s %s ",probe,event);va_list args;va_start(args,format);vprintf(format,args);va_end(args);puts("");
@@ -39,6 +42,35 @@ int main(void){
             assert(installer_observe(&bad,i+1,&o));
         }
         assert(bad.errors[0]|bad.errors[1]|bad.errors[2]|bad.errors[3]);
+    }
+    for(unsigned changed=0;changed<8;changed++)for(unsigned bit=1;bit<=IF_DIRECTORY;bit<<=1){
+        if(!(facts[changed].files&bit))continue;
+        for(unsigned content=0;content<2;content++){
+            if(content && !(facts[changed].contents&bit))continue;
+            struct installer_result bad={0};
+            for(unsigned i=0;i<8;i++){
+                struct installer_observation o=facts[i];
+                if(i==changed){if(content)o.contents&=~bit;else o.files&=~bit;}
+                assert(installer_observe(&bad,i+1,&o));
+            }
+            assert(bad.errors[0]|bad.errors[1]|bad.errors[2]|bad.errors[3]);
+        }
+    }
+    for(unsigned progress=1;progress<=2;progress++){
+        struct installer_result advanced={0};
+        for(unsigned i=0;i<8;i++){
+            struct installer_observation o=facts[i];
+            if(i==3 || i==6){
+                unsigned removed=i==3?IF_REMOVE:IF_COPY;
+                o.files&=~removed;o.contents&=~removed;o.contents|=IF_LINE_APPLIED;
+                if(progress==2){
+                    o.files=(o.files&~IF_INI)|IF_BACKUP;
+                    o.contents=(o.contents&~IF_INI)|IF_BACKUP|IF_RETIRED;
+                }
+            }
+            assert(installer_observe(&advanced,i+1,&o));
+        }
+        assert(advanced.complete && !(advanced.errors[0]|advanced.errors[1]|advanced.errors[2]|advanced.errors[3]));
     }
     installer_publish(&good,emit);
     puts("PASS observer order, corrupt manifest, stale copies, registry error, journal and delayed deletion rejection");return 0;

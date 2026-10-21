@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from . import host_services as h
 OUT = h.ROOT / 'build/host/win32/installers/services'
@@ -94,6 +96,58 @@ class HostServiceTests(unittest.TestCase):
         call(s, h.OBJECT, {4: 3, 6: a[16]})
         self.assertEqual(call(s, h.FILE, {4: 10}, [(6, 'C:\\WINDOWS\\TEMP\\locked')])[0][17], 0)
 
+    def test_protected_roots_renames_and_handle_metadata(self):
+        s = self.session
+        for path in ('C:\\System', 'C:\\System\\Win32', 'C:\\', 'D:\\'):
+            with self.subTest(path=path):
+                self.assertIn(call(s, h.FILE, {4: 11}, [(6, path), (7, 'C:\\WINDOWS\\TEMP\\moved')])[0][17], (5, 19))
+                self.assertIn(call(s, h.FILE, {4: 13}, [(6, path)])[0][17], (5, 19))
+        protected = s.path('C:\\System\\locked')
+        protected.write_bytes(b'unchanged')
+        opened, _ = call(s, h.FILE, {4: 1, 10: 0x80000000, 11: 7, 12: 3}, [(6, 'C:\\System\\locked')])
+        self.assertEqual(opened[17], 0)
+        for action in (8, 9):
+            reply, _ = call(s, h.FILE, {4: action, 5: opened[16], 9: 832, 13: 7}, buffer=bytes(832))
+            self.assertEqual(reply[17], 5)
+        # Open an ordinary object, then move it into the protected store as
+        # privileged fixture setup. The saved handle name must confer no right.
+        ordinary, _ = call(s, h.FILE, {4: 1, 10: 0xc0000000, 11: 7, 12: 2}, [(6, 'C:\\WINDOWS\\TEMP\\ordinary')])
+        s.path('C:\\WINDOWS\\TEMP\\ordinary').rename(s.path('C:\\System\\relocated'))
+        self.assertEqual(call(s, h.FILE, {4: 3, 5: ordinary[16], 9: 1}, buffer=b'x')[0][17], 5)
+        self.assertEqual(call(s, h.FILE, {4: 8, 5: ordinary[16], 13: 1})[0][17], 5)
+        attempted, _ = call(s, h.FILE, {4: 1, 10: 0x40000000, 12: 2}, [(6, 'C:\\WINDOWS\\TEMP\\moved\\locked')])
+        self.assertEqual(attempted[17], 2)
+        self.assertEqual(protected.read_bytes(), b'unchanged')
+
+    def test_delete_on_close_is_explicitly_refused(self):
+        reply, _ = call(self.session, h.FILE, {4: 1, 10: 0x40000000, 12: 2, 13: 0x04000000},
+                        [(6, 'C:\\WINDOWS\\TEMP\\delete-on-close')])
+        self.assertEqual(reply[17], 120)
+        self.assertFalse(self.session.path('C:\\WINDOWS\\TEMP\\delete-on-close').exists())
+        self.assertFalse(self.session.handles)
+
+    def test_teardown_continues_after_child_and_tree_cleanup_errors(self):
+        child_path = self.session.path('C:/WINDOWS/TEMP/child.exe')
+        child_path.write_bytes(b'native transport child')
+        child = self.service.start('C:/WINDOWS/TEMP/child.exe', '"C:/WINDOWS/TEMP/child.exe"')
+        broken = SimpleNamespace(process=Mock(poll=lambda: 0),
+                                 finish=Mock(side_effect=[RuntimeError('first child cleanup'), (0, '')]))
+        self.service.children.insert(0, broken)
+        first, second = (self.session.path('C:/WINDOWS/TEMP/' + name) for name in ('first', 'second'))
+        for path in (first, second): path.mkdir(); (path / 'partial').write_bytes(b'partial')
+        remove = h.shutil.rmtree
+        def cleanup(path):
+            if path == first: raise OSError('first tree cleanup')
+            return remove(path)
+        with patch.object(h.shutil, 'rmtree', side_effect=cleanup) as attempted:
+            with self.assertRaisesRegex(RuntimeError, 'first child cleanup.*first tree cleanup'):
+                self.service.close()
+        self.assertIsNotNone(child.process.poll())
+        self.assertFalse(child.worker.is_alive())
+        self.assertFalse(second.exists())
+        self.assertEqual({call.args[0] for call in attempted.call_args_list}, {first, second})
+        self.assertIsNone(self.service.registry.ctx)
+
     def test_actual_child_wait_query_close_and_transport(self):
         # Native protocol unit fixture: genuine process exit 23, not PE evidence.
         (self.service.root / 'C/WINDOWS/TEMP/child.exe').write_bytes(b'authored transport unit marker')
@@ -121,6 +175,22 @@ class HostServiceTests(unittest.TestCase):
         self.assertEqual(call(self.session, h.OBJECT, {4: 9, 6: thread})[0][5], 2)
         for handle in (process, thread): self.assertEqual(call(self.session, h.OBJECT, {4: 3, 6: handle})[0][15], 0)
         self.assertEqual(self.service.children[-1].finish(10)[0], 23)
+
+    def test_timeout_then_termination_reaps_real_child(self):
+        (self.service.root / 'C/WINDOWS/TEMP/child.exe').write_bytes(b'native transport child')
+        a, _ = call(self.session, h.PROCESS, {}, [(4, 'C:/WINDOWS/TEMP/child.exe'),
+                    (5, '"C:/WINDOWS/TEMP/child.exe"')])
+        self.assertEqual(a[15], 0)
+        self.service.wait_timeout_once = True
+        wait = {5: 1, 8: 30000}
+        handles = struct.pack('<I', a[11])
+        self.assertEqual(call(self.session, h.WAIT, wait, buffer=handles)[0][11], 258)
+        self.assertEqual(call(self.session, h.SYSTEM, {4: 3, 5: a[11], 6: 1})[0][10:12], (1, 0))
+        self.assertEqual(call(self.session, h.WAIT, wait, buffer=handles)[0][11:13], (0, 0))
+        child = self.service.children[-1]
+        self.assertLess(child.finish(10)[0], 0)
+        self.assertFalse(child.worker.is_alive())
+        self.assertFalse(self.service.failures)
 
     def test_socket_framing_short_io_and_registry_production_model(self):
         parent, peer = socket.socketpair()
@@ -178,7 +248,7 @@ class HostServiceTests(unittest.TestCase):
             self.assertNotIn(b'errors=0 manifest=1', out.value)
             self.assertEqual(out.value.count(b'manifest=0'), 4)
 
-    def test_restart_journal_checkpoint_precedes_runonce_consumption(self):
+    def test_restart_journal_checkpoint_precedes_runonce_consumption_only(self):
         # Registry timing on the actual restart service, not PE-flow evidence.
         from . import registry_wire as r
         registry = self.service.registry

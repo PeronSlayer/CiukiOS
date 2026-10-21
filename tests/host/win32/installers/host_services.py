@@ -13,6 +13,7 @@ import fnmatch
 import os
 from pathlib import Path
 import socket
+import shutil
 import stat
 import struct
 import subprocess
@@ -59,12 +60,15 @@ class Registry:
             'probe_reset': (None, []),
             'probe_checkpoint': (C.c_int, [C.c_void_p, C.c_uint32, C.c_uint32, C.c_void_p, C.c_uint32]),
             'probe_publish': (C.c_uint32, [C.c_void_p, C.c_uint32]),
+            'snapshot': (C.c_uint32, [C.c_void_p, C.c_void_p, C.c_uint32]),
+            'fault': (None, [C.c_void_p, C.c_uint32]),
         }
         for name, (result, args) in signatures.items():
             function = getattr(self.lib, 'installer_service_' + name)
             function.restype, function.argtypes = result, args
             setattr(self, '_' + name, function)
         self.lock = threading.RLock()
+        self.trace = []
         self.ctx = self._create(os.fsencode(root))
         if not self.ctx:
             raise RuntimeError('w32srv fixture initialization failed')
@@ -77,11 +81,30 @@ class Registry:
             error = self._exchange(self.ctx, pid, raw, len(raw), out, cap, C.byref(used))
             if used.value > cap:
                 raise RuntimeError('registry reply exceeds copied buffer')
+            if len(raw) >= 40 and struct.unpack_from('<I', raw, 4)[0] in (2, 4, 6, 7):
+                self.trace.append(bytes(raw))
             return error, out.raw[:used.value]
 
     def observe(self, stage):
         with self.lock:
             return self._observe(self.ctx, stage)
+
+    def snapshot(self):
+        with self.lock:
+            out = C.create_string_buffer(LIMIT)
+            used = self._snapshot(self.ctx, out, len(out))
+        if not used: raise RuntimeError('registry snapshot bounds')
+        raw, at, result = out.raw[:used], 0, {}
+        while at < len(raw):
+            kind, hive, pn, nn, type_, dn = struct.unpack_from('<6I', raw, at)
+            at += 24
+            path = raw[at:at + pn].decode(); at += pn
+            name = raw[at:at + nn].decode(); at += nn
+            data = raw[at:at + dn]; at += dn
+            key = ('HKLM', 'HKU', 'HKCC', 'HKDD')[hive] + '\\' + path
+            if kind: key += '@' + name
+            result[key.casefold()] = [type_, data.hex()] if kind else 'key'
+        return result
 
     def close(self):
         with self.lock:
@@ -145,6 +168,7 @@ class Services:
         self.lock = threading.RLock()
         self.next_pid = 100
         self.disk_full = False
+        self.wait_timeout_once = False
 
     def session(self, cwd='C:\\WINDOWS\\TEMP'):
         with self.lock:
@@ -189,7 +213,7 @@ class Services:
             raise RuntimeError(str(self.failures))
         return code, output
 
-    def restart(self, checkpoint):
+    def restart(self, checkpoint=lambda: None, interrupt=lambda event: None):
         """Production journal/Wininit/RunOnce sequence; observe while durable."""
         reg = self.registry
         with reg.lock:
@@ -197,13 +221,16 @@ class Services:
         if error:
             raise RuntimeError(f'restart begin {error}')
         checkpoint()
+        interrupt('journal_persisted')
         for _ in range(1024):
             with reg.lock:
                 if reg._restart_phase(reg.ctx) != 1:
                     break
                 reg._restart_tick(reg.ctx)
+            interrupt('wininit_tick')
         else:
             raise RuntimeError('restart WININIT made no progress')
+        interrupt('wininit_retired')
         for _ in range(128):
             command = C.create_string_buffer(2048)
             with reg.lock:
@@ -213,10 +240,12 @@ class Services:
             if error:
                 raise RuntimeError(f'RunOnce handoff {error}')
             text = command.value.decode('utf-8')
+            interrupt('runonce_consumed')
             image = text[1:text.index('"', 1)] if text.startswith('"') else text.split()[0]
             code, output = self.start(image, text).finish(60)
             if code:
                 raise RuntimeError(f'RunOnce child {code}: {output}')
+            interrupt('runonce_executed')
         else:
             raise RuntimeError('unbounded RunOnce queue')
         with reg.lock:
@@ -225,15 +254,55 @@ class Services:
             raise RuntimeError(f'restart end {error}')
 
     def close(self):
+        errors = []
         for child in self.children:
-            if child.process.poll() is None:
-                child.process.kill()
-            child.finish(10)
+            try:
+                if child.process.poll() is None:
+                    child.session.terminating = True
+                    child.process.kill()
+                child.finish(10)
+            except Exception as error:
+                errors.append(repr(error))
         for session in self.sessions:
-            session.close()
-        self.registry.close()
-        if self.failures:
-            raise RuntimeError(str(self.failures))
+            try:
+                session.close()
+            except Exception as error:
+                errors.append(repr(error))
+        try:
+            temporary = list((self.root / 'C/WINDOWS/TEMP').iterdir())
+        except Exception as error:
+            errors.append(repr(error)); temporary = []
+        for path in temporary:
+            try:
+                if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+                else: path.unlink()
+            except Exception as error:
+                errors.append(repr(error))
+        try:
+            self.registry.close()
+        except Exception as error:
+            errors.append(repr(error))
+        if errors or self.failures:
+            raise RuntimeError(str(errors + self.failures))
+
+    def assert_quiescent(self, temporary=()):
+        for child in self.children:
+            if child.process.poll() is not None: child.finish(10)
+        alive = [c.process.pid for c in self.children if c.process.poll() is None or c.worker.is_alive()]
+        if alive:
+            raise AssertionError(f'surviving installer descendants: {alive}')
+        actual = {p.relative_to(self.root / 'C/WINDOWS/TEMP').as_posix()
+                  for p in (self.root / 'C/WINDOWS/TEMP').rglob('*')}
+        if actual != set(temporary):
+            raise AssertionError(f'unexpected temporary files: {actual ^ set(temporary)}')
+
+    def finish_descendants(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        index = 0
+        while index < len(self.children):
+            code, output = self.children[index].finish(max(0.001, deadline - time.monotonic()))
+            if code: raise AssertionError(f'descendant exit {code}: {output}')
+            index += 1
 
 
 class Child:
@@ -245,6 +314,7 @@ class Child:
         try:
             self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            self.session.terminating = True
             self.process.kill(); self.process.wait()
             raise
         self.worker.join(timeout=10)
@@ -261,6 +331,7 @@ class Session:
     def __init__(self, service, pid, cwd):
         self.service, self.pid, self.cwd = service, pid, cwd
         self.handles, self.next_handle = {}, 0x100
+        self.terminating = False
 
     def add(self, handle):
         self.next_handle += 4
@@ -299,7 +370,7 @@ class Session:
         full = self.fullpath(name)
         if writing and full[0] == 'D':
             raise OSError(errno.EROFS, 'read-only fixture drive')
-        if writing and full[3:].casefold().startswith('system\\'):
+        if writing and (full[3:].casefold() == 'system' or full[3:].casefold().startswith('system\\') or full[3:] == ''):
             raise PermissionError(errno.EACCES, 'protected system store')
         current = self.service.root / full[0]
         for part in full[3:].split('\\'):
@@ -314,13 +385,29 @@ class Session:
                 raise PermissionError(errno.EACCES, 'symlink outside fixture')
         return current
 
+    def handle_path(self, h, writing=False):
+        # A handle follows the object through renames. Never trust its old
+        # spelling for authority or metadata; /proc is adapter-only, not PE I/O.
+        current = Path(os.readlink(f'/proc/self/fd/{h.value}'))
+        try:
+            relative = current.relative_to(self.service.root)
+        except ValueError:
+            raise PermissionError(errno.EACCES, 'handle outside fixture') from None
+        parts = relative.parts
+        if not parts or parts[0] not in ('C', 'D'):
+            raise PermissionError(errno.EACCES, 'handle outside fixture drive')
+        return self.path(parts[0] + ':\\' + '\\'.join(parts[1:]), writing)
+
     def close(self):
+        errors = []
         with self.service.lock:
             for handle in list(self.handles):
-                self.close_handle(handle)
+                try: self.close_handle(handle)
+                except Exception as error: errors.append(repr(error))
         if self.service.registry.ctx:
             with self.service.registry.lock:
                 self.service.registry._exit(self.service.registry.ctx, self.pid)
+        if errors: raise RuntimeError(str(errors))
 
     def close_handle(self, handle):
         h = self.handles.pop(handle)
@@ -360,10 +447,15 @@ class Session:
                         raise ValueError('oversized H1 reply')
                     send(sock, struct.pack('<iI', status, len(out)) + out)
         except BaseException as error:
-            with self.service.lock:
-                self.service.failures.append((self.pid, repr(error)))
+            if not (self.terminating and isinstance(error, (BrokenPipeError, ConnectionResetError, EOFError))):
+                with self.service.lock:
+                    self.service.failures.append((self.pid, repr(error)))
         finally:
-            self.close()
+            try:
+                self.close()
+            except Exception as error:
+                with self.service.lock:
+                    self.service.failures.append((self.pid, repr(error)))
 
     def dispatch(self, kind, raw, cap):
         if not 0 <= cap <= LIMIT or len(raw) > LIMIT or (kind == 1 and cap < len(raw)):
@@ -419,6 +511,9 @@ class Session:
             raw[offset:offset + len(data)] = data
         a[16], a[17] = 0, 0
         if action == 1:
+            if a[13] & 0x04000000:
+                a[17] = 120  # H1 explicitly refuses FILE_FLAG_DELETE_ON_CLOSE.
+                return
             access, share, disposition = a[10:13]
             exists = p.exists()
             if disposition not in range(1, 6):
@@ -446,6 +541,8 @@ class Session:
             h = self.handles[handle]
             if h.kind != 7:
                 raise KeyError(handle)
+            if action in (3, 5):
+                self.handle_path(h, True)
             if action in (2, 3):
                 if action == 2:
                     data = os.pread(h.value, count, a[14] | a[15] << 32) if a[13] & 0x10000 else os.read(h.value, count)
@@ -468,6 +565,8 @@ class Session:
             else:
                 os.fsync(h.value)
         elif action in (7, 8, 9):
+            if p is None:
+                p = self.handle_path(self.handles[handle], action in (8, 9))
             st = p.stat() if p is not None else os.fstat(self.handles[handle].value)
             target = str(p) if p is not None else self.handles[handle].name
             metadata = self.service.metadata.get(target)
@@ -583,6 +682,10 @@ class Session:
         if count > 64 or pointer > len(raw) or count * 4 > len(raw) - pointer:
             raise OSError(errno.EINVAL, 'wait array')
         handles = [self.handles[v] for v in struct.unpack_from('<' + 'I' * count, raw, pointer)]
+        if self.service.wait_timeout_once and any(h.kind == 1 for h in handles):
+            self.service.wait_timeout_once = False
+            a[11], a[12] = 258, 0
+            return
         deadline = float('inf') if timeout == 0xffffffff else time.monotonic() + timeout / 1000
         while True:
             ready = [(h.value.process.poll() is not None if h.kind in (1, 2) else bool(h.value['set'])) for h in handles]
@@ -590,6 +693,7 @@ class Session:
                 selected = list(range(count)) if all_ else [ready.index(True)]
                 for index in selected:
                     h = handles[index]
+                    if h.kind in (1, 2): h.value.finish(10)
                     if h.kind == 3 and not h.value['manual']: h.value['set'] = False
                 a[11], a[12] = selected[0], 0
                 self.service.trace.append(('wait', self.pid, selected[0]))
@@ -599,8 +703,7 @@ class Session:
                 return
             time.sleep(0.001)
 
-    @staticmethod
-    def system(a):
+    def system(self, a):
         a[11] = 0
         if a[4] == 1:
             value = (time.time_ns() // 100) + 116444736000000000
@@ -609,4 +712,10 @@ class Session:
             a[7], a[8], a[9] = 65536, 32768, 0
         elif a[4] == 6:
             time.sleep(0)
+        elif a[4] == 3:
+            child = self.handles[a[5]]
+            if child.kind != 1: raise KeyError(a[5])
+            child.value.session.terminating = True
+            child.value.process.kill()
+            a[10] = 1
         else: a[11] = 120

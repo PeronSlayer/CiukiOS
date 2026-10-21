@@ -624,6 +624,7 @@ int host_main(int argc, char **argv) {
         return 0;
     }
 #ifdef H1_INSTALLERS
+    h1_installer_providers(h1_store,sizeof(h1_store)/sizeof(h1_store[0]));
     if ((installer_exec && !h1_installer_init(argv[4])) ||
         (installer_fixture && !h1_installer_init(argv[2])))
         return 9;
