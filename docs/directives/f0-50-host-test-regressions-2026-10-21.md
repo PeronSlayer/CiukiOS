@@ -15,3 +15,10 @@ Find the cause of each failure first; fix production or the harness, never weake
 7. `tests.host.desktop.test_desktop.DesktopTests.test_stale_output_rejected`: `False is not true`; find whether the stale-build detector itself regressed (it must reject a stale output, not fail the test) or whether the failure is the stale-build precondition; report which.
 
 Verification: each module above green one at a time with `nice -n 19 python3 -B -m unittest tests.host.<module>` from the repository root (not `-t .`), then `scripts/test/host_kernel_tests.sh` as far as the sandbox allows (LeakSanitizer is blocked inside; the lead reruns outside). Report `build/codex/f0-50-report.md` with the exact commands and results. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment 1 (lead, 2026-10-21, after the canonical build of main 82bcd31d made the stale-build tests runnable)
+
+Two more regressions of the merges, same rules:
+
+8. `tests.host.desktop.test_desktop.DesktopTests.test_build_provenance_and_payloads`: the image now carries `/system/licenses/lwip-2.2.1-BSD-3-Clause.txt`, `lwip-2.2.1-NOTICES.txt` and `lwip-2.2.1-import.json` (f6-10) and the test's expected payload set does not list them. Extend the expectation from the licence inventory the build uses (one source of truth, not a second hand-written list, if the test's structure allows it).
+9. `tests.host.desktop.test_desktop.DesktopTests.test_actual_desktop_payload_fat_readback`: `mcopy ... Ciuk3.png ::/system/wallpapers/Ciuk3.png` fails with `Disk full`: the fixture FAT the test builds has a fixed capacity that the grown payload set (f6-10, f6-14, f2-87, f7-07) exceeds. Size the fixture from the payload total with a documented margin, and keep the assertion that every payload reads back.
