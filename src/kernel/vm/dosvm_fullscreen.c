@@ -85,6 +85,8 @@ void dosvm_fullscreen_switch(const struct task *t)
 }
 static void unhold(struct dosvm *v)
 {
+    dosvm_client_priority(v);
+    if (v->task) task_input_withdraw(v->task);
     v->fullscreen_hold=false;
     dosvm_present_notify(v);
     dosvm_idle_wake(v);

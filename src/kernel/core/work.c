@@ -113,6 +113,7 @@ bool kwork_run_one(void)
     stats.pending--;
     irq_restore(f);
     running = true;
+    g_current->device_worker_site=(uint32_t)(uintptr_t)fn;
     fn(arg);
     if (!(read_eflags() & 0x200))
         panic("work: callback left interrupts disabled");
@@ -120,6 +121,7 @@ bool kwork_run_one(void)
     bool overrun = us > 1000;
     f = irq_save();
     slice_charge();
+    g_current->device_worker_site=0;
     running = false;
     stats.completed++;
     if (service_us > stats.max_service_us) stats.max_service_us = service_us;

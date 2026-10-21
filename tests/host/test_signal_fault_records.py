@@ -75,6 +75,14 @@ static void priority_update(struct task *t) { (void)t; (void)rq_remove; }
 static void device_cpu_advance(void) { (void)device_cpu_refresh; }
 static bool device_throttled(void) { return device_used>=DEVICE_BUDGET; }
 static bool device_urgent(const struct task *t) { (void)t;return false; }
+/* f1-90 helpers of the extracted sched_tick; attribution itself is covered
+ * by the production scheduler fixtures. */
+static bool device_attribution;
+static unsigned audio_over;
+static void device_tick_sample(struct task *t) { (void)t; }
+static bool device_demote(const struct task *t) { return device_throttled() && !device_urgent(t); }
+static void device_overrun_record(struct task *t) { (void)t; scheduler_stats.budget_exhausted++; }
+static void device_audio_poll(void) { }
 
 void task_start(struct task *t) { t->state=T_READY;rq_push(t); }
 #include <ciuki/work.h>

@@ -1599,6 +1599,8 @@ int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
     if (slot == DOSVM_PORTS) return -ENOSPC;
     v->ports[slot].first = first; v->ports[slot].last = last;
     v->ports[slot].arg = arg; v->ports[slot].handler = handler;
+    if (first==0x40 && last>=0x43 && handler==dosvm_pit_port) v->port_hint[0]=(uint8_t)slot;
+    if (first==0x388 && last>=0x389 && handler==dosvm_audio_port) v->port_hint[3]=(uint8_t)slot;
     return 0;
 }
 int dosvm_port_unregister(struct dosvm_key key, uint16_t first)
@@ -1620,12 +1622,14 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
     uint32_t flags = irq_save();
     struct dosvm *previous = dosvm_lookup(input_focus);
     if (focused && previous && previous != v && dosvm_valid(input_focus)) {
+        task_input_withdraw(previous->task);
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
     }
     v->window_input = true;
     if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
+        task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
     }

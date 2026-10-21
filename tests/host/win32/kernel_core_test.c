@@ -289,7 +289,40 @@ static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put3
     }
 }
 static bool loader_missing;
-static int loader_open(void *cwd,const char *path,struct ciuki_file *out){(void)cwd;CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;*out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;}
+static int loader_open(void *cwd,const char *path,struct ciuki_file *out){
+    (void)cwd;
+    if(!strcmp(path,"/fixture.exe")){*out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;}
+    CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;
+    *out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;
+}
+static void test_advpack_process_flags(struct proc_thread *parent)
+{
+    struct ciuki_w32_vm scratch={.bytes=4096,.flags=W32_MEM_RESERVE|W32_MEM_COMMIT,.protect=W32_PAGE_READWRITE};
+    CHECK(!w32_vm_alloc(parent->process->memory,&scratch));
+    CHECK(!ua_write(parent->process->memory,scratch.address,"C:\\fixture.exe",15));
+    const char command[]="\"C:\\fixture.exe\" /from-inf",env[]="A=B\0\0";
+    CHECK(!ua_write(parent->process->memory,scratch.address+256,command,sizeof(command)));
+    CHECK(!ua_write(parent->process->memory,scratch.address+512,env,sizeof(env)));
+    const uint32_t flags[]={0,0x04000000,0x200,0x04000200,0x04000210};
+    for(unsigned i=0;i<ARRAY_SIZE(flags);i++){
+        struct ciuki_w32_spawn_args a={.image=scratch.address,.command=scratch.address+256,
+            .environment=scratch.address+512,.environment_bytes=sizeof(env),.flags=flags[i]};
+        CHECK(!w32_process_call(parent,&a) && !a.error && a.pid && a.process_handle && a.thread_handle);
+        struct process *child=proc_find(a.pid);CHECK(child && child->published);
+        CHECK(child->pgid==((flags[i]&0x200) && !(flags[i]&0x10)?child->pid:parent->process->pgid));
+        uint32_t parameters;struct ciuki_w32_parameters p;char copied[sizeof(command)];
+        CHECK(!ua_read(child->memory,&parameters,child->w32_peb+16,4));
+        CHECK(!ua_read(child->memory,&p,parameters,sizeof(p)));
+        CHECK(!ua_read(child->memory,copied,p.command_line,sizeof(copied)) && !memcmp(copied,command,sizeof(command)));
+        CHECK(!w32_handle_close(parent->process,a.process_handle) && !w32_handle_close(parent->process,a.thread_handle));
+        proc_discard(child);
+    }
+    struct ciuki_w32_spawn_args bad={.flags=0x04000202};
+    CHECK(!w32_process_call(parent,&bad) && bad.error==87 && !bad.pid && !bad.process_handle && !bad.thread_handle);
+    struct ciuki_w32_vm release={.address=scratch.address,.flags=W32_MEM_RELEASE};
+    CHECK(!w32_vm_free(parent->process->memory,&release));
+    puts("w32 advpack spawn: default error mode, new group, console precedence, verbatim command and unknown-flag refusal PASS");
+}
 static void test_spawn_exceptions(void)
 {
     proc_init();make_pe(pe_data,false);make_pe(loader_data,true);
@@ -309,6 +342,7 @@ static void test_spawn_exceptions(void)
     uint8_t gate[3];CHECK(!ua_read(p->memory,gate,CIUKI_W32_GATE,3)&&gate[0]==0xcd&&gate[1]==0x80&&gate[2]==0xc3);
     p->w32_dispatcher=0x70011000;t->task->win32=true;
     uint8_t fp[512] __attribute__((aligned(16)));t->task->fpu_area=fp;g_cpu_fxsr=true;g_cpu_sse=true;fpu_init();g_current=t->task;t->task->state=T_RUNNING;
+    test_advpack_process_flags(t);
     uint32_t original_source=p->w32_source;
     struct ciuki_w32_compat_args fingerprint={.action=1,.settings=t->teb+1024,.bytes=65};
     CHECK(original_source&&!w32_compat_call(t,&fingerprint)&&p->w32_source==original_source&&fingerprint.image_size==0x3000);

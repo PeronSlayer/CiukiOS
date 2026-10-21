@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "workload": "ut-demo-348",
+  "engine": "winzip",
+  "engine_detail": "WinZip Self-Extractor (Nico Mak Computing 1995-96) stub over a ZIP archive (628 entries) with System/Setup.exe (PE32, Unreal engine setup importing Core.dll and Window.dll from the archive).",
+  "entry": {
+    "kind": "download",
+    "file": "UTDEMO348.EXE"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-ut-demo-348-qemu-t23",
+  "notes": "The WinZip SE stub creates its dialog before extracting; the Unreal Setup.exe is a GUI program without a documented unattended mode."
+}

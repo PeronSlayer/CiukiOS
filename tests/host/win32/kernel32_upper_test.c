@@ -871,7 +871,9 @@ static void unicode_layer(void) {
   WIN32_FILE_ATTRIBUTE_DATA fa;
   CHECK(GetFileAttributesExW(W("x.txt"), 0, &fa) && fa.attributes == 0x21 && fa.size_low == 9);
   CHECK(!GetFileAttributesExW(W("x.txt"), 1, &fa) && last_error == 87);
-  CHECK(MoveFileExW(W("a"), 0, 4) && !strcmp(seen[1], "<null>") && seen_flags == 4);
+  /* f5-15A amendment 1: Windows 98 delayed moves return error 120;
+   * installers write WININIT.INI [rename] themselves. */
+  CHECK(!MoveFileExW(W("a"), 0, 4) && last_error == 120);
   CHECK(!MoveFileExW(W("a"), han, 0) && last_error == 123);
   CHECK(MoveFileW(W("a"), W("b")) && !strcmp(seen[1], "b") && seen_flags == 0x55);
   CHECK(!MoveFileW(han, W("b")) && last_error == 123);

@@ -150,7 +150,10 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
                ['tests/host/proc/signal_legacy.c', 'tests/host/proc/desktop_legacy.c',
                 'src/kernel/audio/registry_master.c', *(f'src/kernel/fs/{n}.c' for n in fs_sources),
                 'tests/host/fs/fake.c', 'src/kernel/probes/f2_probes_files.c'],
-               ['-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread', '-I', str(ROOT / 'src/kernel/fs')],
+               # audio_test.c observes source-read admission through the wrap
+               # that tests/host/audio/run.sh also links (f1-87 amendment 2).
+               ['-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread', '-I', str(ROOT / 'src/kernel/fs'),
+                '-Wl,--wrap=fs_lock_acquired'],
                [OUT / 'fs/fat32.img', OUT / 'fs/fat16.img'], argc=True, text='#undef main\n'+audio_source)
 
 

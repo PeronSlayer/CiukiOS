@@ -223,6 +223,7 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
     struct task *t = harness_alloc(sizeof(*t));
     if (!t) return 0;
     memset(t,0,sizeof(*t)); t->state = T_BLOCKED;
+    t->prio=P_NORMAL; t->base_priority=t->effective_priority=7;
     t->kstack = harness_alloc(KSTACK_SIZE); t->fpu_alloc = harness_alloc(512);
     if (!t->kstack || !t->fpu_alloc) { kfree(t->kstack); kfree(t->fpu_alloc); kfree(t); return 0; }
     t->fpu_area = t->fpu_alloc;
@@ -230,6 +231,15 @@ struct task *task_create_kernel(const char *name, void (*fn)(void *), void *arg,
     CHECK(false); return 0;
 }
 void task_start(struct task *t) { CHECK(t->state == T_BLOCKED); t->state = T_READY; }
+static struct task *priority_transition_task;
+static const bool *priority_transition_hold;
+void task_set_base(struct task *t,enum task_prio p,unsigned level)
+{ if (t==priority_transition_task) CHECK(*priority_transition_hold); t->prio=p; t->base_priority=t->configured_priority=t->effective_priority=level; }
+void task_input_delivered(struct task *t) { (void)t; }
+static unsigned input_forwards;
+static struct task *forward_source,*forward_target;
+void task_input_forward(struct task *source,struct task *target) { input_forwards++; forward_source=source; forward_target=target; target->input_priority=9; target->input_expiry=g_ticks+20; }
+void task_input_withdraw(struct task *target) { target->input_priority=0; target->input_expiry=0; }
 bool task_alive(const struct task *t) { return t->state < T_ZOMBIE; }
 void task_kill(struct task *t, int reason) { t->state = T_ZOMBIE; t->exit_code = reason; }
 void task_reap(struct task *t)

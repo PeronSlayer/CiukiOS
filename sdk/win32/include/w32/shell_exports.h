@@ -4,6 +4,7 @@
 #define CIUKI_SHELL_EXPORTS_H
 #define W32_SHELL_EXPORTS(X) \
  X(SHGetSpecialFolderPathA) X(SHGetSpecialFolderPathW) \
+ X(SHGetSpecialFolderLocation) X(SHGetPathFromIDListA) X(SHGetPathFromIDListW) \
  X(SHGetFolderPathA) X(SHGetFolderPathW) X(SHFileOperationA) \
  X(ShellExecuteA) X(ShellExecuteW) X(ShellExecuteExA) X(ShellExecuteExW) \
  X(FindExecutableA) X(SHAppBarMessage) X(Shell_NotifyIconA) X(Shell_NotifyIconW) \

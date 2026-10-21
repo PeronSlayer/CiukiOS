@@ -48,7 +48,7 @@ int w32_pe_resource(struct w32_pe *, struct w32_resource_key, struct w32_resourc
 int w32_pe_resource_lookup(struct w32_pe *, const struct w32_resource_key *, ULONG, void **);
 struct w32_loader;
 int w32_installer_intercept(struct w32_loader *,const char *);
-enum { W32_LOAD_DATAFILE = 2, W32_LOAD_EXECUTABLE = 0x10000 };
+enum { W32_LOAD_DATAFILE = 2, W32_LOAD_ALTERED_SEARCH = 8, W32_LOAD_EXECUTABLE = 0x10000 };
 struct w32_builtin {
     const char *name, *path, *sha256;
     ULONG base, size;
@@ -101,6 +101,7 @@ struct w32_loader {
     char exe_directory[W32_PATH_MAX], current_directory[W32_PATH_MAX];
     char system_directory[W32_PATH_MAX], windows_directory[W32_PATH_MAX];
     const char *path;
+    const char *altered_directory; /* only while binding this load's imports */
     struct w32_error error;
     uint8_t tls_used[W32_MAX_TLS];
     ULONG transaction_depth, collecting;

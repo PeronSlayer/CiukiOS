@@ -625,6 +625,35 @@ static int search_order(const char *directory, const char *expected) {
     host_print("PASS search-order-builtin\n");
     return 0;
 }
+static int altered_search(const char *directory) {
+    host.services.invoke=quiet_invoke;
+    w32_ldr_init(&loader,&host.services,&host.peb);w32_ldr_bind(&loader);
+    char image[W32_PATH_MAX],expected[W32_PATH_MAX];
+    ULONG n=w32_strlen(directory);
+    REQUIRE(n+32<W32_PATH_MAX);
+    w32_copy(image,directory,n);w32_copy_string(image+n,sizeof(image)-n,"/other/consumer.exe");
+    w32_copy(loader.exe_directory,directory,n);
+    w32_copy_string(loader.exe_directory+n,sizeof(loader.exe_directory)-n,"/exe");
+    for(unsigned alternate=0;alternate<2;alternate++){
+        struct w32_module *m;
+        REQUIRE(w32_ldr_load(&loader,image,alternate?W32_LOAD_ALTERED_SEARCH:0,&m));
+        struct w32_module *provider=w32_ldr_module(&loader,"provider.dll");
+        w32_copy(expected,directory,n);
+        w32_copy_string(expected+n,sizeof(expected)-n,alternate?"/other/provider.dll":"/exe\\provider.dll");
+        REQUIRE(provider && !w32_strcmp(provider->path,expected));
+        REQUIRE(!loader.altered_directory && w32_strlen(loader.exe_directory)==n+4);
+        REQUIRE(w32_ldr_free(&loader,m) && !loader.module_count);
+    }
+    struct w32_module *m;
+    REQUIRE(!w32_ldr_load(&loader,"absent/fail.dll",W32_LOAD_ALTERED_SEARCH,&m));
+    REQUIRE(!loader.altered_directory);
+    REQUIRE(w32_ldr_load(&loader,"provider.dll",W32_LOAD_ALTERED_SEARCH,&m));
+    w32_copy(expected,directory,n);w32_copy_string(expected+n,sizeof(expected)-n,"/exe\\provider.dll");
+    REQUIRE(!w32_strcmp(m->path,expected));
+    REQUIRE(w32_ldr_free(&loader,m));w32_ldr_shutdown(&loader);
+    REQUIRE(!host.allocations && !host.mappings);
+    host_print("PASS alternate import folder, normal/basename order, failure restoration and cleanup\n");return 0;
+}
 static int invalid_relocation(const char *image) {
     w32_ldr_init(&loader, &host.services, &host.peb);
     void *occupied = host.services.map(&host, 0x01000000, 65536, 1);
@@ -760,6 +789,8 @@ int host_main(int argc, char **argv) {
         return resources_and_start(argv[2]);
     if (!w32_strcmp(argv[1], "search") && argc >= 4)
         return search_order(argv[2], argv[3]);
+    if (!w32_strcmp(argv[1], "altered-search") && argc >= 3)
+        return altered_search(argv[2]);
 #ifndef W32_HOST_MODEL
     if (!w32_strcmp(argv[1], "ciuki-stub") && argc >= 3)
         return ciuki_stub(argv[2]);

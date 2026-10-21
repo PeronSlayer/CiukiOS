@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "workload": "ta-demo",
+  "engine": "vendor",
+  "engine_detail": "Cavedog vendor installer (PE32, MSVC; imports COMCTL32, comdlg32, WINSPOOL.DRV, SHELL32; strings: DirectXSetupGetVersion through dsetup.dll, \"Direct X version 5 must be installed\", default C:\\Cavedog\\TotalA\\Demo). Identified at import (the contract left it open).",
+  "entry": {
+    "kind": "download",
+    "file": "Total Annihilation.exe"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-ta-demo-qemu-t23"
+}

@@ -197,7 +197,15 @@ class Gdi32Tests(unittest.TestCase):
         info = census.inspect(raw)
         exports = {n for row in info['exports'] for n in row['names']}
         coverage = json.loads((self.out/'builtin/gdi32-coverage.json').read_text())['exports']
-        self.assertEqual(len(coverage),93)
+        # 93 names from the research census and the fixture census; f5-15B
+        # adds the original acceptance installers' gdi32 imports.
+        from scripts.win32 import stubs
+        expected = set()
+        for source in ('docs/design/research/win32-layer-2026-10-14.md', 'docs/design/win32-census/fixtures.txt'):
+            expected |= stubs.imports((ROOT/source).read_text()).get('gdi32.dll', set())
+        self.assertEqual(len(expected), 93)
+        expected |= stubs.acceptance_imports('gdi32.dll')
+        self.assertEqual({row['name'] for row in coverage}, expected)
         self.assertTrue({row['name'] for row in coverage} <= exports)
         self.assertTrue({row['status'] for row in coverage} <= {'implemented','W21 nonreturning stub'})
         self.assertTrue({'w32_gdi_surface_dc','w32_gdi_create_font','TextOutA','StretchDIBits','CreateDIBSection'} <= exports)

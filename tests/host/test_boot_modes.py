@@ -165,6 +165,8 @@ class LoaderTests(unittest.TestCase):
                 self.assertGreaterEqual(budget['free'], 512)
                 data = binary.read_bytes()
                 self.assertEqual(len(data), LOADER_BYTES)
+                self.assertEqual(data[-32:], b'CLDRPRG1' + bytes(24))
+                self.assertIn(BootMenu.SAFE_CONFIRMATION.encode() + b'\r\n\0', data)
                 self.assertIn(BootMenu.MENU_HINT.encode(), data)
                 self.assertNotIn(BootMenu.MENU_HINT.encode() + b'\0', data, 'AH=13h takes a counted string')
                 # The relocated ranking table lies after the image, inside loader_end.
@@ -268,6 +270,23 @@ class LoaderParserTests(unittest.TestCase):
                 requests.add(f'f{phase}:{name} run=12345678' + suffix)
         requests.update(('', 'f7:boot run=12345678', 'f0:boot run=1234567g', 'x'*65,
                          'f0:boot run=12345678\x00', 'f2:signals-fault'))
+        # f6-18 browser grammar: http[s]://host[:port]/path, URL <= 40 bytes,
+        # optional ' now=1', every source (selector.c browser_url).
+        browser = 'f6:browser run=1234aBcD'
+        for suffix in ('', ' url=https://fixture.test/page', ' url=http://fixture.test/upgrade',
+                       ' url=https://fixture.test/page now=1', ' url=https://h:8443/a_b-c.d/',
+                       ' url=HTTPS://h/', ' url=https://H-1.x/', ' url=http://h/', ' url=http://h:/',
+                       ' url=http://h:123456/', ' url=http://h:65535/', ' url=http://:80/',
+                       ' url=https://fixture.test', ' url=ftp://fixture.test/page', ' url=https:/h/',
+                       ' url=httpss://h/', ' url=https://fixture.test/p?q=1', ' url=https://fixture.test/a=b',
+                       ' url=https://h_1/', ' url=https://h/~', ' url=https://h/page now=0',
+                       ' url=https://h/page now=1 now=1', ' url=https://h/page platform=e500',
+                       ' url=https://h/page safe=1', '  url=https://h/page', ' url=https://h/page ',
+                       ' url=https://h/' + 'a' * 25, ' url=https://h/' + 'a' * 26,
+                       ' url=https://fixture.test/' + 'a' * 9 + ' now=1',
+                       ' url=https://fixture.test/' + 'a' * 15, ' url=https://fixture.test/' + 'a' * 16):
+            requests.add(browser + suffix)
+            requests.add('f5:browser run=1234aBcD' + suffix)
         # Name prefixes and extensions never select a neighbouring probe.
         for phase in ('f0', 'f1', 'f2', 'f4', 'f5', 'all', 'f/', 'g0'):
             for name in ('boo', 'bootinfox', 'input-faul', 'crash-isolatio', 'vm-audio-jitte',

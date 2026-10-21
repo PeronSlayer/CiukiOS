@@ -249,6 +249,15 @@ allowance, while retaining public priority encodings and R3 audio policy.
   Valid device completion wakes add one (cap 15) for ten running PIT ticks;
   polling, false completion predicates and already-ready tasks earn nothing.
   Class/foreground changes recompute active boosts from the new base.
+- A DOS window keeps the VM's configured ordinary base (normally 7), even
+  when its native client is focused at 9. WAIT_PRESENT retains dependency
+  donation. Actual input accepted by the bound VM forwards a focused
+  client's +2/20 ms grant to that VM explicitly; focus messages alone do
+  not grant it. The grant expires and is withdrawn on DOS/native focus
+  loss, teardown and fullscreen transitions. Repeated forwarded input shares
+  the existing bounded DOS preference, preserving desktop progress after
+  that preference is exhausted. Fullscreen transitions restore the binding's
+  base before releasing the held VM, including hotkey and watchdog paths.
 - Ring-3 timer preemption also honours a newly ready higher-priority task.
   Measurement counters preserve timer-caused transitions between measured
   users when an intervening device dispatch services the wake; intermediate
@@ -1368,11 +1377,22 @@ reserved zeros. No hardware address or user DMA mapping is returned.
 | AUDIO_SET_GAIN | 0x4104 | ciuki_audio_gain / 24 |
 | AUDIO_DRAIN | 0x4105 | ciuki_audio_command / 16 |
 | AUDIO_RESET | 0x4106 | ciuki_audio_command / 16 |
+| AUDIO_REFILL_READ | 0x4107 | ciuki_audio_command / 16 |
 | MIXER_GET_MASTER | 0x4201 | ciuki_mixer_master / 32 |
 | MIXER_SET_MASTER | 0x4202 | ciuki_mixer_master / 32 |
 
 The exact fields below are consecutive u32 unless marked u64/i32. All records
 start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
+
+`AUDIO_REFILL_READ` declares source-read demand for the calling thread, using
+a writable output descriptor. A started, non-draining stream with at most
+1536 queued frames permits up to 64 KiB of source reads for 20 ms. Each read
+consumes that allowance; close, reset and expiry invalidate it. A replenished
+stream is ineligible while above the threshold. Other threads sharing the descriptor receive no allowance.
+Music's decoder declares demand before each decode batch; the unchanged
+two-second decoded reservoir covers slow I/O. VFS admission still closes to
+new urgent reads when a queued volume ticket reaches 100 ms (C3). These
+limits bound urgency and do not promise a hardware completion time.
 
 | Record | Remaining fields, in byte order |
 | --- | --- |

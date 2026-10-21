@@ -582,7 +582,9 @@ records page-in/out, working sets, I/O waits and audio/input deadlines at
 ### R1: bounded kernel work and interrupts (R01/R02/M06)
 
 Target ≤1 ms between safe points, with no software execution span >2 ms
-while preemption is disabled outside IRQ-off paths. Audit all lifecycle and
+while preemption is disabled outside IRQ-off paths. Amendment f1-90 (lead,
+2026-10-21): the AC'97 interrupt wakes the audio refill worker directly, in
+O(1), rather than through `device-work`; other waits keep the deferred path. Audit all lifecycle and
 error paths as well as success: VM creation/teardown, page-table/heap/reclaim
 walks, FAT chain walks, dirty scans, VGA harvest/exchange, user copies and
 display/firmware handoffs. A fixed iteration count requires a conservative
@@ -645,6 +647,13 @@ and a proposed aggregate budget of at most 4 ms per 10 ms under the admitted
 reference load. Budget exhaustion requeues ordinary work; an actual urgent
 audio deadline is reported/served, and an unschedulable aggregate workload
 fails admission/qualification rather than silently starving audio.
+Amendment f1-90 (lead, 2026-10-21): the 4 ms per 10 ms budget is shared by
+the device tasks with per-task accounting; only tasks above their max-min
+fair share are demoted when it runs out. The audio refill worker is exempt
+from the shared budget and has its own 2 ms per 10 ms budget, so device-class
+CPU may reach 6 ms per 10 ms; refill overruns are recorded separately
+(`audio_refill_overrun`). `device_attribution` keeps the previous all-tasks
+demotion as the replay's negative control only.
 Focused DOS preference must fit into the CPU time left after device service;
 it may use at most 80% of that remainder, preserving desktop/background
 progress. This is a proposed reconciliation of the existing 8/10 policy,

@@ -32,6 +32,7 @@ import dos_fixtures
 import dos_titles
 import win32_fixtures
 import win32_runner
+import https_fixture
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -1643,6 +1644,11 @@ def require_input_counter_source(inputs,profile,case,requested):
                           'requires f2:crash-isolation server=desktop, graphics and safe mode off')
 
 
+def browser_case(case):
+    """f6-18: a probe case selecting f6:browser (host HTTPS fixture, guestfwd)."""
+    return case.get('probe')=='browser' and str(case.get('selector','')).startswith('f6:browser ')
+
+
 def qemu_args(executable,profile,case,run_id,overlay,firmware):
     if 'loader_options' in case:raise res.Refusal('loader_options are unsupported; use the selector')
     inputs=input_devices(profile,case)
@@ -1665,9 +1671,11 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         if requested.get('title'):
             if platform:raise res.Refusal('DOS title selector does not accept a platform suffix')
             request+=' title='+requested['title']
+        if requested.get('url') and platform:raise res.Refusal('browser selector does not accept a platform suffix (qemu-t23 profile only)')
         if platform:request+=' platform='+platform
         if requested['safe']:request+=' safe=1'
         if requested.get('server'):request+=' server='+('desktop-v3' if requested.get('desktop_v3') else requested['server'])
+        if requested.get('url'):request+=' url='+requested['url']+(' now=1' if requested.get('now') else '')
     require_input_counter_source(inputs,profile,case,requested)
     machine=profile['machine']
     if not inputs['i8042']:
@@ -1694,8 +1702,17 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     nic = devices.get('network')
     if nic not in (None, 'rtl8139', 'ne2k_pci', 'i82559er', 'e1000', 'pcnet', 'tulip'):
         raise res.Refusal('unknown network device exception')
-    if nic and (normal or requested['phase'] != 6 or requested['probe'] != 'net-arp'):
-        raise res.Refusal('user network backend requires f6:net-arp')
+    browser=browser_case(case)
+    if nic and (normal or requested['phase'] != 6 or requested['probe'] not in ('net-arp','browser')):
+        raise res.Refusal('user network backend requires f6:net-arp or f6:browser')
+    if browser and not nic:raise res.Refusal('browser case requires a user network device exception')
+    guestfwd=[]
+    if browser:
+        # f6-18: the host fixture of this run, reached as 10.0.2.100:80/443 through
+        # libslirp's exec forwarding (one relay process per guest connection).
+        ports=case.get('_browser_ports')
+        if not ports:raise res.Refusal('browser case has no fixture ports: _run_boot starts the fixture first')
+        guestfwd=https_fixture.guestfwd_options(*ports)
     args=[executable,'-machine',machine,'-cpu',profile['cpu'],'-accel',profile['accelerator'],
           '-m',str(profile['ram_mib']),'-smp','1','-bios',str(firmware),'-display','none',
           '-monitor','none','-nic','none','-no-shutdown','-S',
@@ -1708,7 +1725,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
             args+=['-device',f'usb-{device},bus=usb{index}.0']
     if source not in ('cfg','none'):args+=['-fw_cfg','name=opt/it.alcybercloud.ciukios/test,string='+request]
     if nic:
-        args += ['-netdev', 'user,id=ciuknet0,restrict=on',
+        args += ['-netdev', ','.join(['user,id=ciuknet0,restrict=on',*guestfwd]),
                  '-device', nic+',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=']
     if source == 'cfg' and case.get('sweep'): args.remove('-no-shutdown')
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
@@ -1826,7 +1843,17 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     if case.get('sweep'): directory /= 'boot-' + str(case.get('_sweep_boot', 1))
     overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
     unit='ciuki-test-'+run_id+('-boot-'+str(case.get('_sweep_boot',1)) if case.get('sweep') else '')+'.scope';identity=git_identity(root)
-    args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
+    fixture_server=None
+    if browser_case(case):
+        # The fixture lives for this boot only; its ports enter the QEMU
+        # arguments, its request log the result (browser_fixture).
+        fixture_server=https_fixture.FixtureServer(ROOT/'tests/suites/fixtures/f6-browser').start()
+        case={**case,'_browser_ports':(fixture_server.http_port,fixture_server.https_port)}
+    try:
+        args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
+    except BaseException:
+        if fixture_server:fixture_server.stop()
+        raise
     scoped=['systemd-run','--user','--scope','--unit='+unit,'-p','MemoryMax=1500M','-p','MemorySwapMax=0','--',
             sys.executable,str(ROOT/'scripts/test/scope_exec.py'),str(gate),*args]
     result={'schema_version':1,'run_id':run_id,'suite':suite,'probe':case['probe'],'case':case.get('id',case['probe']),'attempt':case.get('attempt',1),'boot_kind':case.get('boot_kind','cold'),
@@ -2173,6 +2200,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         elif isinstance(e,win32_runner.Blocked):
             result['reason']=e.kind;result['win32']['blockers']=e.blockers
     finally:
+        if fixture_server:
+            fixture_server.stop()
+            result['browser_fixture']=fixture_server.snapshot()
+            try:(directory/'fixture.log').write_text(json.dumps(result['browser_fixture'],indent=1)+'\n')
+            except OSError:pass
         # Capture before sending quit or terminating anything. A QMP reset/EOF
         # can precede reaping the wrapper by a few scheduler ticks. Never use
         # the status of our later SIGTERM/SIGKILL as the original failure.

@@ -189,7 +189,13 @@ void ciuki_chrome_complete(struct gui_window *window)
     if(url && ciuki_profile_visit(nsurl_access(url)))
         ciuki_chrome_status("Unable to record this page in history.");
 }
-void ciuki_chrome_loading(bool value) { loading=value;if(active)ui.dirty=1; }
+/* f6-18 test profile: gate, fixture anchors and the one-shot page report. */
+#include "testmode.inc"
+void ciuki_chrome_loading(bool value)
+{
+    loading=value;if(active)ui.dirty=1;
+    if(!value)ciuki_test_page_done();
+}
 bool ciuki_chrome_busy(void) { return loading; }
 void ciuki_chrome_title(struct gui_window *window,const char *title)
 {
@@ -300,6 +306,7 @@ int ciuki_chrome_arguments(int *argc,char **argv)
             char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63)return -1;
             ciuki_browser_channel=n;consumed=true;
         }
+        else if(!strcmp(a,"--test=browser")) { test_requested=true;consumed=true; }
 #ifdef CIUKI_HOST
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
@@ -307,6 +314,9 @@ int ciuki_chrome_arguments(int *argc,char **argv)
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
     }
+    /* Before netsurf_init registers the fetchers, which create the network
+     * with the trust anchors the profile selects. */
+    ciuki_test_arm();
     return 0;
 }
 int ciuki_chrome_start(void)

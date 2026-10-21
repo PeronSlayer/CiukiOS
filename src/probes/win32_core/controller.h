@@ -11,7 +11,8 @@ enum { W32_FIXTURE_KERNEL32, W32_FIXTURE_FULLSCREEN, W32_FIXTURE_REGISTRY,
        W32_FIXTURE_USER32, W32_FIXTURE_CODECS, W32_FIXTURE_DDRAW, W32_FIXTURE_INPUT };
 /* Shared launcher IDs for fixtures with their own copied-result protocols.
  * Keep the core schema count and its existing IDs unchanged. */
-enum { W32_FIXTURE_RESTART = W32_FIXTURE_COUNT, W32_FIXTURE_GL };
+enum { W32_FIXTURE_RESTART = W32_FIXTURE_COUNT, W32_FIXTURE_GL,
+       W32_FIXTURE_INSTALLER };
 struct w32_fixture_spec { const char *name, *path; uint32_t address; };
 static const struct w32_fixture_spec w32_fixtures[W32_FIXTURE_COUNT]={
     {"kernel32-exercise", "/System/Win32/Fixtures/kernel32-exercise.exe", 0x10030000u},

@@ -94,6 +94,15 @@ class LoaderTests(unittest.TestCase):
                 expected=('exe','current','system','windows','path')[chosen]+'\\ordinary.dll'
                 self.assertIn('PASS search-order-builtin',self.command(self.units,'search',store,expected))
 
+    def test_altered_search_uses_top_dll_folder_and_restores_normal_order(self):
+        import shutil
+        store=self.out/'altered-search'
+        for name in ('exe','other'):
+            folder=store/name;folder.mkdir(parents=True)
+            shutil.copyfile(self.images/'provider.dll',folder/'provider.dll')
+        shutil.copyfile(self.images/'consumer.exe',store/'other/consumer.exe')
+        self.assertIn('PASS alternate import folder',self.command(self.units,'altered-search',store))
+
     def test_real_i386_runtime_models(self):
         if not self.i386_available: self.skipTest(self.i386_reason)
         for mode in ('heap','critical','strings','seh','loader','relocations','resources','ciuki-stub'):
