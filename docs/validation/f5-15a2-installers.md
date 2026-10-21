@@ -81,9 +81,61 @@ Implementation and evidence boundary:
   confined i386 adapter dies with SIGSYS before PE startup. LeakSanitizer's
   ptrace-dependent inspection is unavailable, with leak detection enabled.
 
-The baseline H1 adapter additionally lacks general file, registry and child
-process transports (its intended original scope is DLL attach/pure entry
-tests). A complete four-flow host NSIS driver and these transports remain
-necessary; the authored guest driver is not a replacement for that evidence.
-The four self-deleting patterns are not fully qualified. This delivery must
-not be treated as closing all f5-15A2 acceptance criteria.
+At WIP commit `68a7a7fc`, the baseline H1 adapter additionally lacked file,
+registry and child-process transports. Amendment 1 below adds those services
+and the four-flow driver. Execution evidence remains separate from their
+implementation: the four self-deleting patterns and the actual compiled
+installer probe are not fully qualified. This delivery must not be treated
+as closing all f5-15A2 acceptance criteria.
+
+## Amendment 1 implementation plan and sources
+
+The H1 installer extension transports copied records over an inherited socket
+to a fixture-only host service. Guest paths resolve under one temporary tree;
+the service never invokes a shell. Registry exchanges use `wr_dispatch` from
+the production w32srv model, and restart uses the production `ws_restart_*`
+engine, including its journal and deletion-before-RunOnce handoff. This keeps
+installer results separate from the observer's read-only manifests. The
+existing H1 seccomp preflight remains mandatory before any PE execution.
+
+Microsoft's [CreateProcessA](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessa)
+and [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject)
+specify separate process/thread handles and a wait that becomes signaled only
+after process exit. The host service therefore launches an actual child adapter
+process and polls/waits its exit; it must not manufacture successful child
+completion. The [NSIS command-line specification](https://nsis.sourceforge.io/Docs/Chapter3.html)
+requires `_?=` last for the waited temporary uninstaller. The
+[NSIS scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html)
+leaves rollback to the script. The host driver checks the authored cancellation
+after partial extraction, as well as install, restart and uninstall separately.
+The [Wine 10.0 setupapi implementation](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/setupapi/install.c)
+and [Microsoft SetupInstallFromInfSectionA](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupinstallfrominfsectiona)
+confirm the independent registry, file and INI flags: retain that engine and
+check its effects, rather than implementing a second INF parser in the adapter.
+
+The pinned Wine `dlls/setupapi/parser.c:953` opens INF content through
+`CreateFileMappingW(PAGE_READONLY)` and `MapViewOfFile(FILE_MAP_READ)`, closing
+the section before parsing the view. The installer extension supplies that
+read-only, unnamed mapping path with a separately owned view, so closing the
+section cannot invalidate the parser's bytes. Bounds and protection follow
+[CreateFileMapping](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga)
+and [MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile).
+This limited adapter path is not evidence for writable/shared section coherence.
+
+Amendment 1 host checks cover copied-record framing, actual fixture files,
+file-sharing errors, temp paths, read-only/full-disk errors, registry transport,
+named mutex lifetime, and a real native transport child whose exit status is
+23 (not a synthesized successful setup). A UBSan executable exercises the
+production registry/restart bridge, including journal visibility, WININIT
+deletion and backup, and RunOnce handoff. The production probe's actual VFS
+observer is compiled into that bridge behind `CIUKI_INSTALLER_OBSERVER_ONLY`;
+corrupt fixture bytes and incomplete sequences cannot publish success.
+
+The compiled-PE driver checks the CAB/INF and self-extractor manifests, then
+NSIS cancel, install, restart and temporary-copy uninstall. It calls the actual
+file/registry observer for all eight checkpoints and the real four-predicate
+publisher. Its NSIS path currently uses `/S`; the normal visible-page path
+still needs H1 USER transport/thread support. The guest desktop's visible-page
+driver remains in the WIP, without execution qualification here. The preserved
+i386 preflight reports SIGSYS before any PE startup, so neither the new driver
+nor its read-only mapping endpoint has runtime evidence in this sandbox.

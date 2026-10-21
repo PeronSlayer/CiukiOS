@@ -3,7 +3,8 @@
  * Linux adapter, its whole import closure bound to the CiukiOS core PEs, and
  * every DllMain executed (attach, then detach on free). The PE ntdll is the
  * adapter build (fail-closed CIUKI_SYS_W32 transport): this is not the
- * CiukiOS kernel, so kernel and w32srv requests fail with ENOSYS.
+ * CiukiOS kernel. The default mode refuses unimplemented kernel/w32srv
+ * requests; the opt-in H1_INSTALLERS mode uses the fixture services below.
  *
  * Safety: PE code never reaches a Linux system call. A seccomp filter allows
  * system calls only from the adapter ELF's own text; any int 0x80 from PE
@@ -11,7 +12,7 @@
  * (0x7ffe0100, used by USER/ADVAPI32) is a host stub counting calls and
  * returning -ENOSYS.
  *
- * Adapter answers (h1_transport.c in the PE ntdll): the kernel's W32_IDENTITY
+ * Default adapter answers (h1_transport.c in the PE ntdll): the kernel's W32_IDENTITY
  * record as src/kernel/proc/win32/records.c answers it (Windows 98, 4.10.2222
  * " A "), and the w32srv atom directory (ATOM_ADD/FIND/DELETE/NAME, the
  * apps/w32srv/directory.c rules: integer atoms #1..#0xbfff, string atoms from
@@ -24,6 +25,10 @@
 #include <w32/server.h>
 #include "upper_h1_store.h"
 #include <stdarg.h>
+#ifdef H1_INSTALLERS
+#include "h1_services.h"
+static int installer_exec;
+#endif
 /* f5-20D: the guest fixture's logic (src/probes/win32_upper/exercise.c, the
  * same source that is linked as upper-exercise.exe) on the adapter. The test
  * writes upper_fixture_src.h (an include of that source) and upper_table.h
@@ -151,6 +156,11 @@ static int32_t h1_kernel(void *record, uint32_t size) {
     }
     if (h->operation == W32_FILE && size >= sizeof(struct ciuki_w32_file_args) && h1_console(record))
         return 0;
+#ifdef H1_INSTALLERS
+    int32_t status;
+    if (installer_exec && h1_installer_kernel(record, size, &status))
+        return status;
+#endif
     kernel_enosys++;
     count_enosys(h->operation);
     return -38;
@@ -233,6 +243,10 @@ static ULONG atom_call(const struct w32r_request *r, const char *name, struct w3
 }
 
 static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, uint32_t *used) {
+#ifdef H1_INSTALLERS
+    if (installer_exec)
+        return h1_installer_server(in, n, out, cap, used);
+#endif
     const struct w32r_request *r = in;
     struct w32r_reply *reply = out;
     server_requests++;
@@ -298,6 +312,14 @@ static void print_stats(void) {
 static void (*base_terminate)(void *, uint32_t);
 static void stats_terminate(void *opaque, uint32_t code) {
     print_stats();
+#ifdef H1_INSTALLERS
+    if (installer_exec) {
+        host_print("TERMINATE ");
+        host_number(code);
+        host_print("\n");
+        host_exit(code);
+    }
+#endif
     base_terminate(opaque, code);
 }
 
@@ -324,6 +346,10 @@ static int run_exe(const char *exe, const char *test) {
         command_line[n++] = (uint8_t)*s;
     command_line[n] = 0;
     RtlInitUnicodeString(&host.parameters.CommandLine, command_line);
+#ifdef H1_INSTALLERS
+    if (installer_exec)
+        h1_installer_parameters(test);
+#endif
     host.parameters.StandardInput = (void *)(uintptr_t)H1_STDIN;
     host.parameters.StandardOutput = (void *)(uintptr_t)H1_STDOUT;
     host.parameters.StandardError = (void *)(uintptr_t)H1_STDERR;
@@ -498,6 +524,10 @@ static int run_fixture(void) {
 
 int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
+#ifdef H1_INSTALLERS
+    installer_exec = argc == 5 && !w32_strcmp(argv[1], "installer-exec");
+    exec = exec || installer_exec;
+#endif
     int preflight = argc == 2 && !w32_strcmp(argv[1], "sandbox-check");
     if (argc != 2 && !exec)
         return 2;
@@ -514,6 +544,10 @@ int host_main(int argc, char **argv) {
         host_print("H1-SANDBOX ready\n");
         return 0;
     }
+#ifdef H1_INSTALLERS
+    if (installer_exec && !h1_installer_init(argv[4]))
+        return 9;
+#endif
     if (!gate_page())
         return 3;
     base_invoke = host.services.invoke;

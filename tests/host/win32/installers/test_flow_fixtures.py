@@ -17,6 +17,7 @@ import unittest
 import zlib
 
 from scripts.win32 import cabinet, census, installer_fixture as fixture
+from . import host_services
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 OUT = ROOT / 'build/host/win32/installers'
@@ -195,7 +196,9 @@ class FlowFixtureTests(unittest.TestCase):
         directory = OUT / 'h1'; directory.mkdir(exist_ok=True)
         if not getattr(self.__class__, 'h1_program', None):
             reused = [n for n, r in upper.RECORD['dlls'].items() if r['qualified']]
-            program, _ = upper.build_h1(directory, reused)
+            extras = {'extra_sources': [HERE / 'h1_services.c'],
+                      'extra_flags': ['-DH1_INSTALLERS', '-I' + str(HERE)]}
+            program, _ = upper.build_h1(directory, reused, **extras)
             (directory / 'upper_table.h').write_text(upper.upper_fixture.table_header(
                 [('cabinet.dll', upper.RECORD['dlls']['cabinet.dll']['base'])]))
             arrays = {'cab_source': (self.fixtures / 'fixture.cab').read_bytes(),
@@ -206,7 +209,7 @@ class FlowFixtureTests(unittest.TestCase):
                 ','.join(map(str, data)) + '};\n' for n, data in arrays.items()))
             (directory / 'upper_fixture_src.h').write_text('#include "' + str(directory / 'cab_bytes.h') +
                 '"\n#include "' + str(HERE / 'fdi_memory.h') + '"\n')
-            program = upper.adapter.build(directory / 'core', directory / 'upper_h1.c', windows=False)
+            program = upper.adapter.build(directory / 'core', directory / 'upper_h1.c', windows=False, **extras)
             self.__class__.h1_program = program
         program = self.__class__.h1_program
         upper.require_h1_sandbox(self, program)
@@ -221,19 +224,38 @@ class FlowFixtureTests(unittest.TestCase):
 
     def test_reused_inf_chain_and_selfextract_child_wait(self):
         program = self.h1()
+        from .flow_driver import FixtureDriver
+        library, _, _ = host_services.build_bridge(OUT / 'services')
         for name in ('infchain.exe', 'selfextract.exe'):
             with self.subTest(image=name):
-                result = subprocess.run([program, 'exec', self.fixtures / name, ''],
-                                        capture_output=True, text=True, timeout=120)
-                (OUT / (name + '-h1.log')).write_text(result.stdout + result.stderr)
-                self.assertIn('TERMINATE 0', result.stdout, result.stdout[-4000:] + result.stderr)
+                with tempfile.TemporaryDirectory(dir=OUT) as root:
+                    driver = FixtureDriver(root, library, program, self.fixtures)
+                    try:
+                        output = driver.chain(name)
+                        (OUT / (name + '-h1.log')).write_text(output)
+                    finally:
+                        (OUT / (name + '-h1.log')).write_text(''.join(driver.outputs))
+                        driver.close()
 
-    def test_pinned_nsis_execution(self):
+    def test_four_predicate_probe_dry_run(self):
         program = self.h1()
-        result = subprocess.run([program, 'exec', self.fixtures / fixture.NAME, '/S /CANCEL'],
-                                capture_output=True, text=True, timeout=120)
-        (OUT / 'nsis-h1.log').write_text(result.stdout + result.stderr)
-        self.assertIn('TERMINATE 1', result.stdout, result.stdout[-4000:] + result.stderr)
+        from .flow_driver import FixtureDriver
+        library, _, _ = host_services.build_bridge(OUT / 'services')
+        with tempfile.TemporaryDirectory(dir=OUT) as root:
+            driver = FixtureDriver(root, library, program, self.fixtures)
+            try:
+                records = driver.nsis()
+                (OUT / 'nsis-probe-dry-run.log').write_text(records)
+            finally:
+                (OUT / 'nsis-h1.log').write_text(''.join(driver.outputs))
+                driver.close()
+        sys.path.insert(0, str(ROOT / 'scripts/test'))
+        import evidence
+        case = next(c for c in json.loads((ROOT / 'tests/suites/f5-core.json').read_text())['cases']
+                    if c['probe'] == 'w32-installer-nsis')
+        rows = [dict(event='DATA', **dict(t.split('=', 1) for t in fields.split()))
+                for fields in re.findall(r'^RECORD w32-installer-nsis DATA (.*)$', records, re.M)]
+        evidence.evaluate_predicates(rows, case['expected'])
 
 
 if __name__ == '__main__':

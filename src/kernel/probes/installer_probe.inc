@@ -63,6 +63,7 @@ static bool installer_report_stage(unsigned stage,unsigned code,unsigned registr
     rec_emit("w32-installer-nsis","DATA","case=checkpoint stage=%u files=%x contents=%x registry_errors=%u exit=%u",stage,o.files,o.contents,o.registry_errors,code);
     return installer_observe(&installer_result,stage,&o)!=0;
 }
+#ifndef CIUKI_INSTALLER_OBSERVER_ONLY
 static unsigned installer_errors(void)
 {return installer_result.errors[0]+installer_result.errors[1]+installer_result.errors[2]+installer_result.errors[3];}
 static int probe_w32_installer_nsis(void)
@@ -108,3 +109,4 @@ finished:
     if(pass)rec_emit(name,"END","status=PASS");else rec_emit(name,"END","status=FAIL reason=%s",failure);
     return pass?0:1;
 }
+#endif
