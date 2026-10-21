@@ -909,9 +909,12 @@ static unsigned media_at(const struct desktop *d,unsigned row)
 }
 static void draw_media(struct desktop *d,struct desk_box clip)
 {
-    struct desk_box p=media_popup(d);
-    struct du_canvas c=canvas(d,clip); du_edge(&c,R(p),DU_RAISED);
-    du_text(&c,p.x+8,p.y+6,"Removable media",SH_INK);
+    struct desk_box p=media_popup(d), b;
+    if (!desk_intersect(outer(p), clip, &b)) return;
+    /* Same opaque face as the volume and network popups: an edge alone left
+     * the interior transparent (f2-89). */
+    struct du_canvas c=canvas(d,b); popup_face(d,&c,p);
+    bold(&c,p.x+8,p.y+6,"Removable media",SH_INK);
     for (unsigned row=0;row<media_rows(d);row++) {
         unsigned drive=media_at(d,row); if (drive>=26) break;
         char label[96]; snprintf(label,sizeof(label),"%s %s%s%c:",d->sh.media.type[drive]==CIUKI_MEDIA_OPTICAL ? "Eject disc" : "Safely remove",
