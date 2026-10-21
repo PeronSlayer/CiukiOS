@@ -12,7 +12,7 @@
 
 Rules as f2-89. Report `build/codex/f2-90-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 00:1x, decision on the delivery)
+## Amendment 1 (lead, 2026-10-22 00:11, decision on the delivery)
 
 The synchronous preload before the first paint is accepted. The 1,123 ms
 figure was computed at the 2.8 MB/s of the failed trial, which ran on the PIO
