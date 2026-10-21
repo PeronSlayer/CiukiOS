@@ -3,7 +3,7 @@
 #ifndef CIUKI_DOSBOX_NETWORK_SETTINGS_H
 #define CIUKI_DOSBOX_NETWORK_SETTINGS_H
 #include "settings.h"
-#include <ciuki/dosvm_network_abi.h>
+#include "../../src/kernel/include/ciuki/dosvm_network_abi.h"
 static inline const char *dosbox_network_label(unsigned mode)
 { return mode == CIUKI_DOSVM_NETWORK_IPX ? "IPX (LAN)" : "off (default)"; }
 static inline int dosbox_network_path(unsigned game, char *out, size_t size)

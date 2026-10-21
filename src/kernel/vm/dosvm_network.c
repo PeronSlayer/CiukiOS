@@ -8,12 +8,13 @@
 #include "dosvm_ne2000.h"
 #include "dosvm_ipx.h"
 #include "dos_file_hook.h"
+#include <ciuki/dosvm_network_abi.h>
 
 #define NETWORK_PINS (DOSVM_IPX_ECBS * (DOSVM_IPX_FRAGMENTS + 2u) + 1u)
 struct network_pin { uint32_t linear; uint16_t length; bool used, write; };
 struct dosvm_network {
     struct dosvm *vm;
-    struct net_bridge *bridge;
+    struct net_bridge_port *port;
     struct dosvm_key key;
     struct dosvm_ne2000 ne;
     struct dosvm_ipx ipx;
@@ -27,6 +28,23 @@ struct dosvm_network {
 /* Fixed upper bound and no heap failure in a receive path. The packet pool
  * is supplied separately and shared with physical/native network owners. */
 static struct dosvm_network networks[BRIDGE_VMS];
+static struct net_bridge_port *selected_port;
+int dosvm_network_bind_port(struct net_bridge_port *port)
+{
+    for (unsigned i = 0; i < BRIDGE_VMS; i++) if (networks[i].allocated) return -16;
+    if (port && (!port->registered || port->closing)) return -19;
+    selected_port = port; return 0;
+}
+int dosvm_network_launch(struct dosvm *v, unsigned mode)
+{
+    if (mode == CIUKI_DOSVM_NETWORK_OFF) return 0;
+    if (mode != CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
+    return selected_port ? dosvm_network_attach(v, selected_port) : -19;
+}
+static uint64_t interval_ticks(uint64_t ms)
+{
+    return (ms / 65536000u) * 1193182u + (ms % 65536000u) * 1193182u / 65536000u;
+}
 _Static_assert(sizeof(networks) <= 256u * 1024u, "DOS network state exceeds ledger bucket");
 _Static_assert(DOSVM_IPX_ENTRY >= DOS_HOOK_END, "IPX ROM overlaps DOS hook ROM");
 _Static_assert(DOSVM_IPX_RETURN + 3 <= 0x2000, "IPX ROM exceeds F1 page");
@@ -78,7 +96,11 @@ static int bridge_send(void *arg, const uint8_t *p, unsigned length)
 {
     struct dosvm_network *n = arg;
     if (!live(n)) return -19;
-    return net_bridge_send(n->bridge, (struct bridge_key){n->key.id,n->key.generation}, p, length, n->host_ms);
+    if (!net_bridge_port_acquire(n->port)) return -16;
+    net_bridge_port_carrier(n->port);
+    int result = n->port->closing ? -19 : net_bridge_send(&n->port->bridge,
+        (struct bridge_key){n->key.id,n->key.generation}, p, length, n->host_ms);
+    net_bridge_port_release(n->port); return result;
 }
 static void virtual_irq(void *arg, bool level)
 {
@@ -90,13 +112,17 @@ static int virtual_port(struct dosvm *v, uint16_t port, unsigned width, bool wri
     struct dosvm_network *n = arg;
     if (!n || n != network(v) || !live(n) || !value || (width != 1 && width != 2)) return -V86_EPERM;
     if (write) dosvm_ne2000_write(&n->ne, port, width, *value);
-    else *value = dosvm_ne2000_read(&n->ne, port, width);
+    else {
+        *value = dosvm_ne2000_read(&n->ne, port, width);
+        if (port == DOSVM_NE2000_LAST && width == 1)
+            v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+    }
     return 0;
 }
 static void relinquish(void *arg)
 {
     struct dosvm_network *n = arg;
-    if (live(n)) { net_bridge_step(n->bridge); kpreempt_point(); }
+    if (live(n) && (read_eflags() & 0x200)) kpreempt_point();
 }
 static int guest_upcall(void *arg, const struct dosvm_ipx_upcall *call)
 {
@@ -108,8 +134,12 @@ static int guest_upcall(void *arg, const struct dosvm_ipx_upcall *call)
     if (f->tf.user_ss > 0xffff || (uint16_t)f->tf.user_esp < 4 ||
         !dosvm_range(v, ((uint32_t)call->cs << 4) + call->ip, 1, false)) return -EFAULT;
     uint16_t sp = (uint16_t)f->tf.user_esp - 4;
+    uint32_t stack = (f->tf.user_ss << 4) + sp;
+    /* Dispatch may run with physical IF clear. Conventional frames stay
+     * resident through teardown; never fault a pageable EMS/DPMI stack here. */
+    if (stack >= 0xa0000 || 4 > 0xa0000 - stack) return -EFAULT;
     uint16_t ret[2] = {DOSVM_IPX_RETURN,0xf000};
-    if (dosvm_write(v, (f->tf.user_ss << 4) + sp, ret, sizeof(ret))) return -EFAULT;
+    if (dosvm_write(v, stack, ret, sizeof(ret))) return -EFAULT;
     n->saved = *f; n->saved_vif = v->monitor.vif; n->active_call = *call; n->active = true;
     f->tf.user_esp = (f->tf.user_esp & 0xffff0000u) | sp;
     f->tf.cs = call->cs; f->tf.eip = call->ip;
@@ -129,63 +159,84 @@ void dosvm_network_rom_init(struct dosvm *v)
 bool dosvm_network_irq_available(const struct dosvm *v, unsigned irq)
 {
     if (irq != DOSVM_NE2000_IRQ) return true;
-    /* IRQ3 is otherwise unallocated in the current ISA devices (SB16=5,
-     * PIT=0, keyboard=1). Reject future conflicting SB assignments. */
+    /* IRQ3 is otherwise unallocated in the current ISA devices (SB16=7,
+     * selectable 2/5/7/10; PIT=0, keyboard=1). Reject a future conflicting SB. */
     return v->audio.sb.irq != irq;
 }
-int dosvm_network_attach(struct dosvm *v, struct net_bridge *bridge)
+int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
 {
-    if (!v || !bridge || network(v) || !dosvm_network_irq_available(v, DOSVM_NE2000_IRQ)) return -EINVAL;
+    if (!v || !port || network(v) || !dosvm_network_irq_available(v, DOSVM_NE2000_IRQ)) return -EINVAL;
+    if (!net_bridge_port_acquire(port)) return -16;
+    if (!port->registered || port->closing) { net_bridge_port_release(port); return -19; }
     struct dosvm_network *n = 0;
     for (unsigned i = 0; i < BRIDGE_VMS; i++) if (!networks[i].allocated) { n = &networks[i]; break; }
-    if (!n) return -ENOSPC;
-    memset(n, 0, sizeof(*n)); n->allocated = true; n->vm = v; n->key = v->info.key; n->bridge = bridge;
+    if (!n) { net_bridge_port_release(port); return -ENOSPC; }
+    memset(n, 0, sizeof(*n)); n->allocated = true; n->vm = v; n->key = v->info.key; n->port = port;
+    n->host_ms = g_ticks;
     uint8_t mac[6];
-    int error = net_bridge_enable(bridge, (struct bridge_key){n->key.id,n->key.generation}, g_ticks, mac);
-    if (error) goto fail;
+    int error = net_bridge_enable(&port->bridge, (struct bridge_key){n->key.id,n->key.generation}, g_ticks, mac);
+    if (error) { net_bridge_port_release(port); memset(n, 0, sizeof(*n)); return error; }
     const struct dosvm_ne2000_ops ne_ops = {n,bridge_send,virtual_irq};
     dosvm_ne2000_init(&n->ne, mac, &ne_ops);
     const struct dosvm_ipx_ops ipx_ops = {n,guest_pin,guest_unpin,guest_read,guest_write,bridge_send,relinquish,guest_upcall};
     error = dosvm_ipx_init(&n->ipx, n->key.generation, mac, &ipx_ops);
     if (error) goto fail;
+    dosvm_ipx_service(&n->ipx, interval_ticks(n->host_ms));
     error = dosvm_port_register(n->key, DOSVM_NE2000_BASE, DOSVM_NE2000_LAST, virtual_port, n);
     if (error) goto fail;
-    dosvm_network_rom_init(v); return 0;
+    dosvm_network_rom_init(v); net_bridge_port_release(port); return 0;
 fail:
     dosvm_ipx_destroy(&n->ipx);
-    net_bridge_disable(bridge, (struct bridge_key){n->key.id,n->key.generation});
+    net_bridge_disable(&port->bridge, (struct bridge_key){n->key.id,n->key.generation});
+    net_bridge_port_release(port);
     memset(n, 0, sizeof(*n)); return error;
 }
-void dosvm_network_detach(struct dosvm *v)
+int dosvm_network_detach(struct dosvm *v)
 {
-    struct dosvm_network *n = network(v); if (!n) return;
+    struct dosvm_network *n = network(v); if (!n) return 0;
+    if (!net_bridge_port_acquire(n->port)) return -16;
     (void)dosvm_port_unregister(n->key, DOSVM_NE2000_BASE);
     dosvm_ipx_destroy(&n->ipx);
     dosvm_ne2000_reset(&n->ne);
-    net_bridge_disable(n->bridge, (struct bridge_key){n->key.id,n->key.generation});
-    memset(n, 0, sizeof(*n));
+    net_bridge_disable(&n->port->bridge, (struct bridge_key){n->key.id,n->key.generation});
+    net_bridge_port_release(n->port);
+    v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+    memset(n, 0, sizeof(*n)); return 0;
 }
 void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
 {
     struct dosvm_network *n = network(v); if (!n || !live(n)) return;
+    if (!(read_eflags() & 0x200)) return; /* final IRQ-off return boundary */
     n->host_ms = host_ms;
-    if (!n->bridge->link) { dosvm_ipx_disconnect(&n->ipx); return; }
+    if (!net_bridge_port_acquire(n->port)) return;
+    net_bridge_port_carrier(n->port);
+    bool link = n->port->bridge.link;
+    net_bridge_port_release(n->port);
+    if (!link) {
+        dosvm_ipx_disconnect(&n->ipx);
+        dosvm_ipx_service(&n->ipx, interval_ticks(host_ms)); return;
+    }
     /* Approximate BIOS rate with exact PIT source/reload ratio. Divide first
      * to avoid a long-uptime overflow in host_ms * 1193182. */
-    uint64_t ticks = (host_ms / 65536000u) * 1193182u +
-        (host_ms % 65536000u) * 1193182u / 65536000u;
-    dosvm_ipx_service(&n->ipx, ticks); net_bridge_step(n->bridge);
-    const struct bridge_vm *state = net_bridge_vm(n->bridge, (struct bridge_key){n->key.id,n->key.generation});
+    uint64_t ticks = interval_ticks(host_ms);
+    dosvm_ipx_service(&n->ipx, ticks);
+    if (!net_bridge_port_acquire(n->port)) return;
+    net_bridge_step(&n->port->bridge);
+    const struct bridge_vm *state = net_bridge_vm(&n->port->bridge, (struct bridge_key){n->key.id,n->key.generation});
     if (state && state->rx_overflows != n->rx_overflows) {
         n->rx_overflows = state->rx_overflows; dosvm_ne2000_overflow(&n->ne);
     }
+    net_bridge_port_release(n->port);
     uint8_t frame[1514];
     /* At most eight frames, bounded by admitted queue size; yield after each
      * complete frame, never while a guest transfer/publication is partial. */
     for (unsigned i = 0; i < BRIDGE_QUEUE; i++) {
-        int bytes = net_bridge_receive(n->bridge, (struct bridge_key){n->key.id,n->key.generation}, frame, sizeof(frame));
+        if (!net_bridge_port_acquire(n->port)) break;
+        int bytes = net_bridge_receive(&n->port->bridge, (struct bridge_key){n->key.id,n->key.generation}, frame, sizeof(frame));
+        net_bridge_port_release(n->port);
         if (bytes <= 0) break;
-        (void)dosvm_ipx_receive(&n->ipx, frame, (unsigned)bytes); kpreempt_point();
+        (void)dosvm_ipx_receive(&n->ipx, frame, (unsigned)bytes);
+        (void)dosvm_ne2000_receive(&n->ne, frame, (unsigned)bytes); kpreempt_point();
     }
 }
 int dosvm_network_dispatch(struct dosvm *v, struct v86_frame *f)

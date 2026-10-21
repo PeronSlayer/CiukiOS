@@ -34,7 +34,7 @@ void net_bridge_port_carrier(struct net_bridge_port *p)
 static void frame_tap(struct netif *d, const uint8_t *frame, unsigned length, void *arg)
 {
     struct net_bridge_port *p = arg;
-    if (d != p->device || d->generation != p->generation) return;
+    if (d != p->device || d->generation != p->generation || p->closing) return;
     if (!net_bridge_port_acquire(p)) { p->busy_drops++; return; }
     net_bridge_port_carrier(p);
     net_bridge_ingress(&p->bridge, p->bridge.interface, p->generation, frame, length, g_ticks);
@@ -45,7 +45,8 @@ int net_bridge_port_open(struct net_bridge_port *p, struct bridge_pool *pool, st
                          const uint8_t physical[][6], unsigned count,
                          int (*mode)(struct netif *, bool))
 {
-    if (!p || !d || !mode || p->registered || !d->generation || !d->ready || !d->running ||
+    if (!p || !d || !mode || p->registered || p->busy || p->bridge.count || p->bridge.promiscuous ||
+        !d->generation || !d->ready || !d->running ||
         d->stopping || d->quarantined) return -EINVAL;
     memset(p, 0, sizeof(*p)); p->device = d; p->generation = d->generation; p->receive_mode = mode;
     struct bridge_ops ops = {p,wire_transmit,receive_mode};
@@ -62,7 +63,7 @@ int net_bridge_port_close(struct net_bridge_port *p)
     if (!net_bridge_port_acquire(p)) return -16;
     if (p->bridge.count) { net_bridge_port_release(p); return -16; }
     /* Revocation can wait for a tap callback; never wait with its gate held. */
-    bool registered = p->registered; p->registered = false;
+    bool registered = p->registered; p->registered = false; p->closing = true;
     net_bridge_port_release(p);
     if (registered) net_bridge_tap_unregister(frame_tap, p);
     if (!net_bridge_port_acquire(p)) return -16;
@@ -76,13 +77,17 @@ int net_bridge_identity_load(const struct bridge_identity_ops *ops, uint8_t id[1
     memset(id, 0, 16);
     int error = ops->read(ops->arg, id);
     if (error && error != -2) { memset(id, 0, 16); return error; }
-    if (error == -2) {
+    bool created = error == -2;
+    if (created) {
         error = ops->random(ops->arg, id);
         if (error) { memset(id, 0, 16); return error; }
     }
     uint8_t nonzero = 0; for (unsigned i = 0; i < 16; i++) nonzero |= id[i];
-    if (!nonzero) return -EINVAL;
+    if (!nonzero) { memset(id, 0, 16); return -EINVAL; }
     /* Existing all-zero/corrupt records are refused, never silently replaced. */
-    if (error == -2) return -EINVAL;
+    if (created) {
+        error = ops->write_atomic(ops->arg, id);
+        if (error) { memset(id, 0, 16); return error; }
+    }
     return 0;
 }

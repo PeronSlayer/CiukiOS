@@ -28,14 +28,18 @@ int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *cookie)
     if (type != BRIDGE_IPX_TYPE || !fn) return -EINVAL;
     kmutex_lock(&registration_mutex);
     int e = shutting_down ? -NET_ENODEV : bridge_tap.fn ? -NET_EBUSY : 0;
-    if (!e) { bridge_tap.cookie = cookie; bridge_tap.type = type; bridge_tap.fn = fn; }
+    if (!e) {
+        uint32_t flags = irq_save();
+        bridge_tap.cookie = cookie; bridge_tap.type = type; bridge_tap.fn = fn;
+        irq_restore(flags);
+    }
     kmutex_unlock(&registration_mutex); return e;
 }
 void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *cookie)
 {
     kmutex_lock(&registration_mutex);
     if (bridge_tap.fn == fn && bridge_tap.cookie == cookie) {
-        bridge_tap.fn = 0;
+        uint32_t flags = irq_save(); bridge_tap.fn = 0; irq_restore(flags);
         while (bridge_tap.active) task_sleep_ms(1);
         bridge_tap.cookie = 0; bridge_tap.type = 0;
     }
@@ -43,9 +47,14 @@ void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *cookie)
 }
 static bool bridge_tap_frame(struct netif *d, const struct net_packet *p)
 {
+    uint32_t flags = irq_save();
     net_bridge_tap_fn fn = bridge_tap.fn;
-    if (!fn || p->length < 14 || (((uint16_t)p->data[12] << 8) | p->data[13]) != bridge_tap.type) return false;
-    bridge_tap.active = true; fn(d, p->data, p->length, bridge_tap.cookie); bridge_tap.active = false;
+    if (!fn || p->length < 14 || (((uint16_t)p->data[12] << 8) | p->data[13]) != bridge_tap.type) {
+        irq_restore(flags); return false;
+    }
+    void *cookie = bridge_tap.cookie; bridge_tap.active = true; irq_restore(flags);
+    fn(d, p->data, p->length, cookie);
+    flags = irq_save(); bridge_tap.active = false; irq_restore(flags);
     return true;
 }
 /* f6-11 END: bridge tap. */

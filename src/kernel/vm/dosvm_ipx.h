@@ -41,6 +41,7 @@ struct dosvm_ipx_ecb {
     uint16_t es, si, esr_cs, esr_ip, socket, total;
     uint64_t order, due;
     uint8_t state, fragments, event_al;
+    uint8_t immediate[6];
     struct dosvm_ipx_fragment fragment[DOSVM_IPX_FRAGMENTS];
 };
 struct dosvm_ipx_socket { uint16_t number; uint8_t lifetime; bool open; };

@@ -50,6 +50,18 @@ int main(void)
     CHECK(d.generation!=generation && d.isr==0x80 && !level && !d.imr);
     CHECK(dosvm_ne2000_read(&d,0x2ff,1)==UINT32_MAX); CHECK(dosvm_ne2000_read(&d,0x310,4)==UINT32_MAX);
     ring(); w(7,255); CHECK(!(d.isr&0x7f));
+    /* Byte-wide remote DMA, zero-count probe, receive filtering and loopback. */
+    w(14,0); remote(0x4100,1,0x12); dosvm_ne2000_write(&d,0x310,1,0xa5);
+    CHECK(d.ram[0x100]==0xa5 && !d.count && d.remote==0x4101 && (d.isr&0x40));
+    w(7,0x40); remote(0x4100,0,0x0a); CHECK(d.isr&0x40);
+    ring(); ipx_frame(p,mac,mac,64); p[0]^=4; CHECK(!dosvm_ne2000_receive(&d,p,64));
+    w(12,0x10); CHECK(dosvm_ne2000_receive(&d,p,64)==1); /* software bridge still filters before this model */
+    w(12,0x20); CHECK(!dosvm_ne2000_receive(&d,p,64));
+    ring(); memcpy(p,mac,6); memcpy(d.ram,p,64); w(4,0x40); w(5,64); w(6,0); w(13,2);
+    CHECK(sent==2); w(0,0x26); CHECK(sent==2 && d.tsr==1 && (d.isr&1));
+    w(0,0x62); w(1,0xaa); w(8,0x55); CHECK(r(1)==0xaa && r(8)==0x55);
+    w(0,0xa2); w(1,0x34); w(2,0x12); w(3,0x45); w(5,0x56); w(6,0x67); w(7,0x89);
+    CHECK(r(3)==0x45 && r(5)==0x56 && r(6)==0x67 && r(7)==0x89 && d.local==0x1234);
     w(0,0xe2); CHECK(r(15)==0); w(15,255); CHECK(r(15)==0);
     printf("ne2000: %u checks passed (IRQ edges %u)\n",checks,edges); return 0;
 }

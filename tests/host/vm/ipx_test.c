@@ -8,7 +8,7 @@ struct host_vm {
     struct bridge_key key;
     uint8_t memory[0x110000],mac[6];
     struct memory_pin pins[2048];
-    unsigned live,pin_calls,fail_pin,callbacks,yields;
+    unsigned live,pin_calls,fail_pin,callbacks,yields,fail_read,fail_write;
     bool safe;
     struct dosvm_ipx_upcall last;
 };
@@ -40,9 +40,9 @@ static bool pinned(struct host_vm *v,uint32_t at,unsigned n,bool write)
     return false;
 }
 static int mem_read(void *arg,uint32_t at,void *out,unsigned n)
-{ struct host_vm *v=arg; CHECK(pinned(v,at,n,false)); memcpy(out,v->memory+at,n); return 0; }
+{ struct host_vm *v=arg; CHECK(pinned(v,at,n,false)); if(v->fail_read==at) return -EFAULT; memcpy(out,v->memory+at,n); return 0; }
 static int mem_write(void *arg,uint32_t at,const void *p,unsigned n)
-{ struct host_vm *v=arg; CHECK(pinned(v,at,n,true)); memcpy(v->memory+at,p,n); return 0; }
+{ struct host_vm *v=arg; CHECK(pinned(v,at,n,true)); if(v->fail_write==at) return -EFAULT; memcpy(v->memory+at,p,n); return 0; }
 static int send(void *arg,const uint8_t *p,unsigned n)
 { struct host_vm *v=arg; return net_bridge_send(&bridge,v->key,p,n,now); }
 static void relinquish(void *arg) { struct host_vm *v=arg; v->yields++; }
@@ -150,6 +150,37 @@ int main(void)
     ecb(&b,0x3000,0xb000,64,0x869c,false); call(&b,4,0,0,0x3000); CHECK(b.live==2);
     CHECK((call(&b,4,0,0,0x3000).ax&255)==255 && b.live==2);
     dosvm_ipx_disconnect(&b.ipx); CHECK(!b.live && b.memory[0x3009]==0xfe);
+    /* BUILD MULTI's header/payload scatter and receive ESR repost. */
+    ecb(&b,0x3000,0xb000,30,0x869c,true);
+    put16(b.memory+0x3022,2); put16(b.memory+0x302a,0); put16(b.memory+0x302c,0xc00); put16(b.memory+0x302e,64);
+    call(&b,4,0,0,0x3000); CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==1);
+    CHECK(!memcmp(b.memory+0xb000,frame+14,30) && !memcmp(b.memory+0xc000,frame+44,20));
+    CHECK(dosvm_ipx_dispatch(&b.ipx)==1 && !b.live);
+    call(&b,4,0,0,0x3000); CHECK(b.memory[0x3008]==0xfe);
+    call(&b,6,0,0,0x3000); CHECK(!b.live);
+    /* Descent's same-LAN GetLocalTarget plus nonlocal refusal. */
+    memcpy(b.memory+0x7004,a.mac,6);
+    r=(struct dosvm_ipx_regs){.bx=2,.es=0x700,.di=16};
+    CHECK(dosvm_ipx_interrupt(&b.ipx,0x7a,&r) && !(r.ax&255) && r.cx==1 && !memcmp(b.memory+0x7010,a.mac,6));
+    b.memory[0x7000]=1; r.ax=0;
+    CHECK(dosvm_ipx_interrupt(&b.ipx,0x7a,&r) && (r.ax&255)==0xfa); b.memory[0x7000]=0;
+    /* Snapshot the immediate target, then mutate the ECB while queued. */
+    send_ecb(&b,0x2000,0x5000,0x6000,12,a.mac,2,1);
+    call(&b,3,0,0,0x2000); memset(b.memory+0x201c,0,6); pump();
+    CHECK(!b.memory[0x2008] && !b.memory[0x2009] && !b.live);
+    send_ecb(&b,0x2000,0x5000,0x6000,12,a.mac,2,2);
+    call(&b,3,0,0,0x2000); b.fail_read=0x6000; dosvm_ipx_service(&b.ipx,b.ipx.ticks);
+    CHECK(b.memory[0x2009]==0xfd && !b.live); b.fail_read=0;
+    ecb(&b,0x3000,0xb000,64,0x869c,false); call(&b,4,0,0,0x3000); b.fail_write=0xb000;
+    CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==-EFAULT && b.memory[0x3009]==0xfd && !b.live); b.fail_write=0;
+    send_ecb(&b,0x2000,0x5000,0x6000,12,a.mac,2,3); call(&b,3,0,0,0x2000);
+    net_bridge_link(&bridge,false); dosvm_ipx_service(&b.ipx,b.ipx.ticks);
+    CHECK(b.memory[0x2009]==0xfe && !b.live); net_bridge_link(&bridge,true);
+    /* Runt, raw 802.3, LLC and malformed IPX cannot consume a listener. */
+    ecb(&b,0x3000,0xb000,64,0x869c,false); call(&b,4,0,0,0x3000);
+    frame[13]=0; CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==-EINVAL && b.memory[0x3008]==0xfe);
+    frame[13]=0x37; frame[17]=51; CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==-EINVAL && b.memory[0x3008]==0xfe);
+    frame[17]=50; call(&b,6,0,0,0x3000); CHECK(!b.live);
     for(unsigned i=0;i<64;i++) {
         ecb(&b,0x10000+i*0x80,0x20000+i*0x100,64,0x869c,false);
         CHECK(!(call(&b,4,0,0,0x10000+i*0x80).ax&255));

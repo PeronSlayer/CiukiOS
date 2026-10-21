@@ -8,7 +8,7 @@ struct net_bridge_port {
     struct netif *device;
     int (*receive_mode)(struct netif *, bool);
     uint32_t generation, busy_drops;
-    bool busy, registered;
+    bool busy, registered, closing;
 };
 /* All control/VM bridge accesses take this nonblocking owner gate. Contention
  * returns EBUSY rather than sleeping inside a guest publication or holding a

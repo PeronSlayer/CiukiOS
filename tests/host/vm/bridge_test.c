@@ -76,5 +76,27 @@ int main(void)
     /* A persisted host ID deterministically recreates an assignment. */
     init(); CHECK(!memcmp(other,ma,6)); net_bridge_shutdown(&bridge);
     promisc_error=-5; CHECK(net_bridge_enable(&bridge,a,0,other)==-5 && !bridge.count && !bridge.promiscuous);
+    promisc_error=0; memcpy(physical[0],ma,6); init(); CHECK(memcmp(physical[0],ma,6));
+    /* Wire floods have a separate bounded receive bucket; drain each frame
+     * so the rate check cannot accidentally be a queue-full check. */
+    ipx_frame(p,peer,ma,64);
+    for(unsigned i=0;i<32;i++) {
+        net_bridge_ingress(&bridge,4,99,p,64,0);
+        CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==64);
+    }
+    net_bridge_ingress(&bridge,4,99,p,64,0);
+    CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==0 && net_bridge_vm(&bridge,a)->rx_overflows==1);
+    net_bridge_ingress(&bridge,4,99,p,64,4); CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==64);
+    for(unsigned n=0;n<44;n++) { net_bridge_ingress(&bridge,4,99,p,n,1000); CHECK(!pool.used); }
+    p[12]=0; p[13]=50; net_bridge_ingress(&bridge,4,99,p,64,1000); CHECK(!pool.used);
+    p[12]=0x81; p[13]=0x37; p[20]=1; net_bridge_ingress(&bridge,4,99,p,64,1000); CHECK(!pool.used);
+    ipx_frame(p,ma,peer,64);
+    for(unsigned i=0;i<128;i++) CHECK(bridge_pool_copy(&pool,p,64,4,99)==(int)i);
+    CHECK(net_bridge_send(&bridge,a,p,64,1000)==-ENOSPC);
+    ipx_frame(p,peer,all,64); net_bridge_ingress(&bridge,4,99,p,64,1000);
+    CHECK(net_bridge_vm(&bridge,a)->rx_overflows==2 && net_bridge_vm(&bridge,b)->rx_overflows==1);
+    net_bridge_shutdown(&bridge);
+    for(unsigned i=0;i<128;i++) bridge_pool_release(&pool,i);
+    CHECK(!pool.used);
     printf("bridge: %u checks passed\n",checks); return 0;
 }

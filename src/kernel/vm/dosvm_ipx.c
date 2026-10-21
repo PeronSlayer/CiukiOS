@@ -69,6 +69,7 @@ static struct dosvm_ipx_ecb *snapshot(struct dosvm_ipx *v, struct dosvm_ipx_regs
     if (v->ops.read(v->ops.arg, linear, raw, 36 + fragments * 6) ||
         (!timer && le16(raw + 34) != fragments)) goto malformed;
     e->socket = be16(raw + 10); e->esr_ip = le16(raw + 4); e->esr_cs = le16(raw + 6);
+    memcpy(e->immediate, raw + 28, 6);
     if (!timer && socket_index(v, e->socket) < 0) { release(v, e); al(r, 0xff); return 0; }
     if ((e->esr_cs || e->esr_ip) && pin(v, e->esr_cs, e->esr_ip, 1, false, &e->esr_pin)) goto malformed;
     for (unsigned i = 0; i < fragments; i++) {
@@ -178,13 +179,11 @@ static void send_packet(struct dosvm_ipx *v, struct dosvm_ipx_ecb *e)
         }
         at += f->length;
     }
-    uint8_t immediate[6];
-    if (v->ops.read(v->ops.arg, e->linear + 28, immediate, 6) ||
-        memcmp(immediate, p + 24, 6) || memcmp(p + 20, "\0\0\0\0", 4) ||
+    if (memcmp(e->immediate, p + 24, 6) || memcmp(p + 20, "\0\0\0\0", 4) ||
         ((p[24] & 1) && memcmp(p + 24, "\xff\xff\xff\xff\xff\xff", 6))) {
         complete(v, e, DOSVM_IPX_UNDELIVERABLE, true); return;
     }
-    memcpy(p, immediate, 6); memcpy(p + 6, v->mac, 6); p[12] = 0x81; p[13] = 0x37;
+    memcpy(p, e->immediate, 6); memcpy(p + 6, v->mac, 6); p[12] = 0x81; p[13] = 0x37;
     p[14] = p[15] = 0xff; p[16] = e->total >> 8; p[17] = (uint8_t)e->total; p[18] = 0;
     memset(p + 32, 0, 4); memcpy(p + 36, v->mac, 6); p[42] = e->socket >> 8; p[43] = (uint8_t)e->socket;
     /* The API fills the caller's first IPX header as well as its wire copy. */
