@@ -39,14 +39,16 @@ CRLF as one line. Research extraction is under
 
 The existing unmodified reference `BIN/KERNL386.SYS` remains pinned at
 `932c0c155701eddb7b902f7269a1b2ce31f5c82a6dc195172f2336d18a74e1fb`.
-F3-55 Amendment 1 additionally requires a byte comparison to this pinned member
-outside its located compile-date string. The candidate is **unmodified except
-patch 0001 (reproducible date)**; two clean builds with pinned inputs must also
-match one another. The vendor member is packed (UPX marker at offset 85) and
-has no visible compile-date banner, whereas our configured output is raw.
-The strict masked comparison therefore remains blocked pending a lead decision
-on equivalent representations; no decompression, alternate pin or wider mask
-is authorised. Two identical local builds alone cannot qualify the guest.
+F3-55 Amendment 3 replaces the vendor byte comparison with two independent
+requirements: reproducibility under different host calendar dates, and 100%
+identical results from the unchanged f3-48 differential conformance battery,
+using the rebuilt kernel as candidate and this vendor member as reference.
+The candidate remains **unmodified except patch 0001 (reproducible date)**.
+The packed vendor SYS wrapper is rejected by UPX 5.2.1; reconstructing it is
+not an acceptance requirement. Size and Wlink section layout of the raw
+rebuild are recorded beside the original vendor size/hash as provenance.
+Host qualification enables the opt-in fixture for the lead's runtime tests;
+it does not establish behavioural equivalence or change the default guest.
 
 ## Architecture and activation
 
@@ -330,9 +332,9 @@ f3-55 baseline build configuration: `BUILDENV=linux`, `XCPU=386`, `XFAT=32`,
 fresh source extraction apply the pinned patch below, write `config.mak` as
 an external build input and invoke `make all` with WATCOM and PATH pointing to
 the pinned tools. No production image build in implementer sandboxes.
-Uncompressed output is a standard supported configuration. Amendment 2 pins
-UPX solely to unpack a copy of the vendor kernel for comparison; the rebuild
-stays uncompressed. It does not reproduce the compressed release bytes. Pin environment,
+Uncompressed output is a standard supported configuration. Amendment 3 removes
+the unused UPX dependency and unpack tooling. Preserve the packed reference
+without trying to reconstruct its wrapper. Pin environment,
 locale/timezone, file mtimes, host compiler, tool versions and configuration;
 compare two clean build outputs and source manifests. The lead's OW1.9 probe
 rejected forced-include redefinition of `__DATE__` with E1100. F3-55 Amendment 1
@@ -343,23 +345,27 @@ in the pinned kernel archive. FreeCOM changes remain in f3-58.
 
 The [patch rationale and SHA-256](../../third_party/freedos/unified/ciuki/patches/README.md)
 and `third_party/freedos/unified/ciuki/build.json` pin the patch, changed source
-hashes, `Oct 21 2026`/`00:00:00` and UTC epoch 1792540800 (the existing f3-55
-build-input date). The compiler receives `CIUKI_BUILD_DATE`/`CIUKI_BUILD_TIME`
-through the documented [OW1.9 preprocessor `-dNAME="text"` option](https://open-watcom.github.io/open-watcom-1.9/cguide.html#Preprocessor).
-A native compiler probe checks those values before make. Preserve the pristine
-archive/ledger and all source hashes before/after patching and compilation.
+hashes, `May 14 2021`/`00:00:00` and UTC epoch 1620950400. This is the
+[K2043 release date](https://github.com/FDOS/kernel/releases/tag/ke2043),
+confirmed by `APPINFO/KERNEL.LSM` in the SHA-pinned outer kernel package.
+The generated external `ciuki-build-date.h` defines `CIUKI_BUILD_DATE` and
+`CIUKI_BUILD_TIME`; compiler flags contain only the space-free relative token
+`-fi=../ciuki-build-date.h`. The [OW1.9 forced-include option](https://open-watcom.github.io/open-watcom-1.9/cguide.html)
+includes this file before each C source, without redefining predefined macros.
+The probe compiles from the SYS directory with this exact option. The header
+and config are recorded, checked after make, and included in corresponding
+source. Preserve the pristine archive/ledger and every source hash.
 SYS uses `CFLAGST` instead of `ALLCFLAGS`, so the external `MAKE` command
-supplies the same macros using the documented [wmake command-line macro
-precedence](https://open-watcom.github.io/open-watcom-1.9/tools.html#Open_Watcom_Make_Command_Line_Format),
+supplies the same forced include through wmake's command-line macro override,
 retaining SYS's original flags and Linux object suffix.
-The checker names patch 0001 and the masked pristine comparison explicitly;
-it compares the raw rebuild with the separately pinned UPX-unpacked vendor
-representation, accepting only one banner in each binary, identical date offsets/lengths and
-identical bytes everywhere outside its 11-byte date. Missing/ambiguous banners
-or any other difference block qualification. The two-date commands use distinct
-roots and source mtimes 946684800 and 1609459200, as Amendment 1 specifies;
-actual wall-clock dates remain informational and can be the same. This checks
-input-date independence, not execution under two actual host calendar dates.
+
+The checker compares raw rebuilt bytes, source manifests, build inputs, tools
+and source/license closure under distinct absolute roots, input mtimes
+946684800 and 1609459200, and observed host calendar dates. Source mtimes and
+`SOURCE_DATE_EPOCH` do not change the host clock. Two runs on the same host
+calendar date cannot qualify the two-host-date requirement. Kernel layout and
+the untouched packed reference hash are read back independently; f3-48
+behavioural equivalence remains explicitly pending the lead's runtime run.
 
 ## License and source delivery
 
@@ -380,7 +386,7 @@ No FreeDOS/FreeCOM source is copied into tracked code by f3-54.
 | SYS FAT16 boot template | GPL-2.0-or-later; exact template `boot16.bin`, authors and `K:boot/boot.asm` source accompany images using it. Wrapper MBR/build glue is separately attributed. |
 | Ciuki VMM/native FS/probes | Existing repository licenses, separately linked native binary/test executables; no FreeDOS implementation transplant. Shared ABI specifications are documented; native and guest code do not import one another's private structs. |
 | OW1.9 / NASM / host compiler | Build-time tools retain their own terms and pins; audit linked runtime separately as above. NASM is BSD-2-Clause; existing SDK provenance remains authoritative. |
-| UPX 5.2.1 | Build-time comparison tool only: GPL-2.0-or-later with the UPX exception, preserving upstream COPYING/LICENSE. `config/upx.json` pins the Linux archive, each extracted file and both vendor representations separately; no UPX code enters the raw rebuild. Direct unpack currently fails on the flattened vendor kernel; see the f3-55 validation record. |
+| UPX | Removed from f3-55 by Amendment 3: no build or comparison use remains. The original packed reference keeps its existing licence/source obligations; no UPX executable is shipped. |
 | Portrait/Tango/book/manuals | Portrait is separately owned, Tango is Public Domain, book/manuals are research only. No relicense or redistribution of supplied Microsoft media. |
 
 The separate-binary/address-space design avoids combining FreeDOS and native

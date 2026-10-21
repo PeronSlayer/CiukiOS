@@ -2,10 +2,12 @@
 """H55-02/03 host-only checker. Never builds an OS image or launches a VM.
 
 Build unmodified except patch 0001 (reproducible date), then compare/qualify.
-Amendment 1's two input dates may be checked on the same wall-clock day:
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-a --mtime 946684800
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-b-longer --mtime 1609459200
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment1-a/build.json build/codex/h55-amendment1-b-longer/build.json
+Amendment 3 requires different host calendar dates as well as roots/mtimes.
+The lead runs these builds on different dates (or with a controlled host clock):
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-a --mtime 946684800
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-b-longer --mtime 1609459200
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment3-a/build.json build/codex/h55-amendment3-b-longer/build.json
+Host qualification enables the opt-in fixture, pending the lead's f3-48 battery.
 """
 import argparse
 import importlib.util
@@ -47,13 +49,9 @@ def main():
     mode.add_argument("--compare", nargs=2, type=Path)
     mode.add_argument("--cpu-reference", action="store_true", help="check the unchanged vendor kernel loader, not a rebuilt-kernel qualification")
     mode.add_argument("--source-out", type=Path, help="construct/read back source bundle without an image or a qualification claim")
-    mode.add_argument("--unpack-vendor", action="store_true", help="UPX -d a vendor copy and verify the unpacked representation pin")
     parser.add_argument("--mtime", type=int, default=build.EPOCH)
     args = parser.parse_args()
-    if args.unpack_vendor:
-        raw, provenance = build.unpacked_vendor()
-        print(json.dumps(dict(provenance, sha256=build.sha(raw), size=len(raw)), sort_keys=True))
-    elif args.source_out:
+    if args.source_out:
         print(json.dumps(build.corresponding_source(args.source_out), sort_keys=True))
     elif args.cpu_reference:
         out = build.build_path(ROOT / "build/codex/h55-reference-cpu")
@@ -68,24 +66,24 @@ def main():
         if record["status"] != "built-unqualified":
             print(record["error"], file=sys.stderr)
             return 1
-        print("H55-02 masked pristine comparison: " + json.dumps(record["pristine_comparison"], sort_keys=True))
-        build.check_pristine(record)
+        print("H55-02 size/section/reference provenance: " + json.dumps(record["kernel_provenance"], sort_keys=True))
+        print("Amendment 3: vendor byte comparison replaced; behavioural equivalence pending lead f3-48 (100% identical results)")
         cpu_check(record)
     else:
         paths = [build.build_path(p) for p in args.compare]
         records = [json.loads(p.read_text()) for p in paths]
-        build.compare_rebuilds(*records)
-        print("H55-02 two-date PASS: different roots/input dates/mtimes, raw kernel and patch 0001 source manifests identical", flush=True)
         build.compare(*records)
-        print("H55-02 masked pristine comparison PASS: only the located 11-byte compile-date region is excluded", flush=True)
+        print("H55-02 reproducibility PASS: different host dates/roots/input mtimes, raw kernel and patch 0001 source manifests identical", flush=True)
+        print("Amendment 3: vendor byte comparison replaced; behavioural equivalence pending lead f3-48 (100% identical results)", flush=True)
         for record in records:
             cpu_check(record)
         out = build.build_path(ROOT / "build/unified-dos")
         out.mkdir(exist_ok=True)
         (out / "qualified.json").write_text(json.dumps(dict(
-            first=str(paths[0]), second=str(paths[1]), cpu_boot="PASS"), indent=2) + "\n")
+            first=str(paths[0]), second=str(paths[1]), cpu_boot="PASS",
+            behavioural_equivalence="pending-lead-f3-48"), indent=2) + "\n")
         source = build.corresponding_source(out / "ciukidos-unified-source.zip")
-        print("H55-02 PASS: unmodified except patch 0001 (reproducible date); two-date and masked pristine comparison passed")
+        print("H55-02 host checks PASS: unmodified except patch 0001 (reproducible date); f3-48 runtime acceptance remains pending")
         print(json.dumps(source, sort_keys=True))
     return 0
 

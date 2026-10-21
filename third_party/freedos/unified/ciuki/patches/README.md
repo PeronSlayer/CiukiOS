@@ -16,31 +16,34 @@ the macro is absent. There is no `__TIME__` or `__TIMESTAMP__` use in this
 archive. No executable logic or other string changes. Source line endings
 are preserved. FreeCOM changes belong to f3-58.
 
-`../build.json` pins the date `Oct 21 2026`, time `00:00:00`, UTC epoch
-1792540800 (the existing f3-55 build-input date), patch hash and both changed
-file hashes. The builder passes `CIUKI_BUILD_DATE` and `CIUKI_BUILD_TIME` on
-the compiler command line using Open Watcom's documented `-dNAME="text"`
-syntax. It verifies exact patch context without fuzz, all 181 source hashes
-before/after the patch and after the build. The native compiler probe checks
-the resulting date/time strings before make runs.
+`../build.json` pins the K2043 release date `May 14 2021`, time `00:00:00`,
+UTC epoch 1620950400, patch hash and both changed file hashes. The date is
+confirmed by `APPINFO/KERNEL.LSM` in the pinned kernel package. Amendment 3
+passes the two build macros through the generated external forced include
+`ciuki-build-date.h`, using only the space-free relative command-line token
+`-fi=../ciuki-build-date.h`. It never redefines `__DATE__` or `__TIME__`.
+The exact header is part of the build record and corresponding-source bundle.
+The native compiler probe uses the same option and SYS working directory.
+All 181 source hashes and both external inputs are checked after make.
 
-The external `MAKE` setting also supplies these macros through wmake's
+The external `MAKE` setting also supplies the forced include through wmake's
 command-line `CFLAGST` override: `sys/makefile` does not consume `ALLCFLAGS`.
 That override retains the exact upstream Watcom flags and Linux `.obj`
-suffix. The two date sites therefore receive the same manifest values.
+suffix. The two date sites therefore receive the same fixed manifest values.
 
 Research: [K2043 release](https://github.com/FDOS/kernel/releases/tag/ke2043),
 [Open Watcom 1.9 release](https://github.com/open-watcom/open-watcom-1.9/releases/tag/ow1.9),
 [getting started](https://open-watcom.github.io/open-watcom-1.9/c_readme.html),
-[compiler preprocessor options](https://open-watcom.github.io/open-watcom-1.9/cguide.html#Preprocessor),
+[compiler forced-include option](https://open-watcom.github.io/open-watcom-1.9/cguide.html),
 [wmake command-line macro precedence](https://open-watcom.github.io/open-watcom-1.9/tools.html#Open_Watcom_Make_Command_Line_Format).
 The checked local inputs are the release archives, never master sources.
 
-The checker compares the raw rebuilt kernel against the pinned vendor member,
-masking only the unique compile date in its FreeDOS banner. Missing/ambiguous
-banners, different offsets/sizes and any other changed bytes fail. The pinned
-vendor member is packed (UPX marker at offset 85, no visible compile date).
-No unpacking or replacement reference is authorised here: this prerequisite
-currently blocks pristine qualification. The separate two-date check compares
-raw rebuilt outputs under input mtimes 946684800 and 1609459200. It cannot
-substitute for the pristine check.
+Amendment 3 supersedes the masked vendor byte comparison: UPX 5.2.1 rejects
+the flattened SYS wrapper with `NotPackedException`; no wrapper reconstruction
+is required. UPX's unused pin and unpack tooling are removed. Acceptance is
+byte-identical raw rebuilds under different observed host dates, roots and
+input mtimes, plus 100% identical results in the unchanged f3-48 differential
+battery (lead-run). A host qualification does not claim behavioural success.
+The original vendor hash and size accompany the raw rebuild's size and Wlink
+section layout. Input mtimes 946684800 and 1609459200 are separate from both
+the fixed release date and the observed host clock.

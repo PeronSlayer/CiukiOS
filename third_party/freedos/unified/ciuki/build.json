@@ -1,6 +1,6 @@
 {
-  "date": "Oct 21 2026",
-  "epoch": 1792540800,
+  "date": "May 14 2021",
+  "epoch": 1620950400,
   "modification": "unmodified except patch 0001 (reproducible date)",
   "patch": {
     "path": "ciuki/patches/0001-reproducible-date.patch",

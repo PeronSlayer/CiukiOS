@@ -16,7 +16,6 @@ import shlex
 import stat
 import subprocess
 import tempfile
-import tarfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,11 +29,9 @@ SOURCE_PINS = {
     "share": ("share-2006a-sources.zip", "SOURCE/SHARE/SOURCES.ZIP",
               "2e28bf858e38086764d4b237ffd0273d687fcb6f8d970c1887559b63511ce7a3"),
 }
-EPOCH = 1792540800  # 2026-10-21 00:00:00 UTC, external build input
+EPOCH = 1620950400  # K2043 release date: 2021-05-14 00:00:00 UTC
 MODIFICATION = "unmodified except patch 0001 (reproducible date)"
 BUILD_MANIFEST = VENDOR / "ciuki/build.json"
-UPX_PIN = ROOT / "config/upx.json"
-UPX_EVIDENCE = ROOT / "build/codex/h55-vendor-upx.json"
 
 
 def sha(data):
@@ -312,14 +309,20 @@ def patched_sources(members):
     return result
 
 
-def date_flags(manifest):
-    # Watcom's documented -dNAME="text" syntax; no predefined macro redefinition.
-    return [f'-dCIUKI_BUILD_DATE="{manifest["date"]}"',
-            f'-dCIUKI_BUILD_TIME="{manifest["time"]}"']
+def date_header(manifest):
+    # External generated input, never a change to a ledger-pinned source file.
+    return (f'#define CIUKI_BUILD_DATE "{manifest["date"]}"\n'
+            f'#define CIUKI_BUILD_TIME "{manifest["time"]}"\n')
+
+
+def date_flags():
+    # All WCC compilations run in a source subdirectory. Keep this token free
+    # of spaces and absolute roots: wmake/wcc split -d values containing spaces.
+    return ["-fi=../ciuki-build-date.h"]
 
 
 def build_config(manifest):
-    flags = " ".join(date_flags(manifest))
+    flags = " ".join(date_flags())
     # SYS uses CFLAGST instead of ALLCFLAGS. A command-line wmake macro has
     # precedence over watcom.mak; preserve its flags and owlinux's .obj suffix.
     sys_flags = "CFLAGST=-fo=.obj -zq-zp1-os-s-we-e3-wx-bt=DOS " + flags
@@ -329,110 +332,31 @@ def build_config(manifest):
             "\nALLCFLAGS=" + flags + " \n")
 
 
-def masked_pristine_compare(kernel, pristine):
-    """Mask exactly one 11-byte compile date, never code, padding or headers."""
-    pattern = (rb"FreeDOS kernel [^\x00\r\n]{1,120}?\[compiled "
-               rb"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 0-3][0-9] [0-9]{4})\]\n")
-    regions = []
-    for name, data in (("rebuilt", kernel), ("pinned KERNL386.SYS", pristine)):
-        matches = list(re.finditer(pattern, data))
-        if len(matches) != 1:
-            packed = "; UPX marker present, compressed/raw comparison is not authorised" if b"UPX!" in data else ""
-            raise ValueError(f"{name}: expected one compile-date banner, found {len(matches)}{packed}")
-        regions.append(matches[0].span(1))
-    if len(kernel) != len(pristine) or regions[0] != regions[1]:
-        raise ValueError("pristine size/date offset mismatch; only the date bytes may differ")
-    start, end = regions[0]
-    manifest, _, _ = reproducible_inputs()
-    if kernel[start:end] != manifest["date"].encode("ascii"):
-        raise ValueError("rebuilt banner does not contain the pinned build date")
-    if kernel[:start] != pristine[:start] or kernel[end:] != pristine[end:]:
-        raise ValueError("pristine comparison differs outside the compile-date region")
-    return dict(status="PASS", reference_sha256=sha(pristine), kernel_sha256=sha(kernel),
-                date_offset=start, date_size=end - start, rebuilt_date=kernel[start:end].decode(),
-                reference_date=pristine[start:end].decode(), compared_bytes=len(kernel) - (end - start))
+def kernel_provenance(work, kernel):
+    """Record the raw rebuild's section table beside the unchanged packed pin.
 
-
-def prepare_upx(output=None):
-    """Validate the pinned upstream tar completely before atomic extraction."""
-    pins = json.loads(UPX_PIN.read_text())
-    archive = ROOT / pins["archive"]["path"]
-    if archive.stat().st_size != pins["archive"]["size"] or digest(archive) != pins["archive"]["sha256"]:
-        raise ValueError("UPX archive pin mismatch")
-    members = {}; seen = set(); total = 0
-    with tarfile.open(archive, "r:xz") as tar:
-        for info in tar:
-            name = info.name
-            if (not name or "\\" in name or ":" in name or "\0" in name or
-                    PurePosixPath(name).is_absolute() or
-                    any(p in ("", ".", "..") for p in name.split("/")) or
-                    name.casefold() in seen or not (info.isfile() or info.isdir())):
-                raise ValueError("unsafe/duplicate/special UPX archive member")
-            seen.add(name.casefold()); total += info.size
-            if len(seen) > 32 or info.size > 4 * 1024 * 1024 or total > 8 * 1024 * 1024:
-                raise ValueError("UPX archive size/count exceeds bound")
-            if info.isfile():
-                pin = pins["members"].get(name)
-                if pin is None or info.size != pin["size"]:
-                    raise ValueError("UPX member list/size mismatch")
-                data = tar.extractfile(info).read()
-                if len(data) != info.size or sha(data) != pin["sha256"]:
-                    raise ValueError("UPX member hash mismatch")
-                members[name] = data
-    if set(members) != set(pins["members"]) or pins["executable"] not in members:
-        raise ValueError("UPX member list mismatch")
-    output = build_path(output or ROOT / "build/tools/upx-5.2.1")
-    if not output.exists():
-        extract(members, output)
-    for name, data in members.items():
-        path = output / name
-        if path.is_symlink() or path.read_bytes() != data:
-            raise ValueError("installed UPX file modified: " + name)
-    executable = output / pins["executable"]
-    executable.chmod(0o755)
-    return executable, pins
-
-
-def unpacked_vendor():
-    """Unpack a copy, never alter the pinned packed reference or its identity."""
-    executable, pins = prepare_upx()
-    files, _ = reference_module().reference_files()
-    packed = files["/KERNEL.SYS"]
-    vendor = pins["vendor"]
-    if len(packed) != vendor["packed"]["size"] or sha(packed) != vendor["packed"]["sha256"]:
-        raise ValueError("packed vendor kernel pin mismatch")
-    parent = build_path(ROOT / "build/codex")
-    parent.mkdir(parents=True, exist_ok=True)
-    provenance = dict(representation="UPX-unpacked vendor KERNL386.SYS", vendor=vendor,
-                      upx_archive_sha256=pins["archive"]["sha256"],
-                      upx_executable_sha256=pins["members"][pins["executable"]]["sha256"],
-                      upx_version=pins["version"], command="upx -d <copy of pinned KERNL386.SYS>")
-    with tempfile.TemporaryDirectory(prefix=".upx-vendor-", dir=parent) as directory:
-        path = Path(directory) / "KERNL386.SYS"
-        path.write_bytes(packed)
-        result = subprocess.run([str(executable), "-d", str(path)], capture_output=True,
-                                text=True, timeout=30, preexec_fn=no_core,
-                                env=dict(PATH="/usr/bin:/bin", LANG="C", LC_ALL="C", TZ="UTC"))
-        evidence = dict(provenance, status="blocked", returncode=result.returncode,
-                        stdout=result.stdout, stderr=result.stderr)
-        build_path(UPX_EVIDENCE).write_text(json.dumps(evidence, indent=2) + "\n")
-        if result.returncode:
-            raise ValueError("UPX vendor unpack failed: " + result.stdout + result.stderr)
-        if not vendor["unpacked"].get("sha256"):
-            raise ValueError("lead must pin the unpacked vendor hash before comparison")
-        if path.stat().st_size != vendor["unpacked"]["size"] or digest(path) != vendor["unpacked"]["sha256"]:
-            raise ValueError("unpacked vendor kernel pin mismatch")
-        raw = path.read_bytes()
-    evidence.update(status="PASS", unpacked_sha256=sha(raw), unpacked_size=len(raw))
-    build_path(UPX_EVIDENCE).write_text(json.dumps(evidence, indent=2) + "\n")
-    return raw, provenance
-
-
-def pristine_comparison(kernel):
-    raw, provenance = unpacked_vendor()
-    result = masked_pristine_compare(kernel, raw)
-    result["reference_representation"] = provenance
-    return result
+    A SYS file is flat, so its sections come from the Wlink map, not a forged
+    executable header. Keep the table's names/classes/groups/addresses/sizes;
+    exclude the map's host timestamp and absolute module paths.
+    """
+    text = (work / "kernel/kernel.map").read_text(errors="replace")
+    header = re.search(r"(?m)^Segment\s+Class\s+Group\s+Address\s+Size\s*$", text)
+    if not header:
+        raise ValueError("kernel section layout missing from Wlink map")
+    table = text[header.end():].split("+", 1)[0]
+    sections = [" ".join(line.split()) for line in table.splitlines()
+                if re.search(r"\b[0-9a-fA-F]{4}:[0-9a-fA-F]{4,8}\s+[0-9a-fA-F]{8}\b", line)]
+    if not sections:
+        raise ValueError("empty kernel section layout in Wlink map")
+    files, identity = reference_module().reference_files()
+    vendor = files["/KERNEL.SYS"]
+    return dict(rebuilt=dict(representation="raw uncompressed kernel, patch 0001",
+                             sha256=sha(kernel), size=len(kernel), sections=sections),
+                reference=dict(representation="original packed BIN/KERNL386.SYS",
+                               sha256=identity["kernel"]["sha256"], size=len(vendor)),
+                vendor_byte_comparison=dict(status="replaced-by-amendment-3",
+                    reason="UPX 5.2.1 rejects the flattened vendor SYS wrapper with NotPackedException"),
+                behavioural_equivalence=dict(status="pending-lead-f3-48", required="100% identical results"))
 
 
 def link_audit(work):
@@ -477,11 +401,13 @@ def build(output, *, mtime=EPOCH):
     output.mkdir(parents=True)
     work = extract(patched, output / "source", mtime)
     (work / "config.mak").write_text(config)
-    evidence = dict(schema=2, status="blocked", unmodified=False, modification=MODIFICATION,
+    header = date_header(manifest)
+    (work / "ciuki-build-date.h").write_text(header)
+    evidence = dict(schema=3, status="blocked", unmodified=False, modification=MODIFICATION,
                     wall_date=datetime.now(timezone.utc).isoformat(),
                     root=str(output), input_mtime=mtime, source_hashes=source_hashes(work),
                     pristine_source_hashes={n: sha(b) for n, b in members.items()},
-                    source_archive_sha256=SOURCE_PINS["kernel"][2], config=config,
+                    source_archive_sha256=SOURCE_PINS["kernel"][2], config=config, date_header=header,
                     build_manifest_sha256=sha(manifest_bytes), build_inputs=manifest)
     try:
         tools, pins = prepare_tools()
@@ -494,13 +420,12 @@ def build(output, *, mtime=EPOCH):
         env = dict(PATH=str(tools / "binl") + ":/usr/bin:/bin", WATCOM=str(tools),
                    LANG="C", LC_ALL="C", TZ="UTC", SOURCE_DATE_EPOCH=str(EPOCH),
                    TMPDIR=str(output), WLINK_LNK="", WCC="")
-        # Probe the build macros using the exact command-line arguments used
-        # by make. Native OW execution/quoting remains lead-host evidence.
-        probe = output / "date-probe.c"
+        # Probe with the same space-free forced-include option and cwd as SYS.
+        probe = work / "sys/ciuki-date-probe.c"
         probe.write_text('const char date_probe[] = CIUKI_BUILD_DATE "|" CIUKI_BUILD_TIME;\n')
-        subprocess.run([str(tools / "binl/wcc"), "-zq", "-bt=dos", *date_flags(manifest),
+        subprocess.run([str(tools / "binl/wcc"), "-zq", "-bt=dos", *date_flags(),
                         "-fo=" + str(output / "date-probe.obj"), str(probe)],
-                       env=env, cwd=output, check=True)
+                       env=env, cwd=work / "sys", check=True)
         if (manifest["date"] + "|" + manifest["time"]).encode() not in (output / "date-probe.obj").read_bytes():
             raise ValueError("patch 0001 compiler build-date macro probe failed")
         with (output / "make.log").open("w") as log:
@@ -508,19 +433,19 @@ def build(output, *, mtime=EPOCH):
                            stderr=subprocess.STDOUT, check=True)
         if source_hashes(work) != evidence["source_hashes"]:
             raise ValueError("source bytes changed during build beyond patch 0001")
+        if ((work / "config.mak").read_text() != config or
+                (work / "ciuki-build-date.h").read_text() != header):
+            raise ValueError("external build inputs changed during build")
         evidence["linked_objects"] = link_audit(work)
         kernel = (work / "bin/kernel.sys").read_bytes()
         if kernel != (work / "kernel/kernel.sys").read_bytes():
             raise ValueError("flattened/installed kernel bytes disagree")
         if not 1024 <= len(kernel) <= 134 * 1024 or kernel.startswith(b"CIUKIDOS"):
             raise ValueError("FreeDOS kernel extent/header invalid")
+        evidence["kernel_provenance"] = kernel_provenance(work, kernel)
         (output / "KERNEL.SYS").write_bytes(kernel)
         evidence.update(status="built-unqualified", kernel_sha256=sha(kernel), size=len(kernel),
                         map_sha256=digest(work / "kernel/kernel.map"))
-        try:
-            evidence["pristine_comparison"] = pristine_comparison(kernel)
-        except (OSError, ValueError) as error:
-            evidence["pristine_comparison"] = dict(status="blocked", error=str(error))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         evidence.update(status="blocked", error=str(error))
     (output / "build.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
@@ -533,14 +458,17 @@ def compare_rebuilds(first, second):
     if first["root"] == second["root"] or first["input_mtime"] == second["input_mtime"]:
         raise ValueError("distinct build roots and input mtimes required")
     if datetime.fromtimestamp(first["input_mtime"], timezone.utc).date() == datetime.fromtimestamp(second["input_mtime"], timezone.utc).date():
-        raise ValueError("different input dates required by f3-55 amendment 1")
+        raise ValueError("different input dates required by f3-55")
+    if datetime.fromisoformat(first["wall_date"]).date() == datetime.fromisoformat(second["wall_date"]).date():
+        raise ValueError("different host calendar dates required by f3-55 amendment 3")
     manifest, manifest_bytes, _ = reproducible_inputs()
     expected_hashes = {n: sha(b) for n, b in patched_sources(sources()).items()}
     for record in (first, second):
-        if (record.get("schema") != 2 or record.get("unmodified") is not False or
+        if (record.get("schema") != 3 or record.get("unmodified") is not False or
                 record.get("modification") != MODIFICATION or record.get("build_inputs") != manifest or
                 record.get("build_manifest_sha256") != sha(manifest_bytes) or
                 record.get("config") != build_config(manifest) or
+                record.get("date_header") != date_header(manifest) or
                 record.get("source_archive_sha256") != SOURCE_PINS["kernel"][2] or
                 record.get("pristine_source_hashes") != ledger("kernel") or
                 record.get("source_hashes") != expected_hashes):
@@ -548,8 +476,11 @@ def compare_rebuilds(first, second):
         kernel = (build_path(record["root"]) / "KERNEL.SYS").read_bytes()
         if sha(kernel) != record["kernel_sha256"] or len(kernel) != record["size"]:
             raise ValueError("recorded kernel hash/size differs from raw bytes")
+        if record.get("kernel_provenance") != kernel_provenance(build_path(record["root"]) / "source", kernel):
+            raise ValueError("kernel layout/reference provenance differs from current bytes")
     for name in ("kernel_sha256", "size", "source_hashes", "source_archive_sha256", "config",
-                 "build_inputs", "build_manifest_sha256", "host", "tools", "support_files", "linked_objects"):
+                 "build_inputs", "build_manifest_sha256", "date_header", "kernel_provenance",
+                 "host", "tools", "support_files", "linked_objects"):
         if name not in first or name not in second or first[name] != second[name]:
             raise ValueError("reproducibility mismatch: " + name)
     if (Path(first["root"]) / "KERNEL.SYS").read_bytes() != (Path(second["root"]) / "KERNEL.SYS").read_bytes():
@@ -557,18 +488,10 @@ def compare_rebuilds(first, second):
     return True
 
 
-def check_pristine(record):
-    actual = pristine_comparison((build_path(record["root"]) / "KERNEL.SYS").read_bytes())
-    if record.get("pristine_comparison") != actual:
-        raise ValueError("masked pristine comparison evidence differs from current bytes")
-    return actual
-
-
 def compare(first, second):
-    compare_rebuilds(first, second)
-    for record in (first, second):
-        check_pristine(record)
-    return True
+    # Host qualification enables an opt-in image for the lead's battery.
+    # It does not claim the separately required f3-48 behavioural equivalence.
+    return compare_rebuilds(first, second)
 
 
 def reference_module():
@@ -618,7 +541,7 @@ def corresponding_source(output):
     files["ciukios/third_party/freedos/unified/ciuki/patches/README.md"] = (VENDOR / "ciuki/patches/README.md").read_bytes()
     paths = ["scripts/unified_dos.py", "scripts/dos_conformance.py", "scripts/build_dos_image.py",
              "scripts/ciukidos_image.py", "src/boot/full_boot.asm", "src/boot/full_stage1_loader.asm",
-             "config/openwatcom.json", "config/upx.json", "docs/design/unified-dos-licenses.tsv",
+             "config/openwatcom.json", "docs/design/unified-dos-licenses.tsv",
              "third_party/freedos/1.3/UPSTREAM.json", "third_party/freedos/1.3/boot16.bin",
              "third_party/freedos/1.3/COPYING", "tests/host/dos/reference_mbr.asm",
              "tests/host/dos/check_unmodified_build.py", "tests/host/dos/unified_boot_test.c"]
@@ -654,6 +577,7 @@ def corresponding_source(output):
     toolchain["source_offer"] = dict(url="", sha256="", status="assigned separately in release metadata")
     files["ciukios/config/openwatcom.json"] = (json.dumps(toolchain, indent=2) + "\n").encode()
     files["build-inputs/config.mak"] = build_config(manifest).encode()
+    files["build-inputs/ciuki-build-date.h"] = date_header(manifest).encode()
     files["README.txt"] = ("CiukiDOS unified K2043: " + MODIFICATION + ".\n"
         "Upstream archives are literal FreeDOS 1.3 nested SOURCES.ZIP files.\n"
         "See ciukios/config/openwatcom.json for build-time tool URLs and SHA-256 pins.\n"

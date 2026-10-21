@@ -24,14 +24,21 @@ Run `tests/host/dos/check_unmodified_build.py` as documented in its docstring
 and `docs/validation/f3-55-unmodified-kernel.md`. Native OW1.9 execution is
 required: no emulator or compiler fallback. The kernel is **unmodified except
 patch 0001 (reproducible date)**, documented and SHA-pinned under
-`ciuki/patches/` and `ciuki/build.json`. `config.mak` passes the pinned build
-date/time macros on the compiler command line. Every source file is hashed
+`ciuki/patches/` and `ciuki/build.json`. The external generated forced include
+`ciuki-build-date.h` defines the fixed K2043 release date `May 14 2021` and
+`00:00:00`; `config.mak` passes the space-free `-fi=../ciuki-build-date.h` token
+to both kernel and SYS compilation. Every source file is hashed
 before/after the patch and after compilation. The guest kernel may
 link only source-built kernel/device objects, never a Watcom runtime library.
 
-After two qualifying builds, the canonical builder installs the new opt-in
+After host qualification under different host dates, roots and input mtimes,
+the canonical builder can install the new opt-in
 `UNIFIED.IMG` through the same FAT16 SYS/MBR path as the reference. It keeps
 FreeCOM 0.85a, SHARE and DOS=LOW with the DFVM bridge disabled. The old guest
 and pristine reference retain their pins, defaults and overlay namespaces.
+Amendment 3 requires the lead's f3-48 differential battery at 100% identical
+results before behavioural acceptance. Vendor byte comparison is superseded;
+UPX pin/unpack tooling is removed. Raw size/section layout is recorded beside
+the packed vendor hash, without claiming equivalent binary representations.
 The source ZIP is placed beside the output image. Source URL publication is
 pending the lead's immutable URL and verification; no live offer is claimed.

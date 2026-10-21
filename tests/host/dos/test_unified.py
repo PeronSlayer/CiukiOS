@@ -11,7 +11,6 @@ import re
 import shlex
 import stat
 import subprocess
-import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -25,6 +24,12 @@ spec.loader.exec_module(unified)
 
 
 class ProvenanceTests(unittest.TestCase):
+    map_fixture = ("linker timestamp and absolute paths omitted from section evidence\n"
+                   "Segment                Class          Group          Address         Size\n"
+                   "=======                =====          =====          =======         ====\n"
+                   "HMA_TEXT               CODE           DGROUP         0000:0020       00001000\n"
+                   "\n                        +--------+\n| next map section |\n")
+
     def test_reference_is_versioned_without_provisioning_symlink(self):
         ref = unified.reference_module()
         self.assertEqual(ref.RELEASE, ROOT / "third_party/freedos/1.3")
@@ -151,78 +156,6 @@ class ProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "modified"):
                 unified.prepare_tools(out)
 
-    def test_upx_archive_tools_and_vendor_failure_preserve_packed_pin(self):
-        executable, pins = unified.prepare_upx()
-        self.assertEqual(unified.digest(executable), pins["members"][pins["executable"]]["sha256"])
-        packed = unified.reference_module().reference_files()[0]["/KERNEL.SYS"]
-        if pins["vendor"]["unpacked"]["sha256"] is None:
-            with self.assertRaisesRegex(ValueError, "NotPackedException"):
-                unified.unpacked_vendor()
-        else:
-            raw, provenance = unified.unpacked_vendor()
-            self.assertEqual(unified.sha(raw), pins["vendor"]["unpacked"]["sha256"])
-            self.assertEqual(provenance["vendor"], pins["vendor"])
-        self.assertEqual(packed, unified.reference_module().reference_files()[0]["/KERNEL.SYS"])
-        bad = copy.deepcopy(pins); bad["archive"]["sha256"] = "0" * 64
-        with patch.object(unified.json, "loads", return_value=bad), self.assertRaisesRegex(ValueError, "archive pin"):
-            unified.prepare_upx()
-
-    def test_upx_comparison_uses_only_verified_unpacked_representation(self):
-        kernel = b'code\0FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled Oct 21 2026]\n\0data'
-        raw = kernel.replace(b'Oct 21 2026', b'May 14 2021')
-        packed = b'packed synthetic vendor, not runtime evidence'
-        _, original = unified.prepare_upx()
-        pins = copy.deepcopy(original)
-        pins["vendor"]["packed"] = dict(size=len(packed), sha256=unified.sha(packed))
-        pins["vendor"]["unpacked"] = dict(size=len(raw), sha256=unified.sha(raw))
-        def unpack(command, **kwargs):
-            self.assertEqual(command[1], "-d")
-            target = Path(command[2]); self.assertEqual(target.read_bytes(), packed)
-            target.write_bytes(raw)
-            return subprocess.CompletedProcess(command, 0, "synthetic unpack", "")
-        with tempfile.TemporaryDirectory(dir=ROOT / "build/codex") as directory, \
-             patch.object(unified, "UPX_EVIDENCE", Path(directory) / "synthetic.json"), \
-             patch.object(unified, "prepare_upx", return_value=(Path('/synthetic/upx'), pins)), \
-             patch.object(unified, "reference_module") as ref, \
-             patch.object(unified.subprocess, "run", side_effect=unpack):
-            ref.return_value.reference_files.return_value = ({"/KERNEL.SYS": packed}, {})
-            result = unified.pristine_comparison(kernel)
-            self.assertEqual(result["reference_sha256"], unified.sha(raw))
-            self.assertEqual(result["reference_representation"]["vendor"], pins["vendor"])
-            pins["vendor"]["unpacked"]["sha256"] = "0" * 64
-            with self.assertRaisesRegex(ValueError, "unpacked vendor kernel pin"):
-                unified.pristine_comparison(kernel)
-            pins["vendor"]["packed"]["sha256"] = "0" * 64
-            with self.assertRaisesRegex(ValueError, "packed vendor kernel pin"):
-                unified.pristine_comparison(kernel)
-
-    def test_upx_unsafe_incomplete_and_corrupt_tar_rejected_before_import(self):
-        _, original = unified.prepare_upx()
-        parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=parent) as directory:
-            folder = Path(directory); archive = folder / "upx.tar.xz"; pinfile = folder / "pin.json"
-            good = tarfile.TarInfo("tools/upx"); good.size = 4
-            link = tarfile.TarInfo("tools/link"); link.type = tarfile.SYMTYPE; link.linkname = "/outside"
-            bomb = tarfile.TarInfo("tools/bomb"); bomb.size = 5 * 1024 * 1024
-            cases = [[(tarfile.TarInfo(name), b"")] for name in ("../escape", "/absolute", "a/../b", "a\\b")]
-            cases += [[(good, b"upx!"), (good, b"upx!")], [(link, b"")], [], [(good, b"bad!")],
-                      [(bomb, b"0" * bomb.size)]]
-            for entries in cases:
-                with self.subTest(names=[i.name for i, _ in entries]):
-                    with tarfile.open(archive, "w:xz") as tar:
-                        for info, data in entries: tar.addfile(info, io.BytesIO(data))
-                    pins = copy.deepcopy(original)
-                    pins["archive"].update(path=str(archive.relative_to(ROOT)), size=archive.stat().st_size,
-                                           sha256=unified.digest(archive))
-                    pins["members"] = {"tools/upx": dict(size=4, sha256=unified.sha(b"upx!"))}
-                    pins["executable"] = "tools/upx"
-                    pinfile.write_text(json.dumps(pins))
-                    with patch.object(unified, "UPX_PIN", pinfile), self.assertRaises(ValueError):
-                        unified.prepare_upx(folder / "out")
-                    self.assertFalse((folder / "out").exists())
-
-
-class BuildTests(unittest.TestCase):
     def test_patch_changes_only_two_date_sites_and_preserves_upstream_default(self):
         original = unified.sources()
         changed = unified.patched_sources(original)
@@ -233,14 +166,19 @@ class BuildTests(unittest.TestCase):
                 if re.search(rb'\b__(?:DATE|TIME|TIMESTAMP)__\b', line):
                     self.assertEqual(line, b'#define CIUKI_BUILD_DATE __DATE__', name)
         self.assertEqual({n: unified.sha(changed[n]) for n in manifest["source_hashes"]}, manifest["source_hashes"])
-        self.assertIn('ALLCFLAGS=' + ' '.join(unified.date_flags(manifest)) + ' \n', unified.build_config(manifest))
-        self.assertNotIn('-fi', unified.build_config(manifest))
+        self.assertEqual((manifest["date"], manifest["time"], manifest["epoch"]),
+                         ("May 14 2021", "00:00:00", 1620950400))
+        self.assertIn('ALLCFLAGS=' + ' '.join(unified.date_flags()) + ' \n', unified.build_config(manifest))
+        self.assertTrue(all(not any(c.isspace() for c in flag) for flag in unified.date_flags()))
+        self.assertNotIn('CIUKI_BUILD_DATE=', unified.build_config(manifest))
+        self.assertNotIn('__DATE__', unified.date_header(manifest))
+        self.assertNotIn('__TIME__', unified.date_header(manifest))
         make = next(line[5:] for line in unified.build_config(manifest).splitlines() if line.startswith("MAKE="))
         # Preserve the pinned SYS flags while supplying the date there too;
         # sys/makefile does not consume ALLCFLAGS.
         upstream_flags = re.search(rb'^CFLAGST=(.+)', original["mkfiles/watcom.mak"], re.M)[1].strip().decode()
         self.assertEqual(shlex.split(make), ["wmake", "-ms", "-h",
-            "CFLAGST=-fo=.obj " + upstream_flags + " " + " ".join(unified.date_flags(manifest))])
+            "CFLAGST=-fo=.obj " + upstream_flags + " " + " ".join(unified.date_flags())])
         # Real host preprocessing checks fallback semantics, not OW execution.
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as name:
@@ -251,7 +189,9 @@ class BuildTests(unittest.TestCase):
                 return subprocess.check_output(["gcc", "-E", "-P", "-x", "c", "-I", name, *flags, "-"], input=source)
             upstream = preprocess(original["hdr/version.h"])
             self.assertEqual(preprocess(changed["hdr/version.h"]), upstream)
-            fixed = preprocess(changed["hdr/version.h"], ["-DCIUKI_BUILD_DATE=\"" + manifest["date"] + "\""])
+            forced = Path(name) / "ciuki-build-date.h"
+            forced.write_text(unified.date_header(manifest))
+            fixed = preprocess(changed["hdr/version.h"], ["-include", str(forced)])
             self.assertIn(('"' + manifest["date"] + '"').encode(), fixed)
 
     def test_patch_pin_context_postimage_and_manifest_are_checked(self):
@@ -299,76 +239,79 @@ class BuildTests(unittest.TestCase):
     def test_build_uses_manifest_macros_and_checks_postbuild_sources(self):
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
         manifest, _, _ = unified.reproducible_inputs()
-        kernel = b'FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled Oct 21 2026]\n' + b'\0' * 1024
+        kernel = b'FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled May 14 2021]\n' + b'\0' * 1024
         execution = {n: dict(returncode=0, output="synthetic native probe") for n in ("wmake", "wcc", "wlink", "wlib")}
         with tempfile.TemporaryDirectory(dir=parent) as name:
-            for failure in (None, "probe", "source"):
+            for failure in (None, "probe", "source", "header", "config", "layout"):
                 with self.subTest(failure=failure):
                     calls = []
                     def run(command, **kwargs):
                         calls.append(command)
                         work = Path(kwargs["cwd"])
                         if Path(command[0]).name == "wcc":
-                            self.assertEqual(command[3:5], unified.date_flags(manifest))
-                            self.assertNotIn("__DATE__", (work / "date-probe.c").read_text())
+                            self.assertEqual(command[3:4], unified.date_flags())
+                            self.assertEqual((work / "../ciuki-build-date.h").read_text(), unified.date_header(manifest))
+                            probe = Path(command[-1])
+                            self.assertNotIn("__DATE__", probe.read_text())
                             value = b"wrong" if failure == "probe" else (manifest["date"] + "|" + manifest["time"]).encode()
-                            (work / "date-probe.obj").write_bytes(value)
+                            Path(command[-2].removeprefix("-fo=")).write_bytes(value)
                         else:
                             self.assertEqual(command, ["make", "all"])
                             self.assertEqual((work / "config.mak").read_text(), unified.build_config(manifest))
-                            self.assertFalse((work / "ciuki-build-date.h").exists())
+                            self.assertEqual((work / "ciuki-build-date.h").read_text(), unified.date_header(manifest))
                             (work / "bin/kernel.sys").write_bytes(kernel)
                             (work / "kernel/kernel.sys").write_bytes(kernel)
-                            (work / "kernel/kernel.map").write_text("synthetic map")
+                            (work / "kernel/kernel.map").write_text("bad map" if failure == "layout" else self.map_fixture)
                             if failure == "source":
                                 (work / "hdr/version.h").write_bytes(b"unexpected build edit")
+                            if failure in ("header", "config"):
+                                (work / ("ciuki-build-date.h" if failure == "header" else "config.mak")).write_text("corrupt")
                         return subprocess.CompletedProcess(command, 0)
                     with patch.object(unified, "prepare_tools", return_value=(Path("/synthetic-ow"), {"tools": {}, "support_files": {}})), \
                             patch.object(unified, "host_environment", return_value={}), \
                             patch.object(unified, "tool_probe", return_value=execution), \
                             patch.object(unified.subprocess, "run", side_effect=run), \
-                            patch.object(unified, "pristine_comparison", side_effect=ValueError("synthetic vendor unavailable")), \
                             patch.object(unified, "link_audit", return_value=[]):
                         record = unified.build(Path(name) / str(failure), mtime=946684800)
                     self.assertEqual(record["status"], "built-unqualified" if failure is None else "blocked")
                     self.assertEqual(len(calls), 1 if failure == "probe" else 2)
                     self.assertEqual((Path(record["root"]) / "KERNEL.SYS").exists(), failure is None)
                     if failure is None:
-                        self.assertEqual(record["pristine_comparison"]["status"], "blocked")
-                        self.assertIn("synthetic vendor unavailable", record["pristine_comparison"]["error"])
+                        self.assertEqual(record["kernel_provenance"]["behavioural_equivalence"]["status"], "pending-lead-f3-48")
+                        self.assertNotIn("pristine_comparison", record)
                     else:
-                        self.assertIn("macro probe failed" if failure == "probe" else "beyond patch 0001", record["error"])
+                        message = {"probe": "macro probe failed", "source": "beyond patch 0001",
+                                   "header": "external build inputs", "config": "external build inputs",
+                                   "layout": "section layout"}[failure]
+                        self.assertIn(message, record["error"])
 
-    def test_comparison_requires_raw_bytes_roots_input_dates_patch_and_pristine(self):
+    def test_comparison_requires_raw_bytes_roots_host_dates_patch_and_layout(self):
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as name:
             roots = [Path(name) / "a", Path(name) / "longer-b"]
             records = []
             manifest, raw, _ = unified.reproducible_inputs()
-            kernel = b'code\0FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled Oct 21 2026]\n\0data'
-            pristine = kernel.replace(b'Oct 21 2026', b'May 14 2021')
-            comparison = unified.masked_pristine_compare(kernel, pristine)
-            comparison["reference_representation"] = {"synthetic": True}
+            kernel = b'code\0FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled May 14 2021]\n\0data'
             hashes = {n: unified.sha(b) for n, b in unified.patched_sources(unified.sources()).items()}
             for i, root in enumerate(roots):
                 root.mkdir(); (root / "KERNEL.SYS").write_bytes(kernel)
-                records.append(dict(schema=2, status="built-unqualified", root=str(root),
-                    input_mtime=(946684800, 1609459200)[i], wall_date="2026-10-21T00:00:00+00:00",
+                (root / "source/kernel").mkdir(parents=True)
+                (root / "source/kernel/kernel.map").write_text(self.map_fixture)
+                records.append(dict(schema=3, status="built-unqualified", root=str(root),
+                    input_mtime=(946684800, 1609459200)[i], wall_date=f"2026-10-{21+i}T00:00:00+00:00",
                     unmodified=False, modification=unified.MODIFICATION, build_inputs=manifest,
                     build_manifest_sha256=unified.sha(raw), kernel_sha256=unified.sha(kernel), size=len(kernel),
                     source_hashes=hashes, pristine_source_hashes=unified.ledger("kernel"),
                     source_archive_sha256=unified.SOURCE_PINS["kernel"][2], config=unified.build_config(manifest),
-                    host={}, tools={}, support_files={}, linked_objects=[], pristine_comparison=comparison))
-            with patch.object(unified, "unpacked_vendor", return_value=(pristine, {"synthetic": True})):
-                self.assertTrue(unified.compare(*records))
-                wrong = copy.deepcopy(records[1]); wrong["pristine_comparison"] = {"status": "PASS"}
-                with self.assertRaisesRegex(ValueError, "evidence"):
-                    unified.compare(records[0], wrong)
-            # Real packed vendor bytes cannot qualify these synthetic binaries.
-            with self.assertRaises(ValueError):
-                unified.compare(*records)
+                    date_header=unified.date_header(manifest),
+                    kernel_provenance=unified.kernel_provenance(root / "source", kernel),
+                    host={}, tools={}, support_files={}, linked_objects=[]))
+            self.assertTrue(unified.compare(*records))
+            self.assertEqual(records[0]["kernel_provenance"]["behavioural_equivalence"]["status"], "pending-lead-f3-48")
             for key, value in (("root", records[0]["root"]),
                                ("status", "blocked"), ("input_mtime", 946684801),
+                               ("wall_date", records[0]["wall_date"]), ("date_header", "wrong"),
+                               ("schema", 2), ("kernel_provenance", {}),
                                ("kernel_sha256", "bad"), ("source_hashes", {"bad": "source"}),
                                ("build_inputs", {}), ("build_manifest_sha256", "bad"), ("unmodified", True),
                                ("tools", {"wcc": "wrong"}), ("support_files", {"h/dos.h": "wrong"}),
@@ -378,25 +321,27 @@ class BuildTests(unittest.TestCase):
             (roots[1] / "KERNEL.SYS").write_bytes(b"different")
             with self.assertRaises(ValueError): unified.compare_rebuilds(*records)
 
-    def test_pristine_comparison_masks_only_the_unique_fixed_date(self):
-        kernel = b'code\0FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled Oct 21 2026]\n\0data'
-        pristine = kernel.replace(b'Oct 21 2026', b'May 14 2021')
-        result = unified.masked_pristine_compare(kernel, pristine)
-        self.assertEqual(result["date_size"], 11)
-        self.assertEqual(result["compared_bytes"], len(kernel) - 11)
-        self.assertEqual(result["reference_sha256"], unified.sha(pristine))
-        for bad in (pristine + b'\0', pristine.replace(b'code', b'Code'), pristine.replace(b'data', b'datA'),
-                    pristine.replace(b'2043', b'2044'), pristine.replace(b'May', b'Bad'), b'UPX!packed',
-                    pristine + pristine, b'X' + pristine[:-1]):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                unified.masked_pristine_compare(kernel, bad)
-        with self.assertRaisesRegex(ValueError, "pinned build date"):
-            unified.masked_pristine_compare(pristine, pristine)
-        vendor = unified.reference_module().reference_files()[0]["/KERNEL.SYS"]
-        self.assertEqual(len(vendor), 46256)
-        self.assertEqual(vendor.find(b'UPX!'), 85)
-        with self.assertRaisesRegex(ValueError, "UPX marker"):
-            unified.masked_pristine_compare(kernel, vendor)
+    def test_kernel_layout_and_packed_reference_provenance(self):
+        parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as name:
+            work = Path(name); (work / "kernel").mkdir()
+            mapping = work / "kernel/kernel.map"
+            mapping.write_text(self.map_fixture)
+            kernel = b"raw uncompressed kernel"
+            record = unified.kernel_provenance(work, kernel)
+            self.assertEqual(record["rebuilt"]["sha256"], unified.sha(kernel))
+            self.assertEqual(record["rebuilt"]["size"], len(kernel))
+            self.assertEqual(record["rebuilt"]["sections"], ["HMA_TEXT CODE DGROUP 0000:0020 00001000"])
+            self.assertEqual(record["reference"]["size"], 46256)
+            self.assertEqual(record["reference"]["sha256"],
+                             "932c0c155701eddb7b902f7269a1b2ce31f5c82a6dc195172f2336d18a74e1fb")
+            self.assertEqual(record["vendor_byte_comparison"]["status"], "replaced-by-amendment-3")
+            self.assertEqual(record["behavioural_equivalence"]["status"], "pending-lead-f3-48")
+            self.assertNotIn("pristine_comparison", record)
+            for bad in ("no segment table", "Segment Class Group Address Size\n(no rows)\n"):
+                mapping.write_text(bad)
+                with self.assertRaisesRegex(ValueError, "section layout"):
+                    unified.kernel_provenance(work, kernel)
 
     def test_link_map_rejects_opaque_runtime_and_math_library(self):
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
@@ -426,7 +371,7 @@ class DistributionTests(unittest.TestCase):
             with zipfile.ZipFile(Path(name) / "one.zip") as archive:
                 for role, (path, _, pin) in unified.SOURCE_PINS.items():
                     self.assertEqual(unified.sha(archive.read("upstream/" + path)), pin)
-                for path in ("ciukios/scripts/unified_dos.py", "ciukios/config/upx.json", "ciukios/tests/host/dos/reference_mbr.asm",
+                for path in ("ciukios/scripts/unified_dos.py", "ciukios/tests/host/dos/reference_mbr.asm",
                              "ciukios/src/boot/full_boot.asm", "ciukios/src/boot/full_stage1_loader.asm",
                              "ciukios/third_party/freedos/1.3/boot16.bin", "build-inputs/config.mak",
                              "ciukios/third_party/freedos/unified/ciuki/build.json",
@@ -437,7 +382,8 @@ class DistributionTests(unittest.TestCase):
                 self.assertEqual(archive.read(prefix + "ciuki/build.json"), raw)
                 self.assertEqual(archive.read(prefix + manifest["patch"]["path"]), date_patch)
                 self.assertEqual(archive.read("build-inputs/config.mak"), unified.build_config(manifest).encode())
-                self.assertNotIn("build-inputs/ciuki-build-date.h", archive.namelist())
+                self.assertEqual(archive.read("build-inputs/ciuki-build-date.h"), unified.date_header(manifest).encode())
+                self.assertNotIn("ciukios/config/upx.json", archive.namelist())
 
     def test_notices_profiles_identities_and_corruption_readback(self):
         ref = unified.reference_module()

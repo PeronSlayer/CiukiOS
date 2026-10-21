@@ -11,7 +11,10 @@ and [compiler user guide](https://open-watcom.github.io/open-watcom-1.9/cguide.h
 The actual inputs are the literal nested source archives from the pinned
 FreeDOS 1.3 packages, checked against the f3-54 per-file ledger. The release
 page distinguishes the 386/FAT32 package binary from the other release builds.
-Amendment 1 now requires the strict masked pristine comparison described below.
+**Current authority: Amendment 3**, described at the end of this record.
+It supersedes the masked byte comparison, UPX dependency and earlier date
+configuration below. The Amendment 1/2 sections retain historical outcomes;
+their failed vendor-unpack prerequisite no longer blocks qualification.
 
 Relevant K2043 sources are `makefile:74–122`, `config.m`,
 `mkfiles/{generic,watcom,owlinux}.mak`, `kernel/makefile`, `drivers/makefile`,
@@ -38,21 +41,23 @@ the official release URL uses hyphens. The raw bytes and size match the
 published asset coordinates. Tools remain build-time dependencies; no
 Watcom CRT is authorised in the GPL kernel.
 
-Run these host checks sequentially, at nice 19. Use fresh roots and the two
-input mtimes specified by f3-55 Amendment 1. Wall-clock dates are recorded,
-but this amended input-date comparison may run on one host calendar day.
+Run these host checks sequentially, at nice 19, using fresh roots and the two
+input mtimes below. Amendment 3 additionally requires different observed host
+calendar dates; changing input mtimes does not simulate a different host clock.
 
 ```sh
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-a --mtime 946684800
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-b-longer --mtime 1609459200
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment1-a/build.json build/codex/h55-amendment1-b-longer/build.json
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-a --mtime 946684800
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-b-longer --mtime 1609459200
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment3-a/build.json build/codex/h55-amendment3-b-longer/build.json
 nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v
 nice -n 19 bash tests/host/dos/run_file_api.sh
 nice -n 19 bash tests/host/dos/run_hook_cpu.sh
 nice -n 19 bash scripts/test/host_kernel_tests.sh
-nice -n 19 bash scripts/test/host_fs_tests.sh
-python3 -B scripts/gen_api_reference.py
-nice -n 19 make CAP= apps
+# Only if filesystem glue changes:
+# nice -n 19 bash scripts/test/host_fs_tests.sh
+# Only if a public header changes:
+# python3 -B scripts/gen_api_reference.py
+# nice -n 19 make CAP= apps
 ```
 
 The checker records blocked attempts in `build.json`; no binary or qualification
@@ -61,10 +66,11 @@ loader and the real kernel's initial relocation with libx86emu, stopping at
 upstream trace `3`, before `FreeDOSmain`. Its sparse synthetic sectors are
 host CPU evidence only. It checks the complete kernel load at 0060:0000 and
 relocated code/stack bounds. It does not claim a complete VM/DOS boot.
-Comparison checks raw bytes, patched/pristine source manifests, patch/date
-manifest, tool/host pins and link closure, and independently repeats the strict
-masked pristine comparison for both kernels. Only after these and the CPU
-checks pass is `build/unified-dos/qualified.json` written.
+Comparison checks raw bytes, patched/pristine source manifests, the external
+header/config, tool/host pins, link closure and size/section provenance. Only
+after these and the host CPU checks pass is `build/unified-dos/qualified.json`
+written. This enables the opt-in lead test image and explicitly records f3-48
+behavioural acceptance as pending; no runtime PASS is inferred.
 
 `kernel=unified` is schema value 2 in the per-game DOS Box settings. Existing
 values and the default remain unchanged. In a conformance `BOOT.CFG` selector,
@@ -109,7 +115,7 @@ This original local artifact has no assigned publication URL. Its hash is
 historical; Amendment 1 adds the patch/manifest/rationale to corresponding
 source and therefore changes the source archive hash.
 
-## Amendment 1
+## Amendment 1 (historical; date and comparison gate superseded by Amendment 3)
 
 The result is **unmodified except patch 0001 (reproducible date)**. The
 [numbered patch and rationale](../../third_party/freedos/unified/ciuki/patches/README.md)
@@ -179,7 +185,7 @@ real link-map, rebuilt-kernel CPU or guest-runtime qualification. No public
 header changed; API-doc regeneration and the app rebuild are not required by
 this amendment. The source URL remains unassigned.
 
-## Amendment 2
+## Amendment 2 (historical; UPX prerequisite superseded by Amendment 3)
 
 Scope: items 1–4 only, on top of `67e0ef5a` and the lead's item-4 directive
 commit `2c26af51`. Patch 0001, the guest/profile/default/COW identities, pinned
@@ -296,3 +302,91 @@ The amended local source ZIP is 2,077,810 bytes, SHA-256
 `61c6c25c7764a488c1ec410d2257aee6666f26ec83c13174654dbf6aa45ebe51`.
 It is a local review artifact, with no live source-offer URL claimed.
 No public header changed; API-doc/app regeneration is not required here.
+
+## Amendment 3
+
+Scope is limited to the lead's amendment on top of `8ac5d72f` (the worktree
+also contains the lead's `69a6a781` directive-text commit). The lead log
+`build/lead/h55-a2/make.log:37–44` shows E1139: WCC/wmake split
+`-dCIUKI_BUILD_DATE="Oct 21 2026"` at its spaces. The fixed input is now the
+K2043 release date **14 May 2021**, confirmed by the
+[official release](https://github.com/FDOS/kernel/releases/tag/ke2043) and
+`APPINFO/KERNEL.LSM` (`Entered-date: 2021-05-14`) inside the unchanged,
+SHA-pinned [kernel package](https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.3/base/kernel.zip).
+The fork manifest pins `May 14 2021`, `00:00:00` and epoch 1620950400.
+Patch 0001 and both source postimage hashes are unchanged.
+
+The generated external `source/ciuki-build-date.h` defines only
+`CIUKI_BUILD_DATE`/`CIUKI_BUILD_TIME`. Kernel `ALLCFLAGS`, SYS `CFLAGST` and
+the native probe share `-fi=../ciuki-build-date.h`, a single relative token
+without spaces or absolute roots. The
+[OW1.9 user guide](https://open-watcom.github.io/open-watcom-1.9/cguide.html)
+documents forced include before the source. SYS's upstream flags/object suffix
+are retained. The probe source and cwd are in SYS, matching production lookup.
+Both external inputs are recorded and checked after make; corresponding source
+includes the exact header. Compiler predefined macros are not redefined.
+
+The lead replaced the masked byte-comparison requirement after UPX 5.2.1's
+`NotPackedException` on the flattened SYS wrapper. The checker no longer
+attempts decompression, masking or wrapper reconstruction. Its explicit status
+is `replaced-by-amendment-3`, rather than a blocked masked comparison.
+`config/upx.json`, extraction/unpack routines, the CLI option and their obsolete
+tests are removed; no other build path uses them. Unrelated UPX signature
+recognition in the Win32 executable census stays unchanged.
+
+Build records use schema 3. Successful builds carry the raw kernel's hash,
+size and normalized Wlink Segment/Class/Group/Address/Size table beside the
+original packed vendor hash/size. The complete map is retained and hashed;
+source/license closure remains mandatory. The flat SYS has no executable
+section header: Wlink is the section-layout authority. OW1.9's pinned source
+`OW19/bld/wl/c/mapio.c:214–227,249–295` writes that table, excluding debug
+classes. Neither raw and packed sizes nor their hashes are expected to match.
+
+Acceptance is (a) byte-identical builds under different roots, input mtimes
+and observed host calendar dates; (b) **100% identical results from the
+unchanged f3-48 differential conformance battery**, rebuilt candidate against
+the unchanged vendor reference; (c) recorded size/section provenance. Same-day
+build records are rejected even when their input mtimes differ. Header/config,
+source manifests and tool/link inputs must match exactly. Host qualification
+permits constructing the opt-in test fixture, with behavioural acceptance
+explicitly `pending-lead-f3-48`. The lead performs the battery; no default
+switch, binding change, memory-limit change or new runtime code is included.
+
+Amendment 3 exact host results and remaining runtime items are recorded in
+`build/codex/f3-55-report.md`. No public header or filesystem glue changed;
+API-document/app regeneration and the filesystem host suite are not required
+by this amendment. The native kernel host suite is required by build integration.
+
+Amendment 3 results on 2026-10-21 (each host command ran alone at nice 19;
+no added ASAN/LSAN overrides):
+
+| Exact command (stdout/stderr saved under `build/codex/h55-amendment3-logs/`) | Result |
+| --- | --- |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v` | PASS, exit 0; 65 tests, 49.002 s (`dos-unit.log`). |
+| `nice -n 19 bash tests/host/dos/run_file_api.sh` | PASS, exit 0 (`file-api.log`). |
+| `nice -n 19 bash tests/host/dos/run_hook_cpu.sh` | PASS, exit 0; existing production guest CPU checks, 0 unexpected traps (`hook-cpu.log`). |
+| `nice -n 19 bash scripts/test/host_kernel_tests.sh` | BLOCKED, exit 1, LeakSanitizer fatal ptrace restriction (`kernel-host.log:280–283`); no override. |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-a --mtime 946684800` | BLOCKED, exit 1; all five native Watcom tools return SIGSYS (-31), before probe/make (`build-a.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment3-b-longer --mtime 1609459200` | BLOCKED, exit 1; same native execution restriction (`build-b.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment3-a/build.json build/codex/h55-amendment3-b-longer/build.json` | Refuses qualification, exit 1; two successful builds required (`compare.log`). |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p test_unified.py -v` | PASS, exit 0; final focused rerun, 16 tests, 2.673 s (`unified-final.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --source-out build/codex/f3-55-amendment3-source.zip` | PASS, exit 0; complete member read-back (`source.log`). |
+| `git diff --check` | PASS, exit 0. |
+
+The Amendment 3 source ZIP is 2,075,735 bytes, SHA-256
+`e99766c98542a96ec42960c11ceac72a19e7ebabb161d7c28d92b8aef10b924e`.
+It includes the generated header and keeps the upstream archives/patch intact;
+no UPX pin or executable is included. Publication URL remains unassigned.
+
+H55-01 host provenance and H55-04 unchanged selector regressions pass. H55-02
+native tools/build qualification is locally blocked by SIGSYS; neither actual
+rebuilt-kernel size/hash nor real map/closure evidence exists from these two
+attempts. H55-03 rebuilt-kernel load/relocation awaits those builds and a host
+where LSan completes. H55-05 source-bundle/read-back host checks pass; canonical
+image read-back and immutable source publication are pending. Behavioural
+acceptance remains pending the lead's 100% identical f3-48 results, followed by
+the recorded conventional-memory/largest-MCB measurements. Host units and
+synthetic maps are not runtime or native build evidence. The lead reruns the
+checker with fresh roots and different observed host dates, and the kernel host
+suite with its sanitizer policy intact. No additional implementation decision
+is required by Amendment 3.
