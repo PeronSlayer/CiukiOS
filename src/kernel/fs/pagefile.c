@@ -1,7 +1,7 @@
 /* f0-49 pagefile adapter (M4). The pager's backing file lives on the
  * writable fixed FAT system volume. open/grow/shrink/map run on the pager
  * manager through the VFS, one bounded volume reservation per step: growth
- * uses the append publication order (zero data, detached chain, tail link,
+ * uses the append metadata publication order (detached chain, tail link,
  * length), shrink publishes the shorter length before releasing the tail,
  * and live clusters never move. Page I/O bypasses FAT and the block cache:
  * prevalidated slot runs, reserved f1-83 request records, the physical
@@ -37,7 +37,11 @@ static int reopen(struct pagefile *pf, bool create)
     if (e) return e;
     pf->table_live = true;
     /* Exclusive: no other description can read swap bytes or move the file. */
-    int h = vfs_open(&pf->table, pf->path, VFS_READ | VFS_WRITE | (create ? VFS_CREATE : 0),
+    int h = vfs_open(&pf->table, pf->path, VFS_READ | VFS_WRITE,
+                     VFS_DENY_ALL, FAT_ATTR_HIDDEN | FAT_ATTR_SYSTEM);
+    pf->created = h == -FS_ENOENT && create;
+    if (pf->created)
+        h = vfs_open(&pf->table, pf->path, VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE,
                      VFS_DENY_ALL, FAT_ATTR_HIDDEN | FAT_ATTR_SYSTEM);
     if (h < 0) { release(pf, false); return h; }
     pf->handle = h; pf->open = true;
@@ -70,6 +74,9 @@ static int pf_open(void *ctx, uint32_t *existing)
     if (!e) e = blk_request_reserve(&pf->out, PAGER_OUT_REQUESTS);
     if (e) { release(pf, true); return e; }
     *existing = size / PAGER_EXTENT_BYTES;
+#ifndef FS_HOST
+    klog("[pager] open created=%u bytes=%u existing=%u cluster_bytes=%u", pf->created, size, *existing, pf->cluster_bytes);
+#endif
     return 0;
 }
 /* Sector runs of one extent -> page slots fully inside a contiguous run.

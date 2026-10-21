@@ -1101,7 +1101,7 @@ int vfs_pagefile_extend(struct vfs_table *t, int h, uint32_t size) {
     if (!e) {
         struct fat_entry before=d->node->entry;
         t->vfs->io_file[d->node->drive]=d->node;
-        e=VFS_IO(t->vfs,fat_extend(d->node->volume,&d->node->entry,size));
+        e=VFS_IO(t->vfs,fat_reserve(d->node->volume,&d->node->entry,size));
         t->vfs->io_file[d->node->drive]=0;
         if (px_legacy_changed) px_legacy_changed(t->vfs,d->node->volume,&before,&d->node->entry,!e);
     }
