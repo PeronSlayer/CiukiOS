@@ -127,8 +127,8 @@ class BootMenu:
     MENU_TICKS = 55
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
-    SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
-    MENU_HINT = 'Press S for safe mode, L for serial log, H for Hardware check'
+    SAFE_CONFIRMATION = 'Safe mode: P Probe or wait'
+    MENU_HINT = 'S Safe / L Serial log / H Hardware'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe

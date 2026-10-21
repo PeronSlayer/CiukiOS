@@ -85,8 +85,8 @@ class HardwareCheckTests(unittest.TestCase):
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS':'detect_leaks=0'})
     def test_boot_wiring(self):
         menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
-        self.assertIn('H Hardware / P Probe',menu) # 79-column title; the hint line spells out 'Hardware check'
-        self.assertIn('H for Hardware check',menu)
+        self.assertIn('H Hardware/P Probe',menu) # Compact title and quiet hint retain the H choice.
+        self.assertIn("menu_hint db 'S Safe / L Serial log / H Hardware'",menu)
         self.assertIn('je .hardware',menu)
         probes=(ROOT/'src/kernel/probes/probes.c').read_text()
         self.assertLess(probes.index('hardware_check_run();'),probes.index('supervisor_bootstrap();'))

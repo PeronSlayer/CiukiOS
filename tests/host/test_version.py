@@ -86,7 +86,7 @@ class VersionTests(unittest.TestCase):
             subprocess.run(command, cwd=ROOT, check=True)
             data = binary.read_bytes()
             self.assertEqual(len(data) % 512, 0)
-            match = re.search(rb"CiukiOS ([^:\r\n]+): N Normal / S Safe / L Log / H Hardware / P Probe \(3 s\)\r\n\0", data)
+            match = re.search(rb"CiukiOS ([^:\r\n]+): N Normal/S Safe/L Log/H Hardware/P Probe \(3s\)\r\n\0", data)
             with self.subTest(version=shown):
                 self.assertIsNotNone(match)
                 self.assertEqual(match.group(1).decode(), shown)
