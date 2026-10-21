@@ -51,6 +51,7 @@ struct task {
     uint8_t base_priority, effective_priority, inherited_priority, configured_priority;
     uint8_t input_priority, io_priority, io_ticks;
     bool priority_valid, focused;
+    uint32_t device_worker_site; /* active deferred callback; zero outside it */
     uint64_t input_expiry, service_deadline;
     struct kwait *waiting_on;      /* owner dependency; never physical device waits */
     struct kwaiter *sync_waiter;   /* one blocked wait, constant-time IRQ wake */

@@ -1584,6 +1584,8 @@ int dosvm_port_register(struct dosvm_key key, uint16_t first, uint16_t last,
     if (slot == DOSVM_PORTS) return -ENOSPC;
     v->ports[slot].first = first; v->ports[slot].last = last;
     v->ports[slot].arg = arg; v->ports[slot].handler = handler;
+    if (first==0x40 && last>=0x43 && handler==dosvm_pit_port) v->port_hint[0]=(uint8_t)slot;
+    if (first==0x388 && last>=0x389 && handler==dosvm_audio_port) v->port_hint[3]=(uint8_t)slot;
     return 0;
 }
 int dosvm_port_unregister(struct dosvm_key key, uint16_t first)

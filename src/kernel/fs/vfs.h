@@ -75,6 +75,7 @@ struct vfs_table;
 struct vfs_hold_info {
     struct fs_task_identity task;
     char op[12];
+    char site[12];
     uint32_t started;
 };
 /* One namespace wait and one volume/file admission wait per locked turn.
@@ -99,8 +100,8 @@ struct vfs {
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
      * -> device (4). Never wait for a reserved volume with namespace held.
      * Bookkeeping/identity phases hold namespace and the operation's volumes.
-     * VFS_IO drops namespace during filesystem work. Before resuming it drops
-     * the volume mutexes, then reacquires namespace -> volumes. Reservations
+     * VFS_IO drops namespace and volume mutexes during filesystem work,
+     * then reacquires namespace -> volumes. Reservations
      * retire before transport. A separate mutation guard excludes other
      * metadata operations/removal until bookkeeping finishes;
      * per-file readers can pass an identified unrelated writer. Snapshots need only
@@ -171,6 +172,12 @@ void vfs_reserve_locked(struct vfs *, uint32_t drives);
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */
 void vfs_tag_locked(struct vfs *,const char *tag);
+void vfs_site_locked(struct vfs *,const char *site);
+/* Namespace held, no volume reservation on entry/return. A private FAT view
+ * and the reader reference protect an immutable open chain during transport. */
+int vfs_read_identity_locked(struct vfs *,struct vfs_file_identity *,struct fat_volume *,
+    const struct fat_entry *,struct fat_cursor *,bool *,uint64_t *,const uint64_t *,bool,
+    int (*)(void *,uint64_t,size_t),void *,void *,size_t,size_t *);
 struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical;
     struct vfs_pending_waits diagnostics; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);

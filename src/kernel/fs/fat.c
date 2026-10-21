@@ -918,7 +918,7 @@ int fat_truncate(struct fat_volume *v, struct fat_entry *file, uint64_t size) {
     identity_changed(v,file,file,FAT_ID_TRUNCATE);
     return replace(v,file,(uint32_t)size,0,0,0);
 }
-int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint32_t capacity,
+int fat_write_reserved_cursor(struct fat_volume *v, const struct fat_entry *file, struct fat_cursor *cursor, uint32_t capacity,
                        uint64_t pos, const void *data, size_t size, size_t *done) {
     context(v,file->name);
     *done=0; int e=writable(v); if (e) return e;
@@ -928,7 +928,8 @@ int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint3
     identity_changed(v,file,file,FAT_ID_WRITE);
     if ((e=publication_stage(v,FAT_P_DATA))) return e;
     uint32_t cb=(uint32_t)v->spc*512, c;
-    if ((e=chain_at(v,file->first,(uint32_t)pos/cb,&c))) return e;
+    uint32_t index=(uint32_t)pos/cb;
+    if ((e=file_cluster(v,file,cursor,index,&c))) return e;
     unsigned off=(uint32_t)pos%cb;
     while (*done<size) {
         if ((e=writesec(v,cluster_sector(v,c)+off/512,(const uint8_t *)data+*done))) return e;
@@ -936,12 +937,19 @@ int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint3
         if (off==cb && *done<size) {
             uint32_t next; if ((e=fat_get_cluster(v,c,&next))) return e;
             if (!valid(v,next)) return corrupt(v,"reserved_chain",next);
-            c=next; off=0;
+            c=next; index++; off=0;
         }
     }
     /* Only data durability here. FAT, FSInfo and directory sectors are not
      * dirtied. All storage waits occur with IF enabled. */
-    return barrier(v);
+    e=barrier(v);
+    if (!e) cursor_set(cursor,file,index,c);
+    else if (cursor) *cursor=(struct fat_cursor){0};
+    return e;
+}
+int fat_write_reserved(struct fat_volume *v, const struct fat_entry *file, uint32_t capacity,
+                       uint64_t pos, const void *data, size_t size, size_t *done) {
+    return fat_write_reserved_cursor(v,file,0,capacity,pos,data,size,done);
 }
 int fat_publish_reserved(struct fat_volume *v, struct fat_entry *file, bool finish) {
     context(v,file->name);

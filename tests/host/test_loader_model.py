@@ -1,5 +1,8 @@
 import copy
 import json
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 import sys
 import unittest
@@ -7,9 +10,33 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/test'))
 import loader_model as model
+from loader_uart_machine import LoaderUARTMachine
 
 
 class LoaderModelTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
+    def test_usbscan_option_assembled_allowlist(self):
+        menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
+        self.assertIn('jne .usbscan',menu.split('.serial:',1)[1].split('.usbscan:',1)[0])
+        body=menu.split('.usbscan:',1)[1].split('.mode:',1)[0]
+        source=('bits 16\norg 0\nentry:\n'+body+
+                '.mode:\nmov ax,1\nret\n.invalid:\nmov ax,2\nret\n.next:\nxor ax,ax\nret\n'+
+                'times 24576-($-$$) db 0\ndw entry,entry,0,0\n')
+        out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='usbscan-loader-',dir=out) as folder:
+            asm=Path(folder)/'token.asm';binary=Path(folder)/'token.bin';asm.write_text(source)
+            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],check=True)
+            for token in ('usbscan=0','usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
+                machine=LoaderUARTMachine(binary)
+                machine.regs.update(esi=0x800,edi=0,ebp=0,edx=len(token))
+                machine.mem[0x20800:0x20800+len(token)]=token.encode('ascii')
+                machine.run(machine.init)
+                self.assertEqual(machine.read('ax')==0,token=='usbscan=0',token)
+        self.assertEqual(model.boot_options('serial=0 usbscan=0\r\nsafe=1 mode=0x0118'),
+                         {'safe':True,'serial':False,'mode':0x118})
+        for token in ('usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
+            with self.assertRaises(ValueError):model.boot_options(token)
+
     def test_uart_outcomes_and_disable(self):
         for options, state in (({}, 1), ({'bda': 0}, 2), ({'bda': 0x2f8}, 2),
                                ({'scratch': False}, 3), ({'lsr': 0xff}, 4),

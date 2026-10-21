@@ -11,6 +11,8 @@
 #include <ciuki/usb.h>
 #include <ciuki/task.h>
 volatile uint64_t g_ticks;
+struct ciuki_boot_info g_boot;
+struct task *g_current;
 static struct usb_host hosts[USB_HOST_MAX];
 static unsigned host_count=2, created, started, scans, polls, gap_max, host_turns;
 static unsigned current_worker;

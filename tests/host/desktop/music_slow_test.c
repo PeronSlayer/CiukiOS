@@ -23,7 +23,9 @@ static ssize_t volume_read(void *arg, char *buf, size_t bytes)
     struct volume *v=arg;
     assert(!pthread_equal(pthread_self(),ui_thread));
     struct timespec delay={0,25000000}; nanosleep(&delay,NULL); atomic_fetch_add(&reads,1);
-    if (v->fail==1 || (v->fail==2 && atomic_load(&reads)>3)) { errno=EIO; return -1; }
+    /* A late error follows actual playback, including the two-second
+     * startup reservoir. The separate fail==1 case covers priming errors. */
+    if (v->fail==1 || (v->fail==2 && atomic_load(&reads)>3 && atomic_load(&writes))) { errno=EIO; return -1; }
     if (bytes>8192) bytes=8192;
     return read(v->fd,buf,bytes);
 }

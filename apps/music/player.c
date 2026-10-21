@@ -71,7 +71,7 @@ static void *reader(void *ctx)
         if (n>free_frames) n=free_frames;
         if (n>MUSIC_BATCH) n=MUSIC_BATCH;
         /* Publish the startup threshold exactly, independently of batch size. */
-        unsigned threshold=p->reader_rate/10;
+        unsigned threshold=p->reader_rate*MUSIC_START_SECONDS;
         if (p->count<threshold && n>threshold-p->count) n=threshold-p->count;
         pthread_mutex_unlock(&p->reservoir_lock);
         uint64_t begin=p->output->now(p->output->ctx);
@@ -311,7 +311,7 @@ int music_player_pump(struct music_player *p)
     p->view.duration=p->reader_length; p->view.reservoir_frames=p->count;
     if (error) { pthread_mutex_unlock(&p->reservoir_lock); p->stage="decode"; return fail(p,error); }
     if (!p->started) {
-        if (p->count<p->view.rate/10 && !p->eof) { pthread_mutex_unlock(&p->reservoir_lock); return 0; }
+        if (p->count<p->view.rate*MUSIC_START_SECONDS && !p->eof) { pthread_mutex_unlock(&p->reservoir_lock); return 0; }
         p->started=1; p->view.state=MUSIC_PLAYING;
         memset(&p->level,0,sizeof(p->level));
     }

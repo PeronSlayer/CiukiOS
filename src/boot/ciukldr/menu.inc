@@ -437,7 +437,7 @@ config_read:
     jmp .next
 .serial:
     cmp dx, 8
-    jne .mode
+    jne .usbscan
     cmp dword [si], 'seri'
     jne .invalid
     cmp dword [si+4], 'al=1'
@@ -445,6 +445,18 @@ config_read:
     cmp dword [si+4], 'al=0'
     jne .invalid
     and dword [B(flags)], ~CBI_F_SERIAL_LOG
+    jmp .next
+.usbscan:
+    ; Diagnostic policy is consumed from the copied options by the kernel.
+    ; Preserve strict whole-token validation and all existing boot flags.
+    cmp dx, 9
+    jne .mode
+    cmp dword [si], 'usbs'
+    jne .invalid
+    cmp dword [si+4], 'can='
+    jne .invalid
+    cmp byte [si+8], '0'
+    jne .invalid
     jmp .next
 .mode:
     cmp dx, 11

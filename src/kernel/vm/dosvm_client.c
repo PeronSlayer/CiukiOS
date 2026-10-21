@@ -19,10 +19,16 @@ struct binding {
     struct surface *surface;
     bool busy, focused;
     bool observed, video_pending;
+    unsigned vm_base, window_base;
     uint32_t changes, display, starts, vbe_changes, console, state, flags, reason, phase;
     uint16_t mode;
 };
 static struct binding bindings[DOSVM_LIMIT];
+static void binding_priority(const struct binding *b,struct dosvm *v) {
+    if (!b->window_base || !v->task) return;
+    unsigned base=v->fullscreen ? b->vm_base : b->window_base;
+    if (v->task->base_priority!=base) task_set_base(v->task,P_NORMAL,base);
+}
 static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
 static const char *window_probe(void)
 {
@@ -50,13 +56,18 @@ static void window_focus(struct binding *b, bool focused)
 {
     b->focused = focused;
     dosvm_input_focus(b->key, focused);
+    struct dosvm *v=dosvm_lookup(b->key);
+    if (focused && v && v->task) task_input_delivered(v->task);
 }
 static int window_input(struct binding *b, const struct ciuki_input_event *e)
 {
     /* The record was validated; a refusal is a full guest queue (or a VM that
      * lost the single input focus to another window: the desktop's focus
      * message to this window follows). */
-    return dosvm_input_event(b->key, e) ? 0 : -EAGAIN;
+    if (!dosvm_input_event(b->key,e)) return -EAGAIN;
+    struct dosvm *v=dosvm_lookup(b->key);
+    if (v && v->task && !v->fullscreen) task_input_delivered(v->task);
+    return 0;
 }
 
 /* ---- Owner lifecycle ---- */
@@ -168,7 +179,8 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     /* This is a producer dependency, not a physical device wait. Existing
      * sync machinery propagates boosts and withdraws them on every wake. */
     kwait_set_owner(&v->present_wait, v->task);
-    kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(c->wait.timeout_ms));
+    unsigned timeout=c->wait.timeout_ms>33 ? 33 : c->wait.timeout_ms;
+    kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
@@ -330,6 +342,14 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;
         else e = dosvm_boot(v);
+        /* The window may spend a long time in desktop IPC between waits.
+         * Keep the producer at its client's normal base for the binding's
+         * lifetime; WAIT donation still carries transient boosts. */
+        if (!e && v->task && g_current) {
+            b->vm_base=v->task->base_priority;
+            b->window_base=g_current->base_priority>b->vm_base ? g_current->base_priority : b->vm_base;
+            binding_priority(b,v);
+        }
         if (e) {
             release_binding(b);
             if (!b->pid) b = 0; /* released; otherwise collected below/later */
@@ -346,6 +366,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         b->busy = true;
         v = dosvm_lookup(key);
         if (!v) { e = -ESRCH; goto out; }
+        binding_priority(b,v);
         if (op == CIUKI_DOSVM_CLOSE) {
             e = closed_error(release_binding(b));
             if (!b->pid) b = 0; /* binding released */
@@ -374,6 +395,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 if (c.focused) v->fullscreen_suspended=false;
                 e=c.focused ? dosvm_fullscreen_enter(key) : dosvm_fullscreen_leave(key,false);
                 if (e==DISPLAY_FULLSCREEN_WINDOWED) e=0;
+                binding_priority(b,v);
             }
         } else if (op == CIUKI_DOSVM_BACKGROUND) {
             v->fullscreen_pause=c.focused!=0;

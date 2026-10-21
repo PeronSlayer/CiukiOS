@@ -163,6 +163,14 @@ static void present_action_hook(void)
 }
 static void test_wait_present(void)
 {
+    window_fixtures(); unsigned saved_base=g_current->base_priority;
+    g_current->base_priority=9;
+    CHECK(!create_window(0,"Producer base",&present_window));
+    struct dosvm *producer=dosvm_lookup((struct dosvm_key){present_window.id,present_window.generation});
+    CHECK(producer->task->base_priority==9 && !producer->present_wait.head);
+    struct ciuki_dosvm_command close=command_for(present_window.id,present_window.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
+    g_current->base_priority=saved_base;
     for (present_action=0;present_action<21;present_action++) {
         window_fixtures(); g_ticks=10000;
         if (present_action>=19) fs_vbe_available=true;
@@ -211,7 +219,7 @@ static void test_wait_present(void)
                 present_action==12 ? CIUKI_DOSVM_EVENT_TIMEOUT : CIUKI_DOSVM_EVENT_STATE;
             CHECK(c.wait.events&expected);
             if (present_action==1 || present_action==20) CHECK(g_ticks-begin>=3 && g_ticks-begin<=c.wait.frame_ms+3);
-            else if (present_action==12 || present_action==13) CHECK(g_ticks-begin==(present_action==12 ? 50u : 0u));
+            else if (present_action==12 || present_action==13) CHECK(g_ticks-begin==(present_action==12 ? 33u : 0u));
             else CHECK(g_ticks-begin>=3 && g_ticks-begin<=4);
             if (present_action!=12) CHECK(host_present_wakes>wakes);
         }

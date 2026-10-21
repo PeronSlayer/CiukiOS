@@ -36,6 +36,14 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
     tests/host/fs/test_vfs_contention.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_vfs_contention
 build/host/fs/test_vfs_contention
+# f1-87: T23 request mix and 111 ms device commands, physical mutex bounds.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_t23_holds.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released -o build/host/fs/test_t23_holds
+build/host/fs/test_t23_holds
+rm build/host/fs/test_t23_holds
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs tests/host/fs/test_blkreq_timer.c \

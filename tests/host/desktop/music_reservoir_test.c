@@ -25,7 +25,7 @@ static ssize_t volume_read(void *ctx,char *buf,size_t n)
     struct volume *v=ctx;
     if (n==256*1024) atomic_fetch_add(&bulk_reads,1);
     if (atomic_load(&stall_enabled) && ns()>=v->next_stall) {
-        atomic_fetch_add(&stalls,1); ms(500); v->next_stall=ns()+500000000;
+        atomic_fetch_add(&stalls,1); ms(1502); v->next_stall=ns()+2000000000;
     }
     if (atomic_load(&force_stall)) { atomic_store(&entered,1); while (atomic_load(&force_stall)) ms(1); }
     return read(v->fd,buf,n);

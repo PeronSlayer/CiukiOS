@@ -124,4 +124,22 @@ static void dosvm_wait_combined_load(void)
                boost ? 11u : 9u,frame_load_max_ready,frame_load_vm,frame_load_desktop,frame_load_device,ms(stretch_max));
         CHECK(!waiters && !owned_queues);
     }
+    /* The presenter makes no calls for 300 ms. Its VM retains base 9 and
+     * competes with the busy desktop and admitted device work without a
+     * live WAIT donation. Measure pending-IRQ service opportunities. */
+    priority_reset(); normal.user=false;
+    task_set_base(&normal,P_NORMAL,9); task_set_base(&ui,P_NORMAL,9);
+    audio_focus=irq_focus=&normal;
+    task_start(&normal); task_start(&hog); running(&ui); flags=0x200;
+    uint64_t last=g_ticks; unsigned gap=0,vm=0,desktop=0;
+    for (unsigned t=0;t<300;t++) {
+        if (g_current==&normal) {
+            unsigned wait=(unsigned)(g_ticks-last); if (wait>gap) gap=wait;
+            last=g_ticks; vm++;
+        }
+        if (g_current==&ui) desktop++;
+        run_tick(0); kpreempt_point();
+    }
+    CHECK(vm && desktop && gap<=33 && g_ticks-last<=33 && !normal.inherited_priority);
+    printf("F1-87 presenter absent=300ms busy desktop/device load, VM base=9 donation=0 IRQ opportunity_max_ms=%u PASS\n",gap);
 }

@@ -893,6 +893,7 @@ complete:
     d->ops.release(d->ops.arg); return DOS_FILE_DONE;
 }
 static enum dos_file_result execute(struct dos_file *d,struct dos_file_frame *f,bool retry) {
+    d->request.site="dos";
     struct fs_request_scope scope; fs_request_enter(&scope,&d->request);
     enum dos_file_result result=execute_request(d,f,retry);
     fs_request_leave(&scope); return result;

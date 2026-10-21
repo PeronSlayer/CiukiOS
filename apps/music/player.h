@@ -8,6 +8,7 @@
 #define MUSIC_BATCH 4096
 #define MUSIC_DEVICE_FRAMES 2048
 #define MUSIC_COMMANDS 8
+#define MUSIC_START_SECONDS 2u
 /* A backend owns one nonblocking native stream; counters reset at open. */
 struct music_output {
     int (*open)(void *, unsigned *rate);
