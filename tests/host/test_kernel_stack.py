@@ -58,13 +58,15 @@ class KernelStackTests(unittest.TestCase):
     def test_allocator(self):
         source = (ROOT / "src/kernel/core/vmm.c").read_text()
         first = source.index("void *kstack_alloc(")
-        end = source.index("/* ---- user address spaces ---- */", first)
+        # Keep the complete allocator/free routines, excluding the unrelated
+        # global page sampler inserted before the user-address-space section.
+        end = source.index("\n}", source.index("void kstack_free(", first)) + 3
         (self.work / "stack_allocator.inc").write_text(source[first:end])
         binary = self.work / "allocator"
         subprocess.run(["clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-I", str(ROOT / "src/kernel/include"), "-I", str(self.work),
                         str(ROOT / "tests/host/proc/stack_alloc_test.c"), "-o", str(binary)],
-                       check=True, env=self.env, capture_output=True, text=True)
+                       check=True, env=self.env)
         result = subprocess.run([str(binary)], check=True, env=self.env, capture_output=True, text=True)
         self.assertIn("stack allocator: PASS", result.stdout)
 
