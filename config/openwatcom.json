@@ -106,6 +106,14 @@
     }
   },
   "support_files": {
+    "binl/wlink.lnk": {
+      "size": 527,
+      "sha256": "e286840ba286d89fd5b10d68e22478800711c33e26c30e34abff999b7481c103"
+    },
+    "binl/wlsystem.lnk": {
+      "size": 13604,
+      "sha256": "6021f11cab63b9aaa1aea4a661b4ba18eb569d434d83567d13d4d41b7c5c489c"
+    },
     "h/_algmut.h": {
       "size": 15120,
       "sha256": "9c2fdcb5e705817b3c449735f8fd29b9756367a2d37360af68e008459db9b16c"

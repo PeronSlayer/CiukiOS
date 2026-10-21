@@ -122,7 +122,8 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_sys_dependencies_complete_and_pinned_before_extraction(self):
         tools, pins = unified.prepare_tools()
-        required = {"h/stdlib.h", "h/dos.h", "h/ctype.h", "h/fcntl.h", "h/sys/stat.h",
+        required = {"binl/wlink.lnk", "binl/wlsystem.lnk",
+                    "h/stdlib.h", "h/dos.h", "h/ctype.h", "h/fcntl.h", "h/sys/stat.h",
                     "h/mem.h", "h/memory.h", "h/string.h", "h/stdio.h", "h/stddef.h",
                     "h/io.h", "h/unistd.h", "h/errno.h", "h/utime.h", "h/_comdef.h",
                     "lib286/dos/clibs.lib", "lib286/dos/doslfns.lib", "lib286/dos/cstart_t.obj"}
@@ -131,19 +132,23 @@ class ProvenanceTests(unittest.TestCase):
         for name, row in pins["support_files"].items():
             self.assertEqual((tools / name).stat().st_size, row["size"])
             self.assertEqual(unified.digest(tools / name), row["sha256"])
-        self.assertIn(b"libfile cstart_t.obj", (tools / "binl/wlsystem.lnk").read_bytes())
+        self.assertIn(b"@%WATCOM%/binl/wlsystem.lnk", (tools / "binl/wlink.lnk").read_bytes())
+        system = (tools / "binl/wlsystem.lnk").read_bytes()
+        self.assertIn(b"system begin com", system)
+        self.assertIn(b"libfile cstart_t.obj", system)
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as directory:
             out = Path(directory) / "tools"
-            for missing in ("h/dos.h", "lib286/dos/clibs.lib"):
+            for missing in ("h/dos.h", "lib286/dos/clibs.lib", "binl/wlink.lnk", "binl/wlsystem.lnk"):
                 bad = copy.deepcopy(pins); del bad["support_files"][missing]
                 with patch.object(unified.json, "loads", return_value=bad), self.assertRaises(ValueError):
                     unified.prepare_tools(out)
                 self.assertFalse(out.exists())
-            bad = copy.deepcopy(pins); bad["support_files"]["h/stdlib.h"]["sha256"] = "0" * 64
-            with patch.object(unified.json, "loads", return_value=bad), self.assertRaises(ValueError):
-                unified.prepare_tools(out)
-            self.assertFalse(out.exists())
+            for corrupt in ("h/stdlib.h", "binl/wlink.lnk", "binl/wlsystem.lnk"):
+                bad = copy.deepcopy(pins); bad["support_files"][corrupt]["sha256"] = "0" * 64
+                with patch.object(unified.json, "loads", return_value=bad), self.assertRaises(ValueError):
+                    unified.prepare_tools(out)
+                self.assertFalse(out.exists())
             # Existing binl-only installations gain the missing trees without
             # replacing the already verified native tools.
             unified.extract({str(p.relative_to(tools)): p.read_bytes()
@@ -152,6 +157,18 @@ class ProvenanceTests(unittest.TestCase):
             before = (out / "binl/wcc").stat().st_ino
             unified.prepare_tools(out)
             self.assertEqual((out / "binl/wcc").stat().st_ino, before)
+            for name in ("binl/wlink.lnk", "binl/wlsystem.lnk"):
+                path = out / name
+                raw = path.read_bytes()
+                path.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    unified.prepare_tools(out)
+                self.assertFalse(path.exists())
+                path.write_bytes(b"corrupt")
+                with self.assertRaisesRegex(ValueError, "modified"):
+                    unified.prepare_tools(out)
+                self.assertEqual(path.read_bytes(), b"corrupt")
+                path.write_bytes(raw)
             (out / "h/stdlib.h").write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "modified"):
                 unified.prepare_tools(out)
@@ -248,6 +265,12 @@ class ProvenanceTests(unittest.TestCase):
                     def run(command, **kwargs):
                         calls.append(command)
                         work = Path(kwargs["cwd"])
+                        env = kwargs["env"]
+                        self.assertEqual(env["WATCOM"], "/synthetic-ow")
+                        self.assertEqual(env["INCLUDE"], "/synthetic-ow/h")
+                        self.assertEqual(env["LIB"], "/synthetic-ow/lib286:/synthetic-ow/lib286/dos")
+                        self.assertEqual(env["WLINK_LNK"], "/synthetic-ow/binl/wlink.lnk")
+                        self.assertEqual(env["PATH"], "/synthetic-ow/binl:/usr/bin:/bin")
                         if Path(command[0]).name == "wcc":
                             self.assertEqual(command[3:4], unified.date_flags())
                             self.assertEqual((work / "../ciuki-build-date.h").read_text(), unified.date_header(manifest))

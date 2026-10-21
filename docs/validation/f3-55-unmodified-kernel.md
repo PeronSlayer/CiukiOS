@@ -11,8 +11,8 @@ and [compiler user guide](https://open-watcom.github.io/open-watcom-1.9/cguide.h
 The actual inputs are the literal nested source archives from the pinned
 FreeDOS 1.3 packages, checked against the f3-54 per-file ledger. The release
 page distinguishes the 386/FAT32 package binary from the other release builds.
-**Current authority: Amendment 3**, described at the end of this record.
-It supersedes the masked byte comparison, UPX dependency and earlier date
+**Current authority: Amendment 4**, described at the end of this record.
+Amendment 3 supersedes the masked byte comparison, UPX dependency and earlier date
 configuration below. The Amendment 1/2 sections retain historical outcomes;
 their failed vendor-unpack prerequisite no longer blocks qualification.
 
@@ -390,3 +390,81 @@ synthetic maps are not runtime or native build evidence. The lead reruns the
 checker with fresh roots and different observed host dates, and the kernel host
 suite with its sanitizer policy intact. No additional implementation decision
 is required by Amendment 3.
+
+## Amendment 4
+
+Scope: linker dependencies and the fixed Watcom build environment only, over
+`55272090`. The lead's `build/lead/h55-a3/make.log` reaches `wcl -mt`, then
+reports W1107 (`system com` undefined) and E2010 (an empty filename resolves
+to a directory). The existing build sets `WATCOM` but also sets
+`WLINK_LNK=""`; it does not export `INCLUDE` or `LIB`.
+
+Research checked the [K2043 release](https://github.com/FDOS/kernel/releases/tag/ke2043),
+the [OW1.9 release](https://github.com/open-watcom/open-watcom-1.9/releases/tag/ow1.9),
+its [getting-started documentation](https://open-watcom.github.io/open-watcom-1.9/c_readme.html)
+and [compiler user's guide](https://open-watcom.github.io/open-watcom-1.9/cguide.html).
+The latter documents COM linking through `system com` and `wlsystem.lnk`.
+In the pinned OW1.9 source archive,
+`OW19/bld/wl/c/cmdline.c:129–130,214–222` reads `WLINK_LNK` before falling
+back to `wlink.lnk`. The installer contains `binl/wlink.lnk`, which includes
+`@%WATCOM%/binl/wlsystem.lnk`; that file's lines 217–222 define `com`,
+the two DOS library paths and `cstart_t.obj`. Both linker files already fall
+within the extractor's `binl/` selection; individual support-file pins were
+missing. The installed release bytes, rather than the source archive's
+different example initialization file, are the build inputs.
+
+Decision: size/hash-pin both Linux linker files and require them before any
+extraction. Set `WLINK_LNK` to the absolute verified `binl/wlink.lnk` path,
+retaining all upstream initialization directives and its system-file include.
+Keep `WATCOM` rooted at the pinned tools; set `INCLUDE` to its `h/` directory
+and `LIB` to its `lib286/` and `lib286/dos/` directories, separated by a colon
+for the Linux tools. These match the paths used by pinned K2043
+`mkfiles/watcom.mak:6,9–11,19` and `mkfiles/owlinux.mak:8–9`.
+The environment remains constructed explicitly without inheriting host
+Watcom settings. `EDPATH` is unnecessary: no editor is invoked. Generated
+SYS remains a build utility; the guest-kernel CRT/link-map prohibition,
+patch 0001, fixed date and all guest/runtime/selector code stay unchanged.
+
+Verification outcomes and remaining lead evidence are recorded below after
+the sequential host checks, and in `build/codex/f3-55-report.md`.
+
+The pinned linker files are:
+
+| Installer member | Bytes | SHA-256 |
+| --- | --- | --- |
+| `binl/wlink.lnk` | 527 | `e286840ba286d89fd5b10d68e22478800711c33e26c30e34abff999b7481c103` |
+| `binl/wlsystem.lnk` | 13,604 | `6021f11cab63b9aaa1aea4a661b4ba18eb569d434d83567d13d4d41b7c5c489c` |
+
+Amendment 4 results on 2026-10-21 (commands ran alone at nice 19;
+stdout/stderr in `build/codex/h55-amendment4-logs/`, no added sanitizer overrides;
+the original script-level settings remain intact):
+
+| Exact command before log redirection | Result |
+| --- | --- |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v` | PASS, exit 0; 65 tests, 48.947 s (`dos-unit.log`). Includes missing/corrupt linker pins before extraction, installed linker-file loss/corruption, upstream include/COM definitions and both compiler/make environments. |
+| `nice -n 19 bash tests/host/dos/run_file_api.sh` | PASS, exit 0 (`file-api.log`). |
+| `nice -n 19 bash tests/host/dos/run_hook_cpu.sh` | PASS, exit 0; 0 unexpected traps (`hook-cpu.log`). |
+| `nice -n 19 bash scripts/test/host_kernel_tests.sh` | BLOCKED, exit 1; LeakSanitizer fatal ptrace restriction (`kernel-host.log:280–283`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment4-a --mtime 946684800` | BLOCKED, exit 1; all five native tools return SIGSYS (-31), before the compiler probe/make (`build-a.log`). Both linker-file pins verified and recorded in `build.json`. |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment4-b-longer --mtime 1609459200` | BLOCKED, exit 1; same SIGSYS restriction and recorded linker pins (`build-b.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment4-a/build.json build/codex/h55-amendment4-b-longer/build.json` | Refuses qualification, exit 1; two successful builds required (`compare.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --source-out build/codex/f3-55-amendment4-source.zip` | PASS, exit 0; complete corresponding-source member read-back (`source.log`). |
+
+The review source ZIP is 2,076,120 bytes, SHA-256
+`f4353a6517acbce044f7db08acd0b0e2f386d7df7180fd62d153a4a6275d3542`.
+It includes the updated extraction/environment code, linker pins and tests;
+the upstream source archives and patch 0001 remain unchanged. It has no
+assigned publication URL. No public header, filesystem glue or native
+selector changed, so API generation, apps and filesystem host tests are not
+required for this amendment.
+
+H55-01 provenance and H55-04 existing selector regressions pass on the host;
+H55-05 corresponding-source/read-back checks pass. H55-02 actual SYS/kernel
+linking, real link-map closure and two-build qualification remain blocked
+locally. Both attempts used the same host calendar date; the different mtimes
+do not satisfy Amendment 3's distinct-clock requirement. H55-03 rebuilt-kernel
+CPU loading/relocation awaits a successful native build. The lead must rerun
+the checker and kernel host suite outside these sandbox restrictions, prove
+two-host-date reproducibility, and supply the remaining canonical-image,
+f3-48 behavioural and memory evidence under the existing authorisations.
+No new Amendment 4 decision is needed; source publication remains a lead gate.

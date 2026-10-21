@@ -165,7 +165,8 @@ def prepare_tools(output=None):
         if path.stat().st_size != source["size"] or digest(path) != source["sha256"]:
             raise ValueError("Open Watcom source archive pin mismatch")
     support = pins["support_files"]
-    if not {"h/stdlib.h", "h/dos.h", "h/sys/stat.h", "lib286/dos/clibs.lib",
+    if not {"binl/wlink.lnk", "binl/wlsystem.lnk",
+            "h/stdlib.h", "h/dos.h", "h/sys/stat.h", "lib286/dos/clibs.lib",
             "lib286/dos/cstart_t.obj", "lib286/dos/doslfns.lib"} <= support.keys():
         raise ValueError("incomplete Open Watcom SYS dependency pins")
     members = zip_members(archive.read_bytes(), max_total=256 * 1024 * 1024,
@@ -418,8 +419,10 @@ def build(output, *, mtime=EPOCH):
         if any(r["returncode"] < 0 or not r["output"] for r in evidence["execution"].values()):
             raise ValueError("native OW1.9 Linux execution unavailable; see execution return codes")
         env = dict(PATH=str(tools / "binl") + ":/usr/bin:/bin", WATCOM=str(tools),
+                   INCLUDE=str(tools / "h"),
+                   LIB=str(tools / "lib286") + ":" + str(tools / "lib286/dos"),
                    LANG="C", LC_ALL="C", TZ="UTC", SOURCE_DATE_EPOCH=str(EPOCH),
-                   TMPDIR=str(output), WLINK_LNK="", WCC="")
+                   TMPDIR=str(output), WLINK_LNK=str(tools / "binl/wlink.lnk"), WCC="")
         # Probe with the same space-free forced-include option and cwd as SYS.
         probe = work / "sys/ciuki-date-probe.c"
         probe.write_text('const char date_probe[] = CIUKI_BUILD_DATE "|" CIUKI_BUILD_TIME;\n')
