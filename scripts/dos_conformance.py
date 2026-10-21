@@ -307,7 +307,7 @@ def build_reference(out, system_files, directories, games_files=None, folder=REL
     identity["boot"]=dict(boot_pin,installed_sha256=sha(bytes(boot)))
     files["/D48/UNI.JSN" if guest is not None else "/D48/REF.JSN"]=(json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
     dos.write_fat16(out,bytes(boot),b"",files,directories=directories,
-                    label="CIUKIUNIFY" if guest is not None else "FREEDOS13",sectors=dos.SECTORS-REFERENCE_START)
+                    label="FREEDOS13",sectors=dos.SECTORS-REFERENCE_START)  # the pinned boot sector carries this label; a different root label fails fsck
     subprocess.run(["fsck.fat","-n",str(out)],check=True,stdout=subprocess.DEVNULL)
     for path,data in files.items():
         if read_file(out,path)!=data: raise ValueError("FreeDOS read-back mismatch: "+path)
