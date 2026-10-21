@@ -223,6 +223,14 @@ def application_payloads():
         sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
     desktop_sources, desktop_directories, desktop_metadata = desktop_payloads()
     sources.update(desktop_sources)
+    netsurf_spec=importlib.util.spec_from_file_location("image_netsurf",ROOT / "sdk/netsurf/build.py")
+    netsurf_build=importlib.util.module_from_spec(netsurf_spec)
+    netsurf_spec.loader.exec_module(netsurf_build)
+    netsurf_sources,netsurf_record=netsurf_build.payloads()
+    sources.update(netsurf_sources)
+    desktop_directories.update({str(Path(name).parent) for name in netsurf_sources})
+    desktop_directories.add("/Documents/NetSurf")
+    desktop_metadata["netsurf"]={"files":netsurf_record["files"],"elf":netsurf_record["elf"]}
     tcc_spec = importlib.util.spec_from_file_location("image_tcc", ROOT / "apps/tcc/build_tcc.py")
     tcc_build = importlib.util.module_from_spec(tcc_spec)
     tcc_spec.loader.exec_module(tcc_build)
