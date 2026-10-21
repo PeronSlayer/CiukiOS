@@ -11,8 +11,9 @@ F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
              'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
-F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart')
+F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-gl')
 F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
+F3_SELECTOR_PROBES = ('title',)  # fixture and explicit title ID required
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([0123456]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
 
@@ -89,6 +90,9 @@ def boot_minimum(cpu, entries, controller=None, complete=True, signature='SMAP')
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
+    title = re.fullmatch(r'f3:title run=([0-9a-fA-F]{8}) title=([a-z][a-z0-9-]{0,22})', request)
+    if title:
+        return {'phase': 3, 'probe': 'title', 'run': title[1], 'title': title[2], 'platform': None, 'safe': False}
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
@@ -230,6 +234,8 @@ def boot_options(options, safe=False, serial=True):
             safe=safe or token=='safe=1'
         elif token in ('serial=0','serial=1'):
             serial=serial and token=='serial=1'
+        elif token=='accel=0':
+            pass  # Preserved boot-info options; consumed by the kernel.
         elif re.fullmatch(r'mode=0x[0-9a-fA-F]{4}',token) and int(token[7:],16)<=0x3fff:
             mode=int(token[7:],16)
         else:raise ValueError('SELECT_ERROR: malformed BOOT.CFG token')

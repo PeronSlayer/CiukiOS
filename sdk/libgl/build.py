@@ -31,7 +31,7 @@ def recipe():
         raise ValueError("TinyGL licence differs from retained upstream notice")
     return {"upstream": upstream, "port": port, "sources": SOURCES,
             "adapter": {str(p.relative_to(HERE)): digest(p) for p in
-                        (HERE / "surface.c", HERE / "include/ciuki/gl.h", HERE / "build.py")}}
+                        (HERE / "surface.c", HERE / "include/ciuki/gl.h", HERE / "build.py", *sorted((HERE / "software").glob("*.[ch]")))}}
 
 
 def includes():
@@ -61,7 +61,7 @@ def build(folder, cc="clang", ar="llvm-ar", flags=(), env=None):
     for key in ("CPATH", "C_INCLUDE_PATH", "LIBRARY_PATH"):
         environment.pop(key, None)
     objects = []
-    for source in [*(HERE / "vendor/src" / (n + ".c") for n in SOURCES), HERE / "surface.c"]:
+    for source in [*(HERE / "vendor/src" / (n + ".c") for n in SOURCES), HERE / "surface.c", HERE / "software/renderer.c"]:
         obj = folder / (source.stem + ".o")
         subprocess.run([str(cc), *flags, *includes(), "-fno-strict-aliasing", "-ffp-contract=off",
                         "-Wno-unused-variable", "-Wno-unused-parameter", "-Wno-unused-function",

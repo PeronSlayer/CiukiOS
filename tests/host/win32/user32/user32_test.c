@@ -1399,8 +1399,18 @@ static void test_palette(void) {
   printf("TRACE palette callbacks: WM_PALETTEISCHANGING WM_PALETTECHANGED to "
          "every top-level window, AnimatePalette\n");
 }
+extern int host_pixel_format(DWORD,int);
+extern BOOL W32API w32_user_gl_target(DWORD,DWORD *);
+extern BOOL W32API w32_user_gl_damage(DWORD);
 static void test_production_gdi(void) {
   CHECK(host_gdi_proc && host_ddraw_seam);
+  /* An old v1 table ends before the v2 tail. ASan guards its exact size. */
+  _Alignas(struct u32_gdi) unsigned char v1[__builtin_offsetof(struct u32_gdi,window_pixel_format)];
+  memcpy(v1,&test_gdi,sizeof(v1));
+  u32_set_gdi((const struct u32_gdi *)v1);
+  HDC v1_dc=GetDC(windows[0]);
+  CHECK(v1_dc && ReleaseDC(windows[0],v1_dc));
+  u32_set_gdi(&test_gdi);
   host_modules = 1;
   real_gdi = 1;
   u32_gdi = 0; /* resolve the production gdi32 through GetProcAddress */
@@ -1411,6 +1421,27 @@ static void test_production_gdi(void) {
   CHECK(InvalidateRect(windows[0], 0, 1) && UpdateWindow(windows[0]));
   CHECK(w32_u32((uint8_t *)w->surface.pixels + 5 * w->surface.pitch + 5 * 4) ==
         0xc0c0c0);
+  HDC first_dc=GetDC(windows[0]), simultaneous_dc=GetDC(windows[0]);
+  CHECK(first_dc && simultaneous_dc);
+  CHECK(!host_pixel_format(U32_PTR(first_dc),0));
+  CHECK(host_pixel_format(U32_PTR(first_dc),1));
+  CHECK(host_pixel_format(U32_PTR(simultaneous_dc),0)==1);
+  CHECK(!host_pixel_format(U32_PTR(simultaneous_dc),2));
+  CHECK(ReleaseDC(windows[0],first_dc) && ReleaseDC(windows[0],simultaneous_dc));
+  first_dc=GetDC(windows[0]);
+  CHECK(first_dc && host_pixel_format(U32_PTR(first_dc),0)==1);
+  CHECK(!host_pixel_format(U32_PTR(first_dc),1));
+  DWORD target[4]={0};
+  CHECK(w32_user_gl_target(U32_PTR(first_dc),target)==1 && target[2]==U32_PTR(windows[0]));
+  ui_kernel_switch(1);
+  CHECK(w32_user_gl_target(U32_PTR(first_dc),target)==-1 && target[2]==U32_PTR(windows[0]));
+  ui_kernel_switch(0);
+  unsigned presents=sent_count(DESK_V3_PRESENT);
+  CHECK(w32_user_gl_damage(U32_PTR(first_dc)) && sent_count(DESK_V3_PRESENT)==presents+1);
+  reject_opcode=DESK_V3_PRESENT;
+  CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
+  CHECK(ReleaseDC(windows[0],first_dc));
+  puts("TRACE window pixel format survives simultaneous and reacquired DCs");
   test_cf_bitmap();
   test_draw_icon();
   test_palette();

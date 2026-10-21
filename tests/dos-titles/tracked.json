@@ -1,0 +1,2350 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "name": "DOOM 1.9 shareware",
+      "year": 1993,
+      "publisher": "id Software",
+      "licence": {
+        "citation": "config/dos-titles.json: doom; original package licence documents",
+        "conditions": "Approved installed DOOM shareware package per UPSTREAM.json and Carmack clarification; four FAQ files excluded.",
+        "class": "bundled"
+      },
+      "install": {
+        "layout": "package",
+        "pin": "doom",
+        "source": null,
+        "target": "DOOM",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "DOOM.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "quake",
+      "name": "Quake 1.06 shareware",
+      "year": 1996,
+      "publisher": "id Software",
+      "licence": {
+        "citation": "config/dos-titles.json: quake; original package licence documents",
+        "conditions": "Whole unmodified shareware package with agreement; free electronic compressed distribution per SLICNSE.TXT section 6 and f3-18 qualification.",
+        "class": "bundled"
+      },
+      "install": {
+        "layout": "package",
+        "pin": "quake",
+        "source": null,
+        "target": "QUAKE",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; digital SFX only, CD music absent.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "QUAKE.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 41,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 41,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 300,
+          "code": 16,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 380,
+          "code": 16,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 600,
+          "code": 22,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 680,
+          "code": 22,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 900,
+          "code": 23,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 980,
+          "code": 23,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1200,
+          "code": 20,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1280,
+          "code": 20,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1500,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1580,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "digital",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 16384,
+        "dpmi": "native",
+        "dpmi_fallback": "cwsdpmi"
+      }
+    },
+    {
+      "id": "wolf3d",
+      "name": "Wolfenstein 3D 1.4 shareware",
+      "year": 1992,
+      "publisher": "Apogee Software / id Software",
+      "licence": {
+        "citation": "Owner decision 2026-10-21, dev diary 2026-10-21-05; VENDOR.DOC [3][C]; config/dos-titles.json: wolf3d",
+        "conditions": "Bundled by owner decision 2026-10-21-05. VENDOR.DOC [3][C] requires prior signed Apogee permission for software bundles; the owner decision is not publisher permission.",
+        "class": "bundled"
+      },
+      "install": {
+        "layout": "package",
+        "pin": "wolf3d",
+        "source": null,
+        "target": "WOLF3D",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "WOLF3D.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 0,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "rott",
+      "name": "Rise of the Triad 1.3 shareware",
+      "year": 1995,
+      "publisher": "Apogee Software",
+      "licence": {
+        "citation": "1rott13.zip!ROTTSW13.SHR!VENDOR.DOC; SHA-256 a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701",
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
+      },
+      "install": {
+        "layout": "installer",
+        "pin": "rott",
+        "source": null,
+        "target": "ROTT",
+        "files": [],
+        "steps": [
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "e440fdec3c9e13dc0e5ed57305bbb025f6681acb91757e688f4f51aeb211f4a5"
+          },
+          {
+            "directory": "ROTT",
+            "executable": "SNDSETUP.EXE",
+            "args": [],
+            "timeout_ms": 60000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 80,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 80,
+                "down": false
+              },
+              {
+                "at_ms": 2200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 4000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 4080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 5000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 5080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 5200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 5280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 6000,
+                "code": 2,
+                "down": true
+              },
+              {
+                "at_ms": 6080,
+                "code": 2,
+                "down": false
+              },
+              {
+                "at_ms": 6200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 6280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 7000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 7080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 7200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 7280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 8000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 8080,
+                "code": 1,
+                "down": false
+              },
+              {
+                "at_ms": 9000,
+                "code": 21,
+                "down": true
+              },
+              {
+                "at_ms": 9080,
+                "code": 21,
+                "down": false
+              },
+              {
+                "at_ms": 9200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 9280,
+                "code": 28,
+                "down": false
+              }
+            ],
+            "tree_sha256": null
+          }
+        ]
+      },
+      "executable": "ROTT.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "keen4",
+      "name": "Commander Keen 4 1.4 shareware",
+      "year": 1991,
+      "publisher": "Apogee Software / id Software",
+      "licence": {
+        "citation": "4keen.zip!CK4SW14.SHR!VENDOR.DOC; SHA-256 4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc",
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
+      },
+      "install": {
+        "layout": "installer",
+        "pin": "keen4",
+        "source": null,
+        "target": "KEEN4",
+        "files": [],
+        "steps": [
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "d9510cd150884ea332761fec6c48c46529f6c14387f485d78ee8a54e7272ea6a"
+          }
+        ]
+      },
+      "executable": "KEEN4E.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 0,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "duke3d",
+      "name": "Duke Nukem 3D 1.3d shareware",
+      "year": 1996,
+      "publisher": "3D Realms",
+      "licence": {
+        "citation": "3dduke13.zip!DN3DSW13.SHR!LICENSE.TXT; SHA-256 38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
+      },
+      "install": {
+        "layout": "installer",
+        "pin": "duke3d",
+        "source": null,
+        "target": "DUKE3D",
+        "files": [],
+        "steps": [
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "3316043294429f96f526265104677954300ff069f080ec66f4f3a52619b5f9b7"
+          },
+          {
+            "directory": "DUKE3D",
+            "executable": "SETUP.EXE",
+            "args": [],
+            "timeout_ms": 60000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 80,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 80,
+                "down": false
+              },
+              {
+                "at_ms": 2200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 4000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 4080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 5000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 5080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 5200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 5280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 6000,
+                "code": 2,
+                "down": true
+              },
+              {
+                "at_ms": 6080,
+                "code": 2,
+                "down": false
+              },
+              {
+                "at_ms": 6200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 6280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 7000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 7080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 7200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 7280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 8000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 8080,
+                "code": 1,
+                "down": false
+              },
+              {
+                "at_ms": 9000,
+                "code": 21,
+                "down": true
+              },
+              {
+                "at_ms": 9080,
+                "code": 21,
+                "down": false
+              },
+              {
+                "at_ms": 9200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 9280,
+                "code": 28,
+                "down": false
+              }
+            ],
+            "tree_sha256": null
+          }
+        ]
+      },
+      "executable": "DUKE3D.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    }
+  ]
+}

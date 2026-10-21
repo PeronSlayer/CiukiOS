@@ -1,0 +1,217 @@
+[
+  {
+    "name": "glActiveTextureARB",
+    "args": "GLenum texture",
+    "return": "void"
+  },
+  {
+    "name": "glClientActiveTextureARB",
+    "args": "GLenum texture",
+    "return": "void"
+  },
+  {
+    "name": "glLockArraysEXT",
+    "args": "GLint first, GLsizei count",
+    "return": "void"
+  },
+  {
+    "name": "glUnlockArraysEXT",
+    "args": "void",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1dARB",
+    "args": "GLenum target, GLdouble s",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1dvARB",
+    "args": "GLenum target, const GLdouble *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1fARB",
+    "args": "GLenum target, GLfloat s",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1fvARB",
+    "args": "GLenum target, const GLfloat *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1iARB",
+    "args": "GLenum target, GLint s",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1ivARB",
+    "args": "GLenum target, const GLint *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1sARB",
+    "args": "GLenum target, GLshort s",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord1svARB",
+    "args": "GLenum target, const GLshort *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2dARB",
+    "args": "GLenum target, GLdouble s, GLdouble t",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2dvARB",
+    "args": "GLenum target, const GLdouble *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2fARB",
+    "args": "GLenum target, GLfloat s, GLfloat t",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2fvARB",
+    "args": "GLenum target, const GLfloat *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2iARB",
+    "args": "GLenum target, GLint s, GLint t",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2ivARB",
+    "args": "GLenum target, const GLint *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2sARB",
+    "args": "GLenum target, GLshort s, GLshort t",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord2svARB",
+    "args": "GLenum target, const GLshort *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3dARB",
+    "args": "GLenum target, GLdouble s, GLdouble t, GLdouble r",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3dvARB",
+    "args": "GLenum target, const GLdouble *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3fARB",
+    "args": "GLenum target, GLfloat s, GLfloat t, GLfloat r",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3fvARB",
+    "args": "GLenum target, const GLfloat *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3iARB",
+    "args": "GLenum target, GLint s, GLint t, GLint r",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3ivARB",
+    "args": "GLenum target, const GLint *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3sARB",
+    "args": "GLenum target, GLshort s, GLshort t, GLshort r",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord3svARB",
+    "args": "GLenum target, const GLshort *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4dARB",
+    "args": "GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4dvARB",
+    "args": "GLenum target, const GLdouble *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4fARB",
+    "args": "GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4fvARB",
+    "args": "GLenum target, const GLfloat *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4iARB",
+    "args": "GLenum target, GLint s, GLint t, GLint r, GLint q",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4ivARB",
+    "args": "GLenum target, const GLint *v",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4sARB",
+    "args": "GLenum target, GLshort s, GLshort t, GLshort r, GLshort q",
+    "return": "void"
+  },
+  {
+    "name": "glMultiTexCoord4svARB",
+    "args": "GLenum target, const GLshort *v",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexImage1DARB",
+    "args": "GLenum target, GLint level, GLenum internalformat, GLsizei width, GLint border, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexSubImage1DARB",
+    "args": "GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexImage2DARB",
+    "args": "GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexSubImage2DARB",
+    "args": "GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexImage3DARB",
+    "args": "GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glCompressedTexSubImage3DARB",
+    "args": "GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void *data",
+    "return": "void"
+  },
+  {
+    "name": "glGetCompressedTexImageARB",
+    "args": "GLenum target, GLint level, void *img",
+    "return": "void"
+  }
+]

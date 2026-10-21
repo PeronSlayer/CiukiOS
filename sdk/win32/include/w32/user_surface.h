@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
- * USER/GDI handoff v1. All rectangles use half-open pixel coordinates. */
+ * USER/GDI handoff: v1 prefix, v2 window pixel-format slot. All rectangles use half-open pixel coordinates. */
 #ifndef CIUKI_USER_SURFACE_H
 #define CIUKI_USER_SURFACE_H
 #include <w32/user32.h>
@@ -33,6 +33,8 @@ struct u32_gdi {
    * or deletes an owned bitmap (surface NULL). */
   BOOL (*bitmap)(HANDLE, struct u32_surface *, BOOL);
   HANDLE (*bitmap_create)(const struct u32_surface *);
+  /* v2 tail: never read for a v1 table. USER retains the slot until release. */
+  BOOL (*window_pixel_format)(HDC, int *);
 };
 /* Install before USER use; the table and callbacks outlive the process. Host
  * adapters replace transport only; public USER APIs execute the same code. */

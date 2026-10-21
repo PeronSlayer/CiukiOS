@@ -1,0 +1,17 @@
+# Synthetic protocol transcript for host parsing, not runtime evidence.
+CIUKI_TEST v=1 run=12345678 seq=000001 probe=title event=BEGIN version=1
+CIUKI_TEST v=1 run=12345678 seq=000002 probe=title event=DATA group=dos_title title=synthetic case=plan sha256=d2ae938b81c0952dd149561a3c111359e885153ca21fdb71d35f61324f789533
+CIUKI_TEST v=1 run=12345678 seq=000003 probe=title event=DATA group=dos_title title=synthetic case=start vm=1 generation=1 launch_ms=1000
+CIUKI_TEST v=1 run=12345678 seq=000004 probe=title event=DATA group=dos_title title=synthetic case=boot ms=2500 matched=1 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CIUKI_TEST v=1 run=12345678 seq=000005 probe=title event=DATA group=dos_title title=synthetic case=menu ms=5000 matched=1 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CIUKI_TEST v=1 run=12345678 seq=000006 probe=title event=DATA group=dos_title title=synthetic case=gameplay ms=10000 matched=1 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CIUKI_TEST v=1 run=12345678 seq=000007 probe=title event=DATA group=dos_title title=synthetic case=play duration_ms=30000 faults=0 frame_changes=20
+[vm-audio] vm=1 cadence blocks=10 late_acks=1 merged=0 ack_max_ms=1 irq_latency_max_us=20000 underruns=0
+CIUKI_TEST v=1 run=12345678 seq=000008 probe=title event=DATA group=dos_title title=synthetic case=audio attached=1 ready=1 irq=5 underruns=0
+CIUKI_TEST v=1 run=12345678 seq=000009 probe=title event=DATA group=dos_title title=synthetic case=pcm pcm_frames=48000 blocks=10 irq_entries=10
+CIUKI_TEST v=1 run=12345678 seq=000010 probe=title event=DATA group=dos_title title=synthetic case=cadence late_acks=1 irq_latency_max_us=20000 opl_writes=100
+CIUKI_TEST v=1 run=12345678 seq=000011 probe=title event=DATA group=dos_title title=synthetic case=music key_writes=30 windows=7
+CIUKI_TEST v=1 run=12345678 seq=000012 probe=title event=DATA group=dos_title title=synthetic case=input delivered=4 expected=4
+CIUKI_TEST v=1 run=12345678 seq=000013 probe=title event=DATA group=dos_title title=synthetic case=exit clean=1 rc=0 faults=0
+CIUKI_TEST v=1 run=12345678 seq=000014 probe=title event=DATA group=dos_title title=synthetic case=cleanup restored=1
+CIUKI_TEST v=1 run=12345678 seq=000015 probe=title event=END status=PASS error=0

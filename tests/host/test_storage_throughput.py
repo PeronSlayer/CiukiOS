@@ -34,9 +34,9 @@ static bool written;
 static jmp_buf exited;
 static uint32_t fixture_now(void) { return clock_ms; }
 #define fs_now_ms fixture_now
-static void task_sleep_ms(uint32_t ms) {
+void cache_writer_wait(struct block_cache *cache, uint32_t ms) {
     const uint32_t times[]={10,100,1010,5000,5100};
-    assert(ms==10 && steps<5);
+    assert(cache==&s.cache && ms==10 && steps<5);
     clock_ms=times[steps++];
     if (steps==5) s.stopped=true;
 }
@@ -57,7 +57,7 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
 }
 int storage_writeback(struct storage *arg, uint32_t now) {
     assert(arg==&s && !s.stopped);
-    assert(now==60 || now==1060 || now==5050);
+    assert(now==60 || now==100 || now==1060 || now==5050);
     writebacks++;
     if (now>=5000) written=true;
     return 0;
@@ -66,7 +66,7 @@ int storage_writeback(struct storage *arg, uint32_t now) {
         suffix = r'''
 int main(void) {
     if (!setjmp(exited)) storage_timer(&s);
-    assert(steps==5 && due_checks==5 && drains==3 && writebacks==3 && written);
+    assert(steps==5 && due_checks==5 && drains==3 && writebacks==4 && written);
     assert(last_log==5000);
     return 0;
 }

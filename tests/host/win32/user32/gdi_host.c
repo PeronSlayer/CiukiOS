@@ -4,6 +4,7 @@
  * the fixture reaches gdi32 only through these DWORD helpers.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/gdi32.h>
+#include <w32/pixelformat.h>
 #include <w32/services.h>
 #include <linux/futex.h>
 #include <string.h>
@@ -114,7 +115,7 @@ static const struct {
                EXPORT(GetObjectA),         EXPORT(GetDIBits),
                EXPORT(w32_gdi_draw_icon),  EXPORT(SetDIBits),
                EXPORT(CreateCompatibleDC), EXPORT(StretchBlt),
-               EXPORT(w32_gdi_palette_hook)};
+               EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format)};
 void *host_gdi_proc(const char *name) {
   for (unsigned i = 0; i < sizeof(exports) / sizeof(*exports); i++)
     if (!strcmp(exports[i].name, name))

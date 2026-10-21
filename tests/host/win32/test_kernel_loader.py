@@ -124,6 +124,17 @@ class KernelLoaderTests(unittest.TestCase):
                 out = self.command(name+'-exercise-startup', target/image)
                 self.assertIn('new result free commit RW zero GetModuleHandleA', out)
 
+    def test_gl_result_page_is_free_after_actual_imports(self):
+        import shutil
+        builtins.build(self.images/'System/Win32')
+        target=self.images/'System/Win32/Fixtures';target.mkdir(exist_ok=True)
+        image='gl-exercise.exe'
+        shutil.copyfile(self.images/'System/Win32/fixtures'/image,target/image)
+        out=self.command('gl-startup',target/image)
+        self.assertIn('new result free commit RW zero GetModuleHandleA',out)
+        store=json.loads((self.images/'System/Win32/builtin-store.json').read_text())
+        self.assertEqual(sum(d['name']=='opengl32.dll' for d in store['dlls']),1)
+
     def test_fixed_address_virtualalloc_on_kernel_model(self):
         self.assertIn('PASS kernel32 fixed VirtualAlloc exact rounding collision=487 invalid=87 zero RW release',
                       self.command('fixed-alloc',self.images/'console.exe'))
@@ -235,8 +246,10 @@ class KernelLoaderTests(unittest.TestCase):
             staged={n for n,r in upper['dlls'].items() if r['qualified']}
             core=json.loads((folder/'builtin-store.json').read_text())['dlls']
             replaced={d['name'] for d in core if d['name'] in staged}
-            self.assertEqual(len(core),43)  # + f5-15A ciukishell.dll
-            self.assertEqual(len(meta['builtins']),43-len(replaced)+len(staged))
+            self.assertEqual(len(core),44)  # + ciukishell and f7-07 opengl32.dll
+            self.assertEqual(len(meta['builtins']),44-len(replaced)+len(staged))
+            self.assertIn('/System/Win32/opengl32.dll',sources)
+            self.assertIn('/System/Win32/Fixtures/gl-exercise.exe',sources)
             self.assertEqual({d['name'] for d in meta['builtins'] if d.get('wine_reused') is True},staged)
             for name in staged:
                 self.assertIn('/System/Win32/'+name,sources)

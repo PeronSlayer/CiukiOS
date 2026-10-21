@@ -1,0 +1,7 @@
+# f0-51 — directive index hygiene: states of every row reconciled with git history
+
+- **Owner:** Codex, `gpt-6-luna`, effort `medium`
+- **Written:** 2026-10-21 by the lead. Several rows of `docs/directives/README.md` still say "written" or "launch after …" although the work was delivered and merged (examples: f5-10c2, f5-12b2, f5-20d, f5-10c3 were implemented by Claude agents on 2026-10-20 and merged; f5-15A was partially merged and continues in f5-15A2; f6-10, f6-14, f2-87, f7-07, f0-49c, f5-07D, f1-86, f3-52, f5-21b, f5-10C4, f5-07C, f5-22, f5-21 were merged on 2026-10-20/21).
+- **Worktree:** `../CiukiOS-wt-f0-51`, branch `wt/f0-51`
+
+Work: for every row whose state is not "merged", "retired", "superseded" or "closed", check `git log --oneline -i --grep=<id> main` and the merge commits ("Merge wt/<id> into main"), the report `build/codex/<id>-report.md` if present on main, and the directive text's own amendments; rewrite the state cell as the existing merged rows do (date, one-line content, review findings applied if the merge message says so). Rows of directives still running today (f6-11, f6-15, f5-15a2, f1-87, f3-54, f5-12b, f0-50, f3-53, f7-08) keep their state with "in progress 2026-10-21" appended. Do not change directive texts, only the index. Also fix the table's Markdown where a row lacks the closing `|`. Report `build/codex/f0-51-report.md` listing every row changed with the evidence (commit SHA). `rg`/`sed`/`git log` only; no builds, no tests, no commits.

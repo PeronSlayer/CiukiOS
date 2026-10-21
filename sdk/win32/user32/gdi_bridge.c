@@ -34,6 +34,7 @@ struct region_header {
 static struct {
   DWORD(W32API *surface_dc)(const struct gdi_dib *, POINT,
                             void (*)(void *, const RECT *), void *);
+  BOOL(W32API *window_pixel_format)(DWORD, int *);
   BOOL(W32API *visible)(DWORD, DWORD);
   DWORD(W32API *rect_region)(int, int, int, int);
   int(W32API *combine)(DWORD, DWORD, DWORD, int);
@@ -259,9 +260,12 @@ static BOOL set_region(HRGN handle, const RECT *r, UINT n) {
   g.delete_object(source);
   return ok;
 }
-static const struct u32_gdi adapter = {1,          acquire,     release,
+static BOOL window_pixel_format(HDC dc, int *slot) {
+  return g.window_pixel_format(U32_PTR(dc),slot);
+}
+static const struct u32_gdi adapter = {2,          acquire,     release,
                                        fill,       icon,        rects,
-                                       set_region, bitmap_view, create_bitmap};
+                                       set_region, bitmap_view, create_bitmap, window_pixel_format};
 /* CF_BITMAP synthesised from CF_DIB (Microsoft GetClipboardData/CreateDIBitmap):
  * the DIB's depth, colour table, BI_BITFIELDS masks and orientation are
  * converted by the gdi32 engine into a display-compatible bitmap. The USER
@@ -382,6 +386,7 @@ void u32_gdi_ensure(void) {
       return;                                                                  \
   } while (0)
   RESOLVE(surface_dc, "w32_gdi_surface_dc");
+  RESOLVE(window_pixel_format, "w32_gdi_gl_window_format");
   RESOLVE(visible, "w32_gdi_set_visible_region");
   RESOLVE(rect_region, "CreateRectRgn");
   RESOLVE(combine, "CombineRgn");

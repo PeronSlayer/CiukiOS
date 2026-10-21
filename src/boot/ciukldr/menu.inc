@@ -115,7 +115,11 @@ selector_validate:
     jc .bad
     loop .hex
     cmp si, [selector_end]
-    je .good
+    jne .suffix
+    cmp bx, f3_title_name
+    je .bad
+    jmp .good
+.suffix:
     cmp byte [selector_sweep], 1
     je .cursor
     mov ax, [selector_start]
@@ -247,6 +251,8 @@ selector_validate:
     ret
 
 .f3_suffix:
+    cmp bx, f3_title_name
+    je .title_suffix
     ; F3 takes only the platform override, fw_cfg only (lead, 2026-10-11: the
     ; qemu-e500 profile appends it to every selector); safe mode stays refused.
     cmp byte [selector_fw], 1
@@ -260,6 +266,38 @@ selector_validate:
     repe cmpsb
     jne .bad
     mov byte [selector_force], 1
+    jmp .good
+.title_suffix:
+    mov ax, [selector_end]
+    sub ax, si
+    cmp ax, 8
+    jb .bad
+    cmp ax, 30
+    ja .bad
+    mov di, title_suffix
+    mov cx, 7
+    repe cmpsb
+    jne .bad
+    mov al, [si]
+    cmp al, 'a'
+    jb .bad
+    cmp al, 'z'
+    ja .bad
+.title_char:
+    lodsb
+    cmp al, '-'
+    je .title_next
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    jbe .title_next
+    cmp al, 'a'
+    jb .bad
+    cmp al, 'z'
+    ja .bad
+.title_next:
+    cmp si, [selector_end]
+    jb .title_char
     jmp .good
 hex_digit:
     cmp al, '0'
@@ -311,7 +349,9 @@ f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'si
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
 f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
-              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0,0
+              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+f3_title_name db 'title',0,0
+title_suffix db ' title='
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'
@@ -425,6 +465,17 @@ config_read:
 .option:
     mov dx, di
     sub dx, si
+    cmp dx, 7
+    jne .safe_option
+    cmp dword [si], 'acce'
+    jne .invalid
+    cmp word [si+4], 'l='
+    jne .invalid
+    cmp byte [si+6], '0'
+    jne .invalid
+    ; Preserved in B(options); kernel declines acceleration before marker I/O.
+    jmp .next
+.safe_option:
     cmp dx, 6
     jne .serial
     cmp dword [si], 'safe'
@@ -728,5 +779,5 @@ menu_tick dd 0
 menu_polls dd 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
-f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-gl',0,0
 f6_probe_names db 'net-arp',0,0

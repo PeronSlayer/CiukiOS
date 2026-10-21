@@ -1061,6 +1061,7 @@ void desk_stats_sample(struct desktop *d)
     memset(&d->stats,0,sizeof(d->stats));
     memset(d->latency_buckets,0,sizeof(d->latency_buckets));
 }
+extern void desk_v3_present_complete(struct desktop *) __attribute__((weak));
 int desk_redraw(struct desktop *d)
 {
     if (d->v3_lease_state) return 0;
@@ -1230,6 +1231,7 @@ int desk_redraw(struct desktop *d)
         struct desk_client *c=&d->clients[i];
         if (c->gfx_pending) desk_gfx_complete(d,i,c->minimized || c->collapsed ? -EAGAIN : 0,end,deadline);
     }
+    if(complete && desk_v3_present_complete)desk_v3_present_complete(d);
     return complete ? 0 : -1;
 }
 uint64_t desk_launch_wait(const struct desktop *d, uint64_t now)
