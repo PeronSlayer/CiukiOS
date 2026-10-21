@@ -187,8 +187,3 @@ BOOL host_animate(DWORD palette) {
   return AnimatePalette(palette, 1, 1, &entry);
 }
 void host_gdi_exit(void) { w32_gdi_process_exit(); }
-<<<<<<< HEAD
-
-#include "../gdi32/pixel_format.inc"
-=======
->>>>>>> main
