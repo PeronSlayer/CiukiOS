@@ -17,6 +17,7 @@ ALLOWED = {
     'probes/f2_probes_process.c',
     'probes/f2_probes_signals.c',
     'probes/f2_probes_desktop.c',
+    'probes/f5_restart_observer.inc', # f5-07D registered w32-restart controller, included by desktop probe TU
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller

@@ -26,7 +26,6 @@ import run as runner  # noqa: E402
 ALL = ('kernel', 'menu', 'loader_model')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
 KNOWN_UNREGISTERED = {
-    (5, 'w32-restart'): {'owner': 'f5-07 continuation', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
     # Found by this check: authored cases whose probe none of the tables knows.
     (5, 'w32-installer-nsis'): {'owner': 'f5-15A2', 'missing': ALL, 'note': 'case written by f5-15A; probe arrives with the NSIS flow (continuation f5-15A2)'},
     # f5-17B title probes: win32-<workload id>, selected by fw_cfg only. The
@@ -102,19 +101,19 @@ class SelectorTableTests(unittest.TestCase):
 
     def test_known_unregistered_entries_name_an_owner_and_a_reason(self):
         self.assertEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()},
-                         {'f5-15A2', 'f5-07 continuation', 'f5-17 continuation'})
+                         {'f5-15A2', 'f5-17 continuation'})
         for parts, entry in KNOWN_UNREGISTERED.items():
             with self.subTest(probe=parts):
                 self.assertTrue(entry['owner'] and entry['note'])
                 self.assertTrue(set(entry['missing']) <= set(ALL))
                 self.assertRegex(parts[1], r'^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
 
-    def test_lead_note_probes_are_reported_for_the_lead(self):
-        # Restart remains owned by the f5-07 continuation; the model matches production.
-        for name in ('w32-restart',):
+    def test_merged_core_and_restart_observers_are_registered(self):
+        # Core and restart observers are registered in the merged state.
+        for name in ('w32-fixtures', 'w32-kernel32', 'w32-restart'):
             with self.subTest(probe=name):
                 self.assertEqual(probe_tables.registration(5, name),
-                                 {'kernel': False, 'menu': False, 'loader_model': False})
+                                 {'kernel': True, 'menu': True, 'loader_model': True})
 
     def test_win32_title_probe_names_against_the_kernel_buffer(self):
         # struct probe_selection.probe[24]: at most 23 bytes of probe name.

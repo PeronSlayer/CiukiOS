@@ -126,6 +126,9 @@ def build(out=None):
     from scripts.win32 import cd_media
     for image in cd_media.build(fixture_source):
         hashes[image.name]=hashlib.sha256(image.read_bytes()).hexdigest()
+    from scripts.win32 import restart_fixture
+    restart=restart_fixture.build(fixture_source,out)
+    hashes[restart.name]=hashlib.sha256(restart.read_bytes()).hexdigest()
     # Same authored PE bytes under a separate, explicitly shimmed identity.
     shutil.copyfile(fixture_source/'console.exe',fixture_source/'shim-fixture.exe')
     hashes['shim-fixture.exe']=hashlib.sha256((fixture_source/'shim-fixture.exe').read_bytes()).hexdigest()

@@ -107,11 +107,12 @@ class KernelCoreTests(unittest.TestCase):
                     self.assertEqual(predicate['fields'],{'errors':{'eq':0},'manifest':{'eq':1}})
                 continue
             if case['probe']=='w32-restart':
-                self.assertIn('f5-21',case['integration_pending'])
-                with self.assertRaises(ValueError):
-                    selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
                 self.assertIn('authored, unrun',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-restart run={run_id}')
+                self.assertEqual(selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)['probe'],
+                                 'w32-restart')
+                self.assertIn('CIUKI_F5_PROBE("w32-restart",probe_w32_restart)',
+                              (ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 self.assertTrue(all(p['fields']['errors']=={'eq':0} for p in case['expected']['predicates']))
                 continue
             if case['probe']=='w32-upper-dlls':

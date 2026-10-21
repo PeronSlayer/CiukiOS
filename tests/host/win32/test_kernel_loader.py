@@ -93,6 +93,13 @@ class KernelLoaderTests(unittest.TestCase):
         self.assertIn('PASS dialogs startup old result collision=487 new result free commit RW zero GetModuleHandleA',out)
         self.assertIn('PASS dialogs compiled PE FindResource LoadResource LockResource SizeofResource',out)
 
+    def test_restart_fixture_startup_and_result_page_on_kernel_model(self):
+        import shutil
+        builtins.build(self.images/'System/Win32')
+        target=self.images/'System/Win32/Fixtures';target.mkdir(exist_ok=True)
+        shutil.copyfile(self.images/'System/Win32/fixtures/restart-exercise.exe',target/'restart-exercise.exe')
+        out=self.command('restart-startup',target/'restart-exercise.exe')
+        self.assertIn('PASS restart compiled PE imports startup result=100d0000 free commit RW zero release',out)
     def test_upper_and_kernel32_result_pages_are_free_after_actual_imports(self):
         import shutil
         builtins.build(self.images/'System/Win32')

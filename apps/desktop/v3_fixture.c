@@ -7,6 +7,9 @@
 #include "../../src/probes/win32_dialogs/controller.h"
 #include "../../src/probes/win32_upper/controller.h"
 #include "../../src/probes/win32_media/controller.h"
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
 #include <stdio.h>
