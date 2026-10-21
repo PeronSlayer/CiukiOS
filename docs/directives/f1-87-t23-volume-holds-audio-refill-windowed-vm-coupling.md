@@ -57,3 +57,7 @@ Apply this amendment only (B is now directive f1-89, Astra). Sources: the C3 rea
 8. **P2 — A: the missing-tag check cannot detect missing tags** (`vfs.c:14` converts absent operations to `metadata`; `test_t23_holds.c:37` only rejects `other`): distinguish explicit tags from fallback attribution (a flag in the hold record) and make the host observer reject fallback or missing attribution.
 
 Report section "Amendment 2". E, F, G stay as delivered.
+
+## Amendment 3 (lead, 2026-10-21): the loader no longer fits after merging main
+
+With main merged (f1-88's `accel=0` token beside this directive's `usbscan=0`), `nasm -f bin src/boot/ciukldr.asm` fails: `src/boot/ciukldr.asm:155: error: TIMES value -28 is negative` (28 bytes over the fixed extent), so `test_boot_modes` cannot assemble the loader (three errors in the kernel host suite). Recover at least 28 bytes inside the loader without changing its behaviour (shorter menu/help strings, shared string prefixes, a compact encoding of the option-token table; the exact tokens stay), keep every `test_boot_modes` test green and the loader model in step. Apply this amendment only; report section "Amendment 3". (A separate directive, f0-54, frees a larger budget in the loader for the future; do not wait for it.)
