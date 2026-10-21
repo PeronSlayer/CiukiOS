@@ -45,7 +45,7 @@ static void b_commit(void *a,unsigned e,uint16_t psp) {
 static enum dos_file_result b_request(void *a,unsigned role,struct dfv2_call *k,struct dfv2_critical *c) {
     (void)a; (void)role;
     if (B.answer==DOS_FILE_DONE) { k->ax=0x1234; k->flags&=~1u; }
-    if (B.answer==DOS_FILE_PENDING) *c=(struct dfv2_critical){0x1a02,0x0c,0,0};
+    if (B.answer==DOS_FILE_PENDING) *c=(struct dfv2_critical){0x1a02,0x0c,0,0,false};
     return B.answer;
 }
 static enum dos_file_result b_complete(void *a,unsigned reply,struct dfv2_call *k) {
@@ -75,9 +75,9 @@ static void bind_record(uint32_t at,unsigned phase) {
     memcpy(guest+at,"DFB2",4); w16(at+4,2); w16(at+6,DFV2_BIND_BYTES); w16(at+8,(uint16_t)phase);
     w32(at+0x0c,GEN); w16(at+0x10,DRV); w16(at+0x12,0x700); w16(at+0x14,CALL); w16(at+0x16,STK);
     w16(at+0x18,STKB); w16(at+0x1a,0x80); w16(at+0x1c,0x84); w16(at+0x1e,0x88);
-    memcpy(guest+at+0x20,"CIUKIDF2 F3-56 1",16);
+    memcpy(guest+at+0x20,"CIUKIDF2 F3-57 1",16);
     if (!phase) return;
-    memcpy(guest+at+0x30,"CIUKIDOS K2043 2",16);
+    memcpy(guest+at+0x30,"CIUKIDOS K2043 3",16);
     w16(at+0x40,data_seg); w16(at+0x42,0x1b00); w16(at+0x44,TEXT); w16(at+0x46,0xa000);
     wfar(at+0x48,data_seg,0x26); wfar(at+0x4c,data_seg,SDA); w16(at+0x50,0x78c); w16(at+0x52,59);
     static const uint16_t field[10]={0,1,3,4,6,7,0xc,0x10,0x14,0x16};
@@ -279,7 +279,7 @@ static void layout_mutate(unsigned i) {
     case 20: guest[LIN(DATA,0xbd2)]=0x41; break;
     case 21: w16(LIN(DATA,0xd90),2); break;
     case 22: guest[LIN(DATA,0xc60+10)]='!'; break;
-    case 23: guest[LIN(0x7000,0x3f)]='3'; break;
+    case 23: guest[LIN(0x7000,0x3f)]='9'; break;
     case 24: w16(LIN(0x7000,0x44),0xffff); break;
     case 25: w16(LIN(0x7000,0x44),DATA); break;
     case 26: w32(LIN(0x7000,0x0c),GEN+1); break;

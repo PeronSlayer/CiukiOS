@@ -25,8 +25,9 @@
 /* Control block at offset 12h of the CIUKIDF$ character device header. */
 #define CIUKI_DEVICE_NAME       "CIUKIDF$"
 #define CIUKI_CONTROL_MAGIC     "CIUKIDFC"
-#define CIUKI_CONTROL_VERSION   2
-#define CIUKI_CONTROL_BYTES     22
+#define CIUKI_CONTROL_VERSION   3
+#define CIUKI_CONTROL_BYTES     24
+#define CIUKI_POLICY_LOCAL      1       /* DEVICE=CIUKIDF.SYS /LOCAL */
 #define CIUKI_STATE_REGISTERED  1
 
 /* Bind record (phase 1 is filled by ciukinit.c). Little endian, packed. */

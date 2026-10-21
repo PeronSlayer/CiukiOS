@@ -151,7 +151,7 @@ struct dosvm {
     struct dos_unified *unified; /* f3-56 DFV2 state: unified profile only */
     struct v86_frame unified_saved;
     uint32_t unified_phys,unified_bytes;
-    bool unified_vif;
+    bool unified_vif,unified_logged;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */

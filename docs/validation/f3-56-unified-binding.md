@@ -4,8 +4,9 @@ Recorded 2026-10-21 20:14 CEST, directive f3-56. This is a private Ciuki
 interface between three separately built binaries: the CiukiDOS fork of the
 FreeDOS 2043 kernel, its GPL-2.0-or-later control driver `CIUKIDF.SYS`, and
 the CiukiOS VMM. It is not a public DOS, Microsoft multiplex or NTVDM API.
-**The ROM slot, version 2, the feature bits, the role bytes and the build
-identities below are proposals awaiting the lead's reservation.** Version 1
+The ROM slot, version 2, the feature bits, the role bytes and the build
+identities below were **reserved by the lead in f3-56 Amendment 1**
+(2026-10-21 20:42; table in the contract). Version 1
 (`dos_file_hook`, F000:1800–1B53) is unchanged and remains the only binding
 of the old CiukiDOS guest.
 
@@ -223,6 +224,26 @@ faulted on the wrapping copy under a 386 model and wrapped silently
 elsewhere); 66h/02 selecting the active page succeeds; other pages and
 countries still fail. 38h keeps FreeDOS's 24-byte copy. The case tables are
 FreeDOS's (e.g. 82h→'E'), not the Unicode-derived v1 tables.
+
+## Decisions confirmed by the lead (f3-56 Amendment 1)
+
+- Decision: an FCB whose reserved SFT byte does not name an open, FCB-opened
+  entry with the FCB's own (uppercased) name fails with AL=FFh and 59h=6 on
+  14h/15h/21h/22h/27h/28h and 10h.
+- Decision: after an FCB end of file (AL=1/3) 59h reports 38; after a short
+  FCB write (AL=1) it reports 39.
+- Decision: 65h/03 returns a lowercase table derived only from table 2.
+- Decision: FreeDOS's hardcoded country-1/CP437 tables are the single
+  definition for 29h, 38h, 65h, 66h, the filename upcase and the native
+  snapshot. **Accepted change relative to v1:** CiukiDOS's uppercasing of
+  80h–FFh now follows FreeDOS/MS-DOS country 1 (for example 82h é→'E',
+  84h ä→8Eh, A4h ñ→A5h), no longer the Unicode-derived v1 tables, which
+  left accented letters without a CP437 capital unchanged.
+- Decision: 2F/1226h behaves as in K2043 (`inthndlr.c:2018`, reaching
+  `DosOpen`); the v1 "DOS internal stack only" precondition is not ported.
+- Decision: `kernel=unified` requires DOS=LOW; the final bind refuses a
+  kernel text or data range outside conventional memory and the VMM logs
+  that refusal once per VM with its reason.
 
 ## Evidence and limits
 

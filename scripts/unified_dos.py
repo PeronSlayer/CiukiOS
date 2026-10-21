@@ -616,8 +616,65 @@ def reference_module():
     return result
 
 
+FORK_QUALIFIED = ROOT / "build/unified-dos/fork-qualified.json"
+
+
+def fork_config(ref):
+    """kernel=unified CONFIG for the fork: the reference profile plus the
+    DFV2 control driver (f3-57). DOS=LOW stays required (f3-56 Amendment 1)."""
+    marker = b"SHELL="
+    if ref.CONFIG.count(marker) != 1 or not ref.CONFIG.startswith(b"DOS=LOW\r\n"):
+        raise ValueError("reference CONFIG layout changed")
+    return ref.CONFIG.replace(marker, b"DEVICE=C:\\CIUKIDF.SYS\r\n" + marker)
+
+
+def fork_guest_files(qualified=FORK_QUALIFIED):
+    """f3-57: kernel=unified installs the CiukiDOS fork kernel and CIUKIDF.SYS,
+    only from the host qualification record of two identical fork builds and
+    passing CPU boots with the live IFS (tests/host/dos/unified_file.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("unified_fork_install", ROOT / "scripts/unified_fork.py")
+    fork = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fork)
+    record = json.loads(build_path(qualified).read_text())
+    first = json.loads(build_path(record["first"]).read_text())
+    second = json.loads(build_path(record["second"]).read_text())
+    for key in ("status", "kernel_sha256", "driver_sha256", "source_hashes", "fork_manifest_sha256",
+                "patch_0002_sha256", "identity", "modification"):
+        if first.get(key) != second.get(key):
+            raise ValueError("fork rebuilds differ: " + key)
+    data, raw, patch, _ = fork.manifest()
+    if (first["status"] != "ok" or first["identity"] != fork.IDENTITY or
+            first["fork_manifest_sha256"] != sha(raw) or first["patch_0002_sha256"] != sha(patch)):
+        raise ValueError("fork qualification does not match the tracked fork")
+    if record.get("cpu_boot") != "PASS" or record.get("ifs") != "PASS":
+        raise ValueError("fork CPU boot/IFS evidence missing")
+    kernel = (build_path(first["root"]) / "KERNEL.SYS").read_bytes()
+    driver = (build_path(first["root"]) / "CIUKIDF.SYS").read_bytes()
+    if sha(kernel) != first["kernel_sha256"] or sha(driver) != first["driver_sha256"]:
+        raise ValueError("rebuilt fork kernel/driver hash mismatch")
+    ref = reference_module()
+    files, identity = ref.reference_files()
+    config = fork_config(ref)
+    files["/KERNEL.SYS"] = kernel
+    files["/CIUKIDF.SYS"] = driver
+    files["/FDCONFIG.SYS"] = config
+    files["/D48/KERNEL.LIC"] = sources()["COPYING"]
+    identity["kernel"] = dict(version="2043", personality="ciukidos-fork", sha256=sha(kernel),
+                              license="GPL-2.0-or-later", license_sha256=sha(files["/D48/KERNEL.LIC"]),
+                              source_archive_sha256=SOURCE_PINS["kernel"][2], binding=True,
+                              identity=first["identity"], modification=first["modification"],
+                              fork_manifest_sha256=first["fork_manifest_sha256"],
+                              driver=dict(name="CIUKIDF.SYS", sha256=sha(driver), size=len(driver)))
+    identity["profile"] = dict(kernel="unified", schema_value=2, bridge=False, share=True, ifs=True,
+                               config_sha256=sha(config), auto_sha256=sha(ref.AUTO))
+    return files, identity
+
+
 def guest_files(qualified=None):
     """Never accept arbitrary prebuilt binaries or a failed checker output."""
+    if qualified is None and FORK_QUALIFIED.is_file():
+        return fork_guest_files()
     qualified = build_path(qualified or ROOT / "build/unified-dos/qualified.json")
     record = json.loads(qualified.read_text())
     first = json.loads(build_path(record["first"]).read_text())
@@ -641,6 +698,34 @@ def guest_files(qualified=None):
     return files, identity
 
 
+def fork_source_files(vendor=VENDOR):
+    """CiukiDOS fork sources for the corresponding-source bundle (f3-56
+    Amendment 1): fork.json, patch 0002 and every file under ciuki/fork/.
+    A fork file absent from fork.json, a listed file absent from disk or any
+    hash mismatch fails, so the bundle can never silently omit a fork file."""
+    vendor = Path(vendor)
+    raw = (vendor / "ciuki/fork.json").read_bytes()
+    data = json.loads(raw)
+    files = {"ciuki/fork.json": raw}
+    patch = (vendor / data["patch"]["path"]).read_bytes()
+    if sha(patch) != data["patch"]["sha256"]:
+        raise ValueError("patch 0002 hash differs from fork.json")
+    files[data["patch"]["path"]] = patch
+    listed = {item["source"]: item["sha256"] for item in data["added"].values()}
+    present = {"ciuki/fork/" + p.relative_to(vendor / "ciuki/fork").as_posix()
+               for p in (vendor / "ciuki/fork").rglob("*") if p.is_file()}
+    if present - set(listed):
+        raise ValueError("fork file missing from fork.json: " + ", ".join(sorted(present - set(listed))))
+    if set(listed) - present:
+        raise ValueError("fork.json lists an absent fork file: " + ", ".join(sorted(set(listed) - present)))
+    for name, pin in sorted(listed.items()):
+        blob = (vendor / name).read_bytes()
+        if sha(blob) != pin:
+            raise ValueError("fork file hash differs from fork.json: " + name)
+        files[name] = blob
+    return files
+
+
 def corresponding_source(output):
     """Deterministic source bundle; no tool binaries, private media or images."""
     output = build_path(output)
@@ -653,7 +738,10 @@ def corresponding_source(output):
     files["ciukios/third_party/freedos/unified/ciuki/build.json"] = manifest_bytes
     files["ciukios/third_party/freedos/unified/" + manifest["patch"]["path"]] = patch
     files["ciukios/third_party/freedos/unified/ciuki/patches/README.md"] = (VENDOR / "ciuki/patches/README.md").read_bytes()
-    paths = ["scripts/unified_dos.py", "scripts/dos_conformance.py", "scripts/build_dos_image.py",
+    for name, data in fork_source_files().items():
+        files["ciukios/third_party/freedos/unified/" + name] = data
+    paths = ["scripts/unified_dos.py", "scripts/unified_fork.py", "docs/licenses/CiukiDOS-unified-kernel-GRANT.md",
+             "scripts/dos_conformance.py", "scripts/build_dos_image.py",
              "scripts/ciukidos_image.py", "src/boot/full_boot.asm", "src/boot/full_stage1_loader.asm",
              "config/openwatcom.json", "docs/design/unified-dos-licenses.tsv",
              "third_party/freedos/1.3/UPSTREAM.json", "third_party/freedos/1.3/boot16.bin",
@@ -731,11 +819,15 @@ def notices(identity, source):
     # until the lead supplies it and verifies the actual downloadable bytes.
     metadata = dict(schema=1, guest=identity, corresponding_source=source,
                     source_url=offer["url"], publication="pending-lead-verification")
-    credits = ("CiukiDOS unified: FreeDOS kernel 2043, " + MODIFICATION + " (GPL-2.0-or-later).\n"
+    fork = identity["kernel"].get("personality") == "ciukidos-fork"
+    modification = identity["kernel"]["modification"] if fork else MODIFICATION
+    credits = ("CiukiDOS unified: FreeDOS kernel 2043, " + modification + " (GPL-2.0-or-later).\n"
                "Copyright Pat Villani and the FreeDOS contributors; original notices retained.\n"
+               + ("CIUKIDF.SYS: CiukiOS contributors, GPL-2.0-or-later; grant in the source bundle.\n" if fork else "") +
                "FreeCOM 0.85a, GPL-2.0; bundled SUPPL has separate LGPL notices.\n"
                "SHARE 08/2006a: original package GPL notice, version not expanded.\n"
-               "Binding disabled; DOS=LOW; original FreeCOM and SHARE release binaries.\n"
+               + ("DFV2 binding and native file system on; DOS=LOW; original FreeCOM and SHARE release binaries.\n"
+                  if fork else "Binding disabled; DOS=LOW; original FreeCOM and SHARE release binaries.\n") +
                "Corresponding source: " + source["archive"] + "\nSHA-256: " + source["sha256"] +
                "\nSource URL: " + (offer["url"] or "not assigned; release publication blocked") + "\n")
     files = {"CIUKIDOS.TXT": credits.encode(), "FDK-GPL2.TXT": sources()["COPYING"],
@@ -757,8 +849,12 @@ def readback(read, identity, license_files):
             raise ValueError("unified guest read-back mismatch: " + role)
         if sha(read("/D48/" + role.upper() + ".LIC")) != identity[role]["license_sha256"]:
             raise ValueError("unified license read-back mismatch: " + role)
-    if read("/FDCONFIG.SYS") != ref.CONFIG or read("/FDAUTO.BAT") != ref.AUTO:
+    config = fork_config(ref) if identity.get("profile", {}).get("ifs") else ref.CONFIG
+    if read("/FDCONFIG.SYS") != config or read("/FDAUTO.BAT") != ref.AUTO:
         raise ValueError("unified profile read-back mismatch")
+    driver = identity["kernel"].get("driver")
+    if driver and sha(read("/" + driver["name"])) != driver["sha256"]:
+        raise ValueError("unified read-back mismatch: CIUKIDF.SYS")
     if json.loads(read("/D48/UNI.JSN")) != identity:
         raise ValueError("unified identity read-back mismatch")
     for name, expected in license_files.items():

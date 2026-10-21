@@ -31,6 +31,11 @@ CALL_BYTES      equ 48
 BIND_BYTES      equ 0xd0
 STACK_BYTES     equ 512
 GENERAL_FAILURE equ 0x1f
+FAIL_ON_INT24   equ 0x53            ; INT 24h answered Fail
+C_RETRY         equ 0x2a            ; f3-57: 1 = Retry of a CRITICAL result
+STATUS_DONE     equ 1
+STATUS_CRITICAL equ 2
+INPUT_WORDS     equ 13              ; record words 10h-29h
 
 ; call record offsets
 C_VERSION       equ 0x00
@@ -86,16 +91,18 @@ header:
                 db      'CIUKIDF$'
 control:                                        ; offset 12h, read by ciukinit.c
                 db      'CIUKIDFC'
-                dw      2
+                dw      3
                 dw      control_end - control
                 dw      late_bind
                 dw      event_entry
                 dw      direct_entry
                 dw      local_entry
                 dw      state
+                dw      policy
 control_end:
 
 state           db      0                       ; 1 registered, 2 bound, 3 refused
+policy          db      0                       ; 1: DEVICE=...CIUKIDF.SYS /LOCAL
 busy            db      0
 request         dd      0
 generation      dd      0
@@ -278,8 +285,12 @@ direct_entry:
                 pop     bp
                 retf
 
-; Entered by "pushf; call far" at a kernel redirector callout:
+;; Entered by "pushf; call far" at a kernel redirector callout:
 ; SS:SP -> IP, CS, FLAGS, stack argument (the 11xxh convention).
+; f3-57: a CRITICAL result is raised through the kernel's own INT 2Fh/1206h
+; (FreeDOS CriticalError: genuine INT 24h frame on the user stack, Abort
+; restarts the call as 4C00h and never returns here, so busy is clear and
+; the Retry copy lives on this kernel stack, not in the driver).
 local_entry:
                 cmp     byte [cs:state], 2
                 jne     .chain
@@ -304,11 +315,24 @@ local_entry:
                 mov     [cs:call_record+C_ARG], ax
                 push    cs
                 pop     ds
+                mov     si, call_record+C_FLAGS
+                mov     cx, INPUT_WORDS
+.save:          push    word [si]               ; flags first, argument on top
+                add     si, 2
+                loop    .save
+                xor     bx, bx
+.issue:         push    bx
                 mov     ax, ROLE_LOCAL
                 call    prep
+                pop     bx
+                mov     [call_record+C_RETRY], bx
                 call    gate_local
-                cmp     word [call_record+C_STATUS], 1
-                je      .done
+                mov     ax, [call_record+C_STATUS]
+                cmp     ax, STATUS_DONE
+                je      .done_drop
+                cmp     ax, STATUS_CRITICAL
+                je      .critical
+                add     sp, INPUT_WORDS*2
                 ; CHAIN or refused: restore the complete unowned registers.
                 mov     bx, [call_record+C_BX]
                 mov     cx, [call_record+C_CX]
@@ -338,6 +362,35 @@ local_entry:
                 pop     ds
                 pop     bp
                 retf
+.critical:      ; AX = INT 24h AH flags/AL drive, DI = cause, BP:SI = device
+                mov     byte [busy], 0
+                mov     ax, [call_record+C_AX]
+                mov     di, [call_record+C_DI]
+                mov     si, [call_record+C_SI]
+                mov     bp, [call_record+C_BP]
+                push    ax                      ; 2F/1206h stack word (INT 24h AX)
+                mov     ax, 0x1206
+                int     0x2f
+                add     sp, 2
+                push    cs
+                pop     ds
+                mov     byte [busy], 1
+                mov     bp, sp                  ; restore the original inputs
+                mov     si, call_record+C_ARG
+                xor     di, di
+.restore:       mov     dx, [ss:bp+di]
+                mov     [si], dx
+                sub     si, 2
+                add     di, 2
+                cmp     di, INPUT_WORDS*2
+                jb      .restore
+                cmp     al, 1
+                jne     .failed
+                mov     bx, 1                   ; Retry: same registers, same frame
+                jmp     .issue
+.failed:        mov     word [call_record+C_AX], FAIL_ON_INT24
+                or      byte [call_record+C_FLAGS], 1
+.done_drop:     add     sp, INPUT_WORDS*2
 .done:
                 pushf
                 pop     ax
@@ -495,7 +548,7 @@ interrupt:
                 pop     ax
                 retf
 
-driver_identity db      'CIUKIDF2 F3-56 1'
+driver_identity db      'CIUKIDF2 F3-57 1'
 
                 align   16
 stack_bottom    times STACK_BYTES db 0
@@ -508,6 +561,7 @@ resident_end:
 init:
                 push    es
                 push    bx
+                call    parse_policy
                 mov     ax, 0xc148
                 mov     bx, 0x4644
                 mov     cx, 2
@@ -587,6 +641,51 @@ init:
                 mov     word [es:bx+14], 0
                 mov     [es:bx+16], cs
                 ret
+
+; ES:BX = request header. "/LOCAL" on the DEVICE= line selects the explicit
+; isolated-fixture policy: a refused activation keeps FreeDOS's local FAT.
+; Without it, kernel=unified stops before INSTALL/shell (ciukinit.c).
+parse_policy:
+                push    es
+                push    bx
+                les     si, [es:bx+0x12]
+                mov     cx, 128
+.scan:          mov     al, [es:si]
+                cmp     al, 13
+                je      .none
+                cmp     al, 10
+                je      .none
+                or      al, al
+                jz      .none
+                cmp     al, '/'
+                jne     .next
+                push    si
+                push    cx
+                mov     di, local_switch
+                mov     cx, 5
+.cmp:           inc     si
+                mov     al, [es:si]
+                cmp     al, 'a'
+                jb      .upper
+                cmp     al, 'z'
+                ja      .upper
+                sub     al, 0x20
+.upper:         cmp     al, [di]
+                jne     .mismatch
+                inc     di
+                loop    .cmp
+                pop     cx
+                pop     si
+                mov     byte [policy], 1
+                jmp     short .none
+.mismatch:      pop     cx
+                pop     si
+.next:          inc     si
+                loop    .scan
+.none:          pop     bx
+                pop     es
+                ret
+local_switch    db      'LOCAL'
 
 ; ES:DI = F000:1C10. CF set unless every byte matches the reserved slot.
 validate_descriptor:

@@ -615,7 +615,9 @@ def build(kernel, out, boot_cfg):
         metadata["dos_conformance"]={"reference":"installed-unqualified"}
         unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
         qualification=ROOT/"build/unified-dos/qualified.json"
-        if qualification.is_file():
+        # f3-57: a fork qualification (two identical fork builds + live IFS CPU
+        # boots) selects the CiukiDOS fork + CIUKIDF.SYS for kernel=unified.
+        if qualification.is_file() or unified.FORK_QUALIFIED.is_file():
             rebuilt=dos_image.parent/"UNIFIED.IMG"
             identity,license_dir,metadata["unified_dos"]=unified.install(
                 rebuilt,system_files,reference_dirs,game_files,

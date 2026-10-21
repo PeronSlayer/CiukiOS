@@ -31,6 +31,12 @@
 #define DFV2_ROLE_EVENT 3u
 #define DFV2_STATUS_CHAIN 0u
 #define DFV2_STATUS_DONE 1u
+/* f3-57: a local request ended in a DOS critical error. The driver raises it
+ * through the kernel's own INT 2Fh/1206h (genuine INT 24h frame, Abort via
+ * the kernel's 4C00h restart) with AX/DI/BP:SI from the record; Retry
+ * re-enters the gate with call word +2Ah = 1 and the original registers. */
+#define DFV2_STATUS_CRITICAL 2u
+#define DFV2_FAIL_ON_INT24 83u
 #define DFV2_EVENT_BIND 0u
 
 enum dfv2_outcome {
@@ -47,6 +53,7 @@ enum dfv2_nls { DFV2_COUNTRY, DFV2_UPCASE, DFV2_FUPCASE, DFV2_TERMINATOR,
 struct dfv2_call {
     uint32_t generation,serial;
     uint16_t role,status,flags,ax,bx,cx,dx,si,di,bp,ds,es,frame_ss,frame_sp,arg;
+    uint16_t retry;           /* +2Ah: 1 = Retry of the previous CRITICAL result */
 };
 struct dfv2_layout {
     /* phase 0: the driver's resident registration */
@@ -68,13 +75,15 @@ struct dfv2_process {
     uint8_t kind;             /* 0 root, 1 EXEC, 26h copy, 55h child */
     uint16_t psp,parent;      /* parent is immutable after creation */
 };
-struct dfv2_critical { uint16_t ax,di,bp,si; };
+struct dfv2_critical { uint16_t ax,di,bp,si; bool raise; };
 /* Native backend (fixture in f3-56, live VFS owner in f3-57). The adapter
  * finishes every guest check before prepare, so a successful prepare is
  * always followed by exactly one commit and nothing can fail in between;
  * a failing prepare must leave nothing reserved (its DOS error is
  * returned). request/complete return CHAIN, DONE or PENDING; they may
- * update the call's register fields and FLAGS only for DONE. */
+ * update the call's register fields and FLAGS only for DONE. A local
+ * request that returns DONE with critical->raise set completes with
+ * DFV2_STATUS_CRITICAL and critical's AX/DI/BP:SI (f3-57). */
 struct dfv2_backend {
     int (*prepare)(void *,unsigned event,uint16_t psp,uint16_t parent);
     void (*commit)(void *,unsigned event,uint16_t psp);
@@ -84,7 +93,7 @@ struct dfv2_backend {
     const uint8_t *claim;     /* 32-byte INT 21h AH bitmap for the direct role, or 0 */
     void *arg;
 };
-struct dfv2_stats { uint32_t refused,chained,done,suspended,completed,events,binds; };
+struct dfv2_stats { uint32_t refused,chained,done,suspended,completed,events,binds,critical,retries; };
 struct dos_unified {
     struct dos_file_ops memory;
     struct dfv2_backend backend;
@@ -98,6 +107,8 @@ struct dos_unified {
     struct dfv2_critical critical;
     struct dfv2_stats stats;
     const char *why;          /* last refusal/failure reason (static text) */
+    const char *bind_refusal; /* why the one final bind failed, if it did */
+    const struct dfv2_layout *staged; /* final layout during the bind's prepare/commit */
 };
 
 void dos_unified_rom(uint8_t *page_f1,uint32_t generation);
@@ -110,4 +121,6 @@ bool dos_unified_callback_stack(const struct dos_unified *,uint16_t *ss,uint16_t
 enum dfv2_outcome dos_unified_critical(struct dos_unified *,const struct dos_file_frame *live,unsigned reply);
 /* VM stop: event 8. Idempotent; a late completion is refused. */
 void dos_unified_destroy(struct dos_unified *);
+/* The final layout: staged during the bind transaction, then published. */
+const struct dfv2_layout *dos_unified_layout(const struct dos_unified *);
 #endif

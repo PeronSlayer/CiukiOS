@@ -4,6 +4,7 @@
 #include "dosvm_internal.h"
 #include "dos_file_hook.h"
 #include "dos_unified.h"
+#include "dos_unified_ifs.h"
 #include "dos_file_volume.h"
 #include "dosvm_network.h"
 #include <ciuki/probe.h>
@@ -128,25 +129,80 @@ static int file_finish(struct dosvm *v,struct v86_frame *f,const struct dos_file
     }
     pack(f,r); return 0;
 }
-/* f3-56 DFV2 (private, unified profile only). The state is allocated at the
- * first event-gate call and charged to the VM; an allocation failure is a
- * refused gate call, which CIUKIDF.SYS reports as a contained INIT failure.
- * The f3-56 backend is null: no direct claims, every local call chains;
- * f3-57 installs the live VFS backend. */
+/* f3-56/f3-57 DFV2 (private, unified profile only). The state is allocated
+ * at the first event-gate call and charged to the VM; an allocation failure
+ * is a refused gate call, which CIUKIDF.SYS reports as a contained INIT
+ * failure. The backend is the f3-57 live IFS (dos_unified_ifs.c): the final
+ * bind mounts this VM's logical C: view through f3-47 (the same provider and
+ * generation as BIOS INT 13h, which then serializes through it), maps the
+ * read-only system D: and the policy-controlled E:, and converts their CDS
+ * entries to IFS drives. */
+struct unified_runtime {
+    struct dos_unified unified;
+    struct dfv2_ifs ifs;
+    struct dos_file_volume volume,removable;
+    struct blkdev provider,removable_provider;
+    struct vfs_table native;
+    bool volume_open,removable_open,native_ready,active_logged;
+};
+static void unified_unmount(void *arg,struct dfv2_ifs *s) {
+    struct dosvm *v=arg; struct unified_runtime *r=(struct unified_runtime *)v->unified; (void)s;
+    if (v->file_volume==&r->volume) v->file_volume=0;
+    if (r->native_ready) { vfs_table_destroy(&r->native); r->native_ready=false; }
+    if (r->removable_open) { (void)dos_file_volume_close(&r->removable); r->removable_open=false; }
+    if (r->volume_open) {
+        int e=dos_file_volume_close(&r->volume);
+        if (e) {
+            if (!v->info.cleanup_error) v->info.cleanup_error=e;
+            (void)dos_file_volume_discard(&r->volume);
+        }
+        r->volume_open=false;
+    }
+}
+static int unified_mount(void *arg,struct dfv2_ifs *s) {
+    struct dosvm *v=arg; struct unified_runtime *r=(struct unified_runtime *)v->unified;
+    struct storage *storage=storage_get();
+    if (!storage || !storage->ready || v->file_volume) return -FS_EIO;
+    dosvm_disk_provider_init(v,&r->provider);
+    int e=dos_file_volume_open(&r->volume,&storage->cache,&r->provider,v->overlay_open);
+    if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!v->overlay_open); }
+    if (!e && vfs_drive_present(&storage->vfs,2)) {
+        e=vfs_table_init(&storage->vfs,&r->native,2);
+        if (!e) { r->native_ready=true; e=dfv2_ifs_map(s,3,&r->native,2,true); }
+    }
+    if (!e && v->conformance_media.mode) {
+        r->removable_provider=(struct blkdev){.read=removable_read,.capacity=D48_VOLUME_SECTORS,
+            .sector_size=512,.media_generation=v->conformance_media.generation,.logical=true,.ctx=&v->conformance_media};
+        e=dos_file_volume_open(&r->removable,&storage->cache,&r->removable_provider,false);
+        if (!e) { r->removable_open=true; e=dfv2_ifs_map(s,4,&r->removable.table,2,true); }
+    } else if (!e && r->native_ready) {
+        for (unsigned i=3;i<26;i++)
+            if (vfs_drive_present(&storage->vfs,i) && (storage->vfs.drive_flags[i]&VFS_DRIVE_REMOVABLE)) {
+                e=dfv2_ifs_map(s,4,&r->native,i,true); break;   /* policy: not writable */
+            }
+    }
+    if (e) { unified_unmount(v,s); return e; }
+    v->file_volume=&r->volume;
+    return 0;
+}
 static int unified_create(struct dosvm *v) {
-    unsigned bytes=(sizeof(struct dos_unified)+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    unsigned bytes=(sizeof(struct unified_runtime)+PAGE_SIZE-1)&~(PAGE_SIZE-1);
     if (v->info.resident+bytes>v->info.commitment) return -FS_ENOMEM;
     uint32_t phys=pmm_alloc_contig(bytes/PAGE_SIZE); if (!phys) return -FS_ENOMEM;
     mm_claim(phys,bytes/PAGE_SIZE,MM_VM_PRIVATE);
-    struct dos_unified *u=P2V(phys); struct dos_file_ops ops;
-    dosvm_file_ops_init(v,&ops);
-    dos_unified_init(u,v->info.key.generation,&ops,0);
-    v->unified=u; v->unified_phys=phys; v->unified_bytes=bytes; v->info.resident+=bytes;
+    struct unified_runtime *r=P2V(phys); memset(r,0,bytes);
+    struct dos_file_ops ops; dosvm_file_ops_init(v,&ops);
+    struct dfv2_ifs_host host={unified_mount,unified_unmount,v};
+    struct dfv2_backend backend;
+    dfv2_ifs_init(&r->ifs,&r->unified,&ops,&host,v->info.key.id,v->info.key.generation);
+    dfv2_ifs_backend(&r->ifs,&backend);
+    dos_unified_init(&r->unified,v->info.key.generation,&ops,&backend);
+    v->unified=&r->unified; v->unified_phys=phys; v->unified_bytes=bytes; v->info.resident+=bytes;
     return 0;
 }
 static void unified_release(struct dosvm *v) {
     if (!v->unified) return;
-    dos_unified_destroy(v->unified);
+    dos_unified_destroy(v->unified);       /* closes descriptions, then unmounts */
     for (unsigned i=0;i<v->unified_bytes/PAGE_SIZE;i++) mm_free(v->unified_phys+i*PAGE_SIZE,MM_VM_PRIVATE);
     v->info.resident-=v->unified_bytes; v->unified=0; v->unified_phys=v->unified_bytes=0;
 }
@@ -168,7 +224,23 @@ static int unified_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector)
     }
     if (ip!=DFV2_DIRECT+2 && ip!=DFV2_LOCAL+2 && ip!=DFV2_EVENT+2) return -ENOSYS;
     if (!v->unified && (ip!=DFV2_EVENT+2 || unified_create(v))) return 0;
-    if (dos_unified_gate(v->unified,&r)!=DFV2_SUSPEND) return 0;
+    enum dfv2_outcome outcome=dos_unified_gate(v->unified,&r);
+    if (v->unified->bind_refusal && !v->unified_logged) {
+        /* One line per VM: the final bind is one-shot (DOS=LOW is required). */
+        struct unified_runtime *r=(struct unified_runtime *)v->unified;
+        klog("[dosvm] DFV2 bind refused vm=%u generation=%u reason=%s ifs=%s",
+             v->info.key.id,v->info.key.generation,v->unified->bind_refusal,r->ifs.why ? r->ifs.why : "-");
+        v->unified_logged=true;
+    }
+    {
+        struct unified_runtime *r=(struct unified_runtime *)v->unified;
+        if (r->ifs.active && !r->active_logged) {
+            klog("[dosvm] DFV2 IFS active vm=%u generation=%u drives=%x",
+                 v->info.key.id,v->info.key.generation,r->ifs.owned);
+            r->active_logged=true;
+        }
+    }
+    if (outcome!=DFV2_SUSPEND) return 0;
     /* INT 24h callback on the driver stack; IRET returns to the C2 gate. */
     uint16_t ss,sp,vector24[2];
     if (!dos_unified_callback_stack(v->unified,&ss,&sp) || dosvm_read(v,0x24*4,vector24,4)) {

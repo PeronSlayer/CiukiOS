@@ -289,7 +289,37 @@ is part of `scripts/test/host_kernel_tests.sh`. `test_unified_fork.py`
 checks the fork pins and shared constants without building.
 
 Evidence limits: the native backend is a fixture; every file operation is
-FreeDOS's local FAT. f3-57 supplies the live VFS backend. Editing the fork:
+FreeDOS's local FAT (the fixture boots load `CIUKIDF.SYS /LOCAL`, the
+explicit isolated-fixture policy). f3-57 supplies the live VFS backend
+(next section). Editing the fork:
 `python3 -B scripts/unified_fork.py --checkout build/<dir>`, edit, then
 `--refresh build/<dir>` regenerates patch 0002 and `fork.json`. Wire layout
 and decisions: `docs/validation/f3-56-unified-binding.md`.
+
+## Unified CiukiDOS local IFS (f3-57)
+
+```sh
+nice -n 19 bash tests/host/dos/run_unified_file.sh
+```
+
+`unified_file.py` builds the fork twice (determinism) and the pristine
+patch-0001 kernel, compiles `unified_cpu_test.c` with `-DH57_IFS` (the
+production `dos_unified.c` + `dos_unified_ifs.c` over the production
+VFS/FAT and `dos_file_volume.c`, mounting the boot disk's partition as C:
+and a small FAT16 volume as read-only D: at the final bind), and boots:
+`h57/h57.asm` (`H57.COM F`: drive classification 4409h/4408h/32h/1100h,
+create/read/seek/zero-length truncate, dup/forced dup, copied-DTA search,
+attributes, rename/delete, directories and current-directory refusal,
+36h, locks, 6C00h actions, file times, checked FCB-close size metadata,
+read-only D:, and INT 24h Retry/Fail/Abort and O_NOCRIT through provider
+read faults armed on port EBh); the f3-56 suite `H56.COM N` over the live
+backend; the activation barrier (refused mount: contained stop before the
+shell; `/LOCAL`: local FAT; a view beyond LASTDRIVE: refused after the
+mount and unwound); and the unchanged f3-48 basic battery on the pristine
+kernel and on the fork with the live IFS, whose results must be identical.
+Guest INT 13h after activation must be zero. On success it writes
+`build/unified-dos/fork-qualified.json`; only then does the canonical image
+builder install the fork kernel, `CIUKIDF.SYS` and the `DEVICE=` line for
+`kernel=unified` (`scripts/unified_dos.py` `fork_guest_files`), which the
+script also reads back. Part of `scripts/test/host_kernel_tests.sh`.
+Decisions: `docs/validation/f3-57-unified-file-channel.md`.

@@ -590,3 +590,6 @@ bash "$root/tests/host/dos/run_hook_cpu.sh"
 
 # f3-56: unified CiukiDOS DFV2 binding (fork build, native matrix, CPU boots).
 bash "$root/tests/host/dos/run_unified_binding.sh"
+# f3-57: unified CiukiDOS local IFS (live VFS backend, critical errors,
+# activation barrier, kernel=unified installation record).
+bash "$root/tests/host/dos/run_unified_file.sh"

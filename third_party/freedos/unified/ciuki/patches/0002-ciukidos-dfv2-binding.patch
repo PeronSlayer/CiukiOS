@@ -1,3 +1,35 @@
+--- a/kernel/entry.asm
++++ b/kernel/entry.asm
+@@ -564,6 +564,16 @@
+                 mov     bp,sp
+                 push    si
+                 push    di
++%if XCPU >= 386
++%ifdef WATCOM
++                ; CiukiDOS fork: keep the C caller's FS/GS. Watcom's 386
++                ; code holds far pointers in GS (int2F_12_handler writes
++                ; the 2F/1206h result through GS:SI), and Restore386Registers
++                ; below loads the user's FS/GS for the INT 24h handler.
++                push    fs
++                push    gs
++%endif
++%endif
+                 ;
+                 ; Get parameters
+                 ;
+@@ -624,6 +634,12 @@
+                 mov     es,[_cu_psp]
+                 pop     word [es:PSP_USERSP]
+                 pop     word [es:PSP_USERSS]
++%if XCPU >= 386
++%ifdef WATCOM
++                pop     gs                      ; CiukiDOS fork: caller's FS/GS
++                pop     fs
++%endif
++%endif
+                 mov     bp, sp
+                 mov     ah, byte [bp+4+4]       ; restore old AH from nFlags
+                 sti                             ; Enable interrupts
 --- a/kernel/fcbfns.c
 +++ b/kernel/fcbfns.c
 @@ -28,6 +28,7 @@

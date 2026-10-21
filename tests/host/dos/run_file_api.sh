@@ -41,7 +41,7 @@ from pathlib import Path
 import subprocess
 spec=importlib.util.spec_from_file_location('kernel_flags','scripts/build_kernel.py')
 k=importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-for source in ('vm/dos_file','vm/dos_file_vm','vm/dos_unified','vm/dosvm_bios','vm/dosvm',
+for source in ('vm/dos_file','vm/dos_file_vm','vm/dos_unified','vm/dos_unified_ifs','vm/dosvm_bios','vm/dosvm',
                'core/output','probes/f3_probes_dos_conformance'):
     unit=source.rsplit('/',1)[-1]
     subprocess.run(['clang',*k.CFLAGS,'-I','src/kernel/include','-c',f'src/kernel/{source}.c',

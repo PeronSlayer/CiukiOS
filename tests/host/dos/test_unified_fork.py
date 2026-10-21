@@ -4,8 +4,11 @@ no compiler, emulator or image. The build/CPU qualification is
 tests/host/dos/run_unified_binding.sh. SPDX-License-Identifier: GPL-2.0-only
 """
 import importlib.util
+import json
 from pathlib import Path
 import re
+import shutil
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -22,7 +25,7 @@ class ForkInputs(unittest.TestCase):
         self.assertEqual(data["base"], u.MODIFICATION)
         self.assertEqual(set(added), {"ciuki/ciukidf.asm", "hdr/ciuki.h", "kernel/ciuki.c", "kernel/ciukinit.c"})
         self.assertEqual(set(data["changed"]), {
-            "kernel/fcbfns.c", "kernel/int2f.asm", "kernel/inthndlr.c", "kernel/main.c", "kernel/makefile",
+            "kernel/entry.asm", "kernel/fcbfns.c", "kernel/int2f.asm", "kernel/inthndlr.c", "kernel/main.c", "kernel/makefile",
             "kernel/nls.c", "kernel/nls_hc.asm", "kernel/proto.h", "kernel/task.c"})
         for blob in added.values():
             self.assertIn(b"SPDX-License-Identifier: GPL-2.0-or-later", blob)
@@ -95,6 +98,34 @@ class ForkInputs(unittest.TestCase):
         self.assertLessEqual(v1_end, define("DFV2_DIRECT"))
         self.assertLessEqual(define("DFV2_END"), 0x2000)
 
+    def test_f3_57_critical_retry_and_policy_wire(self):
+        """CRITICAL status 2, Retry word +2Ah, control block v3 with the
+        /LOCAL policy byte, and the CriticalError FS/GS fix in entry.asm."""
+        header = (ROOT / "src/kernel/vm/dos_unified.h").read_text()
+        native = (ROOT / "src/kernel/vm/dos_unified.c").read_text()
+        driver = (FORK / "drivers/ciukidf.asm").read_text()
+        kernel_h = (FORK / "hdr/ciuki.h").read_text()
+        init = (FORK / "kernel/ciukinit.c").read_text()
+
+        def equ(name):
+            return int(re.search(rf"^{name}\s+equ\s+(0x[0-9a-f]+|\d+)", driver, re.M).group(1), 0)
+        self.assertEqual(equ("STATUS_CRITICAL"),
+                         int(re.search(r"#define DFV2_STATUS_CRITICAL (\d+)u", header).group(1)))
+        self.assertEqual(equ("FAIL_ON_INT24"), int(re.search(r"#define DFV2_FAIL_ON_INT24 (\d+)u", header).group(1)))
+        self.assertEqual(equ("C_RETRY"), 0x2a)
+        self.assertIn(".retry=u16(c+0x2a)", native)
+        self.assertIn("for (unsigned i=0x2c;i<DFV2_CALL_BYTES;i++) if (c[i]) return false;", native)
+        control = driver[driver.index("control:"):driver.index("control_end:")]
+        self.assertEqual(re.search(r"dw\s+(\d+)\n", control).group(1),
+                         re.search(r"#define CIUKI_CONTROL_VERSION\s+(\d+)", kernel_h).group(1))
+        self.assertEqual(control.count("dw      ") * 2 + 8, int(re.search(r"#define CIUKI_CONTROL_BYTES\s+(\d+)", kernel_h).group(1)))
+        self.assertIn("dw      policy", control)
+        self.assertIn("(control + 22)", init)
+        self.assertIn("r.a.x = 0x0d00;", init)
+        entry = fork.fork_sources()["kernel/entry.asm"].decode("latin-1").replace("\r\n", "\n")
+        self.assertIn("                push    fs\n                push    gs\n", entry)
+        self.assertIn("                pop     gs                      ; CiukiDOS fork: caller's FS/GS\n                pop     fs\n", entry)
+
     def test_v1_discovery_and_rom_are_not_redefined(self):
         """DFV2 answers CX=2 only; v1 keeps CX=1 and its own descriptor."""
         native = (ROOT / "src/kernel/vm/dos_unified.c").read_text()
@@ -104,6 +135,47 @@ class ForkInputs(unittest.TestCase):
         vm = (ROOT / "src/kernel/vm/dos_file_vm.c").read_text()
         self.assertIn("if (v->kernel==2) dos_unified_rom(", vm)
         self.assertIn("if (v->kernel==2) {\n        int unified=unified_interrupt(v,f,vector);", vm)
+
+
+class ForkDistribution(unittest.TestCase):
+    """f3-56 Amendment 1: licence ledger and corresponding-source manifest."""
+
+    def test_ledger_lists_patch_and_every_fork_file(self):
+        rows = [l for l in u.LEDGER.read_text().splitlines() if l.startswith("ciuki-fork\t")]
+        self.assertEqual(rows, fork.ledger_rows())
+        data = json.loads(fork.FORK.read_text())
+        named = {r.split("\t")[1] for r in rows}
+        self.assertIn("third_party/freedos/unified/" + data["patch"]["path"], named)
+        for item in data["added"].values():
+            self.assertIn("third_party/freedos/unified/" + item["source"], named)
+        for row in rows:
+            self.assertEqual(row.split("\t")[3], "GPL-2.0-or-later")
+            self.assertIn("CiukiDOS-unified-kernel-GRANT.md", row)
+
+    def test_bundle_manifest_refuses_an_unlisted_or_absent_fork_file(self):
+        files = u.fork_source_files()
+        data = json.loads(fork.FORK.read_text())
+        self.assertIn("ciuki/fork.json", files)
+        self.assertIn(data["patch"]["path"], files)
+        for item in data["added"].values():
+            self.assertIn(item["source"], files)
+        parent = ROOT / "build/host/dos"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as name:
+            vendor = Path(name) / "unified"
+            shutil.copytree(u.VENDOR / "ciuki", vendor / "ciuki")
+            (vendor / "ciuki/fork/kernel/extra.c").write_text("/* not in fork.json */\n")
+            with self.assertRaisesRegex(ValueError, "missing from fork.json"):
+                u.fork_source_files(vendor)
+            (vendor / "ciuki/fork/kernel/extra.c").unlink()
+            (vendor / "ciuki/fork/kernel/ciuki.c").unlink()
+            with self.assertRaisesRegex(ValueError, "absent fork file"):
+                u.fork_source_files(vendor)
+
+    def test_corresponding_source_carries_the_fork(self):
+        source = (ROOT / "scripts/unified_dos.py").read_text()
+        self.assertIn("for name, data in fork_source_files().items():", source)
+        self.assertIn('"scripts/unified_fork.py", "docs/licenses/CiukiDOS-unified-kernel-GRANT.md"', source)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,13 @@
  * (config.c:459-506), and FsConfig() rebuilds CDS and the root JFT
  * (main.c:342-347). This phase therefore runs once, after init_kernel()
  * and before DoInstall(): the layout it reports is the final one.
+ *
+ * f3-57: the final bind is also the activation barrier of the VMM's local
+ * file system. All dirty buffers are written first (INT 21h/0Dh), so the
+ * native mount reads the volume FreeDOS left; the VMM then converts the
+ * owned CDS entries to IFS drives before the hooks are published here. A
+ * refused activation stops this kernel before INSTALL/shell unless the
+ * driver was loaded with /LOCAL (isolated fixtures keep the local FAT).
  */
 
 #include "portab.h"
@@ -27,6 +34,21 @@ extern BYTE DOSFAR ASM nlsDBCSHardcoded[];
 extern UWORD DOSFAR ASM cu_psp;
 
 STATIC UBYTE ciuki_record[CIUKI_BIND_BYTES];
+
+#ifdef __WATCOMC__
+VOID ciuki_halt(VOID);
+#pragma aux ciuki_halt = "cli" "hlt" modify exact []
+#else
+#define ciuki_halt()
+#endif
+
+/* Contained stop (no panic path): the VM monitor sees HLT with IF clear. */
+STATIC VOID ciuki_stop(int rc)
+{
+  printf("CiukiDOS: native file activation refused (error %d); system stopped\n", rc);
+  for (;;)
+    ciuki_halt();
+}
 
 STATIC VOID put16(unsigned at, UWORD v)
 {
@@ -87,7 +109,7 @@ VOID CiukiLateBind(VOID)
   put16(4, 2);
   put16(6, CIUKI_BIND_BYTES);
   put16(8, 1);                  /* final phase; driver fills 0Ch-2Fh */
-  fmemcpy(ciuki_record + 0x30, "CIUKIDOS K2043 2", 16);
+  fmemcpy(ciuki_record + 0x30, "CIUKIDOS K2043 3", 16);
   put16(0x40, FP_SEG(LoL));
   put16(0x42, FP_OFF(DynLast()));
   put16(0x44, CurrentKernelSegment);
@@ -132,10 +154,18 @@ VOID CiukiLateBind(VOID)
   putfar(0xa0, DOSDATA(nlsCollHardcoded));
   putfar(0xa4, DOSDATA(nlsDBCSHardcoded));
 
+  {
+    iregs r;
+    r.a.x = 0x0d00;             /* disk reset: write every dirty buffer */
+    init_call_intr(0x21, &r);
+  }
   rc = ((ciuki_bind_fn)MK_FP(seg, *(UWORD FAR *)(control + 12)))
       ((VOID FAR *)ciuki_record);
   if (rc != SUCCESS)
   {
+    if (*((UBYTE FAR *)MK_FP(seg, *(UWORD FAR *)(control + 22))) !=
+        CIUKI_POLICY_LOCAL)
+      ciuki_stop(rc);
     printf("CiukiDOS: DFV2 binding refused (error %d); continuing unbound\n",
            rc);
     return;

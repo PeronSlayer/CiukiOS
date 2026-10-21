@@ -39,7 +39,9 @@ CFLAGS = ["-DFS_HOST", "-D_POSIX_C_SOURCE=200809L", "-std=c17", "-O1", "-g", "-W
 FS = ["src/kernel/fs/fs_port.c", "src/kernel/fs/blkreq.c", "src/kernel/fs/cache.c", "src/kernel/fs/path.c",
       "src/kernel/fs/fat.c", "src/kernel/fs/vfs.c", "src/kernel/fs/fs_ro.c"]
 CONFIG = b"DOS=LOW\r\nFILES=40\r\nBUFFERS=10\r\nLASTDRIVE=Z\r\n%sSHELL=C:\\%s\r\n"
-DEVICE = b"DEVICE=C:\\CIUKIDF.SYS\r\n"
+# The fixture backend owns no drive: /LOCAL is the explicit isolated-fixture
+# policy (f3-57), so a refused final bind keeps the local FAT here.
+DEVICE = b"DEVICE=C:\\CIUKIDF.SYS /LOCAL\r\n"
 COMMON = ("layout", "handles", "exec", "psp", "internals")
 failures = []
 

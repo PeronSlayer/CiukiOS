@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import unified_dos as u  # noqa: E402
 
 FORK = u.VENDOR / "ciuki/fork.json"
-IDENTITY = "CIUKIDOS K2043 2"
+IDENTITY = "CIUKIDOS K2043 3"
 MODIFICATION = ("CiukiDOS fork: patch 0001 (reproducible date), patch 0002 "
                 "(DFV2 binding, lifecycle, FCB and NLS) and added fork files")
 
@@ -242,7 +242,29 @@ def refresh(fork_tree):
                 changed=changed, added=added)
     FORK.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
     apply_patch(base, patch, changed, "patch 0002")
+    ledger_rows(write=True)
     return data
+
+
+LEDGER_PREFIX = "third_party/freedos/unified/"
+
+
+def ledger_rows(write=False):
+    """The licence-ledger rows of patch 0002 and every fork file (component
+    `ciuki-fork`). With write=True the ledger is rewritten in place."""
+    data = json.loads(FORK.read_text())
+    evidence = "file notice; owner grant docs/licenses/CiukiDOS-unified-kernel-GRANT.md"
+    rows = [("ciuki-fork", LEDGER_PREFIX + data["patch"]["path"], data["patch"]["sha256"], "GPL-2.0-or-later",
+             evidence, "fork modification of the pinned K2043 sources (patch 0002)")]
+    for dest, item in sorted(data["added"].items()):
+        rows.append(("ciuki-fork", LEDGER_PREFIX + item["source"], item["sha256"], "GPL-2.0-or-later",
+                     evidence, "fork addition installed as " + dest))
+    lines = ["\t".join(r) for r in rows]
+    if write:
+        text = u.LEDGER.read_text().splitlines()
+        kept = [line for line in text if not line.startswith("ciuki-fork\t")]
+        u.LEDGER.write_text("\n".join(kept + lines) + "\n")
+    return lines
 
 
 def checkout(dest):

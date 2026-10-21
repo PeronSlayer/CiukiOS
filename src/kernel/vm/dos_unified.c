@@ -9,8 +9,8 @@
 enum { E_HANDLE=6, E_MEMORY=8, E_PARAM=87, E_GENERAL=0x1f };
 static const uint16_t sda_offsets[DFV2_SDA_FIELDS]={0x00,0x01,0x03,0x04,0x06,0x07,0x0c,0x10,0x14,0x16};
 static const uint16_t gates[3]={DFV2_DIRECT,DFV2_LOCAL,DFV2_EVENT};
-static const char driver_id[17]="CIUKIDF2 F3-56 1";
-static const char kernel_id[17]="CIUKIDOS K2043 2";
+static const char driver_id[17]="CIUKIDF2 F3-57 1";
+static const char kernel_id[17]="CIUKIDOS K2043 3";
 
 static uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0]|p[1]<<8); }
 static uint32_t u32(const uint8_t *p) { return u16(p)|(uint32_t)u16(p+2)<<16; }
@@ -88,19 +88,21 @@ static bool parse_call(const uint8_t *c,struct dfv2_call *k) {
     *k=(struct dfv2_call){.generation=u32(c+4),.serial=u32(c+8),.role=u16(c+0x0c),.status=u16(c+0x0e),
         .flags=u16(c+0x10),.ax=u16(c+0x12),.bx=u16(c+0x14),.cx=u16(c+0x16),.dx=u16(c+0x18),.si=u16(c+0x1a),
         .di=u16(c+0x1c),.bp=u16(c+0x1e),.ds=u16(c+0x20),.es=u16(c+0x22),.frame_ss=u16(c+0x24),
-        .frame_sp=u16(c+0x26),.arg=u16(c+0x28)};
-    for (unsigned i=0x2a;i<DFV2_CALL_BYTES;i++) if (c[i]) return false;
+        .frame_sp=u16(c+0x26),.arg=u16(c+0x28),.retry=u16(c+0x2a)};
+    if (k->retry>1) return false;
+    for (unsigned i=0x2c;i<DFV2_CALL_BYTES;i++) if (c[i]) return false;
     return u16(c)==DFV2_VERSION && u16(c+2)==DFV2_CALL_BYTES && k->status==0xffff;
 }
-/* The only guest write besides the claim output: status and, for DONE,
- * the result registers and FLAGS. The extent was pinned writable. */
+/* The adapter's only guest write besides the claim output: status and, for
+ * DONE/CRITICAL, the result registers and FLAGS. The extent was pinned
+ * writable. (The f3-57 backend writes the DOS structures it owns.) */
 static void finish(struct dos_unified *d,const struct dfv2_call *k,unsigned status) {
     uint8_t c[0x24-0x0e];
     w16(c,(uint16_t)status); w16(c+2,k->flags);
     const uint16_t r[9]={k->ax,k->bx,k->cx,k->dx,k->si,k->di,k->bp,k->ds,k->es};
     for (unsigned i=0;i<9;i++) w16(c+4+2*i,r[i]);
     struct dos_file_far call=at(d->layout.driver_seg,(uint16_t)(d->layout.call_off+0x0e));
-    d->memory.write(d->memory.arg,lin(call),c,status==DFV2_STATUS_DONE ? sizeof(c) : 2);
+    d->memory.write(d->memory.arg,lin(call),c,status==DFV2_STATUS_CHAIN ? 2 : sizeof(c));
 }
 static void done_error(struct dfv2_call *k,unsigned error) {
     k->flags=(uint16_t)(error ? k->flags|1u : k->flags&~1u); k->ax=(uint16_t)error;
@@ -314,12 +316,13 @@ static int final_bind(struct dos_unified *d,struct dfv2_call *k) {
     REQUIRE(read_psp(d,&l,l.root,&j) && j.count==20 && same(j.table,at(l.root,0x18)),"root PSP/JFT",E_PARAM);
     REQUIRE(d->memory.check(d->memory.arg,lin(plus(rec,0xb0)),32,true),"claim output not writable",E_PARAM);
     if (d->backend.claim) memcpy(l.claim,d->backend.claim,32);
+    d->staged=&l;
     int e=prepare(d,DFV2_EVENT_BIND,l.root,l.root);
-    if (e) { d->why="backend refused final bind"; return e; }
+    if (e) { d->staged=0; d->why="backend refused final bind"; return e; }
     d->memory.write(d->memory.arg,lin(plus(rec,0xb0)),l.claim,32);
     d->layout=l; memset(d->process,0,sizeof(d->process));
     d->process[0]=(struct dfv2_process){.used=true,.kind=0,.psp=l.root,.parent=l.root};
-    d->selected=d->owning=l.root; d->bound=true;
+    d->selected=d->owning=l.root; d->bound=true; d->staged=0;
     commit(d,DFV2_EVENT_BIND,l.root); d->stats.binds++;
     return 0;
 }
@@ -371,6 +374,7 @@ enum dfv2_outcome dos_unified_gate(struct dos_unified *d,const struct dos_file_f
     REFUSE(k.generation==d->generation,"stale call generation");
     REFUSE(d->serial!=UINT32_MAX && k.serial==d->serial+1,"call serial");
     REFUSE(k.role==role,"call role differs from gate");
+    REFUSE(!k.retry || role==DFV2_ROLE_LOCAL,"retry word outside the local role");
     if (role==DFV2_ROLE_EVENT) {
         REFUSE(!k.frame_ss && !k.frame_sp && !k.arg,"event frame fields");
         REFUSE(k.ax==DFV2_EVENT_BIND ? !d->bound : d->bound,"bind state");
@@ -396,20 +400,30 @@ enum dfv2_outcome dos_unified_gate(struct dos_unified *d,const struct dos_file_f
     unsigned status=DFV2_STATUS_DONE;
     if (role==DFV2_ROLE_EVENT) {
         int e=k.ax==DFV2_EVENT_BIND ? final_bind(d,&k) : lifecycle(d,k.ax,k.bx,k.cx,k.dx);
+        if (e && k.ax==DFV2_EVENT_BIND) d->bind_refusal=d->why;
         done_error(&k,(unsigned)e);
     } else {
         enum dos_file_result r=DOS_FILE_CHAIN; struct dfv2_call in=k;
+        d->critical.raise=false;
+        if (k.retry) d->stats.retries++;
         if (d->backend.request) r=d->backend.request(d->backend.arg,role,&k,&d->critical);
         if (r==DOS_FILE_PENDING) {
             d->pending=true; d->token=++d->tokens; d->suspended=in; d->stats.suspended++;
             d->memory.release(d->memory.arg); return DFV2_SUSPEND;
         }
         if (r==DOS_FILE_CHAIN) { k=in; status=DFV2_STATUS_CHAIN; }
+        else if (d->critical.raise && role==DFV2_ROLE_LOCAL) {
+            const struct dfv2_critical *c=&d->critical;
+            k=in; k.ax=c->ax; k.di=c->di; k.bp=c->bp; k.si=c->si;
+            status=DFV2_STATUS_CRITICAL; d->stats.critical++;
+        }
+        d->critical.raise=false;
     }
     finish(d,&k,status);
     if (status==DFV2_STATUS_CHAIN) d->stats.chained++; else d->stats.done++;
     d->memory.release(d->memory.arg); return DFV2_RESUME;
 }
+const struct dfv2_layout *dos_unified_layout(const struct dos_unified *d) { return d->staged ? d->staged : &d->layout; }
 bool dos_unified_callback_stack(const struct dos_unified *d,uint16_t *ss,uint16_t *spp) {
     if (!d->pending || d->dead) return false;
     *ss=d->layout.driver_seg; *spp=(uint16_t)(stack_top(&d->layout)-4); return true;

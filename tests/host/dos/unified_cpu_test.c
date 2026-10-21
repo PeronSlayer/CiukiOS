@@ -2,8 +2,11 @@
  * K2043 fork, CIUKIDF.SYS and guest COM programs from a FAT16 disk image.
  * A minimal BIOS lives in ROM stubs reached through the guest IVT; INT FE at
  * the DFV2 gates enters the production native adapter (dos_unified.c) with a
- * fixture backend. Not a VM boot and not hardware evidence. f3-57 owns the
- * live file backend: every file operation here uses FreeDOS's local FAT.
+ * fixture backend. Not a VM boot and not hardware evidence. Built normally,
+ * every file operation uses FreeDOS's local FAT (f3-56). Built with
+ * -DH57_IFS (f3-57), the backend is the production live IFS backend
+ * (dos_unified_ifs.c) over the production VFS/FAT, mounting the same
+ * in-memory disk as C: (and an optional read-only D: volume) at the bind.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <x86emu.h>
 #include <stdarg.h>
@@ -11,6 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include "vm/dos_unified.h"
+#ifdef H57_IFS
+#include "vm/dos_unified_ifs.h"
+#include "vm/dos_file_volume.h"
+#endif
 
 #define TOTAL_SECTORS (63u+262144u)
 #define BIOS_STUBS 0xe000u
@@ -74,7 +81,7 @@ static enum dos_file_result b_request(void *a,unsigned role,struct dfv2_call *k,
     if (role==DFV2_ROLE_DIRECT) {
         unsigned ah=k->ax>>8;
         if (ah==0x61) { k->ax=0x5a5a; k->bx=(uint16_t)~k->bx; k->cx=0x1234; k->dx=0xfedc; k->flags&=~1u; return DOS_FILE_DONE; }
-        if (ah==0x6f) { *c=(struct dfv2_critical){0x1a02,0x000c,0x0000,0x0000}; return DOS_FILE_PENDING; }
+        if (ah==0x6f) { *c=(struct dfv2_critical){0x1a02,0x000c,0x0000,0x0000,false}; return DOS_FILE_PENDING; }
         return DOS_FILE_CHAIN;
     }
     if (role==DFV2_ROLE_LOCAL && k->ax==0x1122) { k->flags&=~1u; return DOS_FILE_DONE; }
@@ -122,8 +129,86 @@ static bool sector_write(uint32_t lba,const uint8_t *in) {
     memcpy(overlay[lba],in,512); return true;
 }
 static void set_cf(bool on) { if (on) E->x86.R_EFLG|=1; else E->x86.R_EFLG&=~1u; }
+#ifdef H57_IFS
+static unsigned int13_before,int13_after;
+/* ---- f3-57 live backend: production IFS over production VFS/FAT ---- */
+static struct dfv2_ifs IFS;
+static struct block_cache CACHE;
+static struct dos_file_volume CVOL,DVOL;
+static uint8_t *dimage; static size_t dimage_bytes;
+static unsigned fault_reads,faults_hit,mounts,unmounts,held_samples[64],held_n;
+static bool fault_sticky,dvol_open;
+static const char *ifs_fail;
+static int c_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
+    (void)d;
+    if (fault_sticky || fault_reads) { if (fault_reads) fault_reads--; faults_hit++; return -FS_EIO; }
+    for (uint32_t i=0;i<n;i++) sector_read(63u+(uint32_t)lba+i,(uint8_t *)buf+512u*i);
+    return 0;
+}
+static int c_write(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
+    (void)d;
+    for (uint32_t i=0;i<n;i++) if (!sector_write(63u+(uint32_t)lba+i,(const uint8_t *)buf+512u*i)) return -FS_EIO;
+    return 0;
+}
+static int c_flush(struct blkdev *d) { (void)d; return 0; }
+static struct blkdev CPROV={.read=c_read,.write=c_write,.flush=c_flush,.capacity=262144u-63u,.sector_size=512,
+    .write_cache_state=BLKDEV_CACHE_DISABLED,.logical=true};
+static int d_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
+    (void)d; memset(buf,0,512u*n);
+    for (uint32_t i=0;i<n;i++) { size_t off=(size_t)(lba+i)*512u; if (off<dimage_bytes)
+        memcpy((uint8_t *)buf+512u*i,dimage+off,dimage_bytes-off<512 ? dimage_bytes-off : 512); }
+    return 0;
+}
+static struct blkdev DPROV={.read=d_read,.sector_size=512,.logical=true};
+static int h_mount(void *a,struct dfv2_ifs *s) {
+    (void)a;
+    if (ifs_fail && !strcmp(ifs_fail,"mount")) return -FS_EIO;
+    int e=dos_file_volume_open(&CVOL,&CACHE,&CPROV,true);
+    if (e) return e;
+    e=dfv2_ifs_map(s,2,&CVOL.table,2,false);
+    if (!e && dimage) {
+        uint32_t total=dimage_bytes>=0x24 ? (uint32_t)(dimage[0x13]|dimage[0x14]<<8) : 0;
+        if (!total && dimage_bytes>=0x24) total=(uint32_t)dimage[0x20]|(uint32_t)dimage[0x21]<<8|(uint32_t)dimage[0x22]<<16|(uint32_t)dimage[0x23]<<24;
+        DPROV.capacity=total;            /* the BPB's extent; unwritten tail reads as zeros */
+        e=dos_file_volume_open(&DVOL,&CACHE,&DPROV,false);
+        /* --ifs-fail=lastdrive: the read-only view is offered as Z: (beyond
+         * LASTDRIVE=Y), so the barrier refuses after a successful mount. */
+        unsigned guest=ifs_fail && !strcmp(ifs_fail,"lastdrive") ? 25 : 3;
+        if (!e) { dvol_open=true; e=dfv2_ifs_map(s,guest,&DVOL.table,2,true); }
+    }
+    if (e) { if (dvol_open) (void)dos_file_volume_close(&DVOL); dvol_open=false; (void)dos_file_volume_close(&CVOL); return e; }
+    mounts++; return 0;
+}
+static void h_unmount(void *a,struct dfv2_ifs *s) {
+    (void)a; (void)s;
+    if (dvol_open) (void)dos_file_volume_close(&DVOL);
+    dvol_open=false;
+    (void)dos_file_volume_close(&CVOL); unmounts++;
+}
+static uint64_t h_wall(void *a) { (void)a; return E->x86.R_TSC/10; }
+static bool h_stopped(void *a) { (void)a; return false; }
+static void h_pause(void *a) { (void)a; }
+static bool hreq_cancelled(void *a) { (void)a; return false; }
+static uint64_t hreq_now(void *a) { (void)a; return 0; }
+static void hreq_pause(void *a) { (void)a; }
+/* Guest control port EBh: 00 disarm, 1n arm n failing C: provider reads,
+ * 1F persistent faults, 20 sample the native ledger. Arming first commits
+ * and drops the clean cache so the next data read reaches the provider. */
+static void ifs_control(unsigned v) {
+    if (v==0x20) { if (held_n<64) held_samples[held_n++]=dfv2_ifs_held(&IFS); return; }
+    if (!v) { fault_reads=0; fault_sticky=false; return; }
+    if (v<0x11 || v>0x1f || !IFS.active) return;
+    static struct vfs_request hreq={.deadline=UINT64_MAX,.now=hreq_now,.cancelled=hreq_cancelled,.pause=hreq_pause};
+    CVOL.table.request=&hreq; (void)vfs_flush_drive(&CVOL.table,2);
+    cache_invalidate(&CACHE,&CPROV,false);
+    if (v==0x1f) fault_sticky=true; else fault_reads=v-0x10;
+}
+#endif
 static int disk(void) {
     unsigned ah=E->x86.R_AH,dl=E->x86.R_DL; set_cf(false);
+#ifdef H57_IFS
+    if (IFS.active) int13_after++; else int13_before++;
+#endif
     if (dl!=0x80) { E->x86.R_AH=ah==0x15 ? 0 : 1; set_cf(ah!=0x15); return 1; }
     if (ah==0x00) { E->x86.R_AH=0; return 1; }
     if (ah==0x08) { unsigned cyl=TOTAL_SECTORS/(16*63)-1; E->x86.R_CH=(uint8_t)cyl; E->x86.R_CL=(uint8_t)(63|((cyl>>2)&0xc0));
@@ -220,7 +305,12 @@ static int gate(void) {
     }
     enum dfv2_outcome r=dos_unified_gate(&U,&f);
     if (getenv("H56_TRACE"))       /* diagnostics: every gate call and its outcome */
-        fprintf(stderr,"GATE %04x:%04x ss:sp=%04x:%04x ax=%04x -> %d why=%s\n",f.cs,f.ip,f.ss,f.sp,f.ax,r,U.why ? U.why : "-");
+    {
+        uint32_t rec=((uint32_t)U.layout.driver_seg<<4)+U.layout.call_off;
+        fprintf(stderr,"GATE %04x:%04x ss:sp=%04x:%04x ax=%04x -> %d why=%s record ax=%04x status=%04x retry=%04x flags=%04x\n",
+                f.cs,f.ip,f.ss,f.sp,f.ax,r,U.why ? U.why : "-",rw(rec>>4,(rec&15)+0x12),rw(rec>>4,(rec&15)+0x0e),
+                rw(rec>>4,(rec&15)+0x2a),rw(rec>>4,(rec&15)+0x10));
+    }
     if (r==DFV2_REFUSED) refusals_seen++;
     if (r==DFV2_SUSPEND) {
         uint16_t ss,sp;
@@ -262,6 +352,9 @@ static unsigned memio(x86emu_t *e,u32 addr,u32 *val,unsigned type) {
             if (opt.stop_on && *val=='\n' && strstr(e9,opt.stop_on)) { stopped=0; x86emu_stop(E); }
         }
         else if (addr==0xea) { stopped=(int)(*val&255); x86emu_stop(E); }
+#ifdef H57_IFS
+        else if (addr==0xeb) ifs_control(*val&255);
+#endif
         else if (!(addr>=0x3f8 && addr<=0x3ff)) ports_unknown++;
         return 0;
     }
@@ -310,6 +403,10 @@ int main(int argc,char **argv) {
         else if (!strncmp(argv[i],"--fail=",7)) { if (sscanf(argv[i]+7,"%u:%u",&L.fail_event,&L.fail_at)!=2) return 2; }
         else if (!strncmp(argv[i],"--budget=",9)) budget=strtoull(argv[i]+9,0,10);
         else if (!strcmp(argv[i],"--claims")) L.claims=true;
+#ifdef H57_IFS
+        else if (!strncmp(argv[i],"--d=",4)) { dimage_bytes=load(argv[i]+4,&dimage,64u<<20); if (!dimage_bytes) return 3; }
+        else if (!strncmp(argv[i],"--ifs-fail=",11)) ifs_fail=argv[i]+11;
+#endif
         else return 2;
     }
     L.fail_event=L.fail_event ? L.fail_event : (L.fail_at ? 0 : 99);
@@ -345,6 +442,14 @@ int main(int argc,char **argv) {
     struct dos_file_ops ops={.check=m_check,.read=m_read,.write=m_write,.release=m_release};
     if (L.claims) { L.claim[0x61>>3]|=(uint8_t)(1u<<(0x61&7)); L.claim[0x6e>>3]|=(uint8_t)(1u<<(0x6e&7)); L.claim[0x6f>>3]|=(uint8_t)(1u<<(0x6f&7)); }
     struct dfv2_backend backend={b_prepare,b_commit,b_request,b_complete,b_destroy,L.claims ? L.claim : 0,0};
+#ifdef H57_IFS
+    if (cache_init(&CACHE,1u<<20)) return 4;
+    struct dos_file_ops ifs_ops=ops; ifs_ops.wall=h_wall; ifs_ops.monitor=h_wall; ifs_ops.pause=h_pause; ifs_ops.stopped=h_stopped;
+    struct dfv2_ifs_host host={h_mount,h_unmount,0};
+    dfv2_ifs_init(&IFS,&U,&ifs_ops,&host,0x57,generation);
+    dfv2_ifs_backend(&IFS,&backend);
+    (void)b_prepare; (void)b_commit; (void)b_request; (void)b_complete; (void)b_destroy;
+#endif
     dos_unified_init(&U,generation,&ops,&backend);
     for (unsigned i=0;i<512;i++) x86emu_write_byte(E,0x7c00+i,image[i]);
     x86emu_set_seg_register(E,E->x86.seg+R_CS_INDEX,0);
@@ -385,12 +490,28 @@ int main(int argc,char **argv) {
     printf("H56 BACKEND runtime=%d live=%d prepared=%d committed=%d aborted=%d released=%d bad=%d direct=%u local=%u completions=%u seen=%u,%u,%u,%u,%u,%u,%u,%u\n",
            L.runtime,live,L.prepared,L.committed,L.aborted,L.released,L.bad,L.requests[1],L.requests[2],L.completions,
            L.seen[0],L.seen[1],L.seen[2],L.seen[3],L.seen[4],L.seen[5],L.seen[6],L.seen[7]);
+#ifdef H57_IFS
+    printf("H57 IFS active=%u owned=%x requests=%u owned_requests=%u chained=%u failed=%u critical=%u retries=%u expired=%u forged=%u reclaimed=%u opens=%u closes=%u reads=%u writes=%u finds=%u read_bytes=%llu written_bytes=%llu activations=%u refusals=%u why=%s\n",
+           IFS.active,IFS.owned,IFS.stats.requests,IFS.stats.owned,IFS.stats.chained,IFS.stats.failed,IFS.stats.critical,
+           IFS.stats.retries,IFS.stats.expired,IFS.stats.forged,IFS.stats.reclaimed,IFS.stats.opens,IFS.stats.closes,
+           IFS.stats.reads,IFS.stats.writes,IFS.stats.finds,(unsigned long long)IFS.stats.read_bytes,
+           (unsigned long long)IFS.stats.written_bytes,IFS.stats.activations,IFS.stats.refusals,IFS.why ? IFS.why : "none");
+    printf("H57 HELD");
+    for (unsigned i=0;i<held_n;i++) printf(" %u",held_samples[i]);
+    printf(" final=%u\n",dfv2_ifs_held(&IFS));
+    printf("H57 IO int13_before=%u int13_after=%u faults_hit=%u mounts=%u unmounts=%u critical_status=%u adapter_retries=%u\n",
+           int13_before,int13_after,faults_hit,mounts,unmounts,U.stats.critical,U.stats.retries);
+#endif
     /* VM stop: event 8, then a late completion must be refused. */
     dos_unified_destroy(&U);
     struct dos_file_frame late={.cs=DFV2_ROM_SEG,.ip=DFV2_CRITICAL+2,.ss=U.layout.driver_seg,.sp=(uint16_t)(U.layout.stack_off+U.layout.stack_bytes-4)};
     enum dfv2_outcome late_r=dos_unified_critical(&U,&late,1);
     live=0; for (unsigned i=0;i<64;i++) if (L.e[i].state) live++;
     printf("H56 DESTROY dead=%u live=%d late_completion=%s prepared=%d bad=%d\n",U.dead,live,late_r==DFV2_REFUSED ? "refused" : "ACCEPTED",L.prepared,L.bad);
+#ifdef H57_IFS
+    printf("H57 DESTROY held=%u mounted=%u active=%u unmounts=%u\n",dfv2_ifs_held(&IFS),IFS.mounted,IFS.active,unmounts);
+    cache_destroy(&CACHE); free(dimage);
+#endif
     for (unsigned i=0;i<TOTAL_SECTORS;i++) free(overlay[i]);
     free(image); x86emu_done(E);
     return failure ? 1 : 0;
