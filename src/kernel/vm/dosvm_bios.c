@@ -473,9 +473,31 @@ int dosvm_record_byte(struct dosvm *v, uint8_t byte)
     return 0;
 }
 
+bool dosvm_io_hot(struct dosvm *v,uint16_t port,unsigned width,bool write,uint32_t *value,int *error)
+{
+    if (width!=1 || v->monitor.io!=dosvm_io || v->info.state>=DOSVM_STOPPING) return false;
+    bool pit=port==0x40 || port==0x43;
+    bool opl=write && (port==0x388 || port==0x389);
+    if (!pit && !opl) return false;
+    /* Reprogramming a timer retains the trace/validation path. The polling
+     * loop's latch command has no programming or IRQ-delivery side effect. */
+    if (pit && write && !(port==0x43 && !(*value&0xf0u))) return false;
+    unsigned hint=v->port_hint[pit ? 0 : 3];
+    dosvm_port_handler handler=pit ? dosvm_pit_port : dosvm_audio_port;
+    if (hint>=DOSVM_PORTS || v->ports[hint].handler!=handler ||
+        port<v->ports[hint].first || port>v->ports[hint].last) return false;
+    if (v->memory.pool.hold) v->memory.pool.effects++;
+    if (v->perf.trap_active && !v->perf.io_valid) { v->perf.io_port=port; v->perf.io_valid=true; }
+    v->perf.cause=pit ? DOSVM_COST_PIT_PIC : DOSVM_COST_IO;
+    uint32_t flags=irq_save();
+    *error=handler(v,port,1,write,value,v->ports[hint].arg);
+    irq_restore(flags); v->perf.io_fast_cycles++;
+    return true;
+}
 int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
 {
     struct dosvm *v = arg;
+    v->perf.io_dispatches++;
     if (v->info.state >= DOSVM_STOPPING) return -V86_EIO;
     /* f3-46: a device effect inside the transaction; a page wait after it
      * is counted as late (the prefault rules should keep it at zero). */

@@ -25,18 +25,19 @@ Tables: kernel `src/kernel/probes/selector.c` (`f6_names`, `browser_url()`,
 `PROBE_BROWSER_NOW`, `probe_selection.url`) and the host model
 `scripts/test/loader_model.py` (`BROWSER_SELECTOR_RE`) accept the grammar; the
 runner (`scripts/test/run.py`) reconstructs the request with the `url=` and
-`now=1` suffixes. The loader menu table (`src/boot/ciukldr/menu.inc`) does
-**not**: the loader had 7 free bytes in its fixed 24576-byte extent and the
-registration (name, ` url=` coarse filter, ` now=1`) costs 144 bytes
-(`TIMES value -137 is negative` with the patch applied). The patch is kept as
-`build/codex/f6-18-loader.patch` (menu.inc plus the `probe_tables.py` label
-regex) and lands after f0-54 frees the loader budget;
-`tests/host/test_runner_selectors.py` lists `(6, 'browser')` as known
-unregistered in the menu until then. The loader validates every selector,
-fw_cfg ones included, before it boots the kernel (`menu.inc`, the `.bad`
-path), so **the QEMU cases cannot run before the loader patch is merged**: the
-loader of the current image rejects the `url=` suffix and falls back to its
-menu. `tests/host/dos/loader_selector_test.c` models that loader grammar.
+`now=1` suffixes. The loader validates every selector, fw_cfg ones included,
+before it boots the kernel (`menu.inc`, the `.bad` path). The first delivery
+kept the loader registration as a patch because the loader had 7 free bytes;
+after f0-54 (1,287 free bytes) the loader menu table registers it on the
+compact parser (2026-10-21): `f6_browser_name` in the F6 list and
+`.browser_suffix` with the exact grammar above for every source (` url=`,
+`http://` or `https://`, host `[A-Za-z0-9.-]+`, optional `:` and 1..5
+digits, `/`, path `[A-Za-z0-9_./-]*`, then nothing or ` now=1`). The 64-byte
+selector cap leaves at most 36 URL bytes, so the 40-byte URL bound always
+holds. Cost 224 bytes: 1,063 free with the release version define.
+`test_boot_modes.LoaderParserTests` compares the assembled grammar with the
+model, and `tests/host/test_runner_selectors.py` no longer lists
+`(6, 'browser')` as unregistered.
 
 ## Guest side
 
@@ -74,8 +75,8 @@ menu. `tests/host/dos/loader_selector_test.c` models that loader grammar.
   decoded body bytes, TLS verdict, error text); the first throbber stop sends
   the one report. Verdicts: `ok`, `none` (plain HTTP), `error` (HTTP-level
   error with TLS ok), `memory`, `clock`, `entropy`, `host`, `cert`, `date`,
-  `protocol`, `io`, `eof`, `other`; f6-17's `CIUKI_TLS_NOT_READY` maps to
-  `not_ready` once merged (one `case` line in `ciuki_test_verdict`).
+  `protocol`, `io`, `eof`, `not_ready` (f6-17's `CIUKI_TLS_NOT_READY`),
+  `other`.
 
 Nothing above runs on a normal boot: the probe exists only under the test
 request, the resolver slots are empty unless the probe arms them, and the
@@ -144,6 +145,6 @@ and `END status=PASS`.
 - `sdk/netsurf/anchors.c` with no prefix reproduces the production
   `anchors.h` byte for byte.
 
-QEMU evidence is the lead's: after the f0-54 loader budget and the loader
-patch, `python3 scripts/test/run.py --suite f6-net` on the canonical image
+QEMU evidence is the lead's: with the loader registration above,
+`python3 scripts/test/run.py --suite f6-net` on the canonical image
 runs the 24 ARP cases and these six.

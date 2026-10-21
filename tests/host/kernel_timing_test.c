@@ -71,8 +71,13 @@ int main(void)
     CHECK(s.raw_work_us==20 && s.raw_firmware_us==2100); /* same raw owner/site, separate maxima */
     CHECK(s.work_site && s.work_site!=s.critical_site && !s.work_owner[0]);
     CHECK(s.critical_us==2120); /* raw firmware latency remains visible */
+    struct task device={.name="device-work",.id=87,.device_worker_site=0xc0128700};
+    g_current=&device;
     f=irq_save();cycles+=2200;irq_restore(f);timing_snapshot(&s);
     CHECK(s.critical_work_us==2200 && s.budget_violations==2 && s.unclassified_irqoff==2);
+    CHECK(!strcmp(s.unclassified_task,"device-work") && s.unclassified_task_id==87 &&
+          s.unclassified_worker_site==0xc0128700);
+    g_current=0;
     puts("f0-46 attribution: IRQ11 raw=2120us work=20us firmware=2100us; 101us work fails; unknown 2200us fully charged PASS");
     g_cpu_tsc=false;g_tsc_per_ms=0;timing_snapshot(&s);CHECK(!s.critical_us);
     puts("kernel timing: longest section/address, 4230us reproduction, software/external gaps, reset and <=500us sections with zero gaps PASS");

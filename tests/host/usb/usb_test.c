@@ -1724,8 +1724,22 @@ static void root_port_isolation(bool ohci)
     record_hook=NULL;
     printf("PASS f0-40 USB %s failed hub child-disable: hub root port isolated; independent root mouse survives\n",ohci?"OHCI":"UHCI");
 }
+static void scan_option(void)
+{
+    const char *options[]={"", "usbscan=00", "xusbscan=0", "usbscan=1", "usbscan=0\r\n"};
+    for (unsigned opt=0;opt<5;opt++) {
+        setup(false,false); memcpy(g_boot.options,options[opt],strlen(options[opt])+1);
+        assert(!attach()); model_step(); unsigned scans=m.host.scan_count;
+        unsigned devices=m.host.device_count; assert(devices && m.host.scanned);
+        for (unsigned i=0;i<4;i++) { m.now+=250; model_step(); }
+        assert(m.host.device_count==devices);
+        assert(opt==4 ? m.host.scan_count==scans : m.host.scan_count!=scans);
+    }
+    puts("F1-87 usbscan=0: initial enumeration retained, periodic scans stopped, exact tokens and CRLF PASS");
+}
 int main(void)
 {
+    scan_option();
     if(getenv("USB_TEST_F1_60_ONLY")) {binding_eighth_packet();return 0;}
     receiver_wheel();chained_bulk();binding_eighth_packet();
     enumeration_retries(false);enumeration_retries(true);

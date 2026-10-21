@@ -12,3 +12,15 @@ Required (research first: how Windows 98/ME VxD scheduling and the DMA refill (V
 4. The 2.1 ms sections themselves stay the subject of the T23 experiment (`usbscan=0`, f1-87 G); do not change the USB scan here.
 
 Report `build/codex/f1-90-report.md`. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; no new `panic()` paths; verify the date with `date` before any timestamp; English.
+
+## Amendment 1 (lead, 2026-10-21 20:51, decisions on the delivery)
+
+1. Device-class CPU may reach 6 ms per 10 ms: 4 ms shared budget plus the
+   refill's own 2 ms. R2/R3 of the real-time contract are amended by the lead
+   accordingly (the refill is exempt from the shared budget and has its own).
+2. VM sound cadence and the refill's 4 ms backup timer stay on `device-work`
+   for the 1.0 Alpha; moving the VM clock to its own audio-class task is the
+   follow-up directive f1-91, after the `usbscan=0` experiment on the T23.
+3. R1 states the direct interrupt wake of the refill explicitly.
+4. `device_attribution` stays in production as the replay's negative control
+   (one flag, never cleared outside tests).

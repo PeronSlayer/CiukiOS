@@ -45,8 +45,10 @@ static void format_cases(void)
     assert(!strcmp(line,"case=browser-page status=200 bytes=42 tls=error url=none"));
     assert(ciuki_test_format(line,sizeof(line),5000,1,CIUKI_TLS_ENTROPY,"e",NULL)>0 && !strcmp(line,"case=browser-page status=999 bytes=1 tls=entropy url=none"));
     assert(ciuki_test_format(line,sizeof(line),0,0,99,"x","u")>0 && strstr(line," tls=other "));
+    assert(ciuki_test_format(line,sizeof(line),0,0,CIUKI_TLS_NOT_READY,"Not ready",NULL)>0 &&
+           !strcmp(line,"case=browser-page status=0 bytes=0 tls=not_ready url=none"));
     /* Every verdict token stays inside the kernel's [a-z_] check. */
-    for(int e=-1;e<=CIUKI_TLS_EOF+1;e++){const char *v=ciuki_test_verdict(e,NULL);for(;*v;v++)assert((*v>='a'&&*v<='z')||*v=='_');}
+    for(int e=-1;e<=CIUKI_TLS_NOT_READY+1;e++){const char *v=ciuki_test_verdict(e,NULL);for(;*v;v++)assert((*v>='a'&&*v<='z')||*v=='_');}
     char small[40];assert(ciuki_test_format(small,sizeof(small),200,1,CIUKI_TLS_OK,NULL,"https://fixture.test/page")<0);
 }
 int main(void)

@@ -54,8 +54,8 @@ static bool ciuki_test_gate(const char *request,size_t length)
     return !memcmp(request+sizeof(prefix)-1+8," url=",5);
 }
 
-/* Verdict tokens: [a-z_] only (kernel report_token). A merged f6-17 adds the
- * CIUKI_TLS_NOT_READY value: map it to "not_ready" here (f6-18 report). */
+/* Verdict tokens: [a-z_] only (kernel report_token). f6-17's
+ * CIUKI_TLS_NOT_READY (getentropy EAGAIN) is "not_ready" (https-not-ready case). */
 static const char *ciuki_test_verdict(int tls_error,const char *error)
 {
     if(tls_error<0)return "none";
@@ -70,6 +70,7 @@ static const char *ciuki_test_verdict(int tls_error,const char *error)
     case CIUKI_TLS_PROTOCOL:return "protocol";
     case CIUKI_TLS_IO:return "io";
     case CIUKI_TLS_EOF:return "eof";
+    case CIUKI_TLS_NOT_READY:return "not_ready";
     default:return "other";
     }
 }

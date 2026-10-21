@@ -95,9 +95,11 @@ int validate(const char *s, unsigned n, unsigned flags, char *url, unsigned cap)
         self.assertEqual(self.kernel(longest)[0], 7)
         self.assertEqual(selector(longest)['now'], True)
 
-    def test_tables_know_the_probe_except_the_pending_loader_menu(self):
+    def test_kernel_menu_and_model_tables_know_the_probe(self):
+        # The loader menu registers f6:browser after f0-54 (assembled grammar:
+        # test_boot_modes.LoaderParserTests).
         self.assertEqual(probe_tables.registration(6, 'browser'),
-                         {'kernel': True, 'menu': False, 'loader_model': True})
+                         {'kernel': True, 'menu': True, 'loader_model': True})
         self.assertEqual(probe_tables.registration(6, 'net-arp'),
                          {'kernel': True, 'menu': True, 'loader_model': True})
 

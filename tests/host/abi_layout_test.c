@@ -812,6 +812,7 @@ static const struct expectation expectations[] = {
     {"constant.AUDIO_SET_GAIN", (uint32_t)(AUDIO_SET_GAIN), 16644u},
     {"constant.AUDIO_DRAIN", (uint32_t)(AUDIO_DRAIN), 16645u},
     {"constant.AUDIO_RESET", (uint32_t)(AUDIO_RESET), 16646u},
+    {"constant.AUDIO_REFILL_READ", (uint32_t)(AUDIO_REFILL_READ), 16647u},
     {"constant.MIXER_GET_MASTER", (uint32_t)(MIXER_GET_MASTER), 16897u},
     {"constant.MIXER_SET_MASTER", (uint32_t)(MIXER_SET_MASTER), 16898u},
     {"constant.CIUKI_MIXER_DEFAULTS", (uint32_t)(CIUKI_MIXER_DEFAULTS), 0u},

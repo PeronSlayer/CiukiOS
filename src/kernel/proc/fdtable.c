@@ -101,7 +101,7 @@ int file_description_close(struct file_description *d)
     if (d->node) {
         struct px_namespace *s = d->node->space;
         vfs_lock(s->vfs,0);
-        if (d->node->volume || d->node->ro) vfs_reserve_locked(s->vfs,vfs_drive_mask(d->node->drive));
+        if (d->node->volume || d->node->ro) vfs_reserve_file_locked(s->vfs,vfs_drive_mask(d->node->drive),d->identity);
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
@@ -223,14 +223,26 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
     return 0;
 }
 extern int w32_file_sync(struct px_node *) __attribute__((weak));
+extern bool w32_file_needs_sync(struct px_node *) __attribute__((weak));
 extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __attribute__((weak));
+struct read_range_check { struct file_description *description; int error; };
+static int read_range(void *arg,uint64_t position,size_t bytes)
+{
+    struct read_range_check *check=arg;
+    return check->error=px_description_range_locked(check->description,position,bytes,false);
+}
 static int description_io_locked(struct file_description *d, void *buffer, size_t bytes, bool write,
                     bool positioned, uint64_t offset, size_t *done, bool section)
 {
-    vfs_tag_locked(d->node->space->vfs,write ? "write" : "other");
+    vfs_tag_locked(d->node->space->vfs,write ? "write" : "read");
+    vfs_site_locked(d->node->space->vfs,"native");
     *done = 0;
     if (bytes > CIUKI_IO_MAX) return -EINVAL;
-    int live=px_ro_check_locked(d->node); if (live) return live;
+    int live=!write && d->node->volume ?
+        (d->node->drive<26 && d->node->volume->mounted && !d->node->volume->dev->quarantined &&
+         d->node->space->vfs->volumes[d->node->drive]==d->node->volume &&
+         d->node->space->vfs->generation[d->node->drive]==d->node->generation ? 0 : -EIO) : px_ro_check_locked(d->node);
+    if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (write && win32_protected_file(d)) return -EACCES;
     if (write && d->node->ro) return -EROFS;
@@ -251,12 +263,26 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (write && (position > UINT32_MAX || bytes > UINT32_MAX - position)) return -EFBIG;
     /* DOS record locks are mandatory for native clients as well. Namespace
      * and this volume's reservation already protect the common node list. */
-    int locked=section ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
-    if(w32_file_sync){int sync=w32_file_sync(n);if(sync)return sync;}
+    bool private_read=!write && !n->ro && !n->space->vfs->active;
+    int locked=section || private_read ? 0 : px_description_range_locked(d,position,bytes,write); if (locked) return locked;
+    if (w32_file_sync) {
+        struct vfs *v=n->space->vfs;
+        bool reserve=!v->active && w32_file_needs_sync && w32_file_needs_sync(n);
+        if (reserve) vfs_reserve_file_locked(v,vfs_drive_mask(n->drive),d->identity);
+        int sync=w32_file_sync(n);
+        if (reserve) { vfs_unlock(v); vfs_lock(v,0); }
+        if (sync) return sync;
+    }
     struct fat_entry before = n->entry;
+    struct read_range_check read_check={d,0};
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) :
         write ? VFS_IO(d->node->space->vfs,fat_write_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done)) :
-                VFS_IO(d->node->space->vfs,fat_read_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done));
+                vfs_read_identity_locked(n->space->vfs,d->identity,n->volume,&n->entry,
+                    &d->fat_cursor,&d->lock_description.io_active,&position,&d->position,positioned,
+                    section ? 0 : read_range,&read_check,buffer,bytes,done);
+    /* A mandatory-lock denial is already in the caller's ABI. Preserve it
+     * just as the reserved precheck does, before FAT's attribute mapping. */
+    if (read_check.error) return read_check.error;
     if(write && *done && w32_file_changed)w32_file_changed(n,position,buffer,(uint32_t)*done);
     if (!write) proc_launch_volume_read((uint32_t)bytes, *done);
     /* fat_write reports the committed count even if the later FSInfo hint
@@ -285,6 +311,7 @@ int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,
 int file_truncate_locked(struct file_description *d, uint64_t length)
 {
     vfs_tag_locked(d->node->space->vfs,"truncate");
+    vfs_site_locked(d->node->space->vfs,"native");
     if (win32_protected_file(d)) return -EACCES;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
@@ -304,6 +331,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
 int file_sync_locked(struct file_description *d)
 {
     vfs_tag_locked(d->node->space->vfs,"commit");
+    vfs_site_locked(d->node->space->vfs,"native");
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return px_ro_check_locked(d->node);
