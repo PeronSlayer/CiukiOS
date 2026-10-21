@@ -3,10 +3,13 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _POSIX_C_SOURCE 200809L
 #include "../../../../apps/w32srv/shell.h"
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <unistd.h>
 struct fixture_service {
     struct wr_server registry;
     struct ws_shell *shell;
@@ -14,10 +17,39 @@ struct fixture_service {
     char root[1024], hives[1100];
     unsigned fault;
 };
+/* The fixture disk is case-insensitive and case-preserving for PE I/O
+ * (host_services.Session.path), as FAT is for the production replay and
+ * probe. Resolve every existing component of the host path the same way:
+ * an NSIS engine creates C:\WINDOWS\wininit.ini and the restart service
+ * opens C:\WINDOWS\WININIT.INI. A missing component keeps its spelling. */
+static void fold_case(char *path,size_t from){
+    size_t i=from+1;  /* path[from] is the '/' after the drive letter */
+    for(;;){
+        size_t start=i;
+        while(path[i] && path[i]!='/')i++;
+        char saved=path[i];path[i]=0;
+        if(i>start && access(path,F_OK)){
+            path[start-1]=0;
+            DIR *d=opendir(path);
+            path[start-1]='/';
+            if(d){
+                struct dirent *e;
+                while((e=readdir(d)))
+                    if(strlen(e->d_name)==i-start && !strcasecmp(e->d_name,path+start)){memcpy(path+start,e->d_name,i-start);break;}
+                closedir(d);
+            }
+        }
+        path[i]=saved;
+        if(!saved)return;
+        i++;
+    }
+}
 static int mapped(struct fixture_service *s,const char *path,char out[2048]) {
     if(!path || path[0]!='/' || strstr(path,"/../") || strstr(path,"/./"))return EINVAL;
     int n=snprintf(out,2048,"%s/C%s",s->root,path);
-    return n<0 || n>=2048?ENAMETOOLONG:0;
+    if(n<0 || n>=2048)return ENAMETOOLONG;
+    fold_case(out,strlen(s->root)+2);
+    return 0;
 }
 static int fs_stat(void *o,const char *p,int *d,uint64_t *n){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.stat(0,q,d,n);}
 #define ONE(name) static int fs_##name(void *o,const char *p){struct fixture_service *s=o;char q[2048];int e=mapped(s,p,q);return e?e:s->native.name(0,q);}
