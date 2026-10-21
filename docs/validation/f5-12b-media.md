@@ -6,7 +6,49 @@ the `avivideo` device (`mciavi32.dll`), the msacm32 discovery entry points and
 PCM converter, avifil32 sample/time conversion, msvfw32 DrawDib and the
 MCIWnd subset. `cdaudio` is not implemented: its transport needs the
 reviewed F4 optical amendment (proposal in `build/codex/f5-12b-amendment.md`).
-Nothing here was run on QEMU or hardware.
+Nothing here was run on QEMU or hardware. The subsequent F5-12B2 CD backend
+and its approved contract are recorded in [f5-12b2-cd-audio.md](f5-12b2-cd-audio.md).
+
+## F5-12B continuation research (2026-10-21)
+
+The current base contains both accepted deliveries. The continuation preserves
+the lead's digital-primary/analog-fallback decision. Before changing code,
+the following primary references were checked against production sources:
+
+- [AVIStreamRead](https://learn.microsoft.com/en-us/windows/win32/api/vfw/nf-vfw-avistreamread)
+  and [AVISTREAMHEADER](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/api/avifmt/ns-avifmt-avistreamheader):
+  a nonzero dwSampleSize groups multiple fixed-size samples in a chunk. The
+  previous reader returned chunk counts for PCM; correct Length/Info/Read
+  to use sample units, support reads crossing chunk boundaries, and adapt
+  MCI AVI audio to request bounded batches of whole PCM frames/ADPCM blocks.
+- [AVI RIFF file reference](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference)
+  and [AVIOLDINDEX](https://learn.microsoft.com/en-us/previous-versions/ms779634(v=vs.85)):
+  parse optional idx1 entries with bounds, validate their chunk identities,
+  sizes and offsets against the already scanned movi data, and accept both
+  documented movi-relative and historical absolute offsets. Keep physical
+  stream order; do not trust an index to authorize reads outside movi.
+- [Microsoft Multimedia Standards Update, revision 3](https://mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/Docs/RIFFNEW.pdf):
+  PCMWAVEFORMAT is 16 bytes. acmStreamOpen already handles that boundary;
+  acmFormatSuggest must also avoid copying a nonexistent cbSize field.
+- [FFmpeg Cinepak implementation](https://github.com/FFmpeg/FFmpeg/blob/n7.1/libavcodec/cinepak.c)
+  and [MS Video 1 implementation](https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/msvideo1.c)
+  are upstream format-behavior references, alongside the existing format
+  notes below. No new upstream decoder code is copied. The f5-14C decoder
+  sources/provenance remain in place.
+
+Exact checks, host cost and sandbox restrictions for this continuation are
+recorded separately in `build/codex/f5-12b-report.md`.
+
+Final continuation evidence: `nice -n 19 make CAP= apps` passes. The focused
+media/codec run has 19 passes, one seccomp PE-adapter skip and five failures
+solely at LeakSanitizer shutdown (ptrace is unavailable). Codec reproducibility,
+24000 codec fuzz iterations and the exactly sized PCM16 regression pass;
+the media harnesses retain leak detection. Separate saved-artifact checks
+match all three pinned traces and nine independent AVI/GDI pixel oracles.
+Final Win32 discovery runs 258 tests: 213 pass, 19 skip, 25 fail at the same
+LeakSanitizer shutdown, and the unchanged dialog harness fails to link
+`host_pixel_format`. Source/fixture hashes remain stable across this run and
+the final apps build. No green full-suite, guest or hardware result is claimed.
 
 ## Sources checked before implementation
 
@@ -142,3 +184,90 @@ no cbSize); avi.c gains AVIStreamSampleToTime/TimeToSample.
 - ACM discovery and PCM converter (split conversions against a Python
   oracle), AVIStreamSampleToTime/TimeToSample, PE store exports/imports,
   census coverage and an i686 no-SSE/MMX disassembly check.
+
+## Amendment 2 research and implementation (2026-10-21)
+
+This amendment applies the nine review findings against `e9cc125b` only.
+The primary references checked against the affected implementations are:
+
+- Microsoft [MM_MCINOTIFY](https://learn.microsoft.com/en-us/windows/win32/multimedia/mm-mcinotify):
+  a device error during an operation requires `MCI_NOTIFY_FAILURE`. AVI now
+  reports preparation failures synchronously, completes a failed operation
+  once, and preserves its error for waiting callers.
+- Microsoft [MCI_OPEN](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open):
+  both opens must permit sharing; MCIWAVE/MCISEQ files are nonsharable.
+  Alias uniqueness remains separate from canonical file ownership. CD aliases
+  share one refcounted transport per optical slot, with separate notifications.
+- Microsoft, [Multimedia Data Standards Update, revision 3.0](https://billposer.org/Linguistics/Computation/riffnew.pdf),
+  printed pp. 22–23: MS ADPCM requires the seven standard coefficient pairs
+  in order, while allowing appended pairs. Validation and authored tests now
+  enforce that prefix; no codec implementation was copied from the reference.
+- T10, [MMC-3 revision 10g, section 5.17](https://www.13thmonkey.org/documentation/SCSI/mmc3r10g.pdf#page=192):
+  READ CD provides CD-DA extraction; the capability bit is described in the
+  CD capabilities page (printed p. 312). The existing kernel INFO handler
+  already retries capability discovery on a ready drive. User-mode CD audio
+  now refreshes unknown capabilities after insertion and selects its playback
+  path before each play, preserving the approved digital/analog policy.
+
+Wave/AVI output owners retain their mixer handle, headers and storage after
+failed reset, unprepare or close. The MCI worker retries an embedded cleanup
+record after device close; this extends the private MCI boundary to version 2.
+The wait loop snapshots yield inputs while locked and checks a 64-bit instance
+generation after reacquiring the lock. AVI audio uses the exclusive sample
+endpoint corresponding to the inclusive final video frame, including ADPCM
+lead-in removal and tail trimming. Palette ranges use subtraction after
+checking the start, so signed addition cannot overflow.
+
+Regression evidence and exact verification commands are recorded in
+`build/codex/f5-12b-report.md`, section “Amendment 2”. No kernel file changes,
+QEMU runs, systemd scopes or image builds belong to this amendment delivery.
+
+Amendment 2 verification: `nice -n 19 make CAP= apps` passes. Win32 discovery
+executes 277 tests: 233 pass, 19 skip, and 25 fail solely at LeakSanitizer
+shutdown because ptrace is unavailable in the sandbox. There are no link
+errors; all 18 dialog tests execute. The focused codec tests pass, including
+ASan/UBSan fuzz preflights. Saved artifacts match three pinned media traces
+and nine independent AVI/GDI pixel oracles, with zero tracked allocations.
+The AVI trace's partial-play completion moves from 875 ms to 745 ms because
+the audio queue now ends at the requested boundary. Leak detection settings
+remain as supplied by the repository scripts; unrestricted LSan reruns are
+left to the lead. After discovery, only the host wait interleaving and codec
+mutation cadence were adjusted and their focused commands rerun; production
+sources remain the state used by the apps build and discovery.
+
+
+## Amendment 3: file ownership identity (2026-10-21)
+
+Microsoft's [MCI_OPEN reference](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open)
+requires both opens to allow sharing and makes MCIWAVE/MCISEQ files
+nonsharable. Its [GetFileInformationByHandle reference](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
+and [BY_HANDLE_FILE_INFORMATION reference](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
+specify comparison of the volume serial and both file-index halves to
+identify two paths referring to one file. FAT's `fat_lookup` already accepts
+either the long name or the short alias of one directory entry.
+
+The MCI consumer uses those three handle-information fields instead of
+lexically normalised file paths. A private allocation wraps `mci_device`,
+preserving its driver boundary layout and version. It owns a read/shared-read
+handle until device close, including sequencers whose driver closes its
+input after caching it. Failed opens release that handle and do not claim an
+alias. Identity-query failure returns `MCIERR_FILE_READ`; file devices do not
+fall back to path spelling. The existing physical CD slot ownership remains
+in its driver.
+
+The host regression models long/8.3 spellings with hard links to authored
+WAV/MIDI fixtures. Both opening orders and all four sharing-flag combinations
+reject the second alias. Separate files containing identical bytes and
+similar names open independently; closing the first owner permits reopening
+the alternate spelling. Tests check allocation and file-handle balance,
+including metadata-query and parser failure.
+
+**Provider dependency:** in the `ee911112` base, kernel32's
+`GetFileInformationByHandle` explicitly returns zero serial/index fields;
+`ciuki_w32_file_info` has no identity fields. Consequently this consumer
+requires provider plumbing before integration on CiukiOS. Approval to extend
+the provider is pending because the directive limits this continuation to
+Amendment 3 and otherwise freezes the base. The host adapter's real POSIX
+device/inode identities validate the consumer only. Exact verification
+results and this remaining dependency are recorded in
+`build/codex/f5-12b-report.md`.

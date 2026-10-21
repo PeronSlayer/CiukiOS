@@ -22,7 +22,8 @@ uint32_t W32API waveOutGetPosition(uintptr_t, void *, uint32_t);
  * An underrun leaves the mixer silent until the next header arrives, holds
  * the audible position, and never skips unread samples or repeats a read. */
 struct cd {
-  struct mci_device *device;
+  struct mci_device *device, *clients;
+  uint32_t shareable;
   const struct mci_host *host;
   int fd;
   uint32_t slot, generation, capabilities, forced, analog;
@@ -35,7 +36,7 @@ struct cd {
   uint8_t *buffers[CD_BUFFERS];
 };
 #define CD_SLOTS 4u /* F4 STORAGE_DISKS; slots are independent of drive letters */
-static uint32_t owners[CD_SLOTS];
+static struct cd *owners[CD_SLOTS];
 #ifdef W32_HOST_MODEL
 int mci_cd_host_open(void);
 void mci_cd_host_close(int);
@@ -175,12 +176,17 @@ static int analog_action(struct cd *c, uint32_t action) {
   struct ciuki_media_cd_pause r = {.generation = c->generation, .action = action};
   return ctl(c, MEDIA_CD_PAUSE, &r, sizeof(r), 0);
 }
+static void complete_clients(struct cd *c, uint32_t status) {
+  for (struct mci_device *d = c->clients; d; d = d->shared_next)
+    if (d->busy) c->host->complete(d, status);
+}
 static int halt(struct cd *c) {
   current(c); c->epoch++;
   int e = 0;
   if (c->analog && c->mode != MCI_MODE_STOP) e = analog_action(c, CIUKI_CD_ACTION_STOP);
   int output_error = release_output(c); c->mode = MCI_MODE_STOP;
-  if (c->device && c->device->busy) c->host->abort(c->device);
+  for (struct mci_device *d = c->clients; d; d = d->shared_next)
+    if (d->busy) c->host->abort(d);
   return e ? e : output_error;
 }
 static int refresh(struct cd *c) {
@@ -198,6 +204,12 @@ static int refresh(struct cd *c) {
           (i && t.tracks[i].start_lba <= t.tracks[i-1].start_lba)) return -EIO;
     c->toc = t; c->generation = t.generation; c->position = t.tracks[0].start_lba;
   }
+  if (!(c->capabilities & CIUKI_CD_CAP_REPORTED)) {
+    struct ciuki_media_cd_info info = {.generation = c->generation};
+    e = ctl(c, MEDIA_CD_INFO, &info, sizeof(info), 0);
+    if (e) return e;
+    c->capabilities = info.capabilities;
+  }
   return 0;
 }
 static void unref(struct cd *c) {
@@ -209,7 +221,7 @@ static void unref(struct cd *c) {
 static void failure(struct cd *c) {
   current(c); release_output(c); c->mode = MCI_MODE_STOP; c->epoch++;
   c->toc.count = 0; c->present = 0;
-  c->host->complete(c->device, MCI_NOTIFY_FAILURE);
+  complete_clients(c, MCI_NOTIFY_FAILURE);
 }
 static int start_analog(struct cd *c, uint32_t from, const char *reason) {
   if (!(c->capabilities & CIUKI_CD_CAP_AUDIO_PLAY)) return -EOPNOTSUPP;
@@ -227,7 +239,6 @@ static int reader_step(struct cd *c) {
     if (release_output(c)) { c->host->unlock(); return 1; }
     const struct mci_host *h = c->host; unref(c); h->unlock(); return 0;
   }
-  struct mci_device *d = c->device;
   if (c->mode == MCI_MODE_STOP) { (void)release_output(c); c->host->unlock(); return 1; }
   uint32_t epoch = c->epoch;
   if (GetTickCount() - c->poll_at >= 100) {
@@ -251,7 +262,7 @@ static int reader_step(struct cd *c) {
       if (e || p.audio_status == CIUKI_CD_AUDIO_ERROR) failure(c);
       else if (p.audio_status == CIUKI_CD_AUDIO_COMPLETED) {
         c->position = c->to; c->mode = MCI_MODE_STOP;
-        c->host->complete(d, MCI_NOTIFY_SUCCESSFUL);
+        complete_clients(c, MCI_NOTIFY_SUCCESSFUL);
       } else if (p.audio_status == CIUKI_CD_AUDIO_PLAYING || p.audio_status == CIUKI_CD_AUDIO_PAUSED)
         c->position = p.absolute_lba;
     }
@@ -269,7 +280,7 @@ static int reader_step(struct cd *c) {
   }
   if (!outstanding && c->next >= c->to) {
     release_output(c); c->position = c->to; c->mode = MCI_MODE_STOP;
-    c->host->complete(d, MCI_NOTIFY_SUCCESSFUL);
+    complete_clients(c, MCI_NOTIFY_SUCCESSFUL);
     c->host->unlock(); return 1;
   }
   if (slot == CD_BUFFERS || c->next >= c->to) { c->host->unlock(); return 1; }
@@ -333,7 +344,15 @@ static uint32_t cd_open(struct mci_device *d, uint32_t flags, struct mci_open *p
       if (!d->element[1] || d->element[1] != ':' || d->element[2] || s.drive != ch - 'A') continue;
       }
     }
-    if (owners[c->slot]) { error = MCIERR_DEVICE_OPEN; break; }
+    if (owners[c->slot]) {
+      struct cd *shared = owners[c->slot];
+      if (!shared->shareable || !(flags & MCI_OPEN_SHAREABLE)) { error = MCIERR_DEVICE_OPEN; break; }
+      shared->refs++;
+      d->shared_next = shared->clients; shared->clients = d;
+      d->data = shared;
+      unref(c);
+      return 0;
+    }
     struct ciuki_media_cd_info info = {0};
     int e = ctl(c, MEDIA_CD_INFO, &info, sizeof(info), 0);
     if (e) { error = map_error(e); break; }
@@ -342,11 +361,14 @@ static uint32_t cd_open(struct mci_device *d, uint32_t flags, struct mci_open *p
     c->analog = c->forced == 2 || (!c->forced && (info.capabilities & CIUKI_CD_CAP_REPORTED) && !(info.capabilities & CIUKI_CD_CAP_CDDA_READ));
     /* Opening a drive with an empty tray is valid. */
     if (s.state == CIUKI_CD_READY && (e = refresh(c))) { error = map_error(e); break; }
-    owners[c->slot] = d->id; d->data = c; return 0;
+    c->shareable = !!(flags & MCI_OPEN_SHAREABLE); c->clients = d;
+    owners[c->slot] = c; d->data = c; return 0;
   }
   unref(c); return error;
 }
 static uint32_t start(struct cd *c, uint32_t from, uint32_t to) {
+  c->analog = c->forced == 2 || (!c->forced &&
+      (c->capabilities & CIUKI_CD_CAP_REPORTED) && !(c->capabilities & CIUKI_CD_CAP_CDDA_READ));
   c->from = c->position = c->next = from; c->to = to; c->epoch++;
   if (from == to) return 0;
   /* Establish cleanup ownership before opening a mixer source. Even a
@@ -401,9 +423,12 @@ static uint32_t cd_command(struct mci_device *d, uint32_t msg, uint32_t flags, v
         int e = c->analog ? analog_action(c, CIUKI_CD_ACTION_RESUME) : (int)waveOutRestart(c->output);
         if (e) return e < 0 ? map_error(e) : MCIERR_HARDWARE;
       }
+      if (!d->busy) c->host->begin(d);
       c->mode = MCI_MODE_PLAY; return MCI_ASYNC;
     }
-    int e = halt(c); return e ? map_error(e) : start(c, from, to);
+    int e = halt(c);
+    if (e) return map_error(e);
+    c->device = d; return start(c, from, to);
   }
   case MCI_STOP: return map_error(halt(c));
   case MCI_PAUSE: case MCI_RESUME: {
@@ -505,12 +530,19 @@ static uint32_t cd_command(struct mci_device *d, uint32_t msg, uint32_t flags, v
 }
 static void cd_close(struct mci_device *d) {
   struct cd *c = d->data;
+  struct mci_device **link = &c->clients;
+  while (*link && *link != d) link = &(*link)->shared_next;
+  if (*link) *link = d->shared_next;
+  if (c->clients) {
+    if (c->device == d) c->device = c->clients;
+    unref(c); d->data = 0; return;
+  }
   halt(c); c->closing = 1; c->device = 0;
   owners[c->slot] = 0;
   if (c->reader) CloseHandle(c->reader);
   unref(c); d->data = 0;
 }
 const struct mci_driver *mci_cd_driver(void) {
-  static const struct mci_driver driver = {1, "cdaudio", MCI_DEVTYPE_CD_AUDIO, cd_open, cd_command, cd_close, 0};
+  static const struct mci_driver driver = {MCI_BOUNDARY_VERSION, "cdaudio", MCI_DEVTYPE_CD_AUDIO, cd_open, cd_command, cd_close, 0};
   return &driver;
 }

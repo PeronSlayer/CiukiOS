@@ -6,6 +6,10 @@
 #include <ciuki/probe.h>
 #include <ciuki/storage.h>
 #include <ciuki/files.h>
+#include <ciuki/net_stack.h>
+#include <ciuki/entropy.h>
+#include <ciuki/entropy_pool.h>
+#include "selector.h"
 
 extern bool probes_operator_mode;
 extern bool probes_operator_wait(bool (*)(void *), uint64_t (*)(uint32_t),
@@ -123,6 +127,7 @@ extern int supervisor_spawn_desktop_probe(struct process **out);
 extern bool probes_desktop_v3_selected(const char *,unsigned,uint32_t);
 extern int probes_crash_server(const char *, unsigned, uint32_t, bool, bool);
 static bool report_unsigned(const char *, const char *, uint32_t *);
+static bool report_token(const char *, const char *, char *, size_t, bool);
 static struct {
     bool active, invalid, input_recorded;
     const char *invalid_check;
@@ -146,6 +151,11 @@ static struct {
     uint32_t installer_child;
     unsigned core_fixture; /* shared fixture ID + 1; zero leaves the gate unarmed */
     uint32_t core_child;
+    /* f6-18 f6:browser: the desktop names the browser it spawned (GATE_BROWSER);
+     * the browser then reports one page outcome through probe call 3. */
+    bool browser, browser_done;
+    uint32_t browser_child, page_status, page_bytes;
+    char page_tls[17], page_url[97];
 } native_reports;
 static bool installer_report_stage(unsigned,unsigned,unsigned);
 static struct {
@@ -173,7 +183,8 @@ static bool native_report(struct process *p, const char *line, unsigned length)
     bool server = p->pid == native_reports.server;
     bool survivor = p->pid == native_reports.survivor;
     bool victim = p->pid == native_reports.victim;
-    if (!server && !survivor && !victim) return false;
+    bool browser = native_reports.browser_child && p->pid == native_reports.browser_child;
+    if (!server && !survivor && !victim && !browser) return false;
     if (native_reports.invalid) return true;
     if (!length || length > CIUKI_PROBE_REPORT_MAX) { native_invalid("length"); return true; }
     if (server && !strncmp(line, "case=native-desktop ", 20)) {
@@ -295,6 +306,24 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         struct process *peer=proc_find(child);
         NATIVE_REQUIRE(peer && peer->ppid==p->pid && peer->personality==PROC_WIN32 && peer->state==PROC_LIVE,"fixture_identity");
         native_reports.core_child=child;
+    } else if (server && native_reports.browser && !strncmp(line,"case=browser ",13)) {
+        uint32_t child;
+        NATIVE_REQUIRE(report_unsigned(line,"child",&child),"browser_fields");
+        NATIVE_REQUIRE(!native_reports.browser_child,"browser_repeat");
+        struct process *peer=proc_find(child);
+        NATIVE_REQUIRE(peer && peer->ppid==p->pid && peer->personality==PROC_NATIVE && peer->state==PROC_LIVE,"browser_identity");
+        native_reports.browser_child=child;
+    } else if (browser && !strncmp(line,"case=browser-page ",18)) {
+        /* One outcome per case; every field is re-validated here so that no
+         * browser text reaches the record grammar unchecked. */
+        uint32_t status,bytes;
+        NATIVE_REQUIRE(!native_reports.browser_done,"page_repeat");
+        NATIVE_REQUIRE(report_unsigned(line,"status",&status) && status<=999,"page_status");
+        NATIVE_REQUIRE(report_unsigned(line,"bytes",&bytes),"page_bytes");
+        NATIVE_REQUIRE(report_token(line,"tls",native_reports.page_tls,sizeof(native_reports.page_tls),false),"page_tls");
+        NATIVE_REQUIRE(report_token(line,"url",native_reports.page_url,sizeof(native_reports.page_url),true),"page_url");
+        native_reports.page_status=status; native_reports.page_bytes=bytes;
+        native_reports.browser_done=true;
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -793,6 +822,117 @@ CIUKI_F5_PROBE("w32-media",probe_w32_media);
 
 static int probe_w32_gl(void) { return probe_w32_fixture(2); }
 CIUKI_F5_PROBE("w32-gl",probe_w32_gl);
+
+/* f6-18 f6:browser run=<id> url=<url> [now=1]: the desktop (gate mode) starts
+ * /Programs/netsurf --test=browser <url> through GATE_BROWSER; the browser
+ * reports one page outcome (status, decoded bytes, TLS verdict, final URL)
+ * through probe call 3, validated above and republished as DATA case=page.
+ * Test-profile state armed here and disarmed on every exit: the resolver
+ * entries fixture.test/untrusted.test -> 10.0.2.100 (the runner's guestfwd
+ * address); the browser's test trust anchor is gated by the same selector,
+ * which it reads through probe call 5. Nothing here runs on a normal boot. */
+#define BROWSER_FIXTURE_ADDRESS ((uint32_t)10 | (uint32_t)0 << 8 | (uint32_t)2 << 16 | (uint32_t)100 << 24)
+static int probe_browser(void)
+{
+    const char *name="browser";
+    rec_emit(name,"BEGIN",0);
+    struct probe_selection selected;
+    if (!probes_parse_selector(g_boot.test_request,g_boot.test_request_len,g_boot.flags,&selected) ||
+        selected.phase!=6 || strncmp(selected.probe,"browser",8) || !selected.url[0]) {
+        rec_emit(name,"END","status=FAIL reason=selector"); return 1;
+    }
+    bool now=!!(selected.flags & PROBE_BROWSER_NOW);
+    const struct fb_device *display=fbdev_get();
+    if (!display->present || (g_boot.flags & CBI_F_SAFE_MODE) || !native_payload_present()) {
+        rec_emit(name,"END","status=FAIL reason=desktop_unavailable"); return 1;
+    }
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
+    /* The user network's DHCP (slirp) answers within seconds; 30 s bound. */
+    uint64_t start=g_ticks; uint32_t ip=0; int port=net_stack_primary();
+    while (port>=0 && g_ticks-start<30000) { net_stack_address((unsigned)port,&ip); if (ip) break; task_sleep_ms(50); }
+    rec_emit(name,"DATA","case=network primary=%d address=%u.%u.%u.%u dhcp_error=%d wait_ms=%llu",port,
+             ip & 255,(ip>>8) & 255,(ip>>16) & 255,ip>>24,port>=0 ? net_stack_dhcp_error((unsigned)port) : 0,
+             (unsigned long long)(g_ticks-start));
+    if (port<0 || !ip) { rec_emit(name,"END","status=FAIL reason=network_unavailable"); return 1; }
+    int armed=net_resolve_override("fixture.test",BROWSER_FIXTURE_ADDRESS);
+    if (!armed) armed=net_resolve_override("untrusted.test",BROWSER_FIXTURE_ADDRESS);
+    rec_emit(name,"DATA","case=resolver names=fixture.test,untrusted.test address=10.0.2.100 armed=%d",armed);
+    if (armed) { rec_emit(name,"END","status=FAIL reason=resolver_override"); return 1; }
+    /* Ready cases wait for the pool (EAGAIN until seeded, 90 s bound); the
+     * now=1 case launches at once so the browser meets the not-ready path. */
+    start=g_ticks; bool ready=false; unsigned polls=0;
+    while (!now && g_ticks-start<90000) {
+        uint8_t seed[32]; int e=entropy_get(seed,sizeof(seed)); polls++;
+        entropy_erase(seed,sizeof(seed));
+        if (e!=-EAGAIN) { ready=e==0; break; }
+        task_sleep_ms(250);
+    }
+    rec_emit(name,"DATA","case=entropy waited=%u ready=%u polls=%u wait_ms=%llu",!now,ready,polls,(unsigned long long)(g_ticks-start));
+    if (!now && !ready) {
+        net_resolve_override("fixture.test",0); net_resolve_override("untrusted.test",0);
+        rec_emit(name,"END","status=FAIL reason=entropy_not_ready"); return 1;
+    }
+    struct desktop_ledger initial,final;
+    struct proc_ledger before,after;
+    desktop_snapshot(&initial); proc_snapshot(&before);
+    struct process *owner=0,*server=0,*child=0;
+    uint32_t generation=0,child_pid=0;
+    memset(&native_reports,0,sizeof(native_reports));
+    const char *failure="controller_setup";
+    bool pass=!proc_prepare(proc_supervisor(),&owner);
+    if (!pass) goto finished;
+    proc_publish(owner,0);
+    int made=supervisor_spawn_desktop_probe(&server);
+    if (made<0) { failure="desktop_launch"; pass=false; goto cleanup; }
+    server->ppid=owner->pid;
+    native_reports.active=true; native_reports.server=server->pid; native_reports.browser=true;
+    uint64_t deadline=g_ticks+10000;
+    while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
+    pass=native_live(server) && native_reports.survivor_stage==2;
+    if (!pass) { failure="survivor_timeout"; goto cleanup; }
+    pass=native_command(server,GATE_SNAPSHOT,&generation) && native_command_argument(server,GATE_BROWSER,&generation,selected.url);
+    if (!pass) { failure=native_command_failure; goto cleanup; }
+    deadline=g_ticks+20000;
+    while (native_live(server) && !native_reports.browser_child && g_ticks<deadline) task_sleep_ms(1);
+    child_pid=native_reports.browser_child;
+    child=child_pid ? proc_find(child_pid) : 0;
+    pass=child && child->ppid==server->pid && child->personality==PROC_NATIVE && !native_reports.invalid;
+    rec_emit(name,"DATA","case=fixture path=/Programs/netsurf pid=%u server_pid=%u url=%s now=%u",child_pid,server->pid,selected.url,now);
+    if (!pass) { failure=native_reports.invalid ? native_reports.invalid_check : "browser_identity"; goto cleanup; }
+    /* DNS override, TLS handshake, redirects and the 64 KiB body under TCG: 120 s bound. */
+    deadline=g_ticks+120000;
+    while (g_ticks<deadline && native_live(server) && !native_reports.browser_done && !native_reports.invalid &&
+           (child=proc_find(child_pid)) && child->state==PROC_LIVE) task_sleep_ms(5);
+    child=proc_find(child_pid);
+    pass=native_reports.browser_done && !native_reports.invalid;
+    if (pass) rec_emit(name,"DATA","case=page status=%u bytes=%u tls=%s url=%s",native_reports.page_status,
+                       native_reports.page_bytes,native_reports.page_tls,native_reports.page_url);
+    else failure=native_reports.invalid ? native_reports.invalid_check : !child || child->state!=PROC_LIVE ? "browser_exit" : "page_timeout";
+cleanup:
+    native_reports.active=false; native_reports.browser=false;
+    net_resolve_override("fixture.test",0); net_resolve_override("untrusted.test",0);
+    if (server) {
+        /* The browser is the desktop's child: collect it before the desktop
+         * so nothing is adopted past the ledger (as the w32 fixtures). */
+        static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
+        unsigned listed=proc_list_snapshot(children,CIUKI_PROCESS_MAX,0);
+        for (unsigned i=0;i<listed;i++)
+            if (children[i].ppid==server->pid) desktop_remove(server,proc_find(children[i].pid));
+        desktop_remove(owner,server);
+    }
+    if (owner) { proc_stop(owner,0,0); proc_collect(); }
+finished:
+    desktop_snapshot(&final); proc_snapshot(&after);
+    bool objects=desktop_ledgers_equal(&initial,&final), processes=native_proc_equal(&before,&after);
+    rec_emit(name,"DATA","case=ledger objects_equal=%u processes_equal=%u",objects,processes);
+    if (pass && (!objects || !processes)) { pass=false; failure="cleanup_ledger"; }
+    if (pass) rec_emit(name,"END","status=PASS");
+    else rec_emit(name,"END","status=FAIL reason=%s",failure ? failure : "unknown");
+    return pass ? 0 : 1;
+}
+CIUKI_F6_PROBE("browser",probe_browser);
 /* f5-21b: one authenticated desktop gate and result reader for the core PEs.
  * The registered wrappers live in f5_probes_observers.c. */
 static void w32_fixture_remove_tree(struct process *owner,struct process *server)
@@ -1215,6 +1355,28 @@ finished:
 /* Call 3 remains bounded ASCII and is framed by the existing supervisor.
  * Observe the trusted payload's three summaries as well as its exit status. */
 static struct { uint32_t pid, stages, checks, failures; bool invalid; } libc_reports;
+/* A bounded token field: [a-z_] for a verdict, the record value charset
+ * [A-Za-z0-9_:.,/+-] for a URL (scripts/test/evidence.py, token grammar). */
+static bool report_token(const char *line, const char *field, char *out, size_t cap, bool url)
+{
+    size_t length = strlen(field);
+    for (const char *p = line; *p; p++) {
+        if ((p == line || p[-1] == ' ') && !strncmp(p, field, length) && p[length] == '=') {
+            p += length + 1;
+            size_t n = 0;
+            for (; p[n] && p[n] != ' '; n++) {
+                char c = p[n];
+                bool ok = (c >= 'a' && c <= 'z') || c == '_' ||
+                    (url && ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ':' || c == '.' || c == ',' || c == '/' || c == '+' || c == '-'));
+                if (!ok) return false;
+            }
+            if (!n || n >= cap) return false;
+            memcpy(out, p, n); out[n] = 0;
+            return true;
+        }
+    }
+    return false;
+}
 static bool report_unsigned(const char *line, const char *field, uint32_t *value)
 {
     size_t length = strlen(field);

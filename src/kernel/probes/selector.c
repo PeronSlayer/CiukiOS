@@ -34,6 +34,38 @@ bool probes_operator_wait(bool (*event)(void *), uint64_t (*now)(uint32_t),
 }
 
 
+/* f6:browser url=<...>: the one address the browser case opens (f6-18). The
+ * grammar admits only the characters the record grammar carries unchanged
+ * (no space, no '=', no '?'), so the URL can be echoed in evidence verbatim. */
+static bool url_host_char(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-'; }
+static bool url_path_char(char c) { return url_host_char(c) || c == '_' || c == '/'; }
+static bool browser_url(const char *s, unsigned len, unsigned *at, char out[PROBE_URL_MAX + 1])
+{
+    unsigned i = *at;
+    if (len - i < 5 + 8 || memcmp(s + i, " url=", 5)) return false;
+    i += 5;
+    unsigned start = i, scheme = 0;
+    if (len - i >= 8 && !memcmp(s + i, "https://", 8)) scheme = 8;
+    else if (len - i >= 7 && !memcmp(s + i, "http://", 7)) scheme = 7;
+    if (!scheme) return false;
+    i += scheme;
+    unsigned host = 0;
+    while (i < len && url_host_char(s[i])) { i++; host++; }
+    if (!host) return false;
+    if (i < len && s[i] == ':') {
+        unsigned digits = 0;
+        for (i++; i < len && s[i] >= '0' && s[i] <= '9'; i++) digits++;
+        if (!digits || digits > 5) return false;
+    }
+    if (i >= len || s[i] != '/') return false;
+    while (i < len && url_path_char(s[i])) i++;
+    if (i - start > PROBE_URL_MAX) return false;
+    memcpy(out, s + start, i - start);
+    out[i - start] = 0;
+    *at = i;
+    return true;
+}
+
 /* F2 crash-isolation additionally accepts [server=desktop|standin] last. */
 bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, struct probe_selection *selection)
 {
@@ -73,8 +105,13 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     static const char *const f3_names[] = { "vm-boot", "vm-memory", "vm-devices", "vm-video", "vm-window", "vm-audio-state", "dpmi",
                                             "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance", "title" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove", "vm-audio-jitter" };
+<<<<<<< HEAD
+    static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects", "w32-dialogs", "w32-upper-dlls", "w32-media", "w32-fixtures", "w32-kernel32", "w32-fullscreen", "w32-registry", "w32-audio", "w32-gdi32", "w32-crash", "w32-user32", "w32-codecs", "w32-ddraw", "w32-input", "w32-restart", "w32-gl" };
+    static const char *const f6_names[] = { "net-arp", "browser" };
+=======
     static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects", "w32-dialogs", "w32-upper-dlls", "w32-media", "w32-fixtures", "w32-kernel32", "w32-fullscreen", "w32-registry", "w32-audio", "w32-gdi32", "w32-crash", "w32-user32", "w32-codecs", "w32-ddraw", "w32-input", "w32-restart", "w32-installer-nsis", "w32-gl" };
     static const char *const f6_names[] = { "net-arp" };
+>>>>>>> wt/f5-15a2
     const char *const *names = parsed.phase == 5 ? f5_names : parsed.phase == 6 ? f6_names : parsed.phase == 4 ? f4_names : parsed.phase == 3 ? f3_names : parsed.phase == 2 ? f2_names : parsed.phase == 1 ? f1_names : f0_names;
     unsigned count = parsed.phase == 5 ? ARRAY_SIZE(f5_names) : parsed.phase == 6 ? ARRAY_SIZE(f6_names) : parsed.phase == 4 ? ARRAY_SIZE(f4_names) : parsed.phase == 3 ? ARRAY_SIZE(f3_names) : parsed.phase == 2 ? ARRAY_SIZE(f2_names) : parsed.phase == 1 ? ARRAY_SIZE(f1_names) : ARRAY_SIZE(f0_names);
     bool known = false;
@@ -107,8 +144,16 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     }
     if (parsed.phase == 3 && !strncmp(parsed.probe,"dos-conformance",sizeof(parsed.probe))) {
         if (len-i == 14 && !memcmp(s+i," guest=freedos",14)) parsed.flags |= PROBE_DOS_FREEDOS;
+        else if (len-i == 30 && !memcmp(s+i," guest=ciukidos kernel=unified",30)) parsed.flags |= PROBE_DOS_UNIFIED;
         else if (len-i != 15 || memcmp(s+i," guest=ciukidos",15)) return false;
         *selection=parsed;
+        return true;
+    }
+    if (parsed.phase == 6 && !strncmp(parsed.probe, "browser", 8)) {
+        if (!browser_url(s, len, &i, parsed.url)) return false;
+        if (len - i == 6 && !memcmp(s + i, " now=1", 6)) { parsed.flags |= PROBE_BROWSER_NOW; i += 6; }
+        if (i != len) return false;
+        *selection = parsed;
         return true;
     }
     /* optional suffixes, in order, each at most once. F3 takes the platform

@@ -75,7 +75,7 @@ static void action(int id)
     switch(id) {
     case BACK: if(browser_window_back_available(bw))browser_window_history_back(bw,false);break;
     case FORWARD:if(browser_window_forward_available(bw))browser_window_history_forward(bw,false);break;
-    case RELOAD:browser_window_reload(bw,true);break;
+    case RELOAD:ciuki_chrome_reload();break;
     case STOP:browser_window_stop(bw);ciuki_chrome_loading(false);break;
     case BOOKMARK:
         if(!hotlist_ready || bookmarks>=500) { ciuki_chrome_status("Bookmark limit reached or profile unavailable.");break; }
@@ -155,9 +155,29 @@ void ciuki_chrome_render(void)
 }
 void ciuki_chrome_status(const char *text)
 { if(active) { du_set_text(du_get(&ui,STATUS),text?text:"");status_dirty=true; } }
+/* The URL the core last displayed: for its internal query pages this is the
+ * site being loaded (the core's loading parameters), not the about: page. */
+static nsurl *shown_url;
 void ciuki_chrome_url(nsurl *url)
 {
+    if(url) { if(shown_url)nsurl_unref(shown_url);shown_url=nsurl_ref(url); }
     if(active && url) { du_set_text(du_get(&ui,URL),nsurl_access(url));ui.dirty=1; }
+}
+/* browser_window_reload re-fetches the content URL. On the core's internal
+ * error pages (about:query/...) that navigation needs the page's form data
+ * and browser_window_navigate refuses it (NSERROR_NEED_DATA), so a reload
+ * would never retry the site. Navigate to the displayed site URL instead,
+ * without a history entry or POST replay: a reload after "not ready" then
+ * retries HTTPS with a fresh entropy request. */
+void ciuki_chrome_reload(void)
+{
+    struct browser_window *bw=browser();if(!bw)return;
+    nsurl *current=browser_window_access_url(bw);
+    if(current && shown_url && !strncmp(nsurl_access(current),"about:query/",12) && strncmp(nsurl_access(shown_url),"about:query/",12)) {
+        if(browser_window_navigate(bw,shown_url,NULL,BW_NAVIGATE_NONE,NULL,NULL,NULL)!=NSERROR_OK)ciuki_chrome_status("Unable to reload this address.");
+        return;
+    }
+    browser_window_reload(bw,true);
 }
 void ciuki_chrome_complete(struct gui_window *window)
 {
@@ -169,7 +189,13 @@ void ciuki_chrome_complete(struct gui_window *window)
     if(url && ciuki_profile_visit(nsurl_access(url)))
         ciuki_chrome_status("Unable to record this page in history.");
 }
-void ciuki_chrome_loading(bool value) { loading=value;if(active)ui.dirty=1; }
+/* f6-18 test profile: gate, fixture anchors and the one-shot page report. */
+#include "testmode.inc"
+void ciuki_chrome_loading(bool value)
+{
+    loading=value;if(active)ui.dirty=1;
+    if(!value)ciuki_test_page_done();
+}
 bool ciuki_chrome_busy(void) { return loading; }
 void ciuki_chrome_title(struct gui_window *window,const char *title)
 {
@@ -280,6 +306,7 @@ int ciuki_chrome_arguments(int *argc,char **argv)
             char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63)return -1;
             ciuki_browser_channel=n;consumed=true;
         }
+        else if(!strcmp(a,"--test=browser")) { test_requested=true;consumed=true; }
 #ifdef CIUKI_HOST
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
@@ -287,6 +314,9 @@ int ciuki_chrome_arguments(int *argc,char **argv)
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
     }
+    /* Before netsurf_init registers the fetchers, which create the network
+     * with the trust anchors the profile selects. */
+    ciuki_test_arm();
     return 0;
 }
 int ciuki_chrome_start(void)
@@ -309,6 +339,7 @@ void ciuki_chrome_finish(void)
             fprintf(stderr,"NetSurf: unable to save profile; previous files retained.\n");
     }
     if(hotlist_ready)hotlist_fini();
+    if(shown_url) { nsurl_unref(shown_url);shown_url=NULL; }
     ciuki_profile_fini();active=profile_ready=hotlist_ready=false;
 }
 void ciuki_chrome_capture(void *context)

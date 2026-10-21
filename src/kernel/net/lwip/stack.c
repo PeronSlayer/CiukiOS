@@ -28,6 +28,8 @@ struct ethernet_port {
 static struct ethernet_port ports[2];
 static bool started, attempted;
 static sys_sem_t initialized;
+extern int entropy_get(void *, size_t) __attribute__((weak));
+static bool crypto_seeded;
 int cu_sockets_init(void);
 void ciuki_sockets_address_lost(uint32_t);
 static void link_dispatch(void *);
@@ -100,7 +102,8 @@ static void attach_core(void *arg)
     netif_set_link_callback(&p->interface, status);
     if (!netif_default || netif_default->name[0] == 'l') netif_set_default(&p->interface);
     p->primary = netif_default == &p->interface;
-    netif_set_up(&p->interface); p->attached = true;
+    netif_set_up(&p->interface);
+    sys_prot_t f = sys_arch_protect(); p->attached = true; sys_arch_unprotect(f);
     link_update(p);
 }
 int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
@@ -112,6 +115,25 @@ int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
     if (!p->link_message) return -ENOMEM;
     err_t r = tcpip_callback_wait(attach_core, p);
     if (r || !p->attached) { tcpip_callbackmsg_delete(p->link_message); p->link_message = NULL; return -ENOMEM; }
+    return 0;
+}
+int net_stack_primary(void)
+{
+    sys_prot_t f = sys_arch_protect(); int index = -ENODEV;
+    for (unsigned i = 0; i < 2; i++)
+        if (ports[i].attached && ports[i].primary) { index = (int)i; break; }
+    sys_arch_unprotect(f); return index;
+}
+int net_stack_random_id(uint8_t id[16])
+{
+    if (!id) return -EINVAL;
+    if (!started) { memset(id, 0, 16); return -ENETDOWN; }
+    /* Exactly the approved per-boot SplitMix64 stream, seeded with RTC,
+     * PIT/TSC samples and the primary MAC before transport initialization. */
+    for (unsigned i = 0; i < 4; i++) {
+        uint32_t word = ciuki_lwip_rand();
+        for (unsigned j = 0; j < 4; j++) id[i * 4 + j] = (uint8_t)(word >> (j * 8));
+    }
     return 0;
 }
 void net_stack_link(unsigned index, bool up)
@@ -160,7 +182,17 @@ int net_stack_dhcp_error(unsigned index)
     sys_arch_unprotect(f); return e;
 }
 static void ready(void *unused) { (void)unused; sys_sem_signal(&initialized); }
-void net_stack_entropy(uint64_t sample) { ciuki_lwip_seed(sample); }
+void net_stack_entropy(uint64_t sample)
+{
+    if (crypto_seeded) return;
+    uint64_t seed;
+    if (entropy_get && !entropy_get(&seed, sizeof(seed))) {
+        ciuki_lwip_seed(seed);
+        volatile uint8_t *bytes = (volatile uint8_t *)&seed;
+        for (unsigned i = 0; i < sizeof(seed); i++) bytes[i] = 0;
+        crypto_seeded = true;
+    } else ciuki_lwip_seed(sample);
+}
 int net_stack_init(void)
 {
     if (started) return 0;
@@ -183,13 +215,13 @@ int net_stack_init(void)
         return -ENOMEM;
     }
     struct clock_seed rtc; file_clock_snapshot(&rtc);
-    ciuki_lwip_seed((uint64_t)rtc.utc ^ g_ticks);
-    if (g_cpu_tsc) ciuki_lwip_seed(read_tsc_serialized());
+    net_stack_entropy((uint64_t)rtc.utc ^ g_ticks);
+    if (g_cpu_tsc) net_stack_entropy(read_tsc_serialized());
     uint32_t flags = irq_save(); outb(0x43, 0); unsigned pit = inb(0x40); pit |= (unsigned)inb(0x40) << 8;
-    irq_restore(flags); ciuki_lwip_seed(pit);
+    irq_restore(flags); net_stack_entropy(pit);
 #endif
-    /* Driver discovery publishes the primary MAC before transport init uses
-     * LWIP_RAND for the initial TCP/UDP ephemeral-port starts. */
+    /* Prefer DRBG material before transport uses LWIP_RAND. While unavailable,
+     * driver discovery supplies the primary MAC to the legacy boot mix. */
     extern void net_stack_driver_entropy(void) __attribute__((weak));
     if (net_stack_driver_entropy) net_stack_driver_entropy();
     if (sys_sem_new(&initialized, 0) != ERR_OK) return -ENOMEM;

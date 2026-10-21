@@ -1,0 +1,15 @@
+{
+  "date": "May 14 2021",
+  "epoch": 1620950400,
+  "modification": "unmodified except patch 0001 (reproducible date)",
+  "patch": {
+    "path": "ciuki/patches/0001-reproducible-date.patch",
+    "sha256": "816cca4f5bd4542013073cbd60246b78e9342db200262cb6a941aafd543c8045"
+  },
+  "schema": 1,
+  "source_hashes": {
+    "hdr/version.h": "149780c354e78a5fec83c6f3857449bba24d8d2c6429adf7d936e1b6c0b50f9d",
+    "sys/sys.c": "f66ac316f727f4732b1340210683084f31df68131069c3300fb3897caeb633b9"
+  },
+  "time": "00:00:00"
+}

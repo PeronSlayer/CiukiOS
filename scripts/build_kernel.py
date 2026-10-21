@@ -205,6 +205,14 @@ def main() -> int:
     lwip_source = lwip_recipe["source"]()
     lwip_includes = lwip_recipe["includes"](lwip_source)
     objs = []
+    jent_recipe = runpy.run_path(str(SRC / "lib/jitterentropy/build.py"))
+    jent_source = jent_recipe["source"]()
+    for c in jent_recipe["sources"](jent_source):
+        o = OBJ / ("jent_" + c.stem + ".o")
+        # Upstream deliberately rejects optimized noise/core builds.
+        run(["clang", *CFLAGS, "-O0", *jent_recipe["includes"](jent_source),
+             "-I", str(SRC / "include"), "-c", str(c), "-o", str(o)])
+        objs.append(o)
     for name in lwip_recipe["SOURCES"]:
         c = lwip_source / "src" / name
         o = OBJ / ("lwip_" + name.replace("/", "_") + ".o")

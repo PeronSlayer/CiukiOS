@@ -7,6 +7,10 @@ int net_stack_init(void);
 void net_stack_input(unsigned, const void *, unsigned);
 void net_stack_link(unsigned, bool);
 int net_stack_attach(unsigned, const uint8_t mac[6], bool link);
+/* Index of the successfully attached default physical netif; no fallback to
+ * a different running adapter when the selected port loses carrier. */
+int net_stack_primary(void);
+int net_stack_random_id(uint8_t[16]);
 void net_stack_address(unsigned, uint32_t *address);
 int net_stack_dhcp_error(unsigned);
 int net_stack_transmit(unsigned, const void *, unsigned);
@@ -39,4 +43,11 @@ int net_poll_capture(struct process *, const struct ciuki_pollfd *, unsigned, vo
 void net_poll_drop(void *);
 int net_poll(struct process *, struct ciuki_pollfd *, unsigned, int, void *);
 int net_resolve(struct process *, const char *, uint32_t *, int *);
+/* f6-18 test-profile static host entries (fixture.test -> 10.0.2.100): armed
+ * only by the f6:browser probe, consulted before any DNS query, never set on
+ * a normal boot. address is in network byte order; address 0 clears the slot.
+ * Returns -EINVAL for a name the resolver grammar refuses, -ENOSPC when both
+ * slots hold other names. */
+#define NET_RESOLVE_OVERRIDES 2
+int net_resolve_override(const char *name, uint32_t address);
 #endif

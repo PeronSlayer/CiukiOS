@@ -130,9 +130,33 @@ static void publication(struct music_runtime *r)
     assert(r->snapshot.publication<=before+4);
     puts("PASS unchanged fields suppressed and state/buffering publications capped at 10Hz");
 }
+static void t23_holds(void)
+{
+    /* Trial histogram (no invented timestamps): isolate each refill delay,
+     * restoring decoded PCM between holds. Device CPU overruns are covered
+     * by the real FS mutex replay and scheduler tests, not this DAC model. */
+    const struct { unsigned count,ms; } holds[]={{406,125},{91,350},{10,750},{5,1250},{1,1502},{34,1633},{1,1837},{1,602},{1,441}};
+    unsigned cases=0;
+    for (unsigned kind=0;kind<sizeof(holds)/sizeof(*holds);kind++)
+        for (unsigned h=0;h<holds[kind].count;h++) {
+            struct device d={0};
+            struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
+            struct music_player *p=calloc(1,sizeof(*p)); assert(p);
+            test_now=0; music_player_init(p,&out,NULL,NULL); prepare(p);
+            p->count=p->view.rate*MUSIC_START_SECONDS;
+            assert(!music_player_pump(p));
+            for (unsigned t=2;t<=holds[kind].ms;t+=2) {
+                test_now=(uint64_t)t*1000000; assert(!music_player_pump(p));
+            }
+            assert(!d.gaps && !p->view.starvations && p->count);
+            music_player_destroy(p); free(p); cases++;
+        }
+    printf("PASS F1-87 T23 hold histogram cases=%u max=1837ms decoded_start=2s DAC_gaps=0 starvations=0\n",cases);
+}
 int main(void)
 {
-    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d};
+    t23_holds();
+    struct device d={0}; struct music_output out={device_open,device_write,device_status,device_close,device_now,&d,NULL};
     struct music_runtime *r=calloc(1,sizeof(*r)); assert(r);
     assert(!pthread_mutex_init(&r->lock,NULL)); music_player_init(&r->player,&out,NULL,NULL);
     contention(r,&d); backpressure(r,&d); debounce(r,&d); publication(r);

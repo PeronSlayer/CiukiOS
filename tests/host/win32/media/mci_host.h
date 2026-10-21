@@ -11,9 +11,11 @@
 #include <string.h>
 #include <w32/kernel32.h>
 int hf_open(const char *);
+unsigned hf_open_handles(void);
 long hf_read(int, void *, unsigned long);
 long hf_seek(int, long, int);
 long hf_size(int);
+int hf_identity(int, uint32_t *, uint32_t *, uint32_t *);
 void hf_close(int);
 int hf_chdir(const char *);
 int hf_write_file(const char *, const void *, unsigned long);
@@ -39,6 +41,7 @@ extern FILE *trace;
 extern uint32_t now_ms, digest;
 extern uint64_t written;
 extern long live_allocations;
+extern unsigned mci_identity_fail;
 extern int key_down;
 extern struct wa_engine engine;
 extern int16_t *capture;

@@ -68,6 +68,10 @@ class HostServiceTests(unittest.TestCase):
         read, raw = call(s, h.FILE, {4: 2, 5: handle, 9: 16}, buffer=bytes(16))
         self.assertEqual(read[16:18], (7, 0))
         self.assertEqual(raw[read[8]:read[8] + 7], b'Ciuki\r\n')
+        # ReadFile(h, p, 0, &n): success with 0 bytes and no copied buffer
+        # (NSIS 2.51 MoveFileOnReboot reads a freshly created empty file).
+        empty, _ = call(s, h.FILE, {4: 2, 5: handle, 9: 0})
+        self.assertEqual(empty[16:18], (0, 0))
         duplicate, _ = call(s, h.FILE, {4: 1, 10: 0x40000000, 11: 7, 12: 1},
                             [(6, 'c:\\windows\\temp\\LONG NAME.TXT')])
         self.assertEqual(duplicate[17], 80)
@@ -297,6 +301,24 @@ class HostServiceTests(unittest.TestCase):
             self.assertGreater(used, 0)
             self.assertNotIn(b'errors=0 manifest=1', out.value)
             self.assertEqual(out.value.count(b'manifest=0'), 4)
+
+    def test_restart_resolves_wininit_spelling_case_insensitively(self):
+        # The engine of an original uninstaller creates "wininit.ini" in its
+        # own spelling; the production restart service opens WININIT.INI. The
+        # fixture disk resolves both to one file, as FAT does. A NUL line
+        # naming a directory is logged and skipped, never fatal.
+        windows = self.service.root / 'C/WINDOWS'
+        temporary = windows / 'TEMP'
+        (temporary / '~nsu.tmp').mkdir()
+        (temporary / '~nsu.tmp/Au_.exe').write_bytes(b'copy')
+        ini = b'[Rename]\r\nNUL=C:\\WINDOWS\\TEMP\\~nsu.tmp\\Au_.exe\r\nNUL=C:\\WINDOWS\\TEMP\\~nsu.tmp\r\n'
+        (windows / 'wininit.ini').write_bytes(ini)
+        self.service.restart()
+        self.assertFalse((temporary / '~nsu.tmp/Au_.exe').exists())
+        self.assertTrue((temporary / '~nsu.tmp').is_dir())
+        self.assertEqual(sorted(p.name for p in windows.iterdir() if p.name.casefold().startswith('wininit')),
+                         ['WININIT.BAK'])
+        self.assertEqual((windows / 'WININIT.BAK').read_bytes(), ini)
 
     def test_restart_journal_checkpoint_precedes_runonce_consumption_only(self):
         # Registry timing on the actual restart service, not PE-flow evidence.

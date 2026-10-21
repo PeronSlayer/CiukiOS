@@ -55,8 +55,23 @@ static struct vfs_request writer_request={.now=now,.pause=pause_request,
     .task={.name="log writer",.id=17}};
 static struct vfs_request waiter_request={.now=now,.pause=pause_request,
     .task={.name="files",.id=29}};
-static struct vfs_table writer, waiter;
-static int handle;
+static struct vfs_table writer, waiter, peer;
+static int handle, peer_handle;
+static void *native_read_thread(void *arg) {
+    uint8_t bytes[512]; size_t done=0; uint64_t pos=0;
+    struct vfs_request request={.now=now,.pause=pause_request,.deadline=now(0)+1000000,
+        .operation="read",.site="native",.urgent_reader=arg!=0};
+    struct fs_request_scope scope; fs_request_enter(&scope,&request);
+    struct vfs_description *d=peer.handles[peer_handle];
+    vfs_lock(&v,0);
+    assert(!vfs_read_identity_locked(&v,d->node->identity,d->node->volume,&d->node->entry,
+        &d->cursor,&d->io_active,&pos,&d->position,false,0,0,bytes,sizeof(bytes),&done));
+    assert(!v.active && !d->io_active && v.readers[2]==(arg ? 1u : 0u) && done==sizeof(bytes));
+    vfs_unlock(&v);
+    fs_request_leave(&scope);
+    for (unsigned i=0;i<sizeof(bytes);i++) assert(bytes[i]==0x5a);
+    return 0;
+}
 void vfs_hold_observer(char drive,uint32_t ms,const struct vfs_hold_info *h,uint32_t waiters) {
     assert(!namespace_locks && !volume_locks);
     if (drive=='D') {
@@ -108,8 +123,12 @@ int main(void) {
         .sector_size=512,.capacity=2880,.write_cache_state=BLKDEV_CACHE_DISABLED};
     assert(!cache_init(&cache,0) && !fat_mount(&volume,&cache,&dev,0,2880,true));
     vfs_init(&v); assert(!vfs_attach(&v,2,&volume));
-    assert(!vfs_table_init(&v,&writer,2) && !vfs_table_init(&v,&waiter,2));
+    assert(!vfs_table_init(&v,&writer,2) && !vfs_table_init(&v,&waiter,2) && !vfs_table_init(&v,&peer,2));
     handle=vfs_open(&writer,"C:/TEST.BIN",VFS_READ|VFS_WRITE|VFS_CREATE,0,0); assert(handle>=0);
+    peer_handle=vfs_open(&peer,"C:/PEER.BIN",VFS_READ|VFS_WRITE|VFS_CREATE,0,0); assert(peer_handle>=0);
+    uint8_t seed[512];memset(seed,0x5a,sizeof(seed));size_t seeded;
+    assert(!vfs_write(&peer,peer_handle,seed,sizeof(seed),&seeded) && seeded==sizeof(seed));
+    uint64_t at;assert(!vfs_seek(&peer,peer_handle,0,VFS_SEEK_SET,&at));
     writer_request.deadline=waiter_request.deadline=now(0)+10000000;
     writer.request=&writer_request; waiter.request=&waiter_request;
     atomic_store(&stall,true); pthread_t a,b; assert(!pthread_create(&a,0,write_thread,0));
@@ -117,6 +136,8 @@ int main(void) {
     while (!atomic_load(&in_device)) { assert((int32_t)(fs_now_ms()-deadline)<0); pause_ms(1); }
     assert(fs_lock_try_take(&v.lock)); assert(v.mutating==(1u<<2) && !v.active);
     fs_lock_drop(&v.lock);
+    pthread_t c; assert(!pthread_create(&c,0,native_read_thread,0) && !pthread_join(c,0));
+    assert(!atomic_load(&release_device)); /* completed before the writer's device wait ends */
     assert(!pthread_create(&b,0,wait_thread,0));
     for (;;) {
         fs_lock_take(&v.lock); bool queued=v.diagnostic_waiters[2]==1; fs_lock_drop(&v.lock);
@@ -126,6 +147,19 @@ int main(void) {
     pause_ms(150); atomic_store(&release_device,true);
     assert(!pthread_join(a,0) && !pthread_join(b,0));
     assert(hold_records==1 && wait_records==1 && held_ms>=waited_ms);
+    /* A normal metadata ticket is queued behind an outstanding desktop
+     * reader. The deadline reader passes that ticket before it is released. */
+    vfs_lock(&v,0); v.readers[2]++; vfs_unlock(&v);
+    assert(!pthread_create(&b,0,wait_thread,0));
+    for (;;) {
+        vfs_lock(&v,0); bool queued=v.diagnostic_waiters[2]==1; vfs_unlock(&v);
+        if (queued) break; pause_ms(1);
+    }
+    assert(!pthread_create(&c,0,native_read_thread,(void *)1) && !pthread_join(c,0));
+    vfs_lock(&v,0); assert(v.readers[2]==1); v.readers[2]--;
+    fs_event_wake(&v.volume_changed); vfs_unlock(&v);
+    assert(!pthread_join(b,0));
+    puts("PASS f1-87 native identity reader completes during unrelated write; deadline reader passes queued normal metadata behind desktop reader");
     /* Exact release threshold and bounded name copy, including a context
      * temporarily suppressed for uncancellable legacy reservation cleanup. */
     struct vfs_request diagnostic=writer_request;
@@ -151,7 +185,8 @@ int main(void) {
     vfs_io_end_locked(&v,io); vfs_unlock(&v); assert(timeout_records==2);
     timeout_kind=0; fs_request_leave(&scope); fake_clock=false;
     writer.request=waiter.request=0;
-    assert(!vfs_close(&writer,handle)); vfs_table_destroy(&writer); vfs_table_destroy(&waiter);
+    assert(!vfs_close(&writer,handle) && !vfs_close(&peer,peer_handle));
+    vfs_table_destroy(&writer); vfs_table_destroy(&waiter); vfs_table_destroy(&peer);
     assert(!vfs_detach(&v,2)); vfs_destroy(&v); assert(!volume.mounted); cache_destroy(&cache); free(disk);
     assert(!blk_request_pool_host_cleanup());
     puts("PASS f1-86 VFS real FAT/cache + slow device: exact holder/waiter fields, 49/50ms threshold, bounded names and calldown context; publication owns no namespace/volume locks");

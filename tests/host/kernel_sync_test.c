@@ -625,6 +625,35 @@ static void test_irq_notification(void)
     current(0);
     puts("f0-46 IRQ notifications: 1000 captures do no predicate/donation/ready walk, one cancelled owner, one live completion, counted bounded continuations PASS");
 }
+/* f1-90: the audio refill's single wait is the interrupt's own deferred
+ * work and is woken in the top half; any other waiter, an I/O wake or a
+ * second waiter keeps the deferred, bounded notification path. */
+static void test_audio_irq_wake(void)
+{
+    static struct kwait q;
+    bool done=true;
+    for (unsigned mode=0;mode<4;mode++) {
+        kwait_init(&q);
+        struct kwaiter a={.task=&tasks[0],.queue=&q,.cond=ready,.arg=&done};
+        struct kwaiter b={.task=&tasks[1],.queue=&q,.cond=ready,.arg=&done};
+        q.head=waiters=&a; if (mode==2) a.next=a.all_next=&b;
+        tasks[0].sync_waiter=&a;tasks[1].sync_waiter=&b;
+        tasks[0].audio_class=mode!=1;tasks[0].state=tasks[1].state=T_BLOCKED;
+        struct kwork_stats before_work;kwork_snapshot(&before_work);
+        unsigned before=starts;flags=0;
+        kwait_wake_irq(&q,mode==3);
+        struct kwork_stats after_work;kwork_snapshot(&after_work);
+        if (!mode) CHECK(starts==before+1 && tasks[0].state==T_READY && !q.notify_active && after_work.queued==before_work.queued);
+        else CHECK(starts==before && q.notify_active && after_work.queued==before_work.queued+1);
+        flags=0x200;drain_work();
+        CHECK(tasks[0].state==T_READY && !q.notify_active);
+        if (mode==2) { CHECK(tasks[1].state==T_READY); wait_unlink(&b); }
+        wait_unlink(&a);CHECK(!waiters && !q.head);
+        tasks[0].audio_class=false;tasks[0].state=tasks[1].state=T_RUNNING;
+    }
+    current(0);
+    puts("f1-90 IRQ wake: audio-class single waiter woken in the top half without deferred work; other, shared or I/O waits stay deferred PASS");
+}
 static unsigned coalesced_seen, coalesced_count;
 static void coalesced_work(void *arg)
 {
@@ -1112,6 +1141,7 @@ int main(void)
     test_timer_queue();
     test_coalesced_work();
     test_irq_notification();
+    test_audio_irq_wake();
     test_irq_chain();
     test_three_shared_devices();
     test_claimed_fatal_quarantine();

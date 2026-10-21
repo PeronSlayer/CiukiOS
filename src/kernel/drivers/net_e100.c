@@ -134,15 +134,32 @@ static int e100_action(struct netif *d, unsigned code, const uint8_t *data, unsi
     }
     return -110;
 }
-static int e100_start(struct netif *d)
+static void e100_config(struct netif *d, uint8_t config[22], bool promiscuous)
 {
     /* Sections 6.4.2.3 tables 37–39: base settings shared by 82557/8/9,
      * standard (not extended) TCB/RFD, MII, discard short/bad frames,
      * broadcast, CRC strip, auto-duplex. Values are hardware fields. */
-    uint8_t config[22] = {22,8,0,0,0,0,0x32,3,1,0,0x2e,0,0x60,0,0xf2,0x48,0,0x40,0xf2,0x80,0x3f,5};
+    static const uint8_t normal[22] = {22,8,0,0,0,0,0x32,3,1,0,0x2e,0,0x60,0,0xf2,0x48,0,0x40,0xf2,0x80,0x3f,5};
+    memcpy(config, normal, sizeof(normal));
     /* Byte 12 bit 0 is mandatory 1 on 82558 and later (tables 38–39).
      * 82557 shares device 1229 with later chips; revisions 0–3 are 82557. */
     if (d->pci.device != 0x1229 || d->pci.revision >= 4) config[12] |= 1;
+    if (promiscuous) config[15] |= 1;
+}
+static int e100_promiscuous(struct netif *d, bool on)
+{
+    /* Configure uses its own CB, but shares the CU with TX. Never start
+     * another command while the existing TX CB is owned by hardware. */
+    if (d->tx_used[0]) return -16;
+    unsigned status = net_read(d, 0, 2);
+    if (status == 0xffff) return -5;
+    if (status & 0xc0) return -16;
+    uint8_t config[22]; e100_config(d, config, on);
+    return e100_action(d, 2, config, sizeof(config));
+}
+static int e100_start(struct netif *d)
+{
+    uint8_t config[22]; e100_config(d, config, false);
     int err = e100_command(d, 0x60, 0);
     if (!err) err = e100_command(d, 6, 0);
     if (!err) err = e100_action(d, 2, config, sizeof(config));
@@ -233,5 +250,5 @@ static enum net_link e100_link(struct netif *d)
 static void e100_mac(struct netif *d, uint8_t mac[6]) { memcpy(mac, d->address, 6); }
 const struct netif_driver net_e100 = {
     "e100", e100_match, 32, 1, 6, e100_idle, e100_init, e100_start, e100_stop,
-    e100_transmit, e100_poll, e100_link, e100_mac, e100_interrupt, e100_irq_enable
+    e100_transmit, e100_poll, e100_link, e100_mac, e100_interrupt, e100_irq_enable, e100_promiscuous
 };

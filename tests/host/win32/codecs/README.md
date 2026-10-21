@@ -31,7 +31,9 @@ need no DllMain side effects. Real i386 guest loading remains the lead's gate.
 
 Supported decode output: ADPCM to signed PCM16 at the source channel count and
 rate; RLE4/RLE8 to indexed 8-bit DIBs; Video 1 to indexed 8-bit or RGB555 DIBs;
-Cinepak to BGR24. Formats do not resample, encode or silently substitute codecs.
+Cinepak to BGR24. ADPCM retains its source rate; the separate ACM PCM
+converter supports channel/bit-depth/rate conversion. No encoder or silent
+codec substitution is provided.
 The decoder retains skipped pixels and Cinepak books within a stream. Callers
 must preserve their output DIB across delta frames and restart after malformed
 input; errors may leave a partial frame or changed codebook. ACM supports
@@ -42,10 +44,13 @@ BLOCKALIGN leaves incomplete blocks unconsumed, even with END.
 AVI is a read-only, API-level RIFF AVI reader: four streams/file, eight open
 files, 65,536 chunks/stream, 16 frame getters, 32 stream views; depth <= 8 and
 one million RIFF chunks. OpenDML/AVIX, palette-change chunks, edit/write/COM
-interfaces and arbitrary sample-to-time operations are unsupported. Video
-frames decode from the beginning after a backwards seek to preserve delta
-state. Audio reads currently expose indexed AVI chunks; they are not a claim
-of full fixed-size audio sample indexing. W filenames are converted without
+interfaces are unsupported. Video frames decode from the beginning after a
+backwards seek to preserve delta
+state. Optional idx1 entries are checked against physical movi chunks (including
+relative and absolute offset conventions); their offsets never authorize new
+reads. Fixed-size streams expose sample units and reads may cross interleaved
+chunks or fill a smaller buffer with complete samples. Variable-size streams
+retain one sample per chunk. W filenames are converted without
 best-fit substitution to the core's ACP; unrepresentable paths fail cleanly.
 The APIs currently require serialized calls (including GetFrame on one file).
 

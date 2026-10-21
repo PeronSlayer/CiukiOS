@@ -304,9 +304,10 @@ int dosvm_disk_open(struct dosvm *v, const char *base)
     if (v->game || v->kernel) {
         e = base_identity(v, entry.size);
         if (e) return e;
-        if (v->kernel==1) {
+        if (v->kernel==1 || v->kernel==2) {
             char expected[66];
-            int identity=vfs_open(&v->disk_table,"C:\\SYSTEM\\DOS\\FREEDOS.SHA",VFS_READ,VFS_DENY_WRITE,0);
+            const char *sidecar=v->kernel==2 ? "C:\\SYSTEM\\DOS\\UNIFIED.SHA" : "C:\\SYSTEM\\DOS\\FREEDOS.SHA";
+            int identity=vfs_open(&v->disk_table,sidecar,VFS_READ,VFS_DENY_WRITE,0);
             if (identity<0) return identity;
             size_t got=0;
             disk_gate_take(v);

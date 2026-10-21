@@ -459,9 +459,13 @@ The full Windows 98 DDK/pager research gaps in f0-42 remain open.
 
 The FAT32 system volume:
 
-- 512-byte sectors, 4 KiB clusters, 2 FATs, 32 reserved sectors, FSInfo at
-  sector 1, backup boot sector at 6 (its FSInfo copy at 7), root directory at
-  cluster 2.
+- 512-byte sectors, 4 KiB clusters, 2 FATs, **160 reserved sectors**
+  (`CIUKI_FAT_RESERVED_SECTORS` in `src/boot/ciukldr/disk.inc`, `FAT_RESERVED`
+  in `scripts/build_image.py`): boot sector 0, FSInfo at sector 1, backup boot
+  sector at 6 (its FSInfo copy at 7), the blackbox descriptor `CBB1` at sector
+  8 and the 128-sector blackbox ring at sectors 32–159; root directory at
+  cluster 2. (The earlier "32 reserved sectors" text was stale; corrected by
+  f9-00 on 2026-10-21.)
 - At least 65,525 data clusters, so a partition of at least about 270 MiB.
   The canonical image is 512 MiB (sparse on the host; compressed in releases).
   The 0.8 128 MiB size cannot be FAT32 with 4 KiB clusters.
@@ -530,7 +534,7 @@ request the system boots normally. The loader MUST, in this order:
    and bypasses the menu. The loader emits L:SELECT_SOURCE=cfg|menu|fw_cfg.
    The validated UART base and divisor are passed to the kernel.
    S cancels the configured request, adds the safe flag, confirms it with
-   `Safe mode selected; P for a probe, or wait` and `L:SAFE=1`, and restarts
+   `Safe mode; P for a probe, or wait` and `L:SAFE=1`, and restarts
    the bounded three-second menu window so P can enter a selector (without
    a `safe=1` suffix), L can toggle logging, and N or expiry boots with the
    safe flag preserved and `L:SELECT_SOURCE=menu`.
@@ -790,7 +794,7 @@ values, and any later change to a target needs a measurement on QEMU at
   still toggles bit 1). `CBI_F_DEFINED_MASK` becomes `0x00000FFF`; layout,
   size and version are unchanged.
 - With no test request and no safe flag at menu time, the loader clears the
-  text screen and writes only `Press S for safe mode, L for serial log` on
+  text screen and writes only `S for safe mode, L for log` on
   row 24 (`INT 10h AH=13h`); `SELECT_READY`, the menu text, provenance and
   `L:VBE_SKIP` lines go to COM1 only. `S`, `L`, `P` and every fatal error
   switch screen output back on. Test-request and safe boots print as before.
@@ -868,3 +872,20 @@ file size and the page-rounded reservation are preserved. The format,
 deadlines, assembled tests and limits (including nonreturning BIOS calls
 and pre-kernel disk persistence) are in the
 [F0-40 audit](../validation/f0-40-reliability-audit.md#loader-trail-and-limits).
+
+## f0-54: loader byte budget
+
+The ELF program-header scratch (`ph_table`, at most 32 × 32 bytes) shares
+the raw E820 buffer (`raw_map`, 128 × 24 bytes), which only `memory_collect`
+uses before A20, the FAT mount and the menu; later RAM checks read the
+normalized `boot_info.e820` array. `elf_load` fills every program-header
+byte it reads. Ordering invariant (accepted by the lead, 2026-10-21):
+`raw_map` is dead once `memory_collect` returns, and `elf_load` stays after
+it; code that reads or writes `raw_map` after `memory_collect`, or a
+program-header read before it, must first give `ph_table` its own buffer
+again. An assembly-time check keeps `MAX_PH * 32` within `raw_map`.
+The file stays 48 sectors; `loader_end` (`0x26841`) and the
+page-rounded reservation are unchanged. `scripts/loader_budget.py` reports
+the bytes per section and the free tail, and the size test requires at
+least 512 free bytes. See the
+[f0-54 record](../validation/f0-54-loader-budget.md).
