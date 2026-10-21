@@ -2303,6 +2303,36 @@ update lease; contention is ERROR_BUSY, foreign release ERROR_ACCESS_DENIED,
 and disconnect/death releases ownership. All kernel32 and advapi32 fragments
 share ntdll's recursive per-process transport lock and request sequence.
 
+
+## F6 extension: IPv4 sockets and readiness (approved 2026-10-20)
+
+Directive f6-10 assigns native calls 78–89; call 90 is reserved for the later
+configuration service and currently returns ENOSYS. Calls 75–77 and W32=96
+retain their assignments. The normative register table, layouts, constants,
+validation order and closed error sets are in
+[network-contract.md](network-contract.md#approved-extension-syscalls-7890-2026-10-20).
+The `ciuki/abi.h` records are shared with the SDK and checked by the i686
+layout dump and independent literal oracle. All unused argument registers
+must be zero. Syscall failures use the existing negative errno convention.
+
+| Calls | Interface |
+| --- | --- |
+| 78–82 | socket, bind, connect, listen, accept |
+| 83–87 | sendto/recvfrom records, shutdown, local/peer sockname, sockopt record |
+| 88–89 | mixed descriptor poll, bounded IPv4 resolver record |
+| 90 | netctl reserved (ENOSYS) |
+
+The address is a 16-byte IPv4 sockaddr (u16 family, network-order u16 port,
+network-order u32 address, eight zero bytes). The 40-byte I/O and option
+records and 32-byte resolver/control records carry version 1, exact size and
+zero reserved fields; nested addresses are u32 user virtual addresses.
+Poll entries are eight bytes; timeout is signed milliseconds, -1 forever.
+Socket descriptions share NONBLOCK across dup/spawn; CLOEXEC remains per fd.
+Close invalidates the fd immediately and defers bounded transport teardown.
+Interruptible user waits run outside the serialized netconn worker. Outputs
+are pinned before receive/accept commits; user pointers never reach lwIP.
+Kernel lwIP and SDK timeval types remain separate (SDK time stays 64 bit).
+
 ### F3-52 DOS window frame wait (2026-10-20, pending lead review)
 
 Operation 11 (`CIUKI_DOSVM_WAIT_PRESENT`) retains record version 1, size 136

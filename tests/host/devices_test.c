@@ -57,7 +57,11 @@ static struct netif nic_contexts[NETIF_MAX];
 #define nic_context nic_contexts[0]
 static unsigned nic_count;
 unsigned net_count(void) { return nic_count; }
-struct netif *net_get(unsigned i) { return i < nic_count ? &nic_contexts[i] : NULL; }
+struct netif *net_get(unsigned i)
+{
+    assert(nic_count <= NETIF_MAX);
+    return i < nic_count ? &nic_contexts[i] : NULL;
+}
 bool gen_matches(gen_t a, gen_t b) { return a && a == b; }
 void klog(const char *s, ...) { (void)s; }
 #include "../../src/kernel/core/registry.c"
@@ -115,10 +119,12 @@ static void second_nic_catalogue(void)
         {.name="e1000"}, {.name="pcnet"}, {.name="tulip"}, {.name="3c905"}, {.name="rhine"}
     };
     struct pci_func saved[2] = {pci[0],pci[1]};
+    assert(!net_count() && !net_get(0));
     for (unsigned n = 0; n < 5; n++) {
         nic_context.driver = &new_drivers[n]; nic_context.pci = pci[0];
         nic_context.ready = nic_context.running = true; nic_context.quarantined = false;
         nic_context.reason = "ready"; nic_count = 1;
+        assert(net_get(0) == &nic_context && !net_get(1));
         devices_snapshot(&snapshot);
         assert(snapshot.driver_count == CIUKI_DRIVERS_MAX);
         assert(!strcmp(device(0x10018)->driver, new_drivers[n].name));
@@ -126,22 +132,40 @@ static void second_nic_catalogue(void)
           for (unsigned j = 12; j < snapshot.driver_count; j++) if (!strcmp(snapshot.drivers[j].name, new_drivers[n].name)) { seen = true; assert(snapshot.drivers[j].bound_devices == 1); }
           assert(seen); }
     }
-    /* Four new bindings must fit the existing sixteen-row public ABI;
-     * replacing unbound catalogue rows must not hide active NICs. */
-    npci = nic_count = 4;
-    for (unsigned i = 0; i < 4; i++) {
+    /* Four discovered NICs remain visible, with at most NETIF_MAX admitted
+     * at once. Replacing unbound catalogue rows must not hide active NICs. */
+    npci = 4;
+    for (unsigned i = 0; i < npci; i++) {
         pci[i] = saved[0]; pci[i].dev = 3 + i;
-        nic_contexts[i] = (struct netif){.pci=pci[i],.driver=&new_drivers[i],.ready=true,.running=true,.reason="ready"};
     }
-    devices_snapshot(&snapshot); assert(snapshot.driver_count == CIUKI_DRIVERS_MAX && !(snapshot.flags & CIUKI_DEVICES_TRUNCATED));
-    for (unsigned i = 0; i < 4; i++) {
-        bool found = false;
-        for (unsigned j = 0; j < snapshot.driver_count; j++) if (!strcmp(snapshot.drivers[j].name, new_drivers[i].name)) {
-            found = true; assert(snapshot.drivers[j].bound_devices == 1);
+    for (unsigned first = 0; first < npci; first += NETIF_MAX) {
+        nic_count = npci - first < NETIF_MAX ? npci - first : NETIF_MAX;
+        for (unsigned i = 0; i < nic_count; i++) {
+            unsigned p = first + i;
+            nic_contexts[i] = (struct netif){.pci=pci[p],.driver=&new_drivers[p],.ready=true,.running=true,.reason="ready"};
+            assert(net_get(i) == &nic_contexts[i]);
         }
-        assert(found);
+        assert(net_count() == nic_count && !net_get(nic_count));
+        assert(!net_get(NETIF_MAX) && !net_get(UINT32_MAX));
+        devices_snapshot(&snapshot);
+        assert(snapshot.driver_count == CIUKI_DRIVERS_MAX && !(snapshot.flags & CIUKI_DEVICES_TRUNCATED));
+        for (unsigned i = 0; i < npci; i++) {
+            const struct ciuki_device_record *d = device(0x10000u | (pci[i].dev << 3));
+            if (i < first || i >= first + nic_count) {
+                assert(!d->driver[0] && d->state != CIUKI_DEVICE_READY);
+                continue;
+            }
+            assert(!strcmp(d->driver, new_drivers[i].name) && d->state == CIUKI_DEVICE_READY);
+            bool found = false;
+            for (unsigned j = 0; j < snapshot.driver_count; j++) if (!strcmp(snapshot.drivers[j].name, new_drivers[i].name)) {
+                found = true; assert(snapshot.drivers[j].bound_devices == 1);
+            }
+            assert(found);
+        }
     }
     pci[0] = saved[0]; pci[1] = saved[1]; npci = 2; nic_count = 0;
+    assert(!net_get(0));
+    puts("PASS devices: two-netif bounds, four discovered NICs and bounded catalogue bindings");
 }
 int main(void)
 {

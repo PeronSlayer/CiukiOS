@@ -4,7 +4,10 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 extern uint32_t file_description_count(void) __attribute__((weak));
-#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
+#define FILE_OBJECTS ((file_description_count ? file_description_count() : 0) + (net_socket_count ? net_socket_count() : 0))
+extern uint32_t net_socket_count(void) __attribute__((weak));
+struct process;
+extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 
@@ -72,6 +75,7 @@ void channel_release(struct desktop_description *d)
     c->inbox[side] = (struct channel_queue){ 0 };
     kwait_wake_all(&c->changed[0]);
     kwait_wake_all(&c->changed[1]);
+    if (net_fd_changed) net_fd_changed(0, 0);
     if (!c->open[side ^ 1]) {
         desktop_objects.channels--;
         kfree(c);
@@ -208,6 +212,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             if (hints & CIUKI_CHANNEL_INPUT) task_input_delivered(receiver);
             irq_restore(f);
             kwait_wake_all(&c->changed[peer]);
+            if (net_fd_changed) net_fd_changed(0, 0);
             op->message = 0;
             return channel_end(op, 0);
         }
@@ -282,6 +287,7 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
                     if (!q->head) q->tail = 0;
                     q->count--; desktop_objects.messages--;
                     kwait_wake_all(&c->changed[side]);
+                    if (net_fd_changed) net_fd_changed(0, 0);
                     channel_message_free(m);
                     err = 1;
                 }
@@ -314,4 +320,15 @@ int channel_connect(struct process *client, struct process *server, int32_t fds[
     server->fds[slot]=client->fds[fds[1]];
     client->fds[fds[1]]=(struct proc_fd){0};
     fds[1]=slot;return 0;
+}
+
+/* Readiness is observed before poll atomically registers/rechecks its global
+ * wake generation; channel waits retain their existing queue predicates. */
+int channel_poll_events(struct desktop_description *d)
+{
+    struct channel *c = d->u.endpoint.channel; unsigned side = d->u.endpoint.side;
+    int events = c->inbox[side].count || !c->open[side ^ 1] ? POLLIN : 0;
+    if (c->open[side ^ 1] && c->inbox[side ^ 1].count < CIUKI_CHANNEL_QUEUE_MAX) events |= POLLOUT;
+    if (!c->open[side ^ 1]) events |= POLLHUP;
+    return events;
 }

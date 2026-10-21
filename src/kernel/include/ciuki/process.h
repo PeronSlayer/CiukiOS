@@ -44,6 +44,7 @@ struct process {
     uint32_t fault_vector, fault_error, fault_eip, fault_address;
     struct uaddr *memory;
     struct proc_fd *fds;
+    uint32_t fd_generation[CIUKI_OPEN_MAX]; /* poll/socket close-reuse identity */
     struct ciuki_sigaction *actions; /* index signo; signal semantics in f2-04 */
     void *cwd;
     void (*cwd_retain)(void *cwd);

@@ -317,3 +317,22 @@ documented above remains lead-owned. No QEMU, systemd scope, commit or push was
 run here. Clean capped `make build-full`, F0/F1 regression gates, F2 guest Lua
 evidence, resource measurements, diary entry and integration review remain
 lead-owned; these results establish host/static evidence only.
+
+
+## IPv4 sockets (f6-10)
+
+Include `<sys/socket.h>` and `<netinet/in.h>` for TCP/UDP, `<arpa/inet.h>` for
+IPv4 text/byte-order conversion, `<netdb.h>` for getaddrinfo, and `<poll.h>` or
+`<sys/select.h>` for readiness. The ordinary SDK link includes these wrappers.
+[The frozen F6 subset](design/posix-subset.md#f6-ipv4-source-api-extension-approved-2026-10-20)
+extends the F2-only exclusions above. Select translates the read/write sets to
+one poll call and preserves its 64-bit-time timeval; exception sets must be
+empty. Getaddrinfo allocates at most two IPv4 TCP/UDP records; release them with
+freeaddrinfo. Only numeric services, ASCII DNS A lookup, numeric IPv4,
+localhost and passive/loopback null-node handling are supported.
+
+UDP payloads above 1472 bytes, TCP requests above 32768 bytes, IPv6, raw sockets,
+multicast membership, fragmented IP, OOB and unlisted options are unsupported.
+Poll supports files/directories, channels, input queues and sockets; valid
+surfaces, grants and other device controls report POLLNVAL. No configuration UI,
+TLS security claim or native-game runtime qualification follows from this API.

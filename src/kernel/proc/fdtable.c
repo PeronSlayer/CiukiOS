@@ -7,6 +7,10 @@
 #include <ciuki/signal.h>
 #include <ciuki/audio.h>
 #pragma weak audio_device_close
+uint32_t net_socket_count(void) __attribute__((weak));
+uint32_t *net_socket_flags(struct proc_object *) __attribute__((weak));
+void net_fd_changed(struct process *, unsigned) __attribute__((weak));
+#define NET_OBJECTS (net_socket_count ? net_socket_count() : 0)
 
 static uint32_t file_descriptions;
 uint32_t file_description_count(void) { return __atomic_load_n(&file_descriptions,__ATOMIC_RELAXED); }
@@ -38,6 +42,30 @@ int file_fd_slot(const struct process *p, unsigned start)
         for (unsigned i = start; i < CIUKI_OPEN_MAX; i++) if (!p->fds[i].object) return (int)i;
     return -EMFILE;
 }
+
+int file_fd_reserve(struct process *p)
+{
+    int fd = file_fd_slot(p, 0);
+    if (fd >= 0) {
+        p->fds[fd] = (struct proc_fd){ &reserved_slot, FD_CLOEXEC };
+        if (net_fd_changed) net_fd_changed(p, (unsigned)fd);
+    }
+    return fd;
+}
+int file_fd_publish(struct process *p, int fd, struct proc_object *object, uint32_t flags)
+{
+    if (p->state == PROC_STOPPING || p->fds[fd].object != &reserved_slot) return -EBADF;
+    p->fds[fd] = (struct proc_fd){ object, flags };
+    if (net_fd_changed) net_fd_changed(p, (unsigned)fd);
+    return fd;
+}
+void file_fd_cancel(struct process *p, int fd)
+{
+    if (p->fds[fd].object == &reserved_slot) {
+        p->fds[fd] = (struct proc_fd){0};
+        if (net_fd_changed) net_fd_changed(p, (unsigned)fd);
+    }
+}
 struct proc_object *file_fd_object(const struct process *p, int32_t fd)
 {
     if (!p || !p->fds || fd < 0 || fd >= CIUKI_OPEN_MAX || p->fds[fd].object == &reserved_slot) return 0;
@@ -50,7 +78,7 @@ struct file_description *file_fd(const struct process *p, int32_t fd)
 }
 struct file_description *file_description_new(uint32_t flags)
 {
-    if (file_descriptions + desktop_objects.descriptions >= CIUKI_OPEN_DESCRIPTION_MAX) return 0;
+    if (file_descriptions + desktop_objects.descriptions + NET_OBJECTS >= CIUKI_OPEN_DESCRIPTION_MAX) return 0;
     struct file_description *d = kzalloc(sizeof(*d));
     if (!d) return 0;
     d->object = (struct proc_object){ file_retain, file_release, true };
@@ -99,6 +127,7 @@ int file_close(struct process *p, int32_t fd)
     if (!o) return -EBADF;
     struct file_description *d = file_fd(p, fd);
     p->fds[fd] = (struct proc_fd){ 0 }; /* remove before a possibly blocking final release */
+    if (net_fd_changed) net_fd_changed(p, (unsigned)fd);
     if (d) return file_description_close(d) ? -EIO : 0;
     o->release(o); return 0;
 }
@@ -120,6 +149,7 @@ int file_dup(struct process *p, int32_t fd, int32_t target, bool exact, uint32_t
     }
     struct proc_object *previous = p->fds[slot].object;
     p->fds[slot] = (struct proc_fd){ o, flags };
+    if (net_fd_changed) net_fd_changed(p, (unsigned)slot);
     /* Atomic replacement is published before release can yield. dup2's
      * closed error set intentionally discards a final-close I/O error. */
     if (previous) previous->release(previous);
@@ -137,7 +167,9 @@ int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
         return file_dup(p, fd, (int32_t)arg, false, cmd == F_DUPFD_CLOEXEC ? FD_CLOEXEC : 0);
     struct file_description *d = file_fd(p, fd);
     struct desktop_description *desktop = d ? 0 : desktop_fd(p, fd);
-    uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : 0;
+    uint32_t *socket_status = net_socket_flags ? net_socket_flags(o) : 0;
+    if (socket_status && cmd == F_SETFL && (arg & O_APPEND)) return -EINVAL;
+    uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : socket_status;
     if (!status) return -EINVAL;
     if (cmd == F_GETFL) return (int)*status;
     if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) && (arg & O_APPEND)) return -EINVAL;
@@ -154,7 +186,7 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
     if (!cwd) return -ENOENT;
     int slot = file_fd_slot(p, 0);
     if (slot < 0) return slot;
-    if (file_descriptions + desktop_objects.descriptions == CIUKI_OPEN_DESCRIPTION_MAX) return -ENFILE;
+    if (file_descriptions + desktop_objects.descriptions + NET_OBJECTS == CIUKI_OPEN_DESCRIPTION_MAX) return -ENFILE;
     struct file_description *d = file_description_new(flags);
     if (!d) return -ENOMEM;
     p->fds[slot] = (struct proc_fd){ &reserved_slot, FD_CLOEXEC };

@@ -545,3 +545,39 @@ the desktop its authority descriptor. These are CiukiOS extensions, not a
 POSIX `/proc` or `sysctl` interface; `kill` and process groups are unchanged
 and `setpgid`/`setsid` stay excluded. The raw stubs `ciuki_raw_proc_list` and
 `ciuki_raw_proc_terminate` are generated from `abi.h` like every other call.
+
+
+## F6 IPv4 source API extension (approved 2026-10-20)
+
+Directive f6-10 implements the subset in
+[the network contract](network-contract.md#native-sockets-readiness-and-resolver-abi)
+using the existing descriptor namespace and Linux i386 errno values. This
+supersedes the F2-only sockets/DNS/poll/select exclusion for this subset;
+POSIX conformance macros remain excluded. Newlib's host-dependent socket or
+resolver records must not replace the frozen SDK overlay headers.
+
+Public headers: `sys/socket.h`, `netinet/in.h`, `netinet/tcp.h`, `arpa/inet.h`,
+`netdb.h`, `poll.h`, `sys/select.h`. Native calls are 78–89; netctl=90 is ENOSYS.
+The SDK provides IPv4 TCP/UDP, the contract's socket options, byte-order and
+strict dotted-decimal address conversion, poll, select and getaddrinfo A lookup.
+Select makes one poll request, preserves its timeout and counts ready set bits;
+nonempty exception sets return EOPNOTSUPP. Resolver records are user-owned;
+freeaddrinfo releases the linked records allocated by this SDK.
+
+There are at most 48 public socket objects, 16 distinct objects per process,
+32 TCP objects, eight listeners and 16 UDP objects; dup shares one object.
+TCP calls accept at most 32768 bytes and can return partial counts. UDP sends
+are limited to 1472 bytes; truncated receives discard one datagram's tail.
+Zero-length UDP datagrams remain datagrams. Numeric IPv4 and localhost work
+without a physical NIC. DNS accepts bounded ASCII labels, returns one IPv4
+address, and has four outstanding requests with ten-second caller deadlines.
+Cancelled storage remains charged until its callback drains. Because the
+upstream callback merges negative and exhausted replies, these map to FAIL;
+no invented NXDOMAIN/transport distinction is exposed.
+
+Raw sockets, IPv6, multicast membership, fragments, ancillary messages,
+MSG_WAITALL/OOB, AF_UNIX/socketpair, reverse lookup, service names, IDN and
+unlisted options are outside this subset and fail explicitly. Poll supports
+sockets, regular files/directories, desktop channels and input queues. Other
+valid objects (surfaces, grants, console, audio, mixer, net/media controls)
+report POLLNVAL. Networking does not qualify native-game ports by itself.

@@ -86,6 +86,9 @@ int px_open_locked(struct px_namespace *, struct px_node *, const char *, uint32
 uint32_t file_description_count(void);
 int file_open_flags(uint32_t flags, uint32_t mode);
 int file_fd_slot(const struct process *, unsigned start);
+int file_fd_reserve(struct process *);
+int file_fd_publish(struct process *, int, struct proc_object *, uint32_t);
+void file_fd_cancel(struct process *, int);
 struct proc_object *file_fd_object(const struct process *, int32_t fd);
 struct file_description *file_fd(const struct process *, int32_t fd);
 struct file_description *file_description_new(uint32_t flags);
