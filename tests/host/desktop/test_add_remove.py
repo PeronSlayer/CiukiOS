@@ -109,13 +109,15 @@ int main(void){
 
     def test_dosvm_harness_links_and_syscalls(self):
         # Run only the existing DOSVM generator block, not the full kernel
-        # script. Both original link profiles use dosvm_test.c's VFS fixture.
+        # script. Both original link profiles use dosvm_test.c's VFS fixture
+        # and f3-52's real-uaddr model. Exercise WAIT_PRESENT alongside the
+        # management operations so their numeric dispatch stays distinct.
         work=ROOT/'build/host/f2-87';work.mkdir(parents=True,exist_ok=True)
         script=(ROOT/'scripts/test/host_kernel_tests.sh').read_text()
         block=script.split('# F3 lifecycle, BIOS/disk preflight and record channel.',1)[1]
         generator=block.split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
         with tempfile.TemporaryDirectory(dir=work) as temporary:
-            folder=Path(temporary);env=dict(os.environ,TMPDIR=temporary,CIUKI_VM_PROGRAMS='1')
+            folder=Path(temporary);env=dict(os.environ,TMPDIR=temporary,CIUKI_VM_WAIT_PRESENT='1')
             subprocess.run(['python3','-B','-c',generator,str(ROOT),temporary],check=True,env=env)
             results=[]
             for profile,flags in (('sanitized',['-O1','-fsanitize=address,undefined']),('optimized',['-O2'])):
@@ -125,10 +127,12 @@ int main(void){
                     subprocess.run(['clang','-std=c17',*flags,'-g','-Wall','-Wextra','-Werror',
                                     '-include',str(ROOT/'tests/host/vm_audio_shim.h'),'-I'+str(ROOT/'src/kernel/include'),
                                     '-c',str(ROOT/f'src/kernel/audio/{unit}.c'),'-o',obj],check=True,env=env)
-                sources=['tests/host/dosvm_test.c','src/kernel/lib/fmt.c','src/kernel/lib/sha256.c']
+                sources=['tests/host/dosvm_test.c','tests/host/dosvm_uaddr_model.c',
+                         'src/kernel/lib/fmt.c','src/kernel/lib/sha256.c']
                 sources+=['src/kernel/vm/'+name+'.c' for name in ('virtual_vga','virtual_vga_bios','vga_x86','vga_presenter')]
                 binary=folder/('dosvm-'+profile)
                 subprocess.run(['clang','-std=c17',*flags,'-g','-Wall','-Wextra','-Werror','-Wno-pointer-to-int-cast',
+                                '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
                                 '-I'+str(ROOT/'src/kernel/include'),'-I'+temporary,
                                 *(str(ROOT/s) for s in sources),*objects,'-o',binary],check=True,env=env)
                 results.append(subprocess.run([binary],env=env).returncode)

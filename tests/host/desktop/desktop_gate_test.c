@@ -78,6 +78,7 @@ static bool normal_first_frame;
 static bool input_error, report_error;
 static bool late_input, no_input, keyboard_attached;
 static unsigned empty_reads, ipc_polls, presents_before_attach;
+static unsigned idle_turns;
 static bool inherit_error, spawn_error, normal_spawn;
 static bool burst, burst_started, flush_timeout, bad_command;
 static unsigned burst_at, blocked_sends, configure_attempts, interaction_reports;
@@ -357,9 +358,15 @@ int nanosleep(const struct timespec *t,struct timespec *rest)
     /* Background observers must not advance the deterministic desktop clock
      * or longjmp through a checkpoint owned by the main thread. */
     if (!pthread_equal(pthread_self(),gate_main_thread)) return (int)syscall(SYS_nanosleep,t,rest);
-    (void)rest;assert(t->tv_nsec==1000000);host_now+=1000000;assert(host_now<10000000000ull);
+    (void)rest;assert(!t->tv_sec && t->tv_nsec>0 && t->tv_nsec<=10000000);
+    if (no_input && host_now>=3000000000ull && host_now<4000000000ull) {
+        assert(t->tv_nsec==10000000); idle_turns++;
+    }
+    host_now+=(uint64_t)t->tv_nsec;assert(host_now<10000000000ull);
     if (no_input && host_now>=6000000000ull) {
         assert(presents && empty_reads>100 && ipc_polls>100 && summary_count>=2 && !gate_keys);
+        assert(idle_turns && idle_turns<=100);
+        printf("PASS F2-86 production idle: service_turns_per_second=%u\n",idle_turns);
         longjmp(done,1);
     }
     if (running && !remaining && pongs==running*100 && !page.command && !interact_ready) command(GATE_SNAPSHOT);
@@ -425,9 +432,60 @@ static void gate_folder_poll(void)
     free(d.sh.icons); free(d.sh.autoplay.workspace);
     puts("PASS F2-79 desktop gate: held folder I/O, frame-only publication, shutdown drain and observer phase");
 }
+static void idle_policy_test(void)
+{
+    struct desktop *d=calloc(1,sizeof(*d)); assert(d);
+    struct desk_ops ops={0}; desk_init(d,&ops,320,320);
+    memset(&d->damage,0,sizeof(d->damage)); d->cursor_dirty=0;
+    uint64_t now=1000000000ull, wait;
+    for(unsigned i=0;i<100;i++) { wait=desktop_pause_ns(d,now,0,UINT64_MAX); assert(wait==10000000ull); now+=wait; }
+    assert(now==2000000000ull);
+    /* A stationary held button/drag has no work or deadline of its own. */
+    d->buttons=1; d->drag=0; d->sh.volume_drag=1;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    d->buttons=0; d->drag=-1; d->sh.volume_drag=0;
+    assert(desktop_pause_ns(d,now,1,UINT64_MAX)==1000000ull);
+    assert(desktop_pause_ns(d,now,0,now+500000ull)==500000ull);
+    d->damage.count=1; d->next_frame_ns=now+2000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull);
+    d->next_frame_ns=now; assert(desktop_pause_ns(d,now,0,UINT64_MAX)==1000000ull); d->damage.count=0;
+    d->animation.active=1; d->animation.started=now-22000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==3000000ull); d->animation.active=0;
+    struct desk_client *c=&d->clients[0]; c->channel=3; c->hello=1; c->next_ping_ns=now+4000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==4000000ull);
+    c->ping_pending=1; c->ping_sent_ns=now-4995000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==5000000ull);
+    c->channel=-1;
+    d->shell=1; d->sh.notification.active=1; d->sh.notification.started=now-6000000ull; d->sh.notification.expires=now+1000000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull); d->sh.notification.active=0;
+    d->sh.hover_target=1; d->sh.hover_since=now-599000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==1000000ull); d->sh.hover_since=0;
+    d->children[0].pid=42; d->children[0].close_ns=now+7000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==7000000ull);
+    /* Suspended shell work cannot keep a static shutdown panel polling. */
+    d->power.state=DESK_POWER_BUSY; d->children[0].close_ns=now-1;
+    d->sh.notification.active=1; d->sh.notification.expires=now-1;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    d->power.state=DESK_POWER_CLOSING; d->power.close_deadline=now+3000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==3000000ull);
+    d->power.state=DESK_POWER_RETRY; d->power.next_try=now+2000000ull;
+    assert(desktop_pause_ns(d,now,0,UINT64_MAX)==2000000ull);
+    d->sh.gate=1; assert(desktop_pause_ns(d,now,0,UINT64_MAX)==10000000ull);
+    /* Input arriving just after the last drain waits at most 10 ms. Its
+     * presentation slot adds <=16.667 ms, within the existing 50 ms target. */
+    d->shell=0; d->now_ns=now;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+1,.value=10,.value2=10};
+    wait=desktop_pause_ns(d,now,0,UINT64_MAX); d->now_ns+=wait; desk_input(d,&e);
+    assert(d->stats.input_lag_ns==wait-1 && d->stats.input_lag_ns<=10000000ull);
+    assert(d->stats.input_lag_ns+DESK_FRAME_NS<50000000ull);
+    free(d);
+    puts("PASS F2-86 idle policy: 100 turns/s, input lag <=10 ms, frame budget <50 ms, timer/frame/animation/heartbeat/shell deadlines");
+}
+
 int main(int argc,char **argv)
 {
     gate_main_thread=pthread_self();
+    idle_policy_test();
     if (argc==2 && !strcmp(argv[1],"--folder-poll")) { gate_folder_poll(); return 0; }
     if (argc==4 && (!strcmp(argv[1],"--first-frame") || !strcmp(argv[1],"--normal-first-frame"))) {
         first_frame_portrait=argv[2]; first_frame_output=argv[3];

@@ -15,6 +15,15 @@ static struct surface fake_surface[3];
 static uint8_t user_mem[4096];
 static bool user_fault;
 static unsigned pins;
+static unsigned record_pin_walks, surface_rows;
+static bool caught_signal;
+static struct proc_thread window_thread;
+int dosvm_model_user_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_user_write(const struct uaddr *, uint32_t, const void *, uint32_t);
+int dosvm_model_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_write(const struct uaddr *, uint32_t, const void *, uint32_t);
+struct proc_thread *proc_thread_for(const struct task *t) { return t == &caller ? &window_thread : 0; }
+bool proc_signal_caught(struct proc_thread *t) { CHECK(t == &window_thread); return caught_signal; }
 struct process *proc_current(void) { return fake_current; }
 struct process *proc_find(uint32_t pid)
 {
@@ -28,18 +37,21 @@ void surface_retain(struct surface *s) { s->references++; }
 void surface_release(struct surface *s) { CHECK(s->references > 1); s->references--; }
 int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
 {
+    surface_rows++;
     if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
     memcpy(s->pixels + offset, data, bytes);
     return 0;
 }
 int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
 {
+    if (!pins) record_pin_walks++; /* production copy resolves/pins absent an outer pin */
     if (user_fault || src > sizeof(user_mem) || bytes > sizeof(user_mem) - src) return -EFAULT;
     memcpy(dst, user_mem + src, bytes);
     return 0;
 }
 int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
 {
+    if (!pins) record_pin_walks++;
     if (dst > sizeof(user_mem) || bytes > sizeof(user_mem) - dst) return -EFAULT;
     memcpy(user_mem + dst, src, bytes);
     return 0;
@@ -47,11 +59,28 @@ int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
 int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, bool write)
 {
     (void)u; CHECK(write && !pins);
+    record_pin_walks++;
     if (base > sizeof(user_mem) || bytes > sizeof(user_mem) - base) return -EFAULT;
     pin->base = base; pin->end = base + bytes; pins++;
     return 0;
 }
 void ua_unpin(struct uaddr *u, struct ua_pin *pin) { (void)u; (void)pin; CHECK(pins == 1); pins--; }
+int ua_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{
+    (void)u;
+    if (user_fault || src > sizeof(user_mem) || bytes > sizeof(user_mem)-src) return -EFAULT;
+    memcpy(dst,user_mem+src,bytes); return 0;
+}
+int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{
+    (void)u;
+    if (user_fault || dst > sizeof(user_mem) || bytes > sizeof(user_mem)-dst) return -EFAULT;
+    memcpy(user_mem+dst,src,bytes); return 0;
+}
+int ua_user_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{ return u ? dosvm_model_user_read(u,dst,src,bytes) : ua_read(u,dst,src,bytes); }
+int ua_user_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{ return u ? dosvm_model_user_write(u,dst,src,bytes) : ua_write(u,dst,src,bytes); }
 
 /* ---- Helpers ---- */
 static struct v86_frame vf(unsigned ax, unsigned bx, unsigned cx, unsigned dx)
@@ -561,7 +590,7 @@ static void test_client_boundary(void)
     fake_current = 0;
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
     fake_current = &fake_proc[0];
-    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(11, &c, sizeof(c)) == -EINVAL);
+    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(12, &c, sizeof(c)) == -EINVAL);
     c = command_for(0, 0); c.surface_fd = 0; c.name[0] = 'X';
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c) - 1) == -EINVAL);
     c.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EOPNOTSUPP);

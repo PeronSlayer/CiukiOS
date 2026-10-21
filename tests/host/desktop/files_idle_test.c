@@ -51,7 +51,11 @@ static void turn(int stress)
     uint64_t elapsed=clock_ns(CLOCK_MONOTONIC)-started; if (elapsed>ping_max) ping_max=elapsed;
 }
 static void finish_scan(void)
-{ uint64_t end=clock_ns(CLOCK_MONOTONIC)+3000000000ull; while(app.reading) { assert(clock_ns(CLOCK_MONOTONIC)<end); turn(0); pause_ms(2); } }
+{
+    uint64_t end=clock_ns(CLOCK_MONOTONIC)+3000000000ull;
+    while(app.reading) { assert(clock_ns(CLOCK_MONOTONIC)<end); turn(0); pause_ms(2); }
+    for(unsigned i=0;i<DU_TIMERS;i++) assert(!ui.timers[i].active || ui.timers[i].id!=T_BROWSER);
+}
 static void run_period(unsigned seconds,int old)
 {
     baseline=old; turns=paints=0; cpu_spent=ping_max=0;
@@ -95,6 +99,13 @@ int main(int argc,char **argv)
     baseline=0; ui_lists=0; app.model.active=3; app.model.anchor=7; app.model.entries[8].selected=1;
     files_update(&app); turn(0);
     struct fm_entry *entries=app.model.entries; struct files_node *tree=app.tree; struct du_item *rows=app.rows;
+    app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0));
+    uint64_t browser_deadline=du_next_deadline(&ui);
+    assert(browser_deadline==ui.now+20000000ull);
+    /* Supersession must not postpone the outstanding browser poll. */
+    ui.now+=1000000ull;
+    app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0));
+    assert(du_next_deadline(&ui)==browser_deadline); finish_scan();
     app.media_polled=0; du_timer_start(&ui,T_MEDIA,1000000000ull,1);
     run_period(4,0);
     assert(app.model.entries==entries && app.tree==tree && app.rows==rows && app.model.active==3 && app.model.anchor==7 && app.model.entries[8].selected);
@@ -106,6 +117,13 @@ int main(int argc,char **argv)
     /* No change produces no paint; structural changes remain visible. */
     finish_scan(); app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0)); finish_scan(); turn(0);
     unsigned before=paints; app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0)); finish_scan(); turn(0); assert(paints==before);
+    du_timer_stop(&ui,T_MEDIA); rt_renders=rt_compared_rows=0;
+    uint64_t idle_begin=ui.now;
+    for(unsigned i=1;i<=100;i++) { assert(du_window_turn(&window,idle_begin+i*10000000ull)>0); }
+    assert(!rt_renders && !rt_compared_rows);
+    struct files_worker *worker=app.worker; pthread_mutex_lock(&worker->lock);
+    assert(!worker->busy && !worker->pending && !worker->result); pthread_mutex_unlock(&worker->lock);
+    puts("PASS F2-86 Files idle worker: browser timer stopped, renders=0 compared_rows=0 per simulated second");
     assert(!fm_join(path,directory,"new.txt")); int fd=open(path,O_CREAT|O_WRONLY,0600); assert(fd>=0 && !close(fd));
     app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0)); finish_scan(); assert(app.model.count==1025);
     assert(!unlink(path)); app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0)); finish_scan(); assert(app.model.count==1024);

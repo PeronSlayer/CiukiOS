@@ -941,7 +941,9 @@ enum dos_file_result dos_file_dispatch(struct dos_file *d,struct dos_file_frame 
     if (origin==DOS_FILE_DPMI_0300 || origin==DOS_FILE_EXTENDER || origin==DOS_FILE_HOST) observe(d,f,seq,wall,monitor,origin,vector);
     d->request_wall=wall; d->request_monitor=monitor; d->deadline=wall+DOS_FILE_BUDGET_US;
     memset(&d->wait,0,sizeof(d->wait));
-    d->request=(struct vfs_request){d,d->deadline,request_now,request_cancelled,request_pause,owner(d,d->selected),&d->wait,&d->cleanup_status};
+    d->request=(struct vfs_request){.arg=d,.deadline=d->deadline,.now=request_now,
+        .cancelled=request_cancelled,.pause=request_pause,.owner=owner(d,d->selected),
+        .wait=&d->wait,.cleanup_status=&d->cleanup_status,.task=fs_request_identity(0)};
     d->dispatch_depth++;
     enum dos_file_result result=execute(d,f,false);
     d->dispatch_depth--;

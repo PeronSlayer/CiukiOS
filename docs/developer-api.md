@@ -2327,22 +2327,36 @@ PRESENT plus destination 8-line damage
 focused=1 enter, 0 return to window
 
 ```c
-#define CIUKI_DOSVM_GAME_QUERY 11u
+#define CIUKI_DOSVM_BACKGROUND 10u
+```
+
+focused=1 pause on Alt+Tab, 0 continue
+
+```c
+#define CIUKI_DOSVM_WAIT_PRESENT 11u
+```
+
+observe frame/lifecycle events, no drawing
+
+```c
+#define CIUKI_DOSVM_GAME_QUERY 12u
 ```
 
 launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes
 
 ```c
-#define CIUKI_DOSVM_GAME_REMOVE 12u
+#define CIUKI_DOSVM_GAME_REMOVE 13u
 ```
 
 delegated program-management authority; no VM handle
 
 ```c
-#define CIUKI_DOSVM_BACKGROUND 10u
+#define CIUKI_DOSVM_WAIT_MAX_MS 50u
+#define CIUKI_DOSVM_EVENT_VIDEO 1u
+#define CIUKI_DOSVM_EVENT_STATE 2u
+#define CIUKI_DOSVM_EVENT_CONSOLE 4u
+#define CIUKI_DOSVM_EVENT_TIMEOUT 8u
 ```
-
-focused=1 pause on Alt+Tab, 0 continue
 
 CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
 a FreeDOS override is permitted only for an explicit game, never the shell.
@@ -2463,10 +2477,16 @@ struct { uint32_t kernel, game, memory, reserved[7]; } launch;
 CREATE input
 
 ```c
-struct { uint32_t bands[2], reserved[8]; } presentation;
+struct { uint32_t bands[2], redraw, reserved[7]; } presentation;
 ```
 
-PRESENT_BANDS output
+bands output; redraw input 0/1
+
+```c
+struct { uint32_t timeout_ms, frame_ms, events, reserved[7]; } wait;
+```
+
+WAIT_PRESENT
 
 ```c
 };
@@ -4435,6 +4455,8 @@ struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
 ```
 
 Timers (monotonic nanoseconds) and the shared text clipboard.
+
+DU_EV_TICK preserves dirty state; callbacks invalidate changed content.
 
 ```c
 int du_timer_start(struct du_ui *, int id, uint64_t interval_ns, int repeat);

@@ -4,6 +4,7 @@
 #define CIUKI_CPU_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define KERNEL_VBASE    0xC0000000u
 #define P2V(p)          ((void *)((uintptr_t)(p) + KERNEL_VBASE))
@@ -85,11 +86,20 @@ static inline uint64_t read_tsc_serialized(void)
     cpuid(0, &a, &b, &c, &d);
     return ((uint64_t)hi << 32) | lo;
 }
+/* Diagnostic phase boundaries only: P6 RDTSC, no CPUID per scheduler phase.
+ * These approximate attribution; they are not instruction-serialization proof. */
+static inline uint64_t read_tsc_unserialized(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
 
 /* Save EFLAGS and disable interrupts; restore. Outermost sections are
  * timed for the F0 latency evidence (core/timing.c). */
 void crit_begin(void);
 void crit_end(void);
+bool crit_begin_inactive(void) __attribute__((weak));
 void crit_label(const char *section) __attribute__((weak));
 static inline uint32_t irq_save_at(const char *section)
 {

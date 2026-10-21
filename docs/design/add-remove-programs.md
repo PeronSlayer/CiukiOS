@@ -46,13 +46,19 @@ Implementation decisions (f2-87 continuation, 2026-10-21):
   NoRemove and SystemComponent prohibit removal; NoModify alone permits it.
   The confirmation names the selected application and includes shortcut
   removal. Bundled-game confirmation explains the system-reinstall requirement.
-- GAME_QUERY (11) and GAME_REMOVE (12) extend DOSVM version 1 with fixed game
+- GAME_QUERY (12) and GAME_REMOVE (13) extend DOSVM version 1 with fixed game
   IDs only. They grant no VM/display capability. A single owner mount uses the
   existing VFS sharing and C: write authority, a logical block provider, and
   the production FAT driver. Traversal is bounded to depth 16 and 16,384
   entries, with a read-only preflight before removal and FAT ownership
   validation before write enable. Queries do not enable writes. Kernel and
   SDK compiler frame limits remain unchanged.
+
+  Amendment 3 keeps f3-52 WAIT_PRESENT at operation 11 and assigns management
+  operations 12/13. The kernel header is also the SDK's public ABI source;
+  the layout dump discovers constants from it, while the independent host
+  oracle fixes their expected values. Registry metadata and removal semantics
+  above are unchanged by this numbering correction.
 - Remove clears the digest cache after attempted FAT mutation and deletes
   matching game/kernel COW files. A live backing-file read/deny-write handle
   prevents removal. Preserve every installed licence/provenance file. Report

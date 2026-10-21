@@ -57,6 +57,7 @@ enum dosvm_perf_cause {
     DOSVM_COST_PM_HLT, DOSVM_COST_DPMI, DOSVM_COST_HOST_IRQ, DOSVM_COST_COUNT
 };
 #define DOSVM_PERF_INTERVAL 5000u
+#define DOSVM_SERIAL_INTERVAL 2000u
 #define DOSVM_PERF_TOP 5u
 #define DOSVM_PERF_PORTS 256u
 enum dosvm_if_path { DOSVM_IF_TRAMPOLINE, DOSVM_IF_STI, DOSVM_IF_IRET,
@@ -164,6 +165,9 @@ struct dosvm {
     int fullscreen_error;
     uint32_t continuation;
     struct kwait wake;
+    struct kwait present_wait; /* request dependency on the VM worker */
+    uint64_t present_due_us, present_sample_due_us;
+    uint32_t console_sequence, present_vbe_changes, present_samples;
     struct {
         bool sleeping, seen;
         uint64_t last_tick, poll_tick;
@@ -257,6 +261,14 @@ struct dosvm {
         uint32_t exits[6]; /* #GP, #PF, #DB, host timer, other, protected-mode total */
         uint64_t guest_cycles, monitor_cycles, present_cycles, harvest_cycles, log_cycles;
         uint64_t stamp, report_tick;
+        /* Independent UART window: leave every existing disk family at 5s. */
+        struct {
+            uint64_t tick, guest, monitor, cost_cycles[DOSVM_COST_COUNT];
+            uint32_t exits[6], idle[DOSVM_IDLE_REASONS], cost_count[DOSVM_COST_COUNT];
+            struct dosvm_hot_cost ports[2][DOSVM_PERF_PORTS];
+            unsigned active;
+            bool reporting;
+        } serial;
         unsigned phase; /* 0 suspended, 1 guest, 2 monitor */
         unsigned resume_phase;
         bool trap_active;
@@ -435,6 +447,11 @@ void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);
 void dosvm_idle_wake(struct dosvm *);
+void dosvm_present_notify(struct dosvm *);
+void dosvm_present_checkpoint(struct dosvm *);
+unsigned dosvm_vga_period_ms(struct dosvm *);
+uint64_t dosvm_vga_period_us(struct dosvm *, uint64_t tick);
+uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period_us, uint64_t tick);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
 { return v->probe ? v->probe : "vm-boot"; }

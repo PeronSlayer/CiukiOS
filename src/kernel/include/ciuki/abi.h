@@ -1339,9 +1339,15 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_LAUNCH 7u /* arm command visibility before its final Enter */
 #define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
-#define CIUKI_DOSVM_GAME_QUERY 11u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
-#define CIUKI_DOSVM_GAME_REMOVE 12u /* delegated program-management authority; no VM handle */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
+#define CIUKI_DOSVM_WAIT_PRESENT 11u /* observe frame/lifecycle events, no drawing */
+#define CIUKI_DOSVM_GAME_QUERY 12u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
+#define CIUKI_DOSVM_GAME_REMOVE 13u /* delegated program-management authority; no VM handle */
+#define CIUKI_DOSVM_WAIT_MAX_MS 50u
+#define CIUKI_DOSVM_EVENT_VIDEO 1u
+#define CIUKI_DOSVM_EVENT_STATE 2u
+#define CIUKI_DOSVM_EVENT_CONSOLE 4u
+#define CIUKI_DOSVM_EVENT_TIMEOUT 8u
 /* CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
  * a FreeDOS override is permitted only for an explicit game, never the shell. */
 #define CIUKI_DOSVM_CIUKIDOS 0u
@@ -1375,7 +1381,8 @@ struct ciuki_dosvm_command {
     union {
         struct ciuki_input_event event; /* 72: INPUT */
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
-        struct { uint32_t bands[2], reserved[8]; } presentation; /* PRESENT_BANDS output */
+        struct { uint32_t bands[2], redraw, reserved[7]; } presentation; /* bands output; redraw input 0/1 */
+        struct { uint32_t timeout_ms, frame_ms, events, reserved[7]; } wait; /* WAIT_PRESENT */
     };
     struct ciuki_rect damage; /* 112 */
 };
@@ -1659,6 +1666,10 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, launch.memory) == 
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, event) == 72, "ciuki_dosvm_command.event offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[0]) == 72, "ciuki_dosvm_command.bands low offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.bands[1]) == 76, "ciuki_dosvm_command.bands high offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, presentation.redraw) == 80, "ciuki_dosvm_command.redraw offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, wait.timeout_ms) == 72, "ciuki_dosvm_command.wait timeout offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, wait.frame_ms) == 76, "ciuki_dosvm_command.wait frame offset");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, wait.events) == 80, "ciuki_dosvm_command.wait events offset");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command, damage) == 112, "ciuki_dosvm_command.damage offset");
 
 

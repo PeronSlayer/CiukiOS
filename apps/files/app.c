@@ -863,7 +863,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     pthread_cond_signal(&w->changed);
     pthread_mutex_unlock(&w->lock);
     scan_free(old); scan_free(result);
-    a->tree_dirty = 0; a->reading = 1;
+    a->tree_dirty = 0;
+    /* Replacing an outstanding request keeps its existing 20 ms cadence. */
+    if (!a->reading) du_timer_start(a->ui, T_BROWSER, 20000000u, 1);
+    a->reading = 1;
     if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH) {
         a->loading = 1;
         snprintf(a->loading_path, sizeof(a->loading_path), "%s", kind == SCAN_REFRESH ? a->model.path : s->target);
@@ -885,6 +888,7 @@ static void scan_poll(struct files_app *a)
     if (scan_cancelled(s)) { scan_free(s); return; }
     struct files_app *b = &s->state;
     a->reading = 0;
+    du_timer_stop(a->ui, T_BROWSER);
     if (s->clipboard_valid && s->clipboard_key==clipboard_key(&a->model) && clipboard_key(&a->model)!=clipboard_key(&b->model)) {
         fm_clipboard_clear(&a->model);
         a->model.clipboard=b->model.clipboard; a->model.clipboard_count=b->model.clipboard_count; a->model.cut=b->model.cut;
@@ -1632,7 +1636,6 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     du_focus(u, W_LIST);
     int worker_error = scan_start(a);
     if (worker_error) return worker_error;
-    du_timer_start(u, T_BROWSER, 20000000u, 1);
     if (files_navigate(a, path ? path : FM_COMPUTER)) {
         du_dialog_close(u);
         if (files_navigate(a, FM_COMPUTER)) return -EIO;
