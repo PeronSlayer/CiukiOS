@@ -115,7 +115,7 @@ static bool event_changed(void *arg)
 #endif
 /* Called with the short publication lock held. Always returns with it held. */
 #ifdef LWIP_HOST
-static void unlock_cancel(void *arg) { pthread_mutex_unlock(arg); }
+static void unlock_cancel(void *arg) { nesting = 0; pthread_mutex_unlock(arg); }
 #endif
 static void event_wait(struct event *e, uint64_t deadline, bool forever, sys_prot_t *saved)
 {
@@ -357,6 +357,7 @@ uint32_t ciuki_lwip_rand(void)
     sys_arch_unprotect(f); return (uint32_t)(z ^ (z >> 31));
 }
 unsigned cu_arch_bytes(void) { return sizeof(sems) + sizeof(mutexes) + sizeof(mboxes) + sizeof(threads); }
+unsigned cu_mbox_bytes(void) { return sizeof(struct cu_mbox); }
 
 static struct event changes;
 static bool changes_initialized;

@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 static struct {
     struct net_packet frames[NET_QUEUE_MAX];
+    uint32_t generation[NET_QUEUE_MAX];
     unsigned head, count;
     struct kmutex lock;
 } outgoing[2];
@@ -22,7 +23,11 @@ int net_stack_transmit(unsigned index, const void *frame, unsigned bytes)
     unsigned count = outgoing[index].count;
     int e = count == NET_QUEUE_MAX ? -EAGAIN : 0;
     if (!e) {
-        struct net_packet *p = &outgoing[index].frames[(outgoing[index].head + count) % NET_QUEUE_MAX];
+        unsigned at = (outgoing[index].head + count) % NET_QUEUE_MAX;
+        struct netif *d = net_get(index);
+        if (!d || !d->running || d->quarantined) { kmutex_unlock(&outgoing[index].lock); return -ENETDOWN; }
+        struct net_packet *p = &outgoing[index].frames[at];
+        outgoing[index].generation[at] = d->generation;
         memcpy(p->data, frame, bytes); p->length = (uint16_t)bytes; outgoing[index].count++;
     }
     kmutex_unlock(&outgoing[index].lock); return e;
@@ -44,12 +49,17 @@ void net_stack_driver_service(void)
     for (unsigned i = 0; i < net_count() && i < 2; i++) {
         struct netif *d = net_get(i);
         net_stack_link(i, d->running && !d->quarantined && d->link != NET_LINK_DOWN);
+        if (!d->running || d->quarantined || d->link == NET_LINK_DOWN) {
+            kmutex_lock(&outgoing[i].lock); outgoing[i].head = outgoing[i].count = 0;
+            kmutex_unlock(&outgoing[i].lock); continue;
+        }
         for (unsigned n = 0; n < 8 && g_ticks - start < 1; n++) {
             kmutex_lock(&outgoing[i].lock);
             if (!outgoing[i].count) { kmutex_unlock(&outgoing[i].lock); break; }
             packet = outgoing[i].frames[outgoing[i].head];
+            uint32_t generation = outgoing[i].generation[outgoing[i].head];
             kmutex_unlock(&outgoing[i].lock);
-            int e = netif_transmit(d, d->generation, packet.data, packet.length);
+            int e = netif_transmit(d, generation, packet.data, packet.length);
             if (e == -16) break;
             kmutex_lock(&outgoing[i].lock);
             outgoing[i].head = (outgoing[i].head + 1) % NET_QUEUE_MAX; outgoing[i].count--;

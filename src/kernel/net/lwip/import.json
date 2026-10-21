@@ -38,7 +38,7 @@
   ],
   "patches": {
     "0001-preserve-tcp-pcbs.patch": "9b08ebc1b973099d520d39bcbc9a40360ee034547314f8a73b78b428eefbe917",
-    "0002-dns-server-generation.patch": "44a366352f0a96e81b1648600f17c8ca9a4c7e927177a3b8639aff7de9758867",
+    "0002-dns-server-generation.patch": "dd2f81964a343094f4c39e4babe686540751ab35b5e572b4dc851c3f04d22d2a",
     "0003-typed-loopback-callback.patch": "0466bc1d1b884c4a7572ecfd4e00a47a27aad64987a6ea214138c6af5f4b999e"
   }
 }

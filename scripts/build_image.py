@@ -122,6 +122,9 @@ def desktop_payloads():
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
                "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
+    sources["/system/licenses/lwip-2.2.1-BSD-3-Clause.txt"] = ROOT / "docs/licenses/lwip-2.2.1-BSD-3-Clause.txt"
+    sources["/system/licenses/lwip-2.2.1-NOTICES.txt"] = ROOT / "docs/licenses/lwip-2.2.1-NOTICES.txt"
+    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()

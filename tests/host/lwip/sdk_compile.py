@@ -8,6 +8,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser()
 parser.add_argument('--headers', type=Path, required=True)
+parser.add_argument('--run', action='store_true', help='execute sanitized native-host SDK wrappers with a user-address/trap shim')
 args = parser.parse_args()
 flags = runpy.run_path(str(ROOT / 'scripts/build_kernel.py'))['CFLAGS']
 flags = [f for f in flags if f != '-mno-80387']
@@ -39,3 +40,14 @@ _Static_assert(sizeof(struct addrinfo)==32,"addrinfo");
 ''')
 subprocess.run(['clang', *flags, '-c', str(source), '-o', str(out / 'sdk-layout.o')], check=True)
 print('PASS F6 SDK wrapper compilation and public i686 layouts')
+if args.run:
+    binary = out / 'sdk-test'
+    subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+        '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-D_DEFAULT_SOURCE=1',
+        '-D__DYNAMIC_REENT__=', '-nostdinc', '-isystem', resource + '/include',
+        '-include', str(ROOT / 'tests/host/lwip/sdk_shim.h'),
+        '-I', str(ROOT / 'src/kernel/include'), '-I', str(ROOT / 'sdk/sysroot-overlay/include'),
+        '-I', str(args.headers.resolve()), str(ROOT / 'tests/host/lwip/sdk_test.c'),
+        *[str(ROOT / f'sdk/libciuki/{n}.c') for n in ('socket', 'inet', 'netdb')],
+        '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=30)

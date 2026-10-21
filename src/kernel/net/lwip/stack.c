@@ -26,6 +26,8 @@ static struct ethernet_port ports[2];
 static bool started, attempted;
 static sys_sem_t initialized;
 int cu_sockets_init(void);
+void ciuki_sockets_address_lost(uint32_t);
+static void link_dispatch(void *);
 
 static err_t output(struct netif *n, struct pbuf *p)
 {
@@ -40,8 +42,16 @@ static void status(struct netif *n)
 {
     struct ethernet_port *p = n->state;
     sys_prot_t f = sys_arch_protect();
+    uint32_t old = p->address;
     p->address = netif_is_link_up(n) ? ip4_addr_get_u32(netif_ip4_addr(n)) : 0;
-    sys_arch_unprotect(f); cu_changed();
+    uint32_t current = p->address;
+    sys_arch_unprotect(f);
+    if (old && old != current) {
+        ciuki_sockets_address_lost(old);
+        if (netif_default == n && !current)
+            for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) dns_setserver(i, IP_ADDR_ANY);
+    }
+    cu_changed();
 }
 static err_t interface_init(struct netif *n)
 {
@@ -87,7 +97,7 @@ int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
     if (!started || index >= 2 || ports[index].attached) return -EINVAL;
     struct ethernet_port *p = &ports[index]; p->index = index;
     memcpy(p->mac, mac, 6); p->desired_link = link;
-    p->link_message = tcpip_callbackmsg_new(link_update, p);
+    p->link_message = tcpip_callbackmsg_new(link_dispatch, p);
     if (!p->link_message) return -ENOMEM;
     err_t r = tcpip_callback_wait(attach_core, p);
     if (r || !p->attached) { tcpip_callbackmsg_delete(p->link_message); p->link_message = NULL; return -ENOMEM; }
@@ -115,7 +125,7 @@ void cu_stack_schedule_link(void *arg)
     bool post = !link_pending[p->index] && p->desired_link != p->applied_link;
     if (post) link_pending[p->index] = true;
     sys_arch_unprotect(f);
-    if (post && tcpip_try_callback(link_dispatch, p) != ERR_OK) {
+    if (post && tcpip_callbackmsg_trycallback(p->link_message) != ERR_OK) {
         f = sys_arch_protect(); link_pending[p->index] = false; sys_arch_unprotect(f);
     }
 }
@@ -147,8 +157,14 @@ int net_stack_init(void)
     struct mm_ledger memory; ledger_snapshot(&memory);
     if (pages > 1024 || memory.zone[ZONE_NORMAL].free < memory.high + 1024 - pages)
         return -ENOMEM;
-    if (!ledger_commit(MM_NET, 1024 - pages)) return -ENOMEM;
     ledger_move(V2P(__net_start), pages, MM_KERNEL_IMAGE, MM_NET);
+    /* commit_capacity accounts resident owner pages against the promise.
+     * Promise the TOTAL ceiling, otherwise BSS would cancel the reservation
+     * for the remaining stacks and DMA allocations a second time. */
+    if (!ledger_commit(MM_NET, 1024)) {
+        ledger_move(V2P(__net_start), pages, MM_NET, MM_KERNEL_IMAGE);
+        return -ENOMEM;
+    }
     struct clock_seed rtc; file_clock_snapshot(&rtc);
     ciuki_lwip_seed((uint64_t)rtc.utc ^ g_ticks);
     if (g_cpu_tsc) ciuki_lwip_seed(read_tsc_serialized());

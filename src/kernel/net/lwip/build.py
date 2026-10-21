@@ -24,6 +24,9 @@ def digest(path):
 
 
 def source():
+    record = json.loads((HERE / "import.json").read_text())
+    if record["sources"] != list(SOURCES) or record["sha256"] != SHA256:
+        raise ValueError("lwIP source list/hash differs from the import record")
     archive = ROOT / "build/downloads/lwip/lwip-2.2.1.zip"
     if not archive.is_file() or archive.stat().st_size != 5087893 or digest(archive) != SHA256:
         raise ValueError("missing/changed pinned lwIP 2.2.1 archive; no download/fallback")
@@ -31,7 +34,7 @@ def source():
     stamp = folder / "ciuki-source-hashes.json"
     patches = sorted((HERE / "patches").glob("*.patch"))
     patch_hashes = {p.name: digest(p) for p in patches}
-    expected = json.loads((HERE / "import.json").read_text())["patches"]
+    expected = record["patches"]
     if patch_hashes != expected:
         raise ValueError("unrecorded/changed lwIP patch")
     if stamp.exists():

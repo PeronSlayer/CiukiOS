@@ -1,6 +1,6 @@
 --- a/src/core/dns.c
 +++ b/src/core/dns.c
-@@ -361,6 +361,19 @@
+@@ -361,6 +361,22 @@
  dns_setserver(u8_t numdns, const ip_addr_t *dnsserver)
  {
    if (numdns < DNS_MAX_SERVERS) {
@@ -9,9 +9,12 @@
 +    if (!ip_addr_cmp(&dns_servers[numdns], next)) {
 +      u8_t i;
 +      LWIP_HOOK_DNS_SERVER_CHANGED();
-+      /* Keep uncancellable pending entries until their callbacks drain. */
++      /* Drain callbacks before freeing pending entries and source PCBs. */
 +      for (i = 0; i < DNS_TABLE_SIZE; i++) {
-+        if (dns_table[i].state == DNS_STATE_DONE) {
++        if (dns_table[i].state == DNS_STATE_ASKING) {
++          dns_call_found(i, NULL);
++        }
++        if (dns_table[i].state != DNS_STATE_UNUSED) {
 +          dns_table[i].state = DNS_STATE_UNUSED;
 +        }
 +      }

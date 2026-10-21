@@ -39,3 +39,10 @@ software subset. Link with `-lgl`. CiukiOS uses TinyGL by Fabrice Bellard,
 Gek (DMHSW), and C-Chads; its acknowledgment licence is installed under
 `sdk/libgl/LICENSE-TinyGL.txt`. See [libgl](libgl/README.md) for ownership,
 supported calls and limitations.
+
+
+F6-10 adds the IPv4 TCP/UDP socket headers and libc wrappers, `poll`, `select`,
+strict IPv4 conversion and bounded `getaddrinfo` A lookup. These use native
+calls 78–89; call 90 remains ENOSYS for the configuration directive. Link with
+the usual `libciuki.a`. See the [F6 subset and limits](../docs/design/posix-subset.md#f6-ipv4-source-api-extension-approved-2026-10-20)
+for flags, descriptor readiness, non-pollable objects and deferred features.

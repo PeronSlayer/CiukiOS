@@ -11,9 +11,10 @@ struct user_operation {
     struct ua_pin pins[4];
     unsigned pinned;
     bool used;
-    uint8_t buffer[CIUKI_SOCKET_IO_MAX];
+    uint8_t *buffer;
 };
 static struct user_operation operations[8];
+static uint8_t io_buffers[8][CIUKI_SOCKET_IO_MAX];
 static void user_free(void *arg)
 {
     struct user_operation *o = arg;
@@ -23,7 +24,7 @@ static void user_free(void *arg)
 static struct user_operation *user_new(struct process *p)
 {
     struct user_operation *o = NULL; sys_prot_t f = sys_arch_protect();
-    for (unsigned i = 0; i < 8; i++) if (!operations[i].used) { o = &operations[i]; o->used = true; o->process = p; o->pinned = 0; break; }
+    for (unsigned i = 0; i < 8; i++) if (!operations[i].used) { o = &operations[i]; o->used = true; o->process = p; o->pinned = 0; o->buffer = io_buffers[i]; break; }
     sys_arch_unprotect(f); return o;
 }
 static int pin(struct user_operation *o, uint32_t address, unsigned bytes)
@@ -141,7 +142,8 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
             e = copy_from_user(&length, r.length, 4);
             if (!e && length > 65535) e = -EINVAL;
             if (!e) e = pin(o, r.length, 4);
-            if (!e) e = pin(o, r.value, length < sizeof(value) ? length : sizeof(value));
+            unsigned actual = r.level == SOL_SOCKET && (r.name == SO_RCVTIMEO || r.name == SO_SNDTIMEO) ? 16 : 4;
+            if (!e) e = pin(o, r.value, length < actual ? length : actual);
         }
         unsigned capacity = length;
         if (!e) e = net_socket_option(p, r.fd, r.operation, r.level, r.name, value, &length);
@@ -178,7 +180,10 @@ int32_t net_socket_call(struct trap_frame *tf)
 {
     if (tf->eax == CIUKI_SYS_NETCTL) return -ENOSYS;
     struct process *p = proc_current(); if (!p) return -ENOSYS;
-    struct user_operation *o = user_new(p); if (!o) return -ENOMEM;
+    struct user_operation local = { .process = p };
+    bool data = tf->eax == CIUKI_SYS_SENDTO || tf->eax == CIUKI_SYS_RECVFROM || tf->eax == CIUKI_SYS_POLL;
+    struct user_operation *o = data ? user_new(p) : &local;
+    if (!o) return -ENOMEM;
     struct proc_thread *t = proc_thread_for(g_current);
     if (t) { t->cleanup = user_free; t->operation = o; }
     int result = dispatch(o, tf);

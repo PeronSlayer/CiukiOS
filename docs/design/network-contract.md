@@ -470,7 +470,7 @@ No user's scratch allocation MAY be borrowed by a later retransmission.
 
 **[F6]** Lead amendment f6-10, 2026-10-20: calls 75–77 are occupied;
 this approved table assigns 78–90 in the original order. It
-it MUST NOT renumber 0–74 or the 6–15 reservations. f6-02 MUST add the approved
+MUST NOT renumber 0–74 or the 6–15 reservations. f6-02 MUST add the approved
 records/constants to `ciuki/abi.h` and update SDK generation/ABI layout tests.
 Until implemented the calls MUST return ENOSYS. `B,C,D,S,I,P` mean
 EBX, ECX, EDX, ESI, EDI, EBP as in the existing ABI; unused registers MUST be

@@ -22,6 +22,7 @@ void cu_sleep(unsigned);
 void cu_yield(void);
 uintptr_t cu_identity(void);
 unsigned cu_arch_bytes(void);
+unsigned cu_mbox_bytes(void);
 unsigned cu_mbox_count(sys_mbox_t);
 unsigned cu_change_snapshot(void);
 void cu_changed(void);
