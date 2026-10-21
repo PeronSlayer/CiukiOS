@@ -174,7 +174,7 @@ int main(int argc, char **argv)
     c.launch.kernel=kernel; c.launch.game=game; c.launch.memory=memory;
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
-        snprintf(detail, sizeof(detail), "%s", kernel==CIUKI_DOSVM_FREEDOS13 ?
+        snprintf(detail, sizeof(detail), "%s", errno==ENOENT && game ? "This bundled game has been removed. Reinstall CiukiOS to restore it." : kernel==CIUKI_DOSVM_FREEDOS13 ?
                  "FreeDOS 1.3 is unavailable. Install or repair FreeDOS support, then relaunch." : strerror(errno));
         loading = 1; result = 1;
     } else { id = c.id; generation = c.generation; }

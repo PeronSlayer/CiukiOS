@@ -136,10 +136,10 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
 /* f3-02: the DOS window authority (syscall 70) follows only an exact
  * "/Programs/dosbox" spawned by the supervisor or by a process that owns both a
  * display and an input grant (the desktop). Grants never leave their owner
- * process, so no other launcher can confer it. */
+ * process, so no other launcher can confer it. Program-management authority
+ * follows the same parent check, only to the desktop and Control Panel. */
 void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
 {
-    if (strncmp(path, "/Programs/dosbox", sizeof("/Programs/dosbox"))) return;
     bool display = false, input = false;
     if (parent != proc_supervisor()) {
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
@@ -149,7 +149,10 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
             input |= d->kind == DESKTOP_INPUT;
         }
     }
-    child->dosvm_capability = parent == proc_supervisor() || (display && input);
+    bool authorized = parent == proc_supervisor() || (display && input);
+    child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
+    child->programs_capability = authorized &&
+        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
 }
 
 int supervisor_spawn_gate(bool supplement, struct process **out)

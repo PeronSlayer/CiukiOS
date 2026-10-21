@@ -10,6 +10,9 @@
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
 #include <ciuki/dos_video_modes.h>
+int dosvm_game_remove_reserve(unsigned game);
+void dosvm_game_remove_release(unsigned game);
+int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u

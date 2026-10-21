@@ -1296,7 +1296,44 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     return e;
 }
 
-int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
+/* A game creation keeps its reservation across every sleeping admission/open.
+ * Removal holds the opposite reservation through FAT and COW cleanup. Include
+ * stopped/retained VMs: their overlay can remain open until destruction ends. */
+static unsigned game_creating[CIUKI_DOSVM_GAME_COUNT+1];
+static bool game_removing[CIUKI_DOSVM_GAME_COUNT+1];
+int dosvm_game_remove_reserve(unsigned game)
+{
+    if(!game || game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
+    uint32_t flags=irq_save();
+    bool busy=game_removing[game] || game_creating[game];
+    for(unsigned i=0;i<DOSVM_LIMIT;i++)
+        if(slots[i].info.key.generation && slots[i].info.state!=DOSVM_DEAD && slots[i].game==game)busy=true;
+    if(!busy)game_removing[game]=true;
+    irq_restore(flags);return busy ? -EBUSY : 0;
+}
+void dosvm_game_remove_release(unsigned game)
+{
+    uint32_t flags=irq_save();game_removing[game]=false;irq_restore(flags);
+}
+static int game_create(const struct dosvm_config *,struct dosvm **);
+int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
+{
+    unsigned game=config ? config->game : 0;
+    if(out)*out=0;
+    if(game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
+    uint32_t flags=irq_save();
+    if(game && game_removing[game]){irq_restore(flags);return -EBUSY;}
+    if(game)game_creating[game]++;
+    irq_restore(flags);
+    uint32_t bytes=0;
+    int e=game ? dosvm_game_program(game,false,&bytes) : 0;
+    if(e>0)e=-ENOENT; /* a pending removal cannot be relaunched */
+    if(!e)e=game_create(config,out);
+    flags=irq_save();if(game)game_creating[game]--;irq_restore(flags);
+    return e;
+}
+
+static int game_create(const struct dosvm_config *config, struct dosvm **out)
 {
     if (!out) return -EINVAL;
     *out = 0;

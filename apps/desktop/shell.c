@@ -367,7 +367,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         break;
     case SH_MENU_GAMES:
-        for (unsigned k = 0; k < DESK_GAME_COUNT; k++) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
+        for (unsigned k = 0; k < DESK_GAME_COUNT; k++) if(!(d->games_removed&(1u<<k))) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
         break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
@@ -572,6 +572,9 @@ static void launch_named(struct desktop *d, const char *name, const char *argume
 static void launch_game(struct desktop *d, int index)
 {
     if (index < 0 || (unsigned)index >= DESK_GAME_COUNT) return;
+    if(d->games_removed&(1u<<index)){
+        desk_shell_message(d,"Games","This bundled game has been removed. Reinstall CiukiOS to restore it.",1);return;
+    }
     char name[48];
     snprintf(name, sizeof(name), "--name=%s", desk_games[index].title);
     const char *args[] = {name, desk_games[index].command};

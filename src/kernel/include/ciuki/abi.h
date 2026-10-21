@@ -1394,6 +1394,8 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
 #define CIUKI_DOSVM_WAIT_PRESENT 11u /* observe frame/lifecycle events, no drawing */
+#define CIUKI_DOSVM_GAME_QUERY 12u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
+#define CIUKI_DOSVM_GAME_REMOVE 13u /* delegated program-management authority; no VM handle */
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u

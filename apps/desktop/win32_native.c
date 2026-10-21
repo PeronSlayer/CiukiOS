@@ -134,9 +134,10 @@ static const struct desk_w32_supervisor_ops supervision={spawn_service,record_se
 static pthread_mutex_t launch_lock=PTHREAD_MUTEX_INITIALIZER;
 static unsigned launch_inflight;
 static struct {int ready,fd,pid,kind;uint32_t show;char title[64];struct desk_launch_record record;} pending;
-static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_record *r)
+static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_record *r,int wait)
 {
-    int pair[2]={-1,-1},report[2]={-1,-1};
+    int pair[2]={-1,-1},report[2]={-1,-1},helper=-1;
+    if(wait && kind!=DESK_W32_PE)return -EOPNOTSUPP;
     if(kind==DESK_W32_PE){
         struct {struct w32r_request r;char empty[2];} ping={.r={.version=1,.op=W32R_OPEN,.key=W32R_HKLM,.access=0x20019,.path_bytes=1,.name_bytes=1}};
         struct w32r_reply reply;uint32_t used=0;
@@ -158,7 +159,7 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     pthread_mutex_lock(&launch_lock);
     if(pending.ready){pthread_mutex_unlock(&launch_lock);return -EBUSY;}
     int result=-EIO;
-    if(kind==DESK_W32_ELF){
+    if(kind==DESK_W32_ELF || kind==DESK_W32_DOS){
         pending.ready=1;pending.kind=kind;pending.record=*r;
         pthread_mutex_unlock(&launch_lock);return 0;
     }
@@ -169,11 +170,11 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     if(fcntl(report[1],F_SETFD,0)<0){result=-errno;goto done;}
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
     char type[8];snprintf(type,sizeof(type),"%u",(unsigned)kind);
-    char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,NULL};
+    char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,wait ? "--wait" : NULL,NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
-    int helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
+    helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
-    uint64_t deadline=clock_ns()+UINT64_C(1500000000);
+    uint64_t deadline=clock_ns()+(wait ? UINT64_C(300000000000) : UINT64_C(1500000000));
     struct ciuki_message m;
     for(;;){
         int n=ciuki_channel_recv(report[0],&m,DONTWAIT);
@@ -190,12 +191,23 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     }
 done:
     for(unsigned i=0;i<2;i++){if(pair[i]>=0)close(pair[i]);if(report[i]>=0)close(report[i]);}
+    if(wait && helper>0 && result!=-ETIMEDOUT){
+        int status=0,joined;do {joined=waitpid(helper,&status,0);} while(joined<0 && errno==EINTR);
+        if(joined<0 && !result)result=-errno;
+    }
     pthread_mutex_unlock(&launch_lock);return result;
 }
 int desk_w32_launch(enum desk_w32_kind kind,const struct desk_launch_record *r)
 {
     __atomic_add_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
-    int result=launch_execute(kind,r);
+    int result=launch_execute(kind,r,0);
+    __atomic_sub_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
+    return result;
+}
+int desk_w32_launch_wait(enum desk_w32_kind kind,const struct desk_launch_record *r)
+{
+    __atomic_add_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
+    int result=launch_execute(kind,r,1);
     __atomic_sub_fetch(&launch_inflight,1,__ATOMIC_RELEASE);
     return result;
 }
@@ -467,9 +479,13 @@ void desk_w32_poll(struct desktop *d)
         if(i<0)close((int)a.endpoint);else d->clients[i].pid=a.pid;
     }
     if(!pthread_mutex_trylock(&launch_lock)){
-        if(pending.ready && pending.kind==DESK_W32_ELF){
-            int result=desk_w32_native_shortcut(d,&pending.record);
-            if(result<0)desk_shell_message(d,"Programs","The native shortcut could not be started with its requested arguments or working directory.",1);
+        if(pending.ready && (pending.kind==DESK_W32_ELF || pending.kind==DESK_W32_DOS)){
+            int result;
+            if(pending.kind==DESK_W32_DOS){
+                char command[260];result=desk_w32_dos_command(&pending.record,command,sizeof(command));
+                if(!result)result=desk_task_launch(d,"dosbox",command);
+            }else result=desk_w32_native_shortcut(d,&pending.record);
+            if(result<0)desk_shell_message(d,"Programs","The program could not be started with its requested arguments or working directory.",1);
             pending.ready=0;
         }
         if(pending.ready){

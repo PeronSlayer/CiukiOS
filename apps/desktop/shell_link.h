@@ -9,6 +9,7 @@
 #define DESK_LINK_BYTES 4096u
 #define DESK_LINKS 64u
 #define DESK_UNINSTALL_MAX 32u
+enum desk_program_kind { DESK_PROGRAM_WIN32, DESK_PROGRAM_GAME, DESK_PROGRAM_DOS, DESK_PROGRAM_NATIVE };
 struct desk_launch_record {
     char label[64], target[260], arguments[1024], directory[260], icon[260];
     uint32_t show;
@@ -19,7 +20,13 @@ struct desk_link_entry {
     char source[260]; /* re-read at activation; never launch stale cached bytes */
     unsigned desktop;
 };
-struct desk_uninstall_entry { char key[260], name[64], command[1284], version[64], publisher[128]; };
+struct desk_uninstall_entry {
+    char key[260], name[64], command[1284], version[64], publisher[128], location[260];
+    uint32_t estimated_kb, no_remove, no_modify, system_component;
+    unsigned kind, game, inventory_more;
+    uint64_t disk_bytes;
+    char licence[260];
+};
 static inline int desk_launch_valid(const struct desk_launch_record *r)
 {
     const char *fields[]={r->label,r->target,r->arguments,r->directory,r->icon};

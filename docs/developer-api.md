@@ -2392,6 +2392,18 @@ focused=1 pause on Alt+Tab, 0 continue
 observe frame/lifecycle events, no drawing
 
 ```c
+#define CIUKI_DOSVM_GAME_QUERY 12u
+```
+
+launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes
+
+```c
+#define CIUKI_DOSVM_GAME_REMOVE 13u
+```
+
+delegated program-management authority; no VM handle
+
+```c
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u
