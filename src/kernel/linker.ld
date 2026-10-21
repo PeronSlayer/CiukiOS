@@ -68,6 +68,13 @@ SECTIONS
     .bss ALIGN(4096) (NOLOAD) : AT(ADDR(.bss) - KERNEL_VBASE)
     {
         __bss_start = .;
+        . = ALIGN(4096);
+        __net_start = .;
+        *lwip_*.o(.bss .bss.* COMMON)
+        *net_*.o(.bss .bss.* COMMON)
+        *drivers_net*.o(.bss .bss.* COMMON)
+        . = ALIGN(4096);
+        __net_end = .;
         *(.bss .bss.*)
         *(COMMON)
         . = ALIGN(4096);

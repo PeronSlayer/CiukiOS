@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 extern uint32_t file_description_count(void) __attribute__((weak));
-#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
+#define FILE_OBJECTS ((file_description_count ? file_description_count() : 0) + (net_socket_count ? net_socket_count() : 0))
+extern uint32_t net_socket_count(void) __attribute__((weak));
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
 

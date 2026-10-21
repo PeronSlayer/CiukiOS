@@ -104,6 +104,8 @@ static void sys_log(uint32_t nr, int32_t r, uint32_t side)
     }
 }
 
+int32_t net_socket_call(struct trap_frame *) __attribute__((weak));
+
 void syscall_dispatch(struct trap_frame *tf)
 {
     int32_t r;
@@ -131,6 +133,21 @@ void syscall_dispatch(struct trap_frame *tf)
         break;
     case 5:
         r = sys_probe_query(tf->ebx, tf->ecx);
+        break;
+    case CIUKI_SYS_SOCKET:
+    case CIUKI_SYS_BIND:
+    case CIUKI_SYS_CONNECT:
+    case CIUKI_SYS_LISTEN:
+    case CIUKI_SYS_ACCEPT:
+    case CIUKI_SYS_SENDTO:
+    case CIUKI_SYS_RECVFROM:
+    case CIUKI_SYS_SHUTDOWN:
+    case CIUKI_SYS_SOCKNAME:
+    case CIUKI_SYS_SOCKOPT:
+    case CIUKI_SYS_POLL:
+    case CIUKI_SYS_RESOLVE4:
+    case CIUKI_SYS_NETCTL:
+        r = net_socket_call ? net_socket_call(tf) : -ENOSYS;
         break;
     case CIUKI_SYS_W32:
         if (w32_syscall) { w32_syscall(tf); return; }

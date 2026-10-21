@@ -466,9 +466,10 @@ ordinary TCP read MUST distinguish that case from peer EOF. Send MUST use
 UDP netbuf data MUST be copied/owned through send completion, then freed once.
 No user's scratch allocation MAY be borrowed by a later retransmission.
 
-### Frozen extension proposal: syscalls 75–87
+### Approved extension: syscalls 78–90 (2026-10-20)
 
-**[F6]** This table reserves the next contiguous numbers for lead approval;
+**[F6]** Lead amendment f6-10, 2026-10-20: calls 75–77 are occupied;
+this approved table assigns 78–90 in the original order. It
 it MUST NOT renumber 0–74 or the 6–15 reservations. f6-02 MUST add the approved
 records/constants to `ciuki/abi.h` and update SDK generation/ABI layout tests.
 Until implemented the calls MUST return ENOSYS. `B,C,D,S,I,P` mean
@@ -477,19 +478,19 @@ zero. `N` means nonblocking kernel operation, `I` interruptible user wait.
 
 | No. | Call / registers | Result |
 | --- | --- | --- |
-| 75 | `socket(B=domain,C=type,D=protocol)` | New lowest available fd; N. |
-| 76 | `bind(B=fd,C=addr*,D=addrlen)` | 0; N. |
-| 77 | `connect(B=fd,C=addr*,D=addrlen)` | 0 or pending/error; I. |
-| 78 | `listen(B=fd,C=backlog)` | 0; N. |
-| 79 | `accept(B=fd,C=addr*,D=addrlen*)` | New fd; I. Both output pointers MAY be null together. |
-| 80 | `sendto(B=io*)` | Accepted byte count; I. Also implements send with no destination. |
-| 81 | `recvfrom(B=io*)` | Copied byte count or TCP EOF 0; I. Also implements recv with no address output. |
-| 82 | `shutdown(B=fd,C=how)` | 0; N. |
-| 83 | `sockname(B=fd,C=which,D=addr*,S=addrlen*)` | 0; N. which=0 local, 1 peer. |
-| 84 | `sockopt(B=option*)` | 0; N. operation=0 get, 1 set. |
-| 85 | `poll(B=records*,C=count,D=timeout_ms)` | Number of records with nonzero revents; I. Signed timeout: -1 forever, 0 query, >0 monotonic milliseconds. |
-| 86 | `resolve4(B=request*)` | 0 with DNS result/status; I. libc implements getaddrinfo around it. |
-| 87 | `netctl(B=control*)` | 0 with copied snapshot/accepted configuration operation; N. f6-03 owns control implementation. |
+| 78 | `socket(B=domain,C=type,D=protocol)` | New lowest available fd; N. |
+| 79 | `bind(B=fd,C=addr*,D=addrlen)` | 0; N. |
+| 80 | `connect(B=fd,C=addr*,D=addrlen)` | 0 or pending/error; I. |
+| 81 | `listen(B=fd,C=backlog)` | 0; N. |
+| 82 | `accept(B=fd,C=addr*,D=addrlen*)` | New fd; I. Both output pointers MAY be null together. |
+| 83 | `sendto(B=io*)` | Accepted byte count; I. Also implements send with no destination. |
+| 84 | `recvfrom(B=io*)` | Copied byte count or TCP EOF 0; I. Also implements recv with no address output. |
+| 85 | `shutdown(B=fd,C=how)` | 0; N. |
+| 86 | `sockname(B=fd,C=which,D=addr*,S=addrlen*)` | 0; N. which=0 local, 1 peer. |
+| 87 | `sockopt(B=option*)` | 0; N. operation=0 get, 1 set. |
+| 88 | `poll(B=records*,C=count,D=timeout_ms)` | Number of records with nonzero revents; I. Signed timeout: -1 forever, 0 query, >0 monotonic milliseconds. |
+| 89 | `resolve4(B=request*)` | 0 with DNS result/status; I. libc implements getaddrinfo around it. |
+| 90 | `netctl(B=control*)` | 0 with copied snapshot/accepted configuration operation; N. f6-03 owns control implementation. |
 
 **[F6]** `sa_family_t` MUST be u16. `sockaddr` MUST be 16 bytes (family@0,
 data[14]@2); `sockaddr_in` MUST be 16 bytes (family@0, port@2, address@4,
@@ -903,8 +904,8 @@ guest CLI/IRQ containment and MAC/bridge evidence. Game data stays local.
 | Gate | MUST be complete before that gate closes |
 | --- | --- |
 | **f6-01: drivers** | Common registry/packet/IRQ/DMA interface plus Intel 8255x, RTL8139 and NE2000 PCI; register-model/queue/quarantine host tests; i686 `-Werror`; lead ARP evidence on all three QEMU devices and physical T23. Socket/DHCP/UI/DOS success MUST NOT be claimed from ARP. |
-| **f6-02: stack and sockets** | Pinned lwIP/import notices, actual kernel `sys_arch`, copied netif path, approved calls 75–86 and SDK subset, common fd readiness/lifecycle, loopback/numeric IPv4 and DNS/DHCP hooks; real-lwIP host harness and ABI/layout tests; lead 128 MiB TCP/UDP/broadcast/nonblocking/poll/limits evidence with deterministic peers for each driver. Native Quake LAN is an F6 requirement; engine-specific port changes need a written assignment. |
-| **f6-03: configuration and applet** | Approved call 87/control authority, frozen persistent grammar/desktop messages, DHCP/static/DNS/conflict/lease transitions, Network applet/Device Manager/tray; host state/parser/authority/UI tests and lead QEMU/hardware evidence for link loss, bad configuration, save/reboot and responsive acquisition. |
+| **f6-02: stack and sockets** | Pinned lwIP/import notices, actual kernel `sys_arch`, copied netif path, approved calls 78–89 and SDK subset, common fd readiness/lifecycle, loopback/numeric IPv4 and DNS/DHCP hooks; real-lwIP host harness and ABI/layout tests; lead 128 MiB TCP/UDP/broadcast/nonblocking/poll/limits evidence with deterministic peers for each driver. Native Quake LAN is an F6 requirement; engine-specific port changes need a written assignment. |
+| **f6-03: configuration and applet** | Approved call 90/control authority, frozen persistent grammar/desktop messages, DHCP/static/DNS/conflict/lease transitions, Network applet/Device Manager/tray; host state/parser/authority/UI tests and lead QEMU/hardware evidence for link loss, bad configuration, save/reboot and responsive acquisition. |
 | **f6-04: browser port** | Lead-selected browser/version/license/backend and exact API dependency list before code; SDK/network port, desktop launch and bounded responsiveness; local HTTP/DNS fixture and failure/offline/cancellation tests on canonical image; measured text/data/heap/stack at 128 MiB. If HTTPS is claimed, qualified TLS library/store/time/entropy, certificate verification and negative tests MUST also pass. This gate MUST NOT claim a full modern browser solely from rendering a local page. |
 | **Remaining F6 gates** | Assigned 3c905 implementation and physical coverage; separately assigned virtual NE2000/IPX bridge/guest-driver tests; measured native Quake and DOS DOOM LAN gates between T23/E500. f6-01–04 passing MUST NOT silently retire these owner requirements. |
 

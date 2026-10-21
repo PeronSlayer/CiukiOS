@@ -4,7 +4,8 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 extern uint32_t file_description_count(void) __attribute__((weak));
-#define FILE_OBJECTS (file_description_count ? file_description_count() : 0)
+#define FILE_OBJECTS ((file_description_count ? file_description_count() : 0) + (net_socket_count ? net_socket_count() : 0))
+extern uint32_t net_socket_count(void) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 
@@ -314,4 +315,15 @@ int channel_connect(struct process *client, struct process *server, int32_t fds[
     server->fds[slot]=client->fds[fds[1]];
     client->fds[fds[1]]=(struct proc_fd){0};
     fds[1]=slot;return 0;
+}
+
+/* Readiness is observed before poll atomically registers/rechecks its global
+ * wake generation; channel waits retain their existing queue predicates. */
+int channel_poll_events(struct desktop_description *d)
+{
+    struct channel *c = d->u.endpoint.channel; unsigned side = d->u.endpoint.side;
+    int events = c->inbox[side].count || !c->open[side ^ 1] ? POLLIN : 0;
+    if (c->open[side ^ 1] && c->inbox[side ^ 1].count < CIUKI_CHANNEL_QUEUE_MAX) events |= POLLOUT;
+    if (!c->open[side ^ 1]) events |= POLLHUP;
+    return events;
 }
