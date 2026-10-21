@@ -26,7 +26,7 @@ struct vfs_file_identity {
     struct fat_volume *volume;
     uint64_t serial, generation;
     uint32_t parent, index, refs, pages;
-    bool valid, linked;
+    bool valid, linked, writer;
 };
 struct vfs_page_key { uint64_t generation, file, index; };
 struct vfs_page_identity {
@@ -60,7 +60,7 @@ int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
                   unsigned new_mode, unsigned new_access, uint64_t new_owner, bool readonly);
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
-    uint32_t log_capacity; struct vfs_file_identity *identity; };
+    uint32_t log_capacity, pins; struct vfs_file_identity *identity; };
 /* f3-51c: cursor is this open file's FAT cluster cursor. Only the
  * description's own serialized I/O (io_active or the handle reservation)
  * reads or writes it; fat.c validates it against the node entry. */
@@ -115,6 +115,16 @@ struct vfs {
      * identified writer may coexist only with readers of other nodes. Other
      * metadata operations wait for these short per-file I/O phases. */
     uint32_t readers[26];
+    uint32_t transaction_users[26]; /* lifetime only; never reader exclusion */
+    /* f1-89 writer turn: one FAT-mutating operation per letter for its whole
+     * life, including the unguarded transfer/durability phases of its
+     * transactions. Taken BEFORE volume admission (order: turn -> namespace
+     * -> volumes); a waiter never holds a ticket or reservation. Readers,
+     * lookups, stat and open-file reads never take or wait for it. */
+    uintptr_t turn_owner[26];
+    uint32_t turn_depth[26], turn_waiters[26];
+    uint32_t turn_waits, turn_wait_max_ms; /* diagnostics: writer-writer waits */
+    uint32_t lookup_restarts, lookup_guarded; /* diagnostics: reader restarts */
     struct vfs_node *io_file[26];
     char holder; /* atomic diagnostic snapshot of namespace owner's drive */
     struct vfs_hold_info holds[26], namespace_owner;
@@ -178,6 +188,17 @@ void vfs_site_locked(struct vfs *,const char *site);
 int vfs_read_identity_locked(struct vfs *,struct vfs_file_identity *,struct fat_volume *,
     const struct fat_entry *,struct fat_cursor *,bool *,uint64_t *,const uint64_t *,bool,
     int (*)(void *,uint64_t,size_t),void *,void *,size_t,size_t *);
+/* Namespace/volume turn on entry and return. Native callers additionally
+ * retain their px_node/description and borrowed parents across this call. */
+int vfs_fat_transaction_locked(struct vfs *,struct fat_volume *,struct fat_transaction_args);
+int vfs_file_wait_locked(struct vfs *,const bool *busy);
+/* Writer turn for FAT-mutating operations (see struct vfs). take_locked is
+ * for callers already holding namespace/admission: when the turn is busy it
+ * releases every reservation, waits, and readmits the same set, so it must
+ * precede any borrowed name/entry. Nested takes by the owner only count. */
+int vfs_turn_take_locked(struct vfs *,uint32_t drives,uint32_t *taken);
+void vfs_turn_drop_locked(struct vfs *,uint32_t drives);
+bool vfs_turn_held_locked(struct vfs *,uint32_t drives);
 struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical;
     struct vfs_pending_waits diagnostics; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);

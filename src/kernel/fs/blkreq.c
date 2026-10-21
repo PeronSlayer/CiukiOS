@@ -34,6 +34,7 @@ const struct vfs_request *fs_request_current(void) {
         if (s->task==task) { r=s->request; break; }
     context_drop(f); return r;
 }
+uintptr_t fs_task_token(void) { return executor_id(); }
 int fs_request_check(void) {
     const struct vfs_request *r=fs_request_current();
     if (!r) return 0;

@@ -7,6 +7,10 @@
 #include <ciuki/signal.h>
 #include <ciuki/audio.h>
 #pragma weak audio_device_close
+#pragma weak px_fat_transaction_locked
+#pragma weak vfs_file_wait_locked
+#pragma weak vfs_turn_take_locked
+#pragma weak vfs_turn_drop_locked
 uint32_t net_socket_count(void) __attribute__((weak));
 uint32_t *net_socket_flags(struct proc_object *) __attribute__((weak));
 void net_fd_changed(struct process *, unsigned) __attribute__((weak));
@@ -226,6 +230,48 @@ extern int w32_file_sync(struct px_node *) __attribute__((weak));
 extern bool w32_file_needs_sync(struct px_node *) __attribute__((weak));
 extern void w32_file_changed(struct px_node *,uint64_t,const void *,uint32_t) __attribute__((weak));
 struct read_range_check { struct file_description *description; int error; };
+static int native_write_turn(struct file_description *,uint64_t *,bool,const void *,size_t,size_t *,bool);
+static int native_write_transaction(struct file_description *d,uint64_t *position,bool positioned,
+                                     const void *data,size_t bytes,size_t *done,bool section) {
+    struct px_node *n=d->node; struct vfs *v=n->space->vfs;
+    if (!px_fat_transaction_locked || !vfs_file_wait_locked || !vfs_turn_take_locked)
+        return VFS_IO(v,fat_write_cursor(n->volume,&n->entry,&d->fat_cursor,*position,data,bytes,done));
+    /* f1-89: the writer turn spans every chunk of this write, before the
+     * per-node waits (an owner of n->writing always holds the turn). */
+    uint32_t turn; int e=vfs_turn_take_locked(v,vfs_drive_mask(n->drive),&turn);
+    if (!e) e=native_write_turn(d,position,positioned,data,bytes,done,section);
+    vfs_turn_drop_locked(v,turn);
+    return e;
+}
+static int native_write_turn(struct file_description *d,uint64_t *position,bool positioned,
+                             const void *data,size_t bytes,size_t *done,bool section) {
+    struct px_node *n=d->node; struct vfs *v=n->space->vfs;
+    int e=vfs_file_wait_locked(v,&n->writing);
+    if (!e) e=vfs_file_wait_locked(v,&d->lock_description.io_active);
+    if (!e && d->identity) e=vfs_file_wait_locked(v,&d->identity->writer);
+    if (e) return e;
+    if (!vfs_identity_live(v,d->identity) || n->generation!=v->generation[n->drive]) return -FS_EIO;
+    if (!positioned) *position=(d->flags&O_APPEND) ? n->entry.size : d->position;
+    if (*position>UINT32_MAX || bytes>UINT32_MAX-*position) return -FS_EFBIG;
+    if (!section && (e=px_description_range_locked(d,*position,bytes,true))) return e;
+    n->writing=true; d->lock_description.io_active=true;
+    size_t limit=(size_t)n->volume->spc*512*FAT_TRANSACTION_CLUSTERS;
+    if (limit>131072) limit=131072;
+    while (*position>=(uint64_t)n->entry.size+limit && !e) {
+        uint64_t end=(uint64_t)n->entry.size+32768; if (end>*position) end=*position;
+        e=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_EXTEND,.entry=&n->entry,.capacity=(uint32_t)end});
+    }
+    while (*done<bytes && !e) {
+        size_t step=limit, written=0;
+        if (*position+*done>n->entry.size) step-=*position+*done-n->entry.size;
+        if (step>bytes-*done) step=bytes-*done;
+        e=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_WRITE,
+            .entry=&n->entry,.cursor=&d->fat_cursor,.position=*position+*done,.data=(const uint8_t *)data+*done,.size=step,.done=&written});
+        *done+=written;
+    }
+    d->lock_description.io_active=false; n->writing=false; fs_event_wake(&v->volume_changed);
+    return e;
+}
 static int read_range(void *arg,uint64_t position,size_t bytes)
 {
     struct read_range_check *check=arg;
@@ -276,7 +322,7 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     struct fat_entry before = n->entry;
     struct read_range_check read_check={d,0};
     int err = n->ro ? VFS_IO(d->node->space->vfs,fs_ro_read(n->ro,n->ro_id,position,buffer,bytes,done)) :
-        write ? VFS_IO(d->node->space->vfs,fat_write_cursor(n->volume, &n->entry, &d->fat_cursor, position, buffer, bytes, done)) :
+        write ? native_write_transaction(d,&position,positioned,buffer,bytes,done,section) :
                 vfs_read_identity_locked(n->space->vfs,d->identity,n->volume,&n->entry,
                     &d->fat_cursor,&d->lock_description.io_active,&position,&d->position,positioned,
                     section ? 0 : read_range,&read_check,buffer,bytes,done);
@@ -324,7 +370,9 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     uint64_t start=length<before.size ? length : before.size;
     int locked=px_description_range_locked(d,start,length<before.size ? before.size-length : length-before.size,true);
     if (locked) return locked;
-    int err = VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
+    int err = px_fat_transaction_locked ? px_fat_transaction_locked(d->node,d->node->parent,0,
+        (struct fat_transaction_args){.op=FAT_TX_TRUNCATE,.entry=&d->node->entry,.position=length}) :
+        VFS_IO(d->node->space->vfs,fat_truncate(d->node->volume, &d->node->entry, length));
     if (memcmp(&before, &d->node->entry, sizeof(before))) px_changed_locked(d->node);
     return err == -FS_EACCES ? -EROFS : px_error(err);
 }
@@ -336,7 +384,8 @@ int file_sync_locked(struct file_description *d)
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (d->node->ro) return px_ro_check_locked(d->node);
     if (!d->node->volume) return -EINVAL;
-    return px_error(VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
+    return px_error(px_fat_transaction_locked ? px_fat_transaction_locked(d->node,d->node->parent,0,
+        (struct fat_transaction_args){.op=FAT_TX_COMMIT,.entry=&d->node->entry}) : VFS_IO(d->node->space->vfs,fat_commit(d->node->volume)));
 }
 int files_stdio(struct process *p)
 {

@@ -51,6 +51,23 @@ fi
 rm build/host/fs/test_t23_holds
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_fat_transactions.c -o build/host/fs/test_fat_transactions
+build/host/fs/test_fat_transactions
+rm build/host/fs/test_fat_transactions
+# f1-89: concurrent writers/namespace mutators/readers through the public
+# VFS; no internal EAGAIN may surface; remount and fsck must be clean.
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
+    tests/host/fs/test_fat_concurrency.c -o build/host/fs/test_fat_concurrency
+build/host/fs/test_fat_concurrency build/host/fs/concurrency.img
+fsck.fat -n build/host/fs/concurrency.img
+rm build/host/fs/concurrency.img build/host/fs/test_fat_concurrency
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs tests/host/fs/test_blkreq_timer.c \
     -o build/host/fs/test_blkreq_timer
 build/host/fs/test_blkreq_timer
@@ -60,6 +77,12 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    tests/host/fs/test_cache_reservation.c -o build/host/fs/test_cache_reservation
+build/host/fs/test_cache_reservation
+rm build/host/fs/test_cache_reservation
 # F1-82: deterministic dirty-budget/reservation/error cases, then the timed
 # 10 MiB production FAT/VFS copy versus a 16 KiB / 20 ms reader.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -75,6 +98,17 @@ clang -DFS_HOST -DF182_AFTER -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -W
 build/host/fs/test_writeback
 if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
 python3 tests/host/fs/fixtures.py
+# Native desktop path/fd adapters must meet the same cold-device hold bound.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+    tests/host/proc/files_holds_test.c tests/host/proc/signal_legacy.c tests/host/proc/desktop_legacy.c \
+    src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/path.c \
+    src/kernel/fs/fat.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c tests/host/fs/fake.c \
+    src/kernel/probes/f2_probes_files.c -Wl,--wrap=fs_lock_acquired,--wrap=fs_lock_released \
+    -o build/host/fs/files_holds_test
+build/host/fs/files_holds_test build/host/fs/fat32.img build/host/fs/fat16.img
+rm build/host/fs/files_holds_test
 # f0-49: production pagefile adapter: slot map oracle, in-place growth and
 # shrink, exclusivity, reserved records, I/O failures and power cuts.
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
@@ -232,6 +266,7 @@ for bits in 12 16 32; do
     build/host/fs/test_fs read "$image"
     build/host/fs/test_fs fault "$image"
     build/host/fs/test_fs crash "$image"
+    build/host/fs/test_fs txcrash "$image"
     cp --sparse=always "$image" build/host/fs/work.img
     build/host/fs/test_fs write build/host/fs/work.img
     fsck.fat -n build/host/fs/work.img

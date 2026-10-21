@@ -565,9 +565,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
             times.write_date = f.write_date;
             times.write_time = f.write_time;
           }
-          e = px_error(
-              VFS_IO(s->vfs, fat_set_metadata(d->node->volume, &d->node->entry,
-                                              d->node->entry.attr, &times)));
+          e = px_error(px_fat_transaction_locked(
+              d->node, d->node->parent, 0,
+              (struct fat_transaction_args){.op = FAT_TX_SET_METADATA,
+                                            .entry = &d->node->entry,
+                                            .attr = d->node->entry.attr,
+                                            .times = &times}));
           if (!e)
             px_changed_locked(d->node);
         }
@@ -661,9 +664,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         if (!error && !e && d->node->kind==PX_FILE && d->node->volume)
           e=px_error(vfs_identity_get(s->vfs,d->node->volume,&d->node->entry,&d->identity));
         if (!error && !e && !exists && d->node->volume && (a->flags & 39)) {
-          e = px_error(
-              VFS_IO(s->vfs, fat_set_metadata(d->node->volume, &d->node->entry,
-                                              (uint8_t)(a->flags & 39), 0)));
+          e = px_error(px_fat_transaction_locked(
+              d->node, d->node->parent, 0,
+              (struct fat_transaction_args){.op = FAT_TX_SET_METADATA,
+                                            .entry = &d->node->entry,
+                                            .attr = (uint8_t)(a->flags & 39)}));
           if (!e)
             px_changed_locked(d->node);
         }
@@ -739,10 +744,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         if (!r.node->volume)
           e = -EROFS;
         else
-          e = px_error(VFS_IO(
-              s->vfs, fat_set_metadata(
-                          r.node->volume, &r.node->entry,
-                          (r.node->entry.attr & 16) | (a->flags & 39), 0)));
+          e = px_error(px_fat_transaction_locked(
+              r.node, r.node->parent, 0,
+              (struct fat_transaction_args){
+                  .op = FAT_TX_SET_METADATA, .entry = &r.node->entry,
+                  .attr = (uint8_t)((r.node->entry.attr & 16) | (a->flags & 39))}));
         if (!e)
           px_changed_locked(r.node);
       }

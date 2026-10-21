@@ -167,7 +167,9 @@ static void replay(void) {
         /* Source has produced exactly 1 MiB/s since start; a slow consumer
          * may catch up from its buffered source, never exceed that rate. */
         until(t->start+(uint64_t)(pos+CHUNK)*1000000000/(1024*1024));
-        size_t done; CHECK(!vfs_write(&t->copy,t->out,buf,sizeof(buf),&done) && done==sizeof(buf));
+        size_t done; int e=vfs_write(&t->copy,t->out,buf,sizeof(buf),&done);
+        if (e) fprintf(stderr,"copy write error=%d done=%zu readonly=%u reason=%s\n",e,done,t->volume.readonly,fat_readonly_reason(&t->volume));
+        CHECK(!e && done==sizeof(buf));
     }
     uint64_t elapsed=ns(CLOCK_MONOTONIC)-t->start; atomic_store(&t->stop,true); CHECK(!pthread_join(r,0));
 #ifdef F182_AFTER

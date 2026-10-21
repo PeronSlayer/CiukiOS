@@ -34,11 +34,9 @@ _Static_assert(sizeof(struct cache_page) <= 4096, "cache page header");
 #define PAGES_PER_META ((4096u - (unsigned)offsetof(struct cache_meta, pages)) / (unsigned)sizeof(struct cache_page))
 _Static_assert(PAGES_PER_META >= 1, "descriptor page");
 #ifdef __i386__
-/* On the real target a descriptor page holds 10 page headers: a cache of 20 or
- * more pages packs at least F1's 7 FAT slots per data/metadata budget page.
- * The default, including its 8-page writeback buffer, retains 13904 slots
- * against F1's 13440. The 64-bit host packs fewer headers. */
-_Static_assert(PAGES_PER_META >= 10, "i686 descriptor density");
+/* Reservation pins and per-image ordering still retain F1's >=13440 slots
+ * in the default budget (eight headers per descriptor page on i686). */
+_Static_assert(PAGES_PER_META >= 8, "i686 descriptor density");
 #endif
 
 static unsigned cls(const struct cache_block *b) { return b->capacity >= 2048 ? 1u : 0u; }
@@ -96,6 +94,10 @@ static void clean(struct block_cache *c, struct cache_block *b) {
         struct cache_device *s=device(c,b->dev);
         if (s) s->dirty_bytes-=b->sector_size;
         c->dirty_bytes-=b->sector_size;
+        if (b->pins) {
+            if (s) s->reserved_bytes+=b->sector_size;
+            c->reserved_bytes+=b->sector_size;
+        }
     }
     b->dirty=false;
 }
@@ -189,7 +191,7 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
     uint32_t since=b->since;
     b->busy=true;
     fs_lock_drop(&c->lock);
-    e=blkdev_request(d,BLK_WRITE,b->lba,1,b->data,BLK_BACKGROUND,s->frontier);
+    e=blkdev_request(d,BLK_WRITE,b->lba,1,b->data,BLK_BACKGROUND,b->order);
     (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!e && (b->invalid || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
@@ -294,7 +296,7 @@ static int convert_half(struct block_cache *c, struct cache_page *pg, unsigned h
      * write may sleep, so restart the complete half preflight afterwards. */
     for (unsigned k=0;k<SLOTS_512;k++) {
         struct cache_block *b=&pg->b[h*SLOTS_512+k];
-        if (b->busy || b->waiters) return -FS_EBUSY;
+        if (b->busy || b->waiters || b->pins) return -FS_EBUSY;
         if (b->dirty) {
             int e=write_block(c,b); if (e) return e;
             return -FS_EAGAIN; /* recheck every slot after the unlocked write */
@@ -363,7 +365,7 @@ retry:
              * LRU/hash nodes and this candidate retain their identity. */
             scan_service(&work);
             if (x->capacity<d->sector_size) continue;
-            if (x->busy || x->waiters || page_pinned(x->data)) { pending=true; continue; }
+            if (x->busy || x->waiters || x->pins || page_pinned(x->data)) { pending=true; continue; }
             struct cache_device *owner=x->dirty ? device(c,x->dev) : 0;
             if (!x->dirty) { b=x; break; }
             if (owner && !owner->error) { if (!dirty) dirty=x; }
@@ -521,7 +523,7 @@ static bool reclaim_page(struct block_cache *c, struct cache_page *pg) {
     for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
         if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
         struct cache_block *b=&pg->b[i];
-        pinned|=b->busy || b->waiters;
+        pinned|=b->busy || b->waiters || b->pins;
         if (b->speculative) speculative+=b->sector_size;
         if (b->dirty) {
             dirty=true; struct cache_device *s=device(c,b->dev);
@@ -607,7 +609,7 @@ void cache_reclaim_step(struct block_cache *c, bool speculative, struct reclaim_
     for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
         if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
         struct cache_block *b=&pg->b[i];
-        out->pinned|=b->waiters!=0; out->inflight|=b->busy;
+        out->pinned|=b->waiters!=0 || b->pins!=0; out->inflight|=b->busy;
         if (b->dev && !b->speculative) unused=false;
         if (b->speculative) spec+=b->sector_size;
         if (b->dirty) {
@@ -804,7 +806,7 @@ bool cache_prefetch_tick(struct block_cache *c) {
     for (unsigned i=0;i<count;i++) if (find(c,d,s->lba+i) || filling(c,d,s->lba+i)) { count=i; break; }
     struct cache_block *blocks[CACHE_WRITEBACK_BLOCKS]; unsigned n=0;
     for (struct cache_block *b=c->lru[0].oldest;b && n<count;b=b->next) {
-        if (b->busy || b->waiters || b->dirty || b->speculative || page_pinned(b->data)) continue;
+        if (b->busy || b->waiters || b->pins || b->dirty || b->speculative || page_pinned(b->data)) continue;
         unhash(c,b); b->dev=d; b->lba=s->lba+n; b->generation=d->media_generation;
         b->sector_size=512; b->invalid=false; b->io_error=0; b->busy=true;
         unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b; blocks[n++]=b;
@@ -869,7 +871,7 @@ static void stats_page(struct block_cache *c, struct cache_page *pg, struct cach
     for (unsigned i=0;i<CACHE_PAGE_SLOTS;i++) {
         if (pg->layout[i/SLOTS_512] && i%SLOTS_512) continue;
         struct cache_block *b=&pg->b[i];
-        pinned|=b->busy || b->waiters; dirty|=b->dirty;
+        pinned|=b->busy || b->waiters || b->pins; dirty|=b->dirty;
         if (b->dirty) { struct cache_device *owner=device(c,b->dev); error|=owner && owner->error; }
         else if (!b->speculative && b->io_error) error=true;
     }
@@ -975,7 +977,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
             for (unsigned list=0; list<2 && !b; list++)
                 for (struct cache_block *x=c->lru[list].oldest; x; x=x->next) {
                     scan_service(&work);
-                    if (!x->busy && !x->waiters && !x->dirty && !page_pinned(x->data)) { b=x; break; }
+                    if (!x->busy && !x->waiters && !x->pins && !x->dirty && !page_pinned(x->data)) { b=x; break; }
                 }
             if (!b) continue;
             unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
@@ -1020,6 +1022,151 @@ int cache_read_ahead(struct block_cache *c, struct blkdev *d, uint64_t lba, uint
 }
 static int write_batch(struct block_cache *, struct blkdev *, uint32_t *);
 static int flush_device(struct block_cache *, struct blkdev *);
+/* Reservation credits cover each pinned clean slot exactly once. Cleaning a
+ * published slot restores its credit; publishing consumes it. Dirty slots
+ * continue to count against the ordinary debt, even after release. */
+static int reservation_status(struct cache_reservation *r, struct cache_device **out) {
+    struct cache_device *s=device(r->cache,r->dev);
+    if (out) *out=s;
+    if (!current(s,r->dev,r->epoch,r->generation)) return -FS_EIO;
+    return s->error;
+}
+static void release_locked(struct cache_reservation *r) {
+    struct block_cache *c=r->cache;
+    struct cache_device *s=device(c,r->dev);
+    bool same=s && s->epoch==r->epoch;
+    if (same) { c->reserved_bytes-=r->unassigned; s->reserved_bytes-=r->unassigned; }
+    for (unsigned i=0;i<r->count;i++) {
+        struct cache_block *b=r->blocks[i]; if (!b) continue;
+        if (!b->invalid && !b->dirty) {
+            c->reserved_bytes-=b->sector_size;
+            if (same) s->reserved_bytes-=b->sector_size;
+        }
+        b->pins=0;
+        if (b->invalid && !b->busy) { clean(c,b); unhash(c,b); }
+    }
+    memset(r,0,sizeof(*r)); fs_event_wake(&c->changed);
+}
+int cache_reserve(struct block_cache *c, struct blkdev *d,
+                  const struct cache_reserve_sector *set, unsigned count, struct cache_reservation *r) {
+    if (!c || !d || !set || !r || !count || count>CACHE_RESERVE_MAX) return -FS_EINVAL;
+    memset(r,0,sizeof(*r));
+    if (!blkdev_durable(d)) return -FS_EROFS;
+    uint32_t bytes=count*d->sector_size;
+    if (bytes>2*c->dirty_budget) return -FS_ENOSPC;
+    unsigned sorted[CACHE_RESERVE_MAX];
+    for (unsigned i=0;i<count;i++) {
+        int e=blkdev_range(d,set[i].lba,1); if (e) return e;
+        unsigned j=i;
+        while (j && set[sorted[j-1]].lba>set[i].lba) { sorted[j]=sorted[j-1]; j--; }
+        if (j && set[sorted[j-1]].lba==set[i].lba) return -FS_EINVAL;
+        sorted[j]=i;
+    }
+    int e=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (e) return e;
+    struct cache_device *s=device(c,d);
+    if (!s) { fs_lock_drop(&c->lock); return -FS_ENOSPC; }
+    *r=(struct cache_reservation){.cache=c,.dev=d,.generation=d->media_generation,.epoch=s->epoch,.count=count};
+    /* Admission may assist a stalled writer, but never owns a VFS guard.
+     * No credit-only deadlock: a competing reservation may be retried. */
+    while (!(e=reservation_status(r,0)) &&
+           (c->dirty_bytes+c->reserved_bytes+bytes>2*c->dirty_budget ||
+            s->dirty_bytes+s->reserved_bytes+bytes>2*c->dirty_budget)) {
+        if ((e=fs_request_check())) break;
+        struct cache_device *debt=0;
+        for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dirty_bytes && !c->devices[i].error) {
+            debt=&c->devices[i]; break;
+        }
+        if (!debt) { e=-FS_EAGAIN; break; }
+        uint32_t flushed=0;
+        e=write_batch(c,debt->dev,&flushed);
+        if (e) break;
+        if (!flushed && (e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE))) break;
+    }
+    if (!e) {
+        c->reserved_bytes+=bytes; s->reserved_bytes+=bytes; r->unassigned=bytes;
+        for (unsigned k=0;k<count;k++) {
+            unsigned i=sorted[k]; struct cache_block *b=0;
+            for (;;) {
+                if ((e=reservation_status(r,0)) || (e=get(c,d,set[i].lba,true,&b,0))) break;
+                if ((e=reservation_status(r,0))) break;
+                if (!b->pins) break;
+                e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) break;
+            }
+            if (e) break;
+            b->pins=1; r->blocks[i]=b; r->unassigned-=d->sector_size;
+            if (b->dirty) { c->reserved_bytes-=d->sector_size; s->reserved_bytes-=d->sector_size; }
+            if (set[i].snapshot) memcpy(set[i].snapshot,b->data,d->sector_size);
+        }
+    }
+    if (e) release_locked(r);
+    fs_lock_drop(&c->lock); return e;
+}
+int cache_publish(struct cache_reservation *r, const struct cache_image *images, unsigned count, uint64_t dependency) {
+    if (!r || !r->cache || !images || !count || count>r->count) return -FS_EINVAL;
+    uint32_t seen=0;
+    for (unsigned i=0;i<count;i++) {
+        if (!images[i].data || images[i].slot>=r->count || (seen&(1u<<images[i].slot))) return -FS_EINVAL;
+        seen|=1u<<images[i].slot;
+    }
+    struct block_cache *c=r->cache;
+    if (!fs_lock_try_take(&c->lock)) return -FS_EAGAIN;
+    struct cache_device *s; int e=reservation_status(r,&s);
+    if (!e && (dependency>s->accepted || r->unassigned)) e=-FS_EINVAL;
+    if (!e && (s->barrier_active || s->durable<dependency || s->durable<r->published)) e=-FS_EAGAIN;
+    for (unsigned i=0;!e && i<count;i++) {
+        struct cache_block *b=r->blocks[images[i].slot];
+        if (!b || !b->pins || b->invalid || b->dev!=r->dev || b->generation!=r->generation) e=-FS_EIO;
+        else if (b->busy) e=-FS_EAGAIN;
+    }
+    if (!e && (s->frontier==UINT64_MAX || s->accepted>UINT64_MAX-count)) e=-FS_EIO;
+    if (!e) {
+        uint64_t group=++s->frontier;
+        for (unsigned i=0;i<count;i++) {
+            struct cache_block *b=r->blocks[images[i].slot];
+            memcpy(b->data,images[i].data,r->dev->sector_size); b->order=group;
+            if (!b->dirty) {
+                b->since=fs_now_ms();
+                if (!s->dirty_bytes) s->oldest=b->since;
+                c->reserved_bytes-=b->sector_size; s->reserved_bytes-=b->sector_size;
+                c->dirty_bytes+=b->sector_size; s->dirty_bytes+=b->sector_size;
+                schedule_writeback(c,b->since+CACHE_DIRTY_AGE_MS);
+            }
+            b->dirty=true;
+        }
+        s->accepted+=count; s->buffered_completions+=count;
+        r->published=s->accepted; r->group=group; r->dependency=dependency;
+        if (s->dirty_bytes>=c->dirty_budget) request_writeback(c,s);
+    }
+    fs_lock_drop(&c->lock); return e;
+}
+/* f1-89 read-set validation: copy a resident, settled sector. Never waits,
+ * fills, touches the LRU or issues I/O; absent/in-transition is EAGAIN. */
+int cache_peek(struct block_cache *c, struct blkdev *d, uint64_t lba, void *out) {
+    if (!c || !d || !out) return -FS_EINVAL;
+    fs_lock_take(&c->lock);
+    struct cache_block *b=find(c,d,lba);
+    int e=b && !b->busy && !b->invalid ? 0 : -FS_EAGAIN;
+    if (!e) memcpy(out,b->data,d->sector_size);
+    fs_lock_drop(&c->lock); return e;
+}
+int cache_reservation_wait(struct cache_reservation *r) {
+    if (!r || !r->cache) return -FS_EINVAL;
+    struct block_cache *c=r->cache;
+    int e=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE); if (e) return e;
+    struct cache_device *s;
+    while (!(e=reservation_status(r,&s))) {
+        bool busy=s->barrier_active;
+        for (unsigned i=0;i<r->count;i++) if (r->blocks[i]) busy|=r->blocks[i]->busy;
+        if (!busy) break;
+        if ((e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE))) break;
+    }
+    fs_lock_drop(&c->lock); return e;
+}
+void cache_release(struct cache_reservation *r) {
+    if (!r || !r->cache) return;
+    struct block_cache *c=r->cache;
+    (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE); release_locked(r); fs_lock_drop(&c->lock);
+}
 int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const void *buf) {
     if (c->refresh) c->refresh(c->refresh_ctx,d);
     if (!buf || !blkdev_durable(d)) return d && d->quarantined ? -FS_EQUARANTINED : -FS_EROFS;
@@ -1054,6 +1201,7 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
         if (!e) e=s->error;
         if (!e && (s->epoch!=epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
     }
+retry_slot:
     if (!e) e=get(c,d,lba,false,&b,0);
     s=device(c,d);
     if (!e && (!s || epoch!=s->epoch || generation!=d->media_generation || d->quarantined)) {
@@ -1062,7 +1210,7 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
     }
     /* get/throttle may sleep. Do not publish bytes into a captured barrier.
      * Reacquire the slot after waiting: it may have been evicted meanwhile. */
-    while (!e && s->barrier_active) {
+    while (!e && (s->barrier_active || b->pins)) {
         e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE);
         if (e) break;
         if (!current(s,d,epoch,generation)) e=-FS_EIO;
@@ -1070,10 +1218,20 @@ int cache_write(struct block_cache *c, struct blkdev *d, uint64_t lba, const voi
         else if (!s->barrier_active) e=get(c,d,lba,false,&b,0);
     }
     if (!e && !current(s,d,epoch,generation)) e=-FS_EIO;
+    /* Ordinary writers cannot spend a transaction's promised clean credits.
+     * Re-fetch after every sleep; their earlier slot was not pinned. */
+    if (!e && !b->dirty && (c->reserved_bytes || s->reserved_bytes) &&
+           (c->dirty_bytes+c->reserved_bytes+d->sector_size>2*c->dirty_budget ||
+            s->dirty_bytes+s->reserved_bytes+d->sector_size>2*c->dirty_budget)) {
+        e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE);
+        if (!e && !current(s,d,epoch,generation)) e=-FS_EIO;
+        if (!e) goto retry_slot;
+    }
     if (!e && s->accepted==UINT64_MAX) e=remember(c,d,-FS_EIO);
     if (!e) {
         s->accepted++; s->buffered_completions++;
         memcpy(b->data,buf,d->sector_size);
+        b->order=s->frontier;
         if (!b->dirty) {
             b->since=fs_now_ms();
             if (!s->dirty_bytes) s->oldest=b->since;
@@ -1156,7 +1314,8 @@ selected:
     int result=0; unsigned completed=0;
     for (unsigned i=0;i<n;) {
         unsigned end=i+1;
-        if (c->writeback_buffer) while (end<n && blocks[end]->lba==blocks[end-1]->lba+1) end++;
+        if (c->writeback_buffer) while (end<n && blocks[end]->lba==blocks[end-1]->lba+1 &&
+            blocks[end]->order==blocks[i]->order) end++;
         if (c->refresh) c->refresh(c->refresh_ctx,d);
         int e=s->error;
         if (!e && (s->epoch!=epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
@@ -1164,7 +1323,8 @@ selected:
         if (!e) {
             const void *data=c->writeback_buffer ? c->writeback_buffer+i*d->sector_size : blocks[i]->data;
             uint64_t lba=blocks[i]->lba;
-            fs_lock_drop(&c->lock); e=blkdev_request(d,BLK_WRITE,lba,end-i,(void *)data,BLK_BACKGROUND,s->frontier); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
+            uint64_t order=blocks[i]->order;
+            fs_lock_drop(&c->lock); e=blkdev_request(d,BLK_WRITE,lba,end-i,(void *)data,BLK_BACKGROUND,order); (void)fs_lock_retake(&c->lock,VFS_WAIT_CACHE);
             if (c->refresh) c->refresh(c->refresh_ctx,d);
             if (!e && (s->epoch!=epoch || generation!=d->media_generation || d->quarantined)) e=-FS_EIO;
             for (unsigned j=i;j<end;j++) if (blocks[j]->invalid) e=-FS_EIO;
@@ -1344,13 +1504,18 @@ void cache_invalidate(struct block_cache *c, struct blkdev *d, bool forget) {
     for (struct cache_block *b=first_block(c);b;b=next_block(c,b)) {
         scan_service(&work);
         if (b->dev!=d) continue;
-        if (b->busy) {
+        if (b->busy || b->pins) {
             if (b->dirty && !b->invalid) { c->dirty_bytes-=b->sector_size; device(c,d)->dirty_bytes-=b->sector_size; }
+            if (b->pins && !b->dirty && !b->invalid) {
+                c->reserved_bytes-=b->sector_size; device(c,d)->reserved_bytes-=b->sector_size;
+            }
             b->invalid=true;
+            if (!b->busy) unhash(c,b);
         } else { clean(c,b); unhash(c,b); }
     }
     fs_event_wake(&c->changed);
     for (unsigned i=0;i<CACHE_DEVICES;i++) if (c->devices[i].dev==d) {
+        c->reserved_bytes-=c->devices[i].reserved_bytes; c->devices[i].reserved_bytes=0;
         if (c->device_epoch==UINT32_MAX) fs_panic("cache epoch exhausted");
         c->devices[i].epoch=++c->device_epoch; c->devices[i].barrier_active=false;
         if (forget) memset(&c->devices[i],0,sizeof(c->devices[i]));

@@ -193,12 +193,23 @@ static void fair_replay(const char *name) {
                 CHECK(blk_request_wait(request)==-FS_EAGAIN && !blk_request_release(request));
             }
         }
-        size_t done; CHECK(!vfs_write(&t->copy,t->out,data,1024*1024,&done) && done==1024*1024);
+        size_t done;
+        if (f->old) {
+            /* Preserve BOTH sides of the old whole-operation negative
+             * control after f1-89 moves public writes to transactions. */
+            vfs_lock(&t->vfs,1u<<2);
+            struct vfs_description *d=t->copy.handles[t->out];
+            CHECK(!VFS_IO(&t->vfs,fat_write(d->node->volume,&d->node->entry,d->position,data,1024*1024,&done)));
+            d->position+=done; vfs_unlock(&t->vfs);
+        } else CHECK(!vfs_write(&t->copy,t->out,data,1024*1024,&done));
+        CHECK(done==1024*1024);
         if (f->mixed) {
             pthread_mutex_lock(&source.lock); source.consumed++; pthread_cond_broadcast(&source.changed); pthread_mutex_unlock(&source.lock);
         }
     }
-    CHECK(!vfs_commit(&t->copy,t->out)); uint64_t elapsed=ns(CLOCK_MONOTONIC)-t->start;
+    int commit_error=vfs_commit(&t->copy,t->out);
+    if (commit_error) fprintf(stderr,"variant=%s final commit error=%d\n",name,commit_error);
+    CHECK(!commit_error); uint64_t elapsed=ns(CLOCK_MONOTONIC)-t->start;
     atomic_store(&t->stop,true); CHECK(!pthread_join(r,0) && !pthread_join(w,0));
     uint64_t expected=elapsed/20000000;
     if (f->calls<expected) f->missed+=expected-f->calls;

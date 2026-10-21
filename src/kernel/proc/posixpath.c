@@ -7,6 +7,7 @@
 #include <ciuki/fat_native.h>
 #include <ciuki/audio.h>
 #pragma weak audio_device_open
+#pragma weak vfs_fat_transaction_locked /* older standalone personality models */
 
 static struct px_namespace *spaces;
 
@@ -259,6 +260,58 @@ void files_snapshot(struct px_namespace *s, struct file_ledger *out)
 void px_retain(void *node) { if (node) __atomic_add_fetch(&((struct px_node *)node)->refs,1,__ATOMIC_RELAXED); }
 void px_release(void *node) { if (node) __atomic_sub_fetch(&((struct px_node *)node)->refs,1,__ATOMIC_RELAXED); }
 
+struct px_transaction { struct px_node *node,*parent,*replacement; bool naming;
+    struct fat_entry *entry,*replacement_entry; };
+static void px_transaction_visible(void *arg,const struct fat_entry *entry) {
+    struct px_transaction *t=arg;
+    if (t->naming) {
+        t->node->entry=*entry; t->node->parent=t->parent; t->node->linked=true;
+    }
+}
+static void px_transaction_unlinked(void *arg,bool replacement) {
+    struct px_transaction *t=arg;
+    struct px_node *n=replacement ? t->replacement : t->node;
+    struct fat_entry *entry=replacement ? t->replacement_entry : t->entry;
+    if (n) { n->linked=false; n->entry.index=UINT32_MAX; if (entry) n->entry.identity=entry->identity; }
+}
+int px_fat_transaction_locked(struct px_node *n,struct px_node *parent,struct px_node *replacement,
+                               struct fat_transaction_args a) {
+    struct vfs *v=n->space->vfs;
+    bool namespace_op=a.op==FAT_TX_CREATE || a.op==FAT_TX_REMOVE || a.op==FAT_TX_RENAME || a.op==FAT_TX_RENAME_REPLACE;
+    if (namespace_op && (n->namespace_busy || (replacement && replacement->namespace_busy))) return -FS_EAGAIN;
+    struct px_node *old_parent=n->parent;
+    px_retain(n); px_retain(parent); px_retain(replacement); px_retain(old_parent);
+    if (namespace_op) { n->namespace_busy=true; if (replacement) replacement->namespace_busy=true; }
+    struct px_transaction ctx={n,parent,replacement,namespace_op && a.op!=FAT_TX_REMOVE,a.entry,a.replacement};
+    a.visible=px_transaction_visible; a.unlinked=px_transaction_unlinked; a.visible_ctx=&ctx;
+    int e;
+    if (vfs_fat_transaction_locked) e=vfs_fat_transaction_locked(v,n->volume,a);
+    else {
+        /* Link-only compatibility for the existing fake-FAT personality
+         * models. The kernel and production FS harness link the real API. */
+        switch (a.op) {
+        case FAT_TX_LOOKUP: e=VFS_IO(v,fat_lookup(n->volume,a.directory,a.name,a.entry)); break;
+        case FAT_TX_CREATE: e=VFS_IO(v,fat_create(n->volume,a.directory,a.name,a.attr,a.entry)); break;
+        case FAT_TX_WRITE: e=VFS_IO(v,fat_write_cursor(n->volume,a.entry,a.cursor,a.position,a.data,a.size,a.done)); break;
+        case FAT_TX_EXTEND: e=VFS_IO(v,fat_truncate(n->volume,a.entry,a.capacity)); break;
+        case FAT_TX_TRUNCATE: e=VFS_IO(v,fat_truncate(n->volume,a.entry,a.position)); break;
+        case FAT_TX_NEXT: e=VFS_IO(v,fat_next(n->volume,a.directory,a.directory_cursor,a.entry)); break;
+        case FAT_TX_REMOVE: e=VFS_IO(v,fat_remove(n->volume,a.entry,a.flag)); break;
+        case FAT_TX_RENAME: e=VFS_IO(v,fat_rename(n->volume,a.entry,a.directory,a.name)); break;
+        case FAT_TX_RENAME_REPLACE: e=VFS_IO(v,fat_rename_replace(n->volume,a.entry,a.replacement,a.directory,a.name,a.flag)); break;
+        case FAT_TX_COMMIT: e=VFS_IO(v,fat_commit(n->volume)); break;
+        case FAT_TX_SET_METADATA: e=VFS_IO(v,fat_set_metadata(n->volume,a.entry,a.attr,a.times)); break;
+        default: e=-FS_EOPNOTSUPP; break;
+        }
+    }
+    if (namespace_op) {
+        n->namespace_busy=false; if (replacement) replacement->namespace_busy=false;
+        fs_event_wake(&v->volume_changed); /* resolvers waiting on this node */
+    }
+    px_release(old_parent); px_release(replacement); px_release(parent); px_release(n);
+    return e;
+}
+
 int px_validate(const char *path)
 {
     unsigned bytes = 0;
@@ -297,7 +350,7 @@ static int path_units(struct px_node *parent, const char *leaf)
     }
 }
 
-static int child_lookup(struct px_node *p, const char *name, struct px_node **out)
+static int child_lookup(struct px_node *p, const char *name, struct px_node **out, bool guarded)
 {
     struct px_namespace *s = p->space;
     vfs_tag_locked(s->vfs,"lookup"); vfs_site_locked(s->vfs,"native");
@@ -325,17 +378,46 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
         *out=ro_node_entry(s,p,&entry); return *out ? 0 : -ENOMEM;
     }
     struct fat_entry entry;
-    int err = VFS_IO(s->vfs,fat_lookup(p->volume, p->entry.first, name, &entry));
+    int err = px_fat_transaction_locked(p,p->parent,0,(struct fat_transaction_args){.op=FAT_TX_LOOKUP,.directory=p->entry.first,.name=name,.entry=&entry,.guarded=guarded,
+        .depend=!p->mountpoint,.depend_parent=p->entry.parent,.depend_index=p->entry.index});
     if (err) return px_error(err);
     *out = node_entry(s, p, &entry);
+    /* The caller waits for the namespace operation, then restarts. */
+    if (*out && (*out)->namespace_busy) return -EINPROGRESS;
     return *out ? 0 : -ENOMEM;
 }
 
+/* f1-89: unguarded lookups report EAGAIN when a publication overlapped
+ * them; the walk restarts from its start because any earlier component may
+ * be stale. The last attempt looks up under the short guard (cache warm).
+ * A component whose namespace operation is still in flight is waited for
+ * (its node stays retained), which does not consume an attempt. */
+#define PX_RESOLVE_ATTEMPTS 3u
+static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
+                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy);
 int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                       bool missing_leaf, struct px_path *out)
 {
     int err = px_validate(path);
     if (err) return err;
+    for (unsigned attempt=0;;) {
+        struct px_node *busy=0;
+        err=resolve_once(s,cwd,path,missing_leaf,out,attempt+1>=PX_RESOLVE_ATTEMPTS,&busy);
+        if (err==-EINPROGRESS && busy) {
+            px_retain(busy);
+            int waited=px_error(vfs_file_wait_locked(s->vfs,&busy->namespace_busy));
+            px_release(busy); node_forget(busy); /* a failed create retired meanwhile */
+            if (waited) return waited;
+            continue;
+        }
+        if (err!=-EAGAIN || ++attempt>=PX_RESOLVE_ATTEMPTS) return err==-EINPROGRESS ? -EAGAIN : err;
+        s->vfs->lookup_restarts++; if (attempt+1==PX_RESOLVE_ATTEMPTS) s->vfs->lookup_guarded++;
+    }
+}
+static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
+                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy)
+{
+    int err;
     reserve_paths(s,cwd,path,0);
     memset(out, 0, sizeof(*out));
     struct px_node *n = *path == '/' ? s->root : cwd ? cwd : s->root;
@@ -357,7 +439,8 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
             if (out->name[1]) n = n->parent;
         } else {
             if ((err = path_units(n, out->name))) return err;
-            err = child_lookup(n, out->name, &n);
+            err = child_lookup(n, out->name, &n, guarded);
+            if (err == -EINPROGRESS) { *busy = n; return err; }
             if (err) {
                 if (err == -ENOENT && !*next && missing_leaf && (out->parent->volume || out->parent->ro)) return 0;
                 return err;
@@ -509,7 +592,20 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
     return 0;
 }
 
+/* f1-89: native FAT mutations take the drive's writer turn before they
+ * resolve or borrow anything (see vfs_turn_take_locked). Lookups-only
+ * opens never take it. */
+static int open_inner(struct px_namespace *, struct px_node *, const char *, uint32_t, struct file_description *);
 int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
+                   uint32_t flags, struct file_description *d)
+{
+    if (!(flags & (O_CREAT | O_TRUNC)) || px_validate(path)) return open_inner(s, cwd, path, flags, d);
+    uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
+    if (!err) err = open_inner(s, cwd, path, flags, d);
+    vfs_turn_drop_locked(s->vfs, turn);
+    return err;
+}
+static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *path,
                    uint32_t flags, struct file_description *d)
 {
     vfs_tag_locked(s->vfs,flags&O_TRUNC ? "truncate" : flags&O_CREAT ? "create" : "open");
@@ -544,7 +640,8 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
         vfs_tag_locked(s->vfs,"create");
         vfs_site_locked(s->vfs,"native");
-        err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, 0, &n->entry));
+        n->generation=r.parent->generation;
+        err = px_fat_transaction_locked(n,r.parent,0,(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent->entry.first,.name=r.name,.entry=&n->entry});
         if (err) { node_forget(n); return px_error(err); }
         n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
         n->generation = r.parent->generation; r.node = n;
@@ -554,7 +651,7 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
         if ((err=px_range_locked(r.node,0,r.node->entry.size))) return err;
         vfs_tag_locked(s->vfs,"truncate");
         vfs_site_locked(s->vfs,"native");
-        err = VFS_IO(s->vfs,fat_truncate(r.node->volume, &r.node->entry, 0));
+        err = px_fat_transaction_locked(r.node,r.node->parent,0,(struct fat_transaction_args){.op=FAT_TX_TRUNCATE,.entry=&r.node->entry});
         px_changed_locked(r.node);
         if (err) return px_error(err);
     }
@@ -568,7 +665,16 @@ int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path
     return 0;
 }
 
+static int mkdir_inner(struct px_namespace *, struct px_node *, const char *, uint32_t);
 int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode)
+{
+    if (px_validate(path)) return mkdir_inner(s, cwd, path, mode);
+    uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
+    if (!err) err = mkdir_inner(s, cwd, path, mode);
+    vfs_turn_drop_locked(s->vfs, turn);
+    return err;
+}
+static int mkdir_inner(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode)
 {
     vfs_tag_locked(s->vfs,"mkdir");
     vfs_site_locked(s->vfs,"native");
@@ -582,7 +688,8 @@ int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *pat
     n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
     vfs_tag_locked(s->vfs,"mkdir");
     vfs_site_locked(s->vfs,"native");
-    err = VFS_IO(s->vfs,fat_create(r.parent->volume, r.parent->entry.first, r.name, FAT_ATTR_DIR, &n->entry));
+    n->generation=r.parent->generation;
+    err = px_fat_transaction_locked(n,r.parent,0,(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent->entry.first,.name=r.name,.attr=FAT_ATTR_DIR,.entry=&n->entry});
     if (err) { node_forget(n); return px_error(err); }
     n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
     n->generation = r.parent->generation;
@@ -596,17 +703,24 @@ int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *pat
 static int remove_node(struct px_node *n)
 {
     bool legacy = n->kind == PX_FILE && legacy_open(n);
-    bool retain = n->kind == PX_FILE && (n->refs || legacy);
+    /* Detach first. An open admitted before the tombstone owns its chain
+     * even when there were no opens at initial planning. */
+    bool retain = n->kind == PX_FILE;
     if (retain && (!fat_native_ready || !fat_native_ready())) return -EIO;
     struct fat_entry entry = n->entry;
     if (retain) entry.first = 0; /* durable name removal, no chain release */
     vfs_tag_locked(n->space->vfs,"unlink");
     vfs_site_locked(n->space->vfs,"native");
-    int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &entry, directory(n)));
+    int err = px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=&entry,.flag=directory(n)});
     if (err) return px_error(err);
     n->linked = false;
     if (retain) n->entry.index = UINT32_MAX;
     else { n->entry.first = 0; n->entry.size = 0; }
+    if (retain && !n->refs && !legacy && n->entry.first) {
+        err=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=&n->entry});
+        if (err) return px_error(err);
+        n->entry.first=0; n->entry.size=0;
+    }
     px_changed_locked(n); px_changed_locked(n->parent);
     node_forget(n);
     return 0;
@@ -630,7 +744,7 @@ int px_drop_locked(struct px_node *n)
             n->space->vfs->volumes[n->drive]!=n->volume) { node_forget(n); return 0; }
         vfs_tag_locked(n->space->vfs,"unlink");
         vfs_site_locked(n->space->vfs,"native");
-        int err = VFS_IO(n->space->vfs,fat_remove(n->volume, &n->entry, false));
+        int err = px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=&n->entry});
         n->entry.first = 0; n->entry.size = 0;
         node_forget(n);
         return px_error(err);
@@ -638,7 +752,16 @@ int px_drop_locked(struct px_node *n)
     node_forget(n);
     return 0;
 }
+static int remove_inner(struct px_namespace *, struct px_node *, const char *, bool);
 int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
+{
+    if (px_validate(path)) return remove_inner(s, cwd, path, dir);
+    uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
+    if (!err) err = remove_inner(s, cwd, path, dir);
+    vfs_turn_drop_locked(s->vfs, turn);
+    return err;
+}
+static int remove_inner(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
 {
     vfs_tag_locked(s->vfs,"unlink");
     vfs_site_locked(s->vfs,"native");
@@ -660,11 +783,20 @@ int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *pa
 static int empty_directory(struct px_node *n)
 {
     struct fat_entry child; uint32_t cursor = 0; int err;
-    while (!(err = VFS_IO(n->space->vfs,fat_next(n->volume, n->entry.first, &cursor, &child))))
+    while (!(err = px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_NEXT,.directory=n->entry.first,.directory_cursor=&cursor,.entry=&child})))
         if (!path_equal(child.name, ".") && !path_equal(child.name, "..")) return -ENOTEMPTY;
     return err == -FS_ENOENT ? 0 : px_error(err);
 }
+static int rename_inner(struct px_namespace *, struct px_node *, const char *, const char *);
 int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
+{
+    if (px_validate(from) || px_validate(to)) return rename_inner(s, cwd, from, to);
+    uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, from) | path_drives(s, cwd, to), &turn));
+    if (!err) err = rename_inner(s, cwd, from, to);
+    vfs_turn_drop_locked(s->vfs, turn);
+    return err;
+}
+static int rename_inner(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
 {
     vfs_tag_locked(s->vfs,"rename");
     vfs_site_locked(s->vfs,"native");
@@ -672,7 +804,15 @@ int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *fr
     reserve_paths(s,cwd,from,to);
     struct px_path a, b;
     int err = px_resolve_locked(s, cwd, from, false, &a);
-    if (!err) err = px_resolve_locked(s, cwd, to, true, &b);
+    if (!err) {
+        /* Destination lookup drops namespace while fetching cold metadata.
+         * Keep the already-resolved source alive and reject a changed view. */
+        px_retain(a.node); px_retain(a.parent);
+        uint64_t sequence=a.node->volume ? a.node->volume->mutation_sequence : 0;
+        err=px_resolve_locked(s,cwd,to,true,&b);
+        if (!err && a.node->volume && a.node->volume->mutation_sequence!=sequence) err=-EAGAIN;
+        px_release(a.parent); px_release(a.node);
+    }
     if (err) return err;
     if (a.node->ro || (b.parent && b.parent->ro)) return -EROFS;
     if (a.dot || b.dot) return -EINVAL;
@@ -708,22 +848,29 @@ int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *fr
     if (b.node && b.node != a.node) {
         if (!fat_rename_replace || !fat_native_ready || !fat_native_ready()) return -EIO;
         bool legacy = b.node->kind == PX_FILE && legacy_open(b.node);
-        bool retain = b.node->kind == PX_FILE && (b.node->refs || legacy);
+        bool retain = b.node->kind == PX_FILE;
         vfs_tag_locked(s->vfs,"rename");
         vfs_site_locked(s->vfs,"native");
-        err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, &b.node->entry,
-                                 b.parent->entry.first, b.name, retain));
+        err = px_fat_transaction_locked(a.node,b.parent,b.node,(struct fat_transaction_args){.op=FAT_TX_RENAME_REPLACE,
+            .entry=&a.node->entry,.replacement=&b.node->entry,.directory=b.parent->entry.first,.name=b.name,.flag=retain});
         if (b.node->entry.index == UINT32_MAX) {
-            b.node->linked = false; px_changed_locked(b.node); node_forget(b.node);
+            b.node->linked = false;
+            if (!err && retain && !b.node->refs && !legacy && b.node->entry.first) {
+                err=px_fat_transaction_locked(b.node,b.parent,0,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=&b.node->entry});
+                if (!err) { b.node->entry.first=0; b.node->entry.size=0; }
+            }
+            px_changed_locked(b.node); node_forget(b.node);
         }
     } else if (fat_rename_replace) {
         vfs_tag_locked(s->vfs,"rename");
         vfs_site_locked(s->vfs,"native");
-        err = VFS_IO(s->vfs,fat_rename_replace(a.node->volume, &a.node->entry, 0, b.parent->entry.first, b.name, false));
+        err = px_fat_transaction_locked(a.node,b.parent,0,(struct fat_transaction_args){.op=FAT_TX_RENAME_REPLACE,
+            .entry=&a.node->entry,.directory=b.parent->entry.first,.name=b.name});
     } else {
         vfs_tag_locked(s->vfs,"rename");
         vfs_site_locked(s->vfs,"native");
-        err = VFS_IO(s->vfs,fat_rename(a.node->volume, &a.node->entry, b.parent->entry.first, b.name));
+        err = px_fat_transaction_locked(a.node,b.parent,0,(struct fat_transaction_args){.op=FAT_TX_RENAME,
+            .entry=&a.node->entry,.directory=b.parent->entry.first,.name=b.name});
     }
     if (!err) {
         a.node->parent = b.parent;

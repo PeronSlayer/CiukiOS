@@ -61,7 +61,9 @@ struct fat_volume {
     uint32_t lfn_orphans, lfn_bad_checksum, lfn_invalid;
     uint64_t publication_group, publication_frontier, publication_count, publication_durable;
     uint32_t publication_generation, identity_mount_generation;
-    uint64_t chain_stamp; /* f3-51c: last chain generation issued (volume reservation) */
+    /* f3-51c: last chain generation issued. f1-89: atomic (lock cmpxchg8b
+     * on i686, which needs the natural 8-byte alignment). */
+    _Alignas(8) uint64_t chain_stamp;
     enum fat_publication_stage publication_stage;
     bool publication_pending, write_through;
     struct cache_completion completion;
@@ -73,7 +75,60 @@ struct fat_volume {
                               const struct fat_entry *, enum fat_identity_change);
     void *identity_ctx;
     struct fat_entry alias_scratch; /* serialized alias collision walk; saves kernel stack */
+    uint64_t mutation_sequence;
+    struct fat_transaction *transaction, *transactions;
 };
+/* The caller pins borrowed identities before releasing its namespace turn.
+ * enter takes a fresh short turn; leave releases it. All cold planning,
+ * admission and durability waits happen between these callbacks. */
+struct fat_transaction_guard {
+    void *ctx;
+    int (*enter)(void *);
+    void (*leave)(void *);
+    int (*wait)(void *); /* optional, outside all cache/publication pins */
+    void (*retire)(void *); /* mandatory, uncancellable admission; no cache pins */
+    /* Optional short namespace turn for the in-flight cluster set only: it
+     * excludes legacy mutators and other set walkers, never validates the
+     * publication sequence and never waits for readers. 0: enter/leave. */
+    int (*claim)(void *);
+    void (*unclaim)(void *);
+};
+#define FAT_TRANSACTION_CLUSTERS 256u
+enum fat_transaction_op { FAT_TX_CREATE, FAT_TX_WRITE, FAT_TX_LOG_WRITE,
+    FAT_TX_COMMIT, FAT_TX_REMOVE, FAT_TX_RENAME, FAT_TX_LOOKUP, FAT_TX_PUBLISH, FAT_TX_EXTEND,
+    FAT_TX_RENAME_REPLACE, FAT_TX_TRUNCATE, FAT_TX_RESERVE, FAT_TX_NEXT, FAT_TX_SET_METADATA };
+struct fat_transaction_args {
+    enum fat_transaction_op op;
+    struct fat_entry *entry;
+    struct fat_entry *replacement;
+    struct fat_cursor *cursor;
+    const char *name;
+    const void *data;
+    size_t size, *done;
+    uint64_t position;
+    uint64_t sequence; /* caller's guarded snapshot, checked before planning */
+    uint32_t directory, capacity;
+    uint32_t *directory_cursor;
+    uint8_t attr;
+    bool flag;
+    /* LOOKUP/NEXT only: run under the short guard (cache-warm retry after
+     * a reader restart), never invalidated by a concurrent publisher. */
+    bool guarded;
+    /* LOOKUP/NEXT: the entry (parent cluster, slot) naming `directory`. It
+     * joins the read set, so renaming, emptying or removing an ancestor
+     * during an unguarded walk restarts the walk instead of trusting a
+     * cluster that may have been released. */
+    bool depend;
+    uint32_t depend_parent, depend_index;
+    const struct fat_times *times; /* SET_METADATA; 0 keeps the times */
+    /* Namespace bookkeeping for the owning entry, under the short guard.
+     * Must not wait, allocate or issue I/O. */
+    void (*visible)(void *, const struct fat_entry *);
+    void *visible_ctx;
+    void (*unlinked)(void *, bool replacement);
+};
+int fat_transaction_run(struct fat_volume *, const struct fat_transaction_args *,
+                         const struct fat_transaction_guard *);
 /* Mount does not write unless requested AND validation and durability pass.
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);
@@ -125,6 +180,7 @@ int fat_write_reserved(struct fat_volume *, const struct fat_entry *, uint32_t c
 int fat_publish_reserved(struct fat_volume *, struct fat_entry *, bool finish);
 int fat_remove(struct fat_volume *, struct fat_entry *, bool directory);
 int fat_rename(struct fat_volume *, struct fat_entry *, uint32_t new_parent, const char *new_name);
+int fat_rename_replace(struct fat_volume *,struct fat_entry *,struct fat_entry *,uint32_t,const char *,bool);
 int fat_set_metadata(struct fat_volume *, struct fat_entry *, uint8_t attr, const struct fat_times *);
 /* Useful to host/probe diagnostics; bounded, does not expose a private cache. */
 int fat_get_cluster(struct fat_volume *, uint32_t cluster, uint32_t *value);

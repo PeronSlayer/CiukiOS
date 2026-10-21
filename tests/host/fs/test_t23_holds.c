@@ -14,14 +14,15 @@ static uint32_t clock_ms,max_mutex,max_guard;
 static _Thread_local unsigned namespace_depth,volume_depth;
 static _Thread_local uint32_t acquired[27];
 static bool replay;
-static unsigned transfers,read_transfers,holds;
+static unsigned transfers,read_transfers,holds,logical_releases;
 static bool logical_held;
 static uint32_t logical_started;
 static char logical_op[12];
 static struct {
     const char *op;
     uint32_t max_hold, unclassified_io, stage_io[FAT_P_STAGES];
-} operations[]={{.op="read"},{.op="log_write"},{.op="commit"},{.op="mkdir"}};
+} operations[]={{.op="read"},{.op="log_write"},{.op="commit"},{.op="mkdir"},
+    {.op="write"},{.op="unlink"},{.op="rename"}};
 static int operation(const char *op) {
     for (unsigned i=0;i<sizeof(operations)/sizeof(*operations);i++)
         if (!strcmp(op,operations[i].op)) return (int)i;
@@ -51,6 +52,7 @@ void __wrap_fs_lock_released(fs_lock *l) {
         if (logical_held && !((space.reserved|space.mutating)&vfs_drive_mask(2))) {
             uint32_t held=clock_ms-logical_started; logical_held=false;
             if (replay) {
+                logical_releases++;
                 if (held>max_guard) max_guard=held;
                 int i=operation(logical_op);
                 if (i>=0 && held>operations[i].max_hold) operations[i].max_hold=held;
@@ -125,8 +127,14 @@ int main(int argc,char **argv) {
         if (!(i%100)) assert(!vfs_commit(&writer,log));
     }
     assert(!vfs_mkdir(&audio,"C:/DOSDIR",0));
-    assert(read_transfers>=T23_DESKTOP_HOLDS && holds && max_mutex<=20);
-    printf("F1-87 T23 replay desktop=513 log_write=35 commits=6 mkdir=1 service_ms=111 transfers=%u reads=%u physical_mutex_max_ms=%u logical_guard_max_ms=%u\n",transfers,read_transfers,max_mutex,max_guard);
+    int changed=vfs_open(&desktop,"C:/CHANGED.BIN",VFS_CREATE|VFS_WRITE,0,0);
+    assert(changed>=0);
+    assert(!vfs_write(&desktop,changed,data,1536,&done) && done==1536);
+    assert(!vfs_close(&desktop,changed));
+    assert(!vfs_rename(&desktop,"C:/CHANGED.BIN","C:/RENAMED.BIN"));
+    assert(!vfs_delete(&desktop,"C:/RENAMED.BIN"));
+    assert(read_transfers>=T23_DESKTOP_HOLDS && logical_releases && max_mutex==0);
+    printf("F1-87 T23 replay desktop=513 log_write=35 commits=6 mkdir=1 service_ms=111 transfers=%u reads=%u physical_mutex_max_ms=%u logical_guard_max_ms=%u diagnostic_holds=%u\n",transfers,read_transfers,max_mutex,max_guard,holds);
     for (unsigned i=0;i<sizeof(operations)/sizeof(*operations);i++) {
         printf("F1-87 B operation=%s logical_hold_max_ms=%u preflight_or_transfer_commands=%u guarded_stage_commands=",
             operations[i].op,operations[i].max_hold,operations[i].unclassified_io);

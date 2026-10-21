@@ -100,7 +100,13 @@ void vfs_wait_observer(char drive,uint32_t ms,char holder,const char *reason,
 }
 static void *write_thread(void *arg) {
     (void)arg; uint8_t data[512]; memset(data,0x86,sizeof(data)); size_t done=0;
-    assert(!vfs_write(&writer,handle,data,sizeof(data),&done) && done==sizeof(data)); return 0;
+    /* Keep the old whole-operation path as the diagnostic negative control.
+     * f1-89's T23 replay separately requires the public transactional write
+     * to have no long hold. Do not lower these observer thresholds. */
+    assert(!vfs_admit(&v,1u<<2,writer.request)); vfs_tag_locked(&v,"write");
+    struct vfs_node *node=writer.handles[handle]->node; v.io_file[2]=node;
+    assert(!VFS_IO(&v,fat_write(&volume,&node->entry,0,data,sizeof(data),&done)) && done==sizeof(data));
+    v.io_file[2]=0; vfs_unlock(&v); return 0;
 }
 static void *wait_thread(void *arg) {
     (void)arg; struct fat_entry e; assert(!vfs_stat(&waiter,"C:/TEST.BIN",&e) && e.size==512); return 0;
