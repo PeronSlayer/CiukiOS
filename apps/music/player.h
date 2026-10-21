@@ -8,6 +8,7 @@
 #define MUSIC_BATCH 4096
 #define MUSIC_DEVICE_FRAMES 2048
 #define MUSIC_COMMANDS 8
+#define MUSIC_START_SECONDS 2u
 /* A backend owns one nonblocking native stream; counters reset at open. */
 struct music_output {
     int (*open)(void *, unsigned *rate);
@@ -16,6 +17,7 @@ struct music_output {
     void (*close)(void *);
     uint64_t (*now)(void *); /* Monotonic; called by reader and pump concurrently. */
     void *ctx;
+    void (*refill)(void *); /* reader-thread demand, optional for host sinks */
 };
 enum music_state { MUSIC_STOPPED, MUSIC_LOADING, MUSIC_PLAYING, MUSIC_PAUSED, MUSIC_ERROR, MUSIC_CLOSING };
 enum music_action { MUSIC_OPEN, MUSIC_ADD, MUSIC_SAVE, MUSIC_PLAY, MUSIC_PAUSE, MUSIC_STOP, MUSIC_PREV, MUSIC_NEXT, MUSIC_SEEK, MUSIC_SELECT, MUSIC_CLEAR };

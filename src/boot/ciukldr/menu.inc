@@ -423,9 +423,10 @@ config_read:
     mov [preferred_mode], dx
     jmp .next
 .apply:
-    ; safe=0, serial=1 and accel=0 change nothing here: a normal option never
-    ; clears a positive safe-mode source; B(options) keeps accel=0 for the
-    ; kernel, which declines acceleration before marker I/O.
+    ; safe=0, serial=1, accel=0 and usbscan=0 change nothing here: a normal
+    ; option never clears a positive safe-mode source; B(options) keeps
+    ; accel=0 (the kernel declines acceleration before marker I/O) and
+    ; usbscan=0 (diagnostic policy the kernel reads from the copied options).
     cmp bx, safe_option
     jne .serial
     or dword [B(flags)], CBI_F_SAFE_MODE
@@ -460,7 +461,7 @@ config_read:
 .done:
     ret
 ; Exact BOOT.CFG options; an empty name ends the list.
-option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0
 safe_option db 'safe=1',0
 serial_option db 'serial=0',0,0
 mode_prefix db 'mode=0x',0

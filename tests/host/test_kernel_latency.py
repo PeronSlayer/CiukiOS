@@ -324,6 +324,28 @@ static void test_irq_restore(uint32_t f) {
                                 str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+            binary = temp / 't23_audio_replay_test'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
+                            '-pthread', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/t23_audio_replay_test.c'),
+                            str(ROOT / 'src/kernel/fs/fs_port.c'), str(ROOT / 'src/kernel/fs/blkreq.c'),
+                            *(str(ROOT / 'src/kernel/fs' / unit) for unit in
+                              ('vfs.c', 'fat.c', 'cache.c', 'path.c', 'fs_ro.c')),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            for policy in ('--vfs', '--old-vfs'):
+                subprocess.run([str(binary), policy], check=True,
+                               env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+            # F1-87 amendment 4: the trial's measured device work. The old
+            # policy must reproduce the overruns; the new policy's C
+            # acceptance is reported, and fatal with CIUKI_F187_REQUIRE_C=1.
+            strict = ['--require-c'] if os.environ.get('CIUKI_F187_REQUIRE_C') == '1' else []
+            for policy in (['--old-vfs'], ['--vfs', *strict]):
+                subprocess.run([str(binary), *policy, '--trial-device-work'], check=True,
+                               env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
             if os.environ.get('CIUKI_SCHED_BENCH') == '1':
                 binary = temp / 'scheduler_benchmark'
                 subprocess.run(['clang', '-std=c17', '-O2', '-Wall', '-Wextra', '-Werror',

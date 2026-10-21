@@ -39,6 +39,7 @@ extern const struct task *dosvm_task_focus(void) __attribute__((weak));
 extern const struct task *dosvm_task_irq(void) __attribute__((weak));
 static const struct task *focus_task;
 static struct task *ui_focus;
+static struct task *input_proxy;
 static uint32_t focus_ticks, ordinary_ticks;
 #define FOCUS_PERIOD 10u
 #define FOCUS_BUDGET 8u
@@ -190,6 +191,8 @@ static void task_timer_event(void *owner, uint32_t generation, unsigned kind)
     uint32_t f = irq_save();
     if (kind == 1 && t->input_priority) {
         t->input_priority = 0; t->input_expiry = 0;
+        t->input_forwarded=false;
+        if (input_proxy==t) input_proxy=0;
         scheduler_stats.input_expired++; priority_update(t);
     } else if (kind == 2 && t->state == T_READY && t->prio == P_NORMAL && !t->boosted) {
         t->boosted = true; priority_update(t);
@@ -201,6 +204,7 @@ void task_focus(struct task *t)
 {
     uint32_t f = irq_save();
     if (ui_focus != t) {
+        if (input_proxy) task_input_withdraw(input_proxy);
         struct task *old = ui_focus;
         ui_focus = t;
         if (old) {
@@ -211,6 +215,32 @@ void task_focus(struct task *t)
             priority_update(old);
         }
         if (t) { t->focused = true; priority_update(t); }
+    }
+    irq_restore(f);
+}
+void task_input_withdraw(struct task *target)
+{
+    uint32_t f=irq_save();
+    if (target && target==input_proxy) {
+        input_proxy=0; target->input_forwarded=false;
+        if (target->input_priority) scheduler_stats.input_expired++;
+        target->input_priority=0; target->input_expiry=0;
+        ktimer_cancel(&target->input_timer); priority_update(target);
+    }
+    irq_restore(f);
+}
+void task_input_forward(struct task *source,struct task *target)
+{
+    uint32_t f=irq_save();
+    if (source && source==ui_focus && target && target->state<T_ZOMBIE && target->prio==P_NORMAL) {
+        if (input_proxy && input_proxy!=target) task_input_withdraw(input_proxy);
+        input_proxy=target; target->input_forwarded=true;
+        priority_init(target);
+        unsigned p=target->base_priority+2;
+        target->input_priority=p>SCHED_BOOST_CAP ? SCHED_BOOST_CAP : p;
+        target->input_expiry=g_ticks+20;
+        ktimer_arm(&target->input_timer,target->input_expiry,1,target,&target->generation,task_timer_event);
+        scheduler_stats.input_granted++; priority_update(target);
     }
     irq_restore(f);
 }
@@ -299,6 +329,17 @@ static struct task *rq_pop(void)
         for (int p = SCHED_BOOST_CAP - 1; p > (int)focus->effective_priority; p--)
             if (rq_head[p] && (p > (int)SCHED_FOREGROUND || rq_head[p]->input_priority || rq_head[p]->inherited_priority)) return rq_take(p);
         struct task *t = (struct task *)focus; rq_remove(t); return t;
+    }
+    /* Forwarded input shares the VM's bounded preference. Repeated key
+     * delivery must not promote a base-7 VM over the desktop indefinitely
+     * after that preference has been spent. WAIT dependency donation retains
+     * its normal precedence and withdrawal. */
+    if (focus && focus->state==T_READY && focus_ticks>=FOCUS_BUDGET &&
+        focus->input_forwarded && !focus->inherited_priority && !focus->boosted) {
+        for (int p=SCHED_LEVELS-1;p>=(int)focus->base_priority;p--)
+            for (struct task *t=rq_head[p];t;t=t->next) if (t!=focus) {
+                ktimer_cancel(&t->ready_timer); rq_remove(t); return t;
+            }
     }
     for (int p = SCHED_LEVELS - 1; p >= 0; p--) if (rq_head[p]) return rq_take(p);
     return 0;
@@ -680,6 +721,7 @@ void task_exit(int code)
     struct task *t = g_current;
     bool native = proc_task_exiting(t, code);
     t->exit_code = code;
+    task_input_withdraw(t);
     if (ui_focus == t) task_focus(0);
     ksync_task_exit(t);
     if (!native)
@@ -702,6 +744,7 @@ void task_kill(struct task *t, int code)
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
         bool native = proc_task_exiting(t, code);
         t->exit_code = code;
+        task_input_withdraw(t);
         if (ui_focus == t) task_focus(0);
         ksync_task_exit(t);
         if (t->state == T_READY) rq_remove(t);

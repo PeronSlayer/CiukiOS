@@ -203,7 +203,7 @@ int storage_ntfs_mount(struct storage *s, unsigned slot)
         d = 3; while (d < 26 && vfs_drive_present(&s->vfs, d)) d++;
         if (d >= 26) { n->error=-FS_ENOSPC; vfs_unlock(&s->vfs); return n->error; }
     }
-    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount");
+    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     if (s->stopped || n->ro.mounted || vfs_drive_present(&s->vfs,d)) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     n->drive=d; /* also serializes concurrent preparation of this slot */
     refresh_ntfs(n);
@@ -219,7 +219,7 @@ int storage_ntfs_unmount(struct storage *s, unsigned slot)
     struct storage_ntfs *n = &s->ntfs[slot];
     for (;;) {
         vfs_lock(&s->vfs,0); unsigned d=n->drive;
-        vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount");
+        vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
         if (n->drive==d) break;
         vfs_unlock(&s->vfs);
     }
@@ -407,7 +407,7 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
     }
     uint32_t mask=0;
     for (unsigned d=4;d<26;d++) if (s->volumes[d].removable && s->volumes[d].part.parent==dev) mask|=1u<<d;
-    vfs_reserve_locked(&s->vfs,mask); vfs_tag_locked(&s->vfs,"mount");
+    vfs_reserve_locked(&s->vfs,mask); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     /* Preflight the entire physical device before flushing/cleaning ANY FAT. */
     if (!surprise) for (unsigned d=4;d<26;d++) {
         struct storage_volume *v=&s->volumes[d];
@@ -470,7 +470,7 @@ int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, 
     unsigned d=s->next_drive;
     while (d<26 && vfs_drive_present(&s->vfs,d)) d++;
     if (d>=26) return -FS_ENOSPC;
-    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount");
+    vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     if (s->stopped || vfs_drive_present(&s->vfs,d) || ro->mounted) return -FS_EBUSY;
     int e=VFS_IO(&s->vfs,fs_ro_mount(ro,&iso9660_ops,&s->cache,dev,session,dev->capacity-session));
     if (!e) e=vfs_attach_ro_locked(&s->vfs,d,ro);
@@ -521,7 +521,7 @@ int storage_enable_write(struct storage *s, unsigned d)
     if (s->writer_error) return s->writer_error;
     if (v->error) return v->error;
     if (!v->read_gate || v->writes_before_gate) { v->refused++; return -FS_EROFS; }
-    vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount");
+    vfs_lock(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     refresh_volume(v);
     int e = VFS_IO(&s->vfs,fat_enable_write(&v->fat));
     if (!e && !v->write_sequence) v->write_sequence = ++s->sequence;
@@ -612,7 +612,7 @@ static int shutdown_volumes(struct storage *s)
     if (s->writer_quiescing) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     s->writer_quiescing=true;
     while (s->writer_running) fs_event_wait(&s->vfs.volume_changed,&s->vfs.lock);
-    vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES); vfs_tag_locked(&s->vfs,"commit");
+    vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES); vfs_tag_locked(&s->vfs,"commit"); vfs_site_locked(&s->vfs,"mount");
     bool busy = false;
     for (unsigned i = 0; i < VFS_NODES; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive])) busy = true;
     for (unsigned d=2;d<26;d++) if (s->vfs.volumes[d] && vfs_identity_busy(&s->vfs,s->vfs.volumes[d])) busy=true;
@@ -678,7 +678,7 @@ int storage_boot_cfg(struct storage *s, const char *request)
     struct storage_volume *v = storage_volume(s, 2);
     if (!v || v->error || !v->read_gate || s->writer_error ||
         !blkdev_durable(blkpart_device(&v->part))) return -FS_EROFS;
-    vfs_lock(&s->vfs,vfs_drive_mask(2)); vfs_tag_locked(&s->vfs,"write");
+    vfs_lock(&s->vfs,vfs_drive_mask(2)); vfs_tag_locked(&s->vfs,"write"); vfs_site_locked(&s->vfs,"mount");
     bool mounted = v->fat.mounted, readonly = v->fat.readonly;
     int e = 0;
     if (!mounted) e = VFS_IO(&s->vfs,fat_mount(&v->fat, &s->cache, &v->io, 0, v->io.capacity, false));

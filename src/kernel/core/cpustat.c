@@ -380,9 +380,11 @@ static void cpu_emit(void)
         timing.critical_section ? timing.critical_section : "none", timing.critical_site,
         timing.critical_us, timing.budget_violations, timing.raw_work_us,
         timing.raw_firmware_us, timing.unclassified_irqoff, timing.interrupt_owner[0] ? timing.interrupt_owner : "none");
-    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u",
+    klog_periodic("[cpu] irqoff raw_max_us=%u work_max_us=%u firmware_max_us=%u smi_attributed=%u unclassified=%u task=%s#%u worker_site=%08x",
         timing.critical_us, timing.critical_work_us, timing.firmware_us,
-        timing.firmware_gaps, timing.unclassified_irqoff);
+        timing.firmware_gaps, timing.unclassified_irqoff,
+        timing.unclassified_task[0] ? timing.unclassified_task : "none",
+        timing.unclassified_task_id,timing.unclassified_worker_site);
     klog_periodic("[cpu] irqwork max_us=%u owner=%s site=%08x section=%s",
         timing.critical_work_us, timing.work_owner[0] ? timing.work_owner : "none", timing.work_site,
         timing.work_section ? timing.work_section : "none");

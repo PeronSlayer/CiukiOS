@@ -230,14 +230,21 @@ static int materialize(struct dosvm *v, uint32_t index)
 /* Make one page resident (wait permitting) and record the access. */
 static int resolve(struct dosvm *v, uint32_t index, bool write, bool wait, bool publish)
 {
+    /* Cached resolutions occur once per page in guest transfers. Yield
+     * before borrowing any frame/PTE, including the already-resident path;
+     * a large resident range must not run as one unbroken monitor slice.
+     * Clock/DMA callers (wait=false) retain their nonblocking semantics. */
     struct vm_pool *pool = &v->memory.pool;
-    struct vm_page *page = page_at(v, index);
     uint32_t generation = v->info.key.generation;
+    if (wait && can_block()) kpreempt_point();
+    if (pool->closing || v->info.key.generation!=generation || index>=pool->pages) return -EFAULT;
+    struct vm_page *page = page_at(v, index);
     uint64_t start = 0;
     bool worker = g_current && g_current == v->task;
     int e = 0;
     for (unsigned attempt = 0;; attempt++) {
-        if (pool->closing || v->info.key.generation != generation) { e = -EFAULT; break; }
+        if (pool->closing || v->info.key.generation != generation || index>=pool->pages) { e = -EFAULT; break; }
+        page=page_at(v,index); /* revalidate the directory after a preemption/retry */
         if (page->state == VM_PAGE_RESIDENT) break;
         if (!wait || !can_block()) { e = -EAGAIN; break; }
         if (!start) {
@@ -253,6 +260,7 @@ static int resolve(struct dosvm *v, uint32_t index, bool write, bool wait, bool 
         e = materialize(v, index);
         if (e && e != -EAGAIN) break;
         e = 0;
+        if (can_block()) kpreempt_point(); /* retry a raced publication fairly */
     }
     if (start) {
         uint64_t now = dosvm_perf_clock(), spent = now > start ? now - start : 0;

@@ -61,6 +61,10 @@ on screen as before. After `S`, `L` or `P` in a normal boot the loader prints
 its remaining lines on screen; the menu text itself stays serial-only there.
 A loader error is always printed on screen.
 
+The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
+USB enumeration and stops the periodic USB rescans; the loader only accepts
+the token and leaves it in the copied boot options for the kernel.
+
 ## Shutting down
 
 The desktop calls `ciuki_power()` (system call 73): reboot, power off

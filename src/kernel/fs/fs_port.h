@@ -19,7 +19,9 @@ struct vfs_request {
     uint64_t owner; struct vfs_wait_info *wait;
     int *cleanup_status; /* first failed mutation cleanup, not ordinary DOS errors */
     struct fs_task_identity task; /* diagnostic caller across worker calldowns */
-    const char *operation; /* optional short diagnostic tag, copied on admission */
+    const char *operation; /* short diagnostic tag, copied on admission */
+    const char *site; /* static family: native, dos, writer, mount, vfs */
+    bool urgent_reader; /* deadline-sensitive audio; never inferred from a filename */
 };
 struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const struct vfs_request *request; };
 void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);
