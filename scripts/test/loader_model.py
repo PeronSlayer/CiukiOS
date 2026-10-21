@@ -20,8 +20,8 @@ DOS_SELECTOR_RE = (r'f3:dos-conformance run=([0-9a-fA-F]{8}) '
                    r'guest=(freedos|ciukidos)( kernel=unified)?')
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
-E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
-VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer'
+E820_MINIMUM_ERROR = 'CIUKI: this PC needs a BIOS E820 memory map (L:E820)'
+VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0+ for a linear framebuffer'
 
 
 class LoaderUART:
@@ -136,8 +136,8 @@ class BootMenu:
     MENU_TICKS = 55
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
-    SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
-    MENU_HINT = 'Press S for safe mode, L for serial log, H for Hardware check'
+    SAFE_CONFIRMATION = 'Safe mode; P for a probe, or wait'
+    MENU_HINT = 'S for safe mode, L for log, H for Hardware check'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe
