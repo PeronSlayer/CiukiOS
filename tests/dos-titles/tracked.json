@@ -652,9 +652,9 @@
       "year": 1992,
       "publisher": "Apogee Software / id Software",
       "licence": {
-        "citation": "config/dos-titles.json: wolf3d; original package licence documents",
-        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
-        "class": "test-media"
+        "citation": "Owner decision 2026-10-21, dev diary 2026-10-21-05; VENDOR.DOC [3][C]; config/dos-titles.json: wolf3d",
+        "conditions": "Bundled by owner decision 2026-10-21-05. VENDOR.DOC [3][C] requires prior signed Apogee permission for software bundles; the owner decision is not publisher permission.",
+        "class": "bundled"
       },
       "install": {
         "layout": "package",

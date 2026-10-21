@@ -16,7 +16,7 @@ the supplied pins and edition-specific licence verification for the last three.
 | --- | --- |
 | DOOM | Original `DOOMS_19.DAT` banner and DOOM1.WAD ENDOOM grant sharing; exact clauses and hashes are in `third_party/games/doom-shareware/UPSTREAM.json`. Retain the original archive; the unrelated FAQ has separate restrictions. |
 | Quake | [id Software SLICNSE.TXT, sections 6–7](https://raw.githubusercontent.com/id-Software/Quake/master/WinQuake/data/SLICNSE.TXT): free whole-package distribution, compressed electronic distribution by providers. Never publish extracted PAK data alone. |
-| Wolfenstein | Original `third_party/games/wolf3d-shareware/VENDOR.DOC`, sections 3A/3C: complete unmodified episode only; free sharing allowed, software bundles require signed permission. Private test installation only. |
+| Wolfenstein | `bundled` by owner decision 2026-10-21, dev diary 2026-10-21-05 (Amendment 3). Original `third_party/games/wolf3d-shareware/VENDOR.DOC`, sections 3A/3C: complete unmodified episode only; software bundles require prior signed Apogee permission. The owner decision does not constitute publisher permission. |
 | ROTT | Amendment 1 verifies the original `ROTTSW13.SHR!VENDOR.DOC`; complete unchanged free sharing, prior permission for bundles. |
 | Keen 4 | Amendment 1 verifies the original `CK4SW14.SHR!VENDOR.DOC`; complete unchanged free sharing, prior permission for bundles. |
 | Duke 3D | Amendment 1 verifies the original `DN3DSW13.SHR!LICENSE.TXT`; limited complete unchanged free sharing, other distribution requires permission. |
@@ -180,8 +180,9 @@ Section [3][C]:
 Its [3][A–D] restrict recipients/channels; other distribution requires written
 permission and a fee/agreed benefit. Amendment 2 classifies all three as
 `test-media`: these limited sharing grants do not qualify software bundles.
-Licence metadata never asserts runtime verification. Wolfenstein is also
-`test-media`; the two existing approved bundled packages are qualified below.
+Licence metadata never asserts runtime verification. Amendment 3 supersedes
+Wolfenstein's former `test-media` class with the owner's `bundled` decision;
+the DOOM and Quake bundled-package boundaries are qualified below.
 
 `config/dos-titles.json` also records the complete extracted file inventory
 and a tree hash. Keen uses the existing PKWARE DCL `.SHR` decoder. ROTT and
@@ -301,7 +302,7 @@ have these classes:
 | --- | --- | --- |
 | DOOM 1.9 | `bundled` | `third_party/games/doom-shareware/UPSTREAM.json`: ENDOOM/installer sharing grant, plus [John Carmack's 1999 clarification preserved by Debian](https://tracker.debian.org/media/packages/d/doom-wad-shareware/copyright-1.9.fixed-4). This classification covers the approved installed shareware package with `DMFAQ66A.TXT` through `DMFAQ66D.TXT` excluded: their own II(d) prohibits inclusion within software without permission. It does not make the complete archive an unrestricted OS bundle. |
 | Quake 1.06 | `bundled` | Original [SLICNSE.TXT section 6](https://raw.githubusercontent.com/id-Software/Quake/master/WinQuake/data/SLICNSE.TXT) and f3-18 qualification: whole unmodified shareware, agreement accompanying it, free electronic distribution in compressed form for providers; the end-user grant is whole-package free sharing. No standalone extracted PAK redistribution or physical-media grant. Carmack's DOOM clarification is not a Quake grant. |
-| Wolfenstein 3D 1.4 | `test-media` | `third_party/games/wolf3d-shareware/VENDOR.DOC` [3][A] requires complete unchanged files; [3][C] requires prior signed Apogee permission for hardware/software bundles, CD-ROMs and retail racks. Local battery use only. |
+| Wolfenstein 3D 1.4 | `bundled` (Amendment 3) | Owner decision 2026-10-21, dev diary 2026-10-21-05, retains the pre-installed shareware. `third_party/games/wolf3d-shareware/VENDOR.DOC` [3][A] requires complete unchanged files; [3][C] requires prior signed Apogee permission for hardware/software bundles, CD-ROMs and retail racks. This classification records the owner decision, not publisher permission. |
 | Rise of the Triad 1.3 | `test-media` | Pinned `ROTTSW13.SHR!VENDOR.DOC`, SHA-256 above: [3][A] requires complete unchanged files; [3][C] requires prior signed permission for bundles, CD-ROMs and racks. Local battery use only. |
 | Commander Keen 4 1.4 | `test-media` | Pinned `CK4SW14.SHR!VENDOR.DOC`, SHA-256 above: same [3][A]/[3][C] boundary. Local battery use only. |
 | Duke Nukem 3D 1.3d | `test-media` | Pinned `DN3DSW13.SHR!LICENSE.TXT`, SHA-256 above: [3][A]/[B] limited sharing/download channels; [3][C] requires all original files without modification; [3][D] requires written permission and fee/agreed benefit for all other distribution. Local battery use only. |
@@ -316,10 +317,9 @@ Duke [3][D] states:
 
 These are publisher notices read from the already provisioned pinned archives;
 the [original publisher download page preserved on its mirror](https://ftpmirror.infania.net/pub/3drealms/downloads/Downloads.html)
-identifies editions, not additional permissions. No packaging policy outside
-this battery is changed. In particular, the pre-existing games-disk package
-list still contains Wolfenstein: the lead must reconcile that separate image
-input with this amendment's bundle boundary before publication.
+identifies editions, not additional permissions. Amendment 3 records the
+owner's decision to retain the pre-existing Wolfenstein games-disk package;
+the other packaging boundaries remain unchanged.
 
 An `owner-copy` archive supplies `install.archive_pin={size,sha256}` beside
 its local `install.source`; the tracked config is neither extended nor used
@@ -344,9 +344,11 @@ digest; `.TXT` is 4000 bytes of raw little-endian VGA character/attribute cells,
 also retained when graphics mode is active. No desktop screenshot substitutes
 for a VM checkpoint. After guest teardown, the runner independently checks
 the embedded original game disk and plan digests, exports the six files to
-`title-captures/`, and retains them on successful calibration. The CLI verifies
-image-to-digest consistency and copies them beside `calibration.json` under
-`<profile>/<run-id>/`. Physical serial imports require `--captures <directory>`
+`build/test-runs/dos-titles/<id>/<run-id>/title-captures/`, and retains them on
+successful calibration. The CLI verifies image-to-digest consistency and copies
+them to `build/test-runs/dos-titles/<id>/<profile>/<run-id>/`. The artifact paths
+in `calibration.json` are relative to that title's local run-evidence root,
+not its manifest directory. Physical serial imports require `--captures <directory>`
 with the same files exported by the lead from that run's disposable fixture.
 This is diagnostic retention required for review; no whole-image copy or RAM
 dump is made. Verification fixtures remain byte-for-byte immutable.
@@ -378,3 +380,33 @@ the 64-digit tree digest use separate ordered `install`/`install-tree`
 records. Host tests expand every title DATA format with the longest ID,
 UINT32 sequence/metrics and UINT64 counters and assert the full envelope is
 at most 240 bytes. Acceptance thresholds and the pending f6-11 LAN gate stay.
+
+## Amendment 3 — owner classification and local review captures (2026-10-21)
+
+The owner decision recorded in dev diary 2026-10-21-05 retains Wolfenstein 3D
+shareware pre-installed; directive f3-60 is withdrawn. Both the tracked
+manifest and its pin classify `wolf3d` as `bundled` with that decision and
+the original `VENDOR.DOC` [3][C] reading recorded explicitly. The section
+requires prior signed Apogee permission for software bundles; an owner
+classification does not supply that permission. The original notice and
+package pins are unchanged. The [preserved publisher download list](https://ftpmirror.infania.net/pub/3drealms/downloads/Downloads.html)
+identifies the edition; the package's own notice remains the licence source.
+
+Every runtime export and saved review copy is beneath
+`build/test-runs/dos-titles/<id>/`. Only `calibration.json` is written beside
+the manifest, initially with `status=calibrated`; explicit lead acceptance
+retains the same file and records `status=verified`, reviewer and UTC time.
+Its six relative artifact references resolve against the local title run
+root. Acceptance still rejects missing, modified or escaping artifacts.
+The lead retains the local frames until review and acceptance; binary frames
+are never source-control inputs. Existing pre-amendment artifact locations
+must be recaptured before acceptance; no old binary is copied into the tree.
+
+Host regression tests import synthetic serial/capture evidence through the
+tracked-manifest CLI path and assert that the tree gains only the
+JSON file during calibration and acceptance. A separate mocked runtime test
+checks the per-title runner directory and review copies without launching
+any process. The [QEMU fw_cfg](https://www.qemu.org/docs/master/specs/fw_cfg.html)
+and [backing-image contracts](https://www.qemu.org/docs/master/system/images.html)
+remain unchanged; no selector, kernel, audio, installer or acceptance
+threshold change accompanies this amendment.

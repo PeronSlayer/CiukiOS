@@ -40,3 +40,9 @@ Apply this amendment only.
 8. **Symlink (P2):** the tracked `third_party/freedos/freedos` symlink was the lead's provisioning mistake; it is removed; the FreeDOS reference lookup uses `third_party/freedos/1.3` or skips with the reason.
 
 Report section "Amendment 2".
+
+## Amendment 3 (lead, 2026-10-21): owner decision on Wolfenstein 3D
+
+The owner decided to keep Wolfenstein 3D shareware pre-installed in the image (dev diary 2026-10-21-05; directive f3-60 withdrawn). In the tracked manifest and the design note, `wolf3d` is class `bundled` with a note citing that decision and the VENDOR.DOC §3C reading; nothing else changes. Apply at the next session together with any remaining re-review findings.
+
+Amendment 3, item 2 (re-review P2): default calibration writes PPM/raw-text captures beneath `tests/dos-titles/<id>/…` (`scripts/test/dos_titles.py:505,569`), where they could enter source control. Write every capture under `build/test-runs/dos-titles/<id>/` (untracked by the existing rules), keep only `calibration.json` beside the manifest after `--accept-calibration`, and add a test that the tracked tree gains no binary file from a calibration run. Report section "Amendment 3".

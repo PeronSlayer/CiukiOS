@@ -41,10 +41,16 @@ class SchemaTests(unittest.TestCase):
         pins = json.loads((ROOT / 'config/dos-titles.json').read_text())['titles']
         self.assertEqual({t['id'] for t in rows}, {p['id'] for p in pins})
         for t in rows:
-            expected = 'bundled' if t['id'] in ('doom', 'quake') else 'test-media'
+            expected = 'bundled' if t['id'] in ('doom', 'quake', 'wolf3d') else 'test-media'
             self.assertEqual(t['licence']['class'], expected)
             self.assertEqual(next(p for p in pins if p['id'] == t['id'])['licence']['class'], expected)
             self.assertNotIn('verified', t['licence'])
+        wolf = next(t for t in rows if t['id'] == 'wolf3d')
+        wolf_pin = next(p for p in pins if p['id'] == 'wolf3d')
+        for note in (wolf['licence']['conditions'], wolf_pin['licence']['distribution']):
+            self.assertIn('2026-10-21-05', note)
+            self.assertIn('VENDOR.DOC [3][C]', note)
+            self.assertIn('prior signed Apogee permission', note)
         quake = next(t for t in rows if t['id'] == 'quake')
         self.assertEqual((quake['audio']['expectation'], quake['memory']['dpmi'], quake['memory']['dpmi_fallback']), ('digital', 'native', 'cwsdpmi'))
         for extra in ({'kind': 'redistributable'}, {'verified': True}):
@@ -322,6 +328,11 @@ class AmendmentTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=out, prefix='title-amendment-')
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)
+        (self.path / 'config').mkdir()
+        shutil.copyfile(ROOT / 'config/dos-titles.json', self.path / 'config/dos-titles.json')
+        self.root_patch = patch.object(titles, 'ROOT', self.path)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
 
     def transcript(self, t, capture):
         """Synthetic mode/stage evidence; never claimed as title qualification."""
@@ -361,6 +372,7 @@ class AmendmentTests(unittest.TestCase):
         return directory
 
     def test_supplied_archive_pins_licences_complete_trees_and_original_media(self):
+        self.root_patch.stop()  # This test reads the real provisioned media/decoder.
         pins = json.loads((ROOT / 'config/dos-titles.json').read_text())
         rows = titles.load(ROOT / 'tests/dos-titles/tracked.json', True)['titles']
         for ident in ('rott', 'keen4', 'duke3d'):
@@ -443,7 +455,7 @@ class AmendmentTests(unittest.TestCase):
         r = titles.parse_serial(self.transcript(t, True), '12345678', t, True)
         path = self.path / 'calibration.json'
         titles.save_calibration(path, t, r, 't23', 'c' * 64, '12345678', captures)
-        (path.parent / 't23/12345678/boot.ppm').write_bytes(b'changed')
+        (titles.capture_root(t) / 't23/12345678/boot.ppm').write_bytes(b'changed')
         with self.assertRaises(EvidenceError): titles.accept_calibration(path, t, 't23', 'c' * 64, 'lead')
         (captures / 'boot.ppm').write_bytes(b'changed')
         with self.assertRaises(EvidenceError): titles.save_calibration(path, t, r, 't23', 'c' * 64, '87654321', captures)
@@ -515,6 +527,65 @@ class AmendmentTests(unittest.TestCase):
             applied = titles.apply_calibration(titles.calibration_path(manifest, t), t, 't23', 'c' * 64)
             serial.write_bytes(self.transcript(applied, False))
             self.assertEqual(titles.main(['--verify', '--title', 'synthetic', *common]), 0)
+
+    def test_calibration_keeps_binary_captures_out_of_tracked_tree(self):
+        t = installer_sample()
+        tracked = self.path / 'tests/dos-titles'
+        tracked.mkdir(parents=True)
+        manifest = tracked / 'tracked.json'
+        captures = self.artifacts(t)
+        manifest.write_text(json.dumps({'schema_version': 1, 'titles': [t]}))
+        serial = self.path / 'serial.txt';serial.write_bytes(self.transcript(t, True))
+        common = ['--manifest', str(manifest), '--serial', str(serial), '--run-id', '12345678', '--profile', 't23',
+                  '--image-sha256', 'c' * 64, '--captures', str(captures)]
+        before = {p.relative_to(tracked): p.read_bytes() for p in tracked.rglob('*') if p.is_file()}
+        # Exercise a tracked-manifest path, with synthetic physical
+        # evidence only. No runner or child process is allowed.
+        with patch.object(subprocess, 'Popen', side_effect=AssertionError('host-only import must not launch')), \
+             patch('builtins.print'):
+            self.assertEqual(titles.main(['--calibrate', 'synthetic', *common]), 0)
+            path = titles.calibration_path(manifest, t)
+            self.assertEqual(json.loads(path.read_text())['profiles']['t23']['status'], 'calibrated')
+            self.assertEqual({p.relative_to(tracked) for p in tracked.rglob('*') if p.is_file()} - set(before),
+                             {Path('synthetic/calibration.json')})
+            self.assertEqual(titles.main(['--accept-calibration', 'synthetic', '--reviewer', 'lead-fixture', *common]), 0)
+        after = {p.relative_to(tracked): p.read_bytes() for p in tracked.rglob('*') if p.is_file()}
+        self.assertEqual(set(after) - set(before), {Path('synthetic/calibration.json')})
+        self.assertTrue(all(after[name] == content for name, content in before.items()))
+        record = json.loads(path.read_text())['profiles']['t23']
+        self.assertEqual(record['status'], 'verified')
+        root = self.path / 'build/test-runs/dos-titles/synthetic'
+        self.assertEqual(len(record['artifacts']), 6)
+        for name, digest in record['artifacts'].items():
+            artifact = root / name
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(hashlib.sha256(artifact.read_bytes()).hexdigest(), digest)
+        self.assertEqual({p.name for p in path.parent.iterdir()}, {'calibration.json'})
+
+    def test_runtime_calibration_exports_under_title_run_tree(self):
+        import run as runner
+        t = installer_sample();captures = self.artifacts(t)
+        manifest = self.path / 'manifest.json'
+        manifest.write_text(json.dumps({'schema_version': 1, 'titles': [t]}))
+        image = self.path / 'image-placeholder';image.write_bytes(b'host test only')
+        result = titles.parse_serial(self.transcript(t, True), '12345678', t, True)
+        directory = self.path / 'build/test-runs/dos-titles/synthetic/12345678'
+        directory.mkdir(parents=True)
+        shutil.copytree(captures, directory / 'title-captures')
+        with patch.object(runner.res, 'SlotLock'), \
+             patch.object(runner.res, 'common_lock', return_value=self.path / 'unused-lock'), \
+             patch.object(runner, 'Host'), \
+             patch.object(runner.shutil, 'which', return_value='unused-host-mock'), \
+             patch.object(runner, 'find_firmware', return_value={}), \
+             patch.object(runner, 'load', return_value={}), \
+             patch.object(runner, 'run_case', return_value=({'outcome': 'pass', 'image': {'sha256': 'c' * 64},
+                 'run_id': '12345678', 'observed': []}, directory)) as run_case, \
+             patch.object(titles, 'assess', return_value=result), \
+             patch.object(subprocess, 'Popen', side_effect=AssertionError('mock runtime must not launch')):
+            self.assertEqual(titles.main(['--calibrate', 'synthetic', '--manifest', str(manifest), '--image', str(image)]), 0)
+        self.assertEqual(run_case.call_args.args[1], 'dos-titles/synthetic')
+        self.assertEqual({p.name for p in (self.path / 'synthetic').iterdir()}, {'calibration.json'})
+        self.assertEqual(len(list((self.path / 'build/test-runs/dos-titles/synthetic').rglob('*.ppm'))), 6)
 
 
 if __name__ == '__main__': unittest.main()

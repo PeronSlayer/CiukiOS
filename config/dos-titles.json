@@ -42,8 +42,8 @@
       "licence": {
         "source": "third_party/games/wolf3d-shareware/UPSTREAM.json",
         "terms": "Shareware; VENDOR.DOC [V.07.15.94] of Apogee Software, Ltd. (inside W3DSW14.SHR)",
-        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
-        "class": "test-media"
+        "distribution": "Bundled by owner decision 2026-10-21, dev diary 2026-10-21-05. VENDOR.DOC [3][C] requires prior signed Apogee permission for software bundles; the owner decision is not publisher permission.",
+        "class": "bundled"
       }
     },
     {

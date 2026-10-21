@@ -506,6 +506,11 @@ def calibration_path(manifest, t):
     return Path(manifest).parent / t['id'] / 'calibration.json'
 
 
+def capture_root(t):
+    """Review frames are local run evidence, never manifest/source files."""
+    return ROOT / 'build/test-runs/dos-titles' / t['id']
+
+
 def capture_artifacts(source, checkpoints):
     """Read bounded exact presenter PPM and raw LE16 80x25 text snapshots."""
     result = {}
@@ -568,7 +573,7 @@ def save_calibration(path, t, result, profile, image_sha256, run_id, captures):
                     raise EvidenceError('capture differs from pinned text checkpoint')
     relative = Path(profile) / run_id
     for name, content in artifacts.items():
-        dest = path.parent / relative / name
+        dest = capture_root(t) / relative / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() and dest.read_bytes() != content: raise EvidenceError('capture artifact already exists with different content')
         dest.write_bytes(content)
@@ -624,9 +629,10 @@ def accept_calibration(path, t, profile, image_sha256, reviewer):
     if len(record.get('artifacts', {})) != 6: raise EvidenceError('checkpoint review artifacts missing')
     for name, digest in record['artifacts'].items():
         relative = Path(name)
-        if relative.is_absolute() or '..' in relative.parts or not (path.parent / relative).resolve().is_relative_to(path.parent.resolve()):
+        root = capture_root(t)
+        if relative.is_absolute() or '..' in relative.parts or not (root / relative).resolve().is_relative_to(root.resolve()):
             raise EvidenceError('unsafe checkpoint artifact')
-        if dos_fixtures.sha(path.parent / relative) != digest: raise EvidenceError('checkpoint review artifact changed')
+        if dos_fixtures.sha(root / relative) != digest: raise EvidenceError('checkpoint review artifact changed')
     record.update(status='verified', accepted_by=reviewer, accepted_at=datetime.now(timezone.utc).isoformat())
     temp = path.with_suffix('.json.tmp')
     with temp.open('x') as stream: stream.write(json.dumps(data, indent=2) + '\n')
@@ -704,7 +710,7 @@ def main(argv=None):
         firmware = runner.find_firmware(executable)
         profile = runner.load(ROOT / 'tests/profiles' / (args.profile + '.json'))
         for t in titles:
-            r, directory = runner.run_case(ROOT, 'dos-titles', case(t, args.profile, bool(args.calibrate)), profile, args.image.resolve(), executable, firmware)
+            r, directory = runner.run_case(ROOT, 'dos-titles/' + t['id'], case(t, args.profile, bool(args.calibrate)), profile, args.image.resolve(), executable, firmware)
             report = {'title': t['id'], 'outcome': r['outcome'], 'reason': r.get('reason'),
                       'image_sha256': r['image']['sha256'], 'run_id': r['run_id'],
                       'name': t['name'], 'year': t['year'], 'publisher': t['publisher']}
