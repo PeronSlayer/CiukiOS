@@ -42,3 +42,18 @@ Acceptance (unchanged): T23 service-time model replay, no logical hold above 20 
 **C:** finish the complete replay: real scheduler and refill accounting with interleaved storage requests following the trial's hold distribution (the 513-hold histogram of the directive), asserting zero `device_overrun task=audio-refill`; the reservoir of 2 s and the reader-priority path stay.
 
 Everything delivered for A, D, E, F, G stays. Report section "Amendment 1". If after this session B still cannot meet 20 ms, stop and write the exact obstacle (which operation, which phase, measured hold) in the report instead of partial workarounds.
+
+## Amendment 2 (lead, 2026-10-21): findings of the Codex read-only cross-review of A, C, D (881c5df8); E, F, G accepted
+
+Apply this amendment only (B is now directive f1-89, Astra). Sources: the C3 reader-fairness rules of the resource contract; the scheduler contract (`docs/design/` scheduling, f0-44/f0-46 records).
+
+1. **P1 — C: urgent admission starves queued tickets** (`src/kernel/fs/vfs.c:883`): urgent readers bypass volume tickets without an age or admission budget, so overlapping urgent reads keep `readers[drive]` nonzero indefinitely. Bound urgent overtaking at admission (a budget per ticket age: after an overdue ticket has waited N ms, admission closes to new urgent readers until it runs); sustained overlapping-reader test.
+2. **P1 — D: copying the client's focused base recreates desktop starvation** (`src/kernel/vm/dosvm_client.c:350`, `task.c:303`): the VM retains base 9 against the desktop's 7 and exhausting its focus preference does not demote it. Do not retain the client's focus increment as the VM's permanent base; keep bounded transient propagation (the existing donation) only; test maximum ready delay in both directions with desktop bases 7 and 9 and sustained input (the replay must not give both tasks base 9).
+3. **P2 — C: urgency through an unused read-only audio descriptor** (`syscalls_file.c:105`, `audio_dev.c:650`): require a writable output endpoint with bounded refill demand (stream started, buffer below a threshold), not process-wide descriptor presence; cover read-only, unused and unrelated-thread cases.
+4. **P2 — C: the replay does not reproduce the measured exclusion intervals** (`tests/host/t23_audio_replay_test.c:169`): keep the boundary test and add continuous exclusion/admission modelling with the measured hold intervals through the production VFS admission paths, with an old-policy negative control that shows the overruns.
+5. **P2 — D: VM input boosts are ineffective** (`dosvm_client.c:60,69`, `task.c:223`): `task_input_delivered` requires `t == ui_focus`, which is the DOS Box client, not the VM. Propagate the focused client's bounded input boost to its VM explicitly, with expiry and withdrawal on focus loss; test through the production binding/input path.
+6. **P2 — D: fullscreen priority restoration misses asynchronous transitions** (`dosvm_client.c:398`, `dosvm_fullscreen.c:336,343`): update the binding priority at the actual transition, before unholding the VM, for every entry/exit path (syscall, hotkey, watchdog).
+7. **P2 — A: successful native admission waits vanish from diagnostics** (`vfs.c:917`, `file_wait_locked` :854): capture one accumulated, tagged admission-wait record when the native reader loop completes (existing suppression kept).
+8. **P2 — A: the missing-tag check cannot detect missing tags** (`vfs.c:14` converts absent operations to `metadata`; `test_t23_holds.c:37` only rejects `other`): distinguish explicit tags from fallback attribution (a flag in the hold record) and make the host observer reject fallback or missing attribution.
+
+Report section "Amendment 2". E, F, G stay as delivered.

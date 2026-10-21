@@ -120,7 +120,8 @@ class AccessoriesTests(unittest.TestCase):
         image = (ROOT / "scripts/build_image.py").read_text()
         for name in names:
             self.assertIn(f'"/Programs/{name}": DESKTOP / "{name}"', image)
-        self.assertIn('"/system/licenses/stb_image.txt"', image)
+        licenses = load("acc_image_licenses", ROOT / "scripts/build_image.py").desktop_license_payloads()
+        self.assertEqual(licenses["/system/licenses/stb_image.txt"], ROOT / "third_party/stb/LICENSE")
         listing = subprocess.run(["tar", "tzf", str(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")],
                                  check=True, capture_output=True, text=True).stdout
         for _, _, icon, _ in entries:

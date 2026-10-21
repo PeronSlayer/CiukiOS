@@ -25,3 +25,24 @@ Apply this amendment only.
 4. The three regression tests that need the pinned FreeDOS reference: the reference lives in `third_party/freedos/1.3` of the main tree (symlinked into this worktree now); make the tests find it there or skip with the exact reason, never fail for its absence.
 
 Report section "Amendment 1" with the verified list and the licence quotations.
+
+## Amendment 2 (lead, 2026-10-21): findings of the Codex read-only cross-review (licences and harness)
+
+Apply this amendment only.
+
+1. **Licence boundary (P1).** The battery does not ship any title: the archives are test media the lead downloads on this workstation. Change the manifest semantics accordingly: `licence.class` ∈ {`bundled` (included in the CiukiOS image: today only the DOOM shareware installed package per `third_party/games/doom-shareware/UPSTREAM.json` with Carmack's clarification and the FAQ files excluded, and the Quake shareware package as qualified by f3-18: document both boundaries exactly as the review states, electronic compressed form with the agreement for Quake), `test-media` (pinned download run only on the lead's workstation for the battery, never copied into images or releases: Wolfenstein 3D, Rise of the Triad, Commander Keen 4, Duke Nukem 3D, whose `VENDOR.DOC`/`LICENSE.TXT` §3C/§3D require permission for software bundles or other distribution), `owner-copy` (the owner's private titles through the private manifest)}. Remove `redistributable`/`verified` as currently defined; the design note states for each tracked title the clause and the resulting class, with the review's citations.
+2. **Calibration cannot overwrite expectations (P1).** `dos_titles.py:233/514`: existing non-null expectations are checked, never replaced, by `--calibrate`; capture fills only null checkpoints and marks the title `calibrated`, and a title becomes `verified` only after an explicit `--accept-calibration <title>` step by the lead that records who/when in `calibration.json`; the runner saves the checkpoint images (PPM/PNG) and text frames beside it for the lead's review.
+3. **Gameplay-interval audio (P1).** `src/kernel/probes/f3_probes_titles.c:67`, `dos_title_model.h:147`: the audio predicates use counter deltas within the gameplay interval and an interval-specific IRQ latency maximum; OPL "music" requires sustained key-on activity (register A0–B8 writes with key-on bits over the interval), not detection/reset writes.
+4. **Private archive pins (P1).** The private manifest may carry its own archive pins (size, SHA-256) beside each title; readiness, generation and calibration binding read them at run time; the tracked `config/dos-titles.json` keeps only the test-media and bundled titles.
+5. **Quake audio expectation (P2):** `digital` only (CD music absent in this edition); distinguish the CWSDPMI fallback from the native DPMI server in the metadata.
+6. **Hashing cost (P2):** `f3_probes_titles.c:278`, `dosvm_vga.c:1069`: hash at checkpoints and at a sparse cadence (≤ 2 per second) with the existing presentation/change counters in between.
+7. **Record size (P2):** split the installer tree digest from the metrics record so the maximum legal envelope fits 240 bytes; test the maximum.
+8. **Symlink (P2):** the tracked `third_party/freedos/freedos` symlink was the lead's provisioning mistake; it is removed; the FreeDOS reference lookup uses `third_party/freedos/1.3` or skips with the reason.
+
+Report section "Amendment 2".
+
+## Amendment 3 (lead, 2026-10-21): owner decision on Wolfenstein 3D
+
+The owner decided to keep Wolfenstein 3D shareware pre-installed in the image (dev diary 2026-10-21-05; directive f3-60 withdrawn). In the tracked manifest and the design note, `wolf3d` is class `bundled` with a note citing that decision and the VENDOR.DOC §3C reading; nothing else changes. Apply at the next session together with any remaining re-review findings.
+
+Amendment 3, item 2 (re-review P2): default calibration writes PPM/raw-text captures beneath `tests/dos-titles/<id>/…` (`scripts/test/dos_titles.py:505,569`), where they could enter source control. Write every capture under `build/test-runs/dos-titles/<id>/` (untracked by the existing rules), keep only `calibration.json` beside the manifest after `--accept-calibration`, and add a test that the tracked tree gains no binary file from a calibration run. Report section "Amendment 3".

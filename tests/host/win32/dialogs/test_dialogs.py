@@ -135,14 +135,14 @@ class DialogTests(unittest.TestCase):
                      '-DFrameRect=gdi32_FrameRect', '-DInvertRect=gdi32_InvertRect',
                      '-I'+str(ROOT/'sdk/win32/include'),
                      '-idirafter', str(ROOT/'sdk/sysroot-overlay/include'), *freetype.includes()]
-        gdi_sources = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
-        gdi_sources += [ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c']
+        gdi_exports = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
+        gdi_sources = [*gdi_exports, ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c', HERE.parent/'gdi_support.c']
         names = set()
         for i, source in enumerate(gdi_sources):
             obj = OUT/f'g{i}.o'
             subprocess.run([*gdi_flags, '-c', str(source), '-o', str(obj)], check=True)
             objects.append(obj)
-            if i < len(gdi_sources) - 2:
+            if source in gdi_exports:
                 nm = subprocess.run(['llvm-nm', '--defined-only', str(obj)], capture_output=True,
                                     text=True, check=True).stdout
                 names |= set(re.findall(r'^\S+ T ((?:[A-Z]|w32_gdi_)[A-Za-z0-9_]*)$', nm, re.M))
