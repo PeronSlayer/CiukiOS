@@ -24,3 +24,39 @@ Design and implement, with the research cited (Windows 98 IOS/VFAT and IFS Manag
 5. **No weakening**: the thresholds, the crash-cut suite and the diagnostic observer stay as they are.
 
 Report `build/codex/f1-89-report.md` with the design (one page), citations, the per-operation step table (step, guard held, device commands, durable boundary), exact commands and results. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; no new `panic()` paths; English. If an obstacle makes 20 ms impossible for one operation, deliver the others and state the obstacle precisely with the measured hold.
+
+## Amendment 1 (lead, 2026-10-21 20:44, after the cross-review)
+
+The cross-review is in `build/codex/f1-89-review.md`. Decisions:
+
+**Required before merge** (each with a host test that fails on the current
+code):
+
+1. Review item 1: only a real `barrier()` waits for durability; the 16-sector
+   overflow of a group publishes without a flush, chunks of one group share a
+   cache group so write-back merges to 32 KiB again, and file extension steps
+   grow 128 KiB at a time. Evidence: the 10 MiB copy replay back near 1,278
+   write commands; the C3 copy on the new path at or above the old path's
+   throughput in the same run.
+2. Review item 2: `W32_F_ATTR` takes the writer turn before resolving the
+   path; a writer operation whose identity is unlinked but whose slot index is
+   still set is refused with ENOENT; the slot index is cleared when a legacy
+   unlink is reported; add the delete-versus-SetFileAttributes race test.
+3. Review item 3: transaction objects are preallocated per volume (a small
+   pool, size stated and measured) or lookups use a light object built from
+   ordinary pages; no 24 KiB contiguous allocation per path component.
+4. Review item 7 (lead decision): in-flight readers count in `guard_busy`;
+   a writer-turn wait metric (max and count per drive) joins the T23 replay
+   and the strict gate; the T23 model must show no writer-turn wait above
+   20 ms behind the desktop copy.
+5. Review item 4 (lead decision): the guarded third lookup attempt must not
+   read the disk while holding the guard: warm the needed sectors before
+   taking it, or drop the guard around the read and restart; lookups over
+   32 sectors restart rather than fail.
+
+**Follow-ups** (record in the report, not in this round): items 5, 6, 8, 9,
+10 of the review. Item 5 (abort after a durable partial step) is the first
+follow-up directive after the 1.0 Alpha.
+
+Then rerun the strict FS gate, the C3 variants, the 10 MiB copy replay and
+`test_kernel_latency`, and append the numbers to `build/codex/f1-89-report.md`.
