@@ -1,12 +1,13 @@
 /* Existing GDI and delegated-present boundaries. No device access.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "internal.h"
-#ifndef W32_HOST_MODEL
 #include <ciuki/present_abi.h>
+#include "internal.h"
 #include <w32/shims.h>
+#ifndef W32_HOST_MODEL
 extern void *W32API GetModuleHandleA(const char *);
 extern void *W32API GetProcAddress(void *, const char *);
 extern DWORD w32r_gate(DWORD, DWORD, DWORD, DWORD);
+#endif
 struct gl_lease {
   DWORD active, token, generation, width, height, bpp, pitch;
 };
@@ -19,6 +20,16 @@ static struct {
 static void bind_user(void) {
   if (user.target)
     return;
+#ifdef W32_HOST_MODEL
+  extern BOOL w32_user_gl_target(DWORD, DWORD *);
+  extern BOOL w32_user_gl_damage(DWORD);
+  extern int32_t w32_user_display_lease(uintptr_t, DWORD, DWORD, DWORD, struct gl_lease *);
+  extern void w32_user_display_release(uintptr_t);
+  user.target = w32_user_gl_target;
+  user.damage = w32_user_gl_damage;
+  user.lease = w32_user_display_lease;
+  user.release = w32_user_display_release;
+#else
   void *m = GetModuleHandleA("user32.dll");
   if (!m)
     return;
@@ -26,21 +37,22 @@ static void bind_user(void) {
   user.damage = GetProcAddress(m, "w32_user_gl_damage");
   user.lease = GetProcAddress(m, "w32_user_display_lease");
   user.release = GetProcAddress(m, "w32_user_display_release");
-}
 #endif
+}
 int gl_target(HDC dc, unsigned *w, unsigned *h, unsigned *window) {
   DWORD dw = 0, dh = 0;
   *window = 0;
-#ifndef W32_HOST_MODEL
   bind_user();
   DWORD values[4];
-  if (user.target && user.target(dc, values)) {
+  int result = user.target ? user.target(dc, values) : 0;
+  if (result < 0)
+    return 0;
+  if (result) {
     *w = values[0];
     *h = values[1];
     *window = values[2];
     return 1;
   }
-#endif
   if (!w32_gdi_gl_size(dc, &dw, &dh))
     return 0;
   *w = dw;
@@ -48,7 +60,6 @@ int gl_target(HDC dc, unsigned *w, unsigned *h, unsigned *window) {
   return 1;
 }
 void gl_render_size(unsigned *w, unsigned *h) {
-#ifndef W32_HOST_MODEL
   const struct ciuki_w32_compat *p = w32_shim_current();
   if (!p || !(p->mask & W32_SHIM_BIT(W32_SH_DDRAW_SCALE)))
     return;
@@ -65,34 +76,44 @@ void gl_render_size(unsigned *w, unsigned *h) {
       *h = height;
       return;
     }
-#else
-  (void)w;
-  (void)h;
-#endif
 }
 void gl_release_present(struct gl_context *c) {
-#ifndef W32_HOST_MODEL
   bind_user();
   if (c->leased_window && user.release)
     user.release(c->leased_window);
   c->leased_window = 0;
-#else
-  (void)c;
-#endif
 }
-static void size_log(struct gl_context *c, unsigned dw, unsigned dh) {
+static void display_size(unsigned *dw, unsigned *dh) {
 #ifndef W32_HOST_MODEL
   struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION,
                                     .size = sizeof(info)};
   if ((int32_t)w32r_gate(CIUKI_SYS_DISPLAY, CIUKI_DISPLAY_QUERY,
                          (DWORD)(uintptr_t)&info, 0) >= 0) {
-    dw = info.width;
-    dh = info.height;
+    *dw = info.width;
+    *dh = info.height;
   } else {
-    dw = 0;
-    dh = 0;
+    *dw = 0;
+    *dh = 0;
   }
+#else
+  (void)dw;
+  (void)dh;
 #endif
+}
+BOOL W32API CiukiGLGetSizes(HDC dc, DWORD *values) {
+  GL_GUARD;
+  struct gl_context *c = gl_current();
+  if (!c || c->dc != dc || !values || !gl_refresh_target(c, dc))
+    return 0;
+  values[0] = c->sw.width; values[1] = c->sw.height;
+  values[2] = c->drawable_width; values[3] = c->drawable_height;
+  unsigned dw = values[2], dh = values[3];
+  display_size(&dw, &dh);
+  values[4] = dw; values[5] = dh;
+  return 1;
+}
+static void size_log(struct gl_context *c, unsigned dw, unsigned dh) {
+  display_size(&dw, &dh);
   const struct w32_services *s = w32_get_services();
   if (!s->diagnostic || c->frames)
     return;
@@ -121,12 +142,13 @@ static void size_log(struct gl_context *c, unsigned dw, unsigned dh) {
 }
 BOOL gl_present(struct gl_context *c) {
   unsigned w, h, window;
-  if (!gl_target(c->dc, &w, &h, &window))
+  if (!gl_refresh_target(c, c->dc) || !gl_target(c->dc, &w, &h, &window))
     return 0;
-#ifndef W32_HOST_MODEL
   bind_user();
   DWORD values[4];
-  if (user.target && user.target(c->dc, values) && values[3]) {
+  if (user.target && user.target(c->dc, values) > 0 && values[3]) {
+    if (c->leased_window && c->leased_window != window)
+      gl_release_present(c);
     if (!user.lease)
       return 0;
     struct gl_lease lease = {0};
@@ -156,8 +178,14 @@ BOOL gl_present(struct gl_context *c) {
                                        .token = lease.token,
                                        .generation = lease.generation,
                                        .address = (DWORD)(uintptr_t)copy};
-    int32_t result =
+    int32_t result;
+#ifdef W32_HOST_MODEL
+    extern int32_t gl_host_display_frame(struct ciuki_w32_display_args *, const void *);
+    result = gl_host_display_frame(&a, copy);
+#else
+    result =
         (int32_t)w32r_gate(CIUKI_SYS_W32, (DWORD)(uintptr_t)&a, sizeof(a), 0);
+#endif
     gl_dealloc(copy);
     if (result < 0 || a.error || !a.result)
       return 0;
@@ -165,7 +193,8 @@ BOOL gl_present(struct gl_context *c) {
     size_log(c, w, h);
     return 1;
   }
-#endif
+  /* LEASE(0) is synchronous: composition must be restored before PRESENT. */
+  gl_release_present(c);
   BITMAPINFO info = {.bmiHeader = {.biSize = 40,
                                    .biWidth = c->sw.width,
                                    .biHeight = -(LONG)c->sw.height,
@@ -174,10 +203,8 @@ BOOL gl_present(struct gl_context *c) {
   if (!StretchDIBits(c->dc, 0, 0, w, h, 0, 0, c->sw.width, c->sw.height,
                      c->sw.color, &info, DIB_RGB_COLORS, SRCCOPY))
     return 0;
-#ifndef W32_HOST_MODEL
   if (window && (!user.damage || !user.damage(c->dc)))
     return 0;
-#endif
   size_log(c, w, h);
   return 1;
 }

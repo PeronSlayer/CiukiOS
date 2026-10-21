@@ -66,8 +66,10 @@ struct gl_context {
   unsigned compile_begin, compile_failed;
   unsigned error, compiling, compile_mode, replaying, list_base, call_depth;
   int viewport[4], scissor[4], pack[6], unpack[6];
+  unsigned drawable_width, drawable_height;
   struct gl_array array[7];
   int fog_mode;
+  int compression_hint;
   float fog_density, fog_start, fog_end;
   float range[2], clear[4], clear_depth, alpha_ref, offset_factor, offset_units;
   float texcoord[2][4];
@@ -81,6 +83,10 @@ struct gl_context {
   HBITMAP back;
 };
 int gl_target(HDC, unsigned *, unsigned *, unsigned *);
+int gl_refresh_target(struct gl_context *, HDC);
+void gl_window_state(struct gl_context *);
+int gl_window_coord(struct gl_context *, double, int);
+unsigned gl_read_color(struct gl_context *, int, int);
 void gl_render_size(unsigned *, unsigned *);
 void gl_release_present(struct gl_context *);
 BOOL gl_present(struct gl_context *);
@@ -116,5 +122,7 @@ int gl_pixel_bytes(int, int);
 unsigned gl_pixel_get(const uint8_t *, int, int);
 void gl_pixel_put(uint8_t *, int, int, unsigned);
 unsigned gl_pixel_stride(int, int, int, int);
+struct gl_bitmap_layout { unsigned pitch, bytes; };
+int gl_bitmap_layout(int, int, const int[6], struct gl_bitmap_layout *);
 void *gl_extension(const char *);
 #endif

@@ -304,6 +304,64 @@ static int interpolate(int64_t a, int64_t b, int64_t c, int x, int y, int z,
                        int64_t area) {
   return (int)((a * x + b * y + c * z) / area);
 }
+/* Reduce reconstructed 16.16 coordinates before narrowing. In particular a
+ * positive coordinate beyond INT_MAX must still clamp to the positive edge. */
+static int coordinate(int64_t uv, int wrap_mode) {
+  if (wrap_mode == GL_REPEAT) {
+    uv %= 65536;
+    if (uv < 0) uv += 65536;
+    return (int)uv;
+  }
+  return uv < 0 ? 0 : uv > 65536 ? 65536 : (int)uv;
+}
+struct gradient { int64_t u[2], q; };
+static int64_t gradient(int a, int b, int c, int x, int y, int z, int64_t area) {
+  return ((int64_t)(b - a) * (z - x) - (int64_t)(c - a) * (y - x)) * 16 / area;
+}
+/* Saturating n*2^shift/d, without a wide product. d <= 2^54; doubling
+ * remainders is safe. The saturation is the largest useful texture footprint. */
+static unsigned ratio(uint64_t n, uint64_t d, unsigned shift) {
+  const unsigned limit = 2048 * 256;
+  uint64_t whole = n / d, rem = n % d;
+  if (whole >= limit) return limit;
+  while (shift--) {
+    whole = whole * 2 + (rem * 2 >= d);
+    rem = rem * 2 % d;
+    if (whole >= limit) return limit;
+  }
+  return (unsigned)whole;
+}
+static int mip_lod(const struct sw_texture *t, const struct gradient g[2],
+                   const int uv[2], int q) {
+  if (!q) return 11 * 256;
+  unsigned rho = 0;
+  uint64_t den = (uint64_t)((int64_t)q * q);
+  for (int axis = 0; axis < 2; axis++)
+    for (int k = 0; k < (t->target == GL_TEXTURE_1D ? 1 : 2); k++) {
+      int64_t du = g[axis].u[k], dq = g[axis].q;
+      unsigned shift = 12, size = k ? t->image[0].h : t->image[0].w;
+      /* Sliver triangles may have enormous per-pixel gradients. Scale both
+       * gradients together before the determinant, restore scale in ratio. */
+      while (du > (1LL << 30) || du < -(1LL << 30) ||
+             dq > (1LL << 30) || dq < -(1LL << 30)) {
+        du /= 2; dq /= 2; shift++;
+      }
+      while (size > 1) { size >>= 1; shift++; }
+      int64_t det = du * q - (int64_t)uv[k] * dq;
+      unsigned r = ratio(det < 0 ? (uint64_t)-det : (uint64_t)det, den, shift);
+      if (r > rho) rho = r;
+    }
+  if (rho <= 256) return 0;
+  int lod = 0;
+  while (rho >= 512) { rho >>= 1; lod += 256; }
+  /* Binary log in 8 fractional bits, integer only. */
+  uint64_t n = (uint64_t)rho << 8;
+  for (int bit = 128; bit; bit >>= 1) {
+    n = n * n >> 16;
+    if (n >= 131072) { n >>= 1; lod += bit; }
+  }
+  return lod;
+}
 void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
                  const struct sw_vertex *b, const struct sw_vertex *c) {
   int64_t area = edge(a, b, c->x, c->y);
@@ -331,20 +389,20 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
                               : (b->y > c->y ? b->y : c->y)) >>
                      4,
                  0, (int)s->height - 1);
-  int lod[2] = {0, 0}, textured[2];
+  int textured[2];
+  struct gradient gradients[2][2] = {0};
   for (int t = 0; t < 2; t++)
     textured[t] = s->unit[t].enabled && complete(s->unit[t].texture);
   for (int t = 0; t < 2; t++)
     if (textured[t]) {
-      const struct sw_texture *tex = s->unit[t].texture;
-      int span = x1 - x0 + y1 - y0 + 1;
-      int64_t du = (int64_t)ab(a->uv[t][0] - b->uv[t][0]) * tex->image[0].w +
-                   (int64_t)ab(a->uv[t][1] - b->uv[t][1]) * tex->image[0].h;
-      int64_t rate = du / (span * 65536);
-      while (rate > 1 && lod[t] < 11 * 256) {
-        lod[t] += 256;
-        rate >>= 1;
+      for (int k = 0; k < 2; k++) {
+        gradients[t][0].u[k] = gradient(a->uv[t][k], b->uv[t][k], c->uv[t][k],
+                                       a->y, b->y, c->y, area);
+        gradients[t][1].u[k] = -gradient(a->uv[t][k], b->uv[t][k], c->uv[t][k],
+                                        a->x, b->x, c->x, area);
       }
+      gradients[t][0].q = gradient(a->qw[t], b->qw[t], c->qw[t], a->y, b->y, c->y, area);
+      gradients[t][1].q = -gradient(a->qw[t], b->qw[t], c->qw[t], a->x, b->x, c->x, area);
     }
   /* Incremental edges, pixel centers, half-open shared edges. */
   int64_t row[3] = {edge(b, c, x0 * 16 + 8, y0 * 16 + 8),
@@ -361,16 +419,19 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
         for (int k = 0; k < 4; k++)
           p[k] = col[k] = interpolate(e[0], e[1], e[2], a->color[k],
                                       b->color[k], c->color[k], area);
-        int iw = interpolate(e[0], e[1], e[2], a->iw, b->iw, c->iw, area);
         for (int t = 0; t < 2; t++)
-          if (textured[t] && iw > 0) {
-            int uv[2], tex[4];
+          if (textured[t]) {
+            int q = interpolate(e[0], e[1], e[2], a->qw[t], b->qw[t], c->qw[t], area);
+            int uv[2], projected[2], tex[4];
             for (int k = 0; k < 2; k++) {
-              int q = interpolate(e[0], e[1], e[2], a->uv[t][k], b->uv[t][k],
+              uv[k] = interpolate(e[0], e[1], e[2], a->uv[t][k], b->uv[t][k],
                                   c->uv[t][k], area);
-              uv[k] = (int)((int64_t)q * 1048576 / iw);
+              projected[k] = coordinate(q ? (int64_t)uv[k] * 1048576 / q : 0,
+                  k ? s->unit[t].texture->wrap_t : s->unit[t].texture->wrap_s);
             }
-            sample(s->unit[t].texture, uv[0], uv[1], lod[t], tex);
+            const struct sw_texture *texture = s->unit[t].texture;
+            int lod = texture->min == texture->mag ? 0 : mip_lod(texture, gradients[t], uv, q);
+            sample(s->unit[t].texture, projected[0], projected[1], lod, tex);
             if (sw_base_format(s->unit[t].texture->image[0].internal) ==
                 GL_ALPHA)
               tex[0] = tex[1] = tex[2] = 255;

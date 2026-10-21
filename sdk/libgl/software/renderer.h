@@ -22,7 +22,7 @@ struct sw_unit {
   struct sw_texture *texture;
 };
 struct sw_vertex {
-  int x, y, z, iw, uv[2][2], color[4], fog;
+  int x, y, z, iw, uv[2][2], qw[2], color[4], fog;
 };
 struct sw_state {
   unsigned width, height;
@@ -34,8 +34,8 @@ struct sw_state {
   int scissor, box[4], fog, fog_color, offset;
   struct sw_unit unit[2];
 };
-/* Coordinates: 4 fractional bits, UV/W 16, reciprocal-W 20. Color 0..255.
- * All triangles are clipped before entry; dimensions <=2048; |UV/W|<=2^27.
+/* Coordinates: 4 fractional bits, S/W,T/W 16, Q/W and reciprocal-W 20.
+ * Color 0..255. Clipped before entry; dimensions <=2048; stored UV/Q <=2^27.
  * Edge*interpolant accumulation fits signed 64 bits at these bounds. */
 unsigned sw_base_format(unsigned);
 uint32_t sw_color_format(const struct sw_state *, uint32_t);

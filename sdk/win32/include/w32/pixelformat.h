@@ -30,6 +30,9 @@ int W32API DescribePixelFormat(HDC, int, unsigned, PIXELFORMATDESCRIPTOR *);
 int W32API GetPixelFormat(HDC);
 BOOL W32API SetPixelFormat(HDC, int, const PIXELFORMATDESCRIPTOR *);
 BOOL W32API SwapBuffers(HDC);
+/* Ciuki software-renderer diagnostics: render W/H, drawable W/H, display W/H.
+ * Requires this DC's context current on the calling thread. */
+BOOL W32API CiukiGLGetSizes(HDC, DWORD *);
 DWORD W32API w32_gdi_gl_glyph(HDC, DWORD, BOOL, GLYPHMETRICS *, DWORD, void *);
 /* Value-only surface query; no backing pointer escapes GDI's lock. */
 BOOL W32API w32_gdi_gl_size(HDC, DWORD *, DWORD *);

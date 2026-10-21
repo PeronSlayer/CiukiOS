@@ -17,6 +17,8 @@ static const char *const extensions[] = {
 #include "extensions.inc"
 };
 void gl_amendment_tests(HDC);
+void gl_review_tests(HDC);
+void gl_fixture_tests(void);
 static HDC dc;
 static HGLRC rc;
 static unsigned pixels[W32_GL_WIDTH * W32_GL_HEIGHT];
@@ -252,6 +254,7 @@ int main(int argc, char **argv) {
   lifecycle();
   upload();
   gl_amendment_tests(dc);
+  gl_review_tests(dc);
   for (unsigned scene = 0; scene < W32_GL_SCENES; scene++) {
     uint64_t start = now();
     unsigned count = benchmark ? 10 : 1;
@@ -266,6 +269,8 @@ int main(int argc, char **argv) {
     assert(SwapBuffers(dc));
   }
   fonts();
+  gl_fixture_tests();
+  assert(wglMakeCurrent(dc,rc));
   assert(wglMakeCurrent(0, 0));
   assert(wglDeleteContext(rc));
   assert(!wglDeleteContext(rc));

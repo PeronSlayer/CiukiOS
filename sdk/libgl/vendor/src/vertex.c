@@ -254,6 +254,8 @@ void glopVertex(GLParam* p) {
 		}
 	}
 	v->tex_coord1 = c->current_tex_coord1;
+ if(c->software_triangle)
+  c->software_flat_color = c->begin_type == GL_POLYGON ? c->vertex[0].color : v->color;
  if(c->software_vertex) c->software_vertex(c,v);
  else if(c->software_triangle){if(c->software_texture_matrix[0])gl_M4_MulV4(&v->tex_coord,c->software_texture_matrix[0],&c->current_tex_coord);if(c->software_texture_matrix[1])gl_M4_MulV4(&v->tex_coord1,c->software_texture_matrix[1],&c->current_tex_coord1);}
  if(c->software_triangle)gl_M4_MulV4(&v->ec,c->matrix_stack_ptr[0],&v->coord);

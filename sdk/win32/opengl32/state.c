@@ -120,7 +120,8 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     }
     if (mask & GL_SCISSOR_BIT) {
       RESTORE(sw.scissor);
-      COPY(sw.box);
+      COPY(scissor);
+      gl_window_state(c);
     }
     if (mask & GL_FOG_BIT) {
       RESTORE(sw.fog);
@@ -172,6 +173,8 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     }
     if (mask & GL_LIST_BIT)
       RESTORE(list_base);
+    if (mask & GL_HINT_BIT)
+      RESTORE(compression_hint);
     if (mask & GL_PIXEL_MODE_BIT)
       COPY(zoom);
     if (mask & GL_POINT_BIT)

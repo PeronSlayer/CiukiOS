@@ -19,10 +19,10 @@ static int convert(struct gl_context *c, GLVertex *v, struct sw_vertex *out) {
     return 0;
   float x = v->pc.X * iw, y = v->pc.Y * iw, z = v->pc.Z * iw;
   out->x =
-      clampi((int)((c->viewport[0] + (x + 1) * c->viewport[2] * 0.5f) * 16),
+      clampi(gl_window_coord(c, (c->viewport[0] + (x + 1) * c->viewport[2] * 0.5f) * 16, 0),
              -32768, 65536);
   out->y =
-      clampi((int)((c->viewport[1] + (y + 1) * c->viewport[3] * 0.5f) * 16),
+      clampi(gl_window_coord(c, (c->viewport[1] + (y + 1) * c->viewport[3] * 0.5f) * 16, 1),
              -32768, 65536);
   out->z = (int)(compat_clamp(c->range[0] +
                                   (z + 1) * 0.5f * (c->range[1] - c->range[0]),
@@ -33,12 +33,10 @@ static int convert(struct gl_context *c, GLVertex *v, struct sw_vertex *out) {
     out->color[k] = (int)(compat_clamp(v->color.v[k], 0, 1) * 255);
   for (int t = 0; t < 2; t++) {
     V4 *uv = t ? &v->tex_coord1 : &v->tex_coord;
-    float q = uv->v[3];
-    if (q == 0)
-      q = 1;
+    out->qw[t] = (int)(compat_clamp(uv->v[3] * iw, -128, 128) * 1048576);
     for (int k = 0; k < 2; k++)
       out->uv[t][k] =
-          (int)(compat_clamp(uv->v[k] / q * iw, -2048, 2048) * 65536);
+          (int)(compat_clamp(uv->v[k] * iw, -2048, 2048) * 65536);
   }
   float dist = v->ec.Z;
   if (dist < 0)
@@ -67,7 +65,7 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
   if (tiny->current_shade_model == GL_FLAT)
     for (int i = 0; i < 2; i++)
       for (int k = 0; k < 4; k++)
-        v[i].color[k] = v[2].color[k];
+        v[i].color[k] = v[2].color[k] = (int)(compat_clamp(tiny->software_flat_color.v[k], 0, 1) * 255);
   c->sw.offset = 0;
   if (tiny->offset_states & TGL_OFFSET_FILL) {
     int64_t area = (int64_t)(v[1].x - v[0].x) * (v[2].y - v[0].y) -
@@ -90,11 +88,15 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
     }
   }
   sw_triangle(&c->sw, v, v + 1, v + 2);
+  c->sw.offset = 0;
 }
 void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
   struct gl_context *c = tiny->software_state;
+  c->sw.offset = 0;
   int point = a == b;
   GLVertex ca = *a, cb = *b;
+  if (tiny->current_shade_model == GL_FLAT)
+    ca.color = cb.color = tiny->software_flat_color;
   if (!gl_clip_line(c, &ca, &cb))
     return;
   a = &ca;
@@ -149,15 +151,14 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
       gl_error(c, GL_INVALID_VALUE);
       return 1;
     }
-    unsigned row = gl_pixel_stride(w, GL_COLOR_INDEX, GL_BITMAP, c->unpack[0]);
-    uint64_t n = (uint64_t)(h ? h - 1 + c->unpack[2] : 0) * row +
-                 (w ? (unsigned)(c->unpack[3] + w + 7) / 8 : 0);
-    if (n > 16 * 1024 * 1024) {
-      gl_error(c, GL_OUT_OF_MEMORY);
+    struct gl_bitmap_layout layout;
+    unsigned error = gl_bitmap_layout(w, h, c->unpack, &layout);
+    if (error) {
+      gl_error(c, error);
       c->compile_failed = 1;
       return 1;
     }
-    bytes = a[6].p ? (unsigned)n : 0;
+    bytes = a[6].p ? layout.bytes : 0;
     pointer = 6;
     break;
   }
@@ -526,7 +527,7 @@ static int get(struct gl_context *c, int name, double *v) {
     return 4;
   case GL_SCISSOR_BOX:
     for (int k = 0; k < 4; k++)
-      v[k] = c->sw.box[k];
+      v[k] = c->scissor[k];
     return 4;
   case GL_CURRENT_COLOR:
     for (int k = 0; k < 4; k++)
@@ -545,6 +546,9 @@ static int get(struct gl_context *c, int name, double *v) {
   case GL_MAX_VIEWPORT_DIMS:
     v[0] = v[1] = 2048;
     return 2;
+  case GL_TEXTURE_COMPRESSION_HINT_ARB:
+    *v = c->compression_hint;
+    break;
   case GL_CURRENT_NORMAL:
     for (int k = 0; k < 3; k++)
       v[k] = c->tiny.current_normal.v[k];
@@ -755,6 +759,11 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   struct gl_context *c = gl_current();
   if (!c)
     return result;
+  if (!c->tiny.in_begin && id != ID_glGetError &&
+      !gl_refresh_target(c, c->dc)) {
+    gl_error(c, GL_INVALID_OPERATION);
+    return result;
+  }
   gl_selected_context = &c->tiny;
   struct gl_context *selected __attribute__((cleanup(selected_texture_done))) =
       c;
@@ -1329,9 +1338,11 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   case ID_glScissor:
     if (I(2) < 0 || I(3) < 0 || I(2) > 65536 || I(3) > 65536)
       gl_error(c, GL_INVALID_VALUE);
-    else
+    else {
       for (int k = 0; k < 4; k++)
-        c->sw.box[k] = clampi(I(k), -65536, 65536);
+        c->scissor[k] = clampi(I(k), -65536, 65536);
+      gl_window_state(c);
+    }
     break;
   case ID_glEnable:
   case ID_glDisable: {
@@ -1606,6 +1617,8 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     break;
   }
   case ID_glHint:
+    if (I(0) == GL_TEXTURE_COMPRESSION_HINT_ARB)
+      c->compression_hint = I(1);
     break;
   case ID_glClearStencil:
   case ID_glStencilFunc:

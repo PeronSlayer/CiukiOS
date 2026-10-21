@@ -385,7 +385,8 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
   case ID_glHint:
     if (I(0) != GL_PERSPECTIVE_CORRECTION_HINT &&
         I(0) != GL_POINT_SMOOTH_HINT && I(0) != GL_LINE_SMOOTH_HINT &&
-        I(0) != GL_POLYGON_SMOOTH_HINT && I(0) != GL_FOG_HINT)
+        I(0) != GL_POLYGON_SMOOTH_HINT && I(0) != GL_FOG_HINT &&
+        I(0) != GL_TEXTURE_COMPRESSION_HINT_ARB)
       return GL_INVALID_ENUM;
     return I(1) == GL_DONT_CARE || I(1) == GL_FASTEST || I(1) == GL_NICEST
                ? 0

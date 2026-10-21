@@ -59,6 +59,15 @@ void gl_texture_cleanup(struct gl_context *c) {
 }
 static int dimension(int n) { return n > 0 && n <= 2048 && !(n & (n - 1)); }
 static int target(int t) { return t == GL_TEXTURE_2D || t == GL_TEXTURE_1D; }
+static unsigned internal_pixel(unsigned pixel, unsigned internal) {
+  unsigned base = sw_base_format(internal), lum = (pixel >> 16) & 255;
+  if (base == GL_RGB) return pixel | 0xff000000;
+  if (base == GL_ALPHA) return pixel & 0xff000000;
+  if (base == GL_LUMINANCE || base == GL_LUMINANCE_ALPHA || base == GL_INTENSITY)
+    return lum * 0x010101 | (base == GL_LUMINANCE ? 0xff000000
+                         : base == GL_INTENSITY ? lum << 24 : pixel & 0xff000000);
+  return pixel;
+}
 static void image(struct gl_context *c, struct sw_texture *t, int level,
                   int internal, int w, int h, int border, int f, int type,
                   const void *data, int compressed, unsigned n) {
@@ -112,18 +121,7 @@ static void image(struct gl_context *c, struct sw_texture *t, int level,
     for (int y = 0; y < h; y++)
       for (int x = 0; x < w; x++) {
         unsigned pixel = gl_pixel_get(p + y * pitch + x * bytes, f, type);
-        unsigned base = sw_base_format(internal), lum = (pixel >> 16) & 255;
-        if (base == GL_RGB)
-          pixel |= 0xff000000;
-        else if (base == GL_ALPHA)
-          pixel &= 0xff000000;
-        else if (base == GL_LUMINANCE || base == GL_LUMINANCE_ALPHA ||
-                 base == GL_INTENSITY)
-          pixel =
-              lum * 0x010101 | (base == GL_LUMINANCE   ? 0xff000000
-                                : base == GL_INTENSITY ? lum << 24
-                                                       : pixel & 0xff000000);
-        next.pixels[y * w + x] = pixel;
+        next.pixels[y * w + x] = internal_pixel(pixel, internal);
       }
   }
   gl_dealloc(t->image[level].pixels);
@@ -155,7 +153,7 @@ static void subimage(struct gl_context *c, struct sw_texture *t, int level,
   for (int j = 0; j < h; j++)
     for (int i = 0; i < w; i++)
       m->pixels[(y + j) * m->w + x + i] =
-          gl_pixel_get(p + j * pitch + i * bytes, f, type);
+          internal_pixel(gl_pixel_get(p + j * pitch + i * bytes, f, type), m->internal);
   gl_dealloc(m->compressed);
   m->compressed = 0;
   m->bytes = m->format = 0;

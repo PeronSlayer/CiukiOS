@@ -1400,6 +1400,8 @@ static void test_palette(void) {
          "every top-level window, AnimatePalette\n");
 }
 extern int host_pixel_format(DWORD,int);
+extern BOOL W32API w32_user_gl_target(DWORD,DWORD *);
+extern BOOL W32API w32_user_gl_damage(DWORD);
 static void test_production_gdi(void) {
   CHECK(host_gdi_proc && host_ddraw_seam);
   /* An old v1 table ends before the v2 tail. ASan guards its exact size. */
@@ -1429,6 +1431,15 @@ static void test_production_gdi(void) {
   first_dc=GetDC(windows[0]);
   CHECK(first_dc && host_pixel_format(U32_PTR(first_dc),0)==1);
   CHECK(!host_pixel_format(U32_PTR(first_dc),1));
+  DWORD target[4]={0};
+  CHECK(w32_user_gl_target(U32_PTR(first_dc),target)==1 && target[2]==U32_PTR(windows[0]));
+  ui_kernel_switch(1);
+  CHECK(w32_user_gl_target(U32_PTR(first_dc),target)==-1 && target[2]==U32_PTR(windows[0]));
+  ui_kernel_switch(0);
+  unsigned presents=sent_count(DESK_V3_PRESENT);
+  CHECK(w32_user_gl_damage(U32_PTR(first_dc)) && sent_count(DESK_V3_PRESENT)==presents+1);
+  reject_opcode=DESK_V3_PRESENT;
+  CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
   test_cf_bitmap();

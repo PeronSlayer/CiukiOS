@@ -1,5 +1,63 @@
 # Win32 software OpenGL (f7-07)
 
+## Amendment 3 cross-review decisions (2026-10-21)
+
+Primary sources rechecked before the fixes:
+[GL 1.1](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf),
+§§2.13.7–8, 3.5–3.8 and 4.3 (provoking colors before clipping,
+projective S/W, T/W, Q/W interpolation, texture derivatives, bitmap unpack
+layout, internal image formats, and pixel coordinates);
+[ARB_texture_compression](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_texture_compression.txt)
+(the queryable compression hint, initially DONT_CARE);
+[wglMakeCurrent](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglmakecurrent)
+(exclusive current-thread ownership and compatible drawable rebinding), and
+[SetPixelFormat](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setpixelformat)
+(window lifetime). Wine's retained declarations remain ABI references only.
+
+The reviewed implementation loses PRESENT geometry before transport, captures
+bitmaps with a different pitch from replay, retains an exclusive lease on the
+windowed path, and confuses drawable coordinates with the scaled allocation.
+Correct those paths and qualify them through production transport/presentation
+host adapters. Keep drawable and render sizes separate; application viewport,
+scissor, raster and readback coordinates stay in drawable space and map to the
+backing allocation. Refresh that allocation on resize and compatible rebinding.
+USER's owner-thread transport cannot marshal GL swaps from workers today:
+explicitly reject window-context binding from a different thread, including a
+released context, rather than let a window DC fall through to generic GDI.
+Memory DC contexts retain released-context migration between threads.
+
+Keep texture coordinates and mip gradients wide until wrap/clamp reduction;
+interpolate per-unit Q/W and calculate perspective-correct, order-independent
+screen derivatives with fractional LOD. Preserve primitive flat color before
+splitting/clipping, reuse image-format conversion for subimages, and scope
+depth offset to each polygon operation. Guest scene expectations must be
+qualified against exact host checksums; dimensions and frame totals must
+come from actual allocation and successful completed swaps. Host evidence
+does not qualify guest compositor timing or hardware.
+
+The retained fragment representation bounds S/W and T/W to ±2048 (16
+fractional bits) and Q/W to ±128 (20 fractional bits), so every stored
+interpolant has magnitude at most 2^27. W retains its existing positive
+transform bounds. Barycentric accumulation and reconstructed UV use signed
+64-bit arithmetic; repeat/clamp reduction precedes any narrowing. Integer
+quotient-rule gradients use the maximum absolute screen derivative as the
+texture footprint approximation. A bounded binary logarithm retains eight
+fractional LOD bits; very large footprints saturate at the largest supported
+mip. Identical min/mag filters need no LOD calculation.
+
+`CiukiGLGetSizes` is a value-only diagnostic export of opengl32: six DWORDs
+containing render, drawable and physical display width/height pairs for the
+current context/DC. It adds no advertised GL extension. The fixture uses it
+in the version-2 result block, retaining its 144-byte size and result address.
+It requests an exact 320×240 client via AdjustWindowRect, and both the
+controller and suite require the seven unchanged, host-qualified checksums.
+The guest case remains authored and unrun. Host tests exercise the actual
+fixture body (including failed swaps), USER's PRESENT RPC and target query,
+du3_request, server receipt, compositor failure/retry, lease restoration and
+client teardown. Transport/compositor tests substitute kernel value boundaries.
+The fixture-body replay supplies deterministic USER startup, font-success and
+process-exit boundaries; production glyph conversion is qualified separately.
+
 ## Primary sources and repository comparison
 
 Research, 2026-10-20; primary sources rechecked 2026-10-21:

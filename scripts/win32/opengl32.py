@@ -49,7 +49,7 @@ def build_exercise(out,dlls=None):
   for symbol,arity in re.findall(r'\bU _([A-Za-z][A-Za-z0-9_]*)@(\d+)\s*$',nm,re.M):
    if symbol in ('ExitProcess','VirtualAlloc','Sleep'):dll='kernel32'
    elif symbol in ('ChoosePixelFormat','SetPixelFormat','DescribePixelFormat','SwapBuffers'):dll='gdi32'
-   elif symbol.startswith(('gl','wgl')):dll='opengl32'
+   elif symbol.startswith(('gl','wgl')) or symbol=='CiukiGLGetSizes':dll='opengl32'
    else:dll='user32'
    table[dll].add(f'{symbol}@{arity}')
  libraries=[]

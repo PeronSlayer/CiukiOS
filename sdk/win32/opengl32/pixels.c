@@ -34,6 +34,20 @@ unsigned gl_pixel_stride(int w, int f, int t, int align) {
   unsigned n = t == GL_BITMAP ? (w + 7) / 8 : w * b;
   return (n + align - 1) & ~(unsigned)(align - 1);
 }
+/* The retained command and execution use the same highest addressed byte,
+ * including partial-byte skips and rows shorter than the bitmap itself. */
+int gl_bitmap_layout(int w, int h, const int state[6], struct gl_bitmap_layout *l) {
+  if (w < 0 || h < 0 || w > 2048 || h > 2048)
+    return GL_INVALID_VALUE;
+  l->pitch = gl_pixel_stride(state[1] ? state[1] : w, GL_COLOR_INDEX,
+                             GL_BITMAP, state[0]);
+  uint64_t n = w && h ? ((uint64_t)h - 1 + state[2]) * l->pitch +
+                            ((uint64_t)state[3] + w + 7) / 8 : 0;
+  if (n > 16 * 1024 * 1024)
+    return GL_OUT_OF_MEMORY;
+  l->bytes = (unsigned)n;
+  return 0;
+}
 unsigned gl_pixel_get(const uint8_t *p, int f, int t) {
   unsigned r = 0, g = 0, b = 0, a = 255;
   if (t == GL_UNSIGNED_SHORT_5_6_5) {
@@ -119,9 +133,24 @@ void gl_pixel_put(uint8_t *p, int f, int t, unsigned c) {
     break;
   }
 }
+static void pixel_rect(struct gl_context *c, double x0, double y0, double x1,
+                       double y1, const int color[4]) {
+  int left = gl_window_coord(c, x0, 0), right = gl_window_coord(c, x1, 0),
+      bottom = gl_window_coord(c, y0, 1), top = gl_window_coord(c, y1, 1);
+  if (right < left) { int n = right; right = left; left = n; }
+  if (top < bottom) { int n = top; top = bottom; bottom = n; }
+  if (left < 0) left = 0;
+  if (bottom < 0) bottom = 0;
+  if (right > (int)c->sw.width) right = c->sw.width;
+  if (top > (int)c->sw.height) top = c->sw.height;
+  for (int y = bottom; y < top; y++)
+    for (int x = left; x < right; x++)
+      sw_fragment(&c->sw, x, y, (int)c->raster[2], color);
+}
 void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
                union gl_arg *r) {
   (void)r;
+  c->sw.offset = 0;
   if (id == ID_glPixelZoom) {
     c->zoom[0] = (float)a[0].f;
     c->zoom[1] = (float)a[1].f;
@@ -138,17 +167,20 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
     int col[4];
     for (int k = 0; k < 4; k++)
       col[k] = (int)(c->raster_color[k] * 255);
-    unsigned pitch = gl_pixel_stride(c->unpack[1] ? c->unpack[1] : w,
-                                     GL_COLOR_INDEX, GL_BITMAP, c->unpack[0]);
+    struct gl_bitmap_layout layout;
+    unsigned error = gl_bitmap_layout(w, h, c->unpack, &layout);
+    if (error) { gl_error(c, error); return; }
+    unsigned pitch = layout.pitch;
     const uint8_t *p = a[6].p;
     if (p)
       for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
           if (p[(y + c->unpack[2]) * pitch + (x + c->unpack[3]) / 8] &
               (128 >> ((x + c->unpack[3]) & 7)))
-            sw_fragment(&c->sw, (int)(c->raster[0] - a[2].f) + x,
-                        (int)(c->raster[1] - a[3].f) + y, (int)c->raster[2],
-                        col);
+            pixel_rect(c, c->raster[0] - a[2].f + x,
+                       c->raster[1] - a[3].f + y,
+                       c->raster[0] - a[2].f + x + 1,
+                       c->raster[1] - a[3].f + y + 1, col);
     c->raster[0] += (float)a[4].f;
     c->raster[1] += (float)a[5].f;
     return;
@@ -172,18 +204,14 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
     }
     for (int j = 0; j < h; j++)
       for (int i = 0; i < w; i++)
-        p[j * w + i] =
-            x + i >= 0 && y + j >= 0 && (unsigned)(x + i) < c->sw.width &&
-                    (unsigned)(y + j) < c->sw.height
-                ? c->sw
-                      .color[(c->sw.height - 1 - (y + j)) * c->sw.width + x + i]
-                : 0;
+        p[j * w + i] = gl_read_color(c, x + i, y + j);
     for (int j = 0; j < h; j++)
       for (int i = 0; i < w; i++) {
         unsigned pix = p[j * w + i];
         int color[4] = {(pix >> 16) & 255, (pix >> 8) & 255, pix & 255, 255};
-        sw_fragment(&c->sw, (int)c->raster[0] + i, (int)c->raster[1] + j,
-                    (int)c->raster[2], color);
+        pixel_rect(c, c->raster[0] + i * c->zoom[0], c->raster[1] + j * c->zoom[1],
+                   c->raster[0] + (i + 1) * c->zoom[0],
+                   c->raster[1] + (j + 1) * c->zoom[1], color);
       }
     gl_dealloc(p);
     return;
@@ -213,41 +241,15 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
     for (int x = 0; x < w; x++) {
       if (read) {
         int px = (int)a[0].i + x, py = (int)a[1].i + y;
-        unsigned color = 0xff000000;
-        if (px >= 0 && py >= 0 && (unsigned)px < c->sw.width &&
-            (unsigned)py < c->sw.height)
-          color = c->sw.color[(c->sw.height - 1 - py) * c->sw.width + px] |
-                  0xff000000;
+        unsigned color = gl_read_color(c, px, py);
         gl_pixel_put(p + y * pitch + x * bytes, f, t, color);
       } else if (c->raster_valid) {
         unsigned col = gl_pixel_get(p + y * pitch + x * bytes, f, t);
         int color[4] = {(col >> 16) & 255, (col >> 8) & 255, col & 255,
                         col >> 24};
-        int x0 = (int)(c->raster[0] + x * c->zoom[0]),
-            x1 = (int)(c->raster[0] + (x + 1) * c->zoom[0]),
-            y0 = (int)(c->raster[1] + y * c->zoom[1]),
-            y1 = (int)(c->raster[1] + (y + 1) * c->zoom[1]);
-        if (x1 < x0) {
-          int q = x0;
-          x0 = x1;
-          x1 = q;
-        }
-        if (y1 < y0) {
-          int q = y0;
-          y0 = y1;
-          y1 = q;
-        }
-        if (x0 < -2048)
-          x0 = -2048;
-        if (y0 < -2048)
-          y0 = -2048;
-        if (x1 > 4096)
-          x1 = 4096;
-        if (y1 > 4096)
-          y1 = 4096;
-        for (int yy = y0; yy < y1; yy++)
-          for (int xx = x0; xx < x1; xx++)
-            sw_fragment(&c->sw, xx, yy, (int)c->raster[2], color);
+        pixel_rect(c, c->raster[0] + x * c->zoom[0], c->raster[1] + y * c->zoom[1],
+                   c->raster[0] + (x + 1) * c->zoom[0],
+                   c->raster[1] + (y + 1) * c->zoom[1], color);
       }
     }
 }

@@ -79,6 +79,7 @@ void gl_defaults(struct gl_context *c) {
   c->fog_density = 1;
   c->fog_end = 1;
   c->fog_mode = GL_EXP;
+  c->compression_hint = GL_DONT_CARE;
   c->zoom[0] = c->zoom[1] = 1;
   c->pack[0] = c->unpack[0] = 4;
   for (int i = 0; i < 7; i++) {
@@ -116,6 +117,59 @@ void gl_defaults(struct gl_context *c) {
     u->texture = c->binding[i][1];
   }
 }
+/* Application window coordinates survive compatibility scaling and resizing.
+ * Edge mapping is floor, including negative coordinates. */
+int gl_window_coord(struct gl_context *c, double value, int axis) {
+  unsigned render = axis ? c->sw.height : c->sw.width;
+  unsigned drawable = axis ? c->drawable_height : c->drawable_width;
+  double scaled = value * render / drawable;
+  if (scaled < -1048576) scaled = -1048576;
+  if (scaled > 1048576) scaled = 1048576;
+  int n = (int)scaled;
+  return scaled < n ? n - 1 : n;
+}
+void gl_window_state(struct gl_context *c) {
+  int x = gl_window_coord(c, c->scissor[0], 0),
+      y = gl_window_coord(c, c->scissor[1], 1);
+  c->sw.box[0] = x; c->sw.box[1] = y;
+  c->sw.box[2] = gl_window_coord(c, (double)c->scissor[0] + c->scissor[2], 0) - x;
+  c->sw.box[3] = gl_window_coord(c, (double)c->scissor[1] + c->scissor[3], 1) - y;
+}
+unsigned gl_read_color(struct gl_context *c, int x, int y) {
+  if (x < 0 || y < 0 || (unsigned)x >= c->drawable_width ||
+      (unsigned)y >= c->drawable_height)
+    return 0xff000000;
+  x = gl_window_coord(c, x, 0); y = gl_window_coord(c, y, 1);
+  return c->sw.color[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
+}
+int gl_refresh_target(struct gl_context *c, HDC dc) {
+  unsigned dw, dh, window;
+  if (!gl_target(dc, &dw, &dh, &window) || !dw || !dh || dw > 2048 || dh > 2048)
+    return 0;
+  unsigned w = dw, h = dh;
+  gl_render_size(&w, &h);
+  if (w != c->sw.width || h != c->sw.height) {
+    BITMAPINFO info = {.bmiHeader = {.biSize = 40, .biWidth = w,
+        .biHeight = -(LONG)h, .biPlanes = 1, .biBitCount = 32}};
+    void *bits = 0;
+    HBITMAP back = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, 0, 0);
+    uint16_t *depth = gl_alloc(w * h * 2);
+    if (!back || !bits || !depth) {
+      if (back) DeleteObject(back);
+      gl_dealloc(depth);
+      return 0;
+    }
+    /* Contents after drawable resize are undefined; never expose old storage. */
+    gl_release_present(c);
+    if (c->back) DeleteObject(c->back);
+    gl_dealloc(c->sw.depth);
+    c->back = back; c->sw.color = bits; c->sw.depth = depth;
+    c->sw.width = w; c->sw.height = h;
+  }
+  c->drawable_width = dw; c->drawable_height = dh;
+  gl_window_state(c);
+  return 1;
+}
 HGLRC W32API wglCreateContext(HDC dc) {
   GL_GUARD;
   int format = GetPixelFormat(dc);
@@ -123,7 +177,6 @@ HGLRC W32API wglCreateContext(HDC dc) {
   if (!format || !gl_target(dc, &w, &h, &window) || !w || !h || w > 2048 ||
       h > 2048)
     return 0;
-  gl_render_size(&w, &h);
   unsigned slot;
   for (slot = 0; slot < 16 && contexts[slot]; slot++) {
   }
@@ -138,17 +191,8 @@ HGLRC W32API wglCreateContext(HDC dc) {
     return 0;
   }
   c->share->refs = 1;
-  BITMAPINFO info = {.bmiHeader = {.biSize = 40,
-                                   .biWidth = w,
-                                   .biHeight = -(LONG)h,
-                                   .biPlanes = 1,
-                                   .biBitCount = 32}};
-  void *bits = 0;
-  c->back = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, 0, 0);
-  c->sw.color = bits;
-  c->sw.depth = gl_alloc(w * h * 2);
   c->zb = ZB_open(4, 4, ZB_MODE_RGBA, 0);
-  if (!c->sw.color || !c->sw.depth || !c->zb) {
+  if (!gl_refresh_target(c, dc) || !c->zb) {
     if (c->back)
       DeleteObject(c->back);
     gl_dealloc(c->sw.depth);
@@ -161,8 +205,6 @@ HGLRC W32API wglCreateContext(HDC dc) {
   c->handle = (++serial << 4) | slot;
   c->dc = dc;
   c->format = format;
-  c->sw.width = w;
-  c->sw.height = h;
   gl_selected_context = &c->tiny;
   glInit(c->zb);
   if (c->tiny.error_flag) {
@@ -187,6 +229,8 @@ HGLRC W32API wglCreateContext(HDC dc) {
   c->tiny.current_tex_coord1.W = 1;
   c->viewport[2] = w;
   c->viewport[3] = h;
+  c->scissor[2] = w; c->scissor[3] = h;
+  gl_window_state(c);
   glViewport(0, 0, w, h);
   gl_defaults(c);
   contexts[slot] = c;
@@ -237,6 +281,8 @@ BOOL W32API wglMakeCurrent(HDC dc, HGLRC h) {
   if (!h)
     return 1;
   if (!c || (c->tid && c->tid != tid()) || GetPixelFormat(dc) != (int)c->format)
+    return 0;
+  if (!gl_refresh_target(c, dc))
     return 0;
   c->tid = tid();
   if (c->dc != dc)

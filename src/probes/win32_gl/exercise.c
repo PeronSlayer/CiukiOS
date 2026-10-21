@@ -18,6 +18,7 @@ extern HWND W32API CreateWindowExA(DWORD, const char *, const char *, DWORD,
 extern HDC W32API GetDC(HWND);
 extern int W32API ReleaseDC(HWND, HDC);
 extern BOOL W32API DestroyWindow(HWND);
+extern BOOL W32API AdjustWindowRect(RECT *, DWORD, BOOL);
 #define WS_VISIBLE 0x10000000u
 #define WS_OVERLAPPEDWINDOW 0x00cf0000u
 #include "controller.h"
@@ -40,13 +41,15 @@ void W32API entry(void) {
   if (!result)
     ExitProcess(8);
   result->magic = W32_GL_MAGIC;
-  result->version = 1;
+  result->version = 2;
   WNDCLASSA klass = {.lpfnWndProc = DefWindowProcA,
                      .lpszClassName = "CiukiGLExercise"};
   CHECK(RegisterClassA(&klass));
+  RECT rect = {0,0,W32_GL_WIDTH,W32_GL_HEIGHT};
+  CHECK(AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, 0));
   HWND window = CreateWindowExA(0, "CiukiGLExercise", "CiukiOS software OpenGL",
-                                WS_VISIBLE | WS_OVERLAPPEDWINDOW, 24, 24, 352,
-                                288, 0, 0, 0, 0);
+                                WS_VISIBLE | WS_OVERLAPPEDWINDOW, 24, 24,
+                                rect.right-rect.left, rect.bottom-rect.top, 0, 0, 0, 0);
   CHECK(window);
   HDC dc = GetDC(window);
   CHECK(dc);
@@ -63,6 +66,11 @@ void W32API entry(void) {
   HGLRC context = wglCreateContext(dc);
   CHECK(context);
   CHECK(wglMakeCurrent(dc, context));
+  DWORD sizes[6] = {0};
+  CHECK(CiukiGLGetSizes(dc, sizes));
+  result->render_width = sizes[0]; result->render_height = sizes[1];
+  result->drawable_width = sizes[2]; result->drawable_height = sizes[3];
+  result->display_width = sizes[4]; result->display_height = sizes[5];
   const unsigned char *extensions = glGetString(GL_EXTENSIONS);
   if (extensions && *extensions) {
     result->extensions = 1;
@@ -75,9 +83,10 @@ void W32API entry(void) {
     w32_gl_scene(i);
     CHECK(glGetError() == GL_NO_ERROR);
     result->checksum[i] = w32_gl_checksum();
-    CHECK(result->checksum[i]);
-    CHECK(SwapBuffers(dc));
-    result->frames++;
+    CHECK(result->checksum[i] == w32_gl_expected[i]);
+    BOOL completed = SwapBuffers(dc);
+    CHECK(completed);
+    if (completed) result->frames++;
   }
   GLuint base = glGenLists(96);
   if (base) {
@@ -86,8 +95,6 @@ void W32API entry(void) {
     glDeleteLists(base, 96);
   } else
     CHECK(0);
-  result->render_width = W32_GL_WIDTH;
-  result->render_height = W32_GL_HEIGHT;
   CHECK(wglMakeCurrent(0, 0));
   CHECK(wglDeleteContext(context));
   ReleaseDC(window, dc);

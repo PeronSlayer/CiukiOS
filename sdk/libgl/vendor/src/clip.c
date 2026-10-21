@@ -246,6 +246,12 @@ static void gl_draw_triangle_clip(GLVertex* p0, GLVertex* p1, GLVertex* p2, GLin
 void gl_draw_triangle(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	GLContext* c = gl_get_context();
 	GLint co, cc[3], front;
+ GLVertex flat[3];
+ if(c->software_triangle && c->current_shade_model==GL_FLAT) {
+  flat[0]=*p0;flat[1]=*p1;flat[2]=*p2;
+  flat[0].color=flat[1].color=flat[2].color=c->software_flat_color;
+  p0=&flat[0];p1=&flat[1];p2=&flat[2];
+ }
 
 	cc[0] = p0->clip_code;
 	cc[1] = p1->clip_code;
