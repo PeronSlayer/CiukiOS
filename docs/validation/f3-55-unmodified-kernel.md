@@ -1,4 +1,4 @@
-# F3-55: unmodified source-built FreeDOS 2043 guest
+# F3-55: source-built FreeDOS 2043 guest, unmodified except patch 0001 (reproducible date)
 
 Host implementation record, 2026-10-21. Runtime qualification, canonical image
 construction and publication belong to the lead. No QEMU, systemd scope,
@@ -10,8 +10,8 @@ its [getting-started documentation](https://open-watcom.github.io/open-watcom-1.
 and [compiler user guide](https://open-watcom.github.io/open-watcom-1.9/cguide.html).
 The actual inputs are the literal nested source archives from the pinned
 FreeDOS 1.3 packages, checked against the f3-54 per-file ledger. The release
-page distinguishes the 386/FAT32 package binary from the other release builds;
-the rebuilt uncompressed output is not expected to equal compressed KERNL386.SYS.
+page distinguishes the 386/FAT32 package binary from the other release builds.
+Amendment 1 now requires the strict masked pristine comparison described below.
 
 Relevant K2043 sources are `makefile:74–122`, `config.m`,
 `mkfiles/{generic,watcom,owlinux}.mak`, `kernel/makefile`, `drivers/makefile`,
@@ -22,13 +22,11 @@ the required arithmetic. Link qualification rejects any unknown object or
 library and records source hashes and licences for contributing objects.
 
 Build configuration is external: `BUILDENV=linux`, `XCPU=386`, `XFAT=32`,
-`LOADSEG=0x60`, no UPX, no debug variant. Open Watcom's documented `-fi`
-forced include supplies an external date header that undefines/redefines
-`__DATE__` and `__TIME__`. A compiler probe must demonstrate the exact frozen
-date in its object before the build proceeds. This is a candidate supported
-configuration, **not proven here**, because native tool execution fails first.
-All 181 upstream source hashes must remain unchanged after compilation.
-No upstream timestamp patch is made or implicitly authorised.
+`LOADSEG=0x60`, no UPX, no debug variant. The lead ran the pinned native tools
+successfully outside the sandbox, but the original forced include failed with
+E1100 on `__DATE__`. Amendment 1 replaces that approach with the explicitly
+authorised patch 0001 below. All 181 source hashes are recorded before and
+after patching and must then remain unchanged during compilation.
 
 `config/openwatcom.json` pins the installer (83,959,748 bytes,
 `f7484be27eb70028010303fc16bb2acc5a785679567a568b940c28190ddbf3f3`),
@@ -40,14 +38,14 @@ the official release URL uses hyphens. The raw bytes and size match the
 published asset coordinates. Tools remain build-time dependencies; no
 Watcom CRT is authorised in the GPL kernel.
 
-Run these host checks sequentially, at nice 19. Use fresh roots; the second
-successful build must have a different actual wall-clock date as required
-by f3-54 amendment 1. Changing an evidence date field does not qualify it.
+Run these host checks sequentially, at nice 19. Use fresh roots and the two
+input mtimes specified by f3-55 Amendment 1. Wall-clock dates are recorded,
+but this amended input-date comparison may run on one host calendar day.
 
 ```sh
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-a --mtime 946684800
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-b-longer --mtime 1609459200
-nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-a/build.json build/codex/h55-b-longer/build.json
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-a --mtime 946684800
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-b-longer --mtime 1609459200
+nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment1-a/build.json build/codex/h55-amendment1-b-longer/build.json
 nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v
 nice -n 19 bash tests/host/dos/run_file_api.sh
 nice -n 19 bash tests/host/dos/run_hook_cpu.sh
@@ -63,8 +61,10 @@ loader and the real kernel's initial relocation with libx86emu, stopping at
 upstream trace `3`, before `FreeDOSmain`. Its sparse synthetic sectors are
 host CPU evidence only. It checks the complete kernel load at 0060:0000 and
 relocated code/stack bounds. It does not claim a complete VM/DOS boot.
-Comparison checks raw bytes, source manifests, tool/host pins and link closure;
-only then is `build/unified-dos/qualified.json` written.
+Comparison checks raw bytes, patched/pristine source manifests, patch/date
+manifest, tool/host pins and link closure, and independently repeats the strict
+masked pristine comparison for both kernels. Only after these and the CPU
+checks pass is `build/unified-dos/qualified.json` written.
 
 `kernel=unified` is schema value 2 in the per-game DOS Box settings. Existing
 values and the default remain unchanged. In a conformance `BOOT.CFG` selector,
@@ -85,7 +85,7 @@ URL and source hash.** The original reference pins and overlay metadata are
 not reused. Exact command outcomes, including local blockers and runtime
 items still required, are in `build/codex/f3-55-report.md`.
 
-Recorded host outcomes:
+Recorded original de75a586 host outcomes (before Amendment 1):
 
 | Check | Outcome |
 | --- | --- |
@@ -105,6 +105,75 @@ created/read back with:
 nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --source-out build/codex/ciukidos-unified-source.zip
 ```
 
-This local artifact has no assigned publication URL. Native tool execution,
-different-date reproducibility, actual map closure, a green LSan run and
-lead-owned canonical/runtime/memory evidence remain open.
+This original local artifact has no assigned publication URL. Its hash is
+historical; Amendment 1 adds the patch/manifest/rationale to corresponding
+source and therefore changes the source archive hash.
+
+## Amendment 1
+
+The result is **unmodified except patch 0001 (reproducible date)**. The
+[numbered patch and rationale](../../third_party/freedos/unified/ciuki/patches/README.md)
+are pinned by `third_party/freedos/unified/ciuki/build.json`. Patch SHA-256:
+`816cca4f5bd4542013073cbd60246b78e9342db200262cb6a941aafd543c8045`.
+It changes only the date use in `hdr/version.h:48` and `sys/sys.c:989`, with
+upstream `__DATE__` retained as the default when `CIUKI_BUILD_DATE` is absent.
+There are no other timestamp macro uses in the pinned kernel source archive.
+FreeCOM stays byte-identical here; its date/time patch belongs to f3-58.
+
+The pinned date is `Oct 21 2026`, time `00:00:00`, UTC epoch 1792540800.
+These retain the original f3-55 external input date and now reside in the
+fork manifest. `config.mak` passes `CIUKI_BUILD_DATE`/`CIUKI_BUILD_TIME` using
+the documented [OW1.9 command-line macro syntax](https://open-watcom.github.io/open-watcom-1.9/cguide.html#Preprocessor),
+without redefining compiler predefined macros. A native object probe checks
+both values before make; source postimages and the manifest hash are build
+evidence and part of two-build qualification and corresponding source.
+The external `MAKE` command also overrides wmake's `CFLAGST` with its original
+flags plus those date macros, because `sys/makefile` does not use `ALLCFLAGS`.
+This covers SYS's banner without another source change.
+
+The masked comparison locates the unique FreeDOS compile-date banner in
+both raw binaries and excludes exactly the 11 date bytes. All other bytes,
+total lengths and date offsets must match. Each comparison is recorded in
+`build.json` and independently repeated before qualification. Missing or
+ambiguous banners and unrelated date strings cannot produce a PASS.
+
+Read-back of the actual pinned vendor member confirms 46,256 bytes, SHA-256
+`932c0c155701eddb7b902f7269a1b2ce31f5c82a6dc195172f2336d18a74e1fb`,
+`UPX!` at offset 85 and no visible compile-date banner. Comparing it as-is to
+the configured uncompressed output cannot pass this gate. **Lead decision
+required:** define an authorised equivalent representation or revise that
+acceptance requirement. No unpacker, alternate pristine input, compression
+change or expanded mask was introduced. This observation is a qualification
+blocker, not evidence of a compiler mismatch. Raw two-date reproducibility
+can still be checked independently; it never substitutes for this gate.
+
+Host unit coverage uses synthetic binaries only to verify exact masking,
+outside-region differences, missing/duplicate/moved banners, patch SHA/context/
+postimages, source immutability during the build and rejected forged records.
+GCC preprocessing verifies that absent macros preserve the original banner
+and explicit build macros supply the fixed date; this is not native OW proof.
+The checker prints patch 0001, the masked comparison and the two-date result
+explicitly. The exact amended test results and lead commands are recorded in
+`build/codex/f3-55-report.md`. Native OW builds, actual link maps, a green LSan
+run and canonical/runtime/memory evidence remain lead-owned.
+
+Amendment 1 host results, run sequentially with the scripts' original sanitizer
+settings (no additional ASAN/LSAN environment overrides):
+
+| Exact command | Result |
+| --- | --- |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v` | PASS, exit 0; final run 63 tests in 47.297 s. |
+| `nice -n 19 bash tests/host/dos/run_file_api.sh` | PASS, exit 0, including i686 compilation. |
+| `nice -n 19 bash tests/host/dos/run_hook_cpu.sh` | PASS, exit 0; production monitor/file-owner CPU harness. |
+| `nice -n 19 bash scripts/test/host_kernel_tests.sh` | BLOCKED, exit 1; LSan's sandbox ptrace restriction. No workaround applied. |
+| `nice -n 19 bash scripts/test/host_fs_tests.sh` | PASS, exit 0; fsck/mtools oracles and 2,339 crash cuts, 0 unknown diagnostics. |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --source-out build/codex/f3-55-amendment1-source.zip` | PASS, exit 0; deterministic source construction/read-back. |
+
+The amended corresponding-source archive is 2,066,234 bytes, SHA-256
+`3d613da80360b4756ea39271fa3df2e12737b2f06c8e9ba01e1962beebb6f6bc`.
+The two native `--out` commands and their `--compare` above were not run in
+this sandbox; the lead executes them on the supported host. The unit fixture
+verifies the current packed-vendor blocker, without claiming native compiler,
+real link-map, rebuilt-kernel CPU or guest-runtime qualification. No public
+header changed; API-doc regeneration and the app rebuild are not required by
+this amendment. The source URL remains unassigned.

@@ -39,9 +39,14 @@ CRLF as one line. Research extraction is under
 
 The existing unmodified reference `BIN/KERNL386.SYS` remains pinned at
 `932c0c155701eddb7b902f7269a1b2ce31f5c82a6dc195172f2336d18a74e1fb`.
-A new reproducible build need not match this vendor binary: its compiler,
-options and compression history are not fully recorded. Two clean builds
-with our pinned inputs must match one another. Keep that distinction in evidence.
+F3-55 Amendment 1 additionally requires a byte comparison to this pinned member
+outside its located compile-date string. The candidate is **unmodified except
+patch 0001 (reproducible date)**; two clean builds with pinned inputs must also
+match one another. The vendor member is packed (UPX marker at offset 85) and
+has no visible compile-date banner, whereas our configured output is raw.
+The strict masked comparison therefore remains blocked pending a lead decision
+on equivalent representations; no decompression, alternate pin or wider mask
+is authorised. Two identical local builds alone cannot qualify the guest.
 
 ## Architecture and activation
 
@@ -322,16 +327,37 @@ an unreviewed mixed-license binary. Kernel compiler selection remains OW1.9.
 
 f3-55 baseline build configuration: `BUILDENV=linux`, `XCPU=386`, `XFAT=32`,
 `LOADSEG=0x60`, pinned XNASM, `XUPX` empty/unset, no debug flags. From each
-fresh source extraction write only `config.mak` as an external build input
-and invoke `make all` in that extraction with WATCOM and PATH pointing to
+fresh source extraction apply the pinned patch below, write `config.mak` as
+an external build input and invoke `make all` with WATCOM and PATH pointing to
 the pinned tools. No production image build in implementer sandboxes.
 Uncompressed output is a standard supported configuration and avoids a new
 UPX pin; it does not reproduce the compressed release bytes. Pin environment,
 locale/timezone, file mtimes, host compiler, tool versions and configuration;
-compare two clean build outputs and source manifests. Audit `__DATE__`,
-`__TIME__`, `__TIMESTAMP__`, linker timestamps and source paths. If they alter
-the kernel bytes, preserve the failing evidence and seek a documented minimal
-build reproducibility patch; never label a patched build “unmodified”.
+compare two clean build outputs and source manifests. The lead's OW1.9 probe
+rejected forced-include redefinition of `__DATE__` with E1100. F3-55 Amendment 1
+authorises **unmodified except patch 0001 (reproducible date)**, replacing both
+uses (`K:hdr/version.h:48`, `sys/sys.c:989`) with `CIUKI_BUILD_DATE` and a
+fallback to upstream `__DATE__`. No `__TIME__` or `__TIMESTAMP__` use occurs
+in the pinned kernel archive. FreeCOM changes remain in f3-58.
+
+The [patch rationale and SHA-256](../../third_party/freedos/unified/ciuki/patches/README.md)
+and `third_party/freedos/unified/ciuki/build.json` pin the patch, changed source
+hashes, `Oct 21 2026`/`00:00:00` and UTC epoch 1792540800 (the existing f3-55
+build-input date). The compiler receives `CIUKI_BUILD_DATE`/`CIUKI_BUILD_TIME`
+through the documented [OW1.9 preprocessor `-dNAME="text"` option](https://open-watcom.github.io/open-watcom-1.9/cguide.html#Preprocessor).
+A native compiler probe checks those values before make. Preserve the pristine
+archive/ledger and all source hashes before/after patching and compilation.
+SYS uses `CFLAGST` instead of `ALLCFLAGS`, so the external `MAKE` command
+supplies the same macros using the documented [wmake command-line macro
+precedence](https://open-watcom.github.io/open-watcom-1.9/tools.html#Open_Watcom_Make_Command_Line_Format),
+retaining SYS's original flags and Linux object suffix.
+The checker names patch 0001 and the masked pristine comparison explicitly;
+it accepts only one banner in each binary, identical date offsets/lengths and
+identical bytes everywhere outside its 11-byte date. Missing/ambiguous banners
+or any other difference block qualification. The two-date commands use distinct
+roots and source mtimes 946684800 and 1609459200, as Amendment 1 specifies;
+actual wall-clock dates remain informational and can be the same. This checks
+input-date independence, not execution under two actual host calendar dates.
 
 ## License and source delivery
 
@@ -385,7 +411,7 @@ wire selector is assigned without lead reservation.
 
 | Gate | Required closure |
 | --- | --- |
-| f3-55 | Pinned source+toolchain, complete licenses, two identical clean unmodified kernel builds; host boot/layout checks; lead boots new guest beside old and pristine reference on one canonical image. |
+| f3-55 | Pinned source+toolchain, complete licenses, two identical clean kernel builds unmodified except patch 0001 (reproducible date), strict masked pristine comparison; host boot/layout checks; lead boots new guest beside old and pristine reference on one canonical image. |
 | f3-56 | New negotiated binding and lifecycle; spoof/old/invalid/rollback tests; FCB/NLS retain H50 behavior; no unsafe v1 aliasing or new memory policy. |
 | f3-57 | Every coverage/gap row implemented through one native owner, activation barrier, H49/H50 host matrices; unchanged f3-48 base cases pass at 100% against pristine reference with candidate bridge on. |
 | f3-58 | Source-built CiukiDOS FreeCOM shell, all commands, synthetic installer/batch tests, launch/records/idle regression, credits and reproducible shell bytes. |

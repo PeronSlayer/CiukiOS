@@ -1,9 +1,10 @@
-"""Pinned, unmodified K2043 guest build and distribution inputs (f3-55).
+"""Pinned K2043 guest, unmodified except patch 0001 (reproducible date).
 
 No downloads, emulator, image build or alternate compiler. All extraction and
 generated files belong below this checkout's build/. SPDX-License-Identifier: GPL-2.0-only
 """
 import csv
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -11,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import resource
+import shlex
 import stat
 import subprocess
 import tempfile
@@ -28,10 +30,8 @@ SOURCE_PINS = {
               "2e28bf858e38086764d4b237ffd0273d687fcb6f8d970c1887559b63511ce7a3"),
 }
 EPOCH = 1792540800  # 2026-10-21 00:00:00 UTC, external build input
-DATE_HEADER = b'#undef __DATE__\n#undef __TIME__\n#define __DATE__ "Oct 21 2026"\n#define __TIME__ "00:00:00"\n'
-CONFIG = ("BUILDENV=linux\nXCPU=386\nXFAT=32\nLOADSEG=0x60\n"
-          "XUPX=\nUPXOPT=\nXNASM=nasm\n"
-          "ALLCFLAGS=-fi=../ciuki-build-date.h\n")
+MODIFICATION = "unmodified except patch 0001 (reproducible date)"
+BUILD_MANIFEST = VENDOR / "ciuki/build.json"
 
 
 def sha(data):
@@ -217,6 +217,124 @@ def source_hashes(work):
     return {name: digest(work / name) for name in ledger("kernel")}
 
 
+def reproducible_inputs():
+    raw = BUILD_MANIFEST.read_bytes()
+    manifest = json.loads(raw)
+    fixed = datetime.fromtimestamp(EPOCH, timezone.utc)
+    date = ("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()[fixed.month - 1] +
+            f" {fixed.day:2d} {fixed.year:04d}")
+    if (manifest["schema"] != 1 or manifest["modification"] != MODIFICATION or
+            manifest["epoch"] != EPOCH or manifest["date"] != date or
+            manifest["time"] != "00:00:00" or
+            manifest["patch"]["path"] != "ciuki/patches/0001-reproducible-date.patch" or
+            set(manifest["source_hashes"]) != {"hdr/version.h", "sys/sys.c"}):
+        raise ValueError("invalid pinned reproducible-date manifest")
+    patch = (VENDOR / manifest["patch"]["path"]).read_bytes()
+    if sha(patch) != manifest["patch"]["sha256"]:
+        raise ValueError("patch 0001 SHA-256 mismatch")
+    return manifest, raw, patch
+
+
+def patched_sources(members):
+    """Apply only pinned patch 0001, with exact context and no offset/fuzz."""
+    manifest, _, patch = reproducible_inputs()
+    if {n: sha(b) for n, b in members.items()} != ledger("kernel"):
+        raise ValueError("patch 0001 requires pristine pinned source bytes")
+    result = dict(members)
+    lines = patch.splitlines(keepends=True)
+    i = 0; changed = set()
+    while i < len(lines):
+        if not lines[i].startswith(b"--- a/"):
+            raise ValueError("invalid patch 0001 file header")
+        path = lines[i][6:].rstrip(b"\n").decode("ascii")
+        if (path not in manifest["source_hashes"] or path in changed or i + 1 >= len(lines) or
+                lines[i + 1] != b"+++ b/" + path.encode() + b"\n"):
+            raise ValueError("unexpected patch 0001 target")
+        original = members[path]
+        newline = b"\r\n" if b"\r\n" in original else b"\n"
+        before = original.replace(b"\r\n", b"\n").splitlines(keepends=True)
+        after = []; pos = 0; i += 2
+        while i < len(lines) and lines[i].startswith(b"@@ "):
+            hunk = re.fullmatch(rb"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@\n", lines[i])
+            if not hunk:
+                raise ValueError("invalid patch 0001 hunk")
+            start, old_count, new_start, new_count = (int(n) if n is not None else 1 for n in hunk.groups())
+            offset = start if old_count == 0 else start - 1
+            if offset < pos or offset > len(before):
+                raise ValueError("invalid patch 0001 offset")
+            after.extend(before[pos:offset]); pos = offset
+            if len(after) != new_start - 1:
+                raise ValueError("invalid patch 0001 new offset")
+            removed = added = 0; i += 1
+            while i < len(lines) and not lines[i].startswith((b"@@ ", b"--- a/")):
+                kind, data = lines[i][:1], lines[i][1:]
+                if kind not in (b" ", b"-", b"+"):
+                    raise ValueError("invalid patch 0001 line")
+                if kind != b"+":
+                    if pos >= len(before) or before[pos] != data:
+                        raise ValueError("patch 0001 context mismatch")
+                    pos += 1; removed += 1
+                if kind != b"-":
+                    after.append(data); added += 1
+                i += 1
+            if (removed, added) != (old_count, new_count):
+                raise ValueError("patch 0001 hunk length mismatch")
+        after.extend(before[pos:])
+        result[path] = b"".join(after).replace(b"\n", newline)
+        if sha(result[path]) != manifest["source_hashes"][path]:
+            raise ValueError("patch 0001 postimage hash mismatch")
+        changed.add(path)
+    if changed != set(manifest["source_hashes"]):
+        raise ValueError("incomplete patch 0001")
+    return result
+
+
+def date_flags(manifest):
+    # Watcom's documented -dNAME="text" syntax; no predefined macro redefinition.
+    return [f'-dCIUKI_BUILD_DATE="{manifest["date"]}"',
+            f'-dCIUKI_BUILD_TIME="{manifest["time"]}"']
+
+
+def build_config(manifest):
+    flags = " ".join(date_flags(manifest))
+    # SYS uses CFLAGST instead of ALLCFLAGS. A command-line wmake macro has
+    # precedence over watcom.mak; preserve its flags and owlinux's .obj suffix.
+    sys_flags = "CFLAGST=-fo=.obj -zq-zp1-os-s-we-e3-wx-bt=DOS " + flags
+    # Retain a separator before watcom.mak appends further compiler switches.
+    return ("BUILDENV=linux\nXCPU=386\nXFAT=32\nLOADSEG=0x60\n"
+            "XUPX=\nUPXOPT=\nXNASM=nasm\nMAKE=wmake -ms -h " + shlex.quote(sys_flags) +
+            "\nALLCFLAGS=" + flags + " \n")
+
+
+def masked_pristine_compare(kernel, pristine):
+    """Mask exactly one 11-byte compile date, never code, padding or headers."""
+    pattern = (rb"FreeDOS kernel [^\x00\r\n]{1,120}?\[compiled "
+               rb"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 0-3][0-9] [0-9]{4})\]\n")
+    regions = []
+    for name, data in (("rebuilt", kernel), ("pinned KERNL386.SYS", pristine)):
+        matches = list(re.finditer(pattern, data))
+        if len(matches) != 1:
+            packed = "; UPX marker present, compressed/raw comparison is not authorised" if b"UPX!" in data else ""
+            raise ValueError(f"{name}: expected one compile-date banner, found {len(matches)}{packed}")
+        regions.append(matches[0].span(1))
+    if len(kernel) != len(pristine) or regions[0] != regions[1]:
+        raise ValueError("pristine size/date offset mismatch; only the date bytes may differ")
+    start, end = regions[0]
+    manifest, _, _ = reproducible_inputs()
+    if kernel[start:end] != manifest["date"].encode("ascii"):
+        raise ValueError("rebuilt banner does not contain the pinned build date")
+    if kernel[:start] != pristine[:start] or kernel[end:] != pristine[end:]:
+        raise ValueError("pristine comparison differs outside the compile-date region")
+    return dict(status="PASS", reference_sha256=sha(pristine), kernel_sha256=sha(kernel),
+                date_offset=start, date_size=end - start, rebuilt_date=kernel[start:end].decode(),
+                reference_date=pristine[start:end].decode(), compared_bytes=len(kernel) - (end - start))
+
+
+def pristine_comparison(kernel):
+    files, _ = reference_module().reference_files()
+    return masked_pristine_compare(kernel, files["/KERNEL.SYS"])
+
+
 def link_audit(work):
     """Fail closed on unknown modules/libraries, retain full map as evidence."""
     mapping = {}; required = set()
@@ -253,15 +371,18 @@ def build(output, *, mtime=EPOCH):
     if output.exists():
         raise ValueError("fresh build root required")
     members = sources(folder=ROOT / "third_party/freedos/1.3")
+    manifest, manifest_bytes, _ = reproducible_inputs()
+    patched = patched_sources(members)
+    config = build_config(manifest)
     output.mkdir(parents=True)
-    work = extract(members, output / "source", mtime)
-    (work / "config.mak").write_text(CONFIG)
-    (work / "ciuki-build-date.h").write_bytes(DATE_HEADER)
-    evidence = dict(schema=1, status="blocked", unmodified=True,
-                    wall_date=__import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+    work = extract(patched, output / "source", mtime)
+    (work / "config.mak").write_text(config)
+    evidence = dict(schema=2, status="blocked", unmodified=False, modification=MODIFICATION,
+                    wall_date=datetime.now(timezone.utc).isoformat(),
                     root=str(output), input_mtime=mtime, source_hashes=source_hashes(work),
-                    source_archive_sha256=SOURCE_PINS["kernel"][2], config=CONFIG,
-                    forced_header_sha256=sha(DATE_HEADER))
+                    pristine_source_hashes={n: sha(b) for n, b in members.items()},
+                    source_archive_sha256=SOURCE_PINS["kernel"][2], config=config,
+                    build_manifest_sha256=sha(manifest_bytes), build_inputs=manifest)
     try:
         tools, pins = prepare_tools()
         evidence["host"] = host_environment()
@@ -272,20 +393,20 @@ def build(output, *, mtime=EPOCH):
         env = dict(PATH=str(tools / "binl") + ":/usr/bin:/bin", WATCOM=str(tools),
                    LANG="C", LC_ALL="C", TZ="UTC", SOURCE_DATE_EPOCH=str(EPOCH),
                    TMPDIR=str(output), WLINK_LNK="", WCC="")
-        # A forced include is an external compiler input, not an upstream edit.
-        # Compile the same macro probe before trusting date overrides.
+        # Probe the build macros using the exact command-line arguments used
+        # by make. Native OW execution/quoting remains lead-host evidence.
         probe = output / "date-probe.c"
-        probe.write_text('const char date_probe[] = __DATE__ "|" __TIME__;\n')
-        subprocess.run([str(tools / "binl/wcc"), "-zq", "-bt=dos", "-fi=" + str(work / "ciuki-build-date.h"),
+        probe.write_text('const char date_probe[] = CIUKI_BUILD_DATE "|" CIUKI_BUILD_TIME;\n')
+        subprocess.run([str(tools / "binl/wcc"), "-zq", "-bt=dos", *date_flags(manifest),
                         "-fo=" + str(output / "date-probe.obj"), str(probe)],
                        env=env, cwd=output, check=True)
-        if b"Oct 21 2026|00:00:00" not in (output / "date-probe.obj").read_bytes():
-            raise ValueError("compiler timestamp freeze failed; source patch requires lead review")
+        if (manifest["date"] + "|" + manifest["time"]).encode() not in (output / "date-probe.obj").read_bytes():
+            raise ValueError("patch 0001 compiler build-date macro probe failed")
         with (output / "make.log").open("w") as log:
             subprocess.run(["make", "all"], cwd=work, env=env, stdout=log,
                            stderr=subprocess.STDOUT, check=True)
         if source_hashes(work) != evidence["source_hashes"]:
-            raise ValueError("upstream source bytes changed during build")
+            raise ValueError("source bytes changed during build beyond patch 0001")
         evidence["linked_objects"] = link_audit(work)
         kernel = (work / "bin/kernel.sys").read_bytes()
         if kernel != (work / "kernel/kernel.sys").read_bytes():
@@ -295,25 +416,57 @@ def build(output, *, mtime=EPOCH):
         (output / "KERNEL.SYS").write_bytes(kernel)
         evidence.update(status="built-unqualified", kernel_sha256=sha(kernel), size=len(kernel),
                         map_sha256=digest(work / "kernel/kernel.map"))
+        try:
+            evidence["pristine_comparison"] = pristine_comparison(kernel)
+        except (OSError, ValueError) as error:
+            evidence["pristine_comparison"] = dict(status="blocked", error=str(error))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        evidence["error"] = str(error)
+        evidence.update(status="blocked", error=str(error))
     (output / "build.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     return evidence
 
 
-def compare(first, second, *, require_dates=True):
+def compare_rebuilds(first, second):
     if any(r.get("status") != "built-unqualified" for r in (first, second)):
-        raise ValueError("two successful unmodified builds required")
+        raise ValueError("two successful patch 0001 builds required")
     if first["root"] == second["root"] or first["input_mtime"] == second["input_mtime"]:
         raise ValueError("distinct build roots and input mtimes required")
-    if require_dates and first["wall_date"][:10] == second["wall_date"][:10]:
-        raise ValueError("different wall-clock dates required by f3-54 amendment 1")
+    if datetime.fromtimestamp(first["input_mtime"], timezone.utc).date() == datetime.fromtimestamp(second["input_mtime"], timezone.utc).date():
+        raise ValueError("different input dates required by f3-55 amendment 1")
+    manifest, manifest_bytes, _ = reproducible_inputs()
+    expected_hashes = {n: sha(b) for n, b in patched_sources(sources()).items()}
+    for record in (first, second):
+        if (record.get("schema") != 2 or record.get("unmodified") is not False or
+                record.get("modification") != MODIFICATION or record.get("build_inputs") != manifest or
+                record.get("build_manifest_sha256") != sha(manifest_bytes) or
+                record.get("config") != build_config(manifest) or
+                record.get("source_archive_sha256") != SOURCE_PINS["kernel"][2] or
+                record.get("pristine_source_hashes") != ledger("kernel") or
+                record.get("source_hashes") != expected_hashes):
+            raise ValueError("patch 0001 build/source provenance mismatch")
+        kernel = (build_path(record["root"]) / "KERNEL.SYS").read_bytes()
+        if sha(kernel) != record["kernel_sha256"] or len(kernel) != record["size"]:
+            raise ValueError("recorded kernel hash/size differs from raw bytes")
     for name in ("kernel_sha256", "size", "source_hashes", "source_archive_sha256", "config",
-                 "forced_header_sha256", "host", "tools", "linked_objects"):
-        if first[name] != second[name]:
+                 "build_inputs", "build_manifest_sha256", "host", "tools", "linked_objects"):
+        if name not in first or name not in second or first[name] != second[name]:
             raise ValueError("reproducibility mismatch: " + name)
     if (Path(first["root"]) / "KERNEL.SYS").read_bytes() != (Path(second["root"]) / "KERNEL.SYS").read_bytes():
         raise ValueError("raw kernel byte mismatch")
+    return True
+
+
+def check_pristine(record):
+    actual = pristine_comparison((build_path(record["root"]) / "KERNEL.SYS").read_bytes())
+    if record.get("pristine_comparison") != actual:
+        raise ValueError("masked pristine comparison evidence differs from current bytes")
+    return actual
+
+
+def compare(first, second):
+    compare_rebuilds(first, second)
+    for record in (first, second):
+        check_pristine(record)
     return True
 
 
@@ -343,7 +496,8 @@ def guest_files(qualified=None):
     files["/D48/KERNEL.LIC"] = sources()["COPYING"]
     identity["kernel"] = dict(version="2043", personality="unified-unmodified", sha256=sha(kernel),
                               license="GPL-2.0-or-later", license_sha256=sha(files["/D48/KERNEL.LIC"]),
-                              source_archive_sha256=SOURCE_PINS["kernel"][2], binding=False)
+                              source_archive_sha256=SOURCE_PINS["kernel"][2], binding=False,
+                              modification=MODIFICATION, build_inputs=first["build_inputs"])
     identity["profile"] = dict(kernel="unified", schema_value=2, bridge=False, share=True,
                                config_sha256=sha(ref.CONFIG), auto_sha256=sha(ref.AUTO))
     return files, identity
@@ -356,6 +510,11 @@ def corresponding_source(output):
     for component, (name, _, _) in SOURCE_PINS.items():
         sources(component, ROOT / "third_party/freedos/1.3")
         files["upstream/" + name] = (VENDOR / name).read_bytes()
+    manifest, manifest_bytes, patch = reproducible_inputs()
+    patched_sources(sources())  # Validate the distributed patch and postimages too.
+    files["ciukios/third_party/freedos/unified/ciuki/build.json"] = manifest_bytes
+    files["ciukios/third_party/freedos/unified/" + manifest["patch"]["path"]] = patch
+    files["ciukios/third_party/freedos/unified/ciuki/patches/README.md"] = (VENDOR / "ciuki/patches/README.md").read_bytes()
     paths = ["scripts/unified_dos.py", "scripts/dos_conformance.py", "scripts/build_dos_image.py",
              "scripts/ciukidos_image.py", "src/boot/full_boot.asm", "src/boot/full_stage1_loader.asm",
              "config/openwatcom.json", "docs/design/unified-dos-licenses.tsv",
@@ -393,9 +552,8 @@ def corresponding_source(output):
     toolchain = json.loads(files["ciukios/config/openwatcom.json"])
     toolchain["source_offer"] = dict(url="", sha256="", status="assigned separately in release metadata")
     files["ciukios/config/openwatcom.json"] = (json.dumps(toolchain, indent=2) + "\n").encode()
-    files["build-inputs/config.mak"] = CONFIG.encode()
-    files["build-inputs/ciuki-build-date.h"] = DATE_HEADER
-    files["README.txt"] = ("CiukiDOS unified unmodified K2043 corresponding source.\n"
+    files["build-inputs/config.mak"] = build_config(manifest).encode()
+    files["README.txt"] = ("CiukiDOS unified K2043: " + MODIFICATION + ".\n"
         "Upstream archives are literal FreeDOS 1.3 nested SOURCES.ZIP files.\n"
         "See ciukios/config/openwatcom.json for build-time tool URLs and SHA-256 pins.\n"
         "Restore ciukios/ files at repository root and upstream/ archives under\n"
@@ -434,7 +592,7 @@ def notices(identity, source):
     # until the lead supplies it and verifies the actual downloadable bytes.
     metadata = dict(schema=1, guest=identity, corresponding_source=source,
                     source_url=offer["url"], publication="pending-lead-verification")
-    credits = ("CiukiDOS unified: unmodified FreeDOS kernel 2043 (GPL-2.0-or-later).\n"
+    credits = ("CiukiDOS unified: FreeDOS kernel 2043, " + MODIFICATION + " (GPL-2.0-or-later).\n"
                "Copyright Pat Villani and the FreeDOS contributors; original notices retained.\n"
                "FreeCOM 0.85a, GPL-2.0; bundled SUPPL has separate LGPL notices.\n"
                "SHARE 08/2006a: original package GPL notice, version not expanded.\n"

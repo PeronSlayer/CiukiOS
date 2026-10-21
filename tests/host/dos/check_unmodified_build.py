@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """H55-02/03 host-only checker. Never builds an OS image or launches a VM.
 
-Build each root on a different wall-clock date, then compare/qualify:
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-a --mtime 946684800
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-b-longer --mtime 1609459200
- nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-a/build.json build/codex/h55-b-longer/build.json
+Build unmodified except patch 0001 (reproducible date), then compare/qualify.
+Amendment 1's two input dates may be checked on the same wall-clock day:
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-a --mtime 946684800
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment1-b-longer --mtime 1609459200
+ nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment1-a/build.json build/codex/h55-amendment1-b-longer/build.json
 """
 import argparse
 import importlib.util
@@ -58,15 +59,21 @@ def main():
         cpu_check(dict(root=str(out)), packed_reference=True)
     elif args.out:
         record = build.build(args.out, mtime=args.mtime)
-        print(json.dumps({k: record[k] for k in ("status", "root")}, sort_keys=True))
+        print("H55-02 patch 0001 (reproducible date): " + record["build_inputs"]["patch"]["sha256"])
+        print(json.dumps({k: record[k] for k in ("status", "root", "modification")}, sort_keys=True))
         if record["status"] != "built-unqualified":
             print(record["error"], file=sys.stderr)
             return 1
+        print("H55-02 masked pristine comparison: " + json.dumps(record["pristine_comparison"], sort_keys=True))
+        build.check_pristine(record)
         cpu_check(record)
     else:
         paths = [build.build_path(p) for p in args.compare]
         records = [json.loads(p.read_text()) for p in paths]
+        build.compare_rebuilds(*records)
+        print("H55-02 two-date PASS: different roots/input dates/mtimes, raw kernel and patch 0001 source manifests identical", flush=True)
         build.compare(*records)
+        print("H55-02 masked pristine comparison PASS: only the located 11-byte compile-date region is excluded", flush=True)
         for record in records:
             cpu_check(record)
         out = build.build_path(ROOT / "build/unified-dos")
@@ -74,7 +81,7 @@ def main():
         (out / "qualified.json").write_text(json.dumps(dict(
             first=str(paths[0]), second=str(paths[1]), cpu_boot="PASS"), indent=2) + "\n")
         source = build.corresponding_source(out / "ciukidos-unified-source.zip")
-        print("H55-02 PASS: different roots/mtimes/dates, raw kernel and source manifests identical")
+        print("H55-02 PASS: unmodified except patch 0001 (reproducible date); two-date and masked pristine comparison passed")
         print(json.dumps(source, sort_keys=True))
     return 0
 

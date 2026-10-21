@@ -108,3 +108,21 @@ and largest MCB for later comparison; no cap increase.
 diary edits by Codex; host tests one at a time at nice19. No DFVM/FCB/NLS or
 file backend implementation here; no new panic path, game patch, copied full
 image, private-library disclosure or automatic old-guest retirement.
+
+## Amendment 1 (lead, 2026-10-21): the forced-date probe fails on the supported host; minimal reproducibility patch
+
+The lead ran `tests/host/dos/check_unmodified_build.py` outside the sandbox: the pinned native Open Watcom 1.9 Linux tools execute (the sandbox SIGSYS was an environment limit), but `wcc` rejects the forced include that redefines `__DATE__`/`__TIME__` (`E1100: Definition of macro '__DATE__' not identical to previous definition`, logs `build/lead/h55-a.log`, `h55-b.log`). Decision: do not fight the compiler; apply the **minimal documented reproducibility patch** the contract foresaw:
+
+1. In the fork, replace the `__DATE__`/`__TIME__` uses (`hdr/version.h:48` and any other site; FreeCOM's `__DATE__/__TIME__` likewise when f3-58 builds it) by build-provided macros (`CIUKI_BUILD_DATE`, `CIUKI_BUILD_TIME`) passed on the command line from the pinned manifest's date (fixed, documented, e.g. the kernel release date), with the upstream default preserved when the macros are absent. Record the patch as a numbered patch file under the fork's `ciuki/patches/` with its rationale and SHA-256; the design note and the validation record call the result "unmodified except patch 0001 (reproducible date)".
+2. The pristine comparison: build with the pinned toolchain and compare to the pinned `KERNL386.SYS` byte for byte **outside the date string region** (locate the string in both binaries; everything else must match: this is the proof that the toolchain and sources reproduce the vendor build). Then the two-date comparison (`--mtime 946684800` and `1609459200`) must produce identical binaries.
+3. The lead reruns `check_unmodified_build.py` on the host; make its output name the patch and the masked comparison explicitly. Report section "Amendment 1".
+
+## Amendment 2 (lead, 2026-10-21): remaining findings of the Codex cross-review of de75a586 (finding 1 is Amendment 1)
+
+Apply after Amendment 1.
+
+1. **Toolchain extraction incomplete (High):** `scripts/unified_dos.py:168` extracts only `binl/` and `license.txt`, but `make all` of kernel 2043 builds SYS first, which needs the Watcom headers (`h/`: `stdlib.h`, `dos.h`, …) and the DOS libraries (`lib286/`) for the `wcl` link. Extract and verify (by hash list) the needed `h/` and `lib286/` subsets from the same pinned installer under `build/tools/openwatcom-1.9/`; keep the prohibition on linking Watcom runtime objects into the guest kernel itself (SYS is a host-side DOS utility, document which outputs may link the runtime); add a dependency-completeness test.
+2. **Selector not reachable through the production loader (High):** `src/kernel/probes/selector.c:98` accepts the new selector, but `dos-conformance` is missing from the loader table (`src/boot/ciukldr/menu.inc:312`) and the loader model (`scripts/test/loader_model.py:11`); the loader's F3 suffix parser accepts only `platform=e500`; `tests/host/dos/protocol.py:9` rejects `kernel=unified`. Register the probe and the exact `kernel=unified` grammar in loader, model and host protocol, preserving every existing selector; tests passing the complete selector through all three paths.
+3. **Tracked absolute symlink (Medium):** `third_party/freedos/freedos` was the lead's provisioning mistake and is removed by the lead; never re-add it; the FreeDOS reference resolves through `third_party/freedos/1.3` or skips with the reason.
+
+Report section "Amendment 2".

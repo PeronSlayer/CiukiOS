@@ -22,9 +22,11 @@ inside this worktree's `build/`.
 
 Run `tests/host/dos/check_unmodified_build.py` as documented in its docstring
 and `docs/validation/f3-55-unmodified-kernel.md`. Native OW1.9 execution is
-required: no emulator or compiler fallback. `config.mak` and the forced date
-header are external build inputs; every upstream file is hashed before and
-after compilation. No source date patch is applied. The guest kernel may
+required: no emulator or compiler fallback. The kernel is **unmodified except
+patch 0001 (reproducible date)**, documented and SHA-pinned under
+`ciuki/patches/` and `ciuki/build.json`. `config.mak` passes the pinned build
+date/time macros on the compiler command line. Every source file is hashed
+before/after the patch and after compilation. The guest kernel may
 link only source-built kernel/device objects, never a Watcom runtime library.
 
 After two qualifying builds, the canonical builder installs the new opt-in
