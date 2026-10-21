@@ -104,6 +104,7 @@ unsigned installer_service_observe(void *ctx,unsigned stage){observed=ctx;unsign
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
 #define FS_ENOENT ENOENT
 #define FS_ENOTDIR ENOTDIR
+#define FS_EFBIG EFBIG
 #define VFS_READ 1
 #define VFS_DENY_NONE 0
 struct vfs_table {struct fixture_service *service;};

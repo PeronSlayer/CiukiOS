@@ -300,12 +300,11 @@ Section "Uninstall"
   ClearErrors
   WriteINIStr "$WINDIR\WININIT.INI" "rename" "NUL" "$EXEPATH"
   IfErrors uninstall_failed
-  ; Native NSIS delegation uses a nested ~nsu.tmp directory. Retire the
-  ; directory after its executable, using the Win9x DIRNUL section.
-  StrCmp $EXEDIR "$WINDIR\TEMP" uninstall_done
-  ClearErrors
-  WriteINIStr "$WINDIR\WININIT.INI" "DIRNUL" "$EXEDIR" "0"
-  IfErrors uninstall_failed uninstall_done
+  ; _?= may execute from any existing directory. NSIS 2.51 also reuses its
+  ; shared ~nsu.tmp directory before this section, without exposing whether
+  ; creation succeeded. Neither path establishes directory ownership here;
+  ; retire only this executable, never queue DIRNUL for its parent.
+  Goto uninstall_done
   uninstall_failed:
     SetErrorLevel 2
   uninstall_done:

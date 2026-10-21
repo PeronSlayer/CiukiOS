@@ -75,6 +75,20 @@ def decode_cabinet(raw):
 
 
 class CabinetWriterTests(unittest.TestCase):
+    def test_temporary_reservation_cleanup_ownership(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        for name in ('selfextract', 'infchain'):
+            with self.subTest(fixture=name):
+                binary = OUT / (name + '-temporary-tree-ubsan')
+                source = ROOT / 'tests/win32/fixtures/installers' / (name + '.c')
+                subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                    '-DW32_HOST_MODEL', '-DFIXTURE_SOURCE="' + str(source) + '"',
+                    '-fsanitize=undefined', '-fno-sanitize-recover=all',
+                    '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include'),
+                    HERE / 'temporary_tree_test.c', '-o', binary], check=True)
+                result = subprocess.run([binary], capture_output=True, text=True, check=True)
+                print(result.stdout, end='')
+
     def test_shared_gate_installer_routing_ubsan(self):
         OUT.mkdir(parents=True, exist_ok=True)
         binary = OUT / 'shared-gate-ubsan'
@@ -311,6 +325,14 @@ class FlowFixtureTests(unittest.TestCase):
 
     def test_original_uninstaller_copies_launches_and_exits(self):
         self.run_driver_case(lambda driver: driver.original_uninstall())
+
+    def test_explicit_uninstaller_copy_preserves_unowned_parent(self):
+        # Include empty parents: a stray DIRNUL would succeed there instead
+        # of merely failing because an unrelated file prevents rmdir.
+        for directory in ('C:\\Existing unrelated directory', 'C:\\WINDOWS\\TEMP\\~nsu.tmp'):
+            for populated in (False, True):
+                with self.subTest(directory=directory, populated=populated):
+                    self.run_driver_case(lambda driver: driver.unrelated_uninstall(directory, populated))
 
     def test_actual_runonce_interruption_and_recovery(self):
         for boundary in ('journal_persisted', 'wininit_tick', 'wininit_retired', 'runonce_consumed', 'runonce_executed'):

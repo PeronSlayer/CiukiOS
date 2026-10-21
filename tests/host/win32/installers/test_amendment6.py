@@ -131,6 +131,15 @@ class Amendment6Tests(unittest.TestCase):
                             mutations += [(';[rename]\r\nNUL=' + operand + '\r\n').encode(),
                                           ('[rename]\r\n[Other]\r\nNUL=' + operand + '\r\n').encode(),
                                           ('[rename]\r\n;NUL=' + operand + '\r\n').encode(), valid + valid]
+                            # Amendment 7: the complete instruction set is
+                            # closed, including sections after the valid key.
+                            padded = valid + b';' + b' ' * (4096 - len(valid) - 3) + b'\r\n'
+                            target.write_bytes(padded)
+                            self.assertTrue(contents(3) & (1 << bit))  # exactly at the buffer limit, EOF
+                            extra = b'[DIRNUL]\r\nC:\\unrelated=0\r\n'
+                            mutations += [valid + extra, extra + valid, valid + b'[Other]\r\n',
+                                          b'NUL=outside-section\r\n' + valid,
+                                          valid + b'unexpected=value\r\n', padded + extra, padded + b' ']
                         if bit == 10:
                             mutations += [valid.replace(b'line=0', b'line=2'), valid.replace(b'handed=0', b'handed=1'),
                                           valid.replace(b'flags=2', b'flags=0'), valid.replace(b'phase=1', b'phase=2'), valid.replace(b'phase=1\n', b'')]
@@ -144,6 +153,38 @@ class Amendment6Tests(unittest.TestCase):
                 for offset in (8, 12, 36, 40, 40 + len(link_fields[0]), len(link) - 1):
                     bad = bytearray(link); bad[offset] ^= 1; target.write_bytes(bad)
                     self.assertFalse(contents(3) & 8)
+            finally:
+                service.close()
+
+    def test_amendment7_stage_specific_instruction_sets_and_eof(self):
+        with tempfile.TemporaryDirectory(dir=OUT) as name:
+            service = h.Services(name, self.library)
+            session = service.session()
+            try:
+                restart = self.expected['restart']['delete']
+                uninstall = self.expected['uninstall']['temporary_copy']
+                for stage in range(1, 9):
+                    for retired in ((False, True) if stage == 7 else (False,)):
+                        journal = session.path(self.expected['restart']['journal'])
+                        if retired: journal.write_bytes(b'CIUKIRST 1\nphase=2\nflags=2\nline=1\nhanded=0\n')
+                        elif journal.exists(): journal.unlink()
+                        for bit, filename in ((8, 'WININIT.INI'), (9, 'WININIT.BAK')):
+                            target = restart if (stage <= 5 if bit == 8 else stage <= 7 and not retired) else uninstall
+                            valid = ('[Rename]\r\nNUL=' + target + '\r\n').encode()
+                            padded = valid + b';' + b' ' * (4096 - len(valid) - 3) + b'\r\n'
+                            instruction = b'[DIRNUL]\r\nC:\\unrelated=0\r\n'
+                            cases = [(valid, True), (padded, True), (valid + instruction, False),
+                                     (padded + instruction, False), (padded + b' ', False),
+                                     (valid.replace(target.encode(), (uninstall if target == restart else restart).encode()), False)]
+                            for raw, accepted in cases:
+                                with self.subTest(stage=stage, retired=retired, file=filename, size=len(raw), accepted=accepted):
+                                    session.path('C:/WINDOWS/' + filename).write_bytes(raw)
+                                    service.registry._probe_reset()
+                                    out = C.create_string_buffer(4096)
+                                    for step in range(1, stage + 1):
+                                        self.assertEqual(service.registry._probe_checkpoint(service.registry.ctx, step, 1 if step == 1 else 0, out, len(out)), 1)
+                                    fields = dict(w.split('=', 1) for w in out.value.decode().split() if '=' in w)
+                                    self.assertEqual(bool(int(fields['contents'], 16) & (1 << bit)), accepted)
             finally:
                 service.close()
 

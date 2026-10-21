@@ -20,8 +20,19 @@ static const char *const installer_paths[]={
 static int installer_bytes(const char *path,uint8_t *bytes,unsigned cap,unsigned *count)
 {
     int fd=vfs_open(&installer_files,path,VFS_READ,VFS_DENY_NONE,0);if(fd<0)return fd;
-    size_t done=0;int e=vfs_read(&installer_files,fd,bytes,cap,&done);int close=vfs_close(&installer_files,fd);
-    *count=(unsigned)done;return e?e:close;
+    unsigned total=0;int e=0;*count=0;
+    while(total<cap){
+        size_t done=0;e=vfs_read(&installer_files,fd,bytes+total,cap-total,&done);
+        if(e || !done)break;total+=(unsigned)done;
+    }
+    /* A full buffer is not EOF. Never validate only a prefix of instructions
+     * (or a marker, link or journal) while ignoring a trailing operation. */
+    if(!e && total==cap){
+        uint8_t extra;size_t done=0;e=vfs_read(&installer_files,fd,&extra,1,&done);
+        if(!e && done)e=-FS_EFBIG;
+    }
+    int close=vfs_close(&installer_files,fd);
+    if(!e && !close)*count=total;return e?e:close;
 }
 static bool installer_text(const uint8_t *bytes,unsigned count,const char *text)
 {return strlen(text)==count && !memcmp(bytes,text,count);}
@@ -45,17 +56,20 @@ static bool installer_ini(const uint8_t *bytes,unsigned count,const char *target
         unsigned end=at;while(at<count && (bytes[at]=='\r' || bytes[at]=='\n'))at++;
         while(start<end && (bytes[start]==' ' || bytes[start]=='\t'))start++;
         while(end>start && (bytes[end-1]==' ' || bytes[end-1]=='\t'))end--;
-        if(start==end || bytes[start]==';' || bytes[start]=='#')continue;
+        if(start==end || bytes[start]==';')continue;
         if(bytes[start]=='['){
-            rename=end-start==8;
+            if(rename || end-start!=8)return false;
+            rename=true;
             const char *section="[rename]";
             for(unsigned i=0;rename && i<8;i++){
                 uint8_t c=bytes[start+i];if(c>='A' && c<='Z')c+=32;
                 if(c!=(uint8_t)section[i])rename=false;
             }
-            continue;
+            /* These checkpoints allow just [rename], with one NUL key.
+             * Even an empty additional section is outside their manifest. */
+            if(!rename)return false;continue;
         }
-        if(!rename)continue;
+        if(!rename)return false;
         unsigned equal=start;while(equal<end && bytes[equal]!='=')equal++;
         unsigned key_end=equal;while(key_end>start && (bytes[key_end-1]==' ' || bytes[key_end-1]=='\t'))key_end--;
         if(equal==end || key_end-start!=3)return false;

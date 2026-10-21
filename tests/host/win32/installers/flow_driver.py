@@ -236,14 +236,37 @@ class FixtureDriver:
             raise AssertionError(f'original uninstaller did not copy/start/exit: {spawned}')
         image = delegated[0]
         directory = image.rsplit('\\', 1)[0]
-        # The unchanged engine writes [Rename]; our authored section adds
-        # the Win9x DIRNUL retirement after deleting the running copy.
-        ini = ('[Rename]\r\nNUL=' + image + '\r\n[DIRNUL]\r\n' + directory + '=0\r\n').encode()
+        # The unchanged engine owns the copy/start/exit operation but reuses
+        # its shared directory. The authored section cannot claim ownership
+        # of that parent: only the delegated executable may be retired.
+        ini = ('[Rename]\r\nNUL=' + image + '\r\n').encode()
         path = lambda text: text[0] + '/' + text[3:].replace('\\', '/')
         state = {'files': {path(directory): 'directory', path(image): self.expected['identities']['uninstall.exe']['sha256'],
                           'C/WINDOWS/WININIT.INI': hashlib.sha256(ini).hexdigest()}, 'registry': {}}
         self.compare(state)
         self.service.assert_quiescent((directory.rsplit('\\', 1)[1], directory.rsplit('\\', 1)[1] + '/Au_.exe'))
         self.service.restart()
-        self.compare({'files': {'C/WINDOWS/WININIT.BAK': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
-        self.service.assert_quiescent()
+        self.compare({'files': {path(directory): 'directory',
+                               'C/WINDOWS/WININIT.BAK': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
+        self.service.assert_quiescent((directory.rsplit('\\', 1)[1],))
+
+    def unrelated_uninstall(self, directory, populated):
+        self.execute(fixture.NAME, '/S')
+        self.state(2)
+        parent = self.paths.path(directory)
+        parent.mkdir()
+        sentinel = b'pre-existing unrelated content'
+        if populated: (parent / 'unrelated.txt').write_bytes(sentinel)
+        image = directory + '\\copy.exe'
+        shutil.copyfile(self.installed / 'uninstall.exe', self.paths.path(image))
+        self.execute(image, '/S _?=C:\\Program Files\\Ciuki Installer Fixture')
+        ini = ('[rename]\r\nNUL=' + image + '\r\n').encode()
+        path = lambda text: text[0] + '/' + text[3:].replace('\\', '/')
+        preserved = {path(directory): 'directory'}
+        if populated: preserved[path(directory) + '/unrelated.txt'] = hashlib.sha256(sentinel).hexdigest()
+        self.compare({'files': preserved | {path(image): self.expected['identities']['uninstall.exe']['sha256'],
+                     'C/WINDOWS/WININIT.INI': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
+        self.service.restart()
+        self.compare({'files': preserved | {'C/WINDOWS/WININIT.BAK': hashlib.sha256(ini).hexdigest()}, 'registry': {}})
+        prefix = 'C/WINDOWS/TEMP/'
+        self.service.assert_quiescent([key[len(prefix):] for key in preserved if key.startswith(prefix)])

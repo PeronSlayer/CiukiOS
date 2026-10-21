@@ -14,11 +14,14 @@ static int run(void)
     int result=0;HANDLE setup=0,adv=0,api=0,h=K32_INVALID,process=0;
     DWORD key=0;void (W32API *close)(HANDLE)=0;
     LONG (W32API *regclose)(DWORD)=0;
-    tree[0]=0;
+    int reserved=0,created=0;tree[0]=0;
     DWORD n=GetModuleFileNameA(0,base,260);if(!n || n>=260)FAIL(1);
     unsigned last=0;for(unsigned i=0;i<n;i++)if(base[i]=='\\' || base[i]=='/')last=i;
     base[last]=0;if(!join(inf,base,"chain.inf") || !join(cab,base,"fixture.cab"))FAIL(2);
-    if(!GetTempPathA(260,temp) || !GetTempFileNameA(temp,"CIC",0,tree) || !DeleteFileA(tree) || !CreateDirectoryA(tree,0))FAIL(3);
+    if(!GetTempPathA(260,temp) || !(reserved=GetTempFileNameA(temp,"CIC",0,tree)!=0))FAIL(3);
+    if(!DeleteFileA(tree))FAIL(3);
+    reserved=0;
+    if(!(created=CreateDirectoryA(tree,0)!=0))FAIL(3);
     if(!extract(tree,cab))FAIL(4);
     if(!join(inf,tree,"chain.inf"))FAIL(2);
     setup=LoadLibraryExA("setupapi.dll",0,0),adv=LoadLibraryExA("advpack.dll",0,0);
@@ -89,16 +92,11 @@ cleanup:
     if(h!=K32_INVALID && close)close(h);
     if(key && regclose)regclose(key);
     if(api)FreeLibrary(api);if(adv)FreeLibrary(adv);if(setup)FreeLibrary(setup);
-    if(tree[0]){
-        DWORD attributes=GetFileAttributesA(tree);
-        if(attributes!=~0u){
-            if(attributes&16){
-                char file[260];const char *names[]={"child.done","child.exe","payload.txt","chain.inf","fixture.cab"};
-                for(unsigned i=0;i<5;i++)if(join(file,tree,names[i]) && GetFileAttributesA(file)!=~0u && !DeleteFileA(file))result=result?result:16;
-                if(!RemoveDirectoryA(tree))result=result?result:16;
-            }else if(!DeleteFileA(tree))result=result?result:16;
-        }
-    }
+    if(created){
+        char file[260];const char *names[]={"child.done","child.exe","payload.txt","chain.inf","fixture.cab"};
+        for(unsigned i=0;i<5;i++)if(join(file,tree,names[i]) && GetFileAttributesA(file)!=~0u && !DeleteFileA(file))result=result?result:16;
+        if(!RemoveDirectoryA(tree))result=result?result:16;
+    }else if(reserved && !DeleteFileA(tree))result=result?result:16;
     return result;
 }
 int W32API entry(void){ExitProcess((DWORD)run());return 1;}

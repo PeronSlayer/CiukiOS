@@ -387,8 +387,12 @@ class Session:
 
     def handle_path(self, h, writing=False):
         # A handle follows the object through renames. Never trust its old
-        # spelling for authority or metadata; /proc is adapter-only, not PE I/O.
-        current = Path(os.readlink(f'/proc/self/fd/{h.value}'))
+        # spelling for authority; /proc is adapter-only, not PE I/O. An
+        # unlinked open object still has valid descriptor-based metadata.
+        current = os.readlink(f'/proc/self/fd/{h.value}')
+        if not os.fstat(h.value).st_nlink and current.endswith(' (deleted)'):
+            current = current[:-10]
+        current = Path(current)
         try:
             relative = current.relative_to(self.service.root)
         except ValueError:
@@ -565,16 +569,23 @@ class Session:
             else:
                 os.fsync(h.value)
         elif action in (7, 8, 9):
+            fd = None
             if p is None:
-                p = self.handle_path(self.handles[handle], action in (8, 9))
-            st = p.stat() if p is not None else os.fstat(self.handles[handle].value)
-            target = str(p) if p is not None else self.handles[handle].name
+                h = self.handles[handle]
+                if h.kind != 7:
+                    raise KeyError(handle)
+                p = self.handle_path(h, action in (8, 9))
+                fd = h.value
+            st = p.stat() if fd is None else os.fstat(fd)
+            target = (st.st_dev, st.st_ino)
             metadata = self.service.metadata.get(target)
             if action == 7:
                 output(self.info(st, p.name if p else '', metadata))
             elif action == 8:
                 mode = st.st_mode
-                os.chmod(p or self.handles[handle].name, mode & ~0o222 if a[13] & 1 else mode | 0o200)
+                mode = mode & ~0o222 if a[13] & 1 else mode | 0o200
+                if fd is None: os.chmod(p, mode)
+                else: os.fchmod(fd, mode)
             else:
                 if not offset or count != 832 or offset > len(raw) or count > len(raw) - offset:
                     raise OSError(errno.EINVAL, 'timestamp input')

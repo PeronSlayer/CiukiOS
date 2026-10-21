@@ -115,9 +115,59 @@ class HostServiceTests(unittest.TestCase):
         s.path('C:\\WINDOWS\\TEMP\\ordinary').rename(s.path('C:\\System\\relocated'))
         self.assertEqual(call(s, h.FILE, {4: 3, 5: ordinary[16], 9: 1}, buffer=b'x')[0][17], 5)
         self.assertEqual(call(s, h.FILE, {4: 8, 5: ordinary[16], 13: 1})[0][17], 5)
+        s.path('C:\\System\\relocated').unlink()
+        # Authority still comes from the relocated object after unlink;
+        # stripping the Linux diagnostic suffix must not restore write access.
+        for action in (8, 9):
+            self.assertEqual(call(s, h.FILE, {4: action, 5: ordinary[16], 13: 7, 9: 832}, buffer=bytes(832))[0][17], 5)
         attempted, _ = call(s, h.FILE, {4: 1, 10: 0x40000000, 12: 2}, [(6, 'C:\\WINDOWS\\TEMP\\moved\\locked')])
         self.assertEqual(attempted[17], 2)
         self.assertEqual(protected.read_bytes(), b'unchanged')
+
+    def test_metadata_uses_open_descriptor_after_share_delete_unlink(self):
+        s = self.session
+        name = 'C:\\WINDOWS\\TEMP\\metadata'
+        opened, _ = call(s, h.FILE, {4: 1, 10: 0xc0000000, 11: 7, 12: 1}, [(6, name)])
+        handle = opened[16]
+        self.assertEqual(opened[17], 0)
+        self.assertEqual(call(s, h.FILE, {4: 3, 5: handle, 9: 5}, buffer=b'Ciuki')[0][17], 0)
+        timestamps = bytearray(832)
+        dates = (33, 0, 34, 35, 1)
+        struct.pack_into('<5H', timestamps, 12, *dates)
+        self.assertEqual(call(s, h.FILE, {4: 9, 5: handle, 13: 7, 9: 832}, buffer=timestamps)[0][17], 0)
+        self.assertEqual(call(s, h.FILE, {4: 10}, [(6, name)])[0][17], 0)
+        self.assertFalse(s.path(name).exists())
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                if replacement:
+                    s.path(name).write_bytes(b'new object at the same name')
+                info, raw = call(s, h.FILE, {4: 7, 5: handle, 9: 832}, buffer=bytes(832))
+                self.assertEqual(info[17], 0)
+                self.assertEqual(struct.unpack_from('<II', raw, info[8] + 4), (5, 0))
+                self.assertEqual(struct.unpack_from('<5H', raw, info[8] + 12), dates)
+                # Attribute changes affect the descriptor, even if the old
+                # pathname is absent or now names an unrelated replacement.
+                self.assertEqual(call(s, h.FILE, {4: 8, 5: handle, 13: 1})[0][17], 0)
+                self.assertFalse(os.fstat(s.handles[handle].value).st_mode & 0o222)
+                if replacement:
+                    self.assertTrue(s.path(name).stat().st_mode & 0o222)
+                    self.assertEqual(s.path(name).read_bytes(), b'new object at the same name')
+                self.assertEqual(call(s, h.FILE, {4: 8, 5: handle, 13: 128})[0][17], 0)
+        dates = (36, 1, 37, 38, 2)
+        struct.pack_into('<5H', timestamps, 12, *dates)
+        self.assertEqual(call(s, h.FILE, {4: 9, 5: handle, 13: 7, 9: 832}, buffer=timestamps)[0][17], 0)
+        info, raw = call(s, h.FILE, {4: 7, 5: handle, 9: 832}, buffer=bytes(832))
+        self.assertEqual(info[17], 0)
+        self.assertEqual(struct.unpack_from('<5H', raw, info[8] + 12), dates)
+        self.assertEqual(call(s, h.OBJECT, {4: 3, 6: handle})[0][15], 0)
+
+    def test_metadata_keeps_literal_deleted_suffix_on_linked_names(self):
+        s = self.session
+        opened, _ = call(s, h.FILE, {4: 1, 10: 0xc0000000, 11: 7, 12: 1},
+                         [(6, 'C:\\WINDOWS\\TEMP\\literal (deleted)')])
+        self.assertEqual(opened[17], 0)
+        self.assertEqual(call(s, h.FILE, {4: 8, 5: opened[16], 13: 1})[0][17], 0)
+        self.assertFalse(s.path('C:\\WINDOWS\\TEMP\\literal (deleted)').stat().st_mode & 0o222)
 
     def test_delete_on_close_is_explicitly_refused(self):
         reply, _ = call(self.session, h.FILE, {4: 1, 10: 0x40000000, 12: 2, 13: 0x04000000},
