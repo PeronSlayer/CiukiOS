@@ -65,7 +65,7 @@ def menu_names(root=ROOT):
             tables[current] = set()
         elif current is None:
             continue
-        elif line[:1] not in (' ', '\t') and not re.match(r'f\d_(sweep|crash)_name\b', line):
+        elif line[:1] not in (' ', '\t') and not re.match(r'f\d_(sweep|crash|title)_name\b', line):
             current = None  # an unrelated label ends the list
             continue
         if current is None:
@@ -81,7 +81,9 @@ def menu_names(root=ROOT):
 def loader_model_accepts(phase, name):
     """True when the host reference model's selector grammar accepts the name."""
     try:
-        loader_model.selector('f%d:%s run=00000000' % (phase, name))
+        request = 'f%d:%s run=00000000' % (phase, name)
+        if phase == 3 and name == 'title': request += ' title=fixture'
+        loader_model.selector(request)
     except ValueError:
         return False
     return True

@@ -176,7 +176,10 @@ class MusicTests(unittest.TestCase):
         self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "accessories", NULL}',shell)
         self.assertIn('if (d->pictures_exists) icon_add(d, "Pictures"',shell)
         image = (ROOT/'scripts/build_image.py').read_text()
-        for token in ('"/Documents/Pictures"', '"/Documents/Music"', '"/Programs/music"', '"/system/licenses/minimp3.txt"', '"/system/licenses/stb_vorbis.txt"'):
+        for token in ('"/Documents/Pictures"', '"/Documents/Music"', '"/Programs/music"'):
             self.assertIn(token,image)
+        licenses = load('music_image_licenses', ROOT/'scripts/build_image.py').desktop_license_payloads()
+        self.assertEqual(licenses['/system/licenses/minimp3.txt'], ROOT/'third_party/minimp3/LICENSE')
+        self.assertEqual(licenses['/system/licenses/stb_vorbis.txt'], ROOT/'third_party/stb/LICENSE')
 
 if __name__ == '__main__': unittest.main()

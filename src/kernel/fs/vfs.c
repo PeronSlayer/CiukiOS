@@ -402,6 +402,22 @@ bool vfs_identity_live(struct vfs *v, struct vfs_file_identity *id) {
     bool live=id->valid && id->generation==identity_generation(v,id->volume) && !id->volume->dev->quarantined;
     fs_lock_drop(&v->identity_lock); return live;
 }
+uint64_t vfs_identity_file_id(struct vfs *v, struct vfs_file_identity *id,
+                              uint32_t *volume_serial) {
+    *volume_serial=0;
+    if (!id) return 0;
+    fs_lock_take(&v->identity_lock);
+    uint64_t file_id=0;
+    if (id->valid && id->volume->mounted &&
+        id->generation==identity_generation(v,id->volume) && !id->volume->dev->quarantined) {
+        /* FAT clusters use at most 28 bits. Bit 63 is reserved for retained
+         * unlinked generations, which cannot collide with owning locations.
+         * Bias by one so fixed-root entry zero is a usable nonzero index. */
+        file_id=id->linked ? (((uint64_t)id->parent<<32)|id->index)+1 : id->unlinked_id;
+        if (file_id) *volume_serial=id->volume->volume_serial;
+    }
+    fs_lock_drop(&v->identity_lock); return file_id;
+}
 void vfs_identity_put(struct vfs *v, struct vfs_file_identity *id) {
     if (!id) return;
     fs_lock_take(&v->identity_lock); if (id->refs) id->refs--; fs_lock_drop(&v->identity_lock);
@@ -473,7 +489,15 @@ static void identity_change(void *ctx, struct fat_volume *vol, const struct fat_
     struct vfs_file_identity *id=identity_find(v,vol,old);
     if (id) {
         if (why==FAT_ID_RENAME) { id->parent=entry->parent; id->index=entry->index; id->linked=true; }
-        else if (why==FAT_ID_UNLINK) id->linked=false;
+        else if (why==FAT_ID_UNLINK) {
+            if (id->linked) {
+                /* Keep deleted-but-retained files distinct from slot reuse,
+                 * without exporting the recyclable identity-cache serial. */
+                id->unlinked_id=v->next_unlinked_id<INT64_MAX ?
+                    (UINT64_C(1)<<63)|++v->next_unlinked_id : 0;
+            }
+            id->linked=false;
+        }
         else invalidate_pages(v,id); /* writes/truncate also invalidate partial EOF pages */
     }
     fs_lock_drop(&v->identity_lock);

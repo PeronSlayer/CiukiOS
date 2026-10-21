@@ -109,8 +109,10 @@ static void amendment_file_identity(void) {
   uint32_t h = a.result;
   struct ciuki_w32_file_info first = handle_info(h);
   CHECK(first.volume_serial == 0x00c1a001 && first.file_id);
+  struct vfs_file_identity *identity = handles[h/4]->u.file.description->identity;
+  uint64_t cache_serial = identity->serial;
   CHECK(first.volume_serial == volumes[0].volume_serial &&
-        first.file_id == handles[h/4]->u.file.description->identity->serial);
+        first.file_id == (((uint64_t)identity->parent << 32) | identity->index) + 1);
   char short_name[128];
   CHECK(first.alias[0] && strcmp(first.name, first.alias));
   snprintf(short_name, sizeof(short_name), "C:\\WINDOWS\\%s", first.alias);
@@ -135,19 +137,62 @@ static void amendment_file_identity(void) {
   CHECK(second.file_id == first.file_id && second.volume_serial == first.volume_serial);
   close_handle(alias);
   close_handle(h);
+  /* Force the unreferenced cache slot to serve an unrelated file before A
+   * reopens: exporting its cache serial fails this regression. */
+  a = open_request("C:\\WINDOWS\\Identity Churn.wav", 0xc0000000u, 7, 1);
+  CHECK(!a.error);
+  close_handle(a.result);
   for (unsigned order = 0; order < 2; order++) {
     a = open_request(order ? long_name : short_name, 0x80000000u, 7, 3);
     CHECK(!a.error);
     second = handle_info(a.result);
     CHECK(second.file_id == first.file_id && second.volume_serial == first.volume_serial);
+    CHECK(handles[a.result/4]->u.file.description->identity->serial != cache_serial);
     close_handle(a.result);
   }
+  CHECK(!path_request("C:\\WINDOWS\\IDMOVE", W32_F_MKDIR));
+  a = open_request(long_name, 0x80000000u, 7, 3);
+  CHECK(!a.error);
+  h = a.result;
+  put_path(USER, long_name);
+  put_path(USER+512, "C:\\WINDOWS\\IDMOVE\\Renamed.wav");
+  a = (struct ciuki_w32_file_args){.action=W32_F_MOVE, .path=USER, .path2=USER+512};
+  CHECK(!w32_file_call(client_thread, &a) && !a.error);
+  second = handle_info(h);
+  CHECK(second.volume_serial == first.volume_serial && second.file_id &&
+        second.file_id != first.file_id);
+  first = second;
+  a = open_request("C:\\WINDOWS\\IDMOVE\\Renamed.wav", 0x80000000u, 7, 3);
+  CHECK(!a.error);
+  second = handle_info(a.result);
+  CHECK(second.file_id == first.file_id);
+  close_handle(a.result);
+  /* A retained handle cannot export an identity from an earlier medium, a
+   * quarantined device or an explicit raw-change expiry. */
+  identity = handles[h/4]->u.file.description->identity;
+  identity->volume->dev->media_generation++;
+  second = handle_info(h);
+  CHECK(!second.volume_serial && !second.file_id);
+  identity->volume->dev->media_generation--;
+  identity->volume->dev->quarantined = true;
+  second = handle_info(h);
+  CHECK(!second.volume_serial && !second.file_id);
+  identity->volume->dev->quarantined = false;
+  second = handle_info(h);
+  CHECK(second.file_id == first.file_id && second.volume_serial == first.volume_serial);
+  vfs_lock(&vfs, vfs_drive_mask(2));
+  vfs_identity_expire(&vfs, identity->volume);
+  vfs_unlock(&vfs);
+  CHECK(!identity->valid);
+  second = handle_info(h);
+  CHECK(!second.volume_serial && !second.file_id);
+  close_handle(h);
   a = open_request("C:\\dev\\null", 0x80000000u, 7, 3);
   CHECK(!a.error);
   second = handle_info(a.result);
   CHECK(!second.volume_serial && !second.file_id);
   close_handle(a.result);
-  puts("PASS file-info identity: FAT volume serial, long/short alias, distinct files, reopen, device zero");
+  puts("PASS file-info identity: FAT volume serial, long/short alias, distinct files, cache churn, rename, expiry, device zero");
 }
 static void amendment_files(void) {
   struct ciuki_w32_file_args a=open_request("C:\\WINDOWS\\locks.bin",0xc0000000u,7,1);

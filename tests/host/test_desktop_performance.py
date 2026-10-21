@@ -28,7 +28,8 @@ class DesktopPerformanceTests(unittest.TestCase):
         self.run_model("performance", ["tests/host/desktop/performance_test.c", "tests/host/desktop/fake.c",
                        *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "wallpaper", "keymap", "folder")),
                        "apps/files/model.c", "apps/files/transfer.c",
-                       "apps/libdeskui/draw.c"], ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
+                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))],
+                       ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
                        ["-DF125_WRAP_ALLOC", "-Wl,--wrap=malloc"])
 
     def test_settings_worker(self):

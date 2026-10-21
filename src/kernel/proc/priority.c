@@ -21,7 +21,7 @@ int proc_priority_win32(uint32_t priority_class, int relative, bool foreground)
     unsigned base;
     switch (priority_class) {
     case 0x40: base = 4; break; /* IDLE_PRIORITY_CLASS (not the idle task) */
-    case 0x20: base = foreground ? SCHED_FOREGROUND : SCHED_NORMAL; break;
+    case 0x20: base = foreground ? SCHED_FOREGROUND : CIUKI_SCHED_NORMAL; break;
     case 0x80: base = SCHED_HIGH; break;
     case 0x100: return -EPERM; /* REALTIME_PRIORITY_CLASS reserved */
     default: return -EINVAL;

@@ -7,6 +7,7 @@
 struct probe_selection {
     unsigned phase;
     char probe[24], run[9];
+    char title[24]; /* selector-only f3:title, never included in a sweep */
     uint32_t flags;
 };
 

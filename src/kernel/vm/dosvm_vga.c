@@ -1048,22 +1048,30 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
 }
 
 /* Probe/host digest sink: the complete frame, every row in order. */
-struct frame_sink { struct sha256_ctx sha; unsigned next; };
+struct frame_sink {
+    struct sha256_ctx sha; unsigned next;
+    int (*row)(void *,unsigned,const void *,unsigned); void *arg;
+};
 static int hash_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 {
     struct frame_sink *sink = arg;
     if (y != sink->next || bytes != DOSVM_VIDEO_WIDTH * 4) return -EINVAL;
+    if (sink->row) {
+        int error=sink->row(sink->arg,y,pixels,bytes);
+        if (error) return error;
+    }
     sha256_update(&sink->sha, pixels, bytes);
     sink->next++;
     return 0;
 }
-int dosvm_frame_digest(struct dosvm *v, uint64_t tick, struct dosvm_frame *out)
+int dosvm_frame_capture(struct dosvm *v, uint64_t tick, struct dosvm_frame *out,
+                       int (*row)(void *,unsigned,const void *,unsigned),void *arg)
 {
     /* This scanout consumer only reads the model. Publish pending pages but
      * retain the writable aperture; closing it strands a planar stream until
      * a changed map mask, since the old fault retry only admits chain-4. */
     dosvm_vga_sync(v, false);
-    struct frame_sink sink = {.next = 0};
+    struct frame_sink sink = {.next = 0,.row=row,.arg=arg};
     struct ciuki_rect damage;
     sha256_init(&sink.sha);
     v->video_presented = false;                   /* every row, borders included */
@@ -1081,3 +1089,5 @@ int dosvm_frame_digest(struct dosvm *v, uint64_t tick, struct dosvm_frame *out)
     out->mode = v->vbe_mode ? v->vbe_mode : mode;
     return 0;
 }
+int dosvm_frame_digest(struct dosvm *v,uint64_t tick,struct dosvm_frame *out)
+{ return dosvm_frame_capture(v,tick,out,0,0); }

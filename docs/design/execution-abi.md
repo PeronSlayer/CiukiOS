@@ -2160,13 +2160,25 @@ F5-12B amendment 4 appends `uint64_t file_id` at byte 832 and
 is four bytes on both the host adapter and i686; the original 832-byte prefix
 is unchanged. All file-info producers and consumers use the new 844-byte size;
 no action numbers, argument records or native F2 records change. Handle STAT
-copies the FAT boot-sector volume serial from the mounted volume and the
-description's retained VFS identity serial. The latter is assigned by volume,
-mount generation and owning short-entry location, so long names and 8.3 aliases
-agree, distinct live files differ (including empty files), and rename/unlink
-cannot change an open description's identity. Reopen reuses a retained VFS
-identity; IDs are session-local, not persistent disk identifiers. The bounded
-VFS identity cache may recycle an unreferenced identity after final close.
+copies the FAT boot-sector volume serial from the mounted volume. Amendment 5
+derives the file index from the owning short directory entry:
+`((uint64_t)directory_first_cluster << 32 | entry_index) + 1`. The volume
+serial supplies the volume part of the identity tuple; adding one reserves
+zero for unavailable identities, including FAT16's fixed root directory.
+Long names and 8.3 aliases agree, distinct live files differ (including empty
+files), and closing/reopening with unrelated opens in between cannot change
+the index. The recyclable cache serial remains internal to VFS page/handle
+identity. A rename that relocates the owning entry changes the exported index;
+a rename preserving that entry's location preserves it. FAT indices are not
+persistent across renames or deletion/recreation, as Microsoft documents.
+On unlink, a retained identity receives an independent session generation
+tagged with bit 63 (outside FAT directory-cluster location indices), so a new
+file reusing the slot differs from every retained unlinked file. That tag lasts
+for the retained identity's lifetime; if its 63-bit sequence is exhausted the
+query returns zero identity fields. These tags are not on-disk identifiers.
+The identity lock protects the validity/mount-media generation check and both
+output fields as one snapshot. Expired identities and quarantined volumes
+return zero fields, including expiry between open and handle STAT.
 Path-only STAT and enumeration do not acquire an identity. Providers without
 a retained FAT identity, including device nodes, leave both fields zero; pipe
 handles retain their existing unsupported handle-STAT error.
@@ -2176,9 +2188,8 @@ to `dwVolumeSerialNumber` in `GetFileInformationByHandle`. This follows
 Microsoft's [handle query](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
 and [BY_HANDLE_FILE_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
 identity tuple; Microsoft notes that FAT IDs derive from the containing
-directory/entry location and are not guaranteed stable over time. Exporting
-the retained serial also distinguishes an open unlinked file from a new file
-that reuses its directory slot. MCI refuses file opens with a zero file index
+directory/entry location and are not guaranteed stable over time. MCI refuses
+file opens with a zero file index
 as `MCIERR_FILE_READ`, even when the query succeeded, rather than comparing
 unknown identities. A zero volume serial alone is valid when the index is
 nonzero. This supplies the resource key for the nonsharable waveform/sequence

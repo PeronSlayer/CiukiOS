@@ -42,7 +42,7 @@ struct __attribute__((packed, aligned(4))) ciuki_w32_file_info {
   uint16_t create_date, create_time, access_date, write_date, write_time;
   uint8_t create_tenths, reserved;
   char name[768], alias[40]; /* VFS UTF-8 names */
-  uint64_t file_id; /* Retained VFS identity; zero for providers without one. */
+  uint64_t file_id; /* FAT location or retained unlink generation; zero if unavailable. */
   uint32_t volume_serial;
 };
 struct ciuki_w32_disk_info {

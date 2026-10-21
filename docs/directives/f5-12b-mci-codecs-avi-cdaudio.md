@@ -56,3 +56,10 @@ Amendment 3's prerequisite does not exist yet: `sdk/win32/kernel32/files.c:632�
 3. Tests: kernel host test of the transport (long name and alias → same id, distinct files → distinct ids, id stable across reopen, device → zero), kernel32 unit, and the MCI alias regression `test_mci_file_identity_ownership` now passing for real (the lead's win32 run outside the sandbox is the gate: it was green on 85ae75ac with the consumer alone).
 
 Report section "Amendment 4".
+
+## Amendment 5 (lead, 2026-10-21): two findings of the review of amendment 4
+
+1. **P2 — handle STAT exports expired identities** (`src/kernel/proc/win32/files.c:581`): `d->identity != NULL` alone lets an identity invalidated by `vfs_identity_expire()` (raw change, surprise removal) be returned as valid. Check the identity's validity flag/generation and return zero fields (or the documented error) for an expired identity; test with an expiry between open and query.
+2. **P2 — file identity not stable for the file's lifetime** (`src/kernel/fs/vfs.c:388`): the exported serial comes from a recyclable identity cache slot (query A, close A, open unrelated B, reopen A can change A's index). Derive the 64-bit file id from the **on-disk location of the owning short directory entry** (volume + directory cluster + entry index), which is stable until delete or rename, and keep the cache serial internal; rename changes the id by definition (document it as Windows does for FAT: `nFileIndex` is not persistent across renames on FAT), delete+create at the same location is distinguished by the retained identity's generation where available. Tests: stability across close/reopen with an unrelated open in between, change on rename, device zero.
+
+Apply this amendment only; report section "Amendment 5".
