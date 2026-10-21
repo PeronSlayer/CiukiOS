@@ -27,6 +27,8 @@ if args.kernel:
     includes += ['-I', str(PORT / 'libc')]
 files = [source / 'src' / n for n in recipe['SOURCES']] + [PORT / n for n in (
     'sys_arch.c', 'stack.c', 'sockets.c', 'syscalls.c')]
+if not args.kernel:
+    files += [ROOT / 'src/kernel/net/bridge.c', ROOT / 'src/kernel/net/packet_pool.c']
 if args.kernel:
     files += [ROOT / n for n in ('src/kernel/net/lwip_handoff.c', 'src/kernel/core/syscall.c',
         'src/kernel/proc/fdtable.c', 'src/kernel/proc/channel.c', 'src/kernel/proc/grants.c',

@@ -69,6 +69,8 @@ static const struct acm_api *acm(void) {
 #define WAVE_BUFFERS 4u
 #define FORMAT_MAX 1046u
 struct wave {
+  struct mci_cleanup cleanup;
+  const struct mci_host *host;
   HANDLE file;
   uint32_t data_offset, data_bytes, total, time_format;
   uint8_t format[FORMAT_MAX];
@@ -176,6 +178,7 @@ static uint32_t wave_open(struct mci_device *d, uint32_t flags,
   if (!w)
     return MCIERR_OUT_OF_MEMORY;
   w32_fill(w, 0, sizeof(*w));
+  w->host = d->host;
   w->file = K32_INVALID;
   if (d->element[0]) {
     w->file = CreateFileA(d->element, 0x80000000u, 1, 0, 3, 0, 0);
@@ -194,24 +197,31 @@ static uint32_t wave_open(struct mci_device *d, uint32_t flags,
   d->data = w;
   return 0;
 }
-static void release_output(struct mci_device *d, struct wave *w) {
+static int release_output(struct mci_device *d, struct wave *w) {
+  (void)d;
   if (w->out) {
-    waveOutReset(w->out);
+    if (waveOutReset(w->out)) return 0;
     for (unsigned i = 0; i < WAVE_BUFFERS; i++)
       if (w->header[i].flags & WA_PREPARED)
-        waveOutUnprepareHeader(w->out, &w->header[i], sizeof(w->header[i]));
-    waveOutClose(w->out);
+        if (waveOutUnprepareHeader(w->out, &w->header[i], sizeof(w->header[i]))) return 0;
+    if (waveOutClose(w->out)) return 0;
     w->out = 0;
   }
-  if (w->stream && acm())
-    acm()->close(w->stream, 0);
+  if (w->stream && acm() && acm()->close(w->stream, 0)) return 0;
   w->stream = 0;
   for (unsigned i = 0; i < WAVE_BUFFERS; i++) {
-    d->host->free(w->buffer[i]);
+    w->host->free(w->buffer[i]);
     w->buffer[i] = 0;
   }
-  d->host->free(w->packed);
+  w->host->free(w->packed);
   w->packed = 0;
+  return 1;
+}
+static int wave_cleanup(void *p) {
+  struct wave *w = p;
+  if (!release_output(0, w)) return 0;
+  w->host->free(w);
+  return 1;
 }
 struct mmtime {
   uint32_t type;
@@ -240,7 +250,11 @@ static void wave_close(struct mci_device *d) {
   halt(d, w);
   if (w->file != K32_INVALID)
     CloseHandle(w->file);
-  d->host->free(w);
+  if (!wave_cleanup(w)) {
+    w->cleanup.run = wave_cleanup;
+    w->cleanup.context = w;
+    d->host->defer(&w->cleanup);
+  }
 }
 /* Fills one header with up to buffer_frames PCM frames from read_at. */
 static uint32_t fill(struct mci_device *d, struct wave *w, unsigned i) {
@@ -306,6 +320,7 @@ static uint32_t fill(struct mci_device *d, struct wave *w, unsigned i) {
 }
 static uint32_t start(struct mci_device *d, struct wave *w, uint32_t from,
                       uint32_t to) {
+  if (!release_output(d, w)) return MCIERR_DEVICE_NOT_READY;
   if (!w->spb)
     return MCIERR_WAVE_OUTPUTSUNSUITABLE;
   uint32_t r = waveOutOpen(&w->out, 0, &w->pcm, 0, 0, 0);
@@ -316,8 +331,7 @@ static uint32_t start(struct mci_device *d, struct wave *w, uint32_t from,
   if (w->tag != 1) {
     if (!acm() ||
         acm()->open(&w->stream, 0, w->format, &w->pcm, 0, 0, 0, 0)) {
-      waveOutClose(w->out);
-      w->out = w->stream = 0;
+      release_output(d, w);
       return MCIERR_WAVE_OUTPUTSUNSUITABLE;
     }
   }
@@ -354,6 +368,7 @@ static uint32_t start(struct mci_device *d, struct wave *w, uint32_t from,
 static void wave_service(struct mci_device *d, uint32_t now) {
   (void)now;
   struct wave *w = d->data;
+  if (w->mode == STOPPED) release_output(d, w);
   if (w->mode != PLAYING || !w->out)
     return;
   uint32_t outstanding = 0;

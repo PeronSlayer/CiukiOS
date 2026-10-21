@@ -7,6 +7,10 @@ int net_stack_init(void);
 void net_stack_input(unsigned, const void *, unsigned);
 void net_stack_link(unsigned, bool);
 int net_stack_attach(unsigned, const uint8_t mac[6], bool link);
+/* Index of the successfully attached default physical netif; no fallback to
+ * a different running adapter when the selected port loses carrier. */
+int net_stack_primary(void);
+int net_stack_random_id(uint8_t[16]);
 void net_stack_address(unsigned, uint32_t *address);
 int net_stack_dhcp_error(unsigned);
 int net_stack_transmit(unsigned, const void *, unsigned);

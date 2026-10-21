@@ -253,6 +253,15 @@ class LoaderParserTests(unittest.TestCase):
                 requests.add(f'{phase}:sweep run=12345678' + suffix)
         for title in ('a', 'a'*23, 'a'*24, '', 'A', '0a', 'a-0', 'a_b'):
             requests.add('f3:title run=12345678 title=' + title)
+        # f3-55 DOS conformance grammar: exactly three suffixes, every source.
+        for suffix in ('', ' guest=freedos', ' guest=ciukidos', ' guest=ciukidos kernel=unified',
+                       ' guest=freedos kernel=unified', ' guest=unified', ' guest=ciukido',
+                       ' guest=freedosx', ' guest=ciukidos kernel=master', ' guest=ciukidos kernel=unifie',
+                       ' guest=ciukidos kernel=unified ', ' guest=freedos guest=ciukidos',
+                       ' guest=freedos platform=e500', ' platform=e500 guest=freedos',
+                       ' guest=ciukidos safe=1', ' guest=ciukidos kernel=unified x=1'):
+            requests.add('f3:dos-conformance run=1234aBcD' + suffix)
+            requests.add('f2:dos-conformance run=1234aBcD' + suffix)
         for phase, name in ((2, 'crash-isolation'), (0, 'boot'), (3, 'vm-boot')):
             for suffix in (' server=desktop', ' server=standin', ' safe=1 server=desktop',
                            ' platform=e500 server=standin', ' server=other', ' safe=1 platform=e500'):

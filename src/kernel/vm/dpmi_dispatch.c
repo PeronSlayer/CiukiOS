@@ -1328,6 +1328,37 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     return e;
 }
 
+/* Asynchronous conventional-memory ESR. Use the same suspended continuation
+ * and host real stack as interrupt reflection, but a far-return frame.
+ * Unlike an IRQ this does not acknowledge or measure a virtual PIC source. */
+int dpmi_to_real_call(struct dosvm *v, struct v86_frame *f, uint16_t cs, uint16_t ip,
+                      uint16_t return_ip)
+{
+    struct dpmi *d = &v->dpmi;
+    if (!v->frame_pm || !d->active || !dosvm_range(v, ((uint32_t)cs << 4) + ip, 1, false)) return -EFAULT;
+    if (d->depth >= DPMI_DEPTH || d->rstack_top < DPMI_RSTACK_LEVEL) return -ENOSPC;
+    /* Do not preserve the host's temporary single-step flag as client state. */
+    if (return_unstep(v, f, false)) d->return_replan = true;
+    unsigned depth = d->depth;
+    struct dpmi_record *r;
+    int e = dpmi_push_record(v, f, DPMI_REC_REFLECT, &r);
+    if (e) return e;
+    r->flags = DPMI_RF_HWINT; /* full register/selector/decode restoration */
+    uint16_t ss, sp;
+    if ((e = dpmi_rm_stack(v, &ss, &sp))) { dpmi_unwind(v, depth); return e; }
+    uint16_t ret[2] = {return_ip, 0xf000};
+    if (dosvm_write(v, ((uint32_t)ss << 4) + sp - 4, ret, sizeof(ret))) {
+        dpmi_unwind(v, depth); return -EFAULT;
+    }
+    struct v86_frame n = {0};
+    dpmi_gprs(&n, f);
+    n.tf.user_ss = ss; n.tf.user_esp = sp - 4;
+    n.tf.cs = cs; n.tf.eip = ip;
+    n.tf.eflags = (f->tf.eflags & 0x08d5u) | V86_VM | V86_IF | 2u;
+    dpmi_set_pm(v, false); v->monitor.vif = false; *f = n;
+    return 0;
+}
+
 /* Virtual IRQ delivery while a client exists. Hooked vectors reach the
  * protected-mode handler; others keep the default real-mode reflection.
  * Guest IRQ vectors use the PM interrupt table, never the exception table. */

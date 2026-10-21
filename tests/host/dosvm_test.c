@@ -342,7 +342,7 @@ static void run_worker(struct dosvm *v)
 
 /* File-backed fake VFS transport. Production overlay indexing remains real. */
 static struct storage store = {.ready=true};
-static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open, identity_open; uint64_t pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
+static struct { struct vfs_table *table; FILE *cow; bool base_open, cow_open, identity_open, unified_identity; uint64_t pos[2], base_bytes; char path[80]; void (*base_sector)(uint32_t, void *); } files[DOSVM_LIMIT];
 static unsigned handles, tables, scratch, disk_reads, disk_writes, commits, deletes, base_seeks;
 static unsigned io_calls, io_fail_at;
 static bool short_read, short_write, fail_delete, fail_commit, fail_close, bad_signature;
@@ -368,20 +368,22 @@ void vfs_table_destroy(struct vfs_table *table)
  * bundled games disk (owner decision 2026-10-12) is C:\\GAMES\\CIUKIGAM.IMG,
  * present while bundled_disk is set, bundled_bytes long (cut images). */
 static char last_base[32];
-static bool reference_present,reference_checksum_missing;
+static bool reference_present,reference_checksum_missing,unified_present,unified_checksum_missing;
 static char reference_identity[66];
+static char unified_identity[66];
 static bool workload_disk, bundled_disk = true, bundled_directory;
 static char workload_drive = 'D';
 static uint32_t bundled_bytes = DOSVM_SECTORS * 512u;
 static unsigned workload_scans, bundled_scans;
 static int fixture_errors[26], bundled_error, bundled_open_error;
 static bool fixture_path(const char *path) { return strlen(path) == 15 && path[0] >= 'D' && path[0] <= 'Z' && path[1] == ':' && !strcmp(path + 2, "\\CIUKIGAM.IMG"); }
-static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || fixture_path(path) || !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG"); }
-static uint64_t base_bytes(const char *path) { return (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG")) ? bundled_bytes : DOSVM_SECTORS * 512u; }
+static bool base_path(const char *path) { return !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\DOSBOOT.IMG") || fixture_path(path) || !strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG"); }
+static uint64_t base_bytes(const char *path) { return (!strcmp(path,"C:\\GAMES\\CIUKIGAM.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG") || !strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG")) ? bundled_bytes : DOSVM_SECTORS * 512u; }
 int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 {
     (void)file_slot(table);
     if (!strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.IMG") && !reference_present) return -ENOENT;
+    if (!strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.IMG") && !unified_present) return -ENOENT;
     if (fixture_path(path)) {
         CHECK(path[0] >= 'D' && path[0] <= 'Z');
         if (path[0] == 'D') workload_scans++;
@@ -397,8 +399,9 @@ int vfs_stat(struct vfs_table *table, const char *path, struct fat_entry *entry)
 int vfs_open(struct vfs_table *table, const char *path, unsigned access, enum vfs_share share, uint8_t attr)
 {
     unsigned i=file_slot(table); CHECK(attr==0); if (io_fails()) return -V86_EIO;
-    if (!strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.SHA")) {
-        if (reference_checksum_missing) return -ENOENT;
+    if (!strcmp(path,"C:\\SYSTEM\\DOS\\FREEDOS.SHA") || !strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.SHA")) {
+        files[i].unified_identity=!strcmp(path,"C:\\SYSTEM\\DOS\\UNIFIED.SHA");
+        if (files[i].unified_identity ? unified_checksum_missing : reference_checksum_missing) return -ENOENT;
         CHECK(!files[i].identity_open && access==VFS_READ && share==VFS_DENY_WRITE);
         files[i].identity_open=true; handles++; return 2;
     }
@@ -444,7 +447,7 @@ int vfs_read(struct vfs_table *table, int handle, void *data, size_t bytes, size
 {
     unsigned i=file_slot(table); disk_owned(table);
     if (handle==2) {
-        CHECK(files[i].identity_open && bytes==66); *done=65; memcpy(data,reference_identity,65); return 0;
+        CHECK(files[i].identity_open && bytes==66); *done=65; memcpy(data,files[i].unified_identity ? unified_identity : reference_identity,65); return 0;
     }
     CHECK(bytes && !(bytes % 512) && bytes <= DOSVM_READ_SECTORS * 512u && (!handle || bytes == 512));
     disk_reads++;
@@ -566,6 +569,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 #undef as_map
 #undef memcpy
 #undef memset
+#include "dosvm_network_seams.inc"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"
@@ -910,6 +914,11 @@ int main(void)
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
     if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
+    if(getenv("CIUKI_VM_KERNEL_CHOICE")){
+        test_kernel_choice();test_client_boundary();
+        printf("H55-04 native selector/overlay tests: PASS (%u checks)\n",checks);
+        fflush(stdout);free(ram);return 0;
+    }
     test_d48_bios_and_export();
     test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_maximum_creation();

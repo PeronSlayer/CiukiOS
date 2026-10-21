@@ -14,3 +14,7 @@
 ## Constraints
 
 Use `rg` and `sed`, never `semble`. No QEMU, no `systemd-run`, no image builds, no commits, no diary edits, host tests one at a time with `nice -n 19`. Installer payloads only from `build/win32-workloads/` as downloaded by the lead (never committed, never copied into `build/f0/` or the image); no modification of the original installers; licence classes of the manifest respected (owner-local titles are not used on the adapter unless the manifest marks them freely distributable); no new `panic()` paths; English.
+
+## Lead note at launch (2026-10-21)
+
+Your worktree branches from `wt/f5-15a2` (amendment 11: installer flows, H1 adapter, protocol conformance test, loader within its extent). Owner decision 2026-10-20: the Win16 subsystem (f5-19) moves after the 1.0 Beta, so the 16-bit setup stubs and any engine that needs Win16 are **out of scope**: record them as "deferred (Win16)" in the acceptance table instead of implementing them. The lead downloaded the workload archives listed in `tests/win32/workloads.json` to `build/downloads/win32/` (symlinked into `build/downloads/` of this worktree; sizes and SHA-1 verified where pinned; StarCraft and Total Annihilation may still be arriving) and ran `scripts/win32/workloads.py --import-unpinned`; record the SHA-256 pins and the import receipts as the directive requires. The PE flows run only outside your sandbox: make every acceptance driver runnable by the lead with one command per engine and report what you could verify statically.

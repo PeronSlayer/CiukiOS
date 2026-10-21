@@ -459,7 +459,7 @@ After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
 the same image. Start a **separate** capture with a fresh eight-hex-digit run id
 before powering on. In the three-second `SELECT_READY` window, press **S**
 (upper- or lowercase, laptop keyboard or COM1). The loader cancels any configured
-probe request, sets safe mode, prints `Safe mode selected; P for a probe, or wait`
+probe request, sets safe mode, prints `Safe mode; P for a probe, or wait`
 and `L:SAFE=1`, and starts a fresh three-second menu window. Within that new
 window, press **P**, type **`f1:safe run=<fresh id>`** (replace `<fresh id>` with
 the chosen eight hex digits), and press **Enter** within the selector's

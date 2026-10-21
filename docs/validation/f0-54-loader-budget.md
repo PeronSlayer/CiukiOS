@@ -142,3 +142,27 @@ runs only after a successful validation.
 - [System V gABI, program header](https://gabi.xinuos.com/elf/07-pheader.html):
   `e_phnum` × `e_phentsize` bytes at `e_phoff`; the loader requires
   `e_phentsize` = 32 and 1..32 entries.
+
+## Merge with main (`aac5cb00`)
+
+Main had meanwhile added the f3-55 `f3:dos-conformance` selector
+(`guest=freedos`, `guest=ciukidos`, `guest=ciukidos kernel=unified`, every
+source, no other suffix) and shared/shortened loader strings
+(`minimum_prefix`, `source_prefix`, the `fw_cfg`/`cfg`/`newline` tail).
+The merge keeps main's strings and expresses the DOS grammar with the
+shared matcher: after `run=`, the `dos-conformance` entry accepts exactly
+` guest=freedos`, ` guest=ciukidos` or ` guest=ciukidos` + ` kernel=unified`
+up to the selector end. `probe_tables` follows `chain_probe_names`, because
+`tests/host/dos/test_protocol.py` assembles the data between
+`chain_probe_names db` and `config_read:` together with `selector_validate`.
+
+| Build | Code | Tables | Strings | Scratch | Padding | Free |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| main `aac5cb00`, `0.9.2 pre-alpha` | 8,130 | 252 | 1,604 | 14,520 | 22 | 7 |
+| Merged, `0.9.2 pre-alpha` | 7,773 | 266 | 1,682 | 13,496 | 1,311 | **1,303** |
+
+The bare and `0.9.0 pre-alpha` assemblies also measure 1,303 free bytes.
+A one-off differential run of main's parser against the merged one (same
+executor, the earlier corpus plus 16 DOS suffix forms on every phase)
+matched in all 60,102 selector runs (989 accepted) and all 15,795 BOOT.CFG
+runs (828 non-fatal).

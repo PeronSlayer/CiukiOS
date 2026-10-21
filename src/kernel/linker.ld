@@ -73,6 +73,7 @@ SECTIONS
         *lwip_*.o(.bss .bss.* COMMON)
         *net_*.o(.bss .bss.* COMMON)
         *drivers_net*.o(.bss .bss.* COMMON)
+        *vm_dosvm_network.o(.bss .bss.* COMMON)
         . = ALIGN(4096);
         __net_end = .;
         *(.bss .bss.*)

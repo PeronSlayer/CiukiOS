@@ -4,6 +4,7 @@
 #define CIUKI_SELECTOR_H
 #include <ciuki/probe.h>
 #define PROBE_DOS_FREEDOS (1u << 29)
+#define PROBE_DOS_UNIFIED (1u << 28)
 struct probe_selection {
     unsigned phase;
     char probe[24], run[9];

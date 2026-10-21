@@ -67,6 +67,8 @@ selector_validate:
     mov cx, 8
     call token_hex
     jc .bad
+    cmp bx, dos_conformance_name
+    je .dos_suffix
     cmp si, [selector_end]
     jne .suffix
     cmp bx, f3_title_name
@@ -106,11 +108,11 @@ selector_validate:
     jne .bad
     mov di, desktop_suffix
     call token_match
-    jnc .server_end
+    jnc .exact_end
     mov di, standin_suffix
     call token_match
     jc .bad
-.server_end:
+.exact_end: ; AX=end of the last suffix, which must be the selector end
     cmp ax, [selector_end]
     jne .bad
 .good:
@@ -160,6 +162,23 @@ selector_validate:
 .bad:
     stc
     ret
+.dos_suffix:
+    ; f3-55 grammar for every source: exactly ' guest=freedos',
+    ; ' guest=ciukidos' or ' guest=ciukidos kernel=unified'; no platform or
+    ; safe suffix and no unified FreeDOS kernel.
+    mov di, dos_freedos_suffix
+    call token_match
+    jnc .exact_end
+    mov di, dos_ciukidos_suffix
+    call token_match
+    jc .bad
+    cmp ax, [selector_end]
+    je .good
+    mov si, ax
+    mov di, dos_kernel_suffix
+    call token_match
+    jc .bad
+    jmp .exact_end
 .title_suffix:
     mov di, title_suffix
     call token_match
@@ -258,10 +277,10 @@ selector_accept:
     or dword [B(flags)], CBI_F_INPUT_FORCED
 .done:
     ret
+chain_probe_names db 'sweep',0,0
 ; Phase digit -> NUL-separated probe list; an empty name ends each list.
 probe_tables dw probe_names, f1_probe_names, f2_probe_names, f3_probe_names
     dw f4_probe_names, f5_probe_names, f6_probe_names
-chain_probe_names db 'sweep',0,0
 probe_names:
     db 'sweep',0,'all',0,'core',0,'boot',0,'bootinfo',0,'allocator',0,'protection',0
     db 'isolation',0,'preempt',0,'localfault',0,'syslife',0,'panic',0
@@ -277,11 +296,15 @@ f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
     db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
               db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+dos_conformance_name db 'dos-conformance',0
 f3_title_name db 'title',0,0
 ; NUL-terminated suffix tokens for token_match/token_hex.
 run_suffix db ' run=',0
 step_suffix db ' step=',0
 state_suffix db ' state=',0
+dos_freedos_suffix db ' guest=freedos',0
+dos_ciukidos_suffix db ' guest=ciukidos',0
+dos_kernel_suffix db ' kernel=unified',0
 title_suffix db ' title=',0
 platform_suffix db ' platform=e500',0
 safe_suffix db ' safe=1',0
@@ -507,6 +530,8 @@ boot_menu:
     call deadline_expired
     jnc .poll
 .done:
+    mov si, source_prefix
+    call print
     mov si, source_menu
     cmp byte [selector_source], 1
     jne .cfg_source
@@ -604,15 +629,17 @@ boot_menu:
     mov si, selection_error
     call print
     jmp .done
-source_menu db 'L:SELECT_SOURCE=menu',13,10,0
-source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
-source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
-safe_confirmation db 'Safe mode selected; P for a probe, or wait',13,10,0
+source_prefix db 'L:SELECT_SOURCE=',0
+source_menu db 'menu',13,10,0
+source_fw db 'fw_' ; 'fw_cfg',13,10,0: source_cfg and newline share its tail
+source_cfg db 'cfg'
+newline db 13,10,0
+safe_confirmation db 'Safe mode; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
-probe_prompt db 'Enter f0:<probe|all> run=<8hex>: ',0
-menu_hint db 'Press S for safe mode, L for serial log, H for Hardware check'
+probe_prompt db 'fN:<probe> run=<8hex>: ',0
+menu_hint db 'S for safe mode, L for log, H for Hardware check'
 menu_hint_end:
 
 ; INT 10h teletype AL character, BH page, BL colour (SeaBIOS vgabios.c).

@@ -11,6 +11,8 @@
 #include <ciuki/signal.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
+#include "dosvm_network.h"
+#include <ciuki/dosvm_network_abi.h>
 extern int display_worker_start(void) __attribute__((weak));
 
 struct binding {
@@ -238,10 +240,12 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     allowed.version = c.version; allowed.size = c.size;
     if (op == CIUKI_DOSVM_CREATE) {
         allowed.surface_fd = c.surface_fd;
-        if (c.launch.kernel>CIUKI_DOSVM_FREEDOS13 || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
-            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED) return -EINVAL;
+        if (c.launch.kernel>CIUKI_DOSVM_UNIFIED || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
+            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED ||
+            dosvm_launch_network(&c)>CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
         allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
         allowed.launch.memory=c.launch.memory;
+        dosvm_launch_network_set(&allowed,dosvm_launch_network(&c));
         unsigned n = 0;
         while (n < sizeof(c.name) && c.name[n]) {
             if (c.name[n] < 32 || c.name[n] > 126) return -EINVAL;
@@ -299,7 +303,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * Errors of that required bundled base fail this window launch. */
         char workload[32];
         int found = 0;
-        if (c.launch.kernel==CIUKI_DOSVM_FREEDOS13) {
+        if (c.launch.kernel==CIUKI_DOSVM_FREEDOS13 || c.launch.kernel==CIUKI_DOSVM_UNIFIED) {
             /* This reference contains the pinned shareware corpus. An attached
              * local workload is a different base: never silently substitute
              * its executable/data with another edition under the override. */
@@ -308,7 +312,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (!found) found=-EINVAL;
             else if (found==-ENOENT) {
                 found=0;
-                memcpy(workload,"C:\\SYSTEM\\DOS\\FREEDOS.IMG",sizeof("C:\\SYSTEM\\DOS\\FREEDOS.IMG"));
+                const char *base=c.launch.kernel==CIUKI_DOSVM_UNIFIED ?
+                    "C:\\SYSTEM\\DOS\\UNIFIED.IMG" : "C:\\SYSTEM\\DOS\\FREEDOS.IMG";
+                memcpy(workload,base,strlen(base)+1);
             }
         } else found=dosvm_window_base(workload);
         if (found) { creating[reservation] = 0; e = closed_error(found); goto out; }
@@ -319,7 +325,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
             .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
-            .disable_file_bridge=c.launch.kernel==CIUKI_DOSVM_FREEDOS13};
+            .disable_file_bridge=c.launch.kernel!=CIUKI_DOSVM_CIUKIDOS};
         e = dosvm_create(&config, &v);
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
@@ -329,7 +335,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         v->owner_pid = p->pid;
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;
-        else e = dosvm_boot(v);
+        else if (!(e = dosvm_network_launch(v,dosvm_launch_network(&c)))) e = dosvm_boot(v);
         if (e) {
             release_binding(b);
             if (!b->pid) b = 0; /* released; otherwise collected below/later */
