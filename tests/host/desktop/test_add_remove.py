@@ -138,7 +138,10 @@ int main(void){
                                 '-I'+str(ROOT/'src/kernel/include'),'-I'+temporary,
                                 *(str(ROOT/s) for s in sources),*objects,pool,'-pthread',
                                 '-Wl,-u,pool_fixture_start','-o',binary],check=True,env=env)
-                results.append(subprocess.run([binary],env=env).returncode)
+                # dosvm_test.c's VFS fixture opens its COW scratch at the
+                # root-relative build/host/ path the kernel host script uses;
+                # run from the repository root whatever cwd unittest has.
+                results.append(subprocess.run([binary],env=env,cwd=ROOT).returncode)
             self.assertEqual(results,[0,0])
 
     def test_actual_owner_provider(self):
