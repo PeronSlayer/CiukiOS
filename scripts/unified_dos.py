@@ -16,6 +16,7 @@ import shlex
 import stat
 import subprocess
 import tempfile
+import tarfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,8 @@ SOURCE_PINS = {
 EPOCH = 1792540800  # 2026-10-21 00:00:00 UTC, external build input
 MODIFICATION = "unmodified except patch 0001 (reproducible date)"
 BUILD_MANIFEST = VENDOR / "ciuki/build.json"
+UPX_PIN = ROOT / "config/upx.json"
+UPX_EVIDENCE = ROOT / "build/codex/h55-vendor-upx.json"
 
 
 def sha(data):
@@ -164,17 +167,37 @@ def prepare_tools(output=None):
         path = ROOT / source["path"]
         if path.stat().st_size != source["size"] or digest(path) != source["sha256"]:
             raise ValueError("Open Watcom source archive pin mismatch")
+    support = pins["support_files"]
+    if not {"h/stdlib.h", "h/dos.h", "h/sys/stat.h", "lib286/dos/clibs.lib",
+            "lib286/dos/cstart_t.obj", "lib286/dos/doslfns.lib"} <= support.keys():
+        raise ValueError("incomplete Open Watcom SYS dependency pins")
     members = zip_members(archive.read_bytes(), max_total=256 * 1024 * 1024,
-                          select=lambda n: n.startswith("binl/") or n == "license.txt")
+                          select=lambda n: n.startswith("binl/") or n == "license.txt" or n in support)
     for name, pin in pins["tools"].items():
         data = members["binl/" + name]
         if len(data) != pin["size"] or sha(data) != pin["sha256"]:
             raise ValueError("extracted tool hash mismatch: " + name)
     if sha(members["license.txt"]) != pins["license_sha256"]:
         raise ValueError("tool license hash mismatch")
+    for name, pin in support.items():
+        data = members.get(name)
+        if data is None or len(data) != pin["size"] or sha(data) != pin["sha256"]:
+            raise ValueError("Open Watcom SYS dependency hash mismatch: " + name)
     output = build_path(output or ROOT / "build/tools/openwatcom-1.9")
     if not output.exists():
         extract(members, output)
+    else:
+        # Upgrade the former binl-only extraction without overwriting any
+        # installed byte. Incomplete/corrupt existing trees still fail closed.
+        missing = [d for d in ("h", "lib286") if not (output / d).exists()]
+        for name, data in members.items():
+            if name.split("/")[0] not in missing:
+                p = output / name
+                if p.is_symlink() or p.read_bytes() != data:
+                    raise ValueError("installed Open Watcom file modified: " + name)
+        for directory in missing:
+            extract({n[len(directory) + 1:]: b for n, b in members.items()
+                     if n.startswith(directory + "/")}, output / directory)
     # Verify all extracted bytes on every invocation, including message files.
     for name, data in members.items():
         p = output / name
@@ -191,7 +214,7 @@ def no_core():
 
 def tool_probe(tools):
     results = {}
-    for name in ("wmake", "wcc", "wlink", "wlib"):
+    for name in ("wmake", "wcc", "wlink", "wlib", "wcl"):
         p = subprocess.run([str(tools / "binl" / name), "-?"], capture_output=True,
                            timeout=20, preexec_fn=no_core)
         results[name] = dict(returncode=p.returncode,
@@ -330,9 +353,86 @@ def masked_pristine_compare(kernel, pristine):
                 reference_date=pristine[start:end].decode(), compared_bytes=len(kernel) - (end - start))
 
 
-def pristine_comparison(kernel):
+def prepare_upx(output=None):
+    """Validate the pinned upstream tar completely before atomic extraction."""
+    pins = json.loads(UPX_PIN.read_text())
+    archive = ROOT / pins["archive"]["path"]
+    if archive.stat().st_size != pins["archive"]["size"] or digest(archive) != pins["archive"]["sha256"]:
+        raise ValueError("UPX archive pin mismatch")
+    members = {}; seen = set(); total = 0
+    with tarfile.open(archive, "r:xz") as tar:
+        for info in tar:
+            name = info.name
+            if (not name or "\\" in name or ":" in name or "\0" in name or
+                    PurePosixPath(name).is_absolute() or
+                    any(p in ("", ".", "..") for p in name.split("/")) or
+                    name.casefold() in seen or not (info.isfile() or info.isdir())):
+                raise ValueError("unsafe/duplicate/special UPX archive member")
+            seen.add(name.casefold()); total += info.size
+            if len(seen) > 32 or info.size > 4 * 1024 * 1024 or total > 8 * 1024 * 1024:
+                raise ValueError("UPX archive size/count exceeds bound")
+            if info.isfile():
+                pin = pins["members"].get(name)
+                if pin is None or info.size != pin["size"]:
+                    raise ValueError("UPX member list/size mismatch")
+                data = tar.extractfile(info).read()
+                if len(data) != info.size or sha(data) != pin["sha256"]:
+                    raise ValueError("UPX member hash mismatch")
+                members[name] = data
+    if set(members) != set(pins["members"]) or pins["executable"] not in members:
+        raise ValueError("UPX member list mismatch")
+    output = build_path(output or ROOT / "build/tools/upx-5.2.1")
+    if not output.exists():
+        extract(members, output)
+    for name, data in members.items():
+        path = output / name
+        if path.is_symlink() or path.read_bytes() != data:
+            raise ValueError("installed UPX file modified: " + name)
+    executable = output / pins["executable"]
+    executable.chmod(0o755)
+    return executable, pins
+
+
+def unpacked_vendor():
+    """Unpack a copy, never alter the pinned packed reference or its identity."""
+    executable, pins = prepare_upx()
     files, _ = reference_module().reference_files()
-    return masked_pristine_compare(kernel, files["/KERNEL.SYS"])
+    packed = files["/KERNEL.SYS"]
+    vendor = pins["vendor"]
+    if len(packed) != vendor["packed"]["size"] or sha(packed) != vendor["packed"]["sha256"]:
+        raise ValueError("packed vendor kernel pin mismatch")
+    parent = build_path(ROOT / "build/codex")
+    parent.mkdir(parents=True, exist_ok=True)
+    provenance = dict(representation="UPX-unpacked vendor KERNL386.SYS", vendor=vendor,
+                      upx_archive_sha256=pins["archive"]["sha256"],
+                      upx_executable_sha256=pins["members"][pins["executable"]]["sha256"],
+                      upx_version=pins["version"], command="upx -d <copy of pinned KERNL386.SYS>")
+    with tempfile.TemporaryDirectory(prefix=".upx-vendor-", dir=parent) as directory:
+        path = Path(directory) / "KERNL386.SYS"
+        path.write_bytes(packed)
+        result = subprocess.run([str(executable), "-d", str(path)], capture_output=True,
+                                text=True, timeout=30, preexec_fn=no_core,
+                                env=dict(PATH="/usr/bin:/bin", LANG="C", LC_ALL="C", TZ="UTC"))
+        evidence = dict(provenance, status="blocked", returncode=result.returncode,
+                        stdout=result.stdout, stderr=result.stderr)
+        build_path(UPX_EVIDENCE).write_text(json.dumps(evidence, indent=2) + "\n")
+        if result.returncode:
+            raise ValueError("UPX vendor unpack failed: " + result.stdout + result.stderr)
+        if not vendor["unpacked"].get("sha256"):
+            raise ValueError("lead must pin the unpacked vendor hash before comparison")
+        if path.stat().st_size != vendor["unpacked"]["size"] or digest(path) != vendor["unpacked"]["sha256"]:
+            raise ValueError("unpacked vendor kernel pin mismatch")
+        raw = path.read_bytes()
+    evidence.update(status="PASS", unpacked_sha256=sha(raw), unpacked_size=len(raw))
+    build_path(UPX_EVIDENCE).write_text(json.dumps(evidence, indent=2) + "\n")
+    return raw, provenance
+
+
+def pristine_comparison(kernel):
+    raw, provenance = unpacked_vendor()
+    result = masked_pristine_compare(kernel, raw)
+    result["reference_representation"] = provenance
+    return result
 
 
 def link_audit(work):
@@ -387,6 +487,7 @@ def build(output, *, mtime=EPOCH):
         tools, pins = prepare_tools()
         evidence["host"] = host_environment()
         evidence["tools"] = pins["tools"]
+        evidence["support_files"] = pins["support_files"]
         evidence["execution"] = tool_probe(tools)
         if any(r["returncode"] < 0 or not r["output"] for r in evidence["execution"].values()):
             raise ValueError("native OW1.9 Linux execution unavailable; see execution return codes")
@@ -448,7 +549,7 @@ def compare_rebuilds(first, second):
         if sha(kernel) != record["kernel_sha256"] or len(kernel) != record["size"]:
             raise ValueError("recorded kernel hash/size differs from raw bytes")
     for name in ("kernel_sha256", "size", "source_hashes", "source_archive_sha256", "config",
-                 "build_inputs", "build_manifest_sha256", "host", "tools", "linked_objects"):
+                 "build_inputs", "build_manifest_sha256", "host", "tools", "support_files", "linked_objects"):
         if name not in first or name not in second or first[name] != second[name]:
             raise ValueError("reproducibility mismatch: " + name)
     if (Path(first["root"]) / "KERNEL.SYS").read_bytes() != (Path(second["root"]) / "KERNEL.SYS").read_bytes():
@@ -517,7 +618,7 @@ def corresponding_source(output):
     files["ciukios/third_party/freedos/unified/ciuki/patches/README.md"] = (VENDOR / "ciuki/patches/README.md").read_bytes()
     paths = ["scripts/unified_dos.py", "scripts/dos_conformance.py", "scripts/build_dos_image.py",
              "scripts/ciukidos_image.py", "src/boot/full_boot.asm", "src/boot/full_stage1_loader.asm",
-             "config/openwatcom.json", "docs/design/unified-dos-licenses.tsv",
+             "config/openwatcom.json", "config/upx.json", "docs/design/unified-dos-licenses.tsv",
              "third_party/freedos/1.3/UPSTREAM.json", "third_party/freedos/1.3/boot16.bin",
              "third_party/freedos/1.3/COPYING", "tests/host/dos/reference_mbr.asm",
              "tests/host/dos/check_unmodified_build.py", "tests/host/dos/unified_boot_test.c"]

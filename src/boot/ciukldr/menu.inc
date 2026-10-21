@@ -114,6 +114,8 @@ selector_validate:
     call hex_digit
     jc .bad
     loop .hex
+    cmp bx, dos_conformance_name
+    je .dos_suffix
     cmp si, [selector_end]
     je .good
     cmp byte [selector_sweep], 1
@@ -261,6 +263,25 @@ selector_validate:
     jne .bad
     mov byte [selector_force], 1
     jmp .good
+.dos_suffix:
+    ; Match the native DOS controller grammar exactly, for every source.
+    ; No platform/safe suffix or guest=freedos kernel=unified combination.
+    mov ax, [selector_end]
+    sub ax, si
+    mov di, dos_freedos_suffix
+    cmp ax, 14
+    je .dos_match
+    mov di, dos_ciukidos_suffix
+    cmp ax, 15
+    je .dos_match
+    mov di, dos_unified_suffix
+    cmp ax, 30
+    jne .bad
+.dos_match:
+    mov cx, ax
+    repe cmpsb
+    jne .bad
+    jmp .good
 hex_digit:
     cmp al, '0'
     jb .bad
@@ -311,7 +332,11 @@ f2_sweep_name db 'sweep',0,'elf-load',0,'spawn-wait',0,'fd-table',0,'mmap',0,'si
 f2_crash_name db 'crash-isolation',0,'libc-smoke',0,'app-gate',0,0
 f3_probe_names:
 f3_sweep_name db 'sweep',0,'vm-boot',0,'vm-memory',0,'vm-devices',0,'vm-video',0,'vm-window',0,'vm-audio-state',0,'dpmi',0
-              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0,0
+              db 'dos4gw',0,'doom',0,'doom-sound',0,'wolf3d',0,'vm-starve',0,'quake',0,'vm-fullscreen',0
+dos_conformance_name db 'dos-conformance',0,0
+dos_freedos_suffix db ' guest=freedos'
+dos_ciukidos_suffix db ' guest=ciukidos'
+dos_unified_suffix db ' guest=ciukidos kernel=unified'
 platform_suffix db ' platform=e500'
 safe_suffix db ' safe=1'
 desktop_suffix db ' server=desktop'

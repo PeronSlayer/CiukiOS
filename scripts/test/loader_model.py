@@ -9,12 +9,14 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
-             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen')
+             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
 F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-gl')
 F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([0123456]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+DOS_SELECTOR_RE = (r'f3:dos-conformance run=([0-9a-fA-F]{8}) '
+                   r'guest=(freedos|ciukidos)( kernel=unified)?')
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
 E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
@@ -89,6 +91,13 @@ def boot_minimum(cpu, entries, controller=None, complete=True, signature='SMAP')
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
+    if request.startswith('f3:dos-conformance '):
+        dos = re.fullmatch(DOS_SELECTOR_RE, request)
+        if not dos or (dos[3] and dos[2] != 'ciukidos'):
+            raise ValueError('invalid DOS conformance selector')
+        return {'phase': 3, 'probe': 'dos-conformance', 'run': dos[1],
+                'platform': None, 'safe': False, 'guest': dos[2],
+                'kernel': 'unified' if dos[3] else dos[2]}
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')

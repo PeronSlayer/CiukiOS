@@ -330,8 +330,9 @@ f3-55 baseline build configuration: `BUILDENV=linux`, `XCPU=386`, `XFAT=32`,
 fresh source extraction apply the pinned patch below, write `config.mak` as
 an external build input and invoke `make all` with WATCOM and PATH pointing to
 the pinned tools. No production image build in implementer sandboxes.
-Uncompressed output is a standard supported configuration and avoids a new
-UPX pin; it does not reproduce the compressed release bytes. Pin environment,
+Uncompressed output is a standard supported configuration. Amendment 2 pins
+UPX solely to unpack a copy of the vendor kernel for comparison; the rebuild
+stays uncompressed. It does not reproduce the compressed release bytes. Pin environment,
 locale/timezone, file mtimes, host compiler, tool versions and configuration;
 compare two clean build outputs and source manifests. The lead's OW1.9 probe
 rejected forced-include redefinition of `__DATE__` with E1100. F3-55 Amendment 1
@@ -352,7 +353,8 @@ supplies the same macros using the documented [wmake command-line macro
 precedence](https://open-watcom.github.io/open-watcom-1.9/tools.html#Open_Watcom_Make_Command_Line_Format),
 retaining SYS's original flags and Linux object suffix.
 The checker names patch 0001 and the masked pristine comparison explicitly;
-it accepts only one banner in each binary, identical date offsets/lengths and
+it compares the raw rebuild with the separately pinned UPX-unpacked vendor
+representation, accepting only one banner in each binary, identical date offsets/lengths and
 identical bytes everywhere outside its 11-byte date. Missing/ambiguous banners
 or any other difference block qualification. The two-date commands use distinct
 roots and source mtimes 946684800 and 1609459200, as Amendment 1 specifies;
@@ -378,6 +380,7 @@ No FreeDOS/FreeCOM source is copied into tracked code by f3-54.
 | SYS FAT16 boot template | GPL-2.0-or-later; exact template `boot16.bin`, authors and `K:boot/boot.asm` source accompany images using it. Wrapper MBR/build glue is separately attributed. |
 | Ciuki VMM/native FS/probes | Existing repository licenses, separately linked native binary/test executables; no FreeDOS implementation transplant. Shared ABI specifications are documented; native and guest code do not import one another's private structs. |
 | OW1.9 / NASM / host compiler | Build-time tools retain their own terms and pins; audit linked runtime separately as above. NASM is BSD-2-Clause; existing SDK provenance remains authoritative. |
+| UPX 5.2.1 | Build-time comparison tool only: GPL-2.0-or-later with the UPX exception, preserving upstream COPYING/LICENSE. `config/upx.json` pins the Linux archive, each extracted file and both vendor representations separately; no UPX code enters the raw rebuild. Direct unpack currently fails on the flattened vendor kernel; see the f3-55 validation record. |
 | Portrait/Tango/book/manuals | Portrait is separately owned, Tango is Public Domain, book/manuals are research only. No relicense or redistribution of supplied Microsoft media. |
 
 The separate-binary/address-space design avoids combining FreeDOS and native

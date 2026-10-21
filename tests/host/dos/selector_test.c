@@ -1,8 +1,14 @@
 /* Production parser, not a Python duplicate. SPDX-License-Identifier: MIT */
 #include <assert.h>
 #include <string.h>
+#include <stdlib.h>
 #include "../../../src/kernel/probes/selector.h"
-int main(void) {
+void check_loader_selector(const char *, const char *, unsigned, int);
+int main(int argc, char **argv) {
+    if (argc == 5) {
+        check_loader_selector(argv[1], argv[2], (unsigned)atoi(argv[3]), atoi(argv[4]));
+        return 0;
+    }
     struct probe_selection s, guard;
     memset(&guard,0xa7,sizeof(guard));
     const char *good="f3:dos-conformance run=1234aBcD guest=freedos";

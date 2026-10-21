@@ -47,9 +47,13 @@ def main():
     mode.add_argument("--compare", nargs=2, type=Path)
     mode.add_argument("--cpu-reference", action="store_true", help="check the unchanged vendor kernel loader, not a rebuilt-kernel qualification")
     mode.add_argument("--source-out", type=Path, help="construct/read back source bundle without an image or a qualification claim")
+    mode.add_argument("--unpack-vendor", action="store_true", help="UPX -d a vendor copy and verify the unpacked representation pin")
     parser.add_argument("--mtime", type=int, default=build.EPOCH)
     args = parser.parse_args()
-    if args.source_out:
+    if args.unpack_vendor:
+        raw, provenance = build.unpacked_vendor()
+        print(json.dumps(dict(provenance, sha256=build.sha(raw), size=len(raw)), sort_keys=True))
+    elif args.source_out:
         print(json.dumps(build.corresponding_source(args.source_out), sort_keys=True))
     elif args.cpu_reference:
         out = build.build_path(ROOT / "build/codex/h55-reference-cpu")
