@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 struct trap_frame;
+void *entropy_alloc(size_t);
+void entropy_free(void *);
 void entropy_boot(void);
 void entropy_irq(unsigned irq);
 void entropy_start(void);

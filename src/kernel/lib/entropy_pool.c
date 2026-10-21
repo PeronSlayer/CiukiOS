@@ -37,19 +37,6 @@ void entropy_chacha20(const uint8_t key[32], uint32_t counter,
     entropy_erase(initial, sizeof(initial)); entropy_erase(x, sizeof(x));
 }
 #undef QR
-bool entropy_health_sample(struct entropy_health *h, uint8_t sample)
-{
-    if (h->failed) return false;
-    h->run = h->run && h->previous == sample ? h->run + 1 : 1;
-    h->previous = sample;
-    if (!h->window) { h->reference = sample; h->matches = 0; }
-    if (sample == h->reference) h->matches++;
-    h->window++;
-    /* SP 800-90B 4.4, nonbinary H=.5, alpha=2^-20. */
-    if (h->run >= 41 || h->matches >= 410) h->failed = true;
-    if (h->window == 512) h->window = 0;
-    return !h->failed;
-}
 void entropy_pool_init(struct entropy_pool *p)
 {
     memset(p, 0, sizeof(*p)); sha256_init(&p->conditioner);
@@ -58,7 +45,7 @@ void entropy_pool_init(struct entropy_pool *p)
 }
 void entropy_pool_fail(struct entropy_pool *p)
 {
-    p->failed = true; p->ready = false; p->estimate_bits = p->fraction = 0;
+    p->failed = true; p->ready = false; p->estimate_bits = 0;
     entropy_erase(p->key, sizeof(p->key));
     entropy_erase(&p->conditioner, sizeof(p->conditioner));
 }
@@ -88,22 +75,20 @@ static void reseed(struct entropy_pool *p, uint64_t now)
     entropy_erase(seed, sizeof(seed));
     if (!p->ready) p->initialised_ms = now;
     p->ready = true; p->seeded_ms = now; p->produced = 0;
-    p->estimate_bits = p->fraction = 0; p->reseeds++;
+    p->estimate_bits = 0; p->reseeds++;
 }
-void entropy_pool_sample(struct entropy_pool *p, uint64_t delta, uint64_t now)
+bool entropy_pool_wants_credit(const struct entropy_pool *p)
 {
-    if (p->failed) return;
-    entropy_pool_mix(p, &delta, sizeof(delta), ENTROPY_SOURCE_JITTER);
-    /* Tests see raw noise, never hashed/mixed/filtered samples. */
-    if (!entropy_health_sample(&p->health, (uint8_t)delta)) { entropy_pool_fail(p); return; }
-    uint64_t delta2 = delta - p->previous_delta;
-    uint64_t delta3 = delta2 - p->previous_delta2;
-    p->previous_delta = delta; p->previous_delta2 = delta2;
-    if (p->samples < ENTROPY_STARTUP_SAMPLES) { p->samples++; return; }
-    if (!delta || !delta2 || !delta3) return;
-    if (p->estimate_bits < ENTROPY_SEED_BITS && ++p->fraction == ENTROPY_SAMPLES_PER_BIT) {
-        p->fraction = 0; p->estimate_bits++;
-    }
+    return p->source_ready && !p->failed && p->estimate_bits < ENTROPY_SEED_BITS;
+}
+void entropy_pool_credit(struct entropy_pool *p, const void *bytes, size_t count, uint64_t now)
+{
+    if (!entropy_pool_wants_credit(p)) return;
+    entropy_pool_mix(p, bytes, count, ENTROPY_SOURCE_JITTER);
+    /* Amendment 2: at most ONE bit per delivered library output byte.
+     * No startup, failed read, IRQ or saturated-pool credit. */
+    unsigned room = ENTROPY_SEED_BITS - p->estimate_bits;
+    p->estimate_bits += count < room ? (unsigned)count : room;
     if (p->estimate_bits == ENTROPY_SEED_BITS && due(p, now)) reseed(p, now);
 }
 int entropy_pool_read(struct entropy_pool *p, void *buffer, size_t bytes, uint64_t now)
@@ -127,18 +112,4 @@ int entropy_pool_read(struct entropy_pool *p, void *buffer, size_t bytes, uint64
         entropy_erase(block, sizeof(block));
     }
     return 0;
-}
-/* Like upstream jitterentropy's noise core, retain the actual instruction
- * workload even when the kernel/model is otherwise compiled at -O2/-O1. */
-__attribute__((optnone, noinline))
-uint64_t entropy_jitter_sample(struct entropy_jitter *j, uint64_t (*clock)(void))
-{
-    uint64_t start = clock();
-    /* Volatile dependent memory accesses cannot be elided or vectorized.
-     * Timing is the input; memory contents and loop count receive no credit. */
-    for (unsigned i = 0; i < 128; i++) {
-        j->index = (j->index + 31 + j->memory[j->index]) & 2047;
-        j->memory[j->index]++;
-    }
-    return clock() - start;
 }

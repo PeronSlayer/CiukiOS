@@ -2384,9 +2384,11 @@ or nonzero unused registers), EFAULT (invalid/nonwritable output), or EAGAIN
 (unseeded, health failure, or fresh reseed overdue). A zero-length request
 succeeds without a buffer. It never blocks waiting for entropy and leaves
 output unchanged on readiness refusal. Writable user access is rechecked
-transactionally at copyout. The SDK `ciuki_getentropy_wait` retries EAGAIN
-with interruptible 10 ms nanosleeps and may wait indefinitely. The entropy
-source, 256-bit estimated seeding threshold, health tests, boot guard safety,
+transactionally at copyout. The SDK `ciuki_entropy_wait` retries EAGAIN
+with interruptible 10 ms nanosleeps and may wait indefinitely (the old
+`ciuki_getentropy_wait` name remains an alias). `arc4random*` has a shared
+5 s monotonic EAGAIN deadline per call and aborts with a diagnostic on expiry
+or a permanent error. The entropy source, 256-bit estimated seeding threshold, health tests, boot guard safety,
 reseed limits and qualification boundary are specified in
 [kernel-entropy.md](kernel-entropy.md). No weak fallback is permitted for
 getentropy or arc4random.

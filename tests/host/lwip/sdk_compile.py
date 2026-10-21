@@ -5,6 +5,8 @@ import argparse
 from pathlib import Path
 import runpy
 import subprocess
+import signal
+import resource as limits
 ROOT = Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser()
 parser.add_argument('--headers', type=Path, required=True)
@@ -53,4 +55,11 @@ if args.run:
         '-I', str(args.headers.resolve()), str(ROOT / 'tests/host/lwip/sdk_test.c'),
         *[str(ROOT / f'sdk/libciuki/{n}.c') for n in ('socket', 'inet', 'netdb', 'entropy', 'net_status')],
         '-o', str(binary)], check=True)
+    for mode in ('entropy-timeout', 'entropy-split', 'entropy-u32', 'entropy-uniform', 'entropy-interrupt', 'entropy-permanent', 'entropy-clock'):
+        def no_core():
+            limits.setrlimit(limits.RLIMIT_CORE, (0, 0))
+        result = subprocess.run([str(binary), mode], capture_output=True, text=True, timeout=10, preexec_fn=no_core)
+        if result.returncode != -signal.SIGABRT or 'arc4random: kernel entropy unavailable' not in result.stderr:
+            raise RuntimeError(f'{mode}: expected SIGABRT and diagnostic, got {result.returncode}: {result.stderr}')
+        print(f'PASS SDK {mode}: SIGABRT with clear diagnostic', flush=True)
     subprocess.run([str(binary)], check=True, timeout=30)

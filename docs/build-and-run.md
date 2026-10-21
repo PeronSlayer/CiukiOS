@@ -13,6 +13,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 | Image | `python3`, `mkfs.fat`, `fsck.fat`, `mtools`, `qemu-img` |
 | DOS image DPMI clients (f3-04) | Open Watcom 2.0 under `/opt/watcom` (`binl64/wcl386`, `binw/dos4gw.exe` with the SHA-256 pinned in `scripts/build_dos_image.py`) |
 | Network stack | lwIP 2.2.1 (archive size/hash recorded in [`src/kernel/net/lwip/import.json`](../src/kernel/net/lwip/import.json); offline build, no fallback) |
+| Kernel entropy | jitterentropy-library 3.7.0 (archive size/hash and imported units in [`config/jitterentropy.json`](../config/jitterentropy.json); offline extraction under `build/external/`, no fallback) |
 | NetSurf browser | NetSurf 3.11, zlib 1.3.1 and libpng 1.6.59 (archive hashes in `config/netsurf.json`; offline build, no fallback) |
 | Windows installer fixtures | NSIS 2.51 source and binary archives (hashes in `config/nsis.json`; host fixture tooling, not a guest installer dependency) |
 | Optional host guest runner | `libx86emu` (headers and library); skipped when absent |
