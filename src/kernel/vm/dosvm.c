@@ -1332,7 +1332,7 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->base = v->overlay = -1;
     v->a20 = true;
     v->probe = config ? config->probe : 0;
-    v->perf.report_tick = g_ticks;
+    v->perf.report_tick = v->perf.serial.tick = g_ticks;
     v->dpmi_enabled = config && config->dpmi;
     v->return_tracker_tf = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
     kwait_init(&v->wake);

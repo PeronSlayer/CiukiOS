@@ -333,7 +333,7 @@ bool blk_queue_run_one(struct blk_queue *q) {
     if (r->cancel || r->generation!=r->device->media_generation || r->device->quarantined || now-r->enqueued>=r->timeout) {
         int e=r->cancel ? -FS_EAGAIN : -FS_EIO;
         if (now-r->enqueued>=r->timeout) q->stats.timeouts++;
-        q->stats.cancelled++; finish(r,e); fs_event_wake(&q->changed); fs_lock_drop(&q->lock); return true;
+        q->stats.cancelled++; q->record_dirty=true; finish(r,e); fs_event_wake(&q->changed); fs_lock_drop(&q->lock); return true;
     }
     q->busy=true; q->active=r; r->state=BLK_ISSUED; if (!r->bytes) r->started=now;
     uint32_t bytes=r->length-r->bytes;
@@ -362,7 +362,14 @@ bool blk_queue_run_one(struct blk_queue *q) {
     fs_lock_drop(&q->lock);
     int e=execute(r,bytes); /* sleeps with IF=1; lower IRQ only wakes this continuation */
     fs_lock_take(&q->lock);
+    q->record_dirty=true;
     uint32_t elapsed=fs_now_ms()-now;
+    struct blkdev_stats *stats=&r->device->stats;
+    unsigned bin=elapsed<2 ? 0 : elapsed<8 ? 1 : elapsed<32 ? 2 : 3;
+    stats->service[bin]++;
+    if (elapsed>stats->service_max_ms) stats->service_max_ms=elapsed;
+    unsigned unit=r->device->stats_unit;
+    if (unit<2) { q->stats.device[unit]=*stats; q->stats.device_seen[unit]=true; }
     r->serviced=fs_now_ms();
     if (r->generation!=r->device->media_generation && !e) e=-FS_EIO;
     /* Adaptive command size for reader fairness (C3): shrink after a slow
@@ -456,7 +463,7 @@ bool blk_request_cancel(struct blk_request *r) {
         r->cancel=true;
         if (r->state==BLK_PREPARED) finish(r,-FS_EAGAIN);
         else if (q && r->state==BLK_QUEUED) {
-            unlink_request(q,r); q->stats.cancelled++; finish(r,-FS_EAGAIN);
+            unlink_request(q,r); q->stats.cancelled++; q->record_dirty=true; finish(r,-FS_EAGAIN);
         }
     }
     if (q) { fs_event_wake(&q->changed); fs_lock_drop(&q->lock); }
@@ -500,13 +507,18 @@ static void record_queue(struct blk_queue *q,const struct blk_queue_stats *snaps
 #ifndef FS_HOST
     klog("[storage] queue name=%s depth=%u/%u/%u age_ms=%u issued=%llu merged=%llu split=%llu cancelled=%llu timeout=%llu backpressure=%llu limit=%u",
         q->name,s.depth[0],s.depth[1],s.depth[2],s.oldest_ms,s.issued,s.merged,s.split,s.cancelled,s.timeouts,s.backpressure,s.limit_bytes);
+    for (unsigned unit=0;unit<2;unit++) if (s.device_seen[unit]) {
+        const struct blkdev_stats *d=&s.device[unit];
+        klog_periodic("[storage] queue name=%s unit=%u dma=%llu pio=%llu svc=%u/%u/%u/%u svc_max_ms=%u",
+            q->name,unit,d->dma,d->pio,d->service[0],d->service[1],d->service[2],d->service[3],d->service_max_ms);
+    }
 #endif
 }
 void blk_queue_poll(struct blk_queue *q) {
     struct blk_queue_stats s; uint32_t now=fs_now_ms();
     fs_lock_take(&q->lock);
-    bool report=(q->head || q->busy) && now-q->last_record>=5000;
-    if (report) { q->last_record=now; snapshot_locked(q,&s); }
+    bool report=(q->head || q->busy || q->record_dirty) && now-q->last_record>=5000;
+    if (report) { q->last_record=now; snapshot_locked(q,&s); q->record_dirty=false; }
     fs_lock_drop(&q->lock);
     if (report) record_queue(q,&s);
 }
@@ -522,8 +534,8 @@ static void queue_timer(void *arg,uint32_t generation,unsigned kind) {
         ktimer_arm(&q->report_timer,deadline_after_ms(1),0,q,&q->report_generation,queue_timer); return;
     }
     uint32_t now=fs_now_ms();
-    bool report=(q->head || q->busy) && now-q->last_record>=5000;
-    if (report) { q->last_record=now; snapshot_locked(q,&s); }
+    bool report=(q->head || q->busy || q->record_dirty) && now-q->last_record>=5000;
+    if (report) { q->last_record=now; snapshot_locked(q,&s); q->record_dirty=false; }
     fs_lock_drop(&q->lock);
     if (report) record_queue(q,&s);
     if (!q->stopped) ktimer_arm(&q->report_timer,deadline_after_ms(5000),0,q,&q->report_generation,queue_timer);

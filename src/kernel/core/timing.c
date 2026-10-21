@@ -7,6 +7,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/timing.h>
 #include <ciuki/task.h>
+#include <ciuki/cpustat.h>
 
 uint64_t g_tsc_per_ms;               /* 0 until calibrated */
 static uint64_t crit_start, crit_firmware_start, firmware_cycles;
@@ -51,9 +52,18 @@ void crit_begin(void)
         interrupt_owner[0] = 0;
         crit_site = (uint32_t)(uintptr_t)__builtin_return_address(0);
         crit_section = "irq_save";
+        if (cpu_irqoff_begin) cpu_irqoff_begin(crit_start,crit_site);
     }
 }
 void crit_label(const char *section) { if (crit_start) crit_section=section; }
+/* A scheduler entry can follow a raw CLI, without an irq_save owner.
+ * Preserve a caller's outer section and tell schedule which one it owns. */
+bool crit_begin_inactive(void)
+{
+    if (crit_start) return false;
+    crit_begin();
+    return crit_start!=0;
+}
 
 void crit_owner(const char *owner, uint32_t site)
 {
@@ -76,6 +86,7 @@ void crit_end(void)
     if (!g_cpu_tsc || !crit_start)
         return;
     uint64_t end = rdtsc(), start = crit_start;
+    if (cpu_irqoff_end) cpu_irqoff_end(end);
     uint64_t d = end - start, firmware = firmware_cycles - crit_firmware_start;
     if (firmware > d) firmware = 0;
     uint64_t work = d - firmware;

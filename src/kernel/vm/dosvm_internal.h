@@ -54,6 +54,7 @@ enum dosvm_perf_cause {
     DOSVM_COST_PM_HLT, DOSVM_COST_DPMI, DOSVM_COST_HOST_IRQ, DOSVM_COST_COUNT
 };
 #define DOSVM_PERF_INTERVAL 5000u
+#define DOSVM_SERIAL_INTERVAL 2000u
 #define DOSVM_PERF_TOP 5u
 #define DOSVM_PERF_PORTS 256u
 enum dosvm_if_path { DOSVM_IF_TRAMPOLINE, DOSVM_IF_STI, DOSVM_IF_IRET,
@@ -254,6 +255,14 @@ struct dosvm {
         uint32_t exits[6]; /* #GP, #PF, #DB, host timer, other, protected-mode total */
         uint64_t guest_cycles, monitor_cycles, present_cycles, harvest_cycles, log_cycles;
         uint64_t stamp, report_tick;
+        /* Independent UART window: leave every existing disk family at 5s. */
+        struct {
+            uint64_t tick, guest, monitor, cost_cycles[DOSVM_COST_COUNT];
+            uint32_t exits[6], idle[DOSVM_IDLE_REASONS], cost_count[DOSVM_COST_COUNT];
+            struct dosvm_hot_cost ports[2][DOSVM_PERF_PORTS];
+            unsigned active;
+            bool reporting;
+        } serial;
         unsigned phase; /* 0 suspended, 1 guest, 2 monitor */
         unsigned resume_phase;
         bool trap_active;

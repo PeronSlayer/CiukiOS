@@ -152,6 +152,9 @@ static unsigned launch_stage_pages;
 static unsigned vm_audio_logs;
 static char lifecycle_stop[256],lifecycle_cleanup[256];
 static char last_vm_audio_log[256];
+/* f1-86: the periodic VM exit profile logs through klog_periodic; the host harness ignores it like klog. */
+void klog_periodic(const char *fmt, ...) { (void)fmt; }
+
 void klog(const char *fmt, ...)
 {
     log_sequence++;

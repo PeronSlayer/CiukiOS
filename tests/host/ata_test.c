@@ -225,7 +225,11 @@ static uint64_t read_tsc_serialized(void) { return ktime_cycles(); }
 #include "../../src/kernel/core/irq_budget.c"
 #include "../../src/kernel/core/registry.c"
 #include "../../src/kernel/drivers/ata_dma.c"
+static unsigned ata_stamp_reads;
+static uint64_t ata_command_clock(void) { return (uint64_t)++ata_stamp_reads*1000; }
+#define ktime_cycles ata_command_clock
 #include "../../src/kernel/drivers/ata.c"
+#undef ktime_cycles
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
 #include "../../src/kernel/drivers/optical.c"

@@ -4,6 +4,14 @@
 #include <stddef.h>
 #include <ciuki/task.h>
 void cpu_init(void);
+enum cpu_irqoff_phase { CPU_IRQOFF_NONE, CPU_IRQOFF_PICK, CPU_IRQOFF_FPU,
+    CPU_IRQOFF_ADDRESS, CPU_IRQOFF_LDT_DEBUG, CPU_IRQOFF_VM_ENTER, CPU_IRQOFF_OTHER };
+/* IF-clear scalar accounting only; the cpustat task publishes the maximum
+ * once per window. timing.c supplies its existing section boundary stamps. */
+void cpu_irqoff_begin(uint64_t start,uint32_t site) __attribute__((weak));
+void cpu_irqoff_end(uint64_t end) __attribute__((weak));
+void cpu_irqoff_mark(enum cpu_irqoff_phase) __attribute__((weak));
+void cpu_irqoff_tasks(const struct task *,const struct task *) __attribute__((weak));
 uint64_t cpu_path_clock(void) __attribute__((weak));
 void cpu_trap_enter(const struct trap_frame *tf);
 void cpu_user_return(void);
