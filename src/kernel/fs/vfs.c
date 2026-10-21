@@ -168,7 +168,24 @@ static void volume_mutexes(struct vfs *v,uint32_t mask,bool take) {
         if (mask & (1u<<d)) { if (take) fs_lock_take(&v->volume_lock[d]); else fs_lock_drop(&v->volume_lock[d]); }
     }
 }
-struct vfs_waiter { struct vfs_waiter *next; uint32_t mask, ticket[26], started; };
+struct vfs_waiter {
+    struct vfs_waiter *next;
+    uint32_t mask, ticket[26], started;
+    struct vfs_file_identity *file; /* retained by the calling description */
+    struct vfs_hold_info owner;
+};
+struct vfs_reader {
+    struct vfs_reader *next;
+    const bool *busy;
+    unsigned drive;
+    struct vfs_hold_info owner;
+};
+static bool read_compatible(const char *op) {
+    static const char *const immutable[]={"commit","mkdir","read","open","lookup","readdir","find","stat"};
+    for (unsigned i=0;i<sizeof(immutable)/sizeof(*immutable);i++)
+        if (!strncmp(op,immutable[i],12)) return true;
+    return false;
+}
 static void request_wait(const struct vfs_request *r,uint64_t begin,uint32_t mask,enum vfs_wait_reason reason,int outcome) {
     if (!r || !r->wait) return;
     uint64_t elapsed=r->now(r->arg)-begin;
@@ -183,9 +200,11 @@ static void advance_cancelled(struct vfs *v) {
         for (struct vfs_waiter *w=v->waiters;w;w=w->next)
             if ((w->mask&(1u<<d)) && (uint32_t)(w->ticket[d]-v->serving[d]) < (uint32_t)(next-v->serving[d])) next=w->ticket[d];
         v->serving[d]=next;
+        if (next==v->next[d]) v->urgent_gate_valid[d]=false;
     }
 }
-static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+static int reserve_file_request(struct vfs *v,uint32_t mask,const struct vfs_request *request,
+                                struct vfs_file_identity *file) {
     if (!request) request=fs_request_current();
     mask &= VFS_ALL_DRIVES; mask &= ~v->active;
     if (mask && request && request->wait && !request->wait->outcome) request->wait->drives=mask;
@@ -206,6 +225,10 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     uint8_t attribution=__atomic_load_n(&v->namespace_owner.attribution,__ATOMIC_RELAXED);
     if (request && request->operation) attribution=(attribution & ~VFS_ATTR_OPERATION) | (*request->operation ? VFS_ATTR_OPERATION : 0);
     if (request && request->site) attribution=(attribution & ~VFS_ATTR_SITE) | (*request->site ? VFS_ATTR_SITE : 0);
+    waiter.file=file;
+    waiter.owner=(struct vfs_hold_info){.task=task,.started=start,.attribution=attribution};
+    memcpy(waiter.owner.op,operation,sizeof(operation));
+    memcpy(waiter.owner.site,site,sizeof(site));
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
     uint64_t request_start=request ? request->now(request->arg) : 0;
@@ -245,6 +268,13 @@ static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request 
     __atomic_store_n(&v->namespace_owner.attribution,attribution,__ATOMIC_RELAXED);
     __atomic_store_n(&v->holder,first_drive(v->active),__ATOMIC_RELAXED);
     return 0;
+}
+static int reserve_request(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    return reserve_file_request(v,mask,request,0);
+}
+void vfs_reserve_file_locked(struct vfs *v,uint32_t mask,struct vfs_file_identity *file) {
+    struct fs_request_scope scope; fs_request_enter(&scope,0);
+    (void)reserve_file_request(v,mask,0,file); fs_request_leave(&scope);
 }
 void vfs_reserve_locked(struct vfs *v,uint32_t mask) {
     /* Legacy void helpers cannot return partial admission. They are also used
@@ -868,6 +898,24 @@ static uint32_t handle_mask(struct vfs_table *t,int h) {
  * Keep their admission cancellable, with the same evidence as ticket waits.
  * Cleanup after issued I/O still reacquires namespace unconditionally. */
 struct file_wait_evidence { bool valid; char holder; struct vfs_hold_info owner; };
+static bool meaningful_owner(const struct vfs_hold_info *owner) {
+    return owner->task.name[0] && owner->op[0] && owner->site[0] &&
+        owner->attribution==VFS_ATTR_COMPLETE;
+}
+static void file_wait_owner(struct vfs *v,uint32_t mask,const bool *busy,
+                            struct file_wait_evidence *evidence) {
+    if (!evidence || evidence->valid) return;
+    /* The description, rather than an unrelated volume writer, is the
+     * blocker for shared-offset I/O. Records live until I/O retirement. */
+    for (struct vfs_reader *r=v->reader_owners;busy && r;r=r->next)
+        if (r->busy==busy && meaningful_owner(&r->owner)) {
+            *evidence=(struct file_wait_evidence){true,(char)('A'+r->drive),r->owner}; return;
+        }
+    for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) &&
+        ((v->reserved|v->mutating)&(1u<<d)) && meaningful_owner(&v->holds[d])) {
+        *evidence=(struct file_wait_evidence){true,(char)('A'+d),v->holds[d]}; return;
+    }
+}
 static void file_wait_complete(struct vfs *v,uint32_t mask,const struct vfs_request *request,
     uint32_t start,struct file_wait_evidence *e,int error) {
     if (!e || !e->valid) return;
@@ -883,7 +931,7 @@ static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request
     char holder=first_drive((v->reserved|v->mutating)&mask);
     struct vfs_hold_info owner=holder>='A' && holder<='Z' ? v->holds[holder-'A'] : (struct vfs_hold_info){0};
     struct fs_task_identity task=fs_request_identity(request);
-    if (evidence && !evidence->valid) *evidence=(struct file_wait_evidence){true,holder,owner};
+    file_wait_owner(v,mask,0,evidence);
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->diagnostic_waiters[d]++;
     struct vfs_pending_waits pending=waits_detach(v);
     if (!request) fs_event_wait(&v->volume_changed,&v->lock);
@@ -905,7 +953,7 @@ static int handle_lock(struct vfs_table *t,int h) {
             error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin,0);
             vfs_unlock(t->vfs); if (error) return error; continue;
         }
-        uint32_t mask=handle_mask(t,h); error=reserve_request(t->vfs,mask,t->request);
+        uint32_t mask=handle_mask(t,h); error=reserve_file_request(t->vfs,mask,t->request,desc ? desc->node->identity : 0);
         if (error) { vfs_unlock(t->vfs); return error; }
         if (handle_mask(t,h)==mask) return 0;
         vfs_unlock(t->vfs); /* slot was replaced while admission slept */
@@ -915,27 +963,64 @@ static struct vfs_description *get(struct vfs_table *t, int h) { return h>=0 && 
 /* Only the operations below leave every other open regular file's chain
  * unchanged. Unknown mutations remain excluded. Compare common identities,
  * rather than personality-specific node addresses. */
-static bool reader_admitted(struct vfs *v,unsigned drive,struct vfs_file_identity *id) {
+static bool reader_admitted(struct vfs *v,unsigned drive,struct vfs_file_identity *id,
+                            struct file_wait_evidence *evidence) {
     uint32_t mask=vfs_drive_mask(drive);
-    /* Closing the gate lets overlapping readers drain without a new urgent
-     * arrival perpetually keeping readers[] nonzero. Cancellation removes
-     * its waiter, so a cancelled ticket cannot leave the gate closed. */
-    uint32_t now=fs_now_ms();
-    for (struct vfs_waiter *w=v->waiters;w;w=w->next)
-        if ((w->mask&mask) && now-w->started>=VFS_URGENT_OVERTAKE_MS) return false;
-    if (!((v->reserved|v->mutating)&mask)) {
-        const struct vfs_request *r=fs_request_current();
-        /* A decoder deadline may pass a queued normal metadata ticket while
-         * another reader drains. It never passes an active mutation of this
-         * file. Ordinary readers still close the gate for FIFO writers. */
-        return v->next[drive]==v->serving[drive] || (r && r->urgent_reader);
+    /* An unrelated in-flight mutation must not turn queued tickets into a
+     * barrier for urgent readers. Actual same-file mutations remain unsafe
+     * even during a reader turn. */
+    if ((v->reserved|v->mutating)&mask) {
+        bool compatible=v->io_file[drive] ? v->io_file[drive]->identity!=id : read_compatible(v->holds[drive].op);
+        if (!compatible) file_wait_owner(v,mask,0,evidence);
+        return compatible;
     }
-    if (v->io_file[drive]) return v->io_file[drive]->identity!=id;
-    const char *op=v->holds[drive].op;
-    static const char *const immutable[]={"commit","mkdir","read","open","lookup","readdir","find","stat"};
-    for (unsigned i=0;i<sizeof(immutable)/sizeof(*immutable);i++)
-        if (!strncmp(op,immutable[i],12)) return true;
-    return false;
+    struct vfs_waiter *head=0;
+    /* Only the serving operation can benefit from draining readers. A
+     * younger ticket (including one waiting on another volume) cannot keep
+     * closing admission. Unknown path mutations conservatively conflict. */
+    for (struct vfs_waiter *w=v->waiters;w;w=w->next)
+        if ((w->mask&mask) && w->ticket[drive]==v->serving[drive]) { head=w; break; }
+    bool conflict=head && !read_compatible(head->owner.op) && (!head->file || head->file==id);
+    bool runnable=head!=0;
+    for (unsigned d=0;head && d<26;d++) if ((head->mask&(1u<<d)) &&
+        (head->ticket[d]!=v->serving[d] || ((v->reserved|v->mutating)&(1u<<d)))) runnable=false;
+    const struct vfs_request *r=fs_request_current();
+    bool urgent=r && r->urgent_reader;
+    uint32_t now=fs_now_ms();
+    if (conflict && runnable && now-head->started>=VFS_URGENT_OVERTAKE_MS) {
+        if (!v->urgent_gate_valid[drive]) {
+            v->urgent_gate_valid[drive]=true; v->urgent_gate_start[drive]=now;
+        }
+        /* Share this clock across successive aged tickets. At most 10 ms
+         * closed, followed by 10 ms in which urgent readers can enter. */
+        if (!urgent || (now-v->urgent_gate_start[drive])%(2*VFS_URGENT_DRAIN_MS)<VFS_URGENT_DRAIN_MS) {
+            if (evidence && !evidence->valid && meaningful_owner(&head->owner))
+                *evidence=(struct file_wait_evidence){true,(char)('A'+drive),head->owner};
+            return false;
+        }
+    } else if (!head) v->urgent_gate_valid[drive]=false;
+    bool admitted=v->next[drive]==v->serving[drive] || urgent;
+    if (!admitted && head && evidence && !evidence->valid && meaningful_owner(&head->owner))
+        *evidence=(struct file_wait_evidence){true,(char)('A'+drive),head->owner};
+    return admitted;
+}
+static void reader_begin(struct vfs *v,struct vfs_reader *reader,unsigned drive,const bool *busy) {
+    /* A wait may have let another task replace namespace_owner, and the
+     * namespace retake does not republish it. Build the record from this
+     * reader's own request only: no task, operation or site is inherited.
+     * A reader without an explicit site stays fallback-attributed. */
+    const struct vfs_request *r=fs_request_current();
+    *reader=(struct vfs_reader){.next=v->reader_owners,.busy=busy,.drive=drive,
+        .owner={.task=fs_request_identity(r),.started=fs_now_ms(),.attribution=VFS_ATTR_OPERATION}};
+    tag_copy(reader->owner.op,"read");
+    tag_copy(reader->owner.site,r && r->site && *r->site ? r->site : "vfs");
+    if (r && r->site && *r->site) reader->owner.attribution|=VFS_ATTR_SITE;
+    v->reader_owners=reader;
+}
+static void reader_end(struct vfs *v,struct vfs_reader *reader) {
+    struct vfs_reader **link=&v->reader_owners;
+    while (*link!=reader) link=&(*link)->next;
+    *link=reader->next;
 }
 static struct fat_volume read_view(const struct fat_volume *v) {
     return (struct fat_volume){.cache=v->cache,.dev=v->dev,.start=v->start,.sectors=v->sectors,
@@ -962,7 +1047,8 @@ int vfs_read_identity_locked(struct vfs *v,struct vfs_file_identity *id,struct f
         int e=VFS_IO(v,fat_read_cursor(vol,entry,cursor,*pos,buf,n,done));
         *busy=false; fs_event_wake(&v->volume_changed); return e;
     }
-    while (*busy || !reader_admitted(v,drive,id)) {
+    while (*busy || !reader_admitted(v,drive,id,&evidence)) {
+        if (*busy) file_wait_owner(v,mask,busy,&evidence);
         int e=file_wait_locked(v,mask,r,start,begin,&evidence);
         if (e) { if (saved) vfs_reserve_locked(v,saved); return e; }
     }
@@ -974,9 +1060,10 @@ int vfs_read_identity_locked(struct vfs *v,struct vfs_file_identity *id,struct f
     if (!positioned) *pos=*current; /* shared-description offset after admission */
     int permission=validate ? validate(arg,*pos,n) : 0;
     if (permission) { if (saved) vfs_reserve_locked(v,saved); return permission; }
+    struct vfs_reader reader; reader_begin(v,&reader,drive,busy);
     *busy=true; v->readers[drive]++; vfs_unlock(v);
     int e=fat_read_cursor(&view,&snapshot,cursor,*pos,buf,n,done);
-    vfs_lock(v,0); *busy=false; v->readers[drive]--; fs_event_wake(&v->volume_changed);
+    vfs_lock(v,0); reader_end(v,&reader); *busy=false; v->readers[drive]--; fs_event_wake(&v->volume_changed);
     /* Do not erase corruption observed in the private reader workspace. */
     if (view.readonly_reason) {
         vfs_reserve_locked(v,mask);
@@ -1174,8 +1261,9 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
             vfs_unlock(v); return -FS_EIO;
         }
         uint32_t mask=vfs_drive_mask(drive);
-        bool admitted=reader_admitted(v,drive,node->identity);
+        bool admitted=d->io_active ? false : reader_admitted(v,drive,node->identity,&evidence);
         if (d->io_active || !admitted) {
+            if (d->io_active) file_wait_owner(v,mask,&d->io_active,&evidence);
             int error=file_wait_locked(v,mask,t->request,start,begin,&evidence);
             vfs_unlock(v); if (error) return error; continue;
         }
@@ -1185,12 +1273,13 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
         struct fat_volume *vol=node->volume;
         uint32_t media_generation=vol->dev->media_generation;
         struct fat_volume view=read_view(vol);
+        struct vfs_reader reader; reader_begin(v,&reader,drive,&d->io_active);
         d->io_active=true; d->refs++; v->readers[drive]++; uint64_t position=d->position;
         struct fat_entry entry=node->entry;
         vfs_unlock(v);
         int e=fat_read_stream(&view,&entry,position,buf,n,done,&d->stream,&d->cursor);
         (void)fs_lock_retake(&v->lock,VFS_WAIT_NAMESPACE);
-        d->position+=*done; d->io_active=false; v->readers[drive]--;
+        reader_end(v,&reader); d->position+=*done; d->io_active=false; v->readers[drive]--;
         if (view.readonly_reason) {
             fs_event_wake(&v->volume_changed);
             vfs_reserve_locked(v,mask);

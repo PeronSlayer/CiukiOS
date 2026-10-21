@@ -177,8 +177,26 @@ static void test_wait_present(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&close,sizeof(close)));
     CHECK(input_forwards==forwards+1 && forward_source==g_current && forward_target==producer->task);
     CHECK(producer->task->input_priority==9 && producer->task->input_expiry==g_ticks+20);
+    /* The second owner's acquisition is authoritative even before the
+     * desktop delivers the old owner's loss message. No second input yet. */
+    struct ciuki_dosvm_command second;
+    fake_current=&fake_proc[1];
+    CHECK(!create_window(3,"Second focus",&second));
+    struct dosvm *other=dosvm_lookup((struct dosvm_key){second.id,second.generation});
+    second=command_for(second.id,second.generation); second.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&second,sizeof(second)));
+    CHECK(!producer->task->input_priority && !producer->task->input_expiry && !other->task->input_priority);
+    second=command_for(second.id,second.generation);
+    second.event.type=INPUT_KEY; second.event.code=0x1e; second.event.value=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&second,sizeof(second)) && other->task->input_priority==9);
+    fake_current=&fake_proc[0];
     close=command_for(present_window.id,present_window.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&close,sizeof(close)) && !producer->task->input_priority);
+    CHECK(other->task->input_priority==9); /* delayed old loss cannot revoke the new grant */
+    fake_current=&fake_proc[1];
+    second=command_for(second.id,second.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&second,sizeof(second)));
+    fake_current=&fake_proc[0];
     close.event.type=INPUT_KEY; close.event.code=0x1e; close.event.value=1;
     CHECK(dosvm_call(CIUKI_DOSVM_INPUT,&close,sizeof(close))==-EACCES);
     close=command_for(present_window.id,present_window.generation); close.focused=1;

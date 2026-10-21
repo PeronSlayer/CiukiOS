@@ -205,6 +205,9 @@ bool task_alive(const struct task *t) { return t->state < T_ZOMBIE; }
 void task_kill(struct task *t, int reason) { t->state = T_ZOMBIE; t->exit_code = reason; }
 void task_reap(struct task *t) { g_task_count--; free(t->kstack); free(t->fpu_alloc); free(t); }
 void task_exit(int reason) { (void)reason; abort(); }
+/* dosvm.c revokes a forwarded input boost at DOS focus transfer; no
+ * native input forwarding exists in this runner. */
+void task_input_withdraw(struct task *t) { (void)t; }
 void schedule(void) { g_need_resched = false; }
 void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
 void crit_begin(void) { }

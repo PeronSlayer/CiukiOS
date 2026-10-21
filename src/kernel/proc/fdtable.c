@@ -101,7 +101,7 @@ int file_description_close(struct file_description *d)
     if (d->node) {
         struct px_namespace *s = d->node->space;
         vfs_lock(s->vfs,0);
-        if (d->node->volume || d->node->ro) vfs_reserve_locked(s->vfs,vfs_drive_mask(d->node->drive));
+        if (d->node->volume || d->node->ro) vfs_reserve_file_locked(s->vfs,vfs_drive_mask(d->node->drive),d->identity);
         struct file_description **at = &s->descriptions;
         while (*at && *at != d) at = &(*at)->next;
         if (*at) *at = d->next;
@@ -268,7 +268,7 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (w32_file_sync) {
         struct vfs *v=n->space->vfs;
         bool reserve=!v->active && w32_file_needs_sync && w32_file_needs_sync(n);
-        if (reserve) vfs_reserve_locked(v,vfs_drive_mask(n->drive));
+        if (reserve) vfs_reserve_file_locked(v,vfs_drive_mask(n->drive),d->identity);
         int sync=w32_file_sync(n);
         if (reserve) { vfs_unlock(v); vfs_lock(v,0); }
         if (sync) return sync;
