@@ -142,7 +142,7 @@ static int dialogs_startup(const char *path, uint32_t address) {
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader, &host.peb, path, "", "C:\\", "\0\0", &main));
     CHECK(GetModuleHandleA(0) == main->pe.image);
-    if (path == W32_DIALOGS_PATH) dialogs_resources(main->pe.image); /* f5-10C4: only the dialogs fixture carries RT_DIALOG 600 */
+    if (!w32_strcmp(path, W32_DIALOGS_PATH)) dialogs_resources(main->pe.image); /* f5-10C4: only the dialogs fixture carries RT_DIALOG 600 */
     struct ciuki_w32_memory_info q;
     CHECK(VirtualQuery((void *)0x6fff0000, &q, sizeof(q)) == sizeof(q));
     printf("DIALOGS_LAYOUT old_result=6fff0000 allocation=%08x state=%08x bytes=%u parameters=%08x builtins=%08x main=%08x+%08x\n",
