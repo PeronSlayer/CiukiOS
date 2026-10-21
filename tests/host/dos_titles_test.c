@@ -51,7 +51,7 @@ int main(int argc,char **argv)
     assert(!d53_match(&text,"",cells)); /* no matching across row boundaries */
     assert(d53_match(&plan.cp[0],plan.cp[0].value,0));
     assert(!d53_match(&plan.cp[0],"different",0));
-    struct d53_audio audio={.pcm_frames=1000,.opl_writes=10,.blocks=4,.irq_entries=4,
+    struct d53_audio audio={.pcm_frames=1000,.opl_writes=10,.key_writes=3,.music_windows=7,.blocks=4,.irq_entries=4,
         .irq=5,.attached=true,.ready=true,.irq_latency_max_us=20000};
     assert(d53_audio_ok(&plan,&audio));
     audio.irq_latency_max_us++;assert(!d53_audio_ok(&plan,&audio));audio.irq_latency_max_us=1;
@@ -59,7 +59,8 @@ int main(int argc,char **argv)
     audio.irq=7;assert(!d53_audio_ok(&plan,&audio));audio.irq=5;
     audio.attached=false;assert(!d53_audio_ok(&plan,&audio));audio.attached=true;
     audio.ready=false;assert(!d53_audio_ok(&plan,&audio));audio.ready=true;
-    audio.opl_writes=0;assert(!d53_audio_ok(&plan,&audio));audio.opl_writes=10;
+    audio.key_writes=0;assert(!d53_audio_ok(&plan,&audio));audio.key_writes=3;
+    audio.music_windows=3;assert(!d53_audio_ok(&plan,&audio));audio.music_windows=7;
     audio.pcm_frames=0;assert(!d53_audio_ok(&plan,&audio));
     static uint8_t extended[D53_V2_BYTES], malformed[D53_V2_BYTES];
     f=fopen(argv[2],"rb");assert(f);
@@ -67,7 +68,7 @@ int main(int argc,char **argv)
     assert(d53_parse(extended,sizeof(extended),&plan));
     assert(plan.extended && plan.calibration && plan.stages==1 && plan.stage[0].count==2);
     assert(plan.stage[0].timeout==5000 && !strcmp(plan.stage[0].command,"\\RUNREC.COM \\SYNTH SETUP.EXE"));
-    assert(d53_match(&plan.cp[0],"unmatched",0)); /* capture is never matched=1 */
+    assert(!d53_match(&plan.cp[0],"unmatched",0)); /* known expectation stays checked */
     const unsigned v2_offsets[]={D53_PLAN_BYTES,D53_PLAN_BYTES+4,D53_PLAN_BYTES+8+147,
         D53_PLAN_BYTES+8+216,D53_PLAN_BYTES+8+220,D53_PLAN_BYTES+8+224,
         D53_PLAN_BYTES+8+D53_STAGE_BYTES};
@@ -75,9 +76,17 @@ int main(int argc,char **argv)
         memcpy(malformed,extended,sizeof(extended));malformed[v2_offsets[i]]=255;
         assert(!d53_parse(malformed,sizeof(malformed),&plan));
     }
-    memcpy(malformed,extended,sizeof(extended)); malformed[D53_PLAN_BYTES]=0;
+    memcpy(malformed,extended,sizeof(extended)); malformed[172+8]=2; malformed[D53_PLAN_BYTES]=0;
     assert(!d53_parse(malformed,sizeof(malformed),&plan)); /* verification rejects capture checkpoints */
     assert(!d53_parse(extended,sizeof(extended)-1,&plan));
+    struct d53_audio before={.pcm_frames=100,.blocks=4,.irq_entries=4,.opl_writes=10,.key_writes=3,.underruns=2};
+    audio=before; audio.attached=audio.ready=true; audio.irq=5;
+    audio=d53_audio_delta(audio,&before);
+    assert(!audio.underruns && !audio.pcm_frames && !audio.opl_writes && !audio.key_writes);
+    assert(!d53_audio_ok(&plan,&audio)); /* startup sound cannot pass gameplay */
+    uint64_t next=0; unsigned hashes=0;
+    for (uint64_t ms=0;ms<30000;ms+=20) if (d53_hash_due(ms,&next)) hashes++;
+    assert(hashes==60);
     selector_tests();puts("PASS: production DOS title v1/v2 plans, installer bounds, capture isolation, audio and selector/sweep");
     return 0;
 }

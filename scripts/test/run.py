@@ -2265,7 +2265,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if fixture.get('generator') in ('dos-local','dos-title') and fixture.get('path'):
                 try:
                     fixture['sha256_after']=sha(fixture['path'])
-                    if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('DOS workload fixture changed during read-only case')
+                    calibration=fixture['generator']=='dos-title' and fixture.get('calibrate',False)
+                    if calibration:
+                        dos_titles.extract_captures(fixture,directory/'title-captures')
+                    elif fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('DOS workload fixture changed during read-only case')
                     if result['outcome']=='pass':
                         if fixture['generator']=='dos-title':
                             title=case['fixtures'][0]['title']
@@ -2337,6 +2340,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # all passing runs always retain exactly these contract artifacts
         # (a normal boot also keeps its evaluated screendump).
         passing=['serial.log','screen.ppm'] if normal else ['serial.log']
+        if any(f.get('generator')=='dos-title' and f.get('calibrate') for f in case.get('fixtures',[])):
+            passing.append('title-captures')
         if result['outcome']=='pass':
             for p in directory.iterdir():
                 if p.name not in passing and not (retain_overlay and p==overlay):

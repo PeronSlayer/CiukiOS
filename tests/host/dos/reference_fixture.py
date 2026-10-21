@@ -5,19 +5,11 @@ import conformance
 
 def provisioned_reference(test):
     canonical = conformance.ROOT / 'third_party/freedos/1.3'
-    # The lead exposes the main tree's ignored archives through this directory
-    # symlink; tracked pins in the worktree remain authoritative.
-    linked = conformance.ROOT / 'third_party/freedos/freedos/1.3'
     if not (canonical / 'UPSTREAM.json').is_file():
         test.skipTest('FreeDOS 1.3 pinned reference unavailable; missing pin file: ' + str(canonical / 'UPSTREAM.json'))
     pin = json.loads((canonical / 'UPSTREAM.json').read_text())
     needed = sorted({row['archive'] for row in pin.values() if isinstance(row, dict) and 'archive' in row} | {'boot16.bin'})
-    missing = []
-    for folder in (canonical, linked):
-        absent = [name for name in needed if not (folder / name).is_file()]
-        if not absent:
-            if (folder / 'UPSTREAM.json').read_bytes() != (canonical / 'UPSTREAM.json').read_bytes():
-                raise ValueError('provisioned FreeDOS reference pins differ from worktree pins')
-            return folder
-        missing.append(str(folder) + ': ' + ', '.join(absent))
-    test.skipTest('FreeDOS 1.3 pinned reference unavailable; missing files: ' + '; '.join(missing))
+    absent = [name for name in needed if not (canonical / name).is_file()]
+    if absent:
+        test.skipTest('FreeDOS 1.3 pinned reference unavailable; missing files: ' + str(canonical) + ': ' + ', '.join(absent))
+    return canonical

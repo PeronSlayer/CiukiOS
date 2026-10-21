@@ -7,10 +7,9 @@
       "year": 1993,
       "publisher": "id Software",
       "licence": {
-        "kind": "redistributable",
         "citation": "config/dos-titles.json: doom; original package licence documents",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Approved installed DOOM shareware package per UPSTREAM.json and Carmack clarification; four FAQ files excluded.",
+        "class": "bundled"
       },
       "install": {
         "layout": "package",
@@ -312,10 +311,9 @@
       "year": 1996,
       "publisher": "id Software",
       "licence": {
-        "kind": "redistributable",
         "citation": "config/dos-titles.json: quake; original package licence documents",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Whole unmodified shareware package with agreement; free electronic compressed distribution per SLICNSE.TXT section 6 and f3-18 qualification.",
+        "class": "bundled"
       },
       "install": {
         "layout": "package",
@@ -325,7 +323,7 @@
         "files": [],
         "steps": [
           "Extract complete original shareware archive; retain all licence documents.",
-          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; digital SFX only, CD music absent.",
           "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
         ]
       },
@@ -633,7 +631,7 @@
         }
       ],
       "audio": {
-        "expectation": "both",
+        "expectation": "digital",
         "base": 544,
         "irq": 5,
         "dma8": 1,
@@ -644,7 +642,8 @@
         "conventional_kib": 560,
         "ems_kib": 0,
         "xms_kib": 16384,
-        "dpmi": "cwsdpmi"
+        "dpmi": "native",
+        "dpmi_fallback": "cwsdpmi"
       }
     },
     {
@@ -653,10 +652,9 @@
       "year": 1992,
       "publisher": "Apogee Software / id Software",
       "licence": {
-        "kind": "redistributable",
         "citation": "config/dos-titles.json: wolf3d; original package licence documents",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
       },
       "install": {
         "layout": "package",
@@ -958,10 +956,9 @@
       "year": 1995,
       "publisher": "Apogee Software",
       "licence": {
-        "kind": "redistributable",
         "citation": "1rott13.zip!ROTTSW13.SHR!VENDOR.DOC; SHA-256 a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
       },
       "install": {
         "layout": "installer",
@@ -1474,10 +1471,9 @@
       "year": 1991,
       "publisher": "Apogee Software / id Software",
       "licence": {
-        "kind": "redistributable",
         "citation": "4keen.zip!CK4SW14.SHR!VENDOR.DOC; SHA-256 4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
       },
       "install": {
         "layout": "installer",
@@ -1841,10 +1837,9 @@
       "year": 1996,
       "publisher": "3D Realms",
       "licence": {
-        "kind": "redistributable",
         "citation": "3dduke13.zip!DN3DSW13.SHR!LICENSE.TXT; SHA-256 38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
-        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": true
+        "conditions": "Local battery test media only; never an image or release input. Bundle/other distribution requires publisher permission.",
+        "class": "test-media"
       },
       "install": {
         "layout": "installer",

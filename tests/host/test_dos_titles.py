@@ -36,6 +36,20 @@ def installer_sample():
 
 
 class SchemaTests(unittest.TestCase):
+    def test_licence_boundaries_and_quake_metadata(self):
+        rows = titles.load(ROOT / 'tests/dos-titles/tracked.json', True)['titles']
+        pins = json.loads((ROOT / 'config/dos-titles.json').read_text())['titles']
+        self.assertEqual({t['id'] for t in rows}, {p['id'] for p in pins})
+        for t in rows:
+            expected = 'bundled' if t['id'] in ('doom', 'quake') else 'test-media'
+            self.assertEqual(t['licence']['class'], expected)
+            self.assertEqual(next(p for p in pins if p['id'] == t['id'])['licence']['class'], expected)
+            self.assertNotIn('verified', t['licence'])
+        quake = next(t for t in rows if t['id'] == 'quake')
+        self.assertEqual((quake['audio']['expectation'], quake['memory']['dpmi'], quake['memory']['dpmi_fallback']), ('digital', 'native', 'cwsdpmi'))
+        for extra in ({'kind': 'redistributable'}, {'verified': True}):
+            t = sample(); t['licence'].update(extra)
+            with self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]})
     def test_six_proposed_profiles_and_pending_readiness(self):
         data = titles.load(ROOT / 'tests/dos-titles/tracked.json', True)
         self.assertGreaterEqual(len(data['titles']), 6)
@@ -52,7 +66,7 @@ class SchemaTests(unittest.TestCase):
                 titles.validate({'schema_version': 1, 'titles': [t]})
         t = sample()
         with self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t, t]})
-        t['licence']['kind'] = 'owner-copy'
+        t['licence']['class'] = 'owner-copy'
         with self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]}, True)
         t = sample();t['input'][0]['down'] = False
         with self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]})
@@ -87,6 +101,27 @@ class SerialTests(unittest.TestCase):
         self.assertEqual((r['menu_ms'], r['gameplay_ms'], r['lan']), (5000, 30000, 'pending f6-11'))
         self.assertEqual(len(r['cadence_diagnostics']), 1)
 
+    def test_maximum_record_envelopes(self):
+        # Production formats, longest legal ID, UINT32 seq/metrics and UINT64
+        # counters: ensure no producer can trigger record_overflow at 240.
+        import re
+        source = (ROOT / 'src/kernel/probes/f3_probes_titles.c').read_text()
+        formats = re.findall(r'rec_emit\("title","DATA","(group=dos_title[^"\n]+)"', source)
+        self.assertEqual(len(formats), 14)
+        for fmt in formats:
+            strings = iter(['x' * 23, 'a' * 64])
+            def value(match):
+                if match[0] == '%s': return next(strings, 'a' * 64)
+                return str(2**64 - 1) if match[0] == '%llu' else str(2**32 - 1)
+            # Checkpoint case names have a separate bounded string argument.
+            if 'case=%s' in fmt: strings = iter(['x' * 23, 'gameplay', 'a' * 64])
+            line = 'CIUKI_TEST v=1 run=ffffffff seq=4294967295 probe=title event=DATA ' + re.sub(r'%llu|%[us]', value, fmt)
+            self.assertLessEqual(len(line), 240, line)
+
+    def test_music_requires_activity_across_gameplay(self):
+        for before, after in ((b'key_writes=30', b'key_writes=2'), (b'windows=7', b'windows=3')):
+            with self.assertRaises(EvidenceError): self.parse(self.raw.replace(before, after))
+
     def test_subset_does_not_qualify_the_twenty_title_goal(self):
         out = ROOT / 'build/host';out.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=out, prefix='title-summary-') as temp:
@@ -118,7 +153,7 @@ class SerialTests(unittest.TestCase):
     def test_failure_thresholds_and_unproved_success(self):
         replacements = [(b'underruns=0', b'underruns=1'), (b'irq_latency_max_us=20000', b'irq_latency_max_us=20001'),
                         (b'duration_ms=30000', b'duration_ms=29999'), (b'frame_changes=20', b'frame_changes=0'),
-                        (b'attached=1', b'attached=0'), (b'irq=5', b'irq=7'), (b'opl_writes=100', b'opl_writes=0'),
+                        (b'attached=1', b'attached=0'), (b'irq=5', b'irq=7'), (b'key_writes=30', b'key_writes=0'),
                         (b'delivered=4', b'delivered=3'), (b'clean=1', b'clean=0'), (b'restored=1', b'restored=0'),
                         (b'faults=0', b'faults=1'), (b'case=menu ms=5000', b'case=menu ms=60001')]
         for before, after in replacements:
@@ -176,6 +211,11 @@ class ModelTests(unittest.TestCase):
                             '-Wall', '-Wextra', '-Werror', '-Wframe-larger-than=2048',
                             '-I', str(ROOT / 'src/kernel/include'), '-c',
                             str(ROOT / 'src/kernel/probes/f3_probes_titles.c'), '-o', str(temp / 'controller.o')], check=True)
+            subprocess.run(['clang', '--target=i686-unknown-elf', '-march=pentiumpro', '-ffreestanding',
+                            '-fno-builtin', '-mno-sse', '-mno-sse2', '-mno-80387', '-std=c17', '-O2',
+                            '-Wall', '-Wextra', '-Werror', '-Wframe-larger-than=2048',
+                            '-I', str(ROOT / 'src/kernel/include'), '-c',
+                            str(ROOT / 'src/kernel/vm/dosvm_vga.c'), '-o', str(temp / 'presenter.o')], check=True)
 
 
 class DiskTests(unittest.TestCase):
@@ -206,6 +246,25 @@ class DiskTests(unittest.TestCase):
             wire = dos_fixtures.run(['mcopy', '-i', captured['path'], '::/DTITLE.PLN', '-']).stdout
             self.assertEqual(wire, titles.plan(t, True))
             self.assertEqual((wire[:8], len(wire)), (b'D53PLAN2', titles.PLAN_V2_SIZE))
+            captures = temp / 'captures'
+            ppm = b'P6\n640 480\n255\n' + bytes(640 * 480 * 3)
+            text = bytes(4000)
+            for name in titles.CHECKS:
+                for ext, data in (('ppm', ppm), ('txt', text)):
+                    asset = temp / (name + '.' + ext); asset.write_bytes(data)
+                    dos_fixtures.run(['mcopy', '-n', '-i', captured['path'], asset, '::/' + asset.name.upper()])
+            titles.extract_captures(captured, captures)
+            checkpoints = [{'name': name, 'digest': hashlib.sha256(bytes(640 * 480 * 4)).hexdigest()} for name in titles.CHECKS]
+            self.assertEqual(len(titles.capture_artifacts(captures, checkpoints)), 6)
+            badplan = temp / 'wrong-plan'; badplan.write_bytes(b'changed')
+            dos_fixtures.run(['mcopy', '-o', '-i', captured['path'], badplan, '::/DTITLE.PLN'])
+            with self.assertRaisesRegex(EvidenceError, 'changed original plan'):
+                titles.extract_captures(captured, captures)
+            private = copy.deepcopy(t); private_archive = temp / 'private.zip'
+            with zipfile.ZipFile(private_archive, 'w') as z: z.writestr('GAME.EXE', binary)
+            private['install'].update(layout='zip', source=str(private_archive), archive_pin={'size': private_archive.stat().st_size, 'sha256': dos_fixtures.sha(private_archive)})
+            generated = titles.generate({'generator': titles.GENERATOR, 'title': private}, temp / 'private-run', dos_image=image)
+            self.assertEqual(generated['payloads'], fixture['payloads'])
             t['install']['files'][0]['sha256'] = '0' * 64
             with self.assertRaises(ValueError): titles.files(t, {'titles': []})
 
@@ -217,16 +276,19 @@ class DiskTests(unittest.TestCase):
             for path in ('../ESCAPE.EXE', '/GAME.EXE', 'longfilename.exe'):
                 with zipfile.ZipFile(archive, 'w') as z: z.writestr(path, b'MZ')
                 pins = {'titles': [{'id': 'synthetic', 'sha256': dos_fixtures.sha(archive), 'size': archive.stat().st_size}]}
+                t['install']['archive_pin'] = {k: pins['titles'][0][k] for k in ('sha256', 'size')}
                 with self.subTest(path=path), self.assertRaises(ValueError): titles.files(t, pins)
             with zipfile.ZipFile(archive, 'w') as z: z.writestr('GAME.EXE', b'MZ')
             pins['titles'][0].update(sha256=dos_fixtures.sha(archive), size=archive.stat().st_size)
+            t['install']['archive_pin'] = {k: pins['titles'][0][k] for k in ('sha256', 'size')}
             self.assertEqual(titles.files(t, pins), {'/SYNTH/GAME.EXE': b'MZ'})
-            pins['titles'][0]['sha256'] = '0' * 64
+            t['install']['archive_pin']['sha256'] = '0' * 64
             with self.assertRaises(ValueError): titles.files(t, pins)
             with zipfile.ZipFile(archive, 'w') as z:
                 link = zipfile.ZipInfo('GAME.EXE');link.external_attr = 0o120777 << 16
                 z.writestr(link, 'TARGET')
             pins['titles'][0].update(sha256=dos_fixtures.sha(archive), size=archive.stat().st_size)
+            t['install']['archive_pin'] = {k: pins['titles'][0][k] for k in ('sha256', 'size')}
             with self.assertRaises(ValueError): titles.files(t, pins)
             with self.assertRaises(ValueError): dos_fixtures.check_output(ROOT / 'build/f0', ROOT)
 
@@ -266,14 +328,21 @@ class AmendmentTests(unittest.TestCase):
         raw = (FIXTURES / 'serial.txt').read_text()
         rows = []
         for line in raw.splitlines():
+            for cp in t['checkpoints']:
+                if 'case=' + cp['name'] + ' ' in line:
+                    digest = cp['value'] if cp['value'] is not None and cp['kind'] == 'sha256' else getattr(self, 'frame_digest', 'a' * 64)
+                    line = line.replace('digest=' + 'a' * 64, 'digest=' + digest)
             if 'case=plan ' in line:
                 line = line[:line.index('sha256=')] + 'sha256=' + hashlib.sha256(titles.plan(t, capture)).hexdigest()
-            if capture: line = line.replace('matched=1', 'matched=0')
+            if capture:
+                for cp in t['checkpoints']:
+                    if cp['value'] is None and 'case=' + cp['name'] + ' ' in line: line = line.replace('matched=1', 'matched=0')
             rows.append(line)
             if 'case=plan ' in line:
                 rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=mode calibration=' + str(int(capture)))
                 for i, s in enumerate(t['install'].get('automation', [])):
-                    rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=install stage={} ms=900 delivered={} rc=0 files=2 tree_sha256={}'.format(i, len(s['input']), s['tree_sha256'] or 'b' * 64))
+                    rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=install stage={} ms=900 delivered={} rc=0 files=2'.format(i, len(s['input'])))
+                    rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=install-tree stage={} sha256={}'.format(i, s['tree_sha256'] or 'b' * 64))
         import re
         seq = 0
         for i, line in enumerate(rows):
@@ -281,6 +350,15 @@ class AmendmentTests(unittest.TestCase):
                 seq += 1
                 rows[i] = re.sub(r'seq=[0-9]+', 'seq=%06d' % seq, line)
         return ('\n'.join(rows) + '\n').encode()
+
+    def artifacts(self, t):
+        self.frame_digest = hashlib.sha256(bytes(640 * 480 * 4)).hexdigest()
+        directory = self.path / 'captures'; directory.mkdir(exist_ok=True)
+        for cp in t['checkpoints']:
+            (directory / (cp['name'] + '.ppm')).write_bytes(b'P6\n640 480\n255\n' + bytes(640 * 480 * 3))
+            (directory / (cp['name'] + '.txt')).write_bytes(bytes(4000))
+            if cp['value'] is not None: cp['value'] = self.frame_digest
+        return directory
 
     def test_supplied_archive_pins_licences_complete_trees_and_original_media(self):
         pins = json.loads((ROOT / 'config/dos-titles.json').read_text())
@@ -298,7 +376,7 @@ class AmendmentTests(unittest.TestCase):
             self.assertIn(b'without charge' if ident == 'duke3d' else b'without charging', notice)
             self.assertIn(b'without modification', notice)
             t = next(t for t in rows if t['id'] == ident)
-            self.assertTrue(t['licence']['verified'])
+            self.assertEqual(t['licence']['class'], 'test-media')
             self.assertEqual(t['audio']['irq'], 5)
             self.assertEqual(titles.files(t, pins), {'/MEDIA/' + n: d for n, d in outer.items()})
             self.assertNotIn('/' + t['install']['target'] + '/' + t['executable'], titles.files(t, pins))
@@ -327,20 +405,72 @@ class AmendmentTests(unittest.TestCase):
         self.assertEqual(titles.tree_hash(files), expected)
         self.assertEqual(titles.tree_hash(dict(reversed(list(files.items())))), expected)
 
+    def test_private_archive_pin_schema_runtime_and_binding(self):
+        t = sample(); archive = self.path / 'owner.zip'
+        with zipfile.ZipFile(archive, 'w') as z: z.writestr('GAME.EXE', b'MZ host fixture')
+        t['install'].update(layout='zip', source=str(archive), archive_pin={'size': archive.stat().st_size, 'sha256': dos_fixtures.sha(archive)})
+        titles.validate({'schema_version': 1, 'titles': [t]})
+        titles.ready(t, {'titles': []})
+        self.assertEqual(titles.files(t, {'titles': []}), {'/SYNTH/GAME.EXE': b'MZ host fixture'})
+        original = titles.definition_hash(t)
+        t['install']['archive_pin']['sha256'] = 'f' * 64
+        self.assertNotEqual(titles.definition_hash(t), original)
+        with self.assertRaises(ValueError): titles.files(t, {'titles': []})
+        t['install']['archive_pin']['size'] = True
+        with self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]})
+
+    def test_calibration_cannot_replace_known_hash_or_text_expectations(self):
+        t = installer_sample(); captures = self.artifacts(t)
+        t['checkpoints'][1].update(kind='text', value='MAIN MENU')
+        text = bytearray(4000); text[0:18:2] = b'MAIN MENU'
+        (captures / 'menu.txt').write_bytes(text)
+        r = titles.parse_serial(self.transcript(t, True), '12345678', t, True)
+        path = self.path / 'calibration.json'
+        titles.save_calibration(path, t, r, 't23', 'c' * 64, '12345678', captures)
+        applied = titles.apply_calibration(path, t, 't23', 'c' * 64, False)
+        self.assertEqual(applied['checkpoints'], t['checkpoints'])
+        wrong = copy.deepcopy(t); wrong['checkpoints'][0]['value'] = 'b' * 64
+        with self.assertRaises(EvidenceError): titles.parse_serial(self.transcript(t, True), '12345678', wrong, True)
+        data = json.loads(path.read_text()); data['profiles']['t23']['checkpoints'][0]['digest'] = 'b' * 64
+        path.write_text(json.dumps(data))
+        with self.assertRaises(ValueError): titles.apply_calibration(path, t, 't23', 'c' * 64, False)
+        # The raw text frame is also checked, independently of matched=1.
+        (captures / 'menu.txt').write_bytes(bytes(4000))
+        with self.assertRaises(EvidenceError): titles.save_calibration(self.path / 'other.json', t, r, 't23', 'c' * 64, '12345678', captures)
+
+    def test_review_artifacts_required_intact_and_not_overwritten(self):
+        t = installer_sample(); captures = self.artifacts(t)
+        r = titles.parse_serial(self.transcript(t, True), '12345678', t, True)
+        path = self.path / 'calibration.json'
+        titles.save_calibration(path, t, r, 't23', 'c' * 64, '12345678', captures)
+        (path.parent / 't23/12345678/boot.ppm').write_bytes(b'changed')
+        with self.assertRaises(EvidenceError): titles.accept_calibration(path, t, 't23', 'c' * 64, 'lead')
+        (captures / 'boot.ppm').write_bytes(b'changed')
+        with self.assertRaises(EvidenceError): titles.save_calibration(path, t, r, 't23', 'c' * 64, '87654321', captures)
+
     def test_capture_verify_roundtrip_separate_profiles_and_stale_bindings(self):
         t = installer_sample()
+        t['checkpoints'][1]['value'] = None
+        captures = self.artifacts(t)
         raw = self.transcript(t, True)
         r = titles.parse_serial(raw, '12345678', t, True)
         self.assertEqual(r['outcome'], 'calibrated')
         path = titles.calibration_path(self.path / 'manifest.json', t)
         self.assertEqual(path, self.path / 'synthetic/calibration.json')
         for profile in ('qemu-t23', 't23'):
-            titles.save_calibration(path, t, r, profile, 'c' * 64, '12345678')
+            titles.save_calibration(path, t, r, profile, 'c' * 64, '12345678', captures)
         self.assertEqual(set(json.loads(path.read_text())['profiles']), {'qemu-t23', 't23'})
+        with self.assertRaisesRegex(EvidenceNotRun, 'calibration_acceptance_pending'):
+            titles.apply_calibration(path, t, 't23', 'c' * 64)
+        titles.accept_calibration(path, t, 't23', 'c' * 64, 'lead-fixture')
+        record = json.loads(path.read_text())['profiles']['t23']
+        self.assertEqual((record['status'], record['accepted_by']), ('verified', 'lead-fixture'))
+        self.assertIn('+00:00', record['accepted_at'])
         applied = titles.apply_calibration(path, t, 't23', 'c' * 64)
         self.assertEqual(applied['install']['automation'][0]['tree_sha256'], 'b' * 64)
-        self.assertEqual(applied['checkpoints'][0]['value'], 'a' * 64)
-        self.assertEqual(applied['checkpoints'][0]['at_ms'], 1500)
+        self.assertEqual(applied['checkpoints'][0]['value'], self.frame_digest)
+        self.assertEqual(applied['checkpoints'][0]['at_ms'], t['checkpoints'][0]['at_ms'])
+        self.assertEqual(applied['checkpoints'][1]['at_ms'], t['checkpoints'][1]['at_ms'])
         self.assertEqual(applied['checkpoints'][0]['deadline_ms'], t['checkpoints'][0]['deadline_ms'])
         verified = titles.parse_serial(self.transcript(applied, False), '12345678', applied)
         self.assertEqual(verified['outcome'], 'pass')
@@ -349,6 +479,13 @@ class AmendmentTests(unittest.TestCase):
         for title, profile, image in ((changed, 't23', 'c' * 64), (t, 't23', 'd' * 64)):
             with self.assertRaises(ValueError): titles.apply_calibration(path, title, profile, image)
         with self.assertRaises(EvidenceNotRun): titles.apply_calibration(path, t, 'other', 'c' * 64)
+        # Recapture uses checked expectations from the previous capture and
+        # records its actual plan, without turning capture into verification.
+        recaptured = titles.parse_serial(self.transcript(applied, True), '12345678', applied, True)
+        titles.save_calibration(path, t, recaptured, 't23', 'c' * 64, '87654321', captures)
+        saved = json.loads(path.read_text())['profiles']['t23']
+        self.assertEqual(saved['plan_sha256'], hashlib.sha256(titles.plan(applied, True)).hexdigest())
+        with self.assertRaises(EvidenceNotRun): titles.apply_calibration(path, t, 't23', 'c' * 64)
         titles.write_summary(self.path, [r])
         self.assertEqual(json.loads((self.path / 'summary.json').read_text())['qualified_title_count'], 0)
 
@@ -358,7 +495,7 @@ class AmendmentTests(unittest.TestCase):
         self.assertEqual(titles.parse_serial(raw, '12345678', t)['outcome'], 'pass')
         for before, after in [(b'stage=0', b'stage=1'), (b'ms=900', b'ms=5001'), (b'delivered=2', b'delivered=1'),
                               (b'rc=0 files=2', b'rc=1 files=2'), (b'files=2', b'files=0'),
-                              (b'tree_sha256=' + b'b' * 64, b'tree_sha256=' + b'c' * 64),
+                              (b'sha256=' + b'b' * 64, b'sha256=' + b'c' * 64),
                               (b'calibration=0', b'calibration=1')]:
             with self.subTest(after=after), self.assertRaises(EvidenceError): titles.parse_serial(raw.replace(before, after), '12345678', t)
         lines = raw.splitlines(keepends=True);index = next(i for i, line in enumerate(lines) if b'case=install ' in line)
@@ -367,11 +504,14 @@ class AmendmentTests(unittest.TestCase):
 
     def test_physical_calibration_and_verification_cli_never_launch_processes(self):
         t = installer_sample();manifest = self.path / 'manifest.json'
+        captures = self.artifacts(t)
         manifest.write_text(json.dumps({'schema_version': 1, 'titles': [t]}))
         serial = self.path / 'serial.txt';serial.write_bytes(self.transcript(t, True))
-        common = ['--manifest', str(manifest), '--serial', str(serial), '--run-id', '12345678', '--profile', 't23', '--image-sha256', 'c' * 64]
+        common = ['--manifest', str(manifest), '--serial', str(serial), '--run-id', '12345678', '--profile', 't23', '--image-sha256', 'c' * 64, '--captures', str(captures)]
         with patch.object(subprocess, 'Popen', side_effect=AssertionError('host-only import must not launch')), patch('builtins.print'):
             self.assertEqual(titles.main(['--calibrate', 'synthetic', *common]), 0)
+            with self.assertRaises(EvidenceNotRun): titles.main(['--verify', '--title', 'synthetic', *common])
+            self.assertEqual(titles.main(['--accept-calibration', 'synthetic', '--reviewer', 'lead-fixture', *common]), 0)
             applied = titles.apply_calibration(titles.calibration_path(manifest, t), t, 't23', 'c' * 64)
             serial.write_bytes(self.transcript(applied, False))
             self.assertEqual(titles.main(['--verify', '--title', 'synthetic', *common]), 0)

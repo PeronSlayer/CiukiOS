@@ -75,15 +75,16 @@ class InstallTests(unittest.TestCase):
                     provisioned_reference(self)
                 canonical.mkdir(parents=True);linked.mkdir(parents=True)
                 pin={'release':'1.3','kernel':{'archive':'kernel.zip'}}
-                for folder in (canonical,linked): (folder/'UPSTREAM.json').write_text(json.dumps(pin))
+                (canonical/'UPSTREAM.json').write_text(json.dumps(pin))
                 with self.assertRaisesRegex(unittest.SkipTest,'missing files: .*boot16.bin, kernel.zip'):
                     provisioned_reference(self)
                 for name in ('boot16.bin','kernel.zip'): (linked/name).write_bytes(b'lookup fixture')
-                self.assertEqual(provisioned_reference(self),linked)
+                with self.assertRaisesRegex(unittest.SkipTest,'missing files: .*boot16.bin, kernel.zip'):
+                    provisioned_reference(self)
                 for name in ('boot16.bin','kernel.zip'): (canonical/name).write_bytes(b'lookup fixture')
                 self.assertEqual(provisioned_reference(self),canonical)
                 (canonical/'kernel.zip').unlink();(linked/'UPSTREAM.json').write_text('{}')
-                with self.assertRaisesRegex(ValueError,'pins differ'): provisioned_reference(self)
+                with self.assertRaisesRegex(unittest.SkipTest,'missing files: .*kernel.zip'): provisioned_reference(self)
 
     def fat_fixture(self):
         # In-memory FAT16 parser input, 4096 clusters; no build tool/image.

@@ -23,7 +23,11 @@ int main(void)
     REQUIRE(!v->audio.cadence_irq_entries);
     dosvm_audio_irq_enter(v,7);
     REQUIRE(v->audio.cadence_irq_entries==1 && v->audio.cadence_irq_latency_max_us==20000);
-    dosvm_audio_irq_enter(v,7); REQUIRE(v->audio.cadence_irq_entries==1);
+    REQUIRE(!v->audio.title_irq_latency_max_us);
+    v->audio.title_interval=true; v->audio.sb.irq_entry_pending=true;
+    v->audio.clock=48; dosvm_audio_irq_enter(v,7);
+    REQUIRE(v->audio.title_irq_latency_max_us==1000 && v->audio.cadence_irq_latency_max_us==20000);
+    dosvm_audio_irq_enter(v,7); REQUIRE(v->audio.cadence_irq_entries==2);
     v->audio.sb.causes=1;v->audio.sb.unserviced=2;v->audio.sb.x.waiting=false;
     sb_ack(v,1);
     REQUIRE(v->audio.cadence_late_acks==1);
@@ -35,8 +39,22 @@ int main(void)
     REQUIRE(v->audio.opl_writes==1);
     memset(&v->audio.sb.cadence,0,sizeof(v->audio.sb.cadence));
     dosvm_opl_init(v); sb_reset_port(v,1);sb_reset_port(v,0);
-    REQUIRE(v->audio.opl_writes==1 && v->audio.cadence_irq_entries==1 &&
+    REQUIRE(v->audio.opl_writes==1 && v->audio.cadence_irq_entries==2 &&
             v->audio.cadence_late_acks==1 && v->audio.cadence_irq_latency_max_us==20000);
+    REQUIRE(!v->audio.opl_key_writes && !v->audio.title_music_windows);
+    /* Detection and key-off resets cannot qualify as music. */
+    dosvm_opl_io(v,0,true,4);dosvm_opl_io(v,1,true,0x80);
+    dosvm_opl_io(v,0,true,0xb0);dosvm_opl_io(v,1,true,0);
+    dosvm_opl_io(v,0,true,0xa0);dosvm_opl_io(v,1,true,0x42);
+    REQUIRE(!v->audio.opl_key_writes && !v->audio.title_music_windows);
+    for (unsigned i=0;i<3;i++) {
+        g_ticks=i*10000;
+        dosvm_opl_io(v,0,true,0xb0);dosvm_opl_io(v,1,true,0x20);
+        dosvm_opl_io(v,0,true,0xa0);dosvm_opl_io(v,1,true,0x44);
+    }
+    REQUIRE(v->audio.opl_key_writes==6 && v->audio.title_music_windows==7);
+    g_ticks=30000;dosvm_opl_io(v,1,true,0x45);
+    REQUIRE(v->audio.title_music_windows==7);
     /* The amended title profile uses the existing configurable mixer. */
     v->audio.sb.mixer_index=0x80;sb_mixer_write(&v->audio.sb,2);
     REQUIRE(v->audio.sb.irq==5 && sb_mixer_read(&v->audio.sb)==2);

@@ -12,7 +12,8 @@
       "licence": {
         "source": "third_party/games/doom-shareware/UPSTREAM.json",
         "terms": "Shareware; the package's own terms are the clauses below (doom19s.zip has no VENDOR.DOC or LICENSE.DOC)",
-        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+        "distribution": "Approved installed package per third_party/games/doom-shareware/UPSTREAM.json; Carmack clarification, four FAQ files excluded.",
+        "class": "bundled"
       }
     },
     {
@@ -26,7 +27,8 @@
       "licence": {
         "source": "third_party/games/quake-shareware/UPSTREAM.json",
         "terms": "Original Quake shareware license, SLICNSE.TXT sections 2, 3 and 6",
-        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+        "distribution": "Qualified f3-18 package only: whole unmodified shareware with agreement, free electronic compressed form, SLICNSE.TXT section 6.",
+        "class": "bundled"
       }
     },
     {
@@ -40,7 +42,8 @@
       "licence": {
         "source": "third_party/games/wolf3d-shareware/UPSTREAM.json",
         "terms": "Shareware; VENDOR.DOC [V.07.15.94] of Apogee Software, Ltd. (inside W3DSW14.SHR)",
-        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
+        "class": "test-media"
       }
     },
     {
@@ -54,9 +57,9 @@
         "source": "1rott13.zip!ROTTSW13.SHR!VENDOR.DOC",
         "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
         "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
-        "distribution": "Private battery media only; no software bundle permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
         "sha256": "a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701",
-        "verified": true
+        "class": "test-media"
       },
       "unpack": {
         "format": "zip-sfx",
@@ -167,9 +170,9 @@
         "source": "4keen.zip!CK4SW14.SHR!VENDOR.DOC",
         "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
         "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
-        "distribution": "Private battery media only; no software bundle permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
         "sha256": "4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc",
-        "verified": true
+        "class": "test-media"
       },
       "unpack": {
         "format": "apogee-shr",
@@ -225,9 +228,9 @@
         "source": "3dduke13.zip!DN3DSW13.SHR!LICENSE.TXT",
         "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
         "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
-        "distribution": "Private battery media only; no software bundle permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
         "sha256": "38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
-        "verified": true
+        "class": "test-media"
       },
       "unpack": {
         "format": "zip-sfx",

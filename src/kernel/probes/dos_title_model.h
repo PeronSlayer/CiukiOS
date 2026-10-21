@@ -65,7 +65,7 @@ static inline bool d53_parse(const uint8_t *p,unsigned size,struct d53_plan *out
     for (unsigned i=0;i<3;i++,at+=77) {
         struct d53_checkpoint *c=&d->cp[i];
         c->at=d53_u32(p+at); c->deadline=d53_u32(p+at+4); c->text=d53_u32(p+at+8);
-        if (c->text>(d->calibration ? 2u : 1u) || (d->calibration && c->text!=2) || c->at>c->deadline || c->deadline>60000 ||
+        if (c->text>(d->calibration ? 2u : 1u) || c->at>c->deadline || c->deadline>60000 ||
             (i && c->at<d->cp[i-1].at) || !d53_string(p+at+12,65)) return false;
         memcpy(c->value,p+at+12,65);
         if (!c->text) {
@@ -140,15 +140,28 @@ static inline bool d53_match(const struct d53_checkpoint *cp,const char *digest,
     return false;
 }
 struct d53_audio {
-    uint64_t underruns, pcm_frames, opl_writes;
-    uint32_t blocks, late_acks, irq_latency_max_us, irq_entries, irq;
+    uint64_t underruns, pcm_frames, opl_writes, key_writes;
+    uint32_t blocks, late_acks, irq_latency_max_us, irq_entries, irq, music_windows;
     bool attached, ready;
 };
+/* Maxima/windows are interval-owned; all monotonic counters are deltas. */
+static inline struct d53_audio d53_audio_delta(struct d53_audio end,const struct d53_audio *start)
+{
+    end.underruns-=start->underruns; end.pcm_frames-=start->pcm_frames;
+    end.opl_writes-=start->opl_writes; end.key_writes-=start->key_writes;
+    end.blocks-=start->blocks; end.late_acks-=start->late_acks; end.irq_entries-=start->irq_entries;
+    return end;
+}
+static inline bool d53_hash_due(uint64_t now,uint64_t *next)
+{
+    if (now<*next) return false;
+    *next=now+500; return true;
+}
 static inline bool d53_audio_ok(const struct d53_plan *p,const struct d53_audio *a)
 {
     if (a->underruns || a->irq_latency_max_us>20000) return false;
     if (p->audio && (!a->attached || !a->ready || a->irq!=p->irq)) return false;
     if ((p->audio&1) && (!a->pcm_frames || !a->blocks || !a->irq_entries)) return false;
-    return !(p->audio&2) || a->opl_writes;
+    return !(p->audio&2) || (a->key_writes>=3 && a->music_windows==7);
 }
 #endif

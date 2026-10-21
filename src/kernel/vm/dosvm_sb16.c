@@ -129,6 +129,8 @@ void dosvm_audio_irq_enter(struct dosvm *v, unsigned irq)
     s->cadence.irq_entries++;
     v->audio.cadence_irq_entries++;
     if (latency > v->audio.cadence_irq_latency_max_us) v->audio.cadence_irq_latency_max_us = latency;
+    if (v->audio.title_interval && latency > v->audio.title_irq_latency_max_us)
+        v->audio.title_irq_latency_max_us = latency;
     s->cadence.irq_latency_sum_us += latency;
     if (latency > s->cadence.irq_latency_max_us) s->cadence.irq_latency_max_us = latency;
 }

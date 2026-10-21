@@ -7,10 +7,9 @@
       "year": 1994,
       "publisher": "CiukiOS tests",
       "licence": {
-        "kind": "redistributable",
         "citation": "CiukiOS synthetic test bytes",
-        "conditions": "Test fixture only; no game payload.",
-        "verified": true
+        "conditions": "Synthetic host fixture only.",
+        "class": "owner-copy"
       },
       "install": {
         "layout": "directory",

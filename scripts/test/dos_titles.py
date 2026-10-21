@@ -13,6 +13,7 @@ import re
 import struct
 import sys
 import zipfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dos_fixtures
@@ -66,14 +67,20 @@ def validate(data, tracked=False):
             raise ValueError('invalid or duplicate title ID')
         seen.add(t['id'])
         ascii_text(t['name'], 96); ascii_text(t['publisher'], 96); integer(t['year'], 1980, 2100)
-        exact(t['licence'], 'kind citation conditions verified', 'licence')
+        exact(t['licence'], 'class citation conditions', 'licence')
         lic = t['licence']
-        if lic['kind'] not in ('redistributable', 'owner-copy') or tracked and lic['kind'] != 'redistributable':
-            raise ValueError('tracked titles must be redistributable')
+        if lic['class'] not in ('bundled', 'test-media', 'owner-copy') or tracked and lic['class'] == 'owner-copy':
+            raise ValueError('tracked titles must be bundled or test-media')
         ascii_text(lic['citation'], 300); ascii_text(lic['conditions'], 500)
-        if type(lic['verified']) is not bool: raise ValueError('licence verification must be boolean')
         install = t['install']
-        exact(install, 'layout pin source target files steps' + (' automation' if 'automation' in install else ''), 'install')
+        exact(install, 'layout pin source target files steps' + (' automation' if 'automation' in install else '') + (' archive_pin' if 'archive_pin' in install else ''), 'install')
+        if 'archive_pin' in install:
+            if tracked or lic['class'] != 'owner-copy': raise ValueError('inline archive pins are private owner copies only')
+            pin = install['archive_pin']
+            exact(pin, 'size sha256', 'private archive pin')
+            integer(pin['size'], 1, 96 * 1024**2)
+            if not isinstance(pin['sha256'], str) or not SHA.fullmatch(pin['sha256']): raise ValueError('bad private archive hash')
+            if install['source'] is None or install['layout'] not in ('zip', 'installer'): raise ValueError('private pin needs an archive source')
         if install['layout'] not in ('package', 'zip', 'directory', 'installer'): raise ValueError('unsupported layout')
         if not isinstance(install['pin'], str) or not ID.fullmatch(install['pin']): raise ValueError('bad pin ID')
         if install['source'] is not None:
@@ -151,7 +158,8 @@ def validate(data, tracked=False):
         if a['expectation'] not in ('digital', 'opl', 'both', 'none') or a['base'] != 544 or a['irq'] not in (5, 7) or a['dma8'] != 1 or a['dma16'] != 5:
             raise ValueError('unsupported SB16 wiring')
         if t['lan'] not in ('none', 'ipx'): raise ValueError('unsupported LAN mode')
-        exact(t['memory'], 'conventional_kib ems_kib xms_kib dpmi', 'memory')
+        exact(t['memory'], 'conventional_kib ems_kib xms_kib dpmi' + (' dpmi_fallback' if 'dpmi_fallback' in t['memory'] else ''), 'memory')
+        if t['memory'].get('dpmi_fallback', 'none') not in ('none', 'cwsdpmi'): raise ValueError('bad DPMI fallback')
         for key in ('conventional_kib', 'ems_kib', 'xms_kib'): integer(t['memory'][key], 0, 65536)
         if t['memory']['conventional_kib'] > 640 or t['memory']['dpmi'] not in ('none', 'dos4gw', 'cwsdpmi', 'native'):
             raise ValueError('bad DOS memory needs')
@@ -207,15 +215,20 @@ def manifests(private=None, include_private=False, root=ROOT):
     return validate({'schema_version': 1, 'titles': rows})['titles']
 
 
+def archive_pin(t, pins):
+    if t['licence']['class'] == 'owner-copy':
+        return t['install'].get('archive_pin')
+    return next((p for p in pins['titles'] if p['id'] == t['install']['pin']), None)
+
+
 def ready(t, pins, calibrate=False):
-    if not t['licence']['verified']: raise EvidenceNotRun('licence_verification_pending')
     if not calibrate and (any(cp['value'] is None for cp in t['checkpoints']) or
             any(s['tree_sha256'] is None for s in t['install'].get('automation', []))):
         raise EvidenceNotRun('checkpoint_calibration_pending')
     if t['install']['layout'] == 'directory':
         if not t['install']['files'] or t['install']['source'] is None: raise EvidenceNotRun('installed_files_pending')
     else:
-        pin = next((p for p in pins['titles'] if p['id'] == t['install']['pin']), None)
+        pin = archive_pin(t, pins)
         if not pin or not isinstance(pin.get('sha256'), str) or not SHA.fullmatch(pin['sha256']) or type(pin.get('size')) is not int:
             raise EvidenceNotRun('archive_pin_pending')
 
@@ -230,7 +243,8 @@ def plan(t, calibrate=False):
     blob += struct.pack('<III', mask, t['audio']['irq'], len(t['input']))
     for cp in t['checkpoints']:
         if cp['value'] is None and not calibrate: raise EvidenceNotRun('checkpoint_calibration_pending')
-        blob += struct.pack('<III', cp['at_ms'], cp['deadline_ms'], 2 if calibrate else cp['kind'] == 'text') + fixed('capture' if calibrate else cp['value'], 65)
+        capture = calibrate and cp['value'] is None
+        blob += struct.pack('<III', cp['at_ms'], cp['deadline_ms'], 2 if capture else cp['kind'] == 'text') + fixed('capture' if capture else cp['value'], 65)
     for e in t['input']:
         blob += struct.pack('<III', PHASES.index(e['phase']), e['at_ms'], e['code'] | (256 if e['down'] else 0))
     blob = blob.ljust(PLAN_SIZE, b'\0')
@@ -273,7 +287,8 @@ def files(t, pins, root=ROOT):
     """Read only explicitly selected, pinned material; do not fetch anything."""
     install = t['install']; target = '/' + install['target']
     if install['layout'] == 'package':
-        pin = next(p for p in pins['titles'] if p['id'] == install['pin'])
+        pin = archive_pin(t, pins)
+        if t['licence']['class'] == 'owner-copy': raise ValueError('private archives use zip or installer layout')
         import importlib.util
         spec = importlib.util.spec_from_file_location('title_games_disk', Path(root) / 'scripts/build_games_disk.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
@@ -298,7 +313,8 @@ def files(t, pins, root=ROOT):
             if hashlib.sha256(data).hexdigest() != row['sha256']: raise ValueError('installed file hash mismatch')
             result[target + '/' + row['path']] = data
     else:
-        pin = next(p for p in pins['titles'] if p['id'] == install['pin'])
+        pin = archive_pin(t, pins)
+        if pin is None: raise EvidenceNotRun('archive_pin_pending')
         source = Path(install['source']) if install['source'] else (Path(root) / 'third_party/games' / pin['package'] / pin['archive'] if pin.get('package') else Path(root) / 'build/downloads/dos-titles' / pin['archive'])
         if source.stat().st_size != pin['size'] or dos_fixtures.sha(source) != pin['sha256']: raise ValueError('archive pin mismatch')
         with zipfile.ZipFile(source) as archive:
@@ -379,12 +395,12 @@ def case(t, profile='qemu-t23', calibrate=False):
 def assess(records, t, calibrate=False):
     """Do not trust END PASS without complete, ordered measured subcases."""
     rows = [r for r in records if r.get('group') == 'dos_title']
-    names = ['plan', 'start', 'boot', 'menu', 'gameplay', 'play', 'audio', 'pcm', 'cadence', 'input', 'exit', 'cleanup']
+    names = ['plan', 'start', 'boot', 'menu', 'gameplay', 'play', 'audio', 'pcm', 'cadence', 'music', 'input', 'exit', 'cleanup']
     stages = t['install'].get('automation', [])
     prefix = 1
     if calibrate or stages:
         names.insert(1, 'mode'); prefix += 1
-    names[prefix:prefix] = ['install'] * len(stages)
+    names[prefix:prefix] = [name for _ in stages for name in ('install', 'install-tree')]
     if [r.get('case') for r in rows] != names or any(r.get('title') != t['id'] for r in rows):
         raise EvidenceError('missing, duplicate, reordered or wrong-title evidence')
     d = dict(zip(names, rows))
@@ -394,7 +410,11 @@ def assess(records, t, calibrate=False):
         if not isinstance(value, str) or not re.fullmatch('[0-9]{1,20}', value): raise EvidenceError('missing numeric evidence: ' + key)
         return int(value)
     if 'mode' in d and n(d['mode'], 'calibration') != int(calibrate): raise EvidenceError('wrong calibration mode')
-    installs = rows[prefix:prefix + len(stages)]
+    installs = []
+    for i in range(len(stages)):
+        metrics, tree = rows[prefix + i * 2:prefix + i * 2 + 2]
+        if n(tree, 'stage') != i: raise EvidenceError('wrong installer tree stage')
+        installs.append({**metrics, 'tree_sha256': tree.get('sha256')})
     for i, (s, row) in enumerate(zip(stages, installs)):
         if n(row, 'stage') != i or n(row, 'ms') > s['timeout_ms'] or n(row, 'delivered') != len(s['input']) or n(row, 'rc'):
             raise EvidenceError('installer timeout, input or exit failed')
@@ -407,11 +427,11 @@ def assess(records, t, calibrate=False):
     last = 0
     for name, cp in zip(CHECKS, t['checkpoints']):
         row = d[name]; elapsed = n(row, 'ms')
-        if elapsed < last or elapsed > 60000 or n(row, 'matched') != (0 if calibrate else 1) or not SHA.fullmatch(row.get('digest', '')):
+        if elapsed < last or elapsed > 60000 or n(row, 'matched') != int(cp['value'] is not None) or not SHA.fullmatch(row.get('digest', '')):
             raise EvidenceError('checkpoint timing or match failed')
         after_launch = elapsed - n(d['start'], 'launch_ms')
         if not cp['at_ms'] <= after_launch <= cp['deadline_ms']: raise EvidenceError('checkpoint outside window')
-        if not calibrate and (cp['value'] is None or cp['kind'] == 'sha256' and row['digest'] != cp['value']):
+        if (not calibrate and cp['value'] is None) or (cp['value'] is not None and cp['kind'] == 'sha256' and row['digest'] != cp['value']):
             raise EvidenceError('uncalibrated or wrong screen digest')
         last = elapsed
     if n(d['play'], 'duration_ms') < 30000 or n(d['play'], 'faults') or n(d['play'], 'frame_changes') < 2:
@@ -424,12 +444,15 @@ def assess(records, t, calibrate=False):
         raise EvidenceError('audio backend or wiring unavailable')
     if expect in ('digital', 'both') and (not n(pcm, 'pcm_frames') or not n(pcm, 'blocks') or not n(pcm, 'irq_entries')):
         raise EvidenceError('no digital sound evidence')
-    if expect in ('opl', 'both') and not n(c, 'opl_writes'): raise EvidenceError('no OPL music evidence')
+    music = d.get('music')
+    if expect in ('opl', 'both') and (not music or n(music, 'key_writes') < 3 or n(music, 'windows') != 7):
+        raise EvidenceError('no sustained OPL key-on music evidence')
     if n(d['input'], 'delivered') != len(t['input']) or n(d['input'], 'expected') != len(t['input']): raise EvidenceError('input incomplete')
     if n(d['exit'], 'clean') != 1 or n(d['exit'], 'rc') or n(d['exit'], 'faults') or n(d['cleanup'], 'restored') != 1:
         raise EvidenceError('exit/cleanup failed')
     return {'outcome': 'calibrated' if calibrate else 'pass', 'title': t['id'], 'menu_ms': n(d['menu'], 'ms'),
-            'gameplay_ms': n(d['play'], 'duration_ms'), 'audio': {**a, **pcm, **c},
+            'plan_sha256': d['plan']['sha256'],
+            'gameplay_ms': n(d['play'], 'duration_ms'), 'audio': {**a, **pcm, **c, **music},
             'input_delivered': n(d['input'], 'delivered'), 'exit_clean': True, 'install': installs,
             'checkpoints': [{'name': name, 'digest': d[name]['digest'], 'ms': n(d[name], 'ms'),
                              'after_launch_ms': n(d[name], 'ms') - n(d['start'], 'launch_ms')} for name in CHECKS],
@@ -475,7 +498,7 @@ def write_summary(path, results):
 
 def definition_hash(t):
     pins = json.loads((ROOT / 'config/dos-titles.json').read_text())
-    pin = next((p for p in pins['titles'] if p['id'] == t['install']['pin']), None)
+    pin = archive_pin(t, pins)
     return hashlib.sha256(json.dumps({'title': t, 'pin': pin}, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
 
 
@@ -483,30 +506,93 @@ def calibration_path(manifest, t):
     return Path(manifest).parent / t['id'] / 'calibration.json'
 
 
-def save_calibration(path, t, result, profile, image_sha256, run_id):
+def capture_artifacts(source, checkpoints):
+    """Read bounded exact presenter PPM and raw LE16 80x25 text snapshots."""
+    result = {}
+    for cp in checkpoints:
+        name = cp['name']
+        if (Path(source) / (name + '.ppm')).stat().st_size > 1024**2 or (Path(source) / (name + '.txt')).stat().st_size != 4000:
+            raise EvidenceError('checkpoint artifact exceeds budget')
+        ppm = (Path(source) / (name + '.ppm')).read_bytes()
+        text = (Path(source) / (name + '.txt')).read_bytes()
+        header = b'P6\n640 480\n255\n'
+        if len(ppm) != len(header) + 640 * 480 * 3 or not ppm.startswith(header) or len(text) != 4000:
+            raise EvidenceError('invalid checkpoint image/text frame')
+        rgb = ppm[len(header):]
+        xrgb = bytearray(640 * 480 * 4)
+        xrgb[0::4], xrgb[1::4], xrgb[2::4] = rgb[2::3], rgb[1::3], rgb[0::3]
+        if hashlib.sha256(xrgb).hexdigest() != cp['digest']: raise EvidenceError('checkpoint image differs from recorded digest')
+        result[name + '.ppm'] = ppm
+        result[name + '.txt'] = text
+    return result
+
+
+def extract_captures(fixture, directory):
+    """After teardown, assert original inputs unchanged and export only captures."""
+    image = fixture['path']; directory = Path(directory)
+    if dos_fixtures.stream_sha(['mcopy', '-n', '-i', image, '::/CIUKIGAM.IMG', '-']) != fixture['base_sha256']:
+        raise EvidenceError('calibration changed original private game disk')
+    if dos_fixtures.stream_sha(['mcopy', '-n', '-i', image, '::/DTITLE.PLN', '-']) != fixture['plan_sha256']:
+        raise EvidenceError('calibration changed original plan')
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in CHECKS:
+        for ext in ('ppm', 'txt'):
+            data = dos_fixtures.run(['mcopy', '-n', '-i', image, '::/' + name.upper() + '.' + ext.upper(), '-']).stdout
+            (directory / (name + '.' + ext)).write_bytes(data)
+    return directory
+
+
+def save_calibration(path, t, result, profile, image_sha256, run_id, captures):
     if result['outcome'] != 'calibrated' or not SHA.fullmatch(image_sha256):
         raise EvidenceError('complete calibration and image identity required')
     path = Path(path)
     data = json.loads(path.read_text()) if path.exists() else {'schema_version': 1, 'title': t['id'], 'profiles': {}}
     if data.get('schema_version') != 1 or data.get('title') != t['id'] or not isinstance(data.get('profiles'), dict):
         raise ValueError('invalid calibration file')
-    data['profiles'][profile] = {'definition_sha256': definition_hash(t), 'image_sha256': image_sha256,
-        'run_id': run_id, 'plan_sha256': hashlib.sha256(plan(t, True)).hexdigest(),
-        'checkpoints': result['checkpoints'], 'install': result['install']}
+    ascii_text(profile, 40)
+    if not re.fullmatch('[a-z0-9-]+', profile) or not re.fullmatch('[0-9a-fA-F]{8}', run_id): raise ValueError('bad capture identity')
+    artifacts = capture_artifacts(captures, result['checkpoints'])
+    old = data['profiles'].get(profile)
+    if old and old.get('definition_sha256') == definition_hash(t) and old.get('image_sha256') == image_sha256:
+        for cp, previous, observed in zip(t['checkpoints'], old['checkpoints'], result['checkpoints']):
+            if (cp['value'] is None or cp['kind'] == 'sha256') and previous['digest'] != observed['digest']:
+                raise EvidenceError('capture cannot overwrite existing checkpoint expectations')
+        if [s['tree_sha256'] for s in old['install']] != [s['tree_sha256'] for s in result['install']]:
+            raise EvidenceError('capture cannot overwrite existing installer expectations')
+    for cp, observed in zip(t['checkpoints'], result['checkpoints']):
+        if cp['value'] is not None:
+            if cp['kind'] == 'sha256' and cp['value'] != observed['digest']: raise EvidenceError('capture differs from pinned checkpoint')
+            if cp['kind'] == 'text':
+                cells = artifacts[cp['name'] + '.txt'][::2]
+                if not any(cp['value'].encode('ascii') in cells[i:i+80] for i in range(0, 2000, 80)):
+                    raise EvidenceError('capture differs from pinned text checkpoint')
+    relative = Path(profile) / run_id
+    for name, content in artifacts.items():
+        dest = path.parent / relative / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists() and dest.read_bytes() != content: raise EvidenceError('capture artifact already exists with different content')
+        dest.write_bytes(content)
+    data['profiles'][profile] = {'status': 'calibrated', 'definition_sha256': definition_hash(t), 'image_sha256': image_sha256,
+        'run_id': run_id, 'plan_sha256': result['plan_sha256'],
+        'definition_plan_sha256': hashlib.sha256(plan(t, True)).hexdigest(),
+        'checkpoints': result['checkpoints'], 'install': result['install'],
+        'artifacts': {str(relative / name): hashlib.sha256(content).hexdigest() for name, content in artifacts.items()}}
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix('.json.tmp')
     with temp.open('x') as stream: stream.write(json.dumps(data, indent=2) + '\n')
     temp.replace(path)
 
 
-def apply_calibration(path, t, profile, image_sha256):
+def apply_calibration(path, t, profile, image_sha256, require_accepted=True):
     path = Path(path)
     if not path.is_file(): raise EvidenceNotRun('checkpoint_calibration_pending: ' + str(path))
     data = json.loads(path.read_text())
     if data.get('schema_version') != 1 or data.get('title') != t['id']: raise ValueError('wrong calibration identity')
     record = data.get('profiles', {}).get(profile)
     if not record: raise EvidenceNotRun('profile_calibration_pending: ' + profile)
-    if record.get('definition_sha256') != definition_hash(t) or record.get('image_sha256') != image_sha256 or record.get('plan_sha256') != hashlib.sha256(plan(t, True)).hexdigest():
+    if require_accepted and (record.get('status') != 'verified' or not record.get('accepted_by') or not record.get('accepted_at')):
+        raise EvidenceNotRun('calibration_acceptance_pending: ' + profile)
+    if record.get('definition_sha256') != definition_hash(t) or record.get('image_sha256') != image_sha256 or record.get('definition_plan_sha256') != hashlib.sha256(plan(t, True)).hexdigest():
         raise ValueError('calibration definition, image or plan identity differs; recalibrate')
     cps = record.get('checkpoints', [])
     if len(cps) != 3 or [cp.get('name') for cp in cps] != list(CHECKS): raise ValueError('incomplete calibration checkpoints')
@@ -514,7 +600,10 @@ def apply_calibration(path, t, profile, image_sha256):
     for dst, src in zip(result['checkpoints'], cps):
         if not isinstance(src.get('digest'), str) or not SHA.fullmatch(src['digest']): raise ValueError('invalid calibration hash')
         integer(src.get('ms'), 0, 60000); integer(src.get('after_launch_ms'), dst['at_ms'], dst['deadline_ms'])
-        dst.update(kind='sha256', value=src['digest'], at_ms=src['after_launch_ms'])
+        if dst['value'] is None:
+            dst.update(kind='sha256', value=src['digest'])
+        elif dst['kind'] == 'sha256' and dst['value'] != src['digest']:
+            raise ValueError('calibration differs from pinned checkpoint')
     stages = result['install'].get('automation', [])
     installed = record.get('install', [])
     if len(installed) != len(stages): raise ValueError('incomplete installation calibration')
@@ -523,7 +612,25 @@ def apply_calibration(path, t, profile, image_sha256):
         if row.get('stage') != str(i) or not isinstance(digest, str) or not SHA.fullmatch(digest): raise ValueError('invalid installation calibration')
         if stage['tree_sha256'] is not None and stage['tree_sha256'] != digest: raise ValueError('calibration differs from pinned installed tree')
         stage['tree_sha256'] = digest
+    if record.get('plan_sha256') not in (hashlib.sha256(plan(t, True)).hexdigest(), hashlib.sha256(plan(result, True)).hexdigest()):
+        raise ValueError('calibration capture plan differs')
     return validate({'schema_version': 1, 'titles': [result]})['titles'][0]
+
+
+def accept_calibration(path, t, profile, image_sha256, reviewer):
+    ascii_text(reviewer, 96)
+    apply_calibration(path, t, profile, image_sha256, require_accepted=False)
+    path = Path(path); data = json.loads(path.read_text()); record = data['profiles'][profile]
+    if len(record.get('artifacts', {})) != 6: raise EvidenceError('checkpoint review artifacts missing')
+    for name, digest in record['artifacts'].items():
+        relative = Path(name)
+        if relative.is_absolute() or '..' in relative.parts or not (path.parent / relative).resolve().is_relative_to(path.parent.resolve()):
+            raise EvidenceError('unsafe checkpoint artifact')
+        if dos_fixtures.sha(path.parent / relative) != digest: raise EvidenceError('checkpoint review artifact changed')
+    record.update(status='verified', accepted_by=reviewer, accepted_at=datetime.now(timezone.utc).isoformat())
+    temp = path.with_suffix('.json.tmp')
+    with temp.open('x') as stream: stream.write(json.dumps(data, indent=2) + '\n')
+    temp.replace(path)
 
 
 def main(argv=None):
@@ -532,6 +639,9 @@ def main(argv=None):
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--calibrate', metavar='TITLE')
     mode.add_argument('--verify', action='store_true')
+    mode.add_argument('--accept-calibration', metavar='TITLE')
+    ap.add_argument('--reviewer', help='lead identity recorded on explicit acceptance')
+    ap.add_argument('--captures', type=Path, help='physical import: directory containing checkpoint .ppm and raw .txt frames')
     ap.add_argument('--manifest', type=Path, help='explicit manifest, without automatic private input')
     ap.add_argument('--private', type=Path)
     ap.add_argument('--include-private', action='store_true')
@@ -542,12 +652,13 @@ def main(argv=None):
     ap.add_argument('--image-sha256', help='canonical image identity for importing physical serial evidence')
     args = ap.parse_args(argv)
     if args.action is None: args.action = 'parse' if args.serial else 'run' if args.calibrate or args.verify else 'validate'
-    if args.calibrate:
-        if args.title and args.title != [args.calibrate]: raise ValueError('calibration selects one title')
-        args.title = [args.calibrate]
+    selected = args.calibrate or args.accept_calibration
+    if selected:
+        if args.title and args.title != [selected]: raise ValueError('calibration selects one title')
+        args.title = [selected]
     if (args.calibrate or args.verify) and args.action == 'validate': raise ValueError('calibration/verification needs run or parse')
     if args.manifest and args.private: raise ValueError('choose manifest or private input')
-    titles = load(args.manifest)['titles'] if args.manifest else manifests(args.private, args.include_private or args.action == 'run')
+    titles = load(args.manifest)['titles'] if args.manifest else manifests(args.private, args.include_private or args.action == 'run' or bool(args.accept_calibration))
     if set(args.title) - {t['id'] for t in titles}: raise ValueError('unknown title ID')
     titles = [t for t in titles if not args.title or t['id'] in args.title]
     originals = {t['id']: t for t in titles}
@@ -557,11 +668,19 @@ def main(argv=None):
             return ROOT / 'tests/dos-titles/tracked.json'
         return args.private or os.environ.get('CIUKI_DOS_TITLES') or ROOT / 'legacy/local/piano/dos-titles.json'
     image_sha = None
-    if args.verify or args.calibrate:
+    if args.verify or args.calibrate or args.accept_calibration:
         image_sha = args.image_sha256 or (dos_fixtures.sha(args.image) if args.image.is_file() else None)
         if not isinstance(image_sha, str) or not SHA.fullmatch(image_sha): raise ValueError('canonical image SHA-256 required')
         if args.action == 'run' and args.image_sha256 and dos_fixtures.sha(args.image) != args.image_sha256:
             raise ValueError('image identity differs')
+    if args.accept_calibration:
+        if not args.reviewer: raise ValueError('--accept-calibration requires --reviewer')
+        for t in titles: accept_calibration(calibration_path(origin(t), t), t, args.profile, image_sha, args.reviewer)
+        print('PASS: calibration explicitly accepted by ' + args.reviewer); return 0
+    if args.calibrate:
+        # Previously captured non-null expectations also constrain recapture.
+        titles = [apply_calibration(calibration_path(origin(t), t), t, args.profile, image_sha, False)
+                  if calibration_path(origin(t), t).is_file() and args.profile in json.loads(calibration_path(origin(t), t).read_text()).get('profiles', {}) else t for t in titles]
     if args.verify:
         titles = [apply_calibration(calibration_path(origin(t), t), t, args.profile, image_sha) for t in titles]
     if args.action == 'validate':
@@ -571,7 +690,9 @@ def main(argv=None):
             raise ValueError('parse requires one title, --serial and --run-id')
         t = titles[0]
         report = parse_serial(args.serial.read_bytes(), args.run_id, t, bool(args.calibrate))
-        if args.calibrate: save_calibration(calibration_path(origin(t), t), t, report, args.profile, image_sha, args.run_id)
+        if args.calibrate:
+            if not args.captures: raise ValueError('physical calibration import requires --captures')
+            save_calibration(calibration_path(origin(t), t), originals[t['id']], report, args.profile, image_sha, args.run_id, args.captures)
         print(json.dumps(report, indent=2)); return 0
     import run as runner  # only explicit lead `run` reaches the process manager
     if not args.image.is_file(): raise ValueError('canonical image unavailable; no runtime evidence')
@@ -590,7 +711,7 @@ def main(argv=None):
             if r['outcome'] == 'pass':
                 report.update(assess(r['observed'], t, bool(args.calibrate)))
                 if args.calibrate:
-                    save_calibration(calibration_path(origin(t), t), originals[t['id']], report, args.profile, r['image']['sha256'], r['run_id'])
+                    save_calibration(calibration_path(origin(t), t), originals[t['id']], report, args.profile, r['image']['sha256'], r['run_id'], directory / 'title-captures')
             (directory / 'title-result.json').write_text(json.dumps(report, indent=2) + '\n')
             results.append(report)
             write_summary(ROOT / 'build/test-runs/dos-titles', results)

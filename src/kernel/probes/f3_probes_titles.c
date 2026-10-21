@@ -19,6 +19,58 @@ static uint8_t title_wire[D53_V2_BYTES];
 static unsigned title_wire_size;
 static struct vfs_table title_table;
 static const char *const title_checks[]={"boot","menu","gameplay"};
+static uint8_t title_rgb[DOSVM_VIDEO_WIDTH*3];
+static uint16_t title_text[2000];
+static int title_write(int fd,const void *data,size_t bytes)
+{
+    size_t done=0;
+    int error=vfs_write(&title_table,fd,data,bytes,&done);
+    return error ? error : done==bytes ? 0 : -EIO;
+}
+static int title_capture_row(void *arg,unsigned y,const void *pixels,unsigned bytes)
+{
+    (void)y;
+    if (bytes!=DOSVM_VIDEO_WIDTH*4) return -EINVAL;
+    const uint32_t *p=pixels;
+    for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) {
+        title_rgb[x*3]=p[x]>>16; title_rgb[x*3+1]=p[x]>>8; title_rgb[x*3+2]=p[x];
+    }
+    return title_write(*(int *)arg,title_rgb,sizeof(title_rgb));
+}
+/* Write only this run's disposable fixture volume. Hash and PPM share the
+ * very same presenter scan; incomplete scans are retried, never accepted. */
+static int title_capture(struct dosvm *v,const char *base,unsigned checkpoint,struct dosvm_frame *frame)
+{
+    struct storage *s=storage_get();
+    int error=s ? vfs_table_init(&s->vfs,&title_table,2) : -EIO;
+    if (error) return error;
+    char path[24]; ksnprintf(path,sizeof(path),"%c:\\%s.PPM",base[0],title_checks[checkpoint]);
+    int fd=vfs_open(&title_table,path,VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_ALL,0);
+    if (fd<0) error=fd;
+    else {
+        memcpy(title_text,dosvm_text(v,0),sizeof(title_text));
+        static const char header[]="P6\n640 480\n255\n";
+        error=title_write(fd,header,sizeof(header)-1);
+        if (!error) error=dosvm_frame_capture(v,0,frame,title_capture_row,&fd);
+        if (!error) error=vfs_commit(&title_table,fd);
+        int closed=vfs_close(&title_table,fd);
+        if (!error) error=closed;
+    }
+    if (!error) {
+        ksnprintf(path,sizeof(path),"%c:\\%s.TXT",base[0],title_checks[checkpoint]);
+        fd=vfs_open(&title_table,path,VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_ALL,0);
+        if (fd<0) error=fd;
+        else {
+            /* Raw LE16 VGA cells retain attributes as well as text. */
+            error=title_write(fd,title_text,sizeof(title_text));
+            if (!error) error=vfs_commit(&title_table,fd);
+            int closed=vfs_close(&title_table,fd);
+            if (!error) error=closed;
+        }
+    }
+    vfs_table_destroy(&title_table);
+    return error;
+}
 
 static bool title_prompt(struct dosvm *v)
 {
@@ -67,7 +119,8 @@ static void title_audio(struct dosvm *v,struct d53_audio *out)
     *out=(struct d53_audio){.underruns=d.starved,.pcm_frames=a.frames,
         .opl_writes=v->audio.opl_writes,.blocks=a.boundaries,
         .late_acks=v->audio.cadence_late_acks,.irq_entries=v->audio.cadence_irq_entries,
-        .irq_latency_max_us=v->audio.cadence_irq_latency_max_us,.irq=a.irq,
+        .irq_latency_max_us=v->audio.title_irq_latency_max_us,.irq=a.irq,
+        .key_writes=v->audio.opl_key_writes,.music_windows=v->audio.title_music_windows,
         .attached=d.attached,.ready=d.ready && !d.error};
     irq_restore(flags);
 }
@@ -170,7 +223,8 @@ static __attribute__((noinline)) int title_install(struct dosvm *v,const char *i
         char tree[65]={0}; unsigned files=0;
         if (!error) error=title_tree_hash(v,s->target,tree,&files,until);
         if (!error && s->tree[0] && strncmp(s->tree,tree,65)) error=-EIO;
-        rec_emit("title","DATA","group=dos_title title=%s case=install stage=%u ms=%u delivered=%u rc=%u files=%u tree_sha256=%s",id,i,(uint32_t)(g_ticks-started),next,error ? 1u : 0u,files,tree[0] ? tree : "unavailable");
+        rec_emit("title","DATA","group=dos_title title=%s case=install stage=%u ms=%u delivered=%u rc=%u files=%u",id,i,(uint32_t)(g_ticks-started),next,error ? 1u : 0u,files);
+        rec_emit("title","DATA","group=dos_title title=%s case=install-tree stage=%u sha256=%s",id,i,tree[0] ? tree : "unavailable");
         if (error) return error;
     }
     return 0;
@@ -250,20 +304,21 @@ static int title_run(void)
     }
     unsigned next=0, checkpoint=0, changes=0;
     struct dosvm_frame frame={0}; char digest[65]={0}; uint8_t previous[32]={0};
-    struct d53_audio audio={0};
+    struct d53_audio audio={0}, audio_start={0};
+    uint64_t hash_next=0;
     while (!error && checkpoint<3) {
         if (!title_alive(v)) { error=-EIO; break; }
         error=title_keys(v,0,launched,&next);
         uint64_t ms=g_ticks-launched;
         const struct d53_checkpoint *cp=&title_plan.cp[checkpoint];
         if (!error && (ms>cp->deadline || g_ticks-started>60000)) error=-V86_ETIMEDOUT;
-        if (!error && ms>=cp->at) {
-            int rendered=dosvm_frame_digest(v,0,&frame);
+        if (!error && ms>=cp->at && d53_hash_due(g_ticks,&hash_next)) {
+            int rendered=title_plan.calibration ? title_capture(v,base,checkpoint,&frame) : dosvm_frame_digest(v,0,&frame);
             if (rendered && rendered!=-EAGAIN) error=rendered;
             if (!rendered) {
                 sha256_hex(frame.digest,digest);
-                if (d53_match(cp,digest,frame.text ? dosvm_text(v,0) : 0)) {
-                    rec_emit("title","DATA","group=dos_title title=%s case=%s ms=%u matched=%u digest=%s",id,title_checks[checkpoint],(uint32_t)(g_ticks-started),!title_plan.calibration,digest);
+                if (d53_match(cp,digest,frame.text ? (title_plan.calibration ? title_text : dosvm_text(v,0)) : 0)) {
+                    rec_emit("title","DATA","group=dos_title title=%s case=%s ms=%u matched=%u digest=%s",id,title_checks[checkpoint],(uint32_t)(g_ticks-started),cp->text!=2,digest);
                     checkpoint++;
                 }
             }
@@ -271,27 +326,49 @@ static int title_run(void)
         if (!error) task_sleep_ms(20);
     }
     if (!error && next<title_plan.count && !title_plan.input[next].phase) error=-EINVAL;
-    if (!error) { playing=g_ticks; memcpy(previous,frame.digest,32); }
+    if (!error) {
+        uint32_t flags=irq_save();
+        playing=g_ticks; memcpy(previous,frame.digest,32);
+        v->audio.title_started_ms=playing; v->audio.title_irq_latency_max_us=0;
+        v->audio.title_music_windows=0; title_audio(v,&audio_start);
+        v->audio.title_interval=true;
+        irq_restore(flags);
+    }
+    uint32_t observed_changes=v ? v->vga.changes : 0, observed_display=v ? v->vga.display_changes : 0;
     while (!error && g_ticks-playing<30000) {
         if (!title_alive(v)) { error=-EIO; break; }
         error=title_keys(v,1,playing,&next);
-        int rendered=error ? error : dosvm_frame_digest(v,0,&frame);
+        /* The presenter counters are cheap; sample its pixels at most 2 Hz. */
+        int rendered=-EAGAIN;
+        dosvm_vga_sync(v,false);
+        bool changed=v->vga.changes!=observed_changes || v->vga.display_changes!=observed_display ||
+                     (v->vbe_mode && dosvm_vbe_dirty(v,false));
+        if (!error && d53_hash_due(g_ticks,&hash_next) && changed) {
+            observed_changes=v->vga.changes; observed_display=v->vga.display_changes;
+            rendered=dosvm_frame_digest(v,0,&frame);
+        }
         if (rendered && rendered!=-EAGAIN) error=rendered;
         if (!rendered && memcmp(previous,frame.digest,32)) { changes++;memcpy(previous,frame.digest,32); }
         title_audio(v,&audio);
+        audio=d53_audio_delta(audio,&audio_start);
         if (!d53_audio_ok(&title_plan,&audio) && (audio.underruns || audio.irq_latency_max_us>20000)) error=-EIO;
         if (!error) task_sleep_ms(20);
     }
     if (!error) error=title_keys(v,1,playing,&next);
     if (!error && next<title_plan.count && title_plan.input[next].phase==1) error=-EINVAL;
     if (!error) {
-        title_audio(v,&audio);
+        uint32_t flags=irq_save();
+        title_audio(v,&audio); v->audio.title_interval=false;
+        irq_restore(flags);
+        audio=d53_audio_delta(audio,&audio_start);
         rec_emit("title","DATA","group=dos_title title=%s case=play duration_ms=%u faults=0 frame_changes=%u",id,(uint32_t)(g_ticks-playing),changes);
         rec_emit("title","DATA","group=dos_title title=%s case=audio attached=%u ready=%u irq=%u underruns=%llu",id,audio.attached,audio.ready,audio.irq,(unsigned long long)audio.underruns);
         rec_emit("title","DATA","group=dos_title title=%s case=pcm pcm_frames=%llu blocks=%u irq_entries=%u",id,(unsigned long long)audio.pcm_frames,audio.blocks,audio.irq_entries);
         rec_emit("title","DATA","group=dos_title title=%s case=cadence late_acks=%u irq_latency_max_us=%u opl_writes=%llu",id,audio.late_acks,audio.irq_latency_max_us,(unsigned long long)audio.opl_writes);
+        rec_emit("title","DATA","group=dos_title title=%s case=music key_writes=%llu windows=%u",id,(unsigned long long)audio.key_writes,audio.music_windows);
         if (!d53_audio_ok(&title_plan,&audio) || changes<2) error=-EIO;
     }
+    if (v) v->audio.title_interval=false;
     uint64_t exiting=g_ticks;
     while (!error && next<title_plan.count) {
         /* The final key-down may return to RUNREC before its key-up. The

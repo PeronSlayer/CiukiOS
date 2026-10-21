@@ -21,6 +21,36 @@ static unsigned opens,closes,edges,records;
 static bool short_read,read_error,close_error,timeout,bad_exit,refuse_key,extra_file;
 static uint32_t position;
 static char install_record[512];
+static bool capture_mode, short_write, commit_error, incomplete_frame;
+static unsigned capture_bytes[2], commits, tables_destroyed;
+static char capture_paths[2][24];
+static struct storage capture_storage;
+struct storage *storage_get(void) { return &capture_storage; }
+int vfs_table_init(struct vfs *fs,struct vfs_table *table,unsigned drive)
+{ (void)fs;(void)table;assert(drive==2);return 0; }
+void vfs_table_destroy(struct vfs_table *table) { (void)table;tables_destroyed++; }
+int vfs_commit(struct vfs_table *table,int fd)
+{ (void)table;(void)fd;commits++;return commit_error ? -EIO : 0; }
+int vfs_write(struct vfs_table *table,int fd,const void *data,size_t n,size_t *done)
+{
+    (void)table;assert(capture_mode && fd>=1 && fd<=2);
+    unsigned slot=fd-1;
+    if (!slot && capture_bytes[slot]) {
+        const uint8_t *rgb=data;
+        assert(n==640*3 && rgb[0]==0x12 && rgb[1]==0x34 && rgb[2]==0x56);
+    }
+    *done=short_write ? n-1 : n;capture_bytes[slot]+=*done;return 0;
+}
+int dosvm_frame_capture(struct dosvm *v,uint64_t tick,struct dosvm_frame *out,
+                        int (*row)(void *,unsigned,const void *,unsigned),void *arg)
+{
+    (void)v;assert(!tick);static uint32_t pixels[640];
+    for (unsigned i=0;i<640;i++) pixels[i]=0x123456;
+    for (unsigned y=0;y<480;y++) {
+        int error=row(arg,y,pixels,sizeof(pixels));if (error) return error;
+    }
+    memset(out,0,sizeof(*out));return incomplete_frame ? -EAGAIN : 0;
+}
 int ksnprintf(char *buf,size_t n,const char *fmt,...)
 { va_list ap;va_start(ap,fmt);int r=vsnprintf(buf,n,fmt,ap);va_end(ap);return r; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
@@ -55,7 +85,12 @@ int vfs_find_next(struct vfs_table *t,struct vfs_find *f,struct fat_entry *entry
 { (void)t;return next_node(f,entry); }
 int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share share,uint8_t attr)
 {
-    (void)t;assert(flags==VFS_READ && share==VFS_DENY_WRITE && !attr);
+    (void)t;
+    if (capture_mode) {
+        assert(flags==(VFS_WRITE|VFS_CREATE|VFS_TRUNCATE) && share==VFS_DENY_ALL && !attr);
+        assert(opens<2);snprintf(capture_paths[opens],24,"%s",path);return ++opens;
+    }
+    assert(flags==VFS_READ && share==VFS_DENY_WRITE && !attr);
     char relative[101];snprintf(relative,sizeof(relative),"%s",path+9);
     for (unsigned j=0;relative[j];j++) if (relative[j]=='\\') relative[j]='/';
     for (unsigned i=0;i<ARRAY_SIZE(nodes);i++) if (!strcmp(relative,nodes[i].path)) {
@@ -96,6 +131,8 @@ static void reset(void)
     g_ticks=0;opens=closes=edges=records=0;
     short_read=read_error=close_error=timeout=bad_exit=refuse_key=extra_file=false;
     vm.file_volume=&volume;
+    capture_mode=short_write=commit_error=incomplete_frame=false;
+    capture_bytes[0]=capture_bytes[1]=commits=tables_destroyed=0;
 }
 int main(int argc,char **argv)
 {
@@ -113,11 +150,23 @@ int main(int argc,char **argv)
     struct d53_stage *s=&title_plan.stage[0];s->timeout=1000;s->count=2;
     strcpy(s->command,"\\RUNREC.COM \\SYNTH SETUP.EXE");strcpy(s->target,"SYNTH");strcpy(s->tree,argv[1]);
     s->input[0].at=100;s->input[0].edge=28|256;s->input[1].at=180;s->input[1].edge=28;
-    assert(!title_install(&vm,"synthetic") && records==1 && edges==2 && opens==closes);
-    assert(strstr(install_record,"rc=0 files=2 tree_sha256=") && strstr(install_record,argv[1]));
-    reset();timeout=true;assert(title_install(&vm,"synthetic")==-V86_ETIMEDOUT && records==1);
+    assert(!title_install(&vm,"synthetic") && records==2 && edges==2 && opens==closes);
+    assert(strstr(install_record,"case=install-tree stage=0 sha256=") && strstr(install_record,argv[1]));
+    reset();timeout=true;assert(title_install(&vm,"synthetic")==-V86_ETIMEDOUT && records==2);
     reset();bad_exit=true;assert(title_install(&vm,"synthetic")==-EIO && !opens);
     reset();refuse_key=true;assert(title_install(&vm,"synthetic")==-EIO && !opens);
     reset();s->tree[0]='0';assert(title_install(&vm,"synthetic")==-EIO && opens==closes);
-    puts("PASS: production installer keys/timeout/exit and complete VFS tree digest/error cleanup");return 0;
+    struct dosvm_frame frame;
+    reset();capture_mode=true;
+    assert(!title_capture(&vm,"E:",0,&frame));
+    assert(opens==2 && closes==2 && commits==2 && tables_destroyed==1);
+    assert(!strcmp(capture_paths[0],"E:\\boot.PPM") && !strcmp(capture_paths[1],"E:\\boot.TXT"));
+    assert(capture_bytes[0]==15+640*480*3 && capture_bytes[1]==4000);
+    reset();capture_mode=short_write=true;
+    assert(title_capture(&vm,"E:",1,&frame)==-EIO && opens==closes && tables_destroyed==1);
+    reset();capture_mode=commit_error=true;
+    assert(title_capture(&vm,"E:",1,&frame)==-EIO && opens==closes && tables_destroyed==1);
+    reset();capture_mode=incomplete_frame=true;
+    assert(title_capture(&vm,"E:",2,&frame)==-EAGAIN && opens==closes && tables_destroyed==1);
+    puts("PASS: production installer/tree and checkpoint capture, RGB/text export, commit/error cleanup");return 0;
 }

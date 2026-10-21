@@ -66,6 +66,18 @@ static void opl_write(struct dosvm *v, uint8_t value)
     unsigned reg = o->address;
     uint64_t now = opl_us(v);
     o->regs[reg] = value;
+    /* A0-A8 frequency writes count only while the matching B0-B8 key is on;
+     * B0-B8 count only with KEYON set. Timer/detection/reset traffic cannot
+     * prove music. Observe activity in each ten-second gameplay third. */
+    unsigned channel=reg&255, bank=reg&256;
+    if ((channel>=0xa0 && channel<=0xa8 && (o->regs[bank+channel+0x10]&0x20)) ||
+        (channel>=0xb0 && channel<=0xb8 && (value&0x20))) {
+        v->audio.opl_key_writes++;
+        if (v->audio.title_interval) {
+            uint64_t window=(g_ticks-v->audio.title_started_ms)/10000;
+            if (window<3) v->audio.title_music_windows|=1u<<(unsigned)window;
+        }
+    }
     dosvm_audio_event(v, DOSVM_EVENT_OPL, (uint16_t)reg, value);
     if (reg == 2 || reg == 3) {
         /* A new count applies from the next reload, as on the chip. */

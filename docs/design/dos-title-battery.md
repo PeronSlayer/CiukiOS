@@ -7,7 +7,7 @@ No battery media or owner payload is a release input.
 
 ## Research and proposal, 2026-10-21
 
-Proposed shareware editions: DOOM 1.9, Quake 1.06, Wolfenstein 3D 1.4,
+Tracked local battery editions: DOOM 1.9, Quake 1.06, Wolfenstein 3D 1.4,
 Rise of the Triad 1.3, Commander Keen 4 1.4, Duke Nukem 3D 1.3d.
 `config/dos-titles.json` is the lead's download/pin handoff. Null hashes are unavailable pins, never wildcards. Amendment 1 below records
 the supplied pins and edition-specific licence verification for the last three.
@@ -54,7 +54,7 @@ through the existing per-VM mixer interface and BLASTER setting; see below.
 
 Both manifests have `{ "schema_version": 1, "titles": [...] }`. Title IDs
 are unique lowercase ASCII `[a-z][a-z0-9-]{0,22}`. Tracked rows must have
-`licence.kind=redistributable`; owner rows use `owner-copy`. Private input is
+`licence.class=bundled` or `test-media`; private owner rows use `owner-copy`. Private input is
 selected only when explicitly running the battery: `CIUKI_DOS_TITLES`, or
 `legacy/local/piano/dos-titles.json`. It is never needed for host tests.
 Private manifests use opaque IDs. Names/year/publisher appear only in the
@@ -67,7 +67,7 @@ explicit `CIUKI_DOS_TITLES` or `--private` path must exist; duplicate IDs fail.
 
 The executable validator in `scripts/test/dos_titles.py` defines the exact
 required fields, types and bounds. Each title declares name, year, publisher,
-licence (kind, citation, conditions), archive/layout/install steps, executable,
+licence (class, citation, conditions), archive/layout/install steps, executable,
 arguments, boot/menu/gameplay checkpoints, timed key edges for launch/play/exit,
 audio expectation (`digital`, `opl`, `both`, `none`) and SB16 wiring, LAN
 (`none`, `ipx`), conventional/EMS/XMS KiB and DPMI runtime. Archive layout is
@@ -78,14 +78,14 @@ adds original installer automation and capture/verify modes, described below.
 
 | Field | Required representation |
 | --- | --- |
-| `licence` | `kind`, `citation`, `conditions`, boolean `verified`; false blocks execution |
-| `install` | `layout` (`package`, `zip`, `directory`, `installer`), `pin` ID, optional local `source`, DOS `target`, `files` and documentary `steps` |
+| `licence` | `class` (`bundled`, `test-media`, `owner-copy`), `citation`, `conditions`; describes the packaging boundary, not runtime qualification |
+| `install` | `layout` (`package`, `zip`, `directory`, `installer`), `pin` ID, optional local `source`, DOS `target`, `files` and documentary `steps`; private archives may add `archive_pin:{size,sha256}` with an explicit `source` |
 | `install.files` | Directory layout: complete explicit list of `{path, sha256}`, relative uppercase 8.3 paths; no unpinned files copied |
 | `executable`, `args` | Executable in target directory and argument array; command length at most 126 ASCII bytes, no shell metacharacters |
 | `checkpoints` | Ordered boot/menu/gameplay: `{name, at_ms, deadline_ms, kind, value}`; `value=null` means pending calibration |
 | `input` | Up to 128 ordered `{phase, at_ms, code, down}` entries; balanced set-1 edges, with an exit script |
 | `audio` | `{expectation, base:544, irq:5, dma8:1, dma16:5}`; explicit IRQ 7 also supported for a lead-approved profile |
-| `memory` | `{conventional_kib, ems_kib, xms_kib, dpmi}`; DPMI is `none`, `dos4gw`, `cwsdpmi` or `native`; informational, no VM limits changed |
+| `memory` | `{conventional_kib, ems_kib, xms_kib, dpmi}`; DPMI is `none`, `dos4gw`, `cwsdpmi` or `native`; optional `dpmi_fallback` is `none` or `cwsdpmi`; informational, no VM limits changed |
 
 The tracked scripts, setup notes and memory estimates are proposals awaiting
 edition-specific calibration. The synthetic manifest in
@@ -123,8 +123,8 @@ also contains `CIUKIGAM.IMG`, generated with existing DOS FAT16/system paths.
 
 `CIUKI_TEST ... probe=title ... group=dos_title title=<id>` records include
 VM identity, checkpoint timing and frame digest, delivered input count,
-30 s gameplay, cumulative SB16 late acks/IRQ latency, backend underruns,
-OPL writes, normal child exit and restored VM ledger. Retain `[vm-audio]`
+30 s gameplay, gameplay-interval SB16 counter deltas/IRQ latency maximum, backend underrun deltas,
+OPL writes and sustained key-on activity, normal child exit and restored VM ledger. Retain `[vm-audio]`
 cadence lines as diagnostics; absent audio evidence cannot mean zero errors.
 Records are bound to the selected run/title, the initial VM key and the exact
 plan hash; duplicate or missing title subcases and partial logs fail. Global
@@ -178,12 +178,10 @@ Section [3][C]:
 > modification
 
 Its [3][A–D] restrict recipients/channels; other distribution requires written
-permission and a fee/agreed benefit. All three notices permit unchanged
-complete-package free sharing, so their tracked rows now have
-`kind=redistributable, verified=true`. This verifies that limited grant; it
-does not authorize publishing the battery media or bundling them with an OS.
-No title has been qualified by this licence check. The other three existing
-package decisions remain unchanged.
+permission and a fee/agreed benefit. Amendment 2 classifies all three as
+`test-media`: these limited sharing grants do not qualify software bundles.
+Licence metadata never asserts runtime verification. Wolfenstein is also
+`test-media`; the two existing approved bundled packages are qualified below.
 
 `config/dos-titles.json` also records the complete extracted file inventory
 and a tree hash. Keen uses the existing PKWARE DCL `.SHR` decoder. ROTT and
@@ -230,32 +228,37 @@ requires the actual selected IRQ to match.
 ```sh
 # Lead only: use the existing canonical runner/image, never rebuild per title.
 python3 -B scripts/test/dos_titles.py --calibrate rott --profile qemu-t23
+python3 -B scripts/test/dos_titles.py --accept-calibration rott --reviewer <lead-name> --profile qemu-t23
 python3 -B scripts/test/dos_titles.py --verify --title rott --profile qemu-t23
 # Import a lead-collected physical serial log; no QEMU process is started.
-python3 -B scripts/test/dos_titles.py --calibrate rott --serial /path/to/serial.txt --run-id 12345678 --profile t23 --image-sha256 <64-hex>
+python3 -B scripts/test/dos_titles.py --calibrate rott --serial /path/to/serial.txt --run-id 12345678 --profile t23 --image-sha256 <64-hex> --captures /path/to/title-captures
+python3 -B scripts/test/dos_titles.py --accept-calibration rott --reviewer <lead-name> --profile t23 --image-sha256 <64-hex>
 python3 -B scripts/test/dos_titles.py --verify --title rott --serial /path/to/verify.txt --run-id 87654321 --profile t23 --image-sha256 <64-hex>
 ```
 
 Each manifest's parent contains `<id>/calibration.json`; this keeps private
 calibrations beside their private manifest. The file has separate profile
-entries and binds them to the manifest definition, capture plan, run ID and
+entries and binds them to the manifest definition, original definition plan,
+actual capture plan, run ID and
 canonical image SHA-256. It stores actual VGA frame hashes and both VM-relative
 and launch-relative checkpoint times, plus installer tree hashes/times. A
 changed script, pin recorded in the manifest, profile or image requires a new
-calibration. Verification searches for the captured hashes starting at the recorded
-launch-relative checkpoint times, within the original deadline ceilings and
+calibration. After explicit acceptance, verification fills only null expectations and searches
+for those captured hashes within the original timing windows, while retaining
+observed launch-relative times as evidence, and preserves
 every acceptance threshold. A calibration is
 reported as `calibrated`, never `pass`, and never counts toward twenty titles.
-Known extracted-tree hashes are checked even during calibration; only unknown
-setup output hashes are learned. Capture does not assert a semantic title/menu:
+Known screen/text expectations and extracted-tree hashes are checked even during
+calibration; only null expectations are learned. Capture does not assert a semantic title/menu:
 the lead reviews the scripted scenes before committing a calibration.
 
 The optional `D53PLAN2` wire format retains the v1 prefix, adds a capture flag
 and up to four bounded installer stages; unchanged v1 plans remain accepted.
-Capture checkpoints use kind 2 and emit `matched=0`; verification plans cannot
-contain that kind. The selector stays `f3:title run=<id> title=<id>` with no new
+Null capture checkpoints use kind 2 and emit `matched=0`; known checkpoints
+retain their original kind/value/timing and emit `matched=1` after comparison.
+Verification plans cannot contain kind 2. The selector stays `f3:title run=<id> title=<id>` with no new
 token. Serial evidence binds the complete plan hash and exact mode; installer
-records occur in stage order before the VM start record used by the existing
+metrics and separate `install-tree` digest records occur in stage order before the VM start record used by the existing
 acceptance evaluator. Time remains measured from VM creation, including
 installation: the amendment does not relax the 60 s menu limit. The lead must
 calibrate scripts that meet it; a slower install remains a failed criterion.
@@ -273,10 +276,9 @@ remain the basis for their unchanged edition-specific profiles.
 
 ### Optional FreeDOS regression media
 
-The three release-dependent regression tests first look in
-`third_party/freedos/1.3`, then in the lead-provided directory symlink
-`third_party/freedos/freedos/1.3`. The worktree's tracked `UPSTREAM.json` is
-still authoritative. A missing archive produces a unittest skip listing the
+The three release-dependent regression tests look only in
+`third_party/freedos/1.3`. The worktree's tracked `UPSTREAM.json` remains
+authoritative. The mistaken nested provisioning symlink is not used. A missing archive produces a unittest skip listing the
 exact missing files and searched locations. Different pins/corrupt media fail;
 absence is never passed off as reference evidence.
 
@@ -286,3 +288,93 @@ supplied DOS archives have host ID 0 and non-Unix high attribute words. Apply
 Unix symlink-mode rejection only for Unix host ID 3; retain path, size,
 duplicate, CRC and pin checks for every host. This prevents falsely rejecting
 Keen's DOS-origin `INSTALL.EXE` as a Unix symbolic link.
+
+## Amendment 2 — boundaries and evidence protection (2026-10-21)
+
+This supersedes Amendment 1's licence verification terminology. The battery
+ships no title: its generated disks are private workstation test inputs,
+never inputs to image/release builders. There is no `redistributable` licence
+kind or licence `verified` flag. The six tracked rows and their tracked pins
+have these classes:
+
+| Title | Class | Original clause and exact boundary |
+| --- | --- | --- |
+| DOOM 1.9 | `bundled` | `third_party/games/doom-shareware/UPSTREAM.json`: ENDOOM/installer sharing grant, plus [John Carmack's 1999 clarification preserved by Debian](https://tracker.debian.org/media/packages/d/doom-wad-shareware/copyright-1.9.fixed-4). This classification covers the approved installed shareware package with `DMFAQ66A.TXT` through `DMFAQ66D.TXT` excluded: their own II(d) prohibits inclusion within software without permission. It does not make the complete archive an unrestricted OS bundle. |
+| Quake 1.06 | `bundled` | Original [SLICNSE.TXT section 6](https://raw.githubusercontent.com/id-Software/Quake/master/WinQuake/data/SLICNSE.TXT) and f3-18 qualification: whole unmodified shareware, agreement accompanying it, free electronic distribution in compressed form for providers; the end-user grant is whole-package free sharing. No standalone extracted PAK redistribution or physical-media grant. Carmack's DOOM clarification is not a Quake grant. |
+| Wolfenstein 3D 1.4 | `test-media` | `third_party/games/wolf3d-shareware/VENDOR.DOC` [3][A] requires complete unchanged files; [3][C] requires prior signed Apogee permission for hardware/software bundles, CD-ROMs and retail racks. Local battery use only. |
+| Rise of the Triad 1.3 | `test-media` | Pinned `ROTTSW13.SHR!VENDOR.DOC`, SHA-256 above: [3][A] requires complete unchanged files; [3][C] requires prior signed permission for bundles, CD-ROMs and racks. Local battery use only. |
+| Commander Keen 4 1.4 | `test-media` | Pinned `CK4SW14.SHR!VENDOR.DOC`, SHA-256 above: same [3][A]/[3][C] boundary. Local battery use only. |
+| Duke Nukem 3D 1.3d | `test-media` | Pinned `DN3DSW13.SHR!LICENSE.TXT`, SHA-256 above: [3][A]/[B] limited sharing/download channels; [3][C] requires all original files without modification; [3][D] requires written permission and fee/agreed benefit for all other distribution. Local battery use only. |
+
+The Apogee notices say in [3][C]:
+
+> must get PRIOR signed written permission from Apogee
+
+Duke [3][D] states:
+
+> REQUIRES WRITTEN PERMISSION
+
+These are publisher notices read from the already provisioned pinned archives;
+the [original publisher download page preserved on its mirror](https://ftpmirror.infania.net/pub/3drealms/downloads/Downloads.html)
+identifies editions, not additional permissions. No packaging policy outside
+this battery is changed. In particular, the pre-existing games-disk package
+list still contains Wolfenstein: the lead must reconcile that separate image
+input with this amendment's bundle boundary before publication.
+
+An `owner-copy` archive supplies `install.archive_pin={size,sha256}` beside
+its local `install.source`; the tracked config is neither extended nor used
+as its pin authority. Readiness, file generation and calibration definition
+binding all resolve that private pin at runtime. A changed private pin
+invalidates calibration. Existing pinned-directory layouts remain supported.
+
+`--calibrate` checks every non-null manifest screen/text/tree expectation;
+only null checkpoints get capture kind 2. Applying calibration preserves known
+values and kinds, and every original timing window. Recapture also checks existing captured expectations.
+Each profile record begins with `status=calibrated`, which cannot qualify the
+twenty-title goal. The lead reviews the saved frames, then explicitly invokes
+`--accept-calibration <id> --reviewer <name>` for the same profile/image. That
+step checks bindings and artifact hashes and records `status=verified`,
+`accepted_by` and UTC `accepted_at`. `--verify` refuses an unaccepted record.
+New capture requires acceptance again.
+
+During capture, the controller writes `BOOT.PPM`, `MENU.PPM`, `GAMEPLAY.PPM`
+and matching `.TXT` files only to the disposable fixture volume. P6 images
+are 640x480 RGB from the exact presenter rows used for the recorded XRGB
+digest; `.TXT` is 4000 bytes of raw little-endian VGA character/attribute cells,
+also retained when graphics mode is active. No desktop screenshot substitutes
+for a VM checkpoint. After guest teardown, the runner independently checks
+the embedded original game disk and plan digests, exports the six files to
+`title-captures/`, and retains them on successful calibration. The CLI verifies
+image-to-digest consistency and copies them beside `calibration.json` under
+`<profile>/<run-id>/`. Physical serial imports require `--captures <directory>`
+with the same files exported by the lead from that run's disposable fixture.
+This is diagnostic retention required for review; no whole-image copy or RAM
+dump is made. Verification fixtures remain byte-for-byte immutable.
+
+Gameplay begins after the gameplay checkpoint. PCM frames, blocks, IRQ entries,
+late acks, backend starvation and OPL writes are end-minus-start deltas for
+that interval. A dedicated observer, cleared at gameplay start, records its
+IRQ latency maximum; it does not subtract lifetime maxima or reset diagnostic
+cadence. The [Creative guide](https://www.phatcode.net/res/243/files/sbhwpg.pdf)
+remains the basis for SB16 IRQ 5/DMA 1/5. Startup/menu sound cannot satisfy
+gameplay activity. Music requires at least three qualifying key-on/frequency
+writes and activity in each of the interval's three ten-second thirds
+(`case=music key_writes=... windows=7`). The [upstream Linux OPL3 register definitions](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/opl3.h)
+confirm A0-A8 frequency, B0-B8 KEYON/BLOCK and key-on bit 0x20. Count B0-B8
+writes with key-on set and A0-A8 writes while the corresponding key is on,
+in either bank; detection/timer writes and key-off resets do not qualify.
+
+Quake expects `digital` SFX only: this archive contains no CD audio tracks.
+Its own README's CD-audio instructions describe a separate CD/MSCDEX path;
+it does not use OPL music. Metadata identifies the native DPMI server as
+primary and the original `CWSDPMI.EXE` as fallback, matching f3-18.
+
+Checkpoint attempts and gameplay pixel samples share a 500 ms throttle
+(at most two complete hashes per second). Gameplay polls existing VGA
+change/display counters and VBE dirty state between hashes, skipping scans
+when unchanged. The complete digest API remains deterministic for its other
+callers; only calibration adds an optional row sink. Installer metrics and
+the 64-digit tree digest use separate ordered `install`/`install-tree`
+records. Host tests expand every title DATA format with the longest ID,
+UINT32 sequence/metrics and UINT64 counters and assert the full envelope is
+at most 240 bytes. Acceptance thresholds and the pending f6-11 LAN gate stay.
