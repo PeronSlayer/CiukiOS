@@ -200,7 +200,8 @@ static void gl_vertex_transform(GLVertex* v) {
 		}
 	}
 
-	v->clip_code = gl_clipcode(v->pc.X, v->pc.Y, v->pc.Z, v->pc.W);
+	if(c->software_triangle && v->coord.W!=1){V4 eye;gl_M4_MulV4(&eye,c->matrix_stack_ptr[0],&v->coord);gl_M4_MulV4(&v->pc,c->matrix_stack_ptr[1],&eye);}
+ v->clip_code = gl_clipcode(v->pc.X, v->pc.Y, v->pc.Z, v->pc.W);
 }
 
 void glopVertex(GLParam* p) {
@@ -230,6 +231,7 @@ void glopVertex(GLParam* p) {
 	v->coord.W = p[4].f;
 
 	gl_vertex_transform(v);
+ if(c->software_triangle){for(int k=0;k<4;k++)if(!(v->pc.v[k]>=-1.0e20f&&v->pc.v[k]<=1.0e20f)){c->error_flag=GL_INVALID_VALUE;c->vertex_cnt--;return;}}
 
 	/* color */
 
@@ -252,12 +254,14 @@ void glopVertex(GLParam* p) {
 		}
 	}
 	v->tex_coord1 = c->current_tex_coord1;
+ if(c->software_triangle){if(c->software_texture_matrix[0])gl_M4_MulV4(&v->tex_coord,c->software_texture_matrix[0],&c->current_tex_coord);if(c->software_texture_matrix[1])gl_M4_MulV4(&v->tex_coord1,c->software_texture_matrix[1],&c->current_tex_coord1);}
+ if(c->software_triangle){float *model=&c->matrix_stack_ptr[0]->m[0][0];v->ec.Z=v->coord.X*model[8]+v->coord.Y*model[9]+v->coord.Z*model[10]+v->coord.W*model[11];}
 	/* precompute the mapping to the viewport */
 #if TGL_OPTIMIZATION_HINT_BRANCH_COST < 2
 	if (v->clip_code == 0)
 #endif
 	{
-		gl_transform_to_viewport_vertex_c(v);
+		if (!c->software_triangle || (!v->clip_code && v->pc.W>0)) gl_transform_to_viewport_vertex_c(v);
 	}
 
 	/* edge flag */

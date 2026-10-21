@@ -1356,6 +1356,138 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-gl-qemu-t23",
+      "probe": "w32-gl",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-gl run={run_id}",
+      "timeout": 180,
+      "integration_pending": "f7-07: authored, unrun; GL fixture result page 0x10040000, checksums/frame counts and production desktop controller",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 0
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 1
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 2
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 3
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 4
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 5
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 6
+            },
+            "fields": {
+              "checksum": {
+                "ne": 0
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "exit": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

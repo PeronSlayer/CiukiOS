@@ -63,7 +63,7 @@ struct saved {
 struct dc {
   struct dc_state s;
   struct saved *saved;
-  int level, memory;
+  int level, memory, pixel_format;
   struct w32_dib surface;
   struct region visible, shape;
   int has_visible, has_shape;

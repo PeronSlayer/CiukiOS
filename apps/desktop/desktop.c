@@ -1187,6 +1187,7 @@ __attribute__((weak)) int desk_dialogs_fixture_begin(struct desktop *d) { (void)
 __attribute__((weak)) void desk_upper_fixture_tick(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_upper_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_upper_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) int desk_gl_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 __attribute__((weak)) int desk_media_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
 void desk_v3_fixture_report(const char *line)
 { (void)ciuki_raw_probe_report(CU_PTR(line),(uint32_t)strlen(line),0,0,0,0); }
@@ -1728,9 +1729,10 @@ int main(int argc, char **argv)
                 report=1;break;
             case GATE_DIALOGS:
             case GATE_MEDIA:
+            case GATE_GL:
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
                 desk_w32_start(d);
-                if ((command==GATE_MEDIA ? desk_media_fixture_begin(d) : desk_dialogs_fixture_begin(d))<0)return gate_error("media_fixture",errno,generation);
+                if ((command==GATE_GL ? desk_gl_fixture_begin(d) : command==GATE_MEDIA ? desk_media_fixture_begin(d) : desk_dialogs_fixture_begin(d))<0)return gate_error("media_fixture",errno,generation);
                 report=1;break;
             case GATE_UPPER:
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;

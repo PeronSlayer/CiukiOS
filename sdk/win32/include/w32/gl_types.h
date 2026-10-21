@@ -2,6 +2,8 @@
  * See sdk/libgl/LICENSE-TinyGL.txt. No renderer implementation. */
 #ifndef W32_GL_TYPES_H
 #define W32_GL_TYPES_H
+#define GL_VERSION_1_1 1
+#include <w32/gl_extensions.h>
 enum {
 	/* Boolean values */
 	GL_FALSE			= 0,
@@ -19,8 +21,8 @@ enum {
 	GL_2_BYTES			= 0x1407,
 	GL_3_BYTES			= 0x1408,
 	GL_4_BYTES			= 0x1409,
-	GL_UNSIGNED_SHORT_5_6_5 = 0x140A,
-	GL_UNSIGNED_INT_8_8_8_8 = 0x140B,
+	GL_UNSIGNED_SHORT_5_6_5 = 0x8363,
+	GL_UNSIGNED_INT_8_8_8_8 = 0x8035,
 
 	/* Primitives */
 	GL_LINES			= 0x0001,
@@ -124,7 +126,7 @@ enum {
 	GL_POLYGON_STIPPLE		= 0x0B42,
 	GL_FRONT_FACE			= 0x0B46,
 	GL_POLYGON_MODE			= 0x0B40,
-	GL_POLYGON_OFFSET_FACTOR	= 0x3038,
+	GL_POLYGON_OFFSET_FACTOR	= 0x8038,
 	GL_POLYGON_OFFSET_UNITS		= 0x2A00,
 	GL_POLYGON_OFFSET_POINT		= 0x2A01,
 	GL_POLYGON_OFFSET_LINE		= 0x2A02,

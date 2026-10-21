@@ -570,3 +570,21 @@ int W32API FrameRect(HDC dc, const RECT *rect, HBRUSH brush) {
       return 0;
   return 1;
 }
+
+/* Value-only GL target query. No GDI lock is held by the caller. */
+BOOL W32API w32_user_gl_target(DWORD dc,DWORD *values) {
+ U32_GUARD;
+ struct u32_window *w=u32_window(u32_dc_window((HDC)(uintptr_t)dc));
+ if(!w||!values||w->destroying||w->tid!=u32_tid())return 0;
+ RECT r;GetClientRect(w->handle,&r);values[0]=r.right;values[1]=r.bottom;values[2]=U32_PTR(w->handle);
+ values[3]=!w->parent&&!(w->style&WS_CAPTION)&&(w->style&WS_POPUP)&&IsWindowVisible(w->handle);
+ return 1;
+}
+/* GL has finished its private frame before publishing damage. The desktop
+ * clips the copied surface through the existing v3 compositor path. */
+BOOL W32API w32_user_gl_damage(DWORD dc) {
+ U32_GUARD;struct u32_window *w=u32_root(u32_window(u32_dc_window((HDC)(uintptr_t)dc)));
+ if(!w||!w->wire||w->destroying)return 0;
+ uint8_t b[16]={0};desk_put32(b+8,w->surface.width);desk_put32(b+12,w->surface.height);
+ return u32_wire(w,DESK_V3_PRESENT,b,sizeof(b),-1);
+}

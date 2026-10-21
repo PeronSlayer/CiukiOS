@@ -1550,7 +1550,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
-    case DESK_DAMAGE: {
+    case DESK_DAMAGE: case DESK_V3_PRESENT: {
+        if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         struct desk_box b=desk_content(c);
         if (!p.width || !p.height) break;
         /* A pending resize stretches the old backing. Map source damage
@@ -1561,6 +1562,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         unsigned bottom=(((unsigned)p.y+p.height)*(unsigned)b.h+c->info.height-1)/c->info.height;
         b.x+=(int)left; b.y+=(int)top; b.w=(int)(right-left); b.h=(int)(bottom-top);
         if (!c->minimized) desk_damage_add(&d->damage,b,d->width,d->height);
+        if(p.opcode==DESK_V3_PRESENT){c->gl_present_request=p.request;return 0;}
         break;
     }
     case DESK_V3_WIN32_HWND:
