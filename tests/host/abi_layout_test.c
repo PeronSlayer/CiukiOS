@@ -101,6 +101,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SYS_POLL", CIUKI_SYS_POLL, 88u},
     {"constant.CIUKI_SYS_RESOLVE4", CIUKI_SYS_RESOLVE4, 89u},
     {"constant.CIUKI_SYS_NETCTL", CIUKI_SYS_NETCTL, 90u},
+    {"constant.CIUKI_SYS_GETENTROPY", CIUKI_SYS_GETENTROPY, 91u},
     {"sizeof.ciuki_sockaddr_in", sizeof(struct ciuki_sockaddr_in), 16u},
     {"alignof.ciuki_sockaddr_in", _Alignof(struct ciuki_sockaddr_in), 4u},
     {"offsetof.ciuki_sockaddr_in.family", __builtin_offsetof(struct ciuki_sockaddr_in, family), 0u},

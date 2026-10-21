@@ -1,0 +1,38 @@
+{
+  "version": "3.7.0",
+  "url": "https://github.com/smuellerDD/jitterentropy-library/archive/refs/tags/v3.7.0.tar.gz",
+  "archive": "build/downloads/jitterentropy/jitterentropy-library-v3.7.0.tar.gz",
+  "bytes": 121930,
+  "sha256": "f5eaccc9d2977c83308651be9379f09f34348398f419e8f8b5bbd95928c777ed",
+  "license": "BSD-3-Clause OR GPL-2.0-only",
+  "licenses": [
+    "LICENSE.bsd",
+    "LICENSE.gplv2"
+  ],
+  "sources": [
+    "src/jitterentropy-base.c",
+    "src/jitterentropy-gcd.c",
+    "src/jitterentropy-health.c",
+    "src/jitterentropy-noise.c",
+    "src/jitterentropy-sha3.c"
+  ],
+  "files": [
+    "jitterentropy.h",
+    "src/jitterentropy-base.h",
+    "src/jitterentropy-gcd.h",
+    "src/jitterentropy-health.h",
+    "src/jitterentropy-internal.h",
+    "src/jitterentropy-noise.h",
+    "src/jitterentropy-sha3.h",
+    "src/jitterentropy-timer.h",
+    "src/jitterentropy-base.c",
+    "src/jitterentropy-gcd.c",
+    "src/jitterentropy-health.c",
+    "src/jitterentropy-noise.c",
+    "src/jitterentropy-sha3.c",
+    "jitterentropy-base-user.h"
+  ],
+  "patches": {
+    "0001-bounds-raw.patch": "619c1ee0418c6c34f8078521951c8a12d65c68e074c3181ba82c42146a1d97d0"
+  }
+}

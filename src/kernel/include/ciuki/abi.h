@@ -552,6 +552,7 @@ enum ciuki_syscall {
     CIUKI_SYS_POLL = 88,
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
+    CIUKI_SYS_GETENTROPY = 91,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
