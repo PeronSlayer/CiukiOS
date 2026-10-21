@@ -103,3 +103,80 @@ the VM's original base, restored at fullscreen transitions/client entry.
 
 Host results and outstanding acceptance items are recorded in
 `build/codex/f1-87-report.md`. No QEMU or hardware evidence is claimed here.
+
+## Amendment 1: transaction prerequisite and continuous C replay
+
+Research rechecked on 2026-10-21 against the owner's extracted Resource Kit:
+chapter 10, `wrkc10_7.htm`, the paragraphs after Table 10.8, describes VFAT
+lazy writes through VCACHE and FSD requests passed to IOS. Chapter 28,
+`wrkc28_5.htm`, “Installable File System Manager”, “VFAT File System” and
+“Block I/O Subsystem”, separates arbitration, reentrant VFAT and IOS request
+queues. The public mirror URLs for those chapter fragments were unavailable
+to the browsing tool; the owner's extracted chapters were read directly.
+The DDK [FSD routing](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F6E.HTM),
+[IOS services](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S2F60.HTM) and
+[Ring0 file API](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM)
+were also rechecked online. They document request and handle interfaces,
+without specifying CiukiOS's transaction algorithm or numerical hold limit.
+
+The binding local rules are C2 and C3 of
+`docs/design/win98-class-resource-management.md` (the actual filename of the
+contract named in the directive). C2 retains ordered durable stages and
+finite barriers; C3 separates metadata exclusion from device completion.
+The reserve/transfer/publish amendment is the lead's implementation design.
+
+**B remains unimplemented and fails acceptance.** The cold production-stack
+replay still finds a 999 ms logical `mkdir` hold, including nine 111 ms
+device commands; `log_write` retains its guard through a 111 ms data command.
+`test_t23_holds --require-bounded` makes this an explicit failing gate.
+The normal filesystem runner retains the diagnostic replay so its other
+integrity groups can run; its success does not certify B.
+
+The publication prerequisite is absent: `cache_write()` can fetch/evict,
+throttle or await an active device barrier, even on an already cached sector.
+`cache_group_begin()` can also wait for that barrier. Each cache block stores
+one mutable version; the dependency frontier lives on the device, not on
+each staged metadata version. FAT writes a detached chain, barriers it,
+links it, barriers again, then publishes the directory. The detached EOC and
+the later link can occupy the same sector. Putting all final metadata into
+the cache in one guard section cannot preserve those intermediate versions
+with the current API. This does not rule out the lead's design: it requires
+a nonblocking, reserved multi-block publication API with explicit ordered
+versions before replacing FAT's barriers. No guard release or barrier
+removal workaround has been applied. Reservation isolation, abort, orphan
+recovery and rename/unlink-race tests for the proposed transactions remain
+outstanding, along with the transaction implementation.
+
+C now has a continuous host replay in `tests/host/t23_audio_replay_test.c`,
+registered in `test_kernel_latency.py`. It runs the real scheduler, CPU
+sampler/reporting, ordered timer bodies, block request engine, native mixer
+and refill service. CPU/stack switching, transport registers, compressed
+decoder output and the controller's sleeping completion are modeled.
+It does not replace the separate production VFS B replay.
+
+`tests/host/t23_trial.h` reconstructs 513 desktop holds (406/91/10/6 in the
+measured bins, maximum 1502 ms), 35 log writes (mean 1633 ms, maximum
+1837 ms), six 602 ms commits and one 441 ms mkdir over 400 seconds.
+Bin interiors, arrival ordering, commit count and CPU costs are explicit
+fixture assumptions; the trial does not supply individual timestamps.
+Desktop operations run serially; log writes and commits share one serial
+writer. Pending arrivals backlog behind the same actor. Operations issue
+one command at a time, with a 111 ms service ceiling;
+decoder demand uses the production urgent-reader queue context, ahead of
+fresh normal desktop reads while preserving age promotion. The reservoir
+starts at two seconds once, feeds a finite native stream and is replenished
+only on decoder-read completion. It is never reset between holds.
+The modeled producer requests more encoded input when reservoir space is
+available, allowing catch-up after a delay, as Music's producer does. The
+refill/transport and native PCM accounting are production code; compressed
+input expands at the explicit 128 kbit/s fixture assumption. PCM conservation
+is checked independently against initial frames and completed decoder reads.
+Concurrent device work costs 300 microseconds per two-millisecond sleep;
+the DOS peer costs one millisecond per seven-millisecond sleep. These are
+CPU-load assumptions, not measured T23 callback costs.
+
+The replay asserts zero audio-refill CPU-overrun events, transport deadlines,
+underruns and source starvation; it exercises a complete 400 seconds of
+interleaved requests. An injected long audio CPU turn must produce an actual
+sampler overrun, providing a negative control. Passing this boundary replay
+does not establish the missing transaction lifetimes or physical T23 timing.

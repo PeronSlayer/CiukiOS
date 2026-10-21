@@ -324,6 +324,16 @@ static void test_irq_restore(uint32_t f) {
                                 str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
                 subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+            binary = temp / 't23_audio_replay_test'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
+                            '-pthread', '-I', str(ROOT / 'src/kernel/include'),
+                            '-I', str(temp), str(ROOT / 'tests/host/t23_audio_replay_test.c'),
+                            str(ROOT / 'src/kernel/fs/fs_port.c'), str(ROOT / 'src/kernel/fs/blkreq.c'),
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
             if os.environ.get('CIUKI_SCHED_BENCH') == '1':
                 binary = temp / 'scheduler_benchmark'
                 subprocess.run(['clang', '-std=c17', '-O2', '-Wall', '-Wextra', '-Werror',
