@@ -225,6 +225,12 @@ class Services:
             raise
         finally:
             child.close()
+        # The PE learns its process identity from the adapter (its Linux
+        # PID); w32srv authenticates window records by the caller's PID, so
+        # the serving session carries that same identity. Nothing has been
+        # dispatched for this session yet.
+        with self.lock:
+            session.pid = process.pid
         worker = threading.Thread(target=session.serve, args=(parent,), daemon=True)
         result = Child(process, worker, log, session)
         with self.lock:
@@ -466,6 +472,43 @@ class Session:
             raise ValueError('unterminated copied string')
         return bytes(raw[offset:end]).decode('utf-8')
 
+    def describe(self, op, raw):
+        """Names in a complete kind-1 request: the FILE path, the spawned image."""
+        try:
+            if op == FILE and len(raw) >= 72:
+                named = self.string(raw, struct.unpack_from('<I', raw, 24)[0])
+                return ' path=' + repr(named) if named is not None else ''
+            if op == PROCESS and len(raw) >= 72:
+                spawned = self.string(raw, struct.unpack_from('<I', raw, 16)[0])
+                return ' image=' + repr(spawned) if spawned is not None else ''
+        except ValueError:
+            pass
+        return ''
+
+    @staticmethod
+    def describe_registry(raw):
+        if len(raw) < 40:
+            return ''
+        fields = struct.unpack_from('<10I', raw)
+        text = f' key=0x{fields[2]:x}'
+        if len(raw) >= 40 + fields[7] + fields[8]:
+            text += (' path=' + repr(bytes(raw[40:40 + fields[7]]).rstrip(b'\0').decode('utf-8', 'replace')) +
+                     ' name=' + repr(bytes(raw[40 + fields[7]:40 + fields[7] + fields[8]]).rstrip(b'\0').decode('utf-8', 'replace')))
+        return text
+
+    @staticmethod
+    def reply_error(out, status):
+        if status != 0:
+            return ''
+        if len(out) >= 72:
+            op = struct.unpack_from('<I', out, 8)[0]
+            index = {FILE: 17, PROCESS: 15, OBJECT: 15, WAIT: 12, SYSTEM: 11}.get(op)
+            if index is not None and len(out) >= (index + 1) * 4:
+                return f' error={struct.unpack_from("<I", out, index * 4)[0]}'
+        elif len(out) >= 8:
+            return f' error={struct.unpack_from("<I", out, 4)[0]}'
+        return ''
+
     def diagnostic(self):
         return (f'last served operation={self.last_operation}; last reply={self.last_reply}; '
                 f'partial header={len(self.pending_header)}/16:{self.pending_header[:128].hex()}; '
@@ -480,6 +523,7 @@ class Session:
                     self.pending_header, self.pending_payload = bytearray(), bytearray()
                     self.expected_payload = None
                     complete = False
+                    detail = ''
                     try:
                         # One deadline covers the header and the entire body;
                         # a peer dribbling bytes cannot reset it indefinitely.
@@ -499,8 +543,10 @@ class Session:
                         if kind == 1 and len(raw) >= 20:
                             op, action = struct.unpack_from('<I', raw, 8)[0], struct.unpack_from('<I', raw, 16)[0]
                             operation += f' op=0x{op:x} action={action}'
+                            detail = self.describe(op, raw)
                         elif kind == 2 and len(raw) >= 8:
                             operation += f' registry_op={struct.unpack_from("<I", raw, 4)[0]}'
+                            detail = self.describe_registry(raw)
                         self.last_operation = operation
                         status, out = self.dispatch(kind, raw, cap)
                         if len(out) > cap:
@@ -518,7 +564,11 @@ class Session:
                     send(sock, struct.pack('<iI', status, len(out)) + out)
                     self.last_reply = f'status={status} bytes={len(out)}'
                     with self.service.lock:
-                        self.service.trace.append(('reply', self.pid, self.last_operation, status, len(out)))
+                        # f5-15B: the sixth element names the request (paths,
+                        # spawned image, registry path/name) and the reply's
+                        # Win32 error; the operation string is unchanged.
+                        self.service.trace.append(('reply', self.pid, self.last_operation, status, len(out),
+                                                   detail + self.reply_error(out, status)))
                     if not complete:
                         break
         except BaseException as error:

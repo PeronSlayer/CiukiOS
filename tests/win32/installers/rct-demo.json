@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "workload": "rct-demo",
+  "engine": "winzip",
+  "engine_detail": "WinZip Self-Extractor stub over a ZIP archive (82 entries) with Setup.exe (PE32, \"RollerCoaster Tycoon Demo Setup\", DirectXSetupA/DirectXSetupGetVersion through DSetup.DLL, Uninstall key), UniFish3.exe and AUTORUN.INF (SETUP.EXE -autorun).",
+  "entry": {
+    "kind": "download",
+    "file": "RCTYCOON.EXE"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-rct-demo-qemu-t23"
+}

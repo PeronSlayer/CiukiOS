@@ -38,6 +38,9 @@ EXPORTS
     RaiseException
     RtlRaiseStatus
     RtlUnwind
+    RtlFillMemory
+    RtlMoveMemory
+    RtlZeroMemory
     KiUserExceptionDispatcher
     LdrLoadDll
     LdrUnloadDll

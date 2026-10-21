@@ -306,15 +306,41 @@ static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, u
     return 0;
 }
 
+#ifdef H1_INSTALLERS
+/* f5-15B: the USER gate stays a refusing stub (-ENOSYS), but the installer
+ * runs record which gate numbers (CIUKI_SYS_*) the PE attempted, so the
+ * acceptance table names the first unavailable adapter service exactly.
+ * Called from the gate page with the number in eax; no system call here. */
+static ULONG gate_ops[16][2];
+static ULONG __attribute__((cdecl, used)) h1_gate_log(ULONG number) {
+    gate_calls++;
+    for (unsigned i = 0; i < 16; i++)
+        if (!gate_ops[i][1] || gate_ops[i][0] == number) {
+            gate_ops[i][0] = number;
+            gate_ops[i][1]++;
+            break;
+        }
+    return (ULONG)-38;
+}
+#endif
+
 static int gate_page(void) {
     LONG page = host_syscall(192, 0x7ffe0000u, 4096, 3, 0x32, -1, 0);
     if (page != (LONG)0x7ffe0000u)
         return 0;
     uint8_t *gate = (uint8_t *)(uintptr_t)0x7ffe0100u;
+#ifdef H1_INSTALLERS
+    /* push eax; push ecx; push edx; push eax; call h1_gate_log; add esp,4;
+     * pop edx; pop ecx; add esp,4 (saved eax); ret -> eax = -38 */
+    ULONG rel = (ULONG)(uintptr_t)h1_gate_log - (0x7ffe0100u + 9);
+    const uint8_t code[] = {0x50, 0x51, 0x52, 0x50, 0xe8, rel, rel >> 8, rel >> 16, rel >> 24,
+                            0x83, 0xc4, 0x04, 0x5a, 0x59, 0x83, 0xc4, 0x04, 0xc3};
+#else
     ULONG counter = (ULONG)(uintptr_t)&gate_calls;
     /* incl counter; movl $-38,%eax; ret */
     const uint8_t code[] = {0xff, 0x05, counter, counter >> 8, counter >> 16, counter >> 24,
                             0xb8, 0xda, 0xff, 0xff, 0xff, 0xc3};
+#endif
     for (unsigned i = 0; i < sizeof(code); i++)
         gate[i] = code[i];
     void **hooks = (void **)(uintptr_t)0x7ffe0200u;
@@ -342,6 +368,14 @@ static void print_stats(void) {
         host_print("=");
         host_number(enosys_ops[i][1]);
     }
+#ifdef H1_INSTALLERS
+    for (unsigned i = 0; i < 16 && gate_ops[i][1]; i++) {
+        host_print(" gate:");
+        host_number(gate_ops[i][0]);
+        host_print("=");
+        host_number(gate_ops[i][1]);
+    }
+#endif
     host_print("\n");
 }
 
@@ -431,6 +465,15 @@ static int run_exe(const char *exe, const char *test) {
     base_unmap = host.services.unmap;
     host.services.unmap = exit_unmap;
     struct w32_module *m;
+#ifdef H1_INSTALLERS
+    /* f5-15B: the same DirectSetup admission as sdk/win32/services/start.c,
+     * before import binding or any callback of the redistributable. */
+    if (installer_exec && w32_installer_intercept(&loader, exe)) {
+        host_print("RESULT intercepted dxsetup\n");
+        host_print("TERMINATE 0\n");
+        return 0;
+    }
+#endif
     NTSTATUS start = w32_ldr_start_process(&loader, exe, &m);
     if (start) {
         host_print("REFUSE ");

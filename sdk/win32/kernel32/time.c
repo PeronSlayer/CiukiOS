@@ -173,6 +173,29 @@ DWORD W32API GetVersion(void) {
   struct ciuki_w32_identity a;
   return identity(&a) ? a.get_version : 0;
 }
+/* f5-15B: Microsoft "GetProcessVersion": the major (high word) and minor
+ * (low word) subsystem version of the image of the given process, 0 or the
+ * own identifier meaning the caller. Other processes' images are not
+ * readable from a Win32 process here: ERROR_INVALID_PARAMETER, like an
+ * unknown identifier. The image is mapped; its headers were validated by
+ * the loader, so the optional-header fields are read directly. */
+DWORD W32API GetProcessVersion(DWORD pid) {
+  if (pid && pid != (DWORD)(uintptr_t)NtCurrentTeb()->ClientId.UniqueProcess) {
+    SetLastError(87);
+    return 0;
+  }
+  const uint8_t *base = NtCurrentTeb()->ProcessEnvironmentBlock->ImageBaseAddress;
+  if (!base) {
+    SetLastError(87);
+    return 0;
+  }
+  uint32_t nt;
+  w32_copy(&nt, base + 60, 4);
+  uint16_t major, minor;
+  w32_copy(&major, base + nt + 24 + 48, 2);
+  w32_copy(&minor, base + nt + 24 + 50, 2);
+  return ((DWORD)major << 16) | minor;
+}
 BOOL W32API GetVersionExA(OSVERSIONINFOA *out) {
   if (!out || (out->size != sizeof(*out)&&out->size!=sizeof(OSVERSIONINFOEXA))) {
     SetLastError(87);

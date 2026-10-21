@@ -170,6 +170,51 @@ class CabinetWriterTests(unittest.TestCase):
                 cabinet.mszip({name: b'authored'})
 
 
+_H1_PROGRAM = None
+
+
+def h1_program(fixtures, test=None):
+    """The H1 installer adapter (upper_h1.c + h1_services.c over the core
+    outputs and the qualified reused PEs), built once per process. With a
+    test case the preconditions skip it; otherwise they raise RuntimeError
+    (f5-15B per-title drivers call it outside a test too)."""
+    global _H1_PROGRAM
+    from tests.host.win32.wine import test_wine_upper as upper
+    def unavailable(reason):
+        if test is not None:
+            test.skipTest(reason)
+        raise RuntimeError(reason)
+    if not (ROOT / 'build/apps/win32/builtin-store.json').is_file():
+        unavailable('core outputs absent: make CAP= apps')
+    if not upper.local_build_matches():
+        unavailable('reused PEs do not match the qualified f5-20D record; make CAP= upper')
+    fixtures = Path(fixtures)
+    directory = OUT / 'h1'; directory.mkdir(parents=True, exist_ok=True)
+    if _H1_PROGRAM is None:
+        reused = [n for n, r in upper.RECORD['dlls'].items() if r['qualified']]
+        extras = {'extra_sources': [HERE / 'h1_services.c'],
+                  'extra_flags': ['-DH1_INSTALLERS', '-I' + str(HERE)]}
+        program, _ = upper.build_h1(directory, reused, **extras)
+        (directory / 'upper_table.h').write_text(upper.upper_fixture.table_header(
+            [('cabinet.dll', upper.RECORD['dlls']['cabinet.dll']['base'])]))
+        arrays = {'cab_source': (fixtures / 'fixture.cab').read_bytes(),
+                  'cab_payload': (fixture.SOURCE / 'payload.txt').read_bytes(),
+                  'cab_child': (fixtures / 'child.exe').read_bytes(),
+                  'cab_inf': (fixtures / 'chain.inf').read_bytes()}
+        (directory / 'cab_bytes.h').write_text(''.join('static unsigned char ' + n + '[]={' +
+            ','.join(map(str, data)) + '};\n' for n, data in arrays.items()))
+        (directory / 'upper_fixture_src.h').write_text('#include "' + str(directory / 'cab_bytes.h') +
+            '"\n#include "' + str(HERE / 'fdi_memory.h') + '"\n')
+        _H1_PROGRAM = upper.adapter.build(directory / 'core', directory / 'upper_h1.c', windows=False, **extras)
+    if test is not None:
+        upper.require_h1_sandbox(test, _H1_PROGRAM)
+    else:
+        result = subprocess.run([_H1_PROGRAM, 'sandbox-check'], capture_output=True, text=True, timeout=60)
+        if result.returncode or result.stdout != 'H1-SANDBOX enter\nH1-SANDBOX ready\n':
+            raise RuntimeError('H1 confinement preflight failed: ' + result.stdout + result.stderr)
+    return _H1_PROGRAM
+
+
 class FlowFixtureTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -274,32 +319,7 @@ class FlowFixtureTests(unittest.TestCase):
                 evidence.evaluate_predicates(changed, case['expected'])
 
     def h1(self):
-        from tests.host.win32.wine import test_wine_upper as upper
-        if not (ROOT / 'build/apps/win32/builtin-store.json').is_file():
-            self.skipTest('core outputs absent: make CAP= apps')
-        if not upper.local_build_matches():
-            self.skipTest('reused PEs do not match the qualified f5-20D record; make CAP= upper')
-        directory = OUT / 'h1'; directory.mkdir(exist_ok=True)
-        if not getattr(self.__class__, 'h1_program', None):
-            reused = [n for n, r in upper.RECORD['dlls'].items() if r['qualified']]
-            extras = {'extra_sources': [HERE / 'h1_services.c'],
-                      'extra_flags': ['-DH1_INSTALLERS', '-I' + str(HERE)]}
-            program, _ = upper.build_h1(directory, reused, **extras)
-            (directory / 'upper_table.h').write_text(upper.upper_fixture.table_header(
-                [('cabinet.dll', upper.RECORD['dlls']['cabinet.dll']['base'])]))
-            arrays = {'cab_source': (self.fixtures / 'fixture.cab').read_bytes(),
-                      'cab_payload': (fixture.SOURCE / 'payload.txt').read_bytes(),
-                      'cab_child': (self.fixtures / 'child.exe').read_bytes(),
-                      'cab_inf': (self.fixtures / 'chain.inf').read_bytes()}
-            (directory / 'cab_bytes.h').write_text(''.join('static unsigned char ' + n + '[]={' +
-                ','.join(map(str, data)) + '};\n' for n, data in arrays.items()))
-            (directory / 'upper_fixture_src.h').write_text('#include "' + str(directory / 'cab_bytes.h') +
-                '"\n#include "' + str(HERE / 'fdi_memory.h') + '"\n')
-            program = upper.adapter.build(directory / 'core', directory / 'upper_h1.c', windows=False, **extras)
-            self.__class__.h1_program = program
-        program = self.__class__.h1_program
-        upper.require_h1_sandbox(self, program)
-        return program
+        return h1_program(self.fixtures, self)
 
     def test_reused_fdi_exact_extraction_and_bad_checksum(self):
         program = self.h1()

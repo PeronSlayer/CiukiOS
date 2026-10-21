@@ -7,8 +7,10 @@ lead reviews an import receipt and the original distribution terms.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -187,11 +189,51 @@ def fetch(row, root=ROOT, import_unpinned=False, opener=urlopen):
     return receipt
 
 
+def import_local(row, root=ROOT, import_unpinned=False):
+    """f5-15B: receipt for a file the lead already downloaded, without any I/O
+    beyond hashing. The file is accepted at `build/downloads/win32/<id>/<file>`
+    or, as the lead stores it, flat at `build/downloads/win32/<file>`; the flat
+    file is linked into the per-title directory (same bytes, no copy) so the
+    census and fixture generators find it. Returns None when the file is
+    absent. Owner-local rows and rows without a pinned size are refused."""
+    require(row['licence']['class'] != 'owner-local', 'owner-local payloads are never imported here')
+    source = row['source']
+    name = source['file']
+    if name is None:
+        return None
+    require(isinstance(name, str) and name not in ('', '.', '..') and not any(c in name for c in '/\\\0'), 'unsafe filename')
+    require(re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', row['id']), 'unsafe id')
+    root = Path(root).resolve()
+    base = root/DOWNLOAD_DIRECTORY
+    destination = base/row['id']/name
+    flat = base/name
+    require(not destination.is_symlink() and not flat.is_symlink(), 'symlink payload')
+    if not destination.exists():
+        if not flat.is_file():
+            return None
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(flat, destination)
+        except OSError:
+            shutil.copyfile(flat, destination)
+    require(destination.resolve().is_relative_to(base.resolve()), 'import path escapes tree')
+    actual = verify(destination, source, import_unpinned)
+    receipt = {'schema_version': 1, 'id': row['id'], 'url': source['url'], **actual,
+               'status': 'pinned' if source['sha256'] else 'candidate-unreviewed',
+               'sha1_verified': source['sha1'] is not None,
+               'distribution_verified': row['licence']['distribution_verified'],
+               'imported_from': 'local file supplied by the lead'}
+    destination.with_name(destination.name+'.receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+    return receipt
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, default=ROOT/'tests/win32/workloads.json')
     parser.add_argument('--fetch', metavar='ID')
-    parser.add_argument('--import-unpinned', action='store_true')
+    parser.add_argument('--import-unpinned', action='store_true',
+                        help='with --fetch: accept a SHA-1-only pin; alone: write receipts for '
+                             'every downloaded file already present under build/downloads/win32/')
     args = parser.parse_args()
     manifest = load(args.manifest)
     if args.fetch:
@@ -199,5 +241,18 @@ if __name__ == '__main__':
         if not matches:
             parser.error('unknown workload')
         print(json.dumps(fetch(matches[0], import_unpinned=args.import_unpinned), indent=2))
+    elif args.import_unpinned:
+        receipts = []
+        for row in manifest['workloads']:
+            if row['licence']['class'] == 'owner-local' or row['source']['file'] is None:
+                continue
+            if row['source']['size'] is None:
+                receipts.append({'id': row['id'], 'file': row['source']['file'], 'absent': True,
+                                 'reason': 'no size pin in the manifest; import refused'})
+                continue
+            receipt = import_local(row, import_unpinned=True)
+            receipts.append({'id': row['id'], 'file': row['source']['file'],
+                             **({'absent': True} if receipt is None else receipt)})
+        print(json.dumps(receipts, indent=2))
     else:
         print('Validated', len(manifest['workloads']), 'workload rows; no payload fetched.')
