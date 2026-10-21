@@ -13,3 +13,10 @@
 ## Constraints
 
 `rg`/`sed` only; no `systemd-run`, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`; English. Report `build/codex/f5-07d-report.md`.
+
+## Amendment 1 (lead, 2026-10-21, from the lead's suite run on the delivery; logs in `build/lead/` of this worktree)
+
+1. `tests/host/test_desktop_gate.py` (`test_native_desktop_gate_loop`, `test_native_handshake_reports_through_kernel_hook`): the desktop no longer compiles in the gate harness after the fallback gate change — compiler output: `clang: error: linker command failed with exit code 1 (use -v to see invocation)`. Fix the production code or the harness include so both tests pass.
+2. `scripts/test/host_kernel_tests.sh`: `FAIL evidence record scope: probes/f5_restart_observer.inc:70, probes/f5_restart_observer.inc:73, probes/f5_restart_observer.inc:75, probes/f5_restart_observer.inc:76, probes/f5_restart_observer.inc:169, probes/f5_restart_observer.inc:192, probes/f5_restart_observer.inc:194, probes/f5_restart_observ` — the new probe emits evidence records outside the allowed scope; follow the pattern of the registered probes (records only from the probe's own scope).
+3. `tests/host/win32/test_kernel_core.py:110`: the case `w32-restart-qemu-t23` lost `integration_pending` on registration; the test still reads it. Update the test to the registered state ("authored, unrun" stays in the case as the other registered-but-unrun cases do) rather than dropping the field.
+Rerun `tests.host.win32.test_kernel_core`, the gate, and the kernel suite as far as the sandbox allows.
