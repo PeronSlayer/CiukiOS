@@ -338,11 +338,14 @@ static void test_irq_restore(uint32_t f) {
             for policy in ('--vfs', '--old-vfs'):
                 subprocess.run([str(binary), policy], check=True,
                                env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
-            # F1-87 amendment 4: the trial's measured device work. The old
-            # policy must reproduce the overruns; the new policy's C
-            # acceptance is reported, and fatal with CIUKI_F187_REQUIRE_C=1.
+            # F1-87 amendment 4 / f1-90: the trial's measured device work.
+            # The trial image's aggregate device budget must reproduce the
+            # overruns with either VFS policy (negative controls); the f1-90
+            # attributed budget must give zero audio-refill device overruns
+            # with either. C is fatal with CIUKI_F187_REQUIRE_C=1.
             strict = ['--require-c'] if os.environ.get('CIUKI_F187_REQUIRE_C') == '1' else []
-            for policy in (['--old-vfs'], ['--vfs', *strict]):
+            for policy in (['--old-vfs', '--old-device-budget'], ['--vfs', '--old-device-budget'],
+                           ['--old-vfs'], ['--vfs', *strict]):
                 subprocess.run([str(binary), *policy, '--trial-device-work'], check=True,
                                env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 

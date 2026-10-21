@@ -107,11 +107,12 @@ static void reset(void)
     focus_task=audio_focus=irq_focus=0;ui_focus=input_proxy=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
     memset(device_cpu,0,sizeof(device_cpu));device_cpu_total=device_cpu_tick=0;
     device_cpu_slot=0;device_cpu_scale=1;device_cpu_refresh=false;
+    memset(device_consumers,0,sizeof(device_consumers));audio_over=0;device_seq++;device_attribution=true;
     last_measured=0;last_preempted=false;
     g_task_switches=g_task_switches_other=g_switch_target=0;g_measure_stop=false;
     memset(classes,0,sizeof(classes));memset(paths,0,sizeof(paths));
     irq_cycles=exited_cycles=stretch_max=resched_max=0;switches=overruns=0;
-    overrun_used=overrun_lost=0;
+    overrun_used=overrun_lost=audio_used=audio_lost=0;
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
     memset(&timing_fixture,0,sizeof(timing_fixture));
     memset(&irqoff,0,sizeof(irqoff)); memset(&irqoff_window,0,sizeof(irqoff_window)); fpu_cost=0;
@@ -340,8 +341,75 @@ static void irqoff_phase_test(void)
     CHECK(!irqoff_window.cycles); g_tsc_per_ms=1000;
     puts("f1-86 IRQ-off: production schedule/FPU, exact 1ms boundary, gap, longest once per window, uncalibrated clock PASS");
 }
+/* f1-90: production per-consumer device budget accounting. One consumer
+ * exhausts the shared budget beside a light device task and an audio-class
+ * refill: only the consumer is demoted and named with its own consumption;
+ * the old aggregate policy (negative control) demotes and names all three. */
+static void attribution_test(void)
+{
+    static struct task light, refill;
+    for (unsigned aggregate=0;aggregate<2;aggregate++) {
+        reset(); device_attribution=!aggregate; g_boot.flags=CBI_F_VERBOSE;
+        light=(struct task){.id=9,.generation=1,.prio=P_DEVICE,.state=T_BLOCKED}; strcpy(light.name,"light");
+        refill=(struct task){.id=10,.generation=1,.prio=P_DEVICE,.state=T_BLOCKED}; strcpy(refill.name,"audio-refill");
+        task_set_audio_class(&refill);
+        ui.all_next=&light; light.all_next=&refill; hog.state=ui.state=T_BLOCKED;
+        rq_push(&normal);
+        task_start(&light); schedule(); CHECK(g_current==&light);
+        cycles+=300; task_sleep_ms(50);
+        task_start(&refill); schedule(); CHECK(g_current==&refill);
+        cycles+=500; task_sleep_ms(50);
+        CHECK(device_cpu_total==(aggregate ? 800u : 300u)); /* the refill's own budget */
+        task_start(&hog); schedule(); CHECK(g_current==&hog);
+        for (unsigned i=0;i<4;i++) run_tick(0x9090);
+        CHECK(hog.device_demoted && device_throttled());
+        schedule(); CHECK(g_current==&normal);
+        CHECK(light.device_demoted==(bool)aggregate && refill.device_demoted==(bool)aggregate);
+        unsigned named=0;
+        for (unsigned i=0;i<overrun_used;i++) {
+            const struct overrun_event *e=&overrun_events[i];
+            named|=e->id==hog.id ? 1u : e->id==light.id ? 2u : e->id==refill.id ? 4u : 8u;
+            CHECK(e->count==1 && e->consumed_us==(e->id==hog.id ? 4000u : e->id==light.id ? 300u : 500u));
+        }
+        CHECK(named==(aggregate ? 7u : 1u) && !audio_used);
+        record_bytes=0; records[0]=0; cpu_emit();
+        CHECK(strstr(records,"[sched] device_overrun task=hog#3 count=1 consumed_us=4000\n"));
+        CHECK(!strstr(records,"device_overrun task=light") == !aggregate);
+        CHECK(strstr(records,"[cpu] device_top task=hog#3 us=4000\n"));
+    }
+    /* Max-min fair share: the water level, not an equal split, decides. */
+    struct task a={.id=11,.prio=P_DEVICE,.priority_valid=true,.effective_priority=SCHED_DEVICE},
+                b={.id=12,.prio=P_DEVICE,.priority_valid=true,.effective_priority=SCHED_DEVICE},
+                c={.id=13,.prio=P_DEVICE,.priority_valid=true,.effective_priority=SCHED_DEVICE};
+    static const unsigned shares[2][3]={{300,1800,2000},{300,2000,2000}};
+    for (unsigned k=0;k<2;k++) {
+        reset(); device_cpu_scale=1000;
+        a.device_slot=b.device_slot=c.device_slot=0;
+        sched_charge_runtime(&a,shares[k][0],1000); sched_charge_runtime(&b,shares[k][1],1000);
+        sched_charge_runtime(&c,shares[k][2],1000);
+        CHECK(device_throttled() && !device_demote(&a) && device_demote(&c));
+        CHECK(device_demote(&b)==(k==1)); /* 1800 < level 1900; 2000 >= level 1850 */
+    }
+    /* The refill's own budget: exhaustion demotes it alone, is recorded
+     * apart from device_overrun, leaves the shared budget untouched and
+     * recovers when its window drains. */
+    reset(); refill=(struct task){.id=10,.generation=1,.prio=P_DEVICE,.state=T_BLOCKED};
+    strcpy(refill.name,"audio-refill"); task_set_audio_class(&refill); ui.all_next=&refill;
+    hog.state=ui.state=T_BLOCKED; rq_push(&normal);
+    task_start(&refill); schedule(); CHECK(g_current==&refill);
+    for (unsigned i=0;i<3;i++) run_tick(0x7070);
+    CHECK(refill.device_demoted && !overrun_used && audio_used==1 && audio_events[0].id==refill.id);
+    CHECK(audio_events[0].consumed_us>=AUDIO_CLASS_BUDGET_US && !device_cpu_total && !device_used && audio_over==1);
+    record_bytes=0; records[0]=0; cpu_emit();
+    CHECK(strstr(records,"[sched] audio_refill_overrun task=audio-refill#10 count=1 consumed_us=") && !strstr(records,"device_overrun"));
+    task_sleep_ms(50); CHECK(g_current==&normal);
+    for (unsigned i=0;i<10;i++) run_tick(0);
+    CHECK(!audio_over && device_cpu_refresh); schedule(); CHECK(!refill.device_demoted);
+    puts("f1-90 device budget: consumer alone demoted and named consumed_us, max-min share, refill own budget/record/recovery, aggregate negative control PASS");
+}
 int main(void)
 {
+    attribution_test();
     irqoff_phase_test();
     wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
     puts("kernel latency: wake preemption, bounded device hog, lock/IF deferral, UI priority, CPU/exited shares, guest and stretch EIP, forced record PASS");

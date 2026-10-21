@@ -639,6 +639,9 @@ void audio_init(struct vfs *v)
     if (!worker) {
         audio.reason = "worker_exhausted"; audio.error = -ENOMEM; audio_backend_shutdown(); return;
     }
+    /* f1-90: the DMA refill has its own bounded device budget; other device
+     * tasks' consumption never demotes it (R3). */
+    task_set_audio_class(worker);
     task_start(worker); /* lead fix (QEMU 2026-10-11): a created kernel task runs only after task_start */
     audio.commitment_pages += KSTACK_SIZE / PAGE_SIZE;
     audio.ready = true;
