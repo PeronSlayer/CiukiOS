@@ -224,6 +224,12 @@ struct model {
     unsigned deferred_count, event_reads, events, waits;
     uint64_t parser_due_us;
     bool async_parser, replaying, event_stuck, event_zero, event_wrong, event_dead, wait_seen;
+    /* Empirical failure injection, not a documented SuperSavage latch:
+     * capture CR50 colour lanes at the PM preamble. Upstream has selected
+     * mode depth by then; the old CiukiOS ordering had not. MMIO and BCI
+     * descriptor readbacks deliberately remain correct in this scenario. */
+    bool depth_preamble_model, depth_preamble_seen;
+    unsigned depth_preamble_bpp;
 };
 static struct model m;
 static struct savage2d test_engine;
@@ -253,6 +259,8 @@ static void execute_packet(struct model *p)
     unsigned engine_bpp=cr_depth==0 ? 8 : cr_depth==0x10 ? 16 : 32;
     CHECK(cr_depth!=0x20 && (p->cr[0x50]&0xc1u)==0xc1u);
     if (bpp<engine_bpp) engine_bpp=bpp;
+    if (p->depth_preamble_model && p->depth_preamble_seen &&
+        p->depth_preamble_bpp<engine_bpp) engine_bpp=p->depth_preamble_bpp;
     /* MMIO and the command processor need not observe a depth change
      * together. Keep the captured stale-8-bpp scenario independent of the
      * readable register bank; SET_REGISTER updates the command state. */
@@ -429,6 +437,13 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
         setup_write(p,offset,value);
         if (offset>=0x8100 && offset<0x8180 && !window_live(p)) { p->dead_window_writes++; return; }
         if (offset==BCI_CONTROL && p->bci_locked) return;
+        if (offset==0x816c && p->depth_preamble_model &&
+            !p->depth_preamble_seen && !(value&0xff0000u) && (value&1u)) {
+            unsigned depth=p->cr[0x50]&0x30u;
+            CHECK(depth!=0x20);
+            p->depth_preamble_bpp=depth==0 ? 8 : depth==0x10 ? 16 : 32;
+            p->depth_preamble_seen=true;
+        }
         p->reg[offset/4]=offset==0x816c && p->strict_window ? value&GBD_READ_MASK : value;
     }
 }
@@ -491,6 +506,7 @@ static void chip_cr_write(struct model *p,uint8_t index,uint8_t value)
         p->reset_phase=value&2u ? 1 : 2;
         if (value&2u) {
             p->postreset_enable=false;
+            p->depth_preamble_seen=false;
             p->reset_set_us=0; p->reset_clear_us=0; p->status_reads=0;
             p->reset_engine_writes=p->engine_writes;
         }
@@ -1145,7 +1161,8 @@ static void serial_log_cost(const char *line)
     uint64_t bytes=strlen(line)+2, us=(bytes*10000000+38399)/38400;
     simulated_bytes+=bytes; simulated_log_us+=us; m.us+=us;
     if (!strncmp(line,"[accel] savage step ",20) || !strncmp(line,"[accel] savage init ",20) ||
-        !strncmp(line,"[accel] savage readback ",24) || strstr(line,"[accel] savage completion ")) simulated_trace_us+=us;
+        !strncmp(line,"[accel] savage readback ",24) || strstr(line,"[accel] savage completion ") ||
+        strstr(line,"[accel] savage depth ")) simulated_trace_us+=us;
 }
 static uint64_t log_number(const char *line,const char *field)
 {
@@ -1335,8 +1352,8 @@ static void supersavage_window_and_records(void)
         at=setup_at(0x48c10,0x00700040,at+1);
         at=setup_at(0x48c0c,0,at+1);
         at=setup_at(BCI_CONTROL,8,at+1);
-        at=setup_at(0x816c,0x10000001,at+1);
         at=setup_at(0x100050,0xf1,at+1);
+        at=setup_at(0x816c,0x10000001,at+1);
         at=setup_at(0x8168,0,at+1);
         setup_at(0x816c,engine.descriptor,at+1);
         for (unsigned i=0;i<m.setup_count && i<ARRAY_SIZE(m.setup);i++) {
@@ -1731,8 +1748,8 @@ static void shared_enable_and_failure_readbacks(void)
             at=setup_at(0x48c10,0x00700040,at+1);
             at=setup_at(0x48c0c,0,at+1);
             at=setup_at(BCI_CONTROL,0x1238,at+1);
-            at=setup_at(0x816c,0x10000001,at+1);
             at=setup_at(0x100050,cr50,at+1);
+            at=setup_at(0x816c,0x10000001,at+1);
             at=setup_at(0x8168,0,at+1);
             setup_at(0x816c,gbd,at+1);
             for (unsigned i=0;i<4;i++)
@@ -1890,6 +1907,75 @@ static void supersavage_completion_fence(void)
     finish();
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
+static void supersavage_depth_preamble(void)
+{
+    /* Replay the old descriptor section with the same completion fence.
+     * This isolates depth ordering from the rejected stale-completion
+     * explanation. The latch is an injected hypothesis, not source fact. */
+    prepare(32);
+    free(storage);
+    device.width=1024; device.height=768; device.pitch=4096;
+    device.size=device.height*device.pitch;
+    storage=malloc(device.size+32); CHECK(storage!=NULL);
+    memset(storage,0xa5,device.size+32); device.mapped=storage+16;
+    test_engine.width=device.width; test_engine.height=device.height;
+    struct savage_config cfg;
+    CHECK(savage2d_config(1,&device,&cfg));
+    test_engine.descriptor=cfg.descriptor;
+    CHECK(test_engine.descriptor==0x10200401);
+    m.status_value=0x07e00000; m.exact_clock=m.depth_preamble_model=true;
+    m.cr[0x50]=0xc1;
+    model_write(&m,0x816c,0x10000001);
+    port_cr_write(&test_engine,0x50,0xf1);
+    model_write(&m,0x8168,0);
+    model_write(&m,0x816c,test_engine.descriptor);
+    uint32_t packet[]={0x960100e0,0,0x960100e1,test_engine.descriptor,
+                       0x960100e0,0,0x960100e1,test_engine.descriptor};
+    CHECK(!send_bci(&test_engine,packet,ARRAY_SIZE(packet)));
+    CHECK(m.depth_preamble_bpp==8 && m.cr[0x50]==0xf1 &&
+          read_2d(&test_engine,0x816c)==test_engine.descriptor &&
+          m.bci_gbd[1]==test_engine.descriptor && !test_engine.event_pending);
+    uint32_t before=0x0097a5b2;
+    uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
+    memcpy(last,&before,4); accel_count=0;
+    CHECK(bci_test(&test_engine,&device)==-EIO && test_engine.quarantined);
+    CHECK(log_matches("wrote=00cd00e8 read=e8e8e8e8 read_valid=1 restored=1")==1);
+    CHECK(test_engine.cpu_safe && !test_engine.event_pending &&
+          test_engine.status==0x07e00000 && !test_engine.ops.capabilities(&test_engine));
+    CHECK(!memcmp(last,&before,4));
+    puts("f1-88 Amendment 1 old-order injection: CR50=f1 GBD=10200401 event complete wrote=00cd00e8 read=e8e8e8e8 restored=1 caps=0 PASS");
+    finish();
+
+    for (unsigned bpp=16;bpp<=32;bpp+=16) for (unsigned firmware=0;firmware<3;firmware++) {
+        boot_fixture_mode(false,bpp);
+        free(storage);
+        device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
+        device.size=device.height*device.pitch;
+        storage=malloc(device.size+32); CHECK(storage!=NULL);
+        memset(storage,0xa5,device.size+32); device.mapped=storage+16;
+        uint8_t saved50=firmware==0 ? 0xc1 : firmware==1 ? 0xd1 : 0xf1;
+        m.cr[0x50]=saved50;
+        m.status_value=0x07e00000;
+        m.strict_window=m.exact_clock=m.depth_preamble_model=true;
+        last=device.mapped+device.size-bpp/8;
+        before=bpp==32 ? 0x0097a5b2 : 0xa5b2;
+        memcpy(last,&before,bpp/8);
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        CHECK(m.depth_preamble_seen && m.depth_preamble_bpp==bpp);
+        CHECK(engine.active && !engine.quarantined && engine.cpu_safe && !engine.event_pending);
+        CHECK(engine.ops.capabilities(&engine) && acceleration==&engine.ops && !disk_size);
+        CHECK(engine.saved50==saved50 && !memcmp(last,&before,bpp/8));
+        CHECK(log_matches(bpp==32 ? "wrote=00cd00e8 read=00cd00e8" : "wrote=000000e8 read=000000e8")==1);
+        CHECK(log_matches("order=cr50_before_gbd")==1 && m.register_packets==4 && m.packets==1);
+        unsigned at=setup_at(0x100050,bpp==32 ? 0xf1 : 0xd1,0);
+        setup_at(0x816c,0x10000001,at+1);
+        printf("f1-88 Amendment 1 corrected depth=%u firmware_cr50=%02x preamble_bpp=%u marker=exact caps=%u PASS\n",
+            bpp,saved50,m.depth_preamble_bpp,engine.ops.capabilities(&engine));
+        CHECK(!engine.ops.stop(&engine) && m.cr[0x50]==saved50);
+        finish();
+    }
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
 static void hardware_sweep_default(void)
 {
     for (int config=-1;config<=1;config++) {
@@ -1957,6 +2043,7 @@ int main(void)
     queued_gbd_depth();
     shared_enable_and_failure_readbacks();
     supersavage_completion_fence();
+    supersavage_depth_preamble();
     hardware_sweep_default();
     boot_fixture_accel(false);
     for (int32_t id=-1;id<=96;id++) {

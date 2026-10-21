@@ -522,14 +522,17 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
     uint32_t enabled = (s->saved_bci & 0x3ff0u) | 8u;
     uint32_t control = init_write(s, BCI_CONTROL, enabled, false);
     if (control == UINT32_MAX || (control & 0x0fu) != 8u) return fail(s, "bci_enable_failed");
-    /* X.Org's PM preamble, with the selected controls in both transports.
-     * T23 sweep: bit 3 + BW_DISABLE replicates the low colour byte. */
-    if (supersavage) init_write(s, 0x816c, 0x10000000u | (cfg.descriptor & 9u), true);
-    /* RE046-B CR50.5:4 selects engine pixel length independently of the
-     * descriptor. Firmware may leave its VGA (8-bpp) value after VBE. */
+    /* Establish mode depth BEFORE the PM descriptor preamble, as X.Org's
+     * mode setup and savagefb_set_par do before their 2D initializers.
+     * A final GBD mirror of 32 bpp did not prevent the T23's byte-lane
+     * replication. Do not expose the preamble to firmware's VGA depth.
+     * See f1-88 validation for the unconfirmed depth-latch hypothesis. */
     uint8_t cr50 = (s->saved50 & ~0x30u) | (cfg.depth << 4) | 0xc1u;
     if ((init_cr_write(s, 0x50, cr50) & 0xf1u) != (cr50 & 0xf1u))
         return fail(s, "depth_readback_failed");
+    /* X.Org's PM preamble, with the selected controls in both transports.
+     * T23 sweep: bit 3 + BW_DISABLE replicates the low colour byte. */
+    if (supersavage) init_write(s, 0x816c, 0x10000000u | (cfg.descriptor & 9u), true);
     init_write(s, 0x8168, 0, true);
     uint32_t gbd = cfg.descriptor;
     uint32_t check = init_write(s, 0x816c, gbd, true);
@@ -637,6 +640,11 @@ static void init_failure_readback(struct savage2d *s)
 static void init_report(struct savage2d *s)
 {
     uint64_t start = activation_now(activation_ctx);
+    if (s->touched) {
+        klog("[accel] savage depth firmware_cr50=%02x bpp=%u descriptor=%08x order=cr50_before_gbd",
+            s->saved50, (s->descriptor >> 16) & 255u, s->descriptor);
+        task_yield();
+    }
     if (s->supersavage && s->event_tag) {
         klog("[accel] savage completion reg=48c64 before=%08x requested=%04x observed=%08x pending=%u status=%08x idle_bits=%x fifo_used=%u",
             s->event_before, s->event_tag, s->event_status, s->event_pending,
