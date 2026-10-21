@@ -19,3 +19,15 @@
 ## Constraints
 
 Document only (plus the directive index row is the lead's): no extraction into tracked paths, no code, no builds; `rg`/`sed` only; no commits, no diary edits; English. Report `build/codex/f6-13-report.md`.
+
+## Lead decisions on the plan (2026-10-21, `docs/design/netsurf-port-plan.md` merged on main)
+
+1. Approved: native HTTP fetcher on the f6-10 sockets with BearSSL, the port-local `fd_set` bridge, one bounded DNS worker, libnsfb backend on the v3 window. Browser code that needs sockets waits for the f6-10 merge; everything else starts now (f6-14).
+2. Pins supplied in `config/netsurf.json`: zlib 1.3.1 (target and host), libpng 1.6.59 (host conversion now, target PNG in M3). JPEG deferred to M3 (pin then).
+3. Charset: the parserutils adapter with UTF-8, ISO-8859-1/-15 and Windows-1252 only; no iconv.
+4. Fonts: the SDK font adapter (`FONTLIB=ciuki`, FreeType through the existing bridge) for M1; the system faces of f5-10C2 are the redistributable set.
+5. TLS: 1.2 only, no revocation checking; entropy per f6-10 decision 3; the clock must read a plausible date (RTC year ≥ 2026) or HTTPS reports a dated-clock error instead of accepting; no weaker certificate checks.
+6. HTTP: 8 connections, 30 s timeouts, keep-alive, 5 redirects, bounded URL-encoded POST; no multipart, proxy, authentication or external handlers in the beta.
+7. Memory: 32 MiB resident target accepted provisionally; measured at M1; UI responsiveness bound 100 ms per layout slice with the long-layout gate the plan describes.
+8. Layout: `/Programs/netsurf` + `/system/netsurf` resources; profile `C:\Documents\NetSurf`; retention 500 bookmarks, 2000 history entries, 200 cookies; Tango icon conversion; English copy.
+9. The private site mapping is supplied to the lead's QEMU/T23 checks only, never in tracked files.
