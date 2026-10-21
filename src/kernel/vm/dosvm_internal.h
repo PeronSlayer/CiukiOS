@@ -136,6 +136,7 @@ struct dos_file;
 struct dos_file_ops;
 struct vm_cache_block;
 struct dos_file_volume;
+struct dos_unified;
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -147,6 +148,10 @@ struct dosvm {
     struct dos_file_volume *file_volume;
     struct v86_frame file_saved;
     uint32_t file_phys,file_bytes;
+    struct dos_unified *unified; /* f3-56 DFV2 state: unified profile only */
+    struct v86_frame unified_saved;
+    uint32_t unified_phys,unified_bytes;
+    bool unified_vif;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */

@@ -259,3 +259,37 @@ start, menu, demo, play, save, load, config-write, config-reopen and exit ranges
 each containing actual reconciled calls. Missing fragments, unreturned calls,
 cancelled accepted stages, unknown selectors, unsupported DOS functions and
 unapproved errors fail. No complete title trace has been collected by Codex.
+
+## Unified CiukiDOS binding (f3-56)
+
+The DFV2 binding between the CiukiDOS fork of FreeDOS 2043, its control
+driver `CIUKIDF.SYS` and the VMM has its own host qualification:
+
+```sh
+nice -n 19 bash tests/host/dos/run_unified_binding.sh
+```
+
+It builds the hash-pinned fork (patch 0001 + patch 0002 + the files in
+`third_party/freedos/unified/ciuki/fork/`, see `fork.json`) twice and the
+pristine patch-0001 kernel with the pinned Open Watcom 1.9 and NASM tools,
+then runs `unified_binding_test.c` (the native adapter against synthetic,
+guarded guest memory: negotiation, layout, frame/spoof and lifecycle
+matrices with failure injection) and `unified_cpu_test.c`, which boots
+small FAT16 disks through the pinned MBR/VBR on libx86emu with a ROM BIOS
+and the production `dos_unified.c` at the INT FE gates. The guest programs
+are in `h56/`: `h56.asm` (layout, handles, EXEC/TSR, PSP, internals, direct,
+PENDING, spoof and failure-injection tests), `child.asm`, `h56fcb.asm` and
+`h56nls.asm` (print-only FCB/NLS probes compared with the pristine kernel)
+and `runall.asm` (runs the unchanged basic-fixture f3-48 probes, whose
+results must be identical on the pristine kernel and the bound fork).
+ASan/UBSan stay on with leak detection at its default. The script needs
+libx86emu headers and the ignored FreeDOS 1.3 packages in
+`third_party/freedos/1.3` (or in the primary checkout of a worktree), and
+is part of `scripts/test/host_kernel_tests.sh`. `test_unified_fork.py`
+checks the fork pins and shared constants without building.
+
+Evidence limits: the native backend is a fixture; every file operation is
+FreeDOS's local FAT. f3-57 supplies the live VFS backend. Editing the fork:
+`python3 -B scripts/unified_fork.py --checkout build/<dir>`, edit, then
+`--refresh build/<dir>` regenerates patch 0002 and `fork.json`. Wire layout
+and decisions: `docs/validation/f3-56-unified-binding.md`.

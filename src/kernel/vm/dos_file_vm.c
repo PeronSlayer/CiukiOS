@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "dosvm_internal.h"
 #include "dos_file_hook.h"
+#include "dos_unified.h"
 #include "dos_file_volume.h"
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
@@ -50,7 +51,16 @@ _Static_assert(DOS_HOOK_DISPATCH>=DPMI_RM_END,"DOS gates overlap DPMI real stubs
 _Static_assert(0xf0000+DOS_HOOK_DISPATCH>DPMI_PM_BASE+DPMI_PM_LIMIT,"DOS gates overlap DPMI PM stubs");
 _Static_assert(DOS_HOOK_DISPATCH>DOSVM_MOUSE_RETURN+3,"DOS gates overlap mouse callback");
 _Static_assert(DOS_HOOK_END<=0x2000,"DOS ROM exceeds protected F1 page");
-void dosvm_file_rom_init(struct dosvm *v) { dos_file_hook_rom(P2V(v->frames[0xf1])); }
+_Static_assert(DFV2_DIRECT>=DOS_HOOK_END,"DFV2 gates overlap the v1 ROM");
+_Static_assert(DFV2_END<=0x2000,"DFV2 ROM exceeds protected F1 page");
+_Static_assert(DFV2_DIRECT>DOSVM_MOUSE_RETURN+3 && DFV2_DIRECT>=DPMI_RM_END,"DFV2 gates overlap mouse/DPMI stubs");
+_Static_assert(0xf0000+DFV2_DIRECT>DPMI_PM_BASE+DPMI_PM_LIMIT,"DFV2 gates overlap DPMI PM stubs");
+/* v1 is written for every VM exactly as before; DFV2 only for the unified
+ * profile (kernel=unified, schema value 2), into the unused 1C00-1C3F. */
+void dosvm_file_rom_init(struct dosvm *v) {
+    dos_file_hook_rom(P2V(v->frames[0xf1]));
+    if (v->kernel==2) dos_unified_rom(P2V(v->frames[0xf1]),v->info.key.generation);
+}
 struct file_runtime {
     struct dos_file files;
     struct dos_file_volume volume;
@@ -116,6 +126,64 @@ static int file_finish(struct dosvm *v,struct v86_frame *f,const struct dos_file
     }
     pack(f,r); return 0;
 }
+/* f3-56 DFV2 (private, unified profile only). The state is allocated at the
+ * first event-gate call and charged to the VM; an allocation failure is a
+ * refused gate call, which CIUKIDF.SYS reports as a contained INIT failure.
+ * The f3-56 backend is null: no direct claims, every local call chains;
+ * f3-57 installs the live VFS backend. */
+static int unified_create(struct dosvm *v) {
+    unsigned bytes=(sizeof(struct dos_unified)+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    if (v->info.resident+bytes>v->info.commitment) return -FS_ENOMEM;
+    uint32_t phys=pmm_alloc_contig(bytes/PAGE_SIZE); if (!phys) return -FS_ENOMEM;
+    mm_claim(phys,bytes/PAGE_SIZE,MM_VM_PRIVATE);
+    struct dos_unified *u=P2V(phys); struct dos_file_ops ops;
+    dosvm_file_ops_init(v,&ops);
+    dos_unified_init(u,v->info.key.generation,&ops,0);
+    v->unified=u; v->unified_phys=phys; v->unified_bytes=bytes; v->info.resident+=bytes;
+    return 0;
+}
+static void unified_release(struct dosvm *v) {
+    if (!v->unified) return;
+    dos_unified_destroy(v->unified);
+    for (unsigned i=0;i<v->unified_bytes/PAGE_SIZE;i++) mm_free(v->unified_phys+i*PAGE_SIZE,MM_VM_PRIVATE);
+    v->info.resident-=v->unified_bytes; v->unified=0; v->unified_phys=v->unified_bytes=0;
+}
+static int unified_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector) {
+    struct dos_file_frame r=unpack(f);
+    if (vector==0x2f) {
+        if (!dos_unified_discover(&r)) return -ENOSYS;
+        pack(f,&r); return 0;
+    }
+    if (vector!=0xfe || f->tf.cs!=DFV2_ROM_SEG) return -ENOSYS;
+    uint32_t ip=f->tf.eip;
+    if (ip==DFV2_CRITICAL+2) {
+        /* Monitor-only PENDING ends here exactly once; anything else stops
+         * the VM (contained, no host panic). */
+        if (!v->unified || dos_unified_critical(v->unified,&r,f->tf.eax&255)!=DFV2_RESUME) {
+            dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+        }
+        *f=v->unified_saved; v->monitor.vif=v->unified_vif; return 0;
+    }
+    if (ip!=DFV2_DIRECT+2 && ip!=DFV2_LOCAL+2 && ip!=DFV2_EVENT+2) return -ENOSYS;
+    if (!v->unified && (ip!=DFV2_EVENT+2 || unified_create(v))) return 0;
+    if (dos_unified_gate(v->unified,&r)!=DFV2_SUSPEND) return 0;
+    /* INT 24h callback on the driver stack; IRET returns to the C2 gate. */
+    uint16_t ss,sp,vector24[2];
+    if (!dos_unified_callback_stack(v->unified,&ss,&sp) || dosvm_read(v,0x24*4,vector24,4)) {
+        dosvm_stop(v->info.key,DOSVM_FAULT); return 0;
+    }
+    uint16_t frame[3]={DFV2_CRITICAL,DFV2_ROM_SEG,
+        (uint16_t)((f->tf.eflags&~V86_IF)|(v->monitor.vif ? V86_IF : 0))};
+    sp=(uint16_t)(sp-6);
+    if (dosvm_write(v,vm_ptr(ss,sp),frame,6)) { dosvm_stop(v->info.key,DOSVM_FAULT); return 0; }
+    v->unified_saved=*f; v->unified_vif=v->monitor.vif;
+    const struct dfv2_critical *c=&v->unified->critical;
+    vm_low(&f->tf.eax,c->ax); vm_low(&f->tf.edi,c->di); vm_low(&f->tf.ebp,c->bp); vm_low(&f->tf.esi,c->si);
+    vm_low(&f->tf.user_ss,ss); vm_low(&f->tf.user_esp,sp);
+    f->tf.cs=vector24[1]; f->tf.eip=vector24[0]; f->tf.eflags&=~V86_TF;
+    v->monitor.vif=false;
+    return 0;
+}
 int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsigned origin) {
     if (v->conformance_media.mode && vector==0x21 && (f->tf.eax&0xff00)==0x3d00) {
         static const char path[]="E:\\D48FAULT.DAT";
@@ -125,6 +193,10 @@ int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsi
         d48_open_enter(&v->conformance_media,&r,matched);
     }
     if (v->disable_file_bridge) return -ENOSYS;
+    if (v->kernel==2) {
+        int unified=unified_interrupt(v,f,vector);
+        if (unified!=-ENOSYS) return unified;
+    }
     if (vector==0x2f) {
         struct dos_file_frame r=unpack(f);
         uint8_t magic[8];
@@ -224,6 +296,7 @@ int dosvm_file_disk(struct dosvm *v,uint32_t lba,void *sector,bool write) {
     return v->file_volume ? dos_file_volume_raw(v->file_volume,lba,sector,write,0) : -ENOSYS;
 }
 int dosvm_file_destroy(struct dosvm *v) {
+    unified_release(v);
     if (v->files) {
         dos_file_cancel(v->files);
         dosvm_file_dump(v);

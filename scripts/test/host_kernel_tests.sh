@@ -623,3 +623,6 @@ python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_loade
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel32.py
 # f3-50: bound personality, native FAT/VFS and production V86/DPMI CPU model.
 bash "$root/tests/host/dos/run_hook_cpu.sh"
+
+# f3-56: unified CiukiDOS DFV2 binding (fork build, native matrix, CPU boots).
+bash "$root/tests/host/dos/run_unified_binding.sh"

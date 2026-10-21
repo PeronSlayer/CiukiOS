@@ -1,0 +1,40 @@
+{
+  "added": {
+    "ciuki/ciukidf.asm": {
+      "sha256": "dbd1f7ea8c7384f0f8c0297ab6490d6ba7521d76d28f9f74e46b43cddd4d7a17",
+      "source": "ciuki/fork/drivers/ciukidf.asm"
+    },
+    "hdr/ciuki.h": {
+      "sha256": "361e367f8daf535440eda8b0c6d21f2dc3d3115d7fb9ae6e10d86484f195d7e7",
+      "source": "ciuki/fork/hdr/ciuki.h"
+    },
+    "kernel/ciuki.c": {
+      "sha256": "734269191e764978c8ea8502ad61d8a19f9de4268edb43f92f41fd019c4c3163",
+      "source": "ciuki/fork/kernel/ciuki.c"
+    },
+    "kernel/ciukinit.c": {
+      "sha256": "fa58e3a69d5ce7b0fe07746b5783e022e237fb3ac108f363d6fb063e56dd6669",
+      "source": "ciuki/fork/kernel/ciukinit.c"
+    }
+  },
+  "base": "unmodified except patch 0001 (reproducible date)",
+  "changed": {
+    "kernel/fcbfns.c": "65b8769c5293c12749c84d3bd0d798de0a11bbf48227f67df17883fc4997cc7a",
+    "kernel/int2f.asm": "ddbc1d55bb3395303f1993afec4ba453bc9891e3c47d357ca645381f56bd97f6",
+    "kernel/inthndlr.c": "f134e7aa76cc9dd71f739b68942e1dbae43a62495567b086b40f55f41495341e",
+    "kernel/main.c": "eca11700903f6223dacc0b41770ddc34b1129b106464b68eb164f619e3cb6e75",
+    "kernel/makefile": "fe365882e8092df9c6d23a50fdb0aa25af0cea2fc9d6bf52a37c1813ea37a2d1",
+    "kernel/nls.c": "f4db271c771b091c725601604f842c3f54bf12539a2b169bc44f4b3968c598b9",
+    "kernel/nls_hc.asm": "e9a4d236a5eae16006587a690cf4fe16c1a6f47dc38716bb2dc689ef13b04df8",
+    "kernel/proto.h": "0f833d9ec5db5ee5b70ddd801c3efb4feb1ae9fc7df99421ec84caa98f06aa7a",
+    "kernel/task.c": "0398ccfa44dcec9c4334beb413aef00f5e47adb9e29e7a6687ee1ef5a731d464"
+  },
+  "identity": "CIUKIDOS K2043 2",
+  "license": "GPL-2.0-or-later",
+  "modification": "CiukiDOS fork: patch 0001 (reproducible date), patch 0002 (DFV2 binding, lifecycle, FCB and NLS) and added fork files",
+  "patch": {
+    "path": "ciuki/patches/0002-ciukidos-dfv2-binding.patch",
+    "sha256": "7ab835d0b56c5ae108c015d340b3254b98ec31362e1bdd0ee758b0f257eaadf4"
+  },
+  "schema": 1
+}

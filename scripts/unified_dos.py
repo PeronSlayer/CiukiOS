@@ -213,8 +213,10 @@ def no_core():
 def tool_probe(tools):
     results = {}
     for name in ("wmake", "wcc", "wlink", "wlib", "wcl"):
+        # stdin is /dev/null: wlink's help pager otherwise waits on an
+        # inherited pipe until the timeout (observed in f3-56).
         p = subprocess.run([str(tools / "binl" / name), "-?"], capture_output=True,
-                           timeout=20, preexec_fn=no_core)
+                           stdin=subprocess.DEVNULL, timeout=20, preexec_fn=no_core)
         results[name] = dict(returncode=p.returncode,
                              output=(p.stdout + p.stderr).decode(errors="replace"))
     return results
@@ -370,16 +372,17 @@ class LinkAuditError(ValueError):
             for r in rows if r["classification"] == "opaque"))
 
 
-def link_audit(work):
+def link_audit(work, pinned=None):
     """Resolve Wlink OMF names against pinned recipes, not .obj substrings.
 
     The public-symbol map omits objects without public symbols. Retain all
     direct OBJS inputs from the pinned link recipe and audit library members
     and the verbose module-segment table separately. Never trust a basename
-    from an external object/library/source path.
+    from an external object/library/source path. `pinned` lets the f3-56
+    fork audit its own hash-checked inputs; the default is patch 0001 only.
     """
     work = Path(work).resolve()
-    pinned = patched_sources(sources())
+    pinned = patched_sources(sources()) if pinned is None else pinned
     rows = {}; catalog = {}
     for directory in ("kernel", "drivers"):
         makefile = directory + "/makefile"
@@ -538,7 +541,7 @@ def build(output, *, mtime=EPOCH):
         if (manifest["date"] + "|" + manifest["time"]).encode() not in (output / "date-probe.obj").read_bytes():
             raise ValueError("patch 0001 compiler build-date macro probe failed")
         with (output / "make.log").open("w") as log:
-            subprocess.run(["make", "all"], cwd=work, env=env, stdout=log,
+            subprocess.run(["make", "all"], cwd=work, env=env, stdout=log, stdin=subprocess.DEVNULL,
                            stderr=subprocess.STDOUT, check=True)
         if source_hashes(work) != evidence["source_hashes"]:
             raise ValueError("source bytes changed during build beyond patch 0001")
