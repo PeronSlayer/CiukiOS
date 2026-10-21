@@ -8,6 +8,13 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef CIUKI_HOST
+/* The host clock has no CiukiOS provenance. Fixtures must provide the native
+ * uname result explicitly; an ordinary host run fails closed. */
+bool ciuki_host_clock_rtc(void) __attribute__((weak));
+#else
+#include <sys/utsname.h>
+#endif
 int getentropy(void *,size_t);
 struct cert_proxy { const br_x509_class *vtable;struct ciuki_tls *owner; };
 struct ciuki_tls {
@@ -54,6 +61,14 @@ static enum ciuki_tls_error tls_error(int e)
 }
 bool ciuki_tls_clock(uint32_t *days,uint32_t *seconds)
 {
+#ifdef CIUKI_HOST
+    if(!ciuki_host_clock_rtc || !ciuki_host_clock_rtc())return false;
+#else
+    struct utsname info;
+    /* proc/clock.c selects source 1 only for a qualified, valid RTC sample;
+     * source 0 is the build epoch, even when its date looks recent. */
+    if(uname(&info) || info.realtime_source!=1)return false;
+#endif
     struct timespec now;
     if(clock_gettime(CLOCK_REALTIME,&now) || now.tv_sec<1767225600LL || now.tv_sec>253402300799LL)return false;
     *days=(uint32_t)(now.tv_sec/86400+719528);*seconds=(uint32_t)(now.tv_sec%86400);return true;
@@ -118,7 +133,7 @@ unsigned ciuki_tls_certificates(struct ciuki_tls *t,const unsigned char **der,co
 const char *ciuki_tls_message(enum ciuki_tls_error e)
 {
     static const char *const text[]={"", "Unable to allocate TLS connection.",
-        "HTTPS requires a correct system date (2026 or later). Please set the clock.",
+        "HTTPS requires a qualified RTC clock and a correct date (2026 or later). Please set the system clock.",
         "HTTPS is unavailable: secure system entropy is not available.",
         "TLS certificate hostname verification failed (numeric HTTPS hosts are unsupported).",
         "TLS certificate validation failed: untrusted, malformed, or unsupported certificate.",

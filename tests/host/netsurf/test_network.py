@@ -59,9 +59,71 @@ subjectAltName=DNS:{host}
     openssl("req","-x509","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes",
         "-keyout",folder / "self.key","-out",folder / "self.pem","-subj","/CN=fixture.example","-days","36500",
         "-addext","subjectAltName=DNS:fixture.example")
-    for name in ("valid","wrong","expired","future","self"):
+    openssl("req","-new","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes",
+        "-keyout",folder / "intermediate-ca.key","-out",folder / "intermediate-ca.csr","-subj","/CN=Ciuki Intermediate")
+    (folder / "intermediate.ext").write_text("basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n")
+    config=folder / "ca.conf"
+    config.write_text(config.read_text()+"\n[intermediate]\n"+(folder / "intermediate.ext").read_text())
+    openssl("ca","-batch","-config",config,"-extensions","intermediate","-startdate","20260101000000Z","-enddate","20350101000000Z",
+        "-in",folder / "intermediate-ca.csr","-out",folder / "intermediate-ca.pem")
+    openssl("req","-new","-newkey","ec","-pkeyopt","ec_paramgen_curve:P-256","-nodes",
+        "-keyout",folder / "intermediate.key","-out",folder / "intermediate.csr","-subj","/CN=fixture.example")
+    (folder / "leaf.ext").write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:fixture.example\n")
+    config.write_text(config.read_text().replace(str(folder / "ca.pem"),str(folder / "intermediate-ca.pem")).replace(str(folder / "ca.key"),str(folder / "intermediate-ca.key")))
+    openssl("ca","-batch","-config",config,"-extensions","leaf","-startdate","20260101000000Z","-enddate","20350101000000Z",
+        "-in",folder / "intermediate.csr","-out",folder / "intermediate.pem")
+    openssl("x509","-in",folder / "intermediate-ca.pem","-outform","DER","-out",folder / "intermediate-chain.der")
+    for name in ("valid","wrong","expired","future","self","intermediate"):
         openssl("x509","-in",folder / (name+".pem"),"-outform","DER","-out",folder / (name+".der"))
         openssl("pkey","-in",folder / (name+".key"),"-outform","DER","-out",folder / (name+"-key.der"))
+
+class AnchorTests(unittest.TestCase):
+    def test_production_rsa_ec_anchors(self):
+        """Independent DER/SPKI extraction against every generated production root."""
+        import base64
+        import re
+        recipe().build(host=True)
+        generated=(BASE / "source/netsurf/frontends/framebuffer/ciuki/anchors.h").read_text()
+        arrays={name:bytes(map(int,values.split(","))) for name,values in
+            re.findall(r"static const unsigned char (ca_\d+_\w+)\[\] = \{([0-9,]+)\};",generated)}
+        def elements(data):
+            result=[];offset=0
+            while offset<len(data):
+                begin=offset;tag=data[offset];length=data[offset+1];offset+=2
+                if length&128:
+                    count=length&127;self.assertGreater(count,0)
+                    length=int.from_bytes(data[offset:offset+count],"big");offset+=count
+                end=offset+length;self.assertLessEqual(end,len(data))
+                result.append((tag,data[offset:end],data[begin:end]));offset=end
+            return result
+        roots=re.findall(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----",
+            (ROOT / "third_party/cacert/CACERT.PEM").read_text(),re.S)
+        types=set()
+        for i,pem in enumerate(roots):
+            der=base64.b64decode(pem);tbs=elements(elements(der)[0][1])[0][1];fields=elements(tbs)
+            version=1 if fields[0][0]==0xa0 else 0
+            subject=fields[version+4][2];spki=fields[version+5][2]
+            # OpenSSL independently re-encodes each SubjectPublicKeyInfo.
+            cert=subprocess.run(["openssl","x509","-inform","DER","-pubkey","-noout"],input=der,capture_output=True,check=True)
+            public=subprocess.run(["openssl","pkey","-pubin","-outform","DER"],input=cert.stdout,capture_output=True,check=True)
+            self.assertEqual(spki,public.stdout)
+            self.assertEqual(arrays[f"ca_{i}_dn"],subject)
+            key=elements(elements(spki)[0][1]);algorithm=elements(key[0][1]);bits=key[1][1]
+            self.assertEqual(bits[0],0)
+            if algorithm[0][1]==bytes.fromhex("2a864886f70d010101"):
+                types.add("RSA");numbers=elements(elements(bits[1:])[0][1]);n=numbers[0][1].lstrip(b"\0");e=numbers[1][1].lstrip(b"\0")
+                self.assertEqual(arrays[f"ca_{i}_n"],n);self.assertEqual(arrays[f"ca_{i}_e"],e)
+                entry=f"{{{{(unsigned char *)ca_{i}_dn,{len(subject)}}},BR_X509_TA_CA,{{1,{{.rsa={{(unsigned char *)ca_{i}_n,{len(n)},(unsigned char *)ca_{i}_e,{len(e)}}}}}}}}},"
+            else:
+                self.assertEqual(algorithm[0][1],bytes.fromhex("2a8648ce3d0201"));types.add("EC")
+                curve={"2a8648ce3d030107":23,"2b81040022":24,"2b81040023":25}[algorithm[1][1].hex()]
+                self.assertEqual(arrays[f"ca_{i}_q"],bits[1:])
+                entry=f"{{{{(unsigned char *)ca_{i}_dn,{len(subject)}}},BR_X509_TA_CA,{{2,{{.ec={{{curve},(unsigned char *)ca_{i}_q,{len(bits)-1}}}}}}}}},"
+            self.assertIn(entry,generated)
+        self.assertEqual(types,{"RSA","EC"})
+        self.assertIn(f"#define CIUKI_ANCHOR_COUNT {len(roots)}",generated)
+        self.assertEqual(len(arrays),sum(3 if f"ca_{i}_n" in arrays else 2 for i in range(len(roots))))
+        print(f"PASS independent OpenSSL/DER production anchor equivalence: {len(roots)} RSA/EC roots")
 
 class NetworkTests(unittest.TestCase):
     @classmethod
@@ -77,13 +139,17 @@ class NetworkTests(unittest.TestCase):
             "-fsanitize=address,undefined","-fno-sanitize-recover=undefined","-fno-omit-frame-pointer",
             "-I"+str(ROOT),"-I"+str(OUT),"-I"+str(BASE / "prefix/include"),
             "-I"+str(BASE / "source/netsurf/frontends/framebuffer/ciuki")]
+        cls.port_flags=["-DCIUKI_HOST","-include",str(ROOT / "sdk/netsurf/port/host_network.h"),
+            "-I"+str(BASE / "native-headers"),"-I"+str(BASE / "source/netsurf"),
+            "-I"+str(BASE / "source/netsurf/include"),"-I"+str(BASE / "source/netsurf/frontends")]
         cls.libs=[str(BASE / "prefix/lib/libbearssl.a"),str(BASE / "prefix/lib/libz.a"),"-pthread"]
         def compile(name,sources,extra=()):
-            subprocess.run([*cls.flags,*map(str,sources),*cls.libs,*extra,"-o",str(OUT / name)],check=True)
+            subprocess.run([*cls.flags,*(cls.port_flags if name in ("network","tls-limits") else []),*map(str,sources),*cls.libs,*extra,"-o",str(OUT / name)],check=True)
         compile("http",[HERE / "http_test.c",ROOT / "sdk/netsurf/port/http.c"])
+        compile("tls-limits",[HERE / "tls_limits_test.c"])
         compile("dns",[HERE / "dns_test.c",ROOT / "sdk/netsurf/port/dns.c"],
             ["-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo,--wrap=calloc,--wrap=free,--wrap=pthread_create"])
-        cls.wraps=["-Wl,"+",".join("--wrap="+n for n in ("socket","connect","send","recv","close","fcntl","getsockopt","poll","getaddrinfo","freeaddrinfo"))]
+        cls.wraps=["-Wl,"+",".join("--wrap="+n for n in ("socket","connect","send","recv","close","fcntl","getsockopt","poll","getaddrinfo","freeaddrinfo","open"))]
         cls.stack=cls.compile_stack()
         compile("network",[HERE / "network_test.c",*[ROOT / ("sdk/netsurf/port/"+s+".c") for s in ("http","net","tls","dns")],*cls.stack],
             [*cls.wraps,"-Wl,--wrap=clock_gettime,--wrap=getentropy"])
@@ -91,8 +157,8 @@ class NetworkTests(unittest.TestCase):
         objects=[p for p in sorted((source / "build/Linux-framebuffer").glob("*.o"))]
         libraries=["-Wl,--start-group",*[str(p) for p in sorted((BASE / "prefix/lib").glob("*.a")) if p.name!="libnsfb.a"],"-Wl,--end-group",
                    "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-lm","-pthread"]
-        subprocess.run([*cls.flags,str(HERE / "browser_network_test.c"),*map(str,objects),*cls.stack,
-            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main","-o",str(OUT / "browser")],check=True)
+        subprocess.run([*cls.flags,*cls.port_flags,str(HERE / "browser_network_test.c"),*map(str,objects),*cls.stack,
+            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main,--wrap=nsfb_event,--wrap=clock_gettime","-o",str(OUT / "browser")],check=True)
 
     @classmethod
     def compile_stack(cls):
@@ -113,18 +179,23 @@ class NetworkTests(unittest.TestCase):
     def tearDownClass(cls):cls.fixture.cleanup()
 
     def engine(self,mode,path="/"):
-        secure=mode in ("valid","expired","future","wrong","self","tls10")
-        cert="valid" if mode=="tls10" else mode
+        secure=mode in ("valid","expired","future","wrong","self","tls10","tls-reuse","tls-truncated","tls-unsolicited","tls-buffered","tls-recheck","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer")
+        cert="intermediate" if mode in ("intermediate","missing-intermediate","malformed-chain") else mode if mode in ("valid","expired","future","wrong","self") else "valid"
+        if mode=="malformed-chain":
+            (self.folder / "intermediate-chain.der").write_bytes(b"\x30\x03\x02\x01")
+        elif mode=="intermediate":
+            openssl("x509","-in",self.folder / "intermediate-ca.pem","-outform","DER","-out",self.folder / "intermediate-chain.der")
         args=[str(self.folder / (cert+".der")),str(self.folder / (cert+"-key.der"))] if secure else ["-","-"]
         try:
             result=subprocess.run([str(OUT / "network"),mode,"8443" if secure else "9" if mode=="refused" else "8080",path,*args],text=True,capture_output=True,env=SAN,timeout=25)
         except subprocess.TimeoutExpired as error:
             print(error.stdout,error.stderr,flush=True)
             raise
+        print(result.stdout.strip(),flush=True)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        print(result.stdout.strip())
 
     def test_parser(self):subprocess.run([str(OUT / "http")],check=True,env=SAN,timeout=20)
+    def test_certificate_capture_limits(self):subprocess.run([str(OUT / "tls-limits")],check=True,env=SAN,timeout=10)
     def test_dns_worker(self):subprocess.run([str(OUT / "dns")],check=True,env=SAN,timeout=10)
 
     def test_http_engine(self):
@@ -132,29 +203,48 @@ class NetworkTests(unittest.TestCase):
             ("stale","/stale"),("post-stale","/stale"),("truncated","/truncated"),("limit","/large-header"),
             ("timeout","/slow"),("callback-cancel","/slow"),("cancel","/slow")):
             with self.subTest(mode=mode,path=path):self.engine(mode,path)
-        for mode in ("dns","offline","dated","entropy","numeric","refused","pool"):
-            with self.subTest(mode=mode):self.engine(mode)
+        for mode in ("dns","offline","hostname-offline","loopback-offline","dated","fallback-clock","entropy","numeric","refused","pool","fanout","dns-cache","idle-expiry","idle-reuse-expiry","unsolicited","unsolicited-recheck"):
+            with self.subTest(mode=mode):self.engine(mode,"/unsolicited" if mode=="unsolicited" else "/")
 
     def test_bearssl(self):
-        for mode in ("valid","expired","future","wrong","self","tls10"):
-            with self.subTest(mode=mode):self.engine(mode)
+        for mode in ("valid","expired","future","wrong","self","tls10","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer","tls-reuse","tls-truncated","tls-unsolicited","tls-buffered","tls-recheck"):
+            with self.subTest(mode=mode):self.engine(mode,"/tls-truncated" if mode=="tls-truncated" else "/unsolicited" if mode in ("tls-unsolicited","tls-buffered") else "/")
 
-    def browser(self,path):
+    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
             capture=Path(folder) / "page.xrgb"
             result=subprocess.run([str(OUT / "browser"),"-w","640","-h","480",
                 "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,
-                "--ciuki-capture="+str(capture),f"http://192.0.2.1:8080{path}"],capture_output=True,text=True,timeout=25,env=SAN)
-            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                "--ciuki-capture="+str(capture),f"{scheme}://{host}:8080{path}"],capture_output=True,text=True,timeout=25,env=dict(SAN,CIUKI_FIXTURE_MODE=mode))
+            self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
+            if error:self.assert_page_error(result,error)
+            if expected:self.assertIn(expected,result.stdout,result.stdout+result.stderr)
+            print(f"PASS rendered fixture {mode} {path}",flush=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             return result
 
     def test_browser_redirect_cookies_and_errors(self):
-        self.browser("/redirect")
-        result=self.browser("/cookie-cap/0")
-        self.assertIn("fixture_cookie_retention=200",result.stdout)
-        result=self.browser("/loop")
-        self.assertIn("fixture_loop_requests=6",result.stdout)
-        self.browser("/truncated")
+        cases=[("/redirect",{}),
+            ("/cookie-cap/0",{"expected":"fixture_cookie_retention=200"}),
+            ("/loop",{"expected":"fixture_loop_requests=6"}),
+            ("/truncated",{"error":"Truncated HTTP response."}),
+            ("/",{"mode":"hostname-offline","error":"Offline: no usable network address or route."}),
+            ("/",{"mode":"fallback-clock","scheme":"https","error":"HTTPS requires a qualified RTC clock and a correct date (2026 or later). Please set the system clock."})]
+        for path,options in cases:
+            with self.subTest(path=path,options=options):self.browser(path,**options)
+
+    def assert_page_error(self,result,message):
+        from html.parser import HTMLParser
+        class Text(HTMLParser):
+            def __init__(self):super().__init__();self.parts=[]
+            def handle_data(self,data):self.parts.append(data)
+        self.assertIn("fixture_page_begin",result.stdout,result.stdout+result.stderr)
+        page=result.stdout.split("fixture_page_begin\n",1)[1].split("\nfixture_page_end",1)[0]
+        parser=Text();parser.feed(page)
+        self.assertIn(message," ".join(parser.parts))
+
+    def test_navigation_during_blocked_lookup(self):
+        self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1")
 
 if __name__=="__main__":unittest.main()

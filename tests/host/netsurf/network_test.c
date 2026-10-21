@@ -15,13 +15,19 @@
 static const char *mode;
 static unsigned headers,data_events;
 static size_t received;
+static unsigned char payload[64];
+static struct ciuki_tls *last_tls;
 static bool cancel;
+static _Thread_local uint64_t monotonic_offset;
 int __real_clock_gettime(clockid_t,struct timespec *);
 int __wrap_clock_gettime(clockid_t clock,struct timespec *t)
 {
     int r=__real_clock_gettime(clock,t);
+    if(!r && clock==CLOCK_MONOTONIC && monotonic_offset){t->tv_sec+=(time_t)monotonic_offset;monotonic_offset=0;}
     if(!r && clock==CLOCK_REALTIME && !strcmp(mode,"dated"))t->tv_sec=1735689600;
-    if(!r && clock==CLOCK_REALTIME && (!strcmp(mode,"expired")||!strcmp(mode,"valid")||!strcmp(mode,"wrong")||!strcmp(mode,"tls10")||!strcmp(mode,"future")))t->tv_sec=1790000000;
+    if(!r && clock==CLOCK_REALTIME && (!strcmp(mode,"valid")||!strcmp(mode,"expired")||!strcmp(mode,"future")||
+        !strcmp(mode,"wrong")||!strcmp(mode,"tls10")||!strncmp(mode,"tls-",4)||!strcmp(mode,"intermediate")||
+        !strcmp(mode,"missing-intermediate")||!strcmp(mode,"malformed-chain")||!strncmp(mode,"cert-",5)||!strcmp(mode,"fallback-clock")))t->tv_sec=1790000000;
     return r;
 }
 int __real_getentropy(void *,size_t);
@@ -31,7 +37,7 @@ static bool callback(void *ctx,enum ciuki_http_event e,const void *data,size_t n
 {
     (void)ctx;(void)data;
     if(e==CIUKI_HTTP_HEADER){headers++;if(cancel)return false;}
-    if(e==CIUKI_HTTP_DATA){received+=n;data_events++;}
+    if(e==CIUKI_HTTP_DATA){if(received+n<=sizeof(payload))memcpy(payload+received,data,n);received+=n;data_events++;}
     return true;
 }
 static void drive(struct ciuki_net *net,struct ciuki_job *job)
@@ -39,7 +45,7 @@ static void drive(struct ciuki_net *net,struct ciuki_job *job)
     assert(ciuki_net_start(net,job));
     struct timespec start,now;__real_clock_gettime(CLOCK_MONOTONIC,&start);
     while(!job->finished){
-        ciuki_net_poll(net);
+        last_tls=ciuki_net_tls(job);ciuki_net_poll(net);
         if(!strcmp(mode,"timeout") && headers && !job->finished)job->started_ms-=31000;
         if(!strcmp(mode,"cancel") && headers)ciuki_net_cancel(job);
         struct pollfd fds[8];unsigned n=ciuki_net_fds(net,fds);poll(fds,n,1);
@@ -70,6 +76,35 @@ static void pool_checks(struct ciuki_net *net)
     ciuki_net_poll(net);
     for(unsigned i=0;i<8;i++){assert(jobs[i]->finished);ciuki_net_job_free(jobs[i]);}
 }
+static void fanout(struct ciuki_net *net)
+{
+    struct ciuki_request r={.host="fixture.example",.target="/slow",.port=8080};
+    struct ciuki_job *active[2],*queued[1024];size_t n=0;
+    for(unsigned i=0;i<2;i++){active[i]=ciuki_net_job(&r,callback,NULL);assert(active[i] && ciuki_net_start(net,active[i]));}
+    while(n<1024){
+        struct ciuki_job *j=ciuki_net_job(&r,callback,NULL);if(!j)break;
+        assert(!j->http && !j->request && !ciuki_net_start(net,j));queued[n++]=j;
+        assert(ciuki_net_pending_bytes()<=CIUKI_NET_PENDING_BUDGET);
+    }
+    assert(n>100 && n<1024);printf("pending_fanout=%zu pending_bytes=%zu budget=%u\n",n,ciuki_net_pending_bytes(),CIUKI_NET_PENDING_BUDGET);
+    for(size_t i=0;i<n;i++)ciuki_net_job_free(queued[i]);
+    for(unsigned i=0;i<2;i++){assert(active[i]->request_bytes<1024);ciuki_net_cancel(active[i]);ciuki_net_job_free(active[i]);}
+    assert(!ciuki_net_pending_bytes());
+}
+static void dns_cache(struct ciuki_net *net)
+{
+    extern void fixture_dns_expire(void),fixture_dns_change(void);
+    extern unsigned fixture_dns_queries(void);
+    struct ciuki_request r={.host="fixture.example",.target="/stale",.port=8080};unsigned queries=0;
+    for(unsigned step=0;step<4;step++){
+        if(step==2)fixture_dns_expire();if(step==3)fixture_dns_change();
+        struct ciuki_job *j=ciuki_net_job(&r,callback,NULL);assert(j);drive(net,j);assert(!j->error && j->http->done);
+        unsigned after=fixture_dns_queries();
+        if(step==1)assert(after==queries);else assert(after>queries);
+        queries=after;ciuki_net_job_free(j);usleep(500000);ciuki_net_service_idle(net);
+    }
+    puts("PASS DNS TTL expiry/cache hit/server generation change through fetcher");
+}
 int main(int argc,char **argv)
 {
     assert(argc==6);mode=argv[1];
@@ -82,25 +117,53 @@ int main(int argc,char **argv)
     if(!strcmp(mode,"pool")){
         pool_checks(net);ciuki_net_destroy(net);usleep(20000);fixture_end();puts("PASS eight connections/two per origin/cancellation/request bounds");return 0;
     }
-    bool secure=!strcmp(mode,"valid")||!strcmp(mode,"expired")||!strcmp(mode,"future")||!strcmp(mode,"wrong")||!strcmp(mode,"self")||!strcmp(mode,"tls10")||!strcmp(mode,"dated")||!strcmp(mode,"entropy")||!strcmp(mode,"numeric");
+    if(!strcmp(mode,"fanout")||!strcmp(mode,"dns-cache")){
+        if(!strcmp(mode,"fanout"))fanout(net);else dns_cache(net);
+        ciuki_net_destroy(net);usleep(20000);fixture_end();return 0;
+    }
+    bool secure=!strcmp(mode,"valid")||!strcmp(mode,"expired")||!strcmp(mode,"future")||!strcmp(mode,"wrong")||!strcmp(mode,"self")||!strcmp(mode,"tls10")||!strcmp(mode,"dated")||!strcmp(mode,"entropy")||!strcmp(mode,"numeric")||!strcmp(mode,"fallback-clock")||!strncmp(mode,"tls-",4)||!strcmp(mode,"intermediate")||!strcmp(mode,"missing-intermediate")||!strcmp(mode,"malformed-chain")||!strcmp(mode,"cert-depth")||!strcmp(mode,"cert-buffer");
     struct ciuki_request request={.host=!strcmp(mode,"numeric")?"127.0.0.1":!strcmp(mode,"offline")?"192.0.2.1":"fixture.example",.target=argv[3],.port=(unsigned)atoi(argv[2]),.tls=secure};
+    if(!strcmp(mode,"loopback-offline"))request.host="localhost";
     if(!strcmp(mode,"post"))request.post="dog=Ciuki&step=M2";
     cancel=!strcmp(mode,"callback-cancel");
     struct ciuki_job *job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")){
+    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")){
         if(job->error)fprintf(stderr,"unexpected: %s\n",job->error);
-        assert(!job->error && job->http.done && received==5);
-        if(!strcmp(mode,"reuse")){
+        assert(!job->error && job->http->done && received==5 && !memcmp(payload,"Ciuki",5));
+        if(!strcmp(mode,"reuse")||!strcmp(mode,"tls-reuse")){
             ciuki_net_job_free(job);received=0;
             job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-            assert(job->pooled && !job->error && received==5 && fixture_connections()==1);
+            assert(job->pooled && !job->error && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==1);
+        }
+        if(!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")){
+            extern void fixture_unsolicited(void);
+            ciuki_net_job_free(job);received=0;usleep(500000);
+            job=ciuki_net_job(&request,callback,NULL);assert(job && ciuki_net_start(net,job) && job->pooled && !job->sent);
+            fixture_unsolicited();usleep(500000);drive(net,job);
+            assert(!job->error && job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
+        }
+        if(!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")){
+            ciuki_net_job_free(job);received=0;
+            struct pollfd fds[8];assert(ciuki_net_fds(net,fds)==1 && (fds[0].events&POLLIN));
+            if(strstr(mode,"expiry"))monotonic_offset=16;else usleep(500000);
+            if(!strcmp(mode,"tls-buffered")){
+                assert(last_tls);size_t bytes=0;const unsigned char *app=NULL;
+                for(unsigned tries=0;tries<1000;tries++){
+                    size_t budget=CIUKI_HTTP_SLICE;assert(ciuki_tls_pump(last_tls,fds[0].fd,&budget)==CIUKI_TLS_OK);
+                    app=ciuki_tls_read(last_tls,&bytes);if(app && bytes)break;usleep(1000);
+                }
+                assert(app && bytes);unsigned char byte;assert(recv(fds[0].fd,&byte,1,MSG_PEEK|MSG_DONTWAIT)<0 && errno==EAGAIN);
+            }
+            if(strcmp(mode,"idle-reuse-expiry")){ciuki_net_service_idle(net);assert(!ciuki_net_fds(net,fds));}
+            request.target="/";job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
+            assert(!job->error && !job->pooled && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
         }
         if(!strcmp(mode,"stale")||!strcmp(mode,"post-stale")){
             ciuki_net_job_free(job);received=0;usleep(500000);
             if(!strcmp(mode,"post-stale"))request.post="dog=Ciuki&step=M2";
             job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-            if(!strcmp(mode,"stale"))assert(!job->error && job->retried && received==5 && fixture_connections()==2);
-            else assert(job->error && !job->retried && fixture_connections()==1);
+            if(!strcmp(mode,"stale"))assert(!job->error && !job->pooled && !job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
+            else assert(!job->error && !job->pooled && !job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
         }
     } else if(!strcmp(mode,"callback-cancel")||!strcmp(mode,"cancel"))assert(job->cancelled && !received);
     else {
@@ -109,7 +172,11 @@ int main(int argc,char **argv)
         if(!strcmp(mode,"expired")||!strcmp(mode,"future"))assert(job->tls_error==CIUKI_TLS_DATE);
         if(!strcmp(mode,"self"))assert(job->tls_error==CIUKI_TLS_CERT);
         if(!strcmp(mode,"tls10"))assert(job->tls_error==CIUKI_TLS_PROTOCOL);
-        if(!strcmp(mode,"dated"))assert(job->tls_error==CIUKI_TLS_CLOCK);
+        if(!strcmp(mode,"dated")||!strcmp(mode,"fallback-clock"))assert(job->tls_error==CIUKI_TLS_CLOCK);
+        if(!strcmp(mode,"malformed-chain")||!strcmp(mode,"missing-intermediate")||!strcmp(mode,"cert-depth")||!strcmp(mode,"cert-buffer"))assert(job->tls_error==CIUKI_TLS_CERT);
+        if(!strcmp(mode,"tls-truncated"))assert(job->tls_error==CIUKI_TLS_IO || strstr(job->error,"Truncated"));
+        if(!strcmp(mode,"hostname-offline"))assert(strstr(job->error,"Offline:"));
+        if(!strcmp(mode,"loopback-offline"))assert(strstr(job->error,"refused") && !strstr(job->error,"Offline:"));
         if(!strcmp(mode,"entropy"))assert(job->tls_error==CIUKI_TLS_ENTROPY);
     }
     ciuki_net_job_free(job);ciuki_net_destroy(net);

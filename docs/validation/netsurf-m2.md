@@ -83,3 +83,50 @@ not distinguish missing interface configuration from other DNS errors or
 timeouts, and this base's netctl is ENOSYS. A lead decision on resolver error
 propagation or a later read-only network-status query is still needed to
 classify that state before DNS without an unrelated connectivity probe.
+
+
+## Amendment 1 research and implementation (2026-10-21)
+
+- [RFC 9112 section 9.2](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.2):
+  an idle connection has no outstanding response. Monitor idle descriptors,
+  reject buffered TLS plaintext and socket data/EOF/error, recheck before
+  admission and first send, and expire idle handles on every UI turn.
+- [zlib 1.3.1 manual, inflate](https://zlib.net/manual.html): `Z_BUF_ERROR`
+  without byte/output progress is nonfatal when more input is needed. A parser
+  transition from chunk data to framing also counts as progress; the 16 KiB
+  output slice still applies and gzip trailers/checksums remain mandatory.
+- [BearSSL validation time API](https://bearssl.org/apidoc/bearssl__x509_8h.html):
+  supply UTC days/seconds only after validating clock provenance and date.
+  CiukiOS `uname().realtime_source == 1` identifies a qualified RTC sample;
+  source 0 is the kernel build-epoch fallback and cannot authorize HTTPS.
+- [NetSurf 3.11 pinned source](https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz),
+  `content/urldb.c`, `urldb_iterate_entries_path`: cookie callbacks previously
+  visited only leaves, missing domain cookies on the host path root after URL
+  insertion. Patch `0004-m2-amendment-1.patch` visits cookies on every node,
+  preserving URL traversal and callback early termination.
+
+Pending fetch metadata and owned input snapshots share a 128 KiB process-wide
+budget. Full HTTP parsers and exactly sized wire requests are allocated only
+when a connection slot is available; input snapshots are then released.
+Allocation failure remains an ordinary fetch error. No kernel ABI changes.
+Offline classification queries read-only `/dev/net` `NET_GET_STATE` after a
+failed external lookup; numeric loopback and `localhost` remain usable.
+Detailed host evidence and remaining lead validation are recorded in
+`build/codex/f6-15-report.md`.
+
+Amendment host discovery ran 26 tests in 653.529 s. All added behavioral cases,
+all three M1 pixel goldens, all 121 production-anchor comparisons and both clean
+target application builds reached the expected assertions. The suite exits 1:
+52 subcase failures and 12 errors all correspond to LeakSanitizer's fatal ptrace
+restriction (64 diagnostics). ASan/UBSan and leak detection remain enabled;
+there is no green leak-check claim. The new hostname-offline and RTC-fallback
+checks assert the error text in the currently rendered browser content.
+The read-only status query resolves the base delivery's offline-classification
+item above; no resolver ABI or network configuration authority was added.
+
+`nice -n 19 make CAP= apps` also passes for the amended source, including native
+link/import/ELF checks and the application manifest. NetSurf ELF SHA-256:
+`774c148a94de9de167f1a2c4c4e93ac1f23519e244bb3ab0fdfcd2e53a671adf`;
+13,293,220 file bytes and 3,031,040 inspected load-memory bytes. Host and target
+anchor-table hashes remain identical to the base delivery. No image, QEMU or
+hardware result is claimed.

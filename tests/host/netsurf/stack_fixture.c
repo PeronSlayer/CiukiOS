@@ -18,17 +18,21 @@
 #undef main
 #undef net_stack_transmit
 static const char *fixture_mode;
-static br_x509_certificate server_certificate;
+static br_x509_certificate server_certificates[12];
+static unsigned server_depth=1;
+static unsigned char *intermediate_data;
+static _Atomic bool lookup_entered,lookup_allow;
 static br_skey_decoder_context server_key;
 static unsigned char *certificate_data,*key_data;
 static _Atomic unsigned http_requests,connections_seen,loop_requests;
+static bool fixture_offline;
 struct peer {
     unsigned port;
     uint32_t next,ack;
     unsigned char frame[54];
     char request[CIUKI_SOCKET_IO_MAX*3+1];size_t request_bytes;
     unsigned char response[40000];size_t response_bytes,response_sent;
-    bool tls,waiting,close_after;
+    bool tls,waiting,close_after,unsolicited;
     br_ssl_server_context *server;
     unsigned char *io;
 };
@@ -45,7 +49,9 @@ static void response(struct peer *p)
     if(!strcmp(path,"/loop"))loop_requests++;
     const char *wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nCiuki";
     if(!strcmp(path,"/stale"))p->close_after=true;
+    if(!strcmp(path,"/unsolicited"))p->unsolicited=true;
     if(!strcmp(path,"/chunked"))wire="HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\nCi\r\n3\r\nuki\r\n0\r\nX-Test: end\r\n\r\n";
+    else if(!strcmp(path,"/tls-truncated")){wire="HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nCiuki";p->close_after=true;}
     else if(!strcmp(path,"/truncated")){wire="HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nCiuki";p->close_after=true;}
     else if(!strcmp(path,"/slow"))wire="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n";
     else if(!strcmp(path,"/loop"))wire="HTTP/1.1 302 Loop\r\nLocation: /loop\r\nContent-Length: 0\r\n\r\n";
@@ -53,7 +59,7 @@ static void response(struct peer *p)
     if(!strncmp(path,"/cookie-cap/",12)){
         unsigned hop=(unsigned)strtoul(path+12,NULL,10);CHECK(hop<3);
         size_t used=(size_t)snprintf((char *)p->response,sizeof(p->response),"HTTP/1.1 302 Redirect\r\nLocation: /%s\r\n",hop==0?"cookie-cap/1":hop==1?"cookie-cap/2":"cookie-count");
-        for(unsigned i=0;i<100;i++)used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"Set-Cookie: cookie%u=x; Path=/\r\n",hop*100+i);
+        for(unsigned i=0;i<100;i++)used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"Set-Cookie: cookie%u=x; Domain=fixture.example; Path=/\r\n",hop*100+i);
         used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"Content-Length: 0\r\n\r\n");p->response_bytes=used;
     } else if(!strcmp(path,"/cookie")||!strcmp(path,"/page")||!strcmp(path,"/cookie-count")){
         const char *page="<!doctype html><title>HTTP</title><h1>Ciuki</h1>";
@@ -97,6 +103,10 @@ static void packet(struct peer *p,const void *data,unsigned n,bool fin)
 static void peer_output(struct peer *p)
 {
     if(p->waiting)return;
+    if(p->unsolicited && p->response_sent==p->response_bytes){
+        const char *extra="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nWRONG";
+        memcpy(p->response,extra,strlen(extra));p->response_bytes=strlen(extra);p->response_sent=0;p->unsolicited=false;
+    }
     if(!p->tls){
         size_t n=p->response_bytes-p->response_sent;if(n>1024)n=1024;
         if(n){packet(p,p->response+p->response_sent,(unsigned)n,false);p->response_sent+=n;}
@@ -116,6 +126,7 @@ static void peer_output(struct peer *p)
             unsigned char *app=br_ssl_engine_sendapp_buf(&p->server->eng,&n);size_t left=p->response_bytes-p->response_sent;if(n>left)n=left;
             memcpy(app,p->response+p->response_sent,n);p->response_sent+=n;br_ssl_engine_sendapp_ack(&p->server->eng,n);br_ssl_engine_flush(&p->server->eng,0);continue;
         }
+        if(p->close_after && p->response_sent==p->response_bytes){packet(p,NULL,0,true);p->close_after=false;}
         return;
     }
 }
@@ -137,7 +148,7 @@ int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
         connections_seen++;p->tls=get16(f+36)==8443;
         if(p->tls){
             p->server=calloc(1,sizeof(*p->server));p->io=malloc(BR_SSL_BUFSIZE_BIDI);CHECK(p->server && p->io);
-            br_ssl_server_init_full_ec(p->server,&server_certificate,1,BR_KEYTYPE_EC,br_skey_decoder_get_ec(&server_key));
+            br_ssl_server_init_full_ec(p->server,server_certificates,server_depth,BR_KEYTYPE_EC,br_skey_decoder_get_ec(&server_key));
             br_ssl_engine_set_versions(&p->server->eng,!strcmp(fixture_mode,"tls10")?BR_TLS10:BR_TLS12,!strcmp(fixture_mode,"tls10")?BR_TLS10:BR_TLS12);
             unsigned char seed[32];CHECK(!getentropy(seed,sizeof(seed)));br_ssl_engine_inject_entropy(&p->server->eng,seed,sizeof(seed));
             br_ssl_engine_set_buffer(&p->server->eng,p->io,BR_SSL_BUFSIZE_BIDI,1);CHECK(br_ssl_server_reset(p->server));
@@ -176,7 +187,7 @@ ssize_t __wrap_recv(int fd,void *s,size_t n,int flags)
 { if(n>311)n=311;return result(net_socket_io(&client,fd,s,(unsigned)n,(unsigned)flags,NULL,false,NULL)); }
 int __real_close(int);
 int __wrap_close(int fd)
-{ if(fd>=32 && fd<CIUKI_OPEN_MAX && client.fds[fd].object)return result(file_close(&client,fd));return __real_close(fd); }
+{ if(fd==10000)return 0;if(fd>=32 && fd<CIUKI_OPEN_MAX && client.fds[fd].object)return result(file_close(&client,fd));return __real_close(fd); }
 int __wrap_fcntl(int fd,int cmd,...)
 {
     uint32_t *flags=net_socket_flags(file_fd_object(&client,fd));CHECK(flags);
@@ -196,7 +207,10 @@ int __wrap_poll(struct pollfd *fds,nfds_t n,int timeout)
 int __wrap_getaddrinfo(const char *name,const char *service,const struct addrinfo *hints,struct addrinfo **out)
 {
     (void)service;(void)hints;*out=NULL;uint32_t address;int status;
-    int e=net_resolve(&client,name,&address,&status);
+    if(!strcmp(name,"blocked.example")){
+        lookup_entered=true;while(!lookup_allow)cu_sleep(1);
+    }
+    int e=0;if(!strcmp(name,"localhost")){address=PP_HTONL(0x7f000001);status=0;}else e=net_resolve(&client,name,&address,&status);
     if(e){errno=-e;return EAI_SYSTEM;}if(status)return status==2?EAI_AGAIN:EAI_NONAME;
     struct addrinfo *a=calloc(1,sizeof(*a));struct sockaddr_in *s=calloc(1,sizeof(*s));CHECK(a && s);
     s->sin_family=AF_INET;s->sin_addr.s_addr=address;a->ai_family=AF_INET;a->ai_socktype=SOCK_STREAM;a->ai_addr=(void *)s;a->ai_addrlen=16;*out=a;return 0;
@@ -213,9 +227,15 @@ void fixture_begin(const char *mode,const char *cert,const char *key)
     for(unsigned i=0;i<32;i++)fds[i].object=&reserved;
     ciuki_lwip_seed(0x12345678);CHECK(!net_stack_init());
     CHECK(!net_stack_attach(0,client_mac,true));check_address(PP_HTONL(0xc0000264));
-    if(!strcmp(mode,"offline")){net_stack_link(0,false);check_address(0);}
+    if(!strcmp(mode,"offline")||!strcmp(mode,"hostname-offline")||!strcmp(mode,"loopback-offline")){fixture_offline=true;net_stack_link(0,false);check_address(0);}
     if(strcmp(cert,"-")){
-        server_certificate.data=certificate_data=load(cert,&server_certificate.data_len);
+        server_certificates[0].data=certificate_data=load(cert,&server_certificates[0].data_len);
+        if(!strcmp(mode,"intermediate")||!strcmp(mode,"malformed-chain")){
+            char path[1024];CHECK(strlen(cert)+16<sizeof(path));strcpy(path,cert);strcpy(strrchr(path,'.'),"-chain.der");
+            server_certificates[1].data=intermediate_data=load(path,&server_certificates[1].data_len);server_depth=2;
+        }
+        if(!strcmp(mode,"cert-depth")){server_depth=11;for(unsigned i=1;i<server_depth;i++)server_certificates[i]=server_certificates[0];}
+        if(!strcmp(mode,"cert-buffer")){size_t old=server_certificates[0].data_len;server_certificates[0].data_len=32769;certificate_data=realloc(certificate_data,32769);CHECK(certificate_data);memset(certificate_data+old,0,32769-old);server_certificates[0].data=certificate_data;}
         size_t bytes;key_data=load(key,&bytes);br_skey_decoder_init(&server_key);br_skey_decoder_push(&server_key,key_data,bytes);CHECK(br_skey_decoder_get_ec(&server_key));
     }
 }
@@ -227,5 +247,35 @@ void fixture_end(void)
     for(unsigned i=32;i<CIUKI_OPEN_MAX;i++)if(fds[i].object)file_close(&client,(int)i);
     cu_sleep(30);cu_host_shutdown();
     for(unsigned i=0;i<16;i++){free(peers[i].server);free(peers[i].io);}
-    free(certificate_data);free(key_data);
+    free(certificate_data);free(key_data);free(intermediate_data);
 }
+
+/* Native read-only status boundary: production net.c opens /dev/net and
+ * validates the versioned record before using address_configured. */
+int __real_open(const char *,int,...);
+int __wrap_open(const char *path,int flags,...)
+{
+    if(!strcmp(path,"/dev/net")){CHECK(flags==O_RDONLY);return 10000;}
+    va_list a;va_start(a,flags);mode_t mode=(flags&O_CREAT)?(mode_t)va_arg(a,int):0;va_end(a);
+    return __real_open(path,flags,mode);
+}
+int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
+{
+    CHECK(fd==10000 && op==NET_GET_STATE && size==sizeof(struct ciuki_net_state));
+    struct ciuki_net_state *state=record;CHECK(state->version==CIUKI_NET_VERSION && state->size==size);
+    state->address_configured=!fixture_offline;return 0;
+}
+bool ciuki_host_clock_rtc(void) { return strcmp(fixture_mode,"fallback-clock")!=0; }
+bool fixture_lookup_blocked(void) { return lookup_entered; }
+void fixture_lookup_release(void) { lookup_allow=true; }
+static void expire_dns(void *unused) { (void)unused;for(unsigned i=0;i<61;i++)dns_tmr(); }
+void fixture_dns_expire(void) { CHECK(tcpip_callback_wait(expire_dns,NULL)==ERR_OK); }
+void fixture_dns_change(void) { CHECK(tcpip_callback_wait(dns_servers_reset,NULL)==ERR_OK); }
+unsigned fixture_dns_queries(void) { return dns_queries; }
+
+static void inject_unsolicited(void *unused)
+{
+    (void)unused;
+    for(unsigned i=0;i<16;i++)if(peers[i].port){peers[i].unsolicited=true;peer_output(&peers[i]);}
+}
+void fixture_unsolicited(void) { CHECK(tcpip_callback_wait(inject_unsolicited,NULL)==ERR_OK); }

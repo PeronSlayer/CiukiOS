@@ -78,8 +78,29 @@ static void expansion(bool excessive)
     else assert(ok && p.done && r.bytes==128*1024 && turns>=8);
     ciuki_http_destroy(&p);
 }
+/* Exactly one decoded slice, with the gzip trailer in the next HTTP chunk.
+ * Exercise every transport split and require the checksum before reuse. */
+static void chunked_slice(void)
+{
+    unsigned char input[CIUKI_HTTP_SLICE],encoded[256],wire[1024];memset(input,'x',sizeof(input));
+    z_stream z={0};assert(deflateInit2(&z,9,Z_DEFLATED,31,8,Z_DEFAULT_STRATEGY)==Z_OK);
+    z.next_in=input;z.avail_in=sizeof(input);z.next_out=encoded;z.avail_out=sizeof(encoded);
+    assert(deflate(&z,Z_FINISH)==Z_STREAM_END);size_t n=z.total_out;deflateEnd(&z);assert(n>8);
+    size_t bytes=(size_t)snprintf((char *)wire,sizeof(wire),"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n%zx\r\n",n-8);
+    memcpy(wire+bytes,encoded,n-8);bytes+=n-8;memcpy(wire+bytes,"\r\n8\r\n",5);bytes+=5;
+    memcpy(wire+bytes,encoded+n-8,8);bytes+=8;memcpy(wire+bytes,"\r\n0\r\n\r\n",7);bytes+=7;
+    for(size_t split=1;split<=bytes;split++){
+        struct ciuki_http p;struct received r={0};ciuki_http_init(&p,false,callback,&r);
+        for(size_t i=0;i<bytes;i+=split){
+            assert(ciuki_http_feed(&p,wire+i,bytes-i<split?bytes-i:split));
+            unsigned turns=0;while(ciuki_http_pending(&p)){assert(ciuki_http_drain(&p));assert(++turns<8);}
+        }
+        assert(p.done && !p.error && r.bytes==sizeof(input) && ciuki_http_reusable(&p));ciuki_http_destroy(&p);
+    }
+}
 int main(void)
 {
+    chunked_slice();
     example("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nCiuki","Ciuki",true);
     example("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;x=1\r\nCi\r\n3\r\nuki\r\n0\r\nX-Test: end\r\n\r\n","Ciuki",true);
     example("HTTP/1.0 200 OK\r\n\r\nCiuki","Ciuki",false);

@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: MIT */
 #include "net.h"
 #include "dns.h"
+#include <ciuki/net.h>
+#ifdef CIUKI_HOST
+int ciuki_devctl(int,uint32_t,void *,uint32_t) __attribute__((weak));
+#endif
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <errno.h>
@@ -32,7 +36,7 @@ static bool text(const char *s,size_t limit,bool target)
 static bool append(struct ciuki_job *j,const char *s,size_t n)
 {
     if(n>CIUKI_HTTP_HEADERS+CIUKI_HTTP_POST-j->request_bytes)return false;
-    memcpy(j->request+j->request_bytes,s,n);j->request_bytes+=n;return true;
+    if(j->request)memcpy(j->request+j->request_bytes,s,n);j->request_bytes+=n;return true;
 }
 static bool request(struct ciuki_job *j,const struct ciuki_request *r)
 {
@@ -68,17 +72,46 @@ static bool request(struct ciuki_job *j,const struct ciuki_request *r)
     if(!append(j,"\r\n",2)||j->request_bytes>CIUKI_HTTP_HEADERS)return false;
     return !r->post || append(j,r->post,strlen(r->post));
 }
+/* Pending accounting includes metadata and all caller-owned input copies.
+ * NetSurf may fan out resources before any connection slot is available. */
+static size_t pending_bytes;
+size_t ciuki_net_pending_bytes(void) { return pending_bytes; }
+static char *copy_text(char **out,const char *s)
+{ if(!s)return NULL;char *p=*out;size_t n=strlen(s)+1;memcpy(p,s,n);*out+=n;return p; }
+static void release_pending(struct ciuki_job *j)
+{ pending_bytes-=j->pending_charge;j->pending_charge=0;free(j->snapshot);j->snapshot=NULL;memset(&j->pending,0,sizeof(j->pending)); }
 struct ciuki_job *ciuki_net_job(const struct ciuki_request *r,ciuki_http_callback cb,void *ctx)
 {
+    if(sizeof(struct ciuki_job)>CIUKI_NET_PENDING_BUDGET-pending_bytes)return NULL;
     struct ciuki_job *j=calloc(1,sizeof(*j));if(!j)return NULL;
-    ciuki_http_init(&j->http,r->head,cb,ctx);
-    j->request=malloc(CIUKI_HTTP_HEADERS+CIUKI_HTTP_POST);
-    if(!j->request){free(j);return NULL;}
-    if(!request(j,r))j->error="Unsupported or oversized HTTP request (URL, headers, credentials, or form).";
+    j->pending_charge=sizeof(*j);pending_bytes+=j->pending_charge;
+    j->callback=cb;j->context=ctx;
+    if(!request(j,r)){j->error="Unsupported or oversized HTTP request (URL, headers, credentials, or form).";return j;}
+    size_t fields=0,bytes=0;
+    if(r->headers)while(r->headers[fields])bytes+=strlen(r->headers[fields++])+1;
+    bytes+=(fields+1)*sizeof(char *)+strlen(r->target)+1;
+    if(r->post)bytes+=strlen(r->post)+1;
+    if(r->cookie)bytes+=strlen(r->cookie)+1;
+    if(bytes>CIUKI_NET_PENDING_BUDGET-pending_bytes || !(j->snapshot=malloc(bytes))){ciuki_net_job_free(j);return NULL;}
+    j->pending_charge+=bytes;pending_bytes+=bytes;j->pending=*r;j->pending.host=j->host;
+    const char **headers=j->snapshot;char *out=(char *)(headers+fields+1);
+    for(size_t i=0;i<fields;i++)headers[i]=copy_text(&out,r->headers[i]);headers[fields]=NULL;
+    j->pending.headers=headers;j->pending.target=copy_text(&out,r->target);
+    j->pending.post=copy_text(&out,r->post);j->pending.cookie=copy_text(&out,r->cookie);
     return j;
 }
 void ciuki_net_job_free(struct ciuki_job *j)
-{ if(j){ciuki_http_destroy(&j->http);free(j->request);free(j);} }
+{ if(j){release_pending(j);if(j->http)ciuki_http_destroy(j->http);free(j->http);free(j->request);free(j);} }
+static bool admit(struct ciuki_job *j)
+{
+    size_t bytes=j->request_bytes;
+    j->http=malloc(sizeof(*j->http));j->request=malloc(bytes);
+    if(!j->http || !j->request){free(j->http);j->http=NULL;free(j->request);j->request=NULL;j->error="Unable to allocate HTTP request buffers.";return false;}
+    ciuki_http_init(j->http,j->pending.head,j->callback,j->context);
+    j->request_bytes=0;
+    if(!request(j,&j->pending))j->error="Unable to prepare HTTP request.";
+    release_pending(j);return !j->error;
+}
 struct ciuki_net *ciuki_net_create(const br_x509_trust_anchor *anchors,size_t count)
 {
     struct ciuki_net *n=calloc(1,sizeof(*n));if(!n)return NULL;
@@ -104,6 +137,42 @@ void ciuki_net_cancel(struct ciuki_job *j)
     if(j->connection && !j->owner->polling)close_connection(j->owner,j->connection);
     else if(!j->started)j->finished=true;
 }
+/* With no outstanding request, any queued bytes/EOF/error disqualify reuse.
+ * Checking the TLS engine first also catches plaintext from a buffered record.
+ * Rejecting pending ciphertext conservatively avoids interpreting alerts or
+ * application records as a response to the next URL (RFC 9112 section 9.2). */
+static bool clean_socket(struct ciuki_connection *c)
+{
+    if(c->tls){
+        size_t bytes;const unsigned char *app=ciuki_tls_read(c->tls,&bytes);
+        if((app && bytes) || (ciuki_tls_state(c->tls)&(BR_SSL_CLOSED|BR_SSL_SENDREC)))return false;
+    }
+    struct pollfd fd={c->fd,POLLIN,0};
+    int ready=poll(&fd,1,0);
+    if(ready<0 || fd.revents)return false;
+    unsigned char byte;ssize_t count=recv(c->fd,&byte,1,MSG_PEEK|MSG_DONTWAIT);
+    return count<0 && (errno==EAGAIN || errno==EWOULDBLOCK);
+}
+void ciuki_net_service_idle(struct ciuki_net *n)
+{
+    uint64_t now=now_ms();
+    for(unsigned i=0;i<8;i++){
+        struct ciuki_connection *c=&n->connections[i];
+        if(c->state==IDLE && (!now || now-c->idle_ms>=15000 || !clean_socket(c)))close_connection(n,c);
+    }
+}
+static bool offline(void)
+{
+#ifdef CIUKI_HOST
+    if(!ciuki_devctl)return false;
+#endif
+    int fd=open("/dev/net",O_RDONLY);if(fd<0)return false;
+    struct ciuki_net_state state={.version=CIUKI_NET_VERSION,.size=sizeof(state)};
+    int result=ciuki_devctl(fd,NET_GET_STATE,&state,sizeof(state));close(fd);
+    return !result && !state.address_configured;
+}
+static bool loopback_name(const char *host)
+{ return !strcasecmp(host,"localhost") || !strcasecmp(host,"localhost."); }
 static bool origin(const struct ciuki_connection *c,const struct ciuki_job *j)
 { return c->state && c->port==j->port && c->secure==j->secure && !strcmp(c->host,j->host); }
 static void io_error(struct ciuki_job *j,int error)
@@ -134,12 +203,13 @@ static bool resolve(struct ciuki_net *n,struct ciuki_connection *c)
 bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
 {
     if(j->started)return true;
+    ciuki_net_service_idle(n);
     if(j->cancelled){j->started=j->finished=true;return true;}
     if(j->secure){
         uint32_t days,seconds;
         if(!ciuki_tls_clock(&days,&seconds)){j->tls_error=CIUKI_TLS_CLOCK;j->error=ciuki_tls_message(j->tls_error);}
     }
-    if(j->error){j->started=j->finished=true;return true;}
+    if(j->error){release_pending(j);j->started=j->finished=true;return true;}
     struct ciuki_connection *slot=NULL,*idle=NULL;unsigned active=0;
     for(unsigned i=0;i<8;i++){
         struct ciuki_connection *c=&n->connections[i];
@@ -153,6 +223,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     if(idle)slot=idle;
     if(!slot)for(unsigned i=0;i<8;i++)if(n->connections[i].state==IDLE){slot=&n->connections[i];close_connection(n,slot);break;}
     if(!slot)return false;
+    if(!admit(j)){release_pending(j);j->started=j->finished=true;return true;}
     j->started=true;j->started_ms=now_ms();j->owner=n;j->connection=slot;slot->job=j;
     if(!idle)slot->state=RESOLVING;
     if(!j->started_ms){j->error="Monotonic system clock is unavailable.";return true;}
@@ -168,7 +239,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
 static void finish(struct ciuki_net *n,struct ciuki_connection *c)
 {
     struct ciuki_job *j=c->job;
-    bool keep=!j->cancelled && !j->error && j->sent==j->request_bytes && ciuki_http_reusable(&j->http);
+    bool keep=!j->cancelled && !j->error && j->sent==j->request_bytes && ciuki_http_reusable(j->http);
     unsigned idle=0;for(unsigned i=0;i<8;i++)if(n->connections[i].state==IDLE)idle++;
     if(keep && idle<2){j->finished=true;j->connection=NULL;c->job=NULL;c->state=IDLE;c->idle_ms=now_ms();}
     else close_connection(n,c);
@@ -176,16 +247,20 @@ static void finish(struct ciuki_net *n,struct ciuki_connection *c)
 static void transfer(struct ciuki_connection *c,unsigned char *buffer)
 {
     struct ciuki_job *j=c->job;size_t budget=CIUKI_HTTP_SLICE;
-    if(ciuki_http_pending(&j->http)){
-        ciuki_http_drain(&j->http);
-        if(j->http.error)j->error=j->http.error;
-        if(j->http.cancelled)j->cancelled=true;
+    if(j->pooled && !j->sent && !clean_socket(c)){io_error(j,ECONNRESET);return;}
+    if(ciuki_http_pending(j->http)){
+        ciuki_http_drain(j->http);
+        if(j->http->error)j->error=j->http->error;
+        if(j->http->cancelled)j->cancelled=true;
         return;
     }
     if(c->tls){
         j->tls_error=ciuki_tls_pump(c->tls,c->fd,&budget);
-        if(j->tls_error==CIUKI_TLS_EOF){ciuki_http_eof(&j->http);j->tls_error=CIUKI_TLS_OK;if(j->http.error)j->error=j->http.error;return;}
+        if(j->tls_error==CIUKI_TLS_EOF){ciuki_http_eof(j->http);j->tls_error=CIUKI_TLS_OK;if(j->http->error)j->error=j->http->error;return;}
         if(j->tls_error){j->error=ciuki_tls_message(j->tls_error);return;}
+        /* The pump may have decrypted application data since the first idle
+         * check. It still cannot belong to a request we have not sent. */
+        if(j->pooled && !j->sent && !clean_socket(c)){io_error(j,ECONNRESET);return;}
         size_t bytes;unsigned char *out=ciuki_tls_write(c->tls,&bytes);
         if(out && j->sent<j->request_bytes){
             size_t count=j->request_bytes-j->sent;if(count>bytes)count=bytes;if(count>CIUKI_HTTP_SLICE)count=CIUKI_HTTP_SLICE;
@@ -194,7 +269,7 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         const unsigned char *in=ciuki_tls_read(c->tls,&bytes);
         if(in && bytes){
             if(bytes>CIUKI_HTTP_SLICE)bytes=CIUKI_HTTP_SLICE;
-            ciuki_http_feed(&j->http,in,bytes);ciuki_tls_read_ack(c->tls,bytes);
+            ciuki_http_feed(j->http,in,bytes);ciuki_tls_read_ack(c->tls,bytes);
         }
     } else {
         if(j->sent<j->request_bytes){
@@ -205,21 +280,22 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         }
         if(budget){
             ssize_t r=recv(c->fd,buffer,budget,0);
-            if(r>0)ciuki_http_feed(&j->http,buffer,(size_t)r);
-            else if(!r)ciuki_http_eof(&j->http);
+            if(r>0)ciuki_http_feed(j->http,buffer,(size_t)r);
+            else if(!r)ciuki_http_eof(j->http);
             else if(errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR){io_error(j,errno);return;}
         }
     }
-    if(j->http.error)j->error=j->http.error;
-    if(j->http.cancelled)j->cancelled=true;
+    if(j->http->error)j->error=j->http->error;
+    if(j->http->cancelled)j->cancelled=true;
 }
 void ciuki_net_poll(struct ciuki_net *n)
 {
     if(n->polling)return;n->polling=true;
+    ciuki_net_service_idle(n);
     uint64_t now=now_ms();
     for(unsigned i=0;i<8;i++){
         struct ciuki_connection *c=&n->connections[i];struct ciuki_job *j=c->job;
-        if(c->state==IDLE){if(now-c->idle_ms>=15000)close_connection(n,c);continue;}
+        if(c->state==IDLE)continue;
         if(!j)continue;
         if(!j->error && now-j->started_ms>=30000)io_error(j,ETIMEDOUT);
         if(!j->error && !j->cancelled && c->state==RESOLVING){
@@ -227,7 +303,10 @@ void ciuki_net_poll(struct ciuki_net *n)
             if(!j->dns_token)j->dns_token=ciuki_dns_submit(n->dns,j->host);
             if(j->dns_token && ciuki_dns_result(n->dns,j->dns_token,&address,&error)){
                 j->dns_token=0;
-                if(error){io_error(j,error);if(error==EHOSTUNREACH)j->error="DNS lookup failed: the server name could not be resolved.";}
+                if(error){
+                    if(!loopback_name(j->host) && offline())io_error(j,ENETDOWN);
+                    else {io_error(j,error);if(error==EHOSTUNREACH)j->error="DNS lookup failed: the server name could not be resolved.";}
+                }
                 else open_connection(c,address);
             }
         }
@@ -243,15 +322,15 @@ void ciuki_net_poll(struct ciuki_net *n)
         if(!j->error && !j->cancelled && c->state==TRANSFER)transfer(c,n->input);
         /* A stale idle socket can be retried once, only for idempotent methods
          * before receiving any response byte. Never replay a POST. */
-        if(j->error && j->pooled && !j->post && !j->retried && !j->http.header_bytes && !j->cancelled){
+        if(j->error && j->pooled && !j->post && !j->retried && !j->http->header_bytes && !j->cancelled){
             j->retried=true;j->pooled=false;j->sent=0;j->error=NULL;j->tls_error=CIUKI_TLS_OK;
-            ciuki_http_callback callback=j->http.callback;void *context=j->http.context;bool head=j->http.head;
-            ciuki_http_destroy(&j->http);ciuki_http_init(&j->http,head,callback,context);
+            ciuki_http_callback callback=j->http->callback;void *context=j->http->context;bool head=j->http->head;
+            ciuki_http_destroy(j->http);ciuki_http_init(j->http,head,callback,context);
             if(c->fd>=0)close(c->fd);c->fd=-1;ciuki_tls_free(c->tls);c->tls=NULL;
             if(j->secure){c->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);if(!c->tls)j->error=ciuki_tls_message(j->tls_error);}
             if(!j->error)resolve(n,c);
         }
-        if(j->error||j->cancelled||j->http.done)finish(n,c);
+        if(j->error||j->cancelled||j->http->done)finish(n,c);
     }
     n->polling=false;
 }
@@ -259,11 +338,11 @@ unsigned ciuki_net_fds(struct ciuki_net *n,struct pollfd fds[8])
 {
     unsigned count=0;
     for(unsigned i=0;i<8;i++){
-        struct ciuki_connection *c=&n->connections[i];if(!c->job || c->fd<0)continue;
+        struct ciuki_connection *c=&n->connections[i];if(c->fd<0)continue;
         short events=POLLIN;
         if(c->state==CONNECTING)events=POLLOUT;
         else if(c->tls){if(ciuki_tls_state(c->tls)&BR_SSL_SENDREC)events|=POLLOUT;}
-        else if(c->job->sent<c->job->request_bytes)events|=POLLOUT;
+        else if(c->job && c->job->sent<c->job->request_bytes)events|=POLLOUT;
         fds[count++]=(struct pollfd){c->fd,events,0};
     }
     return count;

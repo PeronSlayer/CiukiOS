@@ -166,7 +166,7 @@ bool ciuki_http_drain(struct ciuki_http *p)
         if(p->state==BODY || p->state==CHUNK_DATA) {
             size_t n=count,used;
             if((p->length||p->state==CHUNK_DATA) && n>p->remaining)n=p->remaining;
-            size_t before=budget;
+            size_t before=budget;unsigned state=p->state;bool pending=p->zpending;
             if(!body(p,s,n,&used,&budget))return false;
             s+=used;count-=used;
             if(p->length||p->state==CHUNK_DATA) {
@@ -176,7 +176,9 @@ bool ciuki_http_drain(struct ciuki_http *p)
                     else if(!complete(p))return false;
                 }
             }
-            if(!used && before==budget && (count||p->zpending))return fail(p,"Invalid compressed HTTP response.");
+            /* A zero-input inflate can exhaust its buffered output exactly at
+             * the slice boundary. Advancing to the next chunk is progress. */
+            if(!used && before==budget && state==p->state && pending==p->zpending && (count||p->zpending))return fail(p,"Invalid compressed HTTP response.");
         } else if(p->state==CHUNK_CRLF) {
             if(*s++!=(p->crlf?'\n':'\r'))return fail(p,"Invalid HTTP chunk terminator.");
             count--;if(++p->crlf==2)p->state=CHUNK_SIZE;

@@ -59,7 +59,7 @@ static bool http_event(void *context,enum ciuki_http_event e,const void *bytes,s
 {
     struct ciuki_fetch *f=context;
     if(f->aborted)return false;
-    struct ciuki_http *p=&f->job->http;
+    struct ciuki_http *p=f->job->http;
     fetch_set_http_code(f->parent,p->status);
     if(e==CIUKI_HTTP_HEAD){
         struct ciuki_tls *tls=ciuki_net_tls(f->job);
@@ -174,7 +174,7 @@ static void poll_fetch(lwc_string *scheme)
         fetch_msg msg={.type=f->terminal};
         if(f->error || (f->job && f->job->error)){
             msg.type=FETCH_ERROR;msg.data.error=f->error?f->error:f->job->error;
-        } else if(msg.type==FETCH_REDIRECT)msg.data.redirect=f->job->http.location;
+        } else if(msg.type==FETCH_REDIRECT)msg.data.redirect=f->job->http->location;
         fetch_remove_from_queues(f->parent);
         if(!f->aborted)notify(f,&msg);
         fetch_free(f->parent);
@@ -208,6 +208,7 @@ void ciuki_fetch_pump(void)
 {
     /* fetch_fdset progresses all fetchers. poll is a readiness bridge only;
      * libnsfb owns the bounded (<=10 ms) UI wait, including desktop events. */
+    if(network)ciuki_net_service_idle(network);
     fd_set read,write,error;int max=-1;
     fetch_fdset(&read,&write,&error,&max);
     struct pollfd fds[FD_SETSIZE];unsigned count=0;
