@@ -50,3 +50,7 @@ Apply this amendment only. Logs: `build/lead/hkt.log`, `build/lead/desktop.log` 
 4. The other red tests of that desktop run (`test_actual_desktop_payload_fat_readback`, `test_build_provenance_and_payloads`, `test_real_server_crash_kill_reconnect_and_flush`) are the known main gate items fixed by f0-50 on main after your base; merge is the lead's: do not touch them, but say in the report whether they still fail after the lead merges main again.
 
 Report section "Amendment 4".
+
+## Amendment 5 (lead, 2026-10-21): the one finding of the final re-review (9d50e05b)
+
+**P2 — PSP removal can leave transient sockets and ESRs alive:** `src/kernel/vm/dos_file_vm.c:141` cancels the process's transient IPX sockets only when `!e`, but `release_process()` clears the process even when file closure fails (`dos_file.c:304`), lifecycle teardown can return a parent preflight/mirror error after removing the child (`dos_file.c:345`), and the guest unwind ignores that error (`src/runtime/ciukidos_vmm_hook.inc:190`); later packets or queued ESRs could then touch terminated-process memory. Cancel the sockets and queued ESRs as soon as the PSP removal is validated and irreversible, independently of the cleanup outcome; regression test with a failing file closure and with a parent preflight error. Apply this amendment only. Report section "Amendment 5".
