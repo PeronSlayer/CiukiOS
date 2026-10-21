@@ -139,7 +139,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->width=desk_get32(b); p->height=desk_get32(b+4); p->serial=desk_get32(b+8);
         if (!p->serial) return 0;
         expected=12; fd=1; break;
-    case DESK_DAMAGE:
+    case DESK_DAMAGE: case DESK_V3_PRESENT:
         if (!client || n!=16 || !desk_surface_valid(s)) return 0;
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
         p->width=desk_get32(b+8); p->height=desk_get32(b+12);

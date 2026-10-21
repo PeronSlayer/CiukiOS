@@ -1,0 +1,1 @@
+/* TinyGL debug output is excluded in the PE recipe. */

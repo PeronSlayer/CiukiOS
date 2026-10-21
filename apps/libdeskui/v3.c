@@ -19,9 +19,9 @@ uint32_t du3_request(struct du3_connection *c, unsigned op, uint32_t id,
     desk_v3_message(&m,op,bytes,token,id,generation);
     if (bytes) memcpy(m.data+16,payload,bytes);
     if (fd>=0) { m.fd_count=1; m.fds[0]=fd; if (c->transport.info(fd,&info)) return 0; }
-    /* DAMAGE needs the retained window's geometry at the server. Validate its
+    /* DAMAGE/PRESENT need the retained window's geometry at the server. Validate their
      * wire bounds locally with the maximum supported XRGB8888 allocation. */
-    if (op==DESK_DAMAGE) info=(struct ciuki_surface_info){.size=sizeof(info),.width=2048,.height=2048,
+    if (op==DESK_DAMAGE || op==DESK_V3_PRESENT) info=(struct ciuki_surface_info){.size=sizeof(info),.width=2048,.height=2048,
         .stride=8192,.format=CIUKI_SURFACE_XRGB8888,.allocation_bytes=16777216};
     if (!desk_parse(&m,1,&info,&p) || op==DESK_HELLO || op==DESK_PONG) { errno=EINVAL; return 0; }
     if (c->transport.send(c->channel,&m,DONTWAIT)<0) return 0;

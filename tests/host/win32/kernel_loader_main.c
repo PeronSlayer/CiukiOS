@@ -9,6 +9,7 @@
 #include "../../../src/probes/win32_upper/controller.h"
 #include "../../../src/probes/win32_kernel32/controller.h"
 #include "../../../src/probes/win32_core/controller.h"
+#include "../../../src/probes/win32_gl/controller.h"
 extern void w32_kernel_model_init(const char *, uint32_t *, uint32_t *);
 extern void w32_kernel_model_finish(void);
 
@@ -204,7 +205,7 @@ static int store_test(void) {
     w32_ldr_init(&loader,&host.services,&host.peb);
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader,&manifest));
-    CHECK(loader.builtin_count==43); /* + f5-15A ciukishell platform exports */
+    CHECK(loader.builtin_count==44); /* + ciukishell and f7-07 opengl32 */
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader,&host.peb,"/builtin-import.exe","","C:\\","\0\0",&main));
     struct w32_module *core=w32_ldr_module(&loader,"ntdll.dll");
@@ -405,6 +406,7 @@ int main(int argc, char **argv) {
                  : !w32_strcmp(argv[2], "dialogs-startup") ? dialogs_startup(W32_DIALOGS_PATH, W32_DIALOGS_RESULT_VA)
                  : !w32_strcmp(argv[2], "upper-startup") ? dialogs_startup(W32_UPPER_PATH, W32_UPPER_RESULT_VA)
                  : !w32_strcmp(argv[2], "kernel32-startup") ? dialogs_startup(W32_KERNEL32_PATH, W32_KERNEL32_RESULT_VA)
+                 : !w32_strcmp(argv[2], "gl-startup") ? dialogs_startup(W32_GL_PATH, W32_GL_RESULT_VA)
                  : !w32_strcmp(argv[2], "unicode-paths") ? unicode_paths()
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()

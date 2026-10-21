@@ -1,0 +1,1685 @@
+{
+  "source": "Wine 10.0 public declarations, ABI shapes only; OpenGL 1.1 (336 entry points)",
+  "functions": [
+    {
+      "name": "glAccum",
+      "return": "void",
+      "args": "GLenum op, GLfloat value"
+    },
+    {
+      "name": "glAlphaFunc",
+      "return": "void",
+      "args": "GLenum func, GLfloat ref"
+    },
+    {
+      "name": "glAreTexturesResident",
+      "return": "GLboolean",
+      "args": "GLsizei n, const GLuint *textures, GLboolean *residences"
+    },
+    {
+      "name": "glArrayElement",
+      "return": "void",
+      "args": "GLint i"
+    },
+    {
+      "name": "glBegin",
+      "return": "void",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glBindTexture",
+      "return": "void",
+      "args": "GLenum target, GLuint texture"
+    },
+    {
+      "name": "glBitmap",
+      "return": "void",
+      "args": "GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte *bitmap"
+    },
+    {
+      "name": "glBlendFunc",
+      "return": "void",
+      "args": "GLenum sfactor, GLenum dfactor"
+    },
+    {
+      "name": "glCallList",
+      "return": "void",
+      "args": "GLuint list"
+    },
+    {
+      "name": "glCallLists",
+      "return": "void",
+      "args": "GLsizei n, GLenum type, const void *lists"
+    },
+    {
+      "name": "glClear",
+      "return": "void",
+      "args": "GLbitfield mask"
+    },
+    {
+      "name": "glClearAccum",
+      "return": "void",
+      "args": "GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha"
+    },
+    {
+      "name": "glClearColor",
+      "return": "void",
+      "args": "GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha"
+    },
+    {
+      "name": "glClearDepth",
+      "return": "void",
+      "args": "GLdouble depth"
+    },
+    {
+      "name": "glClearIndex",
+      "return": "void",
+      "args": "GLfloat c"
+    },
+    {
+      "name": "glClearStencil",
+      "return": "void",
+      "args": "GLint s"
+    },
+    {
+      "name": "glClipPlane",
+      "return": "void",
+      "args": "GLenum plane, const GLdouble *equation"
+    },
+    {
+      "name": "glColor3b",
+      "return": "void",
+      "args": "GLbyte red, GLbyte green, GLbyte blue"
+    },
+    {
+      "name": "glColor3bv",
+      "return": "void",
+      "args": "const GLbyte *v"
+    },
+    {
+      "name": "glColor3d",
+      "return": "void",
+      "args": "GLdouble red, GLdouble green, GLdouble blue"
+    },
+    {
+      "name": "glColor3dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glColor3f",
+      "return": "void",
+      "args": "GLfloat red, GLfloat green, GLfloat blue"
+    },
+    {
+      "name": "glColor3fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glColor3i",
+      "return": "void",
+      "args": "GLint red, GLint green, GLint blue"
+    },
+    {
+      "name": "glColor3iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glColor3s",
+      "return": "void",
+      "args": "GLshort red, GLshort green, GLshort blue"
+    },
+    {
+      "name": "glColor3sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glColor3ub",
+      "return": "void",
+      "args": "GLubyte red, GLubyte green, GLubyte blue"
+    },
+    {
+      "name": "glColor3ubv",
+      "return": "void",
+      "args": "const GLubyte *v"
+    },
+    {
+      "name": "glColor3ui",
+      "return": "void",
+      "args": "GLuint red, GLuint green, GLuint blue"
+    },
+    {
+      "name": "glColor3uiv",
+      "return": "void",
+      "args": "const GLuint *v"
+    },
+    {
+      "name": "glColor3us",
+      "return": "void",
+      "args": "GLushort red, GLushort green, GLushort blue"
+    },
+    {
+      "name": "glColor3usv",
+      "return": "void",
+      "args": "const GLushort *v"
+    },
+    {
+      "name": "glColor4b",
+      "return": "void",
+      "args": "GLbyte red, GLbyte green, GLbyte blue, GLbyte alpha"
+    },
+    {
+      "name": "glColor4bv",
+      "return": "void",
+      "args": "const GLbyte *v"
+    },
+    {
+      "name": "glColor4d",
+      "return": "void",
+      "args": "GLdouble red, GLdouble green, GLdouble blue, GLdouble alpha"
+    },
+    {
+      "name": "glColor4dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glColor4f",
+      "return": "void",
+      "args": "GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha"
+    },
+    {
+      "name": "glColor4fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glColor4i",
+      "return": "void",
+      "args": "GLint red, GLint green, GLint blue, GLint alpha"
+    },
+    {
+      "name": "glColor4iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glColor4s",
+      "return": "void",
+      "args": "GLshort red, GLshort green, GLshort blue, GLshort alpha"
+    },
+    {
+      "name": "glColor4sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glColor4ub",
+      "return": "void",
+      "args": "GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha"
+    },
+    {
+      "name": "glColor4ubv",
+      "return": "void",
+      "args": "const GLubyte *v"
+    },
+    {
+      "name": "glColor4ui",
+      "return": "void",
+      "args": "GLuint red, GLuint green, GLuint blue, GLuint alpha"
+    },
+    {
+      "name": "glColor4uiv",
+      "return": "void",
+      "args": "const GLuint *v"
+    },
+    {
+      "name": "glColor4us",
+      "return": "void",
+      "args": "GLushort red, GLushort green, GLushort blue, GLushort alpha"
+    },
+    {
+      "name": "glColor4usv",
+      "return": "void",
+      "args": "const GLushort *v"
+    },
+    {
+      "name": "glColorMask",
+      "return": "void",
+      "args": "GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha"
+    },
+    {
+      "name": "glColorMaterial",
+      "return": "void",
+      "args": "GLenum face, GLenum mode"
+    },
+    {
+      "name": "glColorPointer",
+      "return": "void",
+      "args": "GLint size, GLenum type, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glCopyPixels",
+      "return": "void",
+      "args": "GLint x, GLint y, GLsizei width, GLsizei height, GLenum type"
+    },
+    {
+      "name": "glCopyTexImage1D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLint border"
+    },
+    {
+      "name": "glCopyTexImage2D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border"
+    },
+    {
+      "name": "glCopyTexSubImage1D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width"
+    },
+    {
+      "name": "glCopyTexSubImage2D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height"
+    },
+    {
+      "name": "glCullFace",
+      "return": "void",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glDeleteLists",
+      "return": "void",
+      "args": "GLuint list, GLsizei range"
+    },
+    {
+      "name": "glDeleteTextures",
+      "return": "void",
+      "args": "GLsizei n, const GLuint *textures"
+    },
+    {
+      "name": "glDepthFunc",
+      "return": "void",
+      "args": "GLenum func"
+    },
+    {
+      "name": "glDepthMask",
+      "return": "void",
+      "args": "GLboolean flag"
+    },
+    {
+      "name": "glDepthRange",
+      "return": "void",
+      "args": "GLdouble n, GLdouble f"
+    },
+    {
+      "name": "glDisable",
+      "return": "void",
+      "args": "GLenum cap"
+    },
+    {
+      "name": "glDisableClientState",
+      "return": "void",
+      "args": "GLenum array"
+    },
+    {
+      "name": "glDrawArrays",
+      "return": "void",
+      "args": "GLenum mode, GLint first, GLsizei count"
+    },
+    {
+      "name": "glDrawBuffer",
+      "return": "void",
+      "args": "GLenum buf"
+    },
+    {
+      "name": "glDrawElements",
+      "return": "void",
+      "args": "GLenum mode, GLsizei count, GLenum type, const void *indices"
+    },
+    {
+      "name": "glDrawPixels",
+      "return": "void",
+      "args": "GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels"
+    },
+    {
+      "name": "glEdgeFlag",
+      "return": "void",
+      "args": "GLboolean flag"
+    },
+    {
+      "name": "glEdgeFlagPointer",
+      "return": "void",
+      "args": "GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glEdgeFlagv",
+      "return": "void",
+      "args": "const GLboolean *flag"
+    },
+    {
+      "name": "glEnable",
+      "return": "void",
+      "args": "GLenum cap"
+    },
+    {
+      "name": "glEnableClientState",
+      "return": "void",
+      "args": "GLenum array"
+    },
+    {
+      "name": "glEnd",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glEndList",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glEvalCoord1d",
+      "return": "void",
+      "args": "GLdouble u"
+    },
+    {
+      "name": "glEvalCoord1dv",
+      "return": "void",
+      "args": "const GLdouble *u"
+    },
+    {
+      "name": "glEvalCoord1f",
+      "return": "void",
+      "args": "GLfloat u"
+    },
+    {
+      "name": "glEvalCoord1fv",
+      "return": "void",
+      "args": "const GLfloat *u"
+    },
+    {
+      "name": "glEvalCoord2d",
+      "return": "void",
+      "args": "GLdouble u, GLdouble v"
+    },
+    {
+      "name": "glEvalCoord2dv",
+      "return": "void",
+      "args": "const GLdouble *u"
+    },
+    {
+      "name": "glEvalCoord2f",
+      "return": "void",
+      "args": "GLfloat u, GLfloat v"
+    },
+    {
+      "name": "glEvalCoord2fv",
+      "return": "void",
+      "args": "const GLfloat *u"
+    },
+    {
+      "name": "glEvalMesh1",
+      "return": "void",
+      "args": "GLenum mode, GLint i1, GLint i2"
+    },
+    {
+      "name": "glEvalMesh2",
+      "return": "void",
+      "args": "GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2"
+    },
+    {
+      "name": "glEvalPoint1",
+      "return": "void",
+      "args": "GLint i"
+    },
+    {
+      "name": "glEvalPoint2",
+      "return": "void",
+      "args": "GLint i, GLint j"
+    },
+    {
+      "name": "glFeedbackBuffer",
+      "return": "void",
+      "args": "GLsizei size, GLenum type, GLfloat *buffer"
+    },
+    {
+      "name": "glFinish",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glFlush",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glFogf",
+      "return": "void",
+      "args": "GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glFogfv",
+      "return": "void",
+      "args": "GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glFogi",
+      "return": "void",
+      "args": "GLenum pname, GLint param"
+    },
+    {
+      "name": "glFogiv",
+      "return": "void",
+      "args": "GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glFrontFace",
+      "return": "void",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glFrustum",
+      "return": "void",
+      "args": "GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar"
+    },
+    {
+      "name": "glGenLists",
+      "return": "GLuint",
+      "args": "GLsizei range"
+    },
+    {
+      "name": "glGenTextures",
+      "return": "void",
+      "args": "GLsizei n, GLuint *textures"
+    },
+    {
+      "name": "glGetBooleanv",
+      "return": "void",
+      "args": "GLenum pname, GLboolean *data"
+    },
+    {
+      "name": "glGetClipPlane",
+      "return": "void",
+      "args": "GLenum plane, GLdouble *equation"
+    },
+    {
+      "name": "glGetDoublev",
+      "return": "void",
+      "args": "GLenum pname, GLdouble *data"
+    },
+    {
+      "name": "glGetError",
+      "return": "GLenum",
+      "args": "void"
+    },
+    {
+      "name": "glGetFloatv",
+      "return": "void",
+      "args": "GLenum pname, GLfloat *data"
+    },
+    {
+      "name": "glGetIntegerv",
+      "return": "void",
+      "args": "GLenum pname, GLint *data"
+    },
+    {
+      "name": "glGetLightfv",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetLightiv",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glGetMapdv",
+      "return": "void",
+      "args": "GLenum target, GLenum query, GLdouble *v"
+    },
+    {
+      "name": "glGetMapfv",
+      "return": "void",
+      "args": "GLenum target, GLenum query, GLfloat *v"
+    },
+    {
+      "name": "glGetMapiv",
+      "return": "void",
+      "args": "GLenum target, GLenum query, GLint *v"
+    },
+    {
+      "name": "glGetMaterialfv",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetMaterialiv",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glGetPixelMapfv",
+      "return": "void",
+      "args": "GLenum map, GLfloat *values"
+    },
+    {
+      "name": "glGetPixelMapuiv",
+      "return": "void",
+      "args": "GLenum map, GLuint *values"
+    },
+    {
+      "name": "glGetPixelMapusv",
+      "return": "void",
+      "args": "GLenum map, GLushort *values"
+    },
+    {
+      "name": "glGetPointerv",
+      "return": "void",
+      "args": "GLenum pname, void **params"
+    },
+    {
+      "name": "glGetPolygonStipple",
+      "return": "void",
+      "args": "GLubyte *mask"
+    },
+    {
+      "name": "glGetString",
+      "return": "const GLubyte *",
+      "args": "GLenum name"
+    },
+    {
+      "name": "glGetTexEnvfv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetTexEnviv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glGetTexGendv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLdouble *params"
+    },
+    {
+      "name": "glGetTexGenfv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetTexGeniv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glGetTexImage",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLenum format, GLenum type, void *pixels"
+    },
+    {
+      "name": "glGetTexLevelParameterfv",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetTexLevelParameteriv",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glGetTexParameterfv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLfloat *params"
+    },
+    {
+      "name": "glGetTexParameteriv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLint *params"
+    },
+    {
+      "name": "glHint",
+      "return": "void",
+      "args": "GLenum target, GLenum mode"
+    },
+    {
+      "name": "glIndexMask",
+      "return": "void",
+      "args": "GLuint mask"
+    },
+    {
+      "name": "glIndexPointer",
+      "return": "void",
+      "args": "GLenum type, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glIndexd",
+      "return": "void",
+      "args": "GLdouble c"
+    },
+    {
+      "name": "glIndexdv",
+      "return": "void",
+      "args": "const GLdouble *c"
+    },
+    {
+      "name": "glIndexf",
+      "return": "void",
+      "args": "GLfloat c"
+    },
+    {
+      "name": "glIndexfv",
+      "return": "void",
+      "args": "const GLfloat *c"
+    },
+    {
+      "name": "glIndexi",
+      "return": "void",
+      "args": "GLint c"
+    },
+    {
+      "name": "glIndexiv",
+      "return": "void",
+      "args": "const GLint *c"
+    },
+    {
+      "name": "glIndexs",
+      "return": "void",
+      "args": "GLshort c"
+    },
+    {
+      "name": "glIndexsv",
+      "return": "void",
+      "args": "const GLshort *c"
+    },
+    {
+      "name": "glIndexub",
+      "return": "void",
+      "args": "GLubyte c"
+    },
+    {
+      "name": "glIndexubv",
+      "return": "void",
+      "args": "const GLubyte *c"
+    },
+    {
+      "name": "glInitNames",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glInterleavedArrays",
+      "return": "void",
+      "args": "GLenum format, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glIsEnabled",
+      "return": "GLboolean",
+      "args": "GLenum cap"
+    },
+    {
+      "name": "glIsList",
+      "return": "GLboolean",
+      "args": "GLuint list"
+    },
+    {
+      "name": "glIsTexture",
+      "return": "GLboolean",
+      "args": "GLuint texture"
+    },
+    {
+      "name": "glLightModelf",
+      "return": "void",
+      "args": "GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glLightModelfv",
+      "return": "void",
+      "args": "GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glLightModeli",
+      "return": "void",
+      "args": "GLenum pname, GLint param"
+    },
+    {
+      "name": "glLightModeliv",
+      "return": "void",
+      "args": "GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glLightf",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glLightfv",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glLighti",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, GLint param"
+    },
+    {
+      "name": "glLightiv",
+      "return": "void",
+      "args": "GLenum light, GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glLineStipple",
+      "return": "void",
+      "args": "GLint factor, GLushort pattern"
+    },
+    {
+      "name": "glLineWidth",
+      "return": "void",
+      "args": "GLfloat width"
+    },
+    {
+      "name": "glListBase",
+      "return": "void",
+      "args": "GLuint base"
+    },
+    {
+      "name": "glLoadIdentity",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glLoadMatrixd",
+      "return": "void",
+      "args": "const GLdouble *m"
+    },
+    {
+      "name": "glLoadMatrixf",
+      "return": "void",
+      "args": "const GLfloat *m"
+    },
+    {
+      "name": "glLoadName",
+      "return": "void",
+      "args": "GLuint name"
+    },
+    {
+      "name": "glLogicOp",
+      "return": "void",
+      "args": "GLenum opcode"
+    },
+    {
+      "name": "glMap1d",
+      "return": "void",
+      "args": "GLenum target, GLdouble u1, GLdouble u2, GLint stride, GLint order, const GLdouble *points"
+    },
+    {
+      "name": "glMap1f",
+      "return": "void",
+      "args": "GLenum target, GLfloat u1, GLfloat u2, GLint stride, GLint order, const GLfloat *points"
+    },
+    {
+      "name": "glMap2d",
+      "return": "void",
+      "args": "GLenum target, GLdouble u1, GLdouble u2, GLint ustride, GLint uorder, GLdouble v1, GLdouble v2, GLint vstride, GLint vorder, const GLdouble *points"
+    },
+    {
+      "name": "glMap2f",
+      "return": "void",
+      "args": "GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder, GLfloat v1, GLfloat v2, GLint vstride, GLint vorder, const GLfloat *points"
+    },
+    {
+      "name": "glMapGrid1d",
+      "return": "void",
+      "args": "GLint un, GLdouble u1, GLdouble u2"
+    },
+    {
+      "name": "glMapGrid1f",
+      "return": "void",
+      "args": "GLint un, GLfloat u1, GLfloat u2"
+    },
+    {
+      "name": "glMapGrid2d",
+      "return": "void",
+      "args": "GLint un, GLdouble u1, GLdouble u2, GLint vn, GLdouble v1, GLdouble v2"
+    },
+    {
+      "name": "glMapGrid2f",
+      "return": "void",
+      "args": "GLint un, GLfloat u1, GLfloat u2, GLint vn, GLfloat v1, GLfloat v2"
+    },
+    {
+      "name": "glMaterialf",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glMaterialfv",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glMateriali",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, GLint param"
+    },
+    {
+      "name": "glMaterialiv",
+      "return": "void",
+      "args": "GLenum face, GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glMatrixMode",
+      "return": "void",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glMultMatrixd",
+      "return": "void",
+      "args": "const GLdouble *m"
+    },
+    {
+      "name": "glMultMatrixf",
+      "return": "void",
+      "args": "const GLfloat *m"
+    },
+    {
+      "name": "glNewList",
+      "return": "void",
+      "args": "GLuint list, GLenum mode"
+    },
+    {
+      "name": "glNormal3b",
+      "return": "void",
+      "args": "GLbyte nx, GLbyte ny, GLbyte nz"
+    },
+    {
+      "name": "glNormal3bv",
+      "return": "void",
+      "args": "const GLbyte *v"
+    },
+    {
+      "name": "glNormal3d",
+      "return": "void",
+      "args": "GLdouble nx, GLdouble ny, GLdouble nz"
+    },
+    {
+      "name": "glNormal3dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glNormal3f",
+      "return": "void",
+      "args": "GLfloat nx, GLfloat ny, GLfloat nz"
+    },
+    {
+      "name": "glNormal3fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glNormal3i",
+      "return": "void",
+      "args": "GLint nx, GLint ny, GLint nz"
+    },
+    {
+      "name": "glNormal3iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glNormal3s",
+      "return": "void",
+      "args": "GLshort nx, GLshort ny, GLshort nz"
+    },
+    {
+      "name": "glNormal3sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glNormalPointer",
+      "return": "void",
+      "args": "GLenum type, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glOrtho",
+      "return": "void",
+      "args": "GLdouble left, GLdouble right, GLdouble bottom, GLdouble top, GLdouble zNear, GLdouble zFar"
+    },
+    {
+      "name": "glPassThrough",
+      "return": "void",
+      "args": "GLfloat token"
+    },
+    {
+      "name": "glPixelMapfv",
+      "return": "void",
+      "args": "GLenum map, GLsizei mapsize, const GLfloat *values"
+    },
+    {
+      "name": "glPixelMapuiv",
+      "return": "void",
+      "args": "GLenum map, GLsizei mapsize, const GLuint *values"
+    },
+    {
+      "name": "glPixelMapusv",
+      "return": "void",
+      "args": "GLenum map, GLsizei mapsize, const GLushort *values"
+    },
+    {
+      "name": "glPixelStoref",
+      "return": "void",
+      "args": "GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glPixelStorei",
+      "return": "void",
+      "args": "GLenum pname, GLint param"
+    },
+    {
+      "name": "glPixelTransferf",
+      "return": "void",
+      "args": "GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glPixelTransferi",
+      "return": "void",
+      "args": "GLenum pname, GLint param"
+    },
+    {
+      "name": "glPixelZoom",
+      "return": "void",
+      "args": "GLfloat xfactor, GLfloat yfactor"
+    },
+    {
+      "name": "glPointSize",
+      "return": "void",
+      "args": "GLfloat size"
+    },
+    {
+      "name": "glPolygonMode",
+      "return": "void",
+      "args": "GLenum face, GLenum mode"
+    },
+    {
+      "name": "glPolygonOffset",
+      "return": "void",
+      "args": "GLfloat factor, GLfloat units"
+    },
+    {
+      "name": "glPolygonStipple",
+      "return": "void",
+      "args": "const GLubyte *mask"
+    },
+    {
+      "name": "glPopAttrib",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glPopClientAttrib",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glPopMatrix",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glPopName",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glPrioritizeTextures",
+      "return": "void",
+      "args": "GLsizei n, const GLuint *textures, const GLfloat *priorities"
+    },
+    {
+      "name": "glPushAttrib",
+      "return": "void",
+      "args": "GLbitfield mask"
+    },
+    {
+      "name": "glPushClientAttrib",
+      "return": "void",
+      "args": "GLbitfield mask"
+    },
+    {
+      "name": "glPushMatrix",
+      "return": "void",
+      "args": "void"
+    },
+    {
+      "name": "glPushName",
+      "return": "void",
+      "args": "GLuint name"
+    },
+    {
+      "name": "glRasterPos2d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y"
+    },
+    {
+      "name": "glRasterPos2dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glRasterPos2f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y"
+    },
+    {
+      "name": "glRasterPos2fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glRasterPos2i",
+      "return": "void",
+      "args": "GLint x, GLint y"
+    },
+    {
+      "name": "glRasterPos2iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glRasterPos2s",
+      "return": "void",
+      "args": "GLshort x, GLshort y"
+    },
+    {
+      "name": "glRasterPos2sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glRasterPos3d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z"
+    },
+    {
+      "name": "glRasterPos3dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glRasterPos3f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z"
+    },
+    {
+      "name": "glRasterPos3fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glRasterPos3i",
+      "return": "void",
+      "args": "GLint x, GLint y, GLint z"
+    },
+    {
+      "name": "glRasterPos3iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glRasterPos3s",
+      "return": "void",
+      "args": "GLshort x, GLshort y, GLshort z"
+    },
+    {
+      "name": "glRasterPos3sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glRasterPos4d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z, GLdouble w"
+    },
+    {
+      "name": "glRasterPos4dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glRasterPos4f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z, GLfloat w"
+    },
+    {
+      "name": "glRasterPos4fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glRasterPos4i",
+      "return": "void",
+      "args": "GLint x, GLint y, GLint z, GLint w"
+    },
+    {
+      "name": "glRasterPos4iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glRasterPos4s",
+      "return": "void",
+      "args": "GLshort x, GLshort y, GLshort z, GLshort w"
+    },
+    {
+      "name": "glRasterPos4sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glReadBuffer",
+      "return": "void",
+      "args": "GLenum src"
+    },
+    {
+      "name": "glReadPixels",
+      "return": "void",
+      "args": "GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void *pixels"
+    },
+    {
+      "name": "glRectd",
+      "return": "void",
+      "args": "GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2"
+    },
+    {
+      "name": "glRectdv",
+      "return": "void",
+      "args": "const GLdouble *v1, const GLdouble *v2"
+    },
+    {
+      "name": "glRectf",
+      "return": "void",
+      "args": "GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2"
+    },
+    {
+      "name": "glRectfv",
+      "return": "void",
+      "args": "const GLfloat *v1, const GLfloat *v2"
+    },
+    {
+      "name": "glRecti",
+      "return": "void",
+      "args": "GLint x1, GLint y1, GLint x2, GLint y2"
+    },
+    {
+      "name": "glRectiv",
+      "return": "void",
+      "args": "const GLint *v1, const GLint *v2"
+    },
+    {
+      "name": "glRects",
+      "return": "void",
+      "args": "GLshort x1, GLshort y1, GLshort x2, GLshort y2"
+    },
+    {
+      "name": "glRectsv",
+      "return": "void",
+      "args": "const GLshort *v1, const GLshort *v2"
+    },
+    {
+      "name": "glRenderMode",
+      "return": "GLint",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glRotated",
+      "return": "void",
+      "args": "GLdouble angle, GLdouble x, GLdouble y, GLdouble z"
+    },
+    {
+      "name": "glRotatef",
+      "return": "void",
+      "args": "GLfloat angle, GLfloat x, GLfloat y, GLfloat z"
+    },
+    {
+      "name": "glScaled",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z"
+    },
+    {
+      "name": "glScalef",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z"
+    },
+    {
+      "name": "glScissor",
+      "return": "void",
+      "args": "GLint x, GLint y, GLsizei width, GLsizei height"
+    },
+    {
+      "name": "glSelectBuffer",
+      "return": "void",
+      "args": "GLsizei size, GLuint *buffer"
+    },
+    {
+      "name": "glShadeModel",
+      "return": "void",
+      "args": "GLenum mode"
+    },
+    {
+      "name": "glStencilFunc",
+      "return": "void",
+      "args": "GLenum func, GLint ref, GLuint mask"
+    },
+    {
+      "name": "glStencilMask",
+      "return": "void",
+      "args": "GLuint mask"
+    },
+    {
+      "name": "glStencilOp",
+      "return": "void",
+      "args": "GLenum fail, GLenum zfail, GLenum zpass"
+    },
+    {
+      "name": "glTexCoord1d",
+      "return": "void",
+      "args": "GLdouble s"
+    },
+    {
+      "name": "glTexCoord1dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glTexCoord1f",
+      "return": "void",
+      "args": "GLfloat s"
+    },
+    {
+      "name": "glTexCoord1fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glTexCoord1i",
+      "return": "void",
+      "args": "GLint s"
+    },
+    {
+      "name": "glTexCoord1iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glTexCoord1s",
+      "return": "void",
+      "args": "GLshort s"
+    },
+    {
+      "name": "glTexCoord1sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glTexCoord2d",
+      "return": "void",
+      "args": "GLdouble s, GLdouble t"
+    },
+    {
+      "name": "glTexCoord2dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glTexCoord2f",
+      "return": "void",
+      "args": "GLfloat s, GLfloat t"
+    },
+    {
+      "name": "glTexCoord2fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glTexCoord2i",
+      "return": "void",
+      "args": "GLint s, GLint t"
+    },
+    {
+      "name": "glTexCoord2iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glTexCoord2s",
+      "return": "void",
+      "args": "GLshort s, GLshort t"
+    },
+    {
+      "name": "glTexCoord2sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glTexCoord3d",
+      "return": "void",
+      "args": "GLdouble s, GLdouble t, GLdouble r"
+    },
+    {
+      "name": "glTexCoord3dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glTexCoord3f",
+      "return": "void",
+      "args": "GLfloat s, GLfloat t, GLfloat r"
+    },
+    {
+      "name": "glTexCoord3fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glTexCoord3i",
+      "return": "void",
+      "args": "GLint s, GLint t, GLint r"
+    },
+    {
+      "name": "glTexCoord3iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glTexCoord3s",
+      "return": "void",
+      "args": "GLshort s, GLshort t, GLshort r"
+    },
+    {
+      "name": "glTexCoord3sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glTexCoord4d",
+      "return": "void",
+      "args": "GLdouble s, GLdouble t, GLdouble r, GLdouble q"
+    },
+    {
+      "name": "glTexCoord4dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glTexCoord4f",
+      "return": "void",
+      "args": "GLfloat s, GLfloat t, GLfloat r, GLfloat q"
+    },
+    {
+      "name": "glTexCoord4fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glTexCoord4i",
+      "return": "void",
+      "args": "GLint s, GLint t, GLint r, GLint q"
+    },
+    {
+      "name": "glTexCoord4iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glTexCoord4s",
+      "return": "void",
+      "args": "GLshort s, GLshort t, GLshort r, GLshort q"
+    },
+    {
+      "name": "glTexCoord4sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glTexCoordPointer",
+      "return": "void",
+      "args": "GLint size, GLenum type, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glTexEnvf",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glTexEnvfv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glTexEnvi",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLint param"
+    },
+    {
+      "name": "glTexEnviv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glTexGend",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLdouble param"
+    },
+    {
+      "name": "glTexGendv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, const GLdouble *params"
+    },
+    {
+      "name": "glTexGenf",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glTexGenfv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glTexGeni",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, GLint param"
+    },
+    {
+      "name": "glTexGeniv",
+      "return": "void",
+      "args": "GLenum coord, GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glTexImage1D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint internalformat, GLsizei width, GLint border, GLenum format, GLenum type, const void *pixels"
+    },
+    {
+      "name": "glTexImage2D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void *pixels"
+    },
+    {
+      "name": "glTexParameterf",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLfloat param"
+    },
+    {
+      "name": "glTexParameterfv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, const GLfloat *params"
+    },
+    {
+      "name": "glTexParameteri",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, GLint param"
+    },
+    {
+      "name": "glTexParameteriv",
+      "return": "void",
+      "args": "GLenum target, GLenum pname, const GLint *params"
+    },
+    {
+      "name": "glTexSubImage1D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type, const void *pixels"
+    },
+    {
+      "name": "glTexSubImage2D",
+      "return": "void",
+      "args": "GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels"
+    },
+    {
+      "name": "glTranslated",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z"
+    },
+    {
+      "name": "glTranslatef",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z"
+    },
+    {
+      "name": "glVertex2d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y"
+    },
+    {
+      "name": "glVertex2dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glVertex2f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y"
+    },
+    {
+      "name": "glVertex2fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glVertex2i",
+      "return": "void",
+      "args": "GLint x, GLint y"
+    },
+    {
+      "name": "glVertex2iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glVertex2s",
+      "return": "void",
+      "args": "GLshort x, GLshort y"
+    },
+    {
+      "name": "glVertex2sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glVertex3d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z"
+    },
+    {
+      "name": "glVertex3dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glVertex3f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z"
+    },
+    {
+      "name": "glVertex3fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glVertex3i",
+      "return": "void",
+      "args": "GLint x, GLint y, GLint z"
+    },
+    {
+      "name": "glVertex3iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glVertex3s",
+      "return": "void",
+      "args": "GLshort x, GLshort y, GLshort z"
+    },
+    {
+      "name": "glVertex3sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glVertex4d",
+      "return": "void",
+      "args": "GLdouble x, GLdouble y, GLdouble z, GLdouble w"
+    },
+    {
+      "name": "glVertex4dv",
+      "return": "void",
+      "args": "const GLdouble *v"
+    },
+    {
+      "name": "glVertex4f",
+      "return": "void",
+      "args": "GLfloat x, GLfloat y, GLfloat z, GLfloat w"
+    },
+    {
+      "name": "glVertex4fv",
+      "return": "void",
+      "args": "const GLfloat *v"
+    },
+    {
+      "name": "glVertex4i",
+      "return": "void",
+      "args": "GLint x, GLint y, GLint z, GLint w"
+    },
+    {
+      "name": "glVertex4iv",
+      "return": "void",
+      "args": "const GLint *v"
+    },
+    {
+      "name": "glVertex4s",
+      "return": "void",
+      "args": "GLshort x, GLshort y, GLshort z, GLshort w"
+    },
+    {
+      "name": "glVertex4sv",
+      "return": "void",
+      "args": "const GLshort *v"
+    },
+    {
+      "name": "glVertexPointer",
+      "return": "void",
+      "args": "GLint size, GLenum type, GLsizei stride, const void *pointer"
+    },
+    {
+      "name": "glViewport",
+      "return": "void",
+      "args": "GLint x, GLint y, GLsizei width, GLsizei height"
+    }
+  ]
+}

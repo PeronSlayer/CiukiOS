@@ -94,6 +94,25 @@ int main(void)
     reset();d.now_ns=0;service_ready=1;spawn_error=1;
     assert(!desk_w32_fixture_begin(&d,"kernel32-exercise"));desk_w32_fixture_tick(&d);
     assert(spawns==1 && strstr(record,"child=0"));
+    reset();d.now_ns=0;
+    assert(desk_w32_fixture_begin(&d,"gl-exercise.exe")==-EINVAL);
+    assert(!desk_w32_fixture_begin(&d,"gl-exercise"));
+    assert(fixture.id==W32_FIXTURE_GL && desk_w32_fixture_active());
+    assert(desk_w32_fixture_begin(&d,"restart-exercise")==-EBUSY);
+    desk_w32_fixture_tick(&d);assert(!spawns);
+    service_ready=1;close_error=5;desk_w32_fixture_tick(&d);assert(!spawns);
+    close_error=0;malformed=1;desk_w32_fixture_tick(&d);assert(!spawns);
+    malformed=0;desk_w32_fixture_tick(&d);
+    assert(spawns==1 && !strcmp(spawn_path,W32_GL_PATH));
+    char expected[64];snprintf(expected,sizeof(expected),"case=w32-fixture fixture=%u child=71",W32_FIXTURE_GL);
+    assert(!strcmp(record,expected));
+    desk_w32_fixture_tick(&d);assert(spawns==1 && !waits);
+    reset();d.now_ns=0;assert(!desk_w32_fixture_begin(&d,"gl-exercise"));
+    d.now_ns=15000000000ull;desk_w32_fixture_tick(&d);assert(!spawns && strstr(record,"child=0"));
+    service_ready=1;desk_w32_fixture_tick(&d);assert(!spawns);
+    reset();d.now_ns=0;service_ready=1;spawn_error=1;
+    assert(!desk_w32_fixture_begin(&d,"gl-exercise"));desk_w32_fixture_tick(&d);
+    assert(spawns==1 && strstr(record,"child=0"));
     reset();service_ready=1;assert(!desk_w32_fixture_begin(&d,"crash-exercise"));desk_w32_fixture_tick(&d);
     d.v3_dialog_kind=1;d.v3_dialog_pid=73;desk_w32_fixture_tick(&d);assert(!accepted);
     d.v3_dialog_pid=72;desk_w32_fixture_tick(&d);assert(accepted==1 && !d.v3_dialog_kind);
@@ -131,8 +150,11 @@ int main(void)
     assert(queries==5 && strstr(record,"phase=3 service=74"));
     assert(W32_RESTART_RESULT_VA==0x100d0000u);
     for(unsigned i=0;i<W32_FIXTURE_COUNT;i++)assert(W32_RESTART_RESULT_VA!=w32_fixtures[i].address);
+    assert(W32_GL_RESULT_VA==0x100e0000u && W32_GL_RESULT_VA!=W32_RESTART_RESULT_VA);
+    assert(W32_FIXTURE_GL!=RESTART_FIXTURE_ID);
+    for(unsigned i=0;i<W32_FIXTURE_COUNT;i++)assert(W32_GL_RESULT_VA!=w32_fixtures[i].address);
     reset();restart_mode=service_ready=1;d.now_ns=0;
     assert(!desk_w32_fixture_begin(&d,"restart-exercise"));
     d.now_ns=360000000000ull;desk_w32_fixture_tick(&d);assert(!spawns && strstr(record,"failed=1"));
-    puts("PASS shared gate: ten core names plus restart, OPEN+CLOSE, timeout, spawn failure, child-bound dialogs, service-only reaping, phased restart and registry consumption");return 0;
+    puts("PASS shared gate: ten core names plus restart and GL, OPEN+CLOSE, timeout, spawn failure, distinct result pages, child-bound dialogs, service-only reaping, phased restart and registry consumption");return 0;
 }

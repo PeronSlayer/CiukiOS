@@ -415,6 +415,36 @@ static void bridge(void)
     bridge_wire.data[255]=1; assert(du3_next(&c,&p)<0 && c.disconnected);
     puts("PASS user-mode bridge tokens, backpressure, malformed server, explicit guest UI PONG");
 }
+/* Focused GL completion replay: production request, receive, redraw and drop.
+ * No captures or guest evidence. */
+static void gl_completion(void)
+{
+    setup(); int root=peer(10,42), a=create(root,20,1,1,0,0); flush();
+    struct du3_connection c; struct du3_transport ops={bridge_send,bridge_recv,fake_ops.info,fake_ops.close};
+    assert(!du3_connect(&c,10,&ops));
+    uint8_t b[16]={0};desk_put32(b+8,200);desk_put32(b+12,100);
+    unsigned request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);assert(request);
+    bridge_wire.sender_pid=42;assert(!desk_v3_receive(&d,root,&bridge_wire));
+    assert(d.clients[a].gl_present_request==request);
+    fake_fail_present=1;assert(desk_redraw(&d)<0 && d.clients[a].gl_present_request==request);
+    flush();unsigned before=fake_sent;
+    fake_fail_present=0;assert(!desk_redraw(&d) && !d.clients[a].gl_present_request);flush();
+    unsigned replies=0;for(unsigned i=before;i<fake_sent;i++)
+        replies+=fake_messages[i].data[1]==DESK_V3_RESULT && desk_get32(fake_messages[i].data+4)==request;
+    assert(replies==1);before=fake_sent;assert(!desk_redraw(&d));flush();assert(fake_sent==before);
+    d.v3_lease=lease;desk_focus(&d,a);request_lease(root,1);flush();assert(d.v3_lease_state);
+    struct ciuki_message release;msg(&release,DESK_V3_LEASE,16,1,1);
+    assert(!desk_v3_receive(&d,root,&release) && !d.v3_lease_state);flush();
+    request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
+    assert(request && !desk_v3_receive(&d,root,&bridge_wire));
+    assert(!desk_redraw(&d) && !d.clients[a].gl_present_request);flush();
+    request=du3_request(&c,DESK_V3_PRESENT,1,1,b,16,-1);bridge_wire.sender_pid=42;
+    assert(request && !desk_v3_receive(&d,root,&bridge_wire));
+    desk_drop_client(&d,root);assert(!d.clients[a].gl_present_request);
+    before=fake_sent;assert(!desk_redraw(&d));flush();assert(fake_sent==before);
+    cleanup();fake_reset();
+    puts("PASS GL production transport/compositor failure retry, single completion, lease restoration and client death");
+}
 static unsigned ended;
 static int end_process(uint32_t pid,int sig) { assert(pid==42 && sig==SIGKILL); ended++; return 0; }
 static void close_and_native_tasks(void)
@@ -483,6 +513,8 @@ static void frames(const char *folder)
 #endif
 int main(int argc,char **argv)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
+    if(argc==2 && !strcmp(argv[1],"--gl-present-only")){gl_completion();return 0;}
 #ifdef DESKTOP_GUEST_FIXTURE
     assert(argc==2);guest_fixture_run(argv[1]);return 0;
 #endif
