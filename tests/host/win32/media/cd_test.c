@@ -121,6 +121,13 @@ int main(int argc, char **argv) {
   }
   cd_load("audio"); command("open cdaudio alias c", 0); command("play c notify", 0); cd_tick();
   cd_model.present = 0; advance(120); status("status c media present", "false"); finish();
+  /* Literal census spelling, using the default device name rather than
+   * an alias. Numeric from/to values select tracks in TMSF format. */
+  cd_load("mixed"); command("open cdaudio", 0);
+  command("set cdaudio time format tmsf", 0);
+  command("play cdaudio from 2 to 3", 0); cd_tick();
+  assert(cd_model.reads && !cd_model.plays);
+  command("stop cdaudio", 0); finish();
   cd_load("data"); command("open cdaudio alias c", 0); command("play c", MCIERR_OUTOFRANGE); assert(!cd_model.reads); finish();
   cd_destroy(); assert(!live_allocations); out("LIVE allocations=0\n"); fclose(trace);
   puts("PASS CD audio: MCI census, exact PCM, digital and analog paths, errors, epochs, notifications, tray");

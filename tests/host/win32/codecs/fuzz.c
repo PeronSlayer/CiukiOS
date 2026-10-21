@@ -21,6 +21,8 @@ extern void *AVIStreamGetFrame(void *, int32_t);
 extern int32_t AVIStreamGetFrameClose(void *);
 extern int32_t AVIFileInfoA(void *, void *, int32_t);
 extern void test_file(const uint8_t *, uint32_t);
+extern uint32_t acmFormatSuggest(uintptr_t, const struct cc_wave *,
+                                  struct cc_wave *, uint32_t, uint32_t);
 static uint32_t rng = 0x1234abcd;
 static uint32_t next(void) {
   rng ^= rng << 13;
@@ -29,6 +31,16 @@ static uint32_t next(void) {
   return rng;
 }
 int main(void) {
+  /* PCMWAVEFORMAT can end exactly at byte 16 (no WAVEFORMATEX cbSize).
+   * Heap redzones catch widening this public input to an 18-byte load. */
+  uint8_t *pcm = malloc(16), *suggested = malloc(16);
+  assert(pcm && suggested);
+  const uint8_t format[16] = {1,0,1,0,0x40,0x1f,0,0,0x80,0x3e,0,0,2,0,16,0};
+  memcpy(pcm, format, 16);
+  assert(!acmFormatSuggest(0, (const void *)pcm, (void *)suggested, 16, 0));
+  assert(!memcmp(suggested, format, 16));
+  free(pcm);
+  free(suggested);
   uint32_t iteration,
       kinds[] = {CC_FOUR('m', 'r', 'l', 'e'), CC_FOUR('m', 's', 'v', 'c'),
                  CC_FOUR('c', 'v', 'i', 'd')};

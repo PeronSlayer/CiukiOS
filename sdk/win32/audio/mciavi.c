@@ -123,7 +123,7 @@ struct avi {
   char title[128];
   /* audio */
   uint8_t aformat[1046];
-  uint32_t atag, achannels, arate, aalign, aspb, achunks, astart;
+  uint32_t atag, achannels, arate, aalign, aspb, achunks, astart, afixed;
   uint32_t *acum; /* cumulative samples before each chunk */
   uint32_t anext, askip, atotal, aopen;
   uint64_t aqueued;
@@ -264,12 +264,20 @@ static void audio_release(struct avi *a) {
   a->packed = 0;
   a->aopen = 0;
 }
-/* Decodes whole chunks into header i (at most buffer_bytes). */
+/* Decodes bounded whole sample/block batches (or variable-size chunks). */
 static uint32_t audio_fill(struct avi *a, unsigned i) {
   uint32_t out = 0, align = a->pcm.align;
   while (a->anext < a->achunks) {
+    uint32_t count = 1;
+    if (a->afixed) {
+      count = (a->buffer_bytes - out) / (a->aspb * align);
+      if (count > a->achunks - a->anext)
+        count = a->achunks - a->anext;
+      if (!count)
+        break;
+    }
     int32_t bytes = 0;
-    if (AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), 1, 0, 0,
+    if (AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), (int32_t)count, 0, 0,
                       &bytes, 0) ||
         bytes < 0)
       return MCIERR_FILE_READ;
@@ -279,12 +287,11 @@ static uint32_t audio_fill(struct avi *a, unsigned i) {
     if (out && out + decoded > a->buffer_bytes)
       break;
     if (decoded > a->buffer_bytes || (uint32_t)bytes > a->packed_bytes) {
-      a->anext++; /* oversized chunk: skipped, never truncated mid-block */
-      continue;
+      return MCIERR_INVALID_FILE; /* never silently discard an audio chunk */
     }
     uint8_t *target = a->buffer[i] + out;
     uint8_t *raw = a->atag == 1 ? target : a->packed;
-    if (bytes && AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), 1,
+    if (bytes && AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), (int32_t)count,
                                raw, bytes, 0, 0))
       return MCIERR_FILE_READ;
     uint32_t produced = (uint32_t)bytes;
@@ -321,7 +328,7 @@ static uint32_t audio_fill(struct avi *a, unsigned i) {
       a->askip = 0;
     }
     out += produced;
-    a->anext++;
+    a->anext += count;
   }
   if (!out)
     return 0;
@@ -339,11 +346,12 @@ static void audio_start(struct avi *a, uint32_t from_frame) {
   if (!a->audio || !a->audio_on || !a->achunks)
     return;
   uint64_t sample = (uint64_t)ms_of(a, from_frame) * a->arate / 1000;
-  uint32_t chunk = 0;
-  while (chunk + 1 < a->achunks && a->acum[chunk + 1] <= sample)
-    chunk++;
   if (sample >= a->atotal)
     return;
+  uint32_t chunk = a->afixed ? (uint32_t)sample / a->aspb : 0;
+  if (!a->afixed)
+    while (chunk + 1 < a->achunks && a->acum[chunk + 1] <= sample)
+      chunk++;
   if (waveOutOpen(&a->wave, 0, &a->pcm, 0, 0, 0)) {
     a->wave = 0;
     return; /* video plays without sound when the device is unavailable */
@@ -369,7 +377,7 @@ static void audio_start(struct avi *a, uint32_t from_frame) {
       return;
     }
   a->anext = chunk;
-  a->askip = (uint32_t)(sample - a->acum[chunk]);
+  a->askip = (uint32_t)sample - (a->afixed ? chunk * a->aspb : a->acum[chunk]);
   a->aqueued = 0;
   a->aopen = 1;
   for (unsigned i = 0; i < AVI_BUFFERS; i++)
@@ -471,9 +479,11 @@ static uint32_t avi_open(struct mci_device *d, uint32_t flags,
       uint32_t bits = w32_u16(a->aformat + 14);
       a->aspb = a->atag == 1 ? 1 : (size >= 20 ? w32_u16(a->aformat + 18) : 0);
       a->astart = (uint32_t)AVIStreamStart(a->audio);
+      a->afixed = w32_u32(ainfo + 44);
       int32_t chunks = AVIStreamLength(a->audio);
       int ok = a->achannels && a->achannels <= 2 && a->arate && a->aalign &&
-               a->aspb && chunks > 0 && (uint32_t)chunks <= AVI_CHUNKS &&
+               a->aspb && chunks > 0 &&
+               (a->afixed ? a->afixed == a->aalign : (uint32_t)chunks <= AVI_CHUNKS) &&
                (a->atag == 1 || a->atag == 2 || a->atag == 17);
       if (ok) {
         a->pcm = (struct wa_format){1, (uint16_t)a->achannels, a->arate, 0,
@@ -483,7 +493,12 @@ static uint32_t avi_open(struct mci_device *d, uint32_t flags,
         a->pcm.average = a->arate * a->pcm.align;
         ok = a->pcm.align && (a->atag != 1 || a->aalign == a->pcm.align);
       }
-      if (ok) {
+      if (ok && a->afixed) {
+        a->achunks = (uint32_t)chunks;
+        ok = a->achunks <= 0xffffffffu / a->aspb;
+        if (ok)
+          a->atotal = a->achunks * a->aspb;
+      } else if (ok) {
         a->achunks = (uint32_t)chunks;
         a->acum = host->alloc((a->achunks + 1) * 4);
         ok = a->acum != 0;

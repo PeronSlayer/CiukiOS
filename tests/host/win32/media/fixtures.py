@@ -15,6 +15,20 @@ def chunk(kind, payload):
     return codec.chunk(kind, payload)
 
 
+def avi_index(data, absolute=False):
+    """Add an authored old-style index to an unindexed, flat movi fixture."""
+    origin = data.index(b'movi')
+    end = origin + struct.unpack_from('<I', data, origin - 4)[0]
+    entries = bytearray()
+    at = origin + 4
+    while at < end:
+        size = struct.unpack_from('<I', data, at + 4)[0]
+        entries += struct.pack('<4sIII', data[at:at+4], 0x10,
+                               at if absolute else at - origin, size)
+        at += 8 + size + (size & 1)
+    return chunk(b'RIFF', data[8:] + chunk(b'idx1', entries))
+
+
 def wav_pcm(rate=22050, channels=1, bits=16, frames=11025):
     align = channels * bits // 8
     data = bytearray()
@@ -156,7 +170,7 @@ def avi_clip(frames=6, width=32, height=16, audio='pcm'):
             chunks.append(bytes(b))
             pcm += codec.reference(17, 1, bytes(b))
         samples = struct.unpack_from('<H', wave, 18)[0]
-        ascale, arate, align, alength = samples, rate, 256, frames
+        ascale, arate, align, alength = samples, rate, 512, frames
     astrh = struct.pack('<4s4sIHHIIIIIIIIhhhh', b'auds', b'\0\0\0\0', 0, 0, 0, 0, ascale, arate, 0, alength, 0, 0, align, 0, 0, 0, 0)
     avih = struct.pack('<IIIIIIIIII4I', 66667, 0, 0, 0x10, frames, 0, 2, 0, width, height, 0, 0, 0, 0)
     hdrl = b'hdrl' + chunk(b'avih', avih) + chunk(b'LIST', b'strl' + chunk(b'strh', vstrh) + chunk(b'strf', vfmt)) + \
@@ -168,7 +182,7 @@ def avi_clip(frames=6, width=32, height=16, audio='pcm'):
         images.append(pixels)
         movi += chunk(b'01wb', chunks[f]) + chunk(b'00dc', codes)
     riff = chunk(b'RIFF', b'AVI ' + chunk(b'LIST', hdrl) + chunk(b'LIST', movi))
-    return riff, images, pcm
+    return avi_index(riff), images, pcm
 
 
 def write_all(folder):

@@ -6,7 +6,49 @@ the `avivideo` device (`mciavi32.dll`), the msacm32 discovery entry points and
 PCM converter, avifil32 sample/time conversion, msvfw32 DrawDib and the
 MCIWnd subset. `cdaudio` is not implemented: its transport needs the
 reviewed F4 optical amendment (proposal in `build/codex/f5-12b-amendment.md`).
-Nothing here was run on QEMU or hardware.
+Nothing here was run on QEMU or hardware. The subsequent F5-12B2 CD backend
+and its approved contract are recorded in [f5-12b2-cd-audio.md](f5-12b2-cd-audio.md).
+
+## F5-12B continuation research (2026-10-21)
+
+The current base contains both accepted deliveries. The continuation preserves
+the lead's digital-primary/analog-fallback decision. Before changing code,
+the following primary references were checked against production sources:
+
+- [AVIStreamRead](https://learn.microsoft.com/en-us/windows/win32/api/vfw/nf-vfw-avistreamread)
+  and [AVISTREAMHEADER](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/api/avifmt/ns-avifmt-avistreamheader):
+  a nonzero dwSampleSize groups multiple fixed-size samples in a chunk. The
+  previous reader returned chunk counts for PCM; correct Length/Info/Read
+  to use sample units, support reads crossing chunk boundaries, and adapt
+  MCI AVI audio to request bounded batches of whole PCM frames/ADPCM blocks.
+- [AVI RIFF file reference](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference)
+  and [AVIOLDINDEX](https://learn.microsoft.com/en-us/previous-versions/ms779634(v=vs.85)):
+  parse optional idx1 entries with bounds, validate their chunk identities,
+  sizes and offsets against the already scanned movi data, and accept both
+  documented movi-relative and historical absolute offsets. Keep physical
+  stream order; do not trust an index to authorize reads outside movi.
+- [Microsoft Multimedia Standards Update, revision 3](https://mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/Docs/RIFFNEW.pdf):
+  PCMWAVEFORMAT is 16 bytes. acmStreamOpen already handles that boundary;
+  acmFormatSuggest must also avoid copying a nonexistent cbSize field.
+- [FFmpeg Cinepak implementation](https://github.com/FFmpeg/FFmpeg/blob/n7.1/libavcodec/cinepak.c)
+  and [MS Video 1 implementation](https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/msvideo1.c)
+  are upstream format-behavior references, alongside the existing format
+  notes below. No new upstream decoder code is copied. The f5-14C decoder
+  sources/provenance remain in place.
+
+Exact checks, host cost and sandbox restrictions for this continuation are
+recorded separately in `build/codex/f5-12b-report.md`.
+
+Final continuation evidence: `nice -n 19 make CAP= apps` passes. The focused
+media/codec run has 19 passes, one seccomp PE-adapter skip and five failures
+solely at LeakSanitizer shutdown (ptrace is unavailable). Codec reproducibility,
+24000 codec fuzz iterations and the exactly sized PCM16 regression pass;
+the media harnesses retain leak detection. Separate saved-artifact checks
+match all three pinned traces and nine independent AVI/GDI pixel oracles.
+Final Win32 discovery runs 258 tests: 213 pass, 19 skip, 25 fail at the same
+LeakSanitizer shutdown, and the unchanged dialog harness fails to link
+`host_pixel_format`. Source/fixture hashes remain stable across this run and
+the final apps build. No green full-suite, guest or hardware result is claimed.
 
 ## Sources checked before implementation
 
