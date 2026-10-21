@@ -52,8 +52,7 @@ static struct process *restart_service(uint32_t desktop,uint32_t previous)
 }
 static bool restart_link(struct vfs_table *t,unsigned checkpoint)
 {
-    /* Only the selected restart controller calls this helper. Keep its
-     * bounded scratch out of the kernel's 4 KiB single-frame budget. */
+    /* Probe task only, one caller at a time: the shortcut buffer stays off the 4 KiB kernel stack budget. */
     static uint8_t b[4096];const char *path=(checkpoint&1)?W32_RESTART_GROUP "\\First.lnk":W32_RESTART_GROUP "\\Second.lnk";
     int n=restart_read(t,path,b,sizeof(b));if(n<40||memcmp(b,"CIUKLNK3",8))return false;
     unsigned at=40;
