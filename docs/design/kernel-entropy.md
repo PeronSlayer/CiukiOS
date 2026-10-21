@@ -20,11 +20,14 @@ No browser or network configuration policy changes belong to this delivery.
   returns unavailable; no heap/memory limit is raised. Runs are erased by
   the adapter and returned on collector retirement.
   Compile the upstream core, noise, GCD, health and SHA3 units with `-O0`.
-  Preserve randomized memory access/loop counts, GCD normalization, startup
+  Preserve the pinned memory-access workload, GCD normalization, startup
   self-tests and RCT/APT/LAG tests with forced health enforcement (OSR >=3).
   This release uses SHA3-256 in its noise workload and SHAKE-256/XDRBG
   conditioning; retain the exact pinned implementation rather than reverting
-  it to the earlier SHA3-only conditioner. The upstream platform header is
+  it to the earlier SHA3-only conditioner. Amendment 3 accepts this release's
+  fidelity: [v3.7.0 CHANGES.md](https://github.com/smuellerDD/jitterentropy-library/blob/v3.7.0/CHANGES.md)
+  records XDRBG-256 output generation and removal of loop-count shuffling.
+  Do not reintroduce loop-count randomization. The upstream platform header is
   replaced by freestanding allocation, erase, TSC and scheduler hooks.
 * [NIST SP 800-90B](https://doi.org/10.6028/NIST.SP.800-90B) and the
   [upstream assessment instructions](https://github.com/smuellerDD/jitterentropy-library/blob/v3.7.0/tests/raw-entropy/README.md)
@@ -60,10 +63,13 @@ credit: timer drift, human input and disk seek/receive timing diversify the
 pool without assuming independent or attacker-inaccessible events. An SMP
 port must provide one buffer per CPU.
 The worker offers a scheduler safe point before each upstream measurement,
-with no pool mutex held. It collects only while fresh pool credit is below
+with no pool mutex held. Combined-noise deltas span consecutive measurement
+calls, so the yield and dispatched work contribute to the next measured delta.
+Normally it collects only while fresh pool credit is below
 256 bits, then stops collection until a reseed consumes that credit. Collection
 errors latch failure, release the collector and retire the worker. IRQ input
-can continue to be mixed without granting credit.
+can continue to be mixed without granting credit. The explicit raw-capture
+mode below also collects while credit is full, only until its sample quota.
 
 Boot collection is finite and happens at the existing global stack-guard safe
 point, before task stacks exist. A missing TSC, failed health test or exhausted
@@ -119,17 +125,53 @@ source for this boot. Runtime collection uses the existing monotonic ticks
 and the same per-attempt bounds. `[entropy] boot rounds=... cycles=... ms=...`
 records the attempt count and elapsed collection cost (including startup).
 
-`BOOT.CFG` token `entropyraw=1` enables a bounded boot capture of at most 8,192
-raw combined-noise deltas. No records or capture allocation occur by default.
-The hook saves GCD-normalized deltas immediately before health testing/stuck
-rejection/conditioning. It buffers them and logs `[entropy] raw ...` only
-**after** collection stops, avoiding serial I/O inside the timed workload.
-Each record carries sample index, delta, GCD and OSR; the closing record
-reports captured/dropped counts. All-zero and rejected deltas are retained.
-This finite diagnostic capture is groundwork for the lead's target assessment;
-it is not the million-sample/restart corpus required by SP 800-90B. Raw data
-must be treated as exposed noise; the capture mode makes no TLS qualification
-claim. The normal worker does not extend the capture or log raw data.
+## Amendment 3: post-boot raw timing stream
+
+The exact `BOOT.CFG` token `entropyraw=1` requests **1,048,576** post-boot
+samples from the normal collector. Without it there is no capture allocation
+or raw serial output. Boot startup/guard seeding never streams raw samples.
+The worker allocates a 131,072-byte buffer (33 owned PMM pages including its
+allocator header), enough for every measurement in one bounded attempt; there
+is no whole-corpus allocation. Allocation failure stops only capture.
+
+The existing observation hook saves the low eight bits of each GCD-normalized
+combined-noise timing delta, before health tests, stuck rejection and
+conditioning. Zero and rejected samples are retained in order. After filling
+fresh credit (or one read when already full), the worker streams the buffer
+in serial-only records:
+
+```text
+[entropy] raw index=0 count=64 data=<128 lowercase hexadecimal digits>
+[entropy] raw index=64 count=64 data=<128 lowercase hexadecimal digits>
+...
+[entropy] raw complete samples=1048576 bits=8
+```
+
+`index` is the zero-based sample offset; `count` is 1–64 bytes and `data`
+contains exactly two hex digits per byte. Frames are shorter than 224 bytes
+including the newline. They bypass console and disk log sinks. Publication
+uses existing evidence queue backpressure, without the pool mutex held; the
+existing UART IRQ transmits. The worker sleeps until its batch's final ticket
+has been submitted to the UART, then starts a new bounded collection attempt.
+Wire submission does not prove remote receipt: the lead must verify every
+offset, count and the completion record in the captured file.
+
+The sample quota truncates only the final batch, with no wraparound/restart.
+After the completion record drains, the raw buffer is erased/freed and normal
+saturation/pause behavior resumes. Serial refusal/disconnection frees capture
+storage and reports an incomplete stream without failing the DRBG. Collector
+failure retains the existing fail-closed policy, retires the worker and frees
+capture storage. The DRBG, credit ceiling, reseed demand and syscall path stay
+active throughout capture; full fresh credit grants no additional entropy.
+
+Serial waits and other scheduled work fall between consecutive timer readings
+and therefore affect subsequent deltas; the capture has that measurement
+perturbation. No serial I/O occurs in the observation hook. The 5 s/round
+collector bounds apply independently to each attempt, excluding the later serial
+drain. A complete corpus takes minutes at 38400 baud. This exposed-noise
+diagnostic mode makes no TLS qualification claim. The lead's capture/parser
+and NIST assessment procedure, including remaining runtime/restart evidence,
+is [pending hardware qualification](../validation/f6-16-entropy.md).
 
 `ciuki_entropy_wait()` is the explicitly indefinite, interruptible helper.
 The existing `ciuki_getentropy_wait()` name is retained as a compatibility

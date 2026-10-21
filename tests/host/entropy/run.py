@@ -40,6 +40,8 @@ else:
     for name in ((args.case,) if args.case else ('model', 'jent', 'kernel', 'lwip-seed')):
         binary = out / (name + '-test')
         extra, sources = [], common
+        if name == 'kernel':
+            sources = [*common, str(root / 'src/kernel/lib/fmt.c')]
         if name in ('jent', 'qualification'):
             objects = []
             for c in recipe['sources'](src):

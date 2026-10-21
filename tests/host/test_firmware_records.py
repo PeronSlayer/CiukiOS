@@ -94,7 +94,7 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
         result = subprocess.run([
             'clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
             '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
-            str(fixture), '-o', str(cls.program),
+            str(fixture), str(ROOT / 'tests/host/entropy/unavailable_stub.c'), '-o', str(cls.program),
         ], env=cls.env, capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)

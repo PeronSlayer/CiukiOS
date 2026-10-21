@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/process.h>
+#include <ciuki/entropy.h>
 #include <ciuki/entropy_pool.h>
 #include <ciuki/entropy_jent.h>
 #include <stdio.h>
@@ -47,6 +48,9 @@ static struct process process;
 static struct task worker;
 static bool refuse_worker, readonly, write_failure;
 static unsigned started, locked, logs, safe_points, boot_logs, raw_logs;
+static unsigned stream_samples, stream_complete, serial_waits;
+static uint64_t serial_ticket;
+static bool serial_refuse, serial_lost, serial_pending, in_jent_read, read_failure;
 static void (*worker_entry)(void *);
 static jmp_buf worker_return;
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
@@ -54,13 +58,47 @@ void kmutex_lock(struct kmutex *m) { (void)m;CHECK(!locked++); }
 void kmutex_unlock(struct kmutex *m) { (void)m;CHECK(locked--==1); }
 void klog(const char *fmt,...) { CHECK(strncmp(fmt,"[entropy]",9)==0);logs++;
     if(strstr(fmt,"boot rounds="))boot_logs++;
-    if(strstr(fmt,"raw index="))raw_logs++;
+}
+uint32_t serial_evidence_begin(size_t bytes)
+{
+    CHECK(g_current && !locked && !in_jent_read && fake_flags==0x200 && bytes<224);
+    /* A user can still obtain DRBG output during serial backpressure. */
+    uint8_t byte;CHECK(!entropy_get(&byte,1) || read_failure);
+    return irq_save();
+}
+uint64_t serial_write_ticket(const char *line,size_t bytes)
+{
+    CHECK(!locked && !in_jent_read && !fake_flags && bytes<224 && line[bytes-1]=='\n');
+    if(serial_refuse)return 0;
+    unsigned index,count;int end=0;char data[129];
+    if(sscanf(line,"[entropy] raw index=%u count=%u data=%128[0-9a-f]\n%n",&index,&count,data,&end)==3){
+        CHECK((size_t)end==bytes && index==stream_samples && count && count<=64 && strlen(data)==2*count);
+        for(unsigned i=0;i<count;i++){
+            unsigned byte;CHECK(sscanf(data+2*i,"%2x",&byte)==1);
+            CHECK(byte==(uint8_t)(stream_samples%1100));stream_samples++;
+        }
+        CHECK(stream_samples<=1048576);raw_logs++;
+    }else{
+        CHECK(sscanf(line,"[entropy] raw complete samples=%u bits=8\n%n",&count,&end)==1);
+        CHECK((size_t)end==bytes && count==1048576 && stream_samples==count && !stream_complete);
+        stream_complete++;
+    }
+    return ++serial_ticket;
+}
+void serial_snapshot(struct serial_stats *s)
+{
+    CHECK(!locked && !in_jent_read && fake_flags==0x200);
+    *s=(struct serial_stats){.present=!serial_lost,.sent=serial_pending?serial_ticket-1:serial_ticket};
 }
 void panic(const char *fmt,...) { (void)fmt;abort(); }
 struct task *task_create_kernel(const char *n,void (*fn)(void *),void *arg,enum task_prio prio)
 { CHECK(!strcmp(n,"entropy") && !arg && prio==P_NORMAL);worker_entry=fn;return refuse_worker?NULL:&worker; }
 void task_start(struct task *t) { CHECK(t==&worker);started++; }
-void task_sleep_ms(uint32_t n) { CHECK(n==10 && !locked && fake_flags==0x200);longjmp(worker_return,1); }
+void task_sleep_ms(uint32_t n) {
+    CHECK(n==10 && !locked && fake_flags==0x200);
+    if(serial_pending){serial_pending=false;serial_waits++;return;}
+    longjmp(worker_return,1);
+}
 void kpreempt_point(void) { CHECK(!locked && fake_flags==0x200);safe_points++; }
 struct process *proc_current(void) { return &process; }
 static uint8_t user_buffer[512];
@@ -69,7 +107,7 @@ bool ua_range(const struct uaddr *u,uint32_t address,uint32_t n,uint32_t prot)
 int ua_user_write(const struct uaddr *u,uint32_t address,const void *data,uint32_t n)
 { if(write_failure)return -ENOMEM;if(!ua_range(u,address,n,PROT_WRITE))return -EFAULT;memcpy(user_buffer+(address-4096),data,n);return 0; }
 static const struct entropy_jent_ops *jent_ops;
-static bool init_failure, read_failure;
+static bool init_failure;
 static unsigned reads, closes;
 void entropy_jent_begin(const struct entropy_jent_ops *o) { jent_ops=o; }
 int entropy_jent_init(void) { return init_failure ? -1 : 0; }
@@ -77,7 +115,9 @@ int entropy_jent_read(uint8_t bytes[32])
 {
     CHECK(!locked);reads++;jent_ops->yield();
     if(read_failure)return -1;
+    in_jent_read=true;
     for(unsigned i=0;i<1100;i++)jent_ops->raw(i,1,3);
+    in_jent_read=false;
     memset(bytes,0x42,32);return 0;
 }
 void entropy_jent_close(void) { closes++; }
@@ -131,12 +171,45 @@ int main(void)
     read_failure=true;unsigned freed=closes;worker_entry(NULL);
     CHECK(pool.failed && closes==freed+1 && entropy_syscall(&tf)==-EAGAIN);
     CHECK(speaker==2 && boot_logs==1 && !raw_logs);
-    /* Exact boot token, capture saturation/drops and bounded flush. */
+    /* Exact token; boot produces no raw allocation/output. */
     g_current=NULL;booted=seeded=false;read_failure=false;g_ticks=0;pit_reads=0;
     memcpy(g_boot.options,"xentropyraw=1 entropyraw=10",27);CHECK(!raw_enabled());
     memset(g_boot.options,0,sizeof(g_boot.options));memcpy(g_boot.options,"entropyraw=1",12);
     CHECK(raw_enabled());stackprot_init();
-    CHECK(pool.ready && raw_logs==RAW_LIMIT && raw_dropped==8800-RAW_LIMIT && !raw && !owned_pages);
+    CHECK(pool.ready && !raw_logs && !raw && !owned_pages);
+    g_current=&worker;serial_pending=true;
+    if(!setjmp(worker_return))worker_entry(NULL);
+    CHECK(raw && raw_sent==8800 && !raw_count && serial_waits==1 && owned_pages==33);
+    /* Continue past full credit, preserve order/zero/rejected low bytes,
+     * service reseed demand during capture, and stop at exactly 2^20. */
+    for(unsigned batch=1;raw;batch++){
+        if(batch==32){g_ticks=ENTROPY_RESEED_MS;uint8_t byte;CHECK(!entropy_get(&byte,1));}
+        if(!setjmp(worker_return))worker_entry(NULL);
+    }
+    CHECK(raw_sent==RAW_LIMIT && stream_samples==RAW_LIMIT && stream_complete==1 && !owned_pages);
+    CHECK(pool.ready && !pool.failed && pool.reseeds==2 && pool.estimate_bits==256);
+    collected=reads;
+    if(!setjmp(worker_return))worker_entry(NULL);
+    CHECK(reads==collected); /* capture stops and saturated collection pauses */
+    /* The observation hook never overruns an attempt buffer, even if an
+     * invalid caller supplies excess callbacks. No serial I/O in the hook. */
+    raw=entropy_alloc(ENTROPY_COLLECT_ROUNDS);CHECK(raw);raw_sent=0;
+    for(unsigned i=0;i<ENTROPY_COLLECT_ROUNDS+16;i++)capture(i,1,3);
+    CHECK(raw_count==ENTROPY_COLLECT_ROUNDS && raw[0]==0 && raw[raw_count-1]==255);
+    raw_release();CHECK(!owned_pages);
+    /* Refused serial publication stops only capture, without failing DRBG. */
+    raw_sent=0;stream_samples=stream_complete=0;raw_requested=true;serial_refuse=true;
+    if(!setjmp(worker_return))worker_entry(NULL);
+    CHECK(!raw && !raw_requested && !owned_pages && !pool.failed && !raw_sent);
+    serial_refuse=false;serial_lost=true;raw_requested=true;
+    if(!setjmp(worker_return))worker_entry(NULL);
+    CHECK(!raw && !raw_requested && !owned_pages && !pool.failed && raw_sent==1100);
+    serial_lost=false;raw_sent=0;stream_samples=0;raw_requested=true;refuse_pages=true;
+    if(!setjmp(worker_return))worker_entry(NULL);
+    CHECK(!raw && !raw_requested && !owned_pages && !pool.failed);refuse_pages=false;
+    raw_requested=true;read_failure=true;freed=closes;worker_entry(NULL);
+    CHECK(pool.failed && !raw && !owned_pages && closes==freed+1);read_failure=false;
+    g_current=NULL;
     memset(g_boot.options,0,sizeof(g_boot.options));
     booted=seeded=false;g_cpu_tsc=false;boot_per_ms=0;stackprot_init();
     CHECK(pool.failed && !pool.ready && __stack_chk_guard);
@@ -146,6 +219,7 @@ int main(void)
     CHECK(pool.failed && !pool.ready && speaker==2);pit_stalled=false;
     booted=seeded=false;init_failure=true;pit_reads=0;stackprot_init();
     CHECK(pool.failed && !pool.ready && !pool.estimate_bits);
-    puts("PASS production boot/guard, absent/stalled TSC/PIT, library-init refusal, IRQ-only mix, worker saturation/resume/retirement, bounded opt-in raw capture and syscall 91 surface");
+    puts("PASS production boot/guard, absent/stalled TSC/PIT, library-init refusal, IRQ-only mix, worker saturation/resume/retirement and syscall 91 surface");
+    puts("PASS post-boot opt-in raw stream: exactly 1048576 ordered low bytes, bounded hex frames, serial backpressure/drain, concurrent DRBG/reseed, cap/pause, allocation/serial/collector failure cleanup");
     return 0;
 }

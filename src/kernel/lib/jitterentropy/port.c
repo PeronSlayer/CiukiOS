@@ -26,7 +26,8 @@ void ciuki_jent_free(void *p, size_t size)
 }
 bool ciuki_jent_round(struct rand_data *ec)
 {
-    /* Yield outside the measured interval and without a pool mutex. */
+    /* No pool mutex is held. Combined-noise deltas span consecutive calls,
+     * so this yield (and any dispatched work) contributes to the next delta. */
     if (ops->yield) ops->yield();
     if (expired || rounds >= ENTROPY_COLLECT_ROUNDS || ops->ms() - begun >= ENTROPY_COLLECT_MS) {
         expired = true;
