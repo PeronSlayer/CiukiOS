@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include <ciuki/present_abi.h>
+#include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #include "../gfxdemo/benchmark.h"
 #include "sound_runtime.h"
 #include "sound_storage.h"
@@ -1319,6 +1320,9 @@ static void shell_service(struct desktop *d)
         desk_power_begin(d,action);
         return;
     }
+    if (sh->want_programs) {
+        sh->want_programs=0;desktop_wait("program-scan");scan_programs(d);
+    }
     if (sh->want_reload & 1) {
         settings_reload_pending=settings_reload_request=1;
         theme_read_pending=0;
@@ -1481,12 +1485,12 @@ static void links_directory(struct desktop *d, const char *path, unsigned deskto
     struct dirent *entry;
     while (*budget && *count<cap && (entry=readdir(dir))) {
         (*budget)--;
-        if (entry->d_name[0]=='.' || strchr(entry->d_name,'/') || strchr(entry->d_name,'\\')) continue;
+        if ((entry->d_name[0]=='.' && strcmp(entry->d_name,".ciuki")) || strchr(entry->d_name,'/') || strchr(entry->d_name,'\\')) continue;
         char file[260]; int n=snprintf(file,sizeof(file),"%s/%s",path,entry->d_name);
         if (n<0 || n>=(int)sizeof(file)) continue;
         struct stat st; if (stat(file,&st)) continue;
         if (S_ISDIR(st.st_mode)) links_directory(d,file,desktop,out,cap,count,depth-1,budget);
-        else if (S_ISREG(st.st_mode) && n>=4 && !strcasecmp(file+n-4,".lnk") && !link_read(d,file,&out[*count].launch)) {
+        else if (S_ISREG(st.st_mode) && n>=4 && (!strcasecmp(file+n-4,".lnk") || (n>=6 && !strcasecmp(file+n-6,".ciuki"))) && !link_read(d,file,&out[*count].launch)) {
             snprintf(out[*count].source,sizeof(out[*count].source),"%s",file); out[*count].desktop=desktop; (*count)++;
         }
     }
@@ -1498,6 +1502,8 @@ static int links_list(struct desktop *d, struct desk_link_entry *out, unsigned c
     links_directory(d,"/Windows/Start Menu/Programs",0,out,cap/2,&count,3,&budget);
     budget=128;
     links_directory(d,"/Windows/Desktop",1,out,cap,&count,1,&budget);
+    budget=256;links_directory(d,"/Games",0,out,cap,&count,3,&budget);
+    budget=256;links_directory(d,"/Programs",0,out,cap,&count,3,&budget);
     /* Stable labels independent of FAT enumeration order. */
     for (unsigned i=1;i<count;i++) for (unsigned j=i;j && strcmp(out[j-1].launch.label,out[j].launch.label)>0;j--) {
         struct desk_link_entry *temp=malloc(sizeof(*temp)); if (!temp) return (int)count;
@@ -1512,6 +1518,7 @@ struct links_worker {
     pthread_mutex_t mutex;
     pthread_cond_t changed;
     int scan_requested, launch_requested, launch_busy, completed, result;
+    unsigned games_removed;
     unsigned count;
     char source[260];
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
@@ -1529,13 +1536,28 @@ static void *links_thread(void *arg)
         pthread_mutex_unlock(&w->mutex);
         if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
-            int result=r ? link_read(NULL,path,r) : -ENOMEM;
+            int result=-ENOMEM;
+            if(r && launch==2){
+                memset(r,0,sizeof(*r));snprintf(r->label,sizeof(r->label),"Install");
+                snprintf(r->target,sizeof(r->target),"%s",path);r->show=1;
+                snprintf(r->directory,sizeof(r->directory),"%s",path);
+                char *slash=strrchr(r->directory,'/');if(slash)*slash=0;
+                result=0;
+            }else if(r)result=link_read(NULL,path,r);
             if (!result) result=ciuki_win32_shell_launch(r);
             free(r);
             pthread_mutex_lock(&w->mutex); w->result=result; w->completed=1; w->launch_busy=0; w->scan_requested=1; pthread_mutex_unlock(&w->mutex);
         } else {
             int count=links_list(NULL,w->scratch,DESK_LINKS);
+            unsigned removed=w->games_removed;
+            for(unsigned g=1;g<=CIUKI_DOSVM_GAME_COUNT;g++){
+                struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
+                if(!ciuki_dosvm(CIUKI_DOSVM_GAME_QUERY,&c)){
+                    if(c.state==1)removed&=~(1u<<(g-1));else removed|=1u<<(g-1);
+                }
+            }
             pthread_mutex_lock(&w->mutex);
+            w->games_removed=removed;
             w->count=count>0 && count<=(int)DESK_LINKS ? (unsigned)count : 0;
             memcpy(w->published,w->scratch,w->count*sizeof(*w->published));
             pthread_mutex_unlock(&w->mutex);
@@ -1568,6 +1590,24 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
+static int install_program(struct desktop *d,const char *path)
+{
+    (void)d;
+    /* Removable volume/CD paths are resolved by the ordinary launch helper.
+     * Keep the same bounded name policy as the Control Panel picker. */
+    if(strncmp(path,"/mnt/",5) || path[5]<'d' || path[5]>'z' || path[6]!='/')return -EINVAL;
+    const char *base=strrchr(path,'/');if(!base)return -EINVAL;base++;
+    size_t n=strlen(base);
+    if(strcasecmp(base,"setup.exe") && strcasecmp(base,"install.exe") && !(n>4 && !strcasecmp(base+n-4,".bat")))return -EINVAL;
+    if(strstr(path,"/../") || strstr(path,"/./") || strchr(path,'\\'))return -EINVAL;
+    struct links_worker *w=links_worker;
+    if(!w || pthread_mutex_trylock(&w->mutex))return -EBUSY;
+    int e=0;
+    if(w->launch_requested || w->launch_busy || w->completed)e=-EBUSY;
+    else if(strlen(path)>=sizeof(w->source))e=-ENAMETOOLONG;
+    else {strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
+    pthread_mutex_unlock(&w->mutex);return e;
+}
 static void links_start(struct desktop *d)
 {
     if (links_worker) return;
@@ -1577,11 +1617,13 @@ static void links_start(struct desktop *d)
     w->scan_requested=1;
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
     links_worker=w;
+    d->install_program=install_program;
     d->v3_links_list=links_snapshot; d->v3_link_read=link_cached; d->v3_launch=link_launch_async;
 }
 static void links_service(struct desktop *d)
 {
     struct links_worker *w=links_worker; if (!w || pthread_mutex_trylock(&w->mutex)) return;
+    d->games_removed=w->games_removed;
     int completed=w->completed, result=w->result; w->completed=0; pthread_mutex_unlock(&w->mutex);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
 }

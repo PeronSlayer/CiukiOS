@@ -12,6 +12,8 @@
 #pragma weak audio_write_user
 #pragma weak audio_devctl
 #pragma weak net_devctl
+bool net_socket_object(struct proc_object *) __attribute__((weak));
+int32_t net_socket_rw(struct process *, int, uint32_t, uint32_t, bool) __attribute__((weak));
 int media_devctl(struct process *, int32_t, uint32_t, uint32_t, uint32_t);
 #pragma weak media_devctl
 
@@ -295,6 +297,13 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     bool fd_call_needed = (nr >= CIUKI_SYS_READ && nr <= CIUKI_SYS_FSTAT) ||
                          nr == CIUKI_SYS_GETDENTS || nr == CIUKI_SYS_FSYNC || nr == CIUKI_SYS_FTRUNCATE;
     struct file_description *d = 0;
+    if (fd_call_needed && net_socket_object && net_socket_object(file_fd_object(p, (int32_t)tf->ebx))) {
+        if (nr == CIUKI_SYS_READ || nr == CIUKI_SYS_WRITE)
+            return net_socket_rw ? net_socket_rw(p, (int32_t)tf->ebx, tf->ecx, tf->edx, nr == CIUKI_SYS_WRITE) : -ENOSYS;
+        if (nr == CIUKI_SYS_FSTAT) return -EOPNOTSUPP;
+        if (nr == CIUKI_SYS_FSYNC || nr == CIUKI_SYS_FTRUNCATE) return -EINVAL;
+        return nr == CIUKI_SYS_GETDENTS ? -ENOTDIR : -ESPIPE;
+    }
     if (fd_call_needed) {
         if (!file_fd_object(p, (int32_t)tf->ebx)) return -EBADF;
         d = file_fd(p, (int32_t)tf->ebx);

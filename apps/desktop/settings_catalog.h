@@ -2,6 +2,7 @@
  * One settings hierarchy for the panel, Start and tray shortcuts. */
 #ifndef CIUKI_SETTINGS_CATALOG_H
 #define CIUKI_SETTINGS_CATALOG_H
+#define DESK_SETTINGS_PROGRAMS 9u /* values zero; program and launcher inventory changed */
 #define DESK_SETTINGS_DISPLAY_PREVIEW 8u /* mode id; Control Panel owns persistence */
 #define DESK_SETTINGS_OPEN_POWER 7u /* values zero; open the shell confirmation */
 enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,

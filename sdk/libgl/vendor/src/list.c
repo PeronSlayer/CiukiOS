@@ -48,7 +48,7 @@ static void delete_list(GLint list) {
 void glDeleteLists(GLuint list, GLuint range) {
 	GLuint i;
 #include "error_check_no_context.h"
-	for (i = 0; i < list + range; i++)
+	for (i = 0; i < range && list + i < MAX_DISPLAY_LISTS; i++)
 		glDeleteList(list + i);
 }
 void glDeleteList(GLuint list) {

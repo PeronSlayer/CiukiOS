@@ -114,6 +114,7 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
 #include "../../probes/win32_upper/controller.h"
 #include "../../probes/win32_media/controller.h"
 #include "../../probes/win32_installers/controller.h"
+#include "../../probes/win32_gl/controller.h"
 #include "../../probes/win32_restart/controller.h"
 #include "../../probes/win32_kernel32/controller.h"
 #include "../../probes/win32_core/controller.h"
@@ -143,7 +144,7 @@ static struct {
     uint32_t upper_child;
     bool installer;
     uint32_t installer_child;
-    unsigned core_fixture; /* fixture index + 1; zero leaves the gate unarmed */
+    unsigned core_fixture; /* shared fixture ID + 1; zero leaves the gate unarmed */
     uint32_t core_child;
 } native_reports;
 static bool installer_report_stage(unsigned,unsigned,unsigned);
@@ -678,9 +679,11 @@ finished:
  * records; application output is never evidence. The result page at
  * W32_DIALOGS_RESULT_VA (0x10000000) avoids the loader's top-down metadata
  * at 0x6fff0000; controller.h owns the fixture's address agreement. */
-static int probe_w32_fixture(bool media)
+static void w32_fixture_remove_tree(struct process *,struct process *);
+static int probe_w32_fixture(unsigned kind)
 {
-    const char *name=media ? "w32-media" : "w32-dialogs";
+    bool media=kind==1,gl=kind==2;
+    const char *name=gl ? "w32-gl" : media ? "w32-media" : "w32-dialogs";
     rec_emit(name,"BEGIN",0);
     const struct fb_device *display=fbdev_get();
     if (!display->present || (g_boot.flags & CBI_F_SAFE_MODE) || !native_payload_present()) {
@@ -700,7 +703,7 @@ static int probe_w32_fixture(bool media)
     desktop_snapshot(&initial); proc_snapshot(&before);
     struct process *owner=0,*server=0,*child=0;
     uint32_t generation=0,child_pid=0,exit_code=0xffffffffu;
-    union { struct w32_dialogs_result r; struct w32_media_result m; } result;
+    union { struct w32_dialogs_result r; struct w32_media_result m; struct w32_gl_result gl; } result;
     memset(&result,0,sizeof(result));
     struct w32_dialogs_result *r=&result.r;
     memset(&native_reports,0,sizeof(native_reports));
@@ -712,49 +715,56 @@ static int probe_w32_fixture(bool media)
     int made=supervisor_spawn_desktop_probe(&server);
     if (made<0) { failure="desktop_launch"; pass=false; goto cleanup; }
     server->ppid=owner->pid;
-    native_reports.active=true; native_reports.server=server->pid; native_reports.dialogs=true;
+    native_reports.active=true; native_reports.server=server->pid;
+    native_reports.dialogs=!gl;
+    native_reports.core_fixture=gl ? W32_FIXTURE_GL+1 : 0;
     uint64_t deadline=g_ticks+10000;
     while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
     pass=native_live(server) && native_reports.survivor_stage==2;
     if (!pass) { failure="survivor_timeout"; goto cleanup; }
-    pass=native_command(server,GATE_SNAPSHOT,&generation) && native_command(server,media ? GATE_MEDIA : GATE_DIALOGS,&generation);
+    pass=native_command(server,GATE_SNAPSHOT,&generation) &&
+        (gl ? native_command_argument(server,GATE_W32_FIXTURE,&generation,"gl-exercise") :
+              native_command(server,media ? GATE_MEDIA : GATE_DIALOGS,&generation));
     if (!pass) { failure=native_command_failure; goto cleanup; }
     /* The desktop spawns the fixture only once w32srv has registered its
      * endpoint (first QEMU run: the fixture's startup met no server, 1062,
      * and exited c0000142); w32srv takes 1-2 s to start under TCG. */
     deadline=g_ticks+20000;
-    while (native_live(server) && !native_reports.dialogs_child && g_ticks<deadline) task_sleep_ms(1);
-    child_pid=native_reports.dialogs_child;
+    while (native_live(server) && !(gl ? native_reports.core_child : native_reports.dialogs_child) && g_ticks<deadline) task_sleep_ms(1);
+    child_pid=gl ? native_reports.core_child : native_reports.dialogs_child;
     child=child_pid ? proc_find(child_pid) : 0;
-    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32;
-    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",media ? W32_MEDIA_PATH : W32_DIALOGS_PATH,child_pid,server->pid);
+    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32 && !native_reports.invalid;
+    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",gl ? W32_GL_PATH : media ? W32_MEDIA_PATH : W32_DIALOGS_PATH,child_pid,server->pid);
     if (!pass) { failure=native_reports.invalid ? native_reports.invalid_check : "fixture_identity"; goto cleanup; }
     /* The fixture waits up to 5 s for w32srv, then runs; 120 s bound. */
     deadline=g_ticks+120000;
     while (g_ticks<deadline && (child=proc_find(child_pid)) && child->state==PROC_LIVE) {
-        if (!ua_read(child->memory,&result,media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA,sizeof(result)) && r->done) break;
+        if (!ua_read(child->memory,&result,gl ? W32_GL_RESULT_VA : media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA,sizeof(result)) && r->done) break;
         task_sleep_ms(5);
     }
     child=proc_find(child_pid);
-    valid=child && child->state==PROC_LIVE && (media ? w32_media_valid(&result.m) : w32_dialogs_valid(r));
+    valid=child && child->state==PROC_LIVE && (gl ? w32_gl_valid(&result.gl) : media ? w32_media_valid(&result.m) : w32_dialogs_valid(r));
     if (valid) {
         uint32_t one=1;
-        released=!ua_write(child->memory,(media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA)+offsetof(struct w32_dialogs_result,release),&one,4);
+        released=!ua_write(child->memory,(gl ? W32_GL_RESULT_VA : media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA)+offsetof(struct w32_dialogs_result,release),&one,4);
     }
     /* In gate mode the desktop does not reap this child: its exit stays. */
     deadline=g_ticks+5000;
     while ((child=proc_find(child_pid)) && child->state!=PROC_ZOMBIE && g_ticks<deadline) task_sleep_ms(1);
     if (child && child->state==PROC_ZOMBIE) exit_code=(uint32_t)child->raw_exit;
     if (valid) {
-        if (media) w32_media_publish(&result.m,exit_code,rec_emit);
+        if(gl) w32_gl_publish(&result.gl,exit_code,rec_emit);
+        else if (media) w32_media_publish(&result.m,exit_code,rec_emit);
         else w32_dialogs_publish(r,exit_code,rec_emit);
     }
-    pass=valid && released && !exit_code && !r->errors && (media || (!r->teardown_errors && !r->live_windows && !r->live_menus));
+    pass=valid && released && !native_reports.invalid && !exit_code && !r->errors && (gl || media || (!r->teardown_errors && !r->live_windows && !r->live_menus));
     if (!pass) failure=!valid ? "fixture_result" : exit_code ? "fixture_exit" : "fixture_errors";
 cleanup:
     native_reports.active=false;
     native_reports.dialogs=false;
-    if (server) {
+    native_reports.core_fixture=0;
+    if (server && gl) w32_fixture_remove_tree(owner,server);
+    else if (server) {
         /* The fixture and w32srv are the desktop's children: collect them
          * before the desktop so nothing is adopted past the ledger. */
         static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
@@ -781,6 +791,8 @@ static int probe_w32_media(void) { return probe_w32_fixture(true); }
 CIUKI_F5_PROBE("w32-dialogs",probe_w32_dialogs);
 CIUKI_F5_PROBE("w32-media",probe_w32_media);
 
+static int probe_w32_gl(void) { return probe_w32_fixture(2); }
+CIUKI_F5_PROBE("w32-gl",probe_w32_gl);
 /* f5-21b: one authenticated desktop gate and result reader for the core PEs.
  * The registered wrappers live in f5_probes_observers.c. */
 static void w32_fixture_remove_tree(struct process *owner,struct process *server)

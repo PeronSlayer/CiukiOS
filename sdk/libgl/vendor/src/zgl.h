@@ -128,6 +128,7 @@ typedef struct GLVertex {
 	V3 normal;
 	V4 coord;
 	V4 tex_coord;
+	V4 tex_coord1; /* CiukiOS opt-in software compatibility interpolant. */
 	V4 color;
 
 	/* computed values */
@@ -174,6 +175,13 @@ typedef void (*gl_draw_triangle_func)(GLVertex* p0, GLVertex* p1, GLVertex* p2);
 /* display context */
 
 typedef struct GLContext {
+	/* CiukiOS: optional compatibility rasterizer; NULL preserves native output. */
+	void (*software_triangle)(struct GLContext*, GLVertex*, GLVertex*, GLVertex*);
+	void *software_state;
+ V4 software_flat_color; /* original provoking vertex, before split/clip */
+  void (*software_vertex)(struct GLContext*, GLVertex*);
+ M4 *software_texture_matrix[2];
+	void (*software_line)(struct GLContext*, GLVertex*, GLVertex*);
 	/* lights */
 	GLLight lights[MAX_LIGHTS];
 	/* viewport */
@@ -188,6 +196,7 @@ typedef struct GLContext {
 	V4 current_color;
 	V4 current_normal;
 	V4 current_tex_coord;
+	V4 current_tex_coord1;
 	V4 rasterpos;
 
 	/*Pointers.*/
@@ -335,7 +344,8 @@ typedef struct GLContext {
 } GLContext;
 
 extern GLContext gl_ctx;
-static GLContext* gl_get_context(void) { return &gl_ctx; }
+extern GLContext *gl_selected_context;
+static GLContext* gl_get_context(void) { return gl_selected_context ? gl_selected_context : &gl_ctx; }
 
 extern void (*op_table_func[])(GLParam*);
 extern GLint op_table_size[];

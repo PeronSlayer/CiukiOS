@@ -13,6 +13,7 @@
 static void gl_transform_to_viewport_clip_c(GLVertex* v) { /* MARK: NOT_INLINED_IN_OG*/
 	GLContext* c = gl_get_context();
 	/* coordinates */
+ if(c->software_triangle && !(v->pc.W>0)) { v->zp.x=v->zp.y=v->zp.z=0;return; }
 	{
 		GLfloat winv = 1.0 / v->pc.W;
 		v->zp.x = (GLint)(v->pc.X * winv * c->viewport.scale.X + c->viewport.trans.X);
@@ -96,7 +97,7 @@ void gl_draw_point(GLVertex* p0) {
 		} else
 #endif
 		{
-			ZB_plot(c->zb, &p0->zp);
+			if (c->software_line) c->software_line(c,p0,p0); else ZB_plot(c->zb, &p0->zp);
 		}
 	}
 }
@@ -107,7 +108,8 @@ void gl_draw_point(GLVertex* p0) {
  * Line Clipping
  */
 
-static void GLinterpolate(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) { 
+static void GLinterpolate(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
+ if (gl_get_context()->software_triangle) { for(int k=0;k<4;k++){q->color.v[k]=p0->color.v[k]+(p1->color.v[k]-p0->color.v[k])*t;q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;}for(int k=0;k<4;k++)q->ec.v[k]=p0->ec.v[k]+(p1->ec.v[k]-p0->ec.v[k])*t;}
 	GLint i;
 	q->pc.X = p0->pc.X + (p1->pc.X - p0->pc.X) * t;
 	q->pc.Y = p0->pc.Y + (p1->pc.Y - p0->pc.Y) * t;
@@ -160,7 +162,8 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 		} else
 #endif
 		{
-			if (c->zb->depth_test)
+			if (c->software_line) c->software_line(c,p1,p2);
+			else if (c->zb->depth_test)
 				ZB_line_z(c->zb, &p1->zp, &p2->zp);
 			else
 				ZB_line(c->zb, &p1->zp, &p2->zp);
@@ -194,7 +197,8 @@ void gl_draw_line(GLVertex* p1, GLVertex* p2) {
 			} else
 #endif
 			{
-				if (c->zb->depth_test)
+				if (c->software_line) c->software_line(c,&q1,&q2);
+				else if (c->zb->depth_test)
 					ZB_line_z(c->zb, &q1.zp, &q2.zp);
 				else
 					ZB_line(c->zb, &q1.zp, &q2.zp);
@@ -224,6 +228,14 @@ static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
 		q->tex_coord.Y = p0->tex_coord.Y + (p1->tex_coord.Y - p0->tex_coord.Y) * t;
 	}
 
+	if (c->software_triangle) {
+		for (int k=0;k<4;k++) {
+			q->color.v[k]=p0->color.v[k]+(p1->color.v[k]-p0->color.v[k])*t;
+			q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;
+			q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;
+		}
+		for(int k=0;k<4;k++)q->ec.v[k]=p0->ec.v[k]+(p1->ec.v[k]-p0->ec.v[k])*t;
+	}
 	q->clip_code = gl_clipcode(q->pc.X, q->pc.Y, q->pc.Z, q->pc.W);
 	if (q->clip_code == 0)
 		gl_transform_to_viewport_clip_c(q);
@@ -234,6 +246,12 @@ static void gl_draw_triangle_clip(GLVertex* p0, GLVertex* p1, GLVertex* p2, GLin
 void gl_draw_triangle(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 	GLContext* c = gl_get_context();
 	GLint co, cc[3], front;
+ GLVertex flat[3];
+ if(c->software_triangle && c->current_shade_model==GL_FLAT) {
+  flat[0]=*p0;flat[1]=*p1;flat[2]=*p2;
+  flat[0].color=flat[1].color=flat[2].color=c->software_flat_color;
+  p0=&flat[0];p1=&flat[1];p2=&flat[2];
+ }
 
 	cc[0] = p0->clip_code;
 	cc[1] = p1->clip_code;
@@ -398,6 +416,7 @@ int count_triangles, count_triangles_textured, count_pixels;
 /* see vertex.c to see how the draw functions are assigned.*/
 void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) { 
 	GLContext* c = gl_get_context();
+	if (c->software_triangle) { c->software_triangle(c,p0,p1,p2); return; }
 	if (c->texture_2d_enabled) {
 		/* if(c->current_texture)*/
 #if TGL_FEATURE_LIT_TEXTURES == 1
@@ -445,6 +464,7 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 /* Render a clipped triangle in line mode */
 
 void gl_draw_triangle_line(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
+ if(gl_get_context()->software_line){GLContext *c=gl_get_context();if(p0->edge_flag)c->software_line(c,p0,p1);if(p1->edge_flag)c->software_line(c,p1,p2);if(p2->edge_flag)c->software_line(c,p2,p0);return;}
 	GLContext* c = gl_get_context();
 	if (c->zb->depth_test) {
 		if (p0->edge_flag)
@@ -465,6 +485,7 @@ void gl_draw_triangle_line(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 
 /* Render a clipped triangle in point mode */
 void gl_draw_triangle_point(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
+ if(gl_get_context()->software_line){GLContext *c=gl_get_context();if(p0->edge_flag)c->software_line(c,p0,p0);if(p1->edge_flag)c->software_line(c,p1,p1);if(p2->edge_flag)c->software_line(c,p2,p2);return;}
 	GLContext* c = gl_get_context();
 	if (p0->edge_flag)
 		ZB_plot(c->zb, &p0->zp);

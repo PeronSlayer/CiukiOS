@@ -321,6 +321,8 @@ assert len(data) == 512 and data[510:] == b"\x55\xaa"
 (out / "dosvm_boot.inc").write_text("static const uint8_t startup_boot_sector[] = {" +
     ",".join(str(b) for b in data) + "};\n")
 PY
+# dosvm_test.c supplies the bounded program-provider fixture for both the
+# sanitized and optimized DOSVM link paths below.
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.
 # f4-05: the VM audio sources, the integer OPL3 port and the f4-01 mixer are
@@ -579,6 +581,10 @@ bash "$root/tests/host/usb/storage_run.sh"
 
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
+python3 "$root/tests/host/lwip/fd_run.py" --frame
+python3 "$root/tests/host/lwip/run.py"
+python3 "$root/tests/host/lwip/fd_run.py"
+python3 "$root/tests/host/lwip/run.py" --kernel
 
 
 # f4-05: the kernel's integer OPL3 port sample for sample against the pinned

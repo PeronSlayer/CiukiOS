@@ -1575,6 +1575,47 @@ without focus), EBUSY (caller already owns or is creating a VM; operation in
 progress), ESRCH, ENOMEM (admission or allocation), ENOSPC (VM or creation
 slots), EAGAIN, EINTR (owner stopping during creation), EIO (private disk or
 boot failure, presenter write failure).
+### F2-87 amendment: bundled-program management (2026-10-21)
+
+Operations 12 (`CIUKI_DOSVM_GAME_QUERY`) and 13
+(`CIUKI_DOSVM_GAME_REMOVE`) preserve version 1, size 136 and all offsets.
+Only version, size and `launch.game` (1 Wolfenstein 3D, 2 DOOM, 3 Quake)
+are inputs; every other byte, including outputs and reserved fields, must
+be zero. Unsupported versions return EOPNOTSUPP; malformed records return
+EINVAL. Both calls pin the complete writable reply before filesystem work.
+
+QUERY requires no VM capability and does not enable writes. It reports
+`state=0` when absent, `state=1` when installed, and `state=2` while removal
+cleanup remains pending. `changed` is allocated bytes (zero for an absent
+directory still awaiting cleanup). REMOVE requires a separate management
+capability, assigned by the supervisor's spawn delegation only to the exact
+`/Programs/desktop` and `/Programs/control` images launched by the supervisor
+or a parent owning both display and input grants. This authority is not
+inherited by their arbitrary children and does not confer DOSVM creation,
+input or display access. Lack of management authority returns EPERM before
+filesystem access. The outer C: write gate and file sharing remain additional
+requirements, independent of caller authorization.
+
+REMOVE reserves its game against every VM creation and refuses EBUSY before
+any write if a matching VM is creating, alive, stopped but retaining resources,
+or being destroyed, on either DOS kernel. Creation retains the opposite
+reservation across its presence check, sleeping admission and backing open.
+A pending removal refuses creation with ENOENT. No interrupt lock spans I/O.
+
+Before mutation, REMOVE durably creates `C:\System\REMOVE<n>.PND`; the fixed
+filename supplies the game identity. It removes the bounded FAT subtree,
+invalidates the digest cache after an attempted mutation and clears matching
+per-kernel COW files. An absent subtree is a successful idempotent step,
+including when retrying after restart. The marker remains until Control Panel
+has removed per-game settings, durably saved forgotten icon positions and
+removed owned launch records. QUERY keeps this game in the applet for retry;
+the desktop treats state 2 as unavailable for launching. Successful REMOVE
+reports `state=1`; storage/cleanup failures return their VFS/FAT errno,
+including EROFS, EBUSY, EIO and allocation/traversal errors. Confirmation,
+logging and launcher refresh are responsibilities of the two trusted managers.
+This is recoverable staged cleanup, not a cross-filesystem transaction or a
+power-failure atomicity claim for the underlying FAT mutations.
+
 ## F3-04 amendment: DPMI client entry path (2026-10-11)
 
 **[F3]** GDT index 8 (selector 40h) is the per-VM LDT descriptor. It is
@@ -2302,6 +2343,36 @@ payload. Authenticated PID owns the global INI
 update lease; contention is ERROR_BUSY, foreign release ERROR_ACCESS_DENIED,
 and disconnect/death releases ownership. All kernel32 and advapi32 fragments
 share ntdll's recursive per-process transport lock and request sequence.
+
+
+## F6 extension: IPv4 sockets and readiness (approved 2026-10-20)
+
+Directive f6-10 assigns native calls 78–89; call 90 is reserved for the later
+configuration service and currently returns ENOSYS. Calls 75–77 and W32=96
+retain their assignments. The normative register table, layouts, constants,
+validation order and closed error sets are in
+[network-contract.md](network-contract.md#approved-extension-syscalls-7890-2026-10-20).
+The `ciuki/abi.h` records are shared with the SDK and checked by the i686
+layout dump and independent literal oracle. All unused argument registers
+must be zero. Syscall failures use the existing negative errno convention.
+
+| Calls | Interface |
+| --- | --- |
+| 78–82 | socket, bind, connect, listen, accept |
+| 83–87 | sendto/recvfrom records, shutdown, local/peer sockname, sockopt record |
+| 88–89 | mixed descriptor poll, bounded IPv4 resolver record |
+| 90 | netctl reserved (ENOSYS) |
+
+The address is a 16-byte IPv4 sockaddr (u16 family, network-order u16 port,
+network-order u32 address, eight zero bytes). The 40-byte I/O and option
+records and 32-byte resolver/control records carry version 1, exact size and
+zero reserved fields; nested addresses are u32 user virtual addresses.
+Poll entries are eight bytes; timeout is signed milliseconds, -1 forever.
+Socket descriptions share NONBLOCK across dup/spawn; CLOEXEC remains per fd.
+Close invalidates the fd immediately and defers bounded transport teardown.
+Interruptible user waits run outside the serialized netconn worker. Outputs
+are pinned before receive/accept commits; user pointers never reach lwIP.
+Kernel lwIP and SDK timeval types remain separate (SDK time stays 64 bit).
 
 ### F3-52 DOS window frame wait (2026-10-20, pending lead review)
 

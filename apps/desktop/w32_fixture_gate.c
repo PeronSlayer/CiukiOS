@@ -5,6 +5,7 @@
 #include "../../src/probes/win32_installers/controller.h"
 #include "../../src/probes/win32_core/controller.h"
 #include "../../src/probes/win32_restart/controller.h"
+#include "../../src/probes/win32_gl/controller.h"
 #include <ciuki/spawn.h>
 #include <ciuki/proc.h>
 #include <errno.h>
@@ -16,8 +17,7 @@
 void desk_v3_fixture_report(const char *);
 static struct { unsigned id; int pid, active, pending; uint64_t deadline; } fixture;
 /* Restart uses the same allowlisted gate, with a multi-instance coordinator. */
-#define RESTART_FIXTURE_ID W32_FIXTURE_COUNT
-#define INSTALLER_FIXTURE_ID (W32_FIXTURE_COUNT+1u)
+#define RESTART_FIXTURE_ID W32_FIXTURE_RESTART
 static struct {unsigned active,pid,phase,resumed;uint64_t deadline,next;} restart_fixture;
 static void restart_tick(struct desktop *);
 int desk_w32_fixture_active(void) { return fixture.active; }
@@ -27,11 +27,13 @@ int desk_w32_fixture_begin(struct desktop *d,const char *name)
     unsigned id;
     for(id=0;id<W32_FIXTURE_COUNT;id++)
         if(!strcmp(name,w32_fixtures[id].name))break;
-    if(id==W32_FIXTURE_COUNT){
-        if(!strcmp(name,INSTALLER_FIXTURE_NAME))id=INSTALLER_FIXTURE_ID;
-        else if(strcmp(name,"restart-exercise"))return -EINVAL;
+    if(id==W32_FIXTURE_COUNT) {
+        if(!strcmp(name,"restart-exercise"))id=W32_FIXTURE_RESTART;
+        else if(!strcmp(name,"gl-exercise"))id=W32_FIXTURE_GL;
+        else if(!strcmp(name,INSTALLER_FIXTURE_NAME))id=W32_FIXTURE_INSTALLER;
+        else return -EINVAL;
     }
-    if(id==INSTALLER_FIXTURE_ID){
+    if(id==W32_FIXTURE_INSTALLER){
         int error=desk_installer_fixture_begin(d);
         if(error<0)return error;
     }
@@ -39,7 +41,7 @@ int desk_w32_fixture_begin(struct desktop *d,const char *name)
         memset(&restart_fixture,0,sizeof(restart_fixture));restart_fixture.active=1;
         restart_fixture.deadline=d->now_ns+360000000000ull;
     }
-    fixture.id=id;fixture.active=1;fixture.pending=id<W32_FIXTURE_COUNT;
+    fixture.id=id;fixture.active=1;fixture.pending=id<W32_FIXTURE_COUNT || id==W32_FIXTURE_GL;
     fixture.deadline=d->now_ns+15000000000ull;
     return 0;
 }
@@ -118,7 +120,7 @@ void desk_w32_fixture_tick(struct desktop *d)
 {
     if(!fixture.active)return;
     service_exits(d);
-    if(fixture.id==INSTALLER_FIXTURE_ID){
+    if(fixture.id==W32_FIXTURE_INSTALLER){
         desk_installer_fixture_tick(d);
         fixture.active=desk_installer_fixture_active();
         return;
@@ -136,7 +138,7 @@ void desk_w32_fixture_tick(struct desktop *d)
     if(d->now_ns>=fixture.deadline){fixture.pending=0;report(0);return;}
     if(!ready())return;
     fixture.pending=0;
-    char *argv[]={(char *)w32_fixtures[fixture.id].path,NULL};
+    char *argv[]={(char *)(fixture.id==W32_FIXTURE_GL ? W32_GL_PATH : w32_fixtures[fixture.id].path),NULL};
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
     fixture.pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
     report(fixture.pid);

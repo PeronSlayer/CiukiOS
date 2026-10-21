@@ -1369,6 +1369,173 @@
           }
         ]
       }
+    },
+    {
+      "id": "w32-gl-qemu-t23",
+      "probe": "w32-gl",
+      "profile": "qemu-t23",
+      "selector": "f5:w32-gl run={run_id}",
+      "timeout": 180,
+      "integration_pending": "f7-07 Amendment 3: authored, unrun; result v2 at 0x100e0000, exact host-qualified scene checksums, completed frames, actual render/drawable/display dimensions",
+      "expected": {
+        "terminal": "END",
+        "predicates": [
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 0
+            },
+            "fields": {
+              "checksum": {
+                "eq": 3115574095
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 1
+            },
+            "fields": {
+              "checksum": {
+                "eq": 3600499565
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 2
+            },
+            "fields": {
+              "checksum": {
+                "eq": 2481373961
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 3
+            },
+            "fields": {
+              "checksum": {
+                "eq": 3941090605
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 4
+            },
+            "fields": {
+              "checksum": {
+                "eq": 3115574095
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 5
+            },
+            "fields": {
+              "checksum": {
+                "eq": 2992561671
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "scene",
+              "scene": 6
+            },
+            "fields": {
+              "checksum": {
+                "eq": 3023371717
+              },
+              "frames": {
+                "eq": 7
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "capabilities"
+            },
+            "fields": {
+              "render_width": {
+                "eq": 320
+              },
+              "render_height": {
+                "eq": 240
+              },
+              "drawable_width": {
+                "eq": 320
+              },
+              "drawable_height": {
+                "eq": 240
+              },
+              "display_width": {
+                "ge": 1
+              },
+              "display_height": {
+                "ge": 1
+              },
+              "extensions": {
+                "eq": 8
+              },
+              "pixel_formats": {
+                "eq": 4
+              },
+              "fonts": {
+                "eq": 1
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
+              "case": "fixture"
+            },
+            "fields": {
+              "errors": {
+                "eq": 0
+              },
+              "exit": {
+                "eq": 0
+              }
+            }
+          }
+        ]
+      }
     }
   ]
 }

@@ -45,6 +45,9 @@ static void *gate_mmap(void *,size_t,int,int,int,off_t);
 #define mmap gate_mmap
 #define main desktop_main
 #include "../../../apps/desktop/desktop.c"
+/* The deterministic gate has no bundled-volume backend. */
+int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
+{if(op==CIUKI_DOSVM_GAME_QUERY){c->state=1;return 0;}errno=ENOSYS;return -1;}
 /* f4-18: desktop.c saves the master volume preference through libreg (sound_storage.c);
  * the gate exercises the display contract, so the harness supplies the persistence hook. */
 int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)

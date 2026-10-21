@@ -1,0 +1,103 @@
+/* f6-10: identical kernel/host configuration. SPDX-License-Identifier: GPL-2.0-only */
+#ifndef CIUKI_LWIPOPTS_H
+#define CIUKI_LWIPOPTS_H
+#define NO_SYS 0
+#define SYS_LIGHTWEIGHT_PROT 1
+#define LWIP_TCPIP_CORE_LOCKING 0
+#define LWIP_TCPIP_CORE_LOCKING_INPUT 0
+#define LWIP_TIMERS 1
+#define LWIP_TIMERS_CUSTOM 0
+#define LWIP_NETCONN 1
+#define LWIP_SOCKET 0
+#define LWIP_NETCONN_FULLDUPLEX 0
+#define LWIP_NETCONN_SEM_PER_THREAD 0
+#define LWIP_IPV4 1
+#define LWIP_IPV6 0
+#define LWIP_ETHERNET 1
+#define LWIP_ARP 1
+#define LWIP_ICMP 1
+#define LWIP_TCP 1
+#define LWIP_UDP 1
+#define LWIP_DHCP 1
+#define LWIP_DNS 1
+#define LWIP_RAW 0
+#define LWIP_IGMP 0
+#define LWIP_AUTOIP 0
+#define IP_FORWARD 0
+#define IP_REASSEMBLY 0
+#define IP_FRAG 0
+#define ETHARP_SUPPORT_VLAN 0
+#define MEM_ALIGNMENT 4
+#define MEM_SIZE 1048576
+#define MEM_LIBC_MALLOC 0
+#define MEMP_MEM_MALLOC 0
+#define PBUF_POOL_SIZE 128
+#define PBUF_POOL_BUFSIZE 1536
+#define MEMP_NUM_PBUF 128
+#define MEMP_NUM_TCP_PCB 40
+#define MEMP_NUM_TCP_PCB_LISTEN 8
+#define MEMP_NUM_TCP_SEG 256
+#define MEMP_NUM_UDP_PCB 20
+#define MEMP_NUM_NETCONN 48
+#define MEMP_NUM_NETBUF 64
+#define MEMP_NUM_SYS_TIMEOUT 32
+#define MEMP_NUM_TCPIP_MSG_API 64
+#define MEMP_NUM_TCPIP_MSG_INPKT 64
+#define TCPIP_MBOX_SIZE 64
+#define DEFAULT_TCP_RECVMBOX_SIZE 8
+#define DEFAULT_UDP_RECVMBOX_SIZE 8
+#define DEFAULT_ACCEPTMBOX_SIZE 4
+#define TCP_MSS 1460
+#define TCP_WND 11680
+#define TCP_SND_BUF 11680
+#define TCP_SND_QUEUELEN 32
+#define TCP_LISTEN_BACKLOG 1
+#define LWIP_WND_SCALE 0
+#define LWIP_TCP_KEEPALIVE 0
+#define SO_REUSE 1
+#define SO_REUSE_RXTOALL 0
+#define IP_SOF_BROADCAST 1
+#define IP_SOF_BROADCAST_RECV 0
+/* With public timeouts outside netconn, api_lib initializes ceil(ms/500)+1
+ * polls. 500 selects TWO polls, each 500 ms: transport cleanup <= 1 second. */
+#define LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT 500
+#define LWIP_SO_SNDTIMEO 0
+#define LWIP_SO_RCVTIMEO 0
+#define LWIP_SO_LINGER 0
+#define ARP_TABLE_SIZE 16
+#define ARP_QUEUEING 1
+#define ARP_QUEUE_LEN 2
+#define MEMP_NUM_ARP_QUEUE 32
+#define LWIP_DHCP_DOES_ACD_CHECK 1
+#define DNS_TABLE_SIZE 8
+#define DNS_MAX_NAME_LENGTH 256
+#define DNS_MAX_SERVERS 2
+#define LWIP_DNS_SECURE 7
+#define LWIP_DHCP_MAX_DNS_SERVERS 2
+#define LWIP_DHCP_GET_NTP_SRV 0
+#define LWIP_NETIF_LOOPBACK 1
+#define LWIP_HAVE_LOOPIF 1
+#define LWIP_LOOPBACK_MAX_PBUFS 16
+#define LWIP_NETIF_STATUS_CALLBACK 1
+#define LWIP_NETIF_LINK_CALLBACK 1
+#define LWIP_STATS 1
+#define LWIP_STATS_DISPLAY 0
+#define CHECKSUM_GEN_IP 1
+#define CHECKSUM_GEN_UDP 1
+#define CHECKSUM_GEN_TCP 1
+#define CHECKSUM_GEN_ICMP 1
+#define CHECKSUM_CHECK_IP 1
+#define CHECKSUM_CHECK_UDP 1
+#define CHECKSUM_CHECK_TCP 1
+#define CHECKSUM_CHECK_ICMP 1
+
+/* Port hooks, explicitly additional to the contract's option table. */
+#define LWIP_ASSERT_CORE_LOCKED() ciuki_lwip_assert_core()
+#define LWIP_MARK_TCPIP_THREAD() ciuki_lwip_mark_core()
+#define LWIP_TCPIP_THREAD_ALIVE() ciuki_lwip_alive()
+#define LWIP_RAND() ciuki_lwip_rand()
+#define LWIP_HOOK_TCP_PCB_EXHAUSTED() 1
+#define LWIP_HOOK_DNS_SERVER_CHANGED() ciuki_dns_servers_changed()
+#define LWIP_ERRNO_INCLUDE <ciuki/abi.h>
+#define LWIP_HOOK_TCP_ISN(local, lp, remote, rp) ciuki_lwip_rand()
+#endif

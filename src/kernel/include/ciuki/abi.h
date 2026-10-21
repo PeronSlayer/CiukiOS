@@ -79,6 +79,46 @@ typedef uint64_t ciuki_sigset_t;
 #define ENOTEMPTY 39
 #define EOVERFLOW 75
 #define EILSEQ 84
+#define ENOTSOCK 88
+#define CIUKI_ENOTSOCK ENOTSOCK
+#define EDESTADDRREQ 89
+#define CIUKI_EDESTADDRREQ EDESTADDRREQ
+#define EPROTOTYPE 91
+#define CIUKI_EPROTOTYPE EPROTOTYPE
+#define ENOPROTOOPT 92
+#define CIUKI_ENOPROTOOPT ENOPROTOOPT
+#define EPROTONOSUPPORT 93
+#define CIUKI_EPROTONOSUPPORT EPROTONOSUPPORT
+#define ESOCKTNOSUPPORT 94
+#define CIUKI_ESOCKTNOSUPPORT ESOCKTNOSUPPORT
+#define EAFNOSUPPORT 97
+#define CIUKI_EAFNOSUPPORT EAFNOSUPPORT
+#define EADDRINUSE 98
+#define CIUKI_EADDRINUSE EADDRINUSE
+#define EADDRNOTAVAIL 99
+#define CIUKI_EADDRNOTAVAIL EADDRNOTAVAIL
+#define ENETDOWN 100
+#define CIUKI_ENETDOWN ENETDOWN
+#define ENETUNREACH 101
+#define CIUKI_ENETUNREACH ENETUNREACH
+#define ECONNABORTED 103
+#define CIUKI_ECONNABORTED ECONNABORTED
+#define ECONNRESET 104
+#define CIUKI_ECONNRESET ECONNRESET
+#define ENOBUFS 105
+#define CIUKI_ENOBUFS ENOBUFS
+#define EISCONN 106
+#define CIUKI_EISCONN EISCONN
+#define ENOTCONN 107
+#define CIUKI_ENOTCONN ENOTCONN
+#define ECONNREFUSED 111
+#define CIUKI_ECONNREFUSED ECONNREFUSED
+#define EHOSTUNREACH 113
+#define CIUKI_EHOSTUNREACH EHOSTUNREACH
+#define EALREADY 114
+#define CIUKI_EALREADY EALREADY
+#define EINPROGRESS 115
+#define CIUKI_EINPROGRESS EINPROGRESS
 #define EMSGSIZE 90
 #define EOPNOTSUPP 95
 #define ETIMEDOUT 110
@@ -499,6 +539,19 @@ enum ciuki_syscall {
     CIUKI_SYS_LAUNCH_MARK = 75,
     CIUKI_SYS_DEVICES = 76,
     CIUKI_SYS_DISPLAY_ACCEL = 77,
+    CIUKI_SYS_SOCKET = 78,
+    CIUKI_SYS_BIND = 79,
+    CIUKI_SYS_CONNECT = 80,
+    CIUKI_SYS_LISTEN = 81,
+    CIUKI_SYS_ACCEPT = 82,
+    CIUKI_SYS_SENDTO = 83,
+    CIUKI_SYS_RECVFROM = 84,
+    CIUKI_SYS_SHUTDOWN = 85,
+    CIUKI_SYS_SOCKNAME = 86,
+    CIUKI_SYS_SOCKOPT = 87,
+    CIUKI_SYS_POLL = 88,
+    CIUKI_SYS_RESOLVE4 = 89,
+    CIUKI_SYS_NETCTL = 90,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
@@ -1341,6 +1394,8 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
 #define CIUKI_DOSVM_WAIT_PRESENT 11u /* observe frame/lifecycle events, no drawing */
+#define CIUKI_DOSVM_GAME_QUERY 12u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
+#define CIUKI_DOSVM_GAME_REMOVE 13u /* delegated program-management authority; no VM handle */
 #define CIUKI_DOSVM_WAIT_MAX_MS 50u
 #define CIUKI_DOSVM_EVENT_VIDEO 1u
 #define CIUKI_DOSVM_EVENT_STATE 2u
@@ -2034,4 +2089,99 @@ struct ciuki_w32_shared {
 };
 _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen size");
 
+
+/* F6 approved extension, 2026-10-20; public integers are SDK-owned. */
+#define AF_UNSPEC 0
+#define AF_INET 2
+#define SOCK_STREAM 1
+#define SOCK_DGRAM 2
+#define SOCK_NONBLOCK 2048
+#define SOCK_CLOEXEC 524288
+#define IPPROTO_IP 0
+#define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
+#define SHUT_RD 0
+#define SHUT_WR 1
+#define SHUT_RDWR 2
+#define MSG_PEEK 2
+#define MSG_DONTWAIT 64
+#define MSG_NOSIGNAL 16384
+#define SOL_SOCKET 1
+#define SO_REUSEADDR 2
+#define SO_TYPE 3
+#define SO_ERROR 4
+#define SO_BROADCAST 6
+#define SO_RCVTIMEO 20
+#define SO_SNDTIMEO 21
+#define TCP_NODELAY 1
+#define POLLIN 1
+#define POLLOUT 4
+#define POLLERR 8
+#define POLLHUP 16
+#define POLLNVAL 32
+#define CIUKI_NET_ABI_VERSION 1
+#define CIUKI_SOCKET_MAX 48
+#define CIUKI_SOCKET_PROCESS_MAX 16
+#define CIUKI_SOCKET_IO_MAX 32768
+#define CIUKI_UDP_MAX 1472
+#define CIUKI_DNS_MAX 4
+#pragma pack(push, 4)
+struct ciuki_sockaddr_in {
+    uint16_t family;
+    uint16_t port;
+    uint32_t address;
+    uint8_t zero[8];
+};
+struct ciuki_socket_io {
+    uint32_t size;
+    uint32_t version;
+    int32_t fd;
+    uint32_t buffer;
+    uint32_t bytes;
+    uint32_t flags;
+    uint32_t address;
+    uint32_t address_length;
+    uint32_t reserved[2];
+};
+struct ciuki_socket_option {
+    uint32_t size;
+    uint32_t version;
+    int32_t fd;
+    uint32_t operation;
+    int32_t level;
+    int32_t name;
+    uint32_t value;
+    uint32_t length;
+    uint32_t reserved[2];
+};
+struct ciuki_pollfd {
+    int32_t fd;
+    int16_t events;
+    int16_t revents;
+};
+struct ciuki_resolve4 {
+    uint32_t size;
+    uint32_t version;
+    uint32_t name;
+    uint32_t name_bytes;
+    uint32_t address;
+    int32_t status;
+    uint32_t reserved[2];
+};
+struct ciuki_netctl {
+    uint32_t size;
+    uint32_t version;
+    uint32_t operation;
+    uint32_t interface_id;
+    int32_t authority_fd;
+    uint32_t payload;
+    uint32_t payload_bytes;
+    uint32_t reserved;
+};
+struct ciuki_socket_timeval {
+    int64_t seconds;
+    int32_t microseconds;
+    uint32_t zero;
+};
+#pragma pack(pop)
 #endif /* CIUKI_ABI_H */

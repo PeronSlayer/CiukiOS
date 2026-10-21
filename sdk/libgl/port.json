@@ -3,15 +3,27 @@
     "include/zfeatures.h": "463b00ba957d2943317585f1dd094193a2ad5e65c636dec014723fe069dec285",
     "src/arrays.c": "3ccc0b42c7001259611d01f5dbd3096897a41d2c540a6b0e7341fa23f80e8786",
     "src/error_check.h": "3abca0e7641e1afd5f2e3dd6eba35d2a2669dc5e92ba5b4147b191e7095dd0f8",
-    "src/init.c": "b2e0967ffa7137722b5710d54bf71e13716da782e6892547e268a42491dd7af3",
+    "src/init.c": "7316a5c18a484b393014301df4c9c324d1ad192d448fdc47372e296c5c4a7bff",
     "src/zbuffer.c": "458c5c9ca9b0f772b6b504dd6ee8fea31d0c826589cfaa77505a4618bde5e3cc",
-    "src/ztriangle.h": "6ce891c23cc9bdffdd93c2e6c5fc76c2f2eb03cfee524e489907ccdd205718ff"
+    "src/ztriangle.h": "6ce891c23cc9bdffdd93c2e6c5fc76c2f2eb03cfee524e489907ccdd205718ff",
+    "src/texture.c": "7350a210fadcde73b450efe471f6b65bc29f29f73a15082e162cd53bc94e6916",
+    "src/list.c": "fe24047db7b39b44198b00625b5ac9d8dcb62d6a53c90ca39e0b5254ba9164f0",
+    "src/clip.c": "6fef69fc23bea2cc451f140f75699513cf7332bdb1089254ec6b47f95ebf5d86",
+    "src/zgl.h": "bc1a4a3ca538adb1f06e36ab051cab2e0c5b668ac0e1c77f967c0eb60e685f20",
+    "src/vertex.c": "9c916cbb6985cf02af5cb39932348bee7634ff002f891b3e438789d57995b9a6",
+    "include/GL/gl.h": "333ad6fa3e71a45460a930301d226415019c0665c50de1b56da34c9682ab8a48"
   },
   "changes": [
     "Enable glGetError; disable magic colour discard and unused multithread hints.",
     "Replace signed shifts of negative values/sign bit in compatibility test and edge slopes.",
     "Zero-initialize ZBuffer raster state; resizing adapter preserves non-storage state.",
     "glGenBuffers uses caller output for reserved names, retaining the 4096-byte SDK stack-frame limit.",
-    "Evaluate ERROR_FLAG in C: preprocessor comparisons of enum names incorrectly converted every error into GL_OUT_OF_MEMORY. Preserve the first pending error."
+    "Evaluate ERROR_FLAG in C: preprocessor comparisons of enum names incorrectly converted every error into GL_OUT_OF_MEMORY. Preserve the first pending error.",
+    "Opt-in caller-owned contexts and scalar compatibility triangle callbacks; native default unchanged.",
+    "Bound glDeleteLists to the requested range.",
+    "Correct packed-pixel enum values, interpolate both compatibility texture coordinates through clipping, route opt-in points/lines to scalar fragments, preserve homogeneous W.",
+    "Initialization OOM returns GL_OUT_OF_MEMORY and permits partial cleanup; native runtime compatibility test retained.",
+    "Optional Win32 texgen vertex hook and full eye-coordinate interpolation for user clipping; native callbacks remain unset.",
+    "Preserve the original software primitive provoking color before quad splitting and homogeneous clipping; native rendering unchanged."
   ]
 }

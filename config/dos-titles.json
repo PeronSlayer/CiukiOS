@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "archive": "doom19s.zip",
+      "url": "https://mirrors.lug.mtu.edu/idgames/idstuff/doom/doom19s.zip",
+      "sha256": "cacf0142b31ca1af00796b4a0339e07992ac5f21bc3f81e7532fe1b5e1b486e6",
+      "size": 2450688,
+      "package": "doom-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/doom-shareware/UPSTREAM.json",
+        "terms": "Shareware; the package's own terms are the clauses below (doom19s.zip has no VENDOR.DOC or LICENSE.DOC)",
+        "distribution": "Approved installed package per third_party/games/doom-shareware/UPSTREAM.json; Carmack clarification, four FAQ files excluded.",
+        "class": "bundled"
+      }
+    },
+    {
+      "id": "quake",
+      "archive": "quake106.zip",
+      "url": "https://mirrors.lug.mtu.edu/idgames/idstuff/quake/quake106.zip",
+      "sha256": "ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239",
+      "size": 9094045,
+      "package": "quake-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/quake-shareware/UPSTREAM.json",
+        "terms": "Original Quake shareware license, SLICNSE.TXT sections 2, 3 and 6",
+        "distribution": "Qualified f3-18 package only: whole unmodified shareware with agreement, free electronic compressed form, SLICNSE.TXT section 6.",
+        "class": "bundled"
+      }
+    },
+    {
+      "id": "wolf3d",
+      "archive": "1wolf14.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wolf14.zip",
+      "sha256": "cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8",
+      "size": 856401,
+      "package": "wolf3d-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/wolf3d-shareware/UPSTREAM.json",
+        "terms": "Shareware; VENDOR.DOC [V.07.15.94] of Apogee Software, Ltd. (inside W3DSW14.SHR)",
+        "distribution": "Bundled by owner decision 2026-10-21, dev diary 2026-10-21-05. VENDOR.DOC [3][C] requires prior signed Apogee permission for software bundles; the owner decision is not publisher permission.",
+        "class": "bundled"
+      }
+    },
+    {
+      "id": "rott",
+      "archive": "1rott13.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1rott13.zip",
+      "sha256": "eea67a85845d52fa0ee7272e3ae24b79769ed1e8bdff7b1360904078bc51ad1e",
+      "size": 3668139,
+      "status": "pinned",
+      "licence": {
+        "source": "1rott13.zip!ROTTSW13.SHR!VENDOR.DOC",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
+        "sha256": "a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701",
+        "class": "test-media"
+      },
+      "unpack": {
+        "format": "zip-sfx",
+        "member": "ROTTSW13.SHR"
+      },
+      "installed_tree_sha256": "e440fdec3c9e13dc0e5ed57305bbb025f6681acb91757e688f4f51aeb211f4a5",
+      "installed_files": [
+        {
+          "path": "DEMO1_3.DMO",
+          "size": 27028,
+          "sha256": "b57b2a1d5c72f6a9b2761537340969b297af16b14dbc284794a71163bc6c50a0"
+        },
+        {
+          "path": "DEMO2_3.DMO",
+          "size": 34360,
+          "sha256": "ed18246749adb5f3834ff8043028c25e0c1059f37679dd86756338e4ef5d90f3"
+        },
+        {
+          "path": "DEMO3_3.DMO",
+          "size": 47704,
+          "sha256": "bd0400207df98d92774db3f92a924ebc1d53f6dce216101df931fd5c6cffb3a4"
+        },
+        {
+          "path": "DEMO4_3.DMO",
+          "size": 36412,
+          "sha256": "e30b0dfe205a59b2da17fe1a577a4bda2745160898d747b2e0169fcc3fc3ab67"
+        },
+        {
+          "path": "HUNTBGIN.RTC",
+          "size": 54258,
+          "sha256": "a914e8c120d67801969582f44a4ba117f088904714ee6101c6d64a4a86f51146"
+        },
+        {
+          "path": "HUNTBGIN.RTL",
+          "size": 103316,
+          "sha256": "96fd5f16735b75151a7a1878ad77b653883fb53f0462b5dd231f6e841a35bfee"
+        },
+        {
+          "path": "HUNTBGIN.WAD",
+          "size": 6436871,
+          "sha256": "863212c2c9af490271f32487e333c44de71f4f368d93e887181d4f7d9525e893"
+        },
+        {
+          "path": "MODEM.PCK",
+          "size": 2174,
+          "sha256": "438b5a5b6041f4ba604a054766071a72dd82255fec4fb2e2b5b3375bb4891777"
+        },
+        {
+          "path": "ORDER.FRM",
+          "size": 5714,
+          "sha256": "e0596c5390896a27001f6cf263bc7a6b5f087a7499c5df18f1530de6c959bcd4"
+        },
+        {
+          "path": "README.EXE",
+          "size": 31256,
+          "sha256": "488fd125f9efb6fb203c5021634eae101f91677be16e2aa76c7f0f93df5dadcb"
+        },
+        {
+          "path": "REMOTE1.RTS",
+          "size": 110484,
+          "sha256": "7901e0102436b3d153a747e1d7b7fe18a4af113701e4dc9ba4764fb997d7d88b"
+        },
+        {
+          "path": "ROTT.EXE",
+          "size": 1076849,
+          "sha256": "2deedf54c45178792483114c017223407e3044abcc0863526aa477654a78569a"
+        },
+        {
+          "path": "ROTTHELP.EXE",
+          "size": 76171,
+          "sha256": "6406a603834d2cc16be9175f325c6f2c434f25e878f8122ac8ce9b93840fd836"
+        },
+        {
+          "path": "ROTTIPX.EXE",
+          "size": 16624,
+          "sha256": "0984eedcb9b992ef48e73ca997ea48d32dfb45fe8e5748fc96b0ac32a2a6f5fb"
+        },
+        {
+          "path": "ROTTSER.EXE",
+          "size": 21905,
+          "sha256": "f6a322781469d47c99699612d2c38157da8fb50b38df8915f0f46dfd9eff6558"
+        },
+        {
+          "path": "SETUP.EXE",
+          "size": 32682,
+          "sha256": "ab97e8d6e342e0262b609e4d6e37214d6cd52f748c41d2bc8a9eaef9c3ff8191"
+        },
+        {
+          "path": "SNDSETUP.EXE",
+          "size": 5756,
+          "sha256": "1d29f2f7a5620db6ee07c2341aed03b3649a75f8787e5423c6327a122b9fd6d6"
+        },
+        {
+          "path": "VENDOR.DOC",
+          "size": 7752,
+          "sha256": "a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701"
+        }
+      ]
+    },
+    {
+      "id": "keen4",
+      "archive": "4keen.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/4keen.zip",
+      "sha256": "f7c63feb8bbec817646d95aa26313df1654c01eda8f7ccc5cfd0c0bc0b5e305e",
+      "size": 729683,
+      "status": "pinned",
+      "licence": {
+        "source": "4keen.zip!CK4SW14.SHR!VENDOR.DOC",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
+        "sha256": "4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc",
+        "class": "test-media"
+      },
+      "unpack": {
+        "format": "apogee-shr",
+        "member": "CK4SW14.SHR"
+      },
+      "installed_tree_sha256": "d9510cd150884ea332761fec6c48c46529f6c14387f485d78ee8a54e7272ea6a",
+      "installed_files": [
+        {
+          "path": "AUDIO.CK4",
+          "size": 33325,
+          "sha256": "66dcf6070a4bc5c8933815b15dab7145ddcccb959f8f43af2a0449b085a04366"
+        },
+        {
+          "path": "DOPEFISH.ANS",
+          "size": 5375,
+          "sha256": "26d67aed88ec0452afa660ac24c188024e02e32f7e759cb7e100ed0ca8408303"
+        },
+        {
+          "path": "EGAGRAPH.CK4",
+          "size": 520581,
+          "sha256": "9805168fb910385ad40455541cbcfa1aaa61f9d81b2504274ee0ca0ec4b71550"
+        },
+        {
+          "path": "GAMEMAPS.CK4",
+          "size": 99040,
+          "sha256": "01186f8cb99257b69a4f475186deb9ba79b872ed52378131c79c21f6344753ea"
+        },
+        {
+          "path": "KEEN4E.EXE",
+          "size": 105108,
+          "sha256": "bdbb46746e02c0dddcba9b24fa464c26cc7e3514a3b3931267c8c17b9fb9c405"
+        },
+        {
+          "path": "ORDER.FRM",
+          "size": 5714,
+          "sha256": "e0596c5390896a27001f6cf263bc7a6b5f087a7499c5df18f1530de6c959bcd4"
+        },
+        {
+          "path": "VENDOR.DOC",
+          "size": 7459,
+          "sha256": "4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc"
+        }
+      ]
+    },
+    {
+      "id": "duke3d",
+      "archive": "3dduke13.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dduke13.zip",
+      "sha256": "c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e",
+      "size": 5924374,
+      "status": "pinned",
+      "licence": {
+        "source": "3dduke13.zip!DN3DSW13.SHR!LICENSE.TXT",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Read from the exact pinned original package; complete unmodified free sharing permitted. No battery bundle/media publication permission asserted.",
+        "distribution": "Lead workstation test media only; never copied by this battery into images or releases. Bundles/other distribution require permission.",
+        "sha256": "38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
+        "class": "test-media"
+      },
+      "unpack": {
+        "format": "zip-sfx",
+        "member": "DN3DSW13.SHR"
+      },
+      "installed_tree_sha256": "3316043294429f96f526265104677954300ff069f080ec66f4f3a52619b5f9b7",
+      "installed_files": [
+        {
+          "path": "COMMIT.EXE",
+          "size": 25942,
+          "sha256": "63c12997aaed8048cff56944603d17b7202d096812b05ab2b53cc4d407c6d8c4"
+        },
+        {
+          "path": "DEFS.CON",
+          "size": 28893,
+          "sha256": "20d415b974191ac53ca1d453ced487408462a6c627f8dff409b20e05d5a6d839"
+        },
+        {
+          "path": "DEMO1.DMO",
+          "size": 6226,
+          "sha256": "28e05772cdf1e6b4d8c11649f96fbd3a76bf73e335ba7fe255dc8f6ab4a938a3"
+        },
+        {
+          "path": "DEMO2.DMO",
+          "size": 9701,
+          "sha256": "5c6021b85a8a23ba235819c6498a8c4b0a4015d64bff24d1a8d48d2ed4dbb780"
+        },
+        {
+          "path": "DEMO3.DMO",
+          "size": 3759,
+          "sha256": "c86efbdef20dbdefbb1aa2480bc02e096225e9ef7f9f01fb5d970c382196ba6d"
+        },
+        {
+          "path": "DN3DHELP.EXE",
+          "size": 73594,
+          "sha256": "5dccdf4da37aff04cca4a64af129587ebeead7c39a3986acf4afba5f4f26d177"
+        },
+        {
+          "path": "DUKE.RTS",
+          "size": 188954,
+          "sha256": "3fbc1d9b221f2a6952825a511ed63756f8eac4f98001eb094a81f17cb0fd05e5"
+        },
+        {
+          "path": "DUKE3D.EXE",
+          "size": 1178963,
+          "sha256": "6e6f5159f21e795302221622df8be89325ede968c099126d5421dbec589ab3be"
+        },
+        {
+          "path": "DUKE3D.GRP",
+          "size": 11035779,
+          "sha256": "f943d0c2e2a0803a644a2107c81ea897dec87596d9dd1a6a432131ad6f5818d6"
+        },
+        {
+          "path": "GAME.CON",
+          "size": 99639,
+          "sha256": "b3095352dc2303b5616d6180bffbe24ddd1a853d2105b384dab0e8535814e0e4"
+        },
+        {
+          "path": "LICENSE.TXT",
+          "size": 9108,
+          "sha256": "38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d"
+        },
+        {
+          "path": "MODEM.PCK",
+          "size": 4125,
+          "sha256": "8a4a11b45eb361f7f5bc8dd0369ec4604f90bbcd2d301b46d2e600bd414e42fa"
+        },
+        {
+          "path": "README.DOC",
+          "size": 2760,
+          "sha256": "bba1b4050f8f6d9d80d125dd911fa229c6883a1d6314a8d31a488a6c7b5f719e"
+        },
+        {
+          "path": "SETMAIN.EXE",
+          "size": 95177,
+          "sha256": "09012d6a5ea099e1fcfaa92f28dbb4ff34526c8e50943732d5ab69e07cf2c735"
+        },
+        {
+          "path": "SETUP.EXE",
+          "size": 27153,
+          "sha256": "79154ab8d112fcf534c4f61392896e15bf40575bba9a0f97a429cf61be84ba92"
+        },
+        {
+          "path": "ULTRAMID.INI",
+          "size": 6871,
+          "sha256": "2df529ccb0188fa861e40326a03b88bdda5b858c6dd0b26c095a4adbdb4e6cfe"
+        },
+        {
+          "path": "USER.CON",
+          "size": 36960,
+          "sha256": "1e872508f1abaa9f5e0504292e275de73a86bc57b29bce35f210c61d29b7255f"
+        }
+      ]
+    }
+  ]
+}

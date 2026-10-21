@@ -1,0 +1,1484 @@
+--- a/netsurf/utils/utf8.c
++++ b/netsurf/utils/utf8.c
+@@ -25,7 +25,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
+-#include <iconv.h>
++
+ #include <parserutils/charset/utf8.h>
+ 
+ #include "utils/config.h"
+@@ -138,330 +138,7 @@
+ 	return next;
+ }
+ 
+-/* Cache of previous iconv conversion descriptor used by utf8_convert */
+-static struct {
+-	char from[32];	/**< Encoding name to convert from */
+-	char to[32];	/**< Encoding name to convert to */
+-	iconv_t cd;	/**< Iconv conversion descriptor */
+-} last_cd;
+-
+-static inline void utf8_clear_cd_cache(void)
+-{
+-	last_cd.from[0] = '\0';
+-	last_cd.to[0] = '\0';
+-	last_cd.cd = 0;
+-}
+-
+-/**
+- * obtain a cached conversion descriptor
+- *
+- * either return the cached conversion descriptor or create one if required
+- */
+-static nserror
+-get_cached_cd(const char *enc_from, const char *enc_to, iconv_t *cd_out)
+-{
+-	iconv_t cd;
+-	/* we cache the last used conversion descriptor,
+-	 * so check if we're trying to use it here */
+-	if (strncasecmp(last_cd.from, enc_from, sizeof(last_cd.from)) == 0 &&
+-	    strncasecmp(last_cd.to, enc_to, sizeof(last_cd.to)) == 0 &&
+-	    last_cd.cd != 0) {
+-		*cd_out = last_cd.cd;
+-		return NSERROR_OK;
+-	}
+-
+-	/* no match, so create a new cd */
+-	cd = iconv_open(enc_to, enc_from);
+-	if (cd == (iconv_t) -1) {
+-		if (errno == EINVAL) {
+-			return NSERROR_BAD_ENCODING;
+-		}
+-		/* default to no memory */
+-		return NSERROR_NOMEM;
+-	}
+-
+-	/* close the last cd - we don't care if this fails */
+-	if (last_cd.cd) {
+-		iconv_close(last_cd.cd);
+-	}
+-
+-	/* and safely copy the to/from/cd data into last_cd */
+-	snprintf(last_cd.from, sizeof(last_cd.from), "%s", enc_from);
+-	snprintf(last_cd.to, sizeof(last_cd.to), "%s", enc_to);
+-	*cd_out = last_cd.cd = cd;
+-
+-	return NSERROR_OK;
+-}
+-
+-/* exported interface documented in utils/utf8.h */
+-nserror utf8_finalise(void)
+-{
+-	if (last_cd.cd != 0)
+-		iconv_close(last_cd.cd);
+-
+-	/* paranoia follows */
+-	utf8_clear_cd_cache();
+-
+-	return NSERROR_OK;
+-}
+-
+-
+-/**
+- * Convert a string from one encoding to another
+- *
+- * \param string  The NULL-terminated string to convert
+- * \param slen    Length of input string to consider (in bytes), or 0
+- * \param from    The encoding name to convert from
+- * \param to      The encoding name to convert to
+- * \param result_out  Pointer to location in which to store result.
+- * \param result_len_out Pointer to location in which to store result length.
+- * \return NSERROR_OK for no error, NSERROR_NOMEM on allocation error,
+- *         NSERROR_BAD_ENCODING for a bad character encoding
+- */
+-static nserror
+-utf8_convert(const char *string,
+-	     size_t slen,
+-	     const char *from,
+-	     const char *to,
+-	     char **result_out,
+-	     size_t *result_len_out)
+-{
+-	iconv_t cd;
+-	char *temp, *out, *in, *result;
+-	size_t result_len;
+-	nserror res;
+-
+-	assert(string && from && to && result_out);
+-
+-	/* calculate the source length if not given */
+-	if (slen==0) {
+-		slen = strlen(string);
+-	}
+-
+-	/* process the empty string separately avoiding any conversion
+-	 * check for the source and destination encoding being the same
+-	 *
+-	 * This optimisation is necessary on AmigaOS as iconv()
+-	 * returns an error if an empty string is passed.
+-	 */
+-	if ((slen == 0) || (strcasecmp(from, to) == 0)) {
+-		*result_out = strndup(string, slen);
+-		if (*result_out == NULL) {
+-			return NSERROR_NOMEM;
+-		}
+-		if (result_len_out != NULL) {
+-			*result_len_out = slen;
+-		}
+-
+-		return NSERROR_OK;
+-	}
+-
+-	in = (char *)string;
+-
+-	res = get_cached_cd(from, to, &cd);
+-	if (res != NSERROR_OK) {
+-		return res;
+-	}
+-
+-	/* Worst case = ASCII -> UCS4, so allocate an output buffer
+-	 * 4 times larger than the input buffer, and add 4 bytes at
+-	 * the end for the NULL terminator
+-	 */
+-	result_len = slen * 4 + 4;
+-
+-	temp = out = malloc(result_len);
+-	if (!out) {
+-		return NSERROR_NOMEM;
+-	}
+-
+-	/* perform conversion */
+-	if (iconv(cd, (void *) &in, &slen, &out, &result_len) == (size_t)-1) {
+-		free(temp);
+-		/* clear the cached conversion descriptor as it's invalid */
+-		if (last_cd.cd)
+-			iconv_close(last_cd.cd);
+-		utf8_clear_cd_cache();
+-		/** \todo handle the various cases properly
+-		 * There are 3 possible error cases:
+-		 * a) Insufficiently large output buffer
+-		 * b) Invalid input byte sequence
+-		 * c) Incomplete input sequence */
+-		return NSERROR_NOMEM;
+-	}
+-
+-	result_len = out - temp;
+-
+-	/* resize buffer allowing for null termination */
+-	result = realloc(temp, result_len + 4);
+-	if (result == NULL) {
+-		free(temp);
+-		return NSERROR_NOMEM;
+-	}
+-
+-	/* NULL terminate - needs 4 characters as we may have
+-	 * converted to UTF-32 */
+-	memset(result + result_len, 0, 4);
+-
+-	*result_out = result;
+-	if (result_len_out != NULL) {
+-		*result_len_out = result_len;
+-	}
+-
+-	return NSERROR_OK;
+-}
+-
+-/* exported interface documented in utils/utf8.h */
+-nserror utf8_to_enc(const char *string, const char *encname,
+-		    size_t len, char **result)
+-{
+-	return utf8_convert(string, len, "UTF-8", encname, result, NULL);
+-}
+-
+-/* exported interface documented in utils/utf8.h */
+-nserror utf8_from_enc(const char *string, const char *encname,
+-		      size_t len, char **result, size_t *result_len)
+-{
+-	return utf8_convert(string, len, encname, "UTF-8", result, result_len);
+-}
+-
+-/**
+- * convert a chunk of html data
+- */
+-static nserror
+-utf8_convert_html_chunk(iconv_t cd,
+-			const char *chunk,
+-			size_t inlen,
+-			char **out,
+-			size_t *outlen)
+-{
+-	size_t ret, esclen;
+-	uint32_t ucs4;
+-	char *pescape, escape[11];
+-
+-	while (inlen > 0) {
+-		ret = iconv(cd, (void *) &chunk, &inlen, (void *) out, outlen);
+-		if (ret != (size_t) -1)
+-			break;
+-
+-		if (errno != EILSEQ)
+-			return NSERROR_NOMEM;
+-
+-		ucs4 = utf8_to_ucs4(chunk, inlen);
+-		esclen = snprintf(escape, sizeof(escape), "&#x%06"PRIx32";", ucs4);
+-		pescape = escape;
+-		ret = iconv(cd, (void *) &pescape, &esclen,
+-			    (void *) out, outlen);
+-		if (ret == (size_t) -1)
+-			return NSERROR_NOMEM;
+-
+-		esclen = utf8_next(chunk, inlen, 0);
+-		chunk += esclen;
+-		inlen -= esclen;
+-	}
+-
+-	return NSERROR_OK;
+-}
+-
+-
+-
+-/* exported interface documented in utils/utf8.h */
+-nserror
+-utf8_to_html(const char *string, const char *encname, size_t len, char **result_out)
+-{
+-	iconv_t cd;
+-	const char *in;
+-	char *out, *origout, *result;
+-	size_t off, prev_off, inlen, outlen, origoutlen, esclen;
+-	nserror ret;
+-	char *pescape, escape[11];
+-	nserror res;
+-
+-	if (len == 0)
+-		len = strlen(string);
+-
+-	res = get_cached_cd("UTF-8", encname, &cd);
+-	if (res != NSERROR_OK) {
+-		return res;
+-	}
+-
+-	/* Worst case is ASCII -> UCS4, with all characters escaped:
+-	 * "&#xYYYYYY;", thus each input character may become a string
+-	 * of 10 UCS4 characters, each 4 bytes in length, plus four for
+-	 * terminating the string */
+-	origoutlen = outlen = len * 10 * 4 + 4;
+-	origout = out = malloc(outlen);
+-	if (out == NULL) {
+-		iconv_close(cd);
+-		utf8_clear_cd_cache();
+-		return NSERROR_NOMEM;
+-	}
+-
+-	/* Process input in chunks between characters we must escape */
+-	prev_off = off = 0;
+-	while (off < len) {
+-		/* Must escape '&', '<', and '>' */
+-		if (string[off] == '&' || string[off] == '<' ||
+-		    string[off] == '>') {
+-			if (off - prev_off > 0) {
+-				/* Emit chunk */
+-				in = string + prev_off;
+-				inlen = off - prev_off;
+-				ret = utf8_convert_html_chunk(cd, in, inlen,
+-							      &out, &outlen);
+-				if (ret != NSERROR_OK) {
+-					free(origout);
+-					iconv_close(cd);
+-					utf8_clear_cd_cache();
+-					return ret;
+-				}
+-			}
+-
+-			/* Emit mandatory escape */
+-			esclen = snprintf(escape, sizeof(escape),
+-					  "&#x%06x;", string[off]);
+-			pescape = escape;
+-			ret = utf8_convert_html_chunk(cd, pescape, esclen,
+-						      &out, &outlen);
+-			if (ret != NSERROR_OK) {
+-				free(origout);
+-				iconv_close(cd);
+-				utf8_clear_cd_cache();
+-				return ret;
+-			}
+-
+-			prev_off = off = utf8_next(string, len, off);
+-		} else {
+-			off = utf8_next(string, len, off);
+-		}
+-	}
+-
+-	/* Process final chunk */
+-	if (prev_off < len) {
+-		in = string + prev_off;
+-		inlen = len - prev_off;
+-		ret = utf8_convert_html_chunk(cd, in, inlen, &out, &outlen);
+-		if (ret != NSERROR_OK) {
+-			free(origout);
+-			iconv_close(cd);
+-			utf8_clear_cd_cache();
+-			return ret;
+-		}
+-	}
+-
+-	/* Terminate string */
+-	memset(out, 0, 4);
+-	outlen -= 4;
+-
+-	/* Shrink-wrap */
+-	result = realloc(origout, origoutlen - outlen);
+-	if (result == NULL) {
+-		free(origout);
+-		return NSERROR_NOMEM;
+-	}
+-	*result_out = result;
+-
+-	return NSERROR_OK;
+-}
++#include "framebuffer/ciuki/utf8.inc"
+ 
+ /* exported interface documented in utils/utf8.h */
+ bool utf8_save_text(const char *utf8_text, const char *path)
+--- a/netsurf/utils/config.h
++++ b/netsurf/utils/config.h
+@@ -164,6 +164,18 @@
+ #if ((defined(__linux__) && defined(__GLIBC__) && !defined(__UCLIBC__)) || \
+      defined(__APPLE__))
+ #define HAVE_EXECINFO
++#endif
++
++#ifdef CIUKI_NETSURF
++#undef HAVE_MMAP
++#undef WITH_MMAP
++#undef HAVE_SCANDIR
++#undef HAVE_DIRFD
++#undef HAVE_UNLINKAT
++#undef HAVE_FSTATAT
++#undef HAVE_STRPTIME
++#undef HAVE_STRFTIME
++#define NO_IPV6 1
+ #endif
+ 
+ /* This section toggles build options on and off.
+@@ -199,4 +211,13 @@
+ 	#define NO_IPV6
+ #endif
+ 
+-#endif
++#ifdef CIUKI_NETSURF
++#undef WITH_MMAP
++#endif
++
++#if defined(CIUKI_NETSURF) && !defined(CIUKI_HOST)
++#include "framebuffer/ciuki/file.h"
++#define realpath ciuki_realpath
++#endif
++
++#endif
+--- a/netsurf/utils/inet.h
++++ b/netsurf/utils/inet.h
+@@ -33,7 +33,17 @@
+ 
+ #include "utils/config.h"
+ 
+-#ifdef HAVE_POSIX_INET_HEADERS
++#if defined(CIUKI_NETSURF) && !defined(CIUKI_HOST)
++/* Local file/data port needs address syntax types, not socket services. */
++#include <stdint.h>
++#include "framebuffer/ciuki/fdset.h"
++struct in_addr { uint32_t s_addr; };
++struct in6_addr { unsigned char s6_addr[16]; };
++#define AF_INET 2
++#define AF_INET6 10
++#undef HAVE_INETATON
++#undef HAVE_INETPTON
++#elif defined(HAVE_POSIX_INET_HEADERS)
+ 
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+--- a/netsurf/frontends/framebuffer/font.h
++++ b/netsurf/frontends/framebuffer/font.h
+@@ -58,7 +58,9 @@
+ nserror fb_font_width(const struct plot_font_style *fstyle, const char *string, size_t length, int *width);
+ 
+ 
+-#ifdef FB_USE_FREETYPE
++#ifdef CIUKI_NETSURF
++#include "framebuffer/ciuki/font.h"
++#elif defined(FB_USE_FREETYPE)
+ #include "framebuffer/font_freetype.h"
+ #else
+ #include "framebuffer/font_internal.h"
+--- a/netsurf/frontends/framebuffer/framebuffer.c
++++ b/netsurf/frontends/framebuffer/framebuffer.c
+@@ -397,7 +397,11 @@
+ }
+ 
+ 
+-#ifdef FB_USE_FREETYPE
++#ifdef CIUKI_NETSURF
++static nserror framebuffer_plot_text(const struct redraw_context *ctx,
++ const struct plot_font_style *style,int x,int y,const char *text,size_t length)
++{ (void)ctx; return ciuki_font_plot(nsfb,style,x,y,text,length); }
++#elif defined(FB_USE_FREETYPE)
+ /**
+  * Text plotting.
+  *
+--- a/netsurf/frontends/framebuffer/Makefile
++++ b/netsurf/frontends/framebuffer/Makefile
+@@ -141,7 +141,7 @@
+ 
+ S_IMAGES :=
+ 
+-$(eval $(foreach V,$(filter FB_IMAGE_%,$(.VARIABLES)),$(call convert_image,$(FRONTEND_RESOURCES_DIR)/$($(V)),$(OBJROOT)/image-$(patsubst FB_IMAGE_%,%,$(V)).c,$(patsubst FB_IMAGE_%,%,$(V)))))
++# Ciuki recipe generates deterministic Tango/Ciuki images.c instead.
+ 
+ 
+ # Internal fonts to generate
+@@ -179,7 +179,7 @@
+ S_FRAMEBUFFER_FBTK := fbtk.c event.c fill.c bitmap.c user.c window.c 	\
+ 	text.c scroll.c osk.c 
+ 
+-S_FRONTEND += font_$(NETSURF_FB_FONTLIB).c
++S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c
+ 
+ S_FRONTEND += $(addprefix fbtk/,$(S_FRAMEBUFFER_FBTK))
+ 
+--- a/netsurf/tools/Makefile
++++ b/netsurf/tools/Makefile
+@@ -10,7 +10,7 @@
+ .PHONY: testament
+ 
+ testament $(OBJROOT)/testament.h:
+-	$(Q)$(PERL) tools/git-testament.pl $(CURDIR) $(OBJROOT)/testament.h
++	$(Q)cp frontends/framebuffer/ciuki/testament.h $(OBJROOT)/testament.h
+ 
+ 
+ # lib png build compiler flags
+--- a/libnsutils/src/time.c
++++ b/libnsutils/src/time.c
+@@ -16,7 +16,7 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
+-#if (defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) && (defined _POSIX_MONOTONIC_CLOCK)) || defined(__OpenBSD__)
++#if (defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) && (defined _POSIX_MONOTONIC_CLOCK)) || defined(__OpenBSD__) || defined(__ciuki__)
+ #include <time.h>
+ #elif defined(__riscos)
+ #include <oslib/os.h>
+@@ -41,10 +41,10 @@
+     uint64_t current;
+     static uint64_t prev = 0; /* previous time so we never go backwards */
+ 
+-#if (defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) && (defined _POSIX_MONOTONIC_CLOCK)) || defined(__OpenBSD__)
++#if (defined(_POSIX_TIMERS) && (_POSIX_TIMERS > 0) && (defined _POSIX_MONOTONIC_CLOCK)) || defined(__OpenBSD__) || defined(__ciuki__)
+     struct timespec tp;
+ 
+-    clock_gettime(CLOCK_MONOTONIC, &tp);
++    if (clock_gettime(CLOCK_MONOTONIC, &tp)) return NSUERROR_INIT_FAILED;
+     current = (tp.tv_sec * 1000) + (tp.tv_nsec / 1000000);
+ #elif defined(__riscos)
+     os_t time;
+--- a/libnsfb/include/libnsfb.h
++++ b/libnsfb/include/libnsfb.h
+@@ -42,6 +42,7 @@
+     NSFB_SURFACE_LINUX, /**< Linux framebuffer surface */
+     NSFB_SURFACE_ABLE, /**< ABLE framebuffer surface */
+     NSFB_SURFACE_RAM, /**< RAM surface */
++    NSFB_SURFACE_CIUKI,
+     NSFB_SURFACE_COUNT, /**< The number of surface kinds */
+ };
+ 
+--- a/libnsfb/src/surface/Makefile
++++ b/libnsfb/src/surface/Makefile
+@@ -1,7 +1,10 @@
+ # Sources
+ 
+ # Common surface code and heap based surface handler
+-SURFACE_HANDLER_yes := surface.c ram.c
++SURFACE_HANDLER_yes := surface.c ram.c ciuki_port/surface.c
++ifneq ($(CIUKI_HOST),yes)
++SURFACE_HANDLER_yes += ciuki.c
++endif
+ 
+ # optional surface handlers
+ SURFACE_HANDLER_$(NSFB_SDL_AVAILABLE) += sdl.c
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -45,6 +45,9 @@
+ #include "content/fetch.h"
+ 
+ #include "framebuffer/gui.h"
++#include "framebuffer/ciuki/chrome.h"
++#include "content/content.h"
++#include "framebuffer/ciuki/surface.h"
+ #include "framebuffer/fbtk.h"
+ #include "framebuffer/framebuffer.h"
+ #include "framebuffer/schedule.h"
+@@ -485,6 +488,11 @@
+ 	NSLOG(netsurf, INFO, "argc %d, argv %p", argc, argv);
+ 
+ 	nsfb_enumerate_surface_types(framebuffer_pick_default_fename, NULL);
++#ifdef CIUKI_HOST
++    fename="ram";
++#else
++    fename="ciuki";
++#endif
+ 
+ 	febpp = 32;
+ 
+@@ -557,14 +565,10 @@
+ static nserror set_defaults(struct nsoption_s *defaults)
+ {
+ 	/* Set defaults for absent option strings */
+-	nsoption_setnull_charp(cookie_file, strdup("~/.netsurf/Cookies"));
+-	nsoption_setnull_charp(cookie_jar, strdup("~/.netsurf/Cookies"));
+-
+-	if (nsoption_charp(cookie_file) == NULL ||
+-	    nsoption_charp(cookie_jar) == NULL) {
+-		NSLOG(netsurf, INFO, "Failed initialising cookie options");
+-		return NSERROR_BAD_PARAMETER;
+-	}
++	/* Cookies are disabled for M1. */
++	
++
++	
+ 
+ 	/* set system colours for framebuffer ui */
+ 	nsoption_set_colour(sys_colour_ActiveBorder, 0x00000000);
+@@ -613,6 +617,7 @@
+ 
+ static void framebuffer_run(void)
+ {
++    unsigned ciuki_capture_turns=0;
+ 	nsfb_event_t event;
+ 	int timeout; /* timeout in miliseconds */
+ 
+@@ -621,6 +626,7 @@
+ 		 * the next event.
+ 		 */
+ 		timeout = schedule_run();
++        if (timeout<0 || timeout>10) timeout=10;
+ 
+ 		/* if redraws are pending do not wait for event,
+ 		 * return immediately
+@@ -634,7 +640,13 @@
+ 				fb_complete = true;
+ 		}
+ 
+-		fbtk_redraw(fbtk);
++		if (!ciuki_chrome_modal()) fbtk_redraw(fbtk);
++        ciuki_chrome_render();
++        if (ciuki_capture_path && (ciuki_capture_turns || (window_list && browser_window_get_content(window_list->bw) &&
++            content_get_status(browser_window_get_content(window_list->bw))==CONTENT_STATUS_DONE))) {
++            /* Let deferred core callbacks unwind before taking host evidence. */
++            if (++ciuki_capture_turns>=3) { ciuki_chrome_capture(fbtk_get_nsfb(fbtk)); fb_complete=true; }
++        }
+ 	}
+ }
+ 
+@@ -642,7 +654,7 @@
+ {
+ 	NSLOG(netsurf, INFO, "gui_quit");
+ 
+-	urldb_save_cookies(nsoption_charp(cookie_jar));
++	ciuki_chrome_finish();
+ 
+ 	framebuffer_finalise();
+ }
+@@ -856,7 +868,9 @@
+ 	NSLOG(netsurf, INFO, "got value %d", cbi->event->value.keycode);
+ 
+ 	switch (cbi->event->type) {
+-	case NSFB_EVENT_KEY_DOWN:
++	case NSFB_EVENT_TEXT:
++        browser_window_key_press(gw->bw,(uint32_t)cbi->event->value.keycode);break;
++    case NSFB_EVENT_KEY_DOWN:
+ 		switch (cbi->event->value.keycode) {
+ 
+ 		case NSFB_KEY_DELETE:
+@@ -1045,7 +1059,7 @@
+ fb_update_back_forward(struct gui_window *gw)
+ {
+ 	struct browser_window *bw = gw->bw;
+-
++    (void)bw; return;
+ 	fbtk_set_bitmap(gw->back,
+ 			(browser_window_back_available(bw)) ?
+ 			&left_arrow : &left_arrow_g);
+@@ -1749,7 +1763,7 @@
+ 	bool resized;
+ 	int width, height;
+ 	int statusbar_width;
+-	int toolbar_height = fbtk_get_height(gw->toolbar);
++	int toolbar_height = gw->toolbar ? fbtk_get_height(gw->toolbar) : 0;
+ 
+ 	/* Resize the main window widget */
+ 	resized = fbtk_set_pos_and_size(gw->window, 0, 0, 0, 0);
+@@ -1826,6 +1840,7 @@
+ {
+ 	struct gui_window *gw;
+ 
++	if (window_list) return NULL;
+ 	gw = calloc(1, sizeof(struct gui_window));
+ 
+ 	if (gw == NULL)
+@@ -1954,7 +1969,7 @@
+ static void
+ gui_window_set_status(struct gui_window *g, const char *text)
+ {
+-	fbtk_set_text(g->status, text);
++	ciuki_chrome_status(text);
+ }
+ 
+ static void
+@@ -1990,7 +2005,7 @@
+ static nserror
+ gui_window_set_url(struct gui_window *g, nsurl *url)
+ {
+-	fbtk_set_text(g->url, nsurl_access(url));
++	ciuki_chrome_url(url);
+ 	return NSERROR_OK;
+ }
+ 
+@@ -2054,6 +2069,7 @@
+ static void
+ gui_window_start_throbber(struct gui_window *g)
+ {
++    ciuki_chrome_loading(true); return;
+ 	g->throbber_index = 0;
+ 	framebuffer_schedule(100, throbber_advance, g);
+ }
+@@ -2061,6 +2077,7 @@
+ static void
+ gui_window_stop_throbber(struct gui_window *gw)
+ {
++    ciuki_chrome_loading(false); return;
+ 	gw->throbber_index = -1;
+ 	fbtk_set_bitmap(gw->throbber, &throbber0);
+ 
+@@ -2156,6 +2173,8 @@
+ 	.get_dimensions = gui_window_get_dimensions,
+ 	.event = gui_window_event,
+ 
++	.set_title = ciuki_chrome_title,
++    .file_gadget_open = ciuki_chrome_file,
+ 	.set_url = gui_window_set_url,
+ 	.set_status = gui_window_set_status,
+ 	.set_pointer = gui_window_set_pointer,
+@@ -2186,6 +2205,7 @@
+ 	nserror ret;
+ 	nsfb_t *nsfb;
+ 	struct netsurf_table framebuffer_table = {
++		.download = &ciuki_download_table,
+ 		.misc = &framebuffer_misc_table,
+ 		.window = &framebuffer_window_table,
+ 		.clipboard = framebuffer_clipboard_table,
+@@ -2195,12 +2215,13 @@
+ 		.layout = framebuffer_layout_table,
+ 	};
+ 
++        if (ciuki_chrome_arguments(&argc,argv)) return 2;
+         ret = netsurf_register(&framebuffer_table);
+         if (ret != NSERROR_OK) {
+ 		die("NetSurf operation table failed registration");
+         }
+ 
+-	respaths = fb_init_resource_path(NETSURF_FB_RESPATH":"NETSURF_FB_FONTPATH);
++	respaths = fb_init_resource_path(ciuki_resource_path);
+ 
+ 	/* initialise logging. Not fatal if it fails but not much we
+ 	 * can do about it either.
+@@ -2212,10 +2233,11 @@
+ 	if (ret != NSERROR_OK) {
+ 		die("Options failed to initialise");
+ 	}
+-	options = filepath_find(respaths, "Choices");
++	options = strdup(ciuki_chrome_choices());
+ 	nsoption_read(options, nsoptions);
+ 	free(options);
+ 	nsoption_commandline(&argc, argv, nsoptions);
++    ciuki_chrome_defaults();
+ 
+ 	/* message init */
+ 	messages = filepath_find(respaths, "Messages");
+@@ -2250,7 +2272,7 @@
+ 
+ 	fbtk_enable_oskb(fbtk);
+ 
+-	urldb_load_cookies(nsoption_charp(cookie_file));
++	if (ciuki_chrome_start()) ciuki_chrome_status("Profile unavailable; changes cannot be saved.");
+ 
+ 	/* create an initial browser window */
+ 
+@@ -2274,6 +2296,8 @@
+ 	}
+ 
+ 	netsurf_exit();
++    free(fbtk);fbtk=NULL;
++    filepath_free_strvec(respaths);respaths=NULL;
+ 
+ 	if (fb_font_finalise() == false)
+ 		NSLOG(netsurf, INFO, "Font finalisation failed.");
+--- a/netsurf/frontends/framebuffer/schedule.c
++++ b/netsurf/frontends/framebuffer/schedule.c
+@@ -18,6 +18,7 @@
+ 
+ #include <time.h>
+ #include <stdlib.h>
++#include <time.h>
+ 
+ #include "utils/sys_time.h"
+ #include "utils/log.h"
+@@ -110,8 +111,10 @@
+         tv.tv_usec = (tival % 1000) * 1000; /* remainder to microseconds */
+ 
+ 	nscb = calloc(1, sizeof(struct nscallback));
+-
+-	gettimeofday(&nscb->tv, NULL);
++    if (!nscb) return NSERROR_NOMEM;
++
++	struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
++    nscb->tv.tv_sec=now.tv_sec;nscb->tv.tv_usec=now.tv_nsec/1000;
+ 	timeradd(&nscb->tv, &tv, &nscb->tv);
+ 
+ 	nscb->callback = callback;
+@@ -142,7 +145,8 @@
+         prev_nscb = NULL;
+ 	nexttime = cur_nscb->tv;
+ 
+-	gettimeofday(&tv, NULL);
++	struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
++    tv.tv_sec=now.tv_sec;tv.tv_usec=now.tv_nsec/1000;
+ 
+         while (cur_nscb != NULL) {
+                 if (timercmp(&tv, &cur_nscb->tv, >)) {
+@@ -160,6 +164,7 @@
+                         unlnk_nscb->callback(unlnk_nscb->p);
+ 
+                         free(unlnk_nscb);
++                        return 0; /* one callback, then drain desktop input */
+ 
+                         /* need to deal with callback modifying the list. */
+ 			if (schedule_list == NULL)
+@@ -198,7 +203,8 @@
+ 	struct timeval tv;
+         struct nscallback *cur_nscb;
+ 
+-	gettimeofday(&tv, NULL);
++	struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
++    tv.tv_sec=now.tv_sec;tv.tv_usec=now.tv_nsec/1000;
+ 
+         NSLOG(netsurf, INFO, "schedule list at %ld:%ld", tv.tv_sec,
+               tv.tv_usec);
+--- a/libhubbub/src/treebuilder/Makefile
++++ b/libhubbub/src/treebuilder/Makefile
+@@ -8,11 +8,7 @@
+ 		after_frameset.c after_after_body.c after_after_frameset.c \
+ 		generic_rcdata.c element-type.c
+ 
+-$(DIR)autogenerated-element-type.c: $(DIR)element-type.gperf
+-	$(VQ)$(ECHO) "   GPERF: $<"
+-	$(Q)gperf --output-file=$@.tmp $<
+-	$(Q)$(SED) -e 's/^\(const struct element_type_map\)/static \1/' $@.tmp >$@
+-	$(Q)$(RM) $@.tmp
++# Pinned Ciuki build recipe supplies the equivalent generated lookup.
+ 
+ PRE_TARGETS := $(DIR)autogenerated-element-type.c
+ 
+--- a/buildsystem/makefiles/Makefile.tools
++++ b/buildsystem/makefiles/Makefile.tools
+@@ -368,6 +368,7 @@
+ 
+ # Check for GCC first, as that's most likely
+ # TODO: Using shell redirection like this probably hurts portability
++ifeq ($(toolchain),)
+ ccspecs := $(shell $(CC) -dumpspecs 2>&1)
+ ifeq ($(findstring libgcc,$(ccspecs)),libgcc)
+   # Looks like GCC
+@@ -418,6 +419,8 @@
+   endif
+ endif
+ 
++endif # toolchain not provided by the pinned SDK recipe
++
+ ifeq ($(toolchain),)
+   $(error Unable to detect toolchain)
+ endif
+--- a/netsurf/content/fetchers/file/file.c
++++ b/netsurf/content/fetchers/file/file.c
+@@ -77,10 +77,16 @@
+ 	nsurl *url; /**< The full url the fetch refers to */
+ 	char *path; /**< The actual path to be used with open() */
+ 
++	FILE *infile;
++    char *buffer;
++    size_t read_bytes;
++    struct stat file_stat;
++    bool pending;
+ 	time_t file_etag; /**< Request etag for file (previous st.m_time) */
+ };
+ 
+ static struct fetch_file_context *ring = NULL;
++unsigned ciuki_file_slices;
+ 
+ /** issue fetch callbacks with locking */
+ static inline bool fetch_file_send_callback(const fetch_msg *msg,
+@@ -193,6 +199,8 @@
+ static void fetch_file_free(void *ctx)
+ {
+ 	struct fetch_file_context *c = ctx;
++	if (c->infile) fclose(c->infile);
++    free(c->buffer);
+ 	nsurl_unref(c->url);
+ 	free(c->path);
+ 	free(ctx);
+@@ -352,107 +360,7 @@
+ 		munmap(buf, buf_size);
+ 	close(fd);
+ #else
+-	fetch_msg msg;
+-	char *buf;
+-	size_t buf_size;
+-
+-	ssize_t tot_read = 0;
+-	ssize_t res;
+-
+-	FILE *infile;
+-
+-	/* Check if we can just return not modified */
+-	if (ctx->file_etag != 0 && ctx->file_etag == fdstat->st_mtime) {
+-		fetch_set_http_code(ctx->fetchh, 304);
+-		msg.type = FETCH_NOTMODIFIED;
+-		fetch_file_send_callback(&msg, ctx);
+-		return;
+-	}
+-
+-	infile = fopen(ctx->path, "rb");
+-	if (infile == NULL) {
+-		/* process errors as appropriate */
+-		fetch_file_process_error(ctx,
+-				fetch_file_errno_to_http_code(errno));
+-		return;
+-	}
+-
+-	/* set buffer size */
+-	buf_size = fdstat->st_size;
+-	if (buf_size > FETCH_FILE_MAX_BUF_SIZE)
+-		buf_size = FETCH_FILE_MAX_BUF_SIZE;
+-
+-	/* allocate the buffer storage */
+-	buf = malloc(buf_size);
+-	if (buf == NULL) {
+-		msg.type = FETCH_ERROR;
+-		msg.data.error =
+-			"Unable to allocate memory for file data buffer";
+-		fetch_file_send_callback(&msg, ctx);
+-		fclose(infile);
+-		return;
+-	}
+-
+-	/* fetch is going to be successful */
+-	fetch_set_http_code(ctx->fetchh, 200);
+-
+-	/* Any callback can result in the fetch being aborted.
+-	 * Therefore, we _must_ check for this after _every_ call to
+-	 * fetch_file_send_callback().
+-	 */
+-
+-	/* content type */
+-	if (fetch_file_send_header(ctx, "Content-Type: %s", 
+-				   guit->fetch->filetype(ctx->path))) {
+-		goto fetch_file_process_aborted;
+-	}
+-
+-	/* content length */
+-	if (fetch_file_send_header(ctx, "Content-Length: %" PRIsizet,
+-				   fdstat->st_size)) {
+-		goto fetch_file_process_aborted;
+-	}
+-
+-	/* create etag */
+-	if (fetch_file_send_header(ctx, "ETag: \"%10" PRId64 "\"", 
+-				   (int64_t) fdstat->st_mtime)) {
+-		goto fetch_file_process_aborted;
+-	}
+-
+-	/* main data loop */
+-	while (tot_read < fdstat->st_size) {
+-		res = fread(buf, 1, buf_size, infile);
+-		if (res == 0) {
+-			if (feof(infile)) {
+-				msg.type = FETCH_ERROR;
+-				msg.data.error = "Unexpected EOF reading file";
+-				fetch_file_send_callback(&msg, ctx);
+-				goto fetch_file_process_aborted;
+-			} else {
+-				msg.type = FETCH_ERROR;
+-				msg.data.error = "Error reading file";
+-				fetch_file_send_callback(&msg, ctx);
+-				goto fetch_file_process_aborted;
+-			}
+-		}
+-		tot_read += res;
+-
+-		msg.type = FETCH_DATA;
+-		msg.data.header_or_data.buf = (const uint8_t *) buf;
+-		msg.data.header_or_data.len = res;
+-		if (fetch_file_send_callback(&msg, ctx))
+-			break;
+-	}
+-
+-	if (ctx->aborted == false) {
+-		msg.type = FETCH_FINISHED;
+-		fetch_file_send_callback(&msg, ctx);
+-	}
+-
+-fetch_file_process_aborted:
+-
+-	fclose(infile);
+-	free(buf);
++#include "framebuffer/ciuki/file_fetch.inc"
+ #endif
+ 	return;
+ }
+@@ -762,6 +670,9 @@
+ /* process a file fetch */
+ static void fetch_file_process(struct fetch_file_context *ctx)
+ {
++    ctx->pending=false;
++    if (ctx->infile) { fetch_file_process_plain(ctx,&ctx->file_stat);return; }
++
+ 	struct stat fdstat; /**< The objects stat */
+ 
+ 	if (stat(ctx->path, &fdstat) != 0) {
+@@ -773,7 +684,7 @@
+ 
+ 	if (S_ISDIR(fdstat.st_mode)) {
+ 		/* directory listing */
+-		fetch_file_process_dir(ctx, &fdstat);
++		fetch_file_process_error(ctx,501); /* Use the desktop file picker. */
+ 		return;
+ 	} else if (S_ISREG(fdstat.st_mode)) {
+ 		/* regular file */
+@@ -813,6 +724,8 @@
+ 			/* file fetches can be processed in one go */
+ 			fetch_file_process(c);
+ 		}
++
++		if (c->pending && !c->aborted) { RING_INSERT(save_ring,c);continue; }
+ 
+ 		/* And now finish */
+ 		fetch_remove_from_queues(c->fetchh);
+--- a/netsurf/content/fetchers/data.c
++++ b/netsurf/content/fetchers/data.c
+@@ -166,7 +166,7 @@
+ 	
+ 	NSLOG(netsurf, DEEPDEBUG, "url: %.140s", nsurl_access(c->url));
+ 	
+-	if (nsurl_length(c->url) < 6) {
++	if (nsurl_length(c->url) < 6 || nsurl_length(c->url) > 8*1024*1024) {
+ 		/* 6 is the minimum possible length (data:,) */
+ 		msg.type = FETCH_ERROR;
+ 		msg.data.error = "Malformed data: URL";
+--- a/netsurf/content/fetch.c
++++ b/netsurf/content/fetch.c
+@@ -54,7 +54,9 @@
+ #include "content/fetchers.h"
+ #include "content/fetchers/resource.h"
+ #include "content/fetchers/about/about.h"
++#ifdef WITH_CURL
+ #include "content/fetchers/curl.h"
++#endif
+ #include "content/fetchers/data.h"
+ #include "content/fetchers/file/file.h"
+ #include "javascript/fetcher.h"
+--- a/netsurf/Makefile
++++ b/netsurf/Makefile
+@@ -67,7 +67,7 @@
+ include frontends/$(TARGET)/Makefile.tools
+ 
+ # compiler versioning to adjust warning flags
+-CC_VERSION := $(shell $(CC) -dumpfullversion -dumpversion)
++CC_VERSION ?= $(shell $(CC) -dumpfullversion -dumpversion)
+ CC_MAJOR := $(word 1,$(subst ., ,$(CC_VERSION)))
+ CC_MINOR := $(word 2,$(subst ., ,$(CC_VERSION)))
+ define cc_ver_ge
+--- a/netsurf/utils/file.c
++++ b/netsurf/utils/file.c
+@@ -248,7 +248,7 @@
+ 	while ((sep = strchr(sep, '/')) != NULL) {
+ 		*sep = 0;
+ 		if (stat(dname, &sb) != 0) {
+-			if (nsmkdir(dname, S_IRWXU) != 0) {
++			if (nsmkdir(dname, 0700) != 0) {
+ 				/* could not create path element */
+ 				free(dname);
+ 				return NSERROR_NOT_FOUND;
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -111,6 +111,20 @@
+ };
+ 
+ /* forward declaration to break cycles */
++/* Ciuki local-document admission and a monotonic long-layout rejection gate.
++ * A failed layout returns to the event pump; it never re-enters core APIs. */
++#include <time.h>
++static uint64_t ciuki_layout_deadline;
++uint64_t ciuki_layout_max_ns;
++static uint64_t ciuki_layout_now(void)
++{
++    struct timespec t;
++    if (clock_gettime(CLOCK_MONOTONIC,&t)) return UINT64_MAX;
++    return (uint64_t)t.tv_sec*1000000000u+t.tv_nsec;
++}
++static bool ciuki_layout_expired(void)
++{ return ciuki_layout_deadline && ciuki_layout_now()>=ciuki_layout_deadline; }
++
+ static void layout_minmax_block(
+ 		struct box *block,
+ 		const struct gui_layout_table *font_func,
+@@ -1606,6 +1620,7 @@
+ 		int available_width,
+ 		html_content *content)
+ {
++    if (ciuki_layout_expired()) return false;
+ 	unsigned int columns = table->columns;  /* total columns */
+ 	unsigned int i;
+ 	unsigned int *row_span;
+@@ -2738,6 +2753,7 @@
+ 	    html_content *content,
+ 	    struct box **next_box)
+ {
++    if (ciuki_layout_expired()) return false;
+ 	int height, used_height;
+ 	int x0 = 0;
+ 	int x1 = *width;
+@@ -3533,6 +3549,7 @@
+ 		int viewport_height,
+ 		html_content *content)
+ {
++    if (ciuki_layout_expired()) return false;
+ 	struct box *box;
+ 	int cx, cy;  /**< current coordinates */
+ 	int max_pos_margin = 0;
+@@ -5418,6 +5435,20 @@
+ /* exported function documented in html/layout.h */
+ bool layout_document(html_content *content, int width, int height)
+ {
++    uint64_t ciuki_started=ciuki_layout_now();
++    ciuki_layout_deadline=ciuki_started+75000000u;
++    struct box *node=content->layout;
++    unsigned nodes=0,depth=0;
++    size_t text_bytes=0;
++    while (node) {
++        if (++nodes>8192 || depth>64 || node->length>8192 || node->columns>64 || ciuki_layout_expired()) return false;
++        text_bytes+=node->length; if (text_bytes>131072) return false;
++        if (node->children) { node=node->children;depth++;continue; }
++        while (node!=content->layout && !node->next) { node=node->parent;depth--; }
++        if (node==content->layout) break;
++        node=node->next;
++    }
++
+ 	bool ret;
+ 	struct box *doc = content->layout;
+ 	const struct gui_layout_table *font_func = content->font_func;
+@@ -5427,6 +5458,7 @@
+ 					&content->base)));
+ 
+ 	layout_minmax_block(doc, font_func, content);
++    if (ciuki_layout_expired()) return false;
+ 
+ 	layout_block_find_dimensions(&content->unit_len_ctx,
+ 			width, height, 0, 0, doc);
+@@ -5441,6 +5473,7 @@
+ 	doc->width = width;
+ 
+ 	ret = layout_block_context(doc, height, content);
++    if (!ret || ciuki_layout_expired()) return false;
+ 
+ 	/* make <html> and <body> fill available height */
+ 	if (doc->y + doc->padding[TOP] + doc->height + doc->padding[BOTTOM] +
+@@ -5465,6 +5498,10 @@
+ 	layout_position_relative(&content->unit_len_ctx, doc, doc, 0, 0);
+ 
+ 	layout_calculate_descendant_bboxes(&content->unit_len_ctx, doc);
++    uint64_t ciuki_elapsed=ciuki_layout_now()-ciuki_started;
++    if (ciuki_elapsed>ciuki_layout_max_ns) ciuki_layout_max_ns=ciuki_elapsed;
++    ciuki_layout_deadline=0;
++    if (ciuki_elapsed>100000000u) return false;
+ 
+ 	return ret;
+ }
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -1050,9 +1050,19 @@
+  * Reformat a CONTENT_HTML to a new width.
+  */
+ 
++static void ciuki_layout_error(void *context)
++{
++    struct content *c=context;
++    fprintf(stderr,"NetSurf layout rejected: local page exceeds admission/time limit.\n");
++    content_set_error(c);
++    content_broadcast_error(c,NSERROR_STOPPED,"Local page exceeds the layout admission/time limit.");
++    /* The callback can release c; never use it after broadcasting. */
++}
++
+ static void html_reformat(struct content *c, int width, int height)
+ {
+ 	html_content *htmlc = (html_content *) c;
++    if (htmlc->ciuki_layout_failed) return;
+ 	struct box *layout;
+ 	uint64_t ms_before;
+ 	uint64_t ms_after;
+@@ -1068,7 +1078,15 @@
+ 			INTTOFIX(height), htmlc->unit_len_ctx.device_dpi);
+ 	htmlc->unit_len_ctx.root_style = htmlc->layout->style;
+ 
+-	layout_document(htmlc, width, height);
++	if (!layout_document(htmlc, width, height)) {
++        htmlc->reflowing=false;htmlc->ciuki_layout_failed=true;
++        c->width=1;c->height=1;
++        content_set_status(c,"Local page exceeds the layout admission/time limit.");
++        /* READY/reformat callers still own their stack references. Report
++         * failure only after that call unwinds, and cancel on destruction. */
++        guit->misc->schedule(0,ciuki_layout_error,c);
++        return;
++    }
+ 	layout = htmlc->layout;
+ 
+ 	/* width and height are at least margin box of document */
+@@ -1201,6 +1219,7 @@
+ 
+ static void html_destroy(struct content *c)
+ {
++    guit->misc->schedule(-1,ciuki_layout_error,c);
+ 	html_content *html = (html_content *) c;
+ 	struct form *f, *g;
+ 
+--- a/netsurf/frontends/framebuffer/bitmap.c
++++ b/netsurf/frontends/framebuffer/bitmap.c
+@@ -25,6 +25,7 @@
+ #include <sys/types.h>
+ #include <stdbool.h>
+ #include <assert.h>
++#include <string.h>
+ #include <libnsfb.h>
+ #include <libnsfb_plot.h>
+ 
+@@ -47,9 +48,11 @@
+  * \param  state   a flag word indicating the initial state
+  * \return an opaque struct bitmap, or NULL on memory exhaustion
+  */
++static size_t ciuki_bitmap_bytes;
+ static void *bitmap_create(int width, int height, enum gui_bitmap_flags flags)
+ {
+ 	nsfb_t *bm;
++    if (width<=0 || height<=0 || width>1024 || height>1024 || (size_t)width*height*4>2*1024*1024-ciuki_bitmap_bytes) return NULL;
+ 
+ 	bm = nsfb_new(NSFB_SURFACE_RAM);
+ 	if (bm == NULL) {
+@@ -67,6 +70,10 @@
+ 		return NULL;
+ 	}
+ 
++    uint8_t *pixels;int stride;
++    nsfb_get_buffer(bm,&pixels,&stride);
++    memset(pixels,0,(size_t)stride*height);
++    ciuki_bitmap_bytes+=(size_t)stride*height;
+ 	return bm;
+ }
+ 
+@@ -123,6 +130,8 @@
+ 
+ 	assert(bm != NULL);
+ 
++    int width,height;nsfb_get_geometry(bm,&width,&height,NULL);
++    ciuki_bitmap_bytes-=(size_t)width*height*4;
+ 	nsfb_free(bm);
+ }
+ 
+--- a/netsurf/desktop/hotlist.c
++++ b/netsurf/desktop/hotlist.c
+@@ -1110,14 +1110,14 @@
+ 			hotlist_export_enter_cb,
+ 			hotlist_export_leave_cb,
+ 			&tw, TREE_NODE_ENTRY | TREE_NODE_FOLDER);
+-	if (err != NSERROR_OK)
+-		return err;
++	if (err != NSERROR_OK) { fclose(fp);return err; }
+ 
+ 	fputs("</ul>\n</body>\n</html>\n", fp);
+ 
+-	fclose(fp);
+-
+-	return NSERROR_OK;
++	int failed=ferror(fp);
++    if (fclose(fp)) failed=1;
++
++	return failed ? NSERROR_SAVE_FAILED : NSERROR_OK;
+ }
+ 
+ 
+--- a/netsurf/utils/filename.c
++++ b/netsurf/utils/filename.c
+@@ -188,7 +188,7 @@
+ 		if (*start == '/') {
+ 			*start = '\0';
+ 			NSLOG(netsurf, INFO, "Creating \"%s\"", directory);
+-			ret = nsmkdir(directory, S_IRWXU);
++			ret = nsmkdir(directory, 0700);
+ 			if (ret != 0 && errno != EEXIST) {
+ 				NSLOG(netsurf, INFO,
+ 				      "Failed to create directory \"%s\"",
+@@ -202,7 +202,7 @@
+ 	}
+ 
+ 	NSLOG(netsurf, INFO, "Temporary directory location: %s", directory);
+-	ret = nsmkdir(directory, S_IRWXU);
++	ret = nsmkdir(directory, 0700);
+ 
+ 	free(directory);
+ 
+@@ -469,7 +469,7 @@
+ 		new_dir->prefix[8] = '/';
+ 
+ 		if (!is_dir(filename_directory)) {
+-			if (!nsmkdir(filename_directory, S_IRWXU))
++			if (!nsmkdir(filename_directory, 0700))
+ 				return new_dir;
+ 
+ 			/* the user has probably deleted the parent directory
+@@ -497,7 +497,7 @@
+ 			last_1[0] = '\0';
+ 
+ 			if (!is_dir(filename_directory)) {
+-				if (nsmkdir(filename_directory, S_IRWXU)) {
++				if (nsmkdir(filename_directory, 0700)) {
+ 					NSLOG(netsurf, INFO,
+ 					      "Failed to create directory '%s'",
+ 					      filename_directory);
+--- a/netsurf/utils/nsoption.c
++++ b/netsurf/utils/nsoption.c
+@@ -794,7 +794,8 @@
+ 
+ 	ret = nsoption_output(fp, opts, defs, false);
+ 
+-	fclose(fp);
++	if (ferror(fp)) ret=NSERROR_SAVE_FAILED;
++    if (fclose(fp)) ret=NSERROR_SAVE_FAILED;
+ 
+ 	return ret;
+ }
+--- a/libnsfb/include/libnsfb_event.h
++++ b/libnsfb/include/libnsfb_event.h
+@@ -18,7 +18,8 @@
+     NSFB_EVENT_KEY_UP,
+     NSFB_EVENT_MOVE_RELATIVE,
+     NSFB_EVENT_MOVE_ABSOLUTE,
+-    NSFB_EVENT_RESIZE
++    NSFB_EVENT_RESIZE,
++    NSFB_EVENT_TEXT = 0x100
+ };
+ 
+ 
+--- a/netsurf/frontends/framebuffer/fbtk/event.c
++++ b/netsurf/frontends/framebuffer/fbtk/event.c
+@@ -214,7 +214,9 @@
+ 		}
+ 
+ 		switch (event->type) {
+-		case NSFB_EVENT_KEY_DOWN:
++		case NSFB_EVENT_TEXT:
++            fbtk_input(root,event);break;
++        case NSFB_EVENT_KEY_DOWN:
+ 		case NSFB_EVENT_KEY_UP:
+ 			if ((event->value.keycode >= NSFB_KEY_MOUSE_1) &&
+ 			    (event->value.keycode <= NSFB_KEY_MOUSE_5)) {
+--- a/netsurf/frontends/framebuffer/clipboard.c
++++ b/netsurf/frontends/framebuffer/clipboard.c
+@@ -33,73 +33,4 @@
+ #include "framebuffer/clipboard.h"
+ 
+ 
+-static struct gui_clipboard {
+-	char *buffer;
+-	size_t buffer_len;
+-	size_t length;
+-} gui_clipboard;
+-
+-
+-/**
+- * Core asks front end for clipboard contents.
+- *
+- * \param  buffer  UTF-8 text, allocated by front end, ownership yeilded to core
+- * \param  length  Byte length of UTF-8 text in buffer
+- */
+-static void gui_get_clipboard(char **buffer, size_t *length)
+-{
+-	*buffer = NULL;
+-	*length = 0;
+-
+-	if (gui_clipboard.length > 0) {
+-		assert(gui_clipboard.buffer != NULL);
+-		NSLOG(netsurf, INFO, "Pasting %zd bytes: \"%s\"\n",
+-		      gui_clipboard.length, gui_clipboard.buffer);
+-
+-		*buffer = malloc(gui_clipboard.length);
+-
+-		if (*buffer != NULL) {
+-			memcpy(*buffer, gui_clipboard.buffer,
+-					gui_clipboard.length);
+-			*length = gui_clipboard.length;
+-		}
+-	}
+-}
+-
+-
+-/**
+- * Core tells front end to put given text in clipboard
+- *
+- * \param  buffer    UTF-8 text, owned by core
+- * \param  length    Byte length of UTF-8 text in buffer
+- * \param  styles    Array of styles given to text runs, owned by core, or NULL
+- * \param  n_styles  Number of text run styles in array
+- */
+-static void gui_set_clipboard(const char *buffer, size_t length,
+-		nsclipboard_styles styles[], int n_styles)
+-{
+-	if (gui_clipboard.buffer_len < length + 1) {
+-		/* Make buffer big enough */
+-		char *new_buff;
+-
+-		new_buff = realloc(gui_clipboard.buffer, length + 1);
+-		if (new_buff == NULL)
+-			return;
+-
+-		gui_clipboard.buffer = new_buff;
+-		gui_clipboard.buffer_len = length + 1;
+-	}
+-
+-	gui_clipboard.length = 0;
+-
+-	memcpy(gui_clipboard.buffer, buffer, length);
+-	gui_clipboard.length = length;
+-	gui_clipboard.buffer[gui_clipboard.length] = '\0';
+-}
+-
+-static struct gui_clipboard_table clipboard_table = {
+-	.get = gui_get_clipboard,
+-	.set = gui_set_clipboard,
+-};
+-
+-struct gui_clipboard_table *framebuffer_clipboard_table = &clipboard_table;
++#include "framebuffer/ciuki/clipboard.inc"
+--- a/netsurf/utils/filepath.c
++++ b/netsurf/utils/filepath.c
+@@ -37,6 +37,7 @@
+ #include "utils/utils.h"
+ #include "utils/config.h"
+ #include "utils/filepath.h"
++#include "framebuffer/ciuki/file.h"
+ 
+ /** maximum number of elements in the resource vector */
+ #define MAX_RESPATH 128
+@@ -68,7 +69,8 @@
+ 
+ 	if (realpathname != NULL) {
+ 		/* sucessfully expanded pathname */
+-		if (access(realpathname, R_OK) != 0) {
++		if (ciuki_readable(realpathname) != 0) {
++            if (!str) free(realpathname);
+ 			/* unable to read the file */
+ 			return NULL;
+ 		}
+--- a/netsurf/utils/utils.c
++++ b/netsurf/utils/utils.c
+@@ -21,6 +21,7 @@
+  */
+ 
+ #include <assert.h>
++#include <errno.h>
+ #include <stdio.h>
+ #include <string.h>
+ #include <strings.h>
+@@ -520,12 +521,12 @@
+ 	else if (af == AF_INET6) {
+ 		/* TODO: implement v6 address support */
+ 		ret = -1;
+-		errno = EAFNOSUPPORT;
++		errno = ENOSYS;
+ 	}
+ #endif
+ 	else {
+ 		ret = -1;
+-		errno = EAFNOSUPPORT;
++		errno = ENOSYS;
+ 	}
+ 
+ 	return ret;
+--- a/libparserutils/src/input/filter.c
++++ b/libparserutils/src/input/filter.c
+@@ -370,8 +370,8 @@
+ 		return PARSERUTILS_BADPARM;
+ 
+ 	mibenum = parserutils_charset_mibenum_from_name(enc, strlen(enc));
+-	if (mibenum == 0)
+-		return PARSERUTILS_BADENCODING;
++	if (mibenum != 106 && mibenum != 4 && mibenum != 111 && mibenum != 2252 && mibenum != 3)
++        return PARSERUTILS_BADENCODING;
+ 
+ 	/* Exit early if we're already using this encoding */
+ 	if (input->settings.encoding == mibenum)
+--- a/netsurf/desktop/netsurf.c
++++ b/netsurf/desktop/netsurf.c
+@@ -197,7 +197,7 @@
+ 	if (ret != NSERROR_OK)
+ 		return ret;
+ 
+-	setlocale(LC_ALL, "");
++	setlocale(LC_ALL, "C");
+ 
+ 	/* initialise the fetchers */
+ 	ret = fetcher_init();
+--- a/netsurf/content/handlers/html/private.h
++++ b/netsurf/content/handlers/html/private.h
+@@ -120,6 +120,7 @@
+ 
+ 	/** Whether a layout (reflow) is in progress */
+ 	bool reflowing;
++    bool ciuki_layout_failed;
+ 
+ 	/** Whether an initial layout has been done */
+ 	bool had_initial_layout;
+--- a/netsurf/content/handlers/html/redraw.c
++++ b/netsurf/content/handlers/html/redraw.c
+@@ -1953,6 +1953,7 @@
+ 		.fill_colour = data->background_colour,
+ 	};
+ 
++	if (html->ciuki_layout_failed) return true;
+ 	box = html->layout;
+ 	assert(box);
+ 
+--- a/netsurf/content/handlers/html/interaction.c
++++ b/netsurf/content/handlers/html/interaction.c
+@@ -1465,6 +1465,7 @@
+ 		  int x, int y)
+ {
+ 	html_content *html = (html_content *)c;
++    if (html->ciuki_layout_failed) return NSERROR_STOPPED;
+ 	nserror res;
+ 
+ 	/* handle open select menu */
+@@ -1519,6 +1520,7 @@
+ bool html_keypress(struct content *c, uint32_t key)
+ {
+ 	html_content *html = (html_content *) c;
++    if (html->ciuki_layout_failed) return false;
+ 	struct selection *sel = html->sel;
+ 
+ 	/** \todo

@@ -1,0 +1,26 @@
+--- a/src/core/netif.c
++++ b/src/core/netif.c
+@@ -1117,6 +1117,14 @@
+  * @return ERR_OK if the packet has been sent
+  *         ERR_MEM if the pbuf used to copy the packet couldn't be allocated
+  */
++#if LWIP_NETIF_LOOPBACK_MULTITHREADING
++static void
++netif_poll_callback(void *arg)
++{
++  netif_poll((struct netif *)arg);
++}
++#endif
++
+ err_t
+ netif_loop_output(struct netif *netif, struct pbuf *p)
+ {
+@@ -1210,7 +1218,7 @@
+ #if LWIP_NETIF_LOOPBACK_MULTITHREADING
+   /* For multithreading environment, schedule a call to netif_poll */
+   if (schedule_poll) {
+-    if (tcpip_try_callback((tcpip_callback_fn)netif_poll, netif) != ERR_OK) {
++    if (tcpip_try_callback(netif_poll_callback, netif) != ERR_OK) {
+       SYS_ARCH_PROTECT(lev);
+       netif->reschedule_poll = 1;
+       SYS_ARCH_UNPROTECT(lev);

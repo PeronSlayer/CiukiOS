@@ -64,7 +64,7 @@ class Win32AdapterTests(unittest.TestCase):
                 '-I'+str(ROOT/'apps/desktop'),'-I'+str(ROOT/'src/kernel/include'),
                 '-I'+str(ROOT/'sdk/win32/include'),'-idirafter',str(ROOT/'sdk/sysroot-overlay/include')]
         obj=work/'launcher.o'
-        subprocess.run([*common,'-Dmain=desk_w32_launcher_main','-Dclose=fixture_close','-c',
+        subprocess.run([*common,'-Dmain=desk_w32_launcher_main','-Dclose=fixture_close','-Dwaitpid=fixture_waitpid','-c',
                         str(ROOT/'apps/desktop/win32_launcher.c'),'-o',str(obj)],check=True,env=env)
         binary=work/'launcher-test'
         subprocess.run([*common,str(obj),str(ROOT/'apps/desktop/win32_launch.c'),

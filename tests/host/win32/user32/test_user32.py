@@ -42,7 +42,7 @@ def build_fixture(out):
     # name USER also defines (FillRect, FrameRect...) stays private to them.
     engine=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if not n.startswith('compiler')]
     engine+=[ROOT/'sdk/win32/ddraw'/n for n in ddraw.SOURCES]
-    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE/'ddraw_seam.c']
+    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE/'ddraw_seam.c']
     defined=set()
     for obj in objects:
         nm=subprocess.run(['llvm-nm','--defined-only','--extern-only','-j',str(obj)],capture_output=True,text=True,check=True)
@@ -96,7 +96,8 @@ class User32Tests(unittest.TestCase):
             '_Static_assert(sizeof(PAINTSTRUCT)==64,"PAINTSTRUCT");\n'
             '_Static_assert(sizeof(ICONINFO)==20,"ICONINFO");\n'
             '_Static_assert(sizeof(struct u32_surface)==24,"surface");\n'
-            '_Static_assert(sizeof(struct u32_gdi)==36,"GDI interface");\n')
+            '_Static_assert(__builtin_offsetof(struct u32_gdi,window_pixel_format)==36,"GDI v1 prefix");\n'
+            '_Static_assert(sizeof(struct u32_gdi)==40,"GDI v2 interface");\n')
         subprocess.run(['clang','--target=i686-pc-windows-msvc','-ffreestanding','-Wall','-Wextra','-Werror',
             '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
             '-c',str(source),'-o',str(out/'layout.obj')],check=True)

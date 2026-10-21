@@ -419,15 +419,47 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case 952: if (e->type==DU_EV_ACTIVATE) build(a); break;
     case 982:
-        if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->uninstall_count) a->uninstall_selected=(unsigned)e->index;
+        if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->uninstall_count) {
+            a->uninstall_selected=(unsigned)e->index;
+            struct desk_uninstall_entry *r=&a->uninstall[a->uninstall_selected];
+            du_get(u,983)->disabled=r->no_remove || r->system_component;
+        }
         break;
     case 983:
-        if (e->type==DU_EV_ACTIVATE && a->uninstall_selected<a->uninstall_count && a->host.uninstall_run) {
-            int result=a->host.uninstall_run(a->host.ctx,a->uninstall[a->uninstall_selected].key);
-            text(a,C_STATUS,result ? "The uninstaller could not be started. Refresh the list and try again." : "Uninstaller started.");
+        if (e->type==DU_EV_ACTIVATE && a->uninstall_selected<a->uninstall_count) {
+            struct desk_uninstall_entry *r=&a->uninstall[a->uninstall_selected];
+            if(r->no_remove || r->system_component){text(a,C_STATUS,"This system component is protected.");break;}
+            char prompt[512];
+            snprintf(prompt,sizeof(prompt),"Remove %s? Its shortcuts will also be removed.%s",r->name,
+                r->kind==DESK_PROGRAM_GAME ? " This bundled game cannot be restored without reinstalling the system." : "");
+            static const char *const buttons[]={"Remove","Cancel"};
+            a->remove_pending=1;
+            du_message(u,987,"Remove program",prompt,DU_DLG_ICON_WARNING,buttons,2,1,1);
+        }
+        break;
+    case 987:
+        if(e->type==DU_EV_DIALOG && a->remove_pending){
+            a->remove_pending=0;
+            if(e->index || a->uninstall_selected>=a->uninstall_count)break;
+            struct desk_uninstall_entry *r=&a->uninstall[a->uninstall_selected];
+            int result=a->host.program_remove ? a->host.program_remove(a->host.ctx,r) :
+                r->no_remove || r->system_component ? -EPERM : a->host.uninstall_run ? a->host.uninstall_run(a->host.ctx,r->key) : -ENOSYS;
+            if(a->host.programs_changed)a->host.programs_changed(a->host.ctx);
+            build(a);
+            char status[96];snprintf(status,sizeof(status),result ? "Removal incomplete: %s. Refresh and try again." : "Program removed.",result ? strerror(-result) : "");
+            text(a,C_STATUS,status);
         }
         break;
     case 984: if (e->type==DU_EV_ACTIVATE) build(a); break;
+    case 986:
+        if(e->type==DU_EV_ACTIVATE)du_file_dialog(u,988,0,"Install a program from removable media or CD-ROM","/", "",NULL,NULL);
+        break;
+    case 988:
+        if(e->type==DU_EV_DIALOG && !e->index && e->text){
+            int result=a->host.program_install ? a->host.program_install(a->host.ctx,e->text) : -ENOSYS;
+            text(a,C_STATUS,result ? "Select SETUP.EXE, INSTALL.EXE or a .BAT installer on removable media." : "Installer requested.");
+        }
+        break;
     case C_BACK: if (e->type == DU_EV_ACTIVATE) cp_open(a, CP_HOME); break;
     case CP_CATEGORY:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CP_CATEGORIES) {
@@ -1084,23 +1116,35 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_TIME_NOTE1, 24, 202, 452, 14, "The clock reads the computer's real-time clock (UTC).");
     add(a, DU_LABEL, C_TIME_NOTE2, 24, 216, 452, 14, "Setting it is not available yet: the kernel has no call for it.");
     } else if (a->page==CP_UNINSTALL) {
-        int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,DESK_UNINSTALL_MAX) : -ENOSYS;
-        a->uninstall_count=count>=0 && count<=(int)DESK_UNINSTALL_MAX ? (unsigned)count : 0;
+        int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
+        a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;
         a->uninstall_selected=0;
         for (unsigned k=0;k<a->uninstall_count;k++) {
             struct desk_uninstall_entry *r=&a->uninstall[k];
             r->name[sizeof(r->name)-1]=0; r->key[sizeof(r->key)-1]=0;
             memset(&a->uninstall_items[k],0,sizeof(a->uninstall_items[k]));
             a->uninstall_items[k].text[0]=r->name;
+            a->uninstall_items[k].text[1]=r->version;
+            a->uninstall_items[k].text[2]=r->publisher;
+            snprintf(a->uninstall_sizes[k],sizeof(a->uninstall_sizes[k]),"%llu KB%s",
+                (unsigned long long)((r->disk_bytes+1023)/1024),r->no_remove || r->system_component ? " (protected)" : "");
+            a->uninstall_items[k].text[3]=a->uninstall_sizes[k];
         }
-        add(a,DU_LABEL,981,24,48,508,16,"Select a Windows program to remove.");
+        add(a,DU_LABEL,981,24,48,508,16,"Install/Uninstall: select a program to remove.");
         w=add(a,DU_LISTVIEW,982,24,76,508,224,"");
-        w->items=a->uninstall_items; w->count=a->uninstall_count; list_style(w,"Installed program");
+        w->items=a->uninstall_items; w->count=a->uninstall_count; list_style(w,"Name");
+        w->column_count=4;
+        w->columns[0]=(struct du_column){"Name",170,0};
+        w->columns[1]=(struct du_column){"Version",64,0};
+        w->columns[2]=(struct du_column){"Publisher",130,0};
+        w->columns[3]=(struct du_column){"Size on disk",140,0};
         w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
-        du_set_text(w,count<0 ? "Windows registry service is unavailable." : "No Windows programs are registered.");
-        add(a,DU_BUTTON,983,24,316,180,24,"Remove")->disabled=!a->uninstall_count || !a->host.uninstall_run;
-        add(a,DU_BUTTON,984,216,316,96,24,"Refresh");
-        add(a,DU_LABEL,985,24,350,508,16,"The program's own uninstaller will be started.");
+        du_set_text(w,count<0 ? "Program inventory unavailable. Refresh to try again." : "No programs are registered.");
+        add(a,DU_BUTTON,983,24,316,100,24,"Remove")->disabled=!a->uninstall_count ||
+            (!a->host.program_remove && !a->host.uninstall_run) || a->uninstall[0].no_remove || a->uninstall[0].system_component;
+        add(a,DU_BUTTON,984,136,316,96,24,"Refresh");
+        add(a,DU_BUTTON,986,244,316,100,24,"Install")->disabled=!a->host.program_install;
+        add(a,DU_LABEL,985,24,350,508,16,a->uninstall_count && a->uninstall[0].inventory_more ? "More programs exist. Remove entries and refresh to see more." : "Protected components cannot be removed.");
     } else if (a->page==CP_AUTOPLAY) {
         static const char *const actions[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
         int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;

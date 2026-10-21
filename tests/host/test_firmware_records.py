@@ -80,6 +80,7 @@ class FirmwareRecordTests(unittest.TestCase):
         assert source.count(old) == 1
         source = source.replace(old, old.replace('P_DEVICE', 'P_INTERACTIVE'))
         source = source.replace('"../../src/', '"' + str(ROOT / 'src') + '/')
+        source = source.replace('"../../tests/host/', '"' + str(ROOT / 'tests/host') + '/')
         source += '''
 bool fwinput_pending(void) { return fw_count || fake_fw_state == BIOSVM_DISABLED_BACKEND; }
 uint64_t biosvm_input_reflections(void) { return 0; }

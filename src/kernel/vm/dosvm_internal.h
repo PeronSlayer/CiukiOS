@@ -10,6 +10,9 @@
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
 #include <ciuki/dos_video_modes.h>
+int dosvm_game_remove_reserve(unsigned game);
+void dosvm_game_remove_release(unsigned game);
+int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -435,6 +438,9 @@ bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, boo
 struct ciuki_rect;
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t tick, struct ciuki_rect *damage);
+/* Same complete scan as frame_digest, optionally retaining those exact rows. */
+int dosvm_frame_capture(struct dosvm *, uint64_t, struct dosvm_frame *,
+                        int (*row)(void *,unsigned,const void *,unsigned),void *);
 uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
 int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);

@@ -92,14 +92,16 @@ class AudioWaveTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 selector(text, 'fw_cfg', True)
         suite = runner.load(ROOT / 'tests/suites/f4-audio.json')
+        self.assertEqual({case['probe'] for case in suite['cases']},
+                         {'audio-native', 'vm-audio', 'vm-audio-jitter'})
         for case in suite['cases']:
             profile = runner.load(ROOT / f"tests/profiles/{case['profile']}.json")
             args, request = runner.qemu_args('fixture', profile, case, '12345678', self.path, self.path)
-            if case['probe'] == 'vm-audio':
+            if case['probe'] in ('vm-audio', 'vm-audio-jitter'):
                 # f4-05: the DOS VM audio output on the three F3 profiles, AC97 by case exception.
                 self.assertIn(case['profile'], ('qemu-t23', 'qemu-e500', 'qemu-min128'))
                 platform = ' platform=e500' if profile.get('platform') == 'e500' else ''
-                self.assertEqual(request, 'f4:vm-audio run=12345678' + platform)
+                self.assertEqual(request, f"f4:{case['probe']} run=12345678" + platform)
                 self.assertEqual(args.count('AC97,audiodev=cap'), 1)
                 self.assertNotIn('audio_expectations', case)
                 continue

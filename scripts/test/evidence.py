@@ -2,8 +2,8 @@
 import hashlib
 import json
 import re
-from loader_model import PROBES, F4_PROBES, F5_PROBES, F6_PROBES
-KNOWN_PROBES = (*PROBES, *F4_PROBES, *F5_PROBES, *F6_PROBES)  # sweep plus selector-only probes
+from loader_model import PROBES, F4_PROBES, F5_PROBES, F6_PROBES, F3_SELECTOR_PROBES
+KNOWN_PROBES = (*PROBES, *F4_PROBES, *F5_PROBES, *F6_PROBES, *F3_SELECTOR_PROBES)
 
 
 class EvidenceError(ValueError):

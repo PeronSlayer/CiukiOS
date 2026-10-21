@@ -104,6 +104,20 @@ def read_version():
     return module.load()
 
 
+def desktop_license_payloads():
+    """Desktop dependencies' licence/notice/provenance inventory."""
+    sources = {f"/system/licenses/{name}": ROOT / "third_party/stb/LICENSE"
+               for name in ("stb_image.txt", "stb_image_write.txt", "stb_vorbis.txt")}
+    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
+    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
+                 "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
+        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
+    for name in ("lwip-2.2.1-BSD-3-Clause.txt", "lwip-2.2.1-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+    return sources
+
+
 def desktop_payloads():
     """Validate desktop/demo ELFs and the exact converted portrait independently."""
     spec = importlib.util.spec_from_file_location("build_desktop", ROOT / "apps/desktop/build_desktop.py")
@@ -120,19 +134,12 @@ def desktop_payloads():
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
-               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    sources.update(desktop_license_payloads())
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
     sources.update(font_sources)
-    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    for name in ("TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
-    sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
-    sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     hwids = ROOT / "assets/hwids"
@@ -220,6 +227,14 @@ def application_payloads():
         sources[f"{TEST_PATH}/{name}"] = LUA / "lua-5.4.8-tests" / name
     desktop_sources, desktop_directories, desktop_metadata = desktop_payloads()
     sources.update(desktop_sources)
+    netsurf_spec=importlib.util.spec_from_file_location("image_netsurf",ROOT / "sdk/netsurf/build.py")
+    netsurf_build=importlib.util.module_from_spec(netsurf_spec)
+    netsurf_spec.loader.exec_module(netsurf_build)
+    netsurf_sources,netsurf_record=netsurf_build.payloads()
+    sources.update(netsurf_sources)
+    desktop_directories.update({str(Path(name).parent) for name in netsurf_sources})
+    desktop_directories.add("/Documents/NetSurf")
+    desktop_metadata["netsurf"]={"files":netsurf_record["files"],"elf":netsurf_record["elf"]}
     tcc_spec = importlib.util.spec_from_file_location("image_tcc", ROOT / "apps/tcc/build_tcc.py")
     tcc_build = importlib.util.module_from_spec(tcc_spec)
     tcc_spec.loader.exec_module(tcc_build)

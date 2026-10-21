@@ -1,0 +1,13 @@
+--- a/src/core/ipv4/dhcp.c
++++ b/src/core/ipv4/dhcp.c
+@@ -742,6 +742,10 @@
+     ip_addr_set_ip4_u32_val(dns_addr, lwip_htonl(dhcp_get_option_value(dhcp, DHCP_OPTION_IDX_DNS_SERVER + n)));
+     dns_setserver(n, &dns_addr);
+   }
++  /* A lease ACK replaces the complete DNS list, including omitted slots. */
++  for (; n < DNS_MAX_SERVERS; n++) {
++    dns_setserver(n, IP_ADDR_ANY);
++  }
+ #endif /* LWIP_DHCP_PROVIDE_DNS_SERVERS */
+ }
+ 

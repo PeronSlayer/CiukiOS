@@ -13,6 +13,13 @@
 #include "../../../apps/desktop/desktop.c"
 #undef desk_init
 #undef main
+/* Replay fixtures keep every bundled game available, like the desktop gate. */
+int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
+{
+    if (op == CIUKI_DOSVM_GAME_QUERY) { c->state = 1; return 0; }
+    errno = ENOSYS;
+    return -1;
+}
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 struct desktop *replay_desktop;
 void replay_hook_desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
