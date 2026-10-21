@@ -17,7 +17,7 @@ class InstallerShellTests(unittest.TestCase):
         cls.program = cls.out/'shell-test'
         cls.sanitized = cls.out/'shell-test-asan'
         sources = [ROOT/'sdk/win32/shell'/n for n in
-            ('folders.c','link.c','execute.c','fileop.c','strings.c')]
+            ('folders.c','pidl.c','link.c','execute.c','fileop.c','strings.c')]
         sources += [ROOT/'sdk/win32/services/bytes.c',
             ROOT/'sdk/win32/kernel32/text.c',ROOT/'apps/desktop/protocol.c']
         sources += [ROOT/'sdk/win32/version'/n for n in ('version.c','install.c')]

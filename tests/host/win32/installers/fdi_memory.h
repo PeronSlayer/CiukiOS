@@ -12,7 +12,9 @@ static void *cab_allocate(ULONG n){
     uint8_t *p=host.services.alloc(&host,n+4);if(!p)return 0;*(ULONG *)p=n+4;cab_allocs++;return p+4;
 }
 static void cab_release(void *p){if(p){uint8_t *b=(uint8_t *)p-4;cab_frees++;host.services.free(&host,b,*(ULONG *)b);}}
-static intptr_t cab_open(char *path,int flags,int mode){(void)path;(void)mode;if(flags)return -1;cab_position=0;return 1;}
+/* Wine FDICopy asks for _O_RDONLY | _O_BINARY (0x8000). Binary is a mode,
+ * not write access; rejecting it makes a valid in-memory cabinet unreadable. */
+static intptr_t cab_open(char *path,int flags,int mode){(void)path;(void)mode;if(flags&~0x8000)return -1;cab_position=0;return 1;}
 static unsigned cab_read(intptr_t h,void *out,unsigned n){
     if(h!=1 || cab_position>sizeof(cab_source))return ~0u;
     if(n>sizeof(cab_source)-cab_position)n=sizeof(cab_source)-cab_position;
@@ -43,6 +45,8 @@ static void w32_upper_run(const struct w32_upper_env *e,const struct w32_upper_e
     if(!m || !create || !copy || !destroy){r->errors++;return;}
     ERF error={0};void *context=create(cab_allocate,cab_release,cab_open,cab_read,cab_write,cab_close,cab_seek,-1,&error);
     int ok=context && copy(context,"fixture.cab","",0,cab_notify,0,0);
+    if(!ok){host_print("FDI operation=");host_number((ULONG)error.erfOper);
+        host_print(" type=");host_number((ULONG)error.erfType);host_print(" error=");host_number((ULONG)error.fError);host_print("\n");}
     if(ok)for(unsigned i=0;i<3;i++){
         const uint8_t *expected=i==0?cab_payload:i==1?cab_child:cab_inf;unsigned n=i==0?sizeof(cab_payload):i==1?sizeof(cab_child):sizeof(cab_inf);
         if(cab_sizes[i]!=n)ok=0;else for(unsigned j=0;j<n;j++)if(cab_output[i][j]!=expected[j])ok=0;

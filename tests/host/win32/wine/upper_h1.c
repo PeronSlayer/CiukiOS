@@ -28,6 +28,7 @@
 #ifdef H1_INSTALLERS
 #include "h1_services.h"
 static int installer_exec;
+static int installer_fixture;
 #endif
 /* f5-20D: the guest fixture's logic (src/probes/win32_upper/exercise.c, the
  * same source that is linked as upper-exercise.exe) on the adapter. The test
@@ -107,6 +108,10 @@ static int sandbox(void) {
 }
 
 static ULONG kernel_records, kernel_enosys, server_requests, server_unsupported, console_writes;
+#ifdef H1_INSTALLERS
+static struct {ULONG op,action,size;} recent_kernel[32];
+static struct {ULONG op,key,status;} recent_server[16];
+#endif
 /* Exec mode (Wine conformance programs): the process's standard handles are
  * a console the adapter answers itself (write to stdout, empty input). */
 #define H1_STDIN 0x40000010u
@@ -141,6 +146,13 @@ static int32_t h1_console(struct ciuki_w32_file_args *a) {
 
 static int32_t h1_kernel(void *record, uint32_t size) {
     struct ciuki_w32_header *h = record;
+#ifdef H1_INSTALLERS
+    recent_kernel[kernel_records%32].op=h->operation;
+    recent_kernel[kernel_records%32].size=size;
+    recent_kernel[kernel_records%32].action=
+        (h->operation==W32_FILE || h->operation==W32_OBJECT || h->operation==W32_VIEW) && size>=20?
+        ((const ULONG *)record)[4]:0;
+#endif
     kernel_records++;
     if (h->operation == W32_IDENTITY && size >= sizeof(struct ciuki_w32_identity)) {
         struct ciuki_w32_identity *a = record;
@@ -158,11 +170,26 @@ static int32_t h1_kernel(void *record, uint32_t size) {
         return 0;
 #ifdef H1_INSTALLERS
     int32_t status;
-    if (installer_exec && h1_installer_kernel(record, size, &status))
+    if ((installer_exec || installer_fixture) && h1_installer_kernel(record, size, &status)){
+        host_print("KERNEL op=");print_hex(h->operation);
+        host_print(" action=");host_number(recent_kernel[(kernel_records-1)%32].action);
+        host_print(" status=");print_hex((ULONG)status);
+        if(size>=sizeof(struct ciuki_w32_vm) &&
+           (h->operation==W32_VM_ALLOC || h->operation==W32_VM_FREE || h->operation==W32_VM_PROTECT)){
+            const struct ciuki_w32_vm *a=record;host_print(" address=");print_hex(a->address);
+            host_print(" bytes=");host_number(a->bytes);host_print(" flags=");print_hex(a->flags);
+        }
+        host_print("\n");
         return status;
+    }
 #endif
     kernel_enosys++;
     count_enosys(h->operation);
+    host_print("KERNEL ENOSYS op=");
+    print_hex(h->operation);
+    host_print(" size=");
+    host_number(size);
+    host_print("\n");
     return -38;
 }
 
@@ -244,8 +271,17 @@ static ULONG atom_call(const struct w32r_request *r, const char *name, struct w3
 
 static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, uint32_t *used) {
 #ifdef H1_INSTALLERS
-    if (installer_exec)
-        return h1_installer_server(in, n, out, cap, used);
+    if (installer_exec || installer_fixture){
+        unsigned slot=server_requests++%16;
+        const struct w32r_request *request=in;
+        recent_server[slot].op=n>=sizeof(*request)?request->op:0;
+        recent_server[slot].key=n>=sizeof(*request)?request->key:0;
+        uint32_t status=h1_installer_server(in,n,out,cap,used);
+        recent_server[slot].status=status;
+        if(!status && *used>=sizeof(struct w32r_reply))
+            recent_server[slot].status=((const struct w32r_reply *)out)->error;
+        return status;
+    }
 #endif
     const struct w32r_request *r = in;
     struct w32r_reply *reply = out;
@@ -308,6 +344,43 @@ static void print_stats(void) {
     }
     host_print("\n");
 }
+
+#ifdef H1_INSTALLERS
+/* Keep the original fault context: the terse diagnostic alone loses both
+ * the failing instruction and its callers. Read only the owned PE stack. */
+static void installer_report(void *opaque, uint32_t action, uint32_t reason,
+                             struct w32_context *c, const char *name, uint32_t code) {
+    (void)opaque;(void)name;(void)code;
+    host_print("REPORT action=");host_number(action);
+    host_print(" reason=");print_hex(reason);
+    if(c){
+        host_print(" eip=");print_hex(c->Eip);
+        host_print(" esp=");print_hex(c->Esp);
+        host_print(" ebp=");print_hex(c->Ebp);
+        host_print(" eax=");print_hex(c->Eax);
+        host_print(" ecx=");print_hex(c->Ecx);
+        host_print(" edx=");print_hex(c->Edx);
+        host_print("\nSTACK");
+        uintptr_t at=c->Esp,low=(uintptr_t)host.teb.Tib.StackLimit,high=(uintptr_t)host.teb.Tib.StackBase;
+        for(unsigned i=0;i<32 && at>=low && at<=high && high-at>=4;i++,at+=4){
+            host_print(" ");print_hex(*(const uint32_t *)at);
+        }
+    }
+    host_print("\n");
+    for(ULONG i=kernel_records>32?kernel_records-32:0;i<kernel_records;i++){
+        unsigned slot=i%32;host_print("KERNEL recent=");host_number(i+1);
+        host_print(" op=");print_hex(recent_kernel[slot].op);
+        host_print(" action=");host_number(recent_kernel[slot].action);
+        host_print(" size=");host_number(recent_kernel[slot].size);host_print("\n");
+    }
+    for(ULONG i=server_requests>16?server_requests-16:0;i<server_requests;i++){
+        unsigned slot=i%16;host_print("SERVER recent=");host_number(i+1);
+        host_print(" op=");host_number(recent_server[slot].op);
+        host_print(" key=");print_hex(recent_server[slot].key);
+        host_print(" status=");host_number(recent_server[slot].status);host_print("\n");
+    }
+}
+#endif
 
 static void (*base_terminate)(void *, uint32_t);
 static void stats_terminate(void *opaque, uint32_t code) {
@@ -519,6 +592,7 @@ static int run_fixture(void) {
     host_print(" mappings=");
     host_number(host.mappings);
     host_print("\n");
+    print_stats();
     return r->errors ? 1 : 0;
 }
 
@@ -526,10 +600,15 @@ int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
 #ifdef H1_INSTALLERS
     installer_exec = argc == 5 && !w32_strcmp(argv[1], "installer-exec");
+    installer_fixture = argc == 3 && !w32_strcmp(argv[1], "installer-fixture");
     exec = exec || installer_exec;
 #endif
     int preflight = argc == 2 && !w32_strcmp(argv[1], "sandbox-check");
-    if (argc != 2 && !exec)
+    if (argc != 2 && !exec
+#ifdef H1_INSTALLERS
+        && !installer_fixture
+#endif
+        )
         return 2;
     /* No PE is mapped in this mode. An outer filter may kill the i386
      * prctl rather than returning an error; the host test can distinguish
@@ -545,8 +624,10 @@ int host_main(int argc, char **argv) {
         return 0;
     }
 #ifdef H1_INSTALLERS
-    if (installer_exec && !h1_installer_init(argv[4]))
+    if ((installer_exec && !h1_installer_init(argv[4])) ||
+        (installer_fixture && !h1_installer_init(argv[2])))
         return 9;
+    host.services.report = installer_report;
 #endif
     if (!gate_page())
         return 3;
@@ -575,7 +656,11 @@ int host_main(int argc, char **argv) {
         return run_exe(argv[2], argv[3]);
     if (!w32_strcmp(argv[1], "debugbreak"))
         return run_debugbreak();
-    if (!w32_strcmp(argv[1], "fixture"))
+    if (!w32_strcmp(argv[1], "fixture")
+#ifdef H1_INSTALLERS
+        || installer_fixture
+#endif
+        )
         return run_fixture();
     /* The process heap, as w32_ldr_start_process creates it: by the adapter's
      * own ntdll code (the PE ntdll is unmapped at loader shutdown). */

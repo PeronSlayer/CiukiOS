@@ -139,3 +139,84 @@ still needs H1 USER transport/thread support. The guest desktop's visible-page
 driver remains in the WIP, without execution qualification here. The preserved
 i386 preflight reports SIGSYS before any PE startup, so neither the new driver
 nor its read-only mapping endpoint has runtime evidence in this sandbox.
+
+## Amendment 2: lead failures and scoped corrections
+
+The lead's `build/lead/installers.log` reports a missing desktop shortcut,
+FDI failure with eight unsupported kernel records, and an INF access violation.
+The sandbox still terminates the i386 adapter before PE startup. These three
+runtime acceptance checks therefore remain open; native unit results do not
+supersede the lead's failures.
+
+The pinned NSIS 2.51 `Source/exehead/util.c:669–738` explicitly chooses
+`SHGetSpecialFolderLocation` / `SHGetPathFromIDList` on Windows 95/98 for
+Desktop and Programs, rather than `SHGetFolderPath`. Those exports previously
+stayed in the reused Wine shell and its COM namespace. The production shell
+now owns the corresponding known-folder PIDL path. It retains the existing
+folder locations, the f5-15A link writer, and the NSIS fixture's original paths
+and hash. Counted GUID/drive/filesystem items follow the pinned Wine 10.0
+`shell32/pidl.h` and `pidl.c`; other namespaces and extended items still use
+the reused parser. The native test checks Desktop and Programs, ANSI/Unicode
+paths, CREATE flags, allocation ownership and malformed item rejection.
+
+This follows Microsoft's [SHGetSpecialFolderLocation contract](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetspecialfolderlocation)
+and [SHGetPathFromIDList contract](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetpathfromidlista),
+and the [NSIS shell-folder context documentation](https://nsis.sourceforge.io/Reference/SetShellVarContext).
+The manifest locations are unchanged; compiled NSIS shortcut creation still
+requires execution evidence.
+
+The FDI test previously invoked H1's default `fixture` mode, which disables
+the installer backend. It now uses `installer-fixture` with the same copied
+file/registry/system services as `installer-exec`, under the unchanged seccomp
+preflight and filter. The exact extraction/corruption checks remain, with an
+additional `kernel_enosys=0` assertion. The memory-file open callback also
+accepts `_O_RDONLY | _O_BINARY`: pinned `cabinet/fdi.c:2475` supplies that mode,
+which the callback previously rejected. This is an I/O adapter correction,
+consistent with Microsoft's [FNOPEN callback](https://learn.microsoft.com/en-us/windows/win32/api/fdi/nf-fdi-fnopen)
+and [FDICopy](https://learn.microsoft.com/en-us/windows/win32/api/fdi/nf-fdi-fdicopy),
+not a change to the expected cabinet bytes. The retained pinned cabinet H1
+record in `build/win32/upper/h1-load.json` identifies the eight unsupported
+operations in its `msvcrt`/`cabinet` closure: `W32_FILE` (0x109) three times,
+`W32_VM_QUERY` (0x6) twice, `W32_SYSTEM` (0x10a) once, and `W32_OBJECT`
+(0x100) twice. All four routes already exist in the installer backend but
+were disabled by the old test launch mode. This matches the lead's aggregate
+count; the lead's new fixture run must confirm the per-operation results.
+H1 now logs operation IDs and statuses and retains per-operation ENOSYS
+totals for that run.
+
+The INF fault's original log has no EIP or stack words. An H1 report hook now
+retains EIP/ESP/EBP, volatile registers, 32 words bounded by the owned stack,
+and recent kernel/registry records. Source inspection identifies a definite
+invalid call in the authored stub: its first `SetupInstallFromInfSectionA`
+call sets `SPINST_FILES` but supplies a NULL callback and context. The
+[documented callback requirement](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupinstallfrominfsectiona)
+is explicit. Wine `install.c:1091` wraps that pointer in
+`QUEUE_callback_WtoA`; `queue.c:1384` sends `SPFILENOTIFY_STARTQUEUE`, and
+`queue.c:286` calls the NULL original handler. This explains a NULL-call
+access violation once the file queue is populated, although the lead must
+still confirm the actual fault context and complete flow.
+
+The stub now obtains the reused `SetupInitDefaultQueueCallback`,
+`SetupDefaultQueueCallbackA` and `SetupTermDefaultQueueCallback` exports,
+passes the real callback/context for file operations, and closes the context
+after success or failure. A native UBSan check validates the actual caller
+helper, including all three section failures and callback allocation failure.
+No production workaround for invalid callback arguments was added, and no
+file/registry/INI expectation was weakened. Only the authored `infchain.exe`
+artifact hash changes; NSIS, CAB, INF and self-extractor bytes stay pinned.
+
+A separate native UBSan test exercises
+the actual `h1_services.c` endpoint with low-address native storage, the real
+copied file transport, VM allocate/query/protect/free, and the INF read-only
+mapping after its section and file handles close. That mapping lifetime check
+passes. Neither native check is evidence of actual reused PE execution.
+
+The mapping check matches the pinned `setupapi/parser.c:953–961` and Microsoft's
+[CreateFileMapping](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga)
+and [MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)
+contracts. The [SetupInstallFromInfSection flags](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupinstallfrominfsectiona)
+and [Wine install engine](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/setupapi/install.c)
+were rechecked; their file/registry/INI expectations were preserved. Web reads
+of Wine's `cabinet/fdi.c` and `advpack/install.c` failed with cache misses;
+their pinned local sources were used for comparison. Current commands,
+results and the required lead rerun are in `build/codex/f5-15a2-report.md`.

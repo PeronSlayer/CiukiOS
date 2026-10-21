@@ -184,6 +184,21 @@ class HostServiceTests(unittest.TestCase):
         result, raw = call(self.session, h.FILE, {4: 7, 5: a[16], 9: 832}, buffer=bytes(832))
         self.assertEqual(struct.unpack_from('<5H', raw, result[8] + 12), dates)
 
+    def test_native_h1_memory_and_inf_mapping_endpoint(self):
+        binary = OUT / 'h1-endpoint-ubsan'
+        subprocess.run([*self.flags, '-DW32_HOST_MODEL', '-no-pie', '-pthread',
+            '-fsanitize=undefined', '-fno-sanitize-recover=all',
+            '-I' + str(h.ROOT / 'tests/host/win32/adapter'),
+            h.HERE / 'h1_endpoint_test.c', h.HERE / 'h1_services.c',
+            h.ROOT / 'sdk/win32/services/bytes.c', '-o', binary], check=True)
+        (self.service.root / 'C/WINDOWS/TEMP/endpoint.inf').write_bytes(
+            b'[Version]\r\nSignature="$CHICAGO$"\r\n')
+        self.service.program = binary
+        code, output = self.service.run('C:\\WINDOWS\\TEMP\\endpoint.inf')
+        self.assertEqual(code, 0, output)
+        self.assertIn('PASS native H1 VM records and INF read-only view', output)
+        print(output, end='')
+
 
 class NativeBridgeTests(unittest.TestCase):
     @classmethod

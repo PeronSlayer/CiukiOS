@@ -154,14 +154,17 @@ class Services:
             return result
 
     def start(self, image, command, cwd='C:\\WINDOWS\\TEMP'):
+        Session(self, 0, cwd).path(image).stat()  # fail before allocating child handles
+        return self.start_adapter(['installer-exec', image, command], image, cwd)
+
+    def start_adapter(self, arguments, label, cwd='C:\\WINDOWS\\TEMP'):
         if self.program is None:
             raise RuntimeError('an H1 executable is required for child creation')
-        Session(self, 0, cwd).path(image).stat()  # fail before allocating child handles
         parent, child = socket.socketpair()
         session = self.session(cwd)
         log = tempfile.TemporaryFile(dir=self.root)
         try:
-            process = subprocess.Popen([str(self.program), 'installer-exec', image, command,
+            process = subprocess.Popen([str(self.program), *arguments,
                                         str(child.fileno())], pass_fds=(child.fileno(),),
                                        stdout=log, stderr=subprocess.STDOUT)
         except BaseException:
@@ -173,7 +176,7 @@ class Services:
         result = Child(process, worker, log, session)
         with self.lock:
             self.children.append(result)
-            self.trace.append(('spawn', image, process.pid))
+            self.trace.append(('spawn', label, process.pid))
         worker.start()
         return result
 

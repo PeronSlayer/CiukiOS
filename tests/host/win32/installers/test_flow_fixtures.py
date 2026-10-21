@@ -75,6 +75,16 @@ def decode_cabinet(raw):
 
 
 class CabinetWriterTests(unittest.TestCase):
+    def test_inf_caller_queue_callback_and_context_lifetime(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        binary = OUT / 'inf-callback-ubsan'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+            '-DW32_HOST_MODEL', '-fsanitize=undefined', '-fno-sanitize-recover=all',
+            '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include'),
+            HERE / 'inf_callback_test.c', '-o', binary], check=True)
+        result = subprocess.run([binary], capture_output=True, text=True, check=True)
+        print(result.stdout, end='')
+
     def test_native_registry_observer_on_production_directory(self):
         OUT.mkdir(parents=True, exist_ok=True)
         binary = OUT / 'registry-observer'
@@ -217,10 +227,17 @@ class FlowFixtureTests(unittest.TestCase):
 
     def test_reused_fdi_exact_extraction_and_bad_checksum(self):
         program = self.h1()
-        result = subprocess.run([program, 'fixture'], capture_output=True, text=True, timeout=120)
-        (OUT / 'fdi-h1.log').write_text(result.stdout + result.stderr)
-        self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr)
-        self.assertIn('PASS FDI MSZIP exact extracted bytes', result.stdout)
+        library, _, _ = host_services.build_bridge(OUT / 'services')
+        with tempfile.TemporaryDirectory(dir=OUT) as root:
+            service = host_services.Services(root, library, program)
+            try:
+                code, output = service.start_adapter(['installer-fixture'], 'FDI memory fixture').finish(120)
+                (OUT / 'fdi-h1.log').write_text(output)
+                self.assertEqual(code, 0, output[-12000:])
+                self.assertIn('PASS FDI MSZIP exact extracted bytes', output)
+                self.assertIn('kernel_enosys=0', output)
+            finally:
+                service.close()
 
     def test_reused_inf_chain_and_selfextract_child_wait(self):
         program = self.h1()

@@ -3,6 +3,7 @@
  * the host driver after execution, independently of these return codes.
  * SPDX-License-Identifier: MIT */
 #include "fdi.h"
+#include "inf_sections.h"
 extern BOOL W32API GetExitCodeProcess(HANDLE,DWORD *);
 extern void W32API ExitProcess(DWORD);
 static int run(void)
@@ -17,14 +18,18 @@ static int run(void)
     HANDLE setup=LoadLibraryExA("setupapi.dll",0,0),adv=LoadLibraryExA("advpack.dll",0,0);
     if(!setup || !adv)return 5;
     HANDLE (W32API *open)(const char *,const char *,DWORD,DWORD *)=GetProcAddress(setup,"SetupOpenInfFileA");
-    BOOL (W32API *install)(HANDLE,HANDLE,const char *,DWORD,HANDLE,const char *,DWORD,void *,void *,HANDLE,void *)=
-        GetProcAddress(setup,"SetupInstallFromInfSectionA");
+    inf_install install=GetProcAddress(setup,"SetupInstallFromInfSectionA");
+    struct inf_queue_api queue={
+        .init=GetProcAddress(setup,"SetupInitDefaultQueueCallback"),
+        .callback=GetProcAddress(setup,"SetupDefaultQueueCallbackA"),
+        .term=GetProcAddress(setup,"SetupTermDefaultQueueCallback")};
     void (W32API *close)(HANDLE)=GetProcAddress(setup,"SetupCloseInfFile");
     LONG (W32API *runsetup)(HANDLE,const char *,const char *,const char *,const char *,HANDLE *,DWORD,void *)=
         GetProcAddress(adv,"RunSetupCommandA");
     int (W32API *launch)(HANDLE,HANDLE,char *,int)=GetProcAddress(adv,"LaunchINFSectionA");
     LONG (W32API *launchex)(HANDLE,HANDLE,char *,int)=GetProcAddress(adv,"LaunchINFSectionExA");
-    if(!open || !install || !close || !runsetup || !launch || !launchex)return 6;
+    if(!open || !install || !close || !runsetup || !launch || !launchex ||
+       !queue.init || !queue.callback || !queue.term)return 6;
     HANDLE api=LoadLibraryExA("advapi32.dll",0,0);if(!api)return 17;
     LONG (W32API *regopen)(DWORD,const char *,DWORD *)=GetProcAddress(api,"RegCreateKeyA");
     LONG (W32API *regset)(DWORD,const char *,DWORD,DWORD,const void *,DWORD)=GetProcAddress(api,"RegSetValueExA");
@@ -36,8 +41,8 @@ static int run(void)
        regset(key,"Obsolete",0,4,&obsolete,4) || regclose(key))return 19;
     DWORD line=0;HANDLE h=open(inf,0,2,&line);if(h==K32_INVALID)return 7;
     /* Exercise the three SPINST subsets separately against the same tree. */
-    const DWORD flags[]={0x10,4,1};
-    for(unsigned i=0;i<3;i++)if(!install(0,h,"DefaultInstall",flags[i],(HANDLE)(uintptr_t)0x80000002u,tree,0,0,0,0,0)){close(h);return 8+(int)i;}
+    int section_error=install_sections(h,tree,install,&queue);
+    if(section_error){close(h);return section_error;}
     close(h);
     DWORD type=0,bytes=4,installed=0;
     if(regopen(0x80000002u,"Software\\CiukiOS\\InstallerFixture",&key))return 20;
