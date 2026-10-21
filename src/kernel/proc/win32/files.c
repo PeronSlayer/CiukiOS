@@ -709,8 +709,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
           e = -EFAULT;
       }
       break;
-    case W32_F_DELETE:
-      e=px_resolve_locked(s,cwd,path,false,&r);
+    case W32_F_DELETE: {
+      /* f1-89 Amendment 1 item 2: the writer turn precedes the resolution,
+       * so no other mutation can retire the resolved entry meanwhile. */
+      uint32_t turn = 0;
+      e = px_turn_take_path_locked(s, cwd, path, &turn);
+      if (!e) e=px_resolve_locked(s,cwd,path,false,&r);
       if (!e && r.node->kind!=PX_FILE) error=5;
       if (!e && !error && px_share_locked(r.node,4,0)) error=32;
       if (!e && !error && ((r.node->entry.attr&1) || r.node->delete_pending)) error=5;
@@ -718,7 +722,9 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         r.node->delete_pending=true;
         e=px_delete_finish_locked(r.node);
       }
+      vfs_turn_drop_locked(s->vfs, turn);
       break;
+    }
     case W32_F_RMDIR:
       e = px_remove_locked(s, cwd, path, true);
       break;
@@ -738,8 +744,13 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         }
       }
       break;
-    case W32_F_ATTR:
-      e = px_resolve_locked(s, cwd, path, false, &r);
+    case W32_F_ATTR: {
+      /* f1-89 Amendment 1 item 2: take the writer turn before resolving,
+       * as px_mkdir/px_remove do; a delete can no longer retire the slot
+       * between the resolution and the attribute transaction. */
+      uint32_t turn = 0;
+      e = px_turn_take_path_locked(s, cwd, path, &turn);
+      if (!e) e = px_resolve_locked(s, cwd, path, false, &r);
       if (!e) {
         if (!r.node->volume)
           e = -EROFS;
@@ -752,7 +763,9 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         if (!e)
           px_changed_locked(r.node);
       }
+      vfs_turn_drop_locked(s->vfs, turn);
       break;
+    }
     default:
       e = -ENOSYS;
       break;

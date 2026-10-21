@@ -752,12 +752,14 @@ static int normalize(struct vfs_table *t, const char *s, unsigned *drive, char o
     int e=path_normalize(s,d,t->cwd[d],drive,out); if (e) return e;
     return t->vfs->volumes[*drive] ? 0 : -FS_ENOENT;
 }
-/* f1-89 writer turn. One FAT-mutating operation per letter owns it for its
- * whole life, so its unguarded transaction phases never race another
- * publisher (no spurious EAGAIN, no lost FSInfo/free-count updates). It is
- * acquired before volume admission and waited for with namespace only, so
- * the order is turn -> namespace -> volumes -> cache. Readers never touch
- * it; they are excluded from publication steps only by the short guard. */
+/* f1-89 writer turn. One FAT-mutating operation per letter plans and
+ * publishes at a time (no spurious EAGAIN, no lost FSInfo/free-count
+ * updates). Data transactions give it up around device waits and rebase or
+ * merge on return (Amendment 1 item 4). It is acquired before volume
+ * admission and waited for with namespace only, so the order is turn ->
+ * namespace -> volumes -> cache; nobody waits for it while holding cache
+ * pins. Readers never touch it; they are excluded from publication steps
+ * only by the short guard. */
 static uint32_t turn_drives(struct vfs *v,uint32_t mask) {
     uint32_t out=0;
     for (unsigned d=0;d<26;d++) if ((mask&(1u<<d)) && v->volumes[d] &&
@@ -783,13 +785,23 @@ static void turn_hold(struct vfs *v,uint32_t mask) {
     uintptr_t self=fs_task_token();
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) { v->turn_owner[d]=self; v->turn_depth[d]++; }
 }
+static void turn_freed(struct vfs *v,unsigned d) { v->turn_free_since[d]=fs_now_ms(); }
 void vfs_turn_drop_locked(struct vfs *v,uint32_t mask) {
     uintptr_t self=fs_task_token(); bool wake=false;
     for (unsigned d=0;d<26;d++)
         if ((mask&(1u<<d)) && v->turn_depth[d] && v->turn_owner[d]==self && !--v->turn_depth[d]) {
-            v->turn_owner[d]=0; wake=true;
+            v->turn_owner[d]=0; turn_freed(v,d); wake=true;
         }
     if (wake) fs_event_wake(&v->volume_changed);
+}
+/* A wait ends when the turn last became free, not when this task ran again:
+ * time the releaser spends on its own device work afterwards is not ours. */
+static void turn_wait_record(struct vfs *v,uint32_t mask,uint32_t start) {
+    for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) {
+        uint32_t end=v->turn_free_since[d];
+        if ((int32_t)(end-start)<0) end=start;
+        v->turn_waits[d]++; if (end-start>v->turn_wait_max_ms[d]) v->turn_wait_max_ms[d]=end-start;
+    }
 }
 /* Namespace held; the caller holds no reservation that the owner could
  * need. Cancellable through the current request; on error nothing is held. */
@@ -801,10 +813,36 @@ static int turn_queue_locked(struct vfs *v,uint32_t mask) {
         e=fs_event_wait_request(&v->volume_changed,&v->lock,VFS_WAIT_VOLUME);
     for (unsigned d=0;d<26;d++) if (mask&(1u<<d)) v->turn_waiters[d]--;
     if (!e) turn_hold(v,mask);
-    uint32_t waited=fs_now_ms()-start;
-    v->turn_waits++; if (waited>v->turn_wait_max_ms) v->turn_wait_max_ms=waited;
+    turn_wait_record(v,mask,start);
     fs_event_wake(&v->volume_changed); /* other queued writers re-evaluate */
     return e;
+}
+uint32_t vfs_turn_suspend_locked(struct vfs *v,unsigned drive) {
+    if (drive>=26 || !v->turn_depth[drive] || v->turn_owner[drive]!=fs_task_token()) return 0;
+    uint32_t depth=v->turn_depth[drive];
+    v->turn_depth[drive]=0; v->turn_owner[drive]=0; turn_freed(v,drive);
+    fs_event_wake(&v->volume_changed); return depth;
+}
+bool vfs_turn_try_resume_locked(struct vfs *v,unsigned drive,uint32_t depth) {
+    if (!depth) return true;
+    if (!turn_available(v,1u<<drive,false)) return false;
+    v->turn_owner[drive]=fs_task_token(); v->turn_depth[drive]=depth;
+    return true;
+}
+/* Uncancellable: the transaction has durable steps behind it and owns its
+ * identity pins; it queues like any writer and never passes one. */
+void vfs_turn_resume_locked(struct vfs *v,unsigned drive,uint32_t depth) {
+    if (!depth) return;
+    uint32_t mask=1u<<drive;
+    if (!turn_available(v,mask,false)) {
+        uint32_t start=fs_now_ms();
+        v->turn_waiters[drive]++;
+        while (!turn_available(v,mask,true)) fs_event_wait(&v->volume_changed,&v->lock);
+        v->turn_waiters[drive]--;
+        turn_wait_record(v,mask,start);
+    }
+    v->turn_owner[drive]=fs_task_token(); v->turn_depth[drive]=depth;
+    fs_event_wake(&v->volume_changed);
 }
 int vfs_turn_take_locked(struct vfs *v,uint32_t drives,uint32_t *taken) {
     *taken=0; uint32_t mask=turn_drives(v,drives);
@@ -854,27 +892,36 @@ static int path_lock_writer(struct vfs_table *t,const char *a,const char *b,cons
 }
 struct transaction_guard {
     struct vfs *v;
-    uint32_t mask;
+    uint32_t mask, turn_saved;
     unsigned drive, default_drive;
-    bool retired;
+    bool retired, gate;
     char op[12],site[12];
 };
-/* A publication step excludes metadata holders and queued tickets, not the
- * private open-file readers: those read other identities (the target's own
- * readers are refused by its writer flag and node pin, and drained at the
- * operation's admission), whose chains no step of this mutation changes. */
+/* A publication step excludes metadata holders, queued tickets and, by lead
+ * decision (f1-89 Amendment 1 item 4), in-flight open-file readers. */
 static bool guard_busy(struct transaction_guard *g) {
     struct vfs *v=g->v;
     bool busy=((v->reserved|v->mutating)&g->mask)!=0;
-    for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d)) busy|=v->next[d]!=v->serving[d];
+    for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d)) busy|=v->next[d]!=v->serving[d] || v->readers[d];
     return busy;
+}
+/* Namespace held. While a step waits, new readers of its letters wait too
+ * (reader_admitted): in-flight readers drain and the step gets its turn. */
+static void guard_gate(struct transaction_guard *g,bool on) {
+    if (g->gate==on) return;
+    g->gate=on;
+    for (unsigned d=0;d<26;d++) if (g->mask&(1u<<d)) {
+        if (on) g->v->publish_waiting[d]++; else g->v->publish_waiting[d]--;
+    }
+    if (!on) fs_event_wake(&g->v->volume_changed);
 }
 static int transaction_guard_enter(void *arg) {
     struct transaction_guard *g=arg; struct vfs *v=g->v;
     vfs_lock(v,0);
     /* Never wait for a legacy writer while retaining cache reservations:
      * that writer may itself need one of our pinned sectors. */
-    if (guard_busy(g)) { vfs_unlock(v); return -FS_EBUSY; }
+    if (guard_busy(g)) { guard_gate(g,true); vfs_unlock(v); return -FS_EBUSY; }
+    guard_gate(g,false);
     vfs_tag_locked(v,g->op); vfs_site_locked(v,g->site);
     vfs_reserve_locked(v,g->mask); v->default_drive=g->default_drive;
     return 0;
@@ -888,6 +935,47 @@ static int transaction_guard_claim(void *arg) {
     return 0;
 }
 static void transaction_guard_unclaim(void *arg) { vfs_unlock(((struct transaction_guard *)arg)->v); }
+/* f1-89 Amendment 1 item 4: no reservation is held between steps, so the
+ * turn can be given up around device waits; resume leaves namespace held. */
+static void transaction_guard_suspend(void *arg) {
+    struct transaction_guard *g=arg; struct vfs *v=g->v;
+    vfs_lock(v,0); g->turn_saved=vfs_turn_suspend_locked(v,g->drive); vfs_unlock(v);
+}
+static void transaction_guard_resume(void *arg) {
+    struct transaction_guard *g=arg; struct vfs *v=g->v;
+    vfs_lock(v,0); vfs_turn_resume_locked(v,g->drive,g->turn_saved); g->turn_saved=0;
+}
+static int transaction_guard_try_resume(void *arg) {
+    struct transaction_guard *g=arg; struct vfs *v=g->v;
+    vfs_lock(v,0);
+    if (vfs_turn_try_resume_locked(v,g->drive,g->turn_saved)) { g->turn_saved=0; return 1; }
+    vfs_unlock(v); return 0;
+}
+/* Wait, with no reservation and no writer turn, until a busy file condition
+ * clears: its owner may be a suspended data transaction that needs the turn
+ * back. The caller's admission set and turn are restored afterwards. */
+static bool flag_busy(void *arg) { return *(const bool *)arg; }
+struct node_busy { struct vfs *v; struct vfs_node *node; };
+static bool node_busy(void *arg) {
+    struct node_busy *b=arg;
+    if (!b->node->refs) return false;
+    if (b->node->pins) return true;
+    for (unsigned i=0;i<VFS_DESCRIPTIONS;i++)
+        if (b->v->descriptions[i].refs && b->v->descriptions[i].node==b->node && b->v->descriptions[i].io_active) return true;
+    return false;
+}
+static __attribute__((noinline)) int wait_unturned(struct vfs *v,unsigned drive,bool (*busy)(void *),void *arg) {
+    uint32_t depth=vfs_turn_suspend_locked(v,drive);
+    uint32_t active=v->active; unsigned default_drive=v->default_drive;
+    struct vfs_hold_info owner=holder_snapshot(&v->namespace_owner);
+    vfs_unlock(v); vfs_lock(v,0);
+    int e=0;
+    while (!e && busy(arg)) e=fs_event_wait_request(&v->volume_changed,&v->lock,VFS_WAIT_VOLUME);
+    vfs_turn_resume_locked(v,drive,depth);
+    vfs_unlock(v); vfs_lock(v,active);
+    v->default_drive=default_drive; vfs_tag_locked(v,owner.op); vfs_site_locked(v,owner.site);
+    return e;
+}
 static void transaction_guard_leave(void *arg) {
     struct transaction_guard *g=arg;
     /* Transfer the final validated namespace turn directly to the caller.
@@ -897,6 +985,7 @@ static void transaction_guard_leave(void *arg) {
 static void transaction_guard_retire(void *arg) {
     struct transaction_guard *g=arg;
     vfs_lock(g->v,g->mask); g->v->default_drive=g->default_drive;
+    guard_gate(g,false);
     vfs_tag_locked(g->v,g->op); vfs_site_locked(g->v,g->site);
     g->retired=true;
 }
@@ -921,6 +1010,20 @@ int vfs_file_wait_locked(struct vfs *v,const bool *busy) {
 /* Pins protect the source volume, matching descriptions and their node for
  * the entire unlocked operation. The mutation sequence validates cold
  * planning against every other FAT publisher, including legacy callers. */
+/* Read one volume sector into the cache with no reservation or turn held;
+ * the caller's admission set is readmitted afterwards (as for the turn). */
+static __attribute__((noinline)) int warm_sector(struct vfs *v,struct fat_volume *vol,unsigned drive,uint64_t sector) {
+    uint32_t active=v->active; unsigned default_drive=v->default_drive;
+    struct vfs_hold_info owner=holder_snapshot(&v->namespace_owner);
+    v->transaction_users[drive]++; /* no detach while the read runs */
+    vfs_unlock(v);
+    uint8_t b[512]; int e=cache_read(vol->cache,vol->dev,vol->start+sector,b);
+    vfs_lock(v,active);
+    v->transaction_users[drive]--; fs_event_wake(&v->volume_changed);
+    v->default_drive=default_drive; vfs_tag_locked(v,owner.op); vfs_site_locked(v,owner.site);
+    if (!e && (!(v->active&(1u<<drive)) || v->volumes[drive]!=vol)) e=-FS_EIO;
+    return e;
+}
 static bool transaction_read_only(enum fat_transaction_op op) {
     return op==FAT_TX_LOOKUP || op==FAT_TX_NEXT || op==FAT_TX_COMMIT;
 }
@@ -931,10 +1034,16 @@ __attribute__((noinline)) int vfs_fat_transaction_locked(struct vfs *v, struct f
     for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) { drive=d; break; }
     if (drive==26 || !(v->active&(1u<<drive))) return -FS_EIO;
     if (a.guarded && (a.op==FAT_TX_LOOKUP || a.op==FAT_TX_NEXT)) {
-        /* Reader restart fallback: the short guard excludes every
-         * publication step; the preceding attempts warmed the cache. */
-        return a.op==FAT_TX_LOOKUP ? VFS_IO(v,fat_lookup(vol,a.directory,a.name,a.entry)) :
-            VFS_IO(v,fat_next(vol,a.directory,a.directory_cursor,a.entry));
+        /* Reader restart fallback (f1-89 Amendment 1 item 5): the short
+         * guard excludes every publication step, and the lookup reads only
+         * resident sectors. A miss ends the attempt: the sector is read with
+         * no reservation held and the caller restarts its walk. */
+        uint64_t miss;
+        int e=VFS_IO(v,fat_lookup_cached(vol,a.directory,a.op==FAT_TX_LOOKUP ? a.name : 0,
+                                         a.directory_cursor,a.entry,&miss));
+        if (e!=-FS_EAGAIN || miss==UINT64_MAX) return e;
+        e=warm_sector(v,vol,drive,miss);
+        return e ? e : -FS_EAGAIN;
     }
     /* LOG_WRITE publishes only DATA into owned reserved clusters: it never
      * stales another transaction, so the storage writer takes no turn. */
@@ -978,36 +1087,48 @@ static int transaction_once(struct vfs *v,struct fat_volume *vol,struct fat_tran
     struct vfs_file_identity *identity=0,*replacement_id=0;
     uint64_t planned=vol->mutation_sequence;
     bool writer=a.entry && a.op!=FAT_TX_CREATE && a.op!=FAT_TX_LOOKUP && a.op!=FAT_TX_NEXT && a.op!=FAT_TX_COMMIT;
+    bool waited=false;
+retry:
+    node=0; identity=0; replacement_id=0;
     if (writer) {
         int e=vfs_identity_get(v,vol,a.entry,&identity); if (e) return e;
         if (a.replacement) e=vfs_identity_get(v,vol,a.replacement,&replacement_id);
         /* Claim both only when both are available. No AB/BA ownership is
-         * retained across a wait on the other rename identity. */
-        while (!e && (identity->writer || (replacement_id && replacement_id->writer)))
-            e=vfs_file_wait_locked(v,identity->writer ? &identity->writer : &replacement_id->writer);
+         * retained across a wait on the other rename identity. The owner
+         * may be a suspended data transaction: wait without the turn. */
+        while (!e && (identity->writer || (replacement_id && replacement_id->writer))) {
+            e=wait_unturned(v,drive,flag_busy,identity->writer ? &identity->writer : &replacement_id->writer);
+            waited=true;
+        }
         if (!e && (!vfs_identity_live(v,identity) || (replacement_id && !vfs_identity_live(v,replacement_id)))) e=-FS_EIO;
-        if (!e && vol->mutation_sequence!=planned && a.op!=FAT_TX_LOG_WRITE) e=-FS_EAGAIN;
+        /* f1-89 Amendment 1 item 2: a borrowed entry that still names a slot
+         * after its file was unlinked must never rewrite (resurrect) it. */
+        if (!e && ((!identity->linked && a.entry->index!=UINT32_MAX) ||
+                   (replacement_id && !replacement_id->linked && a.replacement->index!=UINT32_MAX))) e=-FS_ENOENT;
+        /* Only a caller's copy from a path walk can go stale by waiting. */
+        if (!e && waited && a.borrowed && vol->mutation_sequence!=planned) e=-FS_EAGAIN;
         if (e) { vfs_identity_put(v,replacement_id); vfs_identity_put(v,identity); return e; }
         identity->writer=true;
         if (replacement_id) replacement_id->writer=true;
     }
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].refs &&
         (a.entry==&v->nodes[i].entry || (identity && v->nodes[i].identity==identity))) { node=&v->nodes[i]; break; }
-    if (node && node->pins) {
-        if (replacement_id) { replacement_id->writer=false; vfs_identity_put(v,replacement_id); }
-        if (identity) { identity->writer=false; vfs_identity_put(v,identity); }
-        return -FS_EBUSY;
+    if (node) {
+        /* In use by another transaction (possibly suspended) or a reader:
+         * wait without the turn, then claim everything again. */
+        struct node_busy busy={v,node};
+        if (node_busy(&busy)) {
+            if (replacement_id) { replacement_id->writer=false; vfs_identity_put(v,replacement_id); }
+            if (identity) { identity->writer=false; vfs_identity_put(v,identity); }
+            fs_event_wake(&v->volume_changed);
+            int e=wait_unturned(v,drive,node_busy,&busy); waited=true;
+            if (e) return e;
+            goto retry;
+        }
     }
     bool pinned[VFS_DESCRIPTIONS]={0};
     if (node) {
         node->pins++;
-        for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) if (v->descriptions[i].refs && v->descriptions[i].node==node) {
-            if (v->descriptions[i].io_active) {
-                if (replacement_id) { replacement_id->writer=false; vfs_identity_put(v,replacement_id); }
-                if (identity) { identity->writer=false; vfs_identity_put(v,identity); }
-                node->pins--; return -FS_EBUSY;
-            }
-        }
         for (unsigned i=0;i<VFS_DESCRIPTIONS;i++) if (v->descriptions[i].refs && v->descriptions[i].node==node) {
             pinned[i]=true; v->descriptions[i].refs++; v->descriptions[i].io_active=true;
         }
@@ -1016,9 +1137,11 @@ static int transaction_once(struct vfs *v,struct fat_volume *vol,struct fat_tran
     a.sequence=vol->mutation_sequence;
     vfs_unlock(v);
     const struct fat_transaction_guard callbacks={&g,transaction_guard_enter,transaction_guard_leave,transaction_guard_wait,
-        transaction_guard_retire,transaction_guard_claim,transaction_guard_unclaim};
+        transaction_guard_retire,transaction_guard_claim,transaction_guard_unclaim,
+        transaction_guard_suspend,transaction_guard_resume,transaction_guard_try_resume};
     int e=fat_transaction_run(vol,&a,&callbacks);
     if (!g.retired) vfs_lock(v,g.mask);
+    guard_gate(&g,false);
     v->default_drive=g.default_drive;
     vfs_tag_locked(v,g.op); vfs_site_locked(v,g.site);
     v->transaction_users[drive]--;
@@ -1039,7 +1162,10 @@ static uint32_t root(struct fat_volume *v) { return v->type==32 ? v->root : 0; }
  * can be removed and its cluster reused), so the whole path restarts from
  * the root. The final attempt runs each lookup under the short guard: the
  * earlier attempts warmed the cache and no publication can intervene. */
-#define RESOLVE_ATTEMPTS 3u
+#define RESOLVE_UNGUARDED 2u
+/* Guarded attempts restart after warming one missing sector each; a path
+ * reaches only a few dozen sectors, so this bound is never the limit. */
+#define RESOLVE_GUARDED 64u
 static int resolve_once(struct vfs_table *t, const char *path, struct resolved *r, bool guarded) {
     char full[FS_PATH_BYTES]; int e=normalize(t,path,&r->drive,full); if (e) return e;
     struct fat_volume *v=t->vfs->volumes[r->drive]; r->parent=root(v); const char *s=full+1;
@@ -1063,21 +1189,21 @@ static int lookup_once(struct vfs_table *t, const char *path, struct resolved *r
         .depend=true,.depend_parent=r->dep_parent,.depend_index=r->dep_index});
 }
 static void resolve_restart(struct vfs *v,unsigned attempt) {
-    v->lookup_restarts++; if (attempt+2==RESOLVE_ATTEMPTS) v->lookup_guarded++;
+    v->lookup_restarts++; if (attempt>=RESOLVE_UNGUARDED) v->lookup_guarded++;
 }
 static __attribute__((noinline)) int resolve(struct vfs_table *t, const char *path, struct resolved *r) {
     int e=-FS_EAGAIN;
-    for (unsigned i=0;i<RESOLVE_ATTEMPTS && e==-FS_EAGAIN;i++) {
-        if (i) resolve_restart(t->vfs,i-1);
-        e=resolve_once(t,path,r,i+1==RESOLVE_ATTEMPTS);
+    for (unsigned i=0;i<RESOLVE_UNGUARDED+RESOLVE_GUARDED && e==-FS_EAGAIN;i++) {
+        if (i) resolve_restart(t->vfs,i);
+        e=resolve_once(t,path,r,i>=RESOLVE_UNGUARDED);
     }
     return e;
 }
 static __attribute__((noinline)) int lookup(struct vfs_table *t, const char *path, struct resolved *r, struct fat_entry *ent) {
     int e=-FS_EAGAIN;
-    for (unsigned i=0;i<RESOLVE_ATTEMPTS && e==-FS_EAGAIN;i++) {
-        if (i) resolve_restart(t->vfs,i-1);
-        e=lookup_once(t,path,r,ent,i+1==RESOLVE_ATTEMPTS);
+    for (unsigned i=0;i<RESOLVE_UNGUARDED+RESOLVE_GUARDED && e==-FS_EAGAIN;i++) {
+        if (i) resolve_restart(t->vfs,i);
+        e=lookup_once(t,path,r,ent,i>=RESOLVE_UNGUARDED);
     }
     return e;
 }
@@ -1183,12 +1309,15 @@ static int file_wait_locked(struct vfs *v,uint32_t mask,const struct vfs_request
     if (error || !request) wait_capture(&v->diagnostic_pending,start,first_drive(mask),holder,error==-VFS_ETIMEOUT ? "volume:timeout" : error ? "volume:cancelled" : "volume",&task,&owner);
     return error;
 }
-static int handle_lock(struct vfs_table *t,int h) {
+/* wait=false (writer holding the turn): a busy description is reported as
+ * EBUSY instead of waited for; its owner may need the turn (f1-89 A1 #4). */
+static int handle_lock_mode(struct vfs_table *t,int h,bool wait) {
     uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
     for (;;) {
         int error=vfs_admit(t->vfs,0,t->request); if (error) return error;
         struct vfs_description *desc=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
         if (desc && (desc->io_active || desc->node->pins || (desc->node->identity && desc->node->identity->writer))) {
+            if (!wait) { vfs_unlock(t->vfs); return -FS_EBUSY; }
             error=file_wait_locked(t->vfs,handle_mask(t,h),t->request,start,begin);
             vfs_unlock(t->vfs); if (error) return error; continue;
         }
@@ -1197,9 +1326,11 @@ static int handle_lock(struct vfs_table *t,int h) {
         desc=h>=0 && h<(int)VFS_HANDLES ? t->handles[h] : 0;
         if (handle_mask(t,h)==mask && (!desc || (!desc->io_active && !desc->node->pins &&
             (!desc->node->identity || !desc->node->identity->writer)))) return 0;
-        vfs_unlock(t->vfs); /* slot was replaced while admission slept */
+        vfs_unlock(t->vfs); /* slot was replaced or became busy while admission slept */
+        if (!wait && handle_mask(t,h)==mask) return -FS_EBUSY;
     }
 }
+static int handle_lock(struct vfs_table *t,int h) { return handle_lock_mode(t,h,true); }
 static int handle_lock_writer(struct vfs_table *t,int h,uint32_t *turn) {
     *turn=0;
     for (;;) {
@@ -1210,7 +1341,13 @@ static int handle_lock_writer(struct vfs_table *t,int h,uint32_t *turn) {
         fs_request_leave(&scope);
         if (!e) taken=want;
         vfs_unlock(t->vfs); if (e) return e;
-        e=handle_lock(t,h);
+        e=handle_lock_mode(t,h,false);
+        if (e==-FS_EBUSY) {
+            /* Never wait on a busy file while holding the turn. */
+            turn_release(t->vfs,taken);
+            if ((e=handle_lock(t,h))) return e;
+            vfs_unlock(t->vfs); continue;
+        }
         if (e) { turn_release(t->vfs,taken); return e; }
         if (!(turn_drives(t->vfs,t->vfs->active)&~taken)) { *turn=taken; return 0; }
         writer_unlock(t->vfs,taken);
@@ -1224,6 +1361,7 @@ static bool reader_admitted(struct vfs *v,unsigned drive,struct vfs_file_identit
     uint32_t mask=vfs_drive_mask(drive);
     if (id && id->writer) return false;
     for (unsigned i=0;i<VFS_NODES;i++) if (v->nodes[i].pins && v->nodes[i].identity==id) return false;
+    if (v->publish_waiting[drive]) return false; /* one short publication step first */
     if (!((v->reserved|v->mutating)&mask)) {
         const struct vfs_request *r=fs_request_current();
         /* A decoder deadline may pass a queued normal metadata ticket while
@@ -1534,10 +1672,11 @@ int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *don
         cache_stream_cancel(&d->stream);
         struct fat_entry before=d->node->entry;
         e=0;
-        size_t limit=(size_t)d->node->volume->spc*512*FAT_TRANSACTION_CLUSTERS;
-        if (limit>131072) limit=131072;
+        /* A write slice is one in-flight claim set (256 clusters); a gap
+         * before the position is extended in 128 KiB steps first. */
+        size_t limit=(size_t)d->node->volume->spc*512*FAT_TRANSACTION_CLUSTERS, extend=limit<131072 ? limit : 131072;
         while (n && d->position>=(uint64_t)d->node->entry.size+limit && !e) {
-            uint64_t end=(uint64_t)d->node->entry.size+32768;
+            uint64_t end=(uint64_t)d->node->entry.size+extend;
             if (end>d->position) end=d->position;
             e=vfs_fat_transaction_locked(t->vfs,d->node->volume,(struct fat_transaction_args){.op=FAT_TX_EXTEND,
                 .entry=&d->node->entry,.capacity=(uint32_t)end});
@@ -1793,7 +1932,7 @@ static int metadata(struct vfs_table *t, const char *path, int attr, const struc
         if (n) ent=n->entry;
         struct fat_entry before=ent;
         e=vfs_fat_transaction_locked(t->vfs,vol,(struct fat_transaction_args){.op=FAT_TX_SET_METADATA,
-            .entry=&ent,.attr=attr<0 ? ent.attr : (uint8_t)attr,.times=times});
+            .entry=&ent,.attr=attr<0 ? ent.attr : (uint8_t)attr,.times=times,.borrowed=true});
         if (!e && px_legacy_changed) px_legacy_changed(t->vfs,vol,&before,&ent,false);
         if (!e && n) n->entry=ent;
     }
@@ -1917,7 +2056,7 @@ static int busy(struct vfs *v, struct fat_volume *vol, const struct fat_entry *e
  * announced identity is a copy (keeps vfs_log_rotate under 4 KiB on i686). */
 static __attribute__((noinline)) int remove_announced(struct vfs *v,struct fat_volume *vol,struct fat_entry *entry,bool dir) {
     struct fat_entry before=*entry;
-    int e=vfs_fat_transaction_locked(v,vol,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=entry,.flag=dir});
+    int e=vfs_fat_transaction_locked(v,vol,(struct fat_transaction_args){.op=FAT_TX_REMOVE,.entry=entry,.flag=dir,.borrowed=true});
     if (!e && px_legacy_changed) px_legacy_changed(v,vol,&before,0,false);
     return e;
 }
@@ -1963,11 +2102,11 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
         /* Release the entire unpublished tail, even when size is zero.
          * Finishing in place does not allocate a second full-file chain. */
         if (entry->size>capacity) entry->size=capacity;
-        e=vfs_fat_transaction_locked(v,v->volumes[drive],(struct fat_transaction_args){.op=FAT_TX_PUBLISH,.entry=entry,.flag=true});
+        e=vfs_fat_transaction_locked(v,v->volumes[drive],(struct fat_transaction_args){.op=FAT_TX_PUBLISH,.entry=entry,.flag=true,.borrowed=true});
         if (px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry,false);
         entries[2]=*entry;
         if (!e) e=resolve(t,paths[i],&r);
-        if (!e) e=vfs_fat_transaction_locked(v,v->volumes[drive],(struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=entry,.directory=parent,.name=r.name});
+        if (!e) e=vfs_fat_transaction_locked(v,v->volumes[drive],(struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=entry,.directory=parent,.name=r.name,.borrowed=true});
         if (!e && px_legacy_changed) px_legacy_changed(v,v->volumes[drive],&entries[2],entry,false);
     }
     writer_unlock(v,turn); return e;
@@ -1994,7 +2133,7 @@ int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
         if (!e && (ent.attr&FAT_ATTR_DIR)) { e=contains(t->vfs,v,ent.first,b.parent); if (e>0) e=-FS_EINVAL; }
         if (!e) {
             struct fat_entry before=ent;
-            e=vfs_fat_transaction_locked(t->vfs,v,(struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=&ent,.directory=b.parent,.name=b.name});
+            e=vfs_fat_transaction_locked(t->vfs,v,(struct fat_transaction_args){.op=FAT_TX_RENAME,.entry=&ent,.directory=b.parent,.name=b.name,.borrowed=true});
             if (!e && px_legacy_changed) px_legacy_changed(t->vfs,v,&before,&ent,false);
         }
     }

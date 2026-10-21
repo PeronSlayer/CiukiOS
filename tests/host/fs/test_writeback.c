@@ -186,6 +186,10 @@ static void replay(void) {
         t->reads,(unsigned long long)(t->reader_max/1000),(unsigned long long)t->disk.commands);
 #ifdef F182_AFTER
     CHECK(t->reader_max<=20000000 && elapsed>=9000000000ull && elapsed<=11000000000ull);
+    /* f1-89 Amendment 1 item 1: data chunks of one C2 group are published
+     * without a barrier and merge to 32 KiB again (1278 commands before
+     * f1-89; the per-8-KiB-barrier engine issued 2238). */
+    CHECK(t->disk.commands<=1300);
 #else
     CHECK(t->reader_max>=100000000);
 #endif

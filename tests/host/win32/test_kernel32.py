@@ -89,7 +89,7 @@ class Kernel32Files(unittest.TestCase):
             'src/kernel/fs/fs_ro.c','src/kernel/fs/iso9660.c','tests/host/fs/fake.c','src/kernel/probes/f2_probes_files.c']
         program=out/'files'
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
+            '-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Wl,--wrap=cache_reserve','-DFS_HOST','-D_POSIX_C_SOURCE=200809L','-pthread',
             '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'src/kernel/fs'),*[str(ROOT/s) for s in sources],'-o',str(program)],check=True,env=env)
         result=subprocess.run([program,ROOT/'build/host/fs/fat32.img',ROOT/'build/host/fs/fat16.img'],env=env,capture_output=True,text=True,timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)

@@ -61,6 +61,9 @@ int files_stdio(struct process *p);
 void px_retain(void *node);
 /* Pins all borrowed native identities across a bounded FAT transaction. */
 int px_fat_transaction_locked(struct px_node *,struct px_node *,struct px_node *,struct fat_transaction_args);
+/* f1-89: writer turn for every drive a path can reach, before resolving it;
+ * release with vfs_turn_drop_locked(vfs, *turn). */
+int px_turn_take_path_locked(struct px_namespace *,struct px_node *cwd,const char *path,uint32_t *turn);
 void px_release(void *node);
 int px_error(int error);
 /* All *_locked helpers require vfs_lock/vfs_unlock. They reserve their

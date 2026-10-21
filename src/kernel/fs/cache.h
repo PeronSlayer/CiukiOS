@@ -154,13 +154,21 @@ int cache_write(struct block_cache *, struct blkdev *, uint64_t lba, const void 
  * Callers keep this object alive and unmoved until release. Snapshots are
  * optional sector-sized destinations, copied while pinning each slot. */
 #define CACHE_RESERVE_MAX 16u
-struct cache_reserve_sector { uint64_t lba; void *snapshot; };
+/* fill: the complete image of a sector the caller will overwrite and that
+ * no reader can reach before publication (new or exclusively owned data).
+ * A cold slot is then filled from it under the cache lock, never read. */
+struct cache_reserve_sector { uint64_t lba; void *snapshot; const void *fill; };
 struct cache_reservation {
     struct block_cache *cache;
     struct blkdev *dev;
     struct cache_block *blocks[CACHE_RESERVE_MAX];
     uint32_t generation, epoch, count, unassigned;
     uint64_t published, group, dependency;
+    /* Caller-set before publish: a group of the same durable C2 group. It is
+     * reused only while it is still the device's latest group, so sectors of
+     * one group merge in write-back and no later group is overtaken. */
+    uint64_t group_hint;
+    uint32_t filled; /* slots filled from a fill image: dropped if unpublished */
 };
 struct cache_image { unsigned slot; const void *data; };
 int cache_reserve(struct block_cache *, struct blkdev *,

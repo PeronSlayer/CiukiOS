@@ -392,7 +392,8 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
  * be stale. The last attempt looks up under the short guard (cache warm).
  * A component whose namespace operation is still in flight is waited for
  * (its node stays retained), which does not consume an attempt. */
-#define PX_RESOLVE_ATTEMPTS 3u
+#define PX_RESOLVE_UNGUARDED 2u
+#define PX_RESOLVE_GUARDED 64u /* cache-warming restarts (f1-89 A1 item 5) */
 static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
                         bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy);
 int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
@@ -402,7 +403,7 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
     if (err) return err;
     for (unsigned attempt=0;;) {
         struct px_node *busy=0;
-        err=resolve_once(s,cwd,path,missing_leaf,out,attempt+1>=PX_RESOLVE_ATTEMPTS,&busy);
+        err=resolve_once(s,cwd,path,missing_leaf,out,attempt>=PX_RESOLVE_UNGUARDED,&busy);
         if (err==-EINPROGRESS && busy) {
             px_retain(busy);
             int waited=px_error(vfs_file_wait_locked(s->vfs,&busy->namespace_busy));
@@ -410,8 +411,8 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
             if (waited) return waited;
             continue;
         }
-        if (err!=-EAGAIN || ++attempt>=PX_RESOLVE_ATTEMPTS) return err==-EINPROGRESS ? -EAGAIN : err;
-        s->vfs->lookup_restarts++; if (attempt+1==PX_RESOLVE_ATTEMPTS) s->vfs->lookup_guarded++;
+        if (err!=-EAGAIN || ++attempt>=PX_RESOLVE_UNGUARDED+PX_RESOLVE_GUARDED) return err==-EINPROGRESS ? -EAGAIN : err;
+        s->vfs->lookup_restarts++; if (attempt>=PX_RESOLVE_UNGUARDED) s->vfs->lookup_guarded++;
     }
 }
 static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
@@ -595,6 +596,12 @@ int px_stat_locked(struct px_node *n, struct ciuki_stat *out)
 /* f1-89: native FAT mutations take the drive's writer turn before they
  * resolve or borrow anything (see vfs_turn_take_locked). Lookups-only
  * opens never take it. */
+int px_turn_take_path_locked(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t *turn)
+{
+    *turn = 0;
+    int err = px_validate(path); if (err) return err;
+    return px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), turn));
+}
 static int open_inner(struct px_namespace *, struct px_node *, const char *, uint32_t, struct file_description *);
 int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                    uint32_t flags, struct file_description *d)
@@ -993,7 +1000,7 @@ void px_legacy_changed(struct vfs *v, struct fat_volume *vol, const struct fat_e
             if (candidate->legacy && entry == &candidate->legacy->entry) { n = candidate; break; }
     if (!n) return;
     if (!committed_write && entry && !memcmp(old, entry, sizeof(*entry))) return;
-    if (!entry) n->linked = false;
+    if (!entry) { n->linked = false; n->entry.index = UINT32_MAX; } /* open-unlinked, f1-89 item 2 */
     else {
         n->entry = *entry;
         if (entry->parent != old->parent) {

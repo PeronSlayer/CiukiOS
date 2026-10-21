@@ -76,6 +76,11 @@ struct fat_volume {
     void *identity_ctx;
     struct fat_entry alias_scratch; /* serialized alias collision walk; saves kernel stack */
     uint64_t mutation_sequence;
+    /* f1-89 Amendment 1 item 5: set only around a guarded lookup on the
+     * source volume (exclusive under the guard). Reads come from resident
+     * cache slots only; the first missing sector is reported, never read. */
+    bool cache_only;
+    uint64_t cache_miss;
     struct fat_transaction *transaction, *transactions;
 };
 /* The caller pins borrowed identities before releasing its namespace turn.
@@ -92,6 +97,16 @@ struct fat_transaction_guard {
      * publication sequence and never waits for readers. 0: enter/leave. */
     int (*claim)(void *);
     void (*unclaim)(void *);
+    /* Optional (f1-89 Amendment 1 item 4): a data transaction gives the
+     * writer turn up while it waits for device I/O. resume returns with
+     * the namespace turn held (no reservation); the transaction rebases
+     * its view, then calls leave. */
+    void (*suspend)(void *);
+    void (*resume)(void *);
+    /* Resume only if the turn is free now (1, namespace held as resume);
+     * otherwise 0 with nothing held. A transaction holding cache pins
+     * never waits for the turn: the turn holder may need those pins. */
+    int (*try_resume)(void *);
 };
 #define FAT_TRANSACTION_CLUSTERS 256u
 enum fat_transaction_op { FAT_TX_CREATE, FAT_TX_WRITE, FAT_TX_LOG_WRITE,
@@ -114,6 +129,9 @@ struct fat_transaction_args {
     /* LOOKUP/NEXT only: run under the short guard (cache-warm retry after
      * a reader restart), never invalidated by a concurrent publisher. */
     bool guarded;
+    /* entry is a caller's copy from a path walk, not a live node entry:
+     * after any wait without the turn the walk must be redone (EAGAIN). */
+    bool borrowed;
     /* LOOKUP/NEXT: the entry (parent cluster, slot) naming `directory`. It
      * joins the read set, so renaming, emptying or removing an ancestor
      * during an unguarded walk restarts the walk instead of trusting a
@@ -129,6 +147,10 @@ struct fat_transaction_args {
 };
 int fat_transaction_run(struct fat_volume *, const struct fat_transaction_args *,
                          const struct fat_transaction_guard *);
+/* Lookup (name) or next entry (name 0, cursor) from resident cache slots
+ * only. -FS_EAGAIN with *miss set: warm that volume sector and restart. */
+int fat_lookup_cached(struct fat_volume *, uint32_t dir, const char *name, uint32_t *cursor,
+                      struct fat_entry *, uint64_t *miss);
 /* Mount does not write unless requested AND validation and durability pass.
  * requested RO always issues zero writes/flushes. why is retained in volume. */
 int fat_mount(struct fat_volume *, struct block_cache *, struct blkdev *, uint64_t start, uint64_t sectors, bool writable);

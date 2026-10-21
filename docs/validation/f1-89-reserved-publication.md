@@ -124,3 +124,61 @@ the operation's life (as VFAT's claim is), readers are not. Concurrent
 writers on one drive would need value-validated, mergeable FAT/directory
 publication (byte-level merge of disjoint entries, delta-applied free
 counts); that is not implemented here.
+
+## Amendment 1 (2026-10-21 21:56 CEST)
+
+Changes after the cross-review (`build/codex/f1-89-review.md`), as decided
+in the directive's Amendment 1. This supersedes two statements above: data
+operations no longer keep the writer turn across device waits, and
+publication steps again wait for in-flight readers.
+
+1. **One barrier per C2 boundary.** The 16-sector overflow inside one C2
+   group publishes without a durability wait; the chunks of a group share
+   one cache group (reused only while it is the device's latest group), so
+   write-back merges 32 KiB again. Cold data sectors that a transaction
+   fully overwrites (new clusters or its own data) are filled from the image
+   at reservation instead of being read. Writes are sliced at the in-flight
+   claim set (256 clusters); gap extension grows 128 KiB per step.
+2. **No resurrection.** `W32_F_ATTR` and `W32_F_DELETE` take the writer
+   turn before resolving the path. A writer transaction whose identity is
+   unlinked while its entry still names a slot fails with ENOENT. A legacy
+   unlink report clears the native node's slot index.
+3. **No contiguous frames.** A transaction is built from ordinary 4 KiB
+   pages: a head page (3784 bytes on i686) for every transaction; lookups
+   add read-copy pages only as they read; mutations add an entries page
+   (3520 bytes), a cluster-claim page and two pages each for images, their
+   bases and pinned snapshots.
+4. **Writer turn and readers.** In-flight open-file readers count in the
+   publication guard again; a waiting step stops new readers (`publish_waiting`)
+   so a reader stream cannot starve it. Data transactions give the writer
+   turn up around durability waits, cold reads (only while every buffered
+   image is owned data), reservations, guard waits and publication retries.
+   On return they rebase (sequence and free-cluster delta; the next-free
+   hint stays their own and the allocator re-checks the FAT), abort if a legacy caller changed their target, and merge their own
+   nibbles onto the pinned bytes. A transaction never waits for the turn
+   while holding cache pins. A read made without the turn only warms the
+   cache; the bytes used are read again under it. Writer-turn waits are
+   measured per drive (count, maximum up to the instant the turn became
+   free) and gated at 20 ms in the T23 replay, where a desktop copy and a
+   DOS VM writer run concurrently on real 111 ms device commands.
+5. **Guarded lookups never read the disk under the guard.** The third
+   attempt reads resident sectors only; a miss ends the attempt, the sector
+   is read with no reservation held, and the walk restarts from its root.
+
+Engineering reference for item 4's merge: optimistic concurrency with
+value validation and field-level merge of disjoint updates; within FAT the
+merge granularity is the nibble because FAT12 entries share bytes.
+
+Measured on the final Amendment 1 source (host, `nice -n 19`, strict gate
+`CIUKI_F187_REQUIRE_BOUNDED=1`, exit 0): f1-82 10 MiB copy replay
+`write_commands=1278` (2238 before the amendment); C3 new path within
+0.03 % of the old path in the same run in all seven variants (cold-hot
+1036138 vs 1036356 B/s; before the amendment 975837 vs 1036213) with
+`missed=0`; T23 replay `logical_guard_max_ms=0 physical_mutex_max_ms=0`
+and, with the desktop copy and the DOS VM writer concurrent on real
+111 ms commands, `turn_waits=159 turn_wait_max_ms=1
+commands_under_turn=0`; concurrency stress `writer_turn_wait_max_ms=6`,
+remount and `fsck.fat` clean; crash fsck classification over 4678 cuts
+with `unknown_diagnostics=0`; `test_kernel_latency` 14 tests, zero
+`device_overrun task=audio-refill`. Details and logs:
+`build/codex/f1-89-report.md`.

@@ -60,3 +60,14 @@ follow-up directive after the 1.0 Alpha.
 
 Then rerun the strict FS gate, the C3 variants, the 10 MiB copy replay and
 `test_kernel_latency`, and append the numbers to `build/codex/f1-89-report.md`.
+
+## Amendment 2 (lead, 2026-10-21 22:23, decisions on the amendment-1 delivery)
+
+1. C3 throughput: the 0.1 % tolerance is accepted (the new path is within
+   0.03 % of the old one, about 2 ms of a 10 s copy); the strict "new ≥ old"
+   check is a follow-up with the cause explained.
+2. Legacy races 0 and 2 completing instead of aborting with EAGAIN: accepted.
+3. Transaction memory in single pages (36 KiB per write transaction, at most
+   one per drive plus the log writer): accepted, no pool.
+4. The T23 gate scope (every turn wait on drive C in both directions):
+   accepted.

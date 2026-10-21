@@ -389,6 +389,7 @@ retry:
     b->invalid=false; b->io_error=0;
     unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
     touch(c,b);
+    if (!read && issued) *issued=true; /* fresh slot, contents undefined (f1-89 fill) */
     if (read) {
         if (issued) *issued=true;
         b->busy=true;
@@ -1044,6 +1045,9 @@ static void release_locked(struct cache_reservation *r) {
         }
         b->pins=0;
         if (b->invalid && !b->busy) { clean(c,b); unhash(c,b); }
+        /* Filled from an image but never published: the bytes were never
+         * accepted, so the slot must not survive as a clean cached copy. */
+        else if ((r->filled&(1u<<i)) && !b->busy) { clean(c,b); unhash(c,b); }
     }
     memset(r,0,sizeof(*r)); fs_event_wake(&c->changed);
 }
@@ -1087,7 +1091,12 @@ int cache_reserve(struct block_cache *c, struct blkdev *d,
         for (unsigned k=0;k<count;k++) {
             unsigned i=sorted[k]; struct cache_block *b=0;
             for (;;) {
-                if ((e=reservation_status(r,0)) || (e=get(c,d,set[i].lba,true,&b,0))) break;
+                bool fresh=false;
+                if ((e=reservation_status(r,0)) || (e=get(c,d,set[i].lba,!set[i].fill,&b,&fresh))) break;
+                /* A miss with a fill image is hashed without a read and is
+                 * filled before the lock can drop: never visible unfilled.
+                 * A resident slot keeps its bytes until publication. */
+                if (set[i].fill && fresh) { memcpy(b->data,set[i].fill,d->sector_size); r->filled|=1u<<i; }
                 if ((e=reservation_status(r,0))) break;
                 if (!b->pins) break;
                 e=fs_event_wait_request(&c->changed,&c->lock,VFS_WAIT_CACHE); if (e) break;
@@ -1120,10 +1129,11 @@ int cache_publish(struct cache_reservation *r, const struct cache_image *images,
     }
     if (!e && (s->frontier==UINT64_MAX || s->accepted>UINT64_MAX-count)) e=-FS_EIO;
     if (!e) {
-        uint64_t group=++s->frontier;
+        uint64_t group=r->group_hint && r->group_hint==s->frontier ? r->group_hint : ++s->frontier;
         for (unsigned i=0;i<count;i++) {
             struct cache_block *b=r->blocks[images[i].slot];
             memcpy(b->data,images[i].data,r->dev->sector_size); b->order=group;
+            r->filled&=~(1u<<images[i].slot);
             if (!b->dirty) {
                 b->since=fs_now_ms();
                 if (!s->dirty_bytes) s->oldest=b->since;
@@ -1140,12 +1150,14 @@ int cache_publish(struct cache_reservation *r, const struct cache_image *images,
     fs_lock_drop(&c->lock); return e;
 }
 /* f1-89 read-set validation: copy a resident, settled sector. Never waits,
- * fills, touches the LRU or issues I/O; absent/in-transition is EAGAIN. */
+ * fills, touches the LRU or issues I/O; absent or being filled is EAGAIN.
+ * A dirty block under write-back is busy but its bytes are stable (every
+ * writer waits for busy), so it is readable here. */
 int cache_peek(struct block_cache *c, struct blkdev *d, uint64_t lba, void *out) {
     if (!c || !d || !out) return -FS_EINVAL;
     fs_lock_take(&c->lock);
     struct cache_block *b=find(c,d,lba);
-    int e=b && !b->busy && !b->invalid ? 0 : -FS_EAGAIN;
+    int e=b && (!b->busy || b->dirty) && !b->invalid ? 0 : -FS_EAGAIN;
     if (!e) memcpy(out,b->data,d->sector_size);
     fs_lock_drop(&c->lock); return e;
 }

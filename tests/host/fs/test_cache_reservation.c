@@ -28,7 +28,7 @@ int main(void) {
     assert(!cache_init(&cache,8192));
     uint8_t before[512],first[512],second[512],readback[512];
     memset(first,0x89,512); memset(second,0x98,512);
-    struct cache_reserve_sector set[]={{3,before},{5,0}};
+    struct cache_reserve_sector set[]={{3,before,0},{5,0,0}};
     struct cache_reservation r;
     assert(!cache_reserve(&cache,&dev,set,2,&r));
     assert(cache.reserved_bytes==1024 && !cache.dirty_bytes);
@@ -76,9 +76,30 @@ int main(void) {
     cache_release(&r); /* published debt outlives the pin */
     assert(!cache.reserved_bytes && cache.dirty_bytes==512);
     assert(!cache_barrier(&cache,&dev));
-    struct cache_reserve_sector duplicate_set[]={{3,0},{3,0}};
+    struct cache_reserve_sector duplicate_set[]={{3,0,0},{3,0,0}};
     assert(cache_reserve(&cache,&dev,duplicate_set,2,&r)==-FS_EINVAL);
+    /* f1-89 Amendment 1 item 1: a cold sector reserved with a fill image is
+     * never read; unpublished, it does not survive as a cached copy. */
+    uint8_t fill_image[512]; memset(fill_image,0x5f,512); memset(disk[40],0x11,512);
+    struct cache_reserve_sector fill_set[]={{40,0,fill_image},{41,0,fill_image}};
+    cache_invalidate(&cache,&dev,false); old=commands;
+    assert(!cache_reserve(&cache,&dev,fill_set,2,&r) && commands==old);
+    cache_release(&r);
+    assert(!cache_read(&cache,&dev,40,readback) && !memcmp(readback,disk[40],512) && commands==old+1);
+    /* Published chunks of one C2 group share the device's latest group;
+     * once another publication advanced the frontier, a new group follows. */
+    assert(!cache_reserve(&cache,&dev,fill_set,2,&r));
+    struct cache_image chunk[]={{0,fill_image}};
+    assert(!cache_publish(&r,chunk,1,0)); uint64_t group=r.group; cache_release(&r);
+    assert(!cache_reserve(&cache,&dev,fill_set,2,&r)); r.group_hint=group;
+    struct cache_image chunk2[]={{1,fill_image}};
+    assert(!cache_publish(&r,chunk2,1,0) && r.group==group); cache_release(&r);
+    struct cache_reserve_sector other_set[]={{42,0,fill_image}};
+    assert(!cache_reserve(&cache,&dev,other_set,1,&r) && !cache_publish(&r,chunk,1,0) && r.group>group); cache_release(&r);
+    assert(!cache_reserve(&cache,&dev,fill_set,2,&r)); r.group_hint=group;
+    assert(!cache_publish(&r,chunk2,1,0) && r.group>group); cache_release(&r);
+    assert(!cache_barrier(&cache,&dev) && !memcmp(disk[41],fill_image,512) && !memcmp(disk[40],fill_image,512));
     cache_destroy(&cache); assert(!blk_request_pool_host_cleanup());
-    puts("PASS reserved cache: cold pins, eviction, atomic failure, no-wait publication, active barrier, repeated-sector dependency, credits, abort and generation fencing");
+    puts("PASS reserved cache: cold pins, eviction, atomic failure, no-wait publication, active barrier, repeated-sector dependency, credits, abort and generation fencing, fill without read, shared group only while latest");
     return 0;
 }

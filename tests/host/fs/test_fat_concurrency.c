@@ -151,7 +151,7 @@ int main(int argc,char **argv) {
     for (unsigned i=0;i<2;i++) assert(!pthread_join(w[i],0));
     atomic_store(&writers_done,true);
     for (unsigned i=0;i<3;i++) assert(!pthread_join(r[i],0) && !pthread_join(same[i],0));
-    uint32_t restarts=space.lookup_restarts, guarded=space.lookup_guarded, turn_waits=space.turn_waits, turn_max=space.turn_wait_max_ms;
+    uint32_t restarts=space.lookup_restarts, guarded=space.lookup_guarded, turn_waits=space.turn_waits[2], turn_max=space.turn_wait_max_ms[2];
     /* Phase 2: a continuous overlapping reader stream versus a writer. */
     atomic_store(&slow_reads,true);
     pthread_t s[3]; for (unsigned i=0;i<3;i++) assert(!pthread_create(&s[i],0,stream_reader,(void *)(uintptr_t)i));

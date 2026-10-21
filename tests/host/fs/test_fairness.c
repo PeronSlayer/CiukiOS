@@ -240,6 +240,12 @@ static void fair_replay(const char *name) {
     if (f->old) CHECK(f->latency>=100000000);
     else CHECK(f->latency<=20000000 && !f->missed && f->calls>=expected);
     CHECK(throughput>=943718 && throughput<=1153433);
+    /* f1-89 Amendment 1 item 1: the transactional copy keeps the old
+     * path's throughput in the same run (0.1 % timing tolerance; the
+     * 8-KiB-barrier engine was about 5 % lower). */
+    static uint64_t old_throughput;
+    if (f->old) old_throughput=throughput;
+    else if (old_throughput) { CHECK(throughput*1000>=old_throughput*999); old_throughput=0; }
     if (f->sync) vfs_table_destroy(&f->sync_table);
     CHECK(!vfs_close(&t->copy,t->out) && !vfs_close(&t->reader,t->in));
     vfs_table_destroy(&t->copy); vfs_table_destroy(&t->reader); vfs_destroy(&t->vfs);

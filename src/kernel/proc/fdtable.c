@@ -236,29 +236,37 @@ static int native_write_transaction(struct file_description *d,uint64_t *positio
     struct px_node *n=d->node; struct vfs *v=n->space->vfs;
     if (!px_fat_transaction_locked || !vfs_file_wait_locked || !vfs_turn_take_locked)
         return VFS_IO(v,fat_write_cursor(n->volume,&n->entry,&d->fat_cursor,*position,data,bytes,done));
-    /* f1-89: the writer turn spans every chunk of this write, before the
-     * per-node waits (an owner of n->writing always holds the turn). */
-    uint32_t turn; int e=vfs_turn_take_locked(v,vfs_drive_mask(n->drive),&turn);
-    if (!e) e=native_write_turn(d,position,positioned,data,bytes,done,section);
-    vfs_turn_drop_locked(v,turn);
-    return e;
+    /* f1-89: the writer turn spans every chunk of this write. Busy flags
+     * are waited for WITHOUT the turn (their owner may be a data
+     * transaction that suspended its turn around device I/O). */
+    for (;;) {
+        int e=vfs_file_wait_locked(v,&n->writing);
+        if (!e) e=vfs_file_wait_locked(v,&d->lock_description.io_active);
+        if (!e && d->identity) e=vfs_file_wait_locked(v,&d->identity->writer);
+        if (e) return e;
+        uint32_t turn; e=vfs_turn_take_locked(v,vfs_drive_mask(n->drive),&turn);
+        if (e) return e;
+        if (n->writing || d->lock_description.io_active || (d->identity && d->identity->writer)) {
+            vfs_turn_drop_locked(v,turn); continue;
+        }
+        e=native_write_turn(d,position,positioned,data,bytes,done,section);
+        vfs_turn_drop_locked(v,turn);
+        return e;
+    }
 }
 static int native_write_turn(struct file_description *d,uint64_t *position,bool positioned,
                              const void *data,size_t bytes,size_t *done,bool section) {
-    struct px_node *n=d->node; struct vfs *v=n->space->vfs;
-    int e=vfs_file_wait_locked(v,&n->writing);
-    if (!e) e=vfs_file_wait_locked(v,&d->lock_description.io_active);
-    if (!e && d->identity) e=vfs_file_wait_locked(v,&d->identity->writer);
-    if (e) return e;
+    struct px_node *n=d->node; struct vfs *v=n->space->vfs; int e=0;
     if (!vfs_identity_live(v,d->identity) || n->generation!=v->generation[n->drive]) return -FS_EIO;
     if (!positioned) *position=(d->flags&O_APPEND) ? n->entry.size : d->position;
     if (*position>UINT32_MAX || bytes>UINT32_MAX-*position) return -FS_EFBIG;
     if (!section && (e=px_description_range_locked(d,*position,bytes,true))) return e;
     n->writing=true; d->lock_description.io_active=true;
-    size_t limit=(size_t)n->volume->spc*512*FAT_TRANSACTION_CLUSTERS;
-    if (limit>131072) limit=131072;
+    /* A write slice is one in-flight claim set (256 clusters); a gap
+     * before the position is extended in 128 KiB steps first. */
+    size_t limit=(size_t)n->volume->spc*512*FAT_TRANSACTION_CLUSTERS, extend=limit<131072 ? limit : 131072;
     while (*position>=(uint64_t)n->entry.size+limit && !e) {
-        uint64_t end=(uint64_t)n->entry.size+32768; if (end>*position) end=*position;
+        uint64_t end=(uint64_t)n->entry.size+extend; if (end>*position) end=*position;
         e=px_fat_transaction_locked(n,n->parent,0,(struct fat_transaction_args){.op=FAT_TX_EXTEND,.entry=&n->entry,.capacity=(uint32_t)end});
     }
     while (*done<bytes && !e) {
