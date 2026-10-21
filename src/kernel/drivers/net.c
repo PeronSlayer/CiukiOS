@@ -6,6 +6,7 @@
 #include <ciuki/task.h>
 #include <ciuki/net.h>
 #include <ciuki/timing.h>
+#include <ciuki/net_bridge.h>
 
 #define NET_EIO 5
 #define NET_EBUSY 16
@@ -18,6 +19,36 @@ static bool input_active;
 static struct kmutex registration_mutex;
 static net_input_fn input;
 static void *input_cookie;
+/* f6-11 BEGIN: exclusive Ethernet type tap, independent of native ingress.
+ * Serialized registration, revocation before waiting, no device mutex held
+ * across the callback. The bridge callback must not unregister itself. */
+static struct { net_bridge_tap_fn fn; void *cookie; uint16_t type; bool active; } bridge_tap;
+int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *cookie)
+{
+    if (type != BRIDGE_IPX_TYPE || !fn) return -EINVAL;
+    kmutex_lock(&registration_mutex);
+    int e = shutting_down ? -NET_ENODEV : bridge_tap.fn ? -NET_EBUSY : 0;
+    if (!e) { bridge_tap.cookie = cookie; bridge_tap.type = type; bridge_tap.fn = fn; }
+    kmutex_unlock(&registration_mutex); return e;
+}
+void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *cookie)
+{
+    kmutex_lock(&registration_mutex);
+    if (bridge_tap.fn == fn && bridge_tap.cookie == cookie) {
+        bridge_tap.fn = 0;
+        while (bridge_tap.active) task_sleep_ms(1);
+        bridge_tap.cookie = 0; bridge_tap.type = 0;
+    }
+    kmutex_unlock(&registration_mutex);
+}
+static bool bridge_tap_frame(struct netif *d, const struct net_packet *p)
+{
+    net_bridge_tap_fn fn = bridge_tap.fn;
+    if (!fn || p->length < 14 || (((uint16_t)p->data[12] << 8) | p->data[13]) != bridge_tap.type) return false;
+    bridge_tap.active = true; fn(d, p->data, p->length, bridge_tap.cookie); bridge_tap.active = false;
+    return true;
+}
+/* f6-11 END: bridge tap. */
 static struct netif *proof_device;
 static const struct netif_driver *const net_drivers[] = {
     &net_e100, &net_rtl8139, &net_ne2000, &net_e1000, &net_pcnet,
@@ -416,7 +447,8 @@ void net_worker_step(void)
     for (unsigned i = 0; i < device_count; i++) {
         if (shutting_down) break;
         netif_poll(&devices[i]); task_yield();
-        if (input && netif_pop(&devices[i], &packet)) {
+        if ((input || bridge_tap.fn) && netif_pop(&devices[i], &packet) &&
+            !bridge_tap_frame(&devices[i], &packet)) { /* f6-11 type tap before native ingress */
             net_input_fn fn = input; void *cookie = input_cookie;
             if (fn) {
                 input_active = true; fn(&devices[i], packet.data, packet.length, cookie); input_active = false;
@@ -475,6 +507,7 @@ int net_init(void)
 void net_shutdown(void)
 {
     shutting_down = true; net_set_input(0, 0);
+    net_bridge_tap_unregister(bridge_tap.fn, bridge_tap.cookie); /* f6-11 tap revocation */
     for (unsigned i = 0; i < device_count; i++) (void)netif_stop(&devices[i]);
     if (worker && worker != g_current) {
         while (task_alive(worker)) task_sleep_ms(1);
