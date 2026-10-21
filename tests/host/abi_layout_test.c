@@ -6,6 +6,13 @@
 #include <ciuki/abi.h>
 
 struct expectation { const char *key; uint32_t native, expected; };
+/* The operation-specific union is not enumerated recursively by the JSON
+ * extractor; check these literal offsets in both the -m32 compile and host. */
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.timeout_ms)==72,"DOSVM timeout ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.frame_ms)==76,"DOSVM frame ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.events)==80,"DOSVM events ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,wait.reserved)==84,"DOSVM wait reserved ABI");
+_Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.redraw)==80,"DOSVM redraw ABI");
 static const struct expectation expectations[] = {
     /* f5-05B additive wire schema, literal offsets/values. */
     {"constant.W32_LOADER", W32_LOADER, 263u},
@@ -618,6 +625,12 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_PRESENT_BANDS", (uint32_t)(CIUKI_DOSVM_PRESENT_BANDS), 8u},
     {"constant.CIUKI_DOSVM_FULLSCREEN", (uint32_t)(CIUKI_DOSVM_FULLSCREEN), 9u},
     {"constant.CIUKI_DOSVM_BACKGROUND", (uint32_t)(CIUKI_DOSVM_BACKGROUND), 10u},
+    {"constant.CIUKI_DOSVM_WAIT_PRESENT", CIUKI_DOSVM_WAIT_PRESENT, 11u},
+    {"constant.CIUKI_DOSVM_WAIT_MAX_MS", CIUKI_DOSVM_WAIT_MAX_MS, 50u},
+    {"constant.CIUKI_DOSVM_EVENT_VIDEO", CIUKI_DOSVM_EVENT_VIDEO, 1u},
+    {"constant.CIUKI_DOSVM_EVENT_STATE", CIUKI_DOSVM_EVENT_STATE, 2u},
+    {"constant.CIUKI_DOSVM_EVENT_CONSOLE", CIUKI_DOSVM_EVENT_CONSOLE, 4u},
+    {"constant.CIUKI_DOSVM_EVENT_TIMEOUT", CIUKI_DOSVM_EVENT_TIMEOUT, 8u},
     {"constant.CIUKI_DOSVM_FULL_SCREEN", (uint32_t)(CIUKI_DOSVM_FULL_SCREEN), 4u},
     {"constant.CIUKI_DOSVM_SUSPENDED", (uint32_t)(CIUKI_DOSVM_SUSPENDED), 8u},
     {"constant.CIUKI_DOSVM_FULLSCREEN_REFUSED", (uint32_t)(CIUKI_DOSVM_FULLSCREEN_REFUSED), 16u},

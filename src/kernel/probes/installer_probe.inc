@@ -85,8 +85,15 @@ static int probe_w32_installer_nsis(void)
     server->ppid=owner->pid;native_reports.active=true;native_reports.server=server->pid;native_reports.installer=true;
     uint64_t deadline=g_ticks+10000;
     while(native_live(server) && !native_reports.survivor_stage && g_ticks<deadline)task_sleep_ms(1);
-    if(!native_live(server) || native_reports.survivor_stage!=2 ||
-       !native_command(server,GATE_SNAPSHOT,&generation) || !native_command(server,GATE_INSTALLER,&generation))goto cleanup;
+    if(!native_live(server) || native_reports.survivor_stage!=2)goto cleanup;
+    /* The unmodified pinned NSIS engine has no result protocol. The native
+     * coordinator owns this isolated checkpoint page; manifests remain
+     * independently read by the kernel. ua_map_at refuses existing extents. */
+    failure="installer_result_page";
+    if(ua_map_at(server->memory,INSTALLER_RESULT_VA,PAGE_SIZE,PROT_READ|PROT_WRITE,
+                 PROT_READ|PROT_WRITE,UA_ANON,0) ||
+       !native_command(server,GATE_SNAPSHOT,&generation) ||
+       !native_command_argument(server,GATE_W32_FIXTURE,&generation,INSTALLER_FIXTURE_NAME))goto cleanup;
     deadline=g_ticks+150000;
     while(native_live(server) && !installer_result.complete && !installer_errors() && g_ticks<deadline)task_sleep_ms(1);
     pass=native_live(server) && installer_result.complete && !installer_errors();

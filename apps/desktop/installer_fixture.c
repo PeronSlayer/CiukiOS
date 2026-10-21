@@ -16,10 +16,21 @@
 extern void desk_v3_fixture_report(const char *);
 extern int ciuki_win32_shell_restart(uint32_t,uint32_t);
 static struct { unsigned active,stage,pid,ui_keys; uint64_t deadline,next_ui; } install;
+static struct installer_checkpoint *result;
 int desk_installer_fixture_active(void){return (int)install.active;}
-int desk_installer_fixture_begin(struct desktop *d){install=(__typeof__(install)){.active=1,.deadline=d->now_ns+15000000000ull};return 0;}
+int desk_installer_fixture_begin(struct desktop *d){
+    if(result || install.active)return -EBUSY;
+    /* The selected kernel probe maps this private page before issuing the
+     * shared gate command. Native mmap's arena starts at 0x20000000. */
+    result=(void *)(uintptr_t)INSTALLER_RESULT_VA;
+    memset(result,0,sizeof(*result));
+    install=(__typeof__(install)){.active=1,.deadline=d->now_ns+15000000000ull};return 0;
+}
+static void finish(void)
+{ install.active=0;result=0; } /* kernel tears down the owning desktop */
 static void checkpoint(unsigned stage,unsigned status,unsigned errors)
 {
+    *result=(struct installer_checkpoint){INSTALLER_CHECKPOINT_MAGIC,stage,install.pid,status,errors,install.ui_keys};
     char line[128];snprintf(line,sizeof(line),"case=w32-installer stage=%u child=%u exit=%u registry_errors=%u ui_keys=%u",stage,install.pid,status,errors,install.ui_keys);
     desk_v3_fixture_report(line);
 }
@@ -57,11 +68,11 @@ static int copy_uninstaller(void)
 void desk_installer_fixture_tick(struct desktop *d)
 {
     if(!install.active)return;
-    if(d->now_ns>=install.deadline){checkpoint(99,~0u,1);install.active=0;return;}
+    if(d->now_ns>=install.deadline){checkpoint(99,~0u,1);finish();return;}
     if(!install.stage){
         if(!desk_installer_ready())return;
         install.stage=1;install.deadline=d->now_ns+120000000000ull;
-        if(spawn(1)<0){checkpoint(99,~0u,1);install.active=0;}return;
+        if(spawn(1)<0){checkpoint(99,~0u,1);finish();}return;
     }
     if(install.stage==4 || install.stage==7){
         struct stat st;if(!stat("/WINDOWS/CIUKIRST.LOG",&st)){checkpoint(install.stage,0,0);install.stage++;}return;
@@ -72,18 +83,18 @@ void desk_installer_fixture_tick(struct desktop *d)
         else ready=ready && stat("/WINDOWS/TEMP/CiukiInstallerFixture-uninstall.exe",&st)<0 && errno==ENOENT;
         if(!ready)return;
         checkpoint(install.stage,0,desk_installer_registry(install.stage));
-        if(install.stage==8){install.active=0;return;}
+        if(install.stage==8){finish();return;}
         install.stage=6;
-        if(copy_uninstaller() || spawn(6)<0){checkpoint(99,~0u,1);install.active=0;}return;
+        if(copy_uninstaller() || spawn(6)<0){checkpoint(99,~0u,1);finish();}return;
     }
     pages(d);
     int status=0,pid=waitpid((int)install.pid,&status,WNOHANG);if(!pid)return;
     unsigned code=pid<0 || !WIFEXITED(status)?~0u:(unsigned)WEXITSTATUS(status);
     unsigned errors=desk_installer_registry(install.stage);
     checkpoint(install.stage,code,errors);
-    if(code!=(install.stage==1?1u:0u) || errors){install.active=0;return;}
+    if(code!=(install.stage==1?1u:0u) || errors){finish();return;}
     if(install.stage==3 || install.stage==6){
-        install.stage++;if(ciuki_win32_shell_restart(0,2)<0){checkpoint(99,~0u,1);install.active=0;}return;
+        install.stage++;if(ciuki_win32_shell_restart(0,2)<0){checkpoint(99,~0u,1);finish();}return;
     }
-    install.stage++;if(spawn(install.stage)<0){checkpoint(99,~0u,1);install.active=0;}
+    install.stage++;if(spawn(install.stage)<0){checkpoint(99,~0u,1);finish();}
 }

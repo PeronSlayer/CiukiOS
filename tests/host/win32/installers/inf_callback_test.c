@@ -15,7 +15,8 @@ static DWORD W32API callback(void *context,DWORD notification,uintptr_t p1,uintp
 }
 static BOOL W32API install(HANDLE owner,HANDLE hinf,const char *section,DWORD flags,HANDLE root,
                           const char *tree,DWORD copy,inf_file_callback cb,void *context,HANDLE device,void *data){
-    static const DWORD expected[]={0x10,4,1};
+    /* SPINST_INIFILES is 2; 1 requests device LogConfig and silently skips INI. */
+    static const DWORD expected[]={0x10,4,2};
     assert(!owner && hinf==(HANDLE)17 && !strcmp(section,"DefaultInstall") &&
            root==(HANDLE)(uintptr_t)0x80000002u && !strcmp(tree,"fixture tree") && !copy && !device && !data);
     assert(calls<3 && flags==expected[calls]);calls++;

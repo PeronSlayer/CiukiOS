@@ -20,6 +20,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 int ciuki_channel_pair(int *fds){(void)fds;assert(0);return -1;}
 void desk_shell_message(struct desktop *d,const char *title,const char *text,int error)
 {(void)d;(void)title;(void)text;(void)error;assert(0);}
+int ciuki_proc_list(void *p,uint32_t n){(void)p;(void)n;assert(0);return -1;}
 static const char *binary,*directory;
 static int endpoint=-1;
 static unsigned registrations,reconnects,records;

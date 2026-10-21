@@ -1224,7 +1224,7 @@ void ua_cancel_pins(struct uaddr *u, const struct task *task)
     }
 }
 
-static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t bytes, bool write)
+static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t bytes, bool write, bool supervisor)
 {
     if (va < (u->win32 ? CIUKI_W32_LOW : CIUKI_IMAGE_BASE) || va >= CIUKI_MAIN_STACK_LIMIT ||
         bytes > CIUKI_MAIN_STACK_LIMIT - va)
@@ -1233,9 +1233,15 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
     struct ua_pin transaction={.base=va,.end=va+bytes,.mutation=true,.task=g_current,.next=owner->pins};
     owner->pins=&transaction;
     unsigned pages=0; int result=0;
+    /* Check the complete range after reserving it: a concurrent protection
+     * change cannot invalidate permission checks while resolution sleeps. */
+    if (!supervisor && !ua_range(u,va,bytes,PROT_READ | (write ? PROT_WRITE : 0))) {
+        ua_unpin(owner,&transaction);
+        return -EFAULT;
+    }
     uint8_t *b = buffer;
     while (bytes) {
-        result=resolve_page(owner,va,write,true); if(result)break;
+        result=resolve_page(owner,va,write,supervisor); if(result)break;
         uint32_t *p = pte((struct uaddr *)u, va, false);
         if (!p || !(*p & PTE_OWN)) { result=-EFAULT; break; }
         uint32_t off = va & (PAGE_SIZE - 1), n = PAGE_SIZE - off;
@@ -1248,7 +1254,7 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
         b += n;
         bytes -= n;
         /* 16 direct-map copies * 8 us = 128 us, with the whole range
-         * reserved against unmap/protect until the supervisor copy ends. */
+         * reserved against unmap/protect until the copy ends. */
         if (!(++pages & 15u)) kpreempt_point();
     }
     ua_unpin(owner,&transaction);
@@ -1257,13 +1263,19 @@ static int transfer(const struct uaddr *u, uint32_t va, void *buffer, uint32_t b
 
 int ua_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
 {
-    return transfer(u, src, dst, bytes, false);
+    return transfer(u, src, dst, bytes, false, true);
 }
 
 int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
 {
-    return transfer(u, dst, (void *)src, bytes, true);
+    return transfer(u, dst, (void *)src, bytes, true, true);
 }
+
+int ua_user_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{ return transfer(u,src,dst,bytes,false,false); }
+
+int ua_user_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{ return transfer(u,dst,(void *)src,bytes,true,false); }
 
 static int zero_range(struct uaddr *u, uint32_t base, uint32_t end)
 {

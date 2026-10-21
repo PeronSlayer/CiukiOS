@@ -330,11 +330,11 @@
     {
       "id": "win32-title-starcraft-shareware-qemu-t23",
       "kind": "win32-title",
-      "probe": "win32-starcraft-shareware",
+      "probe": "win32-sc",
       "profile": "qemu-t23",
-      "selector": "f5:win32-starcraft-shareware run={run_id}",
+      "selector": "f5:win32-sc run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-starcraft-shareware probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "integration_pending": "f5-15B: kernel registration of the win32-sc probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
       "fixtures": [
         {
           "generator": "win32-workload",
@@ -1509,11 +1509,11 @@
     {
       "id": "win32-title-worms-armageddon-demo-qemu-t23",
       "kind": "win32-title",
-      "probe": "win32-worms-armageddon-demo",
+      "probe": "win32-wa",
       "profile": "qemu-t23",
-      "selector": "f5:win32-worms-armageddon-demo run={run_id}",
+      "selector": "f5:win32-wa run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-worms-armageddon-demo probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
+      "integration_pending": "f5-15B: kernel registration of the win32-wa probe and the guest title driver; the reference-installed tree, launch path and pins from the reference run; audio reference window (check_audio_wav bounds a capture to 30 s)",
       "fixtures": [
         {
           "generator": "win32-workload",

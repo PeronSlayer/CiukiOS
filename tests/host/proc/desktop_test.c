@@ -11,6 +11,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/storage.h>
 #include <ciuki/files.h>
+#include <ciuki/pager.h>
 
 /* Device-node transport for the desktop poll interleaving test. The process
  * ledger, slot comparison and record formatter remain production code. */
@@ -70,6 +71,8 @@ void console_operator_prompt(bool announce) { if (announce) operator_prompts++; 
 static bool console_owned; static unsigned console_owned_changes;
 static unsigned display_frames, display_uploads;
 static bool display_full_frame;
+static unsigned pager_boot_releases;
+void pager_bootstrap_complete(void) { pager_boot_releases++; }
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
 void console_wake(void) {}
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
@@ -170,6 +173,20 @@ int storage_enable_write(struct storage *s, unsigned drive)
 }
 /* f2-31: only the Files desktop case flushes; no host fixture selects it. */
 int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
+/* These native gate replays never select the installer controller. Keep
+ * its VFS dependency explicit and fail if the harness accidentally enters it. */
+int vfs_table_init(struct vfs *v,struct vfs_table *t,unsigned drive)
+{ (void)v;(void)t;(void)drive;CHECK(!"installer VFS in desktop spawn replay");return -EIO; }
+void vfs_table_destroy(struct vfs_table *t)
+{ (void)t;CHECK(!"installer VFS in desktop spawn replay"); }
+int vfs_stat(struct vfs_table *t,const char *p,struct fat_entry *entry)
+{(void)t;(void)p;(void)entry;CHECK(!"installer stat in desktop replay");return -EIO;}
+int vfs_open(struct vfs_table *t,const char *p,unsigned flags,enum vfs_share share,uint8_t attr)
+{(void)t;(void)p;(void)flags;(void)share;(void)attr;CHECK(!"installer open in desktop replay");return -EIO;}
+int vfs_read(struct vfs_table *t,int fd,void *p,size_t n,size_t *done)
+{(void)t;(void)fd;(void)p;(void)n;(void)done;CHECK(!"installer read in desktop replay");return -EIO;}
+int vfs_close(struct vfs_table *t,int fd)
+{(void)t;(void)fd;CHECK(!"installer close in desktop replay");return -EIO;}
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
@@ -178,6 +195,13 @@ static int report_fixture_spawn(const char *path, const char *const argv[], cons
     libc_spawn_calls++; return -ENOENT;
 }
 static int gate_fixture_spawn(struct process **out);
+/* This harness calls controllers directly, without the kernel's linker-table
+ * dispatcher. Keep the declarations, but let unrelated F5 controllers and
+ * their device/filesystem dependencies be discarded from the host binary. */
+#pragma push_macro("CIUKI_F5_PROBE")
+#undef CIUKI_F5_PROBE
+#define CIUKI_F5_PROBE(id, func) static const struct probe_def \
+    __attribute__((unused)) f5probe_##func = { id, func }
 #define supervisor_spawn_desktop_probe gate_fixture_spawn
 #define supervisor_spawn_standin report_fixture_standin
 #define supervisor_spawn report_fixture_spawn
@@ -185,6 +209,7 @@ static int gate_fixture_spawn(struct process **out);
 #undef supervisor_spawn
 #undef supervisor_spawn_standin
 #undef supervisor_spawn_desktop_probe
+#pragma pop_macro("CIUKI_F5_PROBE")
 
 static struct process *poll_server;
 static struct proc_ledger poll_baseline;
@@ -730,11 +755,14 @@ static void test_desktop_present(void)
     }
     struct ciuki_rect whole = { 0, 0, 0, 0, 2048, 2 };
     unsigned acknowledged = display_frames;
+    unsigned released = pager_boot_releases;
     unsigned points = preempt_points;
     CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
+    CHECK(pager_boot_releases == released + 1); /* after a complete successful frame */
     CHECK(preempt_points - points == 4); /* 2 rows, two 4096-byte tiles/row */
     points = preempt_points; on_preempt_point = present_mapping_change;
     CHECK(grant_present(p, grants[0], wide_fd, &whole) == -EIO);
+    CHECK(pager_boot_releases == released + 1);
     CHECK(!on_preempt_point && preempt_points == points + 1 && !presenting &&
           !t->cleanup && !t->operation && display_frames == acknowledged + 1);
     device.generation = 1;
@@ -742,6 +770,7 @@ static void test_desktop_present(void)
     unsigned uploaded=display_uploads;
     CHECK(!grant_present(p, grants[0], wide_fd, &whole) && display_frames == acknowledged + 1);
     CHECK(display_uploads==uploaded+1 && !display_full_frame);
+    CHECK(pager_boot_releases == released + 1); /* partial frame cannot release boot work */
     /* An old larger surface clipped onto a smaller new screen is not a
      * complete compositor frame for the mode watchdog. */
     device.width = 1024; whole.height = 2;
@@ -758,6 +787,27 @@ static void test_desktop_present(void)
     device = (struct fb_device){ 0 };
     desktop_clean(p);
     puts("desktop present: source/destination clipping, masks, padded pitch, bounds and quarantine PASS");
+}
+static void test_pager_boot_fallback(void)
+{
+    const struct ciuki_file_ops *saved = proc_get_file_ops();
+    uint32_t boot_flags = g_boot.flags;
+    unsigned releases = pager_boot_releases;
+    CHECK(!bootstrap_attempted && !desktop_pid);
+    g_boot.flags = CBI_F_TEST_REQUEST;
+    supervisor_bootstrap();
+    CHECK(!bootstrap_attempted && pager_boot_releases == releases);
+    g_boot.flags = 0; proc_set_file_ops(0);
+    supervisor_bootstrap(); /* desktop and stand-in absent: console fallback */
+    CHECK(bootstrap_attempted && !desktop_pid && pager_boot_releases == releases + 1);
+    supervisor_bootstrap(); CHECK(pager_boot_releases == releases + 1);
+    desktop_pid = UINT32_MAX;
+    uint32_t deaths = desktop_deaths;
+    supervisor_poll();
+    CHECK(!desktop_pid && desktop_deaths == deaths + 1 && pager_boot_releases == releases + 2);
+    desktop_deaths = deaths; bootstrap_attempted = false;
+    g_boot.flags = boot_flags; proc_set_file_ops(saved);
+    puts("desktop pager boot: diagnostics bypass bootstrap; console fallback and death release manager; duplicate bootstrap is inert PASS");
 }
 static void test_desktop_capture(void)
 {
@@ -1470,6 +1520,7 @@ void desktop_spawn_host_finish(void)
 #endif
 int main(int argc, char **argv)
 {
+    setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     controller.state = T_RUNNING; g_current = &controller;
     proc_init();
@@ -1486,7 +1537,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_pager_boot_fallback(); test_desktop_capture();
     test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

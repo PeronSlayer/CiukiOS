@@ -296,6 +296,7 @@ static void video_harvest(struct dosvm *v)
         v->video_pending[plane] = 0;
     }
     if (harvested) { v->perf.harvests++; dosvm_launch_video(v); }
+    dosvm_present_notify(v);
     v->perf.harvest_cycles += dosvm_perf_task_clock() - begin;
 }
 void dosvm_vga_sync(struct dosvm *v, bool unmap)
@@ -837,6 +838,50 @@ static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsign
     }
     return changed;
 }
+/* One cadence policy for the wait, dirty sampler and presenter. Keep the
+ * microsecond phase internally; only the public timeout is rounded up. */
+uint64_t dosvm_vga_period_us(struct dosvm *v, uint64_t tick)
+{
+    uint64_t period = vga_frame_us(&v->vga);
+    const struct dos_video_mode *mode = dos_video_mode(v->vbe_mode);
+    cvga_geometry g = {0};
+    if (mode) period = dos_video_frame_us(mode);
+    else if (cvga_get_geometry(&v->vga, &g) && !g.text && (v->vga.gc[5] & 0x40) &&
+             !(v->video_flip_run >= 2 && tick * 1000u - v->video_flip_us <= period * 2)) period *= 2;
+    return period;
+}
+unsigned dosvm_vga_period_ms(struct dosvm *v)
+{
+    uint64_t period = dosvm_vga_period_us(v, g_ticks);
+    unsigned ms = (unsigned)((period + 999) / 1000);
+    return ms > CIUKI_DOSVM_WAIT_MAX_MS ? CIUKI_DOSVM_WAIT_MAX_MS : ms ? ms : 1;
+}
+
+uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period, uint64_t tick)
+{
+    uint64_t next = due_us + period;
+    return next / 1000u > tick ? next : tick * 1000u + period;
+}
+
+void dosvm_present_notify(struct dosvm *v)
+{
+    if (v->present_wait.head) kwait_wake_ready(&v->present_wait);
+}
+
+void dosvm_present_checkpoint(struct dosvm *v)
+{
+    if (!v->present_wait.head) return;
+    /* Deferred/VM thread context only. The predicate never walks PTEs or
+     * converts pixels. Observe direct stores even without a trapped OUT. */
+    if (deadline_passed(v->present_sample_due_us / 1000u) && v->info.state < DOSVM_STOPPING &&
+        !v->fullscreen && !v->fullscreen_hold) {
+        v->present_sample_due_us = dosvm_vga_next_due(v->present_sample_due_us, dosvm_vga_period_us(v, g_ticks), g_ticks);
+        dosvm_vga_sync(v, false);
+        if (v->vbe_mode && dosvm_vbe_dirty(v, false)) v->present_vbe_changes++;
+    }
+    dosvm_present_notify(v);
+}
+
 int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *, unsigned),
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {
@@ -845,11 +890,9 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
     if (v->vbe_mode) return dosvm_vbe_present(v,row,arg,tick,damage);
-    uint64_t period = vga_frame_us(&v->vga);
+    uint64_t period = dosvm_vga_period_us(v, tick);
     cvga_geometry current = {0};
-    bool indexed_mode = cvga_get_geometry(&v->vga, &current) && !current.text && (v->vga.gc[5] & 0x40);
-    bool fast_flip = v->video_flip_run >= 2 && tick * 1000u - v->video_flip_us <= period * 2;
-    if (indexed_mode && !fast_flip) period *= 2;
+    cvga_get_geometry(&v->vga, &current);
     v->video_present_rate = (unsigned)((1000000u + period / 2) / period);
     if (!v->video_presented || v->video_period_us != period) {
         v->video_due_us = v->video_presented ? v->video_tick * 1000u + period : tick * 1000u;
@@ -858,11 +901,11 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     /* Check before harvest/dirty consumption, including palette and CRTC
      * changes. A completion write cannot bypass the per-VM cap. */
     if (v->video_presented && !current.text && tick < v->video_due_us / 1000u) return 0;
+    v->present_samples++;
     /* Quantize the deadline to the host tick, retaining its fractional
      * phase: ceil(14.268 ms) on every frame would turn 70 Hz into 66 Hz.
      * Drop missed deadlines instead of accumulating a catch-up burst. */
-    uint64_t next_due = v->video_due_us + period;
-    v->video_due_us = next_due / 1000u > tick ? next_due : tick * 1000u + period;
+    v->video_due_us = dosvm_vga_next_due(v->video_due_us, period, tick);
     uint64_t begin = dosvm_perf_task_clock();
     /* Take and clear the dirty granules atomically with respect to the VM
      * worker: a store after this point stays marked for the next frame. */

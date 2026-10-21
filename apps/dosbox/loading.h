@@ -14,6 +14,13 @@ static inline const char *dosbox_launch_icon(const char *command)
         if (!strcmp(command, desk_games[i].command)) return desk_games[i].tango;
     return du_icon_name("program:dosbox");
 }
+#define DOSBOX_PULSE_MS 250u
+static inline struct du_rect dosbox_panel_pulse(struct du_canvas *canvas, uint64_t elapsed)
+{
+    struct du_rect bar = {120,272,400,18};
+    du_progress_paint(canvas,bar,0,0,elapsed);
+    return bar;
+}
 static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
                                 const char *icon, const char *error, const char *detail,
                                 uint64_t elapsed)
@@ -33,7 +40,7 @@ static inline void dosbox_panel(struct du_canvas *canvas, const char *name,
     du_text_font(canvas,desk_theme->font_bold,166,202,title,DU_INK); canvas->clip=old;
     du_text_wrap(canvas,(struct du_rect){166,226,350,30},detail,DU_INK);
     struct du_rect bar={120,272,400,18};
-    if (!error) du_progress_paint(canvas,bar,0,0,elapsed);
+    if (!error) dosbox_panel_pulse(canvas,elapsed);
     else du_well(canvas,bar,DU_FACE);
 }
 /* Save only the dialog rectangle and its border, allocated while it is open. */

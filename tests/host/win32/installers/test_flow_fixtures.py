@@ -75,6 +75,31 @@ def decode_cabinet(raw):
 
 
 class CabinetWriterTests(unittest.TestCase):
+    def test_shared_gate_installer_routing_ubsan(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        binary = OUT / 'shared-gate-ubsan'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+            '-include', ROOT / 'tests/host/desktop/replay_base.h',
+            '-fsanitize=undefined', '-fno-sanitize-recover=all',
+            '-I' + str(ROOT / 'apps/desktop'), '-I' + str(ROOT / 'sdk/win32/include'),
+            '-I' + str(ROOT / 'src/kernel/include'), '-idirafter', ROOT / 'sdk/sysroot-overlay/include',
+            ROOT / 'tests/host/desktop/w32_fixture_gate_test.c', '-o', binary], check=True)
+        result = subprocess.run([binary], capture_output=True, text=True, check=True)
+        print(result.stdout, end='')
+
+    def test_native_installer_coordinator_checkpoint_page(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        binary = OUT / 'controller-page-ubsan'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+            '-D_GNU_SOURCE', '-include', ROOT / 'tests/host/desktop/replay_base.h',
+            '-fsanitize=undefined', '-fno-sanitize-recover=all',
+            '-I' + str(ROOT / 'apps/desktop'), '-I' + str(ROOT / 'sdk/win32/include'),
+            '-I' + str(ROOT / 'src/kernel/include'),
+            '-idirafter', ROOT / 'sdk/sysroot-overlay/include',
+            HERE / 'controller_page_test.c', '-o', binary], check=True)
+        result = subprocess.run([binary], capture_output=True, text=True, check=True)
+        print(result.stdout, end='')
+
     def test_inf_caller_queue_callback_and_context_lifetime(self):
         OUT.mkdir(parents=True, exist_ok=True)
         binary = OUT / 'inf-callback-ubsan'
@@ -105,6 +130,7 @@ class CabinetWriterTests(unittest.TestCase):
         for name, sources in (
                 ('profile-9x', [ROOT / 'tests/host/win32/profile_test.c', ROOT / 'sdk/win32/kernel32/profile.c']),
                 ('security-9x', [HERE / 'security_test.c', ROOT / 'sdk/win32/advapi32/security.c']),
+                ('load-flags', [HERE / 'load_flags_test.c', ROOT / 'sdk/win32/kernel32/modules.c']),
                 ('wide-9x', [HERE / 'delay_move_test.c', ROOT / 'sdk/win32/kernel32/wide.c'])):
             binary = OUT / name
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',

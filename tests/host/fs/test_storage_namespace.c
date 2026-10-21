@@ -411,8 +411,10 @@ static void *latency_media(void *arg)
     return 0;
 }
 static unsigned observed_volume_waits,observed_namespace_waits;
-void vfs_wait_observer(char drive,uint32_t ms,char holder,const char *reason)
+void vfs_wait_observer(char drive,uint32_t ms,char holder,const char *reason,
+                       const struct fs_task_identity *task,const struct vfs_hold_info *owner)
 {
+    (void)task; (void)owner;
     LAT_ASSERT(ms>100);
     if (!strcmp(reason,"volume")) { LAT_ASSERT(drive=='E' && holder=='E'); __atomic_add_fetch(&observed_volume_waits,1,__ATOMIC_RELAXED); }
     else { LAT_ASSERT(!strcmp(reason,"namespace")); __atomic_add_fetch(&observed_namespace_waits,1,__ATOMIC_RELAXED); }

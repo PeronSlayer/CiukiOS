@@ -207,7 +207,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-fullscreen run={run_id}",
       "timeout": 90,
-      "integration_pending": "f5-09 desktop v3 exercise driver and runtime probe; authored, unrun",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead. Presenter scale, stale lease, rollback and restored-input observations remain incomplete; fails explicitly.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -330,7 +330,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-registry run={run_id}",
       "timeout": 90,
-      "integration_pending": "f5-06 production PE backend and f5-09 desktop service supervision/probe driver; authored, unrun",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -385,7 +385,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-kernel32 run={run_id}",
       "timeout": 120,
-      "integration_pending": "f5-22: guest observer owner f5-21; f5-06 builtins at C:\\System\\Win32 (ntdll.dll, BUILTIN.BIN); guest probe remains unqualified; authored case, never run. The selector is absent from all three tables.",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -481,7 +481,7 @@
           }
         ]
       },
-      "integration_pending": "authored, unrun: lead supplies guest audio probe, WAV capture and T23 listening"
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead."
     },
     {
       "id": "w32-gdi32-qemu-t23",
@@ -489,7 +489,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-gdi32 run={run_id}",
       "timeout": 90,
-      "integration_pending": "f5-10A/C USER32/native-font bridge and guest GDI exercise probe; authored, unrun",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -559,7 +559,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-crash run={run_id}",
       "timeout": 90,
-      "integration_pending": "authored, unrun: lead supplies the desktop fault fixture driver and guest evidence; host Details and rotation harnesses are implemented",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -592,7 +592,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-user32 run={run_id}",
       "timeout": 90,
-      "integration_pending": "authored, unrun; lead integrates the USER PE fixture and selector before guest qualification",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -686,7 +686,7 @@
           }
         ]
       },
-      "integration_pending": "authored, unrun: lead supplies guest codec probe and T23 execution; host models do not qualify the guest"
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead."
     },
     {
       "id": "w32-media-qemu-t23",
@@ -794,6 +794,20 @@
           {
             "where": {
               "event": "DATA",
+              "case": "write-gate"
+            },
+            "fields": {
+              "expected": {
+                "eq": 0
+              },
+              "observed": {
+                "eq": 0
+              }
+            }
+          },
+          {
+            "where": {
+              "event": "DATA",
               "case": "fixture"
             },
             "fields": {
@@ -886,7 +900,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-ddraw run={run_id}",
       "timeout": 120,
-      "integration_pending": "f5-11 /System/Win32/Fixtures/ddraw-exercise.exe authored, unrun; USER lease/clip seam and kernel observer integration pending lead",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -930,7 +944,7 @@
       "profile": "qemu-t23",
       "selector": "f5:w32-input run={run_id}",
       "timeout": 90,
-      "integration_pending": "authored, unrun; lead integrates the input PE fixture, selector and raw v3 motion session before guest qualification",
+      "integration_pending": "f5-21b observer and result-block PE registered; guest qualification pending lead. Raw motion buffering and foreground/exclusive loss observations remain incomplete; fails explicitly.",
       "expected": {
         "terminal": "END",
         "predicates": [
@@ -1262,10 +1276,10 @@
     {
       "id": "w32-restart-qemu-t23",
       "probe": "w32-restart",
+      "integration_pending": "f5-07D: restart fixture, desktop gate and kernel observer registered; authored, unrun. Lead owns guest qualification.",
       "profile": "qemu-t23",
       "selector": "f5:w32-restart run={run_id}",
       "timeout": 420,
-      "integration_pending": "authored, unrun (f5-07B): lead supplies guest probe and T23 evidence; host shell and desktop fixtures are not guest qualification. Guest observer owner: f5-21.",
       "expected": {
         "terminal": "END",
         "predicates": [

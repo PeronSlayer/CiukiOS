@@ -787,7 +787,7 @@ static int write_data(struct fat_volume *v, uint32_t c, uint64_t base,
     }
     return 0;
 }
-static int write_span(struct fat_volume *, struct fat_entry *, struct fat_cursor *, uint64_t, const void *, size_t, uint32_t, size_t *);
+static int write_span(struct fat_volume *, struct fat_entry *, struct fat_cursor *, uint64_t, const void *, size_t, uint32_t, size_t *, bool);
 int fat_write_cursor(struct fat_volume *v, struct fat_entry *file, struct fat_cursor *cursor,
                      uint64_t pos, const void *data, size_t size, size_t *done) {
     context(v,file->name);
@@ -797,30 +797,36 @@ int fat_write_cursor(struct fat_volume *v, struct fat_entry *file, struct fat_cu
     if (!data && size) return -FS_EINVAL;
     if (pos>UINT32_MAX || size>UINT32_MAX-pos) return -FS_EFBIG;
     if (!size) return 0;
-    e=write_span(v,file,cursor,pos,data,size,(uint32_t)(pos+size),done);
+    e=write_span(v,file,cursor,pos,data,size,(uint32_t)(pos+size),done,true);
     if (e && cursor) *cursor=(struct fat_cursor){0};
     return e;
 }
 int fat_write(struct fat_volume *v, struct fat_entry *file, uint64_t pos, const void *data, size_t size, size_t *done) {
     return fat_write_cursor(v,file,0,pos,data,size,done);
 }
-/* f0-49: in-place zero-filled extension through the same publication path
- * as an append (data, detached chain, tail link, then length). Existing
- * clusters never move; no data buffer beyond one stack sector is needed. */
-int fat_extend(struct fat_volume *v, struct fat_entry *file, uint32_t size) {
+static int extend(struct fat_volume *v, struct fat_entry *file, uint32_t size, bool initialize) {
     context(v,file->name);
     int e=writable(v); if (e) return e;
     if (file->attr&FAT_ATTR_DIR) return -FS_EISDIR;
     if (file->attr&FAT_ATTR_RO) return -FS_EACCES;
     if (size<=file->size) return size==file->size ? 0 : -FS_EINVAL;
     size_t done;
-    return write_span(v,file,0,file->size,0,0,size,&done);
+    return write_span(v,file,0,file->size,0,0,size,&done,initialize);
+}
+int fat_extend(struct fat_volume *v, struct fat_entry *file, uint32_t size) {
+    return extend(v,file,size,true);
+}
+/* Privileged pagefile reservation: only FAT/length metadata is durable.
+ * Its exclusive owner never reads a slot before writing it in this boot.
+ * Ordinary append/extension retains zero initialization. */
+int fat_reserve(struct fat_volume *v, struct fat_entry *file, uint32_t size) {
+    return extend(v,file,size,false);
 }
 static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_cursor *cursor,
-                      uint64_t pos, const void *data, size_t size, uint32_t end, size_t *done) {
+                      uint64_t pos, const void *data, size_t size, uint32_t end, size_t *done, bool initialize) {
     int e;
     identity_changed(v,file,file,FAT_ID_WRITE);
-    if ((e=publication_stage(v,FAT_P_DATA))) return e;
+    if (initialize && (e=publication_stage(v,FAT_P_DATA))) return e;
     uint32_t cb=(uint32_t)v->spc*512;
     uint32_t count=file->size/cb+(file->size%cb!=0), tail=0;
     uint32_t need=end/cb+(end%cb!=0), extra=0;
@@ -845,7 +851,7 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
     for (uint32_t i=0;i<extra;i++) if ((e=write_free(v,&free_cursor,&scanned,&c))) return e;
     uint64_t begin=pos<file->size ? pos : file->size;
     uint32_t index=(uint32_t)(begin/cb), last=0, last_index=0;
-    if (index<count) {
+    if (initialize && index<count) {
         if ((e=file_cluster(v,file,cursor,index,&c))) return e;
         while (index<count && begin<end) {
             uint64_t base=(uint64_t)index*cb, stop=base+cb;
@@ -860,7 +866,7 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
         }
     }
     free_cursor=v->next_free; scanned=0;
-    for (uint32_t i=0;i<extra;i++) {
+    for (uint32_t i=0;initialize && i<extra;i++) {
         if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
         uint64_t base=(uint64_t)(count+i)*cb;
         uint64_t stop=base+cb; if (stop>end) stop=end;
@@ -869,7 +875,7 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
         if ((e=write_data(v,c,base,base,stop,pos,data,size,true))) return e;
         last=c; last_index=count+i;
     }
-    if ((e=barrier(v))) return e; /* data before any allocation links */
+    if (initialize && (e=barrier(v))) return e; /* data before any allocation links */
     if ((e=publication_stage(v,FAT_P_CHAIN))) return e;
     uint32_t first=0, previous=0;
     free_cursor=v->next_free; scanned=0;
@@ -879,6 +885,7 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
         if (previous && (e=set_cluster(v,previous,c))) return e;
         if (!first) first=c;
         previous=c;
+        if (!initialize) { last=c; last_index=count+i; }
         v->free_clusters--;
     }
     if (extra) {

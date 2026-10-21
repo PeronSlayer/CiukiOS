@@ -172,7 +172,8 @@ static int locate(struct w32_loader *l, const char *name, char *path, struct w32
         if (l->services->open(l->services->opaque, path, file))
             return 1;
     } else {
-        const char *dirs[] = {l->exe_directory, l->current_directory, l->system_directory,
+        const char *dirs[] = {l->altered_directory ? l->altered_directory : l->exe_directory,
+                              l->current_directory, l->system_directory,
                               l->windows_directory};
         for (ULONG i = 0; i < 4; i++)
             if (open_join(l, dirs[i], base, path, file))
@@ -647,7 +648,7 @@ static void collect(struct w32_loader *l, int shutdown) {
 int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32_module **out) {
     if (out)
         *out = 0;
-    if (!name || !out || flags & ~(W32_LOAD_DATAFILE | W32_LOAD_EXECUTABLE))
+    if (!name || !out || flags & ~(W32_LOAD_DATAFILE | W32_LOAD_EXECUTABLE | W32_LOAD_ALTERED_SEARCH))
         return error(l, 87, "load-flags", name, 0);
     if (RtlEnterCriticalSection(&l->lock))
         return 0;
@@ -655,6 +656,20 @@ int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32
     if (!w32_builtin_validate(l->builtins, l->builtin_count, &l->error)) {
         RtlLeaveCriticalSection(&l->lock);
         return 0;
+    }
+    char *altered=0;
+    ULONG directory_bytes=(ULONG)(basename(name)-name);
+    if((flags&W32_LOAD_ALTERED_SEARCH) && directory_bytes){
+        if(directory_bytes>=W32_PATH_MAX){
+            error(l,193,"module-name-limit",name,0);
+            RtlLeaveCriticalSection(&l->lock);return 0;
+        }
+        altered=l->services->alloc(l->services->opaque,directory_bytes+1);
+        if(!altered){
+            error(l,8,"loader-memory",name,0);
+            RtlLeaveCriticalSection(&l->lock);return 0;
+        }
+        w32_copy(altered,name,directory_bytes);altered[directory_bytes]=0;
     }
     /* Snapshot dependency lists too: GetProcAddress forwarders can add edges
      * to an existing module during a recursive initialization transaction. */
@@ -668,7 +683,15 @@ int w32_ldr_load(struct w32_loader *l, const char *name, ULONG flags, struct w32
         old[count++].deps = m->dependency_count;
     }
     l->transaction_depth++;
-    struct w32_module *m = load_one(l, name, flags, 0);
+    /* Win9x alternate order substitutes the top DLL's folder for the EXE
+     * folder while resolving imports. Loaded modules and protected builtins
+     * keep their precedence. A basename (used by Wine COM) has no folder to
+     * substitute; retain ordinary search for that unspecified path case. */
+    const char *saved_directory=l->altered_directory;
+    l->altered_directory=altered;
+    struct w32_module *m = load_one(l, name, flags & ~W32_LOAD_ALTERED_SEARCH, 0);
+    l->altered_directory=saved_directory;
+    if(altered)l->services->free(l->services->opaque,altered,directory_bytes+1);
     /* The main module is visible to GetModuleHandle(NULL) inside TLS and
      * DllMain callbacks, before its initialization transaction commits. */
     if(m && (flags&W32_LOAD_EXECUTABLE)){

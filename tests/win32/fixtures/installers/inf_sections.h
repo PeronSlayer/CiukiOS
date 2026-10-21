@@ -9,12 +9,14 @@ struct inf_queue_api {
     inf_file_callback callback;
     void (W32API *term)(void *);
 };
+enum { FIXTURE_SPINST_INIFILES=0x2, FIXTURE_SPINST_REGISTRY=0x4,
+       FIXTURE_SPINST_FILES=0x10 };
 static int install_sections(HANDLE hinf,const char *tree,inf_install install,const struct inf_queue_api *queue){
     void *context=queue->init(0);if(!context)return 27;
-    const DWORD flags[]={0x10,4,1};int error=0;
+    const DWORD flags[]={FIXTURE_SPINST_FILES,FIXTURE_SPINST_REGISTRY,FIXTURE_SPINST_INIFILES};int error=0;
     for(unsigned i=0;i<3;i++){
         if(!install(0,hinf,"DefaultInstall",flags[i],(HANDLE)(uintptr_t)0x80000002u,tree,0,
-                    flags[i]==0x10?queue->callback:0,flags[i]==0x10?context:0,0,0)){
+                    flags[i]==FIXTURE_SPINST_FILES?queue->callback:0,flags[i]==FIXTURE_SPINST_FILES?context:0,0,0)){
             error=8+(int)i;break;
         }
     }

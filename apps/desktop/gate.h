@@ -8,11 +8,11 @@ enum { GATE_SPAWN = 1, GATE_RELEASE, GATE_REAP, GATE_RUN, GATE_SNAPSHOT, GATE_IN
        GATE_DIALOGS, /* f5-10C2: Win32 services plus the w32-dialogs fixture */
        GATE_UPPER /* f5-20D: Win32 services plus the w32-upper-dlls fixture */,
        GATE_MEDIA /* f5-12B2: Win32 services plus the w32-media fixture */,
-       GATE_INSTALLER /* f5-15A2: pinned NSIS and independent manifests */ };
+       GATE_W32_FIXTURE /* f5-21b: fixture[] is an allowlisted basename */ };
 /* f2-33 tasks scenario: Tasks pings with this serial once the PID it ended
  * has left the kernel process list (runtime test mode only). */
 #define DESK_TASKS_CHECKPOINT 0xf2330007u
-struct gate_control { volatile uint32_t command, generation; };
+struct gate_control { volatile uint32_t command, generation; char fixture[48]; };
 enum { GATE_SETUP_SIGPIPE=1, GATE_SETUP_DISPLAY, GATE_SETUP_GEOMETRY,
     GATE_SETUP_MEMORY, GATE_SETUP_PORTRAIT, GATE_SETUP_OUTPUT,
     GATE_SETUP_INPUT, GATE_SETUP_CONTROL, GATE_SETUP_SURVIVOR };

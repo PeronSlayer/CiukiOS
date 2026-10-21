@@ -3,6 +3,61 @@
 Research date: 2026-10-21. Host evidence only. Exact commands, outputs and
 remaining execution limits are in `build/codex/f5-15a2-report.md`.
 
+## Amendment 3 research and integration
+
+The lead's new `infchain.exe` record ends with `TERMINATE 22`, after file
+copy and registry requests complete without ENOSYS. The authored caller
+assigns 22 only when its post-install INI lookup fails. Its three section
+flags were `0x10, 4, 1`; the pinned Wine 10.0
+[SetupAPI header](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/include/setupapi.h)
+defines `SPINST_INIFILES=2` and `SPINST_LOGCONFIG=1`. The
+[installation engine](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/setupapi/install.c)
+tests `SPINST_INIFILES` before applying `UpdateInis`. Correct the authored
+caller to use 2, retaining the callback/context fix and all INF, registry,
+file and INI expectations. Only `infchain.exe`'s expected artifact identity
+changes, from `d7c5ecc7…` to `9990e3b4…`. This explains the observed exit
+code; successful reused-PE execution still requires the lead's rerun.
+
+For the absent shortcuts, the pinned NSIS 2.51 `exehead/exec.c:1040–1066`
+calls `CoCreateInstance` before `IShellLink`/`IPersistFile::Save`, as its
+[CreateShortCut documentation](https://nsis.sourceforge.io/Reference/CreateShortCut)
+describes. Pinned Wine 10.0 `combase/apartment.c:131` loads that class server
+using `LoadLibraryExW(..., LOAD_WITH_ALTERED_SEARCH_PATH)`. CiukiOS's
+`kernel32/modules.c` rejected flag 8, so this COM activation could never
+reach the CiukiOS link writer. The production facade and loader now accept
+that flag. For a path, import lookup substitutes the top DLL's folder for
+the executable's folder; the context is restored before initialization and
+after a failed load. Basename loads use ordinary search. Protected builtins
+retain precedence. This follows Microsoft's
+[LoadLibraryEx contract](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexa)
+and [alternate search order](https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-search-order),
+including restoration before DLL initialization. It does not enable the
+modern `LOAD_LIBRARY_SEARCH_*` flags or NT security policy.
+The complete shortcut flow remains unqualified in this sandbox; this is a
+source-proven rejection on the actual COM path, not a captured successful
+NSIS run. The manifest and `.nsi` script are unchanged.
+
+All ten merge-conflicted files retain both the installer work and the newer
+main registrations/observers. The installer uses `GATE_W32_FIXTURE` with the
+allowlisted `ciuki-installer-fixture` name; there is no private installer
+gate command. Its native coordinator publishes a checkpoint page at
+`0x100f0000`, mapped into the desktop by the selected kernel probe with
+`ua_map_at`, which refuses overlap. This is deliberately outside native
+`mmap`'s `0x20000000` arena without changing that ABI. The unmodified NSIS
+engine does not own this page. The authenticated kernel hook compares the
+copied checkpoint fields with the report, then reads file/link/journal facts
+independently and retains the production read-only w32srv checks. Desktop
+teardown releases the mapping. The new address differs from the core and
+restart result pages. Single registration and removal from both pending
+lists are verified by the existing table checks.
+
+The desktop gate harness explicitly refuses installer VFS operations: its
+native spawn replay does not mount an installer filesystem. The installer
+suite continues to compile the actual kernel observer with its fixture-tree
+VFS transport. Native controller-page and shared-gate tests exercise the
+coordinator protocol separately from PE execution evidence. Leak detection
+settings and the i386 confinement preflight are preserved.
+
 Primary references checked before implementation:
 
 - [NSIS compiler and installer command line](https://nsis.sourceforge.io/Docs/Chapter3.html):

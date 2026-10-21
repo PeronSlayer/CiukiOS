@@ -5,6 +5,12 @@
 #ifndef CIUKI_INSTALLER_CONTROLLER_H
 #define CIUKI_INSTALLER_CONTROLLER_H
 #include <stdint.h>
+#define INSTALLER_FIXTURE_NAME "ciuki-installer-fixture"
+#define INSTALLER_RESULT_VA 0x100f0000u
+#define INSTALLER_CHECKPOINT_MAGIC 0x49353146u
+struct installer_checkpoint {
+    uint32_t magic,stage,child,exit_code,registry_errors,ui_keys;
+};
 #define INSTALLER_PATH "/System/Win32/Fixtures/ciuki-installer-fixture.exe"
 #define INSTALLER_DIR "C:\\Program Files\\Ciuki Installer Fixture"
 #define INSTALLER_UNINSTALL "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture"

@@ -13,4 +13,8 @@ void rt_push(const struct ciuki_message *);
 int rt_close(int);
 int rt_unmap(void *, size_t);
 void rt_client_tests(void);
+extern unsigned rt_renders, rt_compared_rows;
+extern int rt_render_dirty;
+/* Declared after deskui.h by users that need the recorded rectangle. */
+extern struct du_rect rt_render_bounds;
 #endif
