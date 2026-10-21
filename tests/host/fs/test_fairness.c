@@ -193,12 +193,23 @@ static void fair_replay(const char *name) {
                 CHECK(blk_request_wait(request)==-FS_EAGAIN && !blk_request_release(request));
             }
         }
-        size_t done; CHECK(!vfs_write(&t->copy,t->out,data,1024*1024,&done) && done==1024*1024);
+        size_t done;
+        if (f->old) {
+            /* Preserve BOTH sides of the old whole-operation negative
+             * control after f1-89 moves public writes to transactions. */
+            vfs_lock(&t->vfs,1u<<2);
+            struct vfs_description *d=t->copy.handles[t->out];
+            CHECK(!VFS_IO(&t->vfs,fat_write(d->node->volume,&d->node->entry,d->position,data,1024*1024,&done)));
+            d->position+=done; vfs_unlock(&t->vfs);
+        } else CHECK(!vfs_write(&t->copy,t->out,data,1024*1024,&done));
+        CHECK(done==1024*1024);
         if (f->mixed) {
             pthread_mutex_lock(&source.lock); source.consumed++; pthread_cond_broadcast(&source.changed); pthread_mutex_unlock(&source.lock);
         }
     }
-    CHECK(!vfs_commit(&t->copy,t->out)); uint64_t elapsed=ns(CLOCK_MONOTONIC)-t->start;
+    int commit_error=vfs_commit(&t->copy,t->out);
+    if (commit_error) fprintf(stderr,"variant=%s final commit error=%d\n",name,commit_error);
+    CHECK(!commit_error); uint64_t elapsed=ns(CLOCK_MONOTONIC)-t->start;
     atomic_store(&t->stop,true); CHECK(!pthread_join(r,0) && !pthread_join(w,0));
     uint64_t expected=elapsed/20000000;
     if (f->calls<expected) f->missed+=expected-f->calls;
@@ -229,6 +240,12 @@ static void fair_replay(const char *name) {
     if (f->old) CHECK(f->latency>=100000000);
     else CHECK(f->latency<=20000000 && !f->missed && f->calls>=expected);
     CHECK(throughput>=943718 && throughput<=1153433);
+    /* f1-89 Amendment 1 item 1: the transactional copy keeps the old
+     * path's throughput in the same run (0.1 % timing tolerance; the
+     * 8-KiB-barrier engine was about 5 % lower). */
+    static uint64_t old_throughput;
+    if (f->old) old_throughput=throughput;
+    else if (old_throughput) { CHECK(throughput*1000>=old_throughput*999); old_throughput=0; }
     if (f->sync) vfs_table_destroy(&f->sync_table);
     CHECK(!vfs_close(&t->copy,t->out) && !vfs_close(&t->reader,t->in));
     vfs_table_destroy(&t->copy); vfs_table_destroy(&t->reader); vfs_destroy(&t->vfs);

@@ -7,6 +7,166 @@
 #pragma weak blackbox_checkpoint
 #include "../include/ciuki/fat_native.h"
 bool fat_native_ready(void) { return true; }
+#define FAT_TX_SECTORS CACHE_RESERVE_MAX
+#define FAT_TX_CLUSTERS FAT_TRANSACTION_CLUSTERS
+/* f1-89 Amendment 1 item 3: a transaction is built from ordinary 4 KiB
+ * pages, never from contiguous frames. Every transaction has the head page
+ * below; a mutation adds an entries page, two image pages (16 sectors),
+ * their two base and two snapshot pages and a cluster-claim page (nine
+ * pages in all); a lookup adds read-copy pages only as it reads. */
+struct fat_tx_meta { struct fat_entry original, visible, replacement, unlink_entry; };
+#define FAT_TX_READ_PAGES 4u
+#define FAT_TX_PAGE_SECTORS 8u
+struct fat_transaction {
+    struct fat_transaction *next;
+    struct fat_volume *source, view;
+    struct fat_transaction_guard guard;
+    struct fat_entry entry;
+    struct fat_entry *target;
+    struct fat_entry *replacement_target;
+    struct fat_cursor cursor;
+    struct fat_tx_meta *meta;
+    uint8_t *image_pages[FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS];
+    /* Shared (non-fill) images keep the bytes they were built from (base)
+     * and receive the pinned bytes at reservation (snap): a data
+     * transaction that waited without the turn merges its own nibbles onto
+     * what others published meanwhile (f1-89 Amendment 1 item 4). */
+    uint8_t *base_pages[FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS];
+    uint8_t *snap_pages[FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS];
+    uint16_t based;
+    uint8_t *read_pages[FAT_TX_READ_PAGES];
+    uint32_t *clusters;
+    uint64_t sequence, dependency, durable_group;
+    uint32_t generation, count, allocated;
+    uint64_t sectors[FAT_TX_SECTORS];
+    int error;
+    bool read_only, visible_pending;
+    bool target_initialized;
+    void (*on_visible)(void *,const struct fat_entry *);
+    void *visible_ctx;
+    void (*on_unlinked)(void *,bool);
+    struct fat_entry unlink_entry;
+    enum fat_transaction_op op;
+    bool unlink_pending, unlink_replacement, unlink_notified, rename_notified;
+    /* Read-only lookups: every sector they read, with the bytes they saw
+     * (copies live in images/snapshots, unused by read-only work). A
+     * repeated read sees the same copy. Retirement compares these bytes
+     * with the cache under the guard: unrelated publications (file data,
+     * other directories, other FAT entries) do not restart a reader. */
+    uint32_t read_count;
+    bool read_overflow;
+    /* LOG_WRITE: DATA into owned reserved clusters only (see transaction
+     * run). Independent of every other publication's metadata. */
+    bool data_only;
+    uint64_t read_sectors[FAT_TX_READ_PAGES*FAT_TX_PAGE_SECTORS];
+    /* f1-89 Amendment 1 item 1: a C2 group larger than the 16-sector step
+     * is published in chunks that share one cache group (open_group) and
+     * are made durable once, by the group's real barrier. fill marks data
+     * sectors (new or exclusively owned) that need no read before reserve. */
+    uint64_t open_group, last_published;
+    bool undurable;
+    uint16_t fill;
+    /* f1-89 Amendment 1 item 4: a data operation (its own chain and entry,
+     * claimed clusters) gives the writer turn up while it waits for device
+     * I/O and rebases on resume. free_synced: the view's free count at the
+     * last exchange with the volume; publication adds only the difference. */
+    bool suspendable;
+    uint32_t free_synced, nosuspend;
+};
+_Static_assert(sizeof(struct fat_transaction)<=4096, "transaction head is one page");
+_Static_assert(sizeof(struct fat_tx_meta)<=4096, "transaction entries page");
+_Static_assert(FAT_TX_CLUSTERS*sizeof(uint32_t)<=4096, "cluster claims page");
+static uint8_t *tx_image(struct fat_transaction *t, unsigned i) {
+    return t->image_pages[i/FAT_TX_PAGE_SECTORS]+(size_t)(i%FAT_TX_PAGE_SECTORS)*512;
+}
+static uint8_t *tx_base(struct fat_transaction *t, unsigned i) {
+    return t->base_pages[i/FAT_TX_PAGE_SECTORS]+(size_t)(i%FAT_TX_PAGE_SECTORS)*512;
+}
+static uint8_t *tx_snap(struct fat_transaction *t, unsigned i) {
+    return t->snap_pages[i/FAT_TX_PAGE_SECTORS]+(size_t)(i%FAT_TX_PAGE_SECTORS)*512;
+}
+static uint8_t *read_copy(struct fat_transaction *t, unsigned i) {
+    return t->read_pages[i/FAT_TX_PAGE_SECTORS]+(size_t)(i%FAT_TX_PAGE_SECTORS)*512;
+}
+static void transaction_free(struct fat_transaction *t) {
+    if (!t) return;
+    fs_page_free(t->meta); fs_page_free(t->clusters);
+    for (unsigned i=0;i<FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS;i++) {
+        fs_page_free(t->image_pages[i]); fs_page_free(t->base_pages[i]); fs_page_free(t->snap_pages[i]);
+    }
+    for (unsigned i=0;i<FAT_TX_READ_PAGES;i++) fs_page_free(t->read_pages[i]);
+    fs_page_free(t);
+}
+static struct fat_transaction *transaction_alloc(bool mutation) {
+    struct fat_transaction *t=fs_page_alloc();
+    if (!t || !mutation) return t;
+    t->meta=fs_page_alloc(); t->clusters=fs_page_alloc();
+    for (unsigned i=0;i<FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS;i++) {
+        t->image_pages[i]=fs_page_alloc(); t->base_pages[i]=fs_page_alloc(); t->snap_pages[i]=fs_page_alloc();
+    }
+    bool complete=t->meta && t->clusters;
+    for (unsigned i=0;i<FAT_TX_SECTORS/FAT_TX_PAGE_SECTORS;i++)
+        complete&=t->image_pages[i] && t->base_pages[i] && t->snap_pages[i];
+    if (!complete) { transaction_free(t); return 0; }
+    return t;
+}
+static int transaction_publish(struct fat_volume *, bool durable);
+static bool transaction_suspend(struct fat_transaction *);
+static void transaction_resume(struct fat_transaction *);
+static int transaction_enter(struct fat_transaction *t) {
+    int e=t->guard.enter(t->guard.ctx); if (e) return e;
+    if ((!t->data_only && t->source->mutation_sequence!=t->sequence) ||
+        t->source->dev->media_generation!=t->generation || !t->source->mounted || t->source->dev->quarantined) e=-FS_EAGAIN;
+    if (!e && t->source->readonly && !t->read_only) e=-FS_EROFS;
+    if (e) t->guard.leave(t->guard.ctx);
+    return e;
+}
+static int transaction_enter_wait(struct fat_transaction *t) {
+    int e;
+    while ((e=transaction_enter(t))==-FS_EBUSY) {
+        if ((e=fs_request_check())) break;
+        if (t->guard.wait) { if ((e=t->guard.wait(t->guard.ctx))) break; }
+        else fs_service();
+    }
+    return e;
+}
+/* The transaction list and in-flight sets are only walked or changed under
+ * the namespace turn (claim, publication guard or retirement) or by a legacy
+ * caller retaining the old mutation guard, which claim excludes. */
+static bool cluster_reserved(struct fat_volume *v, uint32_t c) {
+    struct fat_transaction *self=v->transaction;
+    struct fat_volume *source=self ? self->source : v;
+    for (struct fat_transaction *t=source->transactions;t;t=t->next)
+        if (t!=self) for (unsigned i=0;i<t->allocated;i++) if (t->clusters[i]==c) return true;
+    return false;
+}
+static int transaction_claim(struct fat_transaction *t) {
+    if (!t->guard.claim) return transaction_enter_wait(t);
+    int e;
+    while ((e=t->guard.claim(t->guard.ctx))==-FS_EBUSY) {
+        if ((e=fs_request_check())) break;
+        if (t->guard.wait) { if ((e=t->guard.wait(t->guard.ctx))) break; }
+        else fs_service();
+    }
+    return e;
+}
+static void transaction_unclaim(struct fat_transaction *t) {
+    if (t->guard.claim) t->guard.unclaim(t->guard.ctx); else t->guard.leave(t->guard.ctx);
+}
+static int transaction_cluster(struct fat_volume *v, uint32_t c) {
+    struct fat_transaction *t=v->transaction;
+    if (!t) return cluster_reserved(v,c) ? -FS_EBUSY : 0;
+    int e=transaction_claim(t); if (e) return e;
+    if (cluster_reserved(v,c)) e=-FS_EBUSY;
+    else {
+        unsigned i=0; while (i<t->allocated && t->clusters[i]!=c) i++;
+        if (i==t->allocated) {
+            if (i==FAT_TX_CLUSTERS) e=-FS_ENOSPC;
+            else t->clusters[t->allocated++]=c;
+        }
+    }
+    transaction_unclaim(t); return e;
+}
 static uint32_t mask(struct fat_volume *v) { return v->type==12 ? 0xfff : v->type==16 ? 0xffff : 0xfffffff; }
 static uint32_t cleanbit(struct fat_volume *v) { return v->type==16 ? 0x8000 : v->type==32 ? 0x8000000 : 0; }
 static uint32_t errorbit(struct fat_volume *v) { return cleanbit(v)>>1; }
@@ -86,8 +246,47 @@ static int window_sector(struct fat_volume *v, uint64_t s, const uint8_t **out)
     *out=p->data[slot]+(size_t)(s-p->start[slot])*512;
     return 0;
 }
+static int readsec_device(struct fat_volume *, uint64_t, void *);
 static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     int interrupted=fs_request_check(); if (interrupted) return interrupted;
+    struct fat_transaction *t=v->transaction;
+    if (t && t->read_only) {
+        for (unsigned i=0;i<t->read_count;i++)
+            if (t->read_sectors[i]==s) { memcpy(b,read_copy(t,i),512); return 0; }
+        int e=readsec_device(v,s,b);
+        if (!e) {
+            unsigned page=t->read_count/FAT_TX_PAGE_SECTORS;
+            if (t->read_count<FAT_TX_READ_PAGES*FAT_TX_PAGE_SECTORS && !t->read_pages[page]) t->read_pages[page]=fs_page_alloc();
+            if (t->read_count<FAT_TX_READ_PAGES*FAT_TX_PAGE_SECTORS && t->read_pages[page]) {
+                t->read_sectors[t->read_count]=s; memcpy(read_copy(t,t->read_count++),b,512);
+            } else t->read_overflow=true; /* validated by the sequence only */
+        }
+        return e;
+    }
+    if (t) for (unsigned i=0;i<t->count;i++)
+        if (t->sectors[i]==s) { memcpy(b,tx_image(t,i),512); return 0; }
+    /* A cold read gives the writer turn up (item 4) when every buffered
+     * image is owned data (fill): no shared sector image can go stale. */
+    if (t && t->suspendable && !t->nosuspend && t->fill==(uint16_t)((1u<<t->count)-1u) &&
+        cache_peek(v->cache,v->dev,v->start+s,b) && transaction_suspend(t)) {
+        /* The read made without the turn only warms the cache: another
+         * writer may publish this sector before we resume, so the bytes we
+         * use are read again under the turn (normally a cache hit). */
+        int e=readsec_device(v,s,b);
+        transaction_resume(t);
+        if (!e) e=t->error;
+        if (!e) e=readsec_device(v,s,b);
+        return e;
+    }
+    return readsec_device(v,s,b);
+}
+static int readsec_device(struct fat_volume *v, uint64_t s, void *b) {
+    if (v->cache_only) {
+        if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
+        if (!cache_peek(v->cache,v->dev,v->start+s,b)) return 0;
+        if (v->cache_miss==UINT64_MAX) v->cache_miss=s;
+        return -FS_EAGAIN;
+    }
     /* Four 64 KiB cached runs * 128 us bulk <=512 us. Batching also
      * keeps a 1 us cached FAT decode below 10% checkpoint overhead. */
     static unsigned work;
@@ -119,6 +318,7 @@ static int readsec(struct fat_volume *v, uint64_t s, void *b) {
     return e ? (e==-FS_EQUARANTINED ? -FS_EIO : e) : 0;
 }
 static int write_error(struct fat_volume *v, int e) {
+    if (v->transaction && (e==-FS_EAGAIN || e==-FS_ENOSPC || e==-VFS_ECANCELLED || e==-VFS_ETIMEOUT)) return e;
     if (e) {
         v->ro_reasons|=FAT_RO_WRITE_ERROR; fat_revoke_write(v,"write_error",0);
         const struct vfs_request *r=fs_request_current();
@@ -154,9 +354,35 @@ static int publication_begin(struct fat_volume *v) {
 }
 static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     int interrupted=fs_request_check(); if (interrupted) return write_error(v,interrupted);
+    if (v->transaction) {
+        struct fat_transaction *t=v->transaction;
+        if (t->error) return t->error;
+        if (s>=v->sectors) return -FS_EIO;
+        unsigned i=0; while (i<t->count && t->sectors[i]!=s) i++;
+        unsigned limit=2*v->cache->dirty_budget/512;
+        if (limit>FAT_TX_SECTORS) limit=FAT_TX_SECTORS;
+        if (i==limit) {
+            /* Not a C2 boundary: publish the chunk, no durability wait. */
+            int e=transaction_publish(v,false); if (e) return e; i=0;
+        }
+        bool fill=v->publication_stage==FAT_P_DATA && s>=v->data_sector;
+        if (i==t->count) {
+            t->sectors[t->count++]=s;
+            if (fill) t->fill|=(uint16_t)(1u<<i); else t->fill&=(uint16_t)~(1u<<i);
+            /* The resident bytes this image was built from: the caller read
+             * them under the turn, and we have not published over them. */
+            if (!cache_peek(v->cache,v->dev,v->start+s,tx_base(t,i))) t->based|=(uint16_t)(1u<<i);
+            else t->based&=(uint16_t)~(1u<<i);
+        } else if (!fill) t->fill&=(uint16_t)~(1u<<i);
+        memcpy(tx_image(t,i),b,512); v->publication_pending=true;
+        /* The block queue applies its measured-service command cap. At most
+         * 8 KiB of cached images are published in one short CPU-only turn. */
+        return 0;
+    }
     static unsigned work;
     if (!(__atomic_add_fetch(&work,1,__ATOMIC_RELAXED) & 3u)) fs_service();
     if (s>=v->sectors) return corrupt(v,"sector_bounds",0);
+    if (v->mutation_sequence==UINT64_MAX) return write_error(v,-FS_EIO);
     int e=publication_begin(v); if (e) return e;
     if (v->prepare_cache) for (unsigned i=0;i<3;i++)
         if (s>=v->prepare_cache->start[i] && s-v->prepare_cache->start[i]<v->prepare_cache->count[i])
@@ -164,10 +390,12 @@ static int writesec(struct fat_volume *v, uint64_t s, const void *b) {
     e=(v->preparing || v->dev->logical) ?
         blkdev_request(v->dev,BLK_WRITE,v->start+s,1,(void *)b,BLK_BACKGROUND,v->publication_frontier) :
         cache_write(v->cache,v->dev,v->start+s,b);
+    if (!e) v->mutation_sequence++;
     if (e && v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'E',e);
     return write_error(v,e);
 }
 static int barrier(struct fat_volume *v) {
+    if (v->transaction) return transaction_publish(v,true);
     int e=fs_request_check();
     if (e) { v->completion.error=e; v->completion.incomplete=true; }
     else if (!v->preparing && !v->dev->logical) e=cache_barrier_record(v->cache,v->dev,&v->completion);
@@ -186,6 +414,22 @@ static int barrier(struct fat_volume *v) {
 }
 static void identity_changed(struct fat_volume *v, const struct fat_entry *before,
                              const struct fat_entry *after, enum fat_identity_change why) {
+    if (v->transaction) {
+        struct fat_transaction *t=v->transaction;
+        if (why==FAT_ID_UNLINK && t->unlink_notified) { t->unlink_notified=false; return; }
+        if (why==FAT_ID_RENAME && t->rename_notified) { t->rename_notified=false; return; }
+        int e=transaction_enter_wait(t);
+        if (e) { t->error=e; return; }
+        if (t->source->identity_changed) t->source->identity_changed(t->source->identity_ctx,t->source,before,after,why);
+        if (why==FAT_ID_UNLINK) {
+            bool replacement=before==&t->meta->replacement;
+            struct fat_entry *target=replacement ? t->replacement_target : t->target;
+            if (target) target->index=UINT32_MAX;
+            if (!replacement) t->meta->original.index=UINT32_MAX;
+            if (t->on_unlinked) t->on_unlinked(t->visible_ctx,replacement);
+        }
+        t->guard.leave(t->guard.ctx); return;
+    }
     if (v->identity_changed) v->identity_changed(v->identity_ctx,v,before,after,why);
 }
 static uint32_t offset(struct fat_volume *v, uint32_t c) { return v->type==12 ? c+c/2 : c*(v->type/8); }
@@ -194,7 +438,12 @@ static int fat_bytes(struct fat_volume *v, unsigned copy, uint32_t off, uint8_t 
     while (n) {
         uint32_t s=v->reserved+copy*v->fat_sectors+off/512;
         unsigned take=512-off%512; if (take>n) take=n;
-        int e=readsec(v,s,b); if (e) return e;
+        /* A write stores bytes computed from an earlier read (a FAT12 pair
+         * shares a nibble with its neighbour): no turn suspension between. */
+        if (wr && v->transaction) v->transaction->nosuspend++;
+        int e=readsec(v,s,b);
+        if (wr && v->transaction) v->transaction->nosuspend--;
+        if (e) return e;
         if (wr) { memcpy(b+off%512,p,take); if ((e=writesec(v,s,b))) return e; }
         else memcpy(p,b+off%512,take);
         off+=take; p+=take; n-=take;
@@ -276,7 +525,13 @@ static int chain_at(struct fat_volume *v, uint32_t first, uint32_t index, uint32
  * serializes every lookup and FAT mutation of this volume; a remount starts
  * again from zero, but every description and identity of the former mount
  * already fails with EIO before it could follow a cursor. */
-static uint64_t chain_stamp(struct fat_volume *v) { return ++v->chain_stamp; }
+static uint64_t chain_stamp(struct fat_volume *v) {
+    /* f1-89: unique and monotonic without a guard. Lookups decode entries
+     * outside the publication guard; one guard step per decoded entry was
+     * both a reader restart source and a hold per directory slot. */
+    struct fat_volume *source=v->transaction ? v->transaction->source : v;
+    return __atomic_add_fetch(&source->chain_stamp,1,__ATOMIC_RELAXED);
+}
 static bool cursor_valid(struct fat_volume *v, const struct fat_entry *file, const struct fat_cursor *c) {
     return c && c->first && c->first==file->first && c->generation==file->chain_generation &&
         c->index<v->clusters && valid(v,c->cluster) && (c->index || c->cluster==c->first);
@@ -413,6 +668,7 @@ static int update(struct fat_volume *v, const struct fat_entry *e) {
     if (e->index==UINT32_MAX && !(e->attr&FAT_ATTR_DIR)) return 0; /* open-unlinked */
     uint8_t b[32]; int err=dir_read(v,e->parent,e->index,b); if (err) return write_error(v,err);
     encode_entry(v,b,e); if ((err=dir_write(v,e->parent,e->index,b))) return err;
+    if (v->transaction) { v->transaction->meta->visible=*e; v->transaction->visible_pending=true; }
     return barrier(v);
 }
 static int hints(struct fat_volume *v) {
@@ -445,6 +701,14 @@ static int allocate(struct fat_volume *v, uint32_t n, bool directory, uint32_t *
         if (!valid(v,c)) c=2;
         uint32_t val; int e=fat_get_cluster(v,c,&val); if (e) return write_error(v,e);
         if (!val && !(directory && split12(v,c))) {
+            if (v->transaction && v->transaction->allocated==FAT_TX_CLUSTERS) {
+                /* allocate() consumes each claim immediately. Once this
+                 * detached prefix is durable the FAT itself excludes reuse;
+                 * release its in-memory claims before the next bounded set. */
+                if ((e=barrier(v))) return e;
+                v->transaction->allocated=0;
+            }
+            e=transaction_cluster(v,c); if (e==-FS_EBUSY) { c++; continue; } if (e) return e;
             if ((e=set_cluster(v,c,mask(v)))) return e;
             if (tail && (e=set_cluster(v,tail,c))) return e;
             if (!*first) *first=c;
@@ -573,6 +837,10 @@ static int publish(struct fat_volume *v, struct fat_entry *e, const uint16_t *u,
     }
     int err=barrier(v); if (err) return err;
     memset(b,0,sizeof(b)); memcpy(b,alias,11); encode_entry(v,b,e);
+    if (v->transaction) {
+        alias_decode(b,e->alias); path_from_ucs2(u,n,e->name,sizeof(e->name));
+        v->transaction->meta->visible=*e; v->transaction->visible_pending=true;
+    }
     if ((err=dir_write(v,e->parent,e->index,b))) return err;
     if ((err=barrier(v))) return err;
     alias_decode(b,e->alias); path_from_ucs2(u,n,e->name,sizeof(e->name)); return 0;
@@ -580,6 +848,10 @@ static int publish(struct fat_volume *v, struct fat_entry *e, const uint16_t *u,
 static int unlink_entry(struct fat_volume *v, const struct fat_entry *e) {
     int stage_error=publication_stage(v,FAT_P_DELETE); if (stage_error) return stage_error;
     uint8_t b[32]; int err=dir_read(v,e->parent,e->index,b); if (err) return err;
+    if (v->transaction) {
+        v->transaction->meta->unlink_entry=*e; v->transaction->unlink_pending=true;
+        v->transaction->unlink_replacement=e==&v->transaction->meta->replacement;
+    }
     b[0]=0xe5; if ((err=dir_write(v,e->parent,e->index,b)) || (err=barrier(v))) return err;
     identity_changed(v,e,0,FAT_ID_UNLINK);
     for (unsigned i=0;i<e->lfn_count;i++) {
@@ -766,7 +1038,11 @@ static int write_free(struct fat_volume *v, uint32_t *cursor, uint32_t *scanned,
         if (!valid(v,c)) c=2;
         *cursor=c+1; (*scanned)++;
         uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
-        if (!n && !split12(v,c)) { *out=c; return 0; }
+        if (!n && !split12(v,c)) {
+            e=transaction_cluster(v,c); if (e==-FS_EBUSY) continue;
+            if (e) return e;
+            *out=c; return 0;
+        }
     }
     return -FS_ENOSPC;
 }
@@ -847,8 +1123,13 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
     if (extra>v->free_clusters) return -FS_ENOSPC;
     if (extra && tail && split12(v,tail)) return -FS_EOPNOTSUPP;
     uint32_t free_cursor=v->next_free, scanned=0, c=0;
+    uint32_t selected[FAT_TX_CLUSTERS];
+    if (v->transaction && extra>FAT_TX_CLUSTERS) return -FS_ENOSPC;
     /* Preflight ENOSPC, including excluded FAT12 split entries, before data. */
-    for (uint32_t i=0;i<extra;i++) if ((e=write_free(v,&free_cursor,&scanned,&c))) return e;
+    for (uint32_t i=0;i<extra;i++) {
+        if ((e=write_free(v,&free_cursor,&scanned,&c))) return e;
+        if (v->transaction) selected[i]=c;
+    }
     uint64_t begin=pos<file->size ? pos : file->size;
     uint32_t index=(uint32_t)(begin/cb), last=0, last_index=0;
     if (initialize && index<count) {
@@ -867,7 +1148,8 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
     }
     free_cursor=v->next_free; scanned=0;
     for (uint32_t i=0;initialize && i<extra;i++) {
-        if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
+        if (v->transaction) c=selected[i];
+        else if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
         uint64_t base=(uint64_t)(count+i)*cb;
         uint64_t stop=base+cb; if (stop>end) stop=end;
         /* Slack beyond EOF is not visible. A later extension initializes it
@@ -880,7 +1162,8 @@ static int write_span(struct fat_volume *v, struct fat_entry *file, struct fat_c
     uint32_t first=0, previous=0;
     free_cursor=v->next_free; scanned=0;
     for (uint32_t i=0;i<extra;i++) {
-        if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
+        if (v->transaction) { c=selected[i]; free_cursor=c+1; }
+        else if ((e=write_free(v,&free_cursor,&scanned,&c))) return write_error(v,e);
         if ((e=set_cluster(v,c,mask(v)))) return e;
         if (previous && (e=set_cluster(v,previous,c))) return e;
         if (!first) first=c;
@@ -1039,8 +1322,9 @@ int fat_rename(struct fat_volume *v, struct fat_entry *file, uint32_t parent, co
     *file=dest; return hints(v);
 }
 /* Native replacement reserves alias and destination capacity before either
- * name disappears. The single VFS lock hides intermediate successful states.
- * On I/O failure the F1 write revocation/lost-chain policy still applies. */
+ * name disappears. Transaction callers pin both namespace identities across
+ * the durable tombstone/new-owner steps. On failure mount recovery reclaims
+ * detached chains; no intermediate step creates two owners. */
 int fat_rename_replace(struct fat_volume *v, struct fat_entry *file,
                        struct fat_entry *replacement, uint32_t parent,
                        const char *name, bool retain_replacement) {
@@ -1604,4 +1888,337 @@ int fat_unmount(struct fat_volume *v) {
         if ((e=set_clean(v,true))) return e;
     }
     v->mounted=false; return 0;
+}
+
+/* Reserved publication is the only transaction path into the shared cache.
+ * In particular, neither cache_group_begin nor cache_write runs under the
+ * caller's short namespace turn. Each completed image remains pinned until
+ * its durable barrier, including repeated versions of one FAT sector. */
+/* Namespace held (from resume). Other writers may have published while this
+ * transaction waited: adopt their sequence and counters, keep our pending
+ * free-count change. Our next step reads every shared sector afresh. */
+static void transaction_rebase(struct fat_transaction *t) {
+    struct fat_volume *v=&t->view;
+    int64_t pending=(int64_t)v->free_clusters-(int64_t)t->free_synced;
+    t->sequence=t->source->mutation_sequence;
+    v->free_clusters=(uint32_t)((int64_t)t->source->free_clusters+pending);
+    t->free_synced=t->source->free_clusters;
+    /* next_free stays ours: a hint our own allocations advanced; the
+     * allocator re-checks the FAT and the in-flight claims anyway. */
+    /* Our target can only change behind our identity claim through a
+     * legacy (unclaimed) caller: stop before publishing anything more. */
+    if (t->target_initialized && t->target && t->meta) {
+        const struct fat_entry *old=&t->meta->original, *now=t->target;
+        if (now->parent!=old->parent || now->index!=old->index || now->first!=old->first ||
+            now->size!=old->size || now->chain_generation!=old->chain_generation) t->error=-FS_EAGAIN;
+    }
+}
+static bool transaction_suspend(struct fat_transaction *t) {
+    if (!t->suspendable || !t->guard.suspend || !t->guard.resume) return false;
+    t->guard.suspend(t->guard.ctx); return true;
+}
+static void transaction_resume(struct fat_transaction *t) {
+    t->guard.resume(t->guard.ctx); transaction_rebase(t); t->guard.leave(t->guard.ctx);
+}
+static bool transaction_try_resume(struct fat_transaction *t) {
+    if (!t->guard.try_resume(t->guard.ctx)) return false;
+    transaction_rebase(t); t->guard.leave(t->guard.ctx); return true;
+}
+/* Pinned bytes (snap) may include other writers' entries published while
+ * this transaction waited without the turn. Keep every nibble we changed
+ * relative to base (our own entries and claimed clusters only), take the
+ * rest from snap. The FAT32 FSInfo hints are regenerated from the rebased
+ * view. Fill (owned data) sectors are exclusive and need no merge. */
+static void transaction_merge(struct fat_volume *v) {
+    struct fat_transaction *t=v->transaction;
+    for (unsigned i=0;i<t->count;i++) if (!(t->fill&(1u<<i))) {
+        uint8_t *img=tx_image(t,i), *base=tx_base(t,i); const uint8_t *cur=tx_snap(t,i);
+        for (unsigned k=0;k<512;k++) {
+            uint8_t m=img[k]^base[k];
+            uint8_t ours=(uint8_t)((m&0xf0 ? 0xf0 : 0)|(m&0x0f ? 0x0f : 0));
+            img[k]=(uint8_t)((img[k]&ours)|(cur[k]&(uint8_t)~ours));
+        }
+        memcpy(base,cur,512);
+        if (v->type==32 && t->sectors[i]==v->fsinfo) { fs_wr32(img+488,v->free_clusters); fs_wr32(img+492,v->next_free); }
+    }
+}
+static int transaction_durable(struct fat_volume *v) {
+    struct fat_transaction *t=v->transaction;
+    int e=cache_barrier_record(v->cache,v->dev,&v->completion);
+    if (!e) {
+        t->dependency=t->last_published; t->durable_group=v->publication_group;
+        t->undurable=false; t->open_group=0;
+    } else {
+        /* Cancellation after publication can have uncertain durable
+         * metadata. Retain the old write gate until mount recovery. */
+        v->ro_reasons|=FAT_RO_WRITE_ERROR;
+        fat_revoke_write(v,"transaction_durability",0);
+    }
+    if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,e ? 'E' : 'B',e);
+    return e;
+}
+/* durable: a real barrier() (a C2 boundary) publishes what is buffered,
+ * then waits for durability outside the guard. !durable: the 16-sector
+ * overflow inside one C2 group publishes only, in the group's open cache
+ * group, so write-back merges the group again. */
+static int transaction_publish(struct fat_volume *v, bool durable) {
+    struct fat_transaction *t=v->transaction;
+    if (t->error) return t->error;
+    if (!t->count) {
+        if (!durable || !t->undurable) return 0;
+        bool suspended=transaction_suspend(t);
+        int e=transaction_durable(v);
+        if (suspended) transaction_resume(t);
+        if (!e) v->publication_pending=false;
+        return write_error(v,e);
+    }
+    struct cache_reserve_sector set[FAT_TX_SECTORS];
+    struct cache_image images[FAT_TX_SECTORS];
+    /* A data transaction whose every shared image has its base waits for
+     * slots, credits, readers or another writer's barrier without the turn,
+     * then merges its own nibbles onto what is pinned (f1-89 A1 item 4).
+     * merging: all bases valid, so every pinned snapshot is merged (a no-op
+     * when nothing changed). suspending: the turn may be given up. */
+    uint16_t all=(uint16_t)((1u<<t->count)-1u);
+    bool merging=(uint16_t)(t->based|t->fill)==all;
+    bool suspending=merging && t->suspendable && t->guard.suspend && t->guard.resume && t->guard.try_resume;
+    unsigned contended=0; /* resume attempts lost to another writer */
+    for (unsigned i=0;i<t->count;i++) {
+        bool fill=(t->fill&(1u<<i))!=0;
+        set[i]=(struct cache_reserve_sector){v->start+t->sectors[i],merging && !fill ? tx_snap(t,i) : 0,fill ? tx_image(t,i) : 0};
+        images[i]=(struct cache_image){i,tx_image(t,i)};
+    }
+retry:
+    ; struct cache_reservation reservation;
+    if (suspending) transaction_suspend(t);
+    int e=cache_reserve(v->cache,v->dev,set,t->count,&reservation);
+    if (suspending) {
+        /* Never wait for the turn while holding pins (the holder may need
+         * them): give the reservation up, wait holding nothing, retry. After
+         * a few losses reserve under the turn; pin holders never wait for it. */
+        if (!e && !transaction_try_resume(t)) {
+            cache_release(&reservation); transaction_resume(t);
+            if (t->error) return t->error;
+            if (++contended>=4) suspending=false;
+            goto retry;
+        }
+        if (e) transaction_resume(t);
+    }
+    if (!e && t->error) { cache_release(&reservation); return t->error; }
+    if (e) return e;
+    if (merging) transaction_merge(v);
+    reservation.group_hint=t->open_group;
+    for (;;) {
+        e=transaction_enter(t);
+        if (e==-FS_EBUSY) {
+            cache_release(&reservation);
+            if ((e=fs_request_check())) return e;
+            if (suspending) transaction_suspend(t);
+            if (t->guard.wait) e=t->guard.wait(t->guard.ctx);
+            else fs_service();
+            if (suspending) transaction_resume(t);
+            if (e) return e;
+            if (t->error) return t->error;
+            goto retry;
+        }
+        if (e) break;
+        if (t->source->mutation_sequence==UINT64_MAX || t->source->publication_count==UINT64_MAX ||
+            (t->source->publication_count && t->source->publication_generation!=t->generation)) {
+            t->guard.leave(t->guard.ctx); e=-FS_EIO; break;
+        }
+        if (t->visible_pending && t->target_initialized && t->target) {
+            const struct fat_entry *old=&t->meta->original, *now=t->target;
+            if (now->parent!=old->parent || now->index!=old->index || now->first!=old->first ||
+                now->size!=old->size || now->chain_generation!=old->chain_generation) {
+                t->guard.leave(t->guard.ctx); e=-FS_EAGAIN; break;
+            }
+        }
+        e=cache_publish(&reservation,images,t->count,t->dependency);
+        if (!e && t->data_only) {
+            /* Owned DATA sectors only: no metadata changed, so neither the
+             * sequence nor the (possibly stale) view counters are published. */
+            v->publication_group=++t->source->publication_count;
+            v->publication_frontier=reservation.group;
+            t->source->publication_frontier=reservation.group;
+            t->source->publication_generation=t->generation;
+            if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'G',0);
+        } else if (!e) {
+            t->sequence=++t->source->mutation_sequence;
+            /* Publish only this transaction's own change of the free count. */
+            int64_t delta=(int64_t)v->free_clusters-(int64_t)t->free_synced;
+            t->source->free_clusters=(uint32_t)((int64_t)t->source->free_clusters+delta);
+            v->free_clusters=t->source->free_clusters; t->free_synced=v->free_clusters;
+            t->source->next_free=v->next_free;
+            v->publication_group=++t->source->publication_count;
+            v->publication_frontier=reservation.group;
+            t->source->publication_frontier=reservation.group;
+            t->source->publication_generation=t->generation;
+            if (t->visible_pending && t->target) {
+                *t->target=t->meta->visible; t->meta->original=t->meta->visible; t->target_initialized=true;
+                if ((t->op==FAT_TX_RENAME || t->op==FAT_TX_RENAME_REPLACE) && t->source->identity_changed) {
+                    t->source->identity_changed(t->source->identity_ctx,t->source,&t->entry,&t->meta->visible,FAT_ID_RENAME);
+                    t->rename_notified=true;
+                }
+                if (t->on_visible) t->on_visible(t->visible_ctx,&t->meta->visible);
+                t->visible_pending=false;
+            }
+            if (t->unlink_pending) {
+                bool replacement=t->unlink_replacement;
+                struct fat_entry *target=replacement ? t->replacement_target : t->target;
+                if (target) target->index=UINT32_MAX;
+                if (!replacement) t->meta->original.index=UINT32_MAX;
+                if (t->source->identity_changed) t->source->identity_changed(t->source->identity_ctx,t->source,&t->meta->unlink_entry,0,FAT_ID_UNLINK);
+                if (t->on_unlinked) t->on_unlinked(t->visible_ctx,replacement);
+                t->unlink_pending=false; t->unlink_notified=true;
+            }
+            if (v->publication_observer) v->publication_observer(v->publication_ctx,v->publication_group,v->publication_stage,'G',0);
+        }
+        t->guard.leave(t->guard.ctx);
+        if (e!=-FS_EAGAIN) break;
+        /* Our slots are pinned: their bytes cannot change while we wait. */
+        if (suspending) transaction_suspend(t);
+        e=cache_reservation_wait(&reservation);
+        if (suspending && !transaction_try_resume(t)) {
+            cache_release(&reservation); transaction_resume(t);
+            if (!e) e=t->error;
+            if (e) return write_error(v,e);
+            if (++contended>=4) suspending=false;
+            goto retry;
+        }
+        if (!e && t->error) e=t->error;
+        if (e) break;
+        if (merging) transaction_merge(v); /* FSInfo hints after a rebase */
+    }
+    bool suspended=false;
+    if (!e) {
+        t->open_group=reservation.group; t->last_published=reservation.published; t->undurable=true;
+        /* The durability wait runs without the writer turn (item 4); our
+         * pins are released before the turn is taken back. */
+        if (durable) { suspended=transaction_suspend(t); e=transaction_durable(v); }
+    }
+    cache_release(&reservation);
+    if (suspended) transaction_resume(t);
+    if (!e) { t->count=0; t->fill=0; t->based=0; if (durable) v->publication_pending=false; }
+    return write_error(v,e);
+}
+static int lookup_dependency(struct fat_volume *v, const struct fat_transaction_args *a) {
+    if (!a->depend || a->depend_index==UINT32_MAX) return 0;
+    uint8_t b[32]; int e=dir_read(v,a->depend_parent,a->depend_index,b); if (e) return e;
+    uint32_t first=fs_rd16(b+26); if (v->type==32) first|=(uint32_t)fs_rd16(b+20)<<16;
+    if (!b[0] || b[0]==0xe5 || b[11]==15 || !(b[11]&FAT_ATTR_DIR) || first!=a->directory) return -FS_EAGAIN;
+    return 0;
+}
+/* Under the retirement guard no publication can run: a lookup whose every
+ * read still matches the resident bytes is equivalent to one performed now.
+ * A sector no longer resident cannot be compared and counts as changed. */
+static bool reads_current(struct fat_transaction *t) {
+    if (t->read_overflow) return false;
+    uint8_t now[512];
+    for (unsigned i=0;i<t->read_count;i++) {
+        if (cache_peek(t->source->cache,t->source->dev,t->source->start+t->read_sectors[i],now)) return false;
+        if (memcmp(now,read_copy(t,i),512)) return false;
+    }
+    return true;
+}
+int fat_lookup_cached(struct fat_volume *v, uint32_t dir, const char *name, uint32_t *cursor,
+                      struct fat_entry *e, uint64_t *miss) {
+    uint32_t start=cursor ? *cursor : 0;
+    v->cache_only=true; v->cache_miss=UINT64_MAX;
+    int r=name ? fat_lookup(v,dir,name,e) : fat_next(v,dir,cursor,e);
+    v->cache_only=false; *miss=v->cache_miss;
+    if (*miss==UINT64_MAX) return r;
+    if (cursor) *cursor=start;
+    return -FS_EAGAIN;
+}
+int fat_transaction_run(struct fat_volume *source, const struct fat_transaction_args *a,
+                         const struct fat_transaction_guard *guard) {
+    if (!source || !a || !guard || !guard->enter || !guard->leave || !guard->retire || source->dev->logical) return -FS_EOPNOTSUPP;
+    bool mutation=a->op!=FAT_TX_LOOKUP && a->op!=FAT_TX_NEXT && a->op!=FAT_TX_COMMIT;
+    struct fat_transaction *t=transaction_alloc(mutation);
+    if (!t) return -FS_ENOMEM;
+    t->source=source; t->guard=*guard;
+    t->op=a->op;
+    int e;
+    while ((e=guard->enter(guard->ctx))==-FS_EBUSY) {
+        if ((e=fs_request_check())) break;
+        if (guard->wait) { if ((e=guard->wait(guard->ctx))) break; }
+        else fs_service();
+    }
+    if (e) { transaction_free(t); return e; }
+    bool lookup=a->op==FAT_TX_LOOKUP || a->op==FAT_TX_NEXT, data_only=a->op==FAT_TX_LOG_WRITE;
+    /* A lookup has read nothing yet: it simply starts from this snapshot. */
+    if (a->op!=FAT_TX_COMMIT && !lookup && !data_only && source->mutation_sequence!=a->sequence) {
+        guard->leave(guard->ctx); transaction_free(t); return -FS_EAGAIN;
+    }
+    t->view=*source; t->view.transaction=t; t->view.prepare_cache=0;
+    t->view.publication_pending=false;
+    t->sequence=source->mutation_sequence; t->generation=source->dev->media_generation;
+    t->read_only=a->op==FAT_TX_LOOKUP || a->op==FAT_TX_NEXT || a->op==FAT_TX_COMMIT;
+    t->free_synced=source->free_clusters;
+    t->suspendable=a->op==FAT_TX_WRITE || a->op==FAT_TX_EXTEND || a->op==FAT_TX_RESERVE ||
+        a->op==FAT_TX_TRUNCATE || a->op==FAT_TX_PUBLISH || a->op==FAT_TX_SET_METADATA;
+    t->data_only=data_only;
+    if (a->entry && a->op!=FAT_TX_CREATE && a->op!=FAT_TX_LOOKUP && a->op!=FAT_TX_NEXT) t->entry=*a->entry;
+    t->target=a->entry; if (t->meta) t->meta->original=t->entry;
+    t->target_initialized=a->op!=FAT_TX_CREATE && a->op!=FAT_TX_LOOKUP && a->op!=FAT_TX_NEXT;
+    t->on_visible=a->visible; t->visible_ctx=a->visible_ctx;
+    t->on_unlinked=a->unlinked; t->replacement_target=a->replacement;
+    if (a->replacement && t->meta) t->meta->replacement=*a->replacement;
+    if (a->cursor) t->cursor=*a->cursor;
+    t->next=source->transactions; source->transactions=t;
+    guard->leave(guard->ctx);
+    struct fat_volume *v=&t->view;
+    switch (a->op) {
+    case FAT_TX_CREATE: e=fat_create(v,a->directory,a->name,a->attr,&t->entry); break;
+    case FAT_TX_LOOKUP: e=lookup_dependency(v,a); if (!e) e=fat_lookup(v,a->directory,a->name,&t->entry); break;
+    case FAT_TX_NEXT: e=lookup_dependency(v,a); if (!e) e=fat_next(v,a->directory,a->directory_cursor,&t->entry); break;
+    case FAT_TX_WRITE:
+        e=fat_write_cursor(v,&t->entry,&t->cursor,a->position,a->data,a->size,a->done); break;
+    case FAT_TX_LOG_WRITE:
+        e=fat_write_reserved_cursor(v,&t->entry,&t->cursor,a->capacity,a->position,a->data,a->size,a->done); break;
+    case FAT_TX_PUBLISH: e=fat_publish_reserved(v,&t->entry,a->flag); break;
+    case FAT_TX_EXTEND: e=fat_extend(v,&t->entry,a->capacity); break;
+    case FAT_TX_TRUNCATE: e=fat_truncate(v,&t->entry,a->position); break;
+    case FAT_TX_RESERVE: e=fat_reserve(v,&t->entry,a->capacity); break;
+    case FAT_TX_REMOVE: e=fat_remove(v,&t->entry,a->flag); break;
+    case FAT_TX_RENAME: e=fat_rename(v,&t->entry,a->directory,a->name); break;
+    case FAT_TX_RENAME_REPLACE: e=fat_rename_replace(v,&t->entry,a->replacement ? &t->meta->replacement : 0,a->directory,a->name,a->flag); break;
+    case FAT_TX_SET_METADATA: e=fat_set_metadata(v,&t->entry,a->attr,a->times); break;
+    case FAT_TX_COMMIT:
+        e=cache_error(v->cache,v->dev);
+        if (!e) e=v->readonly ? (v->writable_session ? -FS_EROFS : 0) :
+            cache_barrier_record(v->cache,v->dev,&v->completion);
+        if (e) e=write_error(v,e);
+        break;
+    default: e=-FS_EINVAL; break;
+    }
+    if (!e) e=transaction_publish(v,true);
+    /* Retirement cannot be cancelled: keep the list/node pins until a
+     * namespace turn is available, but retain no cache pins while waiting. */
+    guard->retire(guard->ctx);
+    {
+        bool current=source->dev->media_generation==t->generation &&
+            (source->mutation_sequence==t->sequence || data_only || (lookup && source->dev->media_generation==t->generation &&
+             !source->dev->quarantined && source->mounted && reads_current(t)));
+        if (!current && a->op!=FAT_TX_COMMIT && !(v->ro_reasons&FAT_RO_WRITE_ERROR)) e=-FS_EAGAIN;
+        if (source->dev->media_generation!=t->generation) e=-FS_EIO;
+        if (source->dev->media_generation==t->generation && t->durable_group>source->publication_durable)
+            source->publication_durable=t->durable_group;
+        if (!e) {
+            if (a->entry && a->op!=FAT_TX_COMMIT && a->op!=FAT_TX_REMOVE) *a->entry=t->entry;
+            if (a->replacement && t->meta) *a->replacement=t->meta->replacement;
+            if (a->cursor) *a->cursor=t->cursor;
+            if (a->op!=FAT_TX_LOOKUP) source->completion=v->completion;
+        }
+        if (v->readonly && !source->readonly && (current || (v->ro_reasons&FAT_RO_WRITE_ERROR)) && source->dev->media_generation==t->generation) {
+            source->ro_reasons|=v->ro_reasons;
+            fat_revoke_write(source,v->readonly_reason,v->readonly_cluster);
+        }
+        struct fat_transaction **link=&source->transactions;
+        while (*link && *link!=t) link=&(*link)->next;
+        if (*link) *link=t->next;
+        guard->leave(guard->ctx);
+    }
+    transaction_free(t);
+    return e;
 }

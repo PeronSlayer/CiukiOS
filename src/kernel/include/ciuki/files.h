@@ -20,7 +20,7 @@ struct px_node {
     uint64_t ino;
     uint32_t refs, generation, drive;
     enum px_kind kind;
-    bool linked, mountpoint, delete_pending;
+    bool linked, mountpoint, delete_pending, writing, namespace_busy;
 };
 struct audio_stream;
 struct file_description {
@@ -59,6 +59,11 @@ void files_snapshot(struct px_namespace *space, struct file_ledger *out);
 int files_bootstrap(struct vfs *vfs); /* install PID 1 cwd, stdio and loader */
 int files_stdio(struct process *p);
 void px_retain(void *node);
+/* Pins all borrowed native identities across a bounded FAT transaction. */
+int px_fat_transaction_locked(struct px_node *,struct px_node *,struct px_node *,struct fat_transaction_args);
+/* f1-89: writer turn for every drive a path can reach, before resolving it;
+ * release with vfs_turn_drop_locked(vfs, *turn). */
+int px_turn_take_path_locked(struct px_namespace *,struct px_node *cwd,const char *path,uint32_t *turn);
 void px_release(void *node);
 int px_error(int error);
 /* All *_locked helpers require vfs_lock/vfs_unlock. They reserve their

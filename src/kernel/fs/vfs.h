@@ -27,7 +27,7 @@ struct vfs_file_identity {
     uint64_t serial, generation;
     uint64_t unlinked_id; /* exported tombstone generation, not cache serial */
     uint32_t parent, index, refs, pages;
-    bool valid, linked;
+    bool valid, linked, writer;
 };
 struct vfs_page_key { uint64_t generation, file, index; };
 struct vfs_page_identity {
@@ -61,7 +61,7 @@ int vfs_dos_share(unsigned old_mode, unsigned old_access, uint64_t old_owner,
                   unsigned new_mode, unsigned new_access, uint64_t new_owner, bool readonly);
 struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned refs;
     struct fs_ro_volume *ro; uint64_t ro_id, ro_size; uint32_t drive, generation;
-    uint32_t log_capacity; struct vfs_file_identity *identity; };
+    uint32_t log_capacity, pins; struct vfs_file_identity *identity; };
 /* f3-51c: cursor is this open file's FAT cluster cursor. Only the
  * description's own serialized I/O (io_active or the handle reservation)
  * reads or writes it; fat.c validates it against the node entry. */
@@ -123,6 +123,24 @@ struct vfs {
      * identified writer may coexist only with readers of other nodes. Other
      * metadata operations wait for these short per-file I/O phases. */
     uint32_t readers[26];
+    uint32_t transaction_users[26]; /* lifetime only; never reader exclusion */
+    /* f1-89 writer turn: one FAT-mutating operation per letter plans and
+     * publishes at a time. Namespace operations keep it for their whole
+     * life; data operations (write, extend, truncate, publish, attributes)
+     * give it up around device waits and merge on return (Amendment 1 item
+     * 4). Taken BEFORE volume admission (order: turn -> namespace ->
+     * volumes); a waiter holds no ticket, reservation or cache pin. Readers,
+     * lookups, stat and open-file reads never take or wait for it. */
+    uintptr_t turn_owner[26];
+    uint32_t turn_depth[26], turn_waiters[26];
+    /* f1-89 Amendment 1 item 4: writer-writer waits per letter, measured
+     * from the wait's start to the instant the turn became free. */
+    uint32_t turn_waits[26], turn_wait_max_ms[26], turn_free_since[26];
+    /* Publication steps waiting for in-flight readers (f1-89 A1 item 4):
+     * while set, NEW open-file readers of that letter wait, so a reader
+     * stream cannot starve a short publication step. */
+    uint32_t publish_waiting[26];
+    uint32_t lookup_restarts, lookup_guarded; /* diagnostics: reader restarts */
     struct vfs_reader *reader_owners; /* stack records, namespace protected */
     uint32_t urgent_gate_start[26];
     bool urgent_gate_valid[26];
@@ -190,6 +208,23 @@ void vfs_site_locked(struct vfs *,const char *site);
 int vfs_read_identity_locked(struct vfs *,struct vfs_file_identity *,struct fat_volume *,
     const struct fat_entry *,struct fat_cursor *,bool *,uint64_t *,const uint64_t *,bool,
     int (*)(void *,uint64_t,size_t),void *,void *,size_t,size_t *);
+/* Namespace/volume turn on entry and return. Native callers additionally
+ * retain their px_node/description and borrowed parents across this call. */
+int vfs_fat_transaction_locked(struct vfs *,struct fat_volume *,struct fat_transaction_args);
+int vfs_file_wait_locked(struct vfs *,const bool *busy);
+/* Writer turn for FAT-mutating operations (see struct vfs). take_locked is
+ * for callers already holding namespace/admission: when the turn is busy it
+ * releases every reservation, waits, and readmits the same set, so it must
+ * precede any borrowed name/entry. Nested takes by the owner only count. */
+int vfs_turn_take_locked(struct vfs *,uint32_t drives,uint32_t *taken);
+void vfs_turn_drop_locked(struct vfs *,uint32_t drives);
+bool vfs_turn_held_locked(struct vfs *,uint32_t drives);
+/* A data transaction gives its turn up around device waits (namespace held,
+ * no reservation): suspend returns the depth to restore; resume waits as a
+ * queued writer, uncancellably, and returns holding namespace only. */
+uint32_t vfs_turn_suspend_locked(struct vfs *,unsigned drive);
+void vfs_turn_resume_locked(struct vfs *,unsigned drive,uint32_t depth);
+bool vfs_turn_try_resume_locked(struct vfs *,unsigned drive,uint32_t depth);
 struct vfs_io_state { uint32_t drives; unsigned default_drive; bool logical;
     struct vfs_pending_waits diagnostics; };
 struct vfs_io_state vfs_io_begin_locked(struct vfs *);

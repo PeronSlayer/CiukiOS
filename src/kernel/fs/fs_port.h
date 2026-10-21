@@ -27,6 +27,9 @@ struct fs_request_scope { struct fs_request_scope *next; uintptr_t task; const s
 void fs_request_enter(struct fs_request_scope *,const struct vfs_request *);
 void fs_request_leave(struct fs_request_scope *);
 const struct vfs_request *fs_request_current(void);
+/* Opaque identity of the calling task (pthread on the host). Used only to
+ * recognise the owner of an f1-89 writer turn; never dereferenced. */
+uintptr_t fs_task_token(void);
 int fs_request_check(void);
 void fs_request_wait(enum vfs_wait_reason,uint64_t begin,int outcome);
 #ifdef FS_HOST
