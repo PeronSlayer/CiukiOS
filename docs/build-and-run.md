@@ -26,6 +26,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 make build-full        # kernel (build/f0/VMM.ELF), apps, the cached upper Wine DLLs, then the image, with T1 checks and build-manifest.json
 make upper             # only the reused Wine DLLs (cached; needs make apps first)
 make test-host         # T0: kernel library, loader statics, runner, fixtures, loader model
+python3 scripts/loader_budget.py   # loader bytes per section and free bytes in its fixed 48-sector extent
 make qemu-test-full    # T2: f0-smoke through scripts/test/run.py
 python3 scripts/test/run.py f0-core    # T3: ten-boot matrix and the nine non-fatal probes
 python3 scripts/test/run.py f0-panic   # T3: destructive panic cases
