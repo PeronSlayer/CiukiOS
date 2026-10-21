@@ -94,6 +94,61 @@ static uint32_t lock_request(uint32_t h,unsigned op,uint64_t offset,uint64_t byt
       .high=(uint32_t)(offset>>32),.bytes=(uint32_t)bytes,.share=(uint32_t)(bytes>>32),.flags=flags};
   CHECK(!w32_file_call(client_thread,&a));return a.error;
 }
+static struct ciuki_w32_file_info handle_info(uint32_t h) {
+  struct ciuki_w32_file_args a = {.action = W32_F_STAT, .handle = h,
+      .buffer = USER2, .bytes = sizeof(struct ciuki_w32_file_info)};
+  struct ciuki_w32_file_info info;
+  CHECK(!w32_file_call(client_thread, &a) && !a.error);
+  CHECK(!ua_read(client->memory, &info, USER2, sizeof(info)));
+  return info;
+}
+static void amendment_file_identity(void) {
+  const char *long_name = "C:\\WINDOWS\\Identity File.wav";
+  struct ciuki_w32_file_args a = open_request(long_name, 0xc0000000u, 7, 1);
+  CHECK(!a.error);
+  uint32_t h = a.result;
+  struct ciuki_w32_file_info first = handle_info(h);
+  CHECK(first.volume_serial == 0x00c1a001 && first.file_id);
+  CHECK(first.volume_serial == volumes[0].volume_serial &&
+        first.file_id == handles[h/4]->u.file.description->identity->serial);
+  char short_name[128];
+  CHECK(first.alias[0] && strcmp(first.name, first.alias));
+  snprintf(short_name, sizeof(short_name), "C:\\WINDOWS\\%s", first.alias);
+  a = open_request(short_name, 0x80000000u, 7, 3);
+  CHECK(!a.error);
+  uint32_t alias = a.result;
+  struct ciuki_w32_file_info second = handle_info(alias);
+  CHECK(second.volume_serial == first.volume_serial && second.file_id == first.file_id);
+  a = open_request("C:\\WINDOWS\\Identity File 2.wav", 0xc0000000u, 7, 1);
+  CHECK(!a.error);
+  uint32_t distinct = a.result;
+  second = handle_info(distinct);
+  CHECK(second.volume_serial == first.volume_serial && second.file_id &&
+        second.file_id != first.file_id);
+  close_handle(distinct);
+  /* Reopen while the alias retains the identity, then after final close. */
+  close_handle(h);
+  a = open_request(long_name, 0x80000000u, 7, 3);
+  CHECK(!a.error);
+  h = a.result;
+  second = handle_info(h);
+  CHECK(second.file_id == first.file_id && second.volume_serial == first.volume_serial);
+  close_handle(alias);
+  close_handle(h);
+  for (unsigned order = 0; order < 2; order++) {
+    a = open_request(order ? long_name : short_name, 0x80000000u, 7, 3);
+    CHECK(!a.error);
+    second = handle_info(a.result);
+    CHECK(second.file_id == first.file_id && second.volume_serial == first.volume_serial);
+    close_handle(a.result);
+  }
+  a = open_request("C:\\dev\\null", 0x80000000u, 7, 3);
+  CHECK(!a.error);
+  second = handle_info(a.result);
+  CHECK(!second.volume_serial && !second.file_id);
+  close_handle(a.result);
+  puts("PASS file-info identity: FAT volume serial, long/short alias, distinct files, reopen, device zero");
+}
 static void amendment_files(void) {
   struct ciuki_w32_file_args a=open_request("C:\\WINDOWS\\locks.bin",0xc0000000u,7,1);
   CHECK(!a.error);uint32_t h=a.result;
@@ -198,6 +253,7 @@ int main(int argc, char **argv) {
     CHECK(refused.error==5&&!refused.result);
   }
   CHECK(path_request("C:\\System", W32_F_MKDIR) == 5);
+  amendment_file_identity();
   amendment_files();
   struct ciuki_w32_file_args a =
       open_request("C:\\WINDOWS\\Long File.txt", 0xc0000000u, 1, 1);

@@ -421,7 +421,8 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
       free_device(d);
       return MCIERR_FILE_NOT_FOUND;
     }
-    if (!GetFileInformationByHandle(owned->file, &owned->identity)) {
+    if (!GetFileInformationByHandle(owned->file, &owned->identity) ||
+        !(owned->identity.index_high | owned->identity.index_low)) {
       free_device(d);
       return MCIERR_FILE_READ;
     }

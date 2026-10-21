@@ -191,8 +191,9 @@ DWORD GetFileSize(HANDLE h, DWORD *high) {
   return n < 0 ? 0xffffffffu : (DWORD)n;
 }
 BOOL GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *info) {
-  if (mci_identity_fail) return 0;
+  if (mci_identity_fail == 1) return 0;
   memset(info, 0, sizeof(*info));
+  if (mci_identity_fail == 2) return 1; /* Successful query, no identity. */
   return !hf_identity((int)((uintptr_t)h - 0x1000), &info->serial,
                       &info->index_high, &info->index_low);
 }

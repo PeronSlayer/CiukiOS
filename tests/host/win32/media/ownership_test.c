@@ -38,8 +38,11 @@ int main(int argc, char **argv) {
         assert(!live_allocations);
         assert(!hf_open_handles());
       }
-  mci_identity_fail = 1;
-  assert(mciSendStringA("open tone.wav alias failure", 0, 0, 0) == MCIERR_FILE_READ);
+  for (unsigned mode = 1; mode <= 2; mode++) {
+    mci_identity_fail = mode;
+    assert(mciSendStringA("open tone.wav alias failure", 0, 0, 0) == MCIERR_FILE_READ);
+    assert(!mciGetDeviceIDA("failure") && !hf_open_handles() && !live_allocations);
+  }
   mci_identity_fail = 0;
   assert(!mciGetDeviceIDA("failure") && !hf_open_handles() && !live_allocations);
   assert(mciSendStringA("open broken.wav alias failure", 0, 0, 0) == MCIERR_INVALID_FILE);

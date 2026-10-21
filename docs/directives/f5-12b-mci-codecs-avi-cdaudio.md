@@ -46,3 +46,13 @@ Verification: the win32 discovery (`python3 -B -m unittest discover -s tests/hos
 ## Amendment 3 (lead, 2026-10-21): the one finding left open by the re-review of ee911112
 
 Apply this amendment only. **Finding 6 (device sharing by resource, P2):** the ownership key compares `GetFullPathNameA` strings (`sdk/win32/audio/mci.c:399`), which is lexical; FAT accepts a long name and its 8.3 alias for the same entry (`src/kernel/fs/fat.c:408`), so two MCI aliases can open the same WAV/MIDI exclusively through the two spellings. Key the ownership on the file identity instead: open the file and use the volume serial plus file index (`GetFileInformationByHandle` → `dwVolumeSerialNumber`, `nFileIndexHigh/Low`, which our kernel32 derives from the FAT directory entry's first cluster or the file identity f2-03 already maintains); fall back to the normalised path only for devices without a file. Test: open through the long name and the 8.3 alias in both orders, both must be refused the second time; distinct files with similar names stay independent. The lead's win32 suite run outside the sandbox on ee911112 was green (277 tests): keep it green. Report section "Amendment 3".
+
+## Amendment 4 (lead, 2026-10-21): the file-identity provider is in scope
+
+Amendment 3's prerequisite does not exist yet: `sdk/win32/kernel32/files.c:632–649` returns zero `dwVolumeSerialNumber`/`nFileIndexHigh/Low`, and `src/kernel/include/ciuki/w32_core.h:40–46` carries no identity in the file-info transport. The lead authorises the minimal plumbing (the "freeze" of amendment 3 referred to the media layer, not to this prerequisite):
+
+1. Kernel: the file-info transport gains `volume_serial` (the FAT volume serial from the boot sector, already known to the mount) and a 64-bit `file_id` derived from the retained VFS identity (`src/kernel/fs/vfs.c:362–398`: volume plus owning short-entry location, stable for the file's life, equal for the long name and the 8.3 alias); the win32 file-info query fills them. No other ABI change; `docs/design/execution-abi.md` records the fields.
+2. kernel32 `GetFileInformationByHandle` returns them; files without an identity (devices, pipes) return zero and the MCI consumer treats zero as "no identity" and refuses sharing semantics rather than treating two zeros as the same file.
+3. Tests: kernel host test of the transport (long name and alias → same id, distinct files → distinct ids, id stable across reopen, device → zero), kernel32 unit, and the MCI alias regression `test_mci_file_identity_ownership` now passing for real (the lead's win32 run outside the sandbox is the gate: it was green on 85ae75ac with the consumer alone).
+
+Report section "Amendment 4".

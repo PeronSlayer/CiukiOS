@@ -629,8 +629,7 @@ BOOL W32API GetFileAttributesExA(const char *name, DWORD level, void *out) {
   w32_copy(out, &d, sizeof(d));
   return 1;
 }
-/* FAT has no file index and the open description does not name its volume:
- * serial and index are zero, one link. */
+/* FAT descriptions supply the retained VFS identity; other providers use zero. */
 BOOL W32API GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *out) {
   if (!out) {
     SetLastError(87);
@@ -640,6 +639,9 @@ BOOL W32API GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *out
   if (!stat_file(h, 0, &f))
     return 0;
   BY_HANDLE_FILE_INFORMATION d = {.attributes = f.attributes,
+                                  .serial = f.volume_serial,
+                                  .index_high = (DWORD)(f.file_id >> 32),
+                                  .index_low = (DWORD)f.file_id,
                                   .size_high = f.size_high,
                                   .size_low = f.size_low,
                                   .links = 1};

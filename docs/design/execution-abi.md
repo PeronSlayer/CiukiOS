@@ -2150,10 +2150,41 @@ The additive records in `ciuki/w32_core.h` are version 1:
 
 Transport errors are NTSTATUS (negative errno for malformed/faulting transport);
 API errors are in `error`, not disguised as successful results. Output words
-must be zero on entry. File buffers contain either bytes, an 832-byte
+must be zero on entry. File buffers contain either bytes, an 844-byte
 `ciuki_w32_file_info` or a 120-byte `ciuki_w32_disk_info`. Names in these records
 are VFS UTF-8; kernel32 converts CP1252 paths and results. Packed FAT calendar
-fields are converted to FILETIME in user mode. Existing VM/section/wait records
+fields are converted to FILETIME in user mode.
+
+F5-12B amendment 4 appends `uint64_t file_id` at byte 832 and
+`uint32_t volume_serial` at byte 840 to the file-info record. Its wire alignment
+is four bytes on both the host adapter and i686; the original 832-byte prefix
+is unchanged. All file-info producers and consumers use the new 844-byte size;
+no action numbers, argument records or native F2 records change. Handle STAT
+copies the FAT boot-sector volume serial from the mounted volume and the
+description's retained VFS identity serial. The latter is assigned by volume,
+mount generation and owning short-entry location, so long names and 8.3 aliases
+agree, distinct live files differ (including empty files), and rename/unlink
+cannot change an open description's identity. Reopen reuses a retained VFS
+identity; IDs are session-local, not persistent disk identifiers. The bounded
+VFS identity cache may recycle an unreferenced identity after final close.
+Path-only STAT and enumeration do not acquire an identity. Providers without
+a retained FAT identity, including device nodes, leave both fields zero; pipe
+handles retain their existing unsupported handle-STAT error.
+
+Kernel32 splits `file_id` into `nFileIndexHigh/Low` and copies `volume_serial`
+to `dwVolumeSerialNumber` in `GetFileInformationByHandle`. This follows
+Microsoft's [handle query](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
+and [BY_HANDLE_FILE_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
+identity tuple; Microsoft notes that FAT IDs derive from the containing
+directory/entry location and are not guaranteed stable over time. Exporting
+the retained serial also distinguishes an open unlinked file from a new file
+that reuses its directory slot. MCI refuses file opens with a zero file index
+as `MCIERR_FILE_READ`, even when the query succeeded, rather than comparing
+unknown identities. A zero volume serial alone is valid when the index is
+nonzero. This supplies the resource key for the nonsharable waveform/sequence
+files required by [MCI_OPEN](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open).
+
+Existing VM/section/wait records
 are reused without renumbering. `SYSTEM/TERMINATE_THREAD` with a handle queues
 termination at a user-return boundary. Its private cancellation form uses
 handle=0 and extra=TID within the caller's process, allowing CreateThread to
