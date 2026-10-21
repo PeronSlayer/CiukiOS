@@ -40,6 +40,10 @@ KNOWN_UNREGISTERED = {
     (5, 'win32-rct-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-jazz2-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-ta-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    # f6-18 browser HTTPS cases: kernel selector and loader model know the
+    # probe; the loader menu table is full (7 bytes free before f0-54), so the
+    # menu registration is a pending patch (build/codex/f6-18-report.md).
+    (6, 'browser'): {'owner': 'f6-18', 'missing': ('menu',), 'note': 'f6:browser url=<...>: menu.inc entry and url suffix wait for the f0-54 loader budget'},
 }
 
 
@@ -65,7 +69,7 @@ class SelectorTableTests(unittest.TestCase):
         self.assertLessEqual({'boot', 'runner', 'all', 'core'}, kernel[0])
         self.assertLessEqual({'sweep', 'boot', 'runner', 'all', 'core'}, menu[0])
         self.assertLessEqual({'f5-core', 'w32-objects', 'w32-dialogs'}, kernel[5] & menu[5])
-        self.assertEqual(kernel[6], {'net-arp'})
+        self.assertEqual(kernel[6], {'net-arp', 'browser'})
         self.assertTrue(probe_tables.loader_model_accepts(5, 'w32-objects'))
         self.assertFalse(probe_tables.loader_model_accepts(5, 'no-such-probe'))
 
@@ -101,7 +105,7 @@ class SelectorTableTests(unittest.TestCase):
 
     def test_known_unregistered_entries_name_an_owner_and_a_reason(self):
         self.assertEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()},
-                         {'f5-15A2', 'f5-17 continuation'})
+                         {'f5-15A2', 'f5-17 continuation', 'f6-18'})
         for parts, entry in KNOWN_UNREGISTERED.items():
             with self.subTest(probe=parts):
                 self.assertTrue(entry['owner'] and entry['note'])

@@ -43,4 +43,11 @@ int net_poll_capture(struct process *, const struct ciuki_pollfd *, unsigned, vo
 void net_poll_drop(void *);
 int net_poll(struct process *, struct ciuki_pollfd *, unsigned, int, void *);
 int net_resolve(struct process *, const char *, uint32_t *, int *);
+/* f6-18 test-profile static host entries (fixture.test -> 10.0.2.100): armed
+ * only by the f6:browser probe, consulted before any DNS query, never set on
+ * a normal boot. address is in network byte order; address 0 clears the slot.
+ * Returns -EINVAL for a name the resolver grammar refuses, -ENOSPC when both
+ * slots hold other names. */
+#define NET_RESOLVE_OVERRIDES 2
+int net_resolve_override(const char *name, uint32_t address);
 #endif

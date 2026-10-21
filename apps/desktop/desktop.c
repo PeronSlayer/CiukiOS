@@ -298,6 +298,9 @@ static int launch_failed(const struct desk_program *program, int error, const ch
     }
     errno=error; return -1;
 }
+/* f6-18 GATE_BROWSER: the browser needs its window channel, but /Programs/netsurf
+ * has no catalogue entry before M4; the gate launch alone treats it as graphical. */
+static int gate_browser_launch;
 static int launch_program(struct desktop *d, const struct desk_program *program)
 {
     if (d->power.state) return launch_failed(program,EBUSY,"power");
@@ -312,7 +315,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     if (ciuki_channel_pair(pair)) return launch_failed(program,errno,"channel-pair");
     int index=-1;
     ciuki_pid_t pid=-1;
-    int graphical=desk_program_graphical(program->name), kind=desk_program_kind(program->name);
+    int graphical=desk_program_graphical(program->name) || gate_browser_launch, kind=desk_program_kind(program->name);
     /* f2-33: only the Task Manager receives the delegated termination
      * authority, explicitly mapped to fd 4; it also may send task requests. */
     int tasks=!strcmp(program->name,"tasks");
@@ -373,6 +376,31 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     d->clients[index].launch_input_ns=click_ns;
     d->children[child].pid=(uint32_t)pid;
     return pid;
+}
+void desk_v3_fixture_report(const char *line);
+/* f6-18 GATE_BROWSER: start /Programs/netsurf --channel-fd=3 --test=browser <url>
+ * through the ordinary launch path (same environment, channel and client slot
+ * as a menu launch) and name the child to the controller; the kernel validates
+ * the PID and reads the browser's page outcome from it. One shot per gate command. */
+static int desk_browser_fixture_begin(struct desktop *d,const char *url)
+{
+    static char gate_browser_url[48];
+    struct desk_program program;
+    memset(&program,0,sizeof(program));
+    snprintf(program.name,sizeof(program.name),"netsurf");
+    snprintf(program.path,sizeof(program.path),"/Programs/netsurf");
+    snprintf(gate_browser_url,sizeof(gate_browser_url),"%s",url);
+    d->launch_arg=NULL;
+    memset(d->launch_argv,0,sizeof(d->launch_argv));
+    d->launch_argv[0]="--test=browser"; d->launch_argv[1]=gate_browser_url;
+    gate_browser_launch=1;
+    int pid=launch_program(d,&program), error=errno;
+    gate_browser_launch=0;
+    memset(d->launch_argv,0,sizeof(d->launch_argv));
+    char line[80];
+    snprintf(line,sizeof(line),"case=browser child=%d",pid<0 ? 0 : pid);
+    desk_v3_fixture_report(line);
+    return pid<0 ? -error : pid;
 }
 /* f2-33 scenario: the ended PID has no kernel record any more (reaped, not
  * just exited), while the Task Manager and this desktop are still live. */
@@ -1834,6 +1862,14 @@ int main(int argc, char **argv)
                 if(error<0)return gate_error("w32_fixture",-error,generation);
                 d->v3_lease=win32_lease;d->v3_lease_poll=desk_w32_presenter_poll;d->v3_restart=win32_restart;
                 desk_w32_start(d);
+                report=1;break;
+            }
+            case GATE_BROWSER: {
+                char url[sizeof(control->fixture)];
+                memcpy(url,control->fixture,sizeof(url));
+                if (!memchr(url,0,sizeof(url)) || !url[0]) return gate_error("browser_url",EINVAL,generation);
+                int pid=desk_browser_fixture_begin(d,url);
+                if (pid<0) return gate_error("browser_launch",-pid,generation);
                 report=1;break;
             }
             case GATE_INTERACT: interaction=1; report=1; break;

@@ -83,6 +83,7 @@ def loader_model_accepts(phase, name):
     try:
         request = 'f%d:%s run=00000000' % (phase, name)
         if phase == 3 and name == 'title': request += ' title=fixture'
+        if phase == 6 and name == 'browser': request += ' url=https://fixture.test/page'  # f6-18: the URL is mandatory
         loader_model.selector(request)
     except ValueError:
         return False
