@@ -698,7 +698,7 @@ boot_menu:
 source_menu db 'L:SELECT_SOURCE=menu',13,10,0
 source_fw db 'L:SELECT_SOURCE=fw_cfg',13,10,0
 source_cfg db 'L:SELECT_SOURCE=cfg',13,10,0
-safe_confirmation db 'Safe mode selected; P for a probe, or wait',13,10,0
+safe_confirmation db 'Safe mode; P probe or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0

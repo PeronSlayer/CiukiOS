@@ -390,3 +390,29 @@ support keeping descriptor metadata separate from pathname authority checks.
 The [NSIS command-line reference](https://nsis.sourceforge.io/Docs/Chapter3.html)
 and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html)
 were rechecked: `/S`, `_?=` and the installer manifests retain their contracts.
+
+## Amendment 10: fixed loader extent
+
+The safe-mode confirmation is shortened from 42 to 26 ASCII bytes:
+`Safe mode; P probe or wait`. The host menu model uses the same text.
+This recovers 16 bytes before the loader's aligned data, covering the
+12-byte overflow without changing any selector name, table order, menu
+action or deadline. The 24,576-byte file and its last 32-byte progress
+trailer retain their fixed offsets (`docs/design/boot-memory.md`).
+
+Research: NASM's [DB and TIMES documentation](https://www.nasm.us/doc/nasm03.html#section-3.2)
+defines the emitted string bytes and expression-based padding; its
+[ALIGN documentation](https://www.nasm.us/doc/nasm06.html#section-6.15.1)
+explains the 16-byte alignment before `boot_info`. SeaBIOS 1.16.3's
+[keyboard implementation](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/src/kbd.c)
+confirms that INT 16h AH=01 polls and AH=00 consumes input, matching the
+unchanged `menu_getc` path. Decision: compact only display text, keeping
+the installer/GL selectors and their dispatch and evidence names intact.
+The existing assembled-loader test also checks the progress trailer bytes
+at offset 24,544 and the model's CR/LF/NUL-terminated confirmation.
+Exact host verification commands and results are recorded in
+`build/codex/f5-15a2-report.md`, section "Amendment 10".
+The 30 required gate checks and 20 menu/registration checks pass. Standalone
+NASM assembly with `CIUKI_VERSION='0.9.2 pre-alpha'` emits 24,576 bytes;
+`image_end` is `0x5FDC`, leaving four padding bytes before the trailer at
+`0x5FE0`. No image build or guest execution is part of this evidence.
