@@ -26,10 +26,16 @@ void net_bridge_port_carrier(struct net_bridge_port *); /* gate held */
 struct bridge_identity_ops {
     void *arg;
     /* read: 0 existing valid record, -ENOENT absent, other negative error.
-     * write_atomic: durable replace before success. random: 16 fresh bytes. */
+     * write_atomic: durable publication without replacement before success.
+     * random: 16 fresh bytes. */
     int (*read)(void *, uint8_t[16]);
     int (*write_atomic)(void *, const uint8_t[16]);
     int (*random)(void *, uint8_t[16]);
 };
 int net_bridge_identity_load(const struct bridge_identity_ops *, uint8_t[16]);
+/* Production VFS callbacks; arg is an exclusively owned struct vfs_table.
+ * NETID.BIN is never replaced. A valid pending NETID.TMP is recovered before
+ * generating another identity; invalid records and failed barriers refuse LAN. */
+int net_bridge_identity_read_file(void *, uint8_t[16]);
+int net_bridge_identity_write_file(void *, const uint8_t[16]);
 #endif

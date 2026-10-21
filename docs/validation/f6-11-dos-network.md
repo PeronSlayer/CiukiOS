@@ -28,8 +28,12 @@ IPX enters either guest surface; host ARP/IPv4 is excluded.
 
 The host identity adapter loads an existing 16-byte random record, or obtains
 and durably writes one before allowing admission. Missing/corrupt identity,
-failed persistence, or unsupported receive mode fails closed. The lead supplies
-the installation identity store and selected driver's receive-mode operation.
+failed persistence, or unsupported receive mode fails closed. The production
+VFS store now reads `C:\System\NETID.BIN`, commits a new 16-byte candidate to
+`NETID.TMP`, closes it, renames without replacement and flushes C: before
+returning success. A valid pending candidate is recovered before generating
+another identifier; malformed final/pending records are refused. The f6-10
+entropy caller and selected-port publication still require its actual merge.
 
 IPX has 32 socket slots and 64 outstanding ECBs per VM (therefore <=64 per
 socket), with up to 16 nonoverlapping fragments and 1500 datagram bytes.
@@ -41,9 +45,12 @@ FF hardware error. No incoming packet allocates memory or asserts a host panic.
 Exact commands, outcomes, limitations and outstanding integration are recorded
 in `build/codex/f6-11-report.md`. No image SHA or guest qualification is claimed
 from host checks. Amendment 2 authorizes the VM lifecycle, command validator
-and DOS Box wiring, which is now applied. The primary physical-port binding,
-shared f6-10 packet pool/ledger and installation store remain pending the
-lead's f6-10 merge into this worktree.
+and DOS Box wiring, which is already present at `9d7dd81e`. That commit's
+message describes a main merge, but its object has only parent `40f39986`
+and its tree lacks f6-10's `net_stack.h`, `lwip_handoff.c` and lwIP port.
+The primary physical-port binding, shared f6-10 packet pool/ledger and the
+identity entropy/admission caller remain dependent on the actual lead merge.
+The implementer performed no git merge or source transplant from main.
 
 ## Application API source matrix
 
@@ -101,7 +108,25 @@ The new host lifecycle fixture uses the production CREATE validator, VM
 creation/boot, INT2F dispatch and CLOSE teardown, including failed admission
 rollback and deferred receive-mode cleanup. The established guest CPU harness
 has no LAN admission and keeps explicit absent-device seams; it is not evidence
-of guest LAN operation. All nine focused fixtures, this lifecycle fixture and
-the eight physical NIC register models pass supplementary UBSan checks.
-The normal ASan/UBSan runners compile, but LeakSanitizer cannot perform its
-ptrace check in this sandbox. Leak detection remains enabled.
+of guest LAN operation. Eleven focused fixtures (including the two new identity
+fixtures, 5,083 checks) and the lifecycle fixture (130,513 checks) pass the
+current supplementary UBSan checks. The normal ASan/UBSan runners compile,
+but LeakSanitizer cannot perform its ptrace check in this sandbox. Leak
+detection remains enabled; supplementary UBSan does not replace that gate.
+
+The identity fault fixture exercises short/oversized/zero records, every
+publication failure, retry/recovery, handle retirement and destination
+collision. A second fixture calls the actual store through production FAT/VFS
+on in-memory FAT16 sectors, then unmounts/remounts and verifies identical bytes,
+read-only access, pending-candidate recovery and corrupt-record refusal. It
+builds no boot image and changes nothing in `tests/host/fs` or `tests/host/proc`.
+A failed partial pending write is retained and refused, rather than silently
+generating a new identity on the next launch.
+
+Read-only comparison with main confirms that f6-10 uses lwIP 2.2.1's
+`pbuf_alloc(PBUF_RAW, ..., PBUF_POOL)` for native ingress: 128 entries of
+1536 payload bytes, within the `MM_NET` reservation. The
+[pinned upstream pbuf implementation](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/pbuf.c)
+defines the allocation/reference/free ownership used by that pool. Any bridge
+integration must use those same entries and keep IPX out of `tcpip_input`;
+no second packet pool or substitute entropy source is introduced here.
