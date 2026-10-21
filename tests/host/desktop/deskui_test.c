@@ -110,9 +110,75 @@ static void test_wheel(void)
     puts("PASS F1-68 toolkit wheel: details/icons/list/tree/textarea/scrollbar/modal list, both signs, saturation, selection/focus/pointer retention, disabled/menu/capture guards");
 }
 
+static unsigned timer_calls, idle_calls;
+static int timer_change;
+static void timer_event(struct du_ui *ui,const struct du_event *e,void *arg)
+{
+    (void)arg; assert(e->type==DU_EV_TICK); timer_calls++;
+    if (timer_change==1) {
+        struct du_widget *w=du_get(ui,1);
+        du_set_text(w,"Changed"); du_invalidate(ui,w->box);
+    } else if (timer_change==2) du_progress(ui,2,"Copy","Copying",2,10);
+}
+static void timer_idle(void *arg) { (void)arg; idle_calls++; }
+static void timer_invalidation_test(void)
+{
+    struct du_ui ui; struct du_window window; rt_reset();
+    assert(!du_window_open_resizable(&window,&ui,3,W,H,"Timers",200,160));
+    struct du_widget *widget=du_add(&ui,DU_LABEL,1,(struct du_rect){10,30,160,20},"Original");
+    window.configured=1; ui.event=timer_event; ui.now=0;
+    assert(du_window_turn(&window,0)>0);
+    struct ciuki_message m; while(rt_pop(&m)) for(unsigned i=0;i<m.fd_count;i++) rt_close(m.fds[i]);
+    assert(!du_timer_start(&ui,7,20000000ull,1));
+    rt_renders=rt_compared_rows=timer_calls=idle_calls=0;
+    for(unsigned i=1;i<=100;i++) {
+        assert(du_window_turn(&window,i*10000000ull)>0); timer_idle(NULL);
+        while(rt_pop(&m)) for(unsigned k=0;k<m.fd_count;k++) rt_close(m.fds[k]);
+    }
+    printf("F2-86 timer idle: ticks=%u idle=%u renders=%u compared_rows=%u per simulated second\n",
+        timer_calls,idle_calls,rt_renders,rt_compared_rows); fflush(stdout);
+    assert(timer_calls==50 && idle_calls==100 && !rt_renders && !rt_compared_rows);
+    timer_change=1; assert(du_window_turn(&window,1020000000ull)>0);
+    assert(rt_renders==1 && rt_compared_rows==H && rt_render_dirty==3);
+    assert(!memcmp(&rt_render_bounds,&widget->box,sizeof(widget->box)));
+    uint32_t reference[W*H]; memcpy(reference,ui.canvas.pixels,sizeof(reference));
+    ui.dirty=1; du_render(&ui); assert(!memcmp(reference,ui.canvas.pixels,sizeof(reference)));
+    timer_change=0;
+    for(int dirty=1;dirty<=3;dirty++) {
+        ui.dirty=dirty; struct du_rect saved=ui.invalid;
+        du_tick(&ui,ui.now+20000000ull);
+        assert(ui.dirty==dirty && !memcmp(&saved,&ui.invalid,sizeof(saved)));
+    }
+    du_progress(&ui,2,"Copy","Copying",1,10); du_render(&ui);
+    memcpy(reference,ui.canvas.pixels,sizeof(reference));
+    timer_change=2; rt_renders=0;
+    assert(du_window_turn(&window,ui.now+20000000ull)>0);
+    assert(rt_renders==1 && rt_render_dirty==2 && !memcmp(&rt_render_bounds,&ui.dialog.box,sizeof(rt_render_bounds)));
+    for(int y=0;y<H;y++) for(int x=0;x<W;x++) if(!du_contains(ui.dialog.box,x,y))
+        assert(reference[y*W+x]==ui.canvas.pixels[y*W+x]);
+    memcpy(reference,ui.canvas.pixels,sizeof(reference)); ui.dirty=1; du_render(&ui);
+    assert(!memcmp(reference,ui.canvas.pixels,sizeof(reference)));
+    rt_renders=rt_compared_rows=0;
+    assert(du_window_turn(&window,ui.now+20000000ull)>0);
+    assert(!rt_renders && !rt_compared_rows); /* identical progress snapshot */
+    du_set_text(widget,"Combined"); du_invalidate(&ui,widget->box);
+    du_progress(&ui,2,"Copy","Copying",3,10); assert(ui.dirty==3);
+    assert(du_contains(ui.invalid,widget->box.x,widget->box.y) &&
+        du_contains(ui.invalid,ui.dialog.box.x+ui.dialog.box.w-1,ui.dialog.box.y+ui.dialog.box.h-1));
+    du_render(&ui); memcpy(reference,ui.canvas.pixels,sizeof(reference));
+    ui.dirty=1; du_render(&ui); assert(!memcmp(reference,ui.canvas.pixels,sizeof(reference)));
+    du_progress(&ui,2,"Copy","Copying",0,0); du_render(&ui);
+    ui.now+=100000000ull; du_progress(&ui,2,"Copy","Copying",0,0);
+    assert(ui.dirty==2); /* unchanged indeterminate values still animate */
+    timer_change=0; du_window_destroy(&window);
+    assert(!rt_handles() && !rt_mappings());
+    puts("PASS F2-86 timer changed widget: renders=1 bounded; progress: renders=1 dialog-only; pending dirty preserved");
+}
+
 int main(int argc, char **argv)
 {
     out = argc > 1 ? argv[1] : NULL;
+    timer_invalidation_test();
     pixels = calloc(W * H + 1, 4); assert(pixels); pixels[W * H] = 0x5a5a5a5au;
     du_init(&u, pixels, W, H); u.event = handler;
 

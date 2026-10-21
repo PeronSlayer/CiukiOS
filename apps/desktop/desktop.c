@@ -138,6 +138,42 @@ static void gate_input(struct desktop *d, const struct ciuki_input_event *event)
 #define GATE_HOLD_MAX_NS 30000000000ull
 static struct ciuki_input_event input_fifo[GATE_INPUT_FIFO];
 static unsigned fifo_head, fifo_count;
+/* No timed input/channel wait in the native ABI. Empty service polls share
+ * this 10 ms idle cadence; actual deadlines and active input may shorten it. */
+static void loop_deadline(uint64_t now,uint64_t deadline,uint64_t *wait)
+{
+    uint64_t left=deadline>now ? deadline-now : 1000000ull;
+    if (left<*wait) *wait=left;
+}
+static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_pending,uint64_t timer)
+{
+    uint64_t wait=input_pending || d->buttons || d->drag>=0 || d->sh.volume_drag ? 1000000ull : 10000000ull;
+    if (d->damage.count || d->move_damage.count || d->present_damage.count || d->cursor_dirty)
+        loop_deadline(now,d->next_frame_ns,&wait);
+    if (d->animation.active)
+        loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
+    loop_deadline(now,timer,&wait);
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (c->channel<0 || !c->hello || (c->version==DESK_V3_VERSION && !c->window)) continue;
+        if (!c->ping_pending && c->tx_count<DESK_TX_MAX) loop_deadline(now,c->next_ping_ns,&wait);
+        else if (c->ping_pending && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
+    }
+    if (d->shell) {
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid && d->children[i].close_ns && !d->children[i].term_sent)
+            loop_deadline(now,d->children[i].close_ns,&wait);
+        const struct sh_notification *n=&d->sh.notification;
+        if (n->active) {
+            loop_deadline(now,n->expires,&wait);
+            if (now>=n->started && now-n->started<160000000ull)
+                loop_deadline(now,n->started+((now-n->started)/8000000ull+1)*8000000ull,&wait);
+        }
+        if (!d->sh.tooltip && d->sh.hover_since && d->sh.hover_target && !n->active &&
+            !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open)
+            loop_deadline(now,d->sh.hover_since+600000000ull,&wait);
+    }
+    return wait;
+}
 static int scenario_hold(const struct desktop *d, uint64_t now)
 {
     for (int i=0; i<DESK_CLIENTS; i++) {
@@ -1680,6 +1716,7 @@ int main(int argc, char **argv)
     uint64_t shift_base=0, shift_release=0, mixer_poll_next=0;
     for (;;) {
         uint64_t now = monotonic();
+        uint64_t inputs_before=d->inputs;
         desktop_stage(STALL_SHELL);
         desktop_wait("mixer-poll");
         mixer_poll(d,now,&mixer_poll_next);
@@ -1940,10 +1977,13 @@ int main(int argc, char **argv)
         if (gate && progress!=reported_progress) { reported_progress=progress; input_dirty=1; }
         if (test && victim && victim_pid<0 && completed<cycles && now>=next_victim)
             victim_pid=spawn_demo(d,victim,0);
-        /* Sleep even under continuous damage. The independent frame deadline
-         * caps rendering; 1 ms service keeps input ahead of the next frame. */
+        /* Input drains and all service polls run together. An unchanged
+         * desktop sleeps 10 ms; real work retains its earlier deadline. */
         desktop_stage(STALL_IDLE);
-        __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(monotonic()/1000000ull),__ATOMIC_RELEASE);
-        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
+        uint64_t sleep_now=monotonic();
+        __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
+        uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
+        uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count || d->inputs!=inputs_before,timer);
+        struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait}; nanosleep(&pause,NULL);
     }
 }

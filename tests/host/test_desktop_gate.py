@@ -287,6 +287,11 @@ void klog(const char *f,...) {(void)f;}
                     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                     self.assertIn('draws and services IPC PASS',result.stdout)
                     self.assertNotIn('input unavailable',result.stderr)
+                    self.assertIn('PASS F2-86 idle policy: 100 turns/s',result.stdout)
+                    if mode=='--no-input':
+                        self.assertIn('PASS F2-86 production idle: service_turns_per_second=100',result.stdout)
+                        if not shifted:
+                            print('\n'.join(line for line in result.stdout.splitlines() if line.startswith('PASS F2-86 ')))
         result=subprocess.run([str(binary),'--burst'],capture_output=True,text=True,env=env,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('dense interaction keys=200 motion=3000 buttons=74',result.stdout)
