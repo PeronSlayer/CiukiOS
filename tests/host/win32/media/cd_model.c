@@ -67,7 +67,7 @@ int mci_cd_host_ctl(int fd, uint32_t op, void *data, uint32_t bytes, void *buffe
   assert(h[2] == 1);
   if (op == MEDIA_CD_INFO) {
     struct ciuki_media_cd_info *p = data; assert(bytes == sizeof(*p));
-    p->capabilities = cd_model.caps; p->generation = cd_model.generation; p->max_read_sectors = 27; return 0;
+    p->capabilities = cd_model.present ? cd_model.caps : 0; p->generation = cd_model.generation; p->max_read_sectors = 27; return 0;
   }
   if (op == MEDIA_CD_TRAY) {
     struct ciuki_media_cd_tray *p = data; assert(bytes == sizeof(*p));

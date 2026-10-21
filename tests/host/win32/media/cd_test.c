@@ -121,8 +121,44 @@ int main(int argc, char **argv) {
   }
   cd_load("audio"); command("open cdaudio alias c", 0); command("play c notify", 0); cd_tick();
   cd_model.present = 0; advance(120); status("status c media present", "false"); finish();
+  /* Literal census spelling, using the default device name rather than
+   * an alias. Numeric from/to values select tracks in TMSF format. */
+  cd_load("mixed"); command("open cdaudio", 0);
+  command("set cdaudio time format tmsf", 0);
+  command("play cdaudio from 2 to 3", 0); cd_tick();
+  assert(cd_model.reads && !cd_model.plays);
+  command("stop cdaudio", 0); finish();
   cd_load("data"); command("open cdaudio alias c", 0); command("play c", MCIERR_OUTOFRANGE); assert(!cd_model.reads); finish();
-  cd_destroy(); assert(!live_allocations); out("LIVE allocations=0\n"); fclose(trace);
+  /* Additional sharing and empty-open regressions keep the census trace. */
+  FILE *saved = trace; trace = tmpfile(); assert(trace);
+  for (unsigned order = 0; order < 2; order++) {
+    cd_load("audio");
+    command(order ? "open cdaudio alias c shareable" : "open cdaudio alias c", 0);
+    command(order ? "open cdaudio!@1 alias second" : "open cdaudio!@1 alias second shareable", MCIERR_DEVICE_OPEN);
+    finish();
+  }
+  cd_load("audio");
+  command("open cdaudio alias c shareable", 0);
+  command("open cdaudio!@1 alias second shareable", 0);
+  assert(cd_model.handles == 1);
+  command("set c time format tmsf", 0);
+  command("play c from 1 to 2 notify", 0); cd_tick();
+  command("play second to 2 notify", 0);
+  assert(cd_model.notifications == 0); /* both aliases await the same transport */
+  cd_model.during_read = closed;
+  cd_tick(); /* closing an alias during unlocked IO cannot leave a stale device */
+  assert(cd_model.handles == 1);
+  status("status second time format", "tmsf");
+  command("stop second", 0); finish();
+  cd_load("audio"); cd_model.present = 0;
+  command("open cdaudio alias c", 0);
+  cd_model.present = 1; cd_model.generation++;
+  cd_model.read_error = -EIO;
+  command("play c notify", 0); cd_tick();
+  assert(cd_model.plays == 1 && cd_model.analog);
+  finish();
+  cd_destroy(); fclose(trace); trace = saved;
+  assert(!live_allocations); out("LIVE allocations=0\n"); fclose(trace);
   puts("PASS CD audio: MCI census, exact PCM, digital and analog paths, errors, epochs, notifications, tray");
   return 0;
 }
