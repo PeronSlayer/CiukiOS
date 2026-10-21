@@ -6,8 +6,8 @@
 of the 1990s on the computers of the 1990s. Dedicated to **Ciuki**, the dog
 in the boot splash. Code under [GNU GPLv2](LICENSE).
 
-**Version: 0.9.2 pre-alpha** on `main` (the Ciuki VMM line, built on a new
-32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 0.9.2
+**Version: 1.0.0 alpha** on `main` (the Ciuki VMM line, built on a new
+32-bit kernel), next to the frozen **0.8** line on branch `legacy-0.8`. 1.0.0 alpha
 is not released: its evidence is host tests, QEMU campaigns up to
 2026-10-19 and owner trials of earlier images on a ThinkPad T23. No image of
 the current `main` has run on hardware yet, hardware qualification is open
@@ -51,7 +51,7 @@ There are two lines of code:
 | Line | Branch | What it is | State |
 | --- | --- | --- | --- |
 | **0.8** | [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8) | The DOS-based system in the screenshots below: CiukiDOS kernel, graphical desktop, DOS games in windows, CiukWeb browser. | Frozen. Last release: prerelease **0.8.3 build 849** with a [Windows portable bundle](docs/windows-portable-release.md). |
-| **Ciuki VMM** | `main` | **0.9.2 pre-alpha.** A 32-bit protected-mode kernel with paging, priority scheduling and fault containment, whose disk, memory, cache and real-time management follow the Windows 98/ME model (dynamic block cache, asynchronous I/O queues, memory objects, page replacement and a swap file); drivers for ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, ATAPI CD-ROM, NTFS read-only, the framebuffer with S3 Savage support, AC'97 and other audio chips and several network cards; native processes with a POSIX-subset libc, Lua and an on-board C compiler; a ring-3 desktop (top bar with the Ciuki orb, window bar, Files, CiukNote, Music, Terminal, Registry Editor, Control Panel, accessories); DOS virtual machines (V86, XMS/EMS/UMB, a kernel DPMI host, Sound Blaster 16 and OPL3, in a window or full screen) whose DOS file calls are handed to the kernel's file system (merged, host-tested); the first libraries of a Win32 personality. DOOM, Wolfenstein 3D and Quake shareware are pre-installed. | Unreleased. QEMU: the last campaign (image `f56fcbf5…`, 2026-10-19) passed the F0–F4 gate cases and the F5 kernel-core cases, except four known red cases; the owner then suspended the QEMU gates for the hardware trial cycle, so what was merged after it (resource management, DOS file API, Win32 libraries) has host-test evidence only. Hardware: only the ThinkPad T23 has run this line, in owner trials of more than twenty images between 13 and 19 October (the last one `4bcd1d43…`); no image of the current `main` has run on hardware; the E500 and generic PCs have not run it. Main prereleases are suspended. |
+| **Ciuki VMM** | `main` | **1.0.0 alpha.** A 32-bit protected-mode kernel with paging, priority scheduling and fault containment, whose disk, memory, cache and real-time management follow the Windows 98/ME model (dynamic block cache, asynchronous I/O queues, memory objects, page replacement and a swap file); drivers for ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, ATAPI CD-ROM, NTFS read-only, the framebuffer with S3 Savage support, AC'97 and other audio chips and several network cards; native processes with a POSIX-subset libc, Lua and an on-board C compiler; a ring-3 desktop (top bar with the Ciuki orb, window bar, Files, CiukNote, Music, Terminal, Registry Editor, Control Panel, accessories); DOS virtual machines (V86, XMS/EMS/UMB, a kernel DPMI host, Sound Blaster 16 and OPL3, in a window or full screen) whose DOS file calls are handed to the kernel's file system (merged, host-tested); the first libraries of a Win32 personality. DOOM, Wolfenstein 3D and Quake shareware are pre-installed. | Unreleased. QEMU: the last campaign (image `f56fcbf5…`, 2026-10-19) passed the F0–F4 gate cases and the F5 kernel-core cases, except four known red cases; the owner then suspended the QEMU gates for the hardware trial cycle, so what was merged after it (resource management, DOS file API, Win32 libraries) has host-test evidence only. Hardware: only the ThinkPad T23 has run this line, in owner trials of more than twenty images between 13 and 19 October (the last one `4bcd1d43…`); no image of the current `main` has run on hardware; the E500 and generic PCs have not run it. Main prereleases are suspended. |
 
 **Regressions of 20 October 2026, fixed.** The first QEMU boot of the
 integrated image found three regressions (application windows, wallpaper, DOS
@@ -89,7 +89,7 @@ build, and the hardware qualifies the final image of the programme.
 
 Details and gates: [Roadmap](Roadmap.md).
 
-## What the 0.9.2 pre-alpha does today
+## What the 1.0.0 alpha does today
 
 Only what is merged on `main`. Each item says how far its evidence goes:
 **T23** (seen in an owner trial on the ThinkPad T23, always on an earlier
@@ -166,7 +166,7 @@ not yet run in the guest).
   `/Programs`, `/Documents`, `/system`, `/tmp`, synthetic `/dev` and `/mnt`);
   users see `C:\Programs`, `C:\Documents`, `C:\System` and `C:\Games`.
 
-## 0.9.2 pre-alpha in pictures
+## 1.0.0 alpha in pictures (screenshots taken on the 0.9.2 pre-alpha desktop)
 
 QEMU captures (Pentium III profile, TCG) of the canonical image `116ced5d…`
 built from `main` at `cc81cbb6` on 2026-10-20; the DOOM frame comes from the
