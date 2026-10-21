@@ -459,9 +459,13 @@ The full Windows 98 DDK/pager research gaps in f0-42 remain open.
 
 The FAT32 system volume:
 
-- 512-byte sectors, 4 KiB clusters, 2 FATs, 32 reserved sectors, FSInfo at
-  sector 1, backup boot sector at 6 (its FSInfo copy at 7), root directory at
-  cluster 2.
+- 512-byte sectors, 4 KiB clusters, 2 FATs, **160 reserved sectors**
+  (`CIUKI_FAT_RESERVED_SECTORS` in `src/boot/ciukldr/disk.inc`, `FAT_RESERVED`
+  in `scripts/build_image.py`): boot sector 0, FSInfo at sector 1, backup boot
+  sector at 6 (its FSInfo copy at 7), the blackbox descriptor `CBB1` at sector
+  8 and the 128-sector blackbox ring at sectors 32–159; root directory at
+  cluster 2. (The earlier "32 reserved sectors" text was stale; corrected by
+  f9-00 on 2026-10-21.)
 - At least 65,525 data clusters, so a partition of at least about 270 MiB.
   The canonical image is 512 MiB (sparse on the host; compressed in releases).
   The 0.8 128 MiB size cannot be FAT32 with 4 KiB clusters.
