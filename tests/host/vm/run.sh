@@ -30,3 +30,4 @@ for test in bridge ne2000 ipx tap port primary identity identity_vfs settings ne
     (cd "$root" && "$out/${test}_test")
 done
 bash "$root/tests/host/vm/run_lifecycle.sh"
+bash "$root/tests/host/vm/run_process_exit.sh"

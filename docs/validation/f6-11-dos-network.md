@@ -59,6 +59,38 @@ and pixel restoration. Production panel code is unchanged. Exact commands,
 results, the post-f0-50 gate checks and sanitizer restrictions are recorded in
 the report's Amendment 4 section.
 
+## Amendment 5: irreversible PSP removal
+
+Research rechecked online on 2026-10-21 against [DOOM IPXNET.C](https://raw.githubusercontent.com/id-Software/DOOM/master/ipx/IPXNET.C)
+(`OpenSocket` uses AL=00), [BUILD MULTI.C](https://github.com/videogamepreservation/dukenukem3d/blob/master/SRC/MULTI.C)
+(long-lived socket and ESR repost usage), and [Novell's legacy ESR discussion](https://support.novell.com/techcenter/articles/dnd19960702.html).
+The Novell article describes the later NWSIPX interface as well as legacy ESRs;
+it is not a complete legacy INT7Ah longevity specification. Amendment 5 supplies
+the binding PSP-removal policy. The [DPMI 1.0 interrupt/callback specification](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf),
+[DP8390D datasheet](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D%2CNS32490D.pdf),
+[QEMU NE2000 model](https://raw.githubusercontent.com/qemu/qemu/master/hw/net/ne2000.c)
+and [DOOM setup handshake](https://raw.githubusercontent.com/id-Software/DOOM/master/ipx/IPXSETUP.C)
+retain their existing roles; this amendment changes none of those interfaces.
+
+The former adapter cancelled transient sockets only on a successful final
+hook result, although file release irreversibly clears the child PSP before
+returning close errors or parent preflight/mirror errors. Add an optional
+process-exit notification at the irreversible `release_process()` boundary,
+before file release. Its callers have already validated the process record.
+The production VM connects it to its existing IPX process-exit
+operation. Both process exit and EXEC rollback cancel the child's transient
+sockets, listeners and queued ESRs regardless of subsequent cleanup errors.
+The returned error and the existing long-lived/parent socket policy stay intact.
+Rejected hook requests and absent/dead PSP bindings never reach the notification.
+
+The host regression uses production DOS lifecycle, FAT/VFS and IPX code with
+the existing fake guest-memory/disk transports. A failing VFS final-close
+callback and a forged parent JFT exercise both error paths for process exit
+and EXEC rollback. It checks cancellation before final close, released pins,
+no delayed packet/ESR writes into reused child memory, preserved parent and
+long-lived sockets, and unchanged rejection behavior. Exact commands and
+sanitizer limitations are in the report's Amendment 5 section.
+
 ## Interfaces and limits
 
 Bridge mutation is serialized in thread context by its selected-port owner.
