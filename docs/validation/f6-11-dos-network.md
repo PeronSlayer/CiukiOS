@@ -16,6 +16,23 @@ The lead explicitly selects VMM IPX API emulation in place of the contract's
 older ODI/IPX-shim wording. The NE2000 remains an independent packet-driver
 surface; no translation through lwIP or native sockets exists.
 
+## Amendment 3 research and implementation
+
+Checked the following primary sources online on 2026-10-21 against the
+accepted amendment-2 implementation before the corresponding fixes:
+
+- [DP8390D datasheet, section 10.3, ISR](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D%2CNS32490D.pdf): overflow sets both OVW and RST. RST is not writable or interrupting; start clears stop/reset status, and removing ring packets clears overflow status. Track overflow separately until a valid changed BNRY releases ring storage. Keep OVW acknowledgement independent.
+- [QEMU `ne2000_ioport_write`](https://raw.githubusercontent.com/qemu/qemu/master/hw/net/ne2000.c): with STOP clear and count zero, either remote read or remote write sets RDC. Extend the existing model to both commands and retain IMR-controlled IRQ delivery.
+- [DPMI Committee specification 1.0, pages 34–35, 85–91](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf): 0300h enters the IVT target with an IRET frame; 0301h uses a far-return frame; a real-mode callback can subsequently enter a protected-mode procedure. Dispatch the synthetic 2Fh/7Ah entries without consuming their original IRET frames. An asynchronous ESR uses the existing bounded DPMI reflection record and real-mode stack with a far-return trampoline, preserving the full PM continuation, including nested callbacks. No new guest DPMI service is introduced.
+- [Released BUILD `MULTI.C`, `simulateint`, `neton`, receive handler](https://github.com/videogamepreservation/dukenukem3d/blob/master/SRC/MULTI.C): discovery/open/listen use DPMI 0300h; AL=FF requests a long-lived socket, and conventional receive code reposts its ECB. Transient AL=00 sockets retain their opening PSP and are closed without ESR delivery at the validated DOS process-exit/EXEC-rollback hook. Existing AL=FF sockets persist.
+
+Physical link-loss/revocation notifications latch an epoch on the selected
+netif. The existing bounded network worker observes it independently of VM
+execution, takes the nonblocking bridge owner gate and drains RX/TX references.
+A down/up transition is retained until consumed; gate contention retries on
+the next pass. Generation mismatch also drains without programming a replacement
+NIC. Exact host commands and limitations are in the Amendment 3 report.
+
 ## Interfaces and limits
 
 Bridge mutation is serialized in thread context by its selected-port owner.

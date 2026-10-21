@@ -187,6 +187,24 @@ int main(void)
     }
     ecb(&b,0x14000,0x24000,64,0x869c,false); CHECK((call(&b,4,0,0,0x14000).ax&255)==0xfe);
     call(&b,1,0,0x9c86,0); CHECK(!b.live);
+    /* Transient sockets belong to their opener, including completed ESRs.
+     * Long-lived sockets and another PSP's transient socket survive. */
+    b.ipx.psp=0x1234; CHECK(!(call(&b,0,0,0x9c86,0).ax&255));
+    CHECK(!(call(&b,0,0xff,0x9d86,0).ax&255));
+    b.ipx.psp=0x2345; CHECK(!(call(&b,0,0,0x9e86,0).ax&255));
+    ecb(&b,0x3000,0xb000,64,0x869c,true); call(&b,4,0,0,0x3000);
+    CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==1); /* ESR queued, not delivered */
+    ecb(&b,0x3100,0xb100,64,0x869c,true); call(&b,4,0,0,0x3100);
+    ecb(&b,0x3200,0xb200,64,0x869d,true); call(&b,4,0,0,0x3200);
+    unsigned callbacks=b.callbacks;
+    dosvm_ipx_process_exit(&b.ipx,0x1234);
+    CHECK(!b.memory[0x3008] && b.memory[0x3009]==0xfc && b.memory[0x3109]==0xfc);
+    CHECK(b.memory[0x3208]==0xfe && dosvm_ipx_dispatch(&b.ipx)==0 && b.callbacks==callbacks);
+    memset(b.memory+0xb000,0x5a,0x200); /* terminated process's reused buffers */
+    CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==0 && b.memory[0xb000]==0x5a);
+    CHECK(!(call(&b,0,0,0x9c86,0).ax&255)); /* socket number can be reused */
+    CHECK((call(&b,0,0,0x9d86,0).ax&255)==0xff && (call(&b,0,0,0x9e86,0).ax&255)==0xff);
+    call(&b,1,0,0x9c86,0); call(&b,1,0,0x9d86,0); call(&b,1,0,0x9e86,0); CHECK(!b.live);
     for(unsigned i=0;i<32;i++) CHECK(!(call(&b,0,0,0,0).ax&255));
     CHECK((call(&b,0,0,0,0).ax&255)==0xfe);
     uint32_t gen=b.ipx.generation; dosvm_ipx_destroy(&a.ipx); dosvm_ipx_destroy(&b.ipx);

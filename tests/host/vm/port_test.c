@@ -37,6 +37,7 @@ int PORT_TEST_MAIN(void)
     struct netif *d=&devices[0]; d->generation=77; d->ready=d->running=true; d->link=NET_LINK_UP;
     kmutex_init(&registration_mutex);
     CHECK(!net_bridge_port_open(&port,&pool,d,1,id,0,0,mode));
+    device_count=1; /* run the actual driver worker with no VM workers */
     CHECK(port.registered && port.bridge.link);
     CHECK(net_bridge_port_open(&port,&pool,d,1,id,0,0,mode)==-EINVAL);
     struct bridge_key key={1,12}; uint8_t mac[6];
@@ -50,7 +51,24 @@ int PORT_TEST_MAIN(void)
     frame_tap(d,frame,64,&port); CHECK(pool.used==1);
     CHECK(net_bridge_port_acquire(&port)); frame_tap(d,frame,64,&port);
     CHECK(port.busy_drops==1); net_bridge_port_release(&port);
-    d->link=NET_LINK_DOWN; net_bridge_port_carrier(&port); CHECK(!pool.used && !port.bridge.link);
+    /* Both VM workers are absent/suspended: only the net worker services loss. */
+    struct bridge_key peer={2,13}; uint8_t peer_mac[6];
+    CHECK(!net_bridge_enable(&port.bridge,peer,0,peer_mac));
+    memcpy(frame+6,mac,6); memcpy(frame+36,mac,6);
+    CHECK(!net_bridge_send(&port.bridge,key,frame,64,0)); CHECK(pool.used==2);
+    d->link=NET_LINK_DOWN; bridge_tap_changed(d);
+    CHECK(net_bridge_port_acquire(&port)); net_worker_step(); CHECK(pool.used==2);
+    net_bridge_port_release(&port); net_worker_step();
+    CHECK(!pool.used && !port.bridge.link && !port.bridge.vm[0].rx.count && !port.bridge.vm[1].tx.count);
+    d->link=NET_LINK_UP; net_worker_step(); CHECK(port.bridge.link);
+    frame_tap(d,frame,64,&port); /* source local: filtered, use physical peer */
+    frame[6]=2; frame[7]=99; memcpy(frame+36,frame+6,6);
+    frame_tap(d,frame,64,&port); CHECK(pool.used==1);
+    d->link=NET_LINK_DOWN; bridge_tap_changed(d); d->link=NET_LINK_UP;
+    net_worker_step(); CHECK(!pool.used && port.bridge.link); /* latched down/up */
+    frame_tap(d,frame,64,&port); CHECK(pool.used==1);
+    d->generation++; net_worker_step(); CHECK(!pool.used && !port.bridge.link);
+    d->generation--; net_bridge_disable(&port.bridge,peer);
     CHECK(net_bridge_port_acquire(&port)); net_bridge_disable(&port.bridge,key); net_bridge_port_release(&port);
     CHECK(modes==11 && !port.bridge.promiscuous);
     CHECK(!net_bridge_port_close(&port) && !port.registered && !bridge_tap.fn && port.closing);

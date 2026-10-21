@@ -71,5 +71,8 @@ typedef void (*net_bridge_tap_fn)(struct netif *, const uint8_t *, unsigned, voi
 /* Exclusive type-filtered worker tap, consumed before the native stack. Clear
  * synchronizes with an active callback. The callback must not unregister itself. */
 int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn, void *);
+/* Optional bounded maintenance on the same net worker, even without frames.
+ * Shares tap revocation/active synchronization. No device mutex is held. */
+int net_bridge_tap_worker_register(void (*)(struct netif *, void *), void *);
 void net_bridge_tap_unregister(net_bridge_tap_fn, void *);
 #endif

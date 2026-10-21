@@ -7,7 +7,7 @@ struct net_bridge_port {
     struct net_bridge bridge;
     struct netif *device;
     int (*receive_mode)(struct netif *, bool);
-    uint32_t generation, busy_drops;
+    uint32_t generation, busy_drops, epoch;
     bool busy, registered, closing;
 };
 /* All control/VM bridge accesses take this nonblocking owner gate. Contention

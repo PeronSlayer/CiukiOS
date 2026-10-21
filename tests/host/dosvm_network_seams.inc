@@ -1,6 +1,7 @@
 /* The VM/network adapters are production; only the physical NIC transport is
  * replaced here. Frame-pool integration has its separate F6 fixture. */
 static net_bridge_tap_fn host_network_tap;
+static void (*host_network_work)(struct netif *, void *);
 static void *host_network_cookie;
 static int host_network_mode_error;
 static bool host_network_promiscuous;
@@ -17,7 +18,12 @@ int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *arg)
 void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *arg)
 {
     CHECK(host_network_tap == fn && host_network_cookie == arg);
-    host_network_tap = 0; host_network_cookie = 0;
+    host_network_tap = 0; host_network_cookie = 0; host_network_work = 0;
+}
+int net_bridge_tap_worker_register(void (*fn)(struct netif *, void *), void *arg)
+{
+    CHECK(host_network_tap && arg == host_network_cookie);
+    host_network_work = fn; return 0;
 }
 int netif_transmit(struct netif *d, gen_t generation, const void *frame, unsigned length)
 {

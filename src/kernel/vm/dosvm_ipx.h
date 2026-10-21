@@ -44,7 +44,7 @@ struct dosvm_ipx_ecb {
     uint8_t immediate[6];
     struct dosvm_ipx_fragment fragment[DOSVM_IPX_FRAGMENTS];
 };
-struct dosvm_ipx_socket { uint16_t number; uint8_t lifetime; bool open; };
+struct dosvm_ipx_socket { uint16_t number, owner; uint8_t lifetime; bool open; };
 struct dosvm_ipx {
     struct dosvm_ipx_ops ops;
     struct dosvm_ipx_socket socket[DOSVM_IPX_SOCKETS];
@@ -52,7 +52,7 @@ struct dosvm_ipx {
     uint8_t mac[6], frame[1514];
     uint32_t generation, rejected, memory_errors, rx_dropped, callbacks_dropped;
     uint64_t ticks, sequence;
-    uint16_t next_dynamic;
+    uint16_t next_dynamic, psp; /* adapter supplies the current opening PSP */
     bool enabled, servicing;
 };
 int dosvm_ipx_init(struct dosvm_ipx *, uint32_t generation, const uint8_t mac[6], const struct dosvm_ipx_ops *);
@@ -64,5 +64,6 @@ void dosvm_ipx_service(struct dosvm_ipx *, uint64_t ticks);
 int dosvm_ipx_receive(struct dosvm_ipx *, const uint8_t *, unsigned);
 int dosvm_ipx_dispatch(struct dosvm_ipx *);
 void dosvm_ipx_disconnect(struct dosvm_ipx *);
+void dosvm_ipx_process_exit(struct dosvm_ipx *, uint16_t psp);
 void dosvm_ipx_destroy(struct dosvm_ipx *);
 #endif

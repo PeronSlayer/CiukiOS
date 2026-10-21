@@ -4,6 +4,7 @@
 #define main unused_dosvm_suite_main
 #include "../dosvm_test.c"
 #undef main
+#include "network_dpmi.inc"
 int main(void)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
@@ -39,5 +40,6 @@ int main(void)
     CHECK(!network(v) && !port.bridge.count && !host_network_promiscuous && !pool.used);
     CHECK(!used_pages && !heap_blocks && fake_surface[0].references == 1);
     CHECK(!dosvm_network_bind_port(0) && !net_bridge_port_close(&port));
+    test_network_dpmi();
     free(ram); printf("network launch/lifecycle: %u checks passed\n", checks); return 0;
 }

@@ -4,6 +4,7 @@
 #include "dosvm_internal.h"
 #include "dos_file_hook.h"
 #include "dos_file_volume.h"
+#include "dosvm_network.h"
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 static bool file_check(void *arg,uint32_t linear,size_t bytes,bool write) {
@@ -137,6 +138,8 @@ int dosvm_file_interrupt(struct dosvm *v,struct v86_frame *f,uint8_t vector,unsi
         struct dos_file_frame r=unpack(f);
         int e=r.ax==0 ? file_bind(v,&r,ret[1]) :
             v->files ? dos_file_hook_event(v->files,&r,ret[1]) : -FS_EINVAL;
+        if (!e && (r.ax==DOS_FILE_PROCESS_EXIT || r.ax==DOS_FILE_EXEC_ROLLBACK))
+            dosvm_network_process_exit(v,r.bx);
         struct dos_file_error error; dos_file_error_from_fs(&error,e,false);
         r.ax=e ? error.code : 0; r.flags=(uint16_t)((r.flags&~1u)|(e ? 1 : 0)); pack(f,&r); return 0;
     }

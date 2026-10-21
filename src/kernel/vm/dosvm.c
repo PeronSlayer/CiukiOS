@@ -846,7 +846,7 @@ static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
     uint32_t sb_delivered = v->monitor.stats.delivered[v->audio.sb.irq & 15];
     int e = 0;
     uint32_t flags = irq_save();
-    if (!v->frame_pm) e = dosvm_network_dispatch(v, f);
+    e = dosvm_network_dispatch(v, f);
     if (!v->frame_pm && !e) e = dosvm_mouse_dispatch(v, f);
     if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
     irq_restore(flags);
@@ -1121,6 +1121,12 @@ static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
     if (f->tf.cs == 0xF100 && f->tf.eip == 2) service = 0x67; /* EMS stub page */
     else if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip >= 0x1000) return -V86_EPERM;
     else service = (uint8_t)(f->tf.eip >> 4);
+    /* Simulated interrupts and PM reflection arrive through the IVT's
+     * synthetic INT FEh; leave their original IRET frame intact. */
+    if (service == 0x2f || service == 0x7a) {
+        int network = dosvm_network_interrupt(v, f, service);
+        if (network != -ENOSYS) return network;
+    }
     uint32_t off = (uint16_t)f->tf.user_esp;
     if (off > 0xFFFA || f->tf.user_ss > 0xFFFF) return -EFAULT;
     uint32_t linear = (f->tf.user_ss << 4) + off + 4;

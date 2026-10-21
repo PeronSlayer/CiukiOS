@@ -132,7 +132,7 @@ int dosvm_ipx_interrupt(struct dosvm_ipx *v, unsigned vector, struct dosvm_ipx_r
             number = 0;
         }
         if (!number) { al(r, 0xfe); break; }
-        v->socket[index] = (struct dosvm_ipx_socket){number, (uint8_t)r->ax, true};
+        v->socket[index] = (struct dosvm_ipx_socket){number, v->psp, (uint8_t)r->ax, true};
         r->dx = swap(number); al(r, 0); break;
     }
     case 1: close_socket(v, swap(r->dx)); break;
@@ -241,6 +241,13 @@ int dosvm_ipx_dispatch(struct dosvm_ipx *v)
     int result = v->ops.upcall(v->ops.arg, &call);
     if (result) { if (result < 0) v->callbacks_dropped++; release(v, e); }
     return result;
+}
+void dosvm_ipx_process_exit(struct dosvm_ipx *v, uint16_t psp)
+{
+    if (!v || !v->enabled) return;
+    for (unsigned i = 0; i < DOSVM_IPX_SOCKETS; i++)
+        if (v->socket[i].open && v->socket[i].lifetime == 0 && v->socket[i].owner == psp)
+            close_socket(v, v->socket[i].number);
 }
 void dosvm_ipx_disconnect(struct dosvm_ipx *v)
 {

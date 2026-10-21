@@ -26,7 +26,29 @@ static void *input_cookie;
 /* f6-11 BEGIN: exclusive Ethernet type tap, independent of native ingress.
  * Serialized registration, revocation before waiting, no device mutex held
  * across the callback. The bridge callback must not unregister itself. */
-static struct { net_bridge_tap_fn fn; void *cookie; uint16_t type; bool active; } bridge_tap;
+static struct {
+    net_bridge_tap_fn fn;
+    void (*work)(struct netif *, void *);
+    void *cookie; uint16_t type; bool active;
+} bridge_tap;
+/* Notification only under the NIC mutex: no bridge owner/driver lock cycle. */
+static void bridge_tap_changed(struct netif *d) { d->bridge_epoch++; }
+int net_bridge_tap_worker_register(void (*work)(struct netif *, void *), void *cookie)
+{
+    kmutex_lock(&registration_mutex);
+    int e = !bridge_tap.fn || bridge_tap.cookie != cookie ? -NET_ENODEV : 0;
+    if (!e) { uint32_t flags = irq_save(); bridge_tap.work = work; irq_restore(flags); }
+    kmutex_unlock(&registration_mutex); return e;
+}
+static void bridge_tap_work(struct netif *d)
+{
+    uint32_t flags = irq_save();
+    void (*work)(struct netif *, void *) = bridge_tap.work;
+    if (!bridge_tap.fn || !work) { irq_restore(flags); return; }
+    void *cookie = bridge_tap.cookie; bridge_tap.active = true; irq_restore(flags);
+    work(d, cookie);
+    flags = irq_save(); bridge_tap.active = false; irq_restore(flags);
+}
 int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *cookie)
 {
     if (type != BRIDGE_IPX_TYPE || !fn) return -EINVAL;
@@ -43,7 +65,7 @@ void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *cookie)
 {
     kmutex_lock(&registration_mutex);
     if (bridge_tap.fn == fn && bridge_tap.cookie == cookie) {
-        uint32_t flags = irq_save(); bridge_tap.fn = 0; irq_restore(flags);
+        uint32_t flags = irq_save(); bridge_tap.fn = 0; bridge_tap.work = 0; irq_restore(flags);
         while (bridge_tap.active) task_sleep_ms(1);
         bridge_tap.cookie = 0; bridge_tap.type = 0;
     }
@@ -198,6 +220,7 @@ static void quarantine_locked(struct netif *d, const char *reason)
     if (d->quarantined) return;
     d->quarantined = d->stopping = true; d->ready = d->running = false;
     d->link = NET_LINK_DOWN; d->reason = reason; d->stats.quarantines++;
+    bridge_tap_changed(d); /* bounded worker drains after the NIC mutex */
     /* Mask sources and revoke PCI bus mastering, but never reset or release
      * buffers after fault. Neither write by itself is an idle proof. */
     if (d->touched) {
@@ -219,6 +242,7 @@ static int stop_locked(struct netif *d)
 {
     if (d->quarantined) return -NET_EIO;
     d->stopping = true; d->ready = false;
+    bridge_tap_changed(d);
     if (d->touched) {
         d->driver->irq_enable(d, false);
         if (d->driver->stop(d)) { quarantine_locked(d, "stop_unproved"); return -NET_EIO; }
@@ -420,7 +444,11 @@ void netif_poll(struct netif *d)
         if (net_expired(d, d->link_deadline)) {
             enum net_link link = d->driver->link_state(d);
             if (d->fault_pending) quarantine_locked(d, "link_fault");
-            else if (link != d->link) { d->link = link; record(d); }
+            else if (link != d->link) {
+                d->link = link;
+                if (link == NET_LINK_DOWN) bridge_tap_changed(d);
+                record(d);
+            }
             d->link_deadline = d->io.now(d->io.cookie) + 1000;
         }
     }
@@ -486,7 +514,9 @@ void net_worker_step(void)
     if (net_stack_driver_service) { net_stack_driver_service(); task_yield(); }
     for (unsigned i = 0; i < device_count; i++) {
         if (shutting_down) break;
-        netif_poll(&devices[i]); task_yield();
+        netif_poll(&devices[i]);
+        bridge_tap_work(&devices[i]); /* no VM scheduling or incoming frame needed */
+        task_yield();
         if ((input || bridge_tap.fn) && netif_pop(&devices[i], &packet) &&
             !bridge_tap_frame(&devices[i], &packet)) { /* f6-11 type tap before native ingress */
             net_input_fn fn = input; void *cookie = input_cookie;

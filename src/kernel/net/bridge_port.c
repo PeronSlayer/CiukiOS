@@ -30,9 +30,21 @@ static int receive_mode(void *arg, bool on)
 void net_bridge_port_carrier(struct net_bridge_port *p)
 {
     struct netif *d = p->device;
+    if (d && p->epoch != d->bridge_epoch) {
+        net_bridge_link(&p->bridge, false);
+        p->epoch = d->bridge_epoch;
+    }
     bool up = d && d->generation == p->generation && d->ready && d->running &&
         !d->stopping && !d->quarantined && d->link != NET_LINK_DOWN;
     if (p->bridge.link != up) net_bridge_link(&p->bridge, up);
+}
+static void port_work(struct netif *d, void *arg)
+{
+    struct net_bridge_port *p = arg;
+    if (d != p->device || p->closing || !net_bridge_port_acquire(p)) return;
+    /* Contention leaves the device epoch unconsumed; next worker pass retries. */
+    net_bridge_port_carrier(p);
+    net_bridge_port_release(p);
 }
 static void frame_tap(struct netif *d, const uint8_t *frame, unsigned length, void *arg)
 {
@@ -52,11 +64,16 @@ int net_bridge_port_open(struct net_bridge_port *p, struct bridge_pool *pool, st
         !d->generation || !d->ready || !d->running ||
         d->stopping || d->quarantined) return -EINVAL;
     memset(p, 0, sizeof(*p)); p->device = d; p->generation = d->generation; p->receive_mode = mode;
+    p->epoch = d->bridge_epoch;
     struct bridge_ops ops = {p,wire_transmit,receive_mode};
     int error = net_bridge_init(&p->bridge, pool, &ops, id, physical, count, interface, p->generation);
     if (error) return error;
     net_bridge_port_carrier(p);
     error = net_bridge_tap_register(BRIDGE_IPX_TYPE, frame_tap, p);
+    if (!error) {
+        error = net_bridge_tap_worker_register(port_work, p);
+        if (error) net_bridge_tap_unregister(frame_tap, p);
+    }
     if (!error) p->registered = true;
     return error;
 }

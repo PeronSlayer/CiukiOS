@@ -11,6 +11,22 @@ static unsigned wire_count;
 int net_bridge_primary_port(struct net_bridge_port **out)
 { *out = NULL; return -ENODEV; }
 static uint8_t wire_copy[1514];
+/* This isolated adapter fixture models only the DPMI transition transport;
+ * lifecycle_test executes the real records, stack, traps and PM return. */
+static struct v86_frame suspended_pm;
+int dpmi_to_real_call(struct dosvm *v,struct v86_frame *f,uint16_t cs,uint16_t ip,uint16_t ret)
+{
+    CHECK(v->frame_pm && v->dpmi.depth==1 && ret==DOSVM_IPX_RETURN);
+    suspended_pm=*f; v->dpmi.depth++; v->frame_pm=false;
+    f->tf.cs=cs; f->tf.eip=ip; f->tf.user_ss=0x700; f->tf.user_esp=0xfc;
+    uint16_t words[2]={ret,0xf000}; CHECK(!dosvm_write(v,0x70fc,words,4));
+    v->monitor.vif=false; f->tf.eflags&=~0x400u; return 0;
+}
+int dpmi_v86_return(struct dosvm *v,struct v86_frame *f)
+{
+    CHECK(!v->frame_pm && v->dpmi.depth==2);
+    *f=suspended_pm; v->frame_pm=true; v->dpmi.depth--; v->monitor.vif=true; return 0;
+}
 static int physical_send(struct netif *d,const uint8_t *p,unsigned bytes)
 { CHECK(d==&devices[0] && bytes>=60); wire_count++; memcpy(wire_copy,p,bytes); return 0; }
 static const struct netif_driver physical_driver={.transmit=physical_send};
@@ -68,7 +84,9 @@ int main(void)
     struct dosvm_network *n=network(v); CHECK(n && !memcmp(P2V(v->frames[0xf1])+0xc00,"\xcd\x7a\xcb",3));
     f.tf.eax=0x7a00; CHECK(!dosvm_network_interrupt(v,&f,0x2f));
     CHECK((f.tf.eax&255)==255 && f.es==0xf000 && f.tf.edi==DOSVM_IPX_ENTRY);
+    struct dos_file current={.selected=0x1234}; v->files=&current;
     f.tf.edx=0x9c86; f.tf.eax=0; command(v,&f,0,0); CHECK(!(f.tf.eax&255));
+    CHECK(n->ipx.socket[0].owner==0x1234); current.selected=0x2345;
     uint8_t *e=low[0]+0x2000; put16(e+10,0x9c86); put16(e+34,1);
     put16(e+4,0x30); put16(e+6,0x5000); put16(e+36,0); put16(e+38,0x600); put16(e+40,100);
     command(v,&f,4,0x2000); CHECK(e[8]==0xfe);
@@ -83,8 +101,9 @@ int main(void)
     v->monitor.vif=false; CHECK(!dosvm_network_dispatch(v,&f));
     v->monitor.vif=true; v->monitor.shadow=true; CHECK(!dosvm_network_dispatch(v,&f));
     v->monitor.shadow=false; v->mouse.active=true; CHECK(!dosvm_network_dispatch(v,&f));
-    v->mouse.active=false; v->frame_pm=true; CHECK(!dosvm_network_dispatch(v,&f));
-    v->frame_pm=false; v->dpmi.depth=1; CHECK(!dosvm_network_dispatch(v,&f)); v->dpmi.depth=0;
+    v->mouse.active=false; v->frame_pm=true; v->dpmi.active=true; v->dpmi.depth=1;
+    v->dpmi.rstack_top=DPMI_RSTACK_BYTES;
+    v->dpmi.shadow=true; CHECK(!dosvm_network_dispatch(v,&f)); v->dpmi.shadow=false;
     CHECK(dosvm_network_dispatch(v,&f)==1 && n->active && !v->monitor.vif);
     CHECK(f.tf.cs==0x5000 && f.tf.eip==0x30 && f.es==0x200 && f.tf.esi==0x2000%16);
     CHECK(f.tf.eax==0x123400ff && !(f.tf.eflags&0x400) && f.tf.user_esp==0xfc);
@@ -92,6 +111,7 @@ int main(void)
     CHECK(dosvm_network_interrupt(v,&f,0xfc)==-V86_EPERM);
     f.tf.cs=0xf000; f.tf.eip=DOSVM_IPX_RETURN+2; f.tf.user_esp=0x100;
     CHECK(!dosvm_network_interrupt(v,&f,0xfc) && !memcmp(&f,&saved,sizeof(f)) && v->monitor.vif && !n->active);
+    CHECK(v->frame_pm && v->dpmi.depth==1); /* neither PM condition was cleared to dispatch */
     uint32_t value=0; CHECK(!virtual_port(v,0x300,1,false,&value,n)); CHECK(value==0x21);
     value=0x7f; CHECK(!virtual_port(v,0x30f,1,true,&value,n)); dosvm_ne2000_overflow(&n->ne);
     CHECK(v->monitor.pic[0].irr&8); CHECK(!virtual_port(v,0x31f,1,false,&value,n)); CHECK(!(v->monitor.pic[0].irr&8));
@@ -117,6 +137,9 @@ int main(void)
     host_flags=0; dosvm_network_service(v,3000); CHECK(n->host_ms==2000); host_flags=0x200;
     command(v,&f,4,0x2000); d->link=NET_LINK_DOWN; dosvm_network_service(v,3000);
     CHECK(!e[8] && e[9]==0xfe && n->ipx.ticks==interval_ticks(3000) && !pool.used);
+    command(v,&f,4,0x2000); CHECK(e[8]==0xfe);
+    dosvm_network_process_exit(v,0x2345); CHECK(e[8]==0xfe); /* submitter is not opener */
+    dosvm_network_process_exit(v,0x1234); CHECK(!e[8] && e[9]==0xfc && !n->ipx.socket[0].open);
     CHECK(net_bridge_port_acquire(&port)); CHECK(dosvm_network_detach(v)==-16); net_bridge_port_release(&port);
     CHECK(!dosvm_network_detach(v) && !network(v) && !registered_ports[0]);
     CHECK(dosvm_network_dispatch(v,&f)==0);

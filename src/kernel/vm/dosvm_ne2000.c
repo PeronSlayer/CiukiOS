@@ -11,7 +11,7 @@ static void irq_update(struct dosvm_ne2000 *d)
 void dosvm_ne2000_reset(struct dosvm_ne2000 *d)
 {
     if (d->irq_level && d->ops.irq) d->ops.irq(d->ops.arg, false);
-    d->irq_level = false;
+    d->irq_level = false; d->overflow = false;
     d->command = 0x21; d->isr = 0x80; d->imr = 0;
     d->pstart = d->pstop = d->boundary = d->current = 0;
     d->remote = d->remote_start = d->count = d->tx_count = d->local = d->address_count = 0;
@@ -121,8 +121,8 @@ void dosvm_ne2000_write(struct dosvm_ne2000 *d, uint16_t port, unsigned width, u
         d->command = n;
         if (n & 1) d->isr |= 0x80;
         else {
-            d->isr &= ~0x80u;
-            if ((n & 0x38) == 8 && !d->count) d->isr |= 0x40;
+            if ((n & 2) && !d->overflow) d->isr &= ~0x80u;
+            if (((n & 0x38) == 8 || (n & 0x38) == 0x10) && !d->count) d->isr |= 0x40;
             if (n & 4) transmit(d);
         }
         irq_update(d); return;
@@ -131,7 +131,15 @@ void dosvm_ne2000_write(struct dosvm_ne2000 *d, uint16_t port, unsigned width, u
     case 0:
         switch (reg) {
         case 1: d->pstart = n; break; case 2: d->pstop = n; break;
-        case 3: d->boundary = n; break; case 4: d->tpsr = n; break;
+        case 3:
+            /* BNRY advances when software removes a packet. RST is status,
+             * not W1C; acknowledging OVW alone does not free ring storage. */
+            if (d->overflow && ring_valid(d) && n >= d->pstart && n < d->pstop && n != d->boundary) {
+                d->overflow = false;
+                if (!(d->command & 1)) d->isr &= ~0x80u;
+            }
+            d->boundary = n; break;
+        case 4: d->tpsr = n; break;
         case 5: d->tx_count = (d->tx_count & 0xff00) | n; break;
         case 6: d->tx_count = (d->tx_count & 255) | (uint16_t)n << 8; break;
         case 7: d->isr &= ~(n & 0x7f); break;
@@ -161,7 +169,7 @@ void dosvm_ne2000_write(struct dosvm_ne2000 *d, uint16_t port, unsigned width, u
     irq_update(d);
 }
 void dosvm_ne2000_overflow(struct dosvm_ne2000 *d)
-{ d->dropped++; d->rsr = 0x10; d->isr |= 0x10; irq_update(d); }
+{ d->dropped++; d->rsr = 0x10; d->overflow = true; d->isr |= 0x90; irq_update(d); }
 static uint32_t crc32(const uint8_t *data, unsigned n)
 {
     uint32_t crc = UINT32_MAX;

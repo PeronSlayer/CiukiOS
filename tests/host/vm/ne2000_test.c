@@ -23,6 +23,13 @@ int main(void)
     w(14,1); remote(0,32,0x0a);
     for(unsigned i=0;i<16;i++) { unsigned v=dosvm_ne2000_read(&d,0x310,2); CHECK((v&255)==(v>>8)); if(i<6) CHECK((v&255)==mac[i]); if(i>=14) CHECK(v==0x5757); }
     CHECK(d.count==0 && (r(7)&0x40)); w(7,0x7f);
+    /* Both zero-count DMA commands publish RDC even while masked. */
+    for (unsigned command=8; command<=16; command+=8) {
+        w(15,0); w(7,0x7f); remote(0x4000,0,command|2);
+        CHECK((r(7)&0x40) && !level && !d.count && d.remote==0x4000);
+        w(15,0x40); CHECK(level); w(7,0x40); CHECK(!level && !(r(7)&0x40));
+        w(15,0); w(0,0x21); w(0,command|1); CHECK(!(r(7)&0x40));
+    }
     remote(0x4000,3,0x12); dosvm_ne2000_write(&d,0x310,2,0x1234); dosvm_ne2000_write(&d,0x310,2,0x5678);
     CHECK(d.count==0 && d.ram[0]==0x34 && d.ram[3]==0x56);
     remote(0x4000,4,0x0a); CHECK(dosvm_ne2000_read(&d,0x310,2)==0x1234); CHECK(dosvm_ne2000_read(&d,0x310,2)==0x5678);
@@ -40,7 +47,16 @@ int main(void)
     remote(0x7ffe,4,0x12); dosvm_ne2000_write(&d,0x310,2,0xbeef); dosvm_ne2000_write(&d,0x310,2,0xcafe);
     CHECK(d.ram[0x3ffe]==0xef && d.ram[0x600]==0xfe && d.remote==0x4602);
     w(0,0x62); w(7,0x47); w(0,0x22); w(3,0x48);
-    CHECK(dosvm_ne2000_receive(&d,p,300)==-ENOSPC && (d.isr&0x10));
+    CHECK(dosvm_ne2000_receive(&d,p,300)==-ENOSPC && (d.isr&0x90)==0x90);
+    w(15,0x10); CHECK(level); w(7,0x90);
+    CHECK((r(7)&0x80) && !(r(7)&0x10) && !level); /* RST is not W1C/IRQ */
+    w(0,0x22); CHECK(r(7)&0x80); /* START alone cannot free an overflowed ring */
+    w(0,0x21); w(10,0); w(11,0); w(13,2); w(0,0x22);
+    CHECK(r(7)&0x80);
+    w(3,0x46); CHECK(!(r(7)&0x80) && !d.overflow);
+    CHECK(dosvm_ne2000_receive(&d,p,64)==1); w(13,0); w(7,0x7f);
+    w(0,0x21); w(7,0x80); CHECK(r(7)&0x80);
+    w(0,0x22); CHECK(!(r(7)&0x80)); /* stop reset clears on START */
     w(1,0); CHECK(dosvm_ne2000_receive(&d,p,64)==-ENOSPC); ring();
     memcpy(d.ram,p,64); w(4,0x40); w(5,64); w(6,0); w(0,0x26);
     CHECK(sent==1 && !memcmp(copied,p,64) && d.tsr==1 && !(d.command&4));

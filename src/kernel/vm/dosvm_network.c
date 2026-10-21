@@ -23,7 +23,9 @@ struct dosvm_network {
     struct dosvm_ipx_upcall active_call;
     uint64_t host_ms;
     uint32_t rx_overflows;
-    bool active, saved_vif, allocated;
+    unsigned callback_depth;
+    uint16_t callback_ss, callback_sp;
+    bool active, saved_vif, allocated, callback_pm;
 };
 /* Fixed upper bound and no heap failure in a receive path. The packet pool
  * is supplied separately and shared with physical/native network owners. */
@@ -140,20 +142,29 @@ static int guest_upcall(void *arg, const struct dosvm_ipx_upcall *call)
     struct dosvm_network *n = arg; struct dosvm *v = n->vm;
     struct v86_frame *f = n->dispatch_frame;
     if (!live(n) || call->generation != n->key.generation) return -EFAULT;
-    if (!f || n->active || v->frame_pm || v->mouse.active || v->dpmi.depth ||
-        !v->monitor.vif || v->monitor.shadow) return 0;
-    if (f->tf.user_ss > 0xffff || (uint16_t)f->tf.user_esp < 4 ||
-        !dosvm_range(v, ((uint32_t)call->cs << 4) + call->ip, 1, false)) return -EFAULT;
-    uint16_t sp = (uint16_t)f->tf.user_esp - 4;
-    uint32_t stack = (f->tf.user_ss << 4) + sp;
-    /* Dispatch may run with physical IF clear. Conventional frames stay
-     * resident through teardown; never fault a pageable EMS/DPMI stack here. */
-    if (stack >= 0xa0000 || 4 > 0xa0000 - stack) return -EFAULT;
-    uint16_t ret[2] = {DOSVM_IPX_RETURN,0xf000};
-    if (dosvm_write(v, stack, ret, sizeof(ret))) return -EFAULT;
-    n->saved = *f; n->saved_vif = v->monitor.vif; n->active_call = *call; n->active = true;
-    f->tf.user_esp = (f->tf.user_esp & 0xffff0000u) | sp;
-    f->tf.cs = call->cs; f->tf.eip = call->ip;
+    if (!f || n->active || v->mouse.active ||
+        !v->monitor.vif || v->monitor.shadow || v->dpmi.shadow) return 0;
+    if (v->frame_pm) {
+        if (v->dpmi.depth >= DPMI_DEPTH || v->dpmi.rstack_top < DPMI_RSTACK_LEVEL) return 0;
+        int e = dpmi_to_real_call(v, f, call->cs, call->ip, DOSVM_IPX_RETURN);
+        if (e) return e;
+        n->callback_pm = true; n->callback_depth = v->dpmi.depth;
+        n->callback_ss = f->tf.user_ss; n->callback_sp = (uint16_t)f->tf.user_esp + 4;
+    } else {
+        if (f->tf.user_ss > 0xffff || (uint16_t)f->tf.user_esp < 4 ||
+            !dosvm_range(v, ((uint32_t)call->cs << 4) + call->ip, 1, false)) return -EFAULT;
+        uint16_t sp = (uint16_t)f->tf.user_esp - 4;
+        uint32_t stack = (f->tf.user_ss << 4) + sp;
+        /* Dispatch may run with physical IF clear. Conventional frames stay
+         * resident through teardown; never fault a pageable EMS/DPMI stack here. */
+        if (stack >= 0xa0000 || 4 > 0xa0000 - stack) return -EFAULT;
+        uint16_t ret[2] = {DOSVM_IPX_RETURN,0xf000};
+        if (dosvm_write(v, stack, ret, sizeof(ret))) return -EFAULT;
+        n->saved = *f; n->saved_vif = v->monitor.vif; n->callback_pm = false;
+        f->tf.user_esp = (f->tf.user_esp & 0xffff0000u) | sp;
+        f->tf.cs = call->cs; f->tf.eip = call->ip;
+    }
+    n->active_call = *call; n->active = true;
     f->es = call->es; f->tf.esi = (f->tf.esi & 0xffff0000u) | call->si;
     f->tf.eax = (f->tf.eax & ~255u) | call->al;
     f->tf.eflags &= ~(V86_TF | 0x400u);
@@ -268,16 +279,32 @@ int dosvm_network_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t vector
     struct dosvm_network *n = network(v); if (!n) return -ENOSYS;
     if (vector == 0xfc) {
         if (!n->active || n->active_call.generation != n->key.generation || f->tf.cs != 0xf000 ||
-            f->tf.eip != DOSVM_IPX_RETURN + 2 || f->tf.user_ss != n->saved.tf.user_ss ||
-            f->tf.user_esp != n->saved.tf.user_esp) return -V86_EPERM;
+            f->tf.eip != DOSVM_IPX_RETURN + 2) return -V86_EPERM;
+        if (n->callback_pm) {
+            if (v->frame_pm || v->dpmi.depth != n->callback_depth ||
+                f->tf.user_ss != n->callback_ss || (uint16_t)f->tf.user_esp != n->callback_sp)
+                return -V86_EPERM;
+            int e = dpmi_v86_return(v, f);
+            if (!e) { n->active = false; n->callback_pm = false; }
+            return e;
+        }
+        if (f->tf.user_ss != n->saved.tf.user_ss || f->tf.user_esp != n->saved.tf.user_esp)
+            return -V86_EPERM;
         *f = n->saved; n->active = false; v->monitor.vif = n->saved_vif; v->monitor.state = V86_RUNNING; return 0;
     }
     struct dosvm_ipx_regs r = {(uint16_t)f->tf.eax,(uint16_t)f->tf.ebx,(uint16_t)f->tf.ecx,
         (uint16_t)f->tf.edx,(uint16_t)f->tf.esi,(uint16_t)f->tf.edi,(uint16_t)f->es};
+    n->ipx.psp = v->files ? v->files->selected :
+        v->dpmi.clients ? v->dpmi.client[v->dpmi.clients - 1].psp : 0;
     if (!dosvm_ipx_interrupt(&n->ipx, vector, &r)) return -ENOSYS;
     f->tf.eax = (f->tf.eax & 0xffff0000u) | r.ax;
     f->tf.ecx = (f->tf.ecx & 0xffff0000u) | r.cx;
     f->tf.edx = (f->tf.edx & 0xffff0000u) | r.dx;
     f->tf.edi = (f->tf.edi & 0xffff0000u) | r.di; f->es = r.es;
     return 0;
+}
+void dosvm_network_process_exit(struct dosvm *v, uint16_t psp)
+{
+    struct dosvm_network *n = network(v);
+    if (n) dosvm_ipx_process_exit(&n->ipx, psp);
 }

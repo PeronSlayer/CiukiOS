@@ -64,6 +64,7 @@ struct netif {
     uint8_t address[6], phy, eeprom_bits, next_page;
     enum net_link link;
     gen_t generation;
+    uint32_t bridge_epoch; /* latched link loss/revocation, including down/up */
     uint32_t dma_phys;
     uint8_t *dma;
     int claims[3];

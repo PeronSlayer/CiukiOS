@@ -20,4 +20,5 @@ int dosvm_network_interrupt(struct dosvm *, struct v86_frame *, uint8_t);
 int dosvm_network_dispatch(struct dosvm *, struct v86_frame *); /* safe VM callback boundary */
 void dosvm_network_rom_init(struct dosvm *);
 bool dosvm_network_irq_available(const struct dosvm *, unsigned);
+void dosvm_network_process_exit(struct dosvm *, uint16_t psp);
 #endif
