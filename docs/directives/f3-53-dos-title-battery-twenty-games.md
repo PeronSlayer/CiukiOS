@@ -40,3 +40,7 @@ Apply this amendment only.
 8. **Symlink (P2):** the tracked `third_party/freedos/freedos` symlink was the lead's provisioning mistake; it is removed; the FreeDOS reference lookup uses `third_party/freedos/1.3` or skips with the reason.
 
 Report section "Amendment 2".
+
+## Amendment 3 (lead, 2026-10-21): owner decision on Wolfenstein 3D
+
+The owner decided to keep Wolfenstein 3D shareware pre-installed in the image (dev diary 2026-10-21-05; directive f3-60 withdrawn). In the tracked manifest and the design note, `wolf3d` is class `bundled` with a note citing that decision and the VENDOR.DOC §3C reading; nothing else changes. Apply at the next session together with any remaining re-review findings.
