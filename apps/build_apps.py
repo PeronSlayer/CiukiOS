@@ -36,6 +36,9 @@ def validate_payloads():
     files["/Programs/tcc"] = {"source": "build/apps/tcc/tcc", "sha256": tcc["files"]["tcc"], "elf": tcc["elf"]}
     server = load("apps_w32srv", ROOT / "apps/w32srv/build_w32srv.py").validate_payloads()
     files["/System/Win32/w32srv"] = {"source": "build/apps/w32srv/w32srv", "sha256": server["files"]["w32srv"], "elf": server["elf"]}
+    browser=load("apps_netsurf",ROOT / "sdk/netsurf/build.py").validate_payloads()
+    files["/Programs/netsurf"]={"source":"build/external/netsurf-target/stage/Programs/netsurf",
+                              "sha256":browser["files"]["Programs/netsurf"],"elf":browser["elf"]}
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}
     return result
@@ -52,6 +55,7 @@ def main():
     load("apps_tcc_build", ROOT / "apps/tcc/build_tcc.py").build()
     load("win32_builtins", ROOT / "scripts/win32/builtins.py").build()
     load("apps_w32srv_build", ROOT / "apps/w32srv/build_w32srv.py").build()
+    load("apps_netsurf_build", ROOT / "sdk/netsurf/build.py").build()
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

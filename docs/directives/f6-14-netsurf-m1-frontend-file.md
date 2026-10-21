@@ -16,3 +16,9 @@
 ## Constraints
 
 Upstream files unmodified (patch files with reasons); no network code; `rg`/`sed` only; no `systemd-run`, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`; English. Report `build/codex/f6-14-report.md`.
+
+## Lead decisions on the delivery (2026-10-21)
+
+1. The layout admission limits (75 ms monotonic deadline at stages, blocks and lines; 8192 boxes, depth 64, 8192-byte runs, 64 columns, 128 KiB layout text) are accepted provisionally; the 100 ms responsiveness bound is measured by the lead in QEMU and on the T23 with the authored pages and revised by directive if exceeded.
+2. The URL entry stays at the toolkit's 1039 bytes for M1; a larger entry is a later toolkit change if a site of the acceptance list needs it. Local directory listings go through the desktop picker (accepted).
+3. The 32 MiB resident target is measured by the lead at M1 on the 128 MiB profile.

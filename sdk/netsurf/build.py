@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Offline NetSurf 3.11 build. No host package discovery for target objects."""
+# SPDX-License-Identifier: MIT
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import subprocess
+import sys
+import tarfile
+import zlib as host_zlib
+sys.dont_write_bytecode = True
+
+ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+SDK = ROOT / "build/tools/ciuki-sdk"
+EXTERNAL = ROOT / "build/external"
+LIBRARIES = ("libwapcaplet", "libparserutils", "libcss", "libhubbub", "libdom",
+             "libnsutils", "libutf8proc", "libnslog", "libnspsl", "libnsgif", "libnsbmp", "libnsfb")
+FEATURES = {key: "NO" for key in ("CURL", "OPENSSL", "DUKTAPE", "PNG", "JPEG", "JPEGXL", "WEBP",
+                                  "NSSVG", "ROSPRITE", "HARU_PDF", "VIDEO", "FS_BACKING_STORE")}
+FEATURES.update({key: "YES" for key in ("GIF", "BMP", "UTF8PROC", "NSLOG", "NSPSL", "LIBICONV_PLUG")})
+EPOCH = "1703721600"  # release date, independent of the checkout and build clock
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def hashes(folder):
+    return {str(p.relative_to(folder)): digest(p) for p in sorted(folder.rglob("*")) if p.is_file() and "__pycache__" not in p.parts}
+
+
+def run(args, cwd=None, env=None):
+    subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
+
+
+def sources():
+    """Verify even cache hits; extract regular files only, never archive links."""
+    pins = json.loads((ROOT / "config/netsurf.json").read_text())
+    result = {}
+    for key in ("archive", "zlib", "libpng"):
+        pin = pins[key]
+        archive = ROOT / pin["file"]
+        if archive.stat().st_size != pin["size"] or digest(archive) != pin["sha256"]:
+            raise ValueError(f"changed pinned archive: {archive}; no download or fallback")
+        with tarfile.open(archive) as stream:
+            members = stream.getmembers()
+            top = PurePosixPath(members[0].name).parts[0]
+            for member in members:
+                path = PurePosixPath(member.name)
+                if path.is_absolute() or ".." in path.parts or path.parts[0] != top:
+                    raise ValueError("unsafe archive path")
+                if not (member.isdir() or member.isfile() or member.issym() or member.islnk()):
+                    raise ValueError("special archive member")
+            folder = EXTERNAL / top
+            expected = {m.name[len(top) + 1:]: hashlib.sha256(stream.extractfile(m).read()).hexdigest()
+                        for m in members if m.isfile()}
+            if not folder.exists() or hashes(folder) != expected:
+                if folder.exists():
+                    shutil.rmtree(folder)
+                EXTERNAL.mkdir(parents=True, exist_ok=True)
+                stream.extractall(EXTERNAL, members=[m for m in members if m.isfile() or m.isdir()], filter="data")
+            if hashes(folder) != expected:
+                raise ValueError("extracted source hash mismatch")
+            result[key] = folder
+    return result
+
+
+def environment():
+    env = dict(os.environ)
+    for key in ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "PKG_CONFIG_PATH",
+                "CFLAGS", "CPPFLAGS", "LDFLAGS", "MAKEFLAGS", "MFLAGS", "CC", "AR", "RANLIB"):
+        env.pop(key, None)
+    env.update(SOURCE_DATE_EPOCH=EPOCH, LC_ALL="C", TZ="UTC", ZERO_AR_DATE="1",
+               PERL_HASH_SEED="0",PERL_PERTURB_KEYS="0",PYTHONHASHSEED="0")
+    return env
+
+
+def tool(name):
+    path = Path(shutil.which(name)).resolve()
+    return {"path": str(path), "sha256": digest(path),
+            "version": subprocess.check_output([str(path), "--version"], text=True).splitlines()[0]}
+
+
+def inputs(host=False):
+    return {"pins": json.loads((ROOT / "config/netsurf.json").read_text()), "features": FEATURES,
+            "port": hashes(HERE), "sdk": digest(SDK / "manifest.json"), "epoch": EPOCH, "host": host,
+            "tools": {name: tool(name) for name in ("clang", "llvm-ar", "llvm-ranlib", "make", "perl", "pkg-config", "patch", "gawk")},
+            "desktop": {str(p.relative_to(ROOT)): digest(p) for folder in ("apps/libdeskui", "apps/desktop")
+                        for p in sorted((ROOT / folder).glob("*.[ch]"))},
+            "fonts": hashes(ROOT / "assets/fonts/liberation"),
+            "sdk_libraries": {p.name: digest(p) for p in sorted((SDK / "sysroot/lib").glob("*.a"))},
+            "icons": digest(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz"),
+            "portrait": digest(ROOT / "assets/brand/ciuki-logo.png"),
+            "converters": {name:digest(ROOT / "apps/desktop" / name) for name in ("convert_icons.py","convert_portrait.py")},
+            "python":{"version":list(sys.version_info[:3]),"sha256":digest(Path(sys.executable).resolve()),
+                      "zlib":host_zlib.ZLIB_RUNTIME_VERSION},
+            "host_header":digest(ROOT / "tests/host/desktop/replay_base.h") if host else None}
+
+
+def flags(folder):
+    return ["-O2", "-ffunction-sections", "-fdata-sections", "-Wno-error", "-Wno-unknown-warning-option",
+            f"-ffile-prefix-map={ROOT}=.", f"-fdebug-prefix-map={ROOT}=.",
+            f"-ffile-prefix-map={folder}=./netsurf-build", f"-fdebug-prefix-map={folder}=./netsurf-build",
+            "-fdebug-compilation-dir=."]
+
+
+def zlib(src, folder, prefix, cc, env, cflags):
+    shutil.copytree(src, folder, dirs_exist_ok=True)
+    local = dict(env, CC=str(cc), AR="llvm-ar", ARFLAGS="rcsD", RANLIB="llvm-ranlib", CFLAGS=" ".join(cflags))
+    run(["sh", "configure", "--static", "--prefix=" + str(prefix)], folder, local)
+    run(["make", "-j1", "install"], folder, local)
+
+
+def prepare(folder, src):
+    tree = folder / "source"
+    if not tree.exists():
+        shutil.copytree(src, tree)
+        for patch in sorted((HERE / "patches").glob("*.patch")):
+            run(["patch", "--batch", "--fuzz=0", "-p1", "-i", patch], tree)
+    # Port files are owned here, not edits to retained upstream files.
+    shutil.copytree(HERE / "port", tree / "netsurf/frontends/framebuffer/ciuki", dirs_exist_ok=True)
+    shutil.copy2(HERE / "port/nsfb_surface.c", tree / "libnsfb/src/surface/ciuki.c")
+    shutil.copytree(HERE / "port", tree / "libnsfb/src/surface/ciuki_port", dirs_exist_ok=True)
+    # The release omits gperf's output. Generate an equivalent ASCII folded
+    # binary lookup from the pinned table; no host gperf/version dependency.
+    lookup=tree / "libhubbub/src/treebuilder"
+    entries=sorted(line.strip().split(",") for line in (lookup / "element-type.gperf").read_text().split("%%")[1].splitlines() if "," in line)
+    text="#include <string.h>\nstatic const struct element_type_map wordlist[] = {\n"
+    text+="".join('{"'+name.strip()+'",'+kind.strip()+'},\n' for name,kind in entries)+"};\n"
+    text+='''static const struct element_type_map *hubbub_element_type_generated_lookup(const char *s, size_t n)
+{
+    size_t lo=0, hi=sizeof(wordlist)/sizeof(wordlist[0]);
+    while (lo<hi) {
+        size_t mid=lo+(hi-lo)/2, i=0; int cmp=0;
+        const char *key=wordlist[mid].name;
+        for (; i<n && key[i]; i++) {
+            unsigned c=(unsigned char)s[i]; if (c>='A' && c<='Z') c+='a'-'A';
+            cmp=(int)c-(unsigned char)key[i]; if (cmp) break;
+        }
+        if (!cmp) cmp=i<n ? 1 : key[i] ? -1 : 0;
+        if (!cmp) return &wordlist[mid];
+        if (cmp<0) hi=mid; else lo=mid+1;
+    }
+    return NULL;
+}
+'''
+    (lookup / "autogenerated-element-type.c").write_text(text)
+    generate_images(tree)
+    return tree
+
+
+def module(name,path):
+    spec=importlib.util.spec_from_file_location(name,path)
+    result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result)
+    return result
+
+
+def generate_images(tree):
+    """Replace release chrome art with deterministic approved project assets."""
+    icons=module("netsurf_icons",ROOT / "apps/desktop/convert_icons.py")
+    portrait=module("netsurf_portrait",ROOT / "apps/desktop/convert_portrait.py")
+    icon_sources=icons.store_sources()
+    mapping={"left_arrow":"go-previous","right_arrow":"go-next","reload":"view-refresh",
+             "stop_image":"process-stop","history_image":"document-open",
+             "scrolll":"go-previous","scrollr":"go-next","scrollu":"go-up","scrolld":"go-down",
+             "osk_image":"input-keyboard","pointer_image":"go-next","hand_image":"go-next",
+             "caret_image":"format-text-italic","menu_image":"document-properties","progress_image":"view-refresh","move_image":"view-fullscreen"}
+    names=list(mapping)
+    mapping.update({name+"_g":mapping[name] for name in ("left_arrow","right_arrow","reload","stop_image","history_image")})
+    text='#include <stdint.h>\n#include <stdbool.h>\n#include <libnsfb.h>\n#include "framebuffer/gui.h"\n#include "framebuffer/fbtk.h"\n'
+    for name,source in mapping.items():
+        choices=icon_sources[source]["png"]
+        size=22 if 22 in choices else min(choices)
+        rgba=choices[size][2]
+        if size!=22:rgba=icons.area_scale(rgba,size,22)
+        text+='static uint8_t '+name+'_data[]={'+','.join(str(b) for b in rgba)+'};\n'
+        text+='struct fbtk_bitmap '+name+'={.width=22,.height=22,.pixdata='+name+'_data,.opaque=false};\n'
+    # Use the exact selected portrait; nearest-neighbour conversion, no redraw.
+    w,h,pixels=portrait.decode((ROOT / "assets/brand/ciuki-logo.png").read_bytes())
+    if digest(ROOT / "assets/brand/ciuki-logo.png")!=portrait.SOURCE_SHA256:raise ValueError("Ciuki portrait changed")
+    small=bytes(value for y in range(22) for x in range(22) for value in pixels[((y*h//22)*w+x*w//22)*4:((y*h//22)*w+x*w//22)*4+4])
+    text+='static uint8_t throbber_data[]={'+','.join(str(b) for b in small)+'};\n'
+    for i in range(9):text+='struct fbtk_bitmap throbber'+str(i)+'={.width=22,.height=22,.pixdata=throbber_data,.opaque=false};\n'
+    (tree / "netsurf/frontends/framebuffer/ciuki/images.c").write_text(text)
+
+
+def build(host=False, clean=False, directory=None):
+    src = sources()
+    folder = Path(directory or EXTERNAL / ("netsurf-host" if host else "netsurf-target")).resolve()
+    if folder.parent!=EXTERNAL.resolve() or not folder.name.startswith("netsurf-") or folder in src.values():
+        raise ValueError("NetSurf build/source work must remain under build/external")
+    expected = inputs(host)
+    stamp = folder / "manifest.json"
+    stage = folder / "stage"
+    if not clean and stamp.exists():
+        cached = json.loads(stamp.read_text())
+        if (stage / "Programs/netsurf").is_file() and cached.get("inputs") == expected and cached.get("files") == hashes(stage):
+            print("[netsurf] verified cached inputs and installed output hashes")
+            return cached
+    if folder.exists() and (clean or not stamp.exists() or json.loads(stamp.read_text()).get("inputs") != expected):
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    tree = prepare(folder, src["archive"])
+    prefix = folder / "prefix"
+    env = environment()
+    env["TMPDIR"] = str(folder / "temp")
+    Path(env["TMPDIR"]).mkdir(exist_ok=True)
+    env["PKG_CONFIG_LIBDIR"] = str(prefix / "lib/pkgconfig")
+    cc = shutil.which("clang") if host else SDK / "bin/ciuki-cc"
+    native_headers=folder / "native-headers"
+    shutil.copytree(SDK / "sysroot/include/ciuki",native_headers / "ciuki",dirs_exist_ok=True)
+    adapter_headers=native_headers if host else SDK / "sysroot/include"
+    cflags = flags(folder)
+    host_header=["-include",str(ROOT / "tests/host/desktop/replay_base.h")] if host else []
+    zlib(src["zlib"], folder / "zlib", prefix, cc, env, cflags)
+    # Pinned host libraries for the release's image/message generators.
+    hp = folder / "host-prefix"
+    zlib(src["zlib"], folder / "host-zlib", hp, shutil.which("clang"), env, flags(folder))
+    png = folder / "host-png"
+    shutil.copytree(src["libpng"], png, dirs_exist_ok=True)
+    run(["sh", "configure", "--disable-shared", "--disable-dependency-tracking", "--prefix=" + str(hp),
+         "CC=clang", "CFLAGS=" + " ".join(flags(folder)), "CPPFLAGS=-I" + str(hp / "include"),
+         "LDFLAGS=-L" + str(hp / "lib")], png, env)
+    run(["make", "-j1", "install"], png, env)
+    common = ["make", "-j1", "CC=" + str(cc), "AR=llvm-ar", "RANLIB=llvm-ranlib", "ARFLAGS=rcsD", "CCACHE=",
+              "BUILD=" + subprocess.check_output(["clang", "-dumpmachine"], text=True).strip(),
+              "HOST=" + ("x86_64-unknown-linux-gnu" if host else "i686-unknown-elf"),
+              "PREFIX=" + str(prefix), "NSSHARED=" + str(tree / "buildsystem"), "PKGCONFIG=pkg-config",
+              "PKG_CONFIG=pkg-config", "BUILD_CC=clang", "COMPONENT_TYPE=lib-static", "toolchain=clang",
+              "WITH_LIBXML_BINDING=no", "WITH_EXPAT_BINDING=no", "WITH_HUBBUB_BINDING=yes",
+              "NSFB_SDL_AVAILABLE=no", "NSFB_XCB_AVAILABLE=no", "NSFB_VNC_AVAILABLE=no", "NSFB_WLD_AVAILABLE=no"]
+    env["CFLAGS"] = " ".join([*cflags, "-DWITHOUT_ICONV_FILTER", "-I" + str(prefix / "include"),
+                                "-DCIUKI_NETSURF", "-D__ciuki__", "-I" + str(ROOT), "-I" + str(adapter_headers)])
+    if host: common += ["CIUKI_HOST=yes"]
+    for name in LIBRARIES:
+        library_env=dict(env)
+        if host and name=="libnsfb":library_env["CFLAGS"]+=" "+" ".join(host_header)
+        run([*common, "install"], tree / name, library_env)
+    browser = tree / "netsurf"
+    # Build only the desktop toolkit, without its v1/v2 client transport.
+    desk_objects=[]
+    for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:
+        obj=folder / ("desk-" + source.stem + ".o")
+        run([cc,*cflags,*host_header,"-I" + str(adapter_headers),"-I" + str(ROOT),"-c",source,"-o",obj],env=env)
+        desk_objects.append(obj)
+    run(["llvm-ar","rcsD",prefix / "lib/libdeskui.a",*desk_objects],env=env)
+    font_flags="-lfont -lfreetype"
+    if host:
+        spec=importlib.util.spec_from_file_location("netsurf_freetype",ROOT / "sdk/freetype/build.py")
+        ft=importlib.util.module_from_spec(spec);spec.loader.exec_module(ft)
+        library=ft.host()
+        font_obj=folder / "font.o"
+        run([cc,*cflags,"-I" + str(adapter_headers),*ft.includes(),"-c",ROOT / "sdk/libfont/font.c","-o",font_obj],env=env)
+        run(["llvm-ar","rcsD",prefix / "lib/libfont.a",font_obj],env=env)
+        shutil.copy2(library,prefix / "lib/libfreetype.a")
+        font_flags+=" -lpthread"
+    config = [f"override NETSURF_USE_{key} := {value}" for key, value in FEATURES.items()]
+    config += ["override NETSURF_FB_FRONTEND := " + ("ram" if host else "ciuki"),
+               "override NETSURF_FB_FONTLIB := ciuki", "override NETSURF_FB_RESPATH := /system/netsurf",
+               "override NETSURF_FB_FONTPATH := /system/fonts", "override MESSAGES_LANGUAGES := en",
+               "CFLAGS += " + " ".join([*cflags,*host_header]) + " -DCIUKI_NETSURF -D__ciuki__ -I" + str(ROOT) + " -I" + str(adapter_headers) + (" -DCIUKI_HOST" if host else "") + " -DCIUKI_ROOT=\\\"" + str(ROOT) + "\\\"",
+               "LDFLAGS += -L" + str(prefix / "lib") + " -ldeskui " + font_flags]
+    (browser / "Makefile.config").write_text("\n".join(config) + "\n")
+    run(["make", "-j1", "TARGET=framebuffer", "HOST=" + ("Linux" if host else "CiukiOS"), "CC=" + str(cc),
+         "CCACHE=", "CC_VERSION=17.0.0", "PKG_CONFIG=pkg-config", "BUILD_CC=clang",
+         "BUILD_CFLAGS=-O2 -I" + str(hp / "include"), "BUILD_LDFLAGS=-L" + str(hp / "lib"),
+         "BUILD_LIBPNG_CFLAGS=-I" + str(hp / "include"), "BUILD_LIBPNG_LDFLAGS=" + str(hp / "lib/libpng.a") + " " + str(hp / "lib/libz.a") + " -lm"], browser, env)
+    if stage.exists():
+        shutil.rmtree(stage)
+    (stage / "Programs").mkdir(parents=True)
+    shutil.copy2(browser / "nsfb", stage / "Programs/netsurf")
+    resource = stage / "system/netsurf"
+    resource.mkdir(parents=True)
+    for name in ("default.css", "quirks.css", "internal.css", "adblock.css"):
+        shutil.copy2(browser / "resources" / name, resource / name)
+    for name in ("welcome.html", "credits.html", "licence.html"):
+        shutil.copy2(browser / "resources/en" / name, resource / name)
+    shutil.copy2(browser / "frontends/framebuffer/res/en/Messages", resource / "Messages")
+    (resource / "Resources").mkdir()
+    for path in list(resource.iterdir()):
+        if path.is_file():shutil.copy2(path,resource / "Resources" / path.name)
+    notices = stage / "system/licenses"
+    notices.mkdir(parents=True)
+    for name in ("netsurf", *LIBRARIES, "buildsystem"):
+        notice = tree / name / ("LICENSE.md" if name == "libutf8proc" else "COPYING")
+        shutil.copy2(notice, notices / (name + ".txt"))
+    shutil.copy2(tree / "libnspsl/public_suffix_list.dat", notices / "public_suffix_list.dat")
+    shutil.copy2(src["zlib"] / "README", notices / "zlib.txt")
+    shutil.copy2(src["libpng"] / "LICENSE", notices / "libpng-host.txt")
+    for name in ("COPYING.NEWLIB","SDK-MIT.txt","FreeType-FTL.txt","FreeType-LICENSE.txt","FreeType-NOTICE.txt"):
+        shutil.copy2(SDK / "licenses" / name,notices / name)
+    shutil.copy2(ROOT / "assets/fonts/liberation/LICENSE",notices / "Liberation.txt")
+    shutil.copy2(ROOT / "assets/icons/upstream/COPYING",notices / "Tango.txt")
+    shutil.copy2(ROOT / "assets/icons/upstream/AUTHORS",notices / "Tango-AUTHORS.txt")
+    shutil.copytree(HERE / "patches",notices / "netsurf-patches")
+    (notices / "NetSurf-SOURCE.txt").write_text("NetSurf 3.11, GPL-2.0-only.\nSource: "+expected["pins"]["archive"]["url"]+"\nSHA-256: "+expected["pins"]["archive"]["sha256"]+"\nCiuki changes: sdk/netsurf; applied patches retained in netsurf-patches.\nCiuki portrait is a separate CiukiOS project asset; Tango is Public Domain.\n")
+    (resource / "Choices").write_text("enable_javascript:false\nmemory_cache_size:2097152\ndisc_cache_size:0\nmax_fetchers:8\n")
+    # Chrome uses the system Tango store and approved portrait conversion.
+    shutil.copy2(ROOT / "assets/brand/ciuki-logo.png",resource / "ciuki-logo.png")
+    elf=None
+    if not host:
+        checker=module("netsurf_sdk_checker",ROOT / "sdk/tests/check_sdk.py")
+        elf=checker.inspect(stage / "Programs/netsurf")
+        elf["size_output"]=elf["size_output"].replace(str(stage / "Programs/netsurf"),"/Programs/netsurf")
+        symbols=subprocess.check_output(["llvm-nm","-u",stage / "Programs/netsurf"],text=True)
+        if symbols.strip():raise ValueError("unresolved NetSurf target import")
+        table=subprocess.check_output(["llvm-readelf","-s",stage / "Programs/netsurf"],text=True)
+        if "ciuki_register_surface" not in table:raise ValueError("libnsfb constructor discarded")
+    (notices / "netsurf-inventory.json").write_text(json.dumps({"sources":expected["pins"],"libraries":LIBRARIES,
+        "features":FEATURES,"font":"SDK libfont/FreeType; Liberation system faces","psl":"MPL-2.0 data, retained public_suffix_list.dat", "elf":elf},indent=2,sort_keys=True)+"\n")
+    generated=[tree / "libhubbub/src/treebuilder/autogenerated-element-type.c",
+               browser / "frontends/framebuffer/ciuki/images.c",resource / "Messages"]
+    record = {"inputs": expected, "files": hashes(stage), "host": host,"elf":elf,
+              "generated":{str(p.relative_to(folder)):digest(p) for p in generated}}
+    stamp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return record
+
+
+def validate_payloads():
+    sources()  # Check pins and extracted originals even on cache hits.
+    folder=EXTERNAL / "netsurf-target"
+    record=json.loads((folder / "manifest.json").read_text())
+    if record.get("inputs")!=inputs() or record.get("files")!=hashes(folder / "stage"):
+        raise ValueError("missing/stale NetSurf payloads; run make apps")
+    return record
+
+
+def payloads():
+    record=validate_payloads()
+    stage=EXTERNAL / "netsurf-target/stage"
+    return {"/"+name:stage / name for name in record["files"]},record
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", action="store_true")
+    parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--directory", type=Path)
+    args = parser.parse_args()
+    build(args.host, args.clean, args.directory)
