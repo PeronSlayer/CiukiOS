@@ -11,3 +11,7 @@ Required:
 4. Host tests: image payload inventory, Add/Remove, desktop catalogue and the games-disk layout tests updated and green; nothing else changes.
 
 Report `build/codex/f3-60-report.md`. `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Withdrawn (owner decision, 2026-10-21)
+
+The owner decided to keep Wolfenstein 3D shareware pre-installed ("lascialo comunque wolf3d"). This directive is withdrawn before any code change; the Codex session was stopped and the worktree removed. The licence reading above stays on record (dev diary 2026-10-21-05); the f3-53 manifest classifies the title `bundled` with a note pointing to that decision.
