@@ -158,7 +158,7 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     pthread_mutex_lock(&launch_lock);
     if(pending.ready){pthread_mutex_unlock(&launch_lock);return -EBUSY;}
     int result=-EIO;
-    if(kind==DESK_W32_ELF){
+    if(kind==DESK_W32_ELF || kind==DESK_W32_DOS){
         pending.ready=1;pending.kind=kind;pending.record=*r;
         pthread_mutex_unlock(&launch_lock);return 0;
     }
@@ -465,9 +465,13 @@ void desk_w32_poll(struct desktop *d)
         if(i<0)close((int)a.endpoint);else d->clients[i].pid=a.pid;
     }
     if(!pthread_mutex_trylock(&launch_lock)){
-        if(pending.ready && pending.kind==DESK_W32_ELF){
-            int result=desk_w32_native_shortcut(d,&pending.record);
-            if(result<0)desk_shell_message(d,"Programs","The native shortcut could not be started with its requested arguments or working directory.",1);
+        if(pending.ready && (pending.kind==DESK_W32_ELF || pending.kind==DESK_W32_DOS)){
+            int result;
+            if(pending.kind==DESK_W32_DOS){
+                char command[260];result=desk_w32_dos_command(&pending.record,command,sizeof(command));
+                if(!result)result=desk_task_launch(d,"dosbox",command);
+            }else result=desk_w32_native_shortcut(d,&pending.record);
+            if(result<0)desk_shell_message(d,"Programs","The program could not be started with its requested arguments or working directory.",1);
             pending.ready=0;
         }
         if(pending.ready){

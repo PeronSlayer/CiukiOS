@@ -64,6 +64,10 @@ static const char *footprint_registry_directory;
 static int footprint_master_save(const char *,unsigned,unsigned,unsigned);
 #define master_preference_save footprint_master_save
 #endif
+static unsigned refuse_program_scan;
+static DIR *scan_opendir(const char *path)
+{if(refuse_program_scan && !strcmp(path,"/Programs")){errno=ENOENT;return NULL;}return opendir(path);}
+#define opendir scan_opendir
 #define main desktop_main
 #ifdef DESK_FOOTPRINT_TEST
 static const char *sequence_settings_path;
@@ -99,6 +103,7 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 #endif
 #include "../../../apps/desktop/desktop.c"
 #undef write
+#undef opendir
 #ifdef DESK_FOOTPRINT_TEST
 #undef fopen
 #undef cfg_writer_start
@@ -500,7 +505,10 @@ static void test_display_settings(void)
     d.clients[0].program=0;drain(&d,0);v2(&d,0,500,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EPERM && !d.sh.want_reload);
     d.clients[0].program=DESK_APP_CONTROL;drain(&d,0);v2(&d,0,500,&m);
-    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && d.sh.want_reload==3 && !d.v3_links_next);
+    assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && d.sh.want_reload==3 && d.sh.want_programs && !d.v3_links_next);
+    d.sh.want_reload=0;d.sh.want_wallpaper=0;d.program_count=1;
+    refuse_program_scan=1;shell_service(&d);refuse_program_scan=0;
+    assert(!d.program_count && !d.sh.want_programs && !d.sh.want_wallpaper);
     const char *installer="/mnt/d/SETUP.EXE";unsigned length=(unsigned)strlen(installer);
     desk_message(&m,DESK_LAUNCH,23+length);desk_put32(m.data+4,43);desk_put32(m.data+8,7);
     memcpy(m.data+12,"install",7);desk_put32(m.data+19,length);memcpy(m.data+23,installer,length);

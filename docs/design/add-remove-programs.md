@@ -97,3 +97,41 @@ directory is used only to identify shortcuts. Shared/system directories are
 never inferred as ownership of all their shortcuts. Record I/O errors propagate
 as incomplete cleanup; malformed records are not treated as executable launch
 records. User preference writes keep the existing asynchronous settings writer.
+
+
+Amendment 1 (2026-10-21) supersedes the inventory ceiling and removal-lifecycle
+notes above:
+
+- Rechecked Microsoft's [Uninstall registry key](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key),
+  [NoRemove](https://learn.microsoft.com/en-us/windows/win32/msi/arpnoremove) and
+  [NoModify](https://learn.microsoft.com/en-us/windows/win32/msi/arpnomodify)
+  documentation against the copied adapter. Preserve installer-owned fields
+  and the existing protection behavior; retain separate HKCU identity even
+  when HKLM fills the requested buffer. Bounded results explicitly flag
+  omissions; uninstall completion checks the selected key directly instead
+  of inferring absence from a truncated list. The combined list preserves
+  protected rows by displacing
+  removable rows, and explains the limit without clearing the inventory.
+- Read the owner's Resource Kit in place: `wrkc25_2.htm` (Installing
+  Applications Locally), `wrkc31_10.htm` (stale uninstall registration), and
+  `wrkc05_7.htm` (irreversible removal confirmation). Keep Setup/Install
+  discovery and the installer-owned uninstall path. No private text or
+  media is copied into tracked files.
+- The owner-side block callbacks supply the mandatory seek-position output.
+  Host validation mounts an independent FAT image inside an outer FAT/VFS
+  fixture, exercising the real owner provider, rather than only the tree walker.
+- The execution contract now specifies management-only delegation, matching
+  game reservation across both DOS kernels, and the durable pending identity.
+  Cleanup is retryable after an absent subtree or a settings/COW failure.
+  Icon ownership is collected and durably saved before shortcut deletion;
+  the marker is removed only after those steps succeed.
+- Native inventory refresh has a distinct flag, consumed independently of
+  wallpaper/settings reload. External-only launch records in `/Games` and
+  `/Programs` establish ownership. Bundled shortcuts normalize DOS Box paths
+  and match executable tokens independently of optional switches and case.
+- DOS installer preparation returns to the existing desktop launch mailbox.
+  Its main thread calls `desk_task_launch` for DOS Box, preserving supervisor
+  delegation. The unprivileged shell helper refuses a DOS spawn.
+
+Focused host evidence and environmental sanitizer limitations are recorded in
+`build/codex/f2-87-report.md`. Guest evidence remains the lead's responsibility.

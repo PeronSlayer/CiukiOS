@@ -110,11 +110,11 @@ static void check_preview(void)
  * 4:3 scene in the 1024x704 work area, Fill covers it. */
 static int preview_band(void) { return a.preview[72 * 192] == desk_theme_named(a.cfg.theme)->desktop; }
 
-static unsigned program_removes,program_changes,program_installs;
+static unsigned program_removes,program_changes,program_installs,program_overflow;
 static int installed_programs(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {
     (void)ctx;assert(cap>=2);
-    out[0]=(struct desk_uninstall_entry){.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192};
+    out[0]=(struct desk_uninstall_entry){.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192,.inventory_more=program_overflow};
     out[1]=(struct desk_uninstall_entry){.name="Desktop",.no_remove=1,.system_component=1};return 2;
 }
 static int remove_program(void *ctx,const struct desk_uninstall_entry *r)
@@ -141,6 +141,9 @@ static void programs_page(void)
     at_click_widget(&u,986);assert(du_dialog_id(&u)==988);
     du_dialog_close(&u);struct du_event chosen={.type=DU_EV_DIALOG,.id=988,.index=0,.text="/mnt/d/SETUP.EXE"};u.event(&u,&chosen,u.user);
     assert(program_installs==1);
+    program_overflow=1;cp_open(&a,CP_UNINSTALL);
+    assert(a.uninstall_count==2 && strstr(du_get(&u,985)->text,"More programs exist"));
+    program_overflow=0;
     cp_detach(&a);du_release(&u);
 }
 int main(int argc, char **argv)

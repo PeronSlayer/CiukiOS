@@ -10,7 +10,9 @@
 #include <unistd.h>
 static struct cp_program_store store;
 static struct desk_uninstall_entry entries[96];
-static unsigned games=7,registered=1,keep_key,runs,logs,icons;
+static unsigned games=7,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
+static int check_key(void *ctx,const char *key){(void)ctx;assert(!strcmp(key,"HKCU/fixture"));key_checks++;return registered;}
+static int persist(void *ctx){(void)ctx;saves++;return save_failure ? -EIO : 0;}
 static char logged[256];
 static int registry(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {
@@ -21,8 +23,15 @@ static int registry(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 }
 static int run(void *ctx,const char *key)
 {(void)ctx;assert(!strcmp(key,"HKCU/fixture"));runs++;if(!keep_key)registered=0;return 0;}
+static void file(const char *,const void *,size_t);
+static int exists(const char *);
 static int game(void *ctx,unsigned id,int remove,uint32_t *bytes)
-{(void)ctx;assert(id && id<=3);*bytes=8192;if(remove)games&=~(1u<<(id-1));return !!(games&(1u<<(id-1)));}
+{
+    (void)ctx;assert(id && id<=3);*bytes=8192;
+    char pending[64];snprintf(pending,sizeof(pending),"/System/REMOVE%u.PND",id);
+    if(remove){games&=~(1u<<(id-1));file(pending,"",0);return 1;}
+    return exists(pending) ? 2 : !!(games&(1u<<(id-1)));
+}
 static void log_line(void *ctx,const char *text)
 {(void)ctx;logs++;snprintf(logged,sizeof(logged),"%s",text);}
 static void forget(void *ctx,const char *name)
@@ -40,8 +49,8 @@ static int exists(const char *rel)
 {char p[1024];snprintf(p,sizeof(p),"%s%s",store.root,rel);return !access(p,F_OK);}
 int main(int argc,char **argv)
 {
-    assert(argc==2);store=(struct cp_program_store){.root=argv[1],.registry_list=registry,.registry_run=run,.game=game,.log=log_line,.forget_icon=forget};
-    link_file("/Games/Test/.ciuki","Alpha DOS","C:\\Games\\Test\\GAME.EXE","");
+    assert(argc==2);store=(struct cp_program_store){.root=argv[1],.registry_list=registry,.registry_run=run,.registry_check=check_key,.game=game,.log=log_line,.forget_icon=forget,.persist=persist};
+    /* External-only launch record: no internal record may mask discovery. */
     link_file("/Games/External.ciuki","External DOS launch","C:\\Games\\Test\\GAME.EXE","");
     link_file("/Windows/Start Menu/Programs/DosUser.lnk","User DOS","C:\\Programs\\DosUser\\RUN.BAT","");
     link_file("/Windows/Desktop/DOS.lnk","DOS shortcut","/Games/Test/GAME.EXE","");
@@ -51,22 +60,36 @@ int main(int argc,char **argv)
     link_file("/Windows/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     link_file("/Documents/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     file("/Programs/UserNative","\177ELF",4);file("/Programs/control","\177ELF",4);
-    unsigned i=find("Alpha DOS");assert(entries[i].kind==DESK_PROGRAM_DOS && entries[i].disk_bytes);
+    struct desk_uninstall_entry limited[4];
+    assert(cp_program_list(&store,limited,4)==4 && limited[0].inventory_more);
+    for(unsigned j=0;j<4;j++)assert(limited[j].system_component);
+    unsigned i=find("External DOS launch");assert(entries[i].kind==DESK_PROGRAM_DOS && entries[i].disk_bytes);
     int n=cp_program_list(&store,entries,96);assert(n>=10);
     for(int j=1;j<n;j++)assert(strcasecmp(entries[j-1].name,entries[j].name)<=0);
     i=find("control");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/control"));
     i=find("DOOM (shareware)");assert(!strcmp(entries[i].version,"1.9") && !strcmp(entries[i].publisher,"id Software") && strstr(entries[i].licence,"/system/licenses/"));
     i=find("Zulu Win32");assert(!strcmp(entries[i].location,"/Programs/Win"));keep_key=1;assert(cp_program_remove(&store,&entries[i])==-EAGAIN && exists("/Windows/Start Menu/Programs/Win.lnk"));
-    keep_key=0;assert(!cp_program_remove(&store,&entries[i]) && runs==2 && !exists("/Windows/Start Menu/Programs/Win.lnk"));
-    i=find("Alpha DOS");assert(!cp_program_remove(&store,&entries[i]));
+    keep_key=0;assert(!cp_program_remove(&store,&entries[i]) && runs==2 && key_checks==2 && !exists("/Windows/Start Menu/Programs/Win.lnk"));
+    i=find("External DOS launch");assert(!cp_program_remove(&store,&entries[i]));
     assert(!exists("/Games/Test") && !exists("/Windows/Desktop/DOS.lnk") && exists("/Windows/Desktop/Other.lnk"));
     assert(!exists("/Games/External.ciuki"));
     i=find("User DOS");assert(entries[i].kind==DESK_PROGRAM_DOS && !cp_program_remove(&store,&entries[i]) && !exists("/Programs/DosUser"));
     i=find("Native shortcut");assert(!cp_program_remove(&store,&entries[i]) && !exists("/Programs/UserNative") && !exists("/Documents/Desktop/Native.lnk"));
     i=find("UserDirectory");assert(!cp_program_remove(&store,&entries[i]) && !exists("/Programs/UserDirectory"));
-    i=find("Quake (shareware)");assert(!cp_program_remove(&store,&entries[i]) && !(games&4));
-    assert(!exists("/system/settings/dos-game-3.cfg") && !exists("/Windows/Desktop/Quake.lnk") && icons>=7);
-    assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==8);
+    link_file("/Windows/Desktop/Doom.lnk","Doom shortcut","C:\\Programs\\dosbox","--name=Doom \\doom\\doom.exe");
+    link_file("/Windows/Desktop/Quake2.lnk","Quake alternate","c:\\programs\\dosbox","\\quake\\quake.exe -optional");
+    i=find("DOOM (shareware)");assert(!cp_program_remove(&store,&entries[i]) && !exists("/Windows/Desktop/Doom.lnk"));
+    char blocked[1024];snprintf(blocked,sizeof(blocked),"%s/system/settings/dos-game-3.cfg",store.root);
+    assert(!unlink(blocked) && !mkdir(blocked,0700));
+    i=find("Quake (shareware)");assert(cp_program_remove(&store,&entries[i])==-EISDIR);
+    assert(exists("/System/REMOVE3.PND") && !(games&4));
+    assert(!rmdir(blocked));i=find("Quake (shareware)");
+    save_failure=1;assert(cp_program_remove(&store,&entries[i])==-EIO);
+    assert(exists("/System/REMOVE3.PND") && exists("/Windows/Desktop/Quake.lnk") && saves);
+    save_failure=0;i=find("Quake (shareware)");
+    assert(!cp_program_remove(&store,&entries[i]) && !(games&4));
+    assert(!exists("/System/REMOVE3.PND") && !exists("/system/settings/dos-game-3.cfg") && !exists("/Windows/Desktop/Quake.lnk") && icons>=7);
+    assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==11);
     assert(exists("/system/licenses/quake-shareware-UPSTREAM.json"));
     struct desk_uninstall_entry bad={.name="bad",.kind=DESK_PROGRAM_NATIVE,.location="/Programs/../System"};
     assert(cp_program_remove(&store,&bad)==-EPERM);

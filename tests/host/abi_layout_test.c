@@ -617,6 +617,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_LAUNCH", (uint32_t)(CIUKI_DOSVM_LAUNCH), 7u},
     {"constant.CIUKI_DOSVM_PRESENT_BANDS", (uint32_t)(CIUKI_DOSVM_PRESENT_BANDS), 8u},
     {"constant.CIUKI_DOSVM_FULLSCREEN", (uint32_t)(CIUKI_DOSVM_FULLSCREEN), 9u},
+    {"constant.CIUKI_DOSVM_GAME_QUERY", CIUKI_DOSVM_GAME_QUERY, 11u},
+    {"constant.CIUKI_DOSVM_GAME_REMOVE", CIUKI_DOSVM_GAME_REMOVE, 12u},
     {"constant.CIUKI_DOSVM_BACKGROUND", (uint32_t)(CIUKI_DOSVM_BACKGROUND), 10u},
     {"constant.CIUKI_DOSVM_FULL_SCREEN", (uint32_t)(CIUKI_DOSVM_FULL_SCREEN), 4u},
     {"constant.CIUKI_DOSVM_SUSPENDED", (uint32_t)(CIUKI_DOSVM_SUSPENDED), 8u},

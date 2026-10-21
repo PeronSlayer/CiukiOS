@@ -354,10 +354,14 @@ static void idle(void *arg)
 }
 __attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 { (void)out; (void)cap; return -ENOSYS; }
+__attribute__((weak)) int ciuki_win32_uninstall_registered(const char *key)
+{(void)key;return -ENOSYS;}
 __attribute__((weak)) int ciuki_win32_uninstall_run(const char *key)
 { (void)key; return -ENOSYS; }
 static int registry_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {(void)ctx;return ciuki_win32_uninstall_list(out,cap);}
+static int registry_check(void *ctx,const char *key)
+{(void)ctx;return ciuki_win32_uninstall_registered(key);}
 static int registry_run(void *ctx,const char *key)
 {(void)ctx;return ciuki_win32_uninstall_run(key);}
 static int game_program(void *ctx,unsigned game,int remove,uint32_t *size)
@@ -378,21 +382,25 @@ static void program_log(void *ctx,const char *line)
 }
 static void forget_icon(void *ctx,const char *label)
 {struct cp_main *m=ctx;cfg_icon_forget(&m->app.cfg,label);}
-static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.game=game_program,.forget_icon=forget_icon};
+static int program_save(void *ctx)
+{
+    struct cp_main *m=ctx;char *text=malloc(CFG_TEXT_MAX);if(!text)return -ENOMEM;
+    size_t n=cfg_format(&m->app.cfg,text,CFG_TEXT_MAX);
+    int result=!n ? -EIO : save(ctx,text,n) ? -EIO : 0;free(text);
+    if(result)return result;
+    /* The removal identity stays durable until the settings worker commits.
+     * This applet's removal already waits for disk/uninstaller completion. */
+    int error=0;
+    while(!cfg_writer_result(&m->writer,&error)){struct timespec delay={.tv_sec=0,.tv_nsec=1000000};nanosleep(&delay,NULL);}
+    return error ? -error : 0;
+}
+static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.registry_check=registry_check,.game=game_program,.forget_icon=forget_icon,.persist=program_save};
 static int win32_uninstall_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {(void)ctx;return cp_program_list(&programs,out,cap);}
 static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
 {
     programs.ctx=ctx;
     int result=cp_program_remove(&programs,r);
-    struct cp_main *m=ctx;char *text=malloc(CFG_TEXT_MAX);
-    int error=-ENOMEM;
-    if(text){
-        size_t n=cfg_format(&m->app.cfg,text,CFG_TEXT_MAX);
-        error=!n ? -EIO : save(ctx,text,n) ? -EIO : 0;
-        free(text);
-    }
-    if(!result)result=error;
     struct cp_program_store recorder=programs;recorder.log=program_log;
     cp_program_record(&recorder,r,result);return result;
 }

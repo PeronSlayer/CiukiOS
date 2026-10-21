@@ -769,7 +769,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = c->program != DESK_APP_CONTROL || !d->shell ? -EPERM : d->power.state ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
-        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->v3_links_next=0;}
+        if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
             if (d->display_reply_mode) result=-EBUSY;
             else result = d->display_set ? d->display_set(d, (uint16_t)p.values[0]) : -ENOSYS;

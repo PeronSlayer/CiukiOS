@@ -520,6 +520,41 @@ static void test_client_boundary(void)
 {
     window_fixtures();
     struct ciuki_dosvm_command c, w;
+    /* Query/remove use the actual syscall validation and fixture storage. */
+    struct ciuki_dosvm_command q=command_for(0,0);q.launch.game=2;
+    unsigned before=program_calls;
+    fake_current=&fake_proc[2];
+    CHECK(dosvm_call(CIUKI_DOSVM_GAME_REMOVE,&q,sizeof(q))==-EPERM && program_calls==before);
+    CHECK(!dosvm_call(CIUKI_DOSVM_GAME_QUERY,&q,sizeof(q)) && q.state==1 && q.changed==8192);
+    fake_proc[2].programs_capability=true;
+    for(unsigned op=CIUKI_DOSVM_GAME_QUERY;op<=CIUKI_DOSVM_GAME_REMOVE;op++){
+        q=command_for(0,0);q.launch.game=2;q.version=2;
+        CHECK(dosvm_call(op,&q,sizeof(q))==-EOPNOTSUPP);
+        q.version=1;q.size--;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.size++;
+        q.launch.reserved[0]=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.reserved[0]=0;
+        q.state=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.state=0;
+        CHECK(dosvm_call(op,&q,sizeof(q)-1)==-EINVAL);
+        q.launch.game=0;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=4;
+        CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=2;
+        user_fault=true;CHECK(dosvm_call(op,&q,sizeof(q))==-EFAULT);user_fault=false;
+        program_result=1;CHECK(!dosvm_call(op,&q,sizeof(q)) && q.state==2);program_result=0;
+    }
+    fake_proc[2].programs_capability=false;
+    CHECK(!dosvm_game_remove_reserve(2));
+    struct dosvm *reserved_vm=0;struct dosvm_config reserved_config={.game=2};
+    CHECK(dosvm_create(&reserved_config,&reserved_vm)==-EBUSY && !reserved_vm);
+    dosvm_game_remove_release(2);
+    program_result=1;
+    CHECK(dosvm_create(&reserved_config,&reserved_vm)==-ENOENT && !reserved_vm && !game_creating[2]);
+    program_result=0;
+    game_creating[2]++;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);game_creating[2]--;
+    for(unsigned kernel=0;kernel<2;kernel++){
+        slots[0].info.key=(struct dosvm_key){1,1};slots[0].info.state=DOSVM_BOOTING;
+        slots[0].game=2;slots[0].kernel=kernel;
+        CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
+        slots[0].info.state=DOSVM_STOPPING;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
+        memset(&slots[0],0,sizeof(slots[0]));
+    }
     /* Authority and record validation, each before any reservation. */
     fake_current = &fake_proc[2];
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
@@ -549,6 +584,11 @@ static void test_client_boundary(void)
     CHECK(create_window(9, "CiukiDOS", 0) == -EBADF && create_window(1, "CiukiDOS", 0) == -EACCES &&
           create_window(2, "CiukiDOS", 0) == -EINVAL && create_window(3, "CiukiDOS", 0) == -EBADF);
     { struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && fake_surface[0].references == 1); }
+    /* The removed/pending-game errno must reach DOS Box's clear message. */
+    c=command_for(0,0);c.surface_fd=0;strcpy(c.name,"Removed");c.launch.game=2;
+    program_result=-ENOENT;CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENOENT);
+    program_result=1;CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENOENT);
+    program_result=0;
     /* Creation, one VM per owner, status and presentation. */
     CHECK(!create_window(0, "CiukiDOS", &w) && w.id && w.generation && w.state == CIUKI_DOSVM_BOOTING &&
           w.video_mode == 3 && fake_surface[0].references == 2);

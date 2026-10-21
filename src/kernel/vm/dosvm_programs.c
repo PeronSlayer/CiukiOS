@@ -6,6 +6,8 @@
 #include <ciuki/storage.h>
 #include <ciuki/task.h>
 #include "../fs/program_tree.h"
+int dosvm_game_remove_reserve(unsigned);
+void dosvm_game_remove_release(unsigned);
 #define GAME_SECTORS 262144u
 void dosvm_game_digest_invalidate(void);
 /* One serialized owner-side mount, not one resident cache per operation. */
@@ -23,7 +25,8 @@ static int image_read(struct blkdev *d,uint64_t lba,uint32_t count,void *out)
     memset(out,0,(size_t)count*512u);
     if(lba>=owner.sectors)return 0;
     if(count>owner.sectors-lba)count=owner.sectors-(uint32_t)lba;
-    size_t got=0; e=vfs_seek(&owner.table,owner.fd,(int64_t)(lba*512u),0,0);
+    uint64_t position;
+    size_t got=0; e=vfs_seek(&owner.table,owner.fd,(int64_t)(lba*512u),0,&position);
     if(!e)e=vfs_read(&owner.table,owner.fd,out,(size_t)count*512u,&got);
     return e ? e : got==(size_t)count*512u ? 0 : -FS_EIO;
 }
@@ -32,7 +35,8 @@ static int image_write(struct blkdev *d,uint64_t lba,uint32_t count,const void *
     int e=blkdev_range(d,lba,count);if(e)return e;
     /* Removal cannot allocate beyond the installed image's nonzero prefix. */
     if(lba>=owner.sectors || count>owner.sectors-lba)return -FS_ENOSPC;
-    size_t done=0;e=vfs_seek(&owner.table,owner.fd,(int64_t)(lba*512u),0,0);
+    uint64_t position;
+    size_t done=0;e=vfs_seek(&owner.table,owner.fd,(int64_t)(lba*512u),0,&position);
     if(!e)e=vfs_write(&owner.table,owner.fd,in,(size_t)count*512u,&done);
     return e ? e : done==(size_t)count*512u ? 0 : -FS_EIO;
 }
@@ -56,16 +60,24 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 {
     if(!size || !game || game>3)return -FS_EINVAL;
     *size=0;
-    struct storage *s=storage_get();if(!s || !s->ready || s->stopped)return -FS_EIO;
+    int reservation=remove ? dosvm_game_remove_reserve(game) : 0;
+    if(reservation)return reservation;
+    struct storage *s=storage_get();if(!s || !s->ready || s->stopped){if(remove)dosvm_game_remove_release(game);return -FS_EIO;}
     /* Refuse competing requests; do not hold interrupt/preemption locks over
      * filesystem calls or scans. Exclusive file sharing serializes VM opens. */
     uint32_t flags=irq_save();
-    if(owner.busy){irq_restore(flags);return -FS_EBUSY;}
+    if(owner.busy){irq_restore(flags);if(remove)dosvm_game_remove_release(game);return -FS_EBUSY;}
     owner.busy=true;irq_restore(flags);
     int e=vfs_table_init(&s->vfs,&owner.table,2);
     bool table=!e;
     owner.fd=-1;
+    char pending_path[64];ksnprintf(pending_path,sizeof(pending_path),"C:\\SYSTEM\\REMOVE%u.PND",game);
     struct fat_entry entry;
+    bool pending=false;
+    if(!e){
+        int pe=vfs_stat(&owner.table,pending_path,&entry);
+        if(!pe)pending=true;else if(pe!=-FS_ENOENT)e=pe;
+    }
     if(!e)e=vfs_stat(&owner.table,"C:\\GAMES\\CIUKIGAM.IMG",&entry);
     if(!e && ((entry.attr&FAT_ATTR_DIR) || entry.size%512u || entry.size/512u>GAME_SECTORS))e=-FS_EINVAL;
     if(!e) {
@@ -83,7 +95,17 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
     }
     /* Prove traversal bounds and ownership before deleting any entry. */
     if(!e)e=program_tree(&owner.fat,game,false,size);
+    /* An absent directory after a committed deletion still owns cleanup. */
+    bool absent=e==-FS_ENOENT && mounted;
+    if(absent && (remove || pending))e=0;
     if(!e && remove) {
+        /* Commit identity before the first destructive write. Existence is
+         * the record; fixed filename supplies the only permitted game ID. */
+        int marker=vfs_open(&owner.table,pending_path,VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,0);
+        if(marker<0)e=marker;
+        else {e=vfs_commit(&owner.table,marker);int ce=vfs_close(&owner.table,marker);if(!e)e=ce;}
+    }
+    if(!e && remove && !absent) {
         e=fat_enable_write(&owner.fat);
         if(!e)e=program_tree(&owner.fat,game,true,size);
         dosvm_game_digest_invalidate(); /* also after a partially issued write */
@@ -93,5 +115,6 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
     if(owner.fd>=0){int close_error=vfs_close(&owner.table,owner.fd);if(!e)e=close_error;}
     if(table)vfs_table_destroy(&owner.table);
     flags=irq_save();owner.busy=false;irq_restore(flags);
-    return e;
+    if(remove)dosvm_game_remove_release(game);
+    return !e && !remove && pending ? 1 : e;
 }

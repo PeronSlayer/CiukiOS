@@ -1339,8 +1339,8 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_LAUNCH 7u /* arm command visibility before its final Enter */
 #define CIUKI_DOSVM_PRESENT_BANDS 8u /* PRESENT plus destination 8-line damage */
 #define CIUKI_DOSVM_FULLSCREEN 9u /* focused=1 enter, 0 return to window */
-#define CIUKI_DOSVM_GAME_QUERY 11u /* launch.game input; state=present, changed=allocated bytes */
-#define CIUKI_DOSVM_GAME_REMOVE 12u /* exclusive backing-file removal; no VM handle */
+#define CIUKI_DOSVM_GAME_QUERY 11u /* launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes */
+#define CIUKI_DOSVM_GAME_REMOVE 12u /* delegated program-management authority; no VM handle */
 #define CIUKI_DOSVM_BACKGROUND 10u /* focused=1 pause on Alt+Tab, 0 continue */
 /* CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
  * a FreeDOS override is permitted only for an explicit game, never the shell. */

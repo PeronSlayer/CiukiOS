@@ -2330,13 +2330,13 @@ focused=1 enter, 0 return to window
 #define CIUKI_DOSVM_GAME_QUERY 11u
 ```
 
-launch.game input; state=present, changed=allocated bytes
+launch.game input; state=0 absent, 1 present, 2 pending; changed=bytes
 
 ```c
 #define CIUKI_DOSVM_GAME_REMOVE 12u
 ```
 
-exclusive backing-file removal; no VM handle
+delegated program-management authority; no VM handle
 
 ```c
 #define CIUKI_DOSVM_BACKGROUND 10u

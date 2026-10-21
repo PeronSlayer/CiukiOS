@@ -517,6 +517,10 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
 #include "dosvm_font.inc"
 #include "../../src/kernel/vm/dosvm_vga.c"
 #include "../../src/kernel/vm/dosvm_vga_vbe.c"
+static unsigned program_calls;
+static int program_result;
+int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
+{ CHECK(game && game<=3);(void)remove;program_calls++;*size=8192;return program_result; }
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -866,6 +870,7 @@ int main(void)
     if (getenv("CIUKI_VM_BOOT_START")) { test_startup_boot(); free(ram); return 0; }
     if (getenv("CIUKI_VM_EXIT_TEST")) { test_exit_cost(); free(ram); return 0; }
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
+    if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
     test_d48_bios_and_export();
     test_disk_cache(); test_disk_provider_deadline(); test_disk_cache_sizing(); test_default_disk_admission(); test_disk_latency(); test_zone_memory();
     test_maximum_creation();

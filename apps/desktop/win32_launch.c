@@ -1,5 +1,6 @@
 /* Bounded shell records; no shell interpreter. SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
+#include "../dosbox/autorun.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -38,6 +39,19 @@ int desk_w32_identify(const char *path)
     if(ferror(f))result=-EIO;
     if(fclose(f))result=-EIO;
     return result;
+}
+/* Preparation only: the desktop owns the final DOS Box spawn and grants. */
+int desk_w32_dos_command(const struct desk_launch_record *r,char *out,size_t cap)
+{
+    char path[260];int e=desk_w32_native_path(r->target,path,sizeof(path));if(e)return e;
+    if(strpbrk(path," \t"))return -EOPNOTSUPP;
+    int n=snprintf(out,cap,"C:%s%s%s",path,r->arguments[0]?" ":"",r->arguments);
+    if(!strncmp(path,"/mnt/",5) && path[5]>='a' && path[5]<='z' && path[6]=='/')
+        n=snprintf(out,cap,"%c:%s%s%s",path[5]-'a'+'A',path+6,r->arguments[0]?" ":"",r->arguments);
+    if(n<0 || (size_t)n>=cap || n>(int)DOSBOX_COMMAND_MAX)return -E2BIG;
+    for(unsigned i=2;i<(unsigned)n && out[i]!=' ';i++)if(out[i]=='/')out[i]='\\';
+    char lines[DOSBOX_LINES_MAX][DOSBOX_COMMAND_MAX+4];
+    return dosbox_command_lines(out,lines)<0 ? -E2BIG : 0;
 }
 int ciuki_win32_shell_launch(const struct desk_launch_record *record)
 {

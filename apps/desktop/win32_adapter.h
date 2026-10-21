@@ -7,7 +7,9 @@
 /* Transport returns Win32 error; complete copied response only, no retries of
  * mutations after ambiguous disconnect. Handles never survive one operation. */
 uint32_t desk_w32_exchange(const void *, uint32_t, void *, uint32_t, uint32_t *);
+int desk_w32_dos_command(const struct desk_launch_record *,char *,size_t);
 int ciuki_win32_uninstall_list(struct desk_uninstall_entry *, unsigned);
+int ciuki_win32_uninstall_registered(const char *); /* exact key: 1 present, 0 absent, -errno */
 int ciuki_win32_uninstall_run(const char *);
 int ciuki_win32_shell_launch(const struct desk_launch_record *);
 int ciuki_win32_shell_launch_wait(const struct desk_launch_record *);

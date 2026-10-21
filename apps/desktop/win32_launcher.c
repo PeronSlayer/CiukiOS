@@ -32,19 +32,7 @@ int main(int argc,char **argv)
     char *child[34]={path,NULL};unsigned count=1;
     struct ciuki_spawn_fd map={3,3};unsigned maps=kind!=DESK_W32_PE;
     if(kind==DESK_W32_PE)child[count++]=command;
-    else if(kind==DESK_W32_DOS){
-        /* The existing DOS autorun bridge splits an unquoted drive/path into
-         * drive, CD and executable. Its bound and keyboard policy stay intact. */
-        if(strpbrk(path," \t")){result=-EOPNOTSUPP;goto reply;}
-        len=snprintf(command,sizeof(command),"C:%s%s%s",path,argv[3][0]?" ":"",argv[3]);
-        if(!strncmp(path,"/mnt/",5) && path[5]>='a' && path[5]<='z' && path[6]=='/')
-            len=snprintf(command,sizeof(command),"%c:%s%s%s",path[5]-'a'+'A',path+6,argv[3][0]?" ":"",argv[3]);
-        for(unsigned i=2;i<(unsigned)len;i++)if(command[i]=='/')command[i]='\\';
-        char lines[DOSBOX_LINES_MAX][DOSBOX_COMMAND_MAX+4];
-        if(len<0 || len>(int)DOSBOX_COMMAND_MAX || dosbox_command_lines(command,lines)<0){result=-E2BIG;goto reply;}
-        child[0]="/Programs/dosbox";child[count++]="--channel-fd=3";
-        child[count++]=command;strcpy(path,"/Programs/dosbox");
-    }
+    else if(kind==DESK_W32_DOS){result=-EOPNOTSUPP;goto reply;}
     child[count]=NULL;
     char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
     result=ciuki_spawn(path,child,env,maps?&map:NULL,maps,0);if(result<0)result=-errno;

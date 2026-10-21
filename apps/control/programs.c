@@ -124,16 +124,29 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
             if(read_error==-EINVAL)continue;
             if(read_error){error=read_error;break;}
             int belongs=cp_program_contains(location,r.target);
-            if(!belongs && !strcasecmp(r.target,"/Programs/dosbox")){
-                for(unsigned g=0;g<DESK_GAME_COUNT;g++){
-                    const char *dir=g==0 ? "/WOLF3D" : g==1 ? "/DOOM" : "/QUAKE";
-                    if(!strcasecmp(location,dir) && strstr(r.arguments,desk_games[g].command))belongs=1;
+            char launcher[260];
+            if(!belongs && normal(r.target,launcher) && !strcasecmp(launcher,"/Programs/dosbox")){
+                /* Match a complete executable token, independently of optional
+                 * switches, path separators, drive case and catalog spelling. */
+                const char *arg=r.arguments;
+                while(*arg){
+                    while(*arg==' ' || *arg=='\t')arg++;
+                    char token[260];unsigned n=0;int quoted=*arg=='"';if(quoted)arg++;
+                    while(*arg && (quoted ? *arg!='"' : *arg!=' ' && *arg!='\t')){
+                        if(n+1<sizeof(token))token[n++]=*arg;arg++;
+                    }
+                    if(quoted && *arg=='"')arg++;token[n]=0;
+                    char executable[260];
+                    if(normal(token,executable) && cp_program_contains(location,executable)){
+                        const char *base=strrchr(executable,'/');
+                        if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE")))belongs=1;
+                    }
                 }
             }
             if(!belongs)continue;
             if(found)*found=r;
-            if(remove && unlink(full)){error=-errno;break;}
-            if(remove && s->forget_icon)s->forget_icon(s->ctx,r.label);
+            if(remove==1 && unlink(full)){error=-errno;break;}
+            if(remove==2 && s->forget_icon)s->forget_icon(s->ctx,r.label);
             matched++;
         }
     }
@@ -142,8 +155,8 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
 }
 static int launch_record(struct cp_program_store *s,const char *location,struct desk_launch_record *r)
 {
-    const char *const roots[]={location,"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
-    for(unsigned i=0;i<4;i++){
+    const char *const roots[]={location,"/Games","/Programs","/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
+    for(unsigned i=0;i<sizeof(roots)/sizeof(*roots);i++){
         unsigned budget=WALK_ENTRIES;int n=records(s,roots[i],location,r,0,WALK_DEPTH,&budget);
         if(n>0)return 1;if(n<0 && n!=-ENOTDIR)return n;
     }
@@ -197,13 +210,45 @@ static int compare(const void *a,const void *b)
     const struct desk_uninstall_entry *x=a,*y=b;int n=strcasecmp(x->name,y->name);
     if(n)return n;n=strcmp(x->location,y->location);return n ? n : strcmp(x->key,y->key);
 }
+/* Keep the launch record workspace separate from the inventory candidate;
+ * both fit the existing native 4 KiB frame budget without changing flags. */
+static __attribute__((noinline)) int user_program(struct cp_program_store *s,
+    const char *root_path,const char *name,unsigned root,struct desk_uninstall_entry *r,
+    const struct desk_uninstall_entry *out,int n)
+{
+    char full[1024];int e;
+    *r=(struct desk_uninstall_entry){.kind=root ? DESK_PROGRAM_NATIVE : DESK_PROGRAM_DOS};
+    int len=snprintf(r->location,sizeof(r->location),"%s/%s",root_path,name);
+    if(len<0 || len>=(int)sizeof(r->location)){e=-ENAMETOOLONG;return e;}
+    e=path(s,r->location,full,sizeof(full));if(e)return e;
+    struct stat st;if(program_stat(full,&st)){e=-errno;return e;}
+    if(!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))return 0;
+    r->no_remove=r->system_component=system_path(r->location);
+    struct desk_launch_record record={0};int have=0;
+    if(!r->no_remove){
+        have=launch_record(s,r->location,&record);if(have<0){e=have;return e;}
+        if(!root && !have)return 0;
+    }
+    if(!r->no_remove && !S_ISDIR(st.st_mode)){
+        FILE *f=fopen(full,"rb");char magic[4];int elf=f && fread(magic,1,4,f)==4 && !memcmp(magic,"\177ELF",4);if(f)fclose(f);if(!elf && !have)return 0;
+    }
+    /* Registry entries already own their installation directory. */
+    int duplicate=0;for(int i=0;i<n;i++)if(out[i].kind==DESK_PROGRAM_WIN32 && cp_program_contains(r->location,out[i].location))duplicate=1;
+    if(duplicate)return 0;
+    snprintf(r->name,sizeof(r->name),"%.63s",have ? record.label : name);
+    if(have){const char *ext=strrchr(record.target,'.');if(ext && (strcasecmp(ext,".exe")==0 || strcasecmp(ext,".com")==0 || strcasecmp(ext,".bat")==0))r->kind=DESK_PROGRAM_DOS;}
+    unsigned budget=WALK_ENTRIES;e=walk(full,WALK_DEPTH,&budget,0,&r->disk_bytes);if(e)return e;
+    return 1;
+}
 int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,unsigned cap)
 {
     if(!s || !out || !cap)return -EINVAL;
+    s->overflow=0;
     int n=s->registry_list ? s->registry_list(s->ctx,out,cap) : 0;
     /* Registry service absence must not hide DOS/native programs. */
     if(n==-EPIPE || n==-ENOSYS || n==-EAGAIN)n=0;
     if(n<0 || (unsigned)n>cap)return n<0 ? n : -EIO;
+    if(n && out[0].inventory_more)s->overflow=1;
     for(int i=0;i<n;i++){
         uninstall_location(&out[i]);
         out[i].kind=DESK_PROGRAM_WIN32;out[i].disk_bytes=(uint64_t)out[i].estimated_kb*1024;
@@ -213,7 +258,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
     for(unsigned game=1;game<=DESK_GAME_COUNT;game++){
         uint32_t bytes=0;int present=s->game ? s->game(s->ctx,game,0,&bytes) : 0;
         if(present<0)return present;if(!present)continue;
-        if((unsigned)n==cap)return -E2BIG;
+        if((unsigned)n==cap){s->overflow=1;continue;}
         struct desk_uninstall_entry *r=&out[n];
         *r=(struct desk_uninstall_entry){.kind=DESK_PROGRAM_GAME,.game=game,.disk_bytes=bytes};
         snprintf(r->name,sizeof(r->name),"%s",desk_games[game-1].label);
@@ -228,46 +273,37 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
         while((ent=readdir(d))){
             if(!entries--){e=-E2BIG;break;}
             if(ent->d_name[0]=='.')continue;
-            if((unsigned)n==cap){e=-E2BIG;break;}
-            struct desk_uninstall_entry *r=&out[n];
-            *r=(struct desk_uninstall_entry){.kind=root ? DESK_PROGRAM_NATIVE : DESK_PROGRAM_DOS};
-            int len=snprintf(r->location,sizeof(r->location),"%s/%s",roots[root],ent->d_name);
-            if(len<0 || len>=(int)sizeof(r->location)){e=-ENAMETOOLONG;break;}
-            e=path(s,r->location,full,sizeof(full));if(e)break;
-            struct stat st;if(program_stat(full,&st)){e=-errno;break;}
-            if(!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode))continue;
-            r->no_remove=r->system_component=system_path(r->location);
-            struct desk_launch_record record={0};int have=0;
-            if(!r->no_remove){
-                have=launch_record(s,r->location,&record);if(have<0){e=have;break;}
-                if(!root && !have)continue;
-            }
-            if(!r->no_remove && !S_ISDIR(st.st_mode)){
-                FILE *f=fopen(full,"rb");char magic[4];int elf=f && fread(magic,1,4,f)==4 && !memcmp(magic,"\177ELF",4);if(f)fclose(f);if(!elf && !have)continue;
-            }
-            /* Registry entries already own their installation directory. */
-            int duplicate=0;for(int i=0;i<n;i++)if(out[i].kind==DESK_PROGRAM_WIN32 && cp_program_contains(r->location,out[i].location))duplicate=1;
-            if(duplicate)continue;
-            snprintf(r->name,sizeof(r->name),"%.63s",have ? record.label : ent->d_name);
-            if(have){const char *ext=strrchr(record.target,'.');if(ext && (strcasecmp(ext,".exe")==0 || strcasecmp(ext,".com")==0 || strcasecmp(ext,".bat")==0))r->kind=DESK_PROGRAM_DOS;}
-            unsigned budget=WALK_ENTRIES;e=walk(full,WALK_DEPTH,&budget,0,&r->disk_bytes);if(e)break;
-            if((unsigned)n==cap){e=-E2BIG;break;}n++;
+            struct desk_uninstall_entry candidate;
+            struct desk_uninstall_entry *r=&candidate;
+            int present=user_program(s,roots[root],ent->d_name,root,r,out,n);
+            if(present<0){e=present;break;}if(!present)continue;
+            if((unsigned)n==cap){
+                s->overflow=1;
+                if(!r->system_component)continue;
+                unsigned replace=cap;while(replace && out[replace-1].system_component)replace--;
+                if(!replace)continue;out[replace-1]=*r;
+            }else out[n++]=*r;
         }
         if(closedir(d) && !e)e=-errno;if(e)return e;
     }
     static const struct {const char *name,*location;} protected[]={
         {"CiukiDOS kernel","/System/DOS/DOSBOOT.IMG"},{"FreeDOS kernel","/System/DOS/FREEDOS.IMG"},{"Windows service","/System/Win32/w32srv"},{"System fonts","/System/fonts"}};
     for(unsigned i=0;i<sizeof(protected)/sizeof(*protected);i++){
-        if((unsigned)n==cap)return -E2BIG;
-        struct desk_uninstall_entry *r=&out[n];
+        struct desk_uninstall_entry candidate;
+        struct desk_uninstall_entry *r=&candidate;
         *r=(struct desk_uninstall_entry){.kind=DESK_PROGRAM_NATIVE,.no_remove=1,.system_component=1};
         snprintf(r->name,sizeof(r->name),"%s",protected[i].name);snprintf(r->location,sizeof(r->location),"%s",protected[i].location);
         char full[1024];unsigned budget=WALK_ENTRIES;
         int e=path(s,r->location,full,sizeof(full));if(e)return e;
         e=walk(full,WALK_DEPTH,&budget,0,&r->disk_bytes);if(e && e!=-ENOENT)return e;
-        n++;
+        if((unsigned)n==cap){
+            s->overflow=1;unsigned replace=cap;while(replace && out[replace-1].system_component)replace--;
+            if(replace)out[replace-1]=*r;
+        }else out[n++]=*r;
     }
-    qsort(out,(unsigned)n,sizeof(*out),compare);return n;
+    qsort(out,(unsigned)n,sizeof(*out),compare);
+    if(n)out[0].inventory_more=s->overflow;
+    return n;
 }
 int cp_program_remove(struct cp_program_store *s,const struct desk_uninstall_entry *r)
 {
@@ -296,17 +332,33 @@ int cp_program_remove(struct cp_program_store *s,const struct desk_uninstall_ent
     if(!result){
         /* Win32 success means the process exited, not that it unregistered.
          * Keep its shortcuts until a fresh inventory proves key absence. */
-        if(r->kind==DESK_PROGRAM_WIN32){
+        if(r->kind==DESK_PROGRAM_WIN32 && s->registry_check){
+            int present=s->registry_check(s->ctx,r->key);
+            result=present<0 ? present : present ? -EAGAIN : 0;
+        }else if(r->kind==DESK_PROGRAM_WIN32){
             struct desk_uninstall_entry *fresh=calloc(DESK_UNINSTALL_MAX,sizeof(*fresh));
             int n=fresh && s->registry_list ? s->registry_list(s->ctx,fresh,DESK_UNINSTALL_MAX) : -ENOMEM;
             if(n<0)result=n;
+            /* An incomplete snapshot cannot prove that a surviving key is absent. */
+            if(n>0 && fresh[0].inventory_more)result=-EAGAIN;
             for(int i=0;i<n;i++)if(!strcmp(fresh[i].key,r->key))result=-EAGAIN;
             free(fresh);
         }
         const char *const roots[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop","/Games","/Programs"};
-        for(unsigned i=0;!result && r->location[0] && i<5;i++){
-            unsigned budget=WALK_ENTRIES;int e=records(s,roots[i],r->location,NULL,1,WALK_DEPTH,&budget);if(e<0)result=e;
+        /* First collect icon ownership while every record still exists.
+         * Persist that snapshot before deleting the records, so a failed save
+         * or restart never loses the identities needed for a retry. */
+        for(unsigned phase=2;phase && !result;phase--){
+            for(unsigned i=0;!result && r->location[0] && i<5;i++){
+                unsigned budget=WALK_ENTRIES;int e=records(s,roots[i],r->location,NULL,(int)phase,WALK_DEPTH,&budget);if(e<0)result=e;
+            }
+            if(phase==2 && !result && s->persist)result=s->persist(s->ctx);
         }
+    }
+    if(!result && r->kind==DESK_PROGRAM_GAME){
+        char rel[64],full[1024];snprintf(rel,sizeof(rel),"/System/REMOVE%u.PND",r->game);
+        result=path(s,rel,full,sizeof(full));
+        if(!result && unlink(full) && errno!=ENOENT)result=-errno;
     }
     cp_program_record(s,r,result);return result;
 }

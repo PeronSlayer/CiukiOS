@@ -88,7 +88,13 @@ static void registry(const char *dir)
         assert(list[j].no_remove && !list[j].command[0]);protected_found=1;
     }assert(protected_found);
     for(unsigned i=0;i<40;i++){char name[32];snprintf(name,sizeof(name),"program-%u",i);fixture(name,name,"C:\\fixture.exe /x");}
-    assert(ciuki_win32_uninstall_list(list,33)==32);
+    assert(ciuki_win32_uninstall_list(list,32)==32 && list[0].inventory_more);
+    user_found=0;for(unsigned i=0;i<32;i++)if(!strcmp(list[i].key,"HKCU/fixture"))user_found=1;assert(user_found);
+    protected_found=0;for(unsigned i=0;i<32;i++)if(!strcmp(list[i].key,"protected"))protected_found=1;assert(protected_found);
+    assert(ciuki_win32_uninstall_registered("fixture")==1 && ciuki_win32_uninstall_registered("HKCU/fixture")==1);
+    assert(ciuki_win32_uninstall_registered("missing-key")==0 && ciuki_win32_uninstall_registered("..\\bad")==-EINVAL);
+    user->deleted=1;assert(ciuki_win32_uninstall_registered("HKCU/fixture")==0);user->deleted=0;
+    struct desk_uninstall_entry large[64];assert(ciuki_win32_uninstall_list(large,64)==43 && !large[0].inventory_more);
     assert((unsigned char)list[32].key[0]==0xa5);
     assert(ciuki_win32_uninstall_run("..\\fixture")==-EINVAL);
     assert(ciuki_win32_uninstall_run("fixture")==123);
@@ -135,7 +141,7 @@ static void registry(const char *dir)
     value(fixture_key,"UninstallString","C:\\Program Files\\unsafe.exe /x");
     assert(ciuki_win32_uninstall_run("fixture")==-EINVAL); /* reread, reject ambiguous path */
     malformed=1;assert(ciuki_win32_uninstall_list(list,32)==-EINVAL);malformed=0;
-    unavailable=1;assert(ciuki_win32_uninstall_list(list,32)==-EPIPE);assert(desk_w32_flush()==-EPIPE);unavailable=0;
+    unavailable=1;assert(ciuki_win32_uninstall_registered("fixture")==-EPIPE);assert(ciuki_win32_uninstall_list(list,32)==-EPIPE);assert(desk_w32_flush()==-EPIPE);unavailable=0;
     assert(!desk_w32_flush());assert(!desk_w32_ready());
     unavailable=1;assert(desk_w32_ready()==-EPIPE);unavailable=0;wr_destroy(&server);
     puts("PASS uninstall RPC: four fields, 32 record bound, malformed/unavailable endpoint, path validation, flush");

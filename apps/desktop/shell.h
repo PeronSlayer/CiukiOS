@@ -92,7 +92,7 @@ struct desk_shell {
     int logo_down, alt_routed, alt_used, alt_code;
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
-    int want_save, want_wallpaper, want_mixer, want_power, want_reload;
+    int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
     char want_run[192];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;

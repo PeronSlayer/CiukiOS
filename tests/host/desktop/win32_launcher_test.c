@@ -38,9 +38,12 @@ int main(int argc,char **argv)
     assert(desk_w32_arguments(text,native,6)==4);
     assert(!strcmp(native[0],"one") && !strcmp(native[1],"two words") && !strcmp(native[2],"empty\"quote") && !native[3][0]);
     args[1]="2";args[2]="C:\\GAMES\\TEST.COM";args[3]="-fast";
-    assert(!desk_w32_launcher_main(5,args));assert(!strcmp(path,"/Programs/dosbox") && maps==1);
-    assert(!strcmp(words[1],"--channel-fd=3") && !strcmp(words[2],"C:\\GAMES\\TEST.COM -fast"));
-    args[4]="D:\\bad";assert(desk_w32_launcher_main(5,args)==1 && launched==2);
+    assert(desk_w32_launcher_main(5,args)==1 && reply_result==-EOPNOTSUPP && launched==1);
+    struct desk_launch_record dos={.show=1};strcpy(dos.target,"/mnt/d/SETUP.EXE");
+    char command[260];assert(!desk_w32_dos_command(&dos,command,sizeof(command)) && !strcmp(command,"D:\\SETUP.EXE"));
+    strcpy(dos.target,"/mnt/e/INSTALL.BAT");strcpy(dos.arguments,"/fast");
+    assert(!desk_w32_dos_command(&dos,command,sizeof(command)) && !strcmp(command,"E:\\INSTALL.BAT /fast"));
+    args[4]="D:\\bad";assert(desk_w32_launcher_main(5,args)==1 && launched==1);
     assert(sent==3);
     char *wait_args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove",argv[1],"--wait",NULL};
     unsigned before=waits;assert(!desk_w32_launcher_main(6,wait_args) && reply_result==0 && waits==before+1);

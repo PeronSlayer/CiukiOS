@@ -1144,7 +1144,7 @@ static void build(struct cp_app *a)
             (!a->host.program_remove && !a->host.uninstall_run) || a->uninstall[0].no_remove || a->uninstall[0].system_component;
         add(a,DU_BUTTON,984,136,316,96,24,"Refresh");
         add(a,DU_BUTTON,986,244,316,100,24,"Install")->disabled=!a->host.program_install;
-        add(a,DU_LABEL,985,24,350,508,16,"Protected components cannot be removed.");
+        add(a,DU_LABEL,985,24,350,508,16,a->uninstall_count && a->uninstall[0].inventory_more ? "More programs exist. Remove entries and refresh to see more." : "Protected components cannot be removed.");
     } else if (a->page==CP_AUTOPLAY) {
         static const char *const actions[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
         int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;

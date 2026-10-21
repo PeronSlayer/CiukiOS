@@ -23,7 +23,7 @@ struct desk_link_entry {
 struct desk_uninstall_entry {
     char key[260], name[64], command[1284], version[64], publisher[128], location[260];
     uint32_t estimated_kb, no_remove, no_modify, system_component;
-    unsigned kind, game;
+    unsigned kind, game, inventory_more;
     uint64_t disk_bytes;
     char licence[260];
 };

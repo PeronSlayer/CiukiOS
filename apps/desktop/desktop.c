@@ -1273,6 +1273,9 @@ static void shell_service(struct desktop *d)
         desk_power_begin(d,action);
         return;
     }
+    if (sh->want_programs) {
+        sh->want_programs=0;desktop_wait("program-scan");scan_programs(d);
+    }
     if (sh->want_reload & 1) {
         settings_reload_pending=settings_reload_request=1;
         theme_read_pending=0;
@@ -1503,7 +1506,7 @@ static void *links_thread(void *arg)
             for(unsigned g=1;g<=CIUKI_DOSVM_GAME_COUNT;g++){
                 struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
                 if(!ciuki_dosvm(CIUKI_DOSVM_GAME_QUERY,&c)){
-                    if(c.state)removed&=~(1u<<(g-1));else removed|=1u<<(g-1);
+                    if(c.state==1)removed&=~(1u<<(g-1));else removed|=1u<<(g-1);
                 }
             }
             pthread_mutex_lock(&w->mutex);

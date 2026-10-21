@@ -1575,6 +1575,47 @@ without focus), EBUSY (caller already owns or is creating a VM; operation in
 progress), ESRCH, ENOMEM (admission or allocation), ENOSPC (VM or creation
 slots), EAGAIN, EINTR (owner stopping during creation), EIO (private disk or
 boot failure, presenter write failure).
+### F2-87 amendment: bundled-program management (2026-10-21)
+
+Operations 11 (`CIUKI_DOSVM_GAME_QUERY`) and 12
+(`CIUKI_DOSVM_GAME_REMOVE`) preserve version 1, size 136 and all offsets.
+Only version, size and `launch.game` (1 Wolfenstein 3D, 2 DOOM, 3 Quake)
+are inputs; every other byte, including outputs and reserved fields, must
+be zero. Unsupported versions return EOPNOTSUPP; malformed records return
+EINVAL. Both calls pin the complete writable reply before filesystem work.
+
+QUERY requires no VM capability and does not enable writes. It reports
+`state=0` when absent, `state=1` when installed, and `state=2` while removal
+cleanup remains pending. `changed` is allocated bytes (zero for an absent
+directory still awaiting cleanup). REMOVE requires a separate management
+capability, assigned by the supervisor's spawn delegation only to the exact
+`/Programs/desktop` and `/Programs/control` images launched by the supervisor
+or a parent owning both display and input grants. This authority is not
+inherited by their arbitrary children and does not confer DOSVM creation,
+input or display access. Lack of management authority returns EPERM before
+filesystem access. The outer C: write gate and file sharing remain additional
+requirements, independent of caller authorization.
+
+REMOVE reserves its game against every VM creation and refuses EBUSY before
+any write if a matching VM is creating, alive, stopped but retaining resources,
+or being destroyed, on either DOS kernel. Creation retains the opposite
+reservation across its presence check, sleeping admission and backing open.
+A pending removal refuses creation with ENOENT. No interrupt lock spans I/O.
+
+Before mutation, REMOVE durably creates `C:\System\REMOVE<n>.PND`; the fixed
+filename supplies the game identity. It removes the bounded FAT subtree,
+invalidates the digest cache after an attempted mutation and clears matching
+per-kernel COW files. An absent subtree is a successful idempotent step,
+including when retrying after restart. The marker remains until Control Panel
+has removed per-game settings, durably saved forgotten icon positions and
+removed owned launch records. QUERY keeps this game in the applet for retry;
+the desktop treats state 2 as unavailable for launching. Successful REMOVE
+reports `state=1`; storage/cleanup failures return their VFS/FAT errno,
+including EROFS, EBUSY, EIO and allocation/traversal errors. Confirmation,
+logging and launcher refresh are responsibilities of the two trusted managers.
+This is recoverable staged cleanup, not a cross-filesystem transaction or a
+power-failure atomicity claim for the underlying FAT mutations.
+
 ## F3-04 amendment: DPMI client entry path (2026-10-11)
 
 **[F3]** GDT index 8 (selector 40h) is the per-VM LDT descriptor. It is
