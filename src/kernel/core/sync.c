@@ -30,7 +30,7 @@ static struct kwait *owned_queues;
 static gen_t last_gen;
 static bool propagating;
 
-/* Every live outgoing dependency is a wait on an owned mutex queue.
+/* Every live outgoing dependency is a wait on an owned lock/request queue.
  * Device waits have owner==NULL. Suppress the edge that would close a cycle. */
 static struct task *wait_owner(struct task *t)
 { return t && t->waiting_on ? t->waiting_on->owner : 0; }
@@ -402,14 +402,14 @@ bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d
 bool kwait_wait_ticket_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d, uint32_t *ticket)
 { return wait_until(q, cond, arg, d, ticket); }
 
-static void wait_wake(struct kwait *q, bool io)
+static void wait_wake(struct kwait *q, bool io, bool conditional)
 {
     uint32_t f = irq_save();
     for (struct kwaiter *w = q->head; w; w = w->next) {
         if (w->task->state == T_BLOCKED) {
-            /* Check only completion wakes. Generic wakes may be cancellation
+            /* Check completion/producer wakes. Generic wakes may be cancellation
              * or a notification whose predicate is still false. */
-            if (io && !w->cond(w->arg)) continue;
+            if (conditional && !w->cond(w->arg)) continue;
             if (io) task_io_completed(w->task);
             ksync_task_ready(w->task);
             w->task->wake_tick = 0;
@@ -472,8 +472,9 @@ void kwait_wake_irq(struct kwait *q, bool io)
     irq_restore(f);
 }
 
-void kwait_wake_all(struct kwait *q) { wait_wake(q, false); }
-void kwait_wake_io(struct kwait *q) { wait_wake(q, true); }
+void kwait_wake_all(struct kwait *q) { wait_wake(q, false, false); }
+void kwait_wake_ready(struct kwait *q) { wait_wake(q, false, true); }
+void kwait_wake_io(struct kwait *q) { wait_wake(q, true, true); }
 
 void kmutex_init(struct kmutex *m)
 {
@@ -557,7 +558,7 @@ void ksync_task_exit(struct task *t)
         if (q->owner == t) {
             if (q->owner_died) q->owner_died(q);
             kwait_set_owner(q, 0);
-            if (t->preempt_holds) t->preempt_holds--;
+            if (!q->owner_preemptible && t->preempt_holds) t->preempt_holds--;
             kwait_wake_all(q);
         }
         q = next;

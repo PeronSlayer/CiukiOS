@@ -296,6 +296,7 @@ static void video_harvest(struct dosvm *v)
         v->video_pending[plane] = 0;
     }
     if (harvested) { v->perf.harvests++; dosvm_launch_video(v); }
+    dosvm_present_notify(v);
     v->perf.harvest_cycles += dosvm_perf_task_clock() - begin;
 }
 void dosvm_vga_sync(struct dosvm *v, bool unmap)
@@ -837,6 +838,38 @@ static bool video_planar_changed(struct dosvm *v, const cvga_state *scan, unsign
     }
     return changed;
 }
+/* Same refresh policy as the presenter; bounded public timeout in ms. */
+unsigned dosvm_vga_period_ms(struct dosvm *v)
+{
+    uint64_t period = vga_frame_us(&v->vga);
+    const struct dos_video_mode *mode = dos_video_mode(v->vbe_mode);
+    cvga_geometry g = {0};
+    if (mode) period = dos_video_frame_us(mode);
+    else if (cvga_get_geometry(&v->vga, &g) && !g.text && (v->vga.gc[5] & 0x40) &&
+             !(v->video_flip_run >= 2 && g_ticks * 1000u - v->video_flip_us <= period * 2)) period *= 2;
+    unsigned ms = (unsigned)((period + 999) / 1000);
+    return ms > CIUKI_DOSVM_WAIT_MAX_MS ? CIUKI_DOSVM_WAIT_MAX_MS : ms ? ms : 1;
+}
+
+void dosvm_present_notify(struct dosvm *v)
+{
+    if (v->present_wait.head) kwait_wake_ready(&v->present_wait);
+}
+
+void dosvm_present_checkpoint(struct dosvm *v)
+{
+    if (!v->present_wait.head) return;
+    /* Deferred/VM thread context only. The predicate never walks PTEs or
+     * converts pixels. Observe direct stores even without a trapped OUT. */
+    if (deadline_passed(v->present_sample_due) && v->info.state < DOSVM_STOPPING &&
+        !v->fullscreen && !v->fullscreen_hold) {
+        v->present_sample_due = deadline_after_ms(dosvm_vga_period_ms(v));
+        dosvm_vga_sync(v, false);
+        if (v->vbe_mode && dosvm_vbe_dirty(v, false)) v->present_vbe_changes++;
+    }
+    dosvm_present_notify(v);
+}
+
 int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *, unsigned),
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {

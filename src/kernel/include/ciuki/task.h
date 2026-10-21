@@ -52,7 +52,7 @@ struct task {
     uint8_t input_priority, io_priority, io_ticks;
     bool priority_valid, focused;
     uint64_t input_expiry, service_deadline;
-    struct kwait *waiting_on;      /* mutex dependency only; never device waits */
+    struct kwait *waiting_on;      /* owner dependency; never physical device waits */
     struct kwaiter *sync_waiter;   /* one blocked wait, constant-time IRQ wake */
     bool user;
     bool measured;                 /* counted by the preemption measurement */

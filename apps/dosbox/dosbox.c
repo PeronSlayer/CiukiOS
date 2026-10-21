@@ -132,7 +132,7 @@ int main(int argc, char **argv)
         memory=dosbox_memory_value(memory_override);
         if (dosbox_memory_save(game,memory)) { perror("dosbox: DOS memory setting"); return 1; }
     }
-    int settings_open=0, settings_repaint=0;
+    int settings_open=0, settings_repaint=0, settings_dirty=0;
     uint32_t *settings_backup=NULL;
     char setting_detail[96]="Changes apply when you close and relaunch this game.";
     size_t len = strlen(name);
@@ -149,12 +149,17 @@ int main(int argc, char **argv)
     uint64_t started = now_ms(), panel_at = 0, launch_at = 0;
     int loading = !!typed_length, shown = !loading;
     int failure_painted = 0;
+    int panel_sent = 0, panel_redraw = 0, notice_painted = 0, redraw = 1;
+    unsigned frame_ms = 15;
     const char *failure = NULL;
     char detail[80] = "Preparing...";
     char fullscreen_notice[80]="";
     uint64_t fullscreen_notice_until=0;
     uint32_t fullscreen_error_seen=0;
-    if (loading) dosbox_panel(&canvas, name, icon, NULL, detail, 0);
+    if (loading) {
+        dosbox_panel(&canvas, name, icon, NULL, detail, 0);
+        if (game) du_text_wrap(&canvas,(struct du_rect){120,300,400,18},"F12: DOS kernel settings",DU_INK);
+    }
     if (game) fprintf(stderr,"dosbox: DOS kernel: %s; memory: %s; F12 opens game settings\n",
                       dosbox_kernel_label(kernel),dosbox_memory_label(memory));
     struct ciuki_message m;
@@ -195,6 +200,7 @@ int main(int argc, char **argv)
                 if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
                     snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
                     fullscreen_notice_until=now_ms()+3000;
+                    notice_painted=0;
                 }
             } else if (packet.opcode == DESK_CONFIGURE) {
                 if (packet.width != CIUKI_DOSVM_WIDTH || packet.height != CIUKI_DOSVM_HEIGHT) goto done;
@@ -210,6 +216,7 @@ int main(int argc, char **argv)
                         if (settings_open) { dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1; }
                         else if (dosbox_settings_capture(&canvas,&settings_backup)) continue;
                         settings_open=!settings_open;
+                        settings_dirty=settings_open;
                         if (id) {
                             command(&c,id,generation); c.focused=focused && !settings_open;
                             if (ciuki_dosvm(CIUKI_DOSVM_FOCUS,&c) && errno!=ESRCH) goto done;
@@ -218,6 +225,9 @@ int main(int argc, char **argv)
                     continue;
                 }
                 if (settings_open && packet.opcode==DESK_KEY) {
+                    unsigned previous_kernel=kernel, previous_memory=memory;
+                    char previous_detail[sizeof(setting_detail)];
+                    memcpy(previous_detail,setting_detail,sizeof(previous_detail));
                     if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_1 || packet.event.code==CIUKI_KEY_2)) {
                         unsigned choice=packet.event.code==CIUKI_KEY_2 ? CIUKI_DOSVM_FREEDOS13 : 0;
                         if (dosbox_setting_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
@@ -228,6 +238,7 @@ int main(int argc, char **argv)
                         if (dosbox_memory_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
                         else { memory=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
                     }
+                    if (kernel!=previous_kernel || memory!=previous_memory || strcmp(setting_detail,previous_detail)) settings_dirty=1;
                     if (packet.event.code==CIUKI_KEY_ESCAPE && packet.event.value==1) {
                         settings_open=0;
                         dosbox_settings_restore(&canvas,&settings_backup); settings_repaint=1;
@@ -259,16 +270,28 @@ int main(int argc, char **argv)
             settings_repaint=0;
         }
         if (settings_open && configured) {
-            char selection[96];
-            snprintf(selection,sizeof(selection),"Kernel: %s. Memory: %s.",dosbox_kernel_label(kernel),dosbox_memory_label(memory));
-            dosbox_kernel_panel(&canvas,selection,setting_detail);
-            desk_message(&m,DESK_DAMAGE,20);
-            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
-            if (send_packet(channel,&m)) goto done;
-            struct timespec pause={.tv_nsec=20000000}; nanosleep(&pause,NULL);
+            if (settings_dirty) {
+                char selection[96];
+                snprintf(selection,sizeof(selection),"Kernel: %s. Memory: %s.",dosbox_kernel_label(kernel),dosbox_memory_label(memory));
+                dosbox_kernel_panel(&canvas,selection,setting_detail);
+                desk_message(&m,DESK_DAMAGE,20);
+                desk_put32(m.data+4,DOSBOX_SETTINGS_X); desk_put32(m.data+8,DOSBOX_SETTINGS_Y);
+                desk_put32(m.data+12,DOSBOX_SETTINGS_W); desk_put32(m.data+16,DOSBOX_SETTINGS_H);
+                if (send_packet(channel,&m)) goto done;
+                settings_dirty=0;
+            }
+            struct timespec pause={.tv_nsec=50000000}; nanosleep(&pause,NULL);
             continue;
         }
         if (failure) goto panel;
+        command(&c,id,generation); c.wait.timeout_ms=frame_ms;
+        if (ciuki_dosvm(CIUKI_DOSVM_WAIT_PRESENT,&c)) {
+            if (errno==EINTR) continue;
+            if (errno==ESRCH) break;
+            goto done;
+        }
+        frame_ms=c.wait.frame_ms;
+        unsigned video_events=c.wait.events;
         int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
@@ -278,6 +301,7 @@ int main(int argc, char **argv)
             fullscreen_error_seen=c.reason;
             snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror((int)c.reason));
             fullscreen_notice_until=now_ms()+3000;
+            notice_painted=0;
         }
         if (fullscreen) {
             if (!fullscreen_painted && configured) {
@@ -287,10 +311,12 @@ int main(int argc, char **argv)
                 if (send_packet(channel,&m)) goto done;
                 fullscreen_painted=1;
             }
-            struct timespec pause={.tv_nsec=10000000}; nanosleep(&pause,NULL);
             continue;
         }
-        fullscreen_painted=0;
+        if (fullscreen_painted) {
+            fullscreen_painted=0; redraw=1;
+            if (loading) { panel_redraw=1; panel_sent=0; }
+        }
         if (c.state == CIUKI_DOSVM_STOPPED) {
             if (shown) break;
             failure = c.reason == 4 ? "Startup timed out" : "Unable to start";
@@ -299,12 +325,18 @@ int main(int argc, char **argv)
             goto panel;
         }
         if (configured && now_ms()<fullscreen_notice_until) {
-            dosbox_panel(&canvas,name,icon,"Full screen unavailable",fullscreen_notice,0);
-            desk_message(&m,DESK_DAMAGE,20);
-            desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
-            if (send_packet(channel,&m)) goto done;
-            struct timespec pause={.tv_nsec=10000000}; nanosleep(&pause,NULL);
+            if (!notice_painted) {
+                dosbox_panel(&canvas,name,icon,"Full screen unavailable",fullscreen_notice,0);
+                desk_message(&m,DESK_DAMAGE,20);
+                desk_put32(m.data+12,CIUKI_DOSVM_WIDTH); desk_put32(m.data+16,CIUKI_DOSVM_HEIGHT);
+                if (send_packet(channel,&m)) goto done;
+                notice_painted=1;
+            }
             continue;
+        }
+        if (notice_painted) {
+            notice_painted=0; redraw=1; panel_sent=0;
+            if (loading) panel_redraw=1;
         }
         if (polled_launch && (c.changed & CIUKI_DOSVM_LAUNCH_FAILED)) {
             failure = "Program did not start";
@@ -331,8 +363,9 @@ int main(int argc, char **argv)
             result = 1;
         }
         if (loading) goto panel;
-        if (configured) {
+        if (configured && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
+            c.presentation.redraw=redraw;
             if (ciuki_dosvm(CIUKI_DOSVM_PRESENT_BANDS, &c)) {
                 if (errno == ESRCH) break;
                 goto done;
@@ -349,21 +382,26 @@ int main(int argc, char **argv)
                     if (send_packet(channel, &m)) goto done;
                 }
             }
+            redraw=0;
         }
-        { struct timespec pause = {.tv_nsec = focused ? 2000000 : 10000000}; nanosleep(&pause, NULL); }
         continue;
 panel:
-        if (configured && (failure ? !failure_painted : now_ms() - panel_at >= 80)) {
-            dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
-            if (game) du_text_wrap(&canvas,(struct du_rect){120,300,400,18},"F12: DOS kernel settings",DU_INK);
+        if (configured && (failure ? !failure_painted : !panel_sent || now_ms() - panel_at >= DOSBOX_PULSE_MS)) {
+            struct du_rect damage={0,0,CIUKI_DOSVM_WIDTH,CIUKI_DOSVM_HEIGHT};
+            if (failure || panel_redraw) {
+                dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
+                if (game) du_text_wrap(&canvas,(struct du_rect){120,300,400,18},"F12: DOS kernel settings",DU_INK);
+                panel_redraw=0;
+            } else if (panel_sent) damage=dosbox_panel_pulse(&canvas,now_ms()-started);
             desk_message(&m, DESK_DAMAGE, 20);
-            desk_put32(m.data + 4, 0); desk_put32(m.data + 8, 0);
-            desk_put32(m.data + 12, CIUKI_DOSVM_WIDTH); desk_put32(m.data + 16, CIUKI_DOSVM_HEIGHT);
+            desk_put32(m.data + 4, damage.x); desk_put32(m.data + 8, damage.y);
+            desk_put32(m.data + 12, damage.w); desk_put32(m.data + 16, damage.h);
             if (send_packet(channel, &m)) goto done;
             panel_at = now_ms();
+            panel_sent=1;
             if (failure) failure_painted = 1;
         }
-        { struct timespec pause = {.tv_nsec = 10000000}; nanosleep(&pause, NULL); }
+        if (failure) { struct timespec pause = {.tv_nsec = 50000000}; nanosleep(&pause, NULL); }
     }
     if (!failure) result = 0;
 done:

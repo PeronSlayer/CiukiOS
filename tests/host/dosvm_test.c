@@ -265,6 +265,13 @@ bool deadline_passed(uint64_t t) { return g_ticks - t < (1ull << 63); }
 void kwait_init(struct kwait *q) { q->head=0; }
 void kwait_wake_all(struct kwait *q) { (void)q; }
 void kwait_wake_io(struct kwait *q) { (void)q; }
+static struct kwait *host_wait_queue;
+static kwait_cond_fn host_wait_condition;
+static void *host_wait_arg;
+static unsigned host_present_wakes;
+void kwait_wake_ready(struct kwait *q)
+{ if (q == host_wait_queue && host_wait_condition && host_wait_condition(host_wait_arg)) host_present_wakes++; }
+void kwait_set_owner(struct kwait *q, struct task *t) { q->owner=t; }
 void kmutex_init(struct kmutex *m) { memset(m,0,sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { CHECK((cpu_flags&V86_IF) && !m->owner); m->owner=g_current; }
 void kmutex_unlock(struct kmutex *m) { CHECK(m->owner==g_current); m->owner=0; }
@@ -273,10 +280,17 @@ static uint64_t wait_deadline;
 static void (*wait_register_hook)(void);
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn fn, void *arg, uint64_t until)
 {
-    (void)q; wait_calls++; wait_deadline = until;
+    wait_calls++; wait_deadline = until;
+    struct kwait *previous=host_wait_queue;
+    kwait_cond_fn previous_fn=host_wait_condition;
+    void *previous_arg=host_wait_arg;
+    host_wait_queue=q; host_wait_condition=fn; host_wait_arg=arg;
+    q->head=(struct kwaiter *)&until;
     if (wait_register_hook) wait_register_hook();
     while (!fn(arg) && !deadline_passed(until)) task_sleep_ms(1);
-    return fn(arg);
+    bool ready=fn(arg); q->head=0;
+    host_wait_queue=previous; host_wait_condition=previous_fn; host_wait_arg=previous_arg;
+    return ready;
 }
 static bool input_pending;
 static struct input_event input_next;
@@ -857,9 +871,11 @@ static void test_memory_services(bool locked)
 #include "dosvm_zone_memory_test.inc"
 #include "dosvm_conformance_test.inc"
 #include "dosvm_paging_test.inc"
+#include "dosvm_wait_present_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_WAIT_PRESENT")) { test_wait_present(); test_client_boundary(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MEMORY_CHARGE")) { disk_memory_charge(); free(ram); return 0; }
     if (getenv("CIUKI_VM_AUDIO_COST")) { test_vm_source_budget(); free(ram); return 0; }
     if (getenv("CIUKI_VM_QUAKE_START")) { test_quake_start(); free(ram); return 0; }
@@ -873,6 +889,7 @@ int main(void)
     test_vga_transaction_bound();
     test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
     test_video();
+    test_wait_present();
     test_vm_audio();
     test_game_audio();
     test_workloads();

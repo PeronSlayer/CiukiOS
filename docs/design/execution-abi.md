@@ -2302,3 +2302,46 @@ payload. Authenticated PID owns the global INI
 update lease; contention is ERROR_BUSY, foreign release ERROR_ACCESS_DENIED,
 and disconnect/death releases ownership. All kernel32 and advapi32 fragments
 share ntdll's recursive per-process transport lock and request sequence.
+
+### F3-52 DOS window frame wait (2026-10-20, pending lead review)
+
+Operation 11 (`CIUKI_DOSVM_WAIT_PRESENT`) retains record version 1, size 136
+and all existing offsets. Its union at 72 contains `wait.timeout_ms` (input,
+1..50), `wait.frame_ms` (output, programmed/presentation frame period rounded
+up to 1..50 ms), `wait.events` (output), then seven zero reserved u32s.
+All other non-key fields must be zero on input. Events are VIDEO=1 (new VGA
+model/dirty stores, geometry, mode, VBE stores or text blink phase), STATE=2
+(public VM state, launch visibility/failure, fullscreen/suspension/refusal),
+CONSOLE=4 (completed console line), TIMEOUT=8 (successful timeout with no
+other event). Events may be combined. The first observation reports the
+current state and video; later observations acknowledge only returned video
+events. VIDEO is frame paced even when an overlay suppresses presentation.
+WAIT_PRESENT never writes the surface, so it is also safe during loading.
+A timeout does not consume VGA dirt. The application passes the returned
+frame period to its next wait and services desktop messages between waits.
+
+The binding's busy gate permits one wait. A caught signal or process stop
+returns EINTR; stop/fault remains observable as STATE before CLOSE. Other
+validation/ownership errors retain the F3-02 closed set. The owned wait queue
+donates the sleeping client's effective priority to the VM worker (normally
+7 <- 9, with focused input up to 11 and ordinary starvation capped at 15).
+Donation follows boost expiry and downstream lock dependencies and ends
+when the waiter is made runnable, times out, is cancelled or dies. This
+request dependency leaves the existing device/focus budgets and quanta intact.
+Predicates compare only scalar observations; safe VM/deferred checkpoints
+sample direct VGA/VBE dirty pages at most once per frame and notify satisfied
+waiters without awarding an I/O boost. PRESENT never wakes an idle VM.
+
+Wait/present command copies use bounded `ua_read`/`ua_write` transactions;
+they do not retain/pin a pageable user command across the sleep. Copyout may
+return EFAULT if another thread unmapped/protected the record. The surface
+already owns resident MM_USER_SHARED backing, retained for the binding's
+lifetime; no per-call surface pin walk is required, and only damaged rows
+are written. Other operations retain their original writable record pin.
+PRESENT_BANDS additionally accepts `presentation.redraw` (u32 at 80, 0/1)
+for a whole frame after an application overlay. The remaining seven u32s
+are zero. Zero preserves all old clients. Bands/changed/damage remain output.
+The forced redraw still uses the existing row yields and reports exact bands.
+
+Research, policy comparison and qualification limits:
+[window wait validation](../validation/f3-52-window-wait.md).

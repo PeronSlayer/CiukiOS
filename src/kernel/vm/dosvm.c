@@ -80,7 +80,10 @@ void dosvm_console_byte(struct dosvm *v, uint8_t byte)
 {
     if (!v->info.dos_ready && v->boot_log_count < sizeof(v->boot_log))
         v->boot_log[v->boot_log_count++] = (char)byte;
-    if (byte == '\r' || byte == '\n') { v->console_length = 0; return; }
+    if (byte == '\r' || byte == '\n') {
+        v->console_length = 0; v->console_sequence++;
+        dosvm_present_notify(v); return;
+    }
     if (byte >= 32 && byte < 127 && v->console_length < sizeof(v->console_line) - 1) {
         v->console_line[v->console_length++] = (char)byte;
         v->console_line[v->console_length] = 0;
@@ -635,6 +638,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
     v->info.state = DOSVM_STOPPING;
+    dosvm_present_notify(v);
     dosvm_fullscreen_stopping(v);
     dosvm_vga_sync(v, true);
     v->mouse.mask = v->mouse.pending_mask = 0;
@@ -988,6 +992,7 @@ bool dosvm_trap(struct trap_frame *tf)
      * device state just programmed; then the VM's pages are pageable again. */
     if (v->info.state < DOSVM_STOPPING) dosvm_pool_settle(v);
     dosvm_pool_hold(v, false);
+    dosvm_present_checkpoint(v);
     kpreempt_point(); /* complete emulation transaction, before diagnostics */
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
@@ -1336,6 +1341,9 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->dpmi_enabled = config && config->dpmi;
     v->return_tracker_tf = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
     kwait_init(&v->wake);
+    kwait_init(&v->present_wait);
+    v->present_wait.owner_preemptible = true;
+    v->present_due = v->present_sample_due = g_ticks;
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
     if (e) goto fail;
@@ -1492,6 +1500,7 @@ static void dosvm_clock_work(void *arg)
         v->perf.audio_cycles += end - audio;
         v->perf.timer_cycles += end - begin;
         if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
+        dosvm_present_checkpoint(v);
         if (pending) kwork_queue(dosvm_clock_work, arg);
         return; /* One VM and one bounded DMA slice per worker turn. */
     }
