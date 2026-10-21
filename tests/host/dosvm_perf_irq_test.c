@@ -162,6 +162,7 @@ int main(void)
     reset(); vm.perf.serial.tick=0; vm.info.key.id=35; vm.info.key.generation=7;
     for (unsigned i=0;i<6;i++) vm.perf.exits[i]=11+i;
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) vm.idle.count[i]=1+i;
+    vm.idle.blocks=10; vm.idle.reasons=15; vm.idle.busy_permille=99;
     vm.perf.cost_count[DOSVM_COST_IO]=4; vm.perf.cost_cycles[DOSVM_COST_IO]=500;
     for (unsigned i=0;i<5;i++) vm.perf.serial.ports[0][i]=vm.perf.interval[0].ports[i]=
         (struct dosvm_hot_cost){.id=0x330+i,.count=2+i,.cycles=100*(i+1)};
@@ -173,16 +174,40 @@ int main(void)
     CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0333 exits=5 us=400\n"));
     CHECK(strstr(periodic,"[dosvm] perf_port vm=35 port=0332 exits=4 us=300\n"));
     CHECK(!strstr(periodic,"port=0331") && strstr(periodic,"[dosvm] perf_cost vm=35 cause=io exits=4 us=500\n"));
+    CHECK(vm.idle.blocks==10 && vm.idle.reasons==15 && vm.idle.busy_permille==99);
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++)
+        CHECK(vm.idle.count[i]==1+i && !vm.perf.last_idle_count[i]);
+    CHECK(!vm.perf.last_idle_blocks);
     periodic_bytes=periodic_rows=0; periodic[0]=0;
     vm.perf.exits[0]+=7; vm.perf.exits[5]+=3; vm.idle.count[DOSVM_IDLE_HLT]+=2;
+    vm.idle.blocks+=2;
     g_ticks=4000; dosvm_perf_report(&vm);
     CHECK(periodic_rows==2 && !vm.perf.sample_count && !rows);
     CHECK(strstr(periodic,"[dosvm] perf vm=35 gen=7 exits=7 gp=7 pf=0 db=0 timer=0 other=0 pm=3 busy_pm=0 idle_2f=0 idle_28=0 idle_16=0 idle_hlt=2\n"));
     CHECK(!strstr(periodic,"perf_port") && strstr(periodic,"exits=0 us=0\n"));
+    CHECK(vm.idle.blocks==12 && vm.idle.reasons==15 && vm.idle.busy_permille==99);
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++)
+        CHECK(vm.idle.count[i]==1+i+(i==DOSVM_IDLE_HLT ? 2u : 0u) && !vm.perf.last_idle_count[i]);
+    CHECK(!vm.perf.last_idle_blocks);
     g_ticks=5000; dosvm_perf_report(&vm);
     CHECK(vm.perf.sample_count==1 && rows && periodic_rows==2);
     CHECK(vm.perf.sample[0].ms==5000 && vm.perf.sample[0].exits[0]==18);
     CHECK(vm.perf.sample[0].top_port[0].id==0x334);
+    CHECK(vm.perf.sample[0].idle_blocks==12 && vm.perf.sample[0].idle_reasons==15);
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++)
+        CHECK(vm.perf.sample[0].idle_count[i]==vm.idle.count[i]);
+    periodic_bytes=periodic_rows=0; periodic[0]=0;
+    g_ticks=6000; dosvm_perf_report(&vm);
+    CHECK(periodic_rows==2 && vm.perf.sample_count==1);
+    CHECK(strstr(periodic,"busy_pm=0 idle_2f=0 idle_28=0 idle_16=0 idle_hlt=0\n"));
+    g_ticks=10000; dosvm_perf_report(&vm);
+    CHECK(vm.perf.sample_count==2 && !vm.perf.sample[1].idle_blocks && !vm.perf.sample[1].idle_reasons);
+    CHECK(vm.idle.blocks==12 && vm.idle.reasons==15 && !vm.idle.busy_permille);
+    for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) {
+        CHECK(!vm.perf.sample[1].idle_count[i]);
+        CHECK(vm.idle.count[i]==1+i+(i==DOSVM_IDLE_HLT ? 2u : 0u));
+    }
+    puts("PASS f1-86 idle accounting: cumulative API counters preserved across independent UART/disk windows, empty deltas");
     reset(); vm.info.key.id=vm.info.key.generation=UINT32_MAX;
     struct dosvm_perf_sample maximum={.busy_permille=1000};
     for (unsigned i=0;i<6;i++) maximum.exits[i]=UINT32_MAX;

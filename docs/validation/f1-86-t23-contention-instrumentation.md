@@ -140,3 +140,8 @@ VM cadence with concurrent producers, real scheduler/timing/cpustat hooks,
 raw phase overflow, calibrated PIO timestamp avoidance and idle queue reporting.
 Optional P3 namespace generation validation is deferred: namespace owner fields
 retain the documented atomic best-effort snapshot semantics.
+
+Amendment 1 item 7 preserves the cumulative idle API counters: neither reporter
+resets blocks, reasons or per-reason counts. UART and disk deltas use their own
+previous snapshots. The periodic fixture checks both cadences and empty windows;
+the existing `dosvm_speed_test.inc` idle-accounting assertion stays unchanged.

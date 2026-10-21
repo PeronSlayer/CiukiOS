@@ -339,6 +339,8 @@ static void perf_disk_report(struct dosvm *v)
     r->ms = (uint32_t)(tick - v->perf.report_tick);
     r->frames = v->video_frames; r->starts = v->video_starts;
     r->present_rate = v->video_present_rate;
+    /* Idle API counters stay cumulative. Each reporter owns its previous copy;
+     * neither the five-second disk nor two-second UART window consumes them. */
     r->edges = v->pit.edges; r->idle_blocks = v->idle.blocks;
     memcpy(r->idle_count, v->idle.count, sizeof(r->idle_count));
     memcpy(r->irqs, v->monitor.stats.delivered, sizeof(r->irqs));
@@ -463,7 +465,8 @@ static void perf_disk_report(struct dosvm *v)
 #undef DELTA
 }
 
-/* The serial counter snapshot is independent of the five-second disk banks.
+/* The serial counter snapshot is independent of the five-second disk banks
+ * and leaves the cumulative idle counters and disk baselines untouched.
  * Only fixed raw fields and a bank index are touched with IF clear. */
 static void perf_serial_report(struct dosvm *v) {
     if (!g_tsc_per_ms || g_ticks-v->perf.serial.tick<DOSVM_SERIAL_INTERVAL) return;
