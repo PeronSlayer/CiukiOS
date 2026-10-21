@@ -234,7 +234,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     /* Refuse invalid clock/entropy before DNS or any TLS network traffic. */
     if(j->secure){
         slot->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);
-        if(!slot->tls){j->error=ciuki_tls_message(j->tls_error);return true;}
+        if(!slot->tls){j->error=ciuki_tls_describe(j->tls_error,j->tls_message,sizeof(j->tls_message));return true;}
     }
     resolve(n,slot);return true;
 }
@@ -330,7 +330,7 @@ void ciuki_net_poll(struct ciuki_net *n)
             ciuki_http_callback callback=j->http->callback;void *context=j->http->context;bool head=j->http->head;
             ciuki_http_destroy(j->http);ciuki_http_init(j->http,head,callback,context);
             if(c->fd>=0)close(c->fd);c->fd=-1;ciuki_tls_free(c->tls);c->tls=NULL;
-            if(j->secure){c->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);if(!c->tls)j->error=ciuki_tls_message(j->tls_error);}
+            if(j->secure){c->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);if(!c->tls)j->error=ciuki_tls_describe(j->tls_error,j->tls_message,sizeof(j->tls_message));}
             if(!j->error)resolve(n,c);
         }
         if(j->error||j->cancelled||j->http->done)finish(n,c);
