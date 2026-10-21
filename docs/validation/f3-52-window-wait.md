@@ -112,3 +112,14 @@ The change retains live scanout across four-row safe points. DOOM's
 [35 Hz game tic definition](https://raw.githubusercontent.com/id-Software/DOOM/master/linuxdoom-1.10/doomdef.h)
 remains independent of programmed VGA refresh and the window's presentation
 sampling. No guest timer or global scheduling policy changes.
+
+Amendment 2 host linkage (2026-10-21): rechecked the primary sources above,
+especially Linux's checked user-access helpers. Keep the real production
+`uaddr.c` permission model behind `dosvm_uaddr_model.c`; replacing it with
+permissive stubs would remove the protection regressions. The main and audio
+cost harness rules already link this model. The lead's actual failing object
+is `dosvm_exit_bench`, which includes `dosvm_test.c`; the presenter benchmark
+does too. Both benchmark rules now link the same model with the main
+harness's function/data sections and linker garbage collection. All existing
+test assertions and sanitizer settings remain. Amendment 2 commands, results
+and sandbox limits are recorded in `build/codex/f3-52-report.md`.
