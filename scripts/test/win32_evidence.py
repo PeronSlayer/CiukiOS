@@ -40,12 +40,28 @@ SCHEMAS = {
     'name': ({'segment', 'id', 'field', 'offset', 'bytes', 'hex'}, set()),
     # How the title was started in the `start` segment (its path in a name chunk).
     'launch': ({'segment', 'pid', 'kind', 'id'}, set()),
+    # f5-15C installers tier (src/kernel/probes/installer_title_probe.inc):
+    # one operator action of the guest UI driver about to be applied, after
+    # which the guest pauses for the host screendump (`shot`); the window's
+    # caption/class travel in `name` chunks (fields title/class).
+    'ui': ({'segment', 'step', 'action', 'owner', 'hwnd', 'shot', 'id'}, set()),
+    # The kernel's C: delta summary at the end of the install segment.
+    'inventory': ({'segment', 'files', 'directories', 'links', 'changed', 'removed', 'temp', 'excluded', 'bytes'}, set()),
+    # What the install added and the uninstall left behind.
+    'residue': ({'segment', 'files', 'directories', 'links'}, set()),
+    # Segment-less summaries of the observer.
+    'ledger_summary': ({'clean', 'driver_failure'}, set()),
+    'snapshot': ({'error'}, set()),
 }
+SEGMENTLESS = {'identity', 'ledger_summary', 'snapshot'}
+UI_ACTIONS = ('step', 'default', 'restart', 'crash', 'gone', 'process')
 NUMBERS = {'pid', 'guest_ms', 'icount', 'width', 'height', 'bpp', 'duration_ms', 'game_frames',
            'presents', 'avg_milli', 'median_milli', 'p05_milli', 'p95_us',
            'samples', 'underruns', 'consumed_frames', 'non_silent_frames', 'input_id', 'latency_us',
            'latency_frames', 'counter', 'round_trips', 'count', 'system_writes', 'peak_bytes',
-           'id', 'offset', 'bytes', 'size', 'stream_id', 'rate', 'channels'}
+           'id', 'offset', 'bytes', 'size', 'stream_id', 'rate', 'channels',
+           'step', 'owner', 'hwnd', 'files', 'directories', 'links', 'changed', 'removed', 'temp', 'excluded',
+           'driver_failure'}
 INSTALLED_KINDS = ('file', 'directory', 'registry', 'link')
 LAUNCH_KINDS = ('start-menu', 'fixture-tree', 'command')
 KERNEL_KINDS = ('start', 'exit', 'crash', 'stub', 'refuse', 'load')
@@ -67,7 +83,7 @@ TIERS = {
                'kernel': True, 'launch': True},
 }
 BOOLS = {'qualified', 'corrupt', 'default_choices', 'menu_entry', 'uninstall_registered',
-         'key_removed', 'menu_removed', 'handled'}
+         'key_removed', 'menu_removed', 'handled', 'shot', 'clean'}
 LEDGERS = {'process', 'handle', 'section', 'stream', 'channel', 'commit'}
 
 
@@ -166,6 +182,9 @@ class Parser:
             self.identity = True
             return
         require(self.identity, 'missing payload/scene identity')
+        if case in SEGMENTLESS:
+            require(case != 'snapshot' or re.fullmatch('-?[0-9]{1,10}', r['error']), 'snapshot error code')
+            return
         require(r['segment'] in SEGMENTS, 'unknown segment')
         if case == 'segment':
             self._segment(r)
@@ -206,6 +225,12 @@ class Parser:
             require(r['when'] in ('pre','post') and r['kind'] in LEDGERS, 'invalid resource ledger')
         elif case in ('install','uninstall'):
             require(r['segment'] == case, 'installer record in wrong segment')
+        elif case == 'ui':
+            require(r['action'] in UI_ACTIONS and r['segment'] in ('install', 'uninstall'), 'ui action/segment')
+        elif case == 'inventory':
+            require(r['segment'] == 'install', 'inventory summary in the install segment')
+        elif case == 'residue':
+            require(r['segment'] == 'uninstall', 'residue summary in the uninstall segment')
         elif case == 'installed':
             require(r['kind'] in INSTALLED_KINDS and r['segment'] in ('install', 'start'), 'installed inventory kind/segment')
             if r['kind'] == 'file':
@@ -214,7 +239,7 @@ class Parser:
                 require(not {'size', 'sha256'} & fields, 'only files carry size/SHA-256')
         elif case == 'name':
             require(re.fullmatch('(?:[0-9a-fA-F]{2}){1,40}', r['hex']) and int(r['bytes']) == len(r['hex'])//2, 'name chunk bytes')
-            require(r['field'] in ('path', 'target', 'key', 'value'), 'name chunk field')
+            require(r['field'] in ('path', 'target', 'key', 'value', 'title', 'class'), 'name chunk field')
         elif case == 'launch':
             require(r['kind'] in LAUNCH_KINDS and r['segment'] == 'start', 'launch kind/segment')
 

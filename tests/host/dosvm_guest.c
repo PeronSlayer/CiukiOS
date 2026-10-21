@@ -205,6 +205,9 @@ bool task_alive(const struct task *t) { return t->state < T_ZOMBIE; }
 void task_kill(struct task *t, int reason) { t->state = T_ZOMBIE; t->exit_code = reason; }
 void task_reap(struct task *t) { g_task_count--; free(t->kstack); free(t->fpu_alloc); free(t); }
 void task_exit(int reason) { (void)reason; abort(); }
+/* dosvm.c revokes a forwarded input boost at DOS focus transfer; no
+ * native input forwarding exists in this runner. */
+void task_input_withdraw(struct task *t) { (void)t; }
 void schedule(void) { g_need_resched = false; }
 void kpreempt_point(void) { if ((cpu_flags & V86_IF) && g_need_resched) schedule(); }
 void crit_begin(void) { }
@@ -347,6 +350,14 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size)
     return -ENOSYS;
 }
 #include "../../src/kernel/vm/dosvm.c"
+/* This CPU/storage harness admits no LAN port or network-enabled launch.
+ * The real network adapters run in tests/host/vm/lifecycle_test.c instead. */
+void dosvm_network_service(struct dosvm *v, uint64_t now) { (void)v; (void)now; }
+int dosvm_network_dispatch(struct dosvm *v, struct v86_frame *f) { (void)v; (void)f; return 0; }
+int dosvm_network_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t vector)
+{ (void)v; (void)f; (void)vector; return -ENOSYS; }
+int dosvm_network_detach(struct dosvm *v) { (void)v; return 0; }
+void dosvm_network_process_exit(struct dosvm *v, uint16_t psp) { (void)v; (void)psp; }
 #ifndef CIUKI_DOSVM_FILE_CPU
 #include "dosvm_request_context.inc"
 #endif

@@ -90,7 +90,8 @@ cpu_signature_text db '00000000 family='
 cpu_family_text db '00000000 model='
 cpu_model_text db '00000000 stepping='
 cpu_stepping_text db '00000000',13,10,0
-cpu_error db 'CIUKI: this PC needs an i686 CPU with CMOV',0
+cpu_error db 'an i686 CPU with CMOV',0
+minimum_prefix db 'CIUKI: this PC needs ',0
 
 ; Query only, never modeset before BOOT.CFG/menu. A responding pre-2.0
 ; controller is unsupported. An absent controller keeps the contract's
@@ -112,10 +113,14 @@ vbe_minimum:
 .bad:
     mov si, vbe_error
     jmp minimum_halt
-vbe_error db 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer',0
+vbe_error db 'VBE 2.0+ for a linear framebuffer',0
 
 ; Minimum failures do not wait for a keyboard, retry firmware or access disk.
 minimum_halt:
+    push si
+    mov si, minimum_prefix ; every refusal starts 'CIUKI: this PC needs '
+    call print
+    pop si
     call print
     mov si, newline
     call print

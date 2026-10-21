@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "workload": "aoe-trial",
+  "engine": "iexpress",
+  "engine_detail": "IExpress/WEXTRACT self-extracting cabinet (ADVPACK.DLL, dsetup.dll/dsetup32.dll/dsetup16.dll names, DownloadSetup); MSZIP cabinet with setup.exe (PE32, \"Age of Empires Trial Setup\", SETUPCOMMAND/SETUPDATA sections, setupenu.dll) and the trial payload; no directx/ folder in the cabinet.",
+  "entry": {
+    "kind": "download",
+    "file": "MSAoE.exe"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    },
+    {
+      "name": "quiet",
+      "arguments": "/Q",
+      "source": "IExpress command line: /Q quiet modes (Microsoft \"IExpress command-line options\", KB197147; the lead confirms the reference)"
+    },
+    {
+      "name": "quiet-extract-only",
+      "arguments": "/Q /T:C:\\WINDOWS\\TEMP\\aoe /C",
+      "source": "IExpress: /C extract only, /T:path target directory"
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-aoe-trial-qemu-t23"
+}

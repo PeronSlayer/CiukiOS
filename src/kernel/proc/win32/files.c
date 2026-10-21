@@ -578,6 +578,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         struct ciuki_w32_file_info f;
         file_info(&f, &d->node->entry,
                   d->node->ro ? d->node->ro_size : d->node->entry.size);
+        /* Snapshot validity, mount/media generation and owning location under
+         * the identity lock. Expired and non-FAT identities stay zero. */
+        uint32_t volume_serial;
+        f.file_id = vfs_identity_file_id(s->vfs, d->identity, &volume_serial);
+        f.volume_serial = volume_serial;
         if (a->bytes != sizeof(f) || copy_to_user(a->buffer, &f, sizeof(f)))
           e = -EFAULT;
       }

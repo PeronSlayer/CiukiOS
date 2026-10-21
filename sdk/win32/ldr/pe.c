@@ -66,8 +66,11 @@ int w32_pe_parse(struct w32_pe *p, const void *bytes, ULONG size, struct w32_err
           "headers-size");
     p->subsystem = w32_u16(f + o + 68);
     CHECK(p->subsystem == 2 || p->subsystem == 3, "unsupported-subsystem");
-    if (w32_u16(f + o + 48) > 5)
-        w32_diag("load", "image", "newer-subsystem-version");
+    /* MajorSubsystemVersion/MinorSubsystemVersion: optional-header offsets
+     * 48 and 50 (Microsoft PE format, "Optional Header Windows-Specific
+     * Fields"). The loader logs a newer version with the module name. */
+    p->subsystem_major = w32_u16(f + o + 48);
+    p->subsystem_minor = w32_u16(f + o + 50);
     CHECK(p->entry < p->size, "entrypoint-bounds");
     for (ULONG i = 0; i < p->section_count; i++) {
         const uint8_t *t = f + table + i * 40;

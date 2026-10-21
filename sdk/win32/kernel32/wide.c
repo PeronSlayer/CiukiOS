@@ -126,6 +126,8 @@ BOOL W32API GetFileAttributesExW(const WCHAR *p, DWORD level, void *out) {
 }
 BOOL W32API MoveFileExW(const WCHAR *from, const WCHAR *to, DWORD flags) {
   extern BOOL W32API MoveFileExA(const char *, const char *, DWORD);
+  /* Match the ANSI 9x refusal before attempting path conversion. */
+  if (flags & 4) { SetLastError(120); return 0; }
   PATH(from, a) return 0;
   char b[262];
   if (to && !k32_narrow(to, b, sizeof(b), NAME_ERROR))

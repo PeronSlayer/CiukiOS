@@ -16,7 +16,7 @@ ADAPTER = Path(__file__).resolve().parent
 def run(args):
     subprocess.run(list(map(str,args)),check=True,cwd=ROOT,timeout=60)
 
-def build(out, main=None, windows=True):
+def build(out, main=None, windows=True, extra_sources=(), extra_flags=()):
     out=Path(out);out.mkdir(parents=True,exist_ok=True)
     sources=sorted((CORE/'ldr').glob('*.c'))+sorted((CORE/'ntdll').glob('*.c'))+[CORE/'ntdll/context.S',CORE/'ntdll/runtime.S',CORE/'services/ciuki_stub.c']
     common=['-march=pentiumpro','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-omit-frame-pointer',
@@ -31,9 +31,9 @@ def build(out, main=None, windows=True):
             run(['clang','--target='+target,*common,'-fno-pic','-fno-pie','-c',source,'-o',obj]);objects.append(obj)
         run(['llvm-ar','rcs',directory/'libw32core.a',*objects])
         if target.endswith('linux-gnu'):
-            for source in [ADAPTER/'linux.c',ADAPTER/'start.S',main or ADAPTER/'main.c']:
+            for source in [ADAPTER/'linux.c',ADAPTER/'start.S',main or ADAPTER/'main.c', *extra_sources]:
                 obj=directory/(Path(source).stem+'.o')
-                run(['clang','--target='+target,*common,'-fno-pic','-fno-pie','-I'+str(ADAPTER),'-c',source,'-o',obj]);objects.append(obj)
+                run(['clang','--target='+target,*common,*extra_flags,'-fno-pic','-fno-pie','-I'+str(ADAPTER),'-c',source,'-o',obj]);objects.append(obj)
             run(['ld.lld','-m','elf_i386','-static','--entry=_start','--image-base=0x60000000','-o',out/'w32host',*objects])
         else:
             exports=CORE/'ntdll/ntdll.def'

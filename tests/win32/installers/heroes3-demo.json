@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "workload": "heroes3-demo",
+  "engine": "installshield",
+  "engine_detail": "InstallShield 5 self-extracting package: MSZIP cabinet with Disk1/Setup.exe (PE32), _Setup.dll (PE32), _ISDel.exe (PE32), SETUP.INI (AppName \"Heroes of Might and Magic III Demo\"), data1.cab/_sys1.cab/_user1.cab; the bootstrapper extracts to TEMP and runs Setup.exe.",
+  "entry": {
+    "kind": "download",
+    "file": "h3demo.exe"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    },
+    {
+      "name": "silent-candidate",
+      "arguments": "-s",
+      "source": "InstallShield 5 Setup.exe -s runs silently with a recorded setup.iss (-r); no response file exists until a reference run, so this variant only measures the bootstrapper"
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-heroes3-demo-qemu-t23",
+  "notes": "The package extracts Disk1 to TEMP on the adapter; the message pump then needs the USER queue (W32_MESSAGE)."
+}

@@ -6,6 +6,7 @@
 #include <ciuki/task.h>
 #include <ciuki/net.h>
 #include <ciuki/timing.h>
+#include <ciuki/net_bridge.h>
 
 #define NET_EIO 5
 #define NET_EBUSY 16
@@ -22,6 +23,72 @@ void net_stack_driver_service(void) __attribute__((weak));
 void net_stack_address(unsigned, uint32_t *) __attribute__((weak));
 static net_input_fn input;
 static void *input_cookie;
+/* f6-11 BEGIN: exclusive Ethernet type tap, independent of native ingress.
+ * Serialized registration, revocation before waiting, no device mutex held
+ * across the callback. The bridge callback must not unregister itself. */
+static struct {
+    net_bridge_tap_fn fn;
+    void (*work)(struct netif *, void *);
+    void *cookie; uint16_t type; bool active;
+} bridge_tap;
+/* Notification only under the NIC mutex: no bridge owner/driver lock cycle. */
+static void bridge_tap_changed(struct netif *d) { d->bridge_epoch++; }
+int net_bridge_tap_worker_register(void (*work)(struct netif *, void *), void *cookie)
+{
+    kmutex_lock(&registration_mutex);
+    int e = !bridge_tap.fn || bridge_tap.cookie != cookie ? -NET_ENODEV : 0;
+    if (!e) { uint32_t flags = irq_save(); bridge_tap.work = work; irq_restore(flags); }
+    kmutex_unlock(&registration_mutex); return e;
+}
+static void bridge_tap_work(struct netif *d)
+{
+    uint32_t flags = irq_save();
+    void (*work)(struct netif *, void *) = bridge_tap.work;
+    if (!bridge_tap.fn || !work) { irq_restore(flags); return; }
+    void *cookie = bridge_tap.cookie; bridge_tap.active = true; irq_restore(flags);
+    work(d, cookie);
+    flags = irq_save(); bridge_tap.active = false; irq_restore(flags);
+}
+int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *cookie)
+{
+    if (type != BRIDGE_IPX_TYPE || !fn) return -EINVAL;
+    kmutex_lock(&registration_mutex);
+    int e = shutting_down ? -NET_ENODEV : bridge_tap.fn ? -NET_EBUSY : 0;
+    if (!e) {
+        uint32_t flags = irq_save();
+        bridge_tap.cookie = cookie; bridge_tap.type = type; bridge_tap.fn = fn;
+        irq_restore(flags);
+    }
+    kmutex_unlock(&registration_mutex); return e;
+}
+void net_bridge_tap_unregister(net_bridge_tap_fn fn, void *cookie)
+{
+    kmutex_lock(&registration_mutex);
+    if (bridge_tap.fn == fn && bridge_tap.cookie == cookie) {
+        uint32_t flags = irq_save(); bridge_tap.fn = 0; bridge_tap.work = 0; irq_restore(flags);
+        while (bridge_tap.active) task_sleep_ms(1);
+        bridge_tap.cookie = 0; bridge_tap.type = 0;
+    }
+    kmutex_unlock(&registration_mutex);
+}
+static bool bridge_tap_frame(struct netif *d, const struct net_packet *p)
+{
+    uint32_t flags = irq_save();
+    net_bridge_tap_fn fn = bridge_tap.fn;
+    if (!fn || p->length < 14 || (((uint16_t)p->data[12] << 8) | p->data[13]) != bridge_tap.type) {
+        irq_restore(flags); return false;
+    }
+    void *cookie = bridge_tap.cookie; bridge_tap.active = true; irq_restore(flags);
+    fn(d, p->data, p->length, cookie);
+    flags = irq_save(); bridge_tap.active = false; irq_restore(flags);
+    return true;
+}
+/* f6-11 END: bridge tap. */
+static bool native_destination(const struct netif *d, const struct net_packet *p)
+{
+    return !d->promiscuous || (p->length >= 14 &&
+        ((p->data[0] & 1) || !memcmp(p->data, d->address, 6)));
+}
 static struct netif *proof_device;
 static const struct netif_driver *const net_drivers[] = {
     &net_e100, &net_rtl8139, &net_ne2000, &net_e1000, &net_pcnet,
@@ -153,6 +220,7 @@ static void quarantine_locked(struct netif *d, const char *reason)
     if (d->quarantined) return;
     d->quarantined = d->stopping = true; d->ready = d->running = false;
     d->link = NET_LINK_DOWN; d->reason = reason; d->stats.quarantines++;
+    bridge_tap_changed(d); /* bounded worker drains after the NIC mutex */
     /* Mask sources and revoke PCI bus mastering, but never reset or release
      * buffers after fault. Neither write by itself is an idle proof. */
     if (d->touched) {
@@ -174,6 +242,7 @@ static int stop_locked(struct netif *d)
 {
     if (d->quarantined) return -NET_EIO;
     d->stopping = true; d->ready = false;
+    bridge_tap_changed(d);
     if (d->touched) {
         d->driver->irq_enable(d, false);
         if (d->driver->stop(d)) { quarantine_locked(d, "stop_unproved"); return -NET_EIO; }
@@ -329,6 +398,20 @@ int netif_transmit(struct netif *d, gen_t generation, const void *frame, unsigne
     else if (!err) d->stats.tx_submitted++;
     kmutex_unlock(&d->mutex); return err;
 }
+int netif_promiscuous(struct netif *d, gen_t generation, bool on)
+{
+    if (!d || !d->driver) return -EINVAL;
+    kmutex_lock(&d->mutex);
+    int err = generation != d->generation || !d->ready || !d->running ||
+        d->stopping || d->quarantined ? -NET_ENODEV : 0;
+    if (!err && d->promiscuous != on) {
+        err = d->driver->promiscuous ? d->driver->promiscuous(d, on) : -ENOSYS;
+        if (!err && d->fault_pending) err = -NET_EIO;
+        if (!err) d->promiscuous = on;
+        else if (err != -NET_EBUSY && err != -ENOSYS) quarantine_locked(d, "receive_mode_fault");
+    }
+    kmutex_unlock(&d->mutex); return err;
+}
 void netif_poll(struct netif *d)
 {
     if (!d || !d->driver) return;
@@ -361,7 +444,11 @@ void netif_poll(struct netif *d)
         if (net_expired(d, d->link_deadline)) {
             enum net_link link = d->driver->link_state(d);
             if (d->fault_pending) quarantine_locked(d, "link_fault");
-            else if (link != d->link) { d->link = link; record(d); }
+            else if (link != d->link) {
+                d->link = link;
+                if (link == NET_LINK_DOWN) bridge_tap_changed(d);
+                record(d);
+            }
             d->link_deadline = d->io.now(d->io.cookie) + 1000;
         }
     }
@@ -427,10 +514,13 @@ void net_worker_step(void)
     if (net_stack_driver_service) { net_stack_driver_service(); task_yield(); }
     for (unsigned i = 0; i < device_count; i++) {
         if (shutting_down) break;
-        netif_poll(&devices[i]); task_yield();
-        if (input && netif_pop(&devices[i], &packet)) {
+        netif_poll(&devices[i]);
+        bridge_tap_work(&devices[i]); /* no VM scheduling or incoming frame needed */
+        task_yield();
+        if ((input || bridge_tap.fn) && netif_pop(&devices[i], &packet) &&
+            !bridge_tap_frame(&devices[i], &packet)) { /* f6-11 type tap before native ingress */
             net_input_fn fn = input; void *cookie = input_cookie;
-            if (fn) {
+            if (fn && native_destination(&devices[i], &packet)) {
                 input_active = true; fn(&devices[i], packet.data, packet.length, cookie); input_active = false;
             }
         }
@@ -494,6 +584,7 @@ int net_init(void)
 void net_shutdown(void)
 {
     shutting_down = true; net_set_input(0, 0);
+    net_bridge_tap_unregister(bridge_tap.fn, bridge_tap.cookie); /* f6-11 tap revocation */
     for (unsigned i = 0; i < device_count; i++) (void)netif_stop(&devices[i]);
     if (worker && worker != g_current) {
         while (task_alive(worker)) task_sleep_ms(1);

@@ -552,6 +552,7 @@ enum ciuki_syscall {
     CIUKI_SYS_POLL = 88,
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
+    CIUKI_SYS_GETENTROPY = 91,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
@@ -912,6 +913,7 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define AUDIO_SET_GAIN 0x4104u
 #define AUDIO_DRAIN 0x4105u
 #define AUDIO_RESET 0x4106u
+#define AUDIO_REFILL_READ 0x4107u /* command: this thread's next bounded source reads */
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
@@ -1402,9 +1404,10 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
 /* CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
- * a FreeDOS override is permitted only for an explicit game, never the shell. */
+ * a reference/unified override is permitted only for an explicit game, never the shell. */
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_UNIFIED 2u /* opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57) */
 #define CIUKI_DOSVM_GAME_COUNT 3u
 /* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
  * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS

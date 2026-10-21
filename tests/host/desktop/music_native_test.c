@@ -22,7 +22,7 @@ static int fake_close(int);
 #undef close
 #undef write
 #undef open
-static unsigned view_updates;
+static unsigned view_updates, refill_requests;
 void music_update(struct music_app *a, const struct music_snapshot *s)
 { assert(a && s==&a->snapshot); view_updates++; }
 static int audio_closed, mixer_closed, blocked, malformed, fail_control, queue_failed;
@@ -50,6 +50,8 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t bytes)
     } else if (op==AUDIO_GET_STATUS) {
         assert(fd==40); struct ciuki_audio_status *s=record;
         s->consumed_frames=5000; s->queued_frames=fake_queued; s->output_rate=fake_rate; s->transport_frames=480+idle_transport; s->latency_frames=fake_queued+480+fake_rate/50;
+    } else if (op==AUDIO_REFILL_READ) {
+        assert(fd==40 && bytes==sizeof(struct ciuki_audio_command) && !header[2] && !header[3]); refill_requests++;
     } else {
         assert(fd==41 && op==MIXER_GET_MASTER); struct ciuki_mixer_master *m=record;
         m->left=40; m->right=80; m->mute=1;
@@ -62,6 +64,7 @@ int main(void)
 {
     struct music_main *m=calloc(1,sizeof(*m)); assert(m); m->audio=m->mixer=-1;
     unsigned rate; assert(!audio_open(m,&rate) && rate==48000);
+    audio_refill(m); assert(refill_requests==1);
     int16_t pcm[8]={0}; assert(audio_write(m,pcm,4)==4);
     blocked=1; assert(audio_write(m,pcm,4)==-EAGAIN); blocked=0;
     malformed=1; assert(audio_write(m,pcm,4)==-EIO); malformed=0;

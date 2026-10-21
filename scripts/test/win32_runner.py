@@ -30,15 +30,20 @@ from evidence import EvidenceError, EvidenceNotRun  # noqa: E402
 import win32_evidence  # noqa: E402
 import win32_fixtures  # noqa: E402
 import win32_session  # noqa: E402
+import win32_inventory  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 KINDS = {'win32-installer': 'installers', 'win32-title': 'titles'}
 PROBE_LIMIT = probe_tables.PROBE_LIMIT
 SCRIPTS = 'tests/win32/scripts'
 FRAMES = 'tests/win32/frames'
 CASE_KEYS = {'id', 'kind', 'probe', 'profile', 'selector', 'timeout', 'expected', 'attempt', 'boot_kind',
              'fixtures', 'win32', 'integration_pending', 'usb', 'i8042', 'device_exceptions',
-             'audio_expectations', '_smoke', '_run_id'}
+             'audio_expectations', '_smoke', '_run_id', '_win32_calibrate'}
+CALIBRATION_MODES = ('install', 'full')
+INSTALLER_SPECS = 'tests/win32/installers'
 WIN32_KEYS = {'workload', 'scene', 'script', 'screens', 'checkpoints', 'focus', 'uninstall', 'exit_codes',
               'installer_exit_codes', 'launch', 'progress', 'edition'}
 SCREEN_KEYS = {'region', 'sha256', 'mode', 'channel_delta', 'max_bad_pixels', 'reference', 'role',
@@ -110,6 +115,18 @@ def validate_case(case, root=ROOT):
     # second one is the install/play disc (at most one disk and one CD image).
     refuse(sum(win32_fixtures.is_disk(f) for f in fixtures) <= 1 and sum(win32_fixtures.is_optical(f) for f in fixtures) <= 1,
            'win32 case fixtures: at most one disk and one CD image')
+    if tier == 'installers':
+        # f5-15C: the installer medium on the CD and the run's parameter disk.
+        sources = [f.get('source') for f in fixtures]
+        refuse(len(fixtures) == 2 and win32_fixtures.is_optical(fixtures[0]) and sources[0] in win32_fixtures.ARCHIVE_SOURCES
+               and sources[1] == 'run', 'installers tier fixtures: [installer CD (download|disc), parameter disk (run)]')
+        try:
+            from scripts.win32 import operator_program
+            operator_program.load(workload, root)
+        except (ValueError, OSError) as error:
+            raise res.Refusal('operator program: ' + str(error)) from error
+    refuse(case.get('_win32_calibrate') in (None, *CALIBRATION_MODES) and (case.get('_win32_calibrate') is None or tier == 'installers'),
+           'calibration applies to the installers tier only')
     refuse(row['scene']['id'] == scene, 'scene differs from the workload manifest')
     edition = win32.get('edition')
     refuse(edition is None or isinstance(edition, str) and 0 < len(edition) <= 80, 'edition is a short label')
@@ -181,6 +198,79 @@ def validate_case(case, root=ROOT):
         refuse({'start', 'play', 'exit'} <= segments, 'titles tier script needs start, play and exit segments')
         refuse(('focus' in segments) == win32.get('focus', False), 'focus segment must match the focus flag')
     return tier
+
+
+def installer_checks(manifest, inventory, host_inventory, uninstall_ran):
+    """f5-15C host checks of the installers tier.
+
+    installed_files: the guest observer's kernel-read inventory equals the
+    verified manifest (files with sizes and SHA-256, link targets) and, when
+    the run did not uninstall, the independent host delta of the overlay
+    equals it exactly (files, directories, links, registry). uninstalled_files:
+    after an uninstall the host delta equals the verified residue. Unverified
+    manifests leave both unknown (missing, never a pass).
+    """
+    host = {}
+    if not isinstance(host_inventory, dict) or 'added' not in host_inventory:
+        host['host_inventory_error'] = (host_inventory or {}).get('error', 'absent') if isinstance(host_inventory, dict) else 'absent'
+        return host
+    if manifest.get('status') != 'verified':
+        return host
+    guest = win32_inventory.compare_guest(manifest, inventory)
+    host['guest_inventory_comparison'] = guest
+    ok = guest['match']
+    if not uninstall_ran:
+        install = win32_inventory.compare_install(manifest, host_inventory)
+        host['host_inventory_comparison'] = install
+        ok = ok and install['match']
+    host['installed_files'] = ok
+    if uninstall_ran:
+        residue = (manifest.get('uninstall') or {}).get('residue')
+        if residue is not None:
+            compared = win32_inventory.compare_residue(residue, host_inventory)
+            host['uninstall_residue_comparison'] = compared
+            host['uninstalled_files'] = compared['match']
+    return host
+
+
+def calibration(case, row, run_id, image_sha256, payload_sha256, host_inventory, inventory, records, frames, mode):
+    """The calibrated manifest update for tests/win32/workloads.json (the
+    lead accepts it by setting installed_files.status=verified)."""
+    if not isinstance(host_inventory, dict) or 'added' not in host_inventory:
+        raise EvidenceError('calibration needs the host overlay delta')
+    binding = {'run_id': run_id, 'image_sha256': image_sha256, 'payload_sha256': payload_sha256, 'mode': mode,
+               'case': case['id'], 'screens': {f['name']: f['region_sha256'] for f in frames if f.get('calibration')}}
+    registered = any(r.get('case') == 'install' and r.get('uninstall_registered') == '1' for r in records)
+    current = row['installed_files']
+    if mode == 'install':
+        manifest = win32_inventory.manifest_from_delta(host_inventory, binding)
+        manifest['uninstall'] = {'registered': registered, 'residue': None}
+        guest = win32_inventory.compare_guest(manifest, inventory)
+        manifest['calibration']['guest_inventory_agrees'] = guest['match']
+        return manifest
+    if current.get('status') not in ('calibrated', 'verified'):
+        raise EvidenceError('the full calibration needs the install calibration first')
+    manifest = json.loads(json.dumps(current))
+    manifest['status'] = 'calibrated'
+    manifest['uninstall'] = {'registered': registered,
+                             'residue': win32_inventory.residue_from_delta(host_inventory) if registered else None}
+    manifest['calibration'] = {**manifest.get('calibration', {}), 'full': binding}
+    guest = win32_inventory.compare_guest(manifest, inventory)
+    manifest['calibration']['full']['guest_inventory_agrees'] = guest['match']
+    return manifest
+
+
+def write_calibration(workload, manifest, root=ROOT):
+    """Store a calibrated installed_files block in the workload manifest."""
+    from scripts.win32 import workloads
+    path = Path(root) / 'tests/win32/workloads.json'
+    data = json.loads(path.read_text())
+    row = next(r for r in data['workloads'] if r['id'] == workload)
+    row['installed_files'] = manifest
+    row['unknowns'] = [u for u in row['unknowns'] if u != 'installed_files.entries']
+    workloads.validate(data)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+    return path
 
 
 class Blocked(EvidenceNotRun):
@@ -257,15 +347,43 @@ def needed_screens(case, script):
     return set(win32_session.screen_names(script)) | required
 
 
+def installer_spec(workload, root=ROOT):
+    path = Path(root) / INSTALLER_SPECS / (workload + '.json')
+    return json.loads(path.read_text()) if path.is_file() else None
+
+
 def precheck(case, root=ROOT):
     """Cheap pre-launch gate, run before any fixture image is mastered.
 
     Raises Blocked (reported as not_run, no QEMU, no multi-hundred-MiB image)
-    when a required pin is still null or the probe cannot be selected.
+    when a required pin is still null or the probe cannot be selected. A Win16
+    installer is `deferred (Win16)` (owner decision 2026-10-20). A calibration
+    run of the installers tier (f5-15C) waives the screen pins, the operator
+    qualification, the edition and the manifest, which it exists to produce.
     """
     path, script = load_script(case, root)
+    tier = KINDS[case['kind']]
+    spec = installer_spec(case['win32']['workload'], root) if tier == 'installers' else None
+    if spec and spec.get('deferred'):
+        raise Blocked([{'kind': 'deferred_win16', 'detail': 'deferred (Win16): ' + spec['deferred'].get('reason', '')}])
+    calibrate = case.get('_win32_calibrate')
+    if calibrate:
+        found = [b for b in blockers_of(case, {}, set(), root)]
+        if found:
+            raise Blocked(found)
+        return
     blockers = blockers_of(case, case['win32'].get('screens', {}), needed_screens(case, script), root)
-    if script.get('status') != 'reference-qualified':
+    if tier == 'installers':
+        from scripts.win32 import operator_program
+        _, guest = operator_program.load(case['win32']['workload'], root)
+        if guest['status'] != 'qualified':
+            blockers.append({'kind': 'operator_program_pending', 'detail': 'tests/win32/operators/%s.json guest.status=%s'
+                             % (case['win32']['workload'], guest['status'])})
+        if win32_fixtures.workload_row(case['win32']['workload'], root)['installed_files']['status'] != 'verified':
+            blockers.append({'kind': 'manifest_pending', 'detail': 'installed_files not verified: run the calibration (driver.py --calibrate)'})
+        if script.get('status') not in ('guest-driven', 'reference-qualified'):
+            blockers.append({'kind': 'input_reference_pending', 'detail': str(path.relative_to(root))})
+    elif script.get('status') != 'reference-qualified':
         blockers.append({'kind': 'input_reference_pending', 'detail': str(path.relative_to(root))})
     if KINDS[case['kind']] == 'titles' and not case['win32'].get('launch', {}).get('path'):
         blockers.append({'kind': 'launch_path_pending', 'detail': 'reference-installed executable path is unknown'})
@@ -302,6 +420,11 @@ class Session:
         self.now = started_at_ms
         self.references = {}
         self.host_records = []
+        # f5-15C: calibration mode, guest UI screenshots, host overlay delta.
+        self.calibrate = case.get('_win32_calibrate')
+        self.shots = []
+        self.ui_frames = []
+        self.host_inventory = None
 
     # --- screen oracle -------------------------------------------------------
     def wait_for(self, name, now_ms, source):
@@ -341,6 +464,20 @@ class Session:
         qmp.command('screendump', {'filename': str(shot)})
         wait['attempts'] += 1
         wait['last_poll_ms'] = now_ms
+        if check.get('sha256') is None and self.calibrate:
+            # Calibration capture: no pin to compare; record the region digest
+            # the lead pins, keep the frame (f5-15C).
+            try:
+                frame = self.read_frame(shot)
+                digest = hashlib.sha256(frame[2]).hexdigest()
+                region = hashlib.sha256(win32_session.region(frame, check['region'])).hexdigest()
+            except ValueError as error:
+                raise EvidenceError('calibration screen %s: %s' % (name, error)) from error
+            shot.replace(self.directory / ('screen-%s.ppm' % name))
+            self.frames.append({'name': name, 'attempt': wait['attempts'] - 1, 'host_ms': now_ms, 'frame_sha256': digest,
+                                'region_sha256': region, 'match': None, 'calibration': True})
+            wait.update(matched_ms=now_ms, frame_sha256=digest, region_sha256=region)
+            return True
         try:
             frame = self.read_frame(shot)
             outcome = win32_session.screen_check(frame, check, self.reference(check))
@@ -369,6 +506,9 @@ class Session:
         if self.parser.outcome in ('not_run', 'fail'):
             return
         self.player.observe(record, now_ms)
+        if record.get('case') == 'ui' and record.get('shot') == '1':
+            self.shots.append({'seq': record['seq'], 'segment': record.get('segment'), 'step': record.get('step'),
+                               'action': record.get('action'), 'id': record.get('id'), 'host_ms': now_ms})
         for name, checkpoint in self.checkpoints.items():
             if name in self.triggered:
                 continue
@@ -380,6 +520,12 @@ class Session:
         self.now = now_ms
         if self.parser.outcome in ('not_run', 'fail'):
             return None
+        while self.shots:
+            # Screenshots as records: the guest pauses after each `ui` record.
+            shot = self.shots.pop(0)
+            name = 'ui-%s.ppm' % shot['seq']
+            qmp.command('screendump', {'filename': str(self.directory / name)})
+            self.ui_frames.append({**shot, 'file': name, 'taken_host_ms': now_ms})
         for wait in list(self.waits.values()):
             if wait['matched_ms'] is not None or wait['failed']:
                 continue
@@ -451,10 +597,14 @@ class Session:
             host['installed_files_error'] = str(error)
             inventory = []
         else:
-            comparison = compare_inventory(self.row, inventory)
-            if comparison is not None:
-                host['installed_files'] = comparison['match']
-                host['installed_files_comparison'] = comparison
+            if self.tier == 'installers':
+                host.update(installer_checks(self.row['installed_files'], inventory, self.host_inventory,
+                                             any(r.get('case') == 'uninstall' for r in self.parser.records)))
+            else:
+                comparison = compare_inventory(self.row, inventory)
+                if comparison is not None:
+                    host['installed_files'] = comparison['match']
+                    host['installed_files_comparison'] = comparison
         audio = result.get('audio')
         if isinstance(audio, dict):
             host['audio_reference'] = not audio.get('failures')
@@ -501,6 +651,7 @@ class Session:
             'frames': self.frames, 'checkpoints_triggered': sorted(self.triggered),
             'input': {'receipts': self.player.observed, 'latency_ids': host.get('input_ids'), 'complete': self.player.complete},
             'installed_inventory': inventory, 'host_checks': host, 'verdict': verdict,
+            'host_inventory': self.host_inventory, 'ui_frames': self.ui_frames, 'calibration_mode': self.calibrate,
             'clock_domains': {'host': 'monotonic ms since QEMU launch', 'guest_ms': 'guest elapsed ms from the records',
                               'icount': 'TCG instruction count from the records; never converted to host time'}}
         if verdict['outcome'] != 'pass' and result['outcome'] == 'pass':

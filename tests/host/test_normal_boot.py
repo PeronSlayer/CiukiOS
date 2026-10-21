@@ -46,7 +46,7 @@ NEGATIVE_LINES = {
     'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN': 'test_record',
     'L:SELECT_SOURCE=fw_cfg': 'test_request_source',
     'L:SELECT_SOURCE=cfg': 'test_request_source',
-    'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer': 'loader_refusal',
+    'CIUKI: this PC needs VBE 2.0+ for a linear framebuffer': 'loader_refusal',
     'L:SELECT_ERROR': 'loader_refusal',
     'L:SAFE=1': 'safe_mode',
     '[supervisor] desktop unavailable: -2; console ready': 'desktop_unavailable',
@@ -238,9 +238,11 @@ class NormalBootUnitTests(unittest.TestCase):
             binary = temp / 'capture'
             sources = [ROOT / 'apps/desktop' / n for n in ('client.c', 'protocol.c', 'input.c', 'compositor.c', 'theme.c',
                                                            'shell.c', 'autoplay.c', 'autoplay_content.c', 'settings.c', 'wallpaper.c', 'keymap.c', 'folder.c', '../files/model.c', '../files/transfer.c')]
-            sources += [ROOT / 'apps/libdeskui/draw.c']
+            sources += [ROOT / 'apps/libdeskui' / n for n in
+                        ('draw.c', 'widgets.c', 'list.c', 'menu.c', 'dialog.c', 'textarea.c', 'icons.c', 'icon_map.c')]
             sources += [ROOT / 'tests/host/desktop' / n for n in ('fake.c', 'compositor_capture.c')]
-            subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror',
+            subprocess.run(['clang', '-std=c17', '-D_POSIX_C_SOURCE=200809L', '-O1', '-Wall', '-Wextra', '-Werror',
+                            '-include', str(ROOT / 'tests/host/desktop/replay_base.h'),
                             '-fsanitize=address,undefined', '-I', str(ROOT / 'apps/desktop'),
                             '-I', str(ROOT / 'src/kernel/include'), *map(str, sources), '-o', str(binary)],
                            check=True, env=env)

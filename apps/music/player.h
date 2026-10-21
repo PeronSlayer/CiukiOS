@@ -17,6 +17,7 @@ struct music_output {
     void (*close)(void *);
     uint64_t (*now)(void *); /* Monotonic; called by reader and pump concurrently. */
     void *ctx;
+    void (*refill)(void *); /* reader-thread demand, optional for host sinks */
 };
 enum music_state { MUSIC_STOPPED, MUSIC_LOADING, MUSIC_PLAYING, MUSIC_PAUSED, MUSIC_ERROR, MUSIC_CLOSING };
 enum music_action { MUSIC_OPEN, MUSIC_ADD, MUSIC_SAVE, MUSIC_PLAY, MUSIC_PAUSE, MUSIC_STOP, MUSIC_PREV, MUSIC_NEXT, MUSIC_SEEK, MUSIC_SELECT, MUSIC_CLEAR };

@@ -10,6 +10,7 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/work.h>
 #include "dosvm_internal.h"
+#include "dosvm_network.h"
 
 extern void v86_enter(const struct v86_frame *, uint32_t *);
 extern void v86_leave(uint32_t) __attribute__((noreturn));
@@ -839,12 +840,14 @@ static void stack_prefault(struct dosvm *v, const struct v86_frame *f)
  * return after scheduling/reporting. Physical PIC programming is unchanged. */
 static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
 {
+    if (read_eflags() & 0x200) dosvm_network_service(v, g_ticks);
     stack_prefault(v, f);
     uint64_t delivered = v->monitor.stats.reflected_irqs;
     uint32_t sb_delivered = v->monitor.stats.delivered[v->audio.sb.irq & 15];
     int e = 0;
     uint32_t flags = irq_save();
-    if (!v->frame_pm) e = dosvm_mouse_dispatch(v, f);
+    e = dosvm_network_dispatch(v, f);
+    if (!v->frame_pm && !e) e = dosvm_mouse_dispatch(v, f);
     if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
     irq_restore(flags);
     if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
@@ -1088,6 +1091,10 @@ stop_return:
 static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
 {
     struct dosvm *v = arg;
+    if (vector == 0x2f || vector == 0x7a || vector == 0xfc) {
+        int network = dosvm_network_interrupt(v, f, vector);
+        if (network != -ENOSYS) return network;
+    }
     if (dosvm_file_interrupt && (vector==0x21 || vector==0x2f || vector==0xfe)) {
         int file=dosvm_file_interrupt(v,f,vector,0); /* DOS_FILE_V86 */
         if (file!=-ENOSYS) return file;
@@ -1114,6 +1121,12 @@ static int interrupt_dispatch(void *arg, struct v86_frame *f, uint8_t vector)
     if (f->tf.cs == 0xF100 && f->tf.eip == 2) service = 0x67; /* EMS stub page */
     else if (f->tf.cs != 0xF000 || (f->tf.eip & 15) != 2 || f->tf.eip >= 0x1000) return -V86_EPERM;
     else service = (uint8_t)(f->tf.eip >> 4);
+    /* Simulated interrupts and PM reflection arrive through the IVT's
+     * synthetic INT FEh; leave their original IRET frame intact. */
+    if (service == 0x2f || service == 0x7a) {
+        int network = dosvm_network_interrupt(v, f, service);
+        if (network != -ENOSYS) return network;
+    }
     uint32_t off = (uint16_t)f->tf.user_esp;
     if (off > 0xFFFA || f->tf.user_ss > 0xFFFF) return -EFAULT;
     uint32_t linear = (f->tf.user_ss << 4) + off + 4;
@@ -1245,6 +1258,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         task_sleep_ms(1);
     }
     if (v->task) { task_reap(v->task); v->task = 0; }
+    int network_error = dosvm_network_detach(v);
+    if (network_error) { destroying[slot] = false; return network_error; }
     int video_error=dosvm_fullscreen_leave(key,false);
     if (video_error) {
         klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",
@@ -1367,7 +1382,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     v->info.key = (struct dosvm_key){slot + 1, generation};
     v->info.state = DOSVM_CREATING;
     if (config) {
-        v->disable_file_bridge=config->disable_file_bridge || config->kernel==1;
+        v->disable_file_bridge=config->disable_file_bridge || config->kernel!=0;
         v->game=config->game; v->kernel=config->kernel;
         v->record_observer=config->record_observer; v->record_arg=config->record_arg;
     }
@@ -1432,7 +1447,7 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out)
     if (e) goto fail;
     if (v->game || v->kernel)
         rec_diag_disk_bootlog(dosvm_probe(v),"group=game_launch game=%u kernel=%s base_sha256=%s generation=%u bridge=%u cached=%u",
-                      v->game,v->kernel ? "freedos-1.3" : "ciukidos",v->base_sha256,
+                      v->game,v->kernel==2 ? "unified" : v->kernel ? "freedos-1.3" : "ciukidos",v->base_sha256,
                       v->info.key.generation,!v->disable_file_bridge,v->base_cached);
     kpreempt_point();
     v->task = task_create_kernel("dosvm", worker, v, P_NORMAL);
@@ -1607,12 +1622,14 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
     uint32_t flags = irq_save();
     struct dosvm *previous = dosvm_lookup(input_focus);
     if (focused && previous && previous != v && dosvm_valid(input_focus)) {
+        task_input_withdraw(previous->task);
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
     }
     v->window_input = true;
     if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
+        task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
     }

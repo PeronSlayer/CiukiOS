@@ -25,6 +25,7 @@ struct vfs_lock_owner { enum vfs_owner_type type; uint64_t id; };
 struct vfs_file_identity {
     struct fat_volume *volume;
     uint64_t serial, generation;
+    uint64_t unlinked_id; /* exported tombstone generation, not cache serial */
     uint32_t parent, index, refs, pages;
     bool valid, linked, writer;
 };
@@ -71,13 +72,20 @@ struct vfs_range_lock { struct vfs_description *description; struct vfs_node *no
     uint64_t owner, start, end, length; enum vfs_owner_type owner_type; bool shared; };
 #define VFS_RANGE_LOCKS 128u
 struct vfs_waiter;
+struct vfs_reader;
 struct vfs_table;
 struct vfs_hold_info {
     struct fs_task_identity task;
     char op[12];
     char site[12];
     uint32_t started;
+    uint8_t attribution; /* explicit operation/site; fallback text is not a tag */
 };
+#define VFS_ATTR_OPERATION 1u
+#define VFS_ATTR_SITE 2u
+#define VFS_ATTR_COMPLETE (VFS_ATTR_OPERATION | VFS_ATTR_SITE)
+#define VFS_URGENT_OVERTAKE_MS 100u /* C3: close admission for an aged ticket */
+#define VFS_URGENT_DRAIN_MS 10u /* bounded drain, then an equal reader turn */
 /* One namespace wait and one volume/file admission wait per locked turn.
  * These values follow the owner across sleeps and VFS_IO, never pointers
  * into another task's request or the shared holder table. */
@@ -133,6 +141,9 @@ struct vfs {
      * stream cannot starve a short publication step. */
     uint32_t publish_waiting[26];
     uint32_t lookup_restarts, lookup_guarded; /* diagnostics: reader restarts */
+    struct vfs_reader *reader_owners; /* stack records, namespace protected */
+    uint32_t urgent_gate_start[26];
+    bool urgent_gate_valid[26];
     struct vfs_node *io_file[26];
     char holder; /* atomic diagnostic snapshot of namespace owner's drive */
     struct vfs_hold_info holds[26], namespace_owner;
@@ -150,7 +161,7 @@ struct vfs {
     struct vfs_range_lock range_locks[VFS_RANGE_LOCKS];
     struct vfs_waiter *waiters;
     fs_lock identity_lock; /* short table updates; no I/O or namespace acquisition */
-    uint64_t next_identity;
+    uint64_t next_identity, next_unlinked_id;
     uint32_t next_identity_generation;
     struct vfs_file_identity identities[VFS_IDENTITIES];
     struct vfs_page_identity page_identities[VFS_PAGE_IDENTITIES];
@@ -187,6 +198,7 @@ void vfs_destroy(struct vfs *);
 static inline uint32_t vfs_drive_mask(unsigned d) { return d < 26 ? 1u << d : 0; }
 void vfs_lock(struct vfs *, uint32_t drives);
 void vfs_reserve_locked(struct vfs *, uint32_t drives);
+void vfs_reserve_file_locked(struct vfs *, uint32_t drives,struct vfs_file_identity *);
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */
 void vfs_tag_locked(struct vfs *,const char *tag);
@@ -294,6 +306,8 @@ int vfs_completion(struct vfs_table *, int, struct cache_completion *);
 int vfs_identity_get(struct vfs *, struct fat_volume *, struct fat_entry *, struct vfs_file_identity **);
 void vfs_identity_put(struct vfs *, struct vfs_file_identity *);
 bool vfs_identity_live(struct vfs *, struct vfs_file_identity *);
+/* Atomic live FAT location/volume snapshot; zero when identity is unavailable. */
+uint64_t vfs_identity_file_id(struct vfs *, struct vfs_file_identity *, uint32_t *volume_serial);
 int vfs_page_get(struct vfs *, struct vfs_file_identity *, uint64_t index, struct vfs_page_identity **);
 void vfs_page_put(struct vfs *, struct vfs_page_identity *);
 void vfs_identity_expire(struct vfs *, struct fat_volume *);

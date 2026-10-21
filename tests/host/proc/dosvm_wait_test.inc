@@ -124,22 +124,29 @@ static void dosvm_wait_combined_load(void)
                boost ? 11u : 9u,frame_load_max_ready,frame_load_vm,frame_load_desktop,frame_load_device,ms(stretch_max));
         CHECK(!waiters && !owned_queues);
     }
-    /* The presenter makes no calls for 300 ms. Its VM retains base 9 and
-     * competes with the busy desktop and admitted device work without a
-     * live WAIT donation. Measure pending-IRQ service opportunities. */
+    /* No presenter calls for 300 ms. Keep the actual VM base 7 against
+     * desktop 7/9, with sustained forwarded input as a separate expiry. */
+    for (unsigned base=7;base<=9;base+=2) for (unsigned input=0;input<2;input++) {
     priority_reset(); normal.user=false;
-    task_set_base(&normal,P_NORMAL,9); task_set_base(&ui,P_NORMAL,9);
+    task_set_base(&normal,P_NORMAL,7); task_set_base(&ui,P_NORMAL,base);
+    task_focus(&middle);
     audio_focus=irq_focus=&normal;
     task_start(&normal); task_start(&hog); running(&ui); flags=0x200;
-    uint64_t last=g_ticks; unsigned gap=0,vm=0,desktop=0;
+    uint64_t last=g_ticks,last_desktop=g_ticks; unsigned gap=0,desktop_gap=0,vm=0,desktop=0;
     for (unsigned t=0;t<300;t++) {
+        if (input && !(t%5)) task_input_forward(&middle,&normal);
         if (g_current==&normal) {
             unsigned wait=(unsigned)(g_ticks-last); if (wait>gap) gap=wait;
             last=g_ticks; vm++;
         }
-        if (g_current==&ui) desktop++;
+        if (g_current==&ui) {
+            unsigned wait=(unsigned)(g_ticks-last_desktop); if (wait>desktop_gap) desktop_gap=wait;
+            last_desktop=g_ticks; desktop++;
+        }
         run_tick(0); kpreempt_point();
     }
-    CHECK(vm && desktop && gap<=33 && g_ticks-last<=33 && !normal.inherited_priority);
-    printf("F1-87 presenter absent=300ms busy desktop/device load, VM base=9 donation=0 IRQ opportunity_max_ms=%u PASS\n",gap);
+    CHECK(vm && desktop && gap<=33 && desktop_gap<=33 && g_ticks-last<=33 && g_ticks-last_desktop<=33 && !normal.inherited_priority);
+    task_focus(0); CHECK(!normal.input_priority && !normal.input_forwarded);
+    printf("F1-87 presenter absent=300ms desktop_base=%u VM_base=7 sustained_input=%u donation=0 IRQ_opportunity_max_ms=%u desktop_ready_max_ms=%u PASS\n",base,input,gap,desktop_gap);
+    }
 }

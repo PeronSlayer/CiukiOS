@@ -1,0 +1,1493 @@
+# f5-15B static census of the original acceptance installers (scripts/win32/census.py
+# text; metadata only, no payload bytes). Inputs: the entry executables imported by
+# scripts/win32/workloads.py --import-unpinned under build/downloads/win32/<id>/ and
+# their setup children extracted on the host with 7-Zip into <id>/extracted/ (lawful
+# host extraction assists discovery; it proves nothing about CiukiOS). Regenerate from
+# build/downloads/win32 with the per-title commands below; NE (Win16) inputs are
+# explicit refusals (deferred, Win16 subsystem after the 1.0 Beta).
+# Consumed by scripts/win32/stubs.py acceptance_imports()/acceptance_extra(): extra W21
+# names for DLLs already in the research census only; title-private DLLs never become builtins.
+
+# workload: half-life-uplink
+# command: python3 -B scripts/win32/census.py half-life-uplink/hluplink.exe
+FILE hluplink.exe
+SHA256 9f236e9785980c127d46870a828ba4dac756308767ebd498b85bd7edff3305a8
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC KERNEL32.dll -> SetErrorMode, lstrlenA, _lopen, GetCommandLineA, GetModuleHandleA, GetModuleFileNameA, _lwrite, _llseek, GlobalUnlock, lstrcpyA, MulDiv, _lclose, GlobalAlloc, GlobalFree, _lcreat, LoadLibraryA, GetProcAddress, FreeLibrary, OpenFile, GetVersionExA, GetCurrentProcess, WinExec, ExitProcess, _lread, GetTempPathA, GetTempFileNameA, GlobalLock
+STATIC USER32.dll -> GetDC, PostQuitMessage, InvalidateRect, BeginPaint, EndPaint, SendMessageA, DefWindowProcA, GetClientRect, CreateWindowExA, ReleaseDC, SetWindowPos, ShowWindow, LoadIconA, LoadCursorA, RegisterClassA, MessageBoxA, ExitWindowsEx, SetTimer, UpdateWindow
+STATIC GDI32.dll -> DeleteObject, GetStockObject, GetDeviceCaps, PatBlt, CreateSolidBrush, GetTextExtentPointA, TextOutA, SetTextColor, SetBkMode, SelectObject, StretchDIBits, SelectPalette, CreatePalette, CreateFontA, RealizePalette
+STATIC ADVAPI32.dll -> OpenProcessToken, AdjustTokenPrivileges, LookupPrivilegeValueA
+EXPORT #1 _MainWndProc@16
+EXPORT #2 _StubFileWrite@12
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 108, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 588, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: heroes3-demo
+# command: python3 -B scripts/win32/census.py heroes3-demo/h3demo.exe heroes3-demo/extracted/Disk1/Setup.exe heroes3-demo/extracted/Disk1/_Setup.dll heroes3-demo/extracted/Disk1/_ISDel.exe
+FILE h3demo.exe
+SHA256 83cbb6319386d6deba65273f53a60395fda8cce74cc24177b2ac3560ded9c315
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.0
+STATIC KERNEL32.dll -> SetFilePointer, CreateDirectoryA, GetPrivateProfileStringA, SetFileAttributesA, SetFileTime, LocalFileTimeToFileTime, WriteFile, DosDateTimeToFileTime, GetProcAddress, DeleteFileA, FreeLibrary, GetTempFileNameA, LoadLibraryA, GetTempPathA, GetSystemDirectoryA, FormatMessageA, lstrcmpA, lstrcpynA, GetLastError, ReadFile, FindResourceA, CompareStringA, CreateProcessA, WaitForSingleObject, GetStartupInfoA, RemoveDirectoryA, FindNextFileA, ExitProcess, MulDiv, GetSystemDefaultLCID, GetModuleFileNameA, lstrcatA, GetFileAttributesA, CreateFileA, GetFileSize, CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, Sleep, GetDiskFreeSpaceA, FindFirstFileA, FindClose, lstrcpyA, lstrlenA, LockResource, LoadResource, GetWindowsDirectoryA, CloseHandle, SetStdHandle, LCMapStringW, LCMapStringA, RtlUnwind, GetFileType, GetStdHandle, SetHandleCount, FlushFileBuffers, GetOEMCP, GetACP, GetCPInfo, GetEnvironmentStringsW, GetEnvironmentStrings, FreeEnvironmentStringsW, FreeEnvironmentStringsA, UnhandledExceptionFilter, GetCurrentProcess, TerminateProcess, MultiByteToWideChar, GetStringTypeW, GetStringTypeA, WideCharToMultiByte, VirtualAlloc, VirtualFree, HeapCreate, HeapDestroy, GetVersion, GetCommandLineA, GetModuleHandleA, HeapFree, HeapAlloc
+STATIC USER32.dll -> SendMessageA, TranslateMessage, MessageBoxA, wsprintfA, GetWindowLongA, GetParent, SetWindowTextA, GetWindowTextA, GetWindow, SetDlgItemTextA, EndDialog, SendDlgItemMessageA, CharNextA, DialogBoxParamA, GetClassNameA, IsCharAlphaA, GetDesktopWindow, GetDlgItemTextA, KillTimer, EnableWindow, SetTimer, PostMessageA, SetFocus, CreateDialogParamA, DestroyWindow, GetDlgItem, GetDC, ReleaseDC, ScreenToClient, SetWindowLongA, CreateWindowExA, SystemParametersInfoA, GetClientRect, MapWindowPoints, SetWindowPos, LoadStringA, MessageBeep, GetSysColor, DispatchMessageA, PeekMessageA, GetWindowRect
+STATIC GDI32.dll -> CreateFontIndirectA, TextOutA, SetTextColor, SelectObject, SetBkMode, GetTextExtentPointA, GetDeviceCaps, GetObjectA, DeleteObject
+STATIC COMCTL32.dll -> #17, PropertySheetA
+STATIC ADVAPI32.dll -> RegOpenKeyExA, RegQueryValueExA, RegCloseKey
+STATIC SHELL32.dll -> ShellExecuteA, SHBrowseForFolderA, SHGetPathFromIDListA
+STATIC LZ32.dll -> LZOpenFileA, LZCopy, LZClose
+RESOURCE {"language": 1033, "name": 102, "size": 11776, "type": "AVI"}
+RESOURCE {"language": 1033, "name": 106, "size": 450, "type": "RTF"}
+RESOURCE {"language": 1033, "name": 120, "size": 14384, "type": 2}
+RESOURCE {"language": 1033, "name": 1, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 1384, "type": 3}
+RESOURCE {"language": 1033, "name": 3, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 4, "size": 2216, "type": 3}
+RESOURCE {"language": 1033, "name": 5, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 1000, "size": 136, "type": 5}
+RESOURCE {"language": 1033, "name": 1001, "size": 156, "type": 5}
+RESOURCE {"language": 1033, "name": 1002, "size": 544, "type": 5}
+RESOURCE {"language": 1033, "name": 1003, "size": 416, "type": 5}
+RESOURCE {"language": 1033, "name": 1004, "size": 572, "type": 5}
+RESOURCE {"language": 1033, "name": 1005, "size": 264, "type": 5}
+RESOURCE {"language": 1033, "name": 1, "size": 1646, "type": 6}
+RESOURCE {"language": 1033, "name": 2, "size": 934, "type": 6}
+RESOURCE {"language": 1033, "name": 3, "size": 1216, "type": 6}
+RESOURCE {"language": 1033, "name": 4, "size": 318, "type": 6}
+RESOURCE {"language": 1033, "name": 19, "size": 186, "type": 6}
+RESOURCE {"language": 1033, "name": 20, "size": 988, "type": 6}
+RESOURCE {"language": 1033, "name": 103, "size": 62, "type": 14}
+RESOURCE {"language": 1033, "name": 104, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 848, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE Setup.exe
+SHA256 a6d2f8b9173fd43f03aabff0b8cc3fadbd0b15224bcbe5f562a32158a297b502
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC VERSION.dll -> VerLanguageNameA
+STATIC KERNEL32.dll -> GetModuleHandleA, GetSystemInfo, GetVersionExA, DeleteFileA, GetModuleFileNameA, GetWindowsDirectoryA, WriteFile, GetDiskFreeSpaceA, WritePrivateProfileStringA, FindClose, FindFirstFileA, IsDBCSLeadByte, SetFilePointer, ReadFile, GetPrivateProfileIntA, GetLastError, GetTickCount, lstrcmpiA, GetPrivateProfileStringA, lstrcatA, FindResourceA, GlobalHandle, GetUserDefaultLCID, LoadLibraryA, GetProfileStringA, SetErrorMode, GetFileSize, FreeLibrary, CreateFileA, GlobalLock, GlobalAlloc, CloseHandle, GlobalFree, _hread, GlobalUnlock, CreateDirectoryA, lstrlenA, lstrcpyA, WinExec, GetDriveTypeA, SetStdHandle, VirtualAlloc, LCMapStringW, GetProcAddress, HeapFree, HeapAlloc, LCMapStringA, CompareStringW, CompareStringA, SetEnvironmentVariableA, GetStringTypeA, RtlUnwind, GetStringTypeW, HeapCreate, HeapReAlloc, VirtualFree, FlushFileBuffers, GetFileType, GetStdHandle, SetHandleCount, GetOEMCP, GetACP, GetCPInfo, GetEnvironmentStringsW, GetEnvironmentStrings, FreeEnvironmentStringsW, MultiByteToWideChar, FreeEnvironmentStringsA, UnhandledExceptionFilter, WideCharToMultiByte, GetVersion, GetCommandLineA, GetStartupInfoA, GetCurrentProcess, TerminateProcess, HeapDestroy, ExitProcess
+STATIC USER32.dll -> DestroyWindow, EndDialog, DrawIcon, GetWindowPlacement, GetDlgItem, DialogBoxParamA, DestroyIcon, SetRectEmpty, FillRect, LoadStringA, wsprintfA, LoadIconA, SetWindowTextA, InflateRect, SendMessageA, SetWindowLongA, BeginPaint, EndPaint, DefWindowProcA, GetWindowLongA, GetDC, ReleaseDC, InvalidateRect, LoadCursorA, GetClassInfoA, RegisterClassA, CharUpperA, GetMessageA, IsDialogMessageA, TranslateMessage, DispatchMessageA, PeekMessageA, MessageBoxA, PostMessageA, FindWindowA, SubtractRect, SetWindowPos, GetClassNameA, IntersectRect, EqualRect, DrawTextA, GetWindow, ScreenToClient, GetClientRect, UpdateWindow, SetTimer, ShowWindow, IsWindow, RegisterWindowMessageA, CreateDialogParamA, GetSystemMetrics, CharNextA, GetParent, GetWindowRect, GetWindowTextLengthA, GetWindowTextA, SetRect, MoveWindow, GetSysColor, PostQuitMessage, CreateWindowExA
+STATIC GDI32.dll -> RestoreDC, SelectObject, DeleteObject, GetObjectA, SaveDC, CreateFontIndirectA, MoveToEx, CreatePen, LineTo, SetBkColor, SetTextColor, ExtTextOutA, CreateSolidBrush, CreateDIBitmap, GetTextMetricsA, SelectPalette, GetDeviceCaps, RealizePalette, GetSystemPaletteEntries, UnrealizeObject, CreatePalette, BitBlt, CreateCompatibleDC, DeleteDC, CreateRectRgn, GetStockObject, SelectClipRgn, GetTextExtentPointA
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 3002, "size": 210, "type": 5}
+RESOURCE {"language": 1033, "name": 7501, "size": 94, "type": 5}
+RESOURCE {"language": 1033, "name": 442, "size": 494, "type": 6}
+RESOURCE {"language": 1033, "name": 443, "size": 170, "type": 6}
+RESOURCE {"language": 1033, "name": 445, "size": 84, "type": 6}
+RESOURCE {"language": 1033, "name": 7001, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 776, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE _Setup.dll
+SHA256 1ad637e80a25f6f885604589056814d16ccad55699be14920e2b99f2d74c1019
+FORMAT PE32 i386 DLL
+SUBSYSTEM gui LINKER 5.10
+STATIC KERNEL32.dll -> GetEnvironmentStrings, GetVersion, ExitProcess, TerminateProcess, GetCurrentProcess, GetCurrentThreadId, TlsSetValue, TlsAlloc, TlsFree, SetLastError, TlsGetValue, GetLastError, SetHandleCount, GetStdHandle, GetFileType, GetStartupInfoA, DeleteCriticalSection, GetModuleFileNameA, GetCPInfo, GetACP, GetOEMCP, FreeEnvironmentStringsA, MultiByteToWideChar, FreeEnvironmentStringsW, GetCommandLineA, GetEnvironmentStringsW, WideCharToMultiByte, HeapDestroy, HeapCreate, VirtualFree, WriteFile, InitializeCriticalSection, EnterCriticalSection, LeaveCriticalSection, HeapAlloc, HeapFree, LCMapStringA, LCMapStringW, GetStringTypeA, GetStringTypeW, VirtualAlloc, GetProcAddress, LoadLibraryA, FlushFileBuffers, CloseHandle, SetStdHandle, SetFilePointer
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 7500, "size": 462, "type": 5}
+RESOURCE {"language": 1033, "name": 442, "size": 2406, "type": 6}
+RESOURCE {"language": 1033, "name": 445, "size": 92, "type": 6}
+RESOURCE {"language": 1033, "name": 697, "size": 42, "type": 6}
+RESOURCE {"language": 1033, "name": "SETUP_ICON1", "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": "SETUP_ICON2", "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 796, "type": 16}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE _ISDel.exe
+SHA256 b5dc0feb738a91ce3cfa982647fe2779787335c6c2c598d5b49818565d7c3e84
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC KERNEL32.dll -> RemoveDirectoryA, DeleteFileA, GetWindowsDirectoryA, GetTickCount, CloseHandle, CreateFileA, SetErrorMode, GetPrivateProfileIntA, lstrcmpiA, GetPrivateProfileStringA, WritePrivateProfileStringA, GetModuleHandleA, lstrcatA, lstrcpyA, UnhandledExceptionFilter, GetModuleFileNameA, GetProcAddress, VirtualAlloc, LoadLibraryA, GetStringTypeA, HeapAlloc, GetStringTypeW, LCMapStringW, LCMapStringA, HeapFree, RtlUnwind, VirtualFree, WriteFile, HeapDestroy, GetFileType, HeapCreate, GetLastError, SetCurrentDirectoryA, Sleep, GetStartupInfoA, GetCommandLineA, GetVersion, ExitProcess, TerminateProcess, GetCurrentProcess, GetEnvironmentStringsW, WideCharToMultiByte, FreeEnvironmentStringsA, MultiByteToWideChar, FreeEnvironmentStringsW, GetEnvironmentStrings, SetHandleCount, GetCPInfo, GetACP, GetOEMCP, GetStdHandle
+STATIC USER32.dll -> CharNextA, DefWindowProcA, wsprintfA, IsWindow, RegisterWindowMessageA, SetTimer, PostQuitMessage, RegisterClassA, LoadIconA, LoadCursorA, GetMessageA, GetSystemMetrics, CreateWindowExA, SendMessageA, TranslateMessage, DispatchMessageA
+EXPORT #1 WndProc
+RESOURCE {"language": 1033, "name": 1, "size": 44, "type": 6}
+RESOURCE {"language": 1033, "name": 1, "size": 792, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: aoe-trial
+# command: python3 -B scripts/win32/census.py aoe-trial/MSAoE.exe aoe-trial/extracted/setup.exe aoe-trial/extracted/setupenu.dll
+FILE MSAoE.exe
+SHA256 60e01bd94cc88af64fd2ca40a75f3df783b8ea7725971ddd02c60f4d11e96973
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.2
+STATIC KERNEL32.dll -> GetLastError, CloseHandle, GetTempPathA, GetDriveTypeA, GetDiskFreeSpaceA, lstrcatA, DeleteFileA, GetExitCodeProcess, CreateFileA, WriteFile, lstrcpyA, GetFileAttributesA, SetFileAttributesA, SetFileTime, LocalFileTimeToFileTime, DosDateTimeToFileTime, lstrcmpiA, lstrlenA, LocalAlloc, LocalLock, LocalUnlock, LocalFree, GlobalAlloc, GlobalLock, GlobalUnlock, GlobalFree, FindResourceA, LoadResource, LockResource, FreeResource, RemoveDirectoryA, Sleep, CreateProcessA, FlushFileBuffers, GetModuleHandleA, GetStartupInfoA, GetStringTypeW, GetStringTypeA, GetProcAddress, LCMapStringA, LoadLibraryA, GetVersionExA, LCMapStringW, GetCommandLineA, GetACP, GetCPInfo, GetOEMCP, GetEnvironmentStringsW, GetEnvironmentStrings, WideCharToMultiByte, MultiByteToWideChar, FreeEnvironmentStringsA, FreeEnvironmentStringsW, UnhandledExceptionFilter, GetCurrentProcess, GetModuleFileNameA, SetStdHandle, GetStdHandle, TerminateProcess, SetEndOfFile, HeapAlloc, HeapFree, GetFileType, ReadFile, SetFilePointer, RtlUnwind, VirtualAlloc, SetHandleCount, GetVersion, ExitProcess, HeapDestroy, HeapCreate, VirtualFree
+STATIC USER32.dll -> TranslateMessage, UnregisterClassA, DispatchMessageA, UpdateWindow, GetMessageA, PostMessageA, GetSystemMetrics, ShowWindow, CreateWindowExA, FindWindowA, ReleaseDC, GetDC, RegisterClassA, MessageBoxA, LoadStringA, PeekMessageA, GetSysColorBrush, EndPaint, PostQuitMessage, BeginPaint, LoadCursorA, DefWindowProcA, DestroyWindow, SetCursor, IsDialogMessageA
+STATIC GDI32.dll -> DeleteDC, GetDeviceCaps, BitBlt, SelectObject, RealizePalette, SelectPalette, CreateCompatibleDC, GetObjectA, CreateDIBitmap, CreatePalette, DeleteObject
+STATIC ADVAPI32.dll -> RegCloseKey, RegQueryValueExA, RegOpenKeyExA
+RESOURCE {"language": 1033, "name": "IDR_CABFILE", "size": 24689800, "type": "CABFILE"}
+RESOURCE {"language": 1033, "name": "DOWNLOADBMP", "size": 33706, "type": 2}
+RESOURCE {"language": 1033, "name": 1, "size": 398, "type": 6}
+RESOURCE {"language": 1033, "name": 2, "size": 654, "type": 6}
+RELOCATION-TYPES none
+HEURISTICS high-entropy-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE setup.exe
+SHA256 b6250e356b8c4e71e923339b4318c48e16d3919305ca533c2ec84e0f98144bcf
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.2
+STATIC KERNEL32.dll -> LocalFree, GetVersionExA, lstrcpyA, GlobalLock, LocalUnlock, RemoveDirectoryA, CloseHandle, LocalAlloc, LocalLock, ReadFile, GetLastError, FindClose, FindNextFileA, DeleteFileA, SetFileAttributesA, FindResourceA, GlobalAlloc, GlobalFree, FreeResource, LoadResource, LockResource, FindFirstFileA, GetFileAttributesA, Sleep, CreateFileA, lstrcatA, GetFileSize, GlobalUnlock, MulDiv, GetModuleFileNameA, GetPrivateProfileStringA, SetPriorityClass, GetStringTypeA, GetCurrentProcess, LCMapStringA, IsBadCodePtr, LCMapStringW, IsBadReadPtr, SetUnhandledExceptionFilter, IsBadWritePtr, GetTimeZoneInformation, VirtualAlloc, GetFullPathNameA, InterlockedIncrement, InterlockedDecrement, SetStdHandle, InitializeCriticalSection, SetEndOfFile, LeaveCriticalSection, VirtualFree, EnterCriticalSection, HeapDestroy, DeleteCriticalSection, HeapCreate, SetHandleCount, GetOEMCP, GetStdHandle, GetCPInfo, WideCharToMultiByte, GetACP, GetEnvironmentStrings, FreeEnvironmentStringsW, GetEnvironmentStringsW, UnhandledExceptionFilter, TlsGetValue, FreeEnvironmentStringsA, GetTempPathA, SetLastError, TlsAlloc, TlsSetValue, ResumeThread, SetCurrentDirectoryA, HeapFree, HeapAlloc, GetLocaleInfoW, SetEnvironmentVariableA, CompareStringW, CompareStringA, FlushFileBuffers, GetStringTypeW, WriteFile, SetThreadPriority, GetCommandLineA, GetStartupInfoA, GetCurrentThreadId, HeapSize, TerminateProcess, GlobalHandle, GetWindowsDirectoryA, GetCurrentDirectoryA, GetSystemDirectoryA, GetDiskFreeSpaceA, lstrcmpiA, CreateProcessA, lstrlenA, lstrcpynA, lstrcmpA, OpenFile, _hread, _lclose, _llseek, GetDriveTypeA, LoadLibraryA, GetLocaleInfoA, GetUserDefaultLCID, FreeLibrary, GetProcAddress, GetSystemDefaultLangID, FileTimeToSystemTime, OutputDebugStringA, ExitProcess, GetFileType, HeapReAlloc, GetVersion, GetCurrentThread, RtlUnwind, ExitThread, WritePrivateProfileStringA, MoveFileExA, FormatMessageA, GlobalMemoryStatus, GetSystemInfo, GetExitCodeProcess, CreateDirectoryA, GetShortPathNameA, GetExitCodeThread, CreateThread, GetThreadPriority, QueryPerformanceFrequency, QueryPerformanceCounter, GetTickCount, SetFilePointer, MultiByteToWideChar, FileTimeToLocalFileTime, WinExec, GetModuleHandleA, SetFileTime, DosDateTimeToFileTime, CopyFileA, SetErrorMode, GetTempFileNameA, LocalFileTimeToFileTime, SetEvent, CreateEventA, WaitForSingleObject, _lcreat, _lwrite
+STATIC USER32.dll -> FrameRect, CreateDialogParamA, GetWindowWord, InflateRect, EndDialog, BeginPaint, InvalidateRect, SetWindowWord, ShowWindow, SetWindowTextA, DestroyWindow, EnableWindow, CharToOemBuffA, SendDlgItemMessageA, TabbedTextOutA, GetDC, CharNextA, ReleaseDC, EnableMenuItem, SetFocus, GetDlgItem, TranslateMessage, GetSystemMenu, DispatchMessageA, UnregisterClassA, IsDialogMessageA, PeekMessageA, GetSystemMetrics, GetMessageA, CreateWindowExA, LoadIconA, FindWindowA, GetSysColorBrush, DialogBoxParamA, PostQuitMessage, GetDlgItemTextA, CopyRect, FillRect, MapWindowPoints, SetCursor, GetMessagePos, CharPrevA, EndPaint, IsWindow, EnumDisplaySettingsA, MessageBoxA, LoadStringA, SendMessageA, GetClientRect, RegisterClassA, LoadCursorA, SetDlgItemTextA, SetWindowPos, CharUpperA, wvsprintfA, ExitWindowsEx, PostMessageA, wsprintfA, MsgWaitForMultipleObjects, CharLowerA, EnumWindows, FindWindowExA, GetParent, DefWindowProcA, UpdateWindow, SetForegroundWindow
+STATIC GDI32.dll -> ExtTextOutA, GetStockObject, SelectObject, GetTextExtentPoint32A, DeleteObject, GetDeviceCaps, DeleteDC, StartPage, StartDocA, GetTextMetricsA, EndDoc, EndPage, SetAbortProc, GetObjectA, CreateFontA, CreateFontIndirectA, BitBlt, RealizePalette, CreateDCA, SetBkColor, SetTextColor, CreateCompatibleDC, CreateDIBitmap, SelectPalette, RemoveFontResourceA, AddFontResourceA, CreatePalette
+STATIC comdlg32.dll -> PrintDlgA
+STATIC ADVAPI32.dll -> RegOpenKeyA, RegDeleteKeyA, RegSetValueExA, RegCloseKey, RegQueryValueExA, RegOpenKeyExA, RegDeleteValueA, RegEnumKeyExA, OpenProcessToken, RegCreateKeyExA, AdjustTokenPrivileges, LookupPrivilegeValueA, RegQueryInfoKeyA, CloseServiceHandle, OpenSCManagerA
+STATIC SHELL32.dll -> SHGetSpecialFolderLocation, SHBrowseForFolderA, SHGetPathFromIDListA, SHGetMalloc, SHChangeNotify
+STATIC WINMM.dll -> joyGetNumDevs, waveOutGetDevCapsA, waveOutGetNumDevs, PlaySoundA
+STATIC VERSION.dll -> GetFileVersionInfoSizeA, VerLanguageNameA, VerQueryValueA, GetFileVersionInfoA
+STATIC LZ32.dll -> LZOpenFileA, LZCopy, LZClose
+STATIC COMCTL32.dll -> ImageList_Destroy, ImageList_LoadImageA
+STATIC ole32.dll -> OleInitialize, CoUninitialize, CoCreateInstance, CoInitialize, OleUninitialize
+EXPORT #1 _AbortDlgProc@16
+EXPORT #2 _AbortProc@8
+EXPORT #3 _CDDoneFn@4
+EXPORT #4 _CDFailedFn@4
+EXPORT #5 _CDWndProc@16
+EXPORT #6 _CPPDlgProc@16
+EXPORT #7 _CopyFileFn@4
+EXPORT #8 _CreateCDSpeedWindow@4
+EXPORT #9 _DeleteFileFn@4
+EXPORT #10 _GetGroupFn@4
+EXPORT #11 _GetNameFn@4
+EXPORT #12 _GetPidFn@4
+EXPORT #13 _GetPidNumFn@4
+EXPORT #14 _InstIconFn@4
+EXPORT #15 _InstallDPlay@0
+EXPORT #16 _InstallDirectX@8
+EXPORT #17 _MkRootFn@4
+EXPORT #18 _RunRegWizFn@0
+EXPORT #19 _StartCDFn@0
+RESOURCE {"language": 1033, "name": 101, "size": 14, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 102, "size": 9, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 103, "size": 13, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 104, "size": 9, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 105, "size": 13, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 106, "size": 13, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 107, "size": 10, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 108, "size": 10, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 109, "size": 10, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 110, "size": 25, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 111, "size": 33, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 112, "size": 37, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 113, "size": 69, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 114, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 115, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 116, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 117, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 118, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 119, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 120, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 121, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 122, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 123, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 124, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 125, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 126, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 127, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 128, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 129, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 130, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 131, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 132, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 133, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 134, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 135, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 136, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 137, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 138, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 139, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 140, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 141, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 142, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 143, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 144, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 145, "size": 81, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 146, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 147, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 148, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 149, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 150, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 151, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 152, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 153, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 154, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 155, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 156, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 157, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 158, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 159, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 160, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 161, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 162, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 163, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 164, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 165, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 166, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 167, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 168, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 169, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 170, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 171, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 172, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 173, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 174, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 175, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 176, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 177, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 178, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 179, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 180, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 181, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 182, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 183, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 184, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 185, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 186, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 187, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 188, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 189, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 190, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 191, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 192, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 193, "size": 85, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 194, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 195, "size": 87, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 196, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 197, "size": 81, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 198, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 199, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 200, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 201, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 202, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 203, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 204, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 205, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 206, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 207, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 208, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 209, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 210, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 211, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 212, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 213, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 214, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 215, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 216, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 217, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 218, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 219, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 220, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 221, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 222, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 223, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 224, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 225, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 226, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 227, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 228, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 229, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 230, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 231, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 232, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 233, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 234, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 235, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 236, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 237, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 238, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 239, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 240, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 241, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 242, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 243, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 244, "size": 117, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 245, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 246, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 247, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 248, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 249, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 250, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 251, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 252, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 253, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 254, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 255, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 256, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 257, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 258, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 259, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 260, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 261, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 262, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 263, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 264, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 265, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 266, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 267, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 268, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 269, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 270, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 271, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 272, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 273, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 274, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 275, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 276, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 277, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 278, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 279, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 280, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 281, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 282, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 283, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 284, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 285, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 286, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 287, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 288, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 289, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 290, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 291, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 292, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 293, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 294, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 295, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 296, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 297, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 298, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 299, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 300, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 301, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 302, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 303, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 304, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 305, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 306, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 307, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 308, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 309, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 310, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 311, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 312, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 313, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 314, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 315, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 316, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 317, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 318, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 319, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 320, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 321, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 322, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 323, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 324, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 325, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 326, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 327, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 328, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 329, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 330, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 331, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 332, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 333, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 334, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 335, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 336, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 337, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 338, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 339, "size": 114, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 340, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 341, "size": 114, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 342, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 343, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 344, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 345, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 346, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 347, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 348, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 349, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 350, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 351, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 352, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 353, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 354, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 355, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 356, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 357, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 358, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 359, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 360, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 361, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 362, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 363, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 364, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 365, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 366, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 367, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 368, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 369, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 370, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 371, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 372, "size": 109, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 373, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 374, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 375, "size": 107, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 376, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 377, "size": 105, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 378, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 379, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 380, "size": 101, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 381, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 382, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 383, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 384, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 385, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 386, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 387, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 388, "size": 113, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 389, "size": 111, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 390, "size": 89, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 391, "size": 56, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 392, "size": 60, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 393, "size": 58, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 394, "size": 58, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 395, "size": 60, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 396, "size": 84, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 397, "size": 82, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 398, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 399, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 400, "size": 60, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 401, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 402, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 403, "size": 76, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 404, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 405, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 406, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 407, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 408, "size": 75, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 409, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 410, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 411, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 412, "size": 76, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 413, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 414, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 415, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 416, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 417, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 418, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 419, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 420, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 421, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 422, "size": 81, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 423, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 424, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 425, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 426, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 427, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 428, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 429, "size": 71, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 430, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 431, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 432, "size": 80, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 433, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 434, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 435, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 436, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 437, "size": 81, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 438, "size": 76, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 439, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 440, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 441, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 442, "size": 76, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 443, "size": 75, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 444, "size": 75, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 445, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 446, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 447, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 448, "size": 82, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 449, "size": 80, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 450, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 451, "size": 83, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 452, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 453, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 454, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 455, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 456, "size": 71, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 457, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 458, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 459, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 460, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 461, "size": 79, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 462, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 463, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 464, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 465, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 466, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 467, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 468, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 469, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 470, "size": 77, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 471, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 472, "size": 80, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 473, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 474, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 475, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 476, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 477, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 478, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 479, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 480, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 481, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 482, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 483, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 484, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 485, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 486, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 487, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 488, "size": 99, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 489, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 490, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 491, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 492, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 493, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 494, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 495, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 496, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 497, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 498, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 499, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 500, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 501, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 502, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 503, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 504, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 505, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 506, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 507, "size": 62, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 508, "size": 102, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 509, "size": 91, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 510, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 511, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 512, "size": 66, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 513, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 514, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 515, "size": 70, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 516, "size": 60, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 517, "size": 57, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 518, "size": 52, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 519, "size": 25, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 520, "size": 69, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 521, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 522, "size": 69, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 523, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 524, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 525, "size": 73, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 526, "size": 64, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 527, "size": 52, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 528, "size": 72, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 529, "size": 74, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 530, "size": 86, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 531, "size": 52, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 532, "size": 58, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 533, "size": 65, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 534, "size": 121, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 535, "size": 94, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 536, "size": 95, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 537, "size": 91, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 538, "size": 103, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 539, "size": 68, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 540, "size": 69, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 541, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 542, "size": 56, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 543, "size": 78, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 544, "size": 38, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 545, "size": 22, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 546, "size": 22, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 547, "size": 27, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 548, "size": 29, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 549, "size": 29, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 550, "size": 29, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 551, "size": 26, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 552, "size": 26, "type": "COMMANDDATA"}
+RESOURCE {"language": 1033, "name": 101, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 102, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 103, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 104, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 105, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 106, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 107, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 108, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 109, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 110, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 111, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 112, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 113, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 114, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 115, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 116, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 117, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 118, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 119, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 120, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 121, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 122, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 123, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 124, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 125, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 126, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 127, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 128, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 129, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 130, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 131, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 132, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 133, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 134, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 135, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 136, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 137, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 138, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 139, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 140, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 141, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 142, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 143, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 144, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 145, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 146, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 147, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 148, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 149, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 150, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 151, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 152, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 153, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 154, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 155, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 156, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 157, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 158, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 159, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 160, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 161, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 162, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 163, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 164, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 165, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 166, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 167, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 168, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 169, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 170, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 171, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 172, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 173, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 174, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 175, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 176, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 177, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 178, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 179, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 180, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 181, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 182, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 183, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 184, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 185, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 186, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 187, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 188, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 189, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 190, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 191, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 192, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 193, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 194, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 195, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 196, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 197, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 198, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 199, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 200, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 201, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 202, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 203, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 204, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 205, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 206, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 207, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 208, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 209, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 210, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 211, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 212, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 213, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 214, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 215, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 216, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 217, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 218, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 219, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 220, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 221, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 222, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 223, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 224, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 225, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 226, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 227, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 228, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 229, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 230, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 231, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 232, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 233, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 234, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 235, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 236, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 237, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 238, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 239, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 240, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 241, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 242, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 243, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 244, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 245, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 246, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 247, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 248, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 249, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 250, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 251, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 252, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 253, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 254, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 255, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 256, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 257, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 258, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 259, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 260, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 261, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 262, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 263, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 264, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 265, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 266, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 267, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 268, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 269, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 270, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 271, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 272, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 273, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 274, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 275, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 276, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 277, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 278, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 279, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 280, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 281, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 282, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 283, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 284, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 285, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 286, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 287, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 288, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 289, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 290, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 291, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 292, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 293, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 294, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 295, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 296, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 297, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 298, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 299, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 300, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 301, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 302, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 303, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 304, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 305, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 306, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 307, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 308, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 309, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 310, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 311, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 312, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 313, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 314, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 315, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 316, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 317, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 318, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 319, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 320, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 321, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 322, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 323, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 324, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 325, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 326, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 327, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 328, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 329, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 330, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 331, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 332, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 333, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 334, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 335, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 336, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 337, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 338, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 339, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 340, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 341, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 342, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 343, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 344, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 345, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 346, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 347, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 348, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 349, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 350, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 351, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 352, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 353, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 354, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 355, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 356, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 357, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 358, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 359, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 360, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 361, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 362, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 363, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 364, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 365, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 366, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 367, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 368, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 369, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 370, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 371, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 372, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 373, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 374, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 375, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 376, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 377, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 378, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 379, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 380, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 381, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 382, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 383, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 384, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 385, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 386, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 387, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 388, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 389, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 390, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 391, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 392, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 393, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 394, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 395, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 396, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 397, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 398, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 399, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 400, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 401, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 402, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 403, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 404, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 405, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 406, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 407, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 408, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 409, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 410, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 411, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 412, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 413, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 414, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 415, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 416, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 417, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 418, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 419, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 420, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 421, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 422, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 423, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 424, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 425, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 426, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 427, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 428, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 429, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 430, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 431, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 432, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 433, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 434, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 435, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 436, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 437, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 438, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 439, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 440, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 441, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 442, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 443, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 444, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 445, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 446, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 447, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 448, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 449, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 450, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 451, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 452, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 453, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 454, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 455, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 456, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 457, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 458, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 459, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 460, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 461, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 462, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 463, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 464, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 465, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 466, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 467, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 468, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 469, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 470, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 471, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 472, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 473, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 474, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 475, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 476, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 477, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 478, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 479, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 480, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 481, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 482, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 483, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 484, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 485, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 486, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 487, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 488, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 489, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 490, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 491, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 492, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 493, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 494, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 495, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 496, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 497, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 498, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 499, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 500, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 501, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 502, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 503, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 504, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 505, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 506, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 507, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 508, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 509, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 510, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 511, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 512, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 513, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 514, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 515, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 516, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 517, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 518, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 519, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 520, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 521, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 522, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 523, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 524, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 525, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 526, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 527, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 528, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 529, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 530, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 531, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 532, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 533, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 534, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 535, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 536, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 537, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 538, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 539, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 540, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 541, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 542, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 543, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 544, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 545, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 546, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 547, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 548, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 549, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 550, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 551, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 552, "size": 8, "type": "SETUPCOMMAND"}
+RESOURCE {"language": 1033, "name": 101, "size": 4, "type": "SETUPINFO"}
+RESOURCE {"language": 1033, "name": 1, "size": 2216, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 3, "size": 1640, "type": 3}
+RESOURCE {"language": 1033, "name": 4, "size": 3752, "type": 3}
+RESOURCE {"language": 1033, "name": "TRIBEICO", "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 154, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 155, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 156, "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 776, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE setupenu.dll
+SHA256 7b196c29c53ee2e6acbf069810d5ad2ea72a0d52b12360f4c6afdbe40d644080
+FORMAT PE32 i386 DLL
+SUBSYSTEM gui LINKER 5.2
+RESOURCE {"language": 1033, "name": "IDCLICK", "size": 884, "type": "WAVE"}
+RESOURCE {"language": 1033, "name": "TRIBEBMP", "size": 308266, "type": 2}
+RESOURCE {"language": 1033, "name": 153, "size": 616, "type": 2}
+RESOURCE {"language": 1033, "name": "ABORTPRINT", "size": 214, "type": 5}
+RESOURCE {"language": 1033, "name": "BATCHDX", "size": 1400, "type": 5}
+RESOURCE {"language": 1033, "name": "RESTART", "size": 226, "type": 5}
+RESOURCE {"language": 1033, "name": 151, "size": 266, "type": 5}
+RESOURCE {"language": 1033, "name": 152, "size": 1606, "type": 5}
+RESOURCE {"language": 1033, "name": 1000, "size": 664, "type": 5}
+RESOURCE {"language": 1033, "name": 1, "size": 564, "type": 6}
+RESOURCE {"language": 1033, "name": 2, "size": 180, "type": 6}
+RESOURCE {"language": 1033, "name": 7, "size": 46, "type": 6}
+RESOURCE {"language": 1033, "name": 8, "size": 130, "type": 6}
+RESOURCE {"language": 1033, "name": 9, "size": 464, "type": 6}
+RESOURCE {"language": 1033, "name": 13, "size": 558, "type": 6}
+RESOURCE {"language": 1033, "name": 14, "size": 1234, "type": 6}
+RESOURCE {"language": 1033, "name": 15, "size": 2040, "type": 6}
+RESOURCE {"language": 1033, "name": 16, "size": 1624, "type": 6}
+RESOURCE {"language": 1033, "name": 17, "size": 1502, "type": 6}
+RESOURCE {"language": 1033, "name": 19, "size": 400, "type": 6}
+RESOURCE {"language": 1033, "name": 20, "size": 3586, "type": 6}
+RESOURCE {"language": 1033, "name": 21, "size": 2224, "type": 6}
+RESOURCE {"language": 1033, "name": 22, "size": 1854, "type": 6}
+RESOURCE {"language": 1033, "name": 23, "size": 1548, "type": 6}
+RESOURCE {"language": 1033, "name": 26, "size": 32, "type": 6}
+RESOURCE {"language": 1033, "name": 32, "size": 222, "type": 6}
+RESOURCE {"language": 1033, "name": 65, "size": 1404, "type": 6}
+RESOURCE {"language": 1033, "name": 1, "size": 1012, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: ut-demo-348
+# command: python3 -B scripts/win32/census.py ut-demo-348/UTDEMO348.EXE ut-demo-348/extracted/System/Setup.exe
+FILE UTDEMO348.EXE
+SHA256 59e65276c67af7859935d79001b93934928b3e1c3a8cc300807cdfa95208f708
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 4.20
+STATIC USER32.dll -> SetRect, GetMessageA, DefWindowProcA, BeginPaint, GetWindowWord, EndPaint, SetWindowWord, LoadIconA, RegisterClassA, OemToCharA, SetWindowTextA, OemToCharBuffA, LoadCursorA, UpdateWindow, SendMessageA, GetTopWindow, GetLastActivePopup, EnableWindow, PostMessageA, GetClientRect, ShowWindow, GetDC, SetTimer, GetSysColor, ReleaseDC, SetCursor, KillTimer, PostQuitMessage, DialogBoxIndirectParamA, GetWindowRect, GetSystemMetrics, SetWindowPos, GetDlgItemTextA, EndDialog, PeekMessageA, TranslateMessage, DispatchMessageA, GetParent, SetDlgItemTextA, SendDlgItemMessageA, GetDlgItem, InvalidateRect, wsprintfA, MessageBoxA
+STATIC KERNEL32.dll -> DosDateTimeToFileTime, GlobalLock, RtlUnwind, _lcreat, GetModuleHandleA, FindNextFileA, GetCommandLineA, SetFileAttributesA, DeleteFileA, RemoveDirectoryA, GetVersion, GetModuleFileNameA, SetErrorMode, GetTempPathA, GetTempFileNameA, CreateProcessA, WaitForSingleObject, GetTickCount, GetWindowsDirectoryA, OpenFile, LocalAlloc, GetCurrentDirectoryA, GlobalUnlock, GlobalHandle, LocalFree, LocalFileTimeToFileTime, GlobalAlloc, FindClose, FindFirstFileA, SetCurrentDirectoryA, lstrlenA, CreateDirectoryA, SetFileTime, _llseek, GlobalFree, lstrcpyA, _lopen, _lwrite, _lread, lstrcatA, _lclose
+STATIC GDI32.dll -> SetTextColor, GetTextExtentPoint32A, GetBkColor, SetBkColor, ExtTextOutA, GetTextMetricsA, GetTextAlign, DeleteObject, TextOutA, SetTextAlign, SetBkMode, CreateDCA, GetDeviceCaps, CreateFontIndirectA, DeleteDC, SelectObject
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 1, "size": 34, "type": 14}
+RELOCATION-TYPES 0, 3
+HEURISTICS high-entropy-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE Setup.exe
+SHA256 c35b2f3e42d34212a0d00ca291a96c26dedfec108d85d4281f5a1c53e6c71a6c
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 6.0
+STATIC Window.dll -> ?AddButton@FTreeItem@@UAEXPBGUFDelegate@@@Z, ?Serialize@FTreeItem@@UAEXAAVFArchive@@@Z, ?OnSetCursor@FTreeItem@@UAEHXZ, ?GetRect@FTreeItem@@UAE?AUFRect@@XZ, ?Redraw@FTreeItem@@UAEXXZ, ?GetBackgroundBrush@FTreeItem@@UAEPAUHBRUSH__@@H@Z, ?GetTextColor@FTreeItem@@UAEKH@Z, ?OnItemRightMouseDown@FTreeItem@@UAEXUFPoint@@@Z, ?GetIndentPixels@FTreeItem@@UAEHH@Z, ?GetExpanderRect@FTreeItem@@UAE?AUFRect@@XZ, ?GetSelected@FTreeItem@@UAEHXZ, ?DrawTreeLines@FTreeItem@@UAEXPAUHDC__@@UFRect@@@Z, ?OnItemKillFocus@FTreeItem@@UAEXH@Z, ?Collapse@FTreeItem@@UAEXXZ, ?ToggleExpansion@FTreeItem@@UAEXXZ, ?GetReadAddress@FTreeItem@@UAEPAEPAVUProperty@@H@Z, ?SetProperty@FTreeItem@@UAEXPAVUProperty@@HPBG@Z, ?GetStates@FTreeItem@@UAEXAAV?$TArray@VFName@@@@@Z, ?AcceptFlags@FTreeItem@@UAEHK@Z, ?OnItemHelp@FTreeItem@@UAEXXZ, ?SetFocusToItem@FTreeItem@@UAEXXZ, ?SetValue@FTreeItem@@UAEXPBG@Z, ?SnoopChar@FTreeItem@@UAEXPAVWWindow@@H@Z, ?SnoopKeyDown@FTreeItem@@UAEXPAVWWindow@@H@Z, ??0WProperties@@QAE@VFName@@PAVWWindow@@@Z, ??1WProperties@@UAE@XZ, ??1FHeaderItem@@UAE@XZ, ?Expand@FTreeItem@@UAEXXZ, ?SetSelected@FTreeItem@@UAEXH@Z, ?OnSize@WProperties@@UAEXKHH@Z, ?OnActivate@WProperties@@UAEXH@Z, ?OnPaint@WProperties@@UAEXXZ, ?OnInitDialog@WWindow@@UAEXXZ, ?OnFinishSplitterDrag@WProperties@@UAEXPAVWDragInterceptor@@H@Z, ?OnSetCursor@WProperties@@UAEHXZ, ?OnDestroy@WProperties@@UAEXXZ, ?GetDividerWidth@WProperties@@UAEHXZ, ?ResizeList@WProperties@@UAEXXZ, ?SetItemFocus@WProperties@@UAEXH@Z, ?ForceRefresh@WProperties@@UAEXXZ, ?BeginSplitterDrag@WProperties@@UAEXXZ, ?GetListItem@WPropertiesBase@@UAEPAVFTreeItem@@H@Z, ?SetValue@WProperties@@UAEXPBG@Z, ?SnoopChar@WProperties@@UAEXPAVWWindow@@H@Z, ?SnoopKeyDown@WProperties@@UAEXPAVWWindow@@H@Z, ?SnoopLeftMouseDown@WProperties@@UAEXPAVWWindow@@UFPoint@@@Z, ?SnoopRightMouseDown@WProperties@@UAEXPAVWWindow@@UFPoint@@@Z, ??_7WWizardPage@@6B@, ?GetNext@WWizardPage@@UAEPAV1@XZ, ?EndDialogTrue@WDialog@@QAEXXZ, ?hInstanceWindow@@3PAUHINSTANCE__@@A, ??_7FControlSnoop@@6B@, ??1WEdit@@UAE@XZ, ?SnoopChar@FControlSnoop@@UAEXPAVWWindow@@H@Z, ?SnoopKeyDown@FControlSnoop@@UAEXPAVWWindow@@H@Z, ?SnoopLeftMouseDown@FControlSnoop@@UAEXPAVWWindow@@UFPoint@@@Z, ?GetHeight@FHeaderItem@@UAEHXZ, ?OnItemLeftMouseDown@FTreeItem@@UAEXUFPoint@@@Z, ??0FTreeItem@@QAE@PAVWPropertiesBase@@PAV0@H@Z, ?Draw@FHeaderItem@@UAEXPAUHDC__@@@Z, ??1WProgressBar@@UAE@XZ, ?OnItemSetFocus@FTreeItem@@UAEXXZ, ??1FTreeItem@@UAE@XZ, ?Serialize@WProperties@@UAEXAAVFArchive@@@Z, ?SetProgress@WProgressBar@@QAEXHH@Z, ??_7WProgressBar@@6B@, ?OnShowWindow@WWindow@@UAEXH@Z, ?SuperProc@WProgressBar@@2P6GJPAUHWND__@@IIJ@ZA, ?DoDestroy@WProperties@@UAEXXZ, ?CallDefaultProc@WWindow@@UAEHIIJ@Z, ?FindString@WListBox@@QAEHPBG@Z, ?SnoopRightMouseDown@FControlSnoop@@UAEXPAVWWindow@@UFPoint@@@Z, ?SuperProc@WEdit@@2P6GJPAUHWND__@@IIJ@ZA, ??_7FDelegate@@6B@, ??_7WEdit@@6B@, ?OnCurrent@WWizardPage@@UAEXXZ, ?GetBackText@WWizardPage@@UAEPBGXZ, ?OpenChildWindow@WDialog@@QAEXHH@Z, ?AddString@WListBox@@QAEHPBG@Z, ?Show@WWindow@@QAEXH@Z, ?SetCurrent@WListBox@@QAEXHH@Z, ??0WDialog@@QAE@VFName@@HPAVWWindow@@@Z, ??0WUrlButton@@QAE@PAVWWindow@@PBGH@Z, ?MaybeDestroy@WWindow@@QAEXXZ, ??1WUrlButton@@UAE@XZ, ??_7WButton@@6B@, ??1WControl@@UAE@XZ, ??1WWindow@@UAE@XZ, ??1WDialog@@UAE@XZ, ?OnInitDialog@WDialog@@UAEXXZ, ??0WListBox@@QAE@PAVWWindow@@HP6GJPAUHWND__@@IIJ@Z@Z, ??1WListBox@@UAE@XZ, ?GetNextText@WWizardPage@@UAEPBGXZ, ?GetFinishText@WWizardPage@@UAEPBGXZ, ?GetCancelText@WWizardPage@@UAEPBGXZ, ??0WWizardPage@@QAE@PBGHPAVWWizardDialog@@@Z, ?SuperProc@WLabel@@2P6GJPAUHWND__@@IIJ@ZA, ??0WControl@@QAE@PAVWWindow@@HP6GJPAUHWND__@@IIJ@Z@Z, ??_7WLabel@@6B@, ??0FDelegate@@QAE@PAVFCommandTarget@@P81@AEXXZ@Z, ??0FDelegate@@QAE@ABU0@@Z, ??0WButton@@QAE@PAVWWindow@@HUFDelegate@@P6GJPAUHWND__@@IIJ@Z@Z, ??0WCoolButton@@QAE@PAVWWindow@@HUFDelegate@@K@Z, ??1WWizardPage@@UAE@XZ, ??1WLabel@@UAE@XZ, ??1WButton@@UAE@XZ, ??1WCoolButton@@UAE@XZ, ?Unused@FCommandTarget@@UAEXXZ, ?Serialize@WWindow@@UAEXAAVFArchive@@@Z, ?DoDestroy@WWindow@@UAEXXZ, ?WndProc@WWindow@@UAEJIIJ@Z, ?CallDefaultProc@WDialog@@UAEHIIJ@Z, ?InterceptControlCommand@WWindow@@UAEHIIJ@Z, ?GetText@WWindow@@UAE?AVFString@@XZ, ?SetText@WWindow@@UAEXPBG@Z, ?GetLength@WWindow@@UAEHXZ, ?OnCopyData@WWindow@@UAEXPAUHWND__@@PAUtagCOPYDATASTRUCT@@@Z, ?OnSetFocus@WWindow@@UAEXPAUHWND__@@@Z, ?OnKillFocus@WWindow@@UAEXPAUHWND__@@@Z, ?OnSize@WWindow@@UAEXKHH@Z, ?OnCommand@WWindow@@UAEXH@Z, ?OnActivate@WWindow@@UAEXH@Z, ?OnChar@WWindow@@UAEXG@Z, ?OnKeyDown@WWindow@@UAEXG@Z, ?OnCreate@WWindow@@UAEXXZ, ?OnDrawItem@WWindow@@UAEXPAUtagDRAWITEMSTRUCT@@@Z, ?OnMeasureItem@WWindow@@UAEXPAUtagMEASUREITEMSTRUCT@@@Z, ?OnEnterIdle@WWindow@@UAEXXZ, ?OnMouseEnter@WWindow@@UAEXXZ, ?OnMouseLeave@WWindow@@UAEXXZ, ?OnMouseHover@WWindow@@UAEXXZ, ?OnTimer@WWindow@@UAEXXZ, ?OnReleaseCapture@WWindow@@UAEXXZ, ?OnMdiActivate@WWindow@@UAEXH@Z, ?OnMouseMove@WWindow@@UAEXKUFPoint@@@Z, ?OnLeftButtonDown@WWindow@@UAEXXZ, ?OnRightButtonDown@WWindow@@UAEXXZ, ?OnLeftButtonUp@WWindow@@UAEXXZ, ?OnRightButtonUp@WWindow@@UAEXXZ, ?OnFinishSplitterDrag@WWindow@@UAEXPAVWDragInterceptor@@H@Z, ?OnSetCursor@WWindow@@UAEHXZ, ?OnClose@WWindow@@UAEXXZ, ?OnDestroy@WWindow@@UAEXXZ, ?DoModal@WDialog@@UAEHPAUHINSTANCE__@@@Z, ?LocalizeText@WDialog@@UAEXPBG0@Z, ?GetShow@WWizardPage@@UAEHXZ, ?OpenChildWindow@WProperties@@QAEXH@Z, ?GetString@WListBox@@QAE?AVFString@@H@Z, ?GetCurrent@WListBox@@QAEHXZ, ??_7WListBox@@6B@, ?SetFont@WWindow@@QAEXPAUHFONT__@@@Z, ?OnCut@WWindow@@UAEXXZ, ?OnCopy@WWindow@@UAEXXZ, ?hFontHeadline@@3PAUHFONT__@@A, ?Advance@WWizardDialog@@UAEXPAVWWizardPage@@@Z, ?RegisterWindowClass@WWindow@@SAP6GJPAUHWND__@@IIJ@ZPBGK@Z, ?InitWindowing@@YAXXZ, ?OnCancel@WWizardDialog@@UAEXXZ, ?OnNext@WWizardDialog@@UAEXXZ, ?OnBack@WWizardDialog@@UAEXXZ, ?RefreshPage@WWizardDialog@@UAEXXZ, ?OnDestroy@WWizardDialog@@UAEXXZ, ?OnClose@WWizardDialog@@UAEXXZ, ??1WWizardDialog@@UAE@XZ, ??0WWizardDialog@@QAE@XZ, ?OnInitDialog@WWizardDialog@@UAEXXZ, ?LoadFileToBitmap@@YAPAUHBITMAP__@@PBGAAH1@Z, ?OnFinish@WWizardDialog@@UAEXXZ, ?SHGetSpecialFolderPathWX@@3P6GHPAUHWND__@@PAGHH@ZA, ?OnCancel@WWizardPage@@UAEXXZ, ?OnPaste@WWindow@@UAEXXZ, ?OnPaint@WWindow@@UAEXXZ, ?OnUndo@WWindow@@UAEXXZ
+STATIC Core.dll -> ??4FStringNoInit@@QAEAAU0@ABVFString@@@Z, ?appStrfind@@YAPBGPBG0@Z, ??9FString@@QBEHABV0@@Z, ?appPreExit@@YAXXZ, ?ScriptConsoleExec@UObject@@UAEHPBGAAVFOutputDevice@@PAV1@@Z, ?Register@UField@@UAEXXZ, ?ExportTextItem@UStrProperty@@UBEXPAGPAE1H@Z, ?ExportText@UProperty@@UBEHHPAGPAE1H@Z, ?PostLoad@UObject@@UAEXXZ, ?CopyCompleteValue@UProperty@@UBEXPAX0@Z, ?DestroyValue@UStrProperty@@UBEXPAX@Z, ?Port@UProperty@@UBEHXZ, ?GetID@UProperty@@UBEEXZ, ??1UClass@@UAE@XZ, ?StaticConstructor@UObject@@QAEXXZ, ?InternalConstructor@UObject@@SAXPAX@Z, ?PrivateStaticClass@UObject@@0VUClass@@A, ??0UClass@@QAE@W4ENativeConstructor@@KKPAV0@1VFGuid@@PBG33KP6AXPAX@ZP8UObject@@AEXXZ@Z, ??1FRegistryObjectInfo@@QAE@XZ, ?GCRCTable@@3PAKA, ?Names@FName@@0V?$TArray@PAUFNameEntry@@@@A, ?StaticAllocateObject@UObject@@SAPAV1@PAVUClass@@PAV1@VFName@@K1PAVFOutputDevice@@1@Z, ?CreatePackage@UObject@@SAPAVUPackage@@PAV1@PBG@Z, ?appAtof@@YAMPBG@Z, ?appAtoi@@YAHPBG@Z, ?appStaticString1024@@YAPAGXZ, ?Log@FOutputDevice@@QAEXPBG@Z, ?appStrcmp@@YAHPBG0@Z, ?appStrcat@@YAPAGPAGPBG@Z, ??YFString@@QAEAAV0@PBG@Z, ?appSaveStringToFile@@YAHABVFString@@PBGPAVFFileManager@@@Z, ?GIsServer@@3HA, ?GIsScriptable@@3HA, ?appInit@@YAXPBG0PAVFMalloc@@PAVFOutputDevice@@PAVFOutputDeviceError@@PAVFFeedbackContext@@PAVFFileManager@@P6APAVFConfigCache@@XZH@Z, ??0FArray@@QAE@XZ, ?NetSerializeItem@UProperty@@UBEHAAVFArchive@@PAVUPackageMap@@PAX@Z, ?SerializeItem@UStrProperty@@UBEXAAVFArchive@@PAX@Z, ?ImportText@UStrProperty@@UBEPBGPBGPAEH@Z, ?appExit@@YAXXZ, ?appBaseDir@@YAPBGXZ, ?SetLanguage@UObject@@SAXPBG@Z, ?appLoadFileToString@@YAHAAVFString@@PBGPAVFFileManager@@@Z, ?appStrcpy@@YAPAGPAGPBG@Z, ?LocalizeGeneral@@YAPBGPBG00@Z, ??4FStringNoInit@@QAEAAU0@PBG@Z, ??0FName@@QAE@W4EName@@@Z, ?Localize@@YAPBGPBD0PBG1H@Z, ?ExportCppItem@UStrProperty@@UBEXAAVFOutputDevice@@@Z, ?LocalizeGeneral@@YAPBGPBDPBG1@Z, ?PrivateStaticClass@ULanguage@@0VUClass@@A, ?PrivateStaticClass@UClass@@0V1@A, ?GetRegistryObjects@UObject@@SAXAAV?$TArray@VFRegistryObjectInfo@@@@PAVUClass@@1H@Z, ??HFString@@QAE?AV0@PBG@Z, ??0FName@@QAE@PBGW4EFindName@@@Z, ?appPackage@@YAPBGXZ, ?appSprintf@@YAHPAGPBGZZ, ?Printf@FString@@SA?AV1@PBGZZ, ?Right@FString@@QBE?AV1@H@Z, ?LeftChop@FString@@QBE?AV1@H@Z, ??4FString@@QAEAAV0@PBG@Z, ?appToAnsi@@YAPBDPBG@Z, ?appToUnicode@@YAPBGPBG@Z, ?GetTransientPackage@UObject@@SAPAVUPackage@@XZ, ?StaticConstructObject@UObject@@SAPAV1@PAVUClass@@PAV1@VFName@@K1PAVFOutputDevice@@@Z, ??6@YAAAVFArchive@@AAV0@AAVFString@@@Z, ?appLoadFileToArray@@YAHAAV?$TArray@E@@PBGPAVFFileManager@@@Z, ??_7FBufferReader@@6B@, ??6@YAAAVFArchive@@AAV0@AAVFCompactIndex@@@Z, ?Seek@FBufferReader@@UAEXH@Z, ??1FBufferReader@@UAE@XZ, ?InStr@FString@@QBEHPBGH@Z, ?GetName@UObject@@QBEPBGXZ, ?GetFullName@UObject@@QBEPBGPAG@Z, ?appFormat@@YA?AVFString@@V1@ABV?$TMultiMap@VFString@@V1@@@@Z, ?ParseToken@@YAHAAPBGAAVFString@@H@Z, ?appMemCrc@@YAKPBXHK@Z, ?LoadConfig@UObject@@QAEXHPAVUClass@@PBG@Z, ?LoadLocalized@UObject@@QAEXHPAVUClass@@@Z, ??0FString@@QAE@W4ENoInit@@@Z, ??1UArrayProperty@@UAE@XZ, ??1UBoolProperty@@UAE@XZ, ??2UBoolProperty@@SAPAXIPAVUObject@@VFName@@K@Z, ??2UArrayProperty@@SAPAXIPAVUObject@@VFName@@K@Z, ??0UProperty@@QAE@XZ, ?Serialize@UArrayProperty@@UAEXAAVFArchive@@@Z, ?AddCppProperty@UArrayProperty@@UAEXPAVUProperty@@@Z, ?Link@UArrayProperty@@UAEXAAVFArchive@@PAVUProperty@@@Z, ?Identical@UArrayProperty@@UBEHPBX0@Z, ?ExportCppItem@UArrayProperty@@UBEXAAVFOutputDevice@@@Z, ?SerializeItem@UArrayProperty@@UBEXAAVFArchive@@PAX@Z, ?NetSerializeItem@UArrayProperty@@UBEHAAVFArchive@@PAVUPackageMap@@PAX@Z, ?ExportTextItem@UArrayProperty@@UBEXPAGPAE1H@Z, ?ImportText@UArrayProperty@@UBEPBGPBGPAEH@Z, ?CopySingleValue@UArrayProperty@@UBEXPAX0@Z, ?DestroyValue@UArrayProperty@@UBEXPAX@Z, ?Serialize@UBoolProperty@@UAEXAAVFArchive@@@Z, ?Link@UBoolProperty@@UAEXAAVFArchive@@PAVUProperty@@@Z, ?Identical@UBoolProperty@@UBEHPBX0@Z, ?ExportCppItem@UBoolProperty@@UBEXAAVFOutputDevice@@@Z, ?SerializeItem@UBoolProperty@@UBEXAAVFArchive@@PAX@Z, ?NetSerializeItem@UBoolProperty@@UBEHAAVFArchive@@PAVUPackageMap@@PAX@Z, ?ExportTextItem@UBoolProperty@@UBEXPAGPAE1H@Z, ?ImportText@UBoolProperty@@UBEPBGPBGPAEH@Z, ?CopySingleValue@UBoolProperty@@UBEXPAX0@Z, ?DestroyValue@UProperty@@UBEXPAX@Z, ?Parse@@YAHPBG0AAVFString@@@Z, ?Parse@@YAHPBG0AA_J@Z, ?Parse@@YAHPBG0AAK@Z, ?ParseUBOOL@@YAHPBG0AAH@Z, ?GetLanguage@UObject@@SAPBGXZ, ?GetOuter@UObject@@QBEPAV1@XZ, ?ConditionalDestroy@UObject@@QAEHXZ, ??1UObject@@UAE@XZ, ??0UObject@@QAE@XZ, ??1FStringNoInit@@QAE@XZ, ?appFromAnsi@@YAPBGPBD@Z, ?Serialize@UObject@@UAEXAAVFArchive@@@Z, ?Register@UObject@@UAEXXZ, ??1UStrProperty@@UAE@XZ, ??3UObject@@SAXPAXI@Z, ?GetClass@UObject@@QBEPAVUClass@@XZ, ??2UStrProperty@@SAPAXIPAVUObject@@VFName@@K@Z, ??0UProperty@@QAE@W4ECppProperty@@HPBGK@Z, ?QueryInterface@UObject@@UAGKABVFGuid@@PAPAX@Z, ?AddRef@UObject@@UAGKXZ, ?Release@UObject@@UAGKXZ, ?ProcessEvent@UObject@@UAEXPAVUFunction@@PAX1@Z, ?ProcessState@UObject@@UAEXM@Z, ?ProcessRemoteFunction@UObject@@UAEHPAVUFunction@@PAXPAUFFrame@@@Z, ?Modify@UObject@@UAEXXZ, ?PostLoad@UField@@UAEXXZ, ?Destroy@UObject@@UAEXXZ, ?Serialize@UStrProperty@@UAEXAAVFArchive@@@Z, ?IsPendingKill@UObject@@UAEHXZ, ?GotoState@UObject@@UAE?AW4EGotoState@@VFName@@@Z, ?GotoLabel@UObject@@UAEHVFName@@@Z, ?InitExecution@UObject@@UAEXXZ, ?ShutdownAfterError@UObject@@UAEXXZ, ?PostEditChange@UObject@@UAEXXZ, ?CallFunction@UObject@@UAEXAAUFFrame@@QAXPAVUFunction@@@Z, ?CopySingleValue@UStrProperty@@UBEXPAX0@Z, ??_7FArchive@@6B@, ?LanguageChange@UObject@@UAEXXZ, ?AddCppProperty@UField@@UAEXPAVUProperty@@@Z, ?MergeBools@UField@@UAEHXZ, ?Bind@UField@@UAEXXZ, ?GetOwnerClass@UField@@UAEPAVUClass@@XZ, ?GetPropertiesSize@UField@@UAEHXZ, ?Link@UStrProperty@@UAEXAAVFArchive@@PAVUProperty@@@Z, ?Identical@UStrProperty@@UBEHPBX0@Z, ?ExportCpp@UProperty@@UBEXAAVFOutputDevice@@HH@Z, ?GMalloc@@3PAVFMalloc@@A, ?appUnwindf@@YAXPBGZZ, ??1FString@@QAE@XZ, ??0FString@@QAE@ABV0@@Z, ??DFString@@QBE?AV0@PBG@Z, ??0FString@@QAE@PBG@Z, ??4FString@@QAEAAV0@ABV0@@Z, ??HFString@@QAE?AV0@ABV0@@Z, ?Mid@FString@@QBE?AV1@HH@Z, ?appStricmp@@YAHPBG0@Z, ?Left@FString@@QBE?AV1@H@Z, ??_7FFileManager@@6B@, ?GetError@FArchive@@UAEHXZ, ?Flush@FArchive@@UAEXXZ, ?DetachLazyLoader@FArchive@@UAEXPAVFLazyLoader@@@Z, ?AttachLazyLoader@FArchive@@UAEXPAVFLazyLoader@@@Z, ?AtEnd@FArchive@@UAEHXZ, ?MapObject@FArchive@@UAEHPAVUObject@@@Z, ?MapName@FArchive@@UAEHPAVFName@@@Z, ??6FArchive@@UAEAAV0@AAVFName@@@Z, ??6FArchive@@UAEAAV0@AAPAVUObject@@@Z, ?CountBytes@FArchive@@UAEXKK@Z, ?Preload@FArchive@@UAEXPAVUObject@@@Z, ?SerializeInt@FArchive@@UAEXAAKK@Z, ?SerializeBits@FArchive@@UAEXPAXH@Z, ??1FArchive@@UAE@XZ, ??0FArchive@@QAE@XZ, ?GNull@@3PAVFOutputDevice@@A, ?GFileManager@@3PAVFFileManager@@A, ??8FString@@QBEHABV0@@Z, ?appFailAssert@@YAXPBD0H@Z, ?Logf@FOutputDevice@@QAAXW4EName@@PBGZZ, ??1FArray@@QAE@XZ, ?Add@FArray@@QAEHHH@Z, ?Realloc@FArray@@IAEXH@Z, ?Remove@FArray@@QAEXHHH@Z, ?GPageSize@@3KA, ?Logf@FOutputDevice@@QAAXPBGZZ, ?GError@@3PAVFOutputDeviceError@@A, ?LocalizeError@@YAPBGPBDPBG1@Z, ?ParseParam@@YAHPBG0@Z, ?appCmdLine@@YAPBGXZ, ?GLog@@3PAVFOutputDevice@@A, ?appRequestExit@@YAXH@Z, ?GIsGuarded@@3HA, ?appStrlen@@YAHPBG@Z, ?appStrncat@@YAPAGPAGPBGH@Z, ?appStrncpy@@YAPAGPAGPBGH@Z, ?GErrorHist@@3PAGA, ?StaticShutdownAfterError@UObject@@SAXXZ, ?appGetSystemErrorMessage@@YAPBGH@Z, ?GIsSlowTask@@3HA, ?GIsCriticalError@@3HA, ?LocalizeError@@YAPBGPBG00@Z, ?GConfig@@3PAVFConfigCache@@A, ?GIsStarted@@3HA, ?GIsEditor@@3HA, ?GIsClient@@3HA, ?GLogHook@@3PAVFOutputDevice@@A, ?GIsRunning@@3HA, ?appGetVarArgs@@YAHPAGHAAPBG@Z, ?TotalSize@FArchive@@UAEHXZ, ?winToANSI@@YAPADPADPBGH@Z, ?winGetSizeANSI@@YAHPBG@Z, ?GUnicodeOS@@3HA, ?Precache@FArchive@@UAEXH@Z, ?appStrchr@@YAPAGPBGH@Z, ??DFString@@QBEPBGXZ, ??DFString@@QBE?AV0@ABV0@@Z, ?winToUNICODE@@YAPAGPAGPBDH@Z, ?winGetSizeUNICODE@@YAHPBD@Z
+STATIC USER32.dll -> LoadIconA, ExitWindowsEx, MessageBoxA, PeekMessageA, DispatchMessageW, PeekMessageW, InvalidateRect, DrawFrameControl, DispatchMessageA, SendMessageA, UpdateWindow, SendMessageW, LoadIconW, MessageBoxW
+STATIC KERNEL32.dll -> FindFirstFileA, VirtualFree, GetSystemInfo, GetLastError, GetFileSize, CreateFileA, CreateFileW, ReadFile, SetFilePointer, CloseHandle, SetFileAttributesA, SetFileAttributesW, WriteFile, CopyFileA, CopyFileW, DeleteFileA, DeleteFileW, MoveFileA, MoveFileW, CreateDirectoryA, CreateDirectoryW, RemoveDirectoryA, RemoveDirectoryW, FindClose, FindNextFileA, VirtualAlloc, FindNextFileW, FindFirstFileW, SetCurrentDirectoryA, SetCurrentDirectoryW, GetCurrentDirectoryA, GetCurrentDirectoryW, MultiByteToWideChar, GetDiskFreeSpaceA, GetDiskFreeSpaceW, GetUserDefaultLangID, Sleep, CreateMutexA, CreateMutexW, GetCommandLineW, GetWindowsDirectoryW, GetSystemDirectoryW, GetWindowsDirectoryA, GetSystemDirectoryA, GetProcAddress, LoadLibraryA, LoadLibraryW, GetCurrentProcess, GetTempPathW, GetTempPathA, GetStartupInfoA, GetModuleHandleA
+STATIC GDI32.dll -> DeleteObject
+STATIC ADVAPI32.dll -> RegQueryInfoKeyA, OpenProcessToken, LookupPrivilegeValueW, LookupPrivilegeValueA, AdjustTokenPrivileges, RegOpenKeyExW, RegOpenKeyExA, RegDeleteValueW, RegDeleteValueA, RegQueryInfoKeyW, RegCloseKey, RegDeleteKeyW, RegDeleteKeyA, RegQueryValueExA, RegQueryValueExW, RegOpenKeyW, RegOpenKeyA, RegCreateKeyW, RegCreateKeyA, RegSetValueExW, RegSetValueExA
+STATIC SHELL32.dll -> SHGetSpecialFolderLocation, SHGetPathFromIDListA, ShellExecuteW, ShellExecuteA
+STATIC ole32.dll -> CoCreateInstance, CoInitialize
+STATIC MSVCRT.dll -> _except_handler3, _onexit, __set_app_type, __p__fmode, __p__commode, _adjust_fdiv, __setusermatherr, _initterm, __getmainargs, _acmdln, exit, _XcptFilter, _exit, __CxxFrameHandler, __dllonexit, ??1type_info@@UAE@XZ, _purecall, _CxxThrowException, _EH_prolog, _controlfp
+EXPORT #1 _DllMain@12
+EXPORT #2 GPackage
+EXPORT #3 autoclassUSetupDefinition
+EXPORT #4 autoclassUSetupDefinitionWindows
+EXPORT #5 autoclassUSetupGroup
+EXPORT #6 autoclassUSetupGroupWindows
+EXPORT #7 autoclassUSetupObject
+EXPORT #8 autoclassUSetupProduct
+EXPORT #9 autoclassUSetupShortcut
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 104, "size": 138, "type": 5}
+RESOURCE {"language": 1033, "name": 1006, "size": 34, "type": 14}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: rct-demo
+# command: python3 -B scripts/win32/census.py rct-demo/RCTYCOON.EXE rct-demo/extracted/Setup.exe rct-demo/extracted/UniFish3.exe
+FILE RCTYCOON.EXE
+SHA256 057066729e835c1840a051daf12295f25e05ed8a5bdd64cf79e46373ce42357a
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 4.20
+STATIC USER32.dll -> SetRect, GetMessageA, DefWindowProcA, BeginPaint, GetWindowWord, EndPaint, SetWindowWord, LoadIconA, RegisterClassA, OemToCharA, SetWindowTextA, OemToCharBuffA, LoadCursorA, UpdateWindow, SendMessageA, GetTopWindow, GetLastActivePopup, EnableWindow, PostMessageA, GetClientRect, ShowWindow, GetDC, SetTimer, GetSysColor, ReleaseDC, SetCursor, KillTimer, PostQuitMessage, DialogBoxIndirectParamA, GetWindowRect, GetSystemMetrics, SetWindowPos, GetDlgItemTextA, EndDialog, PeekMessageA, TranslateMessage, DispatchMessageA, GetParent, SetDlgItemTextA, SendDlgItemMessageA, GetDlgItem, InvalidateRect, wsprintfA, MessageBoxA
+STATIC KERNEL32.dll -> DosDateTimeToFileTime, GlobalLock, RtlUnwind, _lcreat, GetModuleHandleA, FindNextFileA, GetCommandLineA, SetFileAttributesA, DeleteFileA, RemoveDirectoryA, GetVersion, GetModuleFileNameA, SetErrorMode, GetTempPathA, GetTempFileNameA, CreateProcessA, WaitForSingleObject, GetTickCount, GetWindowsDirectoryA, OpenFile, LocalAlloc, GetCurrentDirectoryA, GlobalUnlock, GlobalHandle, LocalFree, LocalFileTimeToFileTime, GlobalAlloc, FindClose, FindFirstFileA, SetCurrentDirectoryA, lstrlenA, CreateDirectoryA, SetFileTime, _llseek, GlobalFree, lstrcpyA, _lopen, _lwrite, _lread, lstrcatA, _lclose
+STATIC GDI32.dll -> SetTextColor, GetTextExtentPoint32A, GetBkColor, SetBkColor, ExtTextOutA, GetTextMetricsA, GetTextAlign, DeleteObject, TextOutA, SetTextAlign, SetBkMode, CreateDCA, GetDeviceCaps, CreateFontIndirectA, DeleteDC, SelectObject
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 0, "type": 3}
+RESOURCE {"language": 1033, "name": 1, "size": 34, "type": 14}
+RELOCATION-TYPES 0, 3
+HEURISTICS high-entropy-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE Setup.exe
+SHA256 26d5d68970121c37603520c90e3688fb675c58bc02efccb0805ef763efc7e4a4
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC KERNEL32.dll -> FreeLibrary, GetProcAddress, LoadLibraryA, CloseHandle, GetWindowsDirectoryA, FindClose, FindFirstFileA, GetDiskFreeSpaceA, OpenMutexA, CreateMutexA, ExitProcess, GetCurrentDirectoryA, GetFileAttributesA, SetFileAttributesA, GetSystemDefaultLangID, CreateFileA, GetFileSize, CreateDirectoryA, HeapReAlloc, CompareStringA, SetEnvironmentVariableA, GetStringTypeW, GetStringTypeA, SetEndOfFile, FlushFileBuffers, SetStdHandle, GetTimeZoneInformation, GetOEMCP, GetACP, RtlUnwind, GetEnvironmentStringsW, GetEnvironmentStrings, GetCPInfo, FreeEnvironmentStringsA, GetModuleFileNameA, FreeEnvironmentStringsW, LCMapStringW, LCMapStringA, UnhandledExceptionFilter, GetFileType, GetStdHandle, WideCharToMultiByte, SetFilePointer, GetCurrentProcess, SetHandleCount, WriteFile, ReadFile, FormatMessageA, TerminateProcess, GetShortPathNameA, MultiByteToWideChar, lstrcpyA, GetLastError, lstrlenA, lstrcatA, IsDBCSLeadByte, HeapFree, FindNextFileA, HeapAlloc, HeapCreate, HeapDestroy, GetVersion, VirtualAlloc, VirtualFree, DeleteFileA, CompareStringW, GetCommandLineA, GetModuleHandleA, FileTimeToSystemTime, FileTimeToLocalFileTime, GetStartupInfoA
+STATIC USER32.dll -> ReleaseDC, MessageBoxA, GetDC, DrawTextA, GetClientRect, ScreenToClient, GetWindowRect, LockWindowUpdate, EnableWindow, ShowWindow, SetCursor, ExitWindowsEx, LoadCursorA, EndPaint, SetActiveWindow, BeginPaint, GetDlgItemTextA, DialogBoxParamA, SetFocus, EndDialog, GetDesktopWindow, MoveWindow, SendDlgItemMessageA, SendMessageA, SetWindowTextA, UpdateWindow, wvsprintfA, SetDlgItemTextA, GetDlgItem
+STATIC GDI32.dll -> CreateFontIndirectA, SelectObject, CreatePalette, DeleteObject, SetDIBitsToDevice, RealizePalette, SelectPalette
+STATIC ADVAPI32.dll -> RegDeleteKeyA, RegCreateKeyA, RegSetValueExA, RegOpenKeyA, RegQueryValueExA, RegCloseKey
+STATIC SHELL32.dll -> SHFileOperationA, SHBrowseForFolderA, SHGetPathFromIDListA, SHGetMalloc, ShellExecuteA
+STATIC ole32.dll -> CoUninitialize, CoCreateInstance, CoInitialize
+RESOURCE {"language": 2057, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 2057, "name": 101, "size": 850, "type": 5}
+RESOURCE {"language": 2057, "name": 102, "size": 566, "type": 5}
+RESOURCE {"language": 2057, "name": 107, "size": 294, "type": 5}
+RESOURCE {"language": 2057, "name": 108, "size": 194, "type": 5}
+RESOURCE {"language": 2057, "name": 109, "size": 166, "type": 5}
+RESOURCE {"language": 2057, "name": 110, "size": 206, "type": 5}
+RESOURCE {"language": 2057, "name": 103, "size": 20, "type": 14}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE UniFish3.exe
+SHA256 c9afec414c346fe4785b5b03143254f23b3d5dfec2d81b6c1982483f510da941
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 3.10
+STATIC KERNEL32.dll -> GetSystemDefaultLangID, lstrlenA, lstrcmpiA, lstrcatA, GetCurrentDirectoryA, RemoveDirectoryA, FindNextFileA, CloseHandle, SetEnvironmentVariableA, CompareStringW, HeapReAlloc, GetStringTypeW, GetStringTypeA, CompareStringA, LoadLibraryA, GetProcAddress, SetEndOfFile, CreateFileA, SetFilePointer, GetTimeZoneInformation, SetStdHandle, WriteFile, FlushFileBuffers, GetFileType, SetHandleCount, GetStdHandle, GetACP, GetCPInfo, HeapFree, HeapAlloc, GetLastError, FindFirstFileA, lstrcpyA, FindClose, FileTimeToSystemTime, FileTimeToLocalFileTime, GetModuleHandleA, GetStartupInfoA, GetCommandLineA, GetVersion, HeapCreate, UnhandledExceptionFilter, GetOEMCP, ReadFile, ExitProcess, TerminateProcess, GetCurrentProcess, RtlUnwind, GetModuleFileNameA, FreeEnvironmentStringsA, MultiByteToWideChar, GetEnvironmentStrings, FreeEnvironmentStringsW, GetEnvironmentStringsW, WideCharToMultiByte
+STATIC USER32.dll -> ExitWindowsEx, EndDialog, MessageBoxA, SetWindowTextA, ShowWindow, EnableWindow, SetCursor, LoadCursorA, SendDlgItemMessageA, GetDlgItem, SetDlgItemTextA, DialogBoxParamA, FindWindowA, SendMessageA, wsprintfA, wvsprintfA
+STATIC GDI32.dll -> DeleteObject, CreateFontIndirectA
+STATIC ADVAPI32.dll -> RegDeleteKeyA, RegCloseKey, RegQueryValueExA, RegOpenKeyA, RegDeleteValueA
+STATIC SHELL32.dll -> SHGetMalloc, SHBrowseForFolder, SHGetPathFromIDList, SHFileOperationA
+RESOURCE {"language": 2057, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 2057, "name": "DLG_MASTER", "size": 1222, "type": 5}
+RESOURCE {"language": 2057, "name": "SETUP_ICON", "size": 20, "type": 14}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: jazz2-shareware
+# command: python3 -B scripts/win32/census.py jazz2-shareware/jazz2swf.exe
+FILE jazz2swf.exe
+SHA256 ce1bfbc7727a6ff03ba461ad5fdc7c292d3b90924baaf6111d7bbfecf7a55231
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC MPR.dll -> WNetConnectionDialog
+STATIC VERSION.dll -> GetFileVersionInfoA, GetFileVersionInfoSizeA, VerQueryValueA
+STATIC COMCTL32.dll -> ImageList_GetIconSize, PropertySheetA, ImageList_DrawEx
+STATIC KERNEL32.dll -> GetUserDefaultLangID, FreeLibrary, CreateFileA, GetSystemDirectoryA, GetTempPathA, LocalFree, GetFileSize, GetVolumeInformationA, GetCurrentDirectoryA, SetCurrentDirectoryA, LocalAlloc, LoadLibraryA, FormatMessageA, GetProcAddress, GetFileAttributesA, GetDiskFreeSpaceA, MulDiv, ReadFile, GetModuleFileNameA, SetFileAttributesA, GetFileTime, GetTimeFormatA, GetDateFormatA, FileTimeToSystemTime, WriteFile, CreateDirectoryA, SetFileTime, RemoveDirectoryA, SetLastError, GetWindowsDirectoryA, CreateFileMappingA, GetLastError, GetVersionExA, ExitProcess, GetCurrentProcess, GetStringTypeW, SetStdHandle, FlushFileBuffers, SetFilePointer, CloseHandle, MultiByteToWideChar, DeleteFileA, GetNumberFormatA, GetLogicalDrives, FindClose, FindNextFileA, GetStdHandle, IsBadReadPtr, FindFirstFileA, GetFileType, GetOEMCP, GetACP, SetHandleCount, SetUnhandledExceptionFilter, GetEnvironmentStrings, FreeEnvironmentStringsW, FreeEnvironmentStringsA, UnhandledExceptionFilter, TerminateProcess, VirtualAlloc, VirtualFree, HeapCreate, HeapDestroy, LCMapStringW, LCMapStringA, WideCharToMultiByte, GetEnvironmentStringsW, HeapFree, GetVersion, GetCommandLineA, GetStartupInfoA, GetModuleHandleA, HeapAlloc, RaiseException, RtlUnwind, IsBadWritePtr, IsBadCodePtr, GetStringTypeA, GetCPInfo
+STATIC USER32.dll -> LoadStringA, RegisterClassA, MessageBoxA, CreateDialogParamA, LoadIconA, SetWindowLongA, LoadCursorA, DefWindowProcA, GetParent, ReleaseDC, GetDC, PostMessageA, SendDlgItemMessageA, CreateWindowExA, SetDlgItemTextA, DialogBoxParamA, ShowWindow, GetDlgItem, PeekMessageA, TranslateMessage, IsDialogMessageA, DispatchMessageA, OffsetRect, MoveWindow, GetWindowRect, SetWindowPos, LoadImageA, GetClientRect, GetSystemMetrics, GetSysColor, DrawFocusRect, DestroyWindow, SendMessageA, ExitWindowsEx, EnableWindow, EndDialog, SetWindowTextA
+STATIC GDI32.dll -> ExtTextOutA, SetBkColor, GetTextExtentExPointA, GetTextExtentPoint32A, SelectObject, CreateFontIndirectA, GetDeviceCaps, CreateCompatibleDC, SetTextColor
+STATIC ADVAPI32.dll -> RegQueryInfoKeyA, AdjustTokenPrivileges, LookupPrivilegeValueA, OpenProcessToken, RegCloseKey, RegDeleteKeyA, RegQueryValueExA, RegSetValueExA, RegCreateKeyExA, RegOpenKeyExA
+STATIC SHELL32.dll -> SHGetFileInfoA, SHChangeNotify
+STATIC ole32.dll -> CoInitialize, CoCreateInstance
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 104, "size": 398, "type": 5}
+RESOURCE {"language": 1033, "name": 105, "size": 112, "type": 5}
+RESOURCE {"language": 1033, "name": 106, "size": 392, "type": 5}
+RESOURCE {"language": 1033, "name": 107, "size": 274, "type": 5}
+RESOURCE {"language": 1033, "name": 109, "size": 54, "type": 5}
+RESOURCE {"language": 1033, "name": 1, "size": 342, "type": 6}
+RESOURCE {"language": 1033, "name": 20, "size": 34, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 736, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: ta-demo
+# command: python3 -B scripts/win32/census.py ta-demo/Total Annihilation.exe
+FILE Total Annihilation.exe
+SHA256 5e41cf05226c274b4ac9e4398f74f6b321506bd7a4317ee1744ff7aceba34c49
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 4.20
+STATIC KERNEL32.dll -> RaiseException, HeapReAlloc, HeapSize, HeapAlloc, GetCPInfo, GetACP, GetOEMCP, GetTimeZoneInformation, UnhandledExceptionFilter, FreeEnvironmentStringsA, GetEnvironmentStrings, FreeEnvironmentStringsW, GetEnvironmentStringsW, SetHandleCount, GetFileType, GetStdHandle, HeapDestroy, HeapCreate, VirtualFree, HeapFree, GetProcAddress, IsBadReadPtr, IsBadWritePtr, IsBadCodePtr, LCMapStringA, LCMapStringW, SetStdHandle, GetLocaleInfoA, GetLocaleInfoW, CompareStringA, CompareStringW, SetEnvironmentVariableA, GlobalUnlock, GlobalFree, TerminateProcess, ExitProcess, GetCommandLineA, GetStartupInfoA, GetModuleHandleA, RtlUnwind, FileTimeToLocalFileTime, FileTimeToSystemTime, GlobalGetAtomNameA, GlobalAddAtomA, SetErrorMode, GetFileTime, GetFileSize, GetProcessVersion, GetVersion, SetLastError, WritePrivateProfileStringA, GlobalFlags, TlsGetValue, LocalReAlloc, TlsSetValue, EnterCriticalSection, GlobalReAlloc, LeaveCriticalSection, GlobalHandle, DeleteCriticalSection, TlsAlloc, InitializeCriticalSection, LocalAlloc, GetModuleFileNameA, lstrcmpiA, GetFullPathNameA, lstrcpynA, GetVolumeInformationA, FindFirstFileA, FindClose, LoadLibraryA, lstrcpyA, SetUnhandledExceptionFilter, FreeLibrary, CloseHandle, GetStringTypeA, SetEndOfFile, LockResource, UnlockFile, LockFile, FlushFileBuffers, SetFilePointer, WriteFile, ReadFile, CreateFileA, GetCurrentProcess, DuplicateHandle, GetLastError, MulDiv, LocalFree, lstrcatA, MultiByteToWideChar, WideCharToMultiByte, lstrlenA, InterlockedDecrement, InterlockedIncrement, GetStringTypeW, VirtualAlloc, GlobalAlloc, GetCurrentThreadId, SizeofResource, LoadResource, FindResourceA, CreateDirectoryA, GetProfileStringA, GetCurrentThread, lstrcmpA, GlobalDeleteAtom, GlobalLock
+STATIC USER32.dll -> ShowWindow, IsDialogMessageA, SetWindowTextA, GetDC, ReleaseDC, GetWindowDC, BeginPaint, EndPaint, TabbedTextOutA, GrayStringA, LoadCursorA, ReleaseCapture, GetDesktopWindow, WindowFromPoint, ClientToScreen, GetClassNameA, PtInRect, DrawTextA, LoadStringA, GetSysColorBrush, DestroyMenu, SetRectEmpty, LoadAcceleratorsA, TranslateAcceleratorA, LoadMenuA, SetMenu, ReuseDDElParam, UnpackDDElParam, InvalidateRect, BringWindowToTop, IntersectRect, InflateRect, ScreenToClient, GetTopWindow, GetCapture, WinHelpA, wsprintfA, GetClassInfoA, RegisterClassA, GetSubMenu, GetMenuItemID, EndDeferWindowPos, GetWindowTextA, GetDlgCtrlID, SetPropA, UnhookWindowsHookEx, GetLastActivePopup, SetForegroundWindow, GetPropA, RemovePropA, CallWindowProcA, GetMessageTime, GetMessagePos, GetWindow, GetWindowRect, SetWindowLongA, SetWindowPos, RegisterWindowMessageA, CharUpperA, EndDialog, SetActiveWindow, IsWindow, CreateDialogIndirectParamA, DestroyWindow, GetWindowLongA, GetDlgItem, IsWindowEnabled, GetMenuCheckMarkDimensions, LoadBitmapA, GetMenuState, ModifyMenuA, SetMenuItemBitmaps, CheckMenuItem, EnableMenuItem, GetFocus, GetParent, GetNextDlgTabItem, GetMessageA, TranslateMessage, DispatchMessageA, GetActiveWindow, GetKeyState, CallNextHookEx, ValidateRect, IsWindowVisible, PeekMessageA, GetCursorPos, SetWindowsHookExA, SetCursor, ShowOwnedPopups, PostQuitMessage, PostMessageA, IsIconic, GetSystemMetrics, SendDlgItemMessageA, GetClientRect, DrawIcon, SystemParametersInfoA, MapWindowPoints, GetSysColor, SetFocus, AdjustWindowRectEx, EqualRect, DeferWindowPos, BeginDeferWindowPos, CopyRect, UpdateWindow, GetMenuItemCount, GetMenu, LoadIconA, EnableWindow, SendMessageA, MessageBoxA, CreateWindowExA, DefWindowProcA, GetForegroundWindow, GetWindowTextLengthA, DrawFocusRect, ExcludeUpdateRgn, DefDlgProcA, IsWindowUnicode, CharNextA, OffsetRect, UnregisterClassA, ShowCaret, HideCaret
+STATIC GDI32.dll -> CreateBitmap, SetBkColor, GetObjectA, DeleteDC, SaveDC, RestoreDC, SelectObject, GetStockObject, SetBkMode, SetMapMode, SetViewportOrgEx, OffsetViewportOrgEx, SetViewportExtEx, ScaleViewportExtEx, ScaleWindowExtEx, GetClipBox, SetWindowExtEx, IntersectClipRect, DeleteObject, GetDeviceCaps, CreateSolidBrush, PtVisible, RectVisible, TextOutA, ExtTextOutA, Escape, GetTextExtentPointA, PatBlt, CreateDIBitmap, CreateCompatibleDC, BitBlt, SetTextColor
+STATIC comdlg32.dll -> GetFileTitleA
+STATIC WINSPOOL.DRV -> DocumentPropertiesA, OpenPrinterA, ClosePrinter
+STATIC ADVAPI32.dll -> RegSetValueExA, RegCloseKey, RegOpenKeyExA, RegCreateKeyExA
+STATIC SHELL32.dll -> DragFinish, ShellExecuteA, DragQueryFileA
+STATIC COMCTL32.dll -> #17, ImageList_Destroy
+RESOURCE {"language": 1033, "name": 130, "size": 20474804, "type": "ADD"}
+RESOURCE {"language": 1033, "name": 135, "size": 24279, "type": "ADD"}
+RESOURCE {"language": 1033, "name": 136, "size": 809984, "type": "ADD"}
+RESOURCE {"language": 1033, "name": 141, "size": 465, "type": "ADD"}
+RESOURCE {"language": 1033, "name": 3, "size": 308, "type": 1}
+RESOURCE {"language": 1033, "name": 4, "size": 180, "type": 1}
+RESOURCE {"language": 1033, "name": 26567, "size": 1508, "type": 2}
+RESOURCE {"language": 1033, "name": 30994, "size": 184, "type": 2}
+RESOURCE {"language": 1033, "name": 30995, "size": 364, "type": 2}
+RESOURCE {"language": 1033, "name": 30996, "size": 324, "type": 2}
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 102, "size": 490, "type": 5}
+RESOURCE {"language": 1033, "name": 134, "size": 430, "type": 5}
+RESOURCE {"language": 1033, "name": 137, "size": 214, "type": 5}
+RESOURCE {"language": 1033, "name": 30721, "size": 232, "type": 5}
+RESOURCE {"language": 1033, "name": 3841, "size": 130, "type": 6}
+RESOURCE {"language": 1033, "name": 3842, "size": 42, "type": 6}
+RESOURCE {"language": 1033, "name": 3843, "size": 330, "type": 6}
+RESOURCE {"language": 1033, "name": 3857, "size": 878, "type": 6}
+RESOURCE {"language": 1033, "name": 3858, "size": 674, "type": 6}
+RESOURCE {"language": 1033, "name": 3859, "size": 732, "type": 6}
+RESOURCE {"language": 1033, "name": 3865, "size": 172, "type": 6}
+RESOURCE {"language": 1033, "name": 3866, "size": 222, "type": 6}
+RESOURCE {"language": 1033, "name": 3867, "size": 1220, "type": 6}
+RESOURCE {"language": 1033, "name": 3868, "size": 612, "type": 6}
+RESOURCE {"language": 1033, "name": 3869, "size": 44, "type": 6}
+RESOURCE {"language": 1033, "name": 30977, "size": 34, "type": 12}
+RESOURCE {"language": 1033, "name": 128, "size": 34, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 800, "type": 16}
+RELOCATION-TYPES 0, 3
+HEURISTICS high-entropy-section (not identification)
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: worms-armageddon-demo
+# command: python3 -B scripts/win32/census.py worms-armageddon-demo/extracted/SETUP.EXE worms-armageddon-demo/extracted/_SETUP.DLL worms-armageddon-demo/extracted/_ISDEL.EXE
+FILE SETUP.EXE
+SHA256 feb61b7f007c8857ca8ae3a2b9d951bae0a52218cba8896291c14ccc9a77593e
+REFUSED pe-signature
+
+FILE _SETUP.DLL
+SHA256 81aa598307e3a87939dcb470bb39c1d200b8d62efa3f5626df2eb8049666d907
+REFUSED pe-signature
+
+FILE _ISDEL.EXE
+SHA256 387d26452afd823fd3265f42eba2733adbdc55d3f241cfa3857ea48f469f0ccc
+REFUSED pe-signature
+
+
+# workload: diablo-shareware
+# command: python3 -B scripts/win32/census.py diablo-shareware/extracted/SETUP.EXE diablo-shareware/extracted/AUTORUN.EXE diablo-shareware/extracted/DIRECTX3/DIRECTX/DXSETUP.EXE diablo-shareware/extracted/DIRECTX3/DIRECTX/DSETUP.DLL
+FILE SETUP.EXE
+SHA256 98c30047079a9416535d68e7c6885128ad23bd9121eda3fa27244f7ab41e8730
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 4.20
+STATIC KERNEL32.dll -> FreeEnvironmentStringsW, GetEnvironmentStringsW, GetModuleFileNameA, LoadLibraryA, GetProcAddress, GetModuleHandleA, GetStartupInfoA, GetCommandLineA, GetVersion, ExitProcess, TerminateProcess, GetCurrentProcess, RtlUnwind, UnhandledExceptionFilter, FreeEnvironmentStringsA, GetEnvironmentStrings, HeapAlloc, VirtualAlloc, WideCharToMultiByte, GetCPInfo, GetACP, GetOEMCP, SetHandleCount, GetFileType, GetStdHandle, HeapDestroy, HeapCreate, VirtualFree, WriteFile, HeapFree
+STATIC USER32.dll -> GetDesktopWindow
+STATIC SHELL32.dll -> ShellExecuteA
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 102, "size": 34, "type": 14}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE AUTORUN.EXE
+SHA256 4d3606188692940860bf36cdc562967920fc2a99fa839afc6e2348b52dfbd7d4
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 4.20
+STATIC KERNEL32.dll -> IsBadCodePtr, GetFileAttributesA, GlobalMemoryStatus, FreeLibrary, GetVersion, LoadLibraryA, CreateProcessA, GetSystemInfo, GetProcAddress, FindFirstFileA, GetDriveTypeA, SetEndOfFile, ExitProcess, GetLastError, lstrcpyA, WideCharToMultiByte, LeaveCriticalSection, EnterCriticalSection, DeleteCriticalSection, InitializeCriticalSection, WriteFile, CloseHandle, DeleteFileA, RemoveDirectoryA, MultiByteToWideChar, CreateDirectoryA, GetWindowsDirectoryA, GetDiskFreeSpaceA, FormatMessageA, GetModuleFileNameA, WaitForMultipleObjects, GetModuleHandleA, SetFilePointer, GetFileSize, Sleep, WaitForSingleObject, ReadFile, GetTickCount, SetThreadPriority, CreateEventA, CreateThread, SetCurrentDirectoryA, SetEvent, OpenEventA, FindClose, FindNextFileA, GetLocaleInfoA, GetStringTypeW, GetStringTypeA, SetStdHandle, GetFileType, SetHandleCount, GetStdHandle, GetACP, GetCPInfo, GetOEMCP, FreeEnvironmentStringsW, GetEnvironmentStrings, GetEnvironmentStringsW, VirtualAlloc, VirtualFree, FlushFileBuffers, FreeEnvironmentStringsA, HeapCreate, CreateFileA, HeapDestroy, UnhandledExceptionFilter, TlsGetValue, SetLastError, TlsAlloc, GetCurrentThreadId, GetCurrentDirectoryA, LCMapStringW, LCMapStringA, HeapSize, HeapReAlloc, GetCurrentProcess, TerminateProcess, GetCommandLineA, GetStartupInfoA, HeapFree, HeapAlloc, RtlUnwind, ExitThread, TlsSetValue, ResumeThread, GetFullPathNameA, GetLocaleInfoW
+STATIC USER32.dll -> DispatchMessageA, GetWindowTextA, GetDC, GetWindowRect, TranslateMessage, GetMessageA, WaitMessage, PeekMessageA, MessageBoxA, GetForegroundWindow, GetActiveWindow, DialogBoxParamA, EndDialog, PostMessageA, GetDlgItem, wvsprintfA, LoadStringA, MessageBeep, SetWindowTextA, GetParent, IntersectRect, GetClientRect, UpdateWindow, ReleaseCapture, SetCapture, InvalidateRect, ScreenToClient, GetCursorPos, IsIconic, LoadIconA, LoadImageA, RegisterClassExA, GetSystemMetrics, CreateWindowExA, GetClassNameA, EnumWindows, wsprintfA, SetCursor, SetActiveWindow, LoadCursorA, SetWindowLongA, SendMessageA, AdjustWindowRect, DestroyWindow, BeginPaint, EndPaint, ShowWindow, DefWindowProcA, GetWindowLongA, GetDesktopWindow, EnableWindow, SetFocus, ReleaseDC, DrawTextA, SetWindowPos, SetForegroundWindow, FindWindowA
+STATIC GDI32.dll -> SelectObject, DeleteObject, SelectPalette, SetBkMode, DeleteDC, BitBlt, RealizePalette, CreateCompatibleBitmap, GetObjectA, CreateCompatibleDC, CreatePalette, GetSystemPaletteEntries, CreateDIBitmap, CreateFontA, SetDIBitsToDevice, SetPaletteEntries, GetDeviceCaps, SetTextColor
+STATIC COMCTL32.dll -> #17
+STATIC ADVAPI32.dll -> RegCloseKey, RegSetValueExA, RegOpenKeyExA, RegCreateKeyExA, RegFlushKey, RegDeleteValueA, RegQueryValueExA, RegDeleteKeyA, RegQueryInfoKeyA
+STATIC SHELL32.dll -> SHGetMalloc, SHGetDesktopFolder, ShellExecuteA, SHGetSpecialFolderLocation, SHGetFileInfoA
+STATIC WINMM.dll -> #2
+STATIC ole32.dll -> CoCreateInstance, CoInitialize
+RESOURCE {"language": 1033, "name": 111, "size": 22444, "type": "WAVE"}
+RESOURCE {"language": 1033, "name": 112, "size": 837672, "type": "WAVE"}
+RESOURCE {"language": 1033, "name": 1, "size": 3752, "type": 3}
+RESOURCE {"language": 1033, "name": 2, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 3, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 104, "size": 446, "type": 5}
+RESOURCE {"language": 1033, "name": 105, "size": 268, "type": 5}
+RESOURCE {"language": 1033, "name": 113, "size": 400, "type": 5}
+RESOURCE {"language": 1033, "name": 114, "size": 400, "type": 5}
+RESOURCE {"language": 1033, "name": 115, "size": 1290, "type": 5}
+RESOURCE {"language": 1033, "name": 200, "size": 184, "type": 5}
+RESOURCE {"language": 1033, "name": 201, "size": 516, "type": 5}
+RESOURCE {"language": 1033, "name": 202, "size": 508, "type": 5}
+RESOURCE {"language": 1033, "name": 2010, "size": 616, "type": 5}
+RESOURCE {"language": 1033, "name": 2011, "size": 264, "type": 5}
+RESOURCE {"language": 1033, "name": 1, "size": 654, "type": 6}
+RESOURCE {"language": 1033, "name": 2, "size": 1432, "type": 6}
+RESOURCE {"language": 1033, "name": 3, "size": 650, "type": 6}
+RESOURCE {"language": 1033, "name": 63, "size": 262, "type": 6}
+RESOURCE {"language": 1033, "name": 64, "size": 408, "type": 6}
+RESOURCE {"language": 1033, "name": 126, "size": 348, "type": 6}
+RESOURCE {"language": 1033, "name": "DIABLO_SETUP", "size": 48, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 736, "type": 16}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE DXSETUP.EXE
+SHA256 b7f69a8340348629888074bce9685c790a1f2cff2f1a0759830ddd5294dd1605
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 3.10
+STATIC KERNEL32.dll -> SetCurrentDirectoryA, lstrlenA, GetModuleFileNameA, lstrcmpiA, SetErrorMode, SetFilePointer, GetLastError, GetStartupInfoA, FlushFileBuffers, HeapAlloc, HeapFree, LeaveCriticalSection, EnterCriticalSection, InitializeCriticalSection, WriteFile, HeapCreate, TlsGetValue, SetLastError, TlsAlloc, TlsSetValue, GetCurrentThreadId, DeleteCriticalSection, GetStdHandle, GetFileAttributesA, GetSystemDirectoryA, lstrcatA, LoadLibraryA, GetProcAddress, FreeLibrary, RtlZeroMemory, ExitProcess, GetModuleHandleA, RtlUnwind, LocalAlloc, LocalFree, SetStdHandle, lstrcpyA, CloseHandle, GetFileType, GetEnvironmentStrings, GetCommandLineA, GetVersion, FreeEnvironmentStringsW, GetEnvironmentStringsW, UnhandledExceptionFilter, FreeEnvironmentStringsA, WideCharToMultiByte, GetOEMCP, GetACP, GetCPInfo, SetHandleCount
+STATIC USER32.dll -> SetWindowPos, ReleaseDC, MessageBoxA, DialogBoxParamA, ShowWindow, IsDlgButtonChecked, GetDesktopWindow, IsWindowEnabled, SendDlgItemMessageA, MessageBeep, GetDlgItem, EndDialog, LoadCursorA, SetCursor, GetAsyncKeyState, ExitWindowsEx, EnableWindow, SendMessageA, LoadStringA, wvsprintfA, GetDC, GetWindowRect
+STATIC ADVAPI32.dll -> RegSetValueExA, RegOpenKeyExA, RegOpenKeyA, RegDeleteValueA, RegCloseKey, RegQueryValueExA
+STATIC GDI32.dll -> ExtEscape, GetDeviceCaps
+STATIC COMCTL32.dll -> #17
+STATIC VERSION.dll -> GetFileVersionInfoSizeA, VerQueryValueA, GetFileVersionInfoA
+RESOURCE {"language": 1033, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1041, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 1033, "name": 1000, "size": 764, "type": 5}
+RESOURCE {"language": 1041, "name": 1000, "size": 744, "type": 5}
+RESOURCE {"language": 1033, "name": 2000, "size": 362, "type": 5}
+RESOURCE {"language": 1041, "name": 2000, "size": 332, "type": 5}
+RESOURCE {"language": 1033, "name": 7, "size": 554, "type": 6}
+RESOURCE {"language": 1041, "name": 7, "size": 464, "type": 6}
+RESOURCE {"language": 1033, "name": 13, "size": 258, "type": 6}
+RESOURCE {"language": 1041, "name": 13, "size": 260, "type": 6}
+RESOURCE {"language": 1033, "name": 14, "size": 362, "type": 6}
+RESOURCE {"language": 1041, "name": 14, "size": 364, "type": 6}
+RESOURCE {"language": 1033, "name": 15, "size": 186, "type": 6}
+RESOURCE {"language": 1041, "name": 15, "size": 92, "type": 6}
+RESOURCE {"language": 1033, "name": 19, "size": 64, "type": 6}
+RESOURCE {"language": 1041, "name": 19, "size": 64, "type": 6}
+RESOURCE {"language": 1033, "name": "SETUP_ICON", "size": 20, "type": 14}
+RESOURCE {"language": 1041, "name": "SETUP_ICON", "size": 20, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 844, "type": 16}
+RESOURCE {"language": 1041, "name": 1, "size": 848, "type": 16}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE DSETUP.DLL
+SHA256 5b4e2fb6e03daf95bbc5da013c0696cabc2f1df3260c9fce9b79cc5145b63caa
+FORMAT PE32 i386 DLL
+SUBSYSTEM gui LINKER 3.10
+STATIC KERNEL32.dll -> lstrlenA, IsBadStringPtrW, lstrcpyA, SetErrorMode, IsBadStringPtrA, IsBadReadPtr, LocalFree, LocalAlloc, GetCommandLineA, GetModuleHandleA, GetModuleFileNameA, GetVersion, GetCurrentThreadId, TlsSetValue, TlsAlloc, TlsFree, SetLastError, TlsGetValue, GetLastError, HeapCreate, HeapDestroy, SetHandleCount, ExitProcess, WideCharToMultiByte, GetStartupInfoA, DeleteCriticalSection, GetCPInfo, GetACP, GetOEMCP, FreeEnvironmentStringsA, GetProcAddress, GetEnvironmentStrings, FreeEnvironmentStringsW, GetEnvironmentStringsW, WriteFile, InitializeCriticalSection, EnterCriticalSection, LeaveCriticalSection, HeapAlloc, HeapFree, FlushFileBuffers, CloseHandle, SetStdHandle, SetFilePointer, GetSystemDefaultLCID, lstrlenW, LoadLibraryA, GetVersionExA, FreeLibrary, GetFileType, GetStdHandle
+STATIC USER32.dll -> wsprintfA, MessageBoxIndirectA, GetKeyboardType, LoadStringW, wsprintfW, LoadStringA
+STATIC ADVAPI32.dll -> RegSetValueExA, RegCreateKeyExA, RegCloseKey, RegCreateKeyExW, RegQueryValueExA, RegSetValueExW, RegOpenKeyExA
+STATIC VERSION.dll -> GetFileVersionInfoSizeA, GetFileVersionInfoA, VerQueryValueA
+STATIC ole32.dll -> StringFromGUID2
+EXPORT #1 DirectXDeviceDriverSetupA
+EXPORT #2 DirectXDeviceDriverSetupW
+EXPORT #3 DirectXRegisterApplicationA
+EXPORT #4 DirectXRegisterApplicationW
+EXPORT #5 DirectXSetupA
+EXPORT #6 DirectXSetupIsJapan
+EXPORT #7 DirectXSetupIsJapanNec
+EXPORT #8 DirectXSetupW
+EXPORT #9 DllMain
+RESOURCE {"language": 1033, "name": 63, "size": 482, "type": 6}
+RESOURCE {"language": 1033, "name": 126, "size": 200, "type": 6}
+RESOURCE {"language": 1033, "name": 188, "size": 190, "type": 6}
+RESOURCE {"language": 1033, "name": 194, "size": 116, "type": 6}
+RESOURCE {"language": 1033, "name": 1, "size": 844, "type": 16}
+RELOCATION-TYPES 0, 3
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+
+# workload: starcraft-shareware
+# command: python3 -B scripts/win32/census.py starcraft-shareware/extracted/SETUP.EXE starcraft-shareware/extracted/INSTALL.EXE
+FILE SETUP.EXE
+SHA256 ab0c5f9ffabf9e879ba89405eaed97064d4edf8ab17764f4b2b36cd3dd893cb7
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.2
+STATIC KERNEL32.dll -> WideCharToMultiByte, OpenEventA, GetModuleHandleA, GetModuleFileNameA, GetACP, GetOEMCP, GetProcAddress, VirtualAlloc, GetStartupInfoA, GetCommandLineA, GetVersion, ExitProcess, TerminateProcess, GetCurrentProcess, UnhandledExceptionFilter, FreeEnvironmentStringsA, MultiByteToWideChar, FreeEnvironmentStringsW, GetEnvironmentStrings, GetEnvironmentStringsW, CloseHandle, GetCPInfo, RtlUnwind, LoadLibraryA, SetHandleCount, GetStdHandle, GetFileType, HeapDestroy, HeapCreate, VirtualFree, WriteFile, HeapFree, HeapAlloc, LCMapStringA, LCMapStringW, GetStringTypeA, GetStringTypeW
+STATIC USER32.dll -> LoadStringA
+STATIC SHELL32.dll -> ShellExecuteA
+RESOURCE {"language": 0, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 0, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 0, "name": 7, "size": 120, "type": 6}
+RESOURCE {"language": 0, "name": 100, "size": 34, "type": 14}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+
+FILE INSTALL.EXE
+SHA256 8c8855f29d1fb3265727021381d82bf35555a736a27896d9f159c3f34bebe0a8
+FORMAT PE32 i386 EXE
+SUBSYSTEM gui LINKER 5.10
+STATIC VERSION.dll -> VerQueryValueA, GetFileVersionInfoA, GetFileVersionInfoSizeA
+STATIC WINMM.dll -> PlaySoundA
+STATIC KERNEL32.dll -> CreateProcessA, WaitForSingleObject, MultiByteToWideChar, GetDiskFreeSpaceA, WideCharToMultiByte, SetFilePointer, CreateEventA, OpenEventA, SetErrorMode, GetModuleFileNameA, GetModuleHandleA, GetCurrentProcess, SetEndOfFile, VirtualFree, VirtualUnlock, UnmapViewOfFile, MapViewOfFile, CreateFileMappingA, VirtualLock, VirtualAlloc, DeleteCriticalSection, HeapFree, GetProcessHeap, TerminateProcess, GetExitCodeProcess, GetVersion, MoveFileExA, EnterCriticalSection, InterlockedDecrement, InitializeCriticalSection, InterlockedIncrement, GetWindowsDirectoryA, SetVolumeLabelA, FindFirstFileA, GetDriveTypeA, SetEvent, SetThreadPriority, CreateThread, GetTickCount, Sleep, GetFileAttributesA, GetVolumeInformationA, lstrcmpA, SetLastError, RemoveDirectoryA, DeleteFileA, lstrlenA, lstrcpyA, lstrcatA, ExitProcess, GetLastError, FormatMessageA, GetLocaleInfoW, LoadLibraryA, GetShortPathNameA, WritePrivateProfileStringA, lstrcpynA, GetProcAddress, FreeLibrary, WriteFile, GetFileSize, ReadFile, lstrcmpiA, CreateFileA, CloseHandle, LeaveCriticalSection, FindClose, GetLocaleInfoA, CreateDirectoryA, GetCurrentDirectoryA, SetCurrentDirectoryA, HeapAlloc, GetSystemDirectoryA, RaiseException, GetVersionExA, GetSystemInfo, OutputDebugStringA, IsBadCodePtr, IsBadWritePtr, IsBadReadPtr, SetUnhandledExceptionFilter, FlushFileBuffers, SetStdHandle, HeapCreate, HeapDestroy, GetFileType, GetStdHandle, SetHandleCount, GetOEMCP, GetACP, GetCPInfo, GetEnvironmentStringsW, GetEnvironmentStrings, FreeEnvironmentStringsW, FreeEnvironmentStringsA, HeapSize, HeapReAlloc, LCMapStringW, LCMapStringA, UnhandledExceptionFilter, TlsGetValue, TlsAlloc, GetCurrentThreadId, GetFullPathNameA, GetCommandLineA, GetStartupInfoA, ExitThread, TlsSetValue, ResumeThread, RtlUnwind, GetStringTypeA, GetStringTypeW
+STATIC USER32.dll -> SetWindowTextA, SendMessageA, GetDlgItemTextA, GetDlgItem, SetFocus, SetActiveWindow, GetParent, SetWindowLongA, EndDialog, SetDlgItemTextA, DialogBoxParamA, wvsprintfA, MessageBoxA, wsprintfA, SetCapture, ReleaseCapture, SetCursor, LoadCursorA, GetWindowTextA, CallWindowProcA, EndPaint, BeginPaint, ShowWindow, RegisterWindowMessageA, CreateWindowExA, AdjustWindowRect, GetSystemMetrics, RegisterClassExA, InvalidateRect, PostQuitMessage, GetActiveWindow, DefWindowProcA, ReleaseDC, DestroyWindow, ShowCursor, DispatchMessageA, TranslateMessage, PeekMessageA, GetWindowLongA, GetDesktopWindow, DestroyCursor, GetForegroundWindow, CreateCursor, RegisterClassA, ExitWindowsEx, GetWindowRect, SetWindowPos, WaitMessage, LoadStringA, FindWindowA, GetLastActivePopup, GetTopWindow, SetForegroundWindow, KillTimer, WaitForInputIdle, SetTimer, PostMessageA, MessageBeep, LoadImageA, LoadIconA, GetDC
+STATIC GDI32.dll -> BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteObject, GetSystemPaletteEntries, DeleteDC, SetDIBColorTable, SetPaletteEntries, GetDeviceCaps, RealizePalette, SelectPalette, CreatePalette, GetStockObject, SelectObject
+STATIC comdlg32.dll -> GetSaveFileNameA
+STATIC ADVAPI32.dll -> RegDeleteKeyA, RegQueryValueExA, RegOpenKeyExA, RegCreateKeyExA, RegCloseKey, RegSetValueExA, RegDeleteValueA, RegEnumValueA, RegEnumKeyA, RegQueryInfoKeyA, AdjustTokenPrivileges, LookupPrivilegeValueA, OpenProcessToken
+STATIC SHELL32.dll -> SHGetMalloc, SHGetSpecialFolderLocation, SHGetFileInfoA, SHGetDesktopFolder, ShellExecuteA, FindExecutableA
+STATIC ole32.dll -> CoInitialize, CoCreateInstance
+RESOURCE {"language": 0, "name": 1, "size": 744, "type": 3}
+RESOURCE {"language": 0, "name": 2, "size": 296, "type": 3}
+RESOURCE {"language": 1033, "name": 1300, "size": 652, "type": 5}
+RESOURCE {"language": 1033, "name": 1301, "size": 308, "type": 5}
+RESOURCE {"language": 1033, "name": 1302, "size": 452, "type": 5}
+RESOURCE {"language": 1033, "name": 1303, "size": 916, "type": 5}
+RESOURCE {"language": 1033, "name": 1304, "size": 644, "type": 5}
+RESOURCE {"language": 1033, "name": 1305, "size": 178, "type": 5}
+RESOURCE {"language": 1033, "name": 1306, "size": 288, "type": 5}
+RESOURCE {"language": 1033, "name": 1307, "size": 436, "type": 5}
+RESOURCE {"language": 1033, "name": 1308, "size": 502, "type": 5}
+RESOURCE {"language": 1033, "name": 1309, "size": 168, "type": 5}
+RESOURCE {"language": 1033, "name": 1310, "size": 510, "type": 5}
+RESOURCE {"language": 1033, "name": 1311, "size": 360, "type": 5}
+RESOURCE {"language": 1033, "name": 1313, "size": 476, "type": 5}
+RESOURCE {"language": 1033, "name": 1314, "size": 340, "type": 5}
+RESOURCE {"language": 1033, "name": 1315, "size": 646, "type": 5}
+RESOURCE {"language": 1033, "name": 1316, "size": 372, "type": 5}
+RESOURCE {"language": 1033, "name": 7, "size": 100, "type": 6}
+RESOURCE {"language": 1033, "name": 13, "size": 430, "type": 6}
+RESOURCE {"language": 1033, "name": 19, "size": 100, "type": 6}
+RESOURCE {"language": 1033, "name": 26, "size": 286, "type": 6}
+RESOURCE {"language": 1033, "name": 32, "size": 1496, "type": 6}
+RESOURCE {"language": 1033, "name": 38, "size": 932, "type": 6}
+RESOURCE {"language": 1033, "name": 44, "size": 490, "type": 6}
+RESOURCE {"language": 1033, "name": 45, "size": 536, "type": 6}
+RESOURCE {"language": 1033, "name": 51, "size": 190, "type": 6}
+RESOURCE {"language": 1033, "name": 57, "size": 772, "type": 6}
+RESOURCE {"language": 1033, "name": 63, "size": 524, "type": 6}
+RESOURCE {"language": 1033, "name": 69, "size": 378, "type": 6}
+RESOURCE {"language": 1033, "name": 70, "size": 172, "type": 6}
+RESOURCE {"language": 1033, "name": 76, "size": 278, "type": 6}
+RESOURCE {"language": 0, "name": 100, "size": 34, "type": 14}
+RESOURCE {"language": 1033, "name": 1, "size": 756, "type": 16}
+RELOCATION-TYPES none
+DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
+

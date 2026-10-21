@@ -11,6 +11,7 @@
 #include <ciuki/version.h>
 #pragma weak audio_write_user
 #pragma weak audio_devctl
+#pragma weak audio_refill_reader
 #pragma weak net_devctl
 bool net_socket_object(struct proc_object *) __attribute__((weak));
 int32_t net_socket_rw(struct process *, int, uint32_t, uint32_t, bool) __attribute__((weak));
@@ -95,17 +96,6 @@ static bool caught(void)
 static uint64_t file_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000u; }
 static bool file_cancelled(void *arg) { (void)arg; return caught(); }
 static void file_pause(void *arg) { (void)arg; task_sleep_ms(1); }
-static bool file_audio_reader(struct process *p) {
-    if (g_current && g_current->prio==P_DEVICE) return true;
-    /* The decoder runs in a native pthread, not the kernel refill worker.
-     * Derive the I/O deadline class from its live output endpoint, never a
-     * process name or a path supplied by the caller. */
-    for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
-        struct file_description *d=file_fd(p,(int32_t)fd);
-        if (d && d->node->kind==PX_AUDIO && d->audio) return true;
-    }
-    return false;
-}
 static const char *file_tag(uint32_t nr) {
     switch (nr) {
     case CIUKI_SYS_READ: case CIUKI_SYS_PREAD: return "read";
@@ -364,7 +354,7 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     op->request=(struct vfs_request){.deadline=UINT64_MAX,.now=file_now,
         .cancelled=(nr==CIUKI_SYS_READ || nr==CIUKI_SYS_PREAD) ? file_cancelled : 0,
         .pause=file_pause,.operation=file_tag(nr),.site="native",
-        .urgent_reader=file_audio_reader(p)};
+        .urgent_reader=(nr==CIUKI_SYS_READ || nr==CIUKI_SYS_PREAD) && audio_refill_reader && audio_refill_reader(p,tf->edx)};
     fs_request_enter(&op->scope,&op->request); op->scoped=true;
     struct proc_thread *thread = proc_thread_for(g_current);
     if (thread) { thread->cleanup = operation_free; thread->operation = op; }

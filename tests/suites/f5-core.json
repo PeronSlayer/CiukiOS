@@ -1271,8 +1271,7 @@
             }
           }
         ]
-      },
-      "integration_pending": "f5-15A2: authored, unrun: approved pinned NSIS compiler/fixture, guest controller and selector registration required before execution"
+      }
     },
     {
       "id": "w32-restart-qemu-t23",

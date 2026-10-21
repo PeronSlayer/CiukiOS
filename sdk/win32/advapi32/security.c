@@ -307,6 +307,14 @@ int W32API SetFileSecurityW(const WCHAR *file, uint32_t information, void *sd) {
   (void)sd;
   W21("SetFileSecurityW", 0);
 }
+/* NSIS 2.51 eagerly imports A even on its 9x path. Supply the same typed
+ * refusal as W; accepting an ACL on FAT would report unenforced security. */
+int W32API SetFileSecurityA(const char *file, uint32_t information, void *sd) {
+  (void)file;
+  (void)information;
+  (void)sd;
+  W21("SetFileSecurityA", 0);
+}
 int W32API LookupPrivilegeValueW(const WCHAR *system, const WCHAR *name, void *luid) {
   (void)system;
   (void)name;

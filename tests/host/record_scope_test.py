@@ -18,6 +18,8 @@ ALLOWED = {
     'probes/f2_probes_signals.c',
     'probes/f2_probes_desktop.c',
     'probes/f5_restart_observer.inc', # f5-07D registered w32-restart controller, included by desktop probe TU
+    'probes/installer_probe.inc', # f5-15A2 registered w32-installer-nsis controller, included by desktop probe TU
+    'probes/installer_title_probe.inc', # f5-15C registered win32-<alias> installers-tier observer, included by desktop probe TU
     'probes/f2_probes_app.c',
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
@@ -26,6 +28,7 @@ ALLOWED = {
     'probes/f4_probes_vm_audio.c', # f4-05 DOS VM audio output controller (f4:vm-audio)
     'probes/f3_probes_vm.c',
     'probes/f3_probes_dos_conformance.c', # f3-51 explicit-only differential controller
+    'probes/f3_probes_titles.c', # f3-53 selector-only private title controller
     'probes/f3_probes_devices.c', # f3-01 DOS device controller (f3:vm-devices)
     'probes/f3_probes_video.c', # f3-02 virtual VGA stage digests
     'probes/f3_probes_audio_state.c', # f3-05 SB16/OPL3/8237 controller (f3:vm-audio-state)

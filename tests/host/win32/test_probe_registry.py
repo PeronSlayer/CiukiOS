@@ -15,8 +15,14 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# Only the separately owned NSIS observer remains pending.
-UNREGISTERED = {'w32-installer-nsis': 'f5-15A2'}
+# All core observers, including the separate NSIS flow, are registered.
+UNREGISTERED = {}
+# f5-15C installers tier: the title aliases are in the kernel selector and the
+# loader model; the loader table line is build/codex/f5-15c-menu-inc.patch,
+# applied by the lead after the f0-54 merge (the fixed extent is full here).
+# Empty this tuple when the patch is applied: the test then requires equality.
+MENU_PENDING = ()  # the ten f5-15C title probes joined the loader table on 2026-10-21 (after f0-54)
+F5_SUITES = ('f5-core.json', 'f5-installers.json', 'f5-titles.json')
 
 
 def selector_names():
@@ -41,7 +47,8 @@ def loader_names():
 class ProbeRegistryTests(unittest.TestCase):
     def test_kernel_and_loader_tables_are_the_same_list(self):
         loader, items = loader_names()
-        self.assertEqual(selector_names(), loader)
+        self.assertEqual([n for n in selector_names() if n not in MENU_PENDING], loader)
+        self.assertFalse(set(MENU_PENDING) & set(loader), 'patch applied: empty MENU_PENDING')
         self.assertEqual(items[-2:], ['0', '0'], 'the table ends with an empty name')
         self.assertEqual(len(set(loader)), len(loader))
 
@@ -68,8 +75,9 @@ class ProbeRegistryTests(unittest.TestCase):
         self.assertEqual(set(UNREGISTERED), pending)
 
     def test_every_registered_probe_has_its_registration_and_a_suite_case(self):
-        suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
-        probes = {case['probe'] for case in suite['cases']}
+        probes = set()
+        for name in F5_SUITES:
+            probes |= {case['probe'] for case in json.loads((ROOT / 'tests/suites' / name).read_text())['cases']}
         sources = ''.join(p.read_text() for p in (ROOT / 'src/kernel/probes').glob('*.c'))
         for name in selector_names():
             if name == 'f5-core':
@@ -123,6 +131,12 @@ class ProbeWriteGateTests(unittest.TestCase):
         self.assertEqual(self.starters('int probe(void) {'+launch+gate+'}'), [('probe', False)])
         self.assertEqual(self.starters('int probe(void) {'+gate+launch+'}'), [('probe', True)])
 
+    def test_installers_tier_probe_opens_the_gate_before_the_desktop(self):
+        """f5-15C: probe_title lives in an .inc included by the desktop probe TU."""
+        source = (ROOT/'src/kernel/probes/installer_title_probe.inc').read_text()
+        self.assertIn(('probe_title', True), self.starters(source))
+        removed = source.replace('storage_enable_write(storage_get(),2)', '0')
+        self.assertIn(('probe_title', False), self.starters(removed))
 
 if __name__ == '__main__':
     unittest.main()

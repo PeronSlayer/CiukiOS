@@ -17,6 +17,10 @@ int main(void) {
     for(unsigned game=1;game<=3;game++) assert(!dosbox_setting_load(game));
     assert(!dosbox_kernel_value(NULL) && !dosbox_kernel_value("bad"));
     assert(dosbox_kernel_value("freedos-1.3")==1);
+    assert(dosbox_kernel_value("unified")==CIUKI_DOSVM_UNIFIED);
+    assert(!dosbox_setting_save(1,CIUKI_DOSVM_UNIFIED));
+    assert(dosbox_setting_load(1)==CIUKI_DOSVM_UNIFIED);
+    assert(!dosbox_setting_save(1,0));
     assert(!dosbox_setting_save(2,1));
     assert(dosbox_setting_load(2)==1 && !dosbox_setting_load(1) && !dosbox_setting_load(3));
     char path[128]; assert(!dosbox_setting_path(1,path,sizeof(path)));
@@ -25,7 +29,7 @@ int main(void) {
     assert(!dosbox_setting_load(1) && dosbox_setting_load(2)==1);
     file=fopen(path,"wb"); assert(file); fputs("DOS kernel=master\n",file); fclose(file);
     assert(!dosbox_setting_load(1));
-    assert(dosbox_setting_save(0,1)==-1 && dosbox_setting_save(4,1)==-1 && dosbox_setting_save(1,2)==-1);
+    assert(dosbox_setting_save(0,1)==-1 && dosbox_setting_save(4,1)==-1 && dosbox_setting_save(1,3)==-1);
     assert(dosbox_setting_load(2)==1);
     assert(!dosbox_setting_save(2,0) && !dosbox_setting_load(2));
     /* Failed replacement preserves existing selection, reports failure and

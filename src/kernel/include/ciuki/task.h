@@ -13,7 +13,8 @@ enum task_state { T_READY, T_RUNNING, T_BLOCKED, T_ZOMBIE, T_DEAD };
 /* Stable class encodings; larger internal levels below run first. */
 enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_HIGH, P_COUNT };
 #define SCHED_LEVELS 32u
-#define SCHED_NORMAL 7u
+/* A priority level, distinct from the host's SCHED_NORMAL policy. */
+#define CIUKI_SCHED_NORMAL 7u
 #define SCHED_FOREGROUND 9u
 #define SCHED_HIGH 13u
 #define SCHED_DEVICE 24u
@@ -50,9 +51,11 @@ struct task {
     enum task_prio prio;
     uint8_t base_priority, effective_priority, inherited_priority, configured_priority;
     uint8_t input_priority, io_priority, io_ticks;
-    bool priority_valid, focused;
+    bool priority_valid, focused, input_forwarded;
     uint32_t device_worker_site; /* active deferred callback; zero outside it */
     uint64_t input_expiry, service_deadline;
+    uint64_t audio_refill_expiry;
+    uint32_t audio_refill_generation, audio_refill_bytes;
     struct kwait *waiting_on;      /* owner dependency; never physical device waits */
     struct kwaiter *sync_waiter;   /* one blocked wait, constant-time IRQ wake */
     bool user;
@@ -71,7 +74,12 @@ struct task {
     /* Voluntary scheduling and per-window CPU evidence (f0-21). */
     uint32_t preempt_holds;
     bool device_demoted;
+    /* f1-90: audio refill class (own bounded budget, never demoted by other
+     * tasks' device consumption) and the device-window consumer slot hint. */
+    bool audio_class;
+    uint8_t device_slot;
     uint64_t device_ticks;
+    uint64_t device_cycles, device_base; /* shared-budget CPU, report windows */
     uint64_t run_cycles, window_base, kernel_ticks, user_ticks;
     uint64_t kernel_base, user_base, account_start, stretch_start, max_stretch;
     enum task_prio account_prio;
@@ -108,8 +116,13 @@ void task_set_base(struct task *t, enum task_prio prio, unsigned level);
 void task_set_inherited(struct task *t, unsigned priority);
 void task_focus(struct task *t);  /* NULL withdraws foreground promotion */
 void task_input_delivered(struct task *t);
+/* Native focused endpoint -> its bound VM; no permanent focus/base change. */
+void task_input_forward(struct task *source, struct task *target);
+void task_input_withdraw(struct task *target);
 void task_io_completed(struct task *t);
 void task_device_deadline(struct task *t, uint64_t deadline);
+/* f1-90: the audio DMA refill worker; its device CPU uses its own budget. */
+void task_set_audio_class(struct task *t);
 void sched_snapshot(struct sched_stats *out);
 /* cpustat charges actual execution at IRQ/switch boundaries. Tick accounting
  * remains a conservative fallback before a calibrated clock is available. */
@@ -127,7 +140,9 @@ struct task *sched_tasks(void);
 void cpu_switch(struct task *prev, struct task *next) __attribute__((weak));
 void cpu_reap(struct task *t) __attribute__((weak));
 void cpu_point(void) __attribute__((weak));
-void cpu_overrun(struct task *t) __attribute__((weak));
+/* consumed: the task's own device CPU in the 10 ms budget window. */
+void cpu_overrun(struct task *t, uint64_t consumed) __attribute__((weak));
+void cpu_audio_overrun(struct task *t, uint64_t consumed) __attribute__((weak));
 void task_sleep_ms(uint32_t ms);
 __attribute__((noreturn)) void task_exit(int code);
 void task_kill(struct task *t, int code);

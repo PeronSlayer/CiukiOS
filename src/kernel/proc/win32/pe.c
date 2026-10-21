@@ -81,7 +81,9 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
         im->directories[i * 2] = r; im->directories[i * 2 + 1] = n;
     }
     PE_CHECK(!im->directories[29],"unsupported-runtime"); /* CLR header */
-    if (pe16(op + 48) > 5) klog("[win32] load warning=newer-subsystem-version major=%u", pe16(op + 48));
+    /* MajorSubsystemVersion (optional header +48) above 5 is accepted; the
+     * ntdll loader records it once per non-builtin module with its name
+     * (sdk/win32/ldr/loader.c). This seed parser maps builtins as well. */
     return 0;
 }
 #undef PE_CHECK

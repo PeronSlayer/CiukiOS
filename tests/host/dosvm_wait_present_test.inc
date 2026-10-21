@@ -167,9 +167,58 @@ static void test_wait_present(void)
     g_current->base_priority=9;
     CHECK(!create_window(0,"Producer base",&present_window));
     struct dosvm *producer=dosvm_lookup((struct dosvm_key){present_window.id,present_window.generation});
-    CHECK(producer->task->base_priority==9 && !producer->present_wait.head);
+    CHECK(producer->task->base_priority==7 && !producer->present_wait.head);
     struct ciuki_dosvm_command close=command_for(present_window.id,present_window.generation);
+    unsigned forwards=input_forwards;
+    close.focused=1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&close,sizeof(close)));
+    CHECK(input_forwards==forwards); /* focus alone is not delivered input */
+    close=command_for(present_window.id,present_window.generation);
+    close.event.type=INPUT_KEY; close.event.code=0x1e; close.event.value=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&close,sizeof(close)));
+    CHECK(input_forwards==forwards+1 && forward_source==g_current && forward_target==producer->task);
+    CHECK(producer->task->input_priority==9 && producer->task->input_expiry==g_ticks+20);
+    /* The second owner's acquisition is authoritative even before the
+     * desktop delivers the old owner's loss message. No second input yet. */
+    struct ciuki_dosvm_command second;
+    fake_current=&fake_proc[1];
+    CHECK(!create_window(3,"Second focus",&second));
+    struct dosvm *other=dosvm_lookup((struct dosvm_key){second.id,second.generation});
+    second=command_for(second.id,second.generation); second.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&second,sizeof(second)));
+    CHECK(!producer->task->input_priority && !producer->task->input_expiry && !other->task->input_priority);
+    second=command_for(second.id,second.generation);
+    second.event.type=INPUT_KEY; second.event.code=0x1e; second.event.value=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&second,sizeof(second)) && other->task->input_priority==9);
+    fake_current=&fake_proc[0];
+    close=command_for(present_window.id,present_window.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&close,sizeof(close)) && !producer->task->input_priority);
+    CHECK(other->task->input_priority==9); /* delayed old loss cannot revoke the new grant */
+    fake_current=&fake_proc[1];
+    second=command_for(second.id,second.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&second,sizeof(second)));
+    fake_current=&fake_proc[0];
+    close.event.type=INPUT_KEY; close.event.code=0x1e; close.event.value=1;
+    CHECK(dosvm_call(CIUKI_DOSVM_INPUT,&close,sizeof(close))==-EACCES);
+    close=command_for(present_window.id,present_window.generation); close.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&close,sizeof(close)));
+    /* Distinct configured bases make missed asynchronous restoration visible. */
+    struct binding *binding=&bindings[producer->info.key.id-1]; binding->vm_base=5;
+    priority_transition_task=producer->task; priority_transition_hold=&producer->fullscreen_hold;
+    int10(producer,3,0,0,0);
+    producer->fullscreen_parked=true;
+    CHECK(!dosvm_fullscreen_enter(producer->info.key) && producer->task->base_priority==5);
+    CHECK(!dosvm_fullscreen_leave(producer->info.key,false) && producer->task->base_priority==7);
+    dosvm_fullscreen_input(INPUT_KEY,0x38,1); dosvm_fullscreen_input(INPUT_KEY,0x1c,1);
+    producer->fullscreen_parked=true; dosvm_fullscreen_poll();
+    CHECK(producer->fullscreen && producer->task->base_priority==5);
+    dosvm_fullscreen_input(INPUT_KEY,0x1c,0); dosvm_fullscreen_input(INPUT_KEY,0x38,0);
+    producer->idle.sleeping=producer->idle.seen=false; producer->monitor.state=V86_RUNNING;
+    g_ticks+=15000; producer->fullscreen_parked=true; dosvm_fullscreen_poll();
+    CHECK(!producer->fullscreen && producer->task->base_priority==7 && producer->fullscreen_error==-ETIMEDOUT);
+    priority_transition_task=0; priority_transition_hold=0;
+    close=command_for(present_window.id,present_window.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
+    puts("F1-87 D binding: focused client base9 leaves VM base7, input forwarding/withdrawal, syscall/hotkey/worker fullscreen bases PASS");
     g_current->base_priority=saved_base;
     for (present_action=0;present_action<21;present_action++) {
         window_fixtures(); g_ticks=10000;

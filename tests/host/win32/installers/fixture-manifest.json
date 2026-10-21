@@ -1,47 +1,9 @@
 {
-  "schema": 1,
-  "provenance": "self-authored",
-  "engine": "NSIS 2.x",
-  "engine_pin": null,
-  "status": "source fixture only; approved f5-17A compiler/script unavailable in this checkout",
-  "sources": {
-    "fixture.nsi": "b8f2a5466e2d8ee0396662a3965375883b24e6b459edfb6f2e45e608afa261e6",
-    "payload.txt": "8c9ba07e9e2ddec6b843ffca318d5f730135ca763f473acc46d5f218cecfe1bc",
-    "chain.inf": "252cc5a6eed37280bb5a1ba50f8127a2f6778fc719fb05fee9d821bd456af29b"
-  },
-  "expected": {
-    "install": {
-      "file": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt",
-      "sha256": "8c9ba07e9e2ddec6b843ffca318d5f730135ca763f473acc46d5f218cecfe1bc",
-      "registry_key": "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture",
-      "values": {
-        "DisplayName": "Ciuki Installer Fixture",
-        "UninstallString": "\"C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe\"",
-        "DisplayVersion": "1.0",
-        "Publisher": "CiukiOS",
-        "InstallLocation": "C:\\Program Files\\Ciuki Installer Fixture"
-      },
-      "links": {
-        "C:\\WINDOWS\\Desktop\\Ciuki Installer Fixture.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt",
-        "C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Installer Fixture\\Readme.lnk": "C:\\Program Files\\Ciuki Installer Fixture\\payload.txt"
-      }
-    },
-    "cancel": {
-      "fixture_files": [],
-      "fixture_uninstall_keys": [],
-      "fixture_links": []
-    },
-    "restart_request": {
-      "RunOnce": {
-        "CiukiInstallerFixture": "\"C:\\Program Files\\Ciuki Installer Fixture\\uninstall.exe\" /restart-fixture"
-      },
-      "virtual_restart": "f5-07B; not executed here"
-    },
-    "uninstall": {
-      "payload": false,
-      "fixture_uninstall_keys": [],
-      "fixture_links": [],
-      "self_delete": "WININIT.INI delay until virtual restart"
-    }
-  }
+  "schema": 2,
+  "provenance": "self-authored; compiled engine NSIS 2.51",
+  "engine_pin": "config/nsis.json",
+  "sources": "tests/win32/fixtures/nsis/",
+  "fixture_script_sha256": "7b5f9447510531013f1ee5534da48fc880f17b64cfb0835129f9cf0c6ce63cc1",
+  "expected_manifest": "tests/win32/fixtures/nsis/expected.json",
+  "runtime_evidence": "separate from reproducible fixture build; see docs/validation/f5-15a2-installers.md"
 }

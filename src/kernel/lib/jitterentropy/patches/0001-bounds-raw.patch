@@ -1,0 +1,51 @@
+--- a/src/jitterentropy-noise.c
++++ b/src/jitterentropy-noise.c
+@@ -348,6 +348,12 @@
+ 						uint64_t loop_cnt,
+ 						uint64_t *ret_current_delta)
+ {
++	/* Ciuki: finite collection budget, outside the measured workload. */
++	if (ciuki_jent_round(ec)) {
++		if (ret_current_delta) *ret_current_delta = 0;
++		return 1;
++	}
++
+ 	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+ 	uint64_t current_delta = 0;
+ 	unsigned int stuck;
+@@ -412,6 +418,12 @@
+ 					   uint64_t loop_cnt,
+ 					   uint64_t *ret_current_delta)
+ {
++	/* Ciuki: finite collection budget, outside the measured workload. */
++	if (ciuki_jent_round(ec)) {
++		if (ret_current_delta) *ret_current_delta = 0;
++		return 1;
++	}
++
+ 	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+ 	uint64_t time_now = 0;
+ 	uint64_t current_delta = 0;
+@@ -481,6 +493,12 @@
+ 				 uint64_t loop_cnt,
+ 				 uint64_t *ret_current_delta)
+ {
++	/* Ciuki: finite collection budget, outside the measured workload. */
++	if (ciuki_jent_round(ec)) {
++		if (ret_current_delta) *ret_current_delta = 0;
++		return 1;
++	}
++
+ 	/* Size of intermediary ensures a Keccak operation during hash_update */
+ 	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+ 
+@@ -503,6 +521,9 @@
+ 	current_delta = jent_delta(ec->prev_time, time_now) /
+ 				   ec->jent_common_timer_gcd;
+ 	ec->prev_time = time_now;
++
++	/* Ciuki: optional buffered raw observation, before health/filtering. */
++	ciuki_jent_raw(ec, current_delta);
+ 
+ 	/* Check whether we have a stuck measurement. */
+ 	stuck = jent_stuck(ec, current_delta);

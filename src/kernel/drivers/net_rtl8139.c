@@ -120,7 +120,15 @@ static enum net_link rtl_link(struct netif *d)
     return (msr & 4) ? NET_LINK_DOWN : NET_LINK_UP;
 }
 static void rtl_mac(struct netif *d, uint8_t mac[6]) { memcpy(mac, d->address, 6); }
+static int rtl_promiscuous(struct netif *d, bool on)
+{
+    uint32_t config = net_read(d, 0x44, 4);
+    if (config == UINT32_MAX) return -5;
+    config = on ? config | 1u : config & ~1u;
+    net_write(d, 0x44, config, 4);
+    return net_read(d, 0x44, 4) == config ? 0 : -5;
+}
 const struct netif_driver net_rtl8139 = {
     "rtl8139", rtl_match, 256, 0, 5, rtl_idle, rtl_init, rtl_start, rtl_stop,
-    rtl_transmit, rtl_poll, rtl_link, rtl_mac, rtl_interrupt, rtl_irq_enable
+    rtl_transmit, rtl_poll, rtl_link, rtl_mac, rtl_interrupt, rtl_irq_enable, rtl_promiscuous
 };

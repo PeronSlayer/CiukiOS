@@ -179,11 +179,11 @@ CPUID absence, a missing basic leaf 1 or missing CMOV emits:
 
 Invalid/missing E820 emits:
 
-`CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)`
+`CIUKI: this PC needs a BIOS E820 memory map (L:E820)`
 
 A responding malformed/pre-2.0 VBE controller emits:
 
-`CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer`
+`CIUKI: this PC needs VBE 2.0+ for a linear framebuffer`
 
 Each refusal goes to BIOS text output and available validated COM1, then
 CLI/HLT without a keyboard wait, disk access or kernel entry. The MBR has

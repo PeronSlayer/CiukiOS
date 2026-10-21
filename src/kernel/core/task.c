@@ -39,6 +39,7 @@ extern const struct task *dosvm_task_focus(void) __attribute__((weak));
 extern const struct task *dosvm_task_irq(void) __attribute__((weak));
 static const struct task *focus_task;
 static struct task *ui_focus;
+static struct task *input_proxy;
 static uint32_t focus_ticks, ordinary_ticks;
 #define FOCUS_PERIOD 10u
 #define FOCUS_BUDGET 8u
@@ -70,7 +71,7 @@ static void rq_remove(struct task *t)
 
 static unsigned priority_base(struct task *t)
 {
-    static const uint8_t bases[P_COUNT] = { SCHED_DEVICE, SCHED_FOREGROUND, SCHED_NORMAL, 0, SCHED_HIGH };
+    static const uint8_t bases[P_COUNT] = { SCHED_DEVICE, SCHED_FOREGROUND, CIUKI_SCHED_NORMAL, 0, SCHED_HIGH };
     unsigned base = t->configured_priority ? t->configured_priority : bases[t->prio];
     if (t->focused && t->prio == P_NORMAL) base += 2;
     return base > SCHED_BOOST_CAP && t->prio != P_DEVICE ? SCHED_BOOST_CAP : base;
@@ -110,14 +111,185 @@ static bool device_throttled(void)
 {
     return device_used >= DEVICE_BUDGET || device_cpu_total >= DEVICE_BUDGET * device_cpu_scale;
 }
+/* f1-90 (R2/R3): who consumed the shared device budget. The aggregate above
+ * still decides exhaustion; every consumer's own share of the same sliding
+ * 10-tick window decides who yields. Max-min fair share: when the shared
+ * budget is exhausted only consumers at or above the water level are
+ * demoted, never a task that stayed under it. Audio-class tasks (the DMA
+ * refill) are charged to their own bounded budget, never to the shared one;
+ * only that budget can demote them and its exhaustion demotes nobody else.
+ * Windows 9x analogue: per-event/per-thread boosts and timed decay apply to
+ * the thread that runs; a wave driver refills at interrupt time, outside
+ * time slicing (validation record f1-90-device-budget-attribution.md). */
+#define DEVICE_CONSUMERS 32u
+/* Trial b51f034f: refill 33-69 permille of each 2 s window (0.33-0.69 ms per
+ * 10 ms), stretch <= 2 ms; R3 allows one 2 ms service. */
+#define AUDIO_CLASS_BUDGET_US 2000u
+struct device_consumer {
+    const struct task *task;  /* identity with id only; never dereferenced */
+    uint32_t id;
+    uint16_t samples;         /* PIT-tick samples, bit 0 = newest tick */
+    uint8_t slot;             /* cpu[] slot of tick */
+    bool audio, over;
+    uint64_t tick, cpu_total;
+    uint32_t cpu[FOCUS_PERIOD];
+};
+static struct device_consumer device_consumers[DEVICE_CONSUMERS];
+static uint64_t device_level_cpu, device_level_ticks, device_level_tick;
+static uint32_t device_seq, device_level_seq = UINT32_MAX;
+static unsigned audio_over;
+/* False selects the pre-f1-90 aggregate policy (every non-urgent device
+ * task demoted, the refill charged to the shared budget). Only the f1-87
+ * replay's negative control clears it; production never does. */
+static bool device_attribution = true;
+static uint64_t audio_class_budget(void)
+{
+    return (uint64_t)AUDIO_CLASS_BUDGET_US * device_cpu_scale / 1000u;
+}
+static void device_window_advance(struct device_consumer *e)
+{
+    uint64_t elapsed = g_ticks - e->tick;
+    if (!elapsed) return;
+    if (elapsed >= FOCUS_PERIOD) { /* also a clock that moved backwards */
+        memset(e->cpu, 0, sizeof(e->cpu));
+        e->cpu_total = 0; e->samples = 0; e->slot = (uint8_t)(g_ticks % FOCUS_PERIOD);
+    } else {
+        e->samples = (uint16_t)((e->samples << elapsed) & 1023u);
+        while (elapsed--) {
+            if (++e->slot == FOCUS_PERIOD) e->slot = 0;
+            e->cpu_total -= e->cpu[e->slot];
+            e->cpu[e->slot] = 0;
+        }
+    }
+    e->tick = g_ticks;
+    device_seq++;
+    if (e->over && e->cpu_total < audio_class_budget()) {
+        e->over = false; audio_over--;
+        device_cpu_refresh = true; g_need_resched = true;
+    }
+}
+static struct device_consumer *device_consumer_find(const struct task *t)
+{
+    unsigned hint = t->device_slot;
+    struct device_consumer *e = hint && hint <= DEVICE_CONSUMERS ? &device_consumers[hint - 1] : 0;
+    if (!e || e->task != t || e->id != t->id) {
+        e = 0;
+        for (unsigned i = 0; !e && i < DEVICE_CONSUMERS; i++)
+            if (device_consumers[i].task == t && device_consumers[i].id == t->id) e = &device_consumers[i];
+    }
+    if (e) device_window_advance(e);
+    return e;
+}
+/* A full table leaves the charge unattributed: it still counts in the
+ * aggregate and narrows every attributed consumer's fair share. */
+static struct device_consumer *device_consumer_charge(struct task *t)
+{
+    struct device_consumer *e = device_consumer_find(t);
+    for (unsigned i = 0; !e && i < DEVICE_CONSUMERS; i++) {
+        struct device_consumer *c = &device_consumers[i];
+        if (c->task) device_window_advance(c);
+        if (c->task && (c->cpu_total || c->samples || c->over)) continue;
+        memset(c, 0, sizeof(*c));
+        c->task = t; c->id = t->id; c->tick = g_ticks;
+        c->slot = (uint8_t)(g_ticks % FOCUS_PERIOD);
+        e = c;
+    }
+    if (e) t->device_slot = (uint8_t)(e - device_consumers + 1);
+    return e;
+}
+static unsigned device_samples(const struct device_consumer *e)
+{
+    unsigned n = 0; /* ten bits; no compiler runtime helper */
+    for (unsigned v = e->samples; v; v &= v - 1) n++;
+    return n;
+}
+/* Smallest consumption that exceeds the max-min fair share of the shared
+ * budget, or UINT64_MAX while that measure is not exhausted. */
+static uint64_t device_fair_level(bool cpu)
+{
+    uint64_t budget = cpu ? DEVICE_BUDGET * device_cpu_scale : DEVICE_BUDGET;
+    uint64_t total = cpu ? device_cpu_total : device_used;
+    if (total < budget) return UINT64_MAX;
+    uint64_t value[DEVICE_CONSUMERS], sum = 0;
+    unsigned n = 0;
+    for (unsigned i = 0; i < DEVICE_CONSUMERS; i++) {
+        struct device_consumer *e = &device_consumers[i];
+        if (!e->task || e->audio) continue;
+        device_window_advance(e);
+        uint64_t v = cpu ? e->cpu_total : device_samples(e);
+        if (!v) continue;
+        unsigned j = n++;
+        while (j && value[j - 1] > v) { value[j] = value[j - 1]; j--; }
+        value[j] = v; sum += v;
+    }
+    if (!n) return UINT64_MAX;
+    uint64_t unattributed = total > sum ? total - sum : 0;
+    uint64_t remaining = budget > unattributed ? budget - unattributed : 0;
+    for (unsigned k = 0; k < n; k++) {
+        if (value[k] * (n - k) > remaining) return value[k];
+        remaining -= value[k];
+    }
+    return value[n - 1]; /* exactly at the budget: the largest yields */
+}
+static bool device_demote(const struct task *t)
+{
+    if (t->prio != P_DEVICE || device_urgent(t)) return false;
+    if (!device_attribution) return device_throttled();
+    struct device_consumer *e = device_consumer_find(t);
+    if (e && e->audio) return e->over;
+    if (!e || !device_throttled()) return false;
+    if (device_level_seq != device_seq || device_level_tick != g_ticks) {
+        device_level_cpu = device_fair_level(true);
+        device_level_ticks = device_fair_level(false);
+        device_level_seq = device_seq; device_level_tick = g_ticks;
+    }
+    unsigned samples = device_samples(e);
+    return (e->cpu_total && e->cpu_total >= device_level_cpu) ||
+           (samples && samples >= device_level_ticks);
+}
+static void device_overrun_record(struct task *t)
+{
+    struct device_consumer *e = device_consumer_find(t);
+    uint64_t consumed = e ? e->cpu_total : 0;
+    if (e && e->audio) { if (cpu_audio_overrun) cpu_audio_overrun(t, consumed); return; }
+    scheduler_stats.budget_exhausted++;
+    if (cpu_overrun) cpu_overrun(t, consumed);
+}
+static void device_tick_sample(struct task *t)
+{
+    struct device_consumer *e = device_consumer_charge(t);
+    if (e) { e->samples |= 1u; device_seq++; }
+}
+static void device_audio_poll(void)
+{
+    for (unsigned i = 0; audio_over && i < DEVICE_CONSUMERS; i++)
+        if (device_consumers[i].over) device_window_advance(&device_consumers[i]);
+}
 void sched_charge_runtime(struct task *t, uint64_t cycles, uint64_t scale)
 {
     if (!t || !cycles || !scale || t->effective_priority < SCHED_SERVICE_MIN) return;
     if (device_cpu_scale != scale) {
         memset(device_cpu, 0, sizeof(device_cpu));
         device_cpu_total = 0; device_cpu_scale = scale;
+        memset(device_consumers, 0, sizeof(device_consumers)); audio_over = 0;
     }
     device_cpu_advance();
+    struct device_consumer *e = device_consumer_charge(t);
+    bool own = device_attribution && t->audio_class && e;
+    if (e) {
+        uint32_t *slot = &e->cpu[e->slot];
+        uint64_t add = cycles < UINT32_MAX - *slot ? cycles : UINT32_MAX - *slot;
+        *slot += (uint32_t)add; e->cpu_total += add; e->audio = own;
+        device_seq++;
+    }
+    if (own) {
+        if (!e->over && e->cpu_total >= audio_class_budget()) {
+            e->over = true; audio_over++;
+            device_cpu_refresh = true; g_need_resched = true;
+        }
+        return;
+    }
+    t->device_cycles += cycles;
     device_cpu[device_cpu_slot] += cycles;
     device_cpu_total += cycles;
     if (device_throttled()) { device_cpu_refresh = true; g_need_resched = true; }
@@ -127,7 +299,7 @@ static void priority_update(struct task *t)
 {
     priority_init(t);
     t->base_priority = priority_base(t);
-    t->device_demoted = t->prio == P_DEVICE && device_throttled() && !device_urgent(t);
+    t->device_demoted = device_demote(t);
     if (t->input_priority) {
         unsigned input = t->base_priority + 2;
         t->input_priority = input > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : input;
@@ -136,7 +308,7 @@ static void priority_update(struct task *t)
         unsigned io = t->base_priority + 1;
         t->io_priority = io > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : io;
     }
-    unsigned p = t->device_demoted ? SCHED_NORMAL : t->base_priority;
+    unsigned p = t->device_demoted ? CIUKI_SCHED_NORMAL : t->base_priority;
     if (t->input_priority > p) p = t->input_priority;
     if (t->io_priority > p) p = t->io_priority;
     if (t->boosted && p < SCHED_BOOST_CAP) p = SCHED_BOOST_CAP;
@@ -190,6 +362,8 @@ static void task_timer_event(void *owner, uint32_t generation, unsigned kind)
     uint32_t f = irq_save();
     if (kind == 1 && t->input_priority) {
         t->input_priority = 0; t->input_expiry = 0;
+        t->input_forwarded=false;
+        if (input_proxy==t) input_proxy=0;
         scheduler_stats.input_expired++; priority_update(t);
     } else if (kind == 2 && t->state == T_READY && t->prio == P_NORMAL && !t->boosted) {
         t->boosted = true; priority_update(t);
@@ -201,6 +375,7 @@ void task_focus(struct task *t)
 {
     uint32_t f = irq_save();
     if (ui_focus != t) {
+        if (input_proxy) task_input_withdraw(input_proxy);
         struct task *old = ui_focus;
         ui_focus = t;
         if (old) {
@@ -211,6 +386,32 @@ void task_focus(struct task *t)
             priority_update(old);
         }
         if (t) { t->focused = true; priority_update(t); }
+    }
+    irq_restore(f);
+}
+void task_input_withdraw(struct task *target)
+{
+    uint32_t f=irq_save();
+    if (target && target==input_proxy) {
+        input_proxy=0; target->input_forwarded=false;
+        if (target->input_priority) scheduler_stats.input_expired++;
+        target->input_priority=0; target->input_expiry=0;
+        ktimer_cancel(&target->input_timer); priority_update(target);
+    }
+    irq_restore(f);
+}
+void task_input_forward(struct task *source,struct task *target)
+{
+    uint32_t f=irq_save();
+    if (source && source==ui_focus && target && target->state<T_ZOMBIE && target->prio==P_NORMAL) {
+        if (input_proxy && input_proxy!=target) task_input_withdraw(input_proxy);
+        input_proxy=target; target->input_forwarded=true;
+        priority_init(target);
+        unsigned p=target->base_priority+2;
+        target->input_priority=p>SCHED_BOOST_CAP ? SCHED_BOOST_CAP : p;
+        target->input_expiry=g_ticks+20;
+        ktimer_arm(&target->input_timer,target->input_expiry,1,target,&target->generation,task_timer_event);
+        scheduler_stats.input_granted++; priority_update(target);
     }
     irq_restore(f);
 }
@@ -247,6 +448,10 @@ void task_io_completed(struct task *t)
 void task_device_deadline(struct task *t, uint64_t deadline)
 {
     uint32_t f = irq_save(); t->service_deadline = deadline; irq_restore(f);
+}
+void task_set_audio_class(struct task *t)
+{
+    uint32_t f = irq_save(); t->audio_class = true; priority_update(t); irq_restore(f);
 }
 void sched_snapshot(struct sched_stats *out)
 {
@@ -294,11 +499,22 @@ static struct task *rq_pop(void)
     for (int p = SCHED_LEVELS - 1; p >= (int)SCHED_BOOST_CAP; p--)
         if (rq_head[p]) return rq_take(p);
     if (focus && focus->state == T_READY && focus_ticks < FOCUS_BUDGET &&
-        focus->effective_priority >= SCHED_NORMAL) {
+        focus->effective_priority >= CIUKI_SCHED_NORMAL) {
         /* A foreground native input boost or donated lock owner beats a VM. */
         for (int p = SCHED_BOOST_CAP - 1; p > (int)focus->effective_priority; p--)
             if (rq_head[p] && (p > (int)SCHED_FOREGROUND || rq_head[p]->input_priority || rq_head[p]->inherited_priority)) return rq_take(p);
         struct task *t = (struct task *)focus; rq_remove(t); return t;
+    }
+    /* Forwarded input shares the VM's bounded preference. Repeated key
+     * delivery must not promote a base-7 VM over the desktop indefinitely
+     * after that preference has been spent. WAIT dependency donation retains
+     * its normal precedence and withdrawal. */
+    if (focus && focus->state==T_READY && focus_ticks>=FOCUS_BUDGET &&
+        focus->input_forwarded && !focus->inherited_priority && !focus->boosted) {
+        for (int p=SCHED_LEVELS-1;p>=(int)focus->base_priority;p--)
+            for (struct task *t=rq_head[p];t;t=t->next) if (t!=focus) {
+                ktimer_cancel(&t->ready_timer); rq_remove(t); return t;
+            }
     }
     for (int p = SCHED_LEVELS - 1; p >= 0; p--) if (rq_head[p]) return rq_take(p);
     return 0;
@@ -484,10 +700,7 @@ void schedule(void)
         for (struct task *t = all_tasks; t; t = t->all_next) if (t->prio == P_DEVICE) {
             bool was_demoted = t->device_demoted;
             priority_update(t);
-            if (!was_demoted && t->device_demoted) {
-                scheduler_stats.budget_exhausted++;
-                if (cpu_overrun) cpu_overrun(t);
-            }
+            if (!was_demoted && t->device_demoted) device_overrun_record(t);
         }
     }
     struct task *prev = g_current;
@@ -601,9 +814,11 @@ void sched_tick(void)
     bool was_throttled = device_throttled();
     device_cpu_advance();
     bool charged = g_current && g_current->effective_priority >= SCHED_SERVICE_MIN;
+    /* An audio-class sample belongs to its own CPU budget, not the shared one. */
+    bool shared = charged && !(device_attribution && g_current->audio_class);
     if (device_history & (1u << 9)) device_used--;
-    device_history = ((device_history << 1) | charged) & 1023u;
-    if (charged) device_used++;
+    device_history = ((device_history << 1) | shared) & 1023u;
+    if (shared) { device_used++; device_tick_sample(g_current); }
     if (g_current && g_current != idle_task && !charged) {
         ordinary_ticks++;
         if (g_current == focus_task) focus_ticks++;
@@ -624,15 +839,16 @@ void sched_tick(void)
     /* The existing dispatch refresh owns device reclassification. No task
      * population walk occurs in the timer top half. */
     if (t && t->prio == P_DEVICE) {
-        bool demote = device_throttled() && !device_urgent(t);
+        bool demote = device_demote(t);
         if (demote != t->device_demoted) {
             t->device_demoted = demote; priority_update(t);
-            if (demote) { scheduler_stats.budget_exhausted++; if (cpu_overrun) cpu_overrun(t); }
+            if (demote) device_overrun_record(t);
         }
     }
     if (was_throttled != device_throttled()) {
         device_cpu_refresh = true; g_need_resched = true;
     }
+    if (audio_over) device_audio_poll(); /* own-budget recovery */
     if (g_current == idle_task) {
         g_idle_ticks++;
         if (rq_any()) g_need_resched = true;
@@ -680,6 +896,7 @@ void task_exit(int code)
     struct task *t = g_current;
     bool native = proc_task_exiting(t, code);
     t->exit_code = code;
+    task_input_withdraw(t);
     if (ui_focus == t) task_focus(0);
     ksync_task_exit(t);
     if (!native)
@@ -702,6 +919,7 @@ void task_kill(struct task *t, int code)
     if (t->state != T_ZOMBIE && t->state != T_DEAD) {
         bool native = proc_task_exiting(t, code);
         t->exit_code = code;
+        task_input_withdraw(t);
         if (ui_focus == t) task_focus(0);
         ksync_task_exit(t);
         if (t->state == T_READY) rq_remove(t);

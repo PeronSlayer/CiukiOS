@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "workload": "half-life-uplink",
+  "engine": "wise",
+  "engine_detail": "Wise Installation System stub (strings: \"Initializing Wise Installation Wizard...\", GLBSInstall, STUB32.EXE, WiseMain); PE32 GUI subsystem 4.0; reads its own overlay then creates its window.",
+  "entry": {
+    "kind": "download",
+    "file": "hluplink.exe"
+  },
+  "variants": [
+    {
+      "name": "interactive",
+      "arguments": ""
+    },
+    {
+      "name": "silent",
+      "arguments": "/S",
+      "source": "Wise Installation System: /S runs the installation silently (vendor documentation; the lead confirms the reference)"
+    }
+  ],
+  "deferred": null,
+  "exit_codes": [
+    0
+  ],
+  "expected": {
+    "status": "unknown",
+    "reason": "no reference installation on a qualified system yet (f5-02B/15B); the lead pins files, registry, links, restart and uninstall residue from the QEMU installers tier",
+    "install_root": null,
+    "files": {},
+    "registry": [],
+    "links": [],
+    "restart": null,
+    "uninstall": null
+  },
+  "qemu_case": "win32-installer-half-life-uplink-qemu-t23",
+  "notes": "Wise imports MPR.dll!WNetGetConnectionA per the research census; the stub declares no Win16 component (the 16-bit Wise stubs of W24 are not this file)."
+}

@@ -12,6 +12,10 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 | Kernel and loader | `clang`, `ld.lld`, `llvm-objdump`, `nasm` (majors pinned in `config/toolchain.json`) |
 | Image | `python3`, `mkfs.fat`, `fsck.fat`, `mtools`, `qemu-img` |
 | DOS image DPMI clients (f3-04) | Open Watcom 2.0 under `/opt/watcom` (`binl64/wcl386`, `binw/dos4gw.exe` with the SHA-256 pinned in `scripts/build_dos_image.py`) |
+| Network stack | lwIP 2.2.1 (archive size/hash recorded in [`src/kernel/net/lwip/import.json`](../src/kernel/net/lwip/import.json); offline build, no fallback) |
+| Kernel entropy | jitterentropy-library 3.7.0 (archive size/hash and imported units in [`config/jitterentropy.json`](../config/jitterentropy.json); offline extraction under `build/external/`, no fallback) |
+| NetSurf browser | NetSurf 3.11, zlib 1.3.1 and libpng 1.6.59 (archive hashes in `config/netsurf.json`; offline build, no fallback) |
+| Windows installer fixtures | NSIS 2.51 source and binary archives (hashes in `config/nsis.json`; host fixture tooling, not a guest installer dependency) |
 | Optional host guest runner | `libx86emu` (headers and library); skipped when absent |
 | Tests | `qemu-system-i386`, `systemd-run` (user scopes with a memory controller) |
 | Optical fixtures and independent extraction | `xorriso` |
@@ -22,6 +26,7 @@ branch `legacy-0.8` (`docs/design/foundations-transition.md`).
 make build-full        # kernel (build/f0/VMM.ELF), apps, the cached upper Wine DLLs, then the image, with T1 checks and build-manifest.json
 make upper             # only the reused Wine DLLs (cached; needs make apps first)
 make test-host         # T0: kernel library, loader statics, runner, fixtures, loader model
+python3 scripts/loader_budget.py   # loader bytes per section and free bytes in its fixed 48-sector extent
 make qemu-test-full    # T2: f0-smoke through scripts/test/run.py
 python3 scripts/test/run.py f0-core    # T3: ten-boot matrix and the nine non-fatal probes
 python3 scripts/test/run.py f0-panic   # T3: destructive panic cases
@@ -41,14 +46,40 @@ suites in `tests/suites/` (`docs/design/test-architecture.md`,
 Interactive runs use TCG by default; KVM is only for the `qemu-fast`
 developer profile and never for evidence.
 
-QEMU gates are suspended for the current hardware trial cycle (owner
-decisions 2026-10-19, dev diary 2026-10-19-03 and 2026-10-19-07): a merge
-needs green host suites and a canonical `make build-full` of the merged
-tree; an image goes to
-the hardware with its SHA-256, the serial capture and the disk logs as
-evidence. The only QEMU use allowed meanwhile is the DOS conformance battery
-of f3-48 (`f3:dos-conformance`, dev diary 2026-10-19-06). The commands above
-stay valid and QEMU evidence resumes on the owner's request.
+The general QEMU smoke and suite tiers are suspended for the current hardware
+trial cycle (owner decisions 2026-10-19 and 2026-10-20): a merge needs green
+host suites and a canonical `make build-full` of the merged tree; the resulting
+image goes to hardware with its SHA-256, serial capture and disk logs as
+evidence. Authorized QEMU uses are the DOS conformance battery of f3-48
+(`f3:dos-conformance`), F6 network cases, F7 3D API development/tests and the
+short boot smoke before a hardware image. Other QEMU evidence resumes on the
+owner's request.
+
+### Network QEMU cases (F6)
+
+The `f6-net` runner suite selects one virtual NIC through the case's
+`device_exceptions.network` value. For the user-mode backend, the runner adds
+`-netdev user,id=ciuknet0,restrict=on` and the selected device with
+`netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=`. The user backend is
+restricted and has no host port forwards. NIC variants are declared in
+`tests/suites/f6-net.json`; the runner owns the QEMU arguments. These cases
+currently exercise network-driver/ARP behavior, not browser site acceptance.
+Network suites remain subject to the current QEMU authorization policy above.
+
+The kernel's native networking uses the pinned lwIP 2.2.1 stack, DHCP for
+primary-interface IPv4 configuration, DNS resolution and the socket API.
+The public socket syscalls are implemented by CiukiOS; the [developer API
+reference](developer-api.md) lists their numbers, records and limits. lwIP's
+upstream BSD socket adapter is not used. The NetSurf M1 browser is currently
+limited to `file:`
+and `data:` content; HTTP/HTTPS fetching is a later browser milestone.
+
+The NetSurf 3.11, zlib 1.3.1 and libpng 1.6.59 archive SHA-256 pins are in
+[`config/netsurf.json`](../config/netsurf.json); the apps build verifies them
+before extraction. The lwIP 2.2.1 archive hash and imported-file inventory are
+in `src/kernel/net/lwip/import.json`. NSIS 2.51 source and binary pins are in
+[`config/nsis.json`](../config/nsis.json), for host-side installer fixtures.
+No normal build downloads these inputs or falls back to an unpinned version.
 
 ### Reused Wine DLLs (f5-20D)
 
@@ -428,7 +459,7 @@ After SWEEP_END, the on-disk `probe=` line has been removed; keep the disk and
 the same image. Start a **separate** capture with a fresh eight-hex-digit run id
 before powering on. In the three-second `SELECT_READY` window, press **S**
 (upper- or lowercase, laptop keyboard or COM1). The loader cancels any configured
-probe request, sets safe mode, prints `Safe mode selected; P for a probe, or wait`
+probe request, sets safe mode, prints `Safe mode; P for a probe, or wait`
 and `L:SAFE=1`, and starts a fresh three-second menu window. Within that new
 window, press **P**, type **`f1:safe run=<fresh id>`** (replace `<fresh id>` with
 the chosen eight hex digits), and press **Enter** within the selector's

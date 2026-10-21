@@ -8,6 +8,7 @@ struct ciuki_browser_surface;
 void ciuki_chrome_status(const char *);
 void ciuki_chrome_url(struct nsurl *);
 void ciuki_chrome_loading(bool);
+void ciuki_chrome_reload(void);
 bool ciuki_chrome_busy(void);
 void ciuki_chrome_complete(struct gui_window *);
 void ciuki_chrome_title(struct gui_window *,const char *);

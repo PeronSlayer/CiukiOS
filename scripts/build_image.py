@@ -104,6 +104,24 @@ def read_version():
     return module.load()
 
 
+def desktop_license_payloads():
+    """Desktop dependencies' licence/notice/provenance inventory."""
+    sources = {f"/system/licenses/{name}": ROOT / "third_party/stb/LICENSE"
+               for name in ("stb_image.txt", "stb_image_write.txt", "stb_vorbis.txt")}
+    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
+    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
+                 "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
+        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
+    for name in ("lwip-2.2.1-BSD-3-Clause.txt", "lwip-2.2.1-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+    for name in ("jitterentropy-3.7.0-LICENSE.bsd", "jitterentropy-3.7.0-LICENSE.gplv2",
+                 "jitterentropy-3.7.0-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
+    return sources
+
+
 def desktop_payloads():
     """Validate desktop/demo ELFs and the exact converted portrait independently."""
     spec = importlib.util.spec_from_file_location("build_desktop", ROOT / "apps/desktop/build_desktop.py")
@@ -120,22 +138,12 @@ def desktop_payloads():
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
-               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
-    sources["/system/licenses/lwip-2.2.1-BSD-3-Clause.txt"] = ROOT / "docs/licenses/lwip-2.2.1-BSD-3-Clause.txt"
-    sources["/system/licenses/lwip-2.2.1-NOTICES.txt"] = ROOT / "docs/licenses/lwip-2.2.1-NOTICES.txt"
-    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    sources.update(desktop_license_payloads())
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
     sources.update(font_sources)
-    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    for name in ("TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
-    sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
-    sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     hwids = ROOT / "assets/hwids"
@@ -605,6 +613,21 @@ def build(kernel, out, boot_cfg):
         sources["/system/dos/FREEDOS.IMG"]=reference
         sources["/system/dos/FREEDOS.SHA"]=reference.with_suffix(".SHA")
         metadata["dos_conformance"]={"reference":"installed-unqualified"}
+        unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
+        qualification=ROOT/"build/unified-dos/qualified.json"
+        # f3-57: a fork qualification (two identical fork builds + live IFS CPU
+        # boots) selects the CiukiDOS fork + CIUKIDF.SYS for kernel=unified.
+        if qualification.is_file() or unified.FORK_QUALIFIED.is_file():
+            rebuilt=dos_image.parent/"UNIFIED.IMG"
+            identity,license_dir,metadata["unified_dos"]=unified.install(
+                rebuilt,system_files,reference_dirs,game_files,
+                source_output=out.parent/"ciukidos-unified-source.zip")
+            sources["/system/dos/UNIFIED.IMG"]=rebuilt
+            sources["/system/dos/UNIFIED.SHA"]=rebuilt.with_suffix(".SHA")
+            for name in ("CIUKIDOS.TXT","FDK-GPL2.TXT","FREECOM.TXT","SUPPL.TXT","SHARE.TXT","CIUKIDOS.JSN"):
+                sources["/system/licenses/"+name]=license_dir/name
+        else:
+            metadata["unified_dos"]={"status":"absent", "reason":"two-build/CPU qualification not provisioned"}
     else:
         metadata["dos_conformance"]={"reference":"absent", "reason":"official FreeDOS 1.3 pins/packages not provisioned"}
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -675,6 +698,17 @@ def build(kernel, out, boot_cfg):
                 cursor = hole
         check_image(candidate, volume)
         check_payloads(candidate, payloads, directories)
+        if "/system/dos/UNIFIED.IMG" in sources:
+            import io
+            nested=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.IMG",PART_LBA*SECTOR)
+            sidecar=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.SHA",PART_LBA*SECTOR)
+            require(sidecar==(unified.sha(nested)+"\n").encode(),"unified sidecar read-back")
+            def read_unified(path):
+                if path.startswith("/system/licenses/"):
+                    return conformance.read_file(candidate,path,PART_LBA*SECTOR)
+                return conformance.read_file(io.BytesIO(nested),path,conformance.reference_offset(nested))
+            notices={p.name:p.read_bytes() for p in license_dir.iterdir()}
+            unified.readback(read_unified,identity,notices)
         os.replace(candidate, out)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)

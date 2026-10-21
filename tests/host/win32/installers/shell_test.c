@@ -11,6 +11,32 @@ struct interface {const void *const *vt;struct link *owner;};
 struct factory {const void *const *vt;ULONG refs;};
 #define METHOD(i,n,type) ((type)(i)->vt[n])
 static SHELL_GUID guid(DWORD a){return (SHELL_GUID){.a=a,.d={0xc0,0,0,0,0,0,0,0x46}};}
+static void folder_identifiers(void){
+  /* The exact 9x NSIS route: current-user CSIDL, with/without CREATE,
+   * PIDL -> ANSI path, and task-allocator ownership. */
+  const unsigned ids[]={0,2,16,23,25};
+  for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++){
+    char expected[260],actual[260];WCHAR wide[260];void *pidl=0;
+    assert(SHGetSpecialFolderPathA(0,expected,(int)ids[i],0));
+    assert(!SHGetSpecialFolderLocation(0,(int)ids[i]|0x8000,&pidl) && pidl);
+    assert(SHGetPathFromIDListA(pidl,actual) && !strcmp(actual,expected));
+    assert(SHGetPathFromIDListW(pidl,wide) && shell_ansi(wide,actual,260) && !strcmp(actual,expected));
+    /* The list consists of counted SHITEMIDs followed by a zero WORD. */
+    const uint8_t *p=pidl;unsigned total=0;
+    while(w32_u16(p)){unsigned n=w32_u16(p);assert(n>=3 && n<=1024 && total+n<1024);p+=n;total+=n;}
+    if(ids[i]==16){
+      assert(total>45 && ((uint8_t *)pidl)[2]==0x1f && ((uint8_t *)pidl)[22]==0x23);
+      /* Malformed filesystem item must not become a traversal path. */
+      uint8_t *folder=(uint8_t *)pidl+45;folder[14]='\\';
+      assert(!SHGetPathFromIDListA(pidl,actual) && !actual[0]);
+    }
+    shell_free(pidl);
+  }
+  void *bad=(void *)1;assert(SHGetSpecialFolderLocation(0,31,&bad)<0 && !bad);
+  assert(SHGetSpecialFolderLocation(0,16,0)<0);
+  char path[260]="sentinel";assert(!SHGetPathFromIDListA(0,path) && !path[0]);
+  puts("PASS NSIS 9x desktop/programs PIDL paths, ownership and malformed identifiers");
+}
 static void links(void){
   SHELL_GUID cls=guid(0x21401),factory_id=guid(1),link_id=guid(0x214ee),persist_id=guid(0x10b);
   struct factory *factory=0;struct interface *link=0,*persist=0;
@@ -95,5 +121,5 @@ int main(int argc,char **argv){
   for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++)assert(SHGetSpecialFolderPathA(0,path,(int)ids[i],1));
   assert(!SHGetSpecialFolderPathA(0,path,3,0) && !path[0]);
   assert(!SHGetSpecialFolderPathA(0,path,31,0) && !path[0]);
-  links();operations();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
+  folder_identifiers();links();operations();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
 }

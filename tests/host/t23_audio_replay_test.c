@@ -3,6 +3,13 @@
  * service; fake CPU/device clocks and transport registers. Storage arrivals
  * use the measured hold histogram, split into <=111 ms commands. No PCM
  * reset between holds. This tests C at the block boundary, not B admission.
+ * --vfs/--old-vfs replay the holds through production VFS admission (new
+ * per-file policy, or every hold conflicting). --trial-device-work adds the
+ * trial's measured device-work sections (t23_trial.h); --require-c makes
+ * the C acceptance (zero audio-refill overruns under the new policy) fatal
+ * in that model instead of reporting it. --old-device-budget selects the
+ * pre-f1-90 aggregate device budget (every non-urgent device task demoted,
+ * the refill charged to the shared budget), the trial image's policy.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define main latency_fixture_main
 #include "kernel_latency_test.c"
@@ -31,9 +38,23 @@ static uint8_t compressed[4096];
 static uint64_t decode_arrived, read_latency_max;
 static unsigned decoded, decoded_min, decode_reads, refills, commands, service_ms;
 static unsigned audio_overruns, other_overruns, priority_checks;
+/* f1-90: own-budget refill overruns, device overruns by task, device_top. */
+static unsigned audio_own_overruns, work_overruns, innocent_overruns, consumed_us_max;
+static unsigned top_windows, top_work_windows;
+static bool old_device_budget;
 static uint64_t class_total[P_COUNT];
 static uint64_t next_refill, next_pump;
 static struct vfs_request audio_read;
+static bool vfs_replay, old_admission, trial_device_work, require_c;
+static unsigned admission_overruns, report_windows, overrun_windows;
+static uint64_t next_device_work=T23_DEVICE_WORK_PERIOD_MS;
+static struct vfs admission_space;
+static struct fat_volume admission_volume;
+static struct vfs_node admission_writer;
+static struct vfs_file_identity unrelated_identity;
+static struct vfs_io_state admission_hold;
+static int admission_current=-1;
+static uint64_t admission_end;
 static void step(void);
 
 /* The scheduler fixture supplies only architectural/time boundaries. Refill
@@ -98,7 +119,11 @@ static void block_until(struct task *t,uint64_t due)
     task_sleep_ms((uint32_t)(due-g_ticks));
 }
 static uint64_t request_now(void *arg) { (void)arg; return g_ticks*1000u; }
-static void request_pause(void *arg) { (void)arg; CHECK(false); }
+static void request_pause(void *arg) {
+    (void)arg; CHECK(vfs_replay && g_current==&decoder);
+    block_until(&decoder,g_ticks+1);
+    while (g_current!=&decoder) { step(); if (g_need_resched) schedule(); }
+}
 static struct blk_request *request(enum blk_operation op,uint64_t lba,unsigned bytes,
                                    void *buffer,bool urgent)
 {
@@ -152,10 +177,52 @@ static void add_operation(unsigned due,unsigned ms,unsigned kind)
     CHECK(operation_count<OPERATIONS);
     operations[operation_count++]=(struct operation){.due=due,.remaining=ms,.kind=kind};
 }
+static void admission_arrivals(void)
+{
+    if (admission_current>=0 && g_ticks>=admission_end) {
+        struct operation *op=&operations[admission_current];
+        vfs_io_end_locked(&admission_space,admission_hold);
+        admission_space.io_file[2]=0; vfs_unlock(&admission_space);
+        op->remaining=0; finished[op->kind]++; admission_current=-1;
+    }
+    if (admission_current>=0) return;
+    unsigned next=operation_count;
+    for (unsigned i=0;i<operation_count;i++) if (operations[i].remaining && operations[i].due<=g_ticks &&
+        (next==operation_count || operations[i].due<operations[next].due)) next=i;
+    if (next==operation_count) return;
+    static const char *const tags[]={"read","log_write","commit","mkdir"};
+    struct operation *op=&operations[next];
+    struct vfs_request holder={.deadline=UINT64_MAX,.now=request_now,.pause=request_pause,
+        .operation=tags[op->kind],.site=op->kind ? "writer" : "native"};
+    struct fs_request_scope scope; fs_request_enter(&scope,&holder);
+    CHECK(!vfs_admit(&admission_space,1u<<2,&holder));
+    /* A synthetic transfer holds the real production mutation guard for the
+     * complete measured interval, not a series of 111ms commands. Writers
+     * identify a different file. The old coarse-volume policy is represented
+     * by making every identity conflict; the admission code is unchanged. */
+    admission_writer.identity=old_admission ? 0 : &unrelated_identity;
+    admission_space.io_file[2]=&admission_writer;
+    admission_hold=vfs_io_begin_locked(&admission_space); fs_request_leave(&scope);
+    admission_current=(int)next; admission_end=g_ticks+op->remaining;
+}
+static void admission_read(void)
+{
+    struct fs_request_scope scope; fs_request_enter(&scope,&audio_read);
+    vfs_lock(&admission_space,0);
+    struct fat_entry entry={0}; struct fat_cursor cursor={0};
+    uint64_t pos=0, arrived=g_ticks; bool busy=false; size_t done=99;
+    /* Zero data here isolates namespace admission; the following production
+     * block request supplies the actual compressed-data completion/PCM credit. */
+    CHECK(!vfs_read_identity_locked(&admission_space,0,&admission_volume,&entry,&cursor,&busy,
+        &pos,&pos,false,0,0,0,0,&done) && !done);
+    vfs_unlock(&admission_space); fs_request_leave(&scope);
+    if (g_ticks-arrived>250) admission_overruns++;
+}
 static void arrivals(void)
 {
+    if (vfs_replay) admission_arrivals();
     bool actor_busy[3]={false};
-    for (unsigned i=0;i<operation_count;i++) {
+    for (unsigned i=0;!vfs_replay && i<operation_count;i++) {
         struct operation *op=&operations[i];
         unsigned actor=op->kind==0 ? 0 : op->kind==3 ? 2 : 1;
         if (op->request && op->request->state==BLK_COMPLETED) {
@@ -205,6 +272,7 @@ static void step(void)
          * limiting catch-up to real-time rate after a delayed read. */
         if (!decode_request && decoded<=2*AUDIO_RATE-AUDIO_RATE/4) {
             decode_arrived=g_ticks;
+            if (vfs_replay) admission_read();
             decode_request=request(BLK_READ,4096,sizeof(compressed),compressed,true);
         }
         advance(50);
@@ -219,7 +287,14 @@ static void step(void)
     } else if (g_current==&ui) {
         advance(250); block_until(&ui,g_ticks+2);
     } else if (g_current==&device_peer) {
-        advance(300); block_until(&device_peer,g_ticks+2);
+        /* Ordinary 300 us device turns; the trial model replaces one turn
+         * per period with the measured device-work section, never catching
+         * up missed periods. The policy under test does not change it. */
+        if (trial_device_work && g_ticks>=next_device_work) {
+            advance(T23_DEVICE_WORK_US);
+            while (next_device_work<=g_ticks) next_device_work+=T23_DEVICE_WORK_PERIOD_MS;
+        } else advance(300);
+        block_until(&device_peer,g_ticks+2);
     } else if (g_current==&vm_peer) {
         advance(1000); block_until(&vm_peer,g_ticks+7);
     } else { CHECK(g_current==&idle); advance(1000); }
@@ -228,18 +303,46 @@ static void collect_overruns(void)
 {
     cpu_account();
     for (unsigned i=0;i<P_COUNT;i++) class_total[i]+=classes[i];
-    CHECK(!overrun_lost);
+    CHECK(!overrun_lost && !audio_lost);
+    unsigned before=audio_overruns;
     for (unsigned i=0;i<overrun_used;i++) {
         if (overrun_events[i].id==hog.id) audio_overruns+=overrun_events[i].count;
         else other_overruns+=overrun_events[i].count;
+        if (overrun_events[i].id==device_peer.id) work_overruns+=overrun_events[i].count;
+        else innocent_overruns+=overrun_events[i].count;
+        if (overrun_events[i].consumed_us>consumed_us_max) consumed_us_max=overrun_events[i].consumed_us;
+        /* f1-90: a demotion names a consumer, never a task with no share. */
+        if (!old_device_budget) CHECK(overrun_events[i].consumed_us);
     }
+    /* Only the refill is audio class; its own budget names nobody else. */
+    for (unsigned i=0;i<audio_used;i++) {
+        CHECK(audio_events[i].id==hog.id && !old_device_budget);
+        audio_own_overruns+=audio_events[i].count;
+    }
+    /* One report window per collection, as the [sched] records count them.
+     * A decoder blocked inside old admission defers collection, so old
+     * policy windows can be longer than 2 s; prevalence uses this count. */
+    report_windows++; if (audio_overruns>before) overrun_windows++;
     /* Use the real reporting path and start another 2 s window. */
     record_bytes=0; records[0]=0; cpu_emit();
-    CHECK(!overrun_used);
+    CHECK(!overrun_used && !audio_used);
+    const char *top=strstr(records,"[cpu] device_top task=");
+    if (top) { top_windows++; if (!strncmp(top+22,"device-work#7 ",14)) top_work_windows++; }
 }
-int main(void)
+int main(int argc,char **argv)
 {
+    for (int i=1;i<argc;i++) {
+        if (!strcmp(argv[i],"--vfs") || !strcmp(argv[i],"--old-vfs")) {
+            CHECK(!vfs_replay); vfs_replay=true; old_admission=!strcmp(argv[i],"--old-vfs");
+        } else if (!strcmp(argv[i],"--trial-device-work")) trial_device_work=true;
+        else if (!strcmp(argv[i],"--old-device-budget")) old_device_budget=true;
+        else if (!strcmp(argv[i],"--require-c")) require_c=true;
+        else CHECK(!"unknown option");
+    }
+    CHECK(!require_c || (vfs_replay && trial_device_work && !old_device_budget));
     reset();
+    device_attribution=!old_device_budget;
+    hog.audio_class=true; /* as audio_init marks the refill worker */
     strcpy(hog.name,"audio-refill"); strcpy(normal.name,"music-pump");
     reporter=(struct task){.id=5,.generation=1,.prio=P_DEVICE,.state=T_BLOCKED};
     strcpy(reporter.name,"storage-writer");
@@ -255,6 +358,10 @@ int main(void)
     disk=(struct blkdev){.read=blkdev_read,.write=blkdev_write,.flush=blkdev_flush,
         .request_read=transfer,.request_write=write_transfer,.request_flush=flush_transfer,
         .queue=&queue,.capacity=8192,.sector_size=512,.write_cache_state=BLKDEV_CACHE_DISABLED};
+    if (vfs_replay) {
+        vfs_init(&admission_space); admission_space.volumes[2]=&admission_volume;
+        admission_volume.dev=&disk;
+    }
     audio_read=(struct vfs_request){.deadline=UINT64_MAX,.now=request_now,.pause=request_pause,
         .urgent_reader=true,.operation="read",.site="native"};
     for (unsigned i=0;i<T23_DESKTOP_HOLDS;i++) {
@@ -290,19 +397,67 @@ int main(void)
         (unsigned long long)(class_total[P_IDLE]*1000/cycles),
         (unsigned long long)(class_total[P_DEVICE]*1000/cycles),
         (unsigned long long)(class_total[P_NORMAL]*1000/cycles));
-    CHECK(!audio_overruns && !audio.error && !audio.deadlines && !audio.underruns && !pcm.starvation);
-    CHECK(decoded_min && decode_reads>1500 && refills>50000 && commands>2000 && priority_checks);
+    CHECK(!audio.error && !audio.deadlines && !audio.underruns && (old_admission || !pcm.starvation));
+    if (!vfs_replay) CHECK(decoded_min && decode_reads>1500 && refills>50000 && commands>2000 && priority_checks);
+    else {
+        printf("F1-87 C VFS continuous old_policy=%u holds=555 complete_intervals=125..1837ms admission_deadline_overruns=%u decoder_latency_max_ms=%llu sampler_audio_overruns=%u PCM_starvations=%llu\n",
+            old_admission,admission_overruns,(unsigned long long)read_latency_max,audio_overruns,(unsigned long long)pcm.starvation);
+        CHECK(old_admission ? admission_overruns>0 : admission_overruns==0 && decoded_min>0);
+    }
     CHECK(decoded+pcm.accepted==2*AUDIO_RATE+(uint64_t)decode_reads*(AUDIO_RATE/4));
     CHECK(pcm.queued+pcm.consumed==pcm.accepted); /* no invented/discarded PCM */
-    puts("F1-87 C continuous replay: all 555 operations, finite PCM and zero refill overruns PASS");
-    /* Negative control: the actual sampler must attribute a device overrun
-     * to this task when a refill consumes an excessive CPU interval. */
+    /* Amendment 4 item 4: the metric is the sampler's device_overrun
+     * task=audio-refill, never admission misses or PCM starvation. Checked
+     * before the independent 5 ms sampler calibration below adds a count.
+     * The record is emitted for every non-urgent P_DEVICE task demoted when
+     * the aggregate device budget (4 of 10 ticks or 4 ms of 10 ms) runs out;
+     * it names the demoted task, not the consumer of the budget. */
+    const char *policy=!vfs_replay ? "block" : old_admission ? "old" : "new";
+    const char *device_policy=old_device_budget ? "aggregate" : "attributed";
+    printf("F1-87 C sampler: policy=%s device_budget=%s trial_device_work=%u audio_refill_overruns=%u other_device_overruns=%u overrun_windows=%u/%u trial_windows=%u/%u\n",
+        policy,device_policy,trial_device_work,audio_overruns,other_overruns,overrun_windows,report_windows,T23_OVERRUN_WINDOWS,T23_REPORT_WINDOWS);
+    printf("F1-90 attribution: device_budget=%s device_work_overruns=%u innocent_overruns=%u consumed_us_max=%u audio_refill_own_overruns=%u device_top=device-work in %u/%u reported windows\n",
+        device_policy,work_overruns,innocent_overruns,consumed_us_max,audio_own_overruns,top_work_windows,top_windows);
+    if (!old_device_budget) {
+        /* f1-90: the refill has its own budget, so another task's device
+         * work can never demote it; a demotion names only the consumer
+         * (device-work here), and the refill stays inside its own budget. */
+        CHECK(!audio_overruns && !innocent_overruns && !audio_own_overruns);
+        CHECK(top_work_windows==top_windows);
+    }
+    if (!trial_device_work) {
+        /* The hold distribution alone: zero under the new policy (C). The
+         * old policy's count is reported; it is not a negative control,
+         * since the holds do not change device-class CPU in this model. */
+        if (!old_admission) CHECK(!audio_overruns);
+    } else if (old_device_budget) {
+        /* Negative control (lead decision): the trial image's aggregate
+         * device budget with the trial's hold distribution and measured
+         * device work reproduces the overruns in at least 90% of the
+         * windows (trial: 192/201), whichever VFS policy is replayed. */
+        CHECK(audio_overruns>0 && overrun_windows*10>=report_windows*9);
+    }
+    bool c_open=vfs_replay && !old_admission && trial_device_work && !old_device_budget && audio_overruns;
+    if (c_open) {
+        fprintf(stderr,"F1-87 C NOT ACCEPTED: new VFS policy with the trial's device work keeps device_overrun task=audio-refill=%u in %u/%u windows; the aggregate device budget, not the volume holds, produces them in this model\n",
+            audio_overruns,overrun_windows,report_windows);
+        if (require_c) return 1;
+    }
+    printf("F1-87 C continuous replay: all 555 operations, finite PCM, policy=%s device_budget=%s trial_device_work=%u audio_refill_overruns=%u %s\n",
+        policy,device_policy,trial_device_work,audio_overruns,c_open ? "REPORTED" : "PASS");
+    /* Negative control: the actual sampler must attribute an overrun to
+     * this task when a refill consumes an excessive CPU interval: its own
+     * audio budget under f1-90, the shared budget under the old policy. */
+    unsigned shared_before=audio_overruns, innocent_before=innocent_overruns;
     while (g_current!=&hog) { step(); if (g_need_resched) schedule(); }
     advance(5000); schedule(); collect_overruns();
-    CHECK(audio_overruns);
-    puts("F1-87 C negative control: real CPU sampler detects audio-refill overrun PASS");
+    if (old_device_budget) CHECK(audio_overruns>shared_before);
+    else CHECK(audio_own_overruns && audio_overruns==shared_before && innocent_overruns==innocent_before);
+    printf("F1-87 C negative control: real CPU sampler detects audio-refill overrun (%s) PASS\n",
+        old_device_budget ? "device_overrun" : "audio_refill_overrun");
     for (unsigned i=0;i<operation_count;i++) CHECK(!operations[i].request);
     if (decode_request) { CHECK(blk_request_cancel(decode_request)); CHECK(!blk_request_release(decode_request)); }
     CHECK(!blk_queue_destroy(&queue) && !blk_request_pool_host_cleanup());
+    if (vfs_replay) { CHECK(admission_current<0); admission_space.volumes[2]=0; vfs_destroy(&admission_space); }
     return 0;
 }

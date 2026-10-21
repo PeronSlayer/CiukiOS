@@ -138,6 +138,14 @@ class Kernel32Files(unittest.TestCase):
             *[nt+n+'.c' for n in ('native','registry','strings','path','divide')]],'PASS ntdll upper checks=',extra=('-pthread',))
         self.assertIn('PASS ntdll upper NT registry paths access rights dispositions close routing',out)
 
+    def test_f5_15c_ntdll_vsnprintf_wine_semantics(self):
+        """f5-15C lead decision: ntdll!_vsnprintf/_vsnwprintf implemented with
+        Wine 10.0 dlls/ntdll/printf.h semantics instead of a W21 stub."""
+        nt='sdk/win32/ntdll/'
+        out=self._host('ntdll-printf',['tests/host/win32/ntdll_printf_test.c',nt+'printf.c',nt+'strings.c'],
+                       'PASS ntdll printf checks=')
+        self.assertIn('PASS ntdll printf Wine overflow exact-fit counting flags sizes strings pointers',out)
+
     def test_f5_20a_ntdll_compiler_helpers_i386(self):
         """_alldiv/_allrem/_aulldiv/_chkstk exactly as exported, in a static
         ELF32 that makes no system call (UD2 success, INT3 failure)."""

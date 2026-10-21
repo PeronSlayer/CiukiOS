@@ -3,7 +3,8 @@
 
 Accepts census.py text, DLL!symbol lists, and the checked-in research union.
 No executable input is read. Unknown conventions never guess stack cleanup.
-Only explicit ordinal assignments are compatibility claims; winmm #2 is opaque.
+Only explicit ordinal assignments are compatibility claims; winmm #2 is PlaySound
+(scripts/win32/audio.py, f5-15B, from the pinned Wine winmm.spec).
 """
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Copyright 2026 CiukiOS contributors.
@@ -53,6 +54,21 @@ def imports(text):
         if line.lstrip().startswith('`') or re.fullmatch(r'[\w.!#$?@\s,]+',line):
             for dll,symbol in re.findall(r'([\w.-]+)!([\w?$@]+|#\d+)',line): add(dll,symbol)
     return result
+
+ACCEPTANCE=ROOT/'docs/design/win32-census/acceptance-installers.txt'
+def acceptance_imports(dll):
+    """f5-15B: imports of the original acceptance installers (census.py text of
+    the entry executables and their host-extracted setup children) for one
+    builtin DLL. Only metadata is read; absent text means no extra names."""
+    if not ACCEPTANCE.is_file(): return set()
+    return imports(ACCEPTANCE.read_text()).get(dll.lower(),set())
+
+def acceptance_extra(known):
+    """The acceptance imports for the DLLs already in `known` (an iterable of
+    census DLL names); DLLs private to a title are never generated."""
+    if not ACCEPTANCE.is_file(): return {}
+    present=set(d.lower() for d in known)
+    return {dll:sorted(names) for dll,names in imports(ACCEPTANCE.read_text()).items() if dll in present}
 
 def generate(inputs,out,implemented=None,extra=None):
     from scripts.win32 import stub_signatures

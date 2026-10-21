@@ -4,80 +4,12 @@
   "workload": "jazz2-shareware",
   "scene": "default-play",
   "timeout_ms": 580000,
-  "status": "reference-pending",
+  "status": "guest-driven",
   "segments": [
     {
       "name": "install",
-      "steps": [
-        {
-          "input_id": 1,
-          "at_ms": 500,
-          "events": [
-            {
-              "type": "key",
-              "data": {
-                "down": true,
-                "key": {
-                  "type": "qcode",
-                  "data": "ret"
-                }
-              }
-            }
-          ],
-          "after_screen": "install-welcome",
-          "note": "placeholder stimulus: the exact keys are qualified by the reference run (workloads.json unknown scene.reference_input_sequence)"
-        },
-        {
-          "input_id": 2,
-          "at_ms": 560,
-          "events": [
-            {
-              "type": "key",
-              "data": {
-                "down": false,
-                "key": {
-                  "type": "qcode",
-                  "data": "ret"
-                }
-              }
-            }
-          ]
-        },
-        {
-          "input_id": 3,
-          "at_ms": 500,
-          "events": [
-            {
-              "type": "key",
-              "data": {
-                "down": true,
-                "key": {
-                  "type": "qcode",
-                  "data": "ret"
-                }
-              }
-            }
-          ],
-          "after_screen": "install-complete",
-          "note": "placeholder stimulus: the exact keys are qualified by the reference run (workloads.json unknown scene.reference_input_sequence)"
-        },
-        {
-          "input_id": 4,
-          "at_ms": 560,
-          "events": [
-            {
-              "type": "key",
-              "data": {
-                "down": false,
-                "key": {
-                  "type": "qcode",
-                  "data": "ret"
-                }
-              }
-            }
-          ]
-        }
-      ]
+      "steps": []
     }
-  ]
+  ],
+  "note": "f5-15C: the installers tier is driven in the guest by the operator program of tests/win32/operators/jazz2-shareware.json (guest block) through the desktop input path; the host sends no QMP input and only takes the screendumps the guest asks for"
 }

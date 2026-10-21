@@ -1,0 +1,112 @@
+CiukiOS M2: register the native HTTP/HTTPS fetcher, compile its port-owned
+engine, bridge fd sets through native poll on every <=10 ms UI turn, and enforce
+the approved five redirect hops with 307/308 method preservation. Native inet
+headers replace the M1 local-only address declarations. file: and data: unchanged.
+
+--- a/netsurf/content/fetch.c
++++ b/netsurf/content/fetch.c
+@@ -52,6 +52,7 @@
+ 
+ #include "content/fetch.h"
+ #include "content/fetchers.h"
++#include "framebuffer/ciuki/fetch_ciuki.h"
+ #include "content/fetchers/resource.h"
+ #include "content/fetchers/about/about.h"
+ #ifdef WITH_CURL
+@@ -287,6 +288,9 @@
+ nserror fetcher_init(void)
+ {
+ 	nserror ret;
++
++	ret = fetch_ciuki_register();
++	if (ret != NSERROR_OK) return ret;
+ 
+ #ifdef WITH_CURL
+ 	ret = fetch_curl_register();
+--- a/netsurf/content/fetchers/Makefile
++++ b/netsurf/content/fetchers/Makefile
+@@ -1,6 +1,6 @@
+ # Content fetchers sources
+ 
+-S_FETCHERS_YES := data.c resource.c
++S_FETCHERS_YES := data.c resource.c ciuki.c
+ S_FETCHERS_NO :=
+ S_FETCHERS_$(NETSURF_USE_CURL) += curl.c
+ 
+--- a/netsurf/frontends/framebuffer/Makefile
++++ b/netsurf/frontends/framebuffer/Makefile
+@@ -179,6 +179,7 @@
+ S_FRAMEBUFFER_FBTK := fbtk.c event.c fill.c bitmap.c user.c window.c 	\
+ 	text.c scroll.c osk.c 
+ 
++S_FRONTEND += ciuki/net.c ciuki/http.c ciuki/tls.c ciuki/dns.c
+ S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c ciuki/budget.c
+ 
+ S_FRONTEND += $(addprefix fbtk/,$(S_FRAMEBUFFER_FBTK))
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -46,6 +46,7 @@
+ 
+ #include "framebuffer/gui.h"
+ #include "framebuffer/ciuki/chrome.h"
++#include "framebuffer/ciuki/fetch_ciuki.h"
+ #include "content/content.h"
+ #include "framebuffer/ciuki/surface.h"
+ #include "framebuffer/fbtk.h"
+@@ -633,6 +634,7 @@
+ 		/* run the scheduler and discover how long to wait for
+ 		 * the next event.
+ 		 */
++		ciuki_fetch_pump();
+ 		timeout = schedule_run();
+         if (timeout<0 || timeout>10) timeout=10;
+ 
+--- a/netsurf/utils/inet.h
++++ b/netsurf/utils/inet.h
+@@ -33,16 +33,19 @@
+ 
+ #include "utils/config.h"
+ 
++#if defined(CIUKI_NETSURF) && defined(CIUKI_HOST)
++#include "framebuffer/ciuki/host_network.h"
++#endif
++
+ #if defined(CIUKI_NETSURF) && !defined(CIUKI_HOST)
+-/* Local file/data port needs address syntax types, not socket services. */
+-#include <stdint.h>
++/* Native IPv4 sockets; keep the private fd_set bridge for this port. */
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
+ #include "framebuffer/ciuki/fdset.h"
+-struct in_addr { uint32_t s_addr; };
+ struct in6_addr { unsigned char s6_addr[16]; };
+ #define AF_INET 2
+ #define AF_INET6 10
+-#undef HAVE_INETATON
+-#undef HAVE_INETPTON
+ #elif defined(HAVE_POSIX_INET_HEADERS)
+ 
+ #include <sys/socket.h>
+--- a/netsurf/content/llcache.c
++++ b/netsurf/content/llcache.c
+@@ -2305,8 +2305,8 @@
+ 	(void) llcache_hsts_update_policy(object);
+ 
+ 	/* Forcibly stop redirecting if we've followed too many redirects */
+-#define REDIRECT_LIMIT 10
+-	if (object->fetch.redirect_count > REDIRECT_LIMIT) {
++#define REDIRECT_LIMIT 5
++	if (object->fetch.redirect_count >= REDIRECT_LIMIT) {
+ 		NSLOG(llcache, INFO, "Too many nested redirects");
+ 
+ 		event.type = LLCACHE_EVENT_ERROR;
+@@ -2379,7 +2379,7 @@
+ 	if (http_code == 301 || http_code == 302 || http_code == 303) {
+ 		/* 301, 302, 303 redirects are all unconditional GET requests */
+ 		post = NULL;
+-	} else if (http_code != 307 || post != NULL) {
++	} else if (http_code != 307 && http_code != 308) {
+ 		/** \todo 300, 305, 307 with POST */
+ 		nsurl_unref(hsts_url);
+ 		return NSERROR_OK;

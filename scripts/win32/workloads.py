@@ -7,8 +7,10 @@ lead reviews an import receipt and the original distribution terms.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -89,19 +91,7 @@ def validate(manifest):
             require(installer['arguments'] is None or isinstance(installer['arguments'], list) and all(isinstance(v, str) for v in installer['arguments']), 'installer arguments')
             require(installer['arguments'] is None or https(installer['parameters_source']), 'switches require documentation')
             require(installer['operator_script'] == 'tests/win32/operators/'+ident+'.json', 'operator script path')
-            inventory = row['installed_files']
-            require(inventory['status'] in ('unknown', 'verified'), 'installed inventory status')
-            require(isinstance(inventory['entries'], list), 'installed entries')
-            if inventory['status'] == 'unknown':
-                require(not inventory['entries'] and bool(inventory['reason']), 'unknown inventory must explain absence')
-            else:
-                require(bool(inventory['entries']), 'empty verified inventory')
-                names = set()
-                for entry in inventory['entries']:
-                    name = entry['name']
-                    require(isinstance(name, str) and name and name.casefold() not in names, 'duplicate/invalid installed name')
-                    require(type(entry['size']) is int and entry['size'] >= 0, 'installed size')
-                    names.add(name.casefold())
+            validate_inventory(row['installed_files'])
             require(row['disc']['requirement'] in ('none', 'ISO', 'track-aware'), 'disc requirement')
             scene = row['scene']
             require(type(scene['play_seconds']) is int and scene['play_seconds'] >= 180, 'play must last at least 180 s')
@@ -113,6 +103,64 @@ def validate(manifest):
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed workload manifest: '+str(error)) from error
     return manifest
+
+
+INVENTORY_KEYS = {'status', 'entries', 'reason', 'directories', 'changed', 'removed', 'links', 'registry',
+                  'calibration', 'uninstall'}
+
+
+def validate_files(rows, label):
+    require(isinstance(rows, list), label + ' list')
+    names = set()
+    for entry in rows:
+        require(isinstance(entry, dict) and set(entry) <= {'name', 'size', 'sha256'}, label + ' entry fields')
+        name = entry['name']
+        require(isinstance(name, str) and name and name.casefold() not in names, 'duplicate/invalid installed name')
+        require(type(entry['size']) is int and entry['size'] >= 0, 'installed size')
+        require(entry.get('sha256') is None or digest(entry['sha256'], 64), 'installed sha256')
+        names.add(name.casefold())
+
+
+def validate_registry(delta):
+    require(delta is None or isinstance(delta, dict) and set(delta) == {'added_keys', 'removed_keys', 'changed_values'},
+            'registry delta shape')
+    if delta:
+        require(all(isinstance(v, list) for v in delta.values()), 'registry delta lists')
+
+
+def validate_inventory(inventory):
+    """unknown (nothing observed), calibrated (written by an f5-15C QEMU
+    calibration run, awaiting the lead) or verified (accepted by the lead)."""
+    require(isinstance(inventory, dict) and set(inventory) <= INVENTORY_KEYS, 'installed inventory fields')
+    require(inventory['status'] in ('unknown', 'calibrated', 'verified'), 'installed inventory status')
+    require(isinstance(inventory['entries'], list), 'installed entries')
+    if inventory['status'] == 'unknown':
+        require(not inventory['entries'] and bool(inventory['reason']), 'unknown inventory must explain absence')
+        require(not set(inventory) - {'status', 'entries', 'reason'}, 'unknown inventory carries no calibration')
+        return
+    require(bool(inventory['entries']), 'empty verified inventory')
+    validate_files(inventory['entries'], 'installed')
+    validate_files(inventory.get('changed', []), 'changed')
+    for key in ('directories', 'removed'):
+        require(isinstance(inventory.get(key, []), list) and all(isinstance(p, str) and p for p in inventory.get(key, [])), key)
+    links = inventory.get('links', [])
+    require(isinstance(links, list) and all(isinstance(l, dict) and set(l) == {'path', 'target'} for l in links), 'links')
+    validate_registry(inventory.get('registry'))
+    uninstall = inventory.get('uninstall')
+    if uninstall is not None:
+        require(isinstance(uninstall, dict) and set(uninstall) == {'registered', 'residue'} and type(uninstall['registered']) is bool,
+                'uninstall block')
+        residue = uninstall['residue']
+        if residue is not None:
+            require(isinstance(residue, dict) and set(residue) == {'files', 'directories', 'changed', 'removed', 'registry'}, 'residue shape')
+            validate_files(residue['files'], 'residue')
+            validate_files(residue['changed'], 'residue changed')
+            validate_registry(residue['registry'])
+    if inventory['status'] == 'calibrated' or 'calibration' in inventory:
+        calibration = inventory.get('calibration')
+        require(isinstance(calibration, dict) and re.fullmatch('[0-9a-f]{8}', str(calibration.get('run_id'))) and
+                digest(calibration.get('image_sha256'), 64) and digest(calibration.get('payload_sha256'), 64),
+                'calibrated inventory names its run, image and payload')
 
 
 def load(path=ROOT/'tests/win32/workloads.json'):
@@ -187,11 +235,51 @@ def fetch(row, root=ROOT, import_unpinned=False, opener=urlopen):
     return receipt
 
 
+def import_local(row, root=ROOT, import_unpinned=False):
+    """f5-15B: receipt for a file the lead already downloaded, without any I/O
+    beyond hashing. The file is accepted at `build/downloads/win32/<id>/<file>`
+    or, as the lead stores it, flat at `build/downloads/win32/<file>`; the flat
+    file is linked into the per-title directory (same bytes, no copy) so the
+    census and fixture generators find it. Returns None when the file is
+    absent. Owner-local rows and rows without a pinned size are refused."""
+    require(row['licence']['class'] != 'owner-local', 'owner-local payloads are never imported here')
+    source = row['source']
+    name = source['file']
+    if name is None:
+        return None
+    require(isinstance(name, str) and name not in ('', '.', '..') and not any(c in name for c in '/\\\0'), 'unsafe filename')
+    require(re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', row['id']), 'unsafe id')
+    root = Path(root).resolve()
+    base = root/DOWNLOAD_DIRECTORY
+    destination = base/row['id']/name
+    flat = base/name
+    require(not destination.is_symlink() and not flat.is_symlink(), 'symlink payload')
+    if not destination.exists():
+        if not flat.is_file():
+            return None
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(flat, destination)
+        except OSError:
+            shutil.copyfile(flat, destination)
+    require(destination.resolve().is_relative_to(base.resolve()), 'import path escapes tree')
+    actual = verify(destination, source, import_unpinned)
+    receipt = {'schema_version': 1, 'id': row['id'], 'url': source['url'], **actual,
+               'status': 'pinned' if source['sha256'] else 'candidate-unreviewed',
+               'sha1_verified': source['sha1'] is not None,
+               'distribution_verified': row['licence']['distribution_verified'],
+               'imported_from': 'local file supplied by the lead'}
+    destination.with_name(destination.name+'.receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+    return receipt
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, default=ROOT/'tests/win32/workloads.json')
     parser.add_argument('--fetch', metavar='ID')
-    parser.add_argument('--import-unpinned', action='store_true')
+    parser.add_argument('--import-unpinned', action='store_true',
+                        help='with --fetch: accept a SHA-1-only pin; alone: write receipts for '
+                             'every downloaded file already present under build/downloads/win32/')
     args = parser.parse_args()
     manifest = load(args.manifest)
     if args.fetch:
@@ -199,5 +287,18 @@ if __name__ == '__main__':
         if not matches:
             parser.error('unknown workload')
         print(json.dumps(fetch(matches[0], import_unpinned=args.import_unpinned), indent=2))
+    elif args.import_unpinned:
+        receipts = []
+        for row in manifest['workloads']:
+            if row['licence']['class'] == 'owner-local' or row['source']['file'] is None:
+                continue
+            if row['source']['size'] is None:
+                receipts.append({'id': row['id'], 'file': row['source']['file'], 'absent': True,
+                                 'reason': 'no size pin in the manifest; import refused'})
+                continue
+            receipt = import_local(row, import_unpinned=True)
+            receipts.append({'id': row['id'], 'file': row['source']['file'],
+                             **({'absent': True} if receipt is None else receipt)})
+        print(json.dumps(receipts, indent=2))
     else:
         print('Validated', len(manifest['workloads']), 'workload rows; no payload fetched.')

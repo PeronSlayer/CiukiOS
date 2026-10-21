@@ -957,9 +957,33 @@ static void dns_abandon(void *arg)
     w->request->abandoned = true; if (w->request->done) w->request->used = false;
     sys_arch_unprotect(f); if (w->outer) w->outer(w->value);
 }
+static struct { char name[64]; uint32_t address; } resolve_overrides[NET_RESOLVE_OVERRIDES];
+int net_resolve_override(const char *name, uint32_t address)
+{
+    if (!name || strlen(name) >= sizeof(resolve_overrides[0].name) || !dns_name(name)) return -EINVAL;
+    sys_prot_t f = sys_arch_protect(); int slot = -1;
+    for (unsigned i = 0; i < NET_RESOLVE_OVERRIDES; i++) {
+        if (!strncmp(resolve_overrides[i].name, name, sizeof(resolve_overrides[i].name))) { slot = (int)i; break; }
+        if (slot < 0 && !resolve_overrides[i].address) slot = (int)i;
+    }
+    if (slot < 0) { sys_arch_unprotect(f); return -ENOSPC; }
+    if (address) { memcpy(resolve_overrides[slot].name, name, strlen(name) + 1); resolve_overrides[slot].address = address; }
+    else memset(&resolve_overrides[slot], 0, sizeof(resolve_overrides[slot]));
+    sys_arch_unprotect(f);
+    return 0;
+}
+static bool resolve_overridden(const char *name, uint32_t *address)
+{
+    bool found = false; sys_prot_t f = sys_arch_protect();
+    for (unsigned i = 0; i < NET_RESOLVE_OVERRIDES && !found; i++)
+        if (resolve_overrides[i].address && !strncmp(resolve_overrides[i].name, name, sizeof(resolve_overrides[i].name))) { *address = resolve_overrides[i].address; found = true; }
+    sys_arch_unprotect(f);
+    return found;
+}
 int net_resolve(struct process *p, const char *name, uint32_t *address, int *status)
 {
     if (!dns_name(name)) return -EINVAL;
+    if (resolve_overridden(name, address)) { *status = 0; return 0; }
     struct dns_request *r = NULL; sys_prot_t f = sys_arch_protect();
     for (unsigned i = 0; i < CIUKI_DNS_MAX; i++) if (!lookups[i].used) { r = &lookups[i]; memset(r, 0, sizeof(*r)); r->used = true; break; }
     sys_arch_unprotect(f);

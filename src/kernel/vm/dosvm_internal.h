@@ -16,6 +16,7 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
+void dosvm_client_priority(struct dosvm *);
 /* A base image may stop before the geometry's end (owner decision
  * 2026-10-12, the bundled shareware games disk): trailing all-zero sectors
  * are cut by scripts/build_games_disk.py and read back as zeros. It must
@@ -136,6 +137,7 @@ struct dos_file;
 struct dos_file_ops;
 struct vm_cache_block;
 struct dos_file_volume;
+struct dos_unified;
 struct dosvm {
     struct dosvm_info info;
     struct aspace as;
@@ -147,6 +149,10 @@ struct dosvm {
     struct dos_file_volume *file_volume;
     struct v86_frame file_saved;
     uint32_t file_phys,file_bytes;
+    struct dos_unified *unified; /* f3-56 DFV2 state: unified profile only */
+    struct v86_frame unified_saved;
+    uint32_t unified_phys,unified_bytes;
+    bool unified_vif,unified_logged;
     bool frame_pm;           /* frame is a ring-3 DPMI client trap_frame */
     bool dpmi_enabled;       /* INT 2Fh/1687h answered for this VM */
     bool return_tracker_tf;  /* immutable platform choice, survives DPMI reset */
@@ -439,6 +445,9 @@ bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, boo
 struct ciuki_rect;
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t tick, struct ciuki_rect *damage);
+/* Same complete scan as frame_digest, optionally retaining those exact rows. */
+int dosvm_frame_capture(struct dosvm *, uint64_t, struct dosvm_frame *,
+                        int (*row)(void *,unsigned,const void *,unsigned),void *);
 uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
 int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);

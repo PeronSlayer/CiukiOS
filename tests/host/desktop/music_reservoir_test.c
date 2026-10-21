@@ -45,9 +45,12 @@ FILE *__wrap_fopen(const char *path,const char *mode)
 struct device {
     uint64_t written, audible, last, credit, started, expected;
     uint64_t hash, expected_hash; unsigned gaps, max_queue; int gap;
+    pthread_t pump; atomic_uint refill_calls;
 };
 static int output_open(void *ctx,unsigned *rate)
-{ struct device *d=ctx; d->written=d->audible=d->last=d->credit=d->started=0; *rate=48000; return 0; }
+{ struct device *d=ctx; d->pump=pthread_self(); d->written=d->audible=d->last=d->credit=d->started=0; *rate=48000; return 0; }
+static void output_refill(void *ctx)
+{ struct device *d=ctx; assert(!pthread_equal(d->pump,pthread_self())); atomic_fetch_add(&d->refill_calls,1); }
 static int output_write(void *ctx,const int16_t *pcm,unsigned n)
 {
     struct device *d=ctx; assert(n<=2048); if (!d->written) assert(n<=256);
@@ -91,7 +94,7 @@ static void play(const char *path)
 {
     struct device d={0}; reference(path,&d); atomic_store(&stalls,0); atomic_store(&bulk_reads,0);
     atomic_store(&stall_enabled,1);
-    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d};
+    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill};
     struct music_runtime *rt=music_runtime_start(&out); assert(rt);
     struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path); assert(!music_runtime_send(rt,&c));
     struct music_snapshot *s=calloc(1,sizeof(*s)); assert(s); uint64_t previous=0, start=ns(); int playing=0;
@@ -113,6 +116,7 @@ static void play(const char *path)
     assert(d.gaps>0);
 #else
     assert(!d.gaps && !s->starvations && atomic_load(&bulk_reads)>0);
+    assert(atomic_load(&d.refill_calls)>0);
     assert(max_reservoir>=96000 && max_reservoir<=MUSIC_RING);
 #endif
     printf("%s gaps=%u stalls=%u bulk_reads=%u reservoir_max=%u written=%llu EOF=%llu PCM=exact queue_max=%u\n",
@@ -126,7 +130,7 @@ static void starvation(const char *path)
     /* Deliberately exceed the reservoir; writer/status/UI must keep moving,
      * then resume with the exact original PCM, with no stale-slot replay. */
     struct device d={0}; reference(path,&d); atomic_store(&stall_enabled,0);
-    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d};
+    struct music_output out={output_open,output_write,output_status,output_close,output_now,&d,output_refill};
     struct music_runtime *rt=music_runtime_start(&out); assert(rt);
     struct music_command c={.action=MUSIC_OPEN}; snprintf(c.path,sizeof(c.path),"%s",path); assert(!music_runtime_send(rt,&c));
     struct music_snapshot *s=calloc(1,sizeof(*s)); assert(s); uint64_t start=ns();

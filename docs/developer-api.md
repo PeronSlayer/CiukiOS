@@ -571,6 +571,7 @@ enum ciuki_syscall {
     CIUKI_SYS_POLL = 88,
     CIUKI_SYS_RESOLVE4 = 89,
     CIUKI_SYS_NETCTL = 90,
+    CIUKI_SYS_GETENTROPY = 91,
 };
 ```
 
@@ -2412,11 +2413,17 @@ delegated program-management authority; no VM handle
 ```
 
 CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
-a FreeDOS override is permitted only for an explicit game, never the shell.
+a reference/unified override is permitted only for an explicit game, never the shell.
 
 ```c
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_UNIFIED 2u
+```
+
+opt-in CiukiDOS K2043 fork, DFV2 binding and native IFS (f3-57)
+
+```c
 #define CIUKI_DOSVM_GAME_COUNT 3u
 ```
 
@@ -3429,6 +3436,44 @@ int ciuki_dosvm(uint32_t operation, struct ciuki_dosvm_command *command);
 #endif
 ```
 
+## `ciuki/entropy.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/entropy.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_ENTROPY_H
+#define CIUKI_SDK_ENTROPY_H
+#include <stddef.h>
+#include <stdint.h>
+```
+
+getentropy is nonblocking: EAGAIN means unavailable, EINVAL means >256.
+The wait helper retries EAGAIN with 10 ms sleeps, potentially indefinitely;
+it returns -1 on an interrupted sleep or any permanent error.
+
+```c
+int getentropy(void *, size_t);
+int ciuki_entropy_wait(void *, size_t);
+```
+
+Compatibility alias for ciuki_entropy_wait.
+
+```c
+int ciuki_getentropy_wait(void *, size_t);
+```
+
+arc4random* aborts with a diagnostic after 5 s of EAGAIN or on permanent
+errors; the deadline spans the entire call, including chunks/draws.
+
+```c
+uint32_t arc4random(void);
+void arc4random_buf(void *, size_t);
+uint32_t arc4random_uniform(uint32_t);
+#endif
+```
+
 ## `ciuki/font.h`
 
 Source: `sdk/sysroot-overlay/include/ciuki/font.h`.
@@ -3560,6 +3605,14 @@ Cable carrier is independent of IP configuration or Internet access.
 
 ```c
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
+```
+
+Existing /dev/net NET_GET_STATE helper: opens read-only, initializes the
+version/size, queries and closes. present/link/state/address_configured
+describe local availability; syscall 90 remains reserved ENOSYS.
+
+```c
+int ciuki_net_status(struct ciuki_net_state *);
 #endif
 ```
 

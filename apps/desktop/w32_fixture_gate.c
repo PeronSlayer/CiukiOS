@@ -1,6 +1,10 @@
 /* Shared, runtime-only Win32 fixture launcher. SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "win32_adapter.h"
+#include "installer_fixture.h"
+#include "installer_title.h"
+#include "../../src/probes/win32_installers/title_controller.h"
+#include "../../src/probes/win32_installers/controller.h"
 #include "../../src/probes/win32_core/controller.h"
 #include "../../src/probes/win32_restart/controller.h"
 #include "../../src/probes/win32_gl/controller.h"
@@ -28,13 +32,23 @@ int desk_w32_fixture_begin(struct desktop *d,const char *name)
     if(id==W32_FIXTURE_COUNT) {
         if(!strcmp(name,"restart-exercise"))id=W32_FIXTURE_RESTART;
         else if(!strcmp(name,"gl-exercise"))id=W32_FIXTURE_GL;
+        else if(!strcmp(name,INSTALLER_FIXTURE_NAME))id=W32_FIXTURE_INSTALLER;
+        else if(!strncmp(name,TITLE_FIXTURE_PREFIX,sizeof(TITLE_FIXTURE_PREFIX)-1))id=W32_FIXTURE_TITLE;
         else return -EINVAL;
+    }
+    if(id==W32_FIXTURE_TITLE){
+        int error=desk_title_begin(d,name+sizeof(TITLE_FIXTURE_PREFIX)-1);
+        if(error<0)return error;
+    }
+    if(id==W32_FIXTURE_INSTALLER){
+        int error=desk_installer_fixture_begin(d);
+        if(error<0)return error;
     }
     if(id==RESTART_FIXTURE_ID){
         memset(&restart_fixture,0,sizeof(restart_fixture));restart_fixture.active=1;
         restart_fixture.deadline=d->now_ns+360000000000ull;
     }
-    fixture.id=id;fixture.active=1;fixture.pending=id!=RESTART_FIXTURE_ID;
+    fixture.id=id;fixture.active=1;fixture.pending=id<W32_FIXTURE_COUNT || id==W32_FIXTURE_GL;
     fixture.deadline=d->now_ns+15000000000ull;
     return 0;
 }
@@ -113,6 +127,16 @@ void desk_w32_fixture_tick(struct desktop *d)
 {
     if(!fixture.active)return;
     service_exits(d);
+    if(fixture.id==W32_FIXTURE_INSTALLER){
+        desk_installer_fixture_tick(d);
+        fixture.active=desk_installer_fixture_active();
+        return;
+    }
+    if(fixture.id==W32_FIXTURE_TITLE){
+        desk_title_tick(d);
+        fixture.active=desk_title_active();
+        return;
+    }
     if(fixture.id==RESTART_FIXTURE_ID){restart_tick(d);return;}
     /* The authored crash coordinator waits for each child's real unhandled
      * fault and the production crash-file worker. Accept only its own fault
@@ -163,6 +187,7 @@ static uint32_t restart_service_pid(void)
 extern int desk_restart_process_alive(uint32_t);
 void desk_restart_fixture_notice(unsigned kind,uint32_t pid,uint32_t flags)
 {
+    desk_title_notice(kind,pid,flags);
     if(!restart_fixture.active)return;
     if(kind==2)restart_fixture.resumed=0;
     if(kind==3)restart_fixture.resumed=1;

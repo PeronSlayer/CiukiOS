@@ -96,6 +96,18 @@ def load(name, path):
     return m
 
 
+def payload_fixture_bytes(sources, directories):
+    """Room for payloads, FAT metadata and cluster/directory allocation slack."""
+    mib = 1024 * 1024
+    total = sum(source.stat().st_size for source in sources.values())
+    # mkfs.fat selects FAT/cluster geometry from the volume size. Allow 25%
+    # (at least 16 MiB) for metadata/headroom plus a maximum 64 KiB cluster
+    # of slack per file/directory. Keep the old minimum, round up to MiB.
+    margin = max((total + 3) // 4, 16 * mib)
+    required = total + margin + 64 * 1024 * (len(sources) + len(directories))
+    return max(64 * mib, ((required + mib - 1) // mib) * mib)
+
+
 def xrgb_to_rgb(data):
     rgb = bytearray(len(data) // 4 * 3)
     rgb[0::3], rgb[1::3], rgb[2::3] = data[2::4], data[1::4], data[0::4]
@@ -518,7 +530,7 @@ class DesktopTests(unittest.TestCase):
                             '-DDOSBOX_SETTINGS_DIR="'+str(folder/"prefs")+'"', "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
                             str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
                             "-o", str(binary)], check=True)
-            for scenario in range(20):
+            for scenario in range(23):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
@@ -589,12 +601,12 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(build.current_build(expected))
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
+        licenses = image.desktop_license_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
-        self.assertEqual(set(sources), {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
+        expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music",
                                         "/system/assets/ciuki-portrait.xrgb",
-                                        "/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt",
-                                        "/system/licenses/minimp3.txt", "/system/licenses/FreeType-FTL.txt", "/system/licenses/FreeType-LICENSE.txt", "/system/licenses/FreeType-NOTICE.txt", "/system/licenses/TinyGL-LICENSE.txt", "/system/licenses/TinyGL-NOTICE.txt", "/system/fonts/LICENSES.TXT",
+                                        *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         "/system/icons/tango.cis",
@@ -603,19 +615,17 @@ class DesktopTests(unittest.TestCase):
                                         "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
                                         "/system/sounds/scheme.cfg",
                                         *(f"/System/cache/wallpaper/{n}" for n in metadata["wallpaper_cache"]["files"]),
-                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "scheme.cfg")})
+                                        *(f"/system/sounds/{n}" for n in metadata["sounds"]["files"] if n != "scheme.cfg")}
+        self.assertEqual(set(sources), expected_paths)
         self.assertTrue({"/Programs", "/System", "/System/Win32", "/System/cache", "/System/cache/wallpaper", "/system/assets", "/system/icons", "/system/settings", "/system/wallpapers", "/Documents/Music", "/Documents/Pictures"} <= directories)
         self.assertEqual(metadata["portrait"]["array_sha256"], m["files"]["ciuki-portrait.xrgb"])
         self.assertEqual(metadata["icons"]["store_sha256"], m["files"]["tango.cis"])
         records = image.payload_records(sources)
-        self.assertEqual(len(records), 92)  # Includes the private Win32 shell launcher.
+        self.assertEqual(len(records), len(expected_paths))
+        self.assertEqual({r["path"] for r in records}, expected_paths)
         for r in records:
-            if r["path"] in ("/system/licenses/stb_image.txt", "/system/licenses/stb_image_write.txt", "/system/licenses/stb_vorbis.txt"):
-                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/stb/LICENSE").read_bytes()).hexdigest())
-            elif r["path"].startswith(("/system/licenses/FreeType-", "/system/licenses/TinyGL-")):
-                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "build/tools/ciuki-sdk/licenses" / Path(r["path"]).name).read_bytes()).hexdigest())
-            elif r["path"] == "/system/licenses/minimp3.txt":
-                self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "third_party/minimp3/LICENSE").read_bytes()).hexdigest())
+            if r["path"] in licenses:
+                self.assertEqual(r["sha256"], hashlib.sha256(licenses[r["path"]].read_bytes()).hexdigest())
             elif r["path"].startswith("/System/fonts/"):
                 self.assertEqual(r["sha256"], metadata["fonts"]["files"][r["path"]])
             elif r["path"].startswith("/system/fonts/"):
@@ -650,12 +660,46 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp)
             volume = Path(temp) / "fixture.fat"
             with volume.open("wb") as f:
-                f.truncate(64*1024*1024)   # includes five raw wallpaper frames (~19 MiB)
+                f.truncate(payload_fixture_bytes(sources, directories))
             subprocess.run(["mkfs.fat", str(volume)], check=True, env=env, stdout=subprocess.DEVNULL)
             image.populate_payloads(volume, sources, directories)
             with patch.object(image, "PART_LBA", 0):
                 image.check_payloads(volume, image.payload_records(sources), directories)
         print("PASS real FAT read-back: desktop, demo, Files, portrait sizes/SHA-256")
+
+    @unittest.skipUnless(all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mmd", "mdir")),
+                         "requires mtools and mkfs.fat")
+    def test_payload_fixture_growth_and_license_readback(self):
+        # Exercise capacity growth independently of canonical SDK/ELF build
+        # prerequisites, using real licence files and a payload larger than
+        # the entire former fixture. The production copier/checker read all.
+        image = load("desktop_fixture_growth", ROOT / "scripts/build_image.py")
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-growth-", dir=parent) as temp:
+            folder = Path(temp)
+            payload = folder / "grown.bin"
+            with payload.open("wb") as stream:
+                stream.write(b"grown payload start")
+                stream.seek(64 * 1024 * 1024 + 123)
+                stream.write(b"grown payload end")
+            sources = image.desktop_license_payloads()
+            self.assertEqual(sum(p.startswith("/system/licenses/lwip-") for p in sources), 3)
+            sources["/Programs/grown.bin"] = payload
+            directories = {"/Programs", "/System", "/system/licenses"}
+            size = payload_fixture_bytes(sources, directories)
+            self.assertGreater(size, sum(p.stat().st_size for p in sources.values()))
+            self.assertEqual(size % (1024 * 1024), 0)
+            self.assertEqual(payload_fixture_bytes({}, set()), 64 * 1024 * 1024)
+            volume = folder / "fixture.fat"
+            with volume.open("wb") as stream:
+                stream.truncate(size)
+            subprocess.run(["mkfs.fat", str(volume)], check=True, stdout=subprocess.DEVNULL,
+                           env=dict(os.environ, TMPDIR=temp))
+            image.populate_payloads(volume, sources, directories)
+            with patch.object(image, "PART_LBA", 0):
+                image.check_payloads(volume, image.payload_records(sources), directories)
+        print("PASS growing FAT fixture: >64 MiB payload and all desktop licences read back by size/SHA-256")
 
     def test_stale_output_rejected(self):
         build = load("desktop_stale_test", ROOT / "apps/desktop/build_desktop.py")
