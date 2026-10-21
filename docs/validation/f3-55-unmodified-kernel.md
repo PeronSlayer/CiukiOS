@@ -11,7 +11,7 @@ and [compiler user guide](https://open-watcom.github.io/open-watcom-1.9/cguide.h
 The actual inputs are the literal nested source archives from the pinned
 FreeDOS 1.3 packages, checked against the f3-54 per-file ledger. The release
 page distinguishes the 386/FAT32 package binary from the other release builds.
-**Current authority: Amendment 4**, described at the end of this record.
+**Current authority: Amendment 5**, described at the end of this record.
 Amendment 3 supersedes the masked byte comparison, UPX dependency and earlier date
 configuration below. The Amendment 1/2 sections retain historical outcomes;
 their failed vendor-unpack prerequisite no longer blocks qualification.
@@ -468,3 +468,87 @@ the checker and kernel host suite outside these sandbox restrictions, prove
 two-host-date reproducibility, and supply the remaining canonical-image,
 f3-48 behavioural and memory evidence under the existing authorisations.
 No new Amendment 4 decision is needed; source publication remains a lead gate.
+
+## Amendment 5
+
+Scope: link-map classification, its diagnostics and the host build result only.
+The lead reports two 68,104-byte raw kernels with SHA-256
+`d24464ecfac6b568e7a63fd5cb8df0a69c809c7656ff983356bfedae92bb22e1`
+after Amendment 4. This supersedes the earlier absence of native-build evidence;
+it does not supply the still-pending f3-48 behavioural acceptance.
+
+Research rechecked the [K2043 release](https://github.com/FDOS/kernel/releases/tag/ke2043),
+the [OW1.9 release](https://github.com/open-watcom/open-watcom-1.9/releases/tag/ow1.9),
+its [getting-started documentation](https://open-watcom.github.io/open-watcom-1.9/c_readme.html),
+[compiler guide](https://open-watcom.github.io/open-watcom-1.9/cguide.html)
+and [tools guide](https://open-watcom.github.io/open-watcom-1.9/tools.html).
+The tools guide distinguishes the OMF module name stored in THEADR from the
+object filename. In the pinned sources, `kernel/makefile` lists the direct
+link inputs, `mkfiles/generic.mak` defines NASM/C implicit rules,
+`mkfiles/watcom.mak` defines WCC and the separate INIT flags, and
+`drivers/makefile` assembles four objects into `device.lib` using WLIB.
+`mkfiles/owlinux.mak` links the kernel's object list and that library.
+
+The actual lead map names library members as
+`Module: ../lib/device.lib(floppy.asm)` (likewise `rdpcclk`, `wrpcclk`,
+`wratclk`). Its public-symbol section omits objects without public symbols;
+the module-segment table also lists C source paths and assembly source names.
+Requiring every makefile `.obj` name to appear in the symbol map was therefore
+incorrect. Decision: resolve actual map records and segment-module names
+against the pinned build rules and source hashes, retaining the complete
+direct link-input closure even for objects without public symbols. Record
+each object's source, licence, compiler/assembler rule and library step.
+Unknown objects, library members, libraries and paths outside the pinned tree
+remain opaque with named reasons, saved even on failure. Nonempty `libm.lib`
+remains forbidden. A successful host build/audit reports `status: ok`;
+different-date comparison, host CPU checks, fixture qualification and runtime
+acceptance retain their separate gates.
+
+The pinned OW source archive also confirms the distinction:
+`OW19/bld/wl/c/mapio.c:410–419` prints `mod->name` in the verbose module-segment
+table, and `:528–550` separately prints used libraries. Re-auditing the lead's
+preserved `build/lead/h55-a4/source` and `build/lead/h55-b4/source` succeeds:
+55 known objects in each (51 direct, four `device.lib` members), with identical
+normalized classifications. Of these, 49 occur in the public-symbol map and
+six are resolved through module segments: `apisupt.obj`, `iasmsupt.obj`,
+`lfnapi.obj`, `misc.obj`, `strings.obj`, `syspack.obj`. All 181 source hashes
+match the pinned inputs plus patch 0001. Both installed/flattened kernel
+copies agree, and the two raw lead kernels are byte-identical at the exact
+68,104-byte/hash identity recorded above. No opaque module remains. Full
+source/licence/producer rows and section/reference provenance are retained in
+`build/codex/h55-amendment5-logs/lead-reaudit.json`; the exact nice-19 re-audit
+heredoc is in `build/codex/f3-55-report.md`. The preserved lead records were
+not edited or promoted to new compiler/CPU qualification evidence.
+
+Amendment 5 host results (sequential nice 19 commands; logs under
+`build/codex/h55-amendment5-logs/`; no added sanitizer overrides):
+
+| Exact command before log redirection | Result |
+| --- | --- |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/dos -p 'test_*.py' -v` | PASS, exit 0; final run 66 tests, 48.446 s (`dos-unit.log`). Includes production success status, persisted opaque diagnostics, library/source/path rejection and OMF names without extensions. |
+| `nice -n 19 bash tests/host/dos/run_file_api.sh` | PASS, exit 0; API/continuation, cache/VFS and production i686 compilation (`file-api.log`). |
+| `nice -n 19 bash tests/host/dos/run_hook_cpu.sh` | PASS, exit 0; 1,750,578 instructions, 120,277 traps, zero unexpected (`hook-cpu.log`). |
+| `nice -n 19 bash scripts/test/host_kernel_tests.sh` | BLOCKED, exit 1; LeakSanitizer fatal ptrace restriction, lines 280–283 (`kernel-host.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment5-a --mtime 946684800` | BLOCKED, exit 1; all five native Watcom tools return SIGSYS (-31) before compiler/make (`build-a.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --out build/codex/h55-amendment5-b-longer --mtime 1609459200` | BLOCKED, exit 1; same restriction (`build-b.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --compare build/codex/h55-amendment5-a/build.json build/codex/h55-amendment5-b-longer/build.json` | Correctly refuses qualification, exit 1; requires two successful builds (`compare.log`). |
+| `nice -n 19 python3 -B tests/host/dos/check_unmodified_build.py --source-out build/codex/f3-55-amendment5-source.zip` | PASS, exit 0; complete corresponding-source member read-back (`source.log`). |
+| `git diff --check` | PASS, exit 0. |
+
+The review source ZIP is 2,078,809 bytes, SHA-256
+`d2b9348f62ed98df438220e4db8b495b9ea901a05ef5a62a6175b9547c95ec72`.
+No publication URL is assigned. No public header, filesystem glue or runtime
+selector changed; API/apps/filesystem checks are not triggered.
+
+H55-01 and unchanged H55-04 host regressions pass; H55-05 source/read-back
+checks pass, with canonical image/publication evidence pending. H55-02's
+Amendment 5 real-map audit now passes for both preserved native builds;
+fresh local tool execution and H55-03 rebuilt-kernel CPU qualification remain
+blocked by the sandbox. The preserved lead builds have different input mtimes
+but their observed `wall_date` values are both on 2026-10-21; the existing
+different-host-calendar-date comparator gate remains unchanged. The lead
+reruns fresh checker/CPU qualification and the kernel suite outside those
+restrictions, retaining that date gate. The f3-48 100%-identical behavioural
+battery, canonical image/all-three-guest runtime evidence, memory measurements
+and immutable source URL/hash publication remain lead work. No new Amendment 5
+decision is needed. No QEMU, image build, diary edit or default switch was made.

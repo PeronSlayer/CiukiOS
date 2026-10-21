@@ -259,7 +259,7 @@ class ProvenanceTests(unittest.TestCase):
         kernel = b'FreeDOS kernel - GIT (build 2043 OEM:0xfd) [compiled May 14 2021]\n' + b'\0' * 1024
         execution = {n: dict(returncode=0, output="synthetic native probe") for n in ("wmake", "wcc", "wlink", "wlib")}
         with tempfile.TemporaryDirectory(dir=parent) as name:
-            for failure in (None, "probe", "source", "header", "config", "layout"):
+            for failure in (None, "probe", "source", "header", "config", "layout", "audit"):
                 with self.subTest(failure=failure):
                     calls = []
                     def run(command, **kwargs):
@@ -284,7 +284,10 @@ class ProvenanceTests(unittest.TestCase):
                             self.assertEqual((work / "ciuki-build-date.h").read_text(), unified.date_header(manifest))
                             (work / "bin/kernel.sys").write_bytes(kernel)
                             (work / "kernel/kernel.sys").write_bytes(kernel)
-                            (work / "kernel/kernel.map").write_text("bad map" if failure == "layout" else self.map_fixture)
+                            (work / "kernel/kernel.map").write_text("bad map" if failure == "layout" else
+                                self.map_fixture + self.link_map(work) +
+                                ("Module: crt0.obj(cstart.asm)\n" if failure == "audit" else ""))
+                            (work / "lib/libm.lib").write_bytes(b"")
                             if failure == "source":
                                 (work / "hdr/version.h").write_bytes(b"unexpected build edit")
                             if failure in ("header", "config"):
@@ -293,19 +296,22 @@ class ProvenanceTests(unittest.TestCase):
                     with patch.object(unified, "prepare_tools", return_value=(Path("/synthetic-ow"), {"tools": {}, "support_files": {}})), \
                             patch.object(unified, "host_environment", return_value={}), \
                             patch.object(unified, "tool_probe", return_value=execution), \
-                            patch.object(unified.subprocess, "run", side_effect=run), \
-                            patch.object(unified, "link_audit", return_value=[]):
+                            patch.object(unified.subprocess, "run", side_effect=run):
                         record = unified.build(Path(name) / str(failure), mtime=946684800)
-                    self.assertEqual(record["status"], "built-unqualified" if failure is None else "blocked")
+                    self.assertEqual(record["status"], "ok" if failure is None else "blocked")
                     self.assertEqual(len(calls), 1 if failure == "probe" else 2)
                     self.assertEqual((Path(record["root"]) / "KERNEL.SYS").exists(), failure is None)
                     if failure is None:
                         self.assertEqual(record["kernel_provenance"]["behavioural_equivalence"]["status"], "pending-lead-f3-48")
                         self.assertNotIn("pristine_comparison", record)
                     else:
+                        if failure == "audit":
+                            self.assertEqual(json.loads((Path(record["root"]) / "build.json").read_text()), record)
+                            self.assertTrue(any(r["object"] == "crt0.obj" and r["classification"] == "opaque"
+                                                for r in record["linked_objects"]))
                         message = {"probe": "macro probe failed", "source": "beyond patch 0001",
                                    "header": "external build inputs", "config": "external build inputs",
-                                   "layout": "section layout"}[failure]
+                                   "layout": "module-segment table", "audit": "crt0.obj"}[failure]
                         self.assertIn(message, record["error"])
 
     def test_comparison_requires_raw_bytes_roots_host_dates_patch_and_layout(self):
@@ -320,7 +326,7 @@ class ProvenanceTests(unittest.TestCase):
                 root.mkdir(); (root / "KERNEL.SYS").write_bytes(kernel)
                 (root / "source/kernel").mkdir(parents=True)
                 (root / "source/kernel/kernel.map").write_text(self.map_fixture)
-                records.append(dict(schema=3, status="built-unqualified", root=str(root),
+                records.append(dict(schema=3, status="ok", root=str(root),
                     input_mtime=(946684800, 1609459200)[i], wall_date=f"2026-10-{21+i}T00:00:00+00:00",
                     unmodified=False, modification=unified.MODIFICATION, build_inputs=manifest,
                     build_manifest_sha256=unified.sha(raw), kernel_sha256=unified.sha(kernel), size=len(kernel),
@@ -366,22 +372,86 @@ class ProvenanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "section layout"):
                     unified.kernel_provenance(work, kernel)
 
-    def test_link_map_rejects_opaque_runtime_and_math_library(self):
+    def link_map(self, work):
+        # Wlink 1.9's actual forms: C absolute source, NASM THEADR name,
+        # library THEADR member, and sources with segments but no publics.
+        return ("Module: kernel.obj(kernel.asm)\n"
+                f"Module: dosfns.obj({work}/kernel/dosfns.c)\n" +
+                "".join(f"Module: ../lib/device.lib({n}.asm)\n"
+                        for n in ("floppy", "rdpcclk", "wrpcclk", "wratclk")) +
+                "Module          Segment               Class           Address         Size\n"
+                "======          =======               =====           =======         ====\n"
+                "apisupt.asm     PSP                   PSP            0000:0100        00000000\n"
+                f"{work}/kernel/strings.c\n"
+                "                HMA_TEXT              CODE           0209:9d99        00000000\n"
+                "+--------------------+\nLibraries Used\n../lib/device.lib\n")
+
+    def test_link_map_classifies_nasm_library_and_objects_without_publics(self):
+        parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
+        audits = []
+        with tempfile.TemporaryDirectory(dir=parent) as name:
+            for directory in ("a", "longer-root"):
+                work = unified.extract(unified.patched_sources(unified.sources()), Path(name) / directory)
+                (work / "lib/libm.lib").write_bytes(b"")
+                (work / "kernel/kernel.map").write_text(self.link_map(work))
+                rows = unified.link_audit(work); audits.append(rows)
+                by_object = {r["object"]: r for r in rows}
+                self.assertEqual(len(rows), 55)  # 51 direct objects + 4 library members
+                self.assertEqual({r["classification"] for r in rows}, {"known"})
+                self.assertEqual({r["license"] for r in rows}, {"GPL-2.0-or-later"})
+                for obj, src, tool in (("kernel", "kernel/kernel.asm", "nasm 3.02"),
+                                      ("dosfns", "kernel/dosfns.c", "Open Watcom 1.9 wcc"),
+                                      ("floppy", "drivers/floppy.asm", "nasm 3.02")):
+                    row = by_object[obj + ".obj"]
+                    self.assertEqual(row["source"], src)
+                    self.assertEqual(row["sha256"], unified.digest(work / src))
+                    self.assertEqual(row["origin"]["tool"], tool)
+                    self.assertEqual(row["map_visibility"], "public-symbols")
+                self.assertIn("wlib", by_object["floppy.obj"]["origin"]["library"])
+                self.assertEqual(by_object["apisupt.obj"]["map_visibility"], "module-segments")
+                self.assertEqual(by_object["strings.obj"]["map_visibility"], "module-segments")
+                self.assertEqual(by_object["iasmsupt.obj"]["source"], "kernel/asmsupt.asm")
+                self.assertEqual(by_object["iasmsupt.obj"]["origin"]["rule"], "kernel/makefile:iasmsupt.obj")
+                self.assertEqual(by_object["iprf.obj"]["origin"]["rule"], "kernel/makefile:iprf.obj")
+            self.assertEqual(*audits)  # no absolute-root differences in closure
+
+    def test_link_map_rejects_named_opaque_inputs_and_keeps_complete_diagnostics(self):
         parent = ROOT / "build/host/dos"; parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as name:
-            work = unified.extract(unified.sources(), Path(name) / "source")
+            work = unified.extract(unified.patched_sources(unified.sources()), Path(name) / "source")
             (work / "lib/libm.lib").write_bytes(b"")
-            import re
-            kernel_objects = set(re.findall(r"\b([A-Za-z0-9_]+)\.obj\b", (work / "kernel/makefile").read_text()))
-            (work / "kernel/kernel.map").write_text(" ".join(n + ".obj" for n in sorted(kernel_objects)) + " floppy.obj device.lib")
-            rows = unified.link_audit(work)
-            self.assertTrue({"kernel/kernel.asm", "kernel/dosfns.c", "drivers/floppy.asm"} <= {r["source"] for r in rows})
-            for text in ("kernel.obj crt0.obj", "kernel.obj clibm.lib", "no modules"):
-                (work / "kernel/kernel.map").write_text(text)
-                with self.assertRaises(ValueError): unified.link_audit(work)
-            (work / "kernel/kernel.map").write_text("kernel.obj")
+            good = self.link_map(work)
+            bad = ((good + "Module: crt0.obj(cstart.asm)\n", "crt0.obj"),
+                   (good + "Module: ../lib/device.lib(opaque.asm)\n", "opaque.asm"),
+                   (good + "clibm.lib\n", "clibm.lib"),
+                   (good + "Module: /external/kernel.obj(kernel.asm)\n", "/external/kernel.obj"),
+                   (good + "Module: /external/device.lib(floppy.asm)\n", "/external/device.lib"),
+                   (good + "Module: kernel.obj(/external/kernel.asm)\n", "/external/kernel.asm"),
+                   (good.replace("apisupt.asm     PSP", "unknown.asm     PSP"), "unknown.asm"),
+                   (good.replace("apisupt.asm     PSP", "opaque_runtime     PSP"), "opaque_runtime"),
+                   (good + "Module: malformed\n", "malformed"),
+                   ("no modules", "no Wlink module records"))
+            for text, reason in bad:
+                with self.subTest(reason=reason):
+                    (work / "kernel/kernel.map").write_text(text)
+                    with self.assertRaises(unified.LinkAuditError) as caught:
+                        unified.link_audit(work)
+                    error = caught.exception
+                    self.assertIn(reason, str(error))
+                    self.assertIn("source=", str(error)); self.assertIn("origin=", str(error))
+                    self.assertTrue(any(r["classification"] == "opaque" for r in error.rows))
+                    self.assertTrue(any(r["object"] == "dosfns.obj" for r in error.rows))
+            (work / "kernel/kernel.map").write_text(good)
             (work / "lib/libm.lib").write_bytes(b"opaque")
-            with self.assertRaises(ValueError): unified.link_audit(work)
+            with self.assertRaisesRegex(unified.LinkAuditError, "nonempty libm.lib"):
+                unified.link_audit(work)
+            (work / "lib/libm.lib").write_bytes(b"")
+            for path in ("kernel/kernel.asm", "drivers/floppy.asm", "mkfiles/owlinux.mak"):
+                original = (work / path).read_bytes()
+                (work / path).write_bytes(original + b"\nchanged")
+                with self.subTest(path=path), self.assertRaisesRegex(unified.LinkAuditError, "differs from pinned inputs"):
+                    unified.link_audit(work)
+                (work / path).write_bytes(original)
 
 
 class DistributionTests(unittest.TestCase):

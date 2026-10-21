@@ -63,11 +63,12 @@ def main():
         record = build.build(args.out, mtime=args.mtime)
         print("H55-02 patch 0001 (reproducible date): " + record["build_inputs"]["patch"]["sha256"])
         print(json.dumps({k: record[k] for k in ("status", "root", "modification")}, sort_keys=True))
-        if record["status"] != "built-unqualified":
+        if record["status"] != "ok":
             print(record["error"], file=sys.stderr)
             return 1
         print("H55-02 size/section/reference provenance: " + json.dumps(record["kernel_provenance"], sort_keys=True))
         print("Amendment 3: vendor byte comparison replaced; behavioural equivalence pending lead f3-48 (100% identical results)")
+        print("H55-02 link audit: " + json.dumps(record["linked_objects"], sort_keys=True))
         cpu_check(record)
     else:
         paths = [build.build_path(p) for p in args.compare]

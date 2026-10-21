@@ -360,35 +360,141 @@ def kernel_provenance(work, kernel):
                 behavioural_equivalence=dict(status="pending-lead-f3-48", required="100% identical results"))
 
 
+class LinkAuditError(ValueError):
+    """Carry the complete named classification into blocked build evidence."""
+    def __init__(self, rows):
+        self.rows = rows
+        super().__init__("guest link audit failed: " + "; ".join(
+            f"{r['object']} ({r['module']}), source={r['source']}, "
+            f"origin={r['origin']}: {r['reason']}"
+            for r in rows if r["classification"] == "opaque"))
+
+
 def link_audit(work):
-    """Fail closed on unknown modules/libraries, retain full map as evidence."""
-    mapping = {}; required = set()
+    """Resolve Wlink OMF names against pinned recipes, not .obj substrings.
+
+    The public-symbol map omits objects without public symbols. Retain all
+    direct OBJS inputs from the pinned link recipe and audit library members
+    and the verbose module-segment table separately. Never trust a basename
+    from an external object/library/source path.
+    """
+    work = Path(work).resolve()
+    pinned = patched_sources(sources())
+    rows = {}; catalog = {}
     for directory in ("kernel", "drivers"):
-        text = (work / directory / "makefile").read_text().replace("\\\n", " ")
-        objs = set(re.findall(r"\b([A-Za-z0-9_]+)\.obj\b", text))
-        if directory == "kernel":
-            required = objs
-        for obj in objs:
-            src = "asmsupt" if obj == "iasmsupt" else obj
-            choices = [f"{directory}/{src}{ext}" for ext in (".c", ".asm")]
-            choices = [p for p in choices if p in ledger("kernel")]
+        makefile = directory + "/makefile"
+        text = pinned[makefile].decode().replace("\r\n", "\n").replace("\\\n", " ")
+        # Only declared OBJS lists, not all .obj references/dependencies.
+        objects = set(re.findall(r"\b([A-Za-z0-9_]+)\.obj\b", " ".join(
+            re.findall(r"(?m)^OBJS\d*\s*=([^\n]*)", text))))
+        for obj in sorted(objects):
+            stem = "asmsupt" if obj == "iasmsupt" else obj
+            choices = [f"{directory}/{stem}{ext}" for ext in (".c", ".asm")
+                       if f"{directory}/{stem}{ext}" in pinned]
             if len(choices) != 1:
-                raise ValueError("unresolved source for guest object: " + obj)
-            mapping[obj] = choices[0]
+                raise ValueError("unresolved pinned build rule for guest object: " + obj)
+            src = choices[0]
+            assembler = src.endswith(".asm")
+            special = obj == "iasmsupt" or (not assembler and
+                re.search(rf"(?m)^{obj}\.obj:[^\n]*\n\s+\$\(CC\) \$\(INITCFLAGS\)", text))
+            origin = dict(tool="nasm 3.02" if assembler else "Open Watcom 1.9 wcc",
+                          directory=directory,
+                          rule=makefile + ":" + obj + ".obj" if special else
+                               "mkfiles/generic.mak:" + (".asm.obj" if assembler else ".c.obj"),
+                          output=f"{directory}/{obj}.obj")
+            if directory == "drivers":
+                origin["library"] = "drivers/makefile:device.lib (Open Watcom 1.9 wlib), copied to lib/device.lib"
+            catalog[f"{directory}/{obj}.obj"] = dict(object=obj + ".obj", module=Path(src).name,
+                source=src, sha256=sha(pinned[src]), license="GPL-2.0-or-later",
+                ledger=str(LEDGER.relative_to(ROOT)), origin=origin, classification="known",
+                reason="pinned kernel source and toolchain build rule",
+                map_visibility="link-input-only")
+
+    def relative(name, directory):
+        path = (work / directory / name).resolve()
+        return path.relative_to(work).as_posix() if path.is_relative_to(work) else str(path)
+
+    def opaque(obj, module, source, reason, candidate=None):
+        row = dict(candidate) if candidate else dict(object=obj, module=module, source=source,
+                    origin="no producer in pinned kernel build rules", license="unknown")
+        row.update(object=obj, module=module, classification="opaque", reason=reason)
+        rows[(obj, module, reason)] = row
+
+    # Verify recipe/source bytes before assigning any known provenance.
+    for name in ("kernel/makefile", "drivers/makefile", "mkfiles/generic.mak",
+                 "mkfiles/watcom.mak", "mkfiles/owlinux.mak"):
+        if (work / name).read_bytes() != pinned[name]:
+            opaque(name, name, name, "build rule differs from pinned inputs")
+    for key, row in catalog.items():
+        if (work / row["source"]).read_bytes() != pinned[row["source"]]:
+            row.update(classification="opaque", reason="source differs from pinned inputs")
+        if key.startswith("kernel/"):
+            rows[key] = dict(row)
+
     text = (work / "kernel/kernel.map").read_text(errors="replace")
-    # Wlink's verbose map names the contributing object modules and libraries.
-    objects = set(re.findall(r"\b([A-Za-z0-9_]+)\.obj\b", text, re.I))
-    libraries = set(re.findall(r"\b([A-Za-z0-9_]+)\.lib\b", text, re.I))
-    if not required <= objects or objects - mapping.keys() or libraries - {"device"}:
-        raise ValueError("unknown/opaque guest module in link map")
+    modules = re.findall(r"(?m)^Module:\s*(.+)$", text)
+    if not modules:
+        opaque("kernel/kernel.map", "<none>", "unknown", "no Wlink module records")
+    for record in modules:
+        match = re.fullmatch(r"(.+)\(([^()]+)\)\s*", record)
+        if not match:
+            opaque(record, record, "unknown", "malformed Wlink module record")
+            continue
+        container, module = match.groups()
+        path = relative(container, "kernel")
+        if path == "lib/device.lib":
+            matches = [(key, row) for key, row in catalog.items() if key.startswith("drivers/")
+                       and relative(module, "drivers") == row["source"]]
+        else:
+            matches = [(path, catalog[path])] if path in catalog and path.startswith("kernel/") else []
+        if len(matches) != 1:
+            opaque(container, module, relative(module, "kernel"),
+                   "object/library member has no producer in pinned kernel build rules")
+            continue
+        key, candidate = matches[0]
+        row = dict(candidate)
+        if relative(module, row["origin"]["directory"]) != row["source"]:
+            opaque(container, module, relative(module, "kernel"),
+                   "map source does not match pinned object producer", row)
+            continue
+        row["map_visibility"] = "public-symbols"
+        rows[key] = row
+
+    # Modules with no public symbols still occur in the verbose segment table.
+    segment_header = re.search(r"(?m)^Module\s+Segment\s+Class\s+Address\s+Size\s*$", text)
+    if not segment_header:
+        opaque("kernel/kernel.map", "<segments>", "unknown", "missing verbose module-segment table")
+    else:
+        table = text[segment_header.end():].split("+", 1)[0]
+        for line in table.splitlines():
+            if not line or line[0].isspace() or set(line) <= {"=", " "}:
+                continue
+            # Long OMF source names occupy a line by themselves. Short names
+            # precede the padded segment columns; unknown names need no suffix.
+            module = re.split(r"\s{2,}", line.rstrip(), maxsplit=1)[0]
+            matches = [(key, row) for key, row in catalog.items()
+                       if relative(module, row["origin"]["directory"]) == row["source"]]
+            if not matches:
+                opaque("<segment module>", module, relative(module, "kernel"),
+                       "segment module has no producer in pinned kernel build rules")
+            for key, row in matches:
+                if key not in rows:
+                    rows[key] = dict(row)
+                if rows[key]["map_visibility"] != "public-symbols":
+                    rows[key]["map_visibility"] = "module-segments"
+
+    # Also inspect Libraries Used entries, including libraries with no publics.
+    libraries = set(re.findall(r"[^\s()]+\.lib\b", text, re.I))
+    for library in sorted(libraries):
+        if relative(library, "kernel") != "lib/device.lib":
+            opaque(library, "<library>", "unknown", "library not built from pinned kernel sources")
     if (work / "lib/libm.lib").stat().st_size:
-        raise ValueError("Watcom CRT/math library is forbidden in guest")
-    rows = []
-    for obj in sorted(objects):
-        src = mapping[obj]
-        rows.append(dict(object=obj + ".obj", source=src, sha256=digest(work / src),
-                         license="GPL-2.0-or-later", ledger=str(LEDGER.relative_to(ROOT))))
-    return rows
+        opaque("lib/libm.lib", "<library>", "makefile",
+               "nonempty libm.lib: Watcom CRT/math library is forbidden in guest")
+    result = sorted(rows.values(), key=lambda r: (r["object"], r["module"], r["reason"]))
+    if any(r["classification"] == "opaque" for r in result):
+        raise LinkAuditError(result)
+    return result
 
 
 def build(output, *, mtime=EPOCH):
@@ -447,16 +553,18 @@ def build(output, *, mtime=EPOCH):
             raise ValueError("FreeDOS kernel extent/header invalid")
         evidence["kernel_provenance"] = kernel_provenance(work, kernel)
         (output / "KERNEL.SYS").write_bytes(kernel)
-        evidence.update(status="built-unqualified", kernel_sha256=sha(kernel), size=len(kernel),
+        evidence.update(status="ok", kernel_sha256=sha(kernel), size=len(kernel),
                         map_sha256=digest(work / "kernel/kernel.map"))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if isinstance(error, LinkAuditError):
+            evidence["linked_objects"] = error.rows
         evidence.update(status="blocked", error=str(error))
     (output / "build.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     return evidence
 
 
 def compare_rebuilds(first, second):
-    if any(r.get("status") != "built-unqualified" for r in (first, second)):
+    if any(r.get("status") != "ok" for r in (first, second)):
         raise ValueError("two successful patch 0001 builds required")
     if first["root"] == second["root"] or first["input_mtime"] == second["input_mtime"]:
         raise ValueError("distinct build roots and input mtimes required")
