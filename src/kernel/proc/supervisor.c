@@ -6,6 +6,8 @@
 #include <ciuki/audio.h>
 #include <ciuki/desktop.h>
 #include <ciuki/pager.h>
+#include <ciuki/setup_mode.h>
+#include <ciuki/storage.h>
 extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
@@ -64,8 +66,15 @@ void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { supervisor_io 
 uint32_t supervisor_desktop_deaths(void) { return desktop_deaths; }
 uint32_t supervisor_desktop_pid(void) { return desktop_pid; }
 
+static int spawn_process(const char *path, const char *const argv[], const char *cwd,
+                         bool desktop, bool setup, struct process **out);
 int supervisor_spawn(const char *path, const char *const argv[], const char *cwd,
                       bool desktop, struct process **out)
+{
+    return spawn_process(path, argv, cwd, desktop, false, out);
+}
+static int spawn_process(const char *path, const char *const argv[], const char *cwd,
+                         bool desktop, bool setup, struct process **out)
 {
     const struct ciuki_file_ops *files = proc_get_file_ops();
     if (!files || !files->open) return -ENOENT;
@@ -116,6 +125,8 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
         }
     }
     if (!err) supervisor_dosvm_delegate(proc_supervisor(), p, path);
+    /* f9-01: the Setup capability belongs to this one spawn (D5). */
+    if (!err) p->setup_capability = setup;
     if (!err) err = proc_stack_build(p->memory, strings, image.entry, thread->tls, &esp);
     if (!err) {
         task_native_frame(thread->task, esp);
@@ -150,6 +161,7 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
         }
     }
     bool authorized = parent == proc_supervisor() || (display && input);
+    child->setup_capability = false; /* f9-01: never inherited or path-derived */
     child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
     child->programs_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
@@ -173,10 +185,37 @@ int supervisor_spawn_desktop_probe(struct process **out)
     return result;
 }
 
+/* f9-01 (D11): Setup mode spawns /Programs/setup from the boot CD's C:
+ * instead of the desktop; without the boot CD no process starts. */
+static bool setup_bootstrap(struct process **out, int *result)
+{
+    if (!setup_mode()) return false;
+    console_wake();   /* the placeholder and the Setup messages are console text */
+    if (!storage_setup_media_ready()) {
+        klog("%s", SETUP_MEDIA_TEXT);
+        *result = -ENOENT;
+        return true;
+    }
+    const char *argv[] = { "setup", 0 };
+    klog("[supervisor] bootstrap: spawning /Programs/setup");
+    *result = spawn_process("/Programs/setup", argv, 0, false, true, out);
+    if (*result == -ENOENT) *result = supervisor_spawn_standin(proc_supervisor(), out);
+    if (*result >= 0) klog("[supervisor] setup pid=%u pgid=%u setup_capability=%u",
+                           (*out)->pid, (*out)->pgid, (*out)->setup_capability);
+    else klog("[supervisor] setup unavailable: %d", *result);
+    return true;
+}
+
 void supervisor_bootstrap(void)
 {
     if (bootstrap_attempted || (g_boot.flags & CBI_F_TEST_REQUEST)) return;
     bootstrap_attempted = true;
+    struct process *setup = 0;
+    int setup_result = 0;
+    if (setup_bootstrap(&setup, &setup_result)) {
+        if (pager_bootstrap_complete) pager_bootstrap_complete();
+        return;
+    }
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");

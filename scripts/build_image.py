@@ -684,6 +684,9 @@ def build(kernel, out, boot_cfg):
         check_image(candidate, volume)
         check_payloads(candidate, payloads, directories)
         os.replace(candidate, out)
+    # f9-01: the loader of this build beside the image; the Setup CD boot
+    # image carries the same bytes (scripts/build_cd.py checks all three).
+    (out.parent / "ciukldr.bin").write_bytes(loader)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)
     if "/system/dos/FREEDOS.IMG" in sources:

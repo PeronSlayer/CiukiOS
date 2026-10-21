@@ -238,6 +238,10 @@ struct storage_volume *storage_volume(struct storage *s, unsigned drive)
 int storage_enable_write(struct storage *s, unsigned drive)
 { s->volumes[drive].fat.readonly = false; return 0; }
 uint32_t rec_premature_records(void) { return 0; }
+/* f9-01: Setup mode needs setup=1, never set by this fixture. */
+bool storage_setup_requested(void) { return false; }
+void storage_setup_media(struct storage *s, struct ata_device *d[STORAGE_DISKS]) { (void)s; (void)d; CHECK(false); }
+void storage_setup_records(struct ata_device *d[STORAGE_DISKS]) { (void)d; CHECK(false); }
 #include "../../src/kernel/core/init.c"
 #include "../../build/host/runtime_storage_init.inc"
 static struct storage host_storage;

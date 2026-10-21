@@ -1,4 +1,4 @@
-.PHONY: help build-full kernel image test-host qemu-test-full qemu-run-full clean \
+.PHONY: help build-full kernel image cd test-host qemu-test-full qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
         fetch-costa fetch-network-stack sdk lua desktop apps upper
 
@@ -28,6 +28,7 @@ help:
 	@echo "  make upper           - cached reused Wine DLL build (build/win32/upper): rebuilt only when the archive, patches or core exports change"
 	@echo "  make kernel          - build only $(KERNEL)"
 	@echo "  make image           - build only the image from the existing kernel"
+	@echo "  make cd              - build the Setup CD (ISO, boot image, cd-manifest.json) from the built image"
 	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
 	@echo "  make qemu-test-full  - T2 boot smoke of the built image through the runner"
 	@echo "  make qemu-run-full   - boot the image interactively (scripts/run_f0.sh [selector])"
@@ -43,6 +44,7 @@ build-full: kernel
 	@$(MAKE) --no-print-directory apps
 	@$(MAKE) --no-print-directory upper
 	@$(MAKE) --no-print-directory image
+	@$(MAKE) --no-print-directory cd
 
 sdk:
 	@$(CAP) bash scripts/build_sdk.sh $(SDK_ARGS)
@@ -74,6 +76,11 @@ kernel:
 
 image:
 	@$(CAP) python3 scripts/build_image.py --kernel $(KERNEL) --out $(IMAGE)
+
+# f9-01: Setup CD from the image's payload (build/f0/ciukios-setup.iso,
+# ciukios-setup-boot.img, cd-manifest.json); builds /Programs/setup first.
+cd:
+	@$(CAP) python3 scripts/build_cd.py --image $(IMAGE)
 
 test-host:
 	@bash scripts/test/host_kernel_tests.sh

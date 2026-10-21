@@ -70,6 +70,9 @@ struct ata_device {
     uint32_t session_lba;
     uint32_t spinup_generation;
     uint64_t packet_commands, read_blocks, media_writes, max_packet_ms;
+    /* f9-01: write-class commands issued to a fixed disk (WRITE, WRITE DMA,
+     * emergency write, FLUSH CACHE); Setup mode asserts it stays zero. */
+    uint64_t write_commands;
     /* f5-12B2 CD audio: TOC cache, page 2Ah capability bits (fetched once
      * per drive, cd_caps_valid) and the audio-disc readiness flag. */
     struct atapi_toc toc;

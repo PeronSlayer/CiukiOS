@@ -1063,6 +1063,7 @@ static int command_data(struct ata_device *d, uint64_t lba, uint32_t n, uint8_t 
     uint8_t command = write ? (d->lba48 ? 0x34 : 0x30) : (d->lba48 ? 0x24 : 0x20);
     if (multiple) command = write ? (d->lba48 ? 0x39 : 0xc5) : (d->lba48 ? 0x29 : 0xc4);
     if (dma) command = write ? (d->lba48 ? 0x35 : 0xca) : (d->lba48 ? 0x25 : 0xc8);
+    if (write) d->write_commands++; /* f9-01 diagnostic: every issued write command */
     e = issue(d, command, start, &sequence);
     if (dma) {
         /* An immediate device abort can precede Start. Do not restart a
@@ -1171,6 +1172,7 @@ static int ata_flush(struct blkdev *b)
         e = select_device(d, start, deadline, 0);
         if (!e) {
             device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+            d->write_commands++;
             e = issue(d, d->flush_ext ? 0xea : 0xe7, start, &sequence);
         }
         if (!e)
@@ -1220,6 +1222,7 @@ static int ata_emergency_write(struct blkdev *b,uint64_t lba,const void *data) {
         }
         reg_write(c,1,0);reg_write(c,2,1);reg_write(c,3,(uint8_t)lba);
         reg_write(c,4,(uint8_t)(lba>>8));reg_write(c,5,(uint8_t)(lba>>16));
+        d->write_commands++;
         reg_write(c,7,d->lba48 ? 0x34 : 0x30);
         for (unsigned i=0;i<4;i++) (void)alternate(c);
         e=emergency_poll(c,ATA_DRQ);

@@ -666,6 +666,26 @@ This extra state is necessary for truthful totals after reset/panic, which
 cannot be recovered from an in-memory accumulator or a step number alone.
 No boot-info ABI bits or fields are added.
 
+### BOOT.CFG `setup=1` (f9-01, Setup CD)
+
+`setup=1` is a lead-reserved token for the Setup CD's boot image only
+(`docs/design/cd-setup-plan.md` sections 3.2 and 8):
+
+- Loader: accepted as an ordinary 7-byte token and passed through unchanged
+  in `options` (no flag, no other behaviour). Lead decision O2: the
+  parser addition lands after f0-54 frees the loader's fixed extent; until
+  then the token is rejected like any unknown token (`selection_error`),
+  so a Setup CD built before that change does not boot (f9-01 report).
+- Kernel: `setup=1` in `options` selects Setup mode unless the boot carries
+  `CBI_F_TEST_REQUEST` (`src/kernel/include/ciuki/setup_mode.h`): the
+  storage layer starts read-only (no writer task, write enable, disk log,
+  pagefile or black box; ATA volumes from `E:`), `C:` is the boot CD's
+  El Torito image through `cdview`, `D:` its ISO 9660 tree, and the
+  supervisor spawns `/Programs/setup` instead of the desktop.
+- Never written to an installed disk: the installed `BOOT.CFG` never
+  contains `setup=1`, and the disk image's `BOOT.CFG` must not carry it
+  (`scripts/build_cd.py` refuses one that does).
+
 ## Physical memory ownership
 
 - Usable pages: type 1 entries of the normalized map in `ciuki_boot_info`

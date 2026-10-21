@@ -23,6 +23,11 @@
 #pragma weak pagefile_detach
 #pragma weak pagefile_reattach
 #pragma weak pagefile_close
+/* f9-01: fs/cdview.c; harnesses without it never enter Setup mode. */
+#pragma weak cdview_probe
+#pragma weak cdview_bind
+#pragma weak cdview_release
+#pragma weak cdview_verify_volume
 #ifndef FS_HOST
 #include <ciuki/ata.h>
 #include <ciuki/sync.h>
@@ -259,7 +264,8 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
             continue;
         }
         if (!superfloppy && !fat_partition(part->type)) continue;
-        bool boot = !disk && !part->logical && part->start == boot_start && part->count == boot_count;
+        /* f9-01: in Setup mode C: is the boot CD's image; disk 0 is data. */
+        bool boot = !s->setup_mode && !disk && !part->logical && part->start == boot_start && part->count == boot_count;
         /* Raw replay precedes FAT scanning and every writable activation. */
         if (boot && s==&system_storage && blackbox_bind)
             blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
@@ -518,6 +524,9 @@ int storage_enable_write(struct storage *s, unsigned d)
 {
     struct storage_volume *v = storage_volume(s, d);
     if (!v || s->stopped) return -FS_ENOENT;
+    /* f9-01 (D2): no fixed volume becomes writable in Setup mode; f9-02's
+     * destination publication is the only later exception. */
+    if (s->setup_mode && !v->removable) { v->refused++; return -FS_EROFS; }
     if (s->writer_error) return s->writer_error;
     if (v->error) return v->error;
     if (!v->read_gate || v->writes_before_gate) { v->refused++; return -FS_EROFS; }
@@ -652,6 +661,7 @@ void storage_destroy(struct storage *s)
     for (unsigned i=0; i<STORAGE_DISKS; i++) if (s->optical[i].mounted) fs_ro_unmount(&s->optical[i]);
     for (unsigned i=0; i<STORAGE_NTFS; i++) if (s->ntfs[i].ro.mounted) fs_ro_unmount(&s->ntfs[i].ro);
     vfs_destroy(&s->vfs); cache_destroy(&s->cache); s->ready = false;
+    if (cdview_release) cdview_release(&s->boot_cd);
 }
 struct storage *storage_get(void) { return &system_storage; }
 bool storage_readonly_info(unsigned drive, char *text, unsigned bytes)
@@ -757,6 +767,65 @@ int storage_boot_cfg(struct storage *s, const char *request)
     return e;
 }
 
+bool storage_setup_media_ready(void) { return system_storage.boot_cd.bound; }
+int storage_setup_identify(struct storage *s, unsigned slot, struct blkdev *optical, uint64_t session,
+                           const char *options, size_t options_size, const struct cdview_identity *kid)
+{
+    if (!s || !s->ready || s->stopped || !s->setup_mode || slot >= STORAGE_DISKS || !optical) return -FS_EINVAL;
+    if (!cdview_probe || !cdview_bind || !cdview_release || !cdview_verify_volume) return -FS_EOPNOTSUPP;
+    if (s->boot_cd.bound || s->volumes[2].present) return -FS_EBUSY;
+    const char *reason = "memory";
+    struct cdview_boot_record record = { 0 };
+    struct storage_volume *v = &s->volumes[2];
+    void *block = fs_page_alloc();
+    int e = block ? cdview_probe(optical, session, block, &record, &reason) : -FS_ENOMEM;
+    if (block) fs_page_free(block);
+    if (!e) { reason = "view"; e = cdview_bind(&s->boot_cd, optical, record.load_rba, record.image_sectors); }
+    if (!e) {
+        memset(v, 0, sizeof(*v));
+        struct partition part = { .start = record.part_start, .count = record.part_count, .type = CDVIEW_PART_TYPE };
+        reason = "partition";
+        e = blkpart_init(&v->part, &s->boot_cd.dev, &part);
+        if (!e) {
+            v->io = (struct blkdev){ .read = volume_read, .write = volume_write,
+                .capacity = part.count, .sector_size = 512, .ctx = v };
+            refresh_volume(v);
+            reason = "fat";
+            e = fat_mount(&v->fat, &s->cache, &v->io, 0, part.count, false);
+        }
+        if (!e) e = cdview_verify_volume(&v->fat, options, options_size, kid, &reason);
+        if (!e) {
+            v->present = true; v->drive = 2; v->disk = slot; v->partition = 1; v->optical = true;
+            v->writes_before_gate = v->writes;
+            v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
+            if (v->read_gate) v->read_sequence = ++s->sequence;
+            e = vfs_attach(&s->vfs, 2, &v->fat);
+            reason = e ? "attach" : "ok";
+        }
+        if (e) {
+            if (v->fat.mounted) fat_unmount(&v->fat);
+            cache_invalidate(&s->cache, &v->io, true);
+            memset(v, 0, sizeof(*v));
+            cdview_release(&s->boot_cd);
+        }
+    }
+    klog("[setup] candidate slot=%u session=%llu catalog=%u image_block=%u image_sectors=%u result=%d reason=%s",
+         slot, (unsigned long long)session, record.catalog_block, record.load_rba, record.image_sectors, e, reason);
+    if (e) return e;
+    s->boot_cd_slot = slot;
+    /* The ISO 9660 tree of the same disc becomes D: (next_drive is 3). */
+    int d = storage_add_ro(s, slot, optical, session);
+    klog("[setup] media bound slot=%u system=C iso=%c result=%d", slot, d >= 3 ? 'A' + d : '-', d < 0 ? d : 0);
+    return 2;
+}
+void storage_setup_finish(struct storage *s)
+{
+    if (!s || !s->setup_mode) return;
+    if (!s->boot_cd.bound) klog("[setup] media missing");
+    /* Plan 3.3: C: image, D: ISO tree, E: onward the read-only ATA volumes. */
+    if (s->next_drive < 4) s->next_drive = 4;
+}
+
 bool storage_probe_readonly(const char *selector, unsigned length)
 {
     /* Every test starts without a disk sink or a writable mount. Destructive
@@ -816,16 +885,20 @@ void storage_init(void)
     if (!e) e=cache_adaptive_enable(&s->cache,memory.zone[ZONE_NORMAL].usable);
     if (e) { klog("[storage] unavailable error=%d", e); return; }
     bool probe = (g_boot.flags & CBI_F_TEST_REQUEST) && storage_probe_readonly(g_boot.test_request, g_boot.test_request_len);
+    s->setup_mode = storage_setup_requested();
+    struct storage_start_policy policy = storage_start_policy(probe, s->setup_mode);
     struct task *timer = 0;
-    if (!probe) {
+    if (policy.writer) {
         timer = task_create_kernel("storage-writer", storage_timer, s, P_DEVICE);
         if (!timer) s->writer_error = -FS_ENOMEM;
         else s->cache.writer_online=true;
     }
     struct ata_device *devices[STORAGE_DISKS];
+    for (unsigned slot = 0; slot < STORAGE_DISKS; slot++)
+        devices[slot] = ata_device_get(slot / 2, slot % 2);
+    if (s->setup_mode) storage_setup_media(s, devices);
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
-        struct ata_device *dev = ata_device_get(slot / 2, slot % 2);
-        devices[slot]=dev;
+        struct ata_device *dev = devices[slot];
         if (!dev || dev->atapi) continue;
         e = storage_add_disk(s, slot, &dev->block);
         drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE,
@@ -834,7 +907,7 @@ void storage_init(void)
     for (unsigned d = 2; d < 26; d++) {
         struct storage_volume *v = storage_volume(s, d);
         if (!v) continue;
-        if (!probe && !v->error) storage_enable_write(s, d);
+        if (policy.enable_write && !v->error) storage_enable_write(s, d);
         drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_MOUNT,
             .drive = d, .disk = v->disk, .partition = v->partition, .type = v->fat.type,
             .readonly = v->fat.readonly, .reasons = v->fat.ro_reasons, .error = v->error,
@@ -854,7 +927,7 @@ void storage_init(void)
     }
     for (unsigned slot=0; slot<STORAGE_DISKS; slot++) {
         struct ata_device *dev=devices[slot];
-        if (!dev || !dev->atapi) continue;
+        if (!dev || !dev->atapi || s->optical_bindings[slot].device) continue;
         optical_bind(s,slot,dev);
     }
     optical_service(s,fs_now_ms());
@@ -862,19 +935,29 @@ void storage_init(void)
      * for CBI1. Loader fingerprints remain a boot-info v2 requirement. */
     drivers_storage_add((struct activation_entry){ .kind = ACTIVATION_STORAGE_IDENTITY,
         .disk = 0, .partition = 1, .readonly = true, .reason = "loader_fingerprints_absent" });
-    if (!probe) {
-        optical_start_service(s);
+    if (s->setup_mode) storage_setup_records(devices);
+    if (policy.optical_poller) optical_start_service(s);
+    if (policy.bootlog) {
         struct storage_volume *boot = storage_volume(s, 2);
         e = bootlog_activate(&s->vfs, boot && !boot->error && !boot->fat.readonly, s->sequence);
         klog("[storage] disk_log=%s error=%d", e ? "unavailable" : "available", e);
+    }
+    if (policy.pagefile) {
         /* M4: the pager manager opens and grows the file asynchronously;
          * without it commit stays RAM-only and the system remains usable. */
         e = storage_pagefile_bind(s, 2, "C:/SYSTEM/PAGEFILE.SWP");
         klog("[storage] pagefile drive=C result=%d", e);
+    }
+    if (policy.writer) {
         if (timer) task_start(timer);
         else klog("[storage] writeback unavailable; volumes read-only error=%d", s->writer_error);
     }
 }
 #else
 void storage_init(void) { }
+/* Host builds have no ATA/ATAPI driver: Setup mode is never requested here
+ * (the kernel's definitions are in core/setup_mode.c). */
+bool storage_setup_requested(void) { return false; }
+void storage_setup_media(struct storage *s, struct ata_device *devices[STORAGE_DISKS]) { (void)s; (void)devices; }
+void storage_setup_records(struct ata_device *devices[STORAGE_DISKS]) { (void)devices; }
 #endif

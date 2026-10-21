@@ -4,6 +4,7 @@
 #define CIUKI_STORAGE_H
 #include "blkpart.h"
 #include "../../fs/vfs.h"
+#include "../../fs/cdview.h"
 
 #define STORAGE_DISKS 4u
 #define STORAGE_NTFS 8u
@@ -21,6 +22,7 @@ struct storage_volume {
     unsigned disk, partition, drive;
     int error;
     bool present, read_gate, removable, safely_removed;
+    bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
     uint64_t reads, writes, flushes, refused, writes_before_gate;
     /* Selected crash probe only; notification after synchronous completion.
@@ -53,7 +55,37 @@ struct storage {
     unsigned next_drive;
     uint32_t sequence, writer_ticks;
     int writer_error;
+    /* f9-01 Setup mode (cd-setup-plan.md 3.2/3.3): every ATA volume stays
+     * read-only; C: is the boot CD's image view, D: its ISO 9660 tree. */
+    bool setup_mode;
+    unsigned boot_cd_slot;
+    struct cdview boot_cd;
 };
+/* f9-01: what storage_init activates; pure, so the host suite checks it. */
+struct storage_start_policy {
+    bool writer, enable_write, bootlog, pagefile, optical_poller, disk0_system;
+};
+static inline struct storage_start_policy storage_start_policy(bool probe, bool setup)
+{
+    /* Probes start read-only and open gates themselves; Setup mode takes
+     * the same read-only start (D2) and keeps the optical media poller. */
+    bool normal = !probe && !setup;
+    return (struct storage_start_policy){ .writer = normal, .enable_write = normal, .bootlog = normal,
+        .pagefile = normal, .optical_poller = !probe, .disk0_system = !setup };
+}
+/* Setup mode: identify the boot CD on one optical device (session = last
+ * session LBA) and bind C:/D:. Returns 2 (C:) or a negative FS_E*. */
+int storage_setup_identify(struct storage *, unsigned slot, struct blkdev *optical, uint64_t session,
+                           const char *options, size_t options_size, const struct cdview_identity *);
+/* Setup mode after identification: ATA volumes take letters from E:. */
+void storage_setup_finish(struct storage *);
+bool storage_setup_media_ready(void);
+/* Kernel Setup-mode steps of storage_init (core/setup_mode.c): whether
+ * setup=1 selected Setup mode; find and bind the boot CD before the ATA
+ * disks; log the per-disk write counters. */
+bool storage_setup_requested(void);
+void storage_setup_media(struct storage *, struct ata_device *devices[STORAGE_DISKS]);
+void storage_setup_records(struct ata_device *devices[STORAGE_DISKS]);
 int storage_setup(struct storage *, size_t cache_bytes);
 /* disk is the IDE slot, independent of discovery order. Only MBR primary
  * entry 1 on slot 0 may become C:, all other FAT partitions start at D:. */

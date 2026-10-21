@@ -53,6 +53,10 @@ struct process {
     struct kwait changed;
     uint32_t threads, live_threads;
     bool published, dosvm_capability, programs_capability;
+    /* f9-01 (D5): set only by the supervisor's Setup-mode spawn of
+     * /Programs/setup, before publication; never inherited (every other
+     * spawn clears it); consumed by the f9-02 disk lease. */
+    bool setup_capability;
     /* f2-33 enumeration: image basename (printable, NUL-terminated) and the
      * g_ticks value at publication. */
     char name[CIUKI_PROC_NAME_MAX];
