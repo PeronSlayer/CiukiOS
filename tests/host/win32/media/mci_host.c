@@ -7,7 +7,12 @@ static uint64_t now_frames; /* consumed device frames, simulated */
 uint32_t now_ms;
 long live_allocations;
 int key_down;
-static int depth, in_sleep;
+unsigned mci_notifications, mci_last_notify;
+static _Thread_local int depth, in_sleep;
+void hf_lock(void);
+void hf_unlock(void);
+void (*mci_wait_hook)(void);
+_Thread_local void (*mci_unlock_hook)(void);
 #ifdef MCI_TEST_CD
 #include "cd_model.h"
 int mci_test_lock_depth(void) { return depth; }
@@ -215,6 +220,7 @@ void InitializeCriticalSection(RTL_CRITICAL_SECTION *s) {
   memset(s, 0, sizeof(*s));
 }
 void EnterCriticalSection(RTL_CRITICAL_SECTION *s) {
+  hf_lock();
   s->RecursionCount++;
   depth++;
 }
@@ -222,6 +228,8 @@ void LeaveCriticalSection(RTL_CRITICAL_SECTION *s) {
   assert(s->RecursionCount > 0);
   s->RecursionCount--;
   depth--;
+  hf_unlock();
+  if (mci_unlock_hook) mci_unlock_hook();
 }
 /* Sleep is the only clock: the worker's service pass runs when no MCI lock
  * is held by the sleeping thread (the production worker is a thread). */
@@ -272,6 +280,7 @@ void harness_post(uintptr_t window, uint32_t message, uintptr_t wp,
                   intptr_t lp);
 #endif
 void mci_host_post(uintptr_t window, uint32_t status, uint32_t id) {
+  mci_notifications++; mci_last_notify = status;
 #ifdef MCI_TEST_CD
   cd_model.last_notify=status; cd_model.notifications++;
 #endif
@@ -285,6 +294,7 @@ void mci_host_post(uintptr_t window, uint32_t status, uint32_t id) {
 }
 int mci_host_key(int key) {
   (void)key;
+  if (mci_wait_hook) mci_wait_hook();
   return key_down;
 }
 struct acm_api {
@@ -305,3 +315,30 @@ const struct mci_driver *mci_host_avi(const struct mci_host *host) {
   return 0;
 }
 #endif
+
+DWORD GetFullPathNameA(const char *name, DWORD size, char *out, char **part) {
+  char path[1024];
+  size_t n = strlen(name);
+  if (n >= sizeof(path)) return 0;
+  memcpy(path, name, n + 1);
+  for (size_t i = 0; i < n; i++) if (path[i] == '\\') path[i] = '/';
+  char result[1024]; size_t used = 0;
+  for (char *at = path; *at;) {
+    while (*at == '/') at++;
+    char *end = at; while (*end && *end != '/') end++;
+    size_t len = end - at;
+    if (!len) break;
+    if (len == 1 && at[0] == '.') {}
+    else if (len == 2 && at[0] == '.' && at[1] == '.') {
+      while (used && result[--used] != '/') {}
+    } else {
+      if (used) result[used++] = '/';
+      memcpy(result + used, at, len); used += len;
+    }
+    at = end;
+  }
+  if (used >= size) return (DWORD)used + 1;
+  memcpy(out, result, used); out[used] = 0;
+  if (part) *part = 0;
+  return (DWORD)used;
+}

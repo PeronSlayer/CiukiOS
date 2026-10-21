@@ -184,3 +184,53 @@ no cbSize); avi.c gains AVIStreamSampleToTime/TimeToSample.
 - ACM discovery and PCM converter (split conversions against a Python
   oracle), AVIStreamSampleToTime/TimeToSample, PE store exports/imports,
   census coverage and an i686 no-SSE/MMX disassembly check.
+
+## Amendment 2 research and implementation (2026-10-21)
+
+This amendment applies the nine review findings against `e9cc125b` only.
+The primary references checked against the affected implementations are:
+
+- Microsoft [MM_MCINOTIFY](https://learn.microsoft.com/en-us/windows/win32/multimedia/mm-mcinotify):
+  a device error during an operation requires `MCI_NOTIFY_FAILURE`. AVI now
+  reports preparation failures synchronously, completes a failed operation
+  once, and preserves its error for waiting callers.
+- Microsoft [MCI_OPEN](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open):
+  both opens must permit sharing; MCIWAVE/MCISEQ files are nonsharable.
+  Alias uniqueness remains separate from canonical file ownership. CD aliases
+  share one refcounted transport per optical slot, with separate notifications.
+- Microsoft, [Multimedia Data Standards Update, revision 3.0](https://billposer.org/Linguistics/Computation/riffnew.pdf),
+  printed pp. 22–23: MS ADPCM requires the seven standard coefficient pairs
+  in order, while allowing appended pairs. Validation and authored tests now
+  enforce that prefix; no codec implementation was copied from the reference.
+- T10, [MMC-3 revision 10g, section 5.17](https://www.13thmonkey.org/documentation/SCSI/mmc3r10g.pdf#page=192):
+  READ CD provides CD-DA extraction; the capability bit is described in the
+  CD capabilities page (printed p. 312). The existing kernel INFO handler
+  already retries capability discovery on a ready drive. User-mode CD audio
+  now refreshes unknown capabilities after insertion and selects its playback
+  path before each play, preserving the approved digital/analog policy.
+
+Wave/AVI output owners retain their mixer handle, headers and storage after
+failed reset, unprepare or close. The MCI worker retries an embedded cleanup
+record after device close; this extends the private MCI boundary to version 2.
+The wait loop snapshots yield inputs while locked and checks a 64-bit instance
+generation after reacquiring the lock. AVI audio uses the exclusive sample
+endpoint corresponding to the inclusive final video frame, including ADPCM
+lead-in removal and tail trimming. Palette ranges use subtraction after
+checking the start, so signed addition cannot overflow.
+
+Regression evidence and exact verification commands are recorded in
+`build/codex/f5-12b-report.md`, section “Amendment 2”. No kernel file changes,
+QEMU runs, systemd scopes or image builds belong to this amendment delivery.
+
+Amendment 2 verification: `nice -n 19 make CAP= apps` passes. Win32 discovery
+executes 277 tests: 233 pass, 19 skip, and 25 fail solely at LeakSanitizer
+shutdown because ptrace is unavailable in the sandbox. There are no link
+errors; all 18 dialog tests execute. The focused codec tests pass, including
+ASan/UBSan fuzz preflights. Saved artifacts match three pinned media traces
+and nine independent AVI/GDI pixel oracles, with zero tracked allocations.
+The AVI trace's partial-play completion moves from 875 ms to 745 ms because
+the audio queue now ends at the requested boundary. Leak detection settings
+remain as supplied by the repository scripts; unrestricted LSan reruns are
+left to the lead. After discovery, only the host wait interleaving and codec
+mutation cadence were adjusted and their focused commands rerun; production
+sources remain the state used by the apps build and discovery.

@@ -92,6 +92,33 @@ class Codecs(unittest.TestCase):
                     wave,block,expected=F.audio(tag,channels,rate,alignment)
                     self.audio(wave,block*2,expected*2)
 
+    def test_ms_adpcm_prefix_predictors_clipping_header_and_geometry(self):
+        lib = self.lib
+        for channels in (1, 2):
+            for alignment in (7*channels, 8*channels, 32760*channels):
+                wave, block, _ = F.audio(2, channels, 22050, alignment)
+                for predictor in range(7):
+                    for extreme in (-32768, 32767):
+                        raw = bytearray(block)
+                        raw[:channels] = bytes([predictor])*channels
+                        for c in range(channels):
+                            struct.pack_into('<h', raw, channels+2*c, 32767)
+                            struct.pack_into('<h', raw, 3*channels+2*c, extreme)
+                            struct.pack_into('<h', raw, 5*channels+2*c, -extreme-1)
+                        self.audio(wave, bytes(raw), F.reference(2, channels, raw))
+                # The standard prefix is mandatory; extra pairs are permitted.
+                for pair in range(7):
+                    bad = bytearray(wave); bad[22+4*pair] ^= 1
+                    self.assertEqual(lib.acmFormatSuggest(0, buffer(bytes(bad)), C.create_string_buffer(18), 18, 0), 512)
+                bad = bytearray(wave); struct.pack_into('<H', bad, 20, 6)
+                self.assertEqual(lib.acmFormatSuggest(0, buffer(bytes(bad)), C.create_string_buffer(18), 18, 0), 512)
+                appended = bytearray(wave)+struct.pack('<hh', 256, 0)
+                struct.pack_into('<H', appended, 16, 36)
+                struct.pack_into('<H', appended, 20, 8)
+                raw = bytearray(block); raw[:channels] = bytes([7])*channels
+                oracle = bytearray(raw); oracle[:channels] = bytes(channels)
+                self.audio(bytes(appended), bytes(raw), F.reference(2, channels, oracle))
+
     def test_acm_format_constraints_and_size_rounding(self):
         lib=self.lib
         for tag in (17,2):

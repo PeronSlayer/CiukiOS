@@ -188,6 +188,4 @@ BOOL host_animate(DWORD palette) {
 }
 void host_gdi_exit(void) { w32_gdi_process_exit(); }
 
-int host_pixel_format(DWORD dc, int set) {
-  return set ? SetPixelFormat(dc,set,0) : GetPixelFormat(dc);
-}
+#include "../gdi32/pixel_format.inc"

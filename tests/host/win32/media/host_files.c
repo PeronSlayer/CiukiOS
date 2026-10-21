@@ -1,6 +1,7 @@
 /* POSIX file access for the media host harnesses, kept apart from the
  * CiukiOS ABI headers (their O_* values differ from the host's).
  * SPDX-License-Identifier: LGPL-2.1-or-later */
+#define _GNU_SOURCE
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,4 +23,35 @@ int hf_write_file(const char *name, const void *p, unsigned long n) {
   long w = (long)write(fd, p, n);
   close(fd);
   return w == (long)n ? 0 : -1;
+}
+
+/* Real host threads for the close/reopen-during-MCI_WAIT regression. */
+#include <pthread.h>
+#include <stdlib.h>
+#include <assert.h>
+static pthread_mutex_t lifetime_lock;
+static pthread_once_t lifetime_once = PTHREAD_ONCE_INIT;
+static void init_lifetime(void) {
+  pthread_mutexattr_t attr;
+  assert(!pthread_mutexattr_init(&attr));
+  assert(!pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE));
+  assert(!pthread_mutex_init(&lifetime_lock, &attr));
+  pthread_mutexattr_destroy(&attr);
+}
+void hf_lock(void) { pthread_once(&lifetime_once, init_lifetime); pthread_mutex_lock(&lifetime_lock); }
+void hf_unlock(void) { pthread_mutex_unlock(&lifetime_lock); }
+static pthread_t waiter;
+void hf_spawn(void *(*fn)(void *)) { assert(!pthread_create(&waiter, 0, fn, 0)); }
+void hf_join(void) { assert(!pthread_join(waiter, 0)); }
+static pthread_mutex_t gate_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gate_cv = PTHREAD_COND_INITIALIZER;
+static int gate;
+void hf_gate_set(int value) {
+  pthread_mutex_lock(&gate_lock); gate = value;
+  pthread_cond_broadcast(&gate_cv); pthread_mutex_unlock(&gate_lock);
+}
+void hf_gate_wait(int value) {
+  pthread_mutex_lock(&gate_lock);
+  while (gate != value) pthread_cond_wait(&gate_cv, &gate_lock);
+  pthread_mutex_unlock(&gate_lock);
 }

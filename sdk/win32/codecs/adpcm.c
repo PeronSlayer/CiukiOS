@@ -41,8 +41,18 @@ uint32_t cc_wave_validate(const struct cc_wave *f, uint32_t *samples) {
     return CC_NOTPOSSIBLE;
   if (f->tag == 2) {
     uint32_t count = cc_le16((const uint8_t *)f + 20);
-    if (!count || count > 256 || f->extra < 4 + 4 * count)
+    if (count < 7 || count > 256 || f->extra < 4 + 4 * count)
       return CC_NOTPOSSIBLE;
+    /* Microsoft RIFF update, pp. 22–23: the seven preset pairs must
+     * appear in order, even when only one predictor is used. */
+    static const int16_t standard[7][2] = {
+        {256, 0}, {512, -256}, {0, 0}, {192, 64},
+        {240, 0}, {460, -208}, {392, -232}};
+    const uint8_t *pairs = (const uint8_t *)f + 22;
+    for (unsigned i = 0; i < 7; i++)
+      if ((int16_t)cc_le16(pairs + 4*i) != standard[i][0] ||
+          (int16_t)cc_le16(pairs + 4*i + 2) != standard[i][1])
+        return CC_NOTPOSSIBLE;
   }
   *samples = n;
   return CC_OK;

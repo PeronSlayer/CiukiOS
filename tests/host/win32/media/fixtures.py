@@ -207,4 +207,23 @@ def write_all(folder):
         (folder / f'clip-{kind}.avi').write_bytes(riff)
         (folder / f'clip-{kind}.pcm').write_bytes(pcm)
         (folder / f'clip-{kind}.frames').write_bytes(b''.join(images))
+    # Structurally valid RIFF: corruption is inside a later codec payload.
+    for name, audio, target, which, frames in (
+            ('bad-video', 'pcm', b'00dc', 1, 6),
+            ('bad-audio-first', 'ima', b'01wb', 0, 6),
+            ('bad-audio-late', 'ima', b'01wb', 30, 36)):
+        riff, _, _ = avi_clip(frames=frames, audio=audio)
+        data = bytearray(riff)
+        movi = data.index(b'movi') + 4
+        at, index = movi, 0
+        while at + 8 <= len(data):
+            kind, size = struct.unpack_from('<4sI', data, at)
+            if kind == target:
+                if index == which:
+                    if target == b'00dc': data[at+8:at+8+size] = bytes(size)
+                    else: data[at+10] = 255  # invalid IMA step index
+                    break
+                index += 1
+            at += 8 + size + (size & 1)
+        (folder / (name + '.avi')).write_bytes(data)
     return folder
