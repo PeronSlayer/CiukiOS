@@ -140,6 +140,7 @@ struct desk_power_sequence {
 };
 struct desk_render_cache;
 struct desktop {
+    uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
     unsigned games_removed;
     int (*install_program)(struct desktop *,const char *);
     struct desk_ops ops;
