@@ -460,7 +460,7 @@ config_read:
 .done:
     ret
 ; Exact BOOT.CFG options; an empty name ends the list.
-option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'setup=1',0
 safe_option db 'safe=1',0
 serial_option db 'serial=0',0,0
 mode_prefix db 'mode=0x',0

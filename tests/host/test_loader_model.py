@@ -95,6 +95,16 @@ class LoaderModelTests(unittest.TestCase):
         self.assertTrue(model.menu_choice('S'))
         self.assertFalse(model.menu_choice('N'))
 
+    def test_setup_cd_boot_option(self):
+        # f9-01 (O2): the Setup CD's BOOT.CFG; the token only passes through.
+        self.assertEqual(model.boot_options('safe=0 serial=1 setup=1\n'),
+                         {'safe':False,'serial':True,'mode':None})
+        for token in ('setup=0','setup=10','xsetup=1','setup=','setup=1x','SETUP=1'):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                model.boot_options(token)
+        loader = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+        self.assertIn("'setup=1',0", loader)
+
     def test_software_acceleration_boot_option(self):
         self.assertEqual(model.boot_options('safe=0\r\naccel=0 serial=1'),
                          {'safe':False,'serial':True,'mode':None})
