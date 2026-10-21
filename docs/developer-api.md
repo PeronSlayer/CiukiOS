@@ -4424,6 +4424,8 @@ struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
 
 Timers (monotonic nanoseconds) and the shared text clipboard.
 
+DU_EV_TICK preserves dirty state; callbacks invalidate changed content.
+
 ```c
 int du_timer_start(struct du_ui *, int id, uint64_t interval_ns, int repeat);
 void du_timer_stop(struct du_ui *, int id);

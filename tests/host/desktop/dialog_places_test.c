@@ -23,6 +23,7 @@ static int places_close_fd(int);
 static unsigned opens, closes, state_reads, volume_reads;
 static uint32_t mounted=(1u<<3)|(1u<<4), transport=12;
 static int unavailable, changed_mid_snapshot, bad_volume;
+static const char *usb_label="CIUKI USB";
 static int places_open(const char *path,int flags,...)
 {
     assert(!strcmp(path,"/dev/media") && flags==(O_RDONLY|O_CLOEXEC)); opens++;
@@ -47,7 +48,7 @@ int places_devctl(int fd,uint32_t op,void *record,uint32_t bytes)
         if (bad_volume) { errno=EIO; return -1; }
         v->flags=v->drive==3 ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_REMOVABLE;
         v->generation=87; /* Namespace generation is NOT the transport generation. */
-        snprintf(v->label,sizeof(v->label),"%s",v->drive==3 ? "Original tones" : "CIUKI USB");
+        snprintf(v->label,sizeof(v->label),"%s",v->drive==3 ? "Original tones" : usb_label);
         if (changed_mid_snapshot) { transport++; changed_mid_snapshot=0; }
     }
     return 0;
@@ -87,6 +88,18 @@ int main(int argc,char **argv)
     assert(d->items[F_PLACES].box.x+d->items[F_PLACES].box.w<d->items[F_LIST].box.x);
     assert(du_next_deadline(&u)==500000000ull);
     render(&u,argv[1],"places-open");
+    const struct du_item *rows=d->items[F_PLACES].items;
+    d->items[F_PLACES].scroll=1;
+    u.now=500000000ull; du_dialog_tick(&u);
+    assert(!u.dirty && p->count==7 && d->items[F_PLACES].items==rows && d->items[F_PLACES].scroll==1);
+    assert(p->rows[2].selected && p->rows[6].text[0]==p->entries[6].label);
+    usb_label="Renamed USB"; u.now=1000000000ull; du_dialog_tick(&u);
+    assert(u.dirty==3 && !memcmp(&u.invalid,&d->items[F_PLACES].box,sizeof(u.invalid)));
+    assert(!strcmp(p->rows[6].text[0],"Renamed USB (E:)")); du_render(&u);
+    usb_label="CIUKI USB"; u.now=1500000000ull; du_dialog_tick(&u); du_render(&u);
+    d->items[F_PLACES].scroll=0;
+    /* Restore the original test clock after exercising three poll intervals. */
+    u.now=0; p->next_poll=500000000ull;
     click_place(&u,6); assert(!strcmp(d->folder,"/mnt/e") && p->rows[6].selected);
     render(&u,argv[1],"places-usb");
     click_place(&u,3); assert(!strcmp(d->folder,"/mnt/e") && p->rows[6].selected); /* failed folder navigation */
@@ -110,4 +123,5 @@ int main(int argc,char **argv)
     du_message(&u,3,"Question","Replace playlist?",0,NULL,0,0,0); assert(closes==3 && !d->places);
     du_dialog_close(&u); du_release(&u);
     puts("PASS Places: native media labels/generations, render, mouse/keyboard navigation, hotplug, query errors and close");
+    puts("PASS F2-86 Places: unchanged polls render=0; renamed label invalidates pane only; retained row pointers/selection/scroll");
 }

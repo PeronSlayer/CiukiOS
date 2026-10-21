@@ -18,3 +18,7 @@ Every boot logs `[pager] stats … extents=0` then `[pager] grow extents=1 capac
 ## Constraints
 
 Keep the f0-49/f0-49b cursor and reclaim semantics; no new `panic()`; `rg`/`sed` only; no `systemd-run`, no image builds, no commits, no diary edits; host tests one at a time with `nice -n 19`. Report `build/codex/f0-49c-report.md`.
+
+## Amendment 1 (lead, 2026-10-21, from the lead's host kernel suite on the delivery; log in `build/lead/kernel.log` of this worktree)
+
+1. `scripts/test/host_kernel_tests.sh` fails at `tests/host/dosvm_paging_model.inc` line 118: `FAIL 118: pager_manager_step(g_ticks)` — the existing expectation that the manager step reports progress at that point no longer holds after the boot-ordering change. Determine whether the directive's item 3 legitimately changes that (then update the expectation with the reason in the report) or the production change dropped a progress report (then fix production). Everything else in the suite passes.

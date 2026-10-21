@@ -90,7 +90,7 @@ static int probe_w32_restart(void)
     uint64_t deadline=g_ticks+10000;
     while(native_live(server)&&!native_reports.survivor_stage&&g_ticks<deadline)task_sleep_ms(1);
     if(!native_live(server)||native_reports.survivor_stage!=2){failure="survivor_timeout";goto cleanup;}
-    if(!native_command(server,GATE_SNAPSHOT,&generation)||!native_command(server,GATE_RESTART,&generation)){failure=native_command_failure;goto cleanup;}
+    if(!native_command(server,GATE_SNAPSHOT,&generation)||!native_command_argument(server,GATE_W32_FIXTURE,&generation,"restart-exercise")){failure=native_command_failure;goto cleanup;}
     deadline=g_ticks+360000;
     while(g_ticks<deadline&&native_live(server)&&!restart_observation.failed&&!native_reports.invalid){
         for(unsigned i=0;i<CIUKI_PROCESS_MAX;i++){

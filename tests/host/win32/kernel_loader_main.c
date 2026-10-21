@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include "../../../src/probes/win32_dialogs/controller.h"
 #include "../../../src/probes/win32_restart/controller.h"
+#include "../../../src/probes/win32_upper/controller.h"
+#include "../../../src/probes/win32_kernel32/controller.h"
+#include "../../../src/probes/win32_core/controller.h"
 extern void w32_kernel_model_init(const char *, uint32_t *, uint32_t *);
 extern void w32_kernel_model_finish(void);
 
@@ -145,9 +148,9 @@ static int restart_startup(void) {
     CHECK(VirtualQuery(p,&q,sizeof(q))==sizeof(q)&&q.allocation_base==W32_RESTART_RESULT_VA&&q.protect==4);
     CHECK(VirtualFree(p,0,0x8000));w32_ldr_shutdown(&loader);
     if(host.peb.ProcessHeap)RtlDestroyHeap(host.peb.ProcessHeap);host.peb.ProcessHeap=0;
-    puts("PASS restart compiled PE imports startup result=10050000 free commit RW zero release");return 0;
+    puts("PASS restart compiled PE imports startup result=100d0000 free commit RW zero release");return 0;
 }
-static int dialogs_startup(void) {
+static int dialogs_startup(const char *path, uint32_t address) {
     /* Actual fixture imports, production loader, kernel32 and VM services.
      * PE callbacks are observed, never executed by this native H0 model. */
     struct w32_loader loader;
@@ -155,9 +158,9 @@ static int dialogs_startup(void) {
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader, &manifest));
     struct w32_module *main;
-    CHECK(!w32_ciuki_start(&loader, &host.peb, W32_DIALOGS_PATH, "", "C:\\", "\0\0", &main));
+    CHECK(!w32_ciuki_start(&loader, &host.peb, path, "", "C:\\", "\0\0", &main));
     CHECK(GetModuleHandleA(0) == main->pe.image);
-    dialogs_resources(main->pe.image);
+    if (!w32_strcmp(path, W32_DIALOGS_PATH)) dialogs_resources(main->pe.image); /* f5-10C4: only the dialogs fixture carries RT_DIALOG 600 */
     struct ciuki_w32_memory_info q;
     CHECK(VirtualQuery((void *)0x6fff0000, &q, sizeof(q)) == sizeof(q));
     printf("DIALOGS_LAYOUT old_result=6fff0000 allocation=%08x state=%08x bytes=%u parameters=%08x builtins=%08x main=%08x+%08x\n",
@@ -168,15 +171,16 @@ static int dialogs_startup(void) {
     void *p = VirtualAlloc((void *)0x6fff0000, 4096, 0x3000, 4);
     printf("DIALOGS_ALLOC old_result=%p error=%u\n", p, GetLastError());
     CHECK(!p && GetLastError() == 487);
-    p = (void *)(uintptr_t)W32_DIALOGS_RESULT_VA;
+    p = (void *)(uintptr_t)address;
     CHECK(VirtualQuery(p, &q, sizeof(q)) == sizeof(q) && q.state == 0x10000);
     CHECK(VirtualAlloc(p, 4096, 0x3000, 4) == p);
+    for(unsigned i=0;i<4096;i++)CHECK(!((const uint8_t *)p)[i]);
     struct w32_dialogs_result *r = p;
     CHECK(!r->magic && !r->done && !r->release);
     r->magic = W32_DIALOGS_MAGIC;
     r->version = W32_DIALOGS_VERSION;
     CHECK(VirtualQuery(p, &q, sizeof(q)) == sizeof(q) && q.state == 0x1000 &&
-          q.allocation_base == W32_DIALOGS_RESULT_VA && q.region_size == 4096 && q.protect == 4);
+          q.allocation_base == address && q.region_size == 4096 && q.protect == 4);
     CHECK(VirtualFree(p, 0, 0x8000));
     w32_ldr_shutdown(&loader);
     if (host.peb.ProcessHeap) RtlDestroyHeap(host.peb.ProcessHeap);
@@ -388,10 +392,19 @@ int main(int argc, char **argv) {
                          !w32_strcmp(argv[2],"upper-store-dsetup")?"dsetup.dll":"dsetup32.dll";
         int result=upper_store_test(name);w32_kernel_model_finish();return result;
     }
+    for(unsigned i=1;i<W32_FIXTURE_COUNT;i++) {
+        char mode[80];snprintf(mode,sizeof(mode),"%s-startup",w32_fixtures[i].name);
+        if(!w32_strcmp(argv[2],mode)) {
+            int result=dialogs_startup(w32_fixtures[i].path,w32_fixtures[i].address);
+            w32_kernel_model_finish();return result;
+        }
+    }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
                  : !w32_strcmp(argv[2], "fixed-alloc") ? w32_kernel32_fixed_alloc()
                  : !w32_strcmp(argv[2], "restart-startup") ? restart_startup()
-                 : !w32_strcmp(argv[2], "dialogs-startup") ? dialogs_startup()
+                 : !w32_strcmp(argv[2], "dialogs-startup") ? dialogs_startup(W32_DIALOGS_PATH, W32_DIALOGS_RESULT_VA)
+                 : !w32_strcmp(argv[2], "upper-startup") ? dialogs_startup(W32_UPPER_PATH, W32_UPPER_RESULT_VA)
+                 : !w32_strcmp(argv[2], "kernel32-startup") ? dialogs_startup(W32_KERNEL32_PATH, W32_KERNEL32_RESULT_VA)
                  : !w32_strcmp(argv[2], "unicode-paths") ? unicode_paths()
                  : !w32_strcmp(argv[2], "runtime")   ? runtime()
                  : !w32_strcmp(argv[2], "startup") ? startup()

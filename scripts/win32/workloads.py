@@ -44,12 +44,17 @@ def validate(manifest):
         require(set(manifest['corpora']) == {'self-authored', 'period-demo', 'owner-local-retail'}, 'corpus labels')
         rows = manifest['workloads']
         require(isinstance(rows, list), 'workloads must be a list')
-        ids = set()
+        ids, probes = set(), set()
         for row in rows:
             ident = row['id']
             require(isinstance(ident, str) and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', ident), 'invalid workload id')
             require(ident not in ids, 'duplicate workload id')
             ids.add(ident)
+            probe = row['probe']
+            require(isinstance(probe, str) and len(probe.encode('utf-8')) <= 23 and
+                    re.fullmatch(r'win32-[a-z0-9]+(?:-[a-z0-9]+)*', probe), 'invalid workload probe alias')
+            require(probe not in probes, 'duplicate workload probe alias')
+            probes.add(probe)
             require(isinstance(row['title'], str) and bool(row['title']), 'missing title')
             require(row['corpus'] in manifest['corpora'], 'invalid corpus')
             require(row['gate'] in ('F5', 'F7', 'reserve', 'fixture', 'owner-local'), 'invalid gate')

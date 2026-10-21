@@ -120,11 +120,11 @@ class KernelCoreTests(unittest.TestCase):
                 self.assertEqual(case['selector'],'f5:w32-upper-dlls run={run_id}')
                 # f5-20D: one record per staged DLL, then the totals and the teardown.
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
-                                 ['fixture','upper_dll','upper_dlls','upper_teardown'])
+                                 ['write-gate','fixture','upper_dll','upper_dlls','upper_teardown'])
                 upper=json.loads((ROOT/'config/wine-upper.json').read_text())
                 staged=sum(1 for r in upper['dlls'].values() if r['qualified'])
-                self.assertEqual(case['expected']['predicates'][1]['exact_count'],staged)
-                self.assertEqual(case['expected']['predicates'][2]['fields']['dlls'],{'eq':staged})
+                self.assertEqual(case['expected']['predicates'][2]['exact_count'],staged)
+                self.assertEqual(case['expected']['predicates'][3]['fields']['dlls'],{'eq':staged})
                 self.assertIn('CIUKI_F5_PROBE("w32-upper-dlls"',(ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 continue
             if case['probe']=='w32-dialogs':
@@ -136,18 +136,18 @@ class KernelCoreTests(unittest.TestCase):
                 self.assertIn('CIUKI_F5_PROBE("w32-dialogs"',(ROOT/'src/kernel/probes/f2_probes_desktop.c').read_text())
                 continue
             if case['probe']=='w32-ddraw':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-ddraw run={run_id}')
                 continue
             if case['probe']=='w32-input':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-input run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['input_layouts','input_formats','input_buffering','input_cooperative','input_relative_warp','input_teardown'])
                 self.assertTrue(all(p['fields']['errors']=={'eq':0} for p in case['expected']['predicates']))
                 continue
             if case['probe']=='w32-codecs':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-codecs run={run_id}')
                 self.assertEqual(case['expected']['predicates'][0]['fields']['dlls'],{'eq':8})
                 continue
@@ -157,49 +157,43 @@ class KernelCoreTests(unittest.TestCase):
                 self.assertEqual(case['expected']['predicates'][0]['fields']['errors'],{'eq':0})
                 continue
             if case['probe']=='w32-audio':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['expected']['predicates'][0]['fields']['lead'],{'le':512})
                 continue
             if case['probe']=='w32-gdi32':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-gdi32 run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['gdi_dib','gdi_regions_palettes_text','gdi_teardown'])
                 continue
             if case['probe']=='w32-crash':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-crash run={run_id}')
                 continue
             if case['probe']=='w32-user32':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-user32 run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['user32_sends','user32_input','user32_paint','user32_teardown'])
                 continue
             if case['probe']=='w32-registry':
-                self.assertIn('authored, unrun',case['integration_pending'])
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-registry run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['registry_recovery','registry_restart','registry_writers'])
                 continue
             if case['probe']=='w32-fullscreen':
-                # f5-08 authors the unrun case; f5-09 owns its desktop driver.
-                self.assertIn('f5-09',case['integration_pending'])
+                # f5-08 authored the unrun case; f5-21b registered its observer.
+                self.assertIn('f5-21b',case['integration_pending'])
                 self.assertEqual(case['selector'],'f5:w32-fullscreen run={run_id}')
                 self.assertEqual([p['where']['case'] for p in case['expected']['predicates']],
                                  ['indexed_640480','indexed_320200','lease'])
                 continue
-            if case['probe'] in ('w32-fixtures','w32-kernel32'):
-                # f5-17B lead note: cases await their owners' guest drivers;
-                # the host model must reject them just like both real tables.
-                with self.assertRaises(ValueError):
-                    selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
-                continue
             selected=selector(case['selector'].format(run_id='12345678'),'fw_cfg',True)
             self.assertEqual(selected['phase'],5)
             self.assertEqual(selected['probe'],case['probe'])
-            if case['probe']=='w32-objects':
-                continue
+            if case['probe']!='w32-exceptions':
+                continue  # only the exceptions case carries the native_sse predicate
             native=[x for x in case['expected']['predicates'] if x['where'].get('case')=='native_sse']
             self.assertEqual(native[0]['fields'],{'vector':{'eq':6},'status':{'eq':4},'ud':{'eq':1}})
         # QEMU TCG never raises #XM (vector 19): nine faults are the TCG floor and the fixture

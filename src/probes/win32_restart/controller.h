@@ -2,7 +2,7 @@
 #ifndef CIUKI_W32_RESTART_CONTROLLER_H
 #define CIUKI_W32_RESTART_CONTROLLER_H
 #include <stdint.h>
-#define W32_RESTART_RESULT_VA 0x10050000u
+#define W32_RESTART_RESULT_VA 0x100d0000u
 #define W32_RESTART_MAGIC 0x54535257u
 #define W32_RESTART_PATH "/System/Win32/Fixtures/restart-exercise.exe"
 #define W32_RESTART_EXE "C:\\System\\Win32\\Fixtures\\restart-exercise.exe"

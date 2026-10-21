@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts/test'))
-from win32_session import InputPlayer, selector, validate_script, screen_check
+from win32_session import InputPlayer, selector, validate_script, screen_check, probe_name
 
 
 def key(down):
@@ -38,6 +38,19 @@ class SessionTests(unittest.TestCase):
         p = InputPlayer(script(), 'f5:win32-authored-fixture run=1234abcd', started_at_ms=1000, validated_fw_cfg=True)
         p.observe(self.record('BEGIN'), 1000)
         return p
+
+    def test_manifest_alias_keeps_full_workload_identity(self):
+        for workload, alias in [('starcraft-shareware', 'win32-sc'),
+                                ('worms-armageddon-demo', 'win32-wa')]:
+            scenario = script()
+            scenario['workload'] = workload
+            self.assertEqual(probe_name(workload), alias)
+            player = InputPlayer(scenario, 'f5:'+alias+' run=1234abcd',
+                                 started_at_ms=0, validated_fw_cfg=True)
+            self.assertEqual(player.script['workload'], workload)
+            with self.assertRaises(ValueError):
+                InputPlayer(scenario, 'f5:win32-other run=1234abcd',
+                            started_at_ms=0, validated_fw_cfg=True)
 
     def test_selector_requires_validated_fw_cfg_and_exact_request(self):
         request = 'f5:win32-authored-fixture run=1234abcd'

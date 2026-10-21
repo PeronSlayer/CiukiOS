@@ -22,3 +22,17 @@
 ## Constraints
 
 Research first (ATA/ATAPI-6 bus-master DMA semantics in the existing driver comments, the Intel ICH3-M datasheet already cited by `ata.c`, the lwIP-free kernel logging budget in `src/kernel/core/output.c`); no new `panic()`; no behaviour change outside logging and counters; `rg` and `sed`, never `semble`; host tests one at a time with `nice -n 19`; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits. Report in `build/codex/f1-86-report.md` with the verification table.
+
+## Amendment 1 (lead, 2026-10-21, from the Codex cross-review `build/lead-scratch/f1-86-review.md` in the main checkout: verdict "merge with these fixes")
+
+Apply before integration, in this order, each with a host test:
+
+1. **Publish outside the locks.** Hold and wait records are captured (release time, bounded field values) under the existing FS locks but formatted and published only after the namespace/volume locks are released and the waiters woken; admission-side wait records are deferred to the unlocked boundary. The observer fixture asserts that no publication happens while a namespace or volume lock is held.
+2. **Contention record budget.** At most 8 hold records and 8 wait records per 2 s window per drive, then a suppressed count and the maximum hold/wait of the window in the next report; the VM summary stays at 2 s without accelerating any other disk record family; the former verbose-only wait record stays verbose on disk (protected slots unchanged). A stalled-drain test with four VMs plus contention records the slot/byte budget.
+3. **Scheduler entry with IF clear.** `schedule()` entered after `cli()` with no active timing section (the syscall-return path, `task_exit`) starts an inactive section so the phase marks are recorded; keep an existing outer section; test both entries through the real hooks, not the manual `cpu_irqoff_begin()` stub.
+4. **Deferred phase arithmetic.** Raw phase timestamps only; duration and ranking computed only when the section end passes the 1 ms threshold; minimal initialization for sections without phases; the ATA first-completion timestamp taken only when DMA is enabled.
+5. **Idle publication.** Completion marks the queue statistics dirty; the next periodic report publishes dirty counters even when the queue is idle; test a completed burst followed by an idle interval.
+6. (P3, optional) Bounded generation validation of the namespace snapshot with `unknown` on overlap.
+
+Report the changes in `build/codex/f1-86-report.md` (section "Amendment 1").
+7. (lead, after the host kernel suite on the delivery) The existing DOS VM idle-accounting expectation at `tests/host/dosvm_speed_test.inc:151` fails on the delivery (`idle_blocks == 5 && idle_reasons == 6 && idle_count[DOSVM_IDLE_28] == 3 …`): the periodic report must not consume or reset the cumulative snapshot counters the existing API exposes (keep cumulative counters, compute the window deltas from the previous report's copy); fix production, keep the test unchanged.

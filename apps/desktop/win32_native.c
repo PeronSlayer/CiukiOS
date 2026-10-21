@@ -498,13 +498,3 @@ void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
         }else desk_w32_supervise(&supervisor,&supervision,clock_ns());
     }
 }
-
-/* Gate-only selective reaping preserves other probes' child evidence. */
-uint32_t desk_restart_fixture_service(struct desktop *d)
-{
-    if(supervisor.pid){
-        int status;uint32_t pid=supervisor.pid;
-        if(waitpid((int)pid,&status,WNOHANG)==(int)pid)desk_w32_child_exited(d,pid,status);
-    }
-    return supervisor.pid;
-}
