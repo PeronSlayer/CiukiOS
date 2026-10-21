@@ -138,14 +138,16 @@ void ciuki_net_cancel(struct ciuki_job *j)
     else if(!j->started)j->finished=true;
 }
 /* With no outstanding request, any queued bytes/EOF/error disqualify reuse.
- * Checking the TLS engine first also catches plaintext from a buffered record.
+ * Checking the TLS engine first also catches buffered/partial incoming records.
  * Rejecting pending ciphertext conservatively avoids interpreting alerts or
  * application records as a response to the next URL (RFC 9112 section 9.2). */
-static bool clean_socket(struct ciuki_connection *c)
+static bool clean_socket(struct ciuki_connection *c,bool request_queued)
 {
     if(c->tls){
-        size_t bytes;const unsigned char *app=ciuki_tls_read(c->tls,&bytes);
-        if((app && bytes) || (ciuki_tls_state(c->tls)&(BR_SSL_CLOSED|BR_SSL_SENDREC)))return false;
+        if(ciuki_tls_pending_input(c->tls) || (ciuki_tls_state(c->tls)&BR_SSL_CLOSED))return false;
+        /* Before the first transport send, SENDREC may be our queued request.
+         * Idle engines must have no pending output either. */
+        if(!request_queued && (ciuki_tls_state(c->tls)&BR_SSL_SENDREC))return false;
     }
     struct pollfd fd={c->fd,POLLIN,0};
     int ready=poll(&fd,1,0);
@@ -158,7 +160,7 @@ void ciuki_net_service_idle(struct ciuki_net *n)
     uint64_t now=now_ms();
     for(unsigned i=0;i<8;i++){
         struct ciuki_connection *c=&n->connections[i];
-        if(c->state==IDLE && (!now || now-c->idle_ms>=15000 || !clean_socket(c)))close_connection(n,c);
+        if(c->state==IDLE && (!now || now-c->idle_ms>=15000 || !clean_socket(c,false)))close_connection(n,c);
     }
 }
 static bool offline(void)
@@ -247,7 +249,7 @@ static void finish(struct ciuki_net *n,struct ciuki_connection *c)
 static void transfer(struct ciuki_connection *c,unsigned char *buffer)
 {
     struct ciuki_job *j=c->job;size_t budget=CIUKI_HTTP_SLICE;
-    if(j->pooled && !j->sent && !clean_socket(c)){io_error(j,ECONNRESET);return;}
+    if(j->pooled && !j->transmitted && !clean_socket(c,j->sent!=0)){io_error(j,ECONNRESET);return;}
     if(ciuki_http_pending(j->http)){
         ciuki_http_drain(j->http);
         if(j->http->error)j->error=j->http->error;
@@ -255,12 +257,12 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         return;
     }
     if(c->tls){
-        j->tls_error=ciuki_tls_pump(c->tls,c->fd,&budget);
+        j->tls_error=ciuki_tls_pump(c->tls,c->fd,&budget,&j->transmitted);
         if(j->tls_error==CIUKI_TLS_EOF){ciuki_http_eof(j->http);j->tls_error=CIUKI_TLS_OK;if(j->http->error)j->error=j->http->error;return;}
         if(j->tls_error){j->error=ciuki_tls_message(j->tls_error);return;}
         /* The pump may have decrypted application data since the first idle
-         * check. It still cannot belong to a request we have not sent. */
-        if(j->pooled && !j->sent && !clean_socket(c)){io_error(j,ECONNRESET);return;}
+         * check. Plaintext submission alone does not make it our response. */
+        if(j->pooled && !j->transmitted && !clean_socket(c,j->sent!=0)){io_error(j,ECONNRESET);return;}
         size_t bytes;unsigned char *out=ciuki_tls_write(c->tls,&bytes);
         if(out && j->sent<j->request_bytes){
             size_t count=j->request_bytes-j->sent;if(count>bytes)count=bytes;if(count>CIUKI_HTTP_SLICE)count=CIUKI_HTTP_SLICE;
@@ -275,7 +277,7 @@ static void transfer(struct ciuki_connection *c,unsigned char *buffer)
         if(j->sent<j->request_bytes){
             size_t count=j->request_bytes-j->sent;if(count>budget)count=budget;
             ssize_t r=send(c->fd,j->request+j->sent,count,MSG_NOSIGNAL);
-            if(r>0){j->sent+=(size_t)r;budget-=(size_t)r;}
+            if(r>0){j->transmitted=true;j->sent+=(size_t)r;budget-=(size_t)r;}
             else if(r<0 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR){io_error(j,errno);return;}
         }
         if(budget){
@@ -323,7 +325,7 @@ void ciuki_net_poll(struct ciuki_net *n)
         /* A stale idle socket can be retried once, only for idempotent methods
          * before receiving any response byte. Never replay a POST. */
         if(j->error && j->pooled && !j->post && !j->retried && !j->http->header_bytes && !j->cancelled){
-            j->retried=true;j->pooled=false;j->sent=0;j->error=NULL;j->tls_error=CIUKI_TLS_OK;
+            j->retried=true;j->pooled=false;j->sent=0;j->transmitted=false;j->error=NULL;j->tls_error=CIUKI_TLS_OK;
             ciuki_http_callback callback=j->http->callback;void *context=j->http->context;bool head=j->http->head;
             ciuki_http_destroy(j->http);ciuki_http_init(j->http,head,callback,context);
             if(c->fd>=0)close(c->fd);c->fd=-1;ciuki_tls_free(c->tls);c->tls=NULL;

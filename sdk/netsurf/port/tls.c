@@ -27,6 +27,8 @@ struct ciuki_tls {
     size_t der_bytes,expected;
     unsigned depth;
     bool cert_overflow;
+    unsigned input_header;
+    size_t input_left;
 };
 static struct ciuki_tls *owner(const br_x509_class **v) { return ((struct cert_proxy *)v)->owner; }
 static void chain_start(const br_x509_class **v,const char *host)
@@ -103,7 +105,25 @@ struct ciuki_tls *ciuki_tls_create(const char *host,const br_x509_trust_anchor *
 void ciuki_tls_free(struct ciuki_tls *t)
 { if(t){volatile unsigned char *p=(void *)t;for(size_t i=0;i<sizeof(*t);i++)p[i]=0;free(t);} }
 unsigned ciuki_tls_state(struct ciuki_tls *t) { return br_ssl_engine_current_state(&t->client.eng); }
-enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget)
+/* Track only TLS record boundaries (RFC 5246 section 6.2.3). BearSSL owns
+ * validation/decryption; recvrec may consume a partial header or ciphertext
+ * without exposing RECVAPP. Do this before ack can overwrite the input. */
+static void record_input(struct ciuki_tls *t,const unsigned char *p,size_t n)
+{
+    while(n){
+        if(t->input_header<5){
+            unsigned char byte=*p++;n--;
+            if(t->input_header>=3)t->input_left=(t->input_left<<8)|byte;
+            if(++t->input_header<5)continue;
+        }
+        size_t count=n<t->input_left?n:t->input_left;
+        t->input_left-=count;p+=count;n-=count;
+        if(!t->input_left)t->input_header=0;
+    }
+}
+bool ciuki_tls_pending_input(struct ciuki_tls *t)
+{ return t->input_header!=0 || (ciuki_tls_state(t)&BR_SSL_RECVAPP)!=0; }
+enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget,bool *transmitted)
 {
     for(unsigned steps=0;steps<16 && *budget;steps++){
         unsigned state=ciuki_tls_state(t);size_t n;ssize_t r;unsigned char *buffer;
@@ -111,11 +131,11 @@ enum ciuki_tls_error ciuki_tls_pump(struct ciuki_tls *t,int fd,size_t *budget)
         if(state&BR_SSL_SENDREC){
             buffer=br_ssl_engine_sendrec_buf(&t->client.eng,&n);if(n>*budget)n=*budget;
             r=send(fd,buffer,n,MSG_NOSIGNAL);
-            if(r>0){br_ssl_engine_sendrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
+            if(r>0){if(transmitted)*transmitted=true;br_ssl_engine_sendrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
         } else if(state&BR_SSL_RECVREC){
             buffer=br_ssl_engine_recvrec_buf(&t->client.eng,&n);if(n>*budget)n=*budget;
             r=recv(fd,buffer,n,0);
-            if(r>0){br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
+            if(r>0){record_input(t,buffer,(size_t)r);br_ssl_engine_recvrec_ack(&t->client.eng,(size_t)r);*budget-=(size_t)r;continue;}
             if(!r)return CIUKI_TLS_IO;
         } else return CIUKI_TLS_OK;
         if(r<0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))return CIUKI_TLS_OK;

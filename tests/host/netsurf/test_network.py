@@ -158,7 +158,7 @@ class NetworkTests(unittest.TestCase):
         libraries=["-Wl,--start-group",*[str(p) for p in sorted((BASE / "prefix/lib").glob("*.a")) if p.name!="libnsfb.a"],"-Wl,--end-group",
                    "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-lm","-pthread"]
         subprocess.run([*cls.flags,*cls.port_flags,str(HERE / "browser_network_test.c"),*map(str,objects),*cls.stack,
-            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main,--wrap=nsfb_event,--wrap=clock_gettime","-o",str(OUT / "browser")],check=True)
+            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main,--wrap=nsfb_event,--wrap=clock_gettime,--wrap=pthread_cond_wait","-o",str(OUT / "browser")],check=True)
 
     @classmethod
     def compile_stack(cls):
@@ -179,7 +179,7 @@ class NetworkTests(unittest.TestCase):
     def tearDownClass(cls):cls.fixture.cleanup()
 
     def engine(self,mode,path="/"):
-        secure=mode in ("valid","expired","future","wrong","self","tls10","tls-reuse","tls-truncated","tls-unsolicited","tls-buffered","tls-recheck","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer")
+        secure=mode.startswith("tls-") or mode in ("valid","expired","future","wrong","self","tls10","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer")
         cert="intermediate" if mode in ("intermediate","missing-intermediate","malformed-chain") else mode if mode in ("valid","expired","future","wrong","self") else "valid"
         if mode=="malformed-chain":
             (self.folder / "intermediate-chain.der").write_bytes(b"\x30\x03\x02\x01")
@@ -209,6 +209,14 @@ class NetworkTests(unittest.TestCase):
     def test_bearssl(self):
         for mode in ("valid","expired","future","wrong","self","tls10","intermediate","missing-intermediate","malformed-chain","cert-depth","cert-buffer","tls-reuse","tls-truncated","tls-unsolicited","tls-buffered","tls-recheck"):
             with self.subTest(mode=mode):self.engine(mode,"/tls-truncated" if mode=="tls-truncated" else "/unsolicited" if mode in ("tls-unsolicited","tls-buffered") else "/")
+
+    def test_tls_first_transmission_and_partial_records(self):
+        for mode in ("tls-submit-recheck","tls-send-recheck","tls-partial-header","tls-partial-body"):
+            with self.subTest(mode=mode):self.engine(mode)
+
+    def test_admitted_transport_retry_and_no_replay(self):
+        for mode in ("stale-retry","post-no-replay","tls-stale-retry","tls-post-no-replay"):
+            with self.subTest(mode=mode):self.engine(mode)
 
     def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
@@ -245,6 +253,6 @@ class NetworkTests(unittest.TestCase):
         self.assertIn(message," ".join(parser.parts))
 
     def test_navigation_during_blocked_lookup(self):
-        self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1")
+        self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
 
 if __name__=="__main__":unittest.main()

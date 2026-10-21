@@ -22,17 +22,21 @@ static br_x509_certificate server_certificates[12];
 static unsigned server_depth=1;
 static unsigned char *intermediate_data;
 static _Atomic bool lookup_entered,lookup_allow;
+static _Thread_local bool blocked_lookup_returned;
 static br_skey_decoder_context server_key;
 static unsigned char *certificate_data,*key_data;
 static _Atomic unsigned http_requests,connections_seen,loop_requests;
 static bool fixture_offline;
+static bool send_blocked;
+static unsigned blocked_sends;
 struct peer {
     unsigned port;
     uint32_t next,ack;
     unsigned char frame[54];
     char request[CIUKI_SOCKET_IO_MAX*3+1];size_t request_bytes;
     unsigned char response[40000];size_t response_bytes,response_sent;
-    bool tls,waiting,close_after,unsolicited;
+    bool tls,waiting,close_after,unsolicited,hold_record,reset_after;
+    size_t record_prefix;
     br_ssl_server_context *server;
     unsigned char *io;
 };
@@ -40,7 +44,15 @@ static struct peer peers[16];
 static void response(struct peer *p)
 {
     char method[16],path[4097];CHECK(sscanf(p->request,"%15s %4096s",method,path)==2);
+    if(!strcmp(fixture_mode,"browser-blocked")){
+        CHECK(!strcmp(path,"/page")||!strcmp(path,"/favicon.ico"));
+        CHECK(strstr(p->request,"\r\nHost: 192.0.2.1:8080\r\n"));
+    }
     http_requests++;
+    /* Lose B's response after accepting B on the admitted pooled transport.
+     * GET may retry once; POST must never be replayed. A stays reusable. */
+    if(http_requests==2 && (!strcmp(fixture_mode,"stale-retry")||!strcmp(fixture_mode,"post-no-replay")||
+        !strcmp(fixture_mode,"tls-stale-retry")||!strcmp(fixture_mode,"tls-post-no-replay")))p->reset_after=true;
     if(p->tls){const char *sni=br_ssl_engine_get_server_name(&p->server->eng);CHECK(sni && !strcmp(sni,"fixture.example"));}
     if(!strcmp(method,"POST")){
         CHECK(strstr(p->request,"Content-Type: application/x-www-form-urlencoded\r\n"));
@@ -102,21 +114,24 @@ static void packet(struct peer *p,const void *data,unsigned n,bool fin)
 }
 static void peer_output(struct peer *p)
 {
-    if(p->waiting)return;
+    if(p->waiting || p->hold_record)return;
     if(p->unsolicited && p->response_sent==p->response_bytes){
         const char *extra="HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nWRONG";
         memcpy(p->response,extra,strlen(extra));p->response_bytes=strlen(extra);p->response_sent=0;p->unsolicited=false;
     }
     if(!p->tls){
+        if(p->reset_after){p->reset_after=false;p->response_sent=p->response_bytes;tcp_reply(p->frame,p->next,p->ack,0x14,NULL,0);return;}
         size_t n=p->response_bytes-p->response_sent;if(n>1024)n=1024;
         if(n){packet(p,p->response+p->response_sent,(unsigned)n,false);p->response_sent+=n;}
         else if(p->close_after){packet(p,NULL,0,true);p->close_after=false;}
         return;
     }
     for(unsigned step=0;step<8;step++){
+        if(p->reset_after){p->reset_after=false;p->response_sent=p->response_bytes;tcp_reply(p->frame,p->next,p->ack,0x14,NULL,0);return;}
         unsigned state=br_ssl_engine_current_state(&p->server->eng);size_t n;
         if(state&BR_SSL_SENDREC){
             unsigned char *record=br_ssl_engine_sendrec_buf(&p->server->eng,&n);if(n>1024)n=1024;
+            if(p->record_prefix){CHECK(n>p->record_prefix);n=p->record_prefix;p->record_prefix=0;p->hold_record=true;}
             packet(p,record,(unsigned)n,false);br_ssl_engine_sendrec_ack(&p->server->eng,n);return;
         }
         if(state&BR_SSL_RECVAPP){
@@ -182,7 +197,9 @@ int __wrap_connect(int fd,const struct sockaddr *a,socklen_t n)
     CHECK(n==16);struct ciuki_sockaddr_in address;memcpy(&address,a,16);return result(net_socket_connect(&client,fd,&address,NULL));
 }
 ssize_t __wrap_send(int fd,const void *s,size_t n,int flags)
-{ if(n>317)n=317;return result(net_socket_io(&client,fd,(void *)s,(unsigned)n,(unsigned)flags,NULL,true,NULL)); }
+{ if(send_blocked){blocked_sends++;errno=EAGAIN;return -1;}if(n>317)n=317;return result(net_socket_io(&client,fd,(void *)s,(unsigned)n,(unsigned)flags,NULL,true,NULL)); }
+void fixture_block_send(bool blocked) { send_blocked=blocked; }
+unsigned fixture_blocked_sends(void) { return blocked_sends; }
 ssize_t __wrap_recv(int fd,void *s,size_t n,int flags)
 { if(n>311)n=311;return result(net_socket_io(&client,fd,s,(unsigned)n,(unsigned)flags,NULL,false,NULL)); }
 int __real_close(int);
@@ -213,7 +230,9 @@ int __wrap_getaddrinfo(const char *name,const char *service,const struct addrinf
     int e=0;if(!strcmp(name,"localhost")){address=PP_HTONL(0x7f000001);status=0;}else e=net_resolve(&client,name,&address,&status);
     if(e){errno=-e;return EAI_SYSTEM;}if(status)return status==2?EAI_AGAIN:EAI_NONAME;
     struct addrinfo *a=calloc(1,sizeof(*a));struct sockaddr_in *s=calloc(1,sizeof(*s));CHECK(a && s);
-    s->sin_family=AF_INET;s->sin_addr.s_addr=address;a->ai_family=AF_INET;a->ai_socktype=SOCK_STREAM;a->ai_addr=(void *)s;a->ai_addrlen=16;*out=a;return 0;
+    s->sin_family=AF_INET;s->sin_addr.s_addr=address;a->ai_family=AF_INET;a->ai_socktype=SOCK_STREAM;a->ai_addr=(void *)s;a->ai_addrlen=16;*out=a;
+    if(!strcmp(name,"blocked.example"))blocked_lookup_returned=true;
+    return 0;
 }
 void __wrap_freeaddrinfo(struct addrinfo *a) { if(a){free(a->ai_addr);free(a);} }
 static unsigned char *load(const char *name,size_t *bytes)
@@ -268,6 +287,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 bool ciuki_host_clock_rtc(void) { return strcmp(fixture_mode,"fallback-clock")!=0; }
 bool fixture_lookup_blocked(void) { return lookup_entered; }
 void fixture_lookup_release(void) { lookup_allow=true; }
+bool fixture_lookup_returned_in_thread(void) { return blocked_lookup_returned; }
 static void expire_dns(void *unused) { (void)unused;for(unsigned i=0;i<61;i++)dns_tmr(); }
 void fixture_dns_expire(void) { CHECK(tcpip_callback_wait(expire_dns,NULL)==ERR_OK); }
 void fixture_dns_change(void) { CHECK(tcpip_callback_wait(dns_servers_reset,NULL)==ERR_OK); }
@@ -279,3 +299,10 @@ static void inject_unsolicited(void *unused)
     for(unsigned i=0;i<16;i++)if(peers[i].port){peers[i].unsolicited=true;peer_output(&peers[i]);}
 }
 void fixture_unsolicited(void) { CHECK(tcpip_callback_wait(inject_unsolicited,NULL)==ERR_OK); }
+static void inject_partial(void *bytes)
+{
+    for(unsigned i=0;i<16;i++)if(peers[i].port){
+        peers[i].record_prefix=*(const size_t *)bytes;peers[i].unsolicited=true;peer_output(&peers[i]);
+    }
+}
+void fixture_unsolicited_prefix(size_t bytes) { CHECK(tcpip_callback_wait(inject_partial,&bytes)==ERR_OK); }

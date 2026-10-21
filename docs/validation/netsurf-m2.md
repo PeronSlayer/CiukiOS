@@ -130,3 +130,56 @@ link/import/ELF checks and the application manifest. NetSurf ELF SHA-256:
 13,293,220 file bytes and 3,031,040 inspected load-memory bytes. Host and target
 anchor-table hashes remain identical to the base delivery. No image, QEMU or
 hardware result is claimed.
+
+## Amendment 2 research and implementation (2026-10-21)
+
+The amendment is limited to the TLS reuse window and its regression fixtures,
+admitted-transport retry/no-replay coverage, and late DNS browser behaviour.
+The starting code is `a292f2b6`; worktree HEAD `9faee297` only adds Amendment 2
+to the directive.
+
+- [BearSSL generic I/O](https://bearssl.org/api1.html#generic-io) and
+  [record I/O API](https://bearssl.org/apidoc/bearssl__ssl_8h.html):
+  `sendapp_ack` submits buffered plaintext; a positive socket `send` followed
+  by `sendrec_ack` transmits ciphertext. The job now records these separately,
+  resets the transmission flag on retry, and checks reuse cleanliness until
+  the first positive transport send, including across `EAGAIN`.
+- [RFC 5246 section 6.2.3](https://www.rfc-editor.org/rfc/rfc5246.html#section-6.2.3)
+  defines the five-byte TLS ciphertext header and its payload length. Compare
+  the pinned BearSSL 0.6 `ssl_engine.c` input-buffer description (lines
+  144–168) and `recvrec_ack`: a partial header/body can be buffered without
+  exposing `RECVAPP`. The port tracks record boundaries on successful receives
+  before acknowledging bytes, without accessing private BearSSL fields.
+  Partial input and buffered plaintext both disqualify reuse; queued output is
+  allowed only for the admitted request awaiting its first transport send.
+- [RFC 9112 sections 9.2 and 9.3.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.2)
+  require request/response association and describe recovery from asynchronous
+  connection failure. Keep the existing single GET/HEAD retry and POST refusal.
+  Separate HTTP/TLS fixtures reset the already admitted connection after the
+  peer has received request B, before any B response, and count requests and
+  connections to detect replays. Existing pre-admission disposal cases stay.
+- [NetSurf 3.11 source release](https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz),
+  pinned locally, `browser_window_access_url`, browser navigation, and the
+  ordinary framebuffer event/fetch pump supply the browser assertion boundary.
+  The blocked-lookup test now waits for the late answer to return and the
+  resolver to become idle, then runs further browser turns. It asserts the
+  completed page and URL stay unchanged and no extra connection/request occurs.
+  Only fixture capture/exit timing is delayed.
+
+Exact commands, outcomes and qualification limits are in the report's
+**Amendment 2** section at `build/codex/f6-15-report.md`.
+
+Amendment 2 host discovery ran 28 tests in 675.396 s, exiting 1 with 60 subcase
+failures and 12 subprocess errors. All 60 failure blocks show only the
+LeakSanitizer ptrace fatal at shutdown; all 12 subprocess errors have the same
+cause (72 fatal diagnostics total). All directed assertions, the retained
+disposal cases, all three M1 pixel goldens, independent comparisons for all 121
+production anchors, and the two clean target-build comparisons completed.
+ASan/UBSan and leak detection remain enabled. Full sanitizer qualification is
+blocked pending a compatible host; it is not a green gate.
+
+`nice -n 19 make CAP= apps` passed once after discovery, including the refreshed
+SDK, native application links and ELF/import validation. The final NetSurf ELF
+matches both clean target builds: SHA-256
+`468735b9e056f0a0309114b817ea77105c255a08485d284dd611ccd7db045370`,
+13,294,296 file bytes. No image or runtime qualification is claimed.

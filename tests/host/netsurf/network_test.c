@@ -52,6 +52,16 @@ static void drive(struct ciuki_net *net,struct ciuki_job *job)
         __real_clock_gettime(CLOCK_MONOTONIC,&now);assert(now.tv_sec-start.tv_sec<15);
     }
 }
+static int readable_socket(struct ciuki_net *net)
+{
+    struct pollfd fds[8];assert(ciuki_net_fds(net,fds)==1 && (fds[0].events&POLLIN));
+    fds[0].events=POLLIN;
+    for(unsigned tries=0;tries<1000;tries++){
+        if(poll(fds,1,0)>0){assert(fds[0].revents==POLLIN);return fds[0].fd;}
+        usleep(1000);
+    }
+    assert(!"fixture did not deliver the scripted response");return -1;
+}
 static void request_checks(void)
 {
     struct ciuki_request r={.host="fixture.example",.target="/",.port=8080};
@@ -110,7 +120,7 @@ int main(int argc,char **argv)
     assert(argc==6);mode=argv[1];
     setvbuf(stdout,NULL,_IOLBF,0);
     extern void fixture_begin(const char *,const char *,const char *),fixture_end(void);
-    extern unsigned fixture_connections(void);
+    extern unsigned fixture_connections(void),fixture_requests(void);
     fixture_begin(mode,argv[4],argv[5]);
     struct ciuki_net *net=ciuki_net_create(ciuki_anchors,CIUKI_ANCHOR_COUNT);assert(net);
     request_checks();
@@ -127,13 +137,13 @@ int main(int argc,char **argv)
     if(!strcmp(mode,"post"))request.post="dog=Ciuki&step=M2";
     cancel=!strcmp(mode,"callback-cancel");
     struct ciuki_job *job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")){
+    if(!strcmp(mode,"valid")||!strcmp(mode,"ok")||!strcmp(mode,"reuse")||!strcmp(mode,"post")||!strcmp(mode,"stale")||!strcmp(mode,"post-stale")||!strcmp(mode,"intermediate")||!strcmp(mode,"tls-reuse")||!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")||!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")||!strncmp(mode,"tls-partial-",12)||!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
         if(job->error)fprintf(stderr,"unexpected: %s\n",job->error);
         assert(!job->error && job->http->done && received==5 && !memcmp(payload,"Ciuki",5));
         if(!strcmp(mode,"reuse")||!strcmp(mode,"tls-reuse")){
             ciuki_net_job_free(job);received=0;
             job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
-            assert(job->pooled && !job->error && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==1);
+            assert(job->pooled && job->transmitted && !job->error && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==1);
         }
         if(!strcmp(mode,"unsolicited-recheck")||!strcmp(mode,"tls-recheck")){
             extern void fixture_unsolicited(void);
@@ -142,17 +152,42 @@ int main(int argc,char **argv)
             fixture_unsolicited();usleep(500000);drive(net,job);
             assert(!job->error && job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
         }
-        if(!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")){
+        if(!strcmp(mode,"tls-submit-recheck")||!strcmp(mode,"tls-send-recheck")){
+            extern void fixture_unsolicited(void),fixture_block_send(bool);
+            extern unsigned fixture_blocked_sends(void);
+            ciuki_net_job_free(job);received=0;
+            job=ciuki_net_job(&request,callback,NULL);assert(job && ciuki_net_start(net,job) && job->pooled);
+            ciuki_net_poll(net);
+            assert(job->sent==job->request_bytes && !job->transmitted && !job->finished && fixture_requests()==1);
+            if(!strcmp(mode,"tls-send-recheck")){
+                fixture_block_send(true);ciuki_net_poll(net);fixture_block_send(false);
+                assert(fixture_blocked_sends()==1 && !job->transmitted && !job->error && !job->retried && fixture_requests()==1);
+            }
+            fixture_unsolicited();readable_socket(net);drive(net,job);
+            assert(!job->error && job->retried && job->transmitted && received==5 && !memcmp(payload,"Ciuki",5));
+            assert(fixture_connections()==2 && fixture_requests()==2);
+        }
+        if(!strcmp(mode,"unsolicited")||!strcmp(mode,"tls-unsolicited")||!strcmp(mode,"tls-buffered")||!strcmp(mode,"idle-expiry")||!strcmp(mode,"idle-reuse-expiry")||!strncmp(mode,"tls-partial-",12)){
             ciuki_net_job_free(job);received=0;
             struct pollfd fds[8];assert(ciuki_net_fds(net,fds)==1 && (fds[0].events&POLLIN));
             if(strstr(mode,"expiry"))monotonic_offset=16;else usleep(500000);
             if(!strcmp(mode,"tls-buffered")){
                 assert(last_tls);size_t bytes=0;const unsigned char *app=NULL;
                 for(unsigned tries=0;tries<1000;tries++){
-                    size_t budget=CIUKI_HTTP_SLICE;assert(ciuki_tls_pump(last_tls,fds[0].fd,&budget)==CIUKI_TLS_OK);
+                    size_t budget=CIUKI_HTTP_SLICE;assert(ciuki_tls_pump(last_tls,fds[0].fd,&budget,NULL)==CIUKI_TLS_OK);
                     app=ciuki_tls_read(last_tls,&bytes);if(app && bytes)break;usleep(1000);
                 }
                 assert(app && bytes);unsigned char byte;assert(recv(fds[0].fd,&byte,1,MSG_PEEK|MSG_DONTWAIT)<0 && errno==EAGAIN);
+            }
+            if(!strncmp(mode,"tls-partial-",12)){
+                extern void fixture_unsolicited_prefix(size_t);
+                size_t prefix=!strcmp(mode,"tls-partial-header")?2:7;
+                assert(last_tls && !ciuki_tls_pending_input(last_tls));
+                fixture_unsolicited_prefix(prefix);int fd=readable_socket(net);
+                size_t budget=CIUKI_HTTP_SLICE,bytes;
+                assert(ciuki_tls_pump(last_tls,fd,&budget,NULL)==CIUKI_TLS_OK && CIUKI_HTTP_SLICE-budget==prefix);
+                assert(!ciuki_tls_read(last_tls,&bytes) && !bytes && ciuki_tls_pending_input(last_tls));
+                unsigned char byte;assert(recv(fd,&byte,1,MSG_PEEK|MSG_DONTWAIT)<0 && errno==EAGAIN);
             }
             if(strcmp(mode,"idle-reuse-expiry")){ciuki_net_service_idle(net);assert(!ciuki_net_fds(net,fds));}
             request.target="/";job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
@@ -164,6 +199,20 @@ int main(int argc,char **argv)
             job=ciuki_net_job(&request,callback,NULL);assert(job);drive(net,job);
             if(!strcmp(mode,"stale"))assert(!job->error && !job->pooled && !job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
             else assert(!job->error && !job->pooled && !job->retried && received==5 && !memcmp(payload,"Ciuki",5) && fixture_connections()==2);
+        }
+        if(!strcmp(mode,"stale-retry")||!strcmp(mode,"post-no-replay")||!strcmp(mode,"tls-stale-retry")||!strcmp(mode,"tls-post-no-replay")){
+            ciuki_net_job_free(job);received=0;
+            bool post=strstr(mode,"no-replay")!=NULL;
+            if(post)request.post="dog=Ciuki&step=M2";
+            job=ciuki_net_job(&request,callback,NULL);assert(job && ciuki_net_start(net,job) && job->pooled && !job->transmitted);
+            drive(net,job);assert(job->transmitted);
+            if(post){
+                assert(job->error && !job->retried && job->pooled && !job->http->header_bytes && !received);
+                assert(fixture_connections()==1 && fixture_requests()==2);
+            } else {
+                assert(!job->error && job->retried && !job->pooled && received==5 && !memcmp(payload,"Ciuki",5));
+                assert(fixture_connections()==2 && fixture_requests()==3);
+            }
         }
     } else if(!strcmp(mode,"callback-cancel")||!strcmp(mode,"cancel"))assert(job->cancelled && !received);
     else {
