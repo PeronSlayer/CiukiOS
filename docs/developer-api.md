@@ -1109,6 +1109,12 @@ F4-01: fixed copied device-control extension.
 #define AUDIO_SET_GAIN 0x4104u
 #define AUDIO_DRAIN 0x4105u
 #define AUDIO_RESET 0x4106u
+#define AUDIO_REFILL_READ 0x4107u
+```
+
+command: this thread's next bounded source reads
+
+```c
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
