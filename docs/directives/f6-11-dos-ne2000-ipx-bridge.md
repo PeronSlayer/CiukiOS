@@ -39,3 +39,14 @@ Apply this amendment only; keep everything else. Primary sources: the DP8390D da
 6. **P3 — Zero-count remote writes never signal `RDC`** (`dosvm_ne2000.c:125`): complete both zero-count DMA directions (commands `08h` and `10h`) as the QEMU reference does; check ISR/IMR behaviour for each.
 
 Verification as before plus the new regressions; report section "Amendment 3".
+
+## Amendment 4 (lead, 2026-10-21): the lead's suite runs outside the sandbox on 64fc8020 (amendment 3)
+
+Apply this amendment only. Logs: `build/lead/hkt.log`, `build/lead/desktop.log` in this worktree.
+
+1. **Kernel host suite link failure:** `src/kernel/net/bridge.c:27,29,46` reference `net_packet_copy`, `net_packet_data`, `net_packet_free` (f6-10's packet pool) but the harness rule in `scripts/test/host_kernel_tests.sh` that links `bridge.c` does not link the pool unit (or its stub); add it so the suite reaches its end.
+2. **`tests.host.desktop.test_add_remove.AddRemoveTests.test_dosvm_harness_links_and_syscalls`:** `tests/host/dosvm_test.c:209: fatal error: 'dosvm_aspace.inc' file not found`: that test compiles `dosvm_test.c` with its own include directory and expects the generated `dosvm_aspace.inc` (main's `prepare_lifecycle.py` step); on main the test passes, so the merge resolution in this worktree (the `dosvm_test.c` includes or the test's prepare step in `tests/host/desktop/test_add_remove.py`) lost the generation or the include path. Restore it.
+3. **`tests.host.desktop.test_desktop.DesktopTests.test_dosbox_loading` scenario 11:** `dosbox` exits with signal 6 (abort) in the scenario "DOS kernel: CiukiDOS (default); memory: paged (default); F12 opens game settings": the settings panel now includes the network row (your merge resolution in `apps/dosbox/dosbox.c`); an assertion or a sanitizer abort fires when F12 opens the panel. Reproduce with the test, fix the panel/label code (bounds of `selection[96]` with the added "Network: …" text is a candidate), keep the dirty-tracked repaint.
+4. The other red tests of that desktop run (`test_actual_desktop_payload_fat_readback`, `test_build_provenance_and_payloads`, `test_real_server_crash_kill_reconnect_and_flush`) are the known main gate items fixed by f0-50 on main after your base; merge is the lead's: do not touch them, but say in the report whether they still fail after the lead merges main again.
+
+Report section "Amendment 4".
