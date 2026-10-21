@@ -220,6 +220,10 @@ struct model {
     unsigned half_reads, half_writes, dead_window_writes, dword_2d_reads;
     struct { uint32_t reg, value; } setup[64];
     unsigned setup_count;
+    uint32_t deferred[32];
+    unsigned deferred_count, event_reads, events, waits;
+    uint64_t parser_due_us;
+    bool async_parser, replaying, event_stuck, event_zero, event_wrong, event_dead, wait_seen;
 };
 static struct model m;
 static struct savage2d test_engine;
@@ -298,13 +302,32 @@ static void execute_packet(struct model *p)
         if (p->partial && x==w/2) return;
     }
 }
+static void model_write(void *,uint32_t,uint32_t);
+static void model_progress(struct model *p)
+{
+    /* Inject a delayed parser independently of the register being polled.
+     * WAIT_2D precedes tag publication (X.Org ShadowWait / DRM emit_event).
+     * The idle-before-acceptance interval is a hypothesis under test, not a
+     * documented SuperSavage erratum or a measured T23 latency. */
+    if (!p->deferred_count || p->replaying || p->event_stuck || p->us<p->parser_due_us) return;
+    p->replaying=true;
+    for (unsigned i=0;i<p->deferred_count;i++)
+        model_write(p,SAVAGE_BCI+i*4,p->deferred[i]);
+    p->replaying=false; p->deferred_count=0;
+}
 static uint32_t model_read(void *ctx,uint32_t offset)
 {
     struct model *p=ctx;
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     marker_before_register();
+    model_progress(p);
     uint32_t value;
-    if (offset==SAVAGE_STATUS) {
+    if (offset==SAVAGE_EVENT_STATUS) {
+        CHECK(p->reset_phase==2 && !(p->cr[0x66]&2u));
+        p->event_reads++;
+        value=p->event_dead ? UINT32_MAX : p->event_zero ? 0 :
+            p->event_wrong ? (p->reg[offset/4]^0x100u) : p->reg[offset/4];
+    } else if (offset==SAVAGE_STATUS) {
         CHECK(p->reset_phase==2 && p->reset_set_us>=10000 && p->reset_clear_us>=10000);
         if (p->last_status_busy) CHECK(p->us-p->last_status_us>=POLL_US);
         p->last_status_us=p->us; p->status_reads++;
@@ -346,10 +369,25 @@ static void model_write(void *ctx,uint32_t offset,uint32_t value)
 {
     struct model *p=ctx;
     marker_before_register();
-    p->engine_writes++;
+    if (!p->replaying) p->engine_writes++;
     CHECK(offset<SAVAGE_MMIO_BYTES && !(offset&3u));
     if (offset>=SAVAGE_BCI && offset<SAVAGE_BCI+64) {
         CHECK((p->reg[BCI_CONTROL/4]&15u)==8u);
+        if (p->async_parser && !p->replaying) {
+            CHECK(p->deferred_count<ARRAY_SIZE(p->deferred));
+            if (!p->deferred_count) p->parser_due_us=p->us+10;
+            p->deferred[p->deferred_count++]=value;
+            return;
+        }
+        if (!p->words && value==0xc0020000u) {
+            p->waits++; p->wait_seen=true; return;
+        }
+        if (!p->words && (value&0xffff0000u)==0x98000000u) {
+            CHECK(p->wait_seen && (value&0xffffu));
+            p->events++; p->wait_seen=false;
+            if (!p->event_stuck) p->reg[SAVAGE_EVENT_STATUS/4]=value&0xffffu;
+            return;
+        }
         /* FIFO addresses do not select registers. A burst may contain
          * several commands, each with its own header and word count. */
         unsigned at=p->words;
@@ -495,6 +533,7 @@ static uint64_t model_now(void *ctx)
 {
     struct model *p=ctx;
     if (!p->frozen && !p->exact_clock) p->us+=100;
+    model_progress(p);
     return p->frozen ? 0 : p->us;
 }
 static int model_delay(void *ctx,uint32_t us)
@@ -503,6 +542,7 @@ static int model_delay(void *ctx,uint32_t us)
     if (initializing) { marker_before_register(); if (probing) CHECK(!fbdev_console_begin()); }
     if (p->delay_failed) return -EFAULT;
     p->us+=us;
+    model_progress(p);
     if (p->reset_phase==1) p->reset_set_us+=us;
     else if (p->reset_phase==2) p->reset_clear_us+=us;
     return 0;
@@ -554,7 +594,7 @@ static void prepare(unsigned bpp)
     m.cr[0x66]=1;
     m.cr[0x50]=0; /* firmware VGA depth, independent of the active VBE mode */
     initialized=true; changing=false; accel_initializing=false; drawing=0; console_rows=8;
-    g_boot.flags=0; acceleration=NULL;
+    g_boot.flags=0; memset(g_boot.options,0,sizeof(g_boot.options)); acceleration=NULL;
     device=(struct fb_device){.width=96,.height=64,.pitch=128*(bpp/8),.size=64*128*(bpp/8),
         .phys=0xe0000000,.bpp=bpp,.red_size=bpp==16 ? 5 : 8,.red_pos=bpp==16 ? 11 : 16,
         .green_size=bpp==16 ? 6 : 8,.green_pos=bpp==16 ? 5 : 8,.blue_size=bpp==16 ? 5 : 8,
@@ -575,11 +615,13 @@ static void finish(void)
 }
 static struct ciuki_accel_request request(unsigned op)
 { return (struct ciuki_accel_request){.size=sizeof(struct ciuki_accel_request),.operation=op,.generation=42}; }
-static void commands(unsigned bpp)
+static void commands(unsigned bpp, bool async_parser)
 {
     prepare(bpp);
     CHECK(!test_engine.ops.stop(&test_engine));
     memset(&m,0,sizeof(m)); m.cr[0x66]=1; m.alias_dead=true;
+    m.async_parser=m.exact_clock=async_parser;
+    if (async_parser) m.status_value=0x07e00000;
     m.cr[0x50]=bpp==16 ? 0x30 : 0x10; /* stale opposite depth must be replaced */
     test_engine=(struct savage2d){0}; m.t23_bit3_conflict=true; struct savage_io io=model_io();
     CHECK(!savage2d_start(&test_engine,&io,&device,true,m.cursor_page,0x100000));
@@ -1103,7 +1145,7 @@ static void serial_log_cost(const char *line)
     uint64_t bytes=strlen(line)+2, us=(bytes*10000000+38399)/38400;
     simulated_bytes+=bytes; simulated_log_us+=us; m.us+=us;
     if (!strncmp(line,"[accel] savage step ",20) || !strncmp(line,"[accel] savage init ",20) ||
-        !strncmp(line,"[accel] savage readback ",24)) simulated_trace_us+=us;
+        !strncmp(line,"[accel] savage readback ",24) || strstr(line,"[accel] savage completion ")) simulated_trace_us+=us;
 }
 static uint64_t log_number(const char *line,const char *field)
 {
@@ -1739,6 +1781,115 @@ static void shared_enable_and_failure_readbacks(void)
     }
     binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
 }
+/* Replay the pre-f1-88 completion sequence, without substituting a model
+ * verdict for the actual register transport and pixel readback. */
+static void legacy_marker_completion(void)
+{
+    uint32_t before=0x00dce4ec, colour=before^0x005aa55a;
+    uint8_t *last=device.mapped+(device.height-1)*device.pitch+(device.width-1)*4;
+    memcpy(last,&before,4);
+    uint32_t words[]={0x4bcc8000,colour,xy(device.width-1,device.height-1),xy(1,1)};
+    CHECK(!sync_engine(&test_engine));
+    test_engine.io.drain(test_engine.io.ctx);
+    test_engine.cpu_safe=false; test_engine.submitted=true;
+    for (unsigned i=0;i<ARRAY_SIZE(words);i++) model_write(&m,SAVAGE_BCI+i*4,words[i]);
+    CHECK(!wait_idle(&test_engine)); /* old code mistakes the old idle for completion */
+    uint32_t read=0; memcpy(&read,last,4);
+    CHECK(read==before && read!=colour && m.deferred_count==4);
+    CHECK(fail(&test_engine,"bci_test_readback_failed")==-EIO);
+    CHECK(test_engine.quarantined && test_engine.status==0x07e00000);
+    printf("f1-88 legacy completion status=%08x wrote=%08x read=%08x reason=%s\n",
+        test_engine.status,colour,read,test_engine.reason);
+    /* Progress depends on time, not on reading the new event register. */
+    unsigned events=m.event_reads;
+    CHECK(!model_delay(&m,10) && !m.deferred_count && m.packets==1);
+    memcpy(&read,last,4); CHECK(read==colour && m.event_reads==events);
+    memset(last,0xa5,4);
+}
+static void supersavage_completion_fence(void)
+{
+    prepare(32); m.status_value=0x07e00000; m.async_parser=m.exact_clock=true;
+    legacy_marker_completion(); finish();
+    for (unsigned bpp=16;bpp<=32;bpp+=16) for (unsigned variant=0;variant<8;variant++) {
+        boot_fixture_mode(false,bpp);
+        free(storage);
+        device.width=1024; device.height=768; device.pitch=1024*(bpp/8);
+        device.size=device.pitch*device.height;
+        storage=malloc(device.size+32); CHECK(storage!=NULL);
+        memset(storage,0xa5,device.size+32); device.mapped=storage+16;
+        m.exact_clock=true; m.status_value=0x07e00000;
+        m.async_parser=true;
+        m.event_stuck=variant==1 || variant==5;
+        m.event_zero=variant==2;
+        m.event_wrong=variant==3;
+        m.event_dead=variant==4;
+        m.frozen=variant==5;
+        if (variant==6) m.reg[SAVAGE_EVENT_STATUS/4]=0x55aaffff; /* wrap skips zero */
+        if (variant==7) m.ignore_fill=true; /* acknowledged parser != correct pixels */
+        uint32_t before=bpp==32 ? 0x00dce4ec : 0xe4ec;
+        uint8_t *last=device.mapped+device.size-bpp/8;
+        memcpy(last,&before,bpp/8);
+        uint8_t *frame=malloc(device.size); CHECK(frame!=NULL);
+        memcpy(frame,device.mapped,device.size);
+        fbdev_accel_schedule(&settings_vfs); run_accel_init();
+        bool ready=variant==0 || variant==6;
+        CHECK(engine.active==ready && engine.quarantined==!ready);
+        CHECK(!!engine.ops.capabilities(&engine)==ready);
+        CHECK(!memcmp(frame,device.mapped,device.size)); free(frame);
+        CHECK(disk_size==(ready ? 0u : 30u));
+        CHECK(m.cr[0x66]==1 && m.reg[BCI_CONTROL/4]==8 && !m.reg[0x48c0c/4]);
+        if (ready || variant==7) {
+            CHECK(m.events==2 && m.waits==2 && m.register_packets==4 && m.packets==1);
+            CHECK(!engine.event_pending && engine.cpu_safe && engine.event_tag==2);
+            CHECK(log_matches("savage completion reg=48c64")==1);
+            CHECK(log_matches("reg=48c64 wrote=")==(ready ? 2u : 3u)); /* plus fault snapshot */
+            CHECK(log_matches(ready ? "bci_test result=ok" : "bci_test_readback_failed")>=1);
+            if (variant==6) CHECK(log_matches("reg=48c64 wrote=00000001 read=00000001 bank=event")==1);
+        } else {
+            CHECK(!m.packets && !engine.active);
+            CHECK(log_matches(variant==4 ? "dead_event_mmio" : "event_timeout")>=1);
+            CHECK(engine.cpu_safe==(variant==4)); /* dead before submission */
+            if (variant!=4) {
+                CHECK(engine.submitted && engine.event_pending && engine.final_idle_checked);
+                CHECK(acceleration==&engine.ops && binding_resources[2].state==RS_QUARANTINED);
+                CHECK(log_matches("savage readback source=cached_init")==1);
+                unsigned reads=m.status_reads, events=m.event_reads;
+                struct fb_rect r={16,16,1,1};
+                CHECK(fbdev_fill(&r,0x123456)==-EIO && !fbdev_console_begin());
+                CHECK(m.status_reads==reads && m.event_reads==events);
+                CHECK(m.event_reads<=1+2*WAIT_POLLS);
+            }
+        }
+        printf("f1-88 fenced depth=%u variant=%u caps=%u tag=%04x observed=%08x pending=%u cpu_safe=%u\n",
+            bpp,variant,engine.ops.capabilities(&engine),engine.event_tag,
+            engine.event_status,engine.event_pending,engine.cpu_safe);
+        finish();
+    }
+    /* The recovery token prevents marker writes, workers, claims and all
+     * engine access, with the ordinary software presenter still available. */
+    const char *options[]={"accel=0","safe=0\r\naccel=0 serial=1","accel=0 accel=0",
+                          "xaccel=0","accel=00","accel=0x"};
+    for (unsigned i=0;i<ARRAY_SIZE(options);i++) {
+        boot_fixture_accel(false);
+        memcpy(g_boot.options,options[i],strlen(options[i])+1);
+        bool allowed=i>=3;
+        CHECK(savage2d_eligible(&device)==allowed);
+        if (!allowed) {
+            fbdev_accel_schedule(&settings_vfs);
+            CHECK(!accel_queued && !marker_worker_creates && !marker_commits && !disk_size);
+            CHECK(!binding_claims && !m.port_reads && !m.engine_writes && !m.status_reads);
+            CHECK(!engine.active && !engine.submitted && !acceleration);
+            software_desktop();
+        }
+        finish();
+    }
+    boot_fixture_accel(false);
+    memset(g_boot.options,'x',sizeof(g_boot.options)); /* bounded even without NUL */
+    CHECK(savage2d_eligible(&device) && !m.port_reads && !m.engine_writes);
+    memset(g_boot.options,0,sizeof(g_boot.options));
+    finish();
+    binding_allowed=false; binding_pci_count=0; accel_vfs=NULL;
+}
 static void hardware_sweep_default(void)
 {
     for (int config=-1;config<=1;config++) {
@@ -1792,7 +1943,8 @@ int main(void)
     sweep_persistence();
     CHECK(!framebuffer_regression_main());
     CHECK(boot_calls==0); /* framebuffer activation never enters the engine */
-    commands(16); commands(32); failures_and_fallback();
+    commands(16,false); commands(32,false);
+    commands(16,true); commands(32,true); failures_and_fallback();
     glue_stalled_clock(0);            /* never idle, frozen clock */
     glue_stalled_clock(UINT32_MAX);   /* master-aborted (dead) aperture */
     deferred_boots(); async_marker(); optional_alias();
@@ -1804,6 +1956,7 @@ int main(void)
     gbd_idle_and_async_regressions();
     queued_gbd_depth();
     shared_enable_and_failure_readbacks();
+    supersavage_completion_fence();
     hardware_sweep_default();
     boot_fixture_accel(false);
     for (int32_t id=-1;id<=96;id++) {

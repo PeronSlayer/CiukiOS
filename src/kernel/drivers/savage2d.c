@@ -32,6 +32,9 @@
 #define BCI_GBD_LOW 0xe0u
 #define BCI_GBD_HIGH 0xe1u
 #define GBD_READ_MASK 0x13ff1ffdu
+#define BCI_WAIT_2D 0xc0020000u
+#define BCI_EVENT 0x98000000u
+#define BCI_FIFO_WORDS 32u
 static unsigned selected_config;
 static bool initializing, probing;
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
@@ -129,6 +132,7 @@ static int wait_idle(struct savage2d *s)
      * baud a single log can exceed the entire wait. */
     uint64_t start = s->io.now_us(s->io.ctx);
     int result = -EIO;
+    bool last_idle = false;
     for (unsigned i = 0; i < polls; i++) {
         /* No pacing before the first read of a new idle check. Reset has
          * already settled; only consecutive busy reads need the interval. */
@@ -148,7 +152,19 @@ static int wait_idle(struct savage2d *s)
          * fallback on an already quarantined engine. */
         if (!s->quarantined) s->status = status;
         s->status_logged = true;
-        if (idle_status(s, status)) {
+        bool idle = idle_status(s, status);
+        last_idle = idle;
+        bool complete = !s->event_pending;
+        if (s->event_pending && status != UINT32_MAX) {
+            s->event_status = s->io.read32(s->io.ctx, SAVAGE_EVENT_STATUS);
+            /* One owner, one outstanding event. BIOS zero, another tag and
+             * dead MMIO are never proof that this packet has executed. */
+            complete = s->event_status != UINT32_MAX &&
+                (uint16_t)s->event_status == s->event_tag;
+            if (s->event_status == UINT32_MAX) { s->reason = "dead_event_mmio"; break; }
+        }
+        if (idle && complete) {
+            s->event_pending = false;
             result = 0; break;
         }
         if (status == UINT32_MAX || (s->reason && !strncmp(s->reason, "status_contradiction", sizeof("status_contradiction"))) ||
@@ -162,7 +178,8 @@ static int wait_idle(struct savage2d *s)
     }
     if (!old_mask && s->idle_mask)
         klog("[accel] savage idle mask=%08x value=%08x", s->idle_mask, s->idle_value);
-    if (result && !s->reason) s->reason = "idle_timeout";
+    if (result && !s->reason)
+        s->reason = s->event_pending && last_idle ? "event_timeout" : "idle_timeout";
     s->cpu_safe = !result;
     return result;
 }
@@ -242,13 +259,31 @@ static int sync_engine(void *ctx)
 }
 static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
 {
+    if (n > BCI_FIFO_WORDS - (s->supersavage ? 2u : 0u)) return -EINVAL;
     if (sync_engine(s)) return -EIO;
+    if (s->supersavage) {
+        s->event_before = s->io.read32(s->io.ctx, SAVAGE_EVENT_STATUS);
+        if (s->event_before == UINT32_MAX) return fail(s, "dead_event_mmio");
+        s->event_tag = (uint16_t)(s->event_before + 1u);
+        if (!s->event_tag) s->event_tag = 1;
+        s->event_pending = true;
+    }
     s->io.drain(s->io.ctx);
     s->cpu_safe = false;
     s->submitted = true;
     for (unsigned i = 0; i < n; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
+    if (s->supersavage) {
+        /* X.Org ShadowWait / DRM emit_event: wait for the 2D writes before
+         * publishing the parser tag. Poll the MMIO tag without shadow DMA.
+         * Keep the burst consecutive and below the no-COB on-chip capacity. */
+        s->io.write32(s->io.ctx, SAVAGE_BCI + n * 4, BCI_WAIT_2D);
+        s->io.write32(s->io.ctx, SAVAGE_BCI + (n + 1) * 4, BCI_EVENT | s->event_tag);
+    }
     /* UC read flushes posted command writes before observing completion. */
-    if (wait_idle(s)) return fault(s);
+    int err = wait_idle(s);
+    if (s->supersavage && initializing)
+        init_record("event", SAVAGE_EVENT_STATUS, 32, s->event_tag, s->event_status);
+    if (err) return fault(s);
     return 0;
 }
 static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
@@ -421,6 +456,7 @@ static int start_config(struct savage2d *s, const struct savage_io *io, const st
         cursor_set, cursor_move, cursor_show, stop_engine, capabilities, cpu_ready};
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
     s->status_ready = false; s->submitted = false; s->final_idle_checked = false;
+    s->event_before = s->event_status = s->event_tag = 0; s->event_pending = false;
     s->cpu_safe = false;
     s->reset_us = s->poll_us = 0;
     /* All operational VGA access stays on the exclusively owned ports.
@@ -601,6 +637,12 @@ static void init_failure_readback(struct savage2d *s)
 static void init_report(struct savage2d *s)
 {
     uint64_t start = activation_now(activation_ctx);
+    if (s->supersavage && s->event_tag) {
+        klog("[accel] savage completion reg=48c64 before=%08x requested=%04x observed=%08x pending=%u status=%08x idle_bits=%x fifo_used=%u",
+            s->event_before, s->event_tag, s->event_status, s->event_pending,
+            s->status, (s->status >> 21) & 7u, s->status & 0x1fffffu);
+        task_yield();
+    }
     for (unsigned i = 0; i < init_count; i++) {
         klog("[accel] savage init reg=%05x wrote=%08x read=%08x bank=%s width=%u",
             init_records[i].reg, init_records[i].wrote, init_records[i].read,
@@ -900,6 +942,15 @@ static const struct accel_ops *decline(const char *reason)
 }
 static const char *eligibility(const struct fb_device *d, const struct pci_func **found)
 {
+    /* BOOT.CFG is bounded by the loader and preserved in boot-info. Exact
+     * space/CR/LF-delimited tokens only; no ABI flag or registry I/O needed. */
+    for (unsigned i = 0; i < sizeof(g_boot.options) && g_boot.options[i];) {
+        unsigned start = i;
+        while (i < sizeof(g_boot.options) && g_boot.options[i] &&
+               g_boot.options[i] != ' ' && g_boot.options[i] != '\r' && g_boot.options[i] != '\n') i++;
+        if (i - start == 7 && !memcmp(g_boot.options + start, "accel=0", 7)) return "boot_disabled";
+        if (i < sizeof(g_boot.options) && g_boot.options[i]) i++;
+    }
     if (engine.quarantined || attempt_blocked)
         return engine.reason ? engine.reason : "attempt_blocked";
     const struct pci_func *gpu = 0; unsigned displays = 0;
