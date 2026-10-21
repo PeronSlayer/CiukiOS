@@ -79,3 +79,21 @@ checks also pass. The apps target was not retried, preserving its one-attempt
 limit. The lead owns qualification of the concurrent pins and the remaining apps
 and sanitizer validation. Exact commands and logs are in
 `build/codex/f5-07d-report.md`.
+
+## Amendment 1 host harness correction (2026-10-21)
+
+The lead's gate log links the unselected restart controller from the shared
+F5 registration section into the native desktop harness, leaving its VFS and
+Win32 object references unresolved. [Clang's attribute documentation](https://clang.llvm.org/docs/AttributeReference.html#used)
+confirms that `used` forces emission of otherwise unused definitions. The host
+harness calls controllers directly, so its include now uses ordinary unused
+registration declarations, with the production macro restored afterwards.
+Production linker registration and controller execution are unchanged.
+
+The evidence ownership list now explicitly includes the registered
+`f5_restart_observer.inc` controller. Its records remain inside
+`probe_w32_restart`; the list grants no general permission to runtime helpers.
+The restart suite retains `integration_pending` as an authored, unrun guest
+qualification note; the kernel-core test now expects its registered selector.
+Amendment commands, results and sandbox limits are recorded in
+`build/codex/f5-07d-report.md`.

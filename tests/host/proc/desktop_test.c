@@ -178,6 +178,13 @@ static int report_fixture_spawn(const char *path, const char *const argv[], cons
     libc_spawn_calls++; return -ENOENT;
 }
 static int gate_fixture_spawn(struct process **out);
+/* This harness calls controllers directly, without the kernel's linker-table
+ * dispatcher. Keep the declarations, but let unrelated F5 controllers and
+ * their device/filesystem dependencies be discarded from the host binary. */
+#pragma push_macro("CIUKI_F5_PROBE")
+#undef CIUKI_F5_PROBE
+#define CIUKI_F5_PROBE(id, func) static const struct probe_def \
+    __attribute__((unused)) f5probe_##func = { id, func }
 #define supervisor_spawn_desktop_probe gate_fixture_spawn
 #define supervisor_spawn_standin report_fixture_standin
 #define supervisor_spawn report_fixture_spawn
@@ -185,6 +192,7 @@ static int gate_fixture_spawn(struct process **out);
 #undef supervisor_spawn
 #undef supervisor_spawn_standin
 #undef supervisor_spawn_desktop_probe
+#pragma pop_macro("CIUKI_F5_PROBE")
 
 static struct process *poll_server;
 static struct proc_ledger poll_baseline;
