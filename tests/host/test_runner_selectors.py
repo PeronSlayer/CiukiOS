@@ -27,7 +27,6 @@ ALL = ('kernel', 'menu', 'loader_model')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
 KNOWN_UNREGISTERED = {
     # Found by this check: authored cases whose probe none of the tables knows.
-    (5, 'w32-installer-nsis'): {'owner': 'f5-15A2', 'missing': ALL, 'note': 'case written by f5-15A; probe arrives with the NSIS flow (continuation f5-15A2)'},
     # f5-17B title probes: win32-<workload id>, selected by fw_cfg only. The
     # kernel registers none yet; win32_runner reports not_run before any boot.
     (5, 'win32-diablo-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
@@ -123,7 +122,7 @@ class SelectorTableTests(unittest.TestCase):
 
     def test_known_unregistered_entries_name_an_owner_and_a_reason(self):
         self.assertEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()},
-                         {'f5-15A2', 'f5-17 continuation'})
+                         {'f5-17 continuation'})
         for parts, entry in KNOWN_UNREGISTERED.items():
             with self.subTest(probe=parts):
                 self.assertTrue(entry['owner'] and entry['note'])

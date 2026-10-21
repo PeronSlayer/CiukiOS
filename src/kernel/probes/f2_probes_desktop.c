@@ -117,6 +117,7 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
 #include "../../probes/win32_dialogs/controller.h"
 #include "../../probes/win32_upper/controller.h"
 #include "../../probes/win32_media/controller.h"
+#include "../../probes/win32_installers/controller.h"
 #include "../../probes/win32_gl/controller.h"
 #include "../../probes/win32_restart/controller.h"
 #include "../../probes/win32_kernel32/controller.h"
@@ -146,6 +147,8 @@ static struct {
     /* f5-20D w32-upper-dlls: the same arrangement. */
     bool upper;
     uint32_t upper_child;
+    bool installer;
+    uint32_t installer_child;
     unsigned core_fixture; /* shared fixture ID + 1; zero leaves the gate unarmed */
     uint32_t core_child;
     /* f6-18 f6:browser: the desktop names the browser it spawned (GATE_BROWSER);
@@ -154,6 +157,7 @@ static struct {
     uint32_t browser_child, page_status, page_bytes;
     char page_tls[17], page_url[97];
 } native_reports;
+static bool installer_report_stage(unsigned,unsigned,unsigned);
 static struct {
     bool active,failed;
     uint32_t children[4],services[4],launches,exits,prompts,begins,resumes,registry;
@@ -275,6 +279,25 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         NATIVE_REQUIRE(!native_reports.upper_child,"upper_repeat");
         NATIVE_REQUIRE(fixture && fixture->ppid==p->pid && fixture->personality==PROC_WIN32,"upper_identity");
         native_reports.upper_child=child;
+    } else if (server && native_reports.installer && !strncmp(line,"case=w32-installer-child ",25)) {
+        uint32_t child;
+        NATIVE_REQUIRE(report_unsigned(line,"child",&child),"installer_child_fields");
+        struct process *fixture=proc_find(child);
+        NATIVE_REQUIRE(fixture && fixture->ppid==p->pid && fixture->personality==PROC_WIN32,"installer_child_identity");
+        native_reports.installer_child=child;
+    } else if (server && native_reports.installer && !strncmp(line,"case=w32-installer ",19)) {
+        uint32_t stage,child,code,errors,ui_keys;
+        NATIVE_REQUIRE(report_unsigned(line,"stage",&stage) && report_unsigned(line,"child",&child) &&
+            report_unsigned(line,"exit",&code) && report_unsigned(line,"registry_errors",&errors) &&
+            report_unsigned(line,"ui_keys",&ui_keys),"installer_fields");
+        NATIVE_REQUIRE(child && child==native_reports.installer_child && errors<=16,"installer_identity");
+        struct installer_checkpoint checkpoint;
+        NATIVE_REQUIRE(!ua_read(p->memory,&checkpoint,INSTALLER_RESULT_VA,sizeof(checkpoint)),"installer_result_page");
+        NATIVE_REQUIRE(checkpoint.magic==INSTALLER_CHECKPOINT_MAGIC && checkpoint.stage==stage &&
+            checkpoint.child==child && checkpoint.exit_code==code && checkpoint.registry_errors==errors &&
+            checkpoint.ui_keys==ui_keys,"installer_checkpoint");
+        NATIVE_REQUIRE(stage!=2 || ui_keys>=2,"installer_pages");
+        NATIVE_REQUIRE(installer_report_stage(stage,code,errors),"installer_order");
     } else if (server && native_reports.core_fixture && !strncmp(line,"case=w32-fixture ",17)) {
         uint32_t child,fixture;
         NATIVE_REQUIRE(report_unsigned(line,"fixture",&fixture) && fixture+1==native_reports.core_fixture,"fixture_name");
@@ -1163,6 +1186,8 @@ finished:
     return pass ? 0 : 1;
 }
 CIUKI_F5_PROBE("w32-upper-dlls",probe_w32_upper_dlls);
+#include "installer_probe.inc"
+CIUKI_F5_PROBE("w32-installer-nsis",probe_w32_installer_nsis);
 
 int supervisor_spawn_standin(struct process *parent, struct process **out)
 {

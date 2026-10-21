@@ -1,6 +1,8 @@
 /* Shared, runtime-only Win32 fixture launcher. SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "win32_adapter.h"
+#include "installer_fixture.h"
+#include "../../src/probes/win32_installers/controller.h"
 #include "../../src/probes/win32_core/controller.h"
 #include "../../src/probes/win32_restart/controller.h"
 #include "../../src/probes/win32_gl/controller.h"
@@ -28,13 +30,18 @@ int desk_w32_fixture_begin(struct desktop *d,const char *name)
     if(id==W32_FIXTURE_COUNT) {
         if(!strcmp(name,"restart-exercise"))id=W32_FIXTURE_RESTART;
         else if(!strcmp(name,"gl-exercise"))id=W32_FIXTURE_GL;
+        else if(!strcmp(name,INSTALLER_FIXTURE_NAME))id=W32_FIXTURE_INSTALLER;
         else return -EINVAL;
+    }
+    if(id==W32_FIXTURE_INSTALLER){
+        int error=desk_installer_fixture_begin(d);
+        if(error<0)return error;
     }
     if(id==RESTART_FIXTURE_ID){
         memset(&restart_fixture,0,sizeof(restart_fixture));restart_fixture.active=1;
         restart_fixture.deadline=d->now_ns+360000000000ull;
     }
-    fixture.id=id;fixture.active=1;fixture.pending=id!=RESTART_FIXTURE_ID;
+    fixture.id=id;fixture.active=1;fixture.pending=id<W32_FIXTURE_COUNT || id==W32_FIXTURE_GL;
     fixture.deadline=d->now_ns+15000000000ull;
     return 0;
 }
@@ -113,6 +120,11 @@ void desk_w32_fixture_tick(struct desktop *d)
 {
     if(!fixture.active)return;
     service_exits(d);
+    if(fixture.id==W32_FIXTURE_INSTALLER){
+        desk_installer_fixture_tick(d);
+        fixture.active=desk_installer_fixture_active();
+        return;
+    }
     if(fixture.id==RESTART_FIXTURE_ID){restart_tick(d);return;}
     /* The authored crash coordinator waits for each child's real unhandled
      * fault and the production crash-file worker. Accept only its own fault

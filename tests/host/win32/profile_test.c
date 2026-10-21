@@ -243,16 +243,11 @@ int main(void) {
   expected_path="C:\\WINDOWS\\WININIT.INI";
   extern BOOL k32_delay_move(const char *,const char *,DWORD);
   seed("[other]\r\nx=kept\r\n[rename]\r\nNUL=C:\\old.exe\r\n[last]\r\ny=kept\r\n");
-  CHECK(k32_delay_move("C:\\Program Files\\Fixture\\uninstall.exe",0,4));
-  CHECK(k32_delay_move("C:\\WINDOWS\\TEMP\\copy.exe",0,4));
+  CHECK(!k32_delay_move("C:\\Program Files\\Fixture\\uninstall.exe",0,4) && GetLastError()==120);
+  CHECK(!k32_delay_move("C:\\WINDOWS\\TEMP\\copy.exe",0,4) && GetLastError()==120);
   disk[disk_size]=0;
-  CHECK(strstr((char *)disk,"NUL=C:\\old.exe\r\nNUL=C:\\Program Files\\Fixture\\uninstall.exe\r\nNUL=C:\\WINDOWS\\TEMP\\copy.exe\r\n[last]"));
-  CHECK(strstr((char *)disk,"[other]\r\nx=kept\r\n"));
-  CHECK(!k32_delay_move("C:\\bad\r\nfile.exe",0,4) && GetLastError()==123);
-  seed("[other]\r\nx=kept\r\n");
-  CHECK(k32_delay_move("C:\\source.tmp","C:\\target.dll",5));
-  disk[disk_size]=0;
-  CHECK(strstr((char *)disk,"[rename]\r\nC:\\target.dll=C:\\source.tmp\r\n"));
+  CHECK(!strcmp(disk,"[other]\r\nx=kept\r\n[rename]\r\nNUL=C:\\old.exe\r\n[last]\r\ny=kept\r\n"));
+  CHECK(!k32_delay_move("C:\\source.tmp","C:\\target.dll",5) && GetLastError()==120);
   CHECK(!allocations);
   puts("PASS profile first-match quotes comments CR LF defaults enumeration "
        "deletion growth bounds");

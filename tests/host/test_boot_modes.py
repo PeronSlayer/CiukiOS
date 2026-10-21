@@ -165,6 +165,8 @@ class LoaderTests(unittest.TestCase):
                 self.assertGreaterEqual(budget['free'], 512)
                 data = binary.read_bytes()
                 self.assertEqual(len(data), LOADER_BYTES)
+                self.assertEqual(data[-32:], b'CLDRPRG1' + bytes(24))
+                self.assertIn(BootMenu.SAFE_CONFIRMATION.encode() + b'\r\n\0', data)
                 self.assertIn(BootMenu.MENU_HINT.encode(), data)
                 self.assertNotIn(BootMenu.MENU_HINT.encode() + b'\0', data, 'AH=13h takes a counted string')
                 # The relocated ranking table lies after the image, inside loader_end.

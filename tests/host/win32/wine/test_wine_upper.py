@@ -421,7 +421,7 @@ def build_h1_ntdll(out):
     return image
 
 
-def build_h1(directory, reused):
+def build_h1(directory, reused, extra_sources=(), extra_flags=()):
     """The H1 adapter ELF and its store header (PE ntdll with the H1 transport)."""
     directory = Path(directory)
     main = directory / 'upper_h1.c'
@@ -433,7 +433,8 @@ def build_h1(directory, reused):
     (directory / 'upper_fixture_src.h').write_text(
         '#include "' + str(ROOT / 'src/probes/win32_upper/exercise.c') + '"\n')
     (directory / 'upper_table.h').write_text(upper_fixture.table_header(upper_fixture.staged_table()))
-    return adapter.build(directory / 'core', main, windows=False), ntdll
+    return adapter.build(directory / 'core', main, windows=False,
+                         extra_sources=extra_sources, extra_flags=extra_flags), ntdll
 
 
 H1_PATTERN = re.compile(r'^DLLMAIN (\S+) reason=(\d+) return=(\d+) gate=(\d+)$')

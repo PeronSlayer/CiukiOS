@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# Only the separately owned NSIS observer remains pending.
-UNREGISTERED = {'w32-installer-nsis': 'f5-15A2'}
+# All core observers, including the separate NSIS flow, are registered.
+UNREGISTERED = {}
 
 
 def selector_names():

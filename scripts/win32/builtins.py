@@ -131,6 +131,12 @@ def build(out=None):
     from scripts.win32 import cd_media
     for image in cd_media.build(fixture_source):
         hashes[image.name]=hashlib.sha256(image.read_bytes()).hexdigest()
+    # f5-15A2: offline pinned NSIS and authored CAB/INF/self-extractor inputs.
+    from scripts.win32 import installer_fixture
+    installer=installer_fixture.build(fixture_source/'installers')
+    for name, digest in installer['files'].items():
+        shutil.copyfile(fixture_source/'installers'/name,fixture_source/name)
+        hashes[name]=digest
     from scripts.win32 import restart_fixture
     restart=restart_fixture.build(fixture_source,out)
     hashes[restart.name]=hashlib.sha256(restart.read_bytes()).hexdigest()
