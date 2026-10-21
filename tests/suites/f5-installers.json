@@ -10,13 +10,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-diablo-shareware run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-diablo-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-diablo-shareware registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/diablo-shareware.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "diablo-shareware",
           "media": "iso",
-          "source": "extracted",
+          "source": "disc",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "diablo-shareware",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -43,7 +50,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -56,7 +63,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -73,6 +80,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -173,13 +190,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-sc run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-sc probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-sc registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/starcraft-shareware.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "starcraft-shareware",
           "media": "iso",
-          "source": "extracted",
+          "source": "disc",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "starcraft-shareware",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -206,7 +230,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -219,7 +243,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -236,6 +260,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -336,13 +370,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-aoe-trial run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-aoe-trial probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-aoe-trial registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/aoe-trial.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "aoe-trial",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "aoe-trial",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -369,7 +410,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -382,7 +423,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -399,6 +440,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -499,13 +550,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-half-life-uplink run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-half-life-uplink probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-half-life-uplink registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/half-life-uplink.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "half-life-uplink",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "half-life-uplink",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -532,7 +590,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -545,7 +603,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -562,6 +620,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -662,13 +730,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-ut-demo-348 run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-ut-demo-348 probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-ut-demo-348 registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/ut-demo-348.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "ut-demo-348",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "ut-demo-348",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -695,7 +770,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -708,7 +783,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -725,6 +800,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -825,13 +910,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-wa run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-wa probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "deferred (Win16): InstallShield 3 NE setup stub; the Win16 subsystem f5-19 follows the 1.0 Beta (owner decision 2026-10-20)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "worms-armageddon-demo",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "worms-armageddon-demo",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -858,7 +950,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -871,7 +963,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -888,6 +980,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -988,13 +1090,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-heroes3-demo run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-heroes3-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-heroes3-demo registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/heroes3-demo.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "heroes3-demo",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "heroes3-demo",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -1021,7 +1130,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -1034,7 +1143,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -1051,6 +1160,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -1151,13 +1270,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-rct-demo run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-rct-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-rct-demo registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/rct-demo.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "rct-demo",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "rct-demo",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -1184,7 +1310,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -1197,7 +1323,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -1214,6 +1340,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -1314,13 +1450,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-jazz2-shareware run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-jazz2-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-jazz2-shareware registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/jazz2-shareware.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "jazz2-shareware",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "jazz2-shareware",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -1347,7 +1490,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -1360,7 +1503,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -1377,6 +1520,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {
@@ -1477,13 +1630,20 @@
       "profile": "qemu-t23",
       "selector": "f5:win32-ta-demo run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-ta-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15C: probe win32-ta-demo registered in the kernel selector and the loader model (loader table: build/codex/f5-15c-menu-inc.patch after the f0-54 merge); guest operator program, screen pins and the installed manifest come from the calibration runs (scripts/win32/titles/ta-demo.py --tier installers --calibrate install, then full) and the lead's acceptance (--accept)",
       "fixtures": [
         {
           "generator": "win32-workload",
           "workload": "ta-demo",
           "media": "iso",
-          "source": "extracted",
+          "source": "download",
+          "redistribution": "local-only"
+        },
+        {
+          "generator": "win32-workload",
+          "workload": "ta-demo",
+          "media": "fat16",
+          "source": "run",
           "redistribution": "local-only"
         }
       ],
@@ -1510,7 +1670,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup first page (region and pin qualified by the reference run)"
+            "description": "vendor setup first page (region and pin from the f5-15C calibration frames)"
           },
           "install-complete": {
             "region": [
@@ -1523,7 +1683,7 @@
             "mode": "sha256",
             "role": "install",
             "timeout_ms": 60000,
-            "description": "vendor setup completion page (region and pin qualified by the reference run)"
+            "description": "vendor setup completion page (region and pin from the f5-15C calibration frames)"
           },
           "desktop-after-install": {
             "region": [
@@ -1540,6 +1700,16 @@
           }
         },
         "checkpoints": [
+          {
+            "name": "installer-first-page",
+            "after": {
+              "event": "DATA",
+              "case": "ui",
+              "segment": "install"
+            },
+            "screen": "install-welcome",
+            "timeout_ms": 60000
+          },
           {
             "name": "desktop-returned",
             "after": {

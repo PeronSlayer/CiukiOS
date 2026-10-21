@@ -91,19 +91,7 @@ def validate(manifest):
             require(installer['arguments'] is None or isinstance(installer['arguments'], list) and all(isinstance(v, str) for v in installer['arguments']), 'installer arguments')
             require(installer['arguments'] is None or https(installer['parameters_source']), 'switches require documentation')
             require(installer['operator_script'] == 'tests/win32/operators/'+ident+'.json', 'operator script path')
-            inventory = row['installed_files']
-            require(inventory['status'] in ('unknown', 'verified'), 'installed inventory status')
-            require(isinstance(inventory['entries'], list), 'installed entries')
-            if inventory['status'] == 'unknown':
-                require(not inventory['entries'] and bool(inventory['reason']), 'unknown inventory must explain absence')
-            else:
-                require(bool(inventory['entries']), 'empty verified inventory')
-                names = set()
-                for entry in inventory['entries']:
-                    name = entry['name']
-                    require(isinstance(name, str) and name and name.casefold() not in names, 'duplicate/invalid installed name')
-                    require(type(entry['size']) is int and entry['size'] >= 0, 'installed size')
-                    names.add(name.casefold())
+            validate_inventory(row['installed_files'])
             require(row['disc']['requirement'] in ('none', 'ISO', 'track-aware'), 'disc requirement')
             scene = row['scene']
             require(type(scene['play_seconds']) is int and scene['play_seconds'] >= 180, 'play must last at least 180 s')
@@ -115,6 +103,64 @@ def validate(manifest):
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('malformed workload manifest: '+str(error)) from error
     return manifest
+
+
+INVENTORY_KEYS = {'status', 'entries', 'reason', 'directories', 'changed', 'removed', 'links', 'registry',
+                  'calibration', 'uninstall'}
+
+
+def validate_files(rows, label):
+    require(isinstance(rows, list), label + ' list')
+    names = set()
+    for entry in rows:
+        require(isinstance(entry, dict) and set(entry) <= {'name', 'size', 'sha256'}, label + ' entry fields')
+        name = entry['name']
+        require(isinstance(name, str) and name and name.casefold() not in names, 'duplicate/invalid installed name')
+        require(type(entry['size']) is int and entry['size'] >= 0, 'installed size')
+        require(entry.get('sha256') is None or digest(entry['sha256'], 64), 'installed sha256')
+        names.add(name.casefold())
+
+
+def validate_registry(delta):
+    require(delta is None or isinstance(delta, dict) and set(delta) == {'added_keys', 'removed_keys', 'changed_values'},
+            'registry delta shape')
+    if delta:
+        require(all(isinstance(v, list) for v in delta.values()), 'registry delta lists')
+
+
+def validate_inventory(inventory):
+    """unknown (nothing observed), calibrated (written by an f5-15C QEMU
+    calibration run, awaiting the lead) or verified (accepted by the lead)."""
+    require(isinstance(inventory, dict) and set(inventory) <= INVENTORY_KEYS, 'installed inventory fields')
+    require(inventory['status'] in ('unknown', 'calibrated', 'verified'), 'installed inventory status')
+    require(isinstance(inventory['entries'], list), 'installed entries')
+    if inventory['status'] == 'unknown':
+        require(not inventory['entries'] and bool(inventory['reason']), 'unknown inventory must explain absence')
+        require(not set(inventory) - {'status', 'entries', 'reason'}, 'unknown inventory carries no calibration')
+        return
+    require(bool(inventory['entries']), 'empty verified inventory')
+    validate_files(inventory['entries'], 'installed')
+    validate_files(inventory.get('changed', []), 'changed')
+    for key in ('directories', 'removed'):
+        require(isinstance(inventory.get(key, []), list) and all(isinstance(p, str) and p for p in inventory.get(key, [])), key)
+    links = inventory.get('links', [])
+    require(isinstance(links, list) and all(isinstance(l, dict) and set(l) == {'path', 'target'} for l in links), 'links')
+    validate_registry(inventory.get('registry'))
+    uninstall = inventory.get('uninstall')
+    if uninstall is not None:
+        require(isinstance(uninstall, dict) and set(uninstall) == {'registered', 'residue'} and type(uninstall['registered']) is bool,
+                'uninstall block')
+        residue = uninstall['residue']
+        if residue is not None:
+            require(isinstance(residue, dict) and set(residue) == {'files', 'directories', 'changed', 'removed', 'registry'}, 'residue shape')
+            validate_files(residue['files'], 'residue')
+            validate_files(residue['changed'], 'residue changed')
+            validate_registry(residue['registry'])
+    if inventory['status'] == 'calibrated' or 'calibration' in inventory:
+        calibration = inventory.get('calibration')
+        require(isinstance(calibration, dict) and re.fullmatch('[0-9a-f]{8}', str(calibration.get('run_id'))) and
+                digest(calibration.get('image_sha256'), 64) and digest(calibration.get('payload_sha256'), 64),
+                'calibrated inventory names its run, image and payload')
 
 
 def load(path=ROOT/'tests/win32/workloads.json'):

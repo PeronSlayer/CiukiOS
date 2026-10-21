@@ -32,6 +32,7 @@ import dos_fixtures
 import dos_titles
 import win32_fixtures
 import win32_runner
+import win32_inventory
 import https_fixture
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
@@ -279,10 +280,18 @@ def selector(request, source='menu', validated_fw_cfg=False):
     if source == 'cfg' or isinstance(request, str) and ':sweep' in request:
         from physical import cfg_selector
         return cfg_selector(request, source)
-    # f5-17B Win32 title tiers: f5:win32-<workload> run=<id>, fw_cfg only
-    # (win32_session.selector); the kernel does not register these probes yet.
+    # f5-17B/f5-15C Win32 title tiers: f5:win32-<workload> run=<id>. The runner
+    # selects them through validated fw_cfg only (win32_session.selector); from
+    # the menu or cfg the loader accepts the grammar like any registered probe
+    # and the kernel refuses the C: write gate, so the loader model applies.
     if isinstance(request, str) and request.startswith('f5:win32-'):
-        return win32_runner.selector(request, source, validated_fw_cfg)
+        selected = base_selector(request, source, validated_fw_cfg)
+        if source == 'fw_cfg' and validated_fw_cfg:
+            try:
+                return {**selected, **win32_runner.selector(request, source, validated_fw_cfg)}
+            except ValueError:
+                pass  # runner-only strictness (lowercase run id, no suffix): the loader still accepts it
+        return selected
     server = re.search(r' server=(desktop-v3|desktop|standin)$',request) if isinstance(request,str) else None
     if not server:return base_selector(request,source,validated_fw_cfg)
     if source != 'fw_cfg' or not validated_fw_cfg:raise ValueError('server requires validated QEMU fw_cfg')
@@ -540,7 +549,7 @@ def dos_image_identity(image):
         return None
 
 
-def prepare_fixtures(host,case,directory,image=None):
+def prepare_fixtures(host,case,directory,image=None,image_sha256=None):
     manifests=[]
     disks=dict(fixture_disks(case))
     # f3-06: an absent owner-local game directory is not_run before QEMU starts
@@ -578,7 +587,12 @@ def prepare_fixtures(host,case,directory,image=None):
         elif fixture.get('generator')==win32_fixtures.GENERATOR:
             # f5-17B: the lead's local extraction of a verified title download,
             # on this run's own FAT disk or CD image only (win32_fixtures.py).
-            try:item.update(win32_fixtures.generate(fixture,directory,index,ROOT))
+            # f5-15C: the installers tier's CD and run parameter disk carry the
+            # run's identity (image hash, payload of the CD, scene, tier, probe).
+            context={'image_sha256':image_sha256,'probe':case.get('probe'),'scene':case.get('win32',{}).get('scene'),
+                     'tier':win32_runner.KINDS.get(case.get('kind')),'calibrate':case.get('_win32_calibrate'),
+                     'payload_sha256':next((m.get('payload_sha256') for m in manifests if m.get('generator')==win32_fixtures.GENERATOR),None)}
+            try:item.update(win32_fixtures.generate(fixture,directory,index,ROOT,context))
             except EvidenceNotRun:raise
             except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('Win32 workload fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index] if win32_fixtures.is_disk(fixture) else 3
@@ -1924,7 +1938,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
-        result['fixtures']=prepare_fixtures(host,case,directory,image)
+        result['fixtures']=prepare_fixtures(host,case,directory,image,result['image']['sha256'])
         if win32:
             # The session binds the parser to the image hash, the fixture's
             # payload identity and the scene; pins pending, a probe name the
@@ -2353,10 +2367,38 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
             except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:
                 result['outcome']='fail'; result['reason']=str(e)
+        if session is not None and session.tier=='installers' and session.parser.started:
+            # f5-15C: the independent C: delta of this run (canonical image
+            # versus the overlay), after verified teardown only.
+            try:
+                if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before the overlay inventory')
+                session.host_inventory=win32_inventory.overlay_delta(host,image,overlay,directory)
+            except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
+                session.host_inventory={'error':str(e)}
         if session is not None:
             try:session.finish(result)
             except (OSError,ValueError,RuntimeError) as e:
                 result['outcome']='fail';result['reason']='win32 evidence summary failed: '+str(e)
+        if session is not None and case.get('_win32_calibrate'):
+            # f5-15C: a completed calibration run (guest END PASS, host delta
+            # present) writes installed_files status=calibrated into the
+            # workload manifest; the lead reviews the diff and accepts it.
+            calibration={'mode':case['_win32_calibrate'],'applied':False}
+            try:
+                if session.parser.outcome!='pass':raise EvidenceError('guest did not complete the installer flow')
+                manifest=win32_runner.calibration(case,session.row,run_id,result['image']['sha256'],session.parser.payload_sha256,
+                                                  session.host_inventory,result['win32'].get('installed_inventory',[]),
+                                                  session.parser.records,session.frames,case['_win32_calibrate'])
+                atomic_write(directory/'calibration.json',json.dumps(manifest,indent=2)+'\n')
+                calibration.update(path=str(directory/'calibration.json'),
+                                   workloads=str(win32_runner.write_calibration(session.row['id'],manifest,ROOT)),applied=True)
+                if result['outcome'] in ('pass','not_run'):
+                    # A calibration records evidence; it never passes a gate.
+                    result['outcome']='not_run'
+                    result['reason']='win32 installers calibration (%s) recorded installed_files status=calibrated: review the frames and the workloads.json diff, then accept'%case['_win32_calibrate']
+            except (OSError,ValueError,RuntimeError) as e:
+                calibration['error']=str(e)
+            result['win32']['calibration']=calibration
         result['image']['sha256_after']=sha(image)
         if result['image']['sha256_after']!=result['image']['sha256']:
             result['outcome']='fail';result['reason']='canonical image changed during run'
@@ -2372,6 +2414,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # all passing runs always retain exactly these contract artifacts
         # (a normal boot also keeps its evaluated screendump).
         passing=['serial.log','screen.ppm'] if normal else ['serial.log']
+        if case.get('_win32_calibrate'):
+            # f5-15C calibration keeps its screenshots and the manifest proposal.
+            passing+=[p.name for p in directory.iterdir() if p.name.startswith(('ui-','screen-')) or p.name=='calibration.json']
         if any(f.get('generator')=='dos-title' and f.get('calibrate') for f in case.get('fixtures',[])):
             passing.append('title-captures')
         if result['outcome']=='pass':
@@ -2648,12 +2693,19 @@ def main(argv=None):
     ap.add_argument('--image-sha256',help='verified historical image hash (physical import only)')
     ap.add_argument('suite');ap.add_argument('--image',type=Path);ap.add_argument('--profile');ap.add_argument('--keep',action='store_true')
     ap.add_argument('--case', action='append', default=[], help='run only these exact case IDs (repeatable)')
+    ap.add_argument('--win32-calibrate', choices=win32_runner.CALIBRATION_MODES,
+                    help='f5-15C installers tier: record the manifest instead of asserting it (install, then full)')
     options=ap.parse_args(argv)
     try:
         if options.image_sha256 and (not options.physical_capture or not re.fullmatch('[0-9a-f]{64}',options.image_sha256)):
             raise res.Refusal('--image-sha256 requires physical capture and 64 lowercase hex digits')
         if not all(c.isalnum() or c in '-_' for c in options.suite):raise res.Refusal('invalid suite name')
         suite=select_cases(load_suite(options.suite), options.case)
+        if options.win32_calibrate:
+            if not options.case or any(c.get('kind')!='win32-installer' for c in suite['cases'] if not c.get('_smoke')):
+                raise res.Refusal('--win32-calibrate needs explicit win32-installer --case selections')
+            for c in suite['cases']:
+                if not c.get('_smoke'):c['_win32_calibrate']=options.win32_calibrate
         if suite.get('image')!='full':raise res.Refusal('only canonical full HDD suites are supported in F0')
         with res.SlotLock(res.common_lock(ROOT)):
             Host().preflight(ROOT/'build/test-runs')

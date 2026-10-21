@@ -25,7 +25,7 @@ struct w32_directory {
 struct w32_pe {
     const uint8_t *file;
     ULONG file_size, preferred, base, size, headers, entry, section_alignment;
-    uint16_t flags, subsystem, section_count;
+    uint16_t flags, subsystem, section_count, subsystem_major, subsystem_minor;
     struct w32_section sections[W32_MAX_SECTIONS];
     struct w32_directory dirs[16];
     uint8_t *image;

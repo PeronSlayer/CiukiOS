@@ -507,6 +507,13 @@ static struct w32_module *load_one(struct w32_loader *l, const char *name, ULONG
     w32_copy_string(m->path, sizeof(m->path), path);
     dllname(m->name, name);
     int ok = w32_pe_parse(&m->pe, f.bytes, f.size, &l->error);
+    /* Contract "Accepted images": MajorSubsystemVersion above 5 is accepted
+     * with a log record, here naming the image. Builtin store images are
+     * pinned by the store manifest instead (the reused Wine providers are
+     * linked 6.0): their record carried no information and its unattributed
+     * form ("image") was read as the application's (f5-15C). */
+    if (ok && !builtin && m->pe.subsystem_major > 5)
+        w32_diag("load", m->name, "newer-subsystem-version");
     if (ok && (flags & W32_LOAD_EXECUTABLE) && (m->pe.flags & 0x2000))
         ok = error(l, 193, "expected-executable", name, 0);
     if (ok && builtin &&

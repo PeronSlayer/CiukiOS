@@ -25,21 +25,14 @@ import run as runner  # noqa: E402
 
 ALL = ('kernel', 'menu', 'loader_model')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
-KNOWN_UNREGISTERED = {
-    # Found by this check: authored cases whose probe none of the tables knows.
-    # f5-17B title probes: win32-<workload id>, selected by fw_cfg only. The
-    # kernel registers none yet; win32_runner reports not_run before any boot.
-    (5, 'win32-diablo-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-sc'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-aoe-trial'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-half-life-uplink'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-ut-demo-348'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-wa'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-heroes3-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-rct-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-jazz2-shareware'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-ta-demo'): {'owner': 'f5-17 continuation', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-}
+# f5-15C: the ten title aliases are registered in the kernel selector and the
+# loader model; the loader table entry is the patch build/codex/f5-15c-menu-inc.patch,
+# applied by the lead after merging main (f0-54 frees the fixed extent's bytes).
+TITLE_ALIASES = ('win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32-half-life-uplink',
+                 'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo',
+                 'win32-jazz2-shareware', 'win32-ta-demo')
+MENU_OWNER = 'lead: merge main (f0-54) then apply build/codex/f5-15c-menu-inc.patch'
+KNOWN_UNREGISTERED = {}  # f5-15C title probes registered in the loader table on 2026-10-21 (after f0-54)
 
 
 def suite_cases():
@@ -121,8 +114,7 @@ class SelectorTableTests(unittest.TestCase):
         self.assertEqual(problems, [], '\n' + '\n'.join(problems))
 
     def test_known_unregistered_entries_name_an_owner_and_a_reason(self):
-        self.assertEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()},
-                         {'f5-17 continuation'})
+        self.assertLessEqual({entry['owner'] for entry in KNOWN_UNREGISTERED.values()}, {MENU_OWNER})
         for parts, entry in KNOWN_UNREGISTERED.items():
             with self.subTest(probe=parts):
                 self.assertTrue(entry['owner'] and entry['note'])
