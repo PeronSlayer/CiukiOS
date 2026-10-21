@@ -337,6 +337,12 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "dosvm_work.inc"
+/* This runner opens explicit fixture images, without a managed games volume. */
+int dosvm_game_program(unsigned game, bool remove, uint32_t *size)
+{
+    (void)game; (void)remove; (void)size;
+    return -ENOSYS;
+}
 #include "../../src/kernel/vm/dosvm.c"
 #ifndef CIUKI_DOSVM_FILE_CPU
 #include "dosvm_request_context.inc"
