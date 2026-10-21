@@ -21,9 +21,7 @@ UNREGISTERED = {}
 # loader model; the loader table line is build/codex/f5-15c-menu-inc.patch,
 # applied by the lead after the f0-54 merge (the fixed extent is full here).
 # Empty this tuple when the patch is applied: the test then requires equality.
-MENU_PENDING = ('win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32-half-life-uplink',
-                'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo',
-                'win32-jazz2-shareware', 'win32-ta-demo')
+MENU_PENDING = ()  # the ten f5-15C title probes joined the loader table on 2026-10-21 (after f0-54)
 F5_SUITES = ('f5-core.json', 'f5-installers.json', 'f5-titles.json')
 
 
