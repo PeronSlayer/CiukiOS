@@ -438,6 +438,9 @@ bool dosvm_vga_retry(struct dosvm *, uint32_t address, uint32_t instruction, boo
 struct ciuki_rect;
 int dosvm_vga_present(struct dosvm *, int (*row)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t tick, struct ciuki_rect *damage);
+/* Same complete scan as frame_digest, optionally retaining those exact rows. */
+int dosvm_frame_capture(struct dosvm *, uint64_t, struct dosvm_frame *,
+                        int (*row)(void *,unsigned,const void *,unsigned),void *);
 uint8_t dosvm_vga_status(struct dosvm *, uint64_t tick);
 int dosvm_disk_open(struct dosvm *, const char *base);
 int dosvm_disk_close(struct dosvm *, bool forced);

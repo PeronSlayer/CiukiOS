@@ -42,7 +42,7 @@ def build_fixture(out):
     # name USER also defines (FillRect, FrameRect...) stays private to them.
     engine=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if not n.startswith('compiler')]
     engine+=[ROOT/'sdk/win32/ddraw'/n for n in ddraw.SOURCES]
-    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE/'ddraw_seam.c']
+    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE/'ddraw_seam.c']
     defined=set()
     for obj in objects:
         nm=subprocess.run(['llvm-nm','--defined-only','--extern-only','-j',str(obj)],capture_output=True,text=True,check=True)

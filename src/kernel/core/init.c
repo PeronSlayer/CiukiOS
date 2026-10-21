@@ -16,6 +16,8 @@
 #include <ciuki/audio.h>
 #include <ciuki/net.h>
 #include <ciuki/usb.h>
+#include <ciuki/entropy.h>
+#pragma weak entropy_start
 #pragma weak usb_init
 #pragma weak audio_init
 #pragma weak net_init
@@ -86,6 +88,7 @@ const struct activation_entry *drivers_mount_get(unsigned drive)
 void drivers_init(void)
 {
     if (state.initialized) return;
+    if (entropy_start) entropy_start();
     state.initialized = true;        /* one attempt, including failed activation */
     state.boot_flags = g_boot.flags;
     state.safe = !!(state.boot_flags & CBI_F_SAFE_MODE);

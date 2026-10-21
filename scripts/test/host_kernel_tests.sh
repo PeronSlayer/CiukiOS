@@ -8,6 +8,8 @@ export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
 # f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
 bash "$root/tests/host/dos/run_file_api.sh"
+python3 "$root/tests/host/entropy/run.py"
+python3 "$root/tests/host/entropy/run.py" --kernel
 
 python3 "$root/tests/host/record_scope_test.py"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
@@ -116,7 +118,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/rtc_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
+    -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pci_irq_test.c" -o "$out/pci_irq_test"
@@ -145,7 +148,8 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
 (out / "fwqueue_i8042_test.c").write_text(source)
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" -o "$out/i8042_test"
+    -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/i8042_test"
 "$out/i8042_test"
 
 python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$out/optical-manifest.json"
@@ -156,7 +160,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
-    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
+    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/ata_test"
 
 # M1: production PMM/VMM/user mappings, ledger and generation-safe pins.
 # Context violations are diagnostic in production; strictness is opt-in here.

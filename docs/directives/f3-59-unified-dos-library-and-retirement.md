@@ -10,8 +10,17 @@
   unified interfaces. Retirement/default changes only when the gates below
   actually pass. No game binary or installer patching.
 - **Dependencies:** lead supplies approved all-title acceptance identities to
+<<<<<<< HEAD
   the private validation workflow, exact final image/source hashes, allowed
   runtime schedule, source publication URL and any remaining ABI reservations.
+=======
+  the private validation workflow, exact final image/source hashes and allowed
+  runtime schedule. f3-56/f3-58 must have started only after the owner's ported-
+  code grant and source-destination answer; verify the approved GitHub repository
+  and per-release source archive/hash, not an assumed URL. Profile identity is
+  the reserved `kernel=unified`/per-game choice 2; DFV2 and the local IFS seam
+  are confirmed, with ROM reservations recorded in f3-56's report.
+>>>>>>> main
   Do not read, name or publish legacy/local content in tracked artifacts.
 - **Size:** all-library/runtime qualification plus closure tooling; cannot be
   completed from host mocks or three shareware titles alone.
@@ -30,13 +39,27 @@ patterns. Keep private title names/paths out of public reports.
 1. Build an evidence index bound to exact canonical image, source, toolchain,
    kernel, shell, COM probe/helper and game data hashes. Distinguish pristine
    reference (bridge off, SHARE on), old guest and unified candidate (local IFS
+<<<<<<< HEAD
    on). Reject wrong profiles, incomplete logs, trace drops, stale runs,
+=======
+   on, `kernel=unified`, per-game choice 2, negotiated DFV2). Reject wrong
+   tokens/schema choices/layouts, incomplete logs, trace drops, stale runs,
+>>>>>>> main
    duplicate/missing/unknown results, timeouts and nonzero teardown ledgers.
 2. Run the original f3-48 cases unchanged and all appended new behavior cases.
    Lead supplies two independent complete pristine/unified comparisons on the
    same canonical image, both 100%. Preserve semantic assertions and original
    no-public-redirector profile. Identical unsupported errors fail; no skip,
    synthetic PASS, broad normalization or changed existing expected result.
+<<<<<<< HEAD
+=======
+   Public 1100h remains AL=0 with its original assertion. Appended cases include
+   checked FCB-close size/date/SHARE ordering/read-only/reopen semantics and the
+   frozen C:/D:/E: drive matrix (7303h separately from 1B/1C/36). Verify H56-02
+   final SFT/CDS/DOS=LOW relocation and H56-03's seven callout variants, plus
+   H57-01 late activation before INSTALL and H57-08 exact disk API results;
+   synthetic fixtures do not replace their lead-owned reference evidence.
+>>>>>>> main
 3. Qualify every approved DOS-library title and original installer on the
    unified guest. Public anchors include unchanged Wolf3D, DOOM/DOS4GW and
    Quake/DJGPP-go32; those do not substitute for the complete library. Cover
@@ -65,8 +88,16 @@ patterns. Keep private title names/paths out of public reports.
    runtime ambiguity is waived. Verify Ciuki identity, portrait, English copy,
    credits and known shell behavior. Reference binary remains pristine.
 8. Only after all gates pass, change the default to unified CiukiDOS and migrate
+<<<<<<< HEAD
    per-game settings through an explicit schema/policy preserving opt-in reference
    choices. New base/kernel/profile gets independent overlays; preserve user data
+=======
+   per-game settings through the existing `kernel` setting's exact
+   `kernel=unified` token and reserved choice value 2, preserving explicit
+   pristine-reference choices and the existing `ciukidos`/reference stored
+   meanings during migration. No alternate unified token or new selector.
+   New base/kernel/profile gets independent overlays; preserve user data
+>>>>>>> main
    through checked file-level migration/export where required, never reinterpret
    incompatible COW metadata. Test interrupted migration/relaunch and rollback.
 9. Lead records retirement of the old selectable kernel in a new Italian diary
@@ -84,8 +115,13 @@ patterns. Keep private title names/paths out of public reports.
 | H59-02 differential | Two lead-owned 100% same-image reference/unified runs, full unchanged base manifest and appended coverage, exact per-function comparison table. |
 | H59-03 library | Lead attestation/counts for every approved title/installer and exact private evidence index; public tracked notes disclose only approved public anchors and aggregate closure. No unchecked title. |
 | H59-04 runtime/resource | Same-image client/shell regression, audio/input/video and contention, ledgers and measured DF6/memory results tied to image SHA. |
+<<<<<<< HEAD
 | H59-05 distribution | Every notice/source/linked-object right resolved; independent archive and published URL hashes match installed identities. |
 | H59-06 retirement | Host migration/default/invalid-setting/missing-image/interrupted-copy/overlay-isolation tests; lead review of full gate matrix, then diary/default switch/removal in that order. |
+=======
+| H59-05 distribution | Owner grant/source-destination answers recorded before f3-56/58; actual notices/runtime/SUPPL rights resolved (pinned gcc-ia16 shell if required); approved GitHub and per-release source archive with independently fetched hash matching installed identities. H55-02/H58-01 include different compiler calendar dates, not only mtimes. |
+| H59-06 retirement | BOOT.CFG/DOS Box exact `kernel=unified` and per-game choice2 round-trip, existing old/reference choices preserved; default/invalid-setting/missing-image/interrupted-copy/overlay-isolation tests. Lead review of full gate matrix, then diary/default switch/removal in that order. |
+>>>>>>> main
 
 Extend tests/host/dos and launcher/configuration tests with real production
 parsers/migration paths. Run sequentially at nice19: DOS unittest discovery,

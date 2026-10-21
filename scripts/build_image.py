@@ -115,6 +115,10 @@ def desktop_license_payloads():
     for name in ("lwip-2.2.1-BSD-3-Clause.txt", "lwip-2.2.1-NOTICES.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
     sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+    for name in ("jitterentropy-3.7.0-LICENSE.bsd", "jitterentropy-3.7.0-LICENSE.gplv2",
+                 "jitterentropy-3.7.0-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
     return sources
 
 

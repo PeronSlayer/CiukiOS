@@ -99,6 +99,8 @@ def inputs(host=False):
             "converters": {name:digest(ROOT / "apps/desktop" / name) for name in ("convert_icons.py","convert_portrait.py")},
             "python":{"version":list(sys.version_info[:3]),"sha256":digest(Path(sys.executable).resolve()),
                       "zlib":host_zlib.ZLIB_RUNTIME_VERSION},
+            "bearssl": hashes(ROOT / "third_party/bearssl"),
+            "cacert": hashes(ROOT / "third_party/cacert"),
             "host_header":digest(ROOT / "tests/host/desktop/replay_base.h") if host else None}
 
 
@@ -116,6 +118,38 @@ def zlib(src, folder, prefix, cc, env, cflags):
     run(["make", "-j1", "install"], folder, local)
 
 
+def bearssl(folder, prefix, cc, env, cflags):
+    """Pinned portable C only; no implicit RNG/time providers or SIMD paths."""
+    source=ROOT / "third_party/bearssl"
+    folder.mkdir(parents=True,exist_ok=True)
+    (prefix / "lib").mkdir(parents=True,exist_ok=True)
+    shutil.copytree(source / "inc",prefix / "include",dirs_exist_ok=True)
+    options=["-DBR_USE_URANDOM=0","-DBR_USE_WIN32_RAND=0","-DBR_RDRAND=0",
+             "-DBR_USE_UNIX_TIME=0","-DBR_USE_WIN32_TIME=0","-DBR_AES_X86NI=0",
+             "-DBR_SSE2=0","-DBR_POWER8=0","-DBR_INT128=0","-DBR_UMUL128=0"]
+    objects=[]
+    for path in sorted((source / "src").rglob("*.c")):
+        obj=folder / ("_".join(path.relative_to(source / "src").parts)+".o")
+        run([cc,*cflags,*options,"-I"+str(source / "inc"),"-I"+str(source / "src"),"-c",path,"-o",obj],env=env)
+        objects.append(obj)
+    archive=prefix / "lib/libbearssl.a"
+    run(["llvm-ar","rcsD",archive,*objects],env=env)
+    return archive
+
+
+def anchors(folder, host_prefix, destination, env):
+    bundle=ROOT / "third_party/cacert/CACERT.PEM"
+    if digest(bundle)!="a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505":
+        raise ValueError("changed pinned CA bundle")
+    generator=folder / "ca-generator"
+    run(["clang",*flags(folder),"-I"+str(host_prefix / "include"),HERE / "anchors.c",
+         host_prefix / "lib/libbearssl.a","-o",generator],env=env)
+    with destination.open("w") as stream:
+        subprocess.run([str(generator),str(bundle)],stdout=stream,check=True,env=env)
+    return {"bundle_sha256":digest(bundle),"generator_sha256":digest(generator),
+            "anchors_sha256":digest(destination)}
+
+
 def prepare(folder, src):
     tree = folder / "source"
     if not tree.exists():
@@ -124,6 +158,7 @@ def prepare(folder, src):
             run(["patch", "--batch", "--fuzz=0", "-p1", "-i", patch], tree)
     # Port files are owned here, not edits to retained upstream files.
     shutil.copytree(HERE / "port", tree / "netsurf/frontends/framebuffer/ciuki", dirs_exist_ok=True)
+    shutil.copy2(HERE / "port/fetch_ciuki.c",tree / "netsurf/content/fetchers/ciuki.c")
     shutil.copy2(HERE / "port/nsfb_surface.c", tree / "libnsfb/src/surface/ciuki.c")
     shutil.copytree(HERE / "port", tree / "libnsfb/src/surface/ciuki_port", dirs_exist_ok=True)
     # The release omits gperf's output. Generate an equivalent ASCII folded
@@ -223,6 +258,13 @@ def build(host=False, clean=False, directory=None):
     # Pinned host libraries for the release's image/message generators.
     hp = folder / "host-prefix"
     zlib(src["zlib"], folder / "host-zlib", hp, shutil.which("clang"), env, flags(folder))
+    bearssl(folder / "host-bearssl",hp,shutil.which("clang"),env,flags(folder))
+    if host:
+        shutil.copy2(hp / "lib/libbearssl.a",prefix / "lib/libbearssl.a")
+        shutil.copytree(hp / "include",prefix / "include",dirs_exist_ok=True)
+    else:
+        bearssl(folder / "bearssl",prefix,cc,env,cflags)
+    trust=anchors(folder,hp,tree / "netsurf/frontends/framebuffer/ciuki/anchors.h",env)
     png = folder / "host-png"
     shutil.copytree(src["libpng"], png, dirs_exist_ok=True)
     run(["sh", "configure", "--disable-shared", "--disable-dependency-tracking", "--prefix=" + str(hp),
@@ -265,8 +307,8 @@ def build(host=False, clean=False, directory=None):
     config += ["override NETSURF_FB_FRONTEND := " + ("ram" if host else "ciuki"),
                "override NETSURF_FB_FONTLIB := ciuki", "override NETSURF_FB_RESPATH := /system/netsurf",
                "override NETSURF_FB_FONTPATH := /system/fonts", "override MESSAGES_LANGUAGES := en",
-               "CFLAGS += " + " ".join([*cflags,*host_header]) + " -DCIUKI_NETSURF -D__ciuki__ -I" + str(ROOT) + " -I" + str(adapter_headers) + (" -DCIUKI_HOST" if host else "") + " -DCIUKI_ROOT=\\\"" + str(ROOT) + "\\\"",
-               "LDFLAGS += -L" + str(prefix / "lib") + " -ldeskui " + font_flags]
+               "CFLAGS += " + " ".join([*cflags,*(["-include",str(HERE / "port/host_network.h")] if host else [])]) + " -DCIUKI_NETSURF -D__ciuki__ -I" + str(ROOT) + " -I" + str(adapter_headers) + (" -DCIUKI_HOST" if host else "") + " -DCIUKI_ROOT=\\\"" + str(ROOT) + "\\\"",
+               "LDFLAGS += -L" + str(prefix / "lib") + " -ldeskui -lbearssl " + font_flags]
     (browser / "Makefile.config").write_text("\n".join(config) + "\n")
     run(["make", "-j1", "TARGET=framebuffer", "HOST=" + ("Linux" if host else "CiukiOS"), "CC=" + str(cc),
          "CCACHE=", "CC_VERSION=17.0.0", "PKG_CONFIG=pkg-config", "BUILD_CC=clang",
@@ -293,6 +335,12 @@ def build(host=False, clean=False, directory=None):
         shutil.copy2(notice, notices / (name + ".txt"))
     shutil.copy2(tree / "libnspsl/public_suffix_list.dat", notices / "public_suffix_list.dat")
     shutil.copy2(src["zlib"] / "README", notices / "zlib.txt")
+    shutil.copy2(ROOT / "third_party/bearssl/LICENSE.txt",notices / "BearSSL.txt")
+    shutil.copy2(ROOT / "third_party/bearssl/README.ciuki",notices / "BearSSL-SOURCE.txt")
+    shutil.copy2(ROOT / "third_party/cacert/MPL-2.0.txt",notices / "CACERT-MPL-2.0.txt")
+    shutil.copy2(ROOT / "third_party/cacert/README.md",notices / "CACERT-SOURCE.txt")
+    shutil.copy2(ROOT / "third_party/cacert/CACERT.PEM",resource / "CACERT.PEM")
+    (notices / "netsurf-trust.json").write_text(json.dumps(trust,indent=2,sort_keys=True)+"\n")
     shutil.copy2(src["libpng"] / "LICENSE", notices / "libpng-host.txt")
     for name in ("COPYING.NEWLIB","SDK-MIT.txt","FreeType-FTL.txt","FreeType-LICENSE.txt","FreeType-NOTICE.txt"):
         shutil.copy2(SDK / "licenses" / name,notices / name)
@@ -316,7 +364,7 @@ def build(host=False, clean=False, directory=None):
     (notices / "netsurf-inventory.json").write_text(json.dumps({"sources":expected["pins"],"libraries":LIBRARIES,
         "features":FEATURES,"font":"SDK libfont/FreeType; Liberation system faces","psl":"MPL-2.0 data, retained public_suffix_list.dat", "elf":elf},indent=2,sort_keys=True)+"\n")
     generated=[tree / "libhubbub/src/treebuilder/autogenerated-element-type.c",
-               browser / "frontends/framebuffer/ciuki/images.c",resource / "Messages"]
+               browser / "frontends/framebuffer/ciuki/images.c",browser / "frontends/framebuffer/ciuki/anchors.h",resource / "Messages"]
     record = {"inputs": expected, "files": hashes(stage), "host": host,"elf":elf,
               "generated":{str(p.relative_to(folder)):digest(p) for p in generated}}
     stamp.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")

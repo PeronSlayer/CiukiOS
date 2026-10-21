@@ -28,6 +28,8 @@ struct ethernet_port {
 static struct ethernet_port ports[2];
 static bool started, attempted;
 static sys_sem_t initialized;
+extern int entropy_get(void *, size_t) __attribute__((weak));
+static bool crypto_seeded;
 int cu_sockets_init(void);
 void ciuki_sockets_address_lost(uint32_t);
 static void link_dispatch(void *);
@@ -160,7 +162,17 @@ int net_stack_dhcp_error(unsigned index)
     sys_arch_unprotect(f); return e;
 }
 static void ready(void *unused) { (void)unused; sys_sem_signal(&initialized); }
-void net_stack_entropy(uint64_t sample) { ciuki_lwip_seed(sample); }
+void net_stack_entropy(uint64_t sample)
+{
+    if (crypto_seeded) return;
+    uint64_t seed;
+    if (entropy_get && !entropy_get(&seed, sizeof(seed))) {
+        ciuki_lwip_seed(seed);
+        volatile uint8_t *bytes = (volatile uint8_t *)&seed;
+        for (unsigned i = 0; i < sizeof(seed); i++) bytes[i] = 0;
+        crypto_seeded = true;
+    } else ciuki_lwip_seed(sample);
+}
 int net_stack_init(void)
 {
     if (started) return 0;
@@ -183,13 +195,13 @@ int net_stack_init(void)
         return -ENOMEM;
     }
     struct clock_seed rtc; file_clock_snapshot(&rtc);
-    ciuki_lwip_seed((uint64_t)rtc.utc ^ g_ticks);
-    if (g_cpu_tsc) ciuki_lwip_seed(read_tsc_serialized());
+    net_stack_entropy((uint64_t)rtc.utc ^ g_ticks);
+    if (g_cpu_tsc) net_stack_entropy(read_tsc_serialized());
     uint32_t flags = irq_save(); outb(0x43, 0); unsigned pit = inb(0x40); pit |= (unsigned)inb(0x40) << 8;
-    irq_restore(flags); ciuki_lwip_seed(pit);
+    irq_restore(flags); net_stack_entropy(pit);
 #endif
-    /* Driver discovery publishes the primary MAC before transport init uses
-     * LWIP_RAND for the initial TCP/UDP ephemeral-port starts. */
+    /* Prefer DRBG material before transport uses LWIP_RAND. While unavailable,
+     * driver discovery supplies the primary MAC to the legacy boot mix. */
     extern void net_stack_driver_entropy(void) __attribute__((weak));
     if (net_stack_driver_entropy) net_stack_driver_entropy();
     if (sys_sem_new(&initialized, 0) != ERR_OK) return -ENOMEM;

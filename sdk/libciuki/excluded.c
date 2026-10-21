@@ -33,8 +33,5 @@ int link(const char *a,const char *b) { (void)a;(void)b;return excluded(); }
 int symlink(const char *a,const char *b) { (void)a;(void)b;return excluded(); }
 
 int _link_r(struct _reent *r,const char *a,const char *b) { (void)a;(void)b;r->_errno=ENOSYS;return -1; }
-int _getentropy_r(struct _reent *r,void *b,size_t n) { (void)b;(void)n;r->_errno=ENOSYS;return -1; }
 struct tms;
 clock_t _times_r(struct _reent *r,struct tms *t) { (void)t;r->_errno=ENOSYS;return -1; }
-
-int getentropy(void *b,size_t n) { (void)b;(void)n;return excluded(); }
