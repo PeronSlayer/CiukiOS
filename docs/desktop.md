@@ -217,6 +217,12 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   highlighted; right click opens its system menu. Window captions appear in
   their own frames and as task labels, never in the top bar. Tray popups and
   notifications open below the top bar. See [shell design](design/desktop-shell.md).
+- **Network status:** the tray network icon is left of the speaker. It shows
+  link-up, link-down or no-adapter state; its tooltip identifies the cable or
+  adapter state, and its popup shows the driver, MAC address, link and driver
+  state. The desktop refreshes this read-only snapshot every two seconds.
+  Address configuration and socket activity are provided by the kernel's
+  lwIP-backed network service, not by the tray.
 - **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows
@@ -385,6 +391,22 @@ PCI adapter identity, VBE strings, monitor placeholder and Refresh).
 `--panel=display|mouse|keyboard|sounds|datetime|system|adapter` selects the
 first tab (the Settings menu uses it).
 
+Network status is shown in the system tray. The icon distinguishes an active
+link, no cable and no detected adapter; its popup reports the driver, MAC,
+link and driver state. The read-only status view reports link state, while
+lwIP handles DHCP address setup and DNS for native socket clients.
+
+The **Programs** applet is Add/Remove Programs. Its sorted list combines
+Win32 installer registrations from HKLM and HKCU, bundled DOS games, and
+user-added DOS and native programs. It shows name, version, publisher and
+size; system components are marked protected. Remove asks for confirmation,
+runs a registered Win32 uninstaller or removes the selected DOS/native
+program and its launch records, and refreshes the menus without a reboot.
+Bundled game removal warns that restoring it requires reinstalling the system.
+Install opens the Files picker for removable media or CD setup programs and
+launches them through the existing DOS or Win32 path; CiukiOS does not add a
+separate installer engine.
+
 System event sounds use the pinned Kenney CC0 pack. Startup and Desktop ready,
 shutdown, menu open/command, window open/close, minimise/restore, error,
 information/question dialogs, volume steps and removable device connect/disconnect
@@ -547,6 +569,10 @@ High 0.5 s, Normal 1 s, Low 4 s, Paused) and Help, and a status bar
 termination request from call 71 (docs/design/execution-abi.md, f2-33
 amendment); window data comes from the desktop through the extension below.
 Research and decisions are in docs/design/f2-acceptance.md, section F2-33.
+
+The system pagefile is `C:\System\PAGEFILE.SYS`. Its allocated extents
+persist across boots so startup does not recreate the full backing file; page
+contents are treated as disposable and are initialized before use.
 
 - **Applications:** columns Task and Status (Running / Not Responding from
   the desktop's heartbeat), sorted by title, PID and window id. End Task
@@ -936,6 +962,20 @@ follows the program rows in the top-aligned Programs submenu, so the
 scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
 it; `--regenerate` leaves `f2-desktop.json` unchanged; the scratch `zz-ui.json`
 copy of those cases is no longer tracked).
+
+## NetSurf browser (F6 M1)
+
+The M1 browser payload is installed as `/Programs/netsurf`. Its desktop window
+provides a URL bar, navigation controls, status line and framebuffer content
+area. M1 renders
+local `file:` pages and `data:` URLs, including the supported HTML/CSS, GIF and
+BMP content. Bookmarks and history live in the user's NetSurf profile under
+`C:\Documents\NetSurf`; local directory browsing uses the Files picker.
+The M1 payload does not yet have a Programs menu launcher and does not fetch
+HTTP or HTTPS pages. Network adapters,
+DHCP, DNS and native sockets are available separately through the kernel's
+network service; the later browser fetcher connects those facilities to web
+URLs.
 
 ## f2-30 decisions (2026-10-11)
 
@@ -1351,6 +1391,12 @@ scene. Each page displays
 client FPS and ms/frame. Pause freezes scene motion. The window resizes and
 scales its 320×240 scene with nearest-neighbour sampling. The texture is the
 same approved `/system/assets/ciuki-portrait.xrgb` conversion as the desktop.
+
+Win32 programs can load `opengl32.dll` for the implemented OpenGL 1.1 software
+subset. WGL contexts present through the existing desktop/GDI paths; this is
+CPU rendering, not hardware acceleration. The advertised extension list
+contains only implemented extensions. Direct3D through wined3d is planned
+after the 1.0 Beta.
 
 Run benchmark briefly fills the display, restores it after each sample, and
 compares screen-size fills, 256×256 copies and 8×8 pattern fills per column.

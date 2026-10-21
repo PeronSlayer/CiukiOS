@@ -214,7 +214,7 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -DATA_DMA_THROUGHPUT -std=c17 \
     src/kernel/fs/fat.c src/kernel/fs/path.c src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c \
     src/kernel/fs/iso9660.c src/kernel/fs/ntfs_fs.c src/kernel/fs/ntfs_ro.c src/kernel/fs/mount.c \
     src/kernel/core/bootlog.c src/kernel/probes/fat_probes.c src/kernel/lib/sha256.c src/kernel/lib/fmt.c \
-    tests/host/fs/test_throughput.c -o build/host/fs/test_throughput_dma
+    tests/host/fs/test_throughput.c tests/host/entropy/unavailable_stub.c -o build/host/fs/test_throughput_dma
 build/host/fs/test_throughput_dma
 python3 tests/host/fs/kernel_compile.py
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \

@@ -14,6 +14,7 @@
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
 extern void dosvm_perf_enter(void) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
+extern void entropy_irq(unsigned) __attribute__((weak));
 
 extern char copy_user_fault_start[], copy_user_fault_end[], copy_user_fixup[];
 
@@ -64,6 +65,7 @@ static void handle_irq(struct trap_frame *tf)
         if (ledger_irq_context) ledger_irq_context(false);
         return;
     }
+    if (entropy_irq) entropy_irq(irq);
     biosvm_account_irq(irq, false, irq_handlers[irq] != 0);
     if (irq_handlers[irq])
         irq_handlers[irq](tf);

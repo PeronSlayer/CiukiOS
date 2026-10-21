@@ -104,6 +104,24 @@ def read_version():
     return module.load()
 
 
+def desktop_license_payloads():
+    """Desktop dependencies' licence/notice/provenance inventory."""
+    sources = {f"/system/licenses/{name}": ROOT / "third_party/stb/LICENSE"
+               for name in ("stb_image.txt", "stb_image_write.txt", "stb_vorbis.txt")}
+    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
+    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
+                 "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
+        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
+    for name in ("lwip-2.2.1-BSD-3-Clause.txt", "lwip-2.2.1-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+    for name in ("jitterentropy-3.7.0-LICENSE.bsd", "jitterentropy-3.7.0-LICENSE.gplv2",
+                 "jitterentropy-3.7.0-NOTICES.txt"):
+        sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
+    sources["/system/licenses/jitterentropy-3.7.0-import.json"] = ROOT / "config/jitterentropy.json"
+    return sources
+
+
 def desktop_payloads():
     """Validate desktop/demo ELFs and the exact converted portrait independently."""
     spec = importlib.util.spec_from_file_location("build_desktop", ROOT / "apps/desktop/build_desktop.py")
@@ -120,22 +138,12 @@ def desktop_payloads():
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
-               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb",
-               "/system/licenses/stb_image.txt": ROOT / "third_party/stb/LICENSE"}
-    sources["/system/licenses/lwip-2.2.1-BSD-3-Clause.txt"] = ROOT / "docs/licenses/lwip-2.2.1-BSD-3-Clause.txt"
-    sources["/system/licenses/lwip-2.2.1-NOTICES.txt"] = ROOT / "docs/licenses/lwip-2.2.1-NOTICES.txt"
-    sources["/system/licenses/lwip-2.2.1-import.json"] = ROOT / "src/kernel/net/lwip/import.json"
+               "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
+    sources.update(desktop_license_payloads())
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
     sources.update(font_sources)
-    for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    for name in ("TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
-        sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
-    sources["/system/licenses/minimp3.txt"] = ROOT / "third_party/minimp3/LICENSE"
-    sources["/system/licenses/stb_vorbis.txt"] = ROOT / "third_party/stb/LICENSE"
-    sources["/system/licenses/stb_image_write.txt"] = ROOT / "third_party/stb/LICENSE"
     # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     hwids = ROOT / "assets/hwids"

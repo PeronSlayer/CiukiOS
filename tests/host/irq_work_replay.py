@@ -58,7 +58,8 @@ def main():
                 ('wait_irq_deferred', 'device-wake-turn', 1000),
                 ('kwait_wake_irq', 'device-notification-capture', 100),
                 ('kwork_queue', 'coalescing-work-ring', 100),
-                ('chain_irq', 'shared-IRQ-dispatch', 100)], [])
+                ('chain_irq', 'shared-IRQ-dispatch', 100)], [],
+               ['tests/host/entropy/unavailable_stub.c'])
         from vm_creation_model import write_model
         task_source = (ROOT / 'src/kernel/core/task.c').read_text()
         scheduler = task_source[task_source.index('static struct task *rq_head'):task_source.index('void task_stack_init')]
@@ -110,7 +111,7 @@ void biosvm_input_snapshot(struct biosvm_input_diag *d) { memset(d,0,sizeof(*d))
         replay(folder, 'i8042', None,
                [('input_irq', 'i8042-capture', 93),  # reserve existing 7us data pacing
                 ('input_work', 'i8042-deferred-byte', 1000)],
-               ['fake_read', 'fake_write'], argc=True, text=source)
+               ['fake_read', 'fake_write'], ['tests/host/entropy/unavailable_stub.c'], argc=True, text=source)
         replay(folder, 'net', 'net/net_test.c',
                [('netif_irq', 'NIC-common-wrapper', 50),
                 ('e100_interrupt', 'e100', 50), ('rtl_interrupt', 'rtl8139', 50),
@@ -125,7 +126,8 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
         ata_fs = ['partition', 'fs_port', 'blkreq', 'cache', 'fat', 'path', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount']
         replay(folder, 'ata', 'ata_test.c', [('ata_channel_irq', 'ATA-status-capture', 100), ('ata_dma_irq', 'ATA-DMA-stop-ack', 100)],
                ['fake_in8', 'fake_out8'],
-               [*(f'src/kernel/fs/{n}.c' for n in ata_fs), 'src/kernel/core/bootlog.c', 'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c'],
+               [*(f'src/kernel/fs/{n}.c' for n in ata_fs), 'src/kernel/core/bootlog.c', 'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c',
+                'tests/host/entropy/unavailable_stub.c'],
                ['-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread'])
         usb_sources = ['usb_core', 'uhci', 'usb_interrupt', 'ohci', 'usb_hub', 'usb_hid', 'usb_storage']
         replay(folder, 'usb', 'usb/usb_test.c', [('usb_host_irq', 'UHCI-OHCI', 100)],

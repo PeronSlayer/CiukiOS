@@ -116,6 +116,13 @@ class LoaderModelTests(unittest.TestCase):
         self.assertTrue(model.menu_choice('S'))
         self.assertFalse(model.menu_choice('N'))
 
+    def test_software_acceleration_boot_option(self):
+        self.assertEqual(model.boot_options('safe=0\r\naccel=0 serial=1'),
+                         {'safe':False,'serial':True,'mode':None})
+        for token in ('accel=1','accel=00','xaccel=0','accel=0x','accel='):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                model.boot_options(token)
+
     def test_hardware_replay(self):
         for machine in ('t23','e500'):
             data=json.loads((ROOT/'tests/fixtures/hardware'/machine/'replay.json').read_text())
