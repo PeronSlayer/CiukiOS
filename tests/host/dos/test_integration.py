@@ -13,6 +13,8 @@ import unittest
 import zipfile
 from unittest.mock import patch
 import conformance
+from reference_fixture import provisioned_reference
+from functools import partial
 import protocol
 
 spec=importlib.util.spec_from_file_location("d51_install",conformance.ROOT/"scripts/dos_conformance.py")
@@ -64,6 +66,25 @@ class InstallTests(unittest.TestCase):
                 (folder/"UPSTREAM.json").write_text(json.dumps(wrong))
                 with self.subTest(key=key),self.assertRaises(ValueError): install.reference_files(folder)
 
+    def test_optional_reference_lookup_and_exact_absence_skip(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);canonical=root/'third_party/freedos/1.3'
+            linked=root/'third_party/freedos/freedos/1.3'
+            with patch.object(conformance,'ROOT',root):
+                with self.assertRaisesRegex(unittest.SkipTest,'missing pin file: .*third_party/freedos/1.3/UPSTREAM.json'):
+                    provisioned_reference(self)
+                canonical.mkdir(parents=True);linked.mkdir(parents=True)
+                pin={'release':'1.3','kernel':{'archive':'kernel.zip'}}
+                for folder in (canonical,linked): (folder/'UPSTREAM.json').write_text(json.dumps(pin))
+                with self.assertRaisesRegex(unittest.SkipTest,'missing files: .*boot16.bin, kernel.zip'):
+                    provisioned_reference(self)
+                for name in ('boot16.bin','kernel.zip'): (linked/name).write_bytes(b'lookup fixture')
+                self.assertEqual(provisioned_reference(self),linked)
+                for name in ('boot16.bin','kernel.zip'): (canonical/name).write_bytes(b'lookup fixture')
+                self.assertEqual(provisioned_reference(self),canonical)
+                (canonical/'kernel.zip').unlink();(linked/'UPSTREAM.json').write_text('{}')
+                with self.assertRaisesRegex(ValueError,'pins differ'): provisioned_reference(self)
+
     def fat_fixture(self):
         # In-memory FAT16 parser input, 4096 clusters; no build tool/image.
         sectors=4147
@@ -113,6 +134,13 @@ class InstallTests(unittest.TestCase):
 
 
 class ReadbackTests(unittest.TestCase):
+    def setUp(self):
+        folder = provisioned_reference(self)
+        for name in ('reference_files', 'installed_boot'):
+            patcher = patch.object(install, name, partial(getattr(install, name), folder))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_readback_compares_actual_embedded_members_and_profiles(self):
         parent=conformance.ROOT/"build/host/dos";parent.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as d:

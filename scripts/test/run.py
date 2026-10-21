@@ -1885,7 +1885,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             title=case['fixtures'][0].get('title')
             dos_titles.validate({'schema_version':1,'titles':[title]})
             if request != 'f3:title run='+run_id+' title='+title['id']:raise res.Refusal('selector/title mismatch')
-            dos_titles.ready(title,json.loads((ROOT/'config/dos-titles.json').read_text()))
+            dos_titles.ready(title,json.loads((ROOT/'config/dos-titles.json').read_text()),case['fixtures'][0].get('calibrate',False))
         if shared_overlay is None:
             subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
         blkdebug_config(case,overlay.parent)
@@ -2269,7 +2269,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     if result['outcome']=='pass':
                         if fixture['generator']=='dos-title':
                             title=case['fixtures'][0]['title']
-                            result['dos_title']=dos_titles.parse_serial((directory/'serial.log').read_bytes(),run_id,title)
+                            result['dos_title']=dos_titles.parse_serial((directory/'serial.log').read_bytes(),run_id,title,case['fixtures'][0].get('calibrate',False))
                         else:dos_fixtures.verify_records(fixture,parser.records)
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:

@@ -37,5 +37,10 @@ int main(void)
     dosvm_opl_init(v); sb_reset_port(v,1);sb_reset_port(v,0);
     REQUIRE(v->audio.opl_writes==1 && v->audio.cadence_irq_entries==1 &&
             v->audio.cadence_late_acks==1 && v->audio.cadence_irq_latency_max_us==20000);
+    /* The amended title profile uses the existing configurable mixer. */
+    v->audio.sb.mixer_index=0x80;sb_mixer_write(&v->audio.sb,2);
+    REQUIRE(v->audio.sb.irq==5 && sb_mixer_read(&v->audio.sb)==2);
+    v->audio.sb.mixer_index=0x81;sb_mixer_write(&v->audio.sb,0x22);
+    REQUIRE(v->audio.sb.dma8==1 && v->audio.sb.dma16==5 && sb_mixer_read(&v->audio.sb)==0x22);
     return 0;
 }

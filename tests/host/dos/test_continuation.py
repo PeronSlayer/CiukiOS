@@ -14,6 +14,7 @@ import overlay
 import trace as audit
 import reachability
 import test_integration
+from reference_fixture import provisioned_reference
 
 install=test_integration.install
 
@@ -29,31 +30,33 @@ class FixtureTests(unittest.TestCase):
             subprocess.run([str(binary)],check=True,env=dict(os.environ,ASAN_OPTIONS="detect_leaks=0"))
 
     def test_actual_provisioned_release_and_retry_source(self):
-        files,identity=install.reference_files()
+        folder=provisioned_reference(self)
+        files,identity=install.reference_files(folder)
         self.assertEqual(identity["kernel"]["version"],"2043")
         for role,path in (("kernel","/KERNEL.SYS"),("shell","/COMMAND.COM"),("share","/SHARE.COM")):
             self.assertEqual(install.sha(files[path]),identity[role]["sha256"])
-        pin=json.loads((install.RELEASE/"UPSTREAM.json").read_text())
-        boot=install.reference_boot(install.RELEASE,pin["boot"])
+        pin=json.loads((folder/"UPSTREAM.json").read_text())
+        boot=install.reference_boot(folder,pin["boot"])
         self.assertEqual(boot[3:11],b"FRDOS5.1")
-        fat16=install.reference_boot(install.RELEASE,pin["boot_fat16"])
+        fat16=install.reference_boot(folder,pin["boot_fat16"])
         self.assertEqual(fat16[54:62],b"FAT16   ")
-        with zipfile.ZipFile(install.RELEASE/"kernel.zip") as archive:
+        with zipfile.ZipFile(folder/"kernel.zip") as archive:
             raw=archive.read("SOURCE/KERNEL/SOURCES.ZIP")
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             self.assertRegex(archive.read("hdr/device.h").decode(),r"#define N_RETRY\s+5\b")
             self.assertIn(b"num_retries < N_RETRY",archive.read("kernel/dsk.c"))
 
     def test_reproduce_release_fat16_template_without_running_sys(self):
+        folder=provisioned_reference(self)
         parent=conformance.ROOT/"build/host/dos";parent.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=parent) as d:
-            folder=Path(d);binary=folder/"unpack";source=folder/"SYS.COM"
-            with zipfile.ZipFile(install.RELEASE/"kernel.zip") as archive:source.write_bytes(archive.read("BIN/SYS.COM"))
+            output=Path(d);binary=output/"unpack";source=output/"SYS.COM"
+            with zipfile.ZipFile(folder/"kernel.zip") as archive:source.write_bytes(archive.read("BIN/SYS.COM"))
             subprocess.run(["clang","-std=c17","-O1","-Wall","-Wextra","-Werror","-fsanitize=address,undefined",
                 str(Path(__file__).with_name("reference_boot_test.c")),"-lx86emu","-o",str(binary)],check=True)
             result=subprocess.run([str(binary),str(source)],capture_output=True,check=True,timeout=10,
                                   env=dict(os.environ,ASAN_OPTIONS="detect_leaks=0"))
-            self.assertEqual(result.stdout,(install.RELEASE/"boot16.bin").read_bytes())
+            self.assertEqual(result.stdout,(folder/"boot16.bin").read_bytes())
 
 
 class TraceTests(unittest.TestCase):

@@ -959,21 +959,231 @@
       "publisher": "Apogee Software",
       "licence": {
         "kind": "redistributable",
-        "citation": "config/dos-titles.json: rott; original package licence documents",
+        "citation": "1rott13.zip!ROTTSW13.SHR!VENDOR.DOC; SHA-256 a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701",
         "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": false
+        "verified": true
       },
       "install": {
-        "layout": "zip",
+        "layout": "installer",
         "pin": "rott",
         "source": null,
         "target": "ROTT",
         "files": [],
         "steps": [
-          "Extract complete original shareware archive; retain all licence documents.",
-          "Run INSTALL.EXE on private media; provide a pinned installed directory if archive contains a nested installer payload.",
-          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
-          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "e440fdec3c9e13dc0e5ed57305bbb025f6681acb91757e688f4f51aeb211f4a5"
+          },
+          {
+            "directory": "ROTT",
+            "executable": "SNDSETUP.EXE",
+            "args": [],
+            "timeout_ms": 60000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 80,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 80,
+                "down": false
+              },
+              {
+                "at_ms": 2200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 4000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 4080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 5000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 5080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 5200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 5280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 6000,
+                "code": 2,
+                "down": true
+              },
+              {
+                "at_ms": 6080,
+                "code": 2,
+                "down": false
+              },
+              {
+                "at_ms": 6200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 6280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 7000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 7080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 7200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 7280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 8000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 8080,
+                "code": 1,
+                "down": false
+              },
+              {
+                "at_ms": 9000,
+                "code": 21,
+                "down": true
+              },
+              {
+                "at_ms": 9080,
+                "code": 21,
+                "down": false
+              },
+              {
+                "at_ms": 9200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 9280,
+                "code": 28,
+                "down": false
+              }
+            ],
+            "tree_sha256": null
+          }
         ]
       },
       "executable": "ROTT.EXE",
@@ -1265,20 +1475,82 @@
       "publisher": "Apogee Software / id Software",
       "licence": {
         "kind": "redistributable",
-        "citation": "config/dos-titles.json: keen4; original package licence documents",
+        "citation": "4keen.zip!CK4SW14.SHR!VENDOR.DOC; SHA-256 4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc",
         "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": false
+        "verified": true
       },
       "install": {
-        "layout": "zip",
+        "layout": "installer",
         "pin": "keen4",
         "source": null,
         "target": "KEEN4",
         "files": [],
         "steps": [
-          "Extract complete original shareware archive; retain all licence documents.",
-          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
-          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "d9510cd150884ea332761fec6c48c46529f6c14387f485d78ee8a54e7272ea6a"
+          }
         ]
       },
       "executable": "KEEN4E.EXE",
@@ -1570,21 +1842,231 @@
       "publisher": "3D Realms",
       "licence": {
         "kind": "redistributable",
-        "citation": "config/dos-titles.json: duke3d; original package licence documents",
+        "citation": "3dduke13.zip!DN3DSW13.SHR!LICENSE.TXT; SHA-256 38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
         "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
-        "verified": false
+        "verified": true
       },
       "install": {
-        "layout": "zip",
+        "layout": "installer",
         "pin": "duke3d",
         "source": null,
         "target": "DUKE3D",
         "files": [],
         "steps": [
-          "Extract complete original shareware archive; retain all licence documents.",
-          "Run INSTALL.EXE on private media; provide a pinned installed directory if archive contains a nested installer payload.",
-          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
-          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+          "Extract the entire pinned original archive to C:\\MEDIA, retaining the installer and notices.",
+          "Run the original INSTALL.EXE with timed set-1 keys; hash the complete extracted target tree before setup.",
+          "Run the sound setup keys (where provided): Sound Blaster, A220 I5 D1 H5 T6; no manual installation step.",
+          "Calibrate these proposed timing/key scripts and screen/setup-tree hashes on the lead runtime path before verification."
+        ],
+        "automation": [
+          {
+            "directory": "MEDIA",
+            "executable": "INSTALL.EXE",
+            "args": [],
+            "timeout_ms": 120000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 10000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 10080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 12000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 12080,
+                "code": 1,
+                "down": false
+              }
+            ],
+            "tree_sha256": "3316043294429f96f526265104677954300ff069f080ec66f4f3a52619b5f9b7"
+          },
+          {
+            "directory": "DUKE3D",
+            "executable": "SETUP.EXE",
+            "args": [],
+            "timeout_ms": 60000,
+            "input": [
+              {
+                "at_ms": 1000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 1080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 2000,
+                "code": 80,
+                "down": true
+              },
+              {
+                "at_ms": 2080,
+                "code": 80,
+                "down": false
+              },
+              {
+                "at_ms": 2200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 2280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 3000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 3080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 4000,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 4080,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 5000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 5080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 5200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 5280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 6000,
+                "code": 2,
+                "down": true
+              },
+              {
+                "at_ms": 6080,
+                "code": 2,
+                "down": false
+              },
+              {
+                "at_ms": 6200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 6280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 7000,
+                "code": 6,
+                "down": true
+              },
+              {
+                "at_ms": 7080,
+                "code": 6,
+                "down": false
+              },
+              {
+                "at_ms": 7200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 7280,
+                "code": 28,
+                "down": false
+              },
+              {
+                "at_ms": 8000,
+                "code": 1,
+                "down": true
+              },
+              {
+                "at_ms": 8080,
+                "code": 1,
+                "down": false
+              },
+              {
+                "at_ms": 9000,
+                "code": 21,
+                "down": true
+              },
+              {
+                "at_ms": 9080,
+                "code": 21,
+                "down": false
+              },
+              {
+                "at_ms": 9200,
+                "code": 28,
+                "down": true
+              },
+              {
+                "at_ms": 9280,
+                "code": 28,
+                "down": false
+              }
+            ],
+            "tree_sha256": null
+          }
         ]
       },
       "executable": "DUKE3D.EXE",

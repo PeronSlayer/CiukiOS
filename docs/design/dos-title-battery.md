@@ -9,24 +9,22 @@ No battery media or owner payload is a release input.
 
 Proposed shareware editions: DOOM 1.9, Quake 1.06, Wolfenstein 3D 1.4,
 Rise of the Triad 1.3, Commander Keen 4 1.4, Duke Nukem 3D 1.3d.
-`config/dos-titles.json` is the lead's download/pin handoff. Null hashes are
-unavailable pins, never wildcards. The last three need archive and
-edition-specific licence verification by the lead before use.
+`config/dos-titles.json` is the lead's download/pin handoff. Null hashes are unavailable pins, never wildcards. Amendment 1 below records
+the supplied pins and edition-specific licence verification for the last three.
 
 | Title | Licence evidence and decision |
 | --- | --- |
 | DOOM | Original `DOOMS_19.DAT` banner and DOOM1.WAD ENDOOM grant sharing; exact clauses and hashes are in `third_party/games/doom-shareware/UPSTREAM.json`. Retain the original archive; the unrelated FAQ has separate restrictions. |
 | Quake | [id Software SLICNSE.TXT, sections 6–7](https://raw.githubusercontent.com/id-Software/Quake/master/WinQuake/data/SLICNSE.TXT): free whole-package distribution, compressed electronic distribution by providers. Never publish extracted PAK data alone. |
 | Wolfenstein | Original `third_party/games/wolf3d-shareware/VENDOR.DOC`, sections 3A/3C: complete unmodified episode only; free sharing allowed, software bundles require signed permission. Private test installation only. |
-| ROTT | Publisher's VENDOR.DOC reproduced in the [distribution discussion](https://lists.debian.org/debian-legal/2007/02/msg00055.html); edition-specific original still needs lead read-back. Same no-bundle restriction. |
-| Keen 4 | Proposed original `4keen.zip`, VENDOR.DOC; edition-specific text not yet verified. Do not infer permission from its shareware label. |
-| Duke 3D | Proposed original `3dduke13.zip`, VENDOR.DOC/LICENSE.DOC; edition-specific text not yet verified. Engine source GPL does not license the data. |
+| ROTT | Amendment 1 verifies the original `ROTTSW13.SHR!VENDOR.DOC`; complete unchanged free sharing, prior permission for bundles. |
+| Keen 4 | Amendment 1 verifies the original `CK4SW14.SHR!VENDOR.DOC`; complete unchanged free sharing, prior permission for bundles. |
+| Duke 3D | Amendment 1 verifies the original `DN3DSW13.SHR!LICENSE.TXT`; limited complete unchanged free sharing, other distribution requires permission. |
 
 The [publisher download list mirror](https://ftpmirror.infania.net/pub/3drealms/downloads/Downloads.html)
 identifies original Apogee shareware archives; it does not replace their licences.
-The original legacy publisher site was unavailable during research. The three
-new archive licences need edition-specific read-back; these candidates are
-proposals, not redistribution clearance.
+The original legacy publisher site was unavailable during research. The three new archive licences were initially pending; Amendment 1 below
+records their edition-specific read-back and limited free-sharing grant.
 
 The [QEMU fw_cfg specification](https://www.qemu.org/docs/master/specs/fw_cfg.html)
 supports an `opt/` runtime selector; the existing 64-byte loader field is
@@ -49,10 +47,8 @@ confirm config and exit paths differ. Scripts and goldens are edition-specific;
 elapsed time alone cannot prove a menu or gameplay. Existing `RUNREC.COM`
 wraps the unmodified executable and reports its DOS exit status.
 
-**Lead decision:** f3-53 specifies SB16 220/IRQ 5/DMA 1/5; current
-`dosvm_sb16.c` and DOS BLASTER/config advertise IRQ 7. Keep the requested
-IRQ 5 in proposed profiles and refuse a runtime mismatch. This task does not
-change VM hardware or silently substitute IRQ 7.
+**Amendment 1 decision:** the title battery selects SB16 220/IRQ 5/DMA 1/5
+through the existing per-VM mixer interface and BLASTER setting; see below.
 
 ## Manifest v1
 
@@ -77,14 +73,13 @@ audio expectation (`digital`, `opl`, `both`, `none`) and SB16 wiring, LAN
 (`none`, `ipx`), conventional/EMS/XMS KiB and DPMI runtime. Archive layout is
 either an existing pinned `build_games_disk.py` package, a safe ZIP, or a
 fully pinned installed directory. Installation UI steps are documented;
-automatic extraction supports ZIP and existing package adapters. Original
-interactive installers require a lead-provided pinned installed directory;
-they cannot be silently treated as executed by this battery.
+automatic extraction supports ZIP and existing package adapters. Amendment 1
+adds original installer automation and capture/verify modes, described below.
 
 | Field | Required representation |
 | --- | --- |
 | `licence` | `kind`, `citation`, `conditions`, boolean `verified`; false blocks execution |
-| `install` | `layout` (`package`, `zip`, `directory`), `pin` ID, optional local `source`, DOS `target`, `files` and documentary `steps` |
+| `install` | `layout` (`package`, `zip`, `directory`, `installer`), `pin` ID, optional local `source`, DOS `target`, `files` and documentary `steps` |
 | `install.files` | Directory layout: complete explicit list of `{path, sha256}`, relative uppercase 8.3 paths; no unpinned files copied |
 | `executable`, `args` | Executable in target directory and argument array; command length at most 126 ASCII bytes, no shell metacharacters |
 | `checkpoints` | Ordered boot/menu/gameplay: `{name, at_ms, deadline_ms, kind, value}`; `value=null` means pending calibration |
@@ -144,3 +139,150 @@ Report `late_acks` without inventing an acceptance threshold.
 LAN is **pending f6-11**: two independently identified VMs/peers must join the
 same IPX session, exchange gameplay traffic for 30 s, retain per-peer audio
 and fault acceptance, and exit cleanly. Serial/modem are outside scope.
+
+## Amendment 1 — verified packages and runtime calibration (2026-10-21)
+
+The supplied archives were read locally, checked against the lead's size and
+SHA-256, and unpacked under `build/codex/f3-53-extracted/`. No download was made.
+The [publisher's original download page, preserved by its mirror](https://ftpmirror.infania.net/pub/3drealms/downloads/Downloads.html)
+identifies the shareware releases. Permission below comes from each package's
+own notice, rather than the shareware label or an engine source licence.
+
+| Title | Original archive, bytes, SHA-256 | Notice member and its SHA-256 |
+| --- | --- | --- |
+| ROTT 1.3 | `1rott13.zip`, 3668139, `eea67a85845d52fa0ee7272e3ae24b79769ed1e8bdff7b1360904078bc51ad1e` | `ROTTSW13.SHR!VENDOR.DOC`, `a8a73af0f5f46e975d005becfac692c48c097dc43b9230a32c0734801c9df701` |
+| Keen 4 1.4 | `4keen.zip`, 729683, `f7c63feb8bbec817646d95aa26313df1654c01eda8f7ccc5cfd0c0bc0b5e305e` | `CK4SW14.SHR!VENDOR.DOC`, `4902b35ac79c7c6efcc76d8c91c0a6f9b1ba4d4fd7384f669dae2dddd9b3eafc` |
+| Duke 3D 1.3d | `3dduke13.zip`, 5924374, `c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e` | `DN3DSW13.SHR!LICENSE.TXT`, `38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d` (identical outer notice) |
+
+ROTT and Keen's respective `VENDOR.DOC [V.07.15.94]`, KEY POINTS:
+
+> Everyone can -- and is encouraged! -- to copy, upload and generally pass
+> around this Program without charging for it.
+
+Both notices, section [3][A][1]:
+
+> All of the Program's files, including this one, as released by us must be
+> included without modification.
+
+Both notices require prior signed permission for bundles, CD-ROMs and retail
+racks ([3][C]); the free sharing grant does not grant those rights.
+
+Duke's `LICENSE.TXT [V.7.16.98]`, KEY POINTS:
+
+> Individuals can -- and are encouraged! -- to give away copies of the Game
+> without charge.
+
+Section [3][C]:
+
+> all of the Game's files as released by 3D Realms will be included without
+> modification
+
+Its [3][A–D] restrict recipients/channels; other distribution requires written
+permission and a fee/agreed benefit. All three notices permit unchanged
+complete-package free sharing, so their tracked rows now have
+`kind=redistributable, verified=true`. This verifies that limited grant; it
+does not authorize publishing the battery media or bundling them with an OS.
+No title has been qualified by this licence check. The other three existing
+package decisions remain unchanged.
+
+`config/dos-titles.json` also records the complete extracted file inventory
+and a tree hash. Keen uses the existing PKWARE DCL `.SHR` decoder. ROTT and
+Duke have ZIP self-extractors in `.SHR`; Python's ZIP reader validates their
+CRC without executing the executable prefix. All outer and inner files are
+preserved in the local research extraction. The runtime fixture contains the
+complete outer archive contents in `C:\MEDIA`; it does **not** preinstall the
+unpacked game in place of running `INSTALL.EXE`.
+
+### Installer automation and IRQ 5
+
+`install.layout=installer` adds `install.automation`, up to four stages:
+`{directory, executable, args, timeout_ms, input, tree_sha256}`. A stage has
+1..128 balanced, ordered set-1 key edges `{at_ms,code,down}`, a 1..300 s timeout,
+and a root-level working directory. The controller launches the unchanged
+installer/setup with `RUNREC.COM`, delivers keys, checks zero child status and
+return to the shell, and hashes the actual target tree through the existing
+private VFS mount before launching the next stage. Missing files, unexpected
+files, timeout, nonzero exit, wrong pinned tree or missing key edges fail.
+The manifest holds proposed installer/setup keys; their actual UI navigation
+and timings need the lead's runtime calibration. There is no manual-install
+fallback. Keen configures its supported sound devices in the game; it has no
+separate `SETUP.EXE` in this edition.
+
+The tree digest is SHA-256 over files sorted by uppercase relative DOS path:
+`path ASCII || NUL || size LE32 || content SHA-256 (32 raw bytes)`. It covers
+hidden/system files, excludes directory entries/timestamps and is bounded to
+127 files/directories beneath the target and 96 MiB. Empty/missing trees fail.
+Each installer has a pinned original tree; setup stages additionally capture
+configuration output during calibration. No hand-supplied directory replaces
+the original installers for the three amended profiles.
+
+The [Creative Sound Blaster Hardware Programming Guide, mixer registers 80h/81h](https://www.phatcode.net/res/243/files/sbhwpg.pdf)
+assigns IRQ 5 to bit 1 of 80h and DMA 1/5 to bits 1/5 of 81h. The repository
+already implements those writes in `dosvm_sb16.c::sb_mixer_write`. The title
+controller programs that existing interface for its VM before boot and sets
+`BLASTER=A220 I5 D1 H5 T6` after the shell starts; the setup key sequences select
+IRQ 5. This confines the amended wiring to the title battery and leaves other
+committed profiles at their existing defaults. Cadence verification still
+requires the actual selected IRQ to match.
+
+### Calibration and verification
+
+```sh
+# Lead only: use the existing canonical runner/image, never rebuild per title.
+python3 -B scripts/test/dos_titles.py --calibrate rott --profile qemu-t23
+python3 -B scripts/test/dos_titles.py --verify --title rott --profile qemu-t23
+# Import a lead-collected physical serial log; no QEMU process is started.
+python3 -B scripts/test/dos_titles.py --calibrate rott --serial /path/to/serial.txt --run-id 12345678 --profile t23 --image-sha256 <64-hex>
+python3 -B scripts/test/dos_titles.py --verify --title rott --serial /path/to/verify.txt --run-id 87654321 --profile t23 --image-sha256 <64-hex>
+```
+
+Each manifest's parent contains `<id>/calibration.json`; this keeps private
+calibrations beside their private manifest. The file has separate profile
+entries and binds them to the manifest definition, capture plan, run ID and
+canonical image SHA-256. It stores actual VGA frame hashes and both VM-relative
+and launch-relative checkpoint times, plus installer tree hashes/times. A
+changed script, pin recorded in the manifest, profile or image requires a new
+calibration. Verification searches for the captured hashes starting at the recorded
+launch-relative checkpoint times, within the original deadline ceilings and
+every acceptance threshold. A calibration is
+reported as `calibrated`, never `pass`, and never counts toward twenty titles.
+Known extracted-tree hashes are checked even during calibration; only unknown
+setup output hashes are learned. Capture does not assert a semantic title/menu:
+the lead reviews the scripted scenes before committing a calibration.
+
+The optional `D53PLAN2` wire format retains the v1 prefix, adds a capture flag
+and up to four bounded installer stages; unchanged v1 plans remain accepted.
+Capture checkpoints use kind 2 and emit `matched=0`; verification plans cannot
+contain that kind. The selector stays `f3:title run=<id> title=<id>` with no new
+token. Serial evidence binds the complete plan hash and exact mode; installer
+records occur in stage order before the VM start record used by the existing
+acceptance evaluator. Time remains measured from VM creation, including
+installation: the amendment does not relax the 60 s menu limit. The lead must
+calibrate scripts that meet it; a slower install remains a failed criterion.
+
+The [QEMU fw_cfg specification](https://www.qemu.org/docs/master/specs/fw_cfg.html),
+[backing image documentation](https://www.qemu.org/docs/master/system/images.html),
+[QMP key-edge contract](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event)
+and [Microsoft FAT specification](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+were checked against the existing selector/runner/fixture code. Reuse those
+paths; no second process manager, filesystem or build variant was introduced.
+The original [DOOM configuration code](https://raw.githubusercontent.com/id-Software/DOOM/master/linuxdoom-1.10/m_misc.c),
+[Quake exit code](https://raw.githubusercontent.com/id-Software/Quake/master/WinQuake/host_cmd.c)
+and [Wolfenstein configuration code](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/WL_MAIN.C)
+remain the basis for their unchanged edition-specific profiles.
+
+### Optional FreeDOS regression media
+
+The three release-dependent regression tests first look in
+`third_party/freedos/1.3`, then in the lead-provided directory symlink
+`third_party/freedos/freedos/1.3`. The worktree's tracked `UPSTREAM.json` is
+still authoritative. A missing archive produces a unittest skip listing the
+exact missing files and searched locations. Different pins/corrupt media fail;
+absence is never passed off as reference evidence.
+
+The [PKWARE APPNOTE, 4.4.2 and 4.4.15](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)
+defines external attributes according to the originating host system. The
+supplied DOS archives have host ID 0 and non-Unix high attribute words. Apply
+Unix symlink-mode rejection only for Unix host ID 3; retain path, size,
+duplicate, CRC and pin checks for every host. This prevents falsely rejecting
+Keen's DOS-origin `INSTALL.EXE` as a Unix symbolic link.

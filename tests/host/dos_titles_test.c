@@ -30,7 +30,7 @@ static void selector_tests(void)
 }
 int main(int argc,char **argv)
 {
-    assert(argc==2);
+    assert(argc==3);
     FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(wire,1,sizeof(wire),f)==sizeof(wire) && fgetc(f)==EOF);fclose(f);
     assert(d53_parse(wire,sizeof(wire),&plan));
@@ -61,6 +61,23 @@ int main(int argc,char **argv)
     audio.ready=false;assert(!d53_audio_ok(&plan,&audio));audio.ready=true;
     audio.opl_writes=0;assert(!d53_audio_ok(&plan,&audio));audio.opl_writes=10;
     audio.pcm_frames=0;assert(!d53_audio_ok(&plan,&audio));
-    selector_tests();puts("PASS: production DOS title plan, checkpoints, audio bounds and selector/sweep");
+    static uint8_t extended[D53_V2_BYTES], malformed[D53_V2_BYTES];
+    f=fopen(argv[2],"rb");assert(f);
+    assert(fread(extended,1,sizeof(extended),f)==sizeof(extended) && fgetc(f)==EOF);fclose(f);
+    assert(d53_parse(extended,sizeof(extended),&plan));
+    assert(plan.extended && plan.calibration && plan.stages==1 && plan.stage[0].count==2);
+    assert(plan.stage[0].timeout==5000 && !strcmp(plan.stage[0].command,"\\RUNREC.COM \\SYNTH SETUP.EXE"));
+    assert(d53_match(&plan.cp[0],"unmatched",0)); /* capture is never matched=1 */
+    const unsigned v2_offsets[]={D53_PLAN_BYTES,D53_PLAN_BYTES+4,D53_PLAN_BYTES+8+147,
+        D53_PLAN_BYTES+8+216,D53_PLAN_BYTES+8+220,D53_PLAN_BYTES+8+224,
+        D53_PLAN_BYTES+8+D53_STAGE_BYTES};
+    for (unsigned i=0;i<sizeof(v2_offsets)/sizeof(v2_offsets[0]);i++) {
+        memcpy(malformed,extended,sizeof(extended));malformed[v2_offsets[i]]=255;
+        assert(!d53_parse(malformed,sizeof(malformed),&plan));
+    }
+    memcpy(malformed,extended,sizeof(extended)); malformed[D53_PLAN_BYTES]=0;
+    assert(!d53_parse(malformed,sizeof(malformed),&plan)); /* verification rejects capture checkpoints */
+    assert(!d53_parse(extended,sizeof(extended)-1,&plan));
+    selector_tests();puts("PASS: production DOS title v1/v2 plans, installer bounds, capture isolation, audio and selector/sweep");
     return 0;
 }

@@ -1,5 +1,6 @@
 """f3-53 host evidence only. Synthetic DOS material is never executed."""
 import hashlib
+import copy
 import json
 from pathlib import Path
 import shutil
@@ -24,6 +25,14 @@ FIXTURES = ROOT / 'tests/dos-titles/fixtures'
 
 def sample():
     return json.loads((FIXTURES / 'synthetic.json').read_text())['titles'][0]
+
+
+def installer_sample():
+    t = sample()
+    t['install']['automation'] = [{'directory': 'SYNTH', 'executable': 'SETUP.EXE', 'args': [],
+        'timeout_ms': 5000, 'tree_sha256': None,
+        'input': [{'at_ms': 100, 'code': 28, 'down': True}, {'at_ms': 180, 'code': 28, 'down': False}]}]
+    return t
 
 
 class SchemaTests(unittest.TestCase):
@@ -124,12 +133,13 @@ class ModelTests(unittest.TestCase):
         out = ROOT / 'build/host';out.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=out, prefix='title-model-') as temp:
             temp = Path(temp);wire = temp / 'plan.bin';wire.write_bytes(titles.plan(sample()))
+            extended = temp / 'capture.bin';extended.write_bytes(titles.plan(installer_sample(), True))
             binary = temp / ('model-' + sanitizer)
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-fsanitize=' + sanitizer, '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                             '-I', str(ROOT / 'src/kernel/include'), str(ROOT / 'tests/host/dos_titles_test.c'),
                             str(ROOT / 'src/kernel/probes/selector.c'), '-o', str(binary)], check=True)
-            subprocess.run([str(binary), str(wire)], check=True)
+            subprocess.run([str(binary), str(wire), str(extended)], check=True)
 
     def test_production_model_ubsan(self):
         self.model('undefined')
@@ -146,6 +156,16 @@ class ModelTests(unittest.TestCase):
                             '-Wl,--gc-sections', '-I', str(ROOT / 'src/kernel/include'),
                             str(ROOT / 'tests/host/dos_title_audio_test.c'), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
+
+    def test_production_installer_and_tree_ubsan(self):
+        out = ROOT / 'build/host';out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=out, prefix='title-install-') as temp:
+            binary = Path(temp) / 'install'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=undefined', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-I', str(ROOT / 'src/kernel/include'), str(ROOT / 'tests/host/dos_title_install_test.c'),
+                            str(ROOT / 'src/kernel/lib/sha256.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary), titles.tree_hash({'Z.TXT': b'last', 'DIR/A.DAT': b'first'})], check=True)
 
     def test_target_controller_compile(self):
         out = ROOT / 'build/host';out.mkdir(parents=True, exist_ok=True)
@@ -182,6 +202,10 @@ class DiskTests(unittest.TestCase):
             self.assertEqual(fixture['payloads'][0]['path'], '/SYNTH/GAME.EXE')
             self.assertEqual(dos_fixtures.run(['mcopy', '-i', fixture['path'], '::/DTITLE.PLN', '-']).stdout, titles.plan(t))
             self.assertFalse((temp / 'run/fixture-0.vm').exists())
+            captured = titles.generate({'generator': titles.GENERATOR, 'title': t, 'calibrate': True}, temp / 'capture', dos_image=image)
+            wire = dos_fixtures.run(['mcopy', '-i', captured['path'], '::/DTITLE.PLN', '-']).stdout
+            self.assertEqual(wire, titles.plan(t, True))
+            self.assertEqual((wire[:8], len(wire)), (b'D53PLAN2', titles.PLAN_V2_SIZE))
             t['install']['files'][0]['sha256'] = '0' * 64
             with self.assertRaises(ValueError): titles.files(t, {'titles': []})
 
@@ -228,6 +252,129 @@ class RunnerTests(unittest.TestCase):
             host.launch.assert_not_called()
             self.assertFalse((directory / 'run.qcow2').exists())
             self.assertEqual(image.read_bytes(), b'immutable synthetic canonical fixture')
+
+
+class AmendmentTests(unittest.TestCase):
+    def setUp(self):
+        out = ROOT / 'build/host';out.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=out, prefix='title-amendment-')
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+
+    def transcript(self, t, capture):
+        """Synthetic mode/stage evidence; never claimed as title qualification."""
+        raw = (FIXTURES / 'serial.txt').read_text()
+        rows = []
+        for line in raw.splitlines():
+            if 'case=plan ' in line:
+                line = line[:line.index('sha256=')] + 'sha256=' + hashlib.sha256(titles.plan(t, capture)).hexdigest()
+            if capture: line = line.replace('matched=1', 'matched=0')
+            rows.append(line)
+            if 'case=plan ' in line:
+                rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=mode calibration=' + str(int(capture)))
+                for i, s in enumerate(t['install'].get('automation', [])):
+                    rows.append('CIUKI_TEST v=1 run=12345678 seq=0 probe=title event=DATA group=dos_title title=synthetic case=install stage={} ms=900 delivered={} rc=0 files=2 tree_sha256={}'.format(i, len(s['input']), s['tree_sha256'] or 'b' * 64))
+        import re
+        seq = 0
+        for i, line in enumerate(rows):
+            if line.startswith('CIUKI_TEST '):
+                seq += 1
+                rows[i] = re.sub(r'seq=[0-9]+', 'seq=%06d' % seq, line)
+        return ('\n'.join(rows) + '\n').encode()
+
+    def test_supplied_archive_pins_licences_complete_trees_and_original_media(self):
+        pins = json.loads((ROOT / 'config/dos-titles.json').read_text())
+        rows = titles.load(ROOT / 'tests/dos-titles/tracked.json', True)['titles']
+        for ident in ('rott', 'keen4', 'duke3d'):
+            pin = next(p for p in pins['titles'] if p['id'] == ident)
+            archive = ROOT / 'build/downloads/dos-titles' / pin['archive']
+            if not archive.is_file(): self.skipTest('lead-supplied title archive absent: ' + str(archive))
+            self.assertEqual((archive.stat().st_size, dos_fixtures.sha(archive)), (pin['size'], pin['sha256']))
+            outer, inner = titles.unpack_installer(pin, archive)
+            self.assertEqual(titles.tree_hash(inner), pin['installed_tree_sha256'])
+            self.assertEqual([{'path': n, 'size': len(d), 'sha256': hashlib.sha256(d).hexdigest()} for n, d in sorted(inner.items())], pin['installed_files'])
+            notice = inner['LICENSE.TXT' if ident == 'duke3d' else 'VENDOR.DOC']
+            self.assertEqual(hashlib.sha256(notice).hexdigest(), pin['licence']['sha256'])
+            self.assertIn(b'without charge' if ident == 'duke3d' else b'without charging', notice)
+            self.assertIn(b'without modification', notice)
+            t = next(t for t in rows if t['id'] == ident)
+            self.assertTrue(t['licence']['verified'])
+            self.assertEqual(t['audio']['irq'], 5)
+            self.assertEqual(titles.files(t, pins), {'/MEDIA/' + n: d for n, d in outer.items()})
+            self.assertNotIn('/' + t['install']['target'] + '/' + t['executable'], titles.files(t, pins))
+            titles.ready(t, pins, True)
+            with self.assertRaises(EvidenceNotRun): titles.ready(t, pins)
+
+    def test_installer_schema_rejects_unsafe_unbounded_and_unbalanced_stages(self):
+        titles.validate({'schema_version': 1, 'titles': [installer_sample()]})
+        for field, value in [('directory', '../X'), ('directory', 'ONE/TWO'), ('executable', 'A/B.EXE'),
+                             ('args', ['>FILE']), ('timeout_ms', True), ('timeout_ms', 300001),
+                             ('tree_sha256', 'bad'), ('input', [])]:
+            t = installer_sample();t['install']['automation'][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]})
+        for change in ('duplicate', 'held', 'timeout', 'order'):
+            t = installer_sample();s = t['install']['automation'][0]
+            if change == 'duplicate': s['input'][1]['down'] = True
+            if change == 'held': s['input'].pop()
+            if change == 'timeout': s['input'][-1]['at_ms'] = s['timeout_ms']
+            if change == 'order': s['input'].reverse()
+            with self.subTest(change=change), self.assertRaises(ValueError): titles.validate({'schema_version': 1, 'titles': [t]})
+
+    def test_tree_hash_independent_encoding_and_order(self):
+        files = {'Z.TXT': b'last', 'DIR/A.DAT': b'first'}
+        expected = hashlib.sha256(b'DIR/A.DAT\0' + struct.pack('<I', 5) + hashlib.sha256(b'first').digest() +
+                                  b'Z.TXT\0' + struct.pack('<I', 4) + hashlib.sha256(b'last').digest()).hexdigest()
+        self.assertEqual(titles.tree_hash(files), expected)
+        self.assertEqual(titles.tree_hash(dict(reversed(list(files.items())))), expected)
+
+    def test_capture_verify_roundtrip_separate_profiles_and_stale_bindings(self):
+        t = installer_sample()
+        raw = self.transcript(t, True)
+        r = titles.parse_serial(raw, '12345678', t, True)
+        self.assertEqual(r['outcome'], 'calibrated')
+        path = titles.calibration_path(self.path / 'manifest.json', t)
+        self.assertEqual(path, self.path / 'synthetic/calibration.json')
+        for profile in ('qemu-t23', 't23'):
+            titles.save_calibration(path, t, r, profile, 'c' * 64, '12345678')
+        self.assertEqual(set(json.loads(path.read_text())['profiles']), {'qemu-t23', 't23'})
+        applied = titles.apply_calibration(path, t, 't23', 'c' * 64)
+        self.assertEqual(applied['install']['automation'][0]['tree_sha256'], 'b' * 64)
+        self.assertEqual(applied['checkpoints'][0]['value'], 'a' * 64)
+        self.assertEqual(applied['checkpoints'][0]['at_ms'], 1500)
+        self.assertEqual(applied['checkpoints'][0]['deadline_ms'], t['checkpoints'][0]['deadline_ms'])
+        verified = titles.parse_serial(self.transcript(applied, False), '12345678', applied)
+        self.assertEqual(verified['outcome'], 'pass')
+        with self.assertRaises(EvidenceError): titles.parse_serial(raw, '12345678', applied)
+        changed = copy.deepcopy(t);changed['install']['automation'][0]['input'][0]['at_ms'] += 1
+        for title, profile, image in ((changed, 't23', 'c' * 64), (t, 't23', 'd' * 64)):
+            with self.assertRaises(ValueError): titles.apply_calibration(path, title, profile, image)
+        with self.assertRaises(EvidenceNotRun): titles.apply_calibration(path, t, 'other', 'c' * 64)
+        titles.write_summary(self.path, [r])
+        self.assertEqual(json.loads((self.path / 'summary.json').read_text())['qualified_title_count'], 0)
+
+    def test_install_missing_duplicate_timeout_bad_tree_and_mode_never_pass(self):
+        t = installer_sample();t['install']['automation'][0]['tree_sha256'] = 'b' * 64
+        raw = self.transcript(t, False)
+        self.assertEqual(titles.parse_serial(raw, '12345678', t)['outcome'], 'pass')
+        for before, after in [(b'stage=0', b'stage=1'), (b'ms=900', b'ms=5001'), (b'delivered=2', b'delivered=1'),
+                              (b'rc=0 files=2', b'rc=1 files=2'), (b'files=2', b'files=0'),
+                              (b'tree_sha256=' + b'b' * 64, b'tree_sha256=' + b'c' * 64),
+                              (b'calibration=0', b'calibration=1')]:
+            with self.subTest(after=after), self.assertRaises(EvidenceError): titles.parse_serial(raw.replace(before, after), '12345678', t)
+        lines = raw.splitlines(keepends=True);index = next(i for i, line in enumerate(lines) if b'case=install ' in line)
+        with self.assertRaises(EvidenceError): titles.parse_serial(b''.join(lines[:index] + lines[index+1:]), '12345678', t)
+        with self.assertRaises(EvidenceError): titles.parse_serial(b''.join(lines[:index] + [lines[index]] + lines[index:]), '12345678', t)
+
+    def test_physical_calibration_and_verification_cli_never_launch_processes(self):
+        t = installer_sample();manifest = self.path / 'manifest.json'
+        manifest.write_text(json.dumps({'schema_version': 1, 'titles': [t]}))
+        serial = self.path / 'serial.txt';serial.write_bytes(self.transcript(t, True))
+        common = ['--manifest', str(manifest), '--serial', str(serial), '--run-id', '12345678', '--profile', 't23', '--image-sha256', 'c' * 64]
+        with patch.object(subprocess, 'Popen', side_effect=AssertionError('host-only import must not launch')), patch('builtins.print'):
+            self.assertEqual(titles.main(['--calibrate', 'synthetic', *common]), 0)
+            applied = titles.apply_calibration(titles.calibration_path(manifest, t), t, 't23', 'c' * 64)
+            serial.write_bytes(self.transcript(applied, False))
+            self.assertEqual(titles.main(['--verify', '--title', 'synthetic', *common]), 0)
 
 
 if __name__ == '__main__': unittest.main()
