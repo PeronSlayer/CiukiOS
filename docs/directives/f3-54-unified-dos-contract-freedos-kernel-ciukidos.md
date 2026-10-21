@@ -23,3 +23,25 @@
 - Report `build/codex/f3-54-report.md`: decisions needed from the lead, open questions, risks ranked.
 
 Rules: `rg`/`sed` only, never semble; read only the ranges you need; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English. Nothing from `legacy/local/` is referenced.
+
+## Amendment 1 (lead, 2026-10-21): cross-review verdict "approve with amendments" and the lead's decisions on the report's table
+
+Apply this amendment only: update the contract and the directives f3-55–f3-59 accordingly; no production code.
+
+Review amendments (all required):
+1. **High — binding after FreeDOS initialisation.** The CONFIG.SYS-time binding registers structures that kernel 2043 later replaces (`kernel/main.c:337` device load, `config.c:459` SFT chain extension, `config.c:465` CDS replacement, `main.c:348` `FsConfig`, `config.c:506` DOS=LOW relocation, `main.c:128` INSTALL before the shell). Specify two phases: discover/register the resident driver at INIT; finalise the kernel layout and bind after `init_kernel()` returns and before `DoInstall()`; the f3-57 filesystem activation sits at that late boundary. Host coverage for final SFT allocation, CDS replacement and DOS=LOW relocation.
+2. **High — FCB-close metadata.** `kernel/fcbfns.c:609–613` assigns the caller's FCB size to `sft_size` and skips local merging for `SFT_FSHARED`. Add an explicit checked FCB-close metadata hook with size/date semantics defined against the pristine reference, distinct from handle close and from SFT tampering; tests for changed FCB size, concurrent change, read-only files, failed publication, reopen results. Name `fcbfns.c:252–271` (negative transfer result continuing into count arithmetic, record-size modulus at `:268`) in the checked-arithmetic hardening list.
+3. **Medium — executable definition of the interception seam.** There is no single marshalled INT 2Fh instruction at `call_int2f`; the interrupts are at `int2f.asm:355,364,407,432,443,454,471` with different register/stack conventions. Choose and document either a checked internal `(command, pointer, argument)` adapter or interception at each marshalled callout site; enumerate the sites and frame variants in f3-56 acceptance.
+4. **Medium — redirected-drive classification matrix.** `CDSNETWDRV` makes `get_dpb()` NULL (`fatfs.c:90`), rejects `GetDriveDPB` (`dosfns.c:145`), most block IOCTLs (`ioctl.c:187–190`), DOS absolute transfers (`blockio.c:376–379`), routes 7302h/7304h/7305h and INT 25h/26h through the DPB (`inthndlr.c:218,268,389,1707`). Freeze a per-drive matrix for 32h, 4400/08/09/0A/0E, 7302–7305 and INT 25h/26h: which use native adapters, which deliberately fail with exact results; distinguish BIOS raw access from DOS absolute-disk APIs; host tests. List 7303h (`dosfns.c:885–887` → 110Ch) separately from 1Bh/1Ch/36h.
+Also: strengthen H55-02 to compare builds under different wall-clock dates (`__DATE__` in `hdr/version.h:48`, FreeCOM `__DATE__/__TIME__`).
+
+Lead decisions on the report's table:
+- **Fork-local IFS callout seam confirmed** (the public 1100h probe keeps `AL=0`; the battery's assertion stays unchanged).
+- **Guest/profile identity:** the unified kernel is selected by the exact `BOOT.CFG`/DOS Box setting token `kernel=unified` (the existing `kernel` setting gains this value; `ciukidos` and the pristine reference keep their values); schema value 2 of the per-game kernel choice is reserved for it.
+- **DFVM layout:** a new negotiated layout identity `DFV2` with its own signature and offsets; v1 stays byte-identical for the old guest. The ROM slot: propose the exact region and bytes in the f3-56 text (not overlapping F000:1800–1B53 or the BIOS/DPMI/mouse/current DFVM regions); the lead reserves it when the directive is launched.
+- **Additional transaction selectors:** none picked now; f3-56/f3-57 state which of the existing 0–8 they use and ask only if one is missing.
+- **Shell/VM power control:** reuse the existing scoped interface; no new authority.
+- **Toolchain pin:** Open Watcom 1.9 Linux installer `open-watcom-c-linux-1.9` (83,959,748 bytes) and `open-watcom-1.9.0-src.tar.bz2` from the official `ow1.9` GitHub release; the lead downloads them to `build/downloads/openwatcom/` and records the SHA-256 in `config/openwatcom.json` (write that file's schema in f3-55 and leave the hash fields for the lead to fill). FreeCOM: audit the runtime licence as the contract says; if the OW runtime cannot be combined, the shell is built with a pinned gcc-ia16 (lead pins on request).
+- **Rights for ported CiukiDOS code and the corresponding-source destination:** the owner has been asked (GPL-2.0-or-later grant; GitHub repository plus a per-release source archive with hash); f3-56 and f3-58 do not start before the answer, f3-55 does.
+
+Report section "Amendment 1" with the list of changed documents.

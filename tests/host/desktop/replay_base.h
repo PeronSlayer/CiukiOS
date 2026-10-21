@@ -21,6 +21,16 @@
 #undef _SC_PAGESIZE
 #undef _SC_THREAD_KEYS_MAX
 #undef _SC_THREAD_STACK_MIN
+#undef SOCK_STREAM
+#undef SOCK_DGRAM
+#undef SOCK_NONBLOCK
+#undef SOCK_CLOEXEC
+#undef SHUT_RD
+#undef SHUT_WR
+#undef SHUT_RDWR
+#undef MSG_PEEK
+#undef MSG_DONTWAIT
+#undef MSG_NOSIGNAL
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
