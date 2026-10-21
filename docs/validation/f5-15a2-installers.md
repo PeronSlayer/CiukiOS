@@ -3,6 +3,59 @@
 Research date: 2026-10-21. Host evidence only. Exact commands, outputs and
 remaining execution limits are in `build/codex/f5-15a2-report.md`.
 
+## Amendment 4 research and decisions
+
+The lead's stage-4 failure occurs at the first restart journal checkpoint,
+before uninstall (stage 6). `flow_driver.py` calls it immediately after
+`ws_restart_begin`, before WININIT processing and `ws_restart_next`.
+The production restart service deletes RunOnce durably at command handoff,
+consistent with Microsoft's [RunOnce documentation](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys).
+Therefore require the exact RunOnce command at stages 3 **and 4**, and its
+absence at stage 5, after the real child has completed. Keep every Uninstall
+value, missing-key check and final deletion expectation. The native desktop's
+asynchronous journal checkpoint does not query registry state during handoff.
+
+The lead's INF record reaches `W32_PROCESS` once, then `TERMINATE 11`, with
+`kernel_enosys=0`. Exit 11 identifies the fixture's `RunSetupCommandA` call.
+Microsoft's [RunSetupCommand contract](https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/platform-apis/aa768010(v=vs.85))
+permits the INF/quiet flags already used by this caller. The pinned Wine 10.0
+`dlls/advpack/install.c:152–175,850–881` runs the INF post-setup command with
+`CreateProcessW(CREATE_DEFAULT_ERROR_MODE | CREATE_NEW_PROCESS_GROUP)` and
+waits for completion. Both the H1 backend and production process endpoint
+reject these bits, returning Win32 error 87 inside a successful transport.
+This stops the call before executable search can retry the path with spaces.
+The source diagnosis explains the single process request; a complete PE
+rerun remains required because this sandbox denies the i386 preflight.
+
+Accept these two documented [process creation flags](https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags)
+in the production endpoint and H1 backend. A new group uses the child's PID;
+`CREATE_NEW_CONSOLE` retains its documented precedence over the group flag.
+The current core initializes error mode afresh in each child, so default
+error mode needs no extra state. H1 uses a new host session for the requested
+group and still creates a confined adapter child with a real waitable handle.
+Keep unsupported flags rejected. Do not alter the authored INF, CAB, NSIS
+binary or their semantic manifests. Native regressions exercise these exact
+flags, real child completion, group identity, stage-4 RunOnce retention and
+stage-5 consumption; they are not compiled-installer acceptance evidence.
+
+The installer controller is already registered with `CIUKI_F5_PROBE` in
+`f2_probes_desktop.c`, and its evidence is produced in `installer_probe.inc`.
+Register that include in the explicit producer ownership list, matching
+`f5_restart_observer.inc`. No service is allowed to emit installer evidence,
+and the evidence-scope scanner remains enabled for every other include.
+
+Amendment 4 host verification: 27 installer checks (22 pass, three i386
+preflight skips and two LeakSanitizer skips); 30 desktop/selector/boot checks
+pass; 12 kernel-core/registration checks pass, including 63,792 native core
+assertions. Apps and cached upper builds pass. The changed process endpoint
+compiles with canonical i686 flags. The kernel host script passes the evidence
+scope check, then stops at the unmodified `record_runtime_test` because
+LeakSanitizer cannot inspect threads. A separate observer compile confirms the
+lead-noted `restart_link` frame failure (4120 > 4096 bytes); it is left for the
+lead's main merge as Amendment 4 requires. The current i386 preflight returns
+SIGSYS (-31); successful compiled NSIS, INF/self-extractor or FDI execution is
+not claimed. Exact commands, logs and source citations are in the report.
+
 ## Amendment 3 research and integration
 
 The lead's new `infchain.exe` record ends with `TERMINATE 22`, after file

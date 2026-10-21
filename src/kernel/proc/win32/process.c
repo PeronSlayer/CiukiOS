@@ -113,7 +113,10 @@ static int executable(struct process *p, const char *image, const char *env,
 uint32_t w32_process_call(struct proc_thread *t,
                           struct ciuki_w32_spawn_args *a) {
   uint32_t priority = a->flags & (0x20u | 0x40u | 0x80u | 0x100u);
-  if ((a->flags & ~(4u | 0x10u | 0x20u | 0x40u | 0x80u | 0x100u)) ||
+  /* advpack's waited child uses DEFAULT_ERROR_MODE and NEW_PROCESS_GROUP.
+   * Core DLL state already starts with the default error mode per child. */
+  if ((a->flags & ~(4u | 0x10u | 0x20u | 0x40u | 0x80u | 0x100u |
+                    0x200u | 0x04000000u)) ||
       (priority && (priority & (priority - 1)))) {
     a->error = 87;
     return 0;
@@ -274,7 +277,9 @@ uint32_t w32_process_call(struct proc_thread *t,
                   (unsigned)proc_priority_win32(priority, 0, false));
     if (pe && (a->flags & 4))
       main->w32->suspend = 1;
-    proc_publish(child, 0);
+    /* NEW_CONSOLE takes precedence over NEW_PROCESS_GROUP. */
+    proc_publish(child, (a->flags & 0x200u) && !(a->flags & 0x10u)
+                            ? CIUKI_SPAWN_NEW_GROUP : 0);
     if (realtime) klog("[win32] start pid=%u prio=realtime→high",child->pid);
     a->pid = child->pid;
     a->tid = main->tid;

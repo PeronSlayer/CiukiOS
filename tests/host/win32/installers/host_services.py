@@ -153,11 +153,11 @@ class Services:
             self.sessions.append(result)
             return result
 
-    def start(self, image, command, cwd='C:\\WINDOWS\\TEMP'):
+    def start(self, image, command, cwd='C:\\WINDOWS\\TEMP', flags=0):
         Session(self, 0, cwd).path(image).stat()  # fail before allocating child handles
-        return self.start_adapter(['installer-exec', image, command], image, cwd)
+        return self.start_adapter(['installer-exec', image, command], image, cwd, flags)
 
-    def start_adapter(self, arguments, label, cwd='C:\\WINDOWS\\TEMP'):
+    def start_adapter(self, arguments, label, cwd='C:\\WINDOWS\\TEMP', flags=0):
         if self.program is None:
             raise RuntimeError('an H1 executable is required for child creation')
         parent, child = socket.socketpair()
@@ -166,7 +166,8 @@ class Services:
         try:
             process = subprocess.Popen([str(self.program), *arguments,
                                         str(child.fileno())], pass_fds=(child.fileno(),),
-                                       stdout=log, stderr=subprocess.STDOUT)
+                                       stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=bool(flags & 0x200))
         except BaseException:
             parent.close(); log.close()
             raise
@@ -385,9 +386,12 @@ class Session:
                     self.file(a, data)
             elif op == PROCESS:
                 image, command, cwd = (self.string(raw, a[i]) for i in (4, 5, 6))
-                if a[10] & ~0x08000000 or a[9]:
+                # The reused advpack launches its waited child with
+                # CREATE_DEFAULT_ERROR_MODE | CREATE_NEW_PROCESS_GROUP.
+                # Each adapter starts with fresh core DLL error-mode state.
+                if a[10] & ~(0x08000000 | 0x04000000 | 0x200) or a[9]:
                     raise OSError(errno.EINVAL, 'unsupported spawn flags/inheritance')
-                child = self.service.start(image, command, cwd or self.cwd)
+                child = self.service.start(image, command, cwd or self.cwd, a[10])
                 a[11], a[12] = self.add(Handle(1, child)), self.add(Handle(2, child))
                 a[13], a[14], a[15] = child.process.pid, child.process.pid, 0
             elif op == OBJECT:

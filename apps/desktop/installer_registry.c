@@ -35,7 +35,9 @@ unsigned desk_installer_registry(unsigned stage)
         if(!e){uint32_t key=r.key;request(W32R_CLOSE,key,"","",&r,bytes,sizeof(bytes));errors++;}
         else if(e!=2)errors++;
     }
-    errors+=value(INSTALLER_RUNONCE,"CiukiInstallerFixture",stage==3?"\"" INSTALLER_DIR "\\child.exe\" /restart-child":NULL);
+    /* The durable journal checkpoint precedes RunOnce handoff/deletion.
+     * Require consumption only at the completed restart checkpoint (5). */
+    errors+=value(INSTALLER_RUNONCE,"CiukiInstallerFixture",stage==3 || stage==4?"\"" INSTALLER_DIR "\\child.exe\" /restart-child":NULL);
     return errors;
 }
 int desk_installer_ready(void)

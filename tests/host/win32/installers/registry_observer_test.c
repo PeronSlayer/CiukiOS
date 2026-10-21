@@ -25,13 +25,17 @@ int main(int argc,char **argv){
     assert(!desk_installer_registry(2));
     assert(desk_installer_registry(1));
     assert(desk_installer_registry(3));
+    assert(desk_installer_registry(4));
     host_registry(INSTALLER_RUNONCE,"CiukiInstallerFixture","\"" INSTALLER_DIR "\\child.exe\" /restart-child");
     assert(!desk_installer_registry(3));
+    assert(!desk_installer_registry(4));
+    assert(desk_installer_registry(5)); /* not consumed at completion */
     host_registry(INSTALLER_UNINSTALL,"Publisher","incorrect");assert(desk_installer_registry(2));
     host_registry(INSTALLER_UNINSTALL,"Publisher","CiukiOS");
     damaged=1;assert(desk_installer_registry(3));damaged=0;
     uint32_t key;assert(!RegOpenKeyA(W32R_HKLM,INSTALLER_RUNONCE,&key));assert(!RegDeleteValueA(key,"CiukiInstallerFixture"));assert(!RegCloseKey(key));
     assert(!desk_installer_registry(5));
+    assert(desk_installer_registry(4)); /* prematurely consumed before handoff */
     assert(!RegDeleteKeyA(W32R_HKLM,INSTALLER_UNINSTALL));assert(!desk_installer_registry(8));
     /* An empty Uninstall key still is a stale installation entry. */
     host_registry(INSTALLER_UNINSTALL,"temporary","value");assert(!RegOpenKeyA(W32R_HKLM,INSTALLER_UNINSTALL,&key));

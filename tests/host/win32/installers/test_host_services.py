@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 from pathlib import Path
 import ctypes as C
+import os
 import socket
 import struct
 import subprocess
@@ -96,9 +97,15 @@ class HostServiceTests(unittest.TestCase):
     def test_actual_child_wait_query_close_and_transport(self):
         # Native protocol unit fixture: genuine process exit 23, not PE evidence.
         (self.service.root / 'C/WINDOWS/TEMP/child.exe').write_bytes(b'authored transport unit marker')
-        a, _ = call(self.session, h.PROCESS, {}, [(4, 'C:\\WINDOWS\\TEMP\\child.exe'),
+        refused, _ = call(self.session, h.PROCESS, {10: 4}, [(4, 'C:\\WINDOWS\\TEMP\\child.exe'),
+            (5, '"C:\\WINDOWS\\TEMP\\child.exe"'), (6, 'C:\\WINDOWS\\TEMP')])
+        self.assertEqual(refused[15], 87)
+        self.assertFalse(self.service.children)
+        # Exact flags used by Wine advpack's launch_exe, with real side effects.
+        a, _ = call(self.session, h.PROCESS, {10: 0x04000200}, [(4, 'C:\\WINDOWS\\TEMP\\child.exe'),
             (5, '"C:\\WINDOWS\\TEMP\\child.exe"'), (6, 'C:\\WINDOWS\\TEMP')])
         self.assertEqual(a[15], 0)
+        self.assertEqual(os.getpgid(a[13]), a[13])
         process, thread = a[11:13]
         self.assertNotEqual(process, thread)
         query, _ = call(self.session, h.OBJECT, {4: 9, 6: process})
@@ -170,6 +177,49 @@ class HostServiceTests(unittest.TestCase):
             self.assertGreater(used, 0)
             self.assertNotIn(b'errors=0 manifest=1', out.value)
             self.assertEqual(out.value.count(b'manifest=0'), 4)
+
+    def test_restart_journal_checkpoint_precedes_runonce_consumption(self):
+        # Registry timing on the actual restart service, not PE-flow evidence.
+        from . import registry_wire as r
+        registry = self.service.registry
+        def rpc(op, key, path='', name='', text=''):
+            error, raw = registry.exchange(self.session.pid, r.request(op, key, path, name,
+                (text + '\0').encode('utf-16le') if op == r.SET else b'', 1 if op == r.SET else 0), 4096)
+            self.assertEqual(error, 0)
+            reply = struct.unpack_from('<10I', raw)
+            self.assertEqual(reply[1], 0)
+            return reply[2]
+        directory = 'C:\\Program Files\\Ciuki Installer Fixture'
+        uninstall = 'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CiukiInstallerFixture'
+        key = rpc(r.CREATE, r.HKLM, uninstall)
+        for name, text in {'DisplayName': 'Ciuki Installer Fixture', 'DisplayVersion': '1.0',
+                           'Publisher': 'CiukiOS', 'InstallLocation': directory,
+                           'UninstallString': '"' + directory + '\\uninstall.exe"'}.items():
+            rpc(r.SET, key, name=name, text=text)
+        rpc(r.CLOSE, key)
+        key = rpc(r.CREATE, r.HKLM, 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce')
+        command = '"' + directory + '\\child.exe" /restart-child'
+        rpc(r.SET, key, name='CiukiInstallerFixture', text=command)
+        rpc(r.CLOSE, key)
+        self.assertEqual(registry.observe(3), 0)
+        self.assertEqual(registry._restart_begin(registry.ctx), 0)
+        self.assertTrue((self.service.root / 'C/WINDOWS/CIUKIRST.LOG').is_file())
+        self.assertEqual(registry.observe(4), 0)
+        self.assertGreater(registry.observe(5), 0)  # premature completion
+        for _ in range(1024):
+            if registry._restart_phase(registry.ctx) != 1:
+                break
+            registry._restart_tick(registry.ctx)
+        self.assertEqual(registry._restart_phase(registry.ctx), 2)
+        self.assertEqual(registry.observe(4), 0)
+        out = C.create_string_buffer(2048)
+        self.assertEqual(registry._restart_next(registry.ctx, out, len(out)), 0)
+        self.assertEqual(out.value.decode(), command)
+        self.assertGreater(registry.observe(4), 0)  # consumed at handoff
+        self.assertEqual(registry.observe(5), 0)
+        self.assertEqual(registry._restart_next(registry.ctx, out, len(out)), 259)
+        self.assertEqual(registry._restart_end(registry.ctx), 0)
+        self.assertEqual(registry.observe(5), 0)
 
     def test_copied_record_validation_and_metadata_roundtrip(self):
         self.assertEqual(self.session.dispatch(1, b'short', 4096), (-22, b''))
