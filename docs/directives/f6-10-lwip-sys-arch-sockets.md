@@ -26,3 +26,44 @@
 ## Constraints
 
 Research the contract's pinned sources first (lwIP 2.2.1 `sys.h`, `api_lib.c`, the threading documentation); no new `panic()`; `rg`/`sed` only; host tests one at a time with `nice -n 19`; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment 1 (lead, 2026-10-21, from the Codex cross-review `build/lead-scratch/f6-10-review.md` in the main checkout: verdict "hold")
+
+Apply all eleven findings with focused regressions; the review text with file:line references follows. Lead decisions: finding 10 — rename this delivery's `src/kernel/net/bridge.c` to `src/kernel/net/lwip_handoff.c` (f6-11 owns `bridge.c`); keep lwIP ingress and leave room for f6-11's additive type-filtered tap; finding 8 — meet the contract's one-second close limit by configuration (polls) rather than by patching upstream.
+
+Ranked findings:
+
+1. **P1 — User-memory preparation can redirect an operation onto a replacement fd.**  
+   [syscalls.c:70](src/kernel/net/lwip/syscalls.c:70) checks the fd, then copies/pins memory before [sockets.c:545](src/kernel/net/lwip/sockets.c:545) captures its identity. Production pinning can sleep during page resolution. Another thread can close/reuse the number meanwhile, causing the original receive, accept, bind or option operation to use the replacement socket. Poll has the same window before registration. **Smallest fix:** capture an operation reference and generation at initial fd validation, carry them through preparation, and reject a changed generation before commit.
+
+2. **P1 — Queued native waits ignore cancellation and deadlines.**  
+   [sockets.c:468](src/kernel/net/lwip/sockets.c:468) waits for control ownership and command completion without checking signals, process stopping or an operation deadline. The worker executes queued requests without rechecking caller cancellation ([sockets.c:411](src/kernel/net/lwip/sockets.c:411)). A signal arriving after `retry()` checks can therefore precede an uncommitted receive/dequeue yet still allow consumption. Timeouts can also expire during submission and be ignored. **Smallest fix:** carry cancellation/deadline state into queued requests, cancel uncommitted work and retain storage until completion drains; preserve internal lwIP completion waits.
+
+3. **P1 — Reading SO_ERROR can turn a failed blocking connect into success.**  
+   [sockets.c:574](src/kernel/net/lwip/sockets.c:574) treats `!connecting && error == 0` as successful completion. Another thread can clear the refused connection’s error through SO_ERROR ([sockets.c:230](src/kernel/net/lwip/sockets.c:230)) before the blocking caller resumes. It then returns zero while `connected` remains false. **Smallest fix:** retain a connect-completion result independently of the clearable pending socket error, and require established state for success.
+
+4. **P1 — Address revocation misses already-aborted TCP connections and blocked accepts.**  
+   [stack.c:50](src/kernel/net/lwip/stack.c:50) invokes address-loss handling from the status callback. Upstream address changes abort TCP PCBs before that callback; [sockets.c:790](src/kernel/net/lwip/sockets.c:790) then skips connections whose PCB is null. DHCP expiry/NAK can therefore bypass `network_down` and expose ECONNABORTED through send/receive, outside their allowed error sets. Separately, OP_ACCEPT ignores `network_down` and can continue waiting on a listener bound to the revoked address. **Smallest fix:** identify affected sockets using retained address/interface state, including null-PCB sockets, and make affected accepts return ENETDOWN. The callback ordering follows upstream [netif.c](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/netif.c).
+
+5. **P2 — Successful full shutdown fabricates ECONNABORTED.**  
+   [sockets.c:117](src/kernel/net/lwip/sockets.c:117) converts every ERROR notification with `pending_err == ERR_OK` into ECONNABORTED. Upstream also emits that notification after successful full shutdown. Consequently, SHUT_RDWR can produce a false SO_ERROR and POLLERR. **Smallest fix:** distinguish normal closure notifications from transport errors; retain HUP/EOF without inventing an errno. See upstream [api_msg.c](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/api/api_msg.c).
+
+6. **P2 — DHCP allocation failure becomes permanent until another link transition.**  
+   [stack.c:70](src/kernel/net/lwip/stack.c:70) records the link as applied before discarding `dhcp_start()`’s result. Failure to allocate the DHCP object or PCB leaves acquisition stopped, while subsequent service passes see matching link state and perform no retry. **Smallest fix:** track acquisition-start failure separately, expose it, and retry with bounded pacing or reserve the necessary objects before activation.
+
+7. **P2 — DHCP renewals retain removed DNS servers and cached answers.**  
+   [stack.c:41](src/kernel/net/lwip/stack.c:41) clears DNS only on address loss. Upstream DHCP updates only server slots present in the ACK. A same-address renewal changing `[A,B]` to `[A]` leaves B installed; because A is unchanged, the generation hook need not run either. **Smallest fix:** replace the complete lease DNS list, explicitly clearing omitted slots and invalidating the resolver generation. This follows the ACK handling in upstream [dhcp.c](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/ipv4/dhcp.c).
+
+8. **P2 — The configured close timeout does not enforce one second.**  
+   [lwipopts.h:61](src/kernel/net/lwip/lwipopts.h:61) disables the timestamp-based timeout options. Upstream initializes three remaining polls for the configured 1000 ms limit and retries closure every 500 ms. Persistent FIN-allocation failure can therefore approach **1.5 seconds**, exceeding the contract’s one-second transport limit. **Smallest fix:** enforce an absolute monotonic close deadline while preserving exclusive control ownership. Add a persistent-exhaustion test; setting the option alone is insufficient. See upstream [api_lib.c](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/api/api_lib.c).
+
+9. **P2 — Two-NIC service can exceed the 16-frame yield budget.**  
+   [bridge.c:56](src/kernel/net/bridge.c:56) can submit eight frames per adapter without yielding. Its caller then polls the first adapter before yielding ([net.c:430](src/kernel/drivers/net.c:430)), allowing sixteen TX frames plus another RX frame. **Smallest fix:** share the dispatch budget across TX/RX, or yield when TX exhausts the frame/time budget before entering receive service.
+
+10. **P2 — The lwIP handoff occupies f6-11’s reserved bridge path.**  
+    [bridge.c:1](src/kernel/net/bridge.c:1) creates the exact file assigned to the parallel DOS bridge by f6-11 decision 4. **Smallest fix:** move this lwIP-specific handoff to a distinct filename and update its fixture reference. Preserve lwIP ingress while integrating f6-11’s additive, type-filtered tap; replacing `net_set_input` would disconnect one consumer.
+
+11. **P3 — Initial ephemeral-port randomization precedes the approved MAC mix.**  
+    [stack.c:175](src/kernel/net/lwip/stack.c:175) initializes TCP/UDP port starts before adapter attachment mixes MAC bytes ([bridge.c:40](src/kernel/net/bridge.c:40)). RAND and ISN hooks are present, but initial port selection uses only the earlier RTC/PIT/TSC mixture. **Smallest fix:** seed from the available primary MAC before transport initialization, or explicitly reseed port selection through reviewed glue.
+
+**Merge verdict: hold.** Fix the P1/P2 findings, add focused regressions, then obtain green sanitizer/host suites and the lead-owned canonical build and 128 MiB admission evidence.
