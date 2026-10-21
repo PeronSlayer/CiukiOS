@@ -92,7 +92,6 @@ def boot_minimum(cpu, entries, controller=None, complete=True, signature='SMAP')
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
-<<<<<<< HEAD
     if request.startswith('f3:dos-conformance '):
         dos = re.fullmatch(DOS_SELECTOR_RE, request)
         if not dos or (dos[3] and dos[2] != 'ciukidos'):
@@ -100,11 +99,9 @@ def selector(request, source='menu', validated_fw_cfg=False):
         return {'phase': 3, 'probe': 'dos-conformance', 'run': dos[1],
                 'platform': None, 'safe': False, 'guest': dos[2],
                 'kernel': 'unified' if dos[3] else dos[2]}
-=======
     title = re.fullmatch(r'f3:title run=([0-9a-fA-F]{8}) title=([a-z][a-z0-9-]{0,22})', request)
     if title:
         return {'phase': 3, 'probe': 'title', 'run': title[1], 'title': title[2], 'platform': None, 'safe': False}
->>>>>>> main
     match = re.fullmatch(SELECTOR_RE, request)
     if not match:
         raise ValueError('invalid selector grammar or probe')
