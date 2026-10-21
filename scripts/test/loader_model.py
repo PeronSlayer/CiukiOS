@@ -230,6 +230,8 @@ def boot_options(options, safe=False, serial=True):
             safe=safe or token=='safe=1'
         elif token in ('serial=0','serial=1'):
             serial=serial and token=='serial=1'
+        elif token=='accel=0':
+            pass  # Preserved boot-info options; consumed by the kernel.
         elif re.fullmatch(r'mode=0x[0-9a-fA-F]{4}',token) and int(token[7:],16)<=0x3fff:
             mode=int(token[7:],16)
         else:raise ValueError('SELECT_ERROR: malformed BOOT.CFG token')

@@ -35,7 +35,7 @@ struct chip {
     unsigned words, fills, lines, checkpoints, reset_edges, reset_delay;
     unsigned active_id, durable_id, result_lines, fail_checkpoint;
     bool hang, busy, stuck, descriptor_hang, freeze, delay_fail, result_pending;
-    bool config3, checkpoint_failed, supersavage, setup, winner_pending;
+    bool config3, checkpoint_failed, supersavage, setup, winner_pending, wait_2d;
     unsigned winners, durable_winners;
     uint64_t line_cost;
     uint32_t offset;
@@ -57,6 +57,15 @@ static void wr(void *ctx,uint32_t r,uint32_t v)
     struct chip *c=ctx; c->us++;
     if (r<SAVAGE_BCI || r>=SAVAGE_BCI+64) { c->reg[r/4]=v; return; }
     assert(!c->result_pending || c->checkpoint_failed); /* cleanup allowed after sink failure */
+    /* Production setup now fences the queued descriptor before the sweep.
+     * This transport executes synchronously; a busy engine must not publish
+     * the tag beyond WAIT_2D. The delayed-parser model lives in savage2d_test. */
+    if (!c->words && v==0xc0020000u) { c->wait_2d=true; return; }
+    if (!c->words && (v&0xffff0000u)==0x98000000u) {
+        assert(c->wait_2d && (v&0xffffu)); c->wait_2d=false;
+        if (!c->busy) c->reg[SAVAGE_EVENT_STATUS/4]=v&0xffffu;
+        return;
+    }
     c->packet[c->words++]=v;
     if ((c->packet[0]&0xff000000u)==0x96000000u) {
         if (c->words==2) {
