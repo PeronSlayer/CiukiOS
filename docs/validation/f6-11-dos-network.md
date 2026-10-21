@@ -33,6 +33,32 @@ A down/up transition is retained until consumed; gate contention retries on
 the next pass. Generation mismatch also drains without programming a replacement
 NIC. Exact host commands and limitations are in the Amendment 3 report.
 
+## Amendment 4 harness reconciliation
+
+Research rechecked online on 2026-10-21: the [DP8390D ISR description](https://media.digikey.com/pdf/Data%20Sheets/Texas%20Instruments%20PDFs/DP8390D%2CNS32490D.pdf),
+[QEMU NE2000 model](https://raw.githubusercontent.com/qemu/qemu/master/hw/net/ne2000.c),
+[DPMI 1.0 interrupt/callback specification](https://docs.pcjs.org/specs/dpmi/1991_03_12-DPMI_Spec_v10.pdf),
+[DOOM IPXNET.C](https://raw.githubusercontent.com/id-Software/DOOM/master/ipx/IPXNET.C),
+[IPXSETUP.C](https://raw.githubusercontent.com/id-Software/DOOM/master/ipx/IPXSETUP.C),
+[BUILD MULTI.C](https://github.com/videogamepreservation/dukenukem3d/blob/master/SRC/MULTI.C)
+and the Novell summaries linked above. These references retain their existing
+roles and limitations; Amendment 4 changes host harnesses only.
+
+The lead's kernel log identifies `irq_work_replay.py`'s `vm-clock` link as the
+missing-pool caller. The main kernel script's four DOSVM links already include
+the allocator. The replay now builds and links the same real pool archive and
+forces its initialization constructor. The add/remove test invokes the shared
+`prepare_lifecycle.py` generator in its own include directory and links the
+network units and matching sanitized/plain pool in both profiles.
+
+The scenario-11 abort was the replay's stale title assertion. The production
+panel uses "DOS kernel, memory and network" and already has a 128-byte selection
+buffer. Update the observer and exercise IPX enable/disable, complete network
+labels, unchanged kernel/memory preferences, dirty repaint counts, focus return
+and pixel restoration. Production panel code is unchanged. Exact commands,
+results, the post-f0-50 gate checks and sanitizer restrictions are recorded in
+the report's Amendment 4 section.
+
 ## Interfaces and limits
 
 Bridge mutation is serialized in thread context by its selected-port owner.
