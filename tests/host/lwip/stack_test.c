@@ -468,6 +468,17 @@ static void dns_dhcp_tests(void)
     CHECK(!status && answer==PP_HTONL(0xcb007109) && dns_queries && arp_requests);
     CHECK(net_resolve(&client,"bad..name",&answer,&status)==-EINVAL);
     unsigned before=dns_queries;CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries==before);
+    /* f6-18 test-profile entries: consulted before any DNS query, two slots,
+     * grammar-checked names, cleared by address 0; nothing armed by default. */
+    CHECK(net_resolve_override("bad..name",PP_HTONL(0x0a000264))==-EINVAL);
+    CHECK(!net_resolve_override("fixture.test",PP_HTONL(0x0a000264)));
+    CHECK(!net_resolve_override("untrusted.test",PP_HTONL(0x0a000264)));
+    CHECK(net_resolve_override("third.test",PP_HTONL(0x0a000264))==-ENOSPC);
+    before=dns_queries;answer=0;status=-1;
+    CHECK(!net_resolve(&client,"fixture.test",&answer,&status) && !status && answer==PP_HTONL(0x0a000264) && dns_queries==before);
+    CHECK(!net_resolve(&client,"untrusted.test",&answer,&status) && !status && answer==PP_HTONL(0x0a000264) && dns_queries==before);
+    CHECK(!net_resolve_override("fixture.test",0));CHECK(!net_resolve_override("untrusted.test",0));
+    CHECK(!net_resolve_override("third.test",PP_HTONL(0x0a000264)));CHECK(!net_resolve_override("third.test",0));
     amendment_dns_renewal();before=dns_queries;
     CHECK(tcpip_callback_wait(dns_servers_reset,NULL)==ERR_OK);
     CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries>before);

@@ -65,7 +65,7 @@ class SelectorTableTests(unittest.TestCase):
         self.assertLessEqual({'boot', 'runner', 'all', 'core'}, kernel[0])
         self.assertLessEqual({'sweep', 'boot', 'runner', 'all', 'core'}, menu[0])
         self.assertLessEqual({'f5-core', 'w32-objects', 'w32-dialogs'}, kernel[5] & menu[5])
-        self.assertEqual(kernel[6], {'net-arp'})
+        self.assertEqual(kernel[6], {'net-arp', 'browser'})
         self.assertTrue(probe_tables.loader_model_accepts(5, 'w32-objects'))
         self.assertFalse(probe_tables.loader_model_accepts(5, 'no-such-probe'))
 

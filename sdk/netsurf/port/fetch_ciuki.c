@@ -12,6 +12,7 @@
 #include "content/fetchers.h"
 #include "content/urldb.h"
 #include "framebuffer/ciuki/net.h"
+#include "framebuffer/ciuki/testmode.h"
 struct ciuki_fetch {
     struct ciuki_fetch *next;
     struct fetch *parent;
@@ -20,7 +21,18 @@ struct ciuki_fetch {
     bool active,aborted,only_2xx;
     const char *error;
     fetch_msg_type terminal;
+    size_t delivered; /* decoded body bytes handed to the core (f6-18 observer) */
 };
+/* Host harnesses link the fetcher without chrome.c: silent defaults. */
+__attribute__((weak)) void ciuki_test_fetch_observe(unsigned status,size_t bytes,int tls_error,const char *error)
+{ (void)status;(void)bytes;(void)tls_error;(void)error; }
+__attribute__((weak)) const br_x509_trust_anchor *ciuki_test_anchors(size_t *count) { *count=0;return NULL; }
+static void observe(struct ciuki_fetch *f)
+{
+    unsigned status=f->job && f->job->http ? f->job->http->status : 0;
+    int tls=f->job && f->job->secure ? (int)f->job->tls_error : -1;
+    ciuki_test_fetch_observe(status,f->delivered,tls,f->error?f->error:f->job?f->job->error:NULL);
+}
 static struct ciuki_net *network;
 static struct ciuki_fetch *jobs;
 static unsigned references;
@@ -100,12 +112,16 @@ static bool http_event(void *context,enum ciuki_http_event e,const void *bytes,s
     }
     fetch_msg msg={.type=e==CIUKI_HTTP_DATA?FETCH_DATA:FETCH_HEADER};
     msg.data.header_or_data.buf=bytes;msg.data.header_or_data.len=count;
+    if(e==CIUKI_HTTP_DATA)f->delivered+=count;
     return notify(f,&msg);
 }
 static bool initialise(lwc_string *scheme)
 {
     (void)scheme;
-    if(!references){network=ciuki_net_create(NULL,0);if(!network)return false;}
+    if(!references){
+        size_t count=0;const br_x509_trust_anchor *anchors=ciuki_test_anchors(&count);
+        network=ciuki_net_create(anchors,count);if(!network)return false;
+    }
     references++;return true;
 }
 static bool acceptable(const nsurl *url)
@@ -176,7 +192,7 @@ static void poll_fetch(lwc_string *scheme)
             msg.type=FETCH_ERROR;msg.data.error=f->error?f->error:f->job->error;
         } else if(msg.type==FETCH_REDIRECT)msg.data.redirect=f->job->http->location;
         fetch_remove_from_queues(f->parent);
-        if(!f->aborted)notify(f,&msg);
+        if(!f->aborted){observe(f);notify(f,&msg);}
         fetch_free(f->parent);
     }
     in_poll=false;
