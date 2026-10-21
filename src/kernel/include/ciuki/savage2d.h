@@ -7,6 +7,7 @@ struct pci_func;
 #define SAVAGE_MMIO_BYTES 0x80000u
 #define SAVAGE_BCI 0x10000u
 #define SAVAGE_STATUS 0x48c60u
+#define SAVAGE_EVENT_STATUS 0x48c64u
 struct savage_io {
     void *ctx;
     uint32_t (*read32)(void *, uint32_t);
@@ -33,12 +34,15 @@ struct savage2d {
     uint8_t saved40, saved31, saved50, saved45, saved55;
     uint32_t saved_bci, saved_gbd[2];
     uint32_t idle_mask, idle_value, status;
+    uint32_t event_before, event_status;
+    uint16_t event_tag;
     const char *reason;
     uint64_t operations, idle_waits, fallbacks, timeouts;
     uint64_t reset_us, poll_us;
     bool active, quarantined, cpu_safe, touched, supersavage, cursor_loaded, status_logged;
     /* submitted includes BCI register setup, before drawing is enabled. */
     bool mmio_saved, status_ready, submitted, final_idle_checked;
+    bool event_pending;
 };
 bool savage2d_supported(const struct pci_func *);
 /* No register/file access: decide before scheduling marker persistence. */

@@ -425,6 +425,17 @@ config_read:
 .option:
     mov dx, di
     sub dx, si
+    cmp dx, 7
+    jne .safe_option
+    cmp dword [si], 'acce'
+    jne .invalid
+    cmp word [si+4], 'l='
+    jne .invalid
+    cmp byte [si+6], '0'
+    jne .invalid
+    ; Preserved in B(options); kernel declines acceleration before marker I/O.
+    jmp .next
+.safe_option:
     cmp dx, 6
     jne .serial
     cmp dword [si], 'safe'
