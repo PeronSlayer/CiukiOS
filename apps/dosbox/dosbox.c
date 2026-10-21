@@ -241,9 +241,10 @@ int main(int argc, char **argv)
                     unsigned previous_kernel=kernel, previous_memory=memory, previous_network=network;
                     char previous_detail[sizeof(setting_detail)];
                     memcpy(previous_detail,setting_detail,sizeof(previous_detail));
+                    /* Rows 1, 2 and 7: 5 and 6 belong to the network setting (f6-11). */
                     if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_1 || packet.event.code==CIUKI_KEY_2 ||
-                                                 packet.event.code==CIUKI_KEY_5)) {
-                        unsigned choice=packet.event.code==CIUKI_KEY_5 ? CIUKI_DOSVM_UNIFIED :
+                                                 packet.event.code==CIUKI_KEY_7)) {
+                        unsigned choice=packet.event.code==CIUKI_KEY_7 ? CIUKI_DOSVM_UNIFIED :
                                         packet.event.code==CIUKI_KEY_2 ? CIUKI_DOSVM_FREEDOS13 : 0;
                         if (dosbox_setting_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
                         else { kernel=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }

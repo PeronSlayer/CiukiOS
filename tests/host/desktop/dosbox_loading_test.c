@@ -62,6 +62,7 @@ static const struct {
     {0, 0, CIUKI_KEY_1, 0, 0, "--dos-memory=paged"},  /* 19: duplicate selection changes no pixels */
     {0, 0, CIUKI_KEY_6, 0, 0, NULL}, /* 20: enable IPX without changing kernel/memory */
     {1, 1, CIUKI_KEY_5, 1, 1, NULL}, /* 21: disable IPX, longest kernel/memory labels */
+    {0, 0, CIUKI_KEY_7, 2, 0, NULL}, /* 22: unified kernel on row 7, network untouched */
 };
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
@@ -216,7 +217,7 @@ void du_text_font(struct du_canvas *c,int font,int x,int y,const char *s,uint32_
 { (void)font; du_text_fit(c,x,y,350,s,ink); if (!strcmp(s,"DOS kernel, memory and network")) c->pixels[y*640+x]=0x123456; }
 int du_text_wrap(struct du_canvas *c,struct du_rect b,const char *s,uint32_t ink)
 {
-    if (strstr(s,"5  Network: off (default)\n6  Network: IPX (LAN)\n")) network_rows++;
+    if (strstr(s,"5  Network: off (default)\n6  Network: IPX (LAN)\n7  CiukiDOS unified (preview)\n")) network_rows++;
     if (!strncmp(s,"Kernel: ",8)) {
         const char *network=strstr(s,". Network: ");
         unsigned ipx=scenario==21;
