@@ -26,7 +26,6 @@ import run as runner  # noqa: E402
 ALL = ('kernel', 'menu', 'loader_model')
 # (phase, probe name) -> owner and the exact set of tables that lack the name.
 KNOWN_UNREGISTERED = {
-    (5, 'w32-fixtures'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
     (5, 'w32-kernel32'): {'owner': 'f5-21', 'missing': ALL, 'note': 'guest observer pending; absent from all three selector tables'},
     (5, 'w32-restart'): {'owner': 'f5-21', 'missing': ALL, 'note': 'authored, unrun restart case; guest observer pending'},
     # Found by this check: authored cases whose probe none of the tables knows.
@@ -40,17 +39,14 @@ KNOWN_UNREGISTERED = {
     (5, 'w32-ddraw'): {'owner': 'f5-11', 'missing': ALL, 'note': 'case integration_pending: ddraw-exercise.exe and kernel observer'},
     (5, 'w32-input'): {'owner': 'f5-13 (lead)', 'missing': ALL, 'note': 'case integration_pending: input PE fixture and selector'},
     (5, 'w32-installer-nsis'): {'owner': 'f5-15A2', 'missing': ALL, 'note': 'case written by f5-15A; probe arrives with the NSIS flow (continuation f5-15A2)'},
-    (4, 'vm-audio-jitter'): {
-        'owner': 'f4 audio gate (f4-35)', 'missing': ALL,
-        'note': 'registered with CIUKI_F4_PROBE (src/kernel/probes/f4_probes_vm_audio.c) but absent from all three tables'},
     # f5-17B title probes: win32-<workload id>, selected by fw_cfg only. The
     # kernel registers none yet; win32_runner reports not_run before any boot.
     (5, 'win32-diablo-shareware'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-starcraft-shareware'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-sc'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-aoe-trial'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-half-life-uplink'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-ut-demo-348'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
-    (5, 'win32-worms-armageddon-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
+    (5, 'win32-wa'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-heroes3-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-rct-demo'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
     (5, 'win32-jazz2-shareware'): {'owner': 'f5-15B/f5-17B (lead guest driver)', 'missing': ALL, 'note': 'authored acceptance case; no guest probe'},
@@ -123,19 +119,20 @@ class SelectorTableTests(unittest.TestCase):
 
     def test_lead_note_probes_are_reported_for_the_lead(self):
         # f5-22: the model must match production; f5-21 owns the observers.
-        for name in ('w32-fixtures', 'w32-kernel32', 'w32-restart'):
+        for name in ('w32-kernel32', 'w32-restart'):
             with self.subTest(probe=name):
                 self.assertEqual(probe_tables.registration(5, name),
                                  {'kernel': False, 'menu': False, 'loader_model': False})
 
     def test_win32_title_probe_names_against_the_kernel_buffer(self):
         # struct probe_selection.probe[24]: at most 23 bytes of probe name.
-        long_names = []
         manifest = json.loads((ROOT/'tests/win32/workloads.json').read_text())
-        for row in manifest['workloads']:
-            if len('win32-'+row['id']) > probe_tables.PROBE_LIMIT:
-                long_names.append(row['id'])
-        self.assertEqual(sorted(long_names), ['starcraft-shareware', 'worms-armageddon-demo'])
+        aliases = [row['probe'] for row in manifest['workloads']]
+        self.assertEqual(len(aliases), len(set(aliases)))
+        for alias in aliases:
+            self.assertLessEqual(len(alias.encode('ascii')), probe_tables.PROBE_LIMIT)
+        self.assertIn('win32-sc', aliases)
+        self.assertIn('win32-wa', aliases)
 
 
 if __name__ == '__main__':

@@ -169,11 +169,11 @@
     {
       "id": "win32-installer-starcraft-shareware-qemu-t23",
       "kind": "win32-installer",
-      "probe": "win32-starcraft-shareware",
+      "probe": "win32-sc",
       "profile": "qemu-t23",
-      "selector": "f5:win32-starcraft-shareware run={run_id}",
+      "selector": "f5:win32-sc run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-starcraft-shareware probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15B: kernel registration of the win32-sc probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
       "fixtures": [
         {
           "generator": "win32-workload",
@@ -821,11 +821,11 @@
     {
       "id": "win32-installer-worms-armageddon-demo-qemu-t23",
       "kind": "win32-installer",
-      "probe": "win32-worms-armageddon-demo",
+      "probe": "win32-wa",
       "profile": "qemu-t23",
-      "selector": "f5:win32-worms-armageddon-demo run={run_id}",
+      "selector": "f5:win32-wa run={run_id}",
       "timeout": 600,
-      "integration_pending": "f5-15B: kernel registration of the win32-worms-armageddon-demo probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
+      "integration_pending": "f5-15B: kernel registration of the win32-wa probe, the guest installer driver and inventory probe; reference-run pins for the install screens",
       "fixtures": [
         {
           "generator": "win32-workload",

@@ -31,6 +31,9 @@ class WorkloadTests(unittest.TestCase):
     def test_schema_rejects_dangerous_or_unsubstantiated_mutations(self):
         mutations = [
             lambda m: m.update(schema_version=2),
+            lambda m: m['workloads'][0].update(probe='win32-'+'x'*24),
+            lambda m: m['workloads'][0].update(probe='win32-UPPER'),
+            lambda m: m['workloads'][0].update(probe=m['workloads'][1]['probe']),
             lambda m: m.update(download_directory='/tmp'),
             lambda m: m['workloads'].pop(0),
             lambda m: m['workloads'].append(copy.deepcopy(m['workloads'][0])),

@@ -7,10 +7,10 @@
 #ifndef CIUKI_W32_UPPER_CONTROLLER_H
 #define CIUKI_W32_UPPER_CONTROLLER_H
 #include <stdint.h>
-/* Fixed, 64 KiB-aligned and below the builtin region (CIUKI_W32_APP_LIMIT),
- * one page below the w32-dialogs block: the fixture reserves and commits it
- * before anything else. */
-#define W32_UPPER_RESULT_VA 0x6ffe0000u
+/* Fixed, 64 KiB-aligned application allocation, above the dialogs page.
+ * The loader's top-down metadata owns 0x6fff0000 and can extend below it;
+ * neither that address nor 0x6ffe0000 is a free result-page guarantee. */
+#define W32_UPPER_RESULT_VA 0x10010000u
 #define W32_UPPER_MAGIC 0x52505055u /* "UPPR" */
 #define W32_UPPER_VERSION 1u
 #define W32_UPPER_PATH "/System/Win32/Fixtures/upper-exercise.exe"

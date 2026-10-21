@@ -119,6 +119,9 @@ def build(out=None):
     from scripts.win32 import upper_fixture
     upper=upper_fixture.build(fixture_source,out)
     hashes[upper.name]=hashlib.sha256(upper.read_bytes()).hexdigest()
+    from scripts.win32 import kernel32_fixture
+    kernel32_exercise=kernel32_fixture.build(fixture_source,out)
+    hashes[kernel32_exercise.name]=hashlib.sha256(kernel32_exercise.read_bytes()).hexdigest()
     from scripts.win32 import cd_media
     for image in cd_media.build(fixture_source):
         hashes[image.name]=hashlib.sha256(image.read_bytes()).hexdigest()

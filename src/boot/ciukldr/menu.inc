@@ -727,6 +727,6 @@ deadline_expired:
 menu_tick dd 0
 menu_polls dd 0
 
-f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,0
-f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,0
+f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,0
 f6_probe_names db 'net-arp',0,0

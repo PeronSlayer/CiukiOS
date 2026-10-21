@@ -708,7 +708,8 @@ class FixtureTests(unittest.TestCase):
         self.assertRegex(out, r'DONE detach=\d+ .*allocations=[02] mappings=0')
         case = upper_case()
         run = '12345678'
-        body = [('BEGIN', ''), ('DATA', 'case=fixture path=/System/Win32/Fixtures/upper-exercise.exe pid=7 host_dry_run=1')]
+        body = [('BEGIN', ''), ('DATA', 'case=write-gate expected=0 observed=0'),
+                ('DATA', 'case=fixture path=/System/Win32/Fixtures/upper-exercise.exe pid=7 host_dry_run=1')]
         body += [(event, fields) for probe, event, fields in records if probe == 'w32-upper-dlls']
         body.append(('END', 'status=PASS'))
         parser = evidence.Parser(run, 'w32-upper-dlls')
@@ -723,7 +724,8 @@ class FixtureTests(unittest.TestCase):
         # The predicates discriminate: a DLL that failed to load, an entry that
         # failed, a base that moved, a free that failed or a nonzero exit each
         # fail the case.
-        for marker, good, bad in (('name=msvcrt.dll', 'loaded=1', 'loaded=0'),
+        for marker, good, bad in (('case=write-gate', 'observed=0', 'observed=-30'),
+                                  ('name=msvcrt.dll', 'loaded=1', 'loaded=0'),
                                   ('name=shell32.dll', 'entry=1', 'entry=0'),
                                   ('name=ole32.dll', 'freed=1', 'freed=0'),
                                   ('case=upper_dlls', 'base_errors=0', 'base_errors=1'),
