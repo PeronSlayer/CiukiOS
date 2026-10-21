@@ -44,3 +44,7 @@ Outside the sandbox (logs in `build/lead/` of this worktree): (1) `test_four_pre
 3. `scripts/test/host_kernel_tests.sh`: `FAIL evidence record scope: probes/installer_probe.inc:63, :71, :75, :114, :116` — the installer probe emits evidence records outside the allowed scope; follow the registered probes' pattern (records from the probe's own scope only).
 4. The `f5_restart_observer.inc` stack-frame error in the core-observers test comes from `main` and is fixed there by the lead; ignore it here (the lead merges `main` again before integration).
 Report in "Amendment 4".
+
+## Amendment 5 (lead, 2026-10-21): the f5-20A kernel32 fixture expectation on delayed moves
+
+Installers, Win32 and gate suites are green. `scripts/test/host_kernel_tests.sh` fails only in `tests/host/win32/test_kernel32.py::test_f5_20a_kernel32_upper_entry_points`, fixture line 874: `MoveFileExW(W("a"), 0, 4)` is expected to succeed, but by f5-15A amendment 1 (owner-decided Windows 98 behaviour) `MOVEFILE_DELAY_UNTIL_REBOOT` returns FALSE with error 120 and installers write `WININIT.INI [rename]` themselves. Update that fixture expectation (and any sibling case) to the f5-15A rule with a comment citing it; nothing else. Rerun `tests.host.win32.test_kernel32` and the kernel script as far as the sandbox allows. Report in "Amendment 5".
