@@ -11,6 +11,8 @@
 #include <ciuki/signal.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
+#include "dosvm_network.h"
+#include <ciuki/dosvm_network_abi.h>
 extern int display_worker_start(void) __attribute__((weak));
 
 struct binding {
@@ -239,9 +241,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (op == CIUKI_DOSVM_CREATE) {
         allowed.surface_fd = c.surface_fd;
         if (c.launch.kernel>CIUKI_DOSVM_UNIFIED || c.launch.game>CIUKI_DOSVM_GAME_COUNT ||
-            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED) return -EINVAL;
+            (c.launch.kernel && !c.launch.game) || c.launch.memory>CIUKI_DOSVM_MEMORY_LOCKED ||
+            dosvm_launch_network(&c)>CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
         allowed.launch.kernel=c.launch.kernel; allowed.launch.game=c.launch.game;
         allowed.launch.memory=c.launch.memory;
+        dosvm_launch_network_set(&allowed,dosvm_launch_network(&c));
         unsigned n = 0;
         while (n < sizeof(c.name) && c.name[n]) {
             if (c.name[n] < 32 || c.name[n] > 126) return -EINVAL;
@@ -331,7 +335,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         v->owner_pid = p->pid;
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;
-        else e = dosvm_boot(v);
+        else if (!(e = dosvm_network_launch(v,dosvm_launch_network(&c)))) e = dosvm_boot(v);
         if (e) {
             release_binding(b);
             if (!b->pid) b = 0; /* released; otherwise collected below/later */
