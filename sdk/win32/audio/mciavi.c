@@ -111,6 +111,7 @@ IMPORT uint32_t W32API GetTickCount(void);
 #define WM_CIUKI_AVI_DESTROY 0x8002u /* close on another thread */
 enum { STOPPED, PLAYING, PAUSED };
 struct avi {
+  struct mci_cleanup cleanup;
   struct mci_device *device;
   void *file, *video, *audio, *getter;
   uint32_t frames, rate, scale, width, height, start_frame;
@@ -123,10 +124,11 @@ struct avi {
   char title[128];
   /* audio */
   uint8_t aformat[1046];
-  uint32_t atag, achannels, arate, aalign, aspb, achunks, astart;
+  uint32_t atag, achannels, arate, aalign, aspb, achunks, astart, afixed;
   uint32_t *acum; /* cumulative samples before each chunk */
   uint32_t anext, askip, atotal, aopen;
   uint64_t aqueued;
+  uint32_t aremaining;
   struct wa_format pcm;
   uintptr_t wave, acm;
   struct wa_header header[AVI_BUFFERS];
@@ -244,17 +246,16 @@ static uint32_t from_frame(struct avi *a, uint32_t frame) {
 }
 
 /* ---- audio ---- */
-static void audio_release(struct avi *a) {
+static int audio_release(struct avi *a) {
   if (a->wave) {
-    waveOutReset(a->wave);
+    if (waveOutReset(a->wave)) return 0;
     for (unsigned i = 0; i < AVI_BUFFERS; i++)
       if (a->header[i].flags & WA_PREPARED)
-        waveOutUnprepareHeader(a->wave, &a->header[i], sizeof(a->header[i]));
-    waveOutClose(a->wave);
+        if (waveOutUnprepareHeader(a->wave, &a->header[i], sizeof(a->header[i]))) return 0;
+    if (waveOutClose(a->wave)) return 0;
     a->wave = 0;
   }
-  if (a->acm)
-    acmStreamClose(a->acm, 0);
+  if (a->acm && acmStreamClose(a->acm, 0)) return 0;
   a->acm = 0;
   for (unsigned i = 0; i < AVI_BUFFERS; i++) {
     host->free(a->buffer[i]);
@@ -263,13 +264,24 @@ static void audio_release(struct avi *a) {
   host->free(a->packed);
   a->packed = 0;
   a->aopen = 0;
+  return 1;
 }
-/* Decodes whole chunks into header i (at most buffer_bytes). */
+/* Decodes bounded whole sample/block batches (or variable-size chunks). */
 static uint32_t audio_fill(struct avi *a, unsigned i) {
   uint32_t out = 0, align = a->pcm.align;
-  while (a->anext < a->achunks) {
+  while (a->anext < a->achunks && a->aremaining) {
+    uint32_t count = 1;
+    if (a->afixed) {
+      count = (a->buffer_bytes - out) / (a->aspb * align);
+      if (count > a->achunks - a->anext)
+        count = a->achunks - a->anext;
+      uint32_t blocks = (uint32_t)(((uint64_t)a->aremaining + a->askip + a->aspb - 1) / a->aspb);
+      if (count > blocks) count = blocks;
+      if (!count)
+        break;
+    }
     int32_t bytes = 0;
-    if (AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), 1, 0, 0,
+    if (AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), (int32_t)count, 0, 0,
                       &bytes, 0) ||
         bytes < 0)
       return MCIERR_FILE_READ;
@@ -279,12 +291,11 @@ static uint32_t audio_fill(struct avi *a, unsigned i) {
     if (out && out + decoded > a->buffer_bytes)
       break;
     if (decoded > a->buffer_bytes || (uint32_t)bytes > a->packed_bytes) {
-      a->anext++; /* oversized chunk: skipped, never truncated mid-block */
-      continue;
+      return MCIERR_INVALID_FILE; /* never silently discard an audio chunk */
     }
     uint8_t *target = a->buffer[i] + out;
     uint8_t *raw = a->atag == 1 ? target : a->packed;
-    if (bytes && AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), 1,
+    if (bytes && AVIStreamRead(a->audio, (int32_t)(a->astart + a->anext), (int32_t)count,
                                raw, bytes, 0, 0))
       return MCIERR_FILE_READ;
     uint32_t produced = (uint32_t)bytes;
@@ -320,8 +331,10 @@ static uint32_t audio_fill(struct avi *a, unsigned i) {
       produced -= skip;
       a->askip = 0;
     }
+    if (produced / align > a->aremaining) produced = a->aremaining * align;
+    a->aremaining -= produced / align;
     out += produced;
-    a->anext++;
+    a->anext += count;
   }
   if (!out)
     return 0;
@@ -335,23 +348,25 @@ static uint32_t audio_fill(struct avi *a, unsigned i) {
   a->aqueued += out / align;
   return 0;
 }
-static void audio_start(struct avi *a, uint32_t from_frame) {
+static uint32_t audio_start(struct avi *a, uint32_t from_frame) {
   if (!a->audio || !a->audio_on || !a->achunks)
-    return;
-  uint64_t sample = (uint64_t)ms_of(a, from_frame) * a->arate / 1000;
-  uint32_t chunk = 0;
-  while (chunk + 1 < a->achunks && a->acum[chunk + 1] <= sample)
-    chunk++;
-  if (sample >= a->atotal)
-    return;
+    return 0;
+  uint64_t sample = (uint64_t)from_frame * a->scale * a->arate / a->rate;
+  uint64_t end = ((uint64_t)a->to + 1) * a->scale * a->arate / a->rate;
+  if (end > a->atotal) end = a->atotal;
+  if (sample >= end) return 0;
+  a->aremaining = (uint32_t)(end - sample);
+  uint32_t chunk = a->afixed ? (uint32_t)sample / a->aspb : 0;
+  if (!a->afixed)
+    while (chunk + 1 < a->achunks && a->acum[chunk + 1] <= sample)
+      chunk++;
   if (waveOutOpen(&a->wave, 0, &a->pcm, 0, 0, 0)) {
-    a->wave = 0;
-    return; /* video plays without sound when the device is unavailable */
+    return MCIERR_WAVE_OUTPUTSUNSUITABLE;
   }
   if (a->atag != 1 &&
       acmStreamOpen(&a->acm, 0, a->aformat, &a->pcm, 0, 0, 0, 0)) {
     audio_release(a);
-    return;
+    return MCIERR_WAVE_OUTPUTSUNSUITABLE;
   }
   a->buffer_bytes = a->arate / 4 * a->pcm.align;
   if (a->atag != 1) {
@@ -366,33 +381,32 @@ static void audio_start(struct avi *a, uint32_t from_frame) {
   for (unsigned i = 0; i < AVI_BUFFERS; i++)
     if (!a->buffer[i] || (a->atag != 1 && !a->packed)) {
       audio_release(a);
-      return;
+      return MCIERR_OUT_OF_MEMORY;
     }
   a->anext = chunk;
-  a->askip = (uint32_t)(sample - a->acum[chunk]);
+  a->askip = (uint32_t)sample - (a->afixed ? chunk * a->aspb : a->acum[chunk]);
   a->aqueued = 0;
   a->aopen = 1;
-  for (unsigned i = 0; i < AVI_BUFFERS; i++)
-    if (audio_fill(a, i)) {
-      audio_release(a);
-      return;
-    }
+  for (unsigned i = 0; i < AVI_BUFFERS; i++) {
+    uint32_t error = audio_fill(a, i);
+    if (error) { audio_release(a); return error; }
+  }
+  return 0;
 }
-static void audio_service(struct avi *a) {
+static uint32_t audio_service(struct avi *a) {
   if (!a->wave)
-    return;
+    return 0;
   for (unsigned i = 0; i < AVI_BUFFERS; i++) {
     struct wa_header *h = &a->header[i];
     uint32_t f = __atomic_load_n(&h->flags, __ATOMIC_ACQUIRE);
     if ((f & WA_PREPARED) && !(f & WA_QUEUED)) {
       waveOutUnprepareHeader(a->wave, h, sizeof(*h));
       h->flags = 0;
-      if (audio_fill(a, i)) {
-        audio_release(a);
-        return;
-      }
+      uint32_t error = audio_fill(a, i);
+      if (error) return error;
     }
   }
+  return 0;
 }
 
 /* ---- device ---- */
@@ -471,9 +485,11 @@ static uint32_t avi_open(struct mci_device *d, uint32_t flags,
       uint32_t bits = w32_u16(a->aformat + 14);
       a->aspb = a->atag == 1 ? 1 : (size >= 20 ? w32_u16(a->aformat + 18) : 0);
       a->astart = (uint32_t)AVIStreamStart(a->audio);
+      a->afixed = w32_u32(ainfo + 44);
       int32_t chunks = AVIStreamLength(a->audio);
       int ok = a->achannels && a->achannels <= 2 && a->arate && a->aalign &&
-               a->aspb && chunks > 0 && (uint32_t)chunks <= AVI_CHUNKS &&
+               a->aspb && chunks > 0 &&
+               (a->afixed ? a->afixed == a->aalign : (uint32_t)chunks <= AVI_CHUNKS) &&
                (a->atag == 1 || a->atag == 2 || a->atag == 17);
       if (ok) {
         a->pcm = (struct wa_format){1, (uint16_t)a->achannels, a->arate, 0,
@@ -483,7 +499,12 @@ static uint32_t avi_open(struct mci_device *d, uint32_t flags,
         a->pcm.average = a->arate * a->pcm.align;
         ok = a->pcm.align && (a->atag != 1 || a->aalign == a->pcm.align);
       }
-      if (ok) {
+      if (ok && a->afixed) {
+        a->achunks = (uint32_t)chunks;
+        ok = a->achunks <= 0xffffffffu / a->aspb;
+        if (ok)
+          a->atotal = a->achunks * a->aspb;
+      } else if (ok) {
         a->achunks = (uint32_t)chunks;
         a->acum = host->alloc((a->achunks + 1) * 4);
         ok = a->acum != 0;
@@ -592,6 +613,12 @@ static void halt(struct mci_device *d, struct avi *a) {
   if (d->busy)
     host->abort(d);
 }
+static int avi_cleanup(void *p) {
+  struct avi *a = p;
+  if (!audio_release(a)) return 0;
+  host->free(a);
+  return 1;
+}
 static void avi_close(struct mci_device *d) {
   struct avi *a = d->data;
   halt(d, a);
@@ -611,18 +638,30 @@ static void avi_close(struct mci_device *d) {
   AVIStreamRelease(a->video);
   AVIFileRelease(a->file);
   host->free(a->acum);
-  host->free(a);
+  if (!avi_cleanup(a)) {
+    a->cleanup.run = avi_cleanup;
+    a->cleanup.context = a;
+    host->defer(&a->cleanup);
+  }
 }
 static uint32_t elapsed(struct avi *a) {
   uint32_t now = a->mode == PAUSED ? a->pause_tick : GetTickCount();
   return now - a->start_tick;
 }
+static void playback_failure(struct mci_device *d, struct avi *a, uint32_t error) {
+  audio_release(a);
+  a->mode = STOPPED;
+  d->completion_error = error;
+  restore_fullscreen(a);
+  host->complete(d, MCI_NOTIFY_FAILURE);
+}
 static void avi_service(struct mci_device *d, uint32_t now) {
   (void)now;
   struct avi *a = d->data;
-  if (a->mode != PLAYING)
-    return;
-  audio_service(a);
+  if (a->mode == STOPPED) audio_release(a);
+  if (a->mode != PLAYING) return;
+  uint32_t error = audio_service(a);
+  if (error) { playback_failure(d, a, error); return; }
   uint32_t ms = elapsed(a);
   uint32_t span = ms_of(a, a->to - a->from + 1);
   uint32_t target = a->from + frame_of(a, ms);
@@ -631,11 +670,11 @@ static void avi_service(struct mci_device *d, uint32_t now) {
   if (target != a->drawn) {
     if (target > a->drawn + 1)
       a->skipped += target - a->drawn - 1;
-    show_frame(a, target);
+    if (!show_frame(a, target)) { playback_failure(d, a, MCIERR_INVALID_FILE); return; }
   }
   if (ms >= span && a->wave && ms < span + 250) {
     /* Let the sound track drain (its tail is still in the mixer lead). */
-    int busy = a->anext < a->achunks;
+    int busy = a->aremaining && a->anext < a->achunks;
     for (unsigned i = 0; i < AVI_BUFFERS && !busy; i++)
       busy = !!(__atomic_load_n(&a->header[i].flags, __ATOMIC_ACQUIRE) &
                 WA_QUEUED);
@@ -644,10 +683,10 @@ static void avi_service(struct mci_device *d, uint32_t now) {
   }
   if (ms >= span) {
     if (a->repeat) {
-      audio_release(a);
       a->start_tick = GetTickCount();
-      show_frame(a, a->from);
-      audio_start(a, a->from);
+      if (!audio_release(a)) { playback_failure(d, a, MCIERR_DEVICE_NOT_READY); return; }
+      error = show_frame(a, a->from) ? audio_start(a, a->from) : MCIERR_INVALID_FILE;
+      if (error) playback_failure(d, a, error);
       return;
     }
     a->position = a->to;
@@ -660,6 +699,7 @@ static void avi_service(struct mci_device *d, uint32_t now) {
 }
 static uint32_t start(struct mci_device *d, struct avi *a, uint32_t from,
                       uint32_t to, uint32_t flags) {
+  if (!audio_release(a)) return MCIERR_DEVICE_NOT_READY;
   a->from = from;
   a->to = to;
   a->repeat = !!(flags & MCI_DGV_PLAY_REPEAT);
@@ -687,8 +727,8 @@ static uint32_t start(struct mci_device *d, struct avi *a, uint32_t from,
   } else if (a->window == a->own && !a->hidden)
     ShowWindow(a->own, 5);
   a->start_tick = GetTickCount();
-  show_frame(a, from);
-  audio_start(a, from);
+  uint32_t error = show_frame(a, from) ? audio_start(a, from) : MCIERR_INVALID_FILE;
+  if (error) { audio_release(a); a->mode = STOPPED; restore_fullscreen(a); return error; }
   host->begin(d);
   return MCI_ASYNC;
 }

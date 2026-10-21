@@ -15,6 +15,20 @@ def chunk(kind, payload):
     return codec.chunk(kind, payload)
 
 
+def avi_index(data, absolute=False):
+    """Add an authored old-style index to an unindexed, flat movi fixture."""
+    origin = data.index(b'movi')
+    end = origin + struct.unpack_from('<I', data, origin - 4)[0]
+    entries = bytearray()
+    at = origin + 4
+    while at < end:
+        size = struct.unpack_from('<I', data, at + 4)[0]
+        entries += struct.pack('<4sIII', data[at:at+4], 0x10,
+                               at if absolute else at - origin, size)
+        at += 8 + size + (size & 1)
+    return chunk(b'RIFF', data[8:] + chunk(b'idx1', entries))
+
+
 def wav_pcm(rate=22050, channels=1, bits=16, frames=11025):
     align = channels * bits // 8
     data = bytearray()
@@ -156,7 +170,7 @@ def avi_clip(frames=6, width=32, height=16, audio='pcm'):
             chunks.append(bytes(b))
             pcm += codec.reference(17, 1, bytes(b))
         samples = struct.unpack_from('<H', wave, 18)[0]
-        ascale, arate, align, alength = samples, rate, 256, frames
+        ascale, arate, align, alength = samples, rate, 512, frames
     astrh = struct.pack('<4s4sIHHIIIIIIIIhhhh', b'auds', b'\0\0\0\0', 0, 0, 0, 0, ascale, arate, 0, alength, 0, 0, align, 0, 0, 0, 0)
     avih = struct.pack('<IIIIIIIIII4I', 66667, 0, 0, 0x10, frames, 0, 2, 0, width, height, 0, 0, 0, 0)
     hdrl = b'hdrl' + chunk(b'avih', avih) + chunk(b'LIST', b'strl' + chunk(b'strh', vstrh) + chunk(b'strf', vfmt)) + \
@@ -168,7 +182,7 @@ def avi_clip(frames=6, width=32, height=16, audio='pcm'):
         images.append(pixels)
         movi += chunk(b'01wb', chunks[f]) + chunk(b'00dc', codes)
     riff = chunk(b'RIFF', b'AVI ' + chunk(b'LIST', hdrl) + chunk(b'LIST', movi))
-    return riff, images, pcm
+    return avi_index(riff), images, pcm
 
 
 def write_all(folder):
@@ -184,6 +198,16 @@ def write_all(folder):
     (folder / 'msadpcm.wav').write_bytes(ms)
     (folder / 'msadpcm.pcm').write_bytes(ms_pcm)
     (folder / 'song.mid').write_bytes(midi_song())
+    # Two directory spellings of one identity, as with a FAT LFN/8.3 pair.
+    # A separate byte-identical file prevents content/name based ownership.
+    for source, long_name, short_name, distinct in (
+            ('tone.wav', 'Long Tone.wav', 'LONGTO~1.WAV', 'Long Tone 2.wav'),
+            ('song.mid', 'Long Song.mid', 'LONGSO~1.MID', 'Long Song 2.mid')):
+        (folder / long_name).write_bytes((folder / source).read_bytes())
+        alias = folder / short_name
+        alias.unlink(missing_ok=True)
+        alias.hardlink_to(folder / long_name)
+        (folder / distinct).write_bytes((folder / source).read_bytes())
     (folder / 'song.rmi').write_bytes(rmid(midi_song()))
     (folder / 'smpte.mid').write_bytes(midi_smpte())
     (folder / 'broken.mid').write_bytes(midi_song()[:40])
@@ -193,4 +217,23 @@ def write_all(folder):
         (folder / f'clip-{kind}.avi').write_bytes(riff)
         (folder / f'clip-{kind}.pcm').write_bytes(pcm)
         (folder / f'clip-{kind}.frames').write_bytes(b''.join(images))
+    # Structurally valid RIFF: corruption is inside a later codec payload.
+    for name, audio, target, which, frames in (
+            ('bad-video', 'pcm', b'00dc', 1, 6),
+            ('bad-audio-first', 'ima', b'01wb', 0, 6),
+            ('bad-audio-late', 'ima', b'01wb', 30, 36)):
+        riff, _, _ = avi_clip(frames=frames, audio=audio)
+        data = bytearray(riff)
+        movi = data.index(b'movi') + 4
+        at, index = movi, 0
+        while at + 8 <= len(data):
+            kind, size = struct.unpack_from('<4sI', data, at)
+            if kind == target:
+                if index == which:
+                    if target == b'00dc': data[at+8:at+8+size] = bytes(size)
+                    else: data[at+10] = 255  # invalid IMA step index
+                    break
+                index += 1
+            at += 8 + size + (size & 1)
+        (folder / (name + '.avi')).write_bytes(data)
     return folder

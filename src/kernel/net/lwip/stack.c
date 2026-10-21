@@ -102,7 +102,8 @@ static void attach_core(void *arg)
     netif_set_link_callback(&p->interface, status);
     if (!netif_default || netif_default->name[0] == 'l') netif_set_default(&p->interface);
     p->primary = netif_default == &p->interface;
-    netif_set_up(&p->interface); p->attached = true;
+    netif_set_up(&p->interface);
+    sys_prot_t f = sys_arch_protect(); p->attached = true; sys_arch_unprotect(f);
     link_update(p);
 }
 int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
@@ -114,6 +115,25 @@ int net_stack_attach(unsigned index, const uint8_t mac[6], bool link)
     if (!p->link_message) return -ENOMEM;
     err_t r = tcpip_callback_wait(attach_core, p);
     if (r || !p->attached) { tcpip_callbackmsg_delete(p->link_message); p->link_message = NULL; return -ENOMEM; }
+    return 0;
+}
+int net_stack_primary(void)
+{
+    sys_prot_t f = sys_arch_protect(); int index = -ENODEV;
+    for (unsigned i = 0; i < 2; i++)
+        if (ports[i].attached && ports[i].primary) { index = (int)i; break; }
+    sys_arch_unprotect(f); return index;
+}
+int net_stack_random_id(uint8_t id[16])
+{
+    if (!id) return -EINVAL;
+    if (!started) { memset(id, 0, 16); return -ENETDOWN; }
+    /* Exactly the approved per-boot SplitMix64 stream, seeded with RTC,
+     * PIT/TSC samples and the primary MAC before transport initialization. */
+    for (unsigned i = 0; i < 4; i++) {
+        uint32_t word = ciuki_lwip_rand();
+        for (unsigned j = 0; j < 4; j++) id[i * 4 + j] = (uint8_t)(word >> (j * 8));
+    }
     return 0;
 }
 void net_stack_link(unsigned index, bool up)

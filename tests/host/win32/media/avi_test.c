@@ -14,6 +14,7 @@ int DrawDibBegin(uintptr_t, uintptr_t, int, int, const void *, int, int,
 int DrawDibDraw(uintptr_t, uintptr_t, int, int, int, int, const void *,
                 const void *, int, int, int, int, uint32_t);
 int DrawDibEnd(uintptr_t);
+int DrawDibChangePalette(uintptr_t, int, int, const uint8_t *);
 void *DrawDibGetBuffer(uintptr_t, void *, uint32_t, uint32_t);
 uintptr_t MCIWndCreateA(uintptr_t, uintptr_t, uint32_t, const char *);
 int MCIWndRegisterClass(void);
@@ -574,6 +575,14 @@ static void drawdib(void) {
                                       16, 0, 0, 0, 0);
   uintptr_t dd = DrawDibOpen();
   assert(dd);
+  const uint8_t entry[4] = {1,2,3,0};
+  assert(!DrawDibChangePalette(dd, 2147483647, 1, entry));
+  assert(!DrawDibChangePalette(dd, 1, 2147483647, entry));
+  assert(!DrawDibChangePalette(dd, 2147483647, 2147483647, entry));
+  assert(!DrawDibChangePalette(dd, -1, 1, entry));
+  assert(!DrawDibChangePalette(dd, 256, 1, entry));
+  assert(DrawDibChangePalette(dd, 256, 0, 0));
+  assert(DrawDibChangePalette(dd, 255, 1, entry));
   assert(DrawDibBegin(dd, GetDC(surface), -1, -1, info, -1, -1, 0));
   assert(DrawDibDraw(dd, GetDC(surface), 0, 0, -1, -1, info, chunk, 0, 0, -1,
                      -1, 0));
@@ -701,6 +710,68 @@ static int fuzz(uint32_t iterations) {
   printf("PASS AVI fuzz iterations=%u opened=%u\n", iterations, opened);
   return 0;
 }
+extern unsigned mci_notifications, mci_last_notify;
+static void partial_oracle(const char *file, uint32_t first, uint32_t end) {
+  int fd = hf_open(file); assert(fd >= 0);
+  int16_t *want = malloc((end-first)*2); assert(want);
+  assert(hf_seek(fd, first*2, 0) == (long)first*2);
+  assert(hf_read(fd, want, (end-first)*2) == (long)(end-first)*2); hf_close(fd);
+  size_t start = 0;
+  while (start < capture_frames && capture[2*start] != want[0]) start++;
+  assert(start+end-first <= capture_frames);
+  for (size_t i = 0; i < end-first; i++)
+    assert(capture[2*(start+i)] == want[i] && capture[2*(start+i)+1] == want[i]);
+  /* No queued sample may leak past the exclusive endpoint. */
+  for (size_t i = start+end-first; i < capture_frames; i++)
+    assert(capture[2*i] == 0 && capture[2*i+1] == 0);
+  free(want); free(capture); capture = 0;
+}
+static void amendment2(void) {
+  FILE *saved = trace; trace = tmpfile(); assert(trace);
+  for (unsigned kind = 0; kind < 2; kind++) {
+    const char *file = kind ? "clip-ima.pcm" : "clip-pcm.pcm";
+    assert(!mciSendStringA(kind ? "open clip-ima.avi alias a" : "open clip-pcm.avi alias a", 0, 0, 0));
+    oracle_begin();
+    assert(!mciSendStringA("play a from 1 to 1 wait", 0, 0, 0));
+    run(300); partial_oracle(file, 1470, 2940);
+    assert(!mciSendStringA("close a", 0, 0, 0));
+  }
+  assert(!mciSendStringA("open bad-audio-first.avi alias a", 0, 0, 0));
+  unsigned before = mci_notifications;
+  assert(mciSendStringA("play a notify", 0, 0, 0x55) == MCIERR_INVALID_FILE);
+  assert(mci_notifications == before);
+  assert(!mciSendStringA("close a", 0, 0, 0));
+  const char *bad[] = {"bad-video.avi", "bad-audio-late.avi"};
+  for (unsigned kind = 0; kind < 2; kind++) {
+    char cmd[128]; snprintf(cmd, sizeof(cmd), "open %s alias a", bad[kind]);
+    assert(!mciSendStringA(cmd, 0, 0, 0));
+    if (!kind) {
+      before = mci_notifications;
+      assert(mciSendStringA("play a from 1 notify", 0, 0, 0x55) == MCIERR_INVALID_FILE);
+      assert(mci_notifications == before);
+    }
+    before = mci_notifications;
+    assert(!mciSendStringA("play a notify", 0, 0, 0x55));
+    run(4000);
+    assert(mci_notifications == before + 1 && mci_last_notify == MCI_NOTIFY_FAILURE);
+    assert(mciSendStringA("play a from 0 wait", 0, 0, 0) == MCIERR_INVALID_FILE);
+    assert(!mciSendStringA("close a", 0, 0, 0));
+  }
+  assert(mciSendStringA("play bad-video.avi wait", 0, 0, 0) == MCIERR_INVALID_FILE);
+  assert(!mciGetDeviceIDA("bad-video.avi"));
+  assert(!mciSendStringA("open clip-pcm.avi alias a", 0, 0, 0));
+  assert(!mciSendStringA("play a", 0, 0, 0));
+  unsigned sources = engine.source_count;
+  engine.callback_count = WA_CALLBACKS;
+  assert(!mciSendStringA("close a", 0, 0, 0));
+  assert(engine.source_count == sources && live_allocations > 0);
+  mci_service_pass(); assert(engine.source_count == sources);
+  engine.callback_count = 0;
+  for (unsigned i = 0; i < 8; i++) { wa_dispatch(&engine); mci_service_pass(); }
+  assert(engine.source_count == 0 && !live_allocations);
+  pump(); fclose(trace); trace = saved;
+}
+
 int main(int argc, char **argv) {
   if ((argc != 3 && argc != 4) || hf_chdir(argv[1]))
     return 2;
@@ -733,6 +804,7 @@ int main(int argc, char **argv) {
   avivideo();
   drawdib();
   mciwnd();
+  amendment2();
   mciSendStringA("close all", 0, 0, 0);
   for (int i = 0; i < 40; i++)
     Sleep(5);

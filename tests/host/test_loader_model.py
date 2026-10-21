@@ -10,28 +10,30 @@ import unittest
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts/test'))
 import loader_model as model
-from loader_uart_machine import LoaderUARTMachine
+from loader_parser_machine import LoaderParserMachine, SYMBOLS
 
 
 class LoaderModelTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
     def test_usbscan_option_assembled_allowlist(self):
+        # f0-54 parser: usbscan=0 is one exact entry of the BOOT.CFG option list
+        # without a loader action; the kernel reads it from the copied options.
         menu=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
-        self.assertIn('jne .usbscan',menu.split('.serial:',1)[1].split('.usbscan:',1)[0])
-        body=menu.split('.usbscan:',1)[1].split('.mode:',1)[0]
-        source=('bits 16\norg 0\nentry:\n'+body+
-                '.mode:\nmov ax,1\nret\n.invalid:\nmov ax,2\nret\n.next:\nxor ax,ax\nret\n'+
-                'times 24576-($-$$) db 0\ndw entry,entry,0,0\n')
+        options=menu.split('option_tokens db',1)[1].split('\n',1)[0]
+        self.assertIn("'usbscan=0',0",options)
         out=ROOT/'build/host';out.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='usbscan-loader-',dir=out) as folder:
-            asm=Path(folder)/'token.asm';binary=Path(folder)/'token.bin';asm.write_text(source)
-            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],check=True)
-            for token in ('usbscan=0','usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
-                machine=LoaderUARTMachine(binary)
-                machine.regs.update(esi=0x800,edi=0,ebp=0,edx=len(token))
-                machine.mem[0x20800:0x20800+len(token)]=token.encode('ascii')
-                machine.run(machine.init)
-                self.assertEqual(machine.read('ax')==0,token=='usbscan=0',token)
+            asm=Path(folder)/'loader.asm';binary=Path(folder)/'loader.bin'
+            asm.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                           +','.join(SYMBOLS)+'\n')
+            subprocess.run(['nasm','-f','bin',str(asm),'-o',str(binary)],cwd=ROOT,check=True)
+            machine=LoaderParserMachine(binary)
+            for token in ('usbscan=0','usbscan=1','usbscan=00','xusbscan=0','USBscan=0','usbscan=0\r\n'):
+                with self.subTest(token=token):
+                    self.assertEqual(machine.config(token),token.strip()=='usbscan=0')
+                    if token.strip()=='usbscan=0':self.assertEqual(machine.field(8)&3,2)
+            self.assertTrue(machine.config('serial=0 usbscan=0\r\nsafe=1 mode=0x0118'))
+            self.assertEqual((machine.field(8)&3,machine.var('preferred_mode')),(1,0x118))
         self.assertEqual(model.boot_options('serial=0 usbscan=0\r\nsafe=1 mode=0x0118'),
                          {'safe':True,'serial':False,'mode':0x118})
         for token in ('usbscan=1','usbscan=00','xusbscan=0','USBscan=0'):
@@ -88,7 +90,7 @@ class LoaderModelTests(unittest.TestCase):
                 model.boot_minimum(cpu,memory,controller)
         for entries,options in (([],{}),(memory,{'complete':False}),(memory,{'signature':'bad'}),
                                 ([dict(base=2**64-1,length=2,type=1)],{})):
-            with self.assertRaisesRegex(ValueError,'valid BIOS E820'):
+            with self.assertRaisesRegex(ValueError,'BIOS E820 memory map'):
                 model.boot_minimum(cpu,entries,**options)
         # Refusal order matches assembly: no VBE/disk work after a CPU/map failure.
         with self.assertRaisesRegex(ValueError,'i686 CPU'):
@@ -104,9 +106,15 @@ class LoaderModelTests(unittest.TestCase):
         halt=platform.split('minimum_halt:',1)[1].split('; Optional firmware',1)[0]
         self.assertIn('cli',halt);self.assertIn('hlt',halt)
         self.assertNotIn('int 0x16',halt);self.assertNotIn('int 0x13',halt)
-        for message in (model.CPU_MINIMUM_ERROR,model.VBE_MINIMUM_ERROR):
-            self.assertIn(message,platform)
-        self.assertIn(model.E820_MINIMUM_ERROR,(ROOT/'src/boot/ciukldr/memory.inc').read_text())
+        # minimum_halt prints the shared prefix, then the caller's message tail.
+        prefix='CIUKI: this PC needs '
+        self.assertIn("minimum_prefix db '"+prefix+"',0",platform)
+        self.assertIn('mov si, minimum_prefix',halt)
+        memory=(ROOT/'src/boot/ciukldr/memory.inc').read_text()
+        for message,source in ((model.CPU_MINIMUM_ERROR,platform),(model.VBE_MINIMUM_ERROR,platform),
+                               (model.E820_MINIMUM_ERROR,memory)):
+            self.assertTrue(message.startswith(prefix),message)
+            self.assertIn("db '"+message[len(prefix):]+"',0",source)
 
     def test_menu_safe_sources_are_monotonic(self):
         config = model.boot_options('safe=1 safe=0')

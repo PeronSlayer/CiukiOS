@@ -65,21 +65,4 @@ static inline void dosbox_settings_restore(struct du_canvas *canvas,uint32_t **s
                DOSBOX_SETTINGS_W*sizeof(uint32_t));
     free(*saved); *saved=NULL;
 }
-/* Existing window paint primitives, same Ciuki portrait and Tango family. */
-/* Per-game settings: DOS kernel (f3-51) and memory mode (f3-46). */
-static inline void dosbox_kernel_panel(struct du_canvas *canvas,const char *selection,const char *detail)
-{
-    du_fill(canvas,(struct du_rect){100,120,440,280},DU_FACE);
-    struct desk_paint paint={canvas->pixels,canvas->width,canvas->height,
-        canvas->clip.x,canvas->clip.y,canvas->clip.w,canvas->clip.h};
-    struct desk_frame_style style={.title="Game settings",.active=1};
-    desk_paint_frame(&paint,100,120,440,280,&style);
-    du_icon_draw(canvas,120,160,du_icon(DU_ICON_CIUKI,32),DU_ICON_NORMAL);
-    du_text_font(canvas,desk_theme->font_bold,170,160,"DOS kernel and memory",DU_INK);
-    du_text_wrap(canvas,(struct du_rect){120,200,400,100},
-                 "1  CiukiDOS (default)\n2  FreeDOS 1.3\n3  Memory paged (default)\n"
-                 "4  Memory locked (compatibility)\nF12 or Esc to return to the game.",DU_INK);
-    du_text_wrap(canvas,(struct du_rect){120,305,400,40},selection,DU_INK);
-    du_text_wrap(canvas,(struct du_rect){120,345,400,48},detail,DU_INK);
-}
 #endif

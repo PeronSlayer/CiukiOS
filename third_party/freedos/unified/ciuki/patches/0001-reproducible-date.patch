@@ -1,0 +1,20 @@
+--- a/hdr/version.h
++++ b/hdr/version.h
+@@ -46,0 +47,4 @@
++#ifndef CIUKI_BUILD_DATE
++#define CIUKI_BUILD_DATE __DATE__
++#endif
++
+@@ -48 +52 @@
+-#define KVS(v,s,o) "FreeDOS kernel " v "(build 20" #s " OEM:" #o ") [compiled " __DATE__ "]\n"
++#define KVS(v,s,o) "FreeDOS kernel " v "(build 20" #s " OEM:" #o ") [compiled " CIUKI_BUILD_DATE "]\n"
+--- a/sys/sys.c
++++ b/sys/sys.c
+@@ -36,0 +37,4 @@
++
++#ifndef CIUKI_BUILD_DATE
++#define CIUKI_BUILD_DATE __DATE__
++#endif
+@@ -989 +993 @@
+-    printf(SYS_NAME SYS_VERSION ", " __DATE__ "\n");
++    printf(SYS_NAME SYS_VERSION ", " CIUKI_BUILD_DATE "\n");

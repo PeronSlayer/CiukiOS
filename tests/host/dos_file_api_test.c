@@ -82,7 +82,7 @@ static bool critical(void *arg,uint64_t token,const struct dos_file_frame *f,uin
 }
 static void abort_process(void *arg,uint16_t psp) { (void)arg; CHECK(psp==bridge.owning); aborts++; }
 static bool fixture_stopped(void *arg) { (void)arg; return cancel_request; }
-static struct dos_file_ops ops={memory_check,memory_read,memory_write,memory_release,wall,monitor,pause_time,critical,abort_process,fixture_stopped,0};
+static struct dos_file_ops ops={memory_check,memory_read,memory_write,memory_release,wall,monitor,pause_time,critical,abort_process,fixture_stopped,0,0};
 static void format(void) {
     memset(disk,0,sizeof(disk)); uint8_t *b=disk;
     b[0]=0xeb; b[1]=0x3c; b[2]=0x90; memcpy(b+3,"CIUKI49 ",8);

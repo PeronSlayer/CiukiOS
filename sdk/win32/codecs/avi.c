@@ -28,16 +28,16 @@ IMPORT int32_t ICDecompress(uintptr_t, uint32_t, struct cc_bitmap *,
 #define AVIERR ((int32_t)0x80044000)
 #define VIDE CC_FOUR('v', 'i', 'd', 's')
 struct frame {
-  uint32_t offset, size;
+  uint32_t offset, size, id, sample;
 };
 struct stream {
   uint8_t header[56], format[2048];
-  uint32_t format_len, count, capacity;
+  uint32_t format_len, count, capacity, samples, header_seen;
   struct frame *frames;
 };
 struct file {
   void *handle;
-  uint32_t refs, length, streams;
+  uint32_t refs, length, streams, movi, movi_end, index, index_bytes;
   struct stream stream[4];
 };
 struct view {
@@ -70,7 +70,10 @@ static int readat(struct file *f, uint32_t p, void *out, uint32_t n) {
     return 0;
   return ReadFile(f->handle, out, n, &done, 0) && done == n;
 }
-static int append(struct stream *s, uint32_t p, uint32_t n) {
+static int append(struct stream *s, uint32_t p, uint32_t n, uint32_t id) {
+  uint32_t unit = le32(s->header + 44), samples = unit ? n / unit : 1;
+  if ((unit && n % unit) || samples > 0x7fffffffu - s->samples)
+    return 0;
   if (s->count == 65536)
     return 0;
   if (s->count == s->capacity) {
@@ -84,7 +87,8 @@ static int append(struct stream *s, uint32_t p, uint32_t n) {
     s->frames = frames;
     s->capacity = cap;
   }
-  s->frames[s->count++] = (struct frame){p, n};
+  s->frames[s->count++] = (struct frame){p, n, id, s->samples};
+  s->samples += samples;
   return 1;
 }
 static int scan(struct file *f, uint32_t p, uint32_t end, int index, int movi,
@@ -111,8 +115,14 @@ static int scan(struct file *f, uint32_t p, uint32_t end, int index, int movi,
       if (n < 4 || !readat(f, p + 8, header, 4))
         return 0;
       type = le32(header);
+      if (type == CC_FOUR('m', 'o', 'v', 'i')) {
+        if (f->movi || depth || index >= 0)
+          return 0;
+        f->movi = p + 8; /* idx1 offsets normally start at the movi FOURCC */
+        f->movi_end = p + 8 + n;
+      }
       if (type == CC_FOUR('s', 't', 'r', 'l')) {
-        if (f->streams == 4)
+        if (movi || f->streams == 4)
           return 0;
         child = (int)f->streams++;
       }
@@ -120,12 +130,20 @@ static int scan(struct file *f, uint32_t p, uint32_t end, int index, int movi,
                 movi || type == CC_FOUR('m', 'o', 'v', 'i'), depth + 1, budget))
         return 0;
     } else if (index >= 0 && id == CC_FOUR('s', 't', 'r', 'h')) {
-      if (n < 56 || !readat(f, p + 8, f->stream[index].header, 56))
+      if (movi || f->stream[index].header_seen || n < 56 ||
+          !readat(f, p + 8, f->stream[index].header, 56))
         return 0;
+      f->stream[index].header_seen = 1;
     } else if (index >= 0 && id == CC_FOUR('s', 't', 'r', 'f')) {
-      if (n > 2048 || !readat(f, p + 8, f->stream[index].format, n))
+      if (movi || f->stream[index].format_len || !n || n > 2048 ||
+          !readat(f, p + 8, f->stream[index].format, n))
         return 0;
       f->stream[index].format_len = n;
+    } else if (!depth && id == CC_FOUR('i', 'd', 'x', '1')) {
+      if (f->index || !f->movi || n % 16 || n / 16 > 1000000)
+        return 0;
+      f->index = p + 8;
+      f->index_bytes = n;
     } else if (movi && header[0] >= '0' && header[0] <= '9' &&
                header[1] >= '0' && header[1] <= '9') {
       uint32_t si = (header[0] - '0') * 10 + header[1] - '0';
@@ -133,12 +151,66 @@ static int scan(struct file *f, uint32_t p, uint32_t end, int index, int movi,
         return 0;
       if ((header[2] == 'd' && (header[3] == 'c' || header[3] == 'b')) ||
           (header[2] == 'w' && header[3] == 'b'))
-        if (!append(&f->stream[si], p + 8, n))
+        if (!append(&f->stream[si], p + 8, n, id))
           return 0;
     }
     p = next;
   }
   return p == end;
+}
+/* idx1 is optional. Validate against the physical movi scan, never use an
+ * untrusted index to introduce a read. AVIOLDINDEX permits historical
+ * file-relative offsets as well as offsets relative to the movi FOURCC. */
+static int index_entry(struct file *f, const uint8_t *entry, uint32_t base,
+                       uint32_t *next) {
+  uint32_t id = le32(entry), flags = le32(entry + 4);
+  uint32_t offset = le32(entry + 8), size = le32(entry + 12);
+  if (offset > f->length - base)
+    return 0;
+  offset += base;
+  if (offset < f->movi + 4 || offset > f->movi_end ||
+      f->movi_end - offset < 8 || size > f->movi_end - offset - 8)
+    return 0;
+  if (flags & 1) { /* AVIIF_LIST: index entry names a rec list. */
+    uint8_t header[12];
+    return id == CC_FOUR('r', 'e', 'c', ' ') && size >= 4 &&
+           readat(f, offset, header, sizeof(header)) &&
+           le32(header) == CC_FOUR('L', 'I', 'S', 'T') &&
+           le32(header + 4) == size && le32(header + 8) == id;
+  }
+  if (entry[0] < '0' || entry[0] > '9' || entry[1] < '0' || entry[1] > '9')
+    return 0;
+  uint32_t si = (entry[0] - '0') * 10 + entry[1] - '0';
+  if (si >= f->streams)
+    return 0;
+  struct stream *s = &f->stream[si];
+  uint32_t lo = next[si], hi = s->count;
+  while (lo < hi) {
+    uint32_t mid = lo + (hi - lo) / 2;
+    if (s->frames[mid].offset < offset + 8)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  if (lo == s->count || s->frames[lo].offset != offset + 8 ||
+      s->frames[lo].size != size || s->frames[lo].id != id)
+    return 0;
+  next[si] = lo + 1;
+  return 1;
+}
+static int validate_index(struct file *f) {
+  uint32_t base = f->movi, next[4] = {0};
+  for (uint32_t at = 0; at < f->index_bytes; at += 16) {
+    uint8_t entry[16];
+    if (!readat(f, f->index + at, entry, sizeof(entry)))
+      return 0;
+    if (!index_entry(f, entry, base, next)) {
+      if (at || !index_entry(f, entry, 0, next))
+        return 0;
+      base = 0;
+    }
+  }
+  return 1;
 }
 static struct file *file_find(void *h) {
   uint32_t i;
@@ -232,9 +304,18 @@ static int32_t open_file(void **out, const void *name, uint32_t mode, void *cls,
   }
   n = le32(header + 4);
   if (n < 4 || n != f->length - 8 ||
-      !scan(f, 12, f->length, -1, 0, 0, &budget) || !f->streams) {
+      !scan(f, 12, f->length, -1, 0, 0, &budget) || !f->streams ||
+      !f->movi || !validate_index(f)) {
     AVIFileRelease(f);
     return AVIERR + 102;
+  }
+  for (uint32_t i = 0; i < f->streams; i++) {
+    struct stream *s = &f->stream[i];
+    if (!s->header_seen || !s->format_len || !le32(s->header + 20) || !le32(s->header + 24) ||
+        le32(s->header + 28) > 0x7fffffffu - s->samples) {
+      AVIFileRelease(f);
+      return AVIERR + 102;
+    }
   }
   *out = f;
   return 0;
@@ -301,7 +382,7 @@ int32_t W32API AVIStreamStart(void *h) {
 }
 int32_t W32API AVIStreamLength(void *h) {
   struct view *v = view_find(h);
-  return v ? (int32_t)v->file->stream[v->stream].count : -1;
+  return v ? (int32_t)v->file->stream[v->stream].samples : -1;
 }
 int32_t W32API AVIStreamReadFormat(void *h, int32_t pos, void *format,
                                    int32_t *size) {
@@ -340,8 +421,53 @@ int32_t W32API AVIStreamRead(void *h, int32_t start, int32_t count,
   if ((uint32_t)start < at)
     return AVIERR + 104;
   at = (uint32_t)start - at;
-  if (at >= s->count)
+  if (at >= s->samples || !count)
     return 0;
+  uint32_t unit = le32(s->header + 44);
+  if (unit) {
+    uint32_t lo = 0, hi = s->count;
+    while (lo < hi) {
+      uint32_t mid = lo + (hi - lo) / 2;
+      if (s->frames[mid].sample <= at)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    i = lo - 1;
+    uint32_t skip = (at - s->frames[i].sample) * unit;
+    if (count == -1)
+      count = (int32_t)((s->frames[i].size - skip) / unit);
+    if ((uint32_t)count > s->samples - at)
+      count = (int32_t)(s->samples - at);
+    /* A fixed-size read fills as many complete samples as fit. Only a
+     * buffer smaller than one sample is AVIERR_BUFFERTOOSMALL. */
+    if (buffer) {
+      if ((uint32_t)capacity < unit)
+        return AVIERR + 116;
+      if ((uint32_t)count > (uint32_t)capacity / unit)
+        count = (int32_t)((uint32_t)capacity / unit);
+    }
+    if ((uint32_t)count > 0x7fffffffu / unit)
+      return AVIERR + 102;
+    uint32_t remaining = (uint32_t)count * unit;
+    while (remaining) {
+      struct frame *frame = &s->frames[i++];
+      uint32_t n = frame->size - skip;
+      if (n > remaining)
+        n = remaining;
+      if (buffer && n && !readat(v->file, frame->offset + skip,
+                                 (uint8_t *)buffer + total, n))
+        return AVIERR + 107;
+      total += n;
+      remaining -= n;
+      skip = 0;
+    }
+    if (bytes)
+      *bytes = (int32_t)total;
+    if (samples)
+      *samples = count;
+    return 0;
+  }
   if (count == -1)
     count = 1;
   if ((uint32_t)count > s->count - at)
@@ -349,6 +475,12 @@ int32_t W32API AVIStreamRead(void *h, int32_t start, int32_t count,
   for (i = 0; i < (uint32_t)count; i++) {
     if (s->frames[at + i].size > 0x7fffffffu - total)
       return AVIERR + 102;
+    if (buffer && s->frames[at + i].size > (uint32_t)capacity - total) {
+      if (!i)
+        return AVIERR + 116;
+      count = (int32_t)i;
+      break;
+    }
     total += s->frames[at + i].size;
   }
   if (bytes)
@@ -358,8 +490,6 @@ int32_t W32API AVIStreamRead(void *h, int32_t start, int32_t count,
       *samples = count;
     return 0;
   }
-  if ((uint32_t)capacity < total)
-    return AVIERR + 116;
   total = 0;
   for (i = 0; i < (uint32_t)count; i++) {
     struct frame *f = &s->frames[at + i];
@@ -523,7 +653,7 @@ static int32_t stream_info(void *h, void *out, int32_t bytes, int unicode) {
   fields[5] = le32(s->header + 20);
   fields[6] = le32(s->header + 24);
   fields[7] = le32(s->header + 28);
-  fields[8] = s->count;
+  fields[8] = s->samples;
   fields[9] = le32(s->header + 16);
   fields[10] = le32(s->header + 36);
   fields[11] = le32(s->header + 40);
@@ -590,8 +720,8 @@ static uint64_t div64(uint64_t n, uint64_t d) { /* no compiler runtime */
   }
   return q;
 }
-static int32_t clamp_sample(const uint8_t *header, int64_t sample) {
-  int64_t start = le32(header + 28), end = start + le32(header + 32);
+static int32_t clamp_sample(const struct stream *s, int64_t sample) {
+  int64_t start = le32(s->header + 28), end = start + s->samples;
   if (sample < start)
     sample = start;
   if (sample > end)
@@ -602,23 +732,27 @@ int32_t W32API AVIStreamSampleToTime(void *h, int32_t sample) {
   struct view *v = view_find(h);
   if (!v)
     return -1;
-  const uint8_t *header = v->file->stream[v->stream].header;
+  const struct stream *s = &v->file->stream[v->stream];
+  const uint8_t *header = s->header;
   uint32_t scale = le32(header + 20), rate = le32(header + 24);
   if (!scale || !rate)
     return -1;
-  uint64_t ms = div64((uint64_t)(uint32_t)clamp_sample(header, sample) *
-                          scale * 1000,
-                      rate);
+  uint64_t ticks = (uint64_t)(uint32_t)clamp_sample(s, sample) * scale;
+  uint64_t seconds = div64(ticks, rate);
+  if (seconds > 0x7fffffffu / 1000)
+    return -1;
+  uint64_t ms = seconds * 1000 + div64((ticks - seconds * rate) * 1000, rate);
   return ms > 0x7fffffff ? -1 : (int32_t)ms;
 }
 int32_t W32API AVIStreamTimeToSample(void *h, int32_t ms) {
   struct view *v = view_find(h);
   if (!v || ms < 0)
     return -1;
-  const uint8_t *header = v->file->stream[v->stream].header;
+  const struct stream *s = &v->file->stream[v->stream];
+  const uint8_t *header = s->header;
   uint32_t scale = le32(header + 20), rate = le32(header + 24);
   if (!scale || !rate)
     return -1;
   return clamp_sample(
-      header, (int64_t)div64((uint64_t)ms * rate, (uint64_t)scale * 1000));
+      s, (int64_t)div64((uint64_t)ms * rate, (uint64_t)scale * 1000));
 }

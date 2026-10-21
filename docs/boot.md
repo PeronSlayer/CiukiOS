@@ -13,7 +13,7 @@ pressed in the menu window.
 
 1. Firmware POST.
 2. The loader clears the text screen and shows one line at the bottom,
-   `S Safe / L Serial log / H Hardware`, for about 3 s.
+   `S for safe mode, L for log, H for Hardware check`, for about 3 s.
 3. The loader sets the VBE mode (black screen) and loads `VMM.ELF`.
 4. The kernel draws the boot splash, the original Ciuki photograph
    (`misc/CiukiOS_SplashScreen.png`), as soon as it maps the framebuffer,
@@ -60,6 +60,10 @@ With a `BOOT.CFG` test request or safe flag the loader also prints its menu
 on screen as before. After `S`, `L` or `P` in a normal boot the loader prints
 its remaining lines on screen; the menu text itself stays serial-only there.
 A loader error is always printed on screen.
+
+The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
+USB enumeration and stops the periodic USB rescans; the loader only accepts
+the token and leaves it in the copied boot options for the kernel.
 
 ## Shutting down
 

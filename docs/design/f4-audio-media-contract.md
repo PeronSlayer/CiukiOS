@@ -851,3 +851,14 @@ host adapter understands AUDIO, MODE1/2048, MODE1/2352, stored INDEX 00/01
 pregaps and unstored PREGAP. The kernel does not parse CUE files. QEMU ide-cd
 only qualifies data-only refusal/tray behavior; audio listening requires the
 lead's Red Book test disc and T23 evidence.
+
+F5-12B host continuation, 2026-10-21: the existing `cd_bench.c` model measured
+2850 ns copying plus 2256704 ns in the production mixer per audio second,
+0.225955% host thread CPU versus the historical 0.18% estimate. This excludes
+ATA PIO, drive latency and scheduling, and cannot qualify target CPU cost or
+audible playback. The approved transport choice is unchanged. The command,
+position, notification and cancellation sequence of the synthetic CD model
+is pinned in `tests/host/win32/media/traces/cdaudio.txt`, alongside the existing
+waveaudio/sequencer and AVI traces; its PCM is checked independently sample
+for sample. Exact commands and sandbox limitations are in
+`build/codex/f5-12b-report.md`.
