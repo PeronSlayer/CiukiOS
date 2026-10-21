@@ -577,7 +577,7 @@ static void test_client_boundary(void)
     CHECK(dosvm_create(&reserved_config,&reserved_vm)==-ENOENT && !reserved_vm && !game_creating[2]);
     program_result=0;
     game_creating[2]++;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);game_creating[2]--;
-    for(unsigned kernel=0;kernel<2;kernel++){
+    for(unsigned kernel=0;kernel<3;kernel++){
         slots[0].info.key=(struct dosvm_key){1,1};slots[0].info.state=DOSVM_BOOTING;
         slots[0].game=2;slots[0].kernel=kernel;
         CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
@@ -597,7 +597,7 @@ static void test_client_boundary(void)
     c.version = CIUKI_DOSVM_VERSION; c.size = 100; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL);
     c.size = sizeof(c); user_fault = true; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EFAULT); user_fault = false;
     c.state = 1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EINVAL); c.state = 0;
-    c.launch.kernel=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.kernel=3; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.kernel=1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL); /* shell */
     c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);

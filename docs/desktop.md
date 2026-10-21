@@ -963,19 +963,33 @@ scripted cases' rows do not move (`tests/host/desktop/shell_menu.py` models
 it; `--regenerate` leaves `f2-desktop.json` unchanged; the scratch `zz-ui.json`
 copy of those cases is no longer tracked).
 
-## NetSurf browser (F6 M1)
+## NetSurf browser (F6)
 
-The M1 browser payload is installed as `/Programs/netsurf`. Its desktop window
+The browser payload is installed as `/Programs/netsurf`. Its desktop window
 provides a URL bar, navigation controls, status line and framebuffer content
-area. M1 renders
+area. It renders
 local `file:` pages and `data:` URLs, including the supported HTML/CSS, GIF and
 BMP content. Bookmarks and history live in the user's NetSurf profile under
 `C:\Documents\NetSurf`; local directory browsing uses the Files picker.
-The M1 payload does not yet have a Programs menu launcher and does not fetch
-HTTP or HTTPS pages. Network adapters,
-DHCP, DNS and native sockets are available separately through the kernel's
-network service; the later browser fetcher connects those facilities to web
-URLs.
+HTTP and HTTPS use the native network service, with redirects, cookies and
+gzip responses. HTTPS requires a valid RTC-set system clock dated 2026 or
+later and ready kernel entropy. A recent build date does not qualify as an
+RTC clock. TLS 1.2 and the pinned CA store are used; certificate exceptions
+and revocation checking are unsupported.
+
+"Secure connections are not ready yet" means the kernel returned EAGAIN.
+The page estimates the remaining part of the first boot minute, without
+promising readiness; after that minute it says the estimate has elapsed.
+Reload retries entropy acquisition automatically: on any browser error
+page the Reload button fetches the site address shown in the URL bar again,
+without a new history entry and never replaying a form submission. The
+browser stays responsive while waiting and never substitutes a weak seed.
+An unavailable-entropy page indicates another entropy error. The clock page
+asks you to set the RTC; certificate pages identify an untrusted or
+malformed certificate, a hostname mismatch, or expired/not-yet-valid dates.
+Protocol errors can mean the server does not support TLS 1.2. DNS, offline,
+refused/timed-out connection and truncated-response pages describe separate
+network failures.
 
 ## f2-30 decisions (2026-10-11)
 

@@ -112,9 +112,16 @@ align 16, db 0
 boot_info times CIUKI_BOOT_INFO_SIZE db 0
 align 8, db 0
 raw_map times CIUKI_E820_MAX*24 db 0
+; f0-54: only memory_collect/map_normalize use raw_map, before A20, FAT and
+; the menu; later RAM checks read B(e820). elf_load, the last stage, fills
+; all ph_count*32 bytes before reading a program header, so the program
+; headers reuse that scratch instead of 1 KiB more of the fixed file.
+ph_table equ raw_map
+%if MAX_PH*32 > CIUKI_E820_MAX*24
+%error ELF program headers must fit the raw E820 scratch
+%endif
 cluster times 4096 db 0
 elf_header times 52 db 0
-ph_table times MAX_PH*32 db 0
 fw_file times 64 db 0
 mode_buffer times 256 db 0
 mode_list times 512 dw 0
@@ -127,7 +134,6 @@ gdt:
 gdt_end:
 gdtr dw gdt_end-gdt-1
     dd LOAD_BASE+gdt
-newline db 13,10,0
 
 bits 32
 protected_entry:

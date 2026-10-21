@@ -127,7 +127,8 @@ int main(int argc, char **argv)
     unsigned memory=game ? dosbox_memory_load(game) : 0;
     unsigned network=game ? dosbox_network_load(game) : CIUKI_DOSVM_NETWORK_OFF;
     if (kernel_override) {
-        if (!game) return 2;
+        if (!game || (strcmp(kernel_override,"ciukidos") && strcmp(kernel_override,"freedos-1.3") &&
+                      strcmp(kernel_override,"unified"))) return 2;
         kernel=dosbox_kernel_value(kernel_override);
         if (dosbox_setting_save(game,kernel)) { perror("dosbox: DOS kernel setting"); return 1; }
     }
@@ -184,7 +185,9 @@ int main(int argc, char **argv)
     dosvm_launch_network_set(&c,network);
     if (ciuki_dosvm(CIUKI_DOSVM_CREATE, &c)) {
         failure = "Unable to start";
-        snprintf(detail, sizeof(detail), "%s", errno==ENOENT && game ? "This bundled game has been removed. Reinstall CiukiOS to restore it." : kernel==CIUKI_DOSVM_FREEDOS13 ?
+        snprintf(detail, sizeof(detail), "%s", kernel==CIUKI_DOSVM_UNIFIED ?
+                 "Unified DOS could not be opened. Your game settings have been kept." :
+                 errno==ENOENT && game ? "This bundled game has been removed. Reinstall CiukiOS to restore it." : kernel==CIUKI_DOSVM_FREEDOS13 ?
                  "FreeDOS 1.3 is unavailable. Install or repair FreeDOS support, then relaunch." : strerror(errno));
         loading = 1; result = 1;
     } else { id = c.id; generation = c.generation; }
@@ -238,8 +241,11 @@ int main(int argc, char **argv)
                     unsigned previous_kernel=kernel, previous_memory=memory, previous_network=network;
                     char previous_detail[sizeof(setting_detail)];
                     memcpy(previous_detail,setting_detail,sizeof(previous_detail));
-                    if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_1 || packet.event.code==CIUKI_KEY_2)) {
-                        unsigned choice=packet.event.code==CIUKI_KEY_2 ? CIUKI_DOSVM_FREEDOS13 : 0;
+                    /* Rows 1, 2 and 7: 5 and 6 belong to the network setting (f6-11). */
+                    if (packet.event.value==1 && (packet.event.code==CIUKI_KEY_1 || packet.event.code==CIUKI_KEY_2 ||
+                                                 packet.event.code==CIUKI_KEY_7)) {
+                        unsigned choice=packet.event.code==CIUKI_KEY_7 ? CIUKI_DOSVM_UNIFIED :
+                                        packet.event.code==CIUKI_KEY_2 ? CIUKI_DOSVM_FREEDOS13 : 0;
                         if (dosbox_setting_save(game,choice)) snprintf(setting_detail,sizeof(setting_detail),"Setting could not be saved: %s",strerror(errno));
                         else { kernel=choice; snprintf(setting_detail,sizeof(setting_detail),"Saved. Close and relaunch this game to apply."); }
                     }

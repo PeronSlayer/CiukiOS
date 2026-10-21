@@ -26,6 +26,7 @@ struct ciuki_job {
     /* True only after this request's application data reaches the socket. */
     bool transmitted;
     const char *error;
+    char tls_message[192];
     enum ciuki_tls_error tls_error;
 };
 #define CIUKI_NET_PENDING_BUDGET (128u*1024u)

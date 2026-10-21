@@ -9,17 +9,19 @@ F1_PROBES = ('registry', 'input', 'input-fault', 'framebuffer', 'ata', 'ata-faul
 F2_PROBES = ('elf-load', 'spawn-wait', 'fd-table', 'mmap', 'signals-fault',
              'threads-wait', 'crash-isolation', 'libc-smoke', 'app-gate')
 F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-audio-state', 'dpmi',
-             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen')
+             'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
 F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-gl')
 F6_PROBES = ('net-arp',)  # explicit selector; no F6 hardware sweep yet
 F3_SELECTOR_PROBES = ('title',)  # fixture and explicit title ID required
 PROBES = (*F0_PROBES, *F1_PROBES, *F2_PROBES, *F3_PROBES)
 SELECTOR_RE = r'f([0123456]):([a-z][a-z0-9]*(?:-[a-z0-9]+)*) run=([0-9a-fA-F]{8})( platform=e500)?( safe=1)?'
+DOS_SELECTOR_RE = (r'f3:dos-conformance run=([0-9a-fA-F]{8}) '
+                   r'guest=(freedos|ciukidos)( kernel=unified)?')
 
 CPU_MINIMUM_ERROR = 'CIUKI: this PC needs an i686 CPU with CMOV'
-E820_MINIMUM_ERROR = 'CIUKI: this PC needs a valid BIOS E820 memory map (L:E820)'
-VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer'
+E820_MINIMUM_ERROR = 'CIUKI: this PC needs a BIOS E820 memory map (L:E820)'
+VBE_MINIMUM_ERROR = 'CIUKI: this PC needs VBE 2.0+ for a linear framebuffer'
 
 
 class LoaderUART:
@@ -90,6 +92,13 @@ def boot_minimum(cpu, entries, controller=None, complete=True, signature='SMAP')
 def selector(request, source='menu', validated_fw_cfg=False):
     if not isinstance(request, str) or not request.isascii() or len(request) > 64:
         raise ValueError('selector must be at most 64 ASCII bytes')
+    if request.startswith('f3:dos-conformance '):
+        dos = re.fullmatch(DOS_SELECTOR_RE, request)
+        if not dos or (dos[3] and dos[2] != 'ciukidos'):
+            raise ValueError('invalid DOS conformance selector')
+        return {'phase': 3, 'probe': 'dos-conformance', 'run': dos[1],
+                'platform': None, 'safe': False, 'guest': dos[2],
+                'kernel': 'unified' if dos[3] else dos[2]}
     title = re.fullmatch(r'f3:title run=([0-9a-fA-F]{8}) title=([a-z][a-z0-9-]{0,22})', request)
     if title:
         return {'phase': 3, 'probe': 'title', 'run': title[1], 'title': title[2], 'platform': None, 'safe': False}
@@ -127,8 +136,8 @@ class BootMenu:
     MENU_TICKS = 55
     ENTRY_TICKS = 548
     POLL_LIMIT = 0x2000000
-    SAFE_CONFIRMATION = 'Safe mode selected; P for a probe, or wait'
-    MENU_HINT = 'Press S for safe mode, L for serial log, H for Hardware check'
+    SAFE_CONFIRMATION = 'Safe mode; P for a probe, or wait'
+    MENU_HINT = 'S for safe mode, L for log, H for Hardware check'
 
     def __init__(self, tick=0, safe=False, serial=True, request=None, source='cfg'):
         self.safe = safe

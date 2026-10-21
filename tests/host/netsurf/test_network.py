@@ -144,9 +144,11 @@ class NetworkTests(unittest.TestCase):
             "-I"+str(BASE / "source/netsurf/include"),"-I"+str(BASE / "source/netsurf/frontends")]
         cls.libs=[str(BASE / "prefix/lib/libbearssl.a"),str(BASE / "prefix/lib/libz.a"),"-pthread"]
         def compile(name,sources,extra=()):
-            subprocess.run([*cls.flags,*(cls.port_flags if name in ("network","tls-limits") else []),*map(str,sources),*cls.libs,*extra,"-o",str(OUT / name)],check=True)
+            subprocess.run([*cls.flags,*(cls.port_flags if name in ("network","tls-limits","tls-entropy") else []),*map(str,sources),*cls.libs,*extra,"-o",str(OUT / name)],check=True)
         compile("http",[HERE / "http_test.c",ROOT / "sdk/netsurf/port/http.c"])
         compile("tls-limits",[HERE / "tls_limits_test.c"])
+        compile("tls-entropy",[HERE / "tls_entropy_test.c",ROOT / "sdk/netsurf/port/tls.c"],
+            ["-Wl,--wrap=getentropy,--wrap=clock_gettime,--wrap=br_ssl_engine_inject_entropy,--wrap=br_ssl_client_reset"])
         compile("dns",[HERE / "dns_test.c",ROOT / "sdk/netsurf/port/dns.c"],
             ["-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo,--wrap=calloc,--wrap=free,--wrap=pthread_create"])
         cls.wraps=["-Wl,"+",".join("--wrap="+n for n in ("socket","connect","send","recv","close","fcntl","getsockopt","poll","getaddrinfo","freeaddrinfo","open"))]
@@ -158,7 +160,7 @@ class NetworkTests(unittest.TestCase):
         libraries=["-Wl,--start-group",*[str(p) for p in sorted((BASE / "prefix/lib").glob("*.a")) if p.name!="libnsfb.a"],"-Wl,--end-group",
                    "-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-lm","-pthread"]
         subprocess.run([*cls.flags,*cls.port_flags,str(HERE / "browser_network_test.c"),*map(str,objects),*cls.stack,
-            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main,--wrap=nsfb_event,--wrap=clock_gettime,--wrap=pthread_cond_wait","-o",str(OUT / "browser")],check=True)
+            "-L"+str(BASE / "prefix/lib"),*libraries,*cls.wraps,"-Wl,--wrap=main,--wrap=nsfb_event,--wrap=clock_gettime,--wrap=pthread_cond_wait,--wrap=ciuki_tls_create,--wrap=getentropy","-o",str(OUT / "browser")],check=True)
 
     @classmethod
     def compile_stack(cls):
@@ -196,6 +198,7 @@ class NetworkTests(unittest.TestCase):
 
     def test_parser(self):subprocess.run([str(OUT / "http")],check=True,env=SAN,timeout=20)
     def test_certificate_capture_limits(self):subprocess.run([str(OUT / "tls-limits")],check=True,env=SAN,timeout=10)
+    def test_entropy_seeding(self):subprocess.run([str(OUT / "tls-entropy")],check=True,env=SAN,timeout=10)
     def test_dns_worker(self):subprocess.run([str(OUT / "dns")],check=True,env=SAN,timeout=10)
 
     def test_http_engine(self):
@@ -227,7 +230,8 @@ class NetworkTests(unittest.TestCase):
             capture=Path(folder) / "page.xrgb"
             result=subprocess.run([str(OUT / "browser"),"-w","640","-h","480",
                 "--ciuki-resources="+str(BASE / "stage/system/netsurf"),"--ciuki-profile="+folder,
-                "--ciuki-capture="+str(capture),f"{scheme}://{host}:8080{path}"],capture_output=True,text=True,timeout=25,env=dict(SAN,CIUKI_FIXTURE_MODE=mode))
+                "--ciuki-capture="+str(capture),f"{scheme}://{host}:{8443 if scheme=='https' else 8080}{path}"],capture_output=True,text=True,timeout=25,
+                env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der")))
             self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
             if error:self.assert_page_error(result,error)
@@ -258,5 +262,17 @@ class NetworkTests(unittest.TestCase):
 
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
+
+    def test_browser_https_acceptance(self):
+        cases=[("/page",{"scheme":"https","expected":"<h1>Ciuki</h1>"}),
+            ("/page",{"scheme":"https","mode":"browser-untrusted","error":"TLS certificate validation failed: untrusted, malformed, or unsupported certificate."}),
+            ("/upgrade",{"expected":"fixture_tls_cookie_roundtrip=1"}),
+            ("/tls-cookie-start",{"scheme":"https","expected":"fixture_tls_cookie_roundtrip=1"}),
+            ("/gzip64",{"scheme":"https","expected":"fixture_tls_gzip_bytes=65536"}),
+            ("/page",{"scheme":"https","mode":"browser-entropy","error":"Secure connections are not ready yet. Estimated initial wait remaining: up to ","expected":"fixture_entropy_estimate_ok=1"}),
+            ("/page",{"scheme":"https","mode":"browser-entropy-late","error":"The initial one-minute estimate has elapsed; readiness is not guaranteed.","expected":"fixture_entropy_estimate_ok=1"}),
+            ("/page",{"scheme":"https","mode":"browser-entropy-reload","expected":"fixture_entropy_reload=1"})]
+        for path,options in cases:
+            with self.subTest(path=path,options=options):self.browser(path,**options)
 
 if __name__=="__main__":unittest.main()
