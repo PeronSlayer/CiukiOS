@@ -24,3 +24,11 @@ No commercial installers, no downloads (report what is missing); `rg`/`sed` only
 ## Amendment 1 (lead, 2026-10-21, after two sessions; WIP commit 68a7a7fc)
 
 Decisions: (1) the native `makensis` adaptation is approved as delivered (exact input pins and Windows stubs, explicit host adaptations). (2) Implement the H1 host-adapter services the four flows need — Win32 file services on a fixture tree, registry through the w32srv model (`tests/host/win32/user32/kernel_bridge.c` pattern), child process creation with a waitable handle, temp folder — so the compiled NSIS, CAB/INF and self-extractor flows run end to end on the host adapter with their manifests checked; fail-closed entry attempts are not acceptance. (3) The i386 PE preflight that the sandbox blocks with SIGSYS stays in the suite; the lead runs it. (4) The four-predicate probe dry-run must pass against the authored fixtures. Report in the "Amendment 1" section.
+
+## Amendment 2 (lead, 2026-10-21, from the lead's run of the installer suite outside the sandbox; log `build/lead/installers.log` in this worktree)
+
+The three tests the sandbox could not run fail on the host adapter; fix production (or the H1 backend where a service is missing), not the expectations:
+1. `test_four_predicate_probe_dry_run`: the install flow does not produce `C:\WINDOWS\Desktop\Ciuki Installer Fixture.lnk` (`FileNotFoundError` in `flow_driver.py:75`): the compiled NSIS flow's desktop shortcut is not written (shell-link path through the f5-15A writer) or the manifest names the wrong location.
+2. `test_reused_fdi_exact_extraction_and_bad_checksum`: the `cabinet.dll` extraction fixture ends `errors=1` with `kernel_enosys=8`: eight kernel operations the H1 backend answers ENOSYS; identify them from the record stream and implement them in the backend (or in production if a real service is missing) so FDI extraction completes with exact checksums.
+3. `test_reused_inf_chain_and_selfextract_child_wait`: after `advpack.dll` attaches, `[win32] crash exception unhandled`, `TERMINATE 3221225477` (access violation): debug the INF chain/self-extractor path to the faulting call (crash record, stack words) and fix the cause.
+Rerun `python3 -B -m unittest discover -s tests/host/win32/installers -t .` as far as the sandbox allows and report in "Amendment 2".
