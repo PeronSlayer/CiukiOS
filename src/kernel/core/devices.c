@@ -216,7 +216,7 @@ static void drivers(struct ciuki_devices_info *out)
             if (equal(out->devices[k].driver, builtins[i].name)) detected = true;
         /* Preserve the existing catalogue order. The fixed ABI has sixteen
          * rows; new NIC rows are included when detected, replacing an
-         * unbound older NIC row if necessary. At most four NICs are admitted. */
+         * unbound older NIC row if necessary. At most NETIF_MAX NICs are admitted. */
         if (i >= 16 && !detected) continue;
         unsigned slot = out->driver_count;
         if (slot == CIUKI_DRIVERS_MAX) {

@@ -38,4 +38,8 @@ int net_bridge_identity_load(const struct bridge_identity_ops *, uint8_t[16]);
  * generating another identity; invalid records and failed barriers refuse LAN. */
 int net_bridge_identity_read_file(void *, uint8_t[16]);
 int net_bridge_identity_write_file(void *, const uint8_t[16]);
+/* Lazy first-LAN-launch provisioning. Storage is ready and the NETID record
+ * is durable before a port/VM is published. No NIC, invalid identity or an
+ * unsupported receive operation refuses admission. One physical port only. */
+int net_bridge_primary_port(struct net_bridge_port **);
 #endif

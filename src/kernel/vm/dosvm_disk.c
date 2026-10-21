@@ -228,6 +228,12 @@ static struct {
     uint32_t used;
 } digests[DOSVM_DIGESTS];
 static uint32_t digest_clock;
+void dosvm_game_digest_invalidate(void)
+{
+    uint32_t flags=irq_save();
+    memset(digests,0,sizeof(digests));
+    irq_restore(flags);
+}
 static bool digest_lookup(const struct vfs_file_version *version, char out[65])
 {
     bool hit = false;

@@ -217,6 +217,20 @@ static void test_irq_restore(uint32_t f) {
                             '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
 
+    def test_contention_record_budget(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='contention-budget-', dir=out) as directory:
+            binary = Path(directory) / 'budget'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-Wno-unused-function', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-pthread',
+                            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+                            '-fsanitize=address,undefined', '-I', str(ROOT / 'src/kernel/include'),
+                            str(ROOT / 'tests/host/contention_budget_test.c'),
+                            *[str(ROOT / ('src/kernel/fs/' + unit + '.c')) for unit in ('fs_port', 'blkreq', 'vfs')],
+                            str(ROOT / 'src/kernel/lib/fmt.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+
     def test_i8042_pacing_bound(self):
         out = ROOT / 'build/host'
         out.mkdir(parents=True, exist_ok=True)
@@ -283,6 +297,11 @@ static void test_irq_restore(uint32_t f) {
                     end += 1
                 block += source[match.start():end] + '\n'
             (temp / 'latency_scheduler.inc').write_text('#include <ciuki/sync.h>\n' + block)
+            timing = (ROOT / 'src/kernel/core/timing.c').read_text()
+            begin = timing.index('static inline uint64_t rdtsc(void)')
+            end = timing.index('\nvoid crit_begin(void)', begin)
+            timing = (timing[:begin] + timing[end:]).replace('uint64_t g_tsc_per_ms;', 'extern uint64_t g_tsc_per_ms;')
+            (temp / 'latency_timing.inc').write_text(timing)
             timers = (ROOT / 'src/kernel/core/sync.c').read_text()
             (temp / 'deadline_timers.inc').write_text(timers[timers.index('/* F0-46 timers:'):timers.index('/* End F0-46 timers. */')])
             pit = (ROOT / 'src/kernel/arch/pic_pit.c').read_text()
@@ -290,6 +309,7 @@ static void test_irq_restore(uint32_t f) {
             write_model(temp / 'vm_creation_model.inc')
             for unit, extra in (
                 ('kernel_latency_test.c', []),
+                ('scheduler_irqoff_test.c', []),
                 ('scheduler_priorities_test.c', []),
                 ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),

@@ -11,13 +11,23 @@
 #include <pthread.h>
 #include <time.h>
 #include <ciuki/w32_diagnostics.h>
+static unsigned directory_state=CIUKI_PROC_LIVE;
+int ciuki_proc_list(void *p,uint32_t n)
+{
+    assert(n>=sizeof(struct ciuki_proc_system)+sizeof(struct ciuki_proc_record));
+    struct ciuki_proc_system *s=p;memset(p,0,n);s->version=CIUKI_PROC_VERSION;s->size=sizeof(*s);s->records=1;
+    struct ciuki_proc_record *r=(void *)(s+1);r->pid=700;r->state=directory_state;return 1;
+}
+extern int desk_restart_process_alive(uint32_t);
 static unsigned starts,signals;
 static int authorized=1;
-static unsigned native_launches;
+static pthread_t desktop_thread;
+static unsigned native_launches,dos_launches;
+int desk_task_launch(struct desktop *d,const char *name,const char *arg)
+{assert(pthread_equal(pthread_self(),desktop_thread));assert(d && !strcmp(name,"dosbox") && !strcmp(arg,"D:\\INSTALL.BAT"));dos_launches++;return 152;}
 static int readiness;
 static unsigned idle_enabled,idle_calls,idle_finished,idle_boot_checks;
 static uint64_t fixture_ms;
-static pthread_t desktop_thread;
 static pthread_t idle_thread;
 static struct w32r_packet idle_packet;
 int __real_clock_gettime(clockid_t,struct timespec *);
@@ -124,6 +134,9 @@ static void idle_traffic(struct desktop *d)
 }
 int main(void)
 {
+    assert(desk_restart_process_alive(700));directory_state=CIUKI_PROC_STOPPING;assert(desk_restart_process_alive(700));
+    directory_state=CIUKI_PROC_ZOMBIE;assert(!desk_restart_process_alive(700));assert(!desk_restart_process_alive(701));directory_state=CIUKI_PROC_LIVE;
+
     desktop_thread=pthread_self();
     static struct desktop d;
     authorized=0;desk_w32_start(&d);desk_w32_poll(&d);assert(!starts);
@@ -147,6 +160,9 @@ int main(void)
     strcpy(r.directory,"C:\\unsupported-cwd");assert(desk_w32_native_shortcut(&d,&r)==-EOPNOTSUPP);
     r.directory[0]=0;strcpy(r.arguments,"1 2 3 4 5 6 7");assert(desk_w32_native_shortcut(&d,&r)==-E2BIG);
     assert(native_launches==1);
+    struct desk_launch_record dos={.label="Install",.target="/mnt/d/INSTALL.BAT",.show=1};
+    assert(!desk_w32_launch(DESK_W32_DOS,&dos) && !dos_launches);
+    desk_w32_poll(&d);assert(dos_launches==1 && native_launches==1);
     strcpy(r.target,"C:\\Documents\\control");r.arguments[0]=0;
     assert(desk_w32_native_shortcut(&d,&r)==-EPERM && native_launches==1);
     puts("PASS reserved native identity cannot be forged by a similarly named user ELF");

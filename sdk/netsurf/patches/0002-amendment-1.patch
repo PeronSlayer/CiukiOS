@@ -1,0 +1,1079 @@
+CiukiOS f6-14 Amendment 1: upstream fixes and bounded offline admission.
+Applied after 0001-offline-sdk.patch; pinned originals stay unchanged.
+Reasons: short data MIME underflow; parser/construction admission before
+normalization; shared GIF/bitmap auxiliary memory ledger and frame cap;
+layout deadlines on min/max and plain text, including rejected timings;
+non-clicking input cancellation; successful top-level completion notification.
+Primary references and host evidence: docs/validation/netsurf-m1-amendment-1.md.
+
+--- a/netsurf/content/fetchers/data.c
++++ b/netsurf/content/fetchers/data.c
+@@ -201,9 +201,11 @@
+ 		return false;
+ 	}
+ 	
+-	if (strcmp(c->mimetype + strlen(c->mimetype) - 7, ";base64") == 0) {
++	size_t mimetype_length = strlen(c->mimetype);
++	if (mimetype_length >= 7 &&
++	    strcmp(c->mimetype + mimetype_length - 7, ";base64") == 0) {
+ 		c->base64 = true;
+-		c->mimetype[strlen(c->mimetype) - 7] = '\0';
++		c->mimetype[mimetype_length - 7] = '\0';
+ 	} else {
+ 		c->base64 = false;
+ 	}
+--- a/libdom/bindings/hubbub/parser.c
++++ b/libdom/bindings/hubbub/parser.c
+@@ -45,6 +45,9 @@
+ 					/**< The document's encoding source */
+ 	const char *encoding; 		/**< The document's encoding */
+ 
++	unsigned ciuki_nodes;
++	size_t ciuki_text;
++	bool ciuki_rejected;
+ 	bool complete;			/**< Indicate stream completion */
+ 
+ 	dom_msg msg;		/**< Informational messaging function */
+@@ -53,6 +56,36 @@
+ 
+ 	void *mctx;		/**< Pointer to client data */
+ };
++
++/* Ciuki M1: cumulative allocations, not just the final DOM size. Failed
++ * admissions never recurse or allocate, including malformed-tree reparenting. */
++static bool ciuki_take(dom_hubbub_parser *p, size_t bytes)
++{
++    if (p->ciuki_rejected || p->ciuki_nodes >= 8192 || bytes > 8192 ||
++        bytes > 131072 - p->ciuki_text) {
++        p->ciuki_rejected = true;
++        fprintf(stderr, "NetSurf structure rejected: parser admission limit.\n");
++        return false;
++    }
++    p->ciuki_nodes++;
++    p->ciuki_text += bytes;
++    return true;
++}
++static bool ciuki_attach(void *parent, void *child)
++{
++    dom_node_internal *p = parent, *root = child, *node = child;
++    unsigned depth = 0, seen = 0;
++    for (; p; p = p->parent) if (++depth >= 64) return false;
++    unsigned at = depth + 1;
++    while (node) {
++        if (at > 64 || ++seen > 8192) return false;
++        if (node->first_child) { node = node->first_child; at++; continue; }
++        while (node != root && !node->next) { node = node->parent; at--; }
++        if (node == root) break;
++        node = node->next;
++    }
++    return true;
++}
+ 
+ /* Forward declaration to break reference loop */
+ static hubbub_error add_attributes(void *parser, void *node,
+@@ -72,6 +105,7 @@
+ 	struct dom_comment *comment;
+ 
+ 	*result = NULL;
++	if (!ciuki_take(dom_parser, data->len)) return HUBBUB_NOMEM;
+ 
+ 	err = dom_string_create(data->ptr, data->len, &str);
+ 	if (err != DOM_NO_ERR) {
+@@ -122,6 +156,9 @@
+ 	struct dom_document_type *dtype;
+ 
+ 	*result = NULL;
++	if (!ciuki_take(dom_parser, doctype->name.len) ||
++	    !ciuki_take(dom_parser, doctype->public_missing ? 0 : doctype->public_id.len) ||
++	    !ciuki_take(dom_parser, doctype->system_missing ? 0 : doctype->system_id.len)) return HUBBUB_NOMEM;
+ 
+ 	qname = parser_strndup((const char *) doctype->name.ptr,
+ 			(size_t) doctype->name.len);
+@@ -193,6 +230,7 @@
+ 	hubbub_error herr;
+ 
+ 	*result = NULL;
++	if (!ciuki_take(dom_parser, tag->name.len)) return HUBBUB_NOMEM;
+ 
+ 	err = dom_string_create_interned(tag->name.ptr, tag->name.len, &name);
+ 	if (err != DOM_NO_ERR) {
+@@ -267,6 +305,7 @@
+ 	*result = element;
+ 
+ clean1:
++	if (*result == NULL && element != NULL) dom_node_unref(element);
+ 	dom_string_unref(name);
+ 
+ fail:
+@@ -285,6 +324,7 @@
+ 	struct dom_text *text = NULL;
+ 
+ 	*result = NULL;
++	if (!ciuki_take(dom_parser, data->len)) return HUBBUB_NOMEM;
+ 
+ 	err = dom_string_create(data->ptr, data->len, &str);
+ 	if (err != DOM_NO_ERR) {
+@@ -341,6 +381,13 @@
+ 	dom_hubbub_parser *dom_parser = (dom_hubbub_parser *) parser;
+ 	dom_exception err;
+ 
++	*result = NULL;
++	if (!ciuki_attach(parent, child)) {
++		dom_parser->ciuki_rejected = true;
++		fprintf(stderr, "NetSurf structure rejected: DOM depth.\n");
++		return HUBBUB_NOMEM;
++	}
++
+ 	err = dom_node_append_child((struct dom_node *) parent,
+ 				    (struct dom_node *) child,
+ 				    (struct dom_node **) result);
+@@ -359,6 +406,13 @@
+ {
+ 	dom_hubbub_parser *dom_parser = (dom_hubbub_parser *) parser;
+ 	dom_exception err;
++
++	*result = NULL;
++	if (!ciuki_attach(parent, child)) {
++		dom_parser->ciuki_rejected = true;
++		fprintf(stderr, "NetSurf structure rejected: DOM depth.\n");
++		return HUBBUB_NOMEM;
++	}
+ 
+ 	err = dom_node_insert_before((struct dom_node *) parent,
+ 			(struct dom_node *) child,
+@@ -398,6 +452,21 @@
+ 	dom_hubbub_parser *dom_parser = (dom_hubbub_parser *) parser;
+ 	dom_exception err;
+ 
++	*result = NULL;
++	/* Hubbub requests shallow clones; deep recursive clones are not admitted. */
++	if (deep || !ciuki_take(dom_parser, 0)) return HUBBUB_NOMEM;
++    dom_namednodemap *attributes = NULL;
++    uint32_t count = 0;
++    err = dom_node_get_attributes(node, &attributes);
++    if (err != DOM_NO_ERR) return HUBBUB_NOMEM;
++    if (attributes != NULL) {
++        err = dom_namednodemap_get_length(attributes, &count);
++        dom_namednodemap_unref(attributes);
++        if (err != DOM_NO_ERR) return HUBBUB_NOMEM;
++    }
++    for (uint32_t i = 0; i < count; i++) {
++        if (!ciuki_take(dom_parser, 0)) return HUBBUB_NOMEM;
++    }
+ 	err = dom_node_clone_node((struct dom_node *) node, deep,
+ 			(struct dom_node **) result);
+ 	if (err != DOM_NO_ERR) {
+@@ -427,6 +496,11 @@
+ 		if (child == NULL)
+ 			break;
+ 
++		if (!ciuki_attach(new_parent, child)) {
++			dom_parser->ciuki_rejected = true;
++			dom_node_unref(child);
++			return HUBBUB_NOMEM;
++		}
+ 		err = dom_node_remove_child(node, (struct dom_node *) child,
+ 				&result);
+ 		if (err != DOM_NO_ERR) {
+@@ -565,9 +639,12 @@
+ 	dom_exception err;
+ 	uint32_t i;
+ 
++	if (n_attributes > 64) { dom_parser->ciuki_rejected = true;return HUBBUB_NOMEM; }
+ 	for (i = 0; i < n_attributes; i++) {
+ 		dom_string *name, *value;
+ 
++		if (!ciuki_take(dom_parser, attributes[i].name.len) ||
++		    !ciuki_take(dom_parser, attributes[i].value.len)) return HUBBUB_NOMEM;
+ 		err = dom_string_create_interned(attributes[i].name.ptr,
+ 				attributes[i].name.len, &name);
+ 		if (err != DOM_NO_ERR) {
+@@ -772,6 +849,9 @@
+ 		return DOM_HUBBUB_NOMEM;
+ 	}
+ 
++	binding->ciuki_nodes = 0;
++	binding->ciuki_text = 0;
++	binding->ciuki_rejected = false;
+ 	binding->parser = NULL;
+ 	binding->doc = NULL;
+ 	binding->encoding = params->enc;
+@@ -903,6 +983,9 @@
+ 		return DOM_HUBBUB_NOMEM;
+ 	}
+ 
++	binding->ciuki_nodes = 0;
++	binding->ciuki_text = 0;
++	binding->ciuki_rejected = false;
+ 	binding->parser = NULL;
+ 	binding->doc = (struct dom_document *)dom_node_ref(document);
+ 	binding->encoding = params->enc;
+@@ -1021,7 +1104,9 @@
+ {
+ 	hubbub_error err;
+ 
++	if (parser->ciuki_rejected) return DOM_HUBBUB_NOMEM;
+ 	err = hubbub_parser_parse_chunk(parser->parser, data, len);
++	if (parser->ciuki_rejected) return DOM_HUBBUB_NOMEM;
+ 	if (err != HUBBUB_OK)
+ 		return DOM_HUBBUB_HUBBUB_ERR | err;
+ 
+@@ -1040,7 +1125,9 @@
+ {
+ 	hubbub_error err;
+ 
++	if (parser->ciuki_rejected) return DOM_HUBBUB_NOMEM;
+ 	err = hubbub_parser_completed(parser->parser);
++	if (parser->ciuki_rejected) return DOM_HUBBUB_NOMEM;
+ 	if (err != HUBBUB_OK) {
+ 		parser->msg(DOM_MSG_ERROR, parser->mctx,
+ 				"hubbub_parser_completed failed: %d", err);
+--- a/netsurf/content/handlers/html/box_manipulate.c
++++ b/netsurf/content/handlers/html/box_manipulate.c
+@@ -101,11 +101,14 @@
+ 	unsigned int i;
+ 	struct box *box;
+ 
++	/* context is the per-document bctx counter, including implied boxes. */
++	if (context == NULL || *(int *)context >= 8192) return NULL;
+ 	box = talloc(context, struct box);
+ 	if (!box) {
+ 		return 0;
+ 	}
+ 
++	++*(int *)context;
+ 	talloc_set_destructor(box, box_talloc_destructor);
+ 
+ 	box->type = BOX_INLINE;
+--- a/netsurf/content/handlers/html/box_construct.c
++++ b/netsurf/content/handlers/html/box_construct.c
+@@ -534,6 +534,10 @@
+ 		dom_string_unref(s);
+ 	}
+ 
++	unsigned ciuki_depth = 0;
++	for (struct box *p = props.containing_block; p; p = p->parent)
++		if (++ciuki_depth >= 64) return false;
++
+ 	box = box_create(styles, styles->styles[CSS_PSEUDO_ELEMENT_NONE], false,
+ 			props.href, props.target, props.title, id,
+ 			ctx->bctx);
+@@ -557,6 +561,8 @@
+ 
+ 		dom_string_unref(s);
+ 	}
++
++	if (box->columns > 64) return false;
+ 
+ 	err = dom_element_get_attribute(ctx->n, corestring_dom_rowspan, &s);
+ 	if (err != DOM_NO_ERR)
+@@ -1004,6 +1010,10 @@
+ 	if (err != DOM_NO_ERR || content == NULL)
+ 		return false;
+ 
++	if (dom_string_byte_length(content) > 8192) {
++		dom_string_unref(content);return false;
++	}
++
+ 	if (css_computed_white_space(props.parent_style) ==
+ 			CSS_WHITE_SPACE_NORMAL ||
+ 			css_computed_white_space(props.parent_style) ==
+@@ -1289,9 +1299,29 @@
+ 			root.children = root.last = ctx->root_box;
+ 			root.children->parent = &root;
+ 
++            struct box *node = ctx->root_box;
++            unsigned seen = 0, depth = 0;
++            size_t bytes = 0;
++            bool admitted = true;
++            while (node) {
++                if (++seen > 8192 || depth > 64 || node->length > 8192 ||
++                    node->columns > 64 || node->length > 131072 - bytes) {
++                    admitted = false;break;
++                }
++                bytes += node->length;
++                if (node->children) { node = node->children;depth++;continue; }
++                while (node != ctx->root_box && !node->next) { node = node->parent;depth--; }
++                if (node == ctx->root_box) break;
++                node = node->next;
++            }
++            if (!admitted) {
++                ctx->root_box->parent = NULL;
++                ctx->cb(ctx->content, false);free(ctx);return;
++            }
+ 			/** \todo Remove box_normalise_block */
+ 			if (box_normalise_block(&root, ctx->root_box,
+ 					ctx->content) == false) {
++				ctx->root_box->parent = NULL;
+ 				ctx->cb(ctx->content, false);
+ 			} else {
+ 				ctx->content->layout = root.children;
+--- a/netsurf/content/handlers/html/box_normalise.c
++++ b/netsurf/content/handlers/html/box_normalise.c
+@@ -108,6 +108,7 @@
+ 	if (col_span == 0)
+ 		col_span = 1;
+ 
++	if (cell_start_col >= 64 || col_span > 64 - cell_start_col) return false;
+ 	cell_end_col = cell_start_col + col_span;
+ 
+ 	if (col_info->num_columns < cell_end_col) {
+@@ -151,6 +152,9 @@
+ 			struct columns *col_info,
+ 			html_content * c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = row; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *cell = NULL;
+@@ -290,6 +294,9 @@
+ 			      struct columns *col_info,
+ 			      html_content * c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = row_group; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *row;
+@@ -616,6 +623,9 @@
+ static bool
+ box_normalise_table(struct box *table, const struct box *root, html_content * c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = table; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *row_group;
+@@ -820,6 +830,9 @@
+ 		const struct box *root,
+ 		html_content *c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = flex_container; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *implied_flex_item;
+@@ -996,6 +1009,9 @@
+ 			       const struct box *root,
+ 			       html_content * c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = cont; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 
+@@ -1087,6 +1103,9 @@
+ bool
+ box_normalise_block(struct box *block, const struct box *root, html_content *c)
+ {
++	unsigned ciuki_depth = 0;
++	for (const struct box *p = block; p; p = p->parent)
++		if (++ciuki_depth > 64) return false;
+ 	struct box *child;
+ 	struct box *next_child;
+ 	struct box *table;
+--- a/libnsgif/src/gif.c
++++ b/libnsgif/src/gif.c
+@@ -16,6 +16,13 @@
+ 
+ #include "lzw.h"
+ #include "nsgif.h"
++#include "sdk/netsurf/port/image_memory.inc"
++
++#define malloc ciuki_image_malloc
++#define calloc ciuki_image_calloc
++#define realloc ciuki_image_realloc
++#define free ciuki_image_free
++
+ 
+ /** Default minimum allowable frame delay in cs. */
+ #define NSGIF_FRAME_DELAY_MIN 2
+@@ -291,7 +298,7 @@
+ 	return false;
+ }
+ 
+-static void nsgif__record_frame(
++static nsgif_error nsgif__record_frame(
+ 		struct nsgif *gif,
+ 		const uint32_t *bitmap)
+ {
+@@ -303,19 +310,19 @@
+ 	if (gif->decoded_frame == NSGIF_FRAME_INVALID ||
+ 	    gif->decoded_frame == gif->prev_index) {
+ 		/* No frame to copy, or already have this frame recorded. */
+-		return;
++		return NSGIF_OK;
+ 	}
+ 
+ 	bitmap = nsgif__bitmap_get(gif);
+ 	if (bitmap == NULL) {
+-		return;
++		return NSGIF_ERR_OOM;
+ 	}
+ 
+ 	if (gif->prev_frame == NULL) {
+ 		prev_frame = realloc(gif->prev_frame,
+ 				width * height * pixel_bytes);
+ 		if (prev_frame == NULL) {
+-			return;
++			return NSGIF_ERR_OOM;
+ 		}
+ 	} else {
+ 		prev_frame = gif->prev_frame;
+@@ -325,6 +332,7 @@
+ 
+ 	gif->prev_frame  = prev_frame;
+ 	gif->prev_index  = gif->decoded_frame;
++	return NSGIF_OK;
+ }
+ 
+ static nsgif_error nsgif__recover_frame(
+@@ -336,6 +344,7 @@
+ 	size_t height = gif->info.height;
+ 	size_t width  = gif->info.width;
+ 
++	if (prev_frame == NULL) return NSGIF_ERR_OOM;
+ 	memcpy(bitmap, prev_frame, height * width * pixel_bytes);
+ 
+ 	return NSGIF_OK;
+@@ -720,7 +729,8 @@
+ 
+ 	if (frame->info.disposal == NSGIF_DISPOSAL_RESTORE_PREV) {
+ 		/* Store the previous frame for later restoration */
+-		nsgif__record_frame(gif, bitmap);
++		ret = nsgif__record_frame(gif, bitmap);
++		if (ret != NSGIF_OK) return ret;
+ 	}
+ 
+ 	ret = nsgif__decode(gif, frame, data, bitmap);
+@@ -1268,6 +1278,8 @@
+ {
+ 	struct nsgif_frame *frame;
+ 
++	/* Bound metadata as well as decoded pixels. */
++	if (frame_idx >= 64) return NULL;
+ 	if (gif->frame_holders > frame_idx) {
+ 		frame = &gif->frames[frame_idx];
+ 	} else {
+--- a/libnsgif/src/lzw.c
++++ b/libnsgif/src/lzw.c
+@@ -13,6 +13,13 @@
+ #include <stdbool.h>
+ 
+ #include "lzw.h"
++#include "sdk/netsurf/port/image_memory.h"
++
++#define malloc ciuki_image_malloc
++#define calloc ciuki_image_calloc
++#define realloc ciuki_image_realloc
++#define free ciuki_image_free
++
+ 
+ /**
+  * \file
+--- a/netsurf/frontends/framebuffer/bitmap.c
++++ b/netsurf/frontends/framebuffer/bitmap.c
+@@ -39,6 +39,7 @@
+ #include "framebuffer/fbtk.h"
+ #include "framebuffer/framebuffer.h"
+ #include "framebuffer/bitmap.h"
++#include "sdk/netsurf/port/image_memory.h"
+ 
+ /**
+  * Create a bitmap.
+@@ -48,14 +49,18 @@
+  * \param  state   a flag word indicating the initial state
+  * \return an opaque struct bitmap, or NULL on memory exhaustion
+  */
+-static size_t ciuki_bitmap_bytes;
++/* Reserve pixels plus an upper bound for nsfb object, surface routines and
++ * plotter tables. RAM bitmaps have no cursor/palette allocations. */
+ static void *bitmap_create(int width, int height, enum gui_bitmap_flags flags)
+ {
+ 	nsfb_t *bm;
+-    if (width<=0 || height<=0 || width>1024 || height>1024 || (size_t)width*height*4>2*1024*1024-ciuki_bitmap_bytes) return NULL;
++    if (width<=0 || height<=0 || width>1024 || height>1024) return NULL;
++    size_t charge=(size_t)width*height*4+4096;
++    if (ciuki_image_reserve(charge)) return NULL;
+ 
+ 	bm = nsfb_new(NSFB_SURFACE_RAM);
+ 	if (bm == NULL) {
++        ciuki_image_release(charge);
+ 		return NULL;
+ 	}
+ 
+@@ -67,13 +72,14 @@
+ 
+ 	if (nsfb_init(bm) == -1) {
+ 		nsfb_free(bm);
++        ciuki_image_release(charge);
+ 		return NULL;
+ 	}
+ 
+     uint8_t *pixels;int stride;
+     nsfb_get_buffer(bm,&pixels,&stride);
+     memset(pixels,0,(size_t)stride*height);
+-    ciuki_bitmap_bytes+=(size_t)stride*height;
++
+ 	return bm;
+ }
+ 
+@@ -131,7 +137,7 @@
+ 	assert(bm != NULL);
+ 
+     int width,height;nsfb_get_geometry(bm,&width,&height,NULL);
+-    ciuki_bitmap_bytes-=(size_t)width*height*4;
++    ciuki_image_release((size_t)width*height*4+4096);
+ 	nsfb_free(bm);
+ }
+ 
+@@ -246,18 +252,8 @@
+ 	 * aspect ratio of the required thumbnail. */
+ 	cheight = ((cwidth * height) + (width / 2)) / width;
+ 
+-	/* create temporary surface */
+-	bm = nsfb_new(NSFB_SURFACE_RAM);
+-	if (bm == NULL) {
+-		return NSERROR_NOMEM;
+-	}
+-
+-	nsfb_set_geometry(bm, cwidth, cheight, NSFB_FMT_XBGR8888);
+-
+-	if (nsfb_init(bm) == -1) {
+-		nsfb_free(bm);
+-		return NSERROR_NOMEM;
+-	}
++	bm = bitmap_create(cwidth,cheight,BITMAP_OPAQUE);
++	if (bm == NULL) return NSERROR_NOMEM;
+ 
+ 	current = framebuffer_set_surface(bm);
+ 
+@@ -273,7 +269,7 @@
+ 
+ 	nsfb_plot_copy(bm, NULL, tbm, &loc);
+ 
+-	nsfb_free(bm);
++	bitmap_destroy(bm);
+ 
+ 	return NSERROR_OK;
+ }
+--- a/netsurf/frontends/framebuffer/Makefile
++++ b/netsurf/frontends/framebuffer/Makefile
+@@ -179,7 +179,7 @@
+ S_FRAMEBUFFER_FBTK := fbtk.c event.c fill.c bitmap.c user.c window.c 	\
+ 	text.c scroll.c osk.c 
+ 
+-S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c
++S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c ciuki/budget.c
+ 
+ S_FRONTEND += $(addprefix fbtk/,$(S_FRAMEBUFFER_FBTK))
+ 
+--- a/netsurf/content/handlers/html/layout.c
++++ b/netsurf/content/handlers/html/layout.c
+@@ -113,17 +113,7 @@
+ /* forward declaration to break cycles */
+ /* Ciuki local-document admission and a monotonic long-layout rejection gate.
+  * A failed layout returns to the event pump; it never re-enters core APIs. */
+-#include <time.h>
+-static uint64_t ciuki_layout_deadline;
+-uint64_t ciuki_layout_max_ns;
+-static uint64_t ciuki_layout_now(void)
+-{
+-    struct timespec t;
+-    if (clock_gettime(CLOCK_MONOTONIC,&t)) return UINT64_MAX;
+-    return (uint64_t)t.tv_sec*1000000000u+t.tv_nsec;
+-}
+-static bool ciuki_layout_expired(void)
+-{ return ciuki_layout_deadline && ciuki_layout_now()>=ciuki_layout_deadline; }
++#include "framebuffer/ciuki/budget.h"
+ 
+ static void layout_minmax_block(
+ 		struct box *block,
+@@ -272,6 +262,7 @@
+ 		const struct gui_layout_table *font_func,
+ 		const html_content *content)
+ {
++    if (ciuki_layout_expired()) return;
+ 	unsigned int i, j;
+ 	int border_spacing_h = 0;
+ 	int table_min = 0, table_max = 0;
+@@ -320,6 +311,7 @@
+ 	for (row_group = table->children; row_group; row_group =row_group->next)
+ 	for (row = row_group->children; row; row = row->next)
+ 	for (cell = row->children; cell; cell = cell->next) {
++        if (ciuki_layout_expired()) return;
+ 		assert(cell->type == BOX_TABLE_CELL);
+ 		assert(cell->style);
+ 		/** TODO: Handle colspan="0" correctly.
+@@ -330,6 +322,7 @@
+ 			continue;
+ 
+ 		layout_minmax_block(cell, font_func, content);
++        if (ciuki_layout_expired()) return;
+ 		i = cell->start_column;
+ 
+ 		if (col[i].positioned)
+@@ -353,6 +346,7 @@
+ 			continue;
+ 
+ 		layout_minmax_block(cell, font_func, content);
++        if (ciuki_layout_expired()) return;
+ 		i = cell->start_column;
+ 
+ 		/* find min width so far of spanned columns, and count
+@@ -488,6 +482,7 @@
+ 		   const struct gui_layout_table *font_func,
+ 		   const html_content *content)
+ {
++    if (ciuki_layout_expired()) return NULL;
+ 	int min = 0, max = 0, width, height, fixed;
+ 	float frac;
+ 	size_t i, j;
+@@ -510,6 +505,7 @@
+ 
+ 	/* corresponds to the pass 1 loop in layout_line() */
+ 	for (b = first; b; b = b->next) {
++        if (ciuki_layout_expired()) { *line_min=0;*line_max=0;*line_has_height=false;return NULL; }
+ 		enum css_width_e wtype;
+ 		enum css_height_e htype;
+ 		enum css_box_sizing_e bs;
+@@ -533,6 +529,7 @@
+ 			else
+ 				layout_minmax_block(b->children, font_func,
+ 						content);
++        if (ciuki_layout_expired()) return NULL;
+ 			b->min_width = b->children->min_width;
+ 			b->max_width = b->children->max_width;
+ 			if (min < b->min_width)
+@@ -543,6 +540,7 @@
+ 
+ 		if (b->type == BOX_INLINE_BLOCK || b->type == BOX_INLINE_FLEX) {
+ 			layout_minmax_block(b, font_func, content);
++        if (ciuki_layout_expired()) return NULL;
+ 			if (min < b->min_width)
+ 				min = b->min_width;
+ 			max += b->max_width;
+@@ -840,6 +838,7 @@
+ 			       const struct gui_layout_table *font_func,
+ 			       const html_content *content)
+ {
++    if (ciuki_layout_expired()) return;
+ 	struct box *child;
+ 	int line_min = 0, line_max = 0;
+ 	int min = 0, max = 0;
+@@ -855,9 +854,11 @@
+ 	*has_height = false;
+ 
+ 	for (child = inline_container->children; child; ) {
++        if (ciuki_layout_expired()) return;
+ 		child = layout_minmax_line(child, &line_min, &line_max,
+ 				first_line, &line_has_height, font_func,
+ 				content);
++        if (ciuki_layout_expired()) return;
+ 		if (min < line_min)
+ 			min = line_min;
+ 		if (max < line_max)
+@@ -888,6 +889,7 @@
+ 		const struct gui_layout_table *font_func,
+ 		const html_content *content)
+ {
++    if (ciuki_layout_expired()) return;
+ 	struct box *child;
+ 	int min = 0, max = 0;
+ 	int extra_fixed = 0;
+@@ -970,6 +972,7 @@
+ 		if (content_get_type(block->object) == CONTENT_HTML) {
+ 			layout_minmax_block(html_get_box_tree(block->object),
+ 					font_func, content);
++        if (ciuki_layout_expired()) return;
+ 			min = html_get_box_tree(block->object)->min_width;
+ 			max = html_get_box_tree(block->object)->max_width;
+ 		} else {
+@@ -989,6 +992,7 @@
+ 			case BOX_BLOCK:
+ 				layout_minmax_block(child, font_func,
+ 						content);
++        if (ciuki_layout_expired()) return;
+ 				if (child->flags & HAS_HEIGHT)
+ 					child_has_height = true;
+ 				break;
+@@ -999,6 +1003,7 @@
+ 				layout_minmax_inline_container(child,
+ 						&child_has_height, font_func,
+ 						content);
++        if (ciuki_layout_expired()) return;
+ 				if (child_has_height &&
+ 						child ==
+ 						child->parent->children) {
+@@ -1008,6 +1013,7 @@
+ 			case BOX_TABLE:
+ 				layout_minmax_table(child, font_func,
+ 						content);
++        if (ciuki_layout_expired()) return;
+ 				/* todo: fix for zero height tables */
+ 				child_has_height = true;
+ 				child->flags |= MAKE_HEIGHT;
+@@ -1015,6 +1021,7 @@
+ 			default:
+ 				assert(0);
+ 			}
++            if (ciuki_layout_expired()) return;
+ 			assert(child->max_width != UNKNOWN_MAX_WIDTH);
+ 
+ 			if (child->style &&
+@@ -2408,6 +2415,8 @@
+ 	if (!space)
+ 		space_width = 0;
+ 
++	if (*content->bctx >= 8192 || ciuki_layout_expired()) return false;
++	++*content->bctx;
+ 	/* Create clone of split_box, c2 */
+ 	c2 = talloc_memdup(content->bctx, split_box, sizeof *c2);
+ 	if (!c2)
+@@ -5433,10 +5442,8 @@
+ 
+ 
+ /* exported function documented in html/layout.h */
+-bool layout_document(html_content *content, int width, int height)
++static bool ciuki_layout_document(html_content *content, int width, int height)
+ {
+-    uint64_t ciuki_started=ciuki_layout_now();
+-    ciuki_layout_deadline=ciuki_started+75000000u;
+     struct box *node=content->layout;
+     unsigned nodes=0,depth=0;
+     size_t text_bytes=0;
+@@ -5498,10 +5505,14 @@
+ 	layout_position_relative(&content->unit_len_ctx, doc, doc, 0, 0);
+ 
+ 	layout_calculate_descendant_bboxes(&content->unit_len_ctx, doc);
+-    uint64_t ciuki_elapsed=ciuki_layout_now()-ciuki_started;
+-    if (ciuki_elapsed>ciuki_layout_max_ns) ciuki_layout_max_ns=ciuki_elapsed;
+-    ciuki_layout_deadline=0;
+-    if (ciuki_elapsed>100000000u) return false;
+ 
+ 	return ret;
+ }
++
++/* Always stop the clock, including structural, allocation and timeout exits. */
++bool layout_document(html_content *content, int width, int height)
++{
++    uint64_t start=ciuki_layout_begin();
++    bool accepted=ciuki_layout_document(content,width,height);
++    return ciuki_layout_end(start,accepted);
++}
+--- a/netsurf/content/handlers/text/textplain.c
++++ b/netsurf/content/handlers/text/textplain.c
+@@ -67,6 +67,7 @@
+ 	size_t utf8_data_allocated;
+ 	unsigned long physical_line_count;
+ 	struct textplain_line *physical_line;
++	bool ciuki_layout_failed;
+ 	int formatted_width;
+ 	struct browser_window *bw;
+ 
+@@ -399,7 +400,15 @@
+ /**
+  * Reformat a CONTENT_TEXTPLAIN to a new width.
+  */
+-static void textplain_reformat(struct content *c, int width, int height)
++#include "netsurf/misc.h"
++#include "framebuffer/ciuki/budget.h"
++static void ciuki_text_error(void *context)
++{
++    struct content *c=context;
++    content_set_error(c);
++    content_broadcast_error(c,NSERROR_STOPPED,"Local text exceeds layout admission/time limit.");
++}
++static bool ciuki_text_reformat(struct content *c, int width, int height)
+ {
+ 	textplain_content *text = (textplain_content *) c;
+ 	char *utf8_data = text->utf8_data;
+@@ -413,6 +422,7 @@
+ 	size_t line_start;
+ 	nserror res;
+ 
++    if (utf8_data_size>131072 || ciuki_layout_expired()) return false;
+ 	NSLOG(netsurf, INFO, "content %p w:%d h:%d", c, width, height);
+ 
+ 	/* compute available columns (assuming monospaced font) - use 8
+@@ -422,7 +432,7 @@
+ 				  "ABCDEFGH", 8,
+ 				  &character_width);
+ 	if (res != NSERROR_OK) {
+-		return;
++		return false;
+ 	}
+ 
+ 	columns = (width - MARGIN - MARGIN) * 8 / character_width;
+@@ -443,7 +453,9 @@
+ 	space = 0;
+ 	i = 0;
+ 	col = 0;
++    unsigned ciuki_steps=0;
+ 	while (i < utf8_data_size) {
++        if (!(ciuki_steps++ & 255) && ciuki_layout_expired()) return false;
+ 		size_t csize; /* number of bytes in character */
+ 		uint32_t chr;
+ 		bool term;
+@@ -509,11 +521,11 @@
+ 	c->width = width;
+ 	c->height = line_count * textplain_line_height() + MARGIN + MARGIN;
+ 
+-	return;
++	return true;
+ 
+ no_memory:
+ 	NSLOG(netsurf, INFO, "out of memory (line_count %lu)", line_count);
+-	return;
++	return false;
+ }
+ 
+ 
+@@ -521,8 +533,23 @@
+  * Destroy a CONTENT_TEXTPLAIN and free all resources it owns.
+  */
+ 
++static void textplain_reformat(struct content *c, int width, int height)
++{
++    textplain_content *text=(textplain_content *)c;
++    if (text->ciuki_layout_failed) return;
++    uint64_t start=ciuki_layout_begin();
++    bool accepted=ciuki_text_reformat(c,width,height);
++    if (!ciuki_layout_end(start,accepted)) {
++        text->ciuki_layout_failed=true;c->ciuki_layout_rejected=true;text->physical_line_count=0;
++        c->width=1;c->height=1;
++        fprintf(stderr,"NetSurf layout rejected: plain text admission/time limit.\n");
++        guit->misc->schedule(0,ciuki_text_error,c);
++    }
++}
++
+ static void textplain_destroy(struct content *c)
+ {
++    guit->misc->schedule(-1,ciuki_text_error,c);
+ 	textplain_content *text = (textplain_content *) c;
+ 
+ 	lwc_string_unref(text->encoding);
+@@ -614,6 +641,7 @@
+ static size_t
+ textplain_offset_from_coords(struct content *c, int x, int y, int dir)
+ {
++    if (((textplain_content *)c)->ciuki_layout_failed) return 0;
+ 	textplain_content *textc = (textplain_content *) c;
+ 	float line_height = textplain_line_height();
+ 	struct textplain_line *line;
+@@ -701,6 +729,7 @@
+ 		       browser_mouse_state mouse,
+ 		       int x, int y)
+ {
++    if (((textplain_content *)c)->ciuki_layout_failed) return NSERROR_STOPPED;
+ 	textplain_content *text = (textplain_content *) c;
+ 	browser_pointer_shape pointer = BROWSER_POINTER_DEFAULT;
+ 	union content_msg_data msg_data;
+@@ -751,6 +780,7 @@
+ 		      browser_mouse_state mouse,
+ 		      int x, int y)
+ {
++    if (((textplain_content *)c)->ciuki_layout_failed) return NSERROR_STOPPED;
+ 	textplain_content *text = (textplain_content *) c;
+ 
+ 	if (browser_window_get_drag_type(bw) == DRAGGING_SELECTION && !mouse) {
+@@ -797,6 +827,7 @@
+  */
+ static bool textplain_keypress(struct content *c, uint32_t key)
+ {
++    if (((textplain_content *)c)->ciuki_layout_failed) return false;
+ 	textplain_content *text = (textplain_content *) c;
+ 	struct selection *sel = text->sel;
+ 
+@@ -1053,6 +1084,7 @@
+ 		 const struct rect *clip,
+ 		 const struct redraw_context *ctx)
+ {
++    if (((textplain_content *)c)->ciuki_layout_failed) return true;
+ 	textplain_content *text = (textplain_content *) c;
+ 	struct browser_window *bw = text->bw;
+ 	char *utf8_data = text->utf8_data;
+--- a/netsurf/frontends/framebuffer/fetch.c
++++ b/netsurf/frontends/framebuffer/fetch.c
+@@ -87,6 +87,8 @@
+ 		return "image/svg";
+ 	if (2 < l && strcasecmp(unix_path + l - 3, "bmp") == 0)
+ 		return "image/bmp";
++	if (l > 3 && strcasecmp(unix_path + l - 4, ".txt") == 0)
++		return "text/plain";
+ 	return "text/html";
+ }
+ 
+--- a/netsurf/content/content_protected.h
++++ b/netsurf/content/content_protected.h
+@@ -275,6 +275,8 @@
+ 	 * inconsistent and content must not be redrawn or modified.
+ 	 */
+ 	bool locked;
++	/** Deferred layout error: READY/DONE stacks must unwind before broadcast. */
++	bool ciuki_layout_rejected;
+ 
+ 	/**
+ 	 * Total data size, 0 if unknown.
+--- a/netsurf/content/content.h
++++ b/netsurf/content/content.h
+@@ -447,6 +447,8 @@
+  * \param h handle to the content to retrieve status from
+  * \return Content status
+  */
++bool content_is_layout_rejected(struct hlcache_handle *h);
++
+ content_status content_get_status(struct hlcache_handle *h);
+ 
+ 
+--- a/netsurf/content/content.c
++++ b/netsurf/content/content.c
+@@ -195,6 +195,7 @@
+ 	      const char *fallback_charset,
+ 	      bool quirks)
+ {
++    c->ciuki_layout_rejected=false;
+ 	struct content_user *user_sentinel;
+ 	nserror error;
+ 
+@@ -1121,6 +1122,12 @@
+ 
+ 
+ /* exported interface documented in content/content.h */
++bool content_is_layout_rejected(hlcache_handle *h)
++{
++    struct content *c=hlcache_handle_get_content(h);
++    return c && c->ciuki_layout_rejected;
++}
++
+ content_status content_get_status(hlcache_handle *h)
+ {
+ 	return content__get_status(hlcache_handle_get_content(h));
+@@ -1381,6 +1388,7 @@
+ /* exported interface documented in content/protected.h */
+ nserror content__clone(const struct content *c, struct content *nc)
+ {
++    nc->ciuki_layout_rejected=false;
+ 	nserror error;
+ 
+ 	error = llcache_handle_clone(c->llcache, &(nc->llcache));
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -1079,7 +1079,7 @@
+ 	htmlc->unit_len_ctx.root_style = htmlc->layout->style;
+ 
+ 	if (!layout_document(htmlc, width, height)) {
+-        htmlc->reflowing=false;htmlc->ciuki_layout_failed=true;
++        htmlc->reflowing=false;htmlc->ciuki_layout_failed=true;c->ciuki_layout_rejected=true;
+         c->width=1;c->height=1;
+         content_set_status(c,"Local page exceeds the layout admission/time limit.");
+         /* READY/reformat callers still own their stack references. Report
+--- a/libnsfb/include/libnsfb_event.h
++++ b/libnsfb/include/libnsfb_event.h
+@@ -183,6 +183,7 @@
+ enum nsfb_control_e {
+     NSFB_CONTROL_NONE,
+     NSFB_CONTROL_TIMEOUT, /* timeout event */
++    NSFB_CONTROL_CANCEL, /* cancel press/drag without a click */
+     NSFB_CONTROL_QUIT, /* surface handler quit event */
+ };
+ 
+--- a/netsurf/frontends/framebuffer/fbtk/event.c
++++ b/netsurf/frontends/framebuffer/fbtk/event.c
+@@ -227,6 +227,12 @@
+ 			break;
+ 
+ 		case NSFB_EVENT_CONTROL:
++            if (event->value.controlcode==NSFB_CONTROL_CANCEL) {
++                extern void ciuki_frontend_cancel(void);
++                root->u.root.grabbed=NULL;
++                ciuki_frontend_cancel();
++                break;
++            }
+ 			unused = true;
+ 			break;
+ 
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -97,6 +97,14 @@
+ 	int y;
+ 	bool grabbed_pointer;
+ } gui_drag;
++
++void ciuki_frontend_cancel(void)
++{
++    memset(&gui_drag,0,sizeof(gui_drag));
++    for (struct gui_window *gw=window_list;gw;gw=gw->next)
++        browser_window_mouse_track(gw->bw,0,0,0);
++}
++
+ 
+ 
+ /**
+@@ -642,8 +650,7 @@
+ 
+ 		if (!ciuki_chrome_modal()) fbtk_redraw(fbtk);
+         ciuki_chrome_render();
+-        if (ciuki_capture_path && (ciuki_capture_turns || (window_list && browser_window_get_content(window_list->bw) &&
+-            content_get_status(browser_window_get_content(window_list->bw))==CONTENT_STATUS_DONE))) {
++        if (ciuki_capture_path && window_list && !ciuki_chrome_busy()) {
+             /* Let deferred core callbacks unwind before taking host evidence. */
+             if (++ciuki_capture_turns>=3) { ciuki_chrome_capture(fbtk_get_nsfb(fbtk)); fb_complete=true; }
+         }
+@@ -2154,6 +2161,8 @@
+ 		gui_window_start_throbber(gw);
+ 		break;
+ 
++	case GW_EVENT_LOAD_COMPLETE:
++        ciuki_chrome_complete(gw);break;
+ 	case GW_EVENT_STOP_THROBBER:
+ 		gui_window_stop_throbber(gw);
+ 		break;
+--- a/netsurf/include/netsurf/window.h
++++ b/netsurf/include/netsurf/window.h
+@@ -82,6 +82,8 @@
+ 	 * An empty event should never occur
+ 	 */
+ 	GW_EVENT_NONE = 0,
++	/** Successful top-level content completion (not stop/error). */
++	GW_EVENT_LOAD_COMPLETE,
+ 
+ 	/**
+ 	 * Update the extent of the inside of a browser window to that of the
+--- a/netsurf/desktop/browser_window.c
++++ b/netsurf/desktop/browser_window.c
+@@ -942,6 +942,8 @@
+ 	browser_window_update(bw, false);
+ 	browser_window_set_status(bw, content_get_status_message(bw->current_content));
+ 	browser_window_stop_throbber(bw);
++    if (bw->window != NULL && bw->parent == NULL && !bw->internal_nav)
++        guit->window->event(bw->window,GW_EVENT_LOAD_COMPLETE);
+ 	browser_window_update_favicon(bw->current_content, bw, NULL);
+ 
+ 	if (browser_window_history_get_scroll(bw, &sx, &sy) == NSERROR_OK) {
+@@ -3269,7 +3271,8 @@
+ 		ret = browser_window_refresh_url_bar_internal(bw, url);
+ 	} else if (bw->frag_id == NULL) {
+ 		if (bw->internal_nav) {
+-			url = bw->loading_parameters.url;
++			url = bw->loading_parameters.url ? bw->loading_parameters.url : bw->current_parameters.url;
++            if (url == NULL) url = hlcache_handle_get_url(bw->current_content);
+ 		} else {
+ 			url = hlcache_handle_get_url(bw->current_content);
+ 		}
+@@ -3277,7 +3280,8 @@
+ 	} else {
+ 		/* Combine URL and Fragment */
+ 		if (bw->internal_nav) {
+-			url = bw->loading_parameters.url;
++			url = bw->loading_parameters.url ? bw->loading_parameters.url : bw->current_parameters.url;
++            if (url == NULL) url = hlcache_handle_get_url(bw->current_content);
+ 		} else {
+ 			url = hlcache_handle_get_url(bw->current_content);
+ 		}

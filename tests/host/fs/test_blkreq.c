@@ -5,15 +5,27 @@
 #include <assert.h>
 #include <stdatomic.h>
 static unsigned records;
+static bool idle_report;
+static struct blk_queue_stats reported;
+static bool fake_clock;
+static uint32_t clock_ms;
+uint32_t fs_host_clock_ms(void) {
+    if (fake_clock) return clock_ms;
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
+    return (uint32_t)((uint64_t)t.tv_sec*1000+(uint32_t)t.tv_nsec/1000000);
+}
 void blk_queue_record(const char *name,const struct blk_queue_stats *s) {
-    assert(name && s->depth[BLK_DEMAND]==1 && s->oldest_ms>=5000); records++;
+    assert(name);
+    if (idle_report) assert(!s->depth[0] && !s->depth[1] && !s->depth[2] && !s->oldest_ms);
+    else assert(s->depth[BLK_DEMAND]==1 && s->oldest_ms>=5000);
+    reported=*s; records++;
 }
 struct disk {
     struct blkdev dev;
     struct blk_queue queue;
     uint8_t data[256*1024];
     uint64_t order[128]; unsigned calls, sizes[128];
-    unsigned delay_ms; bool fail, cancel_issued, cleanup_issued;
+    unsigned delay_ms; bool fail, cancel_issued, cleanup_issued, dma;
     uint64_t frontier; enum blk_priority priority;
 };
 static int transfer(struct blkdev *d,uint64_t lba,uint32_t n,void *buf,bool write) {
@@ -22,9 +34,11 @@ static int transfer(struct blkdev *d,uint64_t lba,uint32_t n,void *buf,bool writ
     unsigned call=m->calls++; assert(call<128); m->order[call]=lba; m->sizes[call]=n;
     m->frontier=m->queue.active->frontier; m->priority=m->queue.active->priority;
     if (m->cleanup_issued) assert(blk_request_pool_host_cleanup()==-FS_EBUSY);
-    if (m->delay_ms) { struct timespec t={0,(long)m->delay_ms*1000000}; nanosleep(&t,0); }
+    if (fake_clock) clock_ms+=m->delay_ms;
+    else if (m->delay_ms) { struct timespec t={0,(long)m->delay_ms*1000000}; nanosleep(&t,0); }
     if (m->cancel_issued) blk_queue_cancel_device(&m->queue,d);
     if (m->fail) return -FS_EIO;
+    if (m->dma) d->stats.dma++; else d->stats.pio++;
     if (write) memcpy(m->data+lba*512,buf,n*512); else memcpy(buf,m->data+lba*512,n*512);
     return 0;
 }
@@ -201,4 +215,42 @@ static void pool_cleanup(void) {
     }
     puts("PASS host pool cleanup: rejects prepared/queued/issued/completed/cancelled owners, reinitializes after teardown");
 }
-int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); pool_cleanup(); return 0; }
+static void service_telemetry(void) {
+    struct disk m; init(&m); uint8_t b[512]; fake_clock=true; clock_ms=UINT32_MAX-1;
+    m.dev.stats_unit=1;
+    const unsigned elapsed[]={0,1,2,7,8,31,32,100};
+    for (unsigned i=0;i<8;i++) {
+        m.delay_ms=elapsed[i]; m.dma=!!(i&1);
+        assert(!blkdev_read(&m.dev,0,1,b));
+    }
+    struct blk_queue_stats s; blk_queue_snapshot(&m.queue,&s);
+    assert(s.device_seen[1] && !s.device_seen[0] && s.issued==8);
+    assert(s.device[1].dma==4 && s.device[1].pio==4 && s.device[1].service_max_ms==100);
+    for (unsigned i=0;i<4;i++) assert(s.device[1].service[i]==2);
+    m.fail=true; m.delay_ms=8; assert(blkdev_read(&m.dev,0,1,b)==-FS_EIO);
+    blk_queue_snapshot(&m.queue,&s);
+    assert(s.device[1].service[2]==3 && s.device[1].dma==4 && s.device[1].pio==4);
+    m.fail=false; m.delay_ms=2;
+    struct blkdev peer=m.dev; peer.stats=(struct blkdev_stats){0}; peer.stats_unit=0;
+    assert(!blkdev_read(&peer,0,1,b)); blk_queue_snapshot(&m.queue,&s);
+    assert(s.device_seen[0] && s.device[0].service[1]==1 && s.device[0].dma==1);
+    assert(s.device[1].service[2]==3 && s.device[1].service_max_ms==100);
+    assert(!blk_queue_destroy(&m.queue)); fake_clock=false;
+    puts("PASS f1-86 per-device DMA/PIO and service buckets: exact 2/8/32 boundaries, wrap, failure, sibling isolation");
+}
+static void idle_telemetry(void) {
+    struct disk m; fake_clock=true; clock_ms=1000; init(&m); uint8_t b[512];
+    idle_report=true; unsigned before=records; m.dma=true; m.delay_ms=8;
+    for (unsigned i=0;i<3;i++) assert(!blkdev_read(&m.dev,i,1,b));
+    assert(!m.queue.head && !m.queue.busy && m.queue.record_dirty);
+    clock_ms=5999; blk_queue_poll(&m.queue); assert(records==before);
+    clock_ms=6000; blk_queue_poll(&m.queue); assert(records==before+1 && !m.queue.record_dirty);
+    assert(reported.issued==3 && reported.device[0].dma==3 && reported.device[0].service[2]==3);
+    clock_ms=11000; blk_queue_poll(&m.queue); assert(records==before+1);
+    m.dma=false; m.delay_ms=1; assert(!blkdev_read(&m.dev,0,1,b));
+    blk_queue_poll(&m.queue); assert(records==before+2 && reported.device[0].pio==1);
+    assert(reported.device[0].dma==3 && reported.device[0].service[0]==1);
+    assert(!blk_queue_destroy(&m.queue)); fake_clock=idle_report=false;
+    puts("PASS f1-86 idle queue telemetry: completed DMA burst published at next 5s boundary, no empty duplicates, later PIO completion retained");
+}
+int main(void) { pool_bounds(); priorities(); merging(); faults(); telemetry(); calldown(); aged_split(); service_telemetry(); idle_telemetry(); pool_cleanup(); return 0; }

@@ -2,6 +2,7 @@
 #ifndef CIUKI_NET_BRIDGE_H
 #define CIUKI_NET_BRIDGE_H
 #include <ciuki/kernel.h>
+#include <ciuki/net_packet.h>
 
 #define BRIDGE_VMS 2u
 #define BRIDGE_QUEUE 8u
@@ -10,10 +11,11 @@
 #define BRIDGE_IPX_TYPE 0x8137u
 /* All entry points are serialized by the network owner in thread context.
  * No callback may reenter the owner. No guest pointer crosses this boundary.
- * The same pool must be supplied to physical/native queue owners at integration;
- * there is deliberately no private bridge pool or allocator fallback. */
+ * Slots below contain only ownership metadata. Payloads come from f6-10's
+ * global PBUF_POOL, shared with native ingress; no private frame storage. */
 struct bridge_packet {
-    uint8_t data[1536];
+    struct net_frame *frame;
+    uint8_t *data;
     uint32_t generation, interface;
     uint16_t length, refs;
 };

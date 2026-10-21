@@ -5,6 +5,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/audio.h>
 #include <ciuki/desktop.h>
+#include <ciuki/pager.h>
 extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
@@ -135,10 +136,10 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
 /* f3-02: the DOS window authority (syscall 70) follows only an exact
  * "/Programs/dosbox" spawned by the supervisor or by a process that owns both a
  * display and an input grant (the desktop). Grants never leave their owner
- * process, so no other launcher can confer it. */
+ * process, so no other launcher can confer it. Program-management authority
+ * follows the same parent check, only to the desktop and Control Panel. */
 void supervisor_dosvm_delegate(struct process *parent, struct process *child, const char *path)
 {
-    if (strncmp(path, "/Programs/dosbox", sizeof("/Programs/dosbox"))) return;
     bool display = false, input = false;
     if (parent != proc_supervisor()) {
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
@@ -148,7 +149,10 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
             input |= d->kind == DESKTOP_INPUT;
         }
     }
-    child->dosvm_capability = parent == proc_supervisor() || (display && input);
+    bool authorized = parent == proc_supervisor() || (display && input);
+    child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
+    child->programs_capability = authorized &&
+        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
 }
 
 int supervisor_spawn_gate(bool supplement, struct process **out)
@@ -177,8 +181,12 @@ void supervisor_bootstrap(void)
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
-    if (result == -ENOENT) result = supervisor_spawn_standin(proc_supervisor(), &p);
+    if (result == -ENOENT) {
+        result = supervisor_spawn_standin(proc_supervisor(), &p);
+        if (result >= 0 && pager_bootstrap_complete) pager_bootstrap_complete();
+    }
     if (result < 0) {
+        if (pager_bootstrap_complete) pager_bootstrap_complete();
         console_wake();   /* a quiet boot shows its log instead of the desktop */
         klog("[supervisor] desktop unavailable: %d; console ready", result);
         return;
@@ -195,6 +203,7 @@ void supervisor_poll(void)
         if (!p || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE) {
             uint32_t pid=desktop_pid;
             desktop_pid = 0;
+            if (pager_bootstrap_complete) pager_bootstrap_complete();
             desktop_deaths++;
             console_wake();
             klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);

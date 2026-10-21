@@ -89,7 +89,9 @@ def main():
                 ('dosvm_clock_work', 'DOS-clock-continuation', 1000),
                 ('kwork_run_one', 'DOS-clock-worker-turn', 1000),
                 ('dosvm_audio_advance', 'DOS-audio-clock-per-VM', 250)], [],
-               ['src/kernel/lib/fmt.c', 'src/kernel/lib/sha256.c',
+               # The included DOSVM boundary fixtures use the real-uaddr model.
+               ['tests/host/dosvm_uaddr_model.c',
+                'src/kernel/lib/fmt.c', 'src/kernel/lib/sha256.c',
                 'src/kernel/vm/virtual_vga.c', 'src/kernel/vm/virtual_vga_bios.c',
                 'src/kernel/vm/vga_x86.c', 'src/kernel/vm/vga_presenter.c',
                 'src/kernel/net/bridge.c', 'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',

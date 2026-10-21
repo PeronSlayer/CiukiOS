@@ -4,6 +4,10 @@ static net_bridge_tap_fn host_network_tap;
 static void *host_network_cookie;
 static int host_network_mode_error;
 static bool host_network_promiscuous;
+static struct net_bridge_port *host_primary_port;
+static int host_primary_error = -ENODEV;
+int net_bridge_primary_port(struct net_bridge_port **out)
+{ *out = host_primary_port; return host_primary_error; }
 int net_bridge_tap_register(uint16_t type, net_bridge_tap_fn fn, void *arg)
 {
     CHECK(type == BRIDGE_IPX_TYPE && fn);

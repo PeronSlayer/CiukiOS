@@ -65,6 +65,7 @@ struct desk_client {
     unsigned cursor;
     /* V3 child slots share the transport's fd but never receive/close it. */
     unsigned v3_peer, v3_id, v3_generation, v3_style, v3_scale;
+    uint32_t gl_present_request; /* result waits for completed compositor frame */
     uint32_t v3_win32_hwnd; /* f5-07B: copied identity for session z-order */
     unsigned v3_failed, v3_last[DESK_CLIENTS], v3_pointer;
     struct desk_box v3_clip;
@@ -139,6 +140,8 @@ struct desk_power_sequence {
 };
 struct desk_render_cache;
 struct desktop {
+    unsigned games_removed;
+    int (*install_program)(struct desktop *,const char *);
     struct desk_ops ops;
     int display, input, output, focus, drag;
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */

@@ -58,6 +58,8 @@ def inputs():
     files.append(ROOT / "assets/brand/ciuki-logo.png")
     files.append(ROOT / "sdk/win32/include/w32/server.h")
     files.append(ROOT / "src/probes/desktop_v3/controller.h")
+    files.append(ROOT / "src/probes/win32_restart/controller.h")
+    files.append(ROOT / "src/probes/win32_core/controller.h")
     files.extend(ROOT / "assets/cursors" / name for name in ("cursors.h", "README.md", "paint.h", "paint.md"))
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
     files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
@@ -149,7 +151,7 @@ def build():
     env["TMPDIR"] = str(temp)
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
-               "desktop": ["v3_fixture.c", "win32_presenter.c", "win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "desktop.c", "client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
+               "desktop": ["v3_fixture.c", "w32_fixture_gate.c", "win32_presenter.c", "win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "desktop.c", "client.c", "gl_present.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
                            "../libdeskui/icons.c", "../libdeskui/icon_map.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "protocol.c"]}
@@ -174,7 +176,7 @@ def build():
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
-    sources["control"] = ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/programs.c", "../control/app.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
     for name, files in ACCESSORIES.items():

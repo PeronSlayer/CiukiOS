@@ -2,6 +2,11 @@
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
 #include "control.h"
+#include "programs.h"
+#include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
+#ifdef __i386__
+#include <ciuki/raw.h>
+#endif
 #include "../desktop/sound_storage.h"
 #include "../desktop/settings_io.h"
 #include <ciuki/audio.h>
@@ -20,7 +25,7 @@
 #include <unistd.h>
 
 struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
-    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
+    int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h; };
 
@@ -217,8 +222,8 @@ static int mixer(void *ctx, int *volume, int *muted)
 static int apply(void *ctx, unsigned request, int volume, int muted)
 {
     struct cp_main *m = ctx;
-    if (request==DESK_SETTINGS_RELOAD && m->writer_started && cfg_writer_busy(&m->writer)) {
-        m->reload_pending=1; return 0;
+    if ((request==DESK_SETTINGS_RELOAD || request==DESK_SETTINGS_PROGRAMS) && m->writer_started && cfg_writer_busy(&m->writer)) {
+        m->reload_pending=(int)request; return 0;
     }
     struct ciuki_message msg;
     if (!++m->serial) ++m->serial;
@@ -300,6 +305,11 @@ static void on_message(struct du_window *w, const struct desk_packet *p, void *u
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && m->display_serial && p->serial == m->display_serial) {
         m->display_serial = 0; cp_display_result(&m->app, p->result); return;
     }
+    if(p->opcode==DESK_TASK_RESULT && p->request==DESK_LAUNCH && p->serial==m->install_serial){
+        m->install_serial=0;struct du_widget *s=du_get(&m->ui,3);
+        if(s){du_set_text(s,p->result<0 ? "The installer could not be started. Check the selected media and try again." : "Installer started.");m->ui.dirty=1;}
+        return;
+    }
     if (p->opcode == DESK_TASK_RESULT && p->request == DESK_SETTINGS && p->result < 0) {
         struct du_widget *s = du_get(&m->ui, 3);   /* the status line */
         if (s) { du_set_text(s, p->result == -ENODEV ? "No writable mixer: the volume is read-only." : "The desktop refused the change."); m->ui.dirty = 1; }
@@ -334,7 +344,7 @@ static void idle(void *arg)
     }
     int error;
     if (m->writer_started && cfg_writer_result(&m->writer,&error)) {
-        if (m->reload_pending) { m->reload_pending=0; if (!error) apply(m,DESK_SETTINGS_RELOAD,0,0); }
+        if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
         cp_settings_saved(&m->app,error);
     }
     if (m->writer_started && cfg_writer_busy(&m->writer) && m->app.quit) return;
@@ -344,12 +354,70 @@ static void idle(void *arg)
 }
 __attribute__((weak)) int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
 { (void)out; (void)cap; return -ENOSYS; }
+__attribute__((weak)) int ciuki_win32_uninstall_registered(const char *key)
+{(void)key;return -ENOSYS;}
 __attribute__((weak)) int ciuki_win32_uninstall_run(const char *key)
 { (void)key; return -ENOSYS; }
-static int win32_uninstall_list(void *ctx, struct desk_uninstall_entry *out, unsigned cap)
-{ (void)ctx; return ciuki_win32_uninstall_list(out,cap); }
-static int win32_uninstall_run(void *ctx, const char *key)
-{ (void)ctx; return ciuki_win32_uninstall_run(key); }
+static int registry_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
+{(void)ctx;return ciuki_win32_uninstall_list(out,cap);}
+static int registry_check(void *ctx,const char *key)
+{(void)ctx;return ciuki_win32_uninstall_registered(key);}
+static int registry_run(void *ctx,const char *key)
+{(void)ctx;return ciuki_win32_uninstall_run(key);}
+static int game_program(void *ctx,unsigned game,int remove,uint32_t *size)
+{
+    (void)ctx;struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};
+    c.launch.game=game;
+    if(ciuki_dosvm(remove ? CIUKI_DOSVM_GAME_REMOVE : CIUKI_DOSVM_GAME_QUERY,&c))return -errno;
+    *size=c.changed;return (int)c.state;
+}
+static void program_log(void *ctx,const char *line)
+{
+    (void)ctx;
+#ifdef __i386__
+    (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)strlen(line),0,0,0,0);
+#else
+    fputs(line,stderr);
+#endif
+}
+static void forget_icon(void *ctx,const char *label)
+{struct cp_main *m=ctx;cfg_icon_forget(&m->app.cfg,label);}
+static int program_save(void *ctx)
+{
+    struct cp_main *m=ctx;char *text=malloc(CFG_TEXT_MAX);if(!text)return -ENOMEM;
+    size_t n=cfg_format(&m->app.cfg,text,CFG_TEXT_MAX);
+    int result=!n ? -EIO : save(ctx,text,n) ? -EIO : 0;free(text);
+    if(result)return result;
+    /* The removal identity stays durable until the settings worker commits.
+     * This applet's removal already waits for disk/uninstaller completion. */
+    int error=0;
+    while(!cfg_writer_result(&m->writer,&error)){struct timespec delay={.tv_sec=0,.tv_nsec=1000000};nanosleep(&delay,NULL);}
+    return error ? -error : 0;
+}
+static struct cp_program_store programs={.root="",.registry_list=registry_list,.registry_run=registry_run,.registry_check=registry_check,.game=game_program,.forget_icon=forget_icon,.persist=program_save};
+static int win32_uninstall_list(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
+{(void)ctx;return cp_program_list(&programs,out,cap);}
+static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
+{
+    programs.ctx=ctx;
+    int result=cp_program_remove(&programs,r);
+    struct cp_program_store recorder=programs;recorder.log=program_log;
+    cp_program_record(&recorder,r,result);return result;
+}
+static void programs_changed(void *ctx)
+{(void)apply(ctx,DESK_SETTINGS_PROGRAMS,0,0);}
+static int program_install(void *ctx,const char *path)
+{
+    struct cp_main *m=ctx;
+    if(!cp_program_installer(path))return -EINVAL;
+    struct ciuki_message request;
+    unsigned n=(unsigned)strlen(path),t=7;
+    desk_message(&request,DESK_LAUNCH,16+t+n);
+    desk_put32(request.data+4,++m->serial);desk_put32(request.data+8,t);
+    memcpy(request.data+12,"install",t);desk_put32(request.data+12+t,n);
+    memcpy(request.data+16+t,path,n);
+    int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
+}
 int main(int argc, char **argv)
 {
     int channel = 3, page = CP_HOME;
@@ -365,7 +433,8 @@ int main(int argc, char **argv)
     if (!m) return 1;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
-    h->uninstall_list=win32_uninstall_list; h->uninstall_run=win32_uninstall_run;
+    h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
+    h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode = decode; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;

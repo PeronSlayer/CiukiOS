@@ -29,17 +29,28 @@ struct dosvm_network {
  * is supplied separately and shared with physical/native network owners. */
 static struct dosvm_network networks[BRIDGE_VMS];
 static struct net_bridge_port *selected_port;
+static bool primary_selected;
 int dosvm_network_bind_port(struct net_bridge_port *port)
 {
     for (unsigned i = 0; i < BRIDGE_VMS; i++) if (networks[i].allocated) return -16;
     if (port && (!port->registered || port->closing)) return -19;
-    selected_port = port; return 0;
+    selected_port = port; primary_selected = false; return 0;
 }
 int dosvm_network_launch(struct dosvm *v, unsigned mode)
 {
     if (mode == CIUKI_DOSVM_NETWORK_OFF) return 0;
     if (mode != CIUKI_DOSVM_NETWORK_IPX) return -EINVAL;
-    return selected_port ? dosvm_network_attach(v, selected_port) : -19;
+    if (!selected_port || primary_selected) {
+        struct net_bridge_port *port;
+        int error = net_bridge_primary_port(&port);
+        if (error) return error;
+        if (port != selected_port) {
+            error = dosvm_network_bind_port(port);
+            if (error) return error;
+        }
+        primary_selected = true;
+    }
+    return dosvm_network_attach(v, selected_port);
 }
 static uint64_t interval_ticks(uint64_t ms)
 {
@@ -168,6 +179,11 @@ int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
     if (!v || !port || network(v) || !dosvm_network_irq_available(v, DOSVM_NE2000_IRQ)) return -EINVAL;
     if (!net_bridge_port_acquire(port)) return -16;
     if (!port->registered || port->closing) { net_bridge_port_release(port); return -19; }
+    net_bridge_port_carrier(port);
+    if (port->device->generation != port->generation || !port->device->running ||
+        !port->device->ready || port->device->stopping || port->device->quarantined) {
+        net_bridge_port_release(port); return -19;
+    }
     struct dosvm_network *n = 0;
     for (unsigned i = 0; i < BRIDGE_VMS; i++) if (!networks[i].allocated) { n = &networks[i]; break; }
     if (!n) { net_bridge_port_release(port); return -ENOSPC; }

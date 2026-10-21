@@ -2,21 +2,18 @@
 #include "msghandling.h"
 #include "zgl.h"
 GLContext gl_ctx;
+GLContext *gl_selected_context; /* CiukiOS: serialized caller-owned contexts. */
 static const GLContext empty_gl_ctx = {0};
 
-static void initSharedState(GLContext* c) {
+static int initSharedState(GLContext* c) {
 	GLSharedState* s = &c->shared_state;
 	s->lists = gl_zalloc(sizeof(GLList*) * MAX_DISPLAY_LISTS);
-	if (!s->lists)
-		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
+	if (!s->lists) return 0;
 	s->texture_hash_table = gl_zalloc(sizeof(GLTexture*) * TEXTURE_HASH_TABLE_SIZE);
-	if (!s->texture_hash_table)
-		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
+	if (!s->texture_hash_table) return 0;
 	s->buffers = gl_zalloc(sizeof(GLBuffer*) * MAX_BUFFERS);
-	if (!s->buffers)
-		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
-	alloc_texture(0);
-#include "error_check.h"
+	if (!s->buffers) return 0;
+ return alloc_texture(0)!=NULL;
 }
 
 static void endSharedState(GLContext* c) {
@@ -25,7 +22,7 @@ static void endSharedState(GLContext* c) {
 	GLList* l;
 	GLParamBuffer *pb, *pb1;
 	GLTexture *t, *n;
-	for (i = 0; i < MAX_DISPLAY_LISTS; i++)
+	for (i = 0; s->lists && i < MAX_DISPLAY_LISTS; i++)
 		if (s->lists[i]) {
 			l = s->lists[i];
 			pb = l->first_op_buffer;
@@ -38,7 +35,7 @@ static void endSharedState(GLContext* c) {
 			s->lists[i] = NULL;
 		}
 	gl_free(s->lists);
-	for (i = 0; i < TEXTURE_HASH_TABLE_SIZE; i++) {
+	for (i = 0; s->texture_hash_table && i < TEXTURE_HASH_TABLE_SIZE; i++) {
 		t = s->texture_hash_table[i];
 		while (t) {
 			GLTexture** ht;
@@ -56,7 +53,7 @@ static void endSharedState(GLContext* c) {
 		}
 	}
 	gl_free(s->texture_hash_table);
-	for (i = 0; i < MAX_BUFFERS; i++) {
+	for (i = 0; s->buffers && i < MAX_BUFFERS; i++) {
 		if (s->buffers[i]) {
 			if (s->buffers[i]->data) {
 				gl_free(s->buffers[i]->data);
@@ -155,11 +152,11 @@ void glInit(void* zbuffer1) {
 	GLint i;
 	ZBuffer* zbuffer = (ZBuffer*)zbuffer1;
 #if TGL_FEATURE_TINYGL_RUNTIME_COMPAT_TEST == 1
-	if (TinyGLRuntimeCompatibilityTest())
+	if (!gl_selected_context && TinyGLRuntimeCompatibilityTest())
 		gl_fatal_error("TINYGL_FAILED_RUNTIME_COMPAT_TEST");
 #endif
-	gl_ctx = empty_gl_ctx;
-	c = &gl_ctx;
+	c = gl_get_context();
+	*c = empty_gl_ctx;
 	if (!c)
 		gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
 
@@ -182,7 +179,7 @@ void glInit(void* zbuffer1) {
 	c->drawbuffer = GL_FRONT;
 	c->readbuffer = GL_FRONT;
 	/* shared state */
-	initSharedState(c);
+	if(!initSharedState(c)){c->error_flag=GL_OUT_OF_MEMORY;return;}
 	/* ztext */
 	c->textsize = 1;
 	/* buffer */
@@ -305,8 +302,7 @@ void glInit(void* zbuffer1) {
 
 	for (i = 0; i < 3; i++) {
 		c->matrix_stack[i] = gl_zalloc(c->matrix_stack_depth_max[i] * sizeof(M4));
-		if (!(c->matrix_stack[i]))
-			gl_fatal_error("TINYGL_CANNOT_INIT_OOM");
+		if (!(c->matrix_stack[i])) {c->error_flag=GL_OUT_OF_MEMORY;return;}
 		c->matrix_stack_ptr[i] = c->matrix_stack[i];
 	}
 
@@ -374,5 +370,5 @@ void glClose(void) {
 	}
 #endif
 	endSharedState(c);
-	gl_ctx = empty_gl_ctx;
+	*c = empty_gl_ctx;
 }

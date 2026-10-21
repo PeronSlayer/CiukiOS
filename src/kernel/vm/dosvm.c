@@ -75,13 +75,19 @@ static bool dosvm_in_irq(const struct dosvm *v)
 
 void dosvm_launch_video(struct dosvm *v)
 {
-    if (v->launch_armed && v->launch_exec && !v->launch_failed) v->launch_ready = true;
+    if (v->launch_armed && v->launch_exec && !v->launch_failed && !v->launch_ready) {
+        v->launch_ready = true;
+        dosvm_present_notify(v);
+    }
 }
 void dosvm_console_byte(struct dosvm *v, uint8_t byte)
 {
     if (!v->info.dos_ready && v->boot_log_count < sizeof(v->boot_log))
         v->boot_log[v->boot_log_count++] = (char)byte;
-    if (byte == '\r' || byte == '\n') { v->console_length = 0; return; }
+    if (byte == '\r' || byte == '\n') {
+        v->console_length = 0; v->console_sequence++;
+        dosvm_present_notify(v); return;
+    }
     if (byte >= 32 && byte < 127 && v->console_length < sizeof(v->console_line) - 1) {
         v->console_line[v->console_length++] = (char)byte;
         v->console_line[v->console_length] = 0;
@@ -636,6 +642,7 @@ int dosvm_stop(struct dosvm_key key, enum dosvm_reason reason)
     if (v->info.state >= DOSVM_STOPPING) return 0;
     v->info.reason = reason;
     v->info.state = DOSVM_STOPPING;
+    dosvm_present_notify(v);
     dosvm_fullscreen_stopping(v);
     dosvm_vga_sync(v, true);
     v->mouse.mask = v->mouse.pending_mask = 0;
@@ -991,6 +998,7 @@ bool dosvm_trap(struct trap_frame *tf)
      * device state just programmed; then the VM's pages are pageable again. */
     if (v->info.state < DOSVM_STOPPING) dosvm_pool_settle(v);
     dosvm_pool_hold(v, false);
+    dosvm_present_checkpoint(v);
     kpreempt_point(); /* complete emulation transaction, before diagnostics */
     dosvm_trace_flush(v);
     if (!dosvm_in_irq(v)) dosvm_audio_log(v);
@@ -1297,7 +1305,44 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     return e;
 }
 
-int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
+/* A game creation keeps its reservation across every sleeping admission/open.
+ * Removal holds the opposite reservation through FAT and COW cleanup. Include
+ * stopped/retained VMs: their overlay can remain open until destruction ends. */
+static unsigned game_creating[CIUKI_DOSVM_GAME_COUNT+1];
+static bool game_removing[CIUKI_DOSVM_GAME_COUNT+1];
+int dosvm_game_remove_reserve(unsigned game)
+{
+    if(!game || game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
+    uint32_t flags=irq_save();
+    bool busy=game_removing[game] || game_creating[game];
+    for(unsigned i=0;i<DOSVM_LIMIT;i++)
+        if(slots[i].info.key.generation && slots[i].info.state!=DOSVM_DEAD && slots[i].game==game)busy=true;
+    if(!busy)game_removing[game]=true;
+    irq_restore(flags);return busy ? -EBUSY : 0;
+}
+void dosvm_game_remove_release(unsigned game)
+{
+    uint32_t flags=irq_save();game_removing[game]=false;irq_restore(flags);
+}
+static int game_create(const struct dosvm_config *,struct dosvm **);
+int dosvm_create(const struct dosvm_config *config,struct dosvm **out)
+{
+    unsigned game=config ? config->game : 0;
+    if(out)*out=0;
+    if(game>CIUKI_DOSVM_GAME_COUNT)return -EINVAL;
+    uint32_t flags=irq_save();
+    if(game && game_removing[game]){irq_restore(flags);return -EBUSY;}
+    if(game)game_creating[game]++;
+    irq_restore(flags);
+    uint32_t bytes=0;
+    int e=game ? dosvm_game_program(game,false,&bytes) : 0;
+    if(e>0)e=-ENOENT; /* a pending removal cannot be relaunched */
+    if(!e)e=game_create(config,out);
+    flags=irq_save();if(game)game_creating[game]--;irq_restore(flags);
+    return e;
+}
+
+static int game_create(const struct dosvm_config *config, struct dosvm **out)
 {
     if (!out) return -EINVAL;
     *out = 0;
@@ -1341,10 +1386,13 @@ int dosvm_create(const struct dosvm_config *config, struct dosvm **out)
     v->base = v->overlay = -1;
     v->a20 = true;
     v->probe = config ? config->probe : 0;
-    v->perf.report_tick = g_ticks;
+    v->perf.report_tick = v->perf.serial.tick = g_ticks;
     v->dpmi_enabled = config && config->dpmi;
     v->return_tracker_tf = (g_boot.flags & CBI_F_SMBIOS_QEMU) != 0;
     kwait_init(&v->wake);
+    kwait_init(&v->present_wait);
+    v->present_wait.owner_preemptible = true;
+    v->present_due_us = v->present_sample_due_us = g_ticks * 1000u;
     kwait_init(&v->disk_wait); v->disk_busy = false;
     int e = as_create(&v->as);
     if (e) goto fail;
@@ -1501,6 +1549,7 @@ static void dosvm_clock_work(void *arg)
         v->perf.audio_cycles += end - audio;
         v->perf.timer_cycles += end - begin;
         if (audio_vm_kick && (v->audio.q.seg_count || v->audio.q.event_count)) audio_vm_kick();
+        dosvm_present_checkpoint(v);
         if (pending) kwork_queue(dosvm_clock_work, arg);
         return; /* One VM and one bounded DMA slice per worker turn. */
     }

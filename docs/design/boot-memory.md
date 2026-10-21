@@ -159,6 +159,47 @@ modified queue had no provider; the ledger carried zero `swap_*` fields;
 f1-83's pool had no reservations; FAT growth (`fat_truncate`) copies the
 whole chain, so it could not grow a live pagefile.
 
+f0-49c research, 2026-10-21: the indexed Microsoft Resource Kit
+[chapter excerpt](https://www.oocities.org/~budallen/98performance.html)
+explicitly says Windows 98 retains the boot-drive swap file at boot to
+reduce startup time; its size can reflect the previous session. The DDK
+[IFSMgr_Ring0_FileIO](https://techshelps.github.io/MSDN/WIN95DDK/HTML/S312A.HTM)
+defines open/create action reporting and privileged uncached swap I/O;
+[Q223294](https://www.betaarchive.com/wiki/index.php/Microsoft_KB_Archive/223294)
+(indexed text, direct retrieval denied) confirms idle prewrite ordering.
+The [Microsoft FAT specification, sections 6 and 6.7](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
+defines file length and cluster ownership and requires initialization of
+new directories. CiukiOS decision: keep the existing hidden/system `PAGEFILE.SWP`, capture
+the VFS open/create action atomically and log the durable length and extent
+count. `fat_reserve` uses the existing detached-chain → tail-link → directory
+publication order without a data phase. Only the exclusive pagefile adapter
+uses it; normal file extension still initializes bytes. Ownership starts
+empty on every boot and no slot is readable before this boot writes it.
+
+Inspection found no truncate/delete in the previous backend open or shutdown
+path: `VFS_CREATE` already means open-or-create. The early `extents=0` stats
+line precedes asynchronous store opening and does not report on-disk size.
+Reboots of one host filesystem fixture test retention, and the same test
+also passes with the pre-WIP `c5fa7583` FAT/VFS/pagefile implementations:
+two extents, identical maps, no writes on reopening, both clean and unclean
+shutdown. The new open record distinguishes a genuinely new file from
+retained storage. Establishing the cause of the cited physical logs still
+needs the lead's consecutive boots
+of the same image; replacing the image or discarding an overlay also discards
+its runtime file.
+
+On normal boot the manager is gated through desktop ELF loading and its
+first successful complete frame. Before that frame, admission is RAM-only
+and returns immediately when RAM cannot back the request. A successful full
+presentation releases the gate after presenter resources are released;
+desktop launch failure, console stand-in or desktop death also releases it.
+Diagnostic/test boots without a normal desktop release the gate at pager
+initialization. After release, admission can wait for opening and growth
+within one shared 10 s deadline. Failed opening is attempted once, leaving
+RAM-only admission rather than a runnable manager retry loop. Existing
+extents are mapped without allocation; the manager never rewrites their
+contents at boot.
+
 | Policy (CiukiOS, not 98 values) | Value |
 | --- | --- |
 | File | `C:/SYSTEM/PAGEFILE.SWP`, hidden+system, writable fixed FAT system volume only |
@@ -166,7 +207,7 @@ whole chain, so it could not grow a live pagefile.
 | Growth / maximum | 16 MiB extents, before admission needs them (headroom < one extent); 64 extents = 1 GiB metadata bound |
 | Disk-free reserve | growth only while free ≥ max(16 MiB, 5 % of volume) + 16 MiB |
 | Shrink | trailing extents with no live slot, after 30 s without page I/O or growth, never below commitment + one extent of headroom |
-| Bounded storage steps | growth 256 KiB, shrink 1 MiB, map 512 FAT hops per volume reservation |
+| Bounded storage steps | growth 256 KiB of metadata-only reservation, shrink 1 MiB, map 512 FAT hops per volume reservation |
 | Page-out batch | ≤ 8 contiguous slots per request, 8 pinned bounce pages (one f0-43 token) |
 | Reserved f1-83 records | 4 page-in, 1 page-out; ordinary requests never consume them |
 | Prewrite | no pressure, NORMAL free ≤ 1.5 × high, no dirty cache bytes and empty controller queue, ≥ 100 ms after demand I/O, one slice per 50 ms, ≤ 8 speculative queue entries, > 8 free slots kept for mandatory page-out |

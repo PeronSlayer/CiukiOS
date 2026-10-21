@@ -66,22 +66,25 @@ void du_dialog_tick(struct du_ui *u)
     struct du_dialog *d=&u->dialog; struct du_dialog_places *p=d->places;
     if (!p || u->now<p->next_poll) return;
     p->next_poll=u->now+500000000ull;
-    p->count=0;
+    /* The allocation retains a second list for polling, off the native stack.
+     * Only the first list owns the observer and the polling deadline. */
+    struct du_dialog_places *published=p;
+    p=published+1; p->count=0;
     place_add(p,"Desktop","/Documents/Desktop","place:desktop");
     place_add(p,"Documents","/Documents","place:documents");
     place_add(p,"Music","/Documents/Music","audio-x-generic");
     place_add(p,"Pictures","/Documents/Pictures","image-x-generic");
     place_add(p,"CiukiOS (C:)","/","drive-harddisk");
 #if defined(__i386__) || defined(DU_NATIVE_MEDIA)
-    if (p->fd<0) p->fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
+    if (published->fd<0) published->fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
     struct ciuki_media_state state={.version=CIUKI_MEDIA_VERSION,.size=sizeof(state)};
-    if (p->fd>=0) {
-        if (ciuki_devctl(p->fd,MEDIA_GET_STATE,&state,sizeof(state))) { close(p->fd); p->fd=-1; }
+    if (published->fd>=0) {
+        if (ciuki_devctl(published->fd,MEDIA_GET_STATE,&state,sizeof(state))) { close(published->fd); published->fd=-1; }
         else for (unsigned drive=3;drive<26;drive++) {
             if (!(state.removable_mask&(1u<<drive)) ||
                 (state.type[drive]!=CIUKI_MEDIA_USB && state.type[drive]!=CIUKI_MEDIA_OPTICAL)) continue;
             struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
-            if (ciuki_devctl(p->fd,MEDIA_GET_VOLUME,&v,sizeof(v)) || !v.generation || !v.flags) continue;
+            if (ciuki_devctl(published->fd,MEDIA_GET_VOLUME,&v,sizeof(v)) || !v.generation || !v.flags) continue;
             v.label[sizeof(v.label)-1]=0;
             for (unsigned k=0;v.label[k];k++) if ((unsigned char)v.label[k]<32 || (unsigned char)v.label[k]==127) v.label[k]='?';
             char label[64],path[16];
@@ -91,19 +94,30 @@ void du_dialog_tick(struct du_ui *u)
         }
         /* Mount generations returned by GET_VOLUME differ from the transport
          * generations in GET_STATE. Recheck the latter across enumeration. */
-        if (p->fd>=0) {
+        if (published->fd>=0) {
             struct ciuki_media_state after={.version=CIUKI_MEDIA_VERSION,.size=sizeof(after)};
-            if (ciuki_devctl(p->fd,MEDIA_GET_STATE,&after,sizeof(after)) || memcmp(&state,&after,sizeof(state))) {
-                p->count=5; p->next_poll=u->now+100000000ull;
+            if (ciuki_devctl(published->fd,MEDIA_GET_STATE,&after,sizeof(after)) || memcmp(&state,&after,sizeof(state))) {
+                p->count=5; published->next_poll=u->now+100000000ull;
             }
         }
     }
 #endif
+    int changed=p->count!=published->count;
+    for (unsigned i=0;!changed && i<p->count;i++)
+        changed=strcmp(p->entries[i].path,published->entries[i].path) ||
+            strcmp(p->entries[i].label,published->entries[i].label) ||
+            p->rows[i].icon16!=published->rows[i].icon16;
+    if (!changed) return;
+    memcpy(published->entries,p->entries,sizeof(p->entries));
+    memcpy(published->rows,p->rows,sizeof(p->rows));
+    published->count=p->count; p=published;
+    /* Scratch row labels must point into the retained list after publication. */
+    for (unsigned i=0;i<p->count;i++) p->rows[i].text[0]=p->entries[i].label;
     struct du_widget *w=&d->items[F_PLACES];
     w->items=p->rows; w->count=p->count;
     int max=(int)p->count-du_list_page(w); if (max<0) max=0;
     if (w->scroll>max) w->scroll=max;
-    places_select(d); u->dirty=1;
+    places_select(d); du_invalidate(u,w->box);
 }
 uint64_t du_dialog_deadline(const struct du_ui *u)
 { return u->dialog.places ? u->dialog.places->next_poll : UINT64_MAX; }
@@ -249,6 +263,9 @@ void du_progress(struct du_ui *u, int id, const char *title, const char *text, u
 {
     struct du_dialog *d = &u->dialog;
     int fresh = d->kind != DU_DLG_PROGRESS || d->id != id;
+    int changed = fresh || !total || d->progress != value || d->progress_total != total ||
+        (title && strncmp(d->title,title,sizeof(d->title)-1)) ||
+        (text && strncmp(d->text,text,sizeof(d->text)-1));
     if (fresh) {
         begin(u, DU_DLG_PROGRESS, id, title, text);
         d->buttons = 1; d->cancel = 0; d->focus = 0;
@@ -273,8 +290,11 @@ void du_progress(struct du_ui *u, int id, const char *title, const char *text, u
     d->progress = value; d->progress_total = total;
     d->items[1].value = (int)(value > 0x7fffffffu ? 0x7fffffffu : value);
     d->items[1].total = (int)(total > 0x7fffffffu ? 0x7fffffffu : total);
-    /* Ordinary UI invalidations (1) take precedence over dialog-only (2). */
-    if (!u->dirty) u->dirty = 2;
+    /* Keep full invalidation and merge any pending bounded repaint. */
+    if (changed) {
+        if (!u->dirty) u->dirty = 2;
+        else if (u->dirty==3) du_invalidate(u,d->box);
+    }
 }
 
 /* ---- file dialogs ---- */
@@ -348,7 +368,7 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
     d->lister = lister ? lister : du_posix_lister; d->lister_ctx = ctx;
     d->entries = calloc(DU_FILE_ENTRIES, sizeof(*d->entries));
     d->rows = calloc(DU_FILE_ENTRIES, sizeof(*d->rows));
-    d->places=calloc(1,sizeof(*d->places));
+    d->places=calloc(2,sizeof(*d->places)); /* published list + poll scratch */
     if (d->places) d->places->fd=-1;
     if (!d->entries || !d->rows || !d->places) { places_close(d); free(d->entries); free(d->rows); memset(d, 0, sizeof(*d)); return -ENOMEM; }
     d->buttons = 2; d->cancel = 1; d->focus = F_NAME;

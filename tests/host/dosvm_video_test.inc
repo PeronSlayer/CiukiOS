@@ -15,6 +15,15 @@ static struct surface fake_surface[3];
 static uint8_t user_mem[4096];
 static bool user_fault;
 static unsigned pins;
+static unsigned record_pin_walks, surface_rows;
+static bool caught_signal;
+static struct proc_thread window_thread;
+int dosvm_model_user_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_user_write(const struct uaddr *, uint32_t, const void *, uint32_t);
+int dosvm_model_read(const struct uaddr *, void *, uint32_t, uint32_t);
+int dosvm_model_write(const struct uaddr *, uint32_t, const void *, uint32_t);
+struct proc_thread *proc_thread_for(const struct task *t) { return t == &caller ? &window_thread : 0; }
+bool proc_signal_caught(struct proc_thread *t) { CHECK(t == &window_thread); return caught_signal; }
 struct process *proc_current(void) { return fake_current; }
 struct process *proc_find(uint32_t pid)
 {
@@ -28,18 +37,21 @@ void surface_retain(struct surface *s) { s->references++; }
 void surface_release(struct surface *s) { CHECK(s->references > 1); s->references--; }
 int surface_write(struct surface *s, uint32_t offset, const void *data, uint32_t bytes)
 {
+    surface_rows++;
     if (offset > s->info.allocation_bytes || bytes > s->info.allocation_bytes - offset) return -EINVAL;
     memcpy(s->pixels + offset, data, bytes);
     return 0;
 }
 int copy_from_user(void *dst, uint32_t src, uint32_t bytes)
 {
+    if (!pins) record_pin_walks++; /* production copy resolves/pins absent an outer pin */
     if (user_fault || src > sizeof(user_mem) || bytes > sizeof(user_mem) - src) return -EFAULT;
     memcpy(dst, user_mem + src, bytes);
     return 0;
 }
 int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
 {
+    if (!pins) record_pin_walks++;
     if (dst > sizeof(user_mem) || bytes > sizeof(user_mem) - dst) return -EFAULT;
     memcpy(user_mem + dst, src, bytes);
     return 0;
@@ -47,11 +59,28 @@ int copy_to_user(uint32_t dst, const void *src, uint32_t bytes)
 int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, bool write)
 {
     (void)u; CHECK(write && !pins);
+    record_pin_walks++;
     if (base > sizeof(user_mem) || bytes > sizeof(user_mem) - base) return -EFAULT;
     pin->base = base; pin->end = base + bytes; pins++;
     return 0;
 }
 void ua_unpin(struct uaddr *u, struct ua_pin *pin) { (void)u; (void)pin; CHECK(pins == 1); pins--; }
+int ua_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{
+    (void)u;
+    if (user_fault || src > sizeof(user_mem) || bytes > sizeof(user_mem)-src) return -EFAULT;
+    memcpy(dst,user_mem+src,bytes); return 0;
+}
+int ua_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{
+    (void)u;
+    if (user_fault || dst > sizeof(user_mem) || bytes > sizeof(user_mem)-dst) return -EFAULT;
+    memcpy(user_mem+dst,src,bytes); return 0;
+}
+int ua_user_read(const struct uaddr *u, void *dst, uint32_t src, uint32_t bytes)
+{ return u ? dosvm_model_user_read(u,dst,src,bytes) : ua_read(u,dst,src,bytes); }
+int ua_user_write(const struct uaddr *u, uint32_t dst, const void *src, uint32_t bytes)
+{ return u ? dosvm_model_user_write(u,dst,src,bytes) : ua_write(u,dst,src,bytes); }
 
 /* ---- Helpers ---- */
 static struct v86_frame vf(unsigned ax, unsigned bx, unsigned cx, unsigned dx)
@@ -520,13 +549,48 @@ static void test_client_boundary(void)
 {
     window_fixtures();
     struct ciuki_dosvm_command c, w;
+    /* Query/remove use the actual syscall validation and fixture storage. */
+    struct ciuki_dosvm_command q=command_for(0,0);q.launch.game=2;
+    unsigned before=program_calls;
+    fake_current=&fake_proc[2];
+    CHECK(dosvm_call(CIUKI_DOSVM_GAME_REMOVE,&q,sizeof(q))==-EPERM && program_calls==before);
+    CHECK(!dosvm_call(CIUKI_DOSVM_GAME_QUERY,&q,sizeof(q)) && q.state==1 && q.changed==8192);
+    fake_proc[2].programs_capability=true;
+    for(unsigned op=CIUKI_DOSVM_GAME_QUERY;op<=CIUKI_DOSVM_GAME_REMOVE;op++){
+        q=command_for(0,0);q.launch.game=2;q.version=2;
+        CHECK(dosvm_call(op,&q,sizeof(q))==-EOPNOTSUPP);
+        q.version=1;q.size--;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.size++;
+        q.launch.reserved[0]=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.reserved[0]=0;
+        q.state=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.state=0;
+        CHECK(dosvm_call(op,&q,sizeof(q)-1)==-EINVAL);
+        q.launch.game=0;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=4;
+        CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=2;
+        user_fault=true;CHECK(dosvm_call(op,&q,sizeof(q))==-EFAULT);user_fault=false;
+        program_result=1;CHECK(!dosvm_call(op,&q,sizeof(q)) && q.state==2);program_result=0;
+    }
+    fake_proc[2].programs_capability=false;
+    CHECK(!dosvm_game_remove_reserve(2));
+    struct dosvm *reserved_vm=0;struct dosvm_config reserved_config={.game=2};
+    CHECK(dosvm_create(&reserved_config,&reserved_vm)==-EBUSY && !reserved_vm);
+    dosvm_game_remove_release(2);
+    program_result=1;
+    CHECK(dosvm_create(&reserved_config,&reserved_vm)==-ENOENT && !reserved_vm && !game_creating[2]);
+    program_result=0;
+    game_creating[2]++;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);game_creating[2]--;
+    for(unsigned kernel=0;kernel<2;kernel++){
+        slots[0].info.key=(struct dosvm_key){1,1};slots[0].info.state=DOSVM_BOOTING;
+        slots[0].game=2;slots[0].kernel=kernel;
+        CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
+        slots[0].info.state=DOSVM_STOPPING;CHECK(dosvm_game_remove_reserve(2)==-EBUSY);
+        memset(&slots[0],0,sizeof(slots[0]));
+    }
     /* Authority and record validation, each before any reservation. */
     fake_current = &fake_proc[2];
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
     fake_current = 0;
     CHECK(create_window(0, "CiukiDOS", 0) == -EPERM);
     fake_current = &fake_proc[0];
-    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(11, &c, sizeof(c)) == -EINVAL);
+    c = command_for(0, 0); CHECK(dosvm_call(0, &c, sizeof(c)) == -EINVAL && dosvm_call(12, &c, sizeof(c)) == -EINVAL);
     c = command_for(0, 0); c.surface_fd = 0; c.name[0] = 'X';
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c) - 1) == -EINVAL);
     c.version = 2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EOPNOTSUPP);
@@ -551,6 +615,11 @@ static void test_client_boundary(void)
     CHECK(create_window(9, "CiukiDOS", 0) == -EBADF && create_window(1, "CiukiDOS", 0) == -EACCES &&
           create_window(2, "CiukiDOS", 0) == -EINVAL && create_window(3, "CiukiDOS", 0) == -EBADF);
     { struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms && fake_surface[0].references == 1); }
+    /* The removed/pending-game errno must reach DOS Box's clear message. */
+    c=command_for(0,0);c.surface_fd=0;strcpy(c.name,"Removed");c.launch.game=2;
+    program_result=-ENOENT;CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENOENT);
+    program_result=1;CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-ENOENT);
+    program_result=0;
     /* Creation, one VM per owner, status and presentation. */
     CHECK(!create_window(0, "CiukiDOS", &w) && w.id && w.generation && w.state == CIUKI_DOSVM_BOOTING &&
           w.video_mode == 3 && fake_surface[0].references == 2);

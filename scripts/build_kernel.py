@@ -201,7 +201,17 @@ def main() -> int:
     # below and retained by .f4probes in the canonical linker script.
     if not (SRC / "probes/f4_probes_media.c").is_file():
         raise SystemExit("missing F4 optical probe")
+    lwip_recipe = runpy.run_path(str(SRC / "net/lwip/build.py"))
+    lwip_source = lwip_recipe["source"]()
+    lwip_includes = lwip_recipe["includes"](lwip_source)
     objs = []
+    for name in lwip_recipe["SOURCES"]:
+        c = lwip_source / "src" / name
+        o = OBJ / ("lwip_" + name.replace("/", "_") + ".o")
+        run(["clang", *CFLAGS, *lwip_includes, "-I", str(SRC / "net/lwip/libc"),
+             "-I", str(SRC / "include"), "-c", str(c), "-o", str(o)])
+        objs.append(o)
+
     for asm in sorted((SRC / "arch").glob("*.asm")) + sorted((SRC / "vm").glob("*.asm")) + [SRC / "probes" / "payload_blob.asm"]:
         o = OBJ / (asm.stem + ".o")
         run(["nasm", "-f", "elf32", "-I", str(ROOT) + "/", f"-DPAYLOAD_BIN='{payload}'",
@@ -209,10 +219,10 @@ def main() -> int:
         objs.append(o)
     for c in sorted(list((SRC / "core").glob("*.c")) + list((SRC / "lib").glob("*.c")) +
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
-                    list((SRC / "drivers").glob("*.c")) + list((SRC / "net").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
-                    list((SRC / "usb").glob("*.c")) + list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "proc/win32").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
+                    list((SRC / "drivers").glob("*.c")) + list((SRC / "fs").glob("*.c")) +
+                    list((SRC / "usb").glob("*.c")) + list((SRC / "audio").glob("*.c")) + list((SRC / "proc").glob("*.c")) + list((SRC / "proc/win32").glob("*.c")) + list((SRC / "net").glob("*.c")) + list((SRC / "net/lwip").glob("*.c")) + list((SRC / "vm").glob("*.c"))):
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
-        run(["clang", *CFLAGS, *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
+        run(["clang", *CFLAGS, *lwip_includes, "-I", str(SRC / "net/lwip/libc"), *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_VERSION="{version}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',

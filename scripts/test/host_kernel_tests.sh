@@ -276,6 +276,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 # F3 lifecycle, BIOS/disk preflight and record channel. Keep paging production
 # functions unchanged; replace only PMM and architectural hardware operations.
 python3 "$root/tests/host/vm/prepare_lifecycle.py" "$root" "$out"
+# dosvm_test.c supplies the bounded program-provider fixture.
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.
 # f4-05: the VM audio sources, the integer OPL3 port and the f4-01 mixer are
@@ -285,18 +286,22 @@ for unit in vm_source opl3 mixer; do
         -include "$root/tests/host/vm_audio_shim.h" -I "$root/src/kernel/include" \
         -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_audio_$unit.o"
 done
+pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm")"
+plain_pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm" --plain)"
 network_sources=("$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
 guest_cpu=()
 if [[ -f /usr/include/x86emu.h ]]; then
     guest_cpu=(-DCIUKI_DOSVM_GUEST_CPU "$root/tests/host/dosvm_guest_cpu.c" -lx86emu)
 fi
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" "${network_sources[@]}" \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
-    "${guest_cpu[@]}" -o "$out/dosvm_test"
+    "${guest_cpu[@]}" "$pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_test"
 "$out/dosvm_test"
 CIUKI_VM_DISK_TRACE=1 "$out/dosvm_test"
 # Replay the actual default maximum-cache VM's charges through production
@@ -313,31 +318,40 @@ for unit in vm_source opl3 mixer; do
         -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_cost_$unit.o"
 done
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
-    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" "${network_sources[@]}" \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" \
-    "${guest_cpu[@]}" -o "$out/dosvm_audio_cost_test"
+    "${guest_cpu[@]}" "$plain_pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_audio_cost_test"
 CIUKI_VM_AUDIO_COST=1 "$out/dosvm_audio_cost_test"
 
 # f3-33: aggregate production exit costs with fake CPU trap transport.
+# Both benchmarks include dosvm_test.c and need its real-uaddr model too.
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
-    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_exit_bench.c" "${network_sources[@]}" \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_exit_bench.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
-    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" -o "$out/dosvm_exit_bench"
+    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" \
+    "$plain_pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_exit_bench"
 "$out/dosvm_exit_bench"
 
 # f3-16: production window/dirty-page replay and presenter costs. Sequential
 # with every other host suite; synthetic frames, no image rebuild or QEMU.
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_present_bench.c" "${network_sources[@]}" \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_present_bench.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
-    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" -o "$out/dosvm_present_bench"
+    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
+    "$pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_present_bench"
 "$out/dosvm_present_bench"
 
 # f3-02 migrated VGA model vectors (legacy test_virtual_vga.c, unchanged).
@@ -526,6 +540,10 @@ bash "$root/tests/host/usb/storage_run.sh"
 
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
+python3 "$root/tests/host/lwip/fd_run.py" --frame
+python3 "$root/tests/host/lwip/run.py"
+python3 "$root/tests/host/lwip/fd_run.py"
+python3 "$root/tests/host/lwip/run.py" --kernel
 
 
 # f4-05: the kernel's integer OPL3 port sample for sample against the pinned

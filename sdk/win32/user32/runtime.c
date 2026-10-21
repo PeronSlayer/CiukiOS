@@ -54,7 +54,7 @@ void u32_set_backend(const struct u32_backend *b) {
     u32_backend = *b;
 }
 void u32_set_gdi(const struct u32_gdi *g) {
-  u32_gdi = g && g->version == 1 ? g : 0;
+  u32_gdi = g && (g->version == 1 || g->version == 2) ? g : 0;
 }
 static volatile DWORD owner;
 static UINT depth;

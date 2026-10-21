@@ -64,7 +64,7 @@ static void entry_error(struct dosvm_key key,int error)
 {
     uint32_t flags=irq_save();
     struct dosvm *v=dosvm_lookup(key);
-    if (v) v->fullscreen_error=error;
+    if (v) { v->fullscreen_error=error; dosvm_present_notify(v); }
     irq_restore(flags);
 }
 static int entry_windowed(struct dosvm_key key,int reason)
@@ -86,6 +86,7 @@ void dosvm_fullscreen_switch(const struct task *t)
 static void unhold(struct dosvm *v)
 {
     v->fullscreen_hold=false;
+    dosvm_present_notify(v);
     dosvm_idle_wake(v);
 }
 void dosvm_fullscreen_checkpoint(struct dosvm *v)

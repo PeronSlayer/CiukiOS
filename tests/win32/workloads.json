@@ -89,7 +89,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-diablo-shareware"
     },
     {
       "id": "starcraft-shareware",
@@ -172,7 +173,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-sc"
     },
     {
       "id": "aoe-trial",
@@ -255,7 +257,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-aoe-trial"
     },
     {
       "id": "half-life-uplink",
@@ -338,7 +341,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-half-life-uplink"
     },
     {
       "id": "ut-demo-348",
@@ -421,7 +425,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-ut-demo-348"
     },
     {
       "id": "worms-armageddon-demo",
@@ -505,7 +510,8 @@
         "scene.screen_checks",
         "scene.reference_input_sequence",
         "installer.engine"
-      ]
+      ],
+      "probe": "win32-wa"
     },
     {
       "id": "heroes3-demo",
@@ -588,7 +594,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-heroes3-demo"
     },
     {
       "id": "rct-demo",
@@ -671,7 +678,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-rct-demo"
     },
     {
       "id": "jazz2-shareware",
@@ -754,7 +762,8 @@
         "scene.arguments",
         "scene.screen_checks",
         "scene.reference_input_sequence"
-      ]
+      ],
+      "probe": "win32-jazz2-shareware"
     },
     {
       "id": "ta-demo",
@@ -838,7 +847,8 @@
         "scene.screen_checks",
         "scene.reference_input_sequence",
         "installer.engine"
-      ]
+      ],
+      "probe": "win32-ta-demo"
     },
     {
       "id": "quake3-demo",
@@ -924,7 +934,8 @@
         "source.size",
         "source.sha1",
         "installer.engine"
-      ]
+      ],
+      "probe": "win32-quake3-demo"
     },
     {
       "id": "nfs2se-demo",
@@ -1009,7 +1020,8 @@
         "scene.reference_input_sequence",
         "source.size",
         "source.sha1"
-      ]
+      ],
+      "probe": "win32-nfs2se-demo"
     },
     {
       "id": "gta2-freeware",
@@ -1096,7 +1108,8 @@
         "source.size",
         "source.sha1",
         "installer.engine"
-      ]
+      ],
+      "probe": "win32-gta2-freeware"
     },
     {
       "id": "tomb-raider4-demo",
@@ -1183,7 +1196,8 @@
         "source.size",
         "source.sha1",
         "installer.engine"
-      ]
+      ],
+      "probe": "win32-tomb-raider4-demo"
     }
   ]
 }

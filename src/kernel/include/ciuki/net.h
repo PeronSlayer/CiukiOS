@@ -7,7 +7,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/irq_budget.h>
 
-#define NETIF_MAX 4u
+#define NETIF_MAX 2u
 #define NET_FRAME_MAX 1514u
 #define NET_QUEUE_MAX 16u
 #define NET_TX_TIMEOUT_MS 1000u

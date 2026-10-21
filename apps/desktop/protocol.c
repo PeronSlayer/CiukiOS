@@ -139,7 +139,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->width=desk_get32(b); p->height=desk_get32(b+4); p->serial=desk_get32(b+8);
         if (!p->serial) return 0;
         expected=12; fd=1; break;
-    case DESK_DAMAGE:
+    case DESK_DAMAGE: case DESK_V3_PRESENT:
         if (!client || n!=16 || !desk_surface_valid(s)) return 0;
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
         p->width=desk_get32(b+8); p->height=desk_get32(b+12);
@@ -558,7 +558,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         } else if (p->request == DESK_SETTINGS_SOUND_TEST) {
             if (p->values[0] >= SOUND_EVENTS || p->values[1] || p->values[2]) return 0;
         } else if ((p->request != DESK_SETTINGS_RELOAD && p->request != DESK_SETTINGS_SOUND_RELOAD &&
-                    p->request != DESK_SETTINGS_AUDIO_TEST && p->request != DESK_SETTINGS_OPEN_POWER) || p->values[0] || p->values[1] || p->values[2]) return 0;
+                    p->request != DESK_SETTINGS_AUDIO_TEST && p->request != DESK_SETTINGS_OPEN_POWER && p->request != DESK_SETTINGS_PROGRAMS) || p->values[0] || p->values[1] || p->values[2]) return 0;
         n = 24;
         break;
     case DESK_MIXER_SET:

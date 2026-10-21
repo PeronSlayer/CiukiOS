@@ -17,6 +17,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/font.h>
 #include <stdint.h>
+#define CP_PROGRAM_MAX 96u
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
@@ -63,6 +64,9 @@ struct cp_host {
      * Run re-resolves the selected key and command at the service. */
     int (*uninstall_list)(void *, struct desk_uninstall_entry *, unsigned);
     int (*uninstall_run)(void *, const char *key);
+    int (*program_remove)(void *,const struct desk_uninstall_entry *);
+    int (*program_install)(void *,const char *);
+    void (*programs_changed)(void *);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -71,9 +75,11 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
-    struct desk_uninstall_entry uninstall[DESK_UNINSTALL_MAX];
-    struct du_item uninstall_items[DESK_UNINSTALL_MAX];
+    struct desk_uninstall_entry uninstall[CP_PROGRAM_MAX];
+    struct du_item uninstall_items[CP_PROGRAM_MAX];
     unsigned uninstall_count, uninstall_selected;
+    char uninstall_sizes[CP_PROGRAM_MAX][32];
+    unsigned remove_pending;
     struct du_ui *ui;
     struct cp_host host;
     struct ciuki_settings cfg;

@@ -113,6 +113,10 @@ static bool desktop_ledgers_equal(const struct desktop_ledger *a, const struct d
 #include "../../probes/win32_dialogs/controller.h"
 #include "../../probes/win32_upper/controller.h"
 #include "../../probes/win32_media/controller.h"
+#include "../../probes/win32_gl/controller.h"
+#include "../../probes/win32_restart/controller.h"
+#include "../../probes/win32_kernel32/controller.h"
+#include "../../probes/win32_core/controller.h"
 #include <ciuki/shell_probe.h>
 extern int supervisor_spawn_desktop_probe(struct process **out);
 extern bool probes_desktop_v3_selected(const char *,unsigned,uint32_t);
@@ -137,7 +141,14 @@ static struct {
     /* f5-20D w32-upper-dlls: the same arrangement. */
     bool upper;
     uint32_t upper_child;
+    unsigned core_fixture; /* shared fixture ID + 1; zero leaves the gate unarmed */
+    uint32_t core_child;
 } native_reports;
+static struct {
+    bool active,failed;
+    uint32_t children[4],services[4],launches,exits,prompts,begins,resumes,registry;
+} restart_observation;
+static void restart_report(struct process *,const char *);
 static struct desktop_v3_observation v3_observation;
 static uint32_t native_digest(void);
 /* Case-name prefix and checkpoint count of the reporting app scenario (Files: 5, CiukNote: 3). */
@@ -237,6 +248,8 @@ static bool native_report(struct process *p, const char *line, unsigned length)
             native_invalid("v3_observation");return true;
         }
         desktop_v3_publish(&v3_observation,rec_emit);
+    } else if (server && restart_observation.active && !strncmp(line,"case=w32-restart ",17)) {
+        restart_report(p,line);
     } else if (server && native_reports.dialogs && (!strncmp(line,"case=w32-dialogs ",17) || !strncmp(line,"case=w32-media ",15))) {
         uint32_t child;
         NATIVE_REQUIRE(report_unsigned(line,"child",&child),"dialogs_fields");
@@ -251,6 +264,14 @@ static bool native_report(struct process *p, const char *line, unsigned length)
         NATIVE_REQUIRE(!native_reports.upper_child,"upper_repeat");
         NATIVE_REQUIRE(fixture && fixture->ppid==p->pid && fixture->personality==PROC_WIN32,"upper_identity");
         native_reports.upper_child=child;
+    } else if (server && native_reports.core_fixture && !strncmp(line,"case=w32-fixture ",17)) {
+        uint32_t child,fixture;
+        NATIVE_REQUIRE(report_unsigned(line,"fixture",&fixture) && fixture+1==native_reports.core_fixture,"fixture_name");
+        NATIVE_REQUIRE(report_unsigned(line,"child",&child),"fixture_fields");
+        NATIVE_REQUIRE(!native_reports.core_child,"fixture_repeat");
+        struct process *peer=proc_find(child);
+        NATIVE_REQUIRE(peer && peer->ppid==p->pid && peer->personality==PROC_WIN32 && peer->state==PROC_LIVE,"fixture_identity");
+        native_reports.core_child=child;
     } else if (!server && !strncmp(line,"case=native-demo ",17)) {
         uint32_t stage, turns, unauthorized, generation;
         NATIVE_FIELD(stage); native_reports.reported_stage=stage;
@@ -319,11 +340,12 @@ static void native_step_record(unsigned command, uint32_t generation, const char
         survivor && survivor->state==PROC_LIVE,victim && victim->state==PROC_LIVE,reason);
 }
 static const char *native_command_failure;
-static bool native_command(struct process *server, unsigned command, uint32_t *generation)
+static bool native_command_argument(struct process *server, unsigned command, uint32_t *generation,const char *argument)
 {
     native_command_failure="missing_control";
     if (!native_live(server) || !native_reports.control) return false;
     struct gate_control control={.command=command,.generation=++*generation};
+    if(argument)ksnprintf(control.fixture,sizeof(control.fixture),"%s",argument);
     native_command_failure="control_write";
     if (ua_write(server->memory,native_reports.control,&control,sizeof(control))) return false;
     uint64_t deadline=g_ticks+3000;
@@ -333,6 +355,8 @@ static bool native_command(struct process *server, unsigned command, uint32_t *g
     if (native_reports.generation>*generation || (command==GATE_SNAPSHOT && native_reports.survivor_snapshot>*generation)) native_command_failure="generation_mismatch";
     return ready;
 }
+static bool native_command(struct process *server,unsigned command,uint32_t *generation)
+{ return native_command_argument(server,command,generation,0); }
 static uint32_t native_digest(void)
 {
     const struct fb_device *d=fbdev_get();
@@ -420,6 +444,9 @@ static void native_handles_record(unsigned cycle)
 static int native_crash_isolation(void)
 {
     const char *name="crash-isolation";
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
     struct desktop_ledger initial,final;
     struct proc_ledger before,after;
     desktop_snapshot(&initial); proc_snapshot(&before);
@@ -629,9 +656,11 @@ finished:
  * records; application output is never evidence. The result page at
  * W32_DIALOGS_RESULT_VA (0x10000000) avoids the loader's top-down metadata
  * at 0x6fff0000; controller.h owns the fixture's address agreement. */
-static int probe_w32_fixture(bool media)
+static void w32_fixture_remove_tree(struct process *,struct process *);
+static int probe_w32_fixture(unsigned kind)
 {
-    const char *name=media ? "w32-media" : "w32-dialogs";
+    bool media=kind==1,gl=kind==2;
+    const char *name=gl ? "w32-gl" : media ? "w32-media" : "w32-dialogs";
     rec_emit(name,"BEGIN",0);
     const struct fb_device *display=fbdev_get();
     if (!display->present || (g_boot.flags & CBI_F_SAFE_MODE) || !native_payload_present()) {
@@ -651,7 +680,7 @@ static int probe_w32_fixture(bool media)
     desktop_snapshot(&initial); proc_snapshot(&before);
     struct process *owner=0,*server=0,*child=0;
     uint32_t generation=0,child_pid=0,exit_code=0xffffffffu;
-    union { struct w32_dialogs_result r; struct w32_media_result m; } result;
+    union { struct w32_dialogs_result r; struct w32_media_result m; struct w32_gl_result gl; } result;
     memset(&result,0,sizeof(result));
     struct w32_dialogs_result *r=&result.r;
     memset(&native_reports,0,sizeof(native_reports));
@@ -663,49 +692,56 @@ static int probe_w32_fixture(bool media)
     int made=supervisor_spawn_desktop_probe(&server);
     if (made<0) { failure="desktop_launch"; pass=false; goto cleanup; }
     server->ppid=owner->pid;
-    native_reports.active=true; native_reports.server=server->pid; native_reports.dialogs=true;
+    native_reports.active=true; native_reports.server=server->pid;
+    native_reports.dialogs=!gl;
+    native_reports.core_fixture=gl ? W32_FIXTURE_GL+1 : 0;
     uint64_t deadline=g_ticks+10000;
     while (native_live(server) && !native_reports.survivor_stage && g_ticks<deadline) task_sleep_ms(1);
     pass=native_live(server) && native_reports.survivor_stage==2;
     if (!pass) { failure="survivor_timeout"; goto cleanup; }
-    pass=native_command(server,GATE_SNAPSHOT,&generation) && native_command(server,media ? GATE_MEDIA : GATE_DIALOGS,&generation);
+    pass=native_command(server,GATE_SNAPSHOT,&generation) &&
+        (gl ? native_command_argument(server,GATE_W32_FIXTURE,&generation,"gl-exercise") :
+              native_command(server,media ? GATE_MEDIA : GATE_DIALOGS,&generation));
     if (!pass) { failure=native_command_failure; goto cleanup; }
     /* The desktop spawns the fixture only once w32srv has registered its
      * endpoint (first QEMU run: the fixture's startup met no server, 1062,
      * and exited c0000142); w32srv takes 1-2 s to start under TCG. */
     deadline=g_ticks+20000;
-    while (native_live(server) && !native_reports.dialogs_child && g_ticks<deadline) task_sleep_ms(1);
-    child_pid=native_reports.dialogs_child;
+    while (native_live(server) && !(gl ? native_reports.core_child : native_reports.dialogs_child) && g_ticks<deadline) task_sleep_ms(1);
+    child_pid=gl ? native_reports.core_child : native_reports.dialogs_child;
     child=child_pid ? proc_find(child_pid) : 0;
-    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32;
-    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",media ? W32_MEDIA_PATH : W32_DIALOGS_PATH,child_pid,server->pid);
+    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32 && !native_reports.invalid;
+    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",gl ? W32_GL_PATH : media ? W32_MEDIA_PATH : W32_DIALOGS_PATH,child_pid,server->pid);
     if (!pass) { failure=native_reports.invalid ? native_reports.invalid_check : "fixture_identity"; goto cleanup; }
     /* The fixture waits up to 5 s for w32srv, then runs; 120 s bound. */
     deadline=g_ticks+120000;
     while (g_ticks<deadline && (child=proc_find(child_pid)) && child->state==PROC_LIVE) {
-        if (!ua_read(child->memory,&result,media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA,sizeof(result)) && r->done) break;
+        if (!ua_read(child->memory,&result,gl ? W32_GL_RESULT_VA : media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA,sizeof(result)) && r->done) break;
         task_sleep_ms(5);
     }
     child=proc_find(child_pid);
-    valid=child && child->state==PROC_LIVE && (media ? w32_media_valid(&result.m) : w32_dialogs_valid(r));
+    valid=child && child->state==PROC_LIVE && (gl ? w32_gl_valid(&result.gl) : media ? w32_media_valid(&result.m) : w32_dialogs_valid(r));
     if (valid) {
         uint32_t one=1;
-        released=!ua_write(child->memory,(media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA)+offsetof(struct w32_dialogs_result,release),&one,4);
+        released=!ua_write(child->memory,(gl ? W32_GL_RESULT_VA : media ? W32_MEDIA_RESULT_VA : W32_DIALOGS_RESULT_VA)+offsetof(struct w32_dialogs_result,release),&one,4);
     }
     /* In gate mode the desktop does not reap this child: its exit stays. */
     deadline=g_ticks+5000;
     while ((child=proc_find(child_pid)) && child->state!=PROC_ZOMBIE && g_ticks<deadline) task_sleep_ms(1);
     if (child && child->state==PROC_ZOMBIE) exit_code=(uint32_t)child->raw_exit;
     if (valid) {
-        if (media) w32_media_publish(&result.m,exit_code,rec_emit);
+        if(gl) w32_gl_publish(&result.gl,exit_code,rec_emit);
+        else if (media) w32_media_publish(&result.m,exit_code,rec_emit);
         else w32_dialogs_publish(r,exit_code,rec_emit);
     }
-    pass=valid && released && !exit_code && !r->errors && (media || (!r->teardown_errors && !r->live_windows && !r->live_menus));
+    pass=valid && released && !native_reports.invalid && !exit_code && !r->errors && (gl || media || (!r->teardown_errors && !r->live_windows && !r->live_menus));
     if (!pass) failure=!valid ? "fixture_result" : exit_code ? "fixture_exit" : "fixture_errors";
 cleanup:
     native_reports.active=false;
     native_reports.dialogs=false;
-    if (server) {
+    native_reports.core_fixture=0;
+    if (server && gl) w32_fixture_remove_tree(owner,server);
+    else if (server) {
         /* The fixture and w32srv are the desktop's children: collect them
          * before the desktop so nothing is adopted past the ledger. */
         static struct ciuki_proc_record children[CIUKI_PROCESS_MAX];
@@ -724,10 +760,169 @@ finished:
     else rec_emit(name,"END","status=FAIL reason=%s",failure ? failure : "unknown");
     return pass ? 0 : 1;
 }
+#include "f5_restart_observer.inc"
+CIUKI_F5_PROBE("w32-restart",probe_w32_restart);
+
 static int probe_w32_dialogs(void) { return probe_w32_fixture(false); }
 static int probe_w32_media(void) { return probe_w32_fixture(true); }
 CIUKI_F5_PROBE("w32-dialogs",probe_w32_dialogs);
 CIUKI_F5_PROBE("w32-media",probe_w32_media);
+
+static int probe_w32_gl(void) { return probe_w32_fixture(2); }
+CIUKI_F5_PROBE("w32-gl",probe_w32_gl);
+/* f5-21b: one authenticated desktop gate and result reader for the core PEs.
+ * The registered wrappers live in f5_probes_observers.c. */
+static void w32_fixture_remove_tree(struct process *owner,struct process *server)
+{
+    /* Capture the crash coordinator's descendants before parent exit adopts
+     * them to PID 1. Stop every captured process, including on a timeout. */
+    static struct ciuki_proc_record records[CIUKI_PROCESS_MAX];
+    static unsigned depth[CIUKI_PROCESS_MAX];
+    unsigned count=proc_list_snapshot(records,CIUKI_PROCESS_MAX,0);
+    memset(depth,0,sizeof(depth));
+    for(unsigned round=0;round<count;round++) {
+        bool changed=false;
+        for(unsigned i=0;i<count;i++)if(!depth[i]) {
+            if(records[i].ppid==server->pid)depth[i]=1;
+            else for(unsigned j=0;j<count;j++)
+                if(depth[j] && records[i].ppid==records[j].pid){depth[i]=depth[j]+1;break;}
+            if(depth[i])changed=true;
+        }
+        if(!changed)break;
+    }
+    /* Freeze the desktop first: it must not supervise a replacement w32srv
+     * while its old child is stopped or collected. */
+    proc_stop(server,0,0);
+    for(unsigned i=0;i<count;i++)if(depth[i]) {
+        struct process *p=proc_find(records[i].pid);
+        if(p)proc_stop(p,0,0);
+    }
+    desktop_remove(owner,server);
+    /* proc_collect adopts descendants to PID 1 and reaps them. Do not keep
+     * pointers to their old parents across a collection or scheduling point. */
+    uint64_t deadline=g_ticks+1000;
+    for(;;) {
+        proc_collect();
+        bool present=false;
+        for(unsigned i=0;i<count;i++)if(depth[i] && proc_find(records[i].pid)){present=true;break;}
+        if(!present || g_ticks>=deadline)break;
+        task_sleep_ms(1);
+    }
+}
+static int w32_fixture_restart_server(struct process *desktop)
+{
+    static struct ciuki_proc_record records[CIUKI_PROCESS_MAX];
+    unsigned count=proc_list_snapshot(records,CIUKI_PROCESS_MAX,0),matches=0;
+    uint32_t pid=0;
+    for(unsigned i=0;i<count;i++)
+        if(records[i].ppid==desktop->pid && records[i].state==CIUKI_PROC_LIVE) {
+            struct process *p=proc_find(records[i].pid);
+            if(p && p->personality==PROC_NATIVE && !strncmp(p->name,"w32srv",7)){pid=p->pid;matches++;}
+        }
+    if(matches!=1)return -ESRCH;
+    proc_stop(proc_find(pid),137,SIGKILL);
+    uint64_t deadline=g_ticks+3000;
+    struct process *old;
+    while((old=proc_find(pid)) && old->state!=PROC_ZOMBIE && g_ticks<deadline) {
+        proc_collect();task_sleep_ms(1);
+    }
+    old=proc_find(pid);
+    return old && old->state!=PROC_ZOMBIE ? -ETIMEDOUT : 0;
+}
+int probes_w32_core_fixture(unsigned id)
+{
+    if(id>=W32_FIXTURE_COUNT)return 1;
+    const char *name=w32_core_schemas[id].probe;
+    rec_emit(name,"BEGIN",0);
+    const struct fb_device *display=fbdev_get();
+    if(!display->present || (g_boot.flags & CBI_F_SAFE_MODE) || !native_payload_present()) {
+        rec_emit(name,"END","status=FAIL reason=desktop_unavailable");return 1;
+    }
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if(gate){rec_emit(name,"END","status=FAIL reason=write_gate");return 1;}
+    struct desktop_ledger initial,final;
+    struct proc_ledger before,after;
+    desktop_snapshot(&initial);proc_snapshot(&before);
+    struct process *owner=0,*server=0,*child=0;
+    uint32_t generation=0,child_pid=0,exit_code=0xffffffffu,acknowledged=0;
+    union {struct w32_core_result core;struct w32_kernel32_result k32;} result;
+    memset(&result,0,sizeof(result));memset(&native_reports,0,sizeof(native_reports));
+    bool valid=false,released=false;
+    const char *failure="controller_setup";
+    bool pass=!proc_prepare(proc_supervisor(),&owner);
+    if(!pass)goto finished;
+    proc_publish(owner,0);
+    int made=supervisor_spawn_desktop_probe(&server);
+    if(made<0){failure="desktop_launch";pass=false;goto cleanup;}
+    server->ppid=owner->pid;
+    native_reports.active=true;native_reports.server=server->pid;native_reports.core_fixture=id+1;
+    uint64_t deadline=g_ticks+10000;
+    while(native_live(server) && !native_reports.survivor_stage && !native_reports.invalid && g_ticks<deadline)task_sleep_ms(1);
+    pass=native_live(server) && native_reports.survivor_stage==2 && !native_reports.invalid;
+    if(!pass){failure="survivor_timeout";goto cleanup;}
+    pass=native_command(server,GATE_SNAPSHOT,&generation) &&
+        native_command_argument(server,GATE_W32_FIXTURE,&generation,w32_fixtures[id].name);
+    if(!pass){failure=native_command_failure;goto cleanup;}
+    deadline=g_ticks+20000;
+    while(native_live(server) && !native_reports.core_child && !native_reports.invalid && g_ticks<deadline)task_sleep_ms(1);
+    child_pid=native_reports.core_child;child=child_pid ? proc_find(child_pid) : 0;
+    pass=child && child->ppid==server->pid && child->personality==PROC_WIN32 && !native_reports.invalid;
+    rec_emit(name,"DATA","case=fixture path=%s pid=%u server_pid=%u",w32_fixtures[id].path,child_pid,server->pid);
+    if(!pass){failure=native_reports.invalid ? native_reports.invalid_check : "fixture_identity";goto cleanup;}
+    unsigned bytes=id ? sizeof(result.core) : sizeof(result.k32);
+    deadline=g_ticks+60000;
+    while(g_ticks<deadline && (child=proc_find(child_pid)) && child->state==PROC_LIVE) {
+        if(!ua_read(child->memory,&result,w32_fixtures[id].address,bytes)) {
+            if(id==W32_FIXTURE_REGISTRY && result.core.magic==W32_CORE_MAGIC &&
+               result.core.version==1 && result.core.fixture==id && result.core.request>acknowledged) {
+                int error=result.core.request==acknowledged+1 && result.core.request<=2 ?
+                    w32_fixture_restart_server(server) : -EINVAL;
+                uint32_t reply[2]={result.core.request,(uint32_t)(error<0 ? -error : error)};
+                if(ua_write(child->memory,w32_fixtures[id].address+offsetof(struct w32_core_result,acknowledged),reply,sizeof(reply))) {
+                    failure="restart_ack";pass=false;goto cleanup;
+                }
+                acknowledged=reply[0];
+                rec_emit(name,"DATA","case=service-restart sequence=%u error=%u",acknowledged,reply[1]);
+            }
+            if(result.core.done==1)break;
+        }
+        task_sleep_ms(5);
+    }
+    child=proc_find(child_pid);
+    valid=child && child->state==PROC_LIVE && child->ppid==server->pid &&
+        (id ? w32_core_valid(&result.core,id) : w32_kernel32_valid(&result.k32));
+    if(valid) {
+        uint32_t one=1;
+        released=!ua_write(child->memory,w32_fixtures[id].address+offsetof(struct w32_core_result,release),&one,4);
+    }
+    deadline=g_ticks+5000;
+    while((child=proc_find(child_pid)) && child->state!=PROC_ZOMBIE && g_ticks<deadline)task_sleep_ms(1);
+    if(child && child->state==PROC_ZOMBIE)exit_code=(uint32_t)child->raw_exit;
+    if(valid) {
+        if(id)w32_core_publish(&result.core,id,rec_emit);
+        else w32_kernel32_publish(&result.k32,rec_emit);
+    }
+    pass=valid && released && !native_reports.invalid &&
+        (id!=W32_FIXTURE_REGISTRY || (acknowledged==2 && result.core.acknowledged==acknowledged)) &&
+        (id ? w32_core_pass(&result.core,id,exit_code) : w32_kernel32_pass(&result.k32,exit_code));
+    if(!pass)failure=!valid ? "fixture_result" : !released ? "fixture_release" :
+        id && result.core.unsupported ? "observation_incomplete" : exit_code ? "fixture_exit" : "fixture_predicates";
+cleanup:
+    native_reports.active=false;native_reports.core_fixture=0;
+    if(server) {
+        w32_fixture_remove_tree(owner,server);
+    }
+    if(owner){proc_stop(owner,0,0);proc_collect();}
+finished:
+    desktop_snapshot(&final);proc_snapshot(&after);
+    bool objects=desktop_ledgers_equal(&initial,&final),processes=native_proc_equal(&before,&after);
+    rec_emit(name,"DATA","case=ledger objects_equal=%u processes_equal=%u",objects,processes);
+    if(pass && (!objects || !processes)){pass=false;failure="cleanup_ledger";}
+    if(pass)rec_emit(name,"END","status=PASS");
+    else rec_emit(name,"END","status=FAIL reason=%s",failure);
+    return pass ? 0 : 1;
+}
 
 /* f5-20D w32-upper-dlls: the production desktop (gate mode) starts w32srv and
  * the authored PE fixture /System/Win32/Fixtures/upper-exercise.exe, which
@@ -749,6 +944,9 @@ static int probe_w32_upper_dlls(void)
         rec_emit(name,"END","status=FAIL reason=desktop_unavailable");
         return 1;
     }
+    int gate=storage_enable_write(storage_get(),2);
+    rec_emit(name,"DATA","case=write-gate expected=0 observed=%d",gate);
+    if (gate) { rec_emit(name,"END","status=FAIL reason=write_gate"); return 1; }
     struct desktop_ledger initial,final;
     struct proc_ledger before,after;
     desktop_snapshot(&initial); proc_snapshot(&before);

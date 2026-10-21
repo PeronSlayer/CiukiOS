@@ -1,0 +1,14 @@
+--- a/src/core/tcp.c
++++ b/src/core/tcp.c
+@@ -1842,6 +1842,11 @@
+   LWIP_ASSERT_CORE_LOCKED();
+ 
+   pcb = (struct tcp_pcb *)memp_malloc(MEMP_TCP_PCB);
++#ifdef LWIP_HOOK_TCP_PCB_EXHAUSTED
++  if ((pcb == NULL) && LWIP_HOOK_TCP_PCB_EXHAUSTED()) {
++    return NULL;
++  }
++#endif
+   if (pcb == NULL) {
+     /* Try to send FIN for all pcbs stuck in TF_CLOSEPEND first */
+     tcp_handle_closepend();

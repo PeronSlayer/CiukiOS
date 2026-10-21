@@ -167,6 +167,8 @@ void pmm_free(uint32_t p) { allocated[p / PAGE_SIZE] = false; used_pages--; }
 uint32_t pmm_free_count(void) { return HOST_PAGES - 4096 - used_pages; }
 uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr, "panic: %s\n", fmt); abort(); }
+/* f1-86: the periodic VM exit profile logs through klog_periodic; ignored here like klog. */
+void klog_periodic(const char *fmt, ...) { (void)fmt; }
 void klog(const char *fmt, ...)
 {
     if (!uart_baud) return;
@@ -221,6 +223,7 @@ uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t t) { return g_ticks - t < (1ull << 63); }
 void kwait_init(struct kwait *q) { q->head = 0; }
 void kwait_wake_all(struct kwait *q) { (void)q; }
+void kwait_wake_ready(struct kwait *q) { (void)q; }
 void kmutex_init(struct kmutex *m) { memset(m, 0, sizeof(*m)); }
 void kmutex_lock(struct kmutex *m) { m->owner = g_current; }
 void kmutex_unlock(struct kmutex *m) { m->owner = 0; }
@@ -337,6 +340,12 @@ void rec_diag(const char *probe, const char *fmt, ...)
 #include "../../src/kernel/vm/dosvm_pic.c"
 #include "../../src/kernel/vm/v86.c"
 #include "dosvm_work.inc"
+/* This runner opens explicit fixture images, without a managed games volume. */
+int dosvm_game_program(unsigned game, bool remove, uint32_t *size)
+{
+    (void)game; (void)remove; (void)size;
+    return -ENOSYS;
+}
 #include "../../src/kernel/vm/dosvm.c"
 /* This CPU/storage harness admits no LAN port or network-enabled launch.
  * The real network adapters run in tests/host/vm/lifecycle_test.c instead. */

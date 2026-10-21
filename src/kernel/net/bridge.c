@@ -24,9 +24,10 @@ int bridge_pool_copy(struct bridge_pool *p, const uint8_t *data, unsigned n,
     if (!p || !data || n < 14 || n > BRIDGE_FRAME_MAX || !generation) return -EINVAL;
     for (unsigned i = 0; i < BRIDGE_PACKETS; i++) if (!p->packet[i].refs) {
         struct bridge_packet *f = &p->packet[i];
-        memcpy(f->data, data, n);
+        f->frame = net_packet_copy(data, n);
+        if (!f->frame) return -ENOSPC;
+        f->data = net_packet_data(f->frame);
         unsigned padded = n < 60 ? 60 : n;
-        memset(f->data + n, 0, padded - n);
         f->length = padded; f->interface = interface; f->generation = generation; f->refs = 1;
         if (++p->used > p->peak) p->peak = p->used;
         return (int)i;
@@ -41,7 +42,10 @@ bool bridge_pool_hold(struct bridge_pool *p, unsigned i)
 void bridge_pool_release(struct bridge_pool *p, unsigned i)
 {
     if (!p || i >= BRIDGE_PACKETS || !p->packet[i].refs) return;
-    if (!--p->packet[i].refs) { p->packet[i].length = 0; p->used--; }
+    if (!--p->packet[i].refs) {
+        net_packet_free(p->packet[i].frame);
+        memset(&p->packet[i], 0, sizeof(p->packet[i])); p->used--;
+    }
 }
 static int queue_pop(struct bridge_queue *q)
 {

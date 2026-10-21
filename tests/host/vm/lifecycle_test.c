@@ -18,7 +18,8 @@ int main(void)
     struct netif device = {.generation = 91, .ready = true, .running = true, .link = NET_LINK_UP};
     struct net_bridge_port port = {0};
     CHECK(!net_bridge_port_open(&port, &pool, &device, 0, id, 0, 0, host_network_mode));
-    CHECK(!dosvm_network_bind_port(&port));
+    /* Exercise the production first-LAN-launch selection path. */
+    host_primary_port = &port; host_primary_error = 0;
     host_network_mode_error = -EBUSY;
     CHECK(dosvm_call(CIUKI_DOSVM_CREATE, &c, sizeof(c)) == -EBUSY);
     CHECK(!port.bridge.count && !host_network_promiscuous && !used_pages && !heap_blocks);

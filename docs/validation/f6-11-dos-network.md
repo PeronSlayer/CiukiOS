@@ -20,8 +20,8 @@ surface; no translation through lwIP or native sockets exists.
 
 Bridge mutation is serialized in thread context by its selected-port owner.
 Queues hold references to caller-supplied packet-pool slots, at most eight RX
-and eight TX per VM and two VMs. The owner must supply the global pool; there
-is no allocation fallback. TX admission copies the complete frame before success.
+and eight TX per VM and two VMs. The slots retain ownership metadata only; payloads come from the native
+f6-10 PBUF_POOL, with no allocation fallback. TX admission copies the complete frame before success.
 Physical TX rejection is counted; local unicast stays off the wire. Broadcast
 excludes its sender and uses the physical port once. Only checked Ethernet II
 IPX enters either guest surface; host ARP/IPv4 is excluded.
@@ -32,25 +32,24 @@ failed persistence, or unsupported receive mode fails closed. The production
 VFS store now reads `C:\System\NETID.BIN`, commits a new 16-byte candidate to
 `NETID.TMP`, closes it, renames without replacement and flushes C: before
 returning success. A valid pending candidate is recovered before generating
-another identifier; malformed final/pending records are refused. The f6-10
-entropy caller and selected-port publication still require its actual merge.
+another identifier; malformed final/pending records are refused. The first LAN
+launch obtains the approved f6-10 SplitMix64 stream, persists
+the record, then publishes the primary-port binding. Existing identities do not
+consume fresh entropy. LAN remains off by default.
 
 IPX has 32 socket slots and 64 outstanding ECBs per VM (therefore <=64 per
 socket), with up to 16 nonoverlapping fragments and 1500 datagram bytes.
 Completion values are 00 success, FC cancelled, FD malformed, FE undeliverable,
-FF hardware error. No incoming packet allocates memory or asserts a host panic.
+FF hardware error. No incoming packet allocates heap memory or asserts a host panic.
 
 ## Verification and integration
 
 Exact commands, outcomes, limitations and outstanding integration are recorded
 in `build/codex/f6-11-report.md`. No image SHA or guest qualification is claimed
-from host checks. Amendment 2 authorizes the VM lifecycle, command validator
-and DOS Box wiring, which is already present at `9d7dd81e`. That commit's
-message describes a main merge, but its object has only parent `40f39986`
-and its tree lacks f6-10's `net_stack.h`, `lwip_handoff.c` and lwIP port.
-The primary physical-port binding, shared f6-10 packet pool/ledger and the
-identity entropy/admission caller remain dependent on the actual lead merge.
-The implementer performed no git merge or source transplant from main.
+from host checks. Amendment 2 authorizes the VM lifecycle,
+command validator, DOS Box wiring and primary-port/pool integration. The lead's
+in-progress main merge now supplies f6-10. All merge markers were reconciled;
+index resolution and the merge commit remain the lead's responsibility.
 
 ## Application API source matrix
 
@@ -81,9 +80,20 @@ and copy bounds are tested independently from integration into the VM lifecycle.
 
 ## Amendment 2 research and integration decisions
 
-The amendment grants production wiring after the lead merges f6-10. The checkout
-initially remained at `40f39986`, without that merge or any UU entries. No merge
-or index mutation is performed by the implementer.
+The amendment grants production wiring after the lead merges f6-10. The
+current merge supplies its real netif, packet pool, entropy and MM_NET ledger.
+The bridge asks `net_stack_primary()` for the successfully attached default
+physical interface, rather than independently choosing the first running NIC.
+It retains that device's generation and uses `netif_promiscuous` under the
+existing device mutex. No failover or second physical bridge port is created.
+
+`bridge_runtime.c` provisions lazily at the first IPX launch, through the exact
+production NETID VFS callbacks. It refuses missing storage, malformed identity,
+failed persistence and unsupported receive mode. Concurrent provisioning returns
+EBUSY. It checks the selected index and generation again after sleeping VFS
+operations. Active VMs retain the old generation; teardown performs no register
+write against a replacement/stopped device. A later launch can reopen the port
+after the last old VM retires, reusing the persisted identifier.
 
 Receive-mode operations use the physical device mutex and retain normal error,
 runt and broadcast policy. Sources checked before implementation:
@@ -104,15 +114,14 @@ e1000. PCnet, Tulip, 3c90x and Rhine explicitly return ENOSYS for this operation
 The bridge retains the last VM's network owner when revocation returns busy;
 retrying destruction retries revocation before releasing guest memory.
 
-The new host lifecycle fixture uses the production CREATE validator, VM
-creation/boot, INT2F dispatch and CLOSE teardown, including failed admission
-rollback and deferred receive-mode cleanup. The established guest CPU harness
-has no LAN admission and keeps explicit absent-device seams; it is not evidence
-of guest LAN operation. Eleven focused fixtures (including the two new identity
-fixtures, 5,083 checks) and the lifecycle fixture (130,513 checks) pass the
-current supplementary UBSan checks. The normal ASan/UBSan runners compile,
-but LeakSanitizer cannot perform its ptrace check in this sandbox. Leak
-detection remains enabled; supplementary UBSan does not replace that gate.
+The launch/lifecycle fixture uses production CREATE validation, VM
+creation/boot, automatic primary-port selection, INT2F dispatch and CLOSE,
+including failed admission rollback and deferred receive-mode cleanup. A new
+primary-port fixture selects NIC one while NIC zero is also running, checks
+persistence before publication, refuses faults/reentrancy, and proves generation
+revocation and stable NETID reuse. Exact verification results and sandbox
+limitations are recorded in the report, without treating supplementary UBSan
+as a replacement for the normal ASan/UBSan/LSan gate.
 
 The identity fault fixture exercises short/oversized/zero records, every
 publication failure, retry/recovery, handle retirement and destination
@@ -123,10 +132,22 @@ builds no boot image and changes nothing in `tests/host/fs` or `tests/host/proc`
 A failed partial pending write is retained and refused, rather than silently
 generating a new identity on the next launch.
 
-Read-only comparison with main confirms that f6-10 uses lwIP 2.2.1's
-`pbuf_alloc(PBUF_RAW, ..., PBUF_POOL)` for native ingress: 128 entries of
-1536 payload bytes, within the `MM_NET` reservation. The
-[pinned upstream pbuf implementation](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/pbuf.c)
-defines the allocation/reference/free ownership used by that pool. Any bridge
-integration must use those same entries and keep IPX out of `tcpip_input`;
-no second packet pool or substitute entropy source is introduced here.
+The [pinned lwIP 2.2.1 pbuf implementation](https://raw.githubusercontent.com/lwip-tcpip/lwip/STABLE-2_2_1_RELEASE/src/core/pbuf.c)
+allocates PBUF_POOL from MEMP_PBUF_POOL and releases it through pbuf_free.
+`packet_pool.c` uses exactly that allocator, like native `net_stack_input`:
+128 entries, 1536 payload bytes each. Each bridge metadata slot owns one pbuf;
+local fan-out references keep that owner until the final RX/TX queue releases
+it. No additional frame array, heap fallback or IPX `tcpip_input` call exists.
+The linker includes pool/runtime metadata and DOS network state in the same
+`__net_start..__net_end` range that `net_stack_init` moves to MM_NET and reserves
+under its existing 4 MiB ceiling; the packet pages are not charged twice.
+
+The full real-stack regression parks the tcpip core at a controlled boundary,
+queues one actual native ingress pbuf, retains 113 native pool allocations and
+queues seven frames from each of two VMs. At all 128 entries occupied, both
+VM sends and native ingress fail within their bounds. Link loss frees only the
+14 VM frames; broadcast fan-out shares one payload until its final reader or
+VM teardown. Disable/destroy drains do not release native ownership. Releasing
+the native buffers and draining tcpip_input returns the actual allocator to its
+original baseline. The isolated VM fixtures also use the upstream allocator,
+with only the absent TCP core's optional out-of-order reclaim callback refused.

@@ -21,6 +21,9 @@ static int wire_transmit(void *arg, const uint8_t *frame, unsigned length)
 static int receive_mode(void *arg, bool on)
 {
     struct net_bridge_port *p = arg;
+    /* A revoked generation/stopped driver has already ended this lease.
+     * Never program a replacement generation during old VM teardown. */
+    if (!on && (p->device->generation != p->generation || !p->device->running)) return 0;
     if (p->device->generation != p->generation || !p->receive_mode) return -19;
     return p->receive_mode(p->device, on);
 }

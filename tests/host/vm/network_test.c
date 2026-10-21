@@ -8,6 +8,8 @@ static uint8_t low[2][0xa0000];
 static unsigned registered_ports[3],preemptions;
 static int port_error;
 static unsigned wire_count;
+int net_bridge_primary_port(struct net_bridge_port **out)
+{ *out = NULL; return -ENODEV; }
 static uint8_t wire_copy[1514];
 static int physical_send(struct netif *d,const uint8_t *p,unsigned bytes)
 { CHECK(d==&devices[0] && bytes>=60); wire_count++; memcpy(wire_copy,p,bytes); return 0; }

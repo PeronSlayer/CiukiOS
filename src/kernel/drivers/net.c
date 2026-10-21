@@ -17,6 +17,10 @@ static bool initialized, shutting_down;
 static struct task *worker;
 static bool input_active;
 static struct kmutex registration_mutex;
+int net_stack_init(void) __attribute__((weak));
+void net_stack_driver_start(void) __attribute__((weak));
+void net_stack_driver_service(void) __attribute__((weak));
+void net_stack_address(unsigned, uint32_t *) __attribute__((weak));
 static net_input_fn input;
 static void *input_cookie;
 /* f6-11 BEGIN: exclusive Ethernet type tap, independent of native ingress.
@@ -245,6 +249,7 @@ static int stop_locked(struct netif *d)
     }
     proof_device = 0;
     if (d->dma_phys) {
+        mm_release(d->dma_phys, d->driver->dma_pages, MM_NET);
         for (unsigned i = 0; i < d->driver->dma_pages; i++) pmm_free(d->dma_phys + i * PAGE_SIZE);
         d->dma_phys = 0; d->dma = 0;
     }
@@ -311,6 +316,7 @@ int netif_attach(struct netif *d, const struct pci_func *p, const struct net_io 
         d->dma_phys = pmm_alloc_contig(d->driver->dma_pages);
         if (!d->dma_phys) err = -ENOMEM;
         else {
+            mm_claim(d->dma_phys, d->driver->dma_pages, MM_NET);
             d->dma = P2V(d->dma_phys); memset(d->dma, 0, d->driver->dma_pages * PAGE_SIZE);
             d->claims[2] = registry_claim(RES_MMIO, d->dma_phys,
                 d->dma_phys + d->driver->dma_pages * PAGE_SIZE, d->owner, false);
@@ -457,6 +463,11 @@ void net_state_snapshot(struct ciuki_net_state *out)
     ksnprintf(out->reason, sizeof(out->reason), "%s", d->reason ? d->reason : "unknown");
     out->rx_frames = d->stats.rx_packets;
     out->tx_frames = d->stats.tx_completed;
+    if (net_stack_address) {
+        uint32_t address = 0;
+        for (unsigned i = 0; i < net_count(); i++) if (net_get(i) == d) net_stack_address(i, &address);
+        memcpy(out->ipv4, &address, 4); out->address_configured = address != 0;
+    }
     kmutex_unlock(&d->mutex);
 }
 void net_set_input(net_input_fn fn, void *cookie)
@@ -472,6 +483,7 @@ void net_set_input(net_input_fn fn, void *cookie)
 void net_worker_step(void)
 {
     struct net_packet packet;
+    if (net_stack_driver_service) { net_stack_driver_service(); task_yield(); }
     for (unsigned i = 0; i < device_count; i++) {
         if (shutting_down) break;
         netif_poll(&devices[i]); task_yield();
@@ -516,7 +528,10 @@ int net_init(void)
 {
     if (initialized) return shutting_down ? -NET_ENODEV : 0;
     initialized = true; kmutex_init(&registration_mutex);
-    if (g_boot.flags & CBI_F_SAFE_MODE) { klog("[net] disabled reason=safe_mode"); return 0; }
+    if (g_boot.flags & CBI_F_SAFE_MODE) {
+        if (net_stack_init && net_stack_init()) { klog("[net] disabled reason=stack_no_memory"); return -ENOMEM; }
+        klog("[net] disabled reason=safe_mode"); return 0;
+    }
     for (unsigned i = 0; i < pci_count() && device_count < NETIF_MAX; i++) {
         const struct pci_func *p = pci_get(i);
         if (!find_driver(p)) continue;
@@ -527,6 +542,10 @@ int net_init(void)
     }
     bool active = false;
     for (unsigned i = 0; i < device_count; i++) if (devices[i].running) active = true;
+    if (net_stack_init && net_stack_init()) {
+        net_shutdown(); klog("[net] disabled reason=stack_no_memory"); return -ENOMEM;
+    }
+    if (net_stack_driver_start) net_stack_driver_start();
     if (!active) return 0;
     worker = task_create_kernel("net-input", worker_main, 0, P_DEVICE);
     if (!worker) { net_shutdown(); return -ENOMEM; }

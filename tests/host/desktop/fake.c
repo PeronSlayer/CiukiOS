@@ -79,3 +79,10 @@ static int present(int display, int surface, const struct ciuki_rect *r)
     assert(fake_presents<64); fake_present_surfaces[fake_presents]=surface; fake_rects[fake_presents++]=*r; return 0;
 }
 const struct desk_ops fake_ops={send,info,map,unmap,close_fd,present};
+
+/* Host shell discovery has no VM; fixtures can override this query. */
+__attribute__((weak)) int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
+{
+    if(op==CIUKI_DOSVM_GAME_QUERY){c->state=1;return 0;}
+    errno=ENOSYS;return -1;
+}
