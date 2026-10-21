@@ -32,6 +32,15 @@ int net_stack_transmit(unsigned index, const void *frame, unsigned bytes)
     }
     kmutex_unlock(&outgoing[index].lock); return e;
 }
+void net_stack_driver_entropy(void)
+{
+    for (unsigned i = 0; i < net_count() && i < 2; i++) {
+        struct netif *d = net_get(i); if (!d->running) continue;
+        uint64_t mac = 0; memcpy(&mac, d->address, 6); net_stack_entropy(mac);
+        if (g_cpu_tsc) net_stack_entropy(read_tsc_serialized());
+        break; /* selected primary, before tcp_init/udp_init */
+    }
+}
 void net_stack_driver_start(void)
 {
     for (unsigned i = 0; i < 2; i++) kmutex_init(&outgoing[i].lock);

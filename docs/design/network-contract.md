@@ -182,10 +182,17 @@ which MUST be reviewed explicitly. Runtime test selection MUST NOT change them.
 | Protocol pools | `MEMP_NUM_TCP_PCB=40`, `MEMP_NUM_TCP_PCB_LISTEN=8`, `MEMP_NUM_TCP_SEG=256`, `MEMP_NUM_UDP_PCB=20`, `MEMP_NUM_NETCONN=48`, `MEMP_NUM_NETBUF=64`, `MEMP_NUM_SYS_TIMEOUT=32` |
 | Core messages | `MEMP_NUM_TCPIP_MSG_API=64`, `MEMP_NUM_TCPIP_MSG_INPKT=64`, `TCPIP_MBOX_SIZE=64`, `DEFAULT_TCP_RECVMBOX_SIZE=8`, `DEFAULT_UDP_RECVMBOX_SIZE=8`, `DEFAULT_ACCEPTMBOX_SIZE=4` |
 | TCP | `TCP_MSS=1460`, `TCP_WND=11680`, `TCP_SND_BUF=11680`, `TCP_SND_QUEUELEN=32`, `TCP_LISTEN_BACKLOG=1`, `LWIP_WND_SCALE=0`, `LWIP_TCP_KEEPALIVE=0` |
-| Adapter/close policy | `SO_REUSE=1`, `SO_REUSE_RXTOALL=0`, `IP_SOF_BROADCAST=1`, `IP_SOF_BROADCAST_RECV=0`, `LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT=1000`, `LWIP_SO_SNDTIMEO=0`, `LWIP_SO_RCVTIMEO=0`, `LWIP_SO_LINGER=0` (public timeouts are adapter waits, not blocking netconn waits) |
+| Adapter/close policy | `SO_REUSE=1`, `SO_REUSE_RXTOALL=0`, `IP_SOF_BROADCAST=1`, `IP_SOF_BROADCAST_RECV=0`, `LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT=500`, `LWIP_SO_SNDTIMEO=0`, `LWIP_SO_RCVTIMEO=0`, `LWIP_SO_LINGER=0` (public timeouts are adapter waits, not blocking netconn waits) |
 | ARP/DHCP/DNS | `ARP_TABLE_SIZE=16`, `ARP_QUEUEING=1`, `ARP_QUEUE_LEN=2`, `MEMP_NUM_ARP_QUEUE=32`, `LWIP_DHCP_DOES_ACD_CHECK=1`, `DNS_TABLE_SIZE=8`, `DNS_MAX_NAME_LENGTH=256`, `DNS_MAX_SERVERS=2`, `LWIP_DNS_SECURE=7`, `LWIP_DHCP_MAX_DNS_SERVERS=2`, `LWIP_DHCP_GET_NTP_SRV=0` |
 | Loopback/status | `LWIP_NETIF_LOOPBACK=1`, `LWIP_HAVE_LOOPIF=1`, `LWIP_LOOPBACK_MAX_PBUFS=16`, `LWIP_NETIF_STATUS_CALLBACK=1`, `LWIP_NETIF_LINK_CALLBACK=1`, `LWIP_STATS=1`, `LWIP_STATS_DISPLAY=0` |
 | Checksums | All IPv4/UDP/TCP/ICMP `CHECKSUM_GEN_*` and `CHECKSUM_CHECK_*` options MUST be 1. Driver checksum offload MUST remain disabled. |
+
+2026-10-21, f6-10 Amendment 1, lead decision 8: the close setting above selects
+two 500 ms polls via pinned api_lib's `ceil(setting/500)+1` formula, replacing
+the original setting of 1000 (three polls). The one-second requirement remains.
+The persistent-exhaustion fixture also found a raw TCP `TF_CLOSEPEND` path that
+returns success before those polls; its deadline is an open lead decision,
+recorded in `docs/validation/2026-10-21-f6-10-lwip.md`.
 
 These choices enable client TCP/UDP and LAN broadcast with bounded queues.
 **[F6]** Fragmented incoming IPv4 datagrams MUST be dropped/counted; UDP payloads

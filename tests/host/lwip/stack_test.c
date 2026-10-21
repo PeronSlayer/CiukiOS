@@ -34,7 +34,7 @@ static struct desktop_description *channel_description;
 static _Atomic unsigned input_pending;
 struct proc_thread *proc_thread_for(const struct task *t) { (void)t; thread.process=&client; return &thread; }
 struct process *proc_current(void) { return &client; }
-bool proc_signal_caught(struct proc_thread *t) { (void)t; return caught; }
+bool proc_signal_caught(struct proc_thread *t) { return t->pending || (t==&thread && caught); }
 void proc_signal_pipe(struct proc_thread *t) { (void)t; }
 struct proc_object *file_fd_object(const struct process *p,int32_t fd) { return fd<0 || fd>=CIUKI_OPEN_MAX ? NULL : p->fds[fd].object; }
 int file_fd_slot(const struct process *p,unsigned start) { for (unsigned i=start;i<CIUKI_OPEN_MAX;i++) if (!p->fds[i].object) return (int)i; return -EMFILE; }
@@ -60,12 +60,19 @@ int file_close(struct process *p,int32_t fd)
 }
 void input_snapshot(struct input_stats *out) { memset(out,0,sizeof(*out));out->pending=input_pending; }
 static unsigned char user[65536];
+static void (*access_hook)(void);
+static uint32_t access_pointer;
+static bool access_on_pin;
+static void user_access(uint32_t pointer, bool pinning)
+{
+    if (access_hook && pointer==access_pointer && pinning==access_on_pin) { void (*fn)(void)=access_hook;access_hook=NULL;fn(); }
+}
 int copy_from_user(void *out,uint32_t pointer,uint32_t bytes)
-{ if (pointer<4096 || bytes>sizeof(user) || pointer>sizeof(user)-bytes) return -EFAULT; memcpy(out,user+pointer,bytes); return 0; }
+{ if (pointer<4096 || bytes>sizeof(user) || pointer>sizeof(user)-bytes) return -EFAULT; memcpy(out,user+pointer,bytes);user_access(pointer,false); return 0; }
 int copy_to_user(uint32_t pointer,const void *in,uint32_t bytes)
 { if (pointer<4096 || bytes>sizeof(user) || pointer>sizeof(user)-bytes) return -EFAULT; memcpy(user+pointer,in,bytes); return 0; }
 int ua_pin(struct uaddr *space,struct ua_pin *pin,uint32_t pointer,uint32_t bytes,bool write)
-{ (void)space; (void)pin; (void)write; if(pointer<4096 || pointer>sizeof(user) || bytes>sizeof(user)-pointer)return -EFAULT;live_pins++;return 0; }
+{ (void)space; (void)pin; (void)write; if(pointer<4096 || pointer>sizeof(user) || bytes>sizeof(user)-pointer)return -EFAULT;live_pins++;user_access(pointer,true);return 0; }
 void ua_unpin(struct uaddr *space,struct ua_pin *pin) { (void)space; (void)pin; CHECK(live_pins);live_pins--; }
 static unsigned get16(const unsigned char *p) { return (unsigned)p[0]*256+p[1]; }
 static void put16(unsigned char *p,unsigned n) { p[0]=(unsigned char)(n>>8); p[1]=(unsigned char)n; }
@@ -75,6 +82,7 @@ static _Atomic bool dns_drop, dhcp_drop, dhcp_nak, arp_conflict;
 static unsigned char last_dns[1514];
 static unsigned last_dns_bytes;
 static _Atomic unsigned dhcp_declines;
+static unsigned lease_dns_count=2;
 static unsigned wire_syns, wire_packets, wire_data_transmits;
 static uint32_t wire_ack, wire_first_seq;
 static unsigned wire_first_count;
@@ -157,6 +165,12 @@ int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
         memcpy(b+28,body+28,16);put32(b+236,0x63825363);
         unsigned n=240; const unsigned char options[]={53,1,0,54,4,192,0,2,1,1,4,255,255,255,0,3,4,192,0,2,1,6,4,192,0,2,1,51,4,0,0,0,240,58,4,0,0,0,60,59,4,0,0,0,120,255};
         memcpy(b+n,options,sizeof(options));b[n+2]=type==1 ? 2 : dhcp_nak ? 6 : 5;n+=sizeof(options);
+        if (lease_dns_count==2) {
+            /* Option 6 starts at byte 261; insert the second server. */
+            memmove(b+271,b+267,n-267);put32(b+267,0xc0000202);b[262]=8;n+=4;
+        } else if (!lease_dns_count) {
+            memmove(b+261,b+267,n-267);n-=6;
+        }
         /* Truncated option length: rejected without installing an offer. */
         unsigned char bad[320];memcpy(bad,b,n);bad[241]=250;udp_reply(f,67,68,bad,243,true);
         udp_reply(f,67,68,b,n,true);
@@ -227,24 +241,24 @@ static void arch_tests(void)
 static void udp_tests(void)
 {
     int a=call(CIUKI_SYS_SOCKET,AF_INET,SOCK_DGRAM|SOCK_NONBLOCK,0,0),b=call(CIUKI_SYS_SOCKET,AF_INET,SOCK_DGRAM|SOCK_NONBLOCK,0,0);
-    CHECK(a>=0 && b>=0);struct ciuki_sockaddr_in target=address(30000);CHECK(!net_socket_bind(&client,b,&target));
-    CHECK(net_socket_io(&client,b,user,3,MSG_DONTWAIT,NULL,false)==-EAGAIN);
+    CHECK(a>=0 && b>=0);struct ciuki_sockaddr_in target=address(30000);CHECK(!net_socket_bind(&client,b,&target,NULL));
+    CHECK(net_socket_io(&client,b,user,3,MSG_DONTWAIT,NULL,false,NULL)==-EAGAIN);
     memcpy(user+6000,"abcde",5);memcpy(user+7000,&target,16);
     struct ciuki_socket_io sendio={.size=40,.version=1,.fd=a,.buffer=6000,.bytes=5,.address=7000,.address_length=16};
     memcpy(user+4096,&sendio,40);CHECK(call(CIUKI_SYS_SENDTO,4096,0,0,0)==5);
-    struct ciuki_pollfd p={b,POLLIN,0};CHECK(net_poll(&client,&p,1,1000)==1 && (p.revents&POLLIN));
-    char text[16]={0};CHECK(net_socket_io(&client,b,text,2,MSG_PEEK,NULL,false)==2 && !memcmp(text,"ab",2));
+    struct ciuki_pollfd p={b,POLLIN,0};CHECK(net_poll(&client,&p,1,1000,NULL)==1 && (p.revents&POLLIN));
+    char text[16]={0};CHECK(net_socket_io(&client,b,text,2,MSG_PEEK,NULL,false,NULL)==2 && !memcmp(text,"ab",2));
     struct ciuki_socket_io io={.size=40,.version=1,.fd=b,.buffer=1,.bytes=2};memcpy(user+4096,&io,sizeof(io));
     CHECK(call(CIUKI_SYS_RECVFROM,4096,0,0,0)==-EFAULT);
     io.buffer=8192;memcpy(user+4096,&io,sizeof(io));CHECK(call(CIUKI_SYS_RECVFROM,4096,0,0,0)==2 && !memcmp(user+8192,"ab",2));
-    CHECK(net_socket_io(&client,b,text,16,MSG_DONTWAIT,NULL,false)==-EAGAIN);
-    CHECK(net_socket_io(&client,a,text,0,0,&target,true)==0);p.revents=0;CHECK(net_poll(&client,&p,1,1000)==1);
-    CHECK(net_socket_io(&client,b,text,16,0,NULL,false)==0);
-    CHECK(net_socket_io(&client,a,text,1473,0,&target,true)==-EMSGSIZE);
-    CHECK(net_socket_io(&client,a,text,1,MSG_PEEK,&target,true)==-EINVAL);
-    struct ciuki_sockaddr_in disconnect={0};CHECK(!net_socket_connect(&client,a,&disconnect));
-    CHECK(net_socket_io(&client,a,text,1,0,NULL,true)==-EDESTADDRREQ);
-    CHECK(net_socket_shutdown(&client,a,SHUT_RDWR)==-EOPNOTSUPP);
+    CHECK(net_socket_io(&client,b,text,16,MSG_DONTWAIT,NULL,false,NULL)==-EAGAIN);
+    CHECK(net_socket_io(&client,a,text,0,0,&target,true,NULL)==0);p.revents=0;CHECK(net_poll(&client,&p,1,1000,NULL)==1);
+    CHECK(net_socket_io(&client,b,text,16,0,NULL,false,NULL)==0);
+    CHECK(net_socket_io(&client,a,text,1473,0,&target,true,NULL)==-EMSGSIZE);
+    CHECK(net_socket_io(&client,a,text,1,MSG_PEEK,&target,true,NULL)==-EINVAL);
+    struct ciuki_sockaddr_in disconnect={0};CHECK(!net_socket_connect(&client,a,&disconnect,NULL));
+    CHECK(net_socket_io(&client,a,text,1,0,NULL,true,NULL)==-EDESTADDRREQ);
+    CHECK(net_socket_shutdown(&client,a,SHUT_RDWR,NULL)==-EOPNOTSUPP);
     CHECK(!file_close(&client,a) && !file_close(&client,b));drain();
     puts("PASS native UDP loopback/peek/truncation/zero-datagram/fault-before-consume/bounds");
 }
@@ -252,24 +266,24 @@ static void tcp_tests(void)
 {
     int listener=call(CIUKI_SYS_SOCKET,AF_INET,SOCK_STREAM|SOCK_NONBLOCK,0,0);
     int sender=call(CIUKI_SYS_SOCKET,AF_INET,SOCK_STREAM|SOCK_NONBLOCK,0,0);CHECK(listener>=0 && sender>=0);
-    struct ciuki_sockaddr_in a=address(30001);CHECK(!net_socket_bind(&client,listener,&a));CHECK(!net_socket_listen(&client,listener,8));
-    CHECK(net_socket_connect(&client,sender,&a)==-EINPROGRESS);
-    struct ciuki_pollfd ready={sender,POLLOUT,0};CHECK(net_poll(&client,&ready,1,1000)==1);
-    int error=-1;unsigned bytes=4;CHECK(!net_socket_option(&client,sender,0,SOL_SOCKET,SO_ERROR,&error,&bytes) && !error);
-    ready=(struct ciuki_pollfd){listener,POLLIN,0};CHECK(net_poll(&client,&ready,1,1000)==1);
+    struct ciuki_sockaddr_in a=address(30001);CHECK(!net_socket_bind(&client,listener,&a,NULL));CHECK(!net_socket_listen(&client,listener,8,NULL));
+    CHECK(net_socket_connect(&client,sender,&a,NULL)==-EINPROGRESS);
+    struct ciuki_pollfd ready={sender,POLLOUT,0};CHECK(net_poll(&client,&ready,1,1000,NULL)==1);
+    int error=-1;unsigned bytes=4;CHECK(!net_socket_option(&client,sender,0,SOL_SOCKET,SO_ERROR,&error,&bytes,NULL) && !error);
+    ready=(struct ciuki_pollfd){listener,POLLIN,0};CHECK(net_poll(&client,&ready,1,1000,NULL)==1);
     unsigned capacity=16;memcpy(user+6000,&capacity,4);
     CHECK(call(CIUKI_SYS_ACCEPT,(unsigned)listener,1,6000,0)==-EFAULT);
     int receiver=call(CIUKI_SYS_ACCEPT,(unsigned)listener,0,0,0);CHECK(receiver>=0);CHECK(*net_socket_flags(fds[receiver].object)==O_RDWR);
-    char text[128]={0};CHECK(net_socket_io(&client,sender,"hello world",11,0,NULL,true)==11);
-    ready=(struct ciuki_pollfd){receiver,POLLIN,0};CHECK(net_poll(&client,&ready,1,1000)==1);
-    CHECK(net_socket_io(&client,receiver,text,5,MSG_PEEK,NULL,false)==5 && !memcmp(text,"hello",5));
-    CHECK(net_socket_io(&client,receiver,text,3,0,NULL,false)==3 && !memcmp(text,"hel",3));
-    CHECK(net_socket_io(&client,receiver,text,128,0,NULL,false)==8 && !memcmp(text,"lo world",8));
-    CHECK(net_socket_io(&client,sender,text,0,0,NULL,true)==0);
-    CHECK(net_socket_io(&client,receiver,text,0,0,NULL,false)==0);
-    CHECK(!net_socket_shutdown(&client,sender,SHUT_WR));
-    CHECK(net_socket_io(&client,sender,text,1,MSG_NOSIGNAL,NULL,true)==-EPIPE);
-    CHECK(net_socket_io(&client,receiver,text,128,0,NULL,false)==0);
+    char text[128]={0};CHECK(net_socket_io(&client,sender,"hello world",11,0,NULL,true,NULL)==11);
+    ready=(struct ciuki_pollfd){receiver,POLLIN,0};CHECK(net_poll(&client,&ready,1,1000,NULL)==1);
+    CHECK(net_socket_io(&client,receiver,text,5,MSG_PEEK,NULL,false,NULL)==5 && !memcmp(text,"hello",5));
+    CHECK(net_socket_io(&client,receiver,text,3,0,NULL,false,NULL)==3 && !memcmp(text,"hel",3));
+    CHECK(net_socket_io(&client,receiver,text,128,0,NULL,false,NULL)==8 && !memcmp(text,"lo world",8));
+    CHECK(net_socket_io(&client,sender,text,0,0,NULL,true,NULL)==0);
+    CHECK(net_socket_io(&client,receiver,text,0,0,NULL,false,NULL)==0);
+    CHECK(!net_socket_shutdown(&client,sender,SHUT_WR,NULL));
+    CHECK(net_socket_io(&client,sender,text,1,MSG_NOSIGNAL,NULL,true,NULL)==-EPIPE);
+    CHECK(net_socket_io(&client,receiver,text,128,0,NULL,false,NULL)==0);
     CHECK(!file_close(&client,sender));CHECK(!file_close(&client,receiver));CHECK(!file_close(&client,listener));drain();
     puts("PASS native TCP handshake/nonblocking/poll/accept/partial-tail/peek/FIN/shutdown");
 }
@@ -280,10 +294,10 @@ static void refusal_tests(void)
     CHECK(net_socket_create(&client,AF_INET,SOCK_STREAM,17)==-EPROTONOSUPPORT);
     CHECK(call(CIUKI_SYS_NETCTL,0,0,0,0)==-ENOSYS);
     struct ciuki_pollfd entries[3]={{-1,POLLIN,7},{127,POLLIN,7},{127,POLLOUT,7}};
-    CHECK(net_poll(&client,entries,3,0)==2 && !entries[0].revents && entries[1].revents==POLLNVAL);
-    entries[0].events=0x200;CHECK(net_poll(&client,entries,1,0)==-EINVAL);
-    uint64_t start=cu_now();CHECK(!net_poll(&client,NULL,0,3) && cu_now()-start>=3);
-    caught=true;CHECK(net_poll(&client,NULL,0,-1)==-EINTR);caught=false;
+    CHECK(net_poll(&client,entries,3,0,NULL)==2 && !entries[0].revents && entries[1].revents==POLLNVAL);
+    entries[0].events=0x200;CHECK(net_poll(&client,entries,1,0,NULL)==-EINVAL);
+    uint64_t start=cu_now();CHECK(!net_poll(&client,NULL,0,3,NULL) && cu_now()-start>=3);
+    caught=true;CHECK(net_poll(&client,NULL,0,-1,NULL)==-EINTR);caught=false;
     int many[16];for (unsigned i=0;i<16;i++) { many[i]=net_socket_create(&client,AF_INET,SOCK_DGRAM,0);CHECK(many[i]>=0); }
     CHECK(net_socket_create(&client,AF_INET,SOCK_DGRAM,0)==-EMFILE);
     for (unsigned i=0;i<16;i++) CHECK(!file_close(&client,many[i]));drain();
@@ -302,7 +316,7 @@ static void limits_tests(void)
     for(unsigned i=0;i<3;i++)for(unsigned j=0;j<16;j++)CHECK(!file_close(&owners[i],all[i][j]));drain();
     int listeners[9];for(unsigned i=0;i<9;i++){
         listeners[i]=net_socket_create(&client,AF_INET,SOCK_STREAM,0);CHECK(listeners[i]>=0);
-        CHECK(net_socket_listen(&client,listeners[i],1)==(i<8 ? 0 : -ENOBUFS));
+        CHECK(net_socket_listen(&client,listeners[i],1,NULL)==(i<8 ? 0 : -ENOBUFS));
     }
     for(unsigned i=0;i<9;i++)CHECK(!file_close(&client,listeners[i]));drain();
     puts("PASS 48 global/32 TCP/16 UDP/eight listener resource limits across processes");
@@ -320,10 +334,10 @@ static void mixed_tests(void)
     struct proc_object *objects[]={&regular.object,&directory.object,&channel_description->object,&input_description.object,&unsupported_description.object};
     for(unsigned i=0;i<5;i++)fds[i+1]=(struct proc_fd){objects[i],0};
     struct ciuki_pollfd query[6]={{0,POLLIN,0},{1,POLLIN|POLLOUT,0},{2,POLLIN,0},{3,POLLIN|POLLOUT,0},{4,POLLIN,0},{5,0,0}};
-    CHECK(net_poll(&client,query,6,0)==4 && query[1].revents==POLLIN && query[2].revents==POLLIN &&
+    CHECK(net_poll(&client,query,6,0,NULL)==4 && query[1].revents==POLLIN && query[2].revents==POLLIN &&
         query[3].revents==POLLOUT && query[5].revents==POLLNVAL);
     cu_host_channel(1,CIUKI_CHANNEL_QUEUE_MAX,false);input_pending=1;
-    CHECK(net_poll(&client,query,6,0)==5 && query[3].revents==(POLLIN|POLLHUP) && query[4].revents==POLLIN);
+    CHECK(net_poll(&client,query,6,0,NULL)==5 && query[3].revents==(POLLIN|POLLHUP) && query[4].revents==POLLIN);
     for(unsigned i=1;i<=5;i++)fds[i]=(struct proc_fd){0};input_pending=0;
     CHECK(!file_close(&client,fd));drain();
     puts("PASS common poll over UDP, regular file, /dev directory, production channel queue/peer close, input and non-pollable surface");
@@ -342,9 +356,10 @@ static void *wait_job(void *arg)
     j->entered=true;
     if(j->kind==1) {
         struct ciuki_pollfd f={j->fd,POLLIN,0};
-        j->result=net_poll(&client,&f,1,5000);if(j->result==1)j->result=f.revents;
+        j->result=net_poll(&client,&f,1,5000,NULL);if(j->result==1)j->result=f.revents;
     } else if(j->kind==2) j->result=call(CIUKI_SYS_RECVFROM,4096,0,0,0);
-    else j->result=net_socket_io(&client,j->fd,&b,1,0,NULL,false);
+    else if(j->kind==3)j->result=net_socket_accept(&client,j->fd,NULL,NULL);
+    else j->result=net_socket_io(&client,j->fd,&b,1,0,NULL,false,NULL);
     pthread_cleanup_pop(0);return NULL;
 }
 static void lifecycle_tests(void)
@@ -365,17 +380,17 @@ static void lifecycle_tests(void)
     CHECK(!file_close(&client,fd));drain();
     fd=net_socket_create(&client,AF_INET,SOCK_DGRAM,0);CHECK(fd>=0);
     struct ciuki_socket_timeval timeout={.microseconds=1};unsigned length=sizeof(timeout);
-    CHECK(!net_socket_option(&client,fd,1,SOL_SOCKET,SO_RCVTIMEO,&timeout,&length));
-    char b;uint64_t start=cu_now();CHECK(net_socket_io(&client,fd,&b,1,0,NULL,false)==-EAGAIN && cu_now()>start);
-    caught=true;CHECK(net_socket_io(&client,fd,&b,1,0,NULL,false)==-EINTR);caught=false;
-    timeout.microseconds=1000000;length=sizeof(timeout);CHECK(net_socket_option(&client,fd,1,SOL_SOCKET,SO_RCVTIMEO,&timeout,&length)==-EINVAL);
-    int val=1;length=4;CHECK(net_socket_option(&client,fd,1,IPPROTO_TCP,TCP_NODELAY,&val,&length)==-ENOPROTOOPT);
+    CHECK(!net_socket_option(&client,fd,1,SOL_SOCKET,SO_RCVTIMEO,&timeout,&length,NULL));
+    char b;uint64_t start=cu_now();CHECK(net_socket_io(&client,fd,&b,1,0,NULL,false,NULL)==-EAGAIN && cu_now()>start);
+    caught=true;CHECK(net_socket_io(&client,fd,&b,1,0,NULL,false,NULL)==-EINTR);caught=false;
+    timeout.microseconds=1000000;length=sizeof(timeout);CHECK(net_socket_option(&client,fd,1,SOL_SOCKET,SO_RCVTIMEO,&timeout,&length,NULL)==-EINVAL);
+    int val=1;length=4;CHECK(net_socket_option(&client,fd,1,IPPROTO_TCP,TCP_NODELAY,&val,&length,NULL)==-ENOPROTOOPT);
     CHECK(!file_close(&client,fd));drain();
     int tcp=net_socket_create(&client,AF_INET,SOCK_STREAM|SOCK_NONBLOCK,0);CHECK(tcp>=0);
-    struct ciuki_sockaddr_in none=address(39999);CHECK(net_socket_connect(&client,tcp,&none)==-EINPROGRESS);
-    struct ciuki_pollfd p={tcp,POLLOUT,0};CHECK(net_poll(&client,&p,1,1000)==1 && (p.revents&POLLERR));
-    length=4;val=0;CHECK(!net_socket_option(&client,tcp,0,SOL_SOCKET,SO_ERROR,&val,&length) && val==ECONNREFUSED);
-    length=4;val=-1;CHECK(!net_socket_option(&client,tcp,0,SOL_SOCKET,SO_ERROR,&val,&length) && !val);
+    struct ciuki_sockaddr_in none=address(39999);CHECK(net_socket_connect(&client,tcp,&none,NULL)==-EINPROGRESS);
+    struct ciuki_pollfd p={tcp,POLLOUT,0};CHECK(net_poll(&client,&p,1,1000,NULL)==1 && (p.revents&POLLERR));
+    length=4;val=0;CHECK(!net_socket_option(&client,tcp,0,SOL_SOCKET,SO_ERROR,&val,&length,NULL) && val==ECONNREFUSED);
+    length=4;val=-1;CHECK(!net_socket_option(&client,tcp,0,SOL_SOCKET,SO_ERROR,&val,&length,NULL) && !val);
     CHECK(!file_close(&client,tcp));drain();
     puts("PASS native close/reuse generations, cancelled syscall pins, interrupted/timed waits, refused connect/SO_ERROR");
 }
@@ -399,19 +414,19 @@ static void wire_tests(void)
 {
     int fd=net_socket_create(&client,AF_INET,SOCK_STREAM|SOCK_NONBLOCK,0);CHECK(fd>=0);
     struct ciuki_sockaddr_in peer={.family=AF_INET,.port=PP_HTONS(33334),.address=PP_HTONL(0xc0000201)};
-    CHECK(net_socket_connect(&client,fd,&peer)==-EINPROGRESS);
-    struct ciuki_pollfd p={fd,POLLOUT,0};CHECK(net_poll(&client,&p,1,10000)==1 && wire_syns>=2);
+    CHECK(net_socket_connect(&client,fd,&peer,NULL)==-EINPROGRESS);
+    struct ciuki_pollfd p={fd,POLLOUT,0};CHECK(net_poll(&client,&p,1,10000,NULL)==1 && wire_syns>=2);
     unsigned char payload[32768];memset(payload,'x',sizeof(payload));
-    int sent=net_socket_io(&client,fd,payload,sizeof(payload),0,NULL,true);CHECK(sent>0 && sent<(int)sizeof(payload));
-    p.events=POLLIN;CHECK(net_poll(&client,&p,1,12000)==1 && wire_data_transmits>=2 && wire_first_count>=2);
-    char b[8];CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false)==4 && !memcmp(b,"wire",4));
-    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false)==0 && wire_packets>=4);
+    int sent=net_socket_io(&client,fd,payload,sizeof(payload),0,NULL,true,NULL);CHECK(sent>0 && sent<(int)sizeof(payload));
+    p.events=POLLIN;CHECK(net_poll(&client,&p,1,12000,NULL)==1 && wire_data_transmits>=2 && wire_first_count>=2);
+    char b[8];CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false,NULL)==4 && !memcmp(b,"wire",4));
+    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false,NULL)==0 && wire_packets>=4);
     CHECK(!file_close(&client,fd));drain();
     fd=net_socket_create(&client,AF_INET,SOCK_DGRAM|SOCK_NONBLOCK,0);CHECK(fd>=0);peer.port=PP_HTONS(33336);
-    CHECK(net_socket_io(&client,fd,"query",5,0,&peer,true)==5);p=(struct ciuki_pollfd){fd,POLLIN,0};CHECK(net_poll(&client,&p,1,1000)==1);
-    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false)==3 && !memcmp(b,"two",3));
-    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false)==3 && !memcmp(b,"one",3));
-    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false)==-EAGAIN);CHECK(!file_close(&client,fd));drain();
+    CHECK(net_socket_io(&client,fd,"query",5,0,&peer,true,NULL)==5);p=(struct ciuki_pollfd){fd,POLLIN,0};CHECK(net_poll(&client,&p,1,1000,NULL)==1);
+    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false,NULL)==3 && !memcmp(b,"two",3));
+    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false,NULL)==3 && !memcmp(b,"one",3));
+    CHECK(net_socket_io(&client,fd,b,sizeof(b),0,NULL,false,NULL)==-EAGAIN);CHECK(!file_close(&client,fd));drain();
     puts("PASS synthetic Ethernet TCP SYN/data retransmit/partial send/FIN and UDP loss/reorder; copied frame path");
 }
 static void frame_resources(void *unused)
@@ -440,9 +455,12 @@ static void frame_resources(void *unused)
     while(n<64 && (heap[n]=mem_malloc(16384)))n++;CHECK(n && n<64);
     for(unsigned i=0;i<n;i++)mem_free(heap[i]);CHECK(lwip_stats.mem.used==before);
 }
+static void amendment_dhcp_start(void);
+static void amendment_dns_renewal(void);
+static void amendment_address_revocation(void);
 static void dns_dhcp_tests(void)
 {
-    CHECK(!net_stack_attach(0,client_mac,true));uint32_t ip=0;uint64_t end=cu_now()+12000;
+    amendment_dhcp_start();uint32_t ip=0;uint64_t end=cu_now()+12000;
     do { net_stack_address(0,&ip);if (ip) break;cu_sleep(10); } while (cu_now()<end);
     CHECK(ip==PP_HTONL(0xc0000264) && dhcp_discover && dhcp_request);
     wire_tests();CHECK(tcpip_callback_wait(frame_resources,NULL)==ERR_OK);
@@ -450,6 +468,7 @@ static void dns_dhcp_tests(void)
     CHECK(!status && answer==PP_HTONL(0xcb007109) && dns_queries && arp_requests);
     CHECK(net_resolve(&client,"bad..name",&answer,&status)==-EINVAL);
     unsigned before=dns_queries;CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries==before);
+    amendment_dns_renewal();before=dns_queries;
     CHECK(tcpip_callback_wait(dns_servers_reset,NULL)==ERR_OK);
     CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries>before);
     dns_drop=true;caught=true;
@@ -468,14 +487,15 @@ static void dns_dhcp_tests(void)
     CHECK(tcpip_callback_wait(coarse,(void *)(uintptr_t)2)==ERR_OK);check_address(0);
     net_stack_link(0,false);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);dhcp_drop=false;
     net_stack_link(0,true);check_address(PP_HTONL(0xc0000264));
+    amendment_address_revocation();
     int udp=net_socket_create(&client,AF_INET,SOCK_DGRAM,0);CHECK(udp>=0);
     struct ciuki_sockaddr_in external={.family=AF_INET,.address=PP_HTONL(0xc0000201),.port=PP_HTONS(33333)};
-    CHECK(!net_socket_connect(&client,udp,&external));
+    CHECK(!net_socket_connect(&client,udp,&external,NULL));
     struct ciuki_sockaddr_in broadcast=external;broadcast.address=PP_HTONL(0xffffffff);
-    CHECK(net_socket_io(&client,udp,"b",1,0,&broadcast,true)==-EACCES);
-    int enabled=1;unsigned len=4;CHECK(!net_socket_option(&client,udp,1,SOL_SOCKET,SO_BROADCAST,&enabled,&len));
-    CHECK(net_socket_io(&client,udp,"b",1,0,&broadcast,true)==1);
-    net_stack_link(0,false);check_address(0);CHECK(net_socket_io(&client,udp,&enabled,1,MSG_DONTWAIT,NULL,false)==-ENETDOWN);
+    CHECK(net_socket_io(&client,udp,"b",1,0,&broadcast,true,NULL)==-EACCES);
+    int enabled=1;unsigned len=4;CHECK(!net_socket_option(&client,udp,1,SOL_SOCKET,SO_BROADCAST,&enabled,&len,NULL));
+    CHECK(net_socket_io(&client,udp,"b",1,0,&broadcast,true,NULL)==1);
+    net_stack_link(0,false);check_address(0);CHECK(net_socket_io(&client,udp,&enabled,1,MSG_DONTWAIT,NULL,false,NULL)==-ENETDOWN);
     CHECK(!file_close(&client,udp));drain();
     net_stack_link(0,true);check_address(PP_HTONL(0xc0000264));
     dhcp_nak=true;CHECK(tcpip_callback_wait(coarse,(void *)(uintptr_t)1)==ERR_OK);check_address(0);
@@ -499,12 +519,16 @@ static void cycles(void)
         lwip_stats.memp[MEMP_UDP_PCB]->used==udp_before);
     puts("PASS 10000 create/close cycles; heap/netconn/UDP PCB baseline stable; no public objects retained");
 }
+#include "amendment.inc"
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
     client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};arch_tests();
     ciuki_lwip_seed(0x12345678);CHECK(!net_stack_init());
-    refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();cycles();dns_dhcp_tests();CHECK(!live_pins);
+    CHECK(entropy_before_transport);
+    refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
+    preparation_races();queue_races();connect_error_race();shutdown_close_tests();
+    cycles();dns_dhcp_tests();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);
     printf("MEASURE host pbuf=%zu tcp_pcb=%zu udp_pcb=%zu netconn=%zu socket=%u mbox=%u arch=%u socket_metadata=%u request=%u\n",
         sizeof(struct pbuf),sizeof(struct tcp_pcb),sizeof(struct udp_pcb),sizeof(struct netconn),cu_socket_object_bytes(),cu_mbox_bytes(),cu_arch_bytes(),cu_socket_bytes(),cu_request_bytes());

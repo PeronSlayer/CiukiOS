@@ -58,7 +58,9 @@
 #define SO_REUSE_RXTOALL 0
 #define IP_SOF_BROADCAST 1
 #define IP_SOF_BROADCAST_RECV 0
-#define LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT 1000
+/* With public timeouts outside netconn, api_lib initializes ceil(ms/500)+1
+ * polls. 500 selects TWO polls, each 500 ms: transport cleanup <= 1 second. */
+#define LWIP_TCP_CLOSE_TIMEOUT_MS_DEFAULT 500
 #define LWIP_SO_SNDTIMEO 0
 #define LWIP_SO_RCVTIMEO 0
 #define LWIP_SO_LINGER 0

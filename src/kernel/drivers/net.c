@@ -424,7 +424,7 @@ void net_set_input(net_input_fn fn, void *cookie)
 void net_worker_step(void)
 {
     struct net_packet packet;
-    if (net_stack_driver_service) net_stack_driver_service();
+    if (net_stack_driver_service) { net_stack_driver_service(); task_yield(); }
     for (unsigned i = 0; i < device_count; i++) {
         if (shutting_down) break;
         netif_poll(&devices[i]); task_yield();
@@ -468,8 +468,10 @@ int net_init(void)
 {
     if (initialized) return shutting_down ? -NET_ENODEV : 0;
     initialized = true; kmutex_init(&registration_mutex);
-    if (net_stack_init && net_stack_init()) { klog("[net] disabled reason=stack_no_memory"); return -ENOMEM; }
-    if (g_boot.flags & CBI_F_SAFE_MODE) { klog("[net] disabled reason=safe_mode"); return 0; }
+    if (g_boot.flags & CBI_F_SAFE_MODE) {
+        if (net_stack_init && net_stack_init()) { klog("[net] disabled reason=stack_no_memory"); return -ENOMEM; }
+        klog("[net] disabled reason=safe_mode"); return 0;
+    }
     for (unsigned i = 0; i < pci_count() && device_count < NETIF_MAX; i++) {
         const struct pci_func *p = pci_get(i);
         if (!find_driver(p)) continue;
@@ -480,6 +482,9 @@ int net_init(void)
     }
     bool active = false;
     for (unsigned i = 0; i < device_count; i++) if (devices[i].running) active = true;
+    if (net_stack_init && net_stack_init()) {
+        net_shutdown(); klog("[net] disabled reason=stack_no_memory"); return -ENOMEM;
+    }
     if (net_stack_driver_start) net_stack_driver_start();
     if (!active) return 0;
     worker = task_create_kernel("net-input", worker_main, 0, P_DEVICE);

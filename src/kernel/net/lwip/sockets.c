@@ -21,7 +21,8 @@ struct socket_object {
     struct netbuf *udp_rx;
     unsigned references, active, holds, watchers, generation, flags, type, rx_offset;
     unsigned receive_ms, send_ms, shut, control_shut;
-    int receive_events, send_events, error;
+    int receive_events, send_events, error, connect_result;
+    uint32_t route_address;
     struct ciuki_sockaddr_in local, peer;
     struct process *origin;
     uint32_t origin_pid;
@@ -49,9 +50,18 @@ struct request {
     struct process *process;
     int fd;
     unsigned fd_generation;
+    uint64_t deadline;
+    int cancelled;
+    bool committed;
     uint8_t buffer[CIUKI_SOCKET_IO_MAX];
 };
 static struct request requests[REQUESTS];
+#ifdef LWIP_HOST
+void cu_socket_test_hook(unsigned) __attribute__((weak));
+#define TEST_HOOK(n) do { if (cu_socket_test_hook) cu_socket_test_hook(n); } while (0)
+#else
+#define TEST_HOOK(n) ((void)0)
+#endif
 
 uint32_t net_socket_count(void)
 {
@@ -108,13 +118,20 @@ static void notify(struct netconn *conn, enum netconn_evt evt, u16_t length)
         struct socket_object *s = &sockets[i]; if (!s->used || s->conn != conn) continue;
         if (evt == NETCONN_EVT_RCVPLUS) s->receive_events++;
         if (evt == NETCONN_EVT_RCVMINUS) s->receive_events--;
-        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; } }
+        if (evt == NETCONN_EVT_SENDPLUS) { s->send_events = 1; if (s->connecting) { s->connecting = false; s->connected = true; s->connect_result = 0; } }
         if (evt == NETCONN_EVT_SENDMINUS) s->send_events = 0;
         if (evt == NETCONN_EVT_ERROR) {
             int e = error_number(conn->pending_err);
             /* SYN refused is RST before a connection has been established. */
             if (s->connecting && e == -ECONNRESET) e = -ECONNREFUSED;
-            s->error = e ? -e : ECONNABORTED; s->failed = true; s->connecting = false;
+            if (e) {
+                s->error = -e; s->failed = true;
+                if (s->connecting) s->connect_result = e;
+            } else {
+                /* api_msg also announces successful full shutdown as ERROR. */
+                s->eof = true; s->shut |= 3;
+            }
+            s->connecting = false;
         }
         break;
     }
@@ -151,6 +168,7 @@ static struct request *request_new(struct socket_object *s)
     for (unsigned i = 0; i < REQUESTS; i++) if (!requests[i].used) {
         r = &requests[i]; memset(r, 0, __builtin_offsetof(struct request, buffer));
         r->used = true; r->socket = s; if (s) s->holds++;
+        r->deadline = UINT64_MAX;
         r->thread = proc_thread_for(g_current);
         r->outer_cleanup = r->thread ? r->thread->cleanup : NULL;
         r->outer_operation = r->thread ? r->thread->operation : NULL;
@@ -180,6 +198,47 @@ static bool still_open(struct process *p, int fd, unsigned generation, struct so
 {
     return p->state != PROC_STOPPING && p->fd_generation[fd] == generation &&
            file_fd_object(p, fd) == &s->object && !s->closing;
+}
+int net_socket_capture(struct process *p, int fd, struct net_socket_ref *ref)
+{
+    sys_prot_t f = sys_arch_protect(); int e;
+    struct socket_object *s = lookup(p, fd, &e);
+    if (s) { s->holds++; ref->object = &s->object; ref->generation = p->fd_generation[fd]; }
+    sys_arch_unprotect(f); return e;
+}
+void net_socket_drop(struct net_socket_ref *ref)
+{
+    sys_prot_t f = sys_arch_protect();
+    if (ref->object) { ((struct socket_object *)ref->object)->holds--; ref->object = NULL; }
+    sys_arch_unprotect(f); cu_changed();
+}
+static struct socket_object *lookup_captured(struct process *p, int fd, int *error,
+                                            const struct net_socket_ref *ref)
+{
+    if (!ref) return lookup(p, fd, error);
+    struct socket_object *s = (void *)ref->object;
+    *error = !s || !still_open(p, fd, ref->generation, s) ? -EBADF : 0;
+    return *error ? NULL : s;
+}
+/* Called under the port's short protection, including by the worker, using
+ * the submitting thread rather than the worker's current task. Preparation
+ * may include internal getaddr/core waits; it is not a consuming commit. */
+static int cancellation(struct request *r)
+{
+    if (r->abandoned) return -EINTR;
+    if (r->process && !still_open(r->process, r->fd, r->fd_generation, r->socket)) return -EBADF;
+    bool interruptible = r->operation == OP_CONNECT || r->operation == OP_ACCEPT ||
+                         r->operation == OP_SEND || r->operation == OP_RECV;
+    if (interruptible && r->thread && proc_signal_caught(r->thread)) return -EINTR;
+    if (cu_now() >= r->deadline) return r->operation == OP_CONNECT ? -ETIMEDOUT : -EAGAIN;
+    return 0;
+}
+static int commit(struct request *r)
+{
+    sys_prot_t f = sys_arch_protect();
+    int e = r->committed ? 0 : r->cancelled ? r->cancelled : cancellation(r);
+    if (!e) r->committed = true;
+    sys_arch_unprotect(f); return e;
 }
 static void address_out(struct ciuki_sockaddr_in *out, const ip_addr_t *ip, u16_t port)
 {
@@ -263,17 +322,27 @@ static void local_address_core(void *arg)
     for (struct netif *n = netif_list; n; n = n->next)
         if (netif_is_up(n) && netif_is_link_up(n) && ip4_addr_get_u32(netif_ip4_addr(n)) == address) r->result = 0;
 }
+static void route_address_core(void *arg)
+{
+    struct request *r = arg; struct socket_object *s = r->socket;
+    ip4_addr_t remote = { r->has_address || r->operation == OP_CONNECT ? r->address.address : s->peer.address };
+    struct netif *n = ip4_route(&remote);
+    sys_prot_t f = sys_arch_protect();
+    if (n) s->route_address = ip4_addr_get_u32(netif_ip4_addr(n));
+    sys_arch_unprotect(f);
+}
 static int attempt(struct request *r)
 {
     struct socket_object *s = r->socket; struct netconn *c = s->conn;
     ip_addr_t ip; ip_addr_set_ip4_u32(&ip, r->address.address);
-    u16_t port = lwip_ntohs(r->address.port); err_t e;
+    u16_t port = lwip_ntohs(r->address.port); err_t e; int cancelled;
     if (s->control || s->closing) return -EBADF;
     if (r->process && !still_open(r->process, r->fd, r->fd_generation, s)) return -EBADF;
     if (s->network_down && (r->operation == OP_SEND || r->operation == OP_RECV ||
-                            r->operation == OP_CONNECT)) return -ENETDOWN;
+                            r->operation == OP_CONNECT || r->operation == OP_ACCEPT)) return -ENETDOWN;
     switch (r->operation) {
     case OP_NEW:
+        if ((cancelled = commit(r))) return cancelled;
         s->conn = netconn_new_with_callback(s->type == SOCK_STREAM ? NETCONN_TCP : NETCONN_UDP, notify);
         if (!s->conn) return -ENOBUFS;
         netconn_set_nonblocking(s->conn, 1); s->send_events = s->type == SOCK_DGRAM;
@@ -283,15 +352,22 @@ static int attempt(struct request *r)
         e = tcpip_callback_wait(local_address_core, r);
         if (e) return error_number(e);
         if (r->result) return r->result;
+        if ((cancelled = commit(r))) return cancelled;
         return error_number(netconn_bind(c, &ip, port));
     case OP_CONNECT:
-        if (s->type == SOCK_DGRAM && r->address.family == AF_UNSPEC) { s->connected = false; return error_number(netconn_disconnect(c)); }
+        if (s->type == SOCK_DGRAM && r->address.family == AF_UNSPEC) {
+            if ((cancelled = commit(r))) return cancelled;
+            s->connected = false; return error_number(netconn_disconnect(c));
+        }
         if (s->connecting) return -EALREADY;
         if (s->connected && s->type == SOCK_STREAM) return -EISCONN;
-        s->connecting = s->type == SOCK_STREAM; s->failed = false;
+        e = tcpip_callback_wait(route_address_core, r); if (e) return error_number(e);
+        if ((cancelled = commit(r))) return cancelled;
+        s->peer = r->address;
+        s->connecting = s->type == SOCK_STREAM; s->failed = false; s->connect_result = -EINPROGRESS;
         e = netconn_connect(c, &ip, port);
-        if (e == ERR_OK) { s->connected = true; s->connecting = false; }
-        else if (e != ERR_INPROGRESS) s->connecting = false;
+        if (e == ERR_OK) { s->connected = true; s->connecting = false; s->connect_result = 0; }
+        else if (e != ERR_INPROGRESS) { s->connecting = false; s->connect_result = error_number(e); }
         return error_number(e);
     case OP_LISTEN:
         if (s->type != SOCK_STREAM) return -EOPNOTSUPP;
@@ -310,6 +386,7 @@ static int attempt(struct request *r)
                 }
             }
         }
+        if ((cancelled = commit(r))) return cancelled;
         e = netconn_listen_with_backlog(c, (u8_t)r->which);
         if (!e && !s->listening) {
             s->listening = true; listeners++;
@@ -319,6 +396,7 @@ static int attempt(struct request *r)
     case OP_ACCEPT:
         if (s->type != SOCK_STREAM) return -EOPNOTSUPP;
         if (!s->listening) return -EINVAL;
+        if ((cancelled = commit(r))) return cancelled;
         e = netconn_accept(c, &r->accepted);
         if (!e) {
             struct socket_object *child = r->created;
@@ -331,6 +409,7 @@ static int attempt(struct request *r)
             child->peer = r->address;
             if (netconn_getaddr(child->conn, &peer, &peer_port, 1) == ERR_OK)
                 address_out(&child->local, &peer, peer_port);
+            child->route_address = child->local.address;
             /* ERROR/SEND notifications can precede installation of conn. */
             f = sys_arch_protect();
             if (child->conn->pending_err) {
@@ -341,6 +420,8 @@ static int attempt(struct request *r)
         return error_number(e);
     case OP_SEND:
         if (s->shut & 2) return -EPIPE;
+        e = tcpip_callback_wait(route_address_core, r); if (e) return error_number(e);
+        if ((cancelled = commit(r))) return cancelled;
         if (s->type == SOCK_STREAM) {
             if (!s->connected) return -ENOTCONN;
             if (r->has_address) return -EISCONN;
@@ -366,6 +447,8 @@ static int attempt(struct request *r)
             ip_addr_t peer; u16_t peer_port;
             if (netconn_getaddr(c, &peer, &peer_port, 0) == ERR_OK)
                 address_out(&r->address, &peer, peer_port);
+            TEST_HOOK(5);
+            if ((cancelled = commit(r))) return cancelled;
             if (!s->tcp_rx && !s->eof) {
                 e = netconn_recv_tcp_pbuf_flags(c, &s->tcp_rx, NETCONN_DONTBLOCK | NETCONN_NOAUTORCVD | NETCONN_NOFIN);
                 if (e == ERR_WOULDBLOCK && netconn_is_flag_set(c, NETCONN_FIN_RX_PENDING)) {
@@ -385,6 +468,7 @@ static int attempt(struct request *r)
             }
             return (int)n;
         } else {
+            if ((cancelled = commit(r))) return cancelled;
             if (!s->udp_rx) {
                 e = netconn_recv_udp_raw_netbuf_flags(c, &s->udp_rx, NETCONN_DONTBLOCK);
                 if (e) return error_number(e);
@@ -396,10 +480,13 @@ static int attempt(struct request *r)
             return (int)n;
         }
     case OP_NAME:
+        if ((cancelled = commit(r))) return cancelled;
         e = netconn_getaddr(c, &ip, &port, r->which ? 0 : 1);
         if (!e) address_out(&r->address, &ip, port);
         return error_number(e);
-    case OP_OPTION: return option(r);
+    case OP_OPTION:
+        if ((cancelled = commit(r))) return cancelled;
+        return option(r);
     }
     return -EINVAL;
 }
@@ -408,7 +495,11 @@ static void socket_worker(void *unused)
     (void)unused; unsigned batch = 0;
     for (;;) {
         struct request *r; sys_arch_mbox_fetch(&commands, (void **)&r, 0);
-        if (!r->abandoned) r->result = attempt(r);
+        TEST_HOOK(1); /* deterministic pre-commit queue race in the host fixture */
+        sys_prot_t f = sys_arch_protect();
+        int cancelled = r->cancelled ? r->cancelled : cancellation(r);
+        sys_arch_unprotect(f);
+        r->result = cancelled ? cancelled : attempt(r);
         if (!r->abandoned && r->socket && r->socket->conn) {
             struct socket_object *s = r->socket; ip_addr_t ip; u16_t port;
             struct ciuki_sockaddr_in local = s->local, peer = s->peer;
@@ -416,7 +507,7 @@ static void socket_worker(void *unused)
             if (netconn_getaddr(s->conn, &ip, &port, 0) == ERR_OK) address_out(&peer, &ip, port);
             sys_prot_t f = sys_arch_protect(); s->local = local; s->peer = peer; sys_arch_unprotect(f);
         }
-        sys_prot_t f = sys_arch_protect();
+        f = sys_arch_protect();
         if (r->socket) r->socket->active--;
         r->done = true;
         if (r->abandoned) reclaim_request(r);
@@ -436,6 +527,7 @@ static void control_worker(void *unused)
             if ((!close && !half) || s->control) { sys_arch_unprotect(f); continue; }
             s->control = true; unsigned directions = s->shut;
             sys_arch_unprotect(f);
+            TEST_HOOK(4); /* host fixture pauses after the exclusive handoff */
             if (close) {
                 free_rx(s);
                 err_t e = s->conn ? netconn_delete(s->conn) : ERR_OK;
@@ -467,14 +559,17 @@ int cu_sockets_init(void)
 }
 static int submit(struct request *r)
 {
+    r->cancelled = 0; r->committed = false;
     for (;;) {
         unsigned seq = cu_change_snapshot(); sys_prot_t f = sys_arch_protect();
+        int e = cancellation(r);
+        if (e) { sys_arch_unprotect(f); return e; }
         if (!r->socket || !r->socket->control) {
             if (r->socket) r->socket->active++;
             r->done = false; r->submitted = true;
             sys_arch_unprotect(f); break;
         }
-        sys_arch_unprotect(f); cu_wait_change(seq, cu_now() + 1);
+        sys_arch_unprotect(f); TEST_HOOK(2); cu_wait_change(seq, cu_now() + 1);
     }
     if (sys_mbox_trypost(&commands, r) != ERR_OK) {
         sys_prot_t f = sys_arch_protect(); r->submitted = false;
@@ -482,7 +577,9 @@ static int submit(struct request *r)
         sys_arch_unprotect(f); return -EAGAIN;
     }
     for (;;) {
-        unsigned seq = cu_change_snapshot(); sys_prot_t f = sys_arch_protect(); bool done = r->done; sys_arch_unprotect(f);
+        unsigned seq = cu_change_snapshot(); sys_prot_t f = sys_arch_protect(); bool done = r->done;
+        if (!done && !r->committed && !r->cancelled) r->cancelled = cancellation(r);
+        sys_arch_unprotect(f);
         if (done) return r->result;
         cu_wait_change(seq, cu_now() + 10);
     }
@@ -542,52 +639,55 @@ int net_socket_create(struct process *p, int family, int type, int protocol)
     if (e) return e;
     return fd;
 }
-static struct request *for_fd(struct process *p, int fd, int *error)
+static struct request *for_fd(struct process *p, int fd, int *error, const struct net_socket_ref *ref)
 {
     sys_prot_t f = sys_arch_protect();
-    struct socket_object *s = lookup(p, fd, error);
+    struct socket_object *s = lookup_captured(p, fd, error, ref);
     struct request *r = s ? request_new(s) : NULL;
     if (r) { r->process = p; r->fd = fd; r->fd_generation = p->fd_generation[fd]; }
     else if (s) *error = -ENOBUFS;
     sys_arch_unprotect(f);
     return r;
 }
-int net_socket_bind(struct process *p, int fd, const struct ciuki_sockaddr_in *a)
+int net_socket_bind(struct process *p, int fd, const struct ciuki_sockaddr_in *a, const struct net_socket_ref *ref)
 {
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     e = address_check(a, false);
     if (!e) { r->operation = OP_BIND; r->address = *a; e = submit(r); }
     request_free(r); return e;
 }
-int net_socket_connect(struct process *p, int fd, const struct ciuki_sockaddr_in *a)
+int net_socket_connect(struct process *p, int fd, const struct ciuki_sockaddr_in *a, const struct net_socket_ref *ref)
 {
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     struct socket_object *s = r->socket; unsigned generation = r->fd_generation;
     e = address_check(a, s->type == SOCK_DGRAM);
     if (!e) {
-        r->operation = OP_CONNECT; r->address = *a; e = submit(r);
+        r->operation = OP_CONNECT; r->address = *a;
         uint64_t end = s->send_ms ? cu_now() + s->send_ms : UINT64_MAX;
+        r->deadline = end; e = submit(r);
         while (e == -EINPROGRESS && !(s->flags & O_NONBLOCK)) {
+            TEST_HOOK(3);
             unsigned seq = cu_change_snapshot();
             if (!still_open(p, fd, generation, s)) { e = -EBADF; break; }
             if (interrupted(p)) { e = -EINTR; break; }
-            if (!s->connecting) { e = s->error ? -s->error : 0; break; }
+            if (!s->connecting) { e = s->connect_result ? s->connect_result : s->connected ? 0 : -ENOTCONN; break; }
             if (cu_now() >= end) { e = -ETIMEDOUT; break; }
             cu_wait_change(seq, cu_now() + 1);
         }
     }
     request_free(r); return e;
 }
-int net_socket_listen(struct process *p, int fd, int backlog)
+int net_socket_listen(struct process *p, int fd, int backlog, const struct net_socket_ref *ref)
 {
     if (backlog < 1) return -EINVAL;
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     r->operation = OP_LISTEN; r->which = backlog > 4 ? 4 : (unsigned)backlog;
     e = submit(r); request_free(r); return e;
 }
 static int retry(struct process *p, int fd, struct request *r, unsigned timeout)
 {
     unsigned gen = r->fd_generation; uint64_t end = timeout ? cu_now() + timeout : UINT64_MAX;
+    r->deadline = end;
     for (;;) {
         unsigned seq = cu_change_snapshot();
         if (!still_open(p, fd, gen, r->socket)) return -EBADF;
@@ -598,9 +698,9 @@ static int retry(struct process *p, int fd, struct request *r, unsigned timeout)
         cu_wait_change(seq, cu_now() + 1);
     }
 }
-int net_socket_accept(struct process *p, int fd, struct ciuki_sockaddr_in *a)
+int net_socket_accept(struct process *p, int fd, struct ciuki_sockaddr_in *a, const struct net_socket_ref *ref)
 {
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     if (r->socket->type != SOCK_STREAM) { request_free(r); return -EOPNOTSUPP; }
     int slot = file_fd_reserve(p); if (slot < 0) { request_free(r); return slot; }
     struct socket_object *child = reserve_socket(p, SOCK_STREAM, &e);
@@ -621,10 +721,10 @@ int net_socket_accept(struct process *p, int fd, struct ciuki_sockaddr_in *a)
     return slot;
 }
 int net_socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsigned flags,
-                  struct ciuki_sockaddr_in *a, bool send)
+                  struct ciuki_sockaddr_in *a, bool send, const struct net_socket_ref *ref)
 {
     if (bytes > CIUKI_SOCKET_IO_MAX || flags & ~(MSG_DONTWAIT | (send ? MSG_NOSIGNAL : MSG_PEEK))) return -EINVAL;
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     struct socket_object *s = r->socket;
     if (send && s->type == SOCK_DGRAM && bytes > CIUKI_UDP_MAX) { request_free(r); return -EMSGSIZE; }
     r->operation = send ? OP_SEND : OP_RECV; r->bytes = bytes; r->flags = flags;
@@ -641,28 +741,31 @@ int net_socket_io(struct process *p, int fd, void *buffer, unsigned bytes, unsig
     }
     request_free(r); return e;
 }
-int net_socket_shutdown(struct process *p, int fd, unsigned how)
+int net_socket_shutdown(struct process *p, int fd, unsigned how, const struct net_socket_ref *ref)
 {
     if (how > SHUT_RDWR) return -EINVAL;
-    int e; struct socket_object *s = lookup(p, fd, &e); if (!s) return e;
-    if (s->type != SOCK_STREAM) return -EOPNOTSUPP;
-    if (!s->connected) return -ENOTCONN;
-    sys_prot_t f = sys_arch_protect(); s->shut |= how == SHUT_RD ? 1 : how == SHUT_WR ? 2 : 3; sys_arch_unprotect(f);
+    sys_prot_t f = sys_arch_protect(); int e;
+    struct socket_object *s = lookup_captured(p, fd, &e, ref);
+    if (!s) { sys_arch_unprotect(f); return e; }
+    if (s->type != SOCK_STREAM) e = -EOPNOTSUPP;
+    else if (!s->connected) e = -ENOTCONN;
+    else s->shut |= how == SHUT_RD ? 1 : how == SHUT_WR ? 2 : 3;
+    sys_arch_unprotect(f); if (e) return e;
     cu_changed(); return 0;
 }
-int net_socket_name(struct process *p, int fd, unsigned which, struct ciuki_sockaddr_in *out)
+int net_socket_name(struct process *p, int fd, unsigned which, struct ciuki_sockaddr_in *out, const struct net_socket_ref *ref)
 {
     if (which > 1) return -EINVAL;
     sys_prot_t f = sys_arch_protect(); int e;
-    struct socket_object *s = lookup(p, fd, &e);
+    struct socket_object *s = lookup_captured(p, fd, &e, ref);
     if (s && which && !s->connected) e = -ENOTCONN;
     if (s && !e) *out = which ? s->peer : s->local;
     sys_arch_unprotect(f); return e;
 }
-int net_socket_option(struct process *p, int fd, unsigned set, int level, int name, void *value, unsigned *length)
+int net_socket_option(struct process *p, int fd, unsigned set, int level, int name, void *value, unsigned *length, const struct net_socket_ref *ref)
 {
     if (set > 1 || *length > 65535) return -EINVAL;
-    int e; struct request *r = for_fd(p, fd, &e); if (!r) return e == -ENOBUFS ? -ENOMEM : e;
+    int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e == -ENOBUFS ? -ENOMEM : e;
     r->operation = OP_OPTION; r->which = set; r->level = (unsigned)level; r->option = (unsigned)name; r->length = *length;
     if (set) { if (*length > 16) { request_free(r); return -EINVAL; } memcpy(r->buffer, value, *length); }
     e = submit(r);
@@ -721,24 +824,21 @@ static void poll_free(void *arg)
     }
     op->used = false; cu_changed();
 }
+void net_poll_drop(void *arg) { poll_free(arg); }
 static void poll_abandon(void *arg)
 {
     struct poll_operation *op = arg; void (*outer)(void *) = op->outer_cleanup; void *value = op->outer_operation;
     poll_free(op); if (outer) outer(value);
 }
-int net_poll(struct process *p, struct ciuki_pollfd *fds, unsigned count, int timeout)
+int net_poll_capture(struct process *p, const struct ciuki_pollfd *fds, unsigned count, void **capture)
 {
-    if (count > CIUKI_OPEN_MAX || timeout < -1) return -EINVAL;
+    if (count > CIUKI_OPEN_MAX) return -EINVAL;
     for (unsigned i = 0; i < count; i++)
         if ((unsigned)(uint16_t)fds[i].events & ~(POLLIN | POLLOUT | POLLERR | POLLHUP | POLLNVAL)) return -EINVAL;
     struct poll_operation *op = NULL; sys_prot_t f = sys_arch_protect();
     for (unsigned i = 0; i < 16; i++) if (!polls[i].used) { op = &polls[i]; memset(op, 0, sizeof(*op)); op->used = true; break; }
     sys_arch_unprotect(f); if (!op) return -ENOMEM;
-    op->count = count; op->thread = proc_thread_for(g_current);
-    if (op->thread) {
-        op->outer_cleanup = op->thread->cleanup; op->outer_operation = op->thread->operation;
-        op->thread->cleanup = poll_abandon; op->thread->operation = op;
-    }
+    op->count = count;
     f = sys_arch_protect();
     for (unsigned i = 0; i < count; i++) {
         struct proc_object *o = file_fd_object(p, fds[i].fd); op->objects[i] = o;
@@ -749,6 +849,22 @@ int net_poll(struct process *p, struct ciuki_pollfd *fds, unsigned count, int ti
         }
     }
     sys_arch_unprotect(f);
+    *capture = op; return 0;
+}
+int net_poll(struct process *p, struct ciuki_pollfd *fds, unsigned count, int timeout, void *capture)
+{
+    if (count > CIUKI_OPEN_MAX || timeout < -1) return -EINVAL;
+    bool owned = !capture;
+    if (owned) { int e = net_poll_capture(p, fds, count, &capture); if (e) return e; }
+    struct poll_operation *op = capture;
+    if (owned) {
+        op->thread = proc_thread_for(g_current);
+        if (op->thread) {
+            op->outer_cleanup = op->thread->cleanup; op->outer_operation = op->thread->operation;
+            op->thread->cleanup = poll_abandon; op->thread->operation = op;
+        }
+    }
+    sys_prot_t f;
     uint64_t deadline = timeout >= 0 ? cu_now() + (unsigned)timeout : UINT64_MAX;
     int result;
     for (;;) {
@@ -767,8 +883,11 @@ int net_poll(struct process *p, struct ciuki_pollfd *fds, unsigned count, int ti
         if (cu_now() >= deadline) break;
         cu_wait_change(seq, cu_now() + 1);
     }
-    if (op->thread) { op->thread->cleanup = op->outer_cleanup; op->thread->operation = op->outer_operation; }
-    poll_free(op); return result;
+    if (owned) {
+        if (op->thread) { op->thread->cleanup = op->outer_cleanup; op->thread->operation = op->outer_operation; }
+        poll_free(op);
+    }
+    return result;
 }
 struct dns_request {
     char name[254];
@@ -779,19 +898,21 @@ struct dns_request {
 };
 static struct dns_request lookups[CIUKI_DNS_MAX];
 static unsigned resolver_generation = 1;
-/* Called on the core before a configured address is revoked. Raw PCB reads
- * are legal here; public waits wake without running a transport control call. */
+/* The netif status callback runs AFTER upstream may abort/free TCP PCBs.
+ * Retained endpoint/route state also identifies those sockets and listeners. */
 void ciuki_sockets_address_lost(uint32_t address)
 {
     ciuki_lwip_assert_core();
     sys_prot_t f = sys_arch_protect();
     for (unsigned i = 0; i < CIUKI_SOCKET_MAX; i++) {
         struct socket_object *s = &sockets[i];
-        if (!s->used || s->closing || !s->conn || !s->conn->pcb.ip) continue;
-        uint32_t local = ip4_addr_get_u32(ip_2_ip4(&s->conn->pcb.ip->local_ip));
-        uint32_t remote = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(&s->conn->pcb.ip->remote_ip)));
-        if (local == address || (!local && s->connected && remote && (remote >> 24) != 127)) {
+        if (!s->used || s->closing || !s->conn) continue;
+        uint32_t local = s->local.address;
+        if (!local && s->conn->pcb.ip) local = ip4_addr_get_u32(ip_2_ip4(&s->conn->pcb.ip->local_ip));
+        if (local == address || s->route_address == address) {
             s->network_down = true; s->error = ENETDOWN; s->failed = true;
+            if (s->connecting || s->connect_result == -EINPROGRESS) s->connect_result = -ENETDOWN;
+            s->connecting = false;
         }
     }
     sys_arch_unprotect(f); cu_changed();
@@ -874,6 +995,16 @@ unsigned cu_socket_object_bytes(void) { return sizeof(struct socket_object); }
 unsigned cu_request_bytes(void) { return sizeof(struct request); }
 #ifdef LWIP_HOST
 #include <stdio.h>
+struct netconn *cu_socket_test_conn(struct process *p, int fd)
+{
+    int e; struct socket_object *s = lookup(p, fd, &e); return s ? s->conn : NULL;
+}
+bool cu_socket_test_control_pending(struct process *p, int fd)
+{
+    sys_prot_t f = sys_arch_protect(); int e; struct socket_object *s = lookup(p, fd, &e);
+    bool pending = s && (s->control || s->shut != s->control_shut);
+    sys_arch_unprotect(f); return pending;
+}
 void cu_socket_dump(void)
 {
     sys_prot_t f = sys_arch_protect();

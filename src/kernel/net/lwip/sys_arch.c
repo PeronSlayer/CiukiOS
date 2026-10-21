@@ -41,6 +41,10 @@ static struct cu_mbox mboxes[MBOXES];
 static uintptr_t core;
 static unsigned core_batch;
 static uint64_t random_state;
+#ifdef LWIP_HOST
+static unsigned random_calls;
+unsigned cu_host_random_calls(void) { return random_calls; }
+#endif
 struct thread_start { void (*fn)(void *); void *arg; bool used;
 #ifdef LWIP_HOST
     pthread_t thread;
@@ -352,6 +356,9 @@ void ciuki_lwip_seed(uint64_t sample)
 uint32_t ciuki_lwip_rand(void)
 {
     sys_prot_t f = sys_arch_protect(); uint64_t z = (random_state += 0x9e3779b97f4a7c15ULL);
+#ifdef LWIP_HOST
+    random_calls++;
+#endif
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
     sys_arch_unprotect(f); return (uint32_t)(z ^ (z >> 31));

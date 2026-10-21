@@ -59,7 +59,8 @@ void task_sleep_ms(uint32_t ms)
     CHECK(host_flags & 0x200); sleeps++; g_ticks += ms; cycles += ms * 1000;
     if (sleep_hook && !sleep_hook_active) { sleep_hook_active = true; sleep_hook(); sleep_hook_active = false; }
 }
-void task_yield(void) { CHECK(host_flags & 0x200); yields++; }
+static bool stack_service_needs_yield;
+void task_yield(void) { CHECK(host_flags & 0x200); yields++;stack_service_needs_yield=false; }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *arg, enum task_prio p)
 { (void)n; (void)fn; (void)arg; (void)p; return 0; }
 void task_start(struct task *t) { (void)t; }
@@ -126,6 +127,7 @@ const struct pci_func *pci_get(unsigned n) { return n < 2 ? &functions[n] : 0; }
 
 #include "../../../src/kernel/core/irq_budget.c"
 #include "../../../src/kernel/drivers/net.c"
+void net_stack_driver_service(void) { stack_service_needs_yield=true; }
 #include "../../../src/kernel/core/pci_irq.c"
 #include "../../../src/kernel/drivers/net_rtl8139.c"
 #include "../../../src/kernel/drivers/net_e100.c"
@@ -197,6 +199,7 @@ static void *model_dma(uint32_t phys, unsigned bytes)
 { CHECK(phys >= HOST_PHYS && phys + bytes <= HOST_PHYS + sizeof(memory)); return P2V(phys); }
 static uint32_t model_read(void *arg, uint16_t port, unsigned width)
 {
+    CHECK(!stack_service_needs_yield); /* TX exhausted its dispatch before RX poll */
     struct model *h = arg; cycles += h->read_cost;
     if (port == 0xcfc) {
         unsigned reg = h->cfg_address & 0xfc;

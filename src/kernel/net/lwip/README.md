@@ -15,7 +15,7 @@ also under `docs/licenses/`; the image recipe installs them under
 `/system/licenses`. CiukiOS port code is GPL-2.0-only; SDK headers/wrappers and
 the shared native ABI remain MIT as required by F2.
 
-The three upstream patches have narrow purposes:
+The four upstream patches have narrow purposes:
 
 1. Return allocation failure when the TCP PCB pool is exhausted, preserving
    live/TIME_WAIT PCBs instead of using upstream's eviction fallback.
@@ -25,6 +25,23 @@ The three upstream patches have narrow purposes:
    generation's cache or release a reused request.
 3. Use a correctly typed loopback callback rather than an incompatible function
    pointer cast (checked by the real-stack UBSan harness).
+4. Replace the entire DHCP lease DNS list on ACK, clearing omitted server slots
+   through the existing generation/cache invalidation hook. This covers
+   same-address renewals from two servers to one or no servers.
+
+Amendment 1 (2026-10-21) retains fd identity before user-memory preparation,
+checks cancellation/deadlines at queued commitment, and keeps connect results
+separate from SO_ERROR. Address loss uses retained endpoint/route state even
+after upstream aborts a PCB. Successful full shutdown preserves EOF/HUP without
+inventing an error. DHCP startup failures expose an internal error and retry
+after one monotonic second. `../lwip_handoff.c` owns copied ingress/output;
+`../bridge.c` remains reserved for f6-11's additive DOS tap.
+
+The close setting is 500 ms: pinned api_lib initializes ceil(ms/500)+1 polls,
+so this selects two 500 ms polls. A separate raw TCP path converts FIN-allocation
+failure to success with TF_CLOSEPEND, bypassing those polls. The persistent
+exhaustion fixture records this distinction; the raw-PCB deadline still needs
+the lead's decision (see the validation note).
 
 `lwipopts.h` is shared verbatim by target and host. The native 64-bit host
 requires pointer-aligned allocator storage in `arch/cc.h`; this changes no pool

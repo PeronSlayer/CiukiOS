@@ -19,6 +19,9 @@ struct ethernet_port {
     uint8_t mac[6];
     unsigned index;
     bool attached, desired_link, applied_link;
+    bool dhcp_started, primary;
+    int dhcp_error;
+    uint64_t dhcp_retry;
     uint32_t address;
     struct tcpip_callback_msg *link_message;
 };
@@ -66,18 +69,25 @@ static void link_update(void *arg)
 {
     struct ethernet_port *p = arg;
     sys_prot_t f = sys_arch_protect(); bool up = p->desired_link; sys_arch_unprotect(f);
-    if (p->applied_link == up) return;
-    p->applied_link = up;
-    if (up) {
-        netif_set_link_up(&p->interface);
-        if (netif_default == &p->interface) (void)dhcp_start(&p->interface);
-    } else {
-        dhcp_stop(&p->interface);
-        netif_set_link_down(&p->interface);
-        netif_set_addr(&p->interface, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
-        /* DNS TTL/source/question validation remains upstream; no fallback. */
-        if (netif_default == &p->interface)
-            for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) dns_setserver(i, IP_ADDR_ANY);
+    if (p->applied_link != up) {
+        f = sys_arch_protect(); p->applied_link = up; sys_arch_unprotect(f);
+        if (up) netif_set_link_up(&p->interface);
+        else {
+            dhcp_stop(&p->interface);
+            netif_set_link_down(&p->interface);
+            netif_set_addr(&p->interface, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4);
+            /* DNS TTL/source/question validation remains upstream; no fallback. */
+            if (p->primary)
+                for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) dns_setserver(i, IP_ADDR_ANY);
+            f = sys_arch_protect(); p->dhcp_started = false; p->dhcp_error = 0; p->dhcp_retry = 0; sys_arch_unprotect(f);
+        }
+    }
+    if (up && netif_default == &p->interface && !p->dhcp_started && cu_now() >= p->dhcp_retry) {
+        err_t e = dhcp_start(&p->interface);
+        f = sys_arch_protect(); p->dhcp_started = e == ERR_OK;
+        p->dhcp_error = e == ERR_OK ? 0 : e == ERR_MEM ? -ENOMEM : -ENETDOWN;
+        p->dhcp_retry = cu_now() + 1000;
+        sys_arch_unprotect(f); cu_changed();
     }
     status(&p->interface);
 }
@@ -89,6 +99,7 @@ static void attach_core(void *arg)
     netif_set_status_callback(&p->interface, status);
     netif_set_link_callback(&p->interface, status);
     if (!netif_default || netif_default->name[0] == 'l') netif_set_default(&p->interface);
+    p->primary = netif_default == &p->interface;
     netif_set_up(&p->interface); p->attached = true;
     link_update(p);
 }
@@ -122,7 +133,8 @@ static void link_dispatch(void *arg)
 void cu_stack_schedule_link(void *arg)
 {
     struct ethernet_port *p = arg; sys_prot_t f = sys_arch_protect();
-    bool post = !link_pending[p->index] && p->desired_link != p->applied_link;
+    bool retry = p->primary && p->desired_link && !p->dhcp_started && cu_now() >= p->dhcp_retry;
+    bool post = !link_pending[p->index] && (p->desired_link != p->applied_link || retry);
     if (post) link_pending[p->index] = true;
     sys_arch_unprotect(f);
     if (post && tcpip_callbackmsg_trycallback(p->link_message) != ERR_OK) {
@@ -141,6 +153,11 @@ void net_stack_input(unsigned index, const void *data, unsigned bytes)
 void net_stack_address(unsigned index, uint32_t *address)
 {
     sys_prot_t f = sys_arch_protect(); *address = index < 2 ? ports[index].address : 0; sys_arch_unprotect(f);
+}
+int net_stack_dhcp_error(unsigned index)
+{
+    sys_prot_t f = sys_arch_protect(); int e = index < 2 ? ports[index].dhcp_error : -EINVAL;
+    sys_arch_unprotect(f); return e;
 }
 static void ready(void *unused) { (void)unused; sys_sem_signal(&initialized); }
 void net_stack_entropy(uint64_t sample) { ciuki_lwip_seed(sample); }
@@ -171,6 +188,10 @@ int net_stack_init(void)
     uint32_t flags = irq_save(); outb(0x43, 0); unsigned pit = inb(0x40); pit |= (unsigned)inb(0x40) << 8;
     irq_restore(flags); ciuki_lwip_seed(pit);
 #endif
+    /* Driver discovery publishes the primary MAC before transport init uses
+     * LWIP_RAND for the initial TCP/UDP ephemeral-port starts. */
+    extern void net_stack_driver_entropy(void) __attribute__((weak));
+    if (net_stack_driver_entropy) net_stack_driver_entropy();
     if (sys_sem_new(&initialized, 0) != ERR_OK) return -ENOMEM;
     tcpip_init(ready, NULL);
     if (sys_arch_sem_wait(&initialized, 2000) == SYS_ARCH_TIMEOUT) return -ENOMEM;

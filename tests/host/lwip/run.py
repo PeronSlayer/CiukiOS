@@ -28,7 +28,7 @@ if args.kernel:
 files = [source / 'src' / n for n in recipe['SOURCES']] + [PORT / n for n in (
     'sys_arch.c', 'stack.c', 'sockets.c', 'syscalls.c')]
 if args.kernel:
-    files += [ROOT / n for n in ('src/kernel/net/bridge.c', 'src/kernel/core/syscall.c',
+    files += [ROOT / n for n in ('src/kernel/net/lwip_handoff.c', 'src/kernel/core/syscall.c',
         'src/kernel/proc/fdtable.c', 'src/kernel/proc/channel.c', 'src/kernel/proc/grants.c',
         'src/kernel/proc/surface.c', 'src/kernel/proc/syscalls_file.c',
         'src/kernel/drivers/net.c', 'src/kernel/core/ledger.c')]
