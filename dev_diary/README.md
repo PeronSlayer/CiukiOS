@@ -166,3 +166,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisione del proprietario: Wolfenstein 3D shareware resta pre-installato nell'immagine (direttiva f3-60 ritirata)](2026-10-21-05-decisione-wolfenstein-resta-preinstallato.md) | 21 ottobre 2026 | decisione (contenuti, licenze) |
 | [Approvazione del proprietario: piano del Setup da CD per la distribuzione della 1.0 Beta; direttive f9-01 e f9-02](2026-10-21-06-approvazione-piano-setup-cd.md) | 21 ottobre 2026 | decisione (distribuzione), piano |
 | [Setup da CD rinviato a una release successiva; la 1.0 Alpha resta immagine disco per il T23](2026-10-21-07-setup-cd-rinviato.md) | 21 ottobre 2026 | decisione (programma) |
+| [Integrazione della 1.0.0 alpha: nove fusioni, versione, catena finale, rinvii](2026-10-21-08-integrazione-1-0-0-alpha.md) | 21 ottobre 2026 | integrazione, release |
