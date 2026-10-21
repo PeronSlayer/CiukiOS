@@ -18,6 +18,9 @@ int gl_pixel_bytes(int format, int type) {
   case GL_LUMINANCE_ALPHA:
     return 2;
   case GL_LUMINANCE:
+  case GL_RED:
+  case GL_GREEN:
+  case GL_BLUE:
   case GL_ALPHA:
     return 1;
   default:
@@ -54,9 +57,17 @@ unsigned gl_pixel_get(const uint8_t *p, int f, int t) {
       g = p[1];
       r = p[2];
       break;
+    case GL_RED:
+      r = p[0];
+      break;
+    case GL_GREEN:
+      g = p[0];
+      break;
+    case GL_BLUE:
+      b = p[0];
+      break;
     case GL_ALPHA:
       a = p[0];
-      r = g = b = 255;
       break;
     case GL_LUMINANCE_ALPHA:
       a = p[1]; /* fallthrough */
@@ -89,13 +100,22 @@ void gl_pixel_put(uint8_t *p, int f, int t, unsigned c) {
     p[1] = g;
     p[2] = r;
     break;
+  case GL_RED:
+    p[0] = r;
+    break;
+  case GL_GREEN:
+    p[0] = g;
+    break;
+  case GL_BLUE:
+    p[0] = b;
+    break;
   case GL_ALPHA:
     p[0] = a;
     break;
   case GL_LUMINANCE_ALPHA:
     p[1] = a; /* fallthrough */
   case GL_LUMINANCE:
-    p[0] = r;
+    p[0] = r + g + b > 255 ? 255 : r + g + b;
     break;
   }
 }
@@ -117,7 +137,7 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
       return;
     int col[4];
     for (int k = 0; k < 4; k++)
-      col[k] = (int)(c->tiny.current_color.v[k] * 255);
+      col[k] = (int)(c->raster_color[k] * 255);
     unsigned pitch = gl_pixel_stride(c->unpack[1] ? c->unpack[1] : w,
                                      GL_COLOR_INDEX, GL_BITMAP, c->unpack[0]);
     const uint8_t *p = a[6].p;
@@ -143,6 +163,8 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
       gl_error(c, GL_INVALID_VALUE);
       return;
     }
+    if (!w || !h || !c->raster_valid)
+      return;
     unsigned *p = gl_alloc(w * h * 4);
     if (!p) {
       gl_error(c, GL_OUT_OF_MEMORY);
@@ -177,6 +199,8 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
     gl_error(c, GL_INVALID_ENUM);
     return;
   }
+  if (!w || !h)
+    return;
   uint8_t *p = (uint8_t *)a[base + 4].p;
   if (!p) {
     gl_error(c, GL_INVALID_VALUE);

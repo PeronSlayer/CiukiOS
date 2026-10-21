@@ -32,10 +32,10 @@ must not silently change the already qualified native scenes.
 The compatibility path keeps TinyGL's CPU transformation, lighting, clipping
 with opt-in triangle/line callbacks. Its fragment backend
 uses bounded integer edge/interpolation loops, 16-bit depth and XRGB colour.
-The existing x87 transform ABI is retained; SIMD and vendor registers are
-not used. These facts do not establish complete OpenGL conformance or the
-contract's stronger no-FPU requirement. Remaining differences and evidence
-are recorded in `build/codex/f7-07-report.md`.
+Amendment 1 permits the scalar x87 transform/lighting ABI in user processes;
+the kernel presenter and fragment backend remain integer and SIMD-free.
+No vendor registers are accessed. This is a software subset, without a full
+GL conformance claim; evidence is recorded in `build/codex/f7-07-report.md`.
 
 ## Continuation and implemented boundaries (2026-10-21)
 
@@ -104,24 +104,42 @@ are collected by the kernel from its verified Win32 desktop child. The
 selector, loader table, runner model and `f5-core.json` case are registered;
 the guest case is authored and unrun.
 
-### Acceptance still open
+### Beta boundary
 
-This is an implementation of the requested main rendering path, not completed
-f7-07 acceptance. Some GL 1.1 behavior is still missing or narrower than the
-specification: evaluator/feedback/selection paths, user clip planes, texgen,
-full pixel transfer/maps/types, independent 1D/2D texture binding, front/back
-read/draw-buffer behavior, all display-list validation rules, and full
-shared-object deletion semantics. Pixel-format selection currently persists
-on the GDI DC, rather than on its owning window across DC reacquisition.
-The optional render-size selection still needs application viewport/readback
-semantics qualified when display and render dimensions differ. Extension
-strings and function lookup are tested for the implemented common 2D path;
-complete normative extension conformance is not established. These are
-implementation items to finish before claiming the directive's complete
-GL 1.1/extension surface.
+Amendment 1 permits scalar x87 in user-space transforms and lighting; the
+fragment backend and kernel presenter remain integer and SIMD-free. The
+336 exported GL entry points describe an ABI, not full GL conformance.
+Evaluators, selection/feedback, accumulation and stencil operations report
+errors. Pixel maps/transfer, non-byte pixel types (except retained RGB565),
+texture borders and full front/back draw/read-buffer semantics remain outside
+this beta subset; no corresponding extension is advertised. The software
+renderer has no hardware acceleration claim.
 
-The inherited transform/lighting path uses scalar floating point/x87 on
-PE32, while the rasterizer is integer and SIMD-free. The lead must reconcile
-that explicit directive allowance with the stronger no-FPU wording of the
-F7 contract. The report records host commands and the sandbox's LeakSanitizer
-restriction without disabling leak detection in the new GL suite.
+The v3 completed-present integration review and guest/hardware qualification
+remain with the lead. The new GL sanitized suite keeps leak detection enabled;
+its host sandbox cannot complete LeakSanitizer's ptrace-based teardown.
+The final host commands and precise gate status are in
+`build/codex/f7-07-report.md`.
+
+## Amendment 1 implementation decisions (2026-10-21)
+
+The lead permits scalar x87 in user transforms/lighting; the kernel presenter
+and integer fragment backend retain their SIMD-free restrictions. The minimal
+versioned v3 completion request remains subject to integration review.
+
+Before implementation, the sources above were rechecked: GL 1.1 §§2.10.4,
+2.11, 3.8.4 and 5.4 specify transformed eye planes, independent texture targets,
+retained bindings in other sharing contexts, and compile-time pointer capture.
+Microsoft SetPixelFormat requires window lifetime persistence. The WIP lacked
+these paths. Implement six user planes and per-unit texgen, separate bindings
+and default objects, reference-counted deleted textures, window-owned format
+storage, byte-format pixel oracles and a common display-list validation path.
+Evaluators, selection/feedback, accumulation and stencil remain error-returning
+beta exclusions. Host tests qualify the advertised extensions; guest evidence
+and the sanitized acceptance rerun belong to the lead.
+
+The window-format slot uses a v2 USER/GDI table tail; v1 tables retain their
+original prefix and are never read past it. The production USER fixture
+checks an exact-size v1 table under ASan as well as the v2 window/DC path.
+The final host evidence has seven unchanged fixture goldens and eleven new
+amendment goldens, with separate pixel/region/reflection oracles.

@@ -11,6 +11,8 @@ void gl_drop_state(struct gl_context *c) {
   while (c->attributes) {
     struct gl_snapshot *p = c->attributes;
     c->attributes = p->next;
+    if (p->mask & GL_TEXTURE_BIT)
+      gl_texture_bindings(&p->state, -1);
     gl_dealloc(p);
   }
   while (c->client_attributes) {
@@ -42,6 +44,8 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     }
     s->mask = mask;
     s->state = *c;
+    if (!client && (mask & GL_TEXTURE_BIT))
+      gl_texture_bindings(&s->state, 1);
     s->point = c->zb->pointsize;
     s->next = *head;
     *head = s;
@@ -61,6 +65,8 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     if (p->mask & 2) {
       w32_copy(c->array, p->state.array, sizeof(c->array));
       c->client = p->state.client;
+      c->locked_first = p->state.locked_first;
+      c->locked_count = p->state.locked_count;
     }
     c->client_attributes = p->next;
     c->client_depth--;
@@ -84,6 +90,7 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       COPY(tiny.current_tex_coord1);
       COPY(texcoord);
       COPY(raster);
+      COPY(raster_color);
       RESTORE(raster_valid);
       RESTORE(tiny.current_edge_flag);
     }
@@ -147,11 +154,21 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       RESTORE(tiny.current_color_material_type);
     }
     if (mask & GL_TEXTURE_BIT) {
+      gl_texture_bindings(c, -1);
       COPY(sw.unit);
+      COPY(binding);
+      COPY(texture_enabled);
+      COPY(texgen);
+      RESTORE(active);
+      c->tiny.matrix_stack[2] = c->texture_base[c->active];
+      c->tiny.matrix_stack_ptr[2] = c->texture_ptr[c->active];
+      /* Transfer the snapshot's binding references to the current state. */
     }
     if (mask & GL_TRANSFORM_BIT) {
       RESTORE(tiny.matrix_mode);
       RESTORE(tiny.normalize_enabled);
+      COPY(clip_plane);
+      COPY(clip_enabled);
     }
     if (mask & GL_LIST_BIT)
       RESTORE(list_base);
@@ -165,8 +182,11 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       RESTORE(sw.blend);
       RESTORE(sw.scissor);
       RESTORE(sw.fog);
-      for (int k = 0; k < 2; k++)
-        RESTORE(sw.unit[k].enabled);
+      COPY(texture_enabled);
+      COPY(clip_enabled);
+      for (int u = 0; u < 2; u++)
+        for (int k = 0; k < 4; k++)
+          RESTORE(texgen[u][k].enabled);
       RESTORE(tiny.lighting_enabled);
       RESTORE(tiny.normalize_enabled);
       RESTORE(tiny.color_material_enabled);
@@ -179,6 +199,7 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       }
       RESTORE(tiny.first_light);
     }
+    gl_sync_textures(c);
     c->tiny.matrix_model_projection_updated = 1;
     c->attributes = p->next;
     c->attribute_depth--;

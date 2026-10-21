@@ -109,7 +109,7 @@ void gl_draw_point(GLVertex* p0) {
  */
 
 static void GLinterpolate(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
- if (gl_get_context()->software_triangle) { for(int k=0;k<4;k++){q->color.v[k]=p0->color.v[k]+(p1->color.v[k]-p0->color.v[k])*t;q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;}q->ec.Z=p0->ec.Z+(p1->ec.Z-p0->ec.Z)*t;}
+ if (gl_get_context()->software_triangle) { for(int k=0;k<4;k++){q->color.v[k]=p0->color.v[k]+(p1->color.v[k]-p0->color.v[k])*t;q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;}for(int k=0;k<4;k++)q->ec.v[k]=p0->ec.v[k]+(p1->ec.v[k]-p0->ec.v[k])*t;}
 	GLint i;
 	q->pc.X = p0->pc.X + (p1->pc.X - p0->pc.X) * t;
 	q->pc.Y = p0->pc.Y + (p1->pc.Y - p0->pc.Y) * t;
@@ -234,7 +234,7 @@ static void updateTmp(GLVertex* q, GLVertex* p0, GLVertex* p1, GLfloat t) {
 			q->tex_coord.v[k]=p0->tex_coord.v[k]+(p1->tex_coord.v[k]-p0->tex_coord.v[k])*t;
 			q->tex_coord1.v[k]=p0->tex_coord1.v[k]+(p1->tex_coord1.v[k]-p0->tex_coord1.v[k])*t;
 		}
-		q->ec.Z=p0->ec.Z+(p1->ec.Z-p0->ec.Z)*t;
+		for(int k=0;k<4;k++)q->ec.v[k]=p0->ec.v[k]+(p1->ec.v[k]-p0->ec.v[k])*t;
 	}
 	q->clip_code = gl_clipcode(q->pc.X, q->pc.Y, q->pc.Z, q->pc.W);
 	if (q->clip_code == 0)

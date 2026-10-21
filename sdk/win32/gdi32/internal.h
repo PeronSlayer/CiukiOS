@@ -64,6 +64,7 @@ struct dc {
   struct dc_state s;
   struct saved *saved;
   int level, memory, pixel_format;
+  int *window_pixel_format; /* USER owns this slot until the DC is released. */
   struct w32_dib surface;
   struct region visible, shape;
   int has_visible, has_shape;

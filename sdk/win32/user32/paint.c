@@ -265,6 +265,11 @@ static HDC acquire(HWND h, BOOL frame, const struct u32_region *paint) {
       u32_gdi->acquire(&root->surface, o, include.r, include.n, exclude, n);
   if (!dc)
     return 0;
+  if (u32_gdi->version >= 2 && u32_gdi->window_pixel_format && !u32_gdi->window_pixel_format(dc, &w->pixel_format)) {
+    RECT ignored[U32_RECTS];
+    u32_gdi->release(dc, ignored, U32_RECTS);
+    return 0;
+  }
   *slot = (struct u32_dc){dc, h, root->handle, !!paint, {0}};
   root->dcs++;
   return dc;

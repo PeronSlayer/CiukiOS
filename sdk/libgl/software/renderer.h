@@ -12,7 +12,7 @@ struct sw_image {
   unsigned bytes, format, internal;
 };
 struct sw_texture {
-  unsigned name, used;
+  unsigned name, used, refs, deleted, target;
   int wrap_s, wrap_t, min, mag;
   struct sw_image image[SW_LEVELS];
 };
@@ -37,6 +37,7 @@ struct sw_state {
 /* Coordinates: 4 fractional bits, UV/W 16, reciprocal-W 20. Color 0..255.
  * All triangles are clipped before entry; dimensions <=2048; |UV/W|<=2^27.
  * Edge*interpolant accumulation fits signed 64 bits at these bounds. */
+unsigned sw_base_format(unsigned);
 uint32_t sw_color_format(const struct sw_state *, uint32_t);
 void sw_triangle(struct sw_state *, const struct sw_vertex *,
                  const struct sw_vertex *, const struct sw_vertex *);

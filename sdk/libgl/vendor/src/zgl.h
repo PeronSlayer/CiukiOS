@@ -178,6 +178,7 @@ typedef struct GLContext {
 	/* CiukiOS: optional compatibility rasterizer; NULL preserves native output. */
 	void (*software_triangle)(struct GLContext*, GLVertex*, GLVertex*, GLVertex*);
 	void *software_state;
+  void (*software_vertex)(struct GLContext*, GLVertex*);
  M4 *software_texture_matrix[2];
 	void (*software_line)(struct GLContext*, GLVertex*, GLVertex*);
 	/* lights */

@@ -33,4 +33,5 @@ BOOL W32API SwapBuffers(HDC);
 DWORD W32API w32_gdi_gl_glyph(HDC, DWORD, BOOL, GLYPHMETRICS *, DWORD, void *);
 /* Value-only surface query; no backing pointer escapes GDI's lock. */
 BOOL W32API w32_gdi_gl_size(HDC, DWORD *, DWORD *);
+BOOL W32API w32_gdi_gl_window_format(HDC, int *);
 #endif

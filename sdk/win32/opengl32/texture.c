@@ -4,7 +4,8 @@
 static struct sw_texture *texture(struct gl_context *c, unsigned name,
                                   int create) {
   for (unsigned i = 0; i < GL_TEXTURES; i++)
-    if (c->share->textures[i].used && c->share->textures[i].name == name)
+    if (c->share->textures[i].used && !c->share->textures[i].deleted &&
+        c->share->textures[i].name == name)
       return &c->share->textures[i];
   if (create)
     for (unsigned i = 1; i < GL_TEXTURES; i++)
@@ -19,6 +20,42 @@ static struct sw_texture *texture(struct gl_context *c, unsigned name,
         return t;
       }
   return 0;
+}
+static void free_texture(struct sw_texture *t) {
+  for (int l = 0; l < SW_LEVELS; l++) {
+    gl_dealloc(t->image[l].pixels);
+    gl_dealloc(t->image[l].compressed);
+  }
+  *t = (struct sw_texture){0};
+}
+void gl_texture_ref(struct sw_texture *t, int delta) {
+  if (!t || !t->name)
+    return;
+  if (delta > 0)
+    t->refs++;
+  else if (t->refs)
+    t->refs--;
+  if (t->deleted && !t->refs)
+    free_texture(t);
+}
+void gl_sync_textures(struct gl_context *c) {
+  for (int u = 0; u < 2; u++) {
+    int target = c->texture_enabled[u][1] ? 1 : 0;
+    c->sw.unit[u].texture = c->binding[u][target];
+    c->sw.unit[u].enabled =
+        c->texture_enabled[u][0] || c->texture_enabled[u][1];
+  }
+}
+void gl_texture_bindings(struct gl_context *c, int delta) {
+  for (int u = 0; u < 2; u++)
+    for (int t = 0; t < 2; t++)
+      gl_texture_ref(c->binding[u][t], delta);
+}
+void gl_texture_cleanup(struct gl_context *c) {
+  gl_texture_bindings(c, -1);
+  for (int u = 0; u < 2; u++)
+    for (int t = 0; t < 2; t++)
+      free_texture(&c->defaults[u][t]);
 }
 static int dimension(int n) { return n > 0 && n <= 2048 && !(n & (n - 1)); }
 static int target(int t) { return t == GL_TEXTURE_2D || t == GL_TEXTURE_1D; }
@@ -39,8 +76,8 @@ static void image(struct gl_context *c, struct sw_texture *t, int level,
       internal != GL_RGB && internal != GL_RGBA && internal != GL_LUMINANCE &&
       internal != GL_LUMINANCE_ALPHA && internal != GL_ALPHA &&
       !(internal >= 0x803b && internal <= 0x805b) &&
-      !(internal >= 0x83f0 && internal <= 0x83f3) && internal != 0x84ed &&
-      internal != 0x84ee) {
+      !(internal >= 0x83f0 && internal <= 0x83f3) &&
+      !(internal >= 0x84e9 && internal <= 0x84ee)) {
     gl_error(c, GL_INVALID_VALUE);
     return;
   }
@@ -75,8 +112,17 @@ static void image(struct gl_context *c, struct sw_texture *t, int level,
     for (int y = 0; y < h; y++)
       for (int x = 0; x < w; x++) {
         unsigned pixel = gl_pixel_get(p + y * pitch + x * bytes, f, type);
-        if (internal == 3 || internal == GL_RGB || internal == 0x8051)
+        unsigned base = sw_base_format(internal), lum = (pixel >> 16) & 255;
+        if (base == GL_RGB)
           pixel |= 0xff000000;
+        else if (base == GL_ALPHA)
+          pixel &= 0xff000000;
+        else if (base == GL_LUMINANCE || base == GL_LUMINANCE_ALPHA ||
+                 base == GL_INTENSITY)
+          pixel =
+              lum * 0x010101 | (base == GL_LUMINANCE   ? 0xff000000
+                                : base == GL_INTENSITY ? lum << 24
+                                                       : pixel & 0xff000000);
         next.pixels[y * w + x] = pixel;
       }
   }
@@ -119,21 +165,29 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
 #define I(n) ((int)a[n].i)
 #define P(n) (a[n].p)
   struct sw_unit *u = &c->sw.unit[c->active];
-  struct sw_texture *t = u->texture;
+  struct sw_texture *t = c->binding[c->active][I(0) == GL_TEXTURE_2D];
   switch (id) {
   case ID_glBindTexture:
     if (!target(I(0))) {
       gl_error(c, GL_INVALID_ENUM);
       break;
     }
-    t = texture(c, (unsigned)I(1), 1);
+    t = I(1) ? texture(c, (unsigned)I(1), 1)
+             : &c->defaults[c->active][I(0) == GL_TEXTURE_2D];
     if (!t)
       gl_error(c, GL_OUT_OF_MEMORY);
-    else
-      u->texture = t;
+    else if (t->target && t->target != (unsigned)I(0))
+      gl_error(c, GL_INVALID_OPERATION);
+    else {
+      t->target = I(0);
+      gl_texture_ref(t, 1);
+      gl_texture_ref(c->binding[c->active][I(0) == GL_TEXTURE_2D], -1);
+      c->binding[c->active][I(0) == GL_TEXTURE_2D] = t;
+      gl_sync_textures(c);
+    }
     break;
   case ID_glGenTextures: {
-    if (I(0) < 0 || !P(1)) {
+    if (I(0) < 0 || (I(0) && !P(1))) {
       gl_error(c, GL_INVALID_VALUE);
       break;
     }
@@ -150,10 +204,11 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
     break;
   }
   case ID_glIsTexture:
-    r->i = I(0) != 0 && texture(c, (unsigned)I(0), 0) != 0;
+    t = texture(c, (unsigned)I(0), 0);
+    r->i = I(0) != 0 && t && t->target;
     break;
   case ID_glDeleteTextures:
-    if (I(0) < 0 || !P(1)) {
+    if (I(0) < 0 || (I(0) && !P(1))) {
       gl_error(c, GL_INVALID_VALUE);
       break;
     }
@@ -164,27 +219,36 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
       t = texture(c, n, 0);
       if (!t)
         continue;
-      for (int l = 0; l < SW_LEVELS; l++) {
-        gl_dealloc(t->image[l].pixels);
-        gl_dealloc(t->image[l].compressed);
-      }
+      /* Unbind only this context. Other contexts/attribute stacks retain
+       * the deleted object, and may coexist with a reused numeric name. */
+      t->deleted = 1;
       for (int j = 0; j < 2; j++)
-        if (c->sw.unit[j].texture == t)
-          c->sw.unit[j].texture = &c->share->textures[0];
-      *t = (struct sw_texture){0};
+        for (int k = 0; k < 2; k++)
+          if (c->binding[j][k] == t) {
+            c->binding[j][k] = &c->defaults[j][k];
+            gl_texture_ref(t, -1);
+          }
+      if (t->used && !t->refs)
+        free_texture(t);
+      gl_sync_textures(c);
     }
     break;
   case ID_glAreTexturesResident:
-    if (I(0) < 0 || !P(1) || !P(2)) {
+    if (I(0) < 0 || (I(0) && !P(1))) {
       gl_error(c, GL_INVALID_VALUE);
       break;
     }
     r->i = 1;
+    /* Every valid software object is resident. When all are resident the
+     * specification leaves the caller's residence array untouched. */
     for (int i = 0; i < I(0); i++) {
-      int resident = texture(c, ((const unsigned *)P(1))[i], 0) != 0;
-      ((GLboolean *)P(2))[i] = resident;
-      if (!resident)
+      unsigned name = ((const unsigned *)P(1))[i];
+      t = name ? texture(c, name, 0) : 0;
+      if (!t || !t->target) {
+        gl_error(c, GL_INVALID_VALUE);
         r->i = 0;
+        break;
+      }
     }
     break;
   case ID_glPrioritizeTextures:
@@ -194,7 +258,7 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
   case ID_glTexImage2D:
   case ID_glTexImage1D: {
     int one = id == ID_glTexImage1D;
-    if (!target(I(0))) {
+    if (I(0) != (one ? GL_TEXTURE_1D : GL_TEXTURE_2D)) {
       gl_error(c, GL_INVALID_ENUM);
       break;
     }
@@ -205,7 +269,7 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
   case ID_glTexSubImage2D:
   case ID_glTexSubImage1D: {
     int one = id == ID_glTexSubImage1D;
-    if (!target(I(0))) {
+    if (I(0) != (one ? GL_TEXTURE_1D : GL_TEXTURE_2D)) {
       gl_error(c, GL_INVALID_ENUM);
       break;
     }

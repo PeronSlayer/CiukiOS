@@ -1,8 +1,8 @@
 /* Bounded integer rasterization, two texture stages, D16 and XRGB8888.
  * SPDX-License-Identifier: MIT */
 #include "renderer.h"
-#include "extensions.h"
 #include "../vendor/include/GL/gl.h"
+#include "extensions.h"
 static int clamp(int v, int lo, int hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -144,7 +144,17 @@ static void sample_level(const struct sw_texture *t, int level, int u, int v,
 }
 static void sample(const struct sw_texture *t, int u, int v, int lod,
                    int out[4]) {
-  int level = 0, linear = 0;
+  int level = 0, linear = 0, last = 0;
+  if (t) {
+    unsigned size =
+        t->image[0].w > t->image[0].h ? t->image[0].w : t->image[0].h;
+    while (size > 1 && last < SW_LEVELS - 1) {
+      size >>= 1;
+      last++;
+    }
+    if (t->target == GL_TEXTURE_1D)
+      v = 0;
+  }
   if (!t) {
     out[0] = out[1] = out[2] = 0;
     out[3] = 255;
@@ -154,13 +164,13 @@ static void sample(const struct sw_texture *t, int u, int v, int lod,
     linear = t->min == GL_LINEAR || t->min == GL_LINEAR_MIPMAP_NEAREST ||
              t->min == GL_LINEAR_MIPMAP_LINEAR;
     if (t->min != GL_NEAREST && t->min != GL_LINEAR)
-      level = clamp((lod + 128) >> 8, 0, SW_LEVELS - 1);
+      level = clamp((lod + 128) >> 8, 0, last);
   } else
     linear = t->mag == GL_LINEAR;
   if (t->min == GL_NEAREST_MIPMAP_LINEAR || t->min == GL_LINEAR_MIPMAP_LINEAR) {
-    level = clamp(lod >> 8, 0, SW_LEVELS - 1);
+    level = clamp(lod >> 8, 0, last);
     int next = level + 1;
-    if (next >= SW_LEVELS)
+    if (next > last)
       next = level;
     int a[4], b[4], f = lod > 0 ? lod & 255 : 0;
     sample_level(t, level, u, v, linear, a);
@@ -170,9 +180,26 @@ static void sample(const struct sw_texture *t, int u, int v, int lod,
   } else
     sample_level(t, level, u, v, linear, out);
 }
+unsigned sw_base_format(unsigned f) {
+  if (f == 1 || f == GL_LUMINANCE || f == 0x84ea ||
+      (f >= 0x803f && f <= 0x8042))
+    return GL_LUMINANCE;
+  if (f == 2 || f == GL_LUMINANCE_ALPHA || f == 0x84eb ||
+      (f >= 0x8043 && f <= 0x8048))
+    return GL_LUMINANCE_ALPHA;
+  if (f == GL_ALPHA || f == 0x84e9 || (f >= 0x803b && f <= 0x803e))
+    return GL_ALPHA;
+  if (f == GL_INTENSITY || f == 0x84ec || (f >= 0x804a && f <= 0x804d))
+    return GL_INTENSITY;
+  if (f == 3 || f == GL_RGB || f == 0x84ed || f == 0x83f0 ||
+      (f >= 0x804f && f <= 0x8054))
+    return GL_RGB;
+  return GL_RGBA;
+}
 static void environment(const struct sw_unit *u, const int texture[4],
                         const int primary[4], int previous[4]) {
   int constant[4];
+  unsigned base = sw_base_format(u->texture->image[0].internal);
   unpack(u->constant, constant);
   int out[4];
   for (int k = 0; k < 4; k++) {
@@ -233,10 +260,37 @@ static void environment(const struct sw_unit *u, const int texture[4],
     default:
       break;
     }
+    if (u->mode != GL_COMBINE_ARB) {
+      if ((base == GL_ALPHA && k < 3) ||
+          ((base == GL_RGB || base == GL_LUMINANCE) && k == 3))
+        v = a;
+      else if (base == GL_INTENSITY && k == 3 && u->mode == GL_ADD)
+        v = clamp(a + b, 0, 255);
+      else if (base == GL_INTENSITY && k == 3 && u->mode == GL_BLEND)
+        v = (a * (255 - b) + constant[k] * b + 127) / 255;
+    }
     out[k] = v;
   }
   for (int k = 0; k < 4; k++)
     previous[k] = out[k];
+}
+static int complete(const struct sw_texture *t) {
+  if (!t || !t->image[0].pixels)
+    return 0;
+  if (t->min == GL_NEAREST || t->min == GL_LINEAR)
+    return 1;
+  unsigned w = t->image[0].w, h = t->image[0].h;
+  for (int level = 0; level < SW_LEVELS; level++) {
+    const struct sw_image *m = &t->image[level];
+    if (!m->pixels || m->w != w || m->h != h ||
+        m->internal != t->image[0].internal)
+      return 0;
+    if (w == 1 && h == 1)
+      return 1;
+    w = w > 1 ? w / 2 : 1;
+    h = h > 1 ? h / 2 : 1;
+  }
+  return 0;
 }
 static int64_t edge(const struct sw_vertex *a, const struct sw_vertex *b, int x,
                     int y) {
@@ -277,9 +331,11 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
                               : (b->y > c->y ? b->y : c->y)) >>
                      4,
                  0, (int)s->height - 1);
-  int lod[2] = {0, 0};
+  int lod[2] = {0, 0}, textured[2];
   for (int t = 0; t < 2; t++)
-    if (s->unit[t].enabled && s->unit[t].texture) {
+    textured[t] = s->unit[t].enabled && complete(s->unit[t].texture);
+  for (int t = 0; t < 2; t++)
+    if (textured[t]) {
       const struct sw_texture *tex = s->unit[t].texture;
       int span = x1 - x0 + y1 - y0 + 1;
       int64_t du = (int64_t)ab(a->uv[t][0] - b->uv[t][0]) * tex->image[0].w +
@@ -307,7 +363,7 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
                                       b->color[k], c->color[k], area);
         int iw = interpolate(e[0], e[1], e[2], a->iw, b->iw, c->iw, area);
         for (int t = 0; t < 2; t++)
-          if (s->unit[t].enabled && iw > 0) {
+          if (textured[t] && iw > 0) {
             int uv[2], tex[4];
             for (int k = 0; k < 2; k++) {
               int q = interpolate(e[0], e[1], e[2], a->uv[t][k], b->uv[t][k],
@@ -315,6 +371,9 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
               uv[k] = (int)((int64_t)q * 1048576 / iw);
             }
             sample(s->unit[t].texture, uv[0], uv[1], lod[t], tex);
+            if (sw_base_format(s->unit[t].texture->image[0].internal) ==
+                GL_ALPHA)
+              tex[0] = tex[1] = tex[2] = 255;
             environment(&s->unit[t], tex, p, col);
           }
         if (s->fog) {

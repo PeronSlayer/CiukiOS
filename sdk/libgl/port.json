@@ -8,9 +8,9 @@
     "src/ztriangle.h": "6ce891c23cc9bdffdd93c2e6c5fc76c2f2eb03cfee524e489907ccdd205718ff",
     "src/texture.c": "7350a210fadcde73b450efe471f6b65bc29f29f73a15082e162cd53bc94e6916",
     "src/list.c": "fe24047db7b39b44198b00625b5ac9d8dcb62d6a53c90ca39e0b5254ba9164f0",
-    "src/clip.c": "7f1c0b1d1ae97253ef7648485c436a16165e8516803624b90cc5d7ca032eb923",
-    "src/zgl.h": "ab588c2a16a636ced7074f4de2e294ab5fec5f8665b16e4a521dfad69e7dd72e",
-    "src/vertex.c": "e3a057e7fff04614177838ad647e82c1e562389c3093d98ba3b0edd55084b43f",
+    "src/clip.c": "011ac7adca8db69bf10d9cf5b99132657432c03f0e6eaf4ceab5e1a6ad3c6180",
+    "src/zgl.h": "ab0c19b09016f0bf4ac98b1d5659ec462c1881eeea6c253de287590e693e6821",
+    "src/vertex.c": "85eeec77181788023c91e924c5be016e12825a536dfdcb391136b0b41dd484d8",
     "include/GL/gl.h": "333ad6fa3e71a45460a930301d226415019c0665c50de1b56da34c9682ab8a48"
   },
   "changes": [
@@ -22,6 +22,7 @@
     "Opt-in caller-owned contexts and scalar compatibility triangle callbacks; native default unchanged.",
     "Bound glDeleteLists to the requested range.",
     "Correct packed-pixel enum values, interpolate both compatibility texture coordinates through clipping, route opt-in points/lines to scalar fragments, preserve homogeneous W.",
-    "Initialization OOM returns GL_OUT_OF_MEMORY and permits partial cleanup; native runtime compatibility test retained."
+    "Initialization OOM returns GL_OUT_OF_MEMORY and permits partial cleanup; native runtime compatibility test retained.",
+    "Optional Win32 texgen vertex hook and full eye-coordinate interpolation for user clipping; native callbacks remain unset."
   ]
 }

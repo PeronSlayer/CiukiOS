@@ -48,6 +48,7 @@ struct u32_window {
   struct u32_prop *props;
   BOOL destroying, creating, redraw, erase, internal_paint;
   UINT dcs;
+  int pixel_format;
   struct dd_lease lease;
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;

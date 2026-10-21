@@ -98,13 +98,23 @@ void gl_defaults(struct gl_context *c) {
       u->operand[1][j] = GL_SRC_ALPHA;
     }
     c->texcoord[i][3] = 1;
-    u->texture = &c->share->textures[0];
+    for (int j = 0; j < 2; j++) {
+      struct sw_texture *t = &c->defaults[i][j];
+      *t = (struct sw_texture){.used = 1,
+                               .target = j ? GL_TEXTURE_2D : GL_TEXTURE_1D,
+                               .wrap_s = GL_REPEAT,
+                               .wrap_t = GL_REPEAT,
+                               .min = GL_NEAREST_MIPMAP_LINEAR,
+                               .mag = GL_LINEAR};
+      c->binding[i][j] = t;
+    }
+    for (int j = 0; j < 4; j++) {
+      c->texgen[i][j].mode = GL_EYE_LINEAR;
+      if (j < 2)
+        c->texgen[i][j].object[j] = c->texgen[i][j].eye[j] = 1;
+    }
+    u->texture = c->binding[i][1];
   }
-  struct sw_texture *t = &c->share->textures[0];
-  t->used = 1;
-  t->wrap_s = t->wrap_t = GL_REPEAT;
-  t->min = GL_NEAREST_MIPMAP_LINEAR;
-  t->mag = GL_LINEAR;
 }
 HGLRC W32API wglCreateContext(HDC dc) {
   GL_GUARD;
@@ -165,7 +175,8 @@ HGLRC W32API wglCreateContext(HDC dc) {
     gl_dealloc(c);
     return 0;
   }
-  c->tiny.software_triangle = gl_triangle;
+  c->tiny.software_triangle = gl_clip_triangle;
+  c->tiny.software_vertex = gl_vertex_generated;
   c->tiny.software_line = gl_compat_line;
   c->tiny.software_state = c;
   c->texture_base[0] = c->texture_ptr[0] = c->tiny.matrix_stack[2];
@@ -208,6 +219,8 @@ BOOL W32API wglDeleteContext(HGLRC h) {
   gl_selected_context = 0;
   ZB_close(c->zb);
   gl_drop_state(c);
+  gl_free_list(&c->pending_list);
+  gl_texture_cleanup(c);
   gl_release_present(c);
   release_share(c->share);
   if (c->back)
@@ -259,8 +272,7 @@ BOOL W32API wglShareLists(HGLRC a, HGLRC b) {
   release_share(d->share);
   d->share = s->share;
   d->share->refs++;
-  for (unsigned i = 0; i < 2; i++)
-    d->sw.unit[i].texture = &d->share->textures[0];
+  gl_sync_textures(d);
   return 1;
 }
 /* Font bridge GGO_BITMAP rows are DWORD-aligned, MSB first, top-down;

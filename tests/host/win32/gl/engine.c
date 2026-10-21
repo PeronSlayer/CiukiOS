@@ -16,6 +16,7 @@ int w32_strcmp(const char *a, const char *b) { return strcmp(a, b); }
 static const char *const extensions[] = {
 #include "extensions.inc"
 };
+void gl_amendment_tests(HDC);
 static HDC dc;
 static HGLRC rc;
 static unsigned pixels[W32_GL_WIDTH * W32_GL_HEIGHT];
@@ -250,6 +251,7 @@ int main(int argc, char **argv) {
   pixel_formats();
   lifecycle();
   upload();
+  gl_amendment_tests(dc);
   for (unsigned scene = 0; scene < W32_GL_SCENES; scene++) {
     uint64_t start = now();
     unsigned count = benchmark ? 10 : 1;

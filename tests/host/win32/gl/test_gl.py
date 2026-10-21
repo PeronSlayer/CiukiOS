@@ -21,7 +21,7 @@ class GLTests(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c']
+  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
   cls.binary=out/('engine' if sanitize else 'benchmark')
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
@@ -54,12 +54,16 @@ class GLTests(unittest.TestCase):
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   actual={m[1]:int(m[2]) for m in re.finditer(r'GL_SCENE scene=(\d+) checksum=(\d+)',p.stdout)}
   self.assertEqual(actual,json.loads((HERE/'goldens.json').read_text()))
+  amendment={m[1]:int(m[2]) for m in re.finditer(r'GL_AMENDMENT name=(\S+) checksum=(\d+)',p.stdout)}
+  self.assertEqual(amendment,json.loads((HERE/'amendment-goldens.json').read_text()))
 
 if __name__=='__main__':
  if '--benchmark' in sys.argv:
   GLTests.build(sanitize=False)
   subprocess.run([str(GLTests.present)],check=True)
-  p=subprocess.run([str(GLTests.binary),'--benchmark'],check=True,capture_output=True,text=True);print(p.stdout,end='')
+  p=subprocess.run([str(GLTests.binary),'--benchmark'],capture_output=True,text=True);print(p.stdout,end='');assert p.returncode==0,p.stderr
   actual={m[1]:int(m[2]) for m in re.finditer(r'GL_SCENE scene=(\d+) checksum=(\d+)',p.stdout)}
   assert actual==json.loads((HERE/'goldens.json').read_text()),actual
+  amendment={m[1]:int(m[2]) for m in re.finditer(r'GL_AMENDMENT name=(\S+) checksum=(\d+)',p.stdout)}
+  assert amendment==json.loads((HERE/'amendment-goldens.json').read_text()),amendment
  else:unittest.main()

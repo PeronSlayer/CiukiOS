@@ -93,9 +93,15 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
 }
 void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
   struct gl_context *c = tiny->software_state;
+  int point = a == b;
+  GLVertex ca = *a, cb = *b;
+  if (!gl_clip_line(c, &ca, &cb))
+    return;
+  a = &ca;
+  b = &cb;
   struct sw_vertex x, y;
   if (convert(c, a, &x) && convert(c, b, &y)) {
-    if (a == b) {
+    if (point) {
       int n = (int)(c->zb->pointsize + 0.5f);
       if (n < 1)
         n = 1;
@@ -144,7 +150,14 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
       return 1;
     }
     unsigned row = gl_pixel_stride(w, GL_COLOR_INDEX, GL_BITMAP, c->unpack[0]);
-    bytes = row * (unsigned)h;
+    uint64_t n = (uint64_t)(h ? h - 1 + c->unpack[2] : 0) * row +
+                 (w ? (unsigned)(c->unpack[3] + w + 7) / 8 : 0);
+    if (n > 16 * 1024 * 1024) {
+      gl_error(c, GL_OUT_OF_MEMORY);
+      c->compile_failed = 1;
+      return 1;
+    }
+    bytes = a[6].p ? (unsigned)n : 0;
     pointer = 6;
     break;
   }
@@ -178,6 +191,30 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
   case ID_glTexParameterfv:
     bytes = 4;
     pointer = 2;
+    break;
+  case ID_glCallLists:
+    pointer = 2;
+    bytes =
+        (unsigned)a[0].i *
+        (a[1].i >= GL_2_BYTES && a[1].i <= GL_4_BYTES ? a[1].i - GL_2_BYTES + 2
+         : a[1].i == GL_BYTE || a[1].i == GL_UNSIGNED_BYTE   ? 1
+         : a[1].i == GL_SHORT || a[1].i == GL_UNSIGNED_SHORT ? 2
+                                                             : 4);
+    break;
+  case ID_glPrioritizeTextures:
+    pointer = 1;
+    bytes = (unsigned)a[0].i * 4;
+    second = bytes;
+    break;
+  case ID_glEdgeFlagv:
+    bytes = 1;
+    break;
+  case ID_glTexGendv:
+  case ID_glTexGenfv:
+  case ID_glTexGeniv:
+    pointer = 2;
+    bytes =
+        (a[1].i == GL_TEXTURE_GEN_MODE ? 1 : 4) * (id == ID_glTexGendv ? 8 : 4);
     break;
   case ID_glClipPlane:
     bytes = 32;
@@ -227,13 +264,13 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
     }
     uint64_t n = (uint64_t)gl_pixel_stride(c->unpack[1] ? c->unpack[1] : w, f,
                                            type, c->unpack[0]) *
-                     (h + c->unpack[2]) +
-                 (uint64_t)c->unpack[3] * b;
+                     (h ? h - 1 + c->unpack[2] : 0) +
+                 (uint64_t)(c->unpack[3] + w) * b;
     if (n > 16 * 1024 * 1024) {
       gl_error(c, GL_OUT_OF_MEMORY);
       return 1;
     }
-    bytes = a[pointer].p ? (unsigned)n : 0;
+    bytes = w && h && a[pointer].p ? (unsigned)n : 0;
     break;
   }
   case ID_glCompressedTexImage2DARB:
@@ -257,11 +294,13 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
   }
   if (bytes > 16 * 1024 * 1024) {
     gl_error(c, GL_OUT_OF_MEMORY);
+    c->compile_failed = 1;
     return 1;
   }
   struct gl_command *p = gl_alloc(sizeof(*p) + bytes + second);
   if (!p) {
     gl_error(c, GL_OUT_OF_MEMORY);
+    c->compile_failed = 1;
     return 1;
   }
   p->id = id;
@@ -277,16 +316,17 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
     w32_copy(p->data, a[pointer].p, bytes);
     p->arg[pointer].p = p->data;
     if (second) {
-      if (!a[1].p) {
+      unsigned second_pointer = rectangle ? 1 : 2;
+      if (!a[second_pointer].p) {
         gl_dealloc(p);
         gl_error(c, GL_INVALID_VALUE);
         return 1;
       }
-      w32_copy(p->data + bytes, a[1].p, second);
-      p->arg[1].p = p->data + bytes;
+      w32_copy(p->data + bytes, a[second_pointer].p, second);
+      p->arg[second_pointer].p = p->data + bytes;
     }
   }
-  struct gl_list *l = &c->share->lists[c->compiling];
+  struct gl_list *l = &c->pending_list;
   if (l->tail)
     l->tail->next = p;
   else
@@ -459,8 +499,9 @@ static int enabled(struct gl_context *c, int n) {
     return c->sw.scissor;
   case GL_FOG:
     return c->sw.fog;
+  case GL_TEXTURE_1D:
   case GL_TEXTURE_2D:
-    return c->sw.unit[c->active].enabled;
+    return c->texture_enabled[c->active][n == GL_TEXTURE_2D];
   case GL_LIGHTING:
     return c->tiny.lighting_enabled;
   case GL_CULL_FACE:
@@ -468,6 +509,10 @@ static int enabled(struct gl_context *c, int n) {
   case GL_NORMALIZE:
     return c->tiny.normalize_enabled;
   default:
+    if (n >= GL_CLIP_PLANE0 && n < GL_CLIP_PLANE0 + 6)
+      return c->clip_enabled[n - GL_CLIP_PLANE0];
+    if (n >= GL_TEXTURE_GEN_S && n <= GL_TEXTURE_GEN_Q)
+      return c->texgen[c->active][n - GL_TEXTURE_GEN_S].enabled;
     if (n >= GL_LIGHT0 && n < GL_LIGHT0 + MAX_LIGHTS)
       return c->tiny.lights[n - GL_LIGHT0].enabled;
     return -1;
@@ -549,8 +594,12 @@ static int get(struct gl_context *c, int name, double *v) {
   case GL_CLIENT_ACTIVE_TEXTURE_ARB:
     *v = GL_TEXTURE0_ARB + c->client;
     break;
+  case GL_MAX_CLIP_PLANES:
+    *v = 6;
+    break;
+  case GL_TEXTURE_BINDING_1D:
   case GL_TEXTURE_BINDING_2D:
-    *v = c->sw.unit[c->active].texture->name;
+    *v = c->binding[c->active][name == GL_TEXTURE_BINDING_2D]->name;
     break;
   case GL_DEPTH_BITS:
     *v = 16;
@@ -712,7 +761,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
 #define I(n) ((int)a[n].i)
 #define F(n) ((float)a[n].f)
 #define P(n) (a[n].p)
-  if (c->tiny.in_begin) {
+  if ((c->compiling && !c->replaying) ? c->compile_begin : c->tiny.in_begin) {
     int legal = 0;
     switch (id) {
 #include "begin.inc"
@@ -785,7 +834,6 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   case ID_glDeleteTextures:
   case ID_glIsTexture:
   case ID_glAreTexturesResident:
-  case ID_glPrioritizeTextures:
   case ID_glGetTexImage:
   case ID_glGetTexLevelParameteriv:
   case ID_glGetTexLevelParameterfv:
@@ -795,6 +843,12 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   case ID_glGetTexEnvfv:
   case ID_glGetCompressedTexImageARB:
     gl_textures(c, id, a, &result);
+    return result;
+  case ID_glFlush:
+  case ID_glFinish:
+    return result;
+  case ID_glRenderMode:
+    gl_state(c, id, a, &result);
     return result;
   case ID_glPushClientAttrib:
   case ID_glPopClientAttrib:
@@ -809,8 +863,14 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   case ID_glReadPixels:
     gl_pixels(c, id, a, &result);
     return result;
+  case ID_glGetClipPlane:
+  case ID_glGetTexGendv:
+  case ID_glGetTexGenfv:
+  case ID_glGetTexGeniv:
+    gl_geometry(c, id, a, &result);
+    return result;
   case ID_glIsList:
-    result.i = I(0) > 0 && I(0) < GL_LISTS && c->share->lists[I(0)].head;
+    result.i = I(0) > 0 && I(0) < GL_LISTS && c->share->lists[I(0)].reserved;
     return result;
   case ID_glGenLists: {
     int n = I(0);
@@ -855,8 +915,8 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
       gl_error(c, GL_INVALID_ENUM);
       return result;
     }
-    gl_free_list(&c->share->lists[I(0)]);
-    c->share->lists[I(0)].reserved = 1;
+    c->pending_list = (struct gl_list){.reserved = 1};
+    c->compile_failed = c->compile_begin = 0;
     c->compiling = I(0);
     c->compile_mode = I(1);
     return result;
@@ -864,6 +924,13 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     if (!c->compiling) {
       gl_error(c, GL_INVALID_OPERATION);
       return result;
+    }
+    if (c->compile_failed)
+      gl_free_list(&c->pending_list);
+    else {
+      gl_free_list(&c->share->lists[c->compiling]);
+      c->share->lists[c->compiling] = c->pending_list;
+      c->pending_list = (struct gl_list){0};
     }
     c->compiling = 0;
     return result;
@@ -1090,6 +1157,10 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   case ID_glDrawArrays:
   case ID_glDrawElements: {
+    if (I(0) < GL_POINTS || I(0) > GL_POLYGON) {
+      gl_error(c, GL_INVALID_ENUM);
+      return result;
+    }
     int count = I(2), first = I(1);
     if (id == ID_glDrawElements) {
       count = I(1);
@@ -1118,24 +1189,52 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   }
   case ID_glLockArraysEXT:
-    if (I(0) < 0 || I(1) < 0 || a[0].i + a[1].i > 0x7fffffff)
+    if (I(0) < 0 || I(1) <= 0 || a[0].i + a[1].i > 0x7fffffff)
       gl_error(c, GL_INVALID_VALUE);
+    else if (c->locked_count)
+      gl_error(c, GL_INVALID_OPERATION);
     else {
       c->locked_first = I(0);
       c->locked_count = I(1);
     }
     return result;
   case ID_glUnlockArraysEXT:
-    c->locked_first = c->locked_count = 0;
+    if (!c->locked_count)
+      gl_error(c, GL_INVALID_OPERATION);
+    else
+      c->locked_first = c->locked_count = 0;
     return result;
   default:
     break;
   }
+  unsigned validation = gl_validate(c, id, a);
+  if (validation) {
+    gl_error(c, validation);
+    return result;
+  }
+  if (c->compiling && !c->replaying) {
+    if (id == ID_glEnd && !c->compile_begin) {
+      gl_error(c, GL_INVALID_OPERATION);
+      return result;
+    }
+    if (id == ID_glBegin)
+      c->compile_begin = 1;
+    if (id == ID_glEnd)
+      c->compile_begin = 0;
+  }
   if (gl_record(c, id, a))
+    return result;
+  if (gl_geometry(c, id, a, &result))
     return result;
   if (family(c, id, a))
     return result;
   switch (id) {
+  case ID_glEdgeFlag:
+    glEdgeFlag(!!I(0));
+    break;
+  case ID_glEdgeFlagv:
+    glEdgeFlag(!!*(const GLboolean *)P(0));
+    break;
   case ID_glBegin:
     if (I(0) < GL_POINTS || I(0) > GL_POLYGON)
       gl_error(c, GL_INVALID_ENUM);
@@ -1164,13 +1263,21 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     c->list_base = I(0);
     break;
   case ID_glCallLists:
-    if (I(0) < 0 || !size(I(1)) || !P(2)) {
+    if (I(0) < 0 || (!size(I(1)) && (I(1) < GL_2_BYTES || I(1) > GL_4_BYTES)) ||
+        (I(0) && !P(2))) {
       gl_error(c, GL_INVALID_VALUE);
       break;
     }
-    for (int i = 0; i < I(0); i++)
-      gl_execute_list(c, c->list_base +
-                             (unsigned)read_component(P(2), I(1), i, 0));
+    for (int i = 0; i < I(0); i++) {
+      unsigned index = 0;
+      if (I(1) >= GL_2_BYTES && I(1) <= GL_4_BYTES) {
+        unsigned n = I(1) - GL_2_BYTES + 2;
+        for (unsigned j = 0; j < n; j++)
+          index = (index << 8) | ((const uint8_t *)P(2))[i * n + j];
+      } else
+        index = (unsigned)read_component(P(2), I(1), i, 0);
+      gl_execute_list(c, c->list_base + index);
+    }
     break;
   case ID_glActiveTextureARB:
     if (I(0) < GL_TEXTURE0_ARB || I(0) > GL_TEXTURE0_ARB + 1)
@@ -1245,8 +1352,10 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     case GL_FOG:
       c->sw.fog = e;
       break;
+    case GL_TEXTURE_1D:
     case GL_TEXTURE_2D:
-      c->sw.unit[c->active].enabled = e;
+      c->texture_enabled[c->active][I(0) == GL_TEXTURE_2D] = e;
+      gl_sync_textures(c);
       break;
     case GL_LIGHTING:
     case GL_NORMALIZE:
@@ -1261,7 +1370,11 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
         glDisable(I(0));
       break;
     default:
-      if (I(0) >= GL_LIGHT0 && I(0) < GL_LIGHT0 + MAX_LIGHTS) {
+      if (I(0) >= GL_CLIP_PLANE0 && I(0) < GL_CLIP_PLANE0 + 6)
+        c->clip_enabled[I(0) - GL_CLIP_PLANE0] = e;
+      else if (I(0) >= GL_TEXTURE_GEN_S && I(0) <= GL_TEXTURE_GEN_Q)
+        c->texgen[c->active][I(0) - GL_TEXTURE_GEN_S].enabled = e;
+      else if (I(0) >= GL_LIGHT0 && I(0) < GL_LIGHT0 + MAX_LIGHTS) {
         if (e)
           glEnable(I(0));
         else
@@ -1492,18 +1605,20 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     }
     break;
   }
-  case ID_glFlush:
-  case ID_glFinish:
   case ID_glHint:
+    break;
   case ID_glClearStencil:
   case ID_glStencilFunc:
   case ID_glStencilMask:
   case ID_glStencilOp:
+    gl_error(c, GL_INVALID_OPERATION);
     break;
   case ID_glDrawBuffer:
   case ID_glReadBuffer:
-    if (I(0) != GL_FRONT && I(0) != GL_BACK && I(0) != GL_FRONT_AND_BACK)
-      gl_error(c, GL_INVALID_ENUM);
+    /* This beta has one software render buffer. Do not silently alias a
+     * request for a distinct front/back buffer to the current render target. */
+    if (I(0) != (c->format <= 2 ? GL_BACK : GL_FRONT))
+      gl_error(c, GL_INVALID_OPERATION);
     break;
   default:
     if (id == ID_glBitmap || id == ID_glDrawPixels || id == ID_glReadPixels ||

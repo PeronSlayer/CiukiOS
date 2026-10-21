@@ -254,8 +254,9 @@ void glopVertex(GLParam* p) {
 		}
 	}
 	v->tex_coord1 = c->current_tex_coord1;
- if(c->software_triangle){if(c->software_texture_matrix[0])gl_M4_MulV4(&v->tex_coord,c->software_texture_matrix[0],&c->current_tex_coord);if(c->software_texture_matrix[1])gl_M4_MulV4(&v->tex_coord1,c->software_texture_matrix[1],&c->current_tex_coord1);}
- if(c->software_triangle){float *model=&c->matrix_stack_ptr[0]->m[0][0];v->ec.Z=v->coord.X*model[8]+v->coord.Y*model[9]+v->coord.Z*model[10]+v->coord.W*model[11];}
+ if(c->software_vertex) c->software_vertex(c,v);
+ else if(c->software_triangle){if(c->software_texture_matrix[0])gl_M4_MulV4(&v->tex_coord,c->software_texture_matrix[0],&c->current_tex_coord);if(c->software_texture_matrix[1])gl_M4_MulV4(&v->tex_coord1,c->software_texture_matrix[1],&c->current_tex_coord1);}
+ if(c->software_triangle)gl_M4_MulV4(&v->ec,c->matrix_stack_ptr[0],&v->coord);
 	/* precompute the mapping to the viewport */
 #if TGL_OPTIMIZATION_HINT_BRANCH_COST < 2
 	if (v->clip_code == 0)

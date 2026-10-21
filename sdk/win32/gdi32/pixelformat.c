@@ -48,15 +48,30 @@ int W32API ChoosePixelFormat(HDC h, const PIXELFORMATDESCRIPTOR *p) {
 int W32API GetPixelFormat(HDC h) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
-  return d ? d->pixel_format : 0;
+  return d ? (d->window_pixel_format ? *d->window_pixel_format
+                                     : d->pixel_format)
+           : 0;
 }
 BOOL W32API SetPixelFormat(HDC h, int n, const PIXELFORMATDESCRIPTOR *p) {
   GDI_GUARD;
   (void)p;
   struct dc *d = gdi_dc(h);
-  if (!d || d->pixel_format || n < 1 || n > 4)
+  if (!d || n < 1 || n > 4)
     return 0;
-  d->pixel_format = n;
+  int *slot =
+      d->window_pixel_format ? d->window_pixel_format : &d->pixel_format;
+  if (*slot)
+    return 0;
+  *slot = n;
+  return 1;
+}
+/* Bind once while USER holds the owning window alive with its DC count. */
+BOOL W32API w32_gdi_gl_window_format(HDC h, int *slot) {
+  GDI_GUARD;
+  struct dc *d = gdi_dc(h);
+  if (!d || d->memory || !slot || d->window_pixel_format || d->pixel_format)
+    return 0;
+  d->window_pixel_format = slot;
   return 1;
 }
 BOOL W32API w32_gdi_gl_size(HDC h, DWORD *w, DWORD *height) {
