@@ -187,7 +187,3 @@ BOOL host_animate(DWORD palette) {
   return AnimatePalette(palette, 1, 1, &entry);
 }
 void host_gdi_exit(void) { w32_gdi_process_exit(); }
-
-int host_pixel_format(DWORD dc, int set) {
-  return set ? SetPixelFormat(dc,set,0) : GetPixelFormat(dc);
-}

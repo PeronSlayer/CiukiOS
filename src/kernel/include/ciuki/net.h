@@ -40,6 +40,9 @@ struct netif_driver {
     void (*mac)(struct netif *, uint8_t address[6]);
     bool (*interrupt)(struct netif *);
     void (*irq_enable)(struct netif *, bool);
+    /* Thread-only under the device mutex. No reset or TX-buffer reuse.
+     * NULL fails closed; EBUSY leaves the previous receive mode intact. */
+    int (*promiscuous)(struct netif *, bool);
 };
 struct net_stats {
     uint64_t rx_packets, rx_bytes, rx_errors, rx_dropped;
@@ -61,6 +64,7 @@ struct netif {
     uint8_t address[6], phy, eeprom_bits, next_page;
     enum net_link link;
     gen_t generation;
+    uint32_t bridge_epoch; /* latched link loss/revocation, including down/up */
     uint32_t dma_phys;
     uint8_t *dma;
     int claims[3];
@@ -77,7 +81,7 @@ struct netif {
     unsigned tx_head;
     uint64_t tx_deadline[4], link_deadline;
     bool ready, running, stopping, quarantined, touched, irq_attached;
-    bool irq_pending, fault_pending, servicing;
+    bool irq_pending, fault_pending, servicing, promiscuous;
     const char *reason;
 };
 extern const struct netif_driver net_e100, net_rtl8139, net_ne2000;
@@ -93,6 +97,7 @@ void net_tx_complete(struct netif *, unsigned slot, bool ok);
  * DMA allocation, PCI admission, init, start and rollback are production. */
 int netif_attach(struct netif *, const struct pci_func *, const struct net_io *);
 int netif_transmit(struct netif *, gen_t, const void *, unsigned length);
+int netif_promiscuous(struct netif *, gen_t, bool);
 int netif_stop(struct netif *);
 void netif_quarantine(struct netif *, const char *reason);
 bool netif_irq(struct netif *);

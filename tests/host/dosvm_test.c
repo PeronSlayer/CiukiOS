@@ -569,6 +569,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 #undef as_map
 #undef memcpy
 #undef memset
+#include "dosvm_network_seams.inc"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
 #include "../../src/kernel/vm/dpmi_dispatch.c"

@@ -67,6 +67,7 @@ class Media(unittest.TestCase):
         for event in ('successful', 'superseded', 'aborted', 'failure'):
             self.assertIn(event + ' id=', trace)
         self.assertIn('LIVE allocations=0', trace)
+        golden(self, 'cdaudio.txt', trace)
 
     def test_cue_bin_tracks_and_pregaps(self):
         for name, starts, count in [('mixed', [0, 8, 44], 74), ('audio', [0, 40], 75),
@@ -140,6 +141,12 @@ class Media(unittest.TestCase):
             self.assertLessEqual(abs((got - frames[0]) - want * rate // 1000000), 1)
         self.assertEqual(end, 1500000)
         self.assertIn('LIVE allocations=0', trace)
+
+    def test_mci_file_identity_ownership(self):
+        exe = compile_program('ownership', [HERE / 'ownership_test.c', *MCI_SOURCES])
+        stdout, trace = self.run_harness(exe, 'ownership')
+        self.assertIn('PASS MCI file identity conflicts=16 independent=16', stdout)
+        self.assertIn('OWNERSHIP alias-conflicts=16 distinct-opens=16 allocations=0', trace)
 
     def avi_program(self):
         import sys
@@ -353,6 +360,102 @@ class Media(unittest.TestCase):
         self.assertEqual(lib.AVIStreamSampleToTime(None, 1), -1)
         lib.AVIStreamRelease(v)
         lib.AVIFileRelease(f)
+
+    def test_avi_fixed_audio_samples_and_index_bounds(self):
+        import struct
+        lib = self.codec_library()
+        P, I, U = C.c_void_p, C.c_int32, C.c_uint32
+        for name in ('AVIFileRelease', 'AVIStreamRelease'):
+            getattr(lib, name).argtypes = [P]
+        lib.test_file.argtypes = [P, U]
+        lib.AVIFileOpenA.argtypes = [C.POINTER(P), C.c_char_p, U, P]
+        lib.AVIFileGetStream.argtypes = [P, C.POINTER(P), U, I]
+        lib.AVIStreamLength.argtypes = [P]
+        lib.AVIStreamInfoA.argtypes = [P, P, I]
+        lib.AVIStreamRead.argtypes = [P, I, I, P, I, C.POINTER(I), C.POINTER(I)]
+
+        def opened(data):
+            raw = C.create_string_buffer(data, len(data))
+            lib.test_file(raw, len(data))
+            f = P()
+            result = lib.AVIFileOpenA(C.byref(f), b'authored.avi', 0, None)
+            return raw, f, result
+
+        original, _, pcm = F.avi_clip(audio='pcm')
+        # Relative and absolute idx1 offsets must describe the same samples.
+        variants = [original, F.avi_index(original[:original.index(b'idx1')], True)]
+        # Restore RIFF size after removing idx1 for the unindexed case.
+        bare = bytearray(original[:original.index(b'idx1')])
+        struct.pack_into('<I', bare, 4, len(bare) - 8)
+        variants.append(bytes(bare))
+        # Interleave grouped into LIST rec, indexed both as a list and as
+        # individual chunks. Offsets still originate at the movi FOURCC.
+        origin = original.index(b'movi')
+        end = origin + struct.unpack_from('<I', original, origin - 4)[0]
+        record = F.chunk(b'LIST', b'rec ' + original[origin+4:end])
+        entries = bytearray(original[end+8:])
+        for at in range(0, len(entries), 16):
+            struct.pack_into('<I', entries, at+8, struct.unpack_from('<I', entries, at+8)[0] + 12)
+        entries = struct.pack('<4sIII', b'rec ', 1, 4, len(record)-8) + entries
+        variants.append(F.chunk(b'RIFF', original[8:origin-8] + F.chunk(b'LIST', b'movi' + record) +
+                                F.chunk(b'idx1', entries)))
+        for data in variants:
+            raw, f, result = opened(data)
+            self.assertEqual(result, 0)
+            stream = P()
+            self.assertEqual(lib.AVIFileGetStream(f, C.byref(stream), int.from_bytes(b'auds', 'little'), 0), 0)
+            try:
+                self.assertEqual(lib.AVIStreamLength(stream), len(pcm) // 2)
+                info = C.create_string_buffer(140)
+                self.assertEqual(lib.AVIStreamInfoA(stream, info, 140), 0)
+                self.assertEqual(struct.unpack_from('<I', info, 32)[0], len(pcm) // 2)
+                # Seek inside a chunk and cross into the next interleave.
+                for start, count, cap, want_samples in ((1460, 20, 40, 20),
+                                                        (1, 3000, 14, 7),
+                                                        (len(pcm)//2-2, 99, 198, 2),
+                                                        (5, -1, 4096, 1465),
+                                                        (0, 0, 0, 0)):
+                    out = C.create_string_buffer(max(cap, 1))
+                    nb, ns = I(), I()
+                    self.assertEqual(lib.AVIStreamRead(stream, start, count, out, cap, C.byref(nb), C.byref(ns)), 0)
+                    self.assertEqual((nb.value, ns.value), (want_samples * 2, want_samples))
+                    self.assertEqual(out.raw[:nb.value], pcm[start*2:(start+want_samples)*2])
+                nb, ns = I(), I()
+                self.assertNotEqual(lib.AVIStreamRead(stream, 0, 1, C.create_string_buffer(1), 1,
+                                                      C.byref(nb), C.byref(ns)), 0)
+                self.assertEqual((nb.value, ns.value), (0, 0))
+            finally:
+                lib.AVIStreamRelease(stream)
+            self.assertEqual(lib.AVIFileGetStream(f, C.byref(stream), int.from_bytes(b'vids', 'little'), 0), 0)
+            try:
+                first = F.video_frame(0)[0]
+                out = C.create_string_buffer(len(first))
+                nb, ns = I(), I()
+                self.assertEqual(lib.AVIStreamRead(stream, 0, 6, out, len(out), C.byref(nb), C.byref(ns)), 0)
+                self.assertEqual((nb.value, ns.value, out.raw), (len(first), 1, first))
+            finally:
+                lib.AVIStreamRelease(stream)
+                lib.AVIFileRelease(f)
+
+        index = original.index(b'idx1')
+        mutations = []
+        for offset, value in ((index+4, 15), (index+8, 0x63643039),  # fractional entry, invalid stream
+                              (index+16, 0xffffffff), (index+20, 0xffffffff)):
+            bad = bytearray(original)
+            struct.pack_into('<I', bad, offset, value)
+            mutations.append(bad)
+        # An index pointing into a payload, and duplicate/out-of-order entries.
+        bad = bytearray(original)
+        struct.pack_into('<I', bad, index+16, 5)
+        mutations.append(bad)
+        bad = bytearray(original)
+        bad[index+24:index+40] = bad[index+8:index+24]
+        mutations.append(bad)
+        for data in mutations:
+            raw, f, result = opened(bytes(data))
+            if f:
+                lib.AVIFileRelease(f)
+            self.assertNotEqual(result, 0)
 
     def test_avi_fuzz(self):
         exe = self.avi_program()

@@ -263,7 +263,7 @@ int W32API DrawDibSetPalette(uintptr_t h, uintptr_t palette) {
 int W32API DrawDibChangePalette(uintptr_t h, int start, int count,
                                 const uint8_t *entries) {
   struct drawdib *d = get(h);
-  if (!d || start < 0 || count < 0 || start + count > 256 ||
+  if (!d || start < 0 || count < 0 || start > 256 || count > 256 - start ||
       (count && !entries))
     return 0;
   for (int i = 0; i < count; i++) { /* PALETTEENTRY rgb -> RGBQUAD bgr */

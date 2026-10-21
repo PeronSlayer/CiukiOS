@@ -11,11 +11,52 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ciuki/net.h>
+#include <ciuki/entropy.h>
+#include <reent.h>
+#include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 #undef stdout
 extern FILE *stdout; /* Linux fixture stream; target newlib uses _reent. */
 #define CHECK(e) do { if(!(e)){printf("FAIL SDK line %u: %s\n",__LINE__,#e);abort();} }while(0)
 static int error_value, poll_mode, dns_status, dns_error;
 static unsigned calls, dns_calls;
+static unsigned entropy_calls, entropy_again, wait_calls, largest_entropy;
+static bool interrupt_wait, split_entropy, failure_fixture;
+static uint64_t elapsed_ns;
+static bool clock_failure;
+int clock_gettime(clockid_t id,struct timespec *t)
+{
+    CHECK(id==CLOCK_MONOTONIC);if(clock_failure){errno=EIO;return -1;}
+    memset(t,0,sizeof(*t));t->tv_sec=elapsed_ns/1000000000;t->tv_nsec=elapsed_ns%1000000000;return 0;
+}
+static int entropy_error, net_error, net_open_error, net_close_error;
+static unsigned net_opened, net_closed;
+int open(const char *path,int flags,...)
+{
+    CHECK(!strcmp(path,"/dev/net") && flags==O_RDONLY);net_opened++;
+    if(net_open_error){errno=net_open_error;return -1;}return 7;
+}
+int close(int fd)
+{
+    CHECK(fd==7);net_closed++;
+    if(net_close_error){errno=net_close_error;return -1;}return 0;
+}
+int ciuki_devctl(int fd,uint32_t op,void *buffer,uint32_t bytes)
+{
+    struct ciuki_net_state *s=buffer;
+    CHECK(fd==7 && op==NET_GET_STATE && bytes==96 && s->version==1 && s->size==96 && !s->present &&
+          !s->reserved0[0] && !s->reserved0[1] && !s->reserved1 && !s->rx_frames && !s->tx_frames);
+    if(net_error){errno=net_error;return -1;}
+    s->present=1;s->link=CIUKI_NET_LINK_UP;s->state=CIUKI_NET_RUNNING;s->address_configured=1;return 0;
+}
+int _getentropy_r(struct _reent *,void *,size_t);
+int nanosleep(const struct timespec *t,struct timespec *remaining)
+{
+    CHECK(!t->tv_sec && t->tv_nsec==10000000 && !remaining);wait_calls++;elapsed_ns+=10000000;
+    if(interrupt_wait){errno=EINTR;return -1;}return 0;
+}
 static const void *pointers[64];
 static unsigned pointer_index;
 uint32_t cu_test_pointer(const void *p)
@@ -25,6 +66,14 @@ int *__errno(void) { return &error_value; }
 uint32_t ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint32_t s,uint32_t i,uint32_t p)
 {
     calls++;CHECK(!s && !i && !p);
+    if(nr==CIUKI_SYS_GETENTROPY) {
+        CHECK(!d && c<=256);if(failure_fixture)CHECK(elapsed_ns<=5000000000ULL);entropy_calls++;if(c>largest_entropy)largest_entropy=c;
+        if(split_entropy && entropy_calls==301){memset(cu_test_address(b),0x42,c);return 0;}
+        if(entropy_again){entropy_again--;return (uint32_t)-EAGAIN;}
+        if(entropy_error)return (uint32_t)-entropy_error;
+        if(c && !b)return (uint32_t)-EFAULT;
+        if(c)memset(cu_test_address(b),0x42,c);return 0;
+    }
     if(nr==CIUKI_SYS_POLL){
         CHECK(c<=128);struct pollfd *fds=c ? cu_test_address(b) : NULL;
         CHECK((int32_t)d==1 || (int32_t)d==-1 || d==0);
@@ -44,8 +93,19 @@ uint32_t ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint32_t s,u
     }
     CHECK(false);return (uint32_t)-ENOSYS;
 }
-int main(void)
+int main(int argc,char **argv)
 {
+    if(argc>1){
+        unsigned char bytes[768];entropy_again=1000000;failure_fixture=true;
+        if(!strcmp(argv[1],"entropy-split"))split_entropy=true;
+        if(!strcmp(argv[1],"entropy-permanent")){entropy_again=0;entropy_error=EIO;}
+        if(!strcmp(argv[1],"entropy-clock"))clock_failure=true;
+        if(!strcmp(argv[1],"entropy-interrupt"))interrupt_wait=true;
+        if(!strcmp(argv[1],"entropy-u32"))(void)arc4random();
+        else if(!strcmp(argv[1],"entropy-uniform"))(void)arc4random_uniform(10);
+        else arc4random_buf(bytes,sizeof(bytes));
+        CHECK(0); /* All failure fixtures must terminate the process. */
+    }
     setvbuf(stdout,NULL,_IOLBF,0);
     struct in_addr ip={0};char text[16];errno=EIO;
     CHECK(inet_pton(AF_INET,"192.0.2.9",&ip)==1 && ntohl(ip.s_addr)==0xc0000209 && errno==EIO);
@@ -80,5 +140,27 @@ int main(void)
     h=(struct addrinfo){0};CHECK(getaddrinfo("a","http",&h,&answer)==EAI_SERVICE && getaddrinfo("a","65536",&h,&answer)==EAI_SERVICE);
     CHECK(!strcmp(gai_strerror(EAI_AGAIN),"Temporary resolver failure"));freeaddrinfo(NULL);
     puts("PASS SDK socket records/errno, IPv4 conversion, select translation and getaddrinfo ownership/status/subset");
+    unsigned char random[769];memset(random,0,sizeof(random));unsigned old=entropy_calls;
+    CHECK(getentropy(random,257)==-1 && errno==EINVAL && entropy_calls==old);
+    CHECK(!getentropy(NULL,0));CHECK(getentropy(NULL,1)==-1 && errno==EFAULT);
+    entropy_again=1;CHECK(getentropy(random,1)==-1 && errno==EAGAIN && !wait_calls && !random[0]);
+    entropy_again=2;CHECK(!ciuki_entropy_wait(random,256) && wait_calls==2 && random[255]==0x42 && !random[256]);
+    interrupt_wait=true;entropy_again=1;CHECK(ciuki_getentropy_wait(random,1)==-1 && errno==EINTR);interrupt_wait=false;
+    struct _reent reent={0};entropy_error=EIO;
+    CHECK(_getentropy_r(&reent,random,1)==-1 && reent._errno==EIO);
+    old=entropy_calls;CHECK(_getentropy_r(&reent,random,257)==-1 && reent._errno==EINVAL && entropy_calls==old);
+    entropy_error=0;errno=EIO;old=entropy_calls;
+    arc4random_buf(random,768);CHECK(entropy_calls==old+3 && errno==EIO && largest_entropy==256 && !random[768]);
+    entropy_again=2;old=wait_calls;arc4random_buf(random,1);CHECK(wait_calls==old+2 && errno==EIO);
+    CHECK(arc4random()==0x42424242 && errno==EIO && arc4random_uniform(1)==0 && arc4random_uniform(10)==4);
+    struct ciuki_net_state network;
+    CHECK(!ciuki_net_status(&network) && network.present && network.link==CIUKI_NET_LINK_UP && network.address_configured && net_closed==1);
+    CHECK(ciuki_net_status(NULL)==-1 && errno==EFAULT && net_opened==1);
+    net_error=EIO;net_close_error=EBADF;
+    CHECK(ciuki_net_status(&network)==-1 && errno==EIO && net_closed==2);
+    net_error=0;CHECK(ciuki_net_status(&network)==-1 && errno==EBADF && net_closed==3);
+    net_close_error=0;net_open_error=ENODEV;
+    CHECK(ciuki_net_status(&network)==-1 && errno==ENODEV && net_closed==3);
+    puts("PASS SDK entropy syscall/chunk bounds, nonblocking EAGAIN, wait/interruption, reentrant errno, arc4random; /dev/net helper lifecycle and errno");
     return 0;
 }

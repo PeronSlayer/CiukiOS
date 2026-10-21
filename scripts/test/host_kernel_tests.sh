@@ -8,6 +8,8 @@ export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
 # f3-49: standalone production DOS bridge/FAT/VFS harness, no guest image.
 bash "$root/tests/host/dos/run_file_api.sh"
+python3 "$root/tests/host/entropy/run.py"
+python3 "$root/tests/host/entropy/run.py" --kernel
 
 python3 "$root/tests/host/record_scope_test.py"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_hardware_check.py
@@ -116,7 +118,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 "$out/rtc_test"
 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" -o "$out/kernel_sync_test"
+    -I "$root/src/kernel/include" "$root/tests/host/kernel_sync_test.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/kernel_sync_test"
 "$out/kernel_sync_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$root/src/kernel/include" "$root/tests/host/pci_irq_test.c" -o "$out/pci_irq_test"
@@ -145,7 +148,8 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out) { memset(out, 0, sizeo
 (out / "fwqueue_i8042_test.c").write_text(source)
 PY
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" -o "$out/i8042_test"
+    -I "$root/src/kernel/include" "$out/fwqueue_i8042_test.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/i8042_test"
 "$out/i8042_test"
 
 python3 "$root/scripts/test/iso_fixtures.py" --out "$out/optical" --joliet > "$out/optical-manifest.json"
@@ -156,7 +160,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/fat.c" "$root/src/kernel/fs/path.c" \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/src/kernel/fs/ntfs_fs.c" "$root/src/kernel/fs/ntfs_ro.c" "$root/src/kernel/fs/mount.c" \
     "$root/src/kernel/core/bootlog.c" "$root/src/kernel/probes/fat_probes.c" \
-    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" -o "$out/ata_test"
+    "$root/src/kernel/lib/sha256.c" "$root/src/kernel/lib/fmt.c" \
+    "$root/tests/host/entropy/unavailable_stub.c" -o "$out/ata_test"
 
 # M1: production PMM/VMM/user mappings, ledger and generation-safe pins.
 # Context violations are diagnostic in production; strictness is opt-in here.
@@ -275,54 +280,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # F3 lifecycle, BIOS/disk preflight and record channel. Keep paging production
 # functions unchanged; replace only PMM and architectural hardware operations.
-python3 - "$root" "$out" <<'PY'
-from pathlib import Path
-import subprocess
-import sys
-root, out = map(Path, sys.argv[1:])
-source = (root / "src/kernel/core/vmm.c").read_text()
-aspace = source.split("/* ---- user address spaces ---- */", 1)[1]
-# F0-44: charge actual production teardown PTE/PDE visits, including holes.
-aspace = aspace.replace("uint32_t old = pt[j];", "AS_AUDIT_CHARGE(1000); uint32_t old = pt[j];")
-aspace = aspace.replace("if (pd[i] & PTE_P) {", "AS_AUDIT_CHARGE(1000); if (pd[i] & PTE_P) {")
-(out / "dosvm_aspace.inc").write_text(
-    "#ifndef AS_AUDIT_CHARGE\n#define AS_AUDIT_CHARGE(ns) ((void)0)\n#endif\n" + aspace + "\n#undef AS_AUDIT_CHARGE\n")
-# F4-13: replay the exact production cursor functions beside VM sources,
-# replacing only the register transport, as for the paging functions above.
-source = (root / "src/kernel/drivers/ac97.c").read_text()
-helpers = source[source.index("static unsigned ac97_offset("):source.index("static void stage_log(")]
-cursor = source[source.index("int ac97_observe("):source.index("int ac97_publish(")]
-(out / "dosvm_audio_cursor.inc").write_text(helpers + cursor)
-# f3-02: the exact bytes src/kernel/arch/font.asm includes (offset 64,
-# 95 widths + 95 glyphs x 16 u16 rows), for the VM's synthetic ROM fonts.
-font = (root / "assets/fonts/native/INCONSOL.CFN").read_bytes()[64:64 + 95 + 95 * 32]
-assert len(font) == 95 + 95 * 32
-rows = ",\n".join(", ".join(str(b) for b in font[i:i + 24]) for i in range(0, len(font), 24))
-(out / "dosvm_font.inc").write_text("const uint8_t font_cfn_regular[%d] = {\n%s\n};\n" % (len(font), rows))
-# F3-25: execute the exact DOS MZ relocation validator, without assembling
-# a kernel or an image. The harness supplies ES:0 through the private disk.
-source = (root / "src/boot/floppy_stage1.asm").read_text()
-start = source.index("int21_exec_validate_mz_reloc_table:\n")
-end = source.index("int21_exec_validate_mz_reloc_target:\n", start)
-validator = out / "dosvm_mz_reloc.asm"
-validator.write_text("bits 16\norg 0\ncall int21_exec_validate_mz_reloc_table\nint3\n" + source[start:end])
-binary = out / "dosvm_mz_reloc.bin"
-subprocess.run(["nasm", "-f", "bin", str(validator), "-o", str(binary)], check=True)
-data = binary.read_bytes()
-(out / "dosvm_mz_reloc.inc").write_text("static const uint8_t mz_reloc_code[] = {" +
-    ",".join(str(b) for b in data) + "};\n")
-# F3-27: execute the production boot sector through the active directory,
-# after the real worker's startup diagnostic has yielded. No image needed.
-boot = out / "dosvm_boot.bin"
-subprocess.run(["nasm", "-f", "bin", str(root / "src/boot/full_boot.asm"),
-                "-DFAT_TOTAL_SECTORS=262144", "-o", str(boot)], check=True)
-data = boot.read_bytes()
-assert len(data) == 512 and data[510:] == b"\x55\xaa"
-(out / "dosvm_boot.inc").write_text("static const uint8_t startup_boot_sector[] = {" +
-    ",".join(str(b) for b in data) + "};\n")
-PY
-# dosvm_test.c supplies the bounded program-provider fixture for both the
-# sanitized and optimized DOSVM link paths below.
+python3 "$root/tests/host/vm/prepare_lifecycle.py" "$root" "$out"
+# dosvm_test.c supplies the bounded program-provider fixture.
 # The VGA models and the retained presenter (reference oracle) are separate
 # translation units, exactly as the kernel links them.
 # f4-05: the VM audio sources, the integer OPL3 port and the f4-01 mixer are
@@ -332,6 +291,9 @@ for unit in vm_source opl3 mixer; do
         -include "$root/tests/host/vm_audio_shim.h" -I "$root/src/kernel/include" \
         -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_audio_$unit.o"
 done
+pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm")"
+plain_pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm" --plain)"
+network_sources=("$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
 guest_cpu=()
 if [[ -f /usr/include/x86emu.h ]]; then
     guest_cpu=(-DCIUKI_DOSVM_GUEST_CPU "$root/tests/host/dosvm_guest_cpu.c" -lx86emu)
@@ -339,12 +301,12 @@ fi
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
-    "$root/tests/host/dosvm_uaddr_model.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
-    "${guest_cpu[@]}" -o "$out/dosvm_test"
+    "${guest_cpu[@]}" "$pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_test"
 "$out/dosvm_test"
 CIUKI_VM_DISK_TRACE=1 "$out/dosvm_test"
 # Replay the actual default maximum-cache VM's charges through production
@@ -363,12 +325,12 @@ done
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_test.c" \
-    "$root/tests/host/dosvm_uaddr_model.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" \
-    "${guest_cpu[@]}" -o "$out/dosvm_audio_cost_test"
+    "${guest_cpu[@]}" "$plain_pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_audio_cost_test"
 CIUKI_VM_AUDIO_COST=1 "$out/dosvm_audio_cost_test"
 
 # f3-33: aggregate production exit costs with fake CPU trap transport.
@@ -376,11 +338,12 @@ CIUKI_VM_AUDIO_COST=1 "$out/dosvm_audio_cost_test"
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_exit_bench.c" \
-    "$root/tests/host/dosvm_uaddr_model.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
-    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" -o "$out/dosvm_exit_bench"
+    "$out/dosvm_cost_vm_source.o" "$out/dosvm_cost_opl3.o" "$out/dosvm_cost_mixer.o" \
+    "$plain_pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_exit_bench"
 "$out/dosvm_exit_bench"
 
 # f3-16: production window/dirty-page replay and presenter costs. Sequential
@@ -388,11 +351,12 @@ clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast \
 clang -std=c17 -O2 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$root/src/kernel/include" -I "$out" "$root/tests/host/dosvm_present_bench.c" \
-    "$root/tests/host/dosvm_uaddr_model.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
-    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" -o "$out/dosvm_present_bench"
+    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
+    "$pool" -pthread -Wl,-u,pool_fixture_start -o "$out/dosvm_present_bench"
 "$out/dosvm_present_bench"
 
 # f3-02 migrated VGA model vectors (legacy test_virtual_vga.c, unchanged).

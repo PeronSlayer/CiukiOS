@@ -61,7 +61,7 @@ class LoaderModelTests(unittest.TestCase):
                 model.boot_minimum(cpu,memory,controller)
         for entries,options in (([],{}),(memory,{'complete':False}),(memory,{'signature':'bad'}),
                                 ([dict(base=2**64-1,length=2,type=1)],{})):
-            with self.assertRaisesRegex(ValueError,'valid BIOS E820'):
+            with self.assertRaisesRegex(ValueError,'BIOS E820 memory map'):
                 model.boot_minimum(cpu,entries,**options)
         # Refusal order matches assembly: no VBE/disk work after a CPU/map failure.
         with self.assertRaisesRegex(ValueError,'i686 CPU'):
@@ -77,9 +77,15 @@ class LoaderModelTests(unittest.TestCase):
         halt=platform.split('minimum_halt:',1)[1].split('; Optional firmware',1)[0]
         self.assertIn('cli',halt);self.assertIn('hlt',halt)
         self.assertNotIn('int 0x16',halt);self.assertNotIn('int 0x13',halt)
-        for message in (model.CPU_MINIMUM_ERROR,model.VBE_MINIMUM_ERROR):
-            self.assertIn(message,platform)
-        self.assertIn(model.E820_MINIMUM_ERROR,(ROOT/'src/boot/ciukldr/memory.inc').read_text())
+        # minimum_halt prints the shared prefix, then the caller's message tail.
+        prefix='CIUKI: this PC needs '
+        self.assertIn("minimum_prefix db '"+prefix+"',0",platform)
+        self.assertIn('mov si, minimum_prefix',halt)
+        memory=(ROOT/'src/boot/ciukldr/memory.inc').read_text()
+        for message,source in ((model.CPU_MINIMUM_ERROR,platform),(model.VBE_MINIMUM_ERROR,platform),
+                               (model.E820_MINIMUM_ERROR,memory)):
+            self.assertTrue(message.startswith(prefix),message)
+            self.assertIn("db '"+message[len(prefix):]+"',0",source)
 
     def test_menu_safe_sources_are_monotonic(self):
         config = model.boot_options('safe=1 safe=0')
@@ -88,6 +94,13 @@ class LoaderModelTests(unittest.TestCase):
         self.assertTrue(model.menu_choice('n', fw_cfg['safe']))
         self.assertTrue(model.menu_choice('S'))
         self.assertFalse(model.menu_choice('N'))
+
+    def test_software_acceleration_boot_option(self):
+        self.assertEqual(model.boot_options('safe=0\r\naccel=0 serial=1'),
+                         {'safe':False,'serial':True,'mode':None})
+        for token in ('accel=1','accel=00','xaccel=0','accel=0x','accel='):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                model.boot_options(token)
 
     def test_hardware_replay(self):
         for machine in ('t23','e500'):

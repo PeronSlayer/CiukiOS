@@ -422,6 +422,13 @@ union mci_parms {
  * continued operation is still busy); the end calls host->complete() with
  * MCI_NOTIFY_SUCCESSFUL/FAILURE, a cancellation host->abort(). */
 struct mci_device;
+/* Embedded in the owner: queuing cleanup never needs an allocation. The
+ * worker retries under the lifetime lock after mixer callbacks drain. */
+struct mci_cleanup {
+  struct mci_cleanup *next;
+  int (*run)(void *);
+  void *context;
+};
 struct mci_host {
   uint32_t version;
   void (*begin)(struct mci_device *);
@@ -432,6 +439,7 @@ struct mci_host {
   void (*lock)(void);
   void (*unlock)(void);
   void (*wake)(void);
+  void (*defer)(struct mci_cleanup *);
 };
 struct mci_driver {
   uint32_t version;
@@ -443,13 +451,17 @@ struct mci_driver {
   void (*close)(struct mci_device *);
   void (*service)(struct mci_device *, uint32_t now_ms);
 };
-#define MCI_BOUNDARY_VERSION 1u
+#define MCI_BOUNDARY_VERSION 2u
 struct mci_device {
   uint32_t id, devtype, creator, shareable, auto_open;
+  uint64_t generation;
+  uint32_t completion_error;
+  char resource[260];
   char alias[260], type[32], element[260];
   const struct mci_driver *driver;
   const struct mci_host *host;
   void *data;
+  struct mci_device *shared_next;
   uintptr_t notify; /* pending notification window, 0 = none */
   uint32_t notify_pending, busy, busy_serial;
   uintptr_t yield;

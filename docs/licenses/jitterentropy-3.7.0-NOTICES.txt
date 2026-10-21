@@ -1,0 +1,15 @@
+Jitterentropy-library 3.7.0 — Stephan Müller, 2014–2026
+Upstream: https://github.com/smuellerDD/jitterentropy-library/tree/v3.7.0
+Archive pin, size, hash and imported files: config/jitterentropy.json
+Dual license: BSD-3-Clause OR GPL-2.0-only (upstream LICENSE.bsd/LICENSE.gplv2).
+Full notices: jitterentropy-3.7.0-LICENSE.bsd and jitterentropy-3.7.0-LICENSE.gplv2.
+
+Kernel import: base, GCD, health, noise and SHA3 implementation, compiled at -O0.
+Source is extracted only into build/external; no libc or internal timer thread.
+Ciuki's platform header replaces the OS-specific header through a forced include.
+The recorded patch adds finite deadline/round checks at measurement boundaries
+and an optional buffered raw-delta observer before health testing/filtering.
+It does not change conditioning, health cutoffs, OSR or the randomized workloads.
+The SHA3 unit in this pin includes SHAKE-256/XDRBG conditioning.
+Ciuki files outside the upstream tree carry their own license identifiers.
+No target entropy qualification or NIST validation is claimed.

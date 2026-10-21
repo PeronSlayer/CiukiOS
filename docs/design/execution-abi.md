@@ -2150,10 +2150,52 @@ The additive records in `ciuki/w32_core.h` are version 1:
 
 Transport errors are NTSTATUS (negative errno for malformed/faulting transport);
 API errors are in `error`, not disguised as successful results. Output words
-must be zero on entry. File buffers contain either bytes, an 832-byte
+must be zero on entry. File buffers contain either bytes, an 844-byte
 `ciuki_w32_file_info` or a 120-byte `ciuki_w32_disk_info`. Names in these records
 are VFS UTF-8; kernel32 converts CP1252 paths and results. Packed FAT calendar
-fields are converted to FILETIME in user mode. Existing VM/section/wait records
+fields are converted to FILETIME in user mode.
+
+F5-12B amendment 4 appends `uint64_t file_id` at byte 832 and
+`uint32_t volume_serial` at byte 840 to the file-info record. Its wire alignment
+is four bytes on both the host adapter and i686; the original 832-byte prefix
+is unchanged. All file-info producers and consumers use the new 844-byte size;
+no action numbers, argument records or native F2 records change. Handle STAT
+copies the FAT boot-sector volume serial from the mounted volume. Amendment 5
+derives the file index from the owning short directory entry:
+`((uint64_t)directory_first_cluster << 32 | entry_index) + 1`. The volume
+serial supplies the volume part of the identity tuple; adding one reserves
+zero for unavailable identities, including FAT16's fixed root directory.
+Long names and 8.3 aliases agree, distinct live files differ (including empty
+files), and closing/reopening with unrelated opens in between cannot change
+the index. The recyclable cache serial remains internal to VFS page/handle
+identity. A rename that relocates the owning entry changes the exported index;
+a rename preserving that entry's location preserves it. FAT indices are not
+persistent across renames or deletion/recreation, as Microsoft documents.
+On unlink, a retained identity receives an independent session generation
+tagged with bit 63 (outside FAT directory-cluster location indices), so a new
+file reusing the slot differs from every retained unlinked file. That tag lasts
+for the retained identity's lifetime; if its 63-bit sequence is exhausted the
+query returns zero identity fields. These tags are not on-disk identifiers.
+The identity lock protects the validity/mount-media generation check and both
+output fields as one snapshot. Expired identities and quarantined volumes
+return zero fields, including expiry between open and handle STAT.
+Path-only STAT and enumeration do not acquire an identity. Providers without
+a retained FAT identity, including device nodes, leave both fields zero; pipe
+handles retain their existing unsupported handle-STAT error.
+
+Kernel32 splits `file_id` into `nFileIndexHigh/Low` and copies `volume_serial`
+to `dwVolumeSerialNumber` in `GetFileInformationByHandle`. This follows
+Microsoft's [handle query](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
+and [BY_HANDLE_FILE_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
+identity tuple; Microsoft notes that FAT IDs derive from the containing
+directory/entry location and are not guaranteed stable over time. MCI refuses
+file opens with a zero file index
+as `MCIERR_FILE_READ`, even when the query succeeded, rather than comparing
+unknown identities. A zero volume serial alone is valid when the index is
+nonzero. This supplies the resource key for the nonsharable waveform/sequence
+files required by [MCI_OPEN](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open).
+
+Existing VM/section/wait records
 are reused without renumbering. `SYSTEM/TERMINATE_THREAD` with a handle queues
 termination at a user-return boundary. Its private cancellation form uses
 handle=0 and extra=TID within the caller's process, allowing CreateThread to
@@ -2349,7 +2391,9 @@ share ntdll's recursive per-process transport lock and request sequence.
 
 Directive f6-10 assigns native calls 78–89; call 90 is reserved for the later
 configuration service and currently returns ENOSYS. Calls 75–77 and W32=96
-retain their assignments. The normative register table, layouts, constants,
+retain their assignments. f6-16 adds getentropy=91; Amendment 1 keeps 90
+reserved ENOSYS and uses the existing /dev/net status query. The normative
+register table, layouts, constants,
 validation order and closed error sets are in
 [network-contract.md](network-contract.md#approved-extension-syscalls-7890-2026-10-20).
 The `ciuki/abi.h` records are shared with the SDK and checked by the i686
@@ -2362,6 +2406,7 @@ must be zero. Syscall failures use the existing negative errno convention.
 | 83–87 | sendto/recvfrom records, shutdown, local/peer sockname, sockopt record |
 | 88–89 | mixed descriptor poll, bounded IPv4 resolver record |
 | 90 | netctl reserved (ENOSYS) |
+| 91 | getentropy(B=buffer, C=bytes), bytes <=256; 0 on success |
 
 The address is a 16-byte IPv4 sockaddr (u16 family, network-order u16 port,
 network-order u32 address, eight zero bytes). The 40-byte I/O and option
@@ -2373,6 +2418,31 @@ Close invalidates the fd immediately and defers bounded transport teardown.
 Interruptible user waits run outside the serialized netconn worker. Outputs
 are pinned before receive/accept commits; user pointers never reach lwIP.
 Kernel lwIP and SDK timeval types remain separate (SDK time stays 64 bit).
+
+### Kernel entropy (f6-16, 2026-10-21)
+
+Call 91 writes exactly C bytes and returns zero, or negative EINVAL (C>256
+or nonzero unused registers), EFAULT (invalid/nonwritable output), or EAGAIN
+(unseeded, health failure, or fresh reseed overdue). A zero-length request
+succeeds without a buffer. It never blocks waiting for entropy and leaves
+output unchanged on readiness refusal. Writable user access is rechecked
+transactionally at copyout. The SDK `ciuki_entropy_wait` retries EAGAIN
+with interruptible 10 ms nanosleeps and may wait indefinitely (the old
+`ciuki_getentropy_wait` name remains an alias). `arc4random*` has a shared
+5 s monotonic EAGAIN deadline per call and aborts with a diagnostic on expiry
+or a permanent error. The entropy source, 256-bit estimated seeding threshold, health tests, boot guard safety,
+reseed limits and qualification boundary are specified in
+[kernel-entropy.md](kernel-entropy.md). No weak fallback is permitted for
+getentropy or arc4random.
+
+Per Amendment 1, call 90 remains reserved ENOSYS. The SDK helper
+`ciuki_net_status(struct ciuki_net_state *)` opens `/dev/net` read-only,
+initializes the existing 96-byte versioned record, issues NET_GET_STATE,
+and closes the descriptor on every completed open. `present`, `link`,
+`state`, `address_configured` and `ipv4` classify local availability without
+sending DNS traffic. The record and all earlier syscall assignments remain
+unchanged. DNS server details, configuration mutations and applet policy
+remain outside this delivery.
 
 ### F3-52 DOS window frame wait (2026-10-20, pending lead review)
 

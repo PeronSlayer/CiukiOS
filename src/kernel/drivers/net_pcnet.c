@@ -133,5 +133,5 @@ static enum net_link pc_link(struct netif *d)
 }
 const struct netif_driver net_pcnet = {
     "pcnet", pc_match, 32, 0, NIC_DMA_PAGES, pc_idle, pc_init_device, pc_start, pc_stop,
-    pc_transmit, pc_poll, pc_link, nic_mac, pc_interrupt, pc_irq_enable
+    pc_transmit, pc_poll, pc_link, nic_mac, pc_interrupt, pc_irq_enable, 0
 };
