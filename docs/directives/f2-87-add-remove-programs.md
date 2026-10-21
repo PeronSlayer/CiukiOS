@@ -72,3 +72,7 @@ Ranked findings:
 
 **Merge verdict: do not merge until findings 1–3 are resolved, the removal lifecycle is corrected, and the affected host suites pass.**
 Lead decisions: (3) GAME_REMOVE requires the management capability delegated by the supervisor to the desktop and the Control Panel only (document it in the execution contract); (4) refuse removal while any VM of that game runs, on either DOS kernel, before the first write; (5) a pending-removal record under C:\System makes cleanup idempotent and resumable; (10) the DOS installer route goes through the desktop's existing DOS launch path so the VM delegation holds.
+
+## Amendment 2 (lead, 2026-10-21, from the lead's suite run on the amendment-1 delivery; logs in `build/lead/` of this worktree)
+
+Two harnesses still do not link: (1) `tests/host/desktop` `AppCaseReplayTests` (`setUpClass`): `apps/desktop/desktop.c:1508` has an undefined reference to `ciuki_dosvm' — the replay harness needs the stub/implementation of the new DOS VM game operation wrapper like the other desktop harnesses; (2) `scripts/test/host_kernel_tests.sh`: the rule producing `the dosvm harness` fails with `src/kernel/vm/dosvm.c:1321: undefined reference to dosvm_game_program` — every rule that compiles `dosvm.c` must link `dosvm_programs.c` or a fixture backend. Both suites must reach their end (desktop discovery and the kernel script). Report in "Amendment 2".
