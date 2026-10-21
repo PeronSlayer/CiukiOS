@@ -142,6 +142,12 @@ class Media(unittest.TestCase):
         self.assertEqual(end, 1500000)
         self.assertIn('LIVE allocations=0', trace)
 
+    def test_mci_file_identity_ownership(self):
+        exe = compile_program('ownership', [HERE / 'ownership_test.c', *MCI_SOURCES])
+        stdout, trace = self.run_harness(exe, 'ownership')
+        self.assertIn('PASS MCI file identity conflicts=16 independent=16', stdout)
+        self.assertIn('OWNERSHIP alias-conflicts=16 distinct-opens=16 allocations=0', trace)
+
     def avi_program(self):
         import sys
         sys.path.insert(0, str(ROOT))

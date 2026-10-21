@@ -24,7 +24,7 @@ def build(out,base,flags):
              'CreateFileA':28,'GetFileSize':8,'ReadFile':20,'SetFilePointer':16,
              'GlobalMemoryStatus':4,'CreateFileMappingA':24,'MapViewOfFile':20,
              'FindResourceA':12,'LoadResource':8,'LockResource':4,'SizeofResource':8,
-             'GetPrivateProfileIntA':16,'GetFullPathNameA':16}
+             'GetPrivateProfileIntA':16,'GetFileInformationByHandle':8}
     definition=out/'audio-kernel32.def'
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n'+''.join(f' {n}@{a}\n' for n,a in imports.items()))
     subprocess.run(['llvm-dlltool','-m','i386','-k','-d',str(definition),'-l',str(out/'audio-kernel32.lib')],check=True)

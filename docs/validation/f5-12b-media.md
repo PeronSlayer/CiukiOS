@@ -234,3 +234,40 @@ remain as supplied by the repository scripts; unrestricted LSan reruns are
 left to the lead. After discovery, only the host wait interleaving and codec
 mutation cadence were adjusted and their focused commands rerun; production
 sources remain the state used by the apps build and discovery.
+
+
+## Amendment 3: file ownership identity (2026-10-21)
+
+Microsoft's [MCI_OPEN reference](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-open)
+requires both opens to allow sharing and makes MCIWAVE/MCISEQ files
+nonsharable. Its [GetFileInformationByHandle reference](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle)
+and [BY_HANDLE_FILE_INFORMATION reference](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information)
+specify comparison of the volume serial and both file-index halves to
+identify two paths referring to one file. FAT's `fat_lookup` already accepts
+either the long name or the short alias of one directory entry.
+
+The MCI consumer uses those three handle-information fields instead of
+lexically normalised file paths. A private allocation wraps `mci_device`,
+preserving its driver boundary layout and version. It owns a read/shared-read
+handle until device close, including sequencers whose driver closes its
+input after caching it. Failed opens release that handle and do not claim an
+alias. Identity-query failure returns `MCIERR_FILE_READ`; file devices do not
+fall back to path spelling. The existing physical CD slot ownership remains
+in its driver.
+
+The host regression models long/8.3 spellings with hard links to authored
+WAV/MIDI fixtures. Both opening orders and all four sharing-flag combinations
+reject the second alias. Separate files containing identical bytes and
+similar names open independently; closing the first owner permits reopening
+the alternate spelling. Tests check allocation and file-handle balance,
+including metadata-query and parser failure.
+
+**Provider dependency:** in the `ee911112` base, kernel32's
+`GetFileInformationByHandle` explicitly returns zero serial/index fields;
+`ciuki_w32_file_info` has no identity fields. Consequently this consumer
+requires provider plumbing before integration on CiukiOS. Approval to extend
+the provider is pending because the directive limits this continuation to
+Amendment 3 and otherwise freezes the base. The host adapter's real POSIX
+device/inode identities validate the consumer only. Exact verification
+results and this remaining dependency are recorded in
+`build/codex/f5-12b-report.md`.

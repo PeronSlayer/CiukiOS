@@ -198,6 +198,16 @@ def write_all(folder):
     (folder / 'msadpcm.wav').write_bytes(ms)
     (folder / 'msadpcm.pcm').write_bytes(ms_pcm)
     (folder / 'song.mid').write_bytes(midi_song())
+    # Two directory spellings of one identity, as with a FAT LFN/8.3 pair.
+    # A separate byte-identical file prevents content/name based ownership.
+    for source, long_name, short_name, distinct in (
+            ('tone.wav', 'Long Tone.wav', 'LONGTO~1.WAV', 'Long Tone 2.wav'),
+            ('song.mid', 'Long Song.mid', 'LONGSO~1.MID', 'Long Song 2.mid')):
+        (folder / long_name).write_bytes((folder / source).read_bytes())
+        alias = folder / short_name
+        alias.unlink(missing_ok=True)
+        alias.hardlink_to(folder / long_name)
+        (folder / distinct).write_bytes((folder / source).read_bytes())
     (folder / 'song.rmi').write_bytes(rmid(midi_song()))
     (folder / 'smpte.mid').write_bytes(midi_smpte())
     (folder / 'broken.mid').write_bytes(midi_song()[:40])

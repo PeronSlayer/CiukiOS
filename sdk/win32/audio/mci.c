@@ -22,6 +22,20 @@ extern void wa_deliver(const struct wa_event *);
 
 #define MCI_DEVICES 32u
 static struct mci_device *devices[MCI_DEVICES];
+/* Core-only ownership state leaves the MCI driver boundary unchanged. Keep
+ * the file open for the device lifetime, including sequencers which cache
+ * their input and close the driver's read handle immediately after parsing. */
+struct owned_device {
+  struct mci_device device;
+  HANDLE file;
+  BY_HANDLE_FILE_INFORMATION identity;
+};
+static void free_device(struct mci_device *d) {
+  struct owned_device *owned = (struct owned_device *)d;
+  if (owned->file && owned->file != K32_INVALID)
+    CloseHandle(owned->file);
+  wa_free(d);
+}
 static uint64_t next_generation;
 /* Waiters own their result on the calling thread's stack. Completion
  * survives auto-close and an immediate reuse of the numerical device ID. */
@@ -295,7 +309,7 @@ static void close_locked(struct mci_device *d) {
   }
   d->driver->close(d);
   devices[d->id - 1] = 0;
-  wa_free(d);
+  free_device(d);
 }
 
 /* MCI_OPEN: element/type/alias resolution, then the driver's open. */
@@ -387,21 +401,6 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
                  ? MCIERR_DUPLICATE_ALIAS
                  : MCIERR_DEVICE_OPEN;
   }
-  char resource[260] = {0};
-  if (element[0] && t->devtype != MCI_DEVTYPE_CD_AUDIO) {
-    uint32_t n = GetFullPathNameA(element, sizeof(resource), resource, 0);
-    if (!n || n >= sizeof(resource)) return MCIERR_DEVICE_LENGTH;
-    for (unsigned i = 0; resource[i]; i++)
-      if (resource[i] == '/') resource[i] = '\\';
-    for (unsigned i = 0; i < MCI_DEVICES; i++) {
-      struct mci_device *other = devices[i];
-      if (!other || other->devtype != t->devtype ||
-          !mci_strieq(resource, other->resource)) continue;
-      if (t->devtype == MCI_DEVTYPE_WAVEFORM_AUDIO ||
-          t->devtype == MCI_DEVTYPE_SEQUENCER || !other->shareable ||
-          !(flags & MCI_OPEN_SHAREABLE)) return MCIERR_DEVICE_OPEN;
-    }
-  }
   const struct mci_driver *driver;
   uint32_t error = load_driver(t, &driver);
   if (error)
@@ -411,13 +410,39 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
     slot++;
   if (slot == MCI_DEVICES)
     return MCIERR_OUT_OF_MEMORY;
-  struct mci_device *d = wa_alloc(sizeof(*d));
-  if (!d)
+  struct owned_device *owned = wa_alloc(sizeof(*owned));
+  if (!owned)
     return MCIERR_OUT_OF_MEMORY;
-  w32_fill(d, 0, sizeof(*d));
+  w32_fill(owned, 0, sizeof(*owned));
+  struct mci_device *d = &owned->device;
+  if (element[0] && t->devtype != MCI_DEVTYPE_CD_AUDIO) {
+    owned->file = CreateFileA(element, 0x80000000u, 1, 0, 3, 0, 0);
+    if (owned->file == K32_INVALID) {
+      free_device(d);
+      return MCIERR_FILE_NOT_FOUND;
+    }
+    if (!GetFileInformationByHandle(owned->file, &owned->identity)) {
+      free_device(d);
+      return MCIERR_FILE_READ;
+    }
+    for (unsigned i = 0; i < MCI_DEVICES; i++) {
+      struct mci_device *other = devices[i];
+      if (!other || other->devtype != t->devtype) continue;
+      struct owned_device *previous = (struct owned_device *)other;
+      if (!previous->file ||
+          owned->identity.serial != previous->identity.serial ||
+          owned->identity.index_high != previous->identity.index_high ||
+          owned->identity.index_low != previous->identity.index_low) continue;
+      if (t->devtype == MCI_DEVTYPE_WAVEFORM_AUDIO ||
+          t->devtype == MCI_DEVTYPE_SEQUENCER || !other->shareable ||
+          !(flags & MCI_OPEN_SHAREABLE)) {
+        free_device(d);
+        return MCIERR_DEVICE_OPEN;
+      }
+    }
+  }
   d->id = slot + 1;
   d->generation = ++next_generation;
-  copy_text(d->resource, sizeof(d->resource), resource);
   d->devtype = t->devtype;
   d->creator = GetCurrentThreadId();
   d->shareable = !!(flags & MCI_OPEN_SHAREABLE);
@@ -432,7 +457,7 @@ static uint32_t open_locked(uint32_t flags, struct mci_open *p, int automatic,
   error = driver->open(d, flags, p) & 0xffff;
   if (error) {
     devices[slot] = 0;
-    wa_free(d);
+    free_device(d);
     return error;
   }
   p->device = d->id;

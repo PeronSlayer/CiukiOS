@@ -8,6 +8,7 @@ uint32_t now_ms;
 long live_allocations;
 int key_down;
 unsigned mci_notifications, mci_last_notify;
+unsigned mci_identity_fail;
 static _Thread_local int depth, in_sleep;
 void hf_lock(void);
 void hf_unlock(void);
@@ -188,6 +189,12 @@ DWORD GetFileSize(HANDLE h, DWORD *high) {
     return 4096;
   long n = hf_size((int)((uintptr_t)h - 0x1000));
   return n < 0 ? 0xffffffffu : (DWORD)n;
+}
+BOOL GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *info) {
+  if (mci_identity_fail) return 0;
+  memset(info, 0, sizeof(*info));
+  return !hf_identity((int)((uintptr_t)h - 0x1000), &info->serial,
+                      &info->index_high, &info->index_low);
 }
 BOOL CloseHandle(HANDLE h) {
   if (h != BANK && (uintptr_t)h >= 0x1000 && (uintptr_t)h < 0x2000)
