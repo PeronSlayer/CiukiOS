@@ -417,9 +417,11 @@ class SyntheticFixture(unittest.TestCase):
         dos = builder()
         with self.assertRaises(ValueError):
             dos.write_fat16(self.root / 'work/bad.img', b'\0' * 510 + b'\x55\xaa', b'', {'/A/B/C.TXT': b'x'}, directories=['/A'])
-        # Default arguments keep the canonical payload layout (SYSTEM first).
+        # The canonical payload keeps SYSTEM first and explicitly supplies all
+        # conformance directories, including one child per manifest case.
         source = (ROOT / 'scripts/build_dos_image.py').read_text()
-        self.assertIn('write_fat16(candidate, boot, loader, files)', source)
+        self.assertIn('write_fat16(candidate, boot, loader, files, directories=probe_directories)', source)
+        self.assertIn('probe_directories=("D48","D48TEST",*("D48TEST/"+r["tag"] for r in probe_manifest["cases"]))', source)
         self.assertIn('"/RUNREC.COM"', source)
         self.assertIn('"/CLILOOP.COM"', source)
 

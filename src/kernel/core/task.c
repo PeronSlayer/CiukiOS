@@ -70,7 +70,7 @@ static void rq_remove(struct task *t)
 
 static unsigned priority_base(struct task *t)
 {
-    static const uint8_t bases[P_COUNT] = { SCHED_DEVICE, SCHED_FOREGROUND, SCHED_NORMAL, 0, SCHED_HIGH };
+    static const uint8_t bases[P_COUNT] = { SCHED_DEVICE, SCHED_FOREGROUND, CIUKI_SCHED_NORMAL, 0, SCHED_HIGH };
     unsigned base = t->configured_priority ? t->configured_priority : bases[t->prio];
     if (t->focused && t->prio == P_NORMAL) base += 2;
     return base > SCHED_BOOST_CAP && t->prio != P_DEVICE ? SCHED_BOOST_CAP : base;
@@ -136,7 +136,7 @@ static void priority_update(struct task *t)
         unsigned io = t->base_priority + 1;
         t->io_priority = io > SCHED_BOOST_CAP ? SCHED_BOOST_CAP : io;
     }
-    unsigned p = t->device_demoted ? SCHED_NORMAL : t->base_priority;
+    unsigned p = t->device_demoted ? CIUKI_SCHED_NORMAL : t->base_priority;
     if (t->input_priority > p) p = t->input_priority;
     if (t->io_priority > p) p = t->io_priority;
     if (t->boosted && p < SCHED_BOOST_CAP) p = SCHED_BOOST_CAP;
@@ -294,7 +294,7 @@ static struct task *rq_pop(void)
     for (int p = SCHED_LEVELS - 1; p >= (int)SCHED_BOOST_CAP; p--)
         if (rq_head[p]) return rq_take(p);
     if (focus && focus->state == T_READY && focus_ticks < FOCUS_BUDGET &&
-        focus->effective_priority >= SCHED_NORMAL) {
+        focus->effective_priority >= CIUKI_SCHED_NORMAL) {
         /* A foreground native input boost or donated lock owner beats a VM. */
         for (int p = SCHED_BOOST_CAP - 1; p > (int)focus->effective_priority; p--)
             if (rq_head[p] && (p > (int)SCHED_FOREGROUND || rq_head[p]->input_priority || rq_head[p]->inherited_priority)) return rq_take(p);

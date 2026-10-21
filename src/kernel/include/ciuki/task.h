@@ -13,7 +13,8 @@ enum task_state { T_READY, T_RUNNING, T_BLOCKED, T_ZOMBIE, T_DEAD };
 /* Stable class encodings; larger internal levels below run first. */
 enum task_prio { P_DEVICE, P_INTERACTIVE, P_NORMAL, P_IDLE, P_HIGH, P_COUNT };
 #define SCHED_LEVELS 32u
-#define SCHED_NORMAL 7u
+/* A priority level, distinct from the host's SCHED_NORMAL policy. */
+#define CIUKI_SCHED_NORMAL 7u
 #define SCHED_FOREGROUND 9u
 #define SCHED_HIGH 13u
 #define SCHED_DEVICE 24u

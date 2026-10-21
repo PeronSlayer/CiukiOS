@@ -18,6 +18,12 @@ int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
 {(void)op;(void)c;assert(0);return -1;}
 void cfg_icon_forget(struct ciuki_settings *s,const char *name)
 {(void)s;(void)name;assert(0);}
+size_t cfg_format(const struct ciuki_settings *s,char *out,size_t cap)
+{(void)s;(void)out;(void)cap;assert(0);return 0;}
+int cfg_writer_submit(struct cfg_writer *w,const char *text,size_t length)
+{(void)w;(void)text;(void)length;assert(0);return -1;}
+int cfg_writer_result(struct cfg_writer *w,int *error)
+{(void)w;(void)error;assert(0);return -1;}
 static const char *fixture;
 static unsigned reads, interruptions;
 static int fail_open;
