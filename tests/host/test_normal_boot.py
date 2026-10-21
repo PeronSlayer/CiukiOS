@@ -46,7 +46,7 @@ NEGATIVE_LINES = {
     'CIUKI_TEST v=1 run=12345678 seq=000001 probe=boot event=BEGIN': 'test_record',
     'L:SELECT_SOURCE=fw_cfg': 'test_request_source',
     'L:SELECT_SOURCE=cfg': 'test_request_source',
-    'CIUKI: this PC needs VBE 2.0 or later for a linear framebuffer': 'loader_refusal',
+    'CIUKI: this PC needs VBE 2.0+ for a linear framebuffer': 'loader_refusal',
     'L:SELECT_ERROR': 'loader_refusal',
     'L:SAFE=1': 'safe_mode',
     '[supervisor] desktop unavailable: -2; console ready': 'desktop_unavailable',

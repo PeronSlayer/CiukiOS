@@ -29,6 +29,19 @@ static void test_kernel_choice(void)
     CHECK(!dosvm_valid(previous));
     CHECK(!dosvm_create(&config,&v) && v->info.key.generation!=previous.generation);
     destroy(v,false);empty();
+    /* New personality must not reuse reference sidecar or old COW identity,
+     * even when their synthetic base contents happen to be equal. */
+    config.kernel=2;config.base="C:\\SYSTEM\\DOS\\UNIFIED.IMG";
+    CHECK(dosvm_create(&config,&v)==-ENOENT && !v);empty();
+    unified_present=true;unified_checksum_missing=true;
+    CHECK(dosvm_create(&config,&v)==-ENOENT && !v);empty();
+    unified_checksum_missing=false;memset(unified_identity,'0',64);unified_identity[64]='\n';
+    CHECK(dosvm_create(&config,&v)==-FS_EIO && !v);empty();
+    memcpy(unified_identity,hash,64);
+    CHECK(!dosvm_create(&config,&v));
+    CHECK(v->disable_file_bridge && strstr(v->overlay_path,"G1K2") && strstr(v->overlay_path,hash));
+    CHECK(!strcmp(last_base,"C:\\SYSTEM\\DOS\\UNIFIED.IMG"));
+    destroy(v,false);empty();unified_present=false;
     reference_present=false;bundled_bytes=saved_bytes;
     puts("H51-06 kernel choice: PASS game/kernel/base-specific COW, missing/corrupt reference, close/relaunch ledgers");
 }

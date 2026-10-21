@@ -286,9 +286,11 @@ def readback(image, probes_manifest):
     return result
 
 
-def build_reference(out, system_files, directories, games_files=None, folder=RELEASE):
+def build_reference(out, system_files, directories, games_files=None, folder=RELEASE, *, guest=None):
     """Canonical build helper, called once by build_image; never by test runs."""
     reference,identity=reference_files(folder)
+    if guest is not None:
+        reference,identity=guest
     dos=module("d51_dos_build",ROOT/"scripts/build_dos_image.py")
     out=Path(out); out.parent.mkdir(parents=True,exist_ok=True)
     boot,boot_pin=installed_boot(folder)
@@ -302,8 +304,9 @@ def build_reference(out, system_files, directories, games_files=None, folder=REL
     mbr=reference_mbr()
     identity["mbr_sha256"]=sha(mbr)
     identity["boot"]=dict(boot_pin,installed_sha256=sha(bytes(boot)))
-    files["/D48/REF.JSN"]=(json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
-    dos.write_fat16(out,bytes(boot),b"",files,directories=directories,label="FREEDOS13",sectors=dos.SECTORS-REFERENCE_START)
+    files["/D48/UNI.JSN" if guest is not None else "/D48/REF.JSN"]=(json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
+    dos.write_fat16(out,bytes(boot),b"",files,directories=directories,
+                    label="CIUKIUNIFY" if guest is not None else "FREEDOS13",sectors=dos.SECTORS-REFERENCE_START)
     subprocess.run(["fsck.fat","-n",str(out)],check=True,stdout=subprocess.DEVNULL)
     for path,data in files.items():
         if read_file(out,path)!=data: raise ValueError("FreeDOS read-back mismatch: "+path)
