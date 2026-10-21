@@ -29,6 +29,7 @@ import fat_fixtures
 import iso_fixtures
 import ntfs_fixtures
 import dos_fixtures
+import dos_titles
 import win32_fixtures
 import win32_runner
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
@@ -516,7 +517,7 @@ def fixture_disks(case):
     # Manifest ordinals also cover nondisk fixtures; IDE connector numbers
     # start after the boot disk and must agree with the kernel disk ledger.
     usb=fixture_usb_disks(case)
-    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if index not in usb and (fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local') or win32_fixtures.is_disk(fixture))]
+    indices=[index for index,fixture in enumerate(case.get('fixtures',[])) if index not in usb and (fixture.get('generator') in ('mkfs.fat','mkntfs','dos-local','dos-title') or win32_fixtures.is_disk(fixture))]
     if len(indices)>3:raise res.Refusal('too many IDE fixture disks')
     if sum(f.get('generator')=='mkntfs' for f in case.get('fixtures',[]))>1:raise res.Refusal('one NTFS fixture disk per case')
     optical=[f for f in case.get('fixtures',[]) if optical_fixture(f)]
@@ -566,6 +567,12 @@ def prepare_fixtures(host,case,directory,image=None):
                                                   expected_dos_sha256=dos_image_identity(image) if image else None))
             except dos_fixtures.FixturesAbsent:raise
             except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('DOS workload fixture generation failed: '+str(e)) from e
+            item['ide_index']=disks[index]
+        elif fixture.get('generator')==dos_titles.GENERATOR:
+            try:item.update(dos_titles.generate(fixture,directory,index,ROOT,
+                                               expected_dos_sha256=dos_image_identity(image) if image else None))
+            except EvidenceNotRun:raise
+            except (ValueError,RuntimeError,OSError,subprocess.SubprocessError) as e:raise res.Refusal('DOS title fixture generation failed: '+str(e)) from e
             item['ide_index']=disks[index]
         elif fixture.get('generator')==win32_fixtures.GENERATOR:
             # f5-17B: the lead's local extraction of a verified title download,
@@ -1655,6 +1662,9 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
         if requested['probe']!=case['probe']:raise res.Refusal('suite selector/probe mismatch')
         request=f"f{requested['phase']}:{requested['probe']} run={requested['run']}"
         platform=None if source == 'cfg' else profile.get('platform') or requested['platform']
+        if requested.get('title'):
+            if platform:raise res.Refusal('DOS title selector does not accept a platform suffix')
+            request+=' title='+requested['title']
         if platform:request+=' platform='+platform
         if requested['safe']:request+=' safe=1'
         if requested.get('server'):request+=' server='+('desktop-v3' if requested.get('desktop_v3') else requested['server'])
@@ -1870,6 +1880,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # f5-17B: pins still pending or an unregistered probe end the case as
         # not_run before an overlay or a fixture image is created.
         if win32:win32_runner.precheck(case,ROOT)
+        if case.get('probe')=='title':
+            if len(case.get('fixtures',[]))!=1:raise res.Refusal('title requires one private fixture')
+            title=case['fixtures'][0].get('title')
+            dos_titles.validate({'schema_version':1,'titles':[title]})
+            if request != 'f3:title run='+run_id+' title='+title['id']:raise res.Refusal('selector/title mismatch')
+            dos_titles.ready(title,json.loads((ROOT/'config/dos-titles.json').read_text()))
         if shared_overlay is None:
             subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
         blkdebug_config(case,overlay.parent)
@@ -2246,11 +2262,15 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     # A FAT fixture disk may legitimately receive installer writes; its hash after the run is recorded only.
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)
-            if fixture.get('generator')=='dos-local' and fixture.get('path'):
+            if fixture.get('generator') in ('dos-local','dos-title') and fixture.get('path'):
                 try:
                     fixture['sha256_after']=sha(fixture['path'])
                     if fixture['sha256_after']!=fixture['sha256']:raise EvidenceError('DOS workload fixture changed during read-only case')
-                    if result['outcome']=='pass':dos_fixtures.verify_records(fixture,parser.records)
+                    if result['outcome']=='pass':
+                        if fixture['generator']=='dos-title':
+                            title=case['fixtures'][0]['title']
+                            result['dos_title']=dos_titles.parse_serial((directory/'serial.log').read_bytes(),run_id,title)
+                        else:dos_fixtures.verify_records(fixture,parser.records)
                     fixture['independent_comparison']='pass' if result['outcome']=='pass' else 'not_run'
                 except (OSError,ValueError) as e:
                     result['outcome']='fail';result['reason']=str(e)

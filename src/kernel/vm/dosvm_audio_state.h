@@ -111,6 +111,10 @@ struct dosvm_audio_queue {
 };
 
 struct dosvm_audio {
+    /* Lifetime cadence evidence survives the periodic diagnostic resets and
+     * guest DSP/OPL resets; released with this VM generation. */
+    uint64_t opl_writes;
+    uint32_t cadence_late_acks, cadence_irq_entries, cadence_irq_latency_max_us;
     uint64_t clock, ms;
     uint64_t advance_end; /* current tick's original 64 ms catch-up ceiling */
     bool clock_descheduled; /* sampled producer context, before worker dispatch */

@@ -1,0 +1,1873 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "name": "DOOM 1.9 shareware",
+      "year": 1993,
+      "publisher": "id Software",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: doom; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": true
+      },
+      "install": {
+        "layout": "package",
+        "pin": "doom",
+        "source": null,
+        "target": "DOOM",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "DOOM.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "quake",
+      "name": "Quake 1.06 shareware",
+      "year": 1996,
+      "publisher": "id Software",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: quake; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": true
+      },
+      "install": {
+        "layout": "package",
+        "pin": "quake",
+        "source": null,
+        "target": "QUAKE",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "QUAKE.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 41,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 41,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 300,
+          "code": 16,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 380,
+          "code": 16,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 600,
+          "code": 22,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 680,
+          "code": 22,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 900,
+          "code": 23,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 980,
+          "code": 23,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1200,
+          "code": 20,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1280,
+          "code": 20,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1500,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1580,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 16384,
+        "dpmi": "cwsdpmi"
+      }
+    },
+    {
+      "id": "wolf3d",
+      "name": "Wolfenstein 3D 1.4 shareware",
+      "year": 1992,
+      "publisher": "Apogee Software / id Software",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: wolf3d; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": true
+      },
+      "install": {
+        "layout": "package",
+        "pin": "wolf3d",
+        "source": null,
+        "target": "WOLF3D",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "WOLF3D.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 0,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "rott",
+      "name": "Rise of the Triad 1.3 shareware",
+      "year": 1995,
+      "publisher": "Apogee Software",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: rott; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": false
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "rott",
+        "source": null,
+        "target": "ROTT",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run INSTALL.EXE on private media; provide a pinned installed directory if archive contains a nested installer payload.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "ROTT.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "keen4",
+      "name": "Commander Keen 4 1.4 shareware",
+      "year": 1991,
+      "publisher": "Apogee Software / id Software",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: keen4; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": false
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "keen4",
+        "source": null,
+        "target": "KEEN4",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "KEEN4E.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 0,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "duke3d",
+      "name": "Duke Nukem 3D 1.3d shareware",
+      "year": 1996,
+      "publisher": "3D Realms",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "config/dos-titles.json: duke3d; original package licence documents",
+        "conditions": "Complete unmodified shareware only. Free electronic sharing; no battery media publication or software-bundle permission asserted.",
+        "verified": false
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "duke3d",
+        "source": null,
+        "target": "DUKE3D",
+        "files": [],
+        "steps": [
+          "Extract complete original shareware archive; retain all licence documents.",
+          "Run INSTALL.EXE on private media; provide a pinned installed directory if archive contains a nested installer payload.",
+          "Run SETUP.EXE when provided: Sound Blaster 16, port 220, IRQ 5, DMA 1, high DMA 5; OPL music.",
+          "Installer/menu/input timings and frame hashes require lead calibration against this exact edition."
+        ]
+      },
+      "executable": "DUKE3D.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    }
+  ]
+}

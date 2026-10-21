@@ -127,6 +127,8 @@ void dosvm_audio_irq_enter(struct dosvm *v, unsigned irq)
     uint32_t latency = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
     s->irq_entry_pending = s->irq_entry_ready = false;
     s->cadence.irq_entries++;
+    v->audio.cadence_irq_entries++;
+    if (latency > v->audio.cadence_irq_latency_max_us) v->audio.cadence_irq_latency_max_us = latency;
     s->cadence.irq_latency_sum_us += latency;
     if (latency > s->cadence.irq_latency_max_us) s->cadence.irq_latency_max_us = latency;
 }
@@ -136,7 +138,7 @@ static void sb_ack(struct dosvm *v, uint8_t bit)
     if (s->causes & bit) {
         s->causes &= ~bit;
         s->services++;
-        if (s->unserviced >= 2) s->cadence.late_acks++;
+        if (s->unserviced >= 2) { s->cadence.late_acks++; v->audio.cadence_late_acks++; }
         s->unserviced = 0;
         uint64_t age = v->audio.clock - s->cause_at[bit == 2];
         uint32_t latency = age > UINT32_MAX ? UINT32_MAX : (uint32_t)age;

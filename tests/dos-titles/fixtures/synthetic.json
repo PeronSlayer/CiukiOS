@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "synthetic",
+      "name": "Synthetic host fixture",
+      "year": 1994,
+      "publisher": "CiukiOS tests",
+      "licence": {
+        "kind": "redistributable",
+        "citation": "CiukiOS synthetic test bytes",
+        "conditions": "Test fixture only; no game payload.",
+        "verified": true
+      },
+      "install": {
+        "layout": "directory",
+        "pin": "synthetic",
+        "source": null,
+        "target": "SYNTH",
+        "files": [],
+        "steps": [
+          "Synthetic host-only installed layout; never execute."
+        ]
+      },
+      "executable": "GAME.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 3000,
+          "kind": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "name": "menu",
+          "at_ms": 3000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 5000,
+          "deadline_ms": 20000,
+          "kind": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "input": [
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 5,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    }
+  ]
+}

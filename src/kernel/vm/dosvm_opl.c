@@ -61,6 +61,7 @@ void dosvm_audio_event(struct dosvm *v, uint8_t kind, uint16_t reg, uint8_t valu
 
 static void opl_write(struct dosvm *v, uint8_t value)
 {
+    v->audio.opl_writes++;
     struct dosvm_opl *o = &v->audio.opl;
     unsigned reg = o->address;
     uint64_t now = opl_us(v);

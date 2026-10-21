@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "archive": "doom19s.zip",
+      "url": "https://mirrors.lug.mtu.edu/idgames/idstuff/doom/doom19s.zip",
+      "sha256": "cacf0142b31ca1af00796b4a0339e07992ac5f21bc3f81e7532fe1b5e1b486e6",
+      "size": 2450688,
+      "package": "doom-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/doom-shareware/UPSTREAM.json",
+        "terms": "Shareware; the package's own terms are the clauses below (doom19s.zip has no VENDOR.DOC or LICENSE.DOC)",
+        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+      }
+    },
+    {
+      "id": "quake",
+      "archive": "quake106.zip",
+      "url": "https://mirrors.lug.mtu.edu/idgames/idstuff/quake/quake106.zip",
+      "sha256": "ec6c9d34b1ae0252ac0066045b6611a7919c2a0d78a3a66d9387a8f597553239",
+      "size": 9094045,
+      "package": "quake-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/quake-shareware/UPSTREAM.json",
+        "terms": "Original Quake shareware license, SLICNSE.TXT sections 2, 3 and 6",
+        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+      }
+    },
+    {
+      "id": "wolf3d",
+      "archive": "1wolf14.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wolf14.zip",
+      "sha256": "cb2a2ef7ecef14152c65ff93cc3b84fbd3e8eb0c5c1de41a6fc8cdef559451a8",
+      "size": 856401,
+      "package": "wolf3d-shareware",
+      "status": "pinned",
+      "licence": {
+        "source": "third_party/games/wolf3d-shareware/UPSTREAM.json",
+        "terms": "Shareware; VENDOR.DOC [V.07.15.94] of Apogee Software, Ltd. (inside W3DSW14.SHR)",
+        "distribution": "Original complete archive, free electronic sharing only; no battery media publication."
+      }
+    },
+    {
+      "id": "rott",
+      "archive": "1rott13.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1rott13.zip",
+      "sha256": null,
+      "size": null,
+      "status": "lead-pin-required",
+      "licence": {
+        "source": "VENDOR.DOC inside 1rott13.zip",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Lead must compare the actual edition-specific licence before enabling this candidate.",
+        "distribution": "Private battery media only; no software bundle permission asserted."
+      }
+    },
+    {
+      "id": "keen4",
+      "archive": "4keen.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/4keen.zip",
+      "sha256": null,
+      "size": null,
+      "status": "lead-pin-required",
+      "licence": {
+        "source": "VENDOR.DOC inside 4keen.zip",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Lead must compare the actual edition-specific licence before enabling this candidate.",
+        "distribution": "Private battery media only; no software bundle permission asserted."
+      }
+    },
+    {
+      "id": "duke3d",
+      "archive": "3dduke13.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dduke13.zip",
+      "sha256": null,
+      "size": null,
+      "status": "lead-pin-required",
+      "licence": {
+        "source": "VENDOR.DOC inside 3dduke13.zip",
+        "terms": "Apogee shareware: complete, unmodified, no-charge sharing. Software bundles require prior signed permission.",
+        "verification": "Lead must compare the actual edition-specific licence before enabling this candidate.",
+        "distribution": "Private battery media only; no software bundle permission asserted."
+      }
+    }
+  ]
+}
