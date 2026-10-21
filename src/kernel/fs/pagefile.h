@@ -17,7 +17,7 @@ struct pagefile {
     unsigned drive;
     int handle;
     uint32_t cluster_bytes;
-    bool table_live, open, detached, lost;
+    bool table_live, open, detached, lost, created;
     uint64_t reads, writes, cancels;
 };
 /* No I/O: binds the adapter; the pager manager opens it (backend->open). */

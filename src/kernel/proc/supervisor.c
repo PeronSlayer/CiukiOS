@@ -5,6 +5,7 @@
 #include <ciuki/probe.h>
 #include <ciuki/audio.h>
 #include <ciuki/desktop.h>
+#include <ciuki/pager.h>
 extern void dosvm_client_poll(void) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
@@ -177,8 +178,12 @@ void supervisor_bootstrap(void)
     struct process *p = 0;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
-    if (result == -ENOENT) result = supervisor_spawn_standin(proc_supervisor(), &p);
+    if (result == -ENOENT) {
+        result = supervisor_spawn_standin(proc_supervisor(), &p);
+        if (result >= 0 && pager_bootstrap_complete) pager_bootstrap_complete();
+    }
     if (result < 0) {
+        if (pager_bootstrap_complete) pager_bootstrap_complete();
         console_wake();   /* a quiet boot shows its log instead of the desktop */
         klog("[supervisor] desktop unavailable: %d; console ready", result);
         return;
@@ -195,6 +200,7 @@ void supervisor_poll(void)
         if (!p || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE) {
             uint32_t pid=desktop_pid;
             desktop_pid = 0;
+            if (pager_bootstrap_complete) pager_bootstrap_complete();
             desktop_deaths++;
             console_wake();
             klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);
