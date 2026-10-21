@@ -35,8 +35,13 @@ def build(out=None):
     # Keep core implementations authoritative if the census later adds ntdll.
     generated=out/'generated'
     from scripts.win32 import upper_dlls
-    stubs.generate([ROOT/'docs/design/research/win32-layer-2026-10-14.md'],generated,
-                   extra=upper_dlls.census_stub_amendments())
+    research=ROOT/'docs/design/research/win32-layer-2026-10-14.md'
+    extra={dll:set(names) for dll,names in upper_dlls.census_stub_amendments().items()}
+    # f5-15B: the original acceptance installers' imports extend the W21 set
+    # of the census DLLs only (never a title-private DLL).
+    for dll,names in stubs.acceptance_extra(stubs.imports(research.read_text())).items():
+        extra.setdefault(dll,set()).update(names)
+    stubs.generate([research],generated,extra={dll:sorted(names) for dll,names in extra.items()})
     store=stubs.build(generated,out/'ntdll.lib')
     import shutil
     for dll in store['dlls']:shutil.copyfile(generated/dll['path'],out/dll['path'])

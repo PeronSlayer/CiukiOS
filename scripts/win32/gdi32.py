@@ -46,6 +46,7 @@ def build(out, base=0x72000000, flags=None):
     wide = user_generator.wide_gate(objects, exports, out, 'gdi32.dll', (), FLAGS)
     imports = stubs.imports((ROOT/'docs/design/research/win32-layer-2026-10-14.md').read_text()).get('gdi32.dll', set())
     imports |= stubs.imports((ROOT/'docs/design/win32-census/fixtures.txt').read_text()).get('gdi32.dll', set())
+    imports |= stubs.acceptance_imports('gdi32.dll')  # f5-15B
     missing = sorted(imports-exports.keys())
     source = out/'gdi32-remainder.c'
     source.write_text('__declspec(dllimport) void w32_stub_hit(volatile unsigned *,const char *,const char *);\n'+''.join(

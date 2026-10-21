@@ -252,7 +252,7 @@ static int fixture_open(void *o,const char *name,struct w32_file *file){
     if(record(&a,sizeof(a)) || a.error)return 0;uint32_t handle=a.result;
     struct ciuki_w32_file_info info;
     a=(struct ciuki_w32_file_args){.header={1,sizeof(a),W32_FILE,0},.action=W32_F_STAT,.handle=handle,.buffer=PTR(&info),.bytes=sizeof(info)};
-    int ok=!record(&a,sizeof(a)) && !a.error && !info.size_high && info.size_low && info.size_low<=16*1024*1024;
+    int ok=!record(&a,sizeof(a)) && !a.error && !info.size_high && info.size_low && info.size_low<=256u*1024*1024;
     void *data=ok?host.services.alloc(&host,info.size_low):0;
     if(!data)ok=0;
     for(uint32_t at=0;ok && at<info.size_low;){
