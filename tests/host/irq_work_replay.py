@@ -82,6 +82,10 @@ def main():
         composed=composed.replace('#include "../../src/', f'#include "{ROOT}/src/')
         replay(folder, 'pit-full', None, [('timer_irq', 'PIT-full-ring-1000-timers', 100)],
                ['serial_tick', 'timing_timer_irq'], ['src/kernel/lib/fmt.c'], text='#undef main\n'+composed)
+        # The VM network boundary retains frames in f6-10's real shared pool,
+        # just as the full DOSVM fixture linked by host_kernel_tests.sh does.
+        pool = subprocess.check_output(['python3', str(HOST / 'vm/pool_build.py'),
+                                        str(ROOT), str(folder)], env=ENV, text=True).strip()
         vm_source=(HOST / 'dosvm_test.c').read_text()
         vm_source=vm_source[:vm_source.index('int main(void)')] + 'int main(void) { ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram); test_audio(); test_timer(); test_game_audio(); printf("VM clock coverage checks=%u guest_enters=%u deletes=%u\\n",checks,guest_enters,deletes); free(ram); return 0; }\n'
         vm_source=re.sub(r'(#include ")([^"]+)(")', lambda m:m[1]+str(((HOST / m[2]) if (HOST / m[2]).is_file() else (OUT / m[2])).resolve())+m[3],vm_source)
@@ -95,8 +99,10 @@ def main():
                 'src/kernel/lib/fmt.c', 'src/kernel/lib/sha256.c',
                 'src/kernel/vm/virtual_vga.c', 'src/kernel/vm/virtual_vga_bios.c',
                 'src/kernel/vm/vga_x86.c', 'src/kernel/vm/vga_presenter.c',
-                *(OUT / f'dosvm_audio_{n}.o' for n in ('vm_source', 'opl3', 'mixer'))],
-               ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast'], text=vm_source)
+                'src/kernel/net/bridge.c', 'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',
+                *(OUT / f'dosvm_audio_{n}.o' for n in ('vm_source', 'opl3', 'mixer')), pool],
+               ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast',
+                '-pthread', '-Wl,-u,pool_fixture_start'], text=vm_source)
         replay(folder, 'firmware-input', 'v86_test.c', [('irq_input', 'BIOS-input-capture', 100)], [])
         source = (HOST / 'i8042_test.c').read_text()
         source = source.replace('!arg && prio == P_DEVICE', '!arg && prio == P_INTERACTIVE')

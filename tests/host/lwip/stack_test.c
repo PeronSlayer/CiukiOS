@@ -520,6 +520,7 @@ static void cycles(void)
     puts("PASS 10000 create/close cycles; heap/netconn/UDP PCB baseline stable; no public objects retained");
 }
 #include "amendment.inc"
+#include "dos_bridge.inc"
 int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
@@ -528,7 +529,7 @@ int main(void)
     CHECK(entropy_before_transport);
     refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();
-    cycles();dns_dhcp_tests();CHECK(!live_pins);
+    cycles();dns_dhcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);
     printf("MEASURE host pbuf=%zu tcp_pcb=%zu udp_pcb=%zu netconn=%zu socket=%u mbox=%u arch=%u socket_metadata=%u request=%u\n",
         sizeof(struct pbuf),sizeof(struct tcp_pcb),sizeof(struct udp_pcb),sizeof(struct netconn),cu_socket_object_bytes(),cu_mbox_bytes(),cu_arch_bytes(),cu_socket_bytes(),cu_request_bytes());

@@ -135,5 +135,5 @@ static enum net_link rh_link(struct netif *d)
 }
 const struct netif_driver net_rhine = {
     "rhine", rh_match, 256, 0, NIC_DMA_PAGES, rh_idle, rh_init, rh_start, rh_stop,
-    rh_transmit, rh_poll, rh_link, nic_mac, rh_interrupt, rh_irq_enable
+    rh_transmit, rh_poll, rh_link, nic_mac, rh_interrupt, rh_irq_enable, 0
 };

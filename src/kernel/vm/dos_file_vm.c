@@ -4,6 +4,7 @@
 #include "dosvm_internal.h"
 #include "dos_file_hook.h"
 #include "dos_file_volume.h"
+#include "dosvm_network.h"
 #include <ciuki/probe.h>
 #include <ciuki/timing.h>
 static bool file_check(void *arg,uint32_t linear,size_t bytes,bool write) {
@@ -32,9 +33,10 @@ static bool file_critical(void *arg,uint64_t token,const struct dos_file_frame *
 static bool file_stopped(void *arg) {
     struct dosvm *v=arg; return v->info.state==DOSVM_STOPPING || v->info.state==DOSVM_DEAD;
 }
+static void file_process_exit(void *arg,uint16_t psp) { dosvm_network_process_exit(arg,psp); }
 void dosvm_file_ops_init(struct dosvm *v,struct dos_file_ops *ops) {
     *ops=(struct dos_file_ops){file_check,file_read,file_write,file_release,file_wall,dosvm_file_monitor_us,
-        file_pause,file_critical,0,file_stopped,v};
+        file_pause,file_critical,0,file_stopped,v,file_process_exit};
 }
 static struct dos_file_frame unpack(const struct v86_frame *f) {
     return (struct dos_file_frame){(uint16_t)f->tf.eax,(uint16_t)f->tf.ebx,(uint16_t)f->tf.ecx,(uint16_t)f->tf.edx,
