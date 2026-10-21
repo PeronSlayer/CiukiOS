@@ -7,6 +7,7 @@
 #include "../../../src/probes/win32_dialogs/controller.h"
 #include "../../../src/probes/win32_upper/controller.h"
 #include "../../../src/probes/win32_kernel32/controller.h"
+#include "../../../src/probes/win32_core/controller.h"
 extern void w32_kernel_model_init(const char *, uint32_t *, uint32_t *);
 extern void w32_kernel_model_finish(void);
 
@@ -338,6 +339,13 @@ int main(int argc, char **argv) {
         const char *name=!w32_strcmp(argv[2],"upper-store-baseline")?0:
                          !w32_strcmp(argv[2],"upper-store-dsetup")?"dsetup.dll":"dsetup32.dll";
         int result=upper_store_test(name);w32_kernel_model_finish();return result;
+    }
+    for(unsigned i=1;i<W32_FIXTURE_COUNT;i++) {
+        char mode[80];snprintf(mode,sizeof(mode),"%s-startup",w32_fixtures[i].name);
+        if(!w32_strcmp(argv[2],mode)) {
+            int result=dialogs_startup(w32_fixtures[i].path,w32_fixtures[i].address);
+            w32_kernel_model_finish();return result;
+        }
     }
     int result = !w32_strcmp(argv[2], "kernel32") ? w32_kernel32_runtime()
                  : !w32_strcmp(argv[2], "fixed-alloc") ? w32_kernel32_fixed_alloc()

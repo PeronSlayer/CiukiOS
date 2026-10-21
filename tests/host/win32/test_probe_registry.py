@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/test'))
 import loader_model
 
-# f5-22: f5-21 owns these pending guest observers; all tables reject them.
-UNREGISTERED = {'w32-kernel32': 'f5-21', 'w32-restart': 'f5-21'}
+# f5-21b: only the separately owned NSIS/restart continuations remain.
+UNREGISTERED = {'w32-restart': 'f5-07', 'w32-installer-nsis': 'f5-15A2'}
 
 
 def selector_names():
@@ -65,7 +65,7 @@ class ProbeRegistryTests(unittest.TestCase):
             else:
                 self.assertIn(name, loader_names()[0])
                 loader_model.selector(case['selector'].format(run_id='12345678'), 'fw_cfg', True)
-        self.assertLessEqual(set(UNREGISTERED), pending)
+        self.assertEqual(set(UNREGISTERED), pending)
 
     def test_every_registered_probe_has_its_registration_and_a_suite_case(self):
         suite = json.loads((ROOT / 'tests/suites/f5-core.json').read_text())
