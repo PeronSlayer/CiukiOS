@@ -95,6 +95,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
     i += 12;
     if (parsed.phase == 3 && !strncmp(parsed.probe,"dos-conformance",sizeof(parsed.probe))) {
         if (len-i == 14 && !memcmp(s+i," guest=freedos",14)) parsed.flags |= PROBE_DOS_FREEDOS;
+        else if (len-i == 30 && !memcmp(s+i," guest=ciukidos kernel=unified",30)) parsed.flags |= PROBE_DOS_UNIFIED;
         else if (len-i != 15 || memcmp(s+i," guest=ciukidos",15)) return false;
         *selection=parsed;
         return true;

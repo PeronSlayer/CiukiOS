@@ -609,6 +609,19 @@ def build(kernel, out, boot_cfg):
         sources["/system/dos/FREEDOS.IMG"]=reference
         sources["/system/dos/FREEDOS.SHA"]=reference.with_suffix(".SHA")
         metadata["dos_conformance"]={"reference":"installed-unqualified"}
+        unified=conformance.module("unified_dos",ROOT/"scripts/unified_dos.py")
+        qualification=ROOT/"build/unified-dos/qualified.json"
+        if qualification.is_file():
+            rebuilt=dos_image.parent/"UNIFIED.IMG"
+            identity,license_dir,metadata["unified_dos"]=unified.install(
+                rebuilt,system_files,reference_dirs,game_files,
+                source_output=out.parent/"ciukidos-unified-source.zip")
+            sources["/system/dos/UNIFIED.IMG"]=rebuilt
+            sources["/system/dos/UNIFIED.SHA"]=rebuilt.with_suffix(".SHA")
+            for name in ("CIUKIDOS.TXT","FDK-GPL2.TXT","FREECOM.TXT","SUPPL.TXT","SHARE.TXT","CIUKIDOS.JSN"):
+                sources["/system/licenses/"+name]=license_dir/name
+        else:
+            metadata["unified_dos"]={"status":"absent", "reason":"two-build/CPU qualification not provisioned"}
     else:
         metadata["dos_conformance"]={"reference":"absent", "reason":"official FreeDOS 1.3 pins/packages not provisioned"}
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +692,17 @@ def build(kernel, out, boot_cfg):
                 cursor = hole
         check_image(candidate, volume)
         check_payloads(candidate, payloads, directories)
+        if "/system/dos/UNIFIED.IMG" in sources:
+            import io
+            nested=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.IMG",PART_LBA*SECTOR)
+            sidecar=conformance.read_file(candidate,"/SYSTEM/DOS/UNIFIED.SHA",PART_LBA*SECTOR)
+            require(sidecar==(unified.sha(nested)+"\n").encode(),"unified sidecar read-back")
+            def read_unified(path):
+                if path.startswith("/system/licenses/"):
+                    return conformance.read_file(candidate,path,PART_LBA*SECTOR)
+                return conformance.read_file(io.BytesIO(nested),path,conformance.reference_offset(nested))
+            notices={p.name:p.read_bytes() for p in license_dir.iterdir()}
+            unified.readback(read_unified,identity,notices)
         os.replace(candidate, out)
     image_sha = sha256(out)
     write_manifest(out, kernel, image_sha, payloads, metadata)

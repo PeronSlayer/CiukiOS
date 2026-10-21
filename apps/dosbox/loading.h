@@ -78,7 +78,7 @@ static inline void dosbox_kernel_panel(struct du_canvas *canvas,const char *sele
     du_text_font(canvas,desk_theme->font_bold,170,160,"DOS kernel and memory",DU_INK);
     du_text_wrap(canvas,(struct du_rect){120,200,400,100},
                  "1  CiukiDOS (default)\n2  FreeDOS 1.3\n3  Memory paged (default)\n"
-                 "4  Memory locked (compatibility)\nF12 or Esc to return to the game.",DU_INK);
+                 "4  Memory locked (compatibility)\n5  CiukiDOS unified (preview)\nF12 or Esc to return to the game.",DU_INK);
     du_text_wrap(canvas,(struct du_rect){120,305,400,40},selection,DU_INK);
     du_text_wrap(canvas,(struct du_rect){120,345,400,48},detail,DU_INK);
 }

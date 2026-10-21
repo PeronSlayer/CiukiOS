@@ -2412,11 +2412,17 @@ delegated program-management authority; no VM handle
 ```
 
 CREATE union input. Zero retains the CiukiDOS default. game: catalog index+1;
-a FreeDOS override is permitted only for an explicit game, never the shell.
+a reference/unified override is permitted only for an explicit game, never the shell.
 
 ```c
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
+#define CIUKI_DOSVM_UNIFIED 2u
+```
+
+opt-in unmodified source-built K2043, bridge off
+
+```c
 #define CIUKI_DOSVM_GAME_COUNT 3u
 ```
 

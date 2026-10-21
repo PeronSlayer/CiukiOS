@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "version": "1.9",
+  "license": "Watcom-1.0",
+  "release_url": "https://github.com/open-watcom/open-watcom-1.9/releases/tag/ow1.9",
+  "installer": {
+    "path": "build/downloads/openwatcom/open-watcom-c-linux-1.9",
+    "url": "https://github.com/open-watcom/open-watcom-1.9/releases/download/ow1.9/open-watcom-c-linux-1.9",
+    "size": 83959748,
+    "sha256": "f7484be27eb70028010303fc16bb2acc5a785679567a568b940c28190ddbf3f3"
+  },
+  "source": {
+    "path": "build/downloads/openwatcom/open_watcom_1.9.0-src.tar.bz2",
+    "url": "https://github.com/open-watcom/open-watcom-1.9/releases/download/ow1.9/open-watcom-1.9.0-src.tar.bz2",
+    "size": 27927922,
+    "sha256": "6d303327988ee2dda60cfabebf3f45a9758aee4da117d41cf3153fccb7e5e4bf"
+  },
+  "tools": {
+    "wmake": {
+      "sha256": "d13292a724fb000b51e719bf3a411c6870ab26e13b8e32855e88458a850de5b4",
+      "size": 188973
+    },
+    "wcc": {
+      "sha256": "d882c85922da81aa7956cc5ee5aacc3e2a85932ef346c424ce508ff499d1aba6",
+      "size": 861645
+    },
+    "wlink": {
+      "sha256": "e285c328f48b17e115cb6fd0f91f348a915adfd9eeb932eb3e7b4f3b50fc2838",
+      "size": 457386
+    },
+    "wlib": {
+      "sha256": "0391b9363048520eb3e1da0712c42d096f9ef8407b2a450c2ae97b345a08ed84",
+      "size": 188291
+    }
+  },
+  "license_sha256": "7221bdce3cd8441bb3e3dbc713c8d0dfa7c4c59ec245be8a345a3ba6af2d8e9d",
+  "source_offer": {
+    "url": "",
+    "sha256": "",
+    "status": "lead must supply immutable publication URL before distribution"
+  },
+  "host": {
+    "nasm": {
+      "path": "/usr/bin/nasm",
+      "sha256": "f81db6b9731a8f55737cf4e64f8660b7d3e376cd624517176792434ebe1d0400"
+    },
+    "gcc": {
+      "path": "/usr/bin/gcc",
+      "sha256": "c348a945846fa0e76c17c4df61f326b5323b5b527f432abb1f1f5ed787e2e68a"
+    },
+    "make": {
+      "path": "/usr/bin/make",
+      "sha256": "0052cc9e1280ad0874744623d7241afa01f689be9c0d627056876bb254af5c51"
+    },
+    "as": {
+      "path": "/usr/bin/as",
+      "sha256": "e6a1297b03cf3318b6a0f889bdecbdd9d41201fc888b11e05e8acd2f7aa145fd"
+    },
+    "ld": {
+      "path": "/usr/bin/ld",
+      "sha256": "239eadb638b144619992d527efbd85cb545977807cee349606b8ade9bc0a47aa"
+    },
+    "cp": {
+      "path": "/usr/bin/cp",
+      "sha256": "8ce26f08c86483fc25658a8bcb52a85f3dfe571ba17f2039d4ae84e80d8bcea7"
+    },
+    "rm": {
+      "path": "/usr/bin/rm",
+      "sha256": "011c2d0c1af901153e60667924c84ecdbb2052282b3e617aec9fc4b562325804"
+    },
+    "touch": {
+      "path": "/usr/bin/touch",
+      "sha256": "7e5a26ca65265eb796b0ef6fe3e1e88a32a7da4218d000752175ce03d64429fe"
+    },
+    "sh": {
+      "path": "/usr/bin/bash",
+      "sha256": "c157074818b094c84aaf31b8c80a1e149f234bb1c8c84a25e9a53e96afa30a29"
+    },
+    "cc1": {
+      "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1",
+      "sha256": "0f013970c9ff3f058a66e5d075884a9499e8ccb0902dc83d21bccb69e1490e3a"
+    },
+    "collect2": {
+      "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2",
+      "sha256": "d32bc494c707259e3ef7bf671ded789d6a25a211fa49e5476ade9e8ddd08f1e8"
+    },
+    "crtbegin.o": {
+      "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbegin.o",
+      "sha256": "99b561fbcf63b9180c5da2bad9d4e5ffff1f1c64f1be4e06f705ad5052c11da1"
+    },
+    "crtend.o": {
+      "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtend.o",
+      "sha256": "bcbcd1dcbc7b235c96ab3ff1f06e5b7f44677fed502fa22c2a0b2f8360db71fd"
+    },
+    "libgcc.a": {
+      "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc.a",
+      "sha256": "8777abb7a34f4c0f139a70a8b13393d4a7052f714146689979fb3779d2974a1a"
+    },
+    "libc": {
+      "path": "/usr/lib/libc.so.6",
+      "sha256": "911cf3db7875760dc893b464ae89bddd4f697a377c710ffc13b84f67cbe1237b"
+    }
+  }
+}
