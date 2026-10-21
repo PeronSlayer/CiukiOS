@@ -8,6 +8,7 @@
 #include <ciuki/desktop.h>
 #include <ciuki/display.h>
 #include <ciuki/supervisor.h>
+#include <ciuki/signal.h>
 #include <ciuki/probe.h>
 #include "dosvm_internal.h"
 extern int display_worker_start(void) __attribute__((weak));
@@ -17,6 +18,9 @@ struct binding {
     uint32_t pid;
     struct surface *surface;
     bool busy, focused;
+    bool observed, video_pending;
+    uint32_t changes, display, starts, vbe_changes, console, state, flags, reason, phase;
+    uint16_t mode;
 };
 static struct binding bindings[DOSVM_LIMIT];
 static uint32_t creating[DOSVM_LIMIT]; /* owners inside a sleeping create */
@@ -116,6 +120,72 @@ static uint32_t public_state(const struct dosvm *v)
     if (v->info.state >= DOSVM_STOPPING) return CIUKI_DOSVM_STOPPED;
     return v->info.dos_ready ? CIUKI_DOSVM_RUNNING : CIUKI_DOSVM_BOOTING;
 }
+static uint32_t status_flags(const struct dosvm *v)
+{
+    return (!v->launch_armed || v->launch_ready ? CIUKI_DOSVM_VIDEO_READY : 0) |
+           (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0) |
+           (v->fullscreen ? CIUKI_DOSVM_FULL_SCREEN : 0) |
+           (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
+           (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0);
+}
+static uint32_t wait_phase(void)
+{ return (uint32_t)((g_ticks / DOSVM_BLINK_TICKS) & 1) | (uint32_t)((g_ticks / DOSVM_CURSOR_TICKS) & 1) << 1; }
+struct present_request {
+    struct binding *binding;
+    struct dosvm *vm;
+    struct process *process;
+    struct proc_thread *thread;
+};
+static bool present_interrupted(const struct present_request *r)
+{
+    /* Notifications run in the producer's context, not the waiter's. */
+    return r->process->state != PROC_LIVE || (r->thread && proc_signal_caught(r->thread));
+}
+static uint32_t present_events(struct present_request *r)
+{
+    struct binding *b = r->binding;
+    struct dosvm *v = r->vm;
+    uint32_t events = 0;
+    uint32_t reason = v->fullscreen_error ? (uint32_t)v->fullscreen_error : (uint32_t)v->info.reason;
+    if (!b->observed || b->state != public_state(v) || b->flags != status_flags(v) || b->reason != reason)
+        events |= CIUKI_DOSVM_EVENT_STATE;
+    if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
+    if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
+        (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
+        (b->video_pending || !b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
+         b->starts != v->video_starts || b->mode != v->vbe_mode || b->vbe_changes != v->present_vbe_changes ||
+         (v->video_geometry.text && b->phase != wait_phase()))) events |= CIUKI_DOSVM_EVENT_VIDEO;
+    return events;
+}
+static bool present_ready(void *arg)
+{
+    struct present_request *r = arg;
+    return present_interrupted(r) || present_events(r);
+}
+static int wait_present(struct binding *b, struct dosvm *v, struct process *p, struct ciuki_dosvm_command *c)
+{
+    struct present_request r = {b, v, p, proc_thread_for(g_current)};
+    /* This is a producer dependency, not a physical device wait. Existing
+     * sync machinery propagates boosts and withdraws them on every wake. */
+    kwait_set_owner(&v->present_wait, v->task);
+    kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(c->wait.timeout_ms));
+    kwait_set_owner(&v->present_wait, 0);
+    if (present_interrupted(&r)) return -EINTR;
+    c->wait.events = present_events(&r);
+    if (!c->wait.events) c->wait.events = CIUKI_DOSVM_EVENT_TIMEOUT;
+    c->wait.frame_ms = dosvm_vga_period_ms(v);
+    if (c->wait.events & CIUKI_DOSVM_EVENT_VIDEO) {
+        b->video_pending = true;
+        b->changes = v->vga.changes; b->display = v->vga.display_changes;
+        b->starts = v->video_starts; b->mode = v->vbe_mode;
+        b->vbe_changes = v->present_vbe_changes; b->phase = wait_phase();
+        v->present_due_us = dosvm_vga_next_due(v->present_due_us, dosvm_vga_period_us(v, g_ticks), g_ticks);
+    }
+    b->state = public_state(v); b->flags = status_flags(v);
+    b->reason = v->fullscreen_error ? (uint32_t)v->fullscreen_error : (uint32_t)v->info.reason;
+    b->console = v->console_sequence; b->observed = true;
+    return 0;
+}
 /* Closed error set (execution-abi.md): internal storage/boot errors are EIO. */
 static int closed_error(int e)
 {
@@ -135,10 +205,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     struct process *p = proc_current();
     if (!p || !p->dosvm_capability) return -EPERM;
     unsigned op = tf->ebx;
-    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_BACKGROUND) return -EINVAL;
+    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_WAIT_PRESENT) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
-    int e = copy_from_user(&c, tf->ecx, sizeof(c));
+    bool direct = op == CIUKI_DOSVM_WAIT_PRESENT || op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS;
+    int e = direct ? ua_user_read(p->memory, &c, tf->ecx, sizeof(c)) : copy_from_user(&c, tf->ecx, sizeof(c));
     if (e) return e;
     if (c.version != CIUKI_DOSVM_VERSION) return -EOPNOTSUPP;
     if (c.size != sizeof(c)) return -EINVAL;
@@ -166,10 +237,18 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (!event_valid(&c.event)) return -EINVAL;
         allowed.event = c.event;
     }
+    if (op == CIUKI_DOSVM_WAIT_PRESENT) {
+        if (!c.wait.timeout_ms || c.wait.timeout_ms > CIUKI_DOSVM_WAIT_MAX_MS) return -EINVAL;
+        allowed.wait.timeout_ms = c.wait.timeout_ms;
+    }
+    if (op == CIUKI_DOSVM_PRESENT_BANDS) {
+        if (c.presentation.redraw > 1) return -EINVAL;
+        allowed.presentation.redraw = c.presentation.redraw;
+    }
     if (memcmp(&allowed, &c, sizeof(c))) return -EINVAL;
     /* The record stays writable across a sleeping create/close. */
     struct ua_pin pin;
-    e = ua_pin(p->memory, &pin, tf->ecx, sizeof(c), true);
+    e = direct ? 0 : ua_pin(p->memory, &pin, tf->ecx, sizeof(c), true);
     if (e) return e;
     struct binding *b = 0;
     struct dosvm *v = 0;
@@ -226,7 +305,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if (e) { surface_release(surface); e = closed_error(e); goto out; }
         struct dosvm_key key = dosvm_key(v);
         b = &bindings[key.id - 1];
-        *b = (struct binding){key, p->pid, surface, true, false};
+        *b = (struct binding){.key=key, .pid=p->pid, .surface=surface, .busy=true};
         v->owner_pid = p->pid;
         memcpy(v->name, c.name, sizeof(v->name));
         if (p->state != PROC_LIVE) e = -EINTR;
@@ -259,11 +338,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 as_lookup(&v->as, 0xA0000 + i * PAGE_SIZE, &pte);
                 if (pte & 0x40) { dosvm_launch_video(v); break; }
             }
-            c.changed = (!v->launch_armed || v->launch_ready ? CIUKI_DOSVM_VIDEO_READY : 0) |
-                        (v->launch_failed ? CIUKI_DOSVM_LAUNCH_FAILED : 0) |
-                        (v->fullscreen ? CIUKI_DOSVM_FULL_SCREEN : 0) |
-                        (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
-                        (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0);
+            c.changed = status_flags(v);
             if (v->fullscreen_error && c.state!=CIUKI_DOSVM_STOPPED) c.reason=(uint32_t)-v->fullscreen_error;
             if (v->launch_failed && c.state != CIUKI_DOSVM_STOPPED) c.reason = v->launch_error;
             if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
@@ -271,7 +346,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             video_mode(v, &c);
             dosvm_startup_report(v, false);
             dosvm_perf_report(v);
-        } else if (!dosvm_valid(key)) e = -ESRCH;
+        } else if (op == CIUKI_DOSVM_WAIT_PRESENT) e = wait_present(b, v, p, &c);
+        else if (!dosvm_valid(key)) e = -ESRCH;
         else if (op == CIUKI_DOSVM_FULLSCREEN) {
             if (c.focused && !b->focused) e=-EACCES;
             else {
@@ -291,9 +367,19 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 dosvm_startup_report(v, true);
             }
         } else if (op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS) {
-            if (v->idle.sleeping) dosvm_idle_wake(v);
+            uint32_t samples = v->present_samples;
+            if (op == CIUKI_DOSVM_PRESENT_BANDS && c.presentation.redraw) v->video_presented = false;
             e = dosvm_vga_present(v, put_row, b->surface, g_ticks, &c.damage);
             if (e >= 0) {
+                /* A cadence-deferred call must not acknowledge the pending
+                 * frame. The last store may otherwise never reach the window. */
+                if (v->present_samples != samples) {
+                    b->video_pending = false;
+                    /* WAIT and PRESENT share the sampled frame's phase,
+                     * including when rendering was delayed by other work. */
+                    v->present_due_us = v->video_due_us;
+                    v->present_sample_due_us = v->video_due_us;
+                }
                 c.changed = (uint32_t)e; e = 0; video_mode(v, &c);
                 if (op == CIUKI_DOSVM_PRESENT_BANDS) {
                     c.presentation.bands[0] = (uint32_t)v->video_bands;
@@ -308,7 +394,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             else e = window_input(b, &c.event);
         }
     }
-    if (!e) e = copy_to_user(tf->ecx, &c, sizeof(c));
+    if (!e) e = direct ? ua_user_write(p->memory, tf->ecx, &c, sizeof(c)) : copy_to_user(tf->ecx, &c, sizeof(c));
 out:
     if (op == CIUKI_DOSVM_CREATE && e)
         klog("[launch] name=dosbox pid=%u error=%d stage=vm-create window=%s", p->pid, e, c.name);
@@ -318,6 +404,6 @@ out:
          * supervisor pass skipped the busy binding. */
         if (p->state != PROC_LIVE && b->pid) release_binding(b);
     }
-    ua_unpin(p->memory, &pin);
+    if (!direct) ua_unpin(p->memory, &pin);
     return e;
 }

@@ -162,6 +162,9 @@ struct dosvm {
     int fullscreen_error;
     uint32_t continuation;
     struct kwait wake;
+    struct kwait present_wait; /* request dependency on the VM worker */
+    uint64_t present_due_us, present_sample_due_us;
+    uint32_t console_sequence, present_vbe_changes, present_samples;
     struct {
         bool sleeping, seen;
         uint64_t last_tick, poll_tick;
@@ -441,6 +444,11 @@ void dosvm_putchar(struct dosvm *, uint8_t, uint8_t);
 int dosvm_wait(struct dosvm *, bool keyboard, uint64_t deadline);
 void dosvm_input_poll(struct dosvm *);
 void dosvm_idle_wake(struct dosvm *);
+void dosvm_present_notify(struct dosvm *);
+void dosvm_present_checkpoint(struct dosvm *);
+unsigned dosvm_vga_period_ms(struct dosvm *);
+uint64_t dosvm_vga_period_us(struct dosvm *, uint64_t tick);
+uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period_us, uint64_t tick);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
 { return v->probe ? v->probe : "vm-boot"; }
