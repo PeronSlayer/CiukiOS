@@ -354,6 +354,7 @@ int dosvm_network_dispatch(struct dosvm *v, struct v86_frame *f) { (void)v; (voi
 int dosvm_network_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t vector)
 { (void)v; (void)f; (void)vector; return -ENOSYS; }
 int dosvm_network_detach(struct dosvm *v) { (void)v; return 0; }
+void dosvm_network_process_exit(struct dosvm *v, uint16_t psp) { (void)v; (void)psp; }
 #ifndef CIUKI_DOSVM_FILE_CPU
 #include "dosvm_request_context.inc"
 #endif
