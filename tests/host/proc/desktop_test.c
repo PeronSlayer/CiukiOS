@@ -171,6 +171,15 @@ int storage_enable_write(struct storage *s, unsigned drive)
 {
     CHECK(s == &libc_storage && drive == 2); libc_gate_calls++; return libc_gate_error;
 }
+/* f6-18: the browser probe's network and entropy calls are never reached by
+ * these gate replays (no fixture selects the browser case); keep the host
+ * binary linkable and fail if the harness accidentally enters them. */
+int net_stack_primary(void) { CHECK(!"net_stack_primary outside the browser case"); return -1; }
+void net_stack_address(unsigned port, uint32_t *address) { (void)port; CHECK(!"net_stack_address"); if (address) *address = 0; }
+int net_stack_dhcp_error(unsigned port) { (void)port; CHECK(!"net_stack_dhcp_error"); return 0; }
+int net_resolve_override(const char *name, uint32_t address) { (void)name; (void)address; CHECK(!"net_resolve_override"); return -1; }
+int entropy_get(void *p, size_t n) { (void)p; (void)n; CHECK(!"entropy_get"); return -1; }
+void entropy_erase(void *p, size_t n) { (void)p; (void)n; }
 /* f2-31: only the Files desktop case flushes; no host fixture selects it. */
 int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
 /* These native gate replays never select the installer controller. Keep
