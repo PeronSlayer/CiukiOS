@@ -107,5 +107,3 @@ int gdi_host_render(const char *face, int height, int weight, int italic,
   DeleteObject(f);
   return ok ? size.cx : -1;
 }
-
-#include "../gdi32/pixel_format.inc"
