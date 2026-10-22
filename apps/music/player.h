@@ -61,8 +61,13 @@ struct music_player {
         uint64_t start, sum, samples, frames, decode_ns, writes, bytes;
         unsigned low, high, queued_low, queued_high, starvations;
         unsigned publishes, repaints;
+        /* f4-37: the decoder's stage cycles (reader), the window's TSC start
+         * and the UI kilocycles at its start (docs/design/music-player.md). */
+        struct music_cost cost; uint64_t tsc; unsigned ui_kcycles;
     } level;
     atomic_uint ui_publishes, ui_repaints;
+    atomic_uint ui_kcycles; /* f4-37: UI thread time, cycles/1024, wrapping */
+    uint64_t pump_cycles;   /* f4-37: worker thread time in pump and publish */
     struct music_producer producer_base; /* f1-101: counters at the last level record */
     uint64_t load_started; int first_pcm;
     const char *stage;
@@ -79,6 +84,8 @@ struct music_runtime *music_runtime_start(const struct music_output *);
 int music_runtime_send(struct music_runtime *, const struct music_command *);
 void music_runtime_snapshot(struct music_runtime *, struct music_snapshot *);
 void music_runtime_repaint(struct music_runtime *);
+/* f4-37: UI thread cycles (turns, rendering, presenting) for the cost record. */
+void music_runtime_ui_cycles(struct music_runtime *, uint64_t cycles);
 void music_runtime_close(struct music_runtime *);
 int music_runtime_done(struct music_runtime *);
 void music_runtime_destroy(struct music_runtime *);

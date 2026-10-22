@@ -19,6 +19,7 @@ for bits in (8, 16):
                         tone = math.sin(2*math.pi*(440 if c == 0 else 660)*i/rate)*0.4
                         data += bytes([round(128+tone*100)]) if bits == 8 else struct.pack('<h', round(tone*20000))
                 out.writeframes(data)
-for codec, ext in [('libmp3lame', 'mp3'), ('libvorbis', 'ogg')]:
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-i', str(ROOT/'pcm-16-2-96000.wav'),
-                    '-ar', '44100', '-c:a', codec, str(ROOT/f'tone.{ext}')], check=True)
+for source, codec, name in [('pcm-16-2-96000.wav', 'libmp3lame', 'tone.mp3'), ('pcm-16-2-96000.wav', 'libvorbis', 'tone.ogg'),
+                            ('pcm-16-1-96000.wav', 'libmp3lame', 'tone-mono.mp3')]:
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-i', str(ROOT/source),
+                    '-ar', '44100', '-c:a', codec, str(ROOT/name)], check=True)

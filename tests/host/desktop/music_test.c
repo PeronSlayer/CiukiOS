@@ -91,8 +91,9 @@ static void playlists(const char *fixtures, const char *scratch)
     assert(!music_playlist_save(p,base,NULL,NULL)); /* replace */
     int cancel=1; assert(music_playlist_save(p,base,cancel_now,&cancel)==-ECANCELED);
     q->count=0; assert(!music_playlist_add(q,base,NULL,NULL) && q->count==2); /* original survived */
-    q->count=0; assert(!music_playlist_add(q,fixtures,NULL,NULL) && q->count==10);
-    assert(music_playlist_add(q,fixtures,cancel_now,&cancel)==-ECANCELED && q->count==10);
+    /* Eight WAVs, tone.mp3, tone.ogg and (f4-37) tone-mono.mp3. */
+    q->count=0; assert(!music_playlist_add(q,fixtures,NULL,NULL) && q->count==11);
+    assert(music_playlist_add(q,fixtures,cancel_now,&cancel)==-ECANCELED && q->count==11);
     char folder[MUSIC_PATH]; path(folder,scratch,"sub"); assert(!mkdir(folder,0700));
     char link[MUSIC_PATH]; path(link,folder,"loop"); assert(!symlink(folder,link));
     assert(!music_playlist_add(q,folder,NULL,NULL)); /* symlink never recurses */
