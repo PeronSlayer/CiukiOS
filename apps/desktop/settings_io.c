@@ -93,7 +93,7 @@ int cfg_writer_start(struct cfg_writer *w, const char *path, const char *tempora
 }
 static int ui_lock(struct cfg_writer *w)
 {
-    int e=pthread_mutex_trylock(&w->lock);
+    int e=w->notify ? pthread_mutex_lock(&w->lock) : pthread_mutex_trylock(&w->lock);
     if (e) { errno=e==EBUSY ? EAGAIN : e; return -1; }
     return 0;
 }

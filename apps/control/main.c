@@ -510,7 +510,8 @@ static int program_save(void *ctx)
         if (r<0 && errno==EINTR) continue;
         if (r<0 || fd.revents&(POLLERR|POLLHUP|POLLNVAL)) return -EIO;
         struct ciuki_message token;
-        if (ciuki_channel_recv(fd.fd,&token,DONTWAIT) && errno!=EINTR && errno!=EAGAIN) return -EIO;
+        r=ciuki_channel_recv(fd.fd,&token,DONTWAIT);
+        if (!r || (r<0 && errno!=EINTR && errno!=EAGAIN)) return -EIO;
     }
     return error ? -error : 0;
 }
@@ -601,7 +602,9 @@ static int control_run(struct cp_main *m)
             struct ciuki_message token;
             /* One token is enough; further queued publications stay readable.
              * No producer can race a reset or lose the transition to sleep. */
-            if (ciuki_channel_recv(fds[2].fd,&token,DONTWAIT) && errno!=EAGAIN && errno!=EINTR) return -1;
+            r=ciuki_channel_recv(fds[2].fd,&token,DONTWAIT);
+            if (!r) { errno=EIO;return -1; }
+            if (r<0 && errno!=EAGAIN && errno!=EINTR) return -1;
         }
     }
 }

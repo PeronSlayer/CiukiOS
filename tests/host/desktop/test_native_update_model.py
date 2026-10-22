@@ -86,7 +86,7 @@ class NativeUpdateModelTests(unittest.TestCase):
                     ft = module("native_model_ft", ROOT / "sdk/freetype/build.py")
                     extra = [*ft.includes(), str(ft.host())]
                 binary = work / name
-                command = [*flags, "-DCASE_" + name.upper(), "-Wl,--gc-sections", "-Wl,--wrap=memcmp", "-Wl,--wrap=du_fill",
+                command = [*flags, "-DCASE_" + name.upper(), "-Wl,--wrap=poll", "-Wl,--wrap=clock_gettime", "-Wl,--gc-sections", "-Wl,--wrap=memcmp", "-Wl,--wrap=du_fill",
                            str(ROOT / "tests/host/desktop/native_update_model_test.c"), *objects,
                            *(str(ROOT / p) for p in sources), *extra, "-pthread", "-lm", "-o", str(binary)]
                 if name=="demo": command[1:1]=["-I",str(work / "adapter"),"-I",str(ROOT / "apps/desktop")]

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "net.h"
 #include "dns.h"
+#include <limits.h>
 #include "logline.h"
 #include <ciuki/net.h>
 #ifdef CIUKI_HOST
@@ -461,6 +462,24 @@ void ciuki_net_poll(struct ciuki_net *n)
         if(j->error||j->cancelled||j->http->done)finish(n,c);
     }
     n->polling=false;
+}
+void ciuki_net_notify(struct ciuki_net *n,void (*notify)(void *),void *ctx)
+{ if(n)ciuki_dns_notify(n->dns,notify,ctx); }
+/* Real request/keepalive expiry, including DNS with no socket yet. */
+int ciuki_net_timeout(struct ciuki_net *n,int timeout)
+{
+    if(!n)return timeout;
+    uint64_t now=now_ms();
+    for(unsigned i=0;i<8;i++){
+        struct ciuki_connection *c=&n->connections[i];uint64_t end;
+        if(c->state==IDLE)end=c->idle_ms+15000;
+        else if(c->job)end=c->job->started_ms+30000;
+        else continue;
+        uint64_t left=end>now?end-now:0;
+        if(c->job && c->tls && (ciuki_tls_state(c->tls)&BR_SSL_RECVAPP))left=0;
+        if(timeout<0 || left<(unsigned)timeout)timeout=left>INT_MAX?INT_MAX:(int)left;
+    }
+    return timeout;
 }
 unsigned ciuki_net_fds(struct ciuki_net *n,struct pollfd fds[8])
 {

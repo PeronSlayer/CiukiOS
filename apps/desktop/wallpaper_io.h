@@ -17,7 +17,7 @@ struct desk_wall_request {
 };
 struct desk_wall_memory;
 /* Single worker, one latest pending request and one owned completed frame.
- * Neither disk I/O nor rendering holds lock. UI polling uses trylock. */
+ * Neither disk I/O nor rendering holds lock. UI collection uses a short mailbox lock. */
 struct desk_wall_worker {
     pthread_mutex_t lock; pthread_cond_t changed; pthread_t thread;
     struct desk_wall_request request;
@@ -26,6 +26,8 @@ struct desk_wall_worker {
     uint32_t *pixels;
     const char *cache_dir;
     void (*stage)(const char *);
+    void (*notify)(void *);
+    void *notify_ctx;
     struct desk_wall_memory *memory; /* worker-only, bounded reusable frames/source */
     uint64_t prepare_ns; /* completed request, published with ready under lock */
     const char *activity; /* atomic diagnostic: literal name of the current operation */
@@ -42,7 +44,7 @@ int desk_wall_preload(const struct desk_wall_request *, const char *cache_dir,
  * full-file COW on short writes can hold the shared filesystem for seconds. */
 int desk_wall_worker_start(struct desk_wall_worker *, const char *, void (*stage)(const char *));
 unsigned desk_wall_worker_submit(struct desk_wall_worker *, const struct desk_wall_request *);
-/* submit returns 0 on contention: retain the latest request and retry next turn. */
+/* submit serializes only the bounded mailbox copy. */
 /* 0: pending, 1: ownership transferred (pixels NULL on failure). */
 int desk_wall_worker_take(struct desk_wall_worker *, unsigned, uint32_t **pixels, int *error, int *hit);
 int desk_wall_worker_busy(struct desk_wall_worker *);

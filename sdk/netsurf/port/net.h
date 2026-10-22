@@ -43,6 +43,8 @@ struct ciuki_job {
 #define CIUKI_NET_PENDING_BUDGET (128u*1024u)
 size_t ciuki_net_pending_bytes(void);
 struct ciuki_net *ciuki_net_create(const br_x509_trust_anchor *,size_t);
+void ciuki_net_notify(struct ciuki_net *,void (*)(void *),void *);
+int ciuki_net_timeout(struct ciuki_net *,int);
 void ciuki_net_destroy(struct ciuki_net *);
 struct ciuki_job *ciuki_net_job(const struct ciuki_request *,ciuki_http_callback,void *);
 void ciuki_net_job_free(struct ciuki_job *);

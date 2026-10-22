@@ -101,8 +101,8 @@ int main(int argc,char **argv)
     struct fm_entry *entries=app.model.entries; struct files_node *tree=app.tree; struct du_item *rows=app.rows;
     app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0));
     uint64_t browser_deadline=du_next_deadline(&ui);
-    assert(browser_deadline==ui.now+20000000ull);
-    /* Supersession must not postpone the outstanding browser poll. */
+    assert(browser_deadline==UINT64_MAX);
+    /* Supersession must not arm a completion retry timer. */
     ui.now+=1000000ull;
     app.media_polled=0; assert(!scan_submit(&app,SCAN_MEDIA,NULL,0));
     assert(du_next_deadline(&ui)==browser_deadline); finish_scan();

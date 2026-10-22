@@ -560,7 +560,7 @@
  		 * the next event.
  		 */
  		timeout = schedule_run();
-+        if (timeout<0 || timeout>10) timeout=10;
++        /* Native surface waits on input, fetch completions and this deadline. */
  
  		/* if redraws are pending do not wait for event,
  		 * return immediately

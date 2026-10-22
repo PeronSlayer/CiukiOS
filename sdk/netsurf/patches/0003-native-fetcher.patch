@@ -59,7 +59,7 @@ headers replace the M1 local-only address declarations. file: and data: unchange
  		 */
 +		ciuki_fetch_pump();
  		timeout = schedule_run();
-         if (timeout<0 || timeout>10) timeout=10;
+         /* Native surface waits on input, fetch completions and this deadline. */
  
 --- a/netsurf/utils/inet.h
 +++ b/netsurf/utils/inet.h

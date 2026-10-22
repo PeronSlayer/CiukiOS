@@ -4979,7 +4979,20 @@ Runs after anchors and canvas replacement, preserving widget/model state.
 
 ```c
 void (*layout)(struct du_ui *, void *);
+```
+
+Installed by the window owner before starting workers. Immutable until
+those workers have joined; service runs only on the UI thread.
+
+```c
+void (*wake)(void *);
+    void *wake_ctx;
+    void (*service)(struct du_ui *, void *);
+    int wait_fds[4];
+    unsigned wait_count;
 };
+static inline void du_wake(struct du_ui *u)
+{ if (u && u->wake) u->wake(u->wake_ctx); }
 ```
 
 Core
@@ -5093,6 +5106,7 @@ Desktop window glue: handshake, surface, back buffer, damage, events.
 
 ```c
 struct du_window {
+    struct du_completion *completion;
     int channel, surface, configured, closing, closed, error;
     int close_reply_pending;
 ```
@@ -5167,6 +5181,13 @@ A close_request callback returning zero automatically queues later=1.
 void du_window_close_reply(struct du_window *, int later);
 void du_window_destroy(struct du_window *);
 int du_run(struct du_window *, void (*idle)(void *), void *);
+```
+
+Absolute monotonic deadline; UINT64_MAX waits indefinitely. Includes
+input, pending output, worker completions and application descriptors.
+
+```c
+int du_window_wait(struct du_window *, uint64_t deadline);
 uint64_t du_now(void);
 #endif
 ```

@@ -341,7 +341,7 @@ void re_startup_poll(struct re_app *a)
     struct du_ui *u=a->ui;
     if (!s->job.started) {
         if (u->dirty || !u->frame_count) return;
-        int r=du_job_start(&s->job,startup_read,s);
+        int r=du_job_start_ui(&s->job,startup_read,s,u);
         if (r) { free(s); a->startup=NULL; du_message(u,RE_ERROR,"Registry Editor","The registry worker could not start.",DU_DLG_ICON_ERROR,NULL,0,0,0); }
         return;
     }

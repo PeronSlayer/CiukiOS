@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 struct slot { uint64_t token;char name[254];uint32_t address;int error;bool running,done,cancelled; };
-struct ciuki_dns { pthread_mutex_t lock;pthread_cond_t wake;bool stop;uint64_t next;struct slot slots[8]; };
+struct ciuki_dns { void (*notify)(void *);void *notify_ctx;pthread_mutex_t lock;pthread_cond_t wake;bool stop;uint64_t next;struct slot slots[8]; };
 static void release(struct ciuki_dns *d)
 { pthread_cond_destroy(&d->wake);pthread_mutex_destroy(&d->lock);free(d); }
 static void *worker(void *arg)
@@ -31,7 +31,7 @@ static void *worker(void *arg)
         freeaddrinfo(answer);
         pthread_mutex_lock(&d->lock);
         if(s->cancelled)memset(s,0,sizeof(*s));
-        else{s->address=address;s->error=error;s->done=true;}
+        else{s->address=address;s->error=error;s->done=true;if(d->notify)d->notify(d->notify_ctx);}
     }
 }
 struct ciuki_dns *ciuki_dns_create(void)
@@ -47,6 +47,12 @@ struct ciuki_dns *ciuki_dns_create(void)
     pthread_attr_destroy(&attr);
     if(e){release(d);return NULL;}
     return d;
+}
+void ciuki_dns_notify(struct ciuki_dns *d,void (*notify)(void *),void *ctx)
+{
+    pthread_mutex_lock(&d->lock);d->notify=notify;d->notify_ctx=ctx;
+    for(unsigned i=0;i<8;i++)if(d->slots[i].done && notify){notify(ctx);break;}
+    pthread_mutex_unlock(&d->lock);
 }
 uint64_t ciuki_dns_submit(struct ciuki_dns *d,const char *name)
 {
@@ -76,4 +82,4 @@ void ciuki_dns_cancel(struct ciuki_dns *d,uint64_t token)
     pthread_mutex_unlock(&d->lock);
 }
 void ciuki_dns_destroy(struct ciuki_dns *d)
-{ if(!d)return;pthread_mutex_lock(&d->lock);d->stop=true;pthread_cond_signal(&d->wake);pthread_mutex_unlock(&d->lock); }
+{ if(!d)return;pthread_mutex_lock(&d->lock);d->stop=true;d->notify=NULL;pthread_cond_signal(&d->wake);pthread_mutex_unlock(&d->lock); }

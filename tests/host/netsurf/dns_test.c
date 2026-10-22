@@ -17,6 +17,9 @@ static pthread_mutex_t gate=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;
 static bool allow,entered,released,fail_thread,fail_alloc;
 static void *allocation;
+static unsigned notifications;
+static void notify(void *ctx)
+{ assert(ctx==&notifications);pthread_mutex_lock(&gate);notifications++;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&gate); }
 void *__real_calloc(size_t,size_t);
 void *__wrap_calloc(size_t n,size_t size)
 {
@@ -54,9 +57,11 @@ static void unblock(void)
 { pthread_mutex_lock(&gate);allow=true;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&gate); }
 int main(void)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     fail_alloc=true;assert(!ciuki_dns_create());fail_alloc=false;
     fail_thread=true;assert(!ciuki_dns_create());fail_thread=false;released=false;
     struct ciuki_dns *d=ciuki_dns_create();assert(d);
+    ciuki_dns_notify(d,notify,&notifications);
     uint64_t tokens[8];for(unsigned i=0;i<8;i++){tokens[i]=ciuki_dns_submit(d,i==2?"missing.example":i==3?"offline.example":"fixture.example");assert(tokens[i]);}
     wait_for(&entered);assert(!ciuki_dns_submit(d,"full.example"));
     ciuki_dns_cancel(d,tokens[0]);ciuki_dns_cancel(d,tokens[1]);
@@ -64,11 +69,18 @@ int main(void)
     unblock();uint32_t address;int error;
     assert(!ciuki_dns_result(d,tokens[0],&address,&error));assert(!ciuki_dns_result(d,tokens[1],&address,&error));
     for(unsigned i=2;i<=8;i++){
-        uint64_t token=i==8?replacement:tokens[i];unsigned attempts=0;
-        while(!ciuki_dns_result(d,token,&address,&error)){assert(attempts++<3000);struct timespec pause={0,1000000};nanosleep(&pause,NULL);}
+        uint64_t token=i==8?replacement:tokens[i];
+        for(;;){
+            pthread_mutex_lock(&gate);unsigned seen=notifications;pthread_mutex_unlock(&gate);
+            if(ciuki_dns_result(d,token,&address,&error))break;
+            struct timespec until;clock_gettime(CLOCK_REALTIME,&until);until.tv_sec+=3;
+            pthread_mutex_lock(&gate);
+            while(notifications==seen)assert(!pthread_cond_timedwait(&changed,&gate,&until));
+            pthread_mutex_unlock(&gate);
+        }
         assert(error==(i==2?EHOSTUNREACH:i==3?ENETDOWN:0));if(!error)assert(address==0x12345678);
     }
-    ciuki_dns_destroy(d);wait_for(&released);
+    assert(notifications==7);ciuki_dns_destroy(d);wait_for(&released);
     pthread_mutex_lock(&gate);allow=false;entered=false;released=false;pthread_mutex_unlock(&gate);
     d=ciuki_dns_create();assert(d && ciuki_dns_submit(d,"slow.example"));wait_for(&entered);
     struct timespec before,after;clock_gettime(CLOCK_MONOTONIC,&before);ciuki_dns_destroy(d);clock_gettime(CLOCK_MONOTONIC,&after);

@@ -81,6 +81,7 @@ void music_player_destroy(struct music_player *);
 /* Runtime: the UI only queues commands and reads snapshots. */
 struct music_runtime;
 struct music_runtime *music_runtime_start(const struct music_output *);
+void music_runtime_notify(struct music_runtime *, void (*)(void *), void *);
 int music_runtime_send(struct music_runtime *, const struct music_command *);
 void music_runtime_snapshot(struct music_runtime *, struct music_snapshot *);
 void music_runtime_repaint(struct music_runtime *);

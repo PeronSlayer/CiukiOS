@@ -29,6 +29,8 @@ struct files_drive_label {
     struct files_label_key key;
 };
 struct files_app {
+    unsigned job_publication;
+    uint64_t job_ui_ns;
     struct files_worker *worker;
     struct files_transfer *transfer;
     uint64_t media_poll_ns;

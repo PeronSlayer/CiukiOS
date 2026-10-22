@@ -2383,7 +2383,7 @@ int paint_open_begin(const char *p)
     if (strlen(p)>=sizeof(opening.path)) return -ENAMETOOLONG;
     opening.revision=image_revision;
     strcpy(opening.path,p); memcpy(opening.palette,pal,sizeof(opening.palette)); opening.image=(struct paint_image){0};
-    return du_job_start(&opening.job,read_image,NULL);
+    return du_job_start_ui(&opening.job,read_image,NULL,ui);
 }
 int paint_open_poll(void)
 {

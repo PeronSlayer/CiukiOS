@@ -298,6 +298,7 @@ void du_timer_stop(struct du_ui *u, int id)
 void du_tick(struct du_ui *u, uint64_t now)
 {
     if (now > u->now) u->now = now;
+    if (u->service) u->service(u,u->user);
     du_dialog_tick(u);
     for (int i = 0; i < DU_TIMERS; i++) {
         struct du_timer *t = &u->timers[i];

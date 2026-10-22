@@ -109,7 +109,6 @@ static void idle(void *ctx)
 {
     struct music_main *m=ctx;
     if (m->closing && music_runtime_done(m->runtime)) { du_window_close(&m->window); return; }
-    uint64_t tick=du_now(); if (tick-m->last_poll<100000000ull) return; m->last_poll=tick;
     music_runtime_snapshot(m->runtime,&m->snapshot);
     if (m->snapshot.publication!=m->app.snapshot.publication) music_update(&m->app,&m->snapshot);
 }
@@ -120,26 +119,23 @@ static void idle(void *ctx)
  * keeps growing; and each turn's cycles go to the cost record. */
 static int run(struct music_main *m)
 {
-    struct du_window *w=&m->window; int r; uint64_t started=du_now();
+    struct du_window *w=&m->window; int r;
     for (;;) {
         uint64_t now=du_now(), begin=music_cycles();
         w->present_pending=music_ui_hold(m->painted,m->last_paint,now)!=0;
         m->painted_this_turn=0;
         r=du_window_turn(w,now);
-        w->present_pending=0;
         if (r<=0) break;
         idle(m);
         music_runtime_ui_cycles(m->runtime,music_cycles()-begin);
-        now=du_now(); uint64_t next=du_next_deadline(w->ui), wait=10000000u;
-        if (!w->configured && now>=started && now-started<5000000000ull) wait=1000000u;
-        if (next>now && next-now<wait) wait=next-now;
-        if (next<=now) wait=1000000u;
-        else if (w->ui->dirty) {
+        now=du_now(); uint64_t next=du_next_deadline(w->ui);
+        if (w->ui->dirty) {
             uint64_t hold=music_ui_hold(m->painted,m->last_paint,now);
-            if (!hold) wait=1000000u; else if (hold<wait) wait=hold;
+            w->present_pending=hold!=0;
+            if (hold && now+hold<next) next=now+hold;
         }
-        struct timespec pause={.tv_sec=0,.tv_nsec=(long)wait};
-        nanosleep(&pause,NULL);
+        if (du_window_wait(w,next)) { r=-1; break; }
+        w->present_pending=0;
     }
     return r;
 }
@@ -157,6 +153,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window,&m->ui,channel,w,h,"Music Player",420,300)) {
         fprintf(stderr,"music: desktop connection failed: %s\n",strerror(errno)); music_runtime_destroy(m->runtime); free(m); return 1;
     }
+    music_runtime_notify(m->runtime,m->ui.wake,m->ui.wake_ctx);
     m->window.close_request=close_request; m->window.message=message; m->window.user=m;
     m->window.present_rendered=1; /* f4-37: everything is drawn in du_render */
     music_attach(&m->app,&m->ui,&m->backend);

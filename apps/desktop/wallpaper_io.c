@@ -346,7 +346,9 @@ static void *wall_worker(void *arg)
             w->pixels=pixels; pixels=NULL; w->ready=1; w->completed_serial=serial; w->error=error; w->cache_hit=hit;
             w->prepare_ns=(uint64_t)(end.tv_sec-begin.tv_sec)*1000000000ull+end.tv_nsec-begin.tv_nsec;
         }
-        pthread_mutex_unlock(&w->lock); wall_activity(w,"release-frame"); free(old); free(pixels);
+        pthread_mutex_unlock(&w->lock);
+        if (w->notify) w->notify(w->notify_ctx);
+        wall_activity(w,"release-frame"); free(old); free(pixels);
         wall_activity(w,"mailbox-lock"); pthread_mutex_lock(&w->lock);
     }
     pthread_mutex_unlock(&w->lock); return NULL;
@@ -362,21 +364,22 @@ int desk_wall_worker_start(struct desk_wall_worker *w, const char *dir, void (*s
 }
 unsigned desk_wall_worker_submit(struct desk_wall_worker *w, const struct desk_wall_request *r)
 {
-    if (pthread_mutex_trylock(&w->lock)) return 0;
+    pthread_mutex_lock(&w->lock);
     w->request=*r; if (!++w->serial) ++w->serial;
     unsigned serial=w->serial; w->pending=1; w->ready=0;
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->lock); return serial;
 }
 int desk_wall_worker_take(struct desk_wall_worker *w, unsigned serial, uint32_t **pixels, int *error, int *hit)
 {
-    if (pthread_mutex_trylock(&w->lock)) return 0;
+    pthread_mutex_lock(&w->lock);
     int ready=w->ready && w->completed_serial==serial;
     if (ready) { *pixels=w->pixels; w->pixels=NULL; *error=w->error; *hit=w->cache_hit; w->ready=0; }
     pthread_mutex_unlock(&w->lock); return ready;
 }
 int desk_wall_worker_busy(struct desk_wall_worker *w)
 {
-    if (pthread_mutex_trylock(&w->lock)) return 1;
+    if (w->notify) pthread_mutex_lock(&w->lock);
+    else if (pthread_mutex_trylock(&w->lock)) return 1;
     int busy=w->busy || w->pending; pthread_mutex_unlock(&w->lock); return busy;
 }
 void desk_wall_worker_stop(struct desk_wall_worker *w)

@@ -29,6 +29,7 @@ static struct {
     int client; uint32_t window, serial;
     int shutting; uint64_t shutdown_deadline;
     struct sound_throttle queued;
+    struct desktop *desktop;
 } rt = {.lock=PTHREAD_MUTEX_INITIALIZER, .changed=PTHREAD_COND_INITIALIZER};
 static uint64_t now_ns(void)
 { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec*1000000000ull+(uint64_t)t.tv_nsec; }
@@ -64,7 +65,7 @@ static int request(struct desktop *d, int client, unsigned op, unsigned event, u
 static void hardware_result(int result)
 {
     pthread_mutex_lock(&rt.lock);
-    if (rt.hardware_pending) { rt.hardware_result = result; rt.hardware_done = 1; }
+    if (rt.hardware_pending) { rt.hardware_result = result; rt.hardware_done = 1; desk_wake(rt.desktop); }
     pthread_mutex_unlock(&rt.lock);
 }
 void desk_sound_results(struct desktop *d)
@@ -221,7 +222,9 @@ static void *worker(void *arg)
             }
         }
         pthread_mutex_lock(&rt.lock);
+        int was_busy=rt.busy;
         rt.busy = sound_active(&w->player) || w->fd >= 0 || rt.count;
+        if (was_busy && !rt.busy) desk_wake(rt.desktop);
         if (!rt.count) {
             if (rt.busy) {
                 struct timespec until; clock_gettime(CLOCK_REALTIME,&until); until.tv_nsec += 2000000;
@@ -238,7 +241,7 @@ void desk_sound_init(struct desktop *d)
     struct worker *w=calloc(1,sizeof(*w));
     if (!w) { fprintf(stderr,"desktop: sound storage unavailable\n"); return; }
     (void)sound_load_at(&w->scheme,SOUND_CFG,SOUND_LEGACY_CFG,REG_DIRECTORY);
-    pthread_t thread; rt.live = 1;
+    pthread_t thread; rt.live = 1; rt.desktop=d;
     int r = pthread_create(&thread,NULL,worker,w);
     if (r) { rt.live = 0; free(w); fprintf(stderr,"desktop: sound worker unavailable (%d)\n",r); return; }
     pthread_detach(thread);

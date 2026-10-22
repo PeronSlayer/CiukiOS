@@ -32,7 +32,8 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
 {
     int old = fcntl(fd, F_GETFL);
     if (flags) fcntl(fd, F_SETFL, old | O_NONBLOCK);
-    int r = read(fd, m, MESSAGE_BYTES) == MESSAGE_BYTES ? 0 : -1;
+    ssize_t n=read(fd,m,MESSAGE_BYTES);
+    int r=n==MESSAGE_BYTES ? 1 : n==0 ? 0 : -1;
     int saved = errno;
     if (flags) fcntl(fd, F_SETFL, old);
     errno = saved; return r;

@@ -201,6 +201,8 @@ void klog(const char *f,...) {(void)f;}
                 preexec_fn=lambda:resource.setrlimit(resource.RLIMIT_CORE,(0,0)))
         result=execute();self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('100 acknowledged turns',result.stdout)
+        result=execute('--idle');self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('one infinite wait for 10 s modeled idle',result.stdout)
         result=execute('--summary');self.assertEqual(result.returncode,0)
         self.assertEqual(result.stdout.strip(),'case=native-demo stage=2 turns=100 unauthorized=0 generation=7')
         for kind in ('bad-pointer','closed-peer','forged-fd','grant-fd','handler-fault'):
@@ -293,7 +295,7 @@ void klog(const char *f,...) {(void)f;}
                     self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                     self.assertIn('draws and services IPC PASS',result.stdout)
                     self.assertNotIn('input unavailable',result.stderr)
-                    self.assertIn('PASS F2-86 idle policy: 100 turns/s',result.stdout)
+                    self.assertIn('PASS F2-98c idle policy: 10 s no service timeout',result.stdout)
                     if mode=='--no-input':
                         self.assertIn('PASS F2-86 production idle: service_turns_per_second=100',result.stdout)
                         if not shifted:

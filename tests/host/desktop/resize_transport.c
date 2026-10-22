@@ -1,6 +1,7 @@
 /* Small channel/surface replay: duplicated received fds are read-only;
  * mappings and descriptors independently retain backing allocations.
  * SPDX-License-Identifier: MIT */
+#include "replay_base.h"
 #include "resize_transport.h"
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
@@ -9,6 +10,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+/* Completion channels are real pollable host pipes, outside the replay's
+ * surface descriptor range. Each packet fits within PIPE_BUF. */
+static int completion_out[1024];
+int ciuki_channel_pair(int fds[2])
+{
+    int a[2],b[2];
+    if (pipe(a)) return -1;
+    if (pipe(b)) { close(a[0]);close(a[1]);return -1; }
+    int raw[4]={a[0],a[1],b[0],b[1]},owned[4]={-1,-1,-1,-1};
+    int error=0;
+    for (unsigned i=0;i<4;i++) {
+        owned[i]=fcntl(raw[i],F_DUPFD_CLOEXEC,256);
+        if (owned[i]<0 || owned[i]>=1024) { error=EMFILE;break; }
+        if (fcntl(owned[i],F_SETFL,O_NONBLOCK)) { error=errno;break; }
+    }
+    for (unsigned i=0;i<4;i++) close(raw[i]);
+    if (error) { for (unsigned i=0;i<4;i++) if (owned[i]>=0)close(owned[i]);errno=error;return -1; }
+    fds[0]=owned[0];fds[1]=owned[2];
+    completion_out[fds[0]]=owned[3];completion_out[fds[1]]=owned[1];return 0;
+}
 struct surface { struct ciuki_surface_info info; uint32_t *pixels; unsigned refs, maps; };
 static struct surface surfaces[128];
 static struct { struct surface *s; int writable; } fds[256];
@@ -56,6 +79,7 @@ void *ciuki_surface_map(int fd,int prot)
 }
 int rt_close(int fd)
 {
+    if (fd>=256 && fd<1024) { if(completion_out[fd])close(completion_out[fd]);completion_out[fd]=0;return close(fd); }
     if(fd==3) {
         /* Closing the replay channel drops messages and their attachments. */
         while(in_count) {
@@ -83,6 +107,7 @@ int rt_unmap(void *pixels,size_t bytes)
 }
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
+    if (fd>=256 && fd<1024) return write(completion_out[fd],m,sizeof(*m))==(ssize_t)sizeof(*m) ? 0 : -1;
     assert(fd==3 && (flags & DONTWAIT) && !(flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)));
     if(rt_block) { errno=EAGAIN; return -1; }
     assert(out_count<256 && m->fd_count<=1);
@@ -92,6 +117,7 @@ int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 }
 int ciuki_channel_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
+    if (fd>=256 && fd<1024) { ssize_t n=read(fd,m,sizeof(*m));return n==(ssize_t)sizeof(*m) ? 1 : n==0 ? 0 : -1; }
     assert(fd==3 && flags==DONTWAIT);
     if(!in_count) { if(rt_eof) return 0; errno=EAGAIN; return -1; }
     *m=in[in_head]; in_head=(in_head+1)%256; in_count--; return 1;

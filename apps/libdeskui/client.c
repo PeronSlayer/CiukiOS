@@ -2,6 +2,8 @@
  * Desktop protocol v2.1 client glue: handshake, surface, back buffer,
  * coalesced damage, close requests, focus releases and the event loop. */
 #include "internal.h"
+#include "completion.h"
+#include <poll.h>
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
 #include <sys/mman.h>
@@ -64,6 +66,10 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     w->back = malloc((size_t)width * (size_t)height * 4);
     if (!w->back) { errno = ENOMEM; goto fail; }
     du_init(u, w->back, width, height);
+    w->completion=malloc(sizeof(*w->completion));
+    if (!w->completion) goto fail;
+    if (du_completion_init(w->completion)) { free(w->completion); w->completion=NULL; goto fail; }
+    u->wake=du_completion_notify; u->wake_ctx=w->completion;
     u->now = du_now();
     u->sound = dialog_sound; u->sound_ctx = w;
     struct ciuki_message m;
@@ -302,26 +308,43 @@ protocol_error:
     w->error = EIO; w->closed = 1; return -1;
 }
 
+int du_window_wait(struct du_window *w, uint64_t deadline)
+{
+    struct du_ui *u=w->ui;
+    if (w->closed || (w->closing==1 && w->count<16) || (w->configured && u->dirty &&
+        !w->swap_sent && !w->present_pending && w->count<16)) return 0;
+    struct pollfd fds[6]; unsigned n=0;
+    fds[n++]=(struct pollfd){w->channel,POLLIN | ((w->count ||
+        (w->configured && w->damaged && !w->manual_damage && !w->swap_sent)) ? POLLOUT : 0),0};
+    if (w->completion) fds[n++]=(struct pollfd){w->completion->fd[0],POLLIN,0};
+    for (unsigned i=0;i<u->wait_count && i<4;i++)
+        if (u->wait_fds[i]>=0) fds[n++]=(struct pollfd){u->wait_fds[i],POLLIN,0};
+    int r=poll(fds,n,du_wait_ms(du_now(),deadline));
+    if (r<0) return errno==EINTR ? 0 : -1;
+    for (unsigned i=0;i<n;i++) if (fds[i].revents&POLLNVAL) { errno=EBADF; return -1; }
+    if (w->completion && fds[1].revents) {
+        if (fds[1].revents&(POLLERR|POLLHUP)) { errno=EIO; return -1; }
+        if (du_completion_take(w->completion)) return -1;
+    }
+    return 0;
+}
+
 int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 {
     int r;
-    uint64_t started = du_now();
     while ((r = du_window_turn(w, du_now())) > 0) {
         if (idle) idle(arg);
-        /* Keep asynchronous completion callbacks responsive. A blocking
-         * channel/deadline wait needs a matching callback wake contract. */
-        uint64_t now = du_now(), next = du_next_deadline(w->ui), wait = 10000000u;
-        if (!w->configured && now >= started && now - started < 5000000000ull) wait = 1000000u;
-        if (next > now && next - now < wait) wait = next - now;
-        if (next <= now || w->ui->dirty) wait = 1000000u;
-        struct timespec pause = {.tv_sec = 0, .tv_nsec = (long)wait};
-        nanosleep(&pause, NULL);
+        if (du_window_wait(w,du_next_deadline(w->ui))) return -1;
     }
     return r;
 }
 
 void du_window_destroy(struct du_window *w)
 {
+    if (w->completion) {
+        if (w->ui) { w->ui->wake=NULL; w->ui->wake_ctx=NULL; }
+        du_completion_destroy(w->completion); free(w->completion); w->completion=NULL;
+    }
     if (w->back && w->ui) du_dialog_close(w->ui);
     release_old(w);
     if (w->pixels) { munmap(w->pixels, w->info.allocation_bytes); w->pixels = NULL; }
