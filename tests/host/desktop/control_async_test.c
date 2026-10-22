@@ -10,21 +10,32 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 static uint32_t pixels[CP_WIDTH * CP_HEIGHT], portrait[256 * 256];
 static struct cp_app a; static struct du_ui u;
 static unsigned sync_decodes, begins, polls, engine_calls, pending_polls;
 static int decode_fails;
 static char begun_path[128];
+static struct desk_image held;
 static int sync_decode(void *c, const char *p, struct desk_image *o) { (void)c; (void)p; (void)o; sync_decodes++; return -1; }
-static int begin(void *c, const char *p) { (void)c; begins++; snprintf(begun_path, sizeof(begun_path), "%s", p); return 0; }
-static int poll_done(void *c, char *p, size_t n, struct desk_image *o)
+static struct cp_preview_req last_req;
+static unsigned render_jobs, image_jobs;
+static int begin(void *c, const struct cp_preview_req *r)
+{
+    (void)c; begins++; snprintf(begun_path, sizeof(begun_path), "%s", r->path); last_req = *r;
+    if (r->image.pixels) { render_jobs++; held = r->image; } else image_jobs++;
+    return 0;
+}
+static int poll_done(void *c, struct cp_preview_done *o)
 {
     (void)c; polls++;
     if (pending_polls) { pending_polls--; return 0; }
-    snprintf(p, n, "%s", begun_path);
-    if (decode_fails) { memset(o, 0, sizeof(*o)); return 1; }
-    o->width = 64; o->height = 48; o->pixels = malloc(64 * 48 * 4); assert(o->pixels);
-    for (unsigned i = 0; i < 64 * 48; i++) o->pixels[i] = 0xff3060c0u;
+    memset(o->preview, 0, 0); o->req = last_req; o->req.image = (struct desk_image){0};
+    if (held.pixels) { o->image = held; held = (struct desk_image){0}; o->rendered = 1; for (unsigned i = 0; i < 192 * 144; i++) o->preview[i] = 0xff112233u; return 1; }
+    if (decode_fails) return 1;
+    o->image.width = 64; o->image.height = 48; o->image.pixels = malloc(64 * 48 * 4); assert(o->image.pixels);
+    for (unsigned i = 0; i < 64 * 48; i++) o->image.pixels[i] = 0xff3060c0u;
+    o->rendered = 1; for (unsigned i = 0; i < 192 * 144; i++) o->preview[i] = 0xff445566u;
     return 1;
 }
 static int display(void *c, struct ciuki_display_info *d) { (void)c; display_fixture(d); return 0; }
@@ -68,6 +79,44 @@ int main(void)
         assert(begins == 1);                 /* no retry loop after a finished or failed decode */
         cp_detach(&a); desk_image_free(&a.image);
     }
+    /* f2-88b: image already decoded; a mode change is a render-only job (image moved to the worker),
+     * the old preview stays until it is done, and the UI thread never resamples. */
+    pending_polls = 0; decode_fails = 0; render_jobs = image_jobs = 0;
+    attach(CP_DISPLAY, 0, 1); du_render(&u); settle(3);
+    assert(a.image.pixels && image_jobs == 1 && render_jobs == 0 && a.preview_valid && a.preview[0] == 0xff445566u);
+    a.cfg.wallpaper_mode = a.cfg.wallpaper_mode == CFG_WALL_FILL ? CFG_WALL_FIT : CFG_WALL_FILL; a.preview_valid = 0; u.dirty = 1;
+    pending_polls = 3; du_render(&u);
+    assert(render_jobs == 1 && a.decode_wait && !a.image.pixels && a.preview[0] == 0xff445566u);
+    a.cfg.theme[0] = a.cfg.theme[0] == 'x' ? 'y' : 'x'; a.preview_valid = 0; u.dirty = 1;   /* a change while the job runs */
+    du_render(&u); settle(1);
+    assert(render_jobs == 1 && image_jobs == 1);   /* no second job, no stuck timer: still polled */
+    settle(6);
+    assert(!a.decode_wait && a.image.pixels && a.preview_valid && sync_decodes == 0);
+    cp_detach(&a); desk_image_free(&a.image);
+    /* The worker never finishes: every UI turn stays far below the 100 ms ping bound (no decode, no resample). */
+    pending_polls = 1u << 30; decode_fails = 0;
+    attach(CP_DISPLAY, 1, 1); du_render(&u);
+    {
+        struct timespec t0, t1; unsigned long long worst = 0;
+        for (unsigned i = 0; i < 40; i++) {
+            clock_gettime(CLOCK_MONOTONIC, &t0); settle(1); clock_gettime(CLOCK_MONOTONIC, &t1);
+            unsigned long long ns = (unsigned long long)(t1.tv_sec - t0.tv_sec) * 1000000000ull + (unsigned long long)(t1.tv_nsec - t0.tv_nsec);
+            if (ns > worst) worst = ns;
+        }
+        assert(a.decode_wait && worst < 100000000ull);
+    }
+    cp_detach(&a); desk_image_free(&a.image);
+    /* f2-88b: the preview reaches the canvas by row copies, pixel-exact, in a few ms of UI time. */
+    pending_polls = 0; attach(CP_DISPLAY, 0, 1); du_render(&u); settle(3);
+    assert(a.preview_valid && a.preview[20 * 192 + 150] == 0xff445566u);
+    {
+        struct timespec t0, t1; u.dirty = 1;
+        clock_gettime(CLOCK_MONOTONIC, &t0); du_render(&u); clock_gettime(CLOCK_MONOTONIC, &t1);
+        assert(u.canvas.pixels[(52 + 20) * CP_WIDTH + 32 + 150] == 0xff445566u);
+        assert((t1.tv_sec - t0.tv_sec) * 1000000000ll + (t1.tv_nsec - t0.tv_nsec) < 50000000ll);   /* 5 ms target on the T23; 50 ms host/ASan ceiling */
+    }
+    cp_detach(&a); desk_image_free(&a.image);
+    pending_polls = 0;
     attach(CP_DISPLAY, 1, 1); du_render(&u);
     assert(strstr(a.engine_line, "status unavailable"));
     cp_detach(&a); desk_image_free(&a.image);
