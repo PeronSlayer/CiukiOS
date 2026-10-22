@@ -999,7 +999,16 @@ asks you to set the RTC; certificate pages identify an untrusted or
 malformed certificate, a hostname mismatch, or expired/not-yet-valid dates.
 Protocol errors can mean the server does not support TLS 1.2. DNS, offline,
 refused/timed-out connection and truncated-response pages describe separate
-network failures.
+network failures. These pages and the "not ready" page end with the network
+state (f6-22): no adapter, adapter stopped, no link (check the cable), no
+address yet (waiting for a DHCP server), or the address with the outcome of
+the browser's last name lookup (DNS ok, DNS lookups failing, DNS not tried
+yet). Each browser exit appends one line, with a UTC time, to
+`C:\SYSTEM\LOGS\NETSURF.LOG`: the exit reason, layout timings and the
+network state (`network=no-address`, `dns-ok`, ...); the file starts over
+after 64 KiB. The kernel's `[net] dhcp`, `[net] resolver` and `[net] stack`
+lines in `BOOT.LOG` show the lease, the first DNS answer and the adapter's
+frame counters.
 
 ## f2-30 decisions (2026-10-11)
 

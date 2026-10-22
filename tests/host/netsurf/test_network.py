@@ -290,4 +290,13 @@ class NetworkTests(unittest.TestCase):
         for path,options in cases:
             with self.subTest(path=path,options=options):self.browser(path,**options)
 
+    def test_failure_and_readiness_pages_state_the_network(self):
+        """f6-22: the T23 had a running e100 with link and no DHCP lease; the
+        pages a user sees then say so (no address / address with DNS state)."""
+        cases=[("/page",{"mode":"hostname-offline","error":"Offline: no usable network address or route. Network: no address yet (e100, link up); waiting for a DHCP server."}),
+            ("/page",{"mode":"dns","error":"DNS lookup failed: the server name could not be resolved. Network: address 192.0.2.100 (e100); DNS lookups failing."}),
+            ("/page",{"scheme":"https","mode":"browser-entropy","error":"Reload to retry. Network: address 192.0.2.100 (e100); DNS not tried yet."})]
+        for path,options in cases:
+            with self.subTest(path=path,options=options):self.browser(path,**options)
+
 if __name__=="__main__":unittest.main()

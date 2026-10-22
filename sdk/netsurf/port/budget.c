@@ -5,6 +5,7 @@
 #include <strings.h>
 #include <time.h>
 #include "budget.h"
+#include "logline.h"
 static uint64_t deadline;            /* 0: no timed layout is active */
 static enum ciuki_layout_cause last_cause;
 static uint64_t last_ns;
@@ -68,7 +69,7 @@ bool ciuki_layout_end(struct ciuki_layout_span span,bool accepted)
     /* Hardware evidence: a layout that takes a large part of the remote
      * budget is reported with its class, local or remote. */
     if(elapsed>=CIUKI_LAYOUT_LIMIT_NS/2)
-        fprintf(stderr,"[netsurf] layout slow elapsed_us=%llu class=%s accepted=%d\n",
+        ciuki_log_line("[netsurf] layout slow elapsed_us=%llu class=%s accepted=%d",
                 (unsigned long long)(elapsed/1000u),span.timed?"remote":"local",last_cause==CIUKI_LAYOUT_ACCEPTED);
     return last_cause==CIUKI_LAYOUT_ACCEPTED;
 }
