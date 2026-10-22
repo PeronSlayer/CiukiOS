@@ -170,8 +170,12 @@ static int clear_halt(struct usb_device *d, bool in)
 }
 static int reset_recovery(struct usb_device *d)
 {
-    /* Class reset preserves toggles; only successful halt clear sets DATA0. */
+    /* Class reset preserves toggles; only successful halt clear sets DATA0.
+     * f1-96b: a device aborting a data phase may NAK the reset's status
+     * stage; Linux usb_stor_reset_common allows 5 s before giving up. */
+    d->control_timeout_ms=USB_STORAGE_RESET_MS;
     int e=usb_control(d,0x21,0xff,0,d->storage.interface,0,0);
+    d->control_timeout_ms=0;
     if (!e) e=clear_halt(d,true);
     if (!e) e=clear_halt(d,false);
     klog("[usb-storage] reset addr=%u result=%d",d->address,e);
@@ -199,9 +203,11 @@ static int fault(struct usb_device *d, const char *reason, bool reset)
     }
     return -FS_EIO;
 }
-/* f1-96: BOT_READ_BATCH is a multi-sector READ(10). After a STALL or CSW
- * error, where a single-sector read would be retried once, a batch reports
- * BOT_FALLBACK and the caller re-issues the range one sector per command. */
+/* f1-96: BOT_READ_BATCH is a multi-sector READ(10). f1-96b: after any
+ * recoverable transport fault (NAK timeout once the UHCI engine retried the
+ * same chain, STALL, CSW error) and a successful Reset Recovery, where a
+ * single-sector read would be retried once, a batch reports BOT_FALLBACK and
+ * the caller re-issues the range with the next ladder size (128, 8, 1). */
 enum bot_policy { BOT_STRICT, BOT_FIRST_INQUIRY, BOT_OPTIONAL_MODE, BOT_READ_RETRY, BOT_READ_BATCH };
 enum { BOT_RETRY_INQUIRY=2, BOT_MODE_UNAVAILABLE=3, BOT_RETRY_READ=4, BOT_FALLBACK=5 };
 static int transport_fault(struct usb_device *d, const char *reason, enum bot_policy policy)
@@ -287,10 +293,11 @@ static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len
 {
     int e=bot(d,cdb,len,in,data,bytes,transferred,policy);
     if (e==BOT_RETRY_READ) {
-        /* f1-96: after a STALL or CSW error (not a NAK timeout, which keeps
-         * the f1-74 single same-size retry) reset recovery restored framing
-         * and the batch is re-issued one sector per command. */
-        if (policy==BOT_READ_BATCH && d->storage.trace.result!=-USB_ETIMEDOUT) return BOT_FALLBACK;
+        /* f1-96b: reset recovery restored framing. A batch steps down the
+         * ladder instead of a same-size retry: a NAK timeout reaches here
+         * only after the HC engine retried the same TD chain once. A single
+         * sector keeps the f1-74 reset-qualified retry. */
+        if (policy==BOT_READ_BATCH) return BOT_FALLBACK;
         klog("[usb-storage] retry addr=%u cmd=%02x attempt=2",d->address,cdb[0]);
         e=bot(d,cdb,len,in,data,bytes,transferred,BOT_STRICT);
     }
@@ -316,7 +323,7 @@ static int command_policy(struct usb_device *d, const uint8_t *cdb, unsigned len
     }
     /* f1-96: a batch whose data stage was STALLed, or which the device
      * rejected as ILLEGAL REQUEST (an invalid CDB field such as the length),
-     * is re-read one sector per command. The pipe was cleared before CSW. */
+     * steps down the transfer ladder. The pipe was cleared before CSW. */
     if (policy==BOT_READ_BATCH && (s->trace.data_stalled || s->sense_key==5) && live(d)) {
         s->trace.fault_reason=s->trace.data_stalled ? "data_stall" : "illegal_request";
         return BOT_FALLBACK;
@@ -334,13 +341,21 @@ static int ready(struct usb_device *d)
 { uint8_t cdb[6]={0}; return command(d,cdb,6,false,0,0); }
 static int flush_locked(struct usb_device *d)
 { uint8_t cdb[10]={0x35}; return command(d,cdb,10,false,0,0); }
+/* f1-96b: one ladder step down from the failed command length: more than
+ * USB_STORAGE_FALLBACK_SECTORS sectors drop to that size, a shorter command
+ * to one sector. The device keeps the lowered length (as for f1-96's STALL
+ * fallback); a re-plug starts a new device record at the negotiated size. */
 static void transfer_fallback(struct usb_device *d, uint8_t cmd, uint32_t lba, uint32_t sectors,
                               const char *reason, bool resend)
 {
     struct usb_storage *s=&d->storage;
-    klog("[usb-storage] max_sectors addr=%u cmd=%02x lba=%u sectors=%u from=%u to=1 reason=%s resend=%u fallbacks=%u",
-         d->address,cmd,lba,sectors,s->max_sectors,reason ? reason : "unknown",resend,++s->transfer_fallbacks);
-    s->max_sectors=1; s->read_qualified=1;
+    uint32_t from=s->max_sectors ? s->max_sectors : 1;
+    uint32_t to=sectors>USB_STORAGE_FALLBACK_SECTORS ? USB_STORAGE_FALLBACK_SECTORS : 1;
+    if (to>from) to=from;
+    klog("[usb-storage] max_sectors addr=%u cmd=%02x lba=%u sectors=%u from=%u to=%u reason=%s resend=%u fallbacks=%u",
+         d->address,cmd,lba,sectors,from,to,reason ? reason : "unknown",resend,++s->transfer_fallbacks);
+    s->max_sectors=to;
+    if (s->read_qualified>to) s->read_qualified=to;
 }
 static bool block_take(struct usb_device *d)
 {
@@ -416,7 +431,7 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
             }
         }
         /* An issued write is never resent; a multi-sector failure still
-         * records the one-sector limit for this device's diagnostics. */
+         * records the next ladder size for this device's diagnostics. */
         if (e && write && n>1 && s->max_sectors>1) {
             transfer_fallback(d,cmd,(uint32_t)(lba+done),n,s->trace.data_stalled ? "data_stall" :
                 s->trace.fault_reason ? s->trace.fault_reason : s->trace.csw_status ? "csw_status" : "write_failed",false);
@@ -425,8 +440,12 @@ static int block_io(struct blkdev *b, uint64_t lba, uint32_t count, void *buf, b
         if (e && !b->quarantined) e=fault(d,write ? "write_failed" : "read_failed",false);
     }
     usb_host_drop(d->host);
-    /* Outside the host reservation: the queue then issues single sectors. */
-    if (lowered) blk_queue_set_limits(&s->requests,512u,512u);
+    /* Outside the host reservation: the queue then issues commands of the
+     * lowered ladder size (8 sectors, then one). */
+    if (lowered) {
+        uint32_t bytes=(s->max_sectors ? s->max_sectors : 1)*512u;
+        blk_queue_set_limits(&s->requests,bytes,bytes);
+    }
     return e;
 }
 static int block_read(struct blkdev *b,uint64_t lba,uint32_t n,void *buf)

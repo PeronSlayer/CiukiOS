@@ -92,6 +92,10 @@ void usb_hub_scan(struct usb_device *d)
                 if (previous & 1) record(d, p, s, c, "disconnect", 0);
                 log->quarantine_reported = false;
                 if (child) { usb_detach(child, "disconnected"); d->hub_child[p] = 0; }
+                /* f1-96b: disconnect releases the port for a new device. */
+                d->hub_blocked[p] = false;
+                klog("[usb] release hub=%u port=%u controller=%s reason=disconnect",
+                     d->address, p + 1, h->owner);
             }
             if (log->pending) record(d, p, s, c, log->pending, log->result);
             d->hub_status[p] = (uint16_t)s;

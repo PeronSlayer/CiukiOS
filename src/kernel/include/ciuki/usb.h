@@ -46,9 +46,26 @@
 #define USB_BULK_BATCH 128u
 /* f1-96: BOT READ(10)/WRITE(10) transfer limit. Windows limits USB mass
  * storage to 128 sectors and Linux to 240 by default; our block requests
- * are at most BLKDEV_READ_SECTORS. A STALL/CSW failure of a multi-sector
- * command drops the device to one sector per command. */
+ * are at most BLKDEV_READ_SECTORS. A failed multi-sector command steps the
+ * device down the f1-96b ladder (128, 8, then one sector per command). */
 #define USB_STORAGE_MAX_SECTORS 128u
+/* f1-96b: recovery ladder of a failed multi-sector READ(10): 128 -> 8 -> 1
+ * sectors per command, each step after a successful BOT Reset Recovery. */
+#define USB_STORAGE_FALLBACK_SECTORS 8u
+/* f1-96b: the Bulk-Only Mass Storage Reset class request waits up to 5 s for
+ * its status stage (Linux usb_stor_reset_common, 5*HZ); other control
+ * packets keep USB_TIMEOUT_MS. */
+#define USB_STORAGE_RESET_MS 5000u
+/* f1-96b: UHCI bulk data stage without progress. Early Intel controllers
+ * sometimes leave the QH element on a TD that completed successfully (Linux
+ * b761d9d867bc, uhci_advance_check); the HC writes the element right after
+ * the TD status (UHCI 1.1 section 3.4.1.3 steps 6/9, ICH3-M 5.16.2.2 steps
+ * 10/11), so an element still on that TD after USB_UHCI_ADVANCE_FRAMES frame
+ * boundaries is stuck and is advanced by hand. A stage without progress for
+ * USB_BULK_STALL_MS (Linux QH_WAIT_TIMEOUT) whose next TD was never executed
+ * or is off the QH element is unlinked, retired and relinked once. */
+#define USB_UHCI_ADVANCE_FRAMES 4u
+#define USB_BULK_STALL_MS 200u
 #define USB_HID_DESCRIPTOR_MAX 512u
 #define USB_MOUSE_REPORTS 8u
 struct usb_mouse_field { uint16_t bit; uint8_t size; };
@@ -143,8 +160,11 @@ struct usb_storage {
     uint32_t bind_packets, bind_poll_frames, bind_retire_frames;
     /* f1-96: negotiated sectors per READ(10)/WRITE(10); the largest READ(10)
      * that completed with a passed CSW on this medium (writes never use a
-     * longer transfer); fallbacks to one sector, recorded. */
+     * longer transfer); ladder fallbacks (128, 8, 1), recorded. */
     uint32_t max_sectors, read_qualified, transfer_fallbacks;
+    /* f1-96b: QH elements advanced by hand (early-Intel erratum) and data
+     * stages relinked once after a stall, for this device. */
+    uint32_t advance_fixes, relinks;
 };
 /* Coalesce suppressed events; root and external-hub ports use the same budget. */
 struct usb_port_log {
@@ -163,6 +183,7 @@ struct usb_device {
     uint16_t vendor, product;
     uint8_t address, ep0, class_code, root_port, parent, port, hub_ports, config;
     bool present, configured, quarantined, low_speed;
+    uint16_t control_timeout_ms; /* f1-96b: nonzero only around a BOT class reset */
     struct usb_hid hid[USB_HID_MAX];
     struct usb_storage storage;
     struct usb_packet_trace packet_trace;
@@ -233,7 +254,7 @@ static inline unsigned usb_packet_budget(struct usb_device *d, unsigned ep, bool
      * software clock. Packet engines stop after two linked HC frames;
      * this is only the fail-closed watchdog, including a frozen clock. */
     if (periodic) return USB_PERIODIC_WATCHDOG_MS;
-    unsigned budget = USB_TIMEOUT_MS;
+    unsigned budget = !ep && d->control_timeout_ms ? d->control_timeout_ms : USB_TIMEOUT_MS;
     if (ep && d->storage.bulk_deadline) {
         int64_t left = (int64_t)(d->storage.bulk_deadline - now);
         if (left <= 0) return 0;

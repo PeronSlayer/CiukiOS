@@ -1380,6 +1380,7 @@ reserved zeros. No hardware address or user DMA mapping is returned.
 | AUDIO_REFILL_READ | 0x4107 | ciuki_audio_command / 16 |
 | MIXER_GET_MASTER | 0x4201 | ciuki_mixer_master / 32 |
 | MIXER_SET_MASTER | 0x4202 | ciuki_mixer_master / 32 |
+| MIXER_REFRESH_MASTER | 0x4204 | ciuki_mixer_master / 32 (f1-100) |
 
 The exact fields below are consecutive u32 unless marked u64/i32. All records
 start with version,size. U8=1, S16LE=2; caps formats uses bits 0/1.
@@ -1465,6 +1466,20 @@ observations, not physical addresses or an assertion of audible sound.
 Fetch and owned-IRQ counters are monotonic over transport stops. Getters
 accept a returned record again with its reserved word zero. No existing
 record size or operation number changes.
+
+### F1-100 amendment: requested hardware master read (2026-10-22)
+
+`MIXER_REFRESH_MASTER` (4204h) uses the `ciuki_mixer_master` record and the
+copied version/size/reserved rules of `MIXER_GET_MASTER`. It needs the
+delegated control handle (EACCES on a public open). It asks the kernel to
+read the hardware master once (the ThinkPad EC volume register; nothing on
+other machines), asynchronously in the EC worker and at most once per
+second, and returns the current master like `MIXER_GET_MASTER`; a changed
+hardware state appears in later reads. The desktop issues it when the user
+opens the tray volume popup. Reason: with no periodic EC traffic (f1-100,
+`docs/validation/f1-100-ec-traffic.md`) the mirror of the hardware volume
+keys is updated only by an explicit user action. No existing number or
+record changes.
 
 ## F2-33 amendment: process enumeration and termination requests (2026-10-11)
 

@@ -1143,7 +1143,12 @@ static void mixer_read(struct desktop *d)
     int fd=d->mixer_fd;
     if (fd<0) fd=observer_open(&d->mixer_observer_fd,"/dev/mixer"); /* public, read-only */
     struct ciuki_mixer_master m={.version=CIUKI_AUDIO_VERSION,.size=sizeof(m)};
-    if (fd<0 || ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0) {
+    /* f1-100: no periodic hardware (EC) reads; the popup's open (want_reload
+     * bit 8) asks the kernel for one on the control handle, the plain read
+     * follows otherwise. */
+    int refreshed=(d->sh.want_reload&8) && d->mixer_fd>=0 && fd==d->mixer_fd &&
+        !ciuki_devctl(fd,MIXER_REFRESH_MASTER,&m,sizeof(m));
+    if (fd<0 || (!refreshed && ciuki_devctl(fd,MIXER_GET_MASTER,&m,sizeof(m))<0)) {
         d->sh.mixer_state=-1;
         observer_close(&d->mixer_observer_fd);
     }

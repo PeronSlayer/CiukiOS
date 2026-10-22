@@ -151,11 +151,14 @@ The exact `BOOT.CFG` token `usbscan=0` (f1-87 diagnostic) keeps the initial
 USB enumeration and stops the periodic USB rescans; the loader only accepts
 the token and leaves it in the copied boot options for the kernel.
 
-The exact `BOOT.CFG` token `ecpoll=0` (f1-94 diagnostic) stops the ThinkPad
-EC volume poll, which otherwise runs at 1 Hz: no periodic 62h/66h traffic,
-the EC keeps driving its amplifier from the volume keys, and the desktop
-mixer no longer follows those keys until the next boot without the token.
-The loader only accepts the token and leaves it in the copied boot options.
+The ThinkPad EC volume poll is off by default since f1-100: each EC
+transaction costs the T23 two 2.1 ms SMIs, so there is no periodic 62h/66h
+traffic. The EC keeps driving its amplifier from the volume keys, and the
+desktop mixer follows those keys when the user opens the tray volume popup.
+The exact `BOOT.CFG` token `ecpoll=1` (diagnosis) restores the 1 Hz poll;
+`ecpoll=0` (the f1-94 token) keeps it off and wins over `ecpoll=1`. The
+loader only accepts the two tokens and leaves them in the copied boot
+options.
 
 ## Shutting down
 

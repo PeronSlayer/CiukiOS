@@ -367,7 +367,9 @@ void usb_device_quarantine(struct usb_device *d, const char *reason)
              * port, retaining devices attached to other root ports. */
             usb_device_quarantine(hub, "hub_disable_failed");
     }
-    /* A device fault cannot authorize re-enumerating that port until reboot. */
+    /* A device fault cannot authorize re-enumerating that port while the
+     * device stays connected. f1-96b: an observed disconnect (CCS=0)
+     * releases the port; the next connection is a new device generation. */
     klog("[usb] quarantine device addr=%u reason=%s stage=%s", d->address, reason,
          d->storage.trace.stage ? d->storage.trace.stage : "enumeration");
 }
@@ -782,6 +784,12 @@ void usb_step(struct usb_host *h)
                     if (previous & USB_PORT_CONNECTED) usb_port_record(h, p, "disconnect", 0);
                     log->quarantine_reported = false;
                     if (child) { usb_detach(child, "disconnected"); h->root_child[p] = 0; }
+                    /* f1-96b: the quarantined device is physically gone. A
+                     * re-plug is debounced, reset and enumerated as a new
+                     * device; a persisting overcurrent blocks it again. */
+                    h->root_blocked[p] = false;
+                    klog("[usb] release port=%u controller=%s reason=disconnect tick=%llu",
+                         p + 1, h->owner, h->io.now(h->io.cookie));
                 }
                 if (log->pending) usb_port_record(h, p, log->pending, log->result);
                 h->root_status[p] = s;

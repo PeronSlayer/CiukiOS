@@ -37,6 +37,7 @@ static void test_poll_handles(void)
         desktop_poll_host_check(1);
     }
     assert(network_opens==opens && mixer_queries==queries+100 && !mixer_sets);
+    assert(!mixer_refreshes); /* f1-100: periodic observation never asks for a hardware read */
     poll_snapshot=0;
     /* An extra media handle still fails against the warmed observer baseline. */
     desktop_poll_host_leak(1); desktop_poll_host_check(0);
