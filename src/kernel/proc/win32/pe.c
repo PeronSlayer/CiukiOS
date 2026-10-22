@@ -1,4 +1,7 @@
 /* Initial PE recognition/seed mapping; import binding belongs to ntdll.
+ * Separate streaming recognition/seed step, not the F5/F6 load mechanism.
+ * It cannot execute a driver or bind imports; ntdll revalidates the seed
+ * with sdk/pe/pe.c. See docs/design/ndis-loader-boundary.md.
  * Validation follows the f5-02 structural fixture parser.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
