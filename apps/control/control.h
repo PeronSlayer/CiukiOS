@@ -47,6 +47,13 @@ struct cp_preview_done {
     unsigned decode_ms, render_ms;
     uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
 };
+#define CP_NET_TEST 4u /* UI worker command; never passed to syscall 90. */
+struct cp_network_result {
+    struct ciuki_net_control adapters[2];
+    unsigned count;
+    int error;
+    char message[96];
+};
 struct cp_host {
     int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
     int (*save)(void *, const char *text, size_t length);
@@ -74,6 +81,8 @@ struct cp_host {
     int (*display)(void *, struct ciuki_display_info *);              /* ciuki_display_query: 0 or -errno */
     int (*engine)(void *, struct ciuki_accel_info *);
     int (*network)(void *, struct ciuki_net_state *);
+    int (*network_begin)(void *, unsigned, const struct ciuki_net_control *, const char *);
+    int (*network_poll)(void *, struct cp_network_result *);
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
@@ -94,6 +103,12 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct cp_network_result network;
+    struct ciuki_net_config network_edit;
+    struct du_item network_items[2], network_tabs[3];
+    char network_names[2][64], network_message[96], network_test_name[128];
+    unsigned network_selected, network_tab;
+    int network_busy, network_loaded, building;
     struct desk_uninstall_entry uninstall[CP_PROGRAM_MAX];
     struct du_item uninstall_items[CP_PROGRAM_MAX];
     unsigned uninstall_count, uninstall_selected;

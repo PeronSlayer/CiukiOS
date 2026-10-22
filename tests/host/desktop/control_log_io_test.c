@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT
  * Execute the native applet's positioned reader on a host fixture. */
 #include "replay_base.h"
+#undef IPPROTO_IP
+#undef IPPROTO_TCP
+#undef IPPROTO_UDP
+#include <netinet/in.h>
 int cp_test_open(const char *,int,...);
 ssize_t cp_test_pread(int,void *,size_t,off_t);
 #define main cp_native_main

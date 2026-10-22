@@ -159,6 +159,8 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
     }
     bool authorized = parent == proc_supervisor() || (display && input);
     child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
+    child->network_capability = authorized &&
+        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
     child->programs_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
 }

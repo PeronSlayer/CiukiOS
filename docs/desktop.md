@@ -219,10 +219,21 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   notifications open below the top bar. See [shell design](design/desktop-shell.md).
 - **Network status:** the tray network icon is left of the speaker. It shows
   link-up, link-down or no-adapter state; its tooltip identifies the cable or
-  adapter state, and its popup shows the driver, MAC address, link and driver
-  state. The desktop refreshes this read-only snapshot every two seconds.
+  adapter state. Clicking it opens Control Panel → Connections → Network;
+  if the Control Panel is absent, a small status popup remains available.
+  The desktop refreshes this read-only snapshot every two seconds.
   Address configuration and socket activity are provided by the kernel's
   lwIP-backed network service, not by the tray.
+  Network lists the detected adapters. Adapter Properties shows driver,
+  PCI/MAC, IRQ/I/O/MMIO, cable and supported media options; its checkbox enables
+  or disables the interface. TCP/IP Properties selects automatic DHCP or a
+  static address, mask and gateway, up to three DNS servers, host and domain.
+  Apply saves the settings for that PCI/MAC and applies them immediately.
+  Renew and Release control a DHCP lease. Status shows effective addresses,
+  lease time, packets and errors; Refresh updates it. Test resolves the entered
+  name through the system resolver and connects to the gateway on TCP port 80,
+  showing success, refusal or timeout separately. A refused port can still
+  belong to a reachable gateway; the test does not certify Internet access.
 - **Volume:** the supervisor delegates the writable `/dev/mixer` handle to the
   desktop (`CIUKI_MIXER_FD`, F4 contract). The tray popup (slider, Mute)
   applies `MIXER_SET_MASTER` through it; without the handle the popup shows

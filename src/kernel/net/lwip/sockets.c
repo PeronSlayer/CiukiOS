@@ -1065,6 +1065,16 @@ static bool resolve_overridden(const char *name, uint32_t *address)
 int net_resolve(struct process *p, const char *name, uint32_t *address, int *status)
 {
     if (!dns_name(name)) return -EINVAL;
+    char qualified[254], domain[128]; bool dot = false;
+    for (const char *s = name; *s; s++) if (*s == '.') dot = true;
+    if (!dot) {
+        net_stack_search_domain(domain);
+        if (domain[0]) {
+            size_t n = strlen(name), d = strlen(domain);
+            if (n+1+d >= sizeof(qualified)) return -EINVAL;
+            memcpy(qualified, name, n); qualified[n++] = '.'; memcpy(qualified+n, domain, d+1); name = qualified;
+        }
+    }
     if (resolve_overridden(name, address)) { *status = 0; return 0; }
     struct dns_request *r = NULL; sys_prot_t f = sys_arch_protect();
     for (unsigned i = 0; i < CIUKI_DNS_MAX; i++) if (!lookups[i].used) { r = &lookups[i]; memset(r, 0, sizeof(*r)); r->used = true; break; }

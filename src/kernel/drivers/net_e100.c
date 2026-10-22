@@ -99,6 +99,21 @@ static int e100_mii(struct netif *d, unsigned phy, unsigned reg, uint16_t *value
     }
     return -110;
 }
+int net_e100_media(struct netif *d, unsigned speed, unsigned duplex)
+{
+    uint16_t old;
+    if (e100_mii(d, d->phy, 0, &old)) return -5;
+    uint16_t value = (uint16_t)(old & ~(0x2000u | 0x1000u | 0x0200u | 0x0100u));
+    value |= speed ? (speed == 100 ? 0x2000 : 0) | (duplex == 2 ? 0x0100 : 0) : 0x1200;
+    net_write(d, 0x10, (1u << 26) | ((unsigned)d->phy << 21) | value, 4);
+    for (unsigned i = 0; i < 20; i++) {
+        uint32_t mdi = net_read(d, 0x10, 4);
+        if (mdi == UINT32_MAX) return -5;
+        if (mdi & (1u << 28)) return 0;
+        d->io.sleep(d->io.cookie, 1);
+    }
+    return -110;
+}
 static int e100_init(struct netif *d)
 {
     e100_irq_enable(d, false);
@@ -254,6 +269,17 @@ static enum net_link e100_link(struct netif *d)
     uint16_t status;
     if (e100_mii(d, d->phy, 1, &status) || e100_mii(d, d->phy, 1, &status) || status == 0xffff) {
         d->fault_pending = true; return NET_LINK_UNKNOWN;
+    }
+    d->speed = d->duplex = 0;
+    if (status & 4) {
+        uint16_t control, local, peer;
+        if (!e100_mii(d, d->phy, 0, &control)) {
+            if (!(control & 0x1000)) { d->speed = control & 0x2000 ? 100 : 10; d->duplex = control & 0x100 ? 2 : 1; }
+            else if ((status & 0x20) && !e100_mii(d, d->phy, 4, &local) && !e100_mii(d, d->phy, 5, &peer)) {
+                unsigned common = local & peer;
+                if (common & 0x1e0) { d->speed = common & 0x180 ? 100 : 10; d->duplex = common & 0x100 ? 2 : common & 0x80 ? 1 : common & 0x40 ? 2 : 1; }
+            }
+        }
     }
     return (status & 4) ? NET_LINK_UP : NET_LINK_DOWN;
 }

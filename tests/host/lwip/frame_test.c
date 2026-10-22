@@ -50,6 +50,11 @@ int main(void)
     CHECK(!net_stack_transmit(0,frame,60));devices[0].generation++;net_stack_driver_service();CHECK(stale==1 && !outgoing[0].count);
     CHECK(!net_stack_transmit(0,frame,60));devices[0].quarantined=true;net_stack_driver_service();CHECK(!outgoing[0].count);
     CHECK(net_stack_transmit(0,frame,60)==-ENETDOWN);devices[0].quarantined=false;
+    unsigned committed=transmits;
+    CHECK(!net_stack_transmit(0,frame,60));devices[0].config_epoch++;
+    net_stack_driver_service();CHECK(transmits==committed && !outgoing[0].count);
+    devices[0].administratively_down=true;CHECK(net_stack_transmit(0,frame,60)==-ENETDOWN);
+    devices[0].administratively_down=false;
     input(&devices[1],frame,60,NULL);CHECK(inputs==1 && !received[0]);
     CHECK(net_stack_transmit(2,frame,60)==-EINVAL && net_stack_transmit(0,frame,1515)==-EINVAL);
     for(unsigned i=0;i<2;i++)for(unsigned n=0;n<8;n++)CHECK(!net_stack_transmit(i,frame,60));

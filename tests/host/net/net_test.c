@@ -183,7 +183,7 @@ struct model {
     uint32_t cfg_address, pointer, rfd_pointer;
     unsigned producer, writes, packet_io, read_cost, stop_count;
     unsigned ee_pins, ee_count, ee_opcode, ee_address, ee_sample, ee_bits;
-    uint16_t ee_words[256], mii_status;
+    uint16_t ee_words[256], mii_status, phy_control, phy_peer;
     unsigned mii_reads;
     unsigned rfd_count_flags, scb_write_count, command_busy_reads;
     unsigned rfd_status_extra; /* f6-22: error/information bits a test adds */
@@ -219,8 +219,10 @@ static uint32_t model_read(void *arg, uint16_t port, unsigned width)
         unsigned phy = (model_get(h->reg + 0x10, 4) >> 21) & 31;
         if (h->mdi_stuck) return 0;
         h->mii_reads++;
-        uint16_t value = phy == 1 ? h->mii_status : 0xffff;
-        if (phy == 1 && h->latch_low) { value &= ~4u; h->latch_low = false; }
+        unsigned command=model_get(h->reg+0x10,4),r=(command>>16)&31;
+        uint16_t value=phy!=1 ? 0xffff : r==1 ? h->mii_status : r==0 ? h->phy_control : r==4 ? 0x1e0 : r==5 ? h->phy_peer : 0;
+        if(((command>>26)&3)==1 && phy==1 && r==0){h->phy_control=(uint16_t)command;value=h->phy_control;}
+        if (phy == 1 && r==1 && h->latch_low) { value &= ~4u; h->latch_low = false; }
         return (1u << 28) | value;
     }
     if (h->kind == M_NE) {
@@ -368,7 +370,7 @@ static void model_setup(struct model *h, struct netif *d, enum model_kind kind)
     map_calls = unmap_calls = 0; map_fail = false;
     g_ticks = cycles = sleeps = yields = 0; host_flags = 0x200;
     sleep_hook = 0; sleep_hook_active = false;
-    h->kind = kind; h->device = d; h->ee_bits = 6; h->ee_sample = 1; h->mii_status = 0x782d; h->tx_auto = true;
+    h->kind = kind; h->device = d; h->ee_bits = 6; h->ee_sample = 1; h->phy_control=0x1000;h->phy_peer=0x1e0;h->mii_status = 0x782d; h->tx_auto = true;
     h->ee_words[0] = 0x5452; h->ee_words[1] = 0x1200; h->ee_words[2] = 0x5634;
     const uint8_t mac[6] = {0x52,0x54,0,0x12,0x34,0x56};
     memcpy(h->reg, mac, 6);
@@ -471,7 +473,7 @@ static void test_paths(enum model_kind kind)
     } else if (kind == M_E100) {
         h.mii_status &= ~4u; CHECK(d.driver->link_state(&d) == NET_LINK_DOWN);
         h.mii_status |= 4; h.latch_low = true; unsigned before = h.mii_reads;
-        CHECK(d.driver->link_state(&d) == NET_LINK_UP && h.mii_reads == before + 2);
+        CHECK(d.driver->link_state(&d) == NET_LINK_UP && h.mii_reads == before + 5);
     } else {
         CHECK(d.driver->link_state(&d) == NET_LINK_UNKNOWN);
         d.next_page = h.page1[7] = NE_STOP - 1; model_receive(&h, frame, NET_FRAME_MAX - 1, false); netif_poll(&d);
@@ -714,6 +716,7 @@ static void test_public_state(void)
 }
 #include "second_set_test.c"
 #include "e100_irq_test.c"
+#include "media_test.inc"
 static unsigned callback_work_us;
 static bool timed_e100_interrupt(struct netif *d)
 {
@@ -757,6 +760,8 @@ static void test_smi_budget(void)
 }
 int main(void)
 {
+    setvbuf(stdout,NULL,_IOLBF,0);
+    test_media_options();
     test_smi_budget();
     test_e100_irq();
     for (enum model_kind kind = M_RTL; kind <= M_NE; kind++) { test_paths(kind); test_faults(kind); test_admission(kind); }

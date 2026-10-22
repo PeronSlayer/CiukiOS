@@ -10,6 +10,12 @@
 static struct desktop d;
 static char texts[24][128];
 static unsigned text_count;
+static unsigned settings_launches;
+static int launch_settings(struct desktop *desk,const struct desk_program *program)
+{
+    assert(!strcmp(program->name,"control") && desk->launch_arg && !strcmp(desk->launch_arg,"--panel=network"));
+    settings_launches++;return 123;
+}
 static const uint32_t *store(const char *name, unsigned size)
 { return du_icon_argb(name, size); }
 void __real_du_text(struct du_canvas *, int, int, const char *, uint32_t);
@@ -115,8 +121,13 @@ int main(void)
     click(nx + 20, ny); assert(!d.sh.network_open && d.sh.volume_open);
     click(nx, ny); assert(d.sh.network_open && !d.sh.volume_open);
     click(10, 10); assert(!d.sh.network_open);
+    desk_menu_close(&d);
+    n.state=CIUKI_NET_STOPPED;n.link=CIUKI_NET_LINK_UP;strcpy(n.reason,"disabled");desk_shell_network_update(&d,&n);
+    render();check_icon("network-offline",1);hover(nx,ny);assert(drawn("Network: disabled"));
+    strcpy(d.programs[0].name,"control");strcpy(d.programs[0].path,"/Programs/control");d.program_count=1;d.launch=launch_settings;
+    click(nx,ny);assert(settings_launches==1 && !d.sh.network_open);
     free(d.pixels); d.pixels = 0; desk_render_release(&d);
     assert(!fake_live());
-    puts("PASS network tray: three Tango icons/disabled rendering, exact tooltips, popup, carrier/quarantine, two-second poll and bounded damage");
+    puts("PASS network tray: three Tango icons/disabled rendering, exact tooltips, fallback popup, Control Panel launch, carrier/quarantine, two-second poll and bounded damage");
     return 0;
 }

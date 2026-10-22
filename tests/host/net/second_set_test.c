@@ -12,7 +12,7 @@ struct second_model {
     unsigned ee_count, ee_command, ee_address, ee_pins, ee_sample, ee_bits;
     unsigned mii_count, mii_word, mii_pins, mii_sample, mii_reg, mii_reads;
     unsigned phy_address, tx_status, command, delay_calls;
-    bool absent, reset_stuck, init_stuck, stop_stuck, mii_stuck, ee_stuck;
+    bool absent, reset_stuck, init_stuck, stop_stuck, mii_stuck, ee_stuck, phy_reset_stuck;
     bool tx_auto, tx_error, wire_done, dma_prepared, qemu_mii_edge;
 };
 static const uint8_t second_mac[6] = {0x52,0x54,0,0x12,0x34,0x56};
@@ -185,6 +185,18 @@ static void second_write(void *arg, uint16_t port, uint32_t v, unsigned width)
             unsigned address = (v >> 8) & 0xff; CHECK(address < 3);
             unsigned word = second_mac[address * 2] | (unsigned)second_mac[address * 2 + 1] << 8;
             h->intel[r / 4] = (word << 16) | 0x10;
+        }
+        if (r == 0x20 && !h->mii_stuck) {
+            unsigned phy=(v>>21)&31,reg=(v>>16)&31,op=(v>>26)&3;
+            if(phy!=1)h->intel[r/4]=1u<<30;
+            else {
+                if(op==1) {
+                    h->phy_regs[reg]=(uint16_t)v;
+                    if(reg==0 && (v&0x8000)) { h->phy_regs[16]&=(uint16_t)~0x800u;h->phy_regs[20]&=(uint16_t)~0x70u; }
+                }
+                if(reg==0 && !h->phy_reset_stuck)h->phy_regs[0]&=(uint16_t)~0x8000u;
+                h->intel[r/4]=(1u<<28)|h->phy_regs[reg];
+            }
         }
         if (r == 0x3818 && d->tx_used[0]) second_tx(h);
         return;

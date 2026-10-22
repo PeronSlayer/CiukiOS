@@ -12,6 +12,7 @@
 #include "lwip/stats.h"
 #include "lwip/mem.h"
 #include <ciuki/net_stack.h>
+#include <ciuki/net_control.h>
 #include <ciuki/files.h>
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
@@ -118,7 +119,7 @@ static unsigned count_records(unsigned from,const char *prefix)
     return n;
 }
 void net_stack_driver_counters(unsigned index,struct net_stack_counters *out)
-{ CHECK(index==0);out->rx=41;out->tx=42;out->rx_errors=3;out->tx_errors=0;out->dropped=1; }
+{ CHECK(index<2);out->rx=41;out->tx=42;out->rx_errors=3;out->tx_errors=0;out->dropped=1; }
 static void udp_reply(const unsigned char *request,unsigned sport,unsigned dport,const void *data,unsigned bytes,bool broadcast)
 {
     unsigned char f[1514]={0};
@@ -158,6 +159,7 @@ static void tcp_reply(const unsigned char *request,uint32_t sequence,uint32_t ac
 }
 int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
 {
+    if(index==1)return 0;
     CHECK(index==0 && bytes>=14 && bytes<=1514); const unsigned char *f=data;
     memcpy(output_frame,data,bytes);output_bytes=bytes;
     if (get16(f+12)==0x806) {
@@ -325,7 +327,7 @@ static void refusal_tests(void)
     CHECK(net_socket_create(&client,10,SOCK_STREAM,0)==-EAFNOSUPPORT);
     CHECK(net_socket_create(&client,AF_INET,3,0)==-ESOCKTNOSUPPORT);
     CHECK(net_socket_create(&client,AF_INET,SOCK_STREAM,17)==-EPROTONOSUPPORT);
-    CHECK(call(CIUKI_SYS_NETCTL,0,0,0,0)==-ENOSYS);
+    CHECK(call(CIUKI_SYS_NETCTL,0,0,0,0)==-EPERM);
     struct ciuki_pollfd entries[3]={{-1,POLLIN,7},{127,POLLIN,7},{127,POLLOUT,7}};
     CHECK(net_poll(&client,entries,3,0,NULL)==2 && !entries[0].revents && entries[1].revents==POLLNVAL);
     entries[0].events=0x200;CHECK(net_poll(&client,entries,1,0,NULL)==-EINVAL);
@@ -614,6 +616,7 @@ static void cycles(void)
 }
 #include "amendment.inc"
 #include "dos_bridge.inc"
+#include "netctl.inc"
 #include "f624.inc"
 int main(int argc,char **argv)
 {
@@ -624,6 +627,9 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--f6-24")){
         CHECK(!net_stack_attach(0,client_mac,true));check_address(PP_HTONL(0xc0000264));
         f624_tcp_tests();CHECK(!live_pins);cu_host_shutdown();return 0;
+    }
+    if(argc>1) {
+        CHECK(!net_stack_attach(0,client_mac,true));retry_acquisition();netctl_tests();cu_host_shutdown();return 0;
     }
     refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();

@@ -71,9 +71,9 @@
 #define LWIP_DHCP_DOES_ACD_CHECK 1
 #define DNS_TABLE_SIZE 8
 #define DNS_MAX_NAME_LENGTH 256
-#define DNS_MAX_SERVERS 2
+#define DNS_MAX_SERVERS 3
 #define LWIP_DNS_SECURE 7
-#define LWIP_DHCP_MAX_DNS_SERVERS 2
+#define LWIP_DHCP_MAX_DNS_SERVERS 3
 #define LWIP_DHCP_GET_NTP_SRV 0
 #define LWIP_NETIF_LOOPBACK 1
 #define LWIP_HAVE_LOOPIF 1
@@ -97,7 +97,9 @@
 #define LWIP_TCPIP_THREAD_ALIVE() ciuki_lwip_alive()
 #define LWIP_RAND() ciuki_lwip_rand()
 #define LWIP_HOOK_TCP_PCB_EXHAUSTED() 1
+#define LWIP_HOOK_DHCP_DNS_SERVER(n, i, a) ciuki_stack_dhcp_dns(n, i, a)
 #define LWIP_HOOK_DNS_SERVER_CHANGED() ciuki_dns_servers_changed()
 #define LWIP_ERRNO_INCLUDE <ciuki/abi.h>
 #define LWIP_HOOK_TCP_ISN(local, lp, remote, rp) ciuki_lwip_rand()
+#define LWIP_NETIF_HOSTNAME 1
 #endif

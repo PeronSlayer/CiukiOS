@@ -42,6 +42,8 @@ static struct du_widget *add(struct cp_app *a, enum du_kind k, int id, int x, in
 static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w) { du_set_text(w, s); a->ui->dirty = 1; } }
 
+#include "network.inc"
+
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
 static void load(struct cp_app *a, struct ciuki_settings *out)
 {
@@ -381,6 +383,7 @@ void cp_audio_result(struct cp_app *a, int result)
 }
 void cp_tick(struct cp_app *a)
 {
+    network_poll(a);
     if (a->close_pending && !a->display_write && !a->mode_state) cp_close(a);
     if (a->navigation_pending && !a->display_write && !a->mode_state) {
         int page=a->next_page; a->navigation_pending=0; cp_open(a,page);
@@ -451,6 +454,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if ((e->id==CP_CANCEL || e->id==C_CLOSE) && e->type==DU_EV_ACTIVATE) { cp_close(a); return; }
     if (a->display_write && e->id==C_BACK && e->type==DU_EV_ACTIVATE) { a->navigation_pending=1; a->next_page=CP_HOME; return; }
     if (a->display_write && e->type != DU_EV_TICK) return;
+    if (network_event(a, e)) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW && a->decode_wait) {   /* worker job: poll */
@@ -1046,12 +1050,7 @@ static void system_pages(struct cp_app *a)
     } else if (a->page == CP_ADAPTER) {
         add(a, DU_BUTTON, CP_REFRESH, 24, 324, 84, 24, "Refresh");
     } else if (a->page == CP_NETWORK) {
-        struct ciuki_net_state net = {0};
-        int valid=a->host.network && !a->host.network(a->host.ctx,&net);
-        snprintf(line,sizeof(line),"%s", !valid ? "Network status unavailable." : !net.present ? "No network adapter detected." :
-            net.link == CIUKI_NET_LINK_UP ? "Network cable connected." : "Network cable disconnected.");
-        add(a, DU_LABEL, C_SYS0, 24, 48, 480, 16, line);
-        add(a, DU_LABEL, C_SYS1, 24, 80, 480, 16, "Address configuration is not available yet.");
+        network_build(a);
     } else if (a->page == CP_POWER) {
         add(a, DU_LABEL, C_SYS0, 24, 48, 452, 14, "Power and restart");
         add(a, DU_LABEL, C_SYS1, 24, 82, 452, 14, "Restart or turn off this computer safely.");
@@ -1063,6 +1062,7 @@ static void system_pages(struct cp_app *a)
 
 static void build(struct cp_app *a)
 {
+    a->building=1;
     struct du_ui *u = a->ui;
     du_release(u); du_dialog_close(u);
     u->count = 0; u->focus = -1;
@@ -1256,6 +1256,7 @@ static void build(struct cp_app *a)
         if (v->anchors & DU_ANCHOR_GROW_X) v->box.w += dx;
         if (v->anchors & DU_ANCHOR_GROW_Y) v->box.h += dy;
     }
+    a->building=0;
     du_focus(u, a->page == CP_HOME ? C_APPLETS : a->page == CP_DEVICES ? C_TREE : C_BACK);
 }
 void cp_open(struct cp_app *a, int page)

@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
  * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <poll.h>
 #include "control.h"
 #include "programs.h"
 #include "decoder.h"
@@ -26,7 +30,9 @@
 #include <time.h>
 #include <unistd.h>
 
-struct cp_main { struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+#include "network_io.inc"
+
+struct cp_main { struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial; uint64_t last_tick;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     int saved_w, saved_h;
@@ -242,6 +248,10 @@ static int network_query(void *ctx, struct ciuki_net_state *state)
     int r=ciuki_devctl(fd,NET_GET_STATE,state,sizeof(*state));
     close(fd); return r;
 }
+static int network_begin(void *ctx,unsigned op,const struct ciuki_net_control *record,const char *name)
+{ return network_worker_begin(&((struct cp_main *)ctx)->network_worker,op,record,name); }
+static int network_poll(void *ctx,struct cp_network_result *result)
+{ return network_worker_poll(&((struct cp_main *)ctx)->network_worker,result); }
 static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *length,uint32_t *total)
 {
     (void)ctx; int fd=open(CP_LOG_FILE,O_RDONLY|O_CLOEXEC);
@@ -466,6 +476,7 @@ int main(int argc, char **argv)
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->mixer = mixer; h->apply = apply; h->now = now; h->ctx = m;
     h->display = display_query;
+    h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->network=network_query; h->power=open_power; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1;
@@ -498,6 +509,7 @@ int main(int argc, char **argv)
     }
     int r = du_run(&m->window, idle, m);
     if (m->writer_started) cfg_writer_stop(&m->writer);
+    network_worker_stop(&m->network_worker);
     cp_detach(&m->app); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
     return r < 0 ? 1 : 0;
 }

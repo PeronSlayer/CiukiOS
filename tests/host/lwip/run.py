@@ -16,6 +16,7 @@ PORT = ROOT / 'src/kernel/net/lwip'
 OUT = ROOT / 'build/host/lwip'
 OUT.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser()
+parser.add_argument('--netctl', action='store_true', help='focused syscall 90 configuration checks')
 parser.add_argument('--kernel', action='store_true')
 parser.add_argument('--case', choices=('f6-24',), help='run only the focused TCP record/timeout regression')
 args = parser.parse_args()
@@ -28,17 +29,18 @@ includes = recipe['includes'](source) + ['-I', str(ROOT / 'src/kernel/include')]
 if args.kernel:
     includes += ['-I', str(PORT / 'libc')]
 files = [source / 'src' / n for n in recipe['SOURCES']] + [PORT / n for n in (
-    'sys_arch.c', 'stack.c', 'sockets.c', 'syscalls.c')]
+    'sys_arch.c', 'stack.c', 'sockets.c', 'syscalls.c', 'control.c')]
 if not args.kernel:
     files += [ROOT / 'src/kernel/net/bridge.c', ROOT / 'src/kernel/net/packet_pool.c']
 if args.kernel:
-    files += [ROOT / n for n in ('src/kernel/net/lwip_handoff.c', 'src/kernel/core/syscall.c',
+    files += [ROOT / n for n in ('src/kernel/net/settings.c', 'src/kernel/net/bridge_port.c', 'src/kernel/net/lwip_handoff.c', 'src/kernel/core/syscall.c',
         'src/kernel/proc/fdtable.c', 'src/kernel/proc/channel.c', 'src/kernel/proc/grants.c',
         'src/kernel/proc/surface.c', 'src/kernel/proc/syscalls_file.c',
         'src/kernel/drivers/net.c', 'src/kernel/core/ledger.c')]
     files += [ROOT / ('src/kernel/drivers/' + name + '.c') for name in (
         'net_dev', 'net_arp', 'net_e100', 'net_rtl8139', 'net_ne2000', 'net_e1000',
         'net_pcnet', 'net_tulip', 'net_3c90x', 'net_rhine')]
+files += [ROOT / 'src/kernel/net/config.c', ROOT / 'src/kernel/lib/fmt.c']
 objects = []
 for index, path in enumerate(files):
     obj = OUT / (('target-' if args.kernel else 'host-') + str(index) + '.o')
@@ -66,7 +68,8 @@ if args.kernel:
               'cu_sem', 'cu_mutex', 'request', 'user_operation', 'poll_operation',
               'dns_request', 'ethernet_port', 'task')
     measured = {n: sizes[n] for n in wanted if n in sizes}
-    network_objects = objects[:33] + [objects[39]] + objects[41:]
+    network_objects = [o for p, o in zip(files, objects) if p.parent == PORT or p.is_relative_to(source) or
+        p.parent == ROOT / 'src/kernel/net' or p.name.startswith('net')]
     subprocess.run(['ld.lld', '-r', *map(str, network_objects),
         '-Map=' + str(OUT / 'network.map'), '-o', str(OUT / 'network.o')], check=True)
     runpy.run_path(str(ROOT / 'scripts/build_kernel.py'))['audit'](OUT / 'network.o')
@@ -110,4 +113,4 @@ else:
     subprocess.run(['clang', *flags, *includes, str(ROOT / 'tests/host/lwip/stack_test.c'),
         str(ROOT / 'tests/host/lwip/channel_fixture.c'),
         *map(str, objects), '-Wl,--gc-sections', '-o', str(binary)], check=True)
-    subprocess.run([str(binary), *(['--f6-24'] if args.case else [])], check=True, timeout=90)
+    subprocess.run([str(binary), *(['--netctl'] if args.netctl else []), *(['--f6-24'] if args.case else [])], check=True, timeout=90)

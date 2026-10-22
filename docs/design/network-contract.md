@@ -6,6 +6,13 @@ No build, QEMU, hardware or networking qualification is claimed here.
 
 ## Scope and authority
 
+The unimplemented F6-03 control ABI and persistence sketches below are
+superseded for the f2-100 implementation proposal by
+[network-settings.md](network-settings.md), pending lead review. That record
+defines syscall 90, three DNS slots, supervisor capability delegation,
+generation checks and NETWORK.INI binding/atomic persistence. The existing
+socket and public `/dev/net` ABIs remain in force.
+
 **[F6]** Implementations MUST follow this contract together with
 [network-foundations.md](network-foundations.md),
 [device-firmware-ownership.md](device-firmware-ownership.md),

@@ -2457,7 +2457,7 @@ must be zero. Syscall failures use the existing negative errno convention.
 | 78–82 | socket, bind, connect, listen, accept |
 | 83–87 | sendto/recvfrom records, shutdown, local/peer sockname, sockopt record |
 | 88–89 | mixed descriptor poll, bounded IPv4 resolver record |
-| 90 | netctl reserved (ENOSYS) |
+| 90 | netctl(B=operation, C=record, D=400); see network-settings.md |
 | 91 | getentropy(B=buffer, C=bytes), bytes <=256; 0 on success |
 
 The address is a 16-byte IPv4 sockaddr (u16 family, network-order u16 port,
@@ -2487,14 +2487,16 @@ reseed limits and qualification boundary are specified in
 [kernel-entropy.md](kernel-entropy.md). No weak fallback is permitted for
 getentropy or arc4random.
 
-Per Amendment 1, call 90 remains reserved ENOSYS. The SDK helper
+The f2-100 proposal implements the formerly reserved call 90; its configuration
+record and capability policy are documented in [network-settings.md](network-settings.md).
+The SDK helper
 `ciuki_net_status(struct ciuki_net_state *)` opens `/dev/net` read-only,
 initializes the existing 96-byte versioned record, issues NET_GET_STATE,
 and closes the descriptor on every completed open. `present`, `link`,
 `state`, `address_configured` and `ipv4` classify local availability without
 sending DNS traffic. The record and all earlier syscall assignments remain
-unchanged. DNS server details, configuration mutations and applet policy
-remain outside this delivery.
+unchanged. The privileged `ciuki_net_control` helper adds configuration and
+adapter/lease details without changing that public snapshot.
 
 ### F3-52 DOS window frame wait (2026-10-20, pending lead review)
 

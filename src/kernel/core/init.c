@@ -23,6 +23,8 @@
 #pragma weak console_splash_phase
 #pragma weak usb_init
 #pragma weak audio_init
+#pragma weak net_settings_load
+extern void net_settings_load(struct vfs *);
 #pragma weak net_init
 #pragma weak fbdev_accel_schedule
 
@@ -181,6 +183,7 @@ void drivers_init(void)
     if (audio_init) audio_init(&storage_get()->vfs);
     klog("[init] audio init done");
     splash_report(SPLASH_PHASE_AUDIO);
+    if (net_settings_load) net_settings_load(&storage_get()->vfs);
     if (net_init) net_init();
     if (usb_init) usb_init();
     /* f1-94: after every UHCI handoff; SMI sampling and LEGACY_USB_EN. */

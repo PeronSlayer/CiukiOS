@@ -43,6 +43,8 @@ supported calls and limitations.
 
 F6-10 adds the IPv4 TCP/UDP socket headers and libc wrappers, `poll`, `select`,
 strict IPv4 conversion and bounded `getaddrinfo` A lookup. These use native
-calls 78–89; call 90 remains ENOSYS for the configuration directive. Link with
+calls 78–89; f2-100 adds privileged `ciuki_net_control` on call 90, with the
+versioned records in `ciuki/abi.h`. See [network settings](../docs/design/network-settings.md).
+Link with
 the usual `libciuki.a`. See the [F6 subset and limits](../docs/design/posix-subset.md#f6-ipv4-source-api-extension-approved-2026-10-20)
 for flags, descriptor readiness, non-pollable objects and deferred features.
