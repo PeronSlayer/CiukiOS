@@ -500,20 +500,23 @@ CIUKI_F3_PROBE(FS_PROBE,probe_f3_vm_fullscreen);
 #include "selector.h"
 #define GAME_PROBE "vm-game"
 #define GAME_FULL_MS 45000u
+/* Every vm-game record stays within the 240-byte CIUKI_TEST line for all
+ * values (tests/host/test_vm_game_records.py): a text row is two halves of
+ * 40 cells, blank halves are not emitted, counters are 32-bit. */
 static void game_text(struct dosvm *v,const char *phase,const uint16_t *text)
 {
     static const char hex[]="0123456789abcdef";
-    for (unsigned row=0;row<25;row++) {
-        unsigned n=80;
-        while (n && ((uint8_t)text[row*80+n-1]==' ' || !(uint8_t)text[row*80+n-1])) n--;
+    for (unsigned row=0;row<25;row++) for (unsigned col=0;col<80;col+=40) {
+        unsigned n=40;
+        while (n && ((uint8_t)text[row*80+col+n-1]==' ' || !(uint8_t)text[row*80+col+n-1])) n--;
         if (!n) continue;
-        char line[161];
+        char line[81];
         for (unsigned c=0;c<n;c++) {
-            uint8_t ch=(uint8_t)text[row*80+c];
+            uint8_t ch=(uint8_t)text[row*80+col+c];
             line[2*c]=hex[ch>>4]; line[2*c+1]=hex[ch&15];
         }
         line[2*n]=0;
-        rec_emit(GAME_PROBE,"DATA","case=console phase=%s row=%u hex=%s",phase,row,line);
+        rec_emit(GAME_PROBE,"DATA","case=console phase=%s row=%u col=%u hex=%s",phase,row,col,line);
         task_sleep_ms(5);
     }
     (void)v;
@@ -523,10 +526,11 @@ static void game_unified(struct dosvm *v,const char *when)
     struct dosvm_unified_info u;
     bool bound=dosvm_file_unified_info && dosvm_file_unified_info(v,&u);
     if (!bound) u=(struct dosvm_unified_info){0};
-    rec_emit(GAME_PROBE,"DATA","case=unified when=%s kernel=%u bound=%u active=%u owned=%x start=%u requests=%u "
-             "opens=%u closes=%u reads=%u read_kib=%u failed=%u critical=%u expired=%u refusals=%u held=%u",
-             when,v->kernel,bound,u.active,u.owned,u.start,u.requests,u.opens,u.closes,u.reads,
-             (uint32_t)(u.read_bytes>>10),u.failed,u.critical,u.expired,u.refusals,u.held);
+    rec_emit(GAME_PROBE,"DATA","case=unified when=%s kernel=%u bound=%u active=%u owned=%x start=%u critical=%u "
+             "refusals=%u held=%u",when,v->kernel,bound,u.active,u.owned,u.start,u.critical,u.refusals,u.held);
+    rec_emit(GAME_PROBE,"DATA","case=unified_io when=%s requests=%u opens=%u closes=%u reads=%u read_kib=%u "
+             "failed=%u expired=%u",when,u.requests,u.opens,u.closes,u.reads,(uint32_t)(u.read_bytes>>10),
+             u.failed,u.expired);
 }
 static int probe_f3_vm_game(void)
 {
@@ -574,15 +578,15 @@ static int probe_f3_vm_game(void)
         if (deadline_passed(until)) { error=-V86_ETIMEDOUT; outcome="no-video"; goto observed; }
         task_sleep_ms(20);
     }
-    rec_emit(GAME_PROBE,"DATA","case=launch ms=%llu mode=%u unchained=%u",g_ticks-typed,video.mode,video.unchained);
+    rec_emit(GAME_PROBE,"DATA","case=launch ms=%u mode=%u unchained=%u",(uint32_t)(g_ticks-typed),video.mode,video.unchained);
     if (text_seen) game_text(v,"startup",last_text);
     for (unsigned i=0;i<3;i++) {
         struct dosvm_frame frame; char hex[65]="none";
         task_sleep_ms(1000);
         int e=dosvm_frame_digest(v,g_ticks,&frame);
         if (!e) sha256_hex(frame.digest,hex);
-        rec_emit(GAME_PROBE,"DATA","case=frame index=%u error=%d mode=%u width=%u height=%u text=%u digest=%s",
-                 i,e,e ? 0 : frame.mode,e ? 0 : frame.width,e ? 0 : frame.height,e ? 0 : frame.text,hex);
+        rec_emit(GAME_PROBE,"DATA","case=frame index=%u error=%d mode=%u w=%u h=%u digest=%s",
+                 i,e,e ? 0 : frame.mode,e ? 0 : frame.width,e ? 0 : frame.height,hex);
     }
     rec_emit(GAME_PROBE,"ARM","action=fullscreen_enter");
     until=deadline_after_ms(30000);
@@ -609,11 +613,13 @@ static int probe_f3_vm_game(void)
         if (dosvm_file_unified_info) dosvm_file_unified_info(v,&u);
         uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
         bool active=dosvm_fullscreen_active(dosvm_key(v));
-        rec_emit(GAME_PROBE,"DATA","case=sample t=%llu fullscreen=%u state=%u mode=%u frame_seconds=%u/%u irq_pm=%u opl=%u sb=%u "
-                 "dpmi=%u returned=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u cause=%u error=%d",
-                 g_ticks-started,active,v->info.state,mode,v->fullscreen_frame_seconds,v->fullscreen_seconds,
-                 v->dpmi.stats.irqs_pm-irq0,(uint32_t)(v->audio.opl_writes-opl0),v->audio.sb.units-sb0,v->dpmi.active,
-                 v->launch_returned,u.reads,u.failed,u.critical,v->fullscreen_cause,v->fullscreen_error);
+        uint32_t t=(uint32_t)(g_ticks-started);
+        rec_emit(GAME_PROBE,"DATA","case=sample t=%u fs=%u state=%u mode=%u frames=%u/%u dpmi=%u returned=%u cause=%u error=%d",
+                 t,active,v->info.state,mode,v->fullscreen_frame_seconds,v->fullscreen_seconds,v->dpmi.active,
+                 v->launch_returned,v->fullscreen_cause,v->fullscreen_error);
+        rec_emit(GAME_PROBE,"DATA","case=progress t=%u irq_pm=%u opl=%u sb=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u",
+                 t,v->dpmi.stats.irqs_pm-irq0,(uint32_t)(v->audio.opl_writes-opl0),v->audio.sb.units-sb0,
+                 u.reads,u.failed,u.critical);
         if (v->info.state>=DOSVM_STOPPING || !dosvm_valid(dosvm_key(v))) { outcome="stopped"; break; }
         if (!active) { outcome=v->launch_returned ? "exited" : "watchdog"; break; }
     }
@@ -627,8 +633,8 @@ observed:
     task_sleep_ms(2000);
     if (v && dosvm_valid(dosvm_key(v))) {
         uint8_t mode=0; dosvm_read(v,0x449,&mode,1);
-        rec_emit(GAME_PROBE,"DATA","case=after state=%u reason=%u vector=%u mode=%u dpmi=%u returned=%u exec_pending=%u "
-                 "shell_idle=%u cause=%u",v->info.state,v->info.reason,v->info.fault_vector,mode,v->dpmi.active,
+        rec_emit(GAME_PROBE,"DATA","case=after state=%u reason=%u vector=%u mode=%u dpmi=%u returned=%u exec=%u "
+                 "idle=%u cause=%u",v->info.state,v->info.reason,v->info.fault_vector,mode,v->dpmi.active,
                  v->launch_returned,v->exec_pending,dosvm_shell_idle(v),v->fullscreen_cause);
         if (mode<=3) game_text(v,"after",dosvm_text(v,0));
         game_unified(v,"after");

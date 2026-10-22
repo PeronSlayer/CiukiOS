@@ -758,8 +758,39 @@ static void test_client_boundary(void)
               v->info.data_loss == (running != 0) && v->info.reason == (running ? DOSVM_TERMINATE : DOSVM_EXIT));
         empty();
     }
+    /* f3-61b: a run carries one probe name (scripts/test/evidence.py). The
+     * selected controller owns the window path's records from admission on:
+     * f3:vm-game as f3:vm-fullscreen; any other run keeps vm-window. The
+     * QEMU run cade4804 failed on a probe=vm-window admission record. */
+    {
+        uint32_t old_flags = g_boot.flags, old_length = g_boot.test_request_len;
+        char old_request[sizeof(g_boot.test_request)];
+        memcpy(old_request, g_boot.test_request, sizeof(old_request));
+        static const struct { const char *request, *probe; } owners[] = {
+            {"f3:vm-game run=12345678", "vm-game"},
+            {"f3:vm-game run=12345678 kernel=freedos-1.3", "vm-game"},
+            {"f3:vm-fullscreen run=12345678", "vm-fullscreen"},
+            {"f3:vm-window run=12345678", "vm-window"},
+            {"f3:vm-gamex run=12345678", "vm-window"}};
+        for (unsigned i = 0; i < ARRAY_SIZE(owners); i++) {
+            g_boot.flags |= CBI_F_TEST_REQUEST;
+            g_boot.test_request_len = (uint32_t)strlen(owners[i].request);
+            memcpy(g_boot.test_request, owners[i].request, g_boot.test_request_len);
+            CHECK(!create_window(0, "Owner", &w));
+            v = dosvm_lookup((struct dosvm_key){w.id, w.generation});
+            char tag[48]; snprintf(tag, sizeof(tag), "probe=%s ", owners[i].probe);
+            CHECK(!strcmp(v->probe, owners[i].probe) && strstr(last_record, tag) && strstr(last_record, "group=admission"));
+            c = command_for(w.id, w.generation);
+            CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE, &c, sizeof(c)) && v->info.state == DOSVM_DEAD);
+            CHECK(strstr(last_record, tag));          /* teardown records keep the owner */
+            empty();
+        }
+        g_boot.flags = old_flags; g_boot.test_request_len = old_length;
+        memcpy(g_boot.test_request, old_request, sizeof(old_request));
+    }
     fake_current = 0;
-    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death, idle-shell close and failures PASS\n");
+    printf("DOS VM window boundary: authority, record validation, focus/keyboard adapter, owner death, idle-shell close, "
+           "controller record ownership and failures PASS\n");
 }
 
 /* f3-02 QEMU finding (vm-window, 2026-10-11): the shell waits for a line in

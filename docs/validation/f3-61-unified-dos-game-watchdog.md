@@ -126,13 +126,35 @@ Box's own `--dos-kernel=` and autorun), waits for the prompt, records the VM
 text screen (hex rows) at the prompt, before the game's mode set and after it
 ends, the unified binding state, three windowed frame digests, then arms
 `fullscreen_enter` for the runner's Alt+Enter and samples one record per
-second for 45 s (`frame_seconds` from the aperture dirty bits, PM timer IRQs,
+second for 45 s (`frames` from the aperture dirty bits, PM timer IRQs,
 OPL/SB progress, IFS reads/failures, `cause`). `case=verdict outcome=`
 `running` (frames in every observed second but two), `frozen`, `watchdog`,
 `exited`, `stopped`, `not-entered`, `no-video` or `launch-failed`.
 `fullscreen_demo_screen` keeps the two live QMP screendumps. Cases
 `vm-game-doom-unified-qemu-t23` and `vm-game-doom-freedos-qemu-t23` in
 `tests/suites/f3-vm.json`.
+
+f3-61b (2026-10-22 10:45, after QEMU run cade4804 on image 6b586080 failed
+with "version, run or probe mismatch"): a run carries exactly one probe name
+(`scripts/test/evidence.py` refuses any other), and there is no secondary-probe
+declaration in the runner. As for `vm-fullscreen`, the selected controller
+owns the window path's records from the VM admission on: `window_probe()` in
+`dosvm_client.c` names `vm-game` for an `f3:vm-game ` request (admission,
+`vm_stop`, `vm_cleanup`, guest and perf records); other runs keep
+`vm-window`. Every vm-game record also fits the 240-byte CIUKI_TEST line
+for all values (an overlong line becomes `event=ERROR reason=record_overflow`
+in `output.c`): text rows are emitted as two halves (`row= col=0|40 hex=`),
+the per-second record is `case=sample t= fs= state= mode= frames=n/m dpmi=
+returned= cause= error=` plus `case=progress t= irq_pm= opl= sb= ifs_reads=
+ifs_failed= ifs_critical=`, the binding state is `case=unified when= kernel=
+bound= active= owned= start= critical= refusals= held=` plus `case=unified_io
+when= requests= opens= closes= reads= read_kib= failed= expired=`, frames are
+`case=frame index= error= mode= w= h= digest=` and the end state
+`case=after state= reason= vector= mode= dpmi= returned= exec= idle= cause=`.
+Host evidence: `tests/host/test_vm_game_records.py` (widest-value rendering
+of every format, the runner Parser and both suite cases over a full run, the
+cade4804 prefix refused) and the window-ownership check in
+`tests/host/dosvm_video_test.inc`.
 
 ## Open (lead)
 
