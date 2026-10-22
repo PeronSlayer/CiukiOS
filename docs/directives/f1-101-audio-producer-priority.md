@@ -12,7 +12,7 @@
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f1-101-report.md`.
 
-## Amendment 1 (lead, 2026-10-22 19:14, decisions on the delivery)
+## Amendment 1 (lead, 2026-10-22 19:13, decisions on the delivery)
 
 1. Threshold: "behind" means more than one period below the 1792-frame
    target (behind below 1536, clear at 1792), as delivered.
