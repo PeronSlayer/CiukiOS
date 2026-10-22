@@ -563,3 +563,10 @@ The lead reviewed this contract and the source audit; both are accepted as bindi
 4. **Yamaha DS-XG (f1-119)** is deferred: no microcode is shipped without an explicit redistribution grant.
 5. **Native FAT12 mounting** is approved as a separate follow-up, f1-115b, so floppies open in the file manager.
 6. **QEMU.** Peripheral probes in QEMU wait for the owner's approval under the current suspension. Until then the evidence is host models plus the hardware trials.
+
+## Owner decision on licences (2026-10-22 23:55)
+
+The owner removed licence-compatibility gating: "integra tutte le licenze GPL varie versioni, MIT ecc non mi interessa che siano diverse tu metti tutto e basta".
+- **Yamaha DS-XG (f1-119)** is no longer deferred. Its microcode is included from the best available source, with its notice.
+- **Notices.** Every imported file keeps its notice and origin line in the credits.
+- **Release check.** Before a public release, the lead lists GPL-3.0-only kernel code and firmware with restrictive terms so the owner can resolve them.

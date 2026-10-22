@@ -38,6 +38,8 @@ sources += [root/'src/kernel/probes/f2_probes_files.c']
 sources += [root/'src/kernel/probes/f2_probes_desktop.c', root/'src/kernel/probes/selector.c']
 sources += sorted((root/'src/kernel/usb').glob('*.c'))
 sources += [root/'src/kernel/drivers/blkpart.c', root/'src/kernel/drivers/media_dev.c', root/'src/kernel/proc/posixpath.c', root/'src/kernel/proc/devnodes.c']
+# f9-02: the raw disk nodes (the lease itself is fs/disklease.c, globbed above).
+sources += [root/'src/kernel/drivers/disk_dev.c', root/'src/kernel/proc/process.c']
 sources += [root/'src/kernel/drivers/optical.c', root/'src/kernel/drivers/optical_cd.c', root/'src/kernel/drivers/media_cd.c']
 # F0-23: boot-only calibration, UART bounds, port pacing and live RO inventory.
 sources += [root/'src/kernel/core'/name for name in ('serial.c', 'output.c', 'timing.c', 'main.c', 'devices.c', 'setup_mode.c')]

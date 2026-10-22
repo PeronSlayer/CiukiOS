@@ -766,6 +766,18 @@ static int identify_packet(struct ata_device *d)
     return 0;
 }
 
+static void identity_text(char *out, const uint8_t *words, unsigned chars)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < chars; i++) {
+        uint8_t ch = words[i ^ 1u];
+        if (!n && ch == ' ') continue;
+        out[n++] = ch >= 32 && ch <= 126 && ch != '=' ? (char)(ch == ' ' ? '_' : ch) : '_';
+    }
+    while (n && out[n - 1] == '_') n--;
+    out[n] = 0;
+}
+
 static int identify(struct ata_device *d)
 {
     struct ata_channel *c = d->channel;
@@ -824,6 +836,11 @@ static int identify(struct ata_device *d)
     d->model[len] = 0;
     if (!len)
         memcpy(d->model, "unknown", 8);
+    /* f9-02 disk identity (ATA/ATAPI-6 d1410r3a 8.15 IDENTIFY DEVICE: serial
+     * number words 10-19, firmware revision words 23-26; ASCII, two characters
+     * per word, the first in bits 15:8). Trim the padding; data only, no I/O. */
+    identity_text(d->serial, data + 20, 20);
+    identity_text(d->firmware, data + 46, 8);
     enum blkdev_cache_state cache = BLKDEV_CACHE_UNKNOWN;
     /* 8.15.42/43: honour validity bits before interpreting words 82/85. */
     if (supported_valid && !(w82 & (1u << 5)))

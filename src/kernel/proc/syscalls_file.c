@@ -121,11 +121,36 @@ static int64_t scalar64(uint32_t lo, uint32_t hi)
     int64_t value; memcpy(&value, &bits, sizeof(value)); return value;
 }
 
+/* f9-02 /dev/ataN: pread/pwrite of whole sectors, one request of at most
+ * 64 KiB (128 sectors) per call, authority checked on each call. No
+ * namespace lock is held across the request. */
+static int disk_byte_io(struct file_operation *op, const struct trap_frame *tf, bool write, bool positioned)
+{
+    struct file_description *d = op->description;
+    uint32_t mode = d->flags & O_ACCMODE;
+    if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
+    if (!positioned) return -ESPIPE;
+    int64_t offset = scalar64(tf->esi, tf->edi);
+    if (offset < 0) return -EINVAL;
+    if (!tf->edx) return 0;
+    uint32_t bytes = tf->edx < CIUKI_DISK_IO_MAX ? tf->edx : CIUKI_DISK_IO_MAX;
+    int err = output_pin(op, tf->ecx, bytes, !write);
+    if (err) return err;
+    op->buffer_bytes = bytes;
+    op->buffer = fs_contig_alloc(bytes);
+    if (!op->buffer) return -ENOMEM;
+    if (write && (err = copy_from_user(op->buffer, tf->ecx, bytes))) return err;
+    int done = disk_node_io ? disk_node_io(op->process, d->node->drive, write, (uint64_t)offset, op->buffer, bytes) : -ENODEV;
+    if (done > 0 && !write && (err = copy_to_user(tf->ecx, op->buffer, (uint32_t)done))) return err;
+    return done;
+}
+
 static int byte_io(struct file_operation *op, const struct trap_frame *tf)
 {
     bool write = tf->eax == CIUKI_SYS_WRITE || tf->eax == CIUKI_SYS_PWRITE;
     bool positioned = tf->eax == CIUKI_SYS_PREAD || tf->eax == CIUKI_SYS_PWRITE;
     struct file_description *d = op->description;
+    if (d->node->kind == PX_DISK) return disk_byte_io(op, tf, write, positioned);
     vfs_lock(d->node->space->vfs,d->node->ro ? vfs_drive_mask(d->node->drive) : 0);
     vfs_tag_locked(d->node->space->vfs,write ? "write" : "read");
     vfs_site_locked(d->node->space->vfs,"native");
@@ -201,7 +226,7 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     int err = 0;
     if (tf->eax == CIUKI_SYS_GETDENTS && d->node->kind != PX_DIRECTORY &&
         d->node->kind != PX_MNT && d->node->kind != PX_DEV) return -ENOTDIR;
-    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA)) return -ESPIPE;
+    if (tf->eax == CIUKI_SYS_LSEEK64 && (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || d->node->kind == PX_DISK)) return -ESPIPE;
     if (tf->eax == CIUKI_SYS_LSEEK64)
         err = output_pin(op, tf->edi, sizeof(int64_t), true);
     else if (tf->eax == CIUKI_SYS_FSTAT)
@@ -310,6 +335,8 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
             return media_devctl ? media_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         if (d && d->node->kind == PX_NET)
             return net_devctl ? net_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
+        if (d && d->node->kind == PX_DISK)
+            return disk_devctl ? disk_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) : -ENOTTY;
         return audio_devctl ? audio_devctl(p, (int32_t)tf->ebx, tf->ecx, tf->edx, tf->esi) :
                file_fd_object(p, (int32_t)tf->ebx) ? -ENOTTY : -EBADF;
     }
@@ -348,6 +375,10 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
     }
     if (d && d->node->kind == PX_AUDIO && nr == CIUKI_SYS_WRITE)
         return audio_write_user ? audio_write_user(d, tf->ecx, tf->edx) : -ENODEV;
+    /* f9-02: fsync of /dev/ataN is DISK_FLUSH, outside the namespace lock. */
+    if (d && d->node->kind == PX_DISK && nr == CIUKI_SYS_FSYNC)
+        return disk_node_sync ? disk_node_sync(p, d->node->drive) : -ENODEV;
+    if (d && d->node->kind == PX_DISK && nr == CIUKI_SYS_FTRUNCATE) return -EINVAL;
     struct file_operation *op = kzalloc(sizeof(*op));
     if (!op) return -ENOMEM;
     op->process = p; op->cwd = p->cwd; px_retain(op->cwd);

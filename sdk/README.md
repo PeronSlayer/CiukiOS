@@ -46,3 +46,22 @@ strict IPv4 conversion and bounded `getaddrinfo` A lookup. These use native
 calls 78–89; call 90 remains ENOSYS for the configuration directive. Link with
 the usual `libciuki.a`. See the [F6 subset and limits](../docs/design/posix-subset.md#f6-ipv4-source-api-extension-approved-2026-10-20)
 for flags, descriptor readiness, non-pollable objects and deferred features.
+
+F9-02 installs `libdisk.a` and `<libdisk.h>`, the destination-disk library of
+CiukiOS Setup (`docs/design/cd-setup-plan.md` sections 5 and 6). Link with
+`-ldisk`. It enumerates ATA disks through the raw nodes `/dev/ata0`…`/dev/ata3`,
+plans the Beta's only layout (whole disk: canonical MBR, `ciukldr` gap, FAT32 at
+LBA 2048 with the `scripts/build_image.py` geometry, byte-identical to its
+`mkfs.fat` volume), and executes the raw phases P1, P2 and P5 under the kernel's
+exclusive destination lease (ioctl group `0x4401`–`0x440F`). Every mutating
+request needs the Setup capability of the calling process and the lease; plain
+processes can only enumerate and read. Errors are `DISK_E*` codes whose negation
+is the `setup_error_class` of `setup_txn.h`. The stub and canonical MBR code are
+assembled from `src/boot/setup_stub_mbr.asm` and `src/boot/mbr.asm` by
+`sdk/libdisk/gen_boot.py` during the SDK build; their digests are in the SDK
+manifest (`libdisk_boot`). Host qualification: `tests/host/libdisk_test.c` in
+`scripts/test/host_fs_tests.sh`, including native syscall/lease tests and an
+archive-extraction regression test. The default native backend is included
+automatically by `-ldisk`. Embedded boot-code origins and notices are in
+`sdk/libdisk/NOTICE`, installed as `licenses/libdisk.txt` and named by the
+SDK manifest alongside the MIT notice.

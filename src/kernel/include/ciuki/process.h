@@ -53,9 +53,11 @@ struct process {
     struct kwait changed;
     uint32_t threads, live_threads;
     bool published, dosvm_capability, programs_capability;
-    /* f9-01 (D5): set only by the supervisor's Setup-mode spawn of
-     * /Programs/setup, before publication; never inherited (every other
-     * spawn clears it); consumed by the f9-02 disk lease. */
+    /* f9-01 D5 / f9-02: destination-disk authority for /dev/ata0..3
+     * (mutating requests and the lease). Set only by the supervisor's
+     * Setup-mode spawn of /Programs/setup, before publication; zero in every
+     * other process (kzalloc), never inherited by children or descriptors,
+     * gone with the process. */
     bool setup_capability;
     /* f1-98: the desktop and its Win32 window server keep a minimum CPU
      * share (task.c share_group); every thread inherits it at creation. */

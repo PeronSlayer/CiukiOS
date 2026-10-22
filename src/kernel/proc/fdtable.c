@@ -179,7 +179,7 @@ int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)
     uint32_t *status = d ? &d->flags : desktop ? &desktop->flags : socket_status;
     if (!status) return -EINVAL;
     if (cmd == F_GETFL) return (int)*status;
-    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) && (arg & O_APPEND)) return -EINVAL;
+    if (cmd == F_SETFL && d && (d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || d->node->kind == PX_DISK) && (arg & O_APPEND)) return -EINVAL;
     if (cmd == F_SETFL) { *status = (*status & O_ACCMODE) | arg; return 0; }
     return -EINVAL;
 }
@@ -216,7 +216,7 @@ int file_seek_locked(struct file_description *d, int64_t off, uint32_t whence, i
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (whence > SEEK_END) return -EINVAL;
-    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA) return -ESPIPE;
+    if (d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE || d->node->kind == PX_AUDIO || d->node->kind == PX_MIXER || d->node->kind == PX_NET || d->node->kind == PX_MEDIA || d->node->kind == PX_DISK) return -ESPIPE;
     if (d->node->kind != PX_FILE) {
         if (off || whence != SEEK_SET) return -EINVAL;
         d->position = 0; d->cursor = 0; *out = 0; return 0;
@@ -302,7 +302,7 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
     if (write && win32_protected_file(d)) return -EACCES;
-    if (write && d->node->ro) return -EROFS;
+    if (write && (d->node->ro || px_write_denied(d->node))) return -EROFS;
     uint32_t mode = d->flags & O_ACCMODE;
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
     struct px_node *n = d->node;
@@ -372,7 +372,7 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     if (win32_protected_file(d)) return -EACCES;
     int live=px_ro_check_locked(d->node); if (live) return live;
     if (!vfs_identity_live(d->node->space->vfs,d->identity)) return -EIO;
-    if (d->node->ro) return -EROFS;
+    if (d->node->ro || px_write_denied(d->node)) return -EROFS;
     if ((d->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if (d->node->kind != PX_FILE) return d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE ? -EINVAL : -EISDIR;
     if (length > INT64_MAX) return -EINVAL;

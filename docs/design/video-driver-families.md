@@ -1110,3 +1110,10 @@ The lead reviewed this contract; it is binding with these decisions:
 3. **Licence holds.** No file with an unresolved notice is copied, and the GPL-3.0-only file is excluded. Chips & Technologies stays on VBE software rendering until its header provenance closes. Old Mesa winsys/ioctl helpers are outside this programme.
 4. **Names.** The hardware-name extractor fix is issued as f2-123, so that every display adapter has a name in Device Manager and Control Panel.
 5. **3D.** The Mesa/OpenGL update of F7 is deferred: the owner agreed that hardware 3D comes after the 2D families. This contract's section 7 is kept as research input.
+
+### Owner decision on licences (2026-10-22 23:54, extended 23:55)
+
+The owner first allowed GPL-3.0 sources ("includi anche GPL-3") and then all licences without compatibility gating: "integra tutte le licenze GPL varie versioni, MIT ecc non mi interessa che siano diverse tu metti tutto e basta". This supersedes the licence holds of item 3 above and of section 9:
+- **Licence gating removed.** Any donor file may be used: GPL of any version, LGPL, MIT, BSD, and files whose notices are unresolved. That includes the 28 files with unresolved notices, the Chips & Technologies headers and VirtualBox `DevVGA-SVGA.cpp`, which is an emulator reference for f2-111.
+- **Notices still kept.** Every imported file keeps its original notice and an origin line, and the credits and the notices directory list it.
+- **Recorded risk.** GPL-3.0-only code linked into the kernel, which contains GPL-2.0-only parts, cannot be redistributed as one binary under both licences. Before any public release the lead lists every such file so the owner can resolve it, by replacement or relicensing.
