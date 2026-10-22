@@ -89,6 +89,36 @@ static unsigned wire_first_count;
 static unsigned char output_frame[1514];
 static unsigned output_bytes;
 static unsigned char client_mac[6]={2,0,0,0,0,2}, server_mac[6]={2,0,0,0,0,1};
+/* f6-22: the kernel's `[net]` records through sys_arch's host hook, and the
+ * NIC layer's counters as the stack reads them (fixed values: the line's
+ * format, not a driver, is under test here). */
+extern void (*cu_host_record)(const char *);
+static pthread_mutex_t records_lock=PTHREAD_MUTEX_INITIALIZER;
+static char records[2048][256];
+static unsigned record_count;
+static void record_line(const char *line)
+{
+    pthread_mutex_lock(&records_lock);
+    if(record_count<2048)snprintf(records[record_count],sizeof(records[0]),"%s",line);
+    record_count++;pthread_mutex_unlock(&records_lock);
+}
+static unsigned records_now(void) { pthread_mutex_lock(&records_lock);unsigned n=record_count;pthread_mutex_unlock(&records_lock);return n; }
+/* First record at or after `from` that starts with `prefix` and contains
+ * `fragment` (NULL: any); -1 when absent. */
+static int find_record(unsigned from,const char *prefix,const char *fragment)
+{
+    pthread_mutex_lock(&records_lock);int found=-1;
+    for(unsigned i=from;i<record_count && i<2048 && found<0;i++)
+        if(!strncmp(records[i],prefix,strlen(prefix)) && (!fragment || strstr(records[i],fragment)))found=(int)i;
+    pthread_mutex_unlock(&records_lock);return found;
+}
+static unsigned count_records(unsigned from,const char *prefix)
+{
+    unsigned n=0;for(int i=(int)from;(i=find_record((unsigned)i,prefix,NULL))>=0;i++)n++;
+    return n;
+}
+void net_stack_driver_counters(unsigned index,struct net_stack_counters *out)
+{ CHECK(index==0);out->rx=41;out->tx=42;out->rx_errors=3;out->tx_errors=0;out->dropped=1; }
 static void udp_reply(const unsigned char *request,unsigned sport,unsigned dport,const void *data,unsigned bytes,bool broadcast)
 {
     unsigned char f[1514]={0};
@@ -458,14 +488,34 @@ static void frame_resources(void *unused)
 static void amendment_dhcp_start(void);
 static void amendment_dns_renewal(void);
 static void amendment_address_revocation(void);
+static void watch_pass(void)
+{ net_stack_watch();CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK); }
 static void dns_dhcp_tests(void)
 {
+    cu_host_record=record_line;unsigned first=records_now();
     amendment_dhcp_start();uint32_t ip=0;uint64_t end=cu_now()+12000;
     do { net_stack_address(0,&ip);if (ip) break;cu_sleep(10); } while (cu_now()<end);
     CHECK(ip==PP_HTONL(0xc0000264) && dhcp_discover && dhcp_request);
+    /* f6-22 records of the acquisition: start (and the visible allocation
+     * failure), DISCOVER, the OFFER, the ACD check and the bound lease. */
+    CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
+    CHECK(find_record(first,"[net] dhcp state=start_failed iface=en0 mac=02:00:00:00:00:02 error=-12",NULL)>=0);
+    int start=find_record(first,"[net] dhcp state=start iface=en0 mac=02:00:00:00:00:02 error=0",NULL);
+    int discover=find_record(first,"[net] dhcp state=discover iface=en0 ip=0.0.0.0 ",NULL);
+    int offer=find_record(first,"[net] dhcp state=offer iface=en0 ip=192.0.2.100 ","server=192.0.2.1 tries=");
+    int checking=find_record(first,"[net] dhcp state=checking iface=en0 ip=192.0.2.100 gw=192.0.2.1 dns=192.0.2.1 server=192.0.2.1",NULL);
+    int bound=find_record(first,"[net] dhcp state=bound iface=en0 ip=192.0.2.100 gw=192.0.2.1 dns=192.0.2.1,192.0.2.2 mask=255.255.255.0 lease=240 ",NULL);
+    CHECK(start>=0 && discover>start && offer>discover && checking>offer && bound>checking);
+    unsigned bound_records=count_records(first,"[net] dhcp state=bound ");
+    watch_pass();
+    CHECK(find_record(first,"[net] stack ifaces=1 en0 link=up ip=192.0.2.100 gw=192.0.2.1 dns=192.0.2.1 dhcp=bound rx=41 tx=42 errors=3 dropped=1 in=",NULL)>=0);
+    CHECK(count_records(first,"[net] dhcp state=bound ")==bound_records); /* a watch pass adds no transition */
     wire_tests();CHECK(tcpip_callback_wait(frame_resources,NULL)==ERR_OK);
-    int status=-1;uint32_t answer=0;CHECK(!net_resolve(&client,"fixture.example",&answer,&status));
+    int status=-1;uint32_t answer=0;unsigned resolver_from=records_now();
+    CHECK(!net_resolve(&client,"fixture.example",&answer,&status));
     CHECK(!status && answer==PP_HTONL(0xcb007109) && dns_queries && arp_requests);
+    CHECK(find_record(resolver_from,"[net] resolver first_answer ip=203.0.113.9 servers=192.0.2.1,192.0.2.2 elapsed_ms=",NULL)>=0);
+    CHECK(!strstr(records[find_record(resolver_from,"[net] resolver ",NULL)],"fixture.example")); /* no name */
     CHECK(net_resolve(&client,"bad..name",&answer,&status)==-EINVAL);
     unsigned before=dns_queries;CHECK(!net_resolve(&client,"fixture.example",&answer,&status) && !status && dns_queries==before);
     /* f6-18 test-profile entries: consulted before any DNS query, two slots,
@@ -516,7 +566,36 @@ static void dns_dhcp_tests(void)
     check_address(0);arp_conflict=false;
     net_stack_link(0,false);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
     net_stack_link(0,true);check_address(PP_HTONL(0xc0000264));
+    CHECK(find_record(first,"[net] resolver first_failure ip=0.0.0.0 servers=0.0.0.0,0.0.0.0 ",NULL)>=0);
+    CHECK(find_record(first,"[net] dhcp state=off iface=en0 ip=0.0.0.0 ",NULL)>=0);
+    CHECK(find_record(first,"[net] dhcp state=backing_off iface=en0 ",NULL)>=0); /* NAK and ACD decline */
+    CHECK(find_record(first,"[net] dhcp state=renewing iface=en0 ip=192.0.2.100 ",NULL)>=0);
+    /* No OFFER for 30 s: one timeout record with the driver and stack
+     * counters, repeated at most once a minute; a later lease is recorded. */
+    unsigned from=records_now();dhcp_drop=true;
+    net_stack_link(0,false);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
+    /* dhcp_start is paced at one second, as by the NIC worker's link calls. */
+    uint64_t restart=cu_now()+3000;
+    while(find_record(from,"[net] dhcp state=discover iface=en0 ip=0.0.0.0 ",NULL)<0){
+        CHECK(cu_now()<restart);net_stack_link(0,true);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);cu_sleep(5);
+    }
+    watch_pass();CHECK(find_record(from,"[net] dhcp state=timeout",NULL)<0);
+    cu_host_clock_offset(31000);watch_pass();
+    int timeout=find_record(from,"[net] dhcp state=timeout phase=discover iface=en0 ip=0.0.0.0 gw=0.0.0.0 dns=0.0.0.0 tries=","rx=41 rx_errors=3 tx=42 in=");
+    CHECK(timeout>=0 && strstr(records[timeout],"elapsed_ms=3"));
+    cu_host_clock_offset(31300);watch_pass();CHECK(count_records(from,"[net] dhcp state=timeout ")==1);
+    dhcp_drop=false;net_stack_link(0,false);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
+    net_stack_link(0,true);check_address(PP_HTONL(0xc0000264));
+    CHECK(find_record(from,"[net] dhcp state=bound iface=en0 ip=192.0.2.100 gw=192.0.2.1 ",NULL)>=0);
+    /* The NAK test drives lwIP's immediate DISCOVER restart in a tight loop:
+     * its transitions are counted, not each recorded. */
+    unsigned suppressed=0;
+    for(unsigned i=first;i<records_now() && i<2048;i++){const char *at=strstr(records[i],"suppressed=");if(at)suppressed+=(unsigned)atoi(at+11);}
+    CHECK(suppressed>100 && records_now()-first<200);
+    printf("RECORDS f6-22: %u [net] records (%u transitions suppressed), e.g. %s\n",records_now()-first,suppressed,records[bound]);
+    cu_host_record=NULL;
     puts("PASS DHCP exchange/malformed options/ACD/T1/T2/expiry/link recovery, DNS malformed/ID/port/cache/generation/cancel/limits, broadcast permission");
+    puts("PASS f6-22 records: dhcp start/start_failed/discover/offer/checking/bound/renewing/backing_off/off/timeout, resolver first answer/failure, stack line");
 }
 static void cycles(void)
 {

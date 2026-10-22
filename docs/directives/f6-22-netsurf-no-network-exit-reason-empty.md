@@ -11,3 +11,14 @@
 3. Host tests: DHCP records on the host NIC model, the e100 receive path test if that is the cause, the stderr line atomicity, the readiness page states.
 
 Rules: no QEMU, no systemd-run, no image build, no git mutations, no dev_diary edits, nothing deleted outside the worktree, `date` before timestamps, English, primary sources cited. Report `build/codex/f6-22-report.md`.
+
+## Amendment 1 (lead, 2026-10-22 15:20, decision on the delivery)
+
+Accepted. Cause: the e100 driver rejected every received frame with status
+bits 12:0 set, and the 8255x sets bit 5 on IPv4/ARP and bit 1 on broadcast
+frames, so no DHCP reply or ARP answer ever reached the stack (on real
+hardware and on QEMU's eepro100 alike). The "empty" NetSurf values were
+newlib splitting `fprintf(stderr)` into several writes: the T23 lines read
+`layout slow elapsed_us=3300000 class=local` and `exit
+reason=desktop-close-request`. Follow-ups: SDK-wide stderr line buffering
+(f2-94), a QEMU browser case on the e100.

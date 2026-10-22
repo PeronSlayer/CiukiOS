@@ -151,6 +151,32 @@ class LocalTests(unittest.TestCase):
                 self.assertGreater(int(re.search(r"local_max_ns=(\d+)",completed.stderr)[1]),LAYOUT_LIMIT_NS)
                 self.assertIn("layout_rejections=0",self.assert_exit_reason(completed,"capture"))
 
+    def test_netsurf_log(self):
+        """f6-22: every exit appends one stamped line to NETSURF.LOG (the
+        stderr exit line plus the network state); the file restarts past
+        64 KiB; an early failure is logged although stderr has no exit line."""
+        stamp=r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ "
+        with tempfile.TemporaryDirectory(dir=self.out) as directory:
+            log=Path(directory) / "NETSURF.LOG"
+            for run in range(2):
+                completed=self.run_page("about:welcome","--ciuki-log="+str(log))
+                line=self.assert_exit_reason(completed,"capture")
+                self.assertTrue(line.endswith(" network=unknown"),line)
+                lines=log.read_text().splitlines()
+                self.assertEqual(len(lines),run+1,lines)
+                self.assertRegex(lines[-1],"^"+stamp+re.escape(line)+"$")
+            log.write_text("x"*(64*1024)+"\n")
+            self.run_page("about:blank","--ciuki-log="+str(log))
+            lines=log.read_text().splitlines()
+            self.assertEqual(len(lines),1,lines[:2])
+            self.assertRegex(lines[0],"^"+stamp+"\\[netsurf\\] exit reason=capture ")
+            log.unlink()
+            completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"--ciuki-log="+str(log),"--channel-fd=1","about:blank"],
+                capture_output=True,text=True,timeout=30)
+            self.assertEqual(completed.returncode,2,completed.stdout+completed.stderr)
+            self.assertNotIn("[netsurf] exit reason=",completed.stderr)
+            self.assertRegex(log.read_text(),"^"+stamp+"\\[netsurf\\] exit reason=bad-arguments detail=0 .* network=unknown\n$")
+
     def test_layout_rejection(self):
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "oversized.html"

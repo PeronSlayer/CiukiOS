@@ -4,9 +4,11 @@
 #include "lwip/netif.h"
 #include "lwip/etharp.h"
 #include "lwip/dhcp.h"
+#include "lwip/prot/dhcp.h"
 #include "lwip/dns.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/stats.h"
+#include "netif/ethernet.h"
 #include <ciuki/net_stack.h>
 #include <ciuki/kernel.h>
 #ifndef LWIP_HOST
@@ -24,15 +26,209 @@ struct ethernet_port {
     uint64_t dhcp_retry;
     uint32_t address;
     struct tcpip_callback_msg *link_message;
+    /* f6-22 records. Core thread only, except the frame counters below. */
+    uint8_t dhcp_state;             /* last DHCP state observed, 0xff none */
+    bool dhcp_unrecorded;           /* dhcp_state not recorded yet */
+    int start_recorded;             /* last dhcp_start result recorded */
+    unsigned record_tokens, suppressed;
+    uint64_t acquiring_since, timeout_recorded, tokens_at;
+    /* Copied frames accepted by/handed out of the stack (sys_arch_protect). */
+    uint64_t frames_in, frames_out;
 };
 static struct ethernet_port ports[2];
 static bool started, attempted;
+/* f6-22: state records. Input and the netif status callback observe DHCP
+ * transitions at once; a watch pass every 250 ms (posted by the NIC worker
+ * through net_stack_watch with one preallocated core message, so no timeout
+ * allocation can fail) observes those made on lwIP timers (ACD,
+ * retransmission, T1/T2), reports an acquisition that does not complete and
+ * prints the stack line: every 10 s for the first two minutes (DHCP and the
+ * first lookups), then every 60 s; a line with nothing changed waits 5 min. */
+#define NET_WATCH_MS 250u
+#define NET_STACK_EARLY_MS 120000u
+#define NET_STACK_EARLY_LINE_MS 10000u
+#define NET_STACK_LINE_MS 60000u
+#define NET_STACK_QUIET_MS 300000u
+#define NET_DHCP_TIMEOUT_MS 30000u
+#define NET_DHCP_TIMEOUT_REPEAT_MS 60000u
+/* lwIP restarts DISCOVER at once after a NAK: a server that NAKs every
+ * REQUEST drives offer/discover in a tight loop. Records other than "bound"
+ * spend a token (burst 16, one per second); a suppressed transition is
+ * counted and the then-current state is recorded by a later watch pass. */
+#define NET_RECORD_BURST 16u
+#define NET_RECORD_REFILL_MS 1000u
+extern void net_stack_driver_counters(unsigned, struct net_stack_counters *) __attribute__((weak));
+static struct tcpip_callback_msg *watch_message;
+static bool watch_pending;
+static uint64_t watch_due;
+static uint64_t stack_line_at, stack_line_quiet_at, stack_started;
+static struct net_stack_counters stack_line_last;
+static uint32_t stack_line_address;
 static sys_sem_t initialized;
 extern int entropy_get(void *, size_t) __attribute__((weak));
 static bool crypto_seeded;
 int cu_sockets_init(void);
+void ciuki_resolver_counts(unsigned *, unsigned *);
 void ciuki_sockets_address_lost(uint32_t);
 static void link_dispatch(void *);
+
+/* Network byte order to dotted decimal, without libc formatting. */
+static const char *dotted(uint32_t address, char out[16])
+{
+    const uint8_t *b = (const uint8_t *)&address; char *p = out;
+    for (unsigned i = 0; i < 4; i++) {
+        unsigned v = b[i];
+        if (v >= 100) *p++ = (char)('0' + v / 100);
+        if (v >= 10) *p++ = (char)('0' + v / 10 % 10);
+        *p++ = (char)('0' + v % 10);
+        *p++ = i < 3 ? '.' : 0;
+    }
+    return out;
+}
+static uint32_t dns_server(unsigned i)
+{
+    const ip_addr_t *a = dns_getserver((u8_t)i);
+    return a ? ip4_addr_get_u32(ip_2_ip4(a)) : 0;
+}
+static const char *dhcp_state_name(unsigned state)
+{
+    switch (state) {
+    case DHCP_STATE_OFF: return "off";
+    case DHCP_STATE_REQUESTING: return "offer";      /* OFFER selected, REQUEST sent */
+    case DHCP_STATE_INIT: return "init";
+    case DHCP_STATE_REBOOTING: return "rebooting";
+    case DHCP_STATE_REBINDING: return "rebinding";
+    case DHCP_STATE_RENEWING: return "renewing";
+    case DHCP_STATE_SELECTING: return "discover";    /* DISCOVER sent, no OFFER yet */
+    case DHCP_STATE_INFORMING: return "informing";
+    case DHCP_STATE_CHECKING: return "checking";     /* ACK received, ACD probe */
+    case DHCP_STATE_BOUND: return "bound";
+    case DHCP_STATE_BACKING_OFF: return "backing_off";
+    default: return "unknown";
+    }
+}
+static bool dhcp_acquiring(unsigned state)
+{
+    return state != DHCP_STATE_OFF && state != DHCP_STATE_BOUND &&
+           state != DHCP_STATE_RENEWING && state != DHCP_STATE_REBINDING;
+}
+static void driver_counters(unsigned index, struct net_stack_counters *out)
+{
+    *out = (struct net_stack_counters){0};
+    if (net_stack_driver_counters) net_stack_driver_counters(index, out);
+}
+static bool record_token(struct ethernet_port *p, uint64_t now)
+{
+    uint64_t refill = (now - p->tokens_at) / NET_RECORD_REFILL_MS;
+    if (refill) {
+        p->tokens_at += refill * NET_RECORD_REFILL_MS;
+        p->record_tokens = refill >= NET_RECORD_BURST - p->record_tokens ? NET_RECORD_BURST : p->record_tokens + (unsigned)refill;
+    }
+    if (!p->record_tokens) return false;
+    p->record_tokens--; return true;
+}
+/* Core thread: one protected record per DHCP state change, never under
+ * sys_arch_protect. Repeated DISCOVERs stay in "discover"; the timeout
+ * record reports an acquisition that does not complete. */
+static void dhcp_observe(struct ethernet_port *p)
+{
+    struct netif *n = &p->interface;
+    struct dhcp *dhcp = netif_dhcp_data(n);
+    unsigned state = dhcp ? dhcp->state : DHCP_STATE_OFF;
+    uint64_t now = cu_now();
+    if (state != p->dhcp_state) {
+        if (p->dhcp_unrecorded) p->suppressed++;
+        p->dhcp_state = (uint8_t)state; p->dhcp_unrecorded = true;
+        if (dhcp_acquiring(state)) { if (!p->acquiring_since) p->acquiring_since = now; }
+        else p->acquiring_since = p->timeout_recorded = 0;
+    }
+    if (!p->dhcp_unrecorded || (state != DHCP_STATE_BOUND && !record_token(p, now))) return;
+    p->dhcp_unrecorded = false;
+    unsigned suppressed = p->suppressed; p->suppressed = 0;
+    char ip[16], gw[16], dns0[16], dns1[16], extra[16];
+    if (state == DHCP_STATE_REQUESTING || state == DHCP_STATE_CHECKING) {
+        /* The offered lease; router and DNS options arrive with the ACK. */
+        klog("[net] dhcp state=%s iface=en%u ip=%s gw=%s dns=%s server=%s tries=%u suppressed=%u",
+             dhcp_state_name(state), p->index, dotted(ip4_addr_get_u32(&dhcp->offered_ip_addr), ip),
+             dotted(ip4_addr_get_u32(&dhcp->offered_gw_addr), gw), dotted(dns_server(0), dns0),
+             dotted(ip4_addr_get_u32(ip_2_ip4(&dhcp->server_ip_addr)), extra), (unsigned)dhcp->tries, suppressed);
+        return;
+    }
+    klog("[net] dhcp state=%s iface=en%u ip=%s gw=%s dns=%s,%s mask=%s lease=%u tries=%u suppressed=%u",
+         dhcp_state_name(state), p->index, dotted(ip4_addr_get_u32(netif_ip4_addr(n)), ip),
+         dotted(ip4_addr_get_u32(netif_ip4_gw(n)), gw), dotted(dns_server(0), dns0), dotted(dns_server(1), dns1),
+         dotted(ip4_addr_get_u32(netif_ip4_netmask(n)), extra),
+         dhcp && state == DHCP_STATE_BOUND ? (unsigned)dhcp->offered_t0_lease : 0u, dhcp ? (unsigned)dhcp->tries : 0u,
+         suppressed);
+}
+static void dhcp_timeout_check(struct ethernet_port *p, uint64_t now)
+{
+    struct dhcp *dhcp = netif_dhcp_data(&p->interface);
+    unsigned state = dhcp ? dhcp->state : DHCP_STATE_OFF;
+    if (!p->dhcp_started || !dhcp_acquiring(state) || !p->acquiring_since ||
+        now - p->acquiring_since < NET_DHCP_TIMEOUT_MS ||
+        (p->timeout_recorded && now - p->timeout_recorded < NET_DHCP_TIMEOUT_REPEAT_MS)) return;
+    p->timeout_recorded = now;
+    struct net_stack_counters c; driver_counters(p->index, &c);
+    sys_prot_t f = sys_arch_protect(); uint64_t in = p->frames_in, out = p->frames_out; sys_arch_unprotect(f);
+    char ip[16], gw[16], dns[16];
+    klog("[net] dhcp state=timeout phase=%s iface=en%u ip=%s gw=%s dns=%s tries=%u elapsed_ms=%llu rx=%llu rx_errors=%llu tx=%llu in=%llu out=%llu",
+         dhcp_state_name(state), p->index, dotted(ip4_addr_get_u32(netif_ip4_addr(&p->interface)), ip),
+         dotted(ip4_addr_get_u32(netif_ip4_gw(&p->interface)), gw), dotted(dns_server(0), dns),
+         (unsigned)dhcp->tries, (unsigned long long)(now - p->acquiring_since), (unsigned long long)c.rx,
+         (unsigned long long)c.rx_errors, (unsigned long long)c.tx, (unsigned long long)in, (unsigned long long)out);
+}
+/* `[net] stack ...`: the primary (else first) attached interface. */
+static void stack_line(uint64_t now)
+{
+    struct ethernet_port *p = NULL; unsigned interfaces = 0;
+    for (unsigned i = 0; i < 2; i++) if (ports[i].attached) { interfaces++; if (!p || ports[i].primary) p = &ports[i]; }
+    if (!p || now < stack_line_at) return;
+    stack_line_at = now + (now - stack_started < NET_STACK_EARLY_MS ? NET_STACK_EARLY_LINE_MS : NET_STACK_LINE_MS);
+    struct net_stack_counters c; driver_counters(p->index, &c);
+    sys_prot_t f = sys_arch_protect();
+    c.frames_in = p->frames_in; c.frames_out = p->frames_out; uint32_t address = p->address;
+    sys_arch_unprotect(f);
+    bool changed = memcmp(&c, &stack_line_last, sizeof(c)) || address != stack_line_address;
+    if (!changed && now < stack_line_quiet_at) return;
+    stack_line_last = c; stack_line_address = address; stack_line_quiet_at = now + NET_STACK_QUIET_MS;
+    struct dhcp *dhcp = netif_dhcp_data(&p->interface);
+    unsigned resolved = 0, failed = 0; ciuki_resolver_counts(&resolved, &failed);
+    char ip[16], gw[16], dns[16];
+    klog_periodic("[net] stack ifaces=%u en%u link=%s ip=%s gw=%s dns=%s dhcp=%s rx=%llu tx=%llu errors=%llu dropped=%llu in=%llu out=%llu dns_ok=%u dns_fail=%u",
+         interfaces, p->index, netif_is_link_up(&p->interface) ? "up" : "down", dotted(address, ip),
+         dotted(ip4_addr_get_u32(netif_ip4_gw(&p->interface)), gw), dotted(dns_server(0), dns),
+         dhcp_state_name(dhcp ? dhcp->state : DHCP_STATE_OFF), (unsigned long long)c.rx, (unsigned long long)c.tx,
+         (unsigned long long)(c.rx_errors + c.tx_errors), (unsigned long long)c.dropped,
+         (unsigned long long)c.frames_in, (unsigned long long)c.frames_out, resolved, failed);
+}
+static void watch(void *unused)
+{
+    (void)unused; uint64_t now = cu_now();
+    for (unsigned i = 0; i < 2; i++) if (ports[i].attached) { dhcp_observe(&ports[i]); dhcp_timeout_check(&ports[i], now); }
+    stack_line(now);
+    sys_prot_t f = sys_arch_protect(); watch_pending = false; sys_arch_unprotect(f);
+}
+void net_stack_watch(void)
+{
+    if (!started || !watch_message) return;
+    uint64_t now = cu_now();
+    sys_prot_t f = sys_arch_protect();
+    bool post = !watch_pending && now >= watch_due;
+    if (post) { watch_pending = true; watch_due = now + NET_WATCH_MS; }
+    sys_arch_unprotect(f);
+    if (post && tcpip_callbackmsg_trycallback(watch_message) != ERR_OK) {
+        f = sys_arch_protect(); watch_pending = false; sys_arch_unprotect(f);
+    }
+}
+/* Core-side ingress: Ethernet input, then any DHCP transition it caused
+ * (OFFER -> offer, ACK -> checking or bound, NAK -> discover again). */
+static err_t observed_input(struct pbuf *p, struct netif *n)
+{
+    err_t e = ethernet_input(p, n);
+    dhcp_observe(n->state);
+    return e;
+}
 
 static err_t output(struct netif *n, struct pbuf *p)
 {
@@ -41,6 +237,7 @@ static err_t output(struct netif *n, struct pbuf *p)
     if (pbuf_copy_partial(p, frame, p->tot_len, 0) != p->tot_len) return ERR_IF;
     struct ethernet_port *port = n->state;
     int r = net_stack_transmit(port->index, frame, p->tot_len);
+    if (!r) { sys_prot_t f = sys_arch_protect(); port->frames_out++; sys_arch_unprotect(f); }
     return r == -EAGAIN ? ERR_MEM : r ? ERR_IF : ERR_OK;
 }
 static void status(struct netif *n)
@@ -56,6 +253,7 @@ static void status(struct netif *n)
         if (netif_default == n && !current)
             for (unsigned i = 0; i < DNS_MAX_SERVERS; i++) dns_setserver(i, IP_ADDR_ANY);
     }
+    if (p->attached) dhcp_observe(p);
     cu_changed();
 }
 static err_t interface_init(struct netif *n)
@@ -89,13 +287,28 @@ static void link_update(void *arg)
         f = sys_arch_protect(); p->dhcp_started = e == ERR_OK;
         p->dhcp_error = e == ERR_OK ? 0 : e == ERR_MEM ? -ENOMEM : -ENETDOWN;
         p->dhcp_retry = cu_now() + 1000;
+        int error = p->dhcp_error;
         sys_arch_unprotect(f); cu_changed();
+        /* Every successful start; a failure once per distinct error (the
+         * worker retries each second). */
+        if ((!error || error != p->start_recorded) && record_token(p, cu_now())) {
+            char mac[18]; static const char digits[] = "0123456789abcdef";
+            for (unsigned i = 0; i < 6; i++) {
+                mac[i * 3] = digits[p->mac[i] >> 4]; mac[i * 3 + 1] = digits[p->mac[i] & 15];
+                mac[i * 3 + 2] = i < 5 ? ':' : 0;
+            }
+            klog("[net] dhcp state=%s iface=en%u mac=%s error=%d", error ? "start_failed" : "start", p->index, mac, error);
+        }
+        p->start_recorded = error;
+        dhcp_observe(p);
     }
     status(&p->interface);
 }
 static void attach_core(void *arg)
 {
     struct ethernet_port *p = arg;
+    p->dhcp_state = 0xff; p->start_recorded = 1;
+    p->record_tokens = NET_RECORD_BURST; p->tokens_at = cu_now();
     if (!netif_add(&p->interface, IP4_ADDR_ANY4, IP4_ADDR_ANY4, IP4_ADDR_ANY4,
                    p, interface_init, tcpip_input)) return;
     netif_set_status_callback(&p->interface, status);
@@ -168,9 +381,10 @@ void net_stack_input(unsigned index, const void *data, unsigned bytes)
     if (index >= 2 || !ports[index].attached || bytes < 14 || bytes > 1514) return;
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)bytes, PBUF_POOL);
     if (!p) { LINK_STATS_INC(link.drop); return; }
-    if (pbuf_take(p, data, (u16_t)bytes) != ERR_OK || tcpip_input(p, &ports[index].interface) != ERR_OK) {
-        pbuf_free(p); LINK_STATS_INC(link.drop);
+    if (pbuf_take(p, data, (u16_t)bytes) != ERR_OK || tcpip_inpkt(p, &ports[index].interface, observed_input) != ERR_OK) {
+        pbuf_free(p); LINK_STATS_INC(link.drop); return;
     }
+    sys_prot_t f = sys_arch_protect(); ports[index].frames_in++; sys_arch_unprotect(f);
 }
 void net_stack_address(unsigned index, uint32_t *address)
 {
@@ -229,5 +443,7 @@ int net_stack_init(void)
     if (sys_arch_sem_wait(&initialized, 2000) == SYS_ARCH_TIMEOUT) return -ENOMEM;
     sys_sem_free(&initialized);
     if (cu_sockets_init()) return -ENOMEM;
+    /* Records only: without the message the stack runs, unobserved. */
+    watch_message = tcpip_callbackmsg_new(watch, NULL); stack_started = cu_now();
     started = true; return 0;
 }

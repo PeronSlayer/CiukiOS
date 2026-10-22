@@ -247,6 +247,19 @@ int main(int argc,char **argv)
         if(!strcmp(mode,"tls-truncated"))assert(job->tls_error==CIUKI_TLS_IO || strstr(job->error,"Truncated"));
         if(!strcmp(mode,"hostname-offline"))assert(strstr(job->error,"Offline:"));
         if(!strcmp(mode,"loopback-offline"))assert(strstr(job->error,"refused") && !strstr(job->error,"Offline:"));
+        /* f6-22: failure pages state the network: no address / address and DNS. */
+        if(!strcmp(mode,"offline")||!strcmp(mode,"hostname-offline")||!strcmp(mode,"loopback-offline")){
+            assert(strstr(job->error," Network: no address yet (e100, link up); waiting for a DHCP server."));
+            assert(!strcmp(ciuki_net_state_word(),"no-address"));
+        }
+        if(!strcmp(mode,"dns")){
+            assert(strstr(job->error,"DNS lookup failed: the server name could not be resolved. Network: address 192.0.2.100 (e100); DNS lookups failing."));
+            assert(!strcmp(ciuki_net_state_word(),"dns-failed"));
+        }
+        if(!strcmp(mode,"refused")){
+            assert(strstr(job->error,"The server refused the connection. Network: address 192.0.2.100 (e100); DNS ok."));
+            assert(!strcmp(ciuki_net_state_word(),"dns-ok"));
+        }
         if(!strcmp(mode,"entropy"))assert(job->tls_error==CIUKI_TLS_ENTROPY);
     }
     ciuki_net_job_free(job);ciuki_net_destroy(net);

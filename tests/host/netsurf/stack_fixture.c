@@ -341,7 +341,12 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
 {
     CHECK(fd==10000 && op==NET_GET_STATE && size==sizeof(struct ciuki_net_state));
     struct ciuki_net_state *state=record;CHECK(state->version==CIUKI_NET_VERSION && state->size==size);
-    state->address_configured=!fixture_offline;return 0;
+    /* f6-22: the T23 shape. Offline modes take the link down in the stack
+     * but report what the T23 showed: e100 running, link up, no address. */
+    state->present=1;memcpy(state->driver,"e100",5);state->link=CIUKI_NET_LINK_UP;state->state=CIUKI_NET_RUNNING;
+    memcpy(state->reason,"admission",10);state->address_configured=!fixture_offline;
+    uint32_t address=0;net_stack_address(0,&address);memcpy(state->ipv4,&address,4);
+    return 0;
 }
 bool ciuki_host_clock_rtc(void) { return strcmp(fixture_mode,"fallback-clock")!=0; }
 bool fixture_lookup_blocked(void) { return lookup_entered; }

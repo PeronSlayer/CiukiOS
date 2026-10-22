@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  * Single UI owner: deskui chrome/dialogs; fbtk owns the content viewport. */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 #include <libnsfb.h>
 #include <libnsfb_event.h>
 #include "utils/errors.h"
@@ -30,6 +33,7 @@
 #include "profile.h"
 #include "chrome.h"
 #include "budget.h"
+#include "logline.h"
 
 enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,OPEN=20,FILE_PICKER,NOTICE };
 static struct du_ui ui;
@@ -42,6 +46,14 @@ static struct form_control *file_gadget;
 static struct gui_window *file_window;
 const char *ciuki_resource_path="/system/netsurf";
 const char *ciuki_capture_path;
+/* f6-22: C:\SYSTEM\LOGS\NETSURF.LOG keeps one line per browser exit. Host
+ * runs write it only when --ciuki-log= names a file. */
+#ifdef CIUKI_HOST
+const char *ciuki_netsurf_log_path;
+#else
+const char *ciuki_netsurf_log_path="/system/logs/NETSURF.LOG";
+#endif
+#define CIUKI_NETSURF_LOG_MAX (64u*1024u)
 static const char *profile_path="/Documents/NetSurf";
 const char *ciuki_chrome_choices(void)
 {
@@ -299,12 +311,21 @@ void ciuki_chrome_defaults(void)
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);
     nsoption_set_charp(fb_toolbar_layout,strdup("q"));
 }
+static const char *exit_reason;
+static int exit_detail;
+static bool exit_reported;
+static void exit_fallback(void);
 int ciuki_chrome_arguments(int *argc,char **argv)
 {
+    /* f6-22: every complete stderr line, NetSurf's own log included, leaves
+     * as one write (see logline.h); C allows a line-buffered stderr. */
+    static char stderr_buffer[1024];
+    setvbuf(stderr,stderr_buffer,_IOLBF,sizeof(stderr_buffer));
+    atexit(exit_fallback);
     for(int i=1;i<*argc;) {
         const char *a=argv[i];bool consumed=false;
         if(!strncmp(a,"--channel-fd=",13)) {
-            char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63)return -1;
+            char *end;long n=strtol(a+13,&end,10);if(*end || n<3 || n>63) { exit_reason="bad-arguments";return -1; }
             ciuki_browser_channel=n;consumed=true;
         }
         else if(!strcmp(a,"--test=browser")) { test_requested=true;consumed=true; }
@@ -312,9 +333,10 @@ int ciuki_chrome_arguments(int *argc,char **argv)
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
+        else if(!strncmp(a,"--ciuki-log=",12)) { ciuki_netsurf_log_path=a+12;consumed=true; }
         else if(!strncmp(a,"--ciuki-clock-scale=",20)) {
             /* f6-20 T23 model: charge host layouts as a slower CPU. */
-            char *end;unsigned long n=strtoul(a+20,&end,10);if(*end || !n || n>1000000)return -1;
+            char *end;unsigned long n=strtoul(a+20,&end,10);if(*end || !n || n>1000000) { exit_reason="bad-arguments";return -1; }
             ciuki_layout_clock_scale=(uint32_t)n;consumed=true;
         }
 #endif
@@ -348,8 +370,6 @@ void ciuki_chrome_finish(void)
     if(shown_url) { nsurl_unref(shown_url);shown_url=NULL; }
     ciuki_profile_fini();active=profile_ready=hotlist_ready=false;
 }
-static const char *exit_reason;
-static int exit_detail;
 void ciuki_chrome_exit_reason(const char *reason)
 {
     if(exit_reason)return;
@@ -358,13 +378,49 @@ void ciuki_chrome_exit_reason(const char *reason)
     exit_reason=s && s->close_reason?s->close_reason:"quit-event";
     exit_detail=s && s->close_reason?s->close_detail:0;
 }
-void ciuki_chrome_exit_report(void)
+/* Builds without the native fetcher (unit harnesses) report "unknown". */
+__attribute__((weak)) const char *ciuki_net_state_word(void);
+__attribute__((format(printf,3,4)))
+static int format_line(char *line,size_t size,const char *format,...)
+{ va_list ap;va_start(ap,format);int n=ciuki_line_vformat(line,size,format,ap);va_end(ap);return n; }
+static int exit_line(char *line,size_t size,bool surface)
 {
-    struct ciuki_browser_surface *s=ciuki_browser_active;
-    fprintf(stderr,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u\n",
+    struct ciuki_browser_surface *s=surface?ciuki_browser_active:NULL;
+    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u network=%s",
             exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
             (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
-            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u);
+            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,
+            ciuki_net_state_word?ciuki_net_state_word():"unknown");
+}
+/* Appends "<UTC time> <line>"; past 64 KiB the file starts over. */
+static void netsurf_log(const char *line)
+{
+    if(!ciuki_netsurf_log_path)return;
+    struct stat st;int flags=O_WRONLY|O_CREAT|O_APPEND;
+    if(!stat(ciuki_netsurf_log_path,&st) && st.st_size>=(off_t)CIUKI_NETSURF_LOG_MAX)flags=O_WRONLY|O_CREAT|O_TRUNC;
+    int fd=open(ciuki_netsurf_log_path,flags,0666);if(fd<0)return;
+    char stamp[32]="unknown-time ";struct timespec now;struct tm utc;
+    if(!clock_gettime(CLOCK_REALTIME,&now) && gmtime_r(&now.tv_sec,&utc))
+        snprintf(stamp,sizeof(stamp),"%04d-%02d-%02dT%02d:%02d:%02dZ ",utc.tm_year+1900,utc.tm_mon+1,utc.tm_mday,utc.tm_hour,utc.tm_min,utc.tm_sec);
+    ciuki_write_all(fd,stamp,strlen(stamp));ciuki_write_all(fd,line,strlen(line));close(fd);
+}
+void ciuki_chrome_exit_report(void)
+{
+    char line[CIUKI_LOG_LINE_MAX];
+    if(exit_reported || exit_line(line,sizeof(line),true)<=0)return;
+    exit_reported=true;
+    fflush(stderr);ciuki_write_all(2,line,strlen(line));
+    netsurf_log(line);
+}
+/* die() and early returns: stderr already has their message; the log file
+ * still gets an exit line. The surface may be gone, so it is not read. */
+static void exit_fallback(void)
+{
+    char line[CIUKI_LOG_LINE_MAX];
+    if(exit_reported)return;
+    exit_reported=true;
+    if(!exit_reason)exit_reason="fatal";
+    if(exit_line(line,sizeof(line),false)>0)netsurf_log(line);
 }
 void ciuki_chrome_capture(void *context)
 {

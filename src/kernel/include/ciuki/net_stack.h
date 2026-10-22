@@ -13,6 +13,17 @@ int net_stack_primary(void);
 int net_stack_random_id(uint8_t[16]);
 void net_stack_address(unsigned, uint32_t *address);
 int net_stack_dhcp_error(unsigned);
+/* f6-22: driver counters for the `[net] stack` and DHCP timeout records,
+ * filled by the kernel NIC layer (lwip_handoff.c; absent on host harnesses,
+ * which read zeros unless they define it). frames_in/frames_out are the
+ * stack's own copied-frame counts. */
+struct net_stack_counters {
+    uint64_t rx, tx, rx_errors, tx_errors, dropped, frames_in, frames_out;
+};
+void net_stack_driver_counters(unsigned, struct net_stack_counters *);
+/* Any task, cheap: posts one preallocated core watch pass at most every
+ * 250 ms (DHCP state records, timeout record, periodic stack line). */
+void net_stack_watch(void);
 int net_stack_transmit(unsigned, const void *, unsigned);
 void net_stack_entropy(uint64_t);
 void net_fd_changed(struct process *, unsigned);

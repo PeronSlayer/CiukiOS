@@ -895,9 +895,47 @@ struct dns_request {
     int status;
     unsigned generation;
     bool used, done, abandoned;
+    uint64_t started;
 };
 static struct dns_request lookups[CIUKI_DNS_MAX];
 static unsigned resolver_generation = 1;
+/* f6-22: the first answer and the first failure after each DNS server change
+ * are protected records; the totals go into the `[net] stack` line. The
+ * looked-up name is not recorded. Core thread only. */
+static unsigned resolver_recorded_generation, resolver_answers, resolver_failures;
+static bool resolver_answer_recorded, resolver_failure_recorded;
+void ciuki_resolver_counts(unsigned *answers, unsigned *failures)
+{ *answers = resolver_answers; *failures = resolver_failures; }
+static void dotted_text(uint32_t address, char out[16])
+{
+    const uint8_t *b = (const uint8_t *)&address; char *p = out;
+    for (unsigned i = 0; i < 4; i++) {
+        unsigned v = b[i];
+        if (v >= 100) *p++ = (char)('0' + v / 100);
+        if (v >= 10) *p++ = (char)('0' + v / 10 % 10);
+        *p++ = (char)('0' + v % 10);
+        *p++ = i < 3 ? '.' : 0;
+    }
+}
+static void resolver_record(const struct dns_request *r, bool answered, uint32_t address)
+{
+    ciuki_lwip_assert_core();
+    if (resolver_recorded_generation != r->generation) {
+        resolver_recorded_generation = r->generation;
+        resolver_answer_recorded = resolver_failure_recorded = false;
+    }
+    if (answered) resolver_answers++; else resolver_failures++;
+    if (answered ? resolver_answer_recorded : resolver_failure_recorded) return;
+    if (answered) resolver_answer_recorded = true; else resolver_failure_recorded = true;
+    char ip[16], first[16], second[16];
+    dotted_text(address, ip);
+    const ip_addr_t *a = dns_getserver(0), *b = dns_getserver(1);
+    dotted_text(a ? ip4_addr_get_u32(ip_2_ip4(a)) : 0, first);
+    dotted_text(b ? ip4_addr_get_u32(ip_2_ip4(b)) : 0, second);
+    klog("[net] resolver %s ip=%s servers=%s,%s elapsed_ms=%llu generation=%u",
+         answered ? "first_answer" : "first_failure", ip, first, second,
+         (unsigned long long)(cu_now() - r->started), r->generation);
+}
 /* The netif status callback runs AFTER upstream may abort/free TCP PCBs.
  * Retained endpoint/route state also identifies those sockets and listeners. */
 void ciuki_sockets_address_lost(uint32_t address)
@@ -929,8 +967,11 @@ static void dns_done(const char *name, const ip_addr_t *address, void *arg)
     /* Upstream's callback cannot distinguish NXDOMAIN from retry exhaustion. */
     r->status = address && r->generation == resolver_generation ? 0 : 3;
     r->address = address ? ip4_addr_get_u32(ip_2_ip4(address)) : 0;
+    struct dns_request copy = *r;
     r->done = true; if (r->abandoned) r->used = false;
-    sys_arch_unprotect(f); cu_changed();
+    sys_arch_unprotect(f);
+    resolver_record(&copy, !copy.status, copy.address);
+    cu_changed();
 }
 static void dns_start(void *arg)
 {
@@ -988,7 +1029,7 @@ int net_resolve(struct process *p, const char *name, uint32_t *address, int *sta
     for (unsigned i = 0; i < CIUKI_DNS_MAX; i++) if (!lookups[i].used) { r = &lookups[i]; memset(r, 0, sizeof(*r)); r->used = true; break; }
     sys_arch_unprotect(f);
     if (!r) { *status = 2; *address = 0; return 0; }
-    memcpy(r->name, name, strlen(name) + 1); r->generation = resolver_generation;
+    memcpy(r->name, name, strlen(name) + 1); r->generation = resolver_generation; r->started = cu_now();
     struct proc_thread *t = proc_thread_for(g_current);
     struct dns_waiter w = { r, t ? t->cleanup : NULL, t ? t->operation : NULL };
     if (t) { t->cleanup = dns_abandon; t->operation = &w; }

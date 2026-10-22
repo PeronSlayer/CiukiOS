@@ -163,15 +163,74 @@ void ciuki_net_service_idle(struct ciuki_net *n)
         if(c->state==IDLE && (!now || now-c->idle_ms>=15000 || !clean_socket(c,false)))close_connection(n,c);
     }
 }
-static bool offline(void)
+static bool read_state(struct ciuki_net_state *state)
 {
 #ifdef CIUKI_HOST
     if(!ciuki_devctl)return false;
 #endif
     int fd=open("/dev/net",O_RDONLY);if(fd<0)return false;
-    struct ciuki_net_state state={.version=CIUKI_NET_VERSION,.size=sizeof(state)};
-    int result=ciuki_devctl(fd,NET_GET_STATE,&state,sizeof(state));close(fd);
-    return !result && !state.address_configured;
+    *state=(struct ciuki_net_state){.version=CIUKI_NET_VERSION,.size=sizeof(*state)};
+    int result=ciuki_devctl(fd,NET_GET_STATE,state,sizeof(*state));close(fd);
+    return !result;
+}
+static bool offline(void)
+{
+    struct ciuki_net_state state;
+    return read_state(&state) && !state.address_configured;
+}
+/* Outcome of this browser's last DNS lookup (numeric and loopback hosts
+ * never ask the resolver). */
+enum { DNS_UNTRIED,DNS_ANSWERED,DNS_FAILED };
+static int dns_outcome;
+static unsigned state_kind(const struct ciuki_net_state *s)
+{
+    if(!s->present)return 1;
+    if(s->state!=CIUKI_NET_RUNNING)return 2;
+    if(s->link==CIUKI_NET_LINK_DOWN)return 3;
+    if(!s->address_configured)return 4;
+    return dns_outcome==DNS_ANSWERED?6:dns_outcome==DNS_FAILED?7:5;
+}
+const char *ciuki_net_state_word(void)
+{
+    static const char *const words[]={"unknown","no-adapter","stopped","no-link","no-address","address","dns-ok","dns-failed"};
+    struct ciuki_net_state s;
+    return words[read_state(&s)?state_kind(&s):0];
+}
+size_t ciuki_net_state_text(char *out,size_t bytes)
+{
+    struct ciuki_net_state s;int n=0;
+    if(!bytes)return 0;
+    out[0]=0;
+    if(!read_state(&s))return 0;
+    char driver[sizeof(s.driver)+1],reason[sizeof(s.reason)+1];
+    memcpy(driver,s.driver,sizeof(s.driver));driver[sizeof(s.driver)]=0;
+    memcpy(reason,s.reason,sizeof(s.reason));reason[sizeof(s.reason)]=0;
+    for(char *c=driver;*c;c++)if((unsigned char)*c<32 || (unsigned char)*c>126)*c='?';
+    for(char *c=reason;*c;c++)if((unsigned char)*c<32 || (unsigned char)*c>126)*c='?';
+    switch(state_kind(&s)){
+    case 1:n=snprintf(out,bytes,"Network: no network adapter is active.");break;
+    case 2:n=snprintf(out,bytes,"Network: the %s adapter is %s (%s).",driver,s.state==CIUKI_NET_QUARANTINED?"disabled after a fault":"stopped",reason);break;
+    case 3:n=snprintf(out,bytes,"Network: the %s adapter has no link; check the cable.",driver);break;
+    case 4:n=snprintf(out,bytes,"Network: no address yet (%s, link %s); waiting for a DHCP server.",driver,s.link==CIUKI_NET_LINK_UP?"up":"unknown");break;
+    default:
+        n=snprintf(out,bytes,"Network: address %u.%u.%u.%u (%s); %s.",s.ipv4[0],s.ipv4[1],s.ipv4[2],s.ipv4[3],driver,
+            dns_outcome==DNS_ANSWERED?"DNS ok":dns_outcome==DNS_FAILED?"DNS lookups failing":"DNS not tried yet");
+    }
+    if(n<0){out[0]=0;return 0;}
+    return (size_t)n<bytes?(size_t)n:bytes-1;
+}
+/* Network failures and the readiness page carry the network state. */
+static void network_message(struct ciuki_job *j,const char *message)
+{
+    char state[224];
+    if(!ciuki_net_state_text(state,sizeof(state))){j->error=message;return;}
+    snprintf(j->error_text,sizeof(j->error_text),"%s %s",message,state);
+    j->error=j->error_text;
+}
+static void tls_failure(struct ciuki_job *j)
+{
+    const char *message=ciuki_tls_describe(j->tls_error,j->tls_message,sizeof(j->tls_message));
+    if(j->tls_error==CIUKI_TLS_NOT_READY)network_message(j,message);else j->error=message;
 }
 static bool loopback_name(const char *host)
 { return !strcasecmp(host,"localhost") || !strcasecmp(host,"localhost."); }
@@ -179,8 +238,8 @@ static bool origin(const struct ciuki_connection *c,const struct ciuki_job *j)
 { return c->state && c->port==j->port && c->secure==j->secure && !strcmp(c->host,j->host); }
 static void io_error(struct ciuki_job *j,int error)
 {
-    j->error=error==ENETDOWN||error==ENETUNREACH||error==EADDRNOTAVAIL?"Offline: no usable network address or route.":
-        error==ECONNREFUSED?"The server refused the connection.":error==ETIMEDOUT?"The network request timed out (30 second limit).":"The network connection failed.";
+    network_message(j,error==ENETDOWN||error==ENETUNREACH||error==EADDRNOTAVAIL?"Offline: no usable network address or route.":
+        error==ECONNREFUSED?"The server refused the connection.":error==ETIMEDOUT?"The network request timed out (30 second limit).":"The network connection failed.");
 }
 static bool open_connection(struct ciuki_connection *c,uint32_t address)
 {
@@ -234,7 +293,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     /* Refuse invalid clock/entropy before DNS or any TLS network traffic. */
     if(j->secure){
         slot->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);
-        if(!slot->tls){j->error=ciuki_tls_describe(j->tls_error,j->tls_message,sizeof(j->tls_message));return true;}
+        if(!slot->tls){tls_failure(j);return true;}
     }
     resolve(n,slot);return true;
 }
@@ -306,9 +365,11 @@ void ciuki_net_poll(struct ciuki_net *n)
             if(!j->dns_token)j->dns_token=ciuki_dns_submit(n->dns,j->host);
             if(j->dns_token && ciuki_dns_result(n->dns,j->dns_token,&address,&error)){
                 j->dns_token=0;
+                if(!loopback_name(j->host))dns_outcome=error?DNS_FAILED:DNS_ANSWERED;
                 if(error){
                     if(!loopback_name(j->host) && offline())io_error(j,ENETDOWN);
-                    else {io_error(j,error);if(error==EHOSTUNREACH)j->error="DNS lookup failed: the server name could not be resolved.";}
+                    else if(error==EHOSTUNREACH)network_message(j,"DNS lookup failed: the server name could not be resolved.");
+                    else io_error(j,error);
                 }
                 else open_connection(c,address);
             }
@@ -330,7 +391,7 @@ void ciuki_net_poll(struct ciuki_net *n)
             ciuki_http_callback callback=j->http->callback;void *context=j->http->context;bool head=j->http->head;
             ciuki_http_destroy(j->http);ciuki_http_init(j->http,head,callback,context);
             if(c->fd>=0)close(c->fd);c->fd=-1;ciuki_tls_free(c->tls);c->tls=NULL;
-            if(j->secure){c->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);if(!c->tls)j->error=ciuki_tls_describe(j->tls_error,j->tls_message,sizeof(j->tls_message));}
+            if(j->secure){c->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);if(!c->tls)tls_failure(j);}
             if(!j->error)resolve(n,c);
         }
         if(j->error||j->cancelled||j->http->done)finish(n,c);

@@ -27,6 +27,8 @@ struct ciuki_job {
     bool transmitted;
     const char *error;
     char tls_message[192];
+    /* f6-22: a network failure or readiness message with the network state. */
+    char error_text[400];
     enum ciuki_tls_error tls_error;
 };
 #define CIUKI_NET_PENDING_BUDGET (128u*1024u)
@@ -43,4 +45,11 @@ void ciuki_net_service_idle(struct ciuki_net *);
 /* Port-local fd_set callers translate these to their own representation. */
 unsigned ciuki_net_fds(struct ciuki_net *,struct pollfd [8]);
 struct ciuki_tls *ciuki_net_tls(struct ciuki_job *);
+/* f6-22: the network as this browser sees it: the kernel's /dev/net record
+ * (adapter, link, address) and the outcome of this browser's last name
+ * lookup. The word is one of unknown (no /dev/net), no-adapter, stopped,
+ * no-link, no-address, address, dns-ok, dns-failed; the text is a sentence
+ * for error and readiness pages, empty when /dev/net is unavailable. */
+const char *ciuki_net_state_word(void);
+size_t ciuki_net_state_text(char *,size_t);
 #endif

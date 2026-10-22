@@ -52,9 +52,20 @@ void net_stack_driver_start(void)
     }
     net_set_input(ingress, NULL);
 }
+/* f6-22: driver counters for the stack's `[net]` records (core thread). */
+void net_stack_driver_counters(unsigned index, struct net_stack_counters *out)
+{
+    struct netif *d = index < 2 ? net_get(index) : 0;
+    if (!d) return;
+    struct net_stats stats; netif_snapshot(d, &stats);
+    out->rx = stats.rx_packets; out->tx = stats.tx_completed;
+    out->rx_errors = stats.rx_errors; out->tx_errors = stats.tx_errors;
+    out->dropped = stats.rx_dropped;
+}
 void net_stack_driver_service(void)
 {
     uint64_t start = g_ticks; struct net_packet packet;
+    net_stack_watch();
     for (unsigned i = 0; i < net_count() && i < 2; i++) {
         struct netif *d = net_get(i);
         net_stack_link(i, d->running && !d->quarantined && d->link != NET_LINK_DOWN);

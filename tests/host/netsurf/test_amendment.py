@@ -70,6 +70,11 @@ class SanitizerTests(unittest.TestCase):
         self.compile_run("budget",[HERE / "budget_test.c",ROOT / "sdk/netsurf/port/budget.c"],
                          ["-Wl,--wrap=clock_gettime"])
 
+    def test_stderr_record_lines(self):
+        """f6-22: the layout slow and exit reason lines are single writes."""
+        self.compile_run("logline",[HERE / "logline_test.c",ROOT / "sdk/netsurf/port/budget.c"],
+                         ["-Wl,--wrap=clock_gettime,--wrap=write"])
+
     def test_real_frontend_input(self):
         objects=self.source / "build/Linux-framebuffer"
         excluded={"frontends_framebuffer_gui.o","frontends_framebuffer_ciuki_chrome.o","frontends_framebuffer_fbtk_event.o","content_handlers_html_layout.o","content_handlers_text_textplain.o","frontends_framebuffer_bitmap.o"}
