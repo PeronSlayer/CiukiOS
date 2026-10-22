@@ -196,6 +196,44 @@ never came. Decisions:
   `1116 error=2 DOOM.ETX` (open), `110f error=2 DOOM2F.WAD`, `DOOM2.WAD`,
   `DOOM.WAD` (get attributes, DOOM's IdentifyVersion).
 
+f3-61d (2026-10-22 11:35, QEMU runs ebffb1db (unified) and 761df914
+(freedos case)):
+
+- The freedos case had launched `kernel=unified`: `scripts/test/run.py`
+  rebuilds the fw_cfg request from the parsed selector and dropped the
+  vm-game `kernel=` suffix. It is now kept before the platform suffix; a host
+  test sends both suite cases through `qemu_args` and the kernel selector
+  (`PROBE_DOS_FREEDOS` for the freedos case). The probe's `case=vm
+  kernel= expected=` predicates already refuse a mismatch.
+- The runner failed the windowed run on its own demo pair: the probe's
+  per-second presenter hash (a 640x480 render plus SHA-256 under TCG, about
+  0.3–0.6 s each) made later samples late, and the two demo ARMs were then
+  emitted in the same instant, so the two screendumps were identical. The
+  probe now samples cheaply (page flips, scanout seconds) and paces the ARMs
+  5 s apart on the clock. With `continuation=windowed` the runner reports
+  `fullscreen_demo={skipped, reason: refused}` and compares a desktop
+  screendump with later ones every 5 s, from the demo ARM until the verdict,
+  for a change that fits one 640x480 DOS window client (`window_demo`).
+- Window frame rate under QEMU: not the presenter (the counted flips are CRTC
+  start-address writes in the VM, before any WAIT_PRESENT/PRESENT) and not
+  the IFS (the freedos-run had the same `frames=1/10`). It is the QEMU return
+  tracker (f3-35: TF stepping under `CBI_F_SMBIOS_QEMU` because TCG's debug
+  breakpoints are unusable): in the production VM on the host, 60 s of DOOM
+  with DMX sound take 5.66 M monitor traps with the TF tracker (4.48 M
+  `pm_return` single steps, about 405 per protected-mode IRQ, 11054 IRQs)
+  against 1.65 M with the hardware breakpoint tracker (443 k checkpoints,
+  397 k `pm_if`), same 138 page flips in that instruction-timed run. The QEMU
+  run shows about 5000 VM exits per second (25 k per 5 s perf window), so the
+  IRQ handlers' single steps saturate the VM and DOOM's main loop flips only
+  every few seconds (3 changes in 19 s). On the T23 (breakpoint tracker, a
+  few µs per exit) the same IRQ load costs about 5 % of the CPU; DOOM runs at
+  its 35 Hz tic rate, full screen expected near 35 frames per second.
+- Profile-aware verdict: full screen, and a window on hardware, need frames
+  in all observed seconds but two (`threshold=frames`); a window under QEMU
+  needs at least 20 sampled seconds, PM IRQs in all but two of them and at
+  least two page flips (`threshold=qemu-tcg`). `case=progress` carries
+  `flips=`.
+
 ## Open (lead)
 
 - QEMU `vm-game` on both kernels, then the T23 with serial capture: the

@@ -32,7 +32,9 @@ STRING_MAX = {'phase': 'startup', 'when': 'prompt', 'hex': 'f' * 80, 'digest': '
               'kernel': 'freedos-1.3', 'status': 'FAIL', 'outcome': 'launch-failed',
               # f3-61c
               'continuation': 'windowed', 'policy': 'hardware', 'display': 'fullscreen',
-              'method': 'idle-prompt', 'why': 'game-running', 'name': 'X' * 12}
+              'method': 'idle-prompt', 'why': 'game-running', 'name': 'X' * 12,
+              # f3-61d
+              'threshold': 'qemu-tcg'}
 WIDEST = {'u': '4294967295', 'd': '-2147483648', 'x': 'ffffffff'}
 TOKEN = re.compile(r'[a-z][a-z0-9_]*=[A-Za-z0-9_:.,/+\-]+')
 
@@ -117,11 +119,13 @@ class VmGameRecords(unittest.TestCase):
             out.append(rec('sample', t=second * 1000, fs=int(not windowed), state=1, mode=19, frames=[second, second],
                            dpmi=1, returned=0, cause=0, error=0))
             out.append(rec('progress', t=second * 1000, irq_pm=226 * second, opl=3000 * second, sb=22050 * second,
-                           ifs_reads=1183 + second, ifs_failed=4, ifs_critical=0))
+                           flips=second // 8 if windowed else 35 * second, ifs_reads=1183 + second, ifs_failed=4,
+                           ifs_critical=0))
             if second == 1: out.append(rec('fullscreen_demo_start'))
             if second == 5: out.append(rec('fullscreen_demo_end'))
         if not windowed: out.append(rec('fullscreen_leave'))
-        out += [rec('verdict', outcome='running', display='window' if windowed else 'fullscreen'),
+        out += [rec('verdict', outcome='running', display='window' if windowed else 'fullscreen',
+                    threshold='qemu-tcg' if windowed else 'frames'),
                 rec('after', state=1, reason=0, vector=0, mode=3, dpmi=0, returned=1, exec=0, idle=1, cause=1),
                 rec('console', phase='after', row=24, col=0, hex='433a5c444f4f4d3e'),
                 rec('unified', when='after', kernel=kernel, bound=int(unified), active=int(unified), owned='c' if unified else 0,
@@ -205,6 +209,84 @@ class VmGameRecords(unittest.TestCase):
         for seq, (event, extra) in enumerate(self.records(kernel, windowed), 1):
             parser.feed(line(seq, event, extra).encode() + b'\n')
         return parser.records
+
+    def test_freedos_case_request_reaches_the_kernel(self):
+        """f3-61d: the runner rebuilt the fw_cfg request without the vm-game
+        kernel suffix, so the freedos case launched kernel=unified."""
+        import ctypes, subprocess, tempfile
+        import run as runner
+        out = ROOT / 'build/host'; out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='vm-game-selector-', dir=out) as folder:
+            shim = Path(folder) / 'shim.c'
+            shim.write_text(r'''
+#include <ciuki/kernel.h>
+#include "selector.h"
+void rec_emit(const char *p, const char *e, const char *f, ...) { (void)p;(void)e;(void)f; }
+void klog(const char *f, ...) { (void)f; }
+int kernel_of(const char *s, unsigned n, unsigned flags) {
+    struct probe_selection selection;
+    if (!probes_parse_selector(s, n, flags, &selection)) return -1;
+    return (selection.flags & PROBE_DOS_FREEDOS) ? 1 : (selection.flags & PROBE_DOS_UNIFIED) ? 2 : 0;
+}
+''')
+            lib = Path(folder) / 'selector.so'
+            subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC',
+                            '-I', str(ROOT / 'src/kernel/include'), '-I', str(ROOT / 'src/kernel/probes'), str(shim),
+                            str(ROOT / 'src/kernel/probes/selector.c'), '-o', str(lib)], check=True)
+            native = ctypes.CDLL(str(lib))
+            native.kernel_of.argtypes = [ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint]
+            qemu_flag = 1 << 3  # CBI_F_SMBIOS_QEMU, only needed by a platform suffix
+            for name, kernel, profile in (('vm-game-doom-freedos-qemu-t23', 1, 'qemu-t23'),
+                                          ('vm-game-doom-unified-qemu-t23', 0, 'qemu-t23'),
+                                          ('vm-game-doom-freedos-qemu-t23', 1, 'qemu-e500')):
+                case = self.case(name)
+                _, request = runner.qemu_args('fake', runner.load(ROOT / f'tests/profiles/{profile}.json'), case,
+                                              '12345678', Path(folder) / 'overlay', Path(folder) / 'bios')
+                if kernel == 1: self.assertIn(' kernel=freedos-1.3', request)
+                code = native.kernel_of(request.encode(), len(request), 0xFFFFFFFF)
+                self.assertEqual(code, kernel, request)
+
+    def test_windowed_demo_compares_the_dos_window(self):
+        """f3-61d: a refused full screen skips the demo pair and compares
+        desktop screendumps >= 5 s apart for a change inside a DOS window."""
+        import tempfile
+        import run as runner
+        width, height = 1024, 768
+        def frame(seed):
+            pixels = bytearray(b'\x40\x80\xc0' * width * height)
+            if seed:
+                for y in range(100, 500):
+                    for x in range(200, 840, 7): pixels[(y * width + x) * 3] = seed
+            return b'P6\n%d %d\n255\n' % (width, height) + bytes(pixels)
+        out = ROOT / 'build/host'; out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='vm-game-window-', dir=out) as folder:
+            folder = Path(folder)
+            for frames, expected in (((0, 0, 0, 9), True), ((0, 0, 0, 0, 0), False)):
+                class Qmp:
+                    def __init__(self): self.shots = list(frames)
+                    def command(self, name, args):
+                        assert name == 'screendump'
+                        Path(args['filename']).write_bytes(frame(self.shots.pop(0)))
+                class Seen: records = []
+                seen, qmp, demo = Seen(), Qmp(), runner.WindowDemo(folder)
+                seen.records = [{'event': 'DATA', 'case': 'fullscreen', 'continuation': 'windowed'},
+                                {'event': 'ARM', 'action': 'fullscreen_demo_start'}]
+                self.assertTrue(runner.WindowDemo.windowed(seen))
+                now = 0.0
+                while now < 30.0 and qmp.shots and not (demo.result and demo.result['changed']):
+                    demo.step(seen, qmp, now); now += 0.5
+                self.assertEqual(bool(demo.result and demo.result['changed']), expected, demo.result)
+                if expected:
+                    self.assertGreaterEqual(demo.result['seconds'], 5.0)
+                    self.assertLessEqual(demo.result['box'][2], 640); self.assertLessEqual(demo.result['box'][3], 480)
+                # After the verdict no further screendump is taken (DOOM's ENDOOM is not game progress).
+                seen.records.append({'event': 'DATA', 'case': 'verdict'})
+                left = len(qmp.shots); demo.step(seen, qmp, now + 100); self.assertEqual(len(qmp.shots), left)
+            # A change wider than one DOS window client (desktop repaint) is not window progress.
+            before, after = folder / 'a.ppm', folder / 'b.ppm'
+            before.write_bytes(frame(0)); wide = bytearray(frame(0)); wide[-3] = 1; wide[len(b'P6\n1024 768\n255\n')] = 1
+            after.write_bytes(bytes(wide))
+            self.assertFalse(runner.observe_window_demo(before, after, 5.0, 1)['changed'])
 
     def test_hardware_refusal_fails_the_verdict(self):
         """policy=hardware: the T23 expectation keeps full screen required."""
