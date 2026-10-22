@@ -151,6 +151,10 @@ struct vfs {
      * under the guard (zero in every host gate). */
     uintptr_t io_owner[26];
     uint8_t io_mode[26];
+    /* f1-98: the task (fs_task_token) holding each drive's reservation or
+     * guard, from admission to vfs_unlock or a device-window pause; waiters
+     * lend it their priority (fs_depend). Namespace protected. */
+    uintptr_t hold_token[26];
     uint64_t io_sequence[26];
     uint32_t window_pauses, window_restarts, warm_restarts, cold_fallbacks;
     /* f1-93b: cache-only sections ended by their work bound (the guard is

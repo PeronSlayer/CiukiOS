@@ -77,6 +77,7 @@ void crit_label(const char *section) { (void)section; }
 #define task_input_delivered timing_task_input_delivered
 #define task_device_deadline timing_task_device_deadline
 #define task_set_audio_class timing_task_set_audio_class
+#define task_set_share_group timing_task_set_share_group
 #define task_start timing_task_start
 #include <ciuki/work.h>
 static kwork_fn signal_work;
@@ -92,6 +93,7 @@ void task_start(struct task *);
 #undef task_input_delivered
 #undef task_device_deadline
 #undef task_set_audio_class
+#undef task_set_share_group
 #undef task_start
 #undef switch_context
 #undef crit_end

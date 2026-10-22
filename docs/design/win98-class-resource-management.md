@@ -692,6 +692,16 @@ and all device deadlines/R1 bounds hold together. Report dispatch/wakeup
 counts and CPU overhead, not just average frame rate. Physical acceptance
 uses the combined C3 workload with continued input and game cadence.
 
+Amendment f1-98 (lead, 2026-10-22): a task holding a drive reservation or
+guard, a writer turn or a filesystem lock runs at least at the priority of
+its highest waiter (transitive, cycle-refusing, released with the hold;
+`[sched] inherit` record), as Windows 9x boosts the owner of a critical
+section. The desktop process and the Win32 window server keep a 25 % share
+of every millisecond (2.5 ms banked) ahead of the focused VM's preference,
+behind device service and the starvation boost; a holder that a desktop
+thread waits for borrows that share (`[sched] desktop_share` record). The
+80 % cap stays.
+
 ### R3: timer and audio deadlines (R03/R06)
 
 Keep PIT divisor 1193, nominal 1 kHz, and calibrated monotonic timestamps.
