@@ -154,6 +154,27 @@ class LoaderModelTests(unittest.TestCase):
         self.assertTrue(model.menu_choice('S'))
         self.assertFalse(model.menu_choice('N'))
 
+    @unittest.skipUnless(shutil.which('nasm') and shutil.which('ndisasm'), 'requires NASM')
+    def test_setup_cd_assembled_option_and_budget(self):
+        out = ROOT / 'build/host'
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='setup-loader-', dir=out) as folder:
+            asm = Path(folder) / 'loader.asm'
+            binary = Path(folder) / 'loader.bin'
+            asm.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                           + ','.join(SYMBOLS) + '\n')
+            subprocess.run(['nasm', '-f', 'bin', str(asm), '-o', str(binary)], cwd=ROOT, check=True)
+            self.assertEqual(binary.stat().st_size - 2 * len(SYMBOLS), 48 * 512)
+            machine = LoaderParserMachine(binary)
+            for token in ('setup=1', 'setup=1\r\n', 'setup=0', 'setup=10', 'setup=',
+                          'setup=1x', 'xsetup=1', 'SETUP=1'):
+                with self.subTest(token=token):
+                    self.assertEqual(machine.config(token), token.strip() == 'setup=1')
+                    if token.strip() == 'setup=1':
+                        self.assertEqual(machine.field(8) & 3, 2)
+            self.assertTrue(machine.config('serial=0 usbscan=0 ecpoll=1 setup=1\r\nsafe=1 mode=0x0118'))
+            self.assertEqual((machine.field(8) & 3, machine.var('preferred_mode')), (1, 0x118))
+
     def test_setup_cd_boot_option(self):
         # f9-01 (O2): the Setup CD's BOOT.CFG; the token only passes through.
         self.assertEqual(model.boot_options('safe=0 serial=1 setup=1\n'),

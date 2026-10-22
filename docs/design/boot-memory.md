@@ -672,10 +672,10 @@ No boot-info ABI bits or fields are added.
 (`docs/design/cd-setup-plan.md` sections 3.2 and 8):
 
 - Loader: accepted as an ordinary 7-byte token and passed through unchanged
-  in `options` (no flag, no other behaviour). Lead decision O2: the
-  parser addition lands after f0-54 frees the loader's fixed extent; until
-  then the token is rejected like any unknown token (`selection_error`),
-  so a Setup CD built before that change does not boot (f9-01 report).
+  in `options` (no flag, no other behaviour). Following lead decision O2,
+  the token is in f0-54's exact option table after `usbscan=0` and
+  `ecpoll=0|1`. It fits the existing 48-sector extent; malformed variants
+  are rejected with `selection_error`.
 - Kernel: `setup=1` in `options` selects Setup mode unless the boot carries
   `CBI_F_TEST_REQUEST` (`src/kernel/include/ciuki/setup_mode.h`): the
   storage layer starts read-only (no writer task, write enable, disk log,

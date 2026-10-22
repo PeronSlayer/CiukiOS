@@ -1385,6 +1385,7 @@ static int ata_emergency_write(struct blkdev *b,uint64_t lba,const void *data) {
             e=emergency_poll(c,0);
         }
         if (!e && b->write_cache_state!=BLKDEV_CACHE_DISABLED) {
+            d->write_commands++;
             reg_write(c,7,d->flush_ext ? 0xea : 0xe7);
             for (unsigned i=0;i<4;i++) (void)alternate(c);
             e=emergency_poll(c,0);

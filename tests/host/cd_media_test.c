@@ -35,7 +35,7 @@ struct optical {
     FILE *file;
     uint64_t patch_block;
     uint8_t patch[2048];
-    bool patched;
+    bool patched, change_during_read;
     unsigned reads, blocks;
 };
 void fs_assert_io_unlocked(void);
@@ -51,7 +51,14 @@ static int optical_read(struct blkdev *d, uint64_t lba, uint32_t n, void *buffer
         if (o->patched && lba + i == o->patch_block) { memcpy(out, o->patch, 2048); continue; }
         if (fseek(o->file, (long)((lba + i) * 2048), SEEK_SET) || fread(out, 2048, 1, o->file) != 1) return -FS_EIO;
     }
+    if (o->change_during_read) { o->change_during_read = false; d->media_generation++; }
     return 0;
+}
+static int reject_read(struct blkdev *d, uint64_t lba, uint32_t n, void *buffer)
+{
+    (void)d; (void)lba; (void)buffer;
+    CHECK(n && n <= CDVIEW_BOUNCE_BYTES / CDVIEW_BLOCK);
+    return -FS_EIO;
 }
 static void optical_open(struct optical *o, const char *path)
 {
@@ -123,6 +130,7 @@ static void test_probe(const char *iso)
         { record.catalog_block, 1, 1, "validation_entry" }, { record.catalog_block, 32, 0, "initial_entry" },
         { record.catalog_block, 33, 2, "initial_entry" }, { record.catalog_block, 34, 0xc0, "initial_entry" },
         { record.catalog_block, 36, 0x0b, "initial_entry" }, { record.catalog_block, 38, 4, "initial_entry" },
+        { record.catalog_block, 44, 1, "initial_entry" },
         { record.load_rba, 440, 0x42, "signature" }, { record.load_rba, 450, 0x07, "image_mbr" },
         { record.load_rba, 454, 0x01, "partition" }, { record.load_rba, 511, 0, "image_mbr" } };
     for (unsigned i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
@@ -143,6 +151,17 @@ static void test_view(const char *iso)
 {
     struct optical o; optical_open(&o, iso);
     struct cdview v = { 0 };
+    /* Capacity checks must not multiply a large parent capacity by four. */
+    struct blkdev wide = o.dev;
+    wide.capacity = (UINT64_C(1) << 62) + record.load_rba;
+    CHECK(!cdview_bind(&v, &wide, record.load_rba, record.image_sectors));
+    cdview_release(&v);
+    CHECK(cdview_bind(&v, &wide, wide.capacity - 1, 5) == -FS_EINVAL);
+    wide.read = reject_read;
+    CHECK(!cdview_bind(&v, &wide, record.load_rba, UINT32_MAX));
+    uint8_t untouched[512];
+    CHECK(v.dev.read(&v.dev, 0, UINT32_MAX, untouched) == -FS_EIO);
+    cdview_release(&v);
     CHECK(cdview_bind(&v, &o.dev, record.load_rba, o.dev.capacity * 4 + 1) == -FS_EINVAL);
     CHECK(!cdview_bind(&v, &o.dev, record.load_rba, record.image_sectors));
     CHECK(v.dev.sector_size == 512 && v.dev.capacity == record.image_sectors && !v.dev.write && !v.dev.flush);
@@ -179,6 +198,22 @@ static void test_view(const char *iso)
     struct fat_entry system, cfg; size_t done = 0; char text[160] = { 0 };
     CHECK(!fat_lookup(&fat, fat.root, "SYSTEM", &system) && !fat_lookup(&fat, system.first, "BOOT.CFG", &cfg));
     CHECK(cfg.size == strlen(options) && !fat_read(&fat, &cfg, 0, text, cfg.size, &done) && done == cfg.size && !strcmp(text, options));
+    /* A corrupt ELF segment must not wrap its file offset onto the real
+     * identity at 0x1040 in the synthetic kernel (p_offset + address delta). */
+    struct fat_entry kernel;
+    CHECK(!fat_lookup(&fat, system.first, "VMM.ELF", &kernel));
+    uint64_t first = record.part_start + fat.data_sector + (uint64_t)(kernel.first - 2) * fat.spc;
+    o.patch_block = record.load_rba + first / 4;
+    raw(&o, o.patch_block, o.patch);
+    uint8_t *ph = o.patch + (first % 4) * 512 + 52;
+    fs_wr32(ph + 4, 0xfffffff0u);
+    fs_wr32(ph + 8, identity.address - 0x1050u);
+    fs_wr32(ph + 16, 0x2000u);
+    o.patched = true;
+    cache_invalidate(&cache, &part.block, true);
+    const char *why = 0;
+    CHECK(cdview_verify_volume(&fat, options, options_size(), &identity, &why) == -FS_EINVAL && !strcmp(why, "kernel_identity"));
+    o.patched = false;
     CHECK(fat_enable_write(&fat) == -FS_EROFS && fat.readonly);
     CHECK(!fat_unmount(&fat));
     cache_invalidate(&cache, &part.block, true);
@@ -191,6 +226,13 @@ static void test_view(const char *iso)
     CHECK(v.dev.read(&v.dev, 0, 1, got) == -FS_EQUARANTINED && detach_records == 1);
     cdview_release(&v);
     CHECK(!v.bound && !v.bounce);
+    CHECK(!cdview_bind(&v, &o.dev, record.load_rba, record.image_sectors));
+    o.change_during_read = true;
+    memset(got, 0xa5, 512);
+    CHECK(v.dev.read(&v.dev, 0, 1, got) == -FS_EQUARANTINED && v.detached);
+    for (unsigned i = 0; i < 512; i++) CHECK(got[i] == 0xa5);
+    CHECK(detach_records == 2); /* changed during transfer: no bytes copied */
+    cdview_release(&v);
     free(image); free(got);
     fclose(o.file);
 }
@@ -235,6 +277,27 @@ static void test_identify(const char *iso)
     CHECK(storage_setup_identify(s, 3, &o.dev, 0, options, options_size(), &wrong) == -FS_EINVAL);
     CHECK(strstr(last_candidate, "reason=kernel_identity"));
     storage_destroy(s);
+    /* A matching boot image without a readable ISO tree cannot publish C:. */
+    s = setup_storage();
+    raw(&o, 16, o.patch); o.patch[1] ^= 1; o.patch_block = 16; o.patched = true;
+    CHECK(storage_setup_identify(s, 3, &o.dev, 0, options, options_size(), &identity) < 0);
+    CHECK(strstr(last_candidate, "reason=iso") && !s->boot_cd.bound && !s->volumes[2].present);
+    CHECK(!s->vfs.volumes[2] && !s->vfs.ro_volumes[3]);
+    storage_destroy(s); o.patched = false;
+    /* A later C: publication failure also retires the provisional D: mount. */
+    s = setup_storage(); s->vfs.next_identity_generation = UINT32_MAX;
+    CHECK(storage_setup_identify(s, 3, &o.dev, 0, options, options_size(), &identity) == -FS_ENOSPC);
+    CHECK(!s->boot_cd.bound && !s->vfs.volumes[2] && !s->vfs.ro_volumes[3] && !s->optical[3].mounted);
+    storage_destroy(s);
+    /* The boot CD is discovered by contents on every generic ATA slot. */
+    for (unsigned slot = 0; slot < STORAGE_DISKS; slot++) {
+        s = setup_storage();
+        CHECK(storage_setup_identify(s, slot, &o.dev, 0, options, options_size(), &identity) == 2);
+        CHECK(s->volumes[2].disk == slot && s->volumes[2].optical && s->volumes[2].fat.readonly);
+        CHECK(s->vfs.ro_volumes[3] == &s->optical[slot]);
+        CHECK(storage_setup_identify(s, slot, &o.dev, 0, options, options_size(), &identity) == -FS_EBUSY);
+        storage_destroy(s);
+    }
     fclose(o.file);
 }
 
@@ -301,6 +364,32 @@ static void test_setup_storage(const char *iso, const char *blank, const char *f
     fclose(o.file);
 }
 
+static void test_cached_media_change(const char *iso, bool quarantine)
+{
+    struct optical o; optical_open(&o, iso);
+    struct storage *s = setup_storage();
+    CHECK(storage_setup_identify(s, 3, &o.dev, 0, options, options_size(), &identity) == 2);
+    struct vfs_table table;
+    CHECK(!vfs_table_init(&s->vfs, &table, 2));
+    int h = vfs_open(&table, "C:/SYSTEM/BOOT.CFG", VFS_READ, VFS_DENY_NONE, 0);
+    char buffer[128]; size_t done = 0;
+    CHECK(h >= 0 && !vfs_read(&table, h, buffer, sizeof(buffer), &done) && done == strlen(options));
+    uint64_t position = UINT64_MAX;
+    if (h >= 0) CHECK(!vfs_seek(&table, h, 0, VFS_SEEK_SET, &position) && !position);
+    /* Replacing the disc must refuse bytes already in the filesystem cache. */
+    unsigned reads = o.reads, detached = detach_records;
+    if (quarantine) o.dev.quarantined = true;
+    else o.dev.media_generation++;
+    done = 0;
+    CHECK(h >= 0 && vfs_read(&table, h, buffer, sizeof(buffer), &done) != 0 && !done);
+    if (h >= 0) vfs_close(&table, h);
+    CHECK(o.reads == reads && s->boot_cd.detached && s->volumes[2].io.quarantined);
+    CHECK(detach_records == detached + 1);
+    vfs_table_destroy(&table);
+    storage_destroy(s);
+    fclose(o.file);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 9) { fprintf(stderr, "usage: %s iso options identity_address identity_bytes blank fat ntfs expected\n", argv[0]); return 2; }
@@ -314,6 +403,8 @@ int main(int argc, char **argv)
     test_view(argv[1]);
     test_identify(argv[1]);
     test_setup_storage(argv[1], argv[5], argv[6], argv[7], expected);
+    test_cached_media_change(argv[1], false);
+    test_cached_media_change(argv[1], true);
     printf("cd_media_test: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

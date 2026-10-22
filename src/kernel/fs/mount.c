@@ -70,6 +70,11 @@ uint64_t storage_sweep_writes(const struct storage_volume *v)
 
 static struct blkdev *refresh_volume(struct storage_volume *v)
 {
+    /* Setup C: may have cached FAT/data blocks when the optical service
+     * observes a replacement. Check its view before any cache hit. This
+     * callback is generation-only and never performs device I/O. */
+    if (v->optical && v->part.parent && v->part.parent->media_check)
+        (void)v->part.parent->media_check(v->part.parent);
     struct blkdev *p = blkpart_device(&v->part);
     if (!p) return 0;
     v->io.quarantined = p->quarantined;
@@ -773,9 +778,11 @@ int storage_setup_identify(struct storage *s, unsigned slot, struct blkdev *opti
 {
     if (!s || !s->ready || s->stopped || !s->setup_mode || slot >= STORAGE_DISKS || !optical) return -FS_EINVAL;
     if (!cdview_probe || !cdview_bind || !cdview_release || !cdview_verify_volume) return -FS_EOPNOTSUPP;
-    if (s->boot_cd.bound || s->volumes[2].present) return -FS_EBUSY;
+    if (s->boot_cd.bound || s->volumes[2].present || s->next_drive != 3 ||
+        vfs_drive_present(&s->vfs, 3)) return -FS_EBUSY;
     const char *reason = "memory";
     struct cdview_boot_record record = { 0 };
+    int iso_drive = -1;
     struct storage_volume *v = &s->volumes[2];
     void *block = fs_page_alloc();
     int e = block ? cdview_probe(optical, session, block, &record, &reason) : -FS_ENOMEM;
@@ -794,6 +801,13 @@ int storage_setup_identify(struct storage *s, unsigned slot, struct blkdev *opti
             e = fat_mount(&v->fat, &s->cache, &v->io, 0, part.count, false);
         }
         if (!e) e = cdview_verify_volume(&v->fat, options, options_size, kid, &reason);
+        /* Qualify both namespaces before publishing C:. Without the ISO
+         * tree's licences and sources the disc is not a usable Setup CD. */
+        if (!e) {
+            reason = "iso";
+            iso_drive = storage_add_ro(s, slot, optical, session);
+            if (iso_drive < 0) e = iso_drive;
+        }
         if (!e) {
             v->present = true; v->drive = 2; v->disk = slot; v->partition = 1; v->optical = true;
             v->writes_before_gate = v->writes;
@@ -803,6 +817,7 @@ int storage_setup_identify(struct storage *s, unsigned slot, struct blkdev *opti
             reason = e ? "attach" : "ok";
         }
         if (e) {
+            if (iso_drive >= 0) (void)vfs_detach(&s->vfs, (unsigned)iso_drive);
             if (v->fat.mounted) fat_unmount(&v->fat);
             cache_invalidate(&s->cache, &v->io, true);
             memset(v, 0, sizeof(*v));
@@ -813,9 +828,7 @@ int storage_setup_identify(struct storage *s, unsigned slot, struct blkdev *opti
          slot, (unsigned long long)session, record.catalog_block, record.load_rba, record.image_sectors, e, reason);
     if (e) return e;
     s->boot_cd_slot = slot;
-    /* The ISO 9660 tree of the same disc becomes D: (next_drive is 3). */
-    int d = storage_add_ro(s, slot, optical, session);
-    klog("[setup] media bound slot=%u system=C iso=%c result=%d", slot, d >= 3 ? 'A' + d : '-', d < 0 ? d : 0);
+    klog("[setup] media bound slot=%u system=C iso=%c result=0", slot, 'A' + iso_drive);
     return 2;
 }
 void storage_setup_finish(struct storage *s)

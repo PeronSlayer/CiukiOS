@@ -538,7 +538,7 @@ config_read:
     mov [preferred_mode], dx
     jmp .next
 .apply:
-    ; safe=0, serial=1, accel=0, usbscan=0 and ecpoll=0/1 change nothing
+    ; safe=0, serial=1, accel=0, usbscan=0, ecpoll=0/1 and setup=1 change nothing
     ; here: a normal option never clears a positive safe-mode source;
     ; B(options) keeps accel=0 (the kernel declines acceleration before
     ; marker I/O), usbscan=0 and ecpoll=0/1 (f2-96: the ThinkPad EC volume

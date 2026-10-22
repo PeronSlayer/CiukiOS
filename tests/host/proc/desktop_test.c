@@ -12,6 +12,7 @@
 #include <ciuki/storage.h>
 #include <ciuki/files.h>
 #include <ciuki/pager.h>
+#include <ciuki/setup_mode.h>
 
 /* Device-node transport for the desktop poll interleaving test. The process
  * ledger, slot comparison and record formatter remain production code. */
@@ -74,7 +75,11 @@ static bool display_full_frame;
 static unsigned pager_boot_releases;
 void pager_bootstrap_complete(void) { pager_boot_releases++; }
 void console_display_owned(bool owned) { console_owned = owned; console_owned_changes++; }
-void console_wake(void) {}
+static unsigned console_wakes;
+void console_wake(void) { console_wakes++; }
+static bool setup_media_ready;
+bool setup_mode(void) { return setup_mode_parse(g_boot.flags, g_boot.options, sizeof(g_boot.options)); }
+bool storage_setup_media_ready(void) { return setup_media_ready; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 static unsigned input_records;
 static char last_input_record[241];
@@ -155,7 +160,9 @@ bool input_read(struct input_event *out)
     return true;
 }
 #endif
-int supervisor_spawn_standin(struct process *parent, struct process **out) { (void)parent; (void)out; return -ENOENT; }
+static unsigned standin_attempts;
+int supervisor_spawn_standin(struct process *parent, struct process **out)
+{ (void)parent; (void)out; standin_attempts++; return -ENOENT; }
 
 #include "../../../src/kernel/drivers/fbdev.c"
 #include "../../../src/kernel/proc/surface.c"
@@ -803,6 +810,68 @@ static void test_desktop_present(void)
     device = (struct fb_device){ 0 };
     desktop_clean(p);
     puts("desktop present: source/destination clipping, masks, padded pitch, bounds and quarantine PASS");
+}
+static unsigned setup_opens;
+static int setup_open_error;
+static int setup_open(void *cwd, const char *path, struct ciuki_file *file)
+{
+    (void)cwd;
+    CHECK(!strcmp(path, "/Programs/setup"));
+    setup_opens++;
+    if (setup_open_error) return setup_open_error;
+    *file = fixture_file();
+    return 0;
+}
+static int setup_stdio(struct process *p)
+{
+    CHECK(!p->published && !p->setup_capability);
+    return 0;
+}
+static void test_setup_bootstrap(void)
+{
+    const struct ciuki_file_ops *saved_files = proc_get_file_ops();
+    const struct supervisor_io_ops *saved_io = supervisor_io;
+    struct ciuki_boot_info saved_boot = g_boot;
+    static const struct ciuki_file_ops files = { .open = setup_open };
+    static const struct supervisor_io_ops io = { .stdio = setup_stdio };
+    proc_set_file_ops(&files); supervisor_set_io_ops(&io);
+    struct process *p = 0;
+    int result = 123;
+    g_boot.flags = 0; g_boot.options[0] = 0;
+    CHECK(!setup_bootstrap(&p, &result) && result == 123 && !setup_opens);
+    strcpy(g_boot.options, "safe=0 serial=1 setup=1\n");
+    unsigned wakes = console_wakes, fallback = standin_attempts;
+    CHECK(setup_bootstrap(&p, &result) && result == -ENOENT && !p && !setup_opens);
+    CHECK(console_wakes == wakes + 1 && standin_attempts == fallback);
+    setup_media_ready = true;
+    g_boot.flags = CBI_F_TEST_REQUEST;
+    supervisor_bootstrap();
+    CHECK(!bootstrap_attempted && !setup_opens); /* diagnostics keep their path */
+    g_boot.flags = 0;
+    CHECK(setup_bootstrap(&p, &result) && result > 0 && p && p->published);
+    CHECK(p->setup_capability && !p->share_group && !desktop_objects.grants);
+    CHECK(setup_opens == 1 && standin_attempts == fallback);
+    struct process *child = 0;
+    CHECK(!proc_prepare(p, &child) && !child->setup_capability);
+    child->setup_capability = true;
+    supervisor_dosvm_delegate(p, child, "/Programs/setup");
+    CHECK(!child->setup_capability); /* path and parent confer no authority */
+    proc_discard(child);
+    desktop_clean(p); p = 0;
+    const char *argv[] = { "setup", 0 };
+    CHECK(supervisor_spawn("/Programs/setup", argv, 0, false, &p) > 0);
+    CHECK(!p->setup_capability); /* the ordinary supervisor API cannot grant it */
+    desktop_clean(p); p = 0;
+    setup_open_error = -ENOENT;
+    CHECK(setup_bootstrap(&p, &result) && result == -ENOENT && !p);
+    CHECK(standin_attempts == fallback + 1);
+    setup_open_error = -EIO;
+    CHECK(setup_bootstrap(&p, &result) && result == -EIO && !p);
+    CHECK(standin_attempts == fallback + 1); /* only ENOENT selects the stand-in */
+    setup_media_ready = false; setup_open_error = 0;
+    g_boot = saved_boot;
+    proc_set_file_ops(saved_files); supervisor_set_io_ops(saved_io);
+    puts("Setup bootstrap: missing media/diagnostics refuse spawn, capability before publication only, no inheritance/path grant, ENOENT fallback PASS");
 }
 static void test_pager_boot_fallback(void)
 {
@@ -1553,7 +1622,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_pager_boot_fallback(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_capture();
     test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

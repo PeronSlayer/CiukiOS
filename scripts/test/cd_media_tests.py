@@ -523,6 +523,13 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.manifest["boot_image"]["sha256"], sha(self.boot.read_bytes()))
         self.assertTrue(self.manifest["boot_image"]["files"])
         self.assertIn("system", self.manifest["components"]["present"])
+        # Keep the exact field evidence after the large fixtures are deleted.
+        catalog = iso["catalog"]
+        print(f"[cd-test] catalog block={catalog['block']} validation={catalog['validation_entry_hex']} "
+              f"initial={catalog['initial_entry_hex']}")
+        boot = self.manifest["boot_image"]
+        print("[cd-test] boot " + json.dumps({k: boot[k] for k in (
+            "image_sectors", "partition_sectors", "clusters", "end_chs", "bpb")}, sort_keys=True))
 
     def test_oversize_iso_fails_on_the_completed_iso(self):
         limit = self.manifest["iso"]["sectors"] - 1

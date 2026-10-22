@@ -14,6 +14,7 @@
 #include "fat.h"
 
 static int cdview_read(struct blkdev *, uint64_t, uint32_t, void *);
+static int cdview_media_check(struct blkdev *);
 
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -53,6 +54,7 @@ int cdview_probe(struct blkdev *optical, uint64_t session, void *buffer,
     why = "initial_entry";
     if (entry[0] != 0x88 || entry[1] != 4 || out->load_segment || entry[4] != CDVIEW_PART_TYPE ||
         entry[5] || out->sector_count != 1) goto done;
+    for (unsigned i = 12; i < 32; i++) if (entry[i]) goto done;
     why = "image_read";
     if ((e = block_read(optical, out->load_rba, b))) goto done;
     e = -FS_EINVAL; why = "image_mbr";
@@ -69,7 +71,7 @@ int cdview_probe(struct blkdev *optical, uint64_t session, void *buffer,
     out->image_sectors = out->part_start + out->part_count;
     why = "image_extent";
     if (out->load_rba >= optical->capacity ||
-        out->image_sectors > (optical->capacity - out->load_rba) * 4) goto done;
+        ((uint64_t)out->image_sectors + 3) / 4 > optical->capacity - out->load_rba) goto done;
     e = 0; why = "ok";
 done:
     if (reason) *reason = why;
@@ -79,7 +81,8 @@ done:
 int cdview_bind(struct cdview *v, struct blkdev *optical, uint64_t image_block, uint64_t image_sectors)
 {
     if (!v || v->bound || !optical || optical->sector_size != CDVIEW_BLOCK || !optical->read || !image_sectors ||
-        image_block >= optical->capacity || image_sectors > (optical->capacity - image_block) * 4)
+        image_block >= optical->capacity ||
+        image_sectors / 4 + (image_sectors % 4 != 0) > optical->capacity - image_block)
         return -FS_EINVAL;
     uint8_t *bounce = fs_contig_alloc(CDVIEW_BOUNCE_BYTES);
     if (!bounce) return -FS_ENOMEM;
@@ -88,7 +91,8 @@ int cdview_bind(struct cdview *v, struct blkdev *optical, uint64_t image_block, 
     v->parent = optical; v->image_block = image_block; v->image_sectors = image_sectors;
     v->generation = optical->media_generation; v->bounce = bounce; v->bound = true;
     /* No write or flush: fat_mount can only be read-only (not durable). */
-    v->dev = (struct blkdev){ .read = cdview_read, .capacity = image_sectors, .sector_size = BLKDEV_SECTOR_SIZE,
+    v->dev = (struct blkdev){ .read = cdview_read, .media_check = cdview_media_check,
+        .capacity = image_sectors, .sector_size = BLKDEV_SECTOR_SIZE,
         .media_generation = v->generation, .write_cache_state = BLKDEV_CACHE_UNKNOWN, .ctx = v };
     return 0;
 }
@@ -106,10 +110,21 @@ void cdview_release(struct cdview *v)
 static int generation_check(struct cdview *v)
 {
     if (v->detached) return -FS_EQUARANTINED;
-    if (v->parent->media_generation == v->generation) return 0;
+    if (v->parent->media_generation == v->generation && !v->parent->quarantined) return 0;
     v->detached = true; v->dev.quarantined = true;
     klog("[cdview] detached generation=%u", v->parent->media_generation);
     return -FS_EQUARANTINED;
+}
+
+/* Cache hits must observe a replacement too. This callback only compares
+ * generations; readiness and device I/O stay in the optical service. */
+static int cdview_media_check(struct blkdev *d)
+{
+    struct cdview *v = d->ctx;
+    fs_lock_take(&v->lock);
+    int e = generation_check(v);
+    fs_lock_drop(&v->lock);
+    return e;
 }
 
 static int cdview_read(struct blkdev *d, uint64_t lba, uint32_t count, void *buffer)
@@ -123,10 +138,9 @@ static int cdview_read(struct blkdev *d, uint64_t lba, uint32_t count, void *buf
     while (!e && count) {
         uint64_t block = v->image_block + lba / 4;
         uint32_t slice = (uint32_t)(lba % 4);
-        uint32_t blocks = (slice + count + 3) / 4;
-        if (blocks > CDVIEW_BOUNCE_BYTES / CDVIEW_BLOCK) blocks = CDVIEW_BOUNCE_BYTES / CDVIEW_BLOCK;
-        uint32_t sectors = blocks * 4 - slice;
+        uint32_t sectors = CDVIEW_BOUNCE_BYTES / BLKDEV_SECTOR_SIZE - slice;
         if (sectors > count) sectors = count;
+        uint32_t blocks = (slice + sectors + 3) / 4;
         e = blkdev_range(v->parent, block, blocks);
         if (!e) e = v->parent->read(v->parent, block, blocks, v->bounce);
         /* The generation is checked after the transfer too: a change
@@ -185,14 +199,15 @@ int cdview_verify_volume(struct fat_volume *fat, const char *options, size_t opt
     e = -FS_EINVAL;
     if (memcmp(header, "\177ELF\001\001\001", 7) || rd16(header + 42) != 32 || !rd16(header + 44) || rd16(header + 44) > 16)
         goto done;
-    uint32_t phoff = rd32(header + 28), phnum = rd16(header + 44), found = 0;
+    uint32_t phoff = rd32(header + 28), phnum = rd16(header + 44);
+    uint64_t found = 0;
     for (uint32_t i = 0; i < phnum && !found; i++) {
         uint8_t ph[32];
         if ((e = exact_read(fat, &file, (uint64_t)phoff + i * 32u, ph, sizeof(ph)))) goto done;
         uint32_t type = rd32(ph), offset = rd32(ph + 4), vaddr = rd32(ph + 8), filesz = rd32(ph + 16);
         if (type == 1 && kid->address >= vaddr && kid->address - vaddr <= filesz &&
             kid->length <= filesz - (kid->address - vaddr))
-            found = offset + (kid->address - vaddr);
+            found = (uint64_t)offset + (kid->address - vaddr);
     }
     e = -FS_EINVAL; why = "kernel_identity";
     if (!found) goto done;

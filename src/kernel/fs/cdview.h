@@ -30,7 +30,8 @@ int cdview_probe(struct blkdev *optical, uint64_t session, void *block,
                  struct cdview_boot_record *out, const char **reason);
 
 struct cdview {
-    struct blkdev dev;          /* 512-byte sectors; write/flush NULL */
+    struct blkdev dev;          /* 512-byte sectors; write/flush NULL;
+                                * media_check compares generations without I/O */
     struct blkdev *parent;      /* optical device, 2,048-byte sectors */
     uint64_t image_block;       /* load RBA: first ISO block of the image */
     uint64_t image_sectors;     /* emulated 512-byte sectors (capacity) */
