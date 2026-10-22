@@ -468,3 +468,4 @@ All F1 and F2 directives are written; launches follow their prerequisites
 | [f2-120-riva128](f2-120-riva128.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NVIDIA Riva 128) |
 | [f2-121-neomagic](f2-121-neomagic.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: NeoMagic) |
 | [f2-122-chips-hiqv](f2-122-chips-hiqv.md) | F2 | gpt-6.1-sol / xhigh | written 2026-10-23 01:19 (family port: Chips & Technologies HiQV) |
+| [f1-123-promise-highpoint-pata](f1-123-promise-highpoint-pata.md) | F1 | gpt-6.1-sol / xhigh | written 2026-10-23 01:24 (Promise and HighPoint add-in PATA, plain disks, RAID members refused) |
