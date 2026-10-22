@@ -25,3 +25,10 @@ Host tests (`tests/host/setup/`, run by `scripts/test/host_kernel_tests.sh`'s ap
 Acceptance: every page of the mockup present with its copy; keyboard-only completion in the host test; the answer-file rules and status ids as specified; host tests green; the lead's QEMU run of the interactive flow (scripted keys through the runner) and the memory measurement are f9-06 items.
 
 Report `build/codex/f9-03-report.md` with the page list, golden hashes, exact commands and results, and any copy you could not fit at 640×480 (do not change the copy yourself; list it for the lead). `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment R (lead, 2026-10-23 00:19): resumed for the public distribution
+
+The owner wants CiukiOS distributed for people's retro PCs, and the next image includes every requested integration.
+- **Starting point.** This directive starts from the combined Setup branch: f9-01 media and Setup-mode kernel, f9-02 native disk tools, the f9-03 work-in-progress pages, and the `sdk/libsetup` transaction interface headers already in the tree. f9-03 and f9-04 run in parallel against that interface and must not change it without recording why in the plan.
+- **Universal.** Setup must work on any baseline PC, not only the T23. Detection uses the generic inventories (PCI names from f2-123, ACPI/PnP from f1-109 when merged), and the display uses the registry and software engine of `display-driver-model.md` when no native driver binds.
+- **Licences.** The owner allows every licence (2026-10-22 23:55): keep notices and origin lines.

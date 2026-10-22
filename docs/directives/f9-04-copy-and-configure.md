@@ -27,3 +27,10 @@ Host tests (`tests/host/libsetup_test.c` in the fs host suite; a file-backed dis
 Acceptance: the frozen header implemented without change; host tests green; the generated-file set equals plan §12 item 9 (any addition proposed in the report); no write before `setup_txn_execute`; the lead's QEMU `f9-install` and crash-cut cases are f9-06 items.
 
 Report `build/codex/f9-04-report.md` with the record formats, exact commands and results, the peak memory figure, and any interface gap you found (do not change the header; propose). `rg`/`sed` only; no QEMU, no `systemd-run`, no image builds, no commits, no diary edits; English.
+
+## Amendment R (lead, 2026-10-23 00:19): resumed for the public distribution
+
+The owner wants CiukiOS distributed for people's retro PCs, and the next image includes every requested integration.
+- **Starting point.** This directive starts from the combined Setup branch: f9-01 media and Setup-mode kernel, f9-02 native disk tools, the f9-03 work-in-progress pages, and the `sdk/libsetup` transaction interface headers already in the tree. f9-03 and f9-04 run in parallel against that interface and must not change it without recording why in the plan.
+- **Universal.** Setup must work on any baseline PC, not only the T23. Detection uses the generic inventories (PCI names from f2-123, ACPI/PnP from f1-109 when merged), and the display uses the registry and software engine of `display-driver-model.md` when no native driver binds.
+- **Licences.** The owner allows every licence (2026-10-22 23:55): keep notices and origin lines.
