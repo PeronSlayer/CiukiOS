@@ -621,6 +621,7 @@ static struct savage_io model_io(void)
 const struct accel_ops *boot_init(const struct fb_device *d, struct vfs *vfs)
 { CHECK(marker_thread_running); boot_calls++; struct savage_io io=model_io(); return init_with_io(d,vfs,&io); }
 static uint8_t *storage;
+static unsigned log_matches(const char *part);
 static void prepare(unsigned bpp)
 {
     memset(&m,0,sizeof(m)); memset(&test_engine,0,sizeof(test_engine));
@@ -764,6 +765,15 @@ static void failures_and_fallback(void)
     binding_gpu.bar[0]=0xe1000000;binding_gpu.bar[1]=0xe2000000;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
     binding_gpu.bar[1]=device.phys;binding_pci_count=2;CHECK(!savage2d_init(&device,&settings_vfs) && binding_claims==1);
     binding_pci_count=0;finish();
+    /* f1-97: safe mode never reaches the activation code; the record is
+     * emitted once, and a repeated decision of the same state adds nothing. */
+    memset(&summary_state,0,sizeof(summary_state)); accel_count=0;
+    CHECK(!savage2d_summary(NULL,NULL));
+    savage2d_summary_safe_mode(); savage2d_summary_safe_mode();
+    CHECK(log_matches("[accel] summary accelerated=0 driver=savage reason=safe_mode")==1 && log_matches("[accel] summary ")==1);
+    summary(true,0);                              /* a flip is a new fact: one more record */
+    CHECK(log_matches("[accel] summary accelerated=1 driver=savage reason=none")==1 && log_matches("[accel] summary ")==2);
+    memset(&summary_state,0,sizeof(summary_state));
 }
 static unsigned log_matches(const char *part)
 {
@@ -802,6 +812,7 @@ static void boot_fixture_mode(bool retain_marker, unsigned bpp)
     prepare(bpp); acceleration=NULL;
     memset(&m,0,sizeof(m)); m.cr[0x66]=1;
     engine=(struct savage2d){0}; attempt_blocked=false; reg_claim=cursor_claim=port_claim=-1;
+    memset(&summary_state,0,sizeof(summary_state));
     registers=NULL; register_window=cursor_window=NULL; accel_vfs=NULL; accel_queued=false;
     binding_allowed=true; binding_claims=0; binding_pci_count=1;
     binding_port_conflict=false; memset(binding_resources,0,sizeof(binding_resources));
@@ -877,6 +888,12 @@ static void deferred_boots(void)
         CHECK(disk_size==(ready ? 0u : annotated ? 30u : 14u) &&
               m.status_reads<=INITIAL_POLLS+1+4*(PROBE_DRAWS-1));
         CHECK(log_matches(ready ? "[accel] savage ready" : "[accel] savage quarantined reason=")==1);
+        /* f1-97: exactly one summary record answers the question in one line. */
+        CHECK(log_matches("[accel] summary ")==1);
+        if (ready) CHECK(log_matches("[accel] summary accelerated=1 driver=savage reason=none")==1);
+        else CHECK(log_matches("[accel] summary accelerated=0 driver=savage reason=")==1 &&
+                   log_matches("[accel] summary accelerated=0 driver=savage reason=none")==0);
+        { bool ok=ready; const char *why=0; CHECK(savage2d_summary(&ok,&why) && ok==ready && why && (ready ? !strcmp(why,"none") : *why!=0)); }
         if (variant==1 || variant==3 || variant==6 || variant==12) CHECK(!m.status_reads);
         else CHECK(log_matches("savage status reg=48c60 raw=")==1);
         if (variant==1) CHECK(log_matches("engine_probe reg=48c18 raw=ffffffff")==1);
@@ -1120,14 +1137,14 @@ static void failed_access_handoff(void)
     attempt_in_progress=true; /* BEGIN has not yet committed/closed the marker. */
     struct savage_io io=model_io();
     CHECK(!init_with_io(&device,0,&io) && !binding_claims && !m.port_reads && !m.port_writes && !m.packets);
-    CHECK(log_matches("attempt_not_persisted")==1);
+    CHECK(log_matches("quarantined reason=attempt_not_persisted")==1);
     finish();
     const int unqualified[]={0,3,24}; /* measured failure, block writes, tiling */
     for (unsigned i=0;i<ARRAY_SIZE(unqualified);i++) {
         boot_fixture_accel(false);registry_setting_present=true;registry_setting=unqualified[i];
         fbdev_accel_schedule(&settings_vfs);run_accel_init();
         CHECK(!acceleration && !binding_claims && !marker_commits && !m.port_reads && !m.port_writes && !m.packets);
-        CHECK(log_matches("config_unqualified")==1);
+        CHECK(log_matches("quarantined reason=config_unqualified")==1);
         finish();
     }
     registry_setting_present=false;
@@ -2041,7 +2058,7 @@ static void hardware_sweep_default(void)
         if (!pass) {
             CHECK(!engine.touched && !engine.active && !engine.submitted && !acceleration);
             CHECK(!disk_size && !marker_commits && !binding_claims && !m.port_reads && !m.port_writes);
-            CHECK(log_matches("config_unqualified")==1);
+            CHECK(log_matches("quarantined reason=config_unqualified")==1);
             CHECK(!memcmp(last,&before,4));
             finish(); continue;
         }

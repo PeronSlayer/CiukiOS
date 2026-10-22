@@ -182,8 +182,10 @@ struct splash_layout {
     uint32_t x0, y0, dw, dh;              /* the photograph's 4:3 area */
     uint32_t bx, by, bw, bh;              /* progress bar */
     uint32_t tx, ty, tw;                  /* tagline, 16 rows */
-    bool bar;
+    uint32_t ay;                          /* f1-97 accelerator line, 16 rows */
+    bool bar, accel;
 };
+#define SPLASH_ACCEL_TEXT 72u
 static struct {
     struct splash_layout g;
     bool active, busy, determinate, shown_valid, shown_determinate;
@@ -193,6 +195,10 @@ static struct {
     uint32_t phases, updates, claims, deferred, max_claim_pixels;
     uint32_t recorded, records;           /* serial phase records (f0-55b) */
     uint64_t max_claim_cycles;
+    /* f1-97: `2D acceleration: YES|NO (<reason>)` under the bar. The target
+     * text is set by the accelerator decision; the console worker draws it. */
+    char accel[SPLASH_ACCEL_TEXT], accel_shown[SPLASH_ACCEL_TEXT];
+    bool accel_busy;
 } splash_bar;
 static bool splash_worker_raised;
 
@@ -218,12 +224,14 @@ static uint32_t splash_blend(uint32_t under, uint32_t over, uint32_t alpha)   /*
     return out;
 }
 
-static uint32_t splash_text_width(void)
+static unsigned splash_glyph(char c) { return c >= 32 && c < 127 ? (unsigned)(c - 32) : (unsigned)('?' - 32); }
+static uint32_t splash_string_width(const char *text)
 {
     uint32_t w = 0;
-    for (const char *s = splash_tagline; *s; s++) w += font_cfn_sans[*s - 32];
+    for (const char *s = text; *s; s++) w += font_cfn_sans[splash_glyph(*s)];
     return w;
 }
+static uint32_t splash_text_width(void) { return splash_string_width(splash_tagline); }
 
 /* Reference layout 1024x768: wordmark ink ends at row 681; tagline at 690,
  * bar centred on row 728, 3/8 of the width, 6 rows. Scaled to the area. */
@@ -243,6 +251,9 @@ static void splash_layout(uint32_t w, uint32_t h, struct splash_layout *g)
     g->tx = g->x0 + (g->dw - g->tw) / 2;
     g->ty = g->y0 + g->dh * 690 / 768;
     g->bar = g->tw < g->dw && g->ty + 17 <= g->by && g->by + g->bh <= g->y0 + g->dh;
+    /* f1-97: the accelerator line sits under the bar, inside the photograph. */
+    g->ay = g->by + g->bh + (g->dh * 8 + 384) / 768;
+    g->accel = g->bar && g->ay + 17 <= g->y0 + g->dh;
 }
 
 static uint32_t splash_fill_width(const struct splash_layout *g, uint32_t level)
@@ -317,14 +328,14 @@ static uint32_t splash_bar_pixels(uint32_t c0, uint32_t c1, bool determinate, ui
     return (c1 - c0) * g->bh;
 }
 
-static bool splash_tagline_bit(const struct splash_layout *g, uint32_t x, uint32_t y)
+static bool splash_text_bit(const char *text, uint32_t tx, uint32_t ty, uint32_t x, uint32_t y)
 {
-    if (y < g->ty || y >= g->ty + 16 || x < g->tx) return false;
-    uint32_t cx = g->tx;
-    for (const char *s = splash_tagline; *s; s++) {
-        unsigned i = (unsigned)(*s - 32), w = font_cfn_sans[i];
+    if (y < ty || y >= ty + 16 || x < tx) return false;
+    uint32_t cx = tx;
+    for (const char *s = text; *s; s++) {
+        unsigned i = splash_glyph(*s), w = font_cfn_sans[i];
         if (x < cx + w) {
-            const uint8_t *r = font_cfn_sans + 95 + (i * 16 + (y - g->ty)) * 2;
+            const uint8_t *r = font_cfn_sans + 95 + (i * 16 + (y - ty)) * 2;
             return ((uint32_t)(r[0] | r[1] << 8) & (0x8000u >> (x - cx))) != 0;
         }
         cx += w;
@@ -332,17 +343,41 @@ static bool splash_tagline_bit(const struct splash_layout *g, uint32_t x, uint32
     return false;
 }
 
+/* Pixel (x, y) of a text line over the photograph, with the tagline's ink
+ * and shadow rules; `ink` false and no shadow leaves the plain photograph. */
+static uint32_t splash_text_rgb(const struct splash_layout *g, const char *text, uint32_t tx, uint32_t ty,
+                                uint32_t x, uint32_t y, bool *touched)
+{
+    bool ink = splash_text_bit(text, tx, ty, x, y), shadow = splash_text_bit(text, tx, ty, x - 1, y - 1);
+    uint32_t c = splash_photo(g, x, y);
+    *touched = ink || shadow;
+    if (shadow) c = splash_blend(c, 0, SPLASH_SHADOW_ALPHA);
+    if (ink) c = splash_blend(c, SPLASH_TEXT, SPLASH_TEXT_ALPHA);
+    return c;
+}
+
 static void splash_draw_tagline(const struct splash_layout *g)
 {
     for (uint32_t y = g->ty; y < g->ty + 17; y++)
         for (uint32_t x = g->tx; x < g->tx + g->tw + 1; x++) {
-            bool ink = splash_tagline_bit(g, x, y), shadow = splash_tagline_bit(g, x - 1, y - 1);
-            if (!ink && !shadow) continue;
-            uint32_t c = splash_photo(g, x, y);
-            if (shadow) c = splash_blend(c, 0, SPLASH_SHADOW_ALPHA);
-            if (ink) c = splash_blend(c, SPLASH_TEXT, SPLASH_TEXT_ALPHA);
-            put_px(x, y, pack(c));
+            bool touched;
+            uint32_t c = splash_text_rgb(g, splash_tagline, g->tx, g->ty, x, y, &touched);
+            if (touched) put_px(x, y, pack(c));
         }
+}
+
+/* f1-97: the accelerator line, rows [r0, r1) of its 17, columns [x0, x1):
+ * the photograph is restored first so a changed text leaves no old ink. */
+static uint32_t splash_accel_pixels(const char *text, uint32_t x0, uint32_t x1, uint32_t r0, uint32_t r1)
+{
+    const struct splash_layout *g = &splash_bar.g;
+    uint32_t tx = g->x0 + (g->dw - splash_string_width(text)) / 2;
+    for (uint32_t y = g->ay + r0; y < g->ay + r1; y++)
+        for (uint32_t x = x0; x < x1; x++) {
+            bool touched;
+            put_px(x, y, pack(splash_text_rgb(g, text, tx, g->ay, x, y, &touched)));
+        }
+    return (x1 - x0) * (r1 - r0);
 }
 
 static void splash_record(uint32_t level);
@@ -355,6 +390,8 @@ static void draw_splash(void)
     splash_bar.segment = splash_bar.shown_segment = 0;
     splash_bar.updates = splash_bar.claims = splash_bar.deferred = splash_bar.max_claim_pixels = 0;
     splash_bar.max_claim_cycles = 0;
+    splash_bar.accel_busy = false;
+    memset(splash_bar.accel_shown, 0, sizeof(splash_bar.accel_shown));
     if ((uint32_t)(console_splash_end - console_splash) != SPLASH_W * SPLASH_H * 2)
         return;
     struct splash_layout *g = &splash_bar.g;
@@ -370,6 +407,10 @@ static void draw_splash(void)
     }
     if (!g->bar) return;
     splash_draw_tagline(g);
+    if (g->accel && splash_bar.accel[0]) {          /* f1-97: a decision before this paint */
+        splash_accel_pixels(splash_bar.accel, g->x0, g->x0 + g->dw, 0, 17);
+        memcpy(splash_bar.accel_shown, splash_bar.accel, SPLASH_ACCEL_TEXT);
+    }
     if (splash_bar.ended) return;
     /* f0-55b: the first frame shows the accumulated level, or the sweep. */
     bool determinate = splash_bar.determinate;
@@ -387,22 +428,88 @@ static bool splash_drawable(void)
     return splash_bar.active && quiet && !display_owned && !panic_drawing && fb;
 }
 
-/* One console claim: columns [c0, c1) for the given state. */
-static bool splash_chunk(uint32_t c0, uint32_t c1, bool determinate, uint32_t level, int32_t segment)
+static bool splash_claim_open(void)
 {
     uint32_t f = irq_save();
     bool claimed = splash_drawable() && fbdev_console_begin();
     irq_restore(f);
-    if (!claimed) return false;
-    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
-    uint32_t pixels = splash_bar_pixels(c0, c1, determinate, level, segment);
+    return claimed;
+}
+
+/* Ends a claim opened by splash_claim_open and records its budget. */
+static void splash_claim_close(uint64_t start, uint32_t pixels)
+{
     fbdev_console_end();
     uint64_t cycles = cpu_path_clock ? cpu_path_clock() - start : 0;
     splash_bar.claims++;
     if (pixels > splash_bar.max_claim_pixels) splash_bar.max_claim_pixels = pixels;
     if (cycles > splash_bar.max_claim_cycles) splash_bar.max_claim_cycles = cycles;
     if (cpu_path_add) cpu_path_add(CPU_CONSOLE, cycles);
+}
+
+/* One console claim: columns [c0, c1) for the given state. */
+static bool splash_chunk(uint32_t c0, uint32_t c1, bool determinate, uint32_t level, int32_t segment)
+{
+    if (!splash_claim_open()) return false;
+    uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
+    splash_claim_close(start, splash_bar_pixels(c0, c1, determinate, level, segment));
     return true;
+}
+
+/* f1-97: bring the accelerator line to its target text, in claims of at most
+ * SPLASH_CLAIM_PIXELS pixels (whole rows). No LFB read, no disk read. A
+ * failed claim leaves the rest to the console worker's next turn. */
+static void splash_accel_update(bool yield)
+{
+    const struct splash_layout *g = &splash_bar.g;
+    char want[SPLASH_ACCEL_TEXT], old[SPLASH_ACCEL_TEXT];
+    uint32_t f = irq_save();
+    bool start = !splash_bar.accel_busy && g->accel && splash_drawable() && splash_bar.accel[0] &&
+                 memcmp(splash_bar.accel, splash_bar.accel_shown, SPLASH_ACCEL_TEXT);
+    if (start) {
+        splash_bar.accel_busy = true;
+        memcpy(want, splash_bar.accel, SPLASH_ACCEL_TEXT);
+        memcpy(old, splash_bar.accel_shown, SPLASH_ACCEL_TEXT);
+    }
+    irq_restore(f);
+    if (!start) return;
+    uint32_t nw = splash_string_width(want), ow = splash_string_width(old);
+    uint32_t nx = g->x0 + (g->dw - nw) / 2, ox = g->x0 + (g->dw - ow) / 2;
+    uint32_t x0 = old[0] && ox < nx ? ox : nx, x1 = nx + nw + 1;
+    if (old[0] && ox + ow + 1 > x1) x1 = ox + ow + 1;
+    if (x1 > g->x0 + g->dw) x1 = g->x0 + g->dw;
+    uint32_t rows = SPLASH_CLAIM_PIXELS / (x1 - x0);
+    if (!rows) rows = 1;
+    bool done = true;
+    for (uint32_t r = 0; done && r < 17; r += rows) {
+        if (!splash_claim_open()) { done = false; break; }
+        uint64_t t0 = cpu_path_clock ? cpu_path_clock() : 0;
+        splash_claim_close(t0, splash_accel_pixels(want, x0, x1, r, r + rows < 17 ? r + rows : 17));
+        if (yield) kpreempt_point();
+        if (!splash_drawable()) { done = false; break; }
+    }
+    if (!done) splash_bar.deferred++;
+    f = irq_save();
+    if (done) memcpy(splash_bar.accel_shown, want, SPLASH_ACCEL_TEXT);
+    splash_bar.accel_busy = false;
+    irq_restore(f);
+}
+
+/* f1-97: the accelerator decision (savage2d.c, thread context): the text is
+ * `2D acceleration: YES` or `2D acceleration: NO (<reason>)`; drawn by the
+ * console worker (or at the handover), never from the caller. */
+void console_splash_accel(bool accelerated, const char *reason)
+{
+    char text[SPLASH_ACCEL_TEXT] = { 0 };
+    unsigned n = 0;
+    const char *parts[] = { "2D acceleration: ", accelerated ? "YES" : "NO",
+                            accelerated ? "" : " (", accelerated || !reason ? "" : reason,
+                            accelerated ? "" : ")" };
+    for (unsigned i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
+        for (const char *c = parts[i]; *c && n + 1 < SPLASH_ACCEL_TEXT; c++) text[n++] = *c;
+    uint32_t f = irq_save();
+    if (!splash_bar.ended) memcpy(splash_bar.accel, text, SPLASH_ACCEL_TEXT);
+    irq_restore(f);
 }
 
 /* f0-55b: `[console] splash phase=<n> permille=<p>` once per drawn phase
@@ -485,6 +592,7 @@ static void splash_handover(void)
     irq_restore(f);
     if (!draw) return;
     splash_update(false);
+    splash_accel_update(false);
     bool complete = splash_bar.shown_valid && splash_bar.shown_level == SPLASH_PERMILLE_FULL;
     splash_bar.active = false;
     uint32_t us = g_tsc_per_ms ? (uint32_t)(splash_bar.max_claim_cycles * 1000u / g_tsc_per_ms) : 0;
@@ -534,6 +642,10 @@ static uint32_t splash_service(void)
     if (!splash_bar.determinate) splash_bar.segment = splash_segment_at(&splash_bar.g, g_ticks);
     irq_restore(f);
     splash_update(true);
+    splash_accel_update(true);
+    bool accel_pending = splash_drawable() && splash_bar.g.accel && splash_bar.accel[0] &&
+                         memcmp(splash_bar.accel, splash_bar.accel_shown, SPLASH_ACCEL_TEXT);
+    if (accel_pending) return SPLASH_TICK_MS;
     return splash_drawable() && (!splash_bar.determinate || !splash_bar.shown_valid ||
                                  splash_bar.shown_level != splash_bar.level) ? SPLASH_TICK_MS : 100;
 }
@@ -545,6 +657,7 @@ static uint32_t splash_service(void) { return 100; }
 static void splash_stop(void) {}
 static void splash_worker_class(void) {}
 void console_splash_phase(enum splash_phase phase) { (void)phase; }
+void console_splash_accel(bool accelerated, const char *reason) { (void)accelerated; (void)reason; }
 #endif
 
 static void clear_screen(void)
