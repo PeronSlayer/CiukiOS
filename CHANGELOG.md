@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 alpha (unreleased, `main`; hardware image `288052706a83…` of 2026-10-22, T23 trial pending)
+## 1.0.0 alpha (unreleased, `main`; hardware image `b453bc921d49…` of 2026-10-22, T23 trial pending)
 
 Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
 
@@ -72,6 +72,7 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 
 ### Loader
 
+- f0-55b (`a056ae8c`): splash bar visible from the first frame (centred sweep segment at tick 0, phases reported before the paint applied), console worker on its own 40 ms timer above init's level while the splash is up, one serial record per phase.
 - f0-54 (`f162192b`): Loader memory budget overhauled by replacing repetitive option parsing with a shared bounded table matcher, streaming ELF program headers through the E820 scratch buffer, and reclaiming 1,303 bytes within the fixed 64 KiB loader extent with zero differential divergence across 60,102 tested selectors.
 - f3-55 / fix-dosbox (`2b857092`, `19346ce6`): Added loader command-line and interactive menu parsers for `kernel=unified` alongside existing DOS conformance selectors.
 
